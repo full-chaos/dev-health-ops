@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -181,37 +182,39 @@ func TestGoldenReviewLoadLatencyRepo(t *testing.T) {
 	}
 }
 
-// TestGoldenPersonScopeTeamCohort exercises the person-scope branch
-// end to end: resolve the requested person id to an identity via
-// resolve_person_identity, resolve that identity's team via
-// fetch_person_team_id, then scope BOTH metric reads to that team cohort
-// (_cohort_scope_filter) -- matching Python's actual person branch, which
-// plots the person's whole team, not a single point (see identity.go's and
-// response.go's rowEntity doc comments for why). The entity_id/label on
-// the wire are person_id_for_identity/display_name_for_identity of the
-// raw identity string, never the raw string itself.
-func TestGoldenPersonScopeTeamCohort(t *testing.T) {
+// TestGoldenPersonScopeOwnRowsOnly exercises the person-scope branch end to
+// end: the person id resolves to an identity, and both metric reads are
+// bound to that person's identity strings on the table's own identity
+// column. The org holds a second person (john): the fixture returns his rows
+// to ANY read, so the response holding only jane proves the response itself
+// drops other people, not only that the SQL asked for the right thing.
+func TestGoldenPersonScopeOwnRowsOnly(t *testing.T) {
 	t.Setenv("IDENTITY_MAPPING_PATH", filepath.Join(t.TempDir(), "missing.yaml"))
 
+	var identityBindings []string
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "identities FINAL") || strings.Contains(query, "m.team_id") {
+			t.Fatalf("person scope must not read membership teams:\n%s", query)
+		}
 		switch {
 		case strings.Contains(query, "lower(hex(MD5(identity)))"):
 			return &fixtureRowScanner{rows: [][]any{{"jane@example.com"}}}, nil
-		case strings.Contains(query, "FROM identities FINAL"):
-			return &fixtureRowScanner{rows: [][]any{{"team-x"}}}, nil
 		case strings.Contains(query, "wip_count_end_of_day"):
-			if !queryHasCohortFilter(query) {
-				t.Fatalf("wip query missing team cohort filter:\n%s", query)
+			if !strings.Contains(query, "AND m.user_identity IN {person_identities:Array(String)}") {
+				t.Fatalf("wip query not bound to the person's identities:\n%s", query)
 			}
+			identityBindings = append(identityBindings, fmt.Sprint(bindingValue(bindings, "person_identities")))
 			return &fixtureRowScanner{rows: [][]any{
 				{day(2024, 1, 1), "jane@example.com", "jane@example.com", 5.0},
+				{day(2024, 1, 1), "john@example.com", "john@example.com", 9.0},
 			}}, nil
 		case strings.Contains(query, "items_completed"):
-			if !queryHasCohortFilter(query) {
-				t.Fatalf("throughput query missing team cohort filter:\n%s", query)
+			if !strings.Contains(query, "AND m.user_identity IN {person_identities:Array(String)}") {
+				t.Fatalf("throughput query not bound to the person's identities:\n%s", query)
 			}
 			return &fixtureRowScanner{rows: [][]any{
 				{day(2024, 1, 1), "jane@example.com", "jane@example.com", 12.0},
+				{day(2024, 1, 1), "john@example.com", "john@example.com", 30.0},
 			}}, nil
 		}
 		t.Fatalf("unexpected query for person-scope fixture:\n%s", query)
@@ -219,16 +222,17 @@ func TestGoldenPersonScopeTeamCohort(t *testing.T) {
 	}}
 
 	got, err := BuildResponse(context.Background(), client, "org-1", Params{
-		Type: "wip_throughput", ScopeType: "person", ScopeID: "9e26471d35a78862c17e467d87cddedf",
+		Type: "wip_throughput", ScopeType: "person", ScopeID: PersonIDForIdentity("jane@example.com"),
 		RangeDays: 30, Bucket: "week",
 		StartDate: timePtr(day(2024, 1, 1)), EndDate: timePtr(day(2024, 1, 1)),
 	})
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
 	}
+	if len(identityBindings) != 1 || !strings.Contains(identityBindings[0], "jane@example.com") || strings.Contains(identityBindings[0], "john") {
+		t.Fatalf("identity binding = %v, want only jane's variants", identityBindings)
+	}
 
-	wantEntityID := PersonIDForIdentity("jane@example.com")
-	wantLabel := displayNameForIdentity("jane@example.com")
 	want := Response{
 		Axes: Axes{
 			X: Axis{Metric: "wip", Label: "WIP", Unit: "items"},
@@ -236,7 +240,7 @@ func TestGoldenPersonScopeTeamCohort(t *testing.T) {
 		},
 		Points: []Point{
 			{
-				EntityID: wantEntityID, EntityLabel: wantLabel,
+				EntityID: PersonIDForIdentity("jane@example.com"), EntityLabel: displayNameForIdentity("jane@example.com"),
 				X: 5.0, Y: 12.0,
 				WindowStart: "2024-01-01", WindowEnd: "2024-01-08",
 				EvidenceLink: "/api/v1/explain?metric=throughput",
@@ -249,9 +253,18 @@ func TestGoldenPersonScopeTeamCohort(t *testing.T) {
 	}
 }
 
+func bindingValue(bindings []dhclickhouse.Binding, name string) any {
+	for _, b := range bindings {
+		if b.Name == name {
+			return b.Value
+		}
+	}
+	return nil
+}
+
 // TestGoldenPersonScopeIndividualNotFound pins quadrant.py:536-537: an
 // unresolvable person id (no matching identity, empty alias fallback) is a
-// 404, and neither the team lookup nor either metric read ever runs.
+// 404, and no metric read ever runs.
 func TestGoldenPersonScopeIndividualNotFound(t *testing.T) {
 	t.Setenv("IDENTITY_MAPPING_PATH", filepath.Join(t.TempDir(), "missing.yaml"))
 
@@ -259,7 +272,7 @@ func TestGoldenPersonScopeIndividualNotFound(t *testing.T) {
 		if strings.Contains(query, "lower(hex(MD5(identity)))") {
 			return &fixtureRowScanner{}, nil
 		}
-		t.Fatalf("unexpected query for not-found person fixture (team lookup/metric reads must not run):\n%s", query)
+		t.Fatalf("unexpected query for not-found person fixture (metric reads must not run):\n%s", query)
 		return nil, nil
 	}}
 
@@ -270,13 +283,6 @@ func TestGoldenPersonScopeIndividualNotFound(t *testing.T) {
 	if !ok || reqErr.Status != 404 {
 		t.Fatalf("err = %v, want *RequestError{Status: 404}", err)
 	}
-}
-
-// queryHasCohortFilter reports whether a fetchQuadrantMetric query carries
-// the person-scope team-cohort filter _cohort_scope_filter builds
-// (quadrant.py:378-381).
-func queryHasCohortFilter(query string) bool {
-	return strings.Contains(query, "AND m.team_id = {team_id:String}")
 }
 
 type fakeQueryClient struct {

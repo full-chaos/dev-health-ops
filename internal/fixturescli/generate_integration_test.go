@@ -40,6 +40,8 @@ var generateParameterSets = []struct {
 		Provider: "synthetic", RepoName: "ci-metrics-executed-proof/repo", RepoCount: 1, Days: 7, CommitsPerDay: 5, PRCount: 20, TeamCount: 1,
 		Seed: 4276,
 	}},
+	// The provider worlds (provider_worlds_integration_test.go): the attribution matrix loads them.
+	{githubWorld.OrgID, githubWorld.Params},
 }
 
 // serverStampProblems lists every server-stamped column (serverStampedColumns) of a table the
@@ -344,7 +346,7 @@ func TestLoadWorldReproducesTheRecordedCapture(t *testing.T) {
 				// A nullable column a migration added after the capture is held
 				// to NULL on every loaded row, and only then left out of the
 				// comparison with the frozen columns (columnsAfterTheCapture).
-				got := requireColumnsAfterTheCapture(t, dumpWorldTable(t, ch.httpDSN, table.Name))
+				got := loadedWorldTable(t, set.Params, dumpWorldTable(t, ch.httpDSN, table.Name))
 				// A column the schema dropped after the capture (retiredColumns) is not loaded: the
 				// frozen table is held to the schema without it.
 				table.FrozenTable = table.FrozenTable.WithoutRetired()
@@ -387,7 +389,7 @@ func TestLoadWorldReproducesTheRecordedCapture(t *testing.T) {
 			}
 			for _, table := range world.Tables {
 				table.FrozenTable = table.FrozenTable.WithoutRetired()
-				got := requireColumnsAfterTheCapture(t, dumpWorldTable(t, other.httpDSN, table.Name))
+				got := loadedWorldTable(t, set.Params, dumpWorldTable(t, other.httpDSN, table.Name))
 				back, err := WorldTable{FrozenTable: got}.Transform(-days, org, world.OrgID)
 				if err != nil {
 					t.Fatal(err)

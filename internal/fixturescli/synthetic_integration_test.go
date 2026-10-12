@@ -275,7 +275,10 @@ func maskTimes(table FrozenTable) [][]any {
 		out := make([]any, len(row))
 		copy(out, row)
 		for column, definition := range table.Columns {
-			if _, isTime := timePrecision(definition.Type); isTime && out[column] != nil {
+			// A view's aggregate column over a timestamp (SimpleAggregateFunction(min, DateTime64(3)))
+			// is a time too.
+			_, isTime := timePrecision(definition.Type)
+			if (isTime || strings.Contains(definition.Type, "DateTime")) && out[column] != nil {
 				out[column] = "<ts>"
 			}
 		}

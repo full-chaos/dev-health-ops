@@ -352,6 +352,13 @@ type InProcessRun struct {
 	// GitHubTestsMaxArtifactBytes mirrors GitFamilyDeps.
 	GitHubTestsMaxArtifactBytes int64
 	Now                         func() time.Time
+	// IDs makes the ids of the run's claim (unit, sync run, integration, source,
+	// credential, owner); nil is uuid.NewString. A caller that must write the
+	// same rows on every run (the fixture world producer) passes a sequence.
+	IDs func() string
+	// ProcessorFlags are the planned unit's processor flags; nil is the
+	// capability's own (what `dho sync <target>` runs with).
+	ProcessorFlags map[string]bool
 }
 
 // ErrNotAGitFamilyRoute is returned for a (provider, dataset) pair that has no
@@ -378,6 +385,23 @@ func BudgetLimitsByCostClass() map[CostClass]int {
 // RunInProcess runs one git-family route through the worker's executor with
 // in-process collaborators, and returns what the executor returns.
 func RunInProcess(ctx context.Context, run InProcessRun) (CompleteRouteExecutionResult, error) {
+	return RunRouteInProcess(ctx, run, func(session *LeaseSession) (GitFamilyRoute, bool, error) {
+		route, ok := SelectGitFamilyRoute(run.Provider, run.Dataset, GitFamilyDeps{
+			Conn: run.Conn, Lease: session, GitHubTestsMaxArtifactBytes: run.GitHubTestsMaxArtifactBytes,
+		})
+		return route, ok, nil
+	})
+}
+
+// InProcessRouteSelector builds the (handler, sink, readback) of the run's
+// route for its lease session: SelectGitFamilyRoute for `dho sync <target>`,
+// SelectWorkItemsRoute for a work-items run.
+type InProcessRouteSelector func(session *LeaseSession) (GitFamilyRoute, bool, error)
+
+// RunRouteInProcess runs the route the selector builds through the worker's
+// executor with in-process collaborators. ok=false from the selector is
+// ErrNotAGitFamilyRoute.
+func RunRouteInProcess(ctx context.Context, run InProcessRun, selectRoute InProcessRouteSelector) (CompleteRouteExecutionResult, error) {
 	if run.Conn == nil || run.OrgID == "" || run.SourceExternalID == "" || len(run.Credential) == 0 {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
@@ -391,17 +415,25 @@ func RunInProcess(ctx context.Context, run InProcessRun) (CompleteRouteExecution
 		now = time.Now
 	}
 	started := now().UTC()
+	newID := run.IDs
+	if newID == nil {
+		newID = uuid.NewString
+	}
+	processorFlags := capability.ProcessorFlags
+	if run.ProcessorFlags != nil {
+		processorFlags = run.ProcessorFlags
+	}
 	claim := Claim{
 		Unit: Unit{
-			ID: uuid.NewString(), SyncRunID: uuid.NewString(), OrgID: run.OrgID,
-			IntegrationID: uuid.NewString(), SourceID: uuid.NewString(),
+			ID: newID(), SyncRunID: newID(), OrgID: run.OrgID,
+			IntegrationID: newID(), SourceID: newID(),
 			SourceExternalID: run.SourceExternalID, SourceName: run.SourceName,
 			Provider: run.Provider, Dataset: run.Dataset, CostClass: capability.CostClass,
 			Mode: "incremental", SinceAt: run.SinceAt, BeforeAt: &run.BeforeAt,
-			ProcessorFlags: capability.ProcessorFlags,
-			CredentialID:   uuid.NewString(), AuthSource: "cli",
+			ProcessorFlags: processorFlags,
+			CredentialID:   newID(), AuthSource: "cli",
 		},
-		Owner: uuid.NewString(), Attempt: 1, LeaseExpiresAt: started.Add(10 * time.Minute),
+		Owner: newID(), Attempt: 1, LeaseExpiresAt: started.Add(10 * time.Minute),
 	}
 	if err := claim.Validate(); err != nil {
 		return CompleteRouteExecutionResult{}, err
@@ -410,9 +442,10 @@ func RunInProcess(ctx context.Context, run InProcessRun) (CompleteRouteExecution
 		Repository: InProcessLeaseRepository{}, Claim: claim,
 		LeaseDuration: 10 * time.Minute, Deadline: started.Add(24 * time.Hour), Now: now,
 	}
-	route, ok := SelectGitFamilyRoute(run.Provider, run.Dataset, GitFamilyDeps{
-		Conn: run.Conn, Lease: session, GitHubTestsMaxArtifactBytes: run.GitHubTestsMaxArtifactBytes,
-	})
+	route, ok, err := selectRoute(session)
+	if err != nil {
+		return CompleteRouteExecutionResult{}, err
+	}
 	if !ok {
 		return CompleteRouteExecutionResult{}, ErrNotAGitFamilyRoute
 	}

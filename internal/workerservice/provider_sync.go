@@ -362,69 +362,26 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 					},
 				}
 				sink, readback = ldSink, ldSink
-			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "work-items":
+			case session.Claim.Dataset == "work-items" &&
+				(session.Claim.Provider == "github" || session.Claim.Provider == "gitlab" ||
+					session.Claim.Provider == "jira" || session.Claim.Provider == "linear"):
 				if !workItemsRuntime.configured() {
 					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
 				}
-				ghSink, err := providersync.NewGitHubWorkItemClickHouseEffects(
-					clickhouseConnection, session, providerMetrics,
-				)
-				if err != nil {
-					return providersync.CompleteRouteExecutor{}, err
-				}
-				routeHandler = providersync.GitHubWorkItemsRouteHandler{
-					Projects: providersync.GitHubProjectV2Fetcher{},
-					ProjectMembershipSnapshotDiff: providersync.GitHubProjectV2SnapshotDiffClickHouseReader{
-						Conn: clickhouseConnection,
+				workItemsRoute, selected, err := providersync.SelectWorkItemsRoute(
+					session.Claim.Provider, session.Claim.Dataset,
+					providersync.WorkItemsRouteDeps{
+						Conn: clickhouseConnection, Lease: session, Metrics: providerMetrics,
+						StatusMapping: workItemsRuntime.statusMapping,
 					},
-				}
-				sink, readback = ghSink, ghSink
-			case session.Claim.Provider == "gitlab" &&
-				session.Claim.Dataset == "work-items":
-				if !workItemsRuntime.configured() {
-					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
-				}
-				glSink, err := providersync.NewGitLabWorkItemFamilyClickHouseEffects(
-					clickhouseConnection, session, providerMetrics,
 				)
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
 				}
-				routeHandler = newGitLabWorkItemsRouteHandler(workItemsRuntime.statusMapping)
-				sink, readback = glSink, glSink
-			case session.Claim.Provider == "jira" &&
-				session.Claim.Dataset == "work-items":
-				if !workItemsRuntime.configured() {
+				if !selected {
 					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
 				}
-				jiraSink, err := providersync.NewJiraWorkItemCompositeClickHouseEffects(
-					clickhouseConnection, session, providerMetrics,
-				)
-				if err != nil {
-					return providersync.CompleteRouteExecutor{}, err
-				}
-				routeHandler = providersync.JiraAtlassianRouteHandler{
-					StatusMapping: workItemsRuntime.statusMapping,
-				}
-				sink, readback = jiraSink, jiraSink
-			case session.Claim.Provider == "linear" &&
-				session.Claim.Dataset == "work-items":
-				if !workItemsRuntime.configured() {
-					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
-				}
-				linearSink, err := providersync.NewLinearWorkItemFamilyClickHouseEffects(
-					clickhouseConnection, session, providerMetrics,
-				)
-				if err != nil {
-					return providersync.CompleteRouteExecutor{}, err
-				}
-				routeHandler = providersync.LinearWorkItemFamilyRouteHandler{
-					Direct: providersync.LinearWorkItemsRouteHandler{
-						GlobalDiscovery: true,
-					},
-				}
-				sink, readback = linearSink, linearSink
+				routeHandler, sink, readback = workItemsRoute.Handler, workItemsRoute.Sink, workItemsRoute.Readback
 			case session.Claim.Provider == "jira" &&
 				session.Claim.Dataset == "incidents":
 				if incidentEntitlement == nil {
@@ -815,18 +772,5 @@ func withRequestUsage(handler *providerunit.Handler, writer *providersync.Reques
 		executor, err := build(session)
 		executor.RequestUsage = writer
 		return executor, err
-	}
-}
-
-// newGitLabWorkItemsRouteHandler builds the GitLab work-items route handler the
-// worker runs. It sets NO page limits on purpose: the route's own defaults apply,
-// and for every nested list that default is the 100-page hard ceiling
-// (providersync gitLabWorkItemsNestedHardMaxPages, CHAOS-8777). A limit set here
-// could only lower the ceiling (the route clamps it), never raise it.
-func newGitLabWorkItemsRouteHandler(
-	statusMapping *providersync.StatusMapping,
-) providersync.GitLabWorkItemsRouteHandler {
-	return providersync.GitLabWorkItemsRouteHandler{
-		StatusMapping: statusMapping,
 	}
 }

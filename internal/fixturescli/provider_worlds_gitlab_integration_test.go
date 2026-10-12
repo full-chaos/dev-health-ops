@@ -111,8 +111,18 @@ func gitlabGroupPath(fullPath string) string {
 	return "/api/v4/groups/" + fullPath
 }
 
-func gitlabTeamCatalogAnswers() []providerAnswer {
-	var answers []providerAnswer
+// gitlabArchiveGroup held checkout-web at the organization's first sync and is gone by the second: the
+// second sync closes its project grant and its memberships.
+var gitlabArchiveGroup = gitlabGroup{3003, "chaos-gl/archive", "Archive", []string{"chaos-gl/checkout/checkout-web"}, []gitlabUser{glDana}}
+
+// gitlabTeamCatalogAnswers answers the GitLab team catalog of a root group and these subgroups, in
+// one sync phase.
+func gitlabTeamCatalogAnswers(gitlabGroups []gitlabGroup, phase string) (answers []providerAnswer) {
+	defer func() {
+		for index := range answers {
+			answers[index].Phase = phase
+		}
+	}()
 	root := gitlabGroups[0]
 	answers = append(answers, get(gitlabHost, gitlabGroupPath(root.FullPath), "", root.payload()))
 	subgroups := []map[string]any{}
@@ -307,7 +317,8 @@ var gitlabCheckoutItems = []gitlabItem{
 
 func gitlabAnswers() []providerAnswer {
 	var answers []providerAnswer
-	answers = append(answers, gitlabTeamCatalogAnswers()...)
+	answers = append(answers, gitlabTeamCatalogAnswers(append(append([]gitlabGroup{}, gitlabGroups...), gitlabArchiveGroup), "first")...)
+	answers = append(answers, gitlabTeamCatalogAnswers(gitlabGroups, "second")...)
 	answers = append(answers, gitlabProjectAnswers("chaos-gl/billing-service", gitlabBillingItems)...)
 	answers = append(answers, gitlabProjectAnswers("chaos-gl/checkout/checkout-web", gitlabCheckoutItems)...)
 	return answers
@@ -324,8 +335,11 @@ var gitlabWorld = providerWorld{
 	FrozenAt: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),
 	Answers:  gitlabAnswers,
 	Steps: []worldStep{
+		// The first sync of the catalog, a month before the world's instant, and the second.
 		{Kind: "team_catalog", Provider: "gitlab", Credential: gitlabToken, Sources: gitlabSources,
-			SyncOptions: map[string]any{"group_path": gitlabRoot}},
+			SyncOptions: map[string]any{"group_path": gitlabRoot}, Phase: "first", Before: 30 * 24 * time.Hour},
+		{Kind: "team_catalog", Provider: "gitlab", Credential: gitlabToken, Sources: gitlabSources,
+			SyncOptions: map[string]any{"group_path": gitlabRoot}, Phase: "second"},
 		{Kind: "sync", Provider: "gitlab", Credential: gitlabToken, DepthDays: 180, Sources: gitlabSources,
 			Datasets: []string{"repo-metadata", "prs", "work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"}},
 		{Kind: "work_graph"},

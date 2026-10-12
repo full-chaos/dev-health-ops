@@ -116,6 +116,15 @@ func TestCapacityForecastsReadsRealColumnTypes(t *testing.T) {
 	if err := raw.Exec(ctx, seed); err != nil {
 		t.Fatalf("seed capacity_forecasts: %v", err)
 	}
+	// team-alpha is an active team of each org: a forecast list with no team
+	// named lists the forecasts of active teams and those with no team.
+	if err := raw.Exec(ctx, `
+        INSERT INTO teams (id, team_uuid, name, org_id, provider, is_active, updated_at, last_synced)
+        VALUES ('team-alpha', generateUUIDv4(), 'Alpha', 'org-mine', 'github', 1, now64(6), now64(6)),
+               ('team-alpha', generateUUIDv4(), 'Alpha', 'org-theirs', 'github', 1, now64(6), now64(6))
+    `); err != nil {
+		t.Fatalf("seed teams: %v", err)
+	}
 
 	got, err := capacityforecast.ResolveForecasts(ctx, client, "org-mine", nil)
 	if err != nil {

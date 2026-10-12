@@ -213,6 +213,15 @@ func (executor *BenchmarkingFinalizeExecutor) ComputeFinalizeFamily(
 	// so a nonzero count here is diagnostic, not a family failure -- the
 	// row count this function still returns is what determines
 	// success/refused/partial_write.
+	// A team id that holds rows of the window and is inactive now (a superseded
+	// or retired id) gets no team series: say which ids were left out.
+	if dropped := loader.DroppedInactiveTeams(); len(dropped) > 0 {
+		logger.Info("benchmarking finalize left out inactive team series",
+			"run_id", run.ID, "organization_id", run.OrganizationID,
+			"target_day", run.TargetDay.Format("2006-01-02"),
+			"inactive_team_ids", dropped,
+		)
+	}
 	if outputs.FetchFailures > 0 {
 		logger.Warn("benchmarking finalize had swallowed fetch failures",
 			"run_id", run.ID, "organization_id", run.OrganizationID,

@@ -1408,7 +1408,7 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndex(
 	ambiguous := map[string]bool{}
 	allowedDonorSources := map[string]bool{
 		"native_team": true, "issue_project": true, "project_ownership": true,
-		"repo_ownership": true, "assignee_membership": true,
+		"repo_ownership": true,
 	}
 	for _, subject := range subjects {
 		baseNative[subject.WorkItemID] = derived.NativeTeamCandidate(subject) != nil

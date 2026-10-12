@@ -495,7 +495,7 @@ func TestTheOwnerOfAnItemsDayHoldsForEachProviderAndKindOfFact(t *testing.T) {
 				if primary := primaryTeamOf(fromBackstop); primary != wantTeam {
 					t.Fatalf("the backstop gives team %q, want %q, the team of the item's day (rows %+v)", primary, wantTeam, fromBackstop)
 				}
-				if kind == "membership" && !strings.Contains(fmt.Sprint(fromDaily), "Team:team-old Source:assignee_membership Primary:0") {
+				if kind == "membership" && !strings.Contains(fmt.Sprintf("%+v", fromDaily), "Team:team-old Source:assignee_membership Primary:0") {
 					t.Fatalf("the daily family lost the membership provenance row (rows %+v)", fromDaily)
 				}
 				if fmt.Sprint(fromBackstop) != fmt.Sprint(fromDaily) {

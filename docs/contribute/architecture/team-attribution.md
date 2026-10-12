@@ -342,7 +342,7 @@ all is `ownership_unknown` and the gate does not apply (R74, 2026-09-09: an abse
 treated as missing data, not as "not owned" — two orgs with old fixture data and no ownership rows
 at all pass membership through unchanged); `linked_issue` (5) requires a real `work_item_dependencies`
 donor row resolving to a `work_items`
-row whose **own team came from a first-class fact (sources 0–4)** — a donor resolved only by
+row whose **own team came from a first-class fact (sources 0–3; membership never wins, CHAOS-9414)** — a donor resolved only by
 `author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author
 signal nor a bare prefix can ever be laundered into rank-5 inheritance (both fall through to 6/7);
 `author_membership` (6) is a PERSON signal, "at best a low-precedence fallback" (chris,
@@ -433,9 +433,9 @@ means the ClickHouse `teams` dimension is empty.
 | 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–8 | 0–2 | `repo_full_name` |
-| 4 | `assignee_membership` | CHAOS-4321 two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | 5–8 | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
-| 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–8 | 0–4 | `dependency_type, donor_work_item_id, donor_provider` |
-| 6 | `author_membership` | CHAOS-4244 PR/MR-only + CHAOS-4321 two-layer (same as row 4), non-bot | high (admin) / medium (provider) | 7–8 | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
+| 4 | `assignee_membership` | CHAOS-4321 two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only (CHAOS-9414), never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
+| 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–8 | 0–3 | `dependency_type, donor_work_item_id, donor_provider` |
+| 6 | `author_membership` | CHAOS-4244 PR/MR-only + CHAOS-4321 two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only (CHAOS-9414), never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
 | 7 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 8 only | 0–6 | `scope_type, scope_id, reason` |
 | 8 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
 

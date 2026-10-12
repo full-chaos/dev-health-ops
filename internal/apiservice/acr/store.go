@@ -16,6 +16,10 @@ import (
 // Python: dev_health_ops.licensing.registry.py, "agent_context_runtime".
 const agentContextRuntimeFeatureKey = "agent_context_runtime"
 
+// acrServiceModelFeatureKey is the second feature this route decides: the org
+// may use the platform LLM for MCP investigations without its own BYO LLM.
+const acrServiceModelFeatureKey = "acr_service_model"
+
 // ErrOrgNotFound means the organization row does not exist. Python:
 // api/internal/acr.py:181-192's 404 ("Not found") on both an unparseable
 // org_id and a missing Organization row.
@@ -37,6 +41,9 @@ type Entitlement struct {
 	// which trivially holds by construction on both planes.
 	OrgID               string
 	AgentContextRuntime bool
+	// ACRServiceModel is false for an org without the grant and for an org
+	// where the feature row does not exist yet (not registered reads closed).
+	ACRServiceModel bool
 }
 
 // EntitlementStore looks up one org's agent_context_runtime entitlement.
@@ -87,7 +94,11 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed}, nil
+	serviceModel, err := decisionStore.Decide(ctx, parsedOrgID.String(), acrServiceModelFeatureKey)
+	if err != nil {
+		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed, ACRServiceModel: serviceModel.Allowed}, nil
 }
 
 // readyTimeout bounds the health route's ping, so an unreachable store is a

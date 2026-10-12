@@ -2,6 +2,7 @@ package licensing
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,6 +21,13 @@ for tier in LicenseTier:
 out["decision_keys"] = sorted(EXPLICIT_PURCHASE_FEATURES | {CANONICAL_INCIDENT_INGESTION_FEATURE, "customer_push_ingest"})
 print(json.dumps(out))
 `
+
+// goOnlyDecisionKeys are decision keys added after the frozen Python build: its
+// api tree is deleted, so no newer Python build can record them, and the Go
+// registry is their only source. They are not in the tier feature registry, so
+// licenses and billing entitlements stay byte-identical to the frozen answers.
+// The frozen answer must not hold them, so this allowance cannot hide a drift.
+var goOnlyDecisionKeys = map[string]bool{"acr_service_model": true}
 
 // TestTierFeaturesMatchFrozenPython holds the Go registry, limits and
 // decision keys to the frozen Python ones, value and order.
@@ -51,7 +59,21 @@ func TestTierFeaturesMatchFrozenPython(t *testing.T) {
 			t.Errorf("%s limits: go %v, python %v", tier, limits, want.Limits[tier])
 		}
 	}
-	if strings.Join(EntitlementDecisionKeys(), ",") != strings.Join(want.DecisionKeys, ",") {
+	var goKeys []string
+	for _, key := range EntitlementDecisionKeys() {
+		if !goOnlyDecisionKeys[key] {
+			goKeys = append(goKeys, key)
+		}
+	}
+	for _, key := range want.DecisionKeys {
+		if goOnlyDecisionKeys[key] {
+			t.Fatalf("%s is in the frozen Python decision keys, so it is not Go-only", key)
+		}
+	}
+	if strings.Join(goKeys, ",") != strings.Join(want.DecisionKeys, ",") {
 		t.Errorf("decision keys: go %v, python %v", EntitlementDecisionKeys(), want.DecisionKeys)
+	}
+	if !slices.Contains(EntitlementDecisionKeys(), "acr_service_model") {
+		t.Errorf("decision keys %v lack acr_service_model", EntitlementDecisionKeys())
 	}
 }

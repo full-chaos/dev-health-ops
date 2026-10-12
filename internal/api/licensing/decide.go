@@ -31,6 +31,7 @@ var explicitPurchaseFeatures = map[string]bool{
 	"ask_dev":                        true,
 	"ask_dev_contextual_entrypoints": true,
 	"ask_dev_wave_3_1":               true,
+	"acr_service_model":              true,
 }
 
 // tierBoundOverrideFeatures mirrors feature_policy.py's

@@ -246,6 +246,68 @@ func AuthoritativeOwnerByRepo(
 	return owners, rows.Err()
 }
 
+// OwnersByRepo answers membership for EVERY team at once: the active teams
+// that own each repository as of asOf, keyed by repo_id text, each list in
+// team_id order. A repository owned by several teams lists them all; nothing
+// is ranked (see the package doc). It is the ownership rule of the team
+// groupings of the query API (queryapi/teamscope: FINAL, the bitemporal
+// window, the repos name join with its matched sentinel, a non-empty team id,
+// a repository that repos holds), plus the active-team rule of
+// AuthoritativeOwnerByRepo: an inactive team owns nothing. A failed read of
+// the inactive teams is returned, never read as "no team is inactive".
+func OwnersByRepo(
+	ctx context.Context, conn teamactive.Querier, orgID string, asOf time.Time,
+) (map[string][]string, error) {
+	if conn == nil || orgID == "" {
+		return nil, fmt.Errorf("OwnersByRepo: a connection and an organization id are required")
+	}
+	inactive, err := teamactive.LoadInactive(ctx, conn, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("OwnersByRepo: %w", err)
+	}
+	rows, err := conn.Query(ctx, `
+        SELECT DISTINCT
+            coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id,
+            o.team_id AS owner_team_id
+        FROM team_repo_ownership AS o FINAL
+        LEFT JOIN (
+            SELECT org_id, provider, id, repo, 1 AS matched
+            FROM repos FINAL
+            WHERE org_id = {org_id:String}
+        ) AS r
+            ON r.org_id = o.org_id
+               AND r.provider = o.provider
+               AND lower(r.repo) = lower(o.repo_full_name)
+        WHERE o.org_id = {org_id:String}
+          AND o.team_id != ''
+          AND (o.repo_id IS NOT NULL OR r.matched = 1)
+          AND o.valid_from <= {as_of:DateTime64(3, 'UTC')}
+          AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
+          AND coalesce(toString(o.repo_id), toString(r.id)) IN (
+              SELECT toString(id) AS id
+              FROM repos FINAL
+              WHERE org_id = {org_id:String}
+          )
+        ORDER BY owned_repo_id, owner_team_id
+    `, clickhouse.Named("org_id", orgID), clickhouse.Named("as_of", dateTime64Literal(asOf)))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	owners := map[string][]string{}
+	for rows.Next() {
+		var repoIDText, teamID string
+		if err := rows.Scan(&repoIDText, &teamID); err != nil {
+			return nil, err
+		}
+		if inactive.Has(teamID) {
+			continue
+		}
+		owners[repoIDText] = append(owners[repoIDText], teamID)
+	}
+	return owners, rows.Err()
+}
+
 // ownedRepoIDText runs the owned-repo query and returns the RAW scanned
 // repo_id strings, before uuid.Parse or the uuid.Nil defense-in-depth filter
 // OwnedRepoIDs applies on top. Exists so a test can assert on the SQL

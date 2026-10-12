@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
-	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -53,7 +52,7 @@ func TestTheRollingReadLeavesOutRetractedKeys(t *testing.T) {
 	store("mid@example.com", d3, 20, 5, 0, older)
 	store("mid@example.com", d3, 0, 0, 1, newer)
 
-	stats, err := LoadRollingStats(ctx, conn, org, asOf, teamactive.Inactive{})
+	stats, err := LoadRollingStats(ctx, conn, org, asOf, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

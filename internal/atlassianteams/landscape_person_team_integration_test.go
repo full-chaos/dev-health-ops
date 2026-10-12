@@ -15,20 +15,21 @@ import (
 )
 
 // TestThePersonsTeamOfTheLandscapeComesFromAnAtlassianTeamMembership is the
-// Jira line of the provider matrix of the landscape's person-to-team rule
-// (the GitHub, GitLab and Linear lines are in package providersync). The
-// membership rows are the ones this package's Collect and Write produce from
-// the Teams API answers of the test gateway; no row is written by hand.
+// Jira line of the membership side of the landscape's team rule (the GitHub,
+// GitLab and Linear lines are in package providersync, with the ownership
+// matrix of all four providers). The membership rows are the ones this
+// package's Collect and Write produce from the Teams API answers of the test
+// gateway; no row is written by hand.
 //
 // An Atlassian membership names a person by the account id (the API gives no
 // email), so the person is found as the identity a Jira work item stores for
 // that assignee: the same facet.
 //
-// On a day after the sync the person's point is under the Atlassian team. On a
-// day BEFORE the sync the membership is not valid yet (its valid_from is the
-// time of the sync) and the person has no team, as the work of that day has
-// none from this membership.
-func TestThePersonsTeamOfTheLandscapeComesFromAnAtlassianTeamMembership(t *testing.T) {
+// The landscape's team is the owner of the repository of a person's row
+// (ruling D5985), never a membership: these people have work items and no git
+// row, so no repository, and every point is "unassigned" on both days -- the
+// members' included, before and after the sync.
+func TestAnAtlassianTeamMembershipGivesTheLandscapeNoTeam(t *testing.T) {
 	conn := openClickHouse(t)
 	ctx := context.Background()
 	const org = "org-1"
@@ -92,12 +93,11 @@ WHERE org_id = ? AND as_of_day = ? AND (x_norm != 0 OR y_norm != 0) GROUP BY ide
 		return points
 	}
 
-	member := []string{teamID}
 	unassigned := []string{"unassigned"}
 	if got, want := read(dayBefore), (map[string][]string{people[0]: unassigned, people[1]: unassigned, "jira:nobody-9": unassigned}); !reflect.DeepEqual(got, want) {
 		t.Errorf("the day before the sync: points = %v, want %v", got, want)
 	}
-	if got, want := read(dayAfter), (map[string][]string{people[0]: member, people[1]: member, "jira:nobody-9": unassigned}); !reflect.DeepEqual(got, want) {
+	if got, want := read(dayAfter), (map[string][]string{people[0]: unassigned, people[1]: unassigned, "jira:nobody-9": unassigned}); !reflect.DeepEqual(got, want) {
 		t.Errorf("a day after the sync: points = %v, want %v", got, want)
 	}
 }

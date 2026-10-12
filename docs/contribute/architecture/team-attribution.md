@@ -234,8 +234,8 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > debugging navigation aid; **new code must follow it.** It is implemented across CHAOS-2600
 > CS1–CS7 — the ClickHouse enum widening lands in **CS1** (see *Schema prerequisite* below), the
 > precedence tests are inverted in **CS2**, and the legacy Postgres bridge path is removed in
-> **CS5/CS6**. Until then, §1 below still describes the live (pre-CHAOS-2600) cascade and the
-> existing tests still encode the old precedence.
+> **CS5/CS6**. CS1–CS6 have landed: the ladder in §0.1 is the live cascade (see the restoration note
+> above), and §1 is kept for the cascade flow it draws.
 
 > **CS6 reality (CHAOS-2607).** ClickHouse is the system of record for **both** the team
 > catalog **and** identity→team membership. As of CS6 the Postgres `team_mappings` / `identity_mappings`
@@ -473,7 +473,13 @@ means the ClickHouse `teams` dimension is empty.
 > The row a run writes for a (team, repository) claim starts at the earliest evidence time of the WINNING team's
 > claim: the `created_at` of the earliest pull/merge request of the repository the team's work reaches (an own
 > pull/merge request work item: `work_items.created_at`; a linked issue: the linked pull request's
-> `git_pull_requests.created_at`). A claim with no timed evidence, or evidence after the run, starts at the run.
+> `git_pull_requests.created_at`). A claim with no timed evidence, or evidence after the run, starts at the run,
+> and a later run keeps that row (logged `team_repo_ownership_derivation.evidence_start_set_aside`, `future`).
+> A claim that was retracted before (another team won the repository; a row closed after its own start) and wins
+> again starts at the run when its evidence is older than the end of its latest retraction: that retraction already
+> judged that evidence, and a row at the evidence time would have the key of the retracted row and reopen it, so a
+> read of the interval the other team owned would name this team again (logged with `before_retraction`). A row
+> closed at its own start (superseded, below) is no retraction.
 > One open row per claim: an open row of the claim that does not start at its evidence time (written by an
 > earlier run at its run time) is superseded -- closed at its own `valid_from`, an empty interval no read
 > sees -- in the same run, after the row at the evidence time is written (logged
@@ -1144,6 +1150,16 @@ does not read beside one it reads, two ids, no `edges`, null `edges`, a team sea
 controls: a link that is gone and an explicit empty list are closed).
 
 #### 0.4d A project of several teams: every active team takes the item (CHAOS-8905)
+
+> **Rule of record: one main owner, lesser owners keep their own share (chris, 2026-10-12, verbatim):** *"it's not
+> 'equal shares', the entire history keeps one team as the main owner, and the others who have a lesser percentage
+> share as the share they have."* The measure (lead D5988, from the D5432 ranking in section 1.1): a team's share of a
+> repository is its **linked share**, the link counts per tier (`native`, then `explicit_text`, then `heuristic`); the
+> team with the largest linked share is the main owner and keeps `is_primary` over the whole history, and every other
+> owning team gets a row with its own share. The share value and the per-team rows are not implemented
+> (`team_repo_ownership` has `is_primary`, `specificity`, `priority` only). The text below
+> describes the code as it is on main. Where it says "same rank", "owners at the winner's rank" or "shared
+> equally", it does not yet implement this rule (tracked in CHAOS-9407).
 
 A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
 teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active
@@ -1884,28 +1900,46 @@ Limits:
   count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
   of zeros are equal.
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
-- `ic_landscape_rolling_30d` and the person's `user_metrics_daily` row of the day: the team of a person for a day
-  comes ONLY from the `team_memberships` rows that are valid at that day (the attribution's provider membership read,
-  `LoadProviderMembers`, as of the day: `valid_from` at or before the day, and no `valid_to` or a later one), and
-  only from ACTIVE teams. The row of the day holds ONE team: the first by the attribution's rank (primary, then
-  specificity, priority, the newer row, the team id). The landscape holds a point for EACH active team of the person,
-  so a person of N teams is ranked among the members of each. A person with no membership valid at the day is
-  `unassigned`, id and name, in the row and in the landscape. The NAME of the row's team comes from the same read as
-  its id (CHAOS-9134): the name of the newest membership fact of that team that has one, so the id and the name of one
-  row never come from different teams (a team no fact names keeps its id as its name; the reference passed the stored
-  name through, a declared narrow divergence). The team a STORED row holds is never a source: after
-  the first run of a day the newest stored row is the family's own output, and a person who left a team would stay
-  in it. A point stored under a team the run does not produce is retracted by the rule of this section. What stays:
-  - an id with NO row in `teams` counts as active, so a membership of a deleted team still gives a row and points;
+- `ic_landscape_rolling_30d` (ruling D5985): the team of a point is the team that OWNS the repository of the
+  person's row, never the person's membership and never a team id stored on the row. A person's 30-day numbers in a
+  team are the person's `user_metrics_daily` rows in the repositories the team owns (`teamownership.OwnersByRepo` as
+  of the last millisecond of the day: the ownership rule of the query API's team groupings -- FINAL, the bitemporal
+  window, the `repos` name join with its matched sentinel, a non-empty team id, a repository `repos` holds -- and an
+  inactive team owns nothing). A repository owned by several teams counts whole in each of them; a person who worked
+  in repositories of two teams has a point in each, ranked among the people of that team's repositories. A row of a
+  repository no team owns, and the row of a person with work items and no git row (the synthesized repository,
+  which no team owns), is `unassigned`; a blank or `unknown` identity keeps a blank team. Ownership is provider-
+  agnostic: a GitHub access grant, a GitLab group's project grant and a Jira or Linear team's project, each derived
+  into repository ownership, give the same answer (tested per provider). What stays:
+  - work items reach the landscape only through the person's git row of the day (the merge adds a person's completed
+    items to one git row); items of a person with no git row are `unassigned`, and items are never split by the
+    repository their pull requests are in;
+  - a stored point of a day the run does not compute keeps the team it was stored with until that day is computed
+    again (a recompute of history is a separate decision);
+  - a report chart of a person metric of the landscape (churn, delivery, cycle time, WIP, the raw axes) that is NOT
+    grouped by team counts each person once with the person's WHOLE value (ruling D5986): the person's live
+    `user_metrics_daily` rows of the 30 days ending on the point's day, never a value rebuilt from the team rows (a
+    shared repository is in two teams, and a median or a max does not add). The chart's own filter (organization,
+    days, teams) only selects which people of which day are in it. A chart grouped by team reads the team values;
+    the normalized coordinates are ranks inside one team and keep one value per (person, team).
+- The person's `user_metrics_daily` row of the day still takes its team from membership: the team of a person for a
+  day comes ONLY from the `team_memberships` rows that are valid at that day (the attribution's provider membership
+  read, `LoadProviderMembers`, as of the day: `valid_from` at or before the day, and no `valid_to` or a later one),
+  and only from ACTIVE teams. The row of the day holds ONE team: the first by the attribution's rank (primary, then
+  specificity, priority, the newer row, the team id). A person with no membership valid at the day is `unassigned`,
+  id and name. The NAME of the row's team comes from the same read as its id (CHAOS-9134): the name of the newest
+  membership fact of that team that has one, so the id and the name of one row never come from different teams (a
+  team no fact names keeps its id as its name; the reference passed the stored name through, a declared narrow
+  divergence). The team a STORED row holds is never a source: after the first run of a day the newest stored row is
+  the family's own output, and a person who left a team would stay in it. What stays:
+  - an id with NO row in `teams` counts as active, so a membership of a deleted team still gives a row;
   - only the membership table is read: a person an admin added to a team by hand (the manual roster of the team)
     gets no team here;
   - a member the provider reports with no email is stored with the provider name only, which no commit email
     equals: that person's git rows stay `unassigned`;
   - a membership is valid from the time of the sync that first saw it, so a day before that sync gives no team;
-  - a chart of the landscape metrics over the WHOLE organization with no team filter weights a person of N teams N
-    times in an average (by team: once for each team; by person: unchanged);
   - the membership read fails the run above 100 000 membership rows of an organization: loud, not silent;
-  - a row of a day the run does not compute keeps the id it was stored with; it gives no point that id.
+  - a row of a day the run does not compute keeps the id it was stored with.
 - A family writes its real rows at its own clock. A real row of a key that an EARLIER row of zeros superseded (the key
   comes back) is the newest row of its key only when the family's clock, cut to the unit of the table's `computed_at`
   column, is later than that row of zeros. The row of zeros is at the later of its family's clock and one unit after
@@ -1969,8 +2003,13 @@ Limits:
 
 Ownership and membership rows are bitemporal (`valid_from`, `valid_to`). An item takes its team from the rows
 valid on **the item's day**, never from the rows valid when a job runs. Ownership starts when it was first
-known: an item of a day before the first known ownership of its repository or project stays unassigned, and a
-later change of owner does not rewrite the items of earlier days.
+known, and a later change of owner does not rewrite the items of earlier days.
+
+> **Superseded (chris, 2026-10-12 17:26Z, lead D5987, option C):** for a day before the first recorded ownership
+> of a repository, the repository's FIRST recorded owners apply backward; the earlier rule ("an item of a day
+> before the first known ownership stays unassigned", chris 2026-10-10, D5922) no longer holds. Not yet
+> implemented in the readers (`OwnersByRepo`, `AuthoritativeOwnerByRepo`, `teamscope`): CHAOS-9404; the
+> `valid_from` of the inferred derivation is CHAOS-9403.
 
 - **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
   `completed_at`), and the start of the current day for an item that is not completed. A done item with no

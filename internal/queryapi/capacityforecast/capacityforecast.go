@@ -473,6 +473,13 @@ func ResolveForecasts(
 		}
 	}
 
+	// LIMIT 1 BY keeps the newest row of each forecast slice before the page
+	// LIMIT applies. forecast_id is a fresh uuid per write and the table is
+	// ordered by it, so a retried partition re-inserts forecasts that nothing
+	// can collapse (FINAL would not help); without this the copies fill the
+	// page and push real forecasts out of it. The key is the slice a run
+	// writes once per day: scope, calendar day and the run parameters.
+	//
 	// Python binds LIMIT as a pyformat parameter through a different client.
 	// Server-side bindings here are strings, and ClickHouse will not accept a
 	// bound value in a LIMIT clause, so the already-integer limit is formatted
@@ -508,6 +515,8 @@ func ResolveForecasts(
         FROM capacity_forecasts
         WHERE %s
         ORDER BY computed_at DESC
+        LIMIT 1 BY team_id, work_scope_id, toDate(computed_at),
+            history_days, simulation_count, target_items, target_date
         LIMIT %d
     `, strings.Join(conditions, " AND "), limit)
 

@@ -90,6 +90,8 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -119,6 +121,9 @@ type MetricSpec struct {
 	WhereClause               string
 	Transform                 func(float64) float64
 	UsePrimaryTeamAttribution bool
+	// OwnerTeam groups the rows by the team that OWNS the row's repository
+	// (teamscope.OwnerShares, alias o), not by a team id the row stores.
+	OwnerTeam bool
 	// DayExpr is the UTC date a row falls on, for the window filter and the
 	// bucket. Empty means the daily table's own day column.
 	DayExpr string
@@ -148,13 +153,18 @@ type QuadrantDefinition struct {
 // teamLabelExpr ports TEAM_LABEL (quadrant.py:69).
 const teamLabelExpr = "ifNull(nullIf(m.team_name, ''), m.team_id)"
 
-// TeamMetrics ports TEAM_METRICS (quadrant.py:72-136) verbatim.
+// TeamMetrics ports TEAM_METRICS (quadrant.py:72-136), with one declared
+// difference: the specs of user_metrics_daily group by the repository's owning
+// team (OwnerTeam), never by the team id the row stores. That stored id is the
+// team of the PERSON (a membership), and a team is repository and project
+// ownership only. A team's review load and review latency are therefore the
+// reviews in the repositories the team owns, not the reviews by its members.
 var TeamMetrics = map[string]MetricSpec{
 	"churn": {
 		Metric: "churn", Label: "Churn", Unit: "loc",
 		Table: "user_metrics_daily AS m", ValueExpr: "sum(m.loc_touched)",
-		EntityExpr: "m.team_id", LabelExpr: teamLabelExpr,
-		WhereClause: "AND m.team_id != ''", Transform: identity,
+		EntityExpr: ownerTeamIDExpr, LabelExpr: ownerTeamLabelExpr,
+		Transform: identity, OwnerTeam: true,
 	},
 	"throughput": {
 		Metric: "throughput", Label: "Throughput", Unit: "items",
@@ -179,16 +189,35 @@ var TeamMetrics = map[string]MetricSpec{
 	"review_load": {
 		Metric: "review_load", Label: "Review Load", Unit: "reviews",
 		Table: "user_metrics_daily AS m", ValueExpr: "sum(m.reviews_given) / nullIf(countDistinct(m.identity_id), 0)",
-		EntityExpr: "m.team_id", LabelExpr: teamLabelExpr,
-		WhereClause: "AND m.team_id != ''", Transform: identity,
+		EntityExpr: ownerTeamIDExpr, LabelExpr: ownerTeamLabelExpr,
+		Transform: identity, OwnerTeam: true,
 	},
 	"review_latency": {
 		Metric: "review_latency", Label: "Review Latency", Unit: "hours",
 		Table: "user_metrics_daily AS m", ValueExpr: "avg(m.pr_first_review_p50_hours)",
-		EntityExpr: "m.team_id", LabelExpr: teamLabelExpr,
-		WhereClause: "AND m.team_id != '' AND m.pr_first_review_p50_hours IS NOT NULL",
-		Transform:   identity,
+		EntityExpr: ownerTeamIDExpr, LabelExpr: ownerTeamLabelExpr,
+		WhereClause: "AND m.pr_first_review_p50_hours IS NOT NULL",
+		Transform:   identity, OwnerTeam: true,
 	},
+}
+
+const (
+	ownerTeamIDExpr    = "o.owner_team_id"
+	ownerTeamLabelExpr = "o.owner_team_label"
+)
+
+// ownerTeamRead is an OwnerTeam spec with the ownership join it reads through:
+// each row of a repository counts for every ACTIVE team that owns the repository
+// now (a repository of two owners is a point of each; no reader sums the team
+// points), and a repository with no owner gives no team a point. selectedTeams
+// narrows the owners to the teams of the request.
+func ownerTeamRead(spec MetricSpec, orgID string, selectedTeams []string, asOf time.Time) (MetricSpec, extraScope) {
+	shares, bindings := teamscope.OwnerShares(orgID, selectedTeams, asOf)
+	spec.JoinClause = "INNER JOIN " + shares + " AS o ON o.owner_repo_id = toString(m.repo_id)"
+	return spec, extraScope{
+		SQL:      "\n          AND o.owner_team_id IN (" + activeteams.IDsSubquery + ")",
+		Bindings: bindings,
+	}
 }
 
 // RepoMetrics ports REPO_METRICS (quadrant.py:138-206) verbatim.

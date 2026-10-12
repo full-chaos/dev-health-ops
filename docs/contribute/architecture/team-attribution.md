@@ -1208,6 +1208,13 @@ project (section 0.1): a native team key gives one team.
   change. A rollup-based team view shows a co-owned item under its primary team only, until the rollup rows
   carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
   passes the primary team only.
+- **The team review quadrant reads repository ownership (CHAOS-9339).** At the team grain the quadrant's
+  `user_metrics_daily` metrics (review load, review latency, and churn, which the churn/throughput pair forces to the
+  repository grain) group a row by the team that owns its repository now (`teamscope.OwnerShares`, active teams only),
+  never by the row's stored `team_id`: that id is the PERSON's membership team. A team's review load and review latency
+  are the reviews in the repositories the team owns, not the reviews by its members. A repository of several owners is
+  a point of each owner; a repository with no owner is no team's point. Selected teams narrow the owners. Asserted on
+  real ClickHouse by `TestTheTeamReviewQuadrantGroupsByTheRepositoryOwner`.
 - **Known limit: the team of a work unit follows one team per work unit in the work-unit team list.** A co-owner
   team sees the item in the item views (the issues drilldown, the aggregated flame, the team quadrant, the flow-matrix
   TEAM and REPO activity). The GraphQL work-unit team list (`workUnitTeamAttributions`) takes the team from the

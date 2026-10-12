@@ -92,12 +92,58 @@ func TestRolesHelpNamesEveryVariableAndExitsZero(t *testing.T) {
 	if code := ExecuteRoles(nil, "dho", []string{"-h"}, envLookup(nil), &stdout, &stderr); code != 0 { //nolint:staticcheck // help needs no context
 		t.Fatalf("help exit %d", code)
 	}
-	for _, want := range []string{"RIVER_DOMAIN_DATABASE_PASSWORD", "QUERY_API_DATABASE_ROLE", "RIVER_KEDA_READONLY_PASSWORD", "RIVER_DATABASE_SCHEMA", "_FILE", "-check"} {
+	for _, want := range []string{"RIVER_DOMAIN_DATABASE_PASSWORD", "QUERY_API_DATABASE_ROLE", "RIVER_KEDA_READONLY_PASSWORD", "RIVER_DATABASE_SCHEMA", "OTEL_PG_MONITOR_DATABASE_ROLE", "OTEL_PG_MONITOR_DATABASE_PASSWORD", "_FILE", "-check"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("help lacks %s:\n%s", want, stderr.String())
 		}
 	}
 	if code := ExecuteRoles(nil, "dho", []string{"positional"}, envLookup(nil), &stdout, &stderr); code != 2 { //nolint:staticcheck
 		t.Fatalf("a positional argument must be an argument error, got %d", code)
+	}
+}
+
+// CHAOS-9369: the optional monitor login is read from OTEL_PG_MONITOR_DATABASE_ROLE /
+// _PASSWORD, only when the role is named, and its password is required then.
+func TestRolesOptionsFromEnvironmentMonitorRole(t *testing.T) {
+	t.Parallel()
+	base := map[string]string{
+		"RIVER_DOMAIN_DATABASE_ROLE": "d", "RIVER_DOMAIN_DATABASE_PASSWORD": "x",
+		"RIVER_QUEUE_DATABASE_ROLE": "q", "RIVER_QUEUE_DATABASE_PASSWORD": "x",
+		"RIVER_COORDINATOR_DATABASE_PASSWORD": "x",
+	}
+	with := func(extra map[string]string) map[string]string {
+		out := map[string]string{}
+		for k, v := range base {
+			out[k] = v
+		}
+		for k, v := range extra {
+			out[k] = v
+		}
+		return out
+	}
+	var stderr bytes.Buffer
+	off, ok := rolesOptionsFromEnvironment(envLookup(base), &stderr)
+	if !ok || off.Monitor.Name != "" || strings.Contains(strings.Join(roleLabels(off), ","), "monitor") {
+		t.Fatalf("unset = off: ok=%v %+v", ok, off.Monitor)
+	}
+	blank, ok := rolesOptionsFromEnvironment(envLookup(with(map[string]string{"OTEL_PG_MONITOR_DATABASE_ROLE": "  "})), &stderr)
+	if !ok || blank.Monitor.Name != "" {
+		t.Fatalf("a blank monitor role is unset: ok=%v %+v", ok, blank.Monitor)
+	}
+	on, ok := rolesOptionsFromEnvironment(envLookup(with(map[string]string{
+		"OTEL_PG_MONITOR_DATABASE_ROLE": "otel_monitor", "OTEL_PG_MONITOR_DATABASE_PASSWORD": "pw-mon"})), &stderr)
+	if !ok || on.Monitor.Name != "otel_monitor" || on.Monitor.Password != "pw-mon" {
+		t.Fatalf("monitor not read: ok=%v %+v", ok, on.Monitor)
+	}
+	if got := roleLabels(on); got[len(got)-1] != "monitor" {
+		t.Fatalf("labels = %v", got)
+	}
+	if roleNames(on)["monitor"] != "otel_monitor" {
+		t.Fatalf("roleNames must carry the monitor role (the migration-login distinctness check): %v", roleNames(on))
+	}
+	stderr.Reset()
+	if _, ok := rolesOptionsFromEnvironment(envLookup(with(map[string]string{"OTEL_PG_MONITOR_DATABASE_ROLE": "otel_monitor"})), &stderr); ok ||
+		!strings.Contains(stderr.String(), "OTEL_PG_MONITOR_DATABASE_PASSWORD") {
+		t.Fatalf("a named monitor role without its password must be refused naming the variable: ok=%v %s", ok, stderr.String())
 	}
 }

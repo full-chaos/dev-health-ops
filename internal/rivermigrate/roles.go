@@ -30,7 +30,7 @@ import (
 func rolesCommand() cli.Command {
 	return cli.Command{
 		Name:    "roles",
-		Summary: "create the unprivileged Go runtime logins (domain, queue, coordinator, optional api/query-api/KEDA), or check them (--check)",
+		Summary: "create the unprivileged Go runtime logins (domain, queue, coordinator, optional api/query-api/KEDA/monitor), or check them (--check)",
 		Kind:    cli.Verb,
 		Run: func(ctx context.Context, env cli.Env) int {
 			return ExecuteRoles(ctx, "dho", env.Args, env.Lookup, env.Stdout, env.Stderr)
@@ -47,6 +47,7 @@ const rolesEnvironment = "\nEnvironment (every password also accepts <NAME>_FILE
 	"  API_DATABASE_ROLE / API_DATABASE_PASSWORD                           optional: provisioned only when the role is set\n" +
 	"  QUERY_API_DATABASE_ROLE / QUERY_API_DATABASE_PASSWORD               optional\n" +
 	"  RIVER_KEDA_READONLY_DATABASE_ROLE / RIVER_KEDA_READONLY_PASSWORD    optional (KEDA read-only scaler login)\n" +
+	"  OTEL_PG_MONITOR_DATABASE_ROLE / OTEL_PG_MONITOR_DATABASE_PASSWORD   optional (collector pg_monitor-only login; no table or schema privilege)\n" +
 	"  RIVER_DATABASE_SCHEMA (default river)                               the schema the KEDA login may read\n"
 
 // ExecuteRoles runs `dho migrate roles`. Default: apply, then verify the bootstrap
@@ -232,13 +233,16 @@ func rolesOptionsFromEnvironment(lookup platformsecrets.LookupEnv, stderr io.Wri
 	if options.Keda, err = role("RIVER_KEDA_READONLY_DATABASE_ROLE", "RIVER_KEDA_READONLY_PASSWORD", false, ""); err != nil {
 		return fail(err)
 	}
+	if options.Monitor, err = role("OTEL_PG_MONITOR_DATABASE_ROLE", "OTEL_PG_MONITOR_DATABASE_PASSWORD", false, ""); err != nil {
+		return fail(err)
+	}
 	options.RiverSchema = name("RIVER_DATABASE_SCHEMA")
 	return options, true
 }
 
 func roleNames(options roleprovision.Options) map[string]string {
 	names := map[string]string{"domain": options.Domain.Name, "queue": options.Queue.Name, "coordinator": options.Coordinator.Name}
-	for label, role := range map[string]roleprovision.Role{"api": options.API, "query_api": options.QueryAPI, "keda": options.Keda} {
+	for label, role := range map[string]roleprovision.Role{"api": options.API, "query_api": options.QueryAPI, "keda": options.Keda, "monitor": options.Monitor} {
 		if role.Name != "" {
 			names[label] = role.Name
 		}
@@ -256,6 +260,9 @@ func roleLabels(options roleprovision.Options) []string {
 	}
 	if options.Keda.Name != "" {
 		labels = append(labels, "keda")
+	}
+	if options.Monitor.Name != "" {
+		labels = append(labels, "monitor")
 	}
 	return labels
 }

@@ -5,10 +5,12 @@ package rivermigrate_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -320,5 +322,172 @@ func TestMigrateRolesFailsWhenAnExistingLoginHasADifferentPasswordAndChangesNoth
 		if strings.Contains(stdout.String()+stderr.String(), leaked) {
 			t.Errorf("--check output leaked %q (role names and passwords never appear, only labels)", leaked)
 		}
+	}
+}
+
+// CHAOS-9369: the optional collector login holds ONLY pg_monitor. Through the real
+// command on a real Postgres: pg_monitor works (statistics views, other sessions'
+// rows), no application table in public or the river schema is readable (42501),
+// --check passes, a pre-existing monitor login with an extra table grant fails
+// Verify, and without the env no monitor role exists.
+func TestMigrateRolesMonitorLoginIsPgMonitorOnly(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	for _, statement := range []string{
+		`CREATE TABLE public.app_secret (id int, value text)`,
+		`INSERT INTO public.app_secret VALUES (1, 'x')`,
+		`CREATE SCHEMA river`,
+		`CREATE TABLE river.river_job (id int)`,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings := map[string]string{
+		"MIGRATION_DATABASE_URI":              instance.URI,
+		"RIVER_DOMAIN_DATABASE_ROLE":          "mon_domain",
+		"RIVER_QUEUE_DATABASE_ROLE":           "mon_queue",
+		"RIVER_COORDINATOR_DATABASE_ROLE":     "mon_coordinator",
+		"RIVER_DOMAIN_DATABASE_PASSWORD":      "mon-secret-domain",
+		"RIVER_QUEUE_DATABASE_PASSWORD":       "mon-secret-queue",
+		"RIVER_COORDINATOR_DATABASE_PASSWORD": "mon-secret-coordinator",
+	}
+	lookup := func(key string) (string, bool) { value, ok := settings[key]; return value, ok }
+	run := func(args ...string) (int, string) {
+		var stdout, stderr bytes.Buffer
+		code := rivermigrate.ExecuteRoles(ctx, "dho", args, lookup, &stdout, &stderr)
+		return code, stdout.String() + stderr.String()
+	}
+
+	// (e) env unset = no monitor role.
+	if code, output := run(); code != 0 {
+		t.Fatalf("baseline roles run failed: exit %d\n%s", code, output)
+	}
+	var roles int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname = 'otel_pg_monitor'`).Scan(&roles); err != nil || roles != 0 {
+		t.Fatalf("unset env must create no monitor role: %d %v", roles, err)
+	}
+
+	settings["OTEL_PG_MONITOR_DATABASE_ROLE"] = "otel_pg_monitor"
+	settings["OTEL_PG_MONITOR_DATABASE_PASSWORD"] = "mon-secret-monitor"
+	code, output := run()
+	if code != 0 {
+		t.Fatalf("roles with the monitor login failed: exit %d\n%s", code, output)
+	}
+	if strings.Contains(output, "mon-secret-monitor") || strings.Contains(output, "otel_pg_monitor") {
+		t.Fatalf("output leaked the monitor name or password:\n%s", output)
+	}
+	if !strings.Contains(output, "monitor") {
+		t.Fatalf("output must name the monitor LABEL:\n%s", output)
+	}
+	// (c) --check passes.
+	if code, output := run("--check"); code != 0 {
+		t.Fatalf("--check must pass: exit %d\n%s", code, output)
+	}
+
+	monitorConfig, err := pgxpool.ParseConfig(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitorConfig.ConnConfig.User, monitorConfig.ConnConfig.Password = "otel_pg_monitor", "mon-secret-monitor"
+	monitor, err := pgxpool.NewWithConfig(ctx, monitorConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(monitor.Close)
+
+	// (a) pg_monitor works: statistics, and other sessions' rows in pg_stat_activity.
+	var databases int
+	if err := monitor.QueryRow(ctx, `SELECT count(*) FROM pg_stat_database`).Scan(&databases); err != nil || databases == 0 {
+		t.Fatalf("pg_stat_database: %d %v", databases, err)
+	}
+	var sessions int
+	if err := monitor.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE usename IS NOT NULL AND usename <> 'otel_pg_monitor' AND query <> '<insufficient privilege>'`).Scan(&sessions); err != nil || sessions == 0 {
+		t.Fatalf("pg_stat_activity must show other sessions' queries to pg_monitor: %d %v", sessions, err)
+	}
+
+	// (b) no application table is readable, in public or the river schema.
+	for _, query := range []string{
+		`SELECT * FROM public.app_secret`,
+		`SELECT count(*) FROM river.river_job`,
+		`INSERT INTO public.app_secret VALUES (2, 'y')`,
+	} {
+		_, err := monitor.Exec(ctx, query)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+			t.Errorf("%s: want permission denied (42501), got %v", query, err)
+		}
+	}
+
+	// (d) a table grant on an existing monitor login makes the check fail, naming the label only.
+	if _, err := admin.Exec(ctx, `GRANT SELECT ON public.app_secret TO otel_pg_monitor`); err != nil {
+		t.Fatal(err)
+	}
+	code, output = run("--check")
+	if code != 1 || !strings.Contains(output, "monitor") || !strings.Contains(output, "table in schema public") {
+		t.Fatalf("a table grant on the monitor login must fail --check: exit %d\n%s", code, output)
+	}
+	if _, err := admin.Exec(ctx, `REVOKE SELECT ON public.app_secret FROM otel_pg_monitor`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `GRANT SELECT ON river.river_job TO otel_pg_monitor`); err != nil {
+		t.Fatal(err)
+	}
+	if code, output = run("--check"); code != 1 || !strings.Contains(output, "table in schema river") {
+		t.Fatalf("a river-schema table grant must fail --check: exit %d\n%s", code, output)
+	}
+	if _, err := admin.Exec(ctx, `REVOKE SELECT ON river.river_job FROM otel_pg_monitor`); err != nil {
+		t.Fatal(err)
+	}
+	// A grant outside public and river is the ACL enumeration's catch (the explicit table
+	// check covers only those two schemas), and so is a non-table privilege.
+	if _, err := admin.Exec(ctx, `CREATE SCHEMA other_app; CREATE TABLE other_app.t (id int); GRANT SELECT ON other_app.t TO otel_pg_monitor`); err != nil {
+		t.Fatal(err)
+	}
+	if code, output = run("--check"); code != 1 || !strings.Contains(output, "monitor") {
+		t.Fatalf("a table grant in another schema must fail --check: exit %d\n%s", code, output)
+	}
+	if _, err := admin.Exec(ctx, `REVOKE SELECT ON other_app.t FROM otel_pg_monitor`); err != nil {
+		t.Fatal(err)
+	}
+	if code, output = run("--check"); code != 0 {
+		t.Fatalf("--check must pass again once the extra grant is revoked: exit %d\n%s", code, output)
+	}
+	// CREATE on schema public arriving only through PUBLIC (the pre-v15 default) lets the
+	// login create tables, so it is a problem for this login (r1 P1).
+	if _, err := admin.Exec(ctx, `GRANT CREATE ON SCHEMA public TO PUBLIC`); err != nil {
+		t.Fatal(err)
+	}
+	if code, output = run("--check"); code != 1 || !strings.Contains(output, "monitor") {
+		t.Fatalf("CREATE on schema public through PUBLIC must fail --check: exit %d\n%s", code, output)
+	}
+	if _, err := admin.Exec(ctx, `REVOKE CREATE ON SCHEMA public FROM PUBLIC`); err != nil {
+		t.Fatal(err)
+	}
+	// Membership: an extra role, and a missing pg_monitor, are each a problem.
+	if _, err := admin.Exec(ctx, `CREATE ROLE extra_group NOLOGIN; GRANT extra_group TO otel_pg_monitor`); err != nil {
+		t.Fatal(err)
+	}
+	if code, output = run("--check"); code != 1 || !strings.Contains(output, "other than pg_monitor") {
+		t.Fatalf("a second membership must fail --check: exit %d\n%s", code, output)
+	}
+	if _, err := admin.Exec(ctx, `REVOKE extra_group FROM otel_pg_monitor; REVOKE pg_monitor FROM otel_pg_monitor`); err != nil {
+		t.Fatal(err)
+	}
+	if code, output = run("--check"); code != 1 || !strings.Contains(output, "not a member of pg_monitor") {
+		t.Fatalf("a missing pg_monitor membership must fail --check: exit %d\n%s", code, output)
+	}
+	// Re-running Apply repairs the membership and leaves the password alone.
+	if code, output = run(); code != 0 {
+		t.Fatalf("re-apply must restore pg_monitor: exit %d\n%s", code, output)
 	}
 }

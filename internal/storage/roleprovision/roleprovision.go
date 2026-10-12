@@ -16,9 +16,11 @@
 //     NOCREATEROLE NOREPLICATION NOBYPASSRLS with the given password only when
 //     missing (an existing role keeps its attributes and password, except KEDA's
 //     password, which is re-applied every run so a rotation takes effect);
+//
 //   - CONNECT on the application database; TEMPORARY revoked (from PUBLIC too, for
 //     the mandatory block and the api and query-api blocks); USAGE and no CREATE on
 //     schema public, for the role only;
+//
 //   - KEDA: USAGE on the River schema, SELECT on river_job and (CHAOS-6946) USAGE on
 //     schema public plus SELECT on public.sync_run_units -- the go-sync ScaledObject's
 //     planned-backlog trigger reads it -- nothing else. The psql script never granted
@@ -26,6 +28,13 @@
 //     relying on PUBLIC's own default), and KEDA now reads a table there too, so it
 //     gets the same explicit grant rather than the ambient PUBLIC default a hardened
 //     database may have revoked.
+//
+//   - monitor (CHAOS-9369, optional, no script counterpart): the OpenTelemetry
+//     collector's postgresql-receiver login. CONNECT on the application database,
+//     TEMPORARY revoked, and membership of the built-in pg_monitor -- no schema USAGE,
+//     no table privilege; Verify asserts exactly that (member of pg_monitor and of no
+//     other role, no table privilege in public or the River schema, no own-name grant
+//     but CONNECT).
 //
 // One deliberate difference from the script: Apply runs in ONE transaction, so a
 // failure part-way leaves nothing half-applied (psql ran each statement on its own).
@@ -53,6 +62,15 @@ const MaxIdentifierBytes = 63
 // kedaLabel is the label (never the name) the KEDA login carries in errors and Verify.
 const kedaLabel = "keda"
 
+// monitorLabel is the label (never the name) the pg_monitor-only login carries in
+// errors and Verify (CHAOS-9369).
+const monitorLabel = "monitor"
+
+// monitorBuiltinRole is the one role the monitor login is a member of: the built-in
+// pg_monitor, which is what the OpenTelemetry collector's postgresql receiver needs
+// (pg_stat_* views) and nothing more.
+const monitorBuiltinRole = "pg_monitor"
+
 // kedaSyncRunUnits is the application table the go-sync KEDA trigger counts planned
 // units in (CHAOS-6946). It is Alembic's, in schema public, so it exists before this
 // command runs in the chart and in Compose; the KEDA login gets SELECT on it and on
@@ -76,7 +94,11 @@ type Options struct {
 	// Keda is the KEDA postgresql scaler's read-only login: it reads river_job in
 	// RiverSchema (default "river") for the queue-backlog trigger, and (CHAOS-6946)
 	// public.sync_run_units for the go-sync planned-backlog trigger.
-	Keda        Role
+	Keda Role
+	// Monitor is the OpenTelemetry collector's postgresql-receiver login (CHAOS-9369):
+	// LOGIN, CONNECT on the application database, member of the built-in pg_monitor,
+	// and nothing else -- no schema USAGE, no table privilege of any kind.
+	Monitor     Role
 	RiverSchema string
 	// Authenticate, when set, is asked to log in as a role with the password it was
 	// given; Verify uses it to notice a supplied password that does not work for a
@@ -99,7 +121,7 @@ type labelled struct {
 func (o Options) configured() []labelled {
 	all := []labelled{
 		{"domain", o.Domain}, {"queue", o.Queue}, {"coordinator", o.Coordinator},
-		{"api", o.API}, {"query_api", o.QueryAPI}, {"keda", o.Keda},
+		{"api", o.API}, {"query_api", o.QueryAPI}, {"keda", o.Keda}, {monitorLabel, o.Monitor},
 	}
 	out := make([]labelled, 0, len(all))
 	for index, entry := range all {
@@ -149,10 +171,10 @@ func (o Options) Validate() error {
 	// The runtime roles are the ones `dho migrate river` grants on and refuses by
 	// its own identifier rule, with the misleading "must be distinct" message. A
 	// login this command could create but river then rejects is a dead end, so the
-	// same rule applies here, up front. The KEDA login is never read by river and
-	// stays free-form.
+	// same rule applies here, up front. The KEDA and monitor logins are never read by
+	// river and stay free-form.
 	for _, entry := range o.configured() {
-		if entry.label != "keda" && !riverstore.ValidIdentifier(entry.role.Name) {
+		if entry.label != "keda" && entry.label != monitorLabel && !riverstore.ValidIdentifier(entry.role.Name) {
 			return fmt.Errorf("%w: the %s role name must match [a-z_][a-z0-9_]* and be at most %d bytes (the rule `dho migrate river` applies to runtime roles)",
 				ErrInvalidOptions, entry.label, MaxIdentifierBytes)
 		}
@@ -322,6 +344,26 @@ func Apply(ctx context.Context, pool interface {
 		}
 	}
 
+	// monitor: pg_monitor membership and CONNECT, nothing else. No schema USAGE and no
+	// table grant is given (the built-in role's own privileges are statistics views and
+	// settings); TEMPORARY is revoked like every other login's. The password is NOT
+	// re-applied: an existing login keeps its own, like the other roles.
+	if options.Monitor.Name != "" {
+		name := ident(options.Monitor.Name)
+		if err := create(labelled{monitorLabel, options.Monitor}); err != nil {
+			return err
+		}
+		for _, item := range []struct{ what, statement string }{
+			{"grant connect", "GRANT CONNECT ON DATABASE " + db + " TO " + name},
+			{"revoke temporary", "REVOKE TEMPORARY ON DATABASE " + db + " FROM " + name},
+			{"grant pg_monitor", "GRANT " + monitorBuiltinRole + " TO " + name},
+		} {
+			if err := step(item.what, run.exec(ctx, item.statement)); err != nil {
+				return err
+			}
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: commit", ErrProvisioning)
 	}
@@ -410,7 +452,13 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 		if err := q.QueryRow(ctx, `SELECT `+roleacl.MembershipFreeSQL+`, `+roleacl.OwnsNothingSQL, entry.role.Name).Scan(&memberFree, &ownsNothing); err != nil {
 			return nil, nil, fmt.Errorf("%w: cannot read role membership and ownership", ErrProvisioning)
 		}
-		if !memberFree {
+		if entry.label == monitorLabel {
+			// The monitor login is the one login that MUST be a member of a role -- the
+			// built-in pg_monitor -- and of no other (nothing reachable through
+			// pg_monitor's own built-in members counts). Its table-privilege and
+			// grant checks below are the same closure every other login gets.
+			problems = append(problems, verifyMonitorMembership(ctx, q, entry)...)
+		} else if !memberFree {
 			problems = append(problems, Problem{entry.label, "is a member of another role (privileges it inherits are invisible to its own grants; readiness refuses it)"})
 		}
 		if !ownsNothing {
@@ -427,6 +475,21 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 			if detail := judgeGrant(entry.label, grant, database, options.schema()); detail != "" {
 				problems = append(problems, Problem{entry.label, detail})
 			}
+		}
+		if entry.label == monitorLabel {
+			tableProblems, err := verifyMonitorTables(ctx, q, entry, options.schema())
+			if err != nil {
+				return nil, nil, err
+			}
+			problems = append(problems, tableProblems...)
+			// No USAGE check (the login is not meant to hold one).
+			// CREATE through PUBLIC counts too (PostgreSQL before v15 grants it by
+			// default): unlike the runtime logins, this one is documented as holding
+			// no schema privilege at all, so the effective privilege is the check.
+			if direct || create {
+				problems = append(problems, Problem{entry.label, "can CREATE in schema public (in its own name or through PUBLIC)"})
+			}
+			continue
 		}
 		if entry.label == "keda" {
 			var readsJobs bool
@@ -469,6 +532,69 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 		}
 	}
 	return problems, warnings, nil
+}
+
+// monitorQuerier is what the monitor checks need.
+type monitorQuerier = roleacl.Querier
+
+// verifyMonitorMembership asserts the login is a member of pg_monitor and of no
+// role outside pg_monitor and its three built-in members.
+func verifyMonitorMembership(ctx context.Context, q monitorQuerier, entry labelled) []Problem {
+	var isMember bool
+	var others int
+	err := q.QueryRow(ctx, `SELECT pg_catalog.pg_has_role($1::name, $2::name, 'MEMBER'),
+		(WITH RECURSIVE reachable(oid) AS (
+			SELECT membership.roleid FROM pg_catalog.pg_auth_members AS membership
+			JOIN pg_catalog.pg_roles AS identity ON identity.oid = membership.member
+			WHERE identity.rolname = $1
+			UNION
+			SELECT membership.roleid FROM pg_catalog.pg_auth_members AS membership
+			JOIN reachable ON reachable.oid = membership.member)
+		SELECT count(*) FROM reachable JOIN pg_catalog.pg_roles AS granted ON granted.oid = reachable.oid
+		WHERE granted.rolname <> ALL (ARRAY['pg_monitor','pg_read_all_settings','pg_read_all_stats','pg_stat_scan_tables']))`,
+		entry.role.Name, monitorBuiltinRole).Scan(&isMember, &others)
+	if err != nil {
+		return []Problem{{entry.label, "could not read its role membership"}}
+	}
+	var problems []Problem
+	if !isMember {
+		problems = append(problems, Problem{entry.label, "is not a member of pg_monitor"})
+	}
+	if others > 0 {
+		problems = append(problems, Problem{entry.label, "is a member of a role other than pg_monitor"})
+	}
+	return problems
+}
+
+// verifyMonitorTables asserts the login holds no SELECT, INSERT, UPDATE or DELETE on
+// any table-like relation in schema public or the River schema, in its own name,
+// through PUBLIC or through a role it is a member of.
+func verifyMonitorTables(ctx context.Context, q monitorQuerier, entry labelled, riverSchema string) ([]Problem, error) {
+	var problems []Problem
+	for _, schema := range []string{"public", riverSchema} {
+		var count int
+		if err := q.QueryRow(ctx, `SELECT count(*) FROM pg_catalog.pg_class AS relation
+			JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+			WHERE namespace.nspname = $2 AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+				AND (pg_catalog.has_table_privilege($1::name, relation.oid, 'SELECT')
+					OR pg_catalog.has_table_privilege($1::name, relation.oid, 'INSERT')
+					OR pg_catalog.has_table_privilege($1::name, relation.oid, 'UPDATE')
+					OR pg_catalog.has_table_privilege($1::name, relation.oid, 'DELETE'))`,
+			entry.role.Name, schema).Scan(&count); err != nil {
+			return nil, fmt.Errorf("%w: cannot read the %s role's table privileges", ErrProvisioning, entry.label)
+		}
+		if count > 0 {
+			problems = append(problems, Problem{entry.label, "holds SELECT, INSERT, UPDATE or DELETE on a table in schema " + schema})
+		}
+	}
+	return problems, nil
+}
+
+// monitorGrantExpected is true for the one grant Apply gives the monitor login in
+// its own name: CONNECT on the application database (pg_monitor membership is not
+// an ACL entry).
+func monitorGrantExpected(grant roleacl.Grant, database string) bool {
+	return grant.Class == "database" && grant.Object == database && grant.Privilege == "CONNECT"
 }
 
 // kedaGrantExpected is true for the five grants Apply gives the KEDA login.
@@ -537,6 +663,12 @@ func judgeGrant(label string, grant roleacl.Grant, database, schema string) stri
 	// privileges included, is a problem.
 	if grant.ViaPublic {
 		if publicAmbient(grant, database) || (grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "CREATE") {
+			return ""
+		}
+		return unexpected
+	}
+	if label == monitorLabel {
+		if monitorGrantExpected(grant, database) {
 			return ""
 		}
 		return unexpected

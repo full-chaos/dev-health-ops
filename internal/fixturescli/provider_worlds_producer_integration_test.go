@@ -479,7 +479,6 @@ func produceWorld(t *testing.T, world providerWorld) FrozenWorld {
 	after := rowCounts(t, ch.httpDSN)
 	derived := derivedTables(t, ch.httpDSN)
 	frozen := FrozenWorld{
-		Producer: producerCommit(t),
 		FrozenAt: world.FrozenAt.UTC().Format(producerClockLayout),
 		OrgID:    world.OrgID,
 		Params:   world.Params,
@@ -574,8 +573,11 @@ func TestProviderWorldsAreWhatTheProducersWrite(t *testing.T) {
 		t.Run(WorldFile(world.Params), func(t *testing.T) {
 			produced := produceWorld(t, world)
 			file := WorldFile(world.Params)
-			encoded := encodeWorld(t, produced)
 			if *freezeProviderWorlds {
+				// Only a freeze stamps the producer: the freshness run compares rows and runs where no git
+				// checkout or origin/main exists (CI's test shards).
+				produced.Producer = producerCommit(t)
+				encoded := encodeWorld(t, produced)
 				// A world whose rows are unchanged keeps its file (and its producer stamp and digest).
 				if committed, err := LoadFrozenWorld(world.Params); err == nil && sameWorldRows(committed, produced) {
 					t.Logf("%s: unchanged", file)

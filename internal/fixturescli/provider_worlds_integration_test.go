@@ -9,7 +9,7 @@ import (
 )
 
 // The frozen provider worlds and the run of production verbs that writes each.
-var providerWorlds = []providerWorld{githubWorld}
+var providerWorlds = []providerWorld{githubWorld, gitlabWorld}
 
 // answerJSON marshals a provider answer body.
 func answerJSON(value any) json.RawMessage {

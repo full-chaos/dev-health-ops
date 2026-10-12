@@ -637,8 +637,22 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	// passes through unchanged.
 	source := sourceFrom(spec.Metric, definition)
 	if wholePersonLandscapeMetric(spec, definition) {
-		source = wholePersonLandscapeSource(spec.Metric, source, where)
-		where = "1"
+		// A landscape point holds no repository (its repo_id is a constant
+		// placeholder), so a repository filter selects the person's user rows
+		// of those repositories, not points.
+		pointSpec := spec
+		pointSpec.FilterRepos = nil
+		pointWhere, pointParameters, err := buildChartWhere(pointSpec, definition)
+		if err != nil {
+			return "", nil, err
+		}
+		repoFilter := ""
+		if len(spec.FilterRepos) > 0 {
+			repoFilter = " AND toString(person_rows.repo_id) IN {filter_repos:Array(String)}"
+			pointParameters = append(pointParameters, clickhouse.Named("filter_repos", spec.FilterRepos))
+		}
+		source = wholePersonLandscapeSource(spec.Metric, source, pointWhere, repoFilter)
+		where, parameters = "1", pointParameters
 	}
 	if spec.GroupBy == "" && (spec.ChartType == "scorecard" || spec.ChartType == "trend_delta" || spec.ChartType == "table") {
 		return fmt.Sprintf(`SELECT
@@ -696,12 +710,13 @@ func wholePersonLandscapeMetric(spec ChartSpec, definition metricDefinition) boo
 }
 
 // wholePersonLandscapeSource is the FROM source of a whole-person chart. The
-// chart's own filter (organization, days, teams, repositories) runs on the
-// landscape's live points and says WHICH people of which day and map are in the
-// chart; one row per (organization, repository, map, day, person) then carries
+// chart's own filter (organization, days, teams) runs on the landscape's live
+// points and says WHICH people of which day and map are in the chart; a
+// repository filter (repoFilter) selects the person's user rows of those
+// repositories; one row per (organization, repository, map, day, person) then carries
 // the person's whole value: the person's live user_metrics_daily rows of the
 // 30 days ending on that day, as the landscape compute reads them.
-func wholePersonLandscapeSource(metric, landscapeSource, where string) string {
+func wholePersonLandscapeSource(metric, landscapeSource, where, repoFilter string) string {
 	return fmt.Sprintf(`(
         SELECT org_id, repo_id, map_name, as_of_day, identity_id, %s AS %s
         FROM (
@@ -720,11 +735,11 @@ func wholePersonLandscapeSource(metric, landscapeSource, where string) string {
             ) AS points
             INNER JOIN (SELECT * FROM %s) AS person_rows
                 ON person_rows.org_id = points.org_id AND person_rows.identity_id = points.identity_id
-            WHERE person_rows.day >= points.as_of_day - 29 AND person_rows.day <= points.as_of_day
+            WHERE person_rows.day >= points.as_of_day - 29 AND person_rows.day <= points.as_of_day%s
             GROUP BY org_id, repo_id, map_name, as_of_day, identity_id
         )
     ) AS ic_landscape_rolling_30d`, wholePersonLandscapeColumns[metric], metric, landscapeSource, where,
-		dedupFromSource("user_metrics_daily"))
+		dedupFromSource("user_metrics_daily"), repoFilter)
 }
 
 // sourceFrom is the FROM source for buildChartQuery's outer SELECT.

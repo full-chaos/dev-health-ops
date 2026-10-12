@@ -69,6 +69,7 @@ func TestALandscapeAverageNotGroupedByTeamCountsEachPersonOnce(t *testing.T) {
 VALUES (toUUID(?), ?, ?, ?, 'unassigned', 'Unassigned', ?, ?, ?, ?, ?, ?)`,
 			repoID, rowDay, identity, identity, loc, delivery, cycle, wip, computedAt, orgID)
 	}
+	var chartOf func(metric, chartType, groupBy string, teams, repos []string) map[string]float64
 	const newest, older = "2026-01-02 10:00:00", "2026-01-02 09:00:00"
 	repoOne, repoTwo := "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"
 	userRow(org, repoOne, "person-a", day, 60, 5, 18, 3, newest)
@@ -108,12 +109,16 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
 	chart := func(metric, chartType, groupBy string, teams []string) map[string]float64 {
 		t.Helper()
+		return chartOf(metric, chartType, groupBy, teams, nil)
+	}
+	chartOf = func(metric, chartType, groupBy string, teams, repos []string) map[string]float64 {
+		t.Helper()
 		loader := reportLoaderFunc(func(context.Context, QueryInput) (ReportDefinition, error) {
 			return ReportDefinition{
 				Plan: Plan{PlanID: "plan-1", ReportType: "weekly_health", OrganizationID: org},
 				Charts: []ChartSpec{{
 					ChartID: "chart-1", PlanID: "plan-1", ChartType: chartType, Metric: metric, GroupBy: groupBy,
-					FilterTeams: teams, TimeRangeStart: day, TimeRangeEnd: day, OrganizationID: org,
+					FilterTeams: teams, FilterRepos: repos, TimeRangeStart: day, TimeRangeEnd: day, OrganizationID: org,
 				}},
 			}, nil
 		})
@@ -171,6 +176,33 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		}
 		return total / float64(count)
 	}
+	inRepoOne := map[string]map[string]float64{
+		"person-a": {"churn_loc_30d": 60, "delivery_units_30d": 5, "cycle_p50_30d_hours": 18, "wip_max_30d": 3},
+		"person-b": whole["person-b"],
+	}
+	// repoAverage is wholeAverage over given per-person values.
+	repoAverage := func(metric string, values map[string]map[string]float64) float64 {
+		var total float64
+		var count int
+		for _, person := range values {
+			for _, mapName := range maps {
+				switch metric {
+				case "x_raw":
+					if mapName == "churn_throughput" {
+						total += math.Log1p(person["churn_loc_30d"])
+					} else {
+						total += math.Log1p(person["cycle_p50_30d_hours"])
+					}
+				case "y_raw":
+					total += person["delivery_units_30d"]
+				default:
+					total += person[metric]
+				}
+				count++
+			}
+		}
+		return total / float64(count)
+	}
 	// The team rows of each metric, one per (person, map).
 	teamRows := map[string]map[string][]float64{
 		"team-1": {"churn_loc_30d": {60, 10}, "delivery_units_30d": {5, 2}, "cycle_p50_30d_hours": {18, 4}, "wip_max_30d": {3, 2},
@@ -200,6 +232,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			one(t, "both teams in the filter", chart(metric, "scorecard", "", []string{"team-1", "team-2"}), "total", both)
 			one(t, "team-1 in the filter", chart(metric, "scorecard", "", []string{"team-1"}), "total", both)
 			one(t, "team-2 in the filter (person-a only, whole)", chart(metric, "scorecard", "", []string{"team-2"}), "total", wholeAverage(metric, "person-a"))
+			// A landscape point holds no repository: a repository filter takes
+			// each person's user rows of that repository.
+			one(t, "repository one in the filter", chartOf(metric, "scorecard", "", nil, []string{repoOne}), "total",
+				repoAverage(metric, map[string]map[string]float64{"person-a": inRepoOne["person-a"], "person-b": inRepoOne["person-b"]}))
+			one(t, "repository two in the filter (person-a only)", chartOf(metric, "scorecard", "", nil, []string{repoTwo}), "total",
+				repoAverage(metric, map[string]map[string]float64{"person-a": {"churn_loc_30d": 40, "delivery_units_30d": 3, "cycle_p50_30d_hours": 22, "wip_max_30d": 4}}))
 
 			byTeam := chart(metric, "bar", "team", nil)
 			if len(byTeam) != 2 || !same(byTeam["team-1"], mean(teamRows["team-1"][metric])) || !same(byTeam["team-2"], mean(teamRows["team-2"][metric])) {

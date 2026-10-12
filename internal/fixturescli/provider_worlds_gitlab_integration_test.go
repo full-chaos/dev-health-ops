@@ -345,4 +345,3 @@ var gitlabWorld = providerWorld{
 		{Kind: "work_graph"},
 	},
 }
-

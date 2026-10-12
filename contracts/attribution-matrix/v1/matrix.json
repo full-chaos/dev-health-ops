@@ -153,9 +153,7 @@
       "provider": "gitlab",
       "entity": "repositories",
       "check": "repository_ownership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-9403",
-      "why": "the inferred repository owner starts at the derivation run, not at its earliest linked evidence"
+      "state": "pass"
     },
     {
       "provider": "gitlab",

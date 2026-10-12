@@ -75,8 +75,8 @@ func TestQueueTelemetrySamplerBuildsStableBoundedSnapshot(t *testing.T) {
 	t.Parallel()
 	sampler := testQueueTelemetrySampler(t, func(context.Context) ([]queueTelemetryRow, error) {
 		return []queueTelemetryRow{
-			{queue: "retention", kind: "system.retention_cleanup", available: 5, oldestAgeSeconds: 7.25, localRunning: 3, queueRunning: 2},
-			{queue: "heartbeat", kind: "system.heartbeat", available: 2, oldestAgeSeconds: 12.5, localRunning: 3, queueRunning: 1},
+			{queue: "retention", kind: "system.retention_cleanup", available: 5, oldestAgeSeconds: 7.25, localRunning: 3, queueRunning: 2, scheduled: 4, retryable: 1},
+			{queue: "heartbeat", kind: "system.heartbeat", available: 2, oldestAgeSeconds: 12.5, localRunning: 3, queueRunning: 1, scheduled: 2, retryable: 3},
 		}, nil
 	})
 	snapshot, err := sampler.Snapshot(context.Background())
@@ -106,6 +106,13 @@ func TestQueueTelemetrySamplerBuildsStableBoundedSnapshot(t *testing.T) {
 	}
 	if !reflect.DeepEqual(snapshot.QueueCapacities, wantCapacities) {
 		t.Fatalf("queue capacities = %#v, want %#v", snapshot.QueueCapacities, wantCapacities)
+	}
+	wantStates := []QueueStateTelemetry{
+		{Queue: "heartbeat", Scheduled: 2, Retryable: 3},
+		{Queue: "retention", Scheduled: 4, Retryable: 1},
+	}
+	if !reflect.DeepEqual(snapshot.QueueStates, wantStates) {
+		t.Fatalf("queue states = %#v, want %#v", snapshot.QueueStates, wantStates)
 	}
 	if err := sampler.CheckAvailableContractVersions(context.Background()); err != nil {
 		t.Fatalf("supported version readiness error = %v", err)
@@ -333,4 +340,58 @@ func testQueueTelemetrySampler(t *testing.T, read queueTelemetryReadFunc) *Queue
 		t.Fatal(err)
 	}
 	return &QueueTelemetrySampler{config: normalized, read: read}
+}
+
+func TestQueueTelemetrySamplerRejectsInconsistentOrNegativeQueueStates(t *testing.T) {
+	t.Parallel()
+	for name, rows := range map[string][]queueTelemetryRow{
+		"negative scheduled": {
+			{queue: "heartbeat", kind: "system.heartbeat", scheduled: -1},
+			{queue: "retention", kind: "system.retention_cleanup"},
+		},
+		"negative retryable": {
+			{queue: "heartbeat", kind: "system.heartbeat", retryable: -1},
+			{queue: "retention", kind: "system.retention_cleanup"},
+		},
+	} {
+		rows := rows
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sampler := testQueueTelemetrySampler(t, func(context.Context) ([]queueTelemetryRow, error) { return rows, nil })
+			if _, err := sampler.Snapshot(context.Background()); !errors.Is(err, ErrQueueTelemetryUnavailable) {
+				t.Fatalf("Snapshot() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestQueueTelemetrySamplerRejectsDisagreeingQueueStateRowsWithinOneQueue(t *testing.T) {
+	t.Parallel()
+	config := validQueueTelemetryConfig()
+	config.Jobs = append(config.Jobs, QueueTelemetryJob{
+		Queue: "retention", Kind: "system.retention_other", SupportedVersions: []int{1},
+	})
+	normalized, err := normalizeQueueTelemetryConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*queueTelemetryRow){
+		"scheduled": func(row *queueTelemetryRow) { row.scheduled = 5 },
+		"retryable": func(row *queueTelemetryRow) { row.retryable = 5 },
+	} {
+		mutate := mutate
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rows := []queueTelemetryRow{
+				{queue: "heartbeat", kind: "system.heartbeat"},
+				{queue: "retention", kind: "system.retention_cleanup"},
+				{queue: "retention", kind: "system.retention_other"},
+			}
+			mutate(&rows[2])
+			sampler := &QueueTelemetrySampler{config: normalized, read: func(context.Context) ([]queueTelemetryRow, error) { return rows, nil }}
+			if _, err := sampler.Snapshot(context.Background()); !errors.Is(err, ErrQueueTelemetryUnavailable) {
+				t.Fatalf("Snapshot() error = %v", err)
+			}
+		})
+	}
 }

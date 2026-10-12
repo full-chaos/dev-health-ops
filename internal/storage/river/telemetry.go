@@ -156,6 +156,15 @@ type QueueCapacityTelemetry struct {
 	Saturation float64
 }
 
+// QueueStateTelemetry reports one queue's count of jobs waiting in the
+// scheduled and retryable states. Both are queue-level, table-wide counts
+// (every replica reads the same rows) and never read job args.
+type QueueStateTelemetry struct {
+	Queue     string
+	Scheduled int64
+	Retryable int64
+}
+
 // QueueTelemetrySnapshot is one database-consistent, read-only observation.
 // LocalRunning is restricted to jobs whose latest attempted_by entry is this
 // River client ID, so the saturation denominator is this process's capacity,
@@ -164,6 +173,7 @@ type QueueTelemetrySnapshot struct {
 	Jobs                []QueueJobTelemetry
 	Queues              []QueueAgeTelemetry
 	QueueCapacities     []QueueCapacityTelemetry
+	QueueStates         []QueueStateTelemetry
 	LocalRunning        int64
 	ExecutionSaturation float64
 }
@@ -194,6 +204,8 @@ type queueTelemetryRow struct {
 	oldestAgeSeconds     float64
 	localRunning         int64
 	queueRunning         int64
+	scheduled            int64
+	retryable            int64
 	unsupportedOccupants []string
 }
 
@@ -294,11 +306,14 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 	ages := make(map[string]time.Duration, len(sampler.config.queues))
 	seenAges := make(map[string]float64, len(sampler.config.queues))
 	running := make(map[string]int64, len(sampler.config.queues))
+	scheduled := make(map[string]int64, len(sampler.config.queues))
+	retryable := make(map[string]int64, len(sampler.config.queues))
 	var localRunning int64
 	var offenders []string
 	for index, row := range rows {
 		key := queueJobKey{queue: row.queue, kind: row.kind}
 		if row.available < 0 || row.localRunning < 0 || row.queueRunning < 0 ||
+			row.scheduled < 0 || row.retryable < 0 ||
 			math.IsNaN(row.oldestAgeSeconds) || math.IsInf(row.oldestAgeSeconds, 0) ||
 			row.oldestAgeSeconds < 0 {
 			return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
@@ -316,6 +331,14 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 			return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
 		}
 		running[row.queue] = row.queueRunning
+		if previous, ok := scheduled[row.queue]; ok && previous != row.scheduled {
+			return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
+		}
+		scheduled[row.queue] = row.scheduled
+		if previous, ok := retryable[row.queue]; ok && previous != row.retryable {
+			return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
+		}
+		retryable[row.queue] = row.retryable
 		// Both are whole-selection aggregates: every row of one read must
 		// carry the identical value, so a disagreement means the result set is
 		// not the single consistent observation this sampler contracts for.
@@ -332,6 +355,7 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 		Jobs:                make([]QueueJobTelemetry, 0, len(sampler.config.jobs)),
 		Queues:              make([]QueueAgeTelemetry, 0, len(sampler.config.queues)),
 		QueueCapacities:     make([]QueueCapacityTelemetry, 0, len(sampler.config.queues)),
+		QueueStates:         make([]QueueStateTelemetry, 0, len(sampler.config.queues)),
 		LocalRunning:        localRunning,
 		ExecutionSaturation: executionSaturation(localRunning, sampler.config.executionCapacity),
 	}
@@ -344,6 +368,9 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 	for _, queue := range sampler.config.queues {
 		result.Queues = append(result.Queues, QueueAgeTelemetry{
 			Queue: queue.Name, OldestAvailableAge: ages[queue.Name],
+		})
+		result.QueueStates = append(result.QueueStates, QueueStateTelemetry{
+			Queue: queue.Name, Scheduled: scheduled[queue.Name], Retryable: retryable[queue.Name],
 		})
 		queueRunning := running[queue.Name]
 		result.QueueCapacities = append(result.QueueCapacities, QueueCapacityTelemetry{
@@ -647,6 +674,8 @@ func readQueueTelemetry(
 			&row.oldestAgeSeconds,
 			&row.localRunning,
 			&row.queueRunning,
+			&row.scheduled,
+			&row.retryable,
 			&row.unsupportedOccupants,
 		); err != nil {
 			return nil, err
@@ -714,6 +743,25 @@ queue_running AS (
     WHERE river_job.queue = ANY($3::text[])
         AND river_job.state = 'running'
         AND river_job.attempted_by[array_upper(river_job.attempted_by, 1)] = $7::text
+    GROUP BY river_job.queue
+),
+-- Scheduled and retryable backlog per configured queue. One equality on state
+-- plus queue = ANY(...) per CTE, so each is served by River's
+-- river_job_prioritized_fetching_index (state, queue, priority, scheduled_at,
+-- id) without reading args. Two CTEs, not state = ANY(...), so the planner
+-- sees a single state literal per index probe.
+scheduled_counts AS (
+    SELECT river_job.queue, count(*)::bigint AS scheduled
+    FROM {{river_job}} AS river_job
+    WHERE river_job.state = 'scheduled'
+        AND river_job.queue = ANY($3::text[])
+    GROUP BY river_job.queue
+),
+retryable_counts AS (
+    SELECT river_job.queue, count(*)::bigint AS retryable
+    FROM {{river_job}} AS river_job
+    WHERE river_job.state = 'retryable'
+        AND river_job.queue = ANY($3::text[])
     GROUP BY river_job.queue
 ),
 -- The refusal names the offending contract instead of only asserting that one
@@ -793,10 +841,14 @@ SELECT
     queue_ages.oldest_age_seconds,
     local_running.count,
     coalesce(queue_running.running, 0),
+    coalesce(scheduled_counts.scheduled, 0),
+    coalesce(retryable_counts.retryable, 0),
     unsupported_available.offenders
 FROM available_counts
 JOIN queue_ages USING (queue)
 LEFT JOIN queue_running USING (queue)
+LEFT JOIN scheduled_counts USING (queue)
+LEFT JOIN retryable_counts USING (queue)
 CROSS JOIN local_running
 CROSS JOIN unsupported_available
 ORDER BY available_counts.queue, available_counts.kind

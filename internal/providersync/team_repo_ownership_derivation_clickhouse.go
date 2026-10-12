@@ -229,26 +229,14 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	}
 
 	derivation := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks, knownTeams)
-	retractedUntil, err := loadTeamRepoOwnershipRetractedUntil(ctx, service.Conn, orgID)
-	if err != nil {
-		return 0, 0, true, nil, err
-	}
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
 	// The tie decision runs first because a kept main owner takes the repo's
-	// earliest evidence; that evidence is then settled like every other
-	// claim's (set aside when it is in the future of the run or older than
-	// the end of the claim's last retraction), and the start of each claim is
-	// stamped last.
-	settled, futureEvidence, retractedEvidence := settleInferredEvidence(resolveTiedMainOwners(derivation.Rows, repos, activeRows), repos, retractedUntil, now)
-	if futureEvidence > 0 || retractedEvidence > 0 {
-		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.evidence_start_set_aside",
-			"org_id", orgID, "future", futureEvidence, "before_retraction", retractedEvidence)
-	}
-	derived, roleCloses, roleChanged := applyTeamRepoOwnershipRoleChanges(stampTeamRepoOwnershipClaimStarts(settled, repos, activeRows, now), repos, activeRows, now)
+	// earliest evidence.
+	derived := resolveTiedMainOwners(derivation.Rows, repos, activeRows)
 	// CHAOS-4537 codex review round 3, second P1, and CHAOS-9045: the diff
 	// below is one comparison over the org's whole activeRows, so "this run
 	// does not derive the row" is a proof of absence only when the run read
@@ -266,17 +254,32 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	guard := newTeamRepoOwnershipRetractionGuard(projectLinks, linkHistory, workItems, knownTeams)
 	retractions := diffTeamRepoOwnershipRetractions(activeRows, derived, derivation.Ties, repos)
 	toRetract, held, heldKinds := guard.retain(retractions)
+	// Each claim's evidence is settled (set aside when it is in the future of
+	// the run or older than the end of the claim's last retraction; a main
+	// owner's moved to the end of another team's main tenure), then the start
+	// of each claim is stamped, then role changes are dated at the run.
+	tenure, err := loadTeamRepoOwnershipRetractedUntil(ctx, service.Conn, orgID)
+	if err != nil {
+		return 0, 0, true, nil, err
+	}
+	settled, settledCounts := settleInferredEvidence(derived, repos, tenure, toRetract, now)
+	if settledCounts != (inferredEvidenceSettleCounts{}) {
+		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.evidence_start_set_aside",
+			"org_id", orgID, "future", settledCounts.future, "before_retraction", settledCounts.beforeRetraction,
+			"after_other_owner", settledCounts.afterOtherOwner)
+	}
+	derived, roleCloses, roleChanged := applyTeamRepoOwnershipRoleChanges(stampTeamRepoOwnershipClaimStarts(settled, repos, activeRows, now), repos, activeRows, now)
 	// A role change closes the claim's open row of its old role at the run,
-	// under the same proof as a retraction. A repository with any held close
-	// or retraction keeps every role of this run unchanged, so it never has
-	// two main rows (or none) at one instant: its role changes wait for a
-	// run that proves them all.
+	// under the same proof as a retraction. A repository with a role change
+	// and any held close or retraction keeps all its rows this run, so it
+	// never has two main rows (or none) at one instant: it waits for a run
+	// that proves them all.
 	keptRoleCloses, heldRoles, heldRoleKinds := guard.retain(roleCloses)
 	heldRepos := teamRepoOwnershipReposOf(withoutRows(retractions, toRetract), withoutRows(roleCloses, keptRoleCloses))
-	derived, keptRoleCloses, repoHeld := withoutHeldRoleChanges(derived, roleChanged, keptRoleCloses, heldRepos, repos)
+	derived, toRetract, keptRoleCloses, repoHeld := withoutHeldRoleChanges(derived, roleChanged, toRetract, keptRoleCloses, heldRepos, repos)
 	if repoHeld > 0 {
 		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.role_change_held",
-			"org_id", orgID, "repos", len(heldRepos), "rows", repoHeld)
+			"org_id", orgID, "rows", repoHeld)
 	}
 	stats.RetractionsHeld = held + heldRoles + repoHeld
 	reportTeamRepoOwnershipRetractionHeld(ctx, orgID, append(heldKinds, heldRoleKinds...))
@@ -471,35 +474,50 @@ func applyTeamRepoOwnershipRoleChanges(
 	return out, closes, changed
 }
 
-// withoutHeldRoleChanges leaves out, on every held repository, the derived
-// row of each claim whose role this run changed, and that claim's close: the
-// repository keeps its open rows of the old roles this run. It returns the
-// derived rows, the closes to write and the count of closes it held.
+// withoutHeldRoleChanges keeps every row of a repository whose role changes
+// this run while the guard holds a close or retraction of it: the derived
+// rows, retractions and closes of that repository are left out, so it keeps
+// its open rows this run. It returns those and the count of rows it held.
 func withoutHeldRoleChanges(
 	derived []DerivedTeamRepoOwnershipRow,
 	changed map[teamRepoOwnershipClaim]bool,
-	closes []teamRepoOwnershipActiveRow,
+	retractions, closes []teamRepoOwnershipActiveRow,
 	heldRepos map[teamRepoOwnershipRepoKey]bool,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
-) ([]DerivedTeamRepoOwnershipRow, []teamRepoOwnershipActiveRow, int) {
-	if len(heldRepos) == 0 {
-		return derived, closes, 0
+) ([]DerivedTeamRepoOwnershipRow, []teamRepoOwnershipActiveRow, []teamRepoOwnershipActiveRow, int) {
+	frozen := map[teamRepoOwnershipRepoKey]bool{}
+	for claim := range changed {
+		if key := (teamRepoOwnershipRepoKey{claim.provider, claim.repoFullName}); heldRepos[key] {
+			frozen[key] = true
+		}
 	}
+	if len(frozen) == 0 {
+		return derived, retractions, closes, 0
+	}
+	heldRows := 0
 	out := derived[:0:0]
 	for _, row := range derived {
-		info, ok := resolveTeamRepoOwnershipRepo(row.RepoID, repos)
-		if ok && heldRepos[teamRepoOwnershipRepoKey{info.Provider, info.FullName}] && changed[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}] {
+		if info, ok := resolveTeamRepoOwnershipRepo(row.RepoID, repos); ok && frozen[teamRepoOwnershipRepoKey{info.Provider, info.FullName}] {
+			if changed[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}] {
+				heldRows++
+			}
 			continue
 		}
 		out = append(out, row)
 	}
-	kept := closes[:0:0]
-	for _, row := range closes {
-		if !heldRepos[teamRepoOwnershipRepoKey{row.Provider, row.RepoFullName}] {
+	keep := func(rows []teamRepoOwnershipActiveRow) []teamRepoOwnershipActiveRow {
+		kept := rows[:0:0]
+		for _, row := range rows {
+			if frozen[teamRepoOwnershipRepoKey{row.Provider, row.RepoFullName}] {
+				heldRows++
+				continue
+			}
 			kept = append(kept, row)
 		}
+		return kept
 	}
-	return out, kept, len(closes) - len(kept)
+	keptRetractions, keptCloses := keep(retractions), keep(closes)
+	return out, keptRetractions, keptCloses, heldRows
 }
 
 // teamRepoOwnershipRepoKey names one repository of the open rows.
@@ -588,20 +606,51 @@ func resolveTeamRepoOwnershipRepo(id string, repos map[uuid.UUID]teamRepoOwnersh
 	return info, ok && info.FullName != ""
 }
 
-// settleInferredEvidence clears the evidence time of a claim that must start
-// at a run, not at its evidence: evidence in the future of this run (the row
-// is written at the run and an open row matches on the next runs, so a rerun
-// writes nothing), and evidence older than the end of the claim's last
-// retraction (that retraction already judged it; a row at the evidence time
-// would replace the retracted row, whose valid_from is the same key, and
-// erase the interval another team owned the repository).
+type inferredEvidenceSettleCounts struct{ future, beforeRetraction, afterOtherOwner int }
+
+// settleInferredEvidence moves the evidence time of a claim to where its row
+// must start:
+//   - evidence in the future of this run is cleared (the row starts at the run
+//     and an open row matches on the next runs, so a rerun writes nothing);
+//   - evidence older than the end of the claim's own latest retraction is
+//     cleared (that retraction already judged it; a row at the evidence time
+//     would replace the retracted row, whose valid_from is the same key, and
+//     erase the interval the claim did not own);
+//   - else a main owner's evidence older than the end of another team's main
+//     tenure on the repository (the latest close of its main row, or this
+//     run, when this run retracts its open main row) moves to that end, so the
+//     repository has one main owner at a time. Co-owners own the repository
+//     beside the main owner, so a co-owner's start is never moved by another
+//     team. The end is stored as that team's valid_to, so the next run reads
+//     the same start and writes nothing.
 func settleInferredEvidence(
 	derived []DerivedTeamRepoOwnershipRow,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
-	retractedUntil map[teamRepoOwnershipClaim]time.Time,
+	tenure teamRepoOwnershipTenureEnds,
+	retractingNow []teamRepoOwnershipActiveRow,
 	now time.Time,
-) (settled []DerivedTeamRepoOwnershipRow, future, retracted int) {
-	settled = make([]DerivedTeamRepoOwnershipRow, len(derived))
+) ([]DerivedTeamRepoOwnershipRow, inferredEvidenceSettleCounts) {
+	type repoKey struct{ provider, repoFullName string }
+	type tenureEnd struct {
+		teamID string
+		until  time.Time
+	}
+	ends := map[repoKey][]tenureEnd{}
+	for claim, until := range tenure.mainUntil {
+		key := repoKey{claim.provider, claim.repoFullName}
+		ends[key] = append(ends[key], tenureEnd{claim.teamID, until})
+	}
+	runEnd := evidenceTime(now)
+	for _, row := range retractingNow {
+		if row.IsPrimary == teamRepoOwnershipCoOwner {
+			continue
+		}
+		key := repoKey{row.Provider, row.RepoFullName}
+		ends[key] = append(ends[key], tenureEnd{row.TeamID, runEnd})
+	}
+
+	var counts inferredEvidenceSettleCounts
+	settled := make([]DerivedTeamRepoOwnershipRow, len(derived))
 	for i, row := range derived {
 		settled[i] = row
 		if row.EvidenceFrom.IsZero() {
@@ -609,7 +658,7 @@ func settleInferredEvidence(
 		}
 		if row.EvidenceFrom.After(now) {
 			settled[i].EvidenceFrom = time.Time{}
-			future++
+			counts.future++
 			continue
 		}
 		repoID, err := uuid.Parse(row.RepoID)
@@ -620,22 +669,46 @@ func settleInferredEvidence(
 		if !ok || info.FullName == "" {
 			continue
 		}
-		if until, ok := retractedUntil[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}]; ok && row.EvidenceFrom.Before(until) {
+		if until, ok := tenure.retractedUntil[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}]; ok && row.EvidenceFrom.Before(until) {
 			settled[i].EvidenceFrom = time.Time{}
-			retracted++
+			counts.beforeRetraction++
+			continue
+		}
+		if row.IsPrimary != teamRepoOwnershipMainOwner {
+			continue
+		}
+		var otherEnd time.Time
+		for _, end := range ends[repoKey{info.Provider, info.FullName}] {
+			if end.teamID != row.TeamID && end.until.After(otherEnd) {
+				otherEnd = end.until
+			}
+		}
+		if otherEnd.After(row.EvidenceFrom) {
+			settled[i].EvidenceFrom = otherEnd
+			counts.afterOtherOwner++
 		}
 	}
-	return settled, future, retracted
+	return settled, counts
 }
 
-// loadTeamRepoOwnershipRetractedUntil is, for each inferred claim with a
-// retracted row, the end of its latest retraction. A row closed at its own
-// valid_from (superseded by its evidence start) is no retraction.
+// teamRepoOwnershipTenureEnds is, per inferred claim, the end of its latest
+// retraction (any role, a role change's close included) and the end of its
+// latest main row (is_primary other than 2).
+type teamRepoOwnershipTenureEnds struct {
+	retractedUntil map[teamRepoOwnershipClaim]time.Time
+	mainUntil      map[teamRepoOwnershipClaim]time.Time
+}
+
+// loadTeamRepoOwnershipRetractedUntil loads the tenure ends of the org's
+// inferred claims. A row closed at its own valid_from (superseded by its
+// evidence start) is no retraction.
 func loadTeamRepoOwnershipRetractedUntil(
 	ctx context.Context, conn driver.Conn, orgID string,
-) (map[teamRepoOwnershipClaim]time.Time, error) {
+) (teamRepoOwnershipTenureEnds, error) {
+	tenure := teamRepoOwnershipTenureEnds{retractedUntil: map[teamRepoOwnershipClaim]time.Time{}, mainUntil: map[teamRepoOwnershipClaim]time.Time{}}
 	rows, err := conn.Query(ctx, `
-SELECT provider, repo_full_name, team_id, max(assumeNotNull(valid_to))
+SELECT provider, repo_full_name, team_id, max(assumeNotNull(valid_to)),
+       maxIf(assumeNotNull(valid_to), is_primary != 2), countIf(is_primary != 2)
 FROM team_repo_ownership FINAL
 WHERE org_id = ?
   AND source = 'inferred'
@@ -645,19 +718,22 @@ WHERE org_id = ?
 GROUP BY provider, repo_full_name, team_id`,
 		orgID)
 	if err != nil {
-		return nil, err
+		return tenure, err
 	}
 	defer rows.Close()
-	out := map[teamRepoOwnershipClaim]time.Time{}
 	for rows.Next() {
 		var claim teamRepoOwnershipClaim
-		var until time.Time
-		if err := rows.Scan(&claim.provider, &claim.repoFullName, &claim.teamID, &until); err != nil {
-			return nil, err
+		var until, mainUntil time.Time
+		var mainRows uint64
+		if err := rows.Scan(&claim.provider, &claim.repoFullName, &claim.teamID, &until, &mainUntil, &mainRows); err != nil {
+			return tenure, err
 		}
-		out[claim] = until.UTC()
+		tenure.retractedUntil[claim] = until.UTC()
+		if mainRows > 0 {
+			tenure.mainUntil[claim] = mainUntil.UTC()
+		}
 	}
-	return out, rows.Err()
+	return tenure, rows.Err()
 }
 
 // teamRepoOwnershipRowSignature is the full set of values a written

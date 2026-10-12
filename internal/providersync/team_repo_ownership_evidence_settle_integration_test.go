@@ -191,6 +191,130 @@ func TestEarlierEvidenceMovesTheStartPastASupersededRow(t *testing.T) {
 	}
 }
 
+// TestANewWinnerStartsWhenThePriorOwnerEnds: team A owns the repository, then
+// team B wins with evidence older than the run. B's row starts at the run that
+// retracts A, not at B's evidence, so one team owns the repository at a time;
+// a rerun writes nothing.
+func TestANewWinnerStartsWhenThePriorOwnerEnds(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	oldEvidence := time.Date(2025, 2, 3, 4, 5, 6, 0, time.UTC)
+	winnerEvidence := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Second)
+
+	for _, provider := range evidenceSettleProviders {
+		t.Run(provider, func(t *testing.T) {
+			org := "org-evidence-handover-" + provider
+			teamA, teamB := provider+"-team-a", provider+"-team-b"
+			repo := seedEvidenceSettleRepo(t, ctx, conn, org, provider)
+			seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-a", teamA, true, time.Now().UTC().Add(-time.Hour))
+			seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-b", teamB, true, time.Now().UTC().Add(-time.Hour))
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-a", 1, oldEvidence)
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-a", 2, oldEvidence.Add(time.Hour))
+
+			service := TeamRepoOwnershipDerivationService{Conn: conn}
+			if _, _, ready, _, err := service.Derive(ctx, org); err != nil || !ready {
+				t.Fatalf("first derive: ready %v err %v", ready, err)
+			}
+			for number := uint32(3); number <= 5; number++ {
+				seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", number, winnerEvidence.Add(time.Duration(number-3)*time.Hour))
+			}
+			beforeHandover := time.Now().UTC().Add(-time.Second)
+			// A keeps its links, so it stays an owner (D5988): its main row
+			// closes at the run and it continues as a co-owner.
+			if _, retracted, _, _, stats, err := service.DeriveWithStats(ctx, org); err != nil || retracted != 0 || stats.RoleChanges != 1 {
+				t.Fatalf("B wins: retracted %d role changes %d err %v, want A's main row closed as a role change", retracted, stats.RoleChanges, err)
+			}
+
+			starts := openOwnershipStarts(t, ctx, conn, org, teamB)
+			if len(starts) != 1 || starts[0].Before(beforeHandover) {
+				t.Fatalf("B open rows start at %v, want one at the run that closed A's main row (after %v)", starts, beforeHandover)
+			}
+			var mains []string
+			for _, span := range ownershipRowSpans(t, ctx, conn, org) {
+				if span.validTo == nil {
+					mains = append(mains, fmt.Sprintf("%s:%d", span.team, span.primary))
+				}
+			}
+			if want := []string{teamA + ":2", teamB + ":1"}; fmt.Sprint(mains) != fmt.Sprint(want) && fmt.Sprint(mains) != fmt.Sprint([]string{want[1], want[0]}) {
+				t.Fatalf("open rows %v, want %v", mains, want)
+			}
+			assertSingleOwner(t, ctx, conn, org, repo, teamA, teamB, winnerEvidence.Add(24*time.Hour))
+
+			written, _, _, _, stats, err := service.DeriveWithStats(ctx, org)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if written != 0 || stats.Superseded != 0 {
+				t.Errorf("rerun wrote %d and superseded %d, want 0 and 0", written, stats.Superseded)
+			}
+		})
+	}
+}
+
+// TestAnOverlappingWinnerRowMovesToThePriorOwnersEnd: a stored open row of
+// team B that starts at its evidence, before the end of team A's retracted
+// tenure (the rows an earlier run left), moves to the end of A's tenure: the
+// next run writes B's row there and supersedes the overlapping one.
+func TestAnOverlappingWinnerRowMovesToThePriorOwnersEnd(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	winnerEvidence := time.Now().UTC().Add(-60 * 24 * time.Hour).Truncate(time.Second)
+	priorEnd := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Second)
+
+	for _, provider := range evidenceSettleProviders {
+		t.Run(provider, func(t *testing.T) {
+			org := "org-evidence-overlap-" + provider
+			teamA, teamB := provider+"-team-a", provider+"-team-b"
+			repo := seedEvidenceSettleRepo(t, ctx, conn, org, provider)
+			seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-b", teamB, true, time.Now().UTC().Add(-time.Hour))
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", 1, winnerEvidence)
+
+			service := TeamRepoOwnershipDerivationService{Conn: conn}
+			if _, _, ready, _, err := service.Derive(ctx, org); err != nil || !ready {
+				t.Fatalf("first derive: ready %v err %v", ready, err)
+			}
+			if starts := openOwnershipStarts(t, ctx, conn, org, teamB); len(starts) != 1 || !starts[0].Equal(winnerEvidence) {
+				t.Fatalf("B open rows start at %v, want one at %v", starts, winnerEvidence)
+			}
+			repoProvider := provider
+			if provider == "jira" || provider == "linear" {
+				repoProvider = "github"
+			}
+			if err := conn.Exec(ctx, teamRepoOwnershipInsert+` VALUES (?, ?, ?, ?, ?, 'exact', 'inferred', 0, 1, 0, ?, ?, now64(3))`,
+				org, repoProvider, teamA, repo, "acme/"+org, winnerEvidence.Add(-365*24*time.Hour), priorEnd); err != nil {
+				t.Fatal(err)
+			}
+
+			_, _, _, _, stats, err := service.DeriveWithStats(ctx, org)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stats.Superseded != 1 {
+				t.Errorf("superseded %d, want B's overlapping row (1)", stats.Superseded)
+			}
+			if starts := openOwnershipStarts(t, ctx, conn, org, teamB); len(starts) != 1 || !starts[0].Equal(priorEnd) {
+				t.Fatalf("B open rows start at %v, want one at the end of A's tenure %v", starts, priorEnd)
+			}
+			assertSingleOwner(t, ctx, conn, org, repo, teamA, teamB, priorEnd.Add(-24*time.Hour))
+		})
+	}
+}
+
+// assertSingleOwner holds that at asOf team A owns the repository and team B
+// does not.
+func assertSingleOwner(t *testing.T, ctx context.Context, conn driver.Conn, org string, repo uuid.UUID, teamA, teamB string, asOf time.Time) {
+	t.Helper()
+	ownedA, err := teamownership.OwnedRepoIDs(ctx, conn, org, teamA, asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownedB, err := teamownership.OwnedRepoIDs(ctx, conn, org, teamB, asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ownedA) != 1 || ownedA[0] != repo || len(ownedB) != 0 {
+		t.Errorf("owners at %v: A %v, B %v; want A [%s] and B none", asOf, ownedA, ownedB, repo)
+	}
+}
+
 func seedEvidenceSettleRepo(t *testing.T, ctx context.Context, conn driver.Conn, org, provider string) uuid.UUID {
 	t.Helper()
 	repo := uuid.NewSHA1(uuid.NameSpaceURL, []byte(org))

@@ -94,3 +94,55 @@ func TestAnOpenRowAtTheRunTimeIsSupersededByTheEvidenceStart(t *testing.T) {
 		t.Errorf("evidence in the future of the run starts at %v, want the run %v", got, now)
 	}
 }
+
+// A main owner's start moves to the end of another team's main tenure on the
+// repository, read from that team's closed main rows or from the open main row
+// this run retracts (the read of the closed rows may not see this run's own
+// write yet). Co-owners own the repository beside the main owner: a co-owner's
+// start is never moved by another team, and the end of another team's
+// co-owner row never moves a main owner.
+func TestSettledEvidenceStartsWhereTheOtherOwnerEnds(t *testing.T) {
+	repoID := uuid.New()
+	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{repoID: {FullName: "acme/api", Provider: "github"}}
+	evidence := time.Date(2025, 3, 4, 5, 6, 7, 0, time.UTC)
+	priorEnd := evidence.Add(30 * 24 * time.Hour)
+	now := evidence.Add(90 * 24 * time.Hour)
+	main := []DerivedTeamRepoOwnershipRow{{TeamID: "team-b", RepoID: repoID.String(), EvidenceFrom: evidence, IsPrimary: teamRepoOwnershipMainOwner}}
+	coOwner := []DerivedTeamRepoOwnershipRow{{TeamID: "team-b", RepoID: repoID.String(), EvidenceFrom: evidence, IsPrimary: teamRepoOwnershipCoOwner}}
+	ended := func(repo string, mainRow bool) teamRepoOwnershipTenureEnds {
+		claim := teamRepoOwnershipClaim{"github", repo, "team-a"}
+		tenure := teamRepoOwnershipTenureEnds{retractedUntil: map[teamRepoOwnershipClaim]time.Time{claim: priorEnd}, mainUntil: map[teamRepoOwnershipClaim]time.Time{}}
+		if mainRow {
+			tenure.mainUntil[claim] = priorEnd
+		}
+		return tenure
+	}
+	retracting := func(primary uint8) []teamRepoOwnershipActiveRow {
+		return []teamRepoOwnershipActiveRow{{Provider: "github", RepoFullName: "acme/api", TeamID: "team-a", RepoID: repoID, IsPrimary: primary}}
+	}
+	cases := []struct {
+		name       string
+		derived    []DerivedTeamRepoOwnershipRow
+		tenure     teamRepoOwnershipTenureEnds
+		retracting []teamRepoOwnershipActiveRow
+		want       time.Time
+		moved      int
+	}{
+		{"a main owner after another team's closed main row", main, ended("acme/api", true), nil, priorEnd, 1},
+		{"a main owner when this run retracts another team's main row", main, teamRepoOwnershipTenureEnds{}, retracting(teamRepoOwnershipMainOwner), now, 1},
+		{"a row of the one-owner derivation is a main row", main, teamRepoOwnershipTenureEnds{}, retracting(0), now, 1},
+		{"another repository's main owner", main, ended("acme/other", true), nil, evidence, 0},
+		{"another team's closed co-owner row", main, ended("acme/api", false), nil, evidence, 0},
+		{"this run retracts another team's co-owner row", main, teamRepoOwnershipTenureEnds{}, retracting(teamRepoOwnershipCoOwner), evidence, 0},
+		{"a co-owner beside another team's closed main row", coOwner, ended("acme/api", true), nil, evidence, 0},
+		{"a co-owner when this run retracts the main row", coOwner, teamRepoOwnershipTenureEnds{}, retracting(teamRepoOwnershipMainOwner), evidence, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			settled, counts := settleInferredEvidence(tc.derived, repos, tc.tenure, tc.retracting, now)
+			if !settled[0].EvidenceFrom.Equal(tc.want) || counts.afterOtherOwner != tc.moved {
+				t.Errorf("start %v (%+v), want %v and %d moved", settled[0].EvidenceFrom, counts, tc.want, tc.moved)
+			}
+		})
+	}
+}

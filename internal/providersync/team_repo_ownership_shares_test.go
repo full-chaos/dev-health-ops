@@ -153,17 +153,42 @@ func TestARoleChangeIsDatedAtTheRunAndHeldPerRepository(t *testing.T) {
 		})
 	}
 
-	t.Run("a held close holds the repository", func(t *testing.T) {
-		derived, closes, changed := applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("a", 2), row("b", 1)}, repos, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2)}, now)
+	t.Run("a held close or retraction holds a repository whose roles change", func(t *testing.T) {
+		otherRepo := uuid.MustParse("00000000-0000-4000-8000-0000000000c2")
+		bothRepos := map[uuid.UUID]teamRepoOwnershipRepoInfo{repo: repos[repo], otherRepo: {Provider: "jira", FullName: "acme/s"}}
+		elsewhere := DerivedTeamRepoOwnershipRow{TeamID: "a", RepoID: otherRepo.String(), IsPrimary: 1, Share: 1, validFrom: evidence}
+		retractC := open("c", 2)
+
+		// A -> B where the guard holds A's close: nothing of acme/r changes, acme/s is written.
+		derived, closes, changed := applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("a", 2), row("b", 1), elsewhere}, bothRepos, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2)}, now)
 		keptByGuard := withoutRows(closes, closes[:1])
 		held := teamRepoOwnershipReposOf(withoutRows(closes, keptByGuard))
-		out, kept, n := withoutHeldRoleChanges(derived, changed, keptByGuard, held, repos)
-		if len(out) != 0 || len(kept) != 0 || n != 1 {
-			t.Errorf("derived %v closes %v held %d, want no changed row, no close, 1 held", out, names(kept), n)
+		out, retractions, kept, n := withoutHeldRoleChanges(derived, changed, []teamRepoOwnershipActiveRow{retractC}, keptByGuard, held, bothRepos)
+		if len(out) != 1 || out[0].RepoID != otherRepo.String() || len(retractions) != 0 || len(kept) != 0 || n != 4 {
+			t.Errorf("held close: derived %+v retractions %v closes %v held %d, want only acme/s, no retraction, no close, 4 held", out, names(retractions), names(kept), n)
 		}
-		out, kept, n = withoutHeldRoleChanges(derived, changed, closes, nil, repos)
-		if len(out) != 2 || len(kept) != 2 || n != 0 {
-			t.Errorf("with nothing held: derived %d closes %d held %d, want 2 2 0", len(out), len(kept), n)
+
+		// The guard holds A's retraction while B becomes the main owner: B waits.
+		derived, closes, changed = applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("b", 1)}, repos, []teamRepoOwnershipActiveRow{open("a", 1)}, now)
+		held = teamRepoOwnershipReposOf([]teamRepoOwnershipActiveRow{open("a", 1)}, nil)
+		out, _, kept, n = withoutHeldRoleChanges(derived, changed, nil, closes, held, repos)
+		if len(out) != 0 || len(kept) != 0 || n != 1 {
+			t.Errorf("held main retraction: derived %+v closes %v held %d, want B held", out, names(kept), n)
+		}
+
+		// A held retraction on a repository whose roles do not change holds nothing else.
+		derived, closes, changed = applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("a", 1), row("b", 2)}, repos, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2), retractC}, now)
+		held = teamRepoOwnershipReposOf([]teamRepoOwnershipActiveRow{retractC}, nil)
+		out, _, kept, n = withoutHeldRoleChanges(derived, changed, nil, closes, held, repos)
+		if len(out) != 2 || len(kept) != 0 || n != 0 {
+			t.Errorf("held co-owner retraction: derived %d closes %d held %d, want 2 0 0", len(out), len(kept), n)
+		}
+
+		// Nothing held: the role change goes through.
+		derived, closes, changed = applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("a", 2), row("b", 1)}, repos, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2)}, now)
+		out, retractions, kept, n = withoutHeldRoleChanges(derived, changed, []teamRepoOwnershipActiveRow{retractC}, closes, nil, repos)
+		if len(out) != 2 || len(retractions) != 1 || len(kept) != 2 || n != 0 {
+			t.Errorf("nothing held: derived %d retractions %d closes %d held %d, want 2 1 2 0", len(out), len(retractions), len(kept), n)
 		}
 	})
 }

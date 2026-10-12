@@ -2747,10 +2747,10 @@ claim has one open row. A **role change** seen by a later run (the main owner ch
 that run; only the first rows of a repo are back-dated to the evidence: A's main row and B's co-owner row end at the run
 (`valid_to` = run), B's main row starts at the run, and A continues from the run as a co-owner with its share while it
 still has links (`team_repo_ownership_derivation.role_changed`, `stats.RoleChanges`). A new main owner of a repo where
-another team holds an open main row also starts at the run. So a repo has exactly one main row at every instant of its
-history. A role close goes through the retraction guard; a repo whose roles change while the guard holds any close or
+another team holds an open main row also starts at the run. So a repo has at most one main row at any instant of its
+history, and none only during an unresolved full tie (D5448, above). A role close goes through the retraction guard; a repo whose roles change while the guard holds any close or
 retraction of it keeps all its rows that run (no write, retraction or close; `team_repo_ownership_derivation.role_change_held`)
-and waits for a run that proves them all, so a held row never leaves two main rows or none. A new main owner never starts
+and waits for a run that proves them all, so a held row never leaves two main rows, nor a repo without the main row it had. A new main owner never starts
 before the end of another team's main tenure (CHAOS-9403 `after_other_owner`); a co-owner's start is its own evidence. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick one
 owner never take a co-owner row: `teamownership.AuthoritativeOwnerByRepo` and the cognitive-load gate leave out
 `is_primary = 2` rows and rank `(is_primary = 1) DESC` first, and the cascade's `LoadRepos` gives no `repo_ownership`

@@ -272,7 +272,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	// A role change closes the claim's open row of its old role at the run,
 	// under the same proof as a retraction. A repository with a role change
 	// and any held close or retraction keeps all its rows this run, so it
-	// never has two main rows (or none) at one instant: it waits for a run
+	// never has two main rows, nor loses the main row it had: it waits for a run
 	// that proves them all.
 	keptRoleCloses, heldRoles, heldRoleKinds := guard.retain(roleCloses)
 	heldRepos := teamRepoOwnershipReposOf(withoutRows(retractions, toRetract), withoutRows(roleCloses, keptRoleCloses))
@@ -413,7 +413,8 @@ func stampTeamRepoOwnershipClaimStarts(
 // (a real end, never a supersede: the old role held until this run). A new
 // main owner of a repository whose open main row belongs to another team also
 // starts at the run. Only a first observation is dated by its evidence, so a
-// repository has one main owner at every instant. An open row with is_primary
+// repository has at most one main owner at any instant (none only during an
+// unresolved full tie, D5448). An open row with is_primary
 // 0 (the one-owner derivation) is a main row.
 func applyTeamRepoOwnershipRoleChanges(
 	derived []DerivedTeamRepoOwnershipRow,

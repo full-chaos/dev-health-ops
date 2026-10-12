@@ -4,6 +4,7 @@ package fixturescli
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -54,8 +55,18 @@ var linearProjects = []linearProject{
 	{"9f00d0e1-0000-4000-8000-00000000d002", "API Hardening", []string{"ENG"}, "2026-04-06T09:00:00Z"},
 }
 
+// linearOldTeam was a team of the API Hardening project at the organization's first sync and is gone
+// by the second: the second sync closes its project ownership and its memberships.
+var linearOldTeam = linearTeam{"7e40c0de-0000-4000-8000-00000000c004", "OLD", "Old Platform", []linearUser{linOli}}
+
+// linearFirstProjects are the projects at the first sync: API Hardening also had the old team.
+var linearFirstProjects = []linearProject{
+	linearProjects[0],
+	{"9f00d0e1-0000-4000-8000-00000000d002", "API Hardening", []string{"ENG", "OLD"}, "2026-04-06T09:00:00Z"},
+}
+
 func linearTeamByKey(key string) linearTeam {
-	for _, team := range linearTeams {
+	for _, team := range append(append([]linearTeam{}, linearTeams...), linearOldTeam) {
 		if team.Key == key {
 			return team
 		}
@@ -155,9 +166,9 @@ var githubLinearItems = []githubIssue{
 
 // linearGraphQLAnswer answers every Linear GraphQL read of the reference catalog and the work-items
 // route.
-func linearGraphQLAnswer() providerAnswer {
+func linearGraphQLAnswer(linearTeams []linearTeam, linearProjects []linearProject, phase string) providerAnswer {
 	return providerAnswer{
-		Method: "POST", Host: linearHost, Path: "/graphql", Status: 200,
+		Method: "POST", Host: linearHost, Path: "/graphql", Status: 200, Phase: phase,
 		Respond: func(request replayRequest) (any, bool) {
 			document := request.Document
 			var vars map[string]any
@@ -166,6 +177,37 @@ func linearGraphQLAnswer() providerAnswer {
 			}
 			if vars["after"] != nil {
 				return nil, false
+			}
+			// The absence reads of a later sync (linear_absence.go), answered as the recorded answers
+			// (testdata/provider_answers/linear) answer them.
+			if match := linearTeamsByKey.FindStringSubmatch(document); match != nil {
+				nodes := []any{}
+				for _, team := range linearTeams {
+					if team.Key == match[1] {
+						nodes = append(nodes, map[string]any{"id": team.ID, "key": team.Key})
+					}
+				}
+				return map[string]any{"data": map[string]any{"teams": map[string]any{"nodes": nodes}}}, true
+			}
+			if match := linearProjectByID.FindStringSubmatch(document); match != nil {
+				for _, project := range linearProjects {
+					if project.ID == match[1] {
+						teams := []any{}
+						for _, key := range project.Teams {
+							teams = append(teams, map[string]any{"key": key})
+						}
+						return map[string]any{"data": map[string]any{"project": map[string]any{"id": project.ID, "name": project.Name, "teams": map[string]any{"nodes": teams}}}}, true
+					}
+				}
+				return linearNotFound("Project"), true
+			}
+			if match := linearTeamByID.FindStringSubmatch(document); match != nil {
+				for _, team := range linearTeams {
+					if team.Key == match[1] || team.ID == match[1] {
+						return map[string]any{"data": map[string]any{"team": map[string]any{"id": team.ID, "key": team.Key, "name": team.Name}}}, true
+					}
+				}
+				return linearNotFound("Team"), true
 			}
 			switch {
 			case strings.Contains(document, "query LinearReferenceCatalogTeams("):
@@ -227,10 +269,29 @@ func linearGraphQLAnswer() providerAnswer {
 	}
 }
 
+var (
+	linearTeamsByKey  = regexp.MustCompile(`^query \{ teams\(filter: \{key: \{eq: "([^"]+)"\}\}\)`)
+	linearProjectByID = regexp.MustCompile(`^query \{ project\(id: "([^"]+)"\)`)
+	linearTeamByID    = regexp.MustCompile(`^query \{ team\(id: "([^"]+)"\)`)
+)
+
+// linearNotFound is Linear's answer to a read of an entity it does not hold (the recorded
+// team_by_key_not_found and project_by_id_not_found answers).
+func linearNotFound(entity string) map[string]any {
+	path := strings.ToLower(entity)
+	return map[string]any{"data": nil, "errors": []any{map[string]any{
+		"message": "Entity not found: " + entity, "path": []any{path},
+		"locations": []any{map[string]any{"line": 1, "column": 9}},
+		"extensions": map[string]any{"type": "invalid input", "code": "INPUT_ERROR", "statusCode": 400, "userError": true,
+			"userPresentableMessage": "Could not find referenced " + entity + "."},
+	}}}
+}
+
 func linearWorldAnswers() []providerAnswer {
 	var answers []providerAnswer
-	answers = append(answers, linearGraphQLAnswer())
-	answers = append(answers, githubTeamCatalogAnswersFor(ledgerGitHubTeams)...)
+	answers = append(answers, linearGraphQLAnswer(append(append([]linearTeam{}, linearTeams...), linearOldTeam), linearFirstProjects, "first"))
+	answers = append(answers, linearGraphQLAnswer(linearTeams, linearProjects, "second"))
+	answers = append(answers, githubTeamCatalogAnswersFor(ledgerGitHubTeams, "")...)
 	answers = append(answers, githubRepoAnswers("ledger", githubLinearItems)...)
 	answers = append(answers, githubPRSocialAnswer("ledger", githubLinearItems))
 	answers = append(answers, gitlabProjectAnswers("chaos-gl/billing-service", gitlabBillingItems)...)
@@ -246,7 +307,9 @@ var linearWorld = providerWorld{
 	FrozenAt: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),
 	Answers:  linearWorldAnswers,
 	Steps: []worldStep{
-		{Kind: "team_catalog", Provider: "linear", Credential: linearToken},
+		// The first sync of the catalog, a month before the world's instant, and the second.
+		{Kind: "team_catalog", Provider: "linear", Credential: linearToken, Phase: "first", Before: 30 * 24 * time.Hour},
+		{Kind: "team_catalog", Provider: "linear", Credential: linearToken, Phase: "second"},
 		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}},
 		{Kind: "sync", Provider: "github", Credential: githubToken, DepthDays: 200,
 			Sources:  [][2]string{{githubOrg + "/ledger", "ledger"}},
@@ -254,7 +317,7 @@ var linearWorld = providerWorld{
 		{Kind: "sync", Provider: "gitlab", Credential: gitlabToken, DepthDays: 200,
 			Sources:  [][2]string{{"41001", "chaos-gl/billing-service"}},
 			Datasets: append([]string{"repo-metadata", "prs"}, workItemDatasets...)},
-		{Kind: "sync", Provider: "linear", Credential: linearToken, DepthDays: 200,
+		{Kind: "sync", Provider: "linear", Credential: linearToken, DepthDays: 200, Phase: "second",
 			Sources: [][2]string{{"ENG", "Engineering"}}, Datasets: workItemDatasets},
 		{Kind: "work_graph"},
 	},

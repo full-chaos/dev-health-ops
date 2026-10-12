@@ -234,8 +234,8 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > debugging navigation aid; **new code must follow it.** It is implemented across CHAOS-2600
 > CS1–CS7 — the ClickHouse enum widening lands in **CS1** (see *Schema prerequisite* below), the
 > precedence tests are inverted in **CS2**, and the legacy Postgres bridge path is removed in
-> **CS5/CS6**. Until then, §1 below still describes the live (pre-CHAOS-2600) cascade and the
-> existing tests still encode the old precedence.
+> **CS5/CS6**. CS1–CS6 have landed: the ladder in §0.1 is the live cascade (see the restoration note
+> above), and §1 is kept for the cascade flow it draws.
 
 > **CS6 reality (CHAOS-2607).** ClickHouse is the system of record for **both** the team
 > catalog **and** identity→team membership. As of CS6 the Postgres `team_mappings` / `identity_mappings`
@@ -1129,6 +1129,16 @@ controls: a link that is gone and an explicit empty list are closed).
 
 #### 0.4d A project of several teams: every active team takes the item (CHAOS-8905)
 
+> **Rule of record: one main owner, lesser owners keep their own share (chris, 2026-10-12, verbatim):** *"it's not
+> 'equal shares', the entire history keeps one team as the main owner, and the others who have a lesser percentage
+> share as the share they have."* The measure (lead D5988, from the D5432 ranking in section 1.1): a team's share of a
+> repository is its **linked share**, the link counts per tier (`native`, then `explicit_text`, then `heuristic`); the
+> team with the largest linked share is the main owner and keeps `is_primary` over the whole history, and every other
+> owning team gets a row with its own share. The share value and the per-team rows are not implemented
+> (`team_repo_ownership` has `is_primary`, `specificity`, `priority` only). The text below
+> describes the code as it is on main. Where it says "same rank", "owners at the winner's rank" or "shared
+> equally", it does not yet implement this rule (tracked in CHAOS-9407).
+
 A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
 teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active
 team that owns the project, not of the first team by id. The item's own native team still wins over its
@@ -1953,8 +1963,13 @@ Limits:
 
 Ownership and membership rows are bitemporal (`valid_from`, `valid_to`). An item takes its team from the rows
 valid on **the item's day**, never from the rows valid when a job runs. Ownership starts when it was first
-known: an item of a day before the first known ownership of its repository or project stays unassigned, and a
-later change of owner does not rewrite the items of earlier days.
+known, and a later change of owner does not rewrite the items of earlier days.
+
+> **Superseded (chris, 2026-10-12 17:26Z, lead D5987, option C):** for a day before the first recorded ownership
+> of a repository, the repository's FIRST recorded owners apply backward; the earlier rule ("an item of a day
+> before the first known ownership stays unassigned", chris 2026-10-10, D5922) no longer holds. Not yet
+> implemented in the readers (`OwnersByRepo`, `AuthoritativeOwnerByRepo`, `teamscope`): CHAOS-9404; the
+> `valid_from` of the inferred derivation is CHAOS-9403.
 
 - **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
   `completed_at`), and the start of the current day for an item that is not completed. A done item with no

@@ -63,9 +63,10 @@ Each active donor team contributes all its live, sync-derived
 `provider_access`, and `inferred` ownership sources. It validates the ownership
 interval at the END of the work unit's own span (`to_ts`), never later than the
 materialization timestamp, and joins to this organization's current repository
-catalog. Ownership starts when it was first known: a unit that ended before a
-team's first ownership row of a repository gets no share of that repository, and
-a later change of a team's repositories does not move the effort of a unit that
+catalog. A unit that ended before a team's first ownership row of a repository gets
+no share of that repository on main today; the rule of record (chris 2026-10-12, D5987
+option C) is that the repository's first recorded owners apply backward, tracked in
+CHAOS-9404. A later change of a team's repositories does not move the effort of a unit that
 ended before the change. One run holds units of many end times, so the reader
 loads the donor teams of the issues, and the ownership rows of those donor teams
 that began at or before the materialization timestamp, once; each unit selects

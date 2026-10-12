@@ -24,6 +24,15 @@ var ErrTeamRepoOwnershipDerivationUnavailable = errors.New("team_repo_ownership 
 // runs the pure derivation, and writes team_repo_ownership (source='inferred').
 type TeamRepoOwnershipDerivationService struct {
 	Conn driver.Conn
+	// Now is the run's clock (nil = time.Now): a fixture world's producer pins it to the world's instant.
+	Now func() time.Time
+}
+
+func (service TeamRepoOwnershipDerivationService) now() time.Time {
+	if service.Now != nil {
+		return service.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // teamRepoOwnershipRepoInfo is one org's repos-table row, keyed by repo_id --
@@ -125,7 +134,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	if service.Conn == nil || ctx == nil || orgID == "" {
 		return 0, 0, false, nil, ErrTeamRepoOwnershipDerivationUnavailable
 	}
-	now := time.Now().UTC()
+	now := service.now()
 
 	projectLinks, err := loadTeamRepoOwnershipProjectLinks(ctx, service.Conn, orgID, now)
 	if err != nil {

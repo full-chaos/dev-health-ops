@@ -65,6 +65,8 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "88df6620246d73bbcd158a94354837c459366560690b6d6c0824432ad9ce860f",
 	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "e9ada5e45c0a631e32613eee051d0a2931a6c0229fb42cd2de08eab6fd08696b",
 	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "9522ce0b129e4f179cfe1a9a14581978d8a39ab9ea59ebfec216acce1184adb4",
+	// The mixed-provider demo world (provider_worlds_demo_*).
+	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_90d_c0_p113_t8_s9440_raw.json.gz": "36b44f1c74111b515a1988fa0e3efeb13840cc2bc5fd936179f86952609aaf10",
 }
 
 // producedWorlds are the provider worlds (github of the real shape, gitlab, jira, linear): written by the
@@ -73,10 +75,11 @@ var frozenWorldDigests = map[string]string{
 // worlds they are rewritten when their producers change: that test's -freeze-provider-worlds run
 // writes them, and its plain run fails while a world is not exactly what the producers write today.
 var producedWorlds = map[string]bool{
-	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                true,
-	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  true,
-	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    true,
-	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": true,
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                  true,
+	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                    true,
+	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":      true,
+	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz":   true,
+	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_90d_c0_p113_t8_s9440_raw.json.gz": true,
 }
 
 // GenerateParams are the parameters of one frozen `fixtures generate` run: the flags that change
@@ -518,7 +521,7 @@ Flags (as "dev-hops fixtures generate"):
   --pr-count                pull requests (default 20)
   --team-count              teams (default 10)
   --seed                    seed (required)
-  --provider                synthetic (default), github, gitlab, jira or linear
+  --provider                synthetic (default), github, gitlab, jira, linear or mixed
   --with-metrics            also the derived metrics
   --with-work-graph         also the work graph
   --skip-coherence-validation, --allow-mixed-org   as in Python
@@ -566,9 +569,9 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 		env.Lookup = func(string) (string, bool) { return "", false }
 	}
 	switch *provider {
-	case "synthetic", "github", "gitlab", "jira", "linear":
+	case "synthetic", "github", "gitlab", "jira", "linear", "mixed":
 	default:
-		fmt.Fprintf(env.Stderr, "argument error: --provider must be one of synthetic, github, gitlab, jira, linear\n")
+		fmt.Fprintf(env.Stderr, "argument error: --provider must be one of synthetic, github, gitlab, jira, linear, mixed\n")
 		return cli.ExitUsage
 	}
 	if *dbType != "" && *dbType != "clickhouse" {

@@ -1336,3 +1336,14 @@ func TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier(t *testing.T) {
 		})
 	}
 }
+
+func TestTeamRepoOwnershipDerivationRunsOnItsClock(t *testing.T) {
+	pinned := time.Date(2026, 10, 12, 12, 0, 0, 0, time.FixedZone("x", 3600))
+	if got := (TeamRepoOwnershipDerivationService{Now: func() time.Time { return pinned }}).now(); !got.Equal(pinned) || got.Location() != time.UTC {
+		t.Fatalf("now() = %v, want the pinned clock %v in UTC", got, pinned)
+	}
+	before := time.Now()
+	if got := (TeamRepoOwnershipDerivationService{}).now(); got.Before(before) || got.After(time.Now()) || got.Location() != time.UTC {
+		t.Fatalf("now() without a clock = %v, want the wall clock in UTC", got)
+	}
+}

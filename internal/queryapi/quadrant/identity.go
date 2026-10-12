@@ -5,10 +5,9 @@
 //   - api/utils/identity_aliases.py's normalize_alias/build_reverse_alias_map
 //   - api/services/quadrant.py's _resolve_identity_variants (quadrant.py:
 //     330-355)
-//   - api/queries/people.py's resolve_person_identity/fetch_person_team_id,
-//     backed by sql/people/person_lookup.sql and sql/people/person_team.sql
-//     (inlined verbatim below -- this package has no SQL-file loader, same
-//     posture as quadrant.go's own inlined queries)
+//   - api/queries/people.py's resolve_person_identity, backed by
+//     sql/people/person_lookup.sql (inlined verbatim below -- this package has
+//     no SQL-file loader, same posture as quadrant.go's own inlined queries)
 //
 // Config-file reality (documented precedent: internal/jobs/metrics/daily/
 // repouser/identity.go's package doc comment): identity_mapping.yaml ships
@@ -178,7 +177,7 @@ func displayNameForIdentity(identity string) string {
 
 // identityVariants ports identity_variants (people_identity.py:97-109).
 // Iteration order over a Go map is not the Python set's insertion order,
-// but the result only ever feeds a SQL `IN` list (fetch_person_team_id) --
+// but the result only ever feeds a SQL `IN` list (personIdentityScope) --
 // membership, not order, is the only thing that matters downstream.
 func identityVariants(identity string, aliases []string) []string {
 	variants := map[string]bool{}
@@ -321,99 +320,4 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
 		return "", fmt.Errorf("quadrant: resolve_person_identity: %w", err)
 	}
 	return identity, nil
-}
-
-// fetchPersonTeamID ports fetch_person_team_id (queries/people.py:65-79)
-// and its person_team.sql, inlined verbatim. "" (Python's None) means no
-// active team was found for any of the given identity variants.
-func fetchPersonTeamID(ctx context.Context, client QueryClient, identities []string, orgID string) (string, error) {
-	filtered := make([]string, 0, len(identities))
-	for _, id := range identities {
-		if id != "" {
-			filtered = append(filtered, id)
-		}
-	}
-	if len(filtered) == 0 {
-		return "", nil
-	}
-
-	const query = `
-        SELECT
-            team_id
-        FROM (
-            SELECT
-                arrayJoin(team_ids) AS team_id,
-                updated_at
-            FROM identities FINAL
-            WHERE (
-                canonical_id IN {identities:Array(String)}
-                OR email IN {identities:Array(String)}
-                OR arrayExists(
-                    identity -> (
-                        (
-                            startsWith(identity, 'github:')
-                            AND has(
-                                JSONExtract(provider_identities, 'github', 'Array(String)'),
-                                replaceRegexpOne(identity, '^github:', '')
-                            )
-                        )
-                        OR (
-                            startsWith(identity, 'gitlab:')
-                            AND has(
-                                JSONExtract(provider_identities, 'gitlab', 'Array(String)'),
-                                replaceRegexpOne(identity, '^gitlab:', '')
-                            )
-                        )
-                        OR (
-                            startsWith(identity, 'linear:')
-                            AND has(
-                                JSONExtract(provider_identities, 'linear', 'Array(String)'),
-                                replaceRegexpOne(identity, '^linear:', '')
-                            )
-                        )
-                        OR (
-                            startsWith(identity, 'jira:accountid:')
-                            AND has(
-                                JSONExtract(provider_identities, 'jira', 'Array(String)'),
-                                replaceRegexpOne(identity, '^jira:accountid:', '')
-                            )
-                        )
-                        OR (
-                            startsWith(identity, 'accountid:')
-                            AND has(
-                                JSONExtract(provider_identities, 'jira', 'Array(String)'),
-                                replaceRegexpOne(identity, '^accountid:', '')
-                            )
-                        )
-                    ),
-                    {identities:Array(String)}
-                )
-            )
-              AND org_id = {org_id:String}
-              AND is_active = 1
-        )
-        WHERE team_id != ''
-        ORDER BY updated_at DESC, team_id
-        LIMIT 1
-    `
-	bindings := []dhclickhouse.Binding{
-		{Name: "identities", Value: filtered},
-		{Name: "org_id", Value: orgID},
-	}
-	rows, err := client.Query(ctx, query, bindings)
-	if err != nil {
-		return "", fmt.Errorf("quadrant: fetch_person_team_id query: %w", err)
-	}
-	defer rows.Close()
-
-	var teamID string
-	if rows.Next() {
-		if err := rows.Scan(&teamID); err != nil {
-			return "", fmt.Errorf("quadrant: fetch_person_team_id scan: %w", err)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("quadrant: fetch_person_team_id: %w", err)
-	}
-	return teamID, nil
 }

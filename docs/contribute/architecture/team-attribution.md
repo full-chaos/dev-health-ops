@@ -1215,6 +1215,11 @@ project (section 0.1): a native team key gives one team.
   are the reviews in the repositories the team owns, not the reviews by its members. A repository of several owners is
   a point of each owner; a repository with no owner is no team's point. Selected teams narrow the owners. Asserted on
   real ClickHouse by `TestTheTeamReviewQuadrantGroupsByTheRepositoryOwner`.
+- **The person quadrant reads only that person's own rows (CHAOS-9343).** At the person grain the quadrant resolves the
+  person id to the person's identity strings and binds each read (`user_metrics_daily.identity_id`,
+  `work_item_user_metrics_daily.user_identity`) to them. There is no membership-team lookup (`identities.team_ids`) and
+  no cohort: the response holds no other person's identity or points, and a person with no rows gets an empty point list,
+  never the organization. Asserted by `TestGoldenPersonScopeOwnRowsOnly`.
 - **Known limit: the team of a work unit follows one team per work unit in the work-unit team list.** A co-owner
   team sees the item in the item views (the issues drilldown, the aggregated flame, the team quadrant, the flow-matrix
   TEAM and REPO activity). The GraphQL work-unit team list (`workUnitTeamAttributions`) takes the team from the

@@ -215,17 +215,15 @@ func TestResolveForecastsFiltersBuildTheExpectedPredicates(t *testing.T) {
 		"toDate(computed_at) >= {from_date:Date}",
 		"toDate(computed_at) <= {to_date:Date}",
 		"ORDER BY computed_at DESC",
+		"LIMIT 1 BY team_id, work_scope_id, toDate(computed_at)",
 		"LIMIT 5",
 	} {
 		if !strings.Contains(statement, want) {
 			t.Errorf("statement is missing %q:\n%s", want, statement)
 		}
 	}
-	// Deliberately NOT FINAL: the table is a ReplacingMergeTree ordered by a
-	// column that is unique per row, so nothing ever collapses and Python does
-	// not pay for it either.
-	if strings.Contains(statement, "FINAL") {
-		t.Errorf("statement uses FINAL, which Python's query does not:\n%s", statement)
+	if strings.Index(statement, "LIMIT 1 BY") > strings.Index(statement, "LIMIT 5") {
+		t.Errorf("LIMIT 1 BY must come before the page LIMIT:\n%s", statement)
 	}
 	for name, want := range map[string]any{
 		"team_id": teamID, "work_scope_id": scopeID,

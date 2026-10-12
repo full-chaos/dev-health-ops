@@ -1,17 +1,18 @@
 # AGENTS — dev-health-ops
 
-Backend: ingest → metrics → API → jobs. The versioned platform contract (Work Graph, Investment taxonomy, sink-only, ClickHouse-only, hard bans, and documentation delivery) lives in [`docs/contributing/platform-contract.md`](docs/contributing/platform-contract.md) and is **not repeated here**. Deep dives: MkDocs site under [`docs/`](docs/index.md).
+Backend: ingest → metrics → API → jobs. The versioned platform contract (Work Graph, Investment taxonomy, sink-only, ClickHouse-only, hard bans, and documentation delivery) lives in [`.github/docs-legacy/contributing/platform-contract.md`](.github/docs-legacy/contributing/platform-contract.md) and is **not repeated here**. Deep dives: MkDocs site under [`docs/`](docs/index.md).
 
 ## Read-first
 
 | Need | Source |
 | --- | --- |
-| Product intent / guardrails | [`docs/product/prd.md`](docs/product/prd.md), [`docs/product/concepts.md`](docs/product/concepts.md) |
-| Repo layout & boundaries | [`docs/architecture/repo-layout.md`](docs/architecture/repo-layout.md), [`docs/architecture/data-pipeline.md`](docs/architecture/data-pipeline.md) |
-| Dual DB (semantic vs analytics) | [`docs/architecture/database-architecture.md`](docs/architecture/database-architecture.md) |
-| Provider pattern | [`docs/architecture/adr-001-canonical-provider-pattern.md`](docs/architecture/adr-001-canonical-provider-pattern.md) |
-| LLM categorization contract | [`docs/llm/categorization-contract.md`](docs/llm/categorization-contract.md) |
-| API surface | [`docs/api/graphql-overview.md`](docs/api/graphql-overview.md), [`docs/api/view-mapping.md`](docs/api/view-mapping.md) |
+| Product intent / guardrails | [`.github/docs-legacy/product/prd.md`](.github/docs-legacy/product/prd.md), [`.github/docs-legacy/product/concepts.md`](.github/docs-legacy/product/concepts.md) |
+| Repo layout & boundaries | [`docs/contribute/start/repository-map.md`](docs/contribute/start/repository-map.md), [`.github/docs-legacy/architecture/data-pipeline.md`](.github/docs-legacy/architecture/data-pipeline.md) |
+| Dual DB (semantic vs analytics) | [`docs/contribute/architecture/data-and-storage.md`](docs/contribute/architecture/data-and-storage.md) |
+| Settled attribution / ownership decisions (read BEFORE proposing a change or asking chris) | [`docs/contribute/architecture/team-attribution.md`](docs/contribute/architecture/team-attribution.md) §0.1 precedence, §0.4c-§0.4j (Jira teams, several owning teams, provider-scoped keys, team ids, day of the facts), §1.1 (one inferred owner per repo); [`docs/contribute/architecture/data-and-storage.md`](docs/contribute/architecture/data-and-storage.md) "Entity tree"; [`docs/reference/data-models/investment.md`](docs/reference/data-models/investment.md) "Team ownership fallback". Rulings with their reasons are in the Linear issues named there (CHAOS-2600, 8905, 8924, 8939, 8945, 9088, 9178, 9179) |
+| Provider pattern | [`.github/docs-legacy/architecture/adr-001-canonical-provider-pattern.md`](.github/docs-legacy/architecture/adr-001-canonical-provider-pattern.md) |
+| LLM categorization contract | [`.github/docs-legacy/llm/categorization-contract.md`](.github/docs-legacy/llm/categorization-contract.md) |
+| API surface | [`docs/reference/graphql/index.md`](docs/reference/graphql/index.md), [`.github/docs-legacy/api/view-mapping.md`](.github/docs-legacy/api/view-mapping.md) |
 | CLI & workers | [`docs/reference/cli/index.md`](docs/reference/cli/index.md), [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md) |
 | How to run / test tiers | [`README.md`](README.md), [`ci/run_tests.sh`](ci/run_tests.sh) |
 

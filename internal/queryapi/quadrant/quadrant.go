@@ -27,10 +27,12 @@
 // person/developer branch additionally ports
 // identity.go's identity-alias resolution (people_identity.py's
 // load_identity_aliases/identity_variants/person_id_for_identity) and the
-// two ClickHouse readers queries/people.py's resolve_person_identity/
-// fetch_person_team_id back -- see identity.go's package doc comment for
-// the config-file reality that makes the alias-reconciliation path a
-// practical no-op today without changing the ported algorithm.
+// ClickHouse reader queries/people.py's resolve_person_identity backs -- see
+// identity.go's package doc comment for the config-file reality that makes
+// the alias-reconciliation path a practical no-op today without changing the
+// ported algorithm. A person-scope response carries only that person's own
+// rows (CHAOS-9343): the person's identity strings bind to the identity
+// column of each read; there is no membership-team cohort.
 //
 // Every behaviour Python has for scope_type in {org, team, repo, service,
 // developer, person} -- including the churn_throughput forced-repo-grain
@@ -67,9 +69,7 @@
 // FINAL, with org_id filtered in the SAME top-level statement as the
 // FINAL source, never a separate unfiltered subquery. teams is read with
 // FINAL directly (not through dedupFrom), matching _resolve_team_labels's
-// own query; identities (person-scope team-cohort lookup, identity.go) is
-// likewise read with FINAL directly, matching fetch_person_team_id's own
-// query.
+// own query.
 //
 // Go-side-only adaptation (does not change any computed value): every
 // value_expr is wrapped in toFloat64(...) in the outer SELECT so the Go
@@ -495,13 +495,21 @@ func liveRowClause(table string) string {
 	return "\n          AND " + liverow.Predicate(base, alias)
 }
 
+// personIdentityScope binds a person-scope read to the subject's own identity
+// strings, on the identity column of the spec's table.
+func personIdentityScope(spec MetricSpec, identities []string) extraScope {
+	return extraScope{
+		SQL:      "\nAND " + spec.EntityExpr + " IN {person_identities:Array(String)}",
+		Bindings: []dhclickhouse.Binding{{Name: "person_identities", Value: identities}},
+	}
+}
+
 // fetchQuadrantMetric ports fetch_quadrant_metric (queries/quadrant.py:
 // 19-58). teamFilter ports the scope_filter/scope_params pair
 // _cohort_scope_filter builds (quadrant.py:378-381) -- "" (Python's None
 // team_filter) means no cohort filter, matching every team/repo group-scope
-// call site (which always pass ""); person group scope passes the team id
-// fetchPersonTeamID resolved, restricting the metric read to the person's
-// own team cohort exactly as Python's build_quadrant_response does.
+// call site (every call site passes "" since CHAOS-9343: a person-scope read
+// is bound by personIdentityScope, never by a membership team).
 func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpec, startDay, endDay time.Time, bucket, orgID, teamFilter string) ([]metricRow, error) {
 	return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, bucket, orgID, teamFilter, extraScope{})
 }

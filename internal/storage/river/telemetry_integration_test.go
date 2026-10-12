@@ -82,6 +82,24 @@ func TestQueueTelemetrySamplerReadsPinnedRiverSchemaWithoutClaimingJobs(t *testi
 	insertTelemetryJob("running", "retention", "system.retention_cleanup", `{"contract_version":1}`, now, []string{"client-ops"})
 	insertTelemetryJob("running", "retention", "system.retention_cleanup", `{"contract_version":1}`, now, []string{"other-client"})
 	insertTelemetryJob("available", "other-profile", "unknown.kind", `{"contract_version":99}`, now.Add(-24*time.Hour), nil)
+	// Distinct counts per queue and state so a swapped state or queue shows.
+	// other-profile is not configured and must never be counted.
+	for range 2 {
+		insertTelemetryJob("scheduled", "heartbeat", "system.heartbeat", `{"contract_version":1}`, now.Add(time.Hour), nil)
+	}
+	for range 3 {
+		insertTelemetryJob("retryable", "heartbeat", "system.heartbeat", `{"contract_version":1}`, now.Add(time.Hour), nil)
+	}
+	for range 4 {
+		insertTelemetryJob("scheduled", "retention", "system.retention_cleanup", `{"contract_version":1}`, now.Add(time.Hour), nil)
+	}
+	insertTelemetryJob("retryable", "retention", "system.retention_cleanup", `{"contract_version":1}`, now.Add(time.Hour), nil)
+	for range 5 {
+		insertTelemetryJob("scheduled", "other-profile", "unknown.kind", `{"contract_version":99}`, now.Add(time.Hour), nil)
+	}
+	for range 6 {
+		insertTelemetryJob("retryable", "other-profile", "unknown.kind", `{"contract_version":99}`, now.Add(time.Hour), nil)
+	}
 
 	queueURI := roleURI(t, instance.URI, queueRole, queuePassword, dbName)
 	queuePool := openPool(t, ctx, queueURI)
@@ -133,6 +151,17 @@ func TestQueueTelemetrySamplerReadsPinnedRiverSchemaWithoutClaimingJobs(t *testi
 		capacities["retention"].Capacity != 2 || capacities["retention"].Running != 2 ||
 		capacities["retention"].Saturation != 1 {
 		t.Fatalf("live queue capacities = %v", capacities)
+	}
+	states := make(map[string]riverstore.QueueStateTelemetry, len(snapshot.QueueStates))
+	for _, queue := range snapshot.QueueStates {
+		states[queue.Queue] = queue
+	}
+	wantStates := map[string]riverstore.QueueStateTelemetry{
+		"heartbeat": {Queue: "heartbeat", Scheduled: 2, Retryable: 3},
+		"retention": {Queue: "retention", Scheduled: 4, Retryable: 1},
+	}
+	if !reflect.DeepEqual(states, wantStates) {
+		t.Fatalf("live scheduled/retryable counts = %v, want %v", states, wantStates)
 	}
 	if err := sampler.CheckAvailableContractVersions(ctx); err != nil {
 		t.Fatalf("supported available contracts failed readiness: %v", err)

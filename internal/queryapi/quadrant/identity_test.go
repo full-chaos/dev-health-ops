@@ -164,43 +164,6 @@ func TestResolveIdentityVariantsNotFound(t *testing.T) {
 	}
 }
 
-// TestFetchPersonTeamIDEmptyIdentitiesSkipsQuery pins that an empty
-// identity list never reaches ClickHouse (Python's fetch_person_team_id
-// only ever runs after _resolve_identity_variants already found at least
-// one, but the guard mirrors _sql_params' own falsy-filtering intent).
-func TestFetchPersonTeamIDEmptyIdentitiesSkipsQuery(t *testing.T) {
-	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-		t.Fatal("fetchPersonTeamID must not query ClickHouse for an empty identity list")
-		return nil, nil
-	}}
-	got, err := fetchPersonTeamID(context.Background(), client, []string{"", ""}, "org-1")
-	if err != nil {
-		t.Fatalf("fetchPersonTeamID: %v", err)
-	}
-	if got != "" {
-		t.Fatalf("fetchPersonTeamID() = %q, want \"\"", got)
-	}
-}
-
-// TestFetchPersonTeamIDReturnsResolvedTeam pins fetch_person_team_id's
-// happy path (queries/people.py:65-79).
-func TestFetchPersonTeamIDReturnsResolvedTeam(t *testing.T) {
-	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-		if strings.Contains(query, "FROM identities FINAL") {
-			return &fixtureRowScanner{rows: [][]any{{"team-x"}}}, nil
-		}
-		t.Fatalf("unexpected query:\n%s", query)
-		return nil, nil
-	}}
-	got, err := fetchPersonTeamID(context.Background(), client, []string{"jane@example.com", "jane"}, "org-1")
-	if err != nil {
-		t.Fatalf("fetchPersonTeamID: %v", err)
-	}
-	if got != "team-x" {
-		t.Fatalf("fetchPersonTeamID() = %q, want team-x", got)
-	}
-}
-
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

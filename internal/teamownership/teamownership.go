@@ -124,7 +124,8 @@ func OwnedRepoIDs(
 // active as of asOf, which ONE team is its authoritative owner. Mirrors
 // `load_team_repo_ownership_map` (src/dev_health_ops/providers/teams.py:281,
 // query at :375-:395) exactly, including its ranking: rows are ordered
-// `is_primary DESC, specificity DESC, updated_at DESC, team_id ASC`, and the
+// `(is_primary = 1) DESC, specificity DESC, updated_at DESC, team_id ASC` (a
+// co-owner row, is_primary = 2, ranks with the rows that are not primary), and the
 // FIRST row per repo_id wins -- a `setdefault` in Python, a
 // first-write-wins map build here.
 //
@@ -189,7 +190,7 @@ func AuthoritativeOwnerByRepo(
           AND (o.repo_id IS NOT NULL OR r.matched = 1)
           AND o.valid_from <= {as_of:DateTime64(3, 'UTC')}
           AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
-        ORDER BY o.is_primary DESC, o.specificity DESC, o.updated_at DESC, o.team_id ASC
+        ORDER BY (o.is_primary = 1) DESC, o.specificity DESC, o.updated_at DESC, o.team_id ASC
     `, clickhouse.Named("org_id", orgID), clickhouse.Named("as_of", dateTime64Literal(asOf)))
 	if err != nil {
 		return nil, err

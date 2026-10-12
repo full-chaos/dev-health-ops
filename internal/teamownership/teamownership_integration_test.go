@@ -420,6 +420,10 @@ func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *t
 	// must still lose to team-primary's is_primary=1 (is_primary outranks
 	// specificity entirely, never traded off against it).
 	insert("team-specific", 0, 5, before, multiClaimed)
+	// A co-owner claim (is_primary = 2, ruling D5988), newest and most
+	// specific of all -- must still lose to the main owner: only
+	// is_primary = 1 ranks first, so 2 never sorts above 1.
+	insert("team-co-owner", 2, 9, before.Add(48*time.Hour), multiClaimed)
 	// An unrelated, singly-owned repo -- proves the function does not just
 	// return "the first row it sees" globally, only per repo_id.
 	insert("team-solo", 1, 1, before, soleOwned)
@@ -446,8 +450,8 @@ func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *t
 	}
 
 	if got := owners[multiClaimed.String()]; got != "team-primary" {
-		t.Fatalf("multi-claimed repo owner=%q, want team-primary -- is_primary "+
-			"must outrank both insertion order and specificity", got)
+		t.Fatalf("multi-claimed repo owner=%q, want team-primary -- is_primary = 1 "+
+			"must outrank insertion order, specificity and a co-owner (is_primary = 2)", got)
 	}
 	if got := owners[soleOwned.String()]; got != "team-solo" {
 		t.Fatalf("sole-owned repo owner=%q, want team-solo", got)

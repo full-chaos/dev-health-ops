@@ -1113,14 +1113,20 @@ func TestRankedOwnerManyNativeLinksBeatAFewExplicitTextLinks(t *testing.T) {
 				{pair[1], "rival-b"}: {"explicit_text": 2},
 				{pair[0], "rival-c"}: {"explicit_text": 2, "heuristic": 1},
 			})
-			assertRankedOwner(t, got, "owner")
+			assertRepoOwners(t, got, []repoOwnerWant{
+				{team: "owner", primary: teamRepoOwnershipMainOwner, share: 15.0 / 22},
+				{team: "rival-a", primary: teamRepoOwnershipCoOwner, share: 2.0 / 22},
+				{team: "rival-b", primary: teamRepoOwnershipCoOwner, share: 2.0 / 22},
+				{team: "rival-c", primary: teamRepoOwnershipCoOwner, share: 3.0 / 22},
+			}, nil)
 		})
 	}
 }
 
 // TestRankedOwnerOneNativeLinkBeatsManyExplicitTextLinks: tiers rank
-// lexicographically, so a count in a lower tier never outweighs a higher
-// tier, whatever its size.
+// lexicographically, so a count in a lower tier never outweighs a higher tier
+// for the main owner, whatever its size; the share counts every link, so here
+// the main owner holds the smaller share.
 func TestRankedOwnerOneNativeLinkBeatsManyExplicitTextLinks(t *testing.T) {
 	for _, pair := range rankedOwnerProviderPairs {
 		t.Run(pair[0]+"_over_"+pair[1], func(t *testing.T) {
@@ -1128,7 +1134,10 @@ func TestRankedOwnerOneNativeLinkBeatsManyExplicitTextLinks(t *testing.T) {
 				{pair[0], "native-team"}: {"native": 1},
 				{pair[1], "text-team"}:   {"explicit_text": 50, "heuristic": 50},
 			})
-			assertRankedOwner(t, got, "native-team")
+			assertRepoOwners(t, got, []repoOwnerWant{
+				{team: "native-team", primary: teamRepoOwnershipMainOwner, share: 1.0 / 101},
+				{team: "text-team", primary: teamRepoOwnershipCoOwner, share: 100.0 / 101},
+			}, nil)
 		})
 	}
 }
@@ -1144,8 +1153,8 @@ func TestRankedOwnerExplicitTextDecidesAnEqualNativeCount(t *testing.T) {
 				{pair[1], "heuristic-team"}: {"native": 2, "heuristic": 9},
 			})
 			assertRepoOwners(t, got, []repoOwnerWant{
-				{team: "text-team", primary: teamRepoOwnershipMainOwner, share: 0.5},
-				{team: "heuristic-team", primary: teamRepoOwnershipCoOwner, share: 0.5},
+				{team: "text-team", primary: teamRepoOwnershipMainOwner, share: 3.0 / 14},
+				{team: "heuristic-team", primary: teamRepoOwnershipCoOwner, share: 11.0 / 14},
 			}, nil)
 		})
 	}
@@ -1162,8 +1171,8 @@ func TestRankedOwnerHeuristicDecidesEqualHigherTiers(t *testing.T) {
 				{pair[1], "unknown-team"}:   {"native": 1, "explicit_text": 1, "": 5, "fuzzy": 5},
 			})
 			assertRepoOwners(t, got, []repoOwnerWant{
-				{team: "heuristic-team", primary: teamRepoOwnershipMainOwner, share: 0.5},
-				{team: "unknown-team", primary: teamRepoOwnershipCoOwner, share: 0.5},
+				{team: "heuristic-team", primary: teamRepoOwnershipMainOwner, share: 3.0 / 15},
+				{team: "unknown-team", primary: teamRepoOwnershipCoOwner, share: 12.0 / 15},
 			}, nil)
 		})
 	}
@@ -1178,15 +1187,14 @@ func TestRankedOwnerUnknownProvenanceStillCounts(t *testing.T) {
 		{"github", "less"}:       {"native": 1, "": 1},
 	})
 	assertRepoOwners(t, got, []repoOwnerWant{
-		{team: "more-unknown", primary: teamRepoOwnershipMainOwner, share: 0.5},
-		{team: "less", primary: teamRepoOwnershipCoOwner, share: 0.5},
+		{team: "more-unknown", primary: teamRepoOwnershipMainOwner, share: 3.0 / 5},
+		{team: "less", primary: teamRepoOwnershipCoOwner, share: 2.0 / 5},
 	}, nil)
 }
 
 // TestRankedOwnerFullTieAcrossProvidersIsReported: equal counts at every
 // tier name no main owner, for every provider pair: each owning team keeps its
-// own share of the deciding tier, the tied teams are marked, and the tie is
-// reported.
+// own share of all links, the tied teams are marked, and the tie is reported.
 func TestRankedOwnerFullTieAcrossProvidersIsReported(t *testing.T) {
 	for _, pair := range rankedOwnerProviderPairs {
 		t.Run(pair[0]+"_ties_"+pair[1], func(t *testing.T) {
@@ -1195,11 +1203,10 @@ func TestRankedOwnerFullTieAcrossProvidersIsReported(t *testing.T) {
 				{pair[1], "team-b"}: {"native": 3, "explicit_text": 1, "heuristic": 2},
 				{pair[1], "team-c"}: {"native": 3, "explicit_text": 1, "heuristic": 1},
 			})
-			third := 1.0 / 3
 			assertRepoOwners(t, got, []repoOwnerWant{
-				{team: "team-a", primary: teamRepoOwnershipCoOwner, share: third, tied: true},
-				{team: "team-b", primary: teamRepoOwnershipCoOwner, share: third, tied: true},
-				{team: "team-c", primary: teamRepoOwnershipCoOwner, share: third},
+				{team: "team-a", primary: teamRepoOwnershipCoOwner, share: 6.0 / 17, tied: true},
+				{team: "team-b", primary: teamRepoOwnershipCoOwner, share: 6.0 / 17, tied: true},
+				{team: "team-c", primary: teamRepoOwnershipCoOwner, share: 5.0 / 17},
 			}, []TeamRepoOwnershipTie{{RepoID: "repo-1", TeamIDs: []string{"team-a", "team-b"}}})
 		})
 	}
@@ -1237,8 +1244,9 @@ func TestRankedOwnerSingleTeamIsUnchanged(t *testing.T) {
 
 // TestRankedOwnerOwnRepoAndDonorCandidatesCountAsNative: a work item's own
 // repo_id and a work_item_dependencies donor edge are provider-recorded
-// facts, so each counts as one native link -- one of either beats any number
-// of explicit_text issue<->PR links.
+// facts, so each counts as one native link -- one of either makes the main
+// owner over any number of explicit_text issue<->PR links, which still give
+// their team a co-owner row with its share.
 func TestRankedOwnerOwnRepoAndDonorCandidatesCountAsNative(t *testing.T) {
 	projectLinks := []TeamRepoOwnershipProjectLink{
 		{Provider: "github", ProjectID: "gh-proj", TeamID: "own-repo-team", IsPrimary: true},
@@ -1265,8 +1273,10 @@ func TestRankedOwnerOwnRepoAndDonorCandidatesCountAsNative(t *testing.T) {
 	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, issuePRLinks, nil)
 
 	want := []DerivedTeamRepoOwnershipRow{
-		{TeamID: "donor-team", RepoID: "repo-donor", Specificity: teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity, ResolutionArm: TeamRepoOwnershipResolutionArmProjectID, IsPrimary: teamRepoOwnershipMainOwner, Share: 1},
-		{TeamID: "own-repo-team", RepoID: "repo-own", Specificity: teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity, ResolutionArm: TeamRepoOwnershipResolutionArmProjectID, IsPrimary: teamRepoOwnershipMainOwner, Share: 1},
+		{TeamID: "donor-team", RepoID: "repo-donor", Specificity: teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity, ResolutionArm: TeamRepoOwnershipResolutionArmProjectID, IsPrimary: teamRepoOwnershipMainOwner, Share: 1.0 / 6},
+		{TeamID: "text-team", RepoID: "repo-donor", Specificity: teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity, ResolutionArm: TeamRepoOwnershipResolutionArmProjectID, IsPrimary: teamRepoOwnershipCoOwner, Share: 5.0 / 6},
+		{TeamID: "own-repo-team", RepoID: "repo-own", Specificity: teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity, ResolutionArm: TeamRepoOwnershipResolutionArmProjectID, IsPrimary: teamRepoOwnershipMainOwner, Share: 1.0 / 6},
+		{TeamID: "text-team", RepoID: "repo-own", Specificity: teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity, ResolutionArm: TeamRepoOwnershipResolutionArmProjectID, IsPrimary: teamRepoOwnershipCoOwner, Share: 5.0 / 6},
 	}
 	if rows := sortedDerivedRows(got.Rows); len(got.Ties) != 0 || !reflect.DeepEqual(rows, want) {
 		t.Fatalf("got rows %+v ties %+v, want %+v", rows, got.Ties, want)
@@ -1376,7 +1386,8 @@ func TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate(t *testing.T) {
 // TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier: an issue that carries a
 // repo_id and one explicit_text link to a PR of that repo counts as one
 // explicit_text link, not as a native candidate -- so one native PR link of
-// another team outranks it.
+// another team outranks it for the main owner; the issue's team keeps a
+// co-owner row with its share.
 func TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier(t *testing.T) {
 	for _, pair := range [][2]string{{"github", "gh:acme/repo-a#1"}, {"gitlab", "gitlab:acme/repo-a#1"}} {
 		t.Run(pair[0], func(t *testing.T) {
@@ -1395,8 +1406,14 @@ func TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier(t *testing.T) {
 
 			got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks, nil)
 
-			if len(got.Ties) != 0 || len(got.Rows) != 1 || got.Rows[0].TeamID != "pr-team" {
-				t.Fatalf("got rows %+v ties %+v, want repo-a -> pr-team (1 native link beats the issue's 1 explicit_text link)", got.Rows, got.Ties)
+			owners := map[string]DerivedTeamRepoOwnershipRow{}
+			for _, row := range got.Rows {
+				owners[row.TeamID] = row
+			}
+			if len(got.Ties) != 0 || len(got.Rows) != 2 ||
+				owners["pr-team"].IsPrimary != teamRepoOwnershipMainOwner || owners["pr-team"].Share != 0.5 ||
+				owners["issue-team"].IsPrimary != teamRepoOwnershipCoOwner || owners["issue-team"].Share != 0.5 {
+				t.Fatalf("got rows %+v ties %+v, want repo-a main owner pr-team (1 native link outranks the issue's 1 explicit_text link) and co-owner issue-team, each with share 0.5", got.Rows, got.Ties)
 			}
 		})
 	}

@@ -9,13 +9,16 @@ import (
 
 // A tie for the largest linked share keeps the main owner it already has: the
 // one tied team whose open row is a main row (is_primary 1, or 0 from the
-// one-owner derivation) stays the main owner. With no such team, or two, the
-// repository has no main owner. A team outside the tie is never promoted.
+// one-owner derivation) stays the main owner and starts at the repo's earliest
+// evidence. With no such team, or two, the repository has no main owner. A
+// team outside the tie is never promoted.
 func TestATieKeepsTheMainOwnerItAlreadyHas(t *testing.T) {
 	repo := uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
 	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{repo: {Provider: "github", FullName: "acme/a"}}
+	repoStart := time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC)
 	tied := func(team string) DerivedTeamRepoOwnershipRow {
-		return DerivedTeamRepoOwnershipRow{TeamID: team, RepoID: repo.String(), IsPrimary: teamRepoOwnershipCoOwner, Share: 0.4, Tied: true}
+		return DerivedTeamRepoOwnershipRow{TeamID: team, RepoID: repo.String(), IsPrimary: teamRepoOwnershipCoOwner, Share: 0.4, Tied: true,
+			EvidenceFrom: repoStart.Add(24 * time.Hour), repoEvidenceFrom: repoStart}
 	}
 	third := DerivedTeamRepoOwnershipRow{TeamID: "team-c", RepoID: repo.String(), IsPrimary: teamRepoOwnershipCoOwner, Share: 0.2}
 	open := func(team string, primary uint8) teamRepoOwnershipActiveRow {
@@ -38,6 +41,9 @@ func TestATieKeepsTheMainOwnerItAlreadyHas(t *testing.T) {
 			got := map[string]uint8{}
 			for _, row := range resolveTiedMainOwners(derived, repos, tc.open) {
 				got[row.TeamID] = row.IsPrimary
+				if row.IsPrimary == teamRepoOwnershipMainOwner && !row.EvidenceFrom.Equal(repoStart) {
+					t.Errorf("the kept main owner %s starts at %v, want the repo's earliest evidence %v", row.TeamID, row.EvidenceFrom, repoStart)
+				}
 			}
 			for team, want := range tc.want {
 				if got[team] != want {

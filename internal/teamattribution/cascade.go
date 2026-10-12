@@ -679,7 +679,7 @@ func GithubWorkItemDerivationCandidateFromFact(
 }
 
 func ConfidenceForPrimary(primary int) string {
-	if primary != 0 {
+	if primary == AttributionPrimary {
 		return "high"
 	}
 	return "medium"
@@ -1327,8 +1327,10 @@ func RankDerivationCandidates(
 ) []GithubWorkItemDerivationCandidate {
 	sort.SliceStable(candidates, func(left, right int) bool {
 		a, b := candidates[left], candidates[right]
-		if a.IsPrimary != b.IsPrimary {
-			return a.IsPrimary > b.IsPrimary
+		// Only is_primary = 1 ranks first: a co-owner fact (2) ranks with
+		// the facts that are not primary.
+		if aMain, bMain := a.IsPrimary == AttributionPrimary, b.IsPrimary == AttributionPrimary; aMain != bMain {
+			return aMain
 		}
 		if a.Specificity != b.Specificity {
 			return a.Specificity > b.Specificity

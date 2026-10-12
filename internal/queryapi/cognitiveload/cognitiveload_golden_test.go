@@ -81,7 +81,11 @@ func comparableText(kind, statement string) string {
 		if i := strings.Index(q, " FROM "); i >= 0 {
 			q = q[i:]
 		}
-		q = strings.ReplaceAll(q, "o.is_primary DESC, o.specificity DESC, o.updated_at DESC", "is_primary DESC, specificity DESC, updated_at DESC")
+		// Declared divergence from the frozen reference: the Go order key is
+		// (is_primary = 1) DESC, so a co-owner row (is_primary = 2) does not
+		// outrank the main owner. For the values the reference holds (0 and 1)
+		// the two keys order rows the same.
+		q = strings.ReplaceAll(q, "(o.is_primary = 1) DESC, o.specificity DESC, o.updated_at DESC", "is_primary DESC, specificity DESC, updated_at DESC")
 	}
 	return q
 }

@@ -269,18 +269,20 @@ type DerivedTeamRepoOwnershipRow struct {
 	// (teamRepoOwnershipResolutionArmPriority), so a repo reachable via both
 	// arms still reports one deterministic arm.
 	ResolutionArm string
-	// EvidenceFrom is the earliest evidence time of this team's claim on the
-	// repository (zero when no evidence carries a time): the start of the
-	// ownership, written as valid_from, so history reads the owner the
-	// evidence shows rather than the time of the first derive run.
+	// EvidenceFrom is the start of the ownership, written as valid_from, so
+	// history reads the owner the evidence shows rather than the time of the
+	// first derive run (zero when no evidence carries a time). A co-owner's is
+	// the earliest evidence of its own claim; the main owner's is the earliest
+	// evidence of any claim on the repository, because the main owner is the
+	// main owner over the whole history of the repository (ruling D5988).
 	EvidenceFrom time.Time
 	// IsPrimary is teamRepoOwnershipMainOwner for the team with the largest
 	// linked share of the repository and teamRepoOwnershipCoOwner for every
 	// other owning team (ruling D5988).
 	IsPrimary uint8
-	// Share is the team's linked share of the repository: its link count at
-	// the repository's deciding tier over the link count of every team at
-	// that tier (ruling D5988; the measure D5432 ranks on).
+	// Share is the team's linked share of the repository: its links of every
+	// tier over the links of every team (ruling D5988; the shares of a
+	// repository add up to 1).
 	Share float64
 	// Tied marks a team that ties for the largest linked share at every tier.
 	// It is written as a co-owner unless the write side keeps it the main
@@ -289,6 +291,10 @@ type DerivedTeamRepoOwnershipRow struct {
 	// validFrom is the start the write side gives the claim
 	// (stampTeamRepoOwnershipClaimStarts); zero until then.
 	validFrom time.Time
+	// repoEvidenceFrom is the earliest evidence of any claim on the
+	// repository: the start a tied team takes when the write side keeps it
+	// the main owner.
+	repoEvidenceFrom time.Time
 }
 
 // The is_primary values of a derived row: one main owner per repository, and
@@ -433,18 +439,13 @@ func (counts teamRepoOwnershipLinkCounts) compare(other teamRepoOwnershipLinkCou
 	return 0
 }
 
-// teamRepoOwnershipDecidingTier is the highest tier (lowest index) in which
-// any team has a link to the repo: the tier whose links decide the owners and
-// their shares.
-func teamRepoOwnershipDecidingTier(teams map[string]*teamRepoOwnershipLinkCounts) int {
-	for tier := 0; tier < teamRepoOwnershipLinkTierCount; tier++ {
-		for _, counts := range teams {
-			if counts[tier] > 0 {
-				return tier
-			}
-		}
+// total is the team's link count over every tier.
+func (counts teamRepoOwnershipLinkCounts) total() int {
+	sum := 0
+	for _, count := range counts {
+		sum += count
 	}
-	return teamRepoOwnershipLinkTierCount - 1
+	return sum
 }
 
 // TeamRepoOwnershipTie is a repo whose largest linked share two or more teams
@@ -469,17 +470,19 @@ type teamRepoOwnershipDerivation struct {
 // one row per owning team of each repo.
 //
 // Owners and shares (rulings D5432, D5988): each team's candidates on a repo
-// are counted per link tier. The deciding tier is the highest tier any team
-// has a link in (native, then explicit_text, then heuristic, then any other
-// recorded provenance); the owning teams are the teams with links at that
-// tier, each with its share of that tier's links. A team whose links are all
-// in a lower tier owns nothing: one native link outweighs fifty
-// explicit_text links. The main owner is the top team by the lexicographic
-// rank over every tier; every other owning team is a co-owner with its own
-// share, never an equal split. When two or more teams tie for the top at every
-// tier, the repo is reported in Ties and the tied teams are marked Tied: the
-// write side keeps the tied team that is already the main owner, else the
-// repo has no main owner.
+// are counted per link tier (native, explicit_text, heuristic, then any other
+// recorded provenance). Every team with a link of any tier owns the repo, with
+// its share: its links over all links of the repo, so the shares add up to 1,
+// never an equal split. The main owner is the top team by the lexicographic
+// rank (most native links first, then explicit_text, then heuristic), over the
+// whole history: its row starts at the earliest evidence of any claim on the
+// repo, a co-owner's at its own earliest evidence. One
+// native link outranks fifty explicit_text links, so the main owner can hold
+// a smaller share than a co-owner, and each row carries both its rank role and
+// its share. When two or more teams tie for the top at every tier, the repo is
+// reported in Ties and the tied teams are marked Tied: the write side keeps
+// the tied team that is already the main owner, else the repo has no main
+// owner.
 func deriveTeamRepoOwnership(
 	// orgID is unused inside this function as of CHAOS-4537 (the last
 	// internal use, reconstructing the linear_team_key identity, is gone --
@@ -574,17 +577,19 @@ func deriveTeamRepoOwnership(
 
 	var result teamRepoOwnershipDerivation
 	for repoID, teams := range tallies {
-		deciding := teamRepoOwnershipDecidingTier(teams)
 		total := 0
 		for _, counts := range teams {
-			total += counts[deciding]
+			total += counts.total()
+		}
+		var repoEarliest time.Time
+		for _, at := range earliest[repoID] {
+			if repoEarliest.IsZero() || at.Before(repoEarliest) {
+				repoEarliest = at
+			}
 		}
 		var leaders []string
 		var best teamRepoOwnershipLinkCounts
 		for teamID, counts := range teams {
-			if counts[deciding] == 0 {
-				continue
-			}
 			switch {
 			case len(leaders) == 0 || counts.compare(best) > 0:
 				leaders, best = []string{teamID}, *counts
@@ -602,9 +607,6 @@ func deriveTeamRepoOwnership(
 			leader[teamID] = true
 		}
 		for teamID, counts := range teams {
-			if counts[deciding] == 0 {
-				continue
-			}
 			row := DerivedTeamRepoOwnershipRow{
 				TeamID:        teamID,
 				RepoID:        repoID,
@@ -612,11 +614,14 @@ func deriveTeamRepoOwnership(
 				ResolutionArm: repoArm[repoID][teamID],
 				EvidenceFrom:  earliest[repoID][teamID],
 				IsPrimary:     teamRepoOwnershipCoOwner,
-				Share:         float64(counts[deciding]) / float64(total),
+				Share:         float64(counts.total()) / float64(total),
 				Tied:          tied && leader[teamID],
+
+				repoEvidenceFrom: repoEarliest,
 			}
 			if !tied && leader[teamID] {
 				row.IsPrimary = teamRepoOwnershipMainOwner
+				row.EvidenceFrom = repoEarliest
 			}
 			result.Rows = append(result.Rows, row)
 		}

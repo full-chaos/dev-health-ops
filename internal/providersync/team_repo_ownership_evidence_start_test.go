@@ -7,9 +7,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// Each owning team's claim starts at the earliest timed evidence of THAT team
-// (another team's earlier evidence is not its start); a claim with no timed
-// evidence has no evidence start.
+// A co-owner's claim starts at the earliest timed evidence of THAT team; the
+// main owner's at the earliest evidence of any claim on the repo, because it
+// is the main owner over the whole history; a claim with no timed evidence
+// has no evidence start.
 func TestDerivedOwnershipStartsAtTheWinnersEarliestEvidence(t *testing.T) {
 	early := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
 	mid := early.Add(48 * time.Hour)
@@ -29,8 +30,8 @@ func TestDerivedOwnershipStartsAtTheWinnersEarliestEvidence(t *testing.T) {
 	for _, row := range derivation.Rows {
 		got[[2]string{row.RepoID, row.TeamID}] = row
 	}
-	if row := got[[2]string{"repo-a", "team-win"}]; row.IsPrimary != teamRepoOwnershipMainOwner || !row.EvidenceFrom.Equal(mid) {
-		t.Errorf("repo-a main = %+v, want team-win from %v (its own earliest, not the co-owner's %v)", row, mid, early)
+	if row := got[[2]string{"repo-a", "team-win"}]; row.IsPrimary != teamRepoOwnershipMainOwner || !row.EvidenceFrom.Equal(early) {
+		t.Errorf("repo-a main = %+v, want team-win from %v (the repo's earliest evidence, not its own %v)", row, early, mid)
 	}
 	if row := got[[2]string{"repo-a", "team-lose"}]; row.IsPrimary != teamRepoOwnershipCoOwner || !row.EvidenceFrom.Equal(early) {
 		t.Errorf("repo-a co-owner = %+v, want team-lose from its own %v", row, early)

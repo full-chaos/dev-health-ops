@@ -368,7 +368,9 @@ func stampTeamRepoOwnershipClaimStarts(
 // the repository is a main row (is_primary 1, or 0: a row of the one-owner
 // derivation before co-owner rows) stays the main owner; with no such team, or
 // with more than one, the repository has no main owner and every tied team is
-// a co-owner. A tie never moves the main owner to another team.
+// a co-owner. A tie never moves the main owner to another team. The kept main
+// owner starts at the earliest evidence of any claim on the repository, as a
+// main owner does.
 func resolveTiedMainOwners(
 	derived []DerivedTeamRepoOwnershipRow,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
@@ -395,6 +397,7 @@ func resolveTiedMainOwners(
 	for _, indexes := range mains {
 		if len(indexes) == 1 {
 			out[indexes[0]].IsPrimary = teamRepoOwnershipMainOwner
+			out[indexes[0]].EvidenceFrom = out[indexes[0]].repoEvidenceFrom
 		}
 	}
 	return out
@@ -657,7 +660,7 @@ GROUP BY o.provider, o.project_id, o.team_id`,
 		if err := rows.Scan(&link.Provider, &link.ProjectID, &link.TeamID, &isPrimary, &link.Specificity); err != nil {
 			return nil, err
 		}
-		link.IsPrimary = isPrimary != 0
+		link.IsPrimary = isPrimary == 1
 		out = append(out, link)
 	}
 	return out, rows.Err()

@@ -566,13 +566,30 @@ func (adapter *ClickHouseQueryAdapter) observeDedupGuard(ctx context.Context, sp
 	if adapter == nil || adapter.dedupObserver == nil {
 		return
 	}
+	if wholePersonLandscapeMetric(spec, definition) {
+		// The chart reads the landscape's points (with no repository filter:
+		// a point has no repository) and the person's user rows.
+		pointSpec := spec
+		pointSpec.FilterRepos = nil
+		if statement, parameters, table, ok := dedupGuardQuery(pointSpec, definition); ok {
+			adapter.observeDedupStatement(ctx, statement, parameters, table)
+		}
+		statement, parameters := wholePersonUserRowsGuardQuery(spec)
+		adapter.observeDedupStatement(ctx, statement, parameters, "user_metrics_daily")
+		return
+	}
 	statement, parameters, table, ok := dedupGuardQuery(spec, definition)
 	if !ok {
 		return
 	}
+	adapter.observeDedupStatement(ctx, statement, parameters, table)
+}
+
+func (adapter *ClickHouseQueryAdapter) observeDedupStatement(ctx context.Context, statement string, parameters []any, table string) {
 	row := adapter.conn.QueryRow(ctx, statement, parameters...)
 	var observed, distinctKeys uint64
 	if err := row.Scan(&observed, &distinctKeys); err != nil {
+		slog.Default().DebugContext(ctx, "report.dedup_guard_read_failed", "table", table, "error", err)
 		return
 	}
 	if distinctKeys > observed {
@@ -582,6 +599,38 @@ func (adapter *ClickHouseQueryAdapter) observeDedupGuard(ctx context.Context, sp
 	_ = adapter.dedupObserver.ObserveReportDedupGuard(
 		table, jobruntime.ReportDedupReasonRetryGeneration, int(observed), int(skipped),
 	)
+}
+
+// wholePersonUserRowsGuardQuery is the dedup guard of the user rows a
+// whole-person landscape chart reads: the organization's user_metrics_daily
+// rows of the 29 days before the chart's first day through its last day, of
+// the chart's repositories when it has a repository filter.
+func wholePersonUserRowsGuardQuery(spec ChartSpec) (string, []any) {
+	read := tableReads["user_metrics_daily"]
+	clauses := []string{"1"}
+	var parameters []any
+	if spec.OrganizationID != "" {
+		clauses = append(clauses, "org_id = {org_id:String}")
+		parameters = append(parameters, clickhouse.Named("org_id", spec.OrganizationID))
+	}
+	if spec.TimeRangeStart != "" {
+		clauses = append(clauses, "day >= {time_range_start:Date} - 29")
+		parameters = append(parameters, clickhouse.Named("time_range_start", spec.TimeRangeStart))
+	}
+	if spec.TimeRangeEnd != "" {
+		clauses = append(clauses, "day <= {time_range_end:Date}")
+		parameters = append(parameters, clickhouse.Named("time_range_end", spec.TimeRangeEnd))
+	}
+	if len(spec.FilterRepos) > 0 {
+		clauses = append(clauses, "toString(repo_id) IN {filter_repos:Array(String)}")
+		parameters = append(parameters, clickhouse.Named("filter_repos", spec.FilterRepos))
+	}
+	return fmt.Sprintf(`SELECT
+        count() AS observed,
+        uniqExact(%s) AS distinct_keys
+    FROM user_metrics_daily
+    WHERE
+        %s`, strings.Join(read.Key, ", "), strings.Join(clauses, " AND ")), parameters
 }
 
 func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any, error) {

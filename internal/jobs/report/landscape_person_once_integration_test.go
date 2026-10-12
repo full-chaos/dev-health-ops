@@ -247,6 +247,41 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		})
 	}
 
+	// The dedup telemetry of a whole-person chart observes what the chart
+	// reads: the landscape points (no repository filter: a point has none) and
+	// the person's user rows of the window, where person-b's older generation
+	// of one key is the one discarded row.
+	t.Run("dedup telemetry observes the points and the user rows", func(t *testing.T) {
+		observer := &fakeDedupGuardObserver{}
+		loader := reportLoaderFunc(func(context.Context, QueryInput) (ReportDefinition, error) {
+			return ReportDefinition{
+				Plan: Plan{PlanID: "plan-1", ReportType: "weekly_health", OrganizationID: org},
+				Charts: []ChartSpec{{
+					ChartID: "chart-1", PlanID: "plan-1", ChartType: "scorecard", Metric: "churn_loc_30d",
+					FilterRepos: []string{repoOne}, TimeRangeStart: day, TimeRangeEnd: day, OrganizationID: org,
+				}},
+			}, nil
+		})
+		adapter, err := NewClickHouseQueryAdapter(loader, conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		adapter.SetDedupObserver(observer)
+		if _, err := adapter.Query(ctx, QueryInput{ReportID: "report-1", RunID: "run-1"}); err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]dedupGuardCall{}
+		for _, call := range observer.calls {
+			got[call.table] = call
+		}
+		if call, ok := got["ic_landscape_rolling_30d"]; !ok || call.observed == 0 {
+			t.Errorf("landscape observation = %+v (present %v), want the chart's points observed", call, ok)
+		}
+		if call, ok := got["user_metrics_daily"]; !ok || call.observed != 3 || call.skipped != 1 {
+			t.Errorf("user row observation = %+v (present %v), want 3 observed, 1 skipped (person-b's older generation)", call, ok)
+		}
+	})
+
 	// The normalized coordinates are a rank inside one team: a person of two
 	// teams has two values, and the reader keeps one value per (person, team),
 	// the spread of the person over the teams. It makes no one number of the

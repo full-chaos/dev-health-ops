@@ -15,7 +15,10 @@
 //   - The statement text, the arguments and the error text are NEVER recorded:
 //     driver error texts can embed values. The span carries a bounded
 //     operation, a "<op> <table>" summary parsed with a strict identifier
-//     pattern, a hash of the statement, and a bounded error class.
+//     pattern, a bounded error class and, for a batch, its statement count.
+//     There is deliberately NO statement hash: a hash of statement text
+//     (even a normalised one) lets a low-entropy value be guessed back, and
+//     every normaliser missed a dialect (comments, literals).
 //
 // Error classing: context.Canceled is the caller walking away, not a database
 // fault. It is emitted only when slow (like a success), without an error
@@ -28,9 +31,7 @@ package dbspan
 import (
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"errors"
-	"hash/fnv"
 	"os"
 	"regexp"
 	"strconv"
@@ -118,9 +119,16 @@ func (e Emitter) WithMin(d time.Duration) Emitter {
 
 // Probe is the start of one database call. The zero value is inactive.
 type Probe struct {
-	e      Emitter
-	start  time.Time
-	active bool
+	e         Emitter
+	start     time.Time
+	active    bool
+	batchSize int
+}
+
+// WithBatchSize records the statement count of a batch (db.operation.batch.size).
+func (p Probe) WithBatchSize(n int) Probe {
+	p.batchSize = n
+	return p
 }
 
 // Start begins a call. It is active only when ctx carries a recording span.
@@ -164,8 +172,10 @@ func (p Probe) Finish(ctx context.Context, stmt, op string, err error, errClass 
 		attribute.String("db.system.name", p.e.system),
 		attribute.String("db.operation.name", op),
 		attribute.String("db.query.summary", summary),
-		attribute.String("db.query.fingerprint", Fingerprint(stmt)),
 	)
+	if op == OpBatch && p.batchSize > 0 {
+		attrs = append(attrs, attribute.Int("db.operation.batch.size", p.batchSize))
+	}
 	if p.e.pool != "" {
 		attrs = append(attrs, attribute.String("dh.db.pool", p.e.pool))
 	}
@@ -200,120 +210,6 @@ func ErrorClass(err error) string {
 		return "driver_error"
 	}
 }
-
-// Fingerprint identifies the statement TEMPLATE: the first 16 hex characters of
-// the FNV-1a 64-bit hash of the statement with every string and numeric
-// literal replaced by "?". Hashing the raw text would let anyone with the
-// trace guess a low-entropy literal against known query templates, so the
-// literals never enter the hash; the fingerprint also groups the same query
-// shape across different literal values. It is a grouping key, not a secret
-// (a non-cryptographic hash on purpose).
-func Fingerprint(stmt string) string {
-	h := fnv.New64a()
-	_, _ = h.Write(normalize(stmt))
-	var sum [8]byte
-	return hex.EncodeToString(h.Sum(sum[:0]))
-}
-
-// normalize drops comments (their text can hold anything), replaces
-// TRUE/FALSE/NULL words, single-quoted strings (with ” and backslash escapes),
-// dollar-quoted bodies and numeric literals by "?". Identifiers that contain
-// digits are left alone. An unterminated quote swallows the rest of the text.
-func normalize(stmt string) []byte {
-	in := stmt
-	out := make([]byte, 0, len(in))
-	for i := 0; i < len(in); {
-		c := in[i]
-		switch {
-		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
-			if len(out) > 0 && out[len(out)-1] != ' ' {
-				out = append(out, ' ')
-			}
-			i++
-		case c == '-' && i+1 < len(in) && in[i+1] == '-':
-			for i < len(in) && in[i] != '\n' {
-				i++
-			}
-			if len(out) > 0 && out[len(out)-1] != ' ' {
-				out = append(out, ' ')
-			}
-		case c == '/' && i+1 < len(in) && in[i+1] == '*':
-			end := strings.Index(in[i+2:], "*/")
-			if end < 0 {
-				i = len(in)
-			} else {
-				i += 2 + end + 2
-			}
-			if len(out) > 0 && out[len(out)-1] != ' ' {
-				out = append(out, ' ')
-			}
-		case isIdentStart(c) && (len(out) == 0 || !isIdentPart(out[len(out)-1])):
-			j := i
-			for j < len(in) && isIdentPart(in[j]) {
-				j++
-			}
-			if w := in[i:j]; strings.EqualFold(w, "true") || strings.EqualFold(w, "false") || strings.EqualFold(w, "null") {
-				out = append(out, '?')
-			} else {
-				out = append(out, w...)
-			}
-			i = j
-		case c == '\'':
-			i++
-			for i < len(in) {
-				if in[i] == '\\' && i+1 < len(in) {
-					i += 2
-					continue
-				}
-				if in[i] == '\'' {
-					if i+1 < len(in) && in[i+1] == '\'' {
-						i += 2
-						continue
-					}
-					i++
-					break
-				}
-				i++
-			}
-			out = append(out, '?')
-		case c == '$' && i+1 < len(in) && (in[i+1] == '$' || isIdentStart(in[i+1])):
-			// $tag$ ... $tag$ (dollar quoting) or $$ ... $$; a parameter like $1
-			// is not a quote and falls through to the default branch below.
-			j := i + 1
-			for j < len(in) && isIdentPart(in[j]) {
-				j++
-			}
-			if j < len(in) && in[j] == '$' {
-				tag := in[i : j+1]
-				end := strings.Index(in[j+1:], tag)
-				if end < 0 {
-					i = len(in)
-				} else {
-					i = j + 1 + end + len(tag)
-				}
-				out = append(out, '?')
-				continue
-			}
-			out = append(out, c)
-			i++
-		case c >= '0' && c <= '9' && (len(out) == 0 || !isIdentPart(out[len(out)-1])):
-			for i < len(in) && (in[i] >= '0' && in[i] <= '9' || in[i] == '.' || in[i] == 'e' || in[i] == 'E' || in[i] == 'x' || in[i] == 'X' || (in[i] >= 'a' && in[i] <= 'f') || (in[i] >= 'A' && in[i] <= 'F')) {
-				i++
-			}
-			out = append(out, '?')
-		default:
-			out = append(out, c)
-			i++
-		}
-	}
-	return out
-}
-
-func isIdentStart(c byte) bool {
-	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
-}
-
-func isIdentPart(c byte) bool { return isIdentStart(c) || c >= '0' && c <= '9' }
 
 var operations = map[string]struct{}{
 	"SELECT": {}, "INSERT": {}, "UPDATE": {}, "DELETE": {}, "WITH": {}, "COPY": {},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -59,7 +60,10 @@ func TestPostgresSlowCallSpan(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx, rec, end := recordingCtx()
 			runQuery(tr, ctx, "SELECT id FROM work_items WHERE id = $1", []any{"x"}, nil)
-			bctx := tr.TraceBatchStart(ctx, nil, pgx.TraceBatchStartData{})
+			batch := &pgx.Batch{}
+			batch.Queue("INSERT INTO t VALUES ($1)", "secret-a")
+			batch.Queue("UPDATE t SET v = $1", "secret-b")
+			bctx := tr.TraceBatchStart(ctx, nil, pgx.TraceBatchStartData{Batch: batch})
 			tr.TraceBatchQuery(bctx, nil, pgx.TraceBatchQueryData{SQL: "INSERT INTO t VALUES ($1)"})
 			tr.TraceBatchEnd(bctx, nil, pgx.TraceBatchEndData{})
 			end()
@@ -70,12 +74,23 @@ func TestPostgresSlowCallSpan(t *testing.T) {
 			if spans[0].Name() != "SELECT work_items" || spans[1].Name() != "BATCH" {
 				t.Fatalf("names = %q, %q", spans[0].Name(), spans[1].Name())
 			}
-			wantKeys := 5
+			// The EXACT key sets: no statement hash, no text, no args.
+			pool := []string{}
 			if name == "poolAcquireTracer" {
-				wantKeys = 6 // dh.db.pool
+				pool = []string{"dh.db.pool"}
 			}
-			if got := len(spans[0].Attributes()); got != wantKeys {
-				t.Fatalf("attribute count = %d, want %d", got, wantKeys)
+			wantQuery := append([]string{"db.operation.name", "db.query.summary", "db.system", "db.system.name"}, pool...)
+			wantBatch := append([]string{"db.operation.batch.size", "db.operation.name", "db.query.summary", "db.system", "db.system.name"}, pool...)
+			if got := attrKeys(spans[0]); strings.Join(got, ",") != strings.Join(wantQuery, ",") {
+				t.Fatalf("query span keys = %v, want exactly %v", got, wantQuery)
+			}
+			if got := attrKeys(spans[1]); strings.Join(got, ",") != strings.Join(wantBatch, ",") {
+				t.Fatalf("batch span keys = %v, want exactly %v", got, wantBatch)
+			}
+			for _, kv := range spans[1].Attributes() {
+				if kv.Key == "db.operation.batch.size" && kv.Value.AsInt64() != 2 {
+					t.Fatalf("batch size = %d, want 2", kv.Value.AsInt64())
+				}
 			}
 		})
 	}
@@ -201,4 +216,13 @@ func TestNewTracedPoolInstallsSpanTracer(t *testing.T) {
 	if _, err := NewTracedPool(context.Background(), "://bad"); err == nil {
 		t.Fatal("bad uri must error")
 	}
+}
+
+func attrKeys(s sdktrace.ReadOnlySpan) []string {
+	var out []string
+	for _, kv := range s.Attributes() {
+		out = append(out, string(kv.Key))
+	}
+	sort.Strings(out)
+	return out
 }

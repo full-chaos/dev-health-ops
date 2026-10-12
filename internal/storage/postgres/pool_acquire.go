@@ -105,7 +105,7 @@ func poolAcquireResult(err error) string {
 // call's context carries, if any (CHAOS-6936), and into a slow-call client span
 // when the context carries a recording span (CHAOS-9364). They never feed the
 // acquire metric and never record arguments: pgx hands the SQL text only, and
-// the span carries a summary and a hash, never the text.
+// the span carries a summary, never the text.
 func (t *poolAcquireTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
 	return traceStatementStart(ctx, t.pool, t.spans, data.SQL)
 }
@@ -115,9 +115,10 @@ func (t *poolAcquireTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data
 }
 
 // TraceBatchStart/Query/End cover pgx.SendBatch: one BATCH span per round
-// trip. Individual batch queries are not spanned.
-func (t *poolAcquireTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
-	return traceBatchStart(ctx, t.spans)
+// trip, carrying the batch's statement count. Individual batch statements are
+// not spanned and carry no per-statement identity (a documented limit).
+func (t *poolAcquireTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchStartData) context.Context {
+	return traceBatchStart(ctx, t.spans, data)
 }
 
 func (t *poolAcquireTracer) TraceBatchQuery(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchQueryData) {
@@ -153,8 +154,11 @@ func traceStatementEnd(ctx context.Context, err error) {
 	finishSpan(ctx, err)
 }
 
-func traceBatchStart(ctx context.Context, spans dbspan.Emitter) context.Context {
+func traceBatchStart(ctx context.Context, spans dbspan.Emitter, data pgx.TraceBatchStartData) context.Context {
 	if probe := spans.Start(ctx); probe.Active() {
+		if data.Batch != nil {
+			probe = probe.WithBatchSize(data.Batch.Len())
+		}
 		return context.WithValue(ctx, spanKey{}, spanState{probe: probe, op: dbspan.OpBatch})
 	}
 	return ctx
@@ -190,8 +194,8 @@ func (t spanTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.Tra
 	traceStatementEnd(ctx, data.Err)
 }
 
-func (t spanTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
-	return traceBatchStart(ctx, t.spans)
+func (t spanTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchStartData) context.Context {
+	return traceBatchStart(ctx, t.spans, data)
 }
 
 func (t spanTracer) TraceBatchQuery(context.Context, *pgx.Conn, pgx.TraceBatchQueryData) {}

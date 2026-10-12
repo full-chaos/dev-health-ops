@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -115,8 +116,14 @@ func TestSpanConnEveryMethodEmitsOneSlowSpan(t *testing.T) {
 				t.Fatalf("db.system = %q", a.Value.AsString())
 			}
 		}
-		if len(s.Attributes()) != 5 {
-			t.Fatalf("attribute count = %d, want 5", len(s.Attributes()))
+		// The EXACT key set: no statement hash, no text, no args.
+		var got []string
+		for _, kv := range s.Attributes() {
+			got = append(got, string(kv.Key))
+		}
+		sort.Strings(got)
+		if want := "db.operation.name,db.query.summary,db.system,db.system.name"; strings.Join(got, ",") != want {
+			t.Fatalf("%s attribute keys = %v, want exactly %s", s.Name(), got, want)
 		}
 	}
 }

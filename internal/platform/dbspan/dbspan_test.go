@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,7 +91,8 @@ func TestFastCallNoSpanSlowCallSpan(t *testing.T) {
 	if s.SpanKind() != trace.SpanKindClient || s.Name() != "SELECT public.work_items" || s.Parent().SpanID() != parent.SpanContext().SpanID() {
 		t.Fatalf("kind=%v name=%q parent ok=%v", s.SpanKind(), s.Name(), s.Parent().SpanID() == parent.SpanContext().SpanID())
 	}
-	want := []string{"db.operation.name", "db.query.fingerprint", "db.query.summary", "db.system", "db.system.name", "dh.db.pool"}
+	// The EXACT key set: no statement hash (removed by design), no text.
+	want := []string{"db.operation.name", "db.query.summary", "db.system", "db.system.name", "dh.db.pool"}
 	got := keys(s)
 	if len(got) != len(want) {
 		t.Fatalf("attribute keys = %v, want %v", got, want)
@@ -223,26 +225,6 @@ func TestOperationAndSummary(t *testing.T) {
 			t.Errorf("Summary(%q) = %q want %q", c.stmt, got, c.sum)
 		}
 	}
-	if f := dbspan.Fingerprint("SELECT 1"); len(f) != 16 {
-		t.Errorf("fingerprint %q", f)
-	}
-}
-
-func TestFingerprintGroupsTemplatesAndHidesLiterals(t *testing.T) {
-	a := dbspan.Fingerprint("SELECT * FROM t WHERE email = 'secret@x.y' AND n = 42 AND k = $1")
-	b := dbspan.Fingerprint("SELECT * FROM t WHERE email = 'other''s' AND n = 7 AND k = $1")
-	if a != b {
-		t.Fatalf("same template, different literals: %s != %s", a, b)
-	}
-	if dbspan.Fingerprint("SELECT col1 FROM t1") == dbspan.Fingerprint("SELECT col2 FROM t1") {
-		t.Fatal("digits inside identifiers must not be normalized away")
-	}
-	if dbspan.Fingerprint("SELECT $$secret$$") != dbspan.Fingerprint("SELECT $tag$other$tag$") {
-		t.Fatal("dollar-quoted bodies must normalize")
-	}
-	if len(a) != 16 {
-		t.Fatalf("fingerprint %q", a)
-	}
 }
 
 func TestInvalidEnv(t *testing.T) {
@@ -256,18 +238,33 @@ func TestInvalidEnv(t *testing.T) {
 	}
 }
 
-func TestFingerprintDropsCommentsAndBooleanLiterals(t *testing.T) {
-	base := dbspan.Fingerprint("SELECT 1 FROM t WHERE a = ? AND b = ?")
-	for _, stmt := range []string{
-		"SELECT 1 FROM t WHERE a = TRUE AND b = null",
-		"SELECT 1 FROM t WHERE a = false AND b = NULL",
-		"SELECT /* alice@example.com */ 1 FROM t WHERE a = ? -- bob@example.com\n AND b = ?",
-	} {
-		if got := dbspan.Fingerprint(stmt); got != base {
-			t.Errorf("%q fingerprint %s != template %s", stmt, got, base)
-		}
+func TestBatchSpanCarriesStatementCountAndExactKeys(t *testing.T) {
+	tp, rec := provider(sdktrace.AlwaysSample())
+	ctx, parent := tp.Tracer("t").Start(context.Background(), "parent")
+	e := dbspan.NewEmitter(dbspan.SystemPostgres, "").WithMin(0)
+	e.Start(ctx).WithBatchSize(3).Finish(ctx, "", dbspan.OpBatch, nil, "")
+	e.Start(ctx).Finish(ctx, "SELECT 1", "", nil, "")
+	parent.End()
+	spans := children(rec, "parent")
+	if len(spans) != 2 {
+		t.Fatalf("spans = %d, want 2", len(spans))
 	}
-	if dbspan.Fingerprint("SELECT nullable, trueish FROM t") == dbspan.Fingerprint("SELECT ?, ? FROM t") {
-		t.Error("identifiers that merely start with a keyword must be kept")
+	wants := map[string][]string{
+		"BATCH":  {"db.operation.batch.size", "db.operation.name", "db.query.summary", "db.system", "db.system.name"},
+		"SELECT": {"db.operation.name", "db.query.summary", "db.system", "db.system.name"},
+	}
+	for _, s := range spans {
+		want, ok := wants[s.Name()]
+		if !ok {
+			t.Fatalf("unexpected span %q", s.Name())
+		}
+		if got := keys(s); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s attribute keys = %v, want exactly %v", s.Name(), got, want)
+		}
+		for _, kv := range s.Attributes() {
+			if kv.Key == "db.operation.batch.size" && kv.Value.AsInt64() != 3 {
+				t.Fatalf("batch size = %d, want 3", kv.Value.AsInt64())
+			}
+		}
 	}
 }

@@ -512,6 +512,10 @@ func TestSelectedQueuesUseRegistryBoundedJobDimensions(t *testing.T) {
 			QueueCapacities: []riverstore.QueueCapacityTelemetry{
 				{Queue: "heartbeat", Capacity: 1, Running: 1, Saturation: 0.5},
 			},
+			QueueStates: []riverstore.QueueStateTelemetry{
+				{Queue: "heartbeat", Scheduled: 7, Retryable: 3},
+				{Queue: "retention", Scheduled: 2, Retryable: 5},
+			},
 		},
 	}}
 	// The ops kinds now ship at go_default, so the production operational
@@ -549,6 +553,10 @@ func TestSelectedQueuesUseRegistryBoundedJobDimensions(t *testing.T) {
 		`worker_jobs_available{queue="retention",kind="system.retention_cleanup"} 2`,
 		`worker_job_oldest_age_seconds{queue="heartbeat"} 12`,
 		`worker_execution_saturation_ratio{queue="heartbeat"} 0.5`,
+		`worker_jobs_scheduled{queue="heartbeat"} 7`,
+		`worker_jobs_retryable{queue="heartbeat"} 3`,
+		`worker_jobs_scheduled{queue="retention"} 2`,
+		`worker_jobs_retryable{queue="retention"} 5`,
 		`worker_domain_state_mismatch_total{domain_type="maintenance_run"} 0`,
 	} {
 		if !bytes.Contains(metrics.Bytes(), []byte(metric)) {

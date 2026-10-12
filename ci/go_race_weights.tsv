@@ -196,6 +196,7 @@ internal/pgmigrate	6
 internal/platform/buildstamp	1
 internal/platform/config	12
 internal/platform/dbphase	1
+internal/platform/dbspan	1
 internal/platform/errortext	1
 internal/platform/errortext/hardened	1
 internal/platform/health	1

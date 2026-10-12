@@ -4956,7 +4956,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: ClickHouse readiness check failed (CLICKHOUSE_URI must be the NATIVE protocol port, not the HTTP port -- see deploy/go-workers/README.md): %w", err)
 	}
 
-	pgPool, err := pgxpool.New(context.Background(), cfg.RegistryPostgresURI)
+	pgPool, err := postgresstore.NewTracedPool(context.Background(), cfg.RegistryPostgresURI)
 	if err != nil {
 		return queryRouteHandlers{}, nil, nil, err
 	}

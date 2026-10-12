@@ -8,6 +8,7 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/dbspan"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -91,5 +92,5 @@ func Open(ctx context.Context, config Config) (driver.Conn, error) {
 		_ = connection.Close()
 		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
 	}
-	return connection, nil
+	return newSpanConn(connection, dbspan.NewEmitter(dbspan.SystemClickHouse, "")), nil
 }

@@ -411,6 +411,10 @@ type TeamRepoOwnershipTie struct {
 type teamRepoOwnershipDerivation struct {
 	Rows []DerivedTeamRepoOwnershipRow
 	Ties []TeamRepoOwnershipTie
+	// Reached counts, per kind of input, the candidates the run resolved
+	// through it (a team reaching a repo): the retraction guard's proof that
+	// the kind's whole input chain was in the run.
+	Reached map[teamRepoOwnershipRetractionKind]int
 }
 
 // deriveTeamRepoOwnership implements both signal paths plus PR inheritance
@@ -465,10 +469,13 @@ func deriveTeamRepoOwnership(
 
 	tallies := map[string]map[string]*teamRepoOwnershipLinkCounts{}
 	repoArm := map[string]map[string]string{}
-	assign := func(repoID, teamID, arm string, tier int) {
+	reached := map[teamRepoOwnershipRetractionKind]int{}
+	assign := func(repoID string, resolved teamRepoOwnershipResolution, tier int) {
+		teamID, arm := resolved.TeamID, resolved.Arm
 		if repoID == "" || teamID == "" {
 			return
 		}
+		reached[resolved.Kind]++
 		if tallies[repoID] == nil {
 			tallies[repoID] = map[string]*teamRepoOwnershipLinkCounts{}
 			repoArm[repoID] = map[string]string{}
@@ -493,8 +500,8 @@ func deriveTeamRepoOwnership(
 		if item.RepoID == "" || !teamRepoOwnershipChangeRequestTypes[item.Type] {
 			continue
 		}
-		if teamID, arm := donorTeamID(item.WorkItemID); teamID != "" {
-			assign(item.RepoID, teamID, arm, teamRepoOwnershipLinkTierNative)
+		if resolved := donorTeamID(item.WorkItemID); resolved.TeamID != "" {
+			assign(item.RepoID, resolved, teamRepoOwnershipLinkTierNative)
 		}
 	}
 
@@ -506,12 +513,12 @@ func deriveTeamRepoOwnership(
 		if link.RepoID == "" {
 			continue
 		}
-		if teamID, arm := donorTeamID(link.WorkItemID); teamID != "" {
-			assign(link.RepoID, teamID, arm, teamRepoOwnershipIssuePRLinkTier(link.Provenance))
+		if resolved := donorTeamID(link.WorkItemID); resolved.TeamID != "" {
+			assign(link.RepoID, resolved, teamRepoOwnershipIssuePRLinkTier(link.Provenance))
 		}
 	}
 
-	var result teamRepoOwnershipDerivation
+	result := teamRepoOwnershipDerivation{Reached: reached}
 	for repoID, teams := range tallies {
 		var leaders []string
 		var best teamRepoOwnershipLinkCounts
@@ -537,6 +544,33 @@ func deriveTeamRepoOwnership(
 	}
 	sort.Slice(result.Ties, func(i, j int) bool { return result.Ties[i].RepoID < result.Ties[j].RepoID })
 	return result
+}
+
+// teamRepoOwnershipResolution is the team one work item resolves to, the arm
+// that resolved it, and the kind of input behind it: project_links of the
+// item's provider (the project_id arm keys on (provider, project_id)), or
+// linear_team_key.
+type teamRepoOwnershipResolution struct {
+	TeamID, Arm string
+	Kind        teamRepoOwnershipRetractionKind
+}
+
+// resolveWorkItemTeam is resolveWorkItemTeamID with the kind of input that
+// resolved the team.
+func resolveWorkItemTeam(
+	item TeamRepoOwnershipWorkItem,
+	projectToTeam map[teamRepoOwnershipProjectRef]string,
+	knownLinearTeamKeys map[string]string,
+) (teamRepoOwnershipResolution, bool) {
+	teamID, arm, ok := resolveWorkItemTeamID(item, projectToTeam, knownLinearTeamKeys)
+	if !ok {
+		return teamRepoOwnershipResolution{}, false
+	}
+	kind := teamRepoOwnershipRetractionKind{Kind: teamRepoOwnershipRetractionKindProjectLinks, Provider: item.Provider}
+	if arm == TeamRepoOwnershipResolutionArmLinearTeamKey {
+		kind = teamRepoOwnershipRetractionKind{Kind: teamRepoOwnershipRetractionKindLinearTeamKey}
+	}
+	return teamRepoOwnershipResolution{TeamID: teamID, Arm: arm, Kind: kind}, true
 }
 
 // resolveWorkItemTeamID is the single identity-resolution step shared by the
@@ -686,7 +720,7 @@ func buildDonorTeamIDResolver(
 	edges []TeamRepoOwnershipDependencyEdge,
 	projectToTeam map[teamRepoOwnershipProjectRef]string,
 	knownLinearTeamKeys map[string]string,
-) func(workItemID string) (string, string) {
+) func(workItemID string) teamRepoOwnershipResolution {
 	keyIndex := buildIssueKeyIndex(byID)
 
 	type pair struct{ source, target string }
@@ -701,11 +735,6 @@ func buildDonorTeamIDResolver(
 		}
 	}
 
-	type resolvedTeam struct {
-		teamID string
-		arm    string
-	}
-
 	// Only a donor that ITSELF already resolves to a team is a valid
 	// candidate -- mirrors compute_work_items.py::build_linked_issue_team_resolver
 	// exactly (its `donor_team` map is populated ONLY for items with a
@@ -718,7 +747,7 @@ func buildDonorTeamIDResolver(
 	// CHAOS-4537) so a donor whose own project_id never resolves (a Linear
 	// issue donating through its native_team_key) is still a valid candidate.
 	candidateTargets := map[string][]string{}
-	targetTeam := map[string]resolvedTeam{}
+	targetTeam := map[string]teamRepoOwnershipResolution{}
 	for _, edge := range latestEdge {
 		if !teamRepoOwnershipInheritableRelationshipTypes[edge.RelationshipType] {
 			continue
@@ -731,32 +760,29 @@ func buildDonorTeamIDResolver(
 		if !ok {
 			continue
 		}
-		teamID, arm, resolves := resolveWorkItemTeamID(donor, projectToTeam, knownLinearTeamKeys)
+		resolved, resolves := resolveWorkItemTeam(donor, projectToTeam, knownLinearTeamKeys)
 		if !resolves {
 			continue
 		}
-		targetTeam[target] = resolvedTeam{teamID: teamID, arm: arm}
+		targetTeam[target] = resolved
 		candidateTargets[edge.SourceWorkItemID] = append(candidateTargets[edge.SourceWorkItemID], target)
 	}
 
 	// Deterministic tie-break: the lexicographically smallest canonical
 	// target wins when a source has multiple valid donor candidates.
-	donorTeamBySource := make(map[string]resolvedTeam, len(candidateTargets))
+	donorTeamBySource := make(map[string]teamRepoOwnershipResolution, len(candidateTargets))
 	for source, targets := range candidateTargets {
 		sort.Strings(targets)
 		donorTeamBySource[source] = targetTeam[targets[0]]
 	}
 
-	return func(workItemID string) (string, string) {
+	return func(workItemID string) teamRepoOwnershipResolution {
 		if item, ok := byID[workItemID]; ok {
-			if teamID, arm, resolves := resolveWorkItemTeamID(item, projectToTeam, knownLinearTeamKeys); resolves {
-				return teamID, arm
+			if resolved, resolves := resolveWorkItemTeam(item, projectToTeam, knownLinearTeamKeys); resolves {
+				return resolved
 			}
 		}
-		if entry, ok := donorTeamBySource[workItemID]; ok {
-			return entry.teamID, entry.arm
-		}
-		return "", ""
+		return donorTeamBySource[workItemID]
 	}
 }
 

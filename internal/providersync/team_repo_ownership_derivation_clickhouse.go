@@ -231,17 +231,17 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	// below is one comparison over the org's whole activeRows, so "this run
 	// does not derive the row" is a proof of absence only when the run read
 	// the input that could derive it. That input is per provider and per
-	// fact kind: a run with no open project link of provider A (a transient
-	// gap, or a wrong upstream close of A's links) cannot reconfirm a row
-	// that A's links derived, however many links provider B has, and a run
-	// with no resolvable Linear team key cannot reconfirm a row of the
-	// linear_team_key arm. The guard (team_repo_ownership_retraction_guard.go)
+	// fact kind: a run with no open project link of provider A, or one that
+	// reaches no repository through A (A's work items or pull request links
+	// not in the run), cannot reconfirm a row that A's links derived, however
+	// much provider B has, and a run with no resolvable Linear team key
+	// cannot reconfirm a row of the linear_team_key arm. The guard (team_repo_ownership_retraction_guard.go)
 	// keeps every retraction whose kinds are not all proven, and reports it.
 	linkHistory, err := loadTeamRepoOwnershipTeamLinkProviders(ctx, service.Conn, orgID)
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
-	guard := newTeamRepoOwnershipRetractionGuard(projectLinks, linkHistory, workItems, knownTeams)
+	guard := newTeamRepoOwnershipRetractionGuard(derivation.Reached, projectLinks, linkHistory, workItems, knownTeams)
 	toRetract, held, heldKinds := guard.retain(diffTeamRepoOwnershipRetractions(activeRows, derived, derivation.Ties, repos))
 	stats.RetractionsHeld = held
 	reportTeamRepoOwnershipRetractionHeld(ctx, orgID, heldKinds)

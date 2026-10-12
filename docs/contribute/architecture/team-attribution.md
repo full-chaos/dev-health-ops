@@ -2613,10 +2613,13 @@ also writes a WARN `team_repo_ownership_derivation.owner_tie_unresolved` log lin
 
 **Retraction is guarded per provider and per fact kind (CHAOS-9045).** A run retracts an open inferred row it no longer
 derives only when it read the input that could derive that row. Each kind of input has its own proof
-(`team_repo_ownership_retraction_guard.go`, a `SnapshotProof` of one named term): `project_links:<provider>` holds when the
-run has at least one open `team_project_ownership` link of that provider (reason `no_open_project_link_of_the_provider`);
-`linear_team_key` holds when a Linear work item's `native_team_key` names a current Linear team (reason
-`no_linear_work_item_with_a_known_team_key`). The kinds of an open row are read from its team: `project_links:<P>` for every
+(`team_repo_ownership_retraction_guard.go`, a `SnapshotProof` of two named terms: the kind's input is in the run, and the
+run reached at least one repository through the kind, reason `no_repository_reached_through_the_kind`): `project_links:<provider>`
+needs at least one open `team_project_ownership` link of that provider (reason `no_open_project_link_of_the_provider`) and a
+pull request's repository or an issue's linked pull request reached through it, so a provider whose links are open but whose
+work items or pull request links are not in the run proves nothing; `linear_team_key` needs a Linear work item whose
+`native_team_key` names a current Linear team (reason `no_linear_work_item_with_a_known_team_key`) and a repository reached
+through that arm. A kind that is in the run and reaches no repository closes nothing (the empty answer of a snapshot kind). The kinds of an open row are read from its team: `project_links:<P>` for every
 provider `P` whose links (open or closed) ever named the team, and `linear_team_key` when the team is a Linear team (a
 `linear:` id, or a team the Linear catalog lists). The row is retracted only when the proof of every one of its kinds holds;
 otherwise it stays open. So in an org with two providers, provider A with no open link and provider B with one, A's

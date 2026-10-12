@@ -8,6 +8,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 )
 
 // conn is the narrow ClickHouse capability this package needs, matching
@@ -96,8 +98,7 @@ SELECT
     tupleElement(latest, 1) AS rework_churn_ratio_30d,
     tupleElement(latest, 2) AS single_owner_file_ratio_30d,
     tupleElement(latest, 3) AS code_ownership_gini,
-    tupleElement(latest, 4) AS bus_factor,
-    tupleElement(latest, 5) AS pr_first_review_p90_hours
+    tupleElement(latest, 4) AS bus_factor
 FROM (
     SELECT
         repo_id,
@@ -106,8 +107,7 @@ FROM (
                 rework_churn_ratio_30d,
                 single_owner_file_ratio_30d,
                 code_ownership_gini,
-                bus_factor,
-                pr_first_review_p90_hours
+                bus_factor
             ),
             computed_at
         ) AS latest
@@ -173,7 +173,6 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 		//   single_owner_file_ratio_30d Float64            (004_quality_delivery_metrics.sql:8)
 		//   code_ownership_gini         Float64 DEFAULT 0  (006_knowledge_predictability.sql:3)
 		//   bus_factor                  UInt32  DEFAULT 0  (006_knowledge_predictability.sql:2)
-		//   pr_first_review_p90_hours   Nullable(Float64)  (001_metrics_v2.sql:189)
 		//
 		// Scanning a non-Nullable column into *float64 -- or a UInt32 into any
 		// float -- is a driver-level type error the compute-side unit tests
@@ -190,10 +189,9 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 			singleOwnerRatio float64
 			ownershipGini    float64
 			busFactor        uint32
-			reviewP90        *float64
 		)
 		if err := rows.Scan(
-			&repoID, &reworkChurn, &singleOwnerRatio, &ownershipGini, &busFactor, &reviewP90,
+			&repoID, &reworkChurn, &singleOwnerRatio, &ownershipGini, &busFactor,
 		); err != nil {
 			return nil, fmt.Errorf("scan repo metrics row: %w", err)
 		}
@@ -204,7 +202,6 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 			SingleOwnerFileRatio30D: &singleOwnerRatio,
 			CodeOwnershipGini:       &ownershipGini,
 			BusFactor:               &busFactorFloat,
-			PRFirstReviewP90Hours:   reviewP90,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -255,8 +252,7 @@ SELECT
     tupleElement(latest, 1) AS rework_churn_ratio_30d,
     tupleElement(latest, 2) AS single_owner_file_ratio_30d,
     tupleElement(latest, 3) AS code_ownership_gini,
-    tupleElement(latest, 4) AS bus_factor,
-    tupleElement(latest, 5) AS pr_first_review_p90_hours
+    tupleElement(latest, 4) AS bus_factor
 FROM (
     SELECT
         repo_id,
@@ -265,8 +261,7 @@ FROM (
                 rework_churn_ratio_30d,
                 single_owner_file_ratio_30d,
                 code_ownership_gini,
-                bus_factor,
-                pr_first_review_p90_hours
+                bus_factor
             ),
             computed_at
         ) AS latest
@@ -312,10 +307,9 @@ func (loader *ClickHouseLoader) LoadRepoMetricsForOrgDay(
 			singleOwnerRatio float64
 			ownershipGini    float64
 			busFactor        uint32
-			reviewP90        *float64
 		)
 		if err := rows.Scan(
-			&repoID, &reworkChurn, &singleOwnerRatio, &ownershipGini, &busFactor, &reviewP90,
+			&repoID, &reworkChurn, &singleOwnerRatio, &ownershipGini, &busFactor,
 		); err != nil {
 			return nil, fmt.Errorf("scan org-wide repo metrics row: %w", err)
 		}
@@ -326,7 +320,6 @@ func (loader *ClickHouseLoader) LoadRepoMetricsForOrgDay(
 			SingleOwnerFileRatio30D: &singleOwnerRatio,
 			CodeOwnershipGini:       &ownershipGini,
 			BusFactor:               &busFactorFloat,
-			PRFirstReviewP90Hours:   reviewP90,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -334,6 +327,86 @@ func (loader *ClickHouseLoader) LoadRepoMetricsForOrgDay(
 	}
 	return result, nil
 }
+
+// reviewWindowQuery reads the pull requests merged in the review window of each
+// repository: their count, and the creation and first-review instants of the
+// ones with a first review. The hours and the p90 are computed in Go with the
+// repository/user family's percentile (repouser.Percentile), the definition of
+// the one-day pr_first_review_p90_hours this input replaces.
+const reviewWindowQuery = `
+SELECT
+    toString(repo_id) AS repo_id_text,
+    toUInt64(count()) AS merged_prs,
+    groupArrayIf(created_at, first_review_at IS NOT NULL) AS created,
+    groupArrayIf(assumeNotNull(first_review_at), first_review_at IS NOT NULL) AS first_reviews
+FROM git_pull_requests FINAL
+WHERE org_id = {org_id:String}
+  AND repo_id IN {repo_ids:Array(UUID)}
+  AND merged_at IS NOT NULL
+  AND merged_at >= {start:DateTime64(3, 'UTC')}
+  AND merged_at < {end:DateTime64(3, 'UTC')}
+GROUP BY repo_id
+ORDER BY repo_id`
+
+// LoadReviewWindows returns the review window of each repository, keyed by
+// repo_id text, for the ReviewWindowDays ending on day (inclusive). A
+// repository with no merged pull request in the window has no entry; a caller
+// gives it a window of zeros.
+func (loader *ClickHouseLoader) LoadReviewWindows(
+	ctx context.Context, orgID string, repoIDs []uuid.UUID, day time.Time,
+) (map[string]ReviewWindow, error) {
+	if loader == nil || loader.conn == nil {
+		return nil, fmt.Errorf("compoundingrisk: loader unavailable")
+	}
+	windows := map[string]ReviewWindow{}
+	if len(repoIDs) == 0 {
+		return windows, nil
+	}
+	end := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
+	start := end.AddDate(0, 0, -ReviewWindowDays)
+	rows, err := loader.conn.Query(ctx, reviewWindowQuery,
+		clickhouse.Named("org_id", orgID),
+		clickhouse.Named("repo_ids", repoIDs),
+		clickhouse.Named("start", start.Format(clickHouseDateTime64Layout)),
+		clickhouse.Named("end", end.Format(clickHouseDateTime64Layout)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load review windows: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			repoID       string
+			merged       uint64
+			created      []time.Time
+			firstReviews []time.Time
+		)
+		if err := rows.Scan(&repoID, &merged, &created, &firstReviews); err != nil {
+			return nil, fmt.Errorf("scan review window row: %w", err)
+		}
+		if len(created) != len(firstReviews) {
+			return nil, fmt.Errorf("review window of repo %s: %d creation instants for %d first reviews", repoID, len(created), len(firstReviews))
+		}
+		hours := make([]float64, len(created))
+		for i := range created {
+			hours[i] = firstReviews[i].UTC().Sub(created[i].UTC()).Seconds() / 3600.0
+		}
+		window := ReviewWindow{MergedPRs: int(merged), ReviewedPRs: len(hours)}
+		if len(hours) > 0 {
+			p90 := repouser.Percentile(hours, 90.0)
+			window.P90Hours = &p90
+		}
+		windows[repoID] = window
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return windows, nil
+}
+
+// clickHouseDateTime64Layout is the wire form for a {name:DateTime64(3, 'UTC')}
+// query parameter (a literal string; see LoadRepoMetrics).
+const clickHouseDateTime64Layout = "2006-01-02 15:04:05.000"
 
 // ComplexityWindowDays mirrors COMPLEXITY_WINDOW_DAYS (compounding_risk.py:410).
 const ComplexityWindowDays = 30
@@ -453,7 +526,8 @@ func (writer *Writer) WriteRecords(ctx context.Context, records []Record, orgID 
 		rework_churn, complexity_delta, bus_factor, ownership_gini,
 		single_owner_ratio, review_latency_p90h,
 		w_churn, w_complexity, w_ownership, w_review,
-		threshold_elevated, threshold_high, computed_at
+		threshold_elevated, threshold_high, computed_at,
+		merged_prs_30d, reviewed_prs_30d, review_share_30d
 	)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare compounding_risk_daily batch: %w", err)
@@ -467,6 +541,7 @@ func (writer *Writer) WriteRecords(ctx context.Context, records []Record, orgID 
 			record.SingleOwnerRatio, record.ReviewLatencyP90H,
 			record.WChurn, record.WComplexity, record.WOwnership, record.WReview,
 			record.ThresholdElevated, record.ThresholdHigh, record.ComputedAt,
+			record.MergedPRs30D, record.ReviewedPRs30D, record.ReviewShare30D,
 		); err != nil {
 			return 0, fmt.Errorf("append compounding_risk_daily row: %w", err)
 		}

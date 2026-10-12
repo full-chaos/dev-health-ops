@@ -11,11 +11,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// compoundingRiskSchema is the production shape of the three tables this family
+// compoundingRiskSchema is the production shape of the four tables this family
 // touches. ONE copy, deliberately: it was inlined per-test, and a schema
 // duplicated per test is how #2231's stale-sorting-key bug happened -- one copy
 // drifted from production while the others looked fine, and the test that
@@ -57,9 +58,19 @@ var compoundingRiskSchema = []string{
     single_owner_ratio Nullable(Float64), review_latency_p90h Nullable(Float64),
     w_churn Float64, w_complexity Float64, w_ownership Float64, w_review Float64,
     threshold_elevated Float64, threshold_high Float64,
-    computed_at DateTime DEFAULT now()
+    computed_at DateTime DEFAULT now(),
+    merged_prs_30d Nullable(UInt32), reviewed_prs_30d Nullable(UInt32),
+    review_share_30d Nullable(Float64)
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day)
   ORDER BY (org_id, scope, scope_id, day, computed_at)`,
+	// The git_pull_requests columns the review window reads (000_raw_tables.sql,
+	// 001_metrics_v2.sql's first_review_at, migration 027's sorting key).
+	`CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32,
+    created_at DateTime64(3, 'UTC'), merged_at Nullable(DateTime64(3, 'UTC')),
+    first_review_at Nullable(DateTime64(3, 'UTC')),
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
 }
 
 // TestCompoundingRiskComputeFamilyAgainstRealClickHouse is
@@ -144,6 +155,43 @@ INSERT INTO repo_complexity_daily
 		t.Fatal(err)
 	}
 
+	// Review window of the 2026-08-24 target day: merged in
+	// [2026-07-26 00:00, 2026-08-25 00:00). repo_metrics_daily's one-day
+	// pr_first_review_p90_hours (12.0 above) is NOT the input any more.
+	//   #1 merged 08-21, first review 12h after creation; an OLDER version of
+	//      the row (earlier last_synced) says 3h and must lose to FINAL.
+	//   #2 merged 08-02 (23 days back: only a 30-day window holds it), 6h.
+	//   #3 merged 08-10 with no review.
+	//   #4 merged 07-25 23:59:59.999 (one ms before the window), 100h: out.
+	//   #5 merged 08-25 00:00 (the next day), 200h: out.
+	//   #6 not merged, 1h: out.
+	//   org B's row of the same repo id and number: out.
+	// Window: merged 3, reviewed 2, p90 of [12, 6] = 11.4, share 2/3.
+	// The older version of #1 goes in its own insert with merges stopped: the
+	// table collapses two versions of one key written in ONE insert, and then
+	// nothing would tell a read with FINAL from one without.
+	if err := conn.Exec(ctx, `SYSTEM STOP MERGES git_pull_requests`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, first_review_at, last_synced, org_id) VALUES
+(toUUID('`+repoA1+`'), 1, '2026-08-20 00:00:00', '2026-08-21 00:00:00', '2026-08-20 03:00:00', '2026-08-21 01:00:00', '`+orgA+`')
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, first_review_at, last_synced, org_id) VALUES
+(toUUID('`+repoA1+`'), 1, '2026-08-20 00:00:00', '2026-08-21 00:00:00', '2026-08-20 12:00:00', '2026-08-22 01:00:00', '`+orgA+`'),
+(toUUID('`+repoA1+`'), 2, '2026-08-01 00:00:00', '2026-08-02 00:00:00', '2026-08-01 06:00:00', '2026-08-02 01:00:00', '`+orgA+`'),
+(toUUID('`+repoA1+`'), 3, '2026-08-09 00:00:00', '2026-08-10 00:00:00', NULL,                  '2026-08-10 01:00:00', '`+orgA+`'),
+(toUUID('`+repoA1+`'), 4, '2026-07-20 00:00:00', '2026-07-25 23:59:59.999', '2026-07-24 04:00:00', '2026-07-26 01:00:00', '`+orgA+`'),
+(toUUID('`+repoA1+`'), 5, '2026-08-20 00:00:00', '2026-08-25 00:00:00', '2026-08-28 08:00:00', '2026-08-25 01:00:00', '`+orgA+`'),
+(toUUID('`+repoA1+`'), 6, '2026-08-22 00:00:00', NULL,                  '2026-08-22 01:00:00', '2026-08-22 02:00:00', '`+orgA+`'),
+(toUUID('`+repoA1+`'), 1, '2026-08-20 00:00:00', '2026-08-21 00:00:00', '2026-08-30 00:00:00', '2026-08-23 01:00:00', '`+orgB+`')
+`); err != nil {
+		t.Fatal(err)
+	}
+
 	executor, err := NewCompoundingRiskExecutor(conn)
 	if err != nil {
 		t.Fatal(err)
@@ -181,6 +229,11 @@ INSERT INTO repo_complexity_daily
 	); err != nil {
 		t.Fatalf("typed-parameter binding regressed in LoadComplexityDelta: %v", err)
 	}
+	if _, err := executor.loader.LoadReviewWindows(
+		ctx, orgA, []uuid.UUID{uuid.MustParse(repoA1)}, targetDay,
+	); err != nil {
+		t.Fatalf("typed-parameter binding regressed in LoadReviewWindows: %v", err)
+	}
 	run := Run{ID: "run-a", OrganizationID: orgA, TargetDay: targetDay}
 	partition := Partition{ID: "partition-a", RunID: "run-a", RepoIDs: []RepositoryID{RepositoryID(repoA1)}}
 
@@ -200,7 +253,10 @@ INSERT INTO repo_complexity_daily
 	// golden covers, so this asserts the plumbing rather than restating the
 	// arithmetic a second time.
 	churn, gini := 0.15, 0.20
-	singleOwner, review := 0.35, 12.0
+	singleOwner := 0.35
+	review := compoundingrisk.ReviewWindow{MergedPRs: 3, ReviewedPRs: 2}
+	reviewP90 := repouser.Percentile([]float64{12, 6}, 90)
+	review.P90Hours = &reviewP90
 	busFactor := 3.0
 	delta := compoundingrisk.ComplexityDeltaRatio(11.0, 14.0)
 	want := compoundingrisk.Compute(
@@ -208,7 +264,7 @@ INSERT INTO repo_complexity_daily
 		compoundingrisk.Inputs{
 			ReworkChurn:       &churn,
 			ComplexityDelta:   &delta,
-			ReviewLatencyP90H: &review,
+			ReviewLatencyP90H: review.P90Hours,
 			SingleOwnerRatio:  &singleOwner,
 			OwnershipGini:     &gini,
 			BusFactor:         &busFactor,
@@ -217,9 +273,13 @@ INSERT INTO repo_complexity_daily
 		compoundingrisk.DefaultWeights,
 		compoundingrisk.DefaultThresholds,
 		compoundingrisk.DefaultReferences,
-	)
+	).WithReviewWindow(&review)
 
 	var (
+		gotLatency   *float64
+		gotMerged    *uint32
+		gotReviewed  *uint32
+		gotShare     *float64
 		gotScope     string
 		gotScopeID   string
 		gotScore     *float64
@@ -234,13 +294,15 @@ INSERT INTO repo_complexity_daily
 	readback := conn.QueryRow(ctx, `
 SELECT scope, scope_id, compounding_risk, severity,
        churn_norm, complexity_norm, ownership_norm, review_norm,
-       complexity_delta, bus_factor
+       complexity_delta, bus_factor,
+       review_latency_p90h, merged_prs_30d, reviewed_prs_30d, review_share_30d
 FROM compounding_risk_daily
 WHERE org_id = ? AND day = '2026-08-24'`, orgA)
 	if err := readback.Scan(
 		&gotScope, &gotScopeID, &gotScore, &gotSeverity,
 		&gotChurnNorm, &gotComplex, &gotOwnership, &gotReview,
 		&gotDelta, &gotBusFactor,
+		&gotLatency, &gotMerged, &gotReviewed, &gotShare,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -262,6 +324,8 @@ WHERE org_id = ? AND day = '2026-08-24'`, orgA)
 		{"review_norm", gotReview, want.ReviewNorm},
 		{"complexity_delta", gotDelta, want.ComplexityDelta},
 		{"bus_factor", gotBusFactor, want.BusFactor},
+		{"review_latency_p90h", gotLatency, want.ReviewLatencyP90H},
+		{"review_share_30d", gotShare, want.ReviewShare30D},
 	} {
 		if pair.got == nil || pair.want == nil {
 			if pair.got != pair.want {
@@ -278,6 +342,13 @@ WHERE org_id = ? AND day = '2026-08-24'`, orgA)
 				*pair.want, math.Float64bits(*pair.want),
 			)
 		}
+	}
+
+	if gotLatency == nil || math.Abs(*gotLatency-11.4) > 1e-9 {
+		t.Errorf("review_latency_p90h = %v, want 11.4: the p90 of the 30-day window, not the one-day 12.0 of repo_metrics_daily", gotLatency)
+	}
+	if gotMerged == nil || *gotMerged != 3 || gotReviewed == nil || *gotReviewed != 2 {
+		t.Errorf("merged/reviewed_prs_30d = %v/%v, want 3/2", gotMerged, gotReviewed)
 	}
 
 	// Cross-tenant and blank-org guards.
@@ -347,6 +418,13 @@ INSERT INTO repo_metrics_daily
 `); err != nil {
 		t.Fatal(err)
 	}
+	// One merged pull request of the review window, first reviewed after 12h.
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, first_review_at, last_synced, org_id) VALUES
+(toUUID('`+repo+`'), 1, '2026-08-20 00:00:00', '2026-08-21 00:00:00', '2026-08-20 12:00:00', '2026-08-21 01:00:00', '`+org+`')
+`); err != nil {
+		t.Fatal(err)
+	}
 	// Both rows are BEFORE the 2026-08-10 midpoint, so second_half is NULL.
 	if err := conn.Exec(ctx, `
 INSERT INTO repo_complexity_daily
@@ -402,133 +480,5 @@ FROM compounding_risk_daily WHERE org_id = ?`, org,
 	// signal must not erase the others.
 	if churn == nil || *churn != 0.5 {
 		t.Errorf("churn_norm = %v, want 0.5 (0.15/0.30)", churn)
-	}
-}
-
-// TestCompoundingRiskTupleDedupKeepsTheWinningRowsNullP90 is the guard the
-// LEDGER previously CLAIMED existed and did not.
-//
-// codex r1 on #2230 caught that: the existing fixture's two candidate rows both
-// carry a non-NULL pr_first_review_p90_hours, so a regression from one
-// argMax(tuple(...)) back to five INDEPENDENT argMax calls would have passed
-// unnoticed. The claim was in the ledger, the proof was not in the tree.
-//
-// The discriminating shape is a NEWER row whose p90 is NULL. Independent
-// per-column argMax skips NULLs, so it keeps the OLDER row's 12.0 and pairs it
-// with the newer row's other four columns -- a row that never existed in the
-// table, and one that reports a score where the real latest snapshot has no
-// review data at all.
-//
-// This test does not merely assert the correct answer. It runs BOTH query
-// shapes against the SAME fixture and requires them to DISAGREE, because an
-// assertion that the tuple form returns NULL proves nothing unless the
-// independent form would have returned something else on that very data.
-func TestCompoundingRiskTupleDedupKeepsTheWinningRowsNullP90(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	clickhouseInstance, err := containers.StartClickHouse(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clickhouseInstance.Close(context.Background())
-	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-
-	for _, statement := range compoundingRiskSchema {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	const (
-		orgID  = "00000000-0000-4000-8000-0000000000c0"
-		repoID = "00000000-0000-4000-8000-0000000000c1"
-	)
-
-	// OLDER row: p90 present. NEWER row: p90 NULL, every other column different.
-	if err := conn.Exec(ctx, `
-INSERT INTO repo_metrics_daily
-(repo_id, day, rework_churn_ratio_30d, single_owner_file_ratio_30d, code_ownership_gini, bus_factor, pr_first_review_p90_hours, computed_at, org_id) VALUES
-(toUUID('`+repoID+`'), '2026-08-24', 0.90, 0.90, 0.90, 9, 12.0, '2026-08-24 06:00:00', '`+orgID+`'),
-(toUUID('`+repoID+`'), '2026-08-24', 0.15, 0.35, 0.20, 3, NULL, '2026-08-24 09:00:00', '`+orgID+`')
-`); err != nil {
-		t.Fatal(err)
-	}
-
-	// POSITIVE CONTROL: the independent-argMax shape, run against this exact
-	// fixture. If it does NOT return 12.0, the fixture cannot exhibit the defect
-	// and every assertion below is vacuous -- so this failing is a failure of
-	// the test, stated as such.
-	var independentP90 *float64
-	if err := conn.QueryRow(ctx, `
-SELECT argMax(pr_first_review_p90_hours, computed_at)
-FROM repo_metrics_daily
-WHERE org_id = ? AND repo_id = ? AND day = '2026-08-24'
-GROUP BY org_id, repo_id`, orgID, repoID).Scan(&independentP90); err != nil {
-		t.Fatal(err)
-	}
-	if independentP90 == nil || *independentP90 != 12.0 {
-		t.Fatalf(
-			"positive control: independent argMax returned %v, want 12 -- this fixture "+
-				"cannot exhibit the Frankenstein defect, so the assertion below proves nothing",
-			independentP90,
-		)
-	}
-
-	// The shipped loader uses argMax(tuple(...)): the NEWER row wins WHOLE,
-	// NULL p90 included.
-	executor, err := NewCompoundingRiskExecutor(conn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows, err := executor.loader.LoadRepoMetrics(
-		ctx, orgID, []uuid.UUID{uuid.MustParse(repoID)},
-		time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("got %d row(s), want 1", len(rows))
-	}
-	got := rows[0]
-	if got.PRFirstReviewP90Hours != nil {
-		t.Errorf(
-			"p90 = %v, want NULL -- the winning row's NULL was replaced by the older "+
-				"row's value, which is the independent-argMax Frankenstein this dedup exists to prevent",
-			*got.PRFirstReviewP90Hours,
-		)
-	}
-	// The other four columns must ALSO come from the newer row. Checking only
-	// the NULL would pass on a row that took p90 from the winner and the rest
-	// from the loser -- the same defect with the columns swapped.
-	deref := func(name string, value *float64) float64 {
-		t.Helper()
-		if value == nil {
-			t.Fatalf("%s is NULL, want a value from the winning row", name)
-		}
-		return *value
-	}
-	for _, column := range []struct {
-		name string
-		got  float64
-		want float64
-	}{
-		{"rework_churn_ratio_30d", deref("rework_churn_ratio_30d", got.ReworkChurnRatio30D), 0.15},
-		{"single_owner_file_ratio_30d", deref("single_owner_file_ratio_30d", got.SingleOwnerFileRatio30D), 0.35},
-		{"code_ownership_gini", deref("code_ownership_gini", got.CodeOwnershipGini), 0.20},
-		{"bus_factor", deref("bus_factor", got.BusFactor), 3},
-	} {
-		if column.got != column.want {
-			t.Errorf(
-				"%s = %v, want %v -- this column did not come from the winning row, so the "+
-					"dedup assembled one row out of two snapshots",
-				column.name, column.got, column.want,
-			)
-		}
 	}
 }

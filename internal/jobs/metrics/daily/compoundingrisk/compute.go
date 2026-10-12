@@ -190,6 +190,17 @@ func computeScored(
 	}
 }
 
+// WithReviewWindow stores the review window behind the record's review input.
+// The window is stored, never scored: the score reads ReviewLatencyP90H only.
+func (record Record) WithReviewWindow(window *ReviewWindow) Record {
+	if window == nil {
+		return record
+	}
+	merged, reviewed := uint32(window.MergedPRs), uint32(window.ReviewedPRs)
+	record.MergedPRs30D, record.ReviewedPRs30D, record.ReviewShare30D = &merged, &reviewed, window.Share()
+	return record
+}
+
 // weightedScore is the composite over the inputs that are PRESENT (CHAOS-6545): the
 // weighted sum of the present normalized components divided by the sum of their weights, so the weights are renormalized over what is known. A
 // missing input is not zero: a plain sum of the present terms would count it as
@@ -296,6 +307,7 @@ func ComputeForRepos(
 	orgID string,
 	rows []RepoMetricsRow,
 	complexityDeltaFor map[string]*float64,
+	reviewWindowFor map[string]ReviewWindow,
 	computedAt time.Time,
 	weights Weights,
 	thresholds Thresholds,
@@ -310,17 +322,18 @@ func ComputeForRepos(
 			// Python's `if repo_id is None: continue` (compounding_risk.py:500).
 			continue
 		}
+		window := reviewWindowFor[row.RepoID]
 		inputs := Inputs{
 			ReworkChurn:       row.ReworkChurnRatio30D,
 			ComplexityDelta:   complexityDeltaFor[row.RepoID],
-			ReviewLatencyP90H: row.PRFirstReviewP90Hours,
+			ReviewLatencyP90H: window.P90Hours,
 			SingleOwnerRatio:  row.SingleOwnerFileRatio30D,
 			OwnershipGini:     row.CodeOwnershipGini,
 			BusFactor:         row.BusFactor,
 		}
 		records = append(records, Compute(
 			day, row.RepoID, orgID, inputs, computedAt, weights, thresholds, references,
-		))
+		).WithReviewWindow(&window))
 	}
 	return records
 }
@@ -353,12 +366,33 @@ func MeanOrNone(values []*float64) *float64 {
 	return &mean
 }
 
+// pooledReviewWindow adds the counts of a team's repositories, so the team's
+// share is reviewed over merged across them, not a mean of repository shares.
+// The team's p90 stays the mean of the repository p90s (BuildTeamRows), as for
+// every other input. nil when no repository carries a window.
+func pooledReviewWindow(windows []*ReviewWindow) *ReviewWindow {
+	var pooled *ReviewWindow
+	for _, window := range windows {
+		if window == nil {
+			continue
+		}
+		if pooled == nil {
+			pooled = &ReviewWindow{}
+		}
+		pooled.MergedPRs += window.MergedPRs
+		pooled.ReviewedPRs += window.ReviewedPRs
+	}
+	return pooled
+}
+
 // RepoInputs pairs one repo's Inputs with its repo_id, so BuildTeamRows can
 // group by team while preserving the CALLER's row order rather than a Go
 // map's undefined iteration order.
 type RepoInputs struct {
 	RepoID string
 	Inputs Inputs
+	// ReviewWindow is the window behind Inputs.ReviewLatencyP90H; nil = not read.
+	ReviewWindow *ReviewWindow
 }
 
 // BuildTeamRows ports _build_team_rows (compounding_risk.py:554-604):
@@ -422,6 +456,7 @@ func BuildTeamRows(
 	references References,
 ) []Record {
 	byTeam := make(map[string][]Inputs, len(repoToTeam))
+	windowsByTeam := make(map[string][]*ReviewWindow, len(repoToTeam))
 	teamOrder := make([]string, 0, len(repoToTeam))
 	for _, ri := range repoInputs {
 		teamID, ok := repoToTeam[ri.RepoID]
@@ -432,6 +467,7 @@ func BuildTeamRows(
 			teamOrder = append(teamOrder, teamID)
 		}
 		byTeam[teamID] = append(byTeam[teamID], ri.Inputs)
+		windowsByTeam[teamID] = append(windowsByTeam[teamID], ri.ReviewWindow)
 	}
 
 	out := make([]Record, 0, len(teamOrder))
@@ -469,7 +505,7 @@ func BuildTeamRows(
 		}
 		out = append(out, ComputeTeam(
 			day, teamID, orgID, teamInputs, computedAt, weights, thresholds, references,
-		))
+		).WithReviewWindow(pooledReviewWindow(windowsByTeam[teamID])))
 	}
 	return out
 }

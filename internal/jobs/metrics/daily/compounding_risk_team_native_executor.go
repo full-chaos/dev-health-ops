@@ -183,6 +183,22 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	// therefore a scale optimisation, not a parity risk: for an org where most
 	// repos are unowned by any team, this is the difference between N queries
 	// and the (typically much smaller) |repo_to_team| queries.
+	resolvedRepoIDs := make([]uuid.UUID, 0, len(repoToTeam))
+	for _, row := range orgRepoMetrics {
+		if _, resolved := repoToTeam[row.RepoID]; !resolved {
+			continue
+		}
+		repoUUID, parseErr := uuid.Parse(row.RepoID)
+		if parseErr != nil {
+			return 0, fmt.Errorf("%w: repo_metrics_daily repo_id %q: %v", ErrInvalidState, row.RepoID, parseErr)
+		}
+		resolvedRepoIDs = append(resolvedRepoIDs, repoUUID)
+	}
+	reviewWindows, err := executor.loader.LoadReviewWindows(ctx, run.OrganizationID, resolvedRepoIDs, day)
+	if err != nil {
+		return 0, err
+	}
+
 	repoInputs := make([]compoundingrisk.RepoInputs, 0, len(repoToTeam))
 	for _, row := range orgRepoMetrics {
 		if _, resolved := repoToTeam[row.RepoID]; !resolved {
@@ -198,16 +214,18 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 		if deltaErr != nil {
 			return 0, deltaErr
 		}
+		window := reviewWindows[row.RepoID]
 		repoInputs = append(repoInputs, compoundingrisk.RepoInputs{
 			RepoID: row.RepoID,
 			Inputs: compoundingrisk.Inputs{
 				ReworkChurn:       row.ReworkChurnRatio30D,
 				ComplexityDelta:   delta,
-				ReviewLatencyP90H: row.PRFirstReviewP90Hours,
+				ReviewLatencyP90H: window.P90Hours,
 				SingleOwnerRatio:  row.SingleOwnerFileRatio30D,
 				OwnershipGini:     row.CodeOwnershipGini,
 				BusFactor:         row.BusFactor,
 			},
+			ReviewWindow: &window,
 		})
 	}
 

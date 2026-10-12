@@ -64,7 +64,12 @@ returned rows. The score is the weighted mean over the inputs that have data
 renormalized over the present inputs, and is served with a `coverage` value:
 the share of the weight that was present, from 0 to 1. A missing input is not
 counted as zero, the score is never capped at a low coverage, and a row with no
-input at all has no score (unknown), never 0.
+input at all has no score (unknown), never 0. Every input covers the 30 days that
+end on the row's day; review latency is the 90th percentile of the hours from
+creation to first review of the pull requests merged in those 30 days. Each row
+also stores the pull requests merged in the window, how many of them had a first
+review, and that share (no share when nothing merged). The share is stored, not
+scored.
 
 Every definition publishes its unit, aggregation, display precision, null and
 zero semantics, supported scopes and dimensions, range limits, comparison

@@ -677,3 +677,7 @@ func minInt(a, b int) int {
 	}
 	return b
 }
+
+// Percentile is the percentile of the pr_*_p50/p90 columns of this family, for
+// a reader that computes the same quantity over another window.
+func Percentile(values []float64, pct float64) float64 { return percentile(values, pct) }

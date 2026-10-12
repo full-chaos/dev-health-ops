@@ -292,7 +292,7 @@ func repoAllocationInvestmentSource() string {
                     if(wure.work_unit_id != '', wure.effort_metric, wui.effort_metric) AS effort_metric,
                     if(wure.work_unit_id != '', wure.repo_effort_value, wui.effort_value) AS effort_value,
                     if(wure.work_unit_id != '', wure.allocation_source, 'scalar_fallback') AS allocation_source,
-                    if(wure.work_unit_id != '', if(wui.effort_value > 0, wure.repo_effort_value / wui.effort_value, 0.0), 1.0) AS allocation_weight,
+                    if(wure.work_unit_id != '', %s, 1.0) AS allocation_weight,
                     wui.theme_distribution_json AS theme_distribution_json,
                     wui.subcategory_distribution_json AS subcategory_distribution_json,
                     wui.structural_evidence_json AS structural_evidence_json,
@@ -307,14 +307,34 @@ func repoAllocationInvestmentSource() string {
                 LEFT JOIN %s AS wure
                     ON wure.org_id = wui.org_id
                     AND wure.work_unit_id = wui.work_unit_id
-            ) AS work_unit_investments`, unitRepoExpr("wure", "wui"), LatestWorkUnitInvestmentsSource(), LatestWorkUnitRepoEffortSource())
+                LEFT JOIN %s AS wurc
+                    ON wurc.org_id = wui.org_id
+                    AND wurc.work_unit_id = wui.work_unit_id
+            ) AS work_unit_investments`, unitRepoExpr("wure", "wui"), allocationWeightExpr("wure", "wurc"), LatestWorkUnitInvestmentsSource(), LatestWorkUnitRepoEffortSource(), repoEffortTotalsSource())
+}
+
+// repoEffortTotalsSource is one row per unit: its repository-row count and the sum of its repository efforts.
+func repoEffortTotalsSource() string {
+	return fmt.Sprintf(`(
+                    SELECT org_id, work_unit_id, count() AS repo_row_count, sum(repo_effort_value) AS repo_effort_sum
+                    FROM %s
+                    GROUP BY org_id, work_unit_id
+                )`, LatestWorkUnitRepoEffortSource())
+}
+
+// allocationWeightExpr is the share of a unit one repository row stands for: the row's effort over the sum of the
+// unit's repository efforts, or 1/n over its n rows when that sum is 0. Every unit sums to exactly 1 across its rows,
+// whatever its stored unit effort, so it is counted once on every path (CHAOS-9321). totalsAlias is a join of
+// repoEffortTotalsSource.
+func allocationWeightExpr(effortAlias, totalsAlias string) string {
+	return fmt.Sprintf("if(%[2]s.repo_effort_sum > 0, %[1]s.repo_effort_value / %[2]s.repo_effort_sum, 1.0 / %[2]s.repo_row_count)", effortAlias, totalsAlias)
 }
 
 // RepoAllocationInvestmentSource is repoAllocationInvestmentSource for the readers outside this package that scope
 // a work-unit read by repository or team (Home tile, Investment page): one row per (unit, repository the unit
 // touches), repo_id = that repository, effort_value = the repository's allocated effort (work_unit_repo_effort),
-// allocation_weight = its share of the unit's effort; a unit with no repository row keeps its own repo_id, its whole
-// effort and weight 1. The sum over the repositories of a unit is the unit's effort (CHAOS-9221).
+// allocation_weight = its share of the unit (allocationWeightExpr); a unit with no repository row keeps its own repo_id,
+// its whole effort and weight 1. The sum over the repositories of a unit is the unit's effort (CHAOS-9221).
 func RepoAllocationInvestmentSource() string { return repoAllocationInvestmentSource() }
 
 // --- investment.py:214-256: LATEST_WORK_UNIT_AUTHORS_CTE ----------------

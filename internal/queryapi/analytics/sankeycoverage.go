@@ -277,7 +277,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 			// on this same fix for the executed repro. Python keeps the
 			// defect until CHAOS-2600 retires this read path.
 			"LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(wure.repo_id) AND r.org_id = {org_id:String}",
-			fmt.Sprintf("LEFT JOIN (SELECT org_id, work_unit_id, count() AS repo_row_count FROM %s GROUP BY org_id, work_unit_id) AS wure_counts ON wure_counts.org_id = work_unit_investments.org_id AND wure_counts.work_unit_id = work_unit_investments.work_unit_id", repoEffortSrc),
+			fmt.Sprintf("LEFT JOIN (SELECT org_id, work_unit_id, count() AS repo_row_count, sum(repo_effort_value) AS repo_effort_sum FROM %s GROUP BY org_id, work_unit_id) AS wure_counts ON wure_counts.org_id = work_unit_investments.org_id AND wure_counts.work_unit_id = work_unit_investments.work_unit_id", repoEffortSrc),
 		)
 
 		// CHAOS-4241 (analytics.py:713-760): coverage must be weighted the
@@ -300,9 +300,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 			// sum() (ClickHouse ILLEGAL_AGGREGATION), hence the joined
 			// wure_counts aggregate above.
 			repoEffortCol = "if(wure.work_unit_id != '', " +
-				"if(work_unit_investments.effort_value > 0, " +
-				"wure.repo_effort_value / work_unit_investments.effort_value, " +
-				"1.0 / wure_counts.repo_row_count), " +
+				allocationWeightExpr("wure", "wure_counts") + ", " +
 				"1.0)"
 		}
 		repoAssignedCol := "if(wure.work_unit_id != '', wure.repo_id, work_unit_investments.repo_id)"

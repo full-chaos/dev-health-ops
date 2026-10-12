@@ -686,8 +686,9 @@ ticket and fails when it turns green, until it is moved to `pass`; every provide
 `not_applicable` entry with its rule, and every check of an entity is a cell or an `omitted` entry with its
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
 (§0.4j), of active teams, with the first recorded owners applied backward before the first record (D5987,
-option C). Known red today: ownership and membership starts at the sync (CHAOS-9404), the inferred owner starts
-GitLab ownership names the project by path (CHAOS-8883). The inferred repository owner starts at its earliest linked evidence since CHAOS-9403 (#4049): its cell is pass.
+option C). Known red today: ownership and membership start at the sync (CHAOS-9404), and
+GitLab ownership names the project by path (CHAOS-8883). The inferred repository owner starts at its earliest
+linked evidence since CHAOS-9403 (#4049): its cell is pass.
 `TestCrossProviderAttributionMatrixRediscoversKnownDefects` plants the defects the matrix exists to catch
 (sync-time `valid_from`, a landscape grouped by membership, an issue-key prefix taken as a native link, a reader
 with its own ownership SQL) and requires the judging cell to turn red on each.

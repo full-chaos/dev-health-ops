@@ -50,27 +50,27 @@ var standardPlans = []standardPlan{
 }
 
 func runBillingSeed(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin billing seed")
+	flags := newAccountFlags(env, "dho admin billing seed")
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
 	}
 	tx, err := op.Pool.Begin(ctx)
 	if err != nil {
-		return databaseFailure(env, err)
+		return accountDatabaseFailure(env, err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	rows, err := tx.Query(ctx, `SELECT key FROM billing_plans`)
 	if err != nil {
-		return databaseFailure(env, err)
+		return accountDatabaseFailure(env, err)
 	}
 	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		return databaseFailure(env, err)
+		return accountDatabaseFailure(env, err)
 	}
 	existing := make(map[string]bool, len(keys))
 	for _, key := range keys {
@@ -84,12 +84,12 @@ func runBillingSeed(ctx context.Context, env cli.Env) int {
 		planID := uuid.New()
 		if _, err := tx.Exec(ctx, `INSERT INTO billing_plans (id, key, name, description, tier, display_order) VALUES ($1, $2, $3, $4, $5, $6)`,
 			planID, plan.key, plan.name, plan.description, plan.tier, plan.displayOrder); err != nil {
-			return databaseFailure(env, err)
+			return accountDatabaseFailure(env, err)
 		}
 		for _, price := range plan.prices {
 			if _, err := tx.Exec(ctx, `INSERT INTO billing_prices (id, plan_id, interval, amount, currency) VALUES ($1, $2, $3, $4, $5)`,
 				uuid.New(), planID, price.interval, price.amount, "usd"); err != nil {
-				return databaseFailure(env, err)
+				return accountDatabaseFailure(env, err)
 			}
 		}
 		created++
@@ -99,25 +99,25 @@ func runBillingSeed(ctx context.Context, env cli.Env) int {
 		return cli.ExitOK
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return databaseFailure(env, err)
+		return accountDatabaseFailure(env, err)
 	}
 	fmt.Fprintf(env.Stdout, "Seeded %d billing plan(s) with prices.\n", created)
 	return cli.ExitOK
 }
 
 func runBillingList(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin billing list")
+	flags := newAccountFlags(env, "dho admin billing list")
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
 	}
 	rows, err := op.Pool.Query(ctx, `SELECT id, key, name, tier, is_active, stripe_product_id FROM billing_plans ORDER BY display_order`)
 	if err != nil {
-		return databaseFailure(env, err)
+		return accountDatabaseFailure(env, err)
 	}
 	type plan struct {
 		id              uuid.UUID
@@ -130,13 +130,13 @@ func runBillingList(ctx context.Context, env cli.Env) int {
 		var p plan
 		if err := rows.Scan(&p.id, &p.key, &p.name, &p.tier, &p.active, &p.stripeProductID); err != nil {
 			rows.Close()
-			return databaseFailure(env, err)
+			return accountDatabaseFailure(env, err)
 		}
 		plans = append(plans, p)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return databaseFailure(env, err)
+		return accountDatabaseFailure(env, err)
 	}
 	if len(plans) == 0 {
 		fmt.Fprintln(env.Stdout, "No billing plans found.")
@@ -147,7 +147,7 @@ func runBillingList(ctx context.Context, env cli.Env) int {
 	for _, p := range plans {
 		priceRows, err := op.Pool.Query(ctx, `SELECT interval, amount FROM billing_prices WHERE plan_id = $1`, p.id)
 		if err != nil {
-			return databaseFailure(env, err)
+			return accountDatabaseFailure(env, err)
 		}
 		var summaries []string
 		for priceRows.Next() {
@@ -155,13 +155,13 @@ func runBillingList(ctx context.Context, env cli.Env) int {
 			var amount int64
 			if err := priceRows.Scan(&interval, &amount); err != nil {
 				priceRows.Close()
-				return databaseFailure(env, err)
+				return accountDatabaseFailure(env, err)
 			}
 			summaries = append(summaries, fmt.Sprintf("%s $%.2f", interval, float64(amount)/100))
 		}
 		priceRows.Close()
 		if err := priceRows.Err(); err != nil {
-			return databaseFailure(env, err)
+			return accountDatabaseFailure(env, err)
 		}
 		prices := "none"
 		if len(summaries) > 0 {
@@ -174,4 +174,11 @@ func runBillingList(ctx context.Context, env cli.Env) int {
 		fmt.Fprintf(env.Stdout, "%s %s %s %s %s %s\n", pad(p.key, 15), pad(p.name, 15), pad(p.tier, 12), pad(yesNo(p.active), 8), pad(stripeID, 30), prices)
 	}
 	return cli.ExitOK
+}
+
+// accountDatabaseFailure is databaseFailure over accountDSN, the DSN the billing
+// verbs dialed.
+func accountDatabaseFailure(env cli.Env, err error) int {
+	fmt.Fprintf(env.Stdout, "Error: %s\n", accountRedactor(env)(err).Error())
+	return cli.ExitFailure
 }

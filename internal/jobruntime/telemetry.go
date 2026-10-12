@@ -1396,6 +1396,8 @@ type MetricsCollector struct {
 
 	jobsAvailable                        map[JobLabels]int64
 	jobOldestAge                         map[queueLabels]float64
+	jobsScheduled                        map[queueLabels]int64
+	jobsRetryable                        map[queueLabels]int64
 	jobsRunning                          map[JobLabels]int64
 	executionSaturation                  map[queueLabels]float64
 	jobWait                              map[JobLabels]*histogram
@@ -1776,6 +1778,8 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		teamMetricsDailyRepoCount:            newHistogramWithBounds(repoCountBuckets),
 		jobsAvailable:                        make(map[JobLabels]int64, len(dimensions.Jobs)),
 		jobOldestAge:                         make(map[queueLabels]float64),
+		jobsScheduled:                        make(map[queueLabels]int64),
+		jobsRetryable:                        make(map[queueLabels]int64),
 		jobsRunning:                          make(map[JobLabels]int64, len(dimensions.Jobs)),
 		executionSaturation:                  make(map[queueLabels]float64),
 		jobWait:                              make(map[JobLabels]*histogram, len(dimensions.Jobs)),
@@ -1851,6 +1855,8 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for labels := range collector.allowedQueues {
 		collector.jobOldestAge[labels] = 0
+		collector.jobsScheduled[labels] = 0
+		collector.jobsRetryable[labels] = 0
 	}
 	if len(collector.allowedQueues) > maxMetricQueues {
 		return nil, errors.New("metric queue dimensions exceed bounds")
@@ -2144,6 +2150,39 @@ func (collector *MetricsCollector) SetJobOldestAge(queue string, age time.Durati
 		return errors.New("queue metric dimensions are not registered")
 	}
 	collector.jobOldestAge[labels] = age.Seconds()
+	return nil
+}
+
+// SetJobsScheduled records the per-queue count of River jobs in state
+// scheduled. Every replica samples the same table, so read the max across
+// replicas, not the sum.
+func (collector *MetricsCollector) SetJobsScheduled(queue string, count int64) error {
+	if count < 0 {
+		return errors.New("scheduled job count cannot be negative")
+	}
+	labels := queueLabels{Queue: queue}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if _, ok := collector.allowedQueues[labels]; !ok {
+		return errors.New("queue metric dimensions are not registered")
+	}
+	collector.jobsScheduled[labels] = count
+	return nil
+}
+
+// SetJobsRetryable records the per-queue count of River jobs in state
+// retryable. Same replica semantics as SetJobsScheduled.
+func (collector *MetricsCollector) SetJobsRetryable(queue string, count int64) error {
+	if count < 0 {
+		return errors.New("retryable job count cannot be negative")
+	}
+	labels := queueLabels{Queue: queue}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if _, ok := collector.allowedQueues[labels]; !ok {
+		return errors.New("queue metric dimensions are not registered")
+	}
+	collector.jobsRetryable[labels] = count
 	return nil
 }
 
@@ -3868,6 +3907,16 @@ func (collector *MetricsCollector) writeJobs(output *strings.Builder) {
 	writeMetadata(output, "worker_job_oldest_age_seconds", "Age of the oldest available job by queue.", "gauge")
 	for _, labels := range queues {
 		writeFloatSample(output, "worker_job_oldest_age_seconds", queueMetricLabels(labels), collector.jobOldestAge[labels])
+	}
+
+	writeMetadata(output, "worker_jobs_scheduled", "Per-queue count of River jobs in state scheduled. Each replica samples the same table: read the max across replicas, not the sum.", "gauge")
+	for _, labels := range queues {
+		writeIntSample(output, "worker_jobs_scheduled", queueMetricLabels(labels), collector.jobsScheduled[labels])
+	}
+
+	writeMetadata(output, "worker_jobs_retryable", "Per-queue count of River jobs in state retryable. Each replica samples the same table: read the max across replicas, not the sum.", "gauge")
+	for _, labels := range queues {
+		writeIntSample(output, "worker_jobs_retryable", queueMetricLabels(labels), collector.jobsRetryable[labels])
 	}
 
 	writeMetadata(output, "worker_jobs_running", "Current jobs executing by queue and kind.", "gauge")

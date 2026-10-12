@@ -2009,6 +2009,10 @@ Ownership and membership rows are bitemporal (`valid_from`, `valid_to`). An item
 valid on **the item's day**, never from the rows valid when a job runs. Ownership starts when it was first
 known, and a later change of owner does not rewrite the items of earlier days.
 
+**Time rule of an inferred ownership row (CHAOS-9403):** the first snapshot of a claim back-dates its row to the
+claim's earliest evidence, and a change a later derive run observes (a new owner, a retraction, a claim that wins
+again) starts and ends at that run, so one team owns a repository at a time.
+
 > **Superseded (chris, 2026-10-12 17:26Z, lead D5987, option C):** for a day before the first recorded ownership
 > of a repository, the repository's FIRST recorded owners apply backward; the earlier rule ("an item of a day
 > before the first known ownership stays unassigned", chris 2026-10-10, D5922) no longer holds. Not yet

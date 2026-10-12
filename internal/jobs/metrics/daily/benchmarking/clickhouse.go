@@ -11,6 +11,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
 // conn is the narrow ClickHouse capability this package needs, matching
@@ -69,21 +70,21 @@ func testopsScopes() map[string]bool {
 func pipelineMetric(column string) MetricDefinition {
 	return MetricDefinition{
 		Table: "testops_pipeline_metrics_daily", ValueColumn: column,
-		ScopeSupport: testopsScopes(), InnerGroupColumns: []string{"repo_id", "team_id", "service_id"},
+		ScopeSupport: testopsScopes(), InnerGroupColumns: []string{"repo_id"},
 	}
 }
 
 func testMetric(column string) MetricDefinition {
 	return MetricDefinition{
 		Table: "testops_test_metrics_daily", ValueColumn: column,
-		ScopeSupport: testopsScopes(), InnerGroupColumns: []string{"repo_id", "team_id", "service_id"},
+		ScopeSupport: testopsScopes(), InnerGroupColumns: []string{"repo_id"},
 	}
 }
 
 func coverageMetric(column string) MetricDefinition {
 	return MetricDefinition{
 		Table: "testops_coverage_metrics_daily", ValueColumn: column,
-		ScopeSupport: testopsScopes(), InnerGroupColumns: []string{"repo_id", "team_id", "service_id"},
+		ScopeSupport: testopsScopes(), InnerGroupColumns: []string{"repo_id"},
 	}
 }
 
@@ -152,13 +153,18 @@ func (loader *ClickHouseLoader) FetchMetricSeriesByScope(
 	filters := []string{"day >= {start_day:Date}", "day <= {end_day:Date}", "org_id = {org_id:String}"}
 	filters = append(filters, definition.ExtraFilters...)
 
+	// The team of a key is the team of its NEWEST row. The testops tables hold
+	// the team as a value column of the (org, repo, day) key, so a filter or a
+	// group on team_id before argMax would keep an older row of the key under
+	// the team id it was computed with (a superseded id) as its own group. A
+	// key whose newest row has no team reads as scope_key '' and is dropped
+	// below, as Python drops a blank scope_key.
 	var scopeExpression string
 	switch scopeType {
 	case ScopeRepo:
 		scopeExpression = "toString(repo_id)"
 	case ScopeTeam:
-		scopeExpression = "ifNull(team_id, '')"
-		filters = append(filters, "ifNull(team_id, '') != ''")
+		scopeExpression = "ifNull((argMax(tuple(team_id), computed_at)).1, '')"
 	default:
 		scopeExpression = "'global'"
 	}
@@ -208,6 +214,18 @@ ORDER BY scope_key, day`,
 		arguments = append(arguments, clickhouse.Named("metric_name", "deployment_frequency"))
 	}
 
+	// A team series is a target the job benchmarks, so an inactive team (a
+	// superseded or retired id) has none: a day of it that was not computed
+	// again still holds its last row.
+	var inactive teamactive.Inactive
+	if scopeType == ScopeTeam {
+		loaded, err := teamactive.LoadInactive(ctx, loader.conn, loader.orgID)
+		if err != nil {
+			return nil, fmt.Errorf("fetch metric series %s: %w", canonical, err)
+		}
+		inactive = loaded
+	}
+
 	rows, err := loader.conn.Query(ctx, query, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("fetch metric series %s: %w", canonical, err)
@@ -227,7 +245,7 @@ ORDER BY scope_key, day`,
 		// Python drops a blank scope_key and a NULL value
 		// (_common.py:333-340); `avg()` over an all-NULL group is NULL, which
 		// the outer WHERE cannot catch because it filters the INNER value.
-		if scopeKey == "" || value == nil {
+		if scopeKey == "" || value == nil || inactive.Has(scopeKey) {
 			continue
 		}
 		result[scopeKey] = append(result[scopeKey], MetricPoint{Day: day, Value: *value})

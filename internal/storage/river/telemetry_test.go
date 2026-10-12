@@ -364,3 +364,34 @@ func TestQueueTelemetrySamplerRejectsInconsistentOrNegativeQueueStates(t *testin
 		})
 	}
 }
+
+func TestQueueTelemetrySamplerRejectsDisagreeingQueueStateRowsWithinOneQueue(t *testing.T) {
+	t.Parallel()
+	config := validQueueTelemetryConfig()
+	config.Jobs = append(config.Jobs, QueueTelemetryJob{
+		Queue: "retention", Kind: "system.retention_other", SupportedVersions: []int{1},
+	})
+	normalized, err := normalizeQueueTelemetryConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*queueTelemetryRow){
+		"scheduled": func(row *queueTelemetryRow) { row.scheduled = 5 },
+		"retryable": func(row *queueTelemetryRow) { row.retryable = 5 },
+	} {
+		mutate := mutate
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rows := []queueTelemetryRow{
+				{queue: "heartbeat", kind: "system.heartbeat"},
+				{queue: "retention", kind: "system.retention_cleanup"},
+				{queue: "retention", kind: "system.retention_other"},
+			}
+			mutate(&rows[2])
+			sampler := &QueueTelemetrySampler{config: normalized, read: func(context.Context) ([]queueTelemetryRow, error) { return rows, nil }}
+			if _, err := sampler.Snapshot(context.Background()); !errors.Is(err, ErrQueueTelemetryUnavailable) {
+				t.Fatalf("Snapshot() error = %v", err)
+			}
+		})
+	}
+}

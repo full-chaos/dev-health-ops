@@ -1,0 +1,159 @@
+//go:build integration
+
+package providersync
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
+)
+
+// ownershipRowSpan is one stored inferred row of a repository: its team, role
+// and interval.
+type ownershipRowSpan struct {
+	team      string
+	primary   uint8
+	validFrom time.Time
+	validTo   *time.Time
+}
+
+func ownershipRowSpans(t *testing.T, ctx context.Context, conn driver.Conn, org string) []ownershipRowSpan {
+	t.Helper()
+	rows, err := conn.Query(ctx, `SELECT team_id, is_primary, valid_from, valid_to FROM team_repo_ownership FINAL
+WHERE org_id = ? AND source = 'inferred' ORDER BY valid_from, team_id`, org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []ownershipRowSpan
+	for rows.Next() {
+		var span ownershipRowSpan
+		if err := rows.Scan(&span.team, &span.primary, &span.validFrom, &span.validTo); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, span)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// mainOwnersAt is the teams whose main row (is_primary = 1) covers the instant.
+func mainOwnersAt(spans []ownershipRowSpan, at time.Time) []string {
+	var teams []string
+	for _, span := range spans {
+		if span.primary != teamRepoOwnershipMainOwner || at.Before(span.validFrom) || (span.validTo != nil && !at.Before(*span.validTo)) {
+			continue
+		}
+		teams = append(teams, span.team)
+	}
+	return teams
+}
+
+// TestAWinnerChangeIsDatedAtTheRunWithOneMainOwnerAtEveryInstant: team A is
+// the main owner from the repository's earliest evidence and team B a
+// co-owner; B then takes the lead. The change is dated at the run that
+// observes it: A's main row ends at that run, B's main row starts there, A
+// continues as a co-owner from there with its share, and B's co-owner row ends
+// there. At every instant of the history the repository has exactly one main
+// row, the shared one-owner read names A before the change and B after it, and
+// a rerun writes nothing.
+func TestAWinnerChangeIsDatedAtTheRunWithOneMainOwnerAtEveryInstant(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	old := time.Date(2025, 3, 4, 5, 6, 7, 0, time.UTC)
+	mid := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
+
+	for _, provider := range evidenceSettleProviders {
+		t.Run(provider, func(t *testing.T) {
+			org := "org-winner-change-" + provider
+			teamA, teamB := provider+"-team-a", provider+"-team-b"
+			repo := seedEvidenceSettleRepo(t, ctx, conn, org, provider)
+			seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-a", teamA, true, time.Now().UTC().Add(-time.Hour))
+			seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-b", teamB, true, time.Now().UTC().Add(-time.Hour))
+			for n := uint32(1); n <= 3; n++ {
+				seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-a", n, old.Add(time.Duration(n-1)*time.Hour))
+			}
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", 4, mid)
+
+			service := TeamRepoOwnershipDerivationService{Conn: conn}
+			if _, _, ready, _, err := service.Derive(ctx, org); err != nil || !ready {
+				t.Fatalf("first derive: ready %v err %v", ready, err)
+			}
+
+			for n := uint32(5); n <= 7; n++ {
+				seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", n, mid.Add(time.Duration(n-4)*time.Hour))
+			}
+			before := time.Now().UTC().Add(-time.Second)
+			_, retracted, _, _, stats, err := service.DeriveWithStats(ctx, org)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after := time.Now().UTC().Add(time.Second)
+			if retracted != 0 || stats.RoleChanges != 2 {
+				t.Fatalf("winner change: retracted %d role changes %d, want 0 and 2 (A main -> co-owner, B co-owner -> main)", retracted, stats.RoleChanges)
+			}
+
+			spans := ownershipRowSpans(t, ctx, conn, org)
+			var change time.Time
+			for _, span := range spans {
+				if span.team == teamB && span.primary == teamRepoOwnershipMainOwner && span.validTo == nil {
+					change = span.validFrom
+				}
+			}
+			if change.Before(before) || change.After(after) {
+				t.Fatalf("B's main row starts at %v, want the run (%v..%v); rows %+v", change, before, after, spans)
+			}
+			want := map[string]bool{
+				fmt.Sprintf("%s:1:%s:%s", teamA, old, change): true,
+				fmt.Sprintf("%s:2:%s:-", teamA, change):       true,
+				fmt.Sprintf("%s:2:%s:%s", teamB, mid, change): true,
+				fmt.Sprintf("%s:1:%s:-", teamB, change):       true,
+			}
+			for _, span := range spans {
+				to := "-"
+				if span.validTo != nil {
+					to = span.validTo.UTC().String()
+				}
+				key := fmt.Sprintf("%s:%d:%s:%s", span.team, span.primary, span.validFrom.UTC(), to)
+				if !want[key] {
+					t.Errorf("unexpected row %s (rows %+v)", key, spans)
+				}
+				delete(want, key)
+			}
+			for key := range want {
+				t.Errorf("missing row %s", key)
+			}
+
+			for _, at := range []time.Time{old, old.Add(time.Minute), mid, mid.Add(time.Minute), change.Add(-time.Millisecond), change, change.Add(time.Millisecond), after} {
+				if mains := mainOwnersAt(spans, at); len(mains) != 1 {
+					t.Errorf("main owners at %v = %v, want exactly one", at, mains)
+				}
+			}
+			for at, wantTeam := range map[time.Time]string{mid.Add(time.Minute): teamA, change.Add(-time.Millisecond): teamA, change.Add(time.Millisecond): teamB} {
+				owners, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, org, at)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := owners[repo.String()]; got != wantTeam {
+					t.Errorf("one owner at %v = %q, want %q", at, got, wantTeam)
+				}
+			}
+
+			for run := 1; run <= 2; run++ {
+				written, retracted, _, _, stats, err := service.DeriveWithStats(ctx, org)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if written != 0 || retracted != 0 || stats.Superseded != 0 || stats.RoleChanges != 0 {
+					t.Errorf("rerun %d: written %d retracted %d superseded %d role changes %d, want all 0", run, written, retracted, stats.Superseded, stats.RoleChanges)
+				}
+			}
+		})
+	}
+}

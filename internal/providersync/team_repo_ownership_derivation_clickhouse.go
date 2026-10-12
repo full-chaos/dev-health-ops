@@ -107,6 +107,10 @@ type TeamRepoOwnershipDerivationStats struct {
 	// the tied teams' open rows and retracted any other team's. Set on every run that reaches the derivation, also when it
 	// writes nothing.
 	Ties []TeamRepoOwnershipTie
+	// RoleChanges is how many open rows the run closed at the run because the
+	// claim's role changed (main owner to co-owner, or co-owner to main owner);
+	// the claim's row of its new role starts at the run.
+	RoleChanges int
 	// Superseded is how many open rows the run closed because the claim they
 	// record now starts at its evidence time (a row at that time was written).
 	Superseded int
@@ -244,7 +248,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.evidence_start_set_aside",
 			"org_id", orgID, "future", futureEvidence, "before_retraction", retractedEvidence)
 	}
-	derived := stampTeamRepoOwnershipClaimStarts(settled, repos, activeRows, now)
+	derived, roleCloses, roleChanged := applyTeamRepoOwnershipRoleChanges(stampTeamRepoOwnershipClaimStarts(settled, repos, activeRows, now), repos, activeRows, now)
 	// CHAOS-4537 codex review round 3, second P1, and CHAOS-9045: the diff
 	// below is one comparison over the org's whole activeRows, so "this run
 	// does not derive the row" is a proof of absence only when the run read
@@ -260,15 +264,37 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 		return 0, 0, true, nil, err
 	}
 	guard := newTeamRepoOwnershipRetractionGuard(projectLinks, linkHistory, workItems, knownTeams)
-	toRetract, held, heldKinds := guard.retain(diffTeamRepoOwnershipRetractions(activeRows, derived, derivation.Ties, repos))
-	stats.RetractionsHeld = held
-	reportTeamRepoOwnershipRetractionHeld(ctx, orgID, heldKinds)
+	retractions := diffTeamRepoOwnershipRetractions(activeRows, derived, derivation.Ties, repos)
+	toRetract, held, heldKinds := guard.retain(retractions)
+	// A role change closes the claim's open row of its old role at the run,
+	// under the same proof as a retraction. A repository with any held close
+	// or retraction keeps every role of this run unchanged, so it never has
+	// two main rows (or none) at one instant: its role changes wait for a
+	// run that proves them all.
+	keptRoleCloses, heldRoles, heldRoleKinds := guard.retain(roleCloses)
+	heldRepos := teamRepoOwnershipReposOf(withoutRows(retractions, toRetract), withoutRows(roleCloses, keptRoleCloses))
+	derived, keptRoleCloses, repoHeld := withoutHeldRoleChanges(derived, roleChanged, keptRoleCloses, heldRepos, repos)
+	if repoHeld > 0 {
+		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.role_change_held",
+			"org_id", orgID, "repos", len(heldRepos), "rows", repoHeld)
+	}
+	stats.RetractionsHeld = held + heldRoles + repoHeld
+	reportTeamRepoOwnershipRetractionHeld(ctx, orgID, append(heldKinds, heldRoleKinds...))
 	if len(toRetract) > 0 {
 		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, toRetract)
 		if err != nil {
 			return 0, 0, true, nil, err
 		}
 	}
+	if len(keptRoleCloses) > 0 {
+		changed, err := retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, keptRoleCloses)
+		if err != nil {
+			return 0, retracted, true, nil, err
+		}
+		stats.RoleChanges = changed
+		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.role_changed", "org_id", orgID, "rows", changed)
+	}
+	activeRows = withoutRows(activeRows, keptRoleCloses)
 
 	stats.Derived = len(derived)
 	stats.Ties = derivation.Ties
@@ -372,6 +398,140 @@ func stampTeamRepoOwnershipClaimStarts(
 			if start, open := earliestOpen[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}]; open {
 				out[i].validFrom = start
 			}
+		}
+	}
+	return out
+}
+
+// applyTeamRepoOwnershipRoleChanges dates an observed change of owner at the
+// run. A claim whose open rows all hold another role (a main owner that is now
+// a co-owner, a co-owner that is now the main owner) starts its new row at the
+// run, and its open rows of the old role are returned to be closed at the run
+// (a real end, never a supersede: the old role held until this run). A new
+// main owner of a repository whose open main row belongs to another team also
+// starts at the run. Only a first observation is dated by its evidence, so a
+// repository has one main owner at every instant. An open row with is_primary
+// 0 (the one-owner derivation) is a main row.
+func applyTeamRepoOwnershipRoleChanges(
+	derived []DerivedTeamRepoOwnershipRow,
+	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
+	activeRows []teamRepoOwnershipActiveRow,
+	now time.Time,
+) ([]DerivedTeamRepoOwnershipRow, []teamRepoOwnershipActiveRow, map[teamRepoOwnershipClaim]bool) {
+	isMain := func(isPrimary uint8) bool { return isPrimary != teamRepoOwnershipCoOwner }
+	open := map[teamRepoOwnershipClaim][]teamRepoOwnershipActiveRow{}
+	openMainTeams := map[teamRepoOwnershipRepoKey]map[string]bool{}
+	for _, row := range activeRows {
+		claim := teamRepoOwnershipClaim{row.Provider, row.RepoFullName, row.TeamID}
+		open[claim] = append(open[claim], row)
+		if isMain(row.IsPrimary) {
+			key := teamRepoOwnershipRepoKey{row.Provider, row.RepoFullName}
+			if openMainTeams[key] == nil {
+				openMainTeams[key] = map[string]bool{}
+			}
+			openMainTeams[key][row.TeamID] = true
+		}
+	}
+	out := make([]DerivedTeamRepoOwnershipRow, len(derived))
+	var closes []teamRepoOwnershipActiveRow
+	changed := map[teamRepoOwnershipClaim]bool{}
+	for i, row := range derived {
+		out[i] = row
+		info, ok := resolveTeamRepoOwnershipRepo(row.RepoID, repos)
+		if !ok {
+			continue
+		}
+		claim := teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}
+		main := row.IsPrimary == teamRepoOwnershipMainOwner
+		rows := open[claim]
+		sameRole := false
+		for _, openRow := range rows {
+			if isMain(openRow.IsPrimary) == main {
+				sameRole = true
+			}
+		}
+		roleChanged := len(rows) > 0 && !sameRole
+		mainChanged := false
+		if main && !sameRole {
+			for team := range openMainTeams[teamRepoOwnershipRepoKey{info.Provider, info.FullName}] {
+				if team != row.TeamID {
+					mainChanged = true
+				}
+			}
+		}
+		if !roleChanged && !mainChanged {
+			continue
+		}
+		out[i].validFrom = now
+		changed[claim] = true
+		if roleChanged {
+			closes = append(closes, rows...)
+		}
+	}
+	return out, closes, changed
+}
+
+// withoutHeldRoleChanges leaves out, on every held repository, the derived
+// row of each claim whose role this run changed, and that claim's close: the
+// repository keeps its open rows of the old roles this run. It returns the
+// derived rows, the closes to write and the count of closes it held.
+func withoutHeldRoleChanges(
+	derived []DerivedTeamRepoOwnershipRow,
+	changed map[teamRepoOwnershipClaim]bool,
+	closes []teamRepoOwnershipActiveRow,
+	heldRepos map[teamRepoOwnershipRepoKey]bool,
+	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
+) ([]DerivedTeamRepoOwnershipRow, []teamRepoOwnershipActiveRow, int) {
+	if len(heldRepos) == 0 {
+		return derived, closes, 0
+	}
+	out := derived[:0:0]
+	for _, row := range derived {
+		info, ok := resolveTeamRepoOwnershipRepo(row.RepoID, repos)
+		if ok && heldRepos[teamRepoOwnershipRepoKey{info.Provider, info.FullName}] && changed[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}] {
+			continue
+		}
+		out = append(out, row)
+	}
+	kept := closes[:0:0]
+	for _, row := range closes {
+		if !heldRepos[teamRepoOwnershipRepoKey{row.Provider, row.RepoFullName}] {
+			kept = append(kept, row)
+		}
+	}
+	return out, kept, len(closes) - len(kept)
+}
+
+// teamRepoOwnershipRepoKey names one repository of the open rows.
+type teamRepoOwnershipRepoKey struct{ provider, repoFullName string }
+
+func teamRepoOwnershipReposOf(sets ...[]teamRepoOwnershipActiveRow) map[teamRepoOwnershipRepoKey]bool {
+	out := map[teamRepoOwnershipRepoKey]bool{}
+	for _, rows := range sets {
+		for _, row := range rows {
+			out[teamRepoOwnershipRepoKey{row.Provider, row.RepoFullName}] = true
+		}
+	}
+	return out
+}
+
+// withoutRows is rows less every row of drop (by the table key).
+func withoutRows(rows, drop []teamRepoOwnershipActiveRow) []teamRepoOwnershipActiveRow {
+	if len(drop) == 0 {
+		return rows
+	}
+	type key struct {
+		provider, repoFullName, teamID string
+		validFrom                      time.Time
+	}
+	dropped := map[key]bool{}
+	for _, row := range drop {
+		dropped[key{row.Provider, row.RepoFullName, row.TeamID, row.ValidFrom.UTC()}] = true
+	}
+	out := rows[:0:0]
+	for _, row := range rows {
+		if !dropped[key{row.Provider, row.RepoFullName, row.TeamID, row.ValidFrom.UTC()}] {
+			out = append(out, row)
 		}
 	}
 	return out

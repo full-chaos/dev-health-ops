@@ -1,6 +1,8 @@
 package providersync
 
 import (
+	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -88,4 +90,80 @@ func TestAClaimWithNoEvidenceKeepsTheStartOfItsOpenRow(t *testing.T) {
 	if superseded := supersededTeamRepoOwnershipRows(stamped[:1], repos, active, now); len(superseded) != 0 {
 		t.Errorf("the new version replaces the open row under its key; superseded %+v", superseded)
 	}
+}
+
+// A role change is dated at the run: the claim whose role changes starts its
+// new row at the run and closes its open row of the old role, and a new main
+// owner of a repository that has another team's open main row starts at the
+// run. A held close or retraction on a repository holds every role change of
+// that repository, so it keeps one main row.
+func TestARoleChangeIsDatedAtTheRunAndHeldPerRepository(t *testing.T) {
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	evidence := time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)
+	repo := uuid.MustParse("00000000-0000-4000-8000-0000000000c1")
+	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{repo: {Provider: "jira", FullName: "acme/r"}}
+	row := func(team string, primary uint8) DerivedTeamRepoOwnershipRow {
+		return DerivedTeamRepoOwnershipRow{TeamID: team, RepoID: repo.String(), IsPrimary: primary, Share: 0.5, validFrom: evidence}
+	}
+	open := func(team string, primary uint8) teamRepoOwnershipActiveRow {
+		return teamRepoOwnershipActiveRow{Provider: "jira", RepoFullName: "acme/r", TeamID: team, RepoID: repo, IsPrimary: primary, ValidFrom: evidence}
+	}
+	cases := []struct {
+		name       string
+		derived    []DerivedTeamRepoOwnershipRow
+		open       []teamRepoOwnershipActiveRow
+		wantAtRun  []string
+		wantCloses []string
+	}{
+		{"no change", []DerivedTeamRepoOwnershipRow{row("a", 1), row("b", 2)}, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2)}, nil, nil},
+		{"winner change A -> B", []DerivedTeamRepoOwnershipRow{row("a", 2), row("b", 1)}, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2)}, []string{"a", "b"}, []string{"a", "b"}},
+		{"a row of the one-owner derivation counts as main", []DerivedTeamRepoOwnershipRow{row("a", 1), row("b", 2)}, []teamRepoOwnershipActiveRow{open("a", 0)}, nil, nil},
+		{"a new main owner beside another team's open main row", []DerivedTeamRepoOwnershipRow{row("b", 1)}, []teamRepoOwnershipActiveRow{open("a", 1)}, []string{"b"}, nil},
+		{"of two open main rows the derived main owner keeps its start", []DerivedTeamRepoOwnershipRow{row("a", 1), row("b", 2)}, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 1)}, []string{"b"}, []string{"b"}},
+		{"a new co-owner keeps its evidence start", []DerivedTeamRepoOwnershipRow{row("a", 1), row("c", 2)}, []teamRepoOwnershipActiveRow{open("a", 1)}, nil, nil},
+		{"a main owner with no open row on a repository with none keeps its evidence start", []DerivedTeamRepoOwnershipRow{row("a", 1)}, nil, nil, nil},
+	}
+	names := func(rows []teamRepoOwnershipActiveRow) []string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.TeamID)
+		}
+		sort.Strings(out)
+		return out
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, closes, changed := applyTeamRepoOwnershipRoleChanges(tc.derived, repos, tc.open, now)
+			var atRun []string
+			for _, r := range got {
+				switch {
+				case r.validFrom.Equal(now):
+					atRun = append(atRun, r.TeamID)
+					if !changed[teamRepoOwnershipClaim{"jira", "acme/r", r.TeamID}] {
+						t.Errorf("%s starts at the run but is not a changed claim", r.TeamID)
+					}
+				case !r.validFrom.Equal(evidence):
+					t.Errorf("%s starts at %v, want the evidence or the run", r.TeamID, r.validFrom)
+				}
+			}
+			sort.Strings(atRun)
+			if fmt.Sprint(atRun) != fmt.Sprint(tc.wantAtRun) || fmt.Sprint(names(closes)) != fmt.Sprint(tc.wantCloses) {
+				t.Errorf("at run %v closes %v, want %v and %v", atRun, names(closes), tc.wantAtRun, tc.wantCloses)
+			}
+		})
+	}
+
+	t.Run("a held close holds the repository", func(t *testing.T) {
+		derived, closes, changed := applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("a", 2), row("b", 1)}, repos, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2)}, now)
+		keptByGuard := withoutRows(closes, closes[:1])
+		held := teamRepoOwnershipReposOf(withoutRows(closes, keptByGuard))
+		out, kept, n := withoutHeldRoleChanges(derived, changed, keptByGuard, held, repos)
+		if len(out) != 0 || len(kept) != 0 || n != 1 {
+			t.Errorf("derived %v closes %v held %d, want no changed row, no close, 1 held", out, names(kept), n)
+		}
+		out, kept, n = withoutHeldRoleChanges(derived, changed, closes, nil, repos)
+		if len(out) != 2 || len(kept) != 2 || n != 0 {
+			t.Errorf("with nothing held: derived %d closes %d held %d, want 2 2 0", len(out), len(kept), n)
+		}
+	})
 }

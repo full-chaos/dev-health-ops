@@ -2731,8 +2731,15 @@ tied team that already holds the repo's open main row (`is_primary = 1`, or `0` 
 CHAOS-9411) stays the main owner, every other tied team is a co-owner, and the run signals the tie
 (`owner_tie_unresolved` + the WARN line above). With no such team (or two), the repo has co-owners only and no main
 owner, signalled on every run while the tie lasts. A team that no longer reaches the repo has its row retracted, as
-before; a team whose role or share changed gets a new version of its row under the same key (same `valid_from`), so each
-claim has one open row. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick one
+before; a team whose share changed gets a new version of its row under the same key (same `valid_from`), so each
+claim has one open row. A **role change** seen by a later run (the main owner changes from team A to team B) is dated at
+that run; only the first rows of a repo are back-dated to the evidence: A's main row and B's co-owner row end at the run
+(`valid_to` = run), B's main row starts at the run, and A continues from the run as a co-owner with its share while it
+still has links (`team_repo_ownership_derivation.role_changed`, `stats.RoleChanges`). A new main owner of a repo where
+another team holds an open main row also starts at the run. So a repo has exactly one main row at every instant of its
+history. A role close goes through the retraction guard; when the guard holds any close or retraction of a repo, every
+role change of that repo waits for a run that proves them all (`team_repo_ownership_derivation.role_change_held`), so a
+held close never leaves two main rows or none. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick one
 owner never take a co-owner row: `teamownership.AuthoritativeOwnerByRepo` and the cognitive-load gate leave out
 `is_primary = 2` rows and rank `(is_primary = 1) DESC` first, and the cascade's `LoadRepos` gives no `repo_ownership`
 candidate from a co-owner row (`RankDerivationCandidates` also ranks only `is_primary = 1` first). So a repo with co-owners
@@ -2745,7 +2752,9 @@ CHAOS-9411, the other teams got no row and no share was stored. Pinned by
 `internal/providersync/team_repo_ownership_ranked_owner_integration_test.go` (real ClickHouse, every provider pair: main
 owner, co-owners and shares read back), the `TestRankedOwner*`, `TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate` and
 `TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier` tests in `team_repo_ownership_derivation_test.go`,
-`team_repo_ownership_shares_test.go` (tie keeps the main owner; claim starts), and the reader rank tests
+`team_repo_ownership_shares_test.go` (tie keeps the main owner; claim starts; a role change is dated at the run and held
+per repo), `TestAWinnerChangeIsDatedAtTheRunWithOneMainOwnerAtEveryInstant` (real ClickHouse, every provider: one main
+row at every instant, the one-owner read before and after the change, a rerun writes nothing), and the reader rank tests
 `TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt`, `TestACoOwnerFactNeverOutranksTheMainOwner`,
 `TestLoadReposLeavesOutCoOwnerRows`, `TestTheRepoGateNeverTakesACoOwnerAsTheOwner` and
 `TestAnInferredOwnerStillOutranksAProviderAccessGrant`.

@@ -24,6 +24,20 @@ func TestTheAdminGroupHoldsEveryVerb(t *testing.T) {
 	if command.Name != "admin" || strings.Join(paths, ",") != want {
 		t.Fatalf("the verbs are %v, want %s", paths, want)
 	}
+	var nested []string
+	for _, group := range command.Children {
+		if group.Name != "org" {
+			continue
+		}
+		for _, sub := range group.Children {
+			for _, verb := range sub.Children {
+				nested = append(nested, group.Name+" "+sub.Name+" "+verb.Name)
+			}
+		}
+	}
+	if got := strings.Join(nested, ","); got != "org entitlements list,org entitlements grant,org entitlements revoke" {
+		t.Fatalf("the nested verbs are %s", got)
+	}
 }
 
 // The users and orgs verbs refuse a bad command line before they connect.

@@ -734,6 +734,82 @@ def test_provisioning_env_is_exactly_the_verbs_variables(tmp_path: Path) -> None
             assert "secretKeyRef" in item["valueFrom"] and "value" not in item, name
 
 
+# --- CHAOS-9369: the optional pg_monitor-only login ------------------------
+
+_MONITOR_ENV = {"OTEL_PG_MONITOR_DATABASE_ROLE", "OTEL_PG_MONITOR_DATABASE_PASSWORD"}
+
+
+def _monitor_values(monitor: dict) -> str:
+    base = yaml.safe_load(_values(river_migrate=True))
+    base["migrations"]["hook"]["provisionRoles"]["monitorRole"] = monitor
+    return yaml.safe_dump(base)
+
+
+def test_monitor_login_is_off_by_default(tmp_path: Path) -> None:
+    job = _provision_job(tmp_path)
+    env = {item["name"] for item in job["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert not env & _MONITOR_ENV, sorted(env)
+
+
+def test_monitor_login_env_comes_from_the_separate_operator_secret(
+    tmp_path: Path,
+) -> None:
+    values = _monitor_values({"name": "otel_pg_monitor"})
+    docs = _docs_from_values(values, tmp_path)
+    job = next(d for d in docs if d.get("kind") == "Job" and d["metadata"]["name"] == _PROVISION)
+    env = {i["name"]: i for i in job["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert env["OTEL_PG_MONITOR_DATABASE_ROLE"]["value"] == "otel_pg_monitor"
+    ref = env["OTEL_PG_MONITOR_DATABASE_PASSWORD"]["valueFrom"]["secretKeyRef"]
+    assert ref == {"name": "otel-collector-postgres", "key": "POSTGRES_MONITOR_PASSWORD"}
+    assert "value" not in env["OTEL_PG_MONITOR_DATABASE_PASSWORD"]
+    # The chart never creates that Secret.
+    names = {d["metadata"]["name"] for d in docs if d.get("kind") == "Secret"}
+    assert "otel-collector-postgres" not in names
+    # The pooler/provision Secret is unchanged by the monitor login.
+    for secret in docs:
+        if secret.get("kind") == "Secret":
+            assert "POSTGRES_MONITOR_PASSWORD" not in (secret.get("stringData") or {})
+
+
+def test_monitor_login_secret_name_and_key_are_values(tmp_path: Path) -> None:
+    values = _monitor_values(
+        {"name": "m", "secretName": "other-secret", "secretKey": "PW"}
+    )
+    job = next(
+        d
+        for d in _docs_from_values(values, tmp_path)
+        if d.get("kind") == "Job" and d["metadata"]["name"] == _PROVISION
+    )
+    env = {i["name"]: i for i in job["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert env["OTEL_PG_MONITOR_DATABASE_PASSWORD"]["valueFrom"]["secretKeyRef"] == {
+        "name": "other-secret",
+        "key": "PW",
+    }
+
+
+@pytest.mark.parametrize("missing", ["secretName", "secretKey"])
+def test_monitor_login_named_without_its_secret_fails_the_render(
+    tmp_path: Path, missing: str
+) -> None:
+    monitor = {"name": "otel_pg_monitor", "secretName": "s", "secretKey": "k"}
+    monitor[missing] = ""
+    completed = _render_values(_monitor_values(monitor), tmp_path)
+    assert completed.returncode != 0
+    assert f"monitorRole.{missing}" in completed.stderr
+
+
+def test_monitor_login_secret_without_a_name_stays_off(tmp_path: Path) -> None:
+    job = next(
+        d
+        for d in _docs_from_values(
+            _monitor_values({"name": "", "secretName": ""}), tmp_path
+        )
+        if d.get("kind") == "Job" and d["metadata"]["name"] == _PROVISION
+    )
+    env = {i["name"] for i in job["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert not env & _MONITOR_ENV
+
+
 # --- the elevated DSN must not be IN the weight-0 Job's environment ---------
 #
 # GW (migrate-path owner), 2026-08-29. Unsetting the variable inside the

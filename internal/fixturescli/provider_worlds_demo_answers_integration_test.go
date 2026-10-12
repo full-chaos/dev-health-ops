@@ -459,6 +459,45 @@ func demoInWindow(at string, request replayRequest, sinceKeys, untilKeys []strin
 	return true
 }
 
+// demoCreatedMatches answers GitHub's `created` search qualifier the way the API does: "A..B" (either
+// side "*") or ">=YYYY-MM-DD".
+func demoCreatedMatches(at, created string) bool {
+	if created == "" {
+		return true
+	}
+	instant, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		panic(err)
+	}
+	if day, ok := strings.CutPrefix(created, ">="); ok {
+		from, err := time.Parse(time.DateOnly, day)
+		if err != nil {
+			panic(fmt.Sprintf("created qualifier %q", created))
+		}
+		return !instant.Before(from)
+	}
+	low, high, ok := strings.Cut(created, "..")
+	if !ok {
+		panic(fmt.Sprintf("created qualifier %q", created))
+	}
+	for _, bound := range []struct {
+		text  string
+		after bool
+	}{{low, false}, {high, true}} {
+		if bound.text == "*" {
+			continue
+		}
+		limit, err := time.Parse(time.RFC3339, bound.text)
+		if err != nil {
+			panic(fmt.Sprintf("created qualifier %q", created))
+		}
+		if (!bound.after && instant.Before(limit)) || (bound.after && instant.After(limit)) {
+			return false
+		}
+	}
+	return true
+}
+
 func newestFirst(commits []demoCommit) []demoCommit {
 	out := append([]demoCommit{}, commits...)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At > out[j].At })
@@ -506,6 +545,9 @@ func demoGitHubAnswers(build *demoBuild) []providerAnswer {
 				branch := request.Query.Get("branch")
 				for _, run := range runs {
 					if branch != "" && run.Branch != branch {
+						continue
+					}
+					if !demoCreatedMatches(run.At, request.Query.Get("created")) {
 						continue
 					}
 					conclusion, event := "success", "push"

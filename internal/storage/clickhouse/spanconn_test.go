@@ -57,10 +57,14 @@ func (r fakeRow) ScanStruct(any) error { return r.err }
 
 type fakeBatch struct {
 	driver.Batch
-	sendErr error
-	sleep   time.Duration
+	sendErr  error
+	flushErr error
+	closeErr error
+	sleep    time.Duration
 }
 
+func (b *fakeBatch) Flush() error { return b.flushErr }
+func (b *fakeBatch) Close() error { return b.closeErr }
 func (b *fakeBatch) Send() error  { time.Sleep(b.sleep); return b.sendErr }
 func (b *fakeBatch) Abort() error { return nil }
 
@@ -297,5 +301,33 @@ func TestSpanConnInsertFormatAndQueryFormat(t *testing.T) {
 	end()
 	if n := len(chSpans(rec)); n != 2 {
 		t.Fatalf("spans = %d, want 2", n)
+	}
+}
+
+func TestSpanConnBatchFlushAndCloseFailuresEmit(t *testing.T) {
+	for name, fb := range map[string]*fakeBatch{
+		"flush": {flushErr: errors.New("flush failed secret@x.y")},
+		"close": {closeErr: errors.New("close failed secret@x.y")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, rec, end := recCtx(sdktrace.AlwaysSample())
+			b, _ := wrap(&fakeConn{batch: fb}, time.Hour).PrepareBatch(ctx, "INSERT INTO t")
+			_ = b.Flush()
+			_ = b.Close()
+			_ = b.Close()
+			end()
+			spans := chSpans(rec)
+			if len(spans) != 1 || spans[0].Status().Code != codes.Error {
+				t.Fatalf("spans = %d, want 1 error span", len(spans))
+			}
+		})
+	}
+	ctx, rec, end := recCtx(sdktrace.AlwaysSample())
+	b, _ := wrap(&fakeConn{batch: &fakeBatch{}}, time.Hour).PrepareBatch(ctx, "INSERT INTO t")
+	_ = b.Flush()
+	_ = b.Close()
+	end()
+	if len(chSpans(rec)) != 0 {
+		t.Fatal("clean fast flush+close emitted a span")
 	}
 }

@@ -215,7 +215,8 @@ func Fingerprint(stmt string) string {
 	return hex.EncodeToString(h.Sum(sum[:0]))
 }
 
-// normalize replaces single-quoted strings (with ” and backslash escapes),
+// normalize drops comments (their text can hold anything), replaces
+// TRUE/FALSE/NULL words, single-quoted strings (with ” and backslash escapes),
 // dollar-quoted bodies and numeric literals by "?". Identifiers that contain
 // digits are left alone. An unterminated quote swallows the rest of the text.
 func normalize(stmt string) []byte {
@@ -224,6 +225,39 @@ func normalize(stmt string) []byte {
 	for i := 0; i < len(in); {
 		c := in[i]
 		switch {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			if len(out) > 0 && out[len(out)-1] != ' ' {
+				out = append(out, ' ')
+			}
+			i++
+		case c == '-' && i+1 < len(in) && in[i+1] == '-':
+			for i < len(in) && in[i] != '\n' {
+				i++
+			}
+			if len(out) > 0 && out[len(out)-1] != ' ' {
+				out = append(out, ' ')
+			}
+		case c == '/' && i+1 < len(in) && in[i+1] == '*':
+			end := strings.Index(in[i+2:], "*/")
+			if end < 0 {
+				i = len(in)
+			} else {
+				i += 2 + end + 2
+			}
+			if len(out) > 0 && out[len(out)-1] != ' ' {
+				out = append(out, ' ')
+			}
+		case isIdentStart(c) && (len(out) == 0 || !isIdentPart(out[len(out)-1])):
+			j := i
+			for j < len(in) && isIdentPart(in[j]) {
+				j++
+			}
+			if w := in[i:j]; strings.EqualFold(w, "true") || strings.EqualFold(w, "false") || strings.EqualFold(w, "null") {
+				out = append(out, '?')
+			} else {
+				out = append(out, w...)
+			}
+			i = j
 		case c == '\'':
 			i++
 			for i < len(in) {

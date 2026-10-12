@@ -255,3 +255,19 @@ func TestInvalidEnv(t *testing.T) {
 		t.Fatal("0 is valid")
 	}
 }
+
+func TestFingerprintDropsCommentsAndBooleanLiterals(t *testing.T) {
+	base := dbspan.Fingerprint("SELECT 1 FROM t WHERE a = ? AND b = ?")
+	for _, stmt := range []string{
+		"SELECT 1 FROM t WHERE a = TRUE AND b = null",
+		"SELECT 1 FROM t WHERE a = false AND b = NULL",
+		"SELECT /* alice@example.com */ 1 FROM t WHERE a = ? -- bob@example.com\n AND b = ?",
+	} {
+		if got := dbspan.Fingerprint(stmt); got != base {
+			t.Errorf("%q fingerprint %s != template %s", stmt, got, base)
+		}
+	}
+	if dbspan.Fingerprint("SELECT nullable, trueish FROM t") == dbspan.Fingerprint("SELECT ?, ? FROM t") {
+		t.Error("identifiers that merely start with a keyword must be kept")
+	}
+}

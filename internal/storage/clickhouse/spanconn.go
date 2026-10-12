@@ -203,6 +203,23 @@ func (b *spanBatch) Send() error {
 	return err
 }
 
+// Flush sends buffered data; a failed flush is a failed batch and ends the span.
+func (b *spanBatch) Flush() error {
+	err := b.Batch.Flush()
+	if err != nil {
+		b.finish(err)
+	}
+	return err
+}
+
+// Close can finish the insert; its error ends the span, and a batch closed
+// without Send or Abort ends here (threshold rule).
+func (b *spanBatch) Close() error {
+	err := b.Batch.Close()
+	b.finish(err)
+	return err
+}
+
 func (b *spanBatch) Abort() error {
 	err := b.Batch.Abort()
 	b.finish(nil)

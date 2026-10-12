@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -100,7 +101,15 @@ func TestHealthHandlerUnusableStoreIsServiceUnavailable(t *testing.T) {
 }
 
 func TestEntitlementHandlerSuccess(t *testing.T) {
-	store := &fakeStore{entitlement: Entitlement{OrgID: "the-org-id", AgentContextRuntime: true}}
+	for _, serviceModel := range []bool{false, true} {
+		t.Run(fmt.Sprintf("acr_service_model=%t", serviceModel), func(t *testing.T) {
+			testEntitlementHandlerSuccess(t, serviceModel)
+		})
+	}
+}
+
+func testEntitlementHandlerSuccess(t *testing.T, serviceModel bool) {
+	store := &fakeStore{entitlement: Entitlement{OrgID: "the-org-id", AgentContextRuntime: true, ACRServiceModel: serviceModel}}
 	server := newTestServer(store)
 	defer server.Close()
 
@@ -123,6 +132,7 @@ func TestEntitlementHandlerSuccess(t *testing.T) {
 		"schema_version":        "acr_entitlement.v1",
 		"org_id":                "the-org-id",
 		"agent_context_runtime": true,
+		"acr_service_model":     serviceModel,
 	}
 	for key, value := range want {
 		if body[key] != value {

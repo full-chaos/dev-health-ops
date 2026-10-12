@@ -173,9 +173,9 @@ var githubWorld = providerWorld{
 	FrozenAt: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),
 	Answers:  githubAnswers,
 	Steps: []worldStep{
-		// The first sync of the catalog, a month before the world's instant, and the second.
+		// The first sync of the catalog a month before the world's instant, the second two days before it.
 		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}, Phase: "first", Before: 30 * 24 * time.Hour},
-		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}, Phase: "second"},
+		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}, Phase: "second", Before: 2 * 24 * time.Hour},
 		{Kind: "sync", Provider: "github", Credential: githubToken, DepthDays: 150,
 			Sources:  [][2]string{{githubOrg + "/payments-api", "payments-api"}, {githubOrg + "/platform-core", "platform-core"}},
 			Datasets: []string{"repo-metadata", "prs", "work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"}},

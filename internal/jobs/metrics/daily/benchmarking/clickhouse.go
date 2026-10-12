@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/familyerr"
+	"sort"
 	"strings"
 	"time"
 
@@ -97,6 +98,19 @@ const clickHouseDateLayout = "2006-01-02"
 type ClickHouseLoader struct {
 	conn  conn
 	orgID string
+	// droppedInactive holds the inactive team ids whose series a read left out.
+	droppedInactive map[string]struct{}
+}
+
+// DroppedInactiveTeams returns, sorted, the inactive team ids whose series the
+// loader's team-scope reads have left out so far.
+func (loader *ClickHouseLoader) DroppedInactiveTeams() []string {
+	ids := make([]string, 0, len(loader.droppedInactive))
+	for id := range loader.droppedInactive {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func NewClickHouseLoader(connection conn, orgID string) (*ClickHouseLoader, error) {
@@ -245,7 +259,14 @@ ORDER BY scope_key, day`,
 		// Python drops a blank scope_key and a NULL value
 		// (_common.py:333-340); `avg()` over an all-NULL group is NULL, which
 		// the outer WHERE cannot catch because it filters the INNER value.
-		if scopeKey == "" || value == nil || inactive.Has(scopeKey) {
+		if scopeKey == "" || value == nil {
+			continue
+		}
+		if inactive.Has(scopeKey) {
+			if loader.droppedInactive == nil {
+				loader.droppedInactive = map[string]struct{}{}
+			}
+			loader.droppedInactive[scopeKey] = struct{}{}
 			continue
 		}
 		result[scopeKey] = append(result[scopeKey], MetricPoint{Day: day, Value: *value})

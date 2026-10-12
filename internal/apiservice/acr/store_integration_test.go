@@ -94,6 +94,39 @@ func TestPostgresEntitlementStoreLookupEndToEnd(t *testing.T) {
 			t.Fatal("AgentContextRuntime = false, want true: an active org override exists")
 		}
 	})
+
+	t.Run("acr_service_model absent reads false, set reads true, independent of agent_context_runtime", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `DELETE FROM feature_flags WHERE key = 'acr_service_model'`); err != nil {
+			t.Fatal(err)
+		}
+		entitlement, err := store.Lookup(ctx, orgID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if entitlement.ACRServiceModel || !entitlement.AgentContextRuntime {
+			t.Fatalf("not registered: ACRServiceModel=%t AgentContextRuntime=%t, want false/true",
+				entitlement.ACRServiceModel, entitlement.AgentContextRuntime)
+		}
+
+		serviceModelID := uuid.NewString()
+		pgseed.FeatureFlag(ctx, t, pool, serviceModelID, "acr_service_model", "community", true)
+		entitlement, err = store.Lookup(ctx, orgID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if entitlement.ACRServiceModel {
+			t.Fatal("ACRServiceModel = true with no override: it is an explicit-purchase feature, tier alone must not enable it")
+		}
+
+		pgseed.OrgOverride(ctx, t, pool, orgID, serviceModelID, true)
+		entitlement, err = store.Lookup(ctx, orgID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !entitlement.ACRServiceModel {
+			t.Fatal("ACRServiceModel = false, want true: an active org override exists")
+		}
+	})
 }
 
 // TestPostgresEntitlementStoreReadyFailsWhenAnyEntitlementTableIsUnreadable:

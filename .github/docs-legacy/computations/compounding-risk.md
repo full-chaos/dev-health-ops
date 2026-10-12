@@ -23,9 +23,22 @@ For each `(org_id, repo_id, day)` row, four signals are combined:
 | Churn | `repo_metrics_daily` | `rework_churn_ratio_30d` |
 | Complexity trend | `repo_complexity_daily` | relative change in `cyclomatic_per_kloc` over the trailing window |
 | Ownership concentration | `repo_metrics_daily` | `max(single_owner_file_ratio_30d, code_ownership_gini)` |
-| Review latency (tail) | `repo_metrics_daily` | `pr_first_review_p90_hours` |
+| Review latency (tail) | `git_pull_requests` | p90 hours from `created_at` to `first_review_at` of the pull requests merged in the window |
 
-Window: trailing 30 days. The complexity delta uses the first-half-versus-second-half
+Window: trailing 30 days, inclusive of the row's day, for every input. The review input
+was the one-day `repo_metrics_daily.pr_first_review_p90_hours` until migration 121
+(ruling D5984): one day held a reviewed merge on few days, so most rows scored without
+it. It is now computed over the pull requests merged in the 30 days, with the same
+percentile as `pr_first_review_p90_hours` (linear interpolation). Its weight is unchanged.
+
+**Review window (stored, not scored).** Every row written after migration 121 also
+stores the window behind the review input: `merged_prs_30d` (pull requests merged in
+the window), `reviewed_prs_30d` (of them, with a first review) and `review_share_30d`
+(`reviewed / merged`). The share is `NULL` when nothing merged in the window: no merge
+is not a share of zero. A repository with merges and no review has a share of `0.0`
+and no review latency: few reviews is a signal, not missing data. The three columns
+are `NULL` on rows written before migration 121 and on rows of zeros of the stale-key
+rule. The complexity delta uses the first-half-versus-second-half
 average so a recent rise in complexity is captured even when absolute values are small.
 
 Inputs come from the current `(org_id, repo_id, day)` compute row. The score is the
@@ -131,6 +144,8 @@ Every row carries:
 - the **composite score** and **severity**,
 - the **four normalized components** (so each contribution is visible),
 - the **raw inputs** (so the score can be re-derived by hand),
+- the **review window** behind the review input (`merged_prs_30d`, `reviewed_prs_30d`,
+  `review_share_30d`),
 - the **weights and thresholds in force at compute time** (audit trail).
 
 This is the inspectability contract — no opaque scoring.
@@ -142,6 +157,8 @@ This is the inspectability contract — no opaque scoring.
 v1 persists **repo-scope rows** and, when a repo-to-team mapping is available,
 **team-scope rows**. Team rows aggregate the resolved per-repo raw inputs by
 unweighted mean and then apply the same formula, preserving inspectability. The
+review window of a team row ADDS the counts of its repositories, so its
+`review_share_30d` is reviewed over merged across them, not a mean of shares. The
 GraphQL resolver still supports read-time aggregation as a compatibility
 fallback when persisted team rows are absent.
 

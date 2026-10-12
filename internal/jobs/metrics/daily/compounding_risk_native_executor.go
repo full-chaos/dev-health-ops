@@ -133,9 +133,14 @@ func (executor *CompoundingRiskExecutor) ComputeFamily(
 		complexityDeltas[row.RepoID] = delta
 	}
 
+	reviewWindows, err := executor.loader.LoadReviewWindows(ctx, run.OrganizationID, repoIDs, day)
+	if err != nil {
+		return 0, err
+	}
+
 	computedAt := executor.nowUTC()
 	records := compoundingrisk.ComputeForRepos(
-		day, run.OrganizationID, rows, complexityDeltas, computedAt,
+		day, run.OrganizationID, rows, complexityDeltas, reviewWindows, computedAt,
 		compoundingrisk.DefaultWeights,
 		compoundingrisk.DefaultThresholds,
 		compoundingrisk.DefaultReferences,

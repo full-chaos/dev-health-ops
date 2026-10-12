@@ -468,6 +468,21 @@ means the ClickHouse `teams` dimension is empty.
 > is gated" bullets in §1.1) rather than a looser first-donor walk, and additionally resolves PRs
 > through `work_graph_issue_pr` (§1.1's new PR-inheritance branch) that the original summary above
 > did not cover. See the ownership-derivation diagram in §1.1 and the ER callouts in §3.
+>
+> **Start of an `inferred` row (`valid_from`) = its earliest evidence, not the derive run (CHAOS-9396 F1).**
+> The row a run writes for a (team, repository) claim starts at the earliest evidence time of the WINNING team's
+> claim: the `created_at` of the earliest pull/merge request of the repository the team's work reaches (an own
+> pull/merge request work item: `work_items.created_at`; a linked issue: the linked pull request's
+> `git_pull_requests.created_at`). A claim with no timed evidence, or evidence after the run, starts at the run.
+> One open row per claim: an open row of the claim that does not start at its evidence time (written by an
+> earlier run at its run time) is superseded -- closed at its own `valid_from`, an empty interval no read
+> sees -- in the same run, after the row at the evidence time is written (logged
+> `team_repo_ownership_derivation.superseded_by_evidence_start`, stats `Superseded`). The next derive run after
+> deploy therefore rewrites the history of every inferred claim; a read of a past day (the landscape, team risk)
+> sees the owner the evidence shows. The other ownership writers (GitHub team access, GitLab group projects,
+> Jira/Linear team projects) have no grant time in their APIs and still start at the first sync that saw the link,
+> as the Python reference did; see the first-known-ownership fallback (F2) for days before a repository's first
+> recorded ownership.
 
 > **CHAOS-4458 part (b) (fixed): the derivation's Linear arm never resolved, because
 > `team_project_ownership`'s Linear rows and `work_items.project_id` for a Linear item were two

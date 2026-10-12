@@ -61,10 +61,10 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb",
 	"testdata/generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz": "8470b539f55e1ecd22b8ba9b52dd0921a9b51222dfd6a7d5a8050139e9f2abd8",
 	// The provider worlds (producedWorlds).
-	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t3_s1_raw.json.gz": "b7ae14fb1afad9415b7de0b37e31bcaeebc482460d971764c19d327554cecce8",
-	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t3_s1_raw.json.gz":    "d4e28a08fa30047a25985310b529b46543b875aa9a593113d08af22f6720dc52",
-	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p3_t4_s1_raw.json.gz":                  "61547bc9651a44e1422483bdb60bf9c3e07ca2393e130645ca34238e08f12e44",
-	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p2_t3_s1_raw.json.gz":                "547d2f100e1032ee2aba66fb448df4ef2798ad95f77cf38a31f7fb19c922df09",
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "311bf17cbf5097a2274286626946c35fc6145b5b92ae761be93c8d4f4240a278",
+	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "88df6620246d73bbcd158a94354837c459366560690b6d6c0824432ad9ce860f",
+	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "e9ada5e45c0a631e32613eee051d0a2931a6c0229fb42cd2de08eab6fd08696b",
+	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "9522ce0b129e4f179cfe1a9a14581978d8a39ab9ea59ebfec216acce1184adb4",
 }
 
 // producedWorlds are the provider worlds (github of the real shape, gitlab, jira, linear): written by the
@@ -73,10 +73,10 @@ var frozenWorldDigests = map[string]string{
 // worlds they are rewritten when their producers change: that test's -freeze-provider-worlds run
 // writes them, and its plain run fails while a world is not exactly what the producers write today.
 var producedWorlds = map[string]bool{
-	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t3_s1_raw.json.gz": true,
-	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t3_s1_raw.json.gz":    true,
-	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p3_t4_s1_raw.json.gz":                  true,
-	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p2_t3_s1_raw.json.gz":                true,
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                true,
+	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  true,
+	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    true,
+	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": true,
 }
 
 // GenerateParams are the parameters of one frozen `fixtures generate` run: the flags that change

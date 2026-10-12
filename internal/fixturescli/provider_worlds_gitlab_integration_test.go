@@ -329,7 +329,7 @@ var gitlabSources = [][2]string{{"41001", "chaos-gl/billing-service"}, {"41002",
 var gitlabWorld = providerWorld{
 	Params: GenerateParams{
 		Provider: "gitlab", RepoName: "chaos-gl/billing-service", RepoCount: 2, Days: 160,
-		CommitsPerDay: 0, PRCount: 3, TeamCount: 3, Seed: 1,
+		CommitsPerDay: 0, PRCount: 3, TeamCount: 4, Seed: 1,
 	},
 	OrgID:    "f1c7e000-0000-4000-8000-00000000a002",
 	FrozenAt: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),

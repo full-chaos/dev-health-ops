@@ -167,7 +167,7 @@ func githubAnswers() []providerAnswer {
 var githubWorld = providerWorld{
 	Params: GenerateParams{
 		Provider: "github", RepoName: "chaos-fixtures/payments-api", RepoCount: 2, Days: 120,
-		CommitsPerDay: 0, PRCount: 6, TeamCount: 3, Seed: 1,
+		CommitsPerDay: 0, PRCount: 6, TeamCount: 4, Seed: 1,
 	},
 	OrgID:    "f1c7e000-0000-4000-8000-00000000a001",
 	FrozenAt: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),

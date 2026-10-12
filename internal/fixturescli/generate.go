@@ -64,6 +64,7 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t3_s1_raw.json.gz": "f1e8cf11a184a2276825d6ff00dd114ac1d6b3428574ac9b9fc79f6ee3766bde",
 	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t3_s1_raw.json.gz":    "f0350db8b4c6e381354128141763b40004384fda683d4bde9a614a460a7c0a4d",
 	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p3_t4_s1_raw.json.gz":                  "61547bc9651a44e1422483bdb60bf9c3e07ca2393e130645ca34238e08f12e44",
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p2_t3_s1_raw.json.gz":                "228451cad0d3eeb0e882ec195d582b12c9dde998adad97a0109aa9712553e935",
 }
 
 // producedWorlds are the provider worlds (github of the real shape, gitlab, jira, linear): written by the
@@ -75,6 +76,7 @@ var producedWorlds = map[string]bool{
 	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t3_s1_raw.json.gz": true,
 	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t3_s1_raw.json.gz":    true,
 	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p3_t4_s1_raw.json.gz":                  true,
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p2_t3_s1_raw.json.gz":                true,
 }
 
 // GenerateParams are the parameters of one frozen `fixtures generate` run: the flags that change
@@ -516,7 +518,7 @@ Flags (as "dev-hops fixtures generate"):
   --pr-count                pull requests (default 20)
   --team-count              teams (default 10)
   --seed                    seed (required)
-  --provider                synthetic (default), github, gitlab or jira
+  --provider                synthetic (default), github, gitlab, jira or linear
   --with-metrics            also the derived metrics
   --with-work-graph         also the work graph
   --skip-coherence-validation, --allow-mixed-org   as in Python
@@ -564,9 +566,9 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 		env.Lookup = func(string) (string, bool) { return "", false }
 	}
 	switch *provider {
-	case "synthetic", "github", "gitlab", "jira":
+	case "synthetic", "github", "gitlab", "jira", "linear":
 	default:
-		fmt.Fprintf(env.Stderr, "argument error: --provider must be one of synthetic, github, gitlab, jira\n")
+		fmt.Fprintf(env.Stderr, "argument error: --provider must be one of synthetic, github, gitlab, jira, linear\n")
 		return cli.ExitUsage
 	}
 	if *dbType != "" && *dbType != "clickhouse" {

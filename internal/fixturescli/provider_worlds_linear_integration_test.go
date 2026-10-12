@@ -1,0 +1,261 @@
+//go:build integration
+
+package fixturescli
+
+import (
+	"encoding/json"
+	"strings"
+	"time"
+)
+
+// ---- Linear: answers in the shape of the Linear GraphQL API answers (the shapes the CHAOS-9124
+// recorder measured for teams and projects) ----
+
+const linearHost = "api.linear.app"
+
+var linearToken = map[string]string{"api_key": "fixture-world-placeholder"}
+
+type linearUser struct {
+	ID, Name, Email string
+}
+
+var (
+	linLea = linearUser{"5e1d0000-0000-4000-8000-00000000b001", "Lea Example", "lea@fixtures.example"}
+	linMo  = linearUser{"5e1d0000-0000-4000-8000-00000000b002", "Mo Example", "mo@fixtures.example"}
+	linNia = linearUser{"5e1d0000-0000-4000-8000-00000000b003", "Nia Example", "nia@fixtures.example"}
+	linOli = linearUser{"5e1d0000-0000-4000-8000-00000000b004", "Oli Example", "oli@fixtures.example"}
+)
+
+func (user linearUser) payload() map[string]any {
+	return map[string]any{"id": user.ID, "name": user.Name, "email": user.Email, "active": true}
+}
+
+type linearTeam struct {
+	ID, Key, Name string
+	Members       []linearUser
+}
+
+var linearTeams = []linearTeam{
+	{"7e40c0de-0000-4000-8000-00000000c001", "ENG", "Engineering", []linearUser{linLea, linMo}},
+	{"7e40c0de-0000-4000-8000-00000000c002", "MOB", "Mobile", []linearUser{linMo, linNia}},
+	// A team in no project: it owns nothing.
+	{"7e40c0de-0000-4000-8000-00000000c003", "QA", "Quality", []linearUser{linOli}},
+}
+
+type linearProject struct {
+	ID, Name  string
+	Teams     []string // team keys
+	CreatedAt string
+}
+
+var linearProjects = []linearProject{
+	// A project of two teams.
+	{"9f00d0e1-0000-4000-8000-00000000d001", "Checkout Revamp", []string{"ENG", "MOB"}, "2026-03-02T09:00:00Z"},
+	{"9f00d0e1-0000-4000-8000-00000000d002", "API Hardening", []string{"ENG"}, "2026-04-06T09:00:00Z"},
+}
+
+func linearTeamByKey(key string) linearTeam {
+	for _, team := range linearTeams {
+		if team.Key == key {
+			return team
+		}
+	}
+	panic("no linear team " + key)
+}
+
+func linearPage(items []any) map[string]any {
+	return map[string]any{"nodes": items, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}}
+}
+
+// linearIssue is one Linear issue.
+type linearIssue struct {
+	ID, Identifier, Title string
+	Team                  string
+	Project               string // project id
+	Assignee, Creator     linearUser
+	CreatedAt, UpdatedAt  string
+	StartedAt             string
+	CompletedAt           string
+	// Attachments are the URLs of the pull requests the GitHub and GitLab integrations attach.
+	Attachments []string
+	// Relations are "related <identifier>@<createdAt>".
+	Relations []string
+}
+
+func (issue linearIssue) payload() map[string]any {
+	team := linearTeamByKey(issue.Team)
+	state := map[string]any{"name": "In Progress", "type": "started"}
+	if issue.CompletedAt != "" {
+		state = map[string]any{"name": "Done", "type": "completed"}
+	}
+	var project any
+	for _, candidate := range linearProjects {
+		if candidate.ID == issue.Project {
+			project = map[string]any{"id": candidate.ID, "name": candidate.Name}
+		}
+	}
+	attachments := []any{}
+	for index, link := range issue.Attachments {
+		source := "github"
+		if strings.Contains(link, "gitlab.com") {
+			source = "gitlab"
+		}
+		attachments = append(attachments, map[string]any{"id": issue.ID + "-a" + string(rune('0'+index)), "url": link, "sourceType": source})
+	}
+	relations := []any{}
+	for index, relation := range issue.Relations {
+		kind, rest, _ := strings.Cut(relation, " ")
+		target, at, _ := strings.Cut(rest, "@")
+		relations = append(relations, map[string]any{"id": issue.ID + "-r" + string(rune('0'+index)), "type": kind, "createdAt": at,
+			"issue": map[string]any{"identifier": issue.Identifier}, "relatedIssue": map[string]any{"identifier": target}})
+	}
+	history := []any{}
+	if issue.CompletedAt != "" {
+		history = append(history, map[string]any{"id": issue.ID + "-h1", "createdAt": issue.CompletedAt,
+			"fromState": map[string]any{"name": "In Progress", "type": "started"}, "toState": map[string]any{"name": "Done", "type": "completed"},
+			"fromProjectId": nil, "toProjectId": nil, "actor": map[string]any{"name": issue.Assignee.Name, "email": issue.Assignee.Email}})
+	}
+	return map[string]any{
+		"id": issue.ID, "identifier": issue.Identifier, "title": issue.Title, "description": nil, "priority": 2, "estimate": nil,
+		"createdAt": issue.CreatedAt, "updatedAt": issue.UpdatedAt, "startedAt": nullable(issue.StartedAt), "completedAt": nullable(issue.CompletedAt),
+		"canceledAt": nil, "dueDate": nil, "url": "https://linear.app/chaos-fx/issue/" + strings.ToLower(issue.Identifier), "archivedAt": nil,
+		"state":    state,
+		"assignee": map[string]any{"name": issue.Assignee.Name, "email": issue.Assignee.Email},
+		"creator":  map[string]any{"name": issue.Creator.Name, "email": issue.Creator.Email},
+		"labels":   linearPage([]any{}), "parent": nil, "project": project, "cycle": nil,
+		"team":    map[string]any{"id": team.ID, "key": team.Key, "name": team.Name},
+		"history": linearPage(history), "comments": linearPage([]any{}), "attachments": linearPage(attachments),
+		"relations": linearPage(relations), "inverseRelations": linearPage([]any{}),
+	}
+}
+
+var linearIssues = []linearIssue{
+	{ID: "a1000000-0000-4000-8000-00000000e001", Identifier: "ENG-1", Title: "Checkout API returns stale totals", Team: "ENG",
+		Project: "9f00d0e1-0000-4000-8000-00000000d001", Assignee: linLea, Creator: linMo,
+		CreatedAt: "2026-05-11T09:00:00Z", UpdatedAt: "2026-06-03T15:00:00Z", StartedAt: "2026-05-12T09:00:00Z", CompletedAt: "2026-06-03T15:00:00Z",
+		Attachments: []string{"https://github.com/chaos-fixtures/ledger/pull/3"}},
+	{ID: "a1000000-0000-4000-8000-00000000e002", Identifier: "ENG-2", Title: "Rate limit the public API", Team: "ENG",
+		Project: "9f00d0e1-0000-4000-8000-00000000d002", Assignee: linMo, Creator: linLea,
+		CreatedAt: "2026-08-17T09:00:00Z", UpdatedAt: "2026-09-25T15:00:00Z", StartedAt: "2026-08-18T09:00:00Z", CompletedAt: "2026-09-25T15:00:00Z",
+		Attachments: []string{"https://gitlab.com/chaos-gl/billing-service/-/merge_requests/4"}},
+	{ID: "a1000000-0000-4000-8000-00000000e003", Identifier: "MOB-1", Title: "Checkout screen redesign", Team: "MOB",
+		Project: "9f00d0e1-0000-4000-8000-00000000d001", Assignee: linNia, Creator: linNia,
+		CreatedAt: "2026-09-29T09:00:00Z", UpdatedAt: "2026-10-10T15:00:00Z", StartedAt: "2026-09-30T09:00:00Z",
+		Relations: []string{"related ENG-1@2026-09-29T10:00:00Z"}},
+}
+
+// githubLinearItems are the ledger repository's pull requests of the linear world: PR 3 is attached to
+// ENG-1 by the GitHub integration (native, cross-provider); PR 4 names MOB-1 in its title only.
+var githubLinearItems = []githubIssue{
+	{Number: 3, Title: "Fresh checkout totals", Body: "Recompute totals on read.", Author: ghAlice, PR: true, Head: "fix/checkout-totals",
+		CreatedAt: "2026-05-20T09:00:00Z", UpdatedAt: "2026-06-02T15:00:00Z", ClosedAt: "2026-06-02T15:00:00Z", MergedAt: "2026-06-02T15:00:00Z"},
+	{Number: 4, Title: "MOB-1 checkout layout endpoints", Body: "Endpoints for the new layout.", Author: ghBob, PR: true, Head: "feature/mob-1",
+		CreatedAt: "2026-10-03T09:00:00Z", UpdatedAt: "2026-10-08T15:00:00Z"},
+}
+
+// linearGraphQLAnswer answers every Linear GraphQL read of the reference catalog and the work-items
+// route.
+func linearGraphQLAnswer() providerAnswer {
+	return providerAnswer{
+		Method: "POST", Host: linearHost, Path: "/graphql", Status: 200,
+		Respond: func(request replayRequest) (any, bool) {
+			document := request.Document
+			var vars map[string]any
+			if len(request.Variables) > 0 && json.Unmarshal(request.Variables, &vars) != nil {
+				return nil, false
+			}
+			if vars["after"] != nil {
+				return nil, false
+			}
+			switch {
+			case strings.Contains(document, "query LinearReferenceCatalogTeams("):
+				teams := []any{}
+				for _, team := range linearTeams {
+					members := []any{}
+					for _, member := range team.Members {
+						members = append(members, member.payload())
+					}
+					teams = append(teams, map[string]any{"id": team.ID, "key": team.Key, "name": team.Name, "description": team.Name + " team",
+						"members": linearPage(members)})
+				}
+				return map[string]any{"data": map[string]any{"teams": linearPage(teams)}}, true
+			case strings.Contains(document, "query LinearReferenceCatalogProjects("):
+				projects := []any{}
+				for _, project := range linearProjects {
+					teams := []any{}
+					for _, key := range project.Teams {
+						team := linearTeamByKey(key)
+						teams = append(teams, map[string]any{"id": team.ID, "key": team.Key})
+					}
+					projects = append(projects, map[string]any{
+						"id": project.ID, "name": project.Name, "description": project.Name,
+						"status":  map[string]any{"id": project.ID + "-s", "name": "In Progress", "type": "started"},
+						"trashed": false, "progress": 0.5, "startDate": nil, "targetDate": nil,
+						"createdAt": project.CreatedAt, "updatedAt": "2026-10-01T09:00:00Z", "archivedAt": nil,
+						"url":   "https://linear.app/chaos-fx/project/" + strings.ToLower(strings.ReplaceAll(project.Name, " ", "-")),
+						"lead":  map[string]any{"id": linLea.ID, "name": linLea.Name, "email": linLea.Email},
+						"teams": linearPage(teams),
+					})
+				}
+				return map[string]any{"data": map[string]any{"projects": linearPage(projects)}}, true
+			case strings.Contains(document, "query LinearWorkItemsTeam("):
+				teams := []any{}
+				for _, team := range linearTeams {
+					teams = append(teams, map[string]any{"id": team.ID, "key": team.Key, "name": team.Name})
+				}
+				return map[string]any{"data": map[string]any{"teams": linearPage(teams)}}, true
+			case strings.Contains(document, "query LinearWorkItemsCycles("):
+				return map[string]any{"data": map[string]any{"cycles": linearPage([]any{})}}, true
+			case strings.Contains(document, "query LinearWorkItems("):
+				filter, _ := vars["filter"].(map[string]any)
+				team, _ := filter["team"].(map[string]any)
+				key, _ := team["key"].(map[string]any)
+				in, _ := key["in"].([]any)
+				if len(in) != 1 {
+					return nil, false
+				}
+				issues := []any{}
+				for _, issue := range linearIssues {
+					if issue.Team == in[0] {
+						issues = append(issues, issue.payload())
+					}
+				}
+				return map[string]any{"data": map[string]any{"issues": linearPage(issues)}}, true
+			}
+			return nil, false
+		},
+	}
+}
+
+func linearWorldAnswers() []providerAnswer {
+	var answers []providerAnswer
+	answers = append(answers, linearGraphQLAnswer())
+	answers = append(answers, githubTeamCatalogAnswersFor(ledgerGitHubTeams)...)
+	answers = append(answers, githubRepoAnswers("ledger", githubLinearItems)...)
+	answers = append(answers, githubPRSocialAnswer("ledger", githubLinearItems))
+	answers = append(answers, gitlabProjectAnswers("chaos-gl/billing-service", gitlabBillingItems)...)
+	return answers
+}
+
+var linearWorld = providerWorld{
+	Params: GenerateParams{
+		Provider: "linear", RepoName: "chaos-fx/ENG", RepoCount: 2, Days: 160,
+		CommitsPerDay: 0, PRCount: 2, TeamCount: 3, Seed: 1,
+	},
+	OrgID:    "f1c7e000-0000-4000-8000-00000000a004",
+	FrozenAt: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),
+	Answers:  linearWorldAnswers,
+	Steps: []worldStep{
+		{Kind: "team_catalog", Provider: "linear", Credential: linearToken},
+		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}},
+		{Kind: "sync", Provider: "github", Credential: githubToken, DepthDays: 200,
+			Sources:  [][2]string{{githubOrg + "/ledger", "ledger"}},
+			Datasets: append([]string{"repo-metadata", "prs"}, workItemDatasets...)},
+		{Kind: "sync", Provider: "gitlab", Credential: gitlabToken, DepthDays: 200,
+			Sources:  [][2]string{{"41001", "chaos-gl/billing-service"}},
+			Datasets: append([]string{"repo-metadata", "prs"}, workItemDatasets...)},
+		{Kind: "sync", Provider: "linear", Credential: linearToken, DepthDays: 200,
+			Sources: [][2]string{{"ENG", "Engineering"}}, Datasets: workItemDatasets},
+		{Kind: "work_graph"},
+	},
+}

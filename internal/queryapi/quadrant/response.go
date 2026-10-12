@@ -274,23 +274,17 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		return nil, badRequest("Metric not supported for scope")
 	}
 
-	// quadrant.py:532-541: person scope resolves the requested person id to
-	// its identity variants, then to that person's own team, and scopes
-	// both metric reads to that team cohort (_cohort_scope_filter) -- the
-	// response ends up plotting the person's whole team, not a
-	// single-point series, matching Python exactly (see identity.go).
-	var teamFilter string
+	// Person scope reads only the subject's own rows: the person id resolves
+	// to its identity strings, and each metric read is bound to them on the
+	// table's own identity column. No team lookup, no membership cohort.
+	var personIdentities []string
 	if scope == "person" {
-		identities, err := resolveIdentityVariants(ctx, client, params.ScopeID, orgID)
+		personIdentities, err = resolveIdentityVariants(ctx, client, params.ScopeID, orgID)
 		if err != nil {
 			return nil, err
 		}
-		if len(identities) == 0 {
+		if len(personIdentities) == 0 {
 			return nil, notFound("Individual not found")
-		}
-		teamFilter, err = fetchPersonTeamID(ctx, client, identities, orgID)
-		if err != nil {
-			return nil, err
 		}
 	}
 
@@ -307,7 +301,10 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 			read, owners := ownerTeamRead(spec, orgID, selected.teams, time.Now().UTC())
 			return fetchQuadrantMetricIn(ctx, client, read, startDay, endDay, params.Bucket, orgID, "", owners)
 		}
-		return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, params.Bucket, orgID, teamFilter, selected.scope)
+		if scope == "person" {
+			return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, params.Bucket, orgID, "", personIdentityScope(spec, personIdentities))
+		}
+		return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, params.Bucket, orgID, "", selected.scope)
 	}
 
 	xRows, err := fetch(xSpec)
@@ -342,7 +339,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	xMap := map[xKey]xEntry{}
 	for _, row := range xRows {
 		entityID, label := rowEntity(row, scope, teamLabels)
-		if entityID == "" {
+		if entityID == "" || (scope == "person" && entityID != params.ScopeID) {
 			continue
 		}
 		xMap[xKey{entityID, row.Bucket}] = xEntry{Label: label, X: xSpec.Transform(row.Value)}
@@ -352,7 +349,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	pointsByEntity := map[string][]yWindow{}
 	for _, row := range yRows {
 		entityID, label := rowEntity(row, scope, teamLabels)
-		if entityID == "" {
+		if entityID == "" || (scope == "person" && entityID != params.ScopeID) {
 			continue
 		}
 		xe, ok := xMap[xKey{entityID, row.Bucket}]

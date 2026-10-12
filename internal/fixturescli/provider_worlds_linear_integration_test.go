@@ -307,9 +307,9 @@ var linearWorld = providerWorld{
 	FrozenAt: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),
 	Answers:  linearWorldAnswers,
 	Steps: []worldStep{
-		// The first sync of the catalog, a month before the world's instant, and the second.
+		// The first sync of the catalog a month before the world's instant, the second two days before it.
 		{Kind: "team_catalog", Provider: "linear", Credential: linearToken, Phase: "first", Before: 30 * 24 * time.Hour},
-		{Kind: "team_catalog", Provider: "linear", Credential: linearToken, Phase: "second"},
+		{Kind: "team_catalog", Provider: "linear", Credential: linearToken, Phase: "second", Before: 2 * 24 * time.Hour},
 		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}},
 		{Kind: "sync", Provider: "github", Credential: githubToken, DepthDays: 200,
 			Sources:  [][2]string{{githubOrg + "/ledger", "ledger"}},

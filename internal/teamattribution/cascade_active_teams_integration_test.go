@@ -155,6 +155,14 @@ func TestAnInactiveTeamTakesNoWorkItemForEveryProvider(t *testing.T) {
 				}, "o-" + id},
 			} {
 				gotTeam, _, candidates := derived.Resolve(arm.subject)
+				if name == "by membership" {
+					// CHAOS-9414: membership is provenance only. The primary
+					// team is none; the member's team is the non-primary row.
+					if gotTeam != nil {
+						t.Errorf("%s %s: primary team = %v, want none (provenance only)", id, name, *gotTeam)
+					}
+					gotTeam = membershipProvenanceTeam(candidates)
+				}
 				switch {
 				case team.taken && (gotTeam == nil || *gotTeam != arm.want):
 					t.Errorf("%s %s: resolved team = %v, want %s (candidates %+v)", id, name, gotTeam, arm.want, candidates)
@@ -460,7 +468,11 @@ func TestAMemberOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam(t *testing.T)
 		}
 		typ := map[string]string{"github": "pr", "gitlab": "merge_request", "linear": "issue", "jira": "issue"}[provider]
 		subject := GithubWorkItemDerivationSubject{WorkItemID: provider + ":x#1", Provider: provider, Type: typ, Assignees: []string{"someone"}, OrgID: org}
-		team, _, resolved := derived.Resolve(subject)
+		primary, _, resolved := derived.Resolve(subject)
+		if primary != nil {
+			t.Errorf("%s: primary team = %q, want none (CHAOS-9414: membership is provenance only)", provider, *primary)
+		}
+		team := membershipProvenanceTeam(resolved)
 		if got := GithubWorkItemDerivationStringValue(team); got != "cur-"+provider {
 			t.Errorf("%s: resolved team = %q, want cur-%s (candidates %+v)", provider, got, provider, resolved)
 		}
@@ -541,7 +553,11 @@ func TestAnInactiveAdminTeamIsNotCountedByTheMembershipGate(t *testing.T) {
 					provider, withActiveAdmin, candidateTeams(candidates), reason, want, len(facts.UntypedMembers))
 			}
 			typ := map[string]string{"github": "pr", "gitlab": "merge_request", "linear": "issue", "jira": "issue"}[provider]
-			team, _, resolved := derived.Resolve(GithubWorkItemDerivationSubject{WorkItemID: provider + ":x#1", Provider: provider, Type: typ, Assignees: []string{"someone"}, OrgID: org})
+			primary, _, resolved := derived.Resolve(GithubWorkItemDerivationSubject{WorkItemID: provider + ":x#1", Provider: provider, Type: typ, Assignees: []string{"someone"}, OrgID: org})
+			if primary != nil {
+				t.Errorf("%s activeAdmin=%v: primary team = %q, want none (CHAOS-9414: membership is provenance only)", provider, withActiveAdmin, *primary)
+			}
+			team := membershipProvenanceTeam(resolved)
 			if got := GithubWorkItemDerivationStringValue(team); got != want {
 				t.Errorf("%s activeAdmin=%v: resolved team = %q, want %s (candidates %+v)", provider, withActiveAdmin, got, want, resolved)
 			}

@@ -130,8 +130,8 @@ func TestAnInactiveOnlyAdminLayerFallsThroughToTheProviderLayer(t *testing.T) {
 	}
 }
 
-// The whole cascade: the person of inactive t1 and active t2 is attributed to
-// t2 through membership, and the item is not left unassigned as ambiguous.
+// The whole cascade: the person of inactive t1 and active t2 is recorded as t2
+// provenance (not ambiguous); membership never makes t2 the primary team.
 func TestAPersonOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam(t *testing.T) {
 	for _, provider := range coOwnerProviders {
 		t.Run(provider, func(t *testing.T) {
@@ -143,8 +143,23 @@ func TestAPersonOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam(t *testing.T)
 				WorkItemID: fmt.Sprintf("%s:x-1", provider), Provider: provider, Type: "issue",
 				Assignees: []string{"alice"}, OrgID: "org",
 			})
-			if got := GithubWorkItemDerivationStringValue(team); got != "t2" {
-				t.Errorf("resolved team = %q, want t2 (candidates %+v)", got, candidates)
+			// CHAOS-9414: membership is provenance only. The active team t2
+			// is recorded as a non-primary assignee_membership row; the
+			// inactive t1 is dropped; the item stays unassigned.
+			if got := GithubWorkItemDerivationStringValue(team); got != "" {
+				t.Errorf("resolved team = %q, want none (candidates %+v)", got, candidates)
+			}
+			var recorded []string
+			for _, candidate := range candidates {
+				if candidate.Source == "assignee_membership" {
+					if candidate.IsPrimary != AttributionNotPrimary {
+						t.Errorf("membership row is_primary = %d, want 0", candidate.IsPrimary)
+					}
+					recorded = append(recorded, GithubWorkItemDerivationStringValue(candidate.TeamID))
+				}
+			}
+			if len(recorded) != 1 || recorded[0] != "t2" {
+				t.Errorf("recorded membership teams = %v, want [t2] (candidates %+v)", recorded, candidates)
 			}
 		})
 	}

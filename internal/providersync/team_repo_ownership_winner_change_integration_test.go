@@ -157,3 +157,47 @@ func TestAWinnerChangeIsDatedAtTheRunWithOneMainOwnerAtEveryInstant(t *testing.T
 		})
 	}
 }
+
+// TestACoOwnerRetractionNeverMovesTheMainOwner: a co-owner owns the repository
+// beside the main owner, so the end of a co-owner's row is no end of a main
+// tenure. When co-owner B loses its links and is retracted, main owner A keeps
+// its start at the repository's earliest evidence on every later run.
+func TestACoOwnerRetractionNeverMovesTheMainOwner(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	old := time.Date(2025, 3, 4, 5, 6, 7, 0, time.UTC)
+	mid := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
+
+	for _, provider := range evidenceSettleProviders {
+		t.Run(provider, func(t *testing.T) {
+			org := "org-coowner-retraction-" + provider
+			teamA, teamB := provider+"-team-a", provider+"-team-b"
+			repo := seedEvidenceSettleRepo(t, ctx, conn, org, provider)
+			seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-a", teamA, true, time.Now().UTC().Add(-time.Hour))
+			seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-b", teamB, true, time.Now().UTC().Add(-time.Hour))
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-a", 1, old)
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-a", 2, old.Add(time.Hour))
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", 3, mid)
+
+			service := TeamRepoOwnershipDerivationService{Conn: conn}
+			if _, _, ready, _, err := service.Derive(ctx, org); err != nil || !ready {
+				t.Fatalf("first derive: ready %v err %v", ready, err)
+			}
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-a", 3, mid)
+			if _, retracted, _, _, err := service.Derive(ctx, org); err != nil || retracted != 1 {
+				t.Fatalf("B loses its links: retracted %d err %v, want B's row retracted", retracted, err)
+			}
+			for run := 1; run <= 2; run++ {
+				written, retracted, _, _, stats, err := service.DeriveWithStats(ctx, org)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if written != 0 || retracted != 0 || stats.Superseded != 0 || stats.RoleChanges != 0 {
+					t.Errorf("run %d after the retraction: written %d retracted %d superseded %d role changes %d, want all 0", run, written, retracted, stats.Superseded, stats.RoleChanges)
+				}
+			}
+			if starts := openOwnershipStarts(t, ctx, conn, org, teamA); len(starts) != 1 || !starts[0].Equal(old) {
+				t.Errorf("A open rows start at %v, want one at the repository's earliest evidence %v", starts, old)
+			}
+		})
+	}
+}

@@ -708,7 +708,7 @@ func loadTeamRepoOwnershipRetractedUntil(
 	tenure := teamRepoOwnershipTenureEnds{retractedUntil: map[teamRepoOwnershipClaim]time.Time{}, mainUntil: map[teamRepoOwnershipClaim]time.Time{}}
 	rows, err := conn.Query(ctx, `
 SELECT provider, repo_full_name, team_id, max(assumeNotNull(valid_to)),
-       maxIf(assumeNotNull(valid_to), is_primary != 2), countIf(is_primary != 2)
+       maxIf(valid_to, is_primary != 2)
 FROM team_repo_ownership FINAL
 WHERE org_id = ?
   AND source = 'inferred'
@@ -723,13 +723,13 @@ GROUP BY provider, repo_full_name, team_id`,
 	defer rows.Close()
 	for rows.Next() {
 		var claim teamRepoOwnershipClaim
-		var until, mainUntil time.Time
-		var mainRows uint64
-		if err := rows.Scan(&claim.provider, &claim.repoFullName, &claim.teamID, &until, &mainUntil, &mainRows); err != nil {
+		var until time.Time
+		var mainUntil *time.Time
+		if err := rows.Scan(&claim.provider, &claim.repoFullName, &claim.teamID, &until, &mainUntil); err != nil {
 			return tenure, err
 		}
 		tenure.retractedUntil[claim] = until.UTC()
-		if mainRows > 0 {
+		if mainUntil != nil {
 			tenure.mainUntil[claim] = mainUntil.UTC()
 		}
 	}

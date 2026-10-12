@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/dbspan"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -90,6 +91,10 @@ func New(ctx context.Context, config Config) (*pgxpool.Pool, error) {
 	poolConfig.ConnConfig.ConnectTimeout = config.ConnectTimeout
 	if config.Tracer != nil {
 		poolConfig.ConnConfig.Tracer = config.Tracer
+	} else {
+		// CHAOS-9364: a pool built without a tracer still produces slow-call
+		// client spans (child-only, threshold-gated; see internal/platform/dbspan).
+		poolConfig.ConnConfig.Tracer = spanTracer{spans: dbspan.NewEmitter(dbspan.SystemPostgres, "")}
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)

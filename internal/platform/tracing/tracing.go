@@ -32,6 +32,8 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/dbspan"
 )
 
 // defaultServiceName matches tracing.py's OTEL_SERVICE_NAME default exactly.
@@ -127,6 +129,7 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 		logger.Debug("OpenTelemetry tracing disabled via OTEL_ENABLED=false")
 		return Component{}
 	}
+	dbspan.WarnIfInvalidEnv(logger)
 
 	serviceName := stringEnv("OTEL_SERVICE_NAME", defaultName)
 	environment := stringEnv("OTEL_ENVIRONMENT", defaultEnvironment)

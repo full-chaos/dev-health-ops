@@ -108,6 +108,21 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 					t.Fatalf("%s: a provider world without %s", path, name)
 				}
 			}
+			// The parameters that name a provider world say what it holds: its repositories, its pull
+			// requests and the teams of its own provider.
+			repos := distinctValues(t, world, "repos", "id")
+			prs := distinctValues(t, world, "git_pull_requests", "repo_id", "number")
+			teams := distinctValues(t, world, "teams", "id", "provider")
+			ownTeams := 0
+			for key := range teams {
+				if strings.HasSuffix(key, "\x00"+world.Params.Provider) {
+					ownTeams++
+				}
+			}
+			if len(repos) != world.Params.RepoCount || len(prs) != world.Params.PRCount || ownTeams != world.Params.TeamCount {
+				t.Fatalf("%s is named --repo-count %d --pr-count %d --team-count %d and holds %d repositories, %d pull requests, %d %s teams",
+					path, world.Params.RepoCount, world.Params.PRCount, world.Params.TeamCount, len(repos), len(prs), ownTeams, world.Params.Provider)
+			}
 		}
 		if derived != wantDerived || len(world.Tables) < minTables || rows < minRows {
 			t.Fatalf("%s: %d table(s), %d derived, %d row(s): the world is not what its callers write", path, len(world.Tables), derived, rows)
@@ -121,6 +136,33 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 			}
 		}
 	}
+}
+
+// distinctValues is the set of distinct values of the columns of a world table (joined by NUL).
+func distinctValues(t *testing.T, world FrozenWorld, table string, columns ...string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, frozen := range world.Tables {
+		if frozen.Name != table {
+			continue
+		}
+		index := map[string]int{}
+		for position, column := range frozen.Columns {
+			index[column.Name] = position
+		}
+		for _, row := range frozen.Rows {
+			parts := make([]string, len(columns))
+			for position, column := range columns {
+				at, ok := index[column]
+				if !ok {
+					t.Fatalf("%s has no column %s", table, column)
+				}
+				parts[position] = fmt.Sprint(row[at])
+			}
+			out[strings.Join(parts, "\x00")] = true
+		}
+	}
+	return out
 }
 
 func worldHoldsTable(world FrozenWorld, name string) bool {

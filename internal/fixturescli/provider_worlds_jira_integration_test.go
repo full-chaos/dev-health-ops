@@ -328,7 +328,7 @@ var workItemDatasets = []string{"work-items", "work-item-labels", "work-item-pro
 var jiraWorld = providerWorld{
 	Params: GenerateParams{
 		Provider: "jira", RepoName: "chaos-fx/PAY", RepoCount: 2, Days: 180,
-		CommitsPerDay: 0, PRCount: 3, TeamCount: 4, Seed: 1,
+		CommitsPerDay: 0, PRCount: 4, TeamCount: 4, Seed: 1,
 	},
 	OrgID:    "f1c7e000-0000-4000-8000-00000000a003",
 	FrozenAt: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),

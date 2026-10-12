@@ -204,6 +204,10 @@ type TeamRepoOwnershipWorkItem struct {
 	RepoID        string
 	ProjectID     string
 	NativeTeamKey string
+	// CreatedAt is work_items.created_at: when a pull or merge request of the
+	// repository existed, the evidence time of the ownership it gives (zero
+	// when unknown).
+	CreatedAt time.Time
 }
 
 // teamRepoOwnershipChangeRequestTypes are the work_items.type values of a
@@ -240,6 +244,10 @@ type TeamRepoOwnershipIssuePRLink struct {
 	RepoID     string
 	PRNumber   uint32
 	Provenance string
+	// EvidenceAt is the linked pull request's created_at (git_pull_requests):
+	// the evidence time of the ownership the link gives (zero when the pull
+	// request row is not synced).
+	EvidenceAt time.Time
 }
 
 // DerivedTeamRepoOwnershipRow is one team_repo_ownership row this producer
@@ -261,6 +269,11 @@ type DerivedTeamRepoOwnershipRow struct {
 	// (teamRepoOwnershipResolutionArmPriority), so a repo reachable via both
 	// arms still reports one deterministic arm.
 	ResolutionArm string
+	// EvidenceFrom is the earliest evidence time of the winning team's claim
+	// on the repository (zero when no evidence carries a time): the start of
+	// the ownership, written as valid_from, so history reads the owner the
+	// evidence shows rather than the time of the first derive run.
+	EvidenceFrom time.Time
 }
 
 // teamRepoOwnershipSourceKind names a class of signal that writes
@@ -465,13 +478,20 @@ func deriveTeamRepoOwnership(
 
 	tallies := map[string]map[string]*teamRepoOwnershipLinkCounts{}
 	repoArm := map[string]map[string]string{}
-	assign := func(repoID, teamID, arm string, tier int) {
+	earliest := map[string]map[string]time.Time{}
+	assign := func(repoID, teamID, arm string, tier int, at time.Time) {
 		if repoID == "" || teamID == "" {
 			return
 		}
 		if tallies[repoID] == nil {
 			tallies[repoID] = map[string]*teamRepoOwnershipLinkCounts{}
 			repoArm[repoID] = map[string]string{}
+			earliest[repoID] = map[string]time.Time{}
+		}
+		if !at.IsZero() {
+			if held, ok := earliest[repoID][teamID]; !ok || at.Before(held) {
+				earliest[repoID][teamID] = at.UTC()
+			}
 		}
 		if tallies[repoID][teamID] == nil {
 			tallies[repoID][teamID] = &teamRepoOwnershipLinkCounts{}
@@ -494,7 +514,7 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		if teamID, arm := donorTeamID(item.WorkItemID); teamID != "" {
-			assign(item.RepoID, teamID, arm, teamRepoOwnershipLinkTierNative)
+			assign(item.RepoID, teamID, arm, teamRepoOwnershipLinkTierNative, item.CreatedAt)
 		}
 	}
 
@@ -507,7 +527,7 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		if teamID, arm := donorTeamID(link.WorkItemID); teamID != "" {
-			assign(link.RepoID, teamID, arm, teamRepoOwnershipIssuePRLinkTier(link.Provenance))
+			assign(link.RepoID, teamID, arm, teamRepoOwnershipIssuePRLinkTier(link.Provenance), link.EvidenceAt)
 		}
 	}
 
@@ -533,6 +553,7 @@ func deriveTeamRepoOwnership(
 			RepoID:        repoID,
 			Specificity:   teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity,
 			ResolutionArm: repoArm[repoID][leaders[0]],
+			EvidenceFrom:  earliest[repoID][leaders[0]],
 		})
 	}
 	sort.Slice(result.Ties, func(i, j int) bool { return result.Ties[i].RepoID < result.Ties[j].RepoID })

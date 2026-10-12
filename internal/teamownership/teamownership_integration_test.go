@@ -4,6 +4,7 @@ package teamownership
 
 import (
 	"context"
+	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -635,5 +636,80 @@ func TestOwnedRepoIDsResolvesASameSecondWrite(t *testing.T) {
 	}
 	if len(got) != 1 || got[0] != repoID {
 		t.Fatalf("expected OwnedRepoIDs to resolve [%s] for a row written .100 into a second when asOf is .500 into the SAME second, got %v", repoID, got)
+	}
+}
+
+// TestOwnersByRepoIsTheRuleOfTheTeamGroupings runs OwnersByRepo over one row of
+// each shape of its input domain, on the schema of the migration chain: every
+// active owner of a repository is listed (no ranking), a provider_access row
+// with no repo_id resolves through the repos name join, and a row is left out
+// when its team is inactive, its validity has ended or not begun, its team id
+// is empty, or its repository is not one repos holds.
+func TestOwnersByRepoIsTheRuleOfTheTeamGroupings(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	const org = "00000000-0000-4000-8000-0000000093a1"
+	asOf := time.Date(2026, 9, 21, 23, 59, 59, 999_000_000, time.UTC)
+	long := asOf.AddDate(0, -1, 0)
+	repo := func(name string) uuid.UUID { return uuid.NewSHA1(uuid.NameSpaceURL, []byte(org+name)) }
+	shared, byName, inactiveOnly, ended, future, emptyTeam, notInRepos :=
+		repo("shared"), repo("by-name"), repo("inactive"), repo("ended"), repo("future"), repo("empty"), repo("not-in-repos")
+	for _, id := range []uuid.UUID{shared, byName, inactiveOnly, ended, future, emptyTeam} {
+		if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, 'github', ?)`,
+			id, "acme/"+id.String(), org, long); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES ('team-gone', generateUUIDv4(), 'Gone', [], ?, ?, ?, 'github', 0)`, long, long, org); err != nil {
+		t.Fatal(err)
+	}
+	ended1 := asOf.Add(-time.Hour)
+	for _, row := range []struct {
+		team   string
+		repoID any
+		name   string
+		from   time.Time
+		to     *time.Time
+	}{
+		{"team-a", shared, "acme/" + shared.String(), long, nil},
+		{"team-b", shared, "acme/" + shared.String(), long, nil},
+		{"team-a", nil, "acme/" + byName.String(), long, nil},
+		{"team-gone", inactiveOnly, "acme/" + inactiveOnly.String(), long, nil},
+		{"team-a", ended, "acme/" + ended.String(), long, &ended1},
+		{"team-a", future, "acme/" + future.String(), asOf.Add(time.Millisecond), nil},
+		{"", emptyTeam, "acme/" + emptyTeam.String(), long, nil},
+		{"team-a", notInRepos, "acme/" + notInRepos.String(), long, nil},
+	} {
+		if err := conn.Exec(ctx, `INSERT INTO team_repo_ownership
+    (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, valid_from, valid_to, updated_at)
+    VALUES (?, 'github', ?, ?, ?, 'exact', 'provider_access', 0, 100, ?, ?, ?)`,
+			org, row.team, row.repoID, row.name, row.from, row.to, long); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := OwnersByRepo(ctx, conn, org, asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{
+		shared.String(): {"team-a", "team-b"},
+		byName.String(): {"team-a"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("OwnersByRepo = %v, want %v", got, want)
 	}
 }

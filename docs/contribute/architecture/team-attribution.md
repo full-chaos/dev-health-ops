@@ -1868,28 +1868,42 @@ Limits:
   count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
   of zeros are equal.
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
-- `ic_landscape_rolling_30d` and the person's `user_metrics_daily` row of the day: the team of a person for a day
-  comes ONLY from the `team_memberships` rows that are valid at that day (the attribution's provider membership read,
-  `LoadProviderMembers`, as of the day: `valid_from` at or before the day, and no `valid_to` or a later one), and
-  only from ACTIVE teams. The row of the day holds ONE team: the first by the attribution's rank (primary, then
-  specificity, priority, the newer row, the team id). The landscape holds a point for EACH active team of the person,
-  so a person of N teams is ranked among the members of each. A person with no membership valid at the day is
-  `unassigned`, id and name, in the row and in the landscape. The NAME of the row's team comes from the same read as
-  its id (CHAOS-9134): the name of the newest membership fact of that team that has one, so the id and the name of one
-  row never come from different teams (a team no fact names keeps its id as its name; the reference passed the stored
-  name through, a declared narrow divergence). The team a STORED row holds is never a source: after
-  the first run of a day the newest stored row is the family's own output, and a person who left a team would stay
-  in it. A point stored under a team the run does not produce is retracted by the rule of this section. What stays:
-  - an id with NO row in `teams` counts as active, so a membership of a deleted team still gives a row and points;
+- `ic_landscape_rolling_30d` (ruling D5985): the team of a point is the team that OWNS the repository of the
+  person's row, never the person's membership and never a team id stored on the row. A person's 30-day numbers in a
+  team are the person's `user_metrics_daily` rows in the repositories the team owns (`teamownership.OwnersByRepo` as
+  of the last millisecond of the day: the ownership rule of the query API's team groupings -- FINAL, the bitemporal
+  window, the `repos` name join with its matched sentinel, a non-empty team id, a repository `repos` holds -- and an
+  inactive team owns nothing). A repository owned by several teams counts whole in each of them; a person who worked
+  in repositories of two teams has a point in each, ranked among the people of that team's repositories. A row of a
+  repository no team owns, and the row of a person with work items and no git row (the synthesized repository,
+  which no team owns), is `unassigned`; a blank or `unknown` identity keeps a blank team. Ownership is provider-
+  agnostic: a GitHub access grant, a GitLab group's project grant and a Jira or Linear team's project, each derived
+  into repository ownership, give the same answer (tested per provider). What stays:
+  - work items reach the landscape only through the person's git row of the day (the merge adds a person's completed
+    items to one git row); items of a person with no git row are `unassigned`, and items are never split by the
+    repository their pull requests are in;
+  - a stored point of a day the run does not compute keeps the team it was stored with until that day is computed
+    again (a recompute of history is a separate decision);
+  - a chart of the landscape metrics over the WHOLE organization with no team filter weights a person who worked in
+    the repositories of N teams N times in an average (by team: once for each team; by person: unchanged).
+- The person's `user_metrics_daily` row of the day still takes its team from membership: the team of a person for a
+  day comes ONLY from the `team_memberships` rows that are valid at that day (the attribution's provider membership
+  read, `LoadProviderMembers`, as of the day: `valid_from` at or before the day, and no `valid_to` or a later one),
+  and only from ACTIVE teams. The row of the day holds ONE team: the first by the attribution's rank (primary, then
+  specificity, priority, the newer row, the team id). A person with no membership valid at the day is `unassigned`,
+  id and name. The NAME of the row's team comes from the same read as its id (CHAOS-9134): the name of the newest
+  membership fact of that team that has one, so the id and the name of one row never come from different teams (a
+  team no fact names keeps its id as its name; the reference passed the stored name through, a declared narrow
+  divergence). The team a STORED row holds is never a source: after the first run of a day the newest stored row is
+  the family's own output, and a person who left a team would stay in it. What stays:
+  - an id with NO row in `teams` counts as active, so a membership of a deleted team still gives a row;
   - only the membership table is read: a person an admin added to a team by hand (the manual roster of the team)
     gets no team here;
   - a member the provider reports with no email is stored with the provider name only, which no commit email
     equals: that person's git rows stay `unassigned`;
   - a membership is valid from the time of the sync that first saw it, so a day before that sync gives no team;
-  - a chart of the landscape metrics over the WHOLE organization with no team filter weights a person of N teams N
-    times in an average (by team: once for each team; by person: unchanged);
   - the membership read fails the run above 100 000 membership rows of an organization: loud, not silent;
-  - a row of a day the run does not compute keeps the id it was stored with; it gives no point that id.
+  - a row of a day the run does not compute keeps the id it was stored with.
 - A family writes its real rows at its own clock. A real row of a key that an EARLIER row of zeros superseded (the key
   comes back) is the newest row of its key only when the family's clock, cut to the unit of the table's `computed_at`
   column, is later than that row of zeros. The row of zeros is at the later of its family's clock and one unit after

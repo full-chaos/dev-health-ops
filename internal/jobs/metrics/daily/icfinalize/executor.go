@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // ErrOrganizationRequired is returned when ic_finalize is asked to compute a day
@@ -472,17 +473,18 @@ func (executor *Executor) computeForDay(
 		}
 	}
 
-	stats, err := LoadRollingStats(ctx, executor.conn, orgID, day, inactive)
+	// The landscape's team is the owner of the repository of each row (ruling
+	// D5985), as of the end of the day: a person gets a point in each team
+	// that owns a repository the person worked in, ranked among the people of
+	// that team's repositories. Membership plays no part in it.
+	owners, err := teamownership.OwnersByRepo(ctx, executor.conn, orgID, ownershipAsOf(day))
 	if err != nil {
 		return written, err
 	}
-	// A person who is a member of N active teams gets a point in EACH of
-	// them: the person's 30-day numbers are ranked among the members of each
-	// team (the key of the landscape holds the team). A person with no
-	// membership on the day gets no team here, whatever the stored rows of the
-	// 30 days hold (they are this family's own earlier output), and
-	// ComputeLandscape gives "unassigned" for a person with no team.
-	stats = StatsOfEachTeam(stats, activeTeamsOf)
+	stats, err := LoadRollingStats(ctx, executor.conn, orgID, day, owners)
+	if err != nil {
+		return written, err
+	}
 	landscape := ComputeLandscape(stats, nil)
 	landscapeWritten, err := executor.writeLandscape(ctx, orgID, day, computedAt, landscape)
 	if err != nil {
@@ -627,6 +629,14 @@ func (executor *Executor) SetTeamMapper(mapper TeamMapper) { executor.teamMapper
 // membership that ended before the day, or that starts after it, gives the
 // person no team on that day.
 func membershipAsOf(targetDay time.Time) time.Time { return targetDay }
+
+// ownershipAsOf is the instant the owners of the landscape are read at: the
+// last millisecond of the day (DateTime64(3)), so an ownership that starts
+// during the day counts for it and one that ended during it does not.
+func ownershipAsOf(targetDay time.Time) time.Time {
+	day := targetDay.UTC().Truncate(24 * time.Hour)
+	return day.Add(24*time.Hour - time.Millisecond)
+}
 
 // ComputeFinalizeFamily implements daily.NativeFinalizeFamilyExecutor.
 //

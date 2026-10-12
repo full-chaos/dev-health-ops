@@ -34,9 +34,15 @@ import (
 //     no membership row. The column is not what says who is a member.
 //   - none: no membership.
 //
+// That is the team of the person's ROW. The team of the person's POINTS is the
+// owner of the repository of the row (ruling D5985), with the same validity
+// rule: each person works in a repository of its own, owned with the same
+// validity as the membership but by a DIFFERENT team where one exists (so a
+// point that followed the membership would show), and roster/none own nothing.
+//
 // A person with no team on the day is unassigned. The same people are read
-// again for a day two days later, when the future membership is valid: the
-// time of the read is the day computed, not the time of the run.
+// again for a day two days later, when the future membership and ownership are
+// valid: the time of the read is the day computed, not the time of the run.
 func TestThePersonsTeamsOfTheLandscapeAreTheMembershipsValidAtTheDay(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
@@ -44,7 +50,6 @@ func TestThePersonsTeamsOfTheLandscapeAreTheMembershipsValidAtTheDay(t *testing.
 	day := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
 	twoDaysLater := day.AddDate(0, 0, 2)
 	longBefore := day.AddDate(0, 0, -30)
-	repo := uuid.MustParse("00000000-0000-4000-8000-0000000908c1")
 	exec := func(what, query string, args ...any) {
 		t.Helper()
 		if err := conn.Exec(ctx, query, args...); err != nil {
@@ -75,23 +80,45 @@ func TestThePersonsTeamsOfTheLandscapeAreTheMembershipsValidAtTheDay(t *testing.
 			org, provider, teamID, person, person+"@example.com", primary, validFrom, validTo, updatedAt,
 			[]string{person + "@example.com"})
 	}
+	// The owner of the person's repository: the membership's team swapped for
+	// another active team (jira:ENG <-> github:platform), others kept.
+	ownerOf := map[string]string{"jira:ENG": "github:platform", "github:platform": "jira:ENG"}
+	ownership := func(person, provider, teamID string, primary uint8, validFrom time.Time, validTo *time.Time, updatedAt time.Time) {
+		t.Helper()
+		owner := teamID
+		if swapped, ok := ownerOf[teamID]; ok {
+			owner = swapped
+		}
+		repoID := personRepo(org, person)
+		exec("insert repo of "+person, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, 'github', ?)`,
+			repoID, "acme/"+person, org, longBefore)
+		exec("insert ownership of "+person+" by "+owner, `INSERT INTO team_repo_ownership
+    (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, valid_from, valid_to, updated_at)
+    VALUES (?, 'github', ?, ?, ?, 'exact', 'native', ?, 10, ?, ?, ?)`,
+			org, owner, repoID, "acme/"+person, primary, validFrom, validTo, updatedAt)
+	}
+	both := func(person, provider, teamID string, primary uint8, validFrom time.Time, validTo *time.Time, updatedAt time.Time) {
+		t.Helper()
+		membership(person, provider, teamID, primary, validFrom, validTo, updatedAt)
+		ownership(person, provider, teamID, primary, validFrom, validTo, updatedAt)
+	}
 	open := (*time.Time)(nil)
 	dayBefore, dayAfter := day.AddDate(0, 0, -1), day.AddDate(0, 0, 1)
-	membership("two", "github", "github:platform", 0, longBefore, open, longBefore)
-	membership("two", "jira", "jira:ENG", 1, longBefore, open, longBefore)
-	membership("valid", "github", "github:platform", 1, longBefore, open, longBefore)
-	membership("closed", "jira", "jira:ENG", 1, longBefore, &dayBefore, longBefore)
-	membership("future", "jira", "jira:ENG", 1, dayAfter, open, longBefore)
+	both("two", "github", "github:platform", 0, longBefore, open, longBefore)
+	both("two", "jira", "jira:ENG", 1, longBefore, open, longBefore)
+	both("valid", "github", "github:platform", 1, longBefore, open, longBefore)
+	both("closed", "jira", "jira:ENG", 1, longBefore, &dayBefore, longBefore)
+	both("future", "jira", "jira:ENG", 1, dayAfter, open, longBefore)
 	// The two edges of the window: valid_from <= the day < valid_to.
-	membership("starts", "jira", "jira:ENG", 1, day, open, longBefore)
-	membership("ends", "jira", "jira:ENG", 1, longBefore, &day, longBefore)
+	both("starts", "jira", "jira:ENG", 1, day, open, longBefore)
+	both("ends", "jira", "jira:ENG", 1, longBefore, &day, longBefore)
 	// Two versions of one row (same key, same valid_from): the newer one
 	// closes the membership before the day.
-	membership("reopened", "jira", "jira:ENG", 1, longBefore, open, longBefore)
-	membership("reopened", "jira", "jira:ENG", 1, longBefore, &dayBefore, longBefore.Add(time.Hour))
-	membership("inactive", "jira", "ENG", 1, longBefore, open, longBefore)
-	membership("mixed", "jira", "ENG", 1, longBefore, open, longBefore)
-	membership("mixed", "gitlab", "gitlab:ops", 0, longBefore, open, longBefore)
+	both("reopened", "jira", "jira:ENG", 1, longBefore, open, longBefore)
+	both("reopened", "jira", "jira:ENG", 1, longBefore, &dayBefore, longBefore.Add(time.Hour))
+	both("inactive", "jira", "ENG", 1, longBefore, open, longBefore)
+	both("mixed", "jira", "ENG", 1, longBefore, open, longBefore)
+	both("mixed", "gitlab", "gitlab:ops", 0, longBefore, open, longBefore)
 
 	people := []string{"two", "valid", "closed", "future", "starts", "ends", "reopened", "inactive", "mixed", "roster", "none"}
 	// What the repository/user family writes for each person on each day.
@@ -101,7 +128,7 @@ func TestThePersonsTeamsOfTheLandscapeAreTheMembershipsValidAtTheDay(t *testing.
     (repo_id, day, author_email, identity_id, team_id, team_name, commits_count, loc_added, loc_deleted,
      prs_authored, prs_merged, loc_touched, delivery_units, computed_at, org_id)
     VALUES (?, ?, ?, ?, 'unassigned', 'Unassigned', 3, 40, 10, 1, 1, 50, 1, ?, ?)`,
-				repo, rowDay, person+"@example.com", person+"@example.com", rowDay.Add(30*time.Hour), org)
+				personRepo(org, person), rowDay, person+"@example.com", person+"@example.com", rowDay.Add(30*time.Hour), org)
 		}
 	}
 
@@ -167,9 +194,9 @@ WHERE org_id = ? AND as_of_day = ? AND `+live+` GROUP BY identity_id`, org, asOf
 	unassigned := []string{"unassigned"}
 	want := answers{
 		Points: map[string][]string{
-			"two": {"github:platform", "jira:ENG"}, "valid": {"github:platform"},
+			"two": {"github:platform", "jira:ENG"}, "valid": {"jira:ENG"},
 			"closed": unassigned, "future": unassigned, "reopened": unassigned, "inactive": unassigned,
-			"starts": {"jira:ENG"}, "ends": unassigned,
+			"starts": {"github:platform"}, "ends": unassigned,
 			"mixed": {"gitlab:ops"}, "roster": unassigned, "none": unassigned,
 		},
 		Rows: map[string]string{
@@ -190,7 +217,7 @@ WHERE org_id = ? AND as_of_day = ? AND `+live+` GROUP BY identity_id`, org, asOf
 	}
 
 	// Two days later the future membership is valid; nothing else changed.
-	want.Points["future"], want.Rows["future"] = []string{"jira:ENG"}, "jira:ENG"
+	want.Points["future"], want.Rows["future"] = []string{"github:platform"}, "jira:ENG"
 	if got := run(twoDaysLater); !reflect.DeepEqual(got, want) {
 		t.Errorf("two days later:\n got  %+v\n want %+v", got, want)
 	}
@@ -204,7 +231,9 @@ WHERE org_id = ? AND as_of_day = ? AND `+live+` GROUP BY identity_id`, org, asOf
 // TestAPersonWhoLeftATeamLeavesItsLandscape holds that the family's own
 // earlier output is never the source of a person's team. Each earlier row
 // here is a row the FAMILY wrote under a team in an earlier run, as in
-// production after the first run of a day.
+// production after the first run of a day. Each person works in a repository
+// of its own whose OWNERSHIP changes exactly as the membership does: the row
+// follows the membership, the point follows the owner (ruling D5985).
 //
 //   - leaver: a membership in alpha that ends one day after the first day; a
 //     row on the first day only. The run of the first day writes the row and
@@ -226,7 +255,6 @@ func TestAPersonWhoLeftATeamLeavesItsLandscape(t *testing.T) {
 	threeLater, tenLater := firstDay.AddDate(0, 0, 3), firstDay.AddDate(0, 0, 10)
 	longBefore := firstDay.AddDate(0, 0, -60)
 	leaves := firstDay.AddDate(0, 0, 1)
-	repo := uuid.MustParse("00000000-0000-4000-8000-0000000908e1")
 	exec := func(what, query string, args ...any) {
 		t.Helper()
 		if err := conn.Exec(ctx, query, args...); err != nil {
@@ -245,6 +273,13 @@ func TestAPersonWhoLeftATeamLeavesItsLandscape(t *testing.T) {
     (org_id, provider, team_id, member_id, raw_email, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, identity_facets)
     VALUES (?, ?, ?, ?, ?, 'native', 1, 100, 10, ?, ?, ?, ?)`,
 			org, provider, teamID, person, person+"@example.com", validFrom, validTo, updatedAt, []string{person + "@example.com"})
+		repoID := personRepo(org, person)
+		exec("insert repo of "+person, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, 'github', ?)`,
+			repoID, "acme/"+person, org, longBefore)
+		exec("insert ownership of "+person+" by "+teamID, `INSERT INTO team_repo_ownership
+    (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, valid_from, valid_to, updated_at)
+    VALUES (?, 'github', ?, ?, ?, 'exact', 'native', 1, 10, ?, ?, ?)`,
+			org, teamID, repoID, "acme/"+person, validFrom, validTo, updatedAt)
 	}
 	// What the repository/user family writes: a row with no team.
 	commits := func(day time.Time, person string) {
@@ -253,7 +288,7 @@ func TestAPersonWhoLeftATeamLeavesItsLandscape(t *testing.T) {
     (repo_id, day, author_email, identity_id, team_id, team_name, commits_count, loc_added, loc_deleted,
      prs_authored, prs_merged, loc_touched, delivery_units, computed_at, org_id)
     VALUES (?, ?, ?, ?, 'unassigned', 'Unassigned', 3, 40, 10, 1, 1, 50, 1, ?, ?)`,
-			repo, day, person+"@example.com", person+"@example.com", day.Add(30*time.Hour), org)
+			personRepo(org, person), day, person+"@example.com", person+"@example.com", day.Add(30*time.Hour), org)
 	}
 	open := (*time.Time)(nil)
 	membership("leaver", "github", "github:alpha", longBefore, &leaves, longBefore)
@@ -349,4 +384,10 @@ WHERE org_id = ? AND as_of_day = ? AND identity_id = 'closed@example.com' AND te
 	if liveUnderAlpha != 0 || retractedUnderAlpha != 3 {
 		t.Errorf("the old points of closed under github:alpha: %d live, %d retracted; want 0 and the 3 maps retracted", liveUnderAlpha, retractedUnderAlpha)
 	}
+}
+
+// personRepo is the one repository a person of these tests works in, so the
+// owners of that repository are the teams of the person's point.
+func personRepo(org, person string) uuid.UUID {
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(org+":repo-of:"+person))
 }

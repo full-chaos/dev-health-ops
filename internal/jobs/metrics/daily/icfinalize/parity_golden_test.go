@@ -166,6 +166,32 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 		return nil
 	})
 
+	// The landscape's team is the OWNER of the repository of a row (ruling
+	// D5985), not the reference's team_map. alice's and bob's repositories are
+	// owned by the team the reference maps them to, so their points, ranks and
+	// numbers are the reference's. carol has work items and no git row (the
+	// synthesized repository), which no team owns: her point is "unassigned",
+	// a DECLARED divergence from the reference's team-wi-c (a one-member team
+	// ranks 0.5 either way, so only the team id differs).
+	for _, repoID := range []uuid.UUID{repoAlice, repoBob} {
+		if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, 'github', ?)`,
+			repoID, "acme/"+repoID.String(), orgID, seedNow); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.Exec(ctx, `INSERT INTO team_repo_ownership
+        (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, valid_from, updated_at)
+        VALUES (?, 'github', 'team-shared-ab', ?, ?, 'exact', 'native', 1, 10, ?, ?)`,
+			orgID, repoID, "acme/"+repoID.String(), day.AddDate(0, 0, -60), seedNow); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unassigned := "unassigned"
+	for index := range golden.LandscapeRolling {
+		if golden.LandscapeRolling[index].IdentityID == "carol@example.com" {
+			golden.LandscapeRolling[index].TeamID = &unassigned
+		}
+	}
+
 	if _, err := executor.computeForDay(ctx, orgID, day, resolveTeam, nil, nil); err != nil {
 		t.Fatalf("computeForDay: %v", err)
 	}

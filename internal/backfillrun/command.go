@@ -148,7 +148,7 @@ func runVerb(ctx context.Context, env cli.Env) int {
 		return cli.ExitFailure
 	}
 
-	dsn, _, ok := resolveDatabase(env.Lookup, env.Stderr)
+	dsn, dsnSource, ok := resolveDatabase(env.Lookup, env.Stderr)
 	if !ok {
 		return cli.ExitFailure
 	}
@@ -171,7 +171,7 @@ func runVerb(ctx context.Context, env cli.Env) int {
 	logger.Info("backfill queued",
 		"since", window.Since.Format(time.RFC3339Nano), "before", window.Before.Format(time.RFC3339Nano),
 		"provider", trigger.Provider, "sync_targets", trigger.SyncTargets, "dataset_keys", trigger.DatasetKeys,
-		"enabled_sources", trigger.EnabledSources, "occurrence_id", trigger.OccurrenceID)
+		"enabled_sources", trigger.EnabledSources, "occurrence_id", trigger.OccurrenceID, "database_source", dsnSource)
 	if *noWait {
 		fmt.Fprintf(env.Stdout, "Backfill queued: occurrence_id=%s\n", trigger.OccurrenceID)
 		return cli.ExitOK

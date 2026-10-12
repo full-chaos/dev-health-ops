@@ -462,6 +462,17 @@ func TestMigrateRolesMonitorLoginIsPgMonitorOnly(t *testing.T) {
 	if code, output = run("--check"); code != 0 {
 		t.Fatalf("--check must pass again once the extra grant is revoked: exit %d\n%s", code, output)
 	}
+	// CREATE on schema public arriving only through PUBLIC (the pre-v15 default) lets the
+	// login create tables, so it is a problem for this login (r1 P1).
+	if _, err := admin.Exec(ctx, `GRANT CREATE ON SCHEMA public TO PUBLIC`); err != nil {
+		t.Fatal(err)
+	}
+	if code, output = run("--check"); code != 1 || !strings.Contains(output, "monitor") {
+		t.Fatalf("CREATE on schema public through PUBLIC must fail --check: exit %d\n%s", code, output)
+	}
+	if _, err := admin.Exec(ctx, `REVOKE CREATE ON SCHEMA public FROM PUBLIC`); err != nil {
+		t.Fatal(err)
+	}
 	// Membership: an extra role, and a missing pg_monitor, are each a problem.
 	if _, err := admin.Exec(ctx, `CREATE ROLE extra_group NOLOGIN; GRANT extra_group TO otel_pg_monitor`); err != nil {
 		t.Fatal(err)

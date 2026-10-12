@@ -482,10 +482,12 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 				return nil, nil, err
 			}
 			problems = append(problems, tableProblems...)
-			// No USAGE check (the login is not meant to hold one); CREATE on schema
-			// public in its own name is still a problem.
-			if direct {
-				problems = append(problems, Problem{entry.label, "holds CREATE on schema public in its own name"})
+			// No USAGE check (the login is not meant to hold one).
+			// CREATE through PUBLIC counts too (PostgreSQL before v15 grants it by
+			// default): unlike the runtime logins, this one is documented as holding
+			// no schema privilege at all, so the effective privilege is the check.
+			if direct || create {
+				problems = append(problems, Problem{entry.label, "can CREATE in schema public (in its own name or through PUBLIC)"})
 			}
 			continue
 		}

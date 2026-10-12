@@ -5,6 +5,7 @@ package daily
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -481,11 +482,21 @@ func TestTheOwnerOfAnItemsDayHoldsForEachProviderAndKindOfFact(t *testing.T) {
 
 				fromBackstop := queryItemDayRows(t, ctx, conn, backstopOrg, "backstop")
 				fromDaily := queryItemDayRows(t, ctx, conn, dailyOrg, "daily")
-				if primary := primaryTeamOf(fromDaily); primary != "team-old" {
-					t.Fatalf("the daily family gives team %q, want team-old: the seed does not give the item a team through %s (rows %+v)", primary, kind, fromDaily)
+				// CHAOS-9414: membership is provenance only, so an item whose only
+				// team signal is the assignee's membership has NO primary team;
+				// the member's team is a non-primary provenance row.
+				wantTeam := "team-old"
+				if kind == "membership" {
+					wantTeam = ""
 				}
-				if primary := primaryTeamOf(fromBackstop); primary != "team-old" {
-					t.Fatalf("the backstop gives team %q, want team-old, the team of the item's day (rows %+v)", primary, fromBackstop)
+				if primary := primaryTeamOf(fromDaily); primary != wantTeam {
+					t.Fatalf("the daily family gives team %q, want %q: the seed does not give the item a team through %s (rows %+v)", primary, wantTeam, kind, fromDaily)
+				}
+				if primary := primaryTeamOf(fromBackstop); primary != wantTeam {
+					t.Fatalf("the backstop gives team %q, want %q, the team of the item's day (rows %+v)", primary, wantTeam, fromBackstop)
+				}
+				if kind == "membership" && !strings.Contains(fmt.Sprint(fromDaily), "Team:team-old Source:assignee_membership Primary:0") {
+					t.Fatalf("the daily family lost the membership provenance row (rows %+v)", fromDaily)
 				}
 				if fmt.Sprint(fromBackstop) != fmt.Sprint(fromDaily) {
 					t.Fatalf("the two writers give the item different rows:\n  backstop %+v\n  daily    %+v", fromBackstop, fromDaily)

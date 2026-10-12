@@ -32,13 +32,16 @@ import (
 // inactive team row is what every resolver already reads as "takes nothing".
 //
 // While the team is there it owns its repositories and holds the person's
-// row and landscape points. After the delete:
+// row (membership). The person's landscape points are under the OWNERS of the
+// repository the person worked in (ruling D5985): the shared repository has
+// two owners, so a point in each. After the delete:
 //
 //   - the repository it shared goes to the other owner, which ranked lower;
 //   - the repository only it owned has no owner;
 //   - the person's row of the day is written again as unassigned (id and
-//     name), the person's points are under unassigned, and each point that
-//     was stored under the deleted id holds a retraction row and no measure.
+//     name), the person's point is under the remaining owner only, and each
+//     point that was stored under the deleted id holds a retraction row and
+//     no measure.
 //
 // The file uses no symbol of the delete, so the same file runs on a tree
 // where the delete removes the row (there the team keeps everything).
@@ -72,6 +75,12 @@ func TestATeamAnAdminDeletedIsNoTeam(t *testing.T) {
 			}
 			shared := uuid.NewSHA1(uuid.NameSpaceURL, []byte("shared:"+origin))
 			onlyGone := uuid.NewSHA1(uuid.NameSpaceURL, []byte("only:"+origin))
+			for _, repo := range []uuid.UUID{shared, onlyGone} {
+				if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+					repo, "acme/"+repo.String(), org, teamid.StoredProvider(origin), owned); err != nil {
+					t.Fatal(err)
+				}
+			}
 			for _, claim := range []struct {
 				team    string
 				repo    uuid.UUID
@@ -143,7 +152,7 @@ WHERE org_id = ? AND as_of_day = ? AND identity_id = ? AND `+live, org, day, per
 			}
 
 			before := read()
-			if want := (state{Owners: map[string]string{"shared": gone, "only": gone}, Row: gone + " / Platform", Points: []string{gone}}); !reflect.DeepEqual(before, want) {
+			if want := (state{Owners: map[string]string{"shared": gone, "only": gone}, Row: gone + " / Platform", Points: sortedTeams(gone, stays)}); !reflect.DeepEqual(before, want) {
 				t.Fatalf("while the team is there: %+v, want %+v", before, want)
 			}
 
@@ -162,7 +171,7 @@ WHERE org_id = ? AND as_of_day = ? AND identity_id = ? AND `+live, org, day, per
 			}
 
 			after := read()
-			if want := (state{Owners: map[string]string{"shared": stays}, Row: "unassigned / Unassigned", Points: []string{"unassigned"}}); !reflect.DeepEqual(after, want) {
+			if want := (state{Owners: map[string]string{"shared": stays}, Row: "unassigned / Unassigned", Points: []string{stays}}); !reflect.DeepEqual(after, want) {
 				t.Errorf("after the delete: %+v, want %+v", after, want)
 			}
 			var liveUnderGone, retractedUnderGone uint64
@@ -175,4 +184,10 @@ WHERE org_id = ? AND as_of_day = ? AND identity_id = ? AND team_id = ?`, org, da
 			}
 		})
 	}
+}
+
+func sortedTeams(ids ...string) []string {
+	out := append([]string(nil), ids...)
+	sort.Strings(out)
+	return out
 }

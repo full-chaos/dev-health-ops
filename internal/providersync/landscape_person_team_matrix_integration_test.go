@@ -17,22 +17,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
-// TestThePersonsTeamOfTheLandscapeComesFromTheMembershipRowOfEachProvider is
-// the provider matrix of the landscape's person-to-team rule for GitHub,
-// GitLab and Linear (the Jira line is in package atlassianteams, whose
-// collector produces the Jira membership rows). Each membership row is made
-// by the provider's own normalizer from a member as the provider's API gives
-// it, and stored by the provider's own writer: no row is written by hand.
+// TestAMembershipGivesTheRowATeamAndTheLandscapeNone is the provider matrix of
+// the membership rule for GitHub, GitLab and Linear (the Jira line is in
+// package atlassianteams, whose collector produces the Jira membership rows).
+// Each membership row is made by the provider's own normalizer from a member
+// as the provider's API gives it, and stored by the provider's own writer: no
+// row is written by hand.
 //
 // The person commits under the email the provider reports. On a day after the
-// sync the person's point and row are under the team of the membership. On a
-// day BEFORE the sync the membership is not valid yet (its valid_from is the
-// time of the sync), so the person has no team: the same answer the work of
-// that day gets from this membership.
+// sync the person's user row is under the team of the membership; on a day
+// BEFORE the sync the membership is not valid yet, so the row has no team. A
+// member the provider reports with no email stays unassigned.
 //
-// A member the provider reports with no email is stored with the provider
-// name only, which no commit email equals: that person stays unassigned.
-func TestThePersonsTeamOfTheLandscapeComesFromTheMembershipRowOfEachProvider(t *testing.T) {
+// The landscape point follows neither: its team is the owner of the
+// repository (ruling D5985), and no team owns this repository, so every point
+// is "unassigned" on both days, the member's included.
+func TestAMembershipGivesTheRowATeamAndTheLandscapeNone(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 	resolver := identityalias.Load("")
@@ -161,9 +161,136 @@ WHERE org_id = ? AND day = ? GROUP BY author_email`, org, day)
 			if got := read(dayBefore); !reflect.DeepEqual(got, want) {
 				t.Errorf("the day before the sync:\n got  %v\n want %v", got, want)
 			}
-			want["point of "+withEmail], want["row of "+withEmail] = []string{teamID}, []string{teamID}
+			want["row of "+withEmail] = []string{teamID}
 			if got := read(dayAfter); !reflect.DeepEqual(got, want) {
 				t.Errorf("a day after the sync:\n got  %v\n want %v", got, want)
+			}
+		})
+	}
+}
+
+// TestTheLandscapeTeamIsTheOwnerOfTheRepositoryOfEachProvider is the provider
+// matrix of the landscape's team rule (ruling D5985): a person's point is in
+// the team that OWNS the repository the person worked in, for an ownership
+// row of each provider made by that provider's own producer:
+//
+//   - github: a team's access grant (normalizeGitHubTeamRepoOwnership, written
+//     by the team catalog writer; repo_id NULL, resolved by the repos name join);
+//   - gitlab: a group's project grant (normalizeGitLabOwnershipRow) and the
+//     project's merge request, derived into repository ownership;
+//   - jira and linear: a team's project, an issue of that project and the
+//     issue's native link to a pull request of the repository
+//     (work_graph_issue_pr), derived into repository ownership.
+//
+// In the same organization a second person works only in a repository no
+// team owns and is "unassigned", whatever the stored team id of the row says,
+// and a person of the owned repository who also worked in the unowned one has
+// a point in each: the team holds only the person's work in its repository.
+func TestTheLandscapeTeamIsTheOwnerOfTheRepositoryOfEachProvider(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	now := time.Now().UTC()
+	day := now.Truncate(24 * time.Hour)
+	grantedAt := now.Add(-time.Hour)
+
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		t.Run(provider, func(t *testing.T) {
+			org := "org-landscape-owner-" + provider
+			owned := uuid.NewSHA1(uuid.NameSpaceURL, []byte("owned:"+provider))
+			unowned := uuid.NewSHA1(uuid.NameSpaceURL, []byte("unowned:"+provider))
+			repoProvider := provider
+			if provider == "jira" || provider == "linear" {
+				repoProvider = "github"
+			}
+			if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`,
+				owned, "acme/owned-"+provider, org, repoProvider, now, unowned, "acme/unowned-"+provider, org, repoProvider, now); err != nil {
+				t.Fatal(err)
+			}
+
+			var teamID string
+			switch provider {
+			case "github":
+				row, err := normalizeGitHubTeamRepoOwnership(org, "platform", "acme/owned-github", grantedAt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := (GitHubTeamCatalogClickHouseEffects{Conn: conn}).WriteTeamRepoOwnership(ctx, org, []githubTeamRepoOwnershipRow{row}); err != nil {
+					t.Fatal(err)
+				}
+				teamID = row.TeamID
+			case "gitlab":
+				teamID = gitlabTeamID("acme/ops")
+				row, ok := normalizeGitLabOwnershipRow(org, teamID, "acme/owned-gitlab", 100, grantedAt)
+				if !ok {
+					t.Fatal("the GitLab normalizer refused the project grant")
+				}
+				if err := (GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}).writeOwnership(ctx, []gitlabTeamCatalogOwnershipRow{row}); err != nil {
+					t.Fatal(err)
+				}
+				seedWorkItemOfType(t, ctx, conn, org, "gitlab:acme/owned-gitlab!1", "gitlab", "merge_request", owned, row.ProjectID.String(), grantedAt)
+			case "jira", "linear":
+				teamID = provider + "-team-core"
+				seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-core", teamID, true, grantedAt)
+				issue := provider + ":CORE-1"
+				seedWorkItem(t, ctx, conn, org, issue, provider, uuid.Nil, "proj-core", grantedAt)
+				seedWorkGraphIssuePR(t, ctx, conn, org, owned, issue, 7, grantedAt)
+			}
+			if provider != "github" {
+				if _, _, _, _, err := (TeamRepoOwnershipDerivationService{Conn: conn}).Derive(ctx, org); err != nil {
+					t.Fatalf("derive the repository ownership: %v", err)
+				}
+			}
+
+			// What the repository/user family writes: the stored team id is a
+			// decoy the landscape must not read.
+			for _, row := range []struct {
+				repo   uuid.UUID
+				person string
+				loc    uint32
+			}{
+				{owned, "owner-dev@example.com", 50},
+				{unowned, "owner-dev@example.com", 7},
+				{unowned, "other@example.com", 9},
+			} {
+				if err := conn.Exec(ctx, `INSERT INTO user_metrics_daily
+    (repo_id, day, author_email, identity_id, team_id, team_name, commits_count, loc_added, loc_deleted,
+     prs_authored, prs_merged, loc_touched, delivery_units, computed_at, org_id)
+    VALUES (?, ?, ?, ?, 'stored-decoy', 'Stored Decoy', 3, ?, 0, 1, 1, ?, 1, ?, ?)`,
+					row.repo, day, row.person, row.person, row.loc, row.loc, now, org); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if _, err := daily.NewICFinalizeExecutor(conn).ComputeFinalizeFamily(ctx, daily.Run{
+				ID: uuid.NewString(), OrganizationID: org, TargetDay: day,
+			}); err != nil {
+				t.Fatalf("ic_finalize: %v", err)
+			}
+			points, err := conn.Query(ctx, `SELECT identity_id, toString(team_id), churn_loc_30d FROM ic_landscape_rolling_30d FINAL
+WHERE org_id = ? AND as_of_day = ? AND map_name = 'churn_throughput' AND (x_norm != 0 OR y_norm != 0)`, org, day)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer points.Close()
+			got := map[string]uint64{}
+			for points.Next() {
+				var person, team string
+				var churn uint64
+				if err := points.Scan(&person, &team, &churn); err != nil {
+					t.Fatal(err)
+				}
+				got[person+" in "+team] = churn
+			}
+			if err := points.Err(); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]uint64{
+				"owner-dev@example.com in " + teamID:  50,
+				"owner-dev@example.com in unassigned": 7,
+				"other@example.com in unassigned":     9,
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("landscape points (person in team: churn):\n got  %v\n want %v", got, want)
 			}
 		})
 	}

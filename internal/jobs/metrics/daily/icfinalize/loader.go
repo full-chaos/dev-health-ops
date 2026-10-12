@@ -2,15 +2,16 @@ package icfinalize
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
-	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
-// RollingStat is one row of the 30-day rolling window, one per identity.
+// RollingStat is one row of the 30-day rolling window, one per (owning team,
+// identity).
 type RollingStat struct {
 	IdentityID      string
 	TeamID          string
@@ -43,33 +44,56 @@ const rollingWindowDays = 29
 // (org_id, repo_id, author_email, day) — read from the current helper, never
 // from a migration comment.
 //
-// THE TEAM OF A PERSON is a difference from the reference, which takes
-// any(team_id): whichever stored value ClickHouse reaches first among the
-// person's rows of the 30 days. Those rows are of many days and repositories,
-// and a row of a day that was not computed again can hold the id of a team
-// that was since replaced. any() could give the person that id, and a
-// different id on the next run over the same rows. The statement takes the
-// team of the person's NEWEST row instead (by computed_at; the day and the
-// repository id break a tie, so two runs over the same rows agree), and
-// LoadRollingStats then drops an inactive id from it.
+// THE TEAM is the team that OWNS the repository of a row (ruling D5985), never
+// the person's membership and never the team id stored on the row: a person's
+// numbers in a team are the person's rows in the repositories the team owns.
+// A row of a repository owned by several teams counts in each of them (each
+// team sees its own repositories whole, as a team scope of the query API
+// does). A row of a repository no team owns, and a row of a person with no
+// git row (the synthesized repository, which no team owns), is "unassigned".
+// A blank or "unknown" identity is no person and keeps a blank team, as in
+// ComputeLandscape; its rows join no owner (the join key is blank), so a row of
+// a repository with several owners is still counted once. The owners come in as two parallel arrays (owner_repo_ids,
+// owner_team_ids) from teamownership.OwnersByRepo.
 var rollingStatsSQL = `
 SELECT
+    owner_team,
     identity_id,
-    argMax(team_id, tuple(computed_at, day, repo_id)) AS team_id,
     sum(loc_touched)            AS churn_loc_30d,
     sum(delivery_units)         AS delivery_units_30d,
     median(cycle_p50_hours)     AS cycle_p50_30d_hours,
     max(work_items_active)      AS wip_max_30d
 FROM (
-    SELECT *
-    FROM user_metrics_daily
-    ORDER BY computed_at DESC
-    LIMIT 1 BY org_id, repo_id, author_email, day
-) AS user_metrics_daily
-WHERE day >= {start:Date} AND day <= {end:Date}
-  AND org_id = {org_id:String}
-  AND ` + liverow.Predicate("user_metrics_daily", "user_metrics_daily") + `
-GROUP BY identity_id`
+    SELECT
+        u.identity_id AS identity_id,
+        if(u.identity_id IN ('', 'unknown'), '',
+           if(ow.owner_team_id = '', '` + unassignedTeamID + `', ow.owner_team_id)) AS owner_team,
+        u.loc_touched AS loc_touched,
+        u.delivery_units AS delivery_units,
+        u.cycle_p50_hours AS cycle_p50_hours,
+        u.work_items_active AS work_items_active
+    FROM (
+        SELECT *
+        FROM (
+            SELECT *
+            FROM user_metrics_daily
+            ORDER BY computed_at DESC
+            LIMIT 1 BY org_id, repo_id, author_email, day
+        ) AS user_metrics_daily
+        WHERE day >= {start:Date} AND day <= {end:Date}
+          AND org_id = {org_id:String}
+          AND ` + liverow.Predicate("user_metrics_daily", "user_metrics_daily") + `
+    ) AS u
+    LEFT JOIN (
+        SELECT tupleElement(pair, 1) AS owner_repo_id, tupleElement(pair, 2) AS owner_team_id
+        FROM (
+            SELECT arrayJoin(arrayZip(
+                {owner_repo_ids:Array(String)}, {owner_team_ids:Array(String)}
+            )) AS pair
+        )
+    ) AS ow ON ow.owner_repo_id = if(u.identity_id IN ('', 'unknown'), '', toString(u.repo_id))
+)
+GROUP BY owner_team, identity_id`
 
 // LoadRollingStats reads the 30-day rolling window for one organization.
 //
@@ -87,19 +111,21 @@ GROUP BY identity_id`
 // depending on it would force every caller -- including the executor, which
 // holds the narrow one -- to supply capabilities it does not use.
 //
-// inactive is the organization's inactive team ids. A person whose newest row
-// holds one gets no team here (the stored id names a team that was replaced):
-// ComputeLandscape then gives the person the mapped team, or "unassigned".
+// owners is teamownership.OwnersByRepo as of the end of asOf's day: the active
+// owning teams of each repository (an inactive team owns nothing).
 func LoadRollingStats(
-	ctx context.Context, conn Conn, orgID string, asOf time.Time, inactive teamactive.Inactive,
+	ctx context.Context, conn Conn, orgID string, asOf time.Time, owners map[string][]string,
 ) ([]RollingStat, error) {
 	end := asOf.UTC().Truncate(24 * time.Hour)
 	start := end.AddDate(0, 0, -rollingWindowDays)
+	ownerRepoIDs, ownerTeamIDs := ownerPairs(owners)
 
 	rows, err := conn.Query(ctx, rollingStatsSQL,
 		clickhouse.Named("start", start.Format("2006-01-02")),
 		clickhouse.Named("end", end.Format("2006-01-02")),
 		clickhouse.Named("org_id", orgID),
+		clickhouse.Named("owner_repo_ids", ownerRepoIDs),
+		clickhouse.Named("owner_team_ids", ownerTeamIDs),
 	)
 	if err != nil {
 		return nil, err
@@ -120,13 +146,10 @@ func LoadRollingStats(
 		var churnLOC30d, deliveryUnits30 uint64
 		var wipMax30d uint32
 		if err := rows.Scan(
-			&stat.IdentityID, &stat.TeamID, &churnLOC30d,
+			&stat.TeamID, &stat.IdentityID, &churnLOC30d,
 			&deliveryUnits30, &stat.CycleP5030dHrs, &wipMax30d,
 		); err != nil {
 			return nil, err
-		}
-		if inactive.Has(stat.TeamID) {
-			stat.TeamID = ""
 		}
 		stat.ChurnLOC30d = float64(churnLOC30d)
 		stat.DeliveryUnits30 = float64(deliveryUnits30)
@@ -134,4 +157,22 @@ func LoadRollingStats(
 		stats = append(stats, stat)
 	}
 	return stats, rows.Err()
+}
+
+// ownerPairs flattens the owners of each repository into the two parallel
+// arrays rollingStatsSQL joins on, in repository then team order.
+func ownerPairs(owners map[string][]string) (repoIDs, teamIDs []string) {
+	keys := make([]string, 0, len(owners))
+	for repoID := range owners {
+		keys = append(keys, repoID)
+	}
+	sort.Strings(keys)
+	repoIDs, teamIDs = []string{}, []string{}
+	for _, repoID := range keys {
+		for _, teamID := range owners[repoID] {
+			repoIDs = append(repoIDs, repoID)
+			teamIDs = append(teamIDs, teamID)
+		}
+	}
+	return repoIDs, teamIDs
 }

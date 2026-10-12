@@ -5,6 +5,7 @@ package daily
 import (
 	"context"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -33,13 +34,14 @@ import (
 //
 // The family reads every newest row of the day back and writes it again, and
 // it gives each person of the trailing 30 days a point in the landscape of the
-// day. After the run no row of the day and no live point may sit under ENG:
-// such a row is written again under the team of the person's membership, or as
-// unassigned. The same holds for a stored ACTIVE team: the team a row was
-// stored with is the family's own earlier output and is never the person's
-// team, so erin, henry and ivy, who are members of no team, are unassigned. A
-// row of a day the run does not compute keeps its stored id, and it gives no
-// point that id.
+// day. After the run no row of the day and no live point may sit under ENG: a
+// row is written again under the team of the person's membership, or as
+// unassigned, and a point is under the active OWNER of the repository of the
+// person's rows (ruling D5985). repoOld is owned by ENG only, so it has no
+// active owner; repoLive is owned by ENG and github:platform, so its active
+// owner is github:platform. A stored team id -- inactive or active -- is never
+// a source of either. A row of a day the run does not compute keeps its stored
+// id; its point is under the repository's owner.
 func TestTheLandscapeFinalizeGivesNoPersonAnInactiveTeam(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
@@ -78,6 +80,20 @@ func TestTheLandscapeFinalizeGivesNoPersonAnInactiveTeam(t *testing.T) {
     VALUES (?, ?, ?, ?, ?, 'native', ?, ?, ?, ?, ?, ?, ?)`,
 		org, "github", "github:platform", "frank", "frank@example.com", uint8(1), uint16(100), int32(10), t0, (*time.Time)(nil), t0,
 		[]string{"frank@example.com"})
+
+	for _, repo := range []uuid.UUID{repoOld, repoLive} {
+		exec("insert repo", `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, 'github', ?)`,
+			repo, "acme/"+repo.String(), org, t0)
+	}
+	for _, claim := range []struct {
+		team string
+		repo uuid.UUID
+	}{{"ENG", repoOld}, {"ENG", repoLive}, {"github:platform", repoLive}} {
+		exec("insert ownership", `INSERT INTO team_repo_ownership
+    (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, valid_from, updated_at)
+    VALUES (?, 'github', ?, ?, ?, 'exact', 'native', 1, 10, ?, ?)`,
+			org, claim.team, claim.repo, "acme/"+claim.repo.String(), t0, t0)
+	}
 
 	userRow := func(repo uuid.UUID, rowDay time.Time, person, team string, computedAt time.Time) {
 		t.Helper()
@@ -135,6 +151,7 @@ WHERE org_id = ? AND as_of_day = ? AND `+teamkeytables.ICLandscapeRolling30d.Liv
 			if err := points.Scan(&person, &teams); err != nil {
 				t.Fatal(err)
 			}
+			sort.Strings(teams)
 			out.Points[person] = teams
 		}
 		if err := points.Err(); err != nil {
@@ -169,9 +186,9 @@ WHERE org_id = ? AND day = ? AND author_email = 'dave@example.com'`, org, tenDay
 
 	want := answers{
 		Points: map[string][]string{
-			"alice@example.com": {"unassigned"}, "bob@example.com": {"unassigned"}, "carol@example.com": {"unassigned"},
-			"dave@example.com": {"unassigned"}, "erin@example.com": {"unassigned"}, "frank@example.com": {"github:platform"},
-			"henry@example.com": {"unassigned"}, "ivy@example.com": {"unassigned"},
+			"alice@example.com": {"unassigned"}, "bob@example.com": {"unassigned"}, "carol@example.com": {"github:platform"},
+			"dave@example.com": {"github:platform"}, "erin@example.com": {"github:platform"}, "frank@example.com": {"github:platform"},
+			"henry@example.com": {"github:platform"}, "ivy@example.com": {"github:platform", "unassigned"},
 		},
 		// A row of a person with no team gets the fallback id AND its name,
 		// whatever it was stored with. A member's row holds the name of the team its
@@ -206,18 +223,19 @@ WHERE org_id = ? AND as_of_day = ? AND team_id = 'ENG' AND `+teamkeytables.ICLan
 }
 
 // TestTheEdgesOfTheInactiveTeamRuleOfTheLandscapeFinalize holds four edges of
-// the rule by what the family writes, on real ClickHouse:
+// the rule by what the family writes, on real ClickHouse. A point's team is the
+// active OWNER of the repository of the person's rows (ruling D5985):
 //
 //   - The window is the day and the 29 days before it: a person whose only
 //     row is 29 days before gets a point, a person whose only row is 30 days
 //     before gets none.
-//   - A team is inactive by its NEWEST teams row: a member of a team that was
-//     set inactive and active again has that team, and a member of a team
-//     that was active and is inactive now has none.
+//   - A team is inactive by its NEWEST teams row: the owner of a repository
+//     that was set inactive and active again owns it, and an owner that was
+//     active and is inactive now owns nothing.
 //   - The rule is of ONE organization: an id that is inactive in one
-//     organization and active in another is a team for a member in the other.
-//   - The roster column of a team gives nobody a team: a person named there,
-//     with no membership row, is unassigned.
+//     organization and active in another owns its repository in the other.
+//   - A membership gives nobody a point's team: a member of an active team who
+//     works in a repository no team owns is unassigned.
 func TestTheEdgesOfTheInactiveTeamRuleOfTheLandscapeFinalize(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
@@ -243,13 +261,13 @@ func TestTheEdgesOfTheInactiveTeamRuleOfTheLandscapeFinalize(t *testing.T) {
     VALUES (?, ?, ?, ?, ?, ?, ?, 'jira', ?)`,
 			id, uuid.NewSHA1(uuid.NameSpaceURL, []byte(orgID+id)), "Team "+id, []string{}, at, at, orgID, active)
 	}
-	userRow := func(orgID string, rowDay time.Time, person, teamID string) {
+	userRow := func(orgID string, rowRepo uuid.UUID, rowDay time.Time, person, teamID string) {
 		t.Helper()
 		exec("insert user metrics of "+person, `INSERT INTO user_metrics_daily
     (repo_id, day, author_email, identity_id, team_id, team_name, commits_count, loc_added, loc_deleted,
      prs_authored, prs_merged, loc_touched, delivery_units, computed_at, org_id)
     VALUES (?, ?, ?, ?, ?, ?, 3, 40, 10, 1, 1, 50, 1, ?, ?)`,
-			repo, rowDay, person, person, teamID, "Team "+teamID, stored, orgID)
+			rowRepo, rowDay, person, person, teamID, "Team "+teamID, stored, orgID)
 	}
 
 	// Two versions of one team row must both be in the table when the family
@@ -267,6 +285,23 @@ func TestTheEdgesOfTheInactiveTeamRuleOfTheLandscapeFinalize(t *testing.T) {
 	// The same id is an active team of another organization.
 	team(otherOrg, "ENG", 1, t0)
 
+	repoOf := map[string]uuid.UUID{}
+	owns := func(orgID, teamID string) uuid.UUID {
+		t.Helper()
+		owned := uuid.NewSHA1(uuid.NameSpaceURL, []byte(orgID+":"+teamID))
+		exec("insert repo of "+teamID, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, 'github', ?)`,
+			owned, "acme/"+teamID, orgID, t0)
+		exec("insert ownership of "+teamID, `INSERT INTO team_repo_ownership
+    (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, valid_from, updated_at)
+    VALUES (?, 'github', ?, ?, ?, 'exact', 'native', 1, 10, ?, ?)`,
+			orgID, teamID, owned, "acme/"+teamID, t0, t0)
+		return owned
+	}
+	repoOf["back-again"] = owns(org, "back-again")
+	repoOf["closed-later"] = owns(org, "closed-later")
+	repoOf["ENG"] = owns(org, "ENG")
+	repoOf["other ENG"] = owns(otherOrg, "ENG")
+
 	membership := func(orgID, person, teamID string) {
 		t.Helper()
 		exec("insert membership of "+person, `INSERT INTO team_memberships
@@ -274,18 +309,15 @@ func TestTheEdgesOfTheInactiveTeamRuleOfTheLandscapeFinalize(t *testing.T) {
     VALUES (?, 'jira', ?, ?, ?, 'native', 1, 100, 10, ?, NULL, ?, ?)`,
 			orgID, teamID, person, person, t0, t0, []string{person})
 	}
-	membership(org, "back-again@example.com", "back-again")
-	membership(org, "closed-later@example.com", "closed-later")
-	membership(org, "eng@example.com", "ENG")
-	membership(otherOrg, "other@example.com", "ENG")
+	membership(org, "member@example.com", "github:platform")
 
-	userRow(org, back(29), "edge-in@example.com", "ENG")
-	userRow(org, back(30), "edge-out@example.com", "ENG")
-	userRow(org, back(3), "back-again@example.com", "unassigned")
-	userRow(org, back(3), "closed-later@example.com", "unassigned")
-	userRow(org, back(3), "eng@example.com", "unassigned")
-	userRow(org, back(5), "member@example.com", "unassigned")
-	userRow(otherOrg, day, "other@example.com", "unassigned")
+	userRow(org, repoOf["back-again"], back(29), "edge-in@example.com", "ENG")
+	userRow(org, repoOf["back-again"], back(30), "edge-out@example.com", "ENG")
+	userRow(org, repoOf["back-again"], back(3), "back-again@example.com", "unassigned")
+	userRow(org, repoOf["closed-later"], back(3), "closed-later@example.com", "unassigned")
+	userRow(org, repoOf["ENG"], back(3), "eng@example.com", "unassigned")
+	userRow(org, repo, back(5), "member@example.com", "unassigned")
+	userRow(otherOrg, repoOf["other ENG"], day, "other@example.com", "unassigned")
 
 	points := func(orgID string) map[string][]string {
 		t.Helper()
@@ -322,11 +354,12 @@ WHERE org_id = ? AND as_of_day = ? AND `+teamkeytables.ICLandscapeRolling30d.Liv
 	}
 
 	want := map[string][]string{
-		"edge-in@example.com":      {"unassigned"},
+		"edge-in@example.com":      {"back-again"},
 		"back-again@example.com":   {"back-again"},
 		"closed-later@example.com": {"unassigned"},
-		// A member of ENG, which is inactive in this organization.
-		"eng@example.com":    {"unassigned"},
+		// In ENG's repository; ENG is inactive in this organization.
+		"eng@example.com": {"unassigned"},
+		// A member of an active team, in a repository no team owns.
 		"member@example.com": {"unassigned"},
 		// edge-out has no row in the window: no point.
 	}

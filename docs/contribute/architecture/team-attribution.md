@@ -1129,6 +1129,13 @@ controls: a link that is gone and an explicit empty list are closed).
 
 #### 0.4d A project of several teams: every active team takes the item (CHAOS-8905)
 
+> **Rule of record: one main owner, lesser owners keep their own share (chris, 2026-10-12, verbatim):** *"it's not
+> 'equal shares', the entire history keeps one team as the main owner, and the others who have a lesser percentage
+> share as the share they have."* Open: the stored ownership row carries no share value (`team_repo_ownership` has
+> `is_primary`, `specificity`, `priority`), so what a share is measured on is not yet decided in code. The text below
+> describes the code as it is on main. Where it says "same rank", "owners at the winner's rank" or "shared
+> equally", it does not yet implement this rule (tracked in CHAOS-9407).
+
 A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
 teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active
 team that owns the project, not of the first team by id. The item's own native team still wins over its

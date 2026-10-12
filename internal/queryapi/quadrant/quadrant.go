@@ -15,10 +15,12 @@
 // including the per-chart attribution quirk it does not try to fix -- the
 // cycle_throughput quadrant's x (cycle_time) and y (throughput) axes read
 // team attribution via the primary-team-attribution join
-// (work_item_team_attributions, is_primary=1), while every other quadrant
-// definition (churn_throughput, wip_throughput, review_load_latency) reads
-// the stored team_id column directly off the daily rollup tables. Any
-// change to that split is a product decision, not a porting one.
+// (work_item_team_attributions, is_primary=1), and wip_throughput's wip
+// axis reads the stored team_id of work_item_metrics_daily. One declared
+// difference (D5978): the team-grain user_metrics_daily metrics (review load,
+// review latency, churn) group by the repository's owning team
+// (MetricSpec.OwnerTeam), never by the stored team_id, which is the person's
+// membership team.
 //
 // SCOPE: all four group scopes Python serves (team, repo, person, and the
 // org/service aliases _group_scope folds into team) are now ported. The

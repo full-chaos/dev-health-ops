@@ -606,7 +606,8 @@ func (adapter *ClickHouseQueryAdapter) observeDedupStatement(ctx context.Context
 // rows of the 29 days before the chart's first day through its last day, of
 // the chart's repositories when it has a repository filter.
 func wholePersonUserRowsGuardQuery(spec ChartSpec) (string, []any) {
-	read := tableReads["user_metrics_daily"]
+	const table = "user_metrics_daily"
+	read := tableReads[table]
 	clauses := []string{"1"}
 	var parameters []any
 	if spec.OrganizationID != "" {
@@ -628,9 +629,9 @@ func wholePersonUserRowsGuardQuery(spec ChartSpec) (string, []any) {
 	return fmt.Sprintf(`SELECT
         count() AS observed,
         uniqExact(%s) AS distinct_keys
-    FROM user_metrics_daily
+    FROM %s
     WHERE
-        %s`, strings.Join(read.Key, ", "), strings.Join(clauses, " AND ")), parameters
+        %s`, strings.Join(read.Key, ", "), table, strings.Join(clauses, " AND ")), parameters
 }
 
 func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any, error) {

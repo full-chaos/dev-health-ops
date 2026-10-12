@@ -991,7 +991,7 @@ func retractTeamRepoOwnershipRows(
 	now time.Time,
 	toRetract []teamRepoOwnershipActiveRow,
 ) (int, error) {
-	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
+	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipShareInsert)
 	if err != nil {
 		return 0, err
 	}
@@ -1036,7 +1036,7 @@ func supersedeTeamRepoOwnershipRows(
 	if len(rows) == 0 {
 		return 0, nil
 	}
-	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
+	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipShareInsert)
 	if err != nil {
 		return 0, err
 	}
@@ -1068,7 +1068,13 @@ func releaseTeamRepoOwnershipBatch(ctx context.Context, orgID string, batch driv
 	}
 }
 
-const teamRepoOwnershipInsert = `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, share)`
+const teamRepoOwnershipInsert = `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
+
+// teamRepoOwnershipShareInsert is teamRepoOwnershipInsert with the inferred
+// row's share: the insert of this derivation's own writes, retractions and
+// supersedes. teamRepoOwnershipInsert keeps its column list for its other
+// users (the Jira project-as-team retire builds an INSERT ... SELECT on it).
+const teamRepoOwnershipShareInsert = `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, share)`
 
 // writeTeamRepoOwnershipRows batch-inserts the derived rows. A derived row
 // whose repo_id has no matching repos entry (should not happen -- every
@@ -1096,7 +1102,7 @@ func writeTeamRepoOwnershipRows(
 	derived []DerivedTeamRepoOwnershipRow,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
 ) (int, map[string]int, error) {
-	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
+	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipShareInsert)
 	if err != nil {
 		return 0, nil, err
 	}

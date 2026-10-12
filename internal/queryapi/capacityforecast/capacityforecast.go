@@ -81,6 +81,7 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
@@ -442,6 +443,13 @@ func ResolveForecasts(
 
 	conditions := []string{"org_id = {org_id:String}"}
 	bindings := []clickhouse.Binding{{Name: "org_id", Value: orgID}}
+	// With no team named, the list holds the forecasts of the active teams
+	// (and those with no team): a forecast stored under a superseded or
+	// retired team id is not a team's forecast to list. A named team is read
+	// as named: an id the caller holds may be a retired one.
+	if filters == nil || filters.TeamID == nil || *filters.TeamID == "" {
+		conditions = append(conditions, "(ifNull(team_id, '') = '' OR "+activeteams.ListablePredicate("team_id")+")")
+	}
 	if filters != nil {
 		// Every one of these is a FALSY check in Python (`if filters.team_id:`),
 		// so an explicitly empty string is "no filter" rather than "match the

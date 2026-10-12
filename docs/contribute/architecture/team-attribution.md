@@ -1839,10 +1839,23 @@ columns of the predicate from `liverow.Columns`: the predicate is built into the
 columns are in no query text.
 
 The census (`stale_team_keys_census_test.go`) reads the schema and the source and fails when a table with a
-`team_id` or a `scope_id` in its sorting key has no decision (the shared rule, its own rule, or a written exemption),
+`team_id`, a `scope_id` or a `scope_key` column has no decision (the shared rule, its own rule, or a written exemption),
 when a declaration does not agree with the table's columns, when a declared table has no call of the rule, when a
 file that is not a declared writer holds an INSERT of one of the tables, and when a partition family calls the rule
 for a table whose key scope is not the repository (such a table is decided once for the run).
+
+**Tables outside the registry (CHAOS-9055).** These tables hold a team id and take no row of zeros; the rule for
+them is in their readers:
+
+| Table | Team id | Why no row of zeros | Reader rule |
+| --- | --- | --- | --- |
+| the six testops daily tables (`testops_pipeline_metrics_daily`, `testops_test_metrics_daily`, `testops_coverage_metrics_daily`, `testops_release_confidence`, `testops_quality_drag`, `testops_pipeline_stability`) | a VALUE of the (org, repository, day) key: the repository's authoritative active owner | a recompute writes the key again and replaces the team; there is no stale team key | a reader takes the newest row of the KEY first and only then its team. The benchmarking job groups by the table's key and takes the team by `argMax` (`benchmarking.FetchMetricSeriesByScope`; `TestEveryMetricGroupsByTheKeyOfItsTable`): grouping by `team_id` kept an older row under a superseded id as a series of its own |
+| the six benchmarking outputs (`testops_metric_baselines`, `testops_metric_anomalies`, `testops_maturity_bands`, `testops_metric_correlations`, `testops_period_comparisons`, `testops_benchmark_insights`) | `scope_key` of a row of `scope_type = 'team'` | append-only results, read by no reader; a row of zeros would be a result that was not computed | the job writes no team series of an inactive team (`teamactive`): an inactive team is not a target. Rows written before the fix stay; no reader shows them |
+| `capacity_forecasts` | a value of the forecast | one forecast per row, replaced by the next forecast of the same id | the forecast list with no team named lists the active teams and the forecasts with no team (`activeteams.ListablePredicate`); a named team is read as named |
+| `recommendations_daily` | in the key | a rule result (fired or not), not a count | the readers read only the team ids a request names (D5773: no rule) |
+
+Asserted on real ClickHouse by `TestTestopsTeamSeriesHoldNoSupersededTeam` and `TestForecastListHoldsNoSupersededTeam`.
+The acr readers of `capacity_forecasts` and `recommendations_daily` are CHAOS-9022's.
 
 Limits:
 

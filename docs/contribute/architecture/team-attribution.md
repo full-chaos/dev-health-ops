@@ -2614,7 +2614,8 @@ also writes a WARN `team_repo_ownership_derivation.owner_tie_unresolved` log lin
 **Retraction is guarded per provider and per fact kind (CHAOS-9045).** A run retracts an open inferred row it no longer
 derives only when it read the input that could derive that row. Each kind of input has its own proof
 (`team_repo_ownership_retraction_guard.go`, a `SnapshotProof` of two named terms: the kind's input is in the run, and the
-run reached at least one repository through the kind, reason `no_repository_reached_through_the_kind`): `project_links:<provider>`
+run reached at least one repository through the kind that the run's `repos` snapshot knows (a repository it cannot write proves
+nothing), reason `no_repository_reached_through_the_kind`): `project_links:<provider>`
 needs at least one open `team_project_ownership` link of that provider (reason `no_open_project_link_of_the_provider`) and a
 pull request's repository or an issue's linked pull request reached through it, so a provider whose links are open but whose
 work items or pull request links are not in the run proves nothing; `linear_team_key` needs a Linear work item whose

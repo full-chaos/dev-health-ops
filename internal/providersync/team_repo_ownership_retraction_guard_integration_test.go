@@ -201,7 +201,7 @@ func TestDerivedRepoOwnershipSingleProviderClosedLinkKeepsTheRow(t *testing.T) {
 // through A, so A's row stays open while B's input is complete.
 func TestDerivedRepoOwnershipOpenLinksThatReachNothingKeepTheRow(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
-	for _, missing := range []string{"work_items", "work_graph_issue_pr"} {
+	for _, missing := range []string{"work_items", "work_graph_issue_pr", "repo_of_a_pull_request"} {
 		for _, a := range retractionGuardIntegrationProviders {
 			for _, b := range retractionGuardIntegrationProviders {
 				if a == b {
@@ -214,7 +214,14 @@ func TestDerivedRepoOwnershipOpenLinksThatReachNothingKeepTheRow(t *testing.T) {
 					if written, retracted, _, _ := org.derive(); written != 2 || retracted != 0 {
 						t.Fatalf("first Derive: written=%d retracted=%d, want 2 and 0", written, retracted)
 					}
-					org.remove(missing, itemA)
+					if missing == "repo_of_a_pull_request" {
+						// A's only remaining candidate is a pull request of A's
+						// project in a repository the repos snapshot does not know.
+						org.remove("work_graph_issue_pr", itemA)
+						seedWorkItemOfType(t, ctx, conn, org.orgID, a+":PR-1", a, "pr", uuid.New(), a+"-proj-a", org.at)
+					} else {
+						org.remove(missing, itemA)
+					}
 					written, retracted, inputsReady, stats := org.derive()
 					if !inputsReady || written != 0 || retracted != 0 || stats.RetractionsHeld != 1 {
 						t.Fatalf("A's %s missing: inputsReady=%v written=%d retracted=%d held=%d, want true 0 0 1",

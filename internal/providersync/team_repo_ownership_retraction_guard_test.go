@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 var retractionGuardProviders = []string{"jira", "gitlab", "github", "linear"}
@@ -263,8 +265,43 @@ func TestDerivationCountsWhatEachKindReached(t *testing.T) {
 		},
 		[]TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "linear:CHAOS", NativeTeamKey: "CHAOS"}},
 	)
+	known := map[uuid.UUID]teamRepoOwnershipRepoInfo{}
+	for _, id := range []string{"11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222",
+		"33333333-3333-3333-3333-333333333333", "44444444-4444-4444-4444-444444444444"} {
+		known[uuid.MustParse(id)] = teamRepoOwnershipRepoInfo{FullName: "acme/" + id[:4], Provider: "github"}
+	}
 	want := reachedThrough("jira", "jira", "github", teamRepoOwnershipRetractionKindLinearTeamKey)
-	if !reflect.DeepEqual(derivation.Reached, want) {
-		t.Fatalf("reached = %+v, want %+v (gitlab's link is open and reaches no repository)", derivation.Reached, want)
+	if got := reachedKnownRepositories(derivation.Reached, known); !reflect.DeepEqual(got, want) {
+		t.Fatalf("reached = %+v, want %+v (gitlab's link is open and reaches no repository)", got, want)
+	}
+}
+
+// TestReachedCountsOnlyRepositoriesTheSnapshotKnows: a candidate whose
+// repo_id the repos snapshot does not know (or has no full name for) cannot
+// be written, so it proves nothing for its kind.
+func TestReachedCountsOnlyRepositoriesTheSnapshotKnows(t *testing.T) {
+	jira := teamRepoOwnershipRetractionKind{Kind: teamRepoOwnershipRetractionKindProjectLinks, Provider: "jira"}
+	known := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	unnamed := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{known: {FullName: "acme/a", Provider: "github"}, unnamed: {Provider: "github"}}
+	cases := map[string]struct {
+		ids  []string
+		want int
+	}{
+		"known":    {[]string{known.String()}, 1},
+		"unknown":  {[]string{"33333333-3333-3333-3333-333333333333"}, 0},
+		"no name":  {[]string{unnamed.String()}, 0},
+		"not uuid": {[]string{"repo-a"}, 0},
+		"nil uuid": {[]string{uuid.Nil.String()}, 0},
+		"mixed":    {[]string{known.String(), "33333333-3333-3333-3333-333333333333", unnamed.String()}, 1},
+	}
+	for name, tc := range cases {
+		reached := map[teamRepoOwnershipRetractionKind]map[string]bool{jira: {}}
+		for _, id := range tc.ids {
+			reached[jira][id] = true
+		}
+		if got := reachedKnownRepositories(reached, repos)[jira]; got != tc.want {
+			t.Errorf("%s: reached %d, want %d", name, got, tc.want)
+		}
 	}
 }

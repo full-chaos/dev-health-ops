@@ -411,10 +411,10 @@ type TeamRepoOwnershipTie struct {
 type teamRepoOwnershipDerivation struct {
 	Rows []DerivedTeamRepoOwnershipRow
 	Ties []TeamRepoOwnershipTie
-	// Reached counts, per kind of input, the candidates the run resolved
-	// through it (a team reaching a repo): the retraction guard's proof that
-	// the kind's whole input chain was in the run.
-	Reached map[teamRepoOwnershipRetractionKind]int
+	// Reached is, per kind of input, the repositories the run reached through
+	// it (a team resolved for the repository): the retraction guard counts the
+	// ones the repos snapshot knows (reachedKnownRepositories).
+	Reached map[teamRepoOwnershipRetractionKind]map[string]bool
 }
 
 // deriveTeamRepoOwnership implements both signal paths plus PR inheritance
@@ -469,13 +469,16 @@ func deriveTeamRepoOwnership(
 
 	tallies := map[string]map[string]*teamRepoOwnershipLinkCounts{}
 	repoArm := map[string]map[string]string{}
-	reached := map[teamRepoOwnershipRetractionKind]int{}
+	reached := map[teamRepoOwnershipRetractionKind]map[string]bool{}
 	assign := func(repoID string, resolved teamRepoOwnershipResolution, tier int) {
 		teamID, arm := resolved.TeamID, resolved.Arm
 		if repoID == "" || teamID == "" {
 			return
 		}
-		reached[resolved.Kind]++
+		if reached[resolved.Kind] == nil {
+			reached[resolved.Kind] = map[string]bool{}
+		}
+		reached[resolved.Kind][repoID] = true
 		if tallies[repoID] == nil {
 			tallies[repoID] = map[string]*teamRepoOwnershipLinkCounts{}
 			repoArm[repoID] = map[string]string{}

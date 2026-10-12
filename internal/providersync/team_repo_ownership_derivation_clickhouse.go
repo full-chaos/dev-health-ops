@@ -241,7 +241,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
-	guard := newTeamRepoOwnershipRetractionGuard(derivation.Reached, projectLinks, linkHistory, workItems, knownTeams)
+	guard := newTeamRepoOwnershipRetractionGuard(reachedKnownRepositories(derivation.Reached, repos), projectLinks, linkHistory, workItems, knownTeams)
 	toRetract, held, heldKinds := guard.retain(diffTeamRepoOwnershipRetractions(activeRows, derived, derivation.Ties, repos))
 	stats.RetractionsHeld = held
 	reportTeamRepoOwnershipRetractionHeld(ctx, orgID, heldKinds)
@@ -760,6 +760,29 @@ func diffTeamRepoOwnershipRetractions(
 		toRetract = append(toRetract, row)
 	}
 	return toRetract
+}
+
+// reachedKnownRepositories counts, per kind, the repositories the derivation
+// reached through the kind that the run's repos snapshot knows, resolved the
+// same way the write and the retraction diff resolve a repo_id. A repository
+// the snapshot does not know cannot be written, so reaching it proves nothing.
+func reachedKnownRepositories(
+	reached map[teamRepoOwnershipRetractionKind]map[string]bool,
+	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
+) map[teamRepoOwnershipRetractionKind]int {
+	out := make(map[teamRepoOwnershipRetractionKind]int, len(reached))
+	for kind, repoIDs := range reached {
+		for id := range repoIDs {
+			repoID, err := uuid.Parse(id)
+			if err != nil || repoID == uuid.Nil {
+				continue
+			}
+			if info, ok := repos[repoID]; ok && info.FullName != "" {
+				out[kind]++
+			}
+		}
+	}
+	return out
 }
 
 // retractTeamRepoOwnershipRows closes out every row in toRetract: a

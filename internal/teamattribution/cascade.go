@@ -961,7 +961,13 @@ func (derived GithubWorkItemDerivationContext) resolve(
 			}
 			candidates = sameTeamOnly
 		}
-		if primary == nil && len(candidates) > 0 {
+		// CHAOS-9414 (D7; AGENTS.md: team = ownership of repositories and
+		// projects only, membership is provenance only): the membership
+		// tiers never produce the primary team. Their candidates stay in
+		// `all` as is_primary = 0 provenance rows; an item whose only
+		// signal is a member's team falls through to unassigned.
+		membershipTier := source == "assignee_membership" || source == "author_membership"
+		if primary == nil && len(candidates) > 0 && !membershipTier {
 			value := candidates[0]
 			primary = &value
 			coOwners = projectCoOwners(value, candidates[1:])

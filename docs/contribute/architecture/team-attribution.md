@@ -308,13 +308,11 @@ flowchart TD
     PO -->|"yes"| Win
     PO -->|"no"| RO{"3 · repo_ownership candidate?"}
     RO -->|"yes"| Win
-    RO -->|"no"| AM{"4 · assignee_membership candidate?<br/>(assignee identity, CHAOS-4321 -- admin mapping if present (single-team), else provider auto-import fallback (single-team))"}
-    AM -->|"yes"| Win
-    AM -->|"no"| LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
+    RO -->|"no"| AM["4 · assignee_membership: PROVENANCE ONLY (CHAOS-9414)<br/>recorded as is_primary = 0, never the primary team"]
+    AM --> LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
     LK -->|"yes"| Win
-    LK -->|"no"| AU{"6 · author_membership candidate?<br/>(reporter/author identity, CHAOS-4244 PR/MR-only + CHAOS-4321 two-layer admin-then-provider resolution, single-team, non-bot only)"}
-    AU -->|"yes"| Win
-    AU -->|"no"| MF{"7 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
+    LK -->|"no"| AU["6 · author_membership: PROVENANCE ONLY (CHAOS-9414)<br/>recorded as is_primary = 0, never the primary team"]
+    AU --> MF{"7 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
     MF -->|"yes"| Win
     MF -->|"no"| UN["is_primary = unassigned (8)"]
     Win --> P["Persist work_item_team_attributions:<br/>candidate rows that passed every gate; is_primary on the winner"]
@@ -322,6 +320,17 @@ flowchart TD
     P --> API["Expose source / confidence / evidence via GraphQL"]
     API --> UI["Frontend renders only — no recompute"]
 ```
+
+> **CHAOS-9414 (D7; AGENTS.md "team = ownership of repositories and projects only"): membership
+> is provenance only.** `assignee_membership` (4) and `author_membership` (6) keep their ranks,
+> Enum8 codes and gates, and every candidate that passes a gate is still persisted — but always
+> with `is_primary = 0`. Neither tier ever produces the primary team. A work item whose only
+> signal is a member's team stays `unassigned` (`is_primary = 1`, null-carrying), with the
+> membership row recorded beside it as provenance. Readers of `is_primary = 1` therefore never
+> return a team that came from a person. The Go cascade
+> (`internal/teamattribution/cascade.go`, the `order` loop in `Resolve`) skips these two sources when
+> it picks the primary; `TestMembershipTiersAreProvenanceOnly` and the frozen oracle snapshots
+> pin it. The Python mirror is retired for this table and is not changed.
 
 **Invariants:** the **winner is the highest-precedence matching source** (every matching source that
 passes its own gate is still persisted as a candidate — precedence decides `is_primary`, not which
@@ -336,9 +345,8 @@ donor row resolving to a `work_items`
 row whose **own team came from a first-class fact (sources 0–4)** — a donor resolved only by
 `author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author
 signal nor a bare prefix can ever be laundered into rank-5 inheritance (both fall through to 6/7);
-`author_membership` (6) can beat `manual_fallback` and `unassigned` but never a real linked_issue,
-ownership, or membership fact — a PERSON signal, "at best a low-precedence fallback" (chris,
-CHAOS-4244); `manual_fallback` (7) can only beat `unassigned`; a whole org at `unassigned` usually
+`author_membership` (6) is a PERSON signal, "at best a low-precedence fallback" (chris,
+CHAOS-4244) and, since CHAOS-9414, never wins at all — it is provenance only; `manual_fallback` (7) can only beat `unassigned`; a whole org at `unassigned` usually
 means the ClickHouse `teams` dimension is empty.
 
 > **CHAOS-5649 (R179, chris 2026-09-12) — two more `author_membership`/membership rules, on top of

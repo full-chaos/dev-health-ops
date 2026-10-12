@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamresolve"
 )
@@ -194,6 +195,20 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 		}
 		resolvedRepoIDs = append(resolvedRepoIDs, repoUUID)
 	}
+	// A repository of a team with no metrics row of the day still merged pull
+	// requests in the 30-day review window: its counts belong to the team.
+	// Only teams this day already gives a row get them; such a repository adds
+	// no other input.
+	withoutMetrics, err := executor.ownedRepositoriesWithoutMetrics(
+		ctx, run.OrganizationID, day, orgRepoMetrics, repoToTeam, patternResolver,
+	)
+	if err != nil {
+		return 0, err
+	}
+	for _, repo := range withoutMetrics {
+		resolvedRepoIDs = append(resolvedRepoIDs, repo.id)
+		repoToTeam[repo.id.String()] = repo.team
+	}
 	reviewWindows, err := executor.loader.LoadReviewWindows(ctx, run.OrganizationID, resolvedRepoIDs, day)
 	if err != nil {
 		return 0, err
@@ -229,6 +244,15 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 		})
 	}
 
+	for _, repo := range withoutMetrics {
+		window := reviewWindows[repo.id.String()]
+		repoInputs = append(repoInputs, compoundingrisk.RepoInputs{
+			RepoID:       repo.id.String(),
+			Inputs:       compoundingrisk.Inputs{ReviewLatencyP90H: window.P90Hours},
+			ReviewWindow: &window,
+		})
+	}
+
 	computedAt := executor.nowUTC()
 	records := compoundingrisk.BuildTeamRows(
 		day, run.OrganizationID, repoInputs, repoToTeam, computedAt,
@@ -257,6 +281,58 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 		produced = append(produced, staleKey{string(record.Scope), record.ScopeID})
 	}
 	return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, produced, computedAt, rowsWritten)
+}
+
+type ownedRepository struct {
+	id   uuid.UUID
+	team string
+}
+
+// ownedRepositoriesWithoutMetrics is every repository of the organization with
+// no repo_metrics_daily row of the day that resolves (the same ownership and
+// pattern rule as the day's repositories) to a team the day's repositories
+// already resolve to, in repository id order.
+func (executor *CompoundingRiskTeamExecutor) ownedRepositoriesWithoutMetrics(
+	ctx context.Context, organizationID string, day time.Time,
+	orgRepoMetrics []compoundingrisk.RepoMetricsRow, repoToTeam map[string]string,
+	patternResolver numerical.RepoTeamResolver,
+) ([]ownedRepository, error) {
+	withMetrics := make(map[string]bool, len(orgRepoMetrics))
+	for _, row := range orgRepoMetrics {
+		withMetrics[row.RepoID] = true
+	}
+	teamsOfTheDay := map[string]bool{}
+	for _, team := range repoToTeam {
+		teamsOfTheDay[team] = true
+	}
+	all, err := executor.loader.LoadOrgRepoIDs(ctx, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []uuid.UUID
+	for _, id := range all {
+		if !withMetrics[id.String()] {
+			candidates = append(candidates, id)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	names, err := LoadRepoNames(ctx, executor.conn, organizationID, candidates)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := teamresolve.ResolveOwnershipThenPatterns(ctx, executor.conn, organizationID, day, candidates, names, patternResolver)
+	if err != nil {
+		return nil, err
+	}
+	var owned []ownedRepository
+	for _, id := range candidates {
+		if team, ok := resolved[id.String()]; ok && teamsOfTheDay[team] {
+			owned = append(owned, ownedRepository{id: id, team: team})
+		}
+	}
+	return owned, nil
 }
 
 // supersedeStaleKeys applies the stale-key rule (stale_team_keys.go) to the

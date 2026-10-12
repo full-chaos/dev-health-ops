@@ -259,9 +259,11 @@ ORDER BY scope_id
 
 // TestCompoundingRiskTeamReviewWindowAddsRepositoryCounts pins the team scope
 // of the 30-day review window: the team's share is reviewed over merged ADDED
-// across its repositories (not a mean of repository shares), its p90 is the
-// mean of the repository p90s like every other team input, and a team whose
-// repositories merged nothing stores merged 0 and NO share.
+// across ALL its repositories -- also one with no metrics row of the day,
+// whose merges are in the window all the same -- (not a mean of repository
+// shares), its p90 is the mean of the repository p90s like every other team
+// input, and a team whose repositories merged nothing stores merged 0 and NO
+// share.
 func TestCompoundingRiskTeamReviewWindowAddsRepositoryCounts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -287,13 +289,16 @@ func TestCompoundingRiskTeamReviewWindowAddsRepositoryCounts(t *testing.T) {
 		repoX = "00000000-0000-4000-8000-0000000000d1"
 		repoY = "00000000-0000-4000-8000-0000000000d2"
 		repoZ = "00000000-0000-4000-8000-0000000000d3"
+		// repoW: owned by team-a, no repo_metrics_daily row of the day.
+		repoW = "00000000-0000-4000-8000-0000000000d4"
 	)
 	targetDay := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	for _, statement := range []string{`
 INSERT INTO repos (id, repo, created_at, org_id, provider, last_synced) VALUES
 (toUUID('` + repoX + `'), 'acme/x', now(), '` + org + `', 'native', now()),
 (toUUID('` + repoY + `'), 'acme/y', now(), '` + org + `', 'native', now()),
-(toUUID('` + repoZ + `'), 'acme/z', now(), '` + org + `', 'native', now())`, `
+(toUUID('` + repoZ + `'), 'acme/z', now(), '` + org + `', 'native', now()),
+(toUUID('` + repoW + `'), 'acme/w', now(), '` + org + `', 'native', now())`, `
 INSERT INTO teams (id, team_uuid, name, org_id, updated_at) VALUES
 ('team-a', generateUUIDv4(), 'Team Alpha', '` + org + `', now64(6)),
 ('team-b', generateUUIDv4(), 'Team Beta',  '` + org + `', now64(6))`, `
@@ -301,7 +306,8 @@ INSERT INTO team_repo_ownership
 (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES
 ('` + org + `', 'native', 'team-a', toUUID('` + repoX + `'), 'acme/x', 'exact', 'native', 1, 0, 0, '2026-01-01 00:00:00', NULL, '2026-01-01 00:00:00'),
 ('` + org + `', 'native', 'team-a', toUUID('` + repoY + `'), 'acme/y', 'exact', 'native', 1, 0, 0, '2026-01-01 00:00:00', NULL, '2026-01-01 00:00:00'),
-('` + org + `', 'native', 'team-b', toUUID('` + repoZ + `'), 'acme/z', 'exact', 'native', 1, 0, 0, '2026-01-01 00:00:00', NULL, '2026-01-01 00:00:00')`, `
+('` + org + `', 'native', 'team-b', toUUID('` + repoZ + `'), 'acme/z', 'exact', 'native', 1, 0, 0, '2026-01-01 00:00:00', NULL, '2026-01-01 00:00:00'),
+('` + org + `', 'native', 'team-a', toUUID('` + repoW + `'), 'acme/w', 'exact', 'native', 1, 0, 0, '2026-01-01 00:00:00', NULL, '2026-01-01 00:00:00')`, `
 INSERT INTO repo_metrics_daily
 (repo_id, day, rework_churn_ratio_30d, single_owner_file_ratio_30d, code_ownership_gini, bus_factor, pr_first_review_p90_hours, computed_at, org_id) VALUES
 (toUUID('` + repoX + `'), '2026-08-24', 0.1, 0.2, 0.1, 1, 99.0, '2026-08-24 09:00:00', '` + org + `'),
@@ -311,7 +317,10 @@ INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, first_rev
 (toUUID('` + repoX + `'), 1, '2026-08-10 00:00:00', '2026-08-11 00:00:00', '2026-08-10 10:00:00', '2026-08-11 01:00:00', '` + org + `'),
 (toUUID('` + repoX + `'), 2, '2026-08-12 00:00:00', '2026-08-13 00:00:00', NULL,                  '2026-08-13 01:00:00', '` + org + `'),
 (toUUID('` + repoY + `'), 1, '2026-08-14 00:00:00', '2026-08-15 00:00:00', '2026-08-14 04:00:00', '2026-08-15 01:00:00', '` + org + `'),
-(toUUID('` + repoY + `'), 2, '2026-08-16 00:00:00', '2026-08-17 00:00:00', '2026-08-16 08:00:00', '2026-08-17 01:00:00', '` + org + `')`,
+(toUUID('` + repoY + `'), 2, '2026-08-16 00:00:00', '2026-08-17 00:00:00', '2026-08-16 08:00:00', '2026-08-17 01:00:00', '` + org + `'),
+(toUUID('` + repoW + `'), 1, '2026-08-01 00:00:00', '2026-08-02 00:00:00', NULL, '2026-08-02 01:00:00', '` + org + `'),
+(toUUID('` + repoW + `'), 2, '2026-08-03 00:00:00', '2026-08-04 00:00:00', NULL, '2026-08-04 01:00:00', '` + org + `'),
+(toUUID('` + repoW + `'), 3, '2026-08-05 00:00:00', '2026-08-06 00:00:00', NULL, '2026-08-06 01:00:00', '` + org + `')`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -357,8 +366,8 @@ FROM compounding_risk_daily WHERE org_id = ? AND scope = 'team' ORDER BY scope_i
 	if !ok {
 		t.Fatalf("no team-a row (got %v)", got)
 	}
-	if a.merged == nil || *a.merged != 4 || a.reviewed == nil || *a.reviewed != 3 || a.share == nil || *a.share != 0.75 {
-		t.Errorf("team-a merged/reviewed/share = %v/%v/%v, want 4/3/0.75 (counts added across the repositories)", a.merged, a.reviewed, a.share)
+	if a.merged == nil || *a.merged != 7 || a.reviewed == nil || *a.reviewed != 3 || a.share == nil || *a.share != 3.0/7.0 {
+		t.Errorf("team-a merged/reviewed/share = %v/%v/%v, want 7/3/3/7 (counts added across ALL owned repositories, repoW's included)", a.merged, a.reviewed, a.share)
 	}
 	if a.latency == nil || *a.latency != *wantLatency {
 		t.Errorf("team-a review_latency_p90h = %v, want %v (mean of the repository p90s of the window)", a.latency, *wantLatency)

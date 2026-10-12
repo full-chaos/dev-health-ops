@@ -404,6 +404,32 @@ func (loader *ClickHouseLoader) LoadReviewWindows(
 	return windows, nil
 }
 
+// LoadOrgRepoIDs is every repository id of the organization, in id order.
+func (loader *ClickHouseLoader) LoadOrgRepoIDs(ctx context.Context, orgID string) ([]uuid.UUID, error) {
+	if loader == nil || loader.conn == nil {
+		return nil, fmt.Errorf("compoundingrisk: loader unavailable")
+	}
+	rows, err := loader.conn.Query(ctx, `SELECT DISTINCT toString(id) AS repo_id_text FROM repos FINAL WHERE org_id = {org_id:String} ORDER BY repo_id_text`,
+		clickhouse.Named("org_id", orgID))
+	if err != nil {
+		return nil, fmt.Errorf("load organization repositories: %w", err)
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var text string
+		if err := rows.Scan(&text); err != nil {
+			return nil, fmt.Errorf("scan organization repository: %w", err)
+		}
+		id, err := uuid.Parse(text)
+		if err != nil {
+			return nil, fmt.Errorf("organization repository id %q: %w", text, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // clickHouseDateTime64Layout is the wire form for a {name:DateTime64(3, 'UTC')}
 // query parameter (a literal string; see LoadRepoMetrics).
 const clickHouseDateTime64Layout = "2006-01-02 15:04:05.000"

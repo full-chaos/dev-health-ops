@@ -165,8 +165,9 @@ INSERT INTO repo_complexity_daily
 	//   #4 merged 07-25 23:59:59.999 (one ms before the window), 100h: out.
 	//   #5 merged 08-25 00:00 (the next day), 200h: out.
 	//   #6 not merged, 1h: out.
+	//   #7 merged at 07-26 00:00, the first instant of the window, 1h: in.
 	//   org B's row of the same repo id and number: out.
-	// Window: merged 3, reviewed 2, p90 of [12, 6] = 11.4, share 2/3.
+	// Window: merged 4, reviewed 3, p90 of [12, 6, 1], share 3/4.
 	// The older version of #1 goes in its own insert with merges stopped: the
 	// table collapses two versions of one key written in ONE insert, and then
 	// nothing would tell a read with FINAL from one without.
@@ -187,6 +188,7 @@ INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, first_rev
 (toUUID('`+repoA1+`'), 4, '2026-07-20 00:00:00', '2026-07-25 23:59:59.999', '2026-07-24 04:00:00', '2026-07-26 01:00:00', '`+orgA+`'),
 (toUUID('`+repoA1+`'), 5, '2026-08-20 00:00:00', '2026-08-25 00:00:00', '2026-08-28 08:00:00', '2026-08-25 01:00:00', '`+orgA+`'),
 (toUUID('`+repoA1+`'), 6, '2026-08-22 00:00:00', NULL,                  '2026-08-22 01:00:00', '2026-08-22 02:00:00', '`+orgA+`'),
+(toUUID('`+repoA1+`'), 7, '2026-07-25 20:00:00', '2026-07-26 00:00:00', '2026-07-25 21:00:00', '2026-07-26 01:00:00', '`+orgA+`'),
 (toUUID('`+repoA1+`'), 1, '2026-08-20 00:00:00', '2026-08-21 00:00:00', '2026-08-30 00:00:00', '2026-08-23 01:00:00', '`+orgB+`')
 `); err != nil {
 		t.Fatal(err)
@@ -254,8 +256,8 @@ INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, first_rev
 	// arithmetic a second time.
 	churn, gini := 0.15, 0.20
 	singleOwner := 0.35
-	review := compoundingrisk.ReviewWindow{MergedPRs: 3, ReviewedPRs: 2}
-	reviewP90 := repouser.Percentile([]float64{12, 6}, 90)
+	review := compoundingrisk.ReviewWindow{MergedPRs: 4, ReviewedPRs: 3}
+	reviewP90 := repouser.Percentile([]float64{12, 6, 1}, 90)
 	review.P90Hours = &reviewP90
 	busFactor := 3.0
 	delta := compoundingrisk.ComplexityDeltaRatio(11.0, 14.0)
@@ -344,11 +346,11 @@ WHERE org_id = ? AND day = '2026-08-24'`, orgA)
 		}
 	}
 
-	if gotLatency == nil || math.Abs(*gotLatency-11.4) > 1e-9 {
-		t.Errorf("review_latency_p90h = %v, want 11.4: the p90 of the 30-day window, not the one-day 12.0 of repo_metrics_daily", gotLatency)
+	if gotLatency == nil || *gotLatency != reviewP90 || reviewP90 == 12.0 {
+		t.Errorf("review_latency_p90h = %v, want %v: the p90 of the 30-day window, not the one-day 12.0 of repo_metrics_daily", gotLatency, reviewP90)
 	}
-	if gotMerged == nil || *gotMerged != 3 || gotReviewed == nil || *gotReviewed != 2 {
-		t.Errorf("merged/reviewed_prs_30d = %v/%v, want 3/2", gotMerged, gotReviewed)
+	if gotMerged == nil || *gotMerged != 4 || gotReviewed == nil || *gotReviewed != 3 {
+		t.Errorf("merged/reviewed_prs_30d = %v/%v, want 4/3 (the first instant of the window is in it)", gotMerged, gotReviewed)
 	}
 
 	// Cross-tenant and blank-org guards.

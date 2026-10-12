@@ -90,6 +90,17 @@ denominator. Repeated materialization writes a new allocation generation, and
 readers select only the latest generation for each unit. Categorization and
 work-unit identities do not change.
 
+### Read-time allocation weight
+
+Scoped readers (a team or repository scope, and the Investment flow) read one
+row per unit and repository and weight each row by its share of the unit: the
+repository's effort over the sum of the unit's repository efforts. A unit whose
+repository efforts sum to 0 (a unit of effort 0 is the common case) splits
+`1/n` over its `n` repository rows. Every unit therefore sums to exactly one
+across its rows and is counted once, whatever its stored unit effort, so the
+flow total equals the unit count of the same window and scope. A unit with no
+repository row keeps weight 1.
+
 ### Precedence, in order
 
 The allocator checks these in this order and stops at the first that applies.

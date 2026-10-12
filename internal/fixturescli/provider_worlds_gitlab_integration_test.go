@@ -335,11 +335,11 @@ var gitlabWorld = providerWorld{
 	FrozenAt: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),
 	Answers:  gitlabAnswers,
 	Steps: []worldStep{
-		// The first sync of the catalog, a month before the world's instant, and the second.
+		// The first sync of the catalog a month before the world's instant, the second two days before it.
 		{Kind: "team_catalog", Provider: "gitlab", Credential: gitlabToken, Sources: gitlabSources,
 			SyncOptions: map[string]any{"group_path": gitlabRoot}, Phase: "first", Before: 30 * 24 * time.Hour},
 		{Kind: "team_catalog", Provider: "gitlab", Credential: gitlabToken, Sources: gitlabSources,
-			SyncOptions: map[string]any{"group_path": gitlabRoot}, Phase: "second"},
+			SyncOptions: map[string]any{"group_path": gitlabRoot}, Phase: "second", Before: 2 * 24 * time.Hour},
 		{Kind: "sync", Provider: "gitlab", Credential: gitlabToken, DepthDays: 180, Sources: gitlabSources,
 			Datasets: []string{"repo-metadata", "prs", "work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"}},
 		{Kind: "work_graph"},

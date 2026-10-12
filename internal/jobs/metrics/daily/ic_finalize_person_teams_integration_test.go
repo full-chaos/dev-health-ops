@@ -33,6 +33,9 @@ import (
 //   - roster: named in the roster column teams.members of an active team, with
 //     no membership row. The column is not what says who is a member.
 //   - none: no membership.
+//   - midday: no membership; its repository's ownership starts at noon of the
+//     day. Ownership is read as of the END of the day, so the point is in the
+//     owner on the day; the row (membership) is unassigned.
 //
 // That is the team of the person's ROW. The team of the person's POINTS is the
 // owner of the repository of the row (ruling D5985), with the same validity
@@ -120,7 +123,9 @@ func TestThePersonsTeamsOfTheLandscapeAreTheMembershipsValidAtTheDay(t *testing.
 	both("mixed", "jira", "ENG", 1, longBefore, open, longBefore)
 	both("mixed", "gitlab", "gitlab:ops", 0, longBefore, open, longBefore)
 
-	people := []string{"two", "valid", "closed", "future", "starts", "ends", "reopened", "inactive", "mixed", "roster", "none"}
+	ownership("midday", "github", "github:platform", 1, day.Add(12*time.Hour), open, longBefore)
+
+	people := []string{"two", "valid", "closed", "future", "starts", "ends", "reopened", "inactive", "mixed", "roster", "none", "midday"}
 	// What the repository/user family writes for each person on each day.
 	for _, rowDay := range []time.Time{day, twoDaysLater} {
 		for _, person := range people {
@@ -198,6 +203,7 @@ WHERE org_id = ? AND as_of_day = ? AND `+live+` GROUP BY identity_id`, org, asOf
 			"closed": unassigned, "future": unassigned, "reopened": unassigned, "inactive": unassigned,
 			"starts": {"github:platform"}, "ends": unassigned,
 			"mixed": {"gitlab:ops"}, "roster": unassigned, "none": unassigned,
+			"midday": {"jira:ENG"},
 		},
 		Rows: map[string]string{
 			// One row for a person: the primary membership of the two.
@@ -205,9 +211,10 @@ WHERE org_id = ? AND as_of_day = ? AND `+live+` GROUP BY identity_id`, org, asOf
 			"closed": "unassigned", "future": "unassigned", "reopened": "unassigned", "inactive": "unassigned",
 			"starts": "jira:ENG", "ends": "unassigned",
 			"mixed": "gitlab:ops", "roster": "unassigned", "none": "unassigned",
+			"midday": "unassigned",
 		},
-		// 12 (person, team) pairs, three maps each.
-		LivePoints: 36,
+		// 13 (person, team) pairs, three maps each.
+		LivePoints: 39,
 	}
 	if got := run(day); !reflect.DeepEqual(got, want) {
 		t.Errorf("the day:\n got  %+v\n want %+v", got, want)

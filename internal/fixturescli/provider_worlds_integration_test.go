@@ -9,7 +9,7 @@ import (
 )
 
 // The frozen provider worlds and the run of production verbs that writes each.
-var providerWorlds = []providerWorld{githubWorld, gitlabWorld}
+var providerWorlds = []providerWorld{githubWorld, gitlabWorld, jiraWorld}
 
 // answerJSON marshals a provider answer body.
 func answerJSON(value any) json.RawMessage {
@@ -89,6 +89,8 @@ type githubRepo struct {
 var githubRepos = map[string]githubRepo{
 	"payments-api":  {9101, "payments-api", "Payments API", "2025-01-06T09:00:00Z"},
 	"platform-core": {9102, "platform-core", "Shared platform core", "2025-01-06T09:30:00Z"},
+	// The repository of the jira and linear worlds' pull requests.
+	"ledger": {9103, "ledger", "General ledger", "2025-03-03T09:00:00Z"},
 }
 
 func (repo githubRepo) payload() map[string]any {
@@ -106,7 +108,10 @@ func (repo githubRepo) payload() map[string]any {
 	}
 }
 
-func githubTeamCatalogAnswers() []providerAnswer {
+func githubTeamCatalogAnswers() []providerAnswer { return githubTeamCatalogAnswersFor(githubTeams) }
+
+// githubTeamCatalogAnswersFor answers the GitHub team catalog of an organization holding these teams.
+func githubTeamCatalogAnswersFor(githubTeams []githubTeam) []providerAnswer {
 	var teams []map[string]any
 	for _, team := range githubTeams {
 		teams = append(teams, map[string]any{
@@ -120,7 +125,7 @@ func githubTeamCatalogAnswers() []providerAnswer {
 		})
 	}
 	answers := []providerAnswer{get(githubHost, "/orgs/"+githubOrg+"/teams", "per_page=100", teams)}
-	users := map[string]bool{}
+	seen := map[string]bool{}
 	for _, team := range githubTeams {
 		repos := []map[string]any{}
 		for _, name := range team.Repos {
@@ -129,17 +134,15 @@ func githubTeamCatalogAnswers() []providerAnswer {
 		members := []map[string]any{}
 		for _, member := range team.Members {
 			members = append(members, member.simple())
-			users[member.Login] = true
+			if !seen[member.Login] {
+				seen[member.Login] = true
+				answers = append(answers, get(githubHost, "/users/"+member.Login, "", member.full()))
+			}
 		}
 		answers = append(answers,
 			get(githubHost, "/orgs/"+githubOrg+"/teams/"+team.Slug+"/repos", "per_page=100", repos),
 			get(githubHost, "/orgs/"+githubOrg+"/teams/"+team.Slug+"/members", "per_page=100", members),
 		)
-	}
-	for _, user := range []githubUser{ghAlice, ghBob, ghCarol, ghErin} {
-		if users[user.Login] {
-			answers = append(answers, get(githubHost, "/users/"+user.Login, "", user.full()))
-		}
 	}
 	return answers
 }

@@ -1,6 +1,8 @@
 package workerservice
 
 import (
+	"net/http"
+
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -12,6 +14,6 @@ import (
 // run the same collectors: the fixture world producer runs them against
 // recorded provider answers. The worker itself builds it through
 // newProductionTeamCatalogCollectors.
-func NativeTeamCatalogCollectors(conn driver.Conn, turn providersync.TeamCatalogSerializer, scopeCensus providersync.OwnershipScopeCensus, atlassianDoer providerfoundation.HTTPDoer) map[string]providersync.TeamCatalogCollector {
-	return newNativeTeamCatalogCollectors(conn, turn, scopeCensus, atlassianDoer)
+func NativeTeamCatalogCollectors(conn driver.Conn, turn providersync.TeamCatalogSerializer, scopeCensus providersync.OwnershipScopeCensus, atlassianDoer providerfoundation.HTTPDoer, gatewayTransport http.RoundTripper) map[string]providersync.TeamCatalogCollector {
+	return newNativeTeamCatalogCollectors(conn, turn, scopeCensus, atlassianDoer, gatewayTransport)
 }

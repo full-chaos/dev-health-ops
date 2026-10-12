@@ -43,7 +43,7 @@ func (conn *teamCatalogCarryConn) PrepareBatch(context.Context, string, ...drive
 func TestEveryRegisteredTeamCatalogCollectorCarriesFirstCensus(t *testing.T) {
 	failed := errors.New("count read failed")
 	conn := &teamCatalogCarryConn{err: failed}
-	registry := newNativeTeamCatalogCollectors(conn, nil, nil, nil)
+	registry := newNativeTeamCatalogCollectors(conn, nil, nil, nil, nil)
 	if len(registry) < 4 {
 		t.Fatalf("registry = %d collectors, want every provider", len(registry))
 	}
@@ -114,7 +114,7 @@ func TestEveryRegisteredTeamCatalogCollectorTakesItsTurnFirst(t *testing.T) {
 	failed := errors.New("count read failed")
 	conn := &teamCatalogCarryConn{err: failed}
 	turn := &recordingTurn{}
-	registry := newNativeTeamCatalogCollectors(conn, turn, nil, nil)
+	registry := newNativeTeamCatalogCollectors(conn, turn, nil, nil, nil)
 	for provider, collector := range registry {
 		turn.calls = nil
 		_, err := collector.CollectTeamCatalog(context.Background(),

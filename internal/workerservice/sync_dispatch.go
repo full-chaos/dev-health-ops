@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
@@ -984,7 +985,7 @@ func newTouchedDaysDrain(
 // A test builds it from a pool and reads each entry's serializer, so the wiring is checked by
 // what the constructor returns, not by the text of its call site.
 func newProductionTeamCatalogCollectors(clickhouseConnection driver.Conn, domain *pgxpool.Pool) map[string]providersync.TeamCatalogCollector {
-	return newNativeTeamCatalogCollectors(clickhouseConnection, newCatalogLeaseTurn(domain), teamCatalogScopeCensus{pool: domain}, httpguard.NewClient(45*time.Second))
+	return newNativeTeamCatalogCollectors(clickhouseConnection, newCatalogLeaseTurn(domain), teamCatalogScopeCensus{pool: domain}, httpguard.NewClient(45*time.Second), nil)
 }
 
 // newNativeTeamCatalogCollectors is the worker's registry of team catalog
@@ -994,8 +995,9 @@ func newProductionTeamCatalogCollectors(clickhouseConnection driver.Conn, domain
 // behind the per-(organization, provider) turn (CHAOS-9140: the turn must be
 // set in production; a census test pins it).
 // atlassianDoer is the HTTP client of the Atlassian Teams leg of jira, the one
-// collector that does not take the run's provider client.
-func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn, turn providersync.TeamCatalogSerializer, scopeCensus providersync.OwnershipScopeCensus, atlassianDoer providerfoundation.HTTPDoer) map[string]providersync.TeamCatalogCollector {
+// collector that does not take the run's provider client, and gatewayTransport
+// the transport of its gateway client (nil: the default one).
+func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn, turn providersync.TeamCatalogSerializer, scopeCensus providersync.OwnershipScopeCensus, atlassianDoer providerfoundation.HTTPDoer, gatewayTransport http.RoundTripper) map[string]providersync.TeamCatalogCollector {
 	return providersync.CarryFirstSerializedTeamCatalogCollectors(clickhouseConnection, turn, map[string]providersync.TeamCatalogCollector{
 		"linear": providersync.LinearTeamCatalogCollector{
 			Sink: providersync.LinearReferenceCatalogClickHouseEffects{
@@ -1056,9 +1058,10 @@ func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn, turn provi
 				},
 				ScopeCensus: scopeCensus,
 			},
-			ScopeCensus: scopeCensus,
-			Conn:        clickhouseConnection,
-			Doer:        atlassianDoer,
+			ScopeCensus:      scopeCensus,
+			Conn:             clickhouseConnection,
+			Doer:             atlassianDoer,
+			GatewayTransport: gatewayTransport,
 		},
 	})
 }

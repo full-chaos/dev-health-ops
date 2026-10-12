@@ -181,7 +181,8 @@ func githubPRSocialAnswer(repo string, items []githubIssue) providerAnswer {
 	}
 	return providerAnswer{
 		Method: "POST", Host: githubHost, Path: "/graphql", Status: 200,
-		Respond: func(query string, variables json.RawMessage) (any, bool) {
+		Respond: func(request replayRequest) (any, bool) {
+			query, variables := request.Document, request.Variables
 			var vars struct{ Owner, Repo string }
 			if json.Unmarshal(variables, &vars) != nil || vars.Owner != githubOrg || vars.Repo != repo || !strings.Contains(query, "pullRequest(number:") {
 				return nil, false

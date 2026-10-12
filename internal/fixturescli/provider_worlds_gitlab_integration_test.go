@@ -194,7 +194,7 @@ func (item gitlabItem) payload(project gitlabProject) map[string]any {
 		"description": nullable(item.Description), "state": item.state(), "created_at": item.CreatedAt, "updated_at": item.UpdatedAt,
 		"closed_at": nullable(item.ClosedAt), "labels": append([]string{}, item.Labels...), "milestone": nil,
 		"assignees": gitlabUsers(item.Assignees), "author": item.Author.payload(), "web_url": web,
-		"references": map[string]any{"short": sigil + strconv.Itoa(item.IID), "full": project.Path + sigil + strconv.Itoa(item.IID)},
+		"references":       map[string]any{"short": sigil + strconv.Itoa(item.IID), "full": project.Path + sigil + strconv.Itoa(item.IID)},
 		"user_notes_count": 0, "upvotes": 0, "downvotes": 0,
 	}
 	if item.MR {
@@ -331,4 +331,3 @@ var gitlabWorld = providerWorld{
 		{Kind: "work_graph"},
 	},
 }
-

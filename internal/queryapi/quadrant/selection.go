@@ -18,6 +18,9 @@ type selection struct {
 	// attributedTeams is the team condition of the work-item attribution read
 	// (cycle_throughput at the team grain), keyed on its own alias.
 	attributedTeams extraScope
+	// teams are the selected teams at the team grain: an OwnerTeam read narrows
+	// the repository owners to them (teamscope.OwnerShares).
+	teams []string
 	// repoFilterApplied is null when no repository is named, true when the
 	// repository grain was narrowed by it, false when the grain cannot be.
 	repoFilterApplied *bool
@@ -45,6 +48,7 @@ func resolveSelection(ctx context.Context, client QueryClient, orgID, scope stri
 	switch scope {
 	case "team":
 		if len(filter.TeamIDs) > 0 {
+			out.teams = filter.TeamIDs
 			bindings := []dhclickhouse.Binding{{Name: "scope_team_ids", Value: filter.TeamIDs}}
 			out.scope = extraScope{SQL: "\nAND m.team_id IN {scope_team_ids:Array(String)}", Bindings: bindings}
 			out.attributedTeams = extraScope{SQL: "\n              AND t.team_id IN {scope_team_ids:Array(String)}", Bindings: bindings}

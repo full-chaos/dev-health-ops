@@ -173,8 +173,31 @@ func TestSeedMatchesThePythonProducer(t *testing.T) {
 		if pass == "nothing missing" {
 			wantCreated, wantPython = []string{}, "0"
 		}
-		if !reflect.DeepEqual(sorted(result.Created), sorted(wantCreated)) {
-			t.Fatalf("%s: dho created %v, want %v", pass, result.Created, wantCreated)
+		// AdditionalFeatures exist only in Go (Python's registry is frozen):
+		// the first pass creates each, the second finds them present.
+		var goOnlyCreated, pythonKnownCreated []string
+		for _, key := range result.Created {
+			isGoOnly := false
+			for _, feature := range admincli.AdditionalFeatures {
+				isGoOnly = isGoOnly || feature.Key == key
+			}
+			if isGoOnly {
+				goOnlyCreated = append(goOnlyCreated, key)
+			} else {
+				pythonKnownCreated = append(pythonKnownCreated, key)
+			}
+		}
+		wantGoOnly := []string{}
+		if pass == "missing features" {
+			for _, feature := range admincli.AdditionalFeatures {
+				wantGoOnly = append(wantGoOnly, feature.Key)
+			}
+		}
+		if !reflect.DeepEqual(sorted(append([]string{}, goOnlyCreated...)), sorted(wantGoOnly)) {
+			t.Fatalf("%s: dho created Go-only features %v, want %v", pass, goOnlyCreated, wantGoOnly)
+		}
+		if !reflect.DeepEqual(sorted(pythonKnownCreated), sorted(wantCreated)) {
+			t.Fatalf("%s: dho created %v, want %v", pass, pythonKnownCreated, wantCreated)
 		}
 		if strings.TrimSpace(output) != wantPython {
 			t.Fatalf("%s: the Python seed created %q row(s), want %s", pass, output, wantPython)
@@ -195,6 +218,23 @@ func TestSeedMatchesThePythonProducer(t *testing.T) {
 			return strings.Join(featureRows(t, ctx, databases[0], wantCreated, pythonWindow), "\n")
 		}), "\n")
 		goRows := featureRows(t, ctx, databases[1], wantCreated, goWindow)
+		// A Go-only feature has no Python row: it must be present exactly
+		// once, then is set aside so the rest compares row for row.
+		for _, feature := range admincli.AdditionalFeatures {
+			var rest []string
+			found := 0
+			for _, row := range goRows {
+				if strings.HasPrefix(row, feature.Key+"|") {
+					found++
+					continue
+				}
+				rest = append(rest, row)
+			}
+			if found != 1 {
+				t.Fatalf("%s: feature_flags holds %d rows for the Go-only feature %s, want 1", pass, found, feature.Key)
+			}
+			goRows = rest
+		}
 		if !reflect.DeepEqual(goRows, pythonRows) {
 			var differing []string
 			for index := 0; index < len(goRows) || index < len(pythonRows); index++ {

@@ -57,6 +57,7 @@ Ask Dev has five independent feature decisions:
 | `ask_dev_wave_3_1` | Server-owned question interpretation and the named-subject preflight | Disabled until explicitly enabled for an organization or license |
 | `byo_llm` | Organization-managed LLM provider configuration | Existing tier and override behavior, unchanged |
 | `agent_context_runtime` | Hosted ACR/MCP context capability | Existing explicit-purchase behavior, unchanged |
+| `acr_service_model` | The organization may use the platform LLM for MCP investigations without its own BYO LLM; published as the boolean `acr_service_model` in the acr entitlement response (`acr_entitlement.v1`, beside `agent_context_runtime`) | Disabled until explicitly enabled for an organization or license; reads `false` when the feature row is not registered yet (`dho admin features seed` registers it) |
 
 No gate grants any of the others. Enabling `ask_dev` does not enable contextual
 entrypoints, enable Wave 3.1 interpretation, expose BYO LLM settings, or expose

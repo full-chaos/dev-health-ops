@@ -25,7 +25,6 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -33,6 +32,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 const (
@@ -170,7 +170,7 @@ func buildHomeRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.Ha
 	// pools, each independently-built route owning its own pool object
 	// rather than threading a shared one across routes. Lazy (pgxpool.New
 	// does not dial at construction).
-	registryPool, err := pgxpool.New(context.Background(), cfg.RegistryPostgresURI)
+	registryPool, err := postgresstore.NewTracedPool(context.Background(), cfg.RegistryPostgresURI)
 	if err != nil {
 		_ = readClient.Close()
 		return nil, nil, false, fmt.Errorf("home: build registry postgres pool: %w", err)

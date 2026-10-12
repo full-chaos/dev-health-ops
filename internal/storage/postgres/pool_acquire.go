@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/dbphase"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dbspan"
 )
 
 // PoolAcquireObserver records pgx pool acquisition latency by bounded pool
@@ -30,8 +32,8 @@ type (
 )
 
 // poolAcquireTracer is both a pgx.QueryTracer and a pgxpool.AcquireTracer.
-// Query tracing is an intentional no-op: this exists solely to time
-// Acquire, and pgxpool only honors an AcquireTracer that is reachable
+// It times Acquire, feeds dbphase and emits slow-call client spans
+// (CHAOS-9364). pgxpool only honors an AcquireTracer that is reachable
 // through ConnConfig.Tracer (which is typed pgx.QueryTracer).
 //
 // The observer is attached after construction (attach) rather than passed to
@@ -39,14 +41,15 @@ type (
 // pgxpool.NewWithConfig — before the process's MetricsCollector, which is
 // built later in internal/workerservice, exists.
 type poolAcquireTracer struct {
-	pool string
+	pool  string
+	spans dbspan.Emitter
 
 	mu       sync.RWMutex
 	observer PoolAcquireObserver
 }
 
 func newPoolAcquireTracer(pool string) *poolAcquireTracer {
-	return &poolAcquireTracer{pool: pool}
+	return &poolAcquireTracer{pool: pool, spans: dbspan.NewEmitter(dbspan.SystemPostgres, pool)}
 }
 
 func (t *poolAcquireTracer) attach(observer PoolAcquireObserver) {
@@ -99,24 +102,114 @@ func poolAcquireResult(err error) string {
 
 // TraceQueryStart/TraceQueryEnd record each statement round trip (BEGIN and
 // COMMIT included -- pgx issues them as statements) into the dbphase.Trace the
-// call's context carries, if any (CHAOS-6936). They never feed the acquire
-// metric and never see arguments: pgx hands the SQL text only.
+// call's context carries, if any (CHAOS-6936), and into a slow-call client span
+// when the context carries a recording span (CHAOS-9364). They never feed the
+// acquire metric and never record arguments: pgx hands the SQL text only, and
+// the span carries a summary, never the text.
 func (t *poolAcquireTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if dbphase.From(ctx) == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, phaseStatementKey{}, dbphase.Start(ctx, dbphase.KindStatement, t.pool, data.SQL))
+	return traceStatementStart(ctx, t.pool, t.spans, data.SQL)
 }
 
 func (t *poolAcquireTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
-	if handle, ok := ctx.Value(phaseStatementKey{}).(dbphase.Handle); ok {
-		handle.End(data.Err)
+	traceStatementEnd(ctx, data.Err)
+}
+
+// TraceBatchStart/Query/End cover pgx.SendBatch: one BATCH span per round
+// trip, carrying the batch's statement count. Individual batch statements are
+// not spanned and carry no per-statement identity (a documented limit).
+func (t *poolAcquireTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchStartData) context.Context {
+	return traceBatchStart(ctx, t.spans, data)
+}
+
+func (t *poolAcquireTracer) TraceBatchQuery(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchQueryData) {
+}
+
+func (t *poolAcquireTracer) TraceBatchEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchEndData) {
+	traceBatchEnd(ctx, data.Err)
+}
+
+// spanKey carries the span probe and statement from Start to End.
+type spanKey struct{}
+
+type spanState struct {
+	probe dbspan.Probe
+	sql   string
+	op    string
+}
+
+func traceStatementStart(ctx context.Context, pool string, spans dbspan.Emitter, sql string) context.Context {
+	if probe := spans.Start(ctx); probe.Active() {
+		ctx = context.WithValue(ctx, spanKey{}, spanState{probe: probe, sql: sql})
 	}
+	if dbphase.From(ctx) == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, phaseStatementKey{}, dbphase.Start(ctx, dbphase.KindStatement, pool, sql))
+}
+
+func traceStatementEnd(ctx context.Context, err error) {
+	if handle, ok := ctx.Value(phaseStatementKey{}).(dbphase.Handle); ok {
+		handle.End(err)
+	}
+	finishSpan(ctx, err)
+}
+
+func traceBatchStart(ctx context.Context, spans dbspan.Emitter, data pgx.TraceBatchStartData) context.Context {
+	if probe := spans.Start(ctx); probe.Active() {
+		if data.Batch != nil {
+			probe = probe.WithBatchSize(data.Batch.Len())
+		}
+		return context.WithValue(ctx, spanKey{}, spanState{probe: probe, op: dbspan.OpBatch})
+	}
+	return ctx
+}
+
+func traceBatchEnd(ctx context.Context, err error) { finishSpan(ctx, err) }
+
+func finishSpan(ctx context.Context, err error) {
+	if st, ok := ctx.Value(spanKey{}).(spanState); ok {
+		st.probe.Finish(ctx, st.sql, st.op, err, pgErrorClass(err))
+	}
+}
+
+// pgErrorClass is a bounded class: the five-character SQLSTATE of a server
+// error ("pg_23505"), never its message, or the generic class.
+func pgErrorClass(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code != "" && len(pgErr.Code) <= 5 {
+		return "pg_" + pgErr.Code
+	}
+	return dbspan.ErrorClass(err)
+}
+
+// spanTracer is the span-only tracer factory.New installs on a pool that was
+// built without one, so every pool the process owns produces slow-call spans.
+type spanTracer struct{ spans dbspan.Emitter }
+
+func (t spanTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	return traceStatementStart(ctx, "", t.spans, data.SQL)
+}
+
+func (t spanTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	traceStatementEnd(ctx, data.Err)
+}
+
+func (t spanTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchStartData) context.Context {
+	return traceBatchStart(ctx, t.spans, data)
+}
+
+func (t spanTracer) TraceBatchQuery(context.Context, *pgx.Conn, pgx.TraceBatchQueryData) {}
+
+func (t spanTracer) TraceBatchEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchEndData) {
+	traceBatchEnd(ctx, data.Err)
 }
 
 var (
 	_ pgxpool.AcquireTracer = (*poolAcquireTracer)(nil)
 	_ pgx.QueryTracer       = (*poolAcquireTracer)(nil)
+	_ pgx.BatchTracer       = (*poolAcquireTracer)(nil)
+	_ pgx.QueryTracer       = spanTracer{}
+	_ pgx.BatchTracer       = spanTracer{}
 )
 
 // NewPhaseTracer returns the tracer the runtime pools carry, with no metric

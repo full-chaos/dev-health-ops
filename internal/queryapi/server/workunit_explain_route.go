@@ -32,7 +32,6 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 
@@ -47,6 +46,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workunitexplain"
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // workUnitExplainOperation is this route's routeswitch operation name --
@@ -120,7 +120,7 @@ func buildWorkUnitExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (hand
 	}
 
 	// pgxpool.New is lazy, so this does not dial Postgres at startup.
-	orgSettingsPool, err := pgxpool.New(context.Background(), cfg.RegistryPostgresURI)
+	orgSettingsPool, err := postgresstore.NewTracedPool(context.Background(), cfg.RegistryPostgresURI)
 	if err != nil {
 		_ = readClient.Close()
 		_ = writeConn.Close()

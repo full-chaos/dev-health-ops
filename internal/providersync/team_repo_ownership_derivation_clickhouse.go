@@ -107,6 +107,9 @@ type TeamRepoOwnershipDerivationStats struct {
 	// the tied teams' open rows and retracted any other team's. Set on every run that reaches the derivation, also when it
 	// writes nothing.
 	Ties []TeamRepoOwnershipTie
+	// Superseded is how many open rows the run closed because the claim they
+	// record now starts at its evidence time (a row at that time was written).
+	Superseded int
 }
 
 // Derive is DeriveWithStats without the stats (the form the integration tests and the older callers use).
@@ -252,6 +255,16 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 			return 0, 0, true, nil, err
 		}
 	}
+	retractedUntil, err := loadTeamRepoOwnershipRetractedUntil(ctx, service.Conn, orgID)
+	if err != nil {
+		return 0, retracted, true, nil, err
+	}
+	derived, settledCounts := settleInferredEvidence(derived, repos, retractedUntil, toRetract, now)
+	if settledCounts != (inferredEvidenceSettleCounts{}) {
+		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.evidence_start_set_aside",
+			"org_id", orgID, "future", settledCounts.future, "before_retraction", settledCounts.beforeRetraction,
+			"after_other_owner", settledCounts.afterOtherOwner)
+	}
 
 	stats.Derived = len(derived)
 	stats.Ties = derivation.Ties
@@ -268,6 +281,13 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	toWrite := filterUnchangedTeamRepoOwnershipRows(derived, repos, activeRows)
 	stats.Unchanged = len(derived) - len(toWrite)
 	if len(toWrite) == 0 {
+		// The claims are all written; an open row an earlier run left beside
+		// one (a write that landed before its supersede) is closed here.
+		superseded, err := supersedeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, supersededTeamRepoOwnershipRows(derived, repos, activeRows, now))
+		if err != nil {
+			return 0, retracted, true, nil, err
+		}
+		stats.Superseded = superseded
 		return 0, retracted, true, nil, nil
 	}
 	// armCounts (CHAOS-4458 part (b)) is computed by writeTeamRepoOwnershipRows
@@ -280,7 +300,146 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	if err != nil {
 		return 0, retracted, true, nil, err
 	}
+	superseded, err := supersedeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, supersededTeamRepoOwnershipRows(derived, repos, activeRows, now))
+	if err != nil {
+		return written, retracted, true, nil, err
+	}
+	stats.Superseded = superseded
 	return written, retracted, true, armCounts, nil
+}
+
+// evidenceTime is t in UTC at the millisecond of team_repo_ownership's
+// DateTime64(3) columns, or zero for a time that is no evidence (the zero
+// time, or the epoch a DateTime64 column default reads as).
+func evidenceTime(t time.Time) time.Time {
+	if t.IsZero() || !t.After(time.Unix(0, 0)) {
+		return time.Time{}
+	}
+	return t.UTC().Truncate(time.Millisecond)
+}
+
+// inferredValidFrom is the valid_from an inferred row is written with: the
+// earliest evidence time of the claim (a pull or merge request of the
+// repository reached through the team's work), so a read of a past day sees
+// the owner the evidence shows. A claim with no timed evidence, or evidence
+// in the future of this run, starts at the run.
+func inferredValidFrom(row DerivedTeamRepoOwnershipRow, now time.Time) time.Time {
+	if row.EvidenceFrom.IsZero() || row.EvidenceFrom.After(now) {
+		return now
+	}
+	return row.EvidenceFrom
+}
+
+// teamRepoOwnershipClaim is the identity of an inferred ownership claim.
+type teamRepoOwnershipClaim struct{ provider, repoFullName, teamID string }
+
+type inferredEvidenceSettleCounts struct{ future, beforeRetraction, afterOtherOwner int }
+
+// settleInferredEvidence moves the evidence time of a claim to where its row
+// must start:
+//   - evidence in the future of this run is cleared (the row starts at the run
+//     and an open row matches on the next runs, so a rerun writes nothing);
+//   - evidence older than the end of the claim's own latest retraction is
+//     cleared (that retraction already judged it; a row at the evidence time
+//     would replace the retracted row, whose valid_from is the same key, and
+//     erase the interval the claim did not own);
+//   - else evidence older than the end of another team's tenure on the
+//     repository (its latest retraction, or this run, when this run retracts
+//     its open row) moves to that end, so one team owns the repository at a
+//     time. The end is stored as that team's valid_to, so the next run reads
+//     the same start and writes nothing.
+func settleInferredEvidence(
+	derived []DerivedTeamRepoOwnershipRow,
+	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
+	retractedUntil map[teamRepoOwnershipClaim]time.Time,
+	retractingNow []teamRepoOwnershipActiveRow,
+	now time.Time,
+) ([]DerivedTeamRepoOwnershipRow, inferredEvidenceSettleCounts) {
+	type repoKey struct{ provider, repoFullName string }
+	type tenureEnd struct {
+		teamID string
+		until  time.Time
+	}
+	ends := map[repoKey][]tenureEnd{}
+	for claim, until := range retractedUntil {
+		key := repoKey{claim.provider, claim.repoFullName}
+		ends[key] = append(ends[key], tenureEnd{claim.teamID, until})
+	}
+	runEnd := evidenceTime(now)
+	for _, row := range retractingNow {
+		key := repoKey{row.Provider, row.RepoFullName}
+		ends[key] = append(ends[key], tenureEnd{row.TeamID, runEnd})
+	}
+
+	var counts inferredEvidenceSettleCounts
+	settled := make([]DerivedTeamRepoOwnershipRow, len(derived))
+	for i, row := range derived {
+		settled[i] = row
+		if row.EvidenceFrom.IsZero() {
+			continue
+		}
+		if row.EvidenceFrom.After(now) {
+			settled[i].EvidenceFrom = time.Time{}
+			counts.future++
+			continue
+		}
+		repoID, err := uuid.Parse(row.RepoID)
+		if err != nil || repoID == uuid.Nil {
+			continue
+		}
+		info, ok := repos[repoID]
+		if !ok || info.FullName == "" {
+			continue
+		}
+		if until, ok := retractedUntil[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}]; ok && row.EvidenceFrom.Before(until) {
+			settled[i].EvidenceFrom = time.Time{}
+			counts.beforeRetraction++
+			continue
+		}
+		var otherEnd time.Time
+		for _, end := range ends[repoKey{info.Provider, info.FullName}] {
+			if end.teamID != row.TeamID && end.until.After(otherEnd) {
+				otherEnd = end.until
+			}
+		}
+		if otherEnd.After(row.EvidenceFrom) {
+			settled[i].EvidenceFrom = otherEnd
+			counts.afterOtherOwner++
+		}
+	}
+	return settled, counts
+}
+
+// loadTeamRepoOwnershipRetractedUntil is, for each inferred claim with a
+// retracted row, the end of its latest retraction. A row closed at its own
+// valid_from (superseded by its evidence start) is no retraction.
+func loadTeamRepoOwnershipRetractedUntil(
+	ctx context.Context, conn driver.Conn, orgID string,
+) (map[teamRepoOwnershipClaim]time.Time, error) {
+	rows, err := conn.Query(ctx, `
+SELECT provider, repo_full_name, team_id, max(assumeNotNull(valid_to))
+FROM team_repo_ownership FINAL
+WHERE org_id = ?
+  AND source = 'inferred'
+  AND valid_to IS NOT NULL
+  AND valid_to > valid_from
+  AND valid_to <= now64(3, 'UTC')
+GROUP BY provider, repo_full_name, team_id`,
+		orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[teamRepoOwnershipClaim]time.Time{}
+	for rows.Next() {
+		var claim teamRepoOwnershipClaim
+		var until time.Time
+		if err := rows.Scan(&claim.provider, &claim.repoFullName, &claim.teamID, &until); err != nil {
+			return nil, err
+		}
+		out[claim] = until.UTC()
+	}
+	return out, rows.Err()
 }
 
 // teamRepoOwnershipRowSignature is the full set of values a written
@@ -331,9 +490,9 @@ func filterUnchangedTeamRepoOwnershipRows(
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
 	activeRows []teamRepoOwnershipActiveRow,
 ) []DerivedTeamRepoOwnershipRow {
-	unchanged := make(map[teamRepoOwnershipRowSignature]bool, len(activeRows))
+	unchanged := make(map[teamRepoOwnershipRowSignature][]time.Time, len(activeRows))
 	for _, row := range activeRows {
-		unchanged[teamRepoOwnershipRowSignature{
+		key := teamRepoOwnershipRowSignature{
 			TeamID:       row.TeamID,
 			RepoFullName: row.RepoFullName,
 			Provider:     row.Provider,
@@ -342,7 +501,8 @@ func filterUnchangedTeamRepoOwnershipRows(
 			Specificity:  row.Specificity,
 			Priority:     row.Priority,
 			MatchType:    row.MatchType,
-		}] = true
+		}
+		unchanged[key] = append(unchanged[key], row.ValidFrom.UTC().Truncate(time.Millisecond))
 	}
 	toWrite := make([]DerivedTeamRepoOwnershipRow, 0, len(derived))
 	for _, row := range derived {
@@ -371,12 +531,68 @@ func filterUnchangedTeamRepoOwnershipRows(
 			Priority:     teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Priority,
 			MatchType:    "exact", // writeTeamRepoOwnershipRows always writes match_type="exact"
 		}
-		if unchanged[signature] {
+		if openRowMatches(unchanged[signature], row) {
 			continue
 		}
 		toWrite = append(toWrite, row)
 	}
 	return toWrite
+}
+
+// openRowMatches reports whether one of the open rows of a signature records
+// the derived claim: any of them for a claim with no evidence time (its start
+// is the run that first wrote it), else the one that starts at the claim's
+// evidence time. An open row that started at an earlier derive run is then
+// not the claim: the claim gets a row at its evidence time and that open row
+// is superseded (supersededTeamRepoOwnershipRows).
+func openRowMatches(validFroms []time.Time, row DerivedTeamRepoOwnershipRow) bool {
+	if len(validFroms) == 0 {
+		return false
+	}
+	if row.EvidenceFrom.IsZero() {
+		return true
+	}
+	for _, validFrom := range validFroms {
+		if validFrom.Equal(row.EvidenceFrom) {
+			return true
+		}
+	}
+	return false
+}
+
+// supersededTeamRepoOwnershipRows is every open row of a derived claim's
+// identity (provider, repo_full_name, team_id) that does not start at the
+// claim's evidence time, when the claim has one: an earlier derive run wrote
+// it at its own run time. Closing it at its own valid_from (an empty
+// interval, never read) leaves ONE open row per claim, the one at the
+// evidence time. A claim with no evidence time supersedes nothing.
+func supersededTeamRepoOwnershipRows(
+	derived []DerivedTeamRepoOwnershipRow,
+	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
+	activeRows []teamRepoOwnershipActiveRow,
+	now time.Time,
+) []teamRepoOwnershipActiveRow {
+	type claim struct{ provider, repoFullName, teamID string }
+	starts := map[claim]time.Time{}
+	for _, row := range derived {
+		repoID, err := uuid.Parse(row.RepoID)
+		if err != nil || repoID == uuid.Nil {
+			continue
+		}
+		info, ok := repos[repoID]
+		if !ok || info.FullName == "" || row.EvidenceFrom.IsZero() {
+			continue
+		}
+		starts[claim{info.Provider, info.FullName, row.TeamID}] = inferredValidFrom(row, now)
+	}
+	var superseded []teamRepoOwnershipActiveRow
+	for _, row := range activeRows {
+		start, ok := starts[claim{row.Provider, row.RepoFullName, row.TeamID}]
+		if ok && !row.ValidFrom.UTC().Truncate(time.Millisecond).Equal(start) {
+			superseded = append(superseded, row)
+		}
+	}
+	return superseded
 }
 
 func loadTeamRepoOwnershipProjectLinks(
@@ -530,7 +746,7 @@ func loadTeamRepoOwnershipWorkItems(
 	// team key (issue.team.key) that DOES match. Empty string (ClickHouse's
 	// column default, migration 050) for every non-Linear provider.
 	rows, err := conn.Query(ctx, `
-SELECT work_item_id, provider, type, repo_id, project_id, native_team_key
+SELECT work_item_id, provider, type, repo_id, project_id, native_team_key, created_at
 FROM work_items FINAL
 WHERE org_id = ?`,
 		orgID)
@@ -542,9 +758,10 @@ WHERE org_id = ?`,
 	for rows.Next() {
 		var item TeamRepoOwnershipWorkItem
 		var repoID uuid.UUID
-		if err := rows.Scan(&item.WorkItemID, &item.Provider, &item.Type, &repoID, &item.ProjectID, &item.NativeTeamKey); err != nil {
+		if err := rows.Scan(&item.WorkItemID, &item.Provider, &item.Type, &repoID, &item.ProjectID, &item.NativeTeamKey, &item.CreatedAt); err != nil {
 			return nil, err
 		}
+		item.CreatedAt = evidenceTime(item.CreatedAt)
 		if repoID != uuid.Nil {
 			item.RepoID = repoID.String()
 		}
@@ -637,10 +854,18 @@ func loadTeamRepoOwnershipIssuePRLinks(
 	// repo_id IN (?) filter is kept too (defense in depth: this org's own
 	// repo set, loaded separately), but org_id is the authoritative scope.
 	rows, err := conn.Query(ctx, `
-SELECT repo_id, work_item_id, pr_number, provenance
-FROM work_graph_issue_pr FINAL
-WHERE org_id = ? AND repo_id IN (?)`,
-		orgID, repoIDs)
+SELECT l.repo_id, l.work_item_id, l.pr_number, l.provenance, pr.created_at, pr.matched
+FROM (
+    SELECT repo_id, work_item_id, pr_number, provenance
+    FROM work_graph_issue_pr FINAL
+    WHERE org_id = ? AND repo_id IN (?)
+) AS l
+LEFT JOIN (
+    SELECT repo_id, number, created_at, 1 AS matched
+    FROM git_pull_requests FINAL
+    WHERE org_id = ? AND repo_id IN (?)
+) AS pr ON pr.repo_id = l.repo_id AND pr.number = l.pr_number`,
+		orgID, repoIDs, orgID, repoIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -649,8 +874,15 @@ WHERE org_id = ? AND repo_id IN (?)`,
 	for rows.Next() {
 		var link TeamRepoOwnershipIssuePRLink
 		var repoID uuid.UUID
-		if err := rows.Scan(&repoID, &link.WorkItemID, &link.PRNumber, &link.Provenance); err != nil {
+		var prCreatedAt time.Time
+		var matched uint8
+		if err := rows.Scan(&repoID, &link.WorkItemID, &link.PRNumber, &link.Provenance, &prCreatedAt, &matched); err != nil {
 			return nil, err
+		}
+		// An unmatched LEFT JOIN reads the type's zero, never NULL: only a
+		// matched pull request gives an evidence time.
+		if matched == 1 {
+			link.EvidenceAt = evidenceTime(prCreatedAt)
 		}
 		if repoID == uuid.Nil {
 			continue
@@ -805,6 +1037,44 @@ func retractTeamRepoOwnershipRows(
 	return len(toRetract), nil
 }
 
+// supersedeTeamRepoOwnershipRows closes each row at its own valid_from (a
+// replacement under the same key with valid_to = valid_from and a newer
+// updated_at): the row then covers no instant, and the claim's row at its
+// evidence time is the one open row. Logged with the count.
+func supersedeTeamRepoOwnershipRows(
+	ctx context.Context,
+	conn driver.Conn,
+	orgID string,
+	now time.Time,
+	rows []teamRepoOwnershipActiveRow,
+) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
+	if err != nil {
+		return 0, err
+	}
+	defer releaseTeamRepoOwnershipBatch(ctx, orgID, batch)
+	for _, row := range rows {
+		isPrimary := uint8(0)
+		if row.IsPrimary {
+			isPrimary = 1
+		}
+		if err := batch.Append(
+			orgID, row.Provider, row.TeamID, row.RepoID, row.RepoFullName, row.MatchType, "inferred",
+			isPrimary, row.Specificity, row.Priority, row.ValidFrom, row.ValidFrom, now,
+		); err != nil {
+			return 0, err
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return 0, err
+	}
+	slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.superseded_by_evidence_start", "org_id", orgID, "rows", len(rows))
+	return len(rows), nil
+}
+
 // releaseTeamRepoOwnershipBatch aborts a batch that was never sent. A
 // prepared batch holds a pool connection until Send or Abort, so a return
 // without either (no writable row, an Append error) leaks the connection.
@@ -881,7 +1151,7 @@ func writeTeamRepoOwnershipRows(
 			uint8(0),
 			row.Specificity,
 			teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Priority,
-			now,
+			inferredValidFrom(row, now),
 			nil,
 			now,
 		); err != nil {

@@ -225,7 +225,15 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	}
 
 	derivation := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks, knownTeams)
-	derived := derivation.Rows
+	retractedUntil, err := loadTeamRepoOwnershipRetractedUntil(ctx, service.Conn, orgID)
+	if err != nil {
+		return 0, 0, true, nil, err
+	}
+	derived, futureEvidence, retractedEvidence := settleInferredEvidence(derivation.Rows, repos, retractedUntil, now)
+	if futureEvidence > 0 || retractedEvidence > 0 {
+		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.evidence_start_set_aside",
+			"org_id", orgID, "future", futureEvidence, "before_retraction", retractedEvidence)
+	}
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {
@@ -318,6 +326,81 @@ func inferredValidFrom(row DerivedTeamRepoOwnershipRow, now time.Time) time.Time
 		return now
 	}
 	return row.EvidenceFrom
+}
+
+// teamRepoOwnershipClaim is the identity of an inferred ownership claim.
+type teamRepoOwnershipClaim struct{ provider, repoFullName, teamID string }
+
+// settleInferredEvidence clears the evidence time of a claim that must start
+// at a run, not at its evidence: evidence in the future of this run (the row
+// is written at the run and an open row matches on the next runs, so a rerun
+// writes nothing), and evidence older than the end of the claim's last
+// retraction (that retraction already judged it; a row at the evidence time
+// would replace the retracted row, whose valid_from is the same key, and
+// erase the interval another team owned the repository).
+func settleInferredEvidence(
+	derived []DerivedTeamRepoOwnershipRow,
+	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
+	retractedUntil map[teamRepoOwnershipClaim]time.Time,
+	now time.Time,
+) (settled []DerivedTeamRepoOwnershipRow, future, retracted int) {
+	settled = make([]DerivedTeamRepoOwnershipRow, len(derived))
+	for i, row := range derived {
+		settled[i] = row
+		if row.EvidenceFrom.IsZero() {
+			continue
+		}
+		if row.EvidenceFrom.After(now) {
+			settled[i].EvidenceFrom = time.Time{}
+			future++
+			continue
+		}
+		repoID, err := uuid.Parse(row.RepoID)
+		if err != nil || repoID == uuid.Nil {
+			continue
+		}
+		info, ok := repos[repoID]
+		if !ok || info.FullName == "" {
+			continue
+		}
+		if until, ok := retractedUntil[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}]; ok && row.EvidenceFrom.Before(until) {
+			settled[i].EvidenceFrom = time.Time{}
+			retracted++
+		}
+	}
+	return settled, future, retracted
+}
+
+// loadTeamRepoOwnershipRetractedUntil is, for each inferred claim with a
+// retracted row, the end of its latest retraction. A row closed at its own
+// valid_from (superseded by its evidence start) is no retraction.
+func loadTeamRepoOwnershipRetractedUntil(
+	ctx context.Context, conn driver.Conn, orgID string,
+) (map[teamRepoOwnershipClaim]time.Time, error) {
+	rows, err := conn.Query(ctx, `
+SELECT provider, repo_full_name, team_id, max(assumeNotNull(valid_to))
+FROM team_repo_ownership FINAL
+WHERE org_id = ?
+  AND source = 'inferred'
+  AND valid_to IS NOT NULL
+  AND valid_to > valid_from
+  AND valid_to <= now64(3, 'UTC')
+GROUP BY provider, repo_full_name, team_id`,
+		orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[teamRepoOwnershipClaim]time.Time{}
+	for rows.Next() {
+		var claim teamRepoOwnershipClaim
+		var until time.Time
+		if err := rows.Scan(&claim.provider, &claim.repoFullName, &claim.teamID, &until); err != nil {
+			return nil, err
+		}
+		out[claim] = until.UTC()
+	}
+	return out, rows.Err()
 }
 
 // teamRepoOwnershipRowSignature is the full set of values a written

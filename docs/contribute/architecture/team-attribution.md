@@ -473,7 +473,13 @@ means the ClickHouse `teams` dimension is empty.
 > The row a run writes for a (team, repository) claim starts at the earliest evidence time of the WINNING team's
 > claim: the `created_at` of the earliest pull/merge request of the repository the team's work reaches (an own
 > pull/merge request work item: `work_items.created_at`; a linked issue: the linked pull request's
-> `git_pull_requests.created_at`). A claim with no timed evidence, or evidence after the run, starts at the run.
+> `git_pull_requests.created_at`). A claim with no timed evidence, or evidence after the run, starts at the run,
+> and a later run keeps that row (logged `team_repo_ownership_derivation.evidence_start_set_aside`, `future`).
+> A claim that was retracted before (another team won the repository; a row closed after its own start) and wins
+> again starts at the run when its evidence is older than the end of its latest retraction: that retraction already
+> judged that evidence, and a row at the evidence time would have the key of the retracted row and reopen it, so a
+> read of the interval the other team owned would name this team again (logged with `before_retraction`). A row
+> closed at its own start (superseded, below) is no retraction.
 > One open row per claim: an open row of the claim that does not start at its evidence time (written by an
 > earlier run at its run time) is superseded -- closed at its own `valid_from`, an empty interval no read
 > sees -- in the same run, after the row at the evidence time is written (logged

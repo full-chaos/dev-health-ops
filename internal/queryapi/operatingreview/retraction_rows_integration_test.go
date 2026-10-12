@@ -5,6 +5,7 @@ package operatingreview
 import (
 	"context"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"testing"
@@ -14,6 +15,67 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/retractionseed"
 )
+
+// floatTolerance absorbs the summation order of a float mean: the seed days
+// are relative to today, so the order of the addends moves with the date.
+const floatTolerance = 1e-9
+
+// equalWithinTolerance is reflect.DeepEqual with float fields compared within
+// floatTolerance. Every other field must be exactly equal.
+func equalWithinTolerance(a, b reflect.Value) bool {
+	if a.Kind() != b.Kind() {
+		return false
+	}
+	switch a.Kind() {
+	case reflect.Float32, reflect.Float64:
+		return math.Abs(a.Float()-b.Float()) <= floatTolerance
+	case reflect.Slice, reflect.Array:
+		if a.Kind() == reflect.Slice && a.IsNil() != b.IsNil() {
+			return false
+		}
+		if a.Len() != b.Len() {
+			return false
+		}
+		for i := 0; i < a.Len(); i++ {
+			if !equalWithinTolerance(a.Index(i), b.Index(i)) {
+				return false
+			}
+		}
+		return true
+	case reflect.Struct:
+		if a.Type() != b.Type() {
+			return false
+		}
+		if a.Type() == reflect.TypeOf(time.Time{}) {
+			return a.Interface().(time.Time).Equal(b.Interface().(time.Time))
+		}
+		for i := 0; i < a.NumField(); i++ {
+			if !equalWithinTolerance(a.Field(i), b.Field(i)) {
+				return false
+			}
+		}
+		return true
+	case reflect.Ptr:
+		if a.IsNil() || b.IsNil() {
+			return a.IsNil() == b.IsNil()
+		}
+		return equalWithinTolerance(a.Elem(), b.Elem())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return a.Int() == b.Int()
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return a.Uint() == b.Uint()
+	case reflect.String:
+		return a.String() == b.String()
+	case reflect.Bool:
+		return a.Bool() == b.Bool()
+	default:
+		panic(fmt.Sprintf("equalWithinTolerance: unsupported kind %s", a.Kind()))
+	}
+}
+
+func sameWithinTolerance(a, b any) bool {
+	return equalWithinTolerance(reflect.ValueOf(a), reflect.ValueOf(b))
+}
 
 // reviewRows is what the operating review readers of the team-keyed daily
 // tables give for one organization and period.
@@ -78,7 +140,7 @@ func TestOperatingReviewReadersGiveRetractionRowsNoWeight(t *testing.T) {
 		{itemsTouched: 6 * 14, durationHours: 12, avgWip: 0.5},
 		{itemsTouched: 6 * 14, durationHours: 9, avgWip: 0.375},
 	}
-	if !reflect.DeepEqual(control.StateDurations, wantStates) {
+	if !sameWithinTolerance(control.StateDurations, wantStates) {
 		t.Fatalf("control state durations = %+v, want %+v", control.StateDurations, wantStates)
 	}
 	if len(control.WorkItems) != 6 {
@@ -92,7 +154,7 @@ func TestOperatingReviewReadersGiveRetractionRowsNoWeight(t *testing.T) {
 	}
 
 	retracted := readReviewRows(ctx, t, client, retractionseed.RetractedOrg, start, end)
-	if !reflect.DeepEqual(control, retracted) {
+	if !sameWithinTolerance(control, retracted) {
 		t.Fatalf("the retraction rows changed a period row:\n control   %+v\n retracted %+v", control, retracted)
 	}
 }

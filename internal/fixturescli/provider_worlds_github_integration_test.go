@@ -255,4 +255,7 @@ var githubPlatformItems = []githubIssue{
 	{Number: 4, Title: "Router upgrade and refund retry guard", Body: "Fixes #2 and closes chaos-fixtures/payments-api#3", Author: ghCarol, PR: true, Head: "chore/router-upgrade",
 		CreatedAt: "2026-09-25T09:00:00Z", UpdatedAt: "2026-10-02T15:00:00Z", ClosedAt: "2026-10-02T15:00:00Z", MergedAt: "2026-10-02T15:00:00Z",
 		Closes: []string{githubOrg + "/platform-core#2", githubOrg + "/payments-api#3"}},
+	// An open pull request that names no issue: it reaches no team through a link.
+	{Number: 5, Title: "Export pool metrics", Body: "Adds gauges for the pool.", Author: ghBob, PR: true, Head: "feature/pool-metrics",
+		CreatedAt: "2026-10-06T09:00:00Z", UpdatedAt: "2026-10-07T09:00:00Z"},
 }

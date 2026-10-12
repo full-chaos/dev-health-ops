@@ -301,7 +301,7 @@ func linearWorldAnswers() []providerAnswer {
 var linearWorld = providerWorld{
 	Params: GenerateParams{
 		Provider: "linear", RepoName: "chaos-fx/ENG", RepoCount: 2, Days: 160,
-		CommitsPerDay: 0, PRCount: 2, TeamCount: 3, Seed: 1,
+		CommitsPerDay: 0, PRCount: 4, TeamCount: 4, Seed: 1,
 	},
 	OrgID:    "f1c7e000-0000-4000-8000-00000000a004",
 	FrozenAt: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),

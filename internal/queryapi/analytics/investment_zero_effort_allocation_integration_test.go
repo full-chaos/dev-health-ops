@@ -132,6 +132,9 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
+		if out.Sankey == nil || out.Sankey.Coverage == nil {
+			t.Fatalf("%s: sankey coverage is nil (the coverage statement failed or dropped out)", tc.name)
+		}
 		var breakdown, theme, repo float64
 		if len(out.Breakdowns) != 1 {
 			t.Fatalf("%s: breakdowns = %d, want 1", tc.name, len(out.Breakdowns))

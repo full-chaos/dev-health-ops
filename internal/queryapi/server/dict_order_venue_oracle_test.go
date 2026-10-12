@@ -138,6 +138,9 @@ type dictOrderCase struct {
 	method string
 	path   string
 	body   string
+	// retired: the route is no longer served; the recorded Python request
+	// keeps the case so the golden stays valid until it is recorded again.
+	retired bool
 }
 
 // freshnessObject returns body's "freshness" object as the bytes pyjson
@@ -337,7 +340,6 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		"GET /api/v1/explain":                            newExplainGetHandler(explainReader),
 		"GET /api/v1/home":                               newHomeGetHandler(client, pgPool),
 		"GET /api/v1/investment":                         newInvestmentGetHandler(investmentReader),
-		"POST /api/v1/investment/flow":                   newInvestmentFlowHandler(client),
 		"GET /api/v1/flame/aggregated":                   newFlameAggregatedWorkHandler(client),
 		"GET /api/v1/people/{person_id}/summary":         newPeopleSummaryHandler(peopleReader),
 		"GET /api/v1/work-units":                         newWorkUnitsGetHandler(workUnitsReader),
@@ -361,9 +363,8 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			Args: map[string]any{"filters": window}, method: http.MethodGet, path: "/api/v1/home?range_days=7"},
 		{Name: "investment band_counts and distributions", Route: "GET /api/v1/investment", Kind: "investment",
 			Args: map[string]any{"filters": window}, method: http.MethodGet, path: "/api/v1/investment?range_days=7"},
-		{Name: "investment flow coverage", Route: "POST /api/v1/investment/flow", Kind: "flow",
-			Args: map[string]any{"filters": window, "flow_mode": "team_category_repo"}, method: http.MethodPost, path: "/api/v1/investment/flow",
-			body: `{"filters":{"time":{"range_days":7}},"flow_mode":"team_category_repo"}`},
+		{Name: "investment flow coverage", Route: "POST /api/v1/investment/flow", Kind: "flow", retired: true,
+			Args: map[string]any{"filters": window, "flow_mode": "team_category_repo"}},
 		// No cycle_breakdown case: this oracle's Python side, run on a migrated
 		// database, answers 503 for an empty window (its fallback read of
 		// work_item_cycle_milestones_daily, a table no ClickHouse migration
@@ -410,6 +411,9 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	}
 	for _, index := range order {
 		tc := cases[index]
+		if tc.retired {
+			continue
+		}
 		if !goUnitsSeeded && tc.Kind != "home" {
 			seedWorkUnits([]string{venue.GoClickHouseDB})
 			goUnitsSeeded = true

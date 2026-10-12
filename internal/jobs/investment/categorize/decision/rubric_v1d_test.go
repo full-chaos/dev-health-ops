@@ -9,7 +9,7 @@ import (
 
 // The committed replay cases are v1d responses with v1d outcomes. They are
 // replayed under the v1d rubric, which is test data only: production embeds
-// v1f. Nothing here is hand-made v1f output.
+// v1h. Nothing here is hand-made v1h output.
 //
 //go:embed testdata/decision-support-v1d.json
 var rubricV1dJSON []byte

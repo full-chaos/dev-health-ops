@@ -31,7 +31,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentflow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/opportunities"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
@@ -277,18 +276,6 @@ func teamScopeConsumers() []struct {
 		{"GET/POST /api/v1/sankey", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			_, _ = sankey.BuildResponse(context.Background(), client, teamScopeReachOrgID, sankey.Params{
 				Mode: "investment", ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, WhatRepos: whatRepos, StartDay: start, EndDay: end,
-			})
-		}},
-		{"POST /api/v1/investment/flow", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
-			_, _ = investmentflow.BuildFlowResponse(context.Background(), client, investmentflow.Params{
-				OrgID: teamScopeReachOrgID, StartTS: start, EndTS: end,
-				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, WhatRepos: whatRepos, TopNRepos: 12,
-			})
-		}},
-		{"POST /api/v1/investment/flow/repo-team", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
-			_, _ = investmentflow.BuildRepoTeamFlowResponse(context.Background(), client, investmentflow.RepoTeamParams{
-				OrgID: teamScopeReachOrgID, StartTS: start, EndTS: end,
-				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, WhatRepos: whatRepos,
 			})
 		}},
 		{"GET/POST /api/v1/drilldown/prs", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {

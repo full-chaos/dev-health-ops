@@ -13,15 +13,13 @@ import (
 // investmentReaderConstructors are the package-main entry points that hand a
 // ClickHouse client to a reader composing
 // analytics.LatestWorkUnitInvestmentsSource (packages analytics via the
-// GraphQL handler, investment, investmentexplain, investmentflow, sankey).
+// GraphQL handler, investment, investmentexplain, sankey).
 var investmentReaderConstructors = map[string]bool{
-	"investment.NewReader":             true,
-	"investmentexplain.NewReader":      true,
-	"newInvestmentFlowHandler":         true,
-	"newInvestmentFlowRepoTeamHandler": true,
-	"newSankeyGetHandler":              true,
-	"newSankeyPostHandler":             true,
-	"newQueryHandler":                  true,
+	"investment.NewReader":        true,
+	"investmentexplain.NewReader": true,
+	"newSankeyGetHandler":         true,
+	"newSankeyPostHandler":        true,
+	"newQueryHandler":             true,
 }
 
 func calleeName(call *ast.CallExpr) string {

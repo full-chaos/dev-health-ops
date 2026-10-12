@@ -4,7 +4,7 @@ summary: Read how effort-weighted Investment contributions connect categories wi
 content_type: workflow-guide
 owner: product-analytics
 source_of_truth:
-  - internal/queryapi/investmentflow/investmentflow.go
+  - internal/queryapi/sankey/sankey.go
   - internal/queryapi/investment/reader.go
 applicability: current
 lifecycle: active

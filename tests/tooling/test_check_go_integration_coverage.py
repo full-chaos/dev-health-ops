@@ -205,12 +205,11 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # blocked_work_status_filter_integration_test.go, four tests total,
     # against a real ClickHouse container) -- the same package
     # test_go_integration_sharding.py's EXPECTED_PACKAGES also counts.
-    # internal/queryapi/investmentflow and internal/queryapi/
-    # sankey each carry a real-ClickHouse recurrence guard for a
-    # UInt64-aggregate-scanned-into-a-mismatched-Go-type class of defect,
-    # same shape as the featureFlagEvents entry above -- a fake RowScanner
-    # cannot reproduce the real driver's own type-conversion refusal --
-    # and both count toward the total below.
+    # internal/queryapi/sankey carries a real-ClickHouse recurrence guard
+    # for a UInt64-aggregate-scanned-into-a-mismatched-Go-type class of
+    # defect, same shape as the featureFlagEvents entry above -- a fake
+    # RowScanner cannot reproduce the real driver's own type-conversion
+    # refusal -- and it counts toward the total below.
     # CURRENT TOTAL: 73 (CHAOS-6243 added internal/syncbudget).
     # CHAOS-6244 added internal/api/licensing (73 -> 74): the shared
     # feature-decision engine's Postgres-backed Store is proved against a

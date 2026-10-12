@@ -4,12 +4,10 @@ import "testing"
 
 // This file pins the corpus-level fix for the investment family's own
 // missing repo-scope coverage: GET/POST /api/v1/investment, GET
-// /api/v1/investment/sunburst, POST /api/v1/investment/flow and POST
-// /api/v1/investment/flow/repo-team each declare a "repo_scoped" entry
-// (restcorpus.go), one resolved by bounded candidate iteration over
-// filters/options' own repo_id list and exposed as investment_repo_id,
-// the other four consuming that single winner -- see POST /api/v1/
-// investment/flow's own "repo_scoped" entry doc comment for why: a plain
+// /api/v1/investment/sunburst each declare a "repo_scoped" entry
+// (restcorpus.go): the sunburst entry is resolved by bounded candidate
+// iteration over filters/options' own repo_id list and exposed as
+// investment_repo_id, the other two consuming that single winner: a plain
 // first-repo id can easily hold zero investment rows for the requested
 // window, which these routes' own declared BaselineDefects would
 // otherwise refuse as vacuous.
@@ -18,11 +16,9 @@ import "testing"
 // operation this fix touches -- the first entry is the one that resolves
 // investment_repo_id, the rest consume it.
 var investmentRepoScopedOperations = []string{
-	"REST:POST:/api/v1/investment/flow",
-	"REST:POST:/api/v1/investment/flow/repo-team",
+	"REST:GET:/api/v1/investment/sunburst",
 	"REST:GET:/api/v1/investment",
 	"REST:POST:/api/v1/investment",
-	"REST:GET:/api/v1/investment/sunburst",
 }
 
 // findRESTRequest returns the named request from operation's own corpus,
@@ -42,33 +38,9 @@ func findRESTRequest(t *testing.T, operation, name string) RESTRequest {
 	return RESTRequest{}
 }
 
-// TestInvestmentFlowRepoScoped_UsesBoundedCandidateIteration pins POST
-// /api/v1/investment/flow's own "repo_scoped" entry: exactly one binding,
-// iterating over the raw repo_id producer (filters/options' own live repo
-// list) up to 10 candidates, exposed as investment_repo_id -- the same
-// shape GET /api/v1/people/{person_id}/drilldown/prs' own
-// drilldown_prs_default entry already establishes
-// (TestPersonDrilldownPRsDefault_UsesBoundedCandidateIteration).
-func TestInvestmentFlowRepoScoped_UsesBoundedCandidateIteration(t *testing.T) {
-	req := findRESTRequest(t, "REST:POST:/api/v1/investment/flow", "repo_scoped")
-	// POST /api/v1/investment/flow is a deleted-Python-body route
-	// (CHAOS-6241, restdeletedbody.go): the baseline now always answers
-	// the fixed sentinel, not a real 200.
-	if req.WantCandidateStatus != 200 || req.WantBaselineStatus != 500 {
-		t.Fatalf("repo_scoped WantCandidateStatus/WantBaselineStatus = %d/%d, want 200/500", req.WantCandidateStatus, req.WantBaselineStatus)
-	}
-	if len(req.IDBindings) != 1 {
-		t.Fatalf("repo_scoped IDBindings = %+v, want exactly one binding", req.IDBindings)
-	}
-	binding := req.IDBindings[0]
-	if binding.Producer != "repo_id" || binding.BodyPath != "filters.scope.ids" || binding.Candidates != 10 || binding.ExposeAs != "investment_repo_id" {
-		t.Fatalf("repo_scoped binding = %+v, want Producer=repo_id BodyPath=filters.scope.ids Candidates=10 ExposeAs=investment_repo_id", binding)
-	}
-}
-
 // TestInvestmentFamilyRepoScopedSiblings_BindToTheExposedWinner pins that
 // every OTHER repo_scoped entry on the investment family binds to
-// investment_repo_id -- the winning candidate investment/flow's own
+// investment_repo_id -- the winning candidate the sunburst entry's own
 // iteration selected -- never back to the raw repo_id producer a sibling
 // bound to would independently, and possibly differently (or vacuously),
 // resolve. A regression that reverts any sibling to the raw producer
@@ -79,10 +51,8 @@ func TestInvestmentFamilyRepoScopedSiblings_BindToTheExposedWinner(t *testing.T)
 		queryParam string
 		bodyPath   string
 	}{
-		{"REST:POST:/api/v1/investment/flow/repo-team", "", "filters.scope.ids"},
 		{"REST:GET:/api/v1/investment", "scope_id", ""},
 		{"REST:POST:/api/v1/investment", "", "filters.scope.ids"},
-		{"REST:GET:/api/v1/investment/sunburst", "scope_id", ""},
 	} {
 		t.Run(tc.operation, func(t *testing.T) {
 			req := findRESTRequest(t, tc.operation, "repo_scoped")
@@ -106,7 +76,7 @@ func TestInvestmentFamilyRepoScopedSiblings_BindToTheExposedWinner(t *testing.T)
 }
 
 // TestInvestmentRepoScopedOperations_RunOrderResolvesTheProducerFirst pins
-// that restRunOrder actually runs POST /api/v1/investment/flow's own
+// that restRunOrder actually runs GET /api/v1/investment/sunburst's own
 // producer request before every sibling that consumes investment_repo_id
 // -- a regression that reordered restRunOrder would leave every sibling
 // refused by RESTRefusalIDBindingUnresolved at run time even though the
@@ -130,5 +100,22 @@ func TestInvestmentRepoScopedOperations_RunOrderResolvesTheProducerFirst(t *test
 		if pos <= producerPos {
 			t.Fatalf("%s runs at position %d, want strictly after %s (position %d)", op, pos, investmentRepoScopedOperations[0], producerPos)
 		}
+	}
+}
+
+// TestInvestmentSunburstRepoScoped_IteratesAndExposesTheWinner pins that the
+// sunburst repo_scoped entry is the one that searches candidates and
+// exposes the winning repository to its siblings.
+func TestInvestmentSunburstRepoScoped_IteratesAndExposesTheWinner(t *testing.T) {
+	req := findRESTRequest(t, "REST:GET:/api/v1/investment/sunburst", "repo_scoped")
+	if len(req.IDBindings) != 1 {
+		t.Fatalf("repo_scoped IDBindings = %+v, want exactly one binding", req.IDBindings)
+	}
+	binding := req.IDBindings[0]
+	if binding.Producer != "repo_id" || binding.QueryParam != "scope_id" || binding.Candidates != 10 || binding.ExposeAs != "investment_repo_id" {
+		t.Fatalf("repo_scoped binding = %+v, want a 10-candidate search on repo_id exposed as investment_repo_id", binding)
+	}
+	if len(req.Produces) != 1 || req.Produces[0].Name != "investment_repo_sunburst_slice" {
+		t.Fatalf("repo_scoped Produces = %+v, want the declared slice id that makes an empty repository lose", req.Produces)
 	}
 }

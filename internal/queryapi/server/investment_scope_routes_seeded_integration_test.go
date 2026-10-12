@@ -25,7 +25,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentflow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -171,16 +170,6 @@ func scopeRoutes(t *testing.T) []scopeRoute {
 				return nil, err
 			}
 			return investment.BuildSunburstResponse(ctx, reader, orgID, investment.SunburstParams{OrgID: orgID, StartTS: start, EndTS: end, ScopeLevel: "org", Limit: 50})
-		}},
-		{"/api/v1/investment/flow", func(ctx context.Context, client analytics.QueryClient, orgID string) (any, error) {
-			return investmentflow.BuildFlowResponse(ctx, client, investmentflow.Params{OrgID: orgID, StartTS: start, EndTS: end, ScopeLevel: "org", TopNRepos: 12})
-		}},
-		{"/api/v1/investment/flow (team_category_repo)", func(ctx context.Context, client analytics.QueryClient, orgID string) (any, error) {
-			flowMode := "team_category_repo"
-			return investmentflow.BuildFlowResponse(ctx, client, investmentflow.Params{OrgID: orgID, StartTS: start, EndTS: end, ScopeLevel: "org", TopNRepos: 12, FlowMode: &flowMode})
-		}},
-		{"/api/v1/investment/flow/repo-team", func(ctx context.Context, client analytics.QueryClient, orgID string) (any, error) {
-			return investmentflow.BuildRepoTeamFlowResponse(ctx, client, investmentflow.RepoTeamParams{OrgID: orgID, StartTS: start, EndTS: end, ScopeLevel: "org"})
 		}},
 		{"/api/v1/sankey (investment)", func(ctx context.Context, client analytics.QueryClient, orgID string) (any, error) {
 			return sankey.BuildResponse(ctx, client, orgID, sankey.Params{Mode: "investment", ScopeLevel: "org", StartDay: start, EndDay: end})

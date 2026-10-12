@@ -783,6 +783,11 @@ func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
 			t.Errorf("%s is a response_model route with no Go response type in responseModelOracleRoutes", key)
 		}
 	}
+	// Routes the service no longer serves, still named in the recorded
+	// table and render requests: a frozen run answers only a request that is
+	// byte-identical to the recorded one, so they stay here until the goldens
+	// are recorded again.
+	keys = append(keys, "POST /api/v1/investment/flow", "POST /api/v1/investment/flow/repo-team")
 	sort.Strings(keys)
 	tableBody := runPython("table", keys)
 	var table struct {

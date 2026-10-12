@@ -381,8 +381,8 @@ means the ClickHouse `teams` dimension is empty.
 > ladder or any rank — they change what gets *recorded* (rule 1) and what gets *resolved at all*
 > (rule 2), not precedence. Confirmed serving-path scope while implementing: both the flow-matrix
 > Team node (`primaryWorkItemTeamAttributionSource`, `internal/queryapi/analytics/flowmatrix.go`)
-> and the Investment Evidence drilldown's per-unit team vote (`buildUnitTeamSubquery`,
-> `internal/queryapi/analytics/investment.go`, §"Investment work-graph consumption" below) read
+> and the work-unit team list's per-unit team vote (`resolveWorkUnitTeamAttributions`,
+> `internal/queryapi/workgraph/teamattribution.go`) read
 > the SAME `is_primary = 1`, latest-`computed_at` source — there is no separate path joining
 > membership or non-primary rows on either page, so an `Ops Team` node/drilldown entry with units on
 > it was rule 2's 232 PRIMARY rows, never rule 1's 834 non-primary ones (which were already inert
@@ -1165,7 +1165,7 @@ project (section 0.1): a native team key gives one team.
   Readers that stay on `= 1` although they name a team: the organization flame (a breakdown of the
   organization total by primary team), the daily rollup inputs and the investment team-repository donors
   (one team per item, section "Known limit" below), and the one-team-per-work-unit votes
-  (`internal/queryapi/workgraph/teamattribution.go`, the investment views' `BuildUnitTeamSubquery`, the
+  (`internal/queryapi/workgraph/teamattribution.go`, the
   investment explanation's majority team). GraphQL `isPrimary` is `true` for `1` only.
 - **The census.** `TestWorkItemTeamAttributionIsPrimaryPredicateCensus` reads every production Go file that
   names this table and fails on any `is_primary` form other than `= 1` and `IN (1, 2)`: `!= 0`, `> 0`, a bare
@@ -1208,11 +1208,10 @@ project (section 0.1): a native team key gives one team.
   change. A rollup-based team view shows a co-owned item under its primary team only, until the rollup rows
   carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
   passes the primary team only.
-- **Known limit: the team of a work unit follows one team per work unit in the work-unit team list and the REST investment flow.** A co-owner
+- **Known limit: the team of a work unit follows one team per work unit in the work-unit team list.** A co-owner
   team sees the item in the item views (the issues drilldown, the aggregated flame, the team quadrant, the flow-matrix
-  TEAM and REPO activity). The GraphQL work-unit team list (`workUnitTeamAttributions`) and the REST investment flow
-  edges (`POST /api/v1/investment/flow`, no caller in the web app) take the team from the work-unit vote over the items'
-  primary rows (`BuildUnitTeamSubquery`, `resolveWorkUnitTeamAttributions`): one team per work unit. The census holds
+  TEAM and REPO activity). The GraphQL work-unit team list (`workUnitTeamAttributions`) takes the team from the
+  work-unit vote over the items' primary rows (`resolveWorkUnitTeamAttributions`): one team per work unit. The census holds
   every reader of the vote's team to a named list (`workUnitVoteConsumers`); a new reader must be classified there,
   and a stale entry fails. Every **analytics team grouping on the investment path** reads repository ownership instead
   (CHAOS-9297): the TEAM dimension of the sankey (the Investment flow), breakdown, timeseries and the flow matrix, and

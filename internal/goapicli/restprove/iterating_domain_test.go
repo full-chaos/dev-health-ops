@@ -261,7 +261,7 @@ func assertCellConsistent(t *testing.T, name, got string, receipts int, reads []
 // search's unit inside that same repository.
 // TestRunMeasurement_RepositoryScopedCasesBindARepositoryWithData runs the
 // full real corpus the way an operator does. GET /api/v1/filters/options,
-// POST /api/v1/investment/flow, GET /api/v1/work-units and POST
+// GET /api/v1/investment/sunburst, GET /api/v1/work-units and POST
 // /api/v1/work-units/{work_unit_id}/explain are all deleted-Python-body
 // routes (CHAOS-6241, goapiproof/restdeletedbody.go): their baseline now
 // always answers the fixed sentinel, so the bounded-candidate search that
@@ -274,25 +274,21 @@ func assertCellConsistent(t *testing.T, name, got string, receipts int, reads []
 // by whether the baseline changed underneath them.
 func TestRunMeasurement_RepositoryScopedCasesBindARepositoryWithData(t *testing.T) {
 	const build = "build123"
-	flowEmptyCandidate := readProveFixture(t, "investmentflow_reposcoped_emptyrepo_candidate_2a7a073a.json")
-	flowData := readProveFixture(t, "investmentflow_dynamicorg_baseline_1988f415.json")
 	sentinel := func(w http.ResponseWriter) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"detail":"this route is served by query-api and has no Python implementation"}`))
 	}
 	candidateHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-dev-health-build", build)
-		raw, _ := io.ReadAll(r.Body)
-		body := string(raw)
 		switch {
 		case r.URL.Path == "/api/v1/filters/options":
 			_, _ = w.Write([]byte(`{"teams":["team-a"],"repos":["repo-empty","repo-data"]}`))
-		case r.URL.Path == "/api/v1/investment/flow" && strings.Contains(body, `"level":"repo"`):
-			if strings.Contains(body, "repo-empty") {
-				_, _ = w.Write([]byte(flowEmptyCandidate))
+		case r.URL.Path == "/api/v1/investment/sunburst" && r.URL.Query().Get("scope_type") == "repo":
+			if r.URL.Query().Get("scope_id") == "repo-data" {
+				_, _ = w.Write([]byte(`[{"theme":"Feature Delivery","subcategory":"feature","scope":"repo-data","value":1}]`))
 				return
 			}
-			_, _ = w.Write([]byte(flowData))
+			_, _ = w.Write([]byte(`[]`))
 		case r.URL.Path == "/api/v1/work-units" && r.URL.Query().Get("scope_type") == "repo":
 			if r.URL.Query().Get("scope_id") == "repo-data" {
 				_, _ = w.Write([]byte(`[{"work_unit_id":"ABC-123"}]`))
@@ -309,7 +305,7 @@ func TestRunMeasurement_RepositoryScopedCasesBindARepositoryWithData(t *testing.
 	})
 	baselineHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/v1/filters/options", "/api/v1/investment/flow", "/api/v1/work-units":
+		case "/api/v1/filters/options", "/api/v1/investment/sunburst", "/api/v1/work-units":
 			sentinel(w)
 		default:
 			if strings.HasSuffix(r.URL.Path, "/explain") {
@@ -356,13 +352,13 @@ func TestRunMeasurement_RepositoryScopedCasesBindARepositoryWithData(t *testing.
 		t.Fatalf("report has no outcome for %s/%s", op, name)
 		return nil
 	}
-	flow := find("REST:POST:/api/v1/investment/flow", "repo_scoped")
-	if flow.BoundIDs["repo_id"] != "repo-data" || len(flow.Attempts) != 1 || flow.Attempts[0].CandidateID != "repo-empty" {
-		t.Fatalf("flow repo_scoped = %+v, want repo-data bound after skipping repo-empty", flow)
-	}
 	sunburst := find("REST:GET:/api/v1/investment/sunburst", "repo_scoped")
-	if sunburst.BoundIDs["investment_repo_id"] != "repo-data" {
-		t.Fatalf("sunburst repo_scoped bound = %v, want investment_repo_id=repo-data", sunburst.BoundIDs)
+	if sunburst.BoundIDs["repo_id"] != "repo-data" || len(sunburst.Attempts) != 1 || sunburst.Attempts[0].CandidateID != "repo-empty" {
+		t.Fatalf("sunburst repo_scoped = %+v, want repo-data bound after skipping repo-empty", sunburst)
+	}
+	investment := find("REST:GET:/api/v1/investment", "repo_scoped")
+	if investment.BoundIDs["investment_repo_id"] != "repo-data" {
+		t.Fatalf("investment repo_scoped bound = %v, want investment_repo_id=repo-data", investment.BoundIDs)
 	}
 	units := find("REST:GET:/api/v1/work-units", "repo_scoped")
 	if units.BoundIDs["repo_id"] != "repo-data" || len(units.Attempts) != 1 || units.Attempts[0].CandidateID != "repo-empty" {
@@ -372,8 +368,8 @@ func TestRunMeasurement_RepositoryScopedCasesBindARepositoryWithData(t *testing.
 	if explain.Refusal == goapiproof.RESTRefusalIDBindingUnresolved || explain.BoundIDs["work_units_repo_id"] != "repo-data" || explain.BoundIDs["work_unit_id_repo_scoped"] != "ABC-123" {
 		t.Fatalf("explain repo_scoped_live_work_unit = %+v, want ABC-123 explained inside repo-data", explain)
 	}
-	t.Logf("flow=%v attempts=%v | sunburst=%v | work-units=%v attempts=%v | explain=%v refusal=%q",
-		flow.BoundIDs, flow.Attempts, sunburst.BoundIDs, units.BoundIDs, units.Attempts, explain.BoundIDs, explain.Refusal)
+	t.Logf("sunburst=%v attempts=%v | work-units=%v attempts=%v | explain=%v refusal=%q",
+		sunburst.BoundIDs, sunburst.Attempts, units.BoundIDs, units.Attempts, explain.BoundIDs, explain.Refusal)
 }
 
 // bodyWithList builds a JSON body carrying, at each producer's ListPath

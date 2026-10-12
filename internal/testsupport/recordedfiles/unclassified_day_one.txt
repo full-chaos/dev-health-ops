@@ -70,9 +70,6 @@ internal/fixturescli/testdata/generate/synthetic_ci-metrics-executed-proof__repo
 internal/fixturescli/testdata/synthetic/11111111-2222-4333-8444-555555555555_acme__live-e2e_14d.json.gz
 internal/fixturescli/testdata/synthetic/c0ffee00-dead-4bee-8bad-f00dfeedface_ci-metrics-executed-proof__repo_7d.json.gz
 internal/fixturesgen/testdata/generators_oracle.py
-internal/goapicli/restprove/testdata/investmentflow_dynamicorg_baseline_1988f415.json
-internal/goapicli/restprove/testdata/investmentflow_reposcoped_emptyrepo_baseline_acc5f56b.json
-internal/goapicli/restprove/testdata/investmentflow_reposcoped_emptyrepo_candidate_2a7a073a.json
 internal/goapicli/restprove/testdata/investmentsunburst_teamscoped_skew_baseline_3cf72260.json
 internal/goapicli/restprove/testdata/investmentsunburst_teamscoped_skew_candidate_a12379ac.json
 internal/goapicli/restprove/testdata/workunits_reposcoped_emptyrepo_baseline.json
@@ -742,13 +739,6 @@ internal/queryapi/investmentexplain/testdata/resolve_repo_filter_ids__repo_scope
 internal/queryapi/investmentexplain/testdata/resolve_repo_filter_ids__team_scope.json
 internal/queryapi/investmentexplain/testdata/resolve_repo_filter_ids__team_scope_with_what_repos.json
 internal/queryapi/investmentexplain/testdata/workunit_attribution.json
-internal/queryapi/investmentflow/testdata/dynamic_fallback.json
-internal/queryapi/investmentflow/testdata/dynamic_repo_scope.json
-internal/queryapi/investmentflow/testdata/dynamic_team.json
-internal/queryapi/investmentflow/testdata/repo_team.json
-internal/queryapi/investmentflow/testdata/team_category_repo.json
-internal/queryapi/investmentflow/testdata/team_category_subcategory_repo.json
-internal/queryapi/investmentflow/testdata/team_subcategory_repo.json
 internal/queryapi/meta/testdata/meta.json
 internal/queryapi/people/testdata/alias_mapping.json
 internal/queryapi/people/testdata/no_alias_mapping.json

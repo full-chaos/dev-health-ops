@@ -11,10 +11,12 @@ import (
 
 // The main and co-owner rows (rulings D5988, Q2) do not change how an inferred
 // owner ranks against a GitHub provider_access grant: one-owner readers rank
-// (is_primary = 1) first, then specificity, and an inferred row (specificity
-// 150) already outranked a grant (100). The grant is written by the real GitHub
-// catalog normalizer and sink (repo_id NULL, resolved by the repos name join),
-// the inferred rows by Derive.
+// (is_primary = 1) first, then specificity, and an inferred main owner
+// (specificity 150) outranks a grant (100), as the one inferred row did before.
+// A co-owner is never the one owner: a tie with no main owner leaves the grant
+// the owner, as before co-owner rows existed (the tie wrote no row then). The
+// grant is written by the real GitHub catalog normalizer and sink (repo_id
+// NULL, resolved by the repos name join), the inferred rows by Derive.
 func TestAnInferredOwnerStillOutranksAProviderAccessGrant(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	grant := func(org *rankedOwnerOrg) {
@@ -62,8 +64,8 @@ func TestAnInferredOwnerStillOutranksAProviderAccessGrant(t *testing.T) {
 		org.link("linear", "team-b", "native", 1)
 		org.derive()
 		org.assertOwnerRows(map[string]ownerRow{"team-a": ownerState(2, 0.5), "team-b": ownerState(2, 0.5)})
-		if got := owner(org); got == "gh:grant-team" || got == "" {
-			t.Fatalf("owner = %q, want an inferred co-owner (specificity 150 over the grant's 100), as an inferred row ranked before", got)
+		if got := owner(org); got != "gh:grant-team" {
+			t.Fatalf("owner = %q, want the grant gh:grant-team: a co-owner is never the one owner, and the tie names no main owner", got)
 		}
 	})
 }

@@ -2694,9 +2694,12 @@ CHAOS-9411) stays the main owner, every other tied team is a co-owner, and the r
 owner, signalled on every run while the tie lasts. A team that no longer reaches the repo has its row retracted, as
 before; a team whose role or share changed gets a new version of its row under the same key (same `valid_from`), so each
 claim has one open row. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick one
-owner rank `(is_primary = 1) DESC` first (`teamownership.AuthoritativeOwnerByRepo`, the cognitive-load gate, the cascade's
-`RankDerivationCandidates`), so a co-owner never outranks the main owner; an ownership fact with `is_primary = 2` also
-carries the confidence of a fact that is not primary (`medium`). Readers that use the co-owner rows and the share are
+owner never take a co-owner row: `teamownership.AuthoritativeOwnerByRepo` and the cognitive-load gate leave out
+`is_primary = 2` rows and rank `(is_primary = 1) DESC` first, and the cascade's `LoadRepos` gives no `repo_ownership`
+candidate from a co-owner row (`RankDerivationCandidates` also ranks only `is_primary = 1` first). So a repo with co-owners
+only (a tie with no main owner) has no inferred one owner, as before co-owner rows existed, and the main owner keeps
+outranking a `provider_access` grant by specificity. An ownership fact with `is_primary = 2` carries the confidence of a
+fact that is not primary (`medium`). Readers that use the co-owner rows and the share are
 CHAOS-9408/9409/9410/9413.
 Before CHAOS-8945, a single `explicit_text` link from a second team dropped the repo and retracted its owner; before
 CHAOS-9411, the other teams got no row and no share was stored. Pinned by
@@ -2704,7 +2707,9 @@ CHAOS-9411, the other teams got no row and no share was stored. Pinned by
 owner, co-owners and shares read back), the `TestRankedOwner*`, `TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate` and
 `TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier` tests in `team_repo_ownership_derivation_test.go`,
 `team_repo_ownership_shares_test.go` (tie keeps the main owner; claim starts), and the reader rank tests
-`TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt` and `TestACoOwnerFactNeverOutranksTheMainOwner`.
+`TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt`, `TestACoOwnerFactNeverOutranksTheMainOwner`,
+`TestLoadReposLeavesOutCoOwnerRows`, `TestTheRepoGateNeverTakesACoOwnerAsTheOwner` and
+`TestAnInferredOwnerStillOutranksAProviderAccessGrant`.
 
 `work_items.repo_id` (and, for the PR-inheritance branch, `work_graph_issue_pr.repo_id`) is the
 derivation's output column, not resolved by a join through `repos` — though the WRITE side does

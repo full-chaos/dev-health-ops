@@ -424,6 +424,15 @@ func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *t
 	// specific of all -- must still lose to the main owner: only
 	// is_primary = 1 ranks first, so 2 never sorts above 1.
 	insert("team-co-owner", 2, 9, before.Add(48*time.Hour), multiClaimed)
+	// A repo with co-owners only (a tie with no main owner) has no
+	// authoritative owner; a repo with co-owners and a grant (is_primary = 0)
+	// takes the grant, whatever the co-owner's specificity.
+	coOwnersOnly := uuid.New()
+	insert("team-tied-a", 2, 150, before, coOwnersOnly)
+	insert("team-tied-b", 2, 150, before, coOwnersOnly)
+	coOwnerAndGrant := uuid.New()
+	insert("team-tied-c", 2, 150, before, coOwnerAndGrant)
+	insert("team-grant", 0, 100, before, coOwnerAndGrant)
 	// An unrelated, singly-owned repo -- proves the function does not just
 	// return "the first row it sees" globally, only per repo_id.
 	insert("team-solo", 1, 1, before, soleOwned)
@@ -452,6 +461,12 @@ func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *t
 	if got := owners[multiClaimed.String()]; got != "team-primary" {
 		t.Fatalf("multi-claimed repo owner=%q, want team-primary -- is_primary = 1 "+
 			"must outrank insertion order, specificity and a co-owner (is_primary = 2)", got)
+	}
+	if got, ok := owners[coOwnersOnly.String()]; ok {
+		t.Fatalf("co-owners-only repo owner=%q, want no owner: a co-owner (is_primary = 2) is never the authoritative owner", got)
+	}
+	if got := owners[coOwnerAndGrant.String()]; got != "team-grant" {
+		t.Fatalf("co-owner + grant repo owner=%q, want team-grant: a co-owner is never the authoritative owner", got)
 	}
 	if got := owners[soleOwned.String()]; got != "team-solo" {
 		t.Fatalf("sole-owned repo owner=%q, want team-solo", got)

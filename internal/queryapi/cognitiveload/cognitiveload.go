@@ -927,6 +927,7 @@ func fetchOwnershipCandidates(ctx context.Context, client QueryClient, orgID str
         WHERE o.org_id = {org_id:String}
           AND (o.repo_id IS NOT NULL OR r.matched = 1)
           AND coalesce(toString(o.repo_id), toString(r.id)) IN {candidate_ids:Array(String)}
+          AND o.is_primary != 2
           AND o.valid_from <= now64(3)
           AND (o.valid_to IS NULL OR o.valid_to > now64(3))
         ORDER BY resolved_repo_id, (o.is_primary = 1) DESC, o.specificity DESC, o.updated_at DESC, team_id ASC`

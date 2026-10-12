@@ -86,6 +86,9 @@ func comparableText(kind, statement string) string {
 		// outrank the main owner. For the values the reference holds (0 and 1)
 		// the two keys order rows the same.
 		q = strings.ReplaceAll(q, "(o.is_primary = 1) DESC, o.specificity DESC, o.updated_at DESC", "is_primary DESC, specificity DESC, updated_at DESC")
+		// Same declared divergence: a co-owner row is never the canonical
+		// owner; the reference holds no such row.
+		q = strings.ReplaceAll(q, " AND o.is_primary != 2", "")
 	}
 	return q
 }

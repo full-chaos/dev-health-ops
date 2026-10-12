@@ -1683,6 +1683,10 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 // documented fix as
 // internal/jobs/metrics/remaining/dora_native_clickhouse.go's
 // dateTime64Argument/DateTime64Argument.
+// LoadRepos leaves out a co-owner row (is_primary = 2): repository ownership
+// gives an item one team and no co-owner, so a repository with co-owners only
+// (a tie with no main owner) gives no repo_ownership candidate, as before
+// co-owner rows existed.
 func (source ClickHouseFactSource) LoadRepos(
 	ctx context.Context, orgID string, asOf time.Time,
 ) ([]GithubWorkItemDerivationRepoFact, error) {
@@ -1732,6 +1736,9 @@ LIMIT {row_limit:UInt64}`,
 		var priority int32
 		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.RepoID, &fact.RepoFullName, &isPrimary, &specificity, &priority, &fact.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if isPrimary == AttributionCoOwner {
+			continue
 		}
 		fact.IsPrimary = int(isPrimary)
 		fact.Specificity = int(specificity)

@@ -70,3 +70,14 @@ func TestMembershipTiersAreProvenanceOnly(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// membershipProvenanceTeam returns the team of the first membership
+// provenance row (CHAOS-9414: such a row is never the primary team).
+func membershipProvenanceTeam(candidates []GithubWorkItemDerivationCandidate) *string {
+	for _, candidate := range candidates {
+		if candidate.Source == "assignee_membership" || candidate.Source == "author_membership" {
+			return candidate.TeamID
+		}
+	}
+	return nil
+}

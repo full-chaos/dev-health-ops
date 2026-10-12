@@ -149,6 +149,7 @@ var (
 	KeyCountdown                    = Key{"countdown"}
 	KeyRowsWritten                  = Key{"rows_written"}
 	KeyRowsRetracted                = Key{"rows_retracted"}
+	KeyRowsRetractionHeld           = Key{"rows_retraction_held"}
 	KeyFactsDerived                 = Key{"facts_derived"}
 	KeyFactsUnchanged               = Key{"facts_unchanged"}
 	KeyOwnerTies                    = Key{"owner_ties"}

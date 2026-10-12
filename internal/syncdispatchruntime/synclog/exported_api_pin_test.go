@@ -131,6 +131,7 @@ var exportedAPI = []string{
 	"var synclog.KeyRestoredAvailableAt synclog.Key",
 	"var synclog.KeyRouteFamily synclog.Key",
 	"var synclog.KeyRowsRetracted synclog.Key",
+	"var synclog.KeyRowsRetractionHeld synclog.Key",
 	"var synclog.KeyRowsWritten synclog.Key",
 	"var synclog.KeyRunningUnits synclog.Key",
 	"var synclog.KeySourceId synclog.Key",

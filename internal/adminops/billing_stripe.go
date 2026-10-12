@@ -61,17 +61,17 @@ func finishSync(env cli.Env, key secrets.Value, err error) int {
 	if key.Configured() {
 		text = secrets.RedactValues(text, key.Reveal())
 	}
-	fmt.Fprintf(env.Stdout, "Error: %s\n", redactor(env)(fmt.Errorf("%s", text)).Error())
+	fmt.Fprintf(env.Stdout, "Error: %s\n", accountRedactor(env)(fmt.Errorf("%s", text)).Error())
 	return cli.ExitFailure
 }
 
 func runBillingPullStripe(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin billing pull-stripe")
+	flags := newAccountFlags(env, "dho admin billing pull-stripe")
 	dryRun := flags.Bool("dry-run", false, "preview changes without writing to the database")
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
@@ -92,11 +92,11 @@ func runBillingPullStripe(ctx context.Context, env cli.Env) int {
 }
 
 func runBillingSyncStripe(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin billing sync-stripe")
+	flags := newAccountFlags(env, "dho admin billing sync-stripe")
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code

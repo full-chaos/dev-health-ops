@@ -83,7 +83,7 @@ When a preflight check says no (for example a refused environment or a refused p
 | Requirement | Commands |
 |-------------|----------|
 | ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync teams`; `metrics validate-flags`; `ai allowlist list/set` (+org); `migrate clickhouse upgrade/status/repair`; `fixtures generate` (`--sink`) |
-| PostgreSQL (`MIGRATION_DATABASE_URI`, else `POSTGRES_URI`) | `admin ...`; `billing reconcile`; `maintenance ...`; `service-credentials ...`; `migrate postgres ...` |
+| PostgreSQL (`MIGRATION_DATABASE_URI`, else `POSTGRES_URI`) | `admin ...` (except `admin users/orgs/billing` and `billing reconcile`, which also accept `API_DATABASE_URI`); `maintenance ...`; `service-credentials ...`; `migrate postgres ...` |
 | Organization (`--org` / `ORG_ID`) | `ai allowlist list/set`, `sync teams` |
 
 > The org id of the `sync <target>` verbs falls back to the first organization in PostgreSQL when `--org` and `ORG_ID` are omitted.
@@ -477,7 +477,7 @@ It reads `CLICKHOUSE_URI` and, without `--org`, the first `--orgs` rows of `orga
 
 ## Admin Commands
 
-User and organization management commands. The `admin users` and `admin orgs` verbs use the first PostgreSQL database that is set: `MIGRATION_DATABASE_URI`, then `API_DATABASE_URI`, then `POSTGRES_URI`. On Kubernetes, run them in the go-api pod (`kubectl exec -i deploy/<release>-go-api -- dho admin users create ...`): it has `API_DATABASE_URI`, the role the admin API writes users and organizations with. A worker pod has only `POSTGRES_URI`, the domain role, which cannot write users. The other `admin` verbs use `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
+User and organization management commands. The `admin users`, `admin orgs` and `admin billing` verbs (and `billing reconcile`) use the first PostgreSQL database that is set: `MIGRATION_DATABASE_URI`, then `API_DATABASE_URI`, then `POSTGRES_URI`. On Kubernetes, run them in the go-api pod (`kubectl exec -i deploy/<release>-go-api -- dho admin users create ...`): it has `API_DATABASE_URI`, the role the admin API writes users and organizations with. A worker pod has only `POSTGRES_URI`, the domain role, which cannot write users. The other `admin` verbs use `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
 
 > **Important:** Users must belong to an organization to log in. Always create an organization after creating a user.
 

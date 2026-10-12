@@ -39,6 +39,10 @@ import (
 // compounding_risk_daily holds the team id of its team rows in scope_id.
 var teamKeyColumns = map[string]bool{"team_id": true, "scope_id": true}
 
+// teamScopeKeyColumn is the column of the benchmarking outputs that holds a
+// team id in its rows of scope_type 'team' (CHAOS-9055).
+const teamScopeKeyColumn = "scope_key"
+
 // teamKeyOwnRule are the tables whose writer holds the rule itself, with the
 // function that adds the rows of zeros. They are plain MergeTree tables: a row
 // of zeros replaces nothing by itself, and the rule holds because every reader
@@ -86,6 +90,22 @@ var teamValueExempt = map[string]string{
 	"work_item_blocked_durations_daily": "a per-item daily fact keyed by (day, provider, work item): one row is one item on one day; the team is the attribution of the item when it was computed. " +
 		"It holds the same kind of stale key as the user-level tables (an item that no longer qualifies for a day) and is NOT covered by the change that added the marker column: a follow-up",
 	"work_item_cycle_times": "a fact table: one row is one completed work item keyed by the item; the team is the attribution of the item when it was computed and the next compute of the item replaces the row",
+}
+
+// teamScopeKeyReason is why the benchmarking outputs take no row of zeros.
+const teamScopeKeyReason = "a benchmarking output: one result row per metric, scope and period, appended by the benchmarking job and read by no reader; " +
+	"scope_key is a team id only in a row of scope_type 'team', and the job reads a team series from the newest row of each key of its source " +
+	"and only for an active team (benchmarking.FetchMetricSeriesByScope), so it writes no new row under a superseded id; a row of zeros would be a result that was never computed"
+
+// teamScopeKeyExempt are the tables that hold a team id in scope_key and take
+// no row of zeros, each with the reason.
+var teamScopeKeyExempt = map[string]string{
+	"testops_benchmark_insights":  teamScopeKeyReason,
+	"testops_maturity_bands":      teamScopeKeyReason,
+	"testops_metric_anomalies":    teamScopeKeyReason,
+	"testops_metric_baselines":    teamScopeKeyReason,
+	"testops_metric_correlations": teamScopeKeyReason,
+	"testops_period_comparisons":  teamScopeKeyReason,
 }
 
 // Reasons why a file that writes a team-keyed table is not a writer that
@@ -324,10 +344,20 @@ func (table censusTable) teamKeyed() bool {
 
 // holdsTeamID says whether any column of the table holds a team id, in the
 // sorting key or not (CHAOS-9135): a table whose team is a value column is a
-// team table too, and a stale row of it is the same defect.
+// team table too, and a stale row of it is the same defect. A scope_key column
+// holds one too (CHAOS-9055).
 func (table censusTable) holdsTeamID() bool {
 	for _, column := range table.columns {
-		if teamKeyColumns[column.name] {
+		if teamKeyColumns[column.name] || column.name == teamScopeKeyColumn {
+			return true
+		}
+	}
+	return false
+}
+
+func (table censusTable) holdsScopeKey() bool {
+	for _, column := range table.columns {
+		if column.name == teamScopeKeyColumn {
 			return true
 		}
 	}
@@ -371,6 +401,15 @@ func TestEveryTeamKeyedTableCensusHasADecision(t *testing.T) {
 				t.Errorf("table %s is exempt as a table with a team id in a VALUE column and holds it in its sorting key: use teamKeyExempt", name)
 			}
 		}
+		if reason, exempt := teamScopeKeyExempt[name]; exempt {
+			decisions++
+			if len(strings.TrimSpace(reason)) < 40 {
+				t.Errorf("table %s is exempt with no written reason", name)
+			}
+			if !table.holdsScopeKey() {
+				t.Errorf("table %s is exempt as a table with a team id in scope_key and has no scope_key column", name)
+			}
+		}
 		if decisions != 1 {
 			t.Errorf("table %s holds a team id in a column (sorting key %v) and has %d decision(s), want exactly 1: "+
 				"declare it in StaleTeamKeyTables (the shared rule), in teamKeyOwnRule, or in teamKeyExempt / teamValueExempt with the reason",
@@ -401,6 +440,9 @@ func decidedTeamKeyTables() []string {
 		names = append(names, name)
 	}
 	for name := range teamValueExempt {
+		names = append(names, name)
+	}
+	for name := range teamScopeKeyExempt {
 		names = append(names, name)
 	}
 	sort.Strings(names)

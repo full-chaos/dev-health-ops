@@ -566,13 +566,30 @@ func (adapter *ClickHouseQueryAdapter) observeDedupGuard(ctx context.Context, sp
 	if adapter == nil || adapter.dedupObserver == nil {
 		return
 	}
+	if wholePersonLandscapeMetric(spec, definition) {
+		// The chart reads the landscape's points (with no repository filter:
+		// a point has no repository) and the person's user rows.
+		pointSpec := spec
+		pointSpec.FilterRepos = nil
+		if statement, parameters, table, ok := dedupGuardQuery(pointSpec, definition); ok {
+			adapter.observeDedupStatement(ctx, statement, parameters, table)
+		}
+		statement, parameters := wholePersonUserRowsGuardQuery(spec)
+		adapter.observeDedupStatement(ctx, statement, parameters, "user_metrics_daily")
+		return
+	}
 	statement, parameters, table, ok := dedupGuardQuery(spec, definition)
 	if !ok {
 		return
 	}
+	adapter.observeDedupStatement(ctx, statement, parameters, table)
+}
+
+func (adapter *ClickHouseQueryAdapter) observeDedupStatement(ctx context.Context, statement string, parameters []any, table string) {
 	row := adapter.conn.QueryRow(ctx, statement, parameters...)
 	var observed, distinctKeys uint64
 	if err := row.Scan(&observed, &distinctKeys); err != nil {
+		slog.Default().DebugContext(ctx, "report.dedup_guard_read_failed", "table", table, "error", err)
 		return
 	}
 	if distinctKeys > observed {
@@ -582,6 +599,39 @@ func (adapter *ClickHouseQueryAdapter) observeDedupGuard(ctx context.Context, sp
 	_ = adapter.dedupObserver.ObserveReportDedupGuard(
 		table, jobruntime.ReportDedupReasonRetryGeneration, int(observed), int(skipped),
 	)
+}
+
+// wholePersonUserRowsGuardQuery is the dedup guard of the user rows a
+// whole-person landscape chart reads: the organization's user_metrics_daily
+// rows of the 29 days before the chart's first day through its last day, of
+// the chart's repositories when it has a repository filter.
+func wholePersonUserRowsGuardQuery(spec ChartSpec) (string, []any) {
+	const table = "user_metrics_daily"
+	read := tableReads[table]
+	clauses := []string{"1"}
+	var parameters []any
+	if spec.OrganizationID != "" {
+		clauses = append(clauses, "org_id = {org_id:String}")
+		parameters = append(parameters, clickhouse.Named("org_id", spec.OrganizationID))
+	}
+	if spec.TimeRangeStart != "" {
+		clauses = append(clauses, "day >= {time_range_start:Date} - 29")
+		parameters = append(parameters, clickhouse.Named("time_range_start", spec.TimeRangeStart))
+	}
+	if spec.TimeRangeEnd != "" {
+		clauses = append(clauses, "day <= {time_range_end:Date}")
+		parameters = append(parameters, clickhouse.Named("time_range_end", spec.TimeRangeEnd))
+	}
+	if len(spec.FilterRepos) > 0 {
+		clauses = append(clauses, "toString(repo_id) IN {filter_repos:Array(String)}")
+		parameters = append(parameters, clickhouse.Named("filter_repos", spec.FilterRepos))
+	}
+	return fmt.Sprintf(`SELECT
+        count() AS observed,
+        uniqExact(%s) AS distinct_keys
+    FROM %s
+    WHERE
+        %s`, strings.Join(read.Key, ", "), table, strings.Join(clauses, " AND ")), parameters
 }
 
 func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any, error) {
@@ -636,22 +686,23 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	// alongside its earlier generation. A table with no known re-drive risk
 	// passes through unchanged.
 	source := sourceFrom(spec.Metric, definition)
-	if keys, once := onePersonRowKeys(spec, definition); once {
-		// The filter runs inside, on the rows of the table: the team column it
-		// may name is not a column of the one row per person. The value takes
-		// another name on the way, because a filter that names the metric
-		// beside an aggregate of the same name would mean the aggregate.
-		source = fmt.Sprintf(`(
-        SELECT %s, max(value_of_the_person) AS %s
-        FROM (
-            SELECT %s, %s AS value_of_the_person
-            FROM %s
-            WHERE
-            %s
-        )
-        GROUP BY %s
-    ) AS %s`, keys, spec.Metric, keys, spec.Metric, source, where, keys, definition.SourceTable)
-		where = "1"
+	if wholePersonLandscapeMetric(spec, definition) {
+		// A landscape point holds no repository (its repo_id is a constant
+		// placeholder), so a repository filter selects the person's user rows
+		// of those repositories, not points.
+		pointSpec := spec
+		pointSpec.FilterRepos = nil
+		pointWhere, pointParameters, err := buildChartWhere(pointSpec, definition)
+		if err != nil {
+			return "", nil, err
+		}
+		repoFilter := ""
+		if len(spec.FilterRepos) > 0 {
+			repoFilter = " AND toString(person_rows.repo_id) IN {filter_repos:Array(String)}"
+			pointParameters = append(pointParameters, clickhouse.Named("filter_repos", spec.FilterRepos))
+		}
+		source = wholePersonLandscapeSource(spec.Metric, source, pointWhere, repoFilter)
+		where, parameters = "1", pointParameters
 	}
 	if spec.GroupBy == "" && (spec.ChartType == "scorecard" || spec.ChartType == "trend_delta" || spec.ChartType == "table") {
 		return fmt.Sprintf(`SELECT
@@ -677,42 +728,68 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
     ORDER BY %s`, xExpression, yExpression, source, where, order), parameters, nil
 }
 
-// personValuesByTeam names, per source table, the metrics that are a person's
-// own value stored once for each team the person is in: the same number in
-// each of those rows. ic_landscape_rolling_30d holds one point per (person,
-// team, map), and the compute copies the person's 30-day values into each.
+// wholePersonLandscapeColumns maps each person metric of ic_landscape_rolling_30d
+// to its whole-person value over the 30-day window (ruling D5986). The landscape
+// stores a person's numbers per OWNING team (CHAOS-9395): the person's work in
+// that team's repositories, a different number in each team. A chart that is
+// not grouped by team counts each person once with the person's WHOLE value,
+// read from user_metrics_daily -- never rebuilt from the team rows (a shared
+// repository is in two teams, and a median or a max does not add). x_raw is
+// the map's x axis of icfinalize.LandscapeAxes, y_raw its delivery axis.
 //
-// The two normalized coordinates of that table (x_norm, y_norm) are NOT here:
-// they are ranks inside one team, so a person of two teams has two different
-// values. A chart of them keeps one value per (person, team): the spread of
-// the person over the teams, never one number made of the two.
-var personValuesByTeam = map[string]map[string]bool{
-	"ic_landscape_rolling_30d": {
-		"churn_loc_30d": true, "delivery_units_30d": true, "cycle_p50_30d_hours": true,
-		"wip_max_30d": true, "x_raw": true, "y_raw": true,
-	},
+// The normalized coordinates (x_norm, y_norm) are not here: they are ranks
+// inside one team, and a chart of them keeps one value per (person, team).
+var wholePersonLandscapeColumns = map[string]string{
+	"churn_loc_30d":       "whole_churn",
+	"delivery_units_30d":  "whole_delivery",
+	"cycle_p50_30d_hours": "whole_cycle",
+	"wip_max_30d":         "whole_wip",
+	"x_raw": "multiIf(map_name = 'churn_throughput', log1p(whole_churn), " +
+		"map_name = 'cycle_throughput', log1p(whole_cycle), whole_wip)",
+	"y_raw": "whole_delivery",
 }
 
-// onePersonRowKeys says whether the chart must read one row per person in
-// place of one row per (person, team), and returns the columns of that row's
-// key: the key of the table without its team column.
-//
-// A chart that is not grouped by team averages people. A person of N teams has
-// N rows that hold the same value, so an average over the rows weights that
-// person N times; the reference computation gave a person one team, so one
-// row, and counted each person once. A chart grouped by team keeps one row per
-// (person, team): there each row is the person in that team's cohort.
-func onePersonRowKeys(spec ChartSpec, definition metricDefinition) (string, bool) {
-	if spec.GroupBy == "team" || !personValuesByTeam[definition.SourceTable][spec.Metric] {
-		return "", false
+// wholePersonLandscapeMetric says whether the chart reads whole-person values:
+// a landscape person metric in a chart not grouped by team.
+func wholePersonLandscapeMetric(spec ChartSpec, definition metricDefinition) bool {
+	if spec.GroupBy == "team" || definition.SourceTable != "ic_landscape_rolling_30d" {
+		return false
 	}
-	var keys []string
-	for _, column := range tableReads[definition.SourceTable].Key {
-		if column != "team_id" {
-			keys = append(keys, column)
-		}
-	}
-	return strings.Join(keys, ", "), true
+	_, ok := wholePersonLandscapeColumns[spec.Metric]
+	return ok
+}
+
+// wholePersonLandscapeSource is the FROM source of a whole-person chart. The
+// chart's own filter (organization, days, teams) runs on the landscape's live
+// points and says WHICH people of which day and map are in the chart; a
+// repository filter (repoFilter) selects the person's user rows of those
+// repositories; one row per (organization, repository, map, day, person) then carries
+// the person's whole value: the person's live user_metrics_daily rows of the
+// 30 days ending on that day, as the landscape compute reads them.
+func wholePersonLandscapeSource(metric, landscapeSource, where, repoFilter string) string {
+	return fmt.Sprintf(`(
+        SELECT org_id, repo_id, map_name, as_of_day, identity_id, %s AS %s
+        FROM (
+            SELECT
+                points.org_id AS org_id, points.repo_id AS repo_id, points.map_name AS map_name,
+                points.as_of_day AS as_of_day, points.identity_id AS identity_id,
+                toFloat64(sum(person_rows.loc_touched)) AS whole_churn,
+                toFloat64(sum(person_rows.delivery_units)) AS whole_delivery,
+                median(person_rows.cycle_p50_hours) AS whole_cycle,
+                toFloat64(max(person_rows.work_items_active)) AS whole_wip
+            FROM (
+                SELECT DISTINCT org_id, repo_id, map_name, as_of_day, identity_id
+                FROM %s
+                WHERE
+                %s
+            ) AS points
+            INNER JOIN (SELECT * FROM %s) AS person_rows
+                ON person_rows.org_id = points.org_id AND person_rows.identity_id = points.identity_id
+            WHERE person_rows.day >= points.as_of_day - 29 AND person_rows.day <= points.as_of_day%s
+            GROUP BY org_id, repo_id, map_name, as_of_day, identity_id
+        )
+    ) AS ic_landscape_rolling_30d`, wholePersonLandscapeColumns[metric], metric, landscapeSource, where,
+		dedupFromSource("user_metrics_daily"), repoFilter)
 }
 
 // sourceFrom is the FROM source for buildChartQuery's outer SELECT.

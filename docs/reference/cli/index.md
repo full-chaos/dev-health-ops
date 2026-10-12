@@ -83,7 +83,7 @@ When a preflight check says no (for example a refused environment or a refused p
 | Requirement | Commands |
 |-------------|----------|
 | ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync teams`; `metrics validate-flags`; `ai allowlist list/set` (+org); `migrate clickhouse upgrade/status/repair`; `fixtures generate` (`--sink`) |
-| PostgreSQL (`MIGRATION_DATABASE_URI`, else `POSTGRES_URI`) | `admin ...`; `billing reconcile`; `maintenance ...`; `service-credentials ...`; `migrate postgres ...` |
+| PostgreSQL (`MIGRATION_DATABASE_URI`, else `POSTGRES_URI`) | `admin ...` (except `admin users/orgs/billing` and `billing reconcile`, which also accept `API_DATABASE_URI`); `maintenance ...`; `service-credentials ...`; `migrate postgres ...` |
 | Organization (`--org` / `ORG_ID`) | `ai allowlist list/set`, `sync teams` |
 
 > The org id of the `sync <target>` verbs falls back to the first organization in PostgreSQL when `--org` and `ORG_ID` are omitted.
@@ -478,7 +478,7 @@ It reads `CLICKHOUSE_URI` and, without `--org`, the first `--orgs` rows of `orga
 
 ## Admin Commands
 
-User and organization management commands. The `admin users` and `admin orgs` verbs use the first PostgreSQL database that is set: `MIGRATION_DATABASE_URI`, then `API_DATABASE_URI`, then `POSTGRES_URI`. On Kubernetes, run them in the go-api pod (`kubectl exec -i deploy/<release>-go-api -- dho admin users create ...`): it has `API_DATABASE_URI`, the role the admin API writes users and organizations with. A worker pod has only `POSTGRES_URI`, the domain role, which cannot write users. The other `admin` verbs use `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
+User and organization management commands. The `admin users`, `admin orgs` and `admin billing` verbs (and `billing reconcile`) use the first PostgreSQL database that is set: `MIGRATION_DATABASE_URI`, then `API_DATABASE_URI`, then `POSTGRES_URI`. On Kubernetes, run them in the go-api pod (`kubectl exec -i deploy/<release>-go-api -- dho admin users create ...`): it has `API_DATABASE_URI`, the role the admin API writes users and organizations with. A worker pod has only `POSTGRES_URI`, the domain role, which cannot write users. The other `admin` verbs use `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
 
 > **Important:** Users must belong to an organization to log in. Always create an organization after creating a user.
 
@@ -699,7 +699,7 @@ Read and change the LLM settings of an organization (`get`, `set`, `delete`). Ru
 >
 > **API alternative:** trigger the backfill via `POST /api/v1/admin/sync-configs/{config_id}/backfill`. The API plans a backfill-mode `SyncRun` and commits the same durable reference-discovery wakeup used by full and continuation syncs.
 
-Start a historical data backfill for a sync configuration over a window of whole days. Data is synced in chunked 7-day windows. The verb validates the configuration, writes one scheduled occurrence and its backfill trigger, and the scheduler plans and dispatches the run. It waits for the plan (30 seconds by default), or prints the occurrence id at once with `--no-wait`. Uses `MIGRATION_DATABASE_URI` (or the `DEV_HEALTH_PG_*` component form).
+Start a historical data backfill for a sync configuration over a window of whole days. Data is synced in chunked 7-day windows. The verb validates the configuration, writes one scheduled occurrence and its backfill trigger, and the scheduler plans and dispatches the run. It waits for the plan (30 seconds by default), or prints the occurrence id at once with `--no-wait`. Connects with `COORDINATOR_DATABASE_URI` (or the `DEV_HEALTH_PG_COORDINATOR_*` component form) when set, because `scheduled_sync_occurrences` is written only by the coordinator role; otherwise `MIGRATION_DATABASE_URI` (or the `DEV_HEALTH_PG_*` component form), then `POSTGRES_URI`. The domain role that `POSTGRES_URI` usually names has no grant on that table.
 
 ```bash
 dho backfill run \

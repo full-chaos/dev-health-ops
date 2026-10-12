@@ -41,12 +41,35 @@ at once with --no-wait.
 Only a planner-managed configuration, or one pinned to a single source, can be
 started this way: the scheduler materializes no other.
 
-Environment:
-  MIGRATION_DATABASE_URI (or the DEV_HEALTH_PG_* component form)   PostgreSQL DSN
+Environment (first one set is used):
+  COORDINATOR_DATABASE_URI (or the DEV_HEALTH_PG_COORDINATOR_* component form)   PostgreSQL DSN, coordinator role
+  MIGRATION_DATABASE_URI (or the DEV_HEALTH_PG_* component form)                 PostgreSQL DSN
+  POSTGRES_URI                                                                   fallback
 `
 
 // clock is the wall clock the occurrence is stamped with; tests fix it.
 var clock = time.Now
+
+// coordinatorKey is the connection the verb prefers: scheduled_sync_occurrences is
+// coordinator-exclusive (schedulerservice/dependencies.go), so only the coordinator
+// role (or the schema owner) may write it. The domain role POSTGRES_URI names has no
+// grant on it (CHAOS-9029).
+const coordinatorKey = "COORDINATOR_DATABASE_URI"
+
+// resolveDatabase returns the DSN the verb connects with, in this order:
+// COORDINATOR_DATABASE_URI (or its DEV_HEALTH_PG_COORDINATOR_* component form), then
+// MIGRATION_DATABASE_URI, then POSTGRES_URI, as before.
+func resolveDatabase(lookup secrets.LookupEnv, stderr io.Writer) (secrets.Value, string, bool) {
+	value, configured, err := config.ResolveDSN(lookup, coordinatorKey, config.CoordinatorDatabaseSpec)
+	if err != nil {
+		config.WriteConfigError(stderr, err)
+		return secrets.Value{}, "", false
+	}
+	if configured {
+		return value, coordinatorKey, true
+	}
+	return config.ResolveMigrationDatabase(lookup, stderr, true)
+}
 
 // DefaultWait is how long the verb waits for the scheduler to plan the run.
 const DefaultWait = 30 * time.Second
@@ -125,7 +148,7 @@ func runVerb(ctx context.Context, env cli.Env) int {
 		return cli.ExitFailure
 	}
 
-	dsn, _, ok := config.ResolveMigrationDatabase(env.Lookup, env.Stderr, true)
+	dsn, dsnSource, ok := resolveDatabase(env.Lookup, env.Stderr)
 	if !ok {
 		return cli.ExitFailure
 	}
@@ -148,7 +171,7 @@ func runVerb(ctx context.Context, env cli.Env) int {
 	logger.Info("backfill queued",
 		"since", window.Since.Format(time.RFC3339Nano), "before", window.Before.Format(time.RFC3339Nano),
 		"provider", trigger.Provider, "sync_targets", trigger.SyncTargets, "dataset_keys", trigger.DatasetKeys,
-		"enabled_sources", trigger.EnabledSources, "occurrence_id", trigger.OccurrenceID)
+		"enabled_sources", trigger.EnabledSources, "occurrence_id", trigger.OccurrenceID, "database_source", dsnSource)
 	if *noWait {
 		fmt.Fprintf(env.Stdout, "Backfill queued: occurrence_id=%s\n", trigger.OccurrenceID)
 		return cli.ExitOK

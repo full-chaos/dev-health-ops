@@ -1902,8 +1902,12 @@ Limits:
     repository their pull requests are in;
   - a stored point of a day the run does not compute keeps the team it was stored with until that day is computed
     again (a recompute of history is a separate decision);
-  - a chart of the landscape metrics over the WHOLE organization with no team filter weights a person who worked in
-    the repositories of N teams N times in an average (by team: once for each team; by person: unchanged).
+  - a report chart of a person metric of the landscape (churn, delivery, cycle time, WIP, the raw axes) that is NOT
+    grouped by team counts each person once with the person's WHOLE value (ruling D5986): the person's live
+    `user_metrics_daily` rows of the 30 days ending on the point's day, never a value rebuilt from the team rows (a
+    shared repository is in two teams, and a median or a max does not add). The chart's own filter (organization,
+    days, teams) only selects which people of which day are in it. A chart grouped by team reads the team values;
+    the normalized coordinates are ranks inside one team and keep one value per (person, team).
 - The person's `user_metrics_daily` row of the day still takes its team from membership: the team of a person for a
   day comes ONLY from the `team_memberships` rows that are valid at that day (the attribution's provider membership
   read, `LoadProviderMembers`, as of the day: `valid_from` at or before the day, and no `valid_to` or a later one),

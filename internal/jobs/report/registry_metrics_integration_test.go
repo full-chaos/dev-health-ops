@@ -329,8 +329,25 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		}
 		ruleWant[name] = *value
 	}
+	// A landscape person metric in a chart not grouped by team reads the
+	// person's whole value from user_metrics_daily (ruling D5986): here the one
+	// seeded user row, which has the landscape row's (empty) identity and lies
+	// in its 30-day window. The seeded landscape row has no map, so x_raw is
+	// the WIP axis.
+	wholeFrom := map[string]string{
+		"churn_loc_30d": "loc_touched", "delivery_units_30d": "delivery_units",
+		"cycle_p50_30d_hours": "cycle_p50_hours", "wip_max_30d": "work_items_active",
+		"x_raw": "work_items_active", "y_raw": "delivery_units",
+	}
 	want := func(name string) float64 {
 		if value, ok := ruleWant[name]; ok {
+			return value
+		}
+		if column, ok := wholeFrom[name]; ok && supportedMetrics[name].SourceTable == "ic_landscape_rolling_30d" {
+			value, seededColumn := seeded["user_metrics_daily."+column]
+			if !seededColumn {
+				t.Fatalf("%s reads user_metrics_daily.%s, which the test does not seed", name, column)
+			}
 			return value
 		}
 		definition := supportedMetrics[name]

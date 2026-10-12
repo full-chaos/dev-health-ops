@@ -61,13 +61,21 @@ func TestForecastListCollapsesRetryDuplicatesBeforeLimit(t *testing.T) {
 		}
 	}
 
+	// Same day and slice as d0 but another simulation count: a distinct run
+	// configuration, not a retry copy.
+	if err := admin.Exec(ctx, `INSERT INTO capacity_forecasts
+		(forecast_id, computed_at, team_id, backlog_size, history_days, simulation_count, throughput_mean, throughput_stddev, org_id)
+		VALUES ('d0-sims500', ?, NULL, 5, 30, 500, 1.5, 0.5, ?)`, at.Add(time.Minute), org); err != nil {
+		t.Fatalf("insert forecast d0-sims500: %v", err)
+	}
+
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
 	if err != nil {
 		t.Fatalf("construct query client: %v", err)
 	}
 	defer func() { _ = client.Close() }()
 
-	connection, err := ResolveForecasts(ctx, client, org, &model.CapacityForecastFilterInput{Limit: 3})
+	connection, err := ResolveForecasts(ctx, client, org, &model.CapacityForecastFilterInput{Limit: 4})
 	if err != nil {
 		t.Fatalf("ResolveForecasts: %v", err)
 	}
@@ -75,7 +83,7 @@ func TestForecastListCollapsesRetryDuplicatesBeforeLimit(t *testing.T) {
 	for _, edge := range connection.Edges {
 		got = append(got, edge.Node.ForecastID)
 	}
-	if want := []string{"d2", "d1-retry2", "d0"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"d2", "d1-retry2", "d0-sims500", "d0"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("forecast list = %v, want %v (retry copies must not consume the LIMIT)", got, want)
 	}
 }

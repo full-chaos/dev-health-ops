@@ -516,7 +516,7 @@ func ResolveForecasts(
         WHERE %s
         ORDER BY computed_at DESC
         LIMIT 1 BY team_id, work_scope_id, toDate(computed_at),
-            history_days, target_items, target_date
+            history_days, simulation_count, target_items, target_date
         LIMIT %d
     `, strings.Join(conditions, " AND "), limit)
 

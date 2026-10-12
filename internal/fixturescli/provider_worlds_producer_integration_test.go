@@ -502,13 +502,14 @@ func withoutProducerServerStamped(t *testing.T, dsn string, table FrozenTable) F
 	return table.withoutColumns(drop)
 }
 
-// producerCommit is the commit the producers ran at: HEAD of the checkout the freeze runs in. The
-// freshness run compares rows, not this stamp.
+// producerCommit is the main commit the freeze's checkout is based on (the merge base of HEAD and
+// origin/main): a commit every reader can resolve. It is a stamp only: the freshness run compares
+// rows, and it is what pins a world to its producers.
 func producerCommit(t *testing.T) string {
 	t.Helper()
-	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	out, err := exec.Command("git", "merge-base", "HEAD", "origin/main").Output()
 	if err != nil {
-		t.Fatalf("git rev-parse HEAD: %v", err)
+		t.Fatalf("git merge-base HEAD origin/main: %v", err)
 	}
 	return strings.TrimSpace(string(out))
 }

@@ -16,9 +16,11 @@
 //     NOCREATEROLE NOREPLICATION NOBYPASSRLS with the given password only when
 //     missing (an existing role keeps its attributes and password, except KEDA's
 //     password, which is re-applied every run so a rotation takes effect);
+//
 //   - CONNECT on the application database; TEMPORARY revoked (from PUBLIC too, for
 //     the mandatory block and the api and query-api blocks); USAGE and no CREATE on
 //     schema public, for the role only;
+//
 //   - KEDA: USAGE on the River schema, SELECT on river_job and (CHAOS-6946) USAGE on
 //     schema public plus SELECT on public.sync_run_units -- the go-sync ScaledObject's
 //     planned-backlog trigger reads it -- nothing else. The psql script never granted

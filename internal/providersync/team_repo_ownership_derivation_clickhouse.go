@@ -231,17 +231,17 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	// below is one comparison over the org's whole activeRows, so "this run
 	// does not derive the row" is a proof of absence only when the run read
 	// the input that could derive it. That input is per provider and per
-	// fact kind: a run with no open project link of provider A, or one that
-	// reaches no repository through A (A's work items or pull request links
-	// not in the run), cannot reconfirm a row that A's links derived, however
-	// much provider B has, and a run with no resolvable Linear team key
-	// cannot reconfirm a row of the linear_team_key arm. The guard (team_repo_ownership_retraction_guard.go)
+	// fact kind: a run with no open project link of provider A (a transient
+	// gap, or a wrong upstream close of A's links) cannot reconfirm a row
+	// that A's links derived, however many links provider B has, and a run
+	// with no resolvable Linear team key cannot reconfirm a row of the
+	// linear_team_key arm. The guard (team_repo_ownership_retraction_guard.go)
 	// keeps every retraction whose kinds are not all proven, and reports it.
 	linkHistory, err := loadTeamRepoOwnershipTeamLinkProviders(ctx, service.Conn, orgID)
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
-	guard := newTeamRepoOwnershipRetractionGuard(reachedKnownRepositories(derivation.Reached, repos), projectLinks, linkHistory, workItems, knownTeams)
+	guard := newTeamRepoOwnershipRetractionGuard(projectLinks, linkHistory, workItems, knownTeams)
 	toRetract, held, heldKinds := guard.retain(diffTeamRepoOwnershipRetractions(activeRows, derived, derivation.Ties, repos))
 	stats.RetractionsHeld = held
 	reportTeamRepoOwnershipRetractionHeld(ctx, orgID, heldKinds)
@@ -760,29 +760,6 @@ func diffTeamRepoOwnershipRetractions(
 		toRetract = append(toRetract, row)
 	}
 	return toRetract
-}
-
-// reachedKnownRepositories counts, per kind, the repositories the derivation
-// reached through the kind that the run's repos snapshot knows, resolved the
-// same way the write and the retraction diff resolve a repo_id. A repository
-// the snapshot does not know cannot be written, so reaching it proves nothing.
-func reachedKnownRepositories(
-	reached map[teamRepoOwnershipRetractionKind]map[string]bool,
-	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
-) map[teamRepoOwnershipRetractionKind]int {
-	out := make(map[teamRepoOwnershipRetractionKind]int, len(reached))
-	for kind, repoIDs := range reached {
-		for id := range repoIDs {
-			repoID, err := uuid.Parse(id)
-			if err != nil || repoID == uuid.Nil {
-				continue
-			}
-			if info, ok := repos[repoID]; ok && info.FullName != "" {
-				out[kind]++
-			}
-		}
-	}
-	return out
 }
 
 // retractTeamRepoOwnershipRows closes out every row in toRetract: a

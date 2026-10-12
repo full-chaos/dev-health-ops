@@ -4,28 +4,12 @@ import (
 	"reflect"
 	"sort"
 	"testing"
-
-	"github.com/google/uuid"
 )
 
 var retractionGuardProviders = []string{"jira", "gitlab", "github", "linear"}
 
 func retractionGuardRow(teamID, repo string) teamRepoOwnershipActiveRow {
 	return teamRepoOwnershipActiveRow{Provider: "github", TeamID: teamID, RepoFullName: repo}
-}
-
-// reachedThrough is a derivation that reached a repository through each named
-// provider's project links ("linear_team_key" names the Linear team key arm).
-func reachedThrough(kinds ...string) map[teamRepoOwnershipRetractionKind]int {
-	out := map[teamRepoOwnershipRetractionKind]int{}
-	for _, kind := range kinds {
-		if kind == teamRepoOwnershipRetractionKindLinearTeamKey {
-			out[teamRepoOwnershipRetractionKind{Kind: kind}]++
-			continue
-		}
-		out[teamRepoOwnershipRetractionKind{Kind: teamRepoOwnershipRetractionKindProjectLinks, Provider: kind}]++
-	}
-	return out
 }
 
 func retractedTeams(rows []teamRepoOwnershipActiveRow) []string {
@@ -48,7 +32,7 @@ func TestRetractionGuardIsPerProvider(t *testing.T) {
 			}
 			t.Run(a+"_empty_"+b+"_open", func(t *testing.T) {
 				teamA, teamB := a+"-team", b+"-team"
-				guard := newTeamRepoOwnershipRetractionGuard(reachedThrough(b),
+				guard := newTeamRepoOwnershipRetractionGuard(
 					[]TeamRepoOwnershipProjectLink{{Provider: b, ProjectID: b + "-proj", TeamID: teamB}},
 					[]TeamRepoOwnershipTeamLinkProvider{{Provider: a, TeamID: teamA}, {Provider: b, TeamID: teamB}},
 					nil, nil)
@@ -60,7 +44,7 @@ func TestRetractionGuardIsPerProvider(t *testing.T) {
 				}
 				want := []teamRepoOwnershipRetractionHeld{{
 					Kind: teamRepoOwnershipRetractionKindProjectLinks, Provider: a,
-					Reasons: []string{TeamRepoOwnershipNoOpenProjectLinkOfTheProvider, TeamRepoOwnershipNoRepositoryReached}, Rows: 1,
+					Reasons: []string{TeamRepoOwnershipNoOpenProjectLinkOfTheProvider}, Rows: 1,
 				}}
 				if held != 1 || !reflect.DeepEqual(heldKinds, want) {
 					t.Fatalf("held=%d %+v, want 1 %+v", held, heldKinds, want)
@@ -75,7 +59,7 @@ func TestRetractionGuardIsPerProvider(t *testing.T) {
 func TestRetractionGuardSingleProviderWithNoOpenLinkKeepsTheRow(t *testing.T) {
 	for _, a := range retractionGuardProviders {
 		t.Run(a, func(t *testing.T) {
-			guard := newTeamRepoOwnershipRetractionGuard(nil, nil,
+			guard := newTeamRepoOwnershipRetractionGuard(nil,
 				[]TeamRepoOwnershipTeamLinkProvider{{Provider: a, TeamID: "team-a"}}, nil, nil)
 			kept, held, _ := guard.retain([]teamRepoOwnershipActiveRow{retractionGuardRow("team-a", "acme/a")})
 			if len(kept) != 0 || held != 1 {
@@ -95,7 +79,7 @@ func TestRetractionGuardRetractsWhenTheProvidersOwnLinksProveIt(t *testing.T) {
 				continue
 			}
 			t.Run(a+"_"+b, func(t *testing.T) {
-				guard := newTeamRepoOwnershipRetractionGuard(reachedThrough(a, b),
+				guard := newTeamRepoOwnershipRetractionGuard(
 					[]TeamRepoOwnershipProjectLink{
 						{Provider: a, ProjectID: a + "-proj-2", TeamID: "team-a2"},
 						{Provider: b, ProjectID: b + "-proj", TeamID: "team-b"},
@@ -117,12 +101,12 @@ func TestRetractionGuardRetractsWhenTheProvidersOwnLinksProveIt(t *testing.T) {
 func TestRetractionGuardTeamOfTwoProvidersNeedsBoth(t *testing.T) {
 	history := []TeamRepoOwnershipTeamLinkProvider{{Provider: "jira", TeamID: "team-x"}, {Provider: "gitlab", TeamID: "team-x"}}
 	row := []teamRepoOwnershipActiveRow{retractionGuardRow("team-x", "acme/x")}
-	onlyJira := newTeamRepoOwnershipRetractionGuard(reachedThrough("jira"),
+	onlyJira := newTeamRepoOwnershipRetractionGuard(
 		[]TeamRepoOwnershipProjectLink{{Provider: "jira", ProjectID: "10001", TeamID: "team-y"}}, history, nil, nil)
 	if kept, held, _ := onlyJira.retain(row); len(kept) != 0 || held != 1 {
 		t.Fatalf("only jira open: retracted %v held %d, want the row kept", retractedTeams(kept), held)
 	}
-	both := newTeamRepoOwnershipRetractionGuard(reachedThrough("jira", "gitlab"), []TeamRepoOwnershipProjectLink{
+	both := newTeamRepoOwnershipRetractionGuard([]TeamRepoOwnershipProjectLink{
 		{Provider: "jira", ProjectID: "10001", TeamID: "team-y"},
 		{Provider: "gitlab", ProjectID: "g/p", TeamID: "team-z"},
 	}, history, nil, nil)
@@ -140,17 +124,16 @@ func TestRetractionGuardLinearTeamKeyIsItsOwnKind(t *testing.T) {
 	links := []TeamRepoOwnershipProjectLink{{Provider: "jira", ProjectID: "10001", TeamID: "jira:ops"}}
 	row := []teamRepoOwnershipActiveRow{retractionGuardRow("linear:CHAOS", "acme/linear")}
 
-	noKey := newTeamRepoOwnershipRetractionGuard(reachedThrough("jira"), links, nil, []TeamRepoOwnershipWorkItem{{WorkItemID: "linear:CHAOS-1", Provider: "linear"}}, known)
+	noKey := newTeamRepoOwnershipRetractionGuard(links, nil, []TeamRepoOwnershipWorkItem{{WorkItemID: "linear:CHAOS-1", Provider: "linear"}}, known)
 	kept, held, heldKinds := noKey.retain(row)
 	want := []teamRepoOwnershipRetractionHeld{{
-		Kind:    teamRepoOwnershipRetractionKindLinearTeamKey,
-		Reasons: []string{TeamRepoOwnershipNoKnownLinearTeamKey, TeamRepoOwnershipNoRepositoryReached}, Rows: 1,
+		Kind: teamRepoOwnershipRetractionKindLinearTeamKey, Reasons: []string{TeamRepoOwnershipNoKnownLinearTeamKey}, Rows: 1,
 	}}
 	if len(kept) != 0 || held != 1 || !reflect.DeepEqual(heldKinds, want) {
 		t.Fatalf("no resolvable key: retracted %v held %d %+v, want kept by %+v", retractedTeams(kept), held, heldKinds, want)
 	}
 
-	withKey := newTeamRepoOwnershipRetractionGuard(reachedThrough("jira", teamRepoOwnershipRetractionKindLinearTeamKey), links, nil,
+	withKey := newTeamRepoOwnershipRetractionGuard(links, nil,
 		[]TeamRepoOwnershipWorkItem{{WorkItemID: "linear:CHAOS-1", Provider: "linear", NativeTeamKey: "CHAOS"}}, known)
 	if kept, held, _ := withKey.retain(row); len(kept) != 1 || held != 0 {
 		t.Fatalf("resolvable key: retracted %v held %d, want the row retracted", retractedTeams(kept), held)
@@ -160,13 +143,13 @@ func TestRetractionGuardLinearTeamKeyIsItsOwnKind(t *testing.T) {
 	// carried a prefix is of the kind through the catalog.
 	bare := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS", NativeTeamKey: "CHAOS"}}
 	bareRow := []teamRepoOwnershipActiveRow{retractionGuardRow("CHAOS", "acme/linear")}
-	bareNoKey := newTeamRepoOwnershipRetractionGuard(reachedThrough("jira"), links, nil, nil, bare)
+	bareNoKey := newTeamRepoOwnershipRetractionGuard(links, nil, nil, bare)
 	if kept, held, _ := bareNoKey.retain(bareRow); len(kept) != 0 || held != 1 {
 		t.Fatalf("bare listed linear team, no key input: retracted %v held %d, want the row kept", retractedTeams(kept), held)
 	}
 
 	// A prefixed Linear team the catalog no longer lists is still of the kind.
-	gone := newTeamRepoOwnershipRetractionGuard(reachedThrough("jira"), links, nil, nil, nil)
+	gone := newTeamRepoOwnershipRetractionGuard(links, nil, nil, nil)
 	if kept, held, _ := gone.retain(row); len(kept) != 0 || held != 1 {
 		t.Fatalf("unlisted linear team, no key input: retracted %v held %d, want the row kept", retractedTeams(kept), held)
 	}
@@ -177,11 +160,11 @@ func TestRetractionGuardLinearTeamKeyIsItsOwnKind(t *testing.T) {
 // so it is retracted when the run holds an open link of any provider.
 func TestRetractionGuardRowOfNoKindKeepsTheOldGuard(t *testing.T) {
 	row := []teamRepoOwnershipActiveRow{retractionGuardRow("team-orphan", "acme/o")}
-	withLinks := newTeamRepoOwnershipRetractionGuard(nil, []TeamRepoOwnershipProjectLink{{Provider: "gitlab", ProjectID: "g/p", TeamID: "gl:t"}}, nil, nil, nil)
+	withLinks := newTeamRepoOwnershipRetractionGuard([]TeamRepoOwnershipProjectLink{{Provider: "gitlab", ProjectID: "g/p", TeamID: "gl:t"}}, nil, nil, nil)
 	if kept, held, _ := withLinks.retain(row); len(kept) != 1 || held != 0 {
 		t.Fatalf("open links: retracted %v held %d, want retracted", retractedTeams(kept), held)
 	}
-	noLinks := newTeamRepoOwnershipRetractionGuard(nil, nil, nil, nil, nil)
+	noLinks := newTeamRepoOwnershipRetractionGuard(nil, nil, nil, nil)
 	kept, held, heldKinds := noLinks.retain(row)
 	want := []teamRepoOwnershipRetractionHeld{{
 		Kind: teamRepoOwnershipRetractionKindNone, Reasons: []string{TeamRepoOwnershipNoOpenProjectLink}, Rows: 1,
@@ -195,7 +178,7 @@ func TestRetractionGuardRowOfNoKindKeepsTheOldGuard(t *testing.T) {
 // is in the history (it names A's team) and never in the open links, so it
 // proves nothing for A.
 func TestRetractionGuardCountsAClosedLinkInTheHistoryOnly(t *testing.T) {
-	guard := newTeamRepoOwnershipRetractionGuard(reachedThrough("linear"),
+	guard := newTeamRepoOwnershipRetractionGuard(
 		[]TeamRepoOwnershipProjectLink{{Provider: "linear", ProjectID: "uuid-1", TeamID: "team-b"}},
 		[]TeamRepoOwnershipTeamLinkProvider{{Provider: "jira", TeamID: "team-a"}, {Provider: "linear", TeamID: "team-b"}},
 		nil, nil)
@@ -207,101 +190,5 @@ func TestRetractionGuardCountsAClosedLinkInTheHistoryOnly(t *testing.T) {
 	}
 	if !guard.proofs[teamRepoOwnershipRetractionKind{Kind: teamRepoOwnershipRetractionKindProjectLinks, Provider: "linear"}].Proven() {
 		t.Fatal("project_links:linear is not proven with one open linear link")
-	}
-}
-
-// TestRetractionGuardOpenLinksThatReachNothingProveNothing: provider A's links
-// are open but the run reached no repository through them (A's work items or
-// pull request links are not in the run). A's row stays open; B's closes.
-func TestRetractionGuardOpenLinksThatReachNothingProveNothing(t *testing.T) {
-	for _, a := range retractionGuardProviders {
-		for _, b := range retractionGuardProviders {
-			if a == b {
-				continue
-			}
-			t.Run(a+"_unreached_"+b+"_reached", func(t *testing.T) {
-				guard := newTeamRepoOwnershipRetractionGuard(reachedThrough(b),
-					[]TeamRepoOwnershipProjectLink{
-						{Provider: a, ProjectID: a + "-proj", TeamID: "team-a"},
-						{Provider: b, ProjectID: b + "-proj", TeamID: "team-b"},
-					}, nil, nil, nil)
-				kept, held, heldKinds := guard.retain([]teamRepoOwnershipActiveRow{
-					retractionGuardRow("team-a", "acme/a"), retractionGuardRow("team-b", "acme/b"),
-				})
-				want := []teamRepoOwnershipRetractionHeld{{
-					Kind: teamRepoOwnershipRetractionKindProjectLinks, Provider: a,
-					Reasons: []string{TeamRepoOwnershipNoRepositoryReached}, Rows: 1,
-				}}
-				if got := retractedTeams(kept); !reflect.DeepEqual(got, []string{"team-b"}) || held != 1 || !reflect.DeepEqual(heldKinds, want) {
-					t.Fatalf("retracted %v held %d %+v, want only team-b retracted and team-a held by %+v", got, held, heldKinds, want)
-				}
-			})
-		}
-	}
-}
-
-// TestDerivationCountsWhatEachKindReached: the derivation counts a candidate
-// under the kind that resolved its team. A provider with an open link and no
-// item that reaches a repository counts nothing.
-func TestDerivationCountsWhatEachKindReached(t *testing.T) {
-	derivation := deriveTeamRepoOwnership("org",
-		[]TeamRepoOwnershipProjectLink{
-			{Provider: "jira", ProjectID: "10001", TeamID: "jira:ops"},
-			{Provider: "gitlab", ProjectID: "g/p", TeamID: "gl:core"},
-			{Provider: "github", ProjectID: "acme/web", TeamID: "gh:web"},
-		},
-		[]TeamRepoOwnershipWorkItem{
-			{WorkItemID: "jira:OPS-1", Provider: "jira", ProjectID: "10001"},
-			{WorkItemID: "linear:CHAOS-1", Provider: "linear", NativeTeamKey: "CHAOS"},
-			{WorkItemID: "gitlab:g/p#1", Provider: "gitlab", ProjectID: "g/p"},
-			{WorkItemID: "gh:acme/web#4", Provider: "github", ProjectID: "acme/web"},
-		},
-		nil,
-		[]TeamRepoOwnershipIssuePRLink{
-			{WorkItemID: "jira:OPS-1", RepoID: "11111111-1111-1111-1111-111111111111", Provenance: "native"},
-			{WorkItemID: "jira:OPS-1", RepoID: "22222222-2222-2222-2222-222222222222", Provenance: "explicit_text"},
-			{WorkItemID: "linear:CHAOS-1", RepoID: "33333333-3333-3333-3333-333333333333", Provenance: "native"},
-			{WorkItemID: "gh:acme/web#4", RepoID: "44444444-4444-4444-4444-444444444444", Provenance: "native"},
-		},
-		[]TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "linear:CHAOS", NativeTeamKey: "CHAOS"}},
-	)
-	known := map[uuid.UUID]teamRepoOwnershipRepoInfo{}
-	for _, id := range []string{"11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222",
-		"33333333-3333-3333-3333-333333333333", "44444444-4444-4444-4444-444444444444"} {
-		known[uuid.MustParse(id)] = teamRepoOwnershipRepoInfo{FullName: "acme/" + id[:4], Provider: "github"}
-	}
-	want := reachedThrough("jira", "jira", "github", teamRepoOwnershipRetractionKindLinearTeamKey)
-	if got := reachedKnownRepositories(derivation.Reached, known); !reflect.DeepEqual(got, want) {
-		t.Fatalf("reached = %+v, want %+v (gitlab's link is open and reaches no repository)", got, want)
-	}
-}
-
-// TestReachedCountsOnlyRepositoriesTheSnapshotKnows: a candidate whose
-// repo_id the repos snapshot does not know (or has no full name for) cannot
-// be written, so it proves nothing for its kind.
-func TestReachedCountsOnlyRepositoriesTheSnapshotKnows(t *testing.T) {
-	jira := teamRepoOwnershipRetractionKind{Kind: teamRepoOwnershipRetractionKindProjectLinks, Provider: "jira"}
-	known := uuid.MustParse("11111111-1111-1111-1111-111111111111")
-	unnamed := uuid.MustParse("22222222-2222-2222-2222-222222222222")
-	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{known: {FullName: "acme/a", Provider: "github"}, unnamed: {Provider: "github"}}
-	cases := map[string]struct {
-		ids  []string
-		want int
-	}{
-		"known":    {[]string{known.String()}, 1},
-		"unknown":  {[]string{"33333333-3333-3333-3333-333333333333"}, 0},
-		"no name":  {[]string{unnamed.String()}, 0},
-		"not uuid": {[]string{"repo-a"}, 0},
-		"nil uuid": {[]string{uuid.Nil.String()}, 0},
-		"mixed":    {[]string{known.String(), "33333333-3333-3333-3333-333333333333", unnamed.String()}, 1},
-	}
-	for name, tc := range cases {
-		reached := map[teamRepoOwnershipRetractionKind]map[string]bool{jira: {}}
-		for _, id := range tc.ids {
-			reached[jira][id] = true
-		}
-		if got := reachedKnownRepositories(reached, repos)[jira]; got != tc.want {
-			t.Errorf("%s: reached %d, want %d", name, got, tc.want)
-		}
 	}
 }

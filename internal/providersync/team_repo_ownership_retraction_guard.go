@@ -24,18 +24,10 @@ import (
 // with two providers, provider A with no open link and provider B with one
 // let a run retract every derived row of A.
 //
-// So each kind has its own SnapshotProof, made from two named terms: the
-// kind's own input is in the run, and the run reached at least one repository
-// through it (a team resolved through the kind for a pull request's repository
-// or an issue's linked pull request). The second term covers the rest of the
-// chain: a provider whose links are open but whose work items or links to
-// pull requests are not in the run reaches nothing and proves nothing.
+// So each kind has its own SnapshotProof, made from one named term:
 //
-//	project_links:<provider>  an open project link of the provider; a repository reached through it
-//	linear_team_key           a Linear work item whose native team key names a current Linear team; a repository reached through it
-//
-// A kind that is in the run and reaches no repository closes nothing, the
-// same as an empty answer of a snapshot kind (EmptyClosesNothing).
+//	project_links:<provider>  the run holds at least one open project link of the provider
+//	linear_team_key           the run holds a Linear work item whose native team key names a current Linear team
 //
 // The kinds of an open derived row are the kinds that can have derived it:
 // project_links:<P> for every provider P whose project links (open or closed:
@@ -54,9 +46,6 @@ const (
 	// TeamRepoOwnershipNoOpenProjectLinkOfTheProvider is the reason of a
 	// project_links kind whose provider has no open project link in the run.
 	TeamRepoOwnershipNoOpenProjectLinkOfTheProvider = "no_open_project_link_of_the_provider"
-	// TeamRepoOwnershipNoRepositoryReached is the reason of a kind whose input
-	// reached no repository in the run.
-	TeamRepoOwnershipNoRepositoryReached = "no_repository_reached_through_the_kind"
 	// TeamRepoOwnershipNoKnownLinearTeamKey is the reason of the
 	// linear_team_key kind when no Linear work item names a current Linear team.
 	TeamRepoOwnershipNoKnownLinearTeamKey = "no_linear_work_item_with_a_known_team_key"
@@ -97,10 +86,8 @@ type teamRepoOwnershipRetractionGuard struct {
 }
 
 // newTeamRepoOwnershipRetractionGuard makes the proof of every kind from the
-// run's inputs and what the derivation reached through each kind, and the
-// kinds of every team from the org's link history.
+// run's inputs, and the kinds of every team from the org's link history.
 func newTeamRepoOwnershipRetractionGuard(
-	reached map[teamRepoOwnershipRetractionKind]int,
 	projectLinks []TeamRepoOwnershipProjectLink,
 	linkHistory []TeamRepoOwnershipTeamLinkProvider,
 	workItems []TeamRepoOwnershipWorkItem,
@@ -119,9 +106,7 @@ func newTeamRepoOwnershipRetractionGuard(
 	providerKind := func(provider string) teamRepoOwnershipRetractionKind {
 		kind := teamRepoOwnershipRetractionKind{Kind: teamRepoOwnershipRetractionKindProjectLinks, Provider: provider}
 		if _, made := guard.proofs[kind]; !made {
-			guard.proofs[kind] = ProveSnapshot(
-				SnapshotTerm{Holds: openLinks[provider] > 0, Reason: TeamRepoOwnershipNoOpenProjectLinkOfTheProvider},
-				SnapshotTerm{Holds: reached[kind] > 0, Reason: TeamRepoOwnershipNoRepositoryReached})
+			guard.proofs[kind] = ProveSnapshot(SnapshotTerm{Holds: openLinks[provider] > 0, Reason: TeamRepoOwnershipNoOpenProjectLinkOfTheProvider})
 		}
 		return kind
 	}
@@ -149,9 +134,10 @@ func newTeamRepoOwnershipRetractionGuard(
 		}
 	}
 	linearKind := teamRepoOwnershipRetractionKind{Kind: teamRepoOwnershipRetractionKindLinearTeamKey}
-	guard.proofs[linearKind] = ProveSnapshot(
-		SnapshotTerm{Holds: hasResolvableLinearNativeTeamKey(workItems, knownTeams), Reason: TeamRepoOwnershipNoKnownLinearTeamKey},
-		SnapshotTerm{Holds: reached[linearKind] > 0, Reason: TeamRepoOwnershipNoRepositoryReached})
+	guard.proofs[linearKind] = ProveSnapshot(SnapshotTerm{
+		Holds:  hasResolvableLinearNativeTeamKey(workItems, knownTeams),
+		Reason: TeamRepoOwnershipNoKnownLinearTeamKey,
+	})
 	for _, teamID := range knownLinearTeamIDsByKey(knownTeams) {
 		addTeamKind(teamID, linearKind)
 	}

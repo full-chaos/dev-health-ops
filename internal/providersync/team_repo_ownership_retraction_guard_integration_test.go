@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 )
@@ -43,24 +42,13 @@ func newRetractionGuardOrg(t *testing.T, ctx context.Context, conn driver.Conn, 
 
 // own seeds an open link of the team to the provider's project, and one issue
 // of that project linked to a PR of the repo.
-func (org *retractionGuardOrg) own(provider, projectID, teamID, repo string) string {
+func (org *retractionGuardOrg) own(provider, projectID, teamID, repo string) {
 	org.t.Helper()
 	org.issue++
 	workItemID := fmt.Sprintf("%s:G-%d", provider, org.issue)
 	seedTeamProjectOwnership(org.t, org.ctx, org.conn, org.orgID, provider, projectID, teamID, true, org.at)
 	seedWorkItem(org.t, org.ctx, org.conn, org.orgID, workItemID, provider, uuid.Nil, projectID, org.at)
 	seedWorkGraphIssuePR(org.t, org.ctx, org.conn, org.orgID, org.repos[repo], workItemID, uint32(org.issue), org.at)
-	return workItemID
-}
-
-// remove deletes the org's rows of one work item from a table: an input of
-// the run that is not there (a sync that has not landed yet).
-func (org *retractionGuardOrg) remove(table, workItemID string) {
-	org.t.Helper()
-	ctx := clickhouse.Context(org.ctx, clickhouse.WithSettings(clickhouse.Settings{"mutations_sync": 2}))
-	if err := org.conn.Exec(ctx, "ALTER TABLE "+table+" DELETE WHERE org_id = ? AND work_item_id = ?", org.orgID, workItemID); err != nil {
-		org.t.Fatalf("delete %s rows of %s: %v", table, workItemID, err)
-	}
 }
 
 // closeLink writes the link's own key again with valid_to set: what an
@@ -192,45 +180,5 @@ func TestDerivedRepoOwnershipSingleProviderClosedLinkKeepsTheRow(t *testing.T) {
 			}
 			org.assertOpenOwner("acme/repo-a", "team-a")
 		})
-	}
-}
-
-// TestDerivedRepoOwnershipOpenLinksThatReachNothingKeepTheRow: provider A's
-// link stays open, but A's input past the link is not in the run (its work
-// item, or its issue's pull request link). The run reaches no repository
-// through A, so A's row stays open while B's input is complete.
-func TestDerivedRepoOwnershipOpenLinksThatReachNothingKeepTheRow(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t)
-	for _, missing := range []string{"work_items", "work_graph_issue_pr", "repo_of_a_pull_request"} {
-		for _, a := range retractionGuardIntegrationProviders {
-			for _, b := range retractionGuardIntegrationProviders {
-				if a == b {
-					continue
-				}
-				t.Run(missing+"_"+a+"_"+b, func(t *testing.T) {
-					org := newRetractionGuardOrg(t, ctx, conn, "chaos-9045-unreached-"+missing+"-"+a+"-"+b, "acme/repo-a", "acme/repo-b")
-					itemA := org.own(a, a+"-proj-a", "team-a", "acme/repo-a")
-					org.own(b, b+"-proj-b", "team-b", "acme/repo-b")
-					if written, retracted, _, _ := org.derive(); written != 2 || retracted != 0 {
-						t.Fatalf("first Derive: written=%d retracted=%d, want 2 and 0", written, retracted)
-					}
-					if missing == "repo_of_a_pull_request" {
-						// A's only remaining candidate is a pull request of A's
-						// project in a repository the repos snapshot does not know.
-						org.remove("work_graph_issue_pr", itemA)
-						seedWorkItemOfType(t, ctx, conn, org.orgID, a+":PR-1", a, "pr", uuid.New(), a+"-proj-a", org.at)
-					} else {
-						org.remove(missing, itemA)
-					}
-					written, retracted, inputsReady, stats := org.derive()
-					if !inputsReady || written != 0 || retracted != 0 || stats.RetractionsHeld != 1 {
-						t.Fatalf("A's %s missing: inputsReady=%v written=%d retracted=%d held=%d, want true 0 0 1",
-							missing, inputsReady, written, retracted, stats.RetractionsHeld)
-					}
-					org.assertOpenOwner("acme/repo-a", "team-a")
-					org.assertOpenOwner("acme/repo-b", "team-b")
-				})
-			}
-		}
 	}
 }

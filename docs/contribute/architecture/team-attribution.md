@@ -468,6 +468,32 @@ means the ClickHouse `teams` dimension is empty.
 > is gated" bullets in §1.1) rather than a looser first-donor walk, and additionally resolves PRs
 > through `work_graph_issue_pr` (§1.1's new PR-inheritance branch) that the original summary above
 > did not cover. See the ownership-derivation diagram in §1.1 and the ER callouts in §3.
+>
+> **Start of an `inferred` row (`valid_from`) = its earliest evidence, not the derive run (CHAOS-9396 F1).**
+> The row a run writes for a (team, repository) claim starts at the earliest evidence time of the WINNING team's
+> claim: the `created_at` of the earliest pull/merge request of the repository the team's work reaches (an own
+> pull/merge request work item: `work_items.created_at`; a linked issue: the linked pull request's
+> `git_pull_requests.created_at`). A claim with no timed evidence, or evidence after the run, starts at the run,
+> and a later run keeps that row (logged `team_repo_ownership_derivation.evidence_start_set_aside`, `future`).
+> A claim that was retracted before (another team won the repository; a row closed after its own start) and wins
+> again starts at the run when its evidence is older than the end of its latest retraction: that retraction already
+> judged that evidence, and a row at the evidence time would have the key of the retracted row and reopen it, so a
+> read of the interval the other team owned would name this team again (logged with `before_retraction`). A row
+> closed at its own start (superseded, below) is no retraction. One team owns a repository at a time: a claim whose
+> evidence is older than the end of ANOTHER team's tenure on the repository (that team's latest retraction, or this
+> run when this run retracts its open row) starts at that end (logged with `after_other_owner`); the end is stored
+> as the other team's `valid_to`, so the next run reads the same start and writes nothing, and an open row an
+> earlier run left at the older evidence is superseded. A retraction the guard holds (§ retraction guard) has no
+> end yet, so a claim beside a held row can still overlap it.
+> One open row per claim: an open row of the claim that does not start at its evidence time (written by an
+> earlier run at its run time) is superseded -- closed at its own `valid_from`, an empty interval no read
+> sees -- in the same run, after the row at the evidence time is written (logged
+> `team_repo_ownership_derivation.superseded_by_evidence_start`, stats `Superseded`). The next derive run after
+> deploy therefore rewrites the history of every inferred claim; a read of a past day (the landscape, team risk)
+> sees the owner the evidence shows. The other ownership writers (GitHub team access, GitLab group projects,
+> Jira/Linear team projects) have no grant time in their APIs and still start at the first sync that saw the link,
+> as the Python reference did; see the first-known-ownership fallback (F2) for days before a repository's first
+> recorded ownership.
 
 > **CHAOS-4458 part (b) (fixed): the derivation's Linear arm never resolved, because
 > `team_project_ownership`'s Linear rows and `work_items.project_id` for a Linear item were two
@@ -1982,6 +2008,10 @@ Limits:
 Ownership and membership rows are bitemporal (`valid_from`, `valid_to`). An item takes its team from the rows
 valid on **the item's day**, never from the rows valid when a job runs. Ownership starts when it was first
 known, and a later change of owner does not rewrite the items of earlier days.
+
+**Time rule of an inferred ownership row (CHAOS-9403):** the first snapshot of a claim back-dates its row to the
+claim's earliest evidence, and a change a later derive run observes (a new owner, a retraction, a claim that wins
+again) starts and ends at that run, so one team owns a repository at a time.
 
 > **Superseded (chris, 2026-10-12 17:26Z, lead D5987, option C):** for a day before the first recorded ownership
 > of a repository, the repository's FIRST recorded owners apply backward; the earlier rule ("an item of a day

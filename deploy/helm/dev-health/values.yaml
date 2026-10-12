@@ -709,6 +709,19 @@ migrations:
       #    set DEV_HEALTH_MIGRATION_PG_* in an operator-owned Secret instead.
       image: ""
       pullPolicy: ""
+      # -- CHAOS-9369: optional LOGIN holding ONLY the built-in pg_monitor role,
+      #    for the OpenTelemetry collector's postgresql receiver. EMPTY name =
+      #    OFF (nothing is provisioned, no env is added to the Job). When set,
+      #    `dho migrate roles` creates it (CONNECT on the application database +
+      #    pg_monitor membership; no schema USAGE, no table privilege) and the
+      #    password is read from an OPERATOR-CREATED Secret named by secretName /
+      #    secretKey -- this chart never creates that Secret, and the render
+      #    fails if name is set while secretName or secretKey is empty. An
+      #    existing login keeps its password (never rotated).
+      monitorRole:
+        name: ""
+        secretName: "otel-collector-postgres"
+        secretKey: "POSTGRES_MONITOR_PASSWORD"
     riverMigrate:
       # -- OFF is not "River never happens". With the hook off there are two
       #    paths, and which one you are on depends on secretData below:

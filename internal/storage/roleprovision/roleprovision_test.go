@@ -21,6 +21,7 @@ func TestValidateAcceptsTheMandatoryRolesAndEveryOptionalOne(t *testing.T) {
 	}
 	all := valid()
 	all.API, all.QueryAPI, all.Keda = Role{"a", "pw-a"}, Role{"qa", "pw-qa"}, Role{"k", "pw-k"}
+	all.Monitor = Role{"m", "pw-m"}
 	all.RiverSchema = "river"
 	if err := all.Validate(); err != nil {
 		t.Fatal(err)
@@ -42,6 +43,11 @@ func TestValidateRefusesWhatWouldCreateAWrongOrAmbiguousRoleSet(t *testing.T) {
 		"keda equals a mandatory role":                       func(o *Options) { o.Keda = Role{"d", "pw"} },
 		"keda equals api":                                    func(o *Options) { o.API, o.Keda = Role{"x", "pw"}, Role{"x", "pw"} },
 		"keda equals query-api":                              func(o *Options) { o.QueryAPI, o.Keda = Role{"x", "pw"}, Role{"x", "pw"} },
+		"monitor equals a mandatory role":                    func(o *Options) { o.Monitor = Role{"d", "pw"} },
+		"monitor equals keda":                                func(o *Options) { o.Keda, o.Monitor = Role{"x", "pw"}, Role{"x", "pw"} },
+		"monitor without a password":                         func(o *Options) { o.Monitor = Role{"m", ""} },
+		"monitor name past the identifier limit":             func(o *Options) { o.Monitor = Role{long, "pw"} },
+		"a NUL in the monitor name":                          func(o *Options) { o.Monitor = Role{"m\x00x", "pw"} },
 		"an optional role without a password":                func(o *Options) { o.API = Role{"a", ""} },
 		"a name past the identifier limit":                   func(o *Options) { o.Domain.Name = long },
 		"a NUL in a role name":                               func(o *Options) { o.Domain.Name = "d\x00x" },
@@ -94,5 +100,28 @@ func TestOptionalRolesAreConfiguredOnlyWhenNamed(t *testing.T) {
 	}
 	if options.schema() != "river" {
 		t.Fatalf("the default River schema must be river, got %q", options.schema())
+	}
+}
+
+// CHAOS-9369: the monitor login is optional (provisioned only when named), is listed
+// under its own label, and its name is free-form like KEDA's (river never reads it).
+func TestMonitorRoleIsConfiguredOnlyWhenNamedAndLabelled(t *testing.T) {
+	t.Parallel()
+	options := valid()
+	for _, entry := range options.configured() {
+		if entry.label == monitorLabel {
+			t.Fatal("an unset monitor role must not be configured")
+		}
+	}
+	options.Monitor = Role{` Odd "Mon".Name `, "pw-m"}
+	if err := options.Validate(); err != nil {
+		t.Fatalf("river never reads the monitor role, so its name is free-form: %v", err)
+	}
+	found := false
+	for _, entry := range options.configured() {
+		found = found || (entry.label == monitorLabel && entry.role.Name == options.Monitor.Name)
+	}
+	if !found {
+		t.Fatal("a named monitor role must be configured under the monitor label")
 	}
 }

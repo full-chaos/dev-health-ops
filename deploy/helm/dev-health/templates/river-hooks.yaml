@@ -90,6 +90,25 @@ password key still exists -- an override could delete it.
 {{- end }}
 {{- $provisionKeda := and $anyAutoscale (ne $kedaRole "") }}
 {{- /*
+CHAOS-9369: the optional pg_monitor-only login for the OpenTelemetry collector's
+postgresql receiver. OFF unless monitorRole.name is set. Its password comes from a
+SEPARATE, operator-created Secret (monitorRole.secretName / secretKey) -- this chart
+never creates that Secret, and a Secret read as a pre-install/upgrade hook env must
+already exist, so naming a login without naming its Secret is a render error.
+*/}}
+{{- $monitorRole := .Values.migrations.hook.provisionRoles.monitorRole | default dict }}
+{{- $monitorName := toString ($monitorRole.name | default "") }}
+{{- $monitorSecretName := toString ($monitorRole.secretName | default "") }}
+{{- $monitorSecretKey := toString ($monitorRole.secretKey | default "") }}
+{{- if $monitorName }}
+{{- if not $monitorSecretName }}
+{{- fail "migrations.hook.provisionRoles.monitorRole.name is set but monitorRole.secretName is empty: the monitor login's password is read from an operator-created Secret (this chart never creates it); set monitorRole.secretName, or clear monitorRole.name to leave the monitor login off." }}
+{{- end }}
+{{- if not $monitorSecretKey }}
+{{- fail "migrations.hook.provisionRoles.monitorRole.name is set but monitorRole.secretKey is empty: name the key in monitorRole.secretName that holds the monitor login's password." }}
+{{- end }}
+{{- end }}
+{{- /*
 CHAOS-6951: this Job runs `dho migrate roles` (CHAOS-6901), so, like the River
 hook below, its image must be a pinned operator image carrying dho as the
 entrypoint. It is provisionRoles.image, else riverMigrate.image, else
@@ -267,6 +286,15 @@ spec:
                 secretKeyRef:
                   name: {{ $provisionSecretName }}
                   key: RIVER_KEDA_READONLY_PASSWORD
+{{- end }}
+{{- if $monitorName }}
+            - name: OTEL_PG_MONITOR_DATABASE_ROLE
+              value: {{ $monitorName | quote }}
+            - name: OTEL_PG_MONITOR_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $monitorSecretName | quote }}
+                  key: {{ $monitorSecretKey | quote }}
 {{- end }}
           envFrom:
             - secretRef:

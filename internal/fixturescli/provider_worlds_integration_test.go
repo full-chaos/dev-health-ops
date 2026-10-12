@@ -79,6 +79,10 @@ var githubTeams = []githubTeam{
 	{103, "docs", "Docs", "Writes the docs", nil, []githubUser{ghErin}},
 }
 
+// githubLegacyTeam held payments-api at the organization's first sync and is gone by the second: the
+// second sync closes its grant and its memberships.
+var githubLegacyTeam = githubTeam{105, "legacy", "Legacy", "The old payments team", []string{"payments-api"}, []githubUser{ghAlice}}
+
 type githubRepo struct {
 	ID          int
 	Name        string
@@ -108,10 +112,9 @@ func (repo githubRepo) payload() map[string]any {
 	}
 }
 
-func githubTeamCatalogAnswers() []providerAnswer { return githubTeamCatalogAnswersFor(githubTeams) }
-
-// githubTeamCatalogAnswersFor answers the GitHub team catalog of an organization holding these teams.
-func githubTeamCatalogAnswersFor(githubTeams []githubTeam) []providerAnswer {
+// githubTeamCatalogAnswersFor answers the GitHub team catalog of an organization holding these teams,
+// in one sync phase ("" for every phase).
+func githubTeamCatalogAnswersFor(githubTeams []githubTeam, phase string) []providerAnswer {
 	var teams []map[string]any
 	for _, team := range githubTeams {
 		teams = append(teams, map[string]any{
@@ -144,12 +147,16 @@ func githubTeamCatalogAnswersFor(githubTeams []githubTeam) []providerAnswer {
 			get(githubHost, "/orgs/"+githubOrg+"/teams/"+team.Slug+"/members", "per_page=100", members),
 		)
 	}
+	for index := range answers {
+		answers[index].Phase = phase
+	}
 	return answers
 }
 
 func githubAnswers() []providerAnswer {
 	var answers []providerAnswer
-	answers = append(answers, githubTeamCatalogAnswers()...)
+	answers = append(answers, githubTeamCatalogAnswersFor(append(append([]githubTeam{}, githubTeams...), githubLegacyTeam), "first")...)
+	answers = append(answers, githubTeamCatalogAnswersFor(githubTeams, "second")...)
 	answers = append(answers, githubRepoAnswers("payments-api", githubPaymentsItems)...)
 	answers = append(answers, githubPRSocialAnswer("payments-api", githubPaymentsItems))
 	answers = append(answers, githubRepoAnswers("platform-core", githubPlatformItems)...)
@@ -166,7 +173,9 @@ var githubWorld = providerWorld{
 	FrozenAt: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),
 	Answers:  githubAnswers,
 	Steps: []worldStep{
-		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}},
+		// The first sync of the catalog, a month before the world's instant, and the second.
+		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}, Phase: "first", Before: 30 * 24 * time.Hour},
+		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}, Phase: "second"},
 		{Kind: "sync", Provider: "github", Credential: githubToken, DepthDays: 150,
 			Sources:  [][2]string{{githubOrg + "/payments-api", "payments-api"}, {githubOrg + "/platform-core", "platform-core"}},
 			Datasets: []string{"repo-metadata", "prs", "work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"}},

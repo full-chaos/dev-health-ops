@@ -64,9 +64,12 @@ type providerAnswer struct {
 	// Variables, when set, the request's variables as JSON object (compared as values).
 	GraphQL   string          `json:"graphql,omitempty"`
 	Variables json.RawMessage `json:"variables,omitempty"`
-	Status    int             `json:"status"`
-	Headers   http.Header     `json:"headers,omitempty"`
-	Body      json.RawMessage `json:"body"`
+	// Phase names the sync this answer belongs to ("" answers in every phase): a world that syncs its
+	// catalog twice answers the first sync from the first phase's answers.
+	Phase   string          `json:"phase,omitempty"`
+	Status  int             `json:"status"`
+	Headers http.Header     `json:"headers,omitempty"`
+	Body    json.RawMessage `json:"body"`
 	// Respond, when set, builds the body from the request (a GraphQL answer whose shape follows the
 	// aliases the request asks for, a search answer that depends on its query); ok=false is "this
 	// answer does not answer the request".
@@ -83,7 +86,9 @@ type replayRequest struct {
 // replayDoer answers every request from its answers and records each one. A request no answer names is
 // answered 599 and recorded as unmatched; the producer fails the run on any.
 type replayDoer struct {
-	mu        sync.Mutex
+	mu sync.Mutex
+	// phase is the phase of the step that runs now.
+	phase     string
 	answers   []providerAnswer
 	used      map[int]int
 	unmatched []string
@@ -147,6 +152,9 @@ func (doer *replayDoer) Do(request *http.Request) (*http.Response, error) {
 	}
 	for _, index := range order {
 		answer := doer.answers[index]
+		if answer.Phase != "" && answer.Phase != doer.phase {
+			continue
+		}
 		if answer.Method != request.Method || answer.Host != request.URL.Host || answer.Path != request.URL.Path {
 			continue
 		}
@@ -246,6 +254,10 @@ type worldStep struct {
 	// DatasetOptions are the integration's dataset options every planned unit carries (jira
 	// fetch_dev_status).
 	DatasetOptions map[string]any
+	// Phase selects the answers of this step's sync, and Before how long before the world's instant it
+	// runs (its clock): a catalog synced twice shows what a later sync closes.
+	Phase  string
+	Before time.Duration
 }
 
 // providerWorld is one frozen provider world: the parameters `fixtures generate` selects it by, the
@@ -304,6 +316,12 @@ func providerClient(t *testing.T, provider, baseURL string, doer providerfoundat
 // runWorldStep runs one production verb of the world against conn.
 func runWorldStep(ctx context.Context, t *testing.T, conn driver.Conn, world providerWorld, step worldStep, doer *replayDoer, ids *idSequence, mapping *providersync.StatusMapping) {
 	t.Helper()
+	doer.mu.Lock()
+	doer.phase = step.Phase
+	doer.mu.Unlock()
+	if step.Before < 0 || (step.Before > 0 && step.Kind != "team_catalog") {
+		t.Fatalf("step %s: only a team catalog step runs before the world's instant", step.Kind)
+	}
 	switch step.Kind {
 	case "sync":
 		runWorldSync(ctx, t, conn, world, step, doer, ids, mapping)
@@ -317,7 +335,7 @@ func runWorldStep(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 			reference.SourceExternalIDs = append(reference.SourceExternalIDs, source[0])
 		}
 		selections := providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true}
-		result, err := collectTeamCatalog(ctx, t, conn, step, credential, reference, selections, doer, world.FrozenAt)
+		result, err := collectTeamCatalog(ctx, t, conn, step, credential, reference, selections, doer, world.FrozenAt.Add(-step.Before))
 		if err != nil {
 			t.Fatalf("%s team catalog: %v (unmatched requests: %v; last requests: %v)", step.Provider, err, doer.unmatched, doer.lastSeen(6))
 		}

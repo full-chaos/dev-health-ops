@@ -432,7 +432,7 @@ means the ClickHouse `teams` dimension is empty.
 | 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider, else admin teams (section 0.4e) | high | all below | — (top) | `native_team_key` |
 | 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
-| 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–8 | 0–2 | `repo_full_name` |
+| 3 | `repo_ownership` | `team_repo_ownership` | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner since CHAOS-9411) | 4–8 | 0–2 | `repo_full_name` |
 | 4 | `assignee_membership` | CHAOS-4321 two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only (CHAOS-9414), never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
 | 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–8 | 0–3 | `dependency_type, donor_work_item_id, donor_provider` |
 | 6 | `author_membership` | CHAOS-4244 PR/MR-only + CHAOS-4321 two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only (CHAOS-9414), never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
@@ -487,12 +487,14 @@ means the ClickHouse `teams` dimension is empty.
 > again starts at the run when its evidence is older than the end of its latest retraction: that retraction already
 > judged that evidence, and a row at the evidence time would have the key of the retracted row and reopen it, so a
 > read of the interval the other team owned would name this team again (logged with `before_retraction`). A row
-> closed at its own start (superseded, below) is no retraction. One team owns a repository at a time: a claim whose
-> evidence is older than the end of ANOTHER team's tenure on the repository (that team's latest retraction, or this
-> run when this run retracts its open row) starts at that end (logged with `after_other_owner`); the end is stored
-> as the other team's `valid_to`, so the next run reads the same start and writes nothing, and an open row an
-> earlier run left at the older evidence is superseded. A retraction the guard holds (§ retraction guard) has no
-> end yet, so a claim beside a held row can still overlap it.
+> closed at its own start (superseded, below) is no retraction. One team is the main owner of a repository at a time
+> (CHAOS-9411: co-owners own it beside the main owner): a main owner's claim whose evidence is older than the end of
+> ANOTHER team's main tenure on the repository (the latest close of that team's main row, or this run when this run
+> retracts its open main row) starts at that end (logged with `after_other_owner`); the end is stored as the other
+> team's `valid_to`, so the next run reads the same start and writes nothing, and an open row an earlier run left at
+> the older evidence is superseded. A co-owner's start is never moved by another team. A repository whose roles
+> change while the guard holds one of its closes or retractions keeps all its rows that run (§1.1), so a held row
+> never leaves two main rows.
 > One open row per claim: an open row of the claim that does not start at its evidence time (written by an
 > earlier run at its run time) is superseded -- closed at its own `valid_from`, an empty interval no read
 > sees -- in the same run, after the row at the evidence time is written (logged
@@ -536,7 +538,8 @@ means the ClickHouse `teams` dimension is empty.
 > `testops_pipeline`, `testops_test`, `testops_coverage`, and `testops_risk` families retain a
 > non-empty source-row `team_id` when one exists. Otherwise, they use the single authoritative
 > `team_repo_ownership` owner for the repository at the **end of the target day**, ranked by
-> `is_primary DESC, specificity DESC, updated_at DESC, team_id ASC`. An unowned repository stays
+> `(is_primary = 1) DESC, specificity DESC, updated_at DESC, team_id ASC` (CHAOS-9411: a co-owner row,
+> `is_primary = 2`, ranks with the rows that are not primary). An unowned repository stays
 > NULL: these families do not fall back to `teams.repo_patterns` or person membership. The shared
 > ownership reader resolves direct and provider-access ownership rows by repository identity before
 > it applies that ranking, so the TestOps consumer has no provider-specific branch. Real-ClickHouse
@@ -610,7 +613,7 @@ means the ClickHouse `teams` dimension is empty.
 > rejected **every** native GitHub ownership row (§0.2's `repo_id is Nullable and often NULL`
 > note): (1) native `team_repo_ownership` wins where it resolves the repo, via the SAME
 > `coalesce(repo_id, name-joined id)` + `matched` sentinel join `load_team_repo_ownership_map`
-> uses; (2) ranked by `(is_primary DESC, specificity DESC, updated_at DESC)` so a non-primary
+> uses; (2) ranked by `((is_primary = 1) DESC, specificity DESC, updated_at DESC)` so a non-primary
 > co-owner is never mistaken for the canonical owner; (3) falls back to the requesting team's
 > `teams.repo_patterns` glob strings ONLY when native ownership resolves nothing for the candidate
 > repo — the path GitLab/Jira/Linear auto-imports rely on entirely, since none of them write
@@ -2019,7 +2022,7 @@ known, and a later change of owner does not rewrite the items of earlier days.
 
 **Time rule of an inferred ownership row (CHAOS-9403):** the first snapshot of a claim back-dates its row to the
 claim's earliest evidence, and a change a later derive run observes (a new owner, a retraction, a claim that wins
-again) starts and ends at that run, so one team owns a repository at a time.
+again, a change of main owner) starts and ends at that run, so a repository has one main owner at a time (§1.1).
 
 > **Superseded (chris, 2026-10-12 17:26Z, lead D5987, option C):** for a day before the first recorded ownership
 > of a repository, the repository's FIRST recorded owners apply backward; the earlier rule ("an item of a day
@@ -2726,27 +2729,55 @@ log line, one WARN `team_repo_ownership_derivation.retraction_held` line per kin
 `team_repo_ownership_retraction_guard_test.go` and `team_repo_ownership_retraction_guard_integration_test.go` (real
 ClickHouse, every ordered pair of jira, gitlab, github and linear).
 
-**One owner per repo, ranked by linked share (chris ruling D5432, CHAOS-8945).** When two or more teams reach the same
-repo, the derivation counts each team's candidates per link tier and ranks the teams lexicographically: the most `native`
-links first, then the most `explicit_text` links, then the most `heuristic` links, then links with any other recorded
-provenance. The tier of a `work_graph_issue_pr` candidate is that row's `provenance`; a pull request's / merge request's
-own `repo_id` (`work_items.type` `pr` or `merge_request`) and its `work_item_dependencies` donor edge are
-provider-recorded facts and count as `native` (the issue<->PR link builder stamps the same dependency row `native`). An
-issue's own `repo_id` is never a candidate (entity tree: Repository <> Pull request <> Issue <> Project): a GitHub or
-GitLab issue reaches a repo only through its linked pull request rows in `work_graph_issue_pr`, with that link's tier.
-A repo whose only evidence is an issue's own `repo_id` gets no inferred owner. The top team owns the repo; the other
-teams get no row. A count in a lower tier never outweighs a higher tier: one `native` link beats fifty `explicit_text` links. The same ranking applies to every provider:
-the team's provider is never an input. A repo is never dropped only because two teams have links to it. Only a **full
-tie** (equal counts at every tier) names no owner (chris ruling D5432; lead ruling D5448): the run writes nothing for the repo,
-keeps the open inferred rows of the **tied teams** (the existing owner stays when it is one of them), retracts an open
-inferred row of any team that is **not** in the tie, and signals the tie (`owner_tie_unresolved` + the WARN line above).
-A tie with no open row of a tied team leaves the repo without an inferred owner, signalled on every run while the tie
-lasts. When
-the ranked owner of a repo changes, the old owner's row is retracted and the new owner's row written, as before.
-Before this rule, a single `explicit_text` link from a second team dropped the repo and retracted its owner. Pinned by
-`internal/providersync/team_repo_ownership_ranked_owner_integration_test.go` (real ClickHouse, every provider pair) and
-the `TestRankedOwner*`, `TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate` and
-`TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier` tests in `team_repo_ownership_derivation_test.go`.
+**Every owning team of a repo, each with its linked share; one main owner (rulings D5432, D5988; CHAOS-8945, CHAOS-9411).**
+The derivation counts each team's candidates on a repo per link tier. The tier of a `work_graph_issue_pr` candidate is that
+row's `provenance`; a pull request's / merge request's own `repo_id` (`work_items.type` `pr` or `merge_request`) and its
+`work_item_dependencies` donor edge are provider-recorded facts and count as `native` (the issue<->PR link builder stamps
+the same dependency row `native`). An issue's own `repo_id` is never a candidate (entity tree: Repository <> Pull request
+<> Issue <> Project): a GitHub or GitLab issue reaches a repo only through its linked pull request rows in
+`work_graph_issue_pr`, with that link's tier. A repo whose only evidence is an issue's own `repo_id` gets no inferred
+owner. **Every team with a link of any tier owns the repo** (all three tiers are links) and gets its own
+`team_repo_ownership` row with its **share** (column `share`, migration 122): the team's links of every tier over all links
+of the repo, so the shares of a repo add up to 1; never an equal split. The **main owner** (`is_primary = 1`) is the top
+team by the lexicographic rank: the most `native` links first, then the most `explicit_text` links, then the most
+`heuristic` links, then links with any other recorded provenance; every other owning team is a **co-owner**
+(`is_primary = 2`, the CHAOS-8905 convention). The main owner is decided over the whole history of links, and every row
+starts at the earliest evidence of its own team's claim (CHAOS-9403). Because one `native` link outranks fifty
+`explicit_text` links for the main owner while the share counts every link, the main owner can hold a smaller share than
+a co-owner; each row carries both its role and its share. The same rule applies to every provider: the team's provider is
+never an input. A **full tie** for the top (equal counts at every tier; lead ruling D5448) names no new main owner: the
+tied team that already holds the repo's open main row (`is_primary = 1`, or `0` from the one-owner derivation before
+CHAOS-9411) stays the main owner, every other tied team is a co-owner, and the run signals the tie
+(`owner_tie_unresolved` + the WARN line above). With no such team (or two), the repo has co-owners only and no main
+owner, signalled on every run while the tie lasts. A team that no longer reaches the repo has its row retracted, as
+before; a team whose share changed gets a new version of its row under the same key (same `valid_from`), so each
+claim has one open row. A **role change** seen by a later run (the main owner changes from team A to team B) is dated at
+that run; only the first rows of a repo are back-dated to the evidence: A's main row and B's co-owner row end at the run
+(`valid_to` = run), B's main row starts at the run, and A continues from the run as a co-owner with its share while it
+still has links (`team_repo_ownership_derivation.role_changed`, `stats.RoleChanges`). A new main owner of a repo where
+another team holds an open main row also starts at the run. So a repo has at most one main row at any instant of its
+history, and none only during an unresolved full tie (D5448, above). A role close goes through the retraction guard; a repo whose roles change while the guard holds any close or
+retraction of it keeps all its rows that run (no write, retraction or close; `team_repo_ownership_derivation.role_change_held`)
+and waits for a run that proves them all, so a held row never leaves two main rows, nor a repo without the main row it had. A new main owner never starts
+before the end of another team's main tenure (CHAOS-9403 `after_other_owner`); a co-owner's start is its own evidence. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick one
+owner never take a co-owner row: `teamownership.AuthoritativeOwnerByRepo` and the cognitive-load gate leave out
+`is_primary = 2` rows and rank `(is_primary = 1) DESC` first, and the cascade's `LoadRepos` gives no `repo_ownership`
+candidate from a co-owner row (`RankDerivationCandidates` also ranks only `is_primary = 1` first). So a repo with co-owners
+only (a tie with no main owner) has no inferred one owner, as before co-owner rows existed, and the main owner keeps
+outranking a `provider_access` grant by specificity. An ownership fact with `is_primary = 2` carries the confidence of a
+fact that is not primary (`medium`). Readers that use the co-owner rows and the share are
+CHAOS-9408/9409/9410/9413.
+Before CHAOS-8945, a single `explicit_text` link from a second team dropped the repo and retracted its owner; before
+CHAOS-9411, the other teams got no row and no share was stored. Pinned by
+`internal/providersync/team_repo_ownership_ranked_owner_integration_test.go` (real ClickHouse, every provider pair: main
+owner, co-owners and shares read back), the `TestRankedOwner*`, `TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate` and
+`TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier` tests in `team_repo_ownership_derivation_test.go`,
+`team_repo_ownership_shares_test.go` (tie keeps the main owner; claim starts; a role change is dated at the run and held
+per repo), `TestAWinnerChangeIsDatedAtTheRunWithOneMainOwnerAtEveryInstant` (real ClickHouse, every provider: one main
+row at every instant, the one-owner read before and after the change, a rerun writes nothing), and the reader rank tests
+`TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt`, `TestACoOwnerFactNeverOutranksTheMainOwner`,
+`TestLoadReposLeavesOutCoOwnerRows`, `TestTheRepoGateNeverTakesACoOwnerAsTheOwner` and
+`TestAnInferredOwnerStillOutranksAProviderAccessGrant`.
 
 `work_items.repo_id` (and, for the PR-inheritance branch, `work_graph_issue_pr.repo_id`) is the
 derivation's output column, not resolved by a join through `repos` — though the WRITE side does
@@ -3367,12 +3398,12 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   direct producer row (`native` for Jira/Linear, `provider_access` for GitHub/GitLab team
   auto-import — §0.4a) exists for that repo. The attribution resolver's rank-3 `repo_ownership`
   source (§0.1) reads `team_repo_ownership` uniformly regardless of which sub-source populated the
-  winning row — see the §0.2 callout below for how `is_primary` (checked FIRST) then `specificity`
-  keep an `inferred` row from ever beating a direct one for the same repo: this producer writes
-  every row `is_primary=0`, same as GitHub's own `provider_access` writer, so a real GitHub-team
-  grant for that repo ties on `is_primary` and wins on `specificity` alone; a Jira/Linear/GitLab
-  `native`/`provider_access` row that happens to carry `is_primary=1` wins outright regardless of
-  specificity. **Status: implemented** —
+  winning row. Since CHAOS-9411 this producer writes the main owner `is_primary = 1` and every
+  co-owner `is_primary = 2`, each with its `share` (§1.1, "Every owning team of a repo"); readers
+  rank `(is_primary = 1) DESC` first, then `specificity`, so the main inferred owner (specificity
+  150) outranks a GitHub `provider_access` grant (`is_primary = 0`, specificity 100), as the
+  specificity values already made it do before, and a co-owner ranks with the rows that are not
+  primary. **Status: implemented** —
   `internal/providersync/team_repo_ownership_derivation.go`'s `deriveTeamRepoOwnership` (pure
   resolution) and `team_repo_ownership_derivation_clickhouse.go`'s
   `TeamRepoOwnershipDerivationService.Derive` (ClickHouse read/write glue); see the

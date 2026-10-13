@@ -308,13 +308,11 @@ flowchart TD
     PO -->|"yes"| Win
     PO -->|"no"| RO{"3 · repo_ownership candidate?"}
     RO -->|"yes"| Win
-    RO -->|"no"| AM{"4 · assignee_membership candidate?<br/>(assignee identity, CHAOS-4321 -- admin mapping if present (single-team), else provider auto-import fallback (single-team))"}
-    AM -->|"yes"| Win
-    AM -->|"no"| LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
+    RO -->|"no"| AM["4 · assignee_membership: PROVENANCE ONLY (CHAOS-9414)<br/>recorded as is_primary = 0, never the primary team"]
+    AM --> LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
     LK -->|"yes"| Win
-    LK -->|"no"| AU{"6 · author_membership candidate?<br/>(reporter/author identity, CHAOS-4244 PR/MR-only + CHAOS-4321 two-layer admin-then-provider resolution, single-team, non-bot only)"}
-    AU -->|"yes"| Win
-    AU -->|"no"| MF{"7 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
+    LK -->|"no"| AU["6 · author_membership: PROVENANCE ONLY (CHAOS-9414)<br/>recorded as is_primary = 0, never the primary team"]
+    AU --> MF{"7 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
     MF -->|"yes"| Win
     MF -->|"no"| UN["is_primary = unassigned (8)"]
     Win --> P["Persist work_item_team_attributions:<br/>candidate rows that passed every gate; is_primary on the winner"]
@@ -322,6 +320,17 @@ flowchart TD
     P --> API["Expose source / confidence / evidence via GraphQL"]
     API --> UI["Frontend renders only — no recompute"]
 ```
+
+> **CHAOS-9414 (D7; AGENTS.md "team = ownership of repositories and projects only"): membership
+> is provenance only.** `assignee_membership` (4) and `author_membership` (6) keep their ranks,
+> Enum8 codes and gates, and every candidate that passes a gate is still persisted — but always
+> with `is_primary = 0`. Neither tier ever produces the primary team. A work item whose only
+> signal is a member's team stays `unassigned` (`is_primary = 1`, null-carrying), with the
+> membership row recorded beside it as provenance. Readers of `is_primary = 1` therefore never
+> return a team that came from a person. The Go cascade
+> (`internal/teamattribution/cascade.go`, the `order` loop in `Resolve`) skips these two sources when
+> it picks the primary; `TestMembershipTiersAreProvenanceOnly` and the frozen oracle snapshots
+> pin it. The Python mirror is retired for this table and is not changed.
 
 **Invariants:** the **winner is the highest-precedence matching source** (every matching source that
 passes its own gate is still persisted as a candidate — precedence decides `is_primary`, not which
@@ -333,12 +342,11 @@ all is `ownership_unknown` and the gate does not apply (R74, 2026-09-09: an abse
 treated as missing data, not as "not owned" — two orgs with old fixture data and no ownership rows
 at all pass membership through unchanged); `linked_issue` (5) requires a real `work_item_dependencies`
 donor row resolving to a `work_items`
-row whose **own team came from a first-class fact (sources 0–4)** — a donor resolved only by
+row whose **own team came from a first-class fact (sources 0–3; membership never wins, CHAOS-9414)** — a donor resolved only by
 `author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author
 signal nor a bare prefix can ever be laundered into rank-5 inheritance (both fall through to 6/7);
-`author_membership` (6) can beat `manual_fallback` and `unassigned` but never a real linked_issue,
-ownership, or membership fact — a PERSON signal, "at best a low-precedence fallback" (chris,
-CHAOS-4244); `manual_fallback` (7) can only beat `unassigned`; a whole org at `unassigned` usually
+`author_membership` (6) is a PERSON signal, "at best a low-precedence fallback" (chris,
+CHAOS-4244) and, since CHAOS-9414, never wins at all — it is provenance only; `manual_fallback` (7) can only beat `unassigned`; a whole org at `unassigned` usually
 means the ClickHouse `teams` dimension is empty.
 
 > **CHAOS-5649 (R179, chris 2026-09-12) — two more `author_membership`/membership rules, on top of
@@ -425,9 +433,9 @@ means the ClickHouse `teams` dimension is empty.
 | 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–8 | 0–2 | `repo_full_name` |
-| 4 | `assignee_membership` | CHAOS-4321 two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | 5–8 | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
-| 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–8 | 0–4 | `dependency_type, donor_work_item_id, donor_provider` |
-| 6 | `author_membership` | CHAOS-4244 PR/MR-only + CHAOS-4321 two-layer (same as row 4), non-bot | high (admin) / medium (provider) | 7–8 | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
+| 4 | `assignee_membership` | CHAOS-4321 two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only (CHAOS-9414), never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
+| 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–8 | 0–3 | `dependency_type, donor_work_item_id, donor_provider` |
+| 6 | `author_membership` | CHAOS-4244 PR/MR-only + CHAOS-4321 two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only (CHAOS-9414), never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
 | 7 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 8 only | 0–6 | `scope_type, scope_id, reason` |
 | 8 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
 
@@ -686,12 +694,17 @@ ticket and fails when it turns green, until it is moved to `pass`; every provide
 `not_applicable` entry with its rule, and every check of an entity is a cell or an `omitted` entry with its
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
 (§0.4j), of active teams, with the first recorded owners applied backward before the first record (D5987,
-option C). Known red today: ownership and membership start at the sync (CHAOS-9404), and
-GitLab ownership names the project by path (CHAOS-8883). The inferred repository owner starts at its earliest
+option C). Known red today: ownership and membership start at the sync (CHAOS-9404),
+GitLab ownership names the project by path (CHAOS-8883), and a GitHub pull request's `linked_issue` row names a
+repository co-owner of its issue on the pull request's day, not the issue's own team (CHAOS-9460). The inferred repository owner starts at its earliest
 linked evidence since CHAOS-9403 (#4049): its cell is pass.
-`TestCrossProviderAttributionMatrixRediscoversKnownDefects` plants the defects the matrix exists to catch
-(sync-time `valid_from`, a landscape grouped by membership, an issue-key prefix taken as a native link, a reader
-with its own ownership SQL) and requires the judging cell to turn red on each.
+A pull request's `linked_issue` row must name the team an issue it is actually linked to holds on its own
+(a relation of record, or a link of record; an `extkey:` relation counts only through the one existing item of
+that key). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the
+defects the matrix exists to catch into the same state the production verbs wrote (sync-time `valid_from`, a
+landscape grouped by membership, an issue-key prefix taken as a native link, a pull request team inherited
+without a linked issue or naming another team than its issue's, a reader with its own ownership SQL) and
+requires the judging cell to turn red on each.
 
 #### 0.4b Project identity: one project, one id (CHAOS-8851)
 

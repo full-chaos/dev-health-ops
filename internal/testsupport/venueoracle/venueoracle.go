@@ -1157,12 +1157,9 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 	same := py.Status == gr.Status && py.Body == gr.Body
 	if py.Status == http.StatusInternalServerError && pydanticecho.GenericPython500(pyBody) && (gr.Status == http.StatusUnprocessableEntity || gr.Status == http.StatusBadRequest) &&
 		strings.Contains(gr.Body, `"loc"`) && pydanticecho.Strip(gr.Body) == gr.Body {
-		same = true
-		py.Status = gr.Status
-		skip = map[string]bool{"content-length": true}
-		for key := range Volatile {
-			skip[key] = true
-		}
+		// Python's 500 comes from its server-error middleware, outside the
+		// middleware that adds the security headers, so no header is compared.
+		return true, nil, py, gr
 	}
 	compared := headerUnion(py.Headers, gr.Headers, skip)
 	for _, header := range compared {

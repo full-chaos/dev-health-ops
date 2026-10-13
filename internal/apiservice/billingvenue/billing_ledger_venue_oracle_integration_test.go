@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -322,6 +323,11 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	rawPython := golden.Python(t, venue, requests)
 	normalizePython := billingNormalizer(seeded, recordedAt(t, golden, start))
 	python := normalizeAnswers(rawPython, normalizePython)
+	for index, answer := range python {
+		if strings.Contains(answer.Body, goOnlyEntitlementKey) || featuresHoldGoOnly(answer.Body) {
+			t.Fatalf("frozen python answer %q holds %s, so it is not Go-only", requests[index].Name, goOnlyEntitlementKey)
+		}
+	}
 	// The reconciliation must have read the fake Stripe lists: a
 	// comparison of two empty Stripe sides would also read SAME.
 	reconcileWants := map[string][]string{
@@ -335,11 +341,20 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 		"reconcile: all orgs": {`"stripe_id":"in_B1","field":"status","local_value":"void","stripe_value":"uncollectible"`,
 			`"stripe_id":"sub_C","field":"status","local_value":"active","stripe_value":null`, `"sub_stripe_only"`, `"re_stripe_only"`},
 	}
-	inspected := 0
+	inspected, entitlementsInspected := 0, 0
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
-		Golden:    golden,
-		Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
+		Golden: golden,
+		Normalize: func(_ venueoracle.Request, body string) string {
+			dropped, _ := dropGoOnlyFeature(normalize(body))
+			return dropped
+		},
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			if strings.HasPrefix(request.Name, "ent: ") && goResponse.Status == 200 {
+				entitlementsInspected++
+				if _, held := dropGoOnlyFeature(goResponse.Body); !held {
+					t.Errorf("%s: go entitlements lack features.%s=false", request.Name, goOnlyEntitlementKey)
+				}
+			}
 			wants, ok := reconcileWants[request.Name]
 			if !ok {
 				return
@@ -352,6 +367,9 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 			}
 		},
 	})
+	if entitlementsInspected == 0 {
+		t.Error("no go entitlements answer was inspected for the Go-only member")
+	}
 	if inspected != len(reconcileWants) {
 		t.Errorf("inspected %d reconcile answers, want %d", inspected, len(reconcileWants))
 	}
@@ -395,6 +413,63 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	}
 	t.Log("\n" + receipt)
 	golden.Finish(t)
+}
+
+// goOnlyEntitlementKey is a decision key added after the frozen Python build
+// (CHAOS-9311, #4032): its api tree is deleted, so no newer Python build can
+// record it and the Go registry is its only source. Go publishes it, false for
+// every seeded org, as a member of the entitlements "features" object. The
+// comparison drops that one member from the Go body only; the frozen answers
+// must not hold the key, and every Go entitlements answer must hold it under
+// "features" as false, so the allowance hides no drift. The same key anywhere
+// else in the body is not dropped and reads as a DIFF.
+const goOnlyEntitlementKey = "acr_service_model"
+
+// featuresHoldGoOnly reports whether a body's decoded "features" object has
+// the Go-only key in any spelling, including a JSON escape of it.
+func featuresHoldGoOnly(body string) bool {
+	value, err := pyjson.DecodeString(body)
+	if err != nil {
+		return false
+	}
+	root, ok := value.(*pyjson.Object)
+	if !ok {
+		return false
+	}
+	rawFeatures, _ := root.Get("features")
+	features, ok := rawFeatures.(*pyjson.Object)
+	if !ok {
+		return false
+	}
+	_, present := features.Get(goOnlyEntitlementKey)
+	return present
+}
+
+// dropGoOnlyFeature removes features.acr_service_model from an entitlements
+// body when it is there and false. held reports whether it was.
+func dropGoOnlyFeature(body string) (out string, held bool) {
+	value, err := pyjson.DecodeString(body)
+	if err != nil {
+		return body, false
+	}
+	root, ok := value.(*pyjson.Object)
+	if !ok {
+		return body, false
+	}
+	rawFeatures, _ := root.Get("features")
+	features, ok := rawFeatures.(*pyjson.Object)
+	if !ok {
+		return body, false
+	}
+	if flag, present := features.Get(goOnlyEntitlementKey); !present || flag != false {
+		return body, false
+	}
+	features.Delete(goOnlyEntitlementKey)
+	encoded, err := pyjson.Marshal(root)
+	if err != nil {
+		return body, false
+	}
+	return string(encoded), true
 }
 
 // seededIDs is every id the seed wrote: the normalizer keeps these and

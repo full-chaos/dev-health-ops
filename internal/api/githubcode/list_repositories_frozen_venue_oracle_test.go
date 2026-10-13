@@ -22,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 	"regexp"
+	"sort"
 )
 
 // pythonListRepositoriesProgram drives the api's own GitHubCodeClient
@@ -166,6 +167,20 @@ var knownBaseDifferences = map[string]string{
 	"ghe.test/api/v3":                 "a base with no scheme: Python's transport tries the request and raises ValueError, Go refuses before any request",
 	"//ghe.test/api/v3":               "a base with no scheme: Python's transport tries the request and raises ValueError, Go refuses before any request",
 }
+
+// credentialBaseDifferences are the bases that hold a credential in their path (CHAOS-8034), each a NAMED difference: a 404
+// puts the request URL in the error text, Python prints it as it is, Go hides the credential (restcore.redactRequestURL).
+// The key is the base; the value is the name of the difference.
+var credentialBaseDifferences = map[string]string{
+	"https://ghe.test/token/" + basePathMarker + "/api/v3":   "D8034-token-segment: Python prints the credential after a protected name in the base path, Go hides it",
+	"https://ghe.test/token-" + basePathMarker + "/api/v3":   "D8034-protected-word-segment: Python prints a base path segment that holds a protected word, Go hides it",
+	"https://ghe.test/" + basePathMarker + "-secret/api/v3":  "D8034-secret-suffix-segment: Python prints a base path segment that ends in a protected word, Go hides it",
+	"https://ghe.test/api/v3;access_token=" + basePathMarker: "D8034-path-parameter: Python prints a protected path parameter of the base, Go hides its value",
+	"https://ghe.test/token%2F" + basePathMarker + "/api/v3": "D8034-encoded-separator: Python prints a protected name with an encoded separator in the base path, Go hides the segment",
+}
+
+// basePathMarker is the planted credential value of those bases; it must not look like a credential of any provider.
+const basePathMarker = "plantedbasepathmarker8034"
 
 func listScenarios() []scenario {
 	two := page(repoItem(1, "api"), repoItem(2, "web"))
@@ -347,6 +362,14 @@ func listScenarios() []scenario {
 		repos(base, "acme", ok(two, next("/orgs/acme/repos?page=2")), ok(page(repoItem(3, "docs"))))
 		add("installation", base, "", "", "", nil, ok(`{"repositories": []}`))
 		known = ""
+	}
+	// CHAOS-8034: a credential in the base URL path, on a 404 (the request URL is in the text) and on a 200 (it is not).
+	for _, base := range sortedKeys(credentialBaseDifferences) {
+		known = credentialBaseDifferences[base]
+		repos(base, "acme", status(404, `{}`))
+		add("installation", base, "", "", "", nil, status(404, `{}`))
+		known = ""
+		repos(base, "acme", ok(two))
 	}
 	// Terminal responses that are not a 403 and that the rate-limit triage's wording or headers match: only a 403 is
 	// triaged as a rate limit (vet gap, CHAOS-7813).
@@ -644,4 +667,13 @@ func reduceRedirectTarget(text string) string {
 		}
 		return parts[1] + restcore.RedirectTarget(parts[2]) + parts[3]
 	})
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

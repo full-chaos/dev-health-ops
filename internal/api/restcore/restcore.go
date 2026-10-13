@@ -293,7 +293,8 @@ func (w *redirectWitness) RoundTrip(request *http.Request) (*http.Response, erro
 func isLocationParseFailure(err error) bool { return logging.IsLocationParseRefusal(err) }
 
 // redactRequestURL is the request URL as it appears in the text of a NotFound error, with what can hold a credential taken out:
-// the userinfo, the value of every query parameter whose NAME is a protected key (token, secret, password, key, ...) and the
+// the userinfo, a credential in the path (the base URL an operator configured is its start: logging.RedactURLPath's closed set,
+// CHAOS-8034), the value of every query parameter whose NAME is a protected key (token, secret, password, key, ...) and the
 // fragment. Every other byte is kept as it is, so the answer stays byte-identical to Python's for a URL without them (the
 // frozen venue oracles of the sync admin routes pin that text). Both providers authenticate by header (Authorization,
 // PRIVATE-TOKEN), so the URL the callers build holds no credential today; this is the guard for a base URL an operator
@@ -309,7 +310,10 @@ func redactRequestURL(raw string) string {
 			rest = rest[:scheme+3] + "[REDACTED]@" + rest[scheme+3+at+1:]
 		}
 	}
-	if path, query, hasQuery := strings.Cut(rest, "?"); hasQuery {
+	path, query, hasQuery := strings.Cut(rest, "?")
+	path = redactPathOfURL(path)
+	rest = path
+	if hasQuery {
 		pairs := strings.Split(query, "&")
 		for index, pair := range pairs {
 			name, _, hasValue := strings.Cut(pair, "=")
@@ -323,4 +327,18 @@ func redactRequestURL(raw string) string {
 		rest = path + "?" + strings.Join(pairs, "&")
 	}
 	return rest
+}
+
+// redactPathOfURL hides a credential in the path of a request URL. The path starts with the base URL an operator configured,
+// so it can hold one (CHAOS-8034). The forms are logging.RedactURLPath's closed set; the scheme and the authority stay as
+// they are, and so does every other byte of a plain path.
+func redactPathOfURL(raw string) string {
+	pathStart := 0
+	if scheme := strings.Index(raw, "://"); scheme >= 0 {
+		pathStart = len(raw)
+		if cut := strings.Index(raw[scheme+3:], "/"); cut >= 0 {
+			pathStart = scheme + 3 + cut
+		}
+	}
+	return raw[:pathStart] + logging.RedactURLPath(context.Background(), nil, raw[pathStart:])
 }

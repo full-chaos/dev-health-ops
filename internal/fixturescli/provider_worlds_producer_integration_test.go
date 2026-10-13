@@ -661,6 +661,15 @@ func collectTeamCatalog(ctx context.Context, t *testing.T, conn driver.Conn, ste
 	if err := providersync.RequireCarried(collector); err != nil {
 		t.Fatal(err)
 	}
+	// The Linear catalog stamps each project at the instant it observed it (its handler's own clock,
+	// time.Now in the worker): the world pins that clock to the world's instant too.
+	if carry, ok := collector.(providersync.CarryFirstTeamCatalogCollector); ok {
+		if linear, ok := carry.Collector.(providersync.LinearTeamCatalogCollector); ok {
+			linear.Handler.Now = func() time.Time { return now }
+			carry.Collector = linear
+			collector = carry
+		}
+	}
 	retry := providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}
 	lease := providerfoundation.LeaseGuardFunc(func(ctx context.Context) error { return ctx.Err() })
 	var client *providerfoundation.HTTPClient

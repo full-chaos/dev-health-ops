@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 )
 
 // LinksOutcome is one run's accounting for the commit-message derivation half
@@ -85,7 +86,15 @@ func (service *Service) ProduceLinks(ctx context.Context, orgID string, window W
 	}
 	result := Derive(inputs)
 
-	native, err := service.loader.LoadNativeLinkKeys(ctx, orgID, window.RepoID)
+	candidateRepos := make([]uuid.UUID, 0)
+	seenRepos := make(map[uuid.UUID]struct{})
+	for _, link := range result.Links {
+		if _, seen := seenRepos[link.RepoID]; !seen {
+			seenRepos[link.RepoID] = struct{}{}
+			candidateRepos = append(candidateRepos, link.RepoID)
+		}
+	}
+	native, err := service.loader.LoadNativeLinkKeys(ctx, orgID, candidateRepos)
 	if err != nil {
 		service.logger.Error("pr-commit links: native link read failed",
 			slog.String("organization_id", orgID), slog.Any("error", err))

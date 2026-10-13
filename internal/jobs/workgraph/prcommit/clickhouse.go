@@ -110,21 +110,24 @@ type NativeLinkKey struct {
 }
 
 // LoadNativeLinkKeys reads the pairs a provider's own API stated (provenance
-// native). The text derivation must not replace one of them: its row would
+// native) in the given repositories. The text derivation must not replace one of them: its row would
 // carry a newer last_synced under the same key and lower the link's tier.
-func (loader *Loader) LoadNativeLinkKeys(ctx context.Context, orgID string, repoID *uuid.UUID) (map[NativeLinkKey]struct{}, error) {
+func (loader *Loader) LoadNativeLinkKeys(ctx context.Context, orgID string, repoIDs []uuid.UUID) (map[NativeLinkKey]struct{}, error) {
 	if loader == nil || loader.conn == nil {
 		return nil, ErrUnavailable
 	}
 	if orgID == "" {
 		return nil, ErrScopeRequired
 	}
-	query := `SELECT repo_id, pr_number, commit_hash FROM work_graph_pr_commit FINAL WHERE org_id = {org_id:String} AND provenance = 'native'`
-	args := []any{clickhouse.Named("org_id", orgID)}
-	if repoID != nil {
-		query += ` AND repo_id = {repo_id:UUID}`
-		args = append(args, clickhouse.Named("repo_id", repoID.String()))
+	if len(repoIDs) == 0 {
+		return map[NativeLinkKey]struct{}{}, nil
 	}
+	repoStrings := make([]string, 0, len(repoIDs))
+	for _, id := range repoIDs {
+		repoStrings = append(repoStrings, id.String())
+	}
+	query := `SELECT repo_id, pr_number, commit_hash FROM work_graph_pr_commit FINAL WHERE org_id = {org_id:String} AND provenance = 'native' AND toString(repo_id) IN {repo_ids:Array(String)}`
+	args := []any{clickhouse.Named("org_id", orgID), clickhouse.Named("repo_ids", repoStrings)}
 	rows, err := loader.conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err

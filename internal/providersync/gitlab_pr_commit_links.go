@@ -72,6 +72,9 @@ func fetchGitLabMergeRequestCommitLinks(
 	path := providerRelativePath(client, "api", "v4", "projects", projectID, "merge_requests", strconv.Itoa(iid), "commits")
 	items, pages, capReached, err := collectGitLabRawPages(ctx, client, path, url.Values{}, perPage, maxPages, nil, nil)
 	if err != nil {
+		if fatalErr := gitLabCommitStatsFatalDetailError(ctx, err); fatalErr != nil {
+			return nil, pages, fatalErr
+		}
 		if controlErr := gitLabPullRequestControlError(ctx, err); controlErr != nil {
 			return nil, pages, controlErr
 		}

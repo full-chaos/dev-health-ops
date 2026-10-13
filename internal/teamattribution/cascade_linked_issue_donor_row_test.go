@@ -84,3 +84,42 @@ func TestTwoEdgesToOneDonorNameOneRelationship(t *testing.T) {
 		}
 	}
 }
+
+// A stored donor row does not record its team's provider. The team is the one
+// the id names for an item of the donor's provider, so an inactive team of
+// another provider with the same id never drops it, and the team of the
+// donor's provider, when inactive, does.
+func TestAStoredDonorRowBindsTheTeamOfTheDonorsProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		jiraInactive bool
+		want         string
+	}{{"another provider's inactive team with the id", false, "shared-id"}, {"the donor provider's team is inactive", true, ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+				Teams: []GithubWorkItemDerivationTeamFact{
+					{Provider: "github", TeamID: "shared-id", TeamName: "GitHub Shared", Inactive: true},
+					{Provider: "jira", TeamID: "shared-id", TeamName: "Jira Shared", Inactive: tc.jiraInactive},
+				},
+			})
+			subjects := map[string]GithubWorkItemDerivationSubject{
+				"ghpr:acme/api#7": {WorkItemID: "ghpr:acme/api#7", Provider: "github", Type: "pr", OrgID: "org"},
+				"jira:ENG-1":      {WorkItemID: "jira:ENG-1", Provider: "jira", OrgID: "org"},
+			}
+			edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "ghpr:acme/api#7", TargetWorkItemID: "jira:ENG-1", RelationshipType: "relates_to"}}
+			rows := map[string]GithubWorkItemDerivationDonorRow{"jira:ENG-1": {TeamID: "shared-id", Source: "project_ownership"}}
+			derived.LinkedIssue, derived.LinkedIssueEvidence, _, _ = derived.BuildLinkedIssueIndexFromRows("github", subjects, rows, edges, nil)
+			teamID, _, candidates := derived.Resolve(subjects["ghpr:acme/api#7"])
+			if got := GithubWorkItemDerivationStringValue(teamID); got != tc.want {
+				t.Fatalf("team %q, want %q (candidates %+v)", got, tc.want, candidates)
+			}
+			if tc.want != "" {
+				for _, candidate := range candidates {
+					if candidate.Source == "linked_issue" && (candidate.TeamProvider != "jira" || GithubWorkItemDerivationStringValue(candidate.TeamName) != "Jira Shared") {
+						t.Errorf("linked_issue candidate bound to %q %q, want the jira team", candidate.TeamProvider, GithubWorkItemDerivationStringValue(candidate.TeamName))
+					}
+				}
+			}
+		})
+	}
+}

@@ -1499,9 +1499,20 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 ) (map[string][3]string, map[string]string, int, int) {
 	donors := map[string][3]string{}
 	for id, row := range donorRows {
-		if row.TeamID != "" && linkedIssueDonorSources[row.Source] {
-			donors[id] = [3]string{row.TeamID, GithubWorkItemDerivationFirstNonEmpty(row.TeamName, row.TeamID), row.TeamProvider}
+		if row.TeamID == "" || !linkedIssueDonorSources[row.Source] {
+			continue
 		}
+		teamName, teamProvider := GithubWorkItemDerivationFirstNonEmpty(row.TeamName, row.TeamID), row.TeamProvider
+		if teamProvider == "" {
+			// A stored row does not record its team's provider: the team is
+			// the one the id names for an item of the donor's provider, as an
+			// ownership fact of the donor would bind it.
+			bound := derived.bindCandidateTeam(GithubWorkItemDerivationCandidate{
+				TeamID: GithubWorkItemDerivationStringPointer(row.TeamID), TeamName: GithubWorkItemDerivationStringPointer(teamName),
+			}, subjects[id].Provider, bindProviderFact)
+			teamName, teamProvider = GithubWorkItemDerivationFirstNonEmpty(GithubWorkItemDerivationStringValue(bound.TeamName), teamName), bound.TeamProvider
+		}
+		donors[id] = [3]string{row.TeamID, teamName, teamProvider}
 	}
 	baseNative := map[string]bool{}
 	keyIndex := map[string]string{}

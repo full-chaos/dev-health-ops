@@ -248,9 +248,12 @@ func loadWorkItemDerivationContextForProvider(
 	// stored row, never a resolution of it in this run's context.
 	donorRows := make(map[string]teamattribution.GithubWorkItemDerivationDonorRow, len(facts.DonorRows)+len(written))
 	for id, row := range facts.DonorRows {
-		donorRows[id] = row
+		// An item this sync writes gives only its row of this sync, never its
+		// stored one: with no team of its own now, it gives nothing.
+		if _, fresh := written[id]; !fresh {
+			donorRows[id] = row
+		}
 	}
-	// An item this sync writes: its row of this sync replaces its stored one.
 	for id, row := range derived.OwnDonorRows(subjects, written) {
 		donorRows[id] = row
 	}

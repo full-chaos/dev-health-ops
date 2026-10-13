@@ -13,7 +13,8 @@ import (
 // with this sync's facts (CHAOS-9460). The donor's project is owned by
 // team-linked in this sync's facts; its stored row names team-row. A donor
 // with no stored row gives nothing. A donor that this sync writes itself
-// gives the row this sync writes for it, never its older stored row.
+// gives the row this sync writes for it, never its older stored row, and so
+// nothing when it has no team of its own now.
 func TestAPullRequestCopiesItsDonorsStoredRow(t *testing.T) {
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	claim := githubWorkItemOracleClaim()
@@ -36,6 +37,8 @@ func TestAPullRequestCopiesItsDonorsStoredRow(t *testing.T) {
 		RelationshipType: "external_issue_key", LastSynced: now, OrgID: claim.OrgID,
 	}
 	freshDonor := githubWorkItemRow{WorkItemID: "linear:CHAOS-42", Provider: "linear", ProjectID: &donorProject, OrgID: claim.OrgID}
+	unownedProject := "linear-project-nobody-owns"
+	freshDonorWithNoTeam := githubWorkItemRow{WorkItemID: "linear:CHAOS-42", Provider: "linear", ProjectID: &unownedProject, OrgID: claim.OrgID}
 	stored := map[string]teamattribution.GithubWorkItemDerivationDonorRow{
 		"linear:CHAOS-42": {TeamID: "team-row", TeamName: "Row Team", Source: "project_ownership"},
 	}
@@ -48,6 +51,7 @@ func TestAPullRequestCopiesItsDonorsStoredRow(t *testing.T) {
 		{"the donor's stored row", stored, []githubWorkItemRow{pr}, "team-row"},
 		{"a donor with no stored row", map[string]teamattribution.GithubWorkItemDerivationDonorRow{}, []githubWorkItemRow{pr}, ""},
 		{"a donor this sync writes", stored, []githubWorkItemRow{pr, freshDonor}, "team-linked"},
+		{"a donor this sync writes with no team of its own now", stored, []githubWorkItemRow{pr, freshDonorWithNoTeam}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := &fakeGitHubWorkItemDerivationContextSource{facts: facts(tc.rows)}

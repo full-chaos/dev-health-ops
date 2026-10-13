@@ -317,7 +317,7 @@ func (h handlers) loginInTx(w http.ResponseWriter, r *http.Request, tx pgx.Tx, e
 	for index, m := range memberships {
 		orgIDs[index] = m.OrgID
 	}
-	membership := selectActiveMembership(memberships, requested, h.orgActivity(ctx, orgIDs))
+	membership := h.chooseMembership(ctx, memberships, requested, h.orgActivity(ctx, orgIDs))
 	needsOnboarding := membership == nil && !user.IsSuperuser
 
 	// login.py's `payload.org_id and membership is None and memberships`:

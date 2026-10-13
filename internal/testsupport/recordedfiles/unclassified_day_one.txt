@@ -429,7 +429,6 @@ internal/jobs/operational/testdata/billing_email/trial_expiring__unicode.json
 internal/jobs/operational/testdata/billing_email/trial_started__ascii.json
 internal/jobs/operational/testdata/billing_email/trial_started__unicode.json
 internal/jobs/report/testdata/weekly_health.golden.md
-internal/pgmigrate/testdata/hand_ddl_ledger.tsv
 internal/platform/config/testdata/route_dsn_init.sh
 internal/providerfoundation/testdata/normalized_envelope_parity.json
 internal/providerfoundation/testdata/provider_parity.json
@@ -653,9 +652,6 @@ internal/queryapi/investment/testdata/investment_basic.json
 internal/queryapi/investment/testdata/investment_missing_table.json
 internal/queryapi/investment/testdata/sunburst_basic.json
 internal/queryapi/investment/testdata/sunburst_missing_table.json
-internal/queryapi/investmentexplain/testdata/build_prompt__empty_payload.json
-internal/queryapi/investmentexplain/testdata/build_prompt__nested_with_whole_number_floats_and_unicode.json
-internal/queryapi/investmentexplain/testdata/build_prompt__simple_shares.json
 internal/queryapi/investmentexplain/testdata/cache_key__different_org_same_filters.json
 internal/queryapi/investmentexplain/testdata/cache_key__empty_org_id.json
 internal/queryapi/investmentexplain/testdata/cache_key__no_theme_no_subcategory.json

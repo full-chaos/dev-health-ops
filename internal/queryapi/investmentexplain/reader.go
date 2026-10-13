@@ -324,6 +324,41 @@ WHERE work_unit_investments.from_ts < {end_date:Date}
 	return int(count), nil
 }
 
+// FetchInvestmentDataVersion reads the version of an organization's work-unit
+// investments: the newest write and the row count. The explain cache key carries it,
+// so an answer built on older work units (other quality, quotes or counts, even with
+// the same mix shares) is never served for the same filters.
+func (reader *Reader) FetchInvestmentDataVersion(ctx context.Context, orgID string) (string, error) {
+	if reader == nil || reader.client == nil {
+		return "", ErrUnavailable
+	}
+	query := fmt.Sprintf(`
+SELECT toString(max(computed_at)) AS latest, toString(count()) AS row_count
+FROM work_unit_investments
+WHERE org_id = {org_id:String}
+%s
+`, settingsMaxExecutionTime())
+	rows, err := reader.client.Query(ctx, query, []dhclickhouse.Binding{{Name: "org_id", Value: orgID}})
+	if err != nil {
+		return "", fmt.Errorf("query investment data version: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", fmt.Errorf("iterate investment data version: %w", err)
+		}
+		return "none", nil
+	}
+	var latest, rowCount string
+	if err := rows.Scan(&latest, &rowCount); err != nil {
+		return "", fmt.Errorf("scan investment data version: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("iterate investment data version: %w", err)
+	}
+	return latest + "/" + rowCount, nil
+}
+
 func dedupeStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))

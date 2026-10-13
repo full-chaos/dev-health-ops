@@ -274,8 +274,25 @@ func assertWrittenCacheRecordMatchesGolden(t *testing.T, golden explainGolden, c
 		t.Fatalf("explanation_json byte mismatch:\n--- want (python) ---\n%s\n--- got (go) ---\n%s", golden.WrittenCacheRecord.ExplanationJSON, gotExplanationJSON)
 	}
 	gotCacheKey, _ := row[0].(string)
-	if gotCacheKey != golden.WrittenCacheRecord.CacheKey {
-		t.Fatalf("cache_key mismatch: want %s, got %s", golden.WrittenCacheRecord.CacheKey, gotCacheKey)
+	// The row key is deliberately NOT Python's: it also carries the resolved window and the
+	// mix digest (mixCacheFilters), so the written key is checked against the extended filters.
+	themes, subcategories := newOrderedFloatMap(), newOrderedFloatMap()
+	themes.Add("velocity", 40)
+	themes.Add("quality", 10)
+	subcategories.Add("velocity.feature", 40)
+	subcategories.Add("quality.bugfix", 10)
+	wantKey, err := ComputeCacheKey(CacheKeyInput{
+		Filters: mixCacheFilters(ExplainInvestmentMixOptions{
+			StartTS: time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC), EndTS: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			FiltersForCacheKey: defaultMetricFilterForCacheKey(),
+		}, themes, subcategories, "none"),
+		OrgID: "org-golden-4977",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotCacheKey != wantKey || gotCacheKey == golden.WrittenCacheRecord.CacheKey {
+		t.Fatalf("cache_key = %s, want the window-and-mix key %s (never Python's %s)", gotCacheKey, wantKey, golden.WrittenCacheRecord.CacheKey)
 	}
 	gotLLMProvider, _ := row[2].(string)
 	if gotLLMProvider != golden.WrittenCacheRecord.LLMProvider {

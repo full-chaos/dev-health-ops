@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dev-health.jobs/system.llm_budget_stale_reservations.v1",
+  "title": "BYO LLM budget stale reservations v1 payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scheduled_for"],
+  "properties": {
+    "scheduled_for": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
+  }
+}

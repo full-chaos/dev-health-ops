@@ -873,7 +873,7 @@ func demoSteps() []worldStep {
 	}
 	steps = append(steps, demoCommitStatsSteps("github", githubToken, github)...)
 	steps = append(steps, demoCommitStatsSteps("gitlab", gitlabToken, gitlab)...)
-	return append(steps, worldStep{Kind: "work_graph"}, worldStep{Kind: "ownership_derivation"})
+	return append(steps, worldStep{Kind: "work_graph"}, worldStep{Kind: "ownership_derivation"}, worldStep{Kind: "repo_complexity"})
 }
 
 var demoWorld = providerWorld{

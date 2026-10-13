@@ -1426,6 +1426,12 @@ var linkedIssueDonorSources = map[string]bool{
 	"repo_ownership": true,
 }
 
+// IsLinkedIssueDonorSource reports whether a row of this source gives its team
+// to a linked item (linkedIssueDonorSources).
+func IsLinkedIssueDonorSource(source string) bool {
+	return linkedIssueDonorSources[source]
+}
+
 // OwnDonorRows is the primary row this context gives each item of ids on its
 // own (without a linked issue): the row a run that writes those items in this
 // context writes for them.

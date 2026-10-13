@@ -1454,6 +1454,40 @@ func (derived GithubWorkItemDerivationContext) OwnDonorRows(
 	return rows
 }
 
+// bindStoredDonorTeam binds the team of a stored donor row, which records the
+// team's id and name but not its provider: the catalog team with that id and
+// that name (an admin team and a provider team can share an id), the one of
+// the donor's provider first, an active one before an inactive one; with no
+// team of that name, the team the id names for an item of the donor's
+// provider, as an ownership fact of the donor would bind it. The row's own
+// name is kept.
+func (derived GithubWorkItemDerivationContext) bindStoredDonorTeam(
+	candidate GithubWorkItemDerivationCandidate, storedName, donorProvider string,
+) GithubWorkItemDerivationCandidate {
+	var named, activeNamed []GithubWorkItemDerivationTeamFact
+	for _, team := range derived.catalogTeamsByID[strings.TrimSpace(GithubWorkItemDerivationStringValue(candidate.TeamID))] {
+		if storedName == "" || strings.TrimSpace(team.TeamName) != strings.TrimSpace(storedName) {
+			continue
+		}
+		named = append(named, team)
+		if !team.Inactive {
+			activeNamed = append(activeNamed, team)
+		}
+	}
+	for _, teams := range [][]GithubWorkItemDerivationTeamFact{activeNamed, named} {
+		if len(teams) == 0 {
+			continue
+		}
+		picked := teams[0]
+		if own := teamsForItemProvider(teams, donorProvider); len(own) > 0 {
+			picked = own[0]
+		}
+		candidate.TeamProvider, candidate.TeamResolved = strings.TrimSpace(picked.Provider), true
+		return candidate
+	}
+	return derived.bindCandidateTeam(candidate, donorProvider, bindProviderFact)
+}
+
 // BuildLinkedIssueIndex resolves each team-less item to the team of a linked,
 // first-class-attributed donor, every subject's row taken as this context
 // gives it (OwnDonorRows). It is the reference shape the frozen oracles run;
@@ -1511,15 +1545,15 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 			TeamProvider: row.TeamProvider, TeamResolved: row.TeamResolved,
 		}
 		if !bound.TeamResolved {
-			// A stored row does not record its team's provider: the team is
-			// the one the id names for an item of the donor's provider, as an
-			// ownership fact of the donor would bind it.
-			bound = derived.bindCandidateTeam(bound, subjects[id].Provider, bindProviderFact)
+			bound = derived.bindStoredDonorTeam(bound, row.TeamName, subjects[id].Provider)
 		}
 		// A donor whose team is inactive is no donor: it is left out before
 		// the winner is picked, so another linked donor still gives its team.
 		if derived.candidateNamesInactiveTeam(bound) {
 			continue
+		}
+		if row.TeamName != "" {
+			bound.TeamName = GithubWorkItemDerivationStringPointer(row.TeamName)
 		}
 		donors[id] = [3]string{row.TeamID, GithubWorkItemDerivationFirstNonEmpty(GithubWorkItemDerivationStringValue(bound.TeamName), teamName), bound.TeamProvider}
 	}

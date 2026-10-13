@@ -206,3 +206,95 @@ func TestADonorsAdminTeamKeepsItsIdentity(t *testing.T) {
 		})
 	}
 }
+
+// A stored donor row records its team's id and name, not its provider. The
+// team is the catalog team with that id and that name, so an admin team keeps
+// its identity when a provider team has the same id; when that team is
+// inactive the donor gives nothing (the provider team of the same id does not
+// stand in for it); a name no catalog team has falls back to the binding of
+// an ownership fact of the donor. Every donor provider.
+func TestAStoredAdminDonorRowKeepsItsIdentity(t *testing.T) {
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		for _, tc := range []struct {
+			name          string
+			adminInactive bool
+			storedName    string
+			wantName      string
+			wantProvider  string
+		}{
+			{"the admin team of the row", false, "Admin donor team", "Admin donor team", ""},
+			{"the admin team of the row is inactive", true, "Admin donor team", "", ""},
+			{"a name no catalog team has", false, "Renamed long ago", "Renamed long ago", provider},
+		} {
+			t.Run(provider+"/"+tc.name, func(t *testing.T) {
+				derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+					Teams: []GithubWorkItemDerivationTeamFact{
+						{Provider: "", TeamID: "shared", TeamName: "Admin donor team", Inactive: tc.adminInactive},
+						{Provider: provider, TeamID: "shared", TeamName: "Unrelated provider team"},
+					},
+				})
+				subjects := map[string]GithubWorkItemDerivationSubject{
+					"ghpr:acme/api#7": {WorkItemID: "ghpr:acme/api#7", Provider: "github", Type: "pr", OrgID: "org"},
+					"donor":           {WorkItemID: "donor", Provider: provider, OrgID: "org"},
+				}
+				edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "ghpr:acme/api#7", TargetWorkItemID: "donor", RelationshipType: "relates_to"}}
+				rows := map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "shared", TeamName: tc.storedName, Source: "issue_project"}}
+				derived.LinkedIssue, derived.LinkedIssueEvidence, _, _ = derived.BuildLinkedIssueIndexFromRows("github", subjects, rows, edges, nil)
+				_, _, candidates := derived.Resolve(subjects["ghpr:acme/api#7"])
+				var linked *GithubWorkItemDerivationCandidate
+				for i := range candidates {
+					if candidates[i].Source == "linked_issue" {
+						linked = &candidates[i]
+					}
+				}
+				if tc.wantName == "" {
+					if linked != nil {
+						t.Fatalf("linked_issue candidate %+v from an inactive donor team, want none", *linked)
+					}
+					return
+				}
+				if linked == nil {
+					t.Fatalf("no linked_issue candidate: %+v", candidates)
+				}
+				if got := GithubWorkItemDerivationStringValue(linked.TeamName); got != tc.wantName || linked.TeamProvider != tc.wantProvider {
+					t.Errorf("linked_issue team %q of provider %q, want %q of %q", got, linked.TeamProvider, tc.wantName, tc.wantProvider)
+				}
+			})
+		}
+	}
+}
+
+// Two catalog teams with the stored row's id and name: an active one comes
+// before an inactive one, and of two active ones, the one of the donor's
+// provider.
+func TestAStoredDonorRowPrefersAnActiveTeamOfTheDonorsProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		teams        []GithubWorkItemDerivationTeamFact
+		wantProvider string
+	}{
+		{"an active team before an inactive one", []GithubWorkItemDerivationTeamFact{
+			{Provider: "jira", TeamID: "shared", TeamName: "Platform", Inactive: true},
+			{Provider: "", TeamID: "shared", TeamName: "Platform"},
+		}, ""},
+		{"the donor's provider of two active ones", []GithubWorkItemDerivationTeamFact{
+			{Provider: "github", TeamID: "shared", TeamName: "Platform"},
+			{Provider: "jira", TeamID: "shared", TeamName: "Platform"},
+		}, "jira"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: tc.teams})
+			subjects := map[string]GithubWorkItemDerivationSubject{
+				"ghpr:acme/api#7": {WorkItemID: "ghpr:acme/api#7", Provider: "github", Type: "pr", OrgID: "org"},
+				"donor":           {WorkItemID: "donor", Provider: "jira", OrgID: "org"},
+			}
+			edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "ghpr:acme/api#7", TargetWorkItemID: "donor", RelationshipType: "relates_to"}}
+			rows := map[string]GithubWorkItemDerivationDonorRow{"donor": {TeamID: "shared", TeamName: "Platform", Source: "project_ownership"}}
+			index, _, _, _ := derived.BuildLinkedIssueIndexFromRows("github", subjects, rows, edges, nil)
+			got, ok := index["ghpr:acme/api#7"]
+			if !ok || got[0] != "shared" || got[2] != tc.wantProvider {
+				t.Fatalf("inherited %v (present %v), want team shared of provider %q", got, ok, tc.wantProvider)
+			}
+		})
+	}
+}

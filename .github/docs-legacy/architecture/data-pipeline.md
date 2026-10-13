@@ -893,3 +893,5 @@ alembic upgrade head
 - Always handle pagination
 - Add tests under `tests/`
 - Respect existing async patterns
+
+See also: [acr entitlement route contract](acr-entitlement-route.md).

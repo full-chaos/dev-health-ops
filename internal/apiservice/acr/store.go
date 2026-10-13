@@ -25,6 +25,11 @@ const acrServiceModelFeatureKey = "acr_service_model"
 // org_id and a missing Organization row.
 var ErrOrgNotFound = errors.New("organization not found")
 
+// ErrOrgUnknown narrows ErrOrgNotFound to a well-formed org id with no
+// organizations row (deleted or never created). It is the only 404 that
+// carries UnknownOrganizationCode; a malformed id stays a bare ErrOrgNotFound.
+var ErrOrgUnknown = fmt.Errorf("%w: no organization row for this id", ErrOrgNotFound)
+
 // ErrUnavailable means the decision could not be READ. Python:
 // api/internal/acr.py:196-204's 503 ("Service unavailable") on the
 // get_org_entitlements_from_db call failing. Deliberately distinct from
@@ -87,7 +92,7 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if !found {
-		return Entitlement{}, ErrOrgNotFound
+		return Entitlement{}, ErrOrgUnknown
 	}
 	decisionStore := licensing.PostgresStore{Pool: store.Pool, Now: store.Now}
 	decision, err := decisionStore.Decide(ctx, parsedOrgID.String(), agentContextRuntimeFeatureKey)

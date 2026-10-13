@@ -39,7 +39,16 @@ func TestLinearOwnershipSnapshotRule(t *testing.T) {
 	kinds := func(complete bool) []KindSnapshot[OwnershipSnapshotRow] {
 		return linearOwnershipKindSnapshots(context.Background(), "org-1", testSoleScope(), LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: complete}, LinearReferenceCatalogResult{}, linearAskEveryAbsentRowGone)
 	}
-	rows, plan := linearOwnershipSnapshot([]linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:ENG", "p1", t1)}, open, t1, kinds(true)...)
+	// CHAOS-9548: a repeat of an open row is not written; the rows below carry a changed priority so the first-seen stamp is read on a written row.
+	changed := func(at time.Time) linearReferenceOwnershipRow {
+		row := linearOwnershipTestRow(t, "linear:ENG", "p1", at)
+		row.Priority = 11
+		return row
+	}
+	if rows, plan := linearOwnershipSnapshot([]linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:ENG", "p1", t1)}, open[:1], t1, kinds(true)...); len(rows) != 0 || plan.UnchangedCount() != 1 {
+		t.Fatalf("a repeat of the open row: rows=%d unchanged=%d, want 0 written and 1 repeat", len(rows), plan.UnchangedCount())
+	}
+	rows, plan := linearOwnershipSnapshot([]linearReferenceOwnershipRow{changed(t1)}, open, t1, kinds(true)...)
 	closed := len(plan.Retract)
 	if closed != 1 || len(rows) != 2 {
 		t.Fatalf("complete run: rows=%d closed=%d, want 2 and 1", len(rows), closed)
@@ -51,7 +60,7 @@ func TestLinearOwnershipSnapshotRule(t *testing.T) {
 		t.Errorf("lost fact not closed at the run time: %+v", rows[1])
 	}
 
-	rows, plan = linearOwnershipSnapshot([]linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:ENG", "p1", t2)}, open, t2, kinds(false)...)
+	rows, plan = linearOwnershipSnapshot([]linearReferenceOwnershipRow{changed(t2)}, open, t2, kinds(false)...)
 	closed = len(plan.Retract)
 	if closed != 0 || len(rows) != 1 || !rows[0].ValidFrom.Equal(t0) {
 		t.Errorf("incomplete run: rows=%d closed=%d first=%v, want 1, 0 and first-seen valid_from", len(rows), closed, rows[0].ValidFrom)

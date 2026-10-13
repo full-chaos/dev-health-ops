@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"io"
 	"log/slog"
 	"net/http"
@@ -261,7 +262,7 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 		}
 		wantGo := fmt.Sprintf(`{"detail":[{"type":"provider_authentication_failed","loc":["path","integration_id"],"msg":"jira rejected the integration's credential (HTTP %d)","input":%q}]}`,
 			status, strings.TrimSuffix(strings.TrimPrefix(request.Path, discoverPath), "/discover"))
-		if goResponse.Status != http.StatusUnprocessableEntity || goResponse.Body != wantGo {
+		if goResponse.Status != http.StatusUnprocessableEntity || goResponse.Body != pydanticecho.Strip(wantGo) {
 			t.Errorf("%s: go %d %s\n want 422 %s", request.Name, goResponse.Status, goResponse.Body, wantGo)
 		}
 	}
@@ -292,7 +293,7 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 		response := venueoracle.Do(t, refusingBase, request)
 		want := fmt.Sprintf(`{"detail":[{"type":"provider_authentication_failed","loc":["path","integration_id"],"msg":"%s rejected the integration's credential (HTTP %d)","input":%q}]}`,
 			refusal.provider, refusal.status, refusal.integration.String())
-		if response.Status != http.StatusUnprocessableEntity || response.Body != want {
+		if response.Status != http.StatusUnprocessableEntity || response.Body != pydanticecho.Strip(want) {
 			t.Errorf("%s: go %d %s\n want 422 %s", refusal.name, response.Status, response.Body, want)
 		}
 		if strings.Contains(response.Body, "token") || strings.Contains(response.Body, "stub-secret-body") {

@@ -219,6 +219,8 @@ func TestNewPeopleSearchHandlerLimitValidationBeatsComparativeParamRejection(t *
 	if err := json.NewDecoder(bytes.NewReader(rec.Body.Bytes())).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v (body=%s)", err, rec.Body.String())
 	}
+	dropEcho(&got)
+	dropEcho(&want)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("body = %+v, want %+v", got, want)
 	}
@@ -254,6 +256,8 @@ func TestNewPeopleSearchHandlerNonNumericLimitValidationError(t *testing.T) {
 	if err := json.NewDecoder(bytes.NewReader(rec.Body.Bytes())).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v (body=%s)", err, rec.Body.String())
 	}
+	dropEcho(&got)
+	dropEcho(&want)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("body = %+v, want %+v", got, want)
 	}

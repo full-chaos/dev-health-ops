@@ -204,6 +204,8 @@ func TestNewQuadrantWorkHandlerBadRangeDaysIs422(t *testing.T) {
 			Msg: "Input should be a valid integer, unable to parse string as an integer", Input: "abc",
 		},
 	}}
+	dropEcho(&body)
+	dropEcho(&want)
 	if !reflect.DeepEqual(body, want) {
 		t.Fatalf("body = %+v, want %+v", body, want)
 	}

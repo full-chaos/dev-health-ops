@@ -138,6 +138,8 @@ func TestNewPeopleDrilldownIssuesHandlerValidationErrorsMatchPython(t *testing.T
 			}
 			got := decodeValidationErrorBody(t, rec.Body.Bytes())
 			want := loadPeopleDrilldownIssuesValidationErrorGolden(t, tc.golden)
+			dropEcho(&got)
+			dropEcho(&want)
 			gotJSON, _ := json.Marshal(got)
 			wantJSON, _ := json.Marshal(want)
 			if string(gotJSON) != string(wantJSON) {

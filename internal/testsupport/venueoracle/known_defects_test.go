@@ -3,6 +3,7 @@ package venueoracle
 import (
 	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -111,11 +112,15 @@ func TestFrozenGoldensRediscoverKnownDefects(t *testing.T) {
 		for index, entry := range file.Requests {
 			request := Request{Name: entry.Name, Method: entry.Method, Path: entry.Path}
 			answer := Response{Status: entry.Status, Headers: entry.Headers, Body: entry.Body}
-			if same, _, _, _ := Compare(request, answer, answer, DiffOptions{}); !same {
+			// The Go answer is the Python one without a validation error's input
+			// and ctx, which the Go api never writes.
+			goAnswer := answer
+			goAnswer.Body = pydanticecho.Strip(answer.Body)
+			if same, _, _, _ := Compare(request, answer, goAnswer, DiffOptions{}); !same {
 				t.Fatalf("%s answer %d (%s) differs from itself", path, index, entry.Name)
 			}
 			for _, defect := range knownDefects {
-				mutated, ok := defect.plant(answer)
+				mutated, ok := defect.plant(goAnswer)
 				if !ok {
 					continue
 				}

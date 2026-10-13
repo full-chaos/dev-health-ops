@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
 // A claim with evidence starts at it. A claim with no timed evidence keeps the
@@ -90,7 +92,7 @@ func TestARoleChangeIsDatedAtTheRunAndHeldPerRepository(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, closes, changed := applyTeamRepoOwnershipRoleChanges(tc.derived, repos, tc.open, now)
+			got, closes, changed := applyTeamRepoOwnershipRoleChanges(tc.derived, repos, tc.open, nil, now)
 			var atRun []string
 			for _, r := range got {
 				switch {
@@ -117,7 +119,7 @@ func TestARoleChangeIsDatedAtTheRunAndHeldPerRepository(t *testing.T) {
 		retractC := open("c", 2)
 
 		// A -> B where the guard holds A's close: nothing of acme/r changes, acme/s is written.
-		derived, closes, changed := applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("a", 2), row("b", 1), elsewhere}, bothRepos, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2)}, now)
+		derived, closes, changed := applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("a", 2), row("b", 1), elsewhere}, bothRepos, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2)}, nil, now)
 		keptByGuard := withoutRows(closes, closes[:1])
 		held := teamRepoOwnershipReposOf(withoutRows(closes, keptByGuard))
 		out, retractions, kept, n := withoutHeldRoleChanges(derived, changed, []teamRepoOwnershipActiveRow{retractC}, keptByGuard, held, bothRepos)
@@ -126,7 +128,7 @@ func TestARoleChangeIsDatedAtTheRunAndHeldPerRepository(t *testing.T) {
 		}
 
 		// The guard holds A's retraction while B becomes the main owner: B waits.
-		derived, closes, changed = applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("b", 1)}, repos, []teamRepoOwnershipActiveRow{open("a", 1)}, now)
+		derived, closes, changed = applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("b", 1)}, repos, []teamRepoOwnershipActiveRow{open("a", 1)}, nil, now)
 		held = teamRepoOwnershipReposOf([]teamRepoOwnershipActiveRow{open("a", 1)}, nil)
 		out, _, kept, n = withoutHeldRoleChanges(derived, changed, nil, closes, held, repos)
 		if len(out) != 0 || len(kept) != 0 || n != 1 {
@@ -134,7 +136,7 @@ func TestARoleChangeIsDatedAtTheRunAndHeldPerRepository(t *testing.T) {
 		}
 
 		// A held retraction on a repository whose roles do not change holds nothing else.
-		derived, closes, changed = applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("a", 1), row("b", 2)}, repos, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2), retractC}, now)
+		derived, closes, changed = applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("a", 1), row("b", 2)}, repos, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2), retractC}, nil, now)
 		held = teamRepoOwnershipReposOf([]teamRepoOwnershipActiveRow{retractC}, nil)
 		out, _, kept, n = withoutHeldRoleChanges(derived, changed, nil, closes, held, repos)
 		if len(out) != 2 || len(kept) != 0 || n != 0 {
@@ -142,10 +144,39 @@ func TestARoleChangeIsDatedAtTheRunAndHeldPerRepository(t *testing.T) {
 		}
 
 		// Nothing held: the role change goes through.
-		derived, closes, changed = applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("a", 2), row("b", 1)}, repos, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2)}, now)
+		derived, closes, changed = applyTeamRepoOwnershipRoleChanges([]DerivedTeamRepoOwnershipRow{row("a", 2), row("b", 1)}, repos, []teamRepoOwnershipActiveRow{open("a", 1), open("b", 2)}, nil, now)
 		out, retractions, kept, n = withoutHeldRoleChanges(derived, changed, []teamRepoOwnershipActiveRow{retractC}, closes, nil, repos)
 		if len(out) != 2 || len(retractions) != 1 || len(kept) != 2 || n != 0 {
 			t.Errorf("nothing held: derived %d retractions %d closes %d held %d, want 2 1 2 0", len(out), len(retractions), len(kept), n)
 		}
 	})
+}
+
+// The open main row of an inactive team (a replaced team id) never dates a new
+// main owner at the run: an inactive team owns nothing for any reader
+// (team-attribution.md section 0.4g rule 1), so the new owner keeps its
+// evidence start. The open main row of an active team still dates it.
+func TestAnInactiveTeamsOpenMainRowNeverDatesANewMainOwnerAtTheRun(t *testing.T) {
+	repo := uuid.MustParse("00000000-0000-4000-8000-0000000000d1")
+	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{repo: {Provider: "github", FullName: "acme/r"}}
+	evidence := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
+	derived := []DerivedTeamRepoOwnershipRow{{TeamID: "new", RepoID: repo.String(), IsPrimary: teamRepoOwnershipMainOwner, Share: 1, validFrom: evidence}}
+	openOld := []teamRepoOwnershipActiveRow{{Provider: "github", RepoFullName: "acme/r", TeamID: "old", RepoID: repo, IsPrimary: teamRepoOwnershipMainOwner}}
+	for _, tc := range []struct {
+		name     string
+		inactive teamactive.Inactive
+		want     time.Time
+		changed  int
+	}{
+		{"the old team is inactive", teamactive.Inactive{"old": {}}, evidence, 0},
+		{"the old team is active", nil, now, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, closes, changed := applyTeamRepoOwnershipRoleChanges(derived, repos, openOld, tc.inactive, now)
+			if !out[0].validFrom.Equal(tc.want) || len(changed) != tc.changed || len(closes) != 0 {
+				t.Errorf("start %v changed %v closes %v, want %v, %d changed and no close", out[0].validFrom, changed, closes, tc.want, tc.changed)
+			}
+		})
+	}
 }

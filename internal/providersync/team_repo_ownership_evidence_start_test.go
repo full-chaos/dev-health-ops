@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
 // A co-owner's claim starts at the earliest timed evidence of THAT team; the
@@ -151,6 +153,55 @@ func TestSettledEvidenceStartsWhereTheOtherOwnerEnds(t *testing.T) {
 			settled, counts := settleInferredEvidence(tc.derived, repos, tc.tenure, tc.retracting, now)
 			if !settled[0].EvidenceFrom.Equal(tc.want) || counts.afterOtherOwner != tc.moved {
 				t.Errorf("start %v (%+v), want %v and %d moved", settled[0].EvidenceFrom, counts, tc.want, tc.moved)
+			}
+		})
+	}
+}
+
+// An inactive team owns nothing for any reader (team-attribution.md section
+// 0.4g rule 1), so its tenure never moves another team's start: after a team
+// id replacement the new id starts at its own evidence, while an active prior
+// owner still moves it.
+func TestSettledEvidenceIgnoresAnInactiveTeamsTenure(t *testing.T) {
+	repoID := uuid.New()
+	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{repoID: {FullName: "acme/api", Provider: "github"}}
+	evidence := time.Date(2025, 12, 4, 5, 6, 7, 0, time.UTC)
+	replacedAt := time.Date(2026, 10, 9, 13, 6, 40, 0, time.UTC)
+	now := replacedAt.Add(24 * time.Hour)
+	derived := []DerivedTeamRepoOwnershipRow{{TeamID: "team-new", RepoID: repoID.String(), EvidenceFrom: evidence, IsPrimary: teamRepoOwnershipMainOwner}}
+	old := teamRepoOwnershipClaim{"github", "acme/api", "team-old"}
+	closed := func(inactive teamactive.Inactive) teamRepoOwnershipTenureEnds {
+		return teamRepoOwnershipTenureEnds{
+			retractedUntil: map[teamRepoOwnershipClaim]time.Time{old: replacedAt},
+			mainUntil:      map[teamRepoOwnershipClaim]time.Time{old: replacedAt},
+			inactive:       inactive,
+		}
+	}
+	retracting := []teamRepoOwnershipActiveRow{{Provider: "github", RepoFullName: "acme/api", TeamID: "team-old", RepoID: repoID, IsPrimary: teamRepoOwnershipMainOwner}}
+	inactiveOld := teamactive.Inactive{"team-old": {}}
+	cases := []struct {
+		name       string
+		tenure     teamRepoOwnershipTenureEnds
+		retracting []teamRepoOwnershipActiveRow
+		want       time.Time
+		moved      int
+		ignored    int
+	}{
+		{"an inactive team's closed main row", closed(inactiveOld), nil, evidence, 0, 1},
+		{"an inactive team's main row that this run retracts", teamRepoOwnershipTenureEnds{inactive: inactiveOld}, retracting, evidence, 0, 1},
+		{"an active team's closed main row", closed(nil), nil, replacedAt, 1, 0},
+		{"an active team's main row that this run retracts", teamRepoOwnershipTenureEnds{}, retracting, now, 1, 0},
+		{"another inactive team leaves an active team's floor in place", func() teamRepoOwnershipTenureEnds {
+			tenure := closed(teamactive.Inactive{"team-other": {}})
+			tenure.mainUntil[teamRepoOwnershipClaim{"github", "acme/api", "team-other"}] = now
+			return tenure
+		}(), nil, replacedAt, 1, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			settled, counts := settleInferredEvidence(derived, repos, tc.tenure, tc.retracting, now)
+			if !settled[0].EvidenceFrom.Equal(tc.want) || counts.afterOtherOwner != tc.moved || counts.inactiveTenureIgnored != tc.ignored {
+				t.Errorf("start %v (%+v), want %v, %d moved and %d ignored", settled[0].EvidenceFrom, counts, tc.want, tc.moved, tc.ignored)
 			}
 		})
 	}

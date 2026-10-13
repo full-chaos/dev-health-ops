@@ -504,8 +504,11 @@ means the ClickHouse `teams` dimension is empty.
 > read of the interval the other team owned would name this team again (logged with `before_retraction`). A row
 > closed at its own start (superseded, below) is no retraction. A new main owner never takes over before the prior
 > one ends (co-owners own the repository beside the main owners, CHAOS-9411): a main owner's claim whose evidence is
-> older than the end of ANOTHER team's main tenure on the repository (the latest close of that team's main row, or
-> this run when this run retracts its open main row) starts at that end (logged with `after_other_owner`); the end is
+> older than the end of ANOTHER ACTIVE team's main tenure on the repository (the latest close of that team's main row,
+> or this run when this run retracts its open main row) starts at that end (logged with `after_other_owner`). The
+> tenure of a team that is inactive now (its newest `teams` row) never moves a start: an inactive team owns nothing for
+> any reader (§0.4g rule 1), so after a team id replacement the new id starts at its own evidence while the old id's
+> rows close at the replacement and stay as history (logged with `inactive_tenure_ignored`); the end is
 > stored as the other team's `valid_to`, so the next run reads the same start and writes nothing. A claim whose open
 > main row started before that end was a main owner beside the other team (a full tie, D5990, CHAOS-9459) and keeps
 > its start. A co-owner's start is never moved by another team. A repository whose roles
@@ -2068,6 +2071,7 @@ known, and a later change of owner does not rewrite the items of earlier days.
 **Time rule of an inferred ownership row (CHAOS-9403):** the first snapshot of a claim back-dates its row to the
 claim's earliest evidence, and a change a later derive run observes (a new owner, a retraction, a claim that wins
 again, a change of main owner) starts and ends at that run, so a repository has one main owner at a time (§1.1).
+Only another ACTIVE team's tenure delays a start: an inactive team owns nothing for any reader (§0.4g rule 1).
 
 > **Superseded (chris, 2026-10-12 17:26Z, lead D5987, option C):** for a day before the first recorded ownership
 > of a repository, the repository's FIRST recorded owners apply backward; the earlier rule ("an item of a day
@@ -2799,13 +2803,14 @@ claim has one open row. A **role change** seen by a later run (the main owner ch
 that run; only the first rows of a repo are back-dated to the evidence: A's main row and B's co-owner row end at the run
 (`valid_to` = run), B's main row starts at the run, and A continues from the run as a co-owner with its share while it
 still has links (`team_repo_ownership_derivation.role_changed`, `stats.RoleChanges`). A new main owner of a repo where
-another team holds an open main row also starts at the run; so does a team that draws level with the main owner (both
+another ACTIVE team holds an open main row also starts at the run (an inactive team's open main row is no owner,
+§0.4g rule 1, so it never dates a new main owner at the run); so does a team that draws level with the main owner (both
 are main owners from that run), and a tie that ends closes the main row of every team that is no longer a leader at
 that run. So at any instant of its history a repo's main rows are its one leader's, or every tied team's during a full
 tie. A role close goes through the retraction guard; a repo whose roles change while the guard holds any close or
 retraction of it keeps all its rows that run (no write, retraction or close; `team_repo_ownership_derivation.role_change_held`)
 and waits for a run that proves them all, so a held row never leaves a main row that is no longer a leader's, nor a repo without the main row it had. A new main
-owner never starts before the end of another team's main tenure (CHAOS-9403 `after_other_owner`); a main row that was
+owner never starts before the end of another active team's main tenure (CHAOS-9403 `after_other_owner`); a main row that was
 already open before that end belonged to a main owner beside the other team (a tie) and keeps its start; a co-owner's
 start is its own evidence. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick the
 owner never take a co-owner row, and **return every main owner** (D5990): `teamownership.AuthoritativeOwnersByRepo`

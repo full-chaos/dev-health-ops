@@ -79,14 +79,15 @@ func TestEffectiveOrgFollowsTheLiveSession(t *testing.T) {
 	}
 }
 
-// A superuser who is not impersonating acts in the org X-Org-Id names, else
-// their own; a non-superuser always acts in the org claim of the token.
+// Without a session nothing changes: a superuser's X-Org-Id does not move the
+// org these routes act in (the Python rule the venue oracles pin), and a
+// non-superuser always acts in the org claim of the token.
 func TestNonImpersonatingOrgResolution(t *testing.T) {
 	superStore := newStore()
 	superStore.users[userID] = UserState{IsActive: true, IsSuperuser: true}
 	superToken := sign(t, claims(superClaims))
-	if got := serve(effectiveOrgStack(t, superStore, Admin), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + superToken, "X-Org-Id": strangerOrg}); got.body != "acting="+strangerOrg {
-		t.Errorf("superuser with X-Org-Id: %s", got.body)
+	if got := serve(effectiveOrgStack(t, superStore, Admin), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + superToken, "X-Org-Id": strangerOrg}); got.body != "acting="+ownOrg {
+		t.Errorf("superuser with X-Org-Id: %s, want the token's org", got.body)
 	}
 	if got := serve(effectiveOrgStack(t, superStore, Admin), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + superToken}); got.body != "acting="+ownOrg {
 		t.Errorf("superuser without X-Org-Id: %s", got.body)

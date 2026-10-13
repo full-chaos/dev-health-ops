@@ -34,24 +34,21 @@ func OrgIDFrom(ctx context.Context) string {
 }
 
 // EffectiveOrgID is the org an org-scoped admin route acts in for user
-// (CHAOS-9510). An active impersonation session wins: the target's org. A
-// superuser otherwise acts in the org the OrgScope middleware verified from
-// X-Org-Id (else their own). Every other caller acts in the org claim of
-// their token, never an org named by a header. The impersonation session is
-// read from the request context the Impersonation middleware set after a
-// live check, so it is re-decided on every request and never carried.
+// (CHAOS-9510). A superuser with a live impersonation session acts in the
+// target's org. Every other caller, and a superuser without a session, acts
+// in the org claim of their token: the Python api's rule for these routes
+// (get_admin_org_id), which the venue oracles pin, so a superuser's X-Org-Id
+// does not move them. The session is read from the request context the
+// Impersonation middleware set after a live check, so it is re-decided on
+// every request and never carried.
 func EffectiveOrgID(ctx context.Context, user *User) string {
 	if user == nil {
 		return ""
 	}
-	if !user.IsSuperuser {
-		return user.OrgID
-	}
-	if session := ImpersonationFrom(ctx); session != nil {
-		return session.TargetOrgID.String()
-	}
-	if org := OrgIDFrom(ctx); org != "" {
-		return org
+	if user.IsSuperuser {
+		if session := ImpersonationFrom(ctx); session != nil {
+			return session.TargetOrgID.String()
+		}
 	}
 	return user.OrgID
 }

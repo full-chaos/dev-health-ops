@@ -1114,15 +1114,19 @@ func AttributionRowPreference(isPrimary int) int {
 }
 
 // projectCoOwners returns, for a primary that came from the item's project
-// (issue_project, project_ownership), the candidates of the same source that
-// name another team at the same rank (IsPrimary, Specificity, Priority): one
-// per team, in rank order. A project with several owning teams is attributed
-// to all of them; the rank still decides which ONE is the primary row. Other
-// sources have no co-owners.
+// (issue_project, project_ownership) or from a main owner of the item's
+// repository (repo_ownership with is_primary = 1), the candidates of the same
+// source that name another team at the same rank (IsPrimary, Specificity,
+// Priority): one per team, in rank order. A project with several owning teams
+// is attributed to all of them, and so is a repository with several main
+// owners (a full ownership tie, D5990); the rank still decides which ONE is
+// the primary row. Other sources, and repository facts that are not a main
+// owner's (a provider_access grant), have no co-owners.
 func projectCoOwners(
 	primary GithubWorkItemDerivationCandidate, ranked []GithubWorkItemDerivationCandidate,
 ) []GithubWorkItemDerivationCandidate {
-	if primary.Source != "issue_project" && primary.Source != "project_ownership" {
+	mainRepoOwner := primary.Source == "repo_ownership" && primary.IsPrimary == AttributionPrimary
+	if primary.Source != "issue_project" && primary.Source != "project_ownership" && !mainRepoOwner {
 		return nil
 	}
 	seen := map[string]struct{}{GithubWorkItemDerivationStringValue(primary.TeamID): {}}
@@ -1679,7 +1683,7 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 // earlier in the SAME wall-clock second as not-yet-valid for up to a full
 // second. The named form preserves the DateTime64(3) scale -- same
 // established fix as internal/teamownership's OwnedRepoIDs/
-// AuthoritativeOwnerByRepo and internal/queryapi/teamscope's
+// AuthoritativeOwnersByRepo and internal/queryapi/teamscope's
 // RepoCondition, all readers of this same table. asOf is formatted as a
 // literal string, not bound as a raw time.Time: clickhouse-go renders a
 // bare time.Time bound to a {name:DateTime64(...)} placeholder as a

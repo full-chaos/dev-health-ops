@@ -21,7 +21,7 @@ func TestBuildTeamComplexityRowsAggregatesByOwnershipAndComputesRatio(t *testing
 	}
 	repoToTeam := map[string]string{repoID.String(): "gh:platform"}
 
-	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, repoToTeam, teamComplexityTestComputedAt)
+	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, oneOwnerEach(repoToTeam), teamComplexityTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
@@ -69,7 +69,7 @@ func TestBuildTeamComplexityRowsSumsAcrossEveryRepoAndRecomputesTheRatio(t *test
 	}
 	repoToTeam := map[string]string{repoA.String(): "gh:platform", repoB.String(): "gh:platform"}
 
-	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, repoToTeam, teamComplexityTestComputedAt)
+	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, oneOwnerEach(repoToTeam), teamComplexityTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
@@ -110,7 +110,7 @@ func TestBuildTeamComplexityRowsLOCTotalZeroYieldsZeroRatioNotADivisionError(t *
 	}
 	repoToTeam := map[string]string{repoID.String(): "gh:platform"}
 
-	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, repoToTeam, teamComplexityTestComputedAt)
+	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, oneOwnerEach(repoToTeam), teamComplexityTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
@@ -128,7 +128,7 @@ func TestBuildTeamComplexityRowsUnownedRepoContributesToNoTeam(t *testing.T) {
 		{RepoID: unownedRepo, LOCTotal: 1000, CyclomaticTotal: 10},
 	}
 
-	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, map[string]string{}, teamComplexityTestComputedAt)
+	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, map[string][]string{}, teamComplexityTestComputedAt)
 
 	if len(records) != 0 {
 		t.Fatalf("records=%d, want 0 (unowned repo must contribute to no team): %#v", len(records), records)
@@ -139,7 +139,7 @@ func TestBuildTeamComplexityRowsUnownedRepoContributesToNoTeam(t *testing.T) {
 // analogue of ComputeFinalizeFamily's own `if len(repoRows) == 0 { return
 // 0, nil }` early exit.
 func TestBuildTeamComplexityRowsEmptyInputProducesNoRows(t *testing.T) {
-	records := buildTeamComplexityRows("acme", teamComplexityTestDay, nil, map[string]string{}, teamComplexityTestComputedAt)
+	records := buildTeamComplexityRows("acme", teamComplexityTestDay, nil, map[string][]string{}, teamComplexityTestComputedAt)
 	if len(records) != 0 {
 		t.Fatalf("records=%d, want 0", len(records))
 	}

@@ -12,8 +12,6 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
-
-	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // The acceptance case of the active-team rule for the three team resolvers of
@@ -22,7 +20,7 @@ import (
 //   - LoadWellbeingTeams (team_wellbeing, ic_finalize, team_cognitive_load,
 //     team_complexity, compounding_risk_team);
 //   - LoadAIImpactTeams (ai_impact);
-//   - teamownership.AuthoritativeOwnerByRepo (testops, ai_impact and the three
+//   - teamownership.AuthoritativeOwnersByRepo (testops, ai_impact and the three
 //     finalize families above).
 //
 // A team is replaced by a provider-keyed id: the row of the bare id goes
@@ -96,9 +94,9 @@ func readTeamActiveResolverState(
 		state.aiImpactTeams = append(state.aiImpactTeams, team.ID)
 	}
 	sort.Strings(state.aiImpactTeams)
-	state.owners, err = teamownership.AuthoritativeOwnerByRepo(ctx, conn, teamActiveResolverOrg, asOf)
+	state.owners, err = joinedOwnersByRepo(ctx, conn, teamActiveResolverOrg, asOf)
 	if err != nil {
-		t.Fatalf("AuthoritativeOwnerByRepo: %v", err)
+		t.Fatalf("AuthoritativeOwnersByRepo: %v", err)
 	}
 	return state
 }
@@ -112,7 +110,7 @@ func (state teamActiveResolverState) check(t *testing.T, phase string, teams []s
 		t.Errorf("%s: LoadAIImpactTeams returns %v, want %v", phase, state.aiImpactTeams, teams)
 	}
 	if !reflect.DeepEqual(state.owners, owners) {
-		t.Errorf("%s: AuthoritativeOwnerByRepo returns %v, want %v", phase, fmt.Sprint(state.owners), fmt.Sprint(owners))
+		t.Errorf("%s: AuthoritativeOwnersByRepo returns %v, want %v", phase, fmt.Sprint(state.owners), fmt.Sprint(owners))
 	}
 }
 

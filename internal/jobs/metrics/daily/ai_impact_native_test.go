@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -202,11 +203,13 @@ func TestPRCommitLinkageReturnsAvailableButEmptyNotNil(t *testing.T) {
 }
 
 // fakeOwnershipRow is one scanned (repo_id, team_id) pair from
-// teamownership.AuthoritativeOwnerByRepo's query, the shape
+// teamownership.AuthoritativeOwnersByRepo's query, the shape
 // resolveAIImpactRepoToTeam's only conn use scans.
 type fakeOwnershipRow struct {
-	repoID string
-	teamID string
+	repoID      string
+	teamID      string
+	mainOwner   uint8
+	specificity uint16
 }
 
 // fakeOwnershipRows is a minimal chdriver.Rows fake carrying canned
@@ -227,6 +230,8 @@ func (r *fakeOwnershipRows) Scan(dest ...any) error {
 	row := r.rows[r.idx-1]
 	*(dest[0].(*string)) = row.repoID
 	*(dest[1].(*string)) = row.teamID
+	*(dest[2].(*uint8)) = row.mainOwner
+	*(dest[3].(*uint16)) = row.specificity
 	return nil
 }
 
@@ -252,7 +257,7 @@ func TestResolveAIImpactRepoToTeamAttributesAnOwnershipOnlyRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveAIImpactRepoToTeam: %v", err)
 	}
-	if got[repoID.String()] != "team-owner" {
+	if !slices.Equal(got[repoID.String()], []string{"team-owner"}) {
 		t.Fatalf("team=%q, want team-owner -- an ownership-only repo (no repo_patterns match) "+
 			"must still resolve to its team_repo_ownership row", got[repoID.String()])
 	}
@@ -279,7 +284,7 @@ func TestResolveAIImpactRepoToTeamOwnershipBeatsAPatternMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveAIImpactRepoToTeam: %v", err)
 	}
-	if got[repoID.String()] != "team-owner" {
+	if !slices.Equal(got[repoID.String()], []string{"team-owner"}) {
 		t.Fatalf("team=%q, want team-owner -- ownership must beat a repo_patterns match "+
 			"for the same repo", got[repoID.String()])
 	}
@@ -303,7 +308,7 @@ func TestResolveAIImpactRepoToTeamFallsBackToPatternsWhenUnowned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveAIImpactRepoToTeam: %v", err)
 	}
-	if got[repoID.String()] != "team-pattern" {
+	if !slices.Equal(got[repoID.String()], []string{"team-pattern"}) {
 		t.Fatalf("team=%q, want team-pattern -- an unowned repo must still fall back to its "+
 			"repo_patterns match", got[repoID.String()])
 	}

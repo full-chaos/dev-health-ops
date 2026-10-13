@@ -23,7 +23,7 @@ type Team struct {
 // EVERY attributed PR -- a repo-derived team resolver is therefore the
 // family's only source of the team dimension. On the Go executor this
 // resolver supplies the FALLBACK half of that resolution: the authoritative
-// team_repo_ownership resolver (internal/teamownership.AuthoritativeOwnerByRepo)
+// team_repo_ownership resolver (internal/teamownership.AuthoritativeOwnersByRepo)
 // is consulted first for each repo, and this pattern resolver is asked only
 // for a repo that leaves unresolved.
 //

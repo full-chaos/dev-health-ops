@@ -542,7 +542,7 @@ type matrixCheck struct {
 // contract's rule (ownersAt). A known defect is planted by replacing one.
 type ownerReaders struct {
 	OwnersByRepo  func(at time.Time) (map[string][]string, error)
-	Authoritative func(at time.Time) (map[string]string, error)
+	Authoritative func(at time.Time) (map[string][]string, error)
 }
 
 var matrixChecks = map[string]matrixCheck{
@@ -1014,7 +1014,7 @@ func (f matrixFacts) judgeReaders(p string, readers ownerReaders, backward bool)
 	sort.Slice(ordered, func(left, right int) bool { return ordered[left].Before(ordered[right]) })
 	for _, at := range ordered {
 		var shared map[string][]string
-		var authoritative map[string]string
+		var authoritative map[string][]string
 		asked := false
 		day := at.Format(time.DateOnly)
 		for id, repo := range f.repos {
@@ -1038,7 +1038,7 @@ func (f matrixFacts) judgeReaders(p string, readers ownerReaders, backward bool)
 					return r
 				}
 				if authoritative, err = readers.Authoritative(at); err != nil {
-					r.Violations = append(r.Violations, "AuthoritativeOwnerByRepo: "+err.Error())
+					r.Violations = append(r.Violations, "AuthoritativeOwnersByRepo: "+err.Error())
 					return r
 				}
 				asked = true
@@ -1052,10 +1052,14 @@ func (f matrixFacts) judgeReaders(p string, readers ownerReaders, backward bool)
 			if strings.Join(sortedTeamSet(got), ",") != strings.Join(sortedTeamSet(want), ",") {
 				r.Violations = append(r.Violations, fmt.Sprintf("OwnersByRepo %s at %s = %v, rule %v", repo.Name, day, sortedTeamSet(got), sortedTeamSet(want)))
 			}
-			if owner, ok := authoritative[id]; ok && !want[owner] {
-				r.Violations = append(r.Violations, fmt.Sprintf("AuthoritativeOwnerByRepo %s at %s = %s, not an owner", repo.Name, day, owner))
-			} else if !ok && len(want) > 0 {
-				r.Violations = append(r.Violations, fmt.Sprintf("AuthoritativeOwnerByRepo %s at %s has no owner, rule %v", repo.Name, day, sortedTeamSet(want)))
+			if owners, ok := authoritative[id]; ok && len(owners) > 0 {
+				for _, owner := range owners {
+					if !want[owner] {
+						r.Violations = append(r.Violations, fmt.Sprintf("AuthoritativeOwnersByRepo %s at %s names %s, not an owner", repo.Name, day, owner))
+					}
+				}
+			} else if len(want) > 0 {
+				r.Violations = append(r.Violations, fmt.Sprintf("AuthoritativeOwnersByRepo %s at %s has no owner, rule %v", repo.Name, day, sortedTeamSet(want)))
 			}
 		}
 	}
@@ -1065,8 +1069,8 @@ func (f matrixFacts) judgeReaders(p string, readers ownerReaders, backward bool)
 func productionReaders(ctx context.Context, conn driver.Conn, org string) ownerReaders {
 	return ownerReaders{
 		OwnersByRepo: func(at time.Time) (map[string][]string, error) { return teamownership.OwnersByRepo(ctx, conn, org, at) },
-		Authoritative: func(at time.Time) (map[string]string, error) {
-			return teamownership.AuthoritativeOwnerByRepo(ctx, conn, org, at)
+		Authoritative: func(at time.Time) (map[string][]string, error) {
+			return teamownership.AuthoritativeOwnersByRepo(ctx, conn, org, at)
 		},
 	}
 }
@@ -1462,7 +1466,7 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 				}
 				return out, nil
 			},
-			Authoritative: func(at time.Time) (map[string]string, error) {
+			Authoritative: func(at time.Time) (map[string][]string, error) {
 				out, err := production.Authoritative(at)
 				if err != nil {
 					return nil, err
@@ -1473,8 +1477,8 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 						if err != nil {
 							return nil, err
 						}
-						if owner, ok := later[id]; ok {
-							out[id] = owner
+						if owners, ok := later[id]; ok {
+							out[id] = owners
 						}
 					}
 				}

@@ -159,43 +159,49 @@ func TestOnlyOwnersAtThePrimaryRankAreCoOwners(t *testing.T) {
 	}
 }
 
-// Co-owners come from the item's PROJECT only. A repository owned by two
-// teams at the same rank, and a native team key, still give one team.
-func TestRepositoryAndNativeTeamHaveNoCoOwners(t *testing.T) {
+// Co-owners come from the item's project, and from the main owners of the
+// item's repository: a repository with two main owners at the same rank (a
+// full ownership tie, D5990) attributes the item to both, the first by rank
+// as the one primary row. Two repository facts that are not a main owner's
+// (provider_access grants, is_primary = 0) and a native team key still give
+// one team.
+func TestOnlyMainRepositoryOwnersAndProjectsHaveCoOwners(t *testing.T) {
 	for _, provider := range coOwnerProviders {
 		t.Run(provider, func(t *testing.T) {
-			repoID := "repo-1"
+			mainRepo, grantRepo := "repo-main", "repo-grant"
 			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
 				Teams: []GithubWorkItemDerivationTeamFact{
 					{Provider: provider, TeamID: "native-a", ProjectKeys: []string{"NATIVE"}},
 					{Provider: provider, TeamID: "native-b", ProjectKeys: []string{"NATIVE"}},
 				},
 				Repos: []GithubWorkItemDerivationRepoFact{
-					{Provider: provider, TeamID: "repo-a", RepoID: &repoID, IsPrimary: 1, Specificity: 80, Priority: 10},
-					{Provider: provider, TeamID: "repo-b", RepoID: &repoID, IsPrimary: 1, Specificity: 80, Priority: 10},
+					{Provider: provider, TeamID: "main-a", RepoID: &mainRepo, IsPrimary: 1, Specificity: 150, Priority: 0},
+					{Provider: provider, TeamID: "main-b", RepoID: &mainRepo, IsPrimary: 1, Specificity: 150, Priority: 0},
+					{Provider: provider, TeamID: "grant-a", RepoID: &grantRepo, IsPrimary: 0, Specificity: 100, Priority: 0},
+					{Provider: provider, TeamID: "grant-b", RepoID: &grantRepo, IsPrimary: 0, Specificity: 100, Priority: 0},
 				},
 			})
-			_, _, repoCandidates := derived.Resolve(GithubWorkItemDerivationSubject{
-				WorkItemID: provider + ":r-1", Provider: provider, RepoID: &repoID, OrgID: "org",
-			})
 			native := "NATIVE"
-			_, _, nativeCandidates := derived.Resolve(GithubWorkItemDerivationSubject{
-				WorkItemID: provider + ":n-1", Provider: provider, NativeTeamKey: &native, OrgID: "org",
-			})
-			for name, candidates := range map[string][]GithubWorkItemDerivationCandidate{"repo": repoCandidates, "native": nativeCandidates} {
-				for _, candidate := range candidates {
-					if candidate.IsPrimary == AttributionCoOwner && candidate.Source != "issue_project" {
-						t.Errorf("%s: co-owner row from %s: %+v", name, candidate.Source, candidate)
-					}
-					if candidate.Source == "native_team" && candidate.IsPrimary == AttributionCoOwner {
-						t.Errorf("%s: native team has a co-owner: %+v", name, candidate)
+			for _, tc := range []struct {
+				name    string
+				subject GithubWorkItemDerivationSubject
+				want    map[string]map[string]int
+			}{
+				{"two main owners of the repository", GithubWorkItemDerivationSubject{WorkItemID: provider + ":r-1", Provider: provider, RepoID: &mainRepo, OrgID: "org"},
+					map[string]map[string]int{"main-a": {"repo_ownership=1": 1}, "main-b": {"repo_ownership=2": 1}}},
+				{"two grants of the repository", GithubWorkItemDerivationSubject{WorkItemID: provider + ":g-1", Provider: provider, RepoID: &grantRepo, OrgID: "org"},
+					map[string]map[string]int{"grant-a": {"repo_ownership=1": 1}, "grant-b": {}}},
+				{"a native team key", GithubWorkItemDerivationSubject{WorkItemID: provider + ":n-1", Provider: provider, NativeTeamKey: &native, OrgID: "org"},
+					map[string]map[string]int{"native-a": {"native_team=1": 1}, "native-b": {}}},
+			} {
+				_, _, candidates := derived.Resolve(tc.subject)
+				byTeam := rowsByTeam(candidates)
+				for team, want := range tc.want {
+					if got := marks(byTeam[team]); fmt.Sprint(got) != fmt.Sprint(want) {
+						t.Errorf("%s: %s marks %v, want %v (rows %+v)", tc.name, team, got, want, byTeam)
 					}
 				}
-			}
-			for _, candidate := range repoCandidates {
-				if candidate.IsPrimary == AttributionCoOwner {
-					t.Errorf("repo: co-owner row %+v", candidate)
-				}
+				assertEveryRowHasProvenance(t, candidates)
 			}
 		})
 	}

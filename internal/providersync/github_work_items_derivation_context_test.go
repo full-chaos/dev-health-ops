@@ -50,7 +50,7 @@ func (conn *recordingGitHubWorkItemDerivationConn) Query(
 // queryArgsCarryOrgID reports whether a recorded query's args scope it to
 // orgID, regardless of whether that query binds positional `?` placeholders
 // (org_id is args[0]) or named {org_id:String} parameters (team_repo_ownership's
-// readers -- see LoadRepos/OwnedRepoIDs/AuthoritativeOwnerByRepo -- bind
+// readers -- see LoadRepos/OwnedRepoIDs/AuthoritativeOwnersByRepo -- bind
 // named parameters, so org_id can appear anywhere in args as a
 // driver.NamedValue{Name: "org_id"}).
 func queryArgsCarryOrgID(args []any, orgID string) bool {

@@ -29,12 +29,14 @@ import (
 //  1. A team_id on the source row itself wins (testops.resolveRepoTeam). This
 //     is unchanged.
 //  2. Else the repository's AUTHORITATIVE owner as of the END of the target
-//     day: teamownership.AuthoritativeOwnerByRepo. For a repository that more
-//     than one team owns, that function keeps ONE team: the first by
-//     (is_primary = 1) DESC, specificity DESC, updated_at DESC, team_id ASC. One
-//     team, not all of them, because each TestOps daily table holds one row
-//     per (org, repo, day): a second team has no row to live in. It is the
-//     rule team_cognitive_load_daily and compounding_risk_daily already use.
+//     day: the first owner teamownership.AuthoritativeOwnersByRepo gives, by
+//     (is_primary = 1) DESC, specificity DESC, updated_at DESC, team_id ASC.
+//     One team, not all of them, even for a repository with several main
+//     owners (a full ownership tie, D5990), because each TestOps daily table
+//     holds one row per (org, repo, day): a second team has no row to live in.
+//     The families whose tables key a row by team (team_cognitive_load_daily,
+//     team_complexity_daily, compounding_risk_daily, team_metrics_daily,
+//     ai_impact_metrics_daily) count the repository whole in each main owner.
 //  3. Else NULL. A repository with no owner row is not guessed: there is no
 //     fallback to teams.repo_patterns and none to a person's team membership.
 //
@@ -75,9 +77,19 @@ func newTestopsRepoOwnerResolver(ownerByRepoID map[string]string) testops.RepoTe
 func loadTestopsRepoOwnerResolver(
 	ctx context.Context, conn driver.Conn, organizationID string, dayEnd time.Time,
 ) (testops.RepoTeamResolver, error) {
-	owners, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, organizationID, dayEnd)
+	owners, err := teamownership.AuthoritativeOwnersByRepo(ctx, conn, organizationID, dayEnd)
 	if err != nil {
 		return nil, fmt.Errorf("load testops repository owners: %w", err)
 	}
-	return newTestopsRepoOwnerResolver(owners), nil
+	return newTestopsRepoOwnerResolver(firstOwnerOfEach(owners)), nil
+}
+
+// firstOwnerOfEach keeps the first owner by rank of each repository: a TestOps
+// daily table holds one row per repository.
+func firstOwnerOfEach(owners map[string][]string) map[string]string {
+	first := make(map[string]string, len(owners))
+	for repoID, teamIDs := range owners {
+		first[repoID] = teamIDs[0]
+	}
+	return first
 }

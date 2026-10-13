@@ -449,7 +449,7 @@ func BuildTeamRows(
 	day time.Time,
 	orgID string,
 	repoInputs []RepoInputs,
-	repoToTeam map[string]string,
+	repoToTeam map[string][]string,
 	computedAt time.Time,
 	weights Weights,
 	thresholds Thresholds,
@@ -458,16 +458,18 @@ func BuildTeamRows(
 	byTeam := make(map[string][]Inputs, len(repoToTeam))
 	windowsByTeam := make(map[string][]*ReviewWindow, len(repoToTeam))
 	teamOrder := make([]string, 0, len(repoToTeam))
+	// A repo with several main owners (D5990) counts whole in each of them.
 	for _, ri := range repoInputs {
-		teamID, ok := repoToTeam[ri.RepoID]
-		if !ok || teamID == "" {
-			continue
+		for _, teamID := range repoToTeam[ri.RepoID] {
+			if teamID == "" {
+				continue
+			}
+			if _, seen := byTeam[teamID]; !seen {
+				teamOrder = append(teamOrder, teamID)
+			}
+			byTeam[teamID] = append(byTeam[teamID], ri.Inputs)
+			windowsByTeam[teamID] = append(windowsByTeam[teamID], ri.ReviewWindow)
 		}
-		if _, seen := byTeam[teamID]; !seen {
-			teamOrder = append(teamOrder, teamID)
-		}
-		byTeam[teamID] = append(byTeam[teamID], ri.Inputs)
-		windowsByTeam[teamID] = append(windowsByTeam[teamID], ri.ReviewWindow)
 	}
 
 	out := make([]Record, 0, len(teamOrder))

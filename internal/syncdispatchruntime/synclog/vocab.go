@@ -63,7 +63,6 @@ var (
 	MsgDispatchSyncRunRedispatchRearmFailed              = Msg{"dispatch_sync_run.redispatch_rearm_failed"}
 	MsgDispatchSyncRunRedispatchRearmed                  = Msg{"dispatch_sync_run.redispatch_rearmed"}
 	MsgTeamRepoOwnershipDerivation                       = Msg{"team_repo_ownership_derivation"}
-	MsgTeamRepoOwnershipOwnerTieUnresolved               = Msg{"team_repo_ownership_derivation.owner_tie_unresolved"}
 )
 
 // Keys.

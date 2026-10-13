@@ -487,12 +487,13 @@ means the ClickHouse `teams` dimension is empty.
 > again starts at the run when its evidence is older than the end of its latest retraction: that retraction already
 > judged that evidence, and a row at the evidence time would have the key of the retracted row and reopen it, so a
 > read of the interval the other team owned would name this team again (logged with `before_retraction`). A row
-> closed at its own start (superseded, below) is no retraction. One team is the main owner of a repository at a time
-> (CHAOS-9411: co-owners own it beside the main owner): a main owner's claim whose evidence is older than the end of
-> ANOTHER team's main tenure on the repository (the latest close of that team's main row, or this run when this run
-> retracts its open main row) starts at that end (logged with `after_other_owner`); the end is stored as the other
-> team's `valid_to`, so the next run reads the same start and writes nothing, and an open row an earlier run left at
-> the older evidence is superseded. A co-owner's start is never moved by another team. A repository whose roles
+> closed at its own start (superseded, below) is no retraction. A new main owner never takes over before the prior
+> one ends (co-owners own the repository beside the main owners, CHAOS-9411): a main owner's claim whose evidence is
+> older than the end of ANOTHER team's main tenure on the repository (the latest close of that team's main row, or
+> this run when this run retracts its open main row) starts at that end (logged with `after_other_owner`); the end is
+> stored as the other team's `valid_to`, so the next run reads the same start and writes nothing. A claim whose open
+> main row started before that end was a main owner beside the other team (a full tie, D5990, CHAOS-9459) and keeps
+> its start. A co-owner's start is never moved by another team. A repository whose roles
 > change while the guard holds one of its closes or retractions keeps all its rows that run (§1.1), so a held row
 > never leaves two main rows.
 > One open row per claim: an open row of the claim that does not start at its evidence time (written by an
@@ -1188,9 +1189,13 @@ project (section 0.1): a native team key gives one team.
   another provider does not make that team an owner of the item's project (a team reaches an item only through
   ownership of its project), so it takes no row. `project_ownership` facts are
   looked up by the item's provider. When the winning source of an item is
-  `issue_project` or `project_ownership`, every other team of that source at the SAME rank as the winner
-  (`is_primary`, `specificity`, `priority` of the ownership fact) is a co-owner (`projectCoOwners`). A lower
-  rank, an empty team id, `repo_ownership`, a membership source and `native_team` give no co-owner. An
+  `issue_project` or `project_ownership`, or a main owner of the item's repository (`repo_ownership` with
+  `is_primary = 1`), every other team of that source at the SAME rank as the winner (`is_primary`,
+  `specificity`, `priority` of the ownership fact) is a co-owner (`projectCoOwners`): so a repository with
+  several main owners (a full ownership tie, D5990, CHAOS-9459) attributes its items to each of them. A lower
+  rank, an empty team id, a repository fact that is not a main owner's (a `provider_access` grant,
+  `is_primary = 0`), a membership source and `native_team` give no co-owner. Pinned by
+  `TestOnlyMainRepositoryOwnersAndProjectsHaveCoOwners`. An
   inactive team takes no row (section 0.4c).
 - **The values of `work_item_team_attributions.is_primary`** (`AttributionNotPrimary`, `AttributionPrimary`,
   `AttributionCoOwner`; the column is `UInt8`, no migration):
@@ -1708,7 +1713,7 @@ item (`dropInactiveTeamCandidates`, section 0.2) and, with the same test of the 
 (`internal/teamactive`, `NewestRowInactive`), gives no repository, no repository pattern and no member to a daily
 metric family:
 
-- `teamownership.AuthoritativeOwnerByRepo` skips an ownership row of an inactive team. A lower-ranked row of an active
+- `teamownership.AuthoritativeOwnersByRepo` skips an ownership row of an inactive team. A lower-ranked row of an active
   team for the same repository then wins; a repository with no active owner goes to the caller's pattern fallback.
   Callers: testops, `ai_impact`, `team_cognitive_load`, `team_complexity`, `compounding_risk_team`, `team_wellbeing`.
 - `LoadWellbeingTeams` (`team_wellbeing` for the names and the pattern fallback, `ic_finalize`, and the pattern fallback of the three finalize families) and
@@ -2027,7 +2032,7 @@ again, a change of main owner) starts and ends at that run, so a repository has 
 > **Superseded (chris, 2026-10-12 17:26Z, lead D5987, option C):** for a day before the first recorded ownership
 > of a repository, the repository's FIRST recorded owners apply backward; the earlier rule ("an item of a day
 > before the first known ownership stays unassigned", chris 2026-10-10, D5922) no longer holds. Not yet
-> implemented in the readers (`OwnersByRepo`, `AuthoritativeOwnerByRepo`, `teamscope`): CHAOS-9404; the
+> implemented in the readers (`OwnersByRepo`, `AuthoritativeOwnersByRepo`, `teamscope`): CHAOS-9404; the
 > `valid_from` of the inferred derivation is CHAOS-9403.
 
 - **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
@@ -2707,8 +2712,8 @@ designed-empty case, which is not a failure by itself, or it derived facts it co
 carried, so read `facts_derived` and `facts_unchanged` to tell them apart), `inputs_not_ready`, `error`. A quiet table with
 `unchanged` runs is healthy; a quiet table with `no_signal` runs needs the two counts: `facts_derived=0` is the designed-empty
 case, `facts_derived>0` with `facts_unchanged<facts_derived` is a derivation that did not write what it derived.
-Beside the run's outcome, `owner_tie_unresolved` counts a run that left one or more repos on a full tie (next paragraph); the run
-also writes a WARN `team_repo_ownership_derivation.owner_tie_unresolved` log line with `owner_ties` (the count) and `repo_ids`.
+A full tie (next paragraph) is no unresolved state (D5990): the run's `team_repo_ownership_derivation` Info line carries its
+count as `owner_ties`, for provenance only; there is no tie outcome and no WARN line (both were removed with D5448).
 
 **Retraction is guarded per provider and per fact kind (CHAOS-9045).** A run retracts an open inferred row it no longer
 derives only when it read the input that could derive that row. Each kind of input has its own proof
@@ -2729,7 +2734,7 @@ log line, one WARN `team_repo_ownership_derivation.retraction_held` line per kin
 `team_repo_ownership_retraction_guard_test.go` and `team_repo_ownership_retraction_guard_integration_test.go` (real
 ClickHouse, every ordered pair of jira, gitlab, github and linear).
 
-**Every owning team of a repo, each with its linked share; one main owner (rulings D5432, D5988; CHAOS-8945, CHAOS-9411).**
+**Every owning team of a repo, each with its linked share; one main owner, or every team of a full tie (rulings D5432, D5988, D5990; CHAOS-8945, CHAOS-9411, CHAOS-9459).**
 The derivation counts each team's candidates on a repo per link tier. The tier of a `work_graph_issue_pr` candidate is that
 row's `provenance`; a pull request's / merge request's own `repo_id` (`work_items.type` `pr` or `merge_request`) and its
 `work_item_dependencies` donor edge are provider-recorded facts and count as `native` (the issue<->PR link builder stamps
@@ -2745,39 +2750,53 @@ team by the lexicographic rank: the most `native` links first, then the most `ex
 starts at the earliest evidence of its own team's claim (CHAOS-9403). Because one `native` link outranks fifty
 `explicit_text` links for the main owner while the share counts every link, the main owner can hold a smaller share than
 a co-owner; each row carries both its role and its share. The same rule applies to every provider: the team's provider is
-never an input. A **full tie** for the top (equal counts at every tier; lead ruling D5448) names no new main owner: the
-tied team that already holds the repo's open main row (`is_primary = 1`, or `0` from the one-owner derivation before
-CHAOS-9411) stays the main owner, every other tied team is a co-owner, and the run signals the tie
-(`owner_tie_unresolved` + the WARN line above). With no such team (or two), the repo has co-owners only and no main
-owner, signalled on every run while the tie lasts. A team that no longer reaches the repo has its row retracted, as
+never an input. A **full tie** for the top (equal counts at every tier) makes **every tied team a main owner**
+(`is_primary = 1`, each with its share, equal among the tied teams; chris ruling D5990, which supersedes D5448's "a tie
+names no new main owner"): a tie never means no owner. A team outside the tie is a co-owner. The tie is reported for
+provenance only (`stats.Ties`, `owner_ties` above). A team that no longer reaches the repo has its row retracted, as
 before; a team whose share changed gets a new version of its row under the same key (same `valid_from`), so each
 claim has one open row. A **role change** seen by a later run (the main owner changes from team A to team B) is dated at
 that run; only the first rows of a repo are back-dated to the evidence: A's main row and B's co-owner row end at the run
 (`valid_to` = run), B's main row starts at the run, and A continues from the run as a co-owner with its share while it
 still has links (`team_repo_ownership_derivation.role_changed`, `stats.RoleChanges`). A new main owner of a repo where
-another team holds an open main row also starts at the run. So a repo has at most one main row at any instant of its
-history, and none only during an unresolved full tie (D5448, above). A role close goes through the retraction guard; a repo whose roles change while the guard holds any close or
+another team holds an open main row also starts at the run; so does a team that draws level with the main owner (both
+are main owners from that run), and a tie that ends closes the main row of every team that is no longer a leader at
+that run. So at any instant of its history a repo's main rows are its one leader's, or every tied team's during a full
+tie. A role close goes through the retraction guard; a repo whose roles change while the guard holds any close or
 retraction of it keeps all its rows that run (no write, retraction or close; `team_repo_ownership_derivation.role_change_held`)
-and waits for a run that proves them all, so a held row never leaves two main rows, nor a repo without the main row it had. A new main owner never starts
-before the end of another team's main tenure (CHAOS-9403 `after_other_owner`); a co-owner's start is its own evidence. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick one
-owner never take a co-owner row: `teamownership.AuthoritativeOwnerByRepo` and the cognitive-load gate leave out
-`is_primary = 2` rows and rank `(is_primary = 1) DESC` first, and the cascade's `LoadRepos` gives no `repo_ownership`
-candidate from a co-owner row (`RankDerivationCandidates` also ranks only `is_primary = 1` first). So a repo with co-owners
-only (a tie with no main owner) has no inferred one owner, as before co-owner rows existed, and the main owner keeps
-outranking a `provider_access` grant by specificity. An ownership fact with `is_primary = 2` carries the confidence of a
-fact that is not primary (`medium`). Readers that use the co-owner rows and the share are
-CHAOS-9408/9409/9410/9413.
+and waits for a run that proves them all, so a held row never leaves a main row that is no longer a leader's, nor a repo without the main row it had. A new main
+owner never starts before the end of another team's main tenure (CHAOS-9403 `after_other_owner`); a main row that was
+already open before that end belonged to a main owner beside the other team (a tie) and keeps its start; a co-owner's
+start is its own evidence. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick the
+owner never take a co-owner row, and **return every main owner** (D5990): `teamownership.AuthoritativeOwnersByRepo`
+(repo -> owners) and the cognitive-load gate leave out `is_primary = 2` rows and rank `(is_primary = 1) DESC` first; when
+the first row is a main owner's, every other main owner at the same specificity is an owner too, in rank order (a repo
+whose top row is a `provider_access` grant keeps one owner). The daily families whose table keys a row by team count the
+repo whole in each main owner (team cognitive load, team complexity, compounding risk team scope, wellbeing
+`team_metrics_daily`, AI impact); a TestOps daily table holds one row per repo, so TestOps takes the first owner by rank.
+The cascade's `LoadRepos` gives no `repo_ownership` candidate from a co-owner row (`RankDerivationCandidates` also ranks
+only `is_primary = 1` first), and the other main owners of a tie are co-owner rows of the item (section 0.4d). The main
+owner keeps outranking a `provider_access` grant by specificity. An ownership fact with `is_primary = 2` carries the
+confidence of a fact that is not primary (`medium`). Readers that use the co-owner rows and the share are tickets 9408,
+9409, 9410 and 9413.
 Before CHAOS-8945, a single `explicit_text` link from a second team dropped the repo and retracted its owner; before
 CHAOS-9411, the other teams got no row and no share was stored. Pinned by
 `internal/providersync/team_repo_ownership_ranked_owner_integration_test.go` (real ClickHouse, every provider pair: main
 owner, co-owners and shares read back), the `TestRankedOwner*`, `TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate` and
 `TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier` tests in `team_repo_ownership_derivation_test.go`,
-`team_repo_ownership_shares_test.go` (tie keeps the main owner; claim starts; a role change is dated at the run and held
+`team_repo_ownership_shares_test.go` (claim starts; a role change, a tie that
+forms and a tie that ends are dated at the run and held
 per repo), `TestAWinnerChangeIsDatedAtTheRunWithOneMainOwnerAtEveryInstant` (real ClickHouse, every provider: one main
-row at every instant, the one-owner read before and after the change, a rerun writes nothing), and the reader rank tests
-`TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt`, `TestACoOwnerFactNeverOutranksTheMainOwner`,
-`TestLoadReposLeavesOutCoOwnerRows`, `TestTheRepoGateNeverTakesACoOwnerAsTheOwner` and
-`TestAnInferredOwnerStillOutranksAProviderAccessGrant`.
+row at every instant, the one-owner read before and after the change, a rerun writes nothing),
+`TestAFullTieThatFormsAndEndsIsDatedAtTheRuns` and `TestRankedOwnerFullTie*` (real ClickHouse, every provider: every tied
+team is a main owner, the main rows of every instant are its leaders', reruns write nothing), and the reader rank tests
+`TestAuthoritativeOwnersByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt`, `TestACoOwnerFactNeverOutranksTheMainOwner`,
+`TestLoadReposLeavesOutCoOwnerRows`, `TestTheRepoGateNeverTakesACoOwnerAsTheOwner`,
+`TestAnInferredOwnerStillOutranksAProviderAccessGrant` (a tie's main owners outrank a grant),
+`TestResolveOwnedRepoIDTakesEveryMainOwnerOfATie`, `TestResolveFromOwnershipMapKeepsEveryMainOwner`, and the family
+tests `TestARepositoryWithSeveralMainOwnersCountsWholeInEach` (cognitive load, complexity, wellbeing resolver, TestOps
+first owner), `TestBuildTeamRowsCountsARepositoryWholeInEachMainOwner`, `TestComputeTeamWellbeingCountsARepositoryWholeInEachMainOwner`
+and `TestComputeCountsAPullRequestWholeInEachMainOwner`.
 
 `work_items.repo_id` (and, for the PR-inheritance branch, `work_graph_issue_pr.repo_id`) is the
 derivation's output column, not resolved by a join through `repos` — though the WRITE side does

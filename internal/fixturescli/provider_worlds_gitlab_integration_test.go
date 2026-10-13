@@ -180,6 +180,17 @@ type gitlabItem struct {
 	Links []string
 	// Reviewer approves a merged merge request (the zero user: the world's default reviewer).
 	Reviewer gitlabUser
+	// Commits are the SHAs of a merge request's commits, as its commits listing names them.
+	Commits []string
+}
+
+// commitsListing is GET /merge_requests/:iid/commits: newest commit first, each with its id.
+func (item gitlabItem) commitsListing() []any {
+	out := make([]any, 0, len(item.Commits))
+	for index := len(item.Commits) - 1; index >= 0; index-- {
+		out = append(out, map[string]any{"id": item.Commits[index], "short_id": item.Commits[index][:8]})
+	}
+	return out
 }
 
 func (item gitlabItem) state() string {
@@ -267,6 +278,7 @@ func gitlabProjectAnswers(path string, items []gitlabItem) []providerAnswer {
 			answers = append(answers,
 				glList(mrRoot+"/resource_state_events", "*", item.stateEvents()),
 				glList(mrRoot+"/notes", "*", []any{}),
+				glList(mrRoot+"/commits", "*", item.commitsListing()),
 				get(gitlabHost, mrRoot+"/approvals", "*", item.approvals(project)),
 			)
 			continue

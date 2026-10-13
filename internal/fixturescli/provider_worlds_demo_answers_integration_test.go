@@ -406,6 +406,9 @@ func (build *demoBuild) addMergeRequest(team demoTeam, index int, story demoStor
 		IID: iid, Title: story.Title, Description: description, Author: author, MR: true, Branch: branch,
 		CreatedAt: demoAt(c.CreatedAgo, 9, 0), UpdatedAt: demoAt(demoEnd(c), 15, 30), Reviewer: reviewer,
 	}
+	for _, commit := range commits {
+		item.Commits = append(item.Commits, commit.SHA)
+	}
 	if c.MergedAgo >= 0 {
 		item.ClosedAt, item.MergedAt = demoAt(c.MergedAgo, 15, 30), demoAt(c.MergedAgo, 15, 30)
 	}

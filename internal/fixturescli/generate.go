@@ -61,6 +61,7 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb",
 	"testdata/generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz": "8470b539f55e1ecd22b8ba9b52dd0921a9b51222dfd6a7d5a8050139e9f2abd8",
 	// The provider worlds (producedWorlds).
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "a88dc7395d1cf8a6062e812fe185292fe291f45ba76eb88b0d1e83e717ea3001",
 	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "97c3671f55763944bd4da0ff8dcb13b8a8adf8ea0ee9a7709220a89104432d4c",
 	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "e9ada5e45c0a631e32613eee051d0a2931a6c0229fb42cd2de08eab6fd08696b",
 	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "532a5ce01edf72bc869f80ce5ae9f7d69c545c0870d348959ff3b8ea0dbc3adc",
@@ -72,6 +73,7 @@ var frozenWorldDigests = map[string]string{
 // worlds they are rewritten when their producers change: that test's -freeze-provider-worlds run
 // writes them, and its plain run fails while a world is not exactly what the producers write today.
 var producedWorlds = map[string]bool{
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                true,
 	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  true,
 	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    true,
 	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": true,
@@ -516,7 +518,7 @@ Flags (as "dev-hops fixtures generate"):
   --pr-count                pull requests (default 20)
   --team-count              teams (default 10)
   --seed                    seed (required)
-  --provider                synthetic (default), github, gitlab or jira
+  --provider                synthetic (default), github, gitlab, jira or linear
   --with-metrics            also the derived metrics
   --with-work-graph         also the work graph
   --skip-coherence-validation, --allow-mixed-org   as in Python
@@ -564,9 +566,9 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 		env.Lookup = func(string) (string, bool) { return "", false }
 	}
 	switch *provider {
-	case "synthetic", "github", "gitlab", "jira":
+	case "synthetic", "github", "gitlab", "jira", "linear":
 	default:
-		fmt.Fprintf(env.Stderr, "argument error: --provider must be one of synthetic, github, gitlab, jira\n")
+		fmt.Fprintf(env.Stderr, "argument error: --provider must be one of synthetic, github, gitlab, jira, linear\n")
 		return cli.ExitUsage
 	}
 	if *dbType != "" && *dbType != "clickhouse" {

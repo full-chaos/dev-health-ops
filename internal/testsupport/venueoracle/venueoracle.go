@@ -1142,12 +1142,13 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 		}
 	}
 	// The Go api never writes a validation error's input or ctx (FastAPI's echo
-	// of the submitted value, which can be a secret); both planes are compared
-	// without them. A Python 500 whose cause is rendering that echo meets a Go
-	// 4xx that carries none.
-	pyBody, grBody := py.Body, gr.Body
-	py.Body, gr.Body = pydanticecho.Strip(py.Body), pydanticecho.Strip(gr.Body)
-	if py.Body != pyBody || gr.Body != grBody {
+	// of the submitted value, which can be a secret): the Python body is
+	// compared without them, the Go body as it is, so a Go echo is a DIFF. A
+	// Python 500 whose cause is rendering that echo meets a Go 4xx that carries
+	// none.
+	pyBody := py.Body
+	py.Body = pydanticecho.Strip(py.Body)
+	if py.Body != pyBody {
 		skip = map[string]bool{"content-length": true}
 		for key := range Volatile {
 			skip[key] = true

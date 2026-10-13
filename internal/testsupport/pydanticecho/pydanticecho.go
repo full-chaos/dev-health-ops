@@ -22,30 +22,50 @@ func Strip(body string) string {
 	if err != nil {
 		return body
 	}
-	strip(value)
-	out, err := pyjson.Dumps(value)
+	if !strip(value) {
+		return body // nothing to remove: keep the bytes, so a spacing difference still shows
+	}
+	// Render in the spacing the body came in, so a spacing difference between
+	// two planes still shows after the strip.
+	if strings.Contains(body, `"loc": `) {
+		out, err := pyjson.Dumps(value)
+		if err != nil {
+			return body
+		}
+		return out
+	}
+	out, err := pyjson.Marshal(value)
 	if err != nil {
 		return body
 	}
-	return out
+	return string(out)
 }
 
-func strip(value pyjson.Value) {
+func strip(value pyjson.Value) (changed bool) {
 	switch typed := value.(type) {
 	case *pyjson.Object:
 		_, hasType := typed.Get("type")
 		_, hasLoc := typed.Get("loc")
 		if hasType && hasLoc {
-			typed.Delete("input")
-			typed.Delete("ctx")
+			for _, key := range []string{"input", "ctx"} {
+				if _, present := typed.Get(key); present {
+					typed.Delete(key)
+					changed = true
+				}
+			}
 		}
 		for _, key := range typed.Keys() {
 			member, _ := typed.Get(key)
-			strip(member)
+			if strip(member) {
+				changed = true
+			}
 		}
 	case []pyjson.Value:
 		for _, item := range typed {
-			strip(item)
+			if strip(item) {
+				changed = true
+			}
 		}
 	}
+	return changed
 }

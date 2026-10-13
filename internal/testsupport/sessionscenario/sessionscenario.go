@@ -450,7 +450,7 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			h.cursor++
 			goBody := Normalize(goResponse.Body)
 			// The Go api never writes input or ctx of a validation error.
-			same = want.Status == goResponse.Status && pydanticecho.Strip(want.Body) == pydanticecho.Strip(goBody)
+			same = want.Status == goResponse.Status && pydanticecho.Strip(want.Body) == goBody
 			detail = fmt.Sprintf("python %d %s\n go     %d %s", want.Status, want.Body, goResponse.Status, goBody)
 			// A replay has only the Go plane: later steps read its tokens
 			// for both sides.

@@ -156,8 +156,11 @@ func TestDemoWorldEveryTeamHasInvestmentStages(t *testing.T) {
 			breakdown = append(breakdown, fmt.Sprintf("%s:%s:%d", deref(status), deref(metric), n))
 		}
 		groups.Close()
-		fmt.Fprintf(&table, "%s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s\n", tm.name, owned, edges, viaRepoID, viaPR, viaIssue, reached, withDistribution, effortPositive, distNonEmpty, strings.Join(breakdown, ","))
-		if withDistribution == 0 {
+		// A team that tracks no issue (no issue <-> pull request link into its repositories) has no unit
+		// to answer for; every team that tracks issues must have one.
+		linkedIssues := count(`SELECT uniqExact(work_item_id) FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND NOT startsWith(work_item_id, 'ghpr:') AND position(work_item_id, '!') = 0 AND ` + fmt.Sprintf(cond, "toString(repo_id)"))
+		fmt.Fprintf(&table, "%s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | linked_issues=%d\n", tm.name, owned, edges, viaRepoID, viaPR, viaIssue, reached, withDistribution, effortPositive, distNonEmpty, strings.Join(breakdown, ","), linkedIssues)
+		if withDistribution == 0 && linkedIssues > 0 {
 			missing = append(missing, tm.name)
 		}
 		if !gitLabTeams[tm.name] && withDistribution != reached {
@@ -189,7 +192,7 @@ func TestDemoWorldEveryTeamHasInvestmentStages(t *testing.T) {
 	t.Log(table.String())
 	sort.Strings(missing)
 	if len(missing) > 0 {
-		t.Errorf("teams with no persisted investment distribution reachable through their owned repositories: %v", missing)
+		t.Errorf("teams that track issues but have no persisted investment distribution reachable through their owned repositories: %v", missing)
 	}
 }
 

@@ -22,6 +22,10 @@ type demoChange struct {
 	Files    []string
 	// Deploy: the merge is deployed to production; DeployFailed: that deployment failed.
 	Deploy, DeployFailed bool
+	// Revert: the change's first commit reverts the first commit of the team's story RevertOf (by index)
+	// in the same repository.
+	Revert   bool
+	RevertOf int
 }
 
 type demoStory struct {
@@ -79,6 +83,7 @@ func (c demoChange) ci(failed int) demoChange {
 func (c demoChange) files(paths ...string) demoChange { c.Files = paths; return c }
 func (c demoChange) deploy() demoChange               { c.Deploy = true; return c }
 func (c demoChange) deployFails() demoChange          { c.Deploy, c.DeployFailed = true, true; return c }
+func (c demoChange) reverts(story int) demoChange     { c.Revert, c.RevertOf = true, story; return c }
 
 func (s demoStory) blocks(indexes ...int) demoStory { s.Blocks = indexes; return s }
 
@@ -140,13 +145,13 @@ var demoCheckoutStories = []demoStory{
 	feature("Delivery slot picker", 60, 40, change("checkout-api", 47, 41).deploy(), change("checkout-web", 45, 42)),
 	feature("Promo code stacking rules", 52, 35, change("checkout-api", 40, 36).deploy()),
 	feature("Guest checkout email capture", 45, 32, change("checkout-web", 36, 33)),
-	bug("Cart total wrong after promo removal", 28, 26, change("checkout-api", 27, 26).ci(2).deployFails(), change("checkout-api", 26, 25).deploy()),
+	bug("Cart total wrong after promo removal", 28, 26, change("checkout-api", 27, 26).ci(2).deployFails().reverts(7), change("checkout-api", 26, 25).deploy()),
 	bug("Hotfix: payment step spinner never ends", 25, 24, change("checkout-web", 25, 24).ci(1)),
 	bug("Address autocomplete drops apartment numbers", 22, 19, change("checkout-web", 21, 19).text()),
-	bug("Regression: delivery slots show past times", 18, 16, change("checkout-api", 17, 16).ci(1).deploy()),
+	bug("Regression: delivery slots show past times", 18, 16, change("checkout-api", 17, 16).ci(1).deploy().reverts(6)),
 	support("Investigate abandoned carts spike", 15, 11, change("checkout-api", 13, 11).deployFails()),
 	bug("Hotfix: gift cards double-applied", 10, 9, change("checkout-api", 10, 9).ci(2).deploy()),
-	bug("Revert express checkout on Safari", 7, 6, change("checkout-web", 7, 6)),
+	bug("Revert express checkout on Safari", 7, 6, change("checkout-web", 7, 6).reverts(4)),
 	feature("Split shipments", 20, -1, change("checkout-api", 14, -1)).blocks(23),
 	// The three months before.
 	feature("Checkout A/B test harness", 178, 150, change("checkout-web", 170, 152).deploy()),
@@ -294,11 +299,12 @@ var demoDataStories = []demoStory{
 	feature("Nightly ETL deploys through the shared pipeline", 8, -1, change("chaos-gl/data/warehouse-etl", 6, -1)),
 }
 
-// Web (GitLab subgroup web): little recorded work, a trickle of it in the last two weeks.
+// Web (GitLab subgroup web): little recorded work, a trickle of it in the last two weeks, and no tracked
+// issue at all: its merge requests name none, so it is the world's untracked team (no issue <-> pull
+// request link, so no investment unit is expected of it).
 var demoWebStories = []demoStory{
 	feature("Marketing site pricing page", 80, 66, change("chaos-gl/web/marketing-site", 72, 67)),
 	chore("Design system color tokens", 62, 50, change("chaos-gl/web/design-system", 55, 51)),
-	bug("Footer links broken on mobile", 48, -1),
 	// The three months before.
 	feature("Blog section on the marketing site", 150, 130, change("chaos-gl/web/marketing-site", 140, 131)),
 	chore("Design system button variants", 120, 108, change("chaos-gl/web/design-system", 112, 109)),

@@ -18,7 +18,8 @@ import (
 type demoTeam struct {
 	// Name is the team's name in the world's stories (a cross-team blocker names its team by it).
 	Name string
-	// Tracker: jira, linear, github or gitlab.
+	// Tracker: jira, linear, github or gitlab; "none" is a team that tracks no issues (its merge requests
+	// name none).
 	Tracker string
 	// Key is the Jira project key or the Linear team key.
 	Key       string
@@ -50,7 +51,7 @@ var demoTeams = []demoTeam{
 	{Name: "mobile", Tracker: "linear", Key: "MOB", LinearPrj: demoLinearProjects[1].ID, GitHub: []githubUser{dmAbe, dmBea}, Linear: []linearUser{dmLAbe, dmLBea}, Reviewer: dmMoLed, Stories: demoMobileStories, EstimateShare: 70, QuickReview: true, OwnFiles: true},
 	{Name: "delivery", Tracker: "gitlab", Home: "chaos-gl/deploy-pipeline", GitLab: []gitlabUser{dmDax, dmEva, dmFin}, Stories: demoDeliveryStories, EstimateShare: 50},
 	{Name: "data", Tracker: "gitlab", Home: "chaos-gl/data/warehouse-etl", GitLab: []gitlabUser{dmGia, dmHal, dmIda}, Stories: demoDataStories, EstimateShare: 80, QuickReview: true},
-	{Name: "web", Tracker: "gitlab", Home: "chaos-gl/web/marketing-site", GitLab: []gitlabUser{dmJon, dmKit}, Stories: demoWebStories, EstimateShare: 30},
+	{Name: "web", Tracker: "none", Home: "chaos-gl/web/marketing-site", GitLab: []gitlabUser{dmJon, dmKit}, Stories: demoWebStories, EstimateShare: 30},
 }
 
 // demoTeamNamed is the team of that name.
@@ -245,6 +246,29 @@ func demoChangeCommits(team demoTeam, c demoChange, key, title, author string) [
 		})
 	}
 	return commits
+}
+
+// withRevert makes a reverting change's first commit the revert git writes: `Revert "<subject>"` and
+// "This reverts commit <sha>." of the first commit of the team's story it reverts, in the same repository.
+func (build *demoBuild) withRevert(team demoTeam, c demoChange, commits []demoCommit, author string) []demoCommit {
+	if !c.Revert {
+		return commits
+	}
+	target := team.Stories[c.RevertOf]
+	for _, tc := range target.Changes {
+		if tc.Repo != c.Repo {
+			continue
+		}
+		key := ""
+		if team.Tracker == "jira" || team.Tracker == "linear" {
+			key = build.refs[team.Name][c.RevertOf]
+		}
+		reverted := demoChangeCommits(team, tc, key, target.Title, author)[0]
+		subject, _, _ := strings.Cut(reverted.Message, "\n")
+		commits[0].Message = "Revert \"" + subject + "\"\n\nThis reverts commit " + reverted.SHA + "."
+		return commits
+	}
+	panic(fmt.Sprintf("a change in %s reverts %q, which has no change there", c.Repo, target.Title))
 }
 
 // demoRuns are a change's CI runs, one per commit: the first ones fail (CIFailed of them, at most two),
@@ -500,7 +524,7 @@ func (build *demoBuild) addPullRequest(team demoTeam, author githubUser, story d
 	repo := build.GitHub[c.Repo]
 	repo.next++
 	number := repo.next
-	commits := demoChangeCommits(team, c, key, story.Title, author.Login)
+	commits := build.withRevert(team, c, demoChangeCommits(team, c, key, story.Title, author.Login), author.Login)
 	body := demoChangeText(story)
 	var closes []string
 	if team.Tracker == "github" {
@@ -559,12 +583,12 @@ func (build *demoBuild) addMergeRequest(team demoTeam, index int, story demoStor
 	}
 	description := "Closes " + ref + "\n\n" + demoChangeText(story)
 	switch {
-	case c.Heuristic:
+	case team.Tracker == "none", c.Heuristic:
 		description = demoChangeText(story)
 	case c.Text:
 		description = "Implements " + ref + ".\n\n" + demoChangeText(story)
 	}
-	commits := demoChangeCommits(team, c, "", story.Title, author.Name)
+	commits := build.withRevert(team, c, demoChangeCommits(team, c, "", story.Title, author.Name), author.Name)
 	branch := "feature/" + demoSlug(story.Title)
 	times := demoTimesOf(team, story, c)
 	item := gitlabItem{

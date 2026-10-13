@@ -715,3 +715,119 @@ func TestDemoGateCycleTimesVary(t *testing.T) {
 		t.Errorf("%d repository days hold three commits or more, want at least 5", busy)
 	}
 }
+
+// Regression and hotfix work is evidence for "shipped fast, now paying": every bug item whose title says
+// it is a regression, a hotfix or a revert reaches its pull request through a native or explicit-text
+// issue <-> pull request link (work_graph_issue_pr), never only a heuristic one.
+func TestDemoGateRegressionItemsLinkToPullRequests(t *testing.T) {
+	world, _ := demoGateWorld(t)
+	tiers := map[string]map[string]bool{}
+	for _, row := range demoGateRows(world, "work_graph_issue_pr") {
+		id := gateText(row["work_item_id"])
+		if tiers[id] == nil {
+			tiers[id] = map[string]bool{}
+		}
+		tiers[id][gateText(row["provenance"])] = true
+	}
+	found := 0
+	for id, item := range demoGateWorkItems(world) {
+		title := gateText(item["title"])
+		if gateText(item["type"]) != "bug" || !(strings.Contains(title, "Regression") || strings.Contains(title, "Hotfix") || strings.Contains(title, "Revert")) {
+			continue
+		}
+		found++
+		if !tiers[id]["native"] && !tiers[id]["explicit_text"] {
+			t.Errorf("%s (%s) has no native or explicit-text link to a pull request (tiers %v)", id, title, gateKeys(tiers[id]))
+		}
+	}
+	if found < 4 {
+		t.Errorf("%d regression, hotfix or revert bug items, want at least 4", found)
+	}
+}
+
+// demoGateTrackedIssues counts each team's (by name) linked issues: tracker items (not pull or merge
+// requests) with a work_graph_issue_pr row into a repository the team owns.
+func demoGateTrackedIssues(world FrozenWorld) map[string]int {
+	owners := demoGateRepoOwners(world)
+	names := demoGateTeamNames(world)
+	issues := map[string]map[string]bool{}
+	for _, row := range demoGateRows(world, "work_graph_issue_pr") {
+		id := gateText(row["work_item_id"])
+		if strings.HasPrefix(id, "ghpr:") || strings.Contains(id, "!") {
+			continue
+		}
+		for team := range owners[gateText(row["repo_id"])] {
+			if issues[names[team]] == nil {
+				issues[names[team]] = map[string]bool{}
+			}
+			issues[names[team]][id] = true
+		}
+	}
+	counts := map[string]int{}
+	for team := range demoGateTeamRepos(world) {
+		counts[team] = len(issues[team])
+	}
+	return counts
+}
+
+// At least one team tracks no issues (no issue <-> pull request link into its repositories), so "no
+// investment unit" is a correct answer for it and a defect for every team that does track issues; the
+// other teams track theirs.
+func TestDemoGateOneTeamIsUntracked(t *testing.T) {
+	world, _ := demoGateWorld(t)
+	counts := demoGateTrackedIssues(world)
+	var untracked []string
+	for team, count := range counts {
+		t.Logf("%s: %d linked issues", team, count)
+		if count == 0 {
+			untracked = append(untracked, team)
+		}
+	}
+	sort.Strings(untracked)
+	if len(untracked) != 1 {
+		t.Errorf("untracked teams %v, want exactly one (the world's deliberately untracked team)", untracked)
+	}
+}
+
+// Checkout's regressions carry their cause in real shapes: revert commits in git's own form (`Revert
+// "<subject>"` and "This reverts commit <sha>.") that name a commit of the same repository, and failed
+// deployments. No stored relation says "regression of": the platform stores none.
+func TestDemoGateCheckoutRegressionsCarryRevertsAndFailedDeploys(t *testing.T) {
+	world, _ := demoGateWorld(t)
+	checkout := map[string]bool{}
+	for _, repoID := range demoGateTeamRepos(world)["Checkout"] {
+		checkout[repoID] = true
+	}
+	shas := map[string]bool{}
+	for _, row := range demoGateRows(world, "git_commits") {
+		shas[gateText(row["repo_id"])+"/"+gateText(row["hash"])] = true
+	}
+	reverts := 0
+	for _, row := range demoGateRows(world, "git_commits") {
+		repoID, message := gateText(row["repo_id"]), gateText(row["message"])
+		if !checkout[repoID] || !strings.HasPrefix(message, `Revert "`) {
+			continue
+		}
+		_, rest, ok := strings.Cut(message, "This reverts commit ")
+		sha := strings.TrimSuffix(strings.TrimSpace(rest), ".")
+		if !ok || !shas[repoID+"/"+sha] {
+			t.Errorf("revert commit %s names %q, not a commit of its repository", gateText(row["hash"]), sha)
+			continue
+		}
+		reverts++
+	}
+	failed := 0
+	for _, row := range demoGateRows(world, "deployments") {
+		status := gateText(row["status"])
+		if checkout[gateText(row["repo_id"])] && (status == "failure" || status == "failed") {
+			failed++
+		}
+	}
+	t.Logf("Checkout: %d revert commits naming a commit of their repository, %d failed deployments", reverts, failed)
+	if reverts < 3 {
+		t.Errorf("Checkout holds %d revert commits, want at least 3", reverts)
+	}
+	if failed < 2 {
+		t.Errorf("Checkout holds %d failed deployments, want at least 2", failed)
+	}
+}

@@ -131,6 +131,10 @@ type JiraTeamCatalogBatch struct {
 	// returned. Nothing is written for them: the write leaves every open
 	// ownership row of such a project as it is (jiraHoldArchivedOwnership).
 	ArchivedProjects []JiraArchivedProject `json:"archived_projects,omitempty"`
+	// ArchivedProjectRows are the project rows of those projects (completed,
+	// inactive). They are written with the project rows and take no part in
+	// the ownership write.
+	ArchivedProjectRows []jiraTeamCatalogProjectRow `json:"archived_project_rows,omitempty"`
 	// ProjectSearchWalks is every project search walk of this batch, with the
 	// number of responses each took: the live search, the archived search and
 	// the live search again. The union of their answers is what the ownership
@@ -316,19 +320,6 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 			archivedRows = append(archivedRows, normalizeJiraArchivedProjectRow(ref.OrgID, archivedID, project.Key, archivedName, normalizedAt))
 		}
 	}
-	// The archived read is the later one: a project the first live read also
-	// named is archived now, so its row is the archived one.
-	archivedRowIDs := make(map[string]bool, len(archivedRows))
-	for _, row := range archivedRows {
-		archivedRowIDs[row.ID.String()] = true
-	}
-	liveRows := make([]jiraTeamCatalogProjectRow, 0, len(rows.Projects))
-	for _, row := range rows.Projects {
-		if !archivedRowIDs[row.ID.String()] {
-			liveRows = append(liveRows, row)
-		}
-	}
-	rows.Projects = dedupeJiraProjectCatalogRows(append(liveRows, archivedRows...))
 
 	sprints, sprintErr := handler.collectSprints(ctx, client, claim, projectKeys, normalizedAt)
 	if sprintErr != nil {
@@ -378,7 +369,8 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	}
 	evidence.Requests = requests
 	return JiraTeamCatalogBatch{
-		Rows: rows, Result: result, Evidence: evidence, ArchivedProjects: archivedProjects, ProjectSearchWalks: projectSearchWalks,
+		Rows: rows, Result: result, Evidence: evidence, ArchivedProjects: archivedProjects,
+		ArchivedProjectRows: dedupeJiraProjectCatalogRows(archivedRows), ProjectSearchWalks: projectSearchWalks,
 	}, nil
 }
 
@@ -853,14 +845,29 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 			return result, err
 		}
 		result.OwnershipWritten = freshOwnership
-		projectsEffect, effectErr := effectBatchFromValues(jiraTeamCatalogProjectsDestination, EffectReadbackRequired, projects)
+		// The archived read is the later one: a project the first live read
+		// also named is written once, as archived. Rows.Projects itself is
+		// left as it is, because the ownership write reads it as what still
+		// exists.
+		archivedRowIDs := make(map[string]bool, len(batch.ArchivedProjectRows))
+		for _, row := range batch.ArchivedProjectRows {
+			archivedRowIDs[row.ID.String()] = true
+		}
+		writtenProjects := make([]jiraTeamCatalogProjectRow, 0, len(projects)+len(batch.ArchivedProjectRows))
+		for _, row := range projects {
+			if !archivedRowIDs[row.ID.String()] {
+				writtenProjects = append(writtenProjects, row)
+			}
+		}
+		writtenProjects = append(writtenProjects, batch.ArchivedProjectRows...)
+		projectsEffect, effectErr := effectBatchFromValues(jiraTeamCatalogProjectsDestination, EffectReadbackRequired, writtenProjects)
 		if effectErr != nil {
 			return result, effectErr
 		}
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, projectsEffect); err != nil {
 			return result, err
 		}
-		result.ProjectsWritten = len(projects)
+		result.ProjectsWritten = len(writtenProjects)
 	}
 	// Sprints are unconditional reference data, written whenever the walk
 	// reached this point at all -- see the function doc comment on

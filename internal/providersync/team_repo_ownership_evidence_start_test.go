@@ -7,9 +7,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// The winning team's claim starts at the earliest timed evidence of THAT team
-// (a losing team's earlier evidence is not its start); a claim with no timed
-// evidence has no evidence start.
+// A co-owner's claim starts at the earliest timed evidence of THAT team; the
+// main owner's at the earliest evidence of any claim on the repo, because it
+// is the main owner over the whole history; a claim with no timed evidence
+// has no evidence start.
 func TestDerivedOwnershipStartsAtTheWinnersEarliestEvidence(t *testing.T) {
 	early := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
 	mid := early.Add(48 * time.Hour)
@@ -25,15 +26,21 @@ func TestDerivedOwnershipStartsAtTheWinnersEarliestEvidence(t *testing.T) {
 		{WorkItemID: "u1", Provider: "github", Type: "pr", RepoID: "repo-b", ProjectID: "p-untimed"},
 	}
 	derivation := deriveTeamRepoOwnership("org", links, items, nil, nil, nil)
-	got := map[string]DerivedTeamRepoOwnershipRow{}
+	got := map[[2]string]DerivedTeamRepoOwnershipRow{}
 	for _, row := range derivation.Rows {
-		got[row.RepoID] = row
+		got[[2]string{row.RepoID, row.TeamID}] = row
 	}
-	if row := got["repo-a"]; row.TeamID != "team-win" || !row.EvidenceFrom.Equal(mid) {
-		t.Errorf("repo-a = %+v, want team-win from %v (its own earliest, not the loser's %v)", row, mid, early)
+	if row := got[[2]string{"repo-a", "team-win"}]; row.IsPrimary != teamRepoOwnershipMainOwner || !row.EvidenceFrom.Equal(early) {
+		t.Errorf("repo-a main = %+v, want team-win from %v (the repo's earliest evidence, not its own %v)", row, early, mid)
 	}
-	if row := got["repo-b"]; row.TeamID != "team-untimed" || !row.EvidenceFrom.IsZero() {
+	if row := got[[2]string{"repo-a", "team-lose"}]; row.IsPrimary != teamRepoOwnershipCoOwner || !row.EvidenceFrom.Equal(early) {
+		t.Errorf("repo-a co-owner = %+v, want team-lose from its own %v", row, early)
+	}
+	if row := got[[2]string{"repo-b", "team-untimed"}]; row.IsPrimary != teamRepoOwnershipMainOwner || !row.EvidenceFrom.IsZero() {
 		t.Errorf("repo-b = %+v, want team-untimed with no evidence start", row)
+	}
+	if len(got) != 3 {
+		t.Errorf("rows = %+v, want three", derivation.Rows)
 	}
 }
 
@@ -49,14 +56,16 @@ func TestAnOpenRowAtTheRunTimeIsSupersededByTheEvidenceStart(t *testing.T) {
 		repoID: {Provider: "github", FullName: "acme/a"}, untimedRepo: {Provider: "github", FullName: "acme/b"},
 	}
 	inferred := teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred]
+	whole := 1.0
 	active := func(repo uuid.UUID, name string, start time.Time) teamRepoOwnershipActiveRow {
 		return teamRepoOwnershipActiveRow{Provider: "github", TeamID: "team", RepoID: repo, RepoFullName: name, MatchType: "exact",
-			Specificity: inferred.Specificity, Priority: inferred.Priority, ValidFrom: start}
+			Specificity: inferred.Specificity, Priority: inferred.Priority, ValidFrom: start,
+			IsPrimary: teamRepoOwnershipMainOwner, Share: &whole}
 	}
 	runTime := now.Add(-40 * 24 * time.Hour)
 	derived := []DerivedTeamRepoOwnershipRow{
-		{TeamID: "team", RepoID: repoID.String(), Specificity: inferred.Specificity, EvidenceFrom: evidence},
-		{TeamID: "team", RepoID: untimedRepo.String(), Specificity: inferred.Specificity},
+		{TeamID: "team", RepoID: repoID.String(), Specificity: inferred.Specificity, EvidenceFrom: evidence, IsPrimary: teamRepoOwnershipMainOwner, Share: 1},
+		{TeamID: "team", RepoID: untimedRepo.String(), Specificity: inferred.Specificity, IsPrimary: teamRepoOwnershipMainOwner, Share: 1},
 	}
 
 	activeRows := []teamRepoOwnershipActiveRow{active(repoID, "acme/a", runTime), active(untimedRepo, "acme/b", runTime)}
@@ -86,32 +95,54 @@ func TestAnOpenRowAtTheRunTimeIsSupersededByTheEvidenceStart(t *testing.T) {
 	}
 }
 
-// A claim's start moves to the end of another team's tenure on the repository,
-// read from that team's retracted rows or from the open row this run retracts
-// (the read of the retracted rows may not see this run's own write yet).
+// A main owner's start moves to the end of another team's main tenure on the
+// repository, read from that team's closed main rows or from the open main row
+// this run retracts (the read of the closed rows may not see this run's own
+// write yet). Co-owners own the repository beside the main owner: a co-owner's
+// start is never moved by another team, and the end of another team's
+// co-owner row never moves a main owner.
 func TestSettledEvidenceStartsWhereTheOtherOwnerEnds(t *testing.T) {
 	repoID := uuid.New()
 	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{repoID: {FullName: "acme/api", Provider: "github"}}
 	evidence := time.Date(2025, 3, 4, 5, 6, 7, 0, time.UTC)
 	priorEnd := evidence.Add(30 * 24 * time.Hour)
 	now := evidence.Add(90 * 24 * time.Hour)
-	derived := []DerivedTeamRepoOwnershipRow{{TeamID: "team-b", RepoID: repoID.String(), EvidenceFrom: evidence}}
-
-	settled, counts := settleInferredEvidence(derived, repos,
-		map[teamRepoOwnershipClaim]time.Time{{"github", "acme/api", "team-a"}: priorEnd}, nil, now)
-	if !settled[0].EvidenceFrom.Equal(priorEnd) || counts.afterOtherOwner != 1 {
-		t.Errorf("after a retracted owner: start %v (%+v), want %v", settled[0].EvidenceFrom, counts, priorEnd)
+	main := []DerivedTeamRepoOwnershipRow{{TeamID: "team-b", RepoID: repoID.String(), EvidenceFrom: evidence, IsPrimary: teamRepoOwnershipMainOwner}}
+	coOwner := []DerivedTeamRepoOwnershipRow{{TeamID: "team-b", RepoID: repoID.String(), EvidenceFrom: evidence, IsPrimary: teamRepoOwnershipCoOwner}}
+	ended := func(repo string, mainRow bool) teamRepoOwnershipTenureEnds {
+		claim := teamRepoOwnershipClaim{"github", repo, "team-a"}
+		tenure := teamRepoOwnershipTenureEnds{retractedUntil: map[teamRepoOwnershipClaim]time.Time{claim: priorEnd}, mainUntil: map[teamRepoOwnershipClaim]time.Time{}}
+		if mainRow {
+			tenure.mainUntil[claim] = priorEnd
+		}
+		return tenure
 	}
-
-	retracting := []teamRepoOwnershipActiveRow{{Provider: "github", RepoFullName: "acme/api", TeamID: "team-a", RepoID: repoID}}
-	settled, counts = settleInferredEvidence(derived, repos, nil, retracting, now)
-	if !settled[0].EvidenceFrom.Equal(now) || counts.afterOtherOwner != 1 {
-		t.Errorf("retracting the owner in this run: start %v (%+v), want the run %v", settled[0].EvidenceFrom, counts, now)
+	retracting := func(primary uint8) []teamRepoOwnershipActiveRow {
+		return []teamRepoOwnershipActiveRow{{Provider: "github", RepoFullName: "acme/api", TeamID: "team-a", RepoID: repoID, IsPrimary: primary}}
 	}
-
-	settled, _ = settleInferredEvidence(derived, repos,
-		map[teamRepoOwnershipClaim]time.Time{{"github", "acme/other", "team-a"}: priorEnd}, nil, now)
-	if !settled[0].EvidenceFrom.Equal(evidence) {
-		t.Errorf("another repository's owner: start %v, want the evidence %v", settled[0].EvidenceFrom, evidence)
+	cases := []struct {
+		name       string
+		derived    []DerivedTeamRepoOwnershipRow
+		tenure     teamRepoOwnershipTenureEnds
+		retracting []teamRepoOwnershipActiveRow
+		want       time.Time
+		moved      int
+	}{
+		{"a main owner after another team's closed main row", main, ended("acme/api", true), nil, priorEnd, 1},
+		{"a main owner when this run retracts another team's main row", main, teamRepoOwnershipTenureEnds{}, retracting(teamRepoOwnershipMainOwner), now, 1},
+		{"a row of the one-owner derivation is a main row", main, teamRepoOwnershipTenureEnds{}, retracting(0), now, 1},
+		{"another repository's main owner", main, ended("acme/other", true), nil, evidence, 0},
+		{"another team's closed co-owner row", main, ended("acme/api", false), nil, evidence, 0},
+		{"this run retracts another team's co-owner row", main, teamRepoOwnershipTenureEnds{}, retracting(teamRepoOwnershipCoOwner), evidence, 0},
+		{"a co-owner beside another team's closed main row", coOwner, ended("acme/api", true), nil, evidence, 0},
+		{"a co-owner when this run retracts the main row", coOwner, teamRepoOwnershipTenureEnds{}, retracting(teamRepoOwnershipMainOwner), evidence, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			settled, counts := settleInferredEvidence(tc.derived, repos, tc.tenure, tc.retracting, now)
+			if !settled[0].EvidenceFrom.Equal(tc.want) || counts.afterOtherOwner != tc.moved {
+				t.Errorf("start %v (%+v), want %v and %d moved", settled[0].EvidenceFrom, counts, tc.want, tc.moved)
+			}
+		})
 	}
 }

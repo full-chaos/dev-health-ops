@@ -22,10 +22,7 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -677,7 +674,7 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 	if dsn := strings.TrimSpace(*backstopDatabase); dsn != "" {
 		backstop, err := startRecommendationsBackstop(ctx, logger, dsn, orgID)
 		if err != nil {
-			return writeError(env.Stderr, cli.ExitFailure, "backstop_failed", secrets.NewBoundary(dsn).Redact(err).Error())
+			return writeError(env.Stderr, cli.ExitFailure, "backstop_failed", err.Error())
 		}
 		summary["recommendations_backstop"] = backstop
 	}
@@ -689,16 +686,3 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 }
 
 var uuidText = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
-func startRecommendationsBackstop(ctx context.Context, logger *slog.Logger, dsn, orgID string) (RecommendationsBackstopResult, error) {
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		return RecommendationsBackstopResult{}, fmt.Errorf("postgres: %w", err)
-	}
-	defer pool.Close()
-	registry, err := jobruntime.Load(jobsContractRoot)
-	if err != nil {
-		return RecommendationsBackstopResult{}, fmt.Errorf("job contract: %w", err)
-	}
-	return TriggerRecommendationsBackstop(ctx, pool, registry, logger, strings.ToLower(orgID), generateClock())
-}

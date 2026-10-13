@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // recommendationsWindowDays is the window the nightly recommendations_daily_fanout schedule runs
@@ -67,5 +69,25 @@ func TriggerRecommendationsBackstop(ctx context.Context, pool *pgxpool.Pool, reg
 		result.Status = "error"
 	}
 	logger.Info("recommendations backstop triggered", "org_id", org, "day", day, "status", result.Status, "run_id", result.RunID)
+	return result, err
+}
+
+// startRecommendationsBackstop opens the job database and triggers the backstop; every error it
+// returns has the DSN's credentials, as pgx resolved them, redacted.
+func startRecommendationsBackstop(ctx context.Context, logger *slog.Logger, dsn, orgID string) (RecommendationsBackstopResult, error) {
+	boundary := pgstorage.Boundary(dsn)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return RecommendationsBackstopResult{}, fmt.Errorf("postgres: %w", boundary.Redact(err))
+	}
+	defer pool.Close()
+	registry, err := jobruntime.Load(jobsContractRoot)
+	if err != nil {
+		return RecommendationsBackstopResult{}, fmt.Errorf("job contract: %w", err)
+	}
+	result, err := TriggerRecommendationsBackstop(ctx, pool, registry, logger, strings.ToLower(orgID), generateClock())
+	if err != nil {
+		err = boundary.Redact(err)
+	}
 	return result, err
 }

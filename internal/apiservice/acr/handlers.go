@@ -19,6 +19,8 @@
 //     created). The only answer a caller may read as "organization gone".
 //   - 404 {"detail":"Not found"} (no code): malformed id. Not "gone".
 //   - 503 {"detail":"Service unavailable"}: the store cannot be read.
+//
+// Contract: .github/docs-legacy/architecture/acr-entitlement-route.md
 package acr
 
 import (

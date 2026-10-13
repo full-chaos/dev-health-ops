@@ -975,6 +975,30 @@ func TestGitHubWorkItemDerivationNeverInfersTeamFromPersonMembershipUnlessAdminM
 			derived := teamattribution.NewGitHubWorkItemDerivationContext(tt.facts)
 			subject := tt.subject()
 			teamID, teamName, candidates := derived.Resolve(subject)
+			if tt.wantSource == "assignee_membership" || tt.wantSource == "author_membership" {
+				// CHAOS-9414: membership is provenance only. The member's
+				// team is a non-primary row of wantSource; the primary row
+				// is unassigned and carries no team.
+				if teamID != nil || teamName != nil {
+					t.Fatalf("primary team = (%v, %v), want none (membership is provenance only)",
+						teamattribution.GithubWorkItemDerivationStringValue(teamID), teamattribution.GithubWorkItemDerivationStringValue(teamName))
+				}
+				found := false
+				for _, candidate := range candidates {
+					if candidate.Source == tt.wantSource &&
+						teamattribution.GithubWorkItemDerivationStringValue(candidate.TeamID) == tt.wantTeam &&
+						candidate.IsPrimary == teamattribution.AttributionNotPrimary {
+						found = true
+					}
+					if candidate.Source == "unassigned" && candidate.IsPrimary != teamattribution.AttributionPrimary {
+						t.Fatalf("unassigned is_primary = %d, want 1", candidate.IsPrimary)
+					}
+				}
+				if !found {
+					t.Fatalf("candidates = %+v, want a non-primary %s row for %s", candidates, tt.wantSource, tt.wantTeam)
+				}
+				return
+			}
 			if tt.wantTeam == "" {
 				if teamID != nil || teamName != nil {
 					t.Fatalf("team = (%v, %v), want (nil, nil)",
@@ -1093,7 +1117,7 @@ func TestGitHubWorkItemDerivationAuthorOnlyDonorNeverPropagatesATeam(t *testing.
 			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
 		}},
 	})
-	donorTeamID, _, donorCandidates := derived.Resolve(donor)
+	donorTeamID, _, donorCandidates := resolveViaMembership(t, derived, donor)
 	if teamattribution.GithubWorkItemDerivationStringValue(donorTeamID) != "team-donor-only" {
 		t.Fatalf("donor team id = %v, want team-donor-only (its OWN attribution resolves via author_membership)",
 			teamattribution.GithubWorkItemDerivationStringValue(donorTeamID))
@@ -1134,7 +1158,7 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 				TeamID: "team-ops", TeamName: "Ops Team", Facet: "alice@example.com", UpdatedAt: now,
 			}},
 		})
-		teamID, teamName, candidates := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
+		teamID, teamName, candidates := resolveViaMembership(t, derived, teamattribution.GithubWorkItemDerivationSubject{
 			WorkItemID: "gh:acme/api#30", Provider: "github", Type: "issue",
 			Assignees: []string{"alice@example.com"}, OrgID: "org-acme",
 		})
@@ -1154,7 +1178,7 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 				MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
 			}},
 		})
-		teamID, teamName, candidates := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
+		teamID, teamName, candidates := resolveViaMembership(t, derived, teamattribution.GithubWorkItemDerivationSubject{
 			WorkItemID: "ghpr:acme/api#31", Provider: "github", Type: "pr",
 			Reporter: &reporter, OrgID: "org-acme",
 		})
@@ -1177,7 +1201,7 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 				MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
 			}},
 		})
-		teamID, teamName, candidates := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
+		teamID, teamName, candidates := resolveViaMembership(t, derived, teamattribution.GithubWorkItemDerivationSubject{
 			WorkItemID: "gh:acme/api#32", Provider: "github", Type: "issue",
 			Assignees: []string{"alice"}, OrgID: "org-acme",
 		})
@@ -1246,7 +1270,7 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 				MemberID: "lead", IsPrimary: 1, Specificity: 50, Priority: 10,
 			}},
 		})
-		teamID, teamName, candidates := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
+		teamID, teamName, candidates := resolveViaMembership(t, derived, teamattribution.GithubWorkItemDerivationSubject{
 			WorkItemID: "gh:acme/api#40", Provider: "github", Type: "issue",
 			Assignees: []string{"lead"}, OrgID: "org-acme",
 		})
@@ -1276,7 +1300,7 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 				MemberID: "john   doe", IsPrimary: 1, Specificity: 50, Priority: 10,
 			}},
 		})
-		teamID, teamName, candidates := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
+		teamID, teamName, candidates := resolveViaMembership(t, derived, teamattribution.GithubWorkItemDerivationSubject{
 			WorkItemID: "gh:acme/api#41", Provider: "github", Type: "issue",
 			Assignees: []string{"john  doe"}, OrgID: "org-acme",
 		})
@@ -1338,14 +1362,14 @@ func TestGitHubWorkItemDerivationSubjectFromRowPropagatesTypeForAuthorMembership
 			if subject.Type != row.Type {
 				t.Fatalf("githubWorkItemDerivationSubjectFromRow(row).Type = %q, want %q (row.Type must propagate)", subject.Type, row.Type)
 			}
-			teamID, teamName, candidates := derived.Resolve(subject)
+			teamID, teamName, candidates := resolveViaMembership(t, derived, subject)
 			if teamattribution.GithubWorkItemDerivationStringValue(teamID) != "team-ops" {
 				t.Fatalf("team id = %v, want team-ops (Type propagation must keep the author_membership gate open)", teamattribution.GithubWorkItemDerivationStringValue(teamID))
 			}
 			if teamattribution.GithubWorkItemDerivationStringValue(teamName) != "Ops Team" {
 				t.Fatalf("team name = %v, want Ops Team", teamattribution.GithubWorkItemDerivationStringValue(teamName))
 			}
-			if len(candidates) != 1 || candidates[0].Source != "author_membership" || candidates[0].IsPrimary != 1 {
+			if len(candidates) != 1 || candidates[0].Source != "author_membership" || candidates[0].IsPrimary != 0 {
 				t.Fatalf("candidates = %+v", candidates)
 			}
 		})
@@ -1399,7 +1423,7 @@ func TestGitHubWorkItemDerivationUnambiguousReporterMembershipStillResolves(t *t
 		},
 	})
 	reporter := "alice"
-	teamID, teamName, _ := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
+	teamID, teamName, _ := resolveViaMembership(t, derived, teamattribution.GithubWorkItemDerivationSubject{
 		WorkItemID: "ghpr:acme/api#4244", Provider: "github", Type: "pr",
 		Reporter: &reporter, OrgID: "org-acme",
 	})
@@ -1652,7 +1676,7 @@ func TestGitHubWorkItemDerivationReporterAndAssigneeSamePersonSameTeamStayDistin
 		}},
 	})
 	reporter := "alice"
-	teamID, _, candidates := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
+	teamID, _, candidates := resolveViaMembership(t, derived, teamattribution.GithubWorkItemDerivationSubject{
 		WorkItemID: "ghpr:acme/api#77", Provider: "github", Type: "pr",
 		Assignees: []string{"alice"}, Reporter: &reporter, OrgID: "org-acme",
 	})
@@ -1664,8 +1688,8 @@ func TestGitHubWorkItemDerivationReporterAndAssigneeSamePersonSameTeamStayDistin
 		bySource[candidate.Source] = candidate
 	}
 	assignee, ok := bySource["assignee_membership"]
-	if !ok || assignee.IsPrimary != 1 || teamattribution.GithubWorkItemDerivationStringValue(assignee.TeamID) != "team-ops" {
-		t.Fatalf("assignee candidate = %+v (present=%v), want present, primary, team-ops", assignee, ok)
+	if !ok || assignee.IsPrimary != 0 || teamattribution.GithubWorkItemDerivationStringValue(assignee.TeamID) != "team-ops" {
+		t.Fatalf("assignee candidate = %+v (present=%v), want present, non-primary (CHAOS-9414), team-ops", assignee, ok)
 	}
 	author, ok := bySource["author_membership"]
 	if !ok || author.IsPrimary != 0 || teamattribution.GithubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
@@ -1731,4 +1755,44 @@ func (source *fakeGitHubWorkItemDerivationContextSource) LoadStoredBlockingFacts
 	context.Context, Claim, []string, []workitemmetrics.BlockingRelation,
 ) ([]workitemmetrics.BlockingRelation, []workitemmetrics.RelationEnd, error) {
 	return nil, nil, nil
+}
+
+// resolveViaMembership resolves a subject whose ONLY signal is a member's team.
+// CHAOS-9414: membership is provenance only, so the primary team must be
+// empty and the primary row unassigned; the returned team and candidates are
+// the membership provenance row's team and the candidates without the
+// unassigned row, so a test can still assert what membership resolved.
+func resolveViaMembership(
+	t *testing.T, derived teamattribution.GithubWorkItemDerivationContext,
+	subject teamattribution.GithubWorkItemDerivationSubject,
+) (*string, *string, []teamattribution.GithubWorkItemDerivationCandidate) {
+	t.Helper()
+	teamID, teamName, candidates := derived.Resolve(subject)
+	if teamID != nil || teamName != nil {
+		t.Fatalf("primary team = (%v, %v), want none: membership is provenance only (CHAOS-9414)",
+			teamattribution.GithubWorkItemDerivationStringValue(teamID), teamattribution.GithubWorkItemDerivationStringValue(teamName))
+	}
+	var memberTeamID, memberTeamName *string
+	var rest []teamattribution.GithubWorkItemDerivationCandidate
+	unassigned := 0
+	for _, candidate := range candidates {
+		if candidate.Source == "unassigned" {
+			unassigned++
+			if candidate.IsPrimary != teamattribution.AttributionPrimary {
+				t.Fatalf("unassigned is_primary = %d, want 1", candidate.IsPrimary)
+			}
+			continue
+		}
+		if candidate.IsPrimary != teamattribution.AttributionNotPrimary {
+			t.Fatalf("%s is_primary = %d, want 0 (provenance only)", candidate.Source, candidate.IsPrimary)
+		}
+		if memberTeamID == nil {
+			memberTeamID, memberTeamName = candidate.TeamID, candidate.TeamName
+		}
+		rest = append(rest, candidate)
+	}
+	if unassigned != 1 {
+		t.Fatalf("candidates = %+v, want exactly one unassigned primary row", candidates)
+	}
+	return memberTeamID, memberTeamName, rest
 }

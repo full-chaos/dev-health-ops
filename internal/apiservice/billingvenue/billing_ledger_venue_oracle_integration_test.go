@@ -342,7 +342,7 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	}
 	inspected, entitlementsInspected := 0, 0
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
-		Golden:    golden,
+		Golden: golden,
 		Normalize: func(_ venueoracle.Request, body string) string {
 			return strings.Replace(normalize(body), goOnlyEntitlementMember, "", 1)
 		},

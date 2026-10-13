@@ -379,7 +379,7 @@ func TestDirectAdaptersLeaveThePythonOmittedColumnsAtTheirDefaults(t *testing.T)
 		ctx, conn := newWorkItemEffectsConn(t)
 		adapter := GitHubWorkItemsClickHouseAdapter{Conn: conn}
 		row := workItemTestRow(orgID, now)
-		// The semantic row carries all four; the sink still must not write them.
+		// The semantic row carries all four; the sink writes only description.
 		row.Description = stringPointer("body text")
 		row.PriorityRaw = stringPointer("p1")
 		row.ServiceClass = stringPointer("expedite")
@@ -398,8 +398,8 @@ func TestDirectAdaptersLeaveThePythonOmittedColumnsAtTheirDefaults(t *testing.T)
 		).Scan(&description, &priorityRaw, &serviceClass, &dueAt); err != nil {
 			t.Fatalf("read omitted columns: %v", err)
 		}
-		if description != nil || priorityRaw != nil || serviceClass != nil || dueAt != nil {
-			t.Fatalf("this unit wrote a column write_work_items omits: description=%v priority_raw=%v service_class=%v due_at=%v",
+		if description == nil || *description != "body text" || priorityRaw != nil || serviceClass != nil || dueAt != nil {
+			t.Fatalf("description=%v priority_raw=%v service_class=%v due_at=%v; want only description written",
 				description, priorityRaw, serviceClass, dueAt)
 		}
 	})
@@ -418,7 +418,49 @@ func TestDirectAdaptersLeaveThePythonOmittedColumnsAtTheirDefaults(t *testing.T)
 		if err := adapter.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		expectHeldWorkItemColumns(ctx, t, conn, orgID, projected, heldDue)
+		expectHeldWorkItemColumns(ctx, t, conn, orgID, projected, heldDue, "provider body")
+		if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
+			t.Fatalf("inspection=%s err=%v, want exact", inspection, err)
+		}
+	})
+
+	t.Run("work_items keeps a push-written description when the sync row has none", func(t *testing.T) {
+		ctx, conn := newWorkItemEffectsConn(t)
+		adapter := GitHubWorkItemsClickHouseAdapter{Conn: conn}
+		row := workItemTestRow(orgID, now)
+		row.Description = nil
+		projected := projectWorkItem(row)
+		heldDue := now.Add(-24 * time.Hour)
+		insertHeldWorkItemColumns(ctx, t, conn, orgID, projected, now.Add(-time.Hour), heldDue)
+
+		identity, effect := workItemEffect(t, "work_items", row)
+		if err := adapter.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		expectHeldWorkItemColumns(ctx, t, conn, orgID, projected, heldDue, "held body")
+		if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
+			t.Fatalf("inspection=%s err=%v, want exact", inspection, err)
+		}
+	})
+
+	t.Run("work_items stores a description cut to the bound", func(t *testing.T) {
+		ctx, conn := newWorkItemEffectsConn(t)
+		adapter := GitHubWorkItemsClickHouseAdapter{Conn: conn}
+		row := workItemTestRow(orgID, now)
+		long := strings.Repeat("é", workItemDescriptionMaxRunes+50)
+		row.Description = &long
+
+		identity, effect := workItemEffect(t, "work_items", row)
+		if err := adapter.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		var stored string
+		if err := conn.QueryRow(ctx, `SELECT ifNull(description, '') FROM work_items FINAL WHERE org_id = ?`, orgID).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored != strings.Repeat("é", workItemDescriptionMaxRunes) {
+			t.Fatalf("stored %d runes, want exactly %d", len([]rune(stored)), workItemDescriptionMaxRunes)
+		}
 		if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
 			t.Fatalf("inspection=%s err=%v, want exact", inspection, err)
 		}
@@ -853,7 +895,7 @@ func insertHeldWorkItemColumns(ctx context.Context, t *testing.T, conn driver.Co
 	}
 }
 
-func expectHeldWorkItemColumns(ctx context.Context, t *testing.T, conn driver.Conn, orgID string, row workItemStoredRow, due time.Time) {
+func expectHeldWorkItemColumns(ctx context.Context, t *testing.T, conn driver.Conn, orgID string, row workItemStoredRow, due time.Time, wantDescription string) {
 	t.Helper()
 	var description, priorityRaw, serviceClass *string
 	var dueAt *time.Time
@@ -864,9 +906,9 @@ func expectHeldWorkItemColumns(ctx context.Context, t *testing.T, conn driver.Co
 	).Scan(&title, &description, &priorityRaw, &serviceClass, &dueAt); err != nil {
 		t.Fatal(err)
 	}
-	if title != row.Title || description == nil || *description != "held body" || priorityRaw == nil || *priorityRaw != "p0" ||
+	if title != row.Title || description == nil || *description != wantDescription || priorityRaw == nil || *priorityRaw != "p0" ||
 		serviceClass == nil || *serviceClass != "expedite" || dueAt == nil || !dueAt.Equal(due.Truncate(time.Millisecond)) {
-		t.Fatalf("FINAL title=%q description=%v priority_raw=%v service_class=%v due_at=%v; want the sync's title and the held four",
-			title, description, priorityRaw, serviceClass, dueAt)
+		t.Fatalf("FINAL title=%q description=%v priority_raw=%v service_class=%v due_at=%v; want the sync's title, description %q and the held three",
+			title, description, priorityRaw, serviceClass, dueAt, wantDescription)
 	}
 }

@@ -481,6 +481,8 @@ func TestNarrowRepoScopeTextColumnStaysText(t *testing.T) {
 	got, _ := NarrowRepoScope(true, " AND toString(repo_id) IN {scope_ids:Array(String)}", nil, team, nil)
 	if !strings.HasPrefix(got, " AND (toString(repo_id) IN {scope_ids:Array(String)} AND toString(repo_id) IN (") || strings.Contains(got, "toUUIDOrNull") {
 		t.Errorf("a text column must compare as text on both sides:\n%s", got)
+	}
+}
 
 // RepoShare is a lookup in one constant map under its own binding names; no team id = no expression.
 func TestRepoShareIsAMapLookupUnderItsOwnBindings(t *testing.T) {

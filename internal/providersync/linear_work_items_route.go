@@ -1210,11 +1210,14 @@ func linearOrgWidePlaceholder(unit Unit) bool {
 		return false
 	}
 	for _, key := range []string{"project_id", "project_key", "team_id", "repo"} {
-		if value, present := unit.IntegrationConfig[key]; present && value != nil {
-			if text, isText := value.(string); !isText || strings.TrimSpace(text) != "" {
-				return false
-			}
+		value := unit.IntegrationConfig[key]
+		if !pythonTruthy(value) {
+			continue
 		}
+		if text, isText := value.(string); isText && strings.TrimSpace(text) == "" {
+			continue
+		}
+		return false
 	}
 	return true
 }

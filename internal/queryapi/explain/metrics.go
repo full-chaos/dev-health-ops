@@ -67,7 +67,11 @@ func sourceColumns(table, column string) []string {
 // over the days that have a stored revert rate. A day without one is unknown
 // and adds nothing: the deprecated change_failure_rate column is never read
 // for it, because its 0 was not measured.
-func aggregateSQL(aggregator, column string) (value, known string) {
+func aggregateSQL(aggregator, column, shareSQL string) (value, known string) {
+	if aggregator == "sum" && shareSQL != "" {
+		// A team scope sums each repository at the share of it the team holds (teamscope.RepoShare, CHAOS-9413).
+		return fmt.Sprintf("toFloat64(sum(%s * %s))", column, shareSQL), fmt.Sprintf("count(%s)", column)
+	}
 	switch aggregator {
 	case "ratio":
 		return changefailure.WindowRateSQL, "toUInt64(0)"
@@ -164,7 +168,7 @@ func liveRowHaving(table string) string {
 // two-layer None-then-NaN/Inf handling (fetch_metric_value's inner
 // `float(value or 0.0)`, then build_explain_response's own outer
 // safe_float call).
-func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) (float64, bool, error) {
+func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string) (float64, bool, error) {
 	if reader == nil || reader.client == nil {
 		return 0, false, ErrUnavailable
 	}
@@ -183,7 +187,7 @@ func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggre
 	// change_failure_rate) already return Float64/Float32 on their own,
 	// so this cast is a no-op for them -- never a value change, only a
 	// static, driver-safe destination type.
-	valueSQL, knownSQL := aggregateSQL(aggregator, column)
+	valueSQL, knownSQL := aggregateSQL(aggregator, column, shareSQL)
 	query := fmt.Sprintf(`
 SELECT
     %s AS value,
@@ -286,7 +290,7 @@ type metricRow struct {
 // metric's ranking there silently averages a quantity its own headline
 // and label present as a total. This is a declared, required divergence,
 // not a data-semantics choice.
-func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]metricRow, error) {
+func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string) ([]metricRow, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
 	}
@@ -297,7 +301,7 @@ func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column
 	// fetchMetricValue's own doc comment -- a sum-aggregated integer
 	// column returns UInt64, which this binary's native driver refuses to
 	// scan into a *float64 destination.
-	valueSQL, _ := aggregateSQL(aggregator, column)
+	valueSQL, _ := aggregateSQL(aggregator, column, shareSQL)
 	query := fmt.Sprintf(`
 SELECT
     toString(%s) AS id,
@@ -351,7 +355,7 @@ LIMIT {limit:UInt64}
 // in would change which branch the CASE takes for a NULL current/previous
 // pairing (see this package's own PR RISK-NOTES for the worked example
 // this avoids).
-func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]metricRow, error) {
+func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string) ([]metricRow, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
 	}
@@ -359,7 +363,7 @@ func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column,
 
 	currentFrom := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
 	previousFrom := metricFromClause(table, column, scopeFilterSQL, "compare_start", "compare_end")
-	valueSQL, _ := aggregateSQL(aggregator, column)
+	valueSQL, _ := aggregateSQL(aggregator, column, shareSQL)
 	// current/previous were a `WITH current AS (...), previous AS (...)`
 	// CTE pair until this fix: dev-health-go's client-side read-only
 	// guard (clickhouse/client.go's validateReadOnlyStatement) requires a

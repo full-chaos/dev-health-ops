@@ -23,11 +23,41 @@
     "python_result": "[]",
     "python_requests": "[[https://ghe.test/api/v3/installation/repositories?per_page=100# token tok]]"
   },
+  "installation base=\"https://ghe.test/api/v3;access_token=plantedbasepathmarker8034\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #e0511fddf983": {
+    "result": "\"NotFoundException: github resource not found on repo:GET /installation/repositories: https://ghe.test/api/v3;access_token=[REDACTED]/installation/repositories?per_page=100\"",
+    "requests": "[[https://ghe.test/api/v3;access_token=plantedbasepathmarker8034/installation/repositories?per_page=100 token tok]]",
+    "python_result": "\"NotFoundException: github resource not found on repo:GET /installation/repositories: https://ghe.test/api/v3;access_token=plantedbasepathmarker8034/installation/repositories?per_page=100\"",
+    "python_requests": "[[https://ghe.test/api/v3;access_token=plantedbasepathmarker8034/installation/repositories?per_page=100 token tok]]"
+  },
   "installation base=\"https://ghe.test/api/v3?#\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #c9890e42b3ba": {
     "result": "[]",
     "requests": "[[https://ghe.test/api/v3?per_page=100 token tok]]",
     "python_result": "[]",
     "python_requests": "[[https://ghe.test/api/v3?per_page=100# token tok]]"
+  },
+  "installation base=\"https://ghe.test/plantedbasepathmarker8034-secret/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #06742b536d1f": {
+    "result": "\"NotFoundException: github resource not found on repo:GET /installation/repositories: https://ghe.test/[REDACTED]/api/v3/installation/repositories?per_page=100\"",
+    "requests": "[[https://ghe.test/plantedbasepathmarker8034-secret/api/v3/installation/repositories?per_page=100 token tok]]",
+    "python_result": "\"NotFoundException: github resource not found on repo:GET /installation/repositories: https://ghe.test/plantedbasepathmarker8034-secret/api/v3/installation/repositories?per_page=100\"",
+    "python_requests": "[[https://ghe.test/plantedbasepathmarker8034-secret/api/v3/installation/repositories?per_page=100 token tok]]"
+  },
+  "installation base=\"https://ghe.test/token%2Fplantedbasepathmarker8034/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #d5dbe2222d16": {
+    "result": "\"NotFoundException: github resource not found on repo:GET /installation/repositories: https://ghe.test/[REDACTED]/api/v3/installation/repositories?per_page=100\"",
+    "requests": "[[https://ghe.test/token%2Fplantedbasepathmarker8034/api/v3/installation/repositories?per_page=100 token tok]]",
+    "python_result": "\"NotFoundException: github resource not found on repo:GET /installation/repositories: https://ghe.test/token%2Fplantedbasepathmarker8034/api/v3/installation/repositories?per_page=100\"",
+    "python_requests": "[[https://ghe.test/token%2Fplantedbasepathmarker8034/api/v3/installation/repositories?per_page=100 token tok]]"
+  },
+  "installation base=\"https://ghe.test/token-plantedbasepathmarker8034/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #cd68d95ecaf0": {
+    "result": "\"NotFoundException: github resource not found on repo:GET /installation/repositories: https://ghe.test/[REDACTED]/api/v3/installation/repositories?per_page=100\"",
+    "requests": "[[https://ghe.test/token-plantedbasepathmarker8034/api/v3/installation/repositories?per_page=100 token tok]]",
+    "python_result": "\"NotFoundException: github resource not found on repo:GET /installation/repositories: https://ghe.test/token-plantedbasepathmarker8034/api/v3/installation/repositories?per_page=100\"",
+    "python_requests": "[[https://ghe.test/token-plantedbasepathmarker8034/api/v3/installation/repositories?per_page=100 token tok]]"
+  },
+  "installation base=\"https://ghe.test/token/plantedbasepathmarker8034/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #a1d5efaf83ac": {
+    "result": "\"NotFoundException: github resource not found on repo:GET /installation/repositories: https://ghe.test/token/[REDACTED]/api/v3/installation/repositories?per_page=100\"",
+    "requests": "[[https://ghe.test/token/plantedbasepathmarker8034/api/v3/installation/repositories?per_page=100 token tok]]",
+    "python_result": "\"NotFoundException: github resource not found on repo:GET /installation/repositories: https://ghe.test/token/plantedbasepathmarker8034/api/v3/installation/repositories?per_page=100\"",
+    "python_requests": "[[https://ghe.test/token/plantedbasepathmarker8034/api/v3/installation/repositories?per_page=100 token tok]]"
   },
   "installation base=\"https://ghé.test/api/v3\" org=\"\" search=\"\" pattern=\"\" max=\u003cnone\u003e #02988d83a306": {
     "result": "[]",
@@ -365,6 +395,12 @@
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "python_requests": "[[https://ghe.test/api/v3/orgs/acme/repos?per_page=100# token tok] [https://ghe.test/api/v3/orgs/acme/repos?page=2# token tok]]"
   },
+  "repos base=\"https://ghe.test/api/v3;access_token=plantedbasepathmarker8034\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #bed0c326e279": {
+    "result": "\"NotFoundException: github resource not found on repo:GET /orgs/acme/repos: https://ghe.test/api/v3;access_token=[REDACTED]/orgs/acme/repos?per_page=100\"",
+    "requests": "[[https://ghe.test/api/v3;access_token=plantedbasepathmarker8034/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "\"NotFoundException: github resource not found on repo:GET /orgs/acme/repos: https://ghe.test/api/v3;access_token=plantedbasepathmarker8034/orgs/acme/repos?per_page=100\"",
+    "python_requests": "[[https://ghe.test/api/v3;access_token=plantedbasepathmarker8034/orgs/acme/repos?per_page=100 token tok]]"
+  },
   "repos base=\"https://ghe.test/api/v3?#\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #1ea853cac79a": {
     "result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"],[\"docs\",\"Org/docs\",\"about docs\",\"https://github.example.test/Org/docs\"]]",
     "requests": "[[https://ghe.test/api/v3?per_page=100 token tok] [https://ghe.test/api/v3?/orgs/acme/repos?page=2 token tok]]",
@@ -376,6 +412,30 @@
     "requests": "[[https://ghe.test/api/v3?per_page=100 token tok]]",
     "python_result": "[[\"api\",\"Org/api\",\"about api\",\"https://github.example.test/Org/api\"],[\"web\",\"Org/web\",\"about web\",\"https://github.example.test/Org/web\"]]",
     "python_requests": "[[https://ghe.test/api/v3?per_page=100# token tok]]"
+  },
+  "repos base=\"https://ghe.test/plantedbasepathmarker8034-secret/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #a8420b9abd09": {
+    "result": "\"NotFoundException: github resource not found on repo:GET /orgs/acme/repos: https://ghe.test/[REDACTED]/api/v3/orgs/acme/repos?per_page=100\"",
+    "requests": "[[https://ghe.test/plantedbasepathmarker8034-secret/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "\"NotFoundException: github resource not found on repo:GET /orgs/acme/repos: https://ghe.test/plantedbasepathmarker8034-secret/api/v3/orgs/acme/repos?per_page=100\"",
+    "python_requests": "[[https://ghe.test/plantedbasepathmarker8034-secret/api/v3/orgs/acme/repos?per_page=100 token tok]]"
+  },
+  "repos base=\"https://ghe.test/token%2Fplantedbasepathmarker8034/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #ee3645220f38": {
+    "result": "\"NotFoundException: github resource not found on repo:GET /orgs/acme/repos: https://ghe.test/[REDACTED]/api/v3/orgs/acme/repos?per_page=100\"",
+    "requests": "[[https://ghe.test/token%2Fplantedbasepathmarker8034/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "\"NotFoundException: github resource not found on repo:GET /orgs/acme/repos: https://ghe.test/token%2Fplantedbasepathmarker8034/api/v3/orgs/acme/repos?per_page=100\"",
+    "python_requests": "[[https://ghe.test/token%2Fplantedbasepathmarker8034/api/v3/orgs/acme/repos?per_page=100 token tok]]"
+  },
+  "repos base=\"https://ghe.test/token-plantedbasepathmarker8034/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #aea8def9c757": {
+    "result": "\"NotFoundException: github resource not found on repo:GET /orgs/acme/repos: https://ghe.test/[REDACTED]/api/v3/orgs/acme/repos?per_page=100\"",
+    "requests": "[[https://ghe.test/token-plantedbasepathmarker8034/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "\"NotFoundException: github resource not found on repo:GET /orgs/acme/repos: https://ghe.test/token-plantedbasepathmarker8034/api/v3/orgs/acme/repos?per_page=100\"",
+    "python_requests": "[[https://ghe.test/token-plantedbasepathmarker8034/api/v3/orgs/acme/repos?per_page=100 token tok]]"
+  },
+  "repos base=\"https://ghe.test/token/plantedbasepathmarker8034/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #e74605547878": {
+    "result": "\"NotFoundException: github resource not found on repo:GET /orgs/acme/repos: https://ghe.test/token/[REDACTED]/api/v3/orgs/acme/repos?per_page=100\"",
+    "requests": "[[https://ghe.test/token/plantedbasepathmarker8034/api/v3/orgs/acme/repos?per_page=100 token tok]]",
+    "python_result": "\"NotFoundException: github resource not found on repo:GET /orgs/acme/repos: https://ghe.test/token/plantedbasepathmarker8034/api/v3/orgs/acme/repos?per_page=100\"",
+    "python_requests": "[[https://ghe.test/token/plantedbasepathmarker8034/api/v3/orgs/acme/repos?per_page=100 token tok]]"
   },
   "repos base=\"https://ghe.test:8443/api/v3\" org=\"acme\" search=\"\" pattern=\"\" max=\u003cnone\u003e #30a8bafe7492": {
     "result": "\"link_cross_origin_refused: refused a next page link on another origin\"",

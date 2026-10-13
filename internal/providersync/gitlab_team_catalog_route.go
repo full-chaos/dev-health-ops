@@ -757,8 +757,9 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			result.DegradedLegs = append(result.DegradedLegs, SnapshotAbsenceLegs(plan)...)
 			slog.Default().InfoContext(ctx, "gitlab_team_catalog_ownership_snapshot",
 				"org_id", ref.OrgID, "teams_listed", len(batch.Rows.OwnershipListedTeamIDs), "teams_dropped_gone", len(decision.gone),
-				"teams_closable", len(decision.closable), "grants_written", len(batch.Rows.Ownership), "rows_closed", closed)
+				"teams_closable", len(decision.closable), "grants_written", len(batch.Rows.Ownership), "grants_unchanged", plan.UnchangedCount(), "rows_closed", closed)
 			result.OwnershipWritten = batch.Result.TeamProjectOwnershipImported
+			result.OwnershipUnchanged = plan.UnchangedCount()
 		}
 		if batch.Effects.Projects != nil {
 			if err := collector.Sink.WriteEffect(ctx, writeClaim, *batch.Effects.Projects); err != nil {

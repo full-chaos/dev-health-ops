@@ -80,7 +80,7 @@ func liveRowHaving(table string) string {
 
 // metricValueExpression ports _metric_value_expression (api/queries/
 // metrics.py:201-204).
-func metricValueExpression(table, column, aggregator string) string {
+func metricValueExpression(table, column, aggregator, shareSQL string) string {
 	// Every expression is wrapped in toFloat64(...): sum()/count() over an
 	// integer-typed ClickHouse column (UInt32/UInt64 -- every column this
 	// package's metric specs sum is one) returns UInt64, which the driver
@@ -98,6 +98,10 @@ func metricValueExpression(table, column, aggregator string) string {
 		// NULL when the window is not applicable (no deployment) or unknown
 		// (no incident evidence): missing is not healthy.
 		return changefailure.WindowRateSQL
+	}
+	if aggregator == "sum" && shareSQL != "" {
+		// A team scope sums each repository at the share of it the team holds (teamscope.RepoShare, CHAOS-9413).
+		return fmt.Sprintf("toFloat64(sum(%s * %s))", column, shareSQL)
 	}
 	return fmt.Sprintf("toFloat64(%s(%s))", aggregator, column)
 }
@@ -117,8 +121,8 @@ type metricValue struct {
 
 // fetchMetricSeries ports fetch_metric_series (api/queries/metrics.py:
 // 107-152).
-func fetchMetricSeries(ctx context.Context, client QueryClient, table, column string, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, aggregator, orgID string) ([]dayValueRow, error) {
-	valueExpr := metricValueExpression(table, column, aggregator)
+func fetchMetricSeries(ctx context.Context, client QueryClient, table, column string, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, aggregator, orgID, shareSQL string) ([]dayValueRow, error) {
+	valueExpr := metricValueExpression(table, column, aggregator, shareSQL)
 	var query string
 	if _, dedup := dedupByComputedAt[table]; dedup {
 		fromClause := metricFromClause(table, column, scopeFilter, "start_day", "end_day")
@@ -177,8 +181,8 @@ func fetchMetricSeries(ctx context.Context, client QueryClient, table, column st
 
 // fetchMetricValue ports fetch_metric_value (api/queries/metrics.py:
 // 155-198).
-func fetchMetricValue(ctx context.Context, client QueryClient, table, column string, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, aggregator, orgID string) (metricValue, error) {
-	valueExpr := metricValueExpression(table, column, aggregator)
+func fetchMetricValue(ctx context.Context, client QueryClient, table, column string, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, aggregator, orgID, shareSQL string) (metricValue, error) {
+	valueExpr := metricValueExpression(table, column, aggregator, shareSQL)
 	var query string
 	if _, dedup := dedupByComputedAt[table]; dedup {
 		fromClause := metricFromClause(table, column, scopeFilter, "start_day", "end_day")

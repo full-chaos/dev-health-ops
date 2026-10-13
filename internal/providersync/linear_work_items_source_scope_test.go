@@ -153,6 +153,7 @@ func TestLinearOrgWidePlaceholderIsNotAnyProviderNamedSource(t *testing.T) {
 		"not planner managed": {map[string]any{}, map[string]any{}},
 		"explicit team":       {map[string]any{"planner_managed_sync_config_id": "cfg-1"}, map[string]any{"team_id": "ENG"}},
 		"explicit repo":       {map[string]any{"planner_managed_sync_config_id": "cfg-1"}, map[string]any{"repo": "MOB"}},
+		"explicit number":     {map[string]any{"planner_managed_sync_config_id": "cfg-1"}, map[string]any{"team_id": float64(7)}},
 		"marker not true":     {map[string]any{"org_wide_placeholder": "true"}, map[string]any{}},
 	}
 	for name, tc := range cases {

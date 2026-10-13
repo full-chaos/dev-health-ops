@@ -443,7 +443,9 @@ func TestOwnerSharesReadsTheOneOwnershipPredicate(t *testing.T) {
 		"FROM team_repo_ownership AS o FINAL",
 		"AND (o.repo_id IS NOT NULL OR r.matched = 1)",
 		"AND (o.valid_to IS NULL OR o.valid_to > {" + OwnerSharesBindingAsOf + ":DateTime64(3, 'UTC')})",
-		"1.0 / count() OVER (PARTITION BY owned.owner_repo_id) AS owner_share",
+		"max(o.share) AS stored_share",
+		"owned.stored_share / sum(owned.stored_share) OVER (PARTITION BY owned.owner_repo_id)",
+		"1.0 / count() OVER (PARTITION BY owned.owner_repo_id)",
 	} {
 		if !strings.Contains(all, line) {
 			t.Errorf("OwnerShares lacks %q", line)

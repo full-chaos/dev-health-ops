@@ -16,7 +16,8 @@ import (
 // row names its owning teams.
 //
 //   - A repository with no owner is "unassigned" (true data, not a failure to attribute).
-//   - A repository owned by several teams is shared equally among them (teamscope.OwnerShares): the effort of the
+//   - A repository owned by several teams is shared among them by linked share, the main owner by its share and each
+//     lesser owner by its own lesser share, never equally (teamscope.OwnerShares; D5988): the effort of the
 //     unit is counted once across the TEAM groups, so every other dimension keeps its totals. Under a team scope the
 //     owners are narrowed to the teams in view, so one selected team holds its repositories whole.
 const ownershipShareExpr = "if(ut.owner_matched = 1, ut.owner_share, 1.0)"

@@ -411,7 +411,14 @@ Two rules hold for every read of the tree:
    `work_graph_issue_pr`. Each row carries a `provenance` tier, ranked
    **native > explicit_text > heuristic**. All three tiers count as links.
    A consumer names the tier it read and never presents a lower tier as
-   native. An issue-key prefix by itself, an unresolved external key, an
+   native. The `explicit_text` tier is provider-agnostic: a pull request's
+   title, body or head branch that names an issue resolves to a link only
+   against an actual issue row of the org, through one shared matcher with a
+   key grammar per provider family (Jira and Linear `KEY-n`; GitHub `#n` and
+   `owner/repo#n`; GitLab `#n` and `group/project#n`; a GitLab `!n` is a merge
+   request and never matches). A `KEY-n` that matches issue rows of more than
+   one provider in the org is ambiguous and gives no link (a key string is not
+   a link across providers; CHAOS-9457). An issue-key prefix by itself, an unresolved external key, an
    issue's own repository column, or a team's repositories is never the
    relation.
 2. A team is reached through ownership only (`team_repo_ownership`,

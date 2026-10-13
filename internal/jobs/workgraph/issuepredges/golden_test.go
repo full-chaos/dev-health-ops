@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,14 +52,36 @@ func TestDeriveFastPathAndTextParseEdgesMatchFrozenPythonGolden(t *testing.T) {
 	prs := golden.pullRequests(t)
 	workItems := golden.workItems(t)
 	result := issuepredges.DeriveTextParseEdges(prs, workItems, golden.frozenNow(t))
-	assertEdgesMatch(t, "text-parse", result.Edges, golden.wantEdges(t, golden.TextParseEdges))
+	// CHAOS-9457 DELIBERATE DIVERGENCE FROM PYTHON: Python never text-matched a
+	// Linear key; the Go tier does. The frozen golden stays untouched, so the
+	// Linear rows are split off, asserted on their own, and the remainder must
+	// still match Python row for row.
+	var nonLinearEdges []edges.Row
+	linearEdges := 0
+	for _, edge := range result.Edges {
+		if strings.HasPrefix(edge.TargetID, "linear:") {
+			linearEdges++
+			continue
+		}
+		nonLinearEdges = append(nonLinearEdges, edge)
+	}
+	if linearEdges != 1 {
+		t.Fatalf("linear text edges = %d, want exactly 1 (the golden's LINEAR-999 PR)", linearEdges)
+	}
+	assertEdgesMatch(t, "text-parse", nonLinearEdges, golden.wantEdges(t, golden.TextParseEdges))
 
 	wantLinks := golden.wantLinks(t)
-	if len(result.Links) != len(wantLinks) {
-		t.Fatalf("text-parse returned %d links, golden has %d:\n got=%+v\nwant=%+v",
-			len(result.Links), len(wantLinks), result.Links, wantLinks)
+	var nonLinearLinks []issueprlinks.Link
+	for _, link := range result.Links {
+		if !strings.HasPrefix(link.WorkItemID, "linear:") {
+			nonLinearLinks = append(nonLinearLinks, link)
+		}
 	}
-	for index, got := range result.Links {
+	if len(nonLinearLinks) != len(wantLinks) {
+		t.Fatalf("text-parse returned %d links, golden has %d:\n got=%+v\nwant=%+v",
+			len(nonLinearLinks), len(wantLinks), nonLinearLinks, wantLinks)
+	}
+	for index, got := range nonLinearLinks {
 		want := wantLinks[index]
 		if got.RepoID != want.RepoID || got.WorkItemID != want.WorkItemID || got.PRNumber != want.PRNumber ||
 			got.Confidence != want.Confidence || got.Provenance != want.Provenance || got.Evidence != want.Evidence {

@@ -93,6 +93,8 @@ type linearIssue struct {
 	Relations []string
 	// Labels are the issue's label names.
 	Labels []string
+	// Description is the issue's description ("" = none).
+	Description string
 }
 
 func (issue linearIssue) payload() map[string]any {
@@ -133,7 +135,7 @@ func (issue linearIssue) payload() map[string]any {
 			"fromProjectId": nil, "toProjectId": nil, "actor": map[string]any{"name": issue.Assignee.Name, "email": issue.Assignee.Email}})
 	}
 	return map[string]any{
-		"id": issue.ID, "identifier": issue.Identifier, "title": issue.Title, "description": nil, "priority": 2, "estimate": nil,
+		"id": issue.ID, "identifier": issue.Identifier, "title": issue.Title, "description": nullable(issue.Description), "priority": 2, "estimate": nil,
 		"createdAt": issue.CreatedAt, "updatedAt": issue.UpdatedAt, "startedAt": nullable(issue.StartedAt), "completedAt": nullable(issue.CompletedAt),
 		"canceledAt": nil, "dueDate": nil, "url": "https://linear.app/chaos-fx/issue/" + strings.ToLower(issue.Identifier), "archivedAt": nil,
 		"state":    state,

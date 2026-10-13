@@ -174,6 +174,9 @@ type jiraIssue struct {
 	PullRequests []string
 	// Blocks are the keys of the issues this issue blocks (Jira's "Blocks" link, outward).
 	Blocks []string
+	// Description is the issue's description, sent as Jira Cloud v3 sends it: an Atlassian Document
+	// Format document ("" = no description field).
+	Description string
 }
 
 func (issue jiraIssue) issueLinks() []any {
@@ -208,7 +211,7 @@ func (issue jiraIssue) payload() map[string]any {
 	if issue.Resolved != "" {
 		resolved = jiraTime(issue.Resolved)
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"id": issue.ID, "key": issue.Key, "self": "https://" + jiraHost + "/rest/api/3/issue/" + issue.ID,
 		"fields": map[string]any{
 			"summary": issue.Summary, "issuetype": map[string]any{"name": issue.Type, "subtask": false},
@@ -220,6 +223,12 @@ func (issue jiraIssue) payload() map[string]any {
 			"issuelinks": issue.issueLinks(), "subtasks": []any{}, "components": []any{}, "fixVersions": []any{},
 		},
 	}
+	if issue.Description != "" {
+		payload["fields"].(map[string]any)["description"] = map[string]any{"type": "doc", "version": 1, "content": []any{
+			map[string]any{"type": "paragraph", "content": []any{map[string]any{"type": "text", "text": issue.Description}}},
+		}}
+	}
+	return payload
 }
 
 func (issue jiraIssue) changelog() map[string]any {

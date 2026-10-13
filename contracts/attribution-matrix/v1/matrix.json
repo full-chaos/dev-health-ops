@@ -73,6 +73,13 @@
     },
     {
       "provider": "github",
+      "entity": "pull_requests",
+      "check": "pull_request_inherits_only_from_a_linked_issue",
+      "state": "known_red",
+      "ticket": "CHAOS-9460"
+    },
+    {
+      "provider": "github",
       "entity": "issues",
       "check": "issue_reaches_a_repository_only_through_its_links",
       "state": "pass"
@@ -175,6 +182,12 @@
     },
     {
       "provider": "gitlab",
+      "entity": "pull_requests",
+      "check": "pull_request_inherits_only_from_a_linked_issue",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
       "entity": "issues",
       "check": "issue_reaches_a_repository_only_through_its_links",
       "state": "pass"
@@ -265,6 +278,12 @@
       "provider": "jira",
       "entity": "pull_requests",
       "check": "pull_request_team_is_not_a_membership",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "pull_requests",
+      "check": "pull_request_inherits_only_from_a_linked_issue",
       "state": "pass"
     },
     {
@@ -365,6 +384,12 @@
       "provider": "linear",
       "entity": "pull_requests",
       "check": "pull_request_team_is_not_a_membership",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "pull_requests",
+      "check": "pull_request_inherits_only_from_a_linked_issue",
       "state": "pass"
     },
     {

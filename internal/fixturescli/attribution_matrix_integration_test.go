@@ -368,6 +368,71 @@ func (facts matrixFacts) primary(itemID string) (attributionRow, bool) {
 	return attributionRow{}, false
 }
 
+// ownPrimary is an item's primary row when the item holds its team on its own (not inherited by a link):
+// what a donor gives.
+func (facts matrixFacts) ownPrimary(itemID string) (attributionRow, bool) {
+	row, ok := facts.primary(itemID)
+	if !ok || row.Source == "linked_issue" {
+		return attributionRow{}, false
+	}
+	return row, true
+}
+
+// donorRelationships are the dependency types a pull request inherits an issue's team through
+// (team-attribution.md §0: PR/MR attribution comes from an actual linked issue row). The list is the
+// contract's, written here, not read from the cascade.
+var donorRelationships = map[string]bool{"relates_to": true, "relates": true, "duplicates": true, "external_issue_key": true}
+
+// itemByKey is the one Jira or Linear item of an issue key, or "" when none or several hold it.
+func (facts matrixFacts) itemByKey(key string) string {
+	found := ""
+	for id, item := range facts.items {
+		_, suffix, ok := strings.Cut(id, ":")
+		if !ok || (item.Provider != "jira" && item.Provider != "linear") || !strings.EqualFold(strings.TrimSpace(suffix), strings.TrimSpace(key)) {
+			continue
+		}
+		if found != "" {
+			return ""
+		}
+		found = id
+	}
+	return found
+}
+
+// linkedDonors are the issues a pull request is actually linked to: the targets of its recorded
+// relations (an extkey relation resolves only to the one existing item of that key, never to a key
+// prefix) and the issues of its links of record (work_graph_issue_pr, any tier). A pull request is no
+// donor.
+func (facts matrixFacts) linkedDonors(prID string) map[string]bool {
+	donors := map[string]bool{}
+	add := func(id string) {
+		if item, ok := facts.items[id]; ok && !isPullRequestItem(item) {
+			donors[id] = true
+		}
+	}
+	for _, dep := range facts.deps[prID] {
+		target, relationship, _ := strings.Cut(dep, "|")
+		if !donorRelationships[relationship] {
+			continue
+		}
+		if key, ok := strings.CutPrefix(target, "extkey:"); ok {
+			if id := facts.itemByKey(key); id != "" {
+				add(id)
+			}
+			continue
+		}
+		add(target)
+	}
+	pr := facts.items[prID]
+	number := prID[strings.LastIndexAny(prID, "#!")+1:]
+	for _, link := range facts.links {
+		if link.RepoID == pr.RepoID && fmt.Sprint(link.PRNumber) == number {
+			add(link.WorkItemID)
+		}
+	}
+	return donors
+}
+
 // subjectProvider is the provider a check of an item counts under: a pull request's own provider; an
 // issue's provider.
 func isPullRequestItem(item matrixItem) bool {
@@ -730,6 +795,48 @@ var matrixChecks = map[string]matrixCheck{
 		}
 		return r
 	}},
+	"pull_request_inherits_only_from_a_linked_issue": {"pull_requests", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
+		// A pull request's linked_issue row names the team of an issue it is actually linked to, that
+		// issue holding the team on its own. A pull request counts under its own provider and under the
+		// provider of each issue it is linked to.
+		for id, item := range f.items {
+			if !isPullRequestItem(item) {
+				continue
+			}
+			donors := f.linkedDonors(id)
+			counts := item.Provider == p
+			for donor := range donors {
+				counts = counts || f.items[donor].Provider == p
+			}
+			if !counts {
+				continue
+			}
+			for _, row := range f.attribution[id] {
+				if row.Source != "linked_issue" {
+					continue
+				}
+				r.Subjects++
+				given := false
+				for donor := range donors {
+					if own, ok := f.ownPrimary(donor); ok && own.TeamID == row.TeamID {
+						given = true
+					}
+				}
+				if !given {
+					var gave []string
+					for _, donor := range sortedTeamSet(donors) {
+						own, ok := f.primary(donor)
+						if !ok {
+							own.TeamID, own.Source = "-", "no row"
+						}
+						gave = append(gave, donor+"="+own.TeamID+" ("+own.Source+")")
+					}
+					r.Violations = append(r.Violations, fmt.Sprintf("%s -> %s by linked_issue; linked issues %v", id, row.TeamID, gave))
+				}
+			}
+		}
+		return r
+	}},
 	"pull_request_team_is_not_a_membership": {"pull_requests", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
 		linkedProvider := map[string]bool{}
 		for _, link := range f.links {
@@ -988,19 +1095,7 @@ func TestCrossProviderAttributionMatrix(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
-	conn, orgs, now := openMatrixClickHouse(ctx, t)
-	today := now.Truncate(24 * time.Hour)
-	facts := map[string]matrixFacts{}
-	readers := map[string]ownerReaders{}
-	for provider, org := range orgs {
-		var first time.Time
-		matrixQuery(ctx, t, conn, `SELECT min(created_at) FROM work_items WHERE org_id = ?`, []any{org}, func(rows driver.Rows) error {
-			return rows.Scan(&first)
-		})
-		runAttributionVerbs(ctx, t, conn, org, first.UTC().Truncate(24*time.Hour), today)
-		facts[provider] = loadMatrixFacts(ctx, t, conn, org, now)
-		readers[provider] = productionReaders(ctx, conn, org)
-	}
+	conn, orgs, facts, readers := producedMatrixState(ctx, t)
 	for _, cell := range contract.Cells {
 		name := cell.Provider + "/" + cell.Entity + "/" + cell.Check
 		t.Run(name, func(t *testing.T) {
@@ -1029,6 +1124,35 @@ func TestCrossProviderAttributionMatrix(t *testing.T) {
 			}
 		})
 	}
+	// The acceptance gate judges the same produced state the cells judge.
+	t.Run("rediscovers_known_defects", func(t *testing.T) {
+		rediscoverKnownDefects(ctx, t, conn, orgs, facts, readers)
+	})
+}
+
+// producedMatrixState is the state every cell and the acceptance gate judge: a fresh ClickHouse at the
+// migration head with the provider worlds loaded, the production attribution verbs run over each
+// organization, and the facts and the shared readers of each. An organization the verbs gave no
+// attribution row fails here: no cell may judge a state the verbs never reached.
+func producedMatrixState(ctx context.Context, t *testing.T) (driver.Conn, map[string]string, map[string]matrixFacts, map[string]ownerReaders) {
+	t.Helper()
+	conn, orgs, now := openMatrixClickHouse(ctx, t)
+	today := now.Truncate(24 * time.Hour)
+	facts := map[string]matrixFacts{}
+	readers := map[string]ownerReaders{}
+	for provider, org := range orgs {
+		var first time.Time
+		matrixQuery(ctx, t, conn, `SELECT min(created_at) FROM work_items WHERE org_id = ?`, []any{org}, func(rows driver.Rows) error {
+			return rows.Scan(&first)
+		})
+		runAttributionVerbs(ctx, t, conn, org, first.UTC().Truncate(24*time.Hour), today)
+		facts[provider] = loadMatrixFacts(ctx, t, conn, org, now)
+		if len(facts[provider].attribution) == 0 {
+			t.Fatalf("%s: the production verbs wrote no work_item_team_attributions row", provider)
+		}
+		readers[provider] = productionReaders(ctx, conn, org)
+	}
+	return conn, orgs, facts, readers
 }
 
 // ---- the acceptance gate: known defects the matrix must rediscover ----
@@ -1082,20 +1206,12 @@ func (facts matrixFacts) prAuthor(workItemID string) string {
 	return facts.authors[workItemID]
 }
 
-// TestCrossProviderAttributionMatrixRediscoversKnownDefects plants each known defect the matrix exists to
-// catch and requires the cell that judges it to turn red on the planted state, and to be green (or red
-// for the reason it is known red) on the state as the producers wrote it. A check that cannot turn red
+// rediscoverKnownDefects (TestCrossProviderAttributionMatrix/rediscovers_known_defects) is the acceptance
+// gate: it plants each known defect the matrix exists to catch into the state the production verbs
+// wrote, and requires the cell that judges it to turn red on the planted state, and to be green (or red
+// for the reason it is known red) on the produced one. A check that cannot turn red
 // on its defect is no check.
-func TestCrossProviderAttributionMatrixRediscoversKnownDefects(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	conn, orgs, now := openMatrixClickHouse(ctx, t)
-	facts := map[string]matrixFacts{}
-	readers := map[string]ownerReaders{}
-	for provider, org := range orgs {
-		facts[provider] = loadMatrixFacts(ctx, t, conn, org, now)
-		readers[provider] = productionReaders(ctx, conn, org)
-	}
+func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn, orgs map[string]string, facts map[string]matrixFacts, readers map[string]ownerReaders) {
 	judge := func(provider, check string, f map[string]matrixFacts, r map[string]ownerReaders) checkResult {
 		t.Helper()
 		result, err := evaluateCell(matrixCell{Provider: provider, Entity: matrixChecks[check].Entity, Check: check}, f, r)
@@ -1181,6 +1297,67 @@ func TestCrossProviderAttributionMatrixRediscoversKnownDefects(t *testing.T) {
 		})
 		if result := judge("jira", "native_link_has_a_linked_row", planted, readers); len(result.Violations) == 0 {
 			t.Fatal("a native link made from an issue-key prefix is not found")
+		}
+	})
+
+	t.Run("pull request team inherited without a linked issue", func(t *testing.T) {
+		// A writer that gives a pull request a team by an issue-key prefix, with no linked issue row.
+		planted := withFacts("github", func(f *matrixFacts) {
+			ids := make([]string, 0, len(f.items))
+			for id := range f.items {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			for _, id := range ids {
+				if !isPullRequestItem(f.items[id]) || len(f.linkedDonors(id)) > 0 {
+					continue
+				}
+				attribution := map[string][]attributionRow{}
+				for key, rows := range f.attribution {
+					attribution[key] = rows
+				}
+				attribution[id] = append(append([]attributionRow{}, attribution[id]...), attributionRow{TeamID: "gh:payments", Source: "linked_issue", Evidence: "issue_key_prefix=PAY-2", IsPrimary: 1})
+				f.attribution = attribution
+				return
+			}
+			t.Fatal("the github world has no pull request without a linked issue")
+		})
+		if result := judge("github", "pull_request_inherits_only_from_a_linked_issue", planted, readers); len(result.Violations) == 0 {
+			t.Fatal("a pull request team inherited without a linked issue is not found")
+		}
+	})
+
+	t.Run("pull request team that is not its linked issue's", func(t *testing.T) {
+		// A writer that names a team other than the linked issue's own on a linked_issue row.
+		planted := withFacts("jira", func(f *matrixFacts) {
+			ids := make([]string, 0, len(f.attribution))
+			for id := range f.attribution {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			for _, id := range ids {
+				for index, row := range f.attribution[id] {
+					if row.Source != "linked_issue" {
+						continue
+					}
+					rows := append([]attributionRow{}, f.attribution[id]...)
+					rows[index].TeamID = "jira:not-the-donor"
+					attribution := map[string][]attributionRow{}
+					for key, value := range f.attribution {
+						attribution[key] = value
+					}
+					attribution[id] = rows
+					f.attribution = attribution
+					return
+				}
+			}
+			t.Fatal("the jira world has no linked_issue row to plant on")
+		})
+		if result := judge("jira", "pull_request_inherits_only_from_a_linked_issue", facts, readers); len(result.Violations) > 0 {
+			t.Fatalf("a linked_issue row without its donor before the plant: %v", result.Violations)
+		}
+		if result := judge("jira", "pull_request_inherits_only_from_a_linked_issue", planted, readers); len(result.Violations) == 0 {
+			t.Fatal("a linked_issue row naming another team than its linked issue's is not found")
 		}
 	})
 

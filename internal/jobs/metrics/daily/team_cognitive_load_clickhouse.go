@@ -225,7 +225,7 @@ func newTeamCognitiveLoadBucket() *teamCognitiveLoadBucket {
 func buildTeamCognitiveLoadRows(
 	organizationID string, day time.Time,
 	userRows []userMetricsCognitiveLoadInput, teamRows []teamMetricsCognitiveLoadInput,
-	repoToTeam map[string]string, computedAt time.Time,
+	repoToTeam map[string][]string, computedAt time.Time,
 ) []teamCognitiveLoadRow {
 	buckets := map[string]*teamCognitiveLoadBucket{}
 	bucket := func(teamID string) *teamCognitiveLoadBucket {
@@ -237,34 +237,37 @@ func buildTeamCognitiveLoadRows(
 		return existing
 	}
 
+	// A repo with several main owners (D5990) counts whole in each of them.
 	for _, row := range userRows {
 		repoIDStr := row.RepoID.String()
-		teamID, ok := repoToTeam[repoIDStr]
-		if !ok || teamID == "" {
-			continue
-		}
-		b := bucket(teamID)
-		b.prInterruptionLoad += row.PRInterruptionLoad
-		b.reviewRequestLoad += row.ReviewRequestLoad
-		b.repoIDs[repoIDStr] = struct{}{}
-		if row.AuthorEmail != "" {
-			b.authors[row.AuthorEmail] = struct{}{}
-			b.contextSpreadPairs[contextSpreadPair{authorEmail: row.AuthorEmail, repoID: repoIDStr}] = struct{}{}
+		for _, teamID := range repoToTeam[repoIDStr] {
+			if teamID == "" {
+				continue
+			}
+			b := bucket(teamID)
+			b.prInterruptionLoad += row.PRInterruptionLoad
+			b.reviewRequestLoad += row.ReviewRequestLoad
+			b.repoIDs[repoIDStr] = struct{}{}
+			if row.AuthorEmail != "" {
+				b.authors[row.AuthorEmail] = struct{}{}
+				b.contextSpreadPairs[contextSpreadPair{authorEmail: row.AuthorEmail, repoID: repoIDStr}] = struct{}{}
+			}
 		}
 	}
 
 	for _, row := range teamRows {
 		repoIDStr := row.RepoID.String()
-		teamID, ok := repoToTeam[repoIDStr]
-		if !ok || teamID == "" {
-			continue
+		for _, teamID := range repoToTeam[repoIDStr] {
+			if teamID == "" {
+				continue
+			}
+			b := bucket(teamID)
+			b.afterHoursCommitsCount += row.AfterHoursCommitsCount
+			b.weekendCommitsCount += row.WeekendCommitsCount
+			b.commitsCount += row.CommitsCount
+			b.hasTeamMetricsRow = true
+			b.repoIDs[repoIDStr] = struct{}{}
 		}
-		b := bucket(teamID)
-		b.afterHoursCommitsCount += row.AfterHoursCommitsCount
-		b.weekendCommitsCount += row.WeekendCommitsCount
-		b.commitsCount += row.CommitsCount
-		b.hasTeamMetricsRow = true
-		b.repoIDs[repoIDStr] = struct{}{}
 	}
 
 	teamIDs := make([]string, 0, len(buckets))

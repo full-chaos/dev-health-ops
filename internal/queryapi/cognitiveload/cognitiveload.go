@@ -774,6 +774,8 @@ type repoCandidate struct {
 type ownershipRow struct {
 	resolvedRepoID string
 	teamID         string
+	mainOwner      uint8
+	specificity    uint16
 }
 
 // patternTeam is one team's repo_patterns row, for the pattern-fallback
@@ -817,17 +819,31 @@ func resolveOwnedRepoID(ctx context.Context, client QueryClient, orgID, teamID, 
 	// iteration order (a Python dict preserves insertion order, so the
 	// later "return the first matching entry" loop walks resolved_repo_id
 	// ascending; `order` below reproduces that).
+	// Added to the reference: a repo whose first row is a main owner's
+	// (is_primary = 1) is also owned by every other main owner at that row's
+	// specificity (a full ownership tie, D5990, CHAOS-9459).
 	canonicalOwner := make(map[string]string, len(ownershipRows))
+	firstRow := make(map[string]ownershipRow, len(ownershipRows))
+	tiedMainOwners := map[string]map[string]bool{}
 	order := make([]string, 0, len(ownershipRows))
 	for _, row := range ownershipRows {
-		if _, seen := canonicalOwner[row.resolvedRepoID]; seen {
+		if first, seen := firstRow[row.resolvedRepoID]; seen {
+			// The ORDER BY puts main rows first, so a main row after the
+			// first row means the first row is a main owner's too.
+			if row.mainOwner == 1 && row.specificity == first.specificity {
+				if tiedMainOwners[row.resolvedRepoID] == nil {
+					tiedMainOwners[row.resolvedRepoID] = map[string]bool{}
+				}
+				tiedMainOwners[row.resolvedRepoID][row.teamID] = true
+			}
 			continue
 		}
+		firstRow[row.resolvedRepoID] = row
 		canonicalOwner[row.resolvedRepoID] = row.teamID
 		order = append(order, row.resolvedRepoID)
 	}
 	for _, resolvedRepoID := range order {
-		if canonicalOwner[resolvedRepoID] == teamID {
+		if canonicalOwner[resolvedRepoID] == teamID || tiedMainOwners[resolvedRepoID][teamID] {
 			return resolvedRepoID, true, nil
 		}
 	}
@@ -914,7 +930,9 @@ func fetchOwnershipCandidates(ctx context.Context, client QueryClient, orgID str
 	query := `
         SELECT
             coalesce(toString(o.repo_id), toString(r.id)) AS resolved_repo_id,
-            o.team_id AS team_id
+            o.team_id AS team_id,
+            toUInt8(o.is_primary = 1) AS main_owner,
+            o.specificity AS specificity
         FROM team_repo_ownership AS o FINAL
         LEFT JOIN (
             SELECT org_id, provider, id, repo, 1 AS matched
@@ -945,7 +963,7 @@ func fetchOwnershipCandidates(ctx context.Context, client QueryClient, orgID str
 	var result []ownershipRow
 	for rows.Next() {
 		var row ownershipRow
-		if scanErr := rows.Scan(&row.resolvedRepoID, &row.teamID); scanErr != nil {
+		if scanErr := rows.Scan(&row.resolvedRepoID, &row.teamID, &row.mainOwner, &row.specificity); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
 		}
 		result = append(result, row)

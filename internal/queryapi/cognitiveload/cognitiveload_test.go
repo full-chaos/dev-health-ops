@@ -41,6 +41,10 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			*ptr = row[i].(time.Time)
 		case *uint64:
 			*ptr = row[i].(uint64)
+		case *uint8:
+			*ptr = row[i].(uint8)
+		case *uint16:
+			*ptr = row[i].(uint16)
 		case *float64:
 			*ptr = row[i].(float64)
 		case **float64:
@@ -278,7 +282,7 @@ func TestResolve_TeamAndRepoCombined_OwnershipResolves(t *testing.T) {
 	client := &fakeClient{
 		responses: []*fakeRowScanner{
 			{rows: [][]any{{"repo-uuid-1", "org/repo-a"}}},                        // repo candidates
-			{rows: [][]any{{"repo-uuid-1", "team-a"}}},                            // ownership: native, owned by team-a
+			{rows: [][]any{{"repo-uuid-1", "team-a", uint8(1), uint16(150)}}},     // ownership: native, owned by team-a
 			{rows: [][]any{{day("2026-08-20"), uint64(4), uint64(2), uint64(1)}}}, // user metrics
 			{rows: nil}, // days whose every user key is a retraction row: none
 			{rows: [][]any{{day("2026-08-20"), 0.25, 0.0}}}, // repo-scoped team metrics
@@ -360,7 +364,7 @@ func TestResolve_TeamAndRepoCombined_OwnedByADifferentTeam_NeverPatternFallback_
 	client := &fakeClient{
 		responses: []*fakeRowScanner{
 			{rows: [][]any{{"repo-uuid-1", "org/repo-a"}}},
-			{rows: [][]any{{"repo-uuid-1", "team-b"}}}, // owned by team-b, not team-a
+			{rows: [][]any{{"repo-uuid-1", "team-b", uint8(1), uint16(150)}}}, // owned by team-b, not team-a
 		},
 		errs: []error{nil, nil},
 	}
@@ -417,9 +421,9 @@ func TestResolveOwnedRepoID_DedupesToFirstRowPerResolvedRepoAndRespectsOrder(t *
 		responses: []*fakeRowScanner{
 			{rows: [][]any{{"r1", "org/repo-a"}, {"r2", "org/repo-a"}}},
 			{rows: [][]any{
-				{"r1", "team-x"}, // r1's canonical (first-seen) owner: team-x
-				{"r1", "team-y"}, // a losing tie-break row for r1 -- must be ignored
-				{"r2", "team-a"}, // r2's canonical owner: team-a, the match
+				{"r1", "team-x", uint8(0), uint16(100)}, // r1's canonical (first-seen) owner: team-x
+				{"r1", "team-a", uint8(0), uint16(100)}, // a losing tie-break row for r1 -- must be ignored
+				{"r2", "team-a", uint8(1), uint16(150)}, // r2's canonical owner: team-a, the match
 			}},
 		},
 		errs: []error{nil, nil},
@@ -558,5 +562,34 @@ func TestFetchUserMetrics_ScanErrorPropagates(t *testing.T) {
 	_, err := fetchUserMetrics(context.Background(), client, "org-1", "2026-08-01", "2026-08-31", nil, nil)
 	if err == nil {
 		t.Fatal("expected scan error to propagate")
+	}
+}
+
+// A repo with several main owners at one rank (a full ownership tie, D5990):
+// every one of them owns it, not only the first row; a main owner at a lower
+// specificity does not.
+func TestResolveOwnedRepoIDTakesEveryMainOwnerOfATie(t *testing.T) {
+	for _, tc := range []struct {
+		team  string
+		found bool
+	}{{"team-x", true}, {"team-a", true}, {"team-lower", false}} {
+		client := &fakeClient{
+			responses: []*fakeRowScanner{
+				{rows: [][]any{{"r1", "org/repo-a"}}},
+				{rows: [][]any{
+					{"r1", "team-x", uint8(1), uint16(150)},
+					{"r1", "team-a", uint8(1), uint16(150)},
+					{"r1", "team-lower", uint8(1), uint16(100)},
+				}},
+			},
+			errs: []error{nil, nil},
+		}
+		id, found, err := resolveOwnedRepoID(context.Background(), client, "org-1", tc.team, "org/repo-a")
+		if err != nil {
+			t.Fatalf("%s: resolveOwnedRepoID: %v", tc.team, err)
+		}
+		if found != tc.found || (found && id != "r1") {
+			t.Errorf("%s: resolveOwnedRepoID = (%q, %v), want found %v", tc.team, id, found, tc.found)
+		}
 	}
 }

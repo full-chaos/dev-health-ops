@@ -18,8 +18,8 @@
 // this same order but keeps its own pattern engine rather than sharing this
 // package's: its resolver (aiimpact.RepoPatternResolver, adapted to
 // numerical.RepoTeamResolver via ResolveRepo) is asked only for a repo
-// teamownership.AuthoritativeOwnerByRepo leaves unresolved. Its executor
-// calls AuthoritativeOwnerByRepo and ResolveFromOwnershipMap directly rather
+// teamownership.AuthoritativeOwnersByRepo leaves unresolved. Its executor
+// calls AuthoritativeOwnersByRepo and ResolveFromOwnershipMap directly rather
 // than through ResolveOwnershipThenPatterns below, so it can log which of
 // the two paths resolved each repo.
 //
@@ -55,7 +55,7 @@ import (
 // than querying for it, which is what makes it possible to run this exact
 // logic against the REAL Python function in an oracle test with no
 // ClickHouse involved on either side — the ClickHouse read itself is a
-// separate, already-tested concern (teamownership.AuthoritativeOwnerByRepo
+// separate, already-tested concern (teamownership.AuthoritativeOwnersByRepo
 // on the Go side, load_team_repo_ownership_map on the Python side; both
 // documented as mirroring the same hardened, ranked query).
 //
@@ -64,11 +64,14 @@ import (
 // below); the pattern resolver is the fallback, for a repo ownershipMap
 // leaves unresolved AND that is still present in repoNamesByID. A repo
 // repoNamesByID does not carry is never guessed by either path.
+//
+// A repo with several main owners (a full ownership tie, D5990) maps to every
+// one of them, in rank order; the pattern fallback gives one team.
 func ResolveFromOwnershipMap(
-	ownershipMap map[string]string, repoIDs []uuid.UUID, repoNamesByID map[string]string,
+	ownershipMap map[string][]string, repoIDs []uuid.UUID, repoNamesByID map[string]string,
 	patternResolver numerical.RepoTeamResolver,
-) map[string]string {
-	repoToTeam := make(map[string]string, len(repoIDs))
+) map[string][]string {
+	repoToTeam := make(map[string][]string, len(repoIDs))
 	for _, repoID := range repoIDs {
 		key := repoID.String()
 		name, known := repoNamesByID[key]
@@ -77,8 +80,8 @@ func ResolveFromOwnershipMap(
 			// matching _repo_to_team_map_for_compounding_risk's own guard.
 			continue
 		}
-		if teamID := ownershipMap[key]; teamID != "" {
-			repoToTeam[key] = teamID
+		if teamIDs := ownershipMap[key]; len(teamIDs) > 0 {
+			repoToTeam[key] = teamIDs
 			continue
 		}
 		if patternResolver == nil {
@@ -86,7 +89,7 @@ func ResolveFromOwnershipMap(
 		}
 		teamID, _ := patternResolver.ResolveRepo(name)
 		if teamID != "" {
-			repoToTeam[key] = teamID
+			repoToTeam[key] = []string{teamID}
 		}
 	}
 	return repoToTeam
@@ -96,7 +99,7 @@ func ResolveFromOwnershipMap(
 // job_daily.py:497 _repo_to_team_map_for_compounding_risk's REAL production
 // caller does (_write_compounding_risk_team_rows_for_day, job_daily.py:~635):
 // it resolves the org-wide authoritative ownership map ONCE via
-// teamownership.AuthoritativeOwnerByRepo (mirroring
+// teamownership.AuthoritativeOwnersByRepo (mirroring
 // load_team_repo_ownership_map exactly, including its ranking), then
 // delegates the precedence decision to ResolveFromOwnershipMap — the pure
 // core this function and Python's own decoupled shape both funnel through.
@@ -107,7 +110,7 @@ func ResolveFromOwnershipMap(
 // its OWN ownership map by looping teamIDs and calling per-team
 // teamownership.OwnedRepoIDs, merging via a Go-side first-writer-wins
 // applyOwnership helper (now REMOVED, along with its two tests). That is
-// EXACTLY the pre-CHAOS-5141 bug shape teamownership.AuthoritativeOwnerByRepo
+// EXACTLY the pre-CHAOS-5141 bug shape teamownership.AuthoritativeOwnersByRepo
 // was already built to fix (see that function's own doc comment,
 // verbatim: "resolveDailyFinalizeRepoToTeam previously called per-team
 // OwnedRepoIDs in a loop and kept whichever team happened to be encountered
@@ -122,12 +125,12 @@ func ResolveFromOwnershipMap(
 // teamownership.OwnedRepoIDs itself explicitly documents (see its own doc
 // comment) that it answers MEMBERSHIP, not precedence, and "was never meant
 // to settle a multi-claimed repo's canonical owner" -- exactly the misuse
-// this function made of it. Fixed by calling AuthoritativeOwnerByRepo
-// directly; teamIDs is no longer a parameter (AuthoritativeOwnerByRepo is
+// this function made of it. Fixed by calling AuthoritativeOwnersByRepo
+// directly; teamIDs is no longer a parameter (AuthoritativeOwnersByRepo is
 // org-wide, not per-team, and this function had ZERO production callers to
 // break -- confirmed via codegraph before removing it).
 //
-// A resolution failure (teamownership.AuthoritativeOwnerByRepo returning an
+// A resolution failure (teamownership.AuthoritativeOwnersByRepo returning an
 // error) is PROPAGATED, never swallowed (CHAOS-5084 r1 finding P1, codex,
 // confirmed via a real repro: a ClickHouse ownership-query error used to
 // degrade silently to an empty ownership map, which a finalize-scope caller
@@ -139,7 +142,7 @@ func ResolveFromOwnershipMap(
 // only place that can still tell them apart, so it must not collapse them
 // before returning. Matches team_cognitive_load's own
 // resolveDailyFinalizeRepoToTeam precedent (team_cognitive_load_native_executor.go),
-// which propagates the identical AuthoritativeOwnerByRepo error for the
+// which propagates the identical AuthoritativeOwnersByRepo error for the
 // identical reason (CHAOS-5141, #2255 r1 finding 3) -- this was the ONE
 // caller of this function that had drifted from that precedent by degrading
 // instead of propagating, an earlier round's log-only mitigation
@@ -150,8 +153,8 @@ func ResolveOwnershipThenPatterns(
 	ctx context.Context, conn driver.Conn, organizationID string, asOf time.Time,
 	repoIDs []uuid.UUID, repoNamesByID map[string]string,
 	patternResolver numerical.RepoTeamResolver,
-) (map[string]string, error) {
-	ownershipMap, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, organizationID, asOf)
+) (map[string][]string, error) {
+	ownershipMap, err := teamownership.AuthoritativeOwnersByRepo(ctx, conn, organizationID, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("teamresolve: resolve authoritative repo ownership: %w", err)
 	}

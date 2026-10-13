@@ -66,7 +66,7 @@ var linearFirstProjects = []linearProject{
 }
 
 func linearTeamByKey(key string) linearTeam {
-	for _, team := range append(append([]linearTeam{}, linearTeams...), linearOldTeam) {
+	for _, team := range append(append(append([]linearTeam{}, linearTeams...), linearOldTeam), demoLinearTeams...) {
 		if team.Key == key {
 			return team
 		}
@@ -91,6 +91,8 @@ type linearIssue struct {
 	Attachments []string
 	// Relations are "related <identifier>@<createdAt>".
 	Relations []string
+	// Labels are the issue's label names.
+	Labels []string
 }
 
 func (issue linearIssue) payload() map[string]any {
@@ -100,7 +102,7 @@ func (issue linearIssue) payload() map[string]any {
 		state = map[string]any{"name": "Done", "type": "completed"}
 	}
 	var project any
-	for _, candidate := range linearProjects {
+	for _, candidate := range append(append([]linearProject{}, linearProjects...), demoLinearProjects...) {
 		if candidate.ID == issue.Project {
 			project = map[string]any{"id": candidate.ID, "name": candidate.Name}
 		}
@@ -120,6 +122,10 @@ func (issue linearIssue) payload() map[string]any {
 		relations = append(relations, map[string]any{"id": issue.ID + "-r" + string(rune('0'+index)), "type": kind, "createdAt": at,
 			"issue": map[string]any{"identifier": issue.Identifier}, "relatedIssue": map[string]any{"identifier": target}})
 	}
+	labels := []any{}
+	for _, name := range issue.Labels {
+		labels = append(labels, map[string]any{"id": issue.ID + "-l-" + strings.ToLower(name), "name": name})
+	}
 	history := []any{}
 	if issue.CompletedAt != "" {
 		history = append(history, map[string]any{"id": issue.ID + "-h1", "createdAt": issue.CompletedAt,
@@ -133,7 +139,7 @@ func (issue linearIssue) payload() map[string]any {
 		"state":    state,
 		"assignee": map[string]any{"name": issue.Assignee.Name, "email": issue.Assignee.Email},
 		"creator":  map[string]any{"name": issue.Creator.Name, "email": issue.Creator.Email},
-		"labels":   linearPage([]any{}), "parent": nil, "project": project, "cycle": nil,
+		"labels":   linearPage(labels), "parent": nil, "project": project, "cycle": nil,
 		"team":    map[string]any{"id": team.ID, "key": team.Key, "name": team.Name},
 		"history": linearPage(history), "comments": linearPage([]any{}), "attachments": linearPage(attachments),
 		"relations": linearPage(relations), "inverseRelations": linearPage([]any{}),
@@ -166,7 +172,7 @@ var githubLinearItems = []githubIssue{
 
 // linearGraphQLAnswer answers every Linear GraphQL read of the reference catalog and the work-items
 // route.
-func linearGraphQLAnswer(linearTeams []linearTeam, linearProjects []linearProject, phase string) providerAnswer {
+func linearGraphQLAnswer(linearTeams []linearTeam, linearProjects []linearProject, linearIssues []linearIssue, phase string) providerAnswer {
 	return providerAnswer{
 		Method: "POST", Host: linearHost, Path: "/graphql", Status: 200, Phase: phase,
 		Respond: func(request replayRequest) (any, bool) {
@@ -289,8 +295,8 @@ func linearNotFound(entity string) map[string]any {
 
 func linearWorldAnswers() []providerAnswer {
 	var answers []providerAnswer
-	answers = append(answers, linearGraphQLAnswer(append(append([]linearTeam{}, linearTeams...), linearOldTeam), linearFirstProjects, "first"))
-	answers = append(answers, linearGraphQLAnswer(linearTeams, linearProjects, "second"))
+	answers = append(answers, linearGraphQLAnswer(append(append([]linearTeam{}, linearTeams...), linearOldTeam), linearFirstProjects, linearIssues, "first"))
+	answers = append(answers, linearGraphQLAnswer(linearTeams, linearProjects, linearIssues, "second"))
 	answers = append(answers, githubTeamCatalogAnswersFor(ledgerGitHubTeams, "")...)
 	answers = append(answers, githubRepoAnswers("ledger", githubLinearItems)...)
 	answers = append(answers, githubPRSocialAnswer("ledger", githubLinearItems))

@@ -27,6 +27,16 @@ type githubIssue struct {
 	Head     string
 	// Closes are the issues GitHub lists as the PR's closingIssuesReferences ("owner/repo#n").
 	Closes []string
+	// Reviews are the PR's reviews.
+	Reviews []githubReview
+}
+
+// githubReview is one review of a pull request.
+type githubReview struct {
+	ID          int
+	State       string // APPROVED, CHANGES_REQUESTED, COMMENTED
+	SubmittedAt string
+	Author      githubUser
 }
 
 func (issue githubIssue) state() string {
@@ -204,6 +214,14 @@ func githubPRSocialAnswer(repo string, items []githubIssue) providerAnswer {
 						events = append(events, map[string]any{"__typename": "MergedEvent", "createdAt": item.MergedAt, "actor": map[string]any{"login": item.Author.Login}})
 					}
 					pull["timelineItems"] = map[string]any{"nodes": events, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}}
+				}
+				if strings.Contains(query, "reviews(first:") && len(item.Reviews) > 0 {
+					nodes := []any{}
+					for _, review := range item.Reviews {
+						nodes = append(nodes, map[string]any{"id": fmt.Sprintf("PRR_fx%d", review.ID), "databaseId": review.ID, "state": review.State,
+							"submittedAt": review.SubmittedAt, "author": map[string]any{"login": review.Author.Login}})
+					}
+					pull["reviews"] = map[string]any{"nodes": nodes, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}}
 				}
 				if strings.Contains(query, "closingIssuesReferences(") {
 					nodes := []any{}

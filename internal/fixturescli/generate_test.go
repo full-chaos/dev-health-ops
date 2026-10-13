@@ -115,7 +115,7 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 			teams := distinctValues(t, world, "teams", "id", "provider")
 			ownTeams := 0
 			for key := range teams {
-				if strings.HasSuffix(key, "\x00"+world.Params.Provider) {
+				if world.Params.Provider == "mixed" || strings.HasSuffix(key, "\x00"+world.Params.Provider) {
 					ownTeams++
 				}
 			}

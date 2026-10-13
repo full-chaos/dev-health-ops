@@ -17,7 +17,7 @@ func TestFormatDeltaAmount_SmallNumbers(t *testing.T) {
 		{0.05, "+0.1"},
 		{0, "+0.0"},
 	} {
-		if got := formatDeltaAmount(tc.v); got != tc.want {
+		if got := formatDeltaAmount(tc.v, "score"); got != tc.want {
 			t.Errorf("formatDeltaAmount(%v) = %q, want %q", tc.v, got, tc.want)
 		}
 	}
@@ -54,11 +54,11 @@ func TestSmallDeltaSentencesAndRecommendations(t *testing.T) {
 	small := buildMetric("k", "Hotspot risk", 1.04, 1, "score", lowerIsBetter)
 	big := buildMetric("j", "Ownership concentration", 1.1, 1, "ratio", lowerIsBetter)
 	sec := buildSection("risk", "Risk", []reviewMetric{small, big})
-	if len(sec.worsened) != 1 || sec.worsened[0] != "Ownership concentration worsened by +0.1 ratio" {
+	if len(sec.worsened) != 1 || sec.worsened[0] != "Ownership concentration worsened by +0.10 ratio" {
 		t.Errorf("worsened = %q", sec.worsened)
 	}
 	recs := recommendationsFromSections([]reviewSection{sec})
-	if len(recs) != 1 || recs[0] != "Review Ownership concentration: worsened by +0.1 ratio week-over-week." {
+	if len(recs) != 1 || recs[0] != "Review Ownership concentration: worsened by +0.10 ratio week-over-week." {
 		t.Errorf("recommendations = %q", recs)
 	}
 	// A changed-status metric whose delta cannot be shown is forced to the
@@ -76,5 +76,39 @@ func TestSmallDeltaSentencesAndRecommendations(t *testing.T) {
 	forced.delta.status = "worsened"
 	if r := recommendationsFromSections([]reviewSection{{metrics: []reviewMetric{forced}}}); len(r) != 1 || strings.Contains(r[0], "0.0") {
 		t.Errorf("recommendation = %q", r)
+	}
+}
+
+func TestRatioKeepsTwoDecimals(t *testing.T) {
+	for _, tc := range []struct {
+		v    float64
+		want string
+	}{
+		{0.02, "+0.02"},
+		{-0.02, "-0.02"},
+		{0.004, "<0.01"},
+		{-0.004, ">-0.01"},
+		{0, "+0.00"},
+	} {
+		if got := formatDeltaAmount(tc.v, "ratio"); got != tc.want {
+			t.Errorf("formatDeltaAmount(%v, ratio) = %q, want %q", tc.v, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		name         string
+		value, prior float64
+		want         string
+	}{
+		{"revert 0.10 to 0.12", 0.12, 0.10, "worsened"},
+		{"revert 0.12 to 0.10", 0.10, 0.12, "improved"},
+		{"0.004 move", 0.104, 0.10, "unchanged"},
+	} {
+		if got := buildMetric("k", "Revert rate", tc.value, tc.prior, "ratio", lowerIsBetter).delta.status; got != tc.want {
+			t.Errorf("%s: status = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	m := buildMetric("k", "Revert rate", 0.12, 0.10, "ratio", lowerIsBetter)
+	if got := deltaSummary(m); got != "Revert rate worsened by +0.02 ratio" {
+		t.Errorf("deltaSummary = %q", got)
 	}
 }

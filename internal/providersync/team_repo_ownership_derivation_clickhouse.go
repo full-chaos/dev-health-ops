@@ -258,7 +258,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
-	tenure = tenure.withOpenRows(activeRows, toRetract)
+	tenure = tenure.withOpenRows(activeRows)
 	settled, settledCounts := settleInferredEvidence(derived, repos, tenure, toRetract, now)
 	if settledCounts != (inferredEvidenceSettleCounts{}) {
 		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.evidence_start_set_aside",
@@ -553,15 +553,12 @@ func withoutRows(rows, drop []teamRepoOwnershipActiveRow) []teamRepoOwnershipAct
 	return out
 }
 
-// withOpenRows adds what the settle step needs of the open rows: the claims
-// that still own the repository after this run's retractions, and the start
-// of each claim's open main row.
-func (tenure teamRepoOwnershipTenureEnds) withOpenRows(activeRows, retractingNow []teamRepoOwnershipActiveRow) teamRepoOwnershipTenureEnds {
-	tenure.staying = map[teamRepoOwnershipClaim]bool{}
+// withOpenRows adds the start of each claim's open main row, the one thing
+// the settle step needs of the open rows.
+func (tenure teamRepoOwnershipTenureEnds) withOpenRows(activeRows []teamRepoOwnershipActiveRow) teamRepoOwnershipTenureEnds {
 	tenure.openMainFrom = map[teamRepoOwnershipClaim]time.Time{}
-	for _, row := range withoutRows(activeRows, retractingNow) {
+	for _, row := range activeRows {
 		claim := teamRepoOwnershipClaim{row.Provider, row.RepoFullName, row.TeamID}
-		tenure.staying[claim] = true
 		if row.IsPrimary == teamRepoOwnershipCoOwner {
 			continue
 		}
@@ -595,11 +592,13 @@ type inferredEvidenceSettleCounts struct{ future, beforeRetraction, afterOtherOw
 //     erase the interval the claim did not own);
 //   - else a main owner's evidence older than the end of another team's main
 //     tenure on the repository (the latest close of its main row, or this
-//     run, when this run retracts its open main row) moves to that end, so the
-//     repository has one main owner at a time. Co-owners own the repository
-//     beside the main owner, so a co-owner's start is never moved by another
-//     team. The end is stored as that team's valid_to, so the next run reads
-//     the same start and writes nothing.
+//     run, when this run retracts its open main row) moves to that end, so a
+//     new main owner never takes over before the prior one ends. A claim
+//     whose open main row started before that end was a main owner beside
+//     the other team (a full tie, D5990) and is not moved. Co-owners own the
+//     repository beside the main owners, so a co-owner's start is never moved
+//     by another team. The end is stored as that team's valid_to, so the next
+//     run reads the same start and writes nothing.
 func settleInferredEvidence(
 	derived []DerivedTeamRepoOwnershipRow,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
@@ -660,11 +659,11 @@ func settleInferredEvidence(
 			if end.teamID == row.TeamID || !end.until.After(otherEnd) {
 				continue
 			}
-			// A team that still owns the repository and whose main tenure
-			// ended while this claim's open main row was already open was a
-			// main owner beside it (a full tie, D5990): nothing was handed
-			// over, so its end never moves this claim.
-			if tenure.staying[teamRepoOwnershipClaim{info.Provider, info.FullName, end.teamID}] && ownMainOpen && ownMainFrom.Before(end.until) {
+			// A team whose main tenure ended while this claim's open main row
+			// was already open was a main owner beside it (a full tie,
+			// D5990): nothing was handed over, so its end never moves this
+			// claim.
+			if ownMainOpen && ownMainFrom.Before(end.until) {
 				continue
 			}
 			otherEnd = end.until
@@ -683,8 +682,7 @@ func settleInferredEvidence(
 type teamRepoOwnershipTenureEnds struct {
 	retractedUntil map[teamRepoOwnershipClaim]time.Time
 	mainUntil      map[teamRepoOwnershipClaim]time.Time
-	// staying and openMainFrom are set from the open rows (withOpenRows).
-	staying      map[teamRepoOwnershipClaim]bool
+	// openMainFrom is set from the open rows (withOpenRows).
 	openMainFrom map[teamRepoOwnershipClaim]time.Time
 }
 

@@ -487,12 +487,13 @@ means the ClickHouse `teams` dimension is empty.
 > again starts at the run when its evidence is older than the end of its latest retraction: that retraction already
 > judged that evidence, and a row at the evidence time would have the key of the retracted row and reopen it, so a
 > read of the interval the other team owned would name this team again (logged with `before_retraction`). A row
-> closed at its own start (superseded, below) is no retraction. One team is the main owner of a repository at a time
-> (CHAOS-9411: co-owners own it beside the main owner): a main owner's claim whose evidence is older than the end of
-> ANOTHER team's main tenure on the repository (the latest close of that team's main row, or this run when this run
-> retracts its open main row) starts at that end (logged with `after_other_owner`); the end is stored as the other
-> team's `valid_to`, so the next run reads the same start and writes nothing, and an open row an earlier run left at
-> the older evidence is superseded. A co-owner's start is never moved by another team. A repository whose roles
+> closed at its own start (superseded, below) is no retraction. A new main owner never takes over before the prior
+> one ends (co-owners own the repository beside the main owners, CHAOS-9411): a main owner's claim whose evidence is
+> older than the end of ANOTHER team's main tenure on the repository (the latest close of that team's main row, or
+> this run when this run retracts its open main row) starts at that end (logged with `after_other_owner`); the end is
+> stored as the other team's `valid_to`, so the next run reads the same start and writes nothing. A claim whose open
+> main row started before that end was a main owner beside the other team (a full tie, D5990, CHAOS-9459) and keeps
+> its start. A co-owner's start is never moved by another team. A repository whose roles
 > change while the guard holds one of its closes or retractions keeps all its rows that run (§1.1), so a held row
 > never leaves two main rows.
 > One open row per claim: an open row of the claim that does not start at its evidence time (written by an
@@ -2760,9 +2761,9 @@ that run. So at any instant of its history a repo's main rows are its one leader
 tie. A role close goes through the retraction guard; a repo whose roles change while the guard holds any close or
 retraction of it keeps all its rows that run (no write, retraction or close; `team_repo_ownership_derivation.role_change_held`)
 and waits for a run that proves them all, so a held row never leaves a main row that is no longer a leader's, nor a repo without the main row it had. A new main
-owner never starts before the end of the main tenure of a team that left the repo (CHAOS-9403 `after_other_owner`; a team
-that still owns the repo, as a co-owner or as one of the main owners of a tie, hands nothing over, so its change of role
-never moves another main owner); a co-owner's start is its own evidence. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick one
+owner never starts before the end of another team's main tenure (CHAOS-9403 `after_other_owner`); a main row that was
+already open before that end belonged to a main owner beside the other team (a tie) and keeps its start; a co-owner's
+start is its own evidence. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick one
 owner never take a co-owner row: `teamownership.AuthoritativeOwnerByRepo` and the cognitive-load gate leave out
 `is_primary = 2` rows and rank `(is_primary = 1) DESC` first, and the cascade's `LoadRepos` gives no `repo_ownership`
 candidate from a co-owner row (`RankDerivationCandidates` also ranks only `is_primary = 1` first). So a repo with co-owners
@@ -2775,7 +2776,7 @@ CHAOS-9411, the other teams got no row and no share was stored. Pinned by
 `internal/providersync/team_repo_ownership_ranked_owner_integration_test.go` (real ClickHouse, every provider pair: main
 owner, co-owners and shares read back), the `TestRankedOwner*`, `TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate` and
 `TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier` tests in `team_repo_ownership_derivation_test.go`,
-`team_repo_ownership_shares_test.go` (only a team that left ends a main tenure; claim starts; a role change, a tie that
+`team_repo_ownership_shares_test.go` (claim starts; a role change, a tie that
 forms and a tie that ends are dated at the run and held
 per repo), `TestAWinnerChangeIsDatedAtTheRunWithOneMainOwnerAtEveryInstant` (real ClickHouse, every provider: one main
 row at every instant, the one-owner read before and after the change, a rerun writes nothing),

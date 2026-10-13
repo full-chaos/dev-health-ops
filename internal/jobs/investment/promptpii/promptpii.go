@@ -61,7 +61,8 @@ var (
 	mentionPattern = regexp.MustCompile(`(^|[^A-Za-z0-9_@.\]])@[A-Za-z0-9](?:[A-Za-z0-9_-]|\.[A-Za-z0-9])*(?:/[A-Za-z0-9_-]+)?`)
 
 	// A phone number needs a leading "+" or the separators of a national format.
-	// A run of digits without them (an issue number, a timestamp) is not matched.
+	// Other digit runs (an issue number, a timestamp) are not matched, except a
+	// run of exactly ten digits (see digitRunPattern).
 	phonePatterns = []*regexp.Regexp{
 		regexp.MustCompile(`\+\d{1,3}(?:[\s.-]?\(?\d{1,4}\)?){2,5}`),
 		regexp.MustCompile(`\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b`),
@@ -69,7 +70,13 @@ var (
 		regexp.MustCompile(`\(\d{1,4}\)[\s.-]?\d{3,4}[\s.-]\d{3,4}\b`),
 		regexp.MustCompile(`\b0\d(?:[\s.-]\d{2}){4}\b`),
 	}
+
+	// A whole run of digits is a plain phone number when it is exactly ten
+	// digits long. The run is maximal, so it is bounded by non-digits.
+	digitRunPattern = regexp.MustCompile(`\d+`)
 )
+
+const plainPhoneDigits = 10
 
 // Filter replaces PII with placeholders that are stable for one filter: the
 // same value gets the same placeholder, in the order the values first appear.
@@ -153,6 +160,13 @@ func (f *Filter) Text(text string) string {
 			return "[phone-" + strconv.Itoa(ordinal(f.phones, m)) + "]"
 		})
 	}
+	filtered = digitRunPattern.ReplaceAllStringFunc(filtered, func(m string) string {
+		if len(m) != plainPhoneDigits {
+			return m
+		}
+		f.counts.Phones++
+		return "[phone-" + strconv.Itoa(ordinal(f.phones, m)) + "]"
+	})
 	return filtered
 }
 

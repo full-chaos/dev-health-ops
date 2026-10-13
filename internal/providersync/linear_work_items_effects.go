@@ -307,7 +307,7 @@ func linearWorkItemAdapterGuard(
 
 const linearWorkItemsInsert = `INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, status_raw, project_key, project_id, native_team_key, project_name, assignees, reporter, created_at, updated_at, started_at, completed_at, closed_at, labels, story_points, sprint_id, sprint_name, parent_id, epic_id, url, last_synced, org_id, source_id)`
 
-const linearWorkItemsSelect = `SELECT repo_id, work_item_id, provider, title, type, status, status_raw, project_key, project_id, native_team_key, project_name, assignees, reporter, created_at, updated_at, started_at, completed_at, closed_at, labels, story_points, sprint_id, sprint_name, parent_id, epic_id, url, last_synced, org_id, source_id FROM work_items FINAL WHERE org_id = ? AND repo_id = ? AND work_item_id = ?`
+const linearWorkItemsSelect = `SELECT repo_id, work_item_id, provider, title, type, status, status_raw, project_key, project_id, native_team_key, project_name, assignees, reporter, created_at, updated_at, started_at, completed_at, closed_at, labels, story_points, sprint_id, sprint_name, parent_id, epic_id, url, last_synced, org_id, source_id, description FROM work_items FINAL WHERE org_id = ? AND repo_id = ? AND work_item_id = ?`
 
 func projectLinearWorkItem(row linearWorkItemRow) workItemStoredRow {
 	assignees, labels := row.Assignees, row.Labels
@@ -330,7 +330,7 @@ func projectLinearWorkItem(row linearWorkItemRow) workItemStoredRow {
 		SprintID: derefString(row.SprintID), SprintName: derefString(row.SprintName),
 		ParentID: derefString(row.ParentID), EpicID: derefString(row.EpicID),
 		URL: derefString(row.URL), LastSynced: clickHouseMillis(row.LastSynced),
-		OrgID: row.OrgID, SourceID: nil,
+		OrgID: row.OrgID, SourceID: nil, Description: boundedWorkItemDescription(row.Description),
 	}
 }
 
@@ -405,7 +405,7 @@ func (adapter LinearWorkItemsClickHouseAdapter) InspectLinearWorkItemEffect(
 				&actual.UpdatedAt, &actual.StartedAt, &actual.CompletedAt,
 				&actual.ClosedAt, &actual.Labels, &actual.StoryPoints,
 				&actual.SprintID, &actual.SprintName, &actual.ParentID, &actual.EpicID,
-				&actual.URL, &actual.LastSynced, &actual.OrgID, &actual.SourceID,
+				&actual.URL, &actual.LastSynced, &actual.OrgID, &actual.SourceID, &actual.Description,
 			); err != nil {
 				return EffectConflict, err
 			}

@@ -29,7 +29,7 @@ import (
 // refused by stripe-python, so its Stripe side is always empty and every local row
 // reads as missing in Stripe.
 func RunBillingReconcile(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho billing reconcile")
+	flags := newAccountFlags(env, "dho billing reconcile")
 	orgFlag := flags.String("org-id", "", "reconcile a single organization (UUID); omit to reconcile all organizations")
 	sinceFlag := flags.String("since", "", "only reconcile invoices on or after this date (ISO YYYY-MM-DD)")
 	if code, ok := parseArgs(flags, env); !ok {
@@ -55,7 +55,7 @@ func RunBillingReconcile(ctx context.Context, env cli.Env) int {
 		// value to the database driver, which reads it in the process's zone).
 		since = &parsed.Time
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
@@ -72,7 +72,7 @@ func RunBillingReconcile(ctx context.Context, env cli.Env) int {
 		if key.Configured() {
 			text = secrets.RedactValues(text, key.Reveal())
 		}
-		fmt.Fprintf(env.Stderr, "reconcile failed: %s\n", redactor(env)(fmt.Errorf("%s", text)).Error())
+		fmt.Fprintf(env.Stderr, "reconcile failed: %s\n", accountRedactor(env)(fmt.Errorf("%s", text)).Error())
 		return cli.ExitFailure
 	}
 	line, err := pyjson.Dumps(report)

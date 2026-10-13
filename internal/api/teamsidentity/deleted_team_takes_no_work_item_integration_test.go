@@ -118,7 +118,20 @@ func TestADeletedTeamTakesNoWorkItem(t *testing.T) {
 				derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{Teams: teams, ProviderMembers: members, Repos: repos})
 				got := map[string]string{}
 				for _, path := range paths {
-					team, _, _ := derived.Resolve(path.subject)
+					team, _, candidates := derived.Resolve(path.subject)
+					if path.name == "by a membership" {
+						// CHAOS-9414: membership is provenance only: no primary
+						// team, the member's team is the non-primary row.
+						if team != nil {
+							t.Fatalf("%s: primary team %q, want none (provenance only)", path.name, *team)
+						}
+						for _, candidate := range candidates {
+							if candidate.Source == "assignee_membership" || candidate.Source == "author_membership" {
+								team = candidate.TeamID
+								break
+							}
+						}
+					}
 					if team != nil {
 						got[path.name] = *team
 					} else {

@@ -729,7 +729,8 @@
       "route_destinations": [
         "ai_attribution",
         "git_pull_request_reviews",
-        "git_pull_requests"
+        "git_pull_requests",
+        "work_graph_pr_commit"
       ],
       "route_ready": true,
       "plannable": false,
@@ -756,7 +757,8 @@
       "route_destinations": [
         "ai_attribution",
         "git_pull_request_reviews",
-        "git_pull_requests"
+        "git_pull_requests",
+        "work_graph_pr_commit"
       ],
       "route_ready": true,
       "plannable": false,
@@ -783,7 +785,8 @@
       "route_destinations": [
         "ai_attribution",
         "git_pull_request_reviews",
-        "git_pull_requests"
+        "git_pull_requests",
+        "work_graph_pr_commit"
       ],
       "route_ready": true,
       "plannable": true,

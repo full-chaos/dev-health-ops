@@ -1,9 +1,9 @@
 {
   "header": {
     "test": "TestGitLabSprintMatchesFrozenPythonProductionRow",
-    "python_build": "b6b1fd88954fe636660b20b7d58ee8ec8cb4c97e",
+    "python_build": "a4d97f56304ca50fe166cb370cd9f0e55803ecdb",
     "producer_digest": "5d7b843391b729f661e13a3d59d1348998271eb3375eb9e71686f96f20e73888",
-    "recipe": "pair gitlab/work-items/sprint: git worktree add --detach $DIR b6b1fd88954fe636660b20b7d58ee8ec8cb4c97e (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGitLabSprintMatchesFrozenPythonProductionRow$' -python-root $DIR",
+    "recipe": "pair gitlab/work-items/sprint: git worktree add --detach $DIR a4d97f56304ca50fe166cb370cd9f0e55803ecdb (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGitLabSprintMatchesFrozenPythonProductionRow$' -python-root $DIR",
     "recorded_by": "goldenrecord",
     "blanked": {
       "body $.cases[].row.last_synced.v": 2

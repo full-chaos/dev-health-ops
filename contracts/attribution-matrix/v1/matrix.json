@@ -48,6 +48,13 @@
     {
       "provider": "github",
       "entity": "repositories",
+      "check": "readers_apply_first_owners_backward",
+      "state": "known_red",
+      "ticket": "CHAOS-9404"
+    },
+    {
+      "provider": "github",
+      "entity": "repositories",
       "check": "repository_ownership_starts_at_its_evidence",
       "state": "known_red",
       "ticket": "CHAOS-9404",
@@ -155,6 +162,13 @@
       "entity": "repositories",
       "check": "readers_agree_with_the_ownership_rule",
       "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "repositories",
+      "check": "readers_apply_first_owners_backward",
+      "state": "known_red",
+      "ticket": "CHAOS-9404"
     },
     {
       "provider": "gitlab",

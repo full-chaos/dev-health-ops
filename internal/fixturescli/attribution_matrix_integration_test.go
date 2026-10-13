@@ -368,11 +368,15 @@ func (facts matrixFacts) primary(itemID string) (attributionRow, bool) {
 	return attributionRow{}, false
 }
 
-// ownPrimary is an item's primary row when the item holds its team on its own (not inherited by a link):
-// what a donor gives.
+// donorSources are the sources by which an issue holds a team of its own, the only teams a pull request
+// may inherit from it (team-attribution.md §0: a donor's team is a native team or an ownership, never an
+// inherited, membership, fallback or unassigned row).
+var donorSources = map[string]bool{"native_team": true, "issue_project": true, "project_ownership": true, "repo_ownership": true}
+
+// ownPrimary is an item's primary row when the item holds a resolved team on its own: what a donor gives.
 func (facts matrixFacts) ownPrimary(itemID string) (attributionRow, bool) {
 	row, ok := facts.primary(itemID)
-	if !ok || row.Source == "linked_issue" {
+	if !ok || row.TeamID == "" || !donorSources[row.Source] {
 		return attributionRow{}, false
 	}
 	return row, true
@@ -681,44 +685,11 @@ var matrixChecks = map[string]matrixCheck{
 		}
 		return r
 	}},
-	"readers_agree_with_the_ownership_rule": {"repositories", func(f matrixFacts, p string, readers ownerReaders) (r checkResult) {
-		at := f.now
-		shared, err := readers.OwnersByRepo(at)
-		if err != nil {
-			r.Violations = append(r.Violations, "OwnersByRepo: "+err.Error())
-			return r
-		}
-		authoritative, err := readers.Authoritative(at)
-		if err != nil {
-			r.Violations = append(r.Violations, "AuthoritativeOwnerByRepo: "+err.Error())
-			return r
-		}
-		for id, repo := range f.repos {
-			if repo.Provider != p {
-				continue
-			}
-			want := map[string]bool{}
-			for _, row := range f.repoOwnerRows(id) {
-				team, known := f.teams[row.TeamID]
-				if row.TeamID != "" && row.validAt(at) && (!known || team.Active) {
-					want[row.TeamID] = true
-				}
-			}
-			r.Subjects++
-			got := map[string]bool{}
-			for _, team := range shared[id] {
-				got[team] = true
-			}
-			if strings.Join(sortedTeamSet(got), ",") != strings.Join(sortedTeamSet(want), ",") {
-				r.Violations = append(r.Violations, fmt.Sprintf("OwnersByRepo %s = %v, rule %v", repo.Name, sortedTeamSet(got), sortedTeamSet(want)))
-			}
-			if owner, ok := authoritative[id]; ok && !want[owner] {
-				r.Violations = append(r.Violations, fmt.Sprintf("AuthoritativeOwnerByRepo %s = %s, not an owner", repo.Name, owner))
-			} else if !ok && len(want) > 0 {
-				r.Violations = append(r.Violations, fmt.Sprintf("AuthoritativeOwnerByRepo %s has no owner, rule %v", repo.Name, sortedTeamSet(want)))
-			}
-		}
-		return r
+	"readers_agree_with_the_ownership_rule": {"repositories", func(f matrixFacts, p string, readers ownerReaders) checkResult {
+		return f.judgeReaders(p, readers, false)
+	}},
+	"readers_apply_first_owners_backward": {"repositories", func(f matrixFacts, p string, readers ownerReaders) checkResult {
+		return f.judgeReaders(p, readers, true)
 	}},
 	"repository_ownership_starts_at_its_evidence": {"repositories", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
 		for id, repo := range f.repos {
@@ -818,7 +789,7 @@ var matrixChecks = map[string]matrixCheck{
 				r.Subjects++
 				given := false
 				for donor := range donors {
-					if own, ok := f.ownPrimary(donor); ok && own.TeamID == row.TeamID {
+					if own, ok := f.ownPrimary(donor); ok && row.TeamID != "" && own.TeamID == row.TeamID {
 						given = true
 					}
 				}
@@ -937,9 +908,11 @@ var matrixChecks = map[string]matrixCheck{
 				continue
 			}
 			r.Subjects++
+			// An owner takes the item as its primary (1) or as a co-owner (2); a non-primary row (0) is
+			// a candidate, not an attribution.
 			got := map[string]bool{}
 			for _, row := range f.attribution[id] {
-				if row.TeamID != "" {
+				if row.TeamID != "" && (row.IsPrimary == 1 || row.IsPrimary == 2) {
 					got[row.TeamID] = true
 				}
 			}
@@ -1020,6 +993,73 @@ var matrixChecks = map[string]matrixCheck{
 		}
 		return r
 	}},
+}
+
+// judgeReaders compares the shared readers with the contract's rule (ownersAt) for every repository of
+// the provider, at now and on the day of every item of its repositories. backward=false judges the
+// instants at or after a repository's first recorded ownership (the rows valid then, closures included);
+// backward=true judges the instants before it, where the first recorded owners apply backward (D5987,
+// option C).
+func (f matrixFacts) judgeReaders(p string, readers ownerReaders, backward bool) (r checkResult) {
+	instants := map[time.Time]bool{f.now: true}
+	for _, item := range f.items {
+		if repo, ok := f.repos[item.RepoID]; ok && repo.Provider == p {
+			instants[f.itemDay(item)] = true
+		}
+	}
+	ordered := make([]time.Time, 0, len(instants))
+	for at := range instants {
+		ordered = append(ordered, at)
+	}
+	sort.Slice(ordered, func(left, right int) bool { return ordered[left].Before(ordered[right]) })
+	for _, at := range ordered {
+		var shared map[string][]string
+		var authoritative map[string]string
+		asked := false
+		day := at.Format(time.DateOnly)
+		for id, repo := range f.repos {
+			if repo.Provider != p {
+				continue
+			}
+			rows := f.repoOwnerRows(id)
+			var first time.Time
+			for _, row := range rows {
+				if first.IsZero() || row.ValidFrom.Before(first) {
+					first = row.ValidFrom
+				}
+			}
+			if before := len(rows) > 0 && at.Before(first); before != backward {
+				continue
+			}
+			if !asked {
+				var err error
+				if shared, err = readers.OwnersByRepo(at); err != nil {
+					r.Violations = append(r.Violations, "OwnersByRepo: "+err.Error())
+					return r
+				}
+				if authoritative, err = readers.Authoritative(at); err != nil {
+					r.Violations = append(r.Violations, "AuthoritativeOwnerByRepo: "+err.Error())
+					return r
+				}
+				asked = true
+			}
+			want := f.ownersAt(rows, at)
+			r.Subjects++
+			got := map[string]bool{}
+			for _, team := range shared[id] {
+				got[team] = true
+			}
+			if strings.Join(sortedTeamSet(got), ",") != strings.Join(sortedTeamSet(want), ",") {
+				r.Violations = append(r.Violations, fmt.Sprintf("OwnersByRepo %s at %s = %v, rule %v", repo.Name, day, sortedTeamSet(got), sortedTeamSet(want)))
+			}
+			if owner, ok := authoritative[id]; ok && !want[owner] {
+				r.Violations = append(r.Violations, fmt.Sprintf("AuthoritativeOwnerByRepo %s at %s = %s, not an owner", repo.Name, day, owner))
+			} else if !ok && len(want) > 0 {
+				r.Violations = append(r.Violations, fmt.Sprintf("AuthoritativeOwnerByRepo %s at %s has no owner, rule %v", repo.Name, day, sortedTeamSet(want)))
+			}
+		}
+	}
+	return r
 }
 
 func productionReaders(ctx context.Context, conn driver.Conn, org string) ownerReaders {
@@ -1358,6 +1398,146 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 		}
 		if result := judge("jira", "pull_request_inherits_only_from_a_linked_issue", planted, readers); len(result.Violations) == 0 {
 			t.Fatal("a linked_issue row naming another team than its linked issue's is not found")
+		}
+	})
+
+	t.Run("a co-owner written as a candidate row", func(t *testing.T) {
+		if result := judge("jira", "every_active_owner_takes_the_item", facts, readers); len(result.Violations) > 0 {
+			t.Fatalf("an active owner misses an item before the plant: %v", result.Violations)
+		}
+		// A writer that keeps a co-owner as a non-primary candidate (is_primary 0) instead of 2.
+		planted := withFacts("jira", func(f *matrixFacts) {
+			attribution := map[string][]attributionRow{}
+			planted := false
+			for id, rows := range f.attribution {
+				copied := append([]attributionRow{}, rows...)
+				for index := range copied {
+					if copied[index].IsPrimary == 2 {
+						copied[index].IsPrimary = 0
+						planted = true
+					}
+				}
+				attribution[id] = copied
+			}
+			if !planted {
+				t.Fatal("the jira world has no co-owner row to plant on")
+			}
+			f.attribution = attribution
+		})
+		if result := judge("jira", "every_active_owner_takes_the_item", planted, readers); len(result.Violations) == 0 {
+			t.Fatal("a co-owner written as a candidate row is not found")
+		}
+	})
+
+	t.Run("readers that do not apply the first owners backward", func(t *testing.T) {
+		// As the readers are: no owner before the first record (known red, CHAOS-9404).
+		if result := judge("github", "readers_apply_first_owners_backward", facts, readers); len(result.Violations) == 0 {
+			t.Fatal("the readers' missing backward owners are not found")
+		}
+		// The defect removed: a reader that answers an instant before a repository's first record with
+		// the shared readers' answer at that first record. The cell turns green.
+		first := map[string]time.Time{}
+		for id := range facts["github"].repos {
+			for _, row := range facts["github"].repoOwnerRows(id) {
+				if first[id].IsZero() || row.ValidFrom.Before(first[id]) {
+					first[id] = row.ValidFrom
+				}
+			}
+		}
+		production := readers["github"]
+		backward := ownerReaders{
+			OwnersByRepo: func(at time.Time) (map[string][]string, error) {
+				out, err := production.OwnersByRepo(at)
+				if err != nil {
+					return nil, err
+				}
+				for id, start := range first {
+					if at.Before(start) {
+						later, err := production.OwnersByRepo(start)
+						if err != nil {
+							return nil, err
+						}
+						out[id] = later[id]
+					}
+				}
+				return out, nil
+			},
+			Authoritative: func(at time.Time) (map[string]string, error) {
+				out, err := production.Authoritative(at)
+				if err != nil {
+					return nil, err
+				}
+				for id, start := range first {
+					if at.Before(start) {
+						later, err := production.Authoritative(start)
+						if err != nil {
+							return nil, err
+						}
+						if owner, ok := later[id]; ok {
+							out[id] = owner
+						}
+					}
+				}
+				return out, nil
+			},
+		}
+		fixed := map[string]ownerReaders{}
+		for key, value := range readers {
+			fixed[key] = value
+		}
+		fixed["github"] = backward
+		if result := judge("github", "readers_apply_first_owners_backward", facts, fixed); len(result.Violations) > 0 {
+			t.Fatalf("the check stays red on readers that apply the first owners backward: %v", result.Violations)
+		}
+	})
+
+	t.Run("pull request team inherited from a donor without a team of its own", func(t *testing.T) {
+		// A writer that takes the donor's membership row (or an unresolved row) as the team to inherit.
+		for _, plant := range []func(row *attributionRow){
+			func(row *attributionRow) { row.Source = "author_membership" },
+			func(row *attributionRow) { row.Source = "unassigned" },
+		} {
+			planted := withFacts("jira", func(f *matrixFacts) {
+				attribution := map[string][]attributionRow{}
+				for id, rows := range f.attribution {
+					attribution[id] = rows
+				}
+				for id, item := range f.items {
+					if !isPullRequestItem(item) {
+						continue
+					}
+					for donor := range f.linkedDonors(id) {
+						rows := append([]attributionRow{}, attribution[donor]...)
+						for index := range rows {
+							if rows[index].IsPrimary == 1 {
+								plant(&rows[index])
+							}
+						}
+						attribution[donor] = rows
+					}
+				}
+				f.attribution = attribution
+			})
+			if result := judge("jira", "pull_request_inherits_only_from_a_linked_issue", planted, readers); len(result.Violations) == 0 {
+				t.Fatal("a pull request team inherited from a donor without a team of its own is not found")
+			}
+		}
+		// A linked_issue row with no resolved team.
+		planted := withFacts("jira", func(f *matrixFacts) {
+			attribution := map[string][]attributionRow{}
+			for id, rows := range f.attribution {
+				copied := append([]attributionRow{}, rows...)
+				for index := range copied {
+					if copied[index].Source == "linked_issue" {
+						copied[index].TeamID = ""
+					}
+				}
+				attribution[id] = copied
+			}
+			f.attribution = attribution
+		})
+		if result := judge("jira", "pull_request_inherits_only_from_a_linked_issue", planted, readers); len(result.Violations) == 0 {
+			t.Fatal("a linked_issue row with no resolved team is not found")
 		}
 	})
 

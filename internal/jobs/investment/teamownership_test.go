@@ -377,3 +377,24 @@ func TestTeamOwnershipSplitsEquallyWhenAnyShareIsNotMeasured(t *testing.T) {
 		})
 	}
 }
+
+// A team that donates through several member issues of one unit counts once per
+// repository: the donor list repeats its rows once per issue.
+func TestTeamOwnershipCountsADonorTeamOncePerRepository(t *testing.T) {
+	a, b := uuid.MustParse(testRepoID), uuid.MustParse(otherRepoID)
+	result, input := ownershipUnit(t, 10)
+	input.Component = issueComponentOf("issue-a", "issue-b")
+	rows, _ := allocateTeamOwnership(result, input, []chquery.TeamRepoDonor{
+		{WorkItemID: "issue-a", TeamID: "alpha", RepoID: a, Share: shareOf(0.8)},
+		{WorkItemID: "issue-a", TeamID: "alpha", RepoID: b, Share: shareOf(0.2)},
+		{WorkItemID: "issue-b", TeamID: "alpha", RepoID: a, Share: shareOf(0.8)},
+		{WorkItemID: "issue-b", TeamID: "alpha", RepoID: b, Share: shareOf(0.2)},
+		{WorkItemID: "issue-b", TeamID: "beta", RepoID: a, Share: shareOf(0.5)},
+	})
+	want := map[uuid.UUID]float64{a: 1.3 / 1.5, b: 0.2 / 1.5}
+	for _, row := range rows {
+		if math.Abs(row.AllocationWeight-want[*row.RepoID]) > 1e-12 {
+			t.Fatalf("repo %s weight=%g want %g", row.RepoID, row.AllocationWeight, want[*row.RepoID])
+		}
+	}
+}

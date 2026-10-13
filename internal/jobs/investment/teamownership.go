@@ -92,7 +92,9 @@ func allocateTeamOwnership(result MaterializeComponentResult, input MaterializeC
 		return result.RepoEffort, ownershipOutcomeNoEligibleOwner
 	}
 	teamsByRepo := map[string]map[string]bool{}
-	linkedShares := map[string]float64{}
+	// One share per (repository, team): the unit's member issues each repeat
+	// their donor team's rows, and a team counts once however many issues it donates.
+	teamShares := map[string]map[string]float64{}
 	allMeasured := true
 	for _, donor := range donors {
 		if !issues[donor.WorkItemID] || donor.RepoID == uuid.Nil || donor.TeamID == "" {
@@ -105,8 +107,19 @@ func allocateTeamOwnership(result MaterializeComponentResult, input MaterializeC
 		teamsByRepo[repo][donor.TeamID] = true
 		if donor.Share == nil || *donor.Share < 0 {
 			allMeasured = false
-		} else {
-			linkedShares[repo] += *donor.Share
+			continue
+		}
+		if teamShares[repo] == nil {
+			teamShares[repo] = map[string]float64{}
+		}
+		if *donor.Share > teamShares[repo][donor.TeamID] {
+			teamShares[repo][donor.TeamID] = *donor.Share
+		}
+	}
+	linkedShares := make(map[string]float64, len(teamShares))
+	for repo, byTeam := range teamShares {
+		for _, share := range byTeam {
+			linkedShares[repo] += share
 		}
 	}
 	if len(teamsByRepo) == 0 {

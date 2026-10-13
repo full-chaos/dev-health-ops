@@ -132,6 +132,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -1724,7 +1725,7 @@ func buildMetric(key, label string, value, prior float64, unit, direction string
 
 	var status string
 	switch {
-	case absF(deltaValue) < 0.000001:
+	case absF(deltaValue) < 0.000001, deltaRoundsToZero(deltaValue):
 		status = "unchanged"
 	case direction == higherIsBetter:
 		if deltaValue > 0 {
@@ -1757,6 +1758,27 @@ func buildMetric(key, label string, value, prior float64, unit, direction string
 	}
 }
 
+// deltaRoundsToZero reports a change whose one-decimal text would read
+// "+0.0" or "-0.0": a direction nobody can see is not a finding (CHAOS-9073).
+// The threshold is the displayed precision of formatDeltaAmount, no constant.
+func deltaRoundsToZero(v float64) bool {
+	return v != 0 && strings.Trim(fmt.Sprintf("%+.1f", v), "+-0.") == ""
+}
+
+// formatDeltaAmount is the one text of a served absolute delta, for the
+// sentences and the recommendations: one signed decimal; a non-zero change
+// that one decimal cannot show prints "<0.1" (">-0.1" below zero), the same
+// small-number text as the web tile, never "+0.0" or "-0.0".
+func formatDeltaAmount(v float64) string {
+	if deltaRoundsToZero(v) {
+		if v > 0 {
+			return "<0.1"
+		}
+		return ">-0.1"
+	}
+	return fmt.Sprintf("%+.1f", v)
+}
+
 func absF(v float64) float64 {
 	if v < 0 {
 		return -v
@@ -1774,7 +1796,7 @@ func deltaSummary(m reviewMetric) string {
 		"worsened":  "worsened",
 		"unchanged": "did not change",
 	}[m.delta.status]
-	return fmt.Sprintf("%s %s by %+.1f %s", m.label, direction, m.delta.absolute, m.unit)
+	return fmt.Sprintf("%s %s by %s %s", m.label, direction, formatDeltaAmount(m.delta.absolute), m.unit)
 }
 
 // buildSection ports _section (metrics/operating_review.py:676-697)
@@ -1813,8 +1835,8 @@ func recommendationsFromSections(sections []reviewSection) []string {
 		for _, m := range section.metrics {
 			if m.delta.status == "worsened" {
 				recommendations = append(recommendations, fmt.Sprintf(
-					"Review %s: worsened by %+.1f %s week-over-week.",
-					m.label, m.delta.absolute, m.unit,
+					"Review %s: worsened by %s %s week-over-week.",
+					m.label, formatDeltaAmount(m.delta.absolute), m.unit,
 				))
 			}
 		}

@@ -31,8 +31,18 @@ type demoStory struct {
 	CreatedAgo int
 	DoneAgo    int // < 0: open
 	Changes    []demoChange
-	// Blocks are indexes of the team's stories this one blocks.
-	Blocks []int
+	// Blocks are indexes of the team's stories this one blocks; BlocksIn are other teams' stories it
+	// blocks (a team waiting on another one).
+	Blocks   []int
+	BlocksIn []demoStoryRef
+	// Points is the story's own estimate; 0 leaves it to the team's share (demoPoints).
+	Points float64
+}
+
+// demoStoryRef names another team's story: the team's name and the story's index in its stories.
+type demoStoryRef struct {
+	Team  string
+	Story int
 }
 
 func feature(title string, created, done int, changes ...demoChange) demoStory {
@@ -72,8 +82,18 @@ func (c demoChange) deployFails() demoChange          { c.Deploy, c.DeployFailed
 
 func (s demoStory) blocks(indexes ...int) demoStory { s.Blocks = indexes; return s }
 
-// Payments (Jira PAY): steady delivery, three open blocker chains, two blockers already done. Its
-// stories also land four pull requests in shared-api.
+func (s demoStory) blocksIn(team string, index int) demoStory {
+	s.BlocksIn = append(s.BlocksIn, demoStoryRef{team, index})
+	return s
+}
+
+// Every story is in days before the world's as-of day. The first part of each team's list is its last
+// three months; the stories after it are the three months before those (appended so the earlier keys
+// stay), then the last days' work and the blockers between teams.
+
+// Payments (Jira PAY): steady delivery, three open blocker chains, two blockers already done, nothing
+// closed in the last three weeks. Its stories also land pull requests in shared-api. Its refund API
+// blocks Support Tools' refund lookup: a wait on another team.
 var demoPaymentsStories = []demoStory{
 	feature("Card tokenization for saved cards", 88, 74, change("payments-gateway", 82, 75).deploy(), change("shared-api", 80, 76)),
 	bug("Duplicate capture on gateway timeout", 85, 80, change("payments-gateway", 83, 81).ci(1).deploy()),
@@ -98,9 +118,18 @@ var demoPaymentsStories = []demoStory{
 	chore("Ledger schema migration to event rows", 14, -1, change("payments-ledger", 13, -1).ci(2)).blocks(17),
 	feature("Refund ledger entries", 10, -1, change("payments-ledger", 7, -1)).blocks(18),
 	feature("Chargeback automation", 6, -1, change("payments-gateway", 4, -1).text()),
+	// The three months before.
+	feature("Saved card vault migration", 175, 150, change("payments-gateway", 170, 152).deploy(), change("shared-api", 165, 153)),
+	bug("Webhook signature check skips retries", 160, 155, change("payments-gateway", 158, 156).ci(1).deploy()),
+	chore("Ledger read replicas", 150, 132, change("payments-ledger", 140, 133)),
+	feature("Payout currency selection", 128, 104, change("payments-ledger", 118, 106).deploy(), change("shared-api", 112, 105).text()),
+	bug("Refund amount off by a cent on JPY", 110, 98, change("payments-gateway", 100, 99).deploy()),
+	// Support Tools waits on it (SUP "Refund lookup in the support console").
+	feature("Refund status API for support agents", 15, -1, change("payments-gateway", 12, -1)).blocksIn("support", 24),
 }
 
-// Checkout (Linear CHK): features until a month ago, then mostly regressions and hotfixes.
+// Checkout (Linear CHK): features until a month ago, then mostly regressions and hotfixes. Its order
+// status endpoint blocks Mobile's order status screen.
 var demoCheckoutStories = []demoStory{
 	feature("One-page checkout", 89, 70, change("checkout-web", 84, 72).deploy(), change("checkout-api", 82, 71).deploy()),
 	feature("Address autocomplete", 86, 68, change("checkout-web", 76, 69)),
@@ -118,7 +147,18 @@ var demoCheckoutStories = []demoStory{
 	support("Investigate abandoned carts spike", 15, 11, change("checkout-api", 13, 11).deployFails()),
 	bug("Hotfix: gift cards double-applied", 10, 9, change("checkout-api", 10, 9).ci(2).deploy()),
 	bug("Revert express checkout on Safari", 7, 6, change("checkout-web", 7, 6)),
-	feature("Split shipments", 20, -1, change("checkout-api", 14, -1)),
+	feature("Split shipments", 20, -1, change("checkout-api", 14, -1)).blocks(23),
+	// The three months before.
+	feature("Checkout A/B test harness", 178, 150, change("checkout-web", 170, 152).deploy()),
+	feature("Tax calculation service integration", 165, 130, change("checkout-api", 150, 132).deploy(), change("shared-api", 140, 133)),
+	bug("Coupon field accepts expired codes", 140, 136, change("checkout-api", 138, 136).ci(1).deploy()),
+	feature("Shipping estimate on the cart page", 125, 100, change("checkout-web", 110, 101)),
+	chore("Upgrade the payment form SDK", 108, 95, change("checkout-web", 100, 96).deploy()),
+	// The last days.
+	bug("Hotfix: promo banner flickers on load", 3, 1, change("checkout-web", 3, 1).deploy()),
+	feature("Split shipment tracking emails", 9, -1, change("checkout-api", 7, -1)),
+	// Mobile waits on it (MOB "In-app order status screen").
+	feature("Order status endpoint for the mobile app", 13, -1, change("checkout-api", 10, -1)).blocksIn("mobile", 17),
 }
 
 // Support Tools (Jira SUP): mostly bugs, escalations and support requests.
@@ -139,6 +179,18 @@ var demoSupportStories = []demoStory{
 	bug("Inbox counter off by one", 16, 14, change("support-console", 15, 14)),
 	support("Escalation: VIP tickets not flagged", 9, 7, change("support-macros", 8, 7).ci(1)),
 	support("Restore deleted macros for the EU team", 4, -1, change("support-macros", 3, -1)),
+	// The three months before.
+	support("Escalation: password reset emails delayed", 176, 174, change("support-console", 175, 174).deploy()),
+	bug("Ticket tags lost on merge", 165, 160, change("support-console", 163, 160)),
+	feature("Macro library search", 150, 128, change("support-macros", 140, 130)),
+	support("Escalation: invoices missing in the ticket view", 120, 118, change("support-console", 119, 118).ci(1).deploy()),
+	bug("Agent status stuck on away", 102, 97, change("support-console", 100, 97).deploy()),
+	// The last days.
+	support("Escalation: SLA report export times out", 4, 2, change("support-console", 4, 2).ci(1).deploy()),
+	feature("Macro versioning", 8, -1, change("support-macros", 6, -1)).blocks(23),
+	feature("Macro rollback for agents", 5, -1, change("support-macros", 3, -1)),
+	// Waits on Payments ("Refund status API for support agents").
+	feature("Refund lookup in the support console", 11, -1, change("support-console", 9, -1)),
 }
 
 // Identity (GitHub issues, team grant): security work and security alerts on its repositories.
@@ -153,6 +205,13 @@ var demoIdentityStories = []demoStory{
 	bug("SDK leaks the refresh token to logs", 15, 13, change("identity-sdk", 14, 13).ci(1)),
 	security("Upgrade the vulnerable XML parser", 8, -1, change("identity-service", 6, -1).heuristic()),
 	feature("SCIM provisioning", 12, -1, change("identity-service", 9, -1).heuristic()),
+	// The three months before.
+	feature("WebAuthn device management", 172, 140, change("identity-service", 160, 142).deploy()),
+	security("Disable legacy TLS ciphers", 150, 148, change("identity-service", 149, 148).deploy()),
+	bug("SDK retries a revoked token forever", 130, 126, change("identity-sdk", 128, 126).ci(1)),
+	feature("Audit log export", 115, 95, change("identity-service", 105, 96).deploy()),
+	// The last days.
+	bug("Session cookie missing SameSite on redirect", 5, 1, change("identity-service", 4, 1).deploy()),
 }
 
 // Mobile (Linear MOB): steady delivery, every review by the same person.
@@ -167,14 +226,24 @@ var demoMobileStories = []demoStory{
 	chore("Upgrade the React Native runtime", 36, 30, change("mobile-app", 34, 30).ci(2)),
 	feature("Order tracking map", 30, 12, change("mobile-bff", 22, 14).deploy(), change("mobile-app", 18, 13).changes()),
 	bug("Cart badge count stale after logout", 14, 11, change("mobile-app", 13, 11)),
-	feature("Product reviews with photos", 12, -1, change("mobile-app", 8, -1)),
+	feature("Product reviews with photos", 12, -1, change("mobile-app", 8, -1)).blocks(11),
 	feature("Store pickup", 6, -1, change("mobile-bff", 4, -1)),
+	// The three months before.
+	feature("Apple Pay in the app", 176, 150, change("mobile-app", 168, 152), change("mobile-bff", 165, 151).deploy()),
+	bug("Login loop after token expiry", 160, 157, change("mobile-app", 159, 157).ci(1)),
+	feature("Product search filters", 140, 112, change("mobile-bff", 130, 114).deploy(), change("mobile-app", 125, 113).changes()),
+	chore("Crash reporting SDK upgrade", 115, 104, change("mobile-app", 110, 105)),
+	// The last days.
+	bug("Hotfix: order tracking map crash", 3, 2, change("mobile-bff", 3, 2).deploy()),
+	// Waits on Checkout ("Order status endpoint for the mobile app").
+	feature("In-app order status screen", 10, -1, change("mobile-app", 8, -1)),
 }
 
-// Delivery (GitLab root group): the deploy pipeline breaks often; shared-infra changes.
+// Delivery (GitLab root group): the deploy pipeline breaks often; shared-infra changes. Its pipeline
+// environment for data jobs blocks Data.
 var demoDeliveryStories = []demoStory{
 	chore("Move the deploy pipeline to environments", 88, 80, change("chaos-gl/deploy-pipeline", 86, 81).files("ci/deploy.gitlab-ci.yml", "deploy/rollout.yaml").deploy()),
-	feature("Canary stage in the deploy pipeline", 82, 66, change("chaos-gl/deploy-pipeline", 75, 67).ci(1).files("ci/deploy.gitlab-ci.yml", "deploy/canary.yaml").deploy()),
+	feature("Canary stage in the deploy pipeline", 82, 66, change("chaos-gl/deploy-pipeline", 75, 67).ci(1).files("ci/deploy.gitlab-ci.yml", "deploy/canary.yaml", "internal/canary/promote.go").deploy()),
 	bug("Rollback job does not restore the config map", 70, 64, change("chaos-gl/deploy-pipeline", 66, 64).ci(2).files("deploy/rollback.sh").deploy()),
 	chore("Shared runner pool for all projects", 68, 58, change("chaos-gl/shared-infra", 63, 59).files("runners/pool.tf")),
 	feature("Release notes generator", 64, 45, change("chaos-gl/release-tools", 52, 46)),
@@ -186,11 +255,23 @@ var demoDeliveryStories = []demoStory{
 	bug("Blue-green switch leaves old pods serving", 18, 15, change("chaos-gl/deploy-pipeline", 17, 15).ci(2).files("deploy/rollout.yaml").deployFails()),
 	support("Incident follow-up: page on failed rollouts", 12, 10, change("chaos-gl/deploy-pipeline", 11, 10).files("deploy/alerts.yaml").deploy()),
 	chore("Pin base images in the shared infra", 9, -1, change("chaos-gl/shared-infra", 7, -1).files("images/base.lock")),
-	bug("Deploy pipeline retries mask real failures", 5, -1, change("chaos-gl/deploy-pipeline", 4, -1).ci(2).files("ci/deploy.gitlab-ci.yml")),
+	bug("Deploy pipeline retries mask real failures", 5, -1, change("chaos-gl/deploy-pipeline", 4, -1).ci(2).files("ci/deploy.gitlab-ci.yml", "internal/rollout/retry.go")).blocks(22),
+	// The three months before.
+	chore("Container registry cleanup policy", 178, 170, change("chaos-gl/shared-infra", 175, 171).files("registry/cleanup.tf")),
+	feature("Deploy pipeline dry-run mode", 165, 140, change("chaos-gl/deploy-pipeline", 155, 142).ci(1).files("ci/deploy.gitlab-ci.yml", "internal/rollout/plan.go").deploy()),
+	bug("Release tags created twice", 135, 130, change("chaos-gl/release-tools", 133, 131).deploy()),
+	chore("Runner autoscaling limits", 120, 110, change("chaos-gl/shared-infra", 115, 111).files("runners/autoscale.tf")),
+	bug("Rollout status check ignores timeouts", 105, 98, change("chaos-gl/deploy-pipeline", 102, 99).ci(2).files("internal/rollout/status.go", "deploy/rollout.yaml").deploy()),
+	// The last days.
+	bug("Cap smoke test retries at two", 6, 1, change("chaos-gl/deploy-pipeline", 5, 1).ci(1).files("internal/rollout/retry.go", "deploy/smoke.sh").deploy()),
+	chore("Release notes link check", 4, 2, change("chaos-gl/release-tools", 4, 2).deploy()),
+	// Data waits on it (data "Nightly ETL deploys through the shared pipeline").
+	chore("Deploy pipeline environment for data jobs", 12, -1, change("chaos-gl/deploy-pipeline", 10, -1).files("ci/data-jobs.gitlab-ci.yml", "internal/rollout/environments.go")).blocksIn("data", 15),
+	feature("Canary analysis for the payments service", 9, -1, change("chaos-gl/deploy-pipeline", 7, -1).files("internal/canary/analysis.go", "deploy/canary.yaml")),
 }
 
 // Data (GitLab subgroup data): a healthy, steady flow; two of its issues are closed by shared-infra
-// merge requests.
+// merge requests. Its nightly ETL deploys wait on Delivery's pipeline environment.
 var demoDataStories = []demoStory{
 	feature("Incremental loads for the orders table", 85, 72, change("chaos-gl/data/warehouse-etl", 80, 73).deploy()),
 	feature("Metrics store retention policies", 78, 64, change("chaos-gl/data/metrics-store", 70, 65)),
@@ -202,6 +283,15 @@ var demoDataStories = []demoStory{
 	feature("Data quality checks on ingest", 35, 19, change("chaos-gl/data/warehouse-etl", 24, 20).deploy()),
 	feature("Query cache for dashboards", 26, 12, change("chaos-gl/data/metrics-store", 16, 13)),
 	feature("Customer cohort tables", 14, 5, change("chaos-gl/data/warehouse-etl", 9, 6).deploy()),
+	// The three months before.
+	feature("Orders table partitioning", 175, 150, change("chaos-gl/data/warehouse-etl", 165, 152).deploy()),
+	feature("Metrics store rollups", 160, 135, change("chaos-gl/data/metrics-store", 150, 137)),
+	bug("ETL drops rows with a null region", 130, 127, change("chaos-gl/data/warehouse-etl", 129, 127)),
+	chore("Upgrade the warehouse driver", 112, 104, change("chaos-gl/data/warehouse-etl", 108, 105).deploy()),
+	// The last days.
+	feature("Backfill job for the cohort tables", 6, 1, change("chaos-gl/data/warehouse-etl", 5, 1).deploy()),
+	// Waits on Delivery ("Deploy pipeline environment for data jobs").
+	feature("Nightly ETL deploys through the shared pipeline", 8, -1, change("chaos-gl/data/warehouse-etl", 6, -1)),
 }
 
 // Web (GitLab subgroup web): little recorded work, none in the last month.
@@ -209,6 +299,9 @@ var demoWebStories = []demoStory{
 	feature("Marketing site pricing page", 80, 66, change("chaos-gl/web/marketing-site", 72, 67)),
 	chore("Design system color tokens", 62, 50, change("chaos-gl/web/design-system", 55, 51)),
 	bug("Footer links broken on mobile", 48, -1),
+	// The three months before.
+	feature("Blog section on the marketing site", 150, 130, change("chaos-gl/web/marketing-site", 140, 131)),
+	chore("Design system button variants", 120, 108, change("chaos-gl/web/design-system", 112, 109)),
 }
 
 // Delivery's incidents on the deploy pipeline (GitLab incident issues).
@@ -232,6 +325,10 @@ var demoDeliveryIncidents = []demoIncident{
 	{"Failed rollout not paged for 40 minutes", "HIGH", 9, 7, 2},
 	{"Retries masked a broken database migration", "CRITICAL", 4, 9, -1},
 	{"Canary metrics missing for the payments service", "LOW", 2, 11, -1},
+	// The three months before.
+	{"Deploy job ran against the wrong cluster", "HIGH", 160, 10, 4},
+	{"Rollback script failed on a missing tag", "MEDIUM", 128, 15, 6},
+	{"Pipeline stuck waiting for a runner", "LOW", 101, 9, 3},
 }
 
 // demoIssueText is a story's tracker description and demoChangeText its pull or merge request body: a

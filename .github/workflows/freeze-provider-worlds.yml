@@ -7,11 +7,17 @@
 # and pins the digests (internal/fixturescli/generate.go, testdata.manifest.tsv).
 #
 # Run it with `gh workflow run freeze-provider-worlds.yml --ref <branch>`. A change to this file also
-# starts it on the pull request, which is how it is tested before it exists on main.
+# starts it on the pull request, which is how it is tested before it exists on main. The demo world is
+# frozen at its committed as-of day unless demo_as_of names another one (YYYY-MM-DD).
 name: Freeze provider worlds
 
 on:
   workflow_dispatch:
+    inputs:
+      demo_as_of:
+        description: 'The day the demo world ends (YYYY-MM-DD); empty keeps the committed one'
+        required: false
+        default: ''
   pull_request:
     paths:
       - '.github/workflows/freeze-provider-worlds.yml'
@@ -61,18 +67,23 @@ jobs:
         run: bash ci/check_go.sh integration-prepull
 
       - name: Freeze the provider worlds
+        env:
+          DEMO_AS_OF: ${{ inputs.demo_as_of }}
         run: |
           set -euo pipefail
+          extra=()
+          if [ -n "${DEMO_AS_OF:-}" ]; then extra+=("-demo-as-of=${DEMO_AS_OF}"); fi
           go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=25m -v \
             -run '^TestProviderWorldsAreWhatTheProducersWrite$' ./internal/fixturescli/ \
-            -freeze-provider-worlds 2>&1 | tee freeze.log
+            -freeze-provider-worlds "${extra[@]}" 2>&1 | tee freeze.log
 
       - name: Collect what changed
         run: |
           set -euo pipefail
           mkdir -p frozen/files
           git status --porcelain -- internal/fixturescli/testdata > frozen/changed.txt
-          git diff --name-only -- internal/fixturescli/testdata | while read -r file; do
+          # A world with new parameters is a new, untracked file: it is collected too.
+          { git diff --name-only -- internal/fixturescli/testdata; git ls-files --others --exclude-standard -- internal/fixturescli/testdata; } | while read -r file; do
             mkdir -p "frozen/files/$(dirname "${file}")"
             cp "${file}" "frozen/files/${file}"
           done

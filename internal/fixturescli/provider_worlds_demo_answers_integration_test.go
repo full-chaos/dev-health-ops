@@ -3,6 +3,7 @@
 package fixturescli
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"sort"
@@ -15,6 +16,8 @@ import (
 
 // demoTeam is one team's tracker and code host.
 type demoTeam struct {
+	// Name is the team's name in the world's stories (a cross-team blocker names its team by it).
+	Name string
 	// Tracker: jira, linear, github or gitlab.
 	Tracker string
 	// Key is the Jira project key or the Linear team key.
@@ -29,17 +32,43 @@ type demoTeam struct {
 	Linear   []linearUser
 	Reviewer githubUser // when set, every review is by this person
 	Stories  []demoStory
+	// EstimateShare is the percentage of the team's items that carry an estimate (story points, a
+	// Linear estimate or a GitLab weight); a GitHub tracker has no estimate field.
+	EstimateShare int
 }
 
 var demoTeams = []demoTeam{
-	{Tracker: "jira", Key: "PAY", Project: demoJiraPAY, GitHub: []githubUser{dmPia, dmQuin, dmRaf}, Jira: []jiraUser{dmJPia, dmJQuin, dmJRaf}, Stories: demoPaymentsStories},
-	{Tracker: "linear", Key: "CHK", LinearPrj: demoLinearProjects[0].ID, GitHub: []githubUser{dmSol, dmTeo, dmUma}, Linear: []linearUser{dmLSol, dmLTeo, dmLUma}, Stories: demoCheckoutStories},
-	{Tracker: "jira", Key: "SUP", Project: demoJiraSUP, GitHub: []githubUser{dmVic, dmWen}, Jira: []jiraUser{dmJVic, dmJWen}, Stories: demoSupportStories},
-	{Tracker: "github", Home: "identity-service", GitHub: []githubUser{dmXan, dmYara, dmZed}, Stories: demoIdentityStories},
-	{Tracker: "linear", Key: "MOB", LinearPrj: demoLinearProjects[1].ID, GitHub: []githubUser{dmAbe, dmBea}, Linear: []linearUser{dmLAbe, dmLBea}, Reviewer: dmMoLed, Stories: demoMobileStories},
-	{Tracker: "gitlab", Home: "chaos-gl/deploy-pipeline", GitLab: []gitlabUser{dmDax, dmEva, dmFin}, Stories: demoDeliveryStories},
-	{Tracker: "gitlab", Home: "chaos-gl/data/warehouse-etl", GitLab: []gitlabUser{dmGia, dmHal, dmIda}, Stories: demoDataStories},
-	{Tracker: "gitlab", Home: "chaos-gl/web/marketing-site", GitLab: []gitlabUser{dmJon, dmKit}, Stories: demoWebStories},
+	{Name: "payments", Tracker: "jira", Key: "PAY", Project: demoJiraPAY, GitHub: []githubUser{dmPia, dmQuin, dmRaf}, Jira: []jiraUser{dmJPia, dmJQuin, dmJRaf}, Stories: demoPaymentsStories, EstimateShare: 60},
+	{Name: "checkout", Tracker: "linear", Key: "CHK", LinearPrj: demoLinearProjects[0].ID, GitHub: []githubUser{dmSol, dmTeo, dmUma}, Linear: []linearUser{dmLSol, dmLTeo, dmLUma}, Stories: demoCheckoutStories, EstimateShare: 75},
+	{Name: "support", Tracker: "jira", Key: "SUP", Project: demoJiraSUP, GitHub: []githubUser{dmVic, dmWen}, Jira: []jiraUser{dmJVic, dmJWen}, Stories: demoSupportStories, EstimateShare: 40},
+	{Name: "identity", Tracker: "github", Home: "identity-service", GitHub: []githubUser{dmXan, dmYara, dmZed}, Stories: demoIdentityStories},
+	{Name: "mobile", Tracker: "linear", Key: "MOB", LinearPrj: demoLinearProjects[1].ID, GitHub: []githubUser{dmAbe, dmBea}, Linear: []linearUser{dmLAbe, dmLBea}, Reviewer: dmMoLed, Stories: demoMobileStories, EstimateShare: 70},
+	{Name: "delivery", Tracker: "gitlab", Home: "chaos-gl/deploy-pipeline", GitLab: []gitlabUser{dmDax, dmEva, dmFin}, Stories: demoDeliveryStories, EstimateShare: 50},
+	{Name: "data", Tracker: "gitlab", Home: "chaos-gl/data/warehouse-etl", GitLab: []gitlabUser{dmGia, dmHal, dmIda}, Stories: demoDataStories, EstimateShare: 80},
+	{Name: "web", Tracker: "gitlab", Home: "chaos-gl/web/marketing-site", GitLab: []gitlabUser{dmJon, dmKit}, Stories: demoWebStories, EstimateShare: 30},
+}
+
+// demoTeamNamed is the team of that name.
+func demoTeamNamed(name string) demoTeam {
+	for _, team := range demoTeams {
+		if team.Name == name {
+			return team
+		}
+	}
+	panic("no demo team " + name)
+}
+
+// demoPoints is a story's estimate: its own, else one for EstimateShare percent of the team's items,
+// chosen and sized by the story's title (1, 2, 3, 5 or 8 points); 0 is none.
+func demoPoints(team demoTeam, story demoStory) float64 {
+	if story.Points > 0 {
+		return story.Points
+	}
+	sum := sha256.Sum256([]byte("dev-health-demo-estimate:" + team.Name + ":" + story.Title))
+	if int(sum[0])*100/256 >= team.EstimateShare {
+		return 0
+	}
+	return []float64{1, 2, 3, 5, 8}[int(sum[1])%5]
 }
 
 // demoGitHubRepo is everything one GitHub repository answers.
@@ -88,6 +117,8 @@ type demoBuild struct {
 	Jira   []jiraIssue
 	Linear []linearIssue
 	nextID int
+	// refs are each team's stories' tracker references (demoStoryRefs), by team name.
+	refs map[string][]string
 }
 
 func (build *demoBuild) id() int {
@@ -166,7 +197,7 @@ func (build *demoBuild) demoRuns(c demoChange, commits []demoCommit, branch stri
 }
 
 func newDemoBuild() *demoBuild {
-	build := &demoBuild{GitHub: map[string]*demoGitHubRepo{}, GitLab: map[string]*demoGitLabProject{}}
+	build := &demoBuild{GitHub: map[string]*demoGitHubRepo{}, GitLab: map[string]*demoGitLabProject{}, refs: demoStoryRefs()}
 	for _, name := range demoGitHubRepoNames {
 		build.GitHub[name] = &demoGitHubRepo{}
 	}
@@ -178,6 +209,68 @@ func newDemoBuild() *demoBuild {
 	}
 	build.GitLab["chaos-gl/deploy-pipeline"].Incidents = demoDeliveryIncidents
 	return build
+}
+
+// demoIssueHome is the repository a GitHub or GitLab team's story's issue lives in: the repository of
+// its first change for a GitHub team, the project of its first change when the team owns it for a
+// GitLab team, else the team's home.
+func demoIssueHome(team demoTeam, story demoStory) string {
+	home := team.Home
+	if len(story.Changes) > 0 {
+		first := story.Changes[0].Repo
+		switch {
+		case team.Tracker == "github":
+			home = first
+		case team.Tracker == "gitlab" && isGitLab(first) && demoOwnsProject(team, first):
+			home = first
+		}
+	}
+	return home
+}
+
+// demoStoryRefs names every story's tracker item the way the tracker's own links name it: the Jira or
+// Linear key, the GitLab "project#iid". GitHub issues are not named (no GitHub story blocks another).
+// The GitLab numbers are the ones addTeam gives, in the same order; addTeam checks they agree.
+func demoStoryRefs() map[string][]string {
+	refs := map[string][]string{}
+	issues := map[string]int{}
+	for _, team := range demoTeams {
+		out := make([]string, len(team.Stories))
+		for index, story := range team.Stories {
+			switch team.Tracker {
+			case "jira", "linear":
+				out[index] = fmt.Sprintf("%s-%d", team.Key, index+1)
+			case "gitlab":
+				home := demoIssueHome(team, story)
+				issues[home]++
+				out[index] = fmt.Sprintf("%s#%d", home, issues[home])
+			}
+		}
+		refs[team.Name] = out
+	}
+	return refs
+}
+
+// blockedRefs are the references of the items a story blocks: its own team's (Blocks) and another
+// team's (BlocksIn). A tracker's link names only its own tracker's items, so a cross-team blocker is
+// between two teams of the same tracker.
+func (build *demoBuild) blockedRefs(team demoTeam, story demoStory) []string {
+	var out []string
+	for _, index := range story.Blocks {
+		out = append(out, build.refs[team.Name][index])
+	}
+	for _, target := range story.BlocksIn {
+		if other := demoTeamNamed(target.Team); other.Tracker != team.Tracker {
+			panic(fmt.Sprintf("%q blocks a %s item of %s from %s: a tracker links only its own items", story.Title, other.Tracker, target.Team, team.Tracker))
+		}
+		out = append(out, build.refs[target.Team][target.Story])
+	}
+	for _, ref := range out {
+		if ref == "" {
+			panic(fmt.Sprintf("%q blocks an item no tracker link can name", story.Title))
+		}
+	}
+	return out
 }
 
 func demoJiraType(kind string) (string, []string) {
@@ -211,15 +304,11 @@ func demoLabel(kind string) string {
 }
 
 func (build *demoBuild) addTeam(team demoTeam) {
-	keys := make([]string, len(team.Stories))
-	for index := range team.Stories {
-		switch team.Tracker {
-		case "jira", "linear":
-			keys[index] = fmt.Sprintf("%s-%d", team.Key, index+1)
-		}
-	}
 	for index, story := range team.Stories {
-		key := keys[index]
+		key := ""
+		if team.Tracker == "jira" || team.Tracker == "linear" {
+			key = build.refs[team.Name][index]
+		}
 		created := demoAt(story.CreatedAgo, 8, 30)
 		done := ""
 		if story.DoneAgo >= 0 {
@@ -227,16 +316,10 @@ func (build *demoBuild) addTeam(team demoTeam) {
 		}
 		// The tracker item of a GitHub or GitLab team: an issue in the repository of its first change (its
 		// home repository when the change is in another team's repository).
-		home := team.Home
-		if len(story.Changes) > 0 && (team.Tracker == "github" || team.Tracker == "gitlab") {
-			first := story.Changes[0].Repo
-			if _, owned := build.GitLab[first]; owned && team.Tracker == "gitlab" && demoOwnsProject(team, first) {
-				home = first
-			}
-			if team.Tracker == "github" {
-				home = first
-			}
-		}
+		home := demoIssueHome(team, story)
+		points := demoPoints(team, story)
+		blocked := build.blockedRefs(team, story)
+		linkedAt := demoAt(story.CreatedAgo, 10, 0)
 		issueNumber := 0
 		switch team.Tracker {
 		case "github":
@@ -247,6 +330,9 @@ func (build *demoBuild) addTeam(team demoTeam) {
 			project := build.GitLab[home]
 			project.nextIssue++
 			issueNumber = project.nextIssue
+			if ref := fmt.Sprintf("%s#%d", home, issueNumber); ref != build.refs[team.Name][index] {
+				panic(fmt.Sprintf("%q is %s, but the stories' references name it %s", story.Title, ref, build.refs[team.Name][index]))
+			}
 		}
 		lastActivity := created
 		var nativePRs, attachments []string
@@ -284,19 +370,22 @@ func (build *demoBuild) addTeam(team demoTeam) {
 				ID: strconv.Itoa(30000 + build.id()), Key: key, Project: team.Project, Summary: story.Title, Type: kind,
 				Assignee: assignee, Reporter: team.Jira[(index+1)%len(team.Jira)], Created: created, Updated: updated,
 				Resolved: done, Labels: labels, PullRequests: nativePRs, Description: demoIssueText(story),
-			}
-			for _, blocked := range story.Blocks {
-				issue.Blocks = append(issue.Blocks, keys[blocked])
+				Blocks: blocked, StoryPoints: points,
 			}
 			build.Jira = append(build.Jira, issue)
 		case "linear":
 			assignee := team.Linear[index%len(team.Linear)]
 			started := demoAt(max(story.CreatedAgo-1, 0), 9, 0)
+			var relations []string
+			for _, ref := range blocked {
+				relations = append(relations, "blocks "+ref+"@"+linkedAt)
+			}
 			build.Linear = append(build.Linear, linearIssue{
 				ID: fmt.Sprintf("a2000000-0000-4000-8000-%012d", build.id()), Identifier: key, Title: story.Title,
 				Team: team.Key, Project: team.LinearPrj, Assignee: assignee, Creator: team.Linear[(index+1)%len(team.Linear)],
 				CreatedAt: created, UpdatedAt: updated, StartedAt: started, CompletedAt: done,
 				Attachments: attachments, Labels: []string{demoLabel(story.Kind)}, Description: demoIssueText(story),
+				Relations: relations, Estimate: points,
 			})
 		case "github":
 			author := team.GitHub[index%len(team.GitHub)]
@@ -308,10 +397,14 @@ func (build *demoBuild) addTeam(team demoTeam) {
 		case "gitlab":
 			author := team.GitLab[index%len(team.GitLab)]
 			project := build.GitLab[home]
+			var links []string
+			for _, ref := range blocked {
+				links = append(links, "blocks "+ref+"@"+linkedAt)
+			}
 			project.Items = append(project.Items, gitlabItem{
 				IID: issueNumber, Title: story.Title, Description: demoIssueText(story), Author: author, Assignees: []gitlabUser{author},
 				Labels: []string{strings.ToLower(demoLabel(story.Kind))}, CreatedAt: created, UpdatedAt: updated, ClosedAt: done,
-				ClosedBy: closedBy,
+				ClosedBy: closedBy, Links: links, Weight: int(points),
 			})
 		}
 	}
@@ -411,6 +504,7 @@ func (build *demoBuild) addMergeRequest(team demoTeam, index int, story demoStor
 	}
 	if c.MergedAgo >= 0 {
 		item.ClosedAt, item.MergedAt = demoAt(c.MergedAgo, 15, 30), demoAt(c.MergedAgo, 15, 30)
+		item.ApprovedAt = demoAt(c.MergedAgo, 14, 0)
 	}
 	project.Items = append(project.Items, item)
 	project.Commits = append(project.Commits, commits...)
@@ -817,20 +911,24 @@ func demoJiraAnswers(build *demoBuild) []providerAnswer {
 }
 
 func demoAnswers() []providerAnswer {
+	// The catalogs' dates follow the as-of day, which is known once the flags are parsed.
+	registerDemoRepositories()
 	build := newDemoBuild()
 	var answers []providerAnswer
 	answers = append(answers, demoGitHubAnswers(build)...)
 	answers = append(answers, demoGitLabAnswers(build)...)
 	answers = append(answers, demoJiraAnswers(build)...)
-	answers = append(answers, linearGraphQLAnswer(demoLinearTeams, demoLinearProjects, build.Linear, ""))
+	answers = append(answers, linearGraphQLAnswer(demoLinearTeams, demoLinearProjectsDated(), build.Linear, ""))
+	answers = append(answers, demoFileAnswers(build)...)
 	return answers
 }
 
 // demoCommitStatsSteps sync the heavy commit-stats dataset in the seven-day windows successive incremental
-// syncs read, oldest first, so every commit of the world's depth gets its stats.
+// syncs read, oldest first, so every commit of the world's depth gets its stats; the last window ends at
+// the instant.
 func demoCommitStatsSteps(provider string, credential map[string]string, sources [][2]string) []worldStep {
 	var steps []worldStep
-	for days := demoDepthDays; days >= 7; days -= 7 {
+	for days := demoDepthDays; days > 0; days -= 7 {
 		steps = append(steps, worldStep{Kind: "sync", Provider: provider, Credential: credential, DepthDays: days, Sources: sources, Datasets: []string{"commit-stats"}})
 	}
 	return steps
@@ -867,22 +965,36 @@ func demoSteps() []worldStep {
 		{Kind: "sync", Provider: "gitlab", Credential: gitlabToken, DepthDays: demoDepthDays, Sources: gitlab,
 			Datasets: append([]string{"repo-metadata", "prs", "commits", "cicd", "deployments", "incidents"}, workItemDatasets...)},
 		{Kind: "sync", Provider: "jira", Credential: jiraCredential, Config: jiraConfig, DepthDays: demoDepthDays, Sources: jiraSources,
-			Datasets: workItemDatasets, DatasetOptions: map[string]any{"fetch_dev_status": true}},
+			Datasets: workItemDatasets, DatasetOptions: map[string]any{"fetch_dev_status": true, "story_points_field": jiraStoryPointsField}},
 		{Kind: "sync", Provider: "linear", Credential: linearToken, DepthDays: demoDepthDays,
 			Sources: [][2]string{{"CHK", "Checkout"}, {"MOB", "Mobile"}}, Datasets: workItemDatasets},
 	}
 	steps = append(steps, demoCommitStatsSteps("github", githubToken, github)...)
 	steps = append(steps, demoCommitStatsSteps("gitlab", gitlabToken, gitlab)...)
+	// The files at the instant: the tree and the text of the default branch, which the complexity job
+	// scans.
+	steps = append(steps,
+		worldStep{Kind: "sync", Provider: "github", Credential: githubToken, DepthDays: 7, Sources: github, Datasets: []string{"files"}},
+		worldStep{Kind: "sync", Provider: "gitlab", Credential: gitlabToken, DepthDays: 7, Sources: gitlab, Datasets: []string{"files"}})
 	return append(steps, worldStep{Kind: "work_graph"}, worldStep{Kind: "ownership_derivation"}, worldStep{Kind: "repo_complexity"})
 }
 
+// demoWorld is the demo world as the committed file holds it: frozen at demoFrozenAsOf. The parameters do
+// not name the as-of day; the file's frozen_at does, and a load moves the world to the load day.
 var demoWorld = providerWorld{
 	Params: GenerateParams{
-		Provider: "mixed", RepoName: "chaos-fixtures/shared-api", RepoCount: len(demoGitHubRepoNames) + len(demoGitLabProjectPaths), Days: 90,
+		Provider: "mixed", RepoName: "chaos-fixtures/shared-api", RepoCount: len(demoGitHubRepoNames) + len(demoGitLabProjectPaths), Days: demoDepthDays - 1,
 		CommitsPerDay: 0, PRCount: demoChangeCount(), TeamCount: 8, Seed: 9440,
 	},
 	OrgID:    "f1c7e000-0000-4000-8000-00000000a0d0",
-	FrozenAt: demoInstant,
+	FrozenAt: demoInstantOf(demoFrozenAsOf),
 	Answers:  demoAnswers,
 	Steps:    demoSteps(),
+}
+
+// demoWorldAsOf is the demo world of this run's as-of day (-demo-as-of): the one a freeze writes.
+func demoWorldAsOf() providerWorld {
+	world := demoWorld
+	world.FrozenAt = demoInstant()
+	return world
 }

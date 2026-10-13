@@ -828,7 +828,9 @@ func resolveOwnedRepoID(ctx context.Context, client QueryClient, orgID, teamID, 
 	order := make([]string, 0, len(ownershipRows))
 	for _, row := range ownershipRows {
 		if first, seen := firstRow[row.resolvedRepoID]; seen {
-			if first.mainOwner == 1 && row.mainOwner == 1 && row.specificity == first.specificity {
+			// The ORDER BY puts main rows first, so a main row after the
+			// first row means the first row is a main owner's too.
+			if row.mainOwner == 1 && row.specificity == first.specificity {
 				if tiedMainOwners[row.resolvedRepoID] == nil {
 					tiedMainOwners[row.resolvedRepoID] = map[string]bool{}
 				}

@@ -283,7 +283,7 @@ func (build *demoBuild) addTeam(team demoTeam) {
 			issue := jiraIssue{
 				ID: strconv.Itoa(30000 + build.id()), Key: key, Project: team.Project, Summary: story.Title, Type: kind,
 				Assignee: assignee, Reporter: team.Jira[(index+1)%len(team.Jira)], Created: created, Updated: updated,
-				Resolved: done, Labels: labels, PullRequests: nativePRs,
+				Resolved: done, Labels: labels, PullRequests: nativePRs, Description: demoIssueText(story),
 			}
 			for _, blocked := range story.Blocks {
 				issue.Blocks = append(issue.Blocks, keys[blocked])
@@ -296,20 +296,20 @@ func (build *demoBuild) addTeam(team demoTeam) {
 				ID: fmt.Sprintf("a2000000-0000-4000-8000-%012d", build.id()), Identifier: key, Title: story.Title,
 				Team: team.Key, Project: team.LinearPrj, Assignee: assignee, Creator: team.Linear[(index+1)%len(team.Linear)],
 				CreatedAt: created, UpdatedAt: updated, StartedAt: started, CompletedAt: done,
-				Attachments: attachments, Labels: []string{demoLabel(story.Kind)},
+				Attachments: attachments, Labels: []string{demoLabel(story.Kind)}, Description: demoIssueText(story),
 			})
 		case "github":
 			author := team.GitHub[index%len(team.GitHub)]
 			repo := build.GitHub[home]
 			repo.Items = append(repo.Items, githubIssue{
-				Number: issueNumber, Title: story.Title, Body: story.Title + ".", Author: author, Assignees: []githubUser{author},
+				Number: issueNumber, Title: story.Title, Body: demoIssueText(story), Author: author, Assignees: []githubUser{author},
 				Labels: []string{strings.ToLower(demoLabel(story.Kind))}, CreatedAt: created, UpdatedAt: updated, ClosedAt: done,
 			})
 		case "gitlab":
 			author := team.GitLab[index%len(team.GitLab)]
 			project := build.GitLab[home]
 			project.Items = append(project.Items, gitlabItem{
-				IID: issueNumber, Title: story.Title, Description: story.Title + ".", Author: author, Assignees: []gitlabUser{author},
+				IID: issueNumber, Title: story.Title, Description: demoIssueText(story), Author: author, Assignees: []gitlabUser{author},
 				Labels: []string{strings.ToLower(demoLabel(story.Kind))}, CreatedAt: created, UpdatedAt: updated, ClosedAt: done,
 				ClosedBy: closedBy,
 			})
@@ -338,16 +338,15 @@ func (build *demoBuild) addPullRequest(team demoTeam, author githubUser, story d
 	repo.next++
 	number := repo.next
 	commits := demoChangeCommits(c, key, story.Title, author.Login)
-	body := "Changes for: " + story.Title + "."
+	body := demoChangeText(story)
 	var closes []string
 	if team.Tracker == "github" {
 		switch {
 		case c.Heuristic:
-			body = "Changes for the identity service."
 		case c.Text:
-			body = fmt.Sprintf("Implements the work asked for in #%d.", issueNumber)
+			body = fmt.Sprintf("Implements the work asked for in #%d.\n\n", issueNumber) + body
 		default:
-			body = fmt.Sprintf("Fixes #%d", issueNumber)
+			body = fmt.Sprintf("Fixes #%d\n\n", issueNumber) + body
 			closes = []string{fmt.Sprintf("%s/%s#%d", githubOrg, home, issueNumber)}
 		}
 	}
@@ -394,12 +393,12 @@ func (build *demoBuild) addMergeRequest(team demoTeam, index int, story demoStor
 	if home != c.Repo {
 		ref = fmt.Sprintf("%s#%d", home, issueNumber)
 	}
-	description := "Closes " + ref
+	description := "Closes " + ref + "\n\n" + demoChangeText(story)
 	switch {
 	case c.Heuristic:
-		description = "Pipeline maintenance."
+		description = demoChangeText(story)
 	case c.Text:
-		description = "Implements " + ref + "."
+		description = "Implements " + ref + ".\n\n" + demoChangeText(story)
 	}
 	commits := demoChangeCommits(c, "", story.Title, author.Name)
 	branch := "feature/" + demoSlug(story.Title)

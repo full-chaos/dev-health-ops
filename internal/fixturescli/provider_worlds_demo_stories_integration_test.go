@@ -2,6 +2,8 @@
 
 package fixturescli
 
+import "strings"
+
 // The demo world's work: each team's stories (a tracker item and the pull or merge requests that carry
 // it), in days before the world's instant.
 
@@ -230,4 +232,39 @@ var demoDeliveryIncidents = []demoIncident{
 	{"Failed rollout not paged for 40 minutes", "HIGH", 9, 7, 2},
 	{"Retries masked a broken database migration", "CRITICAL", 4, 9, -1},
 	{"Canary metrics missing for the payments service", "LOW", 2, 11, -1},
+}
+
+// demoIssueText is a story's tracker description and demoChangeText its pull or merge request body: a
+// few sentences in the voice of the work's kind, so a unit's text says what kind of work it is. They name
+// no issue key, number or URL: a link stays the link the change declares.
+func demoIssueText(story demoStory) string {
+	subject := strings.ToLower(story.Title[:1]) + story.Title[1:]
+	switch story.Kind {
+	case "feature":
+		return "Customers and the product team asked for " + subject + ". Today people work around the gap by hand, which slows them down and keeps coming up in sales and support calls. This story delivers the capability end to end: the API change, the user-facing screens, the documentation, and a staged rollout behind a feature flag so we can measure adoption before turning it on for everyone."
+	case "bug":
+		return "Users report a defect: " + subject + ". It started after a recent release and breaks a core flow for a subset of accounts, and support has linked several customer tickets to it. We need a fix with a regression test, a short root-cause note, and a check that no stored data was corrupted while the defect was live in production."
+	case "support":
+		return "Unplanned request from the support team: " + subject + ". A customer escalation reached the on-call engineer and the queue is waiting on us, so this interrupts the planned sprint work. Scope is limited to unblocking the affected customers quickly, posting status in the support channel, and writing down what would prevent the same escalation next time."
+	case "security":
+		return "Security work: " + subject + ". A scanner finding and an internal review flagged a weakness that could expose customer accounts or tokens if it stays in place. The goal is to remove the vulnerable path, rotate any secrets that may be affected, add a test that pins the fix, and record the change for the next compliance review with the security team."
+	default:
+		return "Maintenance work: " + subject + ". The current setup is outdated, adds friction to every change, and raises the risk of slow builds and surprises during upgrades. This pays down technical debt without changing user-facing behaviour: update the dependency or configuration, remove dead code, keep the tests green, and document anything operators must know."
+	}
+}
+
+func demoChangeText(story demoStory) string {
+	subject := strings.ToLower(story.Title[:1]) + story.Title[1:]
+	switch story.Kind {
+	case "feature":
+		return "Implements " + subject + ". Adds the new endpoint and the user interface changes behind a feature flag, with unit and integration tests for the main paths and the edge cases found in review. Rollout plan: enable it for internal accounts first, watch error rates and latency on the dashboard for a day, then enable it for all customers and remove the flag."
+	case "bug":
+		return "Fixes the defect: " + subject + ". Root cause: an unchecked edge case in the request handling path that only appears for some accounts. This change corrects the logic, adds a regression test that fails without the fix, and adds logging so we can confirm in production that the error rate drops back to its normal level."
+	case "support":
+		return "Unblocks the support escalation: " + subject + ". An unplanned change made on request of the on-call engineer; it is intentionally small and safe to revert. It touches only the affected path, includes a test, and adds a note to the support runbook so the team can handle the same case without engineering help next time."
+	case "security":
+		return "Security fix: " + subject + ". Removes the vulnerable code path, upgrades the affected library to the patched version, and adds a test that fails on the old behaviour. Tokens and secrets that could have been exposed are rotated as part of the rollout, and the change is recorded for the compliance review with the security team."
+	default:
+		return "Maintenance: " + subject + ". Updates the outdated dependency and configuration, removes code that is no longer used, and keeps behaviour unchanged for users. Build and test times should improve slightly. No migration is needed; operators only need to note the new configuration default described in the documentation change included here."
+	}
 }

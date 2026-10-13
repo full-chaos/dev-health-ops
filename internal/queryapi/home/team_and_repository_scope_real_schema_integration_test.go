@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 // PROD DEFECT (pin 32 step A): Home with a team AND a repository the team holds answered 503,
@@ -84,8 +84,12 @@ func TestTeamAndRepositoryFilterKeepsRepoIDInThePrimaryKeyCondition(t *testing.T
 	if err != nil {
 		t.Fatalf("repoScopeFilter: %v", err)
 	}
-	bindings = append(bindings, dhclickhouse.Binding{Name: "org_id", Value: org})
-	rows, err := client.Query(ctx, "EXPLAIN indexes = 1 SELECT day, repo_id FROM repo_metrics_daily WHERE org_id = {org_id:String}"+filter, bindings)
+	args := []any{stdclickhouse.Named("org_id", org)}
+	for _, binding := range bindings {
+		args = append(args, stdclickhouse.Named(binding.Name, binding.Value))
+	}
+	// The production query client refuses EXPLAIN (read statements only): the admin connection explains it.
+	rows, err := admin.Query(ctx, "EXPLAIN indexes = 1 SELECT day, repo_id FROM repo_metrics_daily WHERE org_id = {org_id:String}"+filter, args...)
 	if err != nil {
 		t.Fatalf("EXPLAIN of the combined filter (code 169 on prod 26.7.1.1315 came from this statement): %v", err)
 	}

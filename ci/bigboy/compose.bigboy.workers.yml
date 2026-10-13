@@ -45,6 +45,11 @@ services:
     build: !reset null
     entrypoint: !override ["/usr/local/bin/dho"]
     command: !override ["reconciler", "--shutdown-timeout=60s", "--http-addr=:8080"]
+    # The operator verbs run in this container (dho workers metrics finalize-redrive, daily-marker-backfill) open
+    # ClickHouse through CLICKHOUSE_URI; without this the service inherits ops/.env's host URI, which the container
+    # cannot reach. Same value as the go-worker services.
+    environment:
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
   go-stream-ingest:
     image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
     build: !reset null

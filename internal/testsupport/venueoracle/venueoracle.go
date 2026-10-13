@@ -1159,6 +1159,10 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 		strings.Contains(gr.Body, `"loc"`) {
 		same = true
 		py.Status = gr.Status
+		skip = map[string]bool{"content-length": true}
+		for key := range Volatile {
+			skip[key] = true
+		}
 	}
 	compared := headerUnion(py.Headers, gr.Headers, skip)
 	for _, header := range compared {

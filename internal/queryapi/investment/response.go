@@ -195,13 +195,17 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 	}
 	var teamCondition string
 	var teamBindings []dhclickhouse.Binding
+	var teamIDs []string
+	teamAsOf := time.Now().UTC()
 	if params.ScopeLevel == "team" && len(params.ScopeIDs) > 0 {
-		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", params.ScopeIDs, time.Now().UTC())
+		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", params.ScopeIDs, teamAsOf)
+		teamIDs = params.ScopeIDs
 	}
 
 	breakdownFilters := investmentexplain.BreakdownFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
+		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
 		Themes: themes, Subcategories: subcategories,
 	}
 	rows, err := reader.explainR.FetchInvestmentBreakdown(ctx, breakdownFilters)
@@ -306,13 +310,17 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 	}
 	var teamCondition string
 	var teamBindings []dhclickhouse.Binding
+	var teamIDs []string
+	teamAsOf := time.Now().UTC()
 	if params.ScopeLevel == "team" && len(params.ScopeIDs) > 0 {
-		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", params.ScopeIDs, time.Now().UTC())
+		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", params.ScopeIDs, teamAsOf)
+		teamIDs = params.ScopeIDs
 	}
 
 	mockFilters := investmentexplain.BreakdownFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
+		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
 		Themes: themes, Subcategories: subcategories,
 	}
 	mockCount, err := reader.explainR.FetchMockFixtureInvestmentRowCount(ctx, mockFilters)
@@ -324,6 +332,7 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 	rows, err := reader.FetchInvestmentSunburst(ctx, SunburstFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
+		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
 		Themes: themes, Subcategories: subcategories, Limit: params.Limit,
 	})
 	if err != nil {

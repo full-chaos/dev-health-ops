@@ -59,12 +59,12 @@ func TestHomeReadersGiveRetractionRowsNoWeight(t *testing.T) {
 			if spec.Scope != "team" {
 				continue
 			}
-			value, err := fetchMetricValue(ctx, client, spec.Table, spec.Column, start, end, "", nil, spec.Aggregator, org)
+			value, err := fetchMetricValue(ctx, client, spec.Table, spec.Column, start, end, "", nil, spec.Aggregator, org, "")
 			if err != nil {
 				t.Fatalf("%s %s value: %v", org, spec.Metric, err)
 			}
 			answers.Values[spec.Metric] = value
-			series, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, start, end, "", nil, spec.Aggregator, org)
+			series, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, start, end, "", nil, spec.Aggregator, org, "")
 			if err != nil {
 				t.Fatalf("%s %s series: %v", org, spec.Metric, err)
 			}
@@ -162,14 +162,14 @@ func TestHomeReadersReportNoDataForRetractionRowsOnly(t *testing.T) {
 		if spec.Scope != "team" {
 			continue
 		}
-		value, err := fetchMetricValue(ctx, client, spec.Table, spec.Column, start, end, "", nil, spec.Aggregator, org)
+		value, err := fetchMetricValue(ctx, client, spec.Table, spec.Column, start, end, "", nil, spec.Aggregator, org, "")
 		if err != nil {
 			t.Fatalf("%s value: %v", spec.Metric, err)
 		}
 		if value.HasData {
 			t.Errorf("%s reports data for a window of retraction rows only: %+v", spec.Metric, value)
 		}
-		series, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, start, end, "", nil, spec.Aggregator, org)
+		series, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, start, end, "", nil, spec.Aggregator, org, "")
 		if err != nil {
 			t.Fatalf("%s series: %v", spec.Metric, err)
 		}

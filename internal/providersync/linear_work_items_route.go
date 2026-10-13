@@ -1192,6 +1192,11 @@ func normalizeLinearInteractions(
 	return rows
 }
 
+// linearScopeKeySet is Python's str(config.get(key) or "").strip() being non-empty.
+func linearScopeKeySet(value any) bool {
+	return pythonTruthy(value) && strings.TrimSpace(fmt.Sprint(value)) != ""
+}
+
 // linearOrgWidePlaceholder ports _linear_org_wide_placeholder_source
 // (workers/sync_bootstrap.py, CHAOS-2739): the one source that stands for the
 // whole Linear workspace. Metadata marks new rows; a legacy row is the
@@ -1210,14 +1215,9 @@ func linearOrgWidePlaceholder(unit Unit) bool {
 		return false
 	}
 	for _, key := range []string{"project_id", "project_key", "team_id", "repo"} {
-		value := unit.IntegrationConfig[key]
-		if !pythonTruthy(value) {
-			continue
+		if linearScopeKeySet(unit.IntegrationConfig[key]) {
+			return false
 		}
-		if text, isText := value.(string); isText && strings.TrimSpace(text) == "" {
-			continue
-		}
-		return false
 	}
 	return true
 }

@@ -131,10 +131,13 @@ func TestLinearOrgWidePlaceholderStillCrawlsEveryTeam(t *testing.T) {
 	cases := map[string]struct {
 		metadata, config map[string]any
 	}{
-		"marked":            {map[string]any{"org_wide_placeholder": true}, map[string]any{}},
-		"legacy unmarked":   {map[string]any{"planner_managed_sync_config_id": "cfg-1"}, map[string]any{"repo": "  ", "team_id": nil}},
-		"legacy numeric id": {map[string]any{"planner_managed_sync_config_id": float64(1)}, map[string]any{}},
-		"legacy no config":  {map[string]any{"planner_managed_sync_config_id": "cfg-1"}, nil},
+		"marked":                  {map[string]any{"org_wide_placeholder": true}, map[string]any{}},
+		"legacy unmarked":         {map[string]any{"planner_managed_sync_config_id": "cfg-1"}, map[string]any{"repo": "  ", "team_id": nil}},
+		"legacy numeric id":       {map[string]any{"planner_managed_sync_config_id": float64(1)}, map[string]any{}},
+		"legacy false":            {map[string]any{"planner_managed_sync_config_id": "cfg-1"}, map[string]any{"team_id": false}},
+		"legacy zero":             {map[string]any{"planner_managed_sync_config_id": "cfg-1"}, map[string]any{"project_id": float64(0)}},
+		"legacy empty containers": {map[string]any{"planner_managed_sync_config_id": "cfg-1"}, map[string]any{"repo": []any{}, "project_key": map[string]any{}}},
+		"legacy no config":        {map[string]any{"planner_managed_sync_config_id": "cfg-1"}, nil},
 	}
 	for name, tc := range cases {
 		keys, doer := collectLinearSource(t, "linear", tc.metadata, tc.config)

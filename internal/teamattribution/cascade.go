@@ -977,10 +977,19 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		// `all` as is_primary = 0 provenance rows; an item whose only
 		// signal is a member's team falls through to unassigned.
 		membershipTier := source == "assignee_membership" || source == "author_membership"
-		if primary == nil && len(candidates) > 0 && !membershipTier {
-			value := candidates[0]
-			primary = &value
-			coOwners = projectCoOwners(value, candidates[1:])
+		if primary == nil && !membershipTier {
+			// CHAOS-9409: a co-owner fact (is_primary = 2: an owner beside the
+			// main owner) is never the primary; it is a co-owner row of the
+			// item when another owner of the same source is the primary.
+			for index, candidate := range candidates {
+				if candidate.IsPrimary == AttributionCoOwner {
+					continue
+				}
+				value := candidate
+				primary = &value
+				coOwners = projectCoOwners(value, append(append([]GithubWorkItemDerivationCandidate(nil), candidates[:index]...), candidates[index+1:]...))
+				break
+			}
 		}
 		all = append(all, candidates...)
 	}
@@ -1124,29 +1133,22 @@ func AttributionRowPreference(isPrimary int) int {
 }
 
 // projectCoOwners returns, for a primary that came from the item's project
-// (issue_project, project_ownership) or from a main owner of the item's
-// repository (repo_ownership with is_primary = 1), the candidates of the same
-// source that name another team at the same rank (IsPrimary, Specificity,
-// Priority): one per team, in rank order. A project with several owning teams
-// is attributed to all of them, and so is a repository with several main
-// owners (a full ownership tie, D5990); the rank still decides which ONE is
-// the primary row. Other sources, and repository facts that are not a main
-// owner's (a provider_access grant), have no co-owners.
+// (issue_project, project_ownership) or repository (repo_ownership), the
+// candidates of the same source that name another team, at any rank: one per
+// team, in rank order (CHAOS-9409, D5988: every owning team of the project or
+// repository is attributed the item, each with its own row; the rank still
+// decides which ONE is the primary row). Other sources have no co-owners.
 func projectCoOwners(
 	primary GithubWorkItemDerivationCandidate, ranked []GithubWorkItemDerivationCandidate,
 ) []GithubWorkItemDerivationCandidate {
-	mainRepoOwner := primary.Source == "repo_ownership" && primary.IsPrimary == AttributionPrimary
-	if primary.Source != "issue_project" && primary.Source != "project_ownership" && !mainRepoOwner {
+	if primary.Source != "issue_project" && primary.Source != "project_ownership" && primary.Source != "repo_ownership" {
 		return nil
 	}
 	seen := map[string]struct{}{GithubWorkItemDerivationStringValue(primary.TeamID): {}}
 	var result []GithubWorkItemDerivationCandidate
 	for _, candidate := range ranked {
 		teamID := GithubWorkItemDerivationStringValue(candidate.TeamID)
-		if strings.TrimSpace(teamID) == "" ||
-			candidate.IsPrimary != primary.IsPrimary ||
-			candidate.Specificity != primary.Specificity ||
-			candidate.Priority != primary.Priority {
+		if strings.TrimSpace(teamID) == "" {
 			continue
 		}
 		if _, duplicate := seen[teamID]; duplicate {
@@ -1885,9 +1887,6 @@ LIMIT {row_limit:UInt64}`,
 		var priority int32
 		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.RepoID, &fact.RepoFullName, &isPrimary, &specificity, &priority, &fact.UpdatedAt); err != nil {
 			return nil, err
-		}
-		if isPrimary == AttributionCoOwner {
-			continue
 		}
 		fact.IsPrimary = int(isPrimary)
 		fact.Specificity = int(specificity)

@@ -1228,14 +1228,14 @@ project (section 0.1): a native team key gives one team.
   the item (section 0.4e): the first is the primary, the others are co-owners. A key string held by a team of
   another provider does not make that team an owner of the item's project (a team reaches an item only through
   ownership of its project), so it takes no row. `project_ownership` facts are
-  looked up by the item's provider. When the winning source of an item is
-  `issue_project` or `project_ownership`, or a main owner of the item's repository (`repo_ownership` with
-  `is_primary = 1`), every other team of that source at the SAME rank as the winner (`is_primary`,
-  `specificity`, `priority` of the ownership fact) is a co-owner (`projectCoOwners`): so a repository with
-  several main owners (a full ownership tie, D5990, CHAOS-9459) attributes its items to each of them. A lower
-  rank, an empty team id, a repository fact that is not a main owner's (a `provider_access` grant,
-  `is_primary = 0`), a membership source and `native_team` give no co-owner. Pinned by
-  `TestOnlyMainRepositoryOwnersAndProjectsHaveCoOwners`. An
+  looked up by the item's provider. When the winning source of an item is `issue_project`, `project_ownership`
+  or `repo_ownership`, every other team of that source is a co-owner, at ANY rank (`projectCoOwners`; CHAOS-9409,
+  D5988: every owning team of the project or repository gets a row of the item, the rank decides only which ONE is
+  the primary row). A repository owner beside the main owner (a co-owner fact, `is_primary = 2`) is never the
+  primary row, even when it outranks a `provider_access` grant by specificity: it is a co-owner row. A repository
+  with several main owners (a full ownership tie, D5990, CHAOS-9459) attributes its items to each of them. An empty
+  team id, a membership source and `native_team` give no co-owner. Pinned by `TestEveryOwnerOfTheProjectIsACoOwner`,
+  `TestEveryOwnerOfTheRepositoryIsACoOwner` and `TestLoadReposCarriesCoOwnerRows`. An
   inactive team takes no row (section 0.4c).
 - **The values of `work_item_team_attributions.is_primary`** (`AttributionNotPrimary`, `AttributionPrimary`,
   `AttributionCoOwner`; the column is `UInt8`, no migration):
@@ -2814,8 +2814,9 @@ the first row is a main owner's, every other main owner at the same specificity 
 whose top row is a `provider_access` grant keeps one owner). The daily families whose table keys a row by team count the
 repo whole in each main owner (team cognitive load, team complexity, compounding risk team scope, wellbeing
 `team_metrics_daily`, AI impact); a TestOps daily table holds one row per repo, so TestOps takes the first owner by rank.
-The cascade's `LoadRepos` gives no `repo_ownership` candidate from a co-owner row (`RankDerivationCandidates` also ranks
-only `is_primary = 1` first), and the other main owners of a tie are co-owner rows of the item (section 0.4d). The main
+The cascade's `LoadRepos` carries co-owner rows; a co-owner fact is never the item's primary row, it is a co-owner row of
+the item, as every other owner of the repository is (CHAOS-9409, section 0.4d; `RankDerivationCandidates` also ranks
+only `is_primary = 1` first). The main
 owner keeps outranking a `provider_access` grant by specificity. An ownership fact with `is_primary = 2` carries the
 confidence of a fact that is not primary (`medium`). Readers that use the co-owner rows and the share are tickets 9408,
 9409, 9410 and 9413.
@@ -2831,7 +2832,7 @@ row at every instant, the one-owner read before and after the change, a rerun wr
 `TestAFullTieThatFormsAndEndsIsDatedAtTheRuns` and `TestRankedOwnerFullTie*` (real ClickHouse, every provider: every tied
 team is a main owner, the main rows of every instant are its leaders', reruns write nothing), and the reader rank tests
 `TestAuthoritativeOwnersByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt`, `TestACoOwnerFactNeverOutranksTheMainOwner`,
-`TestLoadReposLeavesOutCoOwnerRows`, `TestTheRepoGateNeverTakesACoOwnerAsTheOwner`,
+`TestLoadReposCarriesCoOwnerRows`, `TestTheRepoGateNeverTakesACoOwnerAsTheOwner`,
 `TestAnInferredOwnerStillOutranksAProviderAccessGrant` (a tie's main owners outrank a grant),
 `TestResolveOwnedRepoIDTakesEveryMainOwnerOfATie`, `TestResolveFromOwnershipMapKeepsEveryMainOwner`, and the family
 tests `TestARepositoryWithSeveralMainOwnersCountsWholeInEach` (cognitive load, complexity, wellbeing resolver, TestOps

@@ -85,6 +85,8 @@ func (doer *gitLabPullRequestTraversalDoer) Do(request *http.Request) (*http.Res
 			if next := nextPages[query.Get("page")]; next != nil {
 				headers.Set("X-Next-Page", stringValue(next))
 			}
+		case "commits":
+			payload = []any{}
 		default:
 			doer.t.Fatalf("unexpected MR endpoint %s", endpoint)
 		}
@@ -145,14 +147,20 @@ func buildGitLabPullRequestTraversalTrace(t *testing.T, input map[string]any) gi
 	if len(doer.requests) == 0 || batch.Evidence.Requests != len(doer.requests) {
 		t.Fatalf("evidence=%+v requests=%d", batch.Evidence, len(doer.requests))
 	}
+	// The merge request commits listing is the one request the Go route makes
+	// that the Python producer never did (native pr->commit links); it is left
+	// out of the comparison so every request Python made is still compared.
 	trace := gitLabPullRequestTraversalTrace{
-		ProducerRequests:  make([]string, 0, len(doer.requests)-1),
-		UsageRequestCount: batch.Evidence.Requests - 1,
-		Rows:              make([]gitLabPullRequestTraversalTraceRow, 0),
+		ProducerRequests: make([]string, 0, len(doer.requests)-1),
+		Rows:             make([]gitLabPullRequestTraversalTraceRow, 0),
 	}
 	for _, request := range doer.requests[1:] {
+		if strings.HasSuffix(request.URL.Path, "/commits") {
+			continue
+		}
 		trace.ProducerRequests = append(trace.ProducerRequests, request.URL.RequestURI())
 	}
+	trace.UsageRequestCount = len(trace.ProducerRequests)
 	for _, effect := range batch.Effects {
 		if effect.Destination != "git_pull_requests" {
 			continue

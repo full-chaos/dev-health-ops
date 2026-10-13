@@ -248,6 +248,7 @@ func TestServiceProduceLinksEndToEnd(t *testing.T) {
 	conn := &stubConn{responses: [][][]any{
 		{{testOrg, testRepoID, uint32(42)}},
 		{{testOrg, testRepoID, "abc123", "Merge pull request #42 from x"}},
+		{},
 	}}
 	loader, err := NewLoader(conn)
 	if err != nil {
@@ -276,6 +277,39 @@ func TestServiceProduceLinksEndToEnd(t *testing.T) {
 	}
 	if got := conn.inserted[0][6]; got != frozen {
 		t.Fatalf("last_synced = %v, want the clock %v", got, frozen)
+	}
+}
+
+// TestProduceLinksDoesNotReplaceAProviderStatedNativeLink: a pair the provider
+// stated itself is not rewritten by the text derivation, whose row would carry a
+// newer last_synced under the same key and lower the link's tier.
+func TestProduceLinksDoesNotReplaceAProviderStatedNativeLink(t *testing.T) {
+	conn := &stubConn{responses: [][][]any{
+		{{testOrg, testRepoID, uint32(42)}},
+		{
+			{testOrg, testRepoID, "abc123", "Merge pull request #42 from x"},
+			{testOrg, testRepoID, "def456", "Merge pull request #42 from y"},
+		},
+		{{testRepoID, uint32(42), "abc123"}},
+	}}
+	loader, err := NewLoader(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := NewWriter(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(loader, writer, &stubDriverConn{}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := service.ProduceLinks(context.Background(), testOrg, Window{})
+	if err != nil {
+		t.Fatalf("ProduceLinks: %v", err)
+	}
+	if outcome.LinksWritten != 1 || len(conn.inserted) != 1 || conn.inserted[0][2] != "def456" {
+		t.Fatalf("outcome=%+v inserted=%v: only the pair the provider did not state may be written", outcome, conn.inserted)
 	}
 }
 

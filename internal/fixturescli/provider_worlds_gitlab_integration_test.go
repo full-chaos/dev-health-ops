@@ -147,8 +147,14 @@ func gitlabTeamCatalogAnswers(gitlabGroups []gitlabGroup, phase string) (answers
 		)
 	}
 	all := []map[string]any{}
-	for _, path := range []string{"chaos-gl/billing-service", "chaos-gl/checkout/checkout-web"} {
-		all = append(all, gitlabProjects[path].payload())
+	listed := map[string]bool{}
+	for _, group := range gitlabGroups {
+		for _, path := range group.Projects {
+			if !listed[path] {
+				listed[path] = true
+				all = append(all, gitlabProjects[path].payload())
+			}
+		}
 	}
 	answers = append(answers, glList(gitlabGroupPath(root.FullPath)+"/projects", "include_subgroups=true&page=1&per_page=100", all))
 	return answers
@@ -172,6 +178,8 @@ type gitlabItem struct {
 	ClosedBy []string
 	// Links are the issue's links: "relates_to group/project#iid@link_created_at".
 	Links []string
+	// Reviewer approves a merged merge request (the zero user: the world's default reviewer).
+	Reviewer gitlabUser
 }
 
 func (item gitlabItem) state() string {
@@ -234,6 +242,9 @@ func (item gitlabItem) approvals(project gitlabProject) map[string]any {
 		reviewer := glFay
 		if item.Author.ID == glFay.ID {
 			reviewer = glDana
+		}
+		if item.Reviewer.ID != 0 {
+			reviewer = item.Reviewer
 		}
 		approvedBy = append(approvedBy, map[string]any{"user": reviewer.payload()})
 	}

@@ -18,6 +18,7 @@ func TestQueryAPIPostureIsPinned(t *testing.T) {
 		{"scheduled_jobs", true, true, false},
 		{"report_runs", true, false, false},
 		{"worker_job_outbox", true, false, false},
+		{"byo_llm_budget_reservations", true, true, false},
 		{"go_api_proof_orgs", false, false, false},
 		{"go_api_class_decision", false, false, false},
 		{"sync_configurations", false, false, false},
@@ -63,7 +64,7 @@ func TestQueryAPIPostureIsPinned(t *testing.T) {
 // scheduled execution path or the proof CLI owns.
 func TestQueryAPIPostureGrantsNoWriteBeyondTheMutations(t *testing.T) {
 	t.Parallel()
-	writers := map[string]bool{"saved_reports": true, "scheduled_jobs": true, "report_runs": true, "worker_job_outbox": true}
+	writers := map[string]bool{"saved_reports": true, "scheduled_jobs": true, "report_runs": true, "worker_job_outbox": true, "byo_llm_budget_reservations": true}
 	seen := map[string]bool{}
 	for _, table := range QueryAPIPosture().RequiredTables {
 		if seen[table.TableName] {

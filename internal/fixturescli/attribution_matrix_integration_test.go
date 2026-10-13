@@ -382,6 +382,32 @@ func (facts matrixFacts) ownPrimary(itemID string) (attributionRow, bool) {
 	return row, true
 }
 
+// donorTeamsOnDay is the team a donor issue holds on its own on a day, by the contract's rule: its native
+// team; else, of the owners of its project (or repository) valid that day (ownersAt), its main owner -
+// one main owner for the whole history (team-attribution.md §0.4d), the team of its own primary row -
+// when that team owned it that day, and otherwise every owner of that day.
+func (facts matrixFacts) donorTeamsOnDay(donor string, day time.Time) map[string]bool {
+	own, ok := facts.ownPrimary(donor)
+	if !ok {
+		return map[string]bool{}
+	}
+	if own.Source == "native_team" {
+		return map[string]bool{own.TeamID: true}
+	}
+	item := facts.items[donor]
+	var rows []ownershipRow
+	if own.Source == "repo_ownership" {
+		rows = facts.repoOwnerRows(item.RepoID)
+	} else {
+		rows = facts.projectOwnerRows(item.ProjectID)
+	}
+	owners := facts.ownersAt(rows, day)
+	if owners[own.TeamID] {
+		return map[string]bool{own.TeamID: true}
+	}
+	return owners
+}
+
 // donorRelationships are the dependency types a pull request inherits an issue's team through
 // (team-attribution.md §0: PR/MR attribution comes from an actual linked issue row). The list is the
 // contract's, written here, not read from the cascade.
@@ -767,9 +793,10 @@ var matrixChecks = map[string]matrixCheck{
 		return r
 	}},
 	"pull_request_inherits_only_from_a_linked_issue": {"pull_requests", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
-		// A pull request's linked_issue row names the team of an issue it is actually linked to, that
-		// issue holding the team on its own. A pull request counts under its own provider and under the
-		// provider of each issue it is linked to.
+		// A pull request's linked_issue row names the team an issue it is actually linked to holds on its
+		// own ON THE PULL REQUEST'S DAY (donorTeamsOnDay; following the donor's later changes is
+		// CHAOS-9478). A pull request counts under its own provider and under the provider of each issue
+		// it is linked to.
 		for id, item := range f.items {
 			if !isPullRequestItem(item) {
 				continue
@@ -787,22 +814,19 @@ var matrixChecks = map[string]matrixCheck{
 					continue
 				}
 				r.Subjects++
+				day := f.itemDay(item)
 				given := false
 				for donor := range donors {
-					if own, ok := f.ownPrimary(donor); ok && row.TeamID != "" && own.TeamID == row.TeamID {
+					if row.TeamID != "" && f.donorTeamsOnDay(donor, day)[row.TeamID] {
 						given = true
 					}
 				}
 				if !given {
 					var gave []string
 					for _, donor := range sortedTeamSet(donors) {
-						own, ok := f.primary(donor)
-						if !ok {
-							own.TeamID, own.Source = "-", "no row"
-						}
-						gave = append(gave, donor+"="+own.TeamID+" ("+own.Source+")")
+						gave = append(gave, fmt.Sprintf("%s=%v", donor, sortedTeamSet(f.donorTeamsOnDay(donor, day))))
 					}
-					r.Violations = append(r.Violations, fmt.Sprintf("%s -> %s by linked_issue; linked issues %v", id, row.TeamID, gave))
+					r.Violations = append(r.Violations, fmt.Sprintf("%s (%s) -> %s by linked_issue; linked issues' teams that day %v", id, day.Format(time.DateOnly), row.TeamID, gave))
 				}
 			}
 		}

@@ -701,12 +701,12 @@ rule. The rule the cells apply is written once in the test (`ownersAt`): the row
 option C); the shared ownership readers are judged against that rule at now and on every item day. Known red
 today: ownership and membership start at the sync, and the shared readers do not apply the first owners
 backward (CHAOS-9404),
-GitLab ownership names the project by path (CHAOS-8883), and a GitHub pull request's `linked_issue` row names a
-repository co-owner of its issue on the pull request's day, not the issue's own team (CHAOS-9460). The inferred repository owner starts at its earliest
+GitLab ownership names the project by path (CHAOS-8883), and a GitHub pull request's `linked_issue` row copies
+its issue's row of the pull request's day, which names a co-owner as the main owner (CHAOS-9409). The inferred repository owner starts at its earliest
 linked evidence since CHAOS-9403 (#4049): its cell is pass.
-A pull request's `linked_issue` row must name the team an issue it is actually linked to holds on its own
-(a relation of record, or a link of record; an `extkey:` relation counts only through the one existing item of
-that key). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the
+A pull request's `linked_issue` row must name the team an issue it is actually linked to holds on its own on
+the pull request's day (a relation of record, or a link of record; an `extkey:` relation counts only through
+the one existing item of that key; following the issue's later changes is CHAOS-9478). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the
 defects the matrix exists to catch into the same state the production verbs wrote (sync-time `valid_from`, a
 landscape grouped by membership, an issue-key prefix taken as a native link, a pull request team inherited
 without a linked issue, from a donor without a team of its own or naming another team than its issue's, a

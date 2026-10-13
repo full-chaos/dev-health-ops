@@ -456,10 +456,13 @@ type LinearWorkItemsRouteHandler struct {
 	FetchComments *bool
 	FetchHistory  *bool
 	FetchCycles   *bool
-	// GlobalDiscovery mirrors Python's repo=None mode. The claim still carries
-	// a non-empty source identity for lease/watermark fencing, but the route
-	// discovers every Linear team and applies the same bounded issue crawl to
-	// each team. It is provider-local and intentionally not a registry switch.
+	// GlobalDiscovery forces Python's repo=None mode for every claim. The claim
+	// still carries a non-empty source identity for lease/watermark fencing,
+	// but the route discovers every Linear team and applies the same bounded
+	// issue crawl to each team. Production leaves it false: only the org-wide
+	// placeholder source (linearOrgWidePlaceholder) discovers every team, and
+	// every other source crawls its own team, so N sources write each row once.
+	// It is provider-local and intentionally not a registry switch.
 	GlobalDiscovery bool
 	// ReferenceTeams and ReferenceSprints model the reference dimensions that
 	// Python receives through IngestionContext.  They are deliberately inputs
@@ -1189,6 +1192,33 @@ func normalizeLinearInteractions(
 	return rows
 }
 
+// linearOrgWidePlaceholder ports _linear_org_wide_placeholder_source
+// (workers/sync_bootstrap.py, CHAOS-2739): the one source that stands for the
+// whole Linear workspace. Metadata marks new rows; a legacy row is the
+// provider-named, planner-managed source of a config with no explicit scope.
+func linearOrgWidePlaceholder(unit Unit) bool {
+	if unit.Provider != "linear" {
+		return false
+	}
+	if marked, _ := unit.SourceMetadata["org_wide_placeholder"].(bool); marked {
+		return true
+	}
+	if strings.ToLower(strings.TrimSpace(unit.SourceExternalID)) != "linear" {
+		return false
+	}
+	if optionString(unit.SourceMetadata, "planner_managed_sync_config_id") == "" {
+		return false
+	}
+	for _, key := range []string{"project_id", "project_key", "team_id", "repo"} {
+		if value, present := unit.IntegrationConfig[key]; present && value != nil {
+			if text, isText := value.(string); !isText || strings.TrimSpace(text) != "" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (handler LinearWorkItemsRouteHandler) limits() (int, int, error) {
 	perPage, maxPages := handler.PerPage, handler.MaxPages
 	if perPage == 0 {
@@ -1239,8 +1269,9 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		Interactions:      make([]linearWorkItemInteractionRow, 0),
 		Sprints:           make([]linearSprintRow, 0),
 	}
+	globalDiscovery := handler.GlobalDiscovery || linearOrgWidePlaceholder(claim.Unit)
 	var teams []linearTeamPayload
-	if handler.GlobalDiscovery {
+	if globalDiscovery {
 		teams = linearReferenceTeamPayloads(handler.ReferenceTeams)
 		if len(teams) == 0 {
 			var teamErr error
@@ -1262,7 +1293,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		}
 		teams = []linearTeamPayload{team}
 	}
-	if len(teams) == 0 && !handler.GlobalDiscovery {
+	if len(teams) == 0 && !globalDiscovery {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	sprintSeen := make(map[string]struct{})
@@ -1292,7 +1323,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		if fetchCycles {
 			var referenceSprints []linearSprintRow
 			var referenceErr error
-			if !handler.GlobalDiscovery {
+			if !globalDiscovery {
 				referenceSprints, referenceErr = linearReferenceSprints(teamClaim, handler.ReferenceSprints)
 			}
 			if referenceErr != nil {

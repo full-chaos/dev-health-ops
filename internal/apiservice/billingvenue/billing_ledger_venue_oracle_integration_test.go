@@ -324,7 +324,7 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	normalizePython := billingNormalizer(seeded, recordedAt(t, golden, start))
 	python := normalizeAnswers(rawPython, normalizePython)
 	for index, answer := range python {
-		if strings.Contains(answer.Body, `"`+goOnlyEntitlementKey+`"`) {
+		if strings.Contains(answer.Body, goOnlyEntitlementKey) || featuresHoldGoOnly(answer.Body) {
 			t.Fatalf("frozen python answer %q holds %s, so it is not Go-only", requests[index].Name, goOnlyEntitlementKey)
 		}
 	}
@@ -424,6 +424,26 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 // "features" as false, so the allowance hides no drift. The same key anywhere
 // else in the body is not dropped and reads as a DIFF.
 const goOnlyEntitlementKey = "acr_service_model"
+
+// featuresHoldGoOnly reports whether a body's decoded "features" object has
+// the Go-only key in any spelling, including a JSON escape of it.
+func featuresHoldGoOnly(body string) bool {
+	value, err := pyjson.DecodeString(body)
+	if err != nil {
+		return false
+	}
+	root, ok := value.(*pyjson.Object)
+	if !ok {
+		return false
+	}
+	rawFeatures, _ := root.Get("features")
+	features, ok := rawFeatures.(*pyjson.Object)
+	if !ok {
+		return false
+	}
+	_, present := features.Get(goOnlyEntitlementKey)
+	return present
+}
 
 // dropGoOnlyFeature removes features.acr_service_model from an entitlements
 // body when it is there and false. held reports whether it was.

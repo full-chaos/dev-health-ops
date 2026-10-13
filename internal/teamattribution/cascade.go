@@ -276,8 +276,6 @@ type GithubWorkItemDerivationContext struct {
 	providerMemberByID   map[string][]GithubWorkItemDerivationCandidate
 	manualFallbacks      []GithubWorkItemDerivationManualFallback
 	// LinkedIssue: item id -> the donor's primary team (id, name, provider).
-	// An empty provider is a team read from a stored attribution row, which
-	// does not record the team's provider: it is bound provider-neutral.
 	LinkedIssue map[string][3]string
 	// LinkedIssueEvidence: item id -> the evidence of its linked_issue row,
 	// naming the donor (team-attribution.md section 0, row 5: dependency_type,
@@ -780,7 +778,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 	if inherited, exists := derived.LinkedIssue[subject.WorkItemID]; exists {
 		bySource["linked_issue"] = append(bySource["linked_issue"], GithubWorkItemDerivationCandidate{
 			Source: "linked_issue", TeamID: GithubWorkItemDerivationStringPointer(inherited[0]), TeamName: GithubWorkItemDerivationStringPointer(inherited[1]),
-			TeamProvider: inherited[2], TeamResolved: true, TeamNeutral: inherited[2] == "",
+			TeamProvider: inherited[2], TeamResolved: true,
 			Confidence: "medium", Evidence: derived.linkedIssueEvidence(subject.WorkItemID),
 			IsPrimary: 1, Specificity: 90, UpdatedAt: NormalizedDerivationTime(time.Time{}),
 		})
@@ -1503,17 +1501,23 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 		if row.TeamID == "" || !linkedIssueDonorSources[row.Source] {
 			continue
 		}
-		teamName, teamProvider := GithubWorkItemDerivationFirstNonEmpty(row.TeamName, row.TeamID), row.TeamProvider
-		if teamProvider == "" {
+		teamName := GithubWorkItemDerivationFirstNonEmpty(row.TeamName, row.TeamID)
+		bound := GithubWorkItemDerivationCandidate{
+			TeamID: GithubWorkItemDerivationStringPointer(row.TeamID), TeamName: GithubWorkItemDerivationStringPointer(teamName),
+			TeamProvider: row.TeamProvider, TeamResolved: row.TeamProvider != "",
+		}
+		if !bound.TeamResolved {
 			// A stored row does not record its team's provider: the team is
 			// the one the id names for an item of the donor's provider, as an
 			// ownership fact of the donor would bind it.
-			bound := derived.bindCandidateTeam(GithubWorkItemDerivationCandidate{
-				TeamID: GithubWorkItemDerivationStringPointer(row.TeamID), TeamName: GithubWorkItemDerivationStringPointer(teamName),
-			}, subjects[id].Provider, bindProviderFact)
-			teamName, teamProvider = GithubWorkItemDerivationFirstNonEmpty(GithubWorkItemDerivationStringValue(bound.TeamName), teamName), bound.TeamProvider
+			bound = derived.bindCandidateTeam(bound, subjects[id].Provider, bindProviderFact)
 		}
-		donors[id] = [3]string{row.TeamID, teamName, teamProvider}
+		// A donor whose team is inactive is no donor: it is left out before
+		// the winner is picked, so another linked donor still gives its team.
+		if derived.candidateNamesInactiveTeam(bound) {
+			continue
+		}
+		donors[id] = [3]string{row.TeamID, GithubWorkItemDerivationFirstNonEmpty(GithubWorkItemDerivationStringValue(bound.TeamName), teamName), bound.TeamProvider}
 	}
 	baseNative := map[string]bool{}
 	keyIndex := map[string]string{}

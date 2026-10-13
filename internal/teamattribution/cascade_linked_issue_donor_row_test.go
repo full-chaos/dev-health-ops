@@ -123,3 +123,43 @@ func TestAStoredDonorRowBindsTheTeamOfTheDonorsProvider(t *testing.T) {
 		})
 	}
 }
+
+// A donor whose team is inactive is no donor: it is left out before the
+// winner among the linked donors is picked, so the item takes the team of its
+// other donor, never unassigned. A pull request of GitHub or GitLab, with
+// donors of every provider; the inactive donor sorts first.
+func TestAnInactiveDonorNeverHidesAnotherLinkedDonor(t *testing.T) {
+	for _, itemProvider := range []string{"github", "gitlab"} {
+		for _, donorProvider := range []string{"github", "gitlab", "jira", "linear"} {
+			t.Run(itemProvider+"_"+donorProvider, func(t *testing.T) {
+				derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+					Teams: []GithubWorkItemDerivationTeamFact{
+						{Provider: donorProvider, TeamID: "team-gone", TeamName: "Gone", Inactive: true},
+						{Provider: donorProvider, TeamID: "team-active", TeamName: "Active"},
+					},
+				})
+				subjects := map[string]GithubWorkItemDerivationSubject{
+					"pr":      {WorkItemID: "pr", Provider: itemProvider, Type: "pr", OrgID: "org"},
+					"a-donor": {WorkItemID: "a-donor", Provider: donorProvider, OrgID: "org"},
+					"b-donor": {WorkItemID: "b-donor", Provider: donorProvider, OrgID: "org"},
+				}
+				edges := []GithubWorkItemDerivationDependencyEdge{
+					{SourceWorkItemID: "pr", TargetWorkItemID: "a-donor", RelationshipType: "relates_to"},
+					{SourceWorkItemID: "pr", TargetWorkItemID: "b-donor", RelationshipType: "relates_to"},
+				}
+				rows := map[string]GithubWorkItemDerivationDonorRow{
+					"a-donor": {TeamID: "team-gone", Source: "project_ownership"},
+					"b-donor": {TeamID: "team-active", Source: "project_ownership"},
+				}
+				derived.LinkedIssue, derived.LinkedIssueEvidence, _, _ = derived.BuildLinkedIssueIndexFromRows(itemProvider, subjects, rows, edges, nil)
+				teamID, _, candidates := derived.Resolve(subjects["pr"])
+				if got := GithubWorkItemDerivationStringValue(teamID); got != "team-active" {
+					t.Fatalf("team %q, want team-active from the active donor (candidates %+v)", got, candidates)
+				}
+				if got := derived.LinkedIssueEvidence["pr"]; got != "linked_issue=b-donor;dependency_type=relates_to;donor_provider="+donorProvider+";donor_source=project_ownership" {
+					t.Errorf("evidence %q, want the active donor's", got)
+				}
+			})
+		}
+	}
+}

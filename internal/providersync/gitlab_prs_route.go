@@ -141,6 +141,7 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 	rows := make([]pullRequestRow, 0)
 	reviews := make([]pullRequestReviewRow, 0)
 	attributions := make([]gitlabAIAttributionRow, 0)
+	commitLinks := make([]prCommitLinkRow, 0)
 	pages := 0
 	consume := func(raw json.RawMessage) error {
 		var payload gitLabMergeRequestPayload
@@ -177,6 +178,14 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 		if err != nil {
 			return err
 		}
+		links, linkPages, err := fetchGitLabMergeRequestCommitLinks(
+			ctx, &counted, claim, projectID, iid, repoID, normalizedAt, perPage, maxPages,
+		)
+		if err != nil {
+			return err
+		}
+		pages += linkPages
+		commitLinks = append(commitLinks, links...)
 		rows = append(rows, row)
 		reviews = append(reviews, reviewFetch.Rows...)
 		// The same list item feeds the detector the work-items route runs
@@ -227,9 +236,16 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	commitLinkEffect, err := effectBatchFromValues(
+		prCommitLinkDestination, EffectReadbackRequired, commitLinks,
+	)
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
 	return CompleteRouteBatch{
-		Effects: []EffectBatch{prEffect, reviewEffect, attributionEffect},
+		Effects: []EffectBatch{prEffect, reviewEffect, attributionEffect, commitLinkEffect},
 		Result: map[string]any{
+			"pr_commit_links":   len(commitLinks),
 			"prs_synced":        len(rows),
 			"ai_attributions":   len(attributions),
 			"pr_reviews_synced": len(reviews),

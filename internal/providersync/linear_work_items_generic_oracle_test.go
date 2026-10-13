@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -93,6 +94,24 @@ func linearWorkItemOracleCases() []oracleCase {
 					"project": nil,
 					"cycle":   map[string]any{"id": "cycle-8", "name": "", "number": 8},
 					"parent":  nil,
+				},
+			},
+		},
+		{
+			ID: "long_multibyte_description",
+			Input: map[string]any{
+				"org_id":  "org-acme",
+				"history": []any{},
+				"raw_issue": map[string]any{
+					"id": "lin-issue-44", "identifier": "ENG-44", "title": "Long body",
+					"description": strings.Repeat("é日", 800), "priority": 0, "estimate": nil,
+					"createdAt": "2026-07-29T09:00:00Z", "updatedAt": "2026-07-30T11:00:00Z",
+					"startedAt": nil, "completedAt": nil, "canceledAt": nil, "dueDate": nil, "url": nil,
+					"state":    map[string]any{"name": "Backlog", "type": "backlog"},
+					"labels":   map[string]any{"nodes": []any{}},
+					"assignee": nil, "creator": nil,
+					"team":    map[string]any{"id": "team-eng", "key": "ENG", "name": "Engineering"},
+					"project": nil, "cycle": nil, "parent": nil,
 				},
 			},
 		},

@@ -163,3 +163,46 @@ func TestAnInactiveDonorNeverHidesAnotherLinkedDonor(t *testing.T) {
 		}
 	}
 }
+
+// A donor's row of this run keeps the team as its own resolution bound it: an
+// admin team (no provider) is never bound again to a provider team that has the
+// same id, so the linked item names the donor's team, not another one. Every
+// donor provider.
+func TestADonorsAdminTeamKeepsItsIdentity(t *testing.T) {
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		t.Run(provider, func(t *testing.T) {
+			key := "ENG"
+			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+				Teams: []GithubWorkItemDerivationTeamFact{
+					{Provider: "", TeamID: "shared", TeamName: "Admin donor team", ProjectKeys: []string{key}},
+					{Provider: "github", TeamID: "shared", TeamName: "Unrelated provider team"},
+					{Provider: provider, TeamID: "shared", TeamName: "Unrelated provider team"},
+				},
+			})
+			subjects := map[string]GithubWorkItemDerivationSubject{
+				"ghpr:acme/api#7": {WorkItemID: "ghpr:acme/api#7", Provider: "github", Type: "pr", OrgID: "org"},
+				"donor":           {WorkItemID: "donor", Provider: provider, ProjectKey: &key, OrgID: "org"},
+			}
+			own := derived.OwnDonorRows(subjects, map[string]struct{}{"donor": {}})
+			if own["donor"].TeamName != "Admin donor team" || own["donor"].TeamProvider != "" {
+				t.Fatalf("the donor's own row here is %+v, not the admin team this case needs", own["donor"])
+			}
+			edges := []GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: "ghpr:acme/api#7", TargetWorkItemID: "donor", RelationshipType: "relates_to"}}
+			derived.LinkedIssue, derived.LinkedIssueEvidence, _, _ = derived.BuildLinkedIssueIndexFromRows("github", subjects, own, edges, nil)
+			_, _, candidates := derived.Resolve(subjects["ghpr:acme/api#7"])
+			found := false
+			for _, candidate := range candidates {
+				if candidate.Source != "linked_issue" {
+					continue
+				}
+				found = true
+				if got := GithubWorkItemDerivationStringValue(candidate.TeamName); got != "Admin donor team" || candidate.TeamProvider != "" {
+					t.Errorf("linked_issue team %q of provider %q, want the donor's admin team", got, candidate.TeamProvider)
+				}
+			}
+			if !found {
+				t.Fatalf("no linked_issue candidate: %+v", candidates)
+			}
+		})
+	}
+}

@@ -1407,10 +1407,13 @@ func SameDerivationCandidate(left, right GithubWorkItemDerivationCandidate) bool
 // GithubWorkItemDerivationDonorRow is a donor item's own primary attribution
 // row: the team (and its source) an item copies through a linked issue
 // (team-attribution.md section 0: PR/MR attribution comes from an actual
-// linked issue donor row, CHAOS-9460). TeamProvider is empty for a row read
-// from work_item_team_attributions, which does not record it.
+// linked issue donor row, CHAOS-9460). A row this context resolves carries the
+// team's identity as resolved (TeamResolved, with its provider: empty for an
+// admin team); a row read from work_item_team_attributions, which does not
+// record the team's provider, is bound when it is used.
 type GithubWorkItemDerivationDonorRow struct {
 	TeamID, TeamName, TeamProvider, Source string
+	TeamResolved                           bool
 }
 
 // linkedIssueDonorSources are the sources of a row that gives its team to a
@@ -1442,6 +1445,7 @@ func (derived GithubWorkItemDerivationContext) OwnDonorRows(
 				rows[id] = GithubWorkItemDerivationDonorRow{
 					TeamID: *teamID, TeamName: GithubWorkItemDerivationFirstNonEmpty(GithubWorkItemDerivationStringValue(teamName), *teamID),
 					TeamProvider: candidate.TeamProvider, Source: candidate.Source,
+					TeamResolved: true,
 				}
 				break
 			}
@@ -1504,7 +1508,7 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
 		teamName := GithubWorkItemDerivationFirstNonEmpty(row.TeamName, row.TeamID)
 		bound := GithubWorkItemDerivationCandidate{
 			TeamID: GithubWorkItemDerivationStringPointer(row.TeamID), TeamName: GithubWorkItemDerivationStringPointer(teamName),
-			TeamProvider: row.TeamProvider, TeamResolved: row.TeamProvider != "",
+			TeamProvider: row.TeamProvider, TeamResolved: row.TeamResolved,
 		}
 		if !bound.TeamResolved {
 			// A stored row does not record its team's provider: the team is

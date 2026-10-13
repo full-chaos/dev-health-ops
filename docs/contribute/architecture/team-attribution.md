@@ -1227,10 +1227,11 @@ controls: a link that is gone and an explicit empty list are closed).
 > share as the share they have."* The measure (lead D5988, from the D5432 ranking in section 1.1): a team's share of a
 > repository is its **linked share**, the link counts per tier (`native`, then `explicit_text`, then `heuristic`); the
 > team with the largest linked share is the main owner and keeps `is_primary` over the whole history, and every other
-> owning team gets a row with its own share. The share value and the per-team rows are not implemented
-> (`team_repo_ownership` has `is_primary`, `specificity`, `priority` only). The text below
-> describes the code as it is on main. Where it says "same rank", "owners at the winner's rank" or "shared
-> equally", it does not yet implement this rule (tracked in CHAOS-9407).
+> owning team gets a row with its own share. The writer stores the share (`team_repo_ownership.share`, section 1.1)
+> and the investment and quadrant readers weigh a co-owned repository by it (CHAOS-9408, `teamscope.OwnerShares`,
+> next to "The team review quadrant" and "Every analytics team grouping on the investment path" below). Other text
+> below that says "same rank", "owners at the winner's rank" or "shared equally" about the attribution cascade
+> describes the code as it is on main and does not yet implement this rule (tracked in CHAOS-9407).
 
 A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
 teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active
@@ -1347,8 +1348,13 @@ project (section 0.1): a native team key gives one team.
   rows (`teamscope.UnitScope`), with effort allocated per repository.
   The grouping's team is the owner of the repository of each effort row (`teamscope.OwnerShares`, the same ownership
   statement; an ownership row with an empty team id owns nothing): a repository with no owner is `unassigned`; a
-  repository owned by several teams is **shared equally** among its owners, so the THEME and REPO nodes keep their
-  totals; under a team scope the owners are narrowed to the teams in view, so one selected team holds its repositories
+  repository owned by several teams is **shared by linked share** among its owners (CHAOS-9408, D5988: the stored
+  `team_repo_ownership.share` of each owner, the largest non-NULL share of its open rows, divided by the sum over the
+  owners in view; the main owner keeps its own share and each lesser owner its own lesser share, never an equal
+  split; a full tie is stored as equal shares, D5990, and reads equal; a single owner holds the repository whole;
+  when any owner in view has no measured share (NULL: a `provider_access`, `native` or `manual` row, or a row written
+  before migration 122) or the shares sum to nothing, no weight is invented and the owners in view split equally),
+  so the THEME and REPO nodes keep their totals; under a team scope the owners are narrowed to the teams in view, so one selected team holds its repositories
   whole. The unassigned share of the flow equals `1 - teamCoverage` except for a unit that touches an owned and an
   unowned repository: the coverage assigns that unit whole (a per-unit flag), the flow splits its effort by repository.
   See [Investment data model](../../reference/data-models/investment.md).

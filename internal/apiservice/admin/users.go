@@ -159,6 +159,10 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 			policy.WriteInternal(w)
 			return
 		}
+		if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
+			h.logger.DebugContext(ctx, "admin: list users refused: caller is not an admin of the requested org", "caller", user.ID, "org", orgID)
+			return
+		}
 		users, err = h.store.listUsersByOrg(ctx, orgID, filter)
 	case user.IsSuperuser:
 		users, err = h.store.listAllUsers(ctx, filter)

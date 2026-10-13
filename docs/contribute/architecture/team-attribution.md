@@ -351,9 +351,20 @@ that run computes for it with the facts of the linked item's day (a daily partit
 day of each linked item; a provider sync for the items it syncs); any other donor gives its stored newest
 primary row in `work_item_team_attributions` (`ClickHouseFactSource.LoadDonorRows`), with that row's team
 and source, never a resolution of it. A donor with no row of its own gives nothing (the item falls
-through) until it is attributed; a later run then copies its row. A later change of the donor's row does
-not move an item already computed (recomputing the dependents of a changed donor row is ticket 9478). The
-row's source must be one of sources 0–3 above. The row's evidence names the donor:
+through) until it is attributed; a later run then copies its row. **A later change of the donor's row
+re-derives the items that copy it (CHAOS-9478):** each backstop run reads the stored rows and re-derives an
+item that inherits through an inheritable edge when one of its donors has a primary row newer than the
+item's, and the donor the item would copy now (the cascade's winner over the stored rows: the lowest target id
+whose newest primary row is own-sourced and names an active team, with that row's team) differs from the one
+its newest primary row records (`donorChangedDependents`). An item whose own primary row has a team of its own
+(sources 0–3) outranks `linked_issue`, so its donors' changes trigger nothing. The
+re-derive is the backstop's own (the facts of the item's day, `computed_at` = the run); with no ownership scope
+it is an item-only run that publishes no scope marker, and an item another writer already wrote today waits
+for a later run (the backstop's `alreadyCoveredToday` rule). It needs no watermark: after the re-derive the
+item is newer than every donor row, so the next run finds nothing, and a donor recomputed with the same team
+triggers nothing (Info `work_item_attribution.donor_changed_dependents`, `WorkItemAttributionOutcome.DonorChangedDependents`;
+pinned by `TestADonorRowChangeRederivesOnlyTheItemsItChanges` and `TestADonorsChangedRowRederivesTheItemsThatCopyIt`,
+a donor of each of github, gitlab, jira and linear). The row's source must be one of sources 0–3 above. The row's evidence names the donor:
 `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` (the frozen
 Python oracles wrote `linked_issue=<item id>`, the item's own id; the oracle comparison declares that divergence,
 `pythonLinkedIssueEvidence`). Pinned by `TestALinkedItemCopiesItsDonorsRowOnly`, `TestALinkedItemIsRevisitedOnceItsDonorHasARow`,
@@ -725,7 +736,7 @@ is pass since CHAOS-9409: owners tied at the top rank with no main row (two `pro
 donor's team on that day (`tiedOwnersAt`, §0.4d).
 A pull request's `linked_issue` row must name the team an issue it is actually linked to holds on its own on
 the pull request's day (a relation of record, or a link of record; an `extkey:` relation counts only through
-the one existing item of that key; following the issue's later changes is CHAOS-9478). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the
+the one existing item of that key; the backstop follows the issue's later row changes, CHAOS-9478). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the
 defects the matrix exists to catch into the same state the production verbs wrote (sync-time `valid_from`, a
 landscape grouped by membership, an issue-key prefix taken as a native link, a pull request team inherited
 without a linked issue, from a donor without a team of its own or naming another team than its issue's, a

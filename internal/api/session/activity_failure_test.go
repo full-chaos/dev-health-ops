@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,9 +54,40 @@ func (c fakeConn) QueryRow(_ context.Context, query string, args ...any) driver.
 	return fakeRow{err: errors.New("unexpected statement")}
 }
 
+// The global meter provider binds the package's instruments once, so every
+// run shares one reader and asserts on the change in the counters.
+var (
+	metricsOnce   sync.Once
+	metricsReader *sdkmetric.ManualReader
+)
+
+func counterTotal(t *testing.T, name string) int64 {
+	t.Helper()
+	metricsOnce.Do(func() {
+		metricsReader = sdkmetric.NewManualReader()
+		otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricsReader)))
+	})
+	var collected metricdata.ResourceMetrics
+	if err := metricsReader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != name {
+				continue
+			}
+			for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				total += point.Value
+			}
+		}
+	}
+	return total
+}
+
 func TestLoginChoiceNeverRestsOnAFailedActivityRead(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	failedBefore := counterTotal(t, "session_org_activity_read_failures_total")
+	fallbackBefore := counterTotal(t, "session_org_activity_fallback_total")
 
 	orgB, orgA := uuid.New(), uuid.New() // B joined first (member), A later (owner)
 	joinedB := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -130,24 +162,13 @@ func TestLoginChoiceNeverRestsOnAFailedActivityRead(t *testing.T) {
 		})
 	}
 
-	var collected metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &collected); err != nil {
-		t.Fatal(err)
+	// Each case runs orgActivity once: 0 + 1 + 8 failed reads. The fallback
+	// is counted by chooseMembership in the two failing cases.
+	if got := counterTotal(t, "session_org_activity_read_failures_total") - failedBefore; got != 9 {
+		t.Fatalf("failed reads counted = %d, want 9", got)
 	}
-	var failed int64
-	for _, scope := range collected.ScopeMetrics {
-		for _, m := range scope.Metrics {
-			if m.Name != "session_org_activity_read_failures_total" {
-				continue
-			}
-			for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
-				failed += point.Value
-			}
-		}
-	}
-	// Each case runs orgActivity once: 0 + 1 + 8 failed reads.
-	if failed != 9 {
-		t.Fatalf("failed reads counted = %d, want 9", failed)
+	if got := counterTotal(t, "session_org_activity_fallback_total") - fallbackBefore; got != 2 {
+		t.Fatalf("fallbacks counted = %d, want 2", got)
 	}
 }
 

@@ -44,6 +44,7 @@ var generateParameterSets = []struct {
 	{githubWorld.OrgID, githubWorld.Params},
 	{gitlabWorld.OrgID, gitlabWorld.Params},
 	{jiraWorld.OrgID, jiraWorld.Params},
+	{linearWorld.OrgID, linearWorld.Params},
 }
 
 // serverStampProblems lists every server-stamped column (serverStampedColumns) of a table the

@@ -411,7 +411,7 @@ dho fixtures generate \
 | `--pr-count` | `20` | Total pull requests |
 | `--team-count` | `10` | Number of teams |
 | `--seed` | required | Seed of the frozen world |
-| `--provider` | `synthetic` | Provider label: `synthetic`, `github`, `gitlab`, `jira` |
+| `--provider` | `synthetic` | Provider label: `synthetic`, `github`, `gitlab`, `jira`, `linear` |
 | `--with-metrics` | off | Also the derived metrics |
 | `--with-work-graph` | off | Also the work graph |
 | `--db-type` | — | Must be `clickhouse` when given |

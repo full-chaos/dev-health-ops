@@ -786,7 +786,7 @@ type patternTeam struct {
 // resolveOwnedRepoID ports _resolve_owned_repo_id verbatim (see that
 // Python function's docstring for the full rationale -- native
 // team_repo_ownership wins where it resolves the repo, ranked by
-// (is_primary DESC, specificity DESC, updated_at DESC, team_id ASC) same
+// ((is_primary = 1) DESC, specificity DESC, updated_at DESC, team_id ASC) same
 // as load_team_repo_ownership_map; teams.repo_patterns is consulted ONLY
 // for a candidate repo ownership resolves no row for at all, via the same
 // cross-team pattern resolver every other pattern-fallback reader uses).
@@ -811,7 +811,7 @@ func resolveOwnedRepoID(ctx context.Context, client QueryClient, orgID, teamID, 
 	}
 
 	// canonical_owner: first-seen team per resolved_repo_id, in the exact
-	// order ClickHouse's ORDER BY (resolved_repo_id, is_primary DESC,
+	// order ClickHouse's ORDER BY (resolved_repo_id, (is_primary = 1) DESC,
 	// specificity DESC, updated_at DESC, team_id ASC) returns rows --
 	// mirrors Python's dict.setdefault-over-ordered-rows, including
 	// iteration order (a Python dict preserves insertion order, so the
@@ -927,9 +927,10 @@ func fetchOwnershipCandidates(ctx context.Context, client QueryClient, orgID str
         WHERE o.org_id = {org_id:String}
           AND (o.repo_id IS NOT NULL OR r.matched = 1)
           AND coalesce(toString(o.repo_id), toString(r.id)) IN {candidate_ids:Array(String)}
+          AND o.is_primary != 2
           AND o.valid_from <= now64(3)
           AND (o.valid_to IS NULL OR o.valid_to > now64(3))
-        ORDER BY resolved_repo_id, o.is_primary DESC, o.specificity DESC, o.updated_at DESC, team_id ASC`
+        ORDER BY resolved_repo_id, (o.is_primary = 1) DESC, o.specificity DESC, o.updated_at DESC, team_id ASC`
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "candidate_ids", Value: candidateIDs},

@@ -57,8 +57,9 @@ func TestInferredOwnershipWithFutureEvidenceIsWrittenOnce(t *testing.T) {
 }
 
 // TestReactivatedInferredOwnershipKeepsItsRetraction: team A owns the
-// repository from its evidence, team B then wins and A is retracted, then A
-// wins again. A's new row starts at that run, not at A's old evidence (a row
+// repository from its evidence, then A's links all move to team B's project
+// and A is retracted (a team with any link stays an owner, ruling D5988, so
+// only losing every link retracts it), then A wins again. A's new row starts at that run, not at A's old evidence (a row
 // at the old evidence would have the key of the retracted row and reopen it):
 // a read between the retraction and the new win does not name A, and a read
 // of A's first tenure still does.
@@ -86,10 +87,10 @@ func TestReactivatedInferredOwnershipKeepsItsRetraction(t *testing.T) {
 				t.Fatalf("A open rows start at %v, want one at %v", starts, oldEvidence)
 			}
 
-			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", 4, midEvidence.Add(time.Hour))
-			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", 5, midEvidence.Add(2*time.Hour))
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", 1, oldEvidence)
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", 2, oldEvidence.Add(time.Hour))
 			if _, retracted, _, _, err := service.Derive(ctx, org); err != nil || retracted != 1 {
-				t.Fatalf("B wins: retracted %d err %v, want A's row retracted", retracted, err)
+				t.Fatalf("A loses every link: retracted %d err %v, want A's row retracted", retracted, err)
 			}
 			gapAt := time.Now().UTC()
 			time.Sleep(50 * time.Millisecond)
@@ -118,6 +119,29 @@ func TestReactivatedInferredOwnershipKeepsItsRetraction(t *testing.T) {
 			}
 			if len(firstTenure) != 1 || firstTenure[0] != repo {
 				t.Errorf("owned repositories of A in its first tenure = %v, want [%s]", firstTenure, repo)
+			}
+
+			var roles []string
+			rows, err := conn.Query(ctx, `SELECT team_id, is_primary, share FROM team_repo_ownership FINAL
+WHERE org_id = ? AND source = 'inferred' AND valid_to IS NULL ORDER BY team_id`, org)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				var team string
+				var primary uint8
+				var share *float64
+				if err := rows.Scan(&team, &primary, &share); err != nil {
+					t.Fatal(err)
+				}
+				if share == nil {
+					t.Fatalf("open row of %s has no share", team)
+				}
+				roles = append(roles, fmt.Sprintf("%s:%d:%.2f", team, primary, *share))
+			}
+			_ = rows.Close()
+			if want := []string{teamA + ":1:0.60", teamB + ":2:0.40"}; fmt.Sprint(roles) != fmt.Sprint(want) {
+				t.Errorf("open rows after A wins again = %v, want %v", roles, want)
 			}
 
 			written, _, _, _, stats, err := service.DeriveWithStats(ctx, org)
@@ -194,13 +218,24 @@ func TestANewWinnerStartsWhenThePriorOwnerEnds(t *testing.T) {
 				seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", number, winnerEvidence.Add(time.Duration(number-3)*time.Hour))
 			}
 			beforeHandover := time.Now().UTC().Add(-time.Second)
-			if _, retracted, _, _, err := service.Derive(ctx, org); err != nil || retracted != 1 {
-				t.Fatalf("B wins: retracted %d err %v, want A's row retracted", retracted, err)
+			// A keeps its links, so it stays an owner (D5988): its main row
+			// closes at the run and it continues as a co-owner.
+			if _, retracted, _, _, stats, err := service.DeriveWithStats(ctx, org); err != nil || retracted != 0 || stats.RoleChanges != 1 {
+				t.Fatalf("B wins: retracted %d role changes %d err %v, want A's main row closed as a role change", retracted, stats.RoleChanges, err)
 			}
 
 			starts := openOwnershipStarts(t, ctx, conn, org, teamB)
 			if len(starts) != 1 || starts[0].Before(beforeHandover) {
-				t.Fatalf("B open rows start at %v, want one at the run that retracted A (after %v)", starts, beforeHandover)
+				t.Fatalf("B open rows start at %v, want one at the run that closed A's main row (after %v)", starts, beforeHandover)
+			}
+			var mains []string
+			for _, span := range ownershipRowSpans(t, ctx, conn, org) {
+				if span.validTo == nil {
+					mains = append(mains, fmt.Sprintf("%s:%d", span.team, span.primary))
+				}
+			}
+			if want := []string{teamA + ":2", teamB + ":1"}; fmt.Sprint(mains) != fmt.Sprint(want) && fmt.Sprint(mains) != fmt.Sprint([]string{want[1], want[0]}) {
+				t.Fatalf("open rows %v, want %v", mains, want)
 			}
 			assertSingleOwner(t, ctx, conn, org, repo, teamA, teamB, winnerEvidence.Add(24*time.Hour))
 

@@ -16,11 +16,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 )
 
-// The ranked-owner rule against the real migration chain: a repo that two
-// or more teams reach goes to the team with the most native links, then the
-// most explicit_text links, then the most heuristic links
-// (work_graph_issue_pr.provenance). A repo is never dropped only because
-// two teams have links to it, and a full tie keeps the existing open owner.
+// The owner rule against the real migration chain (rulings D5432, D5988):
+// every team that reaches a repo owns it with its share (its links over all
+// links of the repo); the main owner (is_primary = 1) is the team with the
+// most native links, then the most explicit_text links, then the most
+// heuristic links (work_graph_issue_pr.provenance); every other owner is a
+// co-owner (is_primary = 2). A full tie keeps the existing main owner.
 // Every contest runs for each provider pair, so each of jira, github, gitlab
 // and linear is the winning and the losing team's provider at least once.
 
@@ -98,6 +99,51 @@ WHERE org_id = ? AND repo_full_name = ? AND source = 'inferred' AND valid_to IS 
 	return owners
 }
 
+// ownerRow is one open inferred row's role and share, as "primary:share".
+type ownerRow string
+
+func ownerState(primary uint8, share float64) ownerRow {
+	return ownerRow(fmt.Sprintf("%d:%.6f", primary, share))
+}
+
+// openOwnerRows reads every open inferred row of the repo as team -> role and
+// share; a team with two open rows fails (one open row per claim).
+func (org *rankedOwnerOrg) openOwnerRows() map[string]ownerRow {
+	org.t.Helper()
+	rows, err := org.conn.Query(org.ctx, `
+SELECT team_id, is_primary, ifNull(share, -1)
+FROM team_repo_ownership FINAL
+WHERE org_id = ? AND repo_full_name = ? AND source = 'inferred' AND valid_to IS NULL`, org.orgID, org.repo)
+	if err != nil {
+		org.t.Fatalf("read open owner rows: %v", err)
+	}
+	defer rows.Close()
+	out := map[string]ownerRow{}
+	for rows.Next() {
+		var teamID string
+		var primary uint8
+		var share float64
+		if err := rows.Scan(&teamID, &primary, &share); err != nil {
+			org.t.Fatalf("scan open owner row: %v", err)
+		}
+		if _, twice := out[teamID]; twice {
+			org.t.Fatalf("team %s has two open rows on %s", teamID, org.repo)
+		}
+		out[teamID] = ownerState(primary, share)
+	}
+	if err := rows.Err(); err != nil {
+		org.t.Fatalf("open owner rows.Err: %v", err)
+	}
+	return out
+}
+
+func (org *rankedOwnerOrg) assertOwnerRows(want map[string]ownerRow) {
+	org.t.Helper()
+	if got := org.openOwnerRows(); !reflect.DeepEqual(got, want) {
+		org.t.Fatalf("open inferred rows of %s = %v, want %v", org.repo, got, want)
+	}
+}
+
 func (org *rankedOwnerOrg) assertOpenOwners(want ...string) {
 	org.t.Helper()
 	if got := org.openOwners(); !reflect.DeepEqual(got, want) {
@@ -112,8 +158,9 @@ var rankedOwnerIntegrationProviderPairs = [][2]string{
 // TestRankedOwnerKeepsTheNativeMajorityTeamWhenFewExplicitTextLinksArrive is
 // the shape that lost a repo's owner: a team owns the repo through many
 // native links, then four teams of another provider each get two
-// explicit_text links to it. The owner stays, its row is not retracted, and
-// no rival row is written.
+// explicit_text links to it. The owner stays the main owner, nothing is
+// retracted, its one open row takes its new share in place, and each rival is
+// a co-owner with its share.
 func TestRankedOwnerKeepsTheNativeMajorityTeamWhenFewExplicitTextLinksArrive(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	for index, pair := range rankedOwnerIntegrationProviderPairs {
@@ -125,28 +172,33 @@ func TestRankedOwnerKeepsTheNativeMajorityTeamWhenFewExplicitTextLinksArrive(t *
 			if written, retracted, _ := org.derive(); written != 1 || retracted != 0 {
 				t.Fatalf("first Derive: written=%d retracted=%d, want 1 and 0", written, retracted)
 			}
-			org.assertOpenOwners("owner")
+			org.assertOwnerRows(map[string]ownerRow{"owner": ownerState(1, 1)})
 
 			for _, rival := range []string{"rival-a", "rival-b", "rival-c", "rival-d"} {
 				org.ownProject(pair[1], rival)
 				org.link(pair[1], rival, "explicit_text", 2)
 			}
 			written, retracted, stats := org.derive()
-			if written != 0 || retracted != 0 {
-				t.Fatalf("second Derive: written=%d retracted=%d, want 0 and 0 (owner unchanged)", written, retracted)
+			if written != 5 || retracted != 0 {
+				t.Fatalf("second Derive: written=%d retracted=%d, want 5 (the owner's new share, four co-owners) and 0", written, retracted)
 			}
-			if stats.Derived != 1 || stats.Unchanged != 1 {
-				t.Fatalf("second Derive stats: %+v, want derived=1 unchanged=1", stats)
+			if stats.Derived != 5 || stats.Unchanged != 0 {
+				t.Fatalf("second Derive stats: %+v, want derived=5 unchanged=0", stats)
 			}
-			org.assertOpenOwners("owner")
+			rival := ownerState(2, 2.0/22)
+			org.assertOwnerRows(map[string]ownerRow{"owner": ownerState(1, 14.0/22),
+				"rival-a": rival, "rival-b": rival, "rival-c": rival, "rival-d": rival})
+			if written, retracted, _ := org.derive(); written != 0 || retracted != 0 {
+				t.Fatalf("third Derive: written=%d retracted=%d, want 0 and 0", written, retracted)
+			}
 		})
 	}
 }
 
 // TestRankedOwnerOneNativeLinkTakesTheRepoFromFiftyExplicitTextLinks: a
-// count in a lower tier never outweighs a higher tier. The repo moves to the
-// native team, and the old owner's row is retracted because the ranked owner
-// changed.
+// count in a lower tier never outweighs a higher tier for the main owner. The
+// main owner moves to the native team; the old owner stays as a co-owner with
+// the larger share (the rank and the share disagree, and each row says both).
 func TestRankedOwnerOneNativeLinkTakesTheRepoFromFiftyExplicitTextLinks(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	for index, pair := range rankedOwnerIntegrationProviderPairs {
@@ -161,18 +213,18 @@ func TestRankedOwnerOneNativeLinkTakesTheRepoFromFiftyExplicitTextLinks(t *testi
 
 			org.ownProject(pair[0], "native-team")
 			org.link(pair[0], "native-team", "native", 1)
-			if written, retracted, _ := org.derive(); written != 1 || retracted != 1 {
-				t.Fatalf("second Derive: written=%d retracted=%d, want 1 (native-team) and 1 (text-team)", written, retracted)
+			if written, retracted, _ := org.derive(); written != 2 || retracted != 0 {
+				t.Fatalf("second Derive: written=%d retracted=%d, want 2 (native-team, text-team as a co-owner) and 0", written, retracted)
 			}
-			org.assertOpenOwners("native-team")
+			org.assertOwnerRows(map[string]ownerRow{"native-team": ownerState(1, 1.0/51), "text-team": ownerState(2, 50.0/51)})
 		})
 	}
 }
 
 // TestRankedOwnerFullTieKeepsTheExistingOwnerAndSignalsTheTie: a second team
-// reaches the repo with the owner's exact link counts at every tier. No
-// owner is named, nothing is retracted, the existing owner row stays open,
-// and the run reports the tie.
+// reaches the repo with the owner's exact link counts at every tier. The
+// existing main owner stays the main owner, the second team is a co-owner,
+// both at half the links, nothing is retracted, and the run reports the tie.
 func TestRankedOwnerFullTieKeepsTheExistingOwnerAndSignalsTheTie(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	for index, pair := range rankedOwnerIntegrationProviderPairs {
@@ -190,20 +242,23 @@ func TestRankedOwnerFullTieKeepsTheExistingOwnerAndSignalsTheTie(t *testing.T) {
 			org.link(pair[1], "team-b", "native", 1)
 			org.link(pair[1], "team-b", "heuristic", 2)
 			written, retracted, stats := org.derive()
-			if written != 0 || retracted != 0 {
-				t.Fatalf("second Derive: written=%d retracted=%d, want 0 and 0 (tie keeps the owner)", written, retracted)
+			if written != 2 || retracted != 0 {
+				t.Fatalf("second Derive: written=%d retracted=%d, want 2 (team-a's new share, team-b) and 0 (tie keeps the owner)", written, retracted)
 			}
-			org.assertOpenOwners("team-a")
+			org.assertOwnerRows(map[string]ownerRow{"team-a": ownerState(1, 0.5), "team-b": ownerState(2, 0.5)})
 			wantTies := []TeamRepoOwnershipTie{{RepoID: org.repoID.String(), TeamIDs: []string{"team-a", "team-b"}}}
 			if !reflect.DeepEqual(stats.Ties, wantTies) {
 				t.Fatalf("second Derive ties = %+v, want %+v", stats.Ties, wantTies)
 			}
+			if written, retracted, _ := org.derive(); written != 0 || retracted != 0 {
+				t.Fatalf("rerun in the tie: written=%d retracted=%d, want 0 and 0", written, retracted)
+			}
 
 			org.link(pair[1], "team-b", "heuristic", 1)
-			if written, retracted, _ := org.derive(); written != 1 || retracted != 1 {
-				t.Fatalf("third Derive: written=%d retracted=%d, want 1 (team-b) and 1 (team-a) once the tie breaks", written, retracted)
+			if written, retracted, _ := org.derive(); written != 2 || retracted != 0 {
+				t.Fatalf("third Derive: written=%d retracted=%d, want 2 (team-b main, team-a co-owner) and 0 once the tie breaks", written, retracted)
 			}
-			org.assertOpenOwners("team-b")
+			org.assertOwnerRows(map[string]ownerRow{"team-b": ownerState(1, 4.0/7), "team-a": ownerState(2, 3.0/7)})
 		})
 	}
 }
@@ -225,7 +280,7 @@ func TestRankedOwnerSingleTeamIsUnchangedAgainstMigratedSchema(t *testing.T) {
 			if written, retracted, _ := org.derive(); written != 0 || retracted != 0 {
 				t.Fatalf("second Derive: written=%d retracted=%d, want 0 and 0", written, retracted)
 			}
-			org.assertOpenOwners("only")
+			org.assertOwnerRows(map[string]ownerRow{"only": ownerState(1, 1)})
 		})
 	}
 }
@@ -265,9 +320,10 @@ func TestRankedOwnerAnIssuesOwnRepoIsNotACandidateAgainstMigratedSchema(t *testi
 	}
 }
 
-// TestRankedOwnerFullTieRetractsTheRowOfATeamOutsideTheTie: the repo's
-// owner loses its rank to two other teams that tie with each other. No
-// owner is named, and the old owner -- not in the tie -- is retracted.
+// TestRankedOwnerFullTieRetractsTheRowOfATeamOutsideTheTie: the repo's main
+// owner loses its rank to two other teams that tie with each other. No main
+// owner is named; the old owner -- not in the tie -- stays only as a co-owner
+// with its share, and the tied teams are co-owners.
 func TestRankedOwnerFullTieRetractsTheRowOfATeamOutsideTheTie(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	for index, pair := range rankedOwnerIntegrationProviderPairs {
@@ -285,10 +341,10 @@ func TestRankedOwnerFullTieRetractsTheRowOfATeamOutsideTheTie(t *testing.T) {
 			org.ownProject(pair[0], "team-b")
 			org.link(pair[0], "team-b", "native", 2)
 			written, retracted, stats := org.derive()
-			if written != 0 || retracted != 1 {
-				t.Fatalf("second Derive: written=%d retracted=%d, want 0 and 1 (old-owner is not in the tie)", written, retracted)
+			if written != 3 || retracted != 0 {
+				t.Fatalf("second Derive: written=%d retracted=%d, want 3 (old-owner as a co-owner, team-a, team-b) and 0", written, retracted)
 			}
-			org.assertOpenOwners()
+			org.assertOwnerRows(map[string]ownerRow{"old-owner": ownerState(2, 0.2), "team-a": ownerState(2, 0.4), "team-b": ownerState(2, 0.4)})
 			wantTies := []TeamRepoOwnershipTie{{RepoID: org.repoID.String(), TeamIDs: []string{"team-a", "team-b"}}}
 			if !reflect.DeepEqual(stats.Ties, wantTies) {
 				t.Fatalf("second Derive ties = %+v, want %+v", stats.Ties, wantTies)
@@ -298,8 +354,9 @@ func TestRankedOwnerFullTieRetractsTheRowOfATeamOutsideTheTie(t *testing.T) {
 }
 
 // TestRankedOwnerTieWithNoOwnerStaysOwnerlessAndIsReportedEveryRun: a tie
-// on a repo no tied team owns yet names no owner and writes nothing, and
-// every run reports it again while it lasts.
+// on a repo no tied team owns yet names no main owner: both teams are
+// co-owners with their shares, a rerun writes nothing, and every run reports
+// the tie again while it lasts.
 func TestRankedOwnerTieWithNoOwnerStaysOwnerlessAndIsReportedEveryRun(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	for index, pair := range rankedOwnerIntegrationProviderPairs {
@@ -311,11 +368,15 @@ func TestRankedOwnerTieWithNoOwnerStaysOwnerlessAndIsReportedEveryRun(t *testing
 			org.link(pair[1], "team-b", "explicit_text", 1)
 			wantTies := []TeamRepoOwnershipTie{{RepoID: org.repoID.String(), TeamIDs: []string{"team-a", "team-b"}}}
 			for run := 1; run <= 2; run++ {
-				written, retracted, stats := org.derive()
-				if written != 0 || retracted != 0 || !reflect.DeepEqual(stats.Ties, wantTies) {
-					t.Fatalf("run %d: written=%d retracted=%d ties=%+v, want 0, 0 and %+v", run, written, retracted, stats.Ties, wantTies)
+				wantWritten := 2
+				if run == 2 {
+					wantWritten = 0
 				}
-				org.assertOpenOwners()
+				written, retracted, stats := org.derive()
+				if written != wantWritten || retracted != 0 || !reflect.DeepEqual(stats.Ties, wantTies) {
+					t.Fatalf("run %d: written=%d retracted=%d ties=%+v, want %d, 0 and %+v", run, written, retracted, stats.Ties, wantWritten, wantTies)
+				}
+				org.assertOwnerRows(map[string]ownerRow{"team-a": ownerState(2, 0.5), "team-b": ownerState(2, 0.5)})
 			}
 		})
 	}
@@ -361,10 +422,10 @@ func TestRankedOwnerReadsLinksWrittenByTheIssuePRLinkWriter(t *testing.T) {
 			majority.writeLinks(pair[0], "owner", issueprlinks.ProvenanceNative, 6, older)
 			majority.ownProject(pair[1], "rival")
 			majority.writeLinks(pair[1], "rival", "explicit_text", 2, newer)
-			if written, retracted, _ := majority.derive(); written != 1 || retracted != 0 {
-				t.Fatalf("majority Derive: written=%d retracted=%d, want 1 and 0", written, retracted)
+			if written, retracted, _ := majority.derive(); written != 2 || retracted != 0 {
+				t.Fatalf("majority Derive: written=%d retracted=%d, want 2 and 0", written, retracted)
 			}
-			majority.assertOpenOwners("owner")
+			majority.assertOwnerRows(map[string]ownerRow{"owner": ownerState(1, 0.75), "rival": ownerState(2, 0.25)})
 
 			precedence := newRankedOwnerOrg(t, ctx, conn, fmt.Sprintf("ranked-writer-precedence-%d", index))
 			precedence.ownProject(pair[0], "three-native")
@@ -381,10 +442,10 @@ func TestRankedOwnerReadsLinksWrittenByTheIssuePRLinkWriter(t *testing.T) {
 			if err := writer.Write(ctx, relinked); err != nil {
 				t.Fatalf("rewrite issue-pr links: %v", err)
 			}
-			if written, retracted, _ := precedence.derive(); written != 1 || retracted != 0 {
-				t.Fatalf("precedence Derive: written=%d retracted=%d, want 1 and 0", written, retracted)
+			if written, retracted, _ := precedence.derive(); written != 2 || retracted != 0 {
+				t.Fatalf("precedence Derive: written=%d retracted=%d, want 2 and 0", written, retracted)
 			}
-			precedence.assertOpenOwners("four-relinked")
+			precedence.assertOwnerRows(map[string]ownerRow{"four-relinked": ownerState(1, 4.0/7), "three-native": ownerState(2, 3.0/7)})
 		})
 	}
 }
@@ -431,8 +492,8 @@ func TestRankedOwnerClaimsOfASameNamedRepoOfAnotherProviderAreNotProtected(t *te
 		org.link("jira", "team-b", "explicit_text", 1)
 		org.seedSameNamedGitLabRepo("team-a")
 		written, retracted, stats := org.derive()
-		if written != 0 || retracted != 1 || len(stats.Ties) != 1 {
-			t.Fatalf("Derive: written=%d retracted=%d ties=%+v, want 0, 1 and one tie", written, retracted, stats.Ties)
+		if written != 2 || retracted != 1 || len(stats.Ties) != 1 {
+			t.Fatalf("Derive: written=%d retracted=%d ties=%+v, want 2 (two tied co-owners), 1 and one tie", written, retracted, stats.Ties)
 		}
 		if open := org.openGitLabRows("team-a"); open != 0 {
 			t.Fatalf("open gitlab rows of team-a = %d, want 0", open)

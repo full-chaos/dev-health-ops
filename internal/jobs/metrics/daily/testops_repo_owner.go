@@ -31,7 +31,7 @@ import (
 //  2. Else the repository's AUTHORITATIVE owner as of the END of the target
 //     day: teamownership.AuthoritativeOwnerByRepo. For a repository that more
 //     than one team owns, that function keeps ONE team: the first by
-//     is_primary DESC, specificity DESC, updated_at DESC, team_id ASC. One
+//     (is_primary = 1) DESC, specificity DESC, updated_at DESC, team_id ASC. One
 //     team, not all of them, because each TestOps daily table holds one row
 //     per (org, repo, day): a second team has no row to live in. It is the
 //     rule team_cognitive_load_daily and compounding_risk_daily already use.

@@ -100,8 +100,13 @@ func linearWorkItemOracleCases() []oracleCase {
 		{
 			ID: "long_multibyte_description",
 			Input: map[string]any{
-				"org_id":  "org-acme",
-				"history": []any{},
+				"org_id": "org-acme",
+				"history": []any{map[string]any{
+					"createdAt": "2026-07-30T11:00:00Z",
+					"fromState": nil,
+					"toState":   map[string]any{"name": "Backlog", "type": "backlog"},
+					"actor":     nil,
+				}},
 				"raw_issue": map[string]any{
 					"id": "lin-issue-44", "identifier": "ENG-44", "title": "Long body",
 					"description": strings.Repeat("é日", 800), "priority": 0, "estimate": nil,

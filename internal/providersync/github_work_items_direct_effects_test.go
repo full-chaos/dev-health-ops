@@ -207,20 +207,27 @@ func TestFoldWorkItemInspectionsTreatsMixedBatchAsConflict(t *testing.T) {
 	}
 }
 
-// work_items omits description/priority_raw/service_class/due_at and
-// work_item_transitions omits provider. Those omissions are the running Python
-// system's behavior (D16), and a ReplacingMergeTree replaces whole rows, so
-// writing them would diverge from what production stores. This pins the column
-// lists against a well-meaning "the table has the column, fill it in" edit.
+// The Python-parity work_items insert list omits description/priority_raw/
+// service_class/due_at and work_item_transitions omits provider. Those
+// omissions are the running Python system's behavior (D16), and a
+// ReplacingMergeTree replaces whole rows, so writing them from the parity list
+// would diverge from what production stores. description is written only by
+// the appended held column (withHeldWorkItemColumns) and is the one column the
+// readback also compares; priority_raw/service_class/due_at stay out of both.
+// This pins the lists against a well-meaning "the table has the column, fill it
+// in" edit.
 func TestDirectAdapterColumnListsMirrorThePythonSinkOmissions(t *testing.T) {
 	t.Parallel()
 	for _, absent := range []string{"description", "priority_raw", "service_class", "due_at"} {
 		if containsColumn(gitHubWorkItemsInsert, absent) {
 			t.Fatalf("work_items insert writes %q, which write_work_items does not", absent)
 		}
-		if containsColumn(gitHubWorkItemsSelect, absent) {
+		if absent != "description" && containsColumn(gitHubWorkItemsSelect, absent) {
 			t.Fatalf("work_items readback compares %q, a column this unit does not own", absent)
 		}
+	}
+	if !containsColumn(gitHubWorkItemsSelect, "description") {
+		t.Fatal("work_items readback does not compare description, which this unit now writes")
 	}
 	if containsColumn(gitHubWorkItemTransitionsInsert, "provider") {
 		t.Fatal("work_item_transitions insert writes provider, which write_work_item_transitions does not")

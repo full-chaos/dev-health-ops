@@ -45,6 +45,17 @@ services:
     build: !reset null
     entrypoint: !override ["/usr/local/bin/dho"]
     command: !override ["reconciler", "--shutdown-timeout=60s", "--http-addr=:8080"]
+    # The operator verbs run in this container (dho workers metrics finalize-redrive, daily-marker-backfill) open
+    # ClickHouse through its ClickHouse settings. The same component form as the go-worker fleet (x-go-worker-env-base
+    # in compose.yml), and CLICKHOUSE_URI blanked: otherwise the service inherits ops/.env's host URI, which the
+    # container cannot reach, and a URI beside the components is refused as two forms of one connection.
+    environment:
+      CLICKHOUSE_URI: ""
+      DEV_HEALTH_CH_HOST: clickhouse
+      DEV_HEALTH_CH_PORT: "9000"
+      DEV_HEALTH_CH_USER: ${CLICKHOUSE_USER:-ch}
+      DEV_HEALTH_CH_PASSWORD: ${CLICKHOUSE_PASSWORD:-ch}
+      DEV_HEALTH_CH_DB: ${CLICKHOUSE_DB:-default}
   go-stream-ingest:
     image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
     build: !reset null

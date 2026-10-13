@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"strings"
 	"time"
 
@@ -187,22 +188,23 @@ type jiraTeamCatalogMembershipRow struct {
 // captured on team_memberships, so those columns stay empty/nil here,
 // matching Python's ProjectRecord defaults exactly.
 type jiraTeamCatalogProjectRow struct {
-	ID         ProjectID  `json:"id"`
-	OrgID      string     `json:"org_id"`
-	Provider   string     `json:"provider"`
-	ProjectKey *string    `json:"project_key"`
-	Name       string     `json:"name"`
-	IsActive   uint8      `json:"is_active"`
-	State      string     `json:"state"`
-	TargetDate *time.Time `json:"target_date"`
-	URL        string     `json:"url"`
-	TeamIDs    []string   `json:"team_ids"`
-	TeamKeys   []string   `json:"team_keys"`
-	LeadID     *string    `json:"lead_id"`
-	LeadName   *string    `json:"lead_name"`
-	LeadEmail  *string    `json:"lead_email"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	LastSynced time.Time  `json:"last_synced"`
+	ID          ProjectID  `json:"id"`
+	OrgID       string     `json:"org_id"`
+	Provider    string     `json:"provider"`
+	ProjectKey  *string    `json:"project_key"`
+	Name        string     `json:"name"`
+	IsActive    uint8      `json:"is_active"`
+	State       string     `json:"state"`
+	StateSource string     `json:"state_source"`
+	TargetDate  *time.Time `json:"target_date"`
+	URL         string     `json:"url"`
+	TeamIDs     []string   `json:"team_ids"`
+	TeamKeys    []string   `json:"team_keys"`
+	LeadID      *string    `json:"lead_id"`
+	LeadName    *string    `json:"lead_name"`
+	LeadEmail   *string    `json:"lead_email"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	LastSynced  time.Time  `json:"last_synced"`
 }
 
 type JiraTeamCatalogRows struct {
@@ -277,9 +279,12 @@ func normalizeJiraOwnershipRow(orgID, teamID string, projectID ProjectID, projec
 
 func normalizeJiraProjectRow(orgID string, projectID ProjectID, projectKey, name string, normalizedAt time.Time) jiraTeamCatalogProjectRow {
 	key := projectKey
+	// The project search that feeds this row returns live projects only.
+	state := projectmembership.JiraProjectState(projectmembership.JiraStatusLive)
 	return jiraTeamCatalogProjectRow{
 		ID: projectID, OrgID: orgID, Provider: jiraTeamCatalogProvider,
 		ProjectKey: &key, Name: name, IsActive: 1,
+		State: state.State, StateSource: state.Source,
 		TeamIDs: []string{}, TeamKeys: []string{},
 		UpdatedAt: normalizedAt, LastSynced: normalizedAt,
 	}

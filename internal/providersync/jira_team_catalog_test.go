@@ -132,10 +132,10 @@ func TestNormalizeJiraProjectRow(t *testing.T) {
 	row := normalizeJiraProjectRow("org-1", testPID("10001"), "OPS", "Ops Project", now)
 	if row.ID.String() != "10001" || row.OrgID != "org-1" || row.Provider != "jira" ||
 		row.ProjectKey == nil || *row.ProjectKey != "OPS" || row.Name != "Ops Project" ||
-		row.IsActive != 1 || row.State != "" || row.URL != "" ||
+		row.IsActive != 1 || row.State != "started" || row.StateSource != "jira.project.status=live" || row.URL != "" ||
 		len(row.TeamIDs) != 0 || len(row.TeamKeys) != 0 ||
 		row.LeadID != nil || row.LeadName != nil || row.LeadEmail != nil {
-		t.Fatalf("row=%+v -- ProjectRecord's Python defaults (state/url empty, team_ids/team_keys empty, lead_* nil) must be preserved exactly", row)
+		t.Fatalf("row=%+v -- ProjectRecord's Python defaults (url empty; state is the CHAOS-9438 category, team_ids/team_keys empty, lead_* nil) must be preserved exactly", row)
 	}
 }
 

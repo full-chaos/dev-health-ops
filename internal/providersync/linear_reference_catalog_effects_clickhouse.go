@@ -31,7 +31,7 @@ const linearReferenceMembershipsInsert = `INSERT INTO team_memberships (org_id, 
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const linearReferenceOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
-const linearReferenceProjectsInsert = `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced)`
+const linearReferenceProjectsInsert = `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, state_source, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced)`
 
 func (sink LinearReferenceCatalogClickHouseEffects) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
@@ -377,7 +377,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeProjects(ctx context.Co
 	}
 	defer batch.Abort()
 	for _, row := range rows {
-		if err := batch.Append(row.ID, row.OrgID, row.Provider, row.ProjectKey, row.Name, row.IsActive, row.State, linearReferenceTargetDate(row.TargetDate), row.URL, row.TeamIDs, row.TeamKeys, row.LeadID, row.LeadName, row.LeadEmail, row.UpdatedAt, row.LastSynced); err != nil {
+		if err := batch.Append(row.ID, row.OrgID, row.Provider, row.ProjectKey, row.Name, row.IsActive, row.State, row.StateSource, linearReferenceTargetDate(row.TargetDate), row.URL, row.TeamIDs, row.TeamKeys, row.LeadID, row.LeadName, row.LeadEmail, row.UpdatedAt, row.LastSynced); err != nil {
 			return err
 		}
 	}
@@ -562,7 +562,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) inspectMemberships(ctx conte
 
 func (sink LinearReferenceCatalogClickHouseEffects) inspectProjects(ctx context.Context, claim Claim, expected []linearReferenceProjectRow) (EffectInspection, error) {
 	return inspectLinearReferenceRows(expected, func(row linearReferenceProjectRow) (EffectInspection, error) {
-		result, err := sink.Conn.Query(ctx, `SELECT id, org_id, provider, project_key, name, is_active, state, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced FROM projects FINAL WHERE org_id = ? AND provider = ? AND id = ?`, claim.OrgID, "linear", row.ID)
+		result, err := sink.Conn.Query(ctx, `SELECT id, org_id, provider, project_key, name, is_active, state, state_source, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced FROM projects FINAL WHERE org_id = ? AND provider = ? AND id = ?`, claim.OrgID, "linear", row.ID)
 		if err != nil {
 			return EffectConflict, err
 		}
@@ -571,7 +571,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) inspectProjects(ctx context.
 		var storedTargetDate *time.Time
 		found := 0
 		for result.Next() {
-			if err := result.Scan(&actual.ID, &actual.OrgID, &actual.Provider, &actual.ProjectKey, &actual.Name, &actual.IsActive, &actual.State, &storedTargetDate, &actual.URL, &actual.TeamIDs, &actual.TeamKeys, &actual.LeadID, &actual.LeadName, &actual.LeadEmail, &actual.UpdatedAt, &actual.LastSynced); err != nil {
+			if err := result.Scan(&actual.ID, &actual.OrgID, &actual.Provider, &actual.ProjectKey, &actual.Name, &actual.IsActive, &actual.State, &actual.StateSource, &storedTargetDate, &actual.URL, &actual.TeamIDs, &actual.TeamKeys, &actual.LeadID, &actual.LeadName, &actual.LeadEmail, &actual.UpdatedAt, &actual.LastSynced); err != nil {
 				return EffectConflict, err
 			}
 			if storedTargetDate != nil {
@@ -677,7 +677,7 @@ func equalLinearReferenceMembership(left, right linearReferenceMembershipRow) bo
 func equalLinearReferenceProject(left, right linearReferenceProjectRow) bool {
 	return left.ID == right.ID && left.OrgID == right.OrgID && left.Provider == right.Provider &&
 		reflect.DeepEqual(left.ProjectKey, right.ProjectKey) && left.Name == right.Name && left.IsActive == right.IsActive &&
-		left.State == right.State && linearReferenceDateEqual(left.TargetDate, right.TargetDate) && left.URL == right.URL &&
+		left.State == right.State && left.StateSource == right.StateSource && linearReferenceDateEqual(left.TargetDate, right.TargetDate) && left.URL == right.URL &&
 		reflect.DeepEqual(left.TeamIDs, right.TeamIDs) && reflect.DeepEqual(left.TeamKeys, right.TeamKeys) &&
 		reflect.DeepEqual(left.LeadID, right.LeadID) && reflect.DeepEqual(left.LeadName, right.LeadName) &&
 		reflect.DeepEqual(left.LeadEmail, right.LeadEmail) && left.UpdatedAt.Equal(right.UpdatedAt) &&

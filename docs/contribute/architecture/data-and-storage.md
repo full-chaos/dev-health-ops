@@ -438,6 +438,34 @@ Two rules hold for every read of the tree:
 How each provider captures the pull request ↔ issue link is described in
 [Work-item team attribution](team-attribution.md), section 2.
 
+## Project state categories: `projects.state`
+
+Every provider writes its projects' lifecycle into `projects.state` as one closed
+set, lowercase, the set Linear's project status type already uses: `backlog`,
+`planned`, `started`, `paused`, `completed`, `canceled`. `projects.state_source`
+names the provider fact that decided the category, so a view can say "appears
+completed (archived)". A state is never empty and never "unknown": a project
+whose lifecycle fact was not read maps to `started` and the source says
+`...=unread`. Producer: `internal/projectmembership/state.go`.
+
+| Provider | Provider fact | `state` | `state_source` |
+| --- | --- | --- | --- |
+| linear | project status type | the status type itself | `linear.project.status.type=<type>` |
+| jira | project live | `started` | `jira.project.status=live` |
+| jira | project archived | `completed` | `jira.project.status=archived` |
+| jira | project deleted | `canceled` | `jira.project.status=deleted` |
+| gitlab | `archived` false / true | `started` / `completed` | `gitlab.project.archived=false` / `=true` |
+| github | Projects v2 `closed` false / true | `started` / `completed` | `github.projectv2.closed=false` / `=true` |
+| github | `closed` not in the answer | `started` | `github.projectv2.closed=unread` |
+| jira | lookup failed | `started` | `jira.project.status=unread` |
+
+The mapping of archived and closed to `completed` and of Jira deleted to
+`canceled` is a lead decision (2026-10-13) that the product owner may refine.
+`is_active` stays a retirement flag and is a different fact from `state`.
+Jira archived projects get a state only on the ensure-row path (a work item
+moved to or from an archived project): the team-catalog walk reads archived
+projects only to keep ownership rows open and writes no project row for them.
+
 ## Migration rules
 
 Every migration needs:

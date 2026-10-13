@@ -9,6 +9,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
 // team_repo_ownership_derivation_clickhouse.go loads the already-synced
@@ -268,11 +270,17 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 		return 0, 0, true, nil, err
 	}
 	tenure = tenure.withOpenRows(activeRows)
+	// An inactive team owns nothing for any reader (team-attribution.md
+	// section 0.4g rule 1), so its tenure never floors another team's start.
+	tenure.inactive, err = teamactive.LoadInactive(ctx, service.Conn, orgID)
+	if err != nil {
+		return 0, 0, true, nil, err
+	}
 	settled, settledCounts := settleInferredEvidence(derived, repos, tenure, toRetract, now)
 	if settledCounts != (inferredEvidenceSettleCounts{}) {
 		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.evidence_start_set_aside",
 			"org_id", orgID, "future", settledCounts.future, "before_retraction", settledCounts.beforeRetraction,
-			"after_other_owner", settledCounts.afterOtherOwner)
+			"after_other_owner", settledCounts.afterOtherOwner, "inactive_tenure_ignored", settledCounts.inactiveTenureIgnored)
 	}
 	derived, roleCloses, roleChanged := applyTeamRepoOwnershipRoleChanges(stampTeamRepoOwnershipClaimStarts(settled, repos, activeRows, now), repos, activeRows, now)
 	// A role change closes the claim's open row of its old role at the run,
@@ -589,7 +597,12 @@ func resolveTeamRepoOwnershipRepo(id string, repos map[uuid.UUID]teamRepoOwnersh
 	return info, ok && info.FullName != ""
 }
 
-type inferredEvidenceSettleCounts struct{ future, beforeRetraction, afterOtherOwner int }
+type inferredEvidenceSettleCounts struct {
+	future, beforeRetraction, afterOtherOwner int
+	// inactiveTenureIgnored counts the claims whose start a main tenure of an
+	// inactive team would have moved.
+	inactiveTenureIgnored int
+}
 
 // settleInferredEvidence moves the evidence time of a claim to where its row
 // must start:
@@ -606,8 +619,10 @@ type inferredEvidenceSettleCounts struct{ future, beforeRetraction, afterOtherOw
 //     whose open main row started before that end was a main owner beside
 //     the other team (a full tie, D5990) and is not moved. Co-owners own the
 //     repository beside the main owners, so a co-owner's start is never moved
-//     by another team. The end is stored as that team's valid_to, so the next
-//     run reads the same start and writes nothing.
+//     by another team. The end of a team that is inactive now never moves a
+//     claim: an inactive team owns nothing for any reader. The end is stored
+//     as that team's valid_to, so the next run reads the same start and
+//     writes nothing.
 func settleInferredEvidence(
 	derived []DerivedTeamRepoOwnershipRow,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
@@ -663,9 +678,18 @@ func settleInferredEvidence(
 			continue
 		}
 		var otherEnd time.Time
+		ignoredInactive := false
 		ownMainFrom, ownMainOpen := tenure.openMainFrom[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}]
 		for _, end := range ends[repoKey{info.Provider, info.FullName}] {
 			if end.teamID == row.TeamID || !end.until.After(otherEnd) {
+				continue
+			}
+			// An inactive team owns nothing for any reader (section 0.4g rule
+			// 1), so it is never the prior owner: its end never moves this
+			// claim (a replaced team id's rows close at the replacement and
+			// stay as history).
+			if tenure.inactive.Has(end.teamID) {
+				ignoredInactive = ignoredInactive || end.until.After(row.EvidenceFrom)
 				continue
 			}
 			// A team whose main tenure ended while this claim's open main row
@@ -680,6 +704,8 @@ func settleInferredEvidence(
 		if otherEnd.After(row.EvidenceFrom) {
 			settled[i].EvidenceFrom = otherEnd
 			counts.afterOtherOwner++
+		} else if ignoredInactive {
+			counts.inactiveTenureIgnored++
 		}
 	}
 	return settled, counts
@@ -693,6 +719,10 @@ type teamRepoOwnershipTenureEnds struct {
 	mainUntil      map[teamRepoOwnershipClaim]time.Time
 	// openMainFrom is set from the open rows (withOpenRows).
 	openMainFrom map[teamRepoOwnershipClaim]time.Time
+	// inactive is the organization's inactive teams: their main tenure never
+	// floors another team's start (an inactive team owns nothing for any
+	// reader, team-attribution.md section 0.4g rule 1).
+	inactive teamactive.Inactive
 }
 
 // loadTeamRepoOwnershipRetractedUntil loads the tenure ends of the org's

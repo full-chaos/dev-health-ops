@@ -258,7 +258,7 @@ func (GitHubProjectV2Fetcher) Fetch(
 		result.Rows.Projects = append(result.Rows.Projects, projectmembership.EnsureProjectsRow(
 			claim.OrgID, "github", projectScopeID, "",
 			fmt.Sprintf("%s #%d", target.OrgLogin, target.ProjectNumber), normalizedAt,
-		))
+		).WithState(projectmembership.GitHubProjectV2State(targetResult.Closed)))
 		boardSubjects := make([]githubProjectV2SnapshotSubject, 0, len(items))
 		// boardIncomplete tracks whether this sync could positively identify
 		// EVERY board item that has a subject to name (codex round 1 finding,
@@ -433,6 +433,8 @@ type gitHubProjectV2TargetFetchResult struct {
 	Items          []gitHubProjectV2ItemPayload
 	Complete       bool
 	DegradedReason string
+	// Closed is the board's own `closed` flag; nil when the answer did not carry it.
+	Closed *bool
 }
 
 func (doer gitHubProjectV2CountingDoer) Do(request *http.Request) (*http.Response, error) {
@@ -480,6 +482,7 @@ func fetchGitHubProjectV2Target(
 ) (gitHubProjectV2TargetFetchResult, error) {
 	items := []gitHubProjectV2ItemPayload{}
 	outerCursor := ""
+	var closed *bool
 	seenOuter := map[string]struct{}{}
 	for outerPages := 0; ; outerPages++ {
 		if outerPages >= gitHubProjectV2ItemsMaxPages {
@@ -523,6 +526,7 @@ func fetchGitHubProjectV2Target(
 				Items: items, DegradedReason: githubProjectsV2StructuralDegraded,
 			}, nil
 		}
+		closed = envelope.Data.Organization.ProjectV2.Closed
 		connection := *envelope.Data.Organization.ProjectV2.Items
 		paginationComplete := connection.PageInfo != nil && connection.PageInfo.HasNextPage != nil
 		for index := range connection.Nodes {
@@ -601,11 +605,11 @@ func fetchGitHubProjectV2Target(
 				"reason", githubProjectsV2StructuralDegraded, "org_login", target.OrgLogin,
 				"project_number", target.ProjectNumber)
 			return gitHubProjectV2TargetFetchResult{
-				Items: items, DegradedReason: githubProjectsV2StructuralDegraded,
+				Items: items, DegradedReason: githubProjectsV2StructuralDegraded, Closed: closed,
 			}, nil
 		}
 		if !*connection.PageInfo.HasNextPage {
-			return gitHubProjectV2TargetFetchResult{Items: items, Complete: true}, nil
+			return gitHubProjectV2TargetFetchResult{Items: items, Complete: true, Closed: closed}, nil
 		}
 		next := strings.TrimSpace(connection.PageInfo.EndCursor)
 		if next == "" || next == outerCursor {
@@ -739,7 +743,8 @@ type gitHubProjectV2ItemsEnvelope struct {
 	Data struct {
 		Organization *struct {
 			ProjectV2 *struct {
-				Items *gitHubProjectV2Connection[gitHubProjectV2ItemPayload] `json:"items"`
+				Closed *bool                                                  `json:"closed"`
+				Items  *gitHubProjectV2Connection[gitHubProjectV2ItemPayload] `json:"items"`
 			} `json:"projectV2"`
 		} `json:"organization"`
 	} `json:"data"`
@@ -1158,6 +1163,7 @@ const gitHubProjectsV2ItemsQuery = `
 query($login: String!, $number: Int!, $after: String, $first: Int!) {
   organization(login: $login) {
     projectV2(number: $number) {
+      closed
       items(first: $first, after: $after) {
         nodes {
           id createdAt updatedAt

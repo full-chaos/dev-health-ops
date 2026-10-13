@@ -123,25 +123,28 @@ func EventID(row Row) string {
 // catalogue row for the same project on a ReplacingMergeTree keyed
 // (org_id, provider, id).
 const ProjectsInsert = `INSERT INTO projects ` +
-	`(id,org_id,provider,project_key,name,is_active,updated_at,last_synced)`
+	`(id,org_id,provider,project_key,name,is_active,state,state_source,updated_at,last_synced)`
 
 // CatalogRow is a `projects` row in its base 051 columns.
 type CatalogRow struct {
-	ID         string    `json:"id"`
-	OrgID      string    `json:"org_id"`
-	Provider   string    `json:"provider"`
-	ProjectKey string    `json:"project_key"`
-	Name       string    `json:"name"`
-	IsActive   uint8     `json:"is_active"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	LastSynced time.Time `json:"last_synced"`
+	ID         string `json:"id"`
+	OrgID      string `json:"org_id"`
+	Provider   string `json:"provider"`
+	ProjectKey string `json:"project_key"`
+	Name       string `json:"name"`
+	IsActive   uint8  `json:"is_active"`
+	// State is the closed-set category (state.go); StateSource the provider fact.
+	State       string    `json:"state"`
+	StateSource string    `json:"state_source"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	LastSynced  time.Time `json:"last_synced"`
 }
 
 // Values returns the catalogue row in ProjectsInsert's column order.
 func (row CatalogRow) Values() []any {
 	return []any{
 		row.ID, row.OrgID, row.Provider, row.ProjectKey, row.Name,
-		row.IsActive, row.UpdatedAt, row.LastSynced,
+		row.IsActive, row.State, row.StateSource, row.UpdatedAt, row.LastSynced,
 	}
 }
 

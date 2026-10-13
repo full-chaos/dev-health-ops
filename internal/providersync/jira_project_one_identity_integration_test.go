@@ -133,8 +133,8 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	}
 	seedWorkItem(t, ctx, conn, orgID, item.WorkItemID, "jira", uuid.Nil, *item.ProjectID, firstSync)
 	ensured := projectmembership.EnsureProjectsRow(orgID, "jira", *item.ProjectID, *item.ProjectKey, "Ops Project", firstSync)
-	if err := conn.Exec(ctx, projectmembership.ProjectsInsert+` VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		ensured.ID, ensured.OrgID, ensured.Provider, ensured.ProjectKey, ensured.Name, ensured.IsActive, ensured.UpdatedAt, ensured.LastSynced); err != nil {
+	if err := conn.Exec(ctx, projectmembership.ProjectsInsert+` VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ensured.Values()...); err != nil {
 		t.Fatal(err)
 	}
 
@@ -651,8 +651,8 @@ func TestProjectIdentityIsOneIDAcrossCatalogOwnershipAndWorkItems(t *testing.T) 
 	t.Run("github", func(t *testing.T) {
 		boardID := "ghprojv2:acme#3"
 		ensured := projectmembership.EnsureProjectsRow(orgID, "github", boardID, "", "Board", now)
-		if err := conn.Exec(ctx, projectmembership.ProjectsInsert+` VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			ensured.ID, ensured.OrgID, ensured.Provider, ensured.ProjectKey, ensured.Name, ensured.IsActive, ensured.UpdatedAt, ensured.LastSynced); err != nil {
+		if err := conn.Exec(ctx, projectmembership.ProjectsInsert+` VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			ensured.Values()...); err != nil {
 			t.Fatal(err)
 		}
 		seedWorkItem(t, ctx, conn, orgID, "gh:acme/api#7", "github", uuid.New(), boardID, now)

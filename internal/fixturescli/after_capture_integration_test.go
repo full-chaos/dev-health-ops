@@ -108,6 +108,14 @@ var viewFilledAfterTheCapture = map[string]viewFilledTable{
 	},
 }
 
+// emptyColumnsAfterTheCapture names the String columns (DEFAULT ”) a migration
+// added after the capture: table -> column -> migration. A captured row has no
+// value for them, so the load must leave them empty.
+var emptyColumnsAfterTheCapture = map[string]map[string]string{
+	// The provider fact that decided a project's state category (CHAOS-9438).
+	"projects": {"state_source": "123_projects_state_source.sql"},
+}
+
 // withoutColumnsAfterTheCapture checks the columns of table that
 // columnsAfterTheCapture names and returns the table without them, so the
 // rest can be compared with the frozen columns. A problem is reported, never
@@ -115,7 +123,16 @@ var viewFilledAfterTheCapture = map[string]viewFilledTable{
 // is not Nullable (a captured row could not leave it NULL), or holds a value
 // in any loaded row (the load wrote something no capture holds).
 func withoutColumnsAfterTheCapture(table FrozenTable) (FrozenTable, []string) {
-	added := columnsAfterTheCapture[table.Name]
+	added := map[string]string{}
+	for name, migration := range columnsAfterTheCapture[table.Name] {
+		added[name] = migration
+	}
+	// A defaulted-empty String column (emptyColumnsAfterTheCapture) is held to
+	// "" instead of NULL.
+	empty := emptyColumnsAfterTheCapture[table.Name]
+	for name, migration := range empty {
+		added[name] = migration
+	}
 	if len(added) == 0 {
 		return table, nil
 	}
@@ -138,6 +155,24 @@ func withoutColumnsAfterTheCapture(table FrozenTable) (FrozenTable, []string) {
 			continue
 		}
 		drop[position] = true
+		if _, isEmpty := empty[name]; isEmpty {
+			columnType := table.Columns[position].Type
+			if columnType != "String" && columnType != "LowCardinality(String)" {
+				problems = append(problems, fmt.Sprintf("%s.%s (added by %s) is %s, not a defaulted String", table.Name, name, added[name], columnType))
+				continue
+			}
+			valued := 0
+			for _, row := range table.Rows {
+				if position >= len(row) || (row[position] != nil && row[position] != "") {
+					valued++
+				}
+			}
+			if valued > 0 {
+				problems = append(problems, fmt.Sprintf("%s.%s (added by %s, after the capture): %d of %d loaded rows hold a value; a captured row has none, so the load must leave it empty",
+					table.Name, name, added[name], valued, len(table.Rows)))
+			}
+			continue
+		}
 		if columnType := table.Columns[position].Type; !strings.HasPrefix(columnType, "Nullable(") {
 			problems = append(problems, fmt.Sprintf("%s.%s (added by %s) is %s, not Nullable: a captured row has no value for it and could not leave it NULL", table.Name, name, added[name], columnType))
 			continue

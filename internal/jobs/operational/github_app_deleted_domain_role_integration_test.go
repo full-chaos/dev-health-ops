@@ -3,8 +3,10 @@
 package operational
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -181,5 +183,51 @@ VALUES (gen_random_uuid(), 'org-2', 'github', 'github-app', TRUE, 'sealed', now(
 	}
 	if !named {
 		t.Fatalf("diagnostic gaps %v do not name the undeclared credentials_encrypted UPDATE", gaps)
+	}
+}
+
+// A commit that fails after the UPDATE ran must not leave an Info line saying
+// the credential was deactivated: the transaction rolled back and it is still
+// active.
+func TestDeletedInstallationLogsDeactivationOnlyAfterCommit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	admin, domain, _ := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
+	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for _, statement := range []string{
+		`INSERT INTO public.github_app_installations (id, installation_id, org_id, created_at, updated_at)
+			VALUES (gen_random_uuid(), 998, 'org-1', now(), now())`,
+		`INSERT INTO public.integration_credentials (id, org_id, provider, name, is_active, created_at, updated_at)
+			VALUES (gen_random_uuid(), 'org-1', 'github', 'github-app', TRUE, now(), now())`,
+		`CREATE FUNCTION public.fail_commit() RETURNS trigger LANGUAGE plpgsql AS
+			$$ BEGIN RAISE EXCEPTION 'commit refused'; END $$`,
+		`CREATE CONSTRAINT TRIGGER fail_commit AFTER UPDATE ON public.integration_credentials
+			DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fail_commit()`,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	_, err := store.UpsertGithubAppEvent(ctx, "installation",
+		[]byte(`{"action":"deleted","installation":{"id":998}}`), now)
+	if err == nil {
+		t.Fatal("the deferred trigger should have failed the commit")
+	}
+	var active bool
+	if err := admin.QueryRow(ctx, `SELECT is_active FROM public.integration_credentials WHERE org_id = 'org-1'`).Scan(&active); err != nil || !active {
+		t.Fatalf("credential after a failed commit: active=%v err=%v, want still active", active, err)
+	}
+	if strings.Contains(logs.String(), "credential deactivated") {
+		t.Fatalf("success log written before the commit succeeded:\n%s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "commit failed, credential stays active") {
+		t.Fatalf("commit failure not logged:\n%s", logs.String())
 	}
 }

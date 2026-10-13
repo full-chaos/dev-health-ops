@@ -433,6 +433,30 @@ SELECT
 			END)
 	)
 	AND NOT EXISTS (
+		-- CHAOS-6747: on a table named in both manifests the table-wide SELECT
+		-- implies SELECT on every column, so the two sweeps above skip SELECT
+		-- there. A column-level SELECT entry for the caller or PUBLIC that the
+		-- posture does not declare is still refused, so the entry cannot
+		-- outlive a later REVOKE of the table-wide grant.
+		SELECT 1
+		FROM column_scoped_relations AS scoped
+		JOIN required_table_privileges AS mixed ON mixed.table_name = scoped.relname
+		JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = scoped.oid
+		CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS entry
+		WHERE attribute.attacl IS NOT NULL
+			AND attribute.attnum > 0
+			AND NOT attribute.attisdropped
+			AND entry.privilege_type = 'SELECT'
+			AND entry.grantee IN (0, (SELECT oid FROM current_role_identity))
+			AND NOT EXISTS (
+				SELECT 1
+				FROM column_scoped_privileges AS required
+				WHERE required.table_name = scoped.relname
+					AND required.column_name = attribute.attname
+					AND required.privilege = 'SELECT'
+			)
+	)
+	AND NOT EXISTS (
 		-- The required-flag columns only capture whether the base privilege
 		-- is held, so a role that holds a required privilege WITH GRANT OPTION
 		-- passes the base check unchanged (having the option always implies

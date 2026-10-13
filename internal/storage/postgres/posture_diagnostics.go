@@ -694,8 +694,8 @@ func diagnoseColumnScopedExcess(
 // counterpart of rolePostureQuery's effective-privilege column sweep: without
 // it the migration gate would confirm a role holding, say, UPDATE on a secret
 // column of a mixed table while every worker's own readiness check refuses it
-// (CHAOS-6747). SELECT is not swept: the mixed table's table-wide SELECT already
-// implies it on every column.
+// (CHAOS-6747). SELECT is judged by the column ACL only: the mixed table's
+// table-wide SELECT already implies it on every column.
 const diagnoseMixedColumnExcessQuery = `
 WITH mixed(table_name) AS (
 	SELECT DISTINCT * FROM unnest($2::text[])
@@ -711,14 +711,29 @@ WITH mixed(table_name) AS (
 	WHERE attribute.attnum > 0 AND NOT attribute.attisdropped
 )
 SELECT table_name, column_name, privilege
-FROM candidates
-WHERE has_column_privilege($1, relation, column_name, privilege)
-	AND NOT has_table_privilege($1, relation, privilege)
-	AND NOT EXISTS (
+FROM (
+	SELECT table_name, column_name, privilege
+	FROM candidates
+	WHERE has_column_privilege($1, relation, column_name, privilege)
+		AND NOT has_table_privilege($1, relation, privilege)
+	UNION
+	-- A column-level SELECT entry on a column the posture does not declare:
+	-- the table-wide SELECT implies it, so only the column ACL shows it.
+	SELECT mixed.table_name, attribute.attname, 'SELECT'
+	FROM mixed
+	JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = to_regclass('public.' || mixed.table_name)
+	CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS entry
+	WHERE attribute.attacl IS NOT NULL
+		AND attribute.attnum > 0
+		AND NOT attribute.attisdropped
+		AND entry.privilege_type = 'SELECT'
+		AND entry.grantee IN (0, (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1))
+) AS found
+WHERE NOT EXISTS (
 		SELECT 1 FROM declared
-		WHERE declared.table_name = candidates.table_name
-			AND declared.column_name = candidates.column_name
-			AND declared.privilege = candidates.privilege
+		WHERE declared.table_name = found.table_name
+			AND declared.column_name = found.column_name
+			AND declared.privilege = found.privilege
 	)
 ORDER BY table_name, column_name, privilege
 `

@@ -609,6 +609,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), org_id uuid NOT NULL UNIQUE,
 			tier text NOT NULL, features_override json, limits_override json
 		)`,
+		"CREATE TABLE public.byo_llm_budget_reservations (id uuid PRIMARY KEY)",
 		`CREATE TABLE public.tier_limits (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tier text NOT NULL,
 			limit_key text NOT NULL, limit_value text

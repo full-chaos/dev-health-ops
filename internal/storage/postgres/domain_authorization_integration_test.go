@@ -129,6 +129,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.byo_llm_budget_reservations (id uuid PRIMARY KEY)",
 		// CHAOS-4175 family 3's DispatchGuard total-cap read dual-granted this
 		// table; see the doc comment above domainPosture().
 		"CREATE TABLE public.tier_limits (id bigint PRIMARY KEY)",
@@ -148,7 +149,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE ROLE " + authorizedDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainAuthorizationPass + "'",
 		"GRANT CONNECT ON DATABASE " + dbName + " TO " + authorizedDomainRole,
 		"GRANT USAGE ON SCHEMA public TO " + authorizedDomainRole,
-		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.users, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.tier_limits, public.webhook_deliveries TO " + authorizedDomainRole,
+		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.users, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.byo_llm_budget_reservations, public.tier_limits, public.webhook_deliveries TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO " + authorizedDomainRole,

@@ -436,7 +436,7 @@ func TestDimensionsForQueuesUsesRegistryPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dimensions.Jobs) != 5 ||
+	if len(dimensions.Jobs) != 6 ||
 		strings.Join(dimensions.DomainTypes, ",") != "billing_notification,maintenance_run,schedule_occurrence,webhook_delivery" {
 		t.Fatalf("queue dimensions drifted: %+v", dimensions)
 	}

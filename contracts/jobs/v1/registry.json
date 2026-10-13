@@ -651,6 +651,39 @@
       }
     },
     {
+      "kind": "system.llm_budget_stale_reservations",
+      "current_version": 1,
+      "supported_versions": [
+        1
+      ],
+      "queue": "retention",
+      "handler_owner": "internal/jobs/llmbudgetstale",
+      "execution_mode": "command",
+      "priority": 3,
+      "timeout_seconds": 60,
+      "max_attempts": 2,
+      "retry_policy": "bounded_exponential_jitter",
+      "cancellation": "cooperative_checkpoint",
+      "delivery": "replay_safe_at_least_once",
+      "idempotency": "unique_schedule_occurrence",
+      "concurrency": {
+        "scope": "fleet",
+        "limit": 1
+      },
+      "sensitive_fields": [],
+      "domain_link": "schedule_occurrence",
+      "organization_scope": "global",
+      "schema_versions": {
+        "1": "schemas/system.llm_budget_stale_reservations.v1.schema.json"
+      },
+      "fixtures": {
+        "1": [
+          "examples/system.llm_budget_stale_reservations.v1.json"
+        ]
+      },
+      "go_only": true
+    },
+    {
       "kind": "system.retention_cleanup",
       "current_version": 3,
       "supported_versions": [

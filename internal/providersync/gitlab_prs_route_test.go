@@ -69,12 +69,15 @@ func gitLabPullRequestFixtureResponses() []gitLabPullRequestResponse {
 		{body: `[
 			{"id":5,"system":true,"body":"unapproved this merge request","author":{"username":"reviewer"},"created_at":"2026-07-19T11:00:00Z"}
 		]`},
+		{body: `[{"id":"c7a1"},{"id":"c7a2"}]`, headers: http.Header{"X-Next-Page": []string{"2"}}},
+		{body: `[{"id":"c7a3"}]`},
 		{body: `[
 			{"iid":8,"title":"Ship API","description":null,"state":"merged","author":{"username":"author2"},"created_at":"2026-07-05T10:00:00Z","updated_at":"2026-07-10T10:00:00Z","merged_at":"2026-07-22T10:00:00Z","closed_at":"2026-07-22T10:00:00Z","source_branch":"release","target_branch":"main","user_notes_count":0},
 			{"iid":6,"title":"old","state":"closed","updated_at":"2026-06-30T10:00:00Z"}
 		]`, headers: http.Header{"X-Next-Page": []string{"3"}}},
 		{status: http.StatusNotFound, body: `{"message":"approvals unavailable"}`},
 		{body: `[{"id":6,"system":false,"type":"DiffNote","body":"looks good","author":{"username":"reviewer4"},"created_at":"2026-07-11T11:00:00Z"}]`},
+		{status: http.StatusNotFound, body: `{"message":"commits unavailable"}`},
 	}
 }
 
@@ -92,9 +95,11 @@ func TestGitLabPullRequestRouteMirrorsPythonFamilyAndEarlyStop(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(batch.Effects) != 3 || batch.Effects[0].Destination != "git_pull_requests" ||
+			if len(batch.Effects) != 4 || batch.Effects[0].Destination != "git_pull_requests" ||
 				batch.Effects[1].Destination != "git_pull_request_reviews" ||
 				batch.Effects[2].Destination != "ai_attribution" ||
+				batch.Effects[3].Destination != "work_graph_pr_commit" ||
+				batch.Effects[3].Recovery != EffectReadbackRequired ||
 				batch.Effects[0].Recovery != EffectReadbackRequired || batch.Effects[1].Recovery != EffectReadbackRequired {
 				t.Fatalf("effects=%+v", batch.Effects)
 			}
@@ -102,8 +107,22 @@ func TestGitLabPullRequestRouteMirrorsPythonFamilyAndEarlyStop(t *testing.T) {
 				t.Fatalf("rows prs=%d reviews=%d", len(batch.Effects[0].Rows), len(batch.Effects[1].Rows))
 			}
 			if batch.Watermark == nil || !batch.Watermark.Equal(*nativeTestClaim("gitlab", dataset).BeforeAt) ||
-				batch.Evidence.Requests != 9 || batch.Evidence.Pages != 6 || batch.Evidence.Records != 7 {
+				batch.Evidence.Requests != 12 || batch.Evidence.Pages != 8 || batch.Evidence.Records != 7 {
 				t.Fatalf("evidence=%+v watermark=%v", batch.Evidence, batch.Watermark)
+			}
+			if len(batch.Effects[3].Rows) != 3 {
+				t.Fatalf("commit links=%d want 3 distinct commits of MR 7 and none for MR 8", len(batch.Effects[3].Rows))
+			}
+			for index, hash := range []string{"c7a1", "c7a2", "c7a3"} {
+				var link prCommitLinkRow
+				if err := json.Unmarshal(batch.Effects[3].Rows[index], &link); err != nil {
+					t.Fatal(err)
+				}
+				if link.PRNumber != 7 || link.CommitHash != hash || link.Provenance != "native" ||
+					link.Confidence != 1 || link.Evidence != "api_pr_commits" || link.OrgID != "org-acme" ||
+					!link.LastSynced.Equal(normalizedAt.UTC().Truncate(time.Millisecond)) {
+					t.Fatalf("link %d=%+v", index, link)
+				}
 			}
 			var row pullRequestRow
 			if err := json.Unmarshal(batch.Effects[0].Rows[0], &row); err != nil {
@@ -142,7 +161,7 @@ func TestGitLabPullRequestRouteMirrorsPythonFamilyAndEarlyStop(t *testing.T) {
 					t.Fatalf("fetched social data for out-of-window MR: %s", request.URL.Path)
 				}
 			}
-			if got := doer.requests[6].URL.RequestURI(); got != "/api/v4/projects/123/merge_requests?order_by=updated_at&page=2&per_page=2&sort=desc&state=all" {
+			if got := doer.requests[8].URL.RequestURI(); got != "/api/v4/projects/123/merge_requests?order_by=updated_at&page=2&per_page=2&sort=desc&state=all" {
 				t.Fatalf("page-2 request=%q", got)
 			}
 		})
@@ -175,6 +194,7 @@ func TestGitLabPullRequestRouteFailsClosedOnPaginationCap(t *testing.T) {
 		{body: gitLabRepositoryFixture},
 		{body: `[{"iid":7,"state":"opened","updated_at":"2026-07-20T10:00:00Z"}]`, headers: http.Header{"X-Next-Page": []string{"2"}}},
 		{body: `{}`},
+		{body: `[]`},
 		{body: `[]`},
 	}}
 	batch, err := (GitLabPullRequestRouteHandler{MaxPages: 1}).Collect(

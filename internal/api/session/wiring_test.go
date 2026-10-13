@@ -34,8 +34,8 @@ func completeDeps(t *testing.T) Deps {
 // required dependencies is present; each missing one alone leaves nothing
 // mounted.
 func TestRoutesNeedEveryRequiredDependency(t *testing.T) {
-	if got := len(Routes(completeDeps(t))); got != 17 {
-		t.Fatalf("complete deps mount %d routes, want 17", got)
+	if got := len(Routes(completeDeps(t))); got != 18 {
+		t.Fatalf("complete deps mount %d routes, want 18", got)
 	}
 	for name, drop := range map[string]func(*Deps){
 		"Pool":     func(d *Deps) { d.Pool = nil },

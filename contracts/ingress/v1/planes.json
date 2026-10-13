@@ -164,6 +164,7 @@
     {"path": "/api/v1/auth/me$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/auth/me/organizations$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/auth/switch-org$", "path_type": "ImplementationSpecific", "plane": "go-api"},
+    {"path": "/api/v1/auth/change-password$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/auth/validate$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/auth/logout$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/auth/accept-invite$", "path_type": "ImplementationSpecific", "plane": "go-api"},

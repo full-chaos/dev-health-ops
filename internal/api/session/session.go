@@ -66,6 +66,7 @@ type handlers struct {
 	Deps
 	loginLimiter, refreshLimiter, validateLimiter                *httpapi.KeyedLimiter
 	registerLimiter, verifyLimiter, resendLimiter, forgotLimiter *httpapi.KeyedLimiter
+	changePasswordLimiter                                        *httpapi.KeyedLimiter
 }
 
 func (d Deps) withDefaults() Deps {
@@ -108,13 +109,14 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	defaults := deps.withDefaults()
 	h := handlers{Deps: defaults,
-		loginLimiter:    httpapi.NewKeyedLimiter(defaults.Limits, loginLimit),
-		refreshLimiter:  httpapi.NewKeyedLimiter(defaults.Limits, refreshLimit),
-		validateLimiter: httpapi.NewKeyedLimiter(defaults.Limits, validateLimit),
-		registerLimiter: httpapi.NewKeyedLimiter(defaults.Limits, defaults.RegisterLimit),
-		verifyLimiter:   httpapi.NewKeyedLimiter(defaults.Limits, verifyLimit),
-		resendLimiter:   httpapi.NewKeyedLimiter(defaults.Limits, resendLimit),
-		forgotLimiter:   httpapi.NewKeyedLimiter(defaults.Limits, forgotLimit),
+		loginLimiter:          httpapi.NewKeyedLimiter(defaults.Limits, loginLimit),
+		refreshLimiter:        httpapi.NewKeyedLimiter(defaults.Limits, refreshLimit),
+		validateLimiter:       httpapi.NewKeyedLimiter(defaults.Limits, validateLimit),
+		registerLimiter:       httpapi.NewKeyedLimiter(defaults.Limits, defaults.RegisterLimit),
+		verifyLimiter:         httpapi.NewKeyedLimiter(defaults.Limits, verifyLimit),
+		resendLimiter:         httpapi.NewKeyedLimiter(defaults.Limits, resendLimit),
+		forgotLimiter:         httpapi.NewKeyedLimiter(defaults.Limits, forgotLimit),
+		changePasswordLimiter: httpapi.NewKeyedLimiter(defaults.Limits, changePasswordLimit),
 	}
 	guard := h.Guard
 	return []httpapi.Route{
@@ -138,6 +140,8 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/forgot-password", Handler: guard.BodyFirst(policy.Public,
 			httpapi.ValidateThenLimit(validateEmailBody, h.forgotLimiter, bodyAuthKey, h.Write)(http.HandlerFunc(h.forgotPassword)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/reset-password", Handler: guard.BodyFirst(policy.Public, http.HandlerFunc(h.resetPassword))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/change-password", Handler: guard.BodyFirst(policy.Authenticated,
+			httpapi.ValidateThenLimit(validateChangePassword, h.changePasswordLimiter, changePasswordKey, h.Write)(http.HandlerFunc(h.changePassword)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/accept-invite", Handler: guard.BodyFirst(policy.Authenticated, http.HandlerFunc(h.acceptInviteRoute))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/onboard", Handler: guard.BodyFirst(policy.Authenticated, http.HandlerFunc(h.onboard))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/onboarding/state", Handler: guard.Wrap(policy.Authenticated, http.HandlerFunc(h.onboardingStateRoute))},

@@ -19,6 +19,10 @@ type TeamRepoDonor struct {
 	WorkItemID string
 	TeamID     string
 	RepoID     uuid.UUID
+	// Share is the team's stored linked share of the repository
+	// (team_repo_ownership.share, D5988): the largest non-NULL share of its rows
+	// that hold. nil = not measured (NULL is not zero). Only the donor set fills it.
+	Share *float64
 }
 
 // teamRepoDonorsQuery joins repos to ownership on plain equality keys: an
@@ -125,6 +129,7 @@ type TeamRepoInterval struct {
 	RepoID    uuid.UUID
 	ValidFrom time.Time
 	ValidTo   *time.Time
+	Share     *float64
 }
 
 // ValidAt reports whether the ownership row held at the instant: it began at or
@@ -156,14 +161,26 @@ type TeamRepoDonorSet struct {
 // instant: each (team, repository) once, by repository then team.
 func (set TeamRepoDonorSet) DonorsAt(workItemID string, at time.Time) []TeamRepoDonor {
 	var donors []TeamRepoDonor
-	seen := map[TeamRepoDonor]bool{}
+	seen := map[TeamRepoDonor]int{}
 	for _, team := range set.TeamsByWorkItem[workItemID] {
 		for _, interval := range set.IntervalsByTeam[team] {
-			donor := TeamRepoDonor{WorkItemID: workItemID, TeamID: team, RepoID: interval.RepoID}
-			if !interval.ValidAt(at) || seen[donor] {
+			if !interval.ValidAt(at) {
 				continue
 			}
-			seen[donor] = true
+			key := TeamRepoDonor{WorkItemID: workItemID, TeamID: team, RepoID: interval.RepoID}
+			if index, ok := seen[key]; ok {
+				if interval.Share != nil && (donors[index].Share == nil || *interval.Share > *donors[index].Share) {
+					share := *interval.Share
+					donors[index].Share = &share
+				}
+				continue
+			}
+			seen[key] = len(donors)
+			donor := key
+			if interval.Share != nil {
+				share := *interval.Share
+				donor.Share = &share
+			}
 			donors = append(donors, donor)
 		}
 	}
@@ -210,7 +227,7 @@ ORDER BY work_item_id, team_id`
 // the organization's.
 const teamRepoIntervalsQuery = `
 WITH ownership AS (
-    SELECT DISTINCT team_id, provider, repo_id, lower(repo_full_name) AS repo_name_lower, valid_from, valid_to
+    SELECT DISTINCT team_id, provider, repo_id, lower(repo_full_name) AS repo_name_lower, valid_from, valid_to, share
     FROM team_repo_ownership FINAL
     WHERE org_id = {org_id:String}
       AND source IN ('native', 'jira_legacy', 'provider_access', 'inferred')
@@ -220,16 +237,16 @@ WITH ownership AS (
 scoped_repos AS (
     SELECT id, provider, lower(repo) AS repo_lower FROM repos FINAL WHERE org_id = {org_id:String}
 )
-SELECT DISTINCT team_id, repo_id, valid_from, valid_to
+SELECT DISTINCT team_id, repo_id, valid_from, valid_to, share
 FROM (
-    SELECT o.team_id AS team_id, r.id AS repo_id, o.valid_from AS valid_from, o.valid_to AS valid_to
+    SELECT o.team_id AS team_id, r.id AS repo_id, o.valid_from AS valid_from, o.valid_to AS valid_to, o.share AS share
     FROM ownership AS o
     INNER JOIN scoped_repos AS r ON r.provider = o.provider AND r.id = o.repo_id
     WHERE o.repo_id IS NOT NULL
 
     UNION ALL
 
-    SELECT o.team_id AS team_id, r.id AS repo_id, o.valid_from AS valid_from, o.valid_to AS valid_to
+    SELECT o.team_id AS team_id, r.id AS repo_id, o.valid_from AS valid_from, o.valid_to AS valid_to, o.share AS share
     FROM ownership AS o
     INNER JOIN scoped_repos AS r ON r.provider = o.provider AND r.repo_lower = o.repo_name_lower
     WHERE o.repo_id IS NULL
@@ -293,7 +310,7 @@ func (reader *Reader) FetchTeamRepoDonorSet(ctx context.Context, workItemIDs []s
 	defer func() { _ = intervalRows.Close() }()
 	for intervalRows.Next() {
 		var interval TeamRepoInterval
-		if err := intervalRows.Scan(&interval.TeamID, &interval.RepoID, &interval.ValidFrom, &interval.ValidTo); err != nil {
+		if err := intervalRows.Scan(&interval.TeamID, &interval.RepoID, &interval.ValidFrom, &interval.ValidTo, &interval.Share); err != nil {
 			return set, fmt.Errorf("scan team repository interval: %w", err)
 		}
 		interval.TeamID = pythonparity.DecodeClickHouseStringValue(interval.TeamID)

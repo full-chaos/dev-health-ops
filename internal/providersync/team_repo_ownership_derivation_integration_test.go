@@ -98,15 +98,12 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 		if row.provider != "github" {
 			t.Fatalf("%s: expected provider=github (from repos.provider, not the work item's tracker provider), got %s", repoFullName, row.provider)
 		}
-		// codex adversarial review, 2026-08-28 (confirmed high-severity):
-		// is_primary must be 0. The read path (providers/teams.py::
-		// load_team_repo_ownership_map) orders "is_primary DESC, specificity
-		// DESC" -- is_primary=1 would let this row always outrank a real
-		// GitHub-direct grant (team_autoimport_github.py writes every row
-		// is_primary=0) regardless of this producer's deliberately-low
-		// specificity.
-		if row.isPrimary {
-			t.Fatalf("%s: expected is_primary=0 for an inferred row, got true -- this would override a real direct ownership grant", repoFullName)
+		// The only team of each repo is its main owner (ruling D5988):
+		// is_primary = 1 and share 1. An inferred row already outranks a
+		// provider_access grant by specificity (150 over 100), so the main
+		// owner's is_primary = 1 changes no precedence against a grant.
+		if !row.isPrimary || row.share == nil || *row.share != 1 {
+			t.Fatalf("%s: expected the main owner row (is_primary=1, share 1), got %+v", repoFullName, row)
 		}
 	}
 
@@ -1095,11 +1092,11 @@ ORDER BY team_id`, orgID)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 rows (team-old retracted + team-new active), got %+v", results)
 	}
-	if results[0].teamID != "team-new" || !results[0].active || results[0].isPrimary != 0 {
-		t.Fatalf("expected team-new active with is_primary=0, got %+v", results[0])
+	if results[0].teamID != "team-new" || !results[0].active || results[0].isPrimary != teamRepoOwnershipMainOwner {
+		t.Fatalf("expected team-new active as the main owner (is_primary=1), got %+v", results[0])
 	}
-	if results[1].teamID != "team-old" || results[1].active || results[1].isPrimary != 0 {
-		t.Fatalf("expected team-old retracted (inactive) with is_primary=0, got %+v", results[1])
+	if results[1].teamID != "team-old" || results[1].active || results[1].isPrimary != teamRepoOwnershipMainOwner {
+		t.Fatalf("expected team-old retracted (inactive), keeping its is_primary=1, got %+v", results[1])
 	}
 }
 
@@ -1398,13 +1395,14 @@ type teamRepoOwnershipReadRow struct {
 	teamID    string
 	provider  string
 	source    string
-	isPrimary bool
+	isPrimary bool // is_primary = 1: the main owner
+	share     *float64
 }
 
 func readTeamRepoOwnership(t *testing.T, ctx context.Context, conn driver.Conn, orgID string) map[string]teamRepoOwnershipReadRow {
 	t.Helper()
 	rows, err := conn.Query(ctx, `
-SELECT repo_full_name, team_id, provider, source, is_primary
+SELECT repo_full_name, team_id, provider, source, is_primary, share
 FROM team_repo_ownership FINAL
 WHERE org_id = ?`, orgID)
 	if err != nil {
@@ -1415,11 +1413,12 @@ WHERE org_id = ?`, orgID)
 	for rows.Next() {
 		var repoFullName, teamID, provider, source string
 		var isPrimary uint8
-		if err := rows.Scan(&repoFullName, &teamID, &provider, &source, &isPrimary); err != nil {
+		var share *float64
+		if err := rows.Scan(&repoFullName, &teamID, &provider, &source, &isPrimary, &share); err != nil {
 			t.Fatalf("scan team_repo_ownership row: %v", err)
 		}
 		out[repoFullName] = teamRepoOwnershipReadRow{
-			teamID: teamID, provider: provider, source: source, isPrimary: isPrimary != 0,
+			teamID: teamID, provider: provider, source: source, isPrimary: isPrimary == teamRepoOwnershipMainOwner, share: share,
 		}
 	}
 	if err := rows.Err(); err != nil {

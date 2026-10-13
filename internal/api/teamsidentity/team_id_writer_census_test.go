@@ -31,7 +31,7 @@ var teamIDWriters = map[string]struct {
 	"internal/providersync/linear_reference_catalog_effects_clickhouse.go": {3, "native catalog: teamid.Of, behind CarryFirstTeamCatalogCollector"},
 	"internal/providersync/team_drift_review.go":                           {2, "native catalog drift staging: the collector's keyed ids"},
 	"internal/providersync/jira_project_as_team_retire.go":                 {3, "retire: closes and deactivates stored rows, no new id"},
-	"internal/providersync/team_repo_ownership_derivation_clickhouse.go":   {1, "derivation: ids of stored active team rows"},
+	"internal/providersync/team_repo_ownership_derivation_clickhouse.go":   {2, "derivation: ids of stored active team rows (the plain insert and the insert with the share)"},
 	// Exception: a test seed. It stores a retired (inactive) bare id beside
 	// its keyed id on purpose, the state the reader tests of the retraction
 	// rows need. No production binary imports the package.

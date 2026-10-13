@@ -29,7 +29,7 @@ ambiguity rules, and persisted provenance are defined in
 The final [team ownership fallback](../../reference/data-models/investment.md#team-ownership-fallback)
 uses only the latest primary ownership-based issue attribution and live,
 non-manual repository ownership. It unions all eligible repositories across the
-member issues' teams and assigns equal shares; it does not use person membership
+member issues' teams and weights them by linked share (equal only where no share is measured); it does not use person membership
 or change this page's primary attribution precedence.
 
 That fallback is bound by the §0.4 provider coverage contract below and is

@@ -45,6 +45,7 @@ var preparedRouteInsertStatements = map[string]string{
 	"feature_flag_event":                      featureFlagEventInsert,
 	"feature_flag_link":                       featureFlagLinkInsert,
 	"work_graph_edges":                        workGraphEdgesInsert,
+	"work_graph_pr_commit":                    prCommitLinkInsert,
 	"operational_services":                    operationalServicesInsert,
 	"operational_service_repository_mappings": operationalServiceRepositoryMappingsInsert,
 	"operational_incidents":                   operationalIncidentsInsert,

@@ -31,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/promptpii"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -47,6 +48,19 @@ const maxLLMConcurrency = 32
 // nonFiniteConfidenceRejectedEvent names the log line a run emits when one or
 // more edge confidences were excluded from evidence-quality scoring because
 // they are not finite.
+// promptRedactionsEvent names the line a run emits with how many values the
+// prompt filter replaced, by class. Counts only; a value is never logged.
+const promptRedactionsEvent = "investment_materialization.prompt_pii_redacted"
+
+func logPromptRedactions(ctx context.Context, logger *slog.Logger, orgID, runID string, counts promptpii.Counts) {
+	logger.InfoContext(ctx, promptRedactionsEvent,
+		"org_id", orgID, "run_id", runID,
+		"credentials", counts.Credentials, "emails", counts.Emails,
+		"phones", counts.Phones, "mentions", counts.Mentions,
+		"total", counts.Total(),
+	)
+}
+
 const nonFiniteConfidenceRejectedEvent = "investment_materialization.nonfinite_confidence_rejected"
 
 // partitionOversizedHubs is the CHAOS-4771 hub-fate gate passed to
@@ -455,6 +469,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	stats.RepoOwnershipDonorRows = donorSet.Rows
 	stats.RepoOwnershipDonorIssues = len(donorSet.TeamsByWorkItem)
 
+	var promptRedactions promptpii.Counts
 	for index, component := range components {
 		cascade := repoCascades[index]
 		componentInput := MaterializeComponentInput{
@@ -469,6 +484,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			return Stats{}, fmt.Errorf("assemble component %d: %w", index, err)
 		}
 		stats.RejectedConfidences += result.RejectedConfidences
+		promptRedactions = promptRedactions.Add(result.PromptRedactions)
 		if result.Skipped != "" {
 			stats.RepoOwnershipWindowSkipped++
 			continue // no bounds, or entirely outside the window
@@ -791,6 +807,8 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			"count", stats.RejectedConfidences,
 		)
 	}
+
+	logPromptRedactions(ctx, m.logger, cfg.OrgID, cfg.RunID, promptRedactions)
 
 	m.logger.InfoContext(ctx, "investment materialization complete",
 		"components", stats.Components, "records", stats.Records, "quotes", stats.Quotes,

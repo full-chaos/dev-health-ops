@@ -10,4 +10,4 @@
 -	header	golden/old_script_heads.json
 -	header	golden/preflight_states.json
 -	header	golden/revisions.json
-c3d8806acf042551eaa0b99f4854a7aa8779946b0e86b070b32c90ea5295e64f	unclassified	hand_ddl_ledger.tsv
+5d8ad37618c67735f91cba2314b562e690d4a43f3c2c190ef119d0f23121777c	hand-written	hand_ddl_ledger.tsv

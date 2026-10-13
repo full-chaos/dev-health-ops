@@ -1,0 +1,12 @@
+{
+  "contract_version": 1,
+  "correlation_id": "fixed-schedule:llm_budget_stale_reservations:2026-10-13T12:00:00Z",
+  "idempotency_key": "llm-budget-stale-reservations:2026-10-13T12:00:00Z",
+  "domain": {
+    "type": "schedule_occurrence",
+    "id": "5d0f6c0e-7a1b-5c2d-8e3f-4a5b6c7d8e9f"
+  },
+  "payload": {
+    "scheduled_for": "2026-10-13T12:00:00Z"
+  }
+}

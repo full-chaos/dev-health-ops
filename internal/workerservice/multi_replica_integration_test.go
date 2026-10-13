@@ -388,6 +388,7 @@ func assertReplicaQueueParity(t *testing.T, replicas ...*operationalReplica) {
 	wantKinds := []string{
 		jobcontract.KindBillingNotification,
 		jobcontract.KindHeartbeat,
+		jobcontract.KindLLMBudgetStaleReservations,
 		jobcontract.KindRetentionCleanup,
 		jobcontract.KindSyncCoverageRefresh,
 		jobcontract.KindWebhookDelivery,

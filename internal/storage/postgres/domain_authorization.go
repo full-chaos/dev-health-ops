@@ -784,6 +784,9 @@ func domainPosture() RolePosture {
 			{"sync_watermarks", true, true, true},
 			{"sync_dispatch_outbox", true, true, false},
 			{"worker_job_outbox", true, false, false},
+			// Read only: the stale-reservation job (CHAOS-9476) counts rows left
+			// in `reserved`; it never voids one, so it holds no write.
+			{"byo_llm_budget_reservations", false, false, false},
 			// UPDATE as of CHAOS-4209: stampCanonicalSyncConfig
 			// (native_finalize_sync_run.go:582,597) writes the run's
 			// last_sync_at/last_sync_success/last_sync_error/last_sync_stats on

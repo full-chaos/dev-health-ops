@@ -523,6 +523,7 @@ func createOperatorIntegrationSchema(
 		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.byo_llm_budget_reservations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.dev_conversations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.dev_conversation_tombstones (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.provider_rate_limit_observations (id bigint PRIMARY KEY)",

@@ -1006,6 +1006,7 @@ func createKernelIntegrationFixture(
 		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.byo_llm_budget_reservations (id uuid PRIMARY KEY)",
 		// CHAOS-4175 family 3's DispatchGuard total-cap read dual-granted this
 		// table; see the doc comment above domainPosture() in
 		// internal/storage/postgres/domain_authorization.go.

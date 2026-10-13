@@ -10,10 +10,14 @@ package investmentexplain
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"log/slog"
 	"math"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -120,6 +124,98 @@ func buildInvestmentBreakdownDistributions(rows []BreakdownRow) (themes, subcate
 		}
 	}
 	return themes, subcategories
+}
+
+// fetchMixDistributions reads the breakdown the Investment mix itself reads (same
+// rows, same scope and category filters) and aggregates it to the theme and
+// subcategory distributions every share of the explanation is measured against.
+func (reader *Reader) fetchMixDistributions(ctx context.Context, opts ExplainInvestmentMixOptions) (themes, subcategories *orderedFloatMap, err error) {
+	themeFilters, subcategoryFilters := SplitCategoryFilters(opts.WorkCategory)
+
+	breakdownFilter := BreakdownFilters{
+		OrgID:         opts.OrgID,
+		StartTS:       opts.StartTS,
+		EndTS:         opts.EndTS,
+		Themes:        themeFilters,
+		Subcategories: subcategoryFilters,
+	}
+	// RepoIDs is applied to the BREAKDOWN query for a team or repo scope, as the
+	// reference does (investment.py:175: `if filters.scope.level in {"team",
+	// "repo"}:`), and, DIVERGING from it on purpose (CHAOS-9104, D5844, D5900), for
+	// any scope level when the request names repositories: an organization scope
+	// with filters.what.repos narrows the breakdown as it narrows the work units
+	// (work_units.py:253), which the reference left mixed-scope. One gate for every
+	// surface: teamscope.RepoScopeApplies.
+	if teamscope.RepoScopeApplies(opts.ScopeLevel, opts.ReposNamed) {
+		breakdownFilter.RepoIDs = opts.RepoIDs
+		breakdownFilter.ReposNamed = opts.ReposNamed
+		breakdownFilter.TeamScopeCondition = opts.TeamScopeCondition
+		breakdownFilter.TeamScopeBindings = opts.TeamScopeBindings
+	}
+	breakdownRows, err := reader.FetchInvestmentBreakdown(ctx, breakdownFilter)
+	if err != nil {
+		return nil, nil, err
+	}
+	themes, subcategories = buildInvestmentBreakdownDistributions(breakdownRows)
+	return themes, subcategories, nil
+}
+
+// mixCacheFilters extends the request filters of the cache key with the resolved
+// report window and a digest of the mix (theme and subcategory shares to the one
+// decimal the answer serves) and of the work-unit data version. Same filters on another day, or after the work units
+// changed, give another key.
+func mixCacheFilters(opts ExplainInvestmentMixOptions, themes, subcategories *orderedFloatMap, dataVersion string) any {
+	totalEffort := 0.0
+	for _, kv := range themes.Items() {
+		totalEffort += kv.Value
+	}
+	digest := sha256.New()
+	for _, group := range []struct {
+		name  string
+		items []keyValue
+	}{{"theme", themes.Items()}, {"subcategory", subcategories.Items()}} {
+		shares := sharesPct(group.items, totalEffort)
+		keys := make([]string, 0, len(shares))
+		for key := range shares {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(digest, "%s\t%s\t%.1f\n", group.name, key, shares[key])
+		}
+	}
+	fmt.Fprintf(digest, "total\t%.3f\ndata_version\t%s\n", totalEffort, dataVersion)
+	return map[string]any{
+		"request":      opts.FiltersForCacheKey,
+		"window_start": opts.StartTS.UTC().Format("2006-01-02"),
+		"window_end":   opts.EndTS.UTC().Format("2006-01-02"),
+		"mix_sha256":   hex.EncodeToString(digest.Sum(nil)),
+	}
+}
+
+// cachedSharesMatchMix reports whether a cached explanation still agrees with the
+// mix it is served against: every finding share must equal the current share to the
+// one decimal the answer serves. An unknown key counts as stale.
+func cachedSharesMatchMix(cached InvestmentMixExplanation, themes, subcategories *orderedFloatMap) bool {
+	if len(cached.TopFindings) == 0 {
+		return true
+	}
+	totalEffort := 0.0
+	for _, kv := range themes.Items() {
+		totalEffort += kv.Value
+	}
+	themeShares := sharesPct(themes.Items(), totalEffort)
+	subcategoryShares := sharesPct(subcategories.Items(), totalEffort)
+	for _, finding := range cached.TopFindings {
+		current, known := themeShares[finding.Evidence.Theme]
+		if finding.Evidence.Subcategory != nil {
+			current, known = subcategoryShares[*finding.Evidence.Subcategory]
+		}
+		if !known || roundOneDecimal(current) != roundOneDecimal(finding.Evidence.SharePct) {
+			return false
+		}
+	}
+	return true
 }
 
 // llmUnavailableExplanation ports explain_investment_mix's early-return
@@ -274,6 +370,17 @@ func redactedOutputHead(text string, maxRunes int) string {
 // degrades to "did not persist" rather than failing the request, exactly
 // matching that swallow-everything contract.
 func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWriter, available AvailabilityFunc, complete CompleteFunc, opts ExplainInvestmentMixOptions) (InvestmentMixExplanation, error) {
+	explanation, err := reader.explainInvestmentMix(ctx, writer, available, complete, opts)
+	if err != nil {
+		return InvestmentMixExplanation{}, err
+	}
+	if leaked := rawKeyCount(explanation); leaked > 0 {
+		slog.WarnContext(ctx, "query_api.investment_mix_explain.raw_keys_in_prose", "org_id", opts.OrgID, "count", leaked)
+	}
+	return PresentExplanation(explanation), nil
+}
+
+func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWriter, available AvailabilityFunc, complete CompleteFunc, opts ExplainInvestmentMixOptions) (InvestmentMixExplanation, error) {
 	theme := opts.Theme
 	subcategory := opts.Subcategory
 	if theme != "" && !units.IsTheme(theme) {
@@ -297,8 +404,26 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 	if subcategory != "" {
 		subcategoryPtr = &subcategory
 	}
+	// The mix the answer is measured against is read before the cache, because it is
+	// part of the cache key: a request names a relative range, so the key must also
+	// carry the resolved window and the shares of the data behind it, else an answer
+	// computed on an older day or older work units replays for the same filters.
+	var themeDistribution, subcategoryDistribution *orderedFloatMap
+	cacheFilters := opts.FiltersForCacheKey
+	if opts.WindowErr == nil {
+		var fetchErr error
+		themeDistribution, subcategoryDistribution, fetchErr = reader.fetchMixDistributions(ctx, opts)
+		if fetchErr != nil {
+			return InvestmentMixExplanation{}, fetchErr
+		}
+		dataVersion, versionErr := reader.FetchInvestmentDataVersion(ctx, opts.OrgID)
+		if versionErr != nil {
+			return InvestmentMixExplanation{}, versionErr
+		}
+		cacheFilters = mixCacheFilters(opts, themeDistribution, subcategoryDistribution, dataVersion)
+	}
 	cacheKey, err := ComputeCacheKey(CacheKeyInput{
-		Filters:     opts.FiltersForCacheKey,
+		Filters:     cacheFilters,
 		Theme:       themePtr,
 		Subcategory: subcategoryPtr,
 		OrgID:       opts.OrgID,
@@ -311,52 +436,19 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 		cached, err := reader.ReadInvestmentExplanation(ctx, cacheKey, opts.OrgID)
 		if err == nil && cached != nil {
 			if explanation, decodeErr := DecodeInvestmentMixExplanation(cached.ExplanationJSON); decodeErr == nil {
-				return explanation, nil
+				if opts.WindowErr != nil || cachedSharesMatchMix(explanation, themeDistribution, subcategoryDistribution) {
+					return explanation, nil
+				}
+				slog.WarnContext(ctx, "query_api.investment_mix_explain.cache_stale", "org_id", opts.OrgID)
 			}
 		}
 	}
 
-	// themeFilters/subcategoryFilters (from filters.why.work_category) are
-	// computed here, BEFORE the breakdown fetch, because Python's own
-	// build_investment_response passes them into fetch_investment_breakdown
-	// (investment.py:187-188: themes=theme_filters or None,
-	// subcategories=subcategory_filters or None) -- a real query-level
-	// filter, not just the work-unit-level filtering below. A first draft
-	// computed this only after the breakdown fetch and never threaded it
-	// into BreakdownFilters at all, silently ignoring why.work_category for
-	// the top_themes/top_subcategories computation while still applying it
-	// to work units -- caught by codex round 1 (P1).
 	if opts.WindowErr != nil {
 		return InvestmentMixExplanation{}, opts.WindowErr
 	}
 
 	themeFilters, subcategoryFilters := SplitCategoryFilters(opts.WorkCategory)
-
-	breakdownFilter := BreakdownFilters{
-		OrgID:         opts.OrgID,
-		StartTS:       opts.StartTS,
-		EndTS:         opts.EndTS,
-		Themes:        themeFilters,
-		Subcategories: subcategoryFilters,
-	}
-	// RepoIDs is applied to the BREAKDOWN query for a team or repo scope, as the
-	// reference does (investment.py:175: `if filters.scope.level in {"team",
-	// "repo"}:`), and, DIVERGING from it on purpose (CHAOS-9104, D5844, D5900), for
-	// any scope level when the request names repositories: an organization scope
-	// with filters.what.repos narrows the breakdown as it narrows the work units
-	// (work_units.py:253), which the reference left mixed-scope. One gate for every
-	// surface: teamscope.RepoScopeApplies.
-	if teamscope.RepoScopeApplies(opts.ScopeLevel, opts.ReposNamed) {
-		breakdownFilter.RepoIDs = opts.RepoIDs
-		breakdownFilter.ReposNamed = opts.ReposNamed
-		breakdownFilter.TeamScopeCondition = opts.TeamScopeCondition
-		breakdownFilter.TeamScopeBindings = opts.TeamScopeBindings
-	}
-	breakdownRows, err := reader.FetchInvestmentBreakdown(ctx, breakdownFilter)
-	if err != nil {
-		return InvestmentMixExplanation{}, err
-	}
-	themeDistribution, subcategoryDistribution := buildInvestmentBreakdownDistributions(breakdownRows)
 
 	filteredSubcategoryItems := subcategoryDistribution.Items()
 	if theme != "" {
@@ -741,7 +833,7 @@ func buildExplainPayload(in explainPayloadInput) map[string]any {
 		if in.TotalEffort != 0 {
 			pct = kv.Value / in.TotalEffort
 		}
-		themeTop[i] = map[string]any{"theme": kv.Key, "value": kv.Value, "pct": pct}
+		themeTop[i] = map[string]any{"theme": kv.Key, "label": themeLabel(kv.Key), "value": kv.Value, "pct": pct}
 	}
 	subcategoryTop := make([]any, len(in.TopSubcategories))
 	for i, kv := range in.TopSubcategories {
@@ -749,11 +841,11 @@ func buildExplainPayload(in explainPayloadInput) map[string]any {
 		if in.TotalEffort != 0 {
 			pct = kv.Value / in.TotalEffort
 		}
-		subcategoryTop[i] = map[string]any{"subcategory": kv.Key, "value": kv.Value, "pct": pct}
+		subcategoryTop[i] = map[string]any{"subcategory": kv.Key, "label": subcategoryLabel(kv.Key), "value": kv.Value, "pct": pct}
 	}
 	dominantTop := make([]any, len(in.TopCounts))
 	for i, kv := range in.TopCounts {
-		dominantTop[i] = map[string]any{"subcategory": kv.Key, "count": int(kv.Value)}
+		dominantTop[i] = map[string]any{"subcategory": kv.Key, "label": subcategoryLabel(kv.Key), "count": int(kv.Value)}
 	}
 	bandCounts := map[string]any{}
 	for _, bc := range in.BandCounts {

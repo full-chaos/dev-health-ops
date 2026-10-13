@@ -171,20 +171,20 @@ var demoMobileStories = []demoStory{
 
 // Delivery (GitLab root group): the deploy pipeline breaks often; shared-infra changes.
 var demoDeliveryStories = []demoStory{
-	chore("Move the deploy pipeline to environments", 88, 80, change("chaos-gl/deploy-pipeline", 86, 81).files(".gitlab-ci.yml", "deploy/rollout.yaml").deploy()),
-	feature("Canary stage in the deploy pipeline", 82, 66, change("chaos-gl/deploy-pipeline", 75, 67).ci(1).files(".gitlab-ci.yml", "deploy/canary.yaml").deploy()),
+	chore("Move the deploy pipeline to environments", 88, 80, change("chaos-gl/deploy-pipeline", 86, 81).files("ci/deploy.gitlab-ci.yml", "deploy/rollout.yaml").deploy()),
+	feature("Canary stage in the deploy pipeline", 82, 66, change("chaos-gl/deploy-pipeline", 75, 67).ci(1).files("ci/deploy.gitlab-ci.yml", "deploy/canary.yaml").deploy()),
 	bug("Rollback job does not restore the config map", 70, 64, change("chaos-gl/deploy-pipeline", 66, 64).ci(2).files("deploy/rollback.sh").deploy()),
 	chore("Shared runner pool for all projects", 68, 58, change("chaos-gl/shared-infra", 63, 59).files("runners/pool.tf")),
 	feature("Release notes generator", 64, 45, change("chaos-gl/release-tools", 52, 46)),
 	chore("Terraform state backend migration", 57, 50, change("chaos-gl/shared-infra", 54, 51).ci(1).files("terraform/backend.tf")),
-	bug("Deploy pipeline hangs on the smoke test", 46, 41, change("chaos-gl/deploy-pipeline", 44, 41).ci(2).files(".gitlab-ci.yml", "deploy/smoke.sh").deploy()),
+	bug("Deploy pipeline hangs on the smoke test", 46, 41, change("chaos-gl/deploy-pipeline", 44, 41).ci(2).files("ci/deploy.gitlab-ci.yml", "deploy/smoke.sh").deploy()),
 	chore("Harden the cluster network policies", 40, 34, change("chaos-gl/shared-infra", 38, 35).files("k8s/network-policies.yaml")),
-	bug("Pipeline cache poisoning after the runner upgrade", 30, 27, change("chaos-gl/deploy-pipeline", 29, 27).ci(3).files(".gitlab-ci.yml").deployFails()),
+	bug("Pipeline cache poisoning after the runner upgrade", 30, 27, change("chaos-gl/deploy-pipeline", 29, 27).ci(3).files("ci/deploy.gitlab-ci.yml").deployFails()),
 	support("Incident follow-up: add a deploy freeze switch", 24, 20, change("chaos-gl/deploy-pipeline", 23, 20).ci(1).files("deploy/freeze.sh").deploy()),
 	bug("Blue-green switch leaves old pods serving", 18, 15, change("chaos-gl/deploy-pipeline", 17, 15).ci(2).files("deploy/rollout.yaml").deployFails()),
 	support("Incident follow-up: page on failed rollouts", 12, 10, change("chaos-gl/deploy-pipeline", 11, 10).files("deploy/alerts.yaml").deploy()),
 	chore("Pin base images in the shared infra", 9, -1, change("chaos-gl/shared-infra", 7, -1).files("images/base.lock")),
-	bug("Deploy pipeline retries mask real failures", 5, -1, change("chaos-gl/deploy-pipeline", 4, -1).ci(2).files(".gitlab-ci.yml")),
+	bug("Deploy pipeline retries mask real failures", 5, -1, change("chaos-gl/deploy-pipeline", 4, -1).ci(2).files("ci/deploy.gitlab-ci.yml")),
 }
 
 // Data (GitLab subgroup data): a healthy, steady flow; two of its issues are closed by shared-infra

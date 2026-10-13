@@ -5,6 +5,7 @@ import (
 	stddriver "database/sql/driver"
 	"errors"
 	"io"
+	"slices"
 	"testing"
 	"time"
 
@@ -37,7 +38,7 @@ func (f fakePatternResolver) ResolveRepo(repoName string) (teamID, teamName stri
 // used to call ResolveOwnershipThenPatterns (with teamIDs: nil, exploiting
 // the old per-team loop's early-exit for an empty team list to avoid
 // touching ClickHouse) -- that parameter no longer exists after fixing
-// ResolveOwnershipThenPatterns to call teamownership.AuthoritativeOwnerByRepo
+// ResolveOwnershipThenPatterns to call teamownership.AuthoritativeOwnersByRepo
 // unconditionally (see teamresolve.go's own doc for why). What this test
 // actually exercises -- the fallback/gating logic -- lives entirely in
 // ResolveFromOwnershipMap, the pure core; calling it directly (with an
@@ -58,11 +59,11 @@ func TestResolveFromOwnershipMapFallsBackOnlyForKnownUnresolvedRepos(t *testing.
 	}}
 
 	got := ResolveFromOwnershipMap(
-		map[string]string{}, /* ownershipMap: empty, no ownership rows */
+		map[string][]string{}, /* ownershipMap: empty, no ownership rows */
 		[]uuid.UUID{knownRepo, unknownRepo}, repoNamesByID, resolver,
 	)
 
-	if want := "team-pattern"; got[knownRepo.String()] != want {
+	if want := []string{"team-pattern"}; !slices.Equal(got[knownRepo.String()], want) {
 		t.Errorf("known repo via pattern fallback: got %q, want %q", got[knownRepo.String()], want)
 	}
 	if teamID, present := got[unknownRepo.String()]; present {
@@ -83,7 +84,7 @@ func TestResolveFromOwnershipMapNilResolverDoesNotPanic(t *testing.T) {
 	repo := uuid.New()
 	repoNamesByID := map[string]string{repo.String(): "acme/repo"}
 
-	got := ResolveFromOwnershipMap(map[string]string{}, []uuid.UUID{repo}, repoNamesByID, nil)
+	got := ResolveFromOwnershipMap(map[string][]string{}, []uuid.UUID{repo}, repoNamesByID, nil)
 	if len(got) != 0 {
 		t.Errorf("nil resolver + empty ownership map: got %d resolved repos, want 0", len(got))
 	}
@@ -95,7 +96,7 @@ func TestResolveFromOwnershipMapNilResolverDoesNotPanic(t *testing.T) {
 // (team_cognitive_load_test.go), which proves the identical propagation
 // contract for resolveDailyFinalizeRepoToTeam;
 // ResolveOwnershipThenPatterns's only conn use is the single
-// teamownership.AuthoritativeOwnerByRepo call (a conn.Query), so this is a
+// teamownership.AuthoritativeOwnersByRepo call (a conn.Query), so this is a
 // faithful, minimal fake for testing that path's error propagation here too.
 type erroringOwnershipConn struct{}
 
@@ -165,5 +166,25 @@ func TestResolveOwnershipThenPatternsPropagatesOwnershipQueryError(t *testing.T)
 	if got != nil {
 		t.Fatalf("got=%v, want nil map on a propagated failure -- a caller reading this map "+
 			"instead of checking err first must not see a plausible-looking empty result", got)
+	}
+}
+
+// TestResolveFromOwnershipMapKeepsEveryMainOwner: a repo with several main
+// owners (a full ownership tie, D5990) resolves to every one of them in rank
+// order, and the pattern resolver is not asked for it.
+func TestResolveFromOwnershipMapKeepsEveryMainOwner(t *testing.T) {
+	tied, single := uuid.New(), uuid.New()
+	repoNamesByID := map[string]string{tied.String(): "acme/tied", single.String(): "acme/single"}
+	resolver := fakePatternResolver{byName: map[string]string{"acme/tied": "team-pattern", "acme/single": "team-pattern"}}
+
+	got := ResolveFromOwnershipMap(
+		map[string][]string{tied.String(): {"team-b", "team-a"}, single.String(): {"team-c"}},
+		[]uuid.UUID{tied, single}, repoNamesByID, resolver,
+	)
+	if want := []string{"team-b", "team-a"}; !slices.Equal(got[tied.String()], want) {
+		t.Errorf("tied repo: got %q, want %q", got[tied.String()], want)
+	}
+	if want := []string{"team-c"}; !slices.Equal(got[single.String()], want) {
+		t.Errorf("single-owner repo: got %q, want %q", got[single.String()], want)
 	}
 }

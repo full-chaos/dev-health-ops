@@ -74,7 +74,7 @@ func TestTeamComplexityMatchesTheFrozenPythonGolden(t *testing.T) {
 		// repoOrphan deliberately absent.
 	}
 
-	got := buildTeamComplexityRows(orgID, day, repoRows, repoToTeam, computedAt)
+	got := buildTeamComplexityRows(orgID, day, repoRows, oneOwnerEach(repoToTeam), computedAt)
 
 	if len(got) != len(golden.TeamComplexity) {
 		t.Fatalf("row count: golden=%d got=%d (got=%+v)", len(golden.TeamComplexity), len(got), got)

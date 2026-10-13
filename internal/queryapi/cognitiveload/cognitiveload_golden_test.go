@@ -126,7 +126,10 @@ func scriptedRows(kind string, rows []map[string]any) [][]any {
 		case "cand":
 			out = append(out, []any{r["id"], r["repo"]})
 		case "own":
-			out = append(out, []any{r["resolved_repo_id"], r["team_id"]})
+			// The frozen reference rows carry no rank columns; read as rows
+			// that are no main owner's, they keep the reference's
+			// first-row rule (the tie rule of D5990 needs is_primary = 1).
+			out = append(out, []any{r["resolved_repo_id"], r["team_id"], uint8(0), uint16(0)})
 		case "teams":
 			var pats []string
 			for _, p := range r["repo_patterns"].([]any) {

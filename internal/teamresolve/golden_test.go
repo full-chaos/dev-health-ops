@@ -137,14 +137,20 @@ func TestResolveFromOwnershipMapMatchesFrozenPythonGolden(t *testing.T) {
 			if !ok {
 				t.Fatalf("case %q is not present in the frozen golden file", c.name)
 			}
+			// The Python reference names one owner per repo; each is a
+			// one-owner list on the Go side.
+			ownership := make(map[string][]string, len(c.ownershipMap))
+			for repoID, teamID := range c.ownershipMap {
+				ownership[repoID] = []string{teamID}
+			}
 			got := ResolveFromOwnershipMap(
-				c.ownershipMap, c.repoIDs, c.repoNamesByID, fixedPatternResolver{byName: c.patternMap},
+				ownership, c.repoIDs, c.repoNamesByID, fixedPatternResolver{byName: c.patternMap},
 			)
 			if len(got) != len(want) {
 				t.Fatalf("got %d resolved repos, want %d (got=%v want=%v)", len(got), len(want), got, want)
 			}
 			for repoID, wantTeam := range want {
-				if gotTeam := got[repoID]; gotTeam != wantTeam {
+				if gotTeam := got[repoID]; len(gotTeam) != 1 || gotTeam[0] != wantTeam {
 					t.Errorf("repo %s: got team %q, want %q", repoID, gotTeam, wantTeam)
 				}
 			}

@@ -120,6 +120,11 @@ func TestSettledEvidenceStartsWhereTheOtherOwnerEnds(t *testing.T) {
 	retracting := func(primary uint8) []teamRepoOwnershipActiveRow {
 		return []teamRepoOwnershipActiveRow{{Provider: "github", RepoFullName: "acme/api", TeamID: "team-a", RepoID: repoID, IsPrimary: primary}}
 	}
+	// withOpen gives team-b an open main row from mainFrom.
+	withOpen := func(tenure teamRepoOwnershipTenureEnds, mainFrom time.Time) teamRepoOwnershipTenureEnds {
+		tenure.openMainFrom = map[teamRepoOwnershipClaim]time.Time{{"github", "acme/api", "team-b"}: mainFrom}
+		return tenure
+	}
 	cases := []struct {
 		name       string
 		derived    []DerivedTeamRepoOwnershipRow
@@ -136,6 +141,10 @@ func TestSettledEvidenceStartsWhereTheOtherOwnerEnds(t *testing.T) {
 		{"this run retracts another team's co-owner row", main, teamRepoOwnershipTenureEnds{}, retracting(teamRepoOwnershipCoOwner), evidence, 0},
 		{"a co-owner beside another team's closed main row", coOwner, ended("acme/api", true), nil, evidence, 0},
 		{"a co-owner when this run retracts the main row", coOwner, teamRepoOwnershipTenureEnds{}, retracting(teamRepoOwnershipMainOwner), evidence, 0},
+		{"a main owner beside another of a tie: an open main row from before the other's end is not moved", main, withOpen(ended("acme/api", true), evidence), nil, evidence, 0},
+		{"a main owner beside another of a tie that this run retracts is not moved", main, withOpen(teamRepoOwnershipTenureEnds{}, evidence), retracting(teamRepoOwnershipMainOwner), evidence, 0},
+		{"a main owner whose open main row starts at the other's end keeps that start", main, withOpen(ended("acme/api", true), priorEnd), nil, priorEnd, 1},
+		{"a main owner whose open main row starts after the other's end", main, withOpen(ended("acme/api", true), priorEnd.Add(time.Hour)), nil, priorEnd, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

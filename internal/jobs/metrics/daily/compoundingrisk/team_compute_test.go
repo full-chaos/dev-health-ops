@@ -59,7 +59,7 @@ func TestBuildTeamRowsSkipsRepoWithEmptyStringTeamID(t *testing.T) {
 	}
 	repoToTeam := map[string]string{"repo-a": ""}
 	records := BuildTeamRows(
-		goldenDay(), teamGoldenOrgID, repoInputs, repoToTeam, goldenStamp(),
+		goldenDay(), teamGoldenOrgID, repoInputs, oneOwnerEach(repoToTeam), goldenStamp(),
 		DefaultWeights, DefaultThresholds, DefaultReferences,
 	)
 	if len(records) != 0 {
@@ -86,7 +86,7 @@ func TestBuildTeamRowsEmissionOrderIsFirstOccurrenceNotSorted(t *testing.T) {
 		"repo-3": "zzz-team", // second repo-1's team recurs; must not move zzz-team's position
 	}
 	records := BuildTeamRows(
-		goldenDay(), teamGoldenOrgID, repoInputs, repoToTeam, goldenStamp(),
+		goldenDay(), teamGoldenOrgID, repoInputs, oneOwnerEach(repoToTeam), goldenStamp(),
 		DefaultWeights, DefaultThresholds, DefaultReferences,
 	)
 	want := []string{"zzz-team", "aaa-team"}

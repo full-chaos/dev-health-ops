@@ -128,7 +128,7 @@ QUALIFY ROW_NUMBER() OVER (
     provider String DEFAULT 'github'
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
 
-		// The table teamownership.AuthoritativeOwnerByRepo reads -- present but
+		// The table teamownership.AuthoritativeOwnersByRepo reads -- present but
 		// empty in fixtures that do not exercise ownership resolution, so the
 		// join still parses and the pattern-resolver fallback is exercised.
 		`CREATE TABLE team_repo_ownership (
@@ -923,7 +923,7 @@ QUALIFY ROW_NUMBER() OVER (
     provider String DEFAULT 'github'
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
 
-		// The table teamownership.AuthoritativeOwnerByRepo reads -- present but
+		// The table teamownership.AuthoritativeOwnersByRepo reads -- present but
 		// empty in fixtures that do not exercise ownership resolution, so the
 		// join still parses and the pattern-resolver fallback is exercised.
 		`CREATE TABLE team_repo_ownership (
@@ -1113,7 +1113,7 @@ QUALIFY ROW_NUMBER() OVER (
     id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String,
     provider String DEFAULT 'github'
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
-		// The table teamownership.AuthoritativeOwnerByRepo reads -- absent from
+		// The table teamownership.AuthoritativeOwnersByRepo reads -- absent from
 		// every other test in this file, since none of them exercise ownership.
 		`CREATE TABLE team_repo_ownership (
     org_id String, provider String, team_id String, repo_id Nullable(UUID),

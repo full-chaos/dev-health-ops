@@ -150,8 +150,11 @@ type Record struct {
 }
 
 // TeamResolver mirrors the team_resolver callable (:20). It is consulted ONLY
-// when the attribution row carries no team_id (:360).
-type TeamResolver func(repoID uuid.UUID, repoName string) *string
+// when the attribution row carries no team_id (:360). It returns every team
+// that owns the repo: one, or every main owner of a full ownership tie
+// (D5990), each of which takes the pull request whole; none when no team owns
+// it.
+type TeamResolver func(repoID uuid.UUID, repoName string) []string
 
 // Params carries compute_ai_impact_metrics_daily's keyword arguments.
 //
@@ -366,8 +369,14 @@ func Compute(params Params) []Record {
 			teamID = attribution.TeamID
 		}
 		bucket := safeBucket(kind)
+		teamIDs := []*string{teamID}
 		if teamID == nil && params.TeamResolver != nil {
-			teamID = params.TeamResolver(pr.RepoID, params.RepoNamesByID[pr.RepoID])
+			if resolved := params.TeamResolver(pr.RepoID, params.RepoNamesByID[pr.RepoID]); len(resolved) > 0 {
+				teamIDs = teamIDs[:0]
+				for _, team := range resolved {
+					teamIDs = append(teamIDs, &team)
+				}
+			}
 		}
 
 		derivedReviews, derivedChangesRequested := reviewCounts[key][0], reviewCounts[key][1]
@@ -392,18 +401,20 @@ func Compute(params Params) []Record {
 			cycle = &hours
 		}
 
-		facts = append(facts, prFact{
-			repoID: pr.RepoID, number: pr.Number, bucket: bucket, workType: workType,
-			teamID: teamID, merged: mergedAt != nil, cycleHours: cycle,
-			reviews: reviews, changesRequested: changesRequested,
-			additions:    derefUint32(pr.Additions),
-			deletions:    derefUint32(pr.Deletions),
-			changedFiles: derefUint32(pr.ChangedFiles),
-			// nil (not false) when the linkage was unavailable or this PR was
-			// absent from it -- unknown, never a gap.
-			hasTestChange:   testChanges[key],
-			followupCommits: followupByPR[key],
-		})
+		for _, teamID := range teamIDs {
+			facts = append(facts, prFact{
+				repoID: pr.RepoID, number: pr.Number, bucket: bucket, workType: workType,
+				teamID: teamID, merged: mergedAt != nil, cycleHours: cycle,
+				reviews: reviews, changesRequested: changesRequested,
+				additions:    derefUint32(pr.Additions),
+				deletions:    derefUint32(pr.Deletions),
+				changedFiles: derefUint32(pr.ChangedFiles),
+				// nil (not false) when the linkage was unavailable or this PR was
+				// absent from it -- unknown, never a gap.
+				hasTestChange:   testChanges[key],
+				followupCommits: followupByPR[key],
+			})
+		}
 	}
 
 	incidentsByRepo := make(map[uuid.UUID]uint32)

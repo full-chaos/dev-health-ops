@@ -41,6 +41,7 @@ var oraclePerRunFields = map[string][]string{
 	"github/work-items/sprint":         {"last_synced"},
 	"gitlab/security/dependency":       {"created_at"},
 	"gitlab/work-items/ai-attribution": {"ingested_at", "record_id"},
+	"gitlab/work-items/sprint":         {"last_synced"},
 	"linear/work-items/ai-attribution": {"ingested_at", "record_id"},
 	"linear/work-items/dependency":     {"last_synced"},
 	"linear/work-items/interaction":    {"last_synced"},

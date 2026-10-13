@@ -123,6 +123,29 @@ class TestGitLabIssueToWorkItem:
         assert work_item.reporter == "user:reporter1"
         assert "bug" in work_item.labels
 
+    def test_issue_due_date_becomes_due_at(
+        self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping
+    ) -> None:
+        issue = {
+            "iid": 43,
+            "title": "Due Issue",
+            "state": "opened",
+            "created_at": "2025-01-01T10:00:00Z",
+            "updated_at": "2025-01-15T12:00:00Z",
+            "due_date": "2025-02-01",
+        }
+
+        work_item, _ = gitlab_issue_to_work_item(
+            issue=issue,
+            project_full_path="group/project",
+            repo_id=None,
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+
+        assert work_item.due_at is not None
+        assert work_item.due_at.date().isoformat() == "2025-02-01"
+
     def test_closed_issue_with_milestone(
         self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping
     ) -> None:

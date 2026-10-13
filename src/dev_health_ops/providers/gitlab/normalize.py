@@ -191,6 +191,7 @@ def gitlab_issue_to_work_item(
         started_at=started_at,
         completed_at=completed_at,
         closed_at=closed_at,
+        due_at=_to_utc(_parse_iso(_get(issue, "due_date"))),
         labels=labels,
         story_points=story_points,
         sprint_id=str(_get(_get(issue, "milestone"), "id"))

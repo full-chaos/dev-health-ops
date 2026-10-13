@@ -195,6 +195,38 @@ func TestPostgresGuardRefusesAnUnpricedCallUnderABudgetButNotWithout(t *testing.
 	}
 }
 
+func TestPostgresRefuseUnderBudgetAdmitsOnlyAnOrgWithoutABudget(t *testing.T) {
+	pool := newPool(t)
+	guard := guardOn(pool)
+	ctx := context.Background()
+	if err := guard.RefuseUnderBudget(ctx); err != nil {
+		t.Fatalf("no budget: %v, want admitted", err)
+	}
+	if states := rowStates(t, pool); len(states) != 0 {
+		t.Fatalf("an unbudgeted batch wrote rows: %v", states)
+	}
+
+	setLimit(t, pool, "5000")
+	var accountingErr *AccountingError
+	if err := guard.RefuseUnderBudget(ctx); !errors.As(err, &accountingErr) {
+		t.Fatalf("budget set, nothing spent: %v, want an accounting refusal", err)
+	}
+
+	// Spend the ceiling: the batch is still refused, and nothing is reserved.
+	for _, key := range []string{"a", "b"} {
+		if err := guard.Run(ctx, Call{IdempotencyKey: key, MaxInputTokens: 1000, MaxOutputTokens: 1000},
+			func(context.Context) (Usage, error) { return usage(1000, 1000, 0), nil }); err != nil {
+			t.Fatalf("call %s: %v", key, err)
+		}
+	}
+	if err := guard.RefuseUnderBudget(ctx); err == nil {
+		t.Fatal("budget spent: batch admitted, want refused")
+	}
+	if states := rowStates(t, pool); states["succeeded"] != 2 || len(states) != 1 {
+		t.Fatalf("rows = %v, want only the two settled calls (a refusal reserves nothing)", states)
+	}
+}
+
 func TestPostgresGuardRefusesAReusedIdempotencyKey(t *testing.T) {
 	pool := newPool(t)
 	setLimit(t, pool, "100000")

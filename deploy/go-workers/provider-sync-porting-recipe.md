@@ -361,7 +361,14 @@ question.
       its own (sub)test and a `"PIN:<golden name>"` entry in the pin table
       before the first record. `TestEveryOraclePairHasAFrozenGolden` fails for
       a pair with no golden. The "rediscovers" tests run against the same
-      goldens and must stay green after every comparator change.
+      goldens and must stay green after every comparator change. A pair
+      whose answer needs Python the pinned build lacks (a producer change or
+      a pair file added later) is pinned to a later build in
+      `oraclePairLaterPythonBuilds`; a pair file it adds goes in
+      `oracleHarnessFilesAfterBuild`, so the keys of the pairs on the pinned
+      build do not change (`gitlab/work-items/issue` and
+      `gitlab/work-items/sprint`: GitLab `due_date` and date-only milestone
+      dates).
     - **Prefer live execution over a pinned copy even when the import chain
       looks disproportionate — a monkeypatched dependency seam plus a
       sentinel exception usually gets you there.** `github_prs_window.py`

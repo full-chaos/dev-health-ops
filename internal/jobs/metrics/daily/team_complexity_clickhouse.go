@@ -139,10 +139,10 @@ func buildTeamComplexityRows(
 				continue
 			}
 			b := bucket(teamID)
-			b.locTotal += float64(row.LOCTotal) * owner.Share
-			b.cyclomaticTotal += float64(row.CyclomaticTotal) * owner.Share
-			b.highComplexityFunctions += float64(row.HighComplexityFunctions) * owner.Share
-			b.veryHighComplexityFunctions += float64(row.VeryHighComplexityFunctions) * owner.Share
+			b.locTotal += float64(float64(row.LOCTotal) * owner.Share)
+			b.cyclomaticTotal += float64(float64(row.CyclomaticTotal) * owner.Share)
+			b.highComplexityFunctions += float64(float64(row.HighComplexityFunctions) * owner.Share)
+			b.veryHighComplexityFunctions += float64(float64(row.VeryHighComplexityFunctions) * owner.Share)
 			b.repoIDs[repoIDStr] = struct{}{}
 		}
 	}

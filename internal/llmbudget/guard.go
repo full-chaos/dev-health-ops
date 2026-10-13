@@ -174,6 +174,23 @@ func CostMicroUSD(provider, model, baseURL string, input, output, cached int64) 
 	return &cost, nil
 }
 
+// RefuseUnderBudget is for a call that cannot be priced (a batch): it admits
+// the call only when the organization has no budget, and refuses it with an
+// accounting error when one is configured. Nothing is reserved.
+func (g Guard) RefuseUnderBudget(ctx context.Context) error {
+	admission, err := g.Store.Admit(ctx, AdmitRequest{
+		OrgID: g.OrgID, Provider: g.Provider, Model: g.Model, BaseURL: g.BaseURL,
+		IdempotencyKey: "unpriced", MaxCost: nil, Now: g.now(), Lookup: g.Lookup,
+	})
+	if err != nil {
+		return err
+	}
+	if !admission.Unbudgeted {
+		return accounting("BYO LLM batch pricing is unavailable for the configured budget.", nil)
+	}
+	return nil
+}
+
 // Run reserves, invokes and settles one call. invoke runs with no transaction
 // open and returns the usage the provider reported.
 func (g Guard) Run(ctx context.Context, call Call, invoke func(context.Context) (Usage, error)) error {

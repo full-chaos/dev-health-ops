@@ -124,3 +124,45 @@ func TestWithBudgetLeavesMockAndNoneAlone(t *testing.T) {
 		t.Fatal("NoneProvider was wrapped")
 	}
 }
+
+// Review r1 P1: the reservation covers the whole serialized request, including
+// the structured-output schema, not only the prompt text.
+func TestBudgetedOpenAIReservationCoversTheWholeRequest(t *testing.T) {
+	store := &recordingStore{}
+	provider, _ := budgetedOpenAI(t, store, func(w http.ResponseWriter, _ *http.Request) {
+		in, out, cached := 10, 10, 0
+		_ = json.NewEncoder(w).Encode(openAIResponsesResponse{OutputText: `{"ok": true}`,
+			Usage: &openAIUsage{InputTokens: &in, OutputTokens: &out, InputTokensDetails: &openAITokenDetails{CachedTokens: &cached}}})
+	})
+	request := CategorizationRequest("p")
+	if _, err := provider.Complete(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	body := provider.(*OpenAIProvider).responsesBody(request, provider.(*OpenAIProvider).initialMaxOutputTokens(request))
+	encoded, _ := json.Marshal(body)
+	if len(encoded) <= len(body.Input)+len(body.Instructions) {
+		t.Fatalf("the test request carries no schema beyond its text (%d bytes)", len(encoded))
+	}
+	want, _ := llmbudget.CostMicroUSD("openai", "gpt-5-mini", "", int64(len(encoded)), int64(body.MaxOutputTokens), 0)
+	if got := store.admits[0].MaxCost; got == nil || *got != *want {
+		t.Fatalf("reserved %v, want the cost of the whole %d-byte request = %d", got, len(encoded), *want)
+	}
+}
+
+// Review r1 P1: a budgeted provider cannot batch around its guard.
+func TestBudgetedOpenAIBatchIsRefusedBeforeAnyUpload(t *testing.T) {
+	store := &recordingStore{admitErr: &llmbudget.AccountingError{Message: "BYO LLM batch pricing is unavailable for the configured budget."}}
+	provider, calls := budgetedOpenAI(t, store, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
+	batch, ok := provider.(BatchProvider)
+	if !ok {
+		t.Fatal("the budgeted OpenAI provider no longer implements BatchProvider")
+	}
+	_, err := batch.SubmitBatch(context.Background(), []BatchItem{{CustomID: "a", Request: CategorizationRequest("p")}})
+	var accountingErr *llmbudget.AccountingError
+	if !errors.As(err, &accountingErr) {
+		t.Fatalf("err = %v, want an accounting refusal", err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the batch made %d HTTP calls, want 0 (refused before upload)", *calls)
+	}
+}

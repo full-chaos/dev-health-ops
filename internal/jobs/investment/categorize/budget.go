@@ -2,6 +2,7 @@ package categorize
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -64,13 +65,21 @@ func (p *OpenAIProvider) guardedResponses(ctx context.Context, requestKey string
 	if p.cfg.Budget == nil {
 		return p.executeResponsesRequest(withLLMAttempt(ctx, attempt), body)
 	}
+	// The reservation covers the WHOLE serialized request (instructions,
+	// input, structured-output schema, reasoning and text options), as the
+	// Python guard did: bytes bound tokens from above, so the reserved maximum
+	// never undercounts the input the provider bills.
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return openAICompletionText{}, "", &llmbudget.AccountingError{Message: "BYO LLM budget reservation is temporarily unavailable.", Cause: err}
+	}
 	var (
 		out    openAICompletionText
 		reason string
 	)
-	err := p.cfg.Budget.Run(ctx, llmbudget.Call{
+	err = p.cfg.Budget.Run(ctx, llmbudget.Call{
 		IdempotencyKey:  fmt.Sprintf("%s:attempt:%d", requestKey, attempt),
-		MaxInputTokens:  int64(max(1, len(body.Input)+len(body.Instructions))),
+		MaxInputTokens:  int64(max(1, len(encoded))),
 		MaxOutputTokens: int64(body.MaxOutputTokens),
 	}, func(ctx context.Context) (llmbudget.Usage, error) {
 		var err error

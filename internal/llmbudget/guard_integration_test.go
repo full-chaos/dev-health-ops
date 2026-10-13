@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
@@ -254,5 +256,55 @@ func TestStaleListAndOperatorVoid(t *testing.T) {
 	}
 	if err := VoidReservation(ctx, pool, stale[0].ID, testNow); !errors.Is(err, ErrNotReserved) {
 		t.Fatalf("second void: %v, want ErrNotReserved", err)
+	}
+}
+
+// CHAOS-9451 review r1 P1: the explain routes run as the query-api role. The
+// guard must work with exactly the privileges the query-api posture declares
+// (no more), or every budgeted request fails closed before the provider call.
+func TestGuardRunsUnderTheExactQueryAPIPosture(t *testing.T) {
+	admin := newPool(t)
+	ctx := context.Background()
+	setLimit(t, admin, "100000")
+	if _, err := admin.Exec(ctx, `CREATE ROLE qapi_posture NOLOGIN`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `GRANT USAGE ON SCHEMA public TO qapi_posture`); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range postgresstore.QueryAPIPosture().RequiredTables {
+		privileges := "SELECT"
+		if table.AllowInsert {
+			privileges += ", INSERT"
+		}
+		if table.AllowUpdate {
+			privileges += ", UPDATE"
+		}
+		if table.AllowDelete {
+			privileges += ", DELETE"
+		}
+		if _, err := admin.Exec(ctx, `GRANT `+privileges+` ON `+table.TableName+` TO qapi_posture`); err != nil {
+			t.Fatalf("grant %s: %v", table.TableName, err)
+		}
+	}
+	config := admin.Config().Copy()
+	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, `SET ROLE qapi_posture`)
+		return err
+	}
+	scoped, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(scoped.Close)
+
+	calls := 0
+	err = guardOn(scoped).Run(ctx, Call{IdempotencyKey: "posture", MaxInputTokens: 100, MaxOutputTokens: 100},
+		func(context.Context) (Usage, error) { calls++; return usage(100, 100, 0), nil })
+	if err != nil || calls != 1 {
+		t.Fatalf("under the query-api posture: err=%v calls=%d, want the call admitted and settled", err, calls)
+	}
+	if states := rowStates(t, admin); states["succeeded"] != 1 {
+		t.Fatalf("rows = %v, want one succeeded", states)
 	}
 }

@@ -153,7 +153,7 @@ func runRepoOwnerFamilies(t *testing.T, ctx context.Context, conn driver.Conn, c
 // repoOwnerFamiliesRead is what a reader of the newest rows sees for the day,
 // for one team id or (team "") for every team.
 type repoOwnerFamiliesRead struct {
-	commits, afterHoursCommits uint64   // team_metrics_daily
+	commits, afterHoursCommits float64   // team_metrics_daily
 	interruptionLoad           float64  // team_cognitive_load_daily
 	afterHoursRatio            *float64 // team_cognitive_load_daily
 	locTotal                   uint64   // team_complexity_daily
@@ -166,7 +166,7 @@ func (read repoOwnerFamiliesRead) String() string {
 	if read.afterHoursRatio != nil {
 		ratio = fmt.Sprint(*read.afterHoursRatio)
 	}
-	return fmt.Sprintf("commits=%d after_hours_commits=%d interruption_load=%v after_hours_ratio=%s loc_total=%d scored_teams=%d risk=%.6f",
+	return fmt.Sprintf("commits=%v after_hours_commits=%v interruption_load=%v after_hours_ratio=%s loc_total=%d scored_teams=%d risk=%.6f",
 		read.commits, read.afterHoursCommits, read.interruptionLoad, ratio, read.locTotal, read.scoredTeams, read.riskSum)
 }
 

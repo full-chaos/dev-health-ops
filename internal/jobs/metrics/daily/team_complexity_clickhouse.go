@@ -9,7 +9,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/checkedcast"
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // repoComplexityInput is one deduped repo_complexity_daily row this day.
@@ -84,20 +84,20 @@ type teamComplexityRow struct {
 	OrganizationID              string
 	TeamID                      string
 	Day                         time.Time
-	LOCTotal                    int
-	CyclomaticTotal             int
+	LOCTotal                    float64
+	CyclomaticTotal             float64
 	CyclomaticPerKLOC           float64
-	HighComplexityFunctions     int
-	VeryHighComplexityFunctions int
+	HighComplexityFunctions     float64
+	VeryHighComplexityFunctions float64
 	ContributingRepoCount       int
 	ComputedAt                  time.Time
 }
 
 type teamComplexityBucket struct {
-	locTotal                    int
-	cyclomaticTotal             int
-	highComplexityFunctions     int
-	veryHighComplexityFunctions int
+	locTotal                    float64
+	cyclomaticTotal             float64
+	highComplexityFunctions     float64
+	veryHighComplexityFunctions float64
 	repoIDs                     map[string]struct{}
 }
 
@@ -113,7 +113,7 @@ func newTeamComplexityBucket() *teamComplexityBucket {
 // repo's ratio dominate a large one's.
 func buildTeamComplexityRows(
 	organizationID string, day time.Time,
-	repoRows []repoComplexityInput, repoToTeam map[string][]string, computedAt time.Time,
+	repoRows []repoComplexityInput, repoOwners map[string][]teamownership.OwnerShare, computedAt time.Time,
 ) []teamComplexityRow {
 	buckets := map[string]*teamComplexityBucket{}
 	bucket := func(teamID string) *teamComplexityBucket {
@@ -126,19 +126,23 @@ func buildTeamComplexityRows(
 	}
 
 	// Ownership that does not cover a repo is never guessed, matching the
-	// Python aggregator's own `if not team_id: continue`; a repo with several
-	// main owners (D5990) counts whole in each of them.
+	// Python aggregator's own `if not team_id: continue`. The main owner and
+	// every lesser owner of a repo take its counters at their own linked share
+	// (D5988, CHAOS-9601; a full tie is equal shares, D5990); nothing is
+	// rounded (D5991). cyclomatic_per_kloc is recomputed from the weighted
+	// sums, the contributing repo count stays whole.
 	for _, row := range repoRows {
 		repoIDStr := row.RepoID.String()
-		for _, teamID := range repoToTeam[repoIDStr] {
+		for _, owner := range repoOwners[repoIDStr] {
+			teamID := owner.TeamID
 			if teamID == "" {
 				continue
 			}
 			b := bucket(teamID)
-			b.locTotal += row.LOCTotal
-			b.cyclomaticTotal += row.CyclomaticTotal
-			b.highComplexityFunctions += row.HighComplexityFunctions
-			b.veryHighComplexityFunctions += row.VeryHighComplexityFunctions
+			b.locTotal += float64(row.LOCTotal) * owner.Share
+			b.cyclomaticTotal += float64(row.CyclomaticTotal) * owner.Share
+			b.highComplexityFunctions += float64(row.HighComplexityFunctions) * owner.Share
+			b.veryHighComplexityFunctions += float64(row.VeryHighComplexityFunctions) * owner.Share
 			b.repoIDs[repoIDStr] = struct{}{}
 		}
 	}
@@ -154,7 +158,7 @@ func buildTeamComplexityRows(
 		b := buckets[teamID]
 		var cyclomaticPerKLOC float64
 		if b.locTotal > 0 {
-			cyclomaticPerKLOC = float64(b.cyclomaticTotal) / (float64(b.locTotal) / 1000.0)
+			cyclomaticPerKLOC = b.cyclomaticTotal / (b.locTotal / 1000.0)
 		}
 		records = append(records, teamComplexityRow{
 			OrganizationID:              organizationID,
@@ -198,31 +202,9 @@ func (writer *teamComplexityWriter) write(ctx context.Context, rows []teamComple
 		return fmt.Errorf("prepare team_complexity_daily batch: %w", err)
 	}
 	for _, row := range rows {
-		// loc_total/cyclomatic_total/high_complexity_functions/
-		// very_high_complexity_functions are each a SUM across every repo
-		// this team owns (buildTeamComplexityRows' bucket accumulation), not
-		// a single repo's already-bounded total -- they narrow through the
-		// shared checked-cast boundary instead of a bare uint64(...)
-		// conversion.
-		locTotal, err := checkedcast.Uint64(row.LOCTotal, "team_complexity_daily", "loc_total")
-		if err != nil {
-			return fmt.Errorf("check team_complexity_daily row: %w", err)
-		}
-		cyclomaticTotal, err := checkedcast.Uint64(row.CyclomaticTotal, "team_complexity_daily", "cyclomatic_total")
-		if err != nil {
-			return fmt.Errorf("check team_complexity_daily row: %w", err)
-		}
-		highComplexityFunctions, err := checkedcast.Uint64(row.HighComplexityFunctions, "team_complexity_daily", "high_complexity_functions")
-		if err != nil {
-			return fmt.Errorf("check team_complexity_daily row: %w", err)
-		}
-		veryHighComplexityFunctions, err := checkedcast.Uint64(row.VeryHighComplexityFunctions, "team_complexity_daily", "very_high_complexity_functions")
-		if err != nil {
-			return fmt.Errorf("check team_complexity_daily row: %w", err)
-		}
 		if err := batch.Append(
-			row.OrganizationID, row.TeamID, row.Day, locTotal, cyclomaticTotal,
-			row.CyclomaticPerKLOC, highComplexityFunctions, veryHighComplexityFunctions,
+			row.OrganizationID, row.TeamID, row.Day, row.LOCTotal, row.CyclomaticTotal,
+			row.CyclomaticPerKLOC, row.HighComplexityFunctions, row.VeryHighComplexityFunctions,
 			// contributing_repo_count is the size of the team's owned-repo
 			// set for this day (len(b.repoIDs)) -- bounded by how many repos
 			// a team can own, never negative and never remotely close to

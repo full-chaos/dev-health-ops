@@ -86,9 +86,9 @@ FROM (
 // (CHAOS-4396) -- team resolution is repo_to_team's job.
 type teamMetricsCognitiveLoadInput struct {
 	RepoID                 uuid.UUID
-	AfterHoursCommitsCount int
-	WeekendCommitsCount    int
-	CommitsCount           int
+	AfterHoursCommitsCount float64
+	WeekendCommitsCount    float64
+	CommitsCount           float64
 }
 
 // loadTeamMetricsCognitiveLoadInputsForDay reads team_metrics_daily for
@@ -143,9 +143,11 @@ GROUP BY t.repo_id`,
 	for rows.Next() {
 		var row teamMetricsCognitiveLoadInput
 		var repoIDText string
-		// sum(UInt32) promotes to UInt64 in ClickHouse -- these are no longer
-		// the raw column type the way the old per-row argMax scan was.
-		var afterHours, weekend, commits uint64
+		// The counters are Float64 since migration 124 (CHAOS-9601): a team
+		// holds a share of a repository's commits. Both teams of a shared
+		// repository carry the repository's computed_at, so this sum is the
+		// whole repository again (the shares of its owners sum to 1).
+		var afterHours, weekend, commits float64
 		if err := rows.Scan(&repoIDText, &afterHours, &weekend, &commits); err != nil {
 			return nil, fmt.Errorf("scan team_metrics_daily cognitive load row: %w", err)
 		}
@@ -156,9 +158,9 @@ GROUP BY t.repo_id`,
 			continue
 		}
 		row.RepoID = repoID
-		row.AfterHoursCommitsCount = int(afterHours)
-		row.WeekendCommitsCount = int(weekend)
-		row.CommitsCount = int(commits)
+		row.AfterHoursCommitsCount = afterHours
+		row.WeekendCommitsCount = weekend
+		row.CommitsCount = commits
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -269,9 +271,9 @@ func buildTeamCognitiveLoadRows(
 				continue
 			}
 			b := bucket(teamID)
-			b.afterHoursCommitsCount += float64(row.AfterHoursCommitsCount) * owner.Share
-			b.weekendCommitsCount += float64(row.WeekendCommitsCount) * owner.Share
-			b.commitsCount += float64(row.CommitsCount) * owner.Share
+			b.afterHoursCommitsCount += row.AfterHoursCommitsCount * owner.Share
+			b.weekendCommitsCount += row.WeekendCommitsCount * owner.Share
+			b.commitsCount += row.CommitsCount * owner.Share
 			b.hasTeamMetricsRow = true
 			b.repoIDs[repoIDStr] = struct{}{}
 		}

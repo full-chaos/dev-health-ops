@@ -103,12 +103,12 @@ CREATE TABLE team_metrics_daily (
 		t.Fatalf("repo_id=%s, want %s", rows[0].RepoID, repoID)
 	}
 	if rows[0].CommitsCount != 20 {
-		t.Fatalf("commits_count=%d, want 20 (the latest generation's count "+
+		t.Fatalf("commits_count=%v, want 20 (the latest generation's count "+
 			"only -- 30 would be both generations double-counted, CHAOS-5141 "+
 			"finding 1)", rows[0].CommitsCount)
 	}
 	if rows[0].AfterHoursCommitsCount != 4 || rows[0].WeekendCommitsCount != 2 {
-		t.Fatalf("after_hours=%d weekend=%d, want 4/2 (latest generation only)",
+		t.Fatalf("after_hours=%v weekend=%v, want 4/2 (latest generation only)",
 			rows[0].AfterHoursCommitsCount, rows[0].WeekendCommitsCount)
 	}
 }

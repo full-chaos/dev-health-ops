@@ -33,9 +33,9 @@ type TeamWellbeingMetric struct {
 	TeamID                 string
 	TeamName               string
 	RepoID                 string
-	CommitsCount           int
-	AfterHoursCommitsCount int
-	WeekendCommitsCount    int
+	CommitsCount           float64
+	AfterHoursCommitsCount float64
+	WeekendCommitsCount    float64
 	AfterHoursCommitRatio  float64
 	WeekendCommitRatio     float64
 }
@@ -57,6 +57,23 @@ type RepoOwnersResolver interface {
 
 // TeamRef is one team's id and display name.
 type TeamRef struct{ ID, Name string }
+
+// ShareTeamRef is one owning team of a repository with its linked share of it
+// (D5988, CHAOS-9601): the main owner and every lesser owner. The shares of one
+// repository sum to 1.
+type ShareTeamRef struct {
+	TeamRef
+	Share float64
+}
+
+// RepoShareOwnersResolver is a RepoOwnersResolver that gives each owner its own
+// linked share of the repository. ComputeTeamWellbeing asks it first: an owner
+// takes the commits of the repository at its share (a fraction of a count, not
+// rounded, D5991), the ratios are unchanged by the share.
+type RepoShareOwnersResolver interface {
+	RepoTeamResolver
+	ResolveRepoOwnerShares(repoName string) []ShareTeamRef
+}
 
 // MemberTeamResolver resolves a team from a normalized git identity. An
 // empty identity, or no match, must return ("", "").
@@ -123,9 +140,9 @@ func ComputeTeamWellbeing(
 	}
 	type bucket struct {
 		teamName   string
-		commits    int
-		afterHours int
-		weekend    int
+		commits    float64
+		afterHours float64
+		weekend    float64
 	}
 	byTeamRepo := make(map[bucketKey]*bucket)
 
@@ -136,21 +153,25 @@ func ComputeTeamWellbeing(
 		}
 		identity := normalizeGitIdentity(commit.AuthorEmail, commit.AuthorName)
 
-		var teams []TeamRef
-		if owners, ok := repoResolver.(RepoOwnersResolver); ok {
-			teams = owners.ResolveRepoOwners(repoNamesByID[commit.RepoID])
+		var teams []ShareTeamRef
+		if owners, ok := repoResolver.(RepoShareOwnersResolver); ok {
+			teams = owners.ResolveRepoOwnerShares(repoNamesByID[commit.RepoID])
+		} else if owners, ok := repoResolver.(RepoOwnersResolver); ok {
+			for _, team := range owners.ResolveRepoOwners(repoNamesByID[commit.RepoID]) {
+				teams = append(teams, ShareTeamRef{TeamRef: team, Share: 1})
+			}
 		} else if repoResolver != nil {
 			if teamID, teamName := repoResolver.ResolveRepo(repoNamesByID[commit.RepoID]); teamID != "" {
-				teams = []TeamRef{{teamID, teamName}}
+				teams = []ShareTeamRef{{TeamRef: TeamRef{teamID, teamName}, Share: 1}}
 			}
 		}
 		if len(teams) == 0 && memberResolver != nil {
 			if teamID, teamName := memberResolver.ResolveMember(identity); teamID != "" {
-				teams = []TeamRef{{teamID, teamName}}
+				teams = []ShareTeamRef{{TeamRef: TeamRef{teamID, teamName}, Share: 1}}
 			}
 		}
 		if len(teams) == 0 {
-			teams = []TeamRef{{UnknownTeamID, UnknownTeamName}}
+			teams = []ShareTeamRef{{TeamRef: TeamRef{UnknownTeamID, UnknownTeamName}, Share: 1}}
 		}
 
 		local := committedAt.In(businessTZ)
@@ -165,11 +186,11 @@ func ComputeTeamWellbeing(
 				entry = &bucket{teamName: name}
 				byTeamRepo[key] = entry
 			}
-			entry.commits++
+			entry.commits += team.Share
 			if isWeekend(local) {
-				entry.weekend++
+				entry.weekend += team.Share
 			} else if isAfterHours(local, businessHoursStart, businessHoursEnd) {
-				entry.afterHours++
+				entry.afterHours += team.Share
 			}
 		}
 	}
@@ -190,8 +211,8 @@ func ComputeTeamWellbeing(
 		entry := byTeamRepo[key]
 		var afterHoursRatio, weekendRatio float64
 		if entry.commits > 0 {
-			afterHoursRatio = float64(entry.afterHours) / float64(entry.commits)
-			weekendRatio = float64(entry.weekend) / float64(entry.commits)
+			afterHoursRatio = entry.afterHours / entry.commits
+			weekendRatio = entry.weekend / entry.commits
 		}
 		metrics = append(metrics, TeamWellbeingMetric{
 			TeamID:                 key.teamID,

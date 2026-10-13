@@ -124,7 +124,7 @@ WHERE team_id = 'shared-team'`)
 	if !newRows.Next() {
 		t.Fatal("expected one aggregated row")
 	}
-	var latestCommits uint32
+	var latestCommits float64
 	var distinctNewTimestamps uint64
 	if err := newRows.Scan(&latestCommits, &distinctNewTimestamps); err != nil {
 		t.Fatal(err)
@@ -136,6 +136,6 @@ WHERE team_id = 'shared-team'`)
 		t.Fatalf("new (DateTime64(6)) column: distinct computed_at values=%d, want 2 (microsecond precision must keep the two real writes apart)", distinctNewTimestamps)
 	}
 	if latestCommits != 9 {
-		t.Fatalf("argMax(commits_count, computed_at)=%d, want 9 (the TRUE later write, resolved deterministically by real microsecond precision, not a tie-break gamble)", latestCommits)
+		t.Fatalf("argMax(commits_count, computed_at)=%v, want 9 (the TRUE later write, resolved deterministically by real microsecond precision, not a tie-break gamble)", latestCommits)
 	}
 }

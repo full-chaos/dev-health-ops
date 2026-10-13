@@ -153,7 +153,7 @@ func runRepoOwnerFamilies(t *testing.T, ctx context.Context, conn driver.Conn, c
 // repoOwnerFamiliesRead is what a reader of the newest rows sees for the day,
 // for one team id or (team "") for every team.
 type repoOwnerFamiliesRead struct {
-	commits, afterHoursCommits float64   // team_metrics_daily
+	commits, afterHoursCommits float64  // team_metrics_daily
 	interruptionLoad           float64  // team_cognitive_load_daily
 	afterHoursRatio            *float64 // team_cognitive_load_daily
 	locTotal                   uint64   // team_complexity_daily

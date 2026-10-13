@@ -79,7 +79,7 @@ func TestHandlerRejectsABadRequestOrConfiguration(t *testing.T) {
 
 func TestThresholdFromEnv(t *testing.T) {
 	t.Parallel()
-	for raw, want := range map[string]time.Duration{"": DefaultThreshold, "  ": DefaultThreshold, "3600": time.Hour, " 86400 ": 24 * time.Hour} {
+	for raw, want := range map[string]time.Duration{"3600": time.Hour, " 86400 ": 24 * time.Hour} {
 		got, err := ThresholdFromEnv(func(string) (string, bool) { return raw, true })
 		if err != nil || got != want {
 			t.Errorf("ThresholdFromEnv(%q) = %v, %v, want %v", raw, got, err, want)
@@ -88,7 +88,7 @@ func TestThresholdFromEnv(t *testing.T) {
 	if got, err := ThresholdFromEnv(func(string) (string, bool) { return "", false }); err != nil || got != DefaultThreshold {
 		t.Errorf("unset = %v, %v", got, err)
 	}
-	for _, raw := range []string{"abc", "0", "-5", "59", "1.5", "99999999999"} {
+	for _, raw := range []string{"", "  ", "abc", "0", "-5", "59", "1.5", "99999999999"} {
 		if _, err := ThresholdFromEnv(func(string) (string, bool) { return raw, true }); err == nil {
 			t.Errorf("ThresholdFromEnv(%q) accepted", raw)
 		}

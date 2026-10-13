@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -16,6 +15,7 @@ import (
 	systemjobs "github.com/full-chaos/dev-health-ops/internal/jobs/system"
 	"github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/google/uuid"
@@ -195,7 +195,7 @@ func buildOperationalWorker(
 			// A set-but-invalid age refuses startup, so an operator never
 			// watches an age they did not choose. The job only reads the
 			// reservation table.
-			threshold, thresholdErr := llmbudgetstale.ThresholdFromEnv(os.LookupEnv)
+			threshold, thresholdErr := llmbudgetstale.ThresholdFromEnv(secrets.ProcessLookup)
 			if thresholdErr != nil {
 				logger.Error("llm budget stale reservation age is unusable",
 					"variable", llmbudgetstale.ThresholdEnv, "error", thresholdErr)

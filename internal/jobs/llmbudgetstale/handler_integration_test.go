@@ -75,8 +75,7 @@ VALUES (gen_random_uuid(), $1, '2026-10-01', $2, 'openai', 'gpt-5-mini', $3, $4,
 
 func snapshot(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
-	rows, err := pool.Query(context.Background(), `SELECT idempotency_key || ':' || status || ':' || reserved_micro_usd || ':' || coalesce(actual_micro_usd::text, '') || ':' || coalesce(reconciled_at::text, '')
-FROM byo_llm_budget_reservations ORDER BY idempotency_key`)
+	rows, err := pool.Query(context.Background(), `SELECT r::text FROM byo_llm_budget_reservations r ORDER BY idempotency_key`)
 	if err != nil {
 		t.Fatal(err)
 	}

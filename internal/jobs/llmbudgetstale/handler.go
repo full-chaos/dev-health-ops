@@ -32,11 +32,10 @@ const (
 // honoured is an error, so an operator never runs an age they did not choose.
 func ThresholdFromEnv(lookup func(string) (string, bool)) (time.Duration, error) {
 	raw, present := lookup(ThresholdEnv)
-	raw = strings.TrimSpace(raw)
-	if !present || raw == "" {
+	if !present {
 		return DefaultThreshold, nil
 	}
-	seconds, err := strconv.ParseInt(raw, 10, 64)
+	seconds, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 	if err != nil || seconds < int64(minThreshold.Seconds()) || seconds > int64(maxThreshold.Seconds()) {
 		return 0, fmt.Errorf("%s must be a whole number of seconds between %d and %d",
 			ThresholdEnv, int64(minThreshold.Seconds()), int64(maxThreshold.Seconds()))

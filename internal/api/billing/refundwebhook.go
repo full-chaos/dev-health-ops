@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -104,6 +105,16 @@ func scanStoredRefund(row pgx.Row) (storedRefund, error) {
 // refundText is a string field that keeps the stored value when the event
 // lacks the key and is cleared by a null, as Python's `_obj_get(refund, key,
 // stored)` does. A value that is neither text nor null is refused.
+// redactedFailure is the failure_reason text as it is stored: Stripe's own words, with any
+// credential shape taken out.
+func redactedFailure(ctx context.Context, failure *string) *string {
+	if failure == nil {
+		return nil
+	}
+	text := logging.RedactPersisted(ctx, nil, "refunds.failure_reason", *failure)
+	return &text
+}
+
 func refundText(event pyjson.Value, name string, stored *string) (*string, bool) {
 	object, isObject := event.(*pyjson.Object)
 	if !isObject {
@@ -275,6 +286,7 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 		reason, _ := refundText(event, "reason", nil)
 		description, _ := refundText(event, "description", nil)
 		failure, _ := refundText(event, "failure_reason", nil)
+		failure = redactedFailure(ctx, failure)
 		var intent *string
 		if ref := refundRef(event, "payment_intent", nil); ref != nil {
 			intent = ref
@@ -361,6 +373,7 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 			countRefundDecision(ctx, noteInvoiceNotOrgs)
 		}
 	}
+	newFailure = redactedFailure(ctx, newFailure)
 	_, err = tx.Exec(ctx, `UPDATE refunds SET stripe_refund_id = $2, stripe_charge_id = $3, stripe_payment_intent_id = $4, amount = $5,
 		currency = $6, status = $7, reason = $8, description = $9, failure_reason = $10, metadata = $11::json, invoice_id = $12,
 		updated_at = $13 WHERE id = $1`,

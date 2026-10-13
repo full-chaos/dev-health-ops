@@ -359,7 +359,7 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		fmt.Fprintf(w, `{"object": "list", "url": "/v1/invoice_payments", "has_more": false, "data": [%s]}`, data)
 	case r.Method == http.MethodPost && path == "/v1/refunds":
 		if form.Get("payment_intent") == "pi_fail" {
-			stripeFail(w, "Charge ch_x has already been refunded.")
+			stripeFail(w, "Charge ch_x has already been refunded. Key ghp_aaaaaaaaaaaaaaaaaaaaaaaa rejected.")
 			return
 		}
 		// Stripe down: a 500 on every attempt, so the outcome is unknown.
@@ -394,6 +394,9 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		status := `"status": "succeeded"`
 		if form.Get("amount") == "1" {
 			status = `"failure_reason": "lost_or_stolen_card"`
+		}
+		if form.Get("amount") == "7" {
+			status = `"failure_reason": "declined, key ghp_aaaaaaaaaaaaaaaaaaaaaaaa rejected"`
 		}
 		f.refunds++
 		var metadata []string

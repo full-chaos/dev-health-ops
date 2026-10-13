@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -148,7 +149,7 @@ func (h handlers) createRefund(w http.ResponseWriter, r *http.Request) {
 			// Committed on its own: inTx rolls back a 4xx/5xx reply.
 			if err := h.inTxFunc(ctx, func(tx pgx.Tx) error {
 				_, err := tx.Exec(ctx, `UPDATE refunds SET status = 'failed', failure_reason = $2, updated_at = $3 WHERE id = $1`,
-					pending.id, pyStripeError(stripeErr), h.nowUTC())
+					pending.id, logging.RedactPersisted(ctx, nil, "refunds.failure_reason", pyStripeError(stripeErr)), h.nowUTC())
 				return err
 			}); err != nil {
 				h.internal(w, r, "create refund", err)
@@ -446,7 +447,7 @@ func (h handlers) completeRefund(ctx context.Context, tx pgx.Tx, pending pending
 	}
 	var failure *string
 	if refund.FailureReason != "" {
-		text := string(refund.FailureReason)
+		text := logging.RedactPersisted(ctx, nil, "refunds.failure_reason", string(refund.FailureReason))
 		failure = &text
 	}
 	metadata := pyjson.NewObject()

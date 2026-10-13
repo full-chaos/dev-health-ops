@@ -196,3 +196,116 @@ func assertLinkedIssueEvidence(t *testing.T, ctx context.Context, conn driver.Co
 		t.Errorf("linked_issue evidence = %q, want %q", evidence, want)
 	}
 }
+
+// TestALinkedItemCopiesADonorThatAnotherPartitionOfTheRunWrites (CHAOS-9460,
+// round 2 finding): the pull request and its donor are in two partitions of
+// one run, and the pull request's partition runs first, before the donor has
+// any row. The donor is in the run's scope and in the day's window, so the
+// run writes its row for the day: the pull request copies that row (computed
+// with the day's facts), not nothing. Every donor provider.
+func TestALinkedItemCopiesADonorThatAnotherPartitionOfTheRunWrites(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	seededAt := day.Add(-time.Hour)
+
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		t.Run(provider, func(t *testing.T) {
+			orgID := "org-donor-same-run-" + uuid.NewString()
+			repoPR, repoD := uuid.New(), uuid.New()
+			donor := provider + ":D-1"
+			seedWorkItemAttributionLinkedItem(t, ctx, conn, orgID, "PR", repoPR, seededAt)
+			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, created_at, org_id, last_synced) VALUES (?, ?, ?, 'proj-d', ?, ?, ?)`,
+				repoD, donor, provider, seededAt, orgID, seededAt); err != nil {
+				t.Fatalf("seed donor: %v", err)
+			}
+			if err := conn.Exec(ctx, `INSERT INTO team_project_ownership
+				(org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, last_synced)
+				VALUES (?, ?, 'team-donor', 'proj-d', NULL, 'native', 1, 100, 0, ?, NULL, now64(3), now64(3))`, orgID, provider, day.AddDate(0, 0, -3)); err != nil {
+				t.Fatalf("seed project ownership: %v", err)
+			}
+			seedWorkItemAttributionLinkedDependency(t, ctx, conn, orgID, "PR", donor, "relates_to", seededAt)
+			executor, err := NewWorkItemAttributionExecutor(conn)
+			if err != nil {
+				t.Fatalf("new executor: %v", err)
+			}
+			run := Run{ID: uuid.NewString(), OrganizationID: orgID, TargetDay: day,
+				DiscoveredRepoIDs: []RepositoryID{RepositoryID(repoPR.String()), RepositoryID(repoD.String())}}
+			for _, repo := range []uuid.UUID{repoPR, repoD} {
+				partition := Partition{ID: "p-" + repo.String(), RunID: run.ID, RepoIDs: []RepositoryID{RepositoryID(repo.String())}}
+				if _, err := executor.ComputeFamily(ctx, run, partition); err != nil {
+					t.Fatalf("ComputeFamily %v: %v", repo, err)
+				}
+			}
+			var linked []workItemAttributionLinkedRow
+			for _, row := range queryWorkItemAttributionLinkedRows(t, ctx, conn, orgID, "PR") {
+				if row.source == "linked_issue" {
+					linked = append(linked, row)
+				}
+			}
+			if len(linked) != 1 || linked[0].teamID == nil || *linked[0].teamID != "team-donor" || linked[0].isPrimary != 1 {
+				t.Fatalf("linked_issue rows %+v, want one primary row of team-donor: the donor's row this run writes for the day", linked)
+			}
+			assertLinkedIssueEvidence(t, ctx, conn, orgID, "PR",
+				"linked_issue="+donor+";dependency_type=relates_to;donor_provider="+provider+";donor_source=project_ownership")
+		})
+	}
+}
+
+// TestADonorOutsideTheDaysWindowGivesItsStoredRow: a donor in the run's scope
+// that is in no partition of the day -- completed before the day, or created
+// after it -- is not written by the run: the pull request copies its stored
+// row (team-old), never a resolution of it with the day's facts (team-donor).
+func TestADonorOutsideTheDaysWindowGivesItsStoredRow(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	seededAt := day.AddDate(0, 0, -20)
+	for _, tc := range []struct {
+		name               string
+		created, completed time.Time
+		status             string
+	}{
+		{"completed before the day", seededAt, day.AddDate(0, 0, -10), "done"},
+		{"created after the day", day.AddDate(0, 0, 2), time.Time{}, "todo"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			orgID := "org-donor-window-" + uuid.NewString()
+			repoPR, repoD := uuid.New(), uuid.New()
+			seedWorkItemAttributionLinkedItem(t, ctx, conn, orgID, "PR", repoPR, seededAt)
+			var completed any
+			if !tc.completed.IsZero() {
+				completed = tc.completed
+			}
+			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, status, created_at, completed_at, org_id, last_synced) VALUES (?, 'jira:D-1', 'jira', 'proj-d', ?, ?, ?, ?, ?)`,
+				repoD, tc.status, tc.created, completed, orgID, seededAt); err != nil {
+				t.Fatalf("seed donor: %v", err)
+			}
+			if err := conn.Exec(ctx, `INSERT INTO team_project_ownership
+				(org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, last_synced)
+				VALUES (?, 'jira', 'team-donor', 'proj-d', NULL, 'native', 1, 100, 0, ?, NULL, now64(3), now64(3))`, orgID, seededAt); err != nil {
+				t.Fatalf("seed project ownership: %v", err)
+			}
+			seedWorkItemAttributionStoredRow(t, ctx, conn, orgID, repoD, "jira:D-1", "jira", "team-old", "project_ownership", day.AddDate(0, 0, -10))
+			seedWorkItemAttributionLinkedDependency(t, ctx, conn, orgID, "PR", "jira:D-1", "relates_to", seededAt)
+			executor, err := NewWorkItemAttributionExecutor(conn)
+			if err != nil {
+				t.Fatalf("new executor: %v", err)
+			}
+			run := Run{ID: uuid.NewString(), OrganizationID: orgID, TargetDay: day,
+				DiscoveredRepoIDs: []RepositoryID{RepositoryID(repoPR.String()), RepositoryID(repoD.String())}}
+			if _, err := executor.ComputeFamily(ctx, run, Partition{ID: "p1", RunID: run.ID, RepoIDs: []RepositoryID{RepositoryID(repoPR.String())}}); err != nil {
+				t.Fatalf("ComputeFamily: %v", err)
+			}
+			var linked []workItemAttributionLinkedRow
+			for _, row := range queryWorkItemAttributionLinkedRows(t, ctx, conn, orgID, "PR") {
+				if row.source == "linked_issue" {
+					linked = append(linked, row)
+				}
+			}
+			if len(linked) != 1 || linked[0].teamID == nil || *linked[0].teamID != "team-old" {
+				t.Fatalf("linked_issue rows %+v, want team-old (the donor's stored row), not team-donor (a resolution on the day)", linked)
+			}
+		})
+	}
+}

@@ -113,6 +113,14 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 		}
 		switch level {
 		case Admin, AdminOrg:
+			// Org-scoped admin routes act in the effective org (CHAOS-9510):
+			// handlers read UserFrom(ctx).OrgID, so an impersonating
+			// superuser must not be served their own org's rows.
+			if org := EffectiveOrgID(r.Context(), user); org != user.OrgID {
+				acting := *user
+				acting.OrgID = org
+				user = &acting
+			}
 			if !user.IsAdmin() {
 				WriteDetail(w, http.StatusForbidden, "Admin access required", nil)
 				return

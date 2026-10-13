@@ -140,6 +140,28 @@ func TestDemoWorldEveryTeamHasInvestmentStages(t *testing.T) {
 			missing = append(missing, tm.name)
 		}
 	}
+	for _, diag := range []struct{ name, sql string }{
+		{"pull_requests_by_provider(total, with_line_counts)", `SELECT r.provider, count(), countIf(p.additions + p.deletions > 0) FROM (SELECT repo_id, number, argMax(additions, last_synced) AS additions, argMax(deletions, last_synced) AS deletions FROM git_pull_requests WHERE org_id = ? GROUP BY repo_id, number) AS p INNER JOIN (SELECT id, provider FROM repos FINAL WHERE org_id = ?) AS r ON r.id = p.repo_id GROUP BY r.provider ORDER BY r.provider`},
+		{"commit_stats_by_provider(rows, nonzero)", `SELECT r.provider, count(), countIf(s.additions + s.deletions > 0) FROM git_commit_stats AS s INNER JOIN (SELECT id, provider FROM repos FINAL WHERE org_id = ?) AS r ON r.id = s.repo_id WHERE s.org_id = ? GROUP BY r.provider ORDER BY r.provider`},
+		{"cycle_times_by_provider(rows, active_hours>0)", `SELECT w.provider, count(), countIf(c.active > 0) FROM (SELECT work_item_id, argMax(active_time_hours, computed_at) AS active FROM work_item_cycle_times WHERE org_id = ? GROUP BY work_item_id) AS c INNER JOIN (SELECT work_item_id, argMax(provider, last_synced) AS provider FROM work_items WHERE org_id = ? GROUP BY work_item_id) AS w ON w.work_item_id = c.work_item_id GROUP BY w.provider ORDER BY w.provider`},
+	} {
+		diagRows, err := conn.Query(ctx, diag.sql, demoWorld.OrgID, demoWorld.OrgID)
+		if err != nil {
+			t.Logf("%s: %v", diag.name, err)
+			continue
+		}
+		var line []string
+		for diagRows.Next() {
+			var provider string
+			var total, positive uint64
+			if err := diagRows.Scan(&provider, &total, &positive); err != nil {
+				t.Fatal(err)
+			}
+			line = append(line, fmt.Sprintf("%s=%d/%d", provider, total, positive))
+		}
+		diagRows.Close()
+		t.Logf("%s: %s", diag.name, strings.Join(line, " "))
+	}
 	t.Log(table.String())
 	sort.Strings(missing)
 	if len(missing) > 0 {

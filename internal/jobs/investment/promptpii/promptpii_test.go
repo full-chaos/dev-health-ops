@@ -29,6 +29,8 @@ func TestTextReplacesEachClassAndKeepsTheRest(t *testing.T) {
 		{"french phone", "appelez 01 23 45 67 89 demain", "45 67", "appelez [phone-1] demain", func(c Counts) int { return c.Phones }},
 		{"labeled secret equals", "set token=abcdefgh and retry", "abcdefgh", "set token=[REDACTED] and retry", func(c Counts) int { return c.Credentials }},
 		{"labeled password quoted", `config password: "correct horse" ok`, "correct horse", `config password: [REDACTED] ok`, func(c Counts) int { return c.Credentials }},
+		{"authorization header", "curl -H 'Authorization: Bearer abc123xyz' https://api.example.com", "abc123xyz", "Authorization: Bearer [REDACTED]", func(c Counts) int { return c.Credentials }},
+		{"bearer in prose", "send bearer abc123xyz to the gateway", "abc123xyz", "send bearer [REDACTED] to the gateway", func(c Counts) int { return c.Credentials }},
 		{"password in prose", "password: Tr0ub4dor3xx was pasted here", "Tr0ub4dor", "", func(c Counts) int { return c.Credentials }},
 	}
 	for _, tc := range cases {
@@ -57,6 +59,7 @@ func TestTextKeepsPlainEngineeringProse(t *testing.T) {
 		"See https://example.com/docs/a%20b and 100%25 coverage; the /usr/token/refresh path is slow",
 		"Pin react@18.3.1 and lodash@4.17.21 before the 2026-10-13 release; call 555-0132 maybe",
 		"The token is invalid and the password expired",
+		"The bearer of bad news and an authorization flow review",
 		"",
 	} {
 		f := NewFilter()
@@ -86,7 +89,7 @@ func TestTextIsIdempotent(t *testing.T) {
 	inputs := []string{
 		"mail a.b@corp.example, cc @jane-doe and [~jdoe]; call (415) 555-0132 or +44 20 7946 0958",
 		"see https://deploy:hunter2pass@git.corp.example/x password: Tr0ub4dor3xx ghp_abcdefghijklmnopqrstuvwxyz0123456789",
-		"mail alice@localhost, δοκιμή@example.gr; call (02) 9374 4000 or 01 23 45 67 89; set token=abcdefgh, password: \"correct horse\"",
+		"mail alice@localhost, δοκιμή@example.gr; call (02) 9374 4000 or 01 23 45 67 89; set token=abcdefgh, Authorization: Bearer abc123xyz, password: \"correct horse\"",
 		"plain text with nothing to hide",
 	}
 	for _, in := range inputs {

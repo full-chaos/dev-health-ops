@@ -47,6 +47,12 @@ var (
 	// An explicit assignment of a credential label: "password: x", "token=x".
 	labeledSecretPattern = regexp.MustCompile(`(?i)\b(passwords?|passwd|passphrase|pwd|secret|api[_ -]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|token)(\s*[:=]\s*)("[^"\n]+"|'[^'\n]+'|[^\s"',;]+)`)
 
+	// An Authorization header value, with or without a scheme word, and a
+	// bearer token written in prose (which must hold a digit, so "bearer of
+	// bad news" stays).
+	authorizationPattern = regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*(?:(?:bearer|basic|token)\s+)?)([^\s"',;]+)`)
+	bearerPattern        = regexp.MustCompile(`(?i)\b(bearer\s+)([^\s"',;]*\d[^\s"',;]*)`)
+
 	// Jira wiki mentions: [~username] and [~accountid:...].
 	jiraMentionPattern = regexp.MustCompile(`\[~[^\]\s]{1,128}\]`)
 
@@ -112,6 +118,18 @@ func (f *Filter) Text(text string) string {
 		f.counts.Credentials++
 		return sub[1] + sub[2] + credentialMarker
 	})
+
+	for _, pattern := range []*regexp.Regexp{authorizationPattern, bearerPattern} {
+		pattern := pattern
+		filtered = pattern.ReplaceAllStringFunc(filtered, func(m string) string {
+			sub := pattern.FindStringSubmatch(m)
+			if sub[2] == credentialMarker {
+				return m
+			}
+			f.counts.Credentials++
+			return sub[1] + credentialMarker
+		})
+	}
 
 	filtered = emailPattern.ReplaceAllStringFunc(filtered, func(m string) string {
 		f.counts.Emails++

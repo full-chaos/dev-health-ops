@@ -36,6 +36,7 @@ import (
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -142,7 +143,7 @@ func buildWorkUnitExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (hand
 	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}
 
 	routeMux := routeswitch.NewMux(workUnitExplainSwitchFromEnv(getenv))
-	routeMux.Register(workUnitExplainOperation, newWorkUnitExplainHandler(reader, cacheWriter, orgSettings))
+	routeMux.Register(workUnitExplainOperation, newWorkUnitExplainHandler(reader, cacheWriter, orgSettings, llmbudget.PgStore{Pool: orgSettingsPool}))
 
 	entryHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -232,6 +233,7 @@ func newWorkUnitExplainHandler(
 	reader *investmentexplain.Reader,
 	writer *investmentexplain.CacheWriter,
 	orgSettings llmorgsettings.Resolver,
+	budgetStore llmbudget.Store,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
@@ -382,7 +384,7 @@ func newWorkUnitExplainHandler(
 			categorize.CompletionResult, string, string, error,
 		) {
 			return investmentexplain.CompleteWorkUnitExplanationForOrg(
-				ctx, requestedProvider, requestedModel, claims.OrgID, orgSettings, fullPrompt)
+				ctx, requestedProvider, requestedModel, claims.OrgID, orgSettings, budgetStore, fullPrompt)
 		}
 
 		explanation, err := workunitexplain.ExplainWorkUnit(

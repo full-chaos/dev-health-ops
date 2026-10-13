@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
@@ -382,6 +383,24 @@ VALUES (gen_random_uuid(), $1, 'paths connector' || $2::text, 'github', '[]'::js
 	fail("producttelemetry.LoadOrgNames", err)
 	_, err = llmorgsettings.Store{Pool: pool}.ResolveUsableProvider(ctx, f.org)
 	fail("llmorgsettings.ResolveUsableProvider", err)
+
+	// CHAOS-9451: the explain routes reserve and settle a BYO LLM budget row
+	// as this role (llmbudget.PgStore over the route's pool). The guarded call
+	// must be admitted and settled with exactly the declared privileges.
+	budgetCalls := 0
+	err = llmbudget.Guard{
+		Store: llmbudget.PgStore{Pool: pool}, OrgID: f.org, Provider: "openai", Model: "gpt-5-mini",
+		Lookup: func(string) (string, bool) { return "", false },
+	}.Run(ctx, llmbudget.Call{IdempotencyKey: fmt.Sprintf("role-paths-%d", f.runs), MaxInputTokens: 10, MaxOutputTokens: 10},
+		func(context.Context) (llmbudget.Usage, error) {
+			budgetCalls++
+			one := int64(1)
+			return llmbudget.Usage{InputTokens: &one, OutputTokens: &one, CachedInputTokens: new(int64)}, nil
+		})
+	fail("llmbudget.Guard.Run", err)
+	if err == nil && budgetCalls != 1 {
+		fail("llmbudget.Guard.Run", fmt.Errorf("provider called %d times, want 1", budgetCalls))
+	}
 
 	// CHAOS-6263 PR (a): /query's edge-carrier PGStore reads, driven AS THE
 	// RESTRICTED ROLE (pool), against internal/api/policy.PGStore directly

@@ -328,9 +328,19 @@ func acceptanceScriptedTransport(baseURL string) (bool, error) {
 	return present && port == scriptedProviderPort, nil
 }
 
+// Rates are integer micro-USD per one million tokens: input, cached input,
+// output.
+type Rates struct{ Input, CachedInput, Output int64 }
+
 // platformPriceKeys is openai_compatible._PLATFORM_MODEL_PRICES's keys in
 // order; scriptedModel is its carve-out entry (exact match only).
 var platformPriceKeys = []string{"gpt-5-mini", "gpt-5-nano", scriptedModel}
+
+// platformRates is _PLATFORM_MODEL_PRICES's (input, output) rates by key.
+var platformRates = map[string][2]int64{
+	"gpt-5-mini": {250_000, 2_000_000},
+	"gpt-5-nano": {50_000, 400_000},
+}
 
 // canonicalPricedModel is _canonical_priced_model: the price book key the
 // model (stripped, NOT lowered) resolves to, honouring dated variants for
@@ -346,27 +356,37 @@ func canonicalPricedModel(model string) (string, bool) {
 }
 
 // ReliablePrice is `reliable_price(...) is not None`: whether the price book
-// prices this provider, model and endpoint. The price VALUES are not needed by
-// a status read; only their existence is. An absent pair is unavailable,
+// prices this provider, model and endpoint. An absent pair is unavailable,
 // never zero.
 func ReliablePrice(provider, model, baseURL string) (bool, error) {
+	rates, err := PriceRates(provider, model, baseURL)
+	return rates != nil, err
+}
+
+// PriceRates is reliable_price: the rates of this provider, model and
+// endpoint, or nil when the price book does not price them.
+func PriceRates(provider, model, baseURL string) (*Rates, error) {
 	normalizedProvider := pythonparity.Lower(pythonparity.Strip(provider))
 	normalized := normalizedModel(model)
 	if normalizedProvider == "openai" && normalized == scriptedModel {
 		scripted, err := acceptanceScriptedTransport(baseURL)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		if scripted {
-			return true, nil
+			return &Rates{1_000, 1_000, 1_000}, nil
 		}
 	}
 	if normalizedProvider != "openai" || !officialOpenAIEndpoint(baseURL) {
-		return false, nil
+		return nil, nil
 	}
 	if normalized == "gpt-5-mini" {
-		return true, nil
+		return &Rates{250_000, 25_000, 2_000_000}, nil
 	}
 	canonical, ok := canonicalPricedModel(model)
-	return ok && canonical != scriptedModel, nil
+	if !ok || canonical == scriptedModel {
+		return nil, nil
+	}
+	pair := platformRates[canonical]
+	return &Rates{pair[0], pair[0], pair[1]}, nil
 }

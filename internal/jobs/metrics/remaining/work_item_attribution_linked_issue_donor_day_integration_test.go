@@ -10,13 +10,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestTheBackstopGivesALinkedItemItsDonorsRowOfTheDonorsOwnDay (CHAOS-9460):
-// the backstop resolves every item with the facts of its own day. Donor D
-// (completed on day 1) is owned by team-donor on day 1; on day 2, when the
-// pull request P is completed, D's repository is owned by team-other. P
-// inherits through its relates_to edge to D, so it takes the team of D's own
-// row, of D's own day: team-donor, never a resolution of D on P's day.
-func TestTheBackstopGivesALinkedItemItsDonorsRowOfTheDonorsOwnDay(t *testing.T) {
+// TestTheBackstopGivesALinkedItemItsDonorsRowOfTheLinkedItemsDay (CHAOS-9460,
+// lead ruling (i)): the backstop resolves every item with the facts of its own
+// day, and a linked item copies its donor's row as of the linked item's day,
+// as the daily partition of that day does. Donor D (completed on day 1) is
+// owned by team-donor on day 1; on day 2, when the pull request P is
+// completed, D's repository is owned by team-other. D's own row (its day) is
+// team-donor; P copies D's row of P's day, team-other, with D's provenance.
+func TestTheBackstopGivesALinkedItemItsDonorsRowOfTheLinkedItemsDay(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionMigratedClickHouse(t, ctx)
 	writer, err := NewWorkItemAttributionClickHouseWriter(conn)
@@ -82,9 +83,9 @@ func TestTheBackstopGivesALinkedItemItsDonorsRowOfTheDonorsOwnDay(t *testing.T) 
 	if teams["D/repo_ownership"] != "team-donor" {
 		t.Fatalf("D's own row = %v, want team-donor by repo_ownership on D's day", teams)
 	}
-	if teams["P/linked_issue"] != "team-donor" {
-		t.Fatalf("P's rows = %v, want linked_issue team-donor (D's own row), not team-other "+
-			"(a resolution of D on P's day)", teams)
+	if teams["P/linked_issue"] != "team-other" {
+		t.Fatalf("P's rows = %v, want linked_issue team-other (D's row of P's day), not team-donor "+
+			"(D's row of its own day)", teams)
 	}
 	var evidence string
 	if err := conn.QueryRow(ctx, `SELECT evidence FROM work_item_team_attributions FINAL

@@ -345,20 +345,21 @@ donor row resolving to a `work_items`
 row whose **own team came from a first-class fact (sources 0–3; membership never wins, CHAOS-9414)** — a donor resolved only by
 `author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author
 signal nor a bare prefix can ever be laundered into rank-5 inheritance (both fall through to 6/7).
-**The donor's team is its own attribution ROW, copied, never resolved again (CHAOS-9460):** a donor
-that the same run writes gives the row that run computes for it, with the facts of the donor's own day
-(the backstop resolves each item at its own day; a daily partition at its day; a provider sync for the
-items it syncs); any other donor gives its stored newest primary row in `work_item_team_attributions`
-(`ClickHouseFactSource.LoadDonorRows`), with that row's team and source. A donor is never resolved on the
-linked item's day, so an ownership change between the two days cannot move the item to another team,
-and a donor with no row of its own gives nothing (the item falls through) until it is attributed. The
+**The donor's team is its own attribution ROW as of the linked item's day, copied, never resolved again
+(CHAOS-9460; lead ruling (i), daily partition semantics):** a donor that the same run writes gives the row
+that run computes for it with the facts of the linked item's day (a daily partition's day; the backstop's
+day of each linked item; a provider sync for the items it syncs); any other donor gives its stored newest
+primary row in `work_item_team_attributions` (`ClickHouseFactSource.LoadDonorRows`), with that row's team
+and source, never a resolution of it. A donor with no row of its own gives nothing (the item falls
+through) until it is attributed; a later run then copies its row. A later change of the donor's row does
+not move an item already computed (recomputing the dependents of a changed donor row is ticket 9478). The
 row's source must be one of sources 0–3 above. The row's evidence names the donor:
 `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` (the frozen
 Python oracles wrote `linked_issue=<item id>`, the item's own id; the oracle comparison declares that divergence,
 `pythonLinkedIssueEvidence`). Pinned by `TestALinkedItemCopiesItsDonorsRowOnly`, `TestALinkedItemIsRevisitedOnceItsDonorHasARow`,
 `TestAPullRequestCopiesItsDonorsStoredRow`, `TestALinkedItemCopiesTheTeamOfItsDonorsOwnRow` (real
 ClickHouse, a donor of each of github, gitlab, jira and linear) and
-`TestTheBackstopGivesALinkedItemItsDonorsRowOfTheDonorsOwnDay`;
+`TestTheBackstopGivesALinkedItemItsDonorsRowOfTheLinkedItemsDay`;
 `author_membership` (6) is a PERSON signal, "at best a low-precedence fallback" (chris,
 CHAOS-4244) and, since CHAOS-9414, never wins at all — it is provenance only; `manual_fallback` (7) can only beat `unassigned`; a whole org at `unassigned` usually
 means the ClickHouse `teams` dimension is empty.

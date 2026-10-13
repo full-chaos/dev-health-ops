@@ -296,31 +296,30 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 	}
 	sort.Slice(days, func(i, j int) bool { return days[i].Before(days[j]) })
 
-	// CHAOS-9460: a donor gives the team of its own row, never a resolution
-	// of it on the linked item's day. An affected item's row is the one this
-	// run writes for it, with the facts of its own day (first pass); a donor
-	// pulled in only for context gives its stored row.
-	contexts := make(map[time.Time]teamattribution.GithubWorkItemDerivationContext, len(days))
-	ownRows := map[string]teamattribution.GithubWorkItemDerivationDonorRow{}
-	for _, day := range days {
-		facts, err := executor.loadFacts(ctx, orgID, day)
-		if err != nil {
-			return nil, err
-		}
-		derived := teamattribution.NewGitHubWorkItemDerivationContext(facts)
-		contexts[day] = derived
-		for id, row := range derived.OwnDonorRows(subjects, idsByDay[day]) {
-			ownRows[id] = row
-		}
-	}
-	donorRows, err := LinkedIssueDonorRows(ctx, executor.conn, orgID, subjects, affectedIDs, ownRows)
+	// CHAOS-9460 (lead ruling (i)): a linked item copies its donor's row as of
+	// the linked item's day, as the daily partition of that day does. A donor
+	// this run writes gives the row this run computes for it with the facts of
+	// that day; a donor pulled in only for context gives its stored row, never
+	// a resolution of it.
+	stored, err := LinkedIssueDonorRows(ctx, executor.conn, orgID, subjects, affectedIDs, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	var rows []WorkItemAttributionRow
 	for _, day := range days {
-		derived := contexts[day]
+		facts, err := executor.loadFacts(ctx, orgID, day)
+		if err != nil {
+			return nil, err
+		}
+		derived := teamattribution.NewGitHubWorkItemDerivationContext(facts)
+		donorRows := make(map[string]teamattribution.GithubWorkItemDerivationDonorRow, len(stored))
+		for id, row := range stored {
+			donorRows[id] = row
+		}
+		for id, row := range derived.OwnDonorRows(subjects, affectedIDs) {
+			donorRows[id] = row
+		}
 		linkedIssue, linkedEvidence, _, _ := derived.BuildLinkedIssueIndexFromRows("", subjects, donorRows, dependencies, nil)
 		derived.LinkedIssue = linkedIssue
 		derived.LinkedIssueEvidence = linkedEvidence

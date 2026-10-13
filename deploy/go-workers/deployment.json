@@ -156,6 +156,7 @@
         "operational.billing_notification",
         "operational.webhook_delivery",
         "system.heartbeat",
+        "system.llm_budget_stale_reservations",
         "system.retention_cleanup",
         "system.sync_coverage_refresh"
       ],

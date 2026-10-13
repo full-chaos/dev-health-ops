@@ -366,7 +366,9 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # stream_surface row is only re-anchored (one line up). Net: 34 - 3 = 31.
     # CHAOS-8315: -4. The four stream_surface rows were anchored in the Python
     # api tree, which is deleted. Net: 31 - 4 = 27.
-    assert inventory["row_count"] == 27
+    # CHAOS-9476: one row owns the Go-only system.llm_budget_stale_reservations
+    # registry kind: 27 + 1 = 28.
+    assert inventory["row_count"] == 28
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

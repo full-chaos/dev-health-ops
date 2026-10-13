@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 )
 
 // LinksOutcome is one run's accounting for the commit-message derivation half
@@ -84,6 +85,30 @@ func (service *Service) ProduceLinks(ctx context.Context, orgID string, window W
 		return LinksOutcome{OrganizationID: orgID}, err
 	}
 	result := Derive(inputs)
+
+	candidateRepos := make([]uuid.UUID, 0)
+	seenRepos := make(map[uuid.UUID]struct{})
+	for _, link := range result.Links {
+		if _, seen := seenRepos[link.RepoID]; !seen {
+			seenRepos[link.RepoID] = struct{}{}
+			candidateRepos = append(candidateRepos, link.RepoID)
+		}
+	}
+	native, err := service.loader.LoadNativeLinkKeys(ctx, orgID, candidateRepos)
+	if err != nil {
+		service.logger.Error("pr-commit links: native link read failed",
+			slog.String("organization_id", orgID), slog.Any("error", err))
+		return LinksOutcome{OrganizationID: orgID}, fmt.Errorf("read native pr-commit links: %w", err)
+	}
+	if len(native) > 0 {
+		kept := result.Links[:0]
+		for _, link := range result.Links {
+			if _, stated := native[NativeLinkKey{RepoID: link.RepoID, PRNumber: link.PRNumber, CommitHash: link.CommitHash}]; !stated {
+				kept = append(kept, link)
+			}
+		}
+		result.Links = kept
+	}
 
 	// Derive leaves LastSynced zero (see prcommit.go) -- stamp the real
 	// timestamp here, one clock read for the whole batch, mirroring

@@ -29,6 +29,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -564,7 +565,7 @@ WHERE org_id = $1 AND source_system = $2 AND source_instance = $3
   AND recompute_status = 'pending'
   AND COALESCE(recompute_scope ->> 'bridgeId', '') = $4`,
 		claim.OrgID, claim.SourceSystem, claim.SourceInstance, claim.BridgeID,
-		outcomeFailed, now, cause.Error()); err != nil {
+		outcomeFailed, now, logging.RedactPersisted(ctx, drain.logger, "external_ingest_batches.recompute_error", cause.Error())); err != nil {
 		return fmt.Errorf("persist external recompute permanent failure: %w", err)
 	}
 	if err := markTx(ctx, tx, claim.JobID, statusFailed); err != nil {

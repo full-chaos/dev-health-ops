@@ -52,6 +52,9 @@ func (sink GitHubPullRequestSocialClickHouseEffects) WriteEffect(
 		}
 		return sink.aiAttributionAdapter().WriteGitHubWorkItemEffect(ctx, identity, effect)
 	}
+	if effect.Destination == prCommitLinkDestination {
+		return sink.writePRCommitLinks(ctx, claim, effect)
+	}
 	if effect.Destination != "git_pull_request_reviews" {
 		return ErrInvalidConfiguration
 	}
@@ -119,6 +122,9 @@ func (sink GitHubPullRequestSocialClickHouseEffects) InspectEffect(
 			return EffectAbsent, nil
 		}
 		return sink.aiAttributionAdapter().InspectGitHubWorkItemEffect(ctx, identity, effect)
+	}
+	if effect.Destination == prCommitLinkDestination {
+		return sink.inspectPRCommitLinks(ctx, claim, effect)
 	}
 	if effect.Destination != "git_pull_request_reviews" {
 		return EffectConflict, ErrInvalidConfiguration

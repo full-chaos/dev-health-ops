@@ -14,6 +14,7 @@ internal/api/policy/store_integration_test.go	worker_instances	PROBE	id
 internal/joboperator/postgres_integration_test.go	audit_logs	PROBE	
 internal/joboperator/postgres_integration_test.go	backfill_jobs	PROBE	
 internal/joboperator/postgres_integration_test.go	billing_notifications	PROBE	
+internal/joboperator/postgres_integration_test.go	byo_llm_budget_reservations	PROBE	
 internal/joboperator/postgres_integration_test.go	daily_metrics_finalize_redrive_events	PROBE	
 internal/joboperator/postgres_integration_test.go	daily_metrics_partition_recompute_events	PROBE	
 internal/joboperator/postgres_integration_test.go	daily_metrics_partitions	PROBE	
@@ -93,6 +94,7 @@ internal/storage/postgres/coordinator_statement_privileges_integration_test.go	s
 internal/storage/postgres/domain_authorization_integration_test.go	audit_logs	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	backfill_jobs	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	billing_notifications	PROBE	
+internal/storage/postgres/domain_authorization_integration_test.go	byo_llm_budget_reservations	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	daily_metrics_finalize_redrive_events	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	daily_metrics_partition_recompute_events	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	daily_metrics_partitions	PROBE	
@@ -147,6 +149,7 @@ internal/storage/postgres/domain_authorization_integration_test.go	worker_job_ro
 internal/storage/postgres/domain_authorization_integration_test.go	worker_job_runs	PROBE	
 internal/storage/postgres/domain_grant_reconciliation_integration_test.go	backfill_jobs	SUBSET	
 internal/storage/postgres/domain_grant_reconciliation_integration_test.go	billing_notifications	PROBE	
+internal/storage/postgres/domain_grant_reconciliation_integration_test.go	byo_llm_budget_reservations	PROBE	
 internal/storage/postgres/domain_grant_reconciliation_integration_test.go	daily_metrics_finalize_redrive_events	PROBE	
 internal/storage/postgres/domain_grant_reconciliation_integration_test.go	daily_metrics_partition_recompute_events	PROBE	
 internal/storage/postgres/domain_grant_reconciliation_integration_test.go	daily_metrics_partitions	SUBSET	
@@ -203,6 +206,7 @@ internal/storage/postgres/queue_authorization_integration_test.go	worker_job_out
 internal/storage/postgres/runtime_authorization_integration_test.go	audit_logs	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	backfill_jobs	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	billing_notifications	PROBE	
+internal/storage/postgres/runtime_authorization_integration_test.go	byo_llm_budget_reservations	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	daily_metrics_finalize_redrive_events	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	daily_metrics_partition_recompute_events	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	daily_metrics_partitions	PROBE	
@@ -320,6 +324,7 @@ internal/syncdispatchruntime/publisher_integration_test.go	worker_job_outbox	PRO
 internal/syncreconciler/kernel_integration_test.go	audit_logs	PROBE	
 internal/syncreconciler/kernel_integration_test.go	backfill_jobs	PROBE	
 internal/syncreconciler/kernel_integration_test.go	billing_notifications	PROBE	
+internal/syncreconciler/kernel_integration_test.go	byo_llm_budget_reservations	PROBE	
 internal/syncreconciler/kernel_integration_test.go	daily_metrics_finalize_redrive_events	PROBE	
 internal/syncreconciler/kernel_integration_test.go	daily_metrics_partition_recompute_events	PROBE	
 internal/syncreconciler/kernel_integration_test.go	daily_metrics_partitions	PROBE	

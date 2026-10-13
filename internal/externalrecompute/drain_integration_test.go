@@ -15,7 +15,9 @@ package externalrecompute
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -369,6 +371,36 @@ SELECT recompute_status, recompute_error FROM external_ingest_batches LIMIT 1`).
 	}
 	if batchError == nil || *batchError == "" {
 		t.Fatal("batch carries no error text, so the rejection is invisible to the status API")
+	}
+}
+
+// TestDrainStoresARedactedRejectionText pins that a rejection whose cause quotes a
+// credential-shaped value reaches recompute_error without it.
+func TestDrainStoresARedactedRejectionText(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool := drainTestPool(t, ctx)
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	token := "ghp_aaaaaaaaaaaaaaaaaaaaaaaa"
+
+	seedNativeRow(t, ctx, pool, uuid.New().String(), "acme/leaky",
+		now.Add(-time.Minute), statusPending, nil)
+
+	enqueuer := newRecordingEnqueuer()
+	enqueuer.fail = fmt.Errorf("%w: encode materialize scope: bad value %s", ErrPermanent, token)
+	drain := newTestDrain(t, pool, enqueuer, now)
+	if _, err := drain.Step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var batchError *string
+	if err := pool.QueryRow(ctx, `SELECT recompute_error FROM external_ingest_batches LIMIT 1`).Scan(&batchError); err != nil {
+		t.Fatal(err)
+	}
+	if batchError == nil || *batchError == "" {
+		t.Fatal("batch carries no error text")
+	}
+	if strings.Contains(*batchError, token) {
+		t.Fatalf("recompute_error carries the credential: %q", *batchError)
 	}
 }
 

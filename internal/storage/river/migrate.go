@@ -971,6 +971,9 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.backfill_jobs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.backfill_jobs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_coverage_projections') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE public.organizations TO " + domainRole + "; END IF; END $$",
+		// CHAOS-9476: the stale-reservation job lists rows left in `reserved`;
+		// read only, it never voids one.
+		"DO $$ BEGIN IF to_regclass('public.byo_llm_budget_reservations') IS NOT NULL THEN GRANT SELECT ON TABLE public.byo_llm_budget_reservations TO " + domainRole + "; END IF; END $$",
 		// The native phone-home heartbeat runs on the domain pool
 		// (internal/jobs/system/heartbeat_native.go): it counts users
 		// alongside organizations and records each run as an audit_logs row.

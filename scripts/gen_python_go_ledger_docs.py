@@ -312,6 +312,16 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "state": "native",
         "ticket": "n/a",
     },
+    "system.llm_budget_stale_reservations": {
+        "producer": "`internal/jobs/llmbudgetstale/handler.go (*Handler).Work`",
+        "trigger": "schedule",
+        "gate": "`descriptor.Executable()` (route=river, rollback=none); `go_only` in registry.json",
+        "writer": "none: read only (`internal/llmbudget/operator.go` `ListStale`); logs a count per organization",
+        "tables": "`byo_llm_budget_reservations` (read only; a reservation is never freed by age)",
+        "evidence": "argued \u2014 code read; Go-only kind with no Python producer or decoder; real-Postgres test seeds old, fresh and settled rows and asserts no row changes",
+        "state": "native",
+        "ticket": "n/a \u2014 no gap",
+    },
     "system.retention_cleanup": {
         "producer": "`cmd/dev-health-worker/operational.go:156-167`",
         "trigger": "schedule (per-policy)",

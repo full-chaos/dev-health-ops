@@ -398,15 +398,15 @@ func Descriptor(
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "prs":
-		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.Destinations = gitlabPRSocialRouteDestinations()
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
 		descriptor.PreparedManifestRecovery = true
 	case provider == "gitlab" && dataset == "pr-reviews":
-		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.Destinations = gitlabPRSocialRouteDestinations()
 		descriptor.RouteReady = true
 	case provider == "gitlab" && dataset == "pr-comments":
-		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.Destinations = gitlabPRSocialRouteDestinations()
 		descriptor.RouteReady = true
 	case provider == "gitlab" && dataset == "security":
 		descriptor.Destinations = []string{"security_alerts"}
@@ -577,6 +577,10 @@ func launchDarklyRouteDestinations() []string {
 
 func githubPRSocialRouteDestinations() []string {
 	return []string{"git_pull_requests", "git_pull_request_reviews", "ai_attribution"}
+}
+
+func gitlabPRSocialRouteDestinations() []string {
+	return append(githubPRSocialRouteDestinations(), prCommitLinkDestination)
 }
 
 // workItemRouteDestinations is what a provider DESCRIPTOR advertises: the

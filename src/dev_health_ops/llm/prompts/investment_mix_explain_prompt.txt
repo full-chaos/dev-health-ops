@@ -30,6 +30,7 @@ Rules:
 - Use probabilistic language (appears, leans, suggests).
 - Avoid definitive language: "is", "was", "determined", and "detected".
 - Do not put numbers in summary, finding, action, why, where, or anti_claims text. Structured evidence fields carry authoritative numeric values.
+- Name themes and subcategories in summary, finding, action, why, where, and anti_claims by their "label" values. Write keys (names with underscores or dots) and input field names only in the structured evidence fields, never in prose.
 - Do not contradict the provided distributions.
 - Do not invent categories that are not present in the provided theme/subcategory lists.
 - The "anti_claims" array should state what the data does NOT say (guard against misinterpretation).

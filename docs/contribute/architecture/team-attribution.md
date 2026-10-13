@@ -29,7 +29,7 @@ ambiguity rules, and persisted provenance are defined in
 The final [team ownership fallback](../../reference/data-models/investment.md#team-ownership-fallback)
 uses only the latest primary ownership-based issue attribution and live,
 non-manual repository ownership. It unions all eligible repositories across the
-member issues' teams and assigns equal shares; it does not use person membership
+member issues' teams and weights them by linked share (equal only where no share is measured); it does not use person membership
 or change this page's primary attribution precedence.
 
 That fallback is bound by the §0.4 provider coverage contract below and is
@@ -740,8 +740,19 @@ the one existing item of that key; the backstop follows the issue's later row ch
 defects the matrix exists to catch into the same state the production verbs wrote (sync-time `valid_from`, a
 landscape grouped by membership, an issue-key prefix taken as a native link, a pull request team inherited
 without a linked issue, from a donor without a team of its own or naming another team than its issue's, a
-co-owner written as a candidate row, a reader with its own ownership SQL) and
-requires the judging cell to turn red on each.
+co-owner written as a candidate row, a reader with its own ownership SQL, a tied team written as a co-owner, a
+shared reader that names one tied owner) and requires the judging cell to turn red on each.
+
+**The full-tie cell (CHAOS-9533, D5990).** None of the worlds holds a repository that two teams reach with equal
+link counts at every tier, so the matrix adds one to each world before the production verbs run: a repository,
+two pull requests and two linked issues of two different teams, as provider-shaped source rows cloned from rows
+the world holds (the derivation writes the ownership; no `team_repo_ownership` row is written by the test). The
+cell `full_tie_owners_are_all_main` (entity `pull_requests`, all four providers) requires that every tied team
+holds an open main row (`is_primary` 1) for the repository and that both shared readers
+(`OwnersByRepo`, `AuthoritativeOwnersByRepo`) return every tied team. GitHub writes no project ownership (§0.4b),
+so the GitHub tie is built from project ownership rows of the same shape the other providers write: the
+derivation is provider-agnostic (it joins `(provider, project_id)`), and a GitHub repository reaches an inferred
+owner in a real organization only through another tracker's issues.
 
 #### 0.4b Project identity: one project, one id (CHAOS-8851)
 

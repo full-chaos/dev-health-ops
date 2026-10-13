@@ -426,6 +426,20 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	expect("order: an event without a status updates the failure reason and keeps the status",
 		row(`SELECT status || ' ' || coalesce(failure_reason, '<null>') FROM refunds WHERE stripe_refund_id = 're_order3'`), "failed expired_or_canceled_card")
 
+	// A failure reason that carries a credential shape is stored without it, on the insert and on the update.
+	const leakedToken = "ghp_aaaaaaaaaaaaaaaaaaaaaaaa"
+	deliver("redaction: first delivery", "re_redact", "failed", func(object map[string]any) {
+		object["metadata"], object["failure_reason"] = map[string]any{"org_id": orgA}, "upstream diagnostic "+leakedToken
+	})
+	expect("redaction: the inserted failure reason holds no credential shape",
+		row(`SELECT (position('`+leakedToken+`' in failure_reason) > 0)::text || ' ' || (position('upstream diagnostic' in failure_reason) > 0)::text FROM refunds WHERE stripe_refund_id = 're_redact'`), "false true")
+	deliver("redaction: later delivery", "re_redact", "failed", func(object map[string]any) {
+		delete(object, "status")
+		object["metadata"], object["failure_reason"] = map[string]any{"org_id": orgA}, "later diagnostic "+leakedToken
+	})
+	expect("redaction: the updated failure reason holds no credential shape",
+		row(`SELECT (position('`+leakedToken+`' in failure_reason) > 0)::text || ' ' || (position('later diagnostic' in failure_reason) > 0)::text FROM refunds WHERE stripe_refund_id = 're_redact'`), "false true")
+
 	// 4. Two first deliveries of one refund at once: the pending one is
 	// held inside its insert; the succeeded one arrives during the hold.
 	exec(`CREATE FUNCTION venue_hold_refund_insert() RETURNS trigger LANGUAGE plpgsql AS $$

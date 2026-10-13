@@ -57,7 +57,8 @@ type gitLabMergeRequestCommitPayload struct {
 // fetchGitLabMergeRequestCommitLinks lists the commits of one merge request
 // (one request per page of perPage commits) and returns one native link per
 // commit. An ordinary failure of the listing leaves the merge request without
-// links for this pass; control-plane failures (lease, budget, cancellation)
+// links for this pass, as does a malformed listing item (the commit-stats
+// route treats a malformed detail payload the same way); control-plane failures (lease, budget, cancellation)
 // still fail the unit.
 func fetchGitLabMergeRequestCommitLinks(
 	ctx context.Context,
@@ -90,11 +91,11 @@ func fetchGitLabMergeRequestCommitLinks(
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.UseNumber()
 		if decoder.Decode(&payload) != nil || decoder.Decode(&struct{}{}) != io.EOF {
-			return nil, pages, providerfoundation.ErrNormalizationInvalid
+			return nil, pages, nil
 		}
 		hash := strings.TrimSpace(stringValue(payload.ID))
 		if hash == "" {
-			return nil, pages, providerfoundation.ErrNormalizationInvalid
+			return nil, pages, nil
 		}
 		if _, dup := seen[hash]; dup {
 			continue

@@ -110,3 +110,25 @@ func TestGitLabCommitListingControlFailuresFailTheUnitAndOrdinaryOnesDoNot(t *te
 		})
 	}
 }
+
+// A malformed item of the commits listing is a payload fault of that merge
+// request, not of the unit: the merge request goes without links this pass and
+// the others are unaffected.
+func TestGitLabCommitListingMalformedItemLeavesOnlyThatMergeRequestWithoutLinks(t *testing.T) {
+	for name, body := range map[string]string{
+		"missing_id":    `[{"short_id":"abc"}]`,
+		"not_an_object": `["abc"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			responses := append(gitLabOneMergeRequestResponses(), gitLabPullRequestResponse{body: body})
+			doer := &gitLabPullRequestDoer{t: t, responses: responses}
+			batch, err := (GitLabPullRequestRouteHandler{}).Collect(
+				context.Background(), nativeTestClaim("gitlab", "prs"), providerfoundation.Credential{},
+				gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
+			)
+			if err != nil || len(batch.Effects) != 4 || len(batch.Effects[0].Rows) != 1 || len(batch.Effects[3].Rows) != 0 {
+				t.Fatalf("err=%v effects=%d: the merge request row must be written and its links left out", err, len(batch.Effects))
+			}
+		})
+	}
+}

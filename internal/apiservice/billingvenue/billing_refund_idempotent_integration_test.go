@@ -198,6 +198,7 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	code, out = refund("refused: Stripe refuses", "", `{"invoice_id":"`+invFail+`","amount":400}`)
 	expect("refused: 502", status(code, out)[:3], "502")
 	expect("refused: the row is failed with Stripe's reason", row(`SELECT status || ' ' || (failure_reason LIKE '%already been refunded%')::text FROM refunds WHERE invoice_id = '`+invFail+`'`), "failed true")
+	expect("refused: the stored reason holds no credential shape", row(`SELECT (position('ghp_aaaaaaaaaaaaaaaaaaaaaaaa' in failure_reason) > 0)::text FROM refunds WHERE invoice_id = '`+invFail+`'`), "false")
 
 	// 5. Stripe unreachable: the outcome is unknown, so the row stays
 	// pending and its amount held.

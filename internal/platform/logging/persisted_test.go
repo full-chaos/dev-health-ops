@@ -45,3 +45,10 @@ func TestRedactPersistedLeavesPlainTextAndStaysQuiet(t *testing.T) {
 		t.Fatalf("unexpected debug lines: %v", handler.lines)
 	}
 }
+
+func TestRedactPersistedKeepsEveryOtherByte(t *testing.T) {
+	const plain = "diagnostic q=project%3Dfoo&note=visible"
+	if stored := RedactPersisted(context.Background(), slog.New(&recordedLines{}), "t.col", plain); stored != plain {
+		t.Fatalf("stored = %q, want the bytes unchanged", stored)
+	}
+}

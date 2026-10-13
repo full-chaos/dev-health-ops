@@ -164,9 +164,9 @@ WHERE org_id = $2 AND provider = 'github' AND name = 'github-app'`, now, *orgID)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		if deactivated > 0 {
-			slog.ErrorContext(ctx, "github app installation deleted: commit failed, credential stays active",
-				"installation_id", installationID, "error_class", fmt.Sprintf("%T", err))
+		if action == "deleted" && orgID != nil && *orgID != "" {
+			slog.ErrorContext(ctx, "github app installation deleted: commit failed, credential unchanged",
+				"installation_id", installationID, "rows_pending", deactivated, "error_class", fmt.Sprintf("%T", err))
 		}
 		return err
 	}

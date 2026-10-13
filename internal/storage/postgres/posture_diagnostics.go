@@ -717,6 +717,18 @@ FROM (
 	WHERE has_column_privilege($1, relation, column_name, privilege)
 		AND NOT has_table_privilege($1, relation, privilege)
 	UNION
+	-- A declared column privilege held WITH GRANT OPTION: the role could
+	-- re-delegate it, which rolePostureQuery refuses on every declared pair.
+	SELECT table_name, column_name, privilege || ' WITH GRANT OPTION'
+	FROM (
+		SELECT declared.table_name, declared.column_name, declared.privilege
+		FROM declared
+		WHERE declared.table_name IN (SELECT table_name FROM mixed)
+	) AS pairs
+	WHERE to_regclass('public.' || pairs.table_name) IS NOT NULL
+		AND has_column_privilege($1, to_regclass('public.' || pairs.table_name), pairs.column_name,
+			pairs.privilege || ' WITH GRANT OPTION')
+	UNION
 	-- A column-level SELECT entry on a column the posture does not declare:
 	-- the table-wide SELECT implies it, so only the column ACL shows it.
 	SELECT mixed.table_name, attribute.attname, 'SELECT'

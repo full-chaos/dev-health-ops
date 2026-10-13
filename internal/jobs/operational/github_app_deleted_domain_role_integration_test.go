@@ -227,7 +227,41 @@ func TestDeletedInstallationLogsDeactivationOnlyAfterCommit(t *testing.T) {
 	if strings.Contains(logs.String(), "credential deactivated") {
 		t.Fatalf("success log written before the commit succeeded:\n%s", logs.String())
 	}
-	if !strings.Contains(logs.String(), "commit failed, credential stays active") {
+	if !strings.Contains(logs.String(), "commit failed, credential unchanged") {
 		t.Fatalf("commit failure not logged:\n%s", logs.String())
+	}
+}
+
+// The same failed commit when no credential matches the organization: the
+// failure still has to be visible.
+func TestDeletedInstallationLogsCommitFailureWhenNoCredentialMatched(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	admin, domain, _ := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
+	for _, statement := range []string{
+		`INSERT INTO public.github_app_installations (id, installation_id, org_id, created_at, updated_at)
+			VALUES (gen_random_uuid(), 997, 'org-9', now(), now())`,
+		`CREATE FUNCTION public.fail_commit_installations() RETURNS trigger LANGUAGE plpgsql AS
+			$$ BEGIN RAISE EXCEPTION 'commit refused'; END $$`,
+		`CREATE CONSTRAINT TRIGGER fail_commit AFTER UPDATE ON public.github_app_installations
+			DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fail_commit_installations()`,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	if _, err := store.UpsertGithubAppEvent(ctx, "installation",
+		[]byte(`{"action":"deleted","installation":{"id":997}}`), time.Now().UTC()); err == nil {
+		t.Fatal("the deferred trigger should have failed the commit")
+	}
+	if strings.Contains(logs.String(), "credential deactivated") ||
+		!strings.Contains(logs.String(), "commit failed, credential unchanged") {
+		t.Fatalf("want one commit-failure error line and no success line, got:\n%s", logs.String())
 	}
 }

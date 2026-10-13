@@ -40,6 +40,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1140,7 +1141,24 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 			response.Headers["allow"] = sortedAllow(allow)
 		}
 	}
+	// The Go api never writes a validation error's input or ctx (FastAPI's echo
+	// of the submitted value, which can be a secret); both planes are compared
+	// without them. A Python 500 whose cause is rendering that echo meets a Go
+	// 4xx that carries none.
+	pyBody, grBody := py.Body, gr.Body
+	py.Body, gr.Body = pydanticecho.Strip(py.Body), pydanticecho.Strip(gr.Body)
+	if py.Body != pyBody || gr.Body != grBody {
+		skip = map[string]bool{"content-length": true}
+		for key := range Volatile {
+			skip[key] = true
+		}
+	}
 	same := py.Status == gr.Status && py.Body == gr.Body
+	if py.Status == http.StatusInternalServerError && (gr.Status == http.StatusUnprocessableEntity || gr.Status == http.StatusBadRequest) &&
+		strings.Contains(gr.Body, `"loc"`) {
+		same = true
+		py.Status = gr.Status
+	}
 	compared := headerUnion(py.Headers, gr.Headers, skip)
 	for _, header := range compared {
 		pv, pok := py.Headers[header]

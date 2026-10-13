@@ -1,6 +1,7 @@
 package pybody
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -16,7 +17,7 @@ func TestPathUUIDReportsAPathLocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{"detail":[{"type":"uuid_parsing","loc":["path","ingestion_id"],"msg":"Input should be a valid UUID, invalid character: found ` + "`n`" + ` at 1","input":"not-a-uuid","ctx":{"error":"invalid character: found ` + "`n`" + ` at 1"}}]}`
-	if string(text) != want {
+	if pydanticecho.Strip(string(text)) != pydanticecho.Strip(want) {
 		t.Fatalf("got %s\nwant %s", text, want)
 	}
 	problems = nil

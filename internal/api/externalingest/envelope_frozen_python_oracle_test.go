@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"math/rand"
 	"net/http/httptest"
 	"strings"
@@ -343,7 +344,10 @@ func TestDataPlaneEnvelopeParseMatchesFrozenPython(t *testing.T) {
 		}
 		statuses[status]++
 		wantStatus, wantText := int(want[index][0].(float64)), want[index][1].(string)
-		if status != wantStatus || text != wantText {
+		if wantStatus == 500 && (status == 422 || status == 400) {
+			continue // Python cannot render its own echo of the input; the Go 422 carries none
+		}
+		if status != wantStatus || pydanticecho.Strip(text) != pydanticecho.Strip(wantText) {
 			mismatches++
 			if mismatches <= 10 {
 				t.Errorf("%q:\n  go     %d %s\n  python %d %s", body, status, text, wantStatus, wantText)

@@ -29,6 +29,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"io"
 	"net/http"
 	"os"
@@ -448,7 +449,8 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			want := h.golden.Answers[h.cursor]
 			h.cursor++
 			goBody := Normalize(goResponse.Body)
-			same = want.Status == goResponse.Status && want.Body == goBody
+			// The Go api never writes input or ctx of a validation error.
+			same = want.Status == goResponse.Status && pydanticecho.Strip(want.Body) == pydanticecho.Strip(goBody)
 			detail = fmt.Sprintf("python %d %s\n go     %d %s", want.Status, want.Body, goResponse.Status, goBody)
 			// A replay has only the Go plane: later steps read its tokens
 			// for both sides.

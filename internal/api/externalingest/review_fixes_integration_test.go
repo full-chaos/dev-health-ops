@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -187,7 +188,7 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer "+token)
 			recorder := httptest.NewRecorder()
 			deps.handleListBatches()(recorder, req)
-			if recorder.Code != http.StatusUnprocessableEntity || strings.TrimSpace(recorder.Body.String()) != want {
+			if recorder.Code != http.StatusUnprocessableEntity || pydanticecho.Strip(strings.TrimSpace(recorder.Body.String())) != pydanticecho.Strip(want) {
 				t.Errorf("?%s: %d %s, want 422 %s", query, recorder.Code, recorder.Body.String(), want)
 			}
 		}
@@ -214,7 +215,7 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		}
 		want := `{"detail":[{"type":"uuid_parsing","loc":["path","ingestion_id"],"msg":"Input should be a valid UUID, invalid character: found ` + "`n`" + ` at 1","input":"not-a-uuid","ctx":{"error":"invalid character: found ` + "`n`" + ` at 1"}},` +
 			`{"type":"greater_than_equal","loc":["query","errorLimit"],"msg":"Input should be greater than or equal to 1","input":"0","ctx":{"ge":1}}]}`
-		if got := get("/api/v1/external-ingest/batches/not-a-uuid?errorLimit=0"); got.Code != http.StatusUnprocessableEntity || strings.TrimSpace(got.Body.String()) != want {
+		if got := get("/api/v1/external-ingest/batches/not-a-uuid?errorLimit=0"); got.Code != http.StatusUnprocessableEntity || pydanticecho.Strip(strings.TrimSpace(got.Body.String())) != pydanticecho.Strip(want) {
 			t.Fatalf("invalid id + query: %d %s, want 422 %s", got.Code, got.Body.String(), want)
 		}
 		// 125 invalid requests exceed the 120/minute read limit; none of

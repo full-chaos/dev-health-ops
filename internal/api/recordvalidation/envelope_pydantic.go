@@ -5,7 +5,6 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 )
@@ -37,11 +36,20 @@ func (e PydanticError) Dict() *pyjson.Object {
 	}
 	out.Set("loc", loc)
 	out.Set("msg", e.Msg)
-	out.Set("input", pybody.RedactInput(e.Loc, e.Input))
+	out.Set("input", e.Input)
 	if e.Ctx != nil {
 		out.Set("ctx", e.Ctx)
 	}
 	out.Set("url", pydanticErrorURL+e.Type)
+	return out
+}
+
+// PublicDict is Dict without input and ctx: the api never echoes a submitted
+// value, which can be a secret.
+func (e PydanticError) PublicDict() *pyjson.Object {
+	out := e.Dict()
+	out.Delete("input")
+	out.Delete("ctx")
 	return out
 }
 

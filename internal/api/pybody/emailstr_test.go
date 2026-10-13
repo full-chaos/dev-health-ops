@@ -1,6 +1,10 @@
 package pybody
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
+)
 
 // TestEmailStrShapes pins RequiredEmailStr and OptionalEmailStr against
 // FastAPI's own answers for one input of each shape (captured from the live
@@ -30,7 +34,7 @@ func TestEmailStrShapes(t *testing.T) {
 	}
 	for _, c := range cases {
 		status, got := serveEmailStr(t, c.path, []byte(c.body))
-		if status != c.status || got != c.want {
+		if status != c.status || pydanticecho.Strip(got) != pydanticecho.Strip(c.want) {
 			t.Errorf("%s %s: got %d %s, want %d %s", c.path, c.body, status, got, c.status, c.want)
 		}
 	}

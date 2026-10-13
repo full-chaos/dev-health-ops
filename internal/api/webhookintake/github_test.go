@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -87,7 +88,7 @@ func TestHandleGitHubWebhookRejectsAMissingRequiredHeaderEvenWithAValidSignature
 		t.Fatalf("status = %d, want 422; body = %s", recorder.Code, recorder.Body.String())
 	}
 	want := `{"detail":[{"type":"missing","loc":["header","x-github-event"],"msg":"Field required","input":null}]}`
-	if got := recorder.Body.String(); got != want {
+	if got := recorder.Body.String(); pydanticecho.Strip(got) != pydanticecho.Strip(want) {
 		t.Fatalf("body = %s, want %s", got, want)
 	}
 }

@@ -118,6 +118,35 @@ func (producer SyncCoverageRefreshProducer) Produce(
 	return Outcome{Requests: []JobRequest{{Kind: jobcontract.KindSyncCoverageRefresh, Envelope: envelope}}}, nil
 }
 
+// LLMBudgetStaleProducer emits one count of stale BYO LLM budget reservations.
+// The worker owns the age threshold, so the envelope carries only the due time.
+type LLMBudgetStaleProducer struct{}
+
+// NewLLMBudgetStaleProducer constructs the stale-reservation producer.
+func NewLLMBudgetStaleProducer() Producer { return LLMBudgetStaleProducer{} }
+
+func (LLMBudgetStaleProducer) ID() string { return ProducerLLMBudgetStale }
+
+func (LLMBudgetStaleProducer) Produce(
+	_ context.Context,
+	_ pgx.Tx,
+	schedule Schedule,
+	occurrence Occurrence,
+) (Outcome, error) {
+	scheduledFor := occurrence.ScheduledFor.UTC().Format(time.RFC3339)
+	envelope := jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		CorrelationID:   "fixed-schedule:" + schedule.ID + ":" + scheduledFor,
+		IdempotencyKey:  "llm-budget-stale-reservations:" + scheduledFor,
+		Domain: jobcontract.DomainLink{
+			Type: "schedule_occurrence",
+			ID:   OccurrenceDomainID(occurrence),
+		},
+		Payload: jobcontract.LLMBudgetStaleReservationsPayload{ScheduledFor: scheduledFor},
+	}
+	return Outcome{Requests: []JobRequest{{Kind: jobcontract.KindLLMBudgetStaleReservations, Envelope: envelope}}}, nil
+}
+
 // DimensionFoldProducer emits one fold of the declared dimension tables. The
 // worker owns the table list and every guard, so the envelope carries only the
 // due time.

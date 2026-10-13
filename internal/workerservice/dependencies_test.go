@@ -566,7 +566,7 @@ func TestSelectedQueuesUseRegistryBoundedJobDimensions(t *testing.T) {
 }
 
 // celeryRoutedOperationalKinds is every operational queue kind. The checked-in
-// contract now ships all five at go_default, so a genuinely dormant queue set has to be
+// contract now ships all six at go_default, so a genuinely dormant queue set has to be
 // built explicitly by demoting them back to Celery in a scoped fixture.
 var celeryRoutedOperationalKinds = []string{
 	jobcontract.KindBillingNotification,
@@ -574,6 +574,7 @@ var celeryRoutedOperationalKinds = []string{
 	jobcontract.KindHeartbeat,
 	jobcontract.KindRetentionCleanup,
 	jobcontract.KindSyncCoverageRefresh,
+	jobcontract.KindLLMBudgetStaleReservations,
 }
 
 func TestCeleryRoutedHandlersCannotPassQueueCompleteness(t *testing.T) {

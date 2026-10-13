@@ -75,6 +75,24 @@ func (args DimensionFoldArgs) ContractEnvelope() jobcontract.Envelope {
 	return args.envelope()
 }
 
+// LLMBudgetStaleReservationsArgs is the River-facing typed form of
+// system.llm_budget_stale_reservations.v1.
+type LLMBudgetStaleReservationsArgs struct {
+	EnvelopeArgs[jobcontract.LLMBudgetStaleReservationsPayload]
+}
+
+func (LLMBudgetStaleReservationsArgs) Kind() string {
+	return jobcontract.KindLLMBudgetStaleReservations
+}
+
+func (LLMBudgetStaleReservationsArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+
+func (args LLMBudgetStaleReservationsArgs) ContractEnvelope() jobcontract.Envelope {
+	return args.envelope()
+}
+
 // SyncCoverageRefreshArgs is the River-facing typed form of
 // system.sync_coverage_refresh.v1.
 type SyncCoverageRefreshArgs struct {

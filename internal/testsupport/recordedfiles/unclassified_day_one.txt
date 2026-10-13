@@ -429,7 +429,6 @@ internal/jobs/operational/testdata/billing_email/trial_expiring__unicode.json
 internal/jobs/operational/testdata/billing_email/trial_started__ascii.json
 internal/jobs/operational/testdata/billing_email/trial_started__unicode.json
 internal/jobs/report/testdata/weekly_health.golden.md
-internal/pgmigrate/testdata/hand_ddl_ledger.tsv
 internal/platform/config/testdata/route_dsn_init.sh
 internal/providerfoundation/testdata/normalized_envelope_parity.json
 internal/providerfoundation/testdata/provider_parity.json

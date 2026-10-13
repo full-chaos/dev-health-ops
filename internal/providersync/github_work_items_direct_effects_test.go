@@ -11,6 +11,7 @@ import (
 	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/google/uuid"
 )
@@ -207,27 +208,45 @@ func TestFoldWorkItemInspectionsTreatsMixedBatchAsConflict(t *testing.T) {
 	}
 }
 
-// The Python-parity work_items insert list omits description/priority_raw/
-// service_class/due_at and work_item_transitions omits provider. Those
-// omissions are the running Python system's behavior (D16), and a
-// ReplacingMergeTree replaces whole rows, so writing them from the parity list
-// would diverge from what production stores. description is written only by
-// the appended held column (withHeldWorkItemColumns) and is the one column the
-// readback also compares; priority_raw/service_class/due_at stay out of both.
-// This pins the lists against a well-meaning "the table has the column, fill it
-// in" edit.
+// pythonSinkDivergences is the one list of columns the Go work_items write
+// states although write_work_items omits them. description: CHAOS-9484, a
+// decided divergence (bounded text, held when a row has none).
+var pythonSinkDivergences = map[string]string{
+	"description": "bounded provider text is written; a row with none keeps the held value",
+}
+
+// The Python-parity insert list omits description/priority_raw/service_class/
+// due_at, and work_item_transitions omits provider. Every omitted column
+// mirrors Python exactly (never given a provider value) unless it is named in
+// pythonSinkDivergences, which is then written and compared by the readback.
+// A ReplacingMergeTree replaces whole rows, so an unlisted "the table has the
+// column, fill it in" edit would diverge from what production stores.
 func TestDirectAdapterColumnListsMirrorThePythonSinkOmissions(t *testing.T) {
 	t.Parallel()
-	for _, absent := range []string{"description", "priority_raw", "service_class", "due_at"} {
-		if containsColumn(gitHubWorkItemsInsert, absent) {
-			t.Fatalf("work_items insert writes %q, which write_work_items does not", absent)
-		}
-		if absent != "description" && containsColumn(gitHubWorkItemsSelect, absent) {
-			t.Fatalf("work_items readback compares %q, a column this unit does not own", absent)
-		}
+	extended := withHeldWorkItemColumns(gitHubWorkItemsInsert)
+	rules := map[string]storedversion.Rule{}
+	for _, column := range workItemsContract.Columns {
+		rules[column.Name] = column.Rule
 	}
-	if !containsColumn(gitHubWorkItemsSelect, "description") {
-		t.Fatal("work_items readback does not compare description, which this unit now writes")
+	for _, omitted := range []string{"description", "priority_raw", "service_class", "due_at"} {
+		if containsColumn(gitHubWorkItemsInsert, omitted) {
+			t.Fatalf("the Python-parity work_items insert list names %q, which write_work_items does not", omitted)
+		}
+		if _, diverges := pythonSinkDivergences[omitted]; diverges {
+			if !containsColumn(extended, omitted) {
+				t.Fatalf("work_items insert no longer writes %q, a listed divergence from the Python sink", omitted)
+			}
+			if rules[omitted] != storedversion.Unstated || !containsColumn(gitHubWorkItemsSelect, omitted) {
+				t.Fatalf("%q is a listed divergence but is not stated by the row and compared by the readback", omitted)
+			}
+			continue
+		}
+		if rules[omitted] != storedversion.NoField {
+			t.Fatalf("%q diverges from the Python sink (rule %d) but is not in pythonSinkDivergences", omitted, rules[omitted])
+		}
+		if containsColumn(gitHubWorkItemsSelect, omitted) {
+			t.Fatalf("work_items readback compares %q, a column this unit does not own", omitted)
+		}
 	}
 	if containsColumn(gitHubWorkItemTransitionsInsert, "provider") {
 		t.Fatal("work_item_transitions insert writes provider, which write_work_item_transitions does not")

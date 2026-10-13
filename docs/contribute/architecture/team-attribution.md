@@ -1189,9 +1189,13 @@ project (section 0.1): a native team key gives one team.
   another provider does not make that team an owner of the item's project (a team reaches an item only through
   ownership of its project), so it takes no row. `project_ownership` facts are
   looked up by the item's provider. When the winning source of an item is
-  `issue_project` or `project_ownership`, every other team of that source at the SAME rank as the winner
-  (`is_primary`, `specificity`, `priority` of the ownership fact) is a co-owner (`projectCoOwners`). A lower
-  rank, an empty team id, `repo_ownership`, a membership source and `native_team` give no co-owner. An
+  `issue_project` or `project_ownership`, or a main owner of the item's repository (`repo_ownership` with
+  `is_primary = 1`), every other team of that source at the SAME rank as the winner (`is_primary`,
+  `specificity`, `priority` of the ownership fact) is a co-owner (`projectCoOwners`): so a repository with
+  several main owners (a full ownership tie, D5990, CHAOS-9459) attributes its items to each of them. A lower
+  rank, an empty team id, a repository fact that is not a main owner's (a `provider_access` grant,
+  `is_primary = 0`), a membership source and `native_team` give no co-owner. Pinned by
+  `TestOnlyMainRepositoryOwnersAndProjectsHaveCoOwners`. An
   inactive team takes no row (section 0.4c).
 - **The values of `work_item_team_attributions.is_primary`** (`AttributionNotPrimary`, `AttributionPrimary`,
   `AttributionCoOwner`; the column is `UInt8`, no migration):

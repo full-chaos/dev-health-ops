@@ -43,6 +43,7 @@ var generateParameterSets = []struct {
 	// The provider worlds (provider_worlds_integration_test.go): the attribution matrix loads them.
 	{githubWorld.OrgID, githubWorld.Params},
 	{gitlabWorld.OrgID, gitlabWorld.Params},
+	{jiraWorld.OrgID, jiraWorld.Params},
 }
 
 // serverStampProblems lists every server-stamped column (serverStampedColumns) of a table the

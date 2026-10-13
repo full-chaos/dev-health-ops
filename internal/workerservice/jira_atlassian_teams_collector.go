@@ -76,6 +76,10 @@ type jiraCombinedTeamCatalogCollector struct {
 	// the real *graph.Client, exactly like NewClient. Tests replace it with a
 	// fake atlassianteams.OrganizationResolver.
 	NewOrganizationResolver func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.OrganizationResolver
+	// GatewayTransport is the transport of the real gateway client; nil (production) is the default
+	// one. The fixture world producer sets it to its replay of recorded gateway answers, so the real
+	// *graph.Client and its page guard still run.
+	GatewayTransport http.RoundTripper
 }
 
 func (collector jiraCombinedTeamCatalogCollector) newClient(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.Client {
@@ -84,7 +88,7 @@ func (collector jiraCombinedTeamCatalogCollector) newClient(gatewayURL string, a
 	}
 	return &graph.Client{
 		BaseURL: gatewayURL, Auth: auth, Strict: true,
-		HTTPClient: atlassianteams.GatewayHTTPClient(45 * time.Second),
+		HTTPClient: atlassianteams.GatewayHTTPClientOver(45*time.Second, collector.GatewayTransport),
 	}
 }
 
@@ -94,7 +98,7 @@ func (collector jiraCombinedTeamCatalogCollector) newOrganizationResolver(gatewa
 	}
 	return &graph.Client{
 		BaseURL: gatewayURL, Auth: auth, Strict: true,
-		HTTPClient: atlassianteams.GatewayHTTPClient(45 * time.Second),
+		HTTPClient: atlassianteams.GatewayHTTPClientOver(45*time.Second, collector.GatewayTransport),
 	}
 }
 

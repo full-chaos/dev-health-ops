@@ -359,6 +359,9 @@ type InProcessRun struct {
 	// ProcessorFlags are the planned unit's processor flags; nil is the
 	// capability's own (what `dho sync <target>` runs with).
 	ProcessorFlags map[string]bool
+	// DatasetOptions are the unit's dataset options (the integration's sync
+	// options, e.g. jira fetch_dev_status); nil is none.
+	DatasetOptions map[string]any
 }
 
 // ErrNotAGitFamilyRoute is returned for a (provider, dataset) pair that has no
@@ -430,8 +433,8 @@ func RunRouteInProcess(ctx context.Context, run InProcessRun, selectRoute InProc
 			SourceExternalID: run.SourceExternalID, SourceName: run.SourceName,
 			Provider: run.Provider, Dataset: run.Dataset, CostClass: capability.CostClass,
 			Mode: "incremental", SinceAt: run.SinceAt, BeforeAt: &run.BeforeAt,
-			ProcessorFlags: processorFlags,
-			CredentialID:   newID(), AuthSource: "cli",
+			ProcessorFlags: processorFlags, DatasetOptions: run.DatasetOptions,
+			CredentialID: newID(), AuthSource: "cli",
 		},
 		Owner: newID(), Attempt: 1, LeaseExpiresAt: started.Add(10 * time.Minute),
 	}

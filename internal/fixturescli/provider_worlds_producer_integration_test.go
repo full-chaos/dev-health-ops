@@ -70,10 +70,17 @@ type providerAnswer struct {
 	Status  int             `json:"status"`
 	Headers http.Header     `json:"headers,omitempty"`
 	Body    json.RawMessage `json:"body"`
-	// Respond, when set, builds the body from the request's GraphQL document and variables (an
-	// answer whose shape follows the aliases the request asks for); ok=false is "this answer does
-	// not answer the request".
-	Respond func(query string, variables json.RawMessage) (body any, ok bool) `json:"-"`
+	// Respond, when set, builds the body from the request (a GraphQL answer whose shape follows the
+	// aliases the request asks for, a search answer that depends on its query); ok=false is "this
+	// answer does not answer the request".
+	Respond func(request replayRequest) (body any, ok bool) `json:"-"`
+}
+
+// replayRequest is what a Respond answer reads of a request.
+type replayRequest struct {
+	Query     url.Values
+	Document  string // a GraphQL request's query document
+	Variables json.RawMessage
 }
 
 // replayDoer answers every request from its answers and records each one. A request no answer names is
@@ -162,7 +169,7 @@ func (doer *replayDoer) Do(request *http.Request) (*http.Response, error) {
 		}
 		responseBody := answer.Body
 		if answer.Respond != nil {
-			built, ok := answer.Respond(graphQL.Query, graphQL.Variables)
+			built, ok := answer.Respond(replayRequest{Query: request.URL.Query(), Document: graphQL.Query, Variables: graphQL.Variables})
 			if !ok {
 				continue
 			}
@@ -244,6 +251,9 @@ type worldStep struct {
 	Credential  map[string]string
 	Config      map[string]string
 	SyncOptions map[string]any
+	// DatasetOptions are the integration's dataset options every planned unit carries (jira
+	// fetch_dev_status).
+	DatasetOptions map[string]any
 	// Phase selects the answers of this step's sync, and Before how long before the world's instant it
 	// runs (its clock): a catalog synced twice shows what a later sync closes.
 	Phase  string
@@ -374,7 +384,7 @@ func runWorldSync(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 		run := providersync.InProcessRun{
 			OrgID: world.OrgID, Provider: unit.Provider, Dataset: unit.Dataset,
 			SourceExternalID: external, SourceName: external,
-			SinceAt: unit.WindowStart, BeforeAt: *unit.WindowEnd, ProcessorFlags: unit.ProcessorFlags,
+			SinceAt: unit.WindowStart, BeforeAt: *unit.WindowEnd, ProcessorFlags: unit.ProcessorFlags, DatasetOptions: step.DatasetOptions,
 			Credential: step.Credential, Config: step.Config, Conn: conn, Doer: fakehttp.Client(doer),
 			Retry: providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 			Now:   func() time.Time { return world.FrozenAt }, IDs: ids.id,
@@ -643,7 +653,8 @@ func collectTeamCatalog(ctx context.Context, t *testing.T, conn driver.Conn, ste
 	reference providersync.TeamCatalogReference, selections providersync.TeamCatalogSelections, doer *replayDoer, now time.Time,
 ) (providersync.TeamCatalogResult, error) {
 	t.Helper()
-	collector, ok := workerservice.NativeTeamCatalogCollectors(conn, nil, soleIntegrationCensus{}, fakehttp.Client(doer))[step.Provider]
+	replay := fakehttp.Client(doer).(*http.Client)
+	collector, ok := workerservice.NativeTeamCatalogCollectors(conn, nil, soleIntegrationCensus{}, replay, replay.Transport)[step.Provider]
 	if !ok {
 		t.Fatalf("the worker has no team catalog collector for %s", step.Provider)
 	}

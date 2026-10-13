@@ -58,6 +58,7 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 ), required_tables AS (
 	SELECT
 		class.oid,
+		required.table_name,
 		required.allow_insert,
 		required.allow_update,
 		required.allow_delete
@@ -355,12 +356,27 @@ SELECT
 		SELECT 1
 		FROM caller_column_grants AS granted
 		WHERE granted.is_grantable
-			OR NOT EXISTS (
-				SELECT 1
-				FROM column_scoped_privileges AS required
-				WHERE required.table_name = granted.table_name
-					AND required.column_name = granted.column_name
-					AND required.privilege = granted.privilege_type
+			OR (
+				NOT EXISTS (
+					SELECT 1
+					FROM column_scoped_privileges AS required
+					WHERE required.table_name = granted.table_name
+						AND required.column_name = granted.column_name
+						AND required.privilege = granted.privilege_type
+				)
+				-- CHAOS-6747: on a table named in both manifests the table-wide
+				-- ACL entries the flags declare are not column excess; the
+				-- required_tables predicate below checks them against the flags.
+				AND NOT EXISTS (
+					SELECT 1
+					FROM required_table_privileges AS mixed
+					WHERE mixed.table_name = granted.table_name
+						AND (
+							granted.privilege_type = 'SELECT'
+							OR (granted.privilege_type = 'INSERT' AND mixed.allow_insert)
+							OR (granted.privilege_type = 'UPDATE' AND mixed.allow_update)
+						)
+			)
 			)
 	)
 	AND NOT EXISTS (
@@ -383,12 +399,27 @@ SELECT
 					AND required.column_name = actual_column.attname
 					AND required.privilege = privilege_type.privilege
 			)
+			-- CHAOS-6747: same carve-out as the catalog angle above.
+			AND NOT EXISTS (
+				SELECT 1
+				FROM required_table_privileges AS mixed
+				WHERE mixed.table_name = actual_column.relname
+					AND (
+						privilege_type.privilege = 'SELECT'
+						OR (privilege_type.privilege = 'INSERT' AND mixed.allow_insert)
+						OR (privilege_type.privilege = 'UPDATE' AND mixed.allow_update)
+					)
+			)
 	)
 	AND NOT EXISTS (
 		-- No table-wide privilege leakage on a column-scoped table.
 		SELECT 1
 		FROM column_scoped_relations AS scoped
-		WHERE has_table_privilege(current_user, scoped.oid, 'SELECT')
+		WHERE NOT EXISTS (
+				SELECT 1 FROM required_table_privileges AS mixed
+				WHERE mixed.table_name = scoped.relname
+			)
+			AND (has_table_privilege(current_user, scoped.oid, 'SELECT')
 			OR has_table_privilege(current_user, scoped.oid, 'INSERT')
 			OR has_table_privilege(current_user, scoped.oid, 'UPDATE')
 			OR has_table_privilege(current_user, scoped.oid, 'DELETE')
@@ -399,7 +430,7 @@ SELECT
 				WHEN current_setting('server_version_num')::integer >= 170000
 				THEN has_table_privilege(current_user, scoped.oid, 'MAINTAIN')
 				ELSE false
-			END
+			END)
 	)
 	AND NOT EXISTS (
 		-- The required-flag columns only capture whether the base privilege
@@ -450,6 +481,17 @@ SELECT
 			OR (
 				NOT required.allow_update
 				AND 'UPDATE' = ANY (held.any_column)
+				-- CHAOS-6747: a table named in BOTH manifests is mixed: its
+				-- table-wide flags govern the table-wide ACL, and a column
+				-- UPDATE the posture declares is held on top of them. The
+				-- column sweeps above still refuse an UPDATE on any column
+				-- that is not declared.
+				AND NOT EXISTS (
+					SELECT 1
+					FROM column_scoped_privileges AS declared
+					WHERE declared.table_name = required.table_name
+						AND declared.privilege = 'UPDATE'
+				)
 			)
 			OR (
 				required.allow_update
@@ -572,6 +614,13 @@ type TablePrivilege struct {
 // server-owned column must never become reachable through a table-wide
 // grant just because some other column on the same table legitimately
 // needs one.
+//
+// A table may also appear in RequiredTables (CHAOS-6747). It is then mixed:
+// RequiredTables states its table-wide privileges and ColumnScoped adds
+// column privileges on top of them (integration_credentials: table-wide
+// SELECT, column-scoped UPDATE of is_active and updated_at). Any column
+// privilege not declared there, and any table-wide privilege beyond the
+// flags, is refused.
 type ColumnPrivilege struct {
 	TableName  string
 	ColumnName string
@@ -708,6 +757,10 @@ func domainPosture() RolePosture {
 			{"integrations", false, false, false},
 			{"integration_sources", true, true, false},
 			{"integration_datasets", true, true, false},
+			// CHAOS-6747: SELECT table-wide; the one write is the column-scoped
+			// UPDATE (is_active, updated_at) in ColumnScoped below, so a deleted
+			// GitHub App installation can deactivate its credential while
+			// credentials_encrypted stays unwritable by the worker.
 			{"integration_credentials", false, false, false},
 			// CHAOS-6695: the webhook worker routes a GitHub delivery through
 			// its installation's org (SELECT) and upserts the installation on
@@ -896,6 +949,8 @@ func domainPosture() RolePosture {
 			{"worker_posture_manifest_applied", false, false, false},
 		},
 		ColumnScoped: []ColumnPrivilege{
+			{"integration_credentials", "is_active", "UPDATE"},
+			{"integration_credentials", "updated_at", "UPDATE"},
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
 		},

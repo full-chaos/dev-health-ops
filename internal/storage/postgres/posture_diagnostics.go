@@ -301,7 +301,7 @@ func DiagnoseRolePosture(
 		}
 		gaps = append(gaps, columnGaps...)
 
-		excessGaps, err := diagnoseColumnScopedExcess(ctx, pool, expectedRole, posture.ColumnScoped)
+		excessGaps, err := diagnoseColumnScopedExcess(ctx, pool, expectedRole, posture.RequiredTables, posture.ColumnScoped)
 		if err != nil {
 			return nil, err
 		}
@@ -606,9 +606,16 @@ func diagnoseColumnScopedExcess(
 	ctx context.Context,
 	pool *pgxpool.Pool,
 	expectedRole string,
+	tables []TablePrivilege,
 	columns []ColumnPrivilege,
 ) ([]PostureGap, error) {
-	seen := make(map[string]struct{}, len(columns))
+	// CHAOS-6747: a table named in both RequiredTables and ColumnScoped is
+	// mixed. Its table-wide ACL is judged against the RequiredTables flags by
+	// diagnoseTablePosture, so it is not reported here as table-wide excess.
+	seen := make(map[string]struct{}, len(columns)+len(tables))
+	for _, table := range tables {
+		seen[table.TableName] = struct{}{}
+	}
 	tableNames := make([]string, 0, len(columns))
 	for _, column := range columns {
 		if _, ok := seen[column.TableName]; ok {
@@ -616,6 +623,9 @@ func diagnoseColumnScopedExcess(
 		}
 		seen[column.TableName] = struct{}{}
 		tableNames = append(tableNames, column.TableName)
+	}
+	if len(tableNames) == 0 {
+		return nil, nil
 	}
 	rows, err := pool.Query(ctx, diagnoseColumnScopedExcessQuery, expectedRole, tableNames)
 	if err != nil {

@@ -116,8 +116,8 @@ func TestEmptyDayCountIsA422(t *testing.T) {
 		rec := httptest.NewRecorder()
 		test.handler(rec, req)
 		want := `"type":"int_parsing","loc":["query","` + test.field + `"]`
-		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), want) || !strings.Contains(rec.Body.String(), `"input":""`) {
-			t.Errorf("%s: got %d %s, want 422 with %s and input \"\"", name, rec.Code, rec.Body.String(), want)
+		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), want) || strings.Contains(rec.Body.String(), `"input"`) {
+			t.Errorf("%s: got %d %s, want 422 with %s and no input", name, rec.Code, rec.Body.String(), want)
 		}
 	}
 }

@@ -163,6 +163,8 @@ func TestNewHomeGetHandlerBadRangeDaysIs422(t *testing.T) {
 			Msg: "Input should be a valid integer, unable to parse string as an integer", Input: "abc",
 		},
 	}}
+	dropEcho(&body)
+	dropEcho(&want)
 	if !reflect.DeepEqual(body, want) {
 		t.Fatalf("body = %+v, want %+v", body, want)
 	}
@@ -372,6 +374,8 @@ func TestNewHomePostHandlerMissingFiltersIs422(t *testing.T) {
 	want := pydanticValidationErrorBody{Detail: []pydanticErrorDetail{
 		{Type: "missing", Loc: []any{"body", "filters"}, Msg: "Field required", Input: map[string]any{}},
 	}}
+	dropEcho(&body)
+	dropEcho(&want)
 	if !reflect.DeepEqual(body, want) {
 		t.Fatalf("body = %+v, want %+v", body, want)
 	}

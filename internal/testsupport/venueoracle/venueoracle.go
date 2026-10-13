@@ -1156,7 +1156,7 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 	}
 	same := py.Status == gr.Status && py.Body == gr.Body
 	if py.Status == http.StatusInternalServerError && (gr.Status == http.StatusUnprocessableEntity || gr.Status == http.StatusBadRequest) &&
-		strings.Contains(gr.Body, `"loc"`) {
+		strings.Contains(gr.Body, `"loc"`) && pydanticecho.Strip(gr.Body) == gr.Body {
 		same = true
 		py.Status = gr.Status
 		skip = map[string]bool{"content-length": true}

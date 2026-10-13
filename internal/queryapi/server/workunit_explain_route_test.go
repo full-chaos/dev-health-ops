@@ -117,6 +117,8 @@ func TestWorkUnitExplainValidationErrorsMatchPython(t *testing.T) {
 			}
 			got := decodeValidationErrorBody(t, rec.Body.Bytes())
 			want := decodeValidationErrorBody(t, readWorkUnitExplainFixture(t, testCase.fixture))
+			dropEcho(&got)
+			dropEcho(&want)
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("body mismatch\n got=%+v\nwant=%+v", got, want)
 			}

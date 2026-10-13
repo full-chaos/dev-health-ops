@@ -694,7 +694,9 @@ ticket and fails when it turns green, until it is moved to `pass`; every provide
 `not_applicable` entry with its rule, and every check of an entity is a cell or an `omitted` entry with its
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
 (§0.4j), of active teams, with the first recorded owners applied backward before the first record (D5987,
-option C). Known red today: ownership and membership start at the sync (CHAOS-9404),
+option C); the shared ownership readers are judged against that rule at now and on every item day. Known red
+today: ownership and membership start at the sync, and the shared readers do not apply the first owners
+backward (CHAOS-9404),
 GitLab ownership names the project by path (CHAOS-8883), and a GitHub pull request's `linked_issue` row names a
 repository co-owner of its issue on the pull request's day, not the issue's own team (CHAOS-9460). The inferred repository owner starts at its earliest
 linked evidence since CHAOS-9403 (#4049): its cell is pass.
@@ -703,7 +705,8 @@ A pull request's `linked_issue` row must name the team an issue it is actually l
 that key). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the
 defects the matrix exists to catch into the same state the production verbs wrote (sync-time `valid_from`, a
 landscape grouped by membership, an issue-key prefix taken as a native link, a pull request team inherited
-without a linked issue or naming another team than its issue's, a reader with its own ownership SQL) and
+without a linked issue, from a donor without a team of its own or naming another team than its issue's, a
+co-owner written as a candidate row, a reader with its own ownership SQL) and
 requires the judging cell to turn red on each.
 
 #### 0.4b Project identity: one project, one id (CHAOS-8851)

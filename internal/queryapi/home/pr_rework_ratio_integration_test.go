@@ -189,15 +189,15 @@ func TestHomePRReworkRatio_CountsReviewedPullRequestsOnly(t *testing.T) {
 	}
 
 	// The series draws a point only for a day that is measured.
-	series, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, day1, after, "", nil, spec.Aggregator, orgID)
+	series, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, day1, after, "", nil, spec.Aggregator, orgID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(series) != 2 || math.Abs(series[0].Value-0.25) > 1e-9 || series[1].Value != 0 {
 		t.Errorf("the organization's day series = %+v, want day 1 at 0.25 and day 2 at 0", series)
 	}
-	unreviewedSeries, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, day1, after,
-		" AND repo_id IN {scope_ids:Array(String)}", []dhclickhouse.Binding{{Name: "scope_ids", Value: []string{repoN.String()}}}, spec.Aggregator, orgID)
+	unreviewedSeries, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, day1, after, " AND repo_id IN {scope_ids:Array(String)}", []dhclickhouse.Binding{{Name: "scope_ids", Value: []string{repoN.String()}}}, spec.Aggregator, orgID, "")
+
 	if err != nil {
 		t.Fatal(err)
 	}

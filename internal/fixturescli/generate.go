@@ -61,10 +61,10 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb",
 	"testdata/generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz": "8470b539f55e1ecd22b8ba9b52dd0921a9b51222dfd6a7d5a8050139e9f2abd8",
 	// The provider worlds (producedWorlds).
-	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "9b29425971ab0abdcb4932b3ab2afd0010440e998ac8e6a30963273f19067380",
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "e6bf5e7f3d7752f86d4f106dc495e28e870310c899f4d2800f80befec794e647",
 	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "469da72295a35660510b1e36880b24a42de088b904cc2900dc674a7131235af9",
-	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "d83bdc3fbed6c308288bd60eef60bb53e8473e63782e765c9b445c98f9111b39",
-	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "3c5b2795eed849df9378ca3f252204c1b7bd732ea65378aaa19a250177573251",
+	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "74519c4288dc65853a7349ff6e7c320558b588d855c5e6608c72d64f1ada38b1",
+	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "5e8c9436078addc9b1a5b03d1fb77304a30d2b44ac88a22b526886d3793596cd",
 	// The mixed-provider demo world (provider_worlds_demo_*).
 	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p169_t8_s9440_raw.json.gz": "8bdc8b146f6f0f42a574e42d836e3c8fb1ea729c9d2e458c712574c30d9a05db",
 }
@@ -525,6 +525,10 @@ Flags (as "dev-hops fixtures generate"):
   --with-metrics            also the derived metrics
   --with-work-graph         also the work graph
   --skip-coherence-validation, --allow-mixed-org   as in Python
+  --backstop-database       PostgreSQL DSN of the job database; when given, the load also starts the
+                            recommendations backstop (all teams, window 14) for the organization, as the
+                            nightly schedule does, so the org has recommendations_daily rows once a worker
+                            has run it. Read from --backstop-database only, never from the environment.
 `
 
 // defaultOrg is the Python verb's default organization: uuid5(6ba7b810-..., "default-org").
@@ -553,6 +557,7 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 	provider := flags.String("provider", "synthetic", "provider")
 	withMetrics := flags.Bool("with-metrics", false, "derived metrics")
 	withGraph := flags.Bool("with-work-graph", false, "work graph")
+	backstopDatabase := flags.String("backstop-database", "", "PostgreSQL DSN of the job database")
 	flags.Bool("skip-coherence-validation", false, "accepted, no effect")
 	allowMixed := flags.Bool("allow-mixed-org", false, "write into an organization that holds synced data")
 	if err := flags.Parse(env.Args); err != nil {
@@ -665,7 +670,15 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 		total += count
 	}
 	logger.Info("frozen world loaded", "org_id", orgID, "tables", len(counts), "rows", total, "duration_ms", time.Since(started).Milliseconds())
-	if err := json.NewEncoder(env.Stdout).Encode(map[string]any{"org_id": orgID, "params": params.String(), "rows": counts}); err != nil {
+	summary := map[string]any{"org_id": orgID, "params": params.String(), "rows": counts}
+	if dsn := strings.TrimSpace(*backstopDatabase); dsn != "" {
+		backstop, err := startRecommendationsBackstop(ctx, logger, dsn, orgID)
+		if err != nil {
+			return writeError(env.Stderr, cli.ExitFailure, "backstop_failed", err.Error())
+		}
+		summary["recommendations_backstop"] = backstop
+	}
+	if err := json.NewEncoder(env.Stdout).Encode(summary); err != nil {
 		fmt.Fprintln(env.Stderr, "could not write the result")
 		return cli.ExitFailure
 	}

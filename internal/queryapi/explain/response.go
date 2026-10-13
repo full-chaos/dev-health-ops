@@ -123,9 +123,17 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 
 	// One instant for the whole response: the current and comparison windows
 	// below share one scope filter, so they must share one team membership.
-	scopeFilterSQL, scopeBindings, err := reader.scopeFilterForMetric(ctx, config.Scope, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID, time.Now().UTC())
+	asOf := time.Now().UTC()
+	scopeFilterSQL, scopeBindings, err := reader.scopeFilterForMetric(ctx, config.Scope, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID, asOf)
 	if err != nil {
 		return nil, err
+	}
+	shareSQL := ""
+	if config.Scope == "repo" && config.Aggregator == "sum" && params.ScopeLevel == "team" {
+		// A team scope sums a repository metric at the share of each repository the team holds (CHAOS-9413, D5988).
+		var shareBindings []dhclickhouse.Binding
+		shareSQL, shareBindings = teamscope.RepoShare(orgID, "repo_id", params.ScopeIDs, asOf)
+		scopeBindings = append(scopeBindings, shareBindings...)
 	}
 	scopeFilterSQL += metricStatusFilterSQL(config.StatusFilter)
 
@@ -154,11 +162,11 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		rateState, linkTier = currentOutcome.StateOrNil(), currentOutcome.LinkTierOrNil()
 	} else {
 		var err error
-		currentRaw, hasData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
+		currentRaw, hasData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL)
 		if err != nil {
 			return nil, err
 		}
-		previousRaw, hasPriorData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
+		previousRaw, hasPriorData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID, shareSQL)
 		if err != nil {
 			return nil, err
 		}
@@ -171,11 +179,11 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		pctChange = &safe
 	}
 
-	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
+	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID, shareSQL)
 	if err != nil {
 		return nil, err
 	}
-	contributors, err := reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
+	contributors, err := reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL)
 	if err != nil {
 		return nil, err
 	}

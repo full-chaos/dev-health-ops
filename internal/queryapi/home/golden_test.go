@@ -233,7 +233,8 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 
 		for column, fx := range metricFixtures {
 			marker := "(" + column + ")) AS value"
-			if !strings.Contains(q, marker) {
+			// A team scope sums a repository metric at the team's share of each repository (CHAOS-9413): sum(col * share).
+			if !strings.Contains(q, marker) && !strings.Contains(q, "(sum("+column+" * ") {
 				continue
 			}
 			if strings.Contains(q, "GROUP BY day") && strings.Contains(q, "ORDER BY day") {

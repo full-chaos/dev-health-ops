@@ -267,7 +267,10 @@ func TestJiraOwnershipSnapshotKeepsFirstSeenAndClosesWhatTheSnapshotLost(t *test
 	proven := func(complete bool) KindSnapshot[OwnershipSnapshotRow] {
 		return JiraLegacyOwnershipKind().testSnapshot(testSoleScope(), ProveSnapshot(SnapshotTerm{Holds: complete, Reason: jiraSnapshotProjectSearch}))
 	}
+	// The fresh row differs from the open one in priority: a repeat of an open row is not written (see
+	// TestJiraOwnershipSnapshotWritesNothingForARepeatOfAnOpenRow), so the first-seen stamp is read on a changed row.
 	fresh := []jiraTeamCatalogOwnershipRow{row("10001", "jira_legacy", now)}
+	fresh[0].Priority = 11
 	open := []jiraTeamCatalogOwnershipRow{
 		row("10001", "jira_legacy", later), row("10001", "jira_legacy", first), // one fact, two open rows
 		row("org-1:jira:OPS", "jira_legacy", first), // the retired identity
@@ -317,10 +320,53 @@ func TestJiraOwnershipSnapshotKeepsFirstSeenAndClosesWhatTheSnapshotLost(t *test
 		t.Fatalf("a row of another kind let the legacy rows close: retracted=%+v", retracted)
 	}
 
-	// A second run on the same data writes the same key again and closes nothing.
+	// A second run on the same data changes nothing: the changed row is written on its first-seen stamp.
 	kept, retracted, _ = jiraOwnershipSnapshot(fresh, []jiraTeamCatalogOwnershipRow{row("10001", "jira_legacy", first)}, now.Add(time.Hour), proven(true))
 	if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) || len(retracted) != 0 {
 		t.Fatalf("second run: kept=%+v retracted=%+v", kept, retracted)
+	}
+}
+
+// CHAOS-9548: a fresh row that repeats the open row of its fact is not written again; a change of any column the
+// row carries, or a fact the table does not hold open, is.
+func TestJiraOwnershipSnapshotWritesNothingForARepeatOfAnOpenRow(t *testing.T) {
+	first := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	now := first.Add(48 * time.Hour)
+	key, otherKey := "OPS", "OTHER"
+	row := func(validFrom time.Time) jiraTeamCatalogOwnershipRow {
+		return jiraTeamCatalogOwnershipRow{
+			OrgID: "org-1", Provider: "jira", TeamID: "OPS", ProjectID: testPID("10001"), ProjectKey: &key,
+			Source: "jira_legacy", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: validFrom, UpdatedAt: validFrom,
+		}
+	}
+	proven := JiraLegacyOwnershipKind().testSnapshot(testSoleScope(), ProveSnapshot(SnapshotTerm{Holds: true, Reason: jiraSnapshotProjectSearch}))
+	open := []jiraTeamCatalogOwnershipRow{row(first)}
+	changes := map[string]func(*jiraTeamCatalogOwnershipRow){
+		"is_primary": func(r *jiraTeamCatalogOwnershipRow) { r.IsPrimary = 2 }, "specificity": func(r *jiraTeamCatalogOwnershipRow) { r.Specificity = 101 },
+		"priority": func(r *jiraTeamCatalogOwnershipRow) { r.Priority = 11 }, "project_key": func(r *jiraTeamCatalogOwnershipRow) { r.ProjectKey = &otherKey },
+		"project_key_removed": func(r *jiraTeamCatalogOwnershipRow) { r.ProjectKey = nil },
+	}
+	kept, retracted, plan := jiraOwnershipSnapshot([]jiraTeamCatalogOwnershipRow{row(now)}, open, now, proven)
+	if len(kept) != 0 || len(retracted) != 0 || plan.UnchangedCount() != 1 {
+		t.Fatalf("repeat: kept=%+v retracted=%+v unchanged=%d, want nothing written", kept, retracted, plan.UnchangedCount())
+	}
+	for name, change := range changes {
+		fresh := row(now)
+		change(&fresh)
+		kept, _, _ := jiraOwnershipSnapshot([]jiraTeamCatalogOwnershipRow{fresh}, open, now, proven)
+		if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) {
+			t.Fatalf("%s changed: kept=%+v, want the row written on its first-seen valid_from", name, kept)
+		}
+	}
+	kept, _, _ = jiraOwnershipSnapshot([]jiraTeamCatalogOwnershipRow{row(now)}, nil, now, proven)
+	if len(kept) != 1 || !kept[0].ValidFrom.Equal(now) {
+		t.Fatalf("a new fact: kept=%+v, want it written at the run", kept)
+	}
+	// An earlier duplicate open row is the first-seen one; the later is closed and the repeat is still not written.
+	later := first.Add(time.Hour)
+	kept, retracted, _ = jiraOwnershipSnapshot([]jiraTeamCatalogOwnershipRow{row(now)}, []jiraTeamCatalogOwnershipRow{row(later), row(first)}, now, proven)
+	if len(kept) != 0 || len(retracted) != 1 || !retracted[0].ValidFrom.Equal(later) {
+		t.Fatalf("duplicate open rows: kept=%+v retracted=%+v, want the later one closed and nothing rewritten", kept, retracted)
 	}
 }
 

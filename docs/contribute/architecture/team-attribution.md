@@ -719,9 +719,10 @@ rule. The rule the cells apply is written once in the test (`ownersAt`): the row
 option C); the shared ownership readers are judged against that rule at now and on every item day. Known red
 today: ownership and membership start at the sync, and the shared readers do not apply the first owners
 backward (CHAOS-9404),
-GitLab ownership names the project by path (CHAOS-8883), and a GitHub pull request's `linked_issue` row copies
-its issue's row of the pull request's day, which names a co-owner as the main owner (CHAOS-9409). The inferred repository owner starts at its earliest
-linked evidence since CHAOS-9403 (#4049): its cell is pass.
+and GitLab ownership names the project by path (CHAOS-8883). The inferred repository owner starts at its earliest
+linked evidence since CHAOS-9403 (#4049): its cell is pass. The GitHub cell of a pull request's `linked_issue` row
+is pass since CHAOS-9409: owners tied at the top rank with no main row (two `provider_access` grants) are all the
+donor's team on that day (`tiedOwnersAt`, §0.4d).
 A pull request's `linked_issue` row must name the team an issue it is actually linked to holds on its own on
 the pull request's day (a relation of record, or a link of record; an `extkey:` relation counts only through
 the one existing item of that key; following the issue's later changes is CHAOS-9478). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the
@@ -1236,7 +1237,12 @@ project (section 0.1): a native team key gives one team.
   D5988: every owning team of the project or repository gets a row of the item, the rank decides only which ONE is
   the primary row). A repository owner beside the main owner (a co-owner fact, `is_primary = 2`) is never the
   primary row, even when it outranks a `provider_access` grant by specificity: it is a co-owner row. A repository
-  with several main owners (a full ownership tie, D5990, CHAOS-9459) attributes its items to each of them. An empty
+  with several main owners (a full ownership tie, D5990, CHAOS-9459) attributes its items to each of them, and so
+  does a repository or project whose top owners tie at equal rank (`specificity`, `priority`) with no main row
+  (`is_primary = 1`), such as two `provider_access` grants (lead ruling on CHAOS-9409, following D5990): every tied
+  owner is an owner, the first by the cascade's deterministic order (`RankDerivationCandidates`) is the primary row
+  and the others are co-owner rows, so a donor's team of that day is any tied owner (the attribution matrix,
+  `tiedOwnersAt`). No new tie-break picks one of them; that would be a data decision. An empty
   team id, a membership source and `native_team` give no co-owner. Pinned by `TestEveryOwnerOfTheProjectIsACoOwner`,
   `TestEveryOwnerOfTheRepositoryIsACoOwner` and `TestLoadReposCarriesCoOwnerRows`. An
   inactive team takes no row (section 0.4c).

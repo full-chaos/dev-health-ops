@@ -100,6 +100,9 @@ type ownershipRow struct {
 	TeamID, Provider, RepoID, RepoName, ProjectID, Source string
 	ValidFrom                                             time.Time
 	ValidTo                                               *time.Time
+	// IsPrimary, Specificity and Priority are the row's rank (repository and project ownership).
+	IsPrimary             uint8
+	Specificity, Priority int
 }
 
 func (row ownershipRow) validAt(at time.Time) bool {
@@ -190,21 +193,27 @@ func loadMatrixFacts(ctx context.Context, t *testing.T, conn driver.Conn, org st
 		facts.teams[id] = matrixTeam{Provider: provider, Active: active == 1}
 		return nil
 	})
-	matrixQuery(ctx, t, conn, `SELECT team_id, provider, ifNull(toString(repo_id), ''), repo_full_name, toString(source), valid_from, valid_to
+	matrixQuery(ctx, t, conn, `SELECT team_id, provider, ifNull(toString(repo_id), ''), repo_full_name, toString(source), valid_from, valid_to,
+	is_primary, toInt64(specificity), toInt64(priority)
 FROM team_repo_ownership FINAL WHERE org_id = ?`, args, func(rows driver.Rows) error {
 		var row ownershipRow
-		if err := rows.Scan(&row.TeamID, &row.Provider, &row.RepoID, &row.RepoName, &row.Source, &row.ValidFrom, &row.ValidTo); err != nil {
+		var specificity, priority int64
+		if err := rows.Scan(&row.TeamID, &row.Provider, &row.RepoID, &row.RepoName, &row.Source, &row.ValidFrom, &row.ValidTo, &row.IsPrimary, &specificity, &priority); err != nil {
 			return err
 		}
+		row.Specificity, row.Priority = int(specificity), int(priority)
 		facts.repoOwners = append(facts.repoOwners, row)
 		return nil
 	})
-	matrixQuery(ctx, t, conn, `SELECT team_id, provider, project_id, toString(source), valid_from, valid_to
+	matrixQuery(ctx, t, conn, `SELECT team_id, provider, project_id, toString(source), valid_from, valid_to,
+	is_primary, toInt64(specificity), toInt64(priority)
 FROM team_project_ownership FINAL WHERE org_id = ?`, args, func(rows driver.Rows) error {
 		var row ownershipRow
-		if err := rows.Scan(&row.TeamID, &row.Provider, &row.ProjectID, &row.Source, &row.ValidFrom, &row.ValidTo); err != nil {
+		var specificity, priority int64
+		if err := rows.Scan(&row.TeamID, &row.Provider, &row.ProjectID, &row.Source, &row.ValidFrom, &row.ValidTo, &row.IsPrimary, &specificity, &priority); err != nil {
 			return err
 		}
+		row.Specificity, row.Priority = int(specificity), int(priority)
 		facts.projOwners = append(facts.projOwners, row)
 		return nil
 	})
@@ -385,7 +394,8 @@ func (facts matrixFacts) ownPrimary(itemID string) (attributionRow, bool) {
 // donorTeamsOnDay is the team a donor issue holds on its own on a day, by the contract's rule: its native
 // team; else, of the owners of its project (or repository) valid that day (ownersAt), its main owner -
 // one main owner for the whole history (team-attribution.md §0.4d), the team of its own primary row -
-// when that team owned it that day, and otherwise every owner of that day.
+// when that team owned it that day, with every owner tied with it that day (tiedOwnersAt), and otherwise
+// every owner of that day.
 func (facts matrixFacts) donorTeamsOnDay(donor string, day time.Time) map[string]bool {
 	own, ok := facts.ownPrimary(donor)
 	if !ok {
@@ -403,9 +413,56 @@ func (facts matrixFacts) donorTeamsOnDay(donor string, day time.Time) map[string
 	}
 	owners := facts.ownersAt(rows, day)
 	if owners[own.TeamID] {
-		return map[string]bool{own.TeamID: true}
+		return facts.tiedOwnersAt(rows, day, own.TeamID)
 	}
 	return owners
+}
+
+// tiedOwnersAt is the team with every owner tied with it at a time: owners of equal rank (specificity,
+// then priority) at the top when no row of that time is a main row (is_primary 1). Like a full tie of
+// main owners (D5990), every tied owner is an owner; the cascade writes the first by its deterministic
+// order as the item's primary and the others as co-owner rows (team-attribution.md §0.4d), so any tied
+// owner is the donor's team.
+func (facts matrixFacts) tiedOwnersAt(rows []ownershipRow, at time.Time, team string) map[string]bool {
+	out := map[string]bool{team: true}
+	var first time.Time
+	for _, row := range rows {
+		if first.IsZero() || row.ValidFrom.Before(first) {
+			first = row.ValidFrom
+		}
+	}
+	var valid []ownershipRow
+	for _, row := range rows {
+		if known, ok := facts.teams[row.TeamID]; row.TeamID == "" || (ok && !known.Active) {
+			continue
+		}
+		if row.validAt(at) || (at.Before(first) && row.ValidFrom.Equal(first)) {
+			if row.IsPrimary == 1 {
+				return out
+			}
+			valid = append(valid, row)
+		}
+	}
+	outranks := func(a, b ownershipRow) bool {
+		return a.Specificity > b.Specificity || (a.Specificity == b.Specificity && a.Priority < b.Priority)
+	}
+	var top []ownershipRow
+	for _, row := range valid {
+		switch {
+		case len(top) == 0 || outranks(row, top[0]):
+			top = []ownershipRow{row}
+		case !outranks(top[0], row):
+			top = append(top, row)
+		}
+	}
+	tied := map[string]bool{}
+	for _, row := range top {
+		tied[row.TeamID] = true
+	}
+	if !tied[team] {
+		return out
+	}
+	return tied
 }
 
 // donorRelationships are the dependency types a pull request inherits an issue's team through

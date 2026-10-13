@@ -22,7 +22,6 @@ const (
 	newPassword = "Brand-new-horse-42"
 )
 
-
 func changeRequest(t *testing.T, ctx context.Context, st stack, method, path, token, body string) (int, string) {
 	t.Helper()
 	request, err := http.NewRequestWithContext(ctx, method, st.server.URL+path, strings.NewReader(body))

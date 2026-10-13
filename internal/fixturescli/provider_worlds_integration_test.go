@@ -9,7 +9,7 @@ import (
 )
 
 // The frozen provider worlds and the run of production verbs that writes each.
-var providerWorlds = []providerWorld{githubWorld, gitlabWorld}
+var providerWorlds = []providerWorld{githubWorld, gitlabWorld, jiraWorld}
 
 // answerJSON marshals a provider answer body.
 func answerJSON(value any) json.RawMessage {
@@ -93,6 +93,8 @@ type githubRepo struct {
 var githubRepos = map[string]githubRepo{
 	"payments-api":  {9101, "payments-api", "Payments API", "2025-01-06T09:00:00Z"},
 	"platform-core": {9102, "platform-core", "Shared platform core", "2025-01-06T09:30:00Z"},
+	// The repository of the jira and linear worlds' pull requests.
+	"ledger": {9103, "ledger", "General ledger", "2025-03-03T09:00:00Z"},
 }
 
 func (repo githubRepo) payload() map[string]any {

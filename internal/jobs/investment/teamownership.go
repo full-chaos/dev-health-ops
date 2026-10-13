@@ -25,9 +25,33 @@ const (
 	ownershipOutcomeNoEligibleOwner = "no_eligible_owner"
 )
 
+// repoWeights returns the weight of each repository of a unit, summing to 1.
+// A repository weighs the linked share of its donor teams (D5988, D5432:
+// team_repo_ownership.share, the measure teamscope.OwnerShares reads), renormalised
+// over the unit's repositories. Known limit, the same as OwnerShares: a share
+// that is not measured (NULL, e.g. a provider_access row) is not zero, and when
+// any donor row of the unit has none, or the measured shares sum to nothing, no
+// weight is invented and the repositories split equally.
+func repoWeights(repos []string, linkedShares map[string]float64, allMeasured bool) []float64 {
+	weights := make([]float64, len(repos))
+	var total float64
+	for _, repo := range repos {
+		total += linkedShares[repo]
+	}
+	for i, repo := range repos {
+		if allMeasured && total > 0 {
+			weights[i] = linkedShares[repo] / total
+		} else {
+			weights[i] = 1.0 / float64(len(repos))
+		}
+	}
+	return weights
+}
+
 // allocateTeamOwnership is the final repository fallback. Each distinct owned
-// repo receives the same share, independent of duplicate ownership records or
-// the number of donor teams. Ranking columns are not effort measurements.
+// repo is weighed by the linked share of its donor teams, independent of
+// duplicate ownership records; equal only when no share is measured (see
+// repoWeights). Ranking columns are not effort measurements.
 // Existing code and hierarchy evidence always keeps precedence. The scalar
 // investment repo stays nil: an NxM allocation has no single primary repo.
 //
@@ -68,6 +92,8 @@ func allocateTeamOwnership(result MaterializeComponentResult, input MaterializeC
 		return result.RepoEffort, ownershipOutcomeNoEligibleOwner
 	}
 	teamsByRepo := map[string]map[string]bool{}
+	linkedShares := map[string]float64{}
+	allMeasured := true
 	for _, donor := range donors {
 		if !issues[donor.WorkItemID] || donor.RepoID == uuid.Nil || donor.TeamID == "" {
 			continue
@@ -77,6 +103,11 @@ func allocateTeamOwnership(result MaterializeComponentResult, input MaterializeC
 			teamsByRepo[repo] = map[string]bool{}
 		}
 		teamsByRepo[repo][donor.TeamID] = true
+		if donor.Share == nil || *donor.Share < 0 {
+			allMeasured = false
+		} else {
+			linkedShares[repo] += *donor.Share
+		}
 	}
 	if len(teamsByRepo) == 0 {
 		return result.RepoEffort, ownershipOutcomeNoEligibleOwner
@@ -86,9 +117,10 @@ func allocateTeamOwnership(result MaterializeComponentResult, input MaterializeC
 		repos = append(repos, repo)
 	}
 	sort.Strings(repos)
-	share := 1.0 / float64(len(repos))
+	weights := repoWeights(repos, linkedShares, allMeasured)
 	records := make([]chwrite.RepoEffortRecord, 0, len(repos))
-	for _, repo := range repos {
+	for index, repo := range repos {
+		share := weights[index]
 		teams := make([]string, 0, len(teamsByRepo[repo]))
 		for team := range teamsByRepo[repo] {
 			teams = append(teams, team)

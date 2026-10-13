@@ -285,3 +285,95 @@ func TestTeamOwnershipZeroRepoEvidenceIsNotEvidence(t *testing.T) {
 		})
 	}
 }
+
+func ownershipUnit(t *testing.T, effort float64) (MaterializeComponentResult, MaterializeComponentInput) {
+	t.Helper()
+	input := windowedInput()
+	input.Component = issueComponentOf("issue-a")
+	input.WorkItems = map[string]chquery.WorkItem{
+		"issue-a": {WorkItemID: "issue-a", CreatedAt: time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)},
+	}
+	input.ActiveHours = map[string]float64{"issue-a": effort}
+	result, err := MaterializeComponent(input)
+	if err != nil || result.Skipped != "" {
+		t.Fatalf("component: %+v %v", result, err)
+	}
+	return result, input
+}
+
+func shareOf(v float64) *float64 { return &v }
+
+// D5988 (chris 2026-10-12): a unit that spans repositories splits its effort by
+// the stored linked share, never equally.
+func TestTeamOwnershipWeighsRepositoriesByLinkedShare(t *testing.T) {
+	a, b := uuid.MustParse(testRepoID), uuid.MustParse(otherRepoID)
+	result, input := ownershipUnit(t, 10)
+	rows, outcome := allocateTeamOwnership(result, input, []chquery.TeamRepoDonor{
+		{WorkItemID: "issue-a", TeamID: "alpha", RepoID: a, Share: shareOf(0.8)},
+		{WorkItemID: "issue-a", TeamID: "alpha", RepoID: b, Share: shareOf(0.2)},
+	})
+	if outcome != ownershipOutcomeAllocated || len(rows) != 2 {
+		t.Fatalf("outcome=%s rows=%d", outcome, len(rows))
+	}
+	want := map[uuid.UUID]float64{a: 0.8, b: 0.2}
+	var weights float64
+	for _, row := range rows {
+		w := want[*row.RepoID]
+		if math.Abs(row.AllocationWeight-w) > 1e-12 || math.Abs(row.EffortValue-10*w) > 1e-12 {
+			t.Fatalf("repo %s weight=%g effort=%g want weight %g", row.RepoID, row.AllocationWeight, row.EffortValue, w)
+		}
+		weights += row.AllocationWeight
+	}
+	if math.Abs(weights-1) > 1e-12 {
+		t.Fatalf("weights sum to %g", weights)
+	}
+}
+
+// Several donor teams of one repository add their shares; the weights are
+// renormalised over the unit's repositories so they still sum to 1.
+func TestTeamOwnershipSumsDonorTeamSharesPerRepository(t *testing.T) {
+	a, b := uuid.MustParse(testRepoID), uuid.MustParse(otherRepoID)
+	result, input := ownershipUnit(t, 12)
+	rows, _ := allocateTeamOwnership(result, input, []chquery.TeamRepoDonor{
+		{WorkItemID: "issue-a", TeamID: "alpha", RepoID: a, Share: shareOf(0.5)},
+		{WorkItemID: "issue-a", TeamID: "beta", RepoID: a, Share: shareOf(0.25)},
+		{WorkItemID: "issue-a", TeamID: "alpha", RepoID: b, Share: shareOf(0.25)},
+	})
+	want := map[uuid.UUID]float64{a: 0.75, b: 0.25}
+	for _, row := range rows {
+		if math.Abs(row.AllocationWeight-want[*row.RepoID]) > 1e-12 {
+			t.Fatalf("repo %s weight=%g want %g", row.RepoID, row.AllocationWeight, want[*row.RepoID])
+		}
+	}
+}
+
+// Known limit (same as teamscope.OwnerShares): NULL = not measured, not zero.
+// When any owner row of the unit has no measured share, no weight is invented
+// and the unit splits equally.
+func TestTeamOwnershipSplitsEquallyWhenAnyShareIsNotMeasured(t *testing.T) {
+	a, b := uuid.MustParse(testRepoID), uuid.MustParse(otherRepoID)
+	for name, donors := range map[string][]chquery.TeamRepoDonor{
+		"none measured": {
+			{WorkItemID: "issue-a", TeamID: "alpha", RepoID: a},
+			{WorkItemID: "issue-a", TeamID: "alpha", RepoID: b},
+		},
+		"one not measured": {
+			{WorkItemID: "issue-a", TeamID: "alpha", RepoID: a, Share: shareOf(0.9)},
+			{WorkItemID: "issue-a", TeamID: "alpha", RepoID: b},
+		},
+		"measured sum to zero": {
+			{WorkItemID: "issue-a", TeamID: "alpha", RepoID: a, Share: shareOf(0)},
+			{WorkItemID: "issue-a", TeamID: "alpha", RepoID: b, Share: shareOf(0)},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, input := ownershipUnit(t, 8)
+			rows, _ := allocateTeamOwnership(result, input, donors)
+			for _, row := range rows {
+				if math.Abs(row.AllocationWeight-0.5) > 1e-12 || math.Abs(row.EffortValue-4) > 1e-12 {
+					t.Fatalf("repo %s weight=%g effort=%g, want an equal split", row.RepoID, row.AllocationWeight, row.EffortValue)
+				}
+			}
+		})
+	}
+}

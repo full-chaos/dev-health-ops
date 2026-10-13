@@ -29,6 +29,7 @@ import (
 	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 )
 
@@ -221,6 +222,7 @@ func ResolveModelNameForOrg(
 // this request use."
 func newProviderForOrg(
 	ctx context.Context, kind categorize.ProviderKind, orgID, model string, orgSettings llmorgsettings.Resolver,
+	budget llmbudget.Store,
 ) (categorize.Provider, error) {
 	if orgSettings != nil {
 		creds, ok, err := orgSettings.Credentials(ctx, orgID, string(kind))
@@ -228,7 +230,17 @@ func newProviderForOrg(
 			return nil, err
 		}
 		if ok {
-			return newProviderFromCredentials(kind, creds.APIKey.Reveal(), creds.BaseURL, model)
+			provider, err := newProviderFromCredentials(kind, creds.APIKey.Reveal(), creds.BaseURL, model)
+			if err != nil || budget == nil {
+				return provider, err
+			}
+			// CHAOS-9451: an org's BYO spend is capped by its LLM budget
+			// (llm/budget.py attach_llm_budget_guard). A call the budget
+			// refuses is never sent.
+			return categorize.WithBudget(provider, llmbudget.Guard{
+				Store: budget, OrgID: orgID, Provider: string(kind), Model: provider.Model(),
+				BaseURL: creds.BaseURL, Lookup: os.LookupEnv,
+			}), nil
 		}
 		// Not usable via org BYO. team-lead ruling (codex round 1, P2 --
 		// SSRF-fallback telemetry, the one finding this package's own
@@ -320,7 +332,7 @@ var (
 // interpolates apiKey/baseURL (providerkind_credentials_test.go).
 func CompleteInvestmentMixExplanationForOrg(
 	ctx context.Context, requestedProvider, requestedModel, orgID string,
-	orgSettings llmorgsettings.Resolver, fullPrompt string,
+	orgSettings llmorgsettings.Resolver, budget llmbudget.Store, fullPrompt string,
 ) (result categorize.CompletionResult, resolvedProvider string, resolvedModel string, err error) {
 	kind, err := categorize.ResolveTextProviderKindForOrg(ctx, requestedProvider, orgID, orgResolverFunc(orgSettings))
 	if err != nil {
@@ -342,7 +354,7 @@ func CompleteInvestmentMixExplanationForOrg(
 	// guess is needed once the report comes from construction itself.
 	model, _ := ResolveModelNameForOrg(ctx, kind, requestedModel, orgID, orgSettings)
 
-	provider, err := newProviderForOrg(ctx, kind, orgID, model, orgSettings)
+	provider, err := newProviderForOrg(ctx, kind, orgID, model, orgSettings, budget)
 	if err != nil {
 		// No provider was constructed, so there is nothing to read Model()
 		// from; model is investmentexplain's own best-effort resolution,
@@ -372,7 +384,7 @@ func CompleteInvestmentMixExplanationForOrg(
 // separate functions rather than one switch.
 func CompleteWorkUnitExplanationForOrg(
 	ctx context.Context, requestedProvider, requestedModel, orgID string,
-	orgSettings llmorgsettings.Resolver, fullPrompt string,
+	orgSettings llmorgsettings.Resolver, budget llmbudget.Store, fullPrompt string,
 ) (result categorize.CompletionResult, resolvedProvider string, resolvedModel string, err error) {
 	kind, err := categorize.ResolveTextProviderKindForOrg(ctx, requestedProvider, orgID, orgResolverFunc(orgSettings))
 	if err != nil {
@@ -394,7 +406,7 @@ func CompleteWorkUnitExplanationForOrg(
 	// guess is needed once the report comes from construction itself.
 	model, _ := ResolveModelNameForOrg(ctx, kind, requestedModel, orgID, orgSettings)
 
-	provider, err := newProviderForOrg(ctx, kind, orgID, model, orgSettings)
+	provider, err := newProviderForOrg(ctx, kind, orgID, model, orgSettings, budget)
 	if err != nil {
 		// No provider was constructed, so there is nothing to read Model()
 		// from; model is investmentexplain's own best-effort resolution,

@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -32,6 +35,9 @@ type OpenAIProviderConfig struct {
 	// CategorizationRequest/InvestmentMixExplanationRequest.
 	MaxOutputTokens int
 	HTTPClient      *http.Client
+	// Budget, when set, reserves and settles every HTTP attempt against the
+	// organization's BYO LLM budget (set by WithBudget).
+	Budget *llmbudget.Guard `json:"-"`
 }
 
 const (
@@ -140,12 +146,18 @@ func (p *OpenAIProvider) Complete(ctx context.Context, request CompletionRequest
 	// configured minimum, only raises it.
 	maxTokens := p.initialMaxOutputTokens(request)
 
+	requestKey := "shared:" + uuid.NewString()
 	var lastErr *llmError
 	for attempt := 0; attempt <= openAIMaxRetries; attempt++ {
 		body := p.responsesBody(request, maxTokens)
 
-		result, incompleteReason, err := p.executeResponsesRequest(withLLMAttempt(ctx, attempt+1), body)
+		result, incompleteReason, err := p.guardedResponses(ctx, requestKey, attempt+1, body)
 		if err != nil {
+			// A budget refusal is final: it is not a provider failure and a retry
+			// would only reserve again.
+			if budgetRefusal(err) {
+				return CompletionResult{}, err
+			}
 			classified := classifyProviderError(err, statusCodeOf(err), headerOf(err), "openai", p.cfg.Model)
 			lastErr = classified
 			if isRetryable(classified) && attempt < openAIMaxRetries {

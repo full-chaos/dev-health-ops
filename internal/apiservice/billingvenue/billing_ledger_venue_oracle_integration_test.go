@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -323,7 +324,7 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	normalizePython := billingNormalizer(seeded, recordedAt(t, golden, start))
 	python := normalizeAnswers(rawPython, normalizePython)
 	for index, answer := range python {
-		if strings.Contains(answer.Body, goOnlyEntitlementMember) || strings.Contains(answer.Body, goOnlyEntitlementKey) {
+		if strings.Contains(answer.Body, `"`+goOnlyEntitlementKey+`"`) {
 			t.Fatalf("frozen python answer %q holds %s, so it is not Go-only", requests[index].Name, goOnlyEntitlementKey)
 		}
 	}
@@ -344,13 +345,14 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		Normalize: func(_ venueoracle.Request, body string) string {
-			return strings.Replace(normalize(body), goOnlyEntitlementMember, "", 1)
+			dropped, _ := dropGoOnlyFeature(normalize(body))
+			return dropped
 		},
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
 			if strings.HasPrefix(request.Name, "ent: ") && goResponse.Status == 200 {
 				entitlementsInspected++
-				if !strings.Contains(goResponse.Body, goOnlyEntitlementMember) {
-					t.Errorf("%s: go entitlements lack %s", request.Name, goOnlyEntitlementMember)
+				if _, held := dropGoOnlyFeature(goResponse.Body); !held {
+					t.Errorf("%s: go entitlements lack features.%s=false", request.Name, goOnlyEntitlementKey)
 				}
 			}
 			wants, ok := reconcileWants[request.Name]
@@ -416,13 +418,39 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 // goOnlyEntitlementKey is a decision key added after the frozen Python build
 // (CHAOS-9311, #4032): its api tree is deleted, so no newer Python build can
 // record it and the Go registry is its only source. Go publishes it, false for
-// every seeded org, as the last member of the entitlements features. The
-// comparison drops it from the Go body only; the frozen answers must not hold
-// it, and every Go entitlements answer must, so the allowance hides no drift.
-const (
-	goOnlyEntitlementKey    = `"acr_service_model"`
-	goOnlyEntitlementMember = `,"acr_service_model":false`
-)
+// every seeded org, as a member of the entitlements "features" object. The
+// comparison drops that one member from the Go body only; the frozen answers
+// must not hold the key, and every Go entitlements answer must hold it under
+// "features" as false, so the allowance hides no drift. The same key anywhere
+// else in the body is not dropped and reads as a DIFF.
+const goOnlyEntitlementKey = "acr_service_model"
+
+// dropGoOnlyFeature removes features.acr_service_model from an entitlements
+// body when it is there and false. held reports whether it was.
+func dropGoOnlyFeature(body string) (out string, held bool) {
+	value, err := pyjson.DecodeString(body)
+	if err != nil {
+		return body, false
+	}
+	root, ok := value.(*pyjson.Object)
+	if !ok {
+		return body, false
+	}
+	rawFeatures, _ := root.Get("features")
+	features, ok := rawFeatures.(*pyjson.Object)
+	if !ok {
+		return body, false
+	}
+	if flag, present := features.Get(goOnlyEntitlementKey); !present || flag != false {
+		return body, false
+	}
+	features.Delete(goOnlyEntitlementKey)
+	encoded, err := pyjson.Marshal(root)
+	if err != nil {
+		return body, false
+	}
+	return string(encoded), true
+}
 
 // seededIDs is every id the seed wrote: the normalizer keeps these and
 // blanks the ids either plane generates.

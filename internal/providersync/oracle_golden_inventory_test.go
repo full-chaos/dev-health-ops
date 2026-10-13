@@ -104,14 +104,14 @@ func TestEveryOraclePairHasAFrozenGolden(t *testing.T) {
 			t.Errorf("golden %s: %v", name, err)
 			continue
 		}
-		if file.Header.PythonBuild != oraclePairPythonBuild {
-			t.Errorf("golden %s was executed on build %s, the pairs pin %s", name, file.Header.PythonBuild, oraclePairPythonBuild)
-		}
 		if len(file.Requests) != 1 {
 			t.Errorf("golden %s holds %d answers: a pair golden holds the one answer of one comparison", name, len(file.Requests))
 			continue
 		}
 		pairID := file.Requests[0].Name
+		if want := oraclePairBuild(pairID); file.Header.PythonBuild != want {
+			t.Errorf("golden %s was executed on build %s, pair %q pins %s", name, file.Header.PythonBuild, pairID, want)
+		}
 		if !pairs[pairID] {
 			t.Errorf("golden %s answers pair %q, which is no checked-in testdata/oracle_pairs file", name, pairID)
 			continue
@@ -136,6 +136,16 @@ func TestEveryOraclePairHasAFrozenGolden(t *testing.T) {
 	for _, name := range pinnedNames {
 		if !onDisk[name] {
 			t.Errorf("pinned golden %s is missing from %s: record it by execution (see the recipe a test of that pair prints)", name, oraclePairGoldenDir)
+		}
+	}
+
+	for path, pairID := range oracleHarnessFilesAfterBuild {
+		if _, err := fs.Stat(embeddedOracleSources, path); err != nil {
+			t.Errorf("oracleHarnessFilesAfterBuild names %s, which is no harness file: %v", path, err)
+		}
+		if oraclePairBuild(pairID) == oraclePairPythonBuild {
+			t.Errorf("harness file %s was added after build %s by pair %q, which is answered on that build: "+
+				"pin the pair to a later build in oraclePairLaterPythonBuilds", path, oraclePairPythonBuild, pairID)
 		}
 	}
 

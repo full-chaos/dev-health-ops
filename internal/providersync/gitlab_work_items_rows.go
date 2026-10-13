@@ -67,6 +67,7 @@ type gitlabIssueWorkItemPayload struct {
 	URL         *string                      `json:"url"`
 	Weight      *float64                     `json:"weight"`
 	Milestone   *gitlabIssueMilestonePayload `json:"milestone"`
+	DueDate     *string                      `json:"due_date"`
 }
 
 type gitlabMergeRequestWorkItemPayload struct {
@@ -176,9 +177,13 @@ func parseGitLabWorkItemTime(value *string) *time.Time {
 	if value == nil || strings.TrimSpace(*value) == "" {
 		return nil
 	}
-	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*value))
+	raw := strings.TrimSpace(*value)
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
-		return nil
+		parsed, err = time.Parse("2006-01-02", raw)
+		if err != nil {
+			return nil
+		}
 	}
 	parsed = parsed.UTC()
 	return &parsed
@@ -262,7 +267,7 @@ func normalizeGitLabIssueWorkItem(
 		ProjectID: stringPointer(fullName), Assignees: assignees, Reporter: reporter,
 		CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC(), ClosedAt: closedAt,
 		Labels: labels, StoryPoints: payload.Weight, SprintID: milestoneID,
-		SprintName: milestoneName, URL: urlValue,
+		SprintName: milestoneName, URL: urlValue, DueAt: parseGitLabWorkItemTime(payload.DueDate),
 		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
 	}
 	transitions := normalizeGitLabIssueLabelTransitions(

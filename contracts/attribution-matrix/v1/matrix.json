@@ -81,6 +81,12 @@
     {
       "provider": "github",
       "entity": "pull_requests",
+      "check": "full_tie_owners_are_all_main",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "pull_requests",
       "check": "pull_request_inherits_only_from_a_linked_issue",
       "state": "pass"
     },
@@ -196,6 +202,12 @@
     {
       "provider": "gitlab",
       "entity": "pull_requests",
+      "check": "full_tie_owners_are_all_main",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "pull_requests",
       "check": "pull_request_inherits_only_from_a_linked_issue",
       "state": "pass"
     },
@@ -291,6 +303,12 @@
       "provider": "jira",
       "entity": "pull_requests",
       "check": "pull_request_team_is_not_a_membership",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "pull_requests",
+      "check": "full_tie_owners_are_all_main",
       "state": "pass"
     },
     {
@@ -397,6 +415,12 @@
       "provider": "linear",
       "entity": "pull_requests",
       "check": "pull_request_team_is_not_a_membership",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "pull_requests",
+      "check": "full_tie_owners_are_all_main",
       "state": "pass"
     },
     {

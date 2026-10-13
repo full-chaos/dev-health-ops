@@ -206,11 +206,19 @@ const (
 //	owner_repo_id    text of the repository id (join with toString(<repo column>))
 //	owner_team_id    the owning team
 //	owner_team_label the team's name, its id when the catalog holds no name
-//	owner_share      1 / (number of owners in the set); the shares of one repository sum to 1
+//	owner_share      the owner's linked share of the repository (team_repo_ownership.share, D5988: its
+//	                 issue<->PR links of every tier over all links of the repository), renormalised over the
+//	                 owners in the set so the shares of one repository sum to 1; equal among the owners
+//	                 (1 / number of owners) only when the set holds no complete measure (see below)
 //	owner_matched    1 (an unmatched LEFT JOIN reads the type's zero, so a caller tests this, never NULL)
 //
 // A repository owned by several teams is shared among them, not given to one (is_primary and priority are not
-// consulted, as in RepoCondition): a grouping that sums its groups gets the repository's effort once. teamIDs
+// consulted, as in RepoCondition): a grouping that sums its groups gets the repository's effort once. The main
+// owner keeps its own share and each lesser owner keeps its own lesser share, never an equal split (chris
+// 2026-10-12, D5988, team-attribution.md section 0.4d); a full tie is stored as equal shares (D5990), so it reads
+// equal. A team's share is the largest non-NULL share of its open rows (an inferred row carries it; a
+// provider_access, native or manual row has NULL = not measured, which is not zero). When any owner in the set has
+// no measured share, or the measured shares sum to nothing, no weight is invented: the set splits equally. teamIDs
 // narrows the owners to the teams in view (a team scope), so a team scope of one team gives that team the whole
 // repository, the same total the scope's own readers give it; no ids = every owning team. The source is a derived
 // table WITHOUT alias; the caller aliases it.
@@ -228,13 +236,20 @@ func OwnerShares(orgID string, teamIDs []string, asOf time.Time) (source string,
         owned.owner_repo_id AS owner_repo_id,
         owned.owner_team_id AS owner_team_id,
         if(nt.team_name != '', nt.team_name, owned.owner_team_id) AS owner_team_label,
-        1.0 / count() OVER (PARTITION BY owned.owner_repo_id) AS owner_share,
+        if(
+            sum(if(owned.stored_share IS NULL, 1, 0)) OVER (PARTITION BY owned.owner_repo_id) = 0
+                AND sum(owned.stored_share) OVER (PARTITION BY owned.owner_repo_id) > 0,
+            owned.stored_share / sum(owned.stored_share) OVER (PARTITION BY owned.owner_repo_id),
+            1.0 / count() OVER (PARTITION BY owned.owner_repo_id)
+        ) AS owner_share,
         1 AS owner_matched
     FROM (
-        SELECT DISTINCT
+        SELECT
             coalesce(toString(o.repo_id), toString(r.id)) AS owner_repo_id,
-            o.team_id AS owner_team_id
+            o.team_id AS owner_team_id,
+            max(o.share) AS stored_share
 %[1]s
+        GROUP BY owner_repo_id, owner_team_id
     ) AS owned
     LEFT JOIN (
         SELECT id AS team_id, max(name) AS team_name

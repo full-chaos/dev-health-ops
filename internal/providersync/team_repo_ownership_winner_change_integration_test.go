@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-
-	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // ownershipRowSpan is one stored inferred row of a repository: its team, role
@@ -136,7 +134,7 @@ func TestAWinnerChangeIsDatedAtTheRunWithOneMainOwnerAtEveryInstant(t *testing.T
 				}
 			}
 			for at, wantTeam := range map[time.Time]string{mid.Add(time.Minute): teamA, change.Add(-time.Millisecond): teamA, change.Add(time.Millisecond): teamB} {
-				owners, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, org, at)
+				owners, err := joinedOwnersByRepo(ctx, conn, org, at)
 				if err != nil {
 					t.Fatal(err)
 				}

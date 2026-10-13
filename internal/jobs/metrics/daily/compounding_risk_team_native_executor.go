@@ -140,7 +140,7 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	//
 	// #2298 r1 (P1): ResolveOwnershipThenPatterns no longer takes an explicit
 	// teamIDs list -- it resolves ownership via a single org-wide
-	// teamownership.AuthoritativeOwnerByRepo query (correctly ranked by
+	// teamownership.AuthoritativeOwnersByRepo query (correctly ranked by
 	// is_primary/specificity/updated_at/team_id), not a per-team loop, so
 	// there is nothing left here to build a teamIDs slice from.
 	//
@@ -207,7 +207,7 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	}
 	for _, repo := range withoutMetrics {
 		resolvedRepoIDs = append(resolvedRepoIDs, repo.id)
-		repoToTeam[repo.id.String()] = repo.team
+		repoToTeam[repo.id.String()] = repo.teams
 	}
 	reviewWindows, err := executor.loader.LoadReviewWindows(ctx, run.OrganizationID, resolvedRepoIDs, day)
 	if err != nil {
@@ -284,17 +284,17 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 }
 
 type ownedRepository struct {
-	id   uuid.UUID
-	team string
+	id    uuid.UUID
+	teams []string
 }
 
 // ownedRepositoriesWithoutMetrics is every repository of the organization with
 // no repo_metrics_daily row of the day that resolves (the same ownership and
 // pattern rule as the day's repositories) to a team the day's repositories
-// already resolve to, in repository id order.
+// already resolve to, in repository id order, with those of its owners.
 func (executor *CompoundingRiskTeamExecutor) ownedRepositoriesWithoutMetrics(
 	ctx context.Context, organizationID string, day time.Time,
-	orgRepoMetrics []compoundingrisk.RepoMetricsRow, repoToTeam map[string]string,
+	orgRepoMetrics []compoundingrisk.RepoMetricsRow, repoToTeam map[string][]string,
 	patternResolver numerical.RepoTeamResolver,
 ) ([]ownedRepository, error) {
 	withMetrics := make(map[string]bool, len(orgRepoMetrics))
@@ -302,8 +302,10 @@ func (executor *CompoundingRiskTeamExecutor) ownedRepositoriesWithoutMetrics(
 		withMetrics[row.RepoID] = true
 	}
 	teamsOfTheDay := map[string]bool{}
-	for _, team := range repoToTeam {
-		teamsOfTheDay[team] = true
+	for _, teams := range repoToTeam {
+		for _, team := range teams {
+			teamsOfTheDay[team] = true
+		}
 	}
 	all, err := executor.loader.LoadOrgRepoIDs(ctx, organizationID)
 	if err != nil {
@@ -328,8 +330,14 @@ func (executor *CompoundingRiskTeamExecutor) ownedRepositoriesWithoutMetrics(
 	}
 	var owned []ownedRepository
 	for _, id := range candidates {
-		if team, ok := resolved[id.String()]; ok && teamsOfTheDay[team] {
-			owned = append(owned, ownedRepository{id: id, team: team})
+		var teams []string
+		for _, team := range resolved[id.String()] {
+			if teamsOfTheDay[team] {
+				teams = append(teams, team)
+			}
+		}
+		if len(teams) > 0 {
+			owned = append(owned, ownedRepository{id: id, teams: teams})
 		}
 	}
 	return owned, nil

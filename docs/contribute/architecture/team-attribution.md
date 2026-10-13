@@ -1713,7 +1713,7 @@ item (`dropInactiveTeamCandidates`, section 0.2) and, with the same test of the 
 (`internal/teamactive`, `NewestRowInactive`), gives no repository, no repository pattern and no member to a daily
 metric family:
 
-- `teamownership.AuthoritativeOwnerByRepo` skips an ownership row of an inactive team. A lower-ranked row of an active
+- `teamownership.AuthoritativeOwnersByRepo` skips an ownership row of an inactive team. A lower-ranked row of an active
   team for the same repository then wins; a repository with no active owner goes to the caller's pattern fallback.
   Callers: testops, `ai_impact`, `team_cognitive_load`, `team_complexity`, `compounding_risk_team`, `team_wellbeing`.
 - `LoadWellbeingTeams` (`team_wellbeing` for the names and the pattern fallback, `ic_finalize`, and the pattern fallback of the three finalize families) and
@@ -2032,7 +2032,7 @@ again, a change of main owner) starts and ends at that run, so a repository has 
 > **Superseded (chris, 2026-10-12 17:26Z, lead D5987, option C):** for a day before the first recorded ownership
 > of a repository, the repository's FIRST recorded owners apply backward; the earlier rule ("an item of a day
 > before the first known ownership stays unassigned", chris 2026-10-10, D5922) no longer holds. Not yet
-> implemented in the readers (`OwnersByRepo`, `AuthoritativeOwnerByRepo`, `teamscope`): CHAOS-9404; the
+> implemented in the readers (`OwnersByRepo`, `AuthoritativeOwnersByRepo`, `teamscope`): CHAOS-9404; the
 > `valid_from` of the inferred derivation is CHAOS-9403.
 
 - **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
@@ -2767,14 +2767,18 @@ retraction of it keeps all its rows that run (no write, retraction or close; `te
 and waits for a run that proves them all, so a held row never leaves a main row that is no longer a leader's, nor a repo without the main row it had. A new main
 owner never starts before the end of another team's main tenure (CHAOS-9403 `after_other_owner`); a main row that was
 already open before that end belonged to a main owner beside the other team (a tie) and keeps its start; a co-owner's
-start is its own evidence. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick one
-owner never take a co-owner row: `teamownership.AuthoritativeOwnerByRepo` and the cognitive-load gate leave out
-`is_primary = 2` rows and rank `(is_primary = 1) DESC` first, and the cascade's `LoadRepos` gives no `repo_ownership`
-candidate from a co-owner row (`RankDerivationCandidates` also ranks only `is_primary = 1` first). So a repo with co-owners
-only (a tie with no main owner) has no inferred one owner, as before co-owner rows existed, and the main owner keeps
-outranking a `provider_access` grant by specificity. An ownership fact with `is_primary = 2` carries the confidence of a
-fact that is not primary (`medium`). Readers that use the co-owner rows and the share are
-CHAOS-9408/9409/9410/9413.
+start is its own evidence. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick the
+owner never take a co-owner row, and **return every main owner** (D5990): `teamownership.AuthoritativeOwnersByRepo`
+(repo -> owners) and the cognitive-load gate leave out `is_primary = 2` rows and rank `(is_primary = 1) DESC` first; when
+the first row is a main owner's, every other main owner at the same specificity is an owner too, in rank order (a repo
+whose top row is a `provider_access` grant keeps one owner). The daily families whose table keys a row by team count the
+repo whole in each main owner (team cognitive load, team complexity, compounding risk team scope, wellbeing
+`team_metrics_daily`, AI impact); a TestOps daily table holds one row per repo, so TestOps takes the first owner by rank.
+The cascade's `LoadRepos` gives no `repo_ownership` candidate from a co-owner row (`RankDerivationCandidates` also ranks
+only `is_primary = 1` first), and the other main owners of a tie are co-owner rows of the item (section 0.4d). The main
+owner keeps outranking a `provider_access` grant by specificity. An ownership fact with `is_primary = 2` carries the
+confidence of a fact that is not primary (`medium`). Readers that use the co-owner rows and the share are tickets 9408,
+9409, 9410 and 9413.
 Before CHAOS-8945, a single `explicit_text` link from a second team dropped the repo and retracted its owner; before
 CHAOS-9411, the other teams got no row and no share was stored. Pinned by
 `internal/providersync/team_repo_ownership_ranked_owner_integration_test.go` (real ClickHouse, every provider pair: main
@@ -2786,9 +2790,13 @@ per repo), `TestAWinnerChangeIsDatedAtTheRunWithOneMainOwnerAtEveryInstant` (rea
 row at every instant, the one-owner read before and after the change, a rerun writes nothing),
 `TestAFullTieThatFormsAndEndsIsDatedAtTheRuns` and `TestRankedOwnerFullTie*` (real ClickHouse, every provider: every tied
 team is a main owner, the main rows of every instant are its leaders', reruns write nothing), and the reader rank tests
-`TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt`, `TestACoOwnerFactNeverOutranksTheMainOwner`,
-`TestLoadReposLeavesOutCoOwnerRows`, `TestTheRepoGateNeverTakesACoOwnerAsTheOwner` and
-`TestAnInferredOwnerStillOutranksAProviderAccessGrant`.
+`TestAuthoritativeOwnersByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt`, `TestACoOwnerFactNeverOutranksTheMainOwner`,
+`TestLoadReposLeavesOutCoOwnerRows`, `TestTheRepoGateNeverTakesACoOwnerAsTheOwner`,
+`TestAnInferredOwnerStillOutranksAProviderAccessGrant` (a tie's main owners outrank a grant),
+`TestResolveOwnedRepoIDTakesEveryMainOwnerOfATie`, `TestResolveFromOwnershipMapKeepsEveryMainOwner`, and the family
+tests `TestARepositoryWithSeveralMainOwnersCountsWholeInEach` (cognitive load, complexity, wellbeing resolver, TestOps
+first owner), `TestBuildTeamRowsCountsARepositoryWholeInEachMainOwner`, `TestComputeTeamWellbeingCountsARepositoryWholeInEachMainOwner`
+and `TestComputeCountsAPullRequestWholeInEachMainOwner`.
 
 `work_items.repo_id` (and, for the PR-inheritance branch, `work_graph_issue_pr.repo_id`) is the
 derivation's output column, not resolved by a join through `repos` — though the WRITE side does

@@ -144,7 +144,7 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 //
 // Also checks that every reader this producer's own doc comments name as
 // consulting team_repo_ownership (internal/teamownership.OwnedRepoIDs,
-// the FINAL+DISTINCT membership shape, and .AuthoritativeOwnerByRepo, the
+// the FINAL+DISTINCT membership shape, and .AuthoritativeOwnersByRepo, the
 // FINAL+ORDER BY tie-break shape) resolves the identical answer before and
 // after an unchanged re-run -- the two query shapes every other reader in
 // this table's PHASE 1 audit also uses (GROUP BY + argMax is the third
@@ -156,7 +156,7 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 // (asOf) or seeding a LATER valid_from against real wall time. Every
 // team_repo_ownership read this file and its writer path exercise now binds
 // named {as_of:DateTime64(3, 'UTC')} parameters (loadTeamRepoOwnershipProjectLinks,
-// OwnedRepoIDs, AuthoritativeOwnerByRepo), which preserve millisecond
+// OwnedRepoIDs, AuthoritativeOwnersByRepo), which preserve millisecond
 // precision end to end -- but a positional `?` DateTime64 parameter on this
 // driver round-trips a Go time.Time at whole-SECOND precision (confirmed
 // empirically against this same ClickHouse image: SELECT toString(?) with a
@@ -228,7 +228,7 @@ func TestTeamRepoOwnershipDerivationUnchangedFactWritesNothing(t *testing.T) {
 		t.Fatalf("OwnedRepoIDs changed across the unchanged re-run: before=%v after=%v", beforeOwned, afterOwned)
 	}
 	if !reflect.DeepEqual(beforeAuth, afterAuth) {
-		t.Fatalf("AuthoritativeOwnerByRepo changed across the unchanged re-run: before=%v after=%v", beforeAuth, afterAuth)
+		t.Fatalf("AuthoritativeOwnersByRepo changed across the unchanged re-run: before=%v after=%v", beforeAuth, afterAuth)
 	}
 
 	// Retract: the work item no longer carries a project_id (a later
@@ -407,7 +407,7 @@ func TestTeamRepoOwnershipDerivationAsOfHistoryAcrossChangeAndRetraction(t *test
 		t.Fatalf("as-of instant1: expected team-new to own nothing yet, got %v", got)
 	}
 	if auth := mustAuthoritativeOwner(t, ctx, conn, orgID, instant1); auth[repoID.String()] != "team-old" {
-		t.Fatalf("as-of instant1: expected AuthoritativeOwnerByRepo[%s]=team-old, got %v", repoID, auth)
+		t.Fatalf("as-of instant1: expected AuthoritativeOwnersByRepo[%s]=team-old, got %v", repoID, auth)
 	}
 
 	// AS-OF instant2: only team-new owns it, after the change, before the
@@ -421,7 +421,7 @@ func TestTeamRepoOwnershipDerivationAsOfHistoryAcrossChangeAndRetraction(t *test
 		t.Fatalf("as-of instant2: expected team-new to own [%s], got %v", repoID, got)
 	}
 	if auth := mustAuthoritativeOwner(t, ctx, conn, orgID, instant2); auth[repoID.String()] != "team-new" {
-		t.Fatalf("as-of instant2: expected AuthoritativeOwnerByRepo[%s]=team-new, got %v", repoID, auth)
+		t.Fatalf("as-of instant2: expected AuthoritativeOwnersByRepo[%s]=team-new, got %v", repoID, auth)
 	}
 
 	// AS-OF instant3: nobody owns it, after the retraction.
@@ -481,9 +481,9 @@ func mustOwnedRepoIDs(t *testing.T, ctx context.Context, conn driver.Conn, orgID
 
 func mustAuthoritativeOwner(t *testing.T, ctx context.Context, conn driver.Conn, orgID string, asOf time.Time) map[string]string {
 	t.Helper()
-	owners, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, orgID, asOf)
+	owners, err := joinedOwnersByRepo(ctx, conn, orgID, asOf)
 	if err != nil {
-		t.Fatalf("AuthoritativeOwnerByRepo: %v", err)
+		t.Fatalf("AuthoritativeOwnersByRepo: %v", err)
 	}
 	return owners
 }

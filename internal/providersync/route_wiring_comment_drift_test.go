@@ -135,6 +135,33 @@ func symbolsConstructedByTheWorker(t *testing.T) map[string]bool {
 		t.Fatal("parsed the wiring file and found ZERO providersync symbols -- the parser is broken, " +
 			"not the tree; a green result here would be a false clean")
 	}
+	// The worker's work-items routes are built by this package's SelectWorkItemsRoute, which the
+	// wiring file calls: every package symbol that selector names is constructed by the worker too.
+	if !direct["SelectWorkItemsRoute"] {
+		t.Fatal("the wiring file no longer calls providersync.SelectWorkItemsRoute -- the work-items " +
+			"wiring moved, and this guard must follow it")
+	}
+	selectorFile, err := parser.ParseFile(fset, "work_items_route_select.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse the work-items route selector: %v", err)
+	}
+	selected := 0
+	ast.Inspect(selectorFile, func(node ast.Node) bool {
+		ident, ok := node.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		name := ident.Name
+		direct[name] = true
+		if strings.HasPrefix(name, "New") && len(name) > 3 {
+			direct[name[3:]] = true
+		}
+		selected++
+		return true
+	})
+	if selected == 0 {
+		t.Fatal("parsed the work-items route selector and found ZERO identifiers -- a false clean")
+	}
 
 	// TRANSITIVE field closure, to fixpoint. A handler wired as a FIELD of a
 	// constructed handler is just as live as one assigned directly, and that is

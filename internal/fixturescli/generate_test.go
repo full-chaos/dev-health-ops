@@ -40,7 +40,9 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 			t.Fatal(err)
 		}
 		sum := sha256.Sum256(raw)
-		if got := hex.EncodeToString(sum[:]); got != want {
+		if got := hex.EncodeToString(sum[:]); got != want && producedWorlds[path] {
+			t.Fatalf("%s digest = %s, want %s: a provider world changed without its digest (freeze it with TestProviderWorldsAreWhatTheProducersWrite -freeze-provider-worlds and pin the digest it prints)", path, got, want)
+		} else if got != want {
 			t.Fatalf("%s digest = %s, want %s: the frozen rows changed without their digest. They are not rewritten: the Python producer that froze them cannot run again (CHAOS-7793)", path, got, want)
 		}
 		world, err := decodeWorld(raw)
@@ -91,12 +93,38 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 				t.Fatalf("%s: %v", path, err)
 			}
 		}
-		minTables, minRows := 50, 20000
+		minTables, minRows, wantDerived := 50, 20000, 1
 		if !world.Params.WithMetrics {
 			// The raw sets (CHAOS-7301) carry no derived metrics: fewer tables, fewer rows.
 			minTables, minRows = 20, 1000
 		}
-		if derived != 1 || len(world.Tables) < minTables || rows < minRows {
+		if producedWorlds[path] {
+			// A provider world holds what one first sync of its integrations writes: the team catalog,
+			// repositories, pull requests, work items and their links, and the two tables a view fills
+			// from the work item dependencies.
+			minTables, minRows, wantDerived = 10, 50, 2
+			for _, name := range []string{"teams", "team_memberships", "work_items", "work_item_dependencies", "work_graph_issue_pr"} {
+				if !worldHoldsTable(world, name) {
+					t.Fatalf("%s: a provider world without %s", path, name)
+				}
+			}
+			// The parameters that name a provider world say what it holds: its repositories, its pull
+			// requests and the teams of its own provider.
+			repos := distinctValues(t, world, "repos", "id")
+			prs := distinctValues(t, world, "git_pull_requests", "repo_id", "number")
+			teams := distinctValues(t, world, "teams", "id", "provider")
+			ownTeams := 0
+			for key := range teams {
+				if strings.HasSuffix(key, "\x00"+world.Params.Provider) {
+					ownTeams++
+				}
+			}
+			if len(repos) != world.Params.RepoCount || len(prs) != world.Params.PRCount || ownTeams != world.Params.TeamCount {
+				t.Fatalf("%s is named --repo-count %d --pr-count %d --team-count %d and holds %d repositories, %d pull requests, %d %s teams",
+					path, world.Params.RepoCount, world.Params.PRCount, world.Params.TeamCount, len(repos), len(prs), ownTeams, world.Params.Provider)
+			}
+		}
+		if derived != wantDerived || len(world.Tables) < minTables || rows < minRows {
 			t.Fatalf("%s: %d table(s), %d derived, %d row(s): the world is not what its callers write", path, len(world.Tables), derived, rows)
 		}
 	}
@@ -108,6 +136,42 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 			}
 		}
 	}
+}
+
+// distinctValues is the set of distinct values of the columns of a world table (joined by NUL).
+func distinctValues(t *testing.T, world FrozenWorld, table string, columns ...string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, frozen := range world.Tables {
+		if frozen.Name != table {
+			continue
+		}
+		index := map[string]int{}
+		for position, column := range frozen.Columns {
+			index[column.Name] = position
+		}
+		for _, row := range frozen.Rows {
+			parts := make([]string, len(columns))
+			for position, column := range columns {
+				at, ok := index[column]
+				if !ok {
+					t.Fatalf("%s has no column %s", table, column)
+				}
+				parts[position] = fmt.Sprint(row[at])
+			}
+			out[strings.Join(parts, "\x00")] = true
+		}
+	}
+	return out
+}
+
+func worldHoldsTable(world FrozenWorld, name string) bool {
+	for _, table := range world.Tables {
+		if table.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLoadFrozenWorldRefusesAnUnfrozenSetNamingTheFrozenOnes(t *testing.T) {

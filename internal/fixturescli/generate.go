@@ -53,12 +53,24 @@ var worldFiles embed.FS
 // LoadFrozenWorld checks it on every load, not only in CI, because the parameters alone (RepoName,
 // Days, Seed, ...) name a world but say nothing about whether its rows are the ones the digest was
 // taken over -- a corrupted, truncated or hand-edited file with the same parameters would otherwise
-// load silently. A file is not rewritten: its freezer (TestFreezeGenerateWorlds) was removed with CHAOS-7793,
-// because the Python producer cannot run again.
+// load silently. A Python world is not rewritten: its freezer (TestFreezeGenerateWorlds) was removed with
+// CHAOS-7793, because the Python producer cannot run again. A provider world (producedWorlds) is rewritten
+// by its Go producers.
 var frozenWorldDigests = map[string]string{
 	"testdata/generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz":             "4767e3ae066bfa89336bc37d19644f137ef1cf0ce60e568468c55783a3400833",
 	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb",
 	"testdata/generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz": "8470b539f55e1ecd22b8ba9b52dd0921a9b51222dfd6a7d5a8050139e9f2abd8",
+	// The provider worlds (producedWorlds).
+	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "9522ce0b129e4f179cfe1a9a14581978d8a39ab9ea59ebfec216acce1184adb4",
+}
+
+// producedWorlds are the provider worlds (github of the real shape, gitlab, jira, linear): written by the
+// Go producers themselves -- the real collectors, routes, normalizers and sinks fed recorded-shape
+// provider answers (TestProviderWorldsAreWhatTheProducersWrite) -- not by Python. Unlike the Python
+// worlds they are rewritten when their producers change: that test's -freeze-provider-worlds run
+// writes them, and its plain run fails while a world is not exactly what the producers write today.
+var producedWorlds = map[string]bool{
+	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": true,
 }
 
 // GenerateParams are the parameters of one frozen `fixtures generate` run: the flags that change

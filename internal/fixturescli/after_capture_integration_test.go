@@ -182,6 +182,18 @@ func requireColumnsAfterTheCapture(t *testing.T, table FrozenTable) FrozenTable 
 	return out
 }
 
+// loadedWorldTable is a loaded table as the world it came from holds it: a Python world was captured
+// before the columns of columnsAfterTheCapture existed, so they are held to NULL and left out; a
+// provider world is written by the producers at the migration head, so it holds every column but the
+// ones the server stamps at load time (producerServerStamped).
+func loadedWorldTable(t *testing.T, params GenerateParams, table FrozenTable) FrozenTable {
+	t.Helper()
+	if producedWorlds[WorldFile(params)] {
+		return table.withoutColumns(producerServerStamped[table.Name])
+	}
+	return requireColumnsAfterTheCapture(t, table)
+}
+
 // viewFilledRowProblems compares what a view-filled table holds with what
 // its rule gives, both as key -> value. A key the rule gives and the table
 // lacks is a view that wrote no row; a key the table holds and the rule does

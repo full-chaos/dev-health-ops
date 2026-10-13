@@ -40,7 +40,12 @@ func (c Counts) Add(o Counts) Counts {
 }
 
 var (
-	emailPattern = regexp.MustCompile(`[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+`)
+	// A dotless host ("alice@localhost") is an address too. The host starts with a
+	// letter so "react@18.3.1" stays a package pin.
+	emailPattern = regexp.MustCompile(`[\p{L}\p{N}._%+'-]+@\p{L}[\p{L}\p{N}-]*(?:\.[\p{L}\p{N}-]+)*`)
+
+	// An explicit assignment of a credential label: "password: x", "token=x".
+	labeledSecretPattern = regexp.MustCompile(`(?i)\b(passwords?|passwd|passphrase|pwd|secret|api[_ -]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|token)(\s*[:=]\s*)("[^"\n]+"|'[^'\n]+'|[^\s"',;]+)`)
 
 	// Jira wiki mentions: [~username] and [~accountid:...].
 	jiraMentionPattern = regexp.MustCompile(`\[~[^\]\s]{1,128}\]`)
@@ -55,6 +60,8 @@ var (
 		regexp.MustCompile(`\+\d{1,3}(?:[\s.-]?\(?\d{1,4}\)?){2,5}`),
 		regexp.MustCompile(`\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b`),
 		regexp.MustCompile(`\b0\d{2,4}[\s.-]\d{3,4}[\s.-]\d{3,4}\b`),
+		regexp.MustCompile(`\(\d{1,4}\)[\s.-]?\d{3,4}[\s.-]\d{3,4}\b`),
+		regexp.MustCompile(`\b0\d(?:[\s.-]\d{2}){4}\b`),
 	}
 )
 
@@ -94,8 +101,17 @@ func (f *Filter) Text(text string) string {
 	}
 	// Credentials first: a "user:secret@host" URL must be gone before the
 	// e-mail pattern reads "secret@host.example" as an address.
-	filtered := logging.RedactText(text)
+	filtered := logging.RedactCredentialShapes(text)
 	f.counts.Credentials += strings.Count(filtered, credentialMarker) - strings.Count(text, credentialMarker)
+
+	filtered = labeledSecretPattern.ReplaceAllStringFunc(filtered, func(m string) string {
+		sub := labeledSecretPattern.FindStringSubmatch(m)
+		if strings.Trim(sub[3], `"'`) == credentialMarker {
+			return m
+		}
+		f.counts.Credentials++
+		return sub[1] + sub[2] + credentialMarker
+	})
 
 	filtered = emailPattern.ReplaceAllStringFunc(filtered, func(m string) string {
 		f.counts.Emails++

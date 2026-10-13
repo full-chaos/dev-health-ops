@@ -21,8 +21,14 @@ func TestTextReplacesEachClassAndKeepsTheRest(t *testing.T) {
 		{"national phone", "call (415) 555-0132 tonight", "555-0132", "call [phone-1] tonight", func(c Counts) int { return c.Phones }},
 		{"dotted phone", "call 415.555.0132 tonight", "555.0132", "call [phone-1] tonight", func(c Counts) int { return c.Phones }},
 		{"international phone", "call +44 20 7946 0958 tonight", "7946", "call [phone-1] tonight", func(c Counts) int { return c.Phones }},
-		{"url userinfo", "see https://deploy:hunter2pass@git.corp.example/repo for logs", "hunter2pass", "see [REDACTED] for logs", func(c Counts) int { return c.Credentials }},
+		{"url userinfo", "see https://deploy:hunter2pass@git.corp.example/repo for logs", "hunter2pass", "see [REDACTED]@git.corp.example/repo for logs", func(c Counts) int { return c.Credentials }},
 		{"provider token", "the token is ghp_abcdefghijklmnopqrstuvwxyz0123456789 ok", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "", func(c Counts) int { return c.Credentials }},
+		{"dotless host email", "mail alice@localhost about it", "alice@localhost", "mail [email-1] about it", func(c Counts) int { return c.Emails }},
+		{"non-ascii email", "contact δοκιμή@example.gr today", "δοκιμή@", "contact [email-1] today", func(c Counts) int { return c.Emails }},
+		{"parenthesised area code phone", "call (02) 9374 4000 today", "9374", "call [phone-1] today", func(c Counts) int { return c.Phones }},
+		{"french phone", "appelez 01 23 45 67 89 demain", "45 67", "appelez [phone-1] demain", func(c Counts) int { return c.Phones }},
+		{"labeled secret equals", "set token=abcdefgh and retry", "abcdefgh", "set token=[REDACTED] and retry", func(c Counts) int { return c.Credentials }},
+		{"labeled password quoted", `config password: "correct horse" ok`, "correct horse", `config password: [REDACTED] ok`, func(c Counts) int { return c.Credentials }},
 		{"password in prose", "password: Tr0ub4dor3xx was pasted here", "Tr0ub4dor", "", func(c Counts) int { return c.Credentials }},
 	}
 	for _, tc := range cases {
@@ -48,6 +54,9 @@ func TestTextKeepsPlainEngineeringProse(t *testing.T) {
 		"Fix PROJ-12345: timeout on 2026-10-13 12:30:45 UTC in v1.2.3",
 		"Upgrade 192.168.100.200 gateway; build 20261013123045",
 		"Secret rotation for the signing key is overdue",
+		"See https://example.com/docs/a%20b and 100%25 coverage; the /usr/token/refresh path is slow",
+		"Pin react@18.3.1 and lodash@4.17.21 before the 2026-10-13 release; call 555-0132 maybe",
+		"The token is invalid and the password expired",
 		"",
 	} {
 		f := NewFilter()
@@ -77,6 +86,7 @@ func TestTextIsIdempotent(t *testing.T) {
 	inputs := []string{
 		"mail a.b@corp.example, cc @jane-doe and [~jdoe]; call (415) 555-0132 or +44 20 7946 0958",
 		"see https://deploy:hunter2pass@git.corp.example/x password: Tr0ub4dor3xx ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+		"mail alice@localhost, δοκιμή@example.gr; call (02) 9374 4000 or 01 23 45 67 89; set token=abcdefgh, password: \"correct horse\"",
 		"plain text with nothing to hide",
 	}
 	for _, in := range inputs {

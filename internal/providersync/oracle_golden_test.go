@@ -22,10 +22,43 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// oraclePairPythonBuild is the build whose production Python answered every
-// frozen pair: python_generic_row_oracle.py executed there, once per
-// comparison, against the real functions under src/dev_health_ops.
+// oraclePairPythonBuild is the build whose production Python answered the
+// frozen pairs: python_generic_row_oracle.py executed there, once per
+// comparison, against the real functions under src/dev_health_ops. A pair
+// named in oraclePairLaterPythonBuilds was answered on that later build.
 const oraclePairPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
+
+// oraclePairGitLabDueDateBuild is the first build whose Python maps a GitLab
+// issue's due_date to due_at and holds the gitlab/work-items/sprint pair file.
+// It is a commit of the branch that made that change: when it is not on main,
+// fetch it by its sha (git fetch origin <sha>) before git worktree add.
+const oraclePairGitLabDueDateBuild = "b6b1fd88954fe636660b20b7d58ee8ec8cb4c97e"
+
+// oraclePairLaterPythonBuilds names, by pair, a build later than
+// oraclePairPythonBuild that answered the pair: its answer needs Python that
+// oraclePairPythonBuild does not hold (a producer change, or a pair file added
+// after it). Such a pair is recorded from a checkout of the later build.
+var oraclePairLaterPythonBuilds = map[string]string{
+	"gitlab/work-items/issue":  oraclePairGitLabDueDateBuild,
+	"gitlab/work-items/sprint": oraclePairGitLabDueDateBuild,
+}
+
+// oracleHarnessFilesAfterBuild are the harness files added after
+// oraclePairPythonBuild, each by a pair of oraclePairLaterPythonBuilds. That
+// build lacks them, so the manifest of a pair answered there leaves them out:
+// adding a pair file then changes no key of a pair answered there. A pair
+// answered on a later build keys on every harness file.
+var oracleHarnessFilesAfterBuild = map[string]string{
+	"testdata/oracle_pairs/gitlab_work-items_sprint.py": "gitlab/work-items/sprint",
+}
+
+// oraclePairBuild is the build that answered pairID.
+func oraclePairBuild(pairID string) string {
+	if build, later := oraclePairLaterPythonBuilds[pairID]; later {
+		return build
+	}
+	return oraclePairPythonBuild
+}
 
 // oraclePairGoldenDir holds one golden per comparison: the pair's Python answer
 // for the cases of the one test (or subtest) that asks for it.
@@ -67,12 +100,13 @@ func frozenPairAnswer(t *testing.T, pairID string, encodedCases []byte) []byte {
 	repoRoot := filepath.Dir(filepath.Dir(packageDir))
 
 	name := oraclePairGoldenName(pairID, t.Name())
+	build := oraclePairBuild(pairID)
 	if err := claimOraclePairGolden(&oraclePairGoldensOpened, name, t, pairID, t.Name()); err != nil {
 		t.Fatal(err)
 	}
 	recipe := fmt.Sprintf("pair %s: git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); "+
 		"then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ "+
-		"-test '^%s$' -python-root $DIR", pairID, oraclePairPythonBuild, strings.SplitN(t.Name(), "/", 2)[0])
+		"-test '^%s$' -python-root $DIR", pairID, build, strings.SplitN(t.Name(), "/", 2)[0])
 	pin, pinned := oraclePairGoldenPins[name]
 	if !pinned {
 		t.Fatalf("pair %q in test %s has no frozen golden: oraclePairGoldenPins names no %s. "+
@@ -81,14 +115,14 @@ func frozenPairAnswer(t *testing.T, pairID string, encodedCases []byte) []byte {
 	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        filepath.Join(oraclePairGoldenDir, name),
-		PythonBuild: oraclePairPythonBuild,
+		PythonBuild: build,
 		SHA256:      pin,
 		Recipe:      recipe,
 		Scrub:       pairPerRunScrub(pairID),
 	})
 	root := golden.PythonRoot(t, repoRoot)
 
-	manifest := oracleHarnessManifest(t, packageDir)
+	manifest := oracleHarnessManifest(t, packageDir, build)
 	keyed, passed := oraclePairEnvironment(t, pairID)
 	request := venueoracle.ProgramRequest(pairID, manifest, encodedCases, keyed)
 	answers := golden.Produce(t, root, []venueoracle.Request{request},
@@ -181,13 +215,18 @@ func oraclePairGoldenName(pairID, testName string) string {
 // through: one "sha256  path" line per harness source (the runner, the
 // registry, the loader, the field reflection, every pair and pair helper) and
 // per pair configuration file. Pairs import each other and share helpers, so
-// the whole set is one producer.
-func oracleHarnessManifest(t *testing.T, packageDir string) string {
+// the whole set is one producer. For a pair answered on oraclePairPythonBuild
+// the set leaves out the files added after that build
+// (oracleHarnessFilesAfterBuild): that build never held them.
+func oracleHarnessManifest(t *testing.T, packageDir, build string) string {
 	t.Helper()
 	var lines []string
 	err := fs.WalkDir(embeddedOracleSources, ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, ".py") {
 			return walkErr
+		}
+		if _, added := oracleHarnessFilesAfterBuild[path]; added && build == oraclePairPythonBuild {
+			return nil
 		}
 		raw, err := fs.ReadFile(embeddedOracleSources, path)
 		if err != nil {

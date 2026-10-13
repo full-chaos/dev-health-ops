@@ -99,7 +99,74 @@ func gitlabWorkItemsOracleCases() []oracleCase {
 				},
 			},
 		},
+		{
+			// GitLab sends an issue's due_date as a date-only string; it becomes due_at.
+			ID: "open_issue_with_due_date",
+			Input: map[string]any{
+				"repo_full_name": "acme/api",
+				"repo_id":        "c7198fbc-1945-3717-05d8-eb78866b4e79",
+				"org_id":         "org-acme",
+				"since":          "2026-08-01T00:00:00Z",
+				"raw_issue": map[string]any{
+					"iid": 51, "title": "Ship the due date", "state": "opened",
+					"created_at": "2026-08-04T08:00:00Z", "updated_at": "2026-08-05T09:00:00Z",
+					"labels": []any{}, "assignees": []any{}, "due_date": "2026-08-20",
+					"milestone": map[string]any{"id": 8, "title": "September"},
+				},
+			},
+		},
 	}
+}
+
+func TestGitLabSprintMatchesFrozenPythonProductionRow(t *testing.T) {
+	compareRowsAgainstPythonOracle(
+		t,
+		"gitlab/work-items/sprint",
+		[]oracleCase{
+			{
+				// GitLab milestone start_date and due_date are date-only strings.
+				ID: "closed_date_only_dates",
+				Input: map[string]any{
+					"repo_full_name": "acme/api", "org_id": "org-acme",
+					"raw_milestone": map[string]any{
+						"id": 7, "title": "August", "state": "closed",
+						"start_date": "2026-08-01", "due_date": "2026-08-31",
+					},
+				},
+			},
+			{
+				ID: "active_no_due_date",
+				Input: map[string]any{
+					"repo_full_name": "acme/api", "org_id": "org-acme",
+					"raw_milestone": map[string]any{
+						"id": 8, "title": "September", "state": "active",
+						"start_date": "2026-09-01", "due_date": nil,
+					},
+				},
+			},
+		},
+		buildGitLabSprintOracleRow,
+		nil,
+	)
+}
+
+func buildGitLabSprintOracleRow(t *testing.T, input map[string]any) gitlabSprintRow {
+	t.Helper()
+	raw, err := json.Marshal(input["raw_milestone"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload gitlabIssueMilestonePayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	claim := nativeTestClaim("gitlab", "work-items")
+	claim.OrgID = input["org_id"].(string)
+	row, err := normalizeGitLabSprint(claim, input["repo_full_name"].(string), payload, gitlabWorkItemsOracleNormalizedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
 }
 
 func buildGitLabFetchWorkItemOracleRow(t *testing.T, input map[string]any) gitlabWorkItemRow {

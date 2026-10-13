@@ -2803,8 +2803,8 @@ claim has one open row. A **role change** seen by a later run (the main owner ch
 that run; only the first rows of a repo are back-dated to the evidence: A's main row and B's co-owner row end at the run
 (`valid_to` = run), B's main row starts at the run, and A continues from the run as a co-owner with its share while it
 still has links (`team_repo_ownership_derivation.role_changed`, `stats.RoleChanges`). A new main owner of a repo where
-another ACTIVE team holds an open main row also starts at the run (an inactive team's open main row is no owner,
-§0.4g rule 1, so it never dates a new main owner at the run); so does a team that draws level with the main owner (both
+another team holds an open main row also starts at the run (an inactive team's open main row too: the new owner
+waits until a run closes that row, then the next run moves its start back to its evidence); so does a team that draws level with the main owner (both
 are main owners from that run), and a tie that ends closes the main row of every team that is no longer a leader at
 that run. So at any instant of its history a repo's main rows are its one leader's, or every tied team's during a full
 tie. A role close goes through the retraction guard; a repo whose roles change while the guard holds any close or

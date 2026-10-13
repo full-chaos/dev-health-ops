@@ -282,7 +282,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 			"org_id", orgID, "future", settledCounts.future, "before_retraction", settledCounts.beforeRetraction,
 			"after_other_owner", settledCounts.afterOtherOwner, "inactive_tenure_ignored", settledCounts.inactiveTenureIgnored)
 	}
-	derived, roleCloses, roleChanged := applyTeamRepoOwnershipRoleChanges(stampTeamRepoOwnershipClaimStarts(settled, repos, activeRows, now), repos, activeRows, tenure.inactive, now)
+	derived, roleCloses, roleChanged := applyTeamRepoOwnershipRoleChanges(stampTeamRepoOwnershipClaimStarts(settled, repos, activeRows, now), repos, activeRows, now)
 	// A role change closes the claim's open row of its old role at the run,
 	// under the same proof as a retraction. A repository with a role change
 	// and any held close or retraction keeps all its rows this run, so it
@@ -429,14 +429,11 @@ func stampTeamRepoOwnershipClaimStarts(
 // starts at the run. Only a first observation is dated by its evidence, so at
 // any instant a repository's main owners are its one leader, or every team of
 // a full tie (D5990). An open row with is_primary
-// 0 (the one-owner derivation) is a main row. The open main row of an inactive
-// team never dates a new main owner at the run: an inactive team owns nothing
-// for any reader (team-attribution.md section 0.4g rule 1).
+// 0 (the one-owner derivation) is a main row.
 func applyTeamRepoOwnershipRoleChanges(
 	derived []DerivedTeamRepoOwnershipRow,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
 	activeRows []teamRepoOwnershipActiveRow,
-	inactive teamactive.Inactive,
 	now time.Time,
 ) ([]DerivedTeamRepoOwnershipRow, []teamRepoOwnershipActiveRow, map[teamRepoOwnershipClaim]bool) {
 	isMain := func(isPrimary uint8) bool { return isPrimary != teamRepoOwnershipCoOwner }
@@ -445,7 +442,7 @@ func applyTeamRepoOwnershipRoleChanges(
 	for _, row := range activeRows {
 		claim := teamRepoOwnershipClaim{row.Provider, row.RepoFullName, row.TeamID}
 		open[claim] = append(open[claim], row)
-		if isMain(row.IsPrimary) && !inactive.Has(row.TeamID) {
+		if isMain(row.IsPrimary) {
 			key := teamRepoOwnershipRepoKey{row.Provider, row.RepoFullName}
 			if openMainTeams[key] == nil {
 				openMainTeams[key] = map[string]bool{}

@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/querybound"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
@@ -294,34 +296,51 @@ func (executor *WorkItemAttributionExecutor) itemsThisRunWritesForTheDay(
 		}
 		others = append(others, id)
 	}
-	repos := make([]string, 0, len(run.DiscoveredRepoIDs)+len(scope.repoIDs))
+	inScope := make(map[string]bool, len(run.DiscoveredRepoIDs)+len(scope.repoIDs))
 	for _, repoID := range run.DiscoveredRepoIDs {
-		repos = append(repos, string(repoID))
+		inScope[strings.ToLower(string(repoID))] = true
 	}
 	for _, repoID := range scope.repoIDs {
-		repos = append(repos, repoID.String())
+		inScope[repoID.String()] = true
 	}
-	if len(others) == 0 || len(repos) == 0 {
+	if len(others) == 0 || len(inScope) == 0 {
 		return written, nil
 	}
 	sort.Strings(others)
-	rows, err := executor.conn.Query(ctx, `SELECT work_item_id FROM work_items FINAL
-WHERE org_id = ? AND has(?, work_item_id) AND has(?, toString(repo_id))
+	// One statement per bounded chunk of ids (querybound): a statement with
+	// every donor of a large partition exceeds ClickHouse's max query size.
+	// The run's repositories are matched here, not bound into the statement.
+	for _, chunk := range querybound.ChunkStringsByRenderedBytes(others, querybound.MaxArrayBytes) {
+		if err := executor.loadDonorsInTheDaysWindow(ctx, run.OrganizationID, chunk, scope, inScope, written); err != nil {
+			return nil, err
+		}
+	}
+	return written, nil
+}
+
+func (executor *WorkItemAttributionExecutor) loadDonorsInTheDaysWindow(
+	ctx context.Context, orgID string, ids []string, scope workItemPartitionScope,
+	inScope map[string]bool, written map[string]struct{},
+) error {
+	rows, err := executor.conn.Query(ctx, `SELECT work_item_id, toString(repo_id) FROM work_items FINAL
+WHERE org_id = ? AND has(?, work_item_id)
   AND created_at < ?
-  AND (status != 'done' OR completed_at >= ?)`, run.OrganizationID, others, repos, scope.end, scope.start)
+  AND (status != 'done' OR completed_at >= ?)`, orgID, ids, scope.end, scope.start)
 	if err != nil {
-		return nil, fmt.Errorf("load the donors this run writes for the day (work_item_attribution): %w", err)
+		return fmt.Errorf("load the donors this run writes for the day (work_item_attribution): %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan a donor this run writes for the day (work_item_attribution): %w", err)
+		var id, repoID string
+		if err := rows.Scan(&id, &repoID); err != nil {
+			return fmt.Errorf("scan a donor this run writes for the day (work_item_attribution): %w", err)
 		}
-		written[id] = struct{}{}
+		if inScope[strings.ToLower(repoID)] {
+			written[id] = struct{}{}
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate the donors this run writes for the day (work_item_attribution): %w", err)
+		return fmt.Errorf("iterate the donors this run writes for the day (work_item_attribution): %w", err)
 	}
-	return written, nil
+	return nil
 }

@@ -23,6 +23,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/querybound"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
@@ -2240,9 +2241,20 @@ func (source ClickHouseFactSource) LoadDonorRows(
 	ctx context.Context, orgID string, ids []string,
 ) (map[string]GithubWorkItemDerivationDonorRow, error) {
 	result := map[string]GithubWorkItemDerivationDonorRow{}
-	if len(ids) == 0 {
-		return result, nil
+	// One statement per bounded chunk of ids (querybound): a statement with
+	// every id of a large partition exceeds ClickHouse's max query size. An
+	// item's rows are in the one chunk that carries its id.
+	for _, chunk := range querybound.ChunkStringsByRenderedBytes(ids, querybound.MaxArrayBytes) {
+		if err := source.loadDonorRowsChunk(ctx, orgID, chunk, result); err != nil {
+			return nil, err
+		}
 	}
+	return result, nil
+}
+
+func (source ClickHouseFactSource) loadDonorRowsChunk(
+	ctx context.Context, orgID string, ids []string, result map[string]GithubWorkItemDerivationDonorRow,
+) error {
 	rows, err := source.Conn.Query(ctx, `
 SELECT work_item_id,
        argMax(ifNull(team_id, ''), computed_at),
@@ -2253,20 +2265,20 @@ WHERE org_id = ? AND has(?, work_item_id) AND is_primary = 1
 GROUP BY work_item_id
 LIMIT ?`, orgID, ids, len(ids)+1)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id string
 		var row GithubWorkItemDerivationDonorRow
 		if err := rows.Scan(&id, &row.TeamID, &row.TeamName, &row.Source); err != nil {
-			return nil, err
+			return err
 		}
 		if row.TeamID != "" {
 			result[id] = row
 		}
 	}
-	return result, rows.Err()
+	return rows.Err()
 }
 
 func GithubWorkItemDerivationStringPointer(value string) *string {

@@ -4,6 +4,8 @@ package daily
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -305,6 +307,90 @@ func TestADonorOutsideTheDaysWindowGivesItsStoredRow(t *testing.T) {
 			}
 			if len(linked) != 1 || linked[0].teamID == nil || *linked[0].teamID != "team-old" {
 				t.Fatalf("linked_issue rows %+v, want team-old (the donor's stored row), not team-donor (a resolution on the day)", linked)
+			}
+		})
+	}
+}
+
+// TestALargePartitionLoadsItsDonorsInBoundedStatements: a partition whose
+// 4,000 pull requests each link a donor of their own reads the donors (those
+// the run writes for the day, and the stored rows of the others) in bounded
+// statements: one statement with every id exceeds ClickHouse's max query
+// size, and the partition would write nothing.
+func TestALargePartitionLoadsItsDonorsInBoundedStatements(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	seededAt := day.AddDate(0, 0, -20)
+	// 4,000 donor ids of about 100 bytes: one array literal of them is over
+	// ClickHouse's default max_query_size (262,144 bytes).
+	const items = 4000
+	pad := strings.Repeat("x", 90)
+	for _, inRunScope := range []bool{true, false} {
+		name := "donors_the_run_writes"
+		if !inRunScope {
+			name = "stored_donor_rows"
+		}
+		t.Run(name, func(t *testing.T) {
+			orgID := "org-donor-bound-" + uuid.NewString()
+			repoPR, repoD := uuid.New(), uuid.New()
+			workItems, err := conn.PrepareBatch(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, created_at, org_id, last_synced)`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			edges, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, last_synced)`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_team_attributions
+				(org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at, writer, run_id)`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for n := range items {
+				pr := fmt.Sprintf("ghpr:acme/%s#%d", pad, n)
+				donor := fmt.Sprintf("jira:%s-%d", pad, n)
+				if err := workItems.Append(repoPR, pr, "github", "", seededAt, orgID, seededAt); err != nil {
+					t.Fatal(err)
+				}
+				if err := workItems.Append(repoD, donor, "jira", "proj-d", seededAt, orgID, seededAt); err != nil {
+					t.Fatal(err)
+				}
+				if err := edges.Append(orgID, pr, donor, "relates_to", seededAt); err != nil {
+					t.Fatal(err)
+				}
+				if err := stored.Append(orgID, repoD, donor, "jira", "team-donor", "team-donor", "project_ownership", uint8(1), "medium", "project_ownership=proj-d", day.AddDate(0, 0, -1), "test", "earlier-run"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, batch := range []driver.Batch{workItems, edges, stored} {
+				if err := batch.Send(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := conn.Exec(ctx, `INSERT INTO team_project_ownership
+				(org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, last_synced)
+				VALUES (?, 'jira', 'team-donor', 'proj-d', NULL, 'native', 1, 100, 0, ?, NULL, now64(3), now64(3))`, orgID, seededAt); err != nil {
+				t.Fatal(err)
+			}
+			executor, err := NewWorkItemAttributionExecutor(conn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := Run{ID: uuid.NewString(), OrganizationID: orgID, TargetDay: day}
+			if inRunScope {
+				run.DiscoveredRepoIDs = []RepositoryID{RepositoryID(repoPR.String()), RepositoryID(repoD.String())}
+			}
+			if _, err := executor.ComputeFamily(ctx, run, Partition{ID: "p1", RunID: run.ID, RepoIDs: []RepositoryID{RepositoryID(repoPR.String())}}); err != nil {
+				t.Fatalf("ComputeFamily: %v", err)
+			}
+			var linked uint64
+			if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_team_attributions FINAL
+				WHERE org_id = ? AND source = 'linked_issue' AND team_id = 'team-donor' AND is_primary = 1`, orgID).Scan(&linked); err != nil {
+				t.Fatal(err)
+			}
+			if linked != items {
+				t.Fatalf("%d pull requests copied their donor's row, want %d", linked, items)
 			}
 		})
 	}

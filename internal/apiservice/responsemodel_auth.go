@@ -11,6 +11,7 @@ func init() {
 		"POST /api/v1/auth/logout":                                 true,
 		"POST /api/v1/auth/refresh":                                true,
 		"POST /api/v1/auth/social-login":                           true,
+		"POST /api/v1/auth/change-password":                        true,
 		"POST /api/v1/auth/switch-org":                             true,
 		"POST /api/v1/auth/validate":                               true,
 		"POST /api/v1/auth/register":                               true,

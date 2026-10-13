@@ -70,6 +70,9 @@ type ExplainInvestmentMixOptions struct {
 	// ReposNamed: see BreakdownFilters.ReposNamed.
 	ReposNamed        bool
 	TeamScopeBindings []dhclickhouse.Binding
+	// TeamIDs/TeamAsOf: see BreakdownFilters.TeamIDs.
+	TeamIDs  []string
+	TeamAsOf time.Time
 	// ScopeLevel is filters.scope.level verbatim ("org" when absent) --
 	// needed here, not just to compute RepoIDs, because
 	// build_investment_response (api/services/investment.py:175) only
@@ -351,6 +354,8 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 		breakdownFilter.ReposNamed = opts.ReposNamed
 		breakdownFilter.TeamScopeCondition = opts.TeamScopeCondition
 		breakdownFilter.TeamScopeBindings = opts.TeamScopeBindings
+		breakdownFilter.TeamIDs = opts.TeamIDs
+		breakdownFilter.TeamAsOf = opts.TeamAsOf
 	}
 	breakdownRows, err := reader.FetchInvestmentBreakdown(ctx, breakdownFilter)
 	if err != nil {

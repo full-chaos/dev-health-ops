@@ -517,6 +517,10 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 	if scopeLevel == "" {
 		scopeLevel = "org"
 	}
+	var teamIDs []string
+	if scopeLevel == "team" && teamCondition != "" {
+		teamIDs = stringsFromAny(scope["ids"])
+	}
 
 	var theme, subcategory, llmModel string
 	if body.Theme != nil {
@@ -559,6 +563,8 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 		ReposNamed:         reposNamed,
 		TeamScopeCondition: teamCondition,
 		TeamScopeBindings:  teamBindings,
+		TeamIDs:            teamIDs,
+		TeamAsOf:           now,
 		ScopeLevel:         scopeLevel,
 		WorkCategory:       workCategoryFromFilters(body.Filters),
 		Theme:              theme,

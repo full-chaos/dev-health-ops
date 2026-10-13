@@ -138,6 +138,18 @@ func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope s
 	return "", nil, nil
 }
 
+// scopeShareForMetric is the weight of a summed repository metric under a team scope: the share of each repository the
+// team holds (teamscope.RepoShare, CHAOS-9413, D5988), so a co-owner reads its own share of the repository's total and
+// the teams of one repository together read it once. Only a sum is weighed: an average, a median or a ratio is a
+// property of the repository, not a quantity split among its owners, and keeps the membership test alone. ("", nil)
+// when the metric is not a repository sum or the request has no team scope.
+func scopeShareForMetric(spec metricSpec, f Filters, orgID, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding) {
+	if spec.Scope != "repo" || spec.Aggregator != "sum" || f.Scope.Level != "team" || len(f.Scope.IDs) == 0 {
+		return "", nil
+	}
+	return teamscope.RepoShare(orgID, repoColumn, f.Scope.IDs, asOf)
+}
+
 // scopeClauseMulti/scopeBindingsMulti port build_scope_filter_multi
 // (api/queries/scopes.py:105-117).
 func scopeClauseMulti(ids []string, column string) string {

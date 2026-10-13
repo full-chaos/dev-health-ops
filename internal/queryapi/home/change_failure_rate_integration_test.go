@@ -165,7 +165,7 @@ func TestHomeChangeFailureRate_FollowsTheViewsWindowAndSubject(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		points, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, day1, after, filter, bindings, spec.Aggregator, orgID)
+		points, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, day1, after, filter, bindings, spec.Aggregator, orgID, "")
 		if err != nil {
 			t.Fatal(err)
 		}

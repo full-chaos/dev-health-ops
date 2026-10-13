@@ -80,7 +80,7 @@ func TestReplacingMergeTreeReadsAreFinalWithOrgIDInStatement(t *testing.T) {
 
 	t.Run("fetchInvestmentFlowItems repos join", func(t *testing.T) {
 		c := &capturingClient{}
-		_, _ = fetchInvestmentFlowItems(ctx, c, now, now, "", nil, 60, "org-1")
+		_, _ = fetchInvestmentFlowItems(ctx, c, now, now, "", nil, "", 60, "org-1")
 		query := c.queries[0]
 		assertNoLimit1By(t, query)
 		joinIdx := strings.Index(query, "LEFT JOIN repos AS r FINAL ON")

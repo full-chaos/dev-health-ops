@@ -52,6 +52,8 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	if err != nil {
 		return MetricDelta{}, err
 	}
+	shareSQL, shareBindings := scopeShareForMetric(spec, f, orgID, "repo_id", asOf)
+	scopeBindings = append(scopeBindings, shareBindings...)
 
 	var currentValue, previousValue float64
 	var hasData, hasPriorData bool
@@ -77,7 +79,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		}()
 		go func() {
 			defer wg.Done()
-			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID)
+			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL)
 		}()
 		wg.Wait()
 		for _, err := range []error{errCur, errPrev, errSeries} {
@@ -113,7 +115,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		}()
 		go func() {
 			defer wg.Done()
-			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID)
+			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL)
 		}()
 		wg.Wait()
 		for _, err := range []error{errCur, errPrev, errSeries} {
@@ -158,15 +160,15 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		wg.Add(3)
 		go func() {
 			defer wg.Done()
-			current, errCur = fetchMetricValue(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID)
+			current, errCur = fetchMetricValue(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL)
 		}()
 		go func() {
 			defer wg.Done()
-			previous, errPrev = fetchMetricValue(ctx, client, spec.Table, spec.Column, compareStart, compareEnd, scopeFilter, scopeBindings, spec.Aggregator, orgID)
+			previous, errPrev = fetchMetricValue(ctx, client, spec.Table, spec.Column, compareStart, compareEnd, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL)
 		}()
 		go func() {
 			defer wg.Done()
-			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID)
+			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL)
 		}()
 		wg.Wait()
 		if errCur != nil {

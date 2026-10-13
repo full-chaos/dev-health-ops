@@ -122,8 +122,14 @@ type BreakdownFilters struct {
 	// two narrow (AND), they never widen.
 	ReposNamed        bool
 	TeamScopeBindings []dhclickhouse.Binding
-	Themes            []string
-	Subcategories     []string
+	// TeamIDs and TeamAsOf are the teams of the team scope and the instant their ownership is read at. They weigh
+	// each repository's effort by the share of it the teams hold (teamscope.RepoShare, CHAOS-9413, D5988):
+	// TeamScopeCondition only says WHICH repositories are in, so without them a co-owner would read the whole of a
+	// repository it owns a fraction of. Empty = no team scope = weight 1.
+	TeamIDs       []string
+	TeamAsOf      time.Time
+	Themes        []string
+	Subcategories []string
 	// DatedByEnd dates a unit by its END day (to_ts in [start, end)) instead of by the overlap
 	// of its [from_ts, to_ts] with the window: the Home tile "Investment by theme" (CHAOS-9195,
 	// D5933). Every other rule of the read (latest row of a unit, every categorization status,
@@ -225,15 +231,17 @@ func (reader *Reader) FetchInvestmentBreakdown(ctx context.Context, filters Brea
 
 	categorySQL, categoryBindings := filters.categoryClause()
 	scopeSQL, scopeBindings := filters.scopeClause()
+	shareSQL, shareBindings := filters.teamShare(scopeSQL)
 	bindings := filters.baseBindings()
 	bindings = append(bindings, scopeBindings...)
+	bindings = append(bindings, shareBindings...)
 	bindings = append(bindings, categoryBindings...)
 
 	query := fmt.Sprintf(`
 SELECT
     subcategory_kv.1 AS subcategory,
     splitByChar('.', subcategory_kv.1)[1] AS theme,
-    sum(subcategory_kv.2 * effort_value) AS value
+    sum(subcategory_kv.2 * effort_value * %s) AS value
 FROM %s
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
 WHERE %s
@@ -243,7 +251,7 @@ WHERE %s
 GROUP BY subcategory, theme
 ORDER BY value DESC
 %s
-`, filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, shareSQL, filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -367,26 +375,28 @@ func (reader *Reader) FetchInvestmentThemeEffort(ctx context.Context, filters Br
 	}
 	categorySQL, categoryBindings := filters.categoryClause()
 	scopeSQL, scopeBindings := filters.scopeClause()
+	shareSQL, shareBindings := filters.teamShare(scopeSQL)
 	bindings := filters.baseBindings()
 	bindings = append(bindings, scopeBindings...)
+	bindings = append(bindings, shareBindings...)
 	bindings = append(bindings, categoryBindings...)
 
 	query := fmt.Sprintf(`
 SELECT
     splitByChar('.', subcategory_kv.1)[1] AS theme,
-    toFloat64(sum(subcategory_kv.2 * effort_value)) AS effort,
-    toFloat64(sum(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0))) AS churn_loc,
-    toFloat64(sum(subcategory_kv.2 * %s * length(JSONExtractArrayRaw(structural_evidence_json, 'prs')))) AS prs
-FROM %s
+    toFloat64(sum(subcategory_kv.2 * effort_value * %[1]s)) AS effort,
+    toFloat64(sum(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value * %[1]s, 0))) AS churn_loc,
+    toFloat64(sum(subcategory_kv.2 * %[2]s * %[1]s * length(JSONExtractArrayRaw(structural_evidence_json, 'prs')))) AS prs
+FROM %[3]s
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
-WHERE %s
+WHERE %[4]s
   AND work_unit_investments.org_id = {org_id:String}
-%s
-%s
+%[5]s
+%[6]s
 GROUP BY theme
 ORDER BY effort DESC, theme ASC
-%s
-`, filters.unitWeight(scopeSQL), filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+%[7]s
+`, shareSQL, filters.unitWeight(scopeSQL), filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -444,6 +454,23 @@ func (f BreakdownFilters) unitWeight(scopeSQL string) string {
 		return "allocation_weight"
 	}
 	return "1.0"
+}
+
+// teamShare is the weight of a row's repository: the share of it the teams of the scope hold, 1.0 without a team scope.
+// The bindings belong to the expression and are bound only when it is used.
+func (f BreakdownFilters) teamShare(scopeSQL string) (expr string, bindings []dhclickhouse.Binding) {
+	if !f.scoped(scopeSQL) || len(f.TeamIDs) == 0 {
+		return "1.0", nil
+	}
+	asOf := f.TeamAsOf
+	if asOf.IsZero() {
+		asOf = time.Now().UTC()
+	}
+	expr, bindings = teamscope.RepoShare(f.OrgID, "repo_id", f.TeamIDs, asOf)
+	if expr == "" {
+		return "1.0", nil
+	}
+	return expr, bindings
 }
 
 func (f BreakdownFilters) scoped(scopeSQL string) bool {

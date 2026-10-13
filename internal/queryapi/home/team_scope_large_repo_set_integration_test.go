@@ -224,7 +224,7 @@ func TestHomeTeamOwnership_ScopeFilterForMetricNarrowsToTheOwnedRepos(t *testing
 
 	startDay := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	endDay := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
-	got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay, endDay, scopeFilter, scopeBindings, "sum", orgID)
+	got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay, endDay, scopeFilter, scopeBindings, "sum", orgID, "")
 	if err != nil {
 		t.Fatalf("fetchMetricValue with a team scope: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestHomeTeamOwnership_TeamWithNoOwnershipRowsReadsEmpty(t *testing.T) {
 
 	startDay := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	endDay := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
-	got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay, endDay, scopeFilter, scopeBindings, "sum", orgID)
+	got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay, endDay, scopeFilter, scopeBindings, "sum", orgID, "")
 	if err != nil {
 		t.Fatalf("fetchMetricValue: %v", err)
 	}

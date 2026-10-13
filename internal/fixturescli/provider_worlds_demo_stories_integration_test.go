@@ -294,7 +294,7 @@ var demoDataStories = []demoStory{
 	feature("Nightly ETL deploys through the shared pipeline", 8, -1, change("chaos-gl/data/warehouse-etl", 6, -1)),
 }
 
-// Web (GitLab subgroup web): little recorded work, none in the last month.
+// Web (GitLab subgroup web): little recorded work, a trickle of it in the last two weeks.
 var demoWebStories = []demoStory{
 	feature("Marketing site pricing page", 80, 66, change("chaos-gl/web/marketing-site", 72, 67)),
 	chore("Design system color tokens", 62, 50, change("chaos-gl/web/design-system", 55, 51)),
@@ -302,6 +302,9 @@ var demoWebStories = []demoStory{
 	// The three months before.
 	feature("Blog section on the marketing site", 150, 130, change("chaos-gl/web/marketing-site", 140, 131)),
 	chore("Design system button variants", 120, 108, change("chaos-gl/web/design-system", 112, 109)),
+	// The last days.
+	feature("Pricing page copy refresh", 10, 4, change("chaos-gl/web/marketing-site", 9, 4)),
+	chore("Design system focus ring tokens", 8, 3, change("chaos-gl/web/design-system", 7, 3)),
 }
 
 // Delivery's incidents on the deploy pipeline (GitLab incident issues).
@@ -312,21 +315,25 @@ type demoIncident struct {
 	ResolvedAfter   int // hours; < 0: open
 }
 
+// An incident that starts on the day of a deploy-pipeline deployment, after it (hour 21; every
+// deployment is done by 20:00), is the one a deployment can be tied to: the daily work-graph edges link
+// an incident to a deployment of its service's repository on the same UTC day, and a change fails only
+// through such a link. The others started on days without a deployment.
 var demoDeliveryIncidents = []demoIncident{
-	{"Deploy to production stuck at 40%", "HIGH", 84, 10, 3},
+	{"Deploy to production stuck at 40%", "HIGH", 81, 21, 3},
 	{"Config map not restored after rollback", "MEDIUM", 69, 14, 6},
-	{"Canary stage promoted a failing build", "HIGH", 61, 9, 2},
+	{"Canary stage promoted a failing build", "HIGH", 67, 21, 2},
 	{"Smoke test timeout blocked all deploys", "MEDIUM", 45, 16, 5},
 	{"Release tag pushed without artifacts", "LOW", 39, 11, 20},
 	{"Runner pool exhausted during peak deploys", "HIGH", 31, 8, 4},
-	{"Poisoned pipeline cache shipped stale assets", "CRITICAL", 28, 13, 7},
-	{"Rollout left two versions serving checkout", "CRITICAL", 17, 15, 9},
+	{"Poisoned pipeline cache shipped stale assets", "CRITICAL", 27, 21, 7},
+	{"Rollout left two versions serving checkout", "CRITICAL", 15, 21, 9},
 	{"Deploy freeze switch ignored by hotfix lane", "MEDIUM", 12, 10, 3},
-	{"Failed rollout not paged for 40 minutes", "HIGH", 9, 7, 2},
-	{"Retries masked a broken database migration", "CRITICAL", 4, 9, -1},
+	{"Failed rollout not paged for 40 minutes", "HIGH", 10, 21, 2},
+	{"Retries masked a broken database migration", "CRITICAL", 1, 21, -1},
 	{"Canary metrics missing for the payments service", "LOW", 2, 11, -1},
 	// The three months before.
-	{"Deploy job ran against the wrong cluster", "HIGH", 160, 10, 4},
+	{"Deploy job ran against the wrong cluster", "HIGH", 142, 21, 4},
 	{"Rollback script failed on a missing tag", "MEDIUM", 128, 15, 6},
 	{"Pipeline stuck waiting for a runner", "LOW", 101, 9, 3},
 }

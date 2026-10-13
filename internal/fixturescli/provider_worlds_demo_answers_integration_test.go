@@ -35,16 +35,21 @@ type demoTeam struct {
 	// EstimateShare is the percentage of the team's items that carry an estimate (story points, a
 	// Linear estimate or a GitLab weight); a GitHub tracker has no estimate field.
 	EstimateShare int
+	// QuickReview: a change gets its first review within hours of opening, not on the day it merges.
+	// OwnFiles: a change touches only its own files (no shared handler), and a follow-up commit its own
+	// test file, so the team's churn does not fall on files touched again and again. Together they make
+	// a team's risk score low (Mobile); QuickReview alone makes it middling (Identity, Data).
+	QuickReview, OwnFiles bool
 }
 
 var demoTeams = []demoTeam{
 	{Name: "payments", Tracker: "jira", Key: "PAY", Project: demoJiraPAY, GitHub: []githubUser{dmPia, dmQuin, dmRaf}, Jira: []jiraUser{dmJPia, dmJQuin, dmJRaf}, Stories: demoPaymentsStories, EstimateShare: 60},
 	{Name: "checkout", Tracker: "linear", Key: "CHK", LinearPrj: demoLinearProjects[0].ID, GitHub: []githubUser{dmSol, dmTeo, dmUma}, Linear: []linearUser{dmLSol, dmLTeo, dmLUma}, Stories: demoCheckoutStories, EstimateShare: 75},
 	{Name: "support", Tracker: "jira", Key: "SUP", Project: demoJiraSUP, GitHub: []githubUser{dmVic, dmWen}, Jira: []jiraUser{dmJVic, dmJWen}, Stories: demoSupportStories, EstimateShare: 40},
-	{Name: "identity", Tracker: "github", Home: "identity-service", GitHub: []githubUser{dmXan, dmYara, dmZed}, Stories: demoIdentityStories},
-	{Name: "mobile", Tracker: "linear", Key: "MOB", LinearPrj: demoLinearProjects[1].ID, GitHub: []githubUser{dmAbe, dmBea}, Linear: []linearUser{dmLAbe, dmLBea}, Reviewer: dmMoLed, Stories: demoMobileStories, EstimateShare: 70},
+	{Name: "identity", Tracker: "github", Home: "identity-service", GitHub: []githubUser{dmXan, dmYara, dmZed}, Stories: demoIdentityStories, QuickReview: true},
+	{Name: "mobile", Tracker: "linear", Key: "MOB", LinearPrj: demoLinearProjects[1].ID, GitHub: []githubUser{dmAbe, dmBea}, Linear: []linearUser{dmLAbe, dmLBea}, Reviewer: dmMoLed, Stories: demoMobileStories, EstimateShare: 70, QuickReview: true, OwnFiles: true},
 	{Name: "delivery", Tracker: "gitlab", Home: "chaos-gl/deploy-pipeline", GitLab: []gitlabUser{dmDax, dmEva, dmFin}, Stories: demoDeliveryStories, EstimateShare: 50},
-	{Name: "data", Tracker: "gitlab", Home: "chaos-gl/data/warehouse-etl", GitLab: []gitlabUser{dmGia, dmHal, dmIda}, Stories: demoDataStories, EstimateShare: 80},
+	{Name: "data", Tracker: "gitlab", Home: "chaos-gl/data/warehouse-etl", GitLab: []gitlabUser{dmGia, dmHal, dmIda}, Stories: demoDataStories, EstimateShare: 80, QuickReview: true},
 	{Name: "web", Tracker: "gitlab", Home: "chaos-gl/web/marketing-site", GitLab: []gitlabUser{dmJon, dmKit}, Stories: demoWebStories, EstimateShare: 30},
 }
 
@@ -153,45 +158,109 @@ func demoEnd(c demoChange) int {
 	return max(c.CreatedAgo-1, 0)
 }
 
-// demoChangeCommits are a change's commits: one, plus one per failed CI run (at most three).
-func demoChangeCommits(c demoChange, key, title, author string) []demoCommit {
-	count := 1 + min(c.CIFailed, 2)
+// demoSeed is a seeded hash of a story's change: the times and the commit count of each change vary
+// with it, so no two changes share a cycle time by construction.
+func demoSeed(parts ...any) [32]byte {
+	return sha256.Sum256([]byte(fmt.Sprint(append([]any{"dev-health-demo-times"}, parts...)...)))
+}
+
+// demoAfter is at moved by minutes.
+func demoAfter(at string, minutes int) string {
+	parsed, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		panic(err)
+	}
+	return parsed.Add(time.Duration(minutes) * time.Minute).UTC().Format(time.RFC3339)
+}
+
+// demoChangeTimes are when a change opened, was approved, merged, ran on main and deployed: opened in
+// the morning and merged in the afternoon of their days, at seeded minutes; the approval comes 20 to 140
+// minutes before the merge (never before the opening), the main run 8 minutes after it and the
+// deployment 25 to 85 minutes after it.
+type demoChangeTimes struct {
+	Created, Approved, ChangesRequested, Merged, MainRun, Deploy string
+}
+
+func demoTimesOf(team demoTeam, story demoStory, c demoChange) demoChangeTimes {
+	seed := demoSeed(c.Repo, story.Title, c.CreatedAgo, c.MergedAgo)
+	times := demoChangeTimes{Created: demoAt(c.CreatedAgo, 8+int(seed[0])%4, int(seed[1])%60)}
+	if c.MergedAgo < 0 {
+		times.ChangesRequested = demoAt(demoEnd(c), 11, int(seed[2])%60)
+		return times
+	}
+	times.Merged = demoAt(c.MergedAgo, 13+int(seed[3])%5, int(seed[4])%60)
+	times.Approved = demoAfter(times.Merged, -(20 + int(seed[5])%121))
+	if team.QuickReview {
+		// Reviewed one to three hours after opening, whenever it merges.
+		times.Approved = min(times.Approved, demoAfter(times.Created, 60+int(seed[5])%121))
+	}
+	if times.Approved <= times.Created {
+		times.Approved = demoAfter(times.Created, 30)
+	}
+	created, _ := time.Parse(time.RFC3339, times.Created)
+	approved, _ := time.Parse(time.RFC3339, times.Approved)
+	times.ChangesRequested = created.Add(approved.Sub(created) / 3).UTC().Format(time.RFC3339)
+	times.MainRun = demoAfter(times.Merged, 8)
+	times.Deploy = demoAfter(times.Merged, 25+int(seed[6])%61)
+	return times
+}
+
+// demoChangeCommits are a change's commits: one, plus one per failed CI run (at most two), plus zero to
+// two review follow-ups (seeded), in the mornings of the days the change is open. A team with OwnFiles
+// touches only the change's own file, and each follow-up its own test file.
+func demoChangeCommits(team demoTeam, c demoChange, key, title, author string) []demoCommit {
+	failed := min(c.CIFailed, 2)
+	seed := demoSeed(c.Repo, title, c.CreatedAgo, c.MergedAgo, "commits")
+	count := 1 + failed + int(seed[0])%3
 	end := demoEnd(c)
+	module := c.Repo[strings.LastIndex(c.Repo, "/")+1:]
 	files := c.Files
-	if len(files) == 0 {
-		module := c.Repo[strings.LastIndex(c.Repo, "/")+1:]
+	switch {
+	case len(files) > 0:
+	case team.OwnFiles:
+		files = []string{"src/" + module + "/" + demoSlug(title) + ".go"}
+	default:
 		files = []string{"src/" + module + "/handler.go", "src/" + module + "/" + demoSlug(title) + ".go"}
 	}
 	var commits []demoCommit
 	for index := 0; index < count; index++ {
 		day := c.CreatedAgo - (c.CreatedAgo-end)*index/count
 		message := title
-		if index > 0 {
+		switch {
+		case index > 0 && index <= failed:
 			message = "Fix CI: " + strings.ToLower(title[:1]) + title[1:]
+		case index > failed:
+			message = "Review follow-up: " + strings.ToLower(title[:1]) + title[1:]
 		}
 		if c.Text {
 			message = key + " " + message
 		}
+		touched := files
+		if team.OwnFiles && index > failed {
+			touched = []string{fmt.Sprintf("src/%s/%s_%d_test.go", module, strings.ReplaceAll(demoSlug(title), "-", "_"), index)}
+		}
 		commits = append(commits, demoCommit{
 			SHA: demoSHA(c.Repo, key, title, c.CreatedAgo, c.MergedAgo, index), Message: message, Author: author,
-			At: demoAt(day, 9+index, 15), Files: files,
+			At: demoAt(day, 8+index%3, int(seed[1+index])%60), Files: touched,
 		})
 	}
 	return commits
 }
 
-// demoRuns are a change's CI runs: the failed ones on its branch, then a passing one (on main when it
-// merged).
-func (build *demoBuild) demoRuns(c demoChange, commits []demoCommit, branch string, deployRepo bool) []demoRun {
+// demoRuns are a change's CI runs, one per commit: the first ones fail (CIFailed of them, at most two),
+// the rest pass, and an open change with failing CI fails its last run too; a merged change also runs on
+// main after the merge.
+func (build *demoBuild) demoRuns(c demoChange, times demoChangeTimes, commits []demoCommit, branch string, deployRepo bool) []demoRun {
 	var runs []demoRun
+	failed := min(c.CIFailed, 2)
 	for index, commit := range commits {
 		last := index == len(commits)-1
-		run := demoRun{ID: 1700000 + build.id(), SHA: commit.SHA, Branch: branch, At: commit.At, Failed: !last || (c.MergedAgo < 0 && c.CIFailed > 0)}
+		run := demoRun{ID: 1700000 + build.id(), SHA: commit.SHA, Branch: branch, At: commit.At, Failed: index < failed || (last && c.MergedAgo < 0 && c.CIFailed > 0)}
 		runs = append(runs, run)
 	}
 	if c.MergedAgo >= 0 {
 		runs = append(runs, demoRun{ID: 1700000 + build.id(), SHA: commits[len(commits)-1].SHA, Branch: "main",
-			At: demoAt(c.MergedAgo, 15, 40), Deploy: deployRepo})
+			At: times.MainRun, Deploy: deployRepo})
 	}
 	return runs
 }
@@ -309,17 +378,18 @@ func (build *demoBuild) addTeam(team demoTeam) {
 		if team.Tracker == "jira" || team.Tracker == "linear" {
 			key = build.refs[team.Name][index]
 		}
-		created := demoAt(story.CreatedAgo, 8, 30)
+		seed := demoSeed(team.Name, story.Title)
+		created := demoAt(story.CreatedAgo, 8+int(seed[0])%3, int(seed[1])%60)
 		done := ""
 		if story.DoneAgo >= 0 {
-			done = demoAt(story.DoneAgo, 17, 0)
+			done = demoAt(story.DoneAgo, 18+int(seed[2])%3, int(seed[3])%60)
 		}
 		// The tracker item of a GitHub or GitLab team: an issue in the repository of its first change (its
 		// home repository when the change is in another team's repository).
 		home := demoIssueHome(team, story)
 		points := demoPoints(team, story)
 		blocked := build.blockedRefs(team, story)
-		linkedAt := demoAt(story.CreatedAgo, 10, 0)
+		linkedAt := demoAfter(created, 45)
 		issueNumber := 0
 		switch team.Tracker {
 		case "github":
@@ -430,7 +500,7 @@ func (build *demoBuild) addPullRequest(team demoTeam, author githubUser, story d
 	repo := build.GitHub[c.Repo]
 	repo.next++
 	number := repo.next
-	commits := demoChangeCommits(c, key, story.Title, author.Login)
+	commits := demoChangeCommits(team, c, key, story.Title, author.Login)
 	body := demoChangeText(story)
 	var closes []string
 	if team.Tracker == "github" {
@@ -452,25 +522,26 @@ func (build *demoBuild) addPullRequest(team demoTeam, author githubUser, story d
 			}
 		}
 	}
+	times := demoTimesOf(team, story, c)
 	item := githubIssue{
 		Number: number, Title: title, Body: body, Author: author, PR: true, Head: "feature/" + demoSlug(story.Title),
-		CreatedAt: demoAt(c.CreatedAgo, 9, 0), UpdatedAt: demoAt(demoEnd(c), 15, 30), Closes: closes,
+		CreatedAt: times.Created, UpdatedAt: demoAt(demoEnd(c), 15, 30), Closes: closes,
 	}
 	if c.MergedAgo >= 0 {
-		item.ClosedAt, item.MergedAt = demoAt(c.MergedAgo, 15, 30), demoAt(c.MergedAgo, 15, 30)
+		item.ClosedAt, item.MergedAt, item.UpdatedAt = times.Merged, times.Merged, times.Merged
 		if c.Changes {
-			item.Reviews = append(item.Reviews, githubReview{build.id() + 910000, "CHANGES_REQUESTED", demoAt(c.CreatedAgo, 11, 0), reviewer})
+			item.Reviews = append(item.Reviews, githubReview{build.id() + 910000, "CHANGES_REQUESTED", times.ChangesRequested, reviewer})
 		}
-		item.Reviews = append(item.Reviews, githubReview{build.id() + 910000, "APPROVED", demoAt(c.MergedAgo, 14, 0), reviewer})
+		item.Reviews = append(item.Reviews, githubReview{build.id() + 910000, "APPROVED", times.Approved, reviewer})
 	} else if c.Changes {
-		item.Reviews = append(item.Reviews, githubReview{build.id() + 910000, "CHANGES_REQUESTED", demoAt(demoEnd(c), 11, 0), reviewer})
+		item.Reviews = append(item.Reviews, githubReview{build.id() + 910000, "CHANGES_REQUESTED", times.ChangesRequested, reviewer})
 	}
 	repo.Items = append(repo.Items, item)
 	repo.Commits = append(repo.Commits, commits...)
-	repo.Runs = append(repo.Runs, build.demoRuns(c, commits, item.Head, c.Deploy)...)
+	repo.Runs = append(repo.Runs, build.demoRuns(c, times, commits, item.Head, c.Deploy)...)
 	if c.Deploy && c.MergedAgo >= 0 {
 		repo.Deploys = append(repo.Deploys, demoDeploy{ID: 2200000 + build.id(), MR: number, SHA: commits[len(commits)-1].SHA,
-			At: demoAt(c.MergedAgo, 16, 30), Merged: item.MergedAt, Failed: c.DeployFailed})
+			At: times.Deploy, Merged: item.MergedAt, Failed: c.DeployFailed})
 	}
 	return number
 }
@@ -493,25 +564,26 @@ func (build *demoBuild) addMergeRequest(team demoTeam, index int, story demoStor
 	case c.Text:
 		description = "Implements " + ref + ".\n\n" + demoChangeText(story)
 	}
-	commits := demoChangeCommits(c, "", story.Title, author.Name)
+	commits := demoChangeCommits(team, c, "", story.Title, author.Name)
 	branch := "feature/" + demoSlug(story.Title)
+	times := demoTimesOf(team, story, c)
 	item := gitlabItem{
 		IID: iid, Title: story.Title, Description: description, Author: author, MR: true, Branch: branch,
-		CreatedAt: demoAt(c.CreatedAgo, 9, 0), UpdatedAt: demoAt(demoEnd(c), 15, 30), Reviewer: reviewer,
+		CreatedAt: times.Created, UpdatedAt: demoAt(demoEnd(c), 15, 30), Reviewer: reviewer,
 	}
 	for _, commit := range commits {
 		item.Commits = append(item.Commits, commit.SHA)
 	}
 	if c.MergedAgo >= 0 {
-		item.ClosedAt, item.MergedAt = demoAt(c.MergedAgo, 15, 30), demoAt(c.MergedAgo, 15, 30)
-		item.ApprovedAt = demoAt(c.MergedAgo, 14, 0)
+		item.ClosedAt, item.MergedAt, item.UpdatedAt = times.Merged, times.Merged, times.Merged
+		item.ApprovedAt = times.Approved
 	}
 	project.Items = append(project.Items, item)
 	project.Commits = append(project.Commits, commits...)
-	project.Pipelines = append(project.Pipelines, build.demoRuns(c, commits, branch, c.Deploy)...)
+	project.Pipelines = append(project.Pipelines, build.demoRuns(c, times, commits, branch, c.Deploy)...)
 	if c.Deploy && c.MergedAgo >= 0 {
 		project.Deploys = append(project.Deploys, demoDeploy{ID: 5100 + build.id(), MR: iid, SHA: commits[len(commits)-1].SHA,
-			At: demoAt(c.MergedAgo, 16, 30), Merged: item.MergedAt, Failed: c.DeployFailed})
+			At: times.Deploy, Merged: item.MergedAt, Failed: c.DeployFailed})
 	}
 	return iid
 }

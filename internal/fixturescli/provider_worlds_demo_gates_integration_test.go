@@ -468,3 +468,250 @@ func TestDemoGateG10DeliveryReachesTheAsOfDay(t *testing.T) {
 	}
 	t.Logf("latest deployment %s, latest CI day %s: %d of %d runs passing", latestDeploy, latestCI, passed[latestCI], runs[latestCI])
 }
+
+// demoGateTeamNames are the teams' names by team id.
+func demoGateTeamNames(world FrozenWorld) map[string]string {
+	names := map[string]string{}
+	for _, row := range demoGateRows(world, "teams") {
+		names[gateText(row["id"])] = gateText(row["name"])
+	}
+	return names
+}
+
+// demoGateTeamRepos are each team's (by name) currently owned repositories.
+func demoGateTeamRepos(world FrozenWorld) map[string][]string {
+	names := demoGateTeamNames(world)
+	repos := map[string][]string{}
+	for repoID, teams := range demoGateRepoOwners(world) {
+		for team := range teams {
+			repos[names[team]] = append(repos[names[team]], repoID)
+		}
+	}
+	for name := range repos {
+		sort.Strings(repos[name])
+	}
+	return repos
+}
+
+// Incidents reach a change failure rate only through a deployment: the daily work-graph edges tie an
+// incident of a service's repository to that repository's deployment of the same UTC day, before the
+// incident. Several incidents, one of them on a failed deployment, must be tied that way.
+func TestDemoGateIncidentsTieToSameDayDeployments(t *testing.T) {
+	world, _ := demoGateWorld(t)
+	serviceRepo := map[string]string{}
+	for _, row := range demoGateRows(world, "operational_service_repository_mappings") {
+		if number, ok := gateNumber(row["is_active"]); ok && number == 1 {
+			serviceRepo[gateText(row["service_id"])] = gateText(row["repo_id"])
+		}
+	}
+	type deploy struct {
+		at     time.Time
+		failed bool
+	}
+	deploys := map[string][]deploy{}
+	for _, row := range demoGateRows(world, "deployments") {
+		if at, ok := gateTime(row["deployed_at"]); ok {
+			status := gateText(row["status"])
+			deploys[gateText(row["repo_id"])] = append(deploys[gateText(row["repo_id"])], deploy{at, status == "failed" || status == "failure"})
+		}
+	}
+	tied, onFailed, total := 0, 0, 0
+	for _, row := range demoGateRows(world, "operational_incidents") {
+		total++
+		started, ok := gateTime(row["started_at"])
+		repoID := serviceRepo[gateText(row["service_id"])]
+		if !ok || repoID == "" {
+			continue
+		}
+		for _, d := range deploys[repoID] {
+			if gateDay(d.at) == gateDay(started) && !started.Before(d.at) {
+				tied++
+				if d.failed {
+					onFailed++
+				}
+				break
+			}
+		}
+	}
+	t.Logf("%d of %d incidents start after a same-day deployment of their service's repository, %d of them a failed one", tied, total, onFailed)
+	if tied < 5 || onFailed < 1 {
+		t.Errorf("%d incidents tie to a same-day deployment (%d to a failed one), want at least 5 (and 1): no change failure rate can be measured", tied, onFailed)
+	}
+}
+
+// demoGateRepoInputs are a repository's churn on files touched more than once (share of the window's
+// churn) and its p90 hours to a first review, over the 30 days before the instant: two of the risk
+// score's inputs, computed as the daily metrics compute them, from the world's rows.
+func demoGateRepoInputs(world FrozenWorld, frozenAt time.Time) (churn map[string]float64, reviewP90 map[string]float64) {
+	since := frozenAt.AddDate(0, 0, -30)
+	committed := map[string]bool{}
+	for _, row := range demoGateRows(world, "git_commits") {
+		if at, ok := gateTime(row["committer_when"]); ok && !at.Before(since) && !at.After(frozenAt) {
+			committed[gateText(row["repo_id"])+"/"+gateText(row["hash"])] = true
+		}
+	}
+	touches := map[string]map[string]int{}
+	lines := map[string]map[string]float64{}
+	for _, row := range demoGateRows(world, "git_commit_stats") {
+		repoID := gateText(row["repo_id"])
+		if !committed[repoID+"/"+gateText(row["commit_hash"])] {
+			continue
+		}
+		if touches[repoID] == nil {
+			touches[repoID], lines[repoID] = map[string]int{}, map[string]float64{}
+		}
+		path := gateText(row["file_path"])
+		added, _ := gateNumber(row["additions"])
+		deleted, _ := gateNumber(row["deletions"])
+		touches[repoID][path]++
+		lines[repoID][path] += added + deleted
+	}
+	churn = map[string]float64{}
+	for repoID, files := range lines {
+		var all, again float64
+		for path, count := range files {
+			all += count
+			if touches[repoID][path] > 1 {
+				again += count
+			}
+		}
+		if all > 0 {
+			churn[repoID] = again / all
+		}
+	}
+	latencies := map[string][]float64{}
+	for _, row := range demoGateRows(world, "git_pull_requests") {
+		merged, ok := gateTime(row["merged_at"])
+		created, okCreated := gateTime(row["created_at"])
+		reviewed, okReviewed := gateTime(row["first_review_at"])
+		if !ok || !okCreated || !okReviewed || merged.Before(since) || merged.After(frozenAt) {
+			continue
+		}
+		latencies[gateText(row["repo_id"])] = append(latencies[gateText(row["repo_id"])], reviewed.Sub(created).Hours())
+	}
+	reviewP90 = map[string]float64{}
+	for repoID, values := range latencies {
+		sort.Float64s(values)
+		reviewP90[repoID] = values[min(len(values)-1, int(float64(len(values))*0.9))]
+	}
+	return churn, reviewP90
+}
+
+// Contrast between teams: one team's repositories have the inputs of a low risk score (little churn on
+// files touched again, first reviews within hours), and a second team's first reviews are as quick while
+// its churn is not (a middling score); the rest keep their stories.
+func TestDemoGateTeamsContrast(t *testing.T) {
+	world, frozenAt := demoGateWorld(t)
+	churn, review := demoGateRepoInputs(world, frozenAt)
+	teamRepos := demoGateTeamRepos(world)
+	mean := func(team string, values map[string]float64) (float64, int) {
+		var sum float64
+		count := 0
+		for _, repoID := range teamRepos[team] {
+			if value, ok := values[repoID]; ok {
+				sum += value
+				count++
+			}
+		}
+		if count == 0 {
+			return 0, 0
+		}
+		return sum / float64(count), count
+	}
+	for _, team := range []string{"Mobile", "Identity", "Checkout", "Payments"} {
+		c, cn := mean(team, churn)
+		r, rn := mean(team, review)
+		t.Logf("%s: churn on files touched again %.2f (%d repos), first review p90 %.1fh (%d repos)", team, c, cn, r, rn)
+	}
+	if c, n := mean("Mobile", churn); n == 0 || c > 0.1 {
+		t.Errorf("Mobile: churn on files touched again %.2f over %d repositories, want at most 0.10 (a healthy team)", c, n)
+	}
+	if r, n := mean("Mobile", review); n == 0 || r > 14 {
+		t.Errorf("Mobile: first review p90 %.1fh over %d repositories, want at most 14h (a healthy team)", r, n)
+	}
+	if r, n := mean("Identity", review); n == 0 || r > 14 {
+		t.Errorf("Identity: first review p90 %.1fh over %d repositories, want at most 14h (a middling team)", r, n)
+	}
+	if c, n := mean("Identity", churn); n == 0 || c <= 0.1 {
+		t.Errorf("Identity: churn on files touched again %.2f over %d repositories, want above 0.10 (a middling team, not a healthy one)", c, n)
+	}
+}
+
+// Web is sparse, not stale: its repositories hold commits in the two weeks before the instant, so its
+// daily repository metrics, and the health score built on them, reach the as-of day.
+func TestDemoGateWebHasRecentWork(t *testing.T) {
+	world, frozenAt := demoGateWorld(t)
+	web := map[string]bool{}
+	for _, repoID := range demoGateTeamRepos(world)["Web"] {
+		web[repoID] = true
+	}
+	if len(web) == 0 {
+		t.Fatal("the Web team owns no repository")
+	}
+	latest := time.Time{}
+	for _, row := range demoGateRows(world, "git_commits") {
+		if at, ok := gateTime(row["committer_when"]); ok && web[gateText(row["repo_id"])] && at.After(latest) {
+			latest = at
+		}
+	}
+	if frozenAt.Sub(latest) > 14*24*time.Hour {
+		t.Errorf("Web's latest commit is %s, more than two weeks before the instant %s", latest, frozenAt)
+	}
+}
+
+// No synthetic tells: pull request cycle times vary (no two teams share a median, few changes share a
+// duration), and some repository days hold several commits.
+func TestDemoGateCycleTimesVary(t *testing.T) {
+	world, _ := demoGateWorld(t)
+	teamOf := map[string]string{}
+	for team, repos := range demoGateTeamRepos(world) {
+		for _, repoID := range repos {
+			if teamOf[repoID] == "" || team < teamOf[repoID] {
+				teamOf[repoID] = team
+			}
+		}
+	}
+	durations := map[float64]int{}
+	byTeam := map[string][]float64{}
+	count := 0
+	for _, row := range demoGateRows(world, "git_pull_requests") {
+		merged, ok := gateTime(row["merged_at"])
+		created, okCreated := gateTime(row["created_at"])
+		if !ok || !okCreated {
+			continue
+		}
+		hours := merged.Sub(created).Hours()
+		durations[hours]++
+		count++
+		byTeam[teamOf[gateText(row["repo_id"])]] = append(byTeam[teamOf[gateText(row["repo_id"])]], hours)
+	}
+	if float64(len(durations)) < 0.9*float64(count) {
+		t.Errorf("%d merged pull requests have %d distinct cycle times, want at least 90%% distinct", count, len(durations))
+	}
+	medians := map[float64][]string{}
+	for team, values := range byTeam {
+		sort.Float64s(values)
+		medians[values[len(values)/2]] = append(medians[values[len(values)/2]], team)
+	}
+	for median, teams := range medians {
+		if len(teams) > 1 {
+			sort.Strings(teams)
+			t.Errorf("teams %v share the median cycle time %.2fh", teams, median)
+		}
+	}
+	perDay := map[string]int{}
+	for _, row := range demoGateRows(world, "git_commits") {
+		if at, ok := gateTime(row["committer_when"]); ok {
+			perDay[gateText(row["repo_id"])+"/"+gateDay(at)]++
+		}
+	}
+	busy := 0
+	for _, commits := range perDay {
+		if commits >= 3 {
+			busy++
+		}
+	}
+	if busy < 5 {
+		t.Errorf("%d repository days hold three commits or more, want at least 5", busy)
+	}
+}

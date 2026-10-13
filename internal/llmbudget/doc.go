@@ -4,5 +4,7 @@
 // priced" decision, and the status a caller reads (used, limit, remaining and
 // the reason enforcement is or is not available). Every Go reader of a
 // budget goes through here (R299: one implementation), so the admin route and
-// a future runtime guard can never price or window differently.
+// the runtime guard (guard.go: reserve, call, settle) can never price or window
+// differently. A `reserved` row is never freed by age (operator.go): the
+// provider may still bill, so only an operator verb voids one.
 package llmbudget

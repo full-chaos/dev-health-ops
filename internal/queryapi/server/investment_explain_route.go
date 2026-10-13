@@ -51,6 +51,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -225,7 +226,7 @@ func buildInvestmentExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (ha
 	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}
 
 	routeMux := routeswitch.NewMux(investmentExplainSwitchFromEnv(getenv))
-	routeMux.Register(investmentExplainOperation, newInvestmentExplainWorkHandler(reader, cacheWriter, orgSettings))
+	routeMux.Register(investmentExplainOperation, newInvestmentExplainWorkHandler(reader, cacheWriter, orgSettings, llmbudget.PgStore{Pool: orgSettingsPool}))
 
 	// Auth runs BEFORE Dispatch, same order /query's newQueryHandler uses
 	// (query_route.go:1180-1194: resolve operation, THEN auth, THEN
@@ -371,6 +372,7 @@ func newInvestmentExplainWorkHandler(
 	reader *investmentexplain.Reader,
 	writer *investmentexplain.CacheWriter,
 	orgSettings llmorgsettings.Resolver,
+	budgetStore llmbudget.Store,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
@@ -468,7 +470,7 @@ func newInvestmentExplainWorkHandler(
 			categorize.CompletionResult, string, string, error,
 		) {
 			return investmentexplain.CompleteInvestmentMixExplanationForOrg(
-				ctx, requestedProvider, requestedModel, claims.OrgID, orgSettings, fullPrompt)
+				ctx, requestedProvider, requestedModel, claims.OrgID, orgSettings, budgetStore, fullPrompt)
 		}
 
 		writeKeepAliveJSON(r.Context(), w, func(ctx context.Context) ([]byte, error) {

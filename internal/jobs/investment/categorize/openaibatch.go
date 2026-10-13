@@ -61,6 +61,15 @@ func (p *OpenAIProvider) batchLine(item BatchItem) ([]byte, error) {
 
 // SubmitBatch uploads one JSONL file (purpose batch) and creates the batch.
 func (p *OpenAIProvider) SubmitBatch(ctx context.Context, items []BatchItem) (BatchSubmission, error) {
+	// Batch pricing differs from synchronous pricing and the batch result does
+	// not keep cached-token detail, so a configured budget cannot be enforced
+	// on it: refuse before any upload, as the Python guard did. An org with no
+	// budget keeps its batch behaviour.
+	if p.cfg.Budget != nil {
+		if err := p.cfg.Budget.RefuseUnderBudget(ctx); err != nil {
+			return BatchSubmission{}, err
+		}
+	}
 	if err := validateBatchItems(items); err != nil {
 		return BatchSubmission{}, err
 	}

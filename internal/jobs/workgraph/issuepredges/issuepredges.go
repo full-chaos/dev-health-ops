@@ -154,34 +154,46 @@ type TextParseResult struct {
 	JiraRefsFound   int
 	GitHubRefsFound int
 	GitLabRefsFound int
+	// CrossRefsFound counts owner/repo#n (GitHub) and group/project#n (GitLab)
+	// references, which name their repository in the text (CHAOS-9457).
+	CrossRefsFound int
+	// AmbiguousKeys counts key references (KEY-n) that match an issue row of more
+	// than one provider in the org; none of them is linked (CHAOS-9457).
+	AmbiguousKeys int
 }
 
 // providerLookup maps a provider's own issue-identifier shape to a
 // work_item_id, mirroring the three dicts builder.py:783-812 builds from
 // work_items rows before scanning any PR text.
 type providerLookup struct {
-	jiraKey map[string]string    // uppercased Jira key -> work_item_id
-	github  map[[2]string]string // (repo_id string, issue number string) -> work_item_id
-	gitlab  map[[2]string]string // (repo_id string, issue number string) -> work_item_id
+	// keyed maps an uppercased KEY-n to every key-style work item of the org
+	// (jira and linear share one grammar; CHAOS-9457).
+	keyed  map[string][]keyedItem
+	byID   map[string]string    // exact work_item_id -> provider, for repo-named references
+	github map[[2]string]string // (repo_id string, issue number string) -> work_item_id
+	gitlab map[[2]string]string // (repo_id string, issue number string) -> work_item_id
 }
 
-// buildProviderLookup ports builder.py:783-812. Providers outside the three
-// text-parse-covered ones (notably Linear) are not tracked here at all --
-// their issue<->PR links arrive as native attachments and become edges via
-// the work_item_dependencies pass, not this one, matching Python's own
-// comment at builder.py:786-789.
+type keyedItem struct{ provider, workItemID string }
+
+// buildProviderLookup ports builder.py:783-812 and extends it (CHAOS-9457, a
+// DELIBERATE divergence from Python): Linear identifiers join Jira keys in one
+// KEY-n map, and every work_item_id is indexed for repository-named references
+// (owner/repo#n, group/project#n). Text resolves only against these real rows.
 func buildProviderLookup(workItems []WorkItemRow) providerLookup {
 	lookup := providerLookup{
-		jiraKey: make(map[string]string),
-		github:  make(map[[2]string]string),
-		gitlab:  make(map[[2]string]string),
+		keyed:  make(map[string][]keyedItem),
+		byID:   make(map[string]string),
+		github: make(map[[2]string]string),
+		gitlab: make(map[[2]string]string),
 	}
 	for _, wi := range workItems {
+		lookup.byID[wi.WorkItemID] = wi.Provider
 		switch wi.Provider {
-		case "jira":
-			if strings.HasPrefix(wi.WorkItemID, "jira:") {
-				key := strings.ToUpper(strings.TrimPrefix(wi.WorkItemID, "jira:"))
-				lookup.jiraKey[key] = wi.WorkItemID
+		case "jira", "linear":
+			if prefix := wi.Provider + ":"; strings.HasPrefix(wi.WorkItemID, prefix) {
+				key := strings.ToUpper(strings.TrimPrefix(wi.WorkItemID, prefix))
+				lookup.keyed[key] = append(lookup.keyed[key], keyedItem{provider: wi.Provider, workItemID: wi.WorkItemID})
 			}
 		case "github":
 			if idx := strings.LastIndex(wi.WorkItemID, "#"); idx >= 0 {
@@ -271,11 +283,26 @@ func DeriveTextParseEdges(prs []PullRequestRow, workItems []WorkItemRow, buildTi
 		jiraRefs := textrefs.ExtractJiraKeys(text)
 		result.JiraRefsFound += len(jiraRefs)
 		for _, ref := range jiraRefs {
-			workItemID, ok := lookup.jiraKey[strings.ToUpper(ref.IssueKey)]
-			if !ok {
+			items := lookup.keyed[strings.ToUpper(ref.IssueKey)]
+			switch {
+			case len(items) == 0:
+				continue
+			case len(items) > 1:
+				// The same KEY-n names an issue of two providers: the text does not
+				// say which, and a key string is not a link across providers.
+				result.AmbiguousKeys++
 				continue
 			}
-			emit(workItemID, "jira", ref.RawMatch, ref.RefType)
+			emit(items[0].workItemID, items[0].provider, ref.RawMatch, ref.RefType)
+		}
+
+		for _, ref := range ExtractRepoNamedIssueRefs(text) {
+			result.CrossRefsFound++
+			workItemID := ref.Prefix + ref.Repo + "#" + ref.Number
+			if _, ok := lookup.byID[workItemID]; !ok {
+				continue
+			}
+			emit(workItemID, ref.Provider, ref.RawMatch, ref.RefType)
 		}
 
 		ghRefs := textrefs.ExtractGitHubIssueRefs(text)

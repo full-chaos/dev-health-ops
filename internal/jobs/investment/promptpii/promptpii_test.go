@@ -76,7 +76,7 @@ func TestPlaceholdersAreStablePerValueAndDeterministic(t *testing.T) {
 func TestTextIsIdempotent(t *testing.T) {
 	inputs := []string{
 		"mail a.b@corp.example, cc @jane-doe and [~jdoe]; call (415) 555-0132 or +44 20 7946 0958",
-		"see https://deploy:hunter2pass@git.corp.example/x token=abcd1234efgh5678 ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+		"see https://deploy:hunter2pass@git.corp.example/x password: Tr0ub4dor3xx ghp_abcdefghijklmnopqrstuvwxyz0123456789",
 		"plain text with nothing to hide",
 	}
 	for _, in := range inputs {

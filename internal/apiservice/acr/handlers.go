@@ -11,6 +11,14 @@
 // public api listener has none. The
 // agent_context_runtime entitlement decision itself is ported in full via
 // internal/api/licensing, this package's only dependency for it.
+//
+// Entitlement route answers (acr's client depends on these):
+//   - 200 grants body: the org exists.
+//   - 404 {"detail":"Not found","code":"acr_organization_unknown"}: the id is
+//     a well-formed UUID and no organizations row exists (deleted or never
+//     created). The only answer a caller may read as "organization gone".
+//   - 404 {"detail":"Not found"} (no code): malformed id. Not "gone".
+//   - 503 {"detail":"Service unavailable"}: the store cannot be read.
 package acr
 
 import (
@@ -94,6 +102,12 @@ func healthHandler(store EntitlementStore, logger *slog.Logger) http.Handler {
 	})
 }
 
+// UnknownOrganizationCode is the stable machine code on the entitlement
+// route's 404 for a well-formed org id that has no organization row. acr
+// treats only a 404 carrying this code as "organization deleted"; any other
+// 404 (malformed id, unrouted path, proxy) is not.
+const UnknownOrganizationCode = "acr_organization_unknown"
+
 func entitlementHandler(store EntitlementStore, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		orgID := r.PathValue("org_id")
@@ -112,6 +126,11 @@ func entitlementHandler(store EntitlementStore, logger *slog.Logger) http.Handle
 			body.Set("agent_context_runtime", entitlement.AgentContextRuntime)
 			body.Set("acr_service_model", entitlement.ACRServiceModel)
 			writeModel(w, http.StatusOK, body)
+		case errors.Is(err, ErrOrgUnknown):
+			body := pyjson.NewObject()
+			body.Set("detail", "Not found")
+			body.Set("code", UnknownOrganizationCode)
+			writeModel(w, http.StatusNotFound, body)
 		case errors.Is(err, ErrOrgNotFound):
 			writeDetail(w, http.StatusNotFound, "Not found")
 		case errors.Is(err, ErrUnavailable):

@@ -22,6 +22,9 @@ func TestPostgresEntitlementStoreLookupRejectsMalformedOrgIDBeforeTouchingThePoo
 	if !errors.Is(err, ErrOrgNotFound) {
 		t.Fatalf("Lookup(malformed) error = %v, want ErrOrgNotFound", err)
 	}
+	if errors.Is(err, ErrOrgUnknown) {
+		t.Fatalf("Lookup(malformed) error = %v, must not be ErrOrgUnknown (no row was checked)", err)
+	}
 	if errors.Is(err, ErrUnavailable) {
 		t.Fatalf("Lookup(malformed) error = %v, must not also be ErrUnavailable", err)
 	}

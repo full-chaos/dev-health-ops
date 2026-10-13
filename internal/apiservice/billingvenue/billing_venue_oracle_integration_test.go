@@ -782,19 +782,20 @@ func billingNormalizer(seeded map[string]bool, start time.Time) func(string) str
 // org_name key (the row's organisation name, which the Python
 // reference never served) is dropped from both planes' bodies; the billing
 // unit tests pin it. So is the Go-only acr_service_model entitlement
-// feature (published by CHAOS-9311 after the Python build was frozen); the
-// entitlement unit tests pin it, and every other feature is still compared.
+// feature (published by CHAOS-9311 after the Python build was frozen) is
+// dropped only inside a "features" object; the entitlement unit tests pin
+// it, and the key anywhere else, like every other feature, is still compared.
 func sortRecordKeys(body string) string {
 	value, err := pyjson.DecodeString(body)
 	if err != nil {
 		return body
 	}
-	var walk func(value pyjson.Value, sortHere bool) pyjson.Value
-	walk = func(value pyjson.Value, sortHere bool) pyjson.Value {
+	var walk func(value pyjson.Value, sortHere, features bool) pyjson.Value
+	walk = func(value pyjson.Value, sortHere, features bool) pyjson.Value {
 		switch v := value.(type) {
 		case []pyjson.Value:
 			for index := range v {
-				v[index] = walk(v[index], false)
+				v[index] = walk(v[index], false, false)
 			}
 			return v
 		case *pyjson.Object:
@@ -804,17 +805,17 @@ func sortRecordKeys(body string) string {
 			}
 			out := pyjson.NewObject()
 			for _, key := range keys {
-				if key == "org_name" || key == "acr_service_model" {
+				if key == "org_name" || (features && key == "acr_service_model") {
 					continue
 				}
 				item, _ := v.Get(key)
-				out.Set(key, walk(item, key == "plan" || key == "price"))
+				out.Set(key, walk(item, key == "plan" || key == "price", key == "features"))
 			}
 			return out
 		}
 		return value
 	}
-	encoded, err := pyjson.Marshal(walk(value, false))
+	encoded, err := pyjson.Marshal(walk(value, false, false))
 	if err != nil {
 		return body
 	}

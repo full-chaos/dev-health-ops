@@ -1254,7 +1254,7 @@ SELECT provider, team_id, repo_id, repo_full_name, match_type, is_primary, speci
 FROM team_repo_ownership FINAL
 WHERE org_id = ?
   AND source = 'inferred'
-  AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`,
+  AND (valid_to IS NULL OR (valid_to > now64(3, 'UTC') AND valid_to > valid_from))`,
 		orgID)
 	if err != nil {
 		return nil, err

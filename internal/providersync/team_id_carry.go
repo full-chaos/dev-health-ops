@@ -764,6 +764,10 @@ func (run *teamIDCarryRun) planLink(link teamIDCarryLink) error {
 		if validFrom := row.time("valid_from"); validFrom.After(closedAt) {
 			closedAt = validFrom
 		}
+		if link.table == "team_repo_ownership" {
+			// A close never lands at or before its own open (teamRepoOwnershipCloseAt).
+			closedAt = teamRepoOwnershipCloseAt(row.time("valid_from"), closedAt)
+		}
 		out = append(out, row.with("valid_to", &closedAt).with("updated_at", updated))
 	}
 	switch link.table {

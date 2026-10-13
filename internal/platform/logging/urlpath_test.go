@@ -24,6 +24,7 @@ func TestRedactURLPathHidesTheClosedSetOfForms(t *testing.T) {
 		"encoded separator after a protected name": {"/token%2F" + urlPathMarker + "/api/v3", "/[REDACTED]/api/v3"},
 		"encoded protected name":                   {"/%74oken/" + urlPathMarker + "/api/v3", "/%74oken/[REDACTED]/api/v3"},
 		"protected name at the end hides nothing":  {"/api/v3/token", "/api/v3/token"},
+		"encoded path parameter delimiter":         {"/api/v3%3Baccess_token=" + urlPathMarker + "/orgs", "/api/[REDACTED]/orgs"},
 		"two credentials":                          {"/token/" + urlPathMarker + "/x/password/" + urlPathMarker, "/token/[REDACTED]/x/password/[REDACTED]"},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -46,6 +46,8 @@ func TestANotFoundErrorCarriesNoCredentialFromTheBaseURLPath(t *testing.T) {
 		{"path parameter on a segment", "/api/v3;access_token=" + plantedBasePathMarker, "/orgs/acme/repos"},
 		{"path parameter on the first segment", "/gitlab;private_token=" + plantedBasePathMarker + "/api/v4", "/projects"},
 		{"percent-encoded separator", "/token%2F" + plantedBasePathMarker + "/api/v3", "/orgs/acme/repos"},
+		{"encoded path parameter delimiter", "/api/v3%3Baccess_token=" + plantedBasePathMarker, "/orgs/acme/repos"},
+		{"encoded path parameter delimiter, GitLab root", "/gitlab%3Bprivate_token=" + plantedBasePathMarker + "/api/v4", "/projects"},
 		{"percent-encoded name", "/%74oken/" + plantedBasePathMarker + "/api/v3", "/orgs/acme/repos"},
 	} {
 		t.Run(row.name, func(t *testing.T) {

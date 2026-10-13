@@ -59,7 +59,13 @@ func redactURLPath(path string) (result string) {
 			continue
 		}
 		if strings.Contains(decoded, ";") {
-			segments[index] = redactPathParameters(segment, len(pieces) > 1)
+			kept := redactPathParameters(segment, len(pieces) > 1)
+			// A delimiter written encoded (`%3B`) is not split on in the raw segment: the decoded form holds the parameter, so the
+			// segment is hidden whole when the raw pass changed nothing.
+			if kept == segment && hasProtectedParameter(decoded) {
+				kept = redacted
+			}
+			segments[index] = kept
 		}
 	}
 	return strings.Join(segments, "/")
@@ -85,4 +91,16 @@ func redactPathParameters(segment string, hadEncodedSlash bool) string {
 		return redacted
 	}
 	return strings.Join(parts, ";")
+}
+
+// hasProtectedParameter reports whether a decoded segment holds a `;name=value` parameter whose name is a protected key.
+func hasProtectedParameter(decoded string) bool {
+	parts := strings.Split(decoded, ";")
+	for position := 1; position < len(parts); position++ {
+		name, _, hasValue := strings.Cut(parts[position], "=")
+		if hasValue && protectedKeyCached(name) {
+			return true
+		}
+	}
+	return false
 }

@@ -4,6 +4,7 @@ package teamownership
 
 import (
 	"context"
+	"math"
 	"reflect"
 	"sort"
 	"testing"
@@ -746,5 +747,93 @@ func TestOwnersByRepoIsTheRuleOfTheTeamGroupings(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("OwnersByRepo = %v, want %v", got, want)
+	}
+}
+
+// CHAOS-9410, D5988: OwnerSharesByRepo gives the main owner and every lesser
+// owner (co-owner rows included) at its own stored share, and
+// AuthoritativeOwnersByRepo is its main owners.
+func TestOwnerSharesByRepoGivesEveryOwnerItsOwnShare(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatalf("open clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	const org = "org-owner-shares"
+	asOf := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	start := asOf.AddDate(0, 0, -30)
+	repoShared, repoTie, repoUnmeasured, repoSole := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	type fact struct {
+		team      string
+		source    string
+		repo      uuid.UUID
+		isPrimary uint8
+		share     *float64
+	}
+	f := func(v float64) *float64 { return &v }
+	facts := []fact{
+		{"team-main", "inferred", repoShared, 1, f(0.5)},
+		{"team-lesser-1", "inferred", repoShared, 2, f(0.3)},
+		{"team-lesser-2", "inferred", repoShared, 2, f(0.2)},
+		{"team-a", "inferred", repoTie, 1, f(0.5)},
+		{"team-b", "inferred", repoTie, 1, f(0.5)},
+		{"team-main", "inferred", repoUnmeasured, 1, f(0.9)},
+		{"team-grant", "provider_access", repoUnmeasured, 0, nil},
+		{"team-sole", "inferred", repoSole, 1, f(1)},
+	}
+	for _, row := range facts {
+		if err := conn.Exec(ctx, `
+            INSERT INTO team_repo_ownership
+                (org_id, provider, team_id, repo_id, repo_full_name, match_type,
+                 source, is_primary, specificity, priority, share, valid_from, valid_to, updated_at)
+            VALUES (?, 'github', ?, ?, ?, 'exact', ?, ?, 100, 0, ?, ?, NULL, ?)
+        `, org, row.team, row.repo, "acme/"+row.repo.String(), row.source, row.isPrimary, row.share, start, start); err != nil {
+			t.Fatalf("seed team_repo_ownership: %v", err)
+		}
+	}
+	got, err := OwnerSharesByRepo(ctx, conn, org, asOf)
+	if err != nil {
+		t.Fatalf("OwnerSharesByRepo: %v", err)
+	}
+	type owner = OwnerShare
+	want := map[string][]owner{
+		repoShared.String():     {{"team-main", true, 0.5}, {"team-lesser-1", false, 0.3}, {"team-lesser-2", false, 0.2}},
+		repoUnmeasured.String(): {{"team-main", true, 0.5}, {"team-grant", false, 0.5}},
+		repoSole.String():       {{"team-sole", true, 1}},
+	}
+	for repoID, wantOwners := range want {
+		gotOwners := got[repoID]
+		if len(gotOwners) != len(wantOwners) {
+			t.Fatalf("repo %s owners %v, want %v", repoID, gotOwners, wantOwners)
+		}
+		for i := range wantOwners {
+			if gotOwners[i].TeamID != wantOwners[i].TeamID || gotOwners[i].Main != wantOwners[i].Main || math.Abs(gotOwners[i].Share-wantOwners[i].Share) > 1e-9 {
+				t.Fatalf("repo %s owner %d = %+v, want %+v", repoID, i, gotOwners[i], wantOwners[i])
+			}
+		}
+	}
+	tie := got[repoTie.String()]
+	if len(tie) != 2 || !tie[0].Main || !tie[1].Main || math.Abs(tie[0].Share-0.5) > 1e-9 || math.Abs(tie[1].Share-0.5) > 1e-9 {
+		t.Fatalf("full tie owners %+v, want two main owners at 0.5", tie)
+	}
+	mains, err := AuthoritativeOwnersByRepo(ctx, conn, org, asOf)
+	if err != nil {
+		t.Fatalf("AuthoritativeOwnersByRepo: %v", err)
+	}
+	if len(mains[repoShared.String()]) != 1 || mains[repoShared.String()][0] != "team-main" || len(mains[repoTie.String()]) != 2 {
+		t.Fatalf("main owners %v: a lesser owner must not be a main owner", mains)
 	}
 }

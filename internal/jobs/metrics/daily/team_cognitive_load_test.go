@@ -9,6 +9,8 @@ import (
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // Test fixtures below port test_team_cognitive_load.py's own fixtures
@@ -34,7 +36,7 @@ func TestBuildTeamCognitiveLoadRowsAggregatesByOwnershipNeverReadingRowTeamID(t 
 	}
 	repoToTeam := map[string]string{repoID.String(): "gh:platform"}
 
-	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, nil, oneOwnerEach(repoToTeam), cognitiveLoadTestComputedAt)
+	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, nil, soleOwnerShares(repoToTeam), cognitiveLoadTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
@@ -93,7 +95,7 @@ func TestBuildTeamCognitiveLoadRowsSumsAcrossEveryOwnedRepoAndRecomputesRatio(t 
 	}
 	repoToTeam := map[string]string{repoA.String(): "gh:platform", repoB.String(): "gh:platform"}
 
-	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, teamRows, oneOwnerEach(repoToTeam), cognitiveLoadTestComputedAt)
+	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, teamRows, soleOwnerShares(repoToTeam), cognitiveLoadTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
@@ -129,7 +131,7 @@ func TestBuildTeamCognitiveLoadRowsUnownedRepoContributesToNoTeam(t *testing.T) 
 		{RepoID: repoID, AuthorEmail: "a@example.com", PRInterruptionLoad: 3},
 	}
 
-	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, nil, map[string][]string{}, cognitiveLoadTestComputedAt)
+	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, nil, map[string][]teamownership.OwnerShare{}, cognitiveLoadTestComputedAt)
 
 	if len(records) != 0 {
 		t.Fatalf("records=%d, want 0 (unowned repo must contribute to no team): %#v", len(records), records)
@@ -147,7 +149,7 @@ func TestBuildTeamCognitiveLoadRowsMeasuredZeroVsUnmeasuredNil(t *testing.T) {
 	}
 	repoToTeam := map[string]string{repoID.String(): "gh:platform"}
 
-	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, nil, teamRows, oneOwnerEach(repoToTeam), cognitiveLoadTestComputedAt)
+	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, nil, teamRows, soleOwnerShares(repoToTeam), cognitiveLoadTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
@@ -166,7 +168,7 @@ func TestBuildTeamCognitiveLoadRowsMeasuredZeroVsUnmeasuredNil(t *testing.T) {
 // exit at the caller level -- the aggregator itself must also produce zero
 // records for zero input, independent of that caller-level shortcut.
 func TestBuildTeamCognitiveLoadRowsEmptyInputsProduceNoRows(t *testing.T) {
-	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, nil, nil, map[string][]string{}, cognitiveLoadTestComputedAt)
+	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, nil, nil, map[string][]teamownership.OwnerShare{}, cognitiveLoadTestComputedAt)
 	if len(records) != 0 {
 		t.Fatalf("records=%d, want 0", len(records))
 	}

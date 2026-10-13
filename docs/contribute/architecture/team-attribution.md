@@ -344,7 +344,22 @@ at all pass membership through unchanged); `linked_issue` (5) requires a real `w
 donor row resolving to a `work_items`
 row whose **own team came from a first-class fact (sources 0–3; membership never wins, CHAOS-9414)** — a donor resolved only by
 `author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author
-signal nor a bare prefix can ever be laundered into rank-5 inheritance (both fall through to 6/7);
+signal nor a bare prefix can ever be laundered into rank-5 inheritance (both fall through to 6/7).
+**The donor's team is its own attribution ROW as of the linked item's day, copied, never resolved again
+(CHAOS-9460; lead ruling (i), daily partition semantics):** a donor that the same run writes gives the row
+that run computes for it with the facts of the linked item's day (a daily partition's day; the backstop's
+day of each linked item; a provider sync for the items it syncs); any other donor gives its stored newest
+primary row in `work_item_team_attributions` (`ClickHouseFactSource.LoadDonorRows`), with that row's team
+and source, never a resolution of it. A donor with no row of its own gives nothing (the item falls
+through) until it is attributed; a later run then copies its row. A later change of the donor's row does
+not move an item already computed (recomputing the dependents of a changed donor row is ticket 9478). The
+row's source must be one of sources 0–3 above. The row's evidence names the donor:
+`linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` (the frozen
+Python oracles wrote `linked_issue=<item id>`, the item's own id; the oracle comparison declares that divergence,
+`pythonLinkedIssueEvidence`). Pinned by `TestALinkedItemCopiesItsDonorsRowOnly`, `TestALinkedItemIsRevisitedOnceItsDonorHasARow`,
+`TestAPullRequestCopiesItsDonorsStoredRow`, `TestALinkedItemCopiesTheTeamOfItsDonorsOwnRow` (real
+ClickHouse, a donor of each of github, gitlab, jira and linear) and
+`TestTheBackstopGivesALinkedItemItsDonorsRowOfTheLinkedItemsDay`;
 `author_membership` (6) is a PERSON signal, "at best a low-precedence fallback" (chris,
 CHAOS-4244) and, since CHAOS-9414, never wins at all — it is provenance only; `manual_fallback` (7) can only beat `unassigned`; a whole org at `unassigned` usually
 means the ClickHouse `teams` dimension is empty.
@@ -434,7 +449,7 @@ means the ClickHouse `teams` dimension is empty.
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` | `team_repo_ownership` | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner since CHAOS-9411) | 4–8 | 0–2 | `repo_full_name` |
 | 4 | `assignee_membership` | CHAOS-4321 two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only (CHAOS-9414), never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
-| 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–8 | 0–3 | `dependency_type, donor_work_item_id, donor_provider` |
+| 5 | `linked_issue` | `work_item_dependencies` donor → the team of the donor's own attribution row (CHAOS-9460) | medium | 6–8 | 0–3 | `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` |
 | 6 | `author_membership` | CHAOS-4244 PR/MR-only + CHAOS-4321 two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only (CHAOS-9414), never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
 | 7 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 8 only | 0–6 | `scope_type, scope_id, reason` |
 | 8 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
@@ -635,7 +650,7 @@ means the ClickHouse `teams` dimension is empty.
 | Symptom | Likely stage | Diagnose | Fix |
 |---|---|---|---|
 | A whole org is `unassigned` | 7 (floor) | `get_all_teams()` empty? CH `teams` populated for `org_id`? | re-home teams population; verify daily-chain order |
-| PR attributed to a surprising team via `linked_issue` | 5 | which `work_item_dependencies` edge? donor's own team? extkey ambiguous? | confirm donor row + `_canonical_target`; check `_INHERITABLE_RELATIONSHIP_TYPES` |
+| PR attributed to a surprising team via `linked_issue` | 5 | which `work_item_dependencies` edge? the donor's own newest primary row in `work_item_team_attributions` (the team the PR copies, CHAOS-9460)? extkey ambiguous? | confirm donor row + `_canonical_target`; check `_INHERITABLE_RELATIONSHIP_TYPES` |
 | A PR that WAS attributed via `linked_issue` silently becomes `unassigned` on a later run | 5 → 7 | is the donor edge older than the sync window? compare the edge's `last_synced` against the run window — donor and dependent stamped minutes apart rules staleness out | **fixed CHAOS-4112**: the donor preload unions the STORED inheritable edges for the items being recomputed with the fresh ones (`_merge_stored_inheritable_edges`), so an edge aging out of the window no longer un-attributes the PR. Watch `devhealth_work_item_team_attribution_downgrades_total` — a teamed→`unassigned` transition is always a bug |
 | `manual_fallback` beats a real team | precedence | `_SOURCE_ORDER` has `manual_fallback=7`? loader merging manual at the wrong rank? | restore rank — manual is the lowest non-unassigned tier |
 | An author beats a real `linked_issue` donor | precedence | `_SOURCE_ORDER` has `author_membership=6` (below `linked_issue=5`)? did a fix accidentally fold it back into `assignee_membership=4`? | restore rank — author is a PERSON signal, never above a real linked_issue donor (CHAOS-4244, chris's 2026-08-24 ruling) |

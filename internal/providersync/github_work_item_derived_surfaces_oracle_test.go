@@ -639,7 +639,7 @@ func newGitHubTeamAttributionColumns(
 		columns.Source = append(columns.Source, row.Source)
 		columns.IsPrimary = append(columns.IsPrimary, row.IsPrimary)
 		columns.Confidence = append(columns.Confidence, row.Confidence)
-		columns.Evidence = append(columns.Evidence, row.Evidence)
+		columns.Evidence = append(columns.Evidence, pythonLinkedIssueEvidence(row.WorkItemID, row.Evidence))
 		columns.ComputedAt = append(columns.ComputedAt, row.ComputedAt)
 		columns.RepoID = append(columns.RepoID, row.RepoID)
 		columns.TeamID = append(columns.TeamID, row.TeamID)
@@ -770,9 +770,7 @@ func buildGitHubDerivedOracleSurfaces(
 	// (CHAOS-3978), deliberately placed where it cannot change what the
 	// resolver does with a given edge set -- which is what keeps every case in
 	// this file valid across that fix.
-	derived.LinkedIssue, _, _ = derived.BuildLinkedIssueIndex(
-		provider, subjects, toDerivationDependencyEdges(rows.Dependencies), nil,
-	)
+	linkLikeProduction(&derived, provider, subjects, toDerivationDependencyEdges(rows.Dependencies))
 	surfaces, err := buildWorkItemDerivedSurfacesForProvider(
 		provider, claim, rows, day, computedAt, derived,
 		nil,

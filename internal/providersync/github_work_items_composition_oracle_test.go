@@ -38,7 +38,7 @@ func (source *githubMultiDayOracleSource) Load(
 	context.Context, Claim, teamattribution.GithubWorkItemDerivationLoadRequest,
 ) (teamattribution.GithubWorkItemDerivationFacts, error) {
 	source.loads++
-	return source.facts, nil
+	return withDonorRowsAsTheirOwnDerivation(source.facts), nil
 }
 
 // The oracle supplies every edge through the case input, so this source has no

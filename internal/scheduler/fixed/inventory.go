@@ -308,7 +308,7 @@ func checkedInSchedules() []Schedule {
 		{
 			ID:               "llm_budget_stale_reservations",
 			Native:           true,
-			Cadence:          EveryInterval(time.Hour),
+			Cadence:          EveryInterval(30 * time.Minute),
 			Timezone:         inventoryTimezone,
 			CatchUp:          CatchUpSkip,
 			UniquenessWindow: 4 * time.Hour,
@@ -318,7 +318,8 @@ func checkedInSchedules() []Schedule {
 			AlertThreshold:   3 * time.Hour,
 			Rationale: "Counts and logs BYO LLM budget reservations left in reserved past an " +
 				"age threshold, per organization. It writes nothing: a reservation is never " +
-				"freed by age, so the log is the operator's cue to void one by id. Each run " +
+				"freed by age, so the log is the operator's cue to void one by id. A 30 minute " +
+				"period emits every 30 to 60 minutes (an interval schedule is released one period after its last run). Each run " +
 				"re-reads the whole table, so a missed run is repaired by the next one.",
 		},
 		{

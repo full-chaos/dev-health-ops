@@ -554,7 +554,7 @@
       "compatibility_dependency": "none; the kind is Go-only (go_only in registry.json) and never had a Python producer",
       "deletion_evidence_requirement": "Remove this transitional registry row after the Go-worker migration project closes and the registry becomes the sole workload inventory.",
       "acceptance_test_id": "internal/jobs/llmbudgetstale/handler_integration_test.go",
-      "notes": "Fixed scheduler emits one occurrence per hour; the worker only reads: it never voids a reservation (the Python side never freed one by age)."
+      "notes": "Fixed scheduler emits one occurrence every 30 to 60 minutes; the worker only reads: it never voids a reservation (the Python side never freed one by age)."
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:687",

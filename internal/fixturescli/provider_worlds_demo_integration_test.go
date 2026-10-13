@@ -5,6 +5,7 @@ package fixturescli
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"strings"
 	"time"
@@ -18,15 +19,40 @@ import (
 // concentration (mobile) and a sparse history (web). Two repositories are shared: shared-api (payments
 // leads, checkout co-owns) and chaos-gl/shared-infra (delivery leads, data co-owns), by unequal link counts.
 
-var demoInstant = time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+// The world has no date of its own: every time in it is so many days before its as-of day, which a run
+// is given. A freeze takes any day (-demo-as-of); the committed world was frozen at demoFrozenAsOf, the
+// default, so its freshness run writes it again byte for byte. A load moves the world by whole days so
+// its as-of day is the load day (FrozenWorld.WholeDays), so the day it was frozen at says nothing about
+// the days a loaded organization holds.
+const demoFrozenAsOf = "2026-10-12"
 
-const demoDepthDays = 91
+var demoAsOf = flag.String("demo-as-of", demoFrozenAsOf, "the day (YYYY-MM-DD) the demo world ends: every time in it is relative to it")
+
+// demoInstant is this run's instant: noon UTC of its as-of day.
+func demoInstant() time.Time { return demoInstantOf(*demoAsOf) }
+
+// demoInstantOf is the world's instant on an as-of day: noon UTC.
+func demoInstantOf(asOf string) time.Time {
+	day, err := time.Parse(time.DateOnly, asOf)
+	if err != nil {
+		panic(fmt.Sprintf("-demo-as-of %q: %v", asOf, err))
+	}
+	return day.Add(12 * time.Hour)
+}
+
+// demoDepthDays is the world's history: 180 days before its as-of day, and the as-of day.
+const demoDepthDays = 181
 
 // demoAt is an instant daysAgo whole days before the world's instant, at hour:minute UTC (hour < 12 on
 // day 0 keeps it before the instant).
 func demoAt(daysAgo, hour, minute int) string {
-	day := demoInstant.AddDate(0, 0, -daysAgo)
+	day := demoInstant().AddDate(0, 0, -daysAgo)
 	return time.Date(day.Year(), day.Month(), day.Day(), hour, minute, 0, 0, time.UTC).Format(time.RFC3339)
+}
+
+// demoDay is the day daysAgo whole days before the world's as-of day (YYYY-MM-DD).
+func demoDay(daysAgo int) string {
+	return demoInstant().AddDate(0, 0, -daysAgo).Format(time.DateOnly)
 }
 
 func demoSHA(parts ...any) string {
@@ -113,8 +139,22 @@ var demoLinearTeams = []linearTeam{
 }
 
 var demoLinearProjects = []linearProject{
-	{"9f00d0e1-0000-4000-8000-0000000dd001", "Checkout Experience", []string{"CHK"}, "2026-03-02T09:00:00Z"},
-	{"9f00d0e1-0000-4000-8000-0000000dd002", "Mobile App", []string{"MOB"}, "2026-03-09T09:00:00Z"},
+	{ID: "9f00d0e1-0000-4000-8000-0000000dd001", Name: "Checkout Experience", Teams: []string{"CHK"}},
+	{ID: "9f00d0e1-0000-4000-8000-0000000dd002", Name: "Mobile App", Teams: []string{"MOB"}},
+}
+
+// demoLinearProjectsDated are the Linear projects with their dates, relative to the as-of day: both
+// started before the world's history and are committed to a target date in the coming weeks, Checkout
+// the sooner one.
+func demoLinearProjectsDated() []linearProject {
+	dated := append([]linearProject{}, demoLinearProjects...)
+	for index, plan := range []struct{ created, target int }{{230, -24}, {223, -52}} {
+		dated[index].CreatedAt = demoAt(plan.created, 9, 0)
+		dated[index].StartDate = demoDay(plan.created)
+		dated[index].TargetDate = demoDay(plan.target)
+		dated[index].UpdatedAt = demoAt(1, 9, 0)
+	}
+	return dated
 }
 
 // GitLab: the root group is the delivery team; data and web are its subgroups.
@@ -133,10 +173,19 @@ var demoGitLabProjectPaths = []string{
 func demoGitLabProjectID(index int) int { return 51001 + index }
 
 func init() {
+	registerDemoRepositories()
+}
+
+// registerDemoRepositories names the demo repositories and projects in the provider worlds' catalogs,
+// dated relative to the as-of day: created long before the world's history, last pushed the day before
+// it ends. It runs again when the world's answers are built, after the flags are parsed.
+func registerDemoRepositories() {
 	for index, name := range demoGitHubRepoNames {
-		githubRepos[name] = githubRepo{9301 + index, name, strings.ReplaceAll(name, "-", " "), "2025-02-03T09:00:00Z"}
+		githubRepos[name] = githubRepo{ID: 9301 + index, Name: name, Description: strings.ReplaceAll(name, "-", " "),
+			CreatedAt: demoAt(600, 9, 0), PushedAt: demoAt(1, 8, 0)}
 	}
 	for index, path := range demoGitLabProjectPaths {
-		gitlabProjects[path] = gitlabProject{demoGitLabProjectID(index), path, path[strings.LastIndex(path, "/")+1:], "2025-02-10T09:00:00Z"}
+		gitlabProjects[path] = gitlabProject{ID: demoGitLabProjectID(index), Path: path, Name: path[strings.LastIndex(path, "/")+1:],
+			CreatedAt: demoAt(593, 9, 0), LastActivityAt: demoAt(1, 8, 0)}
 	}
 }

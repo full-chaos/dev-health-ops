@@ -39,7 +39,7 @@ func TestQueryDatetimeErrorsAreFastAPIs(t *testing.T) {
 	want := `{"detail":[` +
 		`{"type":"datetime_from_date_parsing","loc":["query","from"],"msg":"Input should be a valid datetime or date, input is too short","input":"x","ctx":{"error":"input is too short"}},` +
 		`{"type":"datetime_from_date_parsing","loc":["query","from"],"msg":"Input should be a valid datetime or date, month value is outside expected range of 1-12","input":"2026-13-01","ctx":{"error":"month value is outside expected range of 1-12"}}]}`
-	if pydanticecho.Strip(string(got)) != pydanticecho.Strip(want) {
+	if string(got) != pydanticecho.Strip(want) {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }

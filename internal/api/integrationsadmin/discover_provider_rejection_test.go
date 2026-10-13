@@ -57,7 +57,7 @@ func TestWriteProviderRejectionIsAFastAPIShapedDetail(t *testing.T) {
 		t.Fatalf("status %d", recorder.Code)
 	}
 	const want = `{"detail":[{"type":"provider_authentication_failed","loc":["path","integration_id"],"msg":"github rejected the integration's credential (HTTP 401)","input":"0f8fad5b-d9cb-469f-a165-70867728950e"}]}`
-	if got := recorder.Body.String(); pydanticecho.Strip(got) != pydanticecho.Strip(want) {
+	if got := recorder.Body.String(); got != pydanticecho.Strip(want) {
 		t.Fatalf("body\n got  %s\n want %s", got, want)
 	}
 }

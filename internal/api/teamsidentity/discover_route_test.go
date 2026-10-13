@@ -118,7 +118,7 @@ func TestGetTeamInterceptsDiscoverMissingProvider(t *testing.T) {
 		t.Fatalf("GET .../teams/discover with no provider: got %d, want 422\nbody: %s", rec.Code, rec.Body.String())
 	}
 	want := `{"detail":[{"type":"missing","loc":["query","provider"],"msg":"Field required","input":null}]}`
-	if pydanticecho.Strip(rec.Body.String()) != pydanticecho.Strip(want) {
+	if rec.Body.String() != pydanticecho.Strip(want) {
 		t.Errorf("body = %s, want %s", rec.Body.String(), want)
 	}
 }
@@ -182,7 +182,7 @@ func TestDiscoverTeamsValidatesProviderPattern(t *testing.T) {
 		t.Fatalf("provider=bitbucket: got %d, want 422\nbody: %s", rec.Code, rec.Body.String())
 	}
 	want := `{"detail":[{"type":"string_pattern_mismatch","loc":["query","provider"],"msg":"String should match pattern '^(github|gitlab|jira|linear)$'","input":"bitbucket","ctx":{"pattern":"^(github|gitlab|jira|linear)$"}}]}`
-	if pydanticecho.Strip(rec.Body.String()) != pydanticecho.Strip(want) {
+	if rec.Body.String() != pydanticecho.Strip(want) {
 		t.Errorf("body = %s, want %s", rec.Body.String(), want)
 	}
 }
@@ -215,7 +215,7 @@ func TestDiscoverTeamsNoCredentialConfigured(t *testing.T) {
 		t.Fatalf("no credential configured: got %d, want 404\nbody: %s", rec.Code, rec.Body.String())
 	}
 	want := `{"detail":"No credentials found for provider 'jira'"}`
-	if pydanticecho.Strip(rec.Body.String()) != pydanticecho.Strip(want) {
+	if rec.Body.String() != pydanticecho.Strip(want) {
 		t.Errorf("body = %s, want %s", rec.Body.String(), want)
 	}
 }
@@ -240,7 +240,7 @@ func TestDiscoverTeamsRepeatedProviderLastWins(t *testing.T) {
 		t.Fatalf("provider=bitbucket then provider=jira: got %d, want 404 (last value jira wins)\nbody: %s", rec.Code, rec.Body.String())
 	}
 	want := `{"detail":"No credentials found for provider 'jira'"}`
-	if pydanticecho.Strip(rec.Body.String()) != pydanticecho.Strip(want) {
+	if rec.Body.String() != pydanticecho.Strip(want) {
 		t.Errorf("body = %s, want %s", rec.Body.String(), want)
 	}
 

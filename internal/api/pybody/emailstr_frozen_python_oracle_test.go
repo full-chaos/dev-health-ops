@@ -85,7 +85,7 @@ func TestEmailStrMatchesFrozenFastAPI(t *testing.T) {
 		if want[index].Status == 500 && status == 422 {
 			continue // Python cannot render its own echo of the input; the Go 422 carries none
 		}
-		if status != want[index].Status || pydanticecho.Strip(got) != pydanticecho.Strip(string(expected)) {
+		if status != want[index].Status || got != pydanticecho.Strip(string(expected)) {
 			t.Errorf("%s %s:\n  go     %d %s\n  python %d %s", req.Path, body, status, got, want[index].Status, expected)
 		}
 	}

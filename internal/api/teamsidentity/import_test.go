@@ -71,7 +71,7 @@ func TestImportTeamsValidationMatchesPydantic(t *testing.T) {
 			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status = %d, want 422\nbody: %s", rec.Code, rec.Body.String())
 			}
-			if pydanticecho.Strip(rec.Body.String()) != pydanticecho.Strip(test.want) {
+			if rec.Body.String() != pydanticecho.Strip(test.want) {
 				t.Errorf("body = %s\nwant   %s", rec.Body.String(), test.want)
 			}
 		})
@@ -138,7 +138,7 @@ func TestImportedAssociationsReachTheObservationRow(t *testing.T) {
 func TestImportMissingTeamsReportsTheWholeBodyAsInput(t *testing.T) {
 	rec := postImportBody(t, Store{}, `{}`)
 	want := `{"detail":[{"type":"missing","loc":["body","teams"],"msg":"Field required","input":{}}]}`
-	if rec.Code != http.StatusUnprocessableEntity || pydanticecho.Strip(rec.Body.String()) != pydanticecho.Strip(want) {
+	if rec.Code != http.StatusUnprocessableEntity || rec.Body.String() != pydanticecho.Strip(want) {
 		t.Errorf("got %d %s, want 422 %s", rec.Code, rec.Body.String(), want)
 	}
 }

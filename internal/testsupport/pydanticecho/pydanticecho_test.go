@@ -30,3 +30,16 @@ func TestStripKeepsTheSpacingItCameIn(t *testing.T) {
 		t.Fatalf("got %s want %s", got, want)
 	}
 }
+
+func TestGenericPython500(t *testing.T) {
+	for body, want := range map[string]bool{
+		"Internal Server Error":               true,
+		`{"detail":"Internal Server Error"}`:  true,
+		`{"detail":"database exploded"}`:      false,
+		`{"error":{"code":"internal_error"}}`: false,
+	} {
+		if GenericPython500(body) != want {
+			t.Fatalf("%s: want %v", body, want)
+		}
+	}
+}

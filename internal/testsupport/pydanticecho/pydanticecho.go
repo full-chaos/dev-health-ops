@@ -69,3 +69,11 @@ func strip(value pyjson.Value) (changed bool) {
 	}
 	return changed
 }
+
+// GenericPython500 reports whether a Python 500 body is FastAPI's or
+// Starlette's generic "Internal Server Error" answer, the one a validation
+// error that cannot render its own echo ends in. Any other 500 body names a
+// real fault and is never excused.
+func GenericPython500(body string) bool {
+	return strings.Contains(body, "Internal Server Error")
+}

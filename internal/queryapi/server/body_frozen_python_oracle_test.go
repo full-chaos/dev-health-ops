@@ -304,7 +304,7 @@ func TestQueryAPIBodiesMatchFrozenFastAPI(t *testing.T) {
 				problem = "python 422"
 			case wantStatus == 422 && canonicalJSON(text) != canonicalJSON(wantText):
 				problem = "422 document"
-			case wantStatus == 500 && status == 422:
+			case wantStatus == 500 && status == 422 && pydanticecho.GenericPython500(wantRaw):
 				// Python answered 500 only because it could not render its own echo of the input; the Go 422 carries none.
 			case wantStatus == 500 && status != 500:
 				problem = "python 500"

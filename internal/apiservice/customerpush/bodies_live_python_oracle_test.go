@@ -255,7 +255,7 @@ func TestCustomerPushBodiesMatchFrozenFastAPI(t *testing.T) {
 		if wantStatus == 500 && status == 422 {
 			continue // Python cannot render its own echo of the input; the Go 422 carries none
 		}
-		if status != wantStatus || pydanticecho.Strip(text) != pydanticecho.Strip(wantText) {
+		if status != wantStatus || text != pydanticecho.Strip(wantText) {
 			mismatches++
 			if mismatches <= 15 {
 				t.Errorf("%s %s:\n  go     %d %s\n  python %d %s", item[0], item[1], status, text, wantStatus, wantText)

@@ -347,7 +347,7 @@ func TestDataPlaneEnvelopeParseMatchesFrozenPython(t *testing.T) {
 		if wantStatus == 500 && (status == 422 || status == 400) {
 			continue // Python cannot render its own echo of the input; the Go 422 carries none
 		}
-		if status != wantStatus || pydanticecho.Strip(text) != pydanticecho.Strip(wantText) {
+		if status != wantStatus || text != pydanticecho.Strip(wantText) {
 			mismatches++
 			if mismatches <= 10 {
 				t.Errorf("%q:\n  go     %d %s\n  python %d %s", body, status, text, wantStatus, wantText)

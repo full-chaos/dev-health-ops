@@ -70,6 +70,7 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 		"88888888-0000-4000-8000-00000000000c", "88888888-0000-4000-8000-00000000000d", "88888888-0000-4000-8000-00000000000e"
 	const invLost500, invLost408 = "88888888-0000-4000-8000-00000000000f", "88888888-0000-4000-8000-000000000010"
 	const invPruned, invKeyless = "88888888-0000-4000-8000-000000000011", "88888888-0000-4000-8000-000000000012"
+	const invLeak = "88888888-0000-4000-8000-000000000013"
 	exec(`INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, amount_paid, currency,
 		payment_intent_id, metadata, created_at, updated_at) VALUES
 		('`+invIdem+`', $1, 'in_idem', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_idem', '{}', now(), now()),
@@ -80,7 +81,8 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 		('`+invLost500+`', $1, 'in_lost500', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_lost500', '{}', now(), now()),
 		('`+invLost408+`', $1, 'in_lost408', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_lost408', '{}', now(), now()),
 		('`+invPruned+`', $1, 'in_pruned', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_pruned', '{}', now(), now()),
-		('`+invKeyless+`', $1, 'in_keyless', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_keyless', '{}', now(), now())`, seed.orgA)
+		('`+invKeyless+`', $1, 'in_keyless', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_keyless', '{}', now(), now()),
+		('`+invLeak+`', $1, 'in_leak', 'cus_A', 'paid', 100, 100, 'usd', 'pi_leak', '{}', now(), now())`, seed.orgA)
 	loaded, err := config.Load(config.Spec{Service: config.APIServiceName, LookupEnv: func(key string) (string, bool) {
 		value, ok := billingEnv[key]
 		return value, ok
@@ -199,6 +201,11 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	expect("refused: 502", status(code, out)[:3], "502")
 	expect("refused: the row is failed with Stripe's reason", row(`SELECT status || ' ' || (failure_reason LIKE '%already been refunded%')::text FROM refunds WHERE invoice_id = '`+invFail+`'`), "failed true")
 	expect("refused: the stored reason holds no credential shape", row(`SELECT (position('ghp_aaaaaaaaaaaaaaaaaaaaaaaa' in failure_reason) > 0)::text FROM refunds WHERE invoice_id = '`+invFail+`'`), "false")
+
+	// 4b. Stripe answers a created refund with a failure reason that carries a credential shape.
+	code, out = refund("success response: Stripe answers with a failure reason", "", `{"invoice_id":"`+invLeak+`","amount":7}`)
+	expect("success response: 200", status(code, out)[:3], "200")
+	expect("success response: the stored reason keeps its words and holds no credential shape", row(`SELECT (position('ghp_aaaaaaaaaaaaaaaaaaaaaaaa' in failure_reason) > 0)::text || ' ' || (position('declined, key' in failure_reason) > 0)::text FROM refunds WHERE invoice_id = '`+invLeak+`'`), "false true")
 
 	// 5. Stripe unreachable: the outcome is unknown, so the row stays
 	// pending and its amount held.

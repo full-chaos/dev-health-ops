@@ -395,6 +395,9 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		if form.Get("amount") == "1" {
 			status = `"failure_reason": "lost_or_stolen_card"`
 		}
+		if form.Get("amount") == "7" {
+			status = `"failure_reason": "declined, key ghp_aaaaaaaaaaaaaaaaaaaaaaaa rejected"`
+		}
 		f.refunds++
 		var metadata []string
 		for name := range form {

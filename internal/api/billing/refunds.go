@@ -447,7 +447,7 @@ func (h handlers) completeRefund(ctx context.Context, tx pgx.Tx, pending pending
 	}
 	var failure *string
 	if refund.FailureReason != "" {
-		text := string(refund.FailureReason)
+		text := logging.RedactPersisted(ctx, nil, "refunds.failure_reason", string(refund.FailureReason))
 		failure = &text
 	}
 	metadata := pyjson.NewObject()

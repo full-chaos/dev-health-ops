@@ -207,7 +207,6 @@ var wantResponseModelRoutes = map[string]bool{
 	"POST /api/v1/auth/sso/providers":                                                  true,
 	"POST /api/v1/auth/sso/providers/{provider_id}/activate":                           true,
 	"POST /api/v1/auth/sso/providers/{provider_id}/deactivate":                         true,
-	"POST /api/v1/auth/change-password":                                                true,
 	"POST /api/v1/auth/switch-org":                                                     true,
 	"POST /api/v1/auth/validate":                                                       true,
 	"POST /api/v1/billing/audit/{audit_id}/resolve":                                    true,

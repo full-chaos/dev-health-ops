@@ -122,7 +122,7 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 		OrgWide: scope.orgWide, RepoIDs: scope.repoIDs, ProjectKeys: scope.projectKeys,
 		ItemsSeen: len(subjects), DonorChangedDependents: len(dependents),
 	}
-	if len(subjects) == 0 {
+	if len(subjects) == 0 && (noScope || len(dependents) == 0) {
 		// The scope's ownership changed, but nothing in it has any work
 		// items yet -- a real, if unusual, outcome (e.g. a repo/project was
 		// just given team ownership before any item synced). Still a

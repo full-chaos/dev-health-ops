@@ -52,6 +52,8 @@ func TestADonorRowChangeRederivesOnlyTheItemsItChanges(t *testing.T) {
 			map[string]workItemAttributionNewestPrimary{"P": linked("A", "team-a"), "A": unassigned(after), "B": own("team-b", before)}, nil, []string{"P"}},
 		{"an item of its own native team never inherits", []teamattribution.GithubWorkItemDerivationDependencyEdge{edge("P", "D")}, nil,
 			map[string]workItemAttributionNewestPrimary{"P": {TeamID: "team-n", Source: "native_team", ComputedAt: before}, "D": own("team-b", after)}, nil, nil},
+		{"an item of its own project ownership never inherits", []teamattribution.GithubWorkItemDerivationDependencyEdge{edge("P", "D")}, nil,
+			map[string]workItemAttributionNewestPrimary{"P": own("team-p", before), "D": own("team-b", after)}, nil, nil},
 		{"a donor of an inactive team is no donor", []teamattribution.GithubWorkItemDerivationDependencyEdge{edge("P", "D")}, nil,
 			map[string]workItemAttributionNewestPrimary{"P": unassigned(before), "D": own("team-x", after)}, teamactive.Inactive{"team-x": {}}, nil},
 		{"an item with no row is not this trigger's", []teamattribution.GithubWorkItemDerivationDependencyEdge{edge("P", "D")}, nil,

@@ -75,7 +75,9 @@ func (executor *WorkItemAttributionExecutor) loadDonorChangedDependents(
 // would copy is the cascade's winner (BuildLinkedIssueIndexFromRows): of its
 // donors whose newest primary row has a team of its own (an own source) that
 // is active, the lowest target id, then relationship, with that row's team. An
-// item whose own primary row is native_team never inherits. A donor recomputed
+// item whose own primary row has a team of its own (an own source: native
+// team, project or repository ownership) outranks linked_issue, so a donor
+// never gives it its primary row. A donor recomputed
 // with the same team triggers nothing, and a rederive makes the item newer than
 // its donors, so a trigger never repeats for the same donor row.
 func donorChangedDependents(
@@ -102,7 +104,7 @@ func donorChangedDependents(
 	var owed []string
 	for item, linked := range donors {
 		own, ok := rows[item]
-		if !ok || own.Source == "native_team" {
+		if !ok || teamattribution.IsLinkedIssueDonorSource(own.Source) {
 			continue
 		}
 		sort.Slice(linked, func(left, right int) bool {

@@ -20,8 +20,11 @@ import (
 // The backstop rederives the pull request from the donor's changed row, dated
 // at its run; the next run finds nothing; a donor recomputed with the same team
 // triggers nothing. One donor per provider; a Jira or Linear donor is linked
-// through its issue key (extkey). A run with an ownership scope of its own (an
-// unrelated repository's owner changed) rederives the pull request beside it.
+// through its issue key (extkey). A run with an ownership scope of its own
+// rederives the pull request beside it: an unrelated repository's owner
+// changed, or a project with no item changed owner. A pull request owned
+// through its own project outranks linked_issue: its donor's changes trigger
+// nothing.
 func TestADonorsChangedRowRederivesTheItemsThatCopyIt(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionMigratedClickHouse(t, ctx)
@@ -33,8 +36,8 @@ func TestADonorsChangedRowRederivesTheItemsThatCopyIt(t *testing.T) {
 	setup := now.Add(-72 * time.Hour)
 
 	for _, provider := range coOwnerProviders {
-		for _, scoped := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/scoped=%v", provider, scoped), func(t *testing.T) {
+		for _, shape := range []string{"item_only", "repo_scope", "empty_project_scope", "pr_owns_its_project"} {
+			t.Run(provider+"/"+shape, func(t *testing.T) {
 				orgID := "org-donor-change-" + provider + "-" + uuid.NewString()
 				donorID := map[string]string{"github": "gh:acme/api#issue-1", "gitlab": "gl:acme/api#issue-1", "jira": "jira:CORE-1", "linear": "linear:CORE-1"}[provider]
 				prProvider, prType := "github", "pr"
@@ -62,7 +65,16 @@ func TestADonorsChangedRowRederivesTheItemsThatCopyIt(t *testing.T) {
 					}
 				}
 				seedItem(donorID, provider, "issue", "proj-a", uuid.Nil, setup)
-				seedItem(prID, prProvider, prType, "", uuid.New(), setup)
+				prProject := ""
+				if shape == "pr_owns_its_project" {
+					prProject = "proj-p"
+					if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES ('team-p', ?, 'Team p', [], [], [], 1, ?, ?, ?, ?, '')`,
+						uuid.New(), setup, setup, orgID, prProvider); err != nil {
+						t.Fatalf("insert team-p: %v", err)
+					}
+					seedWorkItemAttributionProjectOwnership(t, ctx, conn, orgID, prProvider, "proj-p", nil, "team-p", setup)
+				}
+				seedItem(prID, prProvider, prType, prProject, uuid.New(), setup)
 				seedWorkItemAttributionDependency(t, ctx, conn, orgID, prID, target, "relates_to", setup)
 
 				// Yesterday's backstop: the first run of the organization is
@@ -77,13 +89,20 @@ func TestADonorsChangedRowRederivesTheItemsThatCopyIt(t *testing.T) {
 				}
 				wantLinked := func(team string) {
 					t.Helper()
+					if shape == "pr_owns_its_project" {
+						team = "team-p"
+					}
 					var got []string
 					for _, row := range latestAttributions(t, ctx, conn, orgID, prID) {
 						if row.isPrimary == 1 {
 							got = append(got, fmt.Sprintf("%s/%s/%s", row.teamID, row.source, linkedIssueEvidenceDonor(row.evidence)))
 						}
 					}
-					if want := fmt.Sprintf("[%s/linked_issue/%s]", team, donorID); fmt.Sprint(got) != want {
+					want := fmt.Sprintf("[%s/linked_issue/%s]", team, donorID)
+					if shape == "pr_owns_its_project" {
+						want = "[team-p/project_ownership/]"
+					}
+					if fmt.Sprint(got) != want {
 						t.Fatalf("pull request primary %v, want %s", got, want)
 					}
 				}
@@ -124,20 +143,37 @@ func TestADonorsChangedRowRederivesTheItemsThatCopyIt(t *testing.T) {
 				seedItem(donorID, provider, "issue", "proj-b", uuid.Nil, time.Now().UTC())
 				writeDonor(now.Add(-6 * time.Hour))
 				unrelated := uuid.New()
-				if scoped {
+				switch shape {
+				case "repo_scope":
 					seedWorkItemAttributionItem(t, ctx, conn, orgID, "gh-pr:acme/other#1", unrelated, setup)
 					seedWorkItemAttributionRepoOwnership(t, ctx, conn, orgID, unrelated, "team-other", time.Now().UTC())
 					waitForWorkItemAttributionScope(t, ctx, backstop, orgID, time.Now().UTC(), func(scope workItemAttributionScopeDecision) bool {
 						return containsString(scope.repoIDs, unrelated.String())
 					})
+				case "empty_project_scope":
+					seedWorkItemAttributionProjectOwnership(t, ctx, conn, orgID, provider, "proj-unused", nil, "team-a", time.Now().UTC())
+					waitForWorkItemAttributionScope(t, ctx, backstop, orgID, time.Now().UTC(), func(scope workItemAttributionScopeDecision) bool {
+						return containsString(scope.projectKeys, "proj-unused")
+					})
 				}
 				outcome := runBackstop()
-				if scoped {
+				switch shape {
+				case "repo_scope":
 					if outcome.DonorChangedDependents != 1 || outcome.OrgWide || fmt.Sprint(outcome.RepoIDs) != fmt.Sprintf("[%s]", unrelated) {
 						t.Fatalf("changed donor row beside a repository scope: outcome %+v", outcome)
 					}
-				} else if outcome.DonorChangedDependents != 1 || outcome.RowsWritten == 0 || outcome.OrgWide || len(outcome.RepoIDs)+len(outcome.ProjectKeys) != 0 {
-					t.Fatalf("changed donor row: outcome %+v, want the pull request rederived by an item-only run", outcome)
+				case "empty_project_scope":
+					if outcome.DonorChangedDependents != 1 || outcome.RowsWritten == 0 || outcome.OrgWide || !containsString(outcome.ProjectKeys, "proj-unused") {
+						t.Fatalf("changed donor row beside a project scope with no item: outcome %+v", outcome)
+					}
+				case "pr_owns_its_project":
+					if !outcome.SkippedNoop || outcome.DonorChangedDependents != 0 {
+						t.Fatalf("changed donor row of a pull request owned through its project: outcome %+v, want a no-op", outcome)
+					}
+				default:
+					if outcome.DonorChangedDependents != 1 || outcome.RowsWritten == 0 || outcome.OrgWide || len(outcome.RepoIDs)+len(outcome.ProjectKeys) != 0 {
+						t.Fatalf("changed donor row: outcome %+v, want the pull request rederived by an item-only run", outcome)
+					}
 				}
 				wantLinked("team-b")
 

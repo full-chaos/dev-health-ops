@@ -356,7 +356,8 @@ re-derives the items that copy it (CHAOS-9478):** each backstop run reads the st
 item that inherits through an inheritable edge when one of its donors has a primary row newer than the
 item's, and the donor the item would copy now (the cascade's winner over the stored rows: the lowest target id
 whose newest primary row is own-sourced and names an active team, with that row's team) differs from the one
-its newest primary row records (`donorChangedDependents`). An item of its own native team never inherits. The
+its newest primary row records (`donorChangedDependents`). An item whose own primary row has a team of its own
+(sources 0–3) outranks `linked_issue`, so its donors' changes trigger nothing. The
 re-derive is the backstop's own (the facts of the item's day, `computed_at` = the run); with no ownership scope
 it is an item-only run that publishes no scope marker, and an item another writer already wrote today waits
 for a later run (the backstop's `alreadyCoveredToday` rule). It needs no watermark: after the re-derive the

@@ -188,7 +188,7 @@ func buildProviderLookup(workItems []WorkItemRow) providerLookup {
 		gitlab: make(map[[2]string]string),
 	}
 	for _, wi := range workItems {
-		lookup.byID[wi.WorkItemID] = wi.Provider
+		lookup.byID[strings.ToLower(wi.WorkItemID)] = wi.WorkItemID
 		switch wi.Provider {
 		case "jira", "linear":
 			if prefix := wi.Provider + ":"; strings.HasPrefix(wi.WorkItemID, prefix) {
@@ -308,8 +308,8 @@ func DeriveTextParseEdges(prs []PullRequestRow, workItems []WorkItemRow, buildTi
 		var hitOrder []string
 		for _, ref := range ExtractRepoNamedIssueRefs(text) {
 			result.CrossRefsFound++
-			workItemID := ref.Prefix + ref.Repo + "#" + ref.Number
-			if _, ok := lookup.byID[workItemID]; !ok {
+			workItemID, ok := lookup.byID[strings.ToLower(ref.Prefix+ref.Repo+"#"+ref.Number)]
+			if !ok {
 				continue
 			}
 			k := ref.Repo + "#" + ref.Number

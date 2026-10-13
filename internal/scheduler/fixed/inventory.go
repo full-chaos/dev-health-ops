@@ -21,6 +21,7 @@ const (
 	ProducerHeartbeat              = "heartbeat"
 	ProducerSyncCoverageRefresh    = "sync_coverage_refresh"
 	ProducerDimensionFold          = "dimension_fold"
+	ProducerLLMBudgetStale         = "llm_budget_stale_reservations"
 	ProducerRetentionCleanup       = "retention_cleanup"
 )
 
@@ -303,6 +304,22 @@ func checkedInSchedules() []Schedule {
 				"syncs rewrite, so readers without FINAL see one row per key within one " +
 				"interval. Only the newest boundary matters: a missed run is repaired by " +
 				"the next one.",
+		},
+		{
+			ID:               "llm_budget_stale_reservations",
+			Native:           true,
+			Cadence:          EveryInterval(time.Hour),
+			Timezone:         inventoryTimezone,
+			CatchUp:          CatchUpSkip,
+			UniquenessWindow: 4 * time.Hour,
+			TargetKind:       jobcontract.KindLLMBudgetStaleReservations,
+			ProducerID:       ProducerLLMBudgetStale,
+			MaxAttempts:      2,
+			AlertThreshold:   3 * time.Hour,
+			Rationale: "Counts and logs BYO LLM budget reservations left in reserved past an " +
+				"age threshold, per organization. It writes nothing: a reservation is never " +
+				"freed by age, so the log is the operator's cue to void one by id. Each run " +
+				"re-reads the whole table, so a missed run is repaired by the next one.",
 		},
 		{
 			ID: "phone_home_heartbeat",

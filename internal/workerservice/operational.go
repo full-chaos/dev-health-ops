@@ -5,10 +5,12 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/llmbudgetstale"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/operational"
 	coveragejobs "github.com/full-chaos/dev-health-ops/internal/jobs/synccoverage"
 	systemjobs "github.com/full-chaos/dev-health-ops/internal/jobs/system"
@@ -43,6 +45,7 @@ func buildOperationalWorker(
 		jobcontract.KindHeartbeat,
 		jobcontract.KindRetentionCleanup,
 		jobcontract.KindSyncCoverageRefresh,
+		jobcontract.KindLLMBudgetStaleReservations,
 	} {
 		descriptor, ok := registry.Descriptor(kind)
 		if !ok {
@@ -182,6 +185,29 @@ func buildOperationalWorker(
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			adapter, adapterErr := jobruntime.NewAdapter[jobruntime.RetentionCleanupArgs](
+				registry, spec, handler, dependencies,
+			)
+			if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			registered = append(registered, adapter.Spec())
+		case jobcontract.KindLLMBudgetStaleReservations:
+			// A set-but-invalid age refuses startup, so an operator never
+			// watches an age they did not choose. The job only reads the
+			// reservation table.
+			threshold, thresholdErr := llmbudgetstale.ThresholdFromEnv(os.LookupEnv)
+			if thresholdErr != nil {
+				logger.Error("llm budget stale reservation age is unusable",
+					"variable", llmbudgetstale.ThresholdEnv, "error", thresholdErr)
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			handler, handlerErr := llmbudgetstale.NewHandler(
+				llmbudgetstale.PgLister{DB: postgresDatabase.pools.Domain}, threshold, logger,
+			)
+			if handlerErr != nil {
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			adapter, adapterErr := jobruntime.NewAdapter[jobruntime.LLMBudgetStaleReservationsArgs](
 				registry, spec, handler, dependencies,
 			)
 			if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {

@@ -21,6 +21,7 @@ const (
 	KindWebhookDelivery              = "operational.webhook_delivery"
 	KindHeartbeat                    = "system.heartbeat"
 	KindDimensionFold                = "system.dimension_fold"
+	KindLLMBudgetStaleReservations   = "system.llm_budget_stale_reservations"
 	KindSyncCoverageRefresh          = "system.sync_coverage_refresh"
 	KindRetentionCleanup             = "system.retention_cleanup"
 	KindReportExecuteOnDemand        = "report.execute_on_demand"
@@ -127,6 +128,13 @@ type Envelope struct {
 // provider syncs rewrite. The worker reads the declared table list and every
 // guard from its own configuration; River carries only the due time.
 type DimensionFoldPayload struct {
+	ScheduledFor string `json:"scheduled_for"`
+}
+
+// LLMBudgetStaleReservationsPayload is the periodic count of BYO LLM budget
+// reservations left in `reserved`. The worker owns the age threshold; River
+// carries only the due time.
+type LLMBudgetStaleReservationsPayload struct {
 	ScheduledFor string `json:"scheduled_for"`
 }
 
@@ -286,6 +294,13 @@ var definitions = map[string]contractDefinition{
 		DomainLink:        "schedule_occurrence",
 		OrganizationScope: "global",
 	},
+	KindLLMBudgetStaleReservations: {
+		Kind:              KindLLMBudgetStaleReservations,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "schedule_occurrence",
+		OrganizationScope: "global",
+	},
 	KindSyncCoverageRefresh: {
 		Kind:              KindSyncCoverageRefresh,
 		CurrentVersion:    ContractVersionV1,
@@ -434,6 +449,15 @@ func Decode(kind string, data []byte) (Envelope, error) {
 		payload = value
 	case KindDimensionFold:
 		var value DimensionFoldPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
+	case KindLLMBudgetStaleReservations:
+		var value LLMBudgetStaleReservationsPayload
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
 			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
 		}
@@ -598,6 +622,8 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindHeartbeat
 	case DimensionFoldPayload:
 		kind = KindDimensionFold
+	case LLMBudgetStaleReservationsPayload:
+		kind = KindLLMBudgetStaleReservations
 	case SyncCoverageRefreshPayload:
 		kind = KindSyncCoverageRefresh
 	case RetentionCleanupPayload:
@@ -700,6 +726,10 @@ func validateSafeID(name, value string, maxLength int) error {
 }
 
 func (payload DimensionFoldPayload) validate() error {
+	return validateUTCTimestamp("scheduled_for", payload.ScheduledFor)
+}
+
+func (payload LLMBudgetStaleReservationsPayload) validate() error {
 	return validateUTCTimestamp("scheduled_for", payload.ScheduledFor)
 }
 

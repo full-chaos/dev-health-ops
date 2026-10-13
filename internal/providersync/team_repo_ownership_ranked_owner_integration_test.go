@@ -21,7 +21,8 @@ import (
 // links of the repo); the main owner (is_primary = 1) is the team with the
 // most native links, then the most explicit_text links, then the most
 // heuristic links (work_graph_issue_pr.provenance); every other owner is a
-// co-owner (is_primary = 2). A full tie keeps the existing main owner.
+// co-owner (is_primary = 2). A full tie makes every tied team a main owner
+// (D5990).
 // Every contest runs for each provider pair, so each of jira, github, gitlab
 // and linear is the winning and the losing team's provider at least once.
 
@@ -221,11 +222,12 @@ func TestRankedOwnerOneNativeLinkTakesTheRepoFromFiftyExplicitTextLinks(t *testi
 	}
 }
 
-// TestRankedOwnerFullTieKeepsTheExistingOwnerAndSignalsTheTie: a second team
-// reaches the repo with the owner's exact link counts at every tier. The
-// existing main owner stays the main owner, the second team is a co-owner,
-// both at half the links, nothing is retracted, and the run reports the tie.
-func TestRankedOwnerFullTieKeepsTheExistingOwnerAndSignalsTheTie(t *testing.T) {
+// TestRankedOwnerFullTieWithTheOwnerMakesBothMainOwners: a second team
+// reaches the repo with the owner's exact link counts at every tier. Both are
+// main owners (D5990) at half the links, nothing is retracted, and the run
+// reports the tie; once the second team leads, the first continues as a
+// co-owner.
+func TestRankedOwnerFullTieWithTheOwnerMakesBothMainOwners(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	for index, pair := range rankedOwnerIntegrationProviderPairs {
 		t.Run(pair[0]+"_owner_ties_"+pair[1], func(t *testing.T) {
@@ -243,9 +245,9 @@ func TestRankedOwnerFullTieKeepsTheExistingOwnerAndSignalsTheTie(t *testing.T) {
 			org.link(pair[1], "team-b", "heuristic", 2)
 			written, retracted, stats := org.derive()
 			if written != 2 || retracted != 0 {
-				t.Fatalf("second Derive: written=%d retracted=%d, want 2 (team-a's new share, team-b) and 0 (tie keeps the owner)", written, retracted)
+				t.Fatalf("second Derive: written=%d retracted=%d, want 2 (team-a's new share, team-b) and 0", written, retracted)
 			}
-			org.assertOwnerRows(map[string]ownerRow{"team-a": ownerState(1, 0.5), "team-b": ownerState(2, 0.5)})
+			org.assertOwnerRows(map[string]ownerRow{"team-a": ownerState(1, 0.5), "team-b": ownerState(1, 0.5)})
 			wantTies := []TeamRepoOwnershipTie{{RepoID: org.repoID.String(), TeamIDs: []string{"team-a", "team-b"}}}
 			if !reflect.DeepEqual(stats.Ties, wantTies) {
 				t.Fatalf("second Derive ties = %+v, want %+v", stats.Ties, wantTies)
@@ -320,11 +322,12 @@ func TestRankedOwnerAnIssuesOwnRepoIsNotACandidateAgainstMigratedSchema(t *testi
 	}
 }
 
-// TestRankedOwnerFullTieRetractsTheRowOfATeamOutsideTheTie: the repo's main
-// owner loses its rank to two other teams that tie with each other. No main
-// owner is named; the old owner -- not in the tie -- stays only as a co-owner
-// with its share, and the tied teams are co-owners.
-func TestRankedOwnerFullTieRetractsTheRowOfATeamOutsideTheTie(t *testing.T) {
+// TestRankedOwnerFullTieAfterAMainOwnerMakesTheTiedTeamsMainOwners: the
+// repo's main owner loses its rank to two other teams that tie with each
+// other. Both tied teams are main owners (D5990); the old owner -- not in the
+// tie -- continues as a co-owner with its share; each change is a role change
+// dated at the run.
+func TestRankedOwnerFullTieAfterAMainOwnerMakesTheTiedTeamsMainOwners(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	for index, pair := range rankedOwnerIntegrationProviderPairs {
 		t.Run(pair[0]+"_old_owner_"+pair[1]+"_tie", func(t *testing.T) {
@@ -341,10 +344,10 @@ func TestRankedOwnerFullTieRetractsTheRowOfATeamOutsideTheTie(t *testing.T) {
 			org.ownProject(pair[0], "team-b")
 			org.link(pair[0], "team-b", "native", 2)
 			written, retracted, stats := org.derive()
-			if written != 3 || retracted != 0 {
-				t.Fatalf("second Derive: written=%d retracted=%d, want 3 (old-owner as a co-owner, team-a, team-b) and 0", written, retracted)
+			if written != 3 || retracted != 0 || stats.RoleChanges != 1 {
+				t.Fatalf("second Derive: written=%d retracted=%d role changes=%d, want 3 (old-owner as a co-owner, team-a, team-b), 0 and 1", written, retracted, stats.RoleChanges)
 			}
-			org.assertOwnerRows(map[string]ownerRow{"old-owner": ownerState(2, 0.2), "team-a": ownerState(2, 0.4), "team-b": ownerState(2, 0.4)})
+			org.assertOwnerRows(map[string]ownerRow{"old-owner": ownerState(2, 0.2), "team-a": ownerState(1, 0.4), "team-b": ownerState(1, 0.4)})
 			wantTies := []TeamRepoOwnershipTie{{RepoID: org.repoID.String(), TeamIDs: []string{"team-a", "team-b"}}}
 			if !reflect.DeepEqual(stats.Ties, wantTies) {
 				t.Fatalf("second Derive ties = %+v, want %+v", stats.Ties, wantTies)
@@ -353,11 +356,11 @@ func TestRankedOwnerFullTieRetractsTheRowOfATeamOutsideTheTie(t *testing.T) {
 	}
 }
 
-// TestRankedOwnerTieWithNoOwnerStaysOwnerlessAndIsReportedEveryRun: a tie
-// on a repo no tied team owns yet names no main owner: both teams are
-// co-owners with their shares, a rerun writes nothing, and every run reports
-// the tie again while it lasts.
-func TestRankedOwnerTieWithNoOwnerStaysOwnerlessAndIsReportedEveryRun(t *testing.T) {
+// TestRankedOwnerFullTieOnAFirstRunMakesEveryTiedTeamAMainOwner: a tie on a
+// repo no team owns yet never means no owner (D5990): both teams are main
+// owners with their shares, a rerun writes nothing, and every run reports the
+// tie for provenance while it lasts.
+func TestRankedOwnerFullTieOnAFirstRunMakesEveryTiedTeamAMainOwner(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	for index, pair := range rankedOwnerIntegrationProviderPairs {
 		t.Run(pair[0]+"_ties_"+pair[1], func(t *testing.T) {
@@ -376,7 +379,7 @@ func TestRankedOwnerTieWithNoOwnerStaysOwnerlessAndIsReportedEveryRun(t *testing
 				if written != wantWritten || retracted != 0 || !reflect.DeepEqual(stats.Ties, wantTies) {
 					t.Fatalf("run %d: written=%d retracted=%d ties=%+v, want %d, 0 and %+v", run, written, retracted, stats.Ties, wantWritten, wantTies)
 				}
-				org.assertOwnerRows(map[string]ownerRow{"team-a": ownerState(2, 0.5), "team-b": ownerState(2, 0.5)})
+				org.assertOwnerRows(map[string]ownerRow{"team-a": ownerState(1, 0.5), "team-b": ownerState(1, 0.5)})
 			}
 		})
 	}

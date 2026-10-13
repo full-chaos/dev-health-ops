@@ -311,12 +311,11 @@ func TestPRInheritanceViaIssuePRLink(t *testing.T) {
 	}
 }
 
-// TestAFullTieBetweenTwoTeamsNamesNoOwnerAndIsReported: two teams reach the
-// same repo with equal link counts at every tier (one native candidate
-// each). Neither is guessed as the main owner: each gets a co-owner row with
-// half the links, marked tied, and the repo is reported, so the write side
-// keeps its existing main owner.
-func TestAFullTieBetweenTwoTeamsNamesNoOwnerAndIsReported(t *testing.T) {
+// TestAFullTieBetweenTwoTeamsMakesBothMainOwners: two teams reach the same
+// repo with equal link counts at every tier (one native candidate each). A
+// tie never means no owner (D5990): each team is a main owner with half the
+// links, and the tie is reported for provenance.
+func TestAFullTieBetweenTwoTeamsMakesBothMainOwners(t *testing.T) {
 	projectLinks := []TeamRepoOwnershipProjectLink{
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
 		{ProjectID: "proj-2", TeamID: "team-growth", IsPrimary: true},
@@ -329,8 +328,8 @@ func TestAFullTieBetweenTwoTeamsNamesNoOwnerAndIsReported(t *testing.T) {
 	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
 
 	for _, row := range got.Rows {
-		if row.IsPrimary != teamRepoOwnershipCoOwner || row.Share != 0.5 || !row.Tied {
-			t.Fatalf("expected two tied co-owner rows of share 0.5, got %+v", got.Rows)
+		if row.IsPrimary != teamRepoOwnershipMainOwner || row.Share != 0.5 {
+			t.Fatalf("expected two main-owner rows of share 0.5, got %+v", got.Rows)
 		}
 	}
 	if len(got.Rows) != 2 {
@@ -1080,11 +1079,10 @@ type repoOwnerWant struct {
 	team    string
 	primary uint8
 	share   float64
-	tied    bool
 }
 
 // assertRepoOwners holds the derivation of repo-1 to exactly the given owner
-// rows (team, is_primary, share, tied) and ties.
+// rows (team, is_primary, share) and ties.
 func assertRepoOwners(t *testing.T, got teamRepoOwnershipDerivation, want []repoOwnerWant, wantTies []TeamRepoOwnershipTie) {
 	t.Helper()
 	var rows []repoOwnerWant
@@ -1092,7 +1090,7 @@ func assertRepoOwners(t *testing.T, got teamRepoOwnershipDerivation, want []repo
 		if row.RepoID != "repo-1" {
 			t.Fatalf("row of another repo: %+v", row)
 		}
-		rows = append(rows, repoOwnerWant{team: row.TeamID, primary: row.IsPrimary, share: row.Share, tied: row.Tied})
+		rows = append(rows, repoOwnerWant{team: row.TeamID, primary: row.IsPrimary, share: row.Share})
 	}
 	sort.Slice(want, func(i, j int) bool { return want[i].team < want[j].team })
 	if !reflect.DeepEqual(rows, want) || !reflect.DeepEqual(got.Ties, wantTies) {
@@ -1192,10 +1190,11 @@ func TestRankedOwnerUnknownProvenanceStillCounts(t *testing.T) {
 	}, nil)
 }
 
-// TestRankedOwnerFullTieAcrossProvidersIsReported: equal counts at every
-// tier name no main owner, for every provider pair: each owning team keeps its
-// own share of all links, the tied teams are marked, and the tie is reported.
-func TestRankedOwnerFullTieAcrossProvidersIsReported(t *testing.T) {
+// TestRankedOwnerFullTieAcrossProvidersMakesEveryTiedTeamAMainOwner: equal
+// counts at every tier make every tied team a main owner (D5990), for every
+// provider pair: each owning team keeps its own share of all links, a team
+// outside the tie is a co-owner, and the tie is reported.
+func TestRankedOwnerFullTieAcrossProvidersMakesEveryTiedTeamAMainOwner(t *testing.T) {
 	for _, pair := range rankedOwnerProviderPairs {
 		t.Run(pair[0]+"_ties_"+pair[1], func(t *testing.T) {
 			got := deriveRankedOwner(map[rankedOwnerTeam]map[string]int{
@@ -1204,8 +1203,8 @@ func TestRankedOwnerFullTieAcrossProvidersIsReported(t *testing.T) {
 				{pair[1], "team-c"}: {"native": 3, "explicit_text": 1, "heuristic": 1},
 			})
 			assertRepoOwners(t, got, []repoOwnerWant{
-				{team: "team-a", primary: teamRepoOwnershipCoOwner, share: 6.0 / 17, tied: true},
-				{team: "team-b", primary: teamRepoOwnershipCoOwner, share: 6.0 / 17, tied: true},
+				{team: "team-a", primary: teamRepoOwnershipMainOwner, share: 6.0 / 17},
+				{team: "team-b", primary: teamRepoOwnershipMainOwner, share: 6.0 / 17},
 				{team: "team-c", primary: teamRepoOwnershipCoOwner, share: 5.0 / 17},
 			}, []TeamRepoOwnershipTie{{RepoID: "repo-1", TeamIDs: []string{"team-a", "team-b"}}})
 		})
@@ -1283,40 +1282,10 @@ func TestRankedOwnerOwnRepoAndDonorCandidatesCountAsNative(t *testing.T) {
 	}
 }
 
-// TestRetractionDiffKeepsOnlyTheTiedTeamsRowsOfATiedRepo: a full tie names
-// no owner, so the open row of a team in the tie stays open, while the open
-// row of a third team that is not in the tie is retracted; other repos still
-// retract the rows their new ranked owner replaced.
-func TestRetractionDiffKeepsOnlyTheTiedTeamsRowsOfATiedRepo(t *testing.T) {
-	tiedRepo, rankedRepo := uuid.New(), uuid.New()
-	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{
-		tiedRepo:   {FullName: "acme/tied", Provider: "github"},
-		rankedRepo: {FullName: "acme/ranked", Provider: "gitlab"},
-	}
-	active := []teamRepoOwnershipActiveRow{
-		{Provider: "github", TeamID: "team-a", RepoID: tiedRepo, RepoFullName: "acme/tied"},
-		{Provider: "github", TeamID: "team-old", RepoID: tiedRepo, RepoFullName: "acme/tied"},
-		{Provider: "gitlab", TeamID: "team-a", RepoID: rankedRepo, RepoFullName: "acme/ranked"},
-	}
-	derived := []DerivedTeamRepoOwnershipRow{{TeamID: "team-new", RepoID: rankedRepo.String()}}
-	ties := []TeamRepoOwnershipTie{{RepoID: tiedRepo.String(), TeamIDs: []string{"team-a", "team-b"}}}
-
-	got := diffTeamRepoOwnershipRetractions(active, derived, ties, repos)
-
-	retracted := map[string]bool{}
-	for _, row := range got {
-		retracted[row.TeamID+" "+row.RepoFullName] = true
-	}
-	want := map[string]bool{"team-old acme/tied": true, "team-a acme/ranked": true}
-	if !reflect.DeepEqual(retracted, want) {
-		t.Fatalf("retracted %v, want %v (team-a keeps acme/tied only: it is in that tie, not in a tie on acme/ranked)", retracted, want)
-	}
-}
-
 // TestRetractionDiffKeysEveryClaimByProviderAndRepoName: two repos of one
-// organization can share a full name on different providers. A tie on one
-// and a derived row on one protect only that repo's open rows; the open row
-// of the same team on the other repo stays retractable.
+// organization can share a full name on different providers. A derived row
+// on one protects only that repo's open rows; the open row of the same team on
+// the other repo stays retractable.
 func TestRetractionDiffKeysEveryClaimByProviderAndRepoName(t *testing.T) {
 	githubRepo, gitlabRepo := uuid.New(), uuid.New()
 	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{
@@ -1327,20 +1296,9 @@ func TestRetractionDiffKeysEveryClaimByProviderAndRepoName(t *testing.T) {
 		{Provider: "github", TeamID: "team-a", RepoID: githubRepo, RepoFullName: "acme/shared"},
 		{Provider: "gitlab", TeamID: "team-a", RepoID: gitlabRepo, RepoFullName: "acme/shared"},
 	}
-	for _, tc := range []struct {
-		name    string
-		derived []DerivedTeamRepoOwnershipRow
-		ties    []TeamRepoOwnershipTie
-	}{
-		{"a tie on the github repo", nil, []TeamRepoOwnershipTie{{RepoID: githubRepo.String(), TeamIDs: []string{"team-a", "team-b"}}}},
-		{"a derived row on the github repo", []DerivedTeamRepoOwnershipRow{{TeamID: "team-a", RepoID: githubRepo.String()}}, nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := diffTeamRepoOwnershipRetractions(active, tc.derived, tc.ties, repos)
-			if len(got) != 1 || got[0].Provider != "gitlab" || got[0].RepoID != gitlabRepo {
-				t.Fatalf("retracted %+v, want only team-a's open row on the gitlab repo", got)
-			}
-		})
+	got := diffTeamRepoOwnershipRetractions(active, []DerivedTeamRepoOwnershipRow{{TeamID: "team-a", RepoID: githubRepo.String()}}, repos)
+	if len(got) != 1 || got[0].Provider != "gitlab" || got[0].RepoID != gitlabRepo {
+		t.Fatalf("retracted %+v, want only team-a's open row on the gitlab repo", got)
 	}
 }
 

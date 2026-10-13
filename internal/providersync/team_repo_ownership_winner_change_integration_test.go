@@ -201,3 +201,86 @@ func TestACoOwnerRetractionNeverMovesTheMainOwner(t *testing.T) {
 		})
 	}
 }
+
+// TestAFullTieThatFormsAndEndsIsDatedAtTheRuns: main owner A holds the
+// repository from its earliest evidence. Co-owner B draws level, so both are
+// main owners (D5990): B's main row starts at that run. A then takes the lead
+// again, so B continues as a co-owner from that run. A's main row is never
+// moved (B's main tenure ends while B still owns the repository), every
+// instant's main rows are the leaders of that instant, and reruns write
+// nothing.
+func TestAFullTieThatFormsAndEndsIsDatedAtTheRuns(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	old := time.Date(2025, 3, 4, 5, 6, 7, 0, time.UTC)
+	mid := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
+
+	for _, provider := range evidenceSettleProviders {
+		t.Run(provider, func(t *testing.T) {
+			org := "org-tie-forms-ends-" + provider
+			teamA, teamB := provider+"-team-a", provider+"-team-b"
+			repo := seedEvidenceSettleRepo(t, ctx, conn, org, provider)
+			seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-a", teamA, true, time.Now().UTC().Add(-time.Hour))
+			seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-b", teamB, true, time.Now().UTC().Add(-time.Hour))
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-a", 1, old)
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-a", 2, old.Add(time.Hour))
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", 3, mid)
+
+			service := TeamRepoOwnershipDerivationService{Conn: conn}
+			derive := func(step string) TeamRepoOwnershipDerivationStats {
+				t.Helper()
+				_, _, ready, _, stats, err := service.DeriveWithStats(ctx, org)
+				if err != nil || !ready {
+					t.Fatalf("%s: ready %v err %v", step, ready, err)
+				}
+				return stats
+			}
+			derive("first derive")
+
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", 4, mid.Add(time.Hour))
+			tieFrom := time.Now().UTC().Add(-time.Second)
+			if stats := derive("the tie forms"); stats.RoleChanges != 1 || len(stats.Ties) != 1 {
+				t.Fatalf("the tie forms: role changes %d ties %+v, want B's co-owner row closed and one tie", stats.RoleChanges, stats.Ties)
+			}
+
+			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-a", 5, mid.Add(2*time.Hour))
+			tieUntil := time.Now().UTC().Add(-time.Second)
+			if stats := derive("the tie ends"); stats.RoleChanges != 1 || len(stats.Ties) != 0 {
+				t.Fatalf("the tie ends: role changes %d ties %+v, want B's main row closed and no tie", stats.RoleChanges, stats.Ties)
+			}
+
+			spans := ownershipRowSpans(t, ctx, conn, org)
+			var bMainFrom, bMainTo time.Time
+			for _, span := range spans {
+				if span.team == teamA && (!span.validFrom.Equal(old) || span.primary != teamRepoOwnershipMainOwner || span.validTo != nil) {
+					t.Errorf("A row %+v, want only its one open main row from %v", span, old)
+				}
+				if span.team == teamB && span.primary == teamRepoOwnershipMainOwner && span.validTo != nil {
+					bMainFrom, bMainTo = span.validFrom, *span.validTo
+				}
+			}
+			if bMainFrom.Before(tieFrom) || !bMainTo.After(bMainFrom) || bMainTo.Before(tieUntil) {
+				t.Fatalf("B main row %v..%v, want from the run of the tie (after %v) to the run that ended it (after %v); rows %+v", bMainFrom, bMainTo, tieFrom, tieUntil, spans)
+			}
+			for at, want := range map[time.Time][]string{
+				mid:                              {teamA},
+				bMainFrom.Add(-time.Millisecond): {teamA},
+				bMainFrom:                        {teamA, teamB},
+				bMainTo.Add(-time.Millisecond):   {teamA, teamB},
+				bMainTo:                          {teamA},
+			} {
+				if got := mainOwnersAt(spans, at); fmt.Sprint(sortedStrings(got)) != fmt.Sprint(sortedStrings(want)) {
+					t.Errorf("main owners at %v = %v, want %v", at, got, want)
+				}
+			}
+			for run := 1; run <= 2; run++ {
+				written, retracted, _, _, stats, err := service.DeriveWithStats(ctx, org)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if written != 0 || retracted != 0 || stats.Superseded != 0 || stats.RoleChanges != 0 {
+					t.Errorf("rerun %d: written %d retracted %d superseded %d role changes %d, want all 0", run, written, retracted, stats.Superseded, stats.RoleChanges)
+				}
+			}
+		})
+	}
+}

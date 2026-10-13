@@ -831,3 +831,31 @@ func TestDemoGateCheckoutRegressionsCarryRevertsAndFailedDeploys(t *testing.T) {
 		t.Errorf("Checkout holds %d failed deployments, want at least 2", failed)
 	}
 }
+
+// Every open ownership row names a synced repository: by repo_id, or by its full name when the producer
+// leaves repo_id empty (the GitHub team catalog's provider_access rows always do,
+// github_team_catalog.go normalizeGitHubTeamRepoOwnership; readers resolve them by name,
+// queryapi/teamscope). Identity owns its two repositories that way.
+func TestDemoGateOwnershipResolvesToSyncedRepositories(t *testing.T) {
+	world, _ := demoGateWorld(t)
+	ids, names := map[string]bool{}, map[string]bool{}
+	for _, row := range demoGateRows(world, "repos") {
+		ids[gateText(row["id"])] = true
+		names[strings.ToLower(gateText(row["repo"]))] = true
+	}
+	byName := 0
+	for _, row := range demoGateRows(world, "team_repo_ownership") {
+		if row["valid_to"] != nil {
+			continue
+		}
+		repoID, name := gateText(row["repo_id"]), strings.ToLower(gateText(row["repo_full_name"]))
+		switch {
+		case repoID != "" && ids[repoID]:
+		case repoID == "" && names[name]:
+			byName++
+		default:
+			t.Errorf("team %s owns %q (repo_id %q), which is not a synced repository", gateText(row["team_id"]), name, repoID)
+		}
+	}
+	t.Logf("%d open ownership rows resolve by repository name", byName)
+}

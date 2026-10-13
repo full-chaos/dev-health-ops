@@ -66,7 +66,7 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "74519c4288dc65853a7349ff6e7c320558b588d855c5e6608c72d64f1ada38b1",
 	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "5e8c9436078addc9b1a5b03d1fb77304a30d2b44ac88a22b526886d3793596cd",
 	// The mixed-provider demo world (provider_worlds_demo_*).
-	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_90d_c0_p113_t8_s9440_raw.json.gz": "20cc54c3ff7fc0c47f2a0a4dfbdecd49a8965d6ed8770361f396324497a1afc6",
+	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p171_t8_s9440_raw.json.gz": "e3079e3a60ddd4c9dab5b12ed98c9a8cf70c69977408e283411b3f3e49012188",
 }
 
 // producedWorlds are the provider worlds (github of the real shape, gitlab, jira, linear): written by the
@@ -75,11 +75,11 @@ var frozenWorldDigests = map[string]string{
 // worlds they are rewritten when their producers change: that test's -freeze-provider-worlds run
 // writes them, and its plain run fails while a world is not exactly what the producers write today.
 var producedWorlds = map[string]bool{
-	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                  true,
-	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                    true,
-	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":      true,
-	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz":   true,
-	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_90d_c0_p113_t8_s9440_raw.json.gz": true,
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                   true,
+	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                     true,
+	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":       true,
+	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz":    true,
+	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p171_t8_s9440_raw.json.gz": true,
 }
 
 // GenerateParams are the parameters of one frozen `fixtures generate` run: the flags that change

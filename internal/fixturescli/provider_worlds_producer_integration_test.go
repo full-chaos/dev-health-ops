@@ -600,7 +600,7 @@ func sameWorldRows(committed, produced FrozenWorld) bool {
 // they write with the committed world, table by table and row by row; with -freeze-provider-worlds it
 // writes the worlds instead (and prints the digests to pin).
 func TestProviderWorldsAreWhatTheProducersWrite(t *testing.T) {
-	for _, world := range append(append([]providerWorld{}, providerWorlds...), demoWorld) {
+	for _, world := range append(append([]providerWorld{}, providerWorlds...), demoWorldAsOf()) {
 		t.Run(WorldFile(world.Params), func(t *testing.T) {
 			produced := produceWorld(t, world)
 			file := WorldFile(world.Params)

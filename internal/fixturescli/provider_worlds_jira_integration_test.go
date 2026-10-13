@@ -177,7 +177,13 @@ type jiraIssue struct {
 	// Description is the issue's description, sent as Jira Cloud v3 sends it: an Atlassian Document
 	// Format document ("" = no description field).
 	Description string
+	// StoryPoints is the issue's estimate in the story points field (jiraStoryPointsField); 0 sends none.
+	StoryPoints float64
 }
+
+// jiraStoryPointsField is the custom field a Jira Cloud site's story points live in by default; a
+// sync reads it only when the integration names it (dataset option story_points_field).
+const jiraStoryPointsField = "customfield_10016"
 
 func (issue jiraIssue) issueLinks() []any {
 	links := []any{}
@@ -222,6 +228,9 @@ func (issue jiraIssue) payload() map[string]any {
 			"labels": append([]string{}, issue.Labels...), "priority": map[string]any{"name": "Medium"},
 			"issuelinks": issue.issueLinks(), "subtasks": []any{}, "components": []any{}, "fixVersions": []any{},
 		},
+	}
+	if issue.StoryPoints > 0 {
+		payload["fields"].(map[string]any)[jiraStoryPointsField] = issue.StoryPoints
 	}
 	if issue.Description != "" {
 		payload["fields"].(map[string]any)["description"] = map[string]any{"type": "doc", "version": 1, "content": []any{

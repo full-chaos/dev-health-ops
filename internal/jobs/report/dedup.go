@@ -103,6 +103,23 @@ func averageExpression(table, metric string) string {
 // filter that ran first would drop the retraction row and serve the older row
 // it replaced.
 func dedupFromSource(table string) string {
+	return dedupFromSourceFor(table, false)
+}
+
+// testopsOwnerKeyedTables hold one row per main owner of a tied repository and day
+// (D5990; migration 124): team_id is in their sorting key.
+var testopsOwnerKeyedTables = map[string]struct{}{
+	"testops_coverage_metrics_daily": {},
+	"testops_pipeline_metrics_daily": {},
+	"testops_test_metrics_daily":     {},
+}
+
+// dedupFromSourceFor is dedupFromSource for a read that groups or filters by
+// team (byTeam). A team-keyed table then keeps every owner's row of the newest
+// run of each (org, repo, day); any other read keeps ONE row per (org, repo,
+// day), the owner with the smallest team_id, so a tied repository is counted
+// once in a sum.
+func dedupFromSourceFor(table string, byTeam bool) string {
 	read, ok := tableReads[table]
 	if !ok {
 		return table
@@ -111,6 +128,19 @@ func dedupFromSource(table string) string {
 		"(SELECT * FROM %s ORDER BY %s DESC LIMIT 1 BY %s) AS %s",
 		table, read.Version, strings.Join(read.Key, ", "), table,
 	)
+	if _, teamKeyed := testopsOwnerKeyedTables[table]; teamKeyed {
+		key := strings.Join(read.Key, ", ")
+		if byTeam {
+			newest = fmt.Sprintf(
+				"(SELECT * EXCEPT (latest_version) FROM (SELECT *, max(%[2]s) OVER (PARTITION BY %[3]s) AS latest_version FROM %[1]s) "+
+					"WHERE %[2]s = latest_version ORDER BY team_id ASC LIMIT 1 BY %[3]s, team_id) AS %[1]s",
+				table, read.Version, key)
+		} else {
+			newest = fmt.Sprintf(
+				"(SELECT * FROM %s ORDER BY %s DESC, team_id ASC LIMIT 1 BY %s) AS %s",
+				table, read.Version, key, table)
+		}
+	}
 	if !liverow.Registered(table) {
 		return newest
 	}

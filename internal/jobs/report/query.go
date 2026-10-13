@@ -685,7 +685,7 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	// latest-generation source (see dedup.go) so a re-drive is never summed
 	// alongside its earlier generation. A table with no known re-drive risk
 	// passes through unchanged.
-	source := sourceFrom(spec.Metric, definition)
+	source := sourceFrom(spec.Metric, definition, spec.GroupBy == "team" || (len(spec.FilterTeams) > 0 && definition.hasDimension("team")))
 	if wholePersonLandscapeMetric(spec, definition) {
 		// A landscape point holds no repository (its repo_id is a constant
 		// placeholder), so a repository filter selects the person's user rows
@@ -829,8 +829,8 @@ func wholePersonLandscapeSource(metric, landscapeSource, where, repoFilter strin
 // returning no data for that org's untouched historical day
 // (independent-review coverage gap, verified as a real defect once a
 // legacy-only-day test was added).
-func sourceFrom(metric string, definition metricDefinition) string {
-	dedupSource := dedupFromSource(definition.SourceTable)
+func sourceFrom(metric string, definition metricDefinition, byTeam bool) string {
+	dedupSource := dedupFromSourceFor(definition.SourceTable, byTeam)
 	if definition.Numerator == "" || definition.Denominator == "" {
 		return dedupSource
 	}

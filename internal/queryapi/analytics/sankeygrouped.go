@@ -56,7 +56,7 @@ func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, fil
 			return sankeyShape{}, err
 		}
 	} else {
-		shape.source, shape.alias, shape.dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
+		shape.source, shape.alias, shape.dateFilter = nonInvestmentSourceAndDateFilter(req.Measure, needsTeamRows(req.Path, filters))
 		shape.measureExpr, err = dbExpression(req.Measure, false, false)
 		if err != nil {
 			return sankeyShape{}, err

@@ -80,7 +80,7 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 	// pipeline/test/coverage executors use (CHAOS-8512).
 	day := chDate(run.TargetDay)
 	end := day.Add(24 * time.Hour)
-	repoResolver, err := loadTestopsRepoOwnerResolver(ctx, executor.conn, run.OrganizationID, end)
+	repoResolver, _, err := loadTestopsRepoOwnerResolver(ctx, executor.conn, run.OrganizationID, end)
 	if err != nil {
 		return 0, err
 	}

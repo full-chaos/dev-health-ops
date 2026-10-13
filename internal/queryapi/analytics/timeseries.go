@@ -83,10 +83,13 @@ var appendOnlyDailyNaturalKeys = map[string][]string{
 // here (root AGENTS.md's SQL-sourcing ruling: fix Python first, on `main`,
 // THEN port -- this has not happened, so the port stays faithful to what
 // ships today, undeduped).
-func dedupFromMeasureSource(table string) (source string, alias string) {
+func dedupFromMeasureSource(table string, byTeam bool) (source string, alias string) {
 	key, ok := appendOnlyDailyNaturalKeys[table]
 	if !ok {
 		return table, table
+	}
+	if _, tied := teamKeyedTestopsTables[table]; tied {
+		return dedupTestopsSource(table, key, byTeam), table
 	}
 	return fmt.Sprintf(`(
             SELECT *
@@ -94,6 +97,42 @@ func dedupFromMeasureSource(table string) (source string, alias string) {
             ORDER BY computed_at DESC
             LIMIT 1 BY %s
         ) AS %s`, table, joinColumns(key), table), table
+}
+
+// teamKeyedTestopsTables are the TestOps daily tables whose sorting key holds
+// team_id (migration 124): a repository with several main owners (D5990, a full
+// ownership tie) has one row per main owner for a day.
+var teamKeyedTestopsTables = map[string]struct{}{
+	"testops_pipeline_metrics_daily": {},
+	"testops_test_metrics_daily":     {},
+	"testops_coverage_metrics_daily": {},
+}
+
+// dedupTestopsSource reads one run's rows of each (org, repo, day). A request
+// that groups or filters by team keeps every owner's row of that run; any other
+// request keeps one row per repository and day (the owner with the smallest
+// team_id), so a tied repository is counted once. Rows of an earlier run that
+// carry another team_id (the repository had another owner then) are not read: the
+// newest computed_at of the (org, repo, day) wins as a whole.
+func dedupTestopsSource(table string, key []string, byTeam bool) string {
+	if !byTeam {
+		return fmt.Sprintf(`(
+            SELECT *
+            FROM %s
+            ORDER BY computed_at DESC, team_id ASC
+            LIMIT 1 BY %s
+        ) AS %s`, table, joinColumns(key), table)
+	}
+	return fmt.Sprintf(`(
+            SELECT * EXCEPT (latest_computed_at)
+            FROM (
+                SELECT *, max(computed_at) OVER (PARTITION BY %s) AS latest_computed_at
+                FROM %s
+            )
+            WHERE computed_at = latest_computed_at
+            ORDER BY team_id ASC
+            LIMIT 1 BY %s, team_id
+        ) AS %s`, joinColumns(key), table, joinColumns(key), table)
 }
 
 func joinColumns(cols []string) string {
@@ -114,9 +153,9 @@ func joinColumns(cols []string) string {
 // the override REPLACES source_table and date_filter unconditionally
 // once a measure routes to a non-default table, regardless of anything
 // else about the request.
-func nonInvestmentSourceAndDateFilter(measure Measure) (source, alias, dateFilter string) {
+func nonInvestmentSourceAndDateFilter(measure Measure, byTeam bool) (source, alias, dateFilter string) {
 	if table := measureSourceTable(measure); table != "" {
-		src, al := dedupFromMeasureSource(table)
+		src, al := dedupFromMeasureSource(table, byTeam)
 		return src, al, "day >= {start_date:Date} AND day <= {end_date:Date}"
 	}
 	return workItemCompletionDedupSource, "work_item_completion_daily", "day >= {start_date:Date} AND day <= {end_date:Date}"
@@ -232,7 +271,7 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 		// _query_investment_dicts, which wraps EXECUTION, not
 		// compilation -- investment.py:175-181).
 	} else {
-		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
+		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure, needsTeamRows([]Dimension{req.Dimension}, filters))
 		measureExpr, err = dbExpression(req.Measure, false, false)
 		if err != nil {
 			return compiledQuery{}, err

@@ -68,6 +68,13 @@ func testopsScopes() map[string]bool {
 	return map[string]bool{ScopeRepo: true, ScopeTeam: true, ScopeGlobal: true}
 }
 
+// teamKeyedTestopsTables hold one row per main owner of a tied repository and day.
+var teamKeyedTestopsTables = map[string]bool{
+	"testops_pipeline_metrics_daily": true,
+	"testops_test_metrics_daily":     true,
+	"testops_coverage_metrics_daily": true,
+}
+
 func pipelineMetric(column string) MetricDefinition {
 	return MetricDefinition{
 		Table: "testops_pipeline_metrics_daily", ValueColumn: column,
@@ -208,6 +215,35 @@ ORDER BY scope_key, day`,
 		scopeExpression, definition.ValueColumn, definition.Table,
 		strings.Join(filters, " AND "), strings.Join(innerGroup, ", "), liveRowHaving(definition.Table),
 	)
+
+	if scopeType == ScopeTeam && teamKeyedTestopsTables[definition.Table] {
+		// One row per main owner of a tied repository (D5990): the team is a
+		// key column, so each owner reads the repository whole. Only the rows
+		// of the newest run of a (org, repo, day) are read, so an owner the
+		// repository had in an earlier run is not read.
+		query = fmt.Sprintf(`
+SELECT scope_key, day, avg(metric_value) AS value
+FROM (
+    SELECT
+        ifNull(team_id, '') AS scope_key,
+        day,
+        (argMax(tuple(%[1]s), computed_at)).1 AS metric_value
+    FROM %[2]s
+    WHERE %[3]s
+      AND (org_id, repo_id, day, computed_at) IN (
+          SELECT org_id, repo_id, day, max(computed_at)
+          FROM %[2]s
+          WHERE %[3]s
+          GROUP BY org_id, repo_id, day
+      )
+    GROUP BY org_id, day, repo_id, team_id
+)
+WHERE metric_value IS NOT NULL
+GROUP BY scope_key, day
+ORDER BY scope_key, day`,
+			definition.ValueColumn, definition.Table, strings.Join(filters, " AND "),
+		)
+	}
 
 	arguments := []any{
 		// Date parameters are bound as YYYY-MM-DD STRINGS, not time.Time. The

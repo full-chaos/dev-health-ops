@@ -73,6 +73,7 @@ func newTestopsNativeBase(conn driver.Conn) (testopsNativeBase, error) {
 type testopsNativeScope struct {
 	repoIDs    []uuid.UUID
 	resolver   testops.RepoTeamResolver
+	owners     testopsRepoOwners
 	day        time.Time
 	start      time.Time
 	end        time.Time
@@ -99,13 +100,14 @@ func (base testopsNativeBase) scope(
 	// partition and passed into every repository's compute call.
 	day := chDate(run.TargetDay)
 	end := day.Add(24 * time.Hour)
-	resolver, err := loadTestopsRepoOwnerResolver(ctx, base.conn, run.OrganizationID, end)
+	resolver, owners, err := loadTestopsRepoOwnerResolver(ctx, base.conn, run.OrganizationID, end)
 	if err != nil {
 		return testopsNativeScope{}, err
 	}
 	return testopsNativeScope{
 		repoIDs:    repoIDs,
 		resolver:   resolver,
+		owners:     owners,
 		day:        day,
 		start:      day,
 		end:        end,
@@ -144,7 +146,7 @@ func (executor *TestopsPipelineExecutor) ComputeFamily(
 	}
 	var metrics []testops.PipelineMetric
 	for _, repoID := range scope.repoIDs {
-		accumulator := testops.NewPipelineAccumulator(repoID, repoID.String(), scope.resolver)
+		accumulator := testops.NewPipelineAccumulator(repoID, repoID.String(), nil)
 		if err := loadNativeTestopsPipelineRuns(
 			ctx, executor.conn, accumulator, run.OrganizationID, repoID, scope.start, scope.end,
 		); err != nil {
@@ -157,6 +159,10 @@ func (executor *TestopsPipelineExecutor) ComputeFamily(
 			metrics = append(metrics, *merged)
 		}
 	}
+	metrics = fanOutOwners(ctx, "testops_pipeline", metrics,
+		func(m testops.PipelineMetric) uuid.UUID { return m.RepoID },
+		func(m testops.PipelineMetric) *string { return m.TeamID },
+		func(m *testops.PipelineMetric, team *string) { m.TeamID = team }, scope.owners)
 	return writeTestopsPipelineMetrics(
 		ctx, executor.conn, run.OrganizationID, scope.day, scope.computedAt, metrics)
 }
@@ -205,7 +211,7 @@ func (executor *TestopsTestExecutor) ComputeFamily(
 	var metrics []testops.TestMetric
 	for _, repoID := range scope.repoIDs {
 		repoMetrics, err := loadTestopsTestMetrics(
-			ctx, executor.conn, run.OrganizationID, repoID, repoID.String(), scope.resolver,
+			ctx, executor.conn, run.OrganizationID, repoID, repoID.String(), nil,
 			historyStart, scope.start, scope.end,
 		)
 		if err != nil {
@@ -213,6 +219,10 @@ func (executor *TestopsTestExecutor) ComputeFamily(
 		}
 		metrics = append(metrics, repoMetrics...)
 	}
+	metrics = fanOutOwners(ctx, "testops_test", metrics,
+		func(m testops.TestMetric) uuid.UUID { return m.RepoID },
+		func(m testops.TestMetric) *string { return m.TeamID },
+		func(m *testops.TestMetric, team *string) { m.TeamID = team }, scope.owners)
 	return writeTestopsTestMetrics(
 		ctx, executor.conn, run.OrganizationID, scope.day, scope.computedAt, metrics)
 }
@@ -269,11 +279,15 @@ func (executor *TestopsCoverageExecutor) ComputeFamily(
 			return 0, err
 		}
 		if metric := testops.ComputeCoverageMetric(
-			repoID, current, prior, repoID.String(), scope.resolver,
+			repoID, current, prior, repoID.String(), nil,
 		); metric != nil {
 			metrics = append(metrics, *metric)
 		}
 	}
+	metrics = fanOutOwners(ctx, "testops_coverage", metrics,
+		func(m testops.CoverageMetric) uuid.UUID { return m.RepoID },
+		func(m testops.CoverageMetric) *string { return m.TeamID },
+		func(m *testops.CoverageMetric, team *string) { m.TeamID = team }, scope.owners)
 	return writeTestopsCoverageMetrics(
 		ctx, executor.conn, run.OrganizationID, scope.day, scope.computedAt, metrics)
 }

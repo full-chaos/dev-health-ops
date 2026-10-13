@@ -44,6 +44,11 @@ func teamScopeIDs(filters *model.FilterInput) []string {
 	return nil
 }
 
+// needsTeamRows is true when a non-investment request reads a team: it groups by team or scopes to teams.
+func needsTeamRows(dimensions []Dimension, filters *model.FilterInput) bool {
+	return dimensionListHas(dimensions, DimensionTeam) || len(teamScopeIDs(filters)) > 0
+}
+
 // ownershipDbExpression is dbExpression(measure, true, true) weighted by the owner's share of the repository.
 func ownershipDbExpression(measure Measure) (string, error) {
 	switch measure {

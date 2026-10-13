@@ -107,9 +107,9 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		{"work_item_completion_daily", "(SELECT * FROM (SELECT * FROM work_item_completion_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id) AS work_item_completion_daily WHERE (work_item_completion_daily.delivery_units != 0 OR work_item_completion_daily.work_items_completed != 0 OR work_item_completion_daily.prs_merged != 0 OR work_item_completion_daily.churn_loc != 0)) AS work_item_completion_daily"},
 		{"issue_type_metrics_daily", "(SELECT * FROM (SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily WHERE (issue_type_metrics_daily.created_count != 0 OR issue_type_metrics_daily.completed_count != 0 OR issue_type_metrics_daily.active_count != 0)) AS issue_type_metrics_daily"},
 		{"user_metrics_daily", "(SELECT * FROM (SELECT * FROM user_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, author_email, day) AS user_metrics_daily WHERE " + teamkeytables.UserMetricsDaily.LiveRow("user_metrics_daily.") + ") AS user_metrics_daily"},
-		{"testops_pipeline_metrics_daily", "(SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"},
-		{"testops_test_metrics_daily", "(SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily"},
-		{"testops_coverage_metrics_daily", "(SELECT * FROM testops_coverage_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_coverage_metrics_daily"},
+		{"testops_pipeline_metrics_daily", "(SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC, team_id ASC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"},
+		{"testops_test_metrics_daily", "(SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC, team_id ASC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily"},
+		{"testops_coverage_metrics_daily", "(SELECT * FROM testops_coverage_metrics_daily ORDER BY computed_at DESC, team_id ASC LIMIT 1 BY org_id, repo_id, day) AS testops_coverage_metrics_daily"},
 		{"dora_metrics_daily", "(SELECT * FROM dora_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, metric_name) AS dora_metrics_daily"},
 		// CHAOS-4459 (codex review rounds 2-3): both now registered.
 		{"file_metrics_daily", "(SELECT * FROM file_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, path) AS file_metrics_daily"},
@@ -252,5 +252,25 @@ func TestChangeFailureRateChartIsTheSharedRuleOverTheCounts(t *testing.T) {
 	other := metricDefinition{CanonicalName: "change_failure_rate", SourceTable: "dora_metrics_daily"}
 	if got := withChartRule(other); got.SourceTable != other.SourceTable || got.rule != "" {
 		t.Errorf("withChartRule moved a metric of %s: %+v", other.SourceTable, got)
+	}
+}
+
+// A read that groups or filters by team keeps every main owner of a tied
+// repository (D5990) from the newest run of each (org, repo, day); any other
+// read keeps one row per repository and day.
+func TestDedupFromSourceForTeamReadsEveryMainOwnerOfTheNewestRun(t *testing.T) {
+	t.Parallel()
+	for _, table := range []string{"testops_pipeline_metrics_daily", "testops_test_metrics_daily", "testops_coverage_metrics_daily"} {
+		want := "(SELECT * EXCEPT (latest_version) FROM (SELECT *, max(computed_at) OVER (PARTITION BY org_id, repo_id, day) AS latest_version FROM " + table + ") " +
+			"WHERE computed_at = latest_version ORDER BY team_id ASC LIMIT 1 BY org_id, repo_id, day, team_id) AS " + table
+		if got := dedupFromSourceFor(table, true); got != want {
+			t.Errorf("dedupFromSourceFor(%q, true) = %q, want %q", table, got, want)
+		}
+		if got := dedupFromSourceFor(table, false); got != dedupFromSource(table) {
+			t.Errorf("dedupFromSourceFor(%q, false) = %q, want the one-row read", table, got)
+		}
+	}
+	if got := dedupFromSourceFor("repo_metrics_daily", true); got != dedupFromSource("repo_metrics_daily") {
+		t.Errorf("a table without a team key must not change: %q", got)
 	}
 }

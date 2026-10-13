@@ -370,7 +370,7 @@ func compileFlowMatrixInvestmentDimension(req FlowMatrixRequest, orgID string, t
 		contextBindings = ictx.Bindings
 		measureExpr, err = ictx.measure(req.Measure)
 	} else {
-		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
+		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure, needsTeamRows([]Dimension{req.Dimension}, filters))
 		measureExpr, err = dbExpression(req.Measure, false, false)
 	}
 	if err != nil {

@@ -1,17 +1,18 @@
 package daily
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
 // A repository with several main owners (a full ownership tie, D5990) counts
-// whole in each of them in every family whose daily table keys a row by team;
-// a TestOps table holds one row per repository, so it takes the first owner by
-// rank.
+// whole in each of them in every family whose daily table keys a row by team,
+// and TestOps gets one row per main owner.
 func TestARepositoryWithSeveralMainOwnersCountsWholeInEach(t *testing.T) {
 	tied, single := uuid.New(), uuid.New()
 	owners := map[string][]string{tied.String(): {"team-b", "team-a"}, single.String(): {"team-c"}}
@@ -42,10 +43,31 @@ func TestARepositoryWithSeveralMainOwnersCountsWholeInEach(t *testing.T) {
 		}
 	})
 
-	t.Run("testops takes the first owner", func(t *testing.T) {
-		got := firstOwnerOfEach(owners)
-		if len(got) != 2 || got[tied.String()] != "team-b" || got[single.String()] != "team-c" {
-			t.Errorf("first owners %v, want team-b for the tied repo and team-c", got)
+	t.Run("testops gets one row per main owner", func(t *testing.T) {
+		metrics := []testops.CoverageMetric{{RepoID: tied}, {RepoID: single}}
+		got := fanOutOwners(context.Background(), "testops_coverage", metrics,
+			func(m testops.CoverageMetric) uuid.UUID { return m.RepoID },
+			func(m testops.CoverageMetric) *string { return m.TeamID },
+			func(m *testops.CoverageMetric, team *string) { m.TeamID = team }, owners)
+		teams := map[uuid.UUID][]string{}
+		for _, metric := range got {
+			teams[metric.RepoID] = append(teams[metric.RepoID], *metric.TeamID)
+		}
+		if len(got) != 3 || len(teams[tied]) != 2 || teams[tied][0] != "team-b" || teams[tied][1] != "team-a" || len(teams[single]) != 1 || teams[single][0] != "team-c" {
+			t.Errorf("teams by repository %v, want team-b and team-a for the tied repo and team-c", teams)
+		}
+	})
+
+	t.Run("testops keeps a team of the row and an unowned repository", func(t *testing.T) {
+		own, none := "team-own", ""
+		unowned := uuid.New()
+		metrics := []testops.CoverageMetric{{RepoID: tied, TeamID: &own}, {RepoID: unowned, TeamID: &none}}
+		got := fanOutOwners(context.Background(), "testops_coverage", metrics,
+			func(m testops.CoverageMetric) uuid.UUID { return m.RepoID },
+			func(m testops.CoverageMetric) *string { return m.TeamID },
+			func(m *testops.CoverageMetric, team *string) { m.TeamID = team }, owners)
+		if len(got) != 2 || *got[0].TeamID != "team-own" || *got[1].TeamID != "" {
+			t.Errorf("rows %+v, want both rows unchanged", got)
 		}
 	})
 

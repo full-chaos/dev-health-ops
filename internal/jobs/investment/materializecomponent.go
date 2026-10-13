@@ -24,7 +24,9 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/promptpii"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // CategorizationStatusNotYetCategorized is the placeholder
@@ -108,6 +110,9 @@ type MaterializeComponentResult struct {
 	// non-finite and was therefore excluded from evidence-quality scoring
 	// rather than propagated into it.
 	RejectedConfidences int
+	// PromptRedactions counts the values the prompt filter replaced in this
+	// component's text before the bundle was built. Never the values.
+	PromptRedactions promptpii.Counts
 }
 
 const (
@@ -153,15 +158,21 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 
 	unitID := units.WorkUnitID(unitNodes)
 
+	promptFilter := promptpii.NewFilter()
+	workItemMap := workItemMapForBundle(issueNodeIDs, input.WorkItems)
+	prMap := prMapForBundle(prNodeIDs, input.PRs)
+	commitMap := commitMapForBundle(commitNodeIDs, input.Commits)
+	parentTitles, epicTitles := filterBundleText(promptFilter, workItemMap, prMap, commitMap, input.ParentTitles, input.EpicTitles)
+
 	bundle, err := units.BuildTextBundle(units.BuildTextBundleInput{
 		IssueIDs:     issueNodeIDs,
 		PRIDs:        prNodeIDs,
 		CommitIDs:    commitNodeIDs,
-		WorkItemMap:  workItemMapForBundle(issueNodeIDs, input.WorkItems),
-		PRMap:        prMapForBundle(prNodeIDs, input.PRs),
-		CommitMap:    commitMapForBundle(commitNodeIDs, input.Commits),
-		ParentTitles: input.ParentTitles,
-		EpicTitles:   input.EpicTitles,
+		WorkItemMap:  workItemMap,
+		PRMap:        prMap,
+		CommitMap:    commitMap,
+		ParentTitles: parentTitles,
+		EpicTitles:   epicTitles,
 		WorkUnitID:   unitID,
 	})
 	if err != nil {
@@ -263,7 +274,7 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 	}
 
 	return MaterializeComponentResult{
-		Investment: investment, RepoEffort: repoEffortRecords, Bundle: bundle,
+		Investment: investment, RepoEffort: repoEffortRecords, Bundle: bundle, PromptRedactions: promptFilter.Counts(),
 		RejectedConfidences: rejectedConfidences,
 	}, nil
 }
@@ -324,6 +335,68 @@ func buildNodeTimes(
 		}
 	}
 	return times
+}
+
+// filterBundleText runs every text the prompt can carry through the one PII
+// filter, in place, before the bundle is built: the bundle hash, the prompt and
+// the quotes the model copies from it are then all made from filtered text. It
+// returns filtered copies of the parent and epic titles the work items name.
+// Ids are visited in sorted order so the placeholder numbers do not depend on
+// map order.
+func filterBundleText(
+	filter *promptpii.Filter,
+	workItems, prs, commits map[string]map[string]any,
+	parentTitles, epicTitles map[string]string,
+) (map[string]string, map[string]string) {
+	filteredParents := map[string]string{}
+	filteredEpics := map[string]string{}
+	for _, id := range sortedTextKeys(workItems) {
+		item := workItems[id]
+		for _, field := range []string{"title", "description", "type"} {
+			if text, ok := item[field].(string); ok {
+				item[field] = filter.Text(text)
+			}
+		}
+		if labels, ok := item["labels"].([]any); ok {
+			for i, label := range labels {
+				if text, ok := label.(string); ok {
+					labels[i] = filter.Text(text)
+				}
+			}
+		}
+		if parentID, ok := item["parent_id"].(string); ok {
+			if title, found := parentTitles[pythonparity.Strip(parentID)]; found {
+				filteredParents[pythonparity.Strip(parentID)] = filter.Text(title)
+			}
+		}
+		if epicID, ok := item["epic_id"].(string); ok {
+			if title, found := epicTitles[pythonparity.Strip(epicID)]; found {
+				filteredEpics[pythonparity.Strip(epicID)] = filter.Text(title)
+			}
+		}
+	}
+	for _, id := range sortedTextKeys(prs) {
+		for _, field := range []string{"title", "body"} {
+			if text, ok := prs[id][field].(string); ok {
+				prs[id][field] = filter.Text(text)
+			}
+		}
+	}
+	for _, id := range sortedTextKeys(commits) {
+		if text, ok := commits[id]["message"].(string); ok {
+			commits[id]["message"] = filter.Text(text)
+		}
+	}
+	return filteredParents, filteredEpics
+}
+
+func sortedTextKeys(m map[string]map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func workItemMapForBundle(issueIDs []string, workItems map[string]chquery.WorkItem) map[string]map[string]any {

@@ -109,7 +109,8 @@ CREATE TABLE team_repo_ownership (
     priority Int32 DEFAULT 0,
     valid_from DateTime64(3, 'UTC'),
     valid_to Nullable(DateTime64(3, 'UTC')),
-    updated_at DateTime64(3, 'UTC')
+    updated_at DateTime64(3, 'UTC'),
+    share Nullable(Float64)
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from);
 

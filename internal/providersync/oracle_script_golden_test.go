@@ -110,7 +110,7 @@ func frozenScriptAnswer(t *testing.T, oracle scriptOracle) []byte {
 	})
 	root := golden.PythonRoot(t, repoRoot)
 
-	harness := oracleHarnessManifest(t, packageDir)
+	harness := oracleHarnessManifest(t, packageDir, oraclePairPythonBuild)
 	program := scriptOracleProgram(t, oracle, harness)
 	keyed, passed := oraclePairEnvironment(t, oracle.name)
 	request := venueoracle.ProgramRequest(oracle.name, program, oracle.input, keyed)

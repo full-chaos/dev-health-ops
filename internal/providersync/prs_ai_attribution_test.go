@@ -420,14 +420,15 @@ func TestGitLabPRsRouteAttributionCostsNoExtraRequest(t *testing.T) {
 	if subjects["9"] || !subjects["7"] || !subjects["8"] {
 		t.Fatalf("subjects=%v want 7 and 8 only", subjects)
 	}
-	// Exactly the requests the unit made before attribution existed: the
-	// project, the merge request list, and the approvals and notes of each
-	// merge request. The attribution rows add none.
+	// Exactly the requests the unit makes without attribution: the project, the
+	// merge request list, and the approvals, notes and commits of each merge
+	// request. The attribution rows add none.
 	root := "/api/v4/projects/123"
 	wantRequests := []string{root, root + "/merge_requests"}
 	for _, iid := range []string{"7", "8", "9"} {
 		wantRequests = append(wantRequests,
-			root+"/merge_requests/"+iid+"/approvals", root+"/merge_requests/"+iid+"/notes")
+			root+"/merge_requests/"+iid+"/approvals", root+"/merge_requests/"+iid+"/notes",
+			root+"/merge_requests/"+iid+"/commits")
 	}
 	if !reflect.DeepEqual(prsDoer.requests, wantRequests) {
 		t.Fatalf("gitlab prs requests=%q want %q", prsDoer.requests, wantRequests)

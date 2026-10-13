@@ -251,8 +251,8 @@ func buildTeamCognitiveLoadRows(
 				continue
 			}
 			b := bucket(teamID)
-			b.prInterruptionLoad += row.PRInterruptionLoad * owner.Share
-			b.reviewRequestLoad += row.ReviewRequestLoad * owner.Share
+			b.prInterruptionLoad += float64(row.PRInterruptionLoad * owner.Share)
+			b.reviewRequestLoad += float64(row.ReviewRequestLoad * owner.Share)
 			b.repoIDs[repoIDStr] = struct{}{}
 			if row.AuthorEmail != "" {
 				b.authors[row.AuthorEmail] = struct{}{}
@@ -269,9 +269,9 @@ func buildTeamCognitiveLoadRows(
 				continue
 			}
 			b := bucket(teamID)
-			b.afterHoursCommitsCount += float64(row.AfterHoursCommitsCount) * owner.Share
-			b.weekendCommitsCount += float64(row.WeekendCommitsCount) * owner.Share
-			b.commitsCount += float64(row.CommitsCount) * owner.Share
+			b.afterHoursCommitsCount += float64(float64(row.AfterHoursCommitsCount) * owner.Share)
+			b.weekendCommitsCount += float64(float64(row.WeekendCommitsCount) * owner.Share)
+			b.commitsCount += float64(float64(row.CommitsCount) * owner.Share)
 			b.hasTeamMetricsRow = true
 			b.repoIDs[repoIDStr] = struct{}{}
 		}

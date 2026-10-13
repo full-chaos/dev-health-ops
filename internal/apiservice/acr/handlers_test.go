@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -152,6 +153,7 @@ func TestEntitlementHandlerErrorStatusCodes(t *testing.T) {
 		wantDetail string
 	}{
 		{"org not found", ErrOrgNotFound, http.StatusNotFound, "Not found"},
+		{"wrapped malformed id", errors.Join(errors.New("bad"), ErrOrgNotFound), http.StatusNotFound, "Not found"},
 		{"store unavailable", ErrUnavailable, http.StatusServiceUnavailable, "Service unavailable"},
 		{"wrapped unavailable", errors.Join(errors.New("db down"), ErrUnavailable), http.StatusServiceUnavailable, "Service unavailable"},
 		{"unclassified error", errors.New("boom"), http.StatusInternalServerError, "Internal Server Error"},
@@ -180,6 +182,39 @@ func TestEntitlementHandlerErrorStatusCodes(t *testing.T) {
 				t.Fatalf("body = %q, want %q", raw, want)
 			}
 		})
+	}
+}
+
+func TestEntitlementHandlerUnknownOrgCarriesTheStableCode(t *testing.T) {
+	server := newTestServer(&fakeStore{err: ErrOrgUnknown})
+	defer server.Close()
+	response, err := http.Get(server.URL + "/api/v1/internal/acr/entitlements/6f1c0c1e-1d4b-4a55-9a39-0d0d6f3b8a10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	raw, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", response.StatusCode)
+	}
+	if want := `{"detail":"Not found","code":"acr_organization_unknown"}`; string(raw) != want {
+		t.Fatalf("body = %q, want %q", raw, want)
+	}
+}
+
+func TestEntitlementHandlerOnlyTheUnknownOrgAnswerCarriesTheCode(t *testing.T) {
+	for _, storeErr := range []error{ErrOrgNotFound, ErrUnavailable, errors.New("boom")} {
+		server := newTestServer(&fakeStore{err: storeErr})
+		response, err := http.Get(server.URL + "/api/v1/internal/acr/entitlements/org-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		server.Close()
+		if strings.Contains(string(raw), UnknownOrganizationCode) {
+			t.Fatalf("error %v answered with the unknown-organization code: %s", storeErr, raw)
+		}
 	}
 }
 

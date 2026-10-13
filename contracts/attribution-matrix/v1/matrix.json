@@ -82,8 +82,7 @@
       "provider": "github",
       "entity": "pull_requests",
       "check": "pull_request_inherits_only_from_a_linked_issue",
-      "state": "known_red",
-      "ticket": "CHAOS-9409"
+      "state": "pass"
     },
     {
       "provider": "github",

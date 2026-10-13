@@ -71,6 +71,13 @@ var (
 	ScanWorkItemCompletionDay                         = Step{label: "scan work item completion day"}
 	IterateWorkItemCompletionDays                     = Step{label: "iterate work item completion days"}
 	LoadLinkedIssueDonorRows                          = Step{label: "load linked issue donor rows"}
+	QueryWorkItemDependenciesDonorChange              = Step{label: "query work_item_dependencies (donor change)"}
+	ScanWorkItemDependenciesRowDonorChange            = Step{label: "scan work_item_dependencies row (donor change)"}
+	IterateWorkItemDependenciesDonorChange            = Step{label: "iterate work_item_dependencies rows (donor change)"}
+	QueryNewestPrimaryRowsDonorChange                 = Step{label: "query newest primary attribution rows (donor change)"}
+	ScanNewestPrimaryRowDonorChange                   = Step{label: "scan newest primary attribution row (donor change)"}
+	IterateNewestPrimaryRowsDonorChange               = Step{label: "iterate newest primary attribution rows (donor change)"}
+	LoadInactiveTeamsDonorChange                      = Step{label: "load inactive teams (donor change)"}
 	ClaimPartition                                    = Step{label: "claim_partition"}
 	LoadRun                                           = Step{label: "load_run"}
 	ComputePartition                                  = Step{label: "compute_partition"}

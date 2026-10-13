@@ -107,6 +107,17 @@ func optionalTime(t *time.Time) pyjson.Value {
 	return pyTimeString(*t)
 }
 
+// requestedOrgHeader is the X-Org-Id the users routes scope by. While the
+// caller has a live impersonation session the target's org is the only org
+// the request may name: a raw header (or its absence, which would mean the
+// global list for a superuser) never widens an impersonation (CHAOS-9510).
+func requestedOrgHeader(r *http.Request) string {
+	if session := policy.ImpersonationFrom(r.Context()); session != nil {
+		return session.TargetOrgID.String()
+	}
+	return r.Header.Get("X-Org-Id")
+}
+
 // listUsers is users.py's list_users: X-Org-Id header present -> org-scoped;
 // absent + superuser -> global; absent + non-superuser -> the JWT org_id.
 func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +147,7 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	filter := listUsersFilter{Limit: limit, Offset: offset, ActiveOnly: activeOnly, Search: search}
 
-	xOrgID := r.Header.Get("X-Org-Id")
+	xOrgID := requestedOrgHeader(r)
 	var (
 		users []*fullUser
 		err   error
@@ -320,7 +331,7 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 // when sent, else a non-superuser's org claim; uuid.Nil is a superuser's
 // platform create. ok is false when a response was already written.
 func (h *handlers) createUserOrg(ctx context.Context, w http.ResponseWriter, r *http.Request, caller *policy.User) (uuid.UUID, bool) {
-	raw := r.Header.Get("X-Org-Id")
+	raw := requestedOrgHeader(r)
 	if raw == "" {
 		if caller.IsSuperuser {
 			return uuid.Nil, true

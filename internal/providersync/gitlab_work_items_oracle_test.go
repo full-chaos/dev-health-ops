@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,6 +83,19 @@ func gitlabWorkItemsOracleCases() []oracleCase {
 				"raw_issue": map[string]any{
 					"iid": 7, "title": "Close duplicate", "state": "closed", "created_at": "2026-07-01T00:00:00Z",
 					"updated_at": "2026-07-03T00:00:00Z", "closed_at": "2026-07-03T00:00:00Z", "labels": []any{"duplicate"}, "assignees": []any{},
+				},
+			},
+		},
+		{
+			ID: "long_multibyte_description",
+			Input: map[string]any{
+				"repo_full_name": "acme/api",
+				"repo_id":        "c7198fbc-1945-3717-05d8-eb78866b4e79",
+				"org_id":         "org-acme",
+				"since":          "2026-07-01T00:00:00Z",
+				"raw_issue": map[string]any{
+					"iid": 9, "title": "Long body", "description": strings.Repeat("é日", 800), "state": "opened",
+					"created_at": "2026-07-04T00:00:00Z", "updated_at": "2026-07-05T00:00:00Z", "labels": []any{}, "assignees": []any{},
 				},
 			},
 		},

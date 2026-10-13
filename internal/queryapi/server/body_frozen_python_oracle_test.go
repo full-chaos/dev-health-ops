@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -276,7 +277,8 @@ func TestQueryAPIBodiesMatchFrozenFastAPI(t *testing.T) {
 	byteDiffs, knownNullGap, declaredUnknownMetric := 0, 0, 0
 	for index, it := range items {
 		wantStatus := int(want[index][0].(float64))
-		wantText := want[index][1].(string)
+		wantRaw := want[index][1].(string)
+		wantText := pydanticecho.Strip(wantRaw)
 		paths := make([]string, 0, len(it.model.handlers))
 		for path := range it.model.handlers {
 			paths = append(paths, path)
@@ -296,12 +298,14 @@ func TestQueryAPIBodiesMatchFrozenFastAPI(t *testing.T) {
 				declaredUnknownMetric++
 			case wantStatus == 200 && (status == 422 || status >= 500):
 				problem = "python accepts"
-			case wantStatus == 422 && status != 422 && nullGap(wantText):
+			case wantStatus == 422 && status != 422 && nullGap(wantRaw):
 				knownNullGap++
 			case wantStatus == 422 && status != 422:
 				problem = "python 422"
 			case wantStatus == 422 && canonicalJSON(text) != canonicalJSON(wantText):
 				problem = "422 document"
+			case wantStatus == 500 && status == 422 && pydanticecho.GenericPython500(wantRaw):
+				// Python answered 500 only because it could not render its own echo of the input; the Go 422 carries none.
 			case wantStatus == 500 && status != 500:
 				problem = "python 500"
 			case wantStatus == 503 && (status != 503 || canonicalJSON(text) != canonicalJSON(wantText)):

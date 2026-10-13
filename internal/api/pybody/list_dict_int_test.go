@@ -1,6 +1,7 @@
 package pybody
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -50,7 +51,7 @@ func TestNewValidatorsMatchPydantic(t *testing.T) {
 		`{"type":"list_type","loc":["body","c"],"msg":"Input should be a valid list","input":"not-a-dict"},` +
 		`{"type":"missing","loc":["body","missing_list"],"msg":"Field required","input":` + mustRenderObject(t, object) + `}` +
 		`]}`
-	if string(rendered) != want {
+	if string(rendered) != pydanticecho.Strip(want) {
 		t.Fatalf("%s", rendered)
 	}
 }
@@ -125,7 +126,7 @@ func TestForbidExtraMatchesPydantic(t *testing.T) {
 		`{"type":"missing","loc":["body","b"],"msg":"Field required","input":` + mustRenderObject(t, object) + `},` +
 		`{"type":"extra_forbidden","loc":["body","z"],"msg":"Extra inputs are not permitted","input":1}` +
 		`]}`
-	if string(rendered) != want {
+	if string(rendered) != pydanticecho.Strip(want) {
 		t.Fatalf("%s", rendered)
 	}
 
@@ -164,7 +165,7 @@ func TestDefaultedVariantsRejectNullMatchPydantic(t *testing.T) {
 		`{"type":"int_type","loc":["body","d"],"msg":"Input should be a valid integer","input":null},` +
 		`{"type":"dict_type","loc":["body","e"],"msg":"Input should be a valid dictionary","input":"not-a-dict"}` +
 		`]}`
-	if string(rendered) != want {
+	if string(rendered) != pydanticecho.Strip(want) {
 		t.Fatalf("%s", rendered)
 	}
 }
@@ -227,7 +228,7 @@ func TestBoundedIntCoercionMatchesPydantic(t *testing.T) {
 		`{"type":"int_parsing","loc":["body","d"],"msg":"Input should be a valid integer, unable to parse string as an integer","input":"1.5"},` +
 		`{"type":"int_parsing","loc":["body","e"],"msg":"Input should be a valid integer, unable to parse string as an integer","input":"abc"}` +
 		`]}`
-	if string(rendered) != want {
+	if string(rendered) != pydanticecho.Strip(want) {
 		t.Fatalf("%s", rendered)
 	}
 }

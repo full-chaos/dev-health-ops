@@ -117,10 +117,8 @@ func (e Error) json() *pyjson.Object {
 	out.Set("type", e.Type)
 	out.Set("loc", e.Loc)
 	out.Set("msg", e.Msg)
-	out.Set("input", e.Input)
-	if e.Ctx != nil {
-		out.Set("ctx", e.Ctx)
-	}
+	// "input" and "ctx" are never written: FastAPI echoes the submitted value,
+	// which can be a password or the whole request body.
 	return out
 }
 

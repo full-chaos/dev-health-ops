@@ -40,6 +40,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1140,7 +1141,26 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 			response.Headers["allow"] = sortedAllow(allow)
 		}
 	}
+	// The Go api never writes a validation error's input or ctx (FastAPI's echo
+	// of the submitted value, which can be a secret): the Python body is
+	// compared without them, the Go body as it is, so a Go echo is a DIFF. A
+	// Python 500 whose cause is rendering that echo meets a Go 4xx that carries
+	// none.
+	pyBody := py.Body
+	py.Body = pydanticecho.Strip(py.Body)
+	if py.Body != pyBody {
+		skip = map[string]bool{"content-length": true}
+		for key := range Volatile {
+			skip[key] = true
+		}
+	}
 	same := py.Status == gr.Status && py.Body == gr.Body
+	if py.Status == http.StatusInternalServerError && pydanticecho.GenericPython500(pyBody) && (gr.Status == http.StatusUnprocessableEntity || gr.Status == http.StatusBadRequest) &&
+		strings.Contains(gr.Body, `"loc"`) && pydanticecho.Strip(gr.Body) == gr.Body {
+		// Python's 500 comes from its server-error middleware, outside the
+		// middleware that adds the security headers, so no header is compared.
+		return true, nil, py, gr
+	}
 	compared := headerUnion(py.Headers, gr.Headers, skip)
 	for _, header := range compared {
 		pv, pok := py.Headers[header]

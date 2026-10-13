@@ -72,6 +72,8 @@ func TestExplainGetValidationErrorsMatchPython(t *testing.T) {
 			}
 			got := decodeExplainValidationErrorBody(t, rec.Body.Bytes())
 			want := loadExplainValidationErrorGolden(t, tc.golden)
+			dropEcho(&got)
+			dropEcho(&want)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("response mismatch\n got:  %+v\nwant: %+v", got, want)
 			}
@@ -106,6 +108,8 @@ func TestExplainPostValidationErrorsMatchPython(t *testing.T) {
 			}
 			got := decodeExplainValidationErrorBody(t, rec.Body.Bytes())
 			want := loadExplainValidationErrorGolden(t, tc.golden)
+			dropEcho(&got)
+			dropEcho(&want)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("response mismatch\n got:  %+v\nwant: %+v", got, want)
 			}

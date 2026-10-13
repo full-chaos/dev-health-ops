@@ -32,7 +32,7 @@ const oraclePairPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // issue's due_date to due_at and holds the gitlab/work-items/sprint pair file.
 // It is a commit of the branch that made that change: when it is not on main,
 // fetch it by its sha (git fetch origin <sha>) before git worktree add.
-const oraclePairGitLabDueDateBuild = "0000000000000000000000000000000000000000"
+const oraclePairGitLabDueDateBuild = "b6b1fd88954fe636660b20b7d58ee8ec8cb4c97e"
 
 // oraclePairLaterPythonBuilds names, by pair, a build later than
 // oraclePairPythonBuild that answered the pair: its answer needs Python that

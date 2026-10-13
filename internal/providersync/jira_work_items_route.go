@@ -168,9 +168,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 				unresolvedProjectMemberships++
 				continue
 			}
-			rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
-				claim.OrgID, "jira", move.ToProjectID, toEntry.Key, toEntry.Name, normalizedAt,
-			))
+			rows.Projects = append(rows.Projects, jiraEnsureProjectsRow(claim.OrgID, move.ToProjectID, toEntry.Key, toEntry.Name, toEntry.Status, normalizedAt))
 			fromProjectID, fromProjectKey := "", ""
 			if move.FromProjectID != "" {
 				// An unresolvable FROM side does not drop the row:
@@ -182,9 +180,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 					ctx, client, jiraProjectCache, move.FromProjectID, move.FromProjectName,
 					derefString(item.ProjectID), derefString(item.ProjectKey),
 				); ok {
-					rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
-						claim.OrgID, "jira", move.FromProjectID, fromEntry.Key, fromEntry.Name, normalizedAt,
-					))
+					rows.Projects = append(rows.Projects, jiraEnsureProjectsRow(claim.OrgID, move.FromProjectID, fromEntry.Key, fromEntry.Name, fromEntry.Status, normalizedAt))
 					fromProjectID, fromProjectKey = move.FromProjectID, fromEntry.Key
 				}
 			}
@@ -450,17 +446,34 @@ func fetchJiraProject(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
 	projectID string,
-) (key, name string, err error) {
+) (key, name, status string, err error) {
 	var payload map[string]any
 	if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/project/"+url.PathEscape(projectID), nil, &payload); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return stringFrom(payload["key"]), stringFrom(payload["name"]), nil
+	// The project GET names the lifecycle as flags: `deleted` (in Jira's
+	// trash) and `archived`. Absent flags mean a live project.
+	status = projectmembership.JiraStatusLive
+	if deleted, _ := payload["deleted"].(bool); deleted {
+		status = projectmembership.JiraStatusDeleted
+	} else if archived, _ := payload["archived"].(bool); archived {
+		status = projectmembership.JiraStatusArchived
+	}
+	return stringFrom(payload["key"]), stringFrom(payload["name"]), status, nil
+}
+
+// jiraEnsureProjectsRow is the ensure row for a Jira project carrying its
+// state category (CHAOS-9438). status "" = the lifecycle was not read.
+func jiraEnsureProjectsRow(orgID, id, key, name, status string, at time.Time) projectmembership.CatalogRow {
+	return projectmembership.EnsureProjectsRow(orgID, "jira", id, key, name, at).
+		WithState(projectmembership.JiraProjectState(status))
 }
 
 type jiraProjectCatalogEntry struct {
 	Key  string
 	Name string
+	// Status is live, archived or deleted; "" when the live lookup failed.
+	Status string
 }
 
 // resolveJiraProjectCatalog resolves one Jira project id to (key, name) at
@@ -507,14 +520,17 @@ func resolveJiraProjectCatalog(
 		}
 		return cached, true
 	}
-	key, name, err := fetchJiraProject(ctx, client, id)
+	key, name, status, err := fetchJiraProject(ctx, client, id)
+	if err != nil {
+		status = ""
+	}
 	if err != nil || name == "" {
 		name = changelogName
 	}
 	if key == "" && id == currentProjectID && currentProjectID != "" {
 		key = currentProjectKey
 	}
-	entry := jiraProjectCatalogEntry{Key: key, Name: name}
+	entry := jiraProjectCatalogEntry{Key: key, Name: name, Status: status}
 	cache[id] = entry
 	return entry, true
 }

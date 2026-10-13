@@ -77,7 +77,10 @@ func buildGitLabTeamCatalogProjectOracleRow(t *testing.T, input map[string]any) 
 	return gitlabTeamCatalogProjectProducerRow{
 		ID: row.ID.String(), Provider: row.Provider, Name: row.Name, IsActive: int(row.IsActive),
 		UpdatedAt: row.UpdatedAt, LastSynced: row.LastSynced, ProjectKey: row.ProjectKey,
-		OrgID: row.OrgID, State: row.State, URL: row.URL, TeamIDs: row.TeamIDs, TeamKeys: row.TeamKeys,
+		OrgID: row.OrgID,
+		// CHAOS-9438: Go now writes a state category (see TestGitLabProjectStateByArchivedFlag);
+		// the frozen Python producer never wrote one, so this mirror keeps its empty state.
+		State: "", URL: row.URL, TeamIDs: row.TeamIDs, TeamKeys: row.TeamKeys,
 		LeadID: row.LeadID, LeadName: row.LeadName, LeadEmail: row.LeadEmail,
 	}
 }

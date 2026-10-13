@@ -39,7 +39,7 @@ const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, de
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const gitlabTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 const gitlabTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
-const gitlabTeamCatalogProjectsInsert = `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced)`
+const gitlabTeamCatalogProjectsInsert = `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, state_source, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced)`
 
 func (sink GitLabTeamCatalogClickHouseEffects) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
@@ -383,7 +383,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeProjects(ctx context.Context
 	}
 	defer batch.Abort()
 	for _, row := range rows {
-		if err := batch.Append(row.ID, row.OrgID, row.Provider, row.ProjectKey, row.Name, row.IsActive, row.State, row.TargetDate, row.URL, row.TeamIDs, row.TeamKeys, row.LeadID, row.LeadName, row.LeadEmail, row.UpdatedAt, row.LastSynced); err != nil {
+		if err := batch.Append(row.ID, row.OrgID, row.Provider, row.ProjectKey, row.Name, row.IsActive, row.State, row.StateSource, row.TargetDate, row.URL, row.TeamIDs, row.TeamKeys, row.LeadID, row.LeadName, row.LeadEmail, row.UpdatedAt, row.LastSynced); err != nil {
 			return err
 		}
 	}
@@ -499,7 +499,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) inspectMembership(ctx context.Con
 }
 
 func (sink GitLabTeamCatalogClickHouseEffects) inspectProject(ctx context.Context, claim Claim, row gitlabTeamCatalogProjectRow) (EffectInspection, error) {
-	result, err := sink.Conn.Query(ctx, `SELECT id, org_id, provider, project_key, name, is_active, state, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced FROM projects FINAL WHERE org_id = ? AND provider = ? AND id = ?`, claim.OrgID, gitlabTeamCatalogProvider, row.ID)
+	result, err := sink.Conn.Query(ctx, `SELECT id, org_id, provider, project_key, name, is_active, state, state_source, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced FROM projects FINAL WHERE org_id = ? AND provider = ? AND id = ?`, claim.OrgID, gitlabTeamCatalogProvider, row.ID)
 	if err != nil {
 		return EffectConflict, err
 	}
@@ -507,7 +507,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) inspectProject(ctx context.Contex
 	var actual gitlabTeamCatalogProjectRow
 	found := 0
 	for result.Next() {
-		if err := result.Scan(&actual.ID, &actual.OrgID, &actual.Provider, &actual.ProjectKey, &actual.Name, &actual.IsActive, &actual.State, &actual.TargetDate, &actual.URL, &actual.TeamIDs, &actual.TeamKeys, &actual.LeadID, &actual.LeadName, &actual.LeadEmail, &actual.UpdatedAt, &actual.LastSynced); err != nil {
+		if err := result.Scan(&actual.ID, &actual.OrgID, &actual.Provider, &actual.ProjectKey, &actual.Name, &actual.IsActive, &actual.State, &actual.StateSource, &actual.TargetDate, &actual.URL, &actual.TeamIDs, &actual.TeamKeys, &actual.LeadID, &actual.LeadName, &actual.LeadEmail, &actual.UpdatedAt, &actual.LastSynced); err != nil {
 			return EffectConflict, err
 		}
 		found++
@@ -572,7 +572,7 @@ func equalGitLabMembership(left, right gitlabTeamCatalogMembershipRow) bool {
 func equalGitLabProject(left, right gitlabTeamCatalogProjectRow) bool {
 	return left.ID == right.ID && left.OrgID == right.OrgID && left.Provider == right.Provider &&
 		reflect.DeepEqual(left.ProjectKey, right.ProjectKey) && left.Name == right.Name && left.IsActive == right.IsActive &&
-		left.State == right.State && gitlabTargetDateEqual(left.TargetDate, right.TargetDate) && left.URL == right.URL &&
+		left.State == right.State && left.StateSource == right.StateSource && gitlabTargetDateEqual(left.TargetDate, right.TargetDate) && left.URL == right.URL &&
 		reflect.DeepEqual(left.TeamIDs, right.TeamIDs) && reflect.DeepEqual(left.TeamKeys, right.TeamKeys) &&
 		reflect.DeepEqual(left.LeadID, right.LeadID) && reflect.DeepEqual(left.LeadName, right.LeadName) &&
 		reflect.DeepEqual(left.LeadEmail, right.LeadEmail) && left.UpdatedAt.Equal(right.UpdatedAt) &&

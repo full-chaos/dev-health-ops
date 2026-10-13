@@ -369,18 +369,14 @@ func (handler JiraAtlassianRouteHandler) Collect(
 				unresolvedProjectMemberships++
 				continue
 			}
-			rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
-				claim.OrgID, "jira", move.ToProjectID, toEntry.Key, toEntry.Name, normalizedAt,
-			))
+			rows.Projects = append(rows.Projects, jiraEnsureProjectsRow(claim.OrgID, move.ToProjectID, toEntry.Key, toEntry.Name, toEntry.Status, normalizedAt))
 			fromProjectID, fromProjectKey := "", ""
 			if move.FromProjectID != "" {
 				if fromEntry, ok := resolveJiraProjectCatalog(
 					ctx, client, jiraProjectCache, move.FromProjectID, move.FromProjectName,
 					derefString(item.ProjectID), derefString(item.ProjectKey),
 				); ok {
-					rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
-						claim.OrgID, "jira", move.FromProjectID, fromEntry.Key, fromEntry.Name, normalizedAt,
-					))
+					rows.Projects = append(rows.Projects, jiraEnsureProjectsRow(claim.OrgID, move.FromProjectID, fromEntry.Key, fromEntry.Name, fromEntry.Status, normalizedAt))
 					fromProjectID, fromProjectKey = move.FromProjectID, fromEntry.Key
 				}
 			}
@@ -407,9 +403,10 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			itemMemberships, &rows.MembershipCreation, normalizedAt,
 		); added {
 			itemMemberships = append(itemMemberships, creation)
-			rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
-				claim.OrgID, "jira", creation.ToProjectID, creation.ToProjectKey,
-				jiraCreationProjectName(item, creation.ToProjectID), normalizedAt,
+			rows.Projects = append(rows.Projects, jiraEnsureProjectsRow(
+				claim.OrgID, creation.ToProjectID, creation.ToProjectKey,
+				jiraCreationProjectName(item, creation.ToProjectID),
+				jiraProjectCache[creation.ToProjectID].Status, normalizedAt,
 			))
 		}
 		rows.ProjectMemberships = append(rows.ProjectMemberships, itemMemberships...)

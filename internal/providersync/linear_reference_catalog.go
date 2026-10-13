@@ -3,6 +3,7 @@ package providersync
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"strings"
 	"time"
 
@@ -150,22 +151,23 @@ type linearReferenceOwnershipRow struct {
 // native Linear enrichment selected by PROJECTS_QUERY. The enrichment is
 // intentionally typed instead of being hidden in a JSON metadata blob.
 type linearReferenceProjectRow struct {
-	ID         ProjectID            `json:"id"`
-	OrgID      string               `json:"org_id"`
-	Provider   string               `json:"provider"`
-	ProjectKey *string              `json:"project_key"`
-	Name       string               `json:"name"`
-	IsActive   uint8                `json:"is_active"`
-	State      string               `json:"state"`
-	TargetDate *linearReferenceDate `json:"target_date"`
-	URL        string               `json:"url"`
-	TeamIDs    []string             `json:"team_ids"`
-	TeamKeys   []string             `json:"team_keys"`
-	LeadID     *string              `json:"lead_id"`
-	LeadName   *string              `json:"lead_name"`
-	LeadEmail  *string              `json:"lead_email"`
-	UpdatedAt  time.Time            `json:"updated_at"`
-	LastSynced time.Time            `json:"last_synced"`
+	ID          ProjectID            `json:"id"`
+	OrgID       string               `json:"org_id"`
+	Provider    string               `json:"provider"`
+	ProjectKey  *string              `json:"project_key"`
+	Name        string               `json:"name"`
+	IsActive    uint8                `json:"is_active"`
+	State       string               `json:"state"`
+	StateSource string               `json:"state_source"`
+	TargetDate  *linearReferenceDate `json:"target_date"`
+	URL         string               `json:"url"`
+	TeamIDs     []string             `json:"team_ids"`
+	TeamKeys    []string             `json:"team_keys"`
+	LeadID      *string              `json:"lead_id"`
+	LeadName    *string              `json:"lead_name"`
+	LeadEmail   *string              `json:"lead_email"`
+	UpdatedAt   time.Time            `json:"updated_at"`
+	LastSynced  time.Time            `json:"last_synced"`
 }
 
 // linearReferenceDate preserves Python's datetime.date contract while still
@@ -298,13 +300,14 @@ func normalizeLinearReferenceProject(
 	if payload.Trashed || payload.ArchivedAt != nil && strings.TrimSpace(*payload.ArchivedAt) != "" {
 		isActive = 0
 	}
+	linearState := projectmembership.LinearProjectState(strings.ToLower(strings.TrimSpace(payload.Status.Type)))
 	projectID, projectIDOK := LinearProjectID(payload.ID)
 	if !projectIDOK {
 		return linearReferenceProjectRow{}, fmt.Errorf("%w: Linear project without an id", ErrInvalidConfiguration)
 	}
 	return linearReferenceProjectRow{
 		ID: projectID, OrgID: claim.OrgID, Provider: "linear", Name: linearFirstNonEmpty(payload.Name, payload.ID),
-		IsActive: isActive, State: strings.TrimSpace(payload.Status.Type), TargetDate: targetDate,
+		IsActive: isActive, State: linearState.State, StateSource: linearState.Source, TargetDate: targetDate,
 		URL: strings.TrimSpace(payload.URL), TeamIDs: teamIDs, TeamKeys: teamKeys,
 		LeadID: leadID, LeadName: leadName, LeadEmail: leadEmail,
 		UpdatedAt: normalizedAt, LastSynced: normalizedAt,

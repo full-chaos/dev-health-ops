@@ -47,7 +47,7 @@ func TestLinearReferenceProjectMatchesFrozenPythonProducer(t *testing.T) {
 			},
 		},
 		buildLinearReferenceProjectOracleRow,
-		nil,
+		map[string]string{"state_source": "CHAOS-9438: Go-only provenance column; the frozen Python producer never carried it (state itself is compared)"},
 	)
 }
 

@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"strings"
 	"time"
 
@@ -117,22 +118,23 @@ type gitlabTeamCatalogMembershipRow struct {
 // carries the same 16 columns; GitLab has no team/lead enrichment, so those
 // stay empty/nil, matching Python's ProjectRecord defaults.
 type gitlabTeamCatalogProjectRow struct {
-	ID         ProjectID  `json:"id"`
-	OrgID      string     `json:"org_id"`
-	Provider   string     `json:"provider"`
-	ProjectKey *string    `json:"project_key"`
-	Name       string     `json:"name"`
-	IsActive   uint8      `json:"is_active"`
-	State      string     `json:"state"`
-	TargetDate *time.Time `json:"target_date"`
-	URL        string     `json:"url"`
-	TeamIDs    []string   `json:"team_ids"`
-	TeamKeys   []string   `json:"team_keys"`
-	LeadID     *string    `json:"lead_id"`
-	LeadName   *string    `json:"lead_name"`
-	LeadEmail  *string    `json:"lead_email"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	LastSynced time.Time  `json:"last_synced"`
+	ID          ProjectID  `json:"id"`
+	OrgID       string     `json:"org_id"`
+	Provider    string     `json:"provider"`
+	ProjectKey  *string    `json:"project_key"`
+	Name        string     `json:"name"`
+	IsActive    uint8      `json:"is_active"`
+	State       string     `json:"state"`
+	StateSource string     `json:"state_source"`
+	TargetDate  *time.Time `json:"target_date"`
+	URL         string     `json:"url"`
+	TeamIDs     []string   `json:"team_ids"`
+	TeamKeys    []string   `json:"team_keys"`
+	LeadID      *string    `json:"lead_id"`
+	LeadName    *string    `json:"lead_name"`
+	LeadEmail   *string    `json:"lead_email"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	LastSynced  time.Time  `json:"last_synced"`
 }
 
 type GitLabTeamCatalogRows struct {
@@ -393,9 +395,10 @@ func normalizeGitLabProjectCatalogRow(
 		isActive = 0
 	}
 	projectKey := path
+	state := projectmembership.GitLabProjectState(payload.Archived)
 	return gitlabTeamCatalogProjectRow{
 		ID: projectID, OrgID: orgID, Provider: gitlabTeamCatalogProvider,
-		ProjectKey: &projectKey, Name: gitlabFirstNonEmpty(payload.Name, path), IsActive: isActive,
+		ProjectKey: &projectKey, Name: gitlabFirstNonEmpty(payload.Name, path), IsActive: isActive, State: state.State, StateSource: state.Source,
 		TeamIDs: []string{}, TeamKeys: []string{}, URL: strings.TrimSpace(payload.WebURL),
 		UpdatedAt: normalizedAt, LastSynced: normalizedAt,
 	}, true

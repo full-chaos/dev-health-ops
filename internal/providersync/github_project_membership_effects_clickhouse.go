@@ -182,7 +182,7 @@ func projectMembershipSortingKey(row projectmembership.Row) string {
 // anything this code enforces.
 type GitHubProjectCatalogClickHouseAdapter struct{ Conn driver.Conn }
 
-const gitHubProjectCatalogSelect = `SELECT id, org_id, provider, project_key, name, is_active, updated_at, last_synced ` +
+const gitHubProjectCatalogSelect = `SELECT id, org_id, provider, project_key, name, is_active, state, state_source, updated_at, last_synced ` +
 	`FROM projects FINAL WHERE org_id = ? AND provider = ? AND id = ?`
 
 func projectCatalogStored(row projectmembership.CatalogRow) projectmembership.CatalogRow {
@@ -265,7 +265,7 @@ func (adapter GitHubProjectCatalogClickHouseAdapter) InspectGitHubWorkItemEffect
 		for result.Next() {
 			if err := result.Scan(
 				&actual.ID, &actual.OrgID, &actual.Provider, &projectKey,
-				&actual.Name, &actual.IsActive, &actual.UpdatedAt, &actual.LastSynced,
+				&actual.Name, &actual.IsActive, &actual.State, &actual.StateSource, &actual.UpdatedAt, &actual.LastSynced,
 			); err != nil {
 				return EffectConflict, err
 			}
@@ -288,7 +288,8 @@ func (adapter GitHubProjectCatalogClickHouseAdapter) InspectGitHubWorkItemEffect
 			return verdict, nil
 		}
 		if expected.ProjectKey != actual.ProjectKey || expected.Name != actual.Name ||
-			expected.IsActive != actual.IsActive {
+			expected.IsActive != actual.IsActive ||
+			expected.State != actual.State || expected.StateSource != actual.StateSource {
 			return EffectConflict, nil
 		}
 		return EffectExact, nil
@@ -330,7 +331,7 @@ func existenceOnlyProjectCatalogReadback(
 			var projectKey *string
 			if err := result.Scan(
 				&discard.ID, &discard.OrgID, &discard.Provider, &projectKey,
-				&discard.Name, &discard.IsActive, &discard.UpdatedAt, &discard.LastSynced,
+				&discard.Name, &discard.IsActive, &discard.State, &discard.StateSource, &discard.UpdatedAt, &discard.LastSynced,
 			); err != nil {
 				return EffectConflict, err
 			}

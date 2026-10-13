@@ -231,11 +231,12 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		closed := len(plan.Retract)
 		ReportSnapshotPlan(ctx, githubTeamCatalogProvider, ref.OrgID, plan)
 		result.RepoOwnershipWritten = written
+		result.RepoOwnershipUnchanged = plan.UnchangedCount()
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.DegradedLegs = append(result.DegradedLegs, SnapshotAbsenceLegs(plan)...)
 		slog.Default().InfoContext(ctx, "github_team_catalog_repo_ownership_snapshot",
 			"org_id", ref.OrgID, "teams_listed", len(rows.RepoListedTeamIDs), "teams_dropped_gone", len(decision.gone),
-			"teams_closable", len(decision.closable), "rows_written", written, "rows_closed", closed)
+			"teams_closable", len(decision.closable), "rows_written", written, "rows_unchanged", plan.UnchangedCount(), "rows_closed", closed)
 	}
 	if selections.Members {
 		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict

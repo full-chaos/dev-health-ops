@@ -258,6 +258,9 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		result.OwnershipSnapshotIncomplete = incomplete
 		result.ProjectsWritten = batch.Result.Projects
 		result.OwnershipWritten = batch.Result.Ownership
+		result.OwnershipUnchanged = plan.UnchangedCount()
+		slog.Default().InfoContext(ctx, "linear_reference_catalog_ownership_unchanged",
+			"org_id", ref.OrgID, "fresh", batch.Result.Ownership, "unchanged", result.OwnershipUnchanged, "written", len(ownershipRows)-retracted)
 		result.ProjectsWithoutKey = batch.Result.ProjectsWithoutKey
 	}
 	// Unconditional reference data -- see the function doc comment above.

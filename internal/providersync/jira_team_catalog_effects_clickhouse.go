@@ -625,17 +625,22 @@ func jiraOpenCatalogOwnership(ctx context.Context, conn driver.Conn, orgID strin
 func jiraOwnershipSnapshot(
 	fresh, open []jiraTeamCatalogOwnershipRow, at time.Time, snapshot KindSnapshot[OwnershipSnapshotRow],
 ) (kept, retracted []jiraTeamCatalogOwnershipRow, plan SnapshotPlan) {
-	kept = append([]jiraTeamCatalogOwnershipRow(nil), fresh...)
+	kept = make([]jiraTeamCatalogOwnershipRow, 0, len(fresh))
 	facts := func(rows []jiraTeamCatalogOwnershipRow) []OwnershipSnapshotRow {
 		out := make([]OwnershipSnapshotRow, len(rows))
 		for index, row := range rows {
-			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom}
+			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom,
+				Shape: ProjectOwnershipShape(row.ProjectKey, row.IsPrimary, row.Specificity, row.Priority)}
 		}
 		return out
 	}
 	plan = PlanOwnershipSnapshot(facts(fresh), facts(open), at, snapshot)
-	for index := range kept {
-		kept[index].ValidFrom = plan.ValidFrom[index]
+	for index, row := range fresh {
+		if plan.Unchanged[index] {
+			continue
+		}
+		row.ValidFrom = plan.ValidFrom[index]
+		kept = append(kept, row)
 	}
 	for _, retraction := range plan.Retract {
 		row := open[retraction.Open]

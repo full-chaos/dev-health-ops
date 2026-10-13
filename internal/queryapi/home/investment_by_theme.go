@@ -48,6 +48,7 @@ func fetchInvestmentThemeAllocation(ctx context.Context, client QueryClient, f F
 	}
 	if f.Scope.Level == "team" && len(f.Scope.IDs) > 0 {
 		filters.TeamScopeCondition, filters.TeamScopeBindings = teamscope.RepoCondition(orgID, "repo_id", f.Scope.IDs, asOf)
+		filters.TeamIDs, filters.TeamAsOf = f.Scope.IDs, asOf
 	}
 	filters.Themes, filters.Subcategories = investmentexplain.SplitWorkCategories(f.Why.WorkCategory)
 

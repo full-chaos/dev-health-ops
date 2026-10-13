@@ -3,8 +3,10 @@ package providersync
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"hash/fnv"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,6 +18,30 @@ type OwnershipSnapshotRow struct {
 	TeamID, Source string
 	ProjectID      ProjectID
 	ValidFrom      time.Time
+	// Shape is the digest of every column the row carries besides its key and
+	// its valid_from (ProjectOwnershipShape, RepoOwnershipShape). A fresh row
+	// whose open row has the same shape is a repeat of that row. An empty
+	// shape is an unknown one: the row is never a repeat.
+	Shape string
+}
+
+// ProjectOwnershipShape is the Shape of a team_project_ownership row.
+func ProjectOwnershipShape(projectKey *string, isPrimary uint8, specificity uint16, priority int32) string {
+	key := "\x00null"
+	if projectKey != nil {
+		key = "\x01" + *projectKey
+	}
+	return fmt.Sprintf("project\x00%s\x00%d\x00%d\x00%d", key, isPrimary, specificity, priority)
+}
+
+// RepoOwnershipShape is the Shape of a team_repo_ownership row that carries no
+// share (a provider_access, native or manual row).
+func RepoOwnershipShape(repoID *string, matchType string, isPrimary uint8, specificity uint16, priority int32) string {
+	id := "\x00null"
+	if repoID != nil {
+		id = "\x01" + *repoID
+	}
+	return fmt.Sprintf("repo\x00%s\x00%s\x00%d\x00%d\x00%d", id, matchType, isPrimary, specificity, priority)
 }
 
 // SnapshotTerm is one condition the end of a snapshot depends on, and the
@@ -378,6 +404,21 @@ type SnapshotPlan struct {
 	Kinds []SnapshotKindOutcome
 	// OpenOfNoKind counts the open rows that no kind holds: never closed.
 	OpenOfNoKind int
+	// Unchanged[i] is true when fresh[i] repeats the open row of its fact: the
+	// row at the valid_from the plan gives it has the same Shape. Writing it
+	// again adds a row that says nothing new. Set by PlanOwnershipSnapshot only.
+	Unchanged []bool
+}
+
+// UnchangedCount is how many fresh rows repeat their open row.
+func (plan SnapshotPlan) UnchangedCount() int {
+	count := 0
+	for _, same := range plan.Unchanged {
+		if same {
+			count++
+		}
+	}
+	return count
 }
 
 // OwnershipSnapshotPlan is the plan of an ownership snapshot.
@@ -406,8 +447,29 @@ func ownershipSnapshotKey(row OwnershipSnapshotRow) string {
 // (TestJiraOwnershipWriterCensus keeps that a named set). It is PlanSnapshot
 // keyed by (team, project, source).
 func PlanOwnershipSnapshot(fresh, open []OwnershipSnapshotRow, at time.Time, kinds ...KindSnapshot[OwnershipSnapshotRow]) OwnershipSnapshotPlan {
-	return PlanSnapshot(fresh, open, ownershipSnapshotKey,
+	plan := PlanSnapshot(fresh, open, ownershipSnapshotKey,
 		func(row OwnershipSnapshotRow) time.Time { return row.ValidFrom }, at, kinds...)
+	plan.Unchanged = unchangedOwnershipFacts(fresh, open, plan.ValidFrom)
+	return plan
+}
+
+// unchangedOwnershipFacts marks the fresh rows that repeat an open row: same
+// fact, the valid_from the plan gives the fresh row, and the same Shape. The
+// retraction of a later duplicate does not depend on it.
+func unchangedOwnershipFacts(fresh, open []OwnershipSnapshotRow, validFrom []time.Time) []bool {
+	held := make(map[string]string, len(open))
+	for _, row := range open {
+		held[ownershipSnapshotKey(row)+"\x00"+strconv.FormatInt(row.ValidFrom.UnixMilli(), 10)] = row.Shape
+	}
+	out := make([]bool, len(fresh))
+	for index, row := range fresh {
+		if row.Shape == "" {
+			continue
+		}
+		shape, ok := held[ownershipSnapshotKey(row)+"\x00"+strconv.FormatInt(validFrom[index].UnixMilli(), 10)]
+		out[index] = ok && shape == row.Shape
+	}
+	return out
 }
 
 // PlanSnapshot is the ONE rule that decides which open rows of a writer a

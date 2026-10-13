@@ -322,6 +322,11 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	rawPython := golden.Python(t, venue, requests)
 	normalizePython := billingNormalizer(seeded, recordedAt(t, golden, start))
 	python := normalizeAnswers(rawPython, normalizePython)
+	for index, answer := range python {
+		if strings.Contains(answer.Body, goOnlyEntitlementMember) || strings.Contains(answer.Body, goOnlyEntitlementKey) {
+			t.Fatalf("frozen python answer %q holds %s, so it is not Go-only", requests[index].Name, goOnlyEntitlementKey)
+		}
+	}
 	// The reconciliation must have read the fake Stripe lists: a
 	// comparison of two empty Stripe sides would also read SAME.
 	reconcileWants := map[string][]string{
@@ -335,11 +340,19 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 		"reconcile: all orgs": {`"stripe_id":"in_B1","field":"status","local_value":"void","stripe_value":"uncollectible"`,
 			`"stripe_id":"sub_C","field":"status","local_value":"active","stripe_value":null`, `"sub_stripe_only"`, `"re_stripe_only"`},
 	}
-	inspected := 0
+	inspected, entitlementsInspected := 0, 0
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden:    golden,
-		Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
+		Normalize: func(_ venueoracle.Request, body string) string {
+			return strings.Replace(normalize(body), goOnlyEntitlementMember, "", 1)
+		},
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			if strings.HasPrefix(request.Name, "ent: ") && goResponse.Status == 200 {
+				entitlementsInspected++
+				if !strings.Contains(goResponse.Body, goOnlyEntitlementMember) {
+					t.Errorf("%s: go entitlements lack %s", request.Name, goOnlyEntitlementMember)
+				}
+			}
 			wants, ok := reconcileWants[request.Name]
 			if !ok {
 				return
@@ -352,6 +365,9 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 			}
 		},
 	})
+	if entitlementsInspected == 0 {
+		t.Error("no go entitlements answer was inspected for the Go-only member")
+	}
 	if inspected != len(reconcileWants) {
 		t.Errorf("inspected %d reconcile answers, want %d", inspected, len(reconcileWants))
 	}
@@ -396,6 +412,17 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	t.Log("\n" + receipt)
 	golden.Finish(t)
 }
+
+// goOnlyEntitlementKey is a decision key added after the frozen Python build
+// (CHAOS-9311, #4032): its api tree is deleted, so no newer Python build can
+// record it and the Go registry is its only source. Go publishes it, false for
+// every seeded org, as the last member of the entitlements features. The
+// comparison drops it from the Go body only; the frozen answers must not hold
+// it, and every Go entitlements answer must, so the allowance hides no drift.
+const (
+	goOnlyEntitlementKey    = `"acr_service_model"`
+	goOnlyEntitlementMember = `,"acr_service_model":false`
+)
 
 // seededIDs is every id the seed wrote: the normalizer keeps these and
 // blanks the ids either plane generates.

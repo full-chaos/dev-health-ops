@@ -163,22 +163,65 @@ func TestDeriveTextParseEdgesSkipsPRWithNoText(t *testing.T) {
 	}
 }
 
-// TestDeriveTextParseEdgesLinearProviderIsNeverTextMatched pins builder.py's
-// own comment: Linear (and any provider outside jira/github/gitlab) never
-// enters the lookup, so a matching-looking reference in PR text can never
-// resolve for it through this path.
-func TestDeriveTextParseEdgesLinearProviderIsNeverTextMatched(t *testing.T) {
+// TestExplicitTextTierProviderMatrix is the CHAOS-9457 provider x entity
+// matrix for the explicit_text tier: for each provider family, a PR whose text
+// names an issue row of that provider gets one explicit_text link; a reference
+// that matches no issue row gets none.
+func TestExplicitTextTierProviderMatrix(t *testing.T) {
 	repoID := uuid.MustParse("00000000-0000-4000-8000-000000000005")
-	prs := []PullRequestRow{{RepoID: repoID, Number: 1, Title: "Fix ABC-123"}}
-	workItems := []WorkItemRow{{RepoID: repoID, WorkItemID: "linear:ABC-123", Provider: "linear"}}
-
-	result := DeriveTextParseEdges(prs, workItems, time.Now())
-	if len(result.Edges) != 0 {
-		t.Fatalf("a linear work item must never resolve through text-parse lookups, got %d edges", len(result.Edges))
+	cases := []struct {
+		name      string
+		title     string
+		items     []WorkItemRow
+		wantItem  string // "" = no link
+		wantEdge  string
+		wantAmbig int
+	}{
+		{"jira row named", "Fix PAY-2 totals", []WorkItemRow{{repoID, "jira:PAY-2", "jira"}}, "jira:PAY-2", "references", 0},
+		{"jira key no row", "Fix PAY-2 totals", []WorkItemRow{{repoID, "jira:PAY-9", "jira"}}, "", "", 0},
+		{"linear row named", "MOB-1 checkout layout", []WorkItemRow{{repoID, "linear:MOB-1", "linear"}}, "linear:MOB-1", "references", 0},
+		{"linear key no row", "MOB-1 checkout layout", []WorkItemRow{{repoID, "linear:MOB-2", "linear"}}, "", "", 0},
+		{"jira-looking prefix, org has no rows of it", "ABC-77 thing", nil, "", "", 0},
+		{"same key in jira and linear is ambiguous", "ABC-1 thing", []WorkItemRow{{repoID, "jira:ABC-1", "jira"}, {repoID, "linear:ABC-1", "linear"}}, "", "", 1},
+		{"github same-repo #n", "Closes #5", []WorkItemRow{{repoID, "gh:o/r#5", "github"}}, "gh:o/r#5", "implements", 0},
+		{"github #n no row", "Closes #6", []WorkItemRow{{repoID, "gh:o/r#5", "github"}}, "", "", 0},
+		{"github owner/repo#n", "Relates to other/lib#12", []WorkItemRow{{uuid.New(), "gh:other/lib#12", "github"}}, "gh:other/lib#12", "references", 0},
+		{"github owner/repo#n no row", "Relates to other/lib#13", []WorkItemRow{{uuid.New(), "gh:other/lib#12", "github"}}, "", "", 0},
+		{"gitlab same-repo #n", "see #7", []WorkItemRow{{repoID, "gitlab:g/p#7", "gitlab"}}, "gitlab:g/p#7", "references", 0},
+		{"gitlab group/project#n", "see grp/sub/proj#8", []WorkItemRow{{uuid.New(), "gitlab:grp/sub/proj#8", "gitlab"}}, "gitlab:grp/sub/proj#8", "references", 0},
+		{"github repo name is case-insensitive", "Closes acme/api#5", []WorkItemRow{{uuid.New(), "gh:Acme/API#5", "github"}}, "gh:Acme/API#5", "implements", 0},
+		{"github glued suffix is no reference", "see o/r#5abc", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}}, "", "", 0},
+		{"unicode letter before owner is no reference", "see \u00e9o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}}, "", "", 0},
+		{"owner/repo#n held by github and gitlab is ambiguous", "see o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}, {uuid.New(), "gitlab:o/r#5", "gitlab"}}, "", "", 1},
+		{"gitlab !n is a merge request", "see g/p!9", []WorkItemRow{{repoID, "gitlab:g/p#9", "gitlab"}}, "", "", 0},
 	}
-	// The ref is still found (extraction is provider-agnostic); it just has
-	// nothing to resolve against.
-	if result.JiraRefsFound != 1 {
-		t.Errorf("JiraRefsFound = %d, want 1 (extraction runs regardless of resolution)", result.JiraRefsFound)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prs := []PullRequestRow{{RepoID: repoID, Number: 1, Title: tc.title}}
+			result := DeriveTextParseEdges(prs, tc.items, time.Now())
+			if tc.wantItem == "" {
+				if len(result.Links) != 0 || len(result.Edges) != 0 {
+					t.Fatalf("want no link, got links=%+v", result.Links)
+				}
+			} else {
+				if len(result.Links) != 1 || result.Links[0].WorkItemID != tc.wantItem || result.Links[0].Provenance != edges.ProvenanceExplicitText {
+					t.Fatalf("want one explicit_text link to %s, got %+v", tc.wantItem, result.Links)
+				}
+				if result.Edges[0].EdgeType != tc.wantEdge {
+					t.Fatalf("edge type = %s, want %s", result.Edges[0].EdgeType, tc.wantEdge)
+				}
+			}
+			if result.AmbiguousKeys != tc.wantAmbig {
+				t.Fatalf("AmbiguousKeys = %d, want %d", result.AmbiguousKeys, tc.wantAmbig)
+			}
+		})
+	}
+}
+
+func TestExtractRepoNamedIssueRefsRejectsEmbeddedAndMergeRequests(t *testing.T) {
+	for _, text := range []string{"ghttps://x/o/r#1", "a/b!3", "https://host/o/r#4"} {
+		if refs := ExtractRepoNamedIssueRefs(text); len(refs) != 0 {
+			t.Errorf("%q gave %+v, want none", text, refs)
+		}
 	}
 }

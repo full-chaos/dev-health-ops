@@ -31,6 +31,8 @@ type TextParseOutcome struct {
 	JiraRefsFound    int
 	GitHubRefsFound  int
 	GitLabRefsFound  int
+	CrossRefsFound   int
+	AmbiguousKeys    int
 	Duration         time.Duration
 }
 
@@ -166,6 +168,8 @@ func (service *Service) ProduceTextParseEdges(ctx context.Context, orgID string,
 		JiraRefsFound:    result.JiraRefsFound,
 		GitHubRefsFound:  result.GitHubRefsFound,
 		GitLabRefsFound:  result.GitLabRefsFound,
+		CrossRefsFound:   result.CrossRefsFound,
+		AmbiguousKeys:    result.AmbiguousKeys,
 		Duration:         service.now().Sub(started),
 	}
 	service.logger.Info("issue-pr text-parse edges produced",
@@ -173,6 +177,8 @@ func (service *Service) ProduceTextParseEdges(ctx context.Context, orgID string,
 		slog.Int("prs_read", outcome.PullRequestsRead),
 		slog.Int("edges_written", outcome.EdgesWritten),
 		slog.Int("links_written", outcome.LinksWritten),
+		slog.Int("cross_refs_found", outcome.CrossRefsFound),
+		slog.Int("ambiguous_keys", outcome.AmbiguousKeys),
 		slog.Duration("duration", outcome.Duration),
 	)
 	return outcome, nil

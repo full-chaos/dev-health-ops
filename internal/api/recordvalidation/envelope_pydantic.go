@@ -44,6 +44,15 @@ func (e PydanticError) Dict() *pyjson.Object {
 	return out
 }
 
+// PublicDict is Dict without input and ctx: the api never echoes a submitted
+// value, which can be a secret.
+func (e PydanticError) PublicDict() *pyjson.Object {
+	out := e.Dict()
+	out.Delete("input")
+	out.Delete("ctx")
+	return out
+}
+
 func ctxOf(pairs ...any) *pyjson.Object {
 	out := pyjson.NewObject()
 	for index := 0; index+1 < len(pairs); index += 2 {

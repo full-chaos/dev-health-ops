@@ -343,6 +343,7 @@ internal/testsupport/programoracle	2
 internal/testsupport/providerstub	3
 internal/testsupport/providerstub/cmd/providerstub	1
 internal/testsupport/providersyncschema	1
+internal/testsupport/pydanticecho	1
 internal/testsupport/pyoracle	2
 internal/testsupport/ratchet	3
 internal/testsupport/ratchet/cmd/ratchets	2

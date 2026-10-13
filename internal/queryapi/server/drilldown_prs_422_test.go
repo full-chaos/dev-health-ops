@@ -75,6 +75,8 @@ func TestGetValidationErrorsMatchPython(t *testing.T) {
 			}
 			got := decodeValidationErrorBody(t, rec.Body.Bytes())
 			want := loadValidationErrorGolden(t, tc.golden)
+			dropEcho(&got)
+			dropEcho(&want)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("response mismatch\n got:  %+v\nwant: %+v", got, want)
 			}
@@ -112,6 +114,8 @@ func TestPostValidationErrorsMatchPython(t *testing.T) {
 			}
 			got := decodeValidationErrorBody(t, rec.Body.Bytes())
 			want := loadValidationErrorGolden(t, tc.golden)
+			dropEcho(&got)
+			dropEcho(&want)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("response mismatch\n got:  %+v\nwant: %+v", got, want)
 			}
@@ -149,6 +153,8 @@ func TestNestedMetricFilterFieldsMatchPython(t *testing.T) {
 			Ctx: map[string]string{"expected": "'org', 'team', 'repo', 'service' or 'developer'"},
 		},
 	}}
+	dropEcho(&got)
+	dropEcho(&want)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\nwant: %+v", got, want)
 	}
@@ -183,6 +189,8 @@ func TestMalformedJSONSyntaxMatchesPython(t *testing.T) {
 		Input: map[string]any{},
 		Ctx:   map[string]string{"error": "Expecting value"},
 	}}}
+	dropEcho(&got)
+	dropEcho(&want)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\nwant: %+v", got, want)
 	}

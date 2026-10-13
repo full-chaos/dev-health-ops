@@ -96,7 +96,8 @@ func writePydanticValidationError(w http.ResponseWriter, r *http.Request, orgID 
 }
 
 // pyjsonObject is the detail as pydantic's error dict, in its key order:
-// type, loc, msg, input, then ctx when present.
+// type, loc, msg. FastAPI's "input" and "ctx" are never written: they echo the
+// submitted value, which can be a secret.
 func (d pydanticErrorDetail) pyjsonObject() *pyjson.Object {
 	out := pyjson.NewObject()
 	out.Set("type", d.Type)
@@ -106,19 +107,6 @@ func (d pydanticErrorDetail) pyjsonObject() *pyjson.Object {
 	}
 	out.Set("loc", loc)
 	out.Set("msg", d.Msg)
-	out.Set("input", pyjsonFromAny(d.Input))
-	if len(d.Ctx) > 0 {
-		keys := make([]string, 0, len(d.Ctx))
-		for key := range d.Ctx {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		ctx := pyjson.NewObject()
-		for _, key := range keys {
-			ctx.Set(key, d.Ctx[key])
-		}
-		out.Set("ctx", ctx)
-	}
 	return out
 }
 

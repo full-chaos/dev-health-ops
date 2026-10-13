@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -137,7 +138,7 @@ func TestQueryParamValidationMatchesFrozenPython(t *testing.T) {
 		if answers[i].Status != http.StatusUnprocessableEntity {
 			t.Errorf("%s: python answered %d, want 422 (the case must be a validation failure): %s", c.name, answers[i].Status, answers[i].Body)
 		}
-		if recorder.Code != answers[i].Status || strings.TrimSpace(recorder.Body.String()) != answers[i].Body {
+		if recorder.Code != answers[i].Status || strings.TrimSpace(recorder.Body.String()) != pydanticecho.Strip(answers[i].Body) {
 			t.Errorf("%s: DIFF\n  go     %d %s\n  python %d %s", c.name, recorder.Code, strings.TrimSpace(recorder.Body.String()), answers[i].Status, answers[i].Body)
 		}
 	}

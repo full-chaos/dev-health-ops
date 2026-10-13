@@ -82,7 +82,7 @@ func parseEnvelope(raw []byte) (*BatchEnvelope, error) {
 			if item.Unrenderable {
 				return nil, unhandledError()
 			}
-			details[index] = item.Dict()
+			details[index] = item.PublicDict()
 		}
 		if _, err := pyjson.Marshal(details); err != nil {
 			return nil, unhandledError()

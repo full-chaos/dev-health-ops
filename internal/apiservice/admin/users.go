@@ -44,18 +44,23 @@ type setPasswordInputKey struct{}
 // fields 8 to 128 characters), run BEFORE the keyed rate limiter as FastAPI
 // does: a malformed body is a 422 that costs no allowance (CHAOS-6435).
 func validateSetPasswordBody(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
-	var errs pybody.Errors
-	object, ok := errs.Object(bodyFromContext(r.Context()))
-	var input setPasswordInput
-	if ok {
-		input.AdminPassword, _ = errs.RequiredString(object, "admin_password", 8, 128)
-		input.Password, _ = errs.RequiredString(object, "password", 8, 128)
-	}
+	input, errs := parseSetPasswordBody(bodyFromContext(r.Context()))
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return nil, false
 	}
 	return r.WithContext(context.WithValue(r.Context(), setPasswordInputKey{}, input)), true
+}
+
+func parseSetPasswordBody(body pybody.Body) (setPasswordInput, pybody.Errors) {
+	var errs pybody.Errors
+	object, ok := errs.Object(body)
+	var input setPasswordInput
+	if ok {
+		input.AdminPassword, _ = errs.RequiredString(object, "admin_password", 8, 128)
+		input.Password, _ = errs.RequiredString(object, "password", 8, 128)
+	}
+	return input, errs
 }
 
 func (h *handlers) userRoutes() []httpapi.Route {
@@ -152,6 +157,10 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 		orgID, parseErr := uuid.Parse(xOrgID)
 		if parseErr != nil {
 			policy.WriteInternal(w)
+			return
+		}
+		if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
+			h.logger.DebugContext(ctx, "admin: list users refused: caller is not an admin of the requested org", "caller", user.ID, "org", orgID)
 			return
 		}
 		users, err = h.store.listUsersByOrg(ctx, orgID, filter)

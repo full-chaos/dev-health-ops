@@ -99,5 +99,11 @@ func RefuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseL
 // GatewayHTTPClient is the HTTP client every Atlassian gateway read uses: complete pages only, a bounded
 // wait, and no redirect followed.
 func GatewayHTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, Transport: CompletePagesOnly(nil), CheckRedirect: RefuseRedirects}
+	return GatewayHTTPClientOver(timeout, nil)
+}
+
+// GatewayHTTPClientOver is GatewayHTTPClient over the given transport (nil: the default one), for a
+// caller that must answer the gateway itself (the fixture world producer replays recorded answers).
+func GatewayHTTPClientOver(timeout time.Duration, base http.RoundTripper) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: CompletePagesOnly(base), CheckRedirect: RefuseRedirects}
 }

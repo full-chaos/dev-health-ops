@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -217,7 +218,8 @@ func (r *PostgresExternalBatchRepository) Complete(ctx context.Context, batch ex
 			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		`, uuid.New().String(), batch.Pointer.OrgID, batch.Pointer.IngestionID.String(),
 			rejection.Index, rejection.Kind, nullableExternalText(rejection.ExternalID),
-			rejection.Code, rejection.Message, nullableExternalText(rejection.Path), now); err != nil {
+			rejection.Code, logging.RedactPersisted(ctx, nil, "external_ingest_rejections.message", rejection.Message),
+			nullableExternalText(rejection.Path), now); err != nil {
 			return fmt.Errorf("persist external rejection: %w", err)
 		}
 	}
@@ -242,7 +244,7 @@ func (r *PostgresExternalBatchRepository) Fail(ctx context.Context, pointer exte
 	summary, err := json.Marshal(map[string]any{
 		"total_rejected": 0, "stored_rejections": 0, "truncated": false,
 		"top_codes": []map[string]any{{"code": "processing_failed", "count": 1}},
-		"reason":    reason,
+		"reason":    logging.RedactPersisted(ctx, nil, "external_ingest_batches.error_summary", reason),
 	})
 	if err != nil {
 		return err

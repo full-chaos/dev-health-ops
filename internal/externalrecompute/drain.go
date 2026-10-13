@@ -565,7 +565,7 @@ WHERE org_id = $1 AND source_system = $2 AND source_instance = $3
   AND recompute_status = 'pending'
   AND COALESCE(recompute_scope ->> 'bridgeId', '') = $4`,
 		claim.OrgID, claim.SourceSystem, claim.SourceInstance, claim.BridgeID,
-		outcomeFailed, now, persistedFailureText(ctx, drain.logger, claim.BridgeID, cause)); err != nil {
+		outcomeFailed, now, logging.RedactPersisted(ctx, drain.logger, "external_ingest_batches.recompute_error", cause.Error())); err != nil {
 		return fmt.Errorf("persist external recompute permanent failure: %w", err)
 	}
 	if err := markTx(ctx, tx, claim.JobID, statusFailed); err != nil {
@@ -576,19 +576,6 @@ WHERE org_id = $1 AND source_system = $2 AND source_instance = $3
 	}
 	committed = true
 	return nil
-}
-
-// persistedFailureText is the text stored in external_ingest_batches.recompute_error.
-// The cause can quote a bridge payload fragment, so it goes through the shared log
-// redactor before it reaches the column. The debug line counts; it never carries text.
-func persistedFailureText(ctx context.Context, logger *slog.Logger, bridgeID string, cause error) string {
-	raw := cause.Error()
-	redacted := logging.RedactText(raw)
-	if redacted != raw {
-		logger.DebugContext(ctx, "external recompute persisted error text redacted",
-			"bridge_id", bridgeID, "raw_bytes", len(raw), "stored_bytes", len(redacted))
-	}
-	return redacted
 }
 
 func markTx(ctx context.Context, tx pgx.Tx, jobID uuid.UUID, status string) error {

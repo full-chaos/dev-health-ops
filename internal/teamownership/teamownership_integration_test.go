@@ -357,7 +357,7 @@ func TestOwnedRepoIDsResolvesProviderAccessRowsByRepoName(t *testing.T) {
 	}
 }
 
-// TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt is
+// TestAuthoritativeOwnersByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt is
 // the red-first proof for CHAOS-5141, #2255 r1 finding 2: a repo claimed by
 // more than one team must resolve to the SAME authoritative owner Python's
 // load_team_repo_ownership_map picks (src/dev_health_ops/providers/teams.py:281,
@@ -369,7 +369,7 @@ func TestOwnedRepoIDsResolvesProviderAccessRowsByRepoName(t *testing.T) {
 // that iterates ownership per-team and keeps whichever is encountered first
 // (the exact defect resolveDailyFinalizeRepoToTeam had before this fix) --
 // team-primary must win instead, because it is_primary=1.
-func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *testing.T) {
+func TestAuthoritativeOwnersByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -448,15 +448,26 @@ func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *t
 	// updated_at) would sort "team-alpha" before "team-zulu" alphabetically,
 	// so if updated_at DESC were removed, the OLDER "team-alpha" claim would
 	// incorrectly win on the team_id tiebreak. With updated_at DESC intact,
-	// the NEWER "team-zulu" claim must win instead.
+	// the NEWER "team-zulu" claim must win instead. The two are grants
+	// (is_primary = 0): two main owners at one rank are both owners (below).
 	older := before
 	newer := before.Add(24 * time.Hour)
-	insert("team-alpha", 1, 1, older, tiedOnRankDiffersOnUpdatedAt)
-	insert("team-zulu", 1, 1, newer, tiedOnRankDiffersOnUpdatedAt)
+	insert("team-alpha", 0, 1, older, tiedOnRankDiffersOnUpdatedAt)
+	insert("team-zulu", 0, 1, newer, tiedOnRankDiffersOnUpdatedAt)
+	// D5990 (CHAOS-9459): a full ownership tie makes every tied team a main
+	// owner, so two main rows at one rank are both owners, in rank order
+	// (updated_at DESC, then team_id ASC); a main row at a lower specificity
+	// and a grant are not.
+	mainOwnersOfATie := uuid.New()
+	insert("team-tie-zulu", 1, 150, newer, mainOwnersOfATie)
+	insert("team-tie-alpha", 1, 150, older, mainOwnersOfATie)
+	insert("team-tie-bravo", 1, 150, older, mainOwnersOfATie)
+	insert("team-main-lower", 1, 100, newer, mainOwnersOfATie)
+	insert("team-tie-grant", 0, 150, newer, mainOwnersOfATie)
 
-	owners, err := AuthoritativeOwnerByRepo(ctx, conn, orgID, asOf)
+	owners, err := joinedOwnersByRepo(ctx, conn, orgID, asOf)
 	if err != nil {
-		t.Fatalf("AuthoritativeOwnerByRepo: %v", err)
+		t.Fatalf("AuthoritativeOwnersByRepo: %v", err)
 	}
 
 	if got := owners[multiClaimed.String()]; got != "team-primary" {
@@ -479,20 +490,25 @@ func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *t
 			"team_id tiebreak alone, so this failing means updated_at DESC "+
 			"is not actually being applied", got)
 	}
+	if got := owners[mainOwnersOfATie.String()]; got != "team-tie-zulu,team-tie-alpha,team-tie-bravo" {
+		t.Fatalf("repo with three main owners at one rank: owners=%q, want "+
+			"team-tie-zulu,team-tie-alpha,team-tie-bravo -- every main owner of a tie "+
+			"in rank order, and no main owner at a lower specificity or grant", got)
+	}
 }
 
-// TestAuthoritativeOwnerByRepoSkipsAnEmptyTeamIDRow is the red-first proof
+// TestAuthoritativeOwnersByRepoSkipsAnEmptyTeamIDRow is the red-first proof
 // for CHAOS-5141, #2255 r2 finding 1: the schema permits an empty team_id
 // (051_team_attribution_dimensions.sql has no non-empty constraint on it),
 // and Python's load_team_repo_ownership_map skips such a row entirely
 // (`if not repo_id or not team_id: continue`, teams.py:411) rather than let
 // an empty string win a repo -- the caller then falls back to the
-// pattern-resolver for that repo. A prior revision of AuthoritativeOwnerByRepo
+// pattern-resolver for that repo. A prior revision of AuthoritativeOwnersByRepo
 // only guarded against an invalid/zero repo_id, not an empty team_id, so an
 // empty-team_id row (however it got there) silently won the repo and
 // suppressed both a real lower-ranked claim AND the pattern-resolver
 // fallback the caller applies when a repo has no entry at all.
-func TestAuthoritativeOwnerByRepoSkipsAnEmptyTeamIDRow(t *testing.T) {
+func TestAuthoritativeOwnersByRepoSkipsAnEmptyTeamIDRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -544,9 +560,9 @@ func TestAuthoritativeOwnerByRepoSkipsAnEmptyTeamIDRow(t *testing.T) {
 	insert("", 1, 1, emptyClaimWinsRankButLowerRealClaimExists)
 	insert("team-real", 0, 1, emptyClaimWinsRankButLowerRealClaimExists)
 
-	owners, err := AuthoritativeOwnerByRepo(ctx, conn, orgID, asOf)
+	owners, err := joinedOwnersByRepo(ctx, conn, orgID, asOf)
 	if err != nil {
-		t.Fatalf("AuthoritativeOwnerByRepo: %v", err)
+		t.Fatalf("AuthoritativeOwnersByRepo: %v", err)
 	}
 
 	if teamID, present := owners[onlyEmptyClaim.String()]; present {

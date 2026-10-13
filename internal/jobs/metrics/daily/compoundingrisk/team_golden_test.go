@@ -84,7 +84,7 @@ func TestBuildTeamRowsMatchesFrozenPythonGolden(t *testing.T) {
 	}
 
 	records := BuildTeamRows(
-		goldenDay(), teamGoldenOrgID, repoInputs, repoToTeam, goldenStamp(),
+		goldenDay(), teamGoldenOrgID, repoInputs, oneOwnerEach(repoToTeam), goldenStamp(),
 		DefaultWeights, DefaultThresholds, DefaultReferences,
 	)
 
@@ -144,7 +144,7 @@ func TestBuildTeamRowsExcludesUnresolvedRepoWithoutAffectingOthers(t *testing.T)
 	repoToTeam := map[string]string{"repo-member": "solo-team"} // "repo-unresolved" deliberately absent
 
 	records := BuildTeamRows(
-		goldenDay(), teamGoldenOrgID, []RepoInputs{unresolved, member}, repoToTeam, goldenStamp(),
+		goldenDay(), teamGoldenOrgID, []RepoInputs{unresolved, member}, oneOwnerEach(repoToTeam), goldenStamp(),
 		DefaultWeights, DefaultThresholds, DefaultReferences,
 	)
 	if len(records) != 1 {

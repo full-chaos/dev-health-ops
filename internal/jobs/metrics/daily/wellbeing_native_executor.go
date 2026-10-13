@@ -38,7 +38,7 @@ import (
 //     Python reference, which falls back to the roster column teams.members
 //     by commit author; that column is gone, CHAOS-9087).
 //     A repository's team is its authoritative owner (team_repo_ownership,
-//     teamownership.AuthoritativeOwnerByRepo), with the repo_patterns
+//     teamownership.AuthoritativeOwnersByRepo), with the repo_patterns
 //     fallback of teamresolve.ResolveFromOwnershipMap; a repository nobody
 //     owns is "unassigned". Team = ownership of repositories, never
 //     person -> membership -> team.
@@ -180,7 +180,7 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 	// team_cognitive_load, team_complexity, compounding_risk_team); the
 	// repo_patterns fallback only serves a repository no owner row resolves.
 	// A repository with no owner is "unassigned".
-	owners, err := teamownership.AuthoritativeOwnerByRepo(ctx, executor.conn, run.OrganizationID, day)
+	owners, err := teamownership.AuthoritativeOwnersByRepo(ctx, executor.conn, run.OrganizationID, day)
 	if err != nil {
 		return 0, fmt.Errorf("resolve authoritative repo ownership: %w", err)
 	}
@@ -377,11 +377,11 @@ func parseRepositoryUUIDs(ids []RepositoryID) ([]uuid.UUID, error) {
 // repository id (newOwnershipRepoResolver returns the identity map to pass as
 // repoNamesByID), so two repositories of one name never share a team.
 type ownershipRepoResolver struct {
-	teamByRepoID map[string]string
+	teamByRepoID map[string][]string
 	nameByTeamID map[string]string
 }
 
-func newOwnershipRepoResolver(teamByRepoID map[string]string, teams []WellbeingTeam) (numerical.RepoTeamResolver, map[string]string) {
+func newOwnershipRepoResolver(teamByRepoID map[string][]string, teams []WellbeingTeam) (numerical.RepoTeamResolver, map[string]string) {
 	names := make(map[string]string, len(teams))
 	for _, team := range teams {
 		names[strings.TrimSpace(team.ID)] = strings.TrimSpace(team.Name)
@@ -394,11 +394,23 @@ func newOwnershipRepoResolver(teamByRepoID map[string]string, teams []WellbeingT
 }
 
 func (resolver *ownershipRepoResolver) ResolveRepo(repoID string) (string, string) {
-	teamID := resolver.teamByRepoID[repoID]
-	if teamID == "" {
+	owners := resolver.ResolveRepoOwners(repoID)
+	if len(owners) == 0 {
 		return "", ""
 	}
-	return teamID, resolver.nameByTeamID[teamID]
+	return owners[0].ID, owners[0].Name
+}
+
+// ResolveRepoOwners is every owning team of the repository id: one, or every
+// main owner of a full ownership tie (D5990).
+func (resolver *ownershipRepoResolver) ResolveRepoOwners(repoID string) []numerical.TeamRef {
+	var owners []numerical.TeamRef
+	for _, teamID := range resolver.teamByRepoID[repoID] {
+		if teamID != "" {
+			owners = append(owners, numerical.TeamRef{ID: teamID, Name: resolver.nameByTeamID[teamID]})
+		}
+	}
+	return owners
 }
 
 var _ NativeFamilyExecutor = (*TeamWellbeingExecutor)(nil)

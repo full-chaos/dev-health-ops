@@ -213,5 +213,4 @@ var exportedAPI = []string{
 	"var synclog.MsgSyncRunAuthFingerprintMismatch synclog.Msg",
 	"var synclog.MsgSyncRunRollupBumped synclog.Msg",
 	"var synclog.MsgTeamRepoOwnershipDerivation synclog.Msg",
-	"var synclog.MsgTeamRepoOwnershipOwnerTieUnresolved synclog.Msg",
 }

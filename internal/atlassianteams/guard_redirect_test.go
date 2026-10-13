@@ -33,4 +33,9 @@ func TestGatewayHTTPClientCheckRedirectRefuses(t *testing.T) {
 	if client.CheckRedirect == nil || client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
 		t.Fatal("the gateway client follows redirects")
 	}
+	// Over a caller's transport (the fixture world producer's replay) the client refuses redirects too.
+	over := GatewayHTTPClientOver(time.Second, http.DefaultTransport)
+	if over.CheckRedirect == nil || over.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("the gateway client over a given transport follows redirects")
+	}
 }

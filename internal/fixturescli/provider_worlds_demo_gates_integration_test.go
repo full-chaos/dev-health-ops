@@ -91,6 +91,17 @@ func gateNumber(value any) (float64, bool) {
 
 func gateDay(at time.Time) string { return at.UTC().Format(time.DateOnly) }
 
+// demoGateScope is a work item's project scope from its id: the Jira project or Linear team key
+// ("jira:PAY-12" -> PAY), the GitLab project path ("gitlab:chaos-gl/x#3" -> chaos-gl/x), the GitHub
+// repository. GitLab items carry no project key column, so the id is the one scope every tracker has.
+func demoGateScope(id string) string {
+	rest := id[strings.Index(id, ":")+1:]
+	if cut := strings.LastIndexAny(rest, "-#"); cut > 0 {
+		return rest[:cut]
+	}
+	return rest
+}
+
 // demoGateWorkItems are the tracker items (no pull or merge request), newest version of each.
 func demoGateWorkItems(world FrozenWorld) map[string]map[string]any {
 	items := map[string]map[string]any{}
@@ -195,7 +206,7 @@ func TestDemoGateG2EstimatesOnAShareOfItems(t *testing.T) {
 		total[provider]++
 		if points, ok := gateNumber(item["story_points"]); ok && points > 0 {
 			estimated[provider]++
-			scopes[gateText(item["project_key"])+"/"+gateText(item["native_team_key"])] = true
+			scopes[demoGateScope(gateText(item["work_item_id"]))] = true
 		}
 	}
 	for _, provider := range []string{"jira", "linear", "gitlab"} {
@@ -242,13 +253,6 @@ func TestDemoGateG3BlockersAcrossTeams(t *testing.T) {
 		}
 		return teams
 	}
-	scope := func(id string) string {
-		rest := id[strings.Index(id, ":")+1:]
-		if cut := strings.LastIndexAny(rest, "-#"); cut > 0 {
-			return rest[:cut]
-		}
-		return rest
-	}
 	seen := map[[2]string]bool{}
 	scopes := map[string]bool{}
 	openPayments, crossTeam := 0, 0
@@ -266,7 +270,7 @@ func TestDemoGateG3BlockersAcrossTeams(t *testing.T) {
 		if !ok {
 			continue
 		}
-		scopes[scope(blocked)] = true
+		scopes[demoGateScope(blocked)] = true
 		open := target["completed_at"] == nil
 		if open && strings.HasPrefix(blocked, "jira:PAY-") && strings.HasPrefix(blocker, "jira:PAY-") {
 			openPayments++

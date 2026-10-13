@@ -30,7 +30,7 @@ func tsvRows(t *testing.T, path string) [][]string {
 }
 
 // producerImports returns the in-module packages the _test.go files of a venue package import
-// and compare against: everything under internal/ except the test support, the platform
+// and compare against: everything under internal/ except the test support
 // plumbing and the package's own tree.
 func producerImports(t *testing.T, root, pkg string) []string {
 	t.Helper()
@@ -48,7 +48,7 @@ func producerImports(t *testing.T, root, pkg string) []string {
 			path, _ := strconv.Unquote(spec.Path.Value)
 			rel, ok := strings.CutPrefix(path, modulePrefix)
 			if !ok || !strings.HasPrefix(rel, "internal/") ||
-				strings.HasPrefix(rel, "internal/testsupport") || strings.HasPrefix(rel, "internal/platform") ||
+				strings.HasPrefix(rel, "internal/testsupport") ||
 				rel == pkg || strings.HasPrefix(rel, pkg+"/") {
 				continue
 			}
@@ -150,7 +150,7 @@ func sumInts(m map[string]int) int {
 // #4032 changed live in internal/api/licensing, and a pull request that changes them selects the ledger oracle.
 func TestTheBillingLedgerOracleIsSelectedByItsProducers(t *testing.T) {
 	root := repoRoot(t)
-	for _, path := range []string{"internal/api/licensing/registry.go", "internal/api/billing/entitlements.go"} {
+	for _, path := range []string{"internal/api/licensing/registry.go", "internal/api/billing/entitlements.go", "internal/platform/config/config.go", "internal/platform/secrets/value.go"} {
 		rows, err, stderr := selected(t, root, "\n", path)
 		if err != nil {
 			t.Fatalf("%s: %v\n%s", path, err, stderr)

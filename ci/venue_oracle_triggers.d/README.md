@@ -21,7 +21,7 @@ main is the check for it. Add a row when a main run goes red after a green pull 
 
 `internal/testsupport/venuechanged` (TestEveryProducerAVenueTestImportsIsDeclaredAsATrigger,
 CHAOS-9578) fails when a package with a `run` row imports a producer package (internal/,
-outside testsupport and platform) that no row of its file covers. Known gaps are listed in
+outside testsupport) that no row of its file covers. Known gaps are listed in
 `ci/venue_oracle_trigger_gaps.tsv` (`<package dir>	<producer package>`, sorted): a new gap
 fails the test, and a line whose gap got covered must be removed. Close a gap by declaring the
 producer here and deleting its line there.

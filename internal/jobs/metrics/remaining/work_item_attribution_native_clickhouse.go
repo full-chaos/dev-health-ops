@@ -296,18 +296,69 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 	}
 	sort.Slice(days, func(i, j int) bool { return days[i].Before(days[j]) })
 
-	var rows []WorkItemAttributionRow
+	// CHAOS-9460: a donor gives the team of its own row, never a resolution
+	// of it on the linked item's day. An affected item's row is the one this
+	// run writes for it, with the facts of its own day (first pass); a donor
+	// pulled in only for context gives its stored row.
+	contexts := make(map[time.Time]teamattribution.GithubWorkItemDerivationContext, len(days))
+	ownRows := map[string]teamattribution.GithubWorkItemDerivationDonorRow{}
 	for _, day := range days {
 		facts, err := executor.loadFacts(ctx, orgID, day)
 		if err != nil {
 			return nil, err
 		}
 		derived := teamattribution.NewGitHubWorkItemDerivationContext(facts)
-		linkedIssue, _, _ := derived.BuildLinkedIssueIndex("", subjects, dependencies, nil)
+		contexts[day] = derived
+		for id, row := range derived.OwnDonorRows(subjects, idsByDay[day]) {
+			ownRows[id] = row
+		}
+	}
+	donorRows, err := LinkedIssueDonorRows(ctx, executor.conn, orgID, subjects, affectedIDs, ownRows)
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []WorkItemAttributionRow
+	for _, day := range days {
+		derived := contexts[day]
+		linkedIssue, linkedEvidence, _, _ := derived.BuildLinkedIssueIndexFromRows("", subjects, donorRows, dependencies, nil)
 		derived.LinkedIssue = linkedIssue
+		derived.LinkedIssueEvidence = linkedEvidence
 		rows = append(rows, BuildWorkItemAttributionRows(orgID, now, idsByDay[day], subjects, derived)...)
 	}
 	return rows, nil
+}
+
+// LinkedIssueDonorRows is the donor row of every subject (CHAOS-9460): the
+// row this run writes for an item of written (ownRows, which holds only those
+// items), and the stored own primary row of every other subject
+// (teamattribution LoadDonorRows). A subject this run does not write is never
+// resolved again.
+func LinkedIssueDonorRows(
+	ctx context.Context, conn driver.Conn, orgID string,
+	subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
+	written map[string]struct{},
+	ownRows map[string]teamattribution.GithubWorkItemDerivationDonorRow,
+) (map[string]teamattribution.GithubWorkItemDerivationDonorRow, error) {
+	var contextIDs []string
+	for id := range subjects {
+		if _, ok := written[id]; !ok {
+			contextIDs = append(contextIDs, id)
+		}
+	}
+	sort.Strings(contextIDs)
+	stored, err := teamattribution.ClickHouseFactSource{Conn: conn}.LoadDonorRows(ctx, orgID, contextIDs)
+	if err != nil {
+		return nil, stepcause.Failure(stepcause.LoadLinkedIssueDonorRows, err)
+	}
+	donorRows := make(map[string]teamattribution.GithubWorkItemDerivationDonorRow, len(stored)+len(ownRows))
+	for id, row := range stored {
+		donorRows[id] = row
+	}
+	for id, row := range ownRows {
+		donorRows[id] = row
+	}
+	return donorRows, nil
 }
 
 // WorkItemAttributionItemDay is the day whose ownership and membership facts

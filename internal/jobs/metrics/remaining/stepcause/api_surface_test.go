@@ -19,6 +19,7 @@ var allowedExports = map[string]bool{
 	"IterateWorkItemDependenciesReverseClosure":         true,
 	"IterateAlreadyCoveredTodayRows":                    true,
 	"IterateWorkItemCompletionDays":                     true,
+	"LoadLinkedIssueDonorRows":                          true,
 	"QueryWorkItemCompletionDays":                       true,
 	"ScanWorkItemCompletionDay":                         true,
 	"QueryScopedWatermarks":                             true,

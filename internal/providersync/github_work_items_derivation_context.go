@@ -121,6 +121,13 @@ func (source githubWorkItemClickHouseDerivationContextSource) Load(
 	if facts.DonorItems, err = source.loadDonors(ctx, claim.OrgID, request); err != nil {
 		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
+	donorIDs := make([]string, 0, len(facts.DonorItems))
+	for _, donor := range facts.DonorItems {
+		donorIDs = append(donorIDs, donor.WorkItemID)
+	}
+	if facts.DonorRows, err = loader.LoadDonorRows(ctx, claim.OrgID, donorIDs); err != nil {
+		return teamattribution.GithubWorkItemDerivationFacts{}, err
+	}
 	if err := source.Lease.Assert(ctx); err != nil {
 		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
@@ -226,6 +233,7 @@ func loadWorkItemDerivationContextForProvider(
 	for _, donor := range facts.DonorItems {
 		subjects[donor.WorkItemID] = donor
 	}
+	written := make(map[string]struct{}, len(rows.WorkItems))
 	for _, row := range rows.WorkItems {
 		subject := githubWorkItemDerivationSubjectFromRow(row)
 		if subject.OrgID != claim.OrgID {
@@ -233,11 +241,24 @@ func loadWorkItemDerivationContextForProvider(
 		}
 		// Fresh rows are authoritative over a persisted donor version.
 		subjects[subject.WorkItemID] = subject
+		written[subject.WorkItemID] = struct{}{}
 	}
-	linkedIssue, rescues, crossProviderRescues := derived.BuildLinkedIssueIndex(
-		provider, subjects, toDerivationDependencyEdges(dependencies), storedOnly,
+	// CHAOS-9460: a donor gives the team of its own row. An item this run
+	// writes gives the row this run writes for it; any other donor gives its
+	// stored row, never a resolution of it in this run's context.
+	donorRows := make(map[string]teamattribution.GithubWorkItemDerivationDonorRow, len(facts.DonorRows)+len(written))
+	for id, row := range facts.DonorRows {
+		donorRows[id] = row
+	}
+	// An item this sync writes: its row of this sync replaces its stored one.
+	for id, row := range derived.OwnDonorRows(subjects, written) {
+		donorRows[id] = row
+	}
+	linkedIssue, linkedEvidence, rescues, crossProviderRescues := derived.BuildLinkedIssueIndexFromRows(
+		provider, subjects, donorRows, toDerivationDependencyEdges(dependencies), storedOnly,
 	)
 	derived.LinkedIssue = linkedIssue
+	derived.LinkedIssueEvidence = linkedEvidence
 	derived.StoredEdgeMerge = teamattribution.GithubWorkItemStoredEdgeMergeObservation{
 		StoredEdgesMerged:    merged,
 		DonorRescues:         rescues,

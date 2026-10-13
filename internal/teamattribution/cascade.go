@@ -213,6 +213,9 @@ type GithubWorkItemDerivationFacts struct {
 	ProviderMembers []GithubWorkItemDerivationMemberFact
 	ManualFallbacks []GithubWorkItemDerivationManualFallback
 	DonorItems      []GithubWorkItemDerivationSubject
+	// DonorRows is the stored own primary attribution row of each donor item
+	// (ClickHouseFactSource.LoadDonorRows), the team a linked item copies.
+	DonorRows map[string]GithubWorkItemDerivationDonorRow
 }
 
 type GithubWorkItemDerivationLoadRequest struct {
@@ -272,8 +275,16 @@ type GithubWorkItemDerivationContext struct {
 	providerMemberByID   map[string][]GithubWorkItemDerivationCandidate
 	manualFallbacks      []GithubWorkItemDerivationManualFallback
 	// LinkedIssue: item id -> the donor's primary team (id, name, provider).
-	LinkedIssue     map[string][3]string
-	StoredEdgeMerge GithubWorkItemStoredEdgeMergeObservation
+	// An empty provider is a team read from a stored attribution row, which
+	// does not record the team's provider: it is bound provider-neutral.
+	LinkedIssue map[string][3]string
+	// LinkedIssueEvidence: item id -> the evidence of its linked_issue row,
+	// naming the donor (team-attribution.md section 0, row 5: dependency_type,
+	// donor_work_item_id, donor_provider) and the source of the donor row it
+	// copies. An item with no entry keeps the reference evidence
+	// "linked_issue=<item id>".
+	LinkedIssueEvidence map[string]string
+	StoredEdgeMerge     GithubWorkItemStoredEdgeMergeObservation
 	// teamsWithOwnership and teamsKnownFromCatalog together answer CHAOS-
 	// 5649's (R179 rule 2, chris 2026-09-12) null-carrying-team question.
 	// teamsWithOwnership: every team_id that owns at least one repo
@@ -768,8 +779,8 @@ func (derived GithubWorkItemDerivationContext) resolve(
 	if inherited, exists := derived.LinkedIssue[subject.WorkItemID]; exists {
 		bySource["linked_issue"] = append(bySource["linked_issue"], GithubWorkItemDerivationCandidate{
 			Source: "linked_issue", TeamID: GithubWorkItemDerivationStringPointer(inherited[0]), TeamName: GithubWorkItemDerivationStringPointer(inherited[1]),
-			TeamProvider: inherited[2], TeamResolved: true,
-			Confidence: "medium", Evidence: "linked_issue=" + subject.WorkItemID,
+			TeamProvider: inherited[2], TeamResolved: true, TeamNeutral: inherited[2] == "",
+			Confidence: "medium", Evidence: derived.linkedIssueEvidence(subject.WorkItemID),
 			IsPrimary: 1, Specificity: 90, UpdatedAt: NormalizedDerivationTime(time.Time{}),
 		})
 	}
@@ -1394,41 +1405,109 @@ func SameDerivationCandidate(left, right GithubWorkItemDerivationCandidate) bool
 		left.Priority == right.Priority && left.UpdatedAt.Equal(right.UpdatedAt)
 }
 
+// GithubWorkItemDerivationDonorRow is a donor item's own primary attribution
+// row: the team (and its source) an item copies through a linked issue
+// (team-attribution.md section 0: PR/MR attribution comes from an actual
+// linked issue donor row, CHAOS-9460). TeamProvider is empty for a row read
+// from work_item_team_attributions, which does not record it.
+type GithubWorkItemDerivationDonorRow struct {
+	TeamID, TeamName, TeamProvider, Source string
+}
+
+// linkedIssueDonorSources are the sources of a row that gives its team to a
+// linked item: a team the item holds on its own, never an inherited,
+// membership, fallback or unassigned row.
+var linkedIssueDonorSources = map[string]bool{
+	"native_team": true, "issue_project": true, "project_ownership": true,
+	"repo_ownership": true,
+}
+
+// OwnDonorRows is the primary row this context gives each item of ids on its
+// own (without a linked issue): the row a run that writes those items in this
+// context writes for them.
+func (derived GithubWorkItemDerivationContext) OwnDonorRows(
+	subjects map[string]GithubWorkItemDerivationSubject, ids map[string]struct{},
+) map[string]GithubWorkItemDerivationDonorRow {
+	rows := map[string]GithubWorkItemDerivationDonorRow{}
+	for id := range ids {
+		subject, ok := subjects[id]
+		if !ok {
+			continue
+		}
+		teamID, teamName, candidates := derived.ResolveWithoutLinked(subject)
+		if teamID == nil {
+			continue
+		}
+		for _, candidate := range candidates {
+			if candidate.IsPrimary == 1 {
+				rows[id] = GithubWorkItemDerivationDonorRow{
+					TeamID: *teamID, TeamName: GithubWorkItemDerivationFirstNonEmpty(GithubWorkItemDerivationStringValue(teamName), *teamID),
+					TeamProvider: candidate.TeamProvider, Source: candidate.Source,
+				}
+				break
+			}
+		}
+	}
+	return rows
+}
+
 // BuildLinkedIssueIndex resolves each team-less item to the team of a linked,
-// first-class-attributed donor.
-//
-// It additionally reports how many of those inheritances rest on an edge that
-// exists ONLY in the store (rescues) and how many of THOSE reach a donor in a
-// different provider (the CHAOS-3978 population). The counts are derived from
-// the same winning edge the attribution uses, never re-estimated, so an
-// observation of N is a claim about N specific attributions.
+// first-class-attributed donor, every subject's row taken as this context
+// gives it (OwnDonorRows). It is the reference shape the frozen oracles run;
+// a writer uses BuildLinkedIssueIndexFromRows with the donor rows it holds.
 func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndex(
 	provider string,
 	subjects map[string]GithubWorkItemDerivationSubject,
 	dependencies []GithubWorkItemDerivationDependencyEdge,
 	storedOnly map[GithubWorkItemDerivationEdgeKey]bool,
 ) (map[string][3]string, int, int) {
+	all := make(map[string]struct{}, len(subjects))
+	for id := range subjects {
+		all[id] = struct{}{}
+	}
+	teams, _, rescues, crossProviderRescues := derived.BuildLinkedIssueIndexFromRows(provider, subjects, derived.OwnDonorRows(subjects, all), dependencies, storedOnly)
+	return teams, rescues, crossProviderRescues
+}
+
+// linkedIssueEvidence is the evidence of an item's linked_issue row.
+func (derived GithubWorkItemDerivationContext) linkedIssueEvidence(workItemID string) string {
+	if evidence, ok := derived.LinkedIssueEvidence[workItemID]; ok {
+		return evidence
+	}
+	return "linked_issue=" + workItemID
+}
+
+// BuildLinkedIssueIndexFromRows resolves each team-less item to the team of a
+// linked donor's own primary row in donorRows, copied as it is and never
+// resolved again on the item's day (CHAOS-9460): a donor whose row is not in
+// donorRows, or whose row's source is not one of linkedIssueDonorSources,
+// gives nothing. It returns, beside each item's team, the evidence of its
+// linked_issue row: "linked_issue=<donor id>;dependency_type=<relationship>;
+// donor_provider=<donor provider>;donor_source=<donor row source>".
+//
+// It additionally reports how many of those inheritances rest on an edge that
+// exists ONLY in the store (rescues) and how many of THOSE reach a donor in a
+// different provider (the CHAOS-3978 population). The counts are derived from
+// the same winning edge the attribution uses, never re-estimated, so an
+// observation of N is a claim about N specific attributions.
+func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndexFromRows(
+	provider string,
+	subjects map[string]GithubWorkItemDerivationSubject,
+	donorRows map[string]GithubWorkItemDerivationDonorRow,
+	dependencies []GithubWorkItemDerivationDependencyEdge,
+	storedOnly map[GithubWorkItemDerivationEdgeKey]bool,
+) (map[string][3]string, map[string]string, int, int) {
 	donors := map[string][3]string{}
+	for id, row := range donorRows {
+		if row.TeamID != "" && linkedIssueDonorSources[row.Source] {
+			donors[id] = [3]string{row.TeamID, GithubWorkItemDerivationFirstNonEmpty(row.TeamName, row.TeamID), row.TeamProvider}
+		}
+	}
 	baseNative := map[string]bool{}
 	keyIndex := map[string]string{}
 	ambiguous := map[string]bool{}
-	allowedDonorSources := map[string]bool{
-		"native_team": true, "issue_project": true, "project_ownership": true,
-		"repo_ownership": true,
-	}
 	for _, subject := range subjects {
 		baseNative[subject.WorkItemID] = derived.NativeTeamCandidate(subject) != nil
-		teamID, teamName, candidates := derived.ResolveWithoutLinked(subject)
-		primarySource, primaryProvider := "", ""
-		for _, candidate := range candidates {
-			if candidate.IsPrimary == 1 {
-				primarySource, primaryProvider = candidate.Source, candidate.TeamProvider
-				break
-			}
-		}
-		if teamID != nil && allowedDonorSources[primarySource] {
-			donors[subject.WorkItemID] = [3]string{*teamID, GithubWorkItemDerivationFirstNonEmpty(GithubWorkItemDerivationStringValue(teamName), *teamID), primaryProvider}
-		}
 		if (subject.Provider == "linear" || subject.Provider == "jira") && strings.Contains(subject.WorkItemID, ":") {
 			_, suffix, _ := strings.Cut(subject.WorkItemID, ":")
 			key := strings.ToUpper(strings.TrimSpace(suffix))
@@ -1443,11 +1522,13 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndex(
 			}
 		}
 	}
-	candidates := map[string][]struct {
-		target     string
-		team       [3]string
-		storedOnly bool
-	}{}
+	type linkedDonor struct {
+		target       string
+		relationship string
+		team         [3]string
+		storedOnly   bool
+	}
+	candidates := map[string][]linkedDonor{}
 	for _, dependency := range LatestGitHubWorkItemDerivationDependencies(dependencies) {
 		if !GithubWorkItemDerivationInheritableRelationships[dependency.RelationshipType] || baseNative[dependency.SourceWorkItemID] {
 			continue
@@ -1460,12 +1541,8 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndex(
 			continue
 		}
 		if donor, exists := donors[target]; exists {
-			candidates[dependency.SourceWorkItemID] = append(candidates[dependency.SourceWorkItemID], struct {
-				target     string
-				team       [3]string
-				storedOnly bool
-			}{
-				target: target, team: donor,
+			candidates[dependency.SourceWorkItemID] = append(candidates[dependency.SourceWorkItemID], linkedDonor{
+				target: target, relationship: dependency.RelationshipType, team: donor,
 				storedOnly: storedOnly[GithubWorkItemDerivationEdgeKey{
 					Source:           dependency.SourceWorkItemID,
 					Target:           dependency.TargetWorkItemID,
@@ -1475,12 +1552,20 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndex(
 		}
 	}
 	result := map[string][3]string{}
+	evidence := map[string]string{}
 	rescues := 0
 	crossProviderRescues := 0
 	for source, possible := range candidates {
-		sort.Slice(possible, func(left, right int) bool { return possible[left].target < possible[right].target })
+		sort.Slice(possible, func(left, right int) bool {
+			if possible[left].target != possible[right].target {
+				return possible[left].target < possible[right].target
+			}
+			return possible[left].relationship < possible[right].relationship
+		})
 		winner := possible[0]
 		result[source] = winner.team
+		evidence[source] = fmt.Sprintf("linked_issue=%s;dependency_type=%s;donor_provider=%s;donor_source=%s",
+			winner.target, winner.relationship, strings.TrimSpace(subjects[winner.target].Provider), donorRows[winner.target].Source)
 		if !winner.storedOnly {
 			continue
 		}
@@ -1495,7 +1580,7 @@ func (derived GithubWorkItemDerivationContext) BuildLinkedIssueIndex(
 			crossProviderRescues++
 		}
 	}
-	return result, rescues, crossProviderRescues
+	return result, evidence, rescues, crossProviderRescues
 }
 
 func (derived GithubWorkItemDerivationContext) ResolveWithoutLinked(
@@ -2130,6 +2215,44 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 		result = append(result, fact)
 		if len(result) > GithubWorkItemDerivationContextLimit {
 			return nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(result)}
+		}
+	}
+	return result, rows.Err()
+}
+
+// LoadDonorRows reads the own primary attribution row of each item of ids:
+// the newest primary row of the item in work_item_team_attributions (by
+// computed_at), with its team and source. An item with no primary row, or
+// whose newest primary row names no team, has no entry. The rows are the
+// donors a linked item copies (BuildLinkedIssueIndexFromRows).
+func (source ClickHouseFactSource) LoadDonorRows(
+	ctx context.Context, orgID string, ids []string,
+) (map[string]GithubWorkItemDerivationDonorRow, error) {
+	result := map[string]GithubWorkItemDerivationDonorRow{}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	rows, err := source.Conn.Query(ctx, `
+SELECT work_item_id,
+       argMax(ifNull(team_id, ''), computed_at),
+       argMax(ifNull(team_name, ''), computed_at),
+       argMax(toString(source), computed_at)
+FROM work_item_team_attributions FINAL
+WHERE org_id = ? AND has(?, work_item_id) AND is_primary = 1
+GROUP BY work_item_id
+LIMIT ?`, orgID, ids, len(ids)+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var row GithubWorkItemDerivationDonorRow
+		if err := rows.Scan(&id, &row.TeamID, &row.TeamName, &row.Source); err != nil {
+			return nil, err
+		}
+		if row.TeamID != "" {
+			result[id] = row
 		}
 	}
 	return result, rows.Err()

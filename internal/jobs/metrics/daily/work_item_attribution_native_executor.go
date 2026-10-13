@@ -172,8 +172,17 @@ func (executor *WorkItemAttributionExecutor) ComputeFamily(
 			}
 		}
 		repoDerived := derived
-		linkedIssue, _, _ := repoDerived.BuildLinkedIssueIndex("", subjects, dependencies, nil)
+		// CHAOS-9460: a donor gives the team of its own row. An item this
+		// partition writes gives the row it writes for it on this day; a donor
+		// pulled in only for context gives its stored row, never a resolution
+		// of it on this day.
+		donorRows, err := remaining.LinkedIssueDonorRows(ctx, executor.conn, run.OrganizationID, subjects, affected, repoDerived.OwnDonorRows(subjects, affected))
+		if err != nil {
+			return total, err
+		}
+		linkedIssue, linkedEvidence, _, _ := repoDerived.BuildLinkedIssueIndexFromRows("", subjects, donorRows, dependencies, nil)
 		repoDerived.LinkedIssue = linkedIssue
+		repoDerived.LinkedIssueEvidence = linkedEvidence
 
 		rows := remaining.BuildWorkItemAttributionRows(
 			run.OrganizationID, computedAt, affected, subjects, repoDerived,

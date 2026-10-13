@@ -31,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // orgResolverFunc adapts a possibly-nil llmorgsettings.Resolver to a
@@ -239,7 +240,7 @@ func newProviderForOrg(
 			// refuses is never sent.
 			return categorize.WithBudget(provider, llmbudget.Guard{
 				Store: budget, OrgID: orgID, Provider: string(kind), Model: provider.Model(),
-				BaseURL: creds.BaseURL, Lookup: os.LookupEnv,
+				BaseURL: creds.BaseURL, Lookup: envsecrets.ProcessLookup,
 			}), nil
 		}
 		// Not usable via org BYO. team-lead ruling (codex round 1, P2 --

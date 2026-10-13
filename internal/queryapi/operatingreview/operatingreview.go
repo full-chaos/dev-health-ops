@@ -1797,9 +1797,11 @@ func absF(v float64) float64 {
 	return v
 }
 
-// deltaSummary ports _delta_summary (metrics/operating_review.py:738-745)
-// verbatim, including Go's `%+.1f` matching Python's `:+.1f` format spec
-// (always-signed, one decimal place).
+// deltaSummary ports _delta_summary (metrics/operating_review.py:738-745).
+// DECLARED DIVERGENCE (CHAOS-9073): the amount is formatDeltaAmount's
+// signed number at the unit's precision (ratio two decimals, others one),
+// and a change that precision cannot show prints "<0.1"; Python prints
+// `:+.1f` for every unit, "+0.0" included.
 func deltaSummary(m reviewMetric) string {
 	direction := map[string]string{
 		"changed":   "changed",

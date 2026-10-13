@@ -1206,7 +1206,7 @@ func linearOrgWidePlaceholder(unit Unit) bool {
 	if strings.ToLower(strings.TrimSpace(unit.SourceExternalID)) != "linear" {
 		return false
 	}
-	if optionString(unit.SourceMetadata, "planner_managed_sync_config_id") == "" {
+	if !pythonTruthy(unit.SourceMetadata["planner_managed_sync_config_id"]) {
 		return false
 	}
 	for _, key := range []string{"project_id", "project_key", "team_id", "repo"} {

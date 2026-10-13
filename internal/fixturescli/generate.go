@@ -61,12 +61,12 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb",
 	"testdata/generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz": "8470b539f55e1ecd22b8ba9b52dd0921a9b51222dfd6a7d5a8050139e9f2abd8",
 	// The provider worlds (producedWorlds).
-	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "57a4bbd9bdb0e14614d0151fc032292aa4eee12a1e6ee116da4b596d406cbb6b",
-	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "97c3671f55763944bd4da0ff8dcb13b8a8adf8ea0ee9a7709220a89104432d4c",
-	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "72c1284bd19d3a6aef0465b845073af895807e9e3ba9a9c619d27ac7a5bf0424",
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "00ac8de0b44945bed45b5cb61f7f9a4756f68baa65c5d1826a4856925f78a76b",
+	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "469da72295a35660510b1e36880b24a42de088b904cc2900dc674a7131235af9",
+	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "d83bdc3fbed6c308288bd60eef60bb53e8473e63782e765c9b445c98f9111b39",
 	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "3c5b2795eed849df9378ca3f252204c1b7bd732ea65378aaa19a250177573251",
 	// The mixed-provider demo world (provider_worlds_demo_*).
-	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_90d_c0_p113_t8_s9440_raw.json.gz": "009c4c4cdcf0d1039d9e9c8d7406dd61364da799c6c2f1a2ab31fa6ce8e7a954",
+	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_90d_c0_p113_t8_s9440_raw.json.gz": "bb451fafc78964645d4d52598bf6a90e0e841b163823720bf5fba2a26b0d4450",
 }
 
 // producedWorlds are the provider worlds (github of the real shape, gitlab, jira, linear): written by the

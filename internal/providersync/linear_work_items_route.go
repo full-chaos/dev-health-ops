@@ -1894,7 +1894,10 @@ func projectDisplayName(id, currentProjectID, currentProjectName string) string 
 var linearProjectsEpoch = time.Unix(0, 0).UTC()
 
 func linearEnsureProjectsRow(orgID, id, name string, normalizedAt time.Time) projectmembership.CatalogRow {
-	row := projectmembership.EnsureProjectsRow(orgID, "linear", id, "", name, normalizedAt)
+	// The state is never empty (CHAOS-9438): a project seen first through a work item reads
+	// as started with source "unread"; the epoch anchor lets the real catalog row replace it.
+	row := projectmembership.EnsureProjectsRow(orgID, "linear", id, "", name, normalizedAt).
+		WithState(projectmembership.LinearProjectState(""))
 	row.UpdatedAt = linearProjectsEpoch
 	return row
 }

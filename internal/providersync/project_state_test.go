@@ -148,3 +148,15 @@ func TestProjectsInsertCarriesStateColumnsInValueOrder(t *testing.T) {
 		t.Fatalf("insert=%s values=%v", projectmembership.ProjectsInsert, values)
 	}
 }
+
+// A Linear project first seen through a work item (the ensure row) is never stateless: it reads
+// started with source "unread", and stays epoch-anchored so the real catalog row wins.
+func TestLinearEnsureRowCarriesAState(t *testing.T) {
+	row := linearEnsureProjectsRow("org", "proj-1", "Name", time.Now())
+	if row.State != "started" || row.StateSource != "linear.project.status.type=unread" {
+		t.Fatalf("ensure row state = %q source = %q, want started / linear.project.status.type=unread", row.State, row.StateSource)
+	}
+	if !row.UpdatedAt.Equal(linearProjectsEpoch) {
+		t.Fatalf("ensure row updated_at = %v, want the epoch anchor", row.UpdatedAt)
+	}
+}

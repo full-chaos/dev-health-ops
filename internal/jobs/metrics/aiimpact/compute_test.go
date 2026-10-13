@@ -160,11 +160,11 @@ func fixtureParams() Params {
 		Incidents:     fixtureIncidents(),
 		PRCommitStats: fixtureCommitStats(), HasCommitStats: true,
 		RepoNamesByID: map[uuid.UUID]string{fixtureRepo: "acme/alpha", fixtureRepoB: "acme/beta"},
-		TeamResolver: func(_ uuid.UUID, repoName string) *string {
+		TeamResolver: func(_ uuid.UUID, repoName string) []string {
 			if repoName == "" {
 				repoName = "none"
 			}
-			return strPtr("team-" + repoName)
+			return []string{"team-" + repoName}
 		},
 	}
 }
@@ -636,5 +636,30 @@ func TestComputeIsOrderInvariantOverItsInput(t *testing.T) {
 		if !bytes.Equal(want, got) {
 			t.Fatalf("shuffle %d changed the output", attempt)
 		}
+	}
+}
+
+// A repository with several main owners (a full ownership tie, D5990): a pull
+// request without an attributed team counts whole in each owner's records.
+func TestComputeCountsAPullRequestWholeInEachMainOwner(t *testing.T) {
+	params := fixtureParams()
+	params.Attributions = nil
+	params.TeamResolver = func(uuid.UUID, string) []string { return []string{"team-b", "team-a"} }
+	totals := map[string]uint32{}
+	for _, record := range Compute(params) {
+		if record.TeamID == nil {
+			t.Fatalf("record without a team: %+v", record)
+		}
+		totals[*record.TeamID] += record.PRsTotal
+	}
+	single := fixtureParams()
+	single.Attributions = nil
+	single.TeamResolver = func(uuid.UUID, string) []string { return []string{"team-a"} }
+	var want uint32
+	for _, record := range Compute(single) {
+		want += record.PRsTotal
+	}
+	if len(totals) != 2 || want == 0 || totals["team-a"] != want || totals["team-b"] != want {
+		t.Errorf("pull requests by team %v, want %d for each of team-a and team-b", totals, want)
 	}
 }

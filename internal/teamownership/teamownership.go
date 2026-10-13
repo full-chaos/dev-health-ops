@@ -31,6 +31,7 @@ package teamownership
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -119,15 +120,20 @@ func OwnedRepoIDs(
 	return repoIDs, nil
 }
 
-// AuthoritativeOwnerByRepo answers the HARDER question OwnedRepoIDs
+// AuthoritativeOwnersByRepo answers the HARDER question OwnedRepoIDs
 // deliberately does not: for every repo team_repo_ownership claims in orgID,
-// active as of asOf, which ONE team is its authoritative owner. Mirrors
+// active as of asOf, which team is its authoritative owner -- or, for a repo
+// with several main owners at the top rank (a full ownership tie, D5990,
+// CHAOS-9459), every one of them, in rank order. Mirrors
 // `load_team_repo_ownership_map` (src/dev_health_ops/providers/teams.py:281,
 // query at :375-:395) exactly, including its ranking: rows are ordered
 // `(is_primary = 1) DESC, specificity DESC, updated_at DESC, team_id ASC` (a
 // co-owner row, is_primary = 2, ranks with the rows that are not primary), and the
 // FIRST row per repo_id wins -- a `setdefault` in Python, a
-// first-write-wins map build here.
+// first-write-wins map build here. Added to the reference: when that first row
+// is a main owner's (is_primary = 1), every other main owner's row at the same
+// specificity is an owner too; a repo whose top row is not a main owner's
+// (a provider_access grant) keeps one owner.
 //
 // CHAOS-5141, #2255 r1 finding 2: resolveDailyFinalizeRepoToTeam previously
 // called per-team OwnedRepoIDs in a loop and kept whichever team happened to
@@ -144,11 +150,11 @@ func OwnedRepoIDs(
 // reference's. A co-owner row (is_primary = 2) is never the authoritative
 // owner: a repository with co-owners only (a tie with no main owner) takes its
 // owner from its other rows, or has none, as before co-owner rows existed.
-func AuthoritativeOwnerByRepo(
+func AuthoritativeOwnersByRepo(
 	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
-) (map[string]string, error) {
+) (map[string][]string, error) {
 	if orgID == "" {
-		return nil, fmt.Errorf("AuthoritativeOwnerByRepo: orgID is required")
+		return nil, fmt.Errorf("AuthoritativeOwnersByRepo: orgID is required")
 	}
 	// Named {org_id:String}/{as_of:DateTime64(3, 'UTC')} parameters, not
 	// positional `?`: this driver round-trips a positional `?` bound to a
@@ -174,12 +180,14 @@ func AuthoritativeOwnerByRepo(
 	// owner map built without it would give a repository to a replaced team.
 	inactive, err := teamactive.LoadInactive(ctx, conn, orgID)
 	if err != nil {
-		return nil, fmt.Errorf("AuthoritativeOwnerByRepo: %w", err)
+		return nil, fmt.Errorf("AuthoritativeOwnersByRepo: %w", err)
 	}
 	rows, err := conn.Query(ctx, `
         SELECT
             toString(coalesce(o.repo_id, r.id)) AS repo_id,
-            o.team_id AS team_id
+            o.team_id AS team_id,
+            toUInt8(o.is_primary = 1) AS main_owner,
+            o.specificity AS specificity
         FROM team_repo_ownership AS o FINAL
         LEFT JOIN (
             SELECT org_id, provider, id, repo, 1 AS matched
@@ -200,10 +208,16 @@ func AuthoritativeOwnerByRepo(
 	}
 	defer func() { _ = rows.Close() }()
 
-	owners := map[string]string{}
+	type rank struct {
+		mainOwner   uint8
+		specificity uint16
+	}
+	owners := map[string][]string{}
+	firstRank := map[string]rank{}
 	for rows.Next() {
 		var repoIDText, teamID string
-		if err := rows.Scan(&repoIDText, &teamID); err != nil {
+		var row rank
+		if err := rows.Scan(&repoIDText, &teamID, &row.mainOwner, &row.specificity); err != nil {
 			return nil, err
 		}
 		if inactive.Has(teamID) {
@@ -237,10 +251,17 @@ func AuthoritativeOwnerByRepo(
 			continue
 		}
 		// ORDER BY already put the best (is_primary, specificity, updated_at)
-		// row for a given repo first -- keep only the FIRST team seen per
-		// repo, exactly matching Python's setdefault semantics.
-		if _, exists := owners[repoIDText]; !exists {
-			owners[repoIDText] = teamID
+		// row for a given repo first -- keep the FIRST team seen per repo,
+		// matching Python's setdefault semantics, and beside it every other
+		// main owner at the first row's rank.
+		first, exists := firstRank[repoIDText]
+		if !exists {
+			firstRank[repoIDText] = row
+			owners[repoIDText] = []string{teamID}
+			continue
+		}
+		if first.mainOwner == 1 && row == first && !slices.Contains(owners[repoIDText], teamID) {
+			owners[repoIDText] = append(owners[repoIDText], teamID)
 		}
 	}
 	return owners, rows.Err()
@@ -253,7 +274,7 @@ func AuthoritativeOwnerByRepo(
 // groupings of the query API (queryapi/teamscope: FINAL, the bitemporal
 // window, the repos name join with its matched sentinel, a non-empty team id,
 // a repository that repos holds), plus the active-team rule of
-// AuthoritativeOwnerByRepo: an inactive team owns nothing. A failed read of
+// AuthoritativeOwnersByRepo: an inactive team owns nothing. A failed read of
 // the inactive teams is returned, never read as "no team is inactive".
 func OwnersByRepo(
 	ctx context.Context, conn teamactive.Querier, orgID string, asOf time.Time,
@@ -338,7 +359,7 @@ func ownedRepoIDText(
 	// caller regardless.
 	// Named {org_id:String}/{team_id:String}/{as_of:DateTime64(3, 'UTC')}
 	// parameters, not positional `?` -- same whole-second truncation this
-	// package's AuthoritativeOwnerByRepo doc comment above now explains, and
+	// package's AuthoritativeOwnersByRepo doc comment above now explains, and
 	// the same dateTime64Literal formatting that comment's toDateTime(...)
 	// rejection note requires.
 	rows, err := conn.Query(ctx, `

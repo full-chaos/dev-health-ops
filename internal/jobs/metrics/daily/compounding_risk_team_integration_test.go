@@ -80,21 +80,11 @@ var compoundingRiskTeamSchema = append(append([]string{}, compoundingRiskSchema.
 // internal/teamresolve.ResolveOwnershipThenPatterns, the same shared entry
 // point team_cognitive_load and team_complexity use.
 //
-// CHAOS-5084 r1 (P3, codex, confirmed): this test used to accept EITHER team
-// winning the shared repo, on the premise that the winner was
-// caller-order-dependent under the old teamownership.OwnedRepoIDs (a gap
-// #2255 was fixing at the time this test was first written). That gap is
-// closed: ResolveOwnershipThenPatterns resolves via
-// teamownership.AuthoritativeOwnerByRepo, whose ORDER BY (is_primary DESC,
-// specificity DESC, updated_at DESC, team_id ASC) is fully deterministic --
-// with both ownership rows here tied on is_primary/specificity/updated_at,
-// team_id ASC makes "team-a" < "team-b" the ONLY possible winner. Accepting
-// both outcomes let a real regression in that tie-break (e.g. an accidental
-// team_id DESC, or a dropped ORDER BY entirely) pass silently as long as
-// SOME single team won. Asserts the ONE deterministic outcome now, not just
-// the double-count/drop invariant (still checked via the exhaustive
-// unmatched-value error message below, so a genuine double-count or drop
-// still fails loudly and distinguishably from a tie-break regression).
+// Both teams hold a main-owner row (is_primary = 1) of the shared repo at one
+// rank: a full ownership tie, so both are its main owners (D5990, CHAOS-9459)
+// and each team's row counts the shared repo whole. Before D5990 the
+// team_id ASC tie-break gave the shared repo to team-a only; that outcome, a
+// drop (in neither mean) and a one-sided count all fail below.
 func TestCompoundingRiskTeamComputeFinalizeFamilyAgainstRealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -232,27 +222,11 @@ ORDER BY scope_id
 	sharedToA := *compoundingrisk.MeanOrNone([]*float64{&churnA, &churnShared})
 	sharedToB := *compoundingrisk.MeanOrNone([]*float64{&churnB, &churnShared})
 
-	caseSharedWentToA := *gotA == sharedToA && *gotB == churnB
-	caseSharedWentToB := *gotA == churnA && *gotB == sharedToB
-	if !caseSharedWentToA && !caseSharedWentToB {
+	if *gotA != sharedToA || *gotB != sharedToB {
 		t.Fatalf(
-			"team-a rework_churn=%v team-b rework_churn=%v matches NEITHER valid shape "+
-				"(shared->A: a=%v b=%v; shared->B: a=%v b=%v) -- the shared repo was either "+
-				"double-counted (appears in both means) or dropped (appears in neither)",
-			*gotA, *gotB, sharedToA, churnB, churnA, sharedToB,
-		)
-	}
-	// The deterministic tie-break (team_id ASC, see the doc comment above)
-	// means shared->A is the ONLY correct outcome here -- shared->B matching
-	// the "neither double-counted nor dropped" shape above is not enough; it
-	// would mean the tie-break itself regressed (team-b winning instead of
-	// team-a), which the check above cannot distinguish from success.
-	if caseSharedWentToB {
-		t.Fatalf(
-			"shared repo resolved to team-b (a=%v b=%v), want team-a (a=%v b=%v) -- "+
-				"AuthoritativeOwnerByRepo's team_id ASC tie-break must deterministically "+
-				"prefer team-a over team-b when every other rank field ties",
-			*gotA, *gotB, sharedToA, churnB,
+			"team-a rework_churn=%v team-b rework_churn=%v, want a=%v b=%v -- the shared repo "+
+				"of two main owners counts whole in each (a tie-break to one team gives a=%v b=%v)",
+			*gotA, *gotB, sharedToA, sharedToB, sharedToA, churnB,
 		)
 	}
 }

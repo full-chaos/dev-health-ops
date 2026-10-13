@@ -31,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -1150,11 +1151,29 @@ func attachRunMarker(
 ) (func(), int) {
 	markerStore, closeConn, err := openRunMarkerStore(ctx, runtime, stderr)
 	if err != nil {
-		return nil, writeError(stderr, "operator_backend_unavailable")
+		return nil, writeRunMarkerStoreError(stderr, err)
 	}
 	store.SetRunMarkerWriter(markerStore)
 	store.SetRunMarkerReader(markerStore)
 	return closeConn, 0
+}
+
+// writeRunMarkerStoreError keeps the stable operator_backend_unavailable code
+// and adds the setting openRunMarkerStore connects with and the redacted
+// cause, so a process whose CLICKHOUSE_URI does not reach ClickHouse says so.
+func writeRunMarkerStoreError(stderr io.Writer, err error) int {
+	payload := struct {
+		Error struct {
+			Code   string `json:"code"`
+			DSNKey string `json:"dsn_key"`
+			Detail string `json:"detail"`
+		} `json:"error"`
+	}{}
+	payload.Error.Code = "operator_backend_unavailable"
+	payload.Error.DSNKey = "CLICKHOUSE_URI"
+	payload.Error.Detail = logging.RedactText(err.Error())
+	_ = json.NewEncoder(stderr).Encode(payload)
+	return cli.ExitFailure
 }
 
 func openRunMarkerStore(
@@ -1221,7 +1240,7 @@ func dispatchMetricsDailyMarkerBackfill(
 	}
 	markerStore, closeConn, err := openRunMarkerStore(ctx, runtime, stderr)
 	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
+		return writeRunMarkerStoreError(stderr, err)
 	}
 	defer closeConn()
 	store.SetRunMarkerWriter(markerStore)

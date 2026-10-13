@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ func TestBuildTeamCognitiveLoadRowsAggregatesByOwnershipNeverReadingRowTeamID(t 
 	}
 	repoToTeam := map[string]string{repoID.String(): "gh:platform"}
 
-	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, nil, repoToTeam, cognitiveLoadTestComputedAt)
+	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, nil, oneOwnerEach(repoToTeam), cognitiveLoadTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
@@ -92,7 +93,7 @@ func TestBuildTeamCognitiveLoadRowsSumsAcrossEveryOwnedRepoAndRecomputesRatio(t 
 	}
 	repoToTeam := map[string]string{repoA.String(): "gh:platform", repoB.String(): "gh:platform"}
 
-	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, teamRows, repoToTeam, cognitiveLoadTestComputedAt)
+	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, teamRows, oneOwnerEach(repoToTeam), cognitiveLoadTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
@@ -128,7 +129,7 @@ func TestBuildTeamCognitiveLoadRowsUnownedRepoContributesToNoTeam(t *testing.T) 
 		{RepoID: repoID, AuthorEmail: "a@example.com", PRInterruptionLoad: 3},
 	}
 
-	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, nil, map[string]string{}, cognitiveLoadTestComputedAt)
+	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, userRows, nil, map[string][]string{}, cognitiveLoadTestComputedAt)
 
 	if len(records) != 0 {
 		t.Fatalf("records=%d, want 0 (unowned repo must contribute to no team): %#v", len(records), records)
@@ -146,7 +147,7 @@ func TestBuildTeamCognitiveLoadRowsMeasuredZeroVsUnmeasuredNil(t *testing.T) {
 	}
 	repoToTeam := map[string]string{repoID.String(): "gh:platform"}
 
-	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, nil, teamRows, repoToTeam, cognitiveLoadTestComputedAt)
+	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, nil, teamRows, oneOwnerEach(repoToTeam), cognitiveLoadTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
@@ -165,7 +166,7 @@ func TestBuildTeamCognitiveLoadRowsMeasuredZeroVsUnmeasuredNil(t *testing.T) {
 // exit at the caller level -- the aggregator itself must also produce zero
 // records for zero input, independent of that caller-level shortcut.
 func TestBuildTeamCognitiveLoadRowsEmptyInputsProduceNoRows(t *testing.T) {
-	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, nil, nil, map[string]string{}, cognitiveLoadTestComputedAt)
+	records := buildTeamCognitiveLoadRows("acme", cognitiveLoadTestDay, nil, nil, map[string][]string{}, cognitiveLoadTestComputedAt)
 	if len(records) != 0 {
 		t.Fatalf("records=%d, want 0", len(records))
 	}
@@ -185,13 +186,13 @@ func TestApplyOwnershipToRepoToTeamRequiresRepoNamesByIDMembership(t *testing.T)
 	staleRepo := uuid.New() // owned, but absent from repoNamesByID
 	repoNamesByID := map[string]string{knownRepo.String(): "acme/known-repo"}
 
-	owners := map[string]string{
-		knownRepo.String(): "team-platform",
-		staleRepo.String(): "team-platform",
+	owners := map[string][]string{
+		knownRepo.String(): {"team-platform"},
+		staleRepo.String(): {"team-platform"},
 	}
 	repoToTeam := authoritativeOwnersKnownToRepoCatalog(owners, repoNamesByID)
 
-	if got := repoToTeam[knownRepo.String()]; got != "team-platform" {
+	if got := repoToTeam[knownRepo.String()]; !slices.Equal(got, []string{"team-platform"}) {
 		t.Fatalf("known repo team=%q, want team-platform", got)
 	}
 	if teamID, resolved := repoToTeam[staleRepo.String()]; resolved {
@@ -205,7 +206,7 @@ func TestApplyOwnershipToRepoToTeamRequiresRepoNamesByIDMembership(t *testing.T)
 // Query, always failing -- everything else panics if reached (mirrors
 // stubDriverConn's "unimplemented" discipline, wellbeing_native_executor_test.go).
 // resolveDailyFinalizeRepoToTeam's only conn use is the single
-// AuthoritativeOwnerByRepo call, so this is a faithful, minimal fake for
+// AuthoritativeOwnersByRepo call, so this is a faithful, minimal fake for
 // testing that path's error propagation.
 type erroringOwnershipConn struct{ stubDriverConn }
 

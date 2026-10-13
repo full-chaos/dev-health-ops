@@ -77,6 +77,10 @@ import (
 //     same transaction as the run (insert; the publisher's conflict read is the
 //     implied SELECT).
 //
+// byo_llm_budget_reservations (CHAOS-9451): the work-unit and investment
+// explanation routes spend an org's BYO LLM key, so they insert a budget
+// reservation before the provider call and update it after. Never deleted.
+//
 // scheduled_report_occurrences is absent on purpose: only the SCHEDULED
 // execution path writes it, and that path is the scheduler's, not this
 // role's. go_api_class_decision is read by the class switches (CHAOS-8735). go_api_candidate_build and go_api_proof_run are absent because only
@@ -92,6 +96,7 @@ func queryAPIPosture() RolePosture {
 			{"scheduled_jobs", true, true, false},
 			{"report_runs", true, false, false},
 			{"worker_job_outbox", true, false, false},
+			{"byo_llm_budget_reservations", true, true, false},
 			{"go_api_proof_orgs", false, false, false},
 			{"go_api_class_decision", false, false, false},
 			{"sync_configurations", false, false, false},

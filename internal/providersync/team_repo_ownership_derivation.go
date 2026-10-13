@@ -284,10 +284,6 @@ type DerivedTeamRepoOwnershipRow struct {
 	// tier over the links of every team (ruling D5988; the shares of a
 	// repository add up to 1).
 	Share float64
-	// Tied marks a team that ties for the largest linked share at every tier.
-	// It is written as a co-owner unless the write side keeps it the main
-	// owner (resolveTiedMainOwners).
-	Tied bool
 	// validFrom is the start the write side gives the claim
 	// (stampTeamRepoOwnershipClaimStarts); zero until then.
 	validFrom time.Time
@@ -449,8 +445,8 @@ func (counts teamRepoOwnershipLinkCounts) total() int {
 }
 
 // TeamRepoOwnershipTie is a repo whose largest linked share two or more teams
-// hold with equal link counts at every tier. Each tied team still gets its
-// row; the write side keeps the main owner among them (resolveTiedMainOwners).
+// hold with equal link counts at every tier. Every tied team is a main owner
+// (D5990); the tie is reported for provenance only.
 type TeamRepoOwnershipTie struct {
 	RepoID  string
 	TeamIDs []string
@@ -615,11 +611,10 @@ func deriveTeamRepoOwnership(
 				EvidenceFrom:  earliest[repoID][teamID],
 				IsPrimary:     teamRepoOwnershipCoOwner,
 				Share:         float64(counts.total()) / float64(total),
-				Tied:          tied && leader[teamID],
 
 				repoEvidenceFrom: repoEarliest,
 			}
-			if !tied && leader[teamID] {
+			if leader[teamID] {
 				row.IsPrimary = teamRepoOwnershipMainOwner
 				row.EvidenceFrom = repoEarliest
 			}

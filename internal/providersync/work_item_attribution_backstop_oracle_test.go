@@ -177,7 +177,7 @@ func buildWorkItemAttributionBackstopOracleRows(
 	// No dependencies in this fixture: the linked-issue donor index is
 	// exercised by teamattribution's own oracle coverage
 	// (githubDerivedOracleCases()), not repeated here.
-	derived.LinkedIssue, _, _ = derived.BuildLinkedIssueIndex("", subjects, nil, nil)
+	linkLikeProduction(&derived, "", subjects, nil)
 
 	return remaining.BuildWorkItemAttributionRows(orgID, computedAt, affectedIDs, subjects, derived)
 }

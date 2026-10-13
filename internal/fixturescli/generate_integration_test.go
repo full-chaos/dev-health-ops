@@ -44,6 +44,9 @@ var generateParameterSets = []struct {
 	{githubWorld.OrgID, githubWorld.Params},
 	{gitlabWorld.OrgID, gitlabWorld.Params},
 	{jiraWorld.OrgID, jiraWorld.Params},
+	{linearWorld.OrgID, linearWorld.Params},
+	// The mixed-provider demo world (provider_worlds_demo_*): a demo organization's data.
+	{demoWorld.OrgID, demoWorld.Params},
 }
 
 // serverStampProblems lists every server-stamped column (serverStampedColumns) of a table the

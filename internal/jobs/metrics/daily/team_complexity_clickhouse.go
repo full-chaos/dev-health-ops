@@ -113,7 +113,7 @@ func newTeamComplexityBucket() *teamComplexityBucket {
 // repo's ratio dominate a large one's.
 func buildTeamComplexityRows(
 	organizationID string, day time.Time,
-	repoRows []repoComplexityInput, repoToTeam map[string]string, computedAt time.Time,
+	repoRows []repoComplexityInput, repoToTeam map[string][]string, computedAt time.Time,
 ) []teamComplexityRow {
 	buckets := map[string]*teamComplexityBucket{}
 	bucket := func(teamID string) *teamComplexityBucket {
@@ -125,20 +125,22 @@ func buildTeamComplexityRows(
 		return existing
 	}
 
+	// Ownership that does not cover a repo is never guessed, matching the
+	// Python aggregator's own `if not team_id: continue`; a repo with several
+	// main owners (D5990) counts whole in each of them.
 	for _, row := range repoRows {
 		repoIDStr := row.RepoID.String()
-		teamID, ok := repoToTeam[repoIDStr]
-		if !ok || teamID == "" {
-			// Ownership genuinely does not cover this repo -- never guessed,
-			// matching the Python aggregator's own `if not team_id: continue`.
-			continue
+		for _, teamID := range repoToTeam[repoIDStr] {
+			if teamID == "" {
+				continue
+			}
+			b := bucket(teamID)
+			b.locTotal += row.LOCTotal
+			b.cyclomaticTotal += row.CyclomaticTotal
+			b.highComplexityFunctions += row.HighComplexityFunctions
+			b.veryHighComplexityFunctions += row.VeryHighComplexityFunctions
+			b.repoIDs[repoIDStr] = struct{}{}
 		}
-		b := bucket(teamID)
-		b.locTotal += row.LOCTotal
-		b.cyclomaticTotal += row.CyclomaticTotal
-		b.highComplexityFunctions += row.HighComplexityFunctions
-		b.veryHighComplexityFunctions += row.VeryHighComplexityFunctions
-		b.repoIDs[repoIDStr] = struct{}{}
 	}
 
 	teamIDs := make([]string, 0, len(buckets))

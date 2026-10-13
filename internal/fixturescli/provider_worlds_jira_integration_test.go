@@ -5,6 +5,7 @@ package fixturescli
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -89,9 +90,9 @@ func atlassianAriNode(id, typename string, data map[string]any) map[string]any {
 	return map[string]any{"__typename": "GraphStoreCypherQueryV2AriNode", "id": id, "data": data}
 }
 
-// atlassianGatewayAnswer answers the three gateway reads of the Atlassian Teams collection: the team
+// atlassianGatewayAnswer answers the three gateway reads of the Atlassian Teams collection of these teams: the team
 // search, a team's users and a team's connected containers.
-func atlassianGatewayAnswer() providerAnswer {
+func atlassianGatewayAnswer(atlassianTeams []atlassianTeam) providerAnswer {
 	byARI := map[string]atlassianTeam{}
 	for _, team := range atlassianTeams {
 		byARI[ariTeam(team.ID)] = team
@@ -171,6 +172,22 @@ type jiraIssue struct {
 	// PullRequests are the pull requests the GitHub-for-Jira and GitLab-for-Jira apps attach to the
 	// issue (the dev-status panel): "GitHub https://github.com/o/r/pull/n" or "GitLab https://...".
 	PullRequests []string
+	// Blocks are the keys of the issues this issue blocks (Jira's "Blocks" link, outward).
+	Blocks []string
+	// Description is the issue's description, sent as Jira Cloud v3 sends it: an Atlassian Document
+	// Format document ("" = no description field).
+	Description string
+}
+
+func (issue jiraIssue) issueLinks() []any {
+	links := []any{}
+	for index, key := range issue.Blocks {
+		links = append(links, map[string]any{
+			"id": issue.ID + strconv.Itoa(90+index), "type": map[string]any{"id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+			"outwardIssue": map[string]any{"key": key},
+		})
+	}
+	return links
 }
 
 func (issue jiraIssue) status() (string, string) {
@@ -194,7 +211,7 @@ func (issue jiraIssue) payload() map[string]any {
 	if issue.Resolved != "" {
 		resolved = jiraTime(issue.Resolved)
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"id": issue.ID, "key": issue.Key, "self": "https://" + jiraHost + "/rest/api/3/issue/" + issue.ID,
 		"fields": map[string]any{
 			"summary": issue.Summary, "issuetype": map[string]any{"name": issue.Type, "subtask": false},
@@ -203,9 +220,15 @@ func (issue jiraIssue) payload() map[string]any {
 			"assignee": issue.Assignee.payload(), "reporter": issue.Reporter.payload(), "creator": issue.Reporter.payload(),
 			"created": jiraTime(issue.Created), "updated": jiraTime(issue.Updated), "resolutiondate": resolved,
 			"labels": append([]string{}, issue.Labels...), "priority": map[string]any{"name": "Medium"},
-			"issuelinks": []any{}, "subtasks": []any{}, "components": []any{}, "fixVersions": []any{},
+			"issuelinks": issue.issueLinks(), "subtasks": []any{}, "components": []any{}, "fixVersions": []any{},
 		},
 	}
+	if issue.Description != "" {
+		payload["fields"].(map[string]any)["description"] = map[string]any{"type": "doc", "version": 1, "content": []any{
+			map[string]any{"type": "paragraph", "content": []any{map[string]any{"type": "text", "text": issue.Description}}},
+		}}
+	}
+	return payload
 }
 
 func (issue jiraIssue) changelog() map[string]any {
@@ -300,7 +323,7 @@ func jiraWorldAnswers() []providerAnswer {
 		get(jiraHost, "/rest/api/3/project/search", "maxResults=100", search(projects)),
 		// No archived project.
 		get(jiraHost, "/rest/api/3/project/search", "maxResults=100&status=archived", search([]any{})),
-		atlassianGatewayAnswer(),
+		atlassianGatewayAnswer(atlassianTeams),
 	)
 	for index, project := range []jiraProject{jiraPAY, jiraOPS} {
 		boardID := 300 + index

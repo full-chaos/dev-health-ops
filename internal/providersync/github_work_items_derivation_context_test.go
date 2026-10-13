@@ -50,7 +50,7 @@ func (conn *recordingGitHubWorkItemDerivationConn) Query(
 // queryArgsCarryOrgID reports whether a recorded query's args scope it to
 // orgID, regardless of whether that query binds positional `?` placeholders
 // (org_id is args[0]) or named {org_id:String} parameters (team_repo_ownership's
-// readers -- see LoadRepos/OwnedRepoIDs/AuthoritativeOwnerByRepo -- bind
+// readers -- see LoadRepos/OwnedRepoIDs/AuthoritativeOwnersByRepo -- bind
 // named parameters, so org_id can appear anywhere in args as a
 // driver.NamedValue{Name: "org_id"}).
 func queryArgsCarryOrgID(args []any, orgID string) bool {
@@ -85,7 +85,7 @@ func (source *fakeGitHubWorkItemDerivationContextSource) Load(
 	source.called = true
 	source.claim = claim
 	source.request = request
-	return source.facts, source.err
+	return withDonorRowsAsTheirOwnDerivation(source.facts), source.err
 }
 
 func (source *fakeGitHubWorkItemDerivationContextSource) LoadStoredInheritableEdges(
@@ -229,7 +229,8 @@ func TestGitHubWorkItemDerivationPreservesPrecedenceAndProvenance(t *testing.T) 
 			t.Fatalf("lower-precedence %s candidate = %+v exists=%t", lower, candidate, exists)
 		}
 	}
-	if linked := bySource["linked_issue"]; teamattribution.GithubWorkItemDerivationStringValue(linked.TeamID) != "team-linked" || linked.Confidence != "medium" || linked.Evidence != "linked_issue=gh:acme/api#7" {
+	if linked := bySource["linked_issue"]; teamattribution.GithubWorkItemDerivationStringValue(linked.TeamID) != "team-linked" || linked.Confidence != "medium" ||
+		linked.Evidence != "linked_issue=linear:CHAOS-42;dependency_type=external_issue_key;donor_provider=linear;donor_source=project_ownership" {
 		t.Fatalf("linked provenance = %+v", linked)
 	}
 }

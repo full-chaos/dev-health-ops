@@ -16,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
-	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -118,7 +117,7 @@ func TestATeamAnAdminDeletedIsNoTeam(t *testing.T) {
 			}
 			read := func() state {
 				t.Helper()
-				owners, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, org, day.Add(36*time.Hour))
+				owners, err := joinedOwnersByRepo(ctx, conn, org, day.Add(36*time.Hour))
 				if err != nil {
 					t.Fatal(err)
 				}

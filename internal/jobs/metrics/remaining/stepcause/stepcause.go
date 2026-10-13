@@ -70,6 +70,7 @@ var (
 	QueryWorkItemCompletionDays                       = Step{label: "query work item completion days"}
 	ScanWorkItemCompletionDay                         = Step{label: "scan work item completion day"}
 	IterateWorkItemCompletionDays                     = Step{label: "iterate work item completion days"}
+	LoadLinkedIssueDonorRows                          = Step{label: "load linked issue donor rows"}
 	ClaimPartition                                    = Step{label: "claim_partition"}
 	LoadRun                                           = Step{label: "load_run"}
 	ComputePartition                                  = Step{label: "compute_partition"}

@@ -235,8 +235,9 @@ func (doer *replayDoer) unusedAnswers() []string {
 type worldStep struct {
 	// Kind is "sync" (the scheduler's plan of a first sync of the integration's sources and
 	// datasets, then every planned unit through the worker's executor, in plan order),
-	// "team_catalog" (the worker's team catalog collector of the provider) or "work_graph" (the
-	// issue <-> pull request link builders).
+	// "team_catalog" (the worker's team catalog collector of the provider), "work_graph" (the
+	// issue <-> pull request link builders) or "ownership_derivation" (the post-sync job
+	// sync.team_repo_ownership_derivation).
 	Kind     string
 	Provider string
 	// Sources are the integration's sources: external id ("owner/repo" for GitHub, the numeric
@@ -342,6 +343,8 @@ func runWorldStep(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 		t.Logf("%s team catalog: %+v", step.Provider, result)
 	case "work_graph":
 		runWorkGraphLinks(ctx, t, conn, world)
+	case "ownership_derivation":
+		runOwnershipDerivation(ctx, t, conn, world)
 	default:
 		t.Fatalf("unknown step kind %q", step.Kind)
 	}
@@ -463,6 +466,21 @@ func runWorkGraphLinks(ctx context.Context, t *testing.T, conn driver.Conn, worl
 	t.Logf("issue_pr_edges: fast=%+v text=%+v heuristic=%+v", fast, text, heuristic)
 }
 
+// runOwnershipDerivation runs the post-sync job sync.team_repo_ownership_derivation's service for the
+// world's organization, as the worker runs it after a sync, on the world's clock.
+func runOwnershipDerivation(ctx context.Context, t *testing.T, conn driver.Conn, world providerWorld) {
+	t.Helper()
+	service := providersync.TeamRepoOwnershipDerivationService{Conn: conn, Now: func() time.Time { return world.FrozenAt }}
+	written, retracted, ready, arms, stats, err := service.DeriveWithStats(ctx, world.OrgID)
+	if err != nil {
+		t.Fatalf("team_repo_ownership_derivation: %v", err)
+	}
+	if !ready {
+		t.Fatal("team_repo_ownership_derivation: inputs not ready: the world's sync wrote no input the derivation reads")
+	}
+	t.Logf("team_repo_ownership_derivation: written=%d retracted=%d arms=%v stats=%+v", written, retracted, arms, stats)
+}
+
 // produceWorld runs the world's producers into a fresh ClickHouse and dumps every table they wrote.
 func produceWorld(t *testing.T, world providerWorld) FrozenWorld {
 	t.Helper()
@@ -579,7 +597,7 @@ func sameWorldRows(committed, produced FrozenWorld) bool {
 // they write with the committed world, table by table and row by row; with -freeze-provider-worlds it
 // writes the worlds instead (and prints the digests to pin).
 func TestProviderWorldsAreWhatTheProducersWrite(t *testing.T) {
-	for _, world := range providerWorlds {
+	for _, world := range append(append([]providerWorld{}, providerWorlds...), demoWorld) {
 		t.Run(WorldFile(world.Params), func(t *testing.T) {
 			produced := produceWorld(t, world)
 			file := WorldFile(world.Params)
@@ -660,6 +678,15 @@ func collectTeamCatalog(ctx context.Context, t *testing.T, conn driver.Conn, ste
 	}
 	if err := providersync.RequireCarried(collector); err != nil {
 		t.Fatal(err)
+	}
+	// The Linear catalog stamps each project at the instant it observed it (its handler's own clock,
+	// time.Now in the worker): the world pins that clock to the world's instant too.
+	if carry, ok := collector.(providersync.CarryFirstTeamCatalogCollector); ok {
+		if linear, ok := carry.Collector.(providersync.LinearTeamCatalogCollector); ok {
+			linear.Handler.Now = func() time.Time { return now }
+			carry.Collector = linear
+			collector = carry
+		}
 	}
 	retry := providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}
 	lease := providerfoundation.LeaseGuardFunc(func(ctx context.Context) error { return ctx.Err() })

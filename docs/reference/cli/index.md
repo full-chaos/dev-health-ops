@@ -411,7 +411,7 @@ dho fixtures generate \
 | `--pr-count` | `20` | Total pull requests |
 | `--team-count` | `10` | Number of teams |
 | `--seed` | required | Seed of the frozen world |
-| `--provider` | `synthetic` | Provider label: `synthetic`, `github`, `gitlab`, `jira` |
+| `--provider` | `synthetic` | Provider label: `synthetic`, `github`, `gitlab`, `jira`, `linear`, `mixed` |
 | `--with-metrics` | off | Also the derived metrics |
 | `--with-work-graph` | off | Also the work graph |
 | `--db-type` | — | Must be `clickhouse` when given |
@@ -422,6 +422,7 @@ Frozen parameter sets:
 - `--provider synthetic --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph` (the acr end-to-end run).
 - `--provider github --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219` (the live backend end-to-end run).
 - `--provider synthetic --repo-name ci-metrics-executed-proof/repo --repo-count 1 --days 7 --commits-per-day 5 --pr-count 20 --team-count 1 --seed 4276` (the metrics executed proof; one team keeps the repository single-owner).
+- `--provider mixed --repo-name chaos-fixtures/shared-api --repo-count 18 --days 90 --commits-per-day 0 --pr-count 113 --team-count 8 --seed 9440` (the demo organization: eight teams from GitHub, GitLab, Jira and Linear that own distinct repositories and projects, with blocker chains, incidents with severities, deployments, CI runs, reviews, security alerts and issue-to-pull-request links at all three tiers; written by the production sync routes, the work-graph link builders and the repository ownership derivation from made-up provider answers. Investment is not in it: run the investment job after the load).
 
 The ClickHouse schema must be at the head first (`dho migrate clickhouse upgrade`). The verb writes **analytics rows only**: it writes no users, organization or license to PostgreSQL, and a `DATABASE_URI`, `POSTGRES_URI` or `DATABASE_URL` in the environment is refused (exit 3) so that a missing account is never silent. Create the first user and organization with the [admin verbs](#admin-commands). `--overwrite-real-users` is not accepted. The mixed-organization guard is kept: an organization that holds synced `github`, `gitlab`, `jira`, `linear` or `bitbucket` rows is refused unless `--allow-mixed-org`. Running the verb twice for the same organization inserts the rows twice, so use a fresh organization or database per run. Before any row is written, the verb checks the embedded world's content digest and the destination server's timezone (it must be UTC, as the world was captured); a table missing partway through the frozen order is also caught before any row is written. A JSON summary (`org_id`, `params`, `rows` per table) goes to stdout.
 

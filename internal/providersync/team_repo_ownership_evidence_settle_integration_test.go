@@ -250,51 +250,71 @@ func TestANewWinnerStartsWhenThePriorOwnerEnds(t *testing.T) {
 	}
 }
 
-// TestAnOverlappingWinnerRowMovesToThePriorOwnersEnd: a stored open row of
-// team B that starts at its evidence, before the end of team A's retracted
-// tenure (the rows an earlier run left), moves to the end of A's tenure: the
-// next run writes B's row there and supersedes the overlapping one.
-func TestAnOverlappingWinnerRowMovesToThePriorOwnersEnd(t *testing.T) {
+// TestANewMainOwnerStartsAtAnEndedMainTenureAndAnOpenOneIsKept: team A's
+// main row ended at priorEnd (the rows an earlier run left). A new claim of
+// team B whose evidence is older than that end starts at the end, so B never
+// takes over before A's tenure ends. A stored open main row of B that already
+// started before that end was a main owner beside A (a full tie, D5990) and
+// keeps its start: the run writes and supersedes nothing.
+func TestANewMainOwnerStartsAtAnEndedMainTenureAndAnOpenOneIsKept(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	winnerEvidence := time.Now().UTC().Add(-60 * 24 * time.Hour).Truncate(time.Second)
 	priorEnd := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Second)
 
 	for _, provider := range evidenceSettleProviders {
-		t.Run(provider, func(t *testing.T) {
-			org := "org-evidence-overlap-" + provider
-			teamA, teamB := provider+"-team-a", provider+"-team-b"
-			repo := seedEvidenceSettleRepo(t, ctx, conn, org, provider)
-			seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-b", teamB, true, time.Now().UTC().Add(-time.Hour))
-			seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", 1, winnerEvidence)
+		for _, bOpenFirst := range []bool{false, true} {
+			name := provider + "/new_claim"
+			if bOpenFirst {
+				name = provider + "/open_main_row"
+			}
+			t.Run(name, func(t *testing.T) {
+				org := fmt.Sprintf("org-evidence-overlap-%s-%v", provider, bOpenFirst)
+				teamA, teamB := provider+"-team-a", provider+"-team-b"
+				repo := seedEvidenceSettleRepo(t, ctx, conn, org, provider)
+				repoProvider := provider
+				if provider == "jira" || provider == "linear" {
+					repoProvider = "github"
+				}
+				endedA := func() {
+					t.Helper()
+					if err := conn.Exec(ctx, teamRepoOwnershipInsert+` VALUES (?, ?, ?, ?, ?, 'exact', 'inferred', 0, 1, 0, ?, ?, now64(3))`,
+						org, repoProvider, teamA, repo, "acme/"+org, winnerEvidence.Add(-365*24*time.Hour), priorEnd); err != nil {
+						t.Fatal(err)
+					}
+				}
+				seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-b", teamB, true, time.Now().UTC().Add(-time.Hour))
+				seedOwnershipEvidence(t, ctx, conn, org, provider, repo, "proj-b", 1, winnerEvidence)
+				service := TeamRepoOwnershipDerivationService{Conn: conn}
+				want := priorEnd
+				if bOpenFirst {
+					if _, _, ready, _, err := service.Derive(ctx, org); err != nil || !ready {
+						t.Fatalf("first derive: ready %v err %v", ready, err)
+					}
+					want = winnerEvidence
+				}
+				endedA()
 
-			service := TeamRepoOwnershipDerivationService{Conn: conn}
-			if _, _, ready, _, err := service.Derive(ctx, org); err != nil || !ready {
-				t.Fatalf("first derive: ready %v err %v", ready, err)
-			}
-			if starts := openOwnershipStarts(t, ctx, conn, org, teamB); len(starts) != 1 || !starts[0].Equal(winnerEvidence) {
-				t.Fatalf("B open rows start at %v, want one at %v", starts, winnerEvidence)
-			}
-			repoProvider := provider
-			if provider == "jira" || provider == "linear" {
-				repoProvider = "github"
-			}
-			if err := conn.Exec(ctx, teamRepoOwnershipInsert+` VALUES (?, ?, ?, ?, ?, 'exact', 'inferred', 0, 1, 0, ?, ?, now64(3))`,
-				org, repoProvider, teamA, repo, "acme/"+org, winnerEvidence.Add(-365*24*time.Hour), priorEnd); err != nil {
-				t.Fatal(err)
-			}
-
-			_, _, _, _, stats, err := service.DeriveWithStats(ctx, org)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if stats.Superseded != 1 {
-				t.Errorf("superseded %d, want B's overlapping row (1)", stats.Superseded)
-			}
-			if starts := openOwnershipStarts(t, ctx, conn, org, teamB); len(starts) != 1 || !starts[0].Equal(priorEnd) {
-				t.Fatalf("B open rows start at %v, want one at the end of A's tenure %v", starts, priorEnd)
-			}
-			assertSingleOwner(t, ctx, conn, org, repo, teamA, teamB, priorEnd.Add(-24*time.Hour))
-		})
+				for run := 1; run <= 2; run++ {
+					written, _, _, _, stats, err := service.DeriveWithStats(ctx, org)
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantWritten := 0
+					if run == 1 && !bOpenFirst {
+						wantWritten = 1
+					}
+					if written != wantWritten || stats.Superseded != 0 {
+						t.Errorf("run %d: written %d superseded %d, want %d and 0", run, written, stats.Superseded, wantWritten)
+					}
+				}
+				if starts := openOwnershipStarts(t, ctx, conn, org, teamB); len(starts) != 1 || !starts[0].Equal(want) {
+					t.Fatalf("B open rows start at %v, want one at %v", starts, want)
+				}
+				if !bOpenFirst {
+					assertSingleOwner(t, ctx, conn, org, repo, teamA, teamB, priorEnd.Add(-24*time.Hour))
+				}
+			})
+		}
 	}
 }
 

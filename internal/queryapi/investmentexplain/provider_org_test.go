@@ -146,7 +146,7 @@ func TestNewProviderForOrg_UsesOrgCredentialsWhenMatched(t *testing.T) {
 	}
 
 	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
-		provider, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "org-chosen-model", resolver)
+		provider, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "org-chosen-model", resolver, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -201,7 +201,7 @@ func TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel(t *testing.T) {
 	}
 
 	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
-		_, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "request-model", resolver)
+		_, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "request-model", resolver, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -239,7 +239,7 @@ func TestCompleteInvestmentMixExplanationForOrg_DefaultModelReachesConstruction(
 
 	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
 		_, resolvedProvider, resolvedModel, err := CompleteInvestmentMixExplanationForOrg(
-			context.Background(), "openai", "", "org-1", resolver, "prompt text")
+			context.Background(), "openai", "", "org-1", resolver, nil, "prompt text")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -274,7 +274,7 @@ func TestNewProviderForOrg_FallsBackToEnvWhenNotMatched(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
-				if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "", tc.orgSettings); err != nil {
+				if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "", tc.orgSettings, nil); err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
 			})
@@ -317,7 +317,7 @@ func TestNewProviderForOrg_FallsBackToEnvWithCallerModel(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
-				if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "caller-chosen-model", tc.orgSettings); err != nil {
+				if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "caller-chosen-model", tc.orgSettings, nil); err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
 			})
@@ -352,7 +352,7 @@ func TestCompleteInvestmentMixExplanationForOrg_EnvResolvedModelReachesConstruct
 
 	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
 		_, resolvedProvider, resolvedModel, err := CompleteInvestmentMixExplanationForOrg(
-			context.Background(), "openai", "", "org-1", nil, "prompt text")
+			context.Background(), "openai", "", "org-1", nil, nil, "prompt text")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -376,7 +376,7 @@ func TestNewProviderForOrg_PropagatesCredentialsLookupError(t *testing.T) {
 	sentinel := errors.New("byo_llm feature flag state could not be determined")
 	resolver := &fakeOrgResolver{credentialsErr: sentinel}
 	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
-		_, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "", resolver)
+		_, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "", resolver, nil)
 		if !errors.Is(err, sentinel) {
 			t.Fatalf("err = %v, want it to wrap the resolver's sentinel error", err)
 		}
@@ -478,7 +478,7 @@ func TestCompleteInvestmentMixExplanationForOrg_NeverLeaksCredentialsInErrors(t 
 		}
 
 		_, _, _, err := CompleteInvestmentMixExplanationForOrg(
-			context.Background(), "openai", "", "org-1", resolver, "prompt text")
+			context.Background(), "openai", "", "org-1", resolver, nil, "prompt text")
 		if err == nil {
 			t.Fatal("expected an error from the failing construction")
 		}
@@ -560,7 +560,7 @@ func TestNewProviderForOrg_CallsFallbackTelemetryHook(t *testing.T) {
 	t.Cleanup(func() { logOrgBaseURLSSRFFallback = origHook })
 
 	withCapturedProviderConstruction(t, func(c *capturedConstruction) {
-		if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-42", "", resolver); err != nil {
+		if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-42", "", resolver, nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -738,7 +738,7 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 				t.Setenv("LLM_API_KEY", "dummy-test-key")
 			}
 			_, _, resolvedModel, _ := CompleteInvestmentMixExplanationForOrg(
-				context.Background(), string(kind), "", "org-1", nil, "prompt text")
+				context.Background(), string(kind), "", "org-1", nil, nil, "prompt text")
 			assertResolvedModelMatchesWire(t, kind, resolvedModel, srv, wireBacked[kind], noWireExpected)
 		})
 
@@ -751,7 +751,7 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 					t.Setenv("LLM_API_KEY", "dummy-test-key")
 				}
 				_, _, resolvedModel, _ := CompleteInvestmentMixExplanationForOrg(
-					context.Background(), string(kind), "", "org-1", nil, "prompt text")
+					context.Background(), string(kind), "", "org-1", nil, nil, "prompt text")
 				assertResolvedModelMatchesWire(t, kind, resolvedModel, srv, wireBacked[kind], noWireExpected)
 			})
 		}
@@ -764,7 +764,7 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 			}
 			explicit := "explicit-" + string(kind)
 			_, _, resolvedModel, _ := CompleteInvestmentMixExplanationForOrg(
-				context.Background(), string(kind), explicit, "org-1", nil, "prompt text")
+				context.Background(), string(kind), explicit, "org-1", nil, nil, "prompt text")
 			assertResolvedModelMatchesWire(t, kind, resolvedModel, srv, wireBacked[kind], noWireExpected)
 			if _, isFixed := noWireExpected[kind]; !isFixed && resolvedModel != explicit {
 				t.Errorf("resolvedModel = %q, want the explicit override %q", resolvedModel, explicit)
@@ -783,7 +783,7 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 				model:         "org-stored-" + string(kind),
 			}
 			_, _, resolvedModel, _ := CompleteInvestmentMixExplanationForOrg(
-				context.Background(), string(kind), "", "org-1", resolver, "prompt text")
+				context.Background(), string(kind), "", "org-1", resolver, nil, "prompt text")
 			assertResolvedModelMatchesWire(t, kind, resolvedModel, srv, wireBacked[kind], noWireExpected)
 		})
 
@@ -794,7 +794,7 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 				t.Setenv("LLM_API_KEY", "dummy-test-key")
 			}
 			_, _, resolvedModel, _ := CompleteWorkUnitExplanationForOrg(
-				context.Background(), string(kind), "", "org-1", nil, "prompt text")
+				context.Background(), string(kind), "", "org-1", nil, nil, "prompt text")
 			assertResolvedModelMatchesWire(t, kind, resolvedModel, srv, wireBacked[kind], noWireExpected)
 		})
 	}

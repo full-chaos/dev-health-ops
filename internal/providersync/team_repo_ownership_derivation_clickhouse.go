@@ -24,6 +24,15 @@ var ErrTeamRepoOwnershipDerivationUnavailable = errors.New("team_repo_ownership 
 // runs the pure derivation, and writes team_repo_ownership (source='inferred').
 type TeamRepoOwnershipDerivationService struct {
 	Conn driver.Conn
+	// Now is the run's clock (nil = time.Now): a fixture world's producer pins it to the world's instant.
+	Now func() time.Time
+}
+
+func (service TeamRepoOwnershipDerivationService) now() time.Time {
+	if service.Now != nil {
+		return service.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // teamRepoOwnershipRepoInfo is one org's repos-table row, keyed by repo_id --
@@ -81,9 +90,8 @@ type teamRepoOwnershipRepoInfo struct {
 // per repo: when several teams reach a repo, the team with the most native
 // links wins, then the most explicit_text links, then the most heuristic
 // links (deriveTeamRepoOwnership). A repo is never dropped only because two
-// teams have links to it. A full tie (equal counts at every tier) names no
-// owner: the open rows of the tied teams stay open (no retraction), a row of
-// any other team is retracted, and the run reports the tie in
+// teams have links to it. A full tie (equal counts at every tier) makes every
+// tied team a main owner (D5990), and the run reports the tie in
 // TeamRepoOwnershipDerivationStats.Ties.
 // Retracted by writing a replacement row under the SAME (org_id, provider,
 // repo_full_name, team_id, source, valid_from) ReplacingMergeTree key with
@@ -103,9 +111,8 @@ type TeamRepoOwnershipDerivationStats struct {
 	// RetractionsHeld is how many open rows the run does not derive and kept open, because the input of a kind that can
 	// derive them was not in the run (CHAOS-9045, team_repo_ownership_retraction_guard.go).
 	RetractionsHeld int
-	// Ties are the repos two or more teams reach with equal link counts at every tier: the run named no owner for them, kept
-	// the tied teams' open rows and retracted any other team's. Set on every run that reaches the derivation, also when it
-	// writes nothing.
+	// Ties are the repos two or more teams reach with equal link counts at every tier: every tied team is a main owner of the
+	// repo (D5990). Provenance only; set on every run that reaches the derivation, also when it writes nothing.
 	Ties []TeamRepoOwnershipTie
 	// RoleChanges is how many open rows the run closed at the run because the
 	// claim's role changed (main owner to co-owner, or co-owner to main owner);
@@ -132,7 +139,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	if service.Conn == nil || ctx == nil || orgID == "" {
 		return 0, 0, false, nil, ErrTeamRepoOwnershipDerivationUnavailable
 	}
-	now := time.Now().UTC()
+	now := service.now()
 
 	projectLinks, err := loadTeamRepoOwnershipProjectLinks(ctx, service.Conn, orgID, now)
 	if err != nil {
@@ -234,9 +241,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
-	// The tie decision runs first because a kept main owner takes the repo's
-	// earliest evidence.
-	derived := resolveTiedMainOwners(derivation.Rows, repos, activeRows)
+	derived := derivation.Rows
 	// CHAOS-4537 codex review round 3, second P1, and CHAOS-9045: the diff
 	// below is one comparison over the org's whole activeRows, so "this run
 	// does not derive the row" is a proof of absence only when the run read
@@ -252,7 +257,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 		return 0, 0, true, nil, err
 	}
 	guard := newTeamRepoOwnershipRetractionGuard(projectLinks, linkHistory, workItems, knownTeams)
-	retractions := diffTeamRepoOwnershipRetractions(activeRows, derived, derivation.Ties, repos)
+	retractions := diffTeamRepoOwnershipRetractions(activeRows, derived, repos)
 	toRetract, held, heldKinds := guard.retain(retractions)
 	// Each claim's evidence is settled (set aside when it is in the future of
 	// the run or older than the end of the claim's last retraction; a main
@@ -262,6 +267,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
+	tenure = tenure.withOpenRows(activeRows)
 	settled, settledCounts := settleInferredEvidence(derived, repos, tenure, toRetract, now)
 	if settledCounts != (inferredEvidenceSettleCounts{}) {
 		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.evidence_start_set_aside",
@@ -412,9 +418,9 @@ func stampTeamRepoOwnershipClaimStarts(
 // run, and its open rows of the old role are returned to be closed at the run
 // (a real end, never a supersede: the old role held until this run). A new
 // main owner of a repository whose open main row belongs to another team also
-// starts at the run. Only a first observation is dated by its evidence, so a
-// repository has at most one main owner at any instant (none only during an
-// unresolved full tie, D5448). An open row with is_primary
+// starts at the run. Only a first observation is dated by its evidence, so at
+// any instant a repository's main owners are its one leader, or every team of
+// a full tie (D5990). An open row with is_primary
 // 0 (the one-owner derivation) is a main row.
 func applyTeamRepoOwnershipRoleChanges(
 	derived []DerivedTeamRepoOwnershipRow,
@@ -556,44 +562,20 @@ func withoutRows(rows, drop []teamRepoOwnershipActiveRow) []teamRepoOwnershipAct
 	return out
 }
 
-// resolveTiedMainOwners decides the main owner of each repository whose
-// largest linked share is tied. The one tied team whose open inferred row of
-// the repository is a main row (is_primary 1, or 0: a row of the one-owner
-// derivation before co-owner rows) stays the main owner; with no such team, or
-// with more than one, the repository has no main owner and every tied team is
-// a co-owner. A tie never moves the main owner to another team. The kept main
-// owner starts at the earliest evidence of any claim on the repository, as a
-// main owner does.
-func resolveTiedMainOwners(
-	derived []DerivedTeamRepoOwnershipRow,
-	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
-	activeRows []teamRepoOwnershipActiveRow,
-) []DerivedTeamRepoOwnershipRow {
-	openMain := map[teamRepoOwnershipClaim]bool{}
+// withOpenRows adds the start of each claim's open main row, the one thing
+// the settle step needs of the open rows.
+func (tenure teamRepoOwnershipTenureEnds) withOpenRows(activeRows []teamRepoOwnershipActiveRow) teamRepoOwnershipTenureEnds {
+	tenure.openMainFrom = map[teamRepoOwnershipClaim]time.Time{}
 	for _, row := range activeRows {
-		if row.IsPrimary != teamRepoOwnershipCoOwner {
-			openMain[teamRepoOwnershipClaim{row.Provider, row.RepoFullName, row.TeamID}] = true
-		}
-	}
-	mains := map[string][]int{}
-	out := make([]DerivedTeamRepoOwnershipRow, len(derived))
-	for i, row := range derived {
-		out[i] = row
-		if !row.Tied {
+		claim := teamRepoOwnershipClaim{row.Provider, row.RepoFullName, row.TeamID}
+		if row.IsPrimary == teamRepoOwnershipCoOwner {
 			continue
 		}
-		info, ok := resolveTeamRepoOwnershipRepo(row.RepoID, repos)
-		if ok && openMain[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}] {
-			mains[row.RepoID] = append(mains[row.RepoID], i)
+		if from, ok := tenure.openMainFrom[claim]; !ok || row.ValidFrom.Before(from) {
+			tenure.openMainFrom[claim] = row.ValidFrom.UTC()
 		}
 	}
-	for _, indexes := range mains {
-		if len(indexes) == 1 {
-			out[indexes[0]].IsPrimary = teamRepoOwnershipMainOwner
-			out[indexes[0]].EvidenceFrom = out[indexes[0]].repoEvidenceFrom
-		}
-	}
-	return out
+	return tenure
 }
 
 // resolveTeamRepoOwnershipRepo is the repos row a derived row's repo_id names,
@@ -619,11 +601,13 @@ type inferredEvidenceSettleCounts struct{ future, beforeRetraction, afterOtherOw
 //     erase the interval the claim did not own);
 //   - else a main owner's evidence older than the end of another team's main
 //     tenure on the repository (the latest close of its main row, or this
-//     run, when this run retracts its open main row) moves to that end, so the
-//     repository has one main owner at a time. Co-owners own the repository
-//     beside the main owner, so a co-owner's start is never moved by another
-//     team. The end is stored as that team's valid_to, so the next run reads
-//     the same start and writes nothing.
+//     run, when this run retracts its open main row) moves to that end, so a
+//     new main owner never takes over before the prior one ends. A claim
+//     whose open main row started before that end was a main owner beside
+//     the other team (a full tie, D5990) and is not moved. Co-owners own the
+//     repository beside the main owners, so a co-owner's start is never moved
+//     by another team. The end is stored as that team's valid_to, so the next
+//     run reads the same start and writes nothing.
 func settleInferredEvidence(
 	derived []DerivedTeamRepoOwnershipRow,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
@@ -679,10 +663,19 @@ func settleInferredEvidence(
 			continue
 		}
 		var otherEnd time.Time
+		ownMainFrom, ownMainOpen := tenure.openMainFrom[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}]
 		for _, end := range ends[repoKey{info.Provider, info.FullName}] {
-			if end.teamID != row.TeamID && end.until.After(otherEnd) {
-				otherEnd = end.until
+			if end.teamID == row.TeamID || !end.until.After(otherEnd) {
+				continue
 			}
+			// A team whose main tenure ended while this claim's open main row
+			// was already open was a main owner beside it (a full tie,
+			// D5990): nothing was handed over, so its end never moves this
+			// claim.
+			if ownMainOpen && ownMainFrom.Before(end.until) {
+				continue
+			}
+			otherEnd = end.until
 		}
 		if otherEnd.After(row.EvidenceFrom) {
 			settled[i].EvidenceFrom = otherEnd
@@ -698,6 +691,8 @@ func settleInferredEvidence(
 type teamRepoOwnershipTenureEnds struct {
 	retractedUntil map[teamRepoOwnershipClaim]time.Time
 	mainUntil      map[teamRepoOwnershipClaim]time.Time
+	// openMainFrom is set from the open rows (withOpenRows).
+	openMainFrom map[teamRepoOwnershipClaim]time.Time
 }
 
 // loadTeamRepoOwnershipRetractedUntil loads the tenure ends of the org's
@@ -1265,7 +1260,6 @@ WHERE org_id = ?
 func diffTeamRepoOwnershipRetractions(
 	activeRows []teamRepoOwnershipActiveRow,
 	derived []DerivedTeamRepoOwnershipRow,
-	ties []TeamRepoOwnershipTie,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
 ) []teamRepoOwnershipActiveRow {
 	type claim struct{ provider, repoFullName, teamID string }
@@ -1283,18 +1277,10 @@ func diffTeamRepoOwnershipRetractions(
 			desired[claim{provider: info.Provider, repoFullName: info.FullName, teamID: row.TeamID}] = true
 		}
 	}
-	tied := make(map[claim]bool)
-	for _, tie := range ties {
-		if info, ok := resolve(tie.RepoID); ok {
-			for _, teamID := range tie.TeamIDs {
-				tied[claim{provider: info.Provider, repoFullName: info.FullName, teamID: teamID}] = true
-			}
-		}
-	}
 	var toRetract []teamRepoOwnershipActiveRow
 	for _, row := range activeRows {
 		key := claim{provider: row.Provider, repoFullName: row.RepoFullName, teamID: row.TeamID}
-		if desired[key] || tied[key] {
+		if desired[key] {
 			continue
 		}
 		toRetract = append(toRetract, row)

@@ -18,7 +18,7 @@ import (
 // verbs of this package.
 func Command() cli.Command {
 	command := admincli.Command()
-	command.Children = append([]cli.Command{usersGroup(), orgsGroup(), llmSettingsGroup(), licensesGroup(), bundlesGroup(), orgGroup(), billingGroup()}, command.Children...)
+	command.Children = append([]cli.Command{usersGroup(), orgsGroup(), llmSettingsGroup(), llmBudgetGroup(), licensesGroup(), bundlesGroup(), orgGroup(), billingGroup()}, command.Children...)
 	return command
 }
 

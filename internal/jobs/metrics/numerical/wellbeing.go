@@ -46,6 +46,18 @@ type RepoTeamResolver interface {
 	ResolveRepo(repoName string) (teamID, teamName string)
 }
 
+// RepoOwnersResolver is a RepoTeamResolver that can name several teams of one
+// repository: every main owner of a full ownership tie (D5990), each of which
+// takes the repository's commits whole. ComputeTeamWellbeing asks it instead
+// of ResolveRepo when the repo resolver implements it.
+type RepoOwnersResolver interface {
+	RepoTeamResolver
+	ResolveRepoOwners(repoName string) []TeamRef
+}
+
+// TeamRef is one team's id and display name.
+type TeamRef struct{ ID, Name string }
+
 // MemberTeamResolver resolves a team from a normalized git identity. An
 // empty identity, or no match, must return ("", "").
 type MemberTeamResolver interface {
@@ -124,34 +136,41 @@ func ComputeTeamWellbeing(
 		}
 		identity := normalizeGitIdentity(commit.AuthorEmail, commit.AuthorName)
 
-		var teamID, teamName string
-		if repoResolver != nil {
-			teamID, teamName = repoResolver.ResolveRepo(repoNamesByID[commit.RepoID])
-		}
-		if teamID == "" && memberResolver != nil {
-			teamID, teamName = memberResolver.ResolveMember(identity)
-		}
-		if teamID == "" {
-			teamID, teamName = UnknownTeamID, UnknownTeamName
-		}
-
-		key := bucketKey{teamID: teamID, repoID: commit.RepoID}
-		entry := byTeamRepo[key]
-		if entry == nil {
-			name := teamName
-			if name == "" {
-				name = teamID
+		var teams []TeamRef
+		if owners, ok := repoResolver.(RepoOwnersResolver); ok {
+			teams = owners.ResolveRepoOwners(repoNamesByID[commit.RepoID])
+		} else if repoResolver != nil {
+			if teamID, teamName := repoResolver.ResolveRepo(repoNamesByID[commit.RepoID]); teamID != "" {
+				teams = []TeamRef{{teamID, teamName}}
 			}
-			entry = &bucket{teamName: name}
-			byTeamRepo[key] = entry
 		}
-		entry.commits++
+		if len(teams) == 0 && memberResolver != nil {
+			if teamID, teamName := memberResolver.ResolveMember(identity); teamID != "" {
+				teams = []TeamRef{{teamID, teamName}}
+			}
+		}
+		if len(teams) == 0 {
+			teams = []TeamRef{{UnknownTeamID, UnknownTeamName}}
+		}
 
 		local := committedAt.In(businessTZ)
-		if isWeekend(local) {
-			entry.weekend++
-		} else if isAfterHours(local, businessHoursStart, businessHoursEnd) {
-			entry.afterHours++
+		for _, team := range teams {
+			key := bucketKey{teamID: team.ID, repoID: commit.RepoID}
+			entry := byTeamRepo[key]
+			if entry == nil {
+				name := team.Name
+				if name == "" {
+					name = team.ID
+				}
+				entry = &bucket{teamName: name}
+				byTeamRepo[key] = entry
+			}
+			entry.commits++
+			if isWeekend(local) {
+				entry.weekend++
+			} else if isAfterHours(local, businessHoursStart, businessHoursEnd) {
+				entry.afterHours++
+			}
 		}
 	}
 

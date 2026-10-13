@@ -91,9 +91,7 @@ func gitlabWorkItemOracleRows(
 		subject := githubWorkItemDerivationSubjectFromRow(row)
 		subjects[subject.WorkItemID] = subject
 	}
-	derived.LinkedIssue, _, _ = derived.BuildLinkedIssueIndex(
-		"gitlab", subjects, toDerivationDependencyEdges(rows.Dependencies), nil,
-	)
+	linkLikeProduction(&derived, "gitlab", subjects, toDerivationDependencyEdges(rows.Dependencies))
 	return claim, rows, derived
 }
 

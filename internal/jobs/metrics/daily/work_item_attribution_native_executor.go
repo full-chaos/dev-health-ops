@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/querybound"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
@@ -172,8 +175,22 @@ func (executor *WorkItemAttributionExecutor) ComputeFamily(
 			}
 		}
 		repoDerived := derived
-		linkedIssue, _, _ := repoDerived.BuildLinkedIssueIndex("", subjects, dependencies, nil)
+		// CHAOS-9460: a donor gives the team of its own row as of this day. A
+		// donor this run writes for this day -- this partition's items, and a
+		// donor of another partition of the same run that is in this day's
+		// window -- gives the row the run writes for it with this day's facts;
+		// any other donor gives its stored row, never a resolution of it.
+		writtenThisRun, err := executor.itemsThisRunWritesForTheDay(ctx, run, scope, subjects, affected)
+		if err != nil {
+			return total, err
+		}
+		donorRows, err := remaining.LinkedIssueDonorRows(ctx, executor.conn, run.OrganizationID, subjects, writtenThisRun, repoDerived.OwnDonorRows(subjects, writtenThisRun))
+		if err != nil {
+			return total, err
+		}
+		linkedIssue, linkedEvidence, _, _ := repoDerived.BuildLinkedIssueIndexFromRows("", subjects, donorRows, dependencies, nil)
 		repoDerived.LinkedIssue = linkedIssue
+		repoDerived.LinkedIssueEvidence = linkedEvidence
 
 		rows := remaining.BuildWorkItemAttributionRows(
 			run.OrganizationID, computedAt, affected, subjects, repoDerived,
@@ -259,3 +276,71 @@ func wrapWorkItemAttributionPartialWrite(total int, err error) (int, error) {
 }
 
 var _ NativeFamilyExecutor = (*WorkItemAttributionExecutor)(nil)
+
+// itemsThisRunWritesForTheDay is affected plus every other subject (a donor
+// pulled in for context) that a partition of the same run writes for this
+// day: its repository is in the run's scope (the union of the run's partition
+// repositories) and it is in the day's window, the predicate of
+// loadPartitionSubjects (created before the day's end, not done or completed
+// on or after the day's start).
+func (executor *WorkItemAttributionExecutor) itemsThisRunWritesForTheDay(
+	ctx context.Context, run Run, scope workItemPartitionScope,
+	subjects map[string]teamattribution.GithubWorkItemDerivationSubject, affected map[string]struct{},
+) (map[string]struct{}, error) {
+	written := make(map[string]struct{}, len(subjects))
+	var others []string
+	for id := range subjects {
+		if _, ok := affected[id]; ok {
+			written[id] = struct{}{}
+			continue
+		}
+		others = append(others, id)
+	}
+	inScope := make(map[string]bool, len(run.DiscoveredRepoIDs)+len(scope.repoIDs))
+	for _, repoID := range run.DiscoveredRepoIDs {
+		inScope[strings.ToLower(string(repoID))] = true
+	}
+	for _, repoID := range scope.repoIDs {
+		inScope[repoID.String()] = true
+	}
+	if len(others) == 0 || len(inScope) == 0 {
+		return written, nil
+	}
+	sort.Strings(others)
+	// One statement per bounded chunk of ids (querybound): a statement with
+	// every donor of a large partition exceeds ClickHouse's max query size.
+	// The run's repositories are matched here, not bound into the statement.
+	for _, chunk := range querybound.ChunkStringsByRenderedBytes(others, querybound.MaxArrayBytes) {
+		if err := executor.loadDonorsInTheDaysWindow(ctx, run.OrganizationID, chunk, scope, inScope, written); err != nil {
+			return nil, err
+		}
+	}
+	return written, nil
+}
+
+func (executor *WorkItemAttributionExecutor) loadDonorsInTheDaysWindow(
+	ctx context.Context, orgID string, ids []string, scope workItemPartitionScope,
+	inScope map[string]bool, written map[string]struct{},
+) error {
+	rows, err := executor.conn.Query(ctx, `SELECT work_item_id, toString(repo_id) FROM work_items FINAL
+WHERE org_id = ? AND has(?, work_item_id)
+  AND created_at < ?
+  AND (status != 'done' OR completed_at >= ?)`, orgID, ids, scope.end, scope.start)
+	if err != nil {
+		return fmt.Errorf("load the donors this run writes for the day (work_item_attribution): %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, repoID string
+		if err := rows.Scan(&id, &repoID); err != nil {
+			return fmt.Errorf("scan a donor this run writes for the day (work_item_attribution): %w", err)
+		}
+		if inScope[strings.ToLower(repoID)] {
+			written[id] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate the donors this run writes for the day (work_item_attribution): %w", err)
+	}
+	return nil
+}

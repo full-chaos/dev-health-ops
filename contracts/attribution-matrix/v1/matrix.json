@@ -1,0 +1,485 @@
+{
+  "version": 1,
+  "cells": [
+    {
+      "provider": "github",
+      "entity": "teams",
+      "check": "provider_prefixed_ids",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "teams",
+      "check": "ownerless_team_takes_no_work",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "teams",
+      "check": "retired_team_owns_nothing_now",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "members",
+      "check": "membership_never_decides_the_team",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "members",
+      "check": "membership_starts_at_its_evidence",
+      "state": "known_red",
+      "ticket": "CHAOS-9404",
+      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+    },
+    {
+      "provider": "github",
+      "entity": "repositories",
+      "check": "pull_request_repository_resolves",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "repositories",
+      "check": "readers_agree_with_the_ownership_rule",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "repositories",
+      "check": "readers_apply_first_owners_backward",
+      "state": "known_red",
+      "ticket": "CHAOS-9404"
+    },
+    {
+      "provider": "github",
+      "entity": "repositories",
+      "check": "repository_ownership_starts_at_its_evidence",
+      "state": "known_red",
+      "ticket": "CHAOS-9404",
+      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+    },
+    {
+      "provider": "github",
+      "entity": "pull_requests",
+      "check": "issue_links_resolve",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "pull_requests",
+      "check": "native_link_has_a_linked_row",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "pull_requests",
+      "check": "pull_request_team_is_not_a_membership",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "pull_requests",
+      "check": "pull_request_inherits_only_from_a_linked_issue",
+      "state": "known_red",
+      "ticket": "CHAOS-9409"
+    },
+    {
+      "provider": "github",
+      "entity": "issues",
+      "check": "issue_reaches_a_repository_only_through_its_links",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "issues",
+      "check": "primary_owner_holds_on_the_item_day",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "issues",
+      "check": "owned_history_is_attributed",
+      "state": "known_red",
+      "ticket": "CHAOS-9404",
+      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+    },
+    {
+      "provider": "github",
+      "entity": "issues",
+      "check": "every_active_owner_takes_the_item",
+      "state": "known_red",
+      "ticket": "CHAOS-9404",
+      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+    },
+    {
+      "provider": "github",
+      "entity": "issues",
+      "check": "attribution_carries_provenance",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "teams",
+      "check": "provider_prefixed_ids",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "teams",
+      "check": "ownerless_team_takes_no_work",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "teams",
+      "check": "retired_team_owns_nothing_now",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "members",
+      "check": "membership_never_decides_the_team",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "members",
+      "check": "membership_starts_at_its_evidence",
+      "state": "known_red",
+      "ticket": "CHAOS-9404",
+      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "repositories",
+      "check": "pull_request_repository_resolves",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "repositories",
+      "check": "readers_agree_with_the_ownership_rule",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "repositories",
+      "check": "readers_apply_first_owners_backward",
+      "state": "known_red",
+      "ticket": "CHAOS-9404"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "repositories",
+      "check": "repository_ownership_starts_at_its_evidence",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "pull_requests",
+      "check": "issue_links_resolve",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "pull_requests",
+      "check": "native_link_has_a_linked_row",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "pull_requests",
+      "check": "pull_request_team_is_not_a_membership",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "pull_requests",
+      "check": "pull_request_inherits_only_from_a_linked_issue",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "issues",
+      "check": "issue_reaches_a_repository_only_through_its_links",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "issues",
+      "check": "primary_owner_holds_on_the_item_day",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "issues",
+      "check": "owned_history_is_attributed",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "issues",
+      "check": "every_active_owner_takes_the_item",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "issues",
+      "check": "attribution_carries_provenance",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "projects",
+      "check": "project_owner_is_of_the_project_provider",
+      "state": "pass"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "projects",
+      "check": "project_ownership_names_the_catalog_project",
+      "state": "known_red",
+      "ticket": "CHAOS-8883",
+      "why": "GitLab ownership names the project by path, the projects catalog by numeric id"
+    },
+    {
+      "provider": "gitlab",
+      "entity": "projects",
+      "check": "project_ownership_starts_at_its_evidence",
+      "state": "known_red",
+      "ticket": "CHAOS-9404",
+      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+    },
+    {
+      "provider": "jira",
+      "entity": "teams",
+      "check": "provider_prefixed_ids",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "teams",
+      "check": "ownerless_team_takes_no_work",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "teams",
+      "check": "retired_team_owns_nothing_now",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "members",
+      "check": "membership_never_decides_the_team",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "pull_requests",
+      "check": "issue_links_resolve",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "pull_requests",
+      "check": "native_link_has_a_linked_row",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "pull_requests",
+      "check": "pull_request_team_is_not_a_membership",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "pull_requests",
+      "check": "pull_request_inherits_only_from_a_linked_issue",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "issues",
+      "check": "issue_reaches_a_repository_only_through_its_links",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "issues",
+      "check": "primary_owner_holds_on_the_item_day",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "issues",
+      "check": "owned_history_is_attributed",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "issues",
+      "check": "every_active_owner_takes_the_item",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "issues",
+      "check": "attribution_carries_provenance",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "projects",
+      "check": "project_owner_is_of_the_project_provider",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "projects",
+      "check": "project_ownership_names_the_catalog_project",
+      "state": "pass"
+    },
+    {
+      "provider": "jira",
+      "entity": "projects",
+      "check": "project_ownership_starts_at_its_evidence",
+      "state": "known_red",
+      "ticket": "CHAOS-9404",
+      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+    },
+    {
+      "provider": "linear",
+      "entity": "teams",
+      "check": "provider_prefixed_ids",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "teams",
+      "check": "ownerless_team_takes_no_work",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "teams",
+      "check": "retired_team_owns_nothing_now",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "members",
+      "check": "membership_never_decides_the_team",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "members",
+      "check": "membership_starts_at_its_evidence",
+      "state": "known_red",
+      "ticket": "CHAOS-9404",
+      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+    },
+    {
+      "provider": "linear",
+      "entity": "pull_requests",
+      "check": "issue_links_resolve",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "pull_requests",
+      "check": "native_link_has_a_linked_row",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "pull_requests",
+      "check": "pull_request_team_is_not_a_membership",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "pull_requests",
+      "check": "pull_request_inherits_only_from_a_linked_issue",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "issues",
+      "check": "issue_reaches_a_repository_only_through_its_links",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "issues",
+      "check": "primary_owner_holds_on_the_item_day",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "issues",
+      "check": "owned_history_is_attributed",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "issues",
+      "check": "attribution_carries_provenance",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "projects",
+      "check": "project_owner_is_of_the_project_provider",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "projects",
+      "check": "project_ownership_names_the_catalog_project",
+      "state": "pass"
+    },
+    {
+      "provider": "linear",
+      "entity": "projects",
+      "check": "project_ownership_starts_at_its_evidence",
+      "state": "known_red",
+      "ticket": "CHAOS-9404",
+      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+    }
+  ],
+  "not_applicable": [
+    {
+      "provider": "github",
+      "entity": "projects",
+      "rule": "GitHub has no native project entity; a GitHub item reaches its team through its repository (team-attribution.md 0.2, 0.1 rule 2)."
+    },
+    {
+      "provider": "jira",
+      "entity": "repositories",
+      "rule": "A tracker has no repository: its items reach repositories only through their linked pull requests (entity tree, data-and-storage.md); the repository cells are the pull request provider's."
+    },
+    {
+      "provider": "linear",
+      "entity": "repositories",
+      "rule": "A tracker has no repository: its items reach repositories only through their linked pull requests (entity tree, data-and-storage.md); the repository cells are the pull request provider's."
+    }
+  ],
+  "omitted": [
+    {
+      "provider": "jira",
+      "entity": "members",
+      "check": "membership_starts_at_its_evidence",
+      "rule": "Atlassian Teams name a member by account id with no email, and the Jira normalizer names a person of an item by email: nothing in a Jira world joins a member to the member's own work."
+    },
+    {
+      "provider": "linear",
+      "entity": "issues",
+      "check": "every_active_owner_takes_the_item",
+      "rule": "Every Linear issue belongs to a Linear team, and the item's own native team wins over the co-owners of its project (team-attribution.md 0.4d, D5206): no Linear item takes the co-owners of a project."
+    }
+  ]
+}

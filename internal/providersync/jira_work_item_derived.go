@@ -156,6 +156,13 @@ func (source jiraWorkItemClickHouseDerivationContextSource) Load(
 	if facts.DonorItems, err = delegate.loadDonors(ctx, claim.OrgID, request); err != nil {
 		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
+	donorIDs := make([]string, 0, len(facts.DonorItems))
+	for _, donor := range facts.DonorItems {
+		donorIDs = append(donorIDs, donor.WorkItemID)
+	}
+	if facts.DonorRows, err = loader.LoadDonorRows(ctx, claim.OrgID, donorIDs); err != nil {
+		return teamattribution.GithubWorkItemDerivationFacts{}, err
+	}
 	if err := delegate.Lease.Assert(ctx); err != nil {
 		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}

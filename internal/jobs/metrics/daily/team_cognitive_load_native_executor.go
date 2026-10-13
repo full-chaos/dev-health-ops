@@ -169,7 +169,7 @@ func (executor *TeamCognitiveLoadExecutor) supersedeStaleKeys(
 }
 
 // authoritativeOwnersKnownToRepoCatalog filters an org-wide authoritative
-// repo->team ownership map (teamownership.AuthoritativeOwnerByRepo) down to
+// repo->team ownership map (teamownership.AuthoritativeOwnersByRepo) down to
 // repos ALSO present in repoNamesByID -- CHAOS-4365 codex r2 P1 guard. An
 // owned repo_id that repoNamesByID does not carry (removed/renamed since
 // team_repo_ownership last ran; that table is INSERT-only, CHAOS-2610 tracks
@@ -182,22 +182,23 @@ func (executor *TeamCognitiveLoadExecutor) supersedeStaleKeys(
 // ownership row could attribute a repo that no longer exists in the org's
 // current inventory, something the pattern-resolver path never did.
 func authoritativeOwnersKnownToRepoCatalog(
-	owners map[string]string, repoNamesByID map[string]string,
-) map[string]string {
-	filtered := make(map[string]string, len(owners))
-	for repoID, teamID := range owners {
+	owners map[string][]string, repoNamesByID map[string]string,
+) map[string][]string {
+	filtered := make(map[string][]string, len(owners))
+	for repoID, teamIDs := range owners {
 		if _, known := repoNamesByID[repoID]; !known {
 			continue
 		}
-		filtered[repoID] = teamID
+		filtered[repoID] = teamIDs
 	}
 	return filtered
 }
 
-// resolveDailyFinalizeRepoToTeam builds {repo_id_str: team_id} exactly as
+// resolveDailyFinalizeRepoToTeam builds {repo_id_str: team_ids} as
 // _write_team_cognitive_load_for_day does: team_repo_ownership
-// (teamownership.AuthoritativeOwnerByRepo, ranked is_primary/specificity/
-// updated_at, ONE authoritative owner per repo -- CHAOS-5141, #2255 r1
+// (teamownership.AuthoritativeOwnersByRepo, ranked is_primary/specificity/
+// updated_at, ONE authoritative owner per repo, or every main owner of a full
+// tie, D5990, each holding the repo whole -- CHAOS-5141, #2255 r1
 // finding 2: OwnedRepoIDs answers "is this repo one of this team's", not
 // "who is its authoritative owner", and iterating it per-team let whichever
 // team happened to be encountered first win a multi-claimed repo) first, the
@@ -209,14 +210,14 @@ func resolveDailyFinalizeRepoToTeam(
 	ctx context.Context, conn driver.Conn, organizationID string, asOf time.Time,
 	repoIDs []uuid.UUID, repoNamesByID map[string]string,
 	patternResolver numerical.RepoTeamResolver,
-) (map[string]string, error) {
+) (map[string][]string, error) {
 	// CHAOS-5141, #2255 r1 finding 3: a resolution failure here is
 	// PROPAGATED, never swallowed. team_cognitive_load is finalize-scope
 	// (CHAOS-4290): a native runtime error must fail the family closed
 	// (Retryable -> River redrive), not silently return a success outcome
 	// with zero/partial rows that the finalize handler would mark Computed
 	// and skip the Python bridge for.
-	owners, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, organizationID, asOf)
+	owners, err := teamownership.AuthoritativeOwnersByRepo(ctx, conn, organizationID, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("resolve authoritative repo ownership: %w", err)
 	}
@@ -232,7 +233,7 @@ func resolveDailyFinalizeRepoToTeam(
 		}
 		teamID, _ := patternResolver.ResolveRepo(name)
 		if teamID != "" {
-			repoToTeam[key] = teamID
+			repoToTeam[key] = []string{teamID}
 		}
 	}
 	return repoToTeam, nil

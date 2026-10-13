@@ -35,7 +35,7 @@ func clearPlatformProviderEnv(t *testing.T) {
 func TestNewProviderForOrgIgnoresABundleThatIsNotOK(t *testing.T) {
 	clearPlatformProviderEnv(t)
 	captured := withCapturedProviderConstruction(t, func(*capturedConstruction) {
-		if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "", refusedBundleResolver()); err != nil {
+		if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "", refusedBundleResolver(), nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})

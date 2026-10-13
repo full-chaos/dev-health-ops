@@ -61,9 +61,7 @@ func buildGitHubWorkItemDerivationOracleCandidates(
 	for _, subject := range decoded.WorkItems {
 		subjects[subject.WorkItemID] = subject
 	}
-	derived.LinkedIssue, _, _ = derived.BuildLinkedIssueIndex(
-		"github", subjects, toDerivationDependencyEdges(decoded.Dependencies), nil,
-	)
+	linkLikeProduction(&derived, "github", subjects, toDerivationDependencyEdges(decoded.Dependencies))
 	_, _, candidates := derived.Resolve(decoded.Subject)
 	result := githubWorkItemDerivationOracleCandidates{
 		Source: make([]string, 0, len(candidates)), TeamID: make([]*string, 0, len(candidates)),
@@ -77,7 +75,7 @@ func buildGitHubWorkItemDerivationOracleCandidates(
 		result.TeamID = append(result.TeamID, candidate.TeamID)
 		result.TeamName = append(result.TeamName, candidate.TeamName)
 		result.Confidence = append(result.Confidence, candidate.Confidence)
-		result.Evidence = append(result.Evidence, candidate.Evidence)
+		result.Evidence = append(result.Evidence, pythonLinkedIssueEvidence(decoded.Subject.WorkItemID, candidate.Evidence))
 		result.IsPrimary = append(result.IsPrimary, candidate.IsPrimary)
 		result.Specificity = append(result.Specificity, candidate.Specificity)
 		result.Priority = append(result.Priority, candidate.Priority)

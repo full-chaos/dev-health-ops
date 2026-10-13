@@ -173,9 +173,10 @@ func (executor *AIImpactExecutor) ComputeFamily(
 		aiimpact.RecordLinkageUnavailable()
 	}
 
-	// Team resolution goes through the same authoritative single-owner
-	// resolver team_cognitive_load and compounding_risk_team already consume
-	// (teamownership.AuthoritativeOwnerByRepo, ranked
+	// Team resolution goes through the same authoritative owner resolver
+	// team_cognitive_load and compounding_risk_team already consume
+	// (teamownership.AuthoritativeOwnersByRepo: one owner, or every main owner
+	// of a full ownership tie, D5990, ranked
 	// is_primary/specificity/updated_at/team_id), with this family's own
 	// repo-pattern resolver as the fallback for a repo team_repo_ownership
 	// does not resolve -- see resolveAIImpactRepoToTeam.
@@ -198,12 +199,8 @@ func (executor *AIImpactExecutor) ComputeFamily(
 	if err != nil {
 		return 0, fmt.Errorf("ai_impact: %w", err)
 	}
-	teamResolver := func(repoID uuid.UUID, _ string) *string {
-		teamID, resolved := repoToTeam[repoID.String()]
-		if !resolved {
-			return nil
-		}
-		return &teamID
+	teamResolver := func(repoID uuid.UUID, _ string) []string {
+		return repoToTeam[repoID.String()]
 	}
 
 	records := aiimpact.Compute(aiimpact.Params{
@@ -225,8 +222,8 @@ func (executor *AIImpactExecutor) ComputeFamily(
 
 var _ NativeFamilyExecutor = (*AIImpactExecutor)(nil)
 
-// resolveAIImpactRepoToTeam builds {repo_id_str: team_id} through
-// teamownership.AuthoritativeOwnerByRepo -- the org-wide, ranked
+// resolveAIImpactRepoToTeam builds {repo_id_str: team_ids} through
+// teamownership.AuthoritativeOwnersByRepo -- the org-wide, ranked
 // (is_primary/specificity/updated_at/team_id) authoritative repo-ownership
 // resolver team_cognitive_load and compounding_risk_team already consume --
 // with patternResolver as the fallback for a repo that resolver leaves
@@ -241,8 +238,8 @@ func resolveAIImpactRepoToTeam(
 	ctx context.Context, conn driver.Conn, organizationID string, asOf time.Time,
 	repoIDs []uuid.UUID, repoNamesByID map[string]string,
 	patternResolver numerical.RepoTeamResolver,
-) (map[string]string, error) {
-	ownershipMap, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, organizationID, asOf)
+) (map[string][]string, error) {
+	ownershipMap, err := teamownership.AuthoritativeOwnersByRepo(ctx, conn, organizationID, asOf)
 	if err != nil {
 		slog.Error("ai_impact team resolution: authoritative repo ownership query failed",
 			"organization_id", organizationID, "error", err)
@@ -254,19 +251,19 @@ func resolveAIImpactRepoToTeam(
 	ownershipWins, patternWins := 0, 0
 	for _, repoID := range repoIDs {
 		key := repoID.String()
-		teamID, resolved := repoToTeam[key]
+		teamIDs, resolved := repoToTeam[key]
 		if !resolved {
 			continue
 		}
-		if ownershipMap[key] == teamID {
+		if len(ownershipMap[key]) > 0 {
 			ownershipWins++
 			slog.Debug("ai_impact team resolution: repository resolved via team_repo_ownership",
-				"organization_id", organizationID, "repo_id", key, "team_id", teamID)
+				"organization_id", organizationID, "repo_id", key, "team_ids", teamIDs)
 			continue
 		}
 		patternWins++
 		slog.Debug("ai_impact team resolution: repository resolved via repo_patterns fallback",
-			"organization_id", organizationID, "repo_id", key, "team_id", teamID)
+			"organization_id", organizationID, "repo_id", key, "team_ids", teamIDs)
 	}
 	slog.Info("ai_impact team resolution summary",
 		"organization_id", organizationID, "repos_total", len(repoIDs),

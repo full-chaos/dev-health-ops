@@ -1104,8 +1104,8 @@ func (derived GithubWorkItemDerivationContext) resolve(
 //
 // AttributionPrimary is the ONE row per item that the daily rollups and every
 // organization-level reader count, so an item counts once in an org total.
-// AttributionCoOwner is each OTHER team that owns the item's project at the
-// same rank: the item is also that team's work. A team-scoped reader reads
+// AttributionCoOwner is each OTHER team that owns the item's project or
+// repository, at any rank: the item is also that team's work. A team-scoped reader reads
 // is_primary IN (1, 2) and filters by its team; every other reader reads
 // is_primary = 1. The census test TestWorkItemTeamAttributionIsPrimaryPredicateCensus
 // holds every reader to those two forms.
@@ -1834,10 +1834,9 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 // documented fix as
 // internal/jobs/metrics/remaining/dora_native_clickhouse.go's
 // dateTime64Argument/DateTime64Argument.
-// LoadRepos leaves out a co-owner row (is_primary = 2): repository ownership
-// gives an item one team and no co-owner, so a repository with co-owners only
-// (a tie with no main owner) gives no repo_ownership candidate, as before
-// co-owner rows existed.
+// LoadRepos carries co-owner rows (is_primary = 2): a co-owner is never the
+// item's primary row but a co-owner row of it, so a repository with co-owners
+// only gives no primary from repository ownership.
 func (source ClickHouseFactSource) LoadRepos(
 	ctx context.Context, orgID string, asOf time.Time,
 ) ([]GithubWorkItemDerivationRepoFact, error) {

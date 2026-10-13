@@ -9,6 +9,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // SunburstFilters is fetch_investment_sunburst's own parameter list
@@ -27,9 +28,13 @@ type SunburstFilters struct {
 	ReposNamed         bool // the request names repositories (teamscope.NamedRepoRefs)
 	TeamScopeCondition string
 	TeamScopeBindings  []dhclickhouse.Binding
-	Themes             []string
-	Subcategories      []string
-	Limit              int
+	// TeamIDs/TeamAsOf: the teams of the team scope and the instant their ownership is read at; each repository's
+	// effort is weighed by the share of it they hold (teamscope.RepoShare, CHAOS-9413, D5988). Empty = weight 1.
+	TeamIDs       []string
+	TeamAsOf      time.Time
+	Themes        []string
+	Subcategories []string
+	Limit         int
 }
 
 func (f SunburstFilters) categoryFilters() categoryFilters {
@@ -71,13 +76,23 @@ func (r *Reader) FetchInvestmentSunburst(ctx context.Context, filters SunburstFi
 		"splitByChar('.', subcategory_kv.1)[1]", "subcategory_kv.1",
 	)
 	scopeSQL, scopeBindings := combinedScopeClause(filters.ReposNamed, filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings)
+	shareSQL, shareBindings := "1.0", []dhclickhouse.Binding(nil)
+	if scoped := strings.TrimSpace(strings.TrimPrefix(scopeSQL, " AND ")); scoped != "" && scoped != "1 = 0" && len(filters.TeamIDs) > 0 {
+		asOf := filters.TeamAsOf
+		if asOf.IsZero() {
+			asOf = time.Now().UTC()
+		}
+		if expr, shareBound := teamscope.RepoShare(filters.OrgID, "repo_id", filters.TeamIDs, asOf); expr != "" {
+			shareSQL, shareBindings = expr, shareBound
+		}
+	}
 
 	query := fmt.Sprintf(`
 SELECT
     subcategory_kv.1 AS subcategory,
     splitByChar('.', subcategory_kv.1)[1] AS theme,
     ifNull(r.repo, toString(repo_id)) AS scope,
-    sum(subcategory_kv.2 * effort_value) AS value
+    sum(subcategory_kv.2 * effort_value * %s) AS value
 FROM %s
 LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -90,7 +105,7 @@ GROUP BY theme, subcategory, scope
 ORDER BY value DESC
 LIMIT {limit:Int64}
 %s
-`, sunburstSource(scopeSQL), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, shareSQL, sunburstSource(scopeSQL), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	// filters.Limit is bound AS GIVEN -- no clamping, no zero/negative
 	// default-substitution here. Python's own investment_sunburst query
@@ -110,6 +125,7 @@ LIMIT {limit:Int64}
 		{Name: "limit", Value: int64(filters.Limit)},
 	}
 	bindings = append(bindings, scopeBindings...)
+	bindings = append(bindings, shareBindings...)
 	bindings = append(bindings, categoryBindings...)
 
 	rows, err := r.client.Query(ctx, query, bindings)

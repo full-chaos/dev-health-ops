@@ -24,6 +24,9 @@ var (
 	verifyLimit = httpapi.Limit{ID: "auth_verify", Count: 10, Window: time.Hour}
 	resendLimit = httpapi.Limit{ID: "auth_resend_verification", Count: 3, Window: time.Hour}
 	forgotLimit = httpapi.Limit{ID: "auth_forgot_password", Count: 3, Window: time.Hour}
+	// change-password (CHAOS-9513) has no Python ancestor: 5/hour per signed-in
+	// user, the admin set-password route's budget.
+	changePasswordLimit = httpapi.Limit{ID: "auth_change_password", Count: 5, Window: time.Hour}
 )
 
 // RegisterLimitID names the register route's counter; AUTH_REGISTER_LIMIT

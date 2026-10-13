@@ -205,7 +205,9 @@ VALUES (?, ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'ru
 		}
 	}
 
-	// A team scope narrows the owners to the team in view: the shared repository is Team A's whole, and no team-b node.
+	// A team scope narrows the owner ROWS to the team in view and keeps each owner's own share (CHAOS-9413, D5988): Team A
+	// reads the shared repository at its 0.5 (no measured share, so the two owners split equally: the known limit), the
+	// same 2.1 it carries without the scope, and no team-b node.
 	scoped, err := Resolve(ctx, client, org, model.AnalyticsRequestInput{
 		Sankey:  &teamTheme,
 		Filters: &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputTeam, Ids: []string{"team-a"}}},
@@ -214,8 +216,8 @@ VALUES (?, ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'ru
 		t.Fatal(err)
 	}
 	scopedTeam := nodeValues(scoped.Sankey.Nodes, "TEAM")
-	if len(scopedTeam) != 1 || !near(scopedTeam["TEAM:Team A"], 2.6) {
-		t.Errorf("team scope team-a: TEAM nodes %v, want only Team A = 2.6 (u-a 1.0, u-shared 1.0, u-mixed 0.6)", scopedTeam)
+	if len(scopedTeam) != 1 || !near(scopedTeam["TEAM:Team A"], 2.1) {
+		t.Errorf("team scope team-a: TEAM nodes %v, want only Team A = 2.1 (u-a 1.0, u-shared 0.5, u-mixed 0.6)", scopedTeam)
 	}
 }
 

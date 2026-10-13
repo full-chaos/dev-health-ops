@@ -771,13 +771,17 @@ func linearOwnershipSnapshot(
 	facts := func(rows []linearReferenceOwnershipRow) []OwnershipSnapshotRow {
 		out := make([]OwnershipSnapshotRow, len(rows))
 		for index, row := range rows {
-			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom}
+			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom,
+				Shape: ProjectOwnershipShape(row.ProjectKey, row.IsPrimary, row.Specificity, row.Priority)}
 		}
 		return out
 	}
 	plan := PlanOwnershipSnapshot(facts(fresh), facts(open), at, kinds...)
 	rows := make([]linearReferenceOwnershipRow, 0, len(fresh)+len(plan.Retract))
 	for index, row := range fresh {
+		if plan.Unchanged[index] {
+			continue
+		}
 		row.ValidFrom = plan.ValidFrom[index]
 		rows = append(rows, row)
 	}

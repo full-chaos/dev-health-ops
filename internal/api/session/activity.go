@@ -8,6 +8,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -15,6 +16,9 @@ import (
 type activity struct {
 	hasData bool
 	last    *time.Time
+	// unknown is set when a table read failed: the activity is then partial,
+	// and must not rank the organization against another one.
+	unknown bool
 }
 
 // metricTables are the tables _load_org_activity reads, in its order.
@@ -22,8 +26,10 @@ var metricTables = []string{"repo_metrics_daily", "user_metrics_daily", "team_me
 
 // orgActivity is _load_org_activity: per organization, whether any metric
 // row exists and the newest computed_at across the four daily tables. A
-// table that cannot be read is skipped, as Python skips it, and without a
-// ClickHouse connection every organization has no activity.
+// table that cannot be read is skipped, as Python skips it, but it is counted,
+// logged at WARN and marks the organization's activity unknown, so that the
+// choice of an organization never rests on partial data (selectActiveMembership).
+// Without a ClickHouse connection every organization has no activity.
 func (h handlers) orgActivity(ctx context.Context, orgIDs []uuid.UUID) map[uuid.UUID]activity {
 	out := map[uuid.UUID]activity{}
 	var ordered []uuid.UUID
@@ -44,7 +50,11 @@ func (h handlers) orgActivity(ctx context.Context, orgIDs []uuid.UUID) map[uuid.
 			err := h.ClickHouse.QueryRow(ctx, activityStatement(table),
 				clickhouse.Named("org_id", orgID.String())).Scan(&count, &last)
 			if err != nil {
-				h.Logger.DebugContext(ctx, "skipping org activity lookup for table", slog.String("table", table), slog.String("error", err.Error()))
+				class := logging.ErrorClass(err)
+				recordActivityReadFailed(ctx, table, class)
+				h.Logger.WarnContext(ctx, "org activity table read failed, activity unknown",
+					slog.String("table", table), slog.String("error_class", class))
+				result.unknown = true
 				continue
 			}
 			last = last.UTC()
@@ -80,9 +90,34 @@ func activityStatement(table string) string {
 // minTime is datetime.min in UTC, the sort value of a missing timestamp.
 var minTime = time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)
 
+// anyActivityUnknown reports whether the activity of any membership is unknown.
+func anyActivityUnknown(memberships []membershipRow, activities map[uuid.UUID]activity) bool {
+	for _, m := range memberships {
+		if activities[m.OrgID].unknown {
+			return true
+		}
+	}
+	return false
+}
+
+// chooseMembership is selectActiveMembership with a WARN when the choice falls
+// back because an activity read failed (no ids in the line).
+func (h handlers) chooseMembership(ctx context.Context, memberships []membershipRow, requested *uuid.UUID, activities map[uuid.UUID]activity) *membershipRow {
+	if requested == nil && len(memberships) > 1 && anyActivityUnknown(memberships, activities) {
+		recordActivityFallback(ctx)
+		h.Logger.WarnContext(ctx, "org activity unknown, active organization chosen by earliest join",
+			slog.Int("memberships", len(memberships)))
+	}
+	return selectActiveMembership(memberships, requested, activities)
+}
+
 // selectActiveMembership is _select_active_membership: the requested org's
 // membership, or the one with data, then the newest metrics, then the
 // earliest join (the first such, as min() keeps the first).
+//
+// Stricter than Python: when the activity of any membership is unknown (a
+// table read failed), activity ranks nobody and the earliest join decides, so
+// a failed read can never send a login to another organization.
 func selectActiveMembership(memberships []membershipRow, requested *uuid.UUID, activities map[uuid.UUID]activity) *membershipRow {
 	if requested != nil {
 		for index := range memberships {
@@ -95,6 +130,7 @@ func selectActiveMembership(memberships []membershipRow, requested *uuid.UUID, a
 	if len(memberships) == 0 {
 		return nil
 	}
+	fallback := anyActivityUnknown(memberships, activities)
 	type key struct {
 		noData bool
 		last   time.Time
@@ -109,6 +145,9 @@ func selectActiveMembership(memberships []membershipRow, requested *uuid.UUID, a
 		joined := m.CreatedAt
 		if m.JoinedAt != nil {
 			joined = *m.JoinedAt
+		}
+		if fallback {
+			return key{last: minTime, joined: joined.UTC()}
 		}
 		return key{noData: !a.hasData, last: last, joined: joined.UTC()}
 	}

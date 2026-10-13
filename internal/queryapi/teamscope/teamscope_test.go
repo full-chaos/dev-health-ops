@@ -458,8 +458,11 @@ func TestOwnerSharesReadsTheOneOwnershipPredicate(t *testing.T) {
 		t.Errorf("bindings = %v, want org and as-of only", allBindings)
 	}
 	scoped, scopedBindings := OwnerShares("org", []string{"", "team-a"}, asOf)
-	if !strings.Contains(scoped, "o.team_id IN {"+OwnerSharesBindingTeamIDs+":Array(String)}") {
-		t.Errorf("team ids must narrow the owners: %s", scoped)
+	if !strings.Contains(scoped, "WHERE owner_team_id IN {"+OwnerSharesBindingTeamIDs+":Array(String)}") {
+		t.Errorf("team ids must narrow the owner rows: %s", scoped)
+	}
+	if strings.Contains(scoped, "o.team_id IN") {
+		t.Errorf("team ids must narrow AFTER the shares are computed over every owner (CHAOS-9413): %s", scoped)
 	}
 	if len(scopedBindings) != 3 || scopedBindings[1].Name != OwnerSharesBindingTeamIDs {
 		t.Errorf("bindings = %v, want org, team ids, as-of", scopedBindings)
@@ -478,5 +481,32 @@ func TestNarrowRepoScopeTextColumnStaysText(t *testing.T) {
 	got, _ := NarrowRepoScope(true, " AND toString(repo_id) IN {scope_ids:Array(String)}", nil, team, nil)
 	if !strings.HasPrefix(got, " AND (toString(repo_id) IN {scope_ids:Array(String)} AND toString(repo_id) IN (") || strings.Contains(got, "toUUIDOrNull") {
 		t.Errorf("a text column must compare as text on both sides:\n%s", got)
+
+// RepoShare is a lookup in one constant map under its own binding names; no team id = no expression.
+func TestRepoShareIsAMapLookupUnderItsOwnBindings(t *testing.T) {
+	asOf := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	if expr, bindings := RepoShare("org", "repo_id", []string{"", ""}, asOf); expr != "" || bindings != nil {
+		t.Fatalf("RepoShare(no team) = (%q, %v), want none", expr, bindings)
+	}
+	expr, bindings := RepoShare("org", "pr.repo_id", []string{"", "team-a"}, asOf)
+	for _, line := range []string{
+		"mapFromArrays(groupArray(repo_key), groupArray(repo_share))",
+		")[toString(pr.repo_id)], 0.0)",
+		"WHERE owner_team_id IN {" + RepoShareBindingTeamIDs + ":Array(String)}",
+		"{" + RepoShareBindingOrgID + ":String}",
+	} {
+		if !strings.Contains(expr, line) {
+			t.Errorf("RepoShare lacks %q:\n%s", line, expr)
+		}
+	}
+	if len(bindings) != 3 {
+		t.Fatalf("bindings = %v, want org, team ids, as-of", bindings)
+	}
+	for _, b := range bindings {
+		switch b.Name {
+		case RepoShareBindingOrgID, RepoShareBindingTeamIDs, RepoShareBindingAsOf:
+		default:
+			t.Errorf("binding %q is not a RepoShare name", b.Name)
+		}
 	}
 }

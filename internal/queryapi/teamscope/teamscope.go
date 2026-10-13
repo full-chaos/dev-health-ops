@@ -30,6 +30,7 @@ package teamscope
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -192,12 +193,17 @@ func ownershipFromWhere(names bindingNames, teamFiltered bool) string {
       )`, names.org, teamFilter, names.asOf)
 }
 
-// Binding names of OwnerShares. They differ from RepoCondition's, so a statement that carries a team scope AND the
-// owner shares binds each name once, never twice.
+// Binding names of OwnerShares and RepoShare. They differ from RepoCondition's, so a statement that carries a team
+// scope AND the owner shares binds each name once, never twice. RepoShare has its own names for the same reason: a
+// statement may carry it next to OwnerShares.
 const (
 	OwnerSharesBindingOrgID   = "owner_shares_org_id"
 	OwnerSharesBindingTeamIDs = "owner_shares_team_ids"
 	OwnerSharesBindingAsOf    = "owner_shares_as_of"
+
+	RepoShareBindingOrgID   = "repo_share_org_id"
+	RepoShareBindingTeamIDs = "repo_share_team_ids"
+	RepoShareBindingAsOf    = "repo_share_as_of"
 )
 
 // OwnerShares is the team side of a repository-keyed grouping: one row per (repository, owning team) as of asOf, by
@@ -207,9 +213,9 @@ const (
 //	owner_team_id    the owning team
 //	owner_team_label the team's name, its id when the catalog holds no name
 //	owner_share      the owner's linked share of the repository (team_repo_ownership.share, D5988: its
-//	                 issue<->PR links of every tier over all links of the repository), renormalised over the
-//	                 owners in the set so the shares of one repository sum to 1; equal among the owners
-//	                 (1 / number of owners) only when the set holds no complete measure (see below)
+//	                 issue<->PR links of every tier over all links of the repository), renormalised over ALL
+//	                 owners of the repository so the shares of one repository sum to 1; equal among the owners
+//	                 (1 / number of owners) only when the owners hold no complete measure (see below)
 //	owner_matched    1 (an unmatched LEFT JOIN reads the type's zero, so a caller tests this, never NULL)
 //
 // A repository owned by several teams is shared among them, not given to one (is_primary and priority are not
@@ -217,21 +223,29 @@ const (
 // owner keeps its own share and each lesser owner keeps its own lesser share, never an equal split (chris
 // 2026-10-12, D5988, team-attribution.md section 0.4d); a full tie is stored as equal shares (D5990), so it reads
 // equal. A team's share is the largest non-NULL share of its open rows (an inferred row carries it; a
-// provider_access, native or manual row has NULL = not measured, which is not zero). When any owner in the set has
-// no measured share, or the measured shares sum to nothing, no weight is invented: the set splits equally. teamIDs
-// narrows the owners to the teams in view (a team scope), so a team scope of one team gives that team the whole
-// repository, the same total the scope's own readers give it; no ids = every owning team. The source is a derived
-// table WITHOUT alias; the caller aliases it.
+// provider_access, native or manual row has NULL = not measured, which is not zero). When any owner of the
+// repository has no measured share, or the measured shares sum to nothing, no weight is invented: the owners split
+// equally (the known limit). teamIDs narrows the ROWS to the teams in view (a team scope), AFTER the shares are
+// computed over every owner: a co-owner in scope keeps its own share of the repository, never the whole
+// repository (CHAOS-9413, D5988); no ids = every owning team. The source is a derived table WITHOUT alias; the
+// caller aliases it.
 func OwnerShares(orgID string, teamIDs []string, asOf time.Time) (source string, bindings []dhclickhouse.Binding) {
-	var teamList []string
-	for _, id := range teamIDs {
-		if id != "" {
-			teamList = append(teamList, id)
-		}
-	}
 	names := bindingNames{org: OwnerSharesBindingOrgID, teams: OwnerSharesBindingTeamIDs, asOf: OwnerSharesBindingAsOf}
+	return ownerShares(names, orgID, teamIDs, asOf)
+}
+
+func ownerShares(names bindingNames, orgID string, teamIDs []string, asOf time.Time) (source string, bindings []dhclickhouse.Binding) {
+	teamList := nonEmpty(teamIDs)
 	bindings = ownershipBindings(names, orgID, teamList, asOf)
+	narrow := ""
+	if teamList != nil {
+		narrow = "\nWHERE owner_team_id IN {" + names.teams + ":Array(String)}"
+	}
+	// The window functions run over every owner of the repository (the unfiltered ownership statement); the team
+	// narrowing is the outer WHERE, so it removes rows and never re-weighs the ones that stay.
 	return fmt.Sprintf(`(
+SELECT owner_repo_id, owner_team_id, owner_team_label, owner_share, owner_matched
+FROM (
     SELECT
         owned.owner_repo_id AS owner_repo_id,
         owned.owner_team_id AS owner_team_id,
@@ -257,7 +271,46 @@ func OwnerShares(orgID string, teamIDs []string, asOf time.Time) (source string,
         WHERE org_id = {%[2]s:String}
         GROUP BY id
     ) AS nt ON nt.team_id = owned.owner_team_id
-)`, ownershipFromWhere(names, teamList != nil), names.org), bindings
+)%[3]s
+)`, ownershipFromWhere(names, false), names.org, narrow), bindings
+}
+
+// RepoShare is the share of a repository the teams of a team scope hold, as a SQL expression of Float64 over
+// repoColumn (D5988, CHAOS-9413): the sum of their own linked shares of it (OwnerShares), 0 for a repository none
+// of them owns. A reader that SUMS a measure over the repositories of a team scope multiplies each repository's
+// measure by it, so a co-owner holding 0.4 of a repository reads 0.4 of its measure, a main owner its own share,
+// and the selected teams together never more than the repository once. RepoCondition stays the membership test
+// (a listing, a per-entity read, a median, a rate); RepoShare is for the readers that accumulate. ("", nil) when no
+// team id is left, which a caller reads as no team scope (weight 1).
+//
+// The expression is a lookup in ONE constant map the server builds once per statement (an uncorrelated scalar
+// subquery), so it adds no join to the statement it is spliced into and repoColumn may be a UUID or a String column.
+func RepoShare(orgID, repoColumn string, teamIDs []string, asOf time.Time) (expr string, bindings []dhclickhouse.Binding) {
+	teamList := nonEmpty(teamIDs)
+	if len(teamList) == 0 {
+		return "", nil
+	}
+	slog.Debug("team scope weighs a summed read by the owners' share", "org_id", orgID, "repo_column", repoColumn, "teams", len(teamList), "as_of", asOf)
+	names := bindingNames{org: RepoShareBindingOrgID, teams: RepoShareBindingTeamIDs, asOf: RepoShareBindingAsOf}
+	shares, bindings := ownerShares(names, orgID, teamList, asOf)
+	return fmt.Sprintf(`ifNull((
+    SELECT mapFromArrays(groupArray(repo_key), groupArray(repo_share))
+    FROM (
+        SELECT owner_repo_id AS repo_key, sum(owner_share) AS repo_share
+        FROM %s AS scope_owner_shares
+        GROUP BY owner_repo_id
+    )
+)[toString(%s)], 0.0)`, shares, repoColumn), bindings
+}
+
+func nonEmpty(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // NarrowRepoScope combines the repository condition of a request into ONE

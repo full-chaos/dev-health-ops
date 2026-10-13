@@ -242,7 +242,7 @@ func TestFetchMetricValueBindsDateAsString(t *testing.T) {
 	}
 	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
-	if _, _, err := reader.fetchMetricValue(context.Background(), "repo_metrics_daily", "total_loc_touched", "sum", start, end, "", nil, "org-1"); err != nil {
+	if _, _, err := reader.fetchMetricValue(context.Background(), "repo_metrics_daily", "total_loc_touched", "sum", start, end, "", nil, "org-1", ""); err != nil {
 		t.Fatalf("fetchMetricValue: %v", err)
 	}
 	if v, _ := bindingValue(client.lastBindings, "start_day"); v != "2024-03-01" {
@@ -287,7 +287,7 @@ func TestFetchMetricContributorsUsesMetricAggregator(t *testing.T) {
 	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
 
-	if _, err := reader.fetchMetricContributors(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, "", nil, "org-1"); err != nil {
+	if _, err := reader.fetchMetricContributors(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, "", nil, "org-1", ""); err != nil {
 		t.Fatalf("fetchMetricContributors: %v", err)
 	}
 	if !strings.Contains(client.lastQuery, "toFloat64(sum(items_completed)) AS value") {
@@ -297,7 +297,7 @@ func TestFetchMetricContributorsUsesMetricAggregator(t *testing.T) {
 		t.Fatalf("sum-aggregator metric still ranks by avg():\n%s", client.lastQuery)
 	}
 
-	if _, err := reader.fetchMetricContributors(context.Background(), "repo_metrics_daily", "pr_first_review_p50_hours", "repo_id", "avg", start, end, "", nil, "org-1"); err != nil {
+	if _, err := reader.fetchMetricContributors(context.Background(), "repo_metrics_daily", "pr_first_review_p50_hours", "repo_id", "avg", start, end, "", nil, "org-1", ""); err != nil {
 		t.Fatalf("fetchMetricContributors: %v", err)
 	}
 	if !strings.Contains(client.lastQuery, "toFloat64(avg(pr_first_review_p50_hours)) AS value") {
@@ -320,7 +320,7 @@ func TestFetchMetricDriverDeltaUsesMetricAggregator(t *testing.T) {
 	compareStart := time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
 	compareEnd := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 
-	if _, err := reader.fetchMetricDriverDelta(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, compareStart, compareEnd, "", nil, "org-1"); err != nil {
+	if _, err := reader.fetchMetricDriverDelta(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, compareStart, compareEnd, "", nil, "org-1", ""); err != nil {
 		t.Fatalf("fetchMetricDriverDelta: %v", err)
 	}
 	if got := strings.Count(client.lastQuery, "toFloat64(sum(items_completed)) AS value"); got != 2 {

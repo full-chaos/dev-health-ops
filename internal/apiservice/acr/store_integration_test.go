@@ -59,6 +59,9 @@ func TestPostgresEntitlementStoreLookupEndToEnd(t *testing.T) {
 		if !errors.Is(err, ErrOrgNotFound) {
 			t.Fatalf("error = %v, want ErrOrgNotFound", err)
 		}
+		if !errors.Is(err, ErrOrgUnknown) {
+			t.Fatalf("error = %v, want ErrOrgUnknown for a well-formed id with no row", err)
+		}
 	})
 
 	orgID := uuid.NewString()

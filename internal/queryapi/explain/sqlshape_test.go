@@ -148,7 +148,7 @@ func TestScopeFilterForMetricIntersectsExplicitReposWithTeamScope(t *testing.T) 
 	if client.calls != 1 {
 		t.Fatalf("scopeFilterForMetric made %d client round trip(s), want exactly 1 (resolving the explicit ref)", client.calls)
 	}
-	if !strings.HasPrefix(filterSQL, " AND (toString(repo_id) IN {scope_ids:Array(String)} AND toString(repo_id) IN (") {
+	if !strings.HasPrefix(filterSQL, " AND (repo_id IN {scope_ids:Array(String)} AND repo_id IN (\n    SELECT DISTINCT toUUIDOrNull(coalesce(toString(o.repo_id), toString(r.id))) AS owned_repo_id") {
 		t.Fatalf("filterSQL does not AND the explicit-repo and team conditions together:\n%s", filterSQL)
 	}
 	if v, _ := bindingValue(bindings, "scope_ids"); fmt.Sprint(v) != "["+resolvedRepoID+"]" {

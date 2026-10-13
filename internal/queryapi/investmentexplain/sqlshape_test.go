@@ -191,7 +191,7 @@ func TestBreakdownFiltersScopeClauseIntersectsExplicitReposWithTeamScope(t *test
 	teamCondition, teamBindings := teamscope.RepoCondition("org-1", "repo_id", []string{"team-x"}, teamScopeAsOf)
 	f := BreakdownFilters{RepoIDs: []string{"repo-1"}, ReposNamed: true, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings}
 	scopeSQL, bindings := f.scopeClause()
-	if !strings.HasPrefix(scopeSQL, " AND (toString(repo_id) IN {scope_ids:Array(String)} AND toString(repo_id) IN (") {
+	if !strings.HasPrefix(scopeSQL, " AND (repo_id IN {scope_ids:Array(String)} AND repo_id IN (\n    SELECT DISTINCT toUUIDOrNull(coalesce(toString(o.repo_id), toString(r.id))) AS owned_repo_id") {
 		t.Fatalf("scopeSQL does not AND the explicit-repo and team conditions together:\n%s", scopeSQL)
 	}
 	// The repository rows are the SOURCE of a scoped effort read (allocation source), not a predicate (CHAOS-9221).

@@ -61,7 +61,7 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb",
 	"testdata/generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz": "8470b539f55e1ecd22b8ba9b52dd0921a9b51222dfd6a7d5a8050139e9f2abd8",
 	// The provider worlds (producedWorlds).
-	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "88df6620246d73bbcd158a94354837c459366560690b6d6c0824432ad9ce860f",
+	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "97c3671f55763944bd4da0ff8dcb13b8a8adf8ea0ee9a7709220a89104432d4c",
 	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "e9ada5e45c0a631e32613eee051d0a2931a6c0229fb42cd2de08eab6fd08696b",
 	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "532a5ce01edf72bc869f80ce5ae9f7d69c545c0870d348959ff3b8ea0dbc3adc",
 }

@@ -80,7 +80,7 @@ func TestDemoWorldEveryTeamHasInvestmentStages(t *testing.T) {
 	}
 
 	var table strings.Builder
-	fmt.Fprintf(&table, "\nteam | owned_repos | edges_in_repos | units_via_repo_id | units_via_pr_ref | units_via_issue_ref | units_reached | units_with_distribution\n")
+	fmt.Fprintf(&table, "\nteam | owned_repos | edges_in_repos | units_via_repo_id | units_via_pr_ref | units_via_issue_ref | units_reached | units_with_distribution | units_effort_gt0 | units_dist_nonempty | status:metric:count\n")
 	var missing []string
 	for _, tm := range teams {
 		cond, bindings := teamscope.RepoCondition(demoWorld.OrgID, "%s", []string{tm.id}, now)
@@ -119,7 +119,23 @@ func TestDemoWorldEveryTeamHasInvestmentStages(t *testing.T) {
 		reachedSQL := `(` + byRepoID + ` OR ` + byPR + ` OR ` + byIssue + `)`
 		reached := count(with + `SELECT count() FROM ` + latest + ` WHERE ` + reachedSQL)
 		withDistribution := count(with + `SELECT count() FROM ` + latest + ` WHERE length(mapKeys(theme_distribution_json)) > 0 AND effort_value > 0 AND ` + reachedSQL)
-		fmt.Fprintf(&table, "%s | %d | %d | %d | %d | %d | %d | %d\n", tm.name, owned, edges, viaRepoID, viaPR, viaIssue, reached, withDistribution)
+		effortPositive := count(with + `SELECT count() FROM ` + latest + ` WHERE effort_value > 0 AND ` + reachedSQL)
+		distNonEmpty := count(with + `SELECT count() FROM ` + latest + ` WHERE length(mapKeys(theme_distribution_json)) > 0 AND ` + reachedSQL)
+		var breakdown []string
+		groups, err := conn.Query(ctx, with+`SELECT status, metric, count() FROM (SELECT argMax(categorization_status, computed_at) AS status, argMax(effort_metric, computed_at) AS metric, argMax(tuple(repo_id), computed_at).1 AS repo_id, argMax(effort_value, computed_at) AS effort_value, argMax(structural_evidence_json, computed_at) AS structural_evidence_json, argMax(theme_distribution_json, computed_at) AS theme_distribution_json FROM work_unit_investments WHERE org_id = {org_id:String} GROUP BY work_unit_id) WHERE `+reachedSQL+` GROUP BY status, metric ORDER BY status, metric`, args...)
+		if err != nil {
+			t.Fatalf("%s: %v", tm.name, err)
+		}
+		for groups.Next() {
+			var status, metric *string
+			var n uint64
+			if err := groups.Scan(&status, &metric, &n); err != nil {
+				t.Fatal(err)
+			}
+			breakdown = append(breakdown, fmt.Sprintf("%s:%s:%d", deref(status), deref(metric), n))
+		}
+		groups.Close()
+		fmt.Fprintf(&table, "%s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s\n", tm.name, owned, edges, viaRepoID, viaPR, viaIssue, reached, withDistribution, effortPositive, distNonEmpty, strings.Join(breakdown, ","))
 		if withDistribution == 0 {
 			missing = append(missing, tm.name)
 		}
@@ -129,4 +145,11 @@ func TestDemoWorldEveryTeamHasInvestmentStages(t *testing.T) {
 	if len(missing) > 0 {
 		t.Errorf("teams with no persisted investment distribution reachable through their owned repositories: %v", missing)
 	}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return "null"
+	}
+	return *s
 }

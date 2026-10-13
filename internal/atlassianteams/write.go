@@ -217,6 +217,7 @@ func Write(
 	}
 	var ownership []OwnershipRow
 	var expiredOwnership []openOwnership
+	ownershipUnchanged := 0
 	if selections.Projects {
 		var plan providersync.SnapshotPlan
 		if ownership, expiredOwnership, plan, err = planOwnership(ctx, conn, orgID, teams, rows.Ownership, now,
@@ -226,12 +227,7 @@ func Write(
 			return result, fmt.Errorf("read current team project ownership: %w", err)
 		}
 		report(plan)
-		result.OwnershipWritten = len(rows.Ownership)
-		result.OwnershipUnchanged = plan.UnchangedCount()
-		if result.OwnershipUnchanged > 0 {
-			slog.Default().InfoContext(ctx, "atlassian_teams_ownership_unchanged",
-				"org_id", orgID, "fresh", len(rows.Ownership), "unchanged", result.OwnershipUnchanged, "written", len(ownership))
-		}
+		ownershipUnchanged = plan.UnchangedCount()
 	}
 	for reason := range abandoned {
 		result.CloseAbandoned = append(result.CloseAbandoned, reason)
@@ -264,6 +260,16 @@ func Write(
 		}
 		result.ExpiredOwnership = len(expiredOwnership)
 		done = append(done, "team project ownership")
+	}
+	if selections.Projects {
+		// Set after the write: a failed write returns above with nothing counted. The rows the run found are
+		// counted whether or not any was written; the unchanged ones were not written again.
+		result.OwnershipWritten = len(rows.Ownership)
+		result.OwnershipUnchanged = ownershipUnchanged
+		if ownershipUnchanged > 0 {
+			slog.Default().InfoContext(ctx, "atlassian_teams_ownership_unchanged",
+				"org_id", orgID, "fresh", len(rows.Ownership), "unchanged", ownershipUnchanged, "written", len(ownership))
+		}
 	}
 	if selections.Structure && (len(teamsToWrite) > 0 || len(deactivate) > 0) {
 		// The catalog row's project keys follow the links: a run that closes

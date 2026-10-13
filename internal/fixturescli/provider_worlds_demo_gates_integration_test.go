@@ -859,3 +859,45 @@ func TestDemoGateOwnershipResolvesToSyncedRepositories(t *testing.T) {
 	}
 	t.Logf("%d open ownership rows resolve by repository name", byName)
 }
+
+// Checkout's failed deployments carry the pull requests the story blames: each failed deployment's
+// pull_request_number (set by the deployment routes from the deployed sha) names a feature pull request
+// that a later revert commit in the same repository reverts.
+func TestDemoGateCheckoutFailedDeploysCarryTheRevertedFeatures(t *testing.T) {
+	world, _ := demoGateWorld(t)
+	checkout := map[string]bool{}
+	for _, repoID := range demoGateTeamRepos(world)["Checkout"] {
+		checkout[repoID] = true
+	}
+	reverted := map[string]bool{}
+	for _, row := range demoGateRows(world, "git_commits") {
+		repoID, message := gateText(row["repo_id"]), gateText(row["message"])
+		if subject, ok := strings.CutPrefix(message, `Revert "`); ok && checkout[repoID] {
+			if cut := strings.Index(subject, "\"\n"); cut > 0 {
+				reverted[repoID+"/"+subject[:cut]] = true
+			}
+		}
+	}
+	titles := map[string]string{}
+	for _, row := range demoGateRows(world, "git_pull_requests") {
+		number, _ := gateNumber(row["number"])
+		titles[fmt.Sprintf("%s#%d", gateText(row["repo_id"]), int(number))] = gateText(row["title"])
+	}
+	failed := 0
+	for _, row := range demoGateRows(world, "deployments") {
+		status := gateText(row["status"])
+		repoID := gateText(row["repo_id"])
+		if !checkout[repoID] || (status != "failure" && status != "failed" && status != "error") {
+			continue
+		}
+		failed++
+		number, ok := gateNumber(row["pull_request_number"])
+		title := titles[fmt.Sprintf("%s#%d", repoID, int(number))]
+		if !ok || !reverted[repoID+"/"+title] {
+			t.Errorf("failed deployment %s carries pull request %v (%q), not a feature a revert commit reverts", gateText(row["deployment_id"]), row["pull_request_number"], title)
+		}
+	}
+	if failed < 2 {
+		t.Errorf("Checkout holds %d failed deployments, want at least 2", failed)
+	}
+}

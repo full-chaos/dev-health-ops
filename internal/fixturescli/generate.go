@@ -22,7 +22,10 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -525,6 +528,10 @@ Flags (as "dev-hops fixtures generate"):
   --with-metrics            also the derived metrics
   --with-work-graph         also the work graph
   --skip-coherence-validation, --allow-mixed-org   as in Python
+  --backstop-database       PostgreSQL DSN of the job database; when given, the load also starts the
+                            recommendations backstop (all teams, window 14) for the organization, as the
+                            nightly schedule does, so the org has recommendations_daily rows once a worker
+                            has run it. Read from --backstop-database only, never from the environment.
 `
 
 // defaultOrg is the Python verb's default organization: uuid5(6ba7b810-..., "default-org").
@@ -553,6 +560,7 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 	provider := flags.String("provider", "synthetic", "provider")
 	withMetrics := flags.Bool("with-metrics", false, "derived metrics")
 	withGraph := flags.Bool("with-work-graph", false, "work graph")
+	backstopDatabase := flags.String("backstop-database", "", "PostgreSQL DSN of the job database")
 	flags.Bool("skip-coherence-validation", false, "accepted, no effect")
 	allowMixed := flags.Bool("allow-mixed-org", false, "write into an organization that holds synced data")
 	if err := flags.Parse(env.Args); err != nil {
@@ -665,7 +673,15 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 		total += count
 	}
 	logger.Info("frozen world loaded", "org_id", orgID, "tables", len(counts), "rows", total, "duration_ms", time.Since(started).Milliseconds())
-	if err := json.NewEncoder(env.Stdout).Encode(map[string]any{"org_id": orgID, "params": params.String(), "rows": counts}); err != nil {
+	summary := map[string]any{"org_id": orgID, "params": params.String(), "rows": counts}
+	if dsn := strings.TrimSpace(*backstopDatabase); dsn != "" {
+		backstop, err := startRecommendationsBackstop(ctx, logger, dsn, orgID)
+		if err != nil {
+			return writeError(env.Stderr, cli.ExitFailure, "backstop_failed", secrets.NewBoundary(dsn).Redact(err).Error())
+		}
+		summary["recommendations_backstop"] = backstop
+	}
+	if err := json.NewEncoder(env.Stdout).Encode(summary); err != nil {
 		fmt.Fprintln(env.Stderr, "could not write the result")
 		return cli.ExitFailure
 	}
@@ -673,3 +689,16 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 }
 
 var uuidText = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+func startRecommendationsBackstop(ctx context.Context, logger *slog.Logger, dsn, orgID string) (RecommendationsBackstopResult, error) {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return RecommendationsBackstopResult{}, fmt.Errorf("postgres: %w", err)
+	}
+	defer pool.Close()
+	registry, err := jobruntime.Load(jobsContractRoot)
+	if err != nil {
+		return RecommendationsBackstopResult{}, fmt.Errorf("job contract: %w", err)
+	}
+	return TriggerRecommendationsBackstop(ctx, pool, registry, logger, strings.ToLower(orgID), generateClock())
+}

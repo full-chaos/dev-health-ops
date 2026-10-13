@@ -494,8 +494,8 @@ func TestJiraTeamCatalogProjectSearchStopsAtThePageBoundAndIsNotComplete(t *test
 
 // The project search returns live projects only. The walk reads the archived
 // projects with a second search (status=archived), every page of it, and
-// names them so that their open ownership rows are HELD: no team, project,
-// member or ownership row is built for them.
+// names them so that their open ownership rows are HELD: no team, member or
+// ownership row is built for them, and each gets a completed project row.
 func TestJiraTeamCatalogCollectReadsArchivedProjectsToHoldOwnershipOnly(t *testing.T) {
 	t.Parallel()
 	const archivedPage2 = "/rest/api/3/project/search?maxResults=100&startAt=100&status=archived"
@@ -541,8 +541,17 @@ func TestJiraTeamCatalogCollectReadsArchivedProjectsToHoldOwnershipOnly(t *testi
 		}), true, []string{"OLD/20001"}, 2},
 	} {
 		batch, doer := collectJiraProjectSearch(t, tc.pages)
-		if len(batch.Rows.Teams) != 0 || len(batch.Rows.Projects) != 1 || len(batch.Rows.Ownership) != 0 || len(batch.Rows.Memberships) != 0 {
-			t.Errorf("%s: teams=%d projects=%d ownership=%d memberships=%d, want the one live project row only", name,
+		wantProjects := 0
+		for _, row := range batch.Rows.Projects {
+			if row.State == "completed" {
+				wantProjects++
+			}
+		}
+		if wantProjects != len(batch.ArchivedProjects) {
+			t.Errorf("%s: %d completed project rows for %d archived projects, want one each", name, wantProjects, len(batch.ArchivedProjects))
+		}
+		if len(batch.Rows.Teams) != 0 || len(batch.Rows.Projects) != 1+len(batch.ArchivedProjects) || len(batch.Rows.Ownership) != 0 || len(batch.Rows.Memberships) != 0 {
+			t.Errorf("%s: teams=%d projects=%d ownership=%d memberships=%d, want the one live project row plus one row per archived project", name,
 				len(batch.Rows.Teams), len(batch.Rows.Projects), len(batch.Rows.Ownership), len(batch.Rows.Memberships))
 		}
 		if batch.Result.ProjectSearchComplete != tc.complete || batch.Result.ProjectSearchPages != 1 || len(doer.requests) != tc.requests+1 {
@@ -1023,7 +1032,7 @@ func TestJiraTeamCatalogArchivedProjectIsLiveOnlyWhenTheReadAfterItSaysSo(t *tes
 		held                   []string
 		projects               []string
 	}{
-		"archived only":                 {page(ops), page(mov), page(ops), []string{"20001"}, []string{"10001"}},
+		"archived only":                 {page(ops), page(mov), page(ops), []string{"20001"}, []string{"10001", "20001"}},
 		"live1 and archived, not live2": {page(ops, mov), page(mov), page(ops), []string{"20001"}, []string{"10001", "20001"}},
 		"archived and live2 (restored)": {page(ops), page(mov), page(ops, mov), nil, []string{"10001", "20001"}},
 		"live1, archived and live2":     {page(ops, mov), page(mov), page(ops, mov), nil, []string{"10001", "20001"}},
@@ -1039,6 +1048,16 @@ func TestJiraTeamCatalogArchivedProjectIsLiveOnlyWhenTheReadAfterItSaysSo(t *tes
 			ids = append(ids, row.ID.String())
 		}
 		slices.Sort(ids)
+		for _, row := range batch.Rows.Projects {
+			wantState, wantSource, wantActive := "started", "jira.project.status=live", uint8(1)
+			if slices.Contains(tc.held, row.ID.String()) {
+				wantState, wantSource, wantActive = "completed", "jira.project.status=archived", 0
+			}
+			if row.State != wantState || row.StateSource != wantSource || row.IsActive != wantActive {
+				t.Errorf("%s: project %s state=%q source=%q active=%d, want %q %q %d", name,
+					row.ID.String(), row.State, row.StateSource, row.IsActive, wantState, wantSource, wantActive)
+			}
+		}
 		if !slices.Equal(held, append([]string{}, tc.held...)) || !slices.Equal(ids, tc.projects) || !batch.Result.ProjectSearchComplete {
 			t.Errorf("%s: held=%v projects=%v complete=%v, want held=%v projects=%v complete", name,
 				held, ids, batch.Result.ProjectSearchComplete, tc.held, tc.projects)

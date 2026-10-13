@@ -229,8 +229,10 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	}
 	// The search above returns live projects only (the provider's default
 	// for `status`). An archived project still exists and still owns its
-	// work items, so it is read too, and only to keep its open ownership
-	// rows open: it gets no team, project, member or sprint row here. This
+	// work items, so it is read too: to keep its open ownership rows open,
+	// and to write its project row as completed (a project the live search
+	// no longer returns would otherwise keep the row it had before project
+	// states were written). It gets no team, member or sprint row here. This
 	// read failing at any page, the first one included, does not fail the
 	// walk; it leaves the snapshot not complete, so nothing is closed.
 	archived, archivedComplete, archivedPages, archivedStop, _ := jiraTeamCatalogSearchProjects(
@@ -286,6 +288,7 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	rows.Projects = dedupeJiraProjectCatalogRows(rows.Projects)
 	rows.Ownership = dedupeJiraOwnershipRows(rows.Ownership)
 	var archivedProjects []JiraArchivedProject
+	var archivedRows []jiraTeamCatalogProjectRow
 	archivedSeen := map[JiraArchivedProject]bool{}
 	// Rule: the reads are ordered in time. Only a live read taken AFTER the
 	// archived read can prove a project live again, so the skip set is the
@@ -305,7 +308,27 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		}
 		archivedSeen[project] = true
 		archivedProjects = append(archivedProjects, project)
+		archivedName := strings.TrimSpace(entry.Name)
+		if archivedName == "" {
+			archivedName = project.Key
+		}
+		if archivedID, ok := JiraProjectID(project.ID); ok {
+			archivedRows = append(archivedRows, normalizeJiraArchivedProjectRow(ref.OrgID, archivedID, project.Key, archivedName, normalizedAt))
+		}
 	}
+	// The archived read is the later one: a project the first live read also
+	// named is archived now, so its row is the archived one.
+	archivedRowIDs := make(map[string]bool, len(archivedRows))
+	for _, row := range archivedRows {
+		archivedRowIDs[row.ID.String()] = true
+	}
+	liveRows := make([]jiraTeamCatalogProjectRow, 0, len(rows.Projects))
+	for _, row := range rows.Projects {
+		if !archivedRowIDs[row.ID.String()] {
+			liveRows = append(liveRows, row)
+		}
+	}
+	rows.Projects = dedupeJiraProjectCatalogRows(append(liveRows, archivedRows...))
 
 	sprints, sprintErr := handler.collectSprints(ctx, client, claim, projectKeys, normalizedAt)
 	if sprintErr != nil {

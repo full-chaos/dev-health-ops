@@ -688,6 +688,31 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
 
 > **The matrix above tracks TEST coverage, not whether the data is pulled.** Functionally we ingest teams, projects, and members for *every* provider that supports them (auto-import, when the option is selected). Don't read a `partial`/`no` cell as "not consumed" — it means "not yet asserted."
 
+**The executed matrix (CHAOS-9425).** `TestCrossProviderAttributionMatrix` (`internal/fixturescli`, integration)
+loads the provider worlds of `dho fixtures generate` (GitHub, GitLab, Jira, Linear; each written by the
+production collectors, routes and link builders, CHAOS-9420), runs the production attribution verbs in
+production order (inferred repository-ownership derivation, the daily `work_item_attribution` family for every
+day of the worlds, the backstop) and judges every cell of `contracts/attribution-matrix/v1/matrix.json`
+(provider × entity × check). A cell no world exercises fails as `fixture_gap`; a `known_red` cell names its
+ticket and fails when it turns green, until it is moved to `pass`; every provider × entity pair is a cell or a
+`not_applicable` entry with its rule, and every check of an entity is a cell or an `omitted` entry with its
+rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
+(§0.4j), of active teams, with the first recorded owners applied backward before the first record (D5987,
+option C); the shared ownership readers are judged against that rule at now and on every item day. Known red
+today: ownership and membership start at the sync, and the shared readers do not apply the first owners
+backward (CHAOS-9404),
+GitLab ownership names the project by path (CHAOS-8883), and a GitHub pull request's `linked_issue` row copies
+its issue's row of the pull request's day, which names a co-owner as the main owner (CHAOS-9409). The inferred repository owner starts at its earliest
+linked evidence since CHAOS-9403 (#4049): its cell is pass.
+A pull request's `linked_issue` row must name the team an issue it is actually linked to holds on its own on
+the pull request's day (a relation of record, or a link of record; an `extkey:` relation counts only through
+the one existing item of that key; following the issue's later changes is CHAOS-9478). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the
+defects the matrix exists to catch into the same state the production verbs wrote (sync-time `valid_from`, a
+landscape grouped by membership, an issue-key prefix taken as a native link, a pull request team inherited
+without a linked issue, from a donor without a team of its own or naming another team than its issue's, a
+co-owner written as a candidate row, a reader with its own ownership SQL) and
+requires the judging cell to turn red on each.
+
 #### 0.4b Project identity: one project, one id (CHAOS-8851)
 
 A project is named by ONE id in the three tables that hold it. The team that owns a project reaches the

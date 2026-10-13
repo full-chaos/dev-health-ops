@@ -5,10 +5,13 @@ package operational
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // CHAOS-6747: the installation "deleted" event deactivates the org's
@@ -146,5 +149,37 @@ VALUES (gen_random_uuid(), 'org-2', 'github', 'github-app', TRUE, 'sealed', now(
 	if err := admin.QueryRow(ctx,
 		`SELECT credentials_encrypted FROM public.integration_credentials WHERE org_id = 'org-2'`).Scan(&sealed); err != nil || sealed != "sealed" {
 		t.Fatalf("credentials_encrypted after refused writes = %q, err %v", sealed, err)
+	}
+
+	// The migration gate's diagnostic must see a widened grant too, or it
+	// would confirm a posture that every worker's readiness check refuses.
+	var role string
+	if err := domain.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	gapsBefore, err := postgresstore.DiagnoseRolePosture(ctx, admin, role, postgresstore.DomainPosture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gap := range gapsBefore {
+		if gap.TableName == "integration_credentials" {
+			t.Fatalf("diagnostic reports a gap on the exact grants: %s", gap)
+		}
+	}
+	if _, err := admin.Exec(ctx, `GRANT UPDATE (credentials_encrypted) ON TABLE public.integration_credentials TO `+role); err != nil {
+		t.Fatal(err)
+	}
+	gaps, err := postgresstore.DiagnoseRolePosture(ctx, admin, role, postgresstore.DomainPosture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := false
+	for _, gap := range gaps {
+		if gap.TableName == "integration_credentials" && len(gap.Excess) > 0 && strings.Contains(gap.String(), "credentials_encrypted") {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("diagnostic gaps %v do not name the undeclared credentials_encrypted UPDATE", gaps)
 	}
 }

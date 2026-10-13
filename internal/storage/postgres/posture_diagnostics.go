@@ -306,6 +306,12 @@ func DiagnoseRolePosture(
 			return nil, err
 		}
 		gaps = append(gaps, excessGaps...)
+
+		mixedGaps, err := diagnoseMixedColumnExcess(ctx, pool, expectedRole, posture.RequiredTables, posture.ColumnScoped)
+		if err != nil {
+			return nil, err
+		}
+		gaps = append(gaps, mixedGaps...)
 	}
 
 	if len(posture.RequiredSequences) > 0 {
@@ -674,6 +680,98 @@ func diagnoseColumnScopedExcess(
 		if len(excess) > 0 {
 			gaps = append(gaps, PostureGap{TableName: tableName, Excess: excess})
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, ErrUnavailable
+	}
+	return gaps, nil
+}
+
+// diagnoseMixedColumnExcessQuery lists the INSERT, UPDATE and REFERENCES
+// column privileges the role holds, by any route, on a column of a mixed table
+// (one named in both RequiredTables and ColumnScoped) that the posture does not
+// declare and that no table-wide grant already implies. It is the gate-side
+// counterpart of rolePostureQuery's effective-privilege column sweep: without
+// it the migration gate would confirm a role holding, say, UPDATE on a secret
+// column of a mixed table while every worker's own readiness check refuses it
+// (CHAOS-6747). SELECT is not swept: the mixed table's table-wide SELECT already
+// implies it on every column.
+const diagnoseMixedColumnExcessQuery = `
+WITH mixed(table_name) AS (
+	SELECT DISTINCT * FROM unnest($2::text[])
+), declared(table_name, column_name, privilege) AS (
+	SELECT * FROM unnest($3::text[], $4::text[], $5::text[])
+), candidates AS (
+	SELECT mixed.table_name, attribute.attname AS column_name, privilege.name AS privilege,
+		to_regclass('public.' || mixed.table_name) AS relation
+	FROM mixed
+	JOIN pg_catalog.pg_attribute AS attribute
+		ON attribute.attrelid = to_regclass('public.' || mixed.table_name)
+	CROSS JOIN (VALUES ('INSERT'), ('UPDATE'), ('REFERENCES')) AS privilege(name)
+	WHERE attribute.attnum > 0 AND NOT attribute.attisdropped
+)
+SELECT table_name, column_name, privilege
+FROM candidates
+WHERE has_column_privilege($1, relation, column_name, privilege)
+	AND NOT has_table_privilege($1, relation, privilege)
+	AND NOT EXISTS (
+		SELECT 1 FROM declared
+		WHERE declared.table_name = candidates.table_name
+			AND declared.column_name = candidates.column_name
+			AND declared.privilege = candidates.privilege
+	)
+ORDER BY table_name, column_name, privilege
+`
+
+// diagnoseMixedColumnExcess reports each undeclared column privilege found by
+// diagnoseMixedColumnExcessQuery as an excess gap naming the table, the
+// privilege and the column. All three are checked-in schema identifiers or SQL
+// keywords, so the line is safe to log.
+func diagnoseMixedColumnExcess(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	expectedRole string,
+	tables []TablePrivilege,
+	columns []ColumnPrivilege,
+) ([]PostureGap, error) {
+	required := make(map[string]struct{}, len(tables))
+	for _, table := range tables {
+		required[table.TableName] = struct{}{}
+	}
+	var (
+		mixedTables                                       []string
+		declaredTables, declaredNames, declaredPrivileges []string
+	)
+	for _, column := range columns {
+		if _, ok := required[column.TableName]; !ok {
+			continue
+		}
+		mixedTables = append(mixedTables, column.TableName)
+		declaredTables = append(declaredTables, column.TableName)
+		declaredNames = append(declaredNames, column.ColumnName)
+		declaredPrivileges = append(declaredPrivileges, column.Privilege)
+	}
+	if len(mixedTables) == 0 {
+		return nil, nil
+	}
+	rows, err := pool.Query(ctx, diagnoseMixedColumnExcessQuery, expectedRole,
+		mixedTables, declaredTables, declaredNames, declaredPrivileges)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer rows.Close()
+
+	var gaps []PostureGap
+	for rows.Next() {
+		var tableName, columnName, privilege string
+		if err := rows.Scan(&tableName, &columnName, &privilege); err != nil {
+			return nil, ErrUnavailable
+		}
+		gaps = append(gaps, PostureGap{
+			TableName:  tableName,
+			ColumnName: columnName,
+			Excess:     []string{privilege + " (" + columnName + ")"},
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, ErrUnavailable

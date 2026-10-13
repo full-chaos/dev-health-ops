@@ -10,6 +10,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -41,8 +42,17 @@ func buildInvestmentFlow(ctx context.Context, client QueryClient, startDay, endD
 		categoryBindings = []dhclickhouse.Binding{{Name: "themes", Value: themes}}
 	}
 	scopeFilterSQL, scopeBindings := combineScope(repoFilterSQL, repoBindings, categoryFilterSQL, categoryBindings)
+	// The effort of a repository a team scope co-owns is the team's own share of it (teamscope.RepoShare,
+	// CHAOS-9413, D5988); RepoCondition above only says the repository is in.
+	var effortShareSQL string
+	if scopeLevel == "team" && strings.TrimSpace(repoFilterSQL) != "" && strings.TrimSpace(strings.TrimPrefix(repoFilterSQL, " AND ")) != "1 = 0" {
+		var shareBindings []dhclickhouse.Binding
+		if effortShareSQL, shareBindings = teamscope.RepoShare(orgID, "work_unit_investments.repo_id", scopeIDs, asOf); effortShareSQL != "" {
+			scopeBindings = append(scopeBindings, shareBindings...)
+		}
+	}
 
-	rows, err := fetchInvestmentFlowItems(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, maxInvestmentItems, orgID)
+	rows, err := fetchInvestmentFlowItems(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, effortShareSQL, maxInvestmentItems, orgID)
 	if err != nil {
 		return nil, nil, err
 	}

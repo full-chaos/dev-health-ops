@@ -811,6 +811,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 			}, lookups.Answer))
 		var retracted []jiraTeamCatalogOwnershipRow
 		var plan SnapshotPlan
+		freshOwnership := len(ownership)
 		ownership, retracted, plan = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond), snapshot)
 		result.OwnershipSnapshotIncomplete = judgeJiraOwnershipSnapshot(ctx, ref.OrgID, plan, len(open)+len(held))
 		result.DegradedLegs = append(result.DegradedLegs, SnapshotAbsenceLegs(plan)...)
@@ -819,7 +820,9 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 				"org_id", ref.OrgID, "rows", len(retracted), "project_ids", jiraRetractedProjectIDs(retracted))
 		}
 		result.OwnershipRetracted = len(retracted)
-		freshOwnership := len(ownership)
+		result.OwnershipUnchanged = plan.UnchangedCount()
+		slog.Default().InfoContext(ctx, "jira_team_catalog_ownership_unchanged",
+			"org_id", ref.OrgID, "fresh", freshOwnership, "unchanged", result.OwnershipUnchanged, "written", len(ownership))
 		ownership = append(ownership, retracted...)
 
 		ownershipEffect, effectErr := effectBatchFromValues(jiraTeamCatalogOwnershipDestination, EffectReadbackRequired, ownership)

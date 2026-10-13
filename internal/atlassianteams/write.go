@@ -48,7 +48,10 @@ type Result struct {
 	TeamKeys           []string
 	MembershipsWritten int
 	MembersWritten     int
+	// OwnershipWritten is the project links this run found and holds open; OwnershipUnchanged of them repeat
+	// an open row and were not written again.
 	OwnershipWritten   int
+	OwnershipUnchanged int
 	ExpiredMemberships int
 	// NewerMembershipFactsSkipped counts the facts (team and member) left open whole because an open row
 	// of theirs was written after this run read the provider (CHAOS-9204).
@@ -214,6 +217,7 @@ func Write(
 	}
 	var ownership []OwnershipRow
 	var expiredOwnership []openOwnership
+	ownershipUnchanged := 0
 	if selections.Projects {
 		var plan providersync.SnapshotPlan
 		if ownership, expiredOwnership, plan, err = planOwnership(ctx, conn, orgID, teams, rows.Ownership, now,
@@ -223,6 +227,7 @@ func Write(
 			return result, fmt.Errorf("read current team project ownership: %w", err)
 		}
 		report(plan)
+		ownershipUnchanged = plan.UnchangedCount()
 	}
 	for reason := range abandoned {
 		result.CloseAbandoned = append(result.CloseAbandoned, reason)
@@ -253,9 +258,18 @@ func Write(
 		if err := writeOwnership(ctx, conn, orgID, ownership, expiredOwnership, now); err != nil {
 			return fail("write team project ownership", err)
 		}
-		result.OwnershipWritten = len(ownership)
 		result.ExpiredOwnership = len(expiredOwnership)
 		done = append(done, "team project ownership")
+	}
+	if selections.Projects {
+		// Set after the write: a failed write returns above with nothing counted. The rows the run found are
+		// counted whether or not any was written; the unchanged ones were not written again.
+		result.OwnershipWritten = len(rows.Ownership)
+		result.OwnershipUnchanged = ownershipUnchanged
+		if ownershipUnchanged > 0 {
+			slog.Default().InfoContext(ctx, "atlassian_teams_ownership_unchanged",
+				"org_id", orgID, "fresh", len(rows.Ownership), "unchanged", ownershipUnchanged, "written", len(ownership))
+		}
 	}
 	if selections.Structure && (len(teamsToWrite) > 0 || len(deactivate) > 0) {
 		// The catalog row's project keys follow the links: a run that closes
@@ -525,17 +539,23 @@ func planOwnership(
 	}
 	freshFacts := make([]providersync.OwnershipSnapshotRow, len(fresh))
 	for i, row := range fresh {
-		freshFacts[i] = providersync.OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom}
+		key := row.ProjectKey
+		freshFacts[i] = providersync.OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom,
+			Shape: providersync.ProjectOwnershipShape(&key, row.IsPrimary, row.Specificity, row.Priority)}
 	}
 	openFacts := make([]providersync.OwnershipSnapshotRow, len(open))
 	for i, row := range open {
-		openFacts[i] = providersync.OwnershipSnapshotRow{TeamID: row.teamID, ProjectID: row.projectID, Source: row.source, ValidFrom: row.validFrom}
+		openFacts[i] = providersync.OwnershipSnapshotRow{TeamID: row.teamID, ProjectID: row.projectID, Source: row.source, ValidFrom: row.validFrom,
+			Shape: providersync.ProjectOwnershipShape(row.projectKey, row.isPrimary, row.specificity, row.priority)}
 	}
 	plan := providersync.PlanOwnershipSnapshot(freshFacts, openFacts, now, snapshot)
-	out := make([]OwnershipRow, len(fresh))
+	out := make([]OwnershipRow, 0, len(fresh))
 	for i, row := range fresh {
+		if plan.Unchanged[i] {
+			continue
+		}
 		row.ValidFrom = plan.ValidFrom[i]
-		out[i] = row
+		out = append(out, row)
 	}
 	var expired []openOwnership
 	for _, retraction := range plan.Retract {

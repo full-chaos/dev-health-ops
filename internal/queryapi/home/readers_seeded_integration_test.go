@@ -383,7 +383,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 	})
 
 	t.Run("fetchMetricValue_argMaxDedupSubqueryChangesTheAnswer", func(t *testing.T) {
-		got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay, endDay, "", nil, "sum", seededOrgID)
+		got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay, endDay, "", nil, "sum", seededOrgID, "")
 		if err != nil {
 			t.Fatalf("fetchMetricValue: %v", err)
 		}
@@ -393,7 +393,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 	})
 
 	t.Run("fetchMetricValue_emptyWindowHasNoData", func(t *testing.T) {
-		got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay.AddDate(10, 0, 0), endDay.AddDate(10, 0, 0), "", nil, "sum", seededOrgID)
+		got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay.AddDate(10, 0, 0), endDay.AddDate(10, 0, 0), "", nil, "sum", seededOrgID, "")
 		if err != nil {
 			t.Fatalf("fetchMetricValue: %v", err)
 		}
@@ -403,7 +403,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 	})
 
 	t.Run("fetchMetricSeries_sameDedupSubquery", func(t *testing.T) {
-		rows, err := fetchMetricSeries(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay, endDay, "", nil, "sum", seededOrgID)
+		rows, err := fetchMetricSeries(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay, endDay, "", nil, "sum", seededOrgID, "")
 		if err != nil {
 			t.Fatalf("fetchMetricSeries: %v", err)
 		}
@@ -472,7 +472,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("scopeFilterForMetric: %v", err)
 		}
-		got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay, endDay, scopeFilter, scopeBindings, "sum", seededOrgID)
+		got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay, endDay, scopeFilter, scopeBindings, "sum", seededOrgID, "")
 		if err != nil {
 			t.Fatalf("fetchMetricValue with team scope: %v", err)
 		}

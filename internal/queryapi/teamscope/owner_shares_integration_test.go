@@ -6,9 +6,10 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 	"testing"
 	"time"
+
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/crossorg"
@@ -27,7 +28,7 @@ import (
 //   - repo-gap:    team-a measured 0.9, team-b NOT measured (NULL)       -> 0.5 / 0.5 (no weight is invented)
 //   - repo-none:   team-a only, share NULL                               -> 1.0
 //
-// A team scope renormalises over the owners in view: team-b alone holds repo-lead whole.
+// A team scope narrows the rows and never re-weighs them: team-b alone holds repo-lead at 0.3 (CHAOS-9413).
 func TestOwnerSharesWeighByTheStoredLinkedShare(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -119,19 +120,76 @@ func TestOwnerSharesWeighByTheStoredLinkedShare(t *testing.T) {
 		}
 	}
 
-	// A team scope renormalises over the owners in view: one selected team holds the repository whole.
+	// A team scope narrows the ROWS and keeps each owner's own share (CHAOS-9413): team-b alone holds repo-lead at its
+	// own 0.3, not the whole repository, and repo-gap at the equal 0.5 of the whole owner set.
 	scoped := read([]string{"team-b"})
-	var keys []string
-	for key := range scoped {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if math.Abs(scoped[key]-1) > 1e-9 {
-			t.Errorf("team-b alone: %s share = %v, want 1", key, scoped[key])
-		}
-	}
 	if len(scoped) == 0 {
 		t.Fatal("team-b alone: no rows")
+	}
+	for pi := range providers {
+		for ci, tc := range cases {
+			want, owned := tc.want["team-b"]
+			got, present := scoped[repoID(pi, ci)+"|team-b"]
+			if owned != present {
+				t.Errorf("%s: team-b row present = %v, want %v", tc.name, present, owned)
+				continue
+			}
+			if owned && math.Abs(got-want) > 1e-9 {
+				t.Errorf("team-b alone: %s share = %v, want its own %v", tc.name, got, want)
+			}
+		}
+	}
+	for key := range scoped {
+		if len(key) < 7 || key[len(key)-7:] != "|team-b" {
+			t.Errorf("team-b alone: unexpected owner row %s", key)
+		}
+	}
+
+	// RepoShare is the sum of the scoped teams' own shares of a repository, 0 for a repository none of them owns.
+	wantShare := map[string]float64{}
+	for pi := range providers {
+		for ci, tc := range cases {
+			wantShare[repoID(pi, ci)] = tc.want["team-a"] + tc.want["team-b"]
+		}
+	}
+	expr, shareBindings := teamscope.RepoShare(org, "id", []string{"team-a", "team-b"}, asOf)
+	rows, err := client.Query(ctx, "SELECT toString(id) AS id, "+expr+" AS share FROM repos FINAL WHERE org_id = {share_org:String}",
+		append(shareBindings, dhclickhouse.Binding{Name: "share_org", Value: org}))
+	if err != nil {
+		t.Fatalf("RepoShare query: %v", err)
+	}
+	defer rows.Close()
+	seen := 0
+	for rows.Next() {
+		var id string
+		var share float64
+		if err := rows.Scan(&id, &share); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		seen++
+		if want := wantShare[id]; math.Abs(share-want) > 1e-9 {
+			t.Errorf("team-a + team-b hold %s at %v, want %v", id, share, want)
+		}
+	}
+	if seen != len(wantShare) {
+		t.Errorf("RepoShare read %d repositories, want %d", seen, len(wantShare))
+	}
+
+	// A team that owns nothing holds 0 of every repository.
+	none, noneBindings := teamscope.RepoShare(org, "id", []string{"team-none"}, asOf)
+	noneRows, err := client.Query(ctx, "SELECT sum("+none+") AS total FROM repos FINAL WHERE org_id = {share_org:String}",
+		append(noneBindings, dhclickhouse.Binding{Name: "share_org", Value: org}))
+	if err != nil {
+		t.Fatalf("RepoShare of a team that owns nothing: %v", err)
+	}
+	defer noneRows.Close()
+	var total float64
+	for noneRows.Next() {
+		if err := noneRows.Scan(&total); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+	}
+	if total != 0 {
+		t.Errorf("team-none holds %v, want 0", total)
 	}
 }

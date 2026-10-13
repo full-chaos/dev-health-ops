@@ -928,6 +928,7 @@ func fetchInvestment(ctx context.Context, client QueryClient, orgID string, team
 	filters := investmentexplain.BreakdownFilters{OrgID: orgID, StartTS: start, EndTS: end, DatedByEnd: true}
 	if len(teams) > 0 {
 		filters.TeamScopeCondition, filters.TeamScopeBindings = teamscope.RepoCondition(orgID, "repo_id", []string(teams), ownershipAsOf(end))
+		filters.TeamIDs, filters.TeamAsOf = []string(teams), ownershipAsOf(end)
 	}
 	themeRows, err := reader.FetchInvestmentThemeEffort(ctx, filters)
 	if err != nil {

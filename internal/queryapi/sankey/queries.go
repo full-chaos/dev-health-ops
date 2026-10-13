@@ -144,12 +144,15 @@ type investmentFlowItemRow struct {
 // sankeyRepoDedupParity): an unmerged repos row, or a same-id row from a
 // different org (this table has no compound key preventing that), could
 // surface as an extra/relabeled target node here. Go is correct.
-func fetchInvestmentFlowItems(ctx context.Context, client QueryClient, startTS, endTS time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, limit int, orgID string) ([]investmentFlowItemRow, error) {
+func fetchInvestmentFlowItems(ctx context.Context, client QueryClient, startTS, endTS time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, effortShareSQL string, limit int, orgID string) ([]investmentFlowItemRow, error) {
+	if effortShareSQL == "" {
+		effortShareSQL = "1.0"
+	}
 	query := fmt.Sprintf(`
         SELECT
             theme_kv.1 AS source,
             r.repo AS target,
-            sum(theme_kv.2 * work_unit_investments.effort_value) AS value
+            sum(theme_kv.2 * work_unit_investments.effort_value * %s) AS value
         FROM %s AS work_unit_investments
         LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(work_unit_investments.repo_id) AND r.org_id = {org_id:String}
         ARRAY JOIN CAST(work_unit_investments.theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
@@ -160,7 +163,7 @@ func fetchInvestmentFlowItems(ctx context.Context, client QueryClient, startTS, 
         ORDER BY value DESC
         LIMIT {limit:UInt64}
         %s
-    `, analytics.LatestWorkUnitInvestmentsSource(), scopeFilterSQL, settingsMaxExecutionTime())
+    `, effortShareSQL, analytics.LatestWorkUnitInvestmentsSource(), scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_ts", Value: startTS},
 		{Name: "end_ts", Value: endTS},

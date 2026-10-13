@@ -296,13 +296,35 @@ func DeriveTextParseEdges(prs []PullRequestRow, workItems []WorkItemRow, buildTi
 			emit(items[0].workItemID, items[0].provider, ref.RawMatch, ref.RefType)
 		}
 
+		// A repository-qualified reference is offered to every prefix it could
+		// belong to (a two-segment path is a GitHub owner/repo AND a possible
+		// GitLab group/project). Exactly one real issue row links; two is
+		// ambiguous and links none, as for KEY-n.
+		type repoRefHit struct {
+			ref  RepoNamedRef
+			item string
+		}
+		hits := map[string][]repoRefHit{}
+		var hitOrder []string
 		for _, ref := range ExtractRepoNamedIssueRefs(text) {
 			result.CrossRefsFound++
 			workItemID := ref.Prefix + ref.Repo + "#" + ref.Number
 			if _, ok := lookup.byID[workItemID]; !ok {
 				continue
 			}
-			emit(workItemID, ref.Provider, ref.RawMatch, ref.RefType)
+			k := ref.Repo + "#" + ref.Number
+			if _, seen := hits[k]; !seen {
+				hitOrder = append(hitOrder, k)
+			}
+			hits[k] = append(hits[k], repoRefHit{ref, workItemID})
+		}
+		for _, k := range hitOrder {
+			if len(hits[k]) > 1 {
+				result.AmbiguousKeys++
+				continue
+			}
+			h := hits[k][0]
+			emit(h.item, h.ref.Provider, h.ref.RawMatch, h.ref.RefType)
 		}
 
 		ghRefs := textrefs.ExtractGitHubIssueRefs(text)

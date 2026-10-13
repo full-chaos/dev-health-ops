@@ -189,6 +189,9 @@ func TestExplicitTextTierProviderMatrix(t *testing.T) {
 		{"github owner/repo#n no row", "Relates to other/lib#13", []WorkItemRow{{uuid.New(), "gh:other/lib#12", "github"}}, "", "", 0},
 		{"gitlab same-repo #n", "see #7", []WorkItemRow{{repoID, "gitlab:g/p#7", "gitlab"}}, "gitlab:g/p#7", "references", 0},
 		{"gitlab group/project#n", "see grp/sub/proj#8", []WorkItemRow{{uuid.New(), "gitlab:grp/sub/proj#8", "gitlab"}}, "gitlab:grp/sub/proj#8", "references", 0},
+		{"github glued suffix is no reference", "see o/r#5abc", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}}, "", "", 0},
+		{"unicode letter before owner is no reference", "see \u00e9o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}}, "", "", 0},
+		{"owner/repo#n held by github and gitlab is ambiguous", "see o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}, {uuid.New(), "gitlab:o/r#5", "gitlab"}}, "", "", 1},
 		{"gitlab !n is a merge request", "see g/p!9", []WorkItemRow{{repoID, "gitlab:g/p#9", "gitlab"}}, "", "", 0},
 	}
 	for _, tc := range cases {

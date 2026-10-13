@@ -36,8 +36,13 @@ func ExtractRepoNamedIssueRefs(text string) []RepoNamedRef {
 		if loc[2] < 0 {
 			start = loc[4]
 		}
+		// Unicode-aware \b on both sides (RE2's is ASCII-only), and a repo path
+		// is not the tail of a longer path, URL or dotted/dashed token.
+		if !textrefs.WordBoundaryBefore(text, start) || !textrefs.WordBoundaryAfter(text, loc[1]) {
+			continue
+		}
 		if start > 0 {
-			if prev := text[start-1]; prev == '/' || prev == '.' || prev == '-' || prev == '_' || prev >= '0' && prev <= '9' || prev >= 'a' && prev <= 'z' || prev >= 'A' && prev <= 'Z' {
+			if prev := text[start-1]; prev == '/' || prev == '.' || prev == '-' {
 				continue
 			}
 		}

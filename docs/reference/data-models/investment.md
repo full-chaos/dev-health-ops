@@ -159,8 +159,8 @@ the unit's repositories (the same ownership rule the team scope uses). It no lon
 vote, so a unit in an owned repository counts as assigned even when no linked work item names a team, and a unit in an
 unowned repository counts as unassigned even when a work item names one. A unit counts once, however many owning teams
 it reaches. The denominator is unchanged. The TEAM grouping of the Investment flow, breakdown, timeseries and the flow matrix reads the same ownership
-(CHAOS-9297): each effort row takes the owner of its repository, a co-owned repository is shared equally among its
-owners, and a repository with no owner is `unassigned`, so the unassigned share of the flow is `1 - teamCoverage`
+(CHAOS-9297): each effort row takes the owner of its repository, a co-owned repository is shared among its
+owners by their linked share (the main owner by its share, each lesser owner by its own lesser share; equally only on a tie or when no share is measured), and a repository with no owner is `unassigned`, so the unassigned share of the flow is `1 - teamCoverage`
 except for a unit that spans an owned and an unowned repository (the coverage assigns it whole, the flow splits its
 effort). Only the work-unit team list still shows the vote.
 

@@ -781,15 +781,17 @@ func billingNormalizer(seeded map[string]bool, start time.Time) func(string) str
 // its keys sorted; a body that is not JSON is returned as is. The Go-only
 // org_name key (the row's organisation name, which the Python
 // reference never served) is dropped from both planes' bodies; the billing
-// unit tests pin it. So is the Go-only acr_service_model entitlement
-// feature (published by CHAOS-9311 after the Python build was frozen) is
-// dropped only inside a "features" object; the entitlement unit tests pin
-// it, and the key anywhere else, like every other feature, is still compared.
+// unit tests pin it. The Go-only acr_service_model entitlement feature
+// (published by CHAOS-9311 after the Python build was frozen) is dropped
+// only from the top-level "features" object of a body, which is the
+// entitlements answer. The entitlement unit tests pin it; the key anywhere
+// else, like every other feature, is still compared.
 func sortRecordKeys(body string) string {
 	value, err := pyjson.DecodeString(body)
 	if err != nil {
 		return body
 	}
+	root := value
 	var walk func(value pyjson.Value, sortHere, features bool) pyjson.Value
 	walk = func(value pyjson.Value, sortHere, features bool) pyjson.Value {
 		switch v := value.(type) {
@@ -809,7 +811,7 @@ func sortRecordKeys(body string) string {
 					continue
 				}
 				item, _ := v.Get(key)
-				out.Set(key, walk(item, key == "plan" || key == "price", key == "features"))
+				out.Set(key, walk(item, key == "plan" || key == "price", value == root && key == "features"))
 			}
 			return out
 		}

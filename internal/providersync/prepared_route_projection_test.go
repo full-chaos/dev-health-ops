@@ -29,6 +29,7 @@ var preparedRouteRowTypes = map[string][]any{
 	"git_pull_requests":                       {pullRequestRow{}},
 	"git_pull_request_reviews":                {pullRequestReviewRow{}},
 	"ai_attribution":                          {githubAIAttributionRow{}},
+	"work_graph_pr_commit":                    {prCommitLinkRow{}},
 	"estimate_coverage_metrics_daily":         {githubEstimateCoverageMetricsDailyRow{}},
 	"issue_type_metrics_daily":                {githubIssueTypeMetricsDailyRow{}},
 	"sprints":                                 {githubSprintRow{}},

@@ -85,6 +85,22 @@ func (service *Service) ProduceLinks(ctx context.Context, orgID string, window W
 	}
 	result := Derive(inputs)
 
+	native, err := service.loader.LoadNativeLinkKeys(ctx, orgID, window.RepoID)
+	if err != nil {
+		service.logger.Error("pr-commit links: native link read failed",
+			slog.String("organization_id", orgID), slog.Any("error", err))
+		return LinksOutcome{OrganizationID: orgID}, fmt.Errorf("read native pr-commit links: %w", err)
+	}
+	if len(native) > 0 {
+		kept := result.Links[:0]
+		for _, link := range result.Links {
+			if _, stated := native[NativeLinkKey{RepoID: link.RepoID, PRNumber: link.PRNumber, CommitHash: link.CommitHash}]; !stated {
+				kept = append(kept, link)
+			}
+		}
+		result.Links = kept
+	}
+
 	// Derive leaves LastSynced zero (see prcommit.go) -- stamp the real
 	// timestamp here, one clock read for the whole batch, mirroring
 	// issueprlinks.Service.Produce's identical post-Derive fallback.

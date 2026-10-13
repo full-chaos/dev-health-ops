@@ -18,9 +18,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/prcommit"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 )
+
+var gitLabTeams = map[string]bool{"Data": true, "Delivery": true, "Web": true}
 
 func TestDemoWorldEveryTeamHasInvestmentStages(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
@@ -38,6 +41,24 @@ func TestDemoWorldEveryTeamHasInvestmentStages(t *testing.T) {
 	}
 	now := time.Now().UTC().Truncate(time.Second)
 	if _, err := LoadWorld(ctx, conn, world, demoWorld.OrgID, now); err != nil {
+		t.Fatal(err)
+	}
+	prCommitLoader, err := prcommit.NewLoader(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prCommitWriter, err := prcommit.NewWriter(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prCommitService, err := prcommit.NewService(prCommitLoader, prCommitWriter, conn, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prCommitService.ProduceLinks(ctx, demoWorld.OrgID, prcommit.Window{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prCommitService.ProduceEdges(ctx, demoWorld.OrgID, prcommit.Window{}); err != nil {
 		t.Fatal(err)
 	}
 	reader, err := chquery.NewReader(conn)
@@ -138,6 +159,9 @@ func TestDemoWorldEveryTeamHasInvestmentStages(t *testing.T) {
 		fmt.Fprintf(&table, "%s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s\n", tm.name, owned, edges, viaRepoID, viaPR, viaIssue, reached, withDistribution, effortPositive, distNonEmpty, strings.Join(breakdown, ","))
 		if withDistribution == 0 {
 			missing = append(missing, tm.name)
+		}
+		if !gitLabTeams[tm.name] && withDistribution != reached {
+			t.Errorf("%s (github-backed): %d of %d reached units carry effort and a distribution; adding GitLab links must not change them", tm.name, withDistribution, reached)
 		}
 	}
 	for _, diag := range []struct{ name, sql string }{

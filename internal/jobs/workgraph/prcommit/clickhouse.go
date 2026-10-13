@@ -102,6 +102,47 @@ func (loader *Loader) Load(ctx context.Context, orgID string, window Window) (In
 	return inputs, nil
 }
 
+// NativeLinkKey identifies one PR<->commit pair a provider stated itself.
+type NativeLinkKey struct {
+	RepoID     uuid.UUID
+	PRNumber   int
+	CommitHash string
+}
+
+// LoadNativeLinkKeys reads the pairs a provider's own API stated (provenance
+// native). The text derivation must not replace one of them: its row would
+// carry a newer last_synced under the same key and lower the link's tier.
+func (loader *Loader) LoadNativeLinkKeys(ctx context.Context, orgID string, repoID *uuid.UUID) (map[NativeLinkKey]struct{}, error) {
+	if loader == nil || loader.conn == nil {
+		return nil, ErrUnavailable
+	}
+	if orgID == "" {
+		return nil, ErrScopeRequired
+	}
+	query := `SELECT repo_id, pr_number, commit_hash FROM work_graph_pr_commit FINAL WHERE org_id = {org_id:String} AND provenance = 'native'`
+	args := []any{clickhouse.Named("org_id", orgID)}
+	if repoID != nil {
+		query += ` AND repo_id = {repo_id:UUID}`
+		args = append(args, clickhouse.Named("repo_id", repoID.String()))
+	}
+	rows, err := loader.conn.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[NativeLinkKey]struct{})
+	for rows.Next() {
+		var key NativeLinkKey
+		var number uint32
+		if err := rows.Scan(&key.RepoID, &number, &key.CommitHash); err != nil {
+			return nil, err
+		}
+		key.PRNumber = int(number)
+		out[key] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
 // loadPullRequests ports the known-PR read (builder.py:1772-1786). No date
 // filter -- see Window's doc comment.
 func (loader *Loader) loadPullRequests(ctx context.Context, orgID string, repoID *uuid.UUID) ([]PullRequestRow, error) {

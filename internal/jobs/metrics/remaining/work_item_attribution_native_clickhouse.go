@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +26,9 @@ type WorkItemAttributionOutcome struct {
 	ItemsSeen   int
 	RowsWritten int
 	SkippedNoop bool
+	// DonorChangedDependents counts the items rederived because a donor's row
+	// changed after their linked_issue row (CHAOS-9478).
+	DonorChangedDependents int
 }
 
 // ComputeOrg re-derives work_item_team_attributions for one org's AFFECTED
@@ -47,6 +51,9 @@ type WorkItemAttributionOutcome struct {
 //     admin membership has no single-repo/project scope to key on, and
 //     "team = ownership" means a membership change can retarget ANY item's
 //     assignee_membership/author_membership candidate ([[feedback_team_vs_member_attribution]]).
+//   - An item whose linked_issue donor's row changed after the item's own row
+//     is rederived too (CHAOS-9478, loadDonorChangedDependents), with no
+//     watermark: the stored rows decide, every run.
 //
 // A scoped run also rederives its linked_issue CLOSURE, not just the
 // originally detected repo/project set -- an item one inheritable-dependency
@@ -83,21 +90,39 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	if err != nil {
 		return WorkItemAttributionOutcome{}, err
 	}
-	if scope.orgWide == false && len(scope.repoIDs) == 0 && len(scope.projectKeys) == 0 {
+	// A linked item copies its donor's stored row (CHAOS-9460); when the
+	// donor's row changed after it for a reason no ownership watermark sees,
+	// the item is owed a rederive too (CHAOS-9478). With no ownership scope,
+	// the run rederives only those items and publishes no scope marker.
+	dependents, err := executor.loadDonorChangedDependents(ctx, orgID)
+	if err != nil {
+		return WorkItemAttributionOutcome{}, err
+	}
+	noScope := !scope.orgWide && len(scope.repoIDs) == 0 && len(scope.projectKeys) == 0
+	if noScope && len(dependents) == 0 {
 		outcome := WorkItemAttributionOutcome{SkippedNoop: true}
 		executor.observeRun(orgID, outcome)
 		return outcome, nil
 	}
+	if len(dependents) > 0 {
+		slog.Default().InfoContext(ctx, "work_item_attribution.donor_changed_dependents",
+			"org_id", orgID, "dependents", len(dependents), "item_only_run", noScope)
+	}
 
-	subjects, err := executor.loadAffectedSubjects(ctx, orgID, scope)
+	var subjects map[string]teamattribution.GithubWorkItemDerivationSubject
+	if noScope {
+		subjects, err = executor.loadDonorSubjects(ctx, orgID, dependents, nil)
+	} else {
+		subjects, err = executor.loadAffectedSubjects(ctx, orgID, scope)
+	}
 	if err != nil {
 		return WorkItemAttributionOutcome{}, err
 	}
 	outcome := WorkItemAttributionOutcome{
 		OrgWide: scope.orgWide, RepoIDs: scope.repoIDs, ProjectKeys: scope.projectKeys,
-		ItemsSeen: len(subjects),
+		ItemsSeen: len(subjects), DonorChangedDependents: len(dependents),
 	}
-	if len(subjects) == 0 {
+	if len(subjects) == 0 && (noScope || len(dependents) == 0) {
 		// The scope's ownership changed, but nothing in it has any work
 		// items yet -- a real, if unusual, outcome (e.g. a repo/project was
 		// just given team ownership before any item synced). Still a
@@ -139,7 +164,7 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	// Only evaluated for a run detectScope did NOT already decide was
 	// org-wide: an org-wide run is already a superset of any closure it
 	// could compute.
-	if !scope.orgWide {
+	if !scope.orgWide && !noScope {
 		closureSubjects, promoted, reason, err := executor.evaluateClosurePromotion(
 			ctx, orgID, affectedIDs, subjects, dependencies)
 		if err != nil {
@@ -186,6 +211,33 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 			// known. Without this reload, BuildLinkedIssueIndex below never
 			// sees B->A, so B resolves unassigned instead of inheriting A's
 			// team via linked_issue -- codex round 2's P1 finding.
+			dependencies, err = executor.loadDependencyEdges(ctx, orgID, subjects)
+			if err != nil {
+				return outcome, err
+			}
+			outcome.ItemsSeen = len(affectedIDs)
+		}
+	}
+
+	// The donor-changed dependents join a scoped run like closure items: they
+	// are written, and their own edges are loaded for their linked_issue
+	// inheritance. An org-wide run already holds every item.
+	if !scope.orgWide && !noScope {
+		var missing []string
+		for _, id := range dependents {
+			if _, ok := affectedIDs[id]; !ok {
+				missing = append(missing, id)
+			}
+		}
+		if len(missing) > 0 {
+			extra, err := executor.loadDonorSubjects(ctx, orgID, missing, nil)
+			if err != nil {
+				return outcome, err
+			}
+			for id, subject := range extra {
+				subjects[id] = subject
+				affectedIDs[id] = struct{}{}
+			}
 			dependencies, err = executor.loadDependencyEdges(ctx, orgID, subjects)
 			if err != nil {
 				return outcome, err

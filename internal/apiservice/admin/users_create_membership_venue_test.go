@@ -117,6 +117,30 @@ WHERE u.email = $1 AND m.org_id = $2), '')`, email, orgID).Scan(&role)
 		return n
 	}
 
+	t.Run("org users list needs an admin membership in the requested org", func(t *testing.T) {
+		list := func(token, xOrgID string) venueoracle.Response {
+			t.Helper()
+			return venueoracle.Do(t, base, venueoracle.Request{
+				Name: "org users list", Method: http.MethodGet, Path: "/api/v1/admin/users",
+				Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens[token], "X-Org-Id": xOrgID},
+			})
+		}
+		for name, c := range map[string]struct {
+			token, org string
+			want       int
+		}{
+			"admin of the org":               {"admin", orgID.String(), http.StatusOK},
+			"superuser":                      {"super", orgID.String(), http.StatusOK},
+			"member-only in the org":         {"demoted", orgID.String(), http.StatusForbidden},
+			"admin elsewhere, no membership": {"admin", otherOrgID.String(), http.StatusForbidden},
+			"member-role only in the org":    {"admin", memberOrgID.String(), http.StatusForbidden},
+		} {
+			if got := list(c.token, c.org); got.Status != c.want {
+				t.Fatalf("%s: status = %d, want %d: %s", name, got.Status, c.want, got.Body)
+			}
+		}
+	})
+
 	t.Run("org admin add with a role is listed with that role", func(t *testing.T) {
 		response := create("admin", orgID.String(), `{"email":"added-admin@example.com","full_name":"Added Admin","role":"admin"}`)
 		if response.Status != http.StatusCreated {

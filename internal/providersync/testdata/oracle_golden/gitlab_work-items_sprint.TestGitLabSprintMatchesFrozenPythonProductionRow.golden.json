@@ -1,0 +1,24 @@
+{
+  "header": {
+    "test": "TestGitLabSprintMatchesFrozenPythonProductionRow",
+    "python_build": "b6b1fd88954fe636660b20b7d58ee8ec8cb4c97e",
+    "producer_digest": "5d7b843391b729f661e13a3d59d1348998271eb3375eb9e71686f96f20e73888",
+    "recipe": "pair gitlab/work-items/sprint: git worktree add --detach $DIR b6b1fd88954fe636660b20b7d58ee8ec8cb4c97e (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGitLabSprintMatchesFrozenPythonProductionRow$' -python-root $DIR",
+    "recorded_by": "goldenrecord",
+    "blanked": {
+      "body $.cases[].row.last_synced.v": 2
+    }
+  },
+  "requests": [
+    {
+      "name": "gitlab/work-items/sprint",
+      "method": "PYTHON",
+      "path": "program sha256 de0d9f364de126a981025af6b7c4923d382e08f13236306779cabc10267c5da2 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "body_sha256": "b4633de1627dde0c20f267049512e464ab911eac843464a94a06811953cc4eb0",
+      "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 0,
+      "headers": {},
+      "body": "{\"cases\": [{\"id\": \"closed_date_only_dates\", \"row\": {\"provider\": {\"t\": \"str\", \"v\": \"gitlab\"}, \"sprint_id\": {\"t\": \"str\", \"v\": \"gitlab:acme/api:milestone:7\"}, \"name\": {\"t\": \"str\", \"v\": \"August\"}, \"state\": {\"t\": \"str\", \"v\": \"closed\"}, \"started_at\": {\"t\": \"datetime\", \"v\": \"2026-08-01T00:00:00Z\"}, \"ended_at\": {\"t\": \"datetime\", \"v\": \"2026-08-31T00:00:00Z\"}, \"completed_at\": {\"t\": \"datetime\", \"v\": \"2026-08-31T00:00:00Z\"}, \"native_team_key\": null, \"last_synced\": {\"t\": \"datetime\", \"v\": \"per-run value\"}, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}, {\"id\": \"active_no_due_date\", \"row\": {\"provider\": {\"t\": \"str\", \"v\": \"gitlab\"}, \"sprint_id\": {\"t\": \"str\", \"v\": \"gitlab:acme/api:milestone:8\"}, \"name\": {\"t\": \"str\", \"v\": \"September\"}, \"state\": {\"t\": \"str\", \"v\": \"active\"}, \"started_at\": {\"t\": \"datetime\", \"v\": \"2026-09-01T00:00:00Z\"}, \"ended_at\": null, \"completed_at\": null, \"native_team_key\": null, \"last_synced\": {\"t\": \"datetime\", \"v\": \"per-run value\"}, \"org_id\": {\"t\": \"str\", \"v\": \"org-acme\"}}}], \"excluded_fields\": {\"last_synced\": \"the production constructor stamps wall-clock now and has no clock parameter; Go stamps the complete unit normalizedAt\"}}\n"
+    }
+  ]
+}

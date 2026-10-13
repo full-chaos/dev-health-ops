@@ -219,3 +219,42 @@ func TestChangePasswordRateLimit(t *testing.T) {
 		t.Errorf("sixth attempt: %d, want 429", last)
 	}
 }
+
+// TestChangePasswordLimitSharesOneBucketPerUser: an equivalent spelling of the subject UUID
+// (braces) counts against the same per-user budget.
+func TestChangePasswordLimitSharesOneBucketPerUser(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
+	st := startStack(t, ctx)
+	org := st.specs["alice"]["org_id"].(string)
+	plain := changeToken(t, st, changeAlice, "alice@example.com", org, "owner", 0)
+	braced := changeToken(t, st, "{"+changeAlice+"}", "alice@example.com", org, "owner", 0)
+	for i := 0; i < 5; i++ {
+		if status, _ := changeRequest(t, ctx, st, http.MethodPost, "/api/v1/auth/change-password", plain, changeBody("wrong-current-pw", newPassword)); status != http.StatusForbidden {
+			t.Fatalf("attempt %d: %d, want 403", i+1, status)
+		}
+	}
+	if status, _ := changeRequest(t, ctx, st, http.MethodPost, "/api/v1/auth/change-password", braced, changeBody("wrong-current-pw", newPassword)); status != http.StatusTooManyRequests {
+		t.Errorf("braced subject sixth attempt: %d, want 429", status)
+	}
+}
+
+// TestChangePasswordKeepsOnboardingFlag: a user with no organization still needs onboarding
+// after the change, as after a login.
+func TestChangePasswordKeepsOnboardingFlag(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
+	st := startStack(t, ctx)
+	// Heidi (seeded, local, no membership).
+	const heidi = "10000000-0000-4000-8000-000000000008"
+	token := changeToken(t, st, heidi, "heidi@example.com", "", "member", 0)
+	status, body := changeRequest(t, ctx, st, http.MethodPost, "/api/v1/auth/change-password", token, changeBody(sessionscenario.Password, newPassword))
+	if status != http.StatusOK {
+		t.Fatalf("change: %d %s", status, body)
+	}
+	if !strings.Contains(body, `"needs_onboarding":true`) {
+		t.Errorf("orgless user lost needs_onboarding: %s", body)
+	}
+}

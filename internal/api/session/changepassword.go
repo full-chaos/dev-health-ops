@@ -59,7 +59,13 @@ func writeGenericValidation(w http.ResponseWriter) {
 // changePasswordKey limits per signed-in user: the guard has set the
 // principal before the limiter runs.
 func changePasswordKey(r *http.Request) string {
-	return "change-password:" + policy.UserFrom(r.Context()).UserID
+	user := policy.UserFrom(r.Context())
+	// The canonical UUID, as authentication reads it: a brace-wrapped or urn form of the same
+	// subject must share one bucket.
+	if id, ok := policy.ParsePyUUID(user.UserID); ok {
+		return "change-password:" + id.String()
+	}
+	return "change-password:" + user.UserID
 }
 
 // changePassword is POST /api/v1/auth/change-password.
@@ -173,7 +179,7 @@ func (h handlers) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Logger.InfoContext(ctx, "change-password succeeded: other sessions revoked", "user_id", caller.UserID)
-	policy.WriteModel(w, http.StatusOK, loginResponse(pair, false, userInfo(user, membership), nil), nil)
+	policy.WriteModel(w, http.StatusOK, loginResponse(pair, membership == nil && !user.IsSuperuser, userInfo(user, membership), nil), nil)
 }
 
 // callerMembership is the membership of the organization in the caller's

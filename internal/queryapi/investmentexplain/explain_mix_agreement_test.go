@@ -23,12 +23,15 @@ type mixAgreementClient struct {
 	cachedJSON     string
 	cachedAt       time.Time
 	cacheReadCount *int
+	dataVersion    string
 }
 
 func (c mixAgreementClient) Query(ctx context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 	switch {
 	case strings.Contains(statement, "ARRAY JOIN CAST(subcategory_distribution_json") && strings.Contains(statement, "subcategory_kv.1 AS subcategory"):
 		return &fixtureRowScanner{rows: c.breakdown}, nil
+	case strings.Contains(statement, "toString(max(computed_at))"):
+		return &fixtureRowScanner{rows: [][]any{{c.dataVersion, "4"}}}, nil
 	case strings.Contains(statement, "FROM investment_explanations"):
 		if c.cacheReadCount != nil {
 			*c.cacheReadCount++
@@ -302,7 +305,7 @@ func TestCacheKeyChangesWithWindowAndMix(t *testing.T) {
 	themes.Add("quality", 50)
 	subcategories := newOrderedFloatMap()
 	opts := explainOpts()
-	base := mixCacheFilters(opts, themes, subcategories)
+	base := mixCacheFilters(opts, themes, subcategories, "v1/4")
 	keyOf := func(f any) string {
 		k, err := ComputeCacheKey(CacheKeyInput{Filters: f, OrgID: "o"})
 		if err != nil {
@@ -312,16 +315,16 @@ func TestCacheKeyChangesWithWindowAndMix(t *testing.T) {
 	}
 	moved := opts
 	moved.EndTS = moved.EndTS.AddDate(0, 0, 1)
-	if keyOf(base) == keyOf(mixCacheFilters(moved, themes, subcategories)) {
+	if keyOf(base) == keyOf(mixCacheFilters(moved, themes, subcategories, "v1/4")) {
 		t.Error("key must change with the resolved window")
 	}
 	changed := newOrderedFloatMap()
 	changed.Add("quality", 50)
 	changed.Add("risk", 10)
-	if keyOf(base) == keyOf(mixCacheFilters(opts, changed, subcategories)) {
+	if keyOf(base) == keyOf(mixCacheFilters(opts, changed, subcategories, "v1/4")) {
 		t.Error("key must change with the mix")
 	}
-	if keyOf(base) != keyOf(mixCacheFilters(opts, themes, subcategories)) {
+	if keyOf(base) != keyOf(mixCacheFilters(opts, themes, subcategories, "v1/4")) {
 		t.Error("key must be stable for the same window and mix")
 	}
 }
@@ -342,5 +345,48 @@ func TestExplainLogsRawKeysFoundInProse(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "raw_keys_in_prose") {
 		t.Fatalf("no raw_keys_in_prose log line, got: %s", buf.String())
+	}
+}
+
+func TestCacheKeyChangesWithTheDataVersionAlone(t *testing.T) {
+	themes := newOrderedFloatMap()
+	themes.Add("quality", 50)
+	subcategories := newOrderedFloatMap()
+	keyOf := func(version string) string {
+		k, err := ComputeCacheKey(CacheKeyInput{Filters: mixCacheFilters(explainOpts(), themes, subcategories, version), OrgID: "o"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	if keyOf("2026-10-13 10:00:00/4") == keyOf("2026-10-13 11:00:00/4") {
+		t.Error("key must change when only the newest write changes")
+	}
+	if keyOf("2026-10-13 10:00:00/4") == keyOf("2026-10-13 10:00:00/5") {
+		t.Error("key must change when only the row count changes")
+	}
+}
+
+func TestEvidenceChangeWithSameMixIsRecomputed(t *testing.T) {
+	// Same mix, same cached finding share; the work-unit data version moved, so the
+	// key differs and nothing is read back from the cache row of the old version.
+	row := func(version string) mixAgreementClient {
+		return mixAgreementClient{breakdown: mixRows(), cachedJSON: cachedExplanationJSON(t, 10.0), cachedAt: explainFixtureNow, dataVersion: version}
+	}
+	keyFor := func(version string) string {
+		reader, _ := NewReader(row(version))
+		themes, subcategories, err := reader.fetchMixDistributions(context.Background(), explainOpts())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := reader.FetchInvestmentDataVersion(context.Background(), "org-9555")
+		if err != nil {
+			t.Fatal(err)
+		}
+		k, _ := ComputeCacheKey(CacheKeyInput{Filters: mixCacheFilters(explainOpts(), themes, subcategories, got), OrgID: "org-9555"})
+		return k
+	}
+	if keyFor("2026-10-13 10:00:00") == keyFor("2026-10-13 12:00:00") {
+		t.Fatal("same mix, newer work units: the cache key must differ")
 	}
 }

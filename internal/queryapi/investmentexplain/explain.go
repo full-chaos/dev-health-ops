@@ -162,9 +162,9 @@ func (reader *Reader) fetchMixDistributions(ctx context.Context, opts ExplainInv
 
 // mixCacheFilters extends the request filters of the cache key with the resolved
 // report window and a digest of the mix (theme and subcategory shares to the one
-// decimal the answer serves). Same filters on another day, or after the work units
+// decimal the answer serves) and of the work-unit data version. Same filters on another day, or after the work units
 // changed, give another key.
-func mixCacheFilters(opts ExplainInvestmentMixOptions, themes, subcategories *orderedFloatMap) any {
+func mixCacheFilters(opts ExplainInvestmentMixOptions, themes, subcategories *orderedFloatMap, dataVersion string) any {
 	totalEffort := 0.0
 	for _, kv := range themes.Items() {
 		totalEffort += kv.Value
@@ -184,7 +184,7 @@ func mixCacheFilters(opts ExplainInvestmentMixOptions, themes, subcategories *or
 			fmt.Fprintf(digest, "%s\t%s\t%.1f\n", group.name, key, shares[key])
 		}
 	}
-	fmt.Fprintf(digest, "total\t%.3f\n", totalEffort)
+	fmt.Fprintf(digest, "total\t%.3f\ndata_version\t%s\n", totalEffort, dataVersion)
 	return map[string]any{
 		"request":      opts.FiltersForCacheKey,
 		"window_start": opts.StartTS.UTC().Format("2006-01-02"),
@@ -416,7 +416,11 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 		if fetchErr != nil {
 			return InvestmentMixExplanation{}, fetchErr
 		}
-		cacheFilters = mixCacheFilters(opts, themeDistribution, subcategoryDistribution)
+		dataVersion, versionErr := reader.FetchInvestmentDataVersion(ctx, opts.OrgID)
+		if versionErr != nil {
+			return InvestmentMixExplanation{}, versionErr
+		}
+		cacheFilters = mixCacheFilters(opts, themeDistribution, subcategoryDistribution, dataVersion)
 	}
 	cacheKey, err := ComputeCacheKey(CacheKeyInput{
 		Filters:     cacheFilters,

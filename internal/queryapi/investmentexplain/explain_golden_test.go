@@ -285,7 +285,7 @@ func assertWrittenCacheRecordMatchesGolden(t *testing.T, golden explainGolden, c
 		Filters: mixCacheFilters(ExplainInvestmentMixOptions{
 			StartTS: time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC), EndTS: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 			FiltersForCacheKey: defaultMetricFilterForCacheKey(),
-		}, themes, subcategories),
+		}, themes, subcategories, "none"),
 		OrgID: "org-golden-4977",
 	})
 	if err != nil {

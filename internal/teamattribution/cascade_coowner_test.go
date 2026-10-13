@@ -102,11 +102,11 @@ func TestAProjectOfSeveralTeamsAttributesTheItemToEveryActiveTeam(t *testing.T) 
 	}
 }
 
-// Ownership with no catalog key (project_ownership wins): the same rule. Only
-// an owner at the SAME rank as the primary is a co-owner; a lower is_primary,
-// specificity or priority, an empty team id, or a second fact of a team
-// already marked, is not.
-func TestOnlyOwnersAtThePrimaryRankAreCoOwners(t *testing.T) {
+// Ownership with no catalog key (project_ownership wins): the same rule. Every
+// other owning team of the project is a co-owner, at any rank (CHAOS-9409,
+// D5988: every owning team gets a row); an empty team id, or a second fact of
+// a team already marked, is not.
+func TestEveryOwnerOfTheProjectIsACoOwner(t *testing.T) {
 	for _, provider := range coOwnerProviders {
 		t.Run(provider, func(t *testing.T) {
 			at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -141,9 +141,9 @@ func TestOnlyOwnersAtThePrimaryRankAreCoOwners(t *testing.T) {
 				"team-a":              "map[project_ownership=1:1]",
 				"team-b":              "map[project_ownership=2:1]",
 				"":                    "map[]",
-				"team-not-primary":    "map[]",
-				"team-less-specific":  "map[]",
-				"team-other-priority": "map[]",
+				"team-not-primary":    "map[project_ownership=2:1]",
+				"team-less-specific":  "map[project_ownership=2:1]",
+				"team-other-priority": "map[project_ownership=2:1]",
 			}
 			for team, wantMarks := range want {
 				if _, present := byTeam[team]; !present {
@@ -159,16 +159,15 @@ func TestOnlyOwnersAtThePrimaryRankAreCoOwners(t *testing.T) {
 	}
 }
 
-// Co-owners come from the item's project, and from the main owners of the
-// item's repository: a repository with two main owners at the same rank (a
-// full ownership tie, D5990) attributes the item to both, the first by rank
-// as the one primary row. Two repository facts that are not a main owner's
-// (provider_access grants, is_primary = 0) and a native team key still give
-// one team.
-func TestOnlyMainRepositoryOwnersAndProjectsHaveCoOwners(t *testing.T) {
+// Co-owners come from the item's project and repository: every owning team of
+// the repository is attributed the item (CHAOS-9409), the first by rank as the
+// one primary row and the others as co-owner rows, grants (is_primary = 0)
+// included; a co-owner fact (is_primary = 2) is never the primary, even when
+// it outranks a grant by specificity. A native team key still gives one team.
+func TestEveryOwnerOfTheRepositoryIsACoOwner(t *testing.T) {
 	for _, provider := range coOwnerProviders {
 		t.Run(provider, func(t *testing.T) {
-			mainRepo, grantRepo := "repo-main", "repo-grant"
+			mainRepo, grantRepo, mixedRepo := "repo-main", "repo-grant", "repo-mixed"
 			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
 				Teams: []GithubWorkItemDerivationTeamFact{
 					{Provider: provider, TeamID: "native-a", ProjectKeys: []string{"NATIVE"}},
@@ -179,6 +178,8 @@ func TestOnlyMainRepositoryOwnersAndProjectsHaveCoOwners(t *testing.T) {
 					{Provider: provider, TeamID: "main-b", RepoID: &mainRepo, IsPrimary: 1, Specificity: 150, Priority: 0},
 					{Provider: provider, TeamID: "grant-a", RepoID: &grantRepo, IsPrimary: 0, Specificity: 100, Priority: 0},
 					{Provider: provider, TeamID: "grant-b", RepoID: &grantRepo, IsPrimary: 0, Specificity: 100, Priority: 0},
+					{Provider: provider, TeamID: "co-owner", RepoID: &mixedRepo, IsPrimary: 2, Specificity: 150, Priority: 0},
+					{Provider: provider, TeamID: "grant-c", RepoID: &mixedRepo, IsPrimary: 0, Specificity: 100, Priority: 0},
 				},
 			})
 			native := "NATIVE"
@@ -190,7 +191,9 @@ func TestOnlyMainRepositoryOwnersAndProjectsHaveCoOwners(t *testing.T) {
 				{"two main owners of the repository", GithubWorkItemDerivationSubject{WorkItemID: provider + ":r-1", Provider: provider, RepoID: &mainRepo, OrgID: "org"},
 					map[string]map[string]int{"main-a": {"repo_ownership=1": 1}, "main-b": {"repo_ownership=2": 1}}},
 				{"two grants of the repository", GithubWorkItemDerivationSubject{WorkItemID: provider + ":g-1", Provider: provider, RepoID: &grantRepo, OrgID: "org"},
-					map[string]map[string]int{"grant-a": {"repo_ownership=1": 1}, "grant-b": {}}},
+					map[string]map[string]int{"grant-a": {"repo_ownership=1": 1}, "grant-b": {"repo_ownership=2": 1}}},
+				{"a co-owner beside a grant", GithubWorkItemDerivationSubject{WorkItemID: provider + ":m-1", Provider: provider, RepoID: &mixedRepo, OrgID: "org"},
+					map[string]map[string]int{"grant-c": {"repo_ownership=1": 1}, "co-owner": {"repo_ownership=2": 1}}},
 				{"a native team key", GithubWorkItemDerivationSubject{WorkItemID: provider + ":n-1", Provider: provider, NativeTeamKey: &native, OrgID: "org"},
 					map[string]map[string]int{"native-a": {"native_team=1": 1}, "native-b": {}}},
 			} {

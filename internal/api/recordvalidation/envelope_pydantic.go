@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 )
@@ -36,7 +37,7 @@ func (e PydanticError) Dict() *pyjson.Object {
 	}
 	out.Set("loc", loc)
 	out.Set("msg", e.Msg)
-	out.Set("input", e.Input)
+	out.Set("input", pybody.RedactInput(e.Loc, e.Input))
 	if e.Ctx != nil {
 		out.Set("ctx", e.Ctx)
 	}

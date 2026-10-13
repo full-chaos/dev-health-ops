@@ -117,7 +117,7 @@ func (e Error) json() *pyjson.Object {
 	out.Set("type", e.Type)
 	out.Set("loc", e.Loc)
 	out.Set("msg", e.Msg)
-	out.Set("input", e.Input)
+	out.Set("input", RedactInput(e.Loc, e.Input))
 	if e.Ctx != nil {
 		out.Set("ctx", e.Ctx)
 	}

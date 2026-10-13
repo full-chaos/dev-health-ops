@@ -232,7 +232,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) openProviderAccessOwnership(
 	ctx context.Context, orgID string, teamIDs []string,
 ) ([]gitlabTeamCatalogOwnershipRow, error) {
 	result, err := sink.Conn.Query(ctx, `
-SELECT team_id, project_id, project_key, toString(source), is_primary, specificity, priority, valid_from
+SELECT team_id, project_id, project_key, toString(source), is_primary, specificity, priority, valid_from, valid_to
 FROM team_project_ownership FINAL
 WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
   AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`,
@@ -245,7 +245,7 @@ WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
 	for result.Next() {
 		row := gitlabTeamCatalogOwnershipRow{OrgID: orgID, Provider: gitlabTeamCatalogProvider}
 		if err := result.Scan(&row.TeamID, &row.ProjectID, &row.ProjectKey, &row.Source, &row.IsPrimary,
-			&row.Specificity, &row.Priority, &row.ValidFrom); err != nil {
+			&row.Specificity, &row.Priority, &row.ValidFrom, &row.ValidTo); err != nil {
 			return nil, err
 		}
 		row.ValidFrom = row.ValidFrom.UTC()
@@ -313,8 +313,11 @@ func gitlabOwnershipSnapshot(
 	facts := func(rows []gitlabTeamCatalogOwnershipRow) []OwnershipSnapshotRow {
 		out := make([]OwnershipSnapshotRow, len(rows))
 		for index, row := range rows {
-			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom,
-				Shape: ProjectOwnershipShape(row.ProjectKey, row.IsPrimary, row.Specificity, row.Priority)}
+			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom}
+			if row.ValidTo == nil {
+				// A row with a close time in the future is not a repeat of a fresh row, which has none.
+				out[index].Shape = ProjectOwnershipShape(row.ProjectKey, row.IsPrimary, row.Specificity, row.Priority)
+			}
 		}
 		return out
 	}

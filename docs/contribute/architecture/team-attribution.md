@@ -787,6 +787,17 @@ project's items by id. Now:
   key-built id. The `source = 'native'` rows with `team_id = project_key` (the project-as-team class) are
   not given to the snapshot rule: every catalog run retires them as a class (section 0.4c). The catalog closes nothing when its
   project search returned no project.
+- **A repeat of an open row is not written again** (CHAOS-9548): `PlanOwnershipSnapshot` marks a fresh row
+  whose open row, on the first-seen `valid_from`, has the same shape (project key or repository id, match type,
+  `is_primary`, `specificity`, `priority`; a repository row from the inferred derivation also its `share`). The
+  Jira, GitLab, GitHub, Linear and Atlassian Teams writers leave such a row out of the write. A change of any of
+  those columns, a new fact and a close are written as before, so a pair holds one stored row per real change and
+  `valid_from` / `valid_to` keep their meaning. `updated_at` of an unchanged row therefore stays at its last real
+  change: a reader that ranks by `updated_at` after `is_primary`, `specificity` and `priority` breaks a tie by the
+  most recent change, not the most recent sync, and the work item attribution scope check flags a repository or
+  project only when its ownership changed after the last run. The `...Written` counters of a catalog result keep
+  counting the rows the run found; `OwnershipUnchanged` and `RepoOwnershipUnchanged` say how many of them were not
+  written again.
 - **A row is closed only through its fact kind, on that kind's own proof** (`providersync.PlanSnapshot`,
   `ownership_snapshot.go`; CHAOS-8886). A writer gives the rule one typed snapshot for each kind of fact its
   table holds (`KindSnapshot`): the kind (`snapshot_kinds.go`: a name, the rows it holds, and what an empty

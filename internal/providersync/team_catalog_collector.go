@@ -101,6 +101,10 @@ type TeamCatalogResult struct {
 	ProjectsWritten    int
 	// OwnershipWritten is team_project_ownership rows (Linear, GitLab).
 	OwnershipWritten int
+	// OwnershipUnchanged is how many of the fresh team_project_ownership rows
+	// repeat an open row, so the sync did not write them again. They are part
+	// of OwnershipWritten (the rows the sync found), not extra rows.
+	OwnershipUnchanged int
 	// OwnershipRetracted is team_project_ownership rows closed because the
 	// fresh snapshot no longer holds them (Jira catalog). They are not part
 	// of OwnershipWritten.
@@ -147,6 +151,9 @@ type TeamCatalogResult struct {
 	// never share one field, or one provider's rows get the other's table
 	// label in telemetry). Zero for collectors that don't write this table.
 	RepoOwnershipWritten int
+	// RepoOwnershipUnchanged is how many of the fresh team_repo_ownership rows
+	// repeat an open row and were not written again; part of RepoOwnershipWritten.
+	RepoOwnershipUnchanged int
 	// TeamKeys is the native_team_key set actually written to `teams` this
 	// call (empty when Teams was not selected). It exists so a caller can
 	// hand it to the existing ClickHouse readback verifier

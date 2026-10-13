@@ -182,7 +182,7 @@ func (sink GitHubTeamCatalogClickHouseEffects) openProviderAccessRepoOwnership(
 	ctx context.Context, orgID, githubOrg string, teamIDs []string,
 ) ([]githubTeamRepoOwnershipRow, error) {
 	result, err := sink.Conn.Query(ctx, `
-SELECT team_id, repo_id, repo_full_name, match_type, is_primary, specificity, priority, valid_from
+SELECT team_id, repo_id, repo_full_name, match_type, is_primary, specificity, priority, valid_from, valid_to
 FROM team_repo_ownership FINAL
 WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
   AND startsWith(repo_full_name, ?)
@@ -197,7 +197,7 @@ WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
 		row := githubTeamRepoOwnershipRow{OrgID: orgID, Provider: githubTeamCatalogProvider, Source: githubTeamCatalogSource}
 		var repoID *uuid.UUID
 		if err := result.Scan(&row.TeamID, &repoID, &row.RepoFullName, &row.MatchType,
-			&row.IsPrimary, &row.Specificity, &row.Priority, &row.ValidFrom); err != nil {
+			&row.IsPrimary, &row.Specificity, &row.Priority, &row.ValidFrom, &row.ValidTo); err != nil {
 			return nil, err
 		}
 		if repoID != nil {
@@ -281,12 +281,19 @@ func githubRepoOwnershipSnapshot(
 			// is written, so a zero id here never reaches the table.
 			repoID, _ := GitHubRepoProjectID(row.RepoFullName)
 			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: repoID, Source: row.Source, ValidFrom: row.ValidFrom}
+			if row.ValidTo == nil {
+				// A row with a close time in the future is not a repeat of a fresh row, which has none.
+				out[index].Shape = RepoOwnershipShape(row.RepoID, row.MatchType, row.IsPrimary, row.Specificity, row.Priority)
+			}
 		}
 		return out
 	}
 	plan := PlanOwnershipSnapshot(facts(fresh), facts(open), at, grants)
 	rows := make([]githubTeamRepoOwnershipRow, 0, len(fresh)+len(plan.Retract))
 	for index, row := range fresh {
+		if plan.Unchanged[index] {
+			continue
+		}
 		row.ValidFrom = plan.ValidFrom[index]
 		rows = append(rows, row)
 	}

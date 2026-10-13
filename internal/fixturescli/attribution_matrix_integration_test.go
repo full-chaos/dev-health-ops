@@ -141,6 +141,7 @@ type matrixFacts struct {
 	deps        map[string][]string // source work item -> "<target>|<relationship>"
 	attribution map[string][]attributionRow
 	authors     map[string]string // pull request work item -> author name
+	fullTies    []matrixFullTie   // the full ties the matrix added to the world (CHAOS-9533)
 }
 
 type matrixTeam struct {
@@ -889,6 +890,7 @@ var matrixChecks = map[string]matrixCheck{
 		}
 		return r
 	}},
+	"full_tie_owners_are_all_main": {"pull_requests", checkFullTieOwners},
 	"pull_request_team_is_not_a_membership": {"pull_requests", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
 		linkedProvider := map[string]bool{}
 		for _, link := range f.links {
@@ -1266,12 +1268,16 @@ func producedMatrixState(ctx context.Context, t *testing.T) (driver.Conn, map[st
 	facts := map[string]matrixFacts{}
 	readers := map[string]ownerReaders{}
 	for provider, org := range orgs {
+		tie := seedFullTie(ctx, t, conn, provider, org, now)
 		var first time.Time
 		matrixQuery(ctx, t, conn, `SELECT min(created_at) FROM work_items WHERE org_id = ?`, []any{org}, func(rows driver.Rows) error {
 			return rows.Scan(&first)
 		})
 		runAttributionVerbs(ctx, t, conn, org, first.UTC().Truncate(24*time.Hour), today)
 		facts[provider] = loadMatrixFacts(ctx, t, conn, org, now)
+		withTie := facts[provider]
+		withTie.fullTies = []matrixFullTie{tie}
+		facts[provider] = withTie
 		if len(facts[provider].attribution) == 0 {
 			t.Fatalf("%s: the production verbs wrote no work_item_team_attributions row", provider)
 		}
@@ -1625,6 +1631,8 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 			t.Fatal("a linked_issue row with no resolved team is not found")
 		}
 	})
+
+	rediscoverFullTieDefects(t, facts, readers)
 
 	t.Run("a reader with its own ownership SQL", func(t *testing.T) {
 		planted := withReader("github", localOwnershipSQL(ctx, conn, orgs["github"]))

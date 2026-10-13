@@ -27,10 +27,10 @@ func TestPresentButEmptyScalarQueryParamIs422(t *testing.T) {
 		handler http.HandlerFunc
 		want    string
 	}{
-		{"empty start_date", "/api/v1/drilldown/prs?scope_type=repo&scope_id=r&start_date=", "", prs, `"loc":["query","start_date"],"msg":"Input should be a valid date or datetime, input is too short","input":""`},
-		{"valid then empty start_date (last wins)", "/api/v1/drilldown/prs?scope_type=repo&scope_id=r&start_date=2024-01-01&start_date=", "", prs, `"loc":["query","start_date"],"msg":"Input should be a valid date or datetime, input is too short","input":""`},
-		{"empty cursor", "/api/v1/people/p1/drilldown/prs?cursor=", "p1", peoplePRs, `"loc":["query","cursor"],"msg":"Input should be a valid datetime or date, input is too short","input":""`},
-		{"empty limit", "/api/v1/people?limit=", "", peopleSearch, `"loc":["query","limit"],"msg":"Input should be a valid integer, unable to parse string as an integer","input":""`},
+		{"empty start_date", "/api/v1/drilldown/prs?scope_type=repo&scope_id=r&start_date=", "", prs, `"loc":["query","start_date"],"msg":"Input should be a valid date or datetime, input is too short"`},
+		{"valid then empty start_date (last wins)", "/api/v1/drilldown/prs?scope_type=repo&scope_id=r&start_date=2024-01-01&start_date=", "", prs, `"loc":["query","start_date"],"msg":"Input should be a valid date or datetime, input is too short"`},
+		{"empty cursor", "/api/v1/people/p1/drilldown/prs?cursor=", "p1", peoplePRs, `"loc":["query","cursor"],"msg":"Input should be a valid datetime or date, input is too short"`},
+		{"empty limit", "/api/v1/people?limit=", "", peopleSearch, `"loc":["query","limit"],"msg":"Input should be a valid integer, unable to parse string as an integer"`},
 	}
 	for _, c := range cases {
 		request := httptest.NewRequest(http.MethodGet, c.target, nil)
@@ -40,7 +40,7 @@ func TestPresentButEmptyScalarQueryParamIs422(t *testing.T) {
 		request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1"}))
 		recorder := httptest.NewRecorder()
 		c.handler(recorder, request)
-		if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), c.want) {
+		if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), c.want) || strings.Contains(recorder.Body.String(), `"input"`) {
 			t.Errorf("%s: got %d %s, want 422 containing %s", c.name, recorder.Code, recorder.Body.String(), c.want)
 		}
 	}

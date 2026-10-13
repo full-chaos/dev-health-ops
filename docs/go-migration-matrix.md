@@ -211,7 +211,7 @@ candidate_build)` and never carries it forward across any of the four changing. 
 says nothing about whether a new binary is the one that was measured: re-run `dho goapi prove` against the deployed build.
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-10-11T20:56:02Z against main merge-base `70113b35169b3c78fea839e60414c310f7c2fa36`; SDL digest pin `sha256:c00c3c65aa6bdbe476b515549be17868f5a39f5e41aa2f106b08cc9f9cb4b462`; fleet read (not read) via not read._
+_Rendered 2026-10-13T16:10:59Z against main merge-base `7f067fcdc87a01b77a70e41670e8b15415d3b0d1`; SDL digest pin `sha256:c00c3c65aa6bdbe476b515549be17868f5a39f5e41aa2f106b08cc9f9cb4b462`; fleet read (not read) via not read._
 
 _query-api serves all **64** catalog operations: the catalog switch (`routeswitch.NewCatalogSwitch`) reads no routing row, so there is no per-operation mode, liveness or proof column to render. The only routing state is the MCP class decision per root (`go_api_class_decision`); `dho goapi routing status` reports it._
 <!-- END GENERATED GO API OPERATIONS -->
@@ -314,9 +314,9 @@ aggregation layer built on top of these tables (see METRICS below).
 | gitlab | `feature-flags` | NATIVE | `feature_flag`, `feature_flag_event`, `work_graph_edges` | True | True |
 | gitlab | `files` | NATIVE | `git_files` | True | True |
 | gitlab | `incidents` | NATIVE | `operational_incidents`, `operational_service_repository_mappings`, `operational_services` | True | True |
-| gitlab | `pr-comments` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests` | True | False |
-| gitlab | `pr-reviews` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests` | True | False |
-| gitlab | `prs` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests` | True | True |
+| gitlab | `pr-comments` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests`, `work_graph_pr_commit` | True | False |
+| gitlab | `pr-reviews` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests`, `work_graph_pr_commit` | True | False |
+| gitlab | `prs` | NATIVE | `ai_attribution`, `git_pull_request_reviews`, `git_pull_requests`, `work_graph_pr_commit` | True | True |
 | gitlab | `repo-metadata` | NATIVE | `repos` | True | True |
 | gitlab | `security` | NATIVE | `security_alerts` | True | True |
 | gitlab | `tests` | NATIVE | `ci_acceptance_checks`, `ci_job_runs`, `ci_pipeline_runs`, `coverage_snapshots`, `test_case_results`, `test_suite_results` | True | False |

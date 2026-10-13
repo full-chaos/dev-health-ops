@@ -82,7 +82,7 @@ func gitLabWorkItemResponses() map[string][]string {
 	return map[string][]string{
 		root:                        {`{"id":123,"path":"api","path_with_namespace":"acme/api","name":"api"}`},
 		root + "/milestones?page=1": {`[{"id":7,"title":"July","state":"closed","start_date":"2026-07-01","due_date":"2026-07-31"}]`, `[]`},
-		root + "/issues?page=1":     {`[{"iid":42,"title":"Fix the API","description":"blocks #7 and see CHAOS-9","state":"opened","created_at":"2026-07-02T09:00:00Z","updated_at":"2026-07-03T09:00:00Z","closed_at":null,"labels":["bug","in progress","priority::high"],"assignees":[{"email":"Alice@EXAMPLE.COM","username":"alice","name":"Alice"}],"author":{"email":"bob@example.com","username":"bob","name":"Bob"},"web_url":"https://gitlab.example/acme/api/-/issues/42","weight":3,"milestone":{"id":7,"title":"July"}}]`, `[]`},
+		root + "/issues?page=1":     {`[{"iid":42,"title":"Fix the API","description":"blocks #7 and see CHAOS-9","state":"opened","created_at":"2026-07-02T09:00:00Z","updated_at":"2026-07-03T09:00:00Z","closed_at":null,"labels":["bug","in progress","priority::high"],"assignees":[{"email":"Alice@EXAMPLE.COM","username":"alice","name":"Alice"}],"author":{"email":"bob@example.com","username":"bob","name":"Bob"},"web_url":"https://gitlab.example/acme/api/-/issues/42","weight":3,"milestone":{"id":7,"title":"July"},"due_date":"2026-07-20"}]`, `[]`},
 		root + "/issues/42/resource_label_events?page=1":        {`[{"action":"add","created_at":"2026-07-02T10:00:00Z","label":{"name":"done"}}]`, `[]`},
 		root + "/issues/42/resource_state_events?page=1":        {`[{"state":"reopened","created_at":"2026-07-03T10:00:00Z","user":{"username":"bob","name":"Bob"}}]`, `[]`},
 		root + "/issues/42/links?page=1":                        {`[{"link_type":"blocks","iid":7,"references":{"full":"acme/api#7"}}]`, `[]`},
@@ -189,6 +189,16 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJ
 		issue.Assignees[0] != "alice@example.com" || issue.Reporter == nil || *issue.Reporter != "bob@example.com" ||
 		issue.StoryPoints == nil || *issue.StoryPoints != 3 || issue.SprintID == nil || *issue.SprintID != "7" {
 		t.Fatalf("issue=%+v", issue)
+	}
+	if wantDue := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC); issue.DueAt == nil || !issue.DueAt.Equal(wantDue) {
+		t.Fatalf("issue due_at=%v want %v (the issue's own due_date)", issue.DueAt, wantDue)
+	}
+	var sprint gitlabSprintRow
+	if err := jsonUnmarshalEffect(byDestination["sprints"].Rows[0], &sprint); err != nil {
+		t.Fatal(err)
+	}
+	if wantEnd := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC); sprint.EndedAt == nil || !sprint.EndedAt.Equal(wantEnd) {
+		t.Fatalf("sprint ended_at=%v want %v (the milestone's date-only due_date)", sprint.EndedAt, wantEnd)
 	}
 	var interaction gitlabWorkItemInteractionRow
 	for _, raw := range byDestination["work_item_interactions"].Rows {

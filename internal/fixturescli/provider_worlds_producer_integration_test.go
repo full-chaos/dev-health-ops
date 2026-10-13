@@ -236,8 +236,9 @@ type worldStep struct {
 	// Kind is "sync" (the scheduler's plan of a first sync of the integration's sources and
 	// datasets, then every planned unit through the worker's executor, in plan order),
 	// "team_catalog" (the worker's team catalog collector of the provider), "work_graph" (the
-	// issue <-> pull request link builders) or "ownership_derivation" (the post-sync job
-	// sync.team_repo_ownership_derivation).
+	// issue <-> pull request link builders), "ownership_derivation" (the post-sync job
+	// sync.team_repo_ownership_derivation) or "repo_complexity" (a seeded daily complexity history per
+	// repository: the world holds no file text for the complexity job to scan).
 	Kind     string
 	Provider string
 	// Sources are the integration's sources: external id ("owner/repo" for GitHub, the numeric
@@ -345,6 +346,8 @@ func runWorldStep(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 		runWorkGraphLinks(ctx, t, conn, world)
 	case "ownership_derivation":
 		runOwnershipDerivation(ctx, t, conn, world)
+	case "repo_complexity":
+		runRepoComplexity(ctx, t, conn, world)
 	default:
 		t.Fatalf("unknown step kind %q", step.Kind)
 	}

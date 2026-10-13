@@ -133,6 +133,7 @@ internal/jobs/investment/categorize	4
 internal/jobs/investment/categorize/decision	3
 internal/jobs/investment/chquery	1
 internal/jobs/investment/chwrite	1
+internal/jobs/investment/promptpii	1
 internal/jobs/metrics/aigovernance	1
 internal/jobs/metrics/aiimpact	2
 internal/jobs/metrics/aiworkflow	1
@@ -343,6 +344,7 @@ internal/testsupport/programoracle	2
 internal/testsupport/providerstub	3
 internal/testsupport/providerstub/cmd/providerstub	1
 internal/testsupport/providersyncschema	1
+internal/testsupport/pydanticecho	1
 internal/testsupport/pyoracle	2
 internal/testsupport/ratchet	3
 internal/testsupport/ratchet/cmd/ratchets	2

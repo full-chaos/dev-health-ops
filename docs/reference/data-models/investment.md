@@ -76,10 +76,20 @@ case-insensitive full repository name. Missing, expired, future, manual,
 foreign-organization, and unmatched repository records cannot supply a share.
 A failed donor query fails materialization before new output is written.
 
-The distinct union of eligible repository IDs receives equal shares, `1/N`.
-Multiple teams owning the same repository and repeated ownership generations do
-not multiply effort. Ranking fields (`is_primary`, `specificity`, `priority`)
-are not effort weights. This is an allocation convention, not measured churn.
+Each repository of the distinct union of eligible repository IDs is weighted by
+its linked share (chris 2026-10-12, D5988, from D5432): the donor teams'
+`team_repo_ownership.share`, the team's issue-to-PR links of every tier over all
+links of the repository, summed over the unit's donor teams and renormalised
+over the unit's repositories so the weights sum to one. A unit never splits
+equally because it spans several repositories. Known limit, the same as the
+owner shares of the team readers: `share` NULL means not measured (a
+`provider_access`, native or manual row), which is not zero. When any donor row
+of the unit has no measured share, or the measured shares sum to zero, no weight
+is invented and the unit splits equally, `1/N`. Multiple teams owning the same
+repository and repeated ownership generations do not multiply effort (a team's
+share of a repository is the largest share of its rows that hold). Ranking
+fields (`is_primary`, `specificity`, `priority`) are not effort weights. This is
+an allocation convention, not measured churn.
 Each repository row carries `allocation_source=team_ownership` and
 `repo_source=team:<sorted contributing team IDs>`. The unit's scalar `repo_id`
 stays null; no single repository is selected as primary.
@@ -113,7 +123,7 @@ The order is the contract; the tests assert each step by name.
 | 2 | An existing effort row carries an allocation source other than empty or active-hours-unassigned | `stronger_allocation` -- churn allocation keeps precedence |
 | 3 | The unit's edges, PRs or commits name any real repository, even ambiguously or at zero churn | `direct_repo_evidence` -- ambiguity is not erased by a team convention |
 | 4 | No member issue has eligible ownership evidence | `no_eligible_owner` -- the unit keeps its unassigned allocation |
-| 5 | Otherwise | `allocated` -- equal `1/N` shares over the distinct union |
+| 5 | Otherwise | `allocated` -- linked-share weights over the distinct union (equal `1/N` only when a share is not measured) |
 
 The zero UUID is not a repository at any step: a PR or commit node carrying it
 is not direct evidence, and an ownership record resolving to it is not a share.
@@ -159,8 +169,8 @@ the unit's repositories (the same ownership rule the team scope uses). It no lon
 vote, so a unit in an owned repository counts as assigned even when no linked work item names a team, and a unit in an
 unowned repository counts as unassigned even when a work item names one. A unit counts once, however many owning teams
 it reaches. The denominator is unchanged. The TEAM grouping of the Investment flow, breakdown, timeseries and the flow matrix reads the same ownership
-(CHAOS-9297): each effort row takes the owner of its repository, a co-owned repository is shared equally among its
-owners, and a repository with no owner is `unassigned`, so the unassigned share of the flow is `1 - teamCoverage`
+(CHAOS-9297): each effort row takes the owner of its repository, a co-owned repository is shared among its
+owners by their linked share (the main owner by its share, each lesser owner by its own lesser share; equally only on a tie or when no share is measured), and a repository with no owner is `unassigned`, so the unassigned share of the flow is `1 - teamCoverage`
 except for a unit that spans an owned and an unowned repository (the coverage assigns it whole, the flow splits its
 effort). Only the work-unit team list still shows the vote.
 
@@ -196,7 +206,7 @@ The Go plane is the source of truth for these figures.
 What the split guarantees, and has guaranteed throughout: direct plus team-fallback always equals the headline `repoCoverage` numerator exactly.
 
 The third field is the one to read first when the first two look good. The
-fallback allocates `1/N` across every repository a team owns, so one unit with a
+fallback allocates across every repository a team owns (by linked share, equally only when no share is measured), so one unit with a
 team that owns nine repositories produces nine rows. On the reference
 organization, repository coverage moved from 53.1/57.5/67.2 percent (7/30/90
 days) to 100.0/100.0/99.5 percent when the fallback shipped, at a fan-out of

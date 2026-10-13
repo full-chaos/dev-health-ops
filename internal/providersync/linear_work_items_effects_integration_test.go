@@ -46,7 +46,7 @@ func TestLinearClickHouseAdaptersWriteAndReadBackTenantFencedRows(t *testing.T) 
 	if err := itemAdapter.WriteLinearWorkItemEffect(ctx, itemIdentity, itemEffect); err != nil {
 		t.Fatal(err)
 	}
-	expectHeldWorkItemColumns(ctx, t, conn, claim.OrgID, projectLinearWorkItem(item), heldDue)
+	expectHeldWorkItemColumns(ctx, t, conn, claim.OrgID, projectLinearWorkItem(item), heldDue, "held body")
 	if inspection, err := itemAdapter.InspectLinearWorkItemEffect(ctx, itemIdentity, itemEffect); err != nil || inspection != EffectExact {
 		t.Fatalf("work item inspection=%s error=%v", inspection, err)
 	}
@@ -188,4 +188,37 @@ func linearIntegrationEffect(t *testing.T, destination string, row any) EffectBa
 		t.Fatal(err)
 	}
 	return effect
+}
+
+func TestLinearWorkItemSyncWritesAStatedDescriptionOverAHeldOne(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	claim := nativeTestClaim("linear", "work-items")
+	now := time.Date(2026, 8, 3, 12, 0, 0, 123000000, time.UTC)
+	item := linearWorkItemRow{
+		WorkItemID: "linear:ENG-101", Provider: "linear", Title: "Described", Type: "task", Status: "todo",
+		Assignees: []string{}, Labels: []string{}, CreatedAt: now, UpdatedAt: now,
+		Description: stringPtr("linear body"), OrgID: claim.OrgID, LastSynced: now,
+	}
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect, err := BuildEffectBatch("work_items", EffectReadbackRequired, []json.RawMessage{raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := newLinearWorkItemEffectIdentity(claim, effect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := LinearWorkItemsClickHouseAdapter{Conn: conn}
+	heldDue := now.Add(-48 * time.Hour)
+	insertHeldWorkItemColumns(ctx, t, conn, claim.OrgID, projectLinearWorkItem(item), now.Add(-time.Hour), heldDue)
+	if err := adapter.WriteLinearWorkItemEffect(ctx, identity, effect); err != nil {
+		t.Fatal(err)
+	}
+	expectHeldWorkItemColumns(ctx, t, conn, claim.OrgID, projectLinearWorkItem(item), heldDue, "linear body")
+	if inspection, err := adapter.InspectLinearWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
+		t.Fatalf("inspection=%s error=%v", inspection, err)
+	}
 }

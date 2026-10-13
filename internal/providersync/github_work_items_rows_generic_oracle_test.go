@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +65,20 @@ func TestGitHubIssueWorkItemMatchesFrozenPythonProductionRow(t *testing.T) {
 					"org_id":         "org-acme",
 					"raw_issue": map[string]any{
 						"number": 8, "title": "No description", "body": "", "state": "open",
+						"created_at": "2026-07-04T00:00:00Z",
+						"updated_at": "2026-07-05T00:00:00Z",
+						"labels":     []any{}, "assignees": []any{},
+					},
+				},
+			},
+			{
+				ID: "long_multibyte_description",
+				Input: map[string]any{
+					"repo_full_name": "acme/api",
+					"repo_id":        "c7198fbc-1945-3717-05d8-eb78866b4e79",
+					"org_id":         "org-acme",
+					"raw_issue": map[string]any{
+						"number": 9, "title": "Long body", "body": strings.Repeat("é日", 800), "state": "open",
 						"created_at": "2026-07-04T00:00:00Z",
 						"updated_at": "2026-07-05T00:00:00Z",
 						"labels":     []any{}, "assignees": []any{},

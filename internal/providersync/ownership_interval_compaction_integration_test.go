@@ -938,6 +938,67 @@ func TestCompactOwnershipIntervalsRestoreLeavesAKeyASyncChanged(t *testing.T) {
 	}
 }
 
+// A sync writes a row with the SAME key and the SAME millisecond stamp as the tombstone version the delete read, but
+// other content, between the version read and the ALTER. The delete matches the content hash too, so it survives.
+func TestCompactOwnershipIntervalsDeleteSparesASameStampSyncWrite(t *testing.T) {
+	f := newCmpFixture(t)
+	// The droppable tombstone of the fixture: acme/web, gh:beta, valid_from day 3, stamp day 3.
+	racing := false
+	hook := failingConn{Conn: f.conn, failExec: func(query string) error {
+		if strings.HasPrefix(query, "ALTER TABLE team_repo_ownership DELETE") && !racing {
+			racing = true
+			same := cmpRepoRow(cmpTeam2, cmpRepo2, "acme/web", 3, -1, 0.9, 2)
+			same.UpdatedAt = cmpDay(3)
+			f.insert(repoSpec(), f.orgA, []ownershipIntervalRow{same})
+		}
+		return nil
+	}}
+	opts := cmpOptions(f.orgA)
+	opts.Table = OwnershipCompactionRepoTable
+	outcome, err := CompactOwnershipIntervals(f.ctx, hook, opts)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !racing {
+		t.Fatal("setup: the racing write did not happen")
+	}
+	if repo := cmpTable(t, outcome, OwnershipCompactionRepoTable); repo.RowsNewerThanTheDelete < 1 {
+		t.Fatalf("the spared row must be reported: %+v", repo)
+	}
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership WHERE org_id = ? AND repo_full_name = 'acme/web' AND team_id = ? AND valid_from = ? AND share = 0.9",
+		f.orgA, cmpTeam2, cmpDay(3)); got != 1 {
+		t.Fatalf("the sync's same-stamp row was deleted: %d", got)
+	}
+}
+
+// Restore re-inserts the rows the run folded and nothing else: a row the run never touched, such as a sync's
+// append with a NEW valid_from, stays exactly as it is.
+func TestCompactOwnershipIntervalsRestoreKeepsARowASyncAppended(t *testing.T) {
+	f := newCmpFixture(t)
+	opts := cmpOptions(f.orgA)
+	opts.Table = OwnershipCompactionRepoTable
+	outcome, err := CompactOwnershipIntervals(f.ctx, f.conn, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appended := cmpRepoRow(cmpTeam1, cmpRepo1, "acme/api", 200, 201, 0.7, 1)
+	appended.UpdatedAt = cmpDay(9000)
+	f.insert(repoSpec(), f.orgA, []ownershipIntervalRow{appended})
+	opts.Apply = true
+	if _, err := RestoreOwnershipCompaction(f.ctx, f.conn, outcome.RunID, opts); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = 'acme/api' AND team_id = ? AND valid_from = ? AND share = 0.7 AND updated_at = ?",
+		f.orgA, cmpTeam1, cmpDay(200), cmpDay(9000)); got != 1 {
+		t.Fatalf("the sync's appended row was changed by the restore: %d", got)
+	}
+	// And the folded rows are back: the run A rows 01-01..01-02 exist again.
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = 'acme/api' AND team_id = ? AND valid_from = ? AND valid_to = ?",
+		f.orgA, cmpTeam1, cmpDay(0), cmpDay(1)); got != 1 {
+		t.Fatalf("the folded rows were not restored: %d", got)
+	}
+}
+
 func TestCompactOwnershipIntervalsChecksTheBackupBeforeAnyRewrite(t *testing.T) {
 	f := newCmpFixture(t)
 	physical := f.physicalCount(OwnershipCompactionRepoTable, f.orgA)

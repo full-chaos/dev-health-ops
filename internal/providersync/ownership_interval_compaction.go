@@ -1219,7 +1219,7 @@ func deleteOwnershipTombstones(
 			return survivors, err
 		}
 		versionArgs := []any{clickhouse.Named("org_id", orgID), clickhouse.Named("versions", versions)}
-		versionScope := "org_id = {org_id:String} AND source = '" + spec.source + "' AND " + fmt.Sprintf(ownershipCompactionVersionsMatch, spec.natural)
+		versionScope := "org_id = {org_id:String} AND source = '" + spec.source + "' AND " + fmt.Sprintf(ownershipCompactionVersionsMatch, spec.natural, spec.contentHash())
 		mutationCtx, cancel := context.WithTimeout(ctx, ownershipCompactionMutationTimeout)
 		syncCtx := clickhouse.Context(mutationCtx, clickhouse.WithSettings(clickhouse.Settings{"mutations_sync": "2"}))
 		err = conn.Exec(syncCtx, "ALTER TABLE "+spec.table+" DELETE WHERE "+versionScope, versionArgs...)
@@ -1251,15 +1251,25 @@ func deleteOwnershipTombstones(
 	return survivors, nil
 }
 
-// ownershipCompactionVersionsMatch matches physical rows by key AND updated_at (milliseconds).
-const ownershipCompactionVersionsMatch = `(provider, %s, team_id, toString(source), valid_from, toUnixTimestamp64Milli(updated_at)) IN (` +
-	`SELECT unhex(parts[1]), unhex(parts[2]), unhex(parts[3]), unhex(parts[4]), fromUnixTimestamp64Milli(toInt64(parts[5]), 'UTC'), toInt64(parts[6]) ` +
+// ownershipCompactionVersionsMatch matches physical rows by key, updated_at (milliseconds) AND a hash of every other
+// column: a row a sync writes with the same key and the same millisecond stamp but other content is not the row that
+// was read, and survives the delete.
+const ownershipCompactionVersionsMatch = `(provider, %s, team_id, toString(source), valid_from, toUnixTimestamp64Milli(updated_at), %s) IN (` +
+	`SELECT unhex(parts[1]), unhex(parts[2]), unhex(parts[3]), unhex(parts[4]), fromUnixTimestamp64Milli(toInt64(parts[5]), 'UTC'), toInt64(parts[6]), toUInt64(parts[7]) ` +
 	`FROM (SELECT splitByChar(':', p) AS parts FROM (SELECT arrayJoin({versions:Array(String)}) AS p)))`
+
+// contentHash is the hash of the columns that are neither the key nor the stamp.
+func (spec ownershipCompactionSpec) contentHash() string {
+	if spec.repo {
+		return "cityHash64(valid_to, updated_at, repo_id, toString(match_type), is_primary, specificity, priority, share)"
+	}
+	return "cityHash64(valid_to, updated_at, project_key, is_primary, specificity, priority, last_synced)"
+}
 
 // physicalVersionTokens lists every physical row (not FINAL) of the keys as key token + updated_at.
 // A version newer than the stamp the run expects for its key (expected, in ms) is left out: it is a sync's write.
 func physicalVersionTokens(ctx context.Context, conn driver.Conn, spec ownershipCompactionSpec, scope string, args []any, expected map[string]int64) ([]string, error) {
-	rows, err := conn.Query(ctx, "SELECT provider, "+spec.natural+", team_id, toString(source), valid_from, toUnixTimestamp64Milli(updated_at) FROM "+spec.table+" WHERE "+scope, args...)
+	rows, err := conn.Query(ctx, "SELECT provider, "+spec.natural+", team_id, toString(source), valid_from, toUnixTimestamp64Milli(updated_at), "+spec.contentHash()+" FROM "+spec.table+" WHERE "+scope, args...)
 	if err != nil {
 		return nil, fmt.Errorf("%w: list versions: %v", ErrOwnershipCompactionMutation, err)
 	}
@@ -1269,14 +1279,15 @@ func physicalVersionTokens(ctx context.Context, conn driver.Conn, spec ownership
 		var provider, natural, team, source string
 		var from time.Time
 		var stamp int64
-		if err := rows.Scan(&provider, &natural, &team, &source, &from, &stamp); err != nil {
+		var content uint64
+		if err := rows.Scan(&provider, &natural, &team, &source, &from, &stamp, &content); err != nil {
 			return nil, fmt.Errorf("%w: list versions: %v", ErrOwnershipCompactionMutation, err)
 		}
 		row := ownershipIntervalRow{Provider: provider, Natural: natural, TeamID: team, Source: source, ValidFrom: from.UTC()}
 		if bound, known := expected[row.token()]; known && stamp > bound {
 			continue
 		}
-		out = append(out, row.token()+":"+strconv.FormatInt(stamp, 10))
+		out = append(out, row.token()+":"+strconv.FormatInt(stamp, 10)+":"+strconv.FormatUint(content, 10))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("%w: list versions: %v", ErrOwnershipCompactionMutation, err)

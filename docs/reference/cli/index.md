@@ -1706,7 +1706,7 @@ it will rewrite or drop into `<table>_compaction_bak` (created if missing) and
 checks the copy is not empty and has the expected row count. A key that a sync
 wrote between the plan and the insert is skipped and counted
 (`runs_changed_during_run`). `--restore-run <run_id> --apply` puts the rows of a
-run back from the backup table: the FINAL rows are restored with an `updated_at` above the current version, a key that a sync has written since the run is left as the sync made it (`rows_changed_since_the_run`, never half restored), an unknown run id is refused,
+run back from the backup table: the FINAL rows are restored with an `updated_at` above the current version, a key whose folded row a sync has rewritten since the run is left as the sync made it (`rows_changed_since_the_run`, never half restored), and a row the run never touched (a sync's append with a new `valid_from`, the open row, a kept tombstone) is never changed by a restore, an unknown run id is refused,
 the superseded stale physical versions (which no FINAL reader sees) are not restored, and the backup of a project row keeps the original `last_synced` (a restored or merged row gets a fresh server stamp). The tool never drops the backup table: it stays
 until the next pin readback after the step and is dropped on the word of the GWC
 lead. In production the step runs inside a roll window (minutes :10-:33 or

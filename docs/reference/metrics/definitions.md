@@ -119,8 +119,9 @@ recorded.
   that cannot read it (a failed or rate-limited lookup, or a lookup skipped
   after one) stores no status, and every later run looks the repository's
   recent deployments with no stored status up again, whatever its window
-  (the last 30 days, at most 100 per run, newest first), until a status is
-  stored. A deployment that has no status at all stays without one and stays
+  (the last 3 days, at most 50 per run, newest first), until a status is
+  stored. An older one is the work of the explicit resync
+  (`dho sync deployments --provider github --org <org> --since <day>`). A deployment that has no status at all stays without one and stays
   out of K. The run logs one `github_deployments.status_lookups` line with the
   counts: stored, empty, failed, skipped and retried.
 - **Evidence basis and base.** A measured rate stands on `incident` (incidents

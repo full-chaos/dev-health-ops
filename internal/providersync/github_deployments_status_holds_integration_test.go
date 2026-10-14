@@ -39,21 +39,21 @@ func TestGitHubDeploymentStatusHoldsAgainstMigratedSchema(t *testing.T) {
 	}
 	day := 24 * time.Hour
 	write(claim,
-		row("held-newest", 1*day, nil, now),
-		row("held-older", 5*day, nil, now),
-		row("held-empty-string", 3*day, str(""), now),
-		row("has-status", 2*day, str("success"), now),
-		row("held-too-old", 60*day, nil, now),
+		row("held-newest", 6*time.Hour, nil, now),
+		row("held-older", 60*time.Hour, nil, now),
+		row("held-empty-string", 36*time.Hour, str(""), now),
+		row("has-status", 12*time.Hour, str("success"), now),
+		row("held-too-old", 5*day, nil, now),
 		// A status stored by a later write wins over the held row of the same key.
-		row("filled-later", 4*day, nil, now.Add(-time.Hour)),
-		row("filled-later", 4*day, str("failure"), now),
+		row("filled-later", 2*day, nil, now.Add(-time.Hour)),
+		row("filled-later", 2*day, str("failure"), now),
 	)
 	foreign := claim
 	foreign.OrgID = "org-github-foreign"
-	foreignRow := row("held-foreign-org", 1*day, nil, now)
+	foreignRow := row("held-foreign-org", 6*time.Hour, nil, now)
 	foreignRow.OrgID = foreign.OrgID
 	write(foreign, foreignRow)
-	otherRepo := row("held-other-repo", 1*day, nil, now)
+	otherRepo := row("held-other-repo", 6*time.Hour, nil, now)
 	otherRepo.RepoID = "11111111-2222-4333-8444-555555555555"
 	write(claim, otherRepo)
 

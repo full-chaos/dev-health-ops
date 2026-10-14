@@ -10,14 +10,17 @@ import (
 )
 
 // Bounds of the status retry (CHAOS-9678). A deployment whose status is still
-// empty is looked up again by every run, outside the claim window too, so a
-// status that a rate-limited or failed lookup left out is stored by a later
-// run. A deployment that has no status at all (GitHub keeps none for a
-// deployment that nothing reported on) would be looked up for ever, so the
-// retry covers the recent deployments only and at most this many per run.
+// empty is looked up again by a later run, outside the claim window too, so a
+// status that a rate-limited or failed lookup left out, or that GitHub had not
+// recorded yet when the deployment was first seen, is stored by a later run.
+// A deployment that has no status at all (GitHub keeps none for a deployment
+// that nothing reported on) must not be looked up for ever: the retry stops
+// once the deployment is older than the horizon, and a run retries at most
+// deploymentStatusRetryMax of them, newest first. A deployment older than the
+// horizon is the work of the explicit resync (`dho sync deployments --since`).
 const (
-	deploymentStatusRetryHorizon = 30 * 24 * time.Hour
-	deploymentStatusRetryMax     = 100
+	deploymentStatusRetryHorizon = 3 * 24 * time.Hour
+	deploymentStatusRetryMax     = 50
 )
 
 // GitHubDeploymentStatusHolds reads the deployments of one repository that

@@ -91,6 +91,12 @@ func TestGoldenInvestment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
 	}
+	// Declared divergence of the values' label (CHAOS-9695, D5999, D6014): the recorded Python answer says unit "items"
+	// for a flow weighted by lines of code; the Go flow counts work units and says so. Every other field is compared.
+	if got.Unit == nil || *got.Unit != "work_units" || want.Unit == nil || *want.Unit != "items" {
+		t.Fatalf("unit = %v, recorded %v, want work_units against the recorded items", got.Unit, want.Unit)
+	}
+	want.Unit = got.Unit
 	assertGoldenMatch(t, *got, want)
 }
 

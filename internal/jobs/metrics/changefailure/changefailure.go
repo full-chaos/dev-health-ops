@@ -8,10 +8,20 @@
 // repositories, or the organization) and applies Rate in Go or WindowRateSQL
 // in ClickHouse. Both encode the same rule:
 //
-//   - no stored row in the view                -> no value, no state
+//   - no stored row in the view                -> no value, no state (not collected)
 //   - no deployments in the view               -> no value, not applicable
-//   - no incident tied to the view's subject   -> no value, unknown
-//   - else (failed native + failed heuristic) / deployments; 0 is a measured 0
+//   - no incident tied to the view's subject
+//     and no deployment with a final status    -> no value, unknown
+//   - else the failed deployments over the denominator of ApplyRule; 0 is a
+//     measured 0
+//
+// A deployment's own status is evidence (CHAOS-9621): a deployment whose
+// status is failed is a failed change, with or without an incident link, and
+// a deployment with a final status (succeeded or failed) makes the rate
+// measurable where no incident source exists. A cancelled deployment never
+// reached its environment: it is neither a deployment nor a failure. The
+// status meaning is deploymentstatus.Classify, shared with every other
+// delivery metric. The evidence a measured rate stands on is named by Basis.
 //
 // Evaluate returns the value together with its state, and every reader serves
 // both: a reader that kept only the value would show unknown, not applicable
@@ -20,10 +30,12 @@
 // Missing is not healthy: a repository that deploys but has no incident
 // evidence must not read 0%.
 //
-// A deployment is failed when at least one deployment-incident link names it.
-// A deployment with a native link counts as native; one with only heuristic
-// links counts as heuristic, so a reader can name the lowest tier that
-// contributes (LowestTier). An incident ties to a repository directly (a
+// A deployment is failed when at least one deployment-incident link names it,
+// or when its own status is failed. A deployment with a native link counts as
+// native; one with only heuristic links counts as heuristic, so a reader can
+// name the lowest tier that contributes (LowestTier). A failed deployment
+// with no link counts as failed by status. A failed deployment with a link
+// counts once, as native or heuristic. An incident ties to a repository directly (a
 // service-to-repository mapping row) or, only when it has no direct row at all,
 // through the repository of its linked deployment.
 package changefailure
@@ -32,6 +44,8 @@ import (
 	"sort"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/deploymentstatus"
 )
 
 // Link tiers, the deployment-incident edge `source` values.
@@ -51,7 +65,8 @@ const (
 	// StateNotApplicable: stored counts, and no deployment in the view.
 	StateNotApplicable State = "not_applicable_no_deployments"
 	// StateUnknown: deployments exist, but no incident ties to the view's
-	// subject in its window.
+	// subject in its window and no deployment has a final status. The value
+	// keeps its CHAOS-8981 spelling, which readers match on.
 	StateUnknown State = "unknown_no_incident_evidence"
 	// StateNoStoredCounts: the view holds no stored row at all, so nothing
 	// was counted for it: the days were never computed, or no repository of
@@ -60,13 +75,68 @@ const (
 	StateNoStoredCounts State = ""
 )
 
+// Basis is the evidence a measured rate stands on (CHAOS-9621).
+type Basis string
+
+const (
+	// BasisNone: the rate is not measured, so it stands on nothing.
+	BasisNone Basis = "none"
+	// BasisIncident: incidents tie to the view, and no deployment has a final
+	// status. The denominator is every deployment.
+	BasisIncident Basis = "incident"
+	// BasisStatus: no incident ties to the view; deployments with a final
+	// status stand for it. The denominator is those deployments.
+	BasisStatus Basis = "status"
+	// BasisBoth: incidents tie to the view and deployments have final
+	// statuses. The denominator is every deployment.
+	BasisBoth Basis = "both"
+)
+
+// UnknownReason says why a view has no rate. The three values are the three
+// different answers behind an empty rate, and a reader (ops or acr) shows
+// which one it has instead of one "unknown".
+type UnknownReason string
+
+const (
+	// NotUnknown: the rate is measured.
+	NotUnknown UnknownReason = ""
+	// ReasonNotCollected: no stored row in the view. Nothing was counted for
+	// it: the days were never computed, or the subject had no deployment and
+	// no incident on them.
+	ReasonNotCollected UnknownReason = "not_collected"
+	// ReasonNoDeploymentsInWindow: stored rows, and no deployment in them.
+	ReasonNoDeploymentsInWindow UnknownReason = "no_deployments_in_window"
+	// ReasonDeploymentsWithoutOutcome: deployments exist, and neither an
+	// incident tied to the view nor a deployment with a final status says how
+	// they went.
+	ReasonDeploymentsWithoutOutcome UnknownReason = "deployments_without_outcome"
+)
+
 // Outcome is the answer for a view: the rate when it is measured, the state
-// that says why it is or is not, and the weakest link tier that contributes a
-// failed deployment to a measured rate ("" when none failed).
+// that says why it is or is not, the unknown reason (one of three when there
+// is no rate), the weakest link tier that contributes a failed deployment to a
+// measured rate ("" when no failure came through a link), the evidence basis,
+// and the deployments (D) and deployments with a final status (K) the rate was
+// computed from with their coverage K / D.
 type Outcome struct {
-	Value    *float64
-	State    State
-	LinkTier string
+	Value         *float64
+	State         State
+	LinkTier      string
+	Basis         Basis
+	UnknownReason UnknownReason
+	Deployments   uint64
+	StatusKnown   uint64
+	Coverage      *float64
+}
+
+// BasisOrNil is the evidence basis as a reader serves it: nil when the rate is
+// not measured.
+func (o Outcome) BasisOrNil() *string {
+	if o.Basis == "" || o.Basis == BasisNone {
+		return nil
+	}
+	basis := string(o.Basis)
+	return &basis
 }
 
 // StateOrNil is the state as a reader serves it: nil for StateNoStoredCounts.
@@ -98,16 +168,15 @@ type View struct {
 // Evaluate is the one rule every reader applies to a view. A view with no
 // stored row has no state; any other view has the Rate of its counts.
 func Evaluate(v View) Outcome {
-	if v.StoredRows == 0 {
-		return Outcome{State: StateNoStoredCounts}
-	}
-	return Rate(v.Counts)
+	return outcomeOf(v.Counts, v.StoredRows)
 }
 
-// Deployment is one deployment of a repository on the counted day.
+// Deployment is one deployment of a repository on the counted day. Status is
+// the deployment's own stored status ("" when it has none).
 type Deployment struct {
 	RepoID       uuid.UUID
 	DeploymentID string
+	Status       string
 }
 
 // IncidentTie ties one incident to one repository. ViaDeployment is false for
@@ -131,12 +200,24 @@ type Link struct {
 
 // Counts are the stored inputs of one repository and day, or their sum over
 // a view.
+//
+// Deployments excludes cancelled deployments. A failed deployment is counted
+// once: FailedNative and FailedHeuristic hold the ones an incident link names,
+// FailedStatus the ones whose own status is failed and that no link names.
+// StatusKnown is the deployments with a final status (succeeded or failed).
 type Counts struct {
 	Deployments            uint64
 	FailedNative           uint64
 	FailedHeuristic        uint64
 	IncidentsDirect        uint64
 	IncidentsViaDeployment uint64
+	FailedStatus           uint64
+	StatusKnown            uint64
+}
+
+// Failed is the failed deployments of the counts, each counted once.
+func (c Counts) Failed() uint64 {
+	return c.FailedNative + c.FailedHeuristic + c.FailedStatus
 }
 
 // Add returns the sum of two counts.
@@ -147,6 +228,8 @@ func (c Counts) Add(o Counts) Counts {
 		FailedHeuristic:        c.FailedHeuristic + o.FailedHeuristic,
 		IncidentsDirect:        c.IncidentsDirect + o.IncidentsDirect,
 		IncidentsViaDeployment: c.IncidentsViaDeployment + o.IncidentsViaDeployment,
+		FailedStatus:           c.FailedStatus + o.FailedStatus,
+		StatusKnown:            c.StatusKnown + o.StatusKnown,
 	}
 }
 
@@ -158,19 +241,40 @@ func (c Counts) Empty() bool {
 
 // Rate applies the rule of this package to the counts of stored rows.
 func Rate(c Counts) Outcome {
-	if c.Deployments == 0 {
-		return Outcome{State: StateNotApplicable}
+	return outcomeOf(c, 1)
+}
+
+func outcomeOf(c Counts, storedRows uint64) Outcome {
+	result := ApplyRule(RuleInputs{
+		StoredRows:           storedRows,
+		Deployments:          c.Deployments,
+		StatusKnown:          c.StatusKnown,
+		FailedStatusOnly:     c.FailedStatus,
+		FailedIncidentLinked: c.FailedNative + c.FailedHeuristic,
+		IncidentEvidence:     c.IncidentsDirect+c.IncidentsViaDeployment > 0,
+	})
+	out := Outcome{
+		Value: result.Rate, Basis: result.Basis, UnknownReason: result.UnknownReason,
+		Deployments: result.Deployments, StatusKnown: result.StatusKnown, Coverage: result.Coverage,
 	}
-	if c.IncidentsDirect+c.IncidentsViaDeployment == 0 {
-		return Outcome{State: StateUnknown}
+	switch result.UnknownReason {
+	case ReasonNotCollected:
+		out.State = StateNoStoredCounts
+	case ReasonNoDeploymentsInWindow:
+		out.State = StateNotApplicable
+	case ReasonDeploymentsWithoutOutcome:
+		out.State = StateUnknown
+	default:
+		out.State = StateMeasured
+		out.LinkTier = LowestTier(c)
 	}
-	value := float64(c.FailedNative+c.FailedHeuristic) / float64(c.Deployments)
-	return Outcome{Value: &value, State: StateMeasured, LinkTier: LowestTier(c)}
+	return out
 }
 
 // LowestTier names the lowest link tier that contributes a failed deployment:
 // TierHeuristic when any heuristic-only deployment counts, TierNative when only
-// native ones do, "" when no deployment failed.
+// native ones do, "" when no failed deployment has a link (a deployment failed
+// by its own status alone has no link tier).
 func LowestTier(c Counts) string {
 	switch {
 	case c.FailedHeuristic > 0:
@@ -184,7 +288,8 @@ func LowestTier(c Counts) string {
 
 // CountDay counts one day per repository.
 //
-// deployments are the day's deployments; ties are the incidents that started
+// deployments are the day's deployments (a cancelled one is dropped: it is not
+// a deployment, and a link to it counts nothing); ties are the incidents that started
 // on the day with their repository ties; links are the deployment-incident
 // links of those incidents. A via-deployment tie of an incident that has a
 // direct tie to any repository is ignored. A link counts only when its
@@ -197,12 +302,16 @@ func CountDay(deployments []Deployment, ties []IncidentTie, links []Link) map[uu
 		repoID       uuid.UUID
 		deploymentID string
 	}
-	deployed := make(map[deploymentKey]struct{}, len(deployments))
+	deployed := make(map[deploymentKey]deploymentstatus.Class, len(deployments))
 	for _, d := range deployments {
 		if d.DeploymentID == "" {
 			continue
 		}
-		deployed[deploymentKey{d.RepoID, d.DeploymentID}] = struct{}{}
+		class := deploymentstatus.Classify(d.Status)
+		if class == deploymentstatus.Canceled {
+			continue
+		}
+		deployed[deploymentKey{d.RepoID, d.DeploymentID}] = class
 	}
 
 	directIncidents := make(map[string]struct{})
@@ -260,8 +369,18 @@ func CountDay(deployments []Deployment, ties []IncidentTie, links []Link) map[uu
 		apply(&c)
 		out[repoID] = c
 	}
-	for key := range deployed {
-		bump(key.repoID, func(c *Counts) { c.Deployments++ })
+	for key, class := range deployed {
+		bump(key.repoID, func(c *Counts) {
+			c.Deployments++
+			if class.Terminal() {
+				c.StatusKnown++
+			}
+		})
+		// A failed status counts a deployment no link names; one a link names
+		// counts below as native or heuristic, so it counts once.
+		if _, linked := failed[key]; !linked && class == deploymentstatus.Failed {
+			bump(key.repoID, func(c *Counts) { c.FailedStatus++ })
+		}
 	}
 	for key, tier := range failed {
 		if tier == TierNative {

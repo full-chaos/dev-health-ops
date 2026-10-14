@@ -85,12 +85,12 @@ func sameKeys(a, b []string) bool {
 // zeros / NULL / NaN with a known count of 0.
 func emptyWeekScanners() []*fakeRowScanner {
 	out := emptyScanners(11)
-	out[2] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), nil, nil, uint64(0)}}} // repo_metrics
-	out[3] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                  // hotspots
-	out[4] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                  // complexity
-	out[5] = &fakeRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0)}}}                                        // deployments
-	out[6] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, uint64(0)}}}                                              // incidents
-	out[10] = &fakeRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}      // change_failure
+	out[2] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), nil, nil, uint64(0)}}}                  // repo_metrics
+	out[3] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                                   // hotspots
+	out[4] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                                   // complexity
+	out[5] = &fakeRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0)}}}                                                         // deployments
+	out[6] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, uint64(0)}}}                                                               // incidents
+	out[10] = &fakeRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}} // change_failure
 	return out
 }
 
@@ -109,7 +109,7 @@ func storedZeroWeekScanners() []*fakeRowScanner {
 		{rows: [][]any{{"feature_delivery", 0.0, 0.0, 0.0}}},                                                            // investment
 		{rows: [][]any{{"human", float64(5), float64(0), float64(0), float64(5), float64(0), 0.0, 0.0, 0.0, 0.0, 0.0}}}, // ai_impact
 		{rows: [][]any{{day("2026-08-24"), nil, nil, uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}},           // ai_governance
-		{rows: [][]any{{uint64(1), uint64(0), uint64(0), uint64(1), uint64(0), uint64(1)}}},                             // change_failure
+		{rows: [][]any{{uint64(1), uint64(0), uint64(0), uint64(1), uint64(0), uint64(0), uint64(0), uint64(1)}}},       // change_failure
 	}
 }
 

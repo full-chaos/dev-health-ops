@@ -36,14 +36,15 @@ func TestExplainChangeFailureRateStates_LiveEngine(t *testing.T) {
 		data   bool
 		state  string
 		tier   string
+		basis  string
 	}{
-		{"unknown: deployments, no incident evidence", uuid.New(), &changefailure.Counts{Deployments: 4}, 0, false, `"unknown_no_incident_evidence"`, `null`},
-		{"not applicable: an incident, no deployment", uuid.New(), &changefailure.Counts{IncidentsDirect: 1}, 0, false, `"not_applicable_no_deployments"`, `null`},
-		{"not applicable: a retraction row of zeros", uuid.New(), &changefailure.Counts{}, 0, false, `"not_applicable_no_deployments"`, `null`},
-		{"no stored row", uuid.New(), nil, 0, false, `null`, `null`},
-		{"measured zero", uuid.New(), &changefailure.Counts{Deployments: 4, IncidentsDirect: 1}, 0, true, `"measured"`, `null`},
-		{"measured, heuristic link", uuid.New(), &changefailure.Counts{Deployments: 4, FailedHeuristic: 2, IncidentsViaDeployment: 1}, 50, true, `"measured"`, `"heuristic"`},
-		{"measured, native link", uuid.New(), &changefailure.Counts{Deployments: 4, FailedNative: 1, IncidentsDirect: 1}, 25, true, `"measured"`, `"native"`},
+		{"unknown: deployments, no incident evidence", uuid.New(), &changefailure.Counts{Deployments: 4}, 0, false, `"unknown_no_incident_evidence"`, `null`, `null`},
+		{"not applicable: an incident, no deployment", uuid.New(), &changefailure.Counts{IncidentsDirect: 1}, 0, false, `"not_applicable_no_deployments"`, `null`, `null`},
+		{"not applicable: a retraction row of zeros", uuid.New(), &changefailure.Counts{}, 0, false, `"not_applicable_no_deployments"`, `null`, `null`},
+		{"no stored row", uuid.New(), nil, 0, false, `null`, `null`, `null`},
+		{"measured zero", uuid.New(), &changefailure.Counts{Deployments: 4, IncidentsDirect: 1}, 0, true, `"measured"`, `null`, `"incident"`},
+		{"measured, heuristic link", uuid.New(), &changefailure.Counts{Deployments: 4, FailedHeuristic: 2, IncidentsViaDeployment: 1}, 50, true, `"measured"`, `"heuristic"`, `"incident"`},
+		{"measured, native link", uuid.New(), &changefailure.Counts{Deployments: 4, FailedNative: 1, IncidentsDirect: 1}, 25, true, `"measured"`, `"native"`, `"incident"`},
 	}
 
 	writer, err := repouser.NewWriter(admin)
@@ -89,7 +90,7 @@ func TestExplainChangeFailureRateStates_LiveEngine(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if want := `"link_tier":` + tc.tier + `,"rate_state":` + tc.state + `}`; !strings.HasSuffix(string(body), want) {
+			if want := `"link_tier":` + tc.tier + `,"rate_state":` + tc.state + `,"evidence_basis":` + tc.basis + `}`; !strings.HasSuffix(string(body), want) {
 				t.Errorf("body ends %s, want %s", tail(string(body), 90), want)
 			}
 		})
@@ -162,4 +163,77 @@ func tail(s string, n int) string {
 		return s
 	}
 	return s[len(s)-n:]
+}
+
+// CHAOS-9621: a deployment's own status is evidence, and the served answer
+// names the basis. Rows come from the real writer, the body is what a client
+// reads.
+func TestExplainChangeFailureRateEvidenceBasis_LiveEngine(t *testing.T) {
+	ctx := context.Background()
+	admin, client := newExplainTestClickHouse(ctx, t)
+
+	const orgID = "org-explain-change-failure-basis"
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	computedAt := time.Date(2026, 9, 3, 6, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name   string
+		repo   uuid.UUID
+		counts changefailure.Counts
+		value  float64
+		tier   string
+		basis  string
+	}{
+		{"two failed of four, by status", uuid.New(), changefailure.Counts{Deployments: 4, FailedStatus: 2, StatusKnown: 4}, 50, `null`, `"status"`},
+		{"measured zero, by status", uuid.New(), changefailure.Counts{Deployments: 4, StatusKnown: 4}, 0, `null`, `"status"`},
+		{"status and incident", uuid.New(), changefailure.Counts{Deployments: 4, FailedNative: 1, FailedStatus: 1, StatusKnown: 4, IncidentsDirect: 1}, 50, `"native"`, `"both"`},
+		{"unfinished deployments only", uuid.New(), changefailure.Counts{Deployments: 4}, 0, `null`, `null`},
+	}
+	writer, err := repouser.NewWriter(admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []repouser.ChangeFailureDaily
+	for i, tc := range cases {
+		rows = append(rows, repouser.ChangeFailureDaily{RepoID: tc.repo, Day: day, ComputedAt: computedAt, Counts: tc.counts})
+		if err := admin.Exec(ctx, fmt.Sprintf(
+			"INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES ('%s', 'acme/basis-%d', 'github', '%s', now64(3), now64(3))",
+			tc.repo, i, orgID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := writer.WriteChangeFailure(ctx, rows, orgID); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := BuildExplainResponse(ctx, reader, orgID, Params{
+				Metric: "change_failure_rate", StartDay: day, EndDay: day.AddDate(0, 0, 7),
+				CompareStart: day.AddDate(0, 0, -7), CompareEnd: day,
+				ScopeLevel: "repo", ScopeIDs: []string{tc.repo.String()},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			measured := tc.basis != `null`
+			if got.HasData != measured || !near(got.Value, tc.value) {
+				t.Errorf("value %v, has_data %v; want %v, %v", got.Value, got.HasData, tc.value, measured)
+			}
+			body, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := `"unknown_no_incident_evidence"`
+			if measured {
+				state = `"measured"`
+			}
+			if want := `"link_tier":` + tc.tier + `,"rate_state":` + state + `,"evidence_basis":` + tc.basis + `}`; !strings.HasSuffix(string(body), want) {
+				t.Errorf("body ends %s, want %s", tail(string(body), 110), want)
+			}
+		})
+	}
 }

@@ -1810,6 +1810,22 @@ next pin readback after the step, on the GWC lead's word.
 (every organization that holds a row of the source). A run always covers both
 ownership tables (there is no table option); `--batch-size` is the number of
 runs per insert (default 2000).
+
+**Time bound and progress (CHAOS-9704).** A compaction run first reads and
+plans every table and organization (rows, runs, owner-answer differential) and
+writes only after every plan finished. `--timeout` (default `10m`) bounds that
+plan phase: on the deadline the verb exits non-zero with
+`ownership_compaction_timeout` and has written nothing; a hang never needs a
+kill. `--restore-run` does not use it. `--progress-every` (default 5000; 0 turns
+it off) prints a counts-only line on stderr every that many rows of each plan
+phase and at its end: `{"progress":{"table":"team_repo_ownership","org_ordinal":2,"phase":"runs","done":20000,"total":44369}}`,
+phases `read`, `plan` (rows of the compacted source), `runs` (rows of the team
+groups whose runs are checked) and `differential`. The log line
+`ownership_interval_compaction.team_group_checked` (rows, runs, elapsed_ms;
+Debug, Info from 1 s) times each team group. The plan is near n log n in the
+rows of a repository or project group, also when many rows of the group are
+valid at the same instant: each row enters and leaves the sweep once, and the
+owner answers are compared from what changed, not rebuilt per instant.
 Output: counts only, under `compact_ownership_intervals`, per table and per
 organization (numbered, never named) and in total: `rows_before`/`rows_after`,
 `open_*`, `closed_*`, `tombstones_*`, `close_before_open_*`, `runs_found`,

@@ -1018,8 +1018,10 @@ project's items by id. Now:
     (`status=archived`, the same paging and bound). The archived answer is an identity set (native id
     and key of each project). Every open ownership row of this writer whose project is in that set, by
     the native id OR by the id built from the key (`{org_id}:jira:{KEY}`, rows written before the one-id
-    rule), is left as it is: it is not given to the snapshot rule, and nothing is written or re-keyed
-    for an archived project (`jira_team_catalog_archived_ownership_held`). This read failing at any
+    rule), is left as it is: it is not given to the snapshot rule, and no ownership row is written or
+    re-keyed for an archived project (`jira_team_catalog_archived_ownership_held`). The project row of an
+    archived project is written as `completed` with source `jira.project.status=archived` and
+    `is_active` 0 (CHAOS-9438 rule), so it does not keep the empty state it had before states were written. This read failing at any
     page, the first one included, does not fail the walk: the snapshot is not complete
     (`jira_team_catalog_archived_project_search_incomplete`) and nothing is closed. A project in
     neither answer (deleted, or no longer visible to the credential) loses its rows on a complete run.

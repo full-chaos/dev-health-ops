@@ -278,12 +278,25 @@ func normalizeJiraOwnershipRow(orgID, teamID string, projectID ProjectID, projec
 }
 
 func normalizeJiraProjectRow(orgID string, projectID ProjectID, projectKey, name string, normalizedAt time.Time) jiraTeamCatalogProjectRow {
-	key := projectKey
 	// The project search that feeds this row returns live projects only.
-	state := projectmembership.JiraProjectState(projectmembership.JiraStatusLive)
+	return jiraProjectCatalogRow(orgID, projectID, projectKey, name, projectmembership.JiraStatusLive, 1, normalizedAt)
+}
+
+// normalizeJiraArchivedProjectRow is the row of a project the archived project
+// search names. It is inactive and completed, so its earlier row cannot stay
+// at the empty state it had before project states were written.
+func normalizeJiraArchivedProjectRow(orgID string, projectID ProjectID, projectKey, name string, normalizedAt time.Time) jiraTeamCatalogProjectRow {
+	return jiraProjectCatalogRow(orgID, projectID, projectKey, name, projectmembership.JiraStatusArchived, 0, normalizedAt)
+}
+
+func jiraProjectCatalogRow(
+	orgID string, projectID ProjectID, projectKey, name, status string, isActive uint8, normalizedAt time.Time,
+) jiraTeamCatalogProjectRow {
+	key := projectKey
+	state := projectmembership.JiraProjectState(status)
 	return jiraTeamCatalogProjectRow{
 		ID: projectID, OrgID: orgID, Provider: jiraTeamCatalogProvider,
-		ProjectKey: &key, Name: name, IsActive: 1,
+		ProjectKey: &key, Name: name, IsActive: isActive,
 		State: state.State, StateSource: state.Source,
 		TeamIDs: []string{}, TeamKeys: []string{},
 		UpdatedAt: normalizedAt, LastSynced: normalizedAt,

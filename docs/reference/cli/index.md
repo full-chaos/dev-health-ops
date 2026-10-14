@@ -1604,13 +1604,14 @@ readers take the newest, so the served number is the same; it is a duplicate
 computation, not a wrong value. Do not run it while a wide post-sync catch-up of
 the window is expected.
 
-**The verb runs only on the go-heavy pod** (`operator_backend_unavailable` from
-go-scheduler: it needs the domain pool and the River registry; `--dry-run`
-needs the domain pool only). Like every `dho workers` verb it also needs
-`POSTGRES_URI`, `WORKER_DATABASE_URI` and `COORDINATOR_DATABASE_URI` in the
-process environment (`configuration_error` otherwise); the `heavy` process of
-`deploy/go-workers/deployment.json` declares only the first two, the
-`worker-operator` operator CLI declares all three. Run it where all three are set.
+**Where to run it:** from a worker pod that holds the coordinator DSN
+(`go-scheduler` or `go-reconciler` on prod), **not** `go-heavy`. Like every
+`dho workers` verb it needs `POSTGRES_URI`, `WORKER_DATABASE_URI` and
+`COORDINATOR_DATABASE_URI` in the process environment (`configuration_error`
+otherwise); `go-heavy` does not carry the coordinator DSN. It also needs the
+domain pool and the River registry (`operator_backend_unavailable` otherwise;
+`--dry-run` needs the domain pool only). The `worker-operator` operator CLI of
+`deploy/go-workers/deployment.json` declares all three DSNs too.
 
 The rewrite appends: `dora_metrics_daily` keeps every
 generation and readers take the newest `computed_at` per key, so the old rows

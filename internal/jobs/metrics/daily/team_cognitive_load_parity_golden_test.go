@@ -76,7 +76,7 @@ func TestTeamCognitiveLoadMatchesTheFrozenPythonGolden(t *testing.T) {
 		// repoOrphan deliberately absent.
 	}
 
-	got := buildTeamCognitiveLoadRows(orgID, day, userRows, teamRows, oneOwnerEach(repoToTeam), computedAt)
+	got := buildTeamCognitiveLoadRows(orgID, day, userRows, teamRows, soleOwnerShares(repoToTeam), computedAt)
 
 	if len(got) != len(golden.TeamCognitiveLoad) {
 		t.Fatalf("row count: golden=%d got=%d (got=%+v)", len(golden.TeamCognitiveLoad), len(got), got)

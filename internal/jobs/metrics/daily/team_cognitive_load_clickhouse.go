@@ -8,6 +8,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 	"github.com/google/uuid"
 )
 
@@ -199,20 +200,20 @@ type contextSpreadPair struct {
 type teamCognitiveLoadBucket struct {
 	prInterruptionLoad     float64
 	reviewRequestLoad      float64
-	afterHoursCommitsCount int
-	weekendCommitsCount    int
-	commitsCount           int
+	afterHoursCommitsCount float64
+	weekendCommitsCount    float64
+	commitsCount           float64
 	hasTeamMetricsRow      bool
 	repoIDs                map[string]struct{}
 	authors                map[string]struct{}
-	contextSpreadPairs     map[contextSpreadPair]struct{}
+	contextSpreadWeight    map[contextSpreadPair]float64
 }
 
 func newTeamCognitiveLoadBucket() *teamCognitiveLoadBucket {
 	return &teamCognitiveLoadBucket{
-		repoIDs:            map[string]struct{}{},
-		authors:            map[string]struct{}{},
-		contextSpreadPairs: map[contextSpreadPair]struct{}{},
+		repoIDs:             map[string]struct{}{},
+		authors:             map[string]struct{}{},
+		contextSpreadWeight: map[contextSpreadPair]float64{},
 	}
 }
 
@@ -225,7 +226,7 @@ func newTeamCognitiveLoadBucket() *teamCognitiveLoadBucket {
 func buildTeamCognitiveLoadRows(
 	organizationID string, day time.Time,
 	userRows []userMetricsCognitiveLoadInput, teamRows []teamMetricsCognitiveLoadInput,
-	repoToTeam map[string][]string, computedAt time.Time,
+	repoOwners map[string][]teamownership.OwnerShare, computedAt time.Time,
 ) []teamCognitiveLoadRow {
 	buckets := map[string]*teamCognitiveLoadBucket{}
 	bucket := func(teamID string) *teamCognitiveLoadBucket {
@@ -237,34 +238,40 @@ func buildTeamCognitiveLoadRows(
 		return existing
 	}
 
-	// A repo with several main owners (D5990) counts whole in each of them.
+	// CHAOS-9410, D5988: the main owner and every lesser owner of a repository
+	// take its additive measures at their own linked share (a full tie is equal
+	// shares, D5990; a sole owner holds the repository whole). The ratios are
+	// recomputed from the share-weighted sums, the distinct counts (repos,
+	// authors) stay whole: a count of things a team touches is not divisible.
 	for _, row := range userRows {
 		repoIDStr := row.RepoID.String()
-		for _, teamID := range repoToTeam[repoIDStr] {
+		for _, owner := range repoOwners[repoIDStr] {
+			teamID := owner.TeamID
 			if teamID == "" {
 				continue
 			}
 			b := bucket(teamID)
-			b.prInterruptionLoad += row.PRInterruptionLoad
-			b.reviewRequestLoad += row.ReviewRequestLoad
+			b.prInterruptionLoad += float64(row.PRInterruptionLoad * owner.Share)
+			b.reviewRequestLoad += float64(row.ReviewRequestLoad * owner.Share)
 			b.repoIDs[repoIDStr] = struct{}{}
 			if row.AuthorEmail != "" {
 				b.authors[row.AuthorEmail] = struct{}{}
-				b.contextSpreadPairs[contextSpreadPair{authorEmail: row.AuthorEmail, repoID: repoIDStr}] = struct{}{}
+				b.contextSpreadWeight[contextSpreadPair{authorEmail: row.AuthorEmail, repoID: repoIDStr}] = owner.Share
 			}
 		}
 	}
 
 	for _, row := range teamRows {
 		repoIDStr := row.RepoID.String()
-		for _, teamID := range repoToTeam[repoIDStr] {
+		for _, owner := range repoOwners[repoIDStr] {
+			teamID := owner.TeamID
 			if teamID == "" {
 				continue
 			}
 			b := bucket(teamID)
-			b.afterHoursCommitsCount += row.AfterHoursCommitsCount
-			b.weekendCommitsCount += row.WeekendCommitsCount
-			b.commitsCount += row.CommitsCount
+			b.afterHoursCommitsCount += float64(float64(row.AfterHoursCommitsCount) * owner.Share)
+			b.weekendCommitsCount += float64(float64(row.WeekendCommitsCount) * owner.Share)
+			b.commitsCount += float64(float64(row.CommitsCount) * owner.Share)
 			b.hasTeamMetricsRow = true
 			b.repoIDs[repoIDStr] = struct{}{}
 		}
@@ -282,8 +289,8 @@ func buildTeamCognitiveLoadRows(
 		var afterHoursRatio, weekendRatio *float64
 		switch {
 		case b.hasTeamMetricsRow && b.commitsCount > 0:
-			ah := float64(b.afterHoursCommitsCount) / float64(b.commitsCount)
-			we := float64(b.weekendCommitsCount) / float64(b.commitsCount)
+			ah := b.afterHoursCommitsCount / b.commitsCount
+			we := b.weekendCommitsCount / b.commitsCount
 			afterHoursRatio, weekendRatio = &ah, &we
 		case b.hasTeamMetricsRow:
 			// Measured, not missing: every owned repo's row was itself a
@@ -293,12 +300,16 @@ func buildTeamCognitiveLoadRows(
 		default:
 			afterHoursRatio, weekendRatio = nil, nil
 		}
+		contextSpread := 0.0
+		for _, share := range b.contextSpreadWeight {
+			contextSpread += share
+		}
 		records = append(records, teamCognitiveLoadRow{
 			OrganizationID:        organizationID,
 			TeamID:                teamID,
 			Day:                   day,
 			PRInterruptionLoad:    b.prInterruptionLoad,
-			ContextSpreadCount:    float64(len(b.contextSpreadPairs)),
+			ContextSpreadCount:    contextSpread,
 			ReviewRequestLoad:     b.reviewRequestLoad,
 			AfterHoursCommitRatio: afterHoursRatio,
 			WeekendCommitRatio:    weekendRatio,

@@ -21,10 +21,12 @@ package analytics
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 )
 
@@ -429,13 +431,21 @@ type investmentContext struct {
 	// OwnershipTeam says the `ut` join is the repository's owner (ownershipTeamSource), so a measure is weighted by
 	// the owner's share (measure).
 	OwnershipTeam bool
+	// ScopeShare is the team scope's RepoShare over the unit's repository (teamscope.RepoShare; CHAOS-9629, D5988) when
+	// the request is team-scoped and the read has no `ut` join: a measure is weighted by the share of each repository
+	// the teams in view hold, as the explanation and the REST readers weigh it. Empty = no team scope (weight 1) or the
+	// `ut` join carries the share (OwnershipTeam). Its bindings are in Bindings.
+	ScopeShare string
 }
 
 // measure is the measure's SQL on this context: dbExpression, weighted by the owner's share of the repository when
 // the team is read from ownership.
 func (c investmentContext) measure(m Measure) (string, error) {
-	if c.OwnershipTeam {
-		return ownershipDbExpression(m)
+	switch {
+	case c.OwnershipTeam:
+		return ownershipDbExpression(m, ownershipShareExpr)
+	case c.ScopeShare != "":
+		return ownershipDbExpression(m, c.ScopeShare)
 	}
 	return dbExpression(m, true, c.UseRepoAllocation)
 }
@@ -521,7 +531,9 @@ func investmentContextFor(orgID string, dimensions []Dimension, forceTeamJoin, r
 	teamJoin := dimensionListHas(dimensions, DimensionTeam) || forceTeamJoin
 	// The team is the owner of the repository of the effort row (CHAOS-9297): ownership is a property of the
 	// per-repository allocation rows, so a team join always reads them.
-	useRepoAllocation := dimensionListHas(dimensions, DimensionRepo) || repoScopedFlag || teamJoin
+	// A team scope weighs by the owners' share of each repository (below), which is a property of the per-repository
+	// allocation rows too (CHAOS-9629).
+	useRepoAllocation := dimensionListHas(dimensions, DimensionRepo) || repoScopedFlag || teamJoin || len(scopedTeams) > 0
 
 	var source string
 	if useRepoAllocation {
@@ -546,10 +558,16 @@ func investmentContextFor(orgID string, dimensions []Dimension, forceTeamJoin, r
 	// faithfully here, so this embeds its OWN fresh copy of
 	// LatestWorkUnitInvestmentsSource() independent of `source` above.
 	var bindings []clickhouse.Binding
+	scopeShare := ""
 	if teamJoin {
 		shares, shareBindings := ownershipTeamSource(orgID, scopedTeams)
 		joins = append(joins, fmt.Sprintf("LEFT JOIN %s AS ut ON ut.owner_repo_id = toString(work_unit_investments.repo_id)", shares))
 		bindings = shareBindings
+	} else if len(scopedTeams) > 0 {
+		// THEME, SUBCATEGORY, REPO, ... under a team scope: no team group to split a repository by, so each repository
+		// row is weighed by the share of it the teams in view hold, the SAME expression the explanation and the REST
+		// readers use (teamscope.RepoShare), with no join and so no row fan-out.
+		scopeShare, bindings = teamscope.RepoShare(orgID, "work_unit_investments.repo_id", scopedTeams, time.Now().UTC())
 	}
 
 	// Repo join: compiler.py:209-210, GO-ONLY DIVERGENCE (CHAOS-4773).
@@ -607,6 +625,7 @@ func investmentContextFor(orgID string, dimensions []Dimension, forceTeamJoin, r
 		UseRepoAllocation: useRepoAllocation,
 		Bindings:          bindings,
 		OwnershipTeam:     teamJoin,
+		ScopeShare:        scopeShare,
 	}
 }
 

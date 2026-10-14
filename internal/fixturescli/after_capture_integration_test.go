@@ -114,6 +114,9 @@ var viewFilledAfterTheCapture = map[string]viewFilledTable{
 var emptyColumnsAfterTheCapture = map[string]map[string]string{
 	// The provider fact that decided a project's state category (CHAOS-9438).
 	"projects": {"state_source": "123_projects_state_source.sql"},
+	// The rule that matched a deployment's pull request link (CHAOS-9610): a
+	// captured deployment has no tier.
+	"deployments": {"pull_request_tier": "126_deployments_pull_request_tier.sql"},
 }
 
 // withoutColumnsAfterTheCapture checks the columns of table that

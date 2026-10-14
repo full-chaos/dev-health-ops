@@ -167,7 +167,7 @@ func TestGitLabDeploymentsEffectsAppendsNullableUInt32PullRequestNumber(t *testi
 	if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
 		t.Fatal(err)
 	}
-	if conn.batch == nil || len(conn.batch.values) != 1 || len(conn.batch.values[0]) != 13 {
+	if conn.batch == nil || len(conn.batch.values) != 1 || len(conn.batch.values[0]) != 14 {
 		t.Fatalf("append values=%+v", conn.batch)
 	}
 	got, ok := conn.batch.values[0][8].(*uint32)

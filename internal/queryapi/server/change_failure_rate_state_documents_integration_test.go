@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -63,18 +64,31 @@ func TestRegisteredDocumentsServeTheStateOfChangeFailureRate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// evidence is the JSON value of changeFailureEvidence (CHAOS-9630), the
+	// same rule's outcome as the state: basis, D, K, coverage K / D and the
+	// unknown reason, served whatever the state.
+	evidence := func(basis any, deployments, withStatus float64, coverage, reason any) map[string]any {
+		return map[string]any{
+			"basis": basis, "deployments": deployments, "deploymentsWithStatus": withStatus,
+			"coverage": coverage, "unknownReason": reason, "__typename": "ChangeFailureEvidence",
+		}
+	}
 	cases := []struct {
-		org     string
-		counts  *changefailure.Counts // nil: no stored row
-		ratio   float64
-		hasData bool
-		state   any // the JSON value of rateState
+		org      string
+		counts   *changefailure.Counts // nil: no stored row
+		ratio    float64
+		hasData  bool
+		state    any // the JSON value of rateState
+		evidence map[string]any
 	}{
-		{"org-documents-unknown", &changefailure.Counts{Deployments: 4}, 0, false, "unknown_no_incident_evidence"},
-		{"org-documents-not-applicable", &changefailure.Counts{IncidentsDirect: 1}, 0, false, "not_applicable_no_deployments"},
-		{"org-documents-no-row", nil, 0, false, nil},
-		{"org-documents-measured-zero", &changefailure.Counts{Deployments: 4, IncidentsDirect: 1}, 0, true, "measured"},
-		{"org-documents-measured", &changefailure.Counts{Deployments: 4, FailedHeuristic: 1, IncidentsViaDeployment: 1}, 0.25, true, "measured"},
+		{"org-documents-unknown", &changefailure.Counts{Deployments: 4}, 0, false, "unknown_no_incident_evidence", evidence(nil, 4, 0, 0.0, "deployments_without_outcome")},
+		{"org-documents-not-applicable", &changefailure.Counts{IncidentsDirect: 1}, 0, false, "not_applicable_no_deployments", evidence(nil, 0, 0, nil, "no_deployments_in_window")},
+		{"org-documents-no-row", nil, 0, false, nil, evidence(nil, 0, 0, nil, "not_collected")},
+		{"org-documents-measured-zero", &changefailure.Counts{Deployments: 4, IncidentsDirect: 1}, 0, true, "measured", evidence("incident", 4, 0, 0.0, nil)},
+		{"org-documents-measured", &changefailure.Counts{Deployments: 4, FailedHeuristic: 1, IncidentsViaDeployment: 1}, 0.25, true, "measured", evidence("incident", 4, 0, 0.0, nil)},
+		// Statuses only: the rate is failed / K (1 of 2), and the coverage K / D shows two of four.
+		{"org-documents-status-only", &changefailure.Counts{Deployments: 4, StatusKnown: 2, FailedStatus: 1}, 0.5, true, "measured", evidence("status", 4, 2, 0.5, nil)},
+		{"org-documents-both", &changefailure.Counts{Deployments: 4, StatusKnown: 4, FailedNative: 1, IncidentsDirect: 1}, 0.25, true, "measured", evidence("both", 4, 4, 1.0, nil)},
 	}
 	for _, tc := range cases {
 		if tc.counts == nil {
@@ -168,6 +182,12 @@ func TestRegisteredDocumentsServeTheStateOfChangeFailureRate(t *testing.T) {
 				}
 				if current["value"] != surface.value || current["hasData"] != tc.hasData {
 					t.Errorf("%s, current text: value %v hasData %v, want %v %v", surface.name, current["value"], current["hasData"], surface.value, tc.hasData)
+				}
+				if got := current["changeFailureEvidence"]; !reflect.DeepEqual(got, tc.evidence) {
+					t.Errorf("%s, current text: changeFailureEvidence %v, want %v", surface.name, got, tc.evidence)
+				}
+				if _, selected := legacy["changeFailureEvidence"]; selected {
+					t.Errorf("%s, legacy text: the response has a changeFailureEvidence key the text does not select", surface.name)
 				}
 				if _, selected := legacy["rateState"]; selected {
 					t.Errorf("%s, legacy text: the response has a rateState key the text does not select", surface.name)

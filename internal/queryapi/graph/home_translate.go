@@ -30,6 +30,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/changefailureevidence"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 )
@@ -137,6 +138,8 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 			RepoLinkBasis:          repoLinkBasisFromResponse(d.RepoLinkBasis),
 			RepoLinkMultiRepoItems: d.RepoLinkMultiRepoItems,
 			RepoLinkCoverage:       repoLinkCoverageFromResponse(d.RepoLinkCoverage),
+
+			ChangeFailureEvidence: changefailureevidence.Model(d.ChangeFailureEvidence),
 		})
 	}
 

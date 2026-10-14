@@ -591,6 +591,19 @@ LIMIT {max_edges:UInt32}
 	}
 	edgesBindings = append(edgesBindings, fc.bindings...)
 	edgesBindings = append(edgesBindings, edgeCtx.Bindings...)
+	// The edge statement embeds measureExpr, which is the NODE context's measure: its own bindings (the team scope's
+	// RepoShare on a REPO flow matrix, CHAOS-9629) travel with it. A name the edge context binds already (the TEAM
+	// dimension's ownership join, the same names on both contexts) is bound once.
+	bound := make(map[string]bool, len(edgesBindings))
+	for _, binding := range edgesBindings {
+		bound[binding.Name] = true
+	}
+	for _, binding := range nodeCtx.Bindings {
+		if !bound[binding.Name] {
+			edgesBindings = append(edgesBindings, binding)
+			bound[binding.Name] = true
+		}
+	}
 
 	return compiledQuery{sql: nodesSQL, bindings: nodesBindings}, compiledQuery{sql: edgesSQL, bindings: edgesBindings}, nil
 }

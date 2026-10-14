@@ -43,30 +43,32 @@ func TestDeploymentContractKeepsThePullRequestPairAsAUnit(t *testing.T) {
 	heldMerged := time.Date(2026, 7, 22, 9, 0, 0, 0, time.UTC)
 	foundMerged := time.Date(2026, 7, 23, 9, 0, 0, 0, time.UTC)
 	found := 7
-	held := map[string]any{"status": "success", "started_at": nil, "finished_at": nil, "merged_at": heldMerged, "pull_request_number": uint32(42)}
+	held := map[string]any{"status": "success", "started_at": nil, "finished_at": nil, "merged_at": heldMerged, "pull_request_number": uint32(42), "pull_request_tier": pullRequestTierExactMergeSHA}
 	cases := []struct {
 		name       string
 		held       map[string]any
 		failed     bool
 		merged     *time.Time
 		number     *int
+		tier       string
 		wantMerged *time.Time
 		wantNumber *int
+		wantTier   string
 	}{
-		{"nothing held, lookup failed", nil, true, nil, nil, nil, nil},
-		{"nothing held, no pull request", nil, false, nil, nil, nil, nil},
-		{"nothing held, pull request found", nil, false, &foundMerged, &found, &foundMerged, &found},
-		{"pair held, lookup failed", held, true, nil, nil, &heldMerged, intPointer(42)},
-		{"pair held, no pull request", held, false, nil, nil, &heldMerged, intPointer(42)},
-		{"pair held, pull request found", held, false, &foundMerged, &found, &foundMerged, &found},
+		{"nothing held, lookup failed", nil, true, nil, nil, "", nil, nil, ""},
+		{"nothing held, no pull request", nil, false, nil, nil, "", nil, nil, ""},
+		{"nothing held, pull request found", nil, false, &foundMerged, &found, pullRequestTierMergedPR, &foundMerged, &found, pullRequestTierMergedPR},
+		{"pair held, lookup failed", held, true, nil, nil, "", &heldMerged, intPointer(42), pullRequestTierExactMergeSHA},
+		{"pair held, no pull request", held, false, nil, nil, "", &heldMerged, intPointer(42), pullRequestTierExactMergeSHA},
+		{"pair held, pull request found", held, false, &foundMerged, &found, pullRequestTierMergedPR, &foundMerged, &found, pullRequestTierMergedPR},
 	}
 	for _, tc := range cases {
 		row := deploymentEffectsUnitRow(claim, "901")
 		row.PullRequestLookupFailed = tc.failed
-		row.MergedAt, row.PullRequestNumber = tc.merged, tc.number
+		row.MergedAt, row.PullRequestNumber, row.PullRequestTier = tc.merged, tc.number, tc.tier
 		got := foldDeployment(t, row, tc.held)
-		if !timePointersEqual(got.MergedAt, tc.wantMerged) || !intPointersEqual(got.PullRequestNumber, tc.wantNumber) {
-			t.Errorf("%s: merged_at=%v pull_request_number=%v, want %v %v", tc.name, got.MergedAt, derefInt(got.PullRequestNumber), tc.wantMerged, derefInt(tc.wantNumber))
+		if !timePointersEqual(got.MergedAt, tc.wantMerged) || !intPointersEqual(got.PullRequestNumber, tc.wantNumber) || got.PullRequestTier != tc.wantTier {
+			t.Errorf("%s: merged_at=%v pull_request_number=%v tier=%q, want %v %v %q", tc.name, got.MergedAt, derefInt(got.PullRequestNumber), got.PullRequestTier, tc.wantMerged, derefInt(tc.wantNumber), tc.wantTier)
 		}
 	}
 }
@@ -76,7 +78,7 @@ func TestDeploymentContractKeepsThePullRequestPairAsAUnit(t *testing.T) {
 func TestDeploymentContractCarriesTheLifecycleOnlyOnAFailedLookup(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "deployments")
 	started := time.Date(2026, 7, 22, 9, 59, 0, 0, time.UTC)
-	held := map[string]any{"status": "success", "started_at": started, "finished_at": started, "merged_at": nil, "pull_request_number": nil}
+	held := map[string]any{"status": "success", "started_at": started, "finished_at": started, "merged_at": nil, "pull_request_number": nil, "pull_request_tier": ""}
 	row := deploymentEffectsUnitRow(claim, "902")
 	row.Status, row.StartedAt, row.FinishedAt = nil, nil, nil
 	row.LifecycleLookupFailed = true
@@ -106,6 +108,8 @@ func TestDeploymentContractWritesEveryKeptColumnBack(t *testing.T) {
 			value = "failure"
 		case "pull_request_number":
 			value = uint32(9)
+		case "pull_request_tier":
+			value = pullRequestTierMergedPR
 		}
 		if err := setDeploymentKept(&row, column, value); err != nil {
 			t.Fatalf("%s: %v", column, err)

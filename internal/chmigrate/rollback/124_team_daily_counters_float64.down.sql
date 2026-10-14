@@ -19,3 +19,7 @@ ALTER TABLE team_metrics_daily
     MODIFY COLUMN commits_count UInt32,
     MODIFY COLUMN after_hours_commits_count UInt32,
     MODIFY COLUMN weekend_commits_count UInt32;
+
+ALTER TABLE compounding_risk_daily
+    MODIFY COLUMN merged_prs_30d Nullable(UInt32),
+    MODIFY COLUMN reviewed_prs_30d Nullable(UInt32);

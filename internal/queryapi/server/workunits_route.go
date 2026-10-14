@@ -254,6 +254,15 @@ type workUnitInvestmentWire struct {
 	Investment      investmentBreakdownWire `json:"investment"`
 	EvidenceQuality evidenceQualityWire     `json:"evidence_quality"`
 	Evidence        workUnitEvidenceWire    `json:"evidence"`
+	// ChangeSet is the lines-of-code fact of the unit (CHAOS-9695): Go-only, last, null where the unit has none. It is
+	// never effort, a weight or a sort key.
+	ChangeSet *workUnitChangeSetWire `json:"change_set"`
+}
+
+type workUnitChangeSetWire struct {
+	Additions *int64 `json:"additions"`
+	Deletions *int64 `json:"deletions"`
+	Total     int64  `json:"total"`
 }
 
 // formatWorkUnitTimestamp ports Pydantic v2's JSON-mode datetime
@@ -337,7 +346,15 @@ func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) w
 			Structural: structural,
 			Contextual: contextual,
 		},
+		ChangeSet: changeSetWire(investment.ChangeSet),
 	}
+}
+
+func changeSetWire(changeSet *investmentexplain.WorkUnitChangeSet) *workUnitChangeSetWire {
+	if changeSet == nil {
+		return nil
+	}
+	return &workUnitChangeSetWire{Additions: changeSet.Additions, Deletions: changeSet.Deletions, Total: changeSet.Total}
 }
 
 // writeWorkUnitsResponse writes investments as the final 200 JSON body --

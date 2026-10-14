@@ -95,14 +95,11 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run
 			}
 		}()
 		for _, row := range rows {
-			repo, effort := "", math.NaN()
+			repo := ""
 			if row.RepoID != nil {
 				repo = *row.RepoID
 			}
-			if row.EffortValue != nil {
-				effort = *row.EffortValue
-			}
-			out[row.WorkUnitID+"@"+repo] = [2]any{repo, effort}
+			out[row.WorkUnitID+"@"+repo] = [2]any{repo, row.WorkUnitCount}
 			keys[row.WorkUnitID+"@"+repo]++
 		}
 		return out
@@ -122,27 +119,27 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run
 			return
 		}
 		if math.Abs(v[1].(float64)-effort) > 1e-6 {
-			t.Errorf("%s: row %s effort = %v, want %v", label, key, v[1], effort)
+			t.Errorf("%s: row %s work-unit count = %v, want %v", label, key, v[1], effort)
 		}
 	}
 
 	// Repository B: the unit appears once, as repository B with its 40 (not repository A with 100).
 	repoB_ := read(WorkUnitInvestmentsFilter{RepoIDs: []string{repoB}})
-	want("repo B", repoB_, "ux@"+repoB, 40)
-	if len(repoB_) != 1 || sum(repoB_) != 40 {
-		t.Errorf("repo B list = %v, want one row summing to repository B's allocation total 40", repoB_)
+	want("repo B", repoB_, "ux@"+repoB, 0.4)
+	if len(repoB_) != 1 || math.Abs(sum(repoB_)-0.4) > 1e-6 {
+		t.Errorf("repo B list = %v, want one row summing to repository B's allocation total 0.4", repoB_)
 	}
-	// Repository A: ux's 60 plus u1's 10 = the allocation total of A.
+	// Repository A: ux's 0.6 plus u1's whole unit (1) = the allocation total of A.
 	repoA_ := read(WorkUnitInvestmentsFilter{RepoIDs: []string{repoA}})
-	want("repo A", repoA_, "ux@"+repoA, 60)
-	want("repo A", repoA_, "u1@"+repoA, 10)
-	if sum(repoA_) != 70 {
-		t.Errorf("repo A list sums to %v, want repository A's allocation total 70", sum(repoA_))
+	want("repo A", repoA_, "ux@"+repoA, 0.6)
+	want("repo A", repoA_, "u1@"+repoA, 1)
+	if math.Abs(sum(repoA_)-1.6) > 1e-6 {
+		t.Errorf("repo A list sums to %v, want repository A's allocation total 1.6", sum(repoA_))
 	}
 	// Org scope (no scope): unchanged, the whole unit once with its own repository.
 	org_ := read(WorkUnitInvestmentsFilter{})
-	want("org scope", org_, "ux@"+repoA, 100)
-	want("org scope", org_, "u1@"+repoA, 10)
+	want("org scope", org_, "ux@"+repoA, 1)
+	want("org scope", org_, "u1@"+repoA, 1)
 	if len(org_) != 2 {
 		t.Errorf("org scope list = %v, want 2 whole units", org_)
 	}
@@ -150,7 +147,7 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run
 	teamB := read(WorkUnitInvestmentsFilter{
 		TeamScopeCondition: "work_unit_investments.repo_id IN (SELECT toString(repo_id) FROM team_repo_ownership FINAL WHERE org_id = {org_id:String} AND team_id = 'team-b')",
 	})
-	want("team B scope", teamB, "ux@"+repoA, 100)
+	want("team B scope", teamB, "ux@"+repoA, 1)
 	if len(teamB) != 1 {
 		t.Errorf("team B list = %v, want ux once, whole", teamB)
 	}

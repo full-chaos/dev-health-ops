@@ -100,6 +100,34 @@ func TestBuildInvestmentFlow(t *testing.T) {
 	}
 }
 
+// CHAOS-9695 (D5999, D6014): an investment flow counts the work units, never their lines of code, and its unit says so.
+// The rows are what the COUNT query returns; the response carries them as link values under the work_units unit, and
+// the query holds no effort_value weight.
+func TestInvestmentFlowIsTheWorkUnitCount(t *testing.T) {
+	var seen string
+	client := dispatchClient(t, func(t *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "ARRAY JOIN CAST(work_unit_investments.theme_distribution_json") {
+			seen = query
+			return &fixtureRowScanner{rows: [][]any{{"planned", "repoA", 1.0}, {"unplanned", "repoA", 0.4}}}, nil
+		}
+		return &fixtureRowScanner{}, nil
+	})
+	resp, err := BuildResponse(context.Background(), client, "org-1", Params{Mode: "investment", StartDay: day(2024, 1, 1), EndDay: day(2024, 1, 31)})
+	if err != nil {
+		t.Fatalf("BuildResponse: %v", err)
+	}
+	if resp.Unit == nil || *resp.Unit != "work_units" {
+		t.Errorf("unit = %v, want work_units", resp.Unit)
+	}
+	want := []Link{{Source: "planned", Target: "repoA", Value: 1.0}, {Source: "unplanned", Target: "repoA", Value: 0.4}}
+	if !reflect.DeepEqual(resp.Links, want) {
+		t.Errorf("links = %+v, want %+v", resp.Links, want)
+	}
+	if strings.Contains(seen, "theme_kv.2 * work_unit_investments.effort_value") || !strings.Contains(seen, "sum(theme_kv.2 * 1.0) AS value") {
+		t.Errorf("the investment flow query is not the COUNT of the units:\n%s", seen)
+	}
+}
+
 // TestBuildExpenseFlow pins the unplanned/rework/abandoned clamp math
 // (services/sankey.py:368-370).
 func TestBuildExpenseFlow(t *testing.T) {

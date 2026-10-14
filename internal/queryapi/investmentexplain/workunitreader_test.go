@@ -89,7 +89,7 @@ func TestFetchWorkUnitInvestmentsQueryShape(t *testing.T) {
 
 	query := capture.lastQuery
 	for _, fragment := range []string{
-		"ORDER BY effort_value DESC, work_unit_id ASC",
+		"ORDER BY work_unit_count DESC, to_ts DESC, work_unit_id ASC",
 		"LIMIT {limit:UInt64}",
 		"repo_id IN {repo_ids:Array(String)}",
 		"work_unit_repo_effort",

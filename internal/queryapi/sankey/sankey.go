@@ -75,7 +75,9 @@ var definitions = map[string]definition{
 	"investment": {
 		Label:       "Investment flow",
 		Description: "Where effort allocates across initiatives, areas, issue types, and work items.",
-		Unit:        "items",
+		// CHAOS-9695 (D5999, D6014): a link counts work units (the recorded Python answer says "items" and weighs by
+		// lines of code); the unit token is the one the work-unit effort carries.
+		Unit: "work_units",
 	},
 	"expense": {
 		Label:       "Investment expense",

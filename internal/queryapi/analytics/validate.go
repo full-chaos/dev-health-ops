@@ -271,7 +271,9 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 		case MeasureCount, MeasureThroughput:
 			return throughputExpr, nil
 		case MeasureChurnLOC:
-			return "SUM(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0))", nil
+			// CHAOS-9695 (D5999, D6014): lines of code are a health measure of delivery (the non-investment path
+			// below), never an Investment measure: a request for it on the investment path is refused.
+			return "", newValidationError("measure", string(measure), "measure %q is not an Investment measure: lines of code are not a measure of effort", measure)
 		case MeasureCycleTimeHours:
 			return cycleTimeExpr, nil
 		default:

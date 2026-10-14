@@ -358,8 +358,11 @@ func TestWorkUnitsSeededRealClickHouse_ArgMaxDedupReturnsLatestVersion(t *testin
 	if got.WorkUnitName == nil || *got.WorkUnitName != "Latest name" {
 		t.Errorf("work_unit_name = %v, want \"Latest name\" (the later computed_at version) -- a stale/blended answer here is the argMax-dedup defect this test guards", got.WorkUnitName)
 	}
-	if got.Effort.Value != 9.0 {
-		t.Errorf("effort.value = %v, want 9.0 (the later computed_at version)", got.Effort.Value)
+	if got.Effort.Metric != "work_units" || got.Effort.Value != 1.0 {
+		t.Errorf("effort = %+v, want 1 work unit (a unit counts 1; the seeded effort_value 9 is not served)", got.Effort)
+	}
+	if got.ChangeSet == nil || got.ChangeSet.Total != 9 || got.ChangeSet.Additions != nil || got.ChangeSet.Deletions != nil {
+		t.Errorf("change set = %+v, want the later version's stored churn 9 as the total, no split", got.ChangeSet)
 	}
 }
 

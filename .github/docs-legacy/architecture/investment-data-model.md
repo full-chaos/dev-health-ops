@@ -28,7 +28,7 @@ One row per WorkUnit per materialization run. Created in
 | `repo_id` | `Nullable(UUID)` | Null → surfaces as `unassigned` scope in the API |
 | `provider` | `Nullable(String)` | Source provider |
 | `effort_metric` | `String` | **Runtime values: `churn_loc` or `active_hours`** |
-| `effort_value` | `Float64` | Churn-LOC / active-hours figure of the unit. **Not a weight**: lines of code are not a measure of effort (D5999); read only by the explicit `CHURN_LOC` measure |
+| `effort_value` | `Float64` | Churn-LOC / active-hours figure of the unit, stored as written. **Not a weight and not served**: lines of code are not a measure of effort (D5999) and no Investment read, field or option carries it (CHAOS-9695, D6014) |
 | `theme_distribution_json` | `Map(String, Float64)` | 5 themes → probability (~sums to 1) |
 | `subcategory_distribution_json` | `Map(String, Float64)` | 15 subcategories → probability |
 | `structural_evidence_json` | `String` | Serialized structural signals |

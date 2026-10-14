@@ -552,7 +552,10 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 	// SAME row. Two separate argMax calls could take them from different rows
 	// if their computed_at values ever tie, which would pair a score with
 	// another row's severity -- and severity is the field that decides whether
-	// this path fires at all.
+	// this path fires at all. The order key is tuple(day, computed_at): the
+	// latest DAY wins, and computed_at only breaks ties within a day. Ordering
+	// by computed_at alone let an old day that was backfilled later beat the
+	// latest day (CHAOS-9713).
 	query := `
             SELECT
                 tupleElement(latest_row, 1) AS score,
@@ -561,7 +564,7 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
                 tupleElement(latest_row, 7), tupleElement(latest_row, 8), tupleElement(latest_row, 9), tupleElement(latest_row, 10)
             FROM (
                 SELECT argMax(tuple(compounding_risk, severity, churn_norm, complexity_norm, ownership_norm, review_norm,
-                                    w_churn, w_complexity, w_ownership, w_review), computed_at) AS latest_row
+                                    w_churn, w_complexity, w_ownership, w_review), tuple(day, computed_at)) AS latest_row
                 FROM compounding_risk_daily
                 WHERE scope = 'team'
                   AND scope_id = {team_id:String}

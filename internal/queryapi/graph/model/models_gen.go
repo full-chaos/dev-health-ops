@@ -2563,17 +2563,15 @@ type SankeyValueUnit string
 
 const (
 	SankeyValueUnitWorkUnits SankeyValueUnit = "WORK_UNITS"
-	SankeyValueUnitLoc       SankeyValueUnit = "LOC"
 )
 
 var AllSankeyValueUnit = []SankeyValueUnit{
 	SankeyValueUnitWorkUnits,
-	SankeyValueUnitLoc,
 }
 
 func (e SankeyValueUnit) IsValid() bool {
 	switch e {
-	case SankeyValueUnitWorkUnits, SankeyValueUnitLoc:
+	case SankeyValueUnitWorkUnits:
 		return true
 	}
 	return false

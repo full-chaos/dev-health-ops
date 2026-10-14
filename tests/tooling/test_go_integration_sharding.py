@@ -968,7 +968,9 @@ def _remaining_go_test_list() -> set[str]:
 def test_every_remaining_test_runs_in_exactly_one_remaining_shard() -> None:
     selected: list[str] = []
     for shard in range(1, _remaining_shard_count() + 1):
-        result = _run_check_go("integration-shard", "remaining", str(shard), "--dry-run")
+        result = _run_check_go(
+            "integration-shard", "remaining", str(shard), "--dry-run"
+        )
         assert result.returncode == 0, result.stdout + result.stderr
         assert f"remaining test shard {shard}: DRY RUN" in result.stdout
         chosen = [
@@ -1053,8 +1055,12 @@ def test_an_isolated_package_key_matching_nothing_fails_loudly_and_workerservice
     assert by_shard[holder] == ["internal/workerservice"]
     (server_holder,) = [s for s, pkgs in by_shard.items() if QAPISERVER_PACKAGE in pkgs]
     assert by_shard[server_holder] == [QAPISERVER_PACKAGE], "queryapi/server shares a shard row with another package"
-    (remaining_holder,) = [s for s, pkgs in by_shard.items() if REMAINING_PACKAGE in pkgs]
-    assert by_shard[remaining_holder] == [REMAINING_PACKAGE], "metrics/remaining shares a shard row with another package"
+    (remaining_holder,) = [
+        s for s, pkgs in by_shard.items() if REMAINING_PACKAGE in pkgs
+    ]
+    assert by_shard[remaining_holder] == [REMAINING_PACKAGE], (
+        "metrics/remaining shares a shard row with another package"
+    )
 
 
 def _declared_image(constant: str) -> str:

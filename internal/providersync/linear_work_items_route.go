@@ -386,8 +386,11 @@ type linearWorkItemRow struct {
 	PriorityRaw   *string    `json:"priority_raw"`
 	ServiceClass  *string    `json:"service_class"`
 	DueAt         *time.Time `json:"due_at"`
-	OrgID         string     `json:"org_id"`
-	LastSynced    time.Time  `json:"last_synced"`
+	// DueAtAbsent marks a row decoded from an effect that has no due_at key
+	// (a prepared snapshot written before the key was projected).
+	DueAtAbsent bool      `json:"-"`
+	OrgID       string    `json:"org_id"`
+	LastSynced  time.Time `json:"last_synced"`
 }
 
 type linearWorkItemTransitionRow struct {

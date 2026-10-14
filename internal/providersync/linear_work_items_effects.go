@@ -331,7 +331,7 @@ func projectLinearWorkItem(row linearWorkItemRow) workItemStoredRow {
 		ParentID: derefString(row.ParentID), EpicID: derefString(row.EpicID),
 		URL: derefString(row.URL), LastSynced: clickHouseMillis(row.LastSynced),
 		OrgID: row.OrgID, SourceID: nil, Description: boundedWorkItemDescription(row.Description),
-		DueAt: utcPointer(row.DueAt),
+		DueAt: utcPointer(row.DueAt), DueAtAbsent: row.DueAtAbsent,
 	}
 }
 
@@ -340,7 +340,7 @@ type LinearWorkItemsClickHouseAdapter struct{ Conn driver.Conn }
 func (adapter LinearWorkItemsClickHouseAdapter) WriteLinearWorkItemEffect(
 	ctx context.Context, identity LinearWorkItemEffectIdentity, effect EffectBatch,
 ) error {
-	rows, err := decodeEffectRows[linearWorkItemRow](effect)
+	rows, err := decodeWorkItemEffectRows(effect, func(row *linearWorkItemRow) { row.DueAtAbsent = true })
 	if err != nil {
 		return err
 	}
@@ -368,7 +368,7 @@ func (adapter LinearWorkItemsClickHouseAdapter) WriteLinearWorkItemEffect(
 func (adapter LinearWorkItemsClickHouseAdapter) InspectLinearWorkItemEffect(
 	ctx context.Context, identity LinearWorkItemEffectIdentity, effect EffectBatch,
 ) (EffectInspection, error) {
-	rows, err := decodeEffectRows[linearWorkItemRow](effect)
+	rows, err := decodeWorkItemEffectRows(effect, func(row *linearWorkItemRow) { row.DueAtAbsent = true })
 	if err != nil {
 		return EffectConflict, err
 	}

@@ -148,6 +148,7 @@ type workItemStoredRow struct {
 	SourceID      *uuid.UUID
 	Description   *string
 	DueAt         *time.Time
+	DueAtAbsent   bool
 }
 
 // projectWorkItem applies exactly the coercions write_work_items applies.
@@ -182,7 +183,7 @@ func projectWorkItem(row githubWorkItemRow) workItemStoredRow {
 		// source_id is NULL for native sync; only the external-ingest sink
 		// stamps it (CHAOS-2698 D1), and this unit is never that writer.
 		SourceID: nil, Description: boundedWorkItemDescription(row.Description),
-		DueAt: utcPointer(row.DueAt),
+		DueAt: utcPointer(row.DueAt), DueAtAbsent: row.DueAtAbsent,
 	}
 }
 
@@ -191,7 +192,7 @@ func (adapter GitHubWorkItemsClickHouseAdapter) WriteGitHubWorkItemEffect(
 	identity GitHubWorkItemEffectIdentity,
 	effect EffectBatch,
 ) error {
-	rows, err := decodeEffectRows[githubWorkItemRow](effect)
+	rows, err := decodeWorkItemEffectRows(effect, func(row *githubWorkItemRow) { row.DueAtAbsent = true })
 	if err != nil {
 		return err
 	}
@@ -221,7 +222,7 @@ func (adapter GitHubWorkItemsClickHouseAdapter) InspectGitHubWorkItemEffect(
 	identity GitHubWorkItemEffectIdentity,
 	effect EffectBatch,
 ) (EffectInspection, error) {
-	rows, err := decodeEffectRows[githubWorkItemRow](effect)
+	rows, err := decodeWorkItemEffectRows(effect, func(row *githubWorkItemRow) { row.DueAtAbsent = true })
 	if err != nil {
 		return EffectConflict, err
 	}
@@ -305,7 +306,7 @@ func workItemStoredRowsEqual(expected, actual workItemStoredRow) EffectInspectio
 		expected.URL != actual.URL || expected.OrgID != actual.OrgID ||
 		!uuidPointersEqual(expected.SourceID, actual.SourceID) ||
 		(expected.Description != nil && !stringPointersEqual(expected.Description, actual.Description)) ||
-		(workItemDueAtStated(expected.Provider) && !timePointersEqual(expected.DueAt, actual.DueAt)) {
+		(workItemRowStatesDueAt(expected) && !timePointersEqual(expected.DueAt, actual.DueAt)) {
 		return EffectConflict
 	}
 	return EffectExact

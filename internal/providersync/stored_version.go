@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -326,8 +327,8 @@ func workItemDueAtStated(provider string) bool {
 	return false
 }
 
-func workItemsContractFor(provider string) storedversion.Contract {
-	if workItemDueAtStated(provider) {
+func workItemsContractFor(row workItemStoredRow) storedversion.Contract {
+	if workItemRowStatesDueAt(row) {
 		return datedWorkItemsContract
 	}
 	return workItemsContract
@@ -388,12 +389,12 @@ func workItemStoredVersionRows(rows []workItemStoredRow) []storedversion.Row {
 	for i, row := range rows {
 		values := append(row.values(), make([]any, len(workItemsHeldColumns))...)
 		values[len(values)-len(workItemsHeldColumns)] = row.Description
-		if workItemDueAtStated(row.Provider) {
+		if workItemRowStatesDueAt(row) {
 			values[len(values)-1] = nullableTimePointer(row.DueAt)
 		}
 		stored[i] = storedversion.Row{
 			Values: values,
-			Carry:  workItemsCarry(workItemsContractFor(row.Provider), workItemDescriptionUnstated(row.Description)),
+			Carry:  workItemsCarry(workItemsContractFor(row), workItemDescriptionUnstated(row.Description)),
 		}
 	}
 	return stored
@@ -415,7 +416,7 @@ func writeWorkItemsKeepingHeldColumns(
 		var group []storedversion.Row
 		var positions []int
 		for i, row := range rows {
-			if workItemDueAtStated(row.Provider) == dated {
+			if workItemRowStatesDueAt(row) == dated {
 				group = append(group, stored[i])
 				positions = append(positions, i)
 			}
@@ -446,21 +447,63 @@ func writeWorkItemsKeepingHeldColumns(
 	return batch.Send()
 }
 
-const workItemDueDatesEvent = "providersync.work_items.due_dates"
+const (
+	workItemDueDatesEvent    = "providersync.work_items.due_dates"
+	workItemDueAtAbsentEvent = "providersync.work_items.due_at_absent_kept_held"
+)
+
+// workItemRowStatesDueAt reports whether a row states the provider's due date
+// (or none). A row of a dated provider decoded from an effect with no due_at
+// key states nothing: the held value is kept (see decodeWorkItemEffectRows).
+func workItemRowStatesDueAt(row workItemStoredRow) bool {
+	return workItemDueAtStated(row.Provider) && !row.DueAtAbsent
+}
+
+// decodeWorkItemEffectRows decodes work_items effect rows and marks each row
+// whose JSON has no due_at key. A prepared snapshot written before the
+// projection kept due_at has none; replaying it must not read as "the provider
+// states no due date" and clear a held one. A row built by a normalizer always
+// has the key (null when the provider states none).
+func decodeWorkItemEffectRows[T any](effect EffectBatch, markAbsent func(*T)) ([]T, error) {
+	rows, err := decodeEffectRows[T](effect)
+	if err != nil {
+		return nil, err
+	}
+	for i, raw := range effect.Rows {
+		var probe struct {
+			DueAt json.RawMessage `json:"due_at"`
+		}
+		if json.Unmarshal(raw, &probe) != nil {
+			return nil, ErrEffectRecoveryUnsafe
+		}
+		if probe.DueAt == nil {
+			markAbsent(&rows[i])
+		}
+	}
+	return rows, nil
+}
 
 // logWorkItemDueDates counts, for one write, the rows whose provider states a
-// due date and how many of them state one; counts only, no ids or text.
+// due date and how many of them state one; counts only, no ids or text. Rows
+// of a dated provider that carried no due_at key are a warning: their held
+// value was kept instead of the provider's statement.
 func logWorkItemDueDates(ctx context.Context, rows []workItemStoredRow) {
-	dated, withDueDate := 0, 0
+	dated, withDueDate, absent := 0, 0, 0
 	for _, row := range rows {
-		if workItemDueAtStated(row.Provider) {
+		switch {
+		case workItemRowStatesDueAt(row):
 			dated++
 			if row.DueAt != nil {
 				withDueDate++
 			}
+		case workItemDueAtStated(row.Provider):
+			absent++
 		}
 	}
 	slog.DebugContext(ctx, workItemDueDatesEvent, "rows", len(rows), "dated_provider_rows", dated, "with_due_date", withDueDate)
+	if absent > 0 {
+		slog.WarnContext(ctx, workItemDueAtAbsentEvent, "rows", absent)
+	}
 }
 
 const repositoryInsert = `

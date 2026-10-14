@@ -341,6 +341,128 @@ func TestProviderDateOnlyDueDatesAreUTCMidnight(t *testing.T) {
 	}
 }
 
+func effectWithoutDueAtKey(t *testing.T, row any, dropKey bool) EffectBatch {
+	t.Helper()
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dropKey {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &object); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := object["due_at"]; !present {
+			t.Fatal("a normalizer row must carry the due_at key")
+		}
+		delete(object, "due_at")
+		if encoded, err = json.Marshal(object); err != nil {
+			t.Fatal(err)
+		}
+	}
+	effect, err := BuildEffectBatch("work_items", EffectReadbackRequired, []json.RawMessage{encoded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return effect
+}
+
+// A prepared snapshot written before the projection kept due_at has rows with
+// no due_at key. Replaying one must keep the held date; a row with the key
+// (null: the provider states none) clears it.
+func TestReplayOfAPreparedSnapshotWithoutDueAtKeepsTheHeldDate(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	held := dueAtDate(2026, time.August, 15)
+	claim := nativeTestClaim("github", "work-items")
+	repoID := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79")
+	gitlab := githubWorkItemRow{
+		WorkItemID: "gl:acme/api#42", Provider: "gitlab", Title: "Replay", Type: "issue", Status: "doing",
+		RepoID: &repoID, Assignees: []string{}, Labels: []string{}, CreatedAt: now, UpdatedAt: now,
+		OrgID: claim.OrgID, LastSynced: now,
+	}
+	linear := linearWorkItemRow{
+		WorkItemID: "linear:ENG-9", Provider: "linear", Title: "Replay", Type: "task", Status: "todo",
+		Assignees: []string{}, Labels: []string{}, CreatedAt: now, UpdatedAt: now, OrgID: claim.OrgID, LastSynced: now,
+	}
+	writers := map[string]func(conn driver.Conn, effect EffectBatch) error{
+		"gitlab": func(conn driver.Conn, effect EffectBatch) error {
+			identity := GitHubWorkItemEffectIdentity{
+				OrgID: claim.OrgID, Provider: "github", Dataset: "work-items", Generation: claim.GenerationKey(),
+				Destination: "work_items", ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
+			}
+			return GitHubWorkItemsClickHouseAdapter{Conn: conn}.WriteGitHubWorkItemEffect(context.Background(), identity, effect)
+		},
+		"linear": func(conn driver.Conn, effect EffectBatch) error {
+			identity, err := newLinearWorkItemEffectIdentity(nativeTestClaim("linear", "work-items"), effect)
+			if err != nil {
+				return err
+			}
+			return LinearWorkItemsClickHouseAdapter{Conn: conn}.WriteLinearWorkItemEffect(context.Background(), identity, effect)
+		},
+	}
+	rows := map[string]struct {
+		row any
+		id  string
+		pos int
+	}{"gitlab": {gitlab, gitlab.WorkItemID, 0}, "linear": {linear, linear.WorkItemID, 0}}
+	insert := map[string]string{"gitlab": gitHubWorkItemsInsert, "linear": linearWorkItemsInsert}
+	for name, write := range writers {
+		for _, dropKey := range []bool{true, false} {
+			conn := &heldVersionConn{held: map[string]*time.Time{rows[name].id: held}, repos: map[string]uuid.UUID{}}
+			if name == "gitlab" {
+				conn.repos[rows[name].id] = repoID
+			}
+			if err := write(conn, effectWithoutDueAtKey(t, rows[name].row, dropKey)); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			positions, err := storedversion.Positions(withHeldWorkItemColumns(insert[name]))
+			if err != nil || len(conn.appended) != 1 {
+				t.Fatalf("%s: err=%v appended=%d", name, err, len(conn.appended))
+			}
+			var got *time.Time
+			switch due := conn.appended[0][positions["due_at"]].(type) {
+			case time.Time:
+				got = &due
+			case *time.Time:
+				got = due
+			}
+			if dropKey && !sameDueAt(got, held) {
+				t.Errorf("%s: replay without the due_at key stored %v, want the held %v", name, got, held)
+			}
+			if !dropKey && got != nil {
+				t.Errorf("%s: a row stating none stored %v, want it cleared", name, got)
+			}
+		}
+	}
+}
+
+// The projection keeps the due_at key a normalizer row carries (a date or
+// null) and adds none to a row that lacks it.
+func TestPreparedRouteProjectionKeepsTheDueAtKeyAsGiven(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	due := dueAtDate(2026, time.August, 20)
+	repoID := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79")
+	row := githubWorkItemRow{
+		WorkItemID: "gl:acme/api#42", Provider: "gitlab", Title: "Projected", Type: "issue", Status: "doing",
+		RepoID: &repoID, Assignees: []string{}, Labels: []string{}, CreatedAt: now, UpdatedAt: now, OrgID: "org-acme", LastSynced: now,
+	}
+	for name, tc := range map[string]struct {
+		dueAt   *time.Time
+		dropKey bool
+		want    string
+	}{"a date": {due, false, `"due_at":"2026-08-20T00:00:00Z"`}, "none": {nil, false, `"due_at":null`}, "no key": {nil, true, ""}} {
+		row.DueAt = tc.dueAt
+		projected, err := projectPreparedRouteEffects("gitlab", []EffectBatch{effectWithoutDueAtKey(t, row, tc.dropKey)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(projected[0].Rows[0])
+		if tc.want == "" && strings.Contains(text, "due_at") || tc.want != "" && !strings.Contains(text, tc.want) {
+			t.Errorf("%s: projected row %s, want %q", name, text, tc.want)
+		}
+	}
+}
+
 // The prepared-route projection keeps due_at on the rows it commits, so the
 // sink sees the date the provider stated.
 func TestPreparedRouteProjectionKeepsDueAt(t *testing.T) {

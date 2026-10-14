@@ -1254,7 +1254,7 @@ SELECT provider, team_id, repo_id, repo_full_name, match_type, is_primary, speci
 FROM team_repo_ownership FINAL
 WHERE org_id = ?
   AND source = 'inferred'
-  AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`,
+  AND (valid_to IS NULL OR (valid_to > now64(3, 'UTC') AND valid_to > valid_from))`,
 		orgID)
 	if err != nil {
 		return nil, err
@@ -1348,7 +1348,7 @@ func retractTeamRepoOwnershipRows(
 			row.Specificity,
 			row.Priority,
 			row.ValidFrom,
-			now,
+			teamRepoOwnershipCloseAt(row.ValidFrom, now),
 			now,
 			row.Share,
 		); err != nil {
@@ -1361,9 +1361,27 @@ func retractTeamRepoOwnershipRows(
 	return len(toRetract), nil
 }
 
-// supersedeTeamRepoOwnershipRows closes each row at its own valid_from (a
-// replacement under the same key with valid_to = valid_from and a newer
-// updated_at): the row then covers no instant, and the claim's row at its
+// teamRepoOwnershipCloseAt is the valid_to a retraction or role-change close
+// writes. Contract: a close never lands at or before its own open, so the
+// row it closes keeps a non-empty interval (valid_to > valid_from). A row
+// opened in the same millisecond as the run, or ahead of this run's clock,
+// closes 1 ms after its open. The only deliberate empty interval is the
+// supersede tombstone (supersedeTeamRepoOwnershipRows), which the reader
+// filter "valid_to > valid_from" below relies on.
+func teamRepoOwnershipCloseAt(validFrom, now time.Time) time.Time {
+	floor := validFrom.UTC().Add(time.Millisecond)
+	if now.Before(floor) {
+		return floor
+	}
+	return now
+}
+
+// supersedeTeamRepoOwnershipRows closes each row at its own valid_from: a
+// deliberate empty-interval tombstone (valid_to = valid_from), the one close
+// exempt from teamRepoOwnershipCloseAt. A closed row overlapping the
+// evidence-start row would double-count the team. Readers ignore it through
+// valid_to > valid_from. It is a replacement under the same key with a newer
+// updated_at. The row then covers no instant, and the claim's row at its
 // evidence time is the one open row. Logged with the count.
 func supersedeTeamRepoOwnershipRows(
 	ctx context.Context,

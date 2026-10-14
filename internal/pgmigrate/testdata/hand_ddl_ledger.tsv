@@ -3,6 +3,7 @@
 internal/api/policy/store_integration_test.go	audit_logs	PROBE	
 internal/api/policy/store_integration_test.go	feature_flags	PROBE	
 internal/api/policy/store_integration_test.go	impersonation_sessions	SUBSET	
+internal/api/policy/store_integration_test.go	integration_credentials	PROBE	
 internal/api/policy/store_integration_test.go	memberships	SUBSET	
 internal/api/policy/store_integration_test.go	org_feature_overrides	PROBE	
 internal/api/policy/store_integration_test.go	org_licenses	PROBE	

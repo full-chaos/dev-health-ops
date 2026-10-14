@@ -148,6 +148,7 @@ on:
       # change must count as Go-relevant or it is never validated on main.
       - 'ci/venue_oracle_registry.d/**'
       - 'ci/venue_oracle_triggers.d/**'
+      - 'ci/venue_oracle_trigger_gaps.tsv'
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       - 'ci/venue_oracle_weights.d/**'
       # CHAOS-6690: the go-quality race shards read these; a change to either
@@ -347,6 +348,7 @@ on:
       # change must count as Go-relevant or it is never validated on main.
       - 'ci/venue_oracle_registry.d/**'
       - 'ci/venue_oracle_triggers.d/**'
+      - 'ci/venue_oracle_trigger_gaps.tsv'
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       - 'ci/venue_oracle_weights.d/**'
       # CHAOS-6690: the go-quality race shards read these; a change to either

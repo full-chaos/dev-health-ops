@@ -2,6 +2,7 @@ package goapiproof
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -323,10 +324,17 @@ func TestOperatingReviewPercentDefect_AdmitsOnlyAWeekWithoutData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(spec.Parity.BaselineDefects) != 1 || spec.Parity.BaselineDefects[0].Ticket != "CHAOS-9111" {
-		t.Fatalf("the operatingReview parity declares %d defects, want the one CHAOS-9111 difference", len(spec.Parity.BaselineDefects))
+	var tickets []string
+	var defect BaselineDefect
+	for _, d := range spec.Parity.BaselineDefects {
+		tickets = append(tickets, d.Ticket)
+		if d.Ticket == "CHAOS-9111" {
+			defect = d
+		}
 	}
-	defect := spec.Parity.BaselineDefects[0]
+	if len(tickets) != 2 || defect.Ticket != "CHAOS-9111" || !slices.Contains(tickets, "CHAOS-9073") {
+		t.Fatalf("the operatingReview parity declares %v, want exactly CHAOS-9111 and CHAOS-9073", tickets)
+	}
 	body := func(pct, metricFlag, deltaFlag string) string {
 		metric := `"key":"a"`
 		if metricFlag != "" {

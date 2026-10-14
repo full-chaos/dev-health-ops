@@ -988,6 +988,12 @@ var operationSpecs = map[string]OperationSpec{
 			}}
 		},
 		Parity: Options{BaselineDefects: []BaselineDefect{{
+			Ticket:             "CHAOS-9073",
+			Reason:             "deliberate deviation from the reference (D5992): a change that rounds to 0 at the unit's displayed precision (ratio two decimals, every other unit one) is served as status unchanged where the reference says improved or worsened, and the sentences and recommendations print the amount at that precision (every ratio amount has two decimals, +0.02 where the reference prints +0.0 and +0.10 where it prints +0.1). Only a text or status difference of the same list length is covered here; a metric dropping out of a list is a length difference no citation covers.",
+			Paths:              []string{"data.operatingReview.sections.metrics.delta.status", "data.operatingReview.sections.changed", "data.operatingReview.sections.improved", "data.operatingReview.sections.worsened", "data.operatingReview.recommendations"},
+			Intermittent:       true,
+			IntermittentReason: "present only while a ratio metric changes (its amount has two decimals) or a change is smaller than its unit's displayed precision; a window where neither happens shows none",
+		}, {
 			Ticket:             "CHAOS-9111",
 			Reason:             "the reference's delta percent is 0.0 where a week holds no stored value (a 0 placeholder against a 0 placeholder); the candidate serves null (a percent has no meaning against a value nobody measured), with hasData or delta.hasPriorData false beside it to say which week holds none.",
 			Paths:              []string{"data.operatingReview.sections.metrics.delta.percent"},

@@ -54,11 +54,13 @@ type gitlabProject struct {
 	Path      string // path_with_namespace
 	Name      string
 	CreatedAt string
+	// LastActivityAt is the project's last activity ("" = the provider worlds' fixed stamp).
+	LastActivityAt string
 }
 
 var gitlabProjects = map[string]gitlabProject{
-	"chaos-gl/billing-service":       {41001, "chaos-gl/billing-service", "billing-service", "2025-02-03T09:00:00Z"},
-	"chaos-gl/checkout/checkout-web": {41002, "chaos-gl/checkout/checkout-web", "checkout-web", "2025-02-04T09:00:00Z"},
+	"chaos-gl/billing-service":       {41001, "chaos-gl/billing-service", "billing-service", "2025-02-03T09:00:00Z", ""},
+	"chaos-gl/checkout/checkout-web": {41002, "chaos-gl/checkout/checkout-web", "checkout-web", "2025-02-04T09:00:00Z", ""},
 }
 
 var gitlabGroups = []gitlabGroup{
@@ -78,7 +80,7 @@ func (project gitlabProject) payload() map[string]any {
 		"created_at": project.CreatedAt, "default_branch": "main", "visibility": "private", "archived": false,
 		"web_url":          "https://gitlab.com/" + project.Path,
 		"http_url_to_repo": "https://gitlab.com/" + project.Path + ".git",
-		"last_activity_at": "2026-10-11T08:00:00Z", "topics": []string{},
+		"last_activity_at": orDefault(project.LastActivityAt, "2026-10-11T08:00:00Z"), "topics": []string{},
 		"namespace": map[string]any{"id": 3000, "name": namespace, "path": namespace, "kind": "group", "full_path": namespace},
 	}
 }
@@ -182,6 +184,11 @@ type gitlabItem struct {
 	Reviewer gitlabUser
 	// Commits are the SHAs of a merge request's commits, as its commits listing names them.
 	Commits []string
+	// Weight is an issue's weight, GitLab's estimate (0 sends none).
+	Weight int
+	// ApprovedAt, on a merged merge request, is when its reviewer approved it: GitLab's "approved this
+	// merge request" system note ("" = no note, the approval list alone).
+	ApprovedAt string
 }
 
 // commitsListing is GET /merge_requests/:iid/commits: newest commit first, each with its id.
@@ -231,6 +238,9 @@ func (item gitlabItem) payload(project gitlabProject) map[string]any {
 		out["draft"], out["merge_status"] = false, "can_be_merged"
 	} else {
 		out["weight"], out["issue_type"], out["type"] = nil, "issue", "ISSUE"
+		if item.Weight > 0 {
+			out["weight"] = item.Weight
+		}
 	}
 	return out
 }
@@ -250,20 +260,34 @@ func (item gitlabItem) stateEvents() []map[string]any {
 func (item gitlabItem) approvals(project gitlabProject) map[string]any {
 	approvedBy := []map[string]any{}
 	if item.MergedAt != "" {
-		reviewer := glFay
-		if item.Author.ID == glFay.ID {
-			reviewer = glDana
-		}
-		if item.Reviewer.ID != 0 {
-			reviewer = item.Reviewer
-		}
-		approvedBy = append(approvedBy, map[string]any{"user": reviewer.payload()})
+		approvedBy = append(approvedBy, map[string]any{"user": item.approver().payload()})
 	}
 	return map[string]any{
 		"id": project.ID*100 + item.IID, "iid": item.IID, "project_id": project.ID, "title": item.Title,
 		"state": item.state(), "created_at": item.CreatedAt, "updated_at": item.UpdatedAt, "merge_status": "can_be_merged",
 		"approved": len(approvedBy) > 0, "approvals_required": 0, "approvals_left": 0, "approved_by": approvedBy,
 	}
+}
+
+// approver is the reviewer who approves a merged merge request: its own reviewer, else the world's
+// default reviewer who is not its author.
+func (item gitlabItem) approver() gitlabUser {
+	if item.Reviewer.ID != 0 {
+		return item.Reviewer
+	}
+	if item.Author.ID == glFay.ID {
+		return glDana
+	}
+	return glFay
+}
+
+// notes is a merge request's notes: the approval's system note when ApprovedAt is set.
+func (item gitlabItem) notes() []any {
+	if item.ApprovedAt == "" {
+		return []any{}
+	}
+	return []any{map[string]any{"id": item.IID*100 + 1, "system": true, "body": "approved this merge request",
+		"created_at": item.ApprovedAt, "updated_at": item.ApprovedAt, "author": item.approver().payload()}}
 }
 
 func gitlabProjectAnswers(path string, items []gitlabItem) []providerAnswer {
@@ -277,7 +301,7 @@ func gitlabProjectAnswers(path string, items []gitlabItem) []providerAnswer {
 			mrRoot := root + "/merge_requests/" + strconv.Itoa(item.IID)
 			answers = append(answers,
 				glList(mrRoot+"/resource_state_events", "*", item.stateEvents()),
-				glList(mrRoot+"/notes", "*", []any{}),
+				glList(mrRoot+"/notes", "*", item.notes()),
 				glList(mrRoot+"/commits", "*", item.commitsListing()),
 				get(gitlabHost, mrRoot+"/approvals", "*", item.approvals(project)),
 			)

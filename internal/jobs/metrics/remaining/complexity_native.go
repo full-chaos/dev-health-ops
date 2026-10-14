@@ -106,6 +106,16 @@ var ErrComplexityNoDataProduced = errors.New(
 func NewComplexityExecutor(
 	ctx context.Context, conn driver.Conn, configPath string, observer ComplexityObserver,
 ) (*ComplexityExecutor, error) {
+	return NewComplexityExecutorAt(ctx, conn, configPath, observer, func() time.Time { return time.Now().UTC() })
+}
+
+// NewComplexityExecutorAt is NewComplexityExecutor with the clock computed_at
+// is stamped from, so a caller with its own clock (a fixture world's producer
+// run) writes the same rows on every run. A nil clock is refused at run time
+// (errExecutorClockUnset), never replaced by the wall clock.
+func NewComplexityExecutorAt(
+	ctx context.Context, conn driver.Conn, configPath string, observer ComplexityObserver, now func() time.Time,
+) (*ComplexityExecutor, error) {
 	if conn == nil {
 		return nil, ErrComplexityUnavailable
 	}
@@ -120,7 +130,7 @@ func NewComplexityExecutor(
 		conn:       conn,
 		baseConfig: baseConfig,
 		observer:   observer,
-		nowUTC:     func() time.Time { return time.Now().UTC() },
+		nowUTC:     now,
 	}, nil
 }
 

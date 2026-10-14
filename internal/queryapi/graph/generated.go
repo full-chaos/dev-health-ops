@@ -11468,7 +11468,6 @@ type SankeyResult {
 
 enum SankeyValueUnit {
   WORK_UNITS
-  LOC
 }
 
 type SavedReportConnection {

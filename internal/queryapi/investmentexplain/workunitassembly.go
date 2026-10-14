@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -33,6 +34,24 @@ type WorkUnitEffort struct {
 type EvidenceQualityOutput struct {
 	Value *float64
 	Band  *string
+}
+
+// WorkUnitChangeSet is the lines of code a unit changed, a FACT of the unit (CHAOS-9695, D5999, D6014): never effort,
+// never a weight and never a sort key. Total is the unit's stored churn (additions + deletions); the split is not stored
+// per unit, so Additions and Deletions are nil until a read of the commit and pull request rows serves them.
+type WorkUnitChangeSet struct {
+	Additions *int64
+	Deletions *int64
+	Total     int64
+}
+
+// changeSetOf is the change set of a stored effort: the churn_loc figure when it is positive, nil when the unit has none
+// (hours of activity, or no commit or pull request churn: a stored 0 is not a measured one).
+func changeSetOf(metric *string, value *float64) *WorkUnitChangeSet {
+	if metric == nil || *metric != "churn_loc" || value == nil || !(*value > 0) {
+		return nil
+	}
+	return &WorkUnitChangeSet{Total: int64(math.Round(*value))}
 }
 
 // WorkUnitEvidenceOutput ports api/models/schemas.py's WorkUnitEvidence.
@@ -68,6 +87,8 @@ type WorkUnitInvestment struct {
 	Investment      InvestmentBreakdownOutput
 	EvidenceQuality EvidenceQualityOutput
 	Evidence        WorkUnitEvidenceOutput
+	// ChangeSet is the lines-of-code fact of the unit, last on purpose: it is not part of the recorded Python shape.
+	ChangeSet *WorkUnitChangeSet
 }
 
 // BuildWorkUnitInvestmentsOptions ports build_work_unit_investments'
@@ -363,6 +384,7 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 
 				StructuralOrdered: structuralOrdered,
 			},
+			ChangeSet: changeSetOf(row.EffortMetric, row.EffortValue),
 		})
 	}
 

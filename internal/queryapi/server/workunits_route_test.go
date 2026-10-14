@@ -528,7 +528,7 @@ func TestBuildWorkUnitsResponseMatchesPythonGolden(t *testing.T) {
 	baseRow := func(unitID string, workUnitCount float64, runID *string) []any {
 		return []any{
 			unitID, (*string)(nil), strPtr("Some Name"), fromTS, toTS,
-			(*string)(nil), (*string)(nil), workUnitCount,
+			(*string)(nil), (*string)(nil), strPtr("churn_loc"), floatPtr(12.5), workUnitCount,
 			[]string{"feature_delivery", "maintenance"}, []float64{0.8, 0.2},
 			[]string{}, []float64{},
 			strPtr(`{"note":"x"}`), floatPtr(0.75), strPtr("high"),
@@ -635,7 +635,8 @@ func TestBuildWorkUnitsResponseMatchesPythonGolden(t *testing.T) {
 // stripWorkUnitEffort is the declared divergence of CHAOS-9695 (D5999, D6014): the recorded Python goldens carry the
 // work unit's effort as lines of code ({"metric": "churn_loc", "value": 12.5}); the Go route serves the work-unit
 // count ({"metric": "work_units", "value": 1}). It checks the served one and removes the effort of both sides, so the
-// recorded golden stays byte-identical and every other key is still compared.
+// recorded golden stays byte-identical and every other key is still compared. The change_set key is Go-only and
+// removed the same way.
 func stripWorkUnitEffort(t *testing.T, got, want any) {
 	t.Helper()
 	items, _ := got.([]any)
@@ -646,6 +647,19 @@ func stripWorkUnitEffort(t *testing.T, got, want any) {
 			t.Fatalf("effort = %v, want the work-unit count metric work_units", object["effort"])
 		}
 		delete(object, "effort")
+		// The lines-of-code fact (Go-only, last): the unit's stored churn_loc 12.5 rounds to a total of 13, the split
+		// is not stored per unit.
+		changeSet, present := object["change_set"]
+		if !present {
+			t.Fatalf("the work unit has no change_set key: %v", object)
+		}
+		if object["work_unit_id"] == "abc-123" {
+			fact, _ := changeSet.(map[string]any)
+			if fact["total"] != 13.0 || fact["additions"] != nil || fact["deletions"] != nil {
+				t.Fatalf("change_set = %v, want {additions: null, deletions: null, total: 13}", changeSet)
+			}
+		}
+		delete(object, "change_set")
 	}
 	recorded, _ := want.([]any)
 	for _, item := range recorded {
@@ -863,13 +877,13 @@ func TestNewWorkUnitsPostHandlerWorkCategoryFilterNarrowsResults(t *testing.T) {
 	toTS := time.Date(2024, 1, 20, 0, 0, 0, 0, time.UTC)
 	matchingRow := []any{
 		"wu-match", (*string)(nil), strPtr("Matches the filter"), fromTS, toTS, (*string)(nil), (*string)(nil),
-		1.0,
+		strPtr("churn_loc"), floatPtr(5.0), 1.0,
 		[]string{"feature_delivery"}, []float64{1.0}, []string{}, []float64{},
 		strPtr(`{}`), floatPtr(0.5), strPtr("moderate"), strPtr("ok"), strPtr("v1"), (*string)(nil), toTS,
 	}
 	nonMatchingRow := []any{
 		"wu-nomatch", (*string)(nil), strPtr("Does not match"), fromTS, toTS, (*string)(nil), (*string)(nil),
-		1.0,
+		strPtr("churn_loc"), floatPtr(3.0), 1.0,
 		[]string{"maintenance"}, []float64{1.0}, []string{}, []float64{},
 		strPtr(`{}`), floatPtr(0.5), strPtr("moderate"), strPtr("ok"), strPtr("v1"), (*string)(nil), toTS,
 	}

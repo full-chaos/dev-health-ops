@@ -41,7 +41,7 @@ to a weight. The Investment paths offer no lines-of-code measure, unit or field
 (CHAOS-9695, D6014): `CHURN_LOC` stays a measure for the delivery-health analytics (team and
 repository dimensions) and is refused on every Investment path (theme, subcategory and work type
 dimensions, the flow, mix, coverage and ownership reads, the explanation), the flow's `unit` is
-`LOC` only on a health flow, and the work units carry no lines of code. Sizing the work by issue
+always `WORK_UNITS`, and a work unit's effort is its work-unit count, not lines of code. Sizing the work by issue
 size (CHAOS-9619) will change the one named measure; it will not bring lines of code back.
 
 The Home tile dates a unit by its END day (D5933) and the Operating Review serves the same
@@ -80,7 +80,9 @@ It stays in the table, and no share is weighted by it; the Home tile's `churn_lo
 is the only read of it. The work-unit
 list serves each unit's `effort` as `{"metric": "work_units", "value": <count>}`: the work-unit
 count the row stands for (1 for a whole unit, the unit's allocation weight under a repository
-scope), ordered by that count, then by the end of the unit.
+scope), ordered by that count, then by the end of the unit. The lines of code of a unit are a separate
+fact, `change_set` `{additions, deletions, total}` (null where the unit has none): `total` is the stored churn;
+the split is not stored per unit, so `additions` and `deletions` are null. It is never effort, a weight or a sort key.
 
 ---
 

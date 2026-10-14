@@ -469,6 +469,13 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 				t.Fatalf("%s: the seeded unit is not served as one work unit (%s): %s", tc.Name, goEffort, goWritten)
 			}
 			goWritten = strings.ReplaceAll(goWritten, goEffort, declaredWorkUnitEffort)
+			// The lines-of-code fact (CHAOS-9695, Go-only, last key of the unit): the seeded unit stored churn 10, the split
+			// is not stored per unit. The frozen Python model never had the key: compared without it, and only it.
+			const goOnlyChangeSet = `,"change_set":{"additions":null,"deletions":null,"total":10}`
+			if !strings.Contains(goWritten, goOnlyChangeSet) {
+				t.Fatalf("%s: the seeded unit carries no change_set of total 10: %s", tc.Name, goWritten)
+			}
+			goWritten = strings.ReplaceAll(goWritten, goOnlyChangeSet, "")
 		}
 		answerBody := answer.Body
 		if tc.Kind == "work_units" {

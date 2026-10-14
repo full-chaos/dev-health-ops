@@ -361,6 +361,9 @@ func TestWorkUnitsSeededRealClickHouse_ArgMaxDedupReturnsLatestVersion(t *testin
 	if got.Effort.Metric != "work_units" || got.Effort.Value != 1.0 {
 		t.Errorf("effort = %+v, want 1 work unit (a unit counts 1; the seeded effort_value 9 is not served)", got.Effort)
 	}
+	if got.ChangeSet == nil || got.ChangeSet.Total != 9 || got.ChangeSet.Additions != nil || got.ChangeSet.Deletions != nil {
+		t.Errorf("change set = %+v, want the later version's stored churn 9 as the total, no split", got.ChangeSet)
+	}
 }
 
 // TestWorkUnitsSeededRealClickHouse_SupersessionExcludesTheUnit is

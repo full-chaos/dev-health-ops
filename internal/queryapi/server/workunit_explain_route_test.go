@@ -649,7 +649,7 @@ func (ollamaSingleWorkUnitClient) Query(_ context.Context, statement string, _ [
 				"wu-ABC-123", strPtrForTest("issue"), strPtrForTest("Ship the new thing"),
 				fromTS, toTS,
 				strPtrForTest("repo-1"), strPtrForTest("github"),
-				1.0,
+				strPtrForTest("churn_loc"), floatPtrForTest(40.0), 1.0,
 				[]string{"velocity"}, []float64{40.0}, []string{"velocity.feature"}, []float64{40.0},
 				strPtrForTest(`{"issues": [], "prs": []}`),
 				floatPtrForTest(0.8), strPtrForTest("high"),

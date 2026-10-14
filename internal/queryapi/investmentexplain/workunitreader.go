@@ -77,6 +77,8 @@ type WorkUnitInvestmentRow struct {
 	ToTS                          time.Time
 	RepoID                        *string
 	Provider                      *string
+	EffortMetric                  *string
+	EffortValue                   *float64
 	WorkUnitCount                 float64
 	ThemeDistributionKeys         []string
 	ThemeDistributionValues       []float64
@@ -175,6 +177,8 @@ SELECT
     to_ts,
     repo_id,
     provider,
+    effort_metric,
+    effort_value,
     toFloat64(%s) AS work_unit_count,
     mapKeys(theme_distribution_json) AS theme_distribution_keys,
     mapValues(theme_distribution_json) AS theme_distribution_values,
@@ -210,7 +214,7 @@ LIMIT {limit:UInt64}
 		if err := rows.Scan(
 			&row.WorkUnitID, &row.WorkUnitType, &row.WorkUnitName,
 			&row.FromTS, &row.ToTS, &row.RepoID, &row.Provider,
-			&row.WorkUnitCount,
+			&row.EffortMetric, &row.EffortValue, &row.WorkUnitCount,
 			&row.ThemeDistributionKeys, &row.ThemeDistributionValues,
 			&row.SubcategoryDistributionKeys, &row.SubcategoryDistributionValues,
 			&row.StructuralEvidenceJSON,

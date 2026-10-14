@@ -208,6 +208,36 @@ func TestInvestmentResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *tes
 	}
 }
 
+// workUnitInvestmentPythonWire is the shape the frozen FastAPI model of the work-units routes has. The production wire
+// type ends with change_set since CHAOS-9695 (the lines-of-code fact of the unit), which the Python model never had; the
+// frozen program is not recorded again, so the oracle still checks THAT shape.
+type workUnitInvestmentPythonWire struct {
+	WorkUnitID      string                  `json:"work_unit_id"`
+	WorkUnitType    *string                 `json:"work_unit_type"`
+	WorkUnitName    *string                 `json:"work_unit_name"`
+	TimeRange       workUnitTimeRangeWire   `json:"time_range"`
+	Effort          workUnitEffortWire      `json:"effort"`
+	Investment      investmentBreakdownWire `json:"investment"`
+	EvidenceQuality evidenceQualityWire     `json:"evidence_quality"`
+	Evidence        workUnitEvidenceWire    `json:"evidence"`
+}
+
+func TestWorkUnitWireIsThePythonShapePlusTheDeclaredChangeSet(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := append(fieldsOf(reflect.TypeOf(workUnitInvestmentPythonWire{})), field{"ChangeSet", "*server.workUnitChangeSetWire", `json:"change_set"`})
+	if got := fieldsOf(reflect.TypeOf(workUnitInvestmentWire{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("workUnitInvestmentWire fields =\n %v\nwant the Python fields, then change_set:\n %v", got, want)
+	}
+}
+
 // opportunitiesPythonCard and opportunitiesPythonResponse are the shape the
 // frozen FastAPI model of /api/v1/opportunities has: the five fields the
 // Python reference served. The Go response (opportunities.Card) has four more
@@ -770,8 +800,8 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/explain":                             plain((*explainPythonResponse)(nil)),
 		"POST /api/v1/explain":                            plain((*explainPythonResponse)(nil)),
 		"GET /api/v1/heatmap":                             plain((*heatmapPythonResponse)(nil)),
-		"GET /api/v1/work-units":                          plain([]workUnitInvestmentWire(nil)),
-		"POST /api/v1/work-units":                         plain([]workUnitInvestmentWire(nil)),
+		"GET /api/v1/work-units":                          plain([]workUnitInvestmentPythonWire(nil)),
+		"POST /api/v1/work-units":                         plain([]workUnitInvestmentPythonWire(nil)),
 		"POST /api/v1/work-units/{work_unit_id}/explain":  plain((*workunitexplain.Explanation)(nil)),
 		"GET /api/v1/flame":                               plain((*flame.Response)(nil)),
 		"GET /api/v1/flame/aggregated":                    plain((*aggflame.Response)(nil)),

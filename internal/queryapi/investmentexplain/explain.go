@@ -86,7 +86,10 @@ type ExplainInvestmentMixOptions struct {
 	// query, which applies them unconditionally -- work_units.py:253)
 	// but must NOT filter the breakdown by them. See ExplainInvestmentMix's
 	// own comment at the breakdown-fetch call site.
-	ScopeLevel         string
+	ScopeLevel string
+	// Measure is the measure the mix is read in: "COUNT", "THROUGHPUT", "CHURN_LOC" or "EFFORT" (see
+	// NormalizeMeasure). Empty is the Investment page's COUNT; every answer read EFFORT before CHAOS-9555.
+	Measure            string
 	WorkCategory       []string
 	Theme              string
 	Subcategory        string
@@ -141,6 +144,7 @@ func (reader *Reader) fetchMixDistributions(ctx context.Context, opts ExplainInv
 		EndTS:         opts.EndTS,
 		Themes:        themeFilters,
 		Subcategories: subcategoryFilters,
+		Measure:       opts.effectiveMeasure(),
 	}
 	// RepoIDs is applied to the BREAKDOWN query for a team or repo scope, as the
 	// reference does (investment.py:175: `if filters.scope.level in {"team",
@@ -163,6 +167,61 @@ func (reader *Reader) fetchMixDistributions(ctx context.Context, opts ExplainInv
 	}
 	themes, subcategories = buildInvestmentBreakdownDistributions(breakdownRows)
 	return themes, subcategories, nil
+}
+
+// effectiveMeasure is the measure of the mix read: the Investment page's COUNT when the option is
+// empty (the explanation is of the mix the user sees), else NormalizeMeasure of it. A name it does not
+// know reads as EFFORT; the route has already refused those.
+func (opts ExplainInvestmentMixOptions) effectiveMeasure() string {
+	if strings.TrimSpace(opts.Measure) == "" {
+		return MeasureCount
+	}
+	measure, ok := NormalizeMeasure(opts.Measure)
+	if !ok {
+		return MeasureEffort
+	}
+	return measure
+}
+
+// shareNoun is the noun the finding text puts after the share: what the mix counts.
+func shareNoun(measure string) string {
+	switch measure {
+	case MeasureCount:
+		return "work"
+	case MeasureChurnLOC:
+		return "changed lines"
+	}
+	return "effort"
+}
+
+// annotateFindings gives each finding the numerator, denominator and measure of its share, taken from
+// the same distributions the share is: numerator is the value of the subcategory (or of the theme when
+// the finding names none), denominator the total of the themes. A reader can divide them and get
+// share_pct, and can read which measure the mix is in.
+func annotateFindings(explanation *InvestmentMixExplanation, measure string, themes, subcategories *orderedFloatMap) {
+	total := 0.0
+	for _, kv := range themes.Items() {
+		total += kv.Value
+	}
+	valueOf := func(items []keyValue, key string) float64 {
+		for _, kv := range items {
+			if kv.Key == key {
+				return kv.Value
+			}
+		}
+		return 0
+	}
+	for i := range explanation.TopFindings {
+		evidence := &explanation.TopFindings[i].Evidence
+		numerator := valueOf(themes.Items(), evidence.Theme)
+		if evidence.Subcategory != nil {
+			numerator = valueOf(subcategories.Items(), *evidence.Subcategory)
+		}
+		denominator := total
+		evidence.Measure = measure
+		evidence.Numerator = &numerator
+		evidence.Denominator = &denominator
+	}
 }
 
 // mixCacheFilters extends the request filters of the cache key with the resolved
@@ -195,6 +254,7 @@ func mixCacheFilters(opts ExplainInvestmentMixOptions, themes, subcategories *or
 		"window_start": opts.StartTS.UTC().Format("2006-01-02"),
 		"window_end":   opts.EndTS.UTC().Format("2006-01-02"),
 		"mix_sha256":   hex.EncodeToString(digest.Sum(nil)),
+		"measure":      opts.effectiveMeasure(),
 	}
 }
 
@@ -675,6 +735,7 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 	parseResult := ParseInvestmentMixResponse(completion.Text, ParseOptions{
 		ThemeSharesPct:       themeSharesPct,
 		SubcategorySharesPct: subcategorySharesPct,
+		ShareNoun:            shareNoun(opts.effectiveMeasure()),
 		FallbackLevel:        confidenceLevel,
 		FallbackBandMix:      bandCounts,
 		FallbackDrivers:      qualityDrivers,
@@ -684,10 +745,13 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 
 	if parseResult.Output == nil {
 		logRejectedExplainOutput(ctx, parseResult, resolvedProvider, resolvedModel, completion)
-		return invalidLLMOutputExplanation(topThemes, totalEffort, confidenceLevel, qualityMean, qualityStddev, bandCounts, qualityDrivers), nil
+		fallback := invalidLLMOutputExplanation(topThemes, totalEffort, confidenceLevel, qualityMean, qualityStddev, bandCounts, qualityDrivers)
+		annotateFindings(&fallback, opts.effectiveMeasure(), themeDistribution, subcategoryDistribution)
+		return fallback, nil
 	}
 
 	result := explainOutputToExplanation(*parseResult.Output)
+	annotateFindings(&result, opts.effectiveMeasure(), themeDistribution, subcategoryDistribution)
 
 	if opts.LLMProvider != "mock" && writer != nil {
 		if explanationJSON, encodeErr := EncodeInvestmentMixExplanation(result); encodeErr == nil {

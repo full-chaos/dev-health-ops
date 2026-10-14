@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -187,6 +188,7 @@ func TestExplainInvestmentMixMockProviderMatchesPythonGolden(t *testing.T) {
 		StartTS:      time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC),
 		EndTS:        time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		LLMProvider:  "mock",
+		Measure:      MeasureEffort, // the Python reference reads effort
 		ForceRefresh: true,
 		Now:          explainFixtureNow,
 	})
@@ -232,6 +234,7 @@ func TestExplainInvestmentMixRecordedFixtureProviderMatchesPythonGolden(t *testi
 		StartTS:            time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC),
 		EndTS:              time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		LLMProvider:        "openai",
+		Measure:            MeasureEffort, // the Python reference reads effort
 		ForceRefresh:       true,
 		Now:                explainFixtureNow,
 		FiltersForCacheKey: defaultMetricFilterForCacheKey(),
@@ -270,6 +273,7 @@ func assertWrittenCacheRecordMatchesGolden(t *testing.T, golden explainGolden, c
 	}
 	row := batch.appended[0]
 	gotExplanationJSON, _ := row[1].(string)
+	gotExplanationJSON = withoutGoOnlyEvidence(gotExplanationJSON)
 	if gotExplanationJSON != golden.WrittenCacheRecord.ExplanationJSON {
 		t.Fatalf("explanation_json byte mismatch:\n--- want (python) ---\n%s\n--- got (go) ---\n%s", golden.WrittenCacheRecord.ExplanationJSON, gotExplanationJSON)
 	}
@@ -284,7 +288,7 @@ func assertWrittenCacheRecordMatchesGolden(t *testing.T, golden explainGolden, c
 	wantKey, err := ComputeCacheKey(CacheKeyInput{
 		Filters: mixCacheFilters(ExplainInvestmentMixOptions{
 			StartTS: time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC), EndTS: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-			FiltersForCacheKey: defaultMetricFilterForCacheKey(),
+			FiltersForCacheKey: defaultMetricFilterForCacheKey(), Measure: MeasureEffort,
 		}, themes, subcategories, "none"),
 		OrgID: "org-golden-4977",
 	})
@@ -323,6 +327,7 @@ func assertExplanationMatchesGolden(t *testing.T, golden explainGolden, got Inve
 	if err != nil {
 		t.Fatalf("EncodeInvestmentMixExplanation: %v", err)
 	}
+	gotJSON = withoutGoOnlyEvidence(gotJSON)
 	var gotAny, wantAny any
 	if err := json.Unmarshal([]byte(gotJSON), &gotAny); err != nil {
 		t.Fatalf("re-decode got JSON: %v", err)
@@ -335,4 +340,12 @@ func assertExplanationMatchesGolden(t *testing.T, golden explainGolden, got Inve
 	if string(gotCanon) != string(wantCanon) {
 		t.Fatalf("case %q mismatch:\n--- want (python) ---\n%s\n--- got (go) ---\n%s", golden.Case, wantCanon, gotCanon)
 	}
+}
+
+var goOnlyEvidencePattern = regexp.MustCompile(`, ?"(?:measure|numerator|denominator)": ?(?:"[^"]*"|[-0-9.eE+]+)`)
+
+// withoutGoOnlyEvidence removes the three evidence fields the Python reference does not have
+// (measure, numerator, denominator; CHAOS-9555), so the differential still compares the Python shape.
+func withoutGoOnlyEvidence(body string) string {
+	return goOnlyEvidencePattern.ReplaceAllString(body, "")
 }

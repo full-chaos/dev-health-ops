@@ -220,6 +220,24 @@ work-unit investment path carries repository provenance; the deprecated daily
 path below has no such column, so it reports null there. Null means "not
 measured here"; zero would mean "measured, and none of it is team fallback".
 
+## The explanation reads the mix the page shows
+
+`POST /api/v1/investment/explain` explains the mix the Investment page shows: every share, and the sum behind it,
+equals what `InvestmentBreakdown` reads for the same request (CHAOS-9555). The body takes the page's own fields
+next to `filters`:
+
+| Field | Meaning | Default |
+|---|---|---|
+| `measure` | `COUNT` (the page's measure), `THROUGHPUT` (same as `COUNT`), `CHURN_LOC`, or `EFFORT` (the unit's effort, the weighting every answer used before this change) | `COUNT` |
+| `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is `[start_date, end_date)`. It replaces `filters.time`. | `filters.time` (a relative `range_days` ends tomorrow, so it covers today) |
+| `use_investment` | Accepted for parity with the page; no effect, because theme and subcategory always read the canonical categorization on both surfaces | none |
+
+`filters.scope.level` keeps its lowercase values. Scope `org` and scope `team` with no ids read the same rows, as on the page.
+
+Each finding's `evidence` carries `measure`, `numerator` and `denominator`: `share_pct` is `numerator / denominator * 100`, where
+the numerator is the finding's subcategory (or theme) sum and the denominator is the sum of all themes in the window. The text of a
+finding names what the share counts ("of work" for `COUNT`, "of changed lines" for `CHURN_LOC`, "of effort" for `EFFORT`).
+
 ## Deprecated: `investment_metrics_daily` / `investment_areas.yaml`
 
 > **Removed (CHAOS-9200, chris 2026-10-11).** The rule classifier, `investment_areas.yaml` and the Go and Python

@@ -28,6 +28,11 @@ type InvestmentMixFindingEvidence struct {
 	DeltaPctPoints      *float64 `json:"delta_pct_points"`
 	EvidenceQualityMean *float64 `json:"evidence_quality_mean"`
 	EvidenceQualityBand *string  `json:"evidence_quality_band"`
+	// Measure, Numerator and Denominator are Go-only (CHAOS-9555): the measure the share is in, and the
+	// two sums share_pct is the ratio of. Omitted when empty, so a body without them keeps the Python shape.
+	Measure     string   `json:"measure,omitempty"`
+	Numerator   *float64 `json:"numerator,omitempty"`
+	Denominator *float64 `json:"denominator,omitempty"`
 }
 
 // InvestmentMixFinding ports InvestmentFinding.
@@ -161,16 +166,28 @@ func DecodeInvestmentMixExplanation(explanationJSON string) (InvestmentMixExplan
 func EncodeInvestmentMixExplanation(explanation InvestmentMixExplanation) (string, error) {
 	findings := make([]any, len(explanation.TopFindings))
 	for i, f := range explanation.TopFindings {
+		evidence := pythonparity.OrderedObject{
+			{Key: "theme", Value: f.Evidence.Theme},
+			{Key: "subcategory", Value: optionalStringToAny(f.Evidence.Subcategory)},
+			{Key: "share_pct", Value: f.Evidence.SharePct},
+			{Key: "delta_pct_points", Value: optionalFloatToAny(f.Evidence.DeltaPctPoints)},
+			{Key: "evidence_quality_mean", Value: optionalFloatToAny(f.Evidence.EvidenceQualityMean)},
+			{Key: "evidence_quality_band", Value: optionalStringToAny(f.Evidence.EvidenceQualityBand)},
+		}
+		// The Go-only measure fields (CHAOS-9555) follow the Python fields and are left out when
+		// empty, so an explanation without them keeps the Python body byte for byte.
+		if f.Evidence.Measure != "" {
+			evidence = append(evidence, pythonparity.Member{Key: "measure", Value: f.Evidence.Measure})
+		}
+		if f.Evidence.Numerator != nil {
+			evidence = append(evidence, pythonparity.Member{Key: "numerator", Value: *f.Evidence.Numerator})
+		}
+		if f.Evidence.Denominator != nil {
+			evidence = append(evidence, pythonparity.Member{Key: "denominator", Value: *f.Evidence.Denominator})
+		}
 		findings[i] = pythonparity.OrderedObject{
 			{Key: "finding", Value: f.Finding},
-			{Key: "evidence", Value: pythonparity.OrderedObject{
-				{Key: "theme", Value: f.Evidence.Theme},
-				{Key: "subcategory", Value: optionalStringToAny(f.Evidence.Subcategory)},
-				{Key: "share_pct", Value: f.Evidence.SharePct},
-				{Key: "delta_pct_points", Value: optionalFloatToAny(f.Evidence.DeltaPctPoints)},
-				{Key: "evidence_quality_mean", Value: optionalFloatToAny(f.Evidence.EvidenceQualityMean)},
-				{Key: "evidence_quality_band", Value: optionalStringToAny(f.Evidence.EvidenceQualityBand)},
-			}},
+			{Key: "evidence", Value: evidence},
 		}
 	}
 

@@ -135,6 +135,47 @@ type BreakdownFilters struct {
 	// D5933). Every other rule of the read (latest row of a unit, every categorization status,
 	// the scope, the category filters) is the Investment page's own.
 	DatedByEnd bool
+	// Measure says what a row's value counts. "" and MeasureEffort are the effort of the unit (the
+	// readers of the REST investment endpoint and the Home tile)
+	// (effort_value); MeasureCount is the share of the unit the row stands for, the Investment page's
+	// COUNT; MeasureChurnLOC is the changed lines of code, the page's CHURN_LOC.
+	Measure string
+}
+
+// The measures of an investment mix read. They are the page's own (analytics.Measure COUNT,
+// THROUGHPUT, CHURN_LOC) plus the effort weighting every explain answer used before CHAOS-9555.
+const (
+	MeasureCount    = "COUNT"
+	MeasureChurnLOC = "CHURN_LOC"
+	MeasureEffort   = "EFFORT"
+)
+
+// NormalizeMeasure maps a request measure to one of the three measures of a mix read. THROUGHPUT is
+// COUNT on the investment path (analytics dbExpression). ok is false for any other name.
+func NormalizeMeasure(name string) (measure string, ok bool) {
+	switch strings.ToUpper(strings.TrimSpace(name)) {
+	case "COUNT", "THROUGHPUT":
+		return MeasureCount, true
+	case "CHURN_LOC":
+		return MeasureChurnLOC, true
+	case "EFFORT":
+		return MeasureEffort, true
+	}
+	return "", false
+}
+
+// valueExpr is the SQL of one row's value for the measure, times the share of the repository the
+// teams of the scope hold (shareSQL, "1.0" without one). COUNT and CHURN_LOC are the expressions
+// of analytics.dbExpression/ownershipDbExpression for the page's breakdown, so the same rows give
+// the same numbers on both surfaces.
+func (f BreakdownFilters) valueExpr(scopeSQL, shareSQL string) string {
+	switch f.Measure {
+	case MeasureCount:
+		return fmt.Sprintf("sum(subcategory_kv.2 * %s * %s)", f.unitWeight(scopeSQL), shareSQL)
+	case MeasureChurnLOC:
+		return fmt.Sprintf("sum(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0) * %s)", shareSQL)
+	}
+	return fmt.Sprintf("sum(subcategory_kv.2 * effort_value * %s)", shareSQL)
 }
 
 // dateWindowClause is the window predicate of the work-unit reads of this package:
@@ -241,7 +282,7 @@ func (reader *Reader) FetchInvestmentBreakdown(ctx context.Context, filters Brea
 SELECT
     subcategory_kv.1 AS subcategory,
     splitByChar('.', subcategory_kv.1)[1] AS theme,
-    sum(subcategory_kv.2 * effort_value * %s) AS value
+    %s AS value
 FROM %s
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
 WHERE %s
@@ -251,7 +292,7 @@ WHERE %s
 GROUP BY subcategory, theme
 ORDER BY value DESC
 %s
-`, shareSQL, filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, filters.valueExpr(scopeSQL, shareSQL), filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {

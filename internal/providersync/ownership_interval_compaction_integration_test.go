@@ -1432,9 +1432,11 @@ func TestCompactOwnershipIntervalsPlannerEqualsThe9556PlannerOnTheFixture(t *tes
 // mutation was written. The first table's plan is reported.
 func TestCompactOwnershipIntervalsPlanTimeoutWritesNothing(t *testing.T) {
 	f := newCmpFixture(t)
-	physical := map[string]uint64{}
+	physical, mutations := map[string]uint64{}, map[string]uint64{}
 	for _, table := range []string{OwnershipCompactionProjectTable, OwnershipCompactionRepoTable} {
 		physical[table] = f.physicalCount(table, f.orgA)
+		// The migrations leave their own mutations (099 materializes last_synced): count only new ones.
+		mutations[table] = cmpMutations(t, f.ctx, f.conn, table)
 	}
 	opts := cmpOptions(f.orgA)
 	opts.PlanTimeout = 2 * time.Second
@@ -1460,8 +1462,8 @@ func TestCompactOwnershipIntervalsPlanTimeoutWritesNothing(t *testing.T) {
 		if got := f.physicalCount(table, f.orgA); got != before {
 			t.Fatalf("%s: physical rows %d -> %d after a timed-out run", table, before, got)
 		}
-		if cmpMutations(t, f.ctx, f.conn, table) != 0 {
-			t.Fatalf("%s: a timed-out run ran a mutation", table)
+		if got := cmpMutations(t, f.ctx, f.conn, table); got != mutations[table] {
+			t.Fatalf("%s: a timed-out run ran a mutation (%d -> %d)", table, mutations[table], got)
 		}
 	}
 	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name LIKE '%compaction_bak'"); got != 0 {

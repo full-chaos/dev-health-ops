@@ -652,12 +652,23 @@ type runWindow struct {
 	inRun       map[string]bool
 	merged      ownershipIntervalRow
 	mergedShape string
+	// exact: the run's sort keys name exactly the run's rows in the team group (always so for FINAL rows). Then at
+	// T in [first valid_from, last valid_to) one run row and the merged row are valid, with the same (team, source,
+	// shape), and outside it neither: the listed rows are equal, and only the team's winner can differ.
+	exact bool
+	post  []ownershipIntervalRow
 }
 
 func acceptRunsOfTeam(
 	meter *compactionMeter, teamRows []ownershipIntervalRow, candidates [][]ownershipIntervalRow, indexes []int, accepted []bool,
 ) error {
 	instants := instantsOf(nil, nil, teamRows)
+	sortKeys := make([]string, len(teamRows))
+	named := make(map[string]int, len(teamRows))
+	for index := range teamRows {
+		sortKeys[index] = teamRows[index].sortKey()
+		named[sortKeys[index]]++
+	}
 	windows := make([]runWindow, 0, len(indexes))
 	for _, index := range indexes {
 		run := candidates[index]
@@ -678,10 +689,23 @@ func acceptRunsOfTeam(
 		}
 		window.merged = mergedRow(run)
 		window.mergedShape = window.merged.shape()
+		rowsNamed := 0
+		for key := range window.inRun {
+			rowsNamed += named[key]
+		}
+		window.exact = rowsNamed == len(run)
+		if !window.exact {
+			for index, row := range teamRows {
+				if !window.inRun[sortKeys[index]] {
+					window.post = append(window.post, row)
+				}
+			}
+			window.post = append(window.post, window.merged)
+		}
 		windows = append(windows, window)
 	}
 	sort.SliceStable(windows, func(i, j int) bool { return windows[i].lo < windows[j].lo })
-	sweep := newAnswerSweep(teamRows, true)
+	sweep := newAnswerSweep(teamRows)
 	var open []*runWindow
 	next := 0
 	for i, at := range instants {
@@ -708,9 +732,24 @@ func acceptRunsOfTeam(
 			continue
 		}
 		sweep.advance(at)
-		pre := sweep.answer(at, nil, nil, "")
 		for _, window := range open {
-			if sweep.answer(at, window.inRun, &window.merged, window.mergedShape) != pre {
+			if !window.exact {
+				if answerAt(teamRows, at) != answerAt(window.post, at) {
+					accepted[window.index] = false
+				}
+				continue
+			}
+			if !window.merged.validAt(at) {
+				continue
+			}
+			team := window.merged.TeamID
+			pre := sweep.first(team, nil)
+			post := sweep.first(team, func(index int) bool { return window.inRun[sortKeys[index]] })
+			postShape := window.mergedShape
+			if post >= 0 && !outranks(&window.merged, &teamRows[post]) {
+				postShape = sweep.shapes[post]
+			}
+			if pre < 0 || sweep.shapes[pre] != postShape {
 				accepted[window.index] = false
 			}
 		}
@@ -765,7 +804,7 @@ func ownerAnswer(valid []answerEntry) string {
 		row := entry.row
 		listed = append(listed, row.TeamID+"\x01"+row.Source+"\x01"+entry.shape)
 		best, ok := winners[row.TeamID]
-		if !ok || row.UpdatedAt.After(best.row.UpdatedAt) || (row.UpdatedAt.Equal(best.row.UpdatedAt) && row.ValidFrom.After(best.row.ValidFrom)) {
+		if !ok || outranks(row, best.row) {
 			winners[row.TeamID] = entry
 		}
 	}
@@ -784,32 +823,48 @@ func ownerAnswer(valid []answerEntry) string {
 	return out.String()
 }
 
-// answerSweep keeps the rows valid at T (valid_from <= T < valid_to, or open)
-// while T only moves forward, in row order. A row with valid_to <= valid_from
-// (a tombstone, a close-before-open row) is valid at no instant.
-type answerSweep struct {
-	rows     []ownershipIntervalRow
-	shapes   []string
-	sortKeys []string
-	byStart  []int
-	byEnd    []int
-	starts   int
-	ends     int
-	active   []int
-	entries  []answerEntry
+// answerAt is ownerAnswer over every row of rows valid at at: O(rows). Only a
+// run whose sort keys name other rows too (never so for FINAL rows) uses it.
+func answerAt(rows []ownershipIntervalRow, at time.Time) string {
+	var valid []answerEntry
+	for index := range rows {
+		if rows[index].validAt(at) {
+			valid = append(valid, answerEntry{row: &rows[index], shape: rows[index].shape()})
+		}
+	}
+	return ownerAnswer(valid)
 }
 
-func newAnswerSweep(rows []ownershipIntervalRow, withSortKeys bool) *answerSweep {
-	sweep := &answerSweep{rows: rows, shapes: make([]string, len(rows))}
-	if withSortKeys {
-		sweep.sortKeys = make([]string, len(rows))
-	}
+// outranks is the reader's winner rule: a row replaces the best so far only
+// when it is newer by (updated_at, valid_from); on a full tie the first stays.
+func outranks(row, best *ownershipIntervalRow) bool {
+	return row.UpdatedAt.After(best.UpdatedAt) || (row.UpdatedAt.Equal(best.UpdatedAt) && row.ValidFrom.After(best.ValidFrom))
+}
+
+// answerSweep keeps the rows valid at T (valid_from <= T < valid_to, or open)
+// while T only moves forward: per team in winner order (outranks, then row
+// order), so a team's winner is the first of its list. A row with valid_to <=
+// valid_from (a tombstone, a close-before-open row) is valid at no instant.
+// Each row enters and leaves once, at O(log n) plus a copy of its team's list.
+type answerSweep struct {
+	rows    []ownershipIntervalRow
+	shapes  []string
+	entries []string
+	byStart []int
+	byEnd   []int
+	starts  int
+	ends    int
+	teams   map[string][]int
+	// changed, when set, hears every row that becomes valid (added) or stops being valid.
+	changed func(index int, added bool)
+}
+
+func newAnswerSweep(rows []ownershipIntervalRow) *answerSweep {
+	sweep := &answerSweep{rows: rows, shapes: make([]string, len(rows)), entries: make([]string, len(rows)), teams: map[string][]int{}}
 	for index := range rows {
 		row := &rows[index]
 		sweep.shapes[index] = row.shape()
-		if withSortKeys {
-			sweep.sortKeys[index] = row.sortKey()
-		}
+		sweep.entries[index] = row.TeamID + "\x01" + row.Source + "\x01" + sweep.shapes[index]
 		if row.ValidTo != nil && !row.ValidTo.After(row.ValidFrom) {
 			continue
 		}
@@ -827,41 +882,57 @@ func newAnswerSweep(rows []ownershipIntervalRow, withSortKeys bool) *answerSweep
 	return sweep
 }
 
+// ahead is the winner order: a before b.
+func (sweep *answerSweep) ahead(a, b int) bool {
+	if outranks(&sweep.rows[a], &sweep.rows[b]) {
+		return true
+	}
+	if outranks(&sweep.rows[b], &sweep.rows[a]) {
+		return false
+	}
+	return a < b
+}
+
 // advance moves the sweep to at; at never goes back.
 func (sweep *answerSweep) advance(at time.Time) {
 	for sweep.starts < len(sweep.byStart) && !sweep.rows[sweep.byStart[sweep.starts]].ValidFrom.After(at) {
 		index := sweep.byStart[sweep.starts]
-		position := sort.SearchInts(sweep.active, index)
-		sweep.active = append(sweep.active, 0)
-		copy(sweep.active[position+1:], sweep.active[position:])
-		sweep.active[position] = index
+		team := sweep.rows[index].TeamID
+		list := sweep.teams[team]
+		position := sort.Search(len(list), func(k int) bool { return sweep.ahead(index, list[k]) })
+		list = append(list, 0)
+		copy(list[position+1:], list[position:])
+		list[position] = index
+		sweep.teams[team] = list
 		sweep.starts++
+		if sweep.changed != nil {
+			sweep.changed(index, true)
+		}
 	}
 	for sweep.ends < len(sweep.byEnd) && !sweep.rows[sweep.byEnd[sweep.ends]].ValidTo.After(at) {
 		index := sweep.byEnd[sweep.ends]
-		position := sort.SearchInts(sweep.active, index)
-		if position < len(sweep.active) && sweep.active[position] == index {
-			sweep.active = append(sweep.active[:position], sweep.active[position+1:]...)
+		team := sweep.rows[index].TeamID
+		list := sweep.teams[team]
+		position := sort.Search(len(list), func(k int) bool { return !sweep.ahead(list[k], index) })
+		if position < len(list) && list[position] == index {
+			sweep.teams[team] = append(list[:position], list[position+1:]...)
 		}
 		sweep.ends++
+		if sweep.changed != nil {
+			sweep.changed(index, false)
+		}
 	}
 }
 
-// answer is ownerAnswer at the current instant at, leaving out the rows whose
-// sort key is in skip and adding extra (with its shape) last when it is valid
-// at at.
-func (sweep *answerSweep) answer(at time.Time, skip map[string]bool, extra *ownershipIntervalRow, extraShape string) string {
-	sweep.entries = sweep.entries[:0]
-	for _, index := range sweep.active {
-		if skip != nil && skip[sweep.sortKeys[index]] {
-			continue
+// first is the winner of team at the current instant, leaving out the rows
+// skip names; -1 when none.
+func (sweep *answerSweep) first(team string, skip func(int) bool) int {
+	for _, index := range sweep.teams[team] {
+		if skip == nil || !skip(index) {
+			return index
 		}
-		sweep.entries = append(sweep.entries, answerEntry{row: &sweep.rows[index], shape: sweep.shapes[index]})
 	}
-	if extra != nil && extra.validAt(at) {
-		sweep.entries = append(sweep.entries, answerEntry{row: extra, shape: extraShape})
-	}
-	return ownerAnswer(sweep.entries)
+	return -1
 }
 
 // instantsOf lists every instant worth asking about for two row sets: each
@@ -963,8 +1034,38 @@ func ownershipDifferentialWithin(meter *compactionMeter, pre, post []ownershipIn
 	return result, nil
 }
 
+// compareGroupAnswers asks the owner-at-T question of two row sets of one
+// group at every instant. The listed rows are compared as an exact multiset
+// difference kept up to date at each change, and the winners only of the
+// teams a change touched: O(log n) per row change, O(1) per quiet instant.
 func compareGroupAnswers(meter *compactionMeter, pre, post []ownershipIntervalRow) (instants, mismatches int, err error) {
-	before, after := newAnswerSweep(pre, false), newAnswerSweep(post, false)
+	before, after := newAnswerSweep(pre), newAnswerSweep(post)
+	delta := map[string]int{}
+	touched := map[string]bool{}
+	differing := map[string]bool{}
+	bump := func(entry string, by int) {
+		if count := delta[entry] + by; count == 0 {
+			delete(delta, entry)
+		} else {
+			delta[entry] = count
+		}
+	}
+	before.changed = func(index int, added bool) {
+		by := -1
+		if added {
+			by = 1
+		}
+		bump(before.entries[index], by)
+		touched[before.rows[index].TeamID] = true
+	}
+	after.changed = func(index int, added bool) {
+		by := 1
+		if added {
+			by = -1
+		}
+		bump(after.entries[index], by)
+		touched[after.rows[index].TeamID] = true
+	}
 	for index, at := range instantsOf(nil, nil, pre, post) {
 		if index&1023 == 0 {
 			if err := meter.check(); err != nil {
@@ -973,8 +1074,17 @@ func compareGroupAnswers(meter *compactionMeter, pre, post []ownershipIntervalRo
 		}
 		before.advance(at)
 		after.advance(at)
+		for team := range touched {
+			a, b := before.first(team, nil), after.first(team, nil)
+			if (a < 0) == (b < 0) && (a < 0 || before.shapes[a] == after.shapes[b]) {
+				delete(differing, team)
+			} else {
+				differing[team] = true
+			}
+			delete(touched, team)
+		}
 		instants++
-		if before.answer(at, nil, nil, "") != after.answer(at, nil, nil, "") {
+		if len(delta) != 0 || len(differing) != 0 {
 			mismatches++
 		}
 	}
@@ -1317,13 +1427,14 @@ type plannedOwnershipOrg struct {
 }
 
 func (planned plannedOwnershipOrg) log(ctx context.Context, report OwnershipCompactionOrg, err error) {
+	failed := err != nil
 	planned.logger.InfoContext(ctx, "ownership_interval_compaction.table",
 		"rows_before", report.RowsBefore, "closed_before", report.ClosedBefore, "closed_after", report.ClosedAfter,
 		"runs_found", report.RunsFound, "runs_merged", report.RunsMerged, "rows_merged", report.RowsMerged,
 		"rows_kept", report.RowsKept, "runs_kept_multi_source", report.RunsKeptMultiSource,
 		"runs_changed_during_run", report.RunsChangedDuringRun, "tombstones_found", report.TombstonesFound,
 		"tombstones_dropped", report.TombstonesDropped, "tombstones_kept_anchor", report.TombstonesKeptAnchor, "tombstones_kept_latest", report.TombstonesKeptLatest, "tombstones_kept_stamp", report.TombstonesKeptStamp,
-		"differential_mismatches", report.Differential.Mismatches, "elapsed_ms", report.ElapsedMS, "failed", err != nil)
+		"differential_mismatches", report.Differential.Mismatches, "elapsed_ms", report.ElapsedMS, "failed", failed)
 }
 
 func planOwnershipOrg(
@@ -1340,8 +1451,9 @@ func planOwnershipOrg(
 	fail := func(err error) (plannedOwnershipOrg, error) {
 		err = planError(ctx, err)
 		planned.report.ElapsedMS = time.Since(started).Milliseconds()
+		timedOut := errors.Is(err, ErrOwnershipCompactionTimeout)
 		planned.logger.InfoContext(ctx, "ownership_interval_compaction.plan_stopped",
-			"phase", meter.line.Phase, "done", meter.line.Done, "total", meter.line.Total, "timeout", errors.Is(err, ErrOwnershipCompactionTimeout))
+			"phase", meter.line.Phase, "done", meter.line.Done, "total", meter.line.Total, "timeout", timedOut)
 		planned.log(context.WithoutCancel(ctx), planned.report, err)
 		return planned, err
 	}

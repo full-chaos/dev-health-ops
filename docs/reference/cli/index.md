@@ -1823,7 +1823,9 @@ phases `read`, `plan` (rows of the compacted source), `runs` (rows of the team
 groups whose runs are checked) and `differential`. The log line
 `ownership_interval_compaction.team_group_checked` (rows, runs, elapsed_ms;
 Debug, Info from 1 s) times each team group. The plan is near n log n in the
-rows of a repository or project group.
+rows of a repository or project group, also when many rows of the group are
+valid at the same instant: each row enters and leaves the sweep once, and the
+owner answers are compared from what changed, not rebuilt per instant.
 Output: counts only, under `compact_ownership_intervals`, per table and per
 organization (numbered, never named) and in total: `rows_before`/`rows_after`,
 `open_*`, `closed_*`, `tombstones_*`, `close_before_open_*`, `runs_found`,

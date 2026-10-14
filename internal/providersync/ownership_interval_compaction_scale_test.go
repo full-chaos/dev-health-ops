@@ -315,6 +315,48 @@ func TestCompactionPlansTheProdShapedTablesInBoundedTime(t *testing.T) {
 	}
 }
 
+// overlappingSourceRows is one (repository, team) group where every run of
+// the inferred key lies under a pile of provider_access rows that are all
+// valid at once: thousands of rows are valid at every instant (the r1 review
+// shape of CHAOS-9704).
+func overlappingSourceRows(pairs int) []ownershipIntervalRow {
+	epoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rows := make([]ownershipIntervalRow, 0, pairs*3)
+	end := epoch.Add(time.Duration(2*pairs+1) * time.Millisecond)
+	for i := 0; i < pairs; i++ {
+		from := epoch.Add(time.Duration(2*i) * time.Millisecond)
+		middle := from.Add(time.Millisecond)
+		to := middle.Add(time.Millisecond)
+		shareA, shareB := float64(i%7+1)/10, float64(i%11+1)/10
+		rows = append(rows,
+			ownershipIntervalRow{Provider: "github", Natural: "repo", TeamID: "team", Source: "inferred", Share: &shareA, ValidFrom: from, ValidTo: &middle, UpdatedAt: from},
+			ownershipIntervalRow{Provider: "github", Natural: "repo", TeamID: "team", Source: "inferred", Share: &shareA, ValidFrom: middle, ValidTo: &to, UpdatedAt: middle},
+			ownershipIntervalRow{Provider: "github", Natural: "repo", TeamID: "team", Source: "provider_access", Share: &shareB,
+				ValidFrom: epoch.Add(-time.Duration(i+1) * time.Millisecond), ValidTo: &end, UpdatedAt: from},
+		)
+	}
+	return rows
+}
+
+func TestCompactionPlansHeavyOverlapInBoundedTime(t *testing.T) {
+	rows := overlappingSourceRows(20000)
+	done := make(chan string, 1)
+	started := time.Now()
+	go func() {
+		plan := planOwnershipCompaction(repoSpec(), rows)
+		diff := ownershipDifferential(rows, plan.final(rows))
+		done <- fmt.Sprintf("runs found %d merged %d kept multi-source %d, differential instants %d mismatches %d",
+			plan.org.RunsFound, plan.org.RunsMerged, plan.org.RunsKeptMultiSource, diff.InstantsChecked, diff.Mismatches)
+	}()
+	bound := compactionBound()
+	select {
+	case got := <-done:
+		t.Logf("heavy overlap, %d rows: %s, elapsed %s", len(rows), got, time.Since(started))
+	case <-time.After(bound):
+		t.Fatalf("plan + differential of %d heavily overlapping rows did not finish within %s", len(rows), bound)
+	}
+}
+
 func TestCompactionPlanStopsAtItsDeadline(t *testing.T) {
 	rows := prodShapedRepoRows(9704, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -519,6 +561,11 @@ func TestCompactionPlannerEqualsThe9556Planner(t *testing.T) {
 			repoRow("a", "acme/api", 5, 5, 5), repoRow("a", "acme/api", 20, -1, 20),
 			repoRow("b", "acme/api", 0, -1, 1), repoRow("b", "acme/api", 7, 7, 1),
 		},
+		// Two versions under one sort key never come out of FINAL; the planner then compares whole answers.
+		"duplicate sort key": {
+			repoRow("a", "acme/api", 0, 10, 10), repoRow("a", "acme/api", 10, 20, 20), repoRow("a", "acme/api", 20, 30, 30),
+			withShare(repoRow("a", "acme/api", 10, 15, 40), 0.5), withSource(repoRow("a", "acme/api", 5, 25, 25), "manual", 25),
+		},
 		"share change, gap, overlap": {
 			repoRow("a", "acme/api", 0, 10, 10), repoRow("a", "acme/api", 10, 20, 20),
 			withShare(repoRow("a", "acme/api", 20, 30, 30), 0.5), withShare(repoRow("a", "acme/api", 30, 40, 40), 0.5),
@@ -528,6 +575,7 @@ func TestCompactionPlannerEqualsThe9556Planner(t *testing.T) {
 	for name, rows := range unitShapes {
 		compareWithLegacy(t, name, repoSpec(), rows, rng)
 	}
+	compareWithLegacy(t, "heavy overlap", repoSpec(), overlappingSourceRows(150), rng)
 	for seed := int64(1); seed <= 3; seed++ {
 		compareWithLegacy(t, "prod shape 1.5% seed "+strconv.FormatInt(seed, 10), repoSpec(), prodShapedRepoRows(seed, 0.015), rng)
 	}

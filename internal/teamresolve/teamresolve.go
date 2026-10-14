@@ -11,7 +11,7 @@
 // Ports job_daily.py:497 _repo_to_team_map_for_compounding_risk — the SAME
 // Python function all three Go call sites mirror (confirmed: team_cognitive_
 // load and team_complexity both call the identical function name at that
-// line, not three different Python resolvers). See ResolveOwnershipThenPatterns's
+// line, not three different Python resolvers). See ResolveOwnerSharesThenPatterns's
 // doc for the exact precedence.
 //
 // ai_impact (internal/jobs/metrics/aiimpact) resolves a repo's team through
@@ -20,7 +20,7 @@
 // numerical.RepoTeamResolver via ResolveRepo) is asked only for a repo
 // teamownership.AuthoritativeOwnersByRepo leaves unresolved. Its executor
 // calls AuthoritativeOwnersByRepo and ResolveFromOwnershipMap directly rather
-// than through ResolveOwnershipThenPatterns below, so it can log which of
+// than through ResolveOwnerSharesThenPatterns below, so it can log which of
 // the two paths resolved each repo.
 //
 // This package's own tests prove cross-language equivalence for the
@@ -47,7 +47,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
-// ResolveFromOwnershipMap is the PURE core of ResolveOwnershipThenPatterns,
+// ResolveFromOwnershipMap is the PURE core of ResolveOwnerSharesThenPatterns,
 // decoupled from ClickHouse exactly the way job_daily.py:497
 // _repo_to_team_map_for_compounding_risk itself is decoupled from
 // load_team_repo_ownership_map: this function takes an ALREADY-RESOLVED
@@ -60,7 +60,7 @@ import (
 // documented as mirroring the same hardened, ranked query).
 //
 // Precedence: ownershipMap wins where it resolves a repo (already gated on
-// repoNamesByID by whoever built it — see ResolveOwnershipThenPatterns
+// repoNamesByID by whoever built it — see ResolveOwnerSharesThenPatterns
 // below); the pattern resolver is the fallback, for a repo ownershipMap
 // leaves unresolved AND that is still present in repoNamesByID. A repo
 // repoNamesByID does not carry is never guessed by either path.

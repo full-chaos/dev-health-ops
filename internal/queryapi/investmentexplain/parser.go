@@ -262,6 +262,7 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 	findingOpts := parseFindingOptions{
 		themeSharesPct:       opts.ThemeSharesPct,
 		subcategorySharesPct: opts.SubcategorySharesPct,
+		shareNoun:            opts.ShareNoun,
 		qualityMean:          opts.FallbackMean,
 		qualityBand:          opts.FallbackQualityBand,
 	}
@@ -386,12 +387,14 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 type ParseOptions struct {
 	ThemeSharesPct       map[string]float64
 	SubcategorySharesPct map[string]float64
-	FallbackLevel        string // defaults to "unknown", matching Python's default
-	FallbackQualityBand  *string
-	FallbackBandMix      BandMix
-	FallbackDrivers      []string
-	FallbackMean         *float64
-	FallbackStddev       *float64
+	// ShareNoun is the noun after the share in a finding's text ("effort" when empty).
+	ShareNoun           string
+	FallbackLevel       string // defaults to "unknown", matching Python's default
+	FallbackQualityBand *string
+	FallbackBandMix     BandMix
+	FallbackDrivers     []string
+	FallbackMean        *float64
+	FallbackStddev      *float64
 }
 
 func cloneBandMix(m BandMix) BandMix {

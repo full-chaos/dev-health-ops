@@ -41,7 +41,7 @@ var compoundingRiskTeamSchema = append(append([]string{}, compoundingRiskSchema.
 	// omitting the column makes that query fail at parse time, not merely
 	// return fewer rows -- caught by this test initially producing 0 rows
 	// everywhere, the OwnedRepoIDs error swallowed by
-	// ResolveOwnershipThenPatterns' per-team fail-open `continue` (matching
+	// ResolveOwnerSharesThenPatterns' per-team fail-open `continue` (matching
 	// Python's own defensive `except Exception`), leaving repoToTeam empty
 	// with no visible error. Matches LoadRepoNames' production query too
 	// (id, argMax(repo, last_synced) FROM repos WHERE org_id = ? AND id IN ?
@@ -78,7 +78,7 @@ var compoundingRiskTeamSchema = append(append([]string{}, compoundingRiskSchema.
 // ONE repo BOTH teams claim (team-lead's explicit ask for this PR) --
 // proving the shared repo lands under EXACTLY ONE team's aggregate, never
 // both (double-counted) and never neither (dropped), via
-// internal/teamresolve.ResolveOwnershipThenPatterns, the same shared entry
+// internal/teamresolve.ResolveOwnerSharesThenPatterns, the same shared entry
 // point team_cognitive_load and team_complexity use.
 //
 // Both teams hold a main-owner row (is_primary = 1) of the shared repo at one

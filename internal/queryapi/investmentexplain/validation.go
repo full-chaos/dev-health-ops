@@ -306,6 +306,7 @@ func snippetOf(value any) string {
 type parseFindingOptions struct {
 	themeSharesPct       map[string]float64
 	subcategorySharesPct map[string]float64
+	shareNoun            string
 	qualityMean          *float64
 	qualityBand          *string
 }
@@ -399,8 +400,12 @@ func parseFinding(raw any, opts parseFindingOptions) (Finding, validationRejecti
 		sharePct = opts.subcategorySharesPct[*subcategory]
 	}
 
+	noun := opts.shareNoun
+	if noun == "" {
+		noun = "effort"
+	}
 	return Finding{
-		Finding: strings.TrimRight(strippedFinding, ".") + " (~" + formatPercentZeroDecimals(sharePct) + "% of effort).",
+		Finding: strings.TrimRight(strippedFinding, ".") + " (~" + formatPercentZeroDecimals(sharePct) + "% of " + noun + ").",
 		Evidence: FindingEvidence{
 			Theme:               theme,
 			Subcategory:         subcategory,

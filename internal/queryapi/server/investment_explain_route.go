@@ -268,6 +268,20 @@ type investmentExplainRequestBody struct {
 	Subcategory *string        `json:"subcategory"`
 	Filters     map[string]any `json:"filters"`
 	LLMModel    *string        `json:"llm_model"`
+	// Measure, DateRange and UseInvestment are Go-only (CHAOS-9555). They are the fields of the
+	// Investment page's InvestmentBreakdown request, so the explanation can be asked about the mix
+	// the page shows: measure (COUNT when absent), the page's dateRange (start inclusive, end
+	// exclusive, as the page binds it; it replaces filters.time) and useInvestment (accepted, no effect:
+	// theme and subcategory are canonical-only on both surfaces).
+	Measure       *string                     `json:"measure"`
+	DateRange     *investmentExplainDateRange `json:"date_range"`
+	UseInvestment *bool                       `json:"use_investment"`
+}
+
+// investmentExplainDateRange is the page's dateRange: the window [StartDate, EndDate).
+type investmentExplainDateRange struct {
+	StartDate time.Time
+	EndDate   time.Time
 }
 
 // keepAliveInterval matches Python's keep_alive_wrapper (main.py:
@@ -501,6 +515,9 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 	// build_investment_response computes it (ExplainInvestmentMix returns
 	// WindowErr there), and before any scope is resolved.
 	startTS, endTS, windowErr := timeWindow(body.Filters)
+	if body.DateRange != nil {
+		startTS, endTS, windowErr = body.DateRange.StartDate, body.DateRange.EndDate, nil
+	}
 	var repoIDs []string
 	var reposNamed bool
 	var teamCondition string
@@ -555,7 +572,21 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 		filtersForCacheKey = investmentexplain.DefaultMetricFilterForCacheKey()
 	}
 
+	measure := investmentexplain.MeasureCount
+	if body.Measure != nil {
+		measure, _ = investmentexplain.NormalizeMeasure(*body.Measure)
+	}
+	// The cache key carries the window and the measure of the mix (mixCacheFilters); the page's
+	// own dateRange is part of the request here, so it joins the filters of the key too.
+	if body.DateRange != nil {
+		filtersForCacheKey = map[string]any{
+			"filters":    filtersForCacheKey,
+			"date_range": []string{body.DateRange.StartDate.Format("2006-01-02"), body.DateRange.EndDate.Format("2006-01-02")},
+		}
+	}
+
 	return investmentexplain.ExplainInvestmentMixOptions{
+		Measure:            measure,
 		OrgID:              orgID,
 		StartTS:            startTS,
 		EndTS:              endTS,

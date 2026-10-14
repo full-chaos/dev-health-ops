@@ -93,6 +93,49 @@ func TestDeploymentContractCarriesTheLifecycleOnlyOnAFailedLookup(t *testing.T) 
 	}
 }
 
+// CHAOS-9678: a deployment synced again whose stored status is NULL (an old
+// writer's row, or a lookup that failed) gets the fetched status through the
+// contract; a held status is never cleared by a lookup that failed (nil), and a
+// failed lookup over a NULL stays NULL. Every cell of {stored NULL, stored
+// status} x {status fetched, lookup failed}.
+func TestDeploymentContractFillsAStoredNullStatusAndNeverClearsAHeldOne(t *testing.T) {
+	claim := nativeTestClaim("github", "deployments")
+	finished := time.Date(2026, 7, 22, 10, 1, 0, 0, time.UTC)
+	heldNull := map[string]any{"status": nil, "started_at": nil, "finished_at": nil, "merged_at": nil, "pull_request_number": nil, "pull_request_tier": ""}
+	heldFailure := map[string]any{"status": "failure", "started_at": nil, "finished_at": finished, "merged_at": nil, "pull_request_number": nil, "pull_request_tier": ""}
+	success, failure := "success", "failure"
+	cases := []struct {
+		name   string
+		held   map[string]any
+		fetch  *string
+		failed bool
+		want   *string
+	}{
+		{"stored NULL, status fetched", heldNull, &success, false, &success},
+		{"stored NULL, lookup failed", heldNull, nil, true, nil},
+		{"no stored row, status fetched", nil, &success, false, &success},
+		{"stored status, same status fetched", heldFailure, &failure, false, &failure},
+		{"stored status, newer status fetched", heldFailure, &success, false, &success},
+		{"stored status, lookup failed", heldFailure, nil, true, &failure},
+	}
+	for _, tc := range cases {
+		row := deploymentEffectsUnitRow(claim, "905")
+		row.Status, row.StartedAt, row.FinishedAt = tc.fetch, nil, nil
+		row.LifecycleLookupFailed = tc.failed
+		got := foldDeployment(t, row, tc.held)
+		if (got.Status == nil) != (tc.want == nil) || (got.Status != nil && *got.Status != *tc.want) {
+			t.Errorf("%s: status=%v, want %v", tc.name, statusValueOrNil(got.Status), statusValueOrNil(tc.want))
+		}
+	}
+}
+
+func statusValueOrNil(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
 func TestDeploymentContractWritesEveryKeptColumnBack(t *testing.T) {
 	claim := nativeTestClaim("github", "deployments")
 	row := deploymentEffectsUnitRow(claim, "903")

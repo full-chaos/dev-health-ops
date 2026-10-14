@@ -37,6 +37,9 @@ func tsvRows(t *testing.T, path string) [][]string {
 type declInfo struct {
 	imports map[string]bool
 	refs    map[string]bool
+	// always marks code that runs in every test binary run whatever test is selected:
+	// init, TestMain and package-level variables with an initializer.
+	always bool
 }
 
 // packageName returns the declared name of the package in dir, or the last path element
@@ -71,7 +74,8 @@ func isProducer(imp, pkg string) (string, bool) {
 // producers it uses. Declarations are keyed by name; a method is keyed ".Name" (all methods
 // of that name merge), and the blank and dot names merge too. The second result is the set
 // of producers imported with the blank identifier: they are linked into the test binary,
-// so every test of the package depends on them.
+// so every test of the package depends on them. Declarations marked always (init, TestMain,
+// initialized package variables) run whatever test is selected, so every test depends on them.
 func scanPackage(t *testing.T, root, pkg string) (map[string]*declInfo, map[string]bool) {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(root, pkg, "*_test.go"))
@@ -112,12 +116,14 @@ func scanPackage(t *testing.T, root, pkg string) (map[string]*declInfo, map[stri
 		}
 		for _, decl := range parsed.Decls {
 			var names []string
+			always := false
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
 				if d.Recv != nil {
 					names = []string{"." + d.Name.Name}
 				} else {
 					names = []string{d.Name.Name}
+					always = d.Name.Name == "init" || d.Name.Name == "TestMain"
 				}
 			case *ast.GenDecl:
 				for _, spec := range d.Specs {
@@ -127,6 +133,9 @@ func scanPackage(t *testing.T, root, pkg string) (map[string]*declInfo, map[stri
 					case *ast.ValueSpec:
 						for _, n := range s.Names {
 							names = append(names, n.Name)
+						}
+						if d.Tok == token.VAR && len(s.Values) > 0 {
+							always = true
 						}
 					}
 				}
@@ -154,6 +163,7 @@ func scanPackage(t *testing.T, root, pkg string) (map[string]*declInfo, map[stri
 			})
 			for _, name := range names {
 				merged := get(name)
+				merged.always = merged.always || always
 				for rel := range info.imports {
 					merged.imports[rel] = true
 				}
@@ -169,7 +179,7 @@ func scanPackage(t *testing.T, root, pkg string) (map[string]*declInfo, map[stri
 // testProducers returns the producer packages one venue test depends on: those named by the
 // test function and, through the identifiers it mentions, by every declaration of the
 // package's test files it reaches (helpers, fixtures, types and methods), plus the producers
-// the package imports for side effects.
+// the package imports for side effects and those the always-running declarations reach.
 func testProducers(decls map[string]*declInfo, blank map[string]bool, test string) []string {
 	seen := map[string]bool{}
 	out := map[string]bool{}
@@ -177,6 +187,11 @@ func testProducers(decls map[string]*declInfo, blank map[string]bool, test strin
 		out[rel] = true
 	}
 	queue := []string{test}
+	for name, info := range decls {
+		if info.always {
+			queue = append(queue, name)
+		}
+	}
 	for len(queue) > 0 {
 		name := queue[0]
 		queue = queue[1:]
@@ -365,8 +380,7 @@ func helper() {}
 
 // TestAProducerReachedThroughAHelperBelongsToTheTestThatCallsIt pins the attribution: a
 // producer imported by a helper file counts for the tests that call the helper (directly,
-// through another helper, through a method or a package variable), and a blank import counts
-// for every test.
+// through another helper or through a method), and a blank import counts for every test.
 func TestAProducerReachedThroughAHelperBelongsToTheTestThatCallsIt(t *testing.T) {
 	root := t.TempDir()
 	const venue = "internal/venue"
@@ -422,6 +436,58 @@ var fixture = clickhouse.New(sub.X)
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("producers by test:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestCodeThatRunsInEveryTestBinaryBelongsToEveryTest pins the always-running roots: init,
+// TestMain and a package variable with an initializer run whatever test is selected, so the
+// producers they reach count for every test; a variable without an initializer does not run
+// anything and a function nobody calls reaches no test.
+func TestCodeThatRunsInEveryTestBinaryBelongsToEveryTest(t *testing.T) {
+	root := t.TempDir()
+	const venue = "internal/venue"
+	writeFixture(t, root, map[string]string{
+		venue + "/a_test.go": `package venue
+
+import (
+	"os"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/audit"
+	"github.com/full-chaos/dev-health-ops/internal/api/billing"
+	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
+	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+)
+
+func TestMain(m *testing.M) { _ = licensing.Keys(); os.Exit(m.Run()) }
+
+func init() { _ = billing.Refund }
+
+var registered = register(orgs.New)
+
+var declared policy.Rule
+
+func register(f func()) int { return 0 }
+
+func unused() { _ = audit.Log }
+
+func TestOne(t *testing.T) {}
+`,
+	})
+	found, _ := undeclaredProducers(t, root, map[string][]string{venue: {"TestOne"}}, nil)
+	var got []string
+	for key := range found {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+	want := []string{
+		venue + "\tTestOne\tinternal/api/billing",
+		venue + "\tTestOne\tinternal/api/licensing",
+		venue + "\tTestOne\tinternal/api/orgs",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("producers of TestOne:\n got %q\nwant %q", got, want)
 	}
 }
 

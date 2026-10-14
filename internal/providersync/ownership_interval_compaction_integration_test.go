@@ -34,6 +34,8 @@ var (
 	cmpRepo1 = uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	cmpRepo2 = uuid.MustParse("22222222-2222-4222-8222-222222222222")
 	cmpRepo3 = uuid.MustParse("33333333-3333-4333-8333-333333333333")
+	cmpRepo4 = uuid.MustParse("44444444-4444-4444-8444-444444444444")
+	cmpRepo5 = uuid.MustParse("55555555-5555-4555-8555-555555555555")
 )
 
 func cmpDay(n int) time.Time { return cmpBase.AddDate(0, 0, n) }
@@ -132,6 +134,18 @@ func newCmpFixture(t *testing.T) cmpFixture {
 	access := cmpRepoRow(cmpTeam1, cmpRepo3, "acme/shared", 1, 2, 0.25, 2)
 	access.Source, access.UpdatedAt = "provider_access", cmpDay(50)
 	repoRows = append(repoRows, access)
+
+	// R4: a run whose FIRST row holds the newest version (a non-monotone updated_at): the merged row needs +1 ms to win its key.
+	odd := cmpChain(func(a, b int) ownershipIntervalRow { return cmpRepoRow(cmpTeam1, cmpRepo4, "acme/odd", a, b, 1, 1) }, 0, 2)
+	odd[0].UpdatedAt = cmpDay(50)
+	repoRows = append(repoRows, odd...)
+
+	// R5: a key whose newest updated_at is held by a tombstone that nothing else would keep (it ends before the
+	// closed row, it is not the earliest row): dropping it would LOWER the key's watermark.
+	repoRows = append(repoRows, cmpRepoRow(cmpTeam1, cmpRepo5, "acme/stamp", 0, 4, 1, 1))
+	stampTomb := cmpRepoRow(cmpTeam1, cmpRepo5, "acme/stamp", 2, 2, 1, 1)
+	stampTomb.UpdatedAt = cmpDay(400)
+	repoRows = append(repoRows, stampTomb)
 
 	var projectRows []ownershipIntervalRow
 	eng := "ENG"
@@ -313,6 +327,226 @@ func cmpMutations(t *testing.T, ctx context.Context, conn driver.Conn, table str
 	return countRows(t, ctx, conn, "SELECT count() FROM system.mutations WHERE database = currentDatabase() AND table = ?", table)
 }
 
+// cmpStrings runs a query that returns string columns and gives one joined line per row.
+func (f cmpFixture) cmpStrings(query string, columns int, args ...any) []string {
+	f.t.Helper()
+	rows, err := f.conn.Query(f.ctx, query, args...)
+	if err != nil {
+		f.t.Fatalf("%s: %v", query, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		cells := make([]string, columns)
+		dest := make([]any, columns)
+		for index := range cells {
+			dest[index] = &cells[index]
+		}
+		if err := rows.Scan(dest...); err != nil {
+			f.t.Fatal(err)
+		}
+		out = append(out, strings.Join(cells, " | "))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// acrFactOrder is acr's ownershipFactOrder (devhealthsource/teams_projects_edges.go:1923) without the table alias.
+const acrFactOrder = "(valid_to IS NULL, if(valid_to IS NULL, -toUnixTimestamp64Micro(valid_from), toUnixTimestamp64Micro(valid_to)), toUnixTimestamp64Micro(valid_from))"
+
+// acrRepositoryEdge is the aggregate half of acr's repositoryTeamsGroupedSQL (teams_projects_edges.go:1991):
+// the latest assertion row by ownershipFactOrder per (provider, repo, team, source). The joins to repos and
+// teams (they read no interval column) are left out. The first column is the stable part, the second the watermark.
+func (f cmpFixture) acrRepositoryEdge(org string) []string {
+	return f.cmpStrings(`SELECT concat(provider, ' ', ifNull(toString(repo_id), ''), ' ', team_id, ' ', toString(source),
+  ' latest_repo=', argMax(repo_full_name, `+acrFactOrder+`), ' match=', argMax(toString(match_type), `+acrFactOrder+`),
+  ' primary=', toString(argMax(toUInt8(is_primary), `+acrFactOrder+`)), ' spec=', toString(argMax(toInt64(specificity), `+acrFactOrder+`)),
+  ' prio=', toString(argMax(toInt64(priority), `+acrFactOrder+`)), ' first_valid_from=', toString(min(valid_from)),
+  ' latest_is_open=', toString(argMax(tuple(valid_to), `+acrFactOrder+`).1 IS NULL),
+  ' latest_valid_to=', toString(ifNull(argMax(tuple(valid_to), `+acrFactOrder+`).1, toDateTime64(0, 3, 'UTC')))) AS stable,
+  concat('watermark=', toString(max(updated_at))) AS wm
+FROM team_repo_ownership FINAL WHERE org_id = {org:String}
+GROUP BY provider, repo_id, team_id, source`, 2, clickhouse.Named("org", org))
+}
+
+// acrProjectEdge is the aggregate half of acr's projectTeamsGroupSQL (teams_projects_edges.go:1568): first_valid_from,
+// latest_is_open, latest_valid_to per (provider, project, team, source); the watermarks are the legacy updated_at
+// and the ingest last_synced.
+func (f cmpFixture) acrProjectEdge(org string) []string {
+	return f.cmpStrings(`SELECT concat(provider, ' ', project_id, ' ', team_id, ' ', toString(source),
+  ' first_valid_from=', toString(min(valid_from)),
+  ' latest_is_open=', toString(argMax(tuple(valid_to), `+acrFactOrder+`).1 IS NULL),
+  ' latest_valid_to=', toString(ifNull(argMax(tuple(valid_to), `+acrFactOrder+`).1, toDateTime64(0, 3, 'UTC')))) AS stable,
+  concat('watermark=', toString(max(updated_at))) AS wm
+FROM team_project_ownership FINAL WHERE org_id = {org:String}
+GROUP BY provider, project_id, team_id, source`, 2, clickhouse.Named("org", org))
+}
+
+// carryAnchors is team_id_carry.go:699: min(valid_from) over ALL physical rows of each link.
+func (f cmpFixture) carryAnchors(org string) []string {
+	return append(
+		f.cmpStrings(`SELECT concat('repo ', provider, ' ', team_id, ' ', repo_full_name, ' ', toString(source)), toString(min(valid_from)) FROM team_repo_ownership WHERE org_id = {org:String} GROUP BY provider, team_id, repo_full_name, source`, 2, clickhouse.Named("org", org)),
+		f.cmpStrings(`SELECT concat('project ', provider, ' ', team_id, ' ', project_id, ' ', toString(source)), toString(min(valid_from)) FROM team_project_ownership WHERE org_id = {org:String} GROUP BY provider, team_id, project_id, source`, 2, clickhouse.Named("org", org))...)
+}
+
+// scopeMax is work_item_attribution_native_clickhouse.go:698-735: per repository and project the newest
+// instant any physical row (not FINAL) puts into the recompute-scope check.
+func (f cmpFixture) scopeMax(org string, asOf time.Time) map[string]string {
+	f.t.Helper()
+	out := map[string]string{}
+	for _, query := range []string{
+		`SELECT concat('repo ', toString(repo_id)), toString(max(greatest(updated_at, if(valid_from <= {as_of:DateTime64(3, 'UTC')}, valid_from, toDateTime64(0, 3)), ifNull(if(valid_to <= {as_of:DateTime64(3, 'UTC')}, valid_to, toDateTime64(0, 3)), toDateTime64(0, 3))))) FROM team_repo_ownership WHERE org_id = {org:String} AND repo_id IS NOT NULL GROUP BY repo_id`,
+		`SELECT concat('project ', project_id), toString(max(greatest(updated_at, if(valid_from <= {as_of:DateTime64(3, 'UTC')}, valid_from, toDateTime64(0, 3)), ifNull(if(valid_to <= {as_of:DateTime64(3, 'UTC')}, valid_to, toDateTime64(0, 3)), toDateTime64(0, 3))))) FROM team_project_ownership WHERE org_id = {org:String} AND project_id != '' GROUP BY project_id`,
+	} {
+		for _, line := range f.cmpStrings(query, 2, clickhouse.Named("org", org), clickhouse.Named("as_of", cmpLiteral(asOf))) {
+			parts := strings.SplitN(line, " | ", 2)
+			out[parts[0]] = parts[1]
+		}
+	}
+	return out
+}
+
+// TestCompactOwnershipIntervalsNeverLowersAKeysNewestStamp: the acr edge pages on max(updated_at) of a key
+// (HAVING watermark > cursor) and the work-item scope check reads it. A key whose newest updated_at is held by a
+// dropped tombstone would see its maximum FALL, and a cursor between the new and the old maximum would never
+// read the key. The tool keeps such a tombstone; this test shows both, by value.
+func TestCompactOwnershipIntervalsNeverLowersAKeysNewestStamp(t *testing.T) {
+	f := newCmpFixture(t)
+	watermarks := func() map[string]string {
+		out := map[string]string{}
+		for _, line := range f.acrRepositoryEdge(f.orgA) {
+			parts := strings.SplitN(line, " | ", 2)
+			group := strings.SplitN(parts[0], " latest_repo=", 2)[0]
+			out[group] = strings.TrimPrefix(parts[1], "watermark=")
+		}
+		return out
+	}
+	before := watermarks()
+	scopeBefore := f.scopeMax(f.orgA, cmpDay(3000))
+	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, cmpOptions(f.orgA)); err != nil {
+		t.Fatal(err)
+	}
+	after := watermarks()
+	for group, was := range before {
+		if now := after[group]; now < was {
+			t.Fatalf("the watermark of %s fell: %s -> %s", group, was, now)
+		}
+	}
+	for key, was := range scopeBefore {
+		if now := f.scopeMax(f.orgA, cmpDay(3000))[key]; now < was {
+			t.Fatalf("the recompute-scope max of %s fell: %s -> %s", key, was, now)
+		}
+	}
+	stampKey := "github " + cmpRepo5.String() + " " + cmpTeam1 + " inferred"
+	// What a drop of that tombstone WOULD do, by value: the key's maximum without it.
+	var withoutTombstone string
+	if err := f.conn.QueryRow(f.ctx, `SELECT toString(maxIf(updated_at, ifNull(valid_to, toDateTime64(0, 3, 'UTC')) != valid_from)) FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = 'acme/stamp'`, f.orgA).Scan(&withoutTombstone); err != nil {
+		t.Fatal(err)
+	}
+	cursor := withoutTombstone // a consumer whose cursor stands exactly on the lower maximum
+	t.Logf("BACKREF stamp-fall key acme/stamp: watermark before %s, after (tombstone kept) %s, what-if dropped %s, cursor %s", before[stampKey], after[stampKey], withoutTombstone, cursor)
+	if !(before[stampKey] > cursor) || !(after[stampKey] > cursor) {
+		t.Fatalf("the kept tombstone must keep the key above the cursor: before %s, after %s, cursor %s", before[stampKey], after[stampKey], cursor)
+	}
+	if withoutTombstone > cursor {
+		t.Fatal("setup: the what-if maximum must stand on the cursor")
+	}
+	t.Logf("BACKREF stamp-fall: acr HAVING watermark > cursor: before=%t, after (guard)=%t, what-if drop=%t (a MISS if false while before is true)",
+		before[stampKey] > cursor, after[stampKey] > cursor, withoutTombstone > cursor)
+}
+
+// keyRows prints the FINAL rows of one key, oldest first, as the record shows them.
+func (f cmpFixture) keyRows(table, natural, naturalValue, team string) []string {
+	return f.cmpStrings(`SELECT concat('valid_from=', toString(valid_from), ' valid_to=', ifNull(toString(valid_to), 'open'), ' updated_at=', toString(updated_at), ' source=', toString(source)), '' FROM `+table+` FINAL WHERE org_id = {org:String} AND `+natural+` = {value:String} AND team_id = {team:String}`, 2,
+		clickhouse.Named("org", f.orgA), clickhouse.Named("value", naturalValue), clickhouse.Named("team", team))
+}
+
+// TestCompactOwnershipIntervalsKeepsEveryBackwardReference lists, by value, what each reader that keys into the
+// history rows sees before and after: team_id_carry min(valid_from), acr's repository and project edge
+// aggregates (first_valid_from, the latest_* row, the watermark), the tenure ends of the derivation writer, and
+// the recompute-scope check. A value that changes fails the test.
+func TestCompactOwnershipIntervalsKeepsEveryBackwardReference(t *testing.T) {
+	f := newCmpFixture(t)
+	asOf := cmpDay(3000)
+	type snapshot struct {
+		repoEdge, projectEdge, carry, keys []string
+		scope                              map[string]string
+		tenure                             string
+	}
+	take := func() snapshot {
+		s := snapshot{repoEdge: f.acrRepositoryEdge(f.orgA), projectEdge: f.acrProjectEdge(f.orgA), carry: f.carryAnchors(f.orgA), scope: f.scopeMax(f.orgA, asOf), tenure: f.writerInputs(f.orgA)}
+		for _, key := range [][4]string{
+			{OwnershipCompactionRepoTable, "repo_full_name", "acme/api", cmpTeam1},
+			{OwnershipCompactionRepoTable, "repo_full_name", "acme/web", cmpTeam2},
+			{OwnershipCompactionRepoTable, "repo_full_name", "acme/web", cmpTeam1},
+			{OwnershipCompactionRepoTable, "repo_full_name", "acme/odd", cmpTeam1},
+			{OwnershipCompactionProjectTable, "project_id", "proj-1", cmpTeam1},
+			{OwnershipCompactionProjectTable, "project_id", "proj-2", cmpTeam2},
+		} {
+			s.keys = append(s.keys, fmt.Sprintf("-- %s %s %s %s", key[0], key[2], key[3], strings.Join(f.keyRows(key[0], key[1], key[2], key[3]), " // ")))
+		}
+		return s
+	}
+	before := take()
+	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, cmpOptions(f.orgA)); err != nil {
+		t.Fatal(err)
+	}
+	after := take()
+
+	stable := func(lines []string) []string {
+		var out []string
+		for _, line := range lines {
+			out = append(out, strings.SplitN(line, " | ", 2)[0])
+		}
+		return out
+	}
+	for name, pair := range map[string][2][]string{
+		"acr repository edge (first_valid_from, latest_*)": {stable(before.repoEdge), stable(after.repoEdge)},
+		"acr project edge (first_valid_from, latest_*)":    {stable(before.projectEdge), stable(after.projectEdge)},
+		"team_id_carry min(valid_from)":                    {before.carry, after.carry},
+	} {
+		if strings.Join(pair[0], "\n") != strings.Join(pair[1], "\n") {
+			t.Fatalf("%s changed:\nbefore:\n%s\nafter:\n%s", name, strings.Join(pair[0], "\n"), strings.Join(pair[1], "\n"))
+		}
+	}
+	if before.tenure != after.tenure {
+		t.Fatalf("tenure ends changed:\n%s\n--\n%s", before.tenure, after.tenure)
+	}
+	requeued := 0
+	for key, was := range before.scope {
+		if now := after.scope[key]; now > was {
+			requeued++
+			t.Logf("recompute scope max rose for %s: %s -> %s", key, was, now)
+		}
+	}
+	if requeued > 1 {
+		t.Fatalf("%d repositories or projects would be re-queued for recompute; only the non-monotone fixture key may rise (1 ms)", requeued)
+	}
+	t.Logf("BACKREF scope-check re-queue size on the fixture: %d of %d keys", requeued, len(before.scope))
+	for index := range before.keys {
+		t.Logf("BACKREF BEFORE %s", before.keys[index])
+		t.Logf("BACKREF AFTER  %s", after.keys[index])
+	}
+	for _, line := range before.repoEdge {
+		t.Logf("BACKREF acr repo edge BEFORE: %s", strings.ReplaceAll(line, " | ", " | "))
+	}
+	for _, line := range after.repoEdge {
+		t.Logf("BACKREF acr repo edge AFTER:  %s", line)
+	}
+	for _, line := range before.projectEdge {
+		t.Logf("BACKREF acr project edge BEFORE: %s", line)
+	}
+	for _, line := range after.projectEdge {
+		t.Logf("BACKREF acr project edge AFTER:  %s", line)
+	}
+	for _, line := range before.carry {
+		t.Logf("BACKREF carry BEFORE: %s", line)
+	}
+	for _, line := range after.carry {
+		t.Logf("BACKREF carry AFTER:  %s", line)
+	}
+}
+
 func TestCompactOwnershipIntervalsDryRunWritesNothing(t *testing.T) {
 	f := newCmpFixture(t)
 	physicalBefore := f.physicalCount(OwnershipCompactionRepoTable, f.orgA)
@@ -323,7 +557,7 @@ func TestCompactOwnershipIntervalsDryRunWritesNothing(t *testing.T) {
 		t.Fatalf("dry run: %v", err)
 	}
 	repo := cmpTable(t, outcome, OwnershipCompactionRepoTable)
-	if repo.RunsMerged != 6 || repo.ClosedBefore != 20 || repo.ClosedAfter != 9 {
+	if repo.RunsMerged != 7 || repo.ClosedBefore != 23 || repo.ClosedAfter != 11 {
 		t.Fatalf("dry run report %+v", repo)
 	}
 	if f.physicalCount(OwnershipCompactionRepoTable, f.orgA) != physicalBefore {
@@ -360,13 +594,13 @@ func TestCompactOwnershipIntervalsKeepsEveryOwnerAnswer(t *testing.T) {
 
 	repo := cmpTable(t, outcome, OwnershipCompactionRepoTable)
 	project := cmpTable(t, outcome, OwnershipCompactionProjectTable)
-	if repo.RunsMerged != 6 || repo.RunsKeptMultiSource != 1 || repo.RowsMerged != 11 {
+	if repo.RunsMerged != 7 || repo.RunsKeptMultiSource != 1 || repo.RowsMerged != 12 {
 		t.Fatalf("repo report %+v", repo)
 	}
-	if repo.RowsBefore != 26 || repo.ClosedBefore != 20 || repo.ClosedAfter != 9 || repo.RowsAfter != 13 || repo.OpenAfter != 2 {
+	if repo.RowsBefore != 30 || repo.ClosedBefore != 23 || repo.ClosedAfter != 11 || repo.RowsAfter != 17 || repo.OpenAfter != 2 {
 		t.Fatalf("repo counts %+v", repo)
 	}
-	if repo.TombstonesFound != 3 || repo.TombstonesDropped != 2 || repo.TombstonesKeptAnchor != 1 || repo.TombstonesAfter != 1 || repo.CloseBeforeOpenAfter != 1 {
+	if repo.TombstonesFound != 4 || repo.TombstonesDropped != 1 || repo.TombstonesKeptAnchor != 1 || repo.TombstonesKeptLatest != 1 || repo.TombstonesKeptStamp != 1 || repo.TombstonesAfter != 3 || repo.CloseBeforeOpenAfter != 1 {
 		t.Fatalf("repo tombstones %+v", repo)
 	}
 	if project.RunsMerged != 3 || project.ClosedBefore != 11 || project.ClosedAfter != 4 {
@@ -375,7 +609,7 @@ func TestCompactOwnershipIntervalsKeepsEveryOwnerAnswer(t *testing.T) {
 	if repo.Differential.Mismatches != 0 || repo.Differential.InstantsChecked == 0 || repo.Differential.GroupsChecked == 0 {
 		t.Fatalf("differential %+v", repo.Differential)
 	}
-	if repo.BackupRows != 17+2 || repo.RunsChangedDuringRun != 0 {
+	if repo.BackupRows != 19+1 || repo.RunsChangedDuringRun != 0 {
 		t.Fatalf("backup %d, changed %d", repo.BackupRows, repo.RunsChangedDuringRun)
 	}
 	// The physical rows are gone, every version of them (the stale open copies too).
@@ -389,7 +623,7 @@ func TestCompactOwnershipIntervalsKeepsEveryOwnerAnswer(t *testing.T) {
 		t.Fatalf("merged interval rows: %d", got)
 	}
 	// The backup holds the rows before the rewrite.
-	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership_compaction_bak WHERE org_id = ?", f.orgA); got != 19 {
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership_compaction_bak WHERE org_id = ?", f.orgA); got != 20 {
 		t.Fatalf("backup rows %d", got)
 	}
 }
@@ -555,8 +789,8 @@ func TestCompactOwnershipIntervalsFailedMutationLeavesTheBackupAndTheAnswers(t *
 		t.Fatalf("resume: %v", err)
 	}
 	f.assertSameAnswers(f.orgA, instants, before, "after the resume")
-	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND valid_to = valid_from", f.orgA); got != 1 {
-		t.Fatalf("tombstones after the resume: %d, want the one anchor", got)
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND valid_to = valid_from", f.orgA); got != 3 {
+		t.Fatalf("tombstones after the resume: %d, want the anchor, the latest and the newest stamp", got)
 	}
 }
 
@@ -676,7 +910,7 @@ func TestCompactOwnershipIntervalsKeyExtendedByASyncKeepsTheAnswers(t *testing.T
 		t.Fatal(err)
 	}
 	repo := cmpTable(t, outcome, OwnershipCompactionRepoTable)
-	if repo.RunsChangedDuringRun != 0 || repo.RunsMerged != 6 || repo.RowsAppearedDuringRun != 2 {
+	if repo.RunsChangedDuringRun != 0 || repo.RunsMerged != 7 || repo.RowsAppearedDuringRun != 2 {
 		t.Fatalf("report %+v", repo)
 	}
 	var early []time.Time

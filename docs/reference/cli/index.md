@@ -1669,7 +1669,9 @@ supersede tombstones (`valid_to` = `valid_from`) that cover no instant. The
 ownership timeline stays exact: for every key and every instant T, the rows
 valid at T have the same shape before and after.
 
-**It deletes rows, so it writes nothing unless `--apply` is given.** Without
+**It deletes rows, so it writes nothing unless `--apply` is given. This is an
+exception to the house pattern of the sibling verbs above, which write unless
+`--dry-run` is given.** Without
 `--apply` (a dry run, the default) it reads, plans, proves the owner-at-T
 differential and reports. `--dry-run` is accepted and does the same; it is
 refused together with `--apply`. `--apply` needs `--reason` and
@@ -1684,8 +1686,13 @@ and rows of any other source are never touched. A run is also kept when a row of
 another source of the same (provider, repository or project, team) would
 change which row wins the "newest version" choice of the cascade readers
 (`runs_kept_multi_source`). A tombstone is dropped unless it is the earliest row
-of its key (`tombstones_kept_anchor`): the team-id carry reads `min(valid_from)`
-of a key as its "since when".
+of its key (`tombstones_kept_anchor`: the team-id carry and the context-fabric
+edge read `min(valid_from)` of a key as its "since when") or the latest row of
+its key by the context-fabric `ownershipFactOrder`, that is, the key has no open
+row and no row that ends after it (`tombstones_kept_latest`: the edge reads
+`latest_valid_to` and the latest row's columns from it) or the holder of the
+key's newest `updated_at` (`tombstones_kept_stamp`: the edge and the work-item
+scope check page on that maximum, which merging never lowers).
 
 Method, per batch of runs: (A) one insert of the merged first row and, for the
 other rows of the run, the same rows again as tombstones, so a reader sees the
@@ -1699,8 +1706,10 @@ it will rewrite or drop into `<table>_compaction_bak` (created if missing) and
 checks the copy is not empty and has the expected row count. A key that a sync
 wrote between the plan and the insert is skipped and counted
 (`runs_changed_during_run`). `--restore-run <run_id> --apply` puts the rows of a
-run back from the backup table; the backup table is dropped by an operator after
-the readback.
+run back from the backup table. The tool never drops the backup table: it stays
+until the next pin readback after the step and is dropped on the word of the GWC
+lead. In production the step runs inside a roll window (minutes :10-:33 or
+:46-:55 of the hour, between the hourly syncs), with the workers running.
 
 `--org-stdin` (one organization on stdin, rules of
 [`metrics daily-start`](#metrics-daily-start-chaos-5055)) or `--all-orgs`
@@ -1711,7 +1720,7 @@ organization (numbered, never named) and in total: `rows_before`/`rows_after`,
 `open_*`, `closed_*`, `tombstones_*`, `close_before_open_*`, `runs_found`,
 `runs_merged`, `rows_merged`, `rows_kept`, `runs_kept_multi_source`,
 `runs_changed_during_run`, `gaps`, `overlaps`, `tombstones_found`,
-`tombstones_dropped`, `tombstones_kept_anchor`, `backup_rows`, `differential`
+`tombstones_dropped`, `tombstones_kept_anchor`, `tombstones_kept_latest`, `tombstones_kept_stamp`, `backup_rows`, `differential`
 (`groups_total`, `groups_checked`, `instants_checked`, `mismatches`) and
 `elapsed_ms`. A second `--apply` reports zero runs merged and writes nothing.
 

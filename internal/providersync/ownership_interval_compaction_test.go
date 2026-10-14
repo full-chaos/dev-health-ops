@@ -137,7 +137,7 @@ func TestCompactionKeepsATombstoneThatIsTheEarliestRowOfItsKey(t *testing.T) {
 	tombstoneFirst := repoRow("a", "acme/api", 5, 5, 5)
 	later := repoRow("a", "acme/api", 20, -1, 20)
 	covered := repoRow("b", "acme/api", 0, -1, 1)
-	tombstoneAfter := repoRow("b", "acme/api", 7, 7, 7)
+	tombstoneAfter := repoRow("b", "acme/api", 7, 7, 1)
 	plan, final := mustPlan(t, []ownershipIntervalRow{tombstoneFirst, later, covered, tombstoneAfter})
 	if plan.org.TombstonesFound != 2 || plan.org.TombstonesDropped != 1 || plan.org.TombstonesKeptAnchor != 1 {
 		t.Fatalf("tombstones %+v", plan.org)
@@ -292,5 +292,52 @@ func TestCompactionProjectTableUsesTheProjectColumns(t *testing.T) {
 	}
 	if len(projectSpec().appendArgs("org", row)) != 12 || len(repoSpec().appendArgs("org", repoRow("a", "r", 0, 1, 1))) != 14 {
 		t.Fatal("insert arity does not match the column list")
+	}
+}
+
+// A tombstone that is the LATEST row of its key by acr's ownershipFactOrder (no open row, no row that ends
+// after it) stays: the edge reads latest_valid_to and the latest row's columns from it.
+func TestCompactionKeepsATombstoneThatIsTheLatestRowOfItsKey(t *testing.T) {
+	rows := []ownershipIntervalRow{
+		repoRow("c", "acme/api", 0, 4, 4),
+		repoRow("c", "acme/api", 3, 3, 3), // ends before the closed row: dropped
+		repoRow("c", "acme/api", 9, 9, 9), // nothing ends after it: the latest row of the key
+		repoRow("d", "acme/api", 0, 4, 4),
+		repoRow("d", "acme/api", 3, 3, 3),
+		repoRow("d", "acme/api", 9, -1, 9), // an open row wins whatever else exists: the tombstone goes
+		repoRow("e", "acme/api", 0, 4, 4),
+		repoRow("e", "acme/api", 4, 4, 4), // ties on valid_to with the closed row and wins on valid_from: it stays
+	}
+	plan, final := mustPlan(t, rows)
+	if plan.org.TombstonesFound != 4 || plan.org.TombstonesDropped != 2 || plan.org.TombstonesKeptLatest != 2 || plan.org.TombstonesKeptAnchor != 0 {
+		t.Fatalf("tombstones %+v", plan.org)
+	}
+	if len(final) != len(rows)-2 {
+		t.Fatalf("final %d rows, want %d", len(final), len(rows)-2)
+	}
+}
+
+// A tombstone that holds the key's newest updated_at stays, so the key's maximum never falls: a cursor on
+// max(updated_at) that has not read the key yet would otherwise slip behind it. The tombstone a half-finished
+// run of this tool leaves (own updated_at + 1 ms) is not such a tombstone.
+func TestCompactionKeepsTheTombstoneThatHoldsTheKeysNewestStamp(t *testing.T) {
+	// The state a half-finished run leaves: the merged row (valid 0..2, stamp 5 h) and the tombstone of the
+	// inner row it folded (valid_from 1 h, stamp 5 h + 1 ms).
+	rows := []ownershipIntervalRow{
+		repoRow("f", "acme/api", 0, 4, 4),
+		repoRow("f", "acme/api", 1, 1, 400), // ends before the closed row, so it would go: but it holds the newest stamp
+		repoRow("g", "acme/api", 0, 4, 4),
+		repoRow("g", "acme/api", 1, 1, 4), // an ordinary old tombstone: dropped
+		repoRow("h", "acme/api", 0, 2, 5),
+		tombstoneOf(repoRow("h", "acme/api", 1, 2, 5)),
+	}
+	plan, _ := mustPlan(t, rows)
+	if plan.org.TombstonesKeptStamp != 1 || plan.org.TombstonesDropped != 2 {
+		t.Fatalf("plan %+v: want one kept for its stamp, and the ordinary one and the leftover dropped", plan.org)
+	}
+	for _, dropped := range plan.drops {
+		if dropped.TeamID == "f" {
+			t.Fatal("the tombstone that holds the newest stamp was dropped")
+		}
 	}
 }

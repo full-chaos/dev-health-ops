@@ -146,6 +146,8 @@ type OwnershipCompactionOrg struct {
 	TombstonesFound        int `json:"tombstones_found"`
 	TombstonesDropped      int `json:"tombstones_dropped"`
 	TombstonesKeptAnchor   int `json:"tombstones_kept_anchor"`
+	TombstonesKeptLatest   int `json:"tombstones_kept_latest"`
+	TombstonesKeptStamp    int `json:"tombstones_kept_stamp"`
 	BackupRows             int `json:"backup_rows"`
 	RowsAppearedDuringRun  int `json:"rows_appeared_during_run"`
 	GroupsDriftedDuringRun int `json:"groups_drifted_during_run"`
@@ -427,7 +429,9 @@ func planOwnershipCompaction(spec ownershipCompactionSpec, rows []ownershipInter
 func (plan *ownershipCompactionPlan) planKey(keyRows []ownershipIntervalRow) {
 	var live []ownershipIntervalRow
 	var tombstones []ownershipIntervalRow
-	var minLive *time.Time
+	var minLive, maxEnd *time.Time
+	var maxLiveStamp time.Time
+	hasOpen := false
 	for _, row := range keyRows {
 		if row.isTombstone() {
 			tombstones = append(tombstones, row)
@@ -437,21 +441,47 @@ func (plan *ownershipCompactionPlan) planKey(keyRows []ownershipIntervalRow) {
 			from := row.ValidFrom
 			minLive = &from
 		}
+		if row.UpdatedAt.After(maxLiveStamp) {
+			maxLiveStamp = row.UpdatedAt
+		}
+		if row.isOpen() {
+			hasOpen = true
+		} else if maxEnd == nil || row.ValidTo.After(*maxEnd) {
+			end := *row.ValidTo
+			maxEnd = &end
+		}
 		if row.isCloseBeforeOpen() {
 			continue
 		}
 		live = append(live, row)
 	}
-	// A tombstone covers no instant. It stays only when it is the earliest row
-	// of its key: team_id_carry reads min(valid_from) of a key as the
-	// "since when" of the fact, and dropping the earliest row would move it.
+	// A tombstone covers no instant, and is dropped unless a reader still
+	// keys on it:
+	//   - it is the earliest row of its key: team_id_carry reads
+	//     min(valid_from) of a key as the "since when" of the fact, and the
+	//     acr edge reads it as first_valid_from;
+	//   - it is the LATEST row of its key by the acr ownershipFactOrder (no
+	//     open row, and no other row ends strictly after it): the edge takes
+	//     latest_valid_to and the latest row's columns from it, so dropping it
+	//     would change both;
+	//   - it holds the key's newest updated_at (more than 1 ms above every other
+	//     row; the 1 ms is the stamp a half-finished run of this tool leaves on
+	//     its own tombstones): the acr edge pages on max(updated_at) of the key
+	//     and the work-item scope check reads it, so a key whose maximum FELL
+	//     could slip behind a cursor that has not read it yet. A merged row
+	//     takes the newest updated_at of its run, so merging never lowers it.
 	for _, tombstone := range tombstones {
 		plan.org.TombstonesFound++
-		if minLive != nil && minLive.Before(tombstone.ValidFrom) {
+		switch {
+		case minLive == nil || !minLive.Before(tombstone.ValidFrom):
+			plan.org.TombstonesKeptAnchor++
+		case !hasOpen && (maxEnd == nil || !maxEnd.After(tombstone.ValidFrom)):
+			plan.org.TombstonesKeptLatest++
+		case tombstone.UpdatedAt.After(maxLiveStamp.Add(time.Millisecond)):
+			plan.org.TombstonesKeptStamp++
+		default:
 			plan.drops = append(plan.drops, tombstone)
 			plan.org.TombstonesDropped++
-		} else {
-			plan.org.TombstonesKeptAnchor++
 		}
 	}
 	var run []ownershipIntervalRow
@@ -751,6 +781,8 @@ func (org *OwnershipCompactionOrg) add(other OwnershipCompactionOrg) {
 	org.TombstonesFound += other.TombstonesFound
 	org.TombstonesDropped += other.TombstonesDropped
 	org.TombstonesKeptAnchor += other.TombstonesKeptAnchor
+	org.TombstonesKeptLatest += other.TombstonesKeptLatest
+	org.TombstonesKeptStamp += other.TombstonesKeptStamp
 	org.BackupRows += other.BackupRows
 	org.RowsAppearedDuringRun += other.RowsAppearedDuringRun
 	org.GroupsDriftedDuringRun += other.GroupsDriftedDuringRun
@@ -883,7 +915,7 @@ func compactOwnershipOrg(
 			"runs_found", report.RunsFound, "runs_merged", report.RunsMerged, "rows_merged", report.RowsMerged,
 			"rows_kept", report.RowsKept, "runs_kept_multi_source", report.RunsKeptMultiSource,
 			"runs_changed_during_run", report.RunsChangedDuringRun, "tombstones_found", report.TombstonesFound,
-			"tombstones_dropped", report.TombstonesDropped, "tombstones_kept_anchor", report.TombstonesKeptAnchor,
+			"tombstones_dropped", report.TombstonesDropped, "tombstones_kept_anchor", report.TombstonesKeptAnchor, "tombstones_kept_latest", report.TombstonesKeptLatest, "tombstones_kept_stamp", report.TombstonesKeptStamp,
 			"differential_mismatches", report.Differential.Mismatches, "elapsed_ms", report.ElapsedMS, "error", err != nil)
 		return report, err
 	}

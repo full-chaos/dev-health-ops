@@ -1801,7 +1801,7 @@ func dispatchProvidersyncCompactOwnershipIntervals(
 	allOrgs := flags.Bool("all-orgs", false, "compact every organization that holds a row of the compacted source")
 	table := flags.String("table", "", "only this table: team_project_ownership or team_repo_ownership (default both)")
 	batchSize := flags.Int("batch-size", providersync.OwnershipCompactionDefaultBatchSize, "runs per insert block")
-	apply := flags.Bool("apply", false, "write: merge the runs, drop the tombstones (without it nothing is written)")
+	apply := flags.Bool("apply", false, "write: merge the runs and delete the rows they fold. EXCEPTION to the house pattern (the sibling verbs write unless --dry-run is given): this verb deletes rows, so it is dry unless --apply is given")
 	dryRun := flags.Bool("dry-run", false, "the default, accepted for the habit of the other verbs; refused together with --apply")
 	restoreRun := flags.String("restore-run", "", "put the rows of this earlier run back from its backup table (with --apply; without it, counts only)")
 	mutation := addMutationFlags(flags)

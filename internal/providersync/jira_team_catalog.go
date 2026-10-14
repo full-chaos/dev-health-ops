@@ -105,6 +105,19 @@ type jiraTeamCatalogProjectDetailPayload struct {
 	Description    *string                     `json:"description"`
 	ProjectTypeKey string                      `json:"projectTypeKey"`
 	Lead           *jiraTeamCatalogUserPayload `json:"lead"`
+	// Versions is the project's complete version list: the provider returns it
+	// inside the project body, unpaginated. nil says the body stated no list.
+	Versions []jiraTeamCatalogVersionPayload `json:"versions"`
+}
+
+// jiraTeamCatalogVersionPayload is one entry of a project's versions. A
+// release date is a date-only string.
+type jiraTeamCatalogVersionPayload struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Released    bool    `json:"released"`
+	Archived    bool    `json:"archived"`
+	ReleaseDate *string `json:"releaseDate"`
 }
 
 type jiraTeamCatalogUserPayload struct {
@@ -197,14 +210,18 @@ type jiraTeamCatalogProjectRow struct {
 	State       string     `json:"state"`
 	StateSource string     `json:"state_source"`
 	TargetDate  *time.Time `json:"target_date"`
-	URL         string     `json:"url"`
-	TeamIDs     []string   `json:"team_ids"`
-	TeamKeys    []string   `json:"team_keys"`
-	LeadID      *string    `json:"lead_id"`
-	LeadName    *string    `json:"lead_name"`
-	LeadEmail   *string    `json:"lead_email"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	LastSynced  time.Time  `json:"last_synced"`
+	// projectTargetFacts is the provenance of TargetDate; empty when this run
+	// did not read the project's versions, and the write then keeps the target
+	// columns the key already holds.
+	projectTargetFacts
+	URL        string    `json:"url"`
+	TeamIDs    []string  `json:"team_ids"`
+	TeamKeys   []string  `json:"team_keys"`
+	LeadID     *string   `json:"lead_id"`
+	LeadName   *string   `json:"lead_name"`
+	LeadEmail  *string   `json:"lead_email"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	LastSynced time.Time `json:"last_synced"`
 }
 
 type JiraTeamCatalogRows struct {
@@ -365,6 +382,27 @@ func normalizeJiraMembershipRow(
 		ProviderUserID: providerUserIDString(lead.AccountID),
 	}, true
 }
+
+// jiraProjectTargetCandidates are the versions of a project as candidates of
+// the shared target rule: open means neither released nor archived.
+func jiraProjectTargetCandidates(versions []jiraTeamCatalogVersionPayload) []projectTargetCandidate {
+	candidates := make([]projectTargetCandidate, 0, len(versions))
+	for _, version := range versions {
+		date := ""
+		if version.ReleaseDate != nil {
+			date = *version.ReleaseDate
+		}
+		id := strings.TrimSpace(version.ID)
+		candidates = append(candidates, projectTargetCandidate{
+			ID: id, Ref: id, Name: strings.TrimSpace(version.Name), Date: date,
+			Open: !version.Released && !version.Archived,
+		})
+	}
+	return candidates
+}
+
+// jiraProjectTargetSource is the provider fact a Jira target date comes from.
+const jiraProjectTargetSource = "jira.version.releaseDate"
 
 func optionalJiraString(value *string) *string {
 	if value == nil {

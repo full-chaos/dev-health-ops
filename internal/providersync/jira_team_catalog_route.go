@@ -321,7 +321,8 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		}
 	}
 
-	sprints, sprintErr := handler.collectSprints(ctx, client, claim, projectKeys, normalizedAt)
+	sprints, targets, sprintErr := handler.collectSprints(ctx, client, claim, projectKeys, normalizedAt)
+	applyJiraProjectTargets(ctx, ref.OrgID, rows.Projects, targets)
 	if sprintErr != nil {
 		if ref.Strict {
 			return JiraTeamCatalogBatch{}, sprintErr
@@ -474,25 +475,33 @@ func jiraTeamCatalogSearchProjects(
 // handling of that returned error; this function itself never distinguishes.
 func (handler JiraTeamCatalogRouteHandler) collectSprints(
 	ctx context.Context, client *providerfoundation.HTTPClient, claim Claim, projectKeys []string, normalizedAt time.Time,
-) ([]jiraSprintRow, error) {
+) ([]jiraSprintRow, map[string]jiraProjectTarget, error) {
 	sprints := make([]jiraSprintRow, 0)
+	// targets holds the target date of each project whose body was read, even
+	// when a later step of the walk fails: the failure loses the sprints, not
+	// the answers already read.
+	targets := make(map[string]jiraProjectTarget, len(projectKeys))
 	for _, key := range projectKeys {
 		var detail jiraTeamCatalogProjectDetailPayload
 		detailPath := "/rest/api/3/project/" + url.PathEscape(key)
 		if err := jiraFetchObject(ctx, client, http.MethodGet, detailPath, nil, &detail); err != nil {
-			return nil, err
+			return nil, targets, err
+		}
+		if detail.Versions != nil {
+			date, facts := pickProjectTarget(projectTargetKindVersion, jiraProjectTargetSource, normalizedAt, jiraProjectTargetCandidates(detail.Versions))
+			targets[key] = jiraProjectTarget{Date: date, Facts: facts, Versions: len(detail.Versions)}
 		}
 		projectType := strings.ToLower(strings.TrimSpace(detail.ProjectTypeKey))
 		if jiraTeamCatalogNoBoardProjectTypes[projectType] {
 			continue
 		}
 		if !jiraTeamCatalogBoardCapableProjectTypes[projectType] {
-			return nil, fmt.Errorf("%w: unrecognized jira project type %q for project_key=%q",
+			return nil, targets, fmt.Errorf("%w: unrecognized jira project type %q for project_key=%q",
 				providerfoundation.ErrNormalizationInvalid, detail.ProjectTypeKey, key)
 		}
 		boards, err := handler.iterBoards(ctx, client, key)
 		if err != nil {
-			return nil, err
+			return nil, targets, err
 		}
 		for _, board := range boards {
 			boardID := strings.TrimSpace(board.ID.String())
@@ -501,12 +510,12 @@ func (handler JiraTeamCatalogRouteHandler) collectSprints(
 			}
 			boardSprints, skipDetail, err := handler.iterBoardSprints(ctx, client, boardID)
 			if err != nil {
-				return nil, err
+				return nil, targets, err
 			}
 			for _, raw := range boardSprints {
 				var payload map[string]any
 				if err := decodeJiraJSON(raw, &payload); err != nil {
-					return nil, providerfoundation.ErrNormalizationInvalid
+					return nil, targets, providerfoundation.ErrNormalizationInvalid
 				}
 				sprint, sprintErr := normalizeJiraSprint(claim, payload, normalizedAt)
 				if sprintErr != nil {
@@ -520,7 +529,44 @@ func (handler JiraTeamCatalogRouteHandler) collectSprints(
 			}
 		}
 	}
-	return sprints, nil
+	return sprints, targets, nil
+}
+
+// jiraProjectTarget is the answer of one project body about its target date:
+// Date is nil when no open version states a date.
+type jiraProjectTarget struct {
+	Date     *time.Time
+	Facts    projectTargetFacts
+	Versions int
+}
+
+// applyJiraProjectTargets states the target of every live project whose body
+// this run read. A project whose body was not read stays unread, so the write
+// keeps the values the key already holds.
+func applyJiraProjectTargets(ctx context.Context, orgID string, projects []jiraTeamCatalogProjectRow, targets map[string]jiraProjectTarget) {
+	withTarget, noneDated, unread, versions := 0, 0, 0, 0
+	for index := range projects {
+		if projects[index].ProjectKey == nil {
+			unread++
+			continue
+		}
+		target, read := targets[*projects[index].ProjectKey]
+		if !read {
+			unread++
+			continue
+		}
+		projects[index].TargetDate = target.Date
+		projects[index].projectTargetFacts = target.Facts
+		versions += target.Versions
+		if target.Date != nil {
+			withTarget++
+		} else {
+			noneDated++
+		}
+	}
+	slog.Default().DebugContext(ctx, "jira_team_catalog_project_targets",
+		"org_id", orgID, "projects", len(projects), "with_target", withTarget,
+		"none_dated", noneDated, "unread", unread, "versions", versions)
 }
 
 func (handler JiraTeamCatalogRouteHandler) iterBoards(

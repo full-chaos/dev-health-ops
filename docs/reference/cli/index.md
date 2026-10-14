@@ -1543,6 +1543,82 @@ JOIN remaining_metric_partitions partition ON partition.run_id = run.id
 WHERE run.org_id = '<org>' AND run.family = '<family>' AND run.generation = '<that day's printed generation>';
 ```
 
+##### `metrics remaining start --recompute` (CHAOS-9674)
+
+`start` refuses a day that a succeeded partition already covers
+(`"already_covered"`). After a **basis change** (a metric rule changed, for
+example the change failure basis of CHAOS-9621) the covered days hold the old
+basis and must be rewritten. `--recompute` is the explicit, operator-only path
+for that. Preview first, then write:
+
+```bash
+dho workers metrics remaining start --recompute --dry-run --basis cfr-125 \
+  --family dora --org <org-uuid> --day 2026-09-01 --to 2026-09-30
+
+dho workers metrics remaining start --recompute --basis cfr-125 \
+  --family dora --org <org-uuid> --day 2026-09-01 --to 2026-09-30 \
+  --review-evidence "CHAOS-9621: canceled leaves deployment frequency, lead time and deployment failure rate" \
+  --reason <code> --correlation-id <id>
+```
+
+- `--basis` (required) names the basis change: 1 to 40 of `a-z 0-9 . _ -`. The
+  run generation is `manual-recompute:<basis>:<family>:<org>` and the day is the
+  run's scope key, so **one basis recomputes a day once**, whatever window each
+  call names. A second run is a no-op (`"already_recomputed"`). A new basis
+  change takes a new label.
+- `--day` and `--to` are both required (no open-ended window). Same limits as
+  `start`: at most 31 days, and every day strictly before today (UTC).
+- `--dry-run` writes nothing (no run, no audit row; `--reason`,
+  `--correlation-id` and `--review-evidence` are not required) and prints the
+  outcome each day would reach (`"would_start"` in place of `"started"`).
+- Audited as the `start` action (the audit action set is a database
+  constraint): tell a recompute from a start by its `--reason` code, its
+  correlation id and the `"recompute": true` field of the printed result.
+- Family `dora` only. Its automatic triggers (post-sync, fixed schedule) take
+  the same `(org, day)` advisory lock and see a covered closed day as covered,
+  so a recompute cannot race them into a second run. `complexity` and
+  `release_impact` have no such cross-trigger lock and dedup on a post-sync
+  run, so `--recompute` refuses them (`invalid_request`).
+
+Per-day `status`:
+
+| status | meaning | what to do |
+| --- | --- | --- |
+| `started` | A run for the day was inserted and published. | Wait for the worker, then run the `readback_hint`. |
+| `already_ran` | This basis already started the day; the run is pending or running. | Wait. |
+| `already_recomputed` | This basis already recomputed the day. Nothing written. | None. |
+| `not_covered` | **Not eligible.** No succeeded run with output covers the day, so there is nothing to replace. | Run `start` without `--recompute` for the day. `metrics partition-recompute` also only redrives days that have a succeeded scheduled fan-out run. |
+| `in_progress` | An automatic run whose window holds the day is pending or running. Nothing written. | Run again after it finishes (or `metrics remaining redrive`). |
+| `exhausted` | Every generation of this basis for the day failed or was canceled. Exit code is nonzero. | Read the runs, fix the cause. |
+| `error` | Store or publisher failure for the day. Exit code is nonzero. | Read the error. |
+
+Concurrency with automatic runs: it takes the same `(org, day)` advisory lock
+as `start` and the dora automatic path, refuses a day that a pending or running
+automatic run's window already holds (`in_progress`), and the partition itself
+runs through the usual claim and lease of the remaining worker. **Named limit:**
+an automatic post-sync run that is *anchored on a later day* with
+`backfill_days > 1` and starts after the recompute run was inserted locks its
+own anchor day and does not see the pending recompute, so both runs compute the
+overlapping day. Both append the same values with their own `computed_at` and
+readers take the newest, so the served number is the same; it is a duplicate
+computation, not a wrong value. Do not run it while a wide post-sync catch-up of
+the window is expected.
+
+**Where to run it:** from a worker pod that holds the coordinator DSN
+(`go-scheduler` or `go-reconciler` on prod), **not** `go-heavy`. Like every
+`dho workers` verb it needs `POSTGRES_URI`, `WORKER_DATABASE_URI` and
+`COORDINATOR_DATABASE_URI` in the process environment (`configuration_error`
+otherwise); `go-heavy` does not carry the coordinator DSN. It also needs the
+domain pool and the River registry (`operator_backend_unavailable` otherwise;
+`--dry-run` needs the domain pool only). The `worker-operator` operator CLI of
+`deploy/go-workers/deployment.json` declares all three DSNs too.
+
+The rewrite appends: `dora_metrics_daily` keeps every
+generation and readers take the newest `computed_at` per key, so the old rows
+stay in the table and stop being read. The readback hint prints
+`count()` and `max(computed_at)` per day: after the worker finished,
+`max(computed_at)` is newer than before.
+
 ### `dho workers routes`
 
 Inspect or control one fixed sync-dispatch transport route through the

@@ -194,6 +194,13 @@ func shareNoun(measure string) string {
 	return "work"
 }
 
+func capitalizeFirst(text string) string {
+	if text == "" {
+		return text
+	}
+	return strings.ToUpper(text[:1]) + text[1:]
+}
+
 func totalKeyOf(measure string) string {
 	if measure == MeasureChurnLOC {
 		return "total_changed_lines"
@@ -319,7 +326,7 @@ func llmUnavailableExplanation() InvestmentMixExplanation {
 // invalidLLMOutputExplanation ports explain_investment_mix's fallback
 // InvestmentMixExplanation construction on a parse failure
 // (investment_mix_explain.py:455-495).
-func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, confidenceLevel string, qualityMean, qualityStddev *float64, bandCounts BandMix, qualityDrivers []string) InvestmentMixExplanation {
+func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, confidenceLevel string, qualityMean, qualityStddev *float64, bandCounts BandMix, qualityDrivers []string, noun string) InvestmentMixExplanation {
 	fallbackFindings := make([]InvestmentMixFinding, 0, 2)
 	for _, kv := range topThemes[:min(2, len(topThemes))] {
 		pct := 0.0
@@ -328,7 +335,7 @@ func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, conf
 		}
 		theme := kv.Key
 		fallbackFindings = append(fallbackFindings, InvestmentMixFinding{
-			Finding: "Effort appears concentrated in " + theme + " (~" + formatPercentZeroDecimals(pct) + "% of total).",
+			Finding: capitalizeFirst(noun) + " appears concentrated in " + theme + " (~" + formatPercentZeroDecimals(pct) + "% of total).",
 			Evidence: InvestmentMixFindingEvidence{
 				Theme:               theme,
 				SharePct:            pct,
@@ -338,7 +345,7 @@ func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, conf
 	}
 	status := "invalid_llm_output"
 	return InvestmentMixExplanation{
-		Summary:     "This mix suggests effort leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.",
+		Summary:     "This mix suggests " + noun + " leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.",
 		TopFindings: fallbackFindings,
 		Confidence: InvestmentMixConfidence{
 			Level:         confidenceLevel,
@@ -760,7 +767,7 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 
 	if parseResult.Output == nil {
 		logRejectedExplainOutput(ctx, parseResult, resolvedProvider, resolvedModel, completion)
-		fallback := invalidLLMOutputExplanation(topThemes, totalEffort, confidenceLevel, qualityMean, qualityStddev, bandCounts, qualityDrivers)
+		fallback := invalidLLMOutputExplanation(topThemes, totalEffort, confidenceLevel, qualityMean, qualityStddev, bandCounts, qualityDrivers, shareNoun(opts.effectiveMeasure()))
 		annotateFindings(&fallback, opts.effectiveMeasure(), themeDistribution, subcategoryDistribution)
 		return fallback, nil
 	}

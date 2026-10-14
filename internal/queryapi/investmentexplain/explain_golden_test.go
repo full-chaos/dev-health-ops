@@ -347,5 +347,7 @@ var goOnlyEvidencePattern = regexp.MustCompile(`, ?"(?:measure|numerator|denomin
 func withoutGoOnlyEvidence(body string) string {
 	body = goOnlyEvidencePattern.ReplaceAllString(body, "")
 	// The Python reference words the share as "of effort"; the Go answer names the measure it reads.
-	return strings.ReplaceAll(body, "% of work)", "% of effort)")
+	body = strings.ReplaceAll(body, "% of work)", "% of effort)")
+	body = strings.ReplaceAll(body, "Work appears concentrated", "Effort appears concentrated")
+	return strings.ReplaceAll(body, "suggests work leans", "suggests effort leans")
 }

@@ -353,3 +353,39 @@ func TestACanceledDeploymentAloneStoresNoRow(t *testing.T) {
 		t.Fatalf("a canceled deployment alone counted %+v, want no row", got)
 	}
 }
+
+// CHAOS-9621: a window that sums rows written before the status columns existed
+// (both read 0 until the day is recomputed) and rows written after. K comes
+// from the new rows only, and the coverage K / D shows the gap.
+func TestAMixedWindowOfOldAndRecomputedRows(t *testing.T) {
+	oldRow := Counts{Deployments: 3}                                  // written before migration 125
+	newRow := Counts{Deployments: 3, StatusKnown: 3, FailedStatus: 1} // recomputed
+	newWithIncident := Counts{Deployments: 3, StatusKnown: 3, FailedStatus: 1, FailedHeuristic: 1, IncidentsDirect: 1}
+	oldWithIncident := Counts{Deployments: 3, FailedHeuristic: 3, IncidentsDirect: 1} // links only
+
+	for _, tc := range []struct {
+		name     string
+		view     View
+		value    *float64
+		basis    Basis
+		reason   UnknownReason
+		d, k     uint64
+		coverage *float64
+	}{
+		{"old rows only: nothing says how the deployments went", View{Counts: oldRow.Add(oldRow), StoredRows: 2}, nil, BasisNone, ReasonDeploymentsWithoutOutcome, 6, 0, ptr(0)},
+		{"old and new rows, no incident: the rate stands on the new rows (1 of K = 3)", View{Counts: oldRow.Add(newRow), StoredRows: 2}, ptr(1.0 / 3.0), BasisStatus, NotUnknown, 6, 3, ptr(0.5)},
+		{"old links and new statuses with an incident: the base is every deployment", View{Counts: oldWithIncident.Add(newWithIncident), StoredRows: 2}, ptr(5.0 / 6.0), BasisBoth, NotUnknown, 6, 3, ptr(0.5)},
+		{"old rows with an incident only: as before the change", View{Counts: oldWithIncident, StoredRows: 1}, ptr(1), BasisIncident, NotUnknown, 3, 0, ptr(0)},
+	} {
+		got := Evaluate(tc.view)
+		if (got.Value == nil) != (tc.value == nil) || (got.Value != nil && (*got.Value-*tc.value > 1e-12 || *tc.value-*got.Value > 1e-12)) {
+			t.Errorf("%s: value %v, want %v", tc.name, deref(got.Value), deref(tc.value))
+		}
+		if got.Basis != tc.basis || got.UnknownReason != tc.reason || got.Deployments != tc.d || got.StatusKnown != tc.k {
+			t.Errorf("%s: basis %q reason %q D %d K %d; want %q %q %d %d", tc.name, got.Basis, got.UnknownReason, got.Deployments, got.StatusKnown, tc.basis, tc.reason, tc.d, tc.k)
+		}
+		if (got.Coverage == nil) != (tc.coverage == nil) || (got.Coverage != nil && *got.Coverage != *tc.coverage) {
+			t.Errorf("%s: coverage %v, want %v", tc.name, deref(got.Coverage), deref(tc.coverage))
+		}
+	}
+}

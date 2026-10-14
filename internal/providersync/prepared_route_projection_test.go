@@ -64,7 +64,7 @@ var preparedRouteRowTypes = map[string][]any{
 // route builds that no sink writes or reads. A change here is a change to what
 // a prepared route persists.
 var preparedRouteDroppedKeys = map[string][]string{
-	"work_items": {"description", "priority_raw", "service_class"},
+	"work_items": {"priority_raw", "service_class"},
 }
 
 // preparedRouteProviderRowTypes are the row types of a provider whose sink
@@ -331,11 +331,12 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 
 func TestProjectionFollowsTheInsertColumnList(t *testing.T) {
 	keys, ok := preparedRouteColumns("github", "work_items")
-	if !ok || keys["description"] || !keys["title"] || !keys["org_id"] {
+	if !ok || !keys["description"] || !keys["due_at"] || !keys["title"] || !keys["org_id"] ||
+		keys["priority_raw"] || keys["service_class"] {
 		t.Fatalf("work_items keys=%v", keys)
 	}
-	widened := strings.Replace(preparedRouteInsertStatements["work_items"], "source_id)", "source_id, description)", 1)
-	if keys := projectionKeys(widened); !keys["description"] {
+	widened := strings.Replace(preparedRouteInsertStatements["work_items"], "source_id)", "source_id, priority_raw)", 1)
+	if keys := projectionKeys(widened); !keys["priority_raw"] {
 		t.Fatal("a column added to the INSERT is not kept by the projection")
 	}
 }

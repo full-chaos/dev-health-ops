@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
@@ -201,9 +202,37 @@ func preparedRouteColumns(provider, destination string) (map[string]bool, bool) 
 // preparedRouteProjectionExtraColumns are columns a destination's sink writes
 // beyond the statement above: the work-item sinks append due_at for the
 // providers that state a due date (workItemDueAtStated), so a prepared route
-// must keep it or the sink would clear every stored due date.
+// must keep it or the sink would clear every stored due date; they also
+// append description, which a prepared route must keep or no provider
+// description ever reaches the stored row.
 var preparedRouteProjectionExtraColumns = map[string][]string{
-	"work_items": {"due_at"},
+	"work_items": {"description", "due_at"},
+}
+
+// preparedRouteValueCuts are the columns whose value the projection cuts to
+// the bound its sink applies, so the effect ledger, the readback and the
+// stored snapshot hold the value the sink writes and not the provider's full
+// text. A cut is idempotent: a value inside its bound is kept byte for byte.
+var preparedRouteValueCuts = map[string]map[string]func(json.RawMessage) (json.RawMessage, error){
+	"work_items": {"description": cutWorkItemDescription},
+}
+
+// cutWorkItemDescription cuts a description to workItemDescriptionMaxRunes on
+// a rune boundary, as boundedWorkItemDescription does at the sink. A null, an
+// empty text and a text inside the bound are returned unchanged.
+func cutWorkItemDescription(raw json.RawMessage) (json.RawMessage, error) {
+	var text *string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return nil, ErrEffectRecoveryUnsafe
+	}
+	if text == nil || utf8.RuneCountInString(*text) <= workItemDescriptionMaxRunes {
+		return raw, nil
+	}
+	cut, err := json.Marshal(boundedWorkItemDescription(text))
+	if err != nil {
+		return nil, ErrEffectRecoveryUnsafe
+	}
+	return cut, nil
 }
 
 // projectionKeys returns the column names of an INSERT statement.
@@ -230,6 +259,12 @@ func projectedRow(destination string, columns map[string]bool, row json.RawMessa
 	}
 	for key, value := range object {
 		if columns[key] {
+			if cut, ok := preparedRouteValueCuts[destination][key]; ok {
+				var err error
+				if value, err = cut(value); err != nil {
+					return nil, err
+				}
+			}
 			projected[key] = value
 			continue
 		}
@@ -271,6 +306,7 @@ func projectPreparedRouteEffects(provider string, effects []EffectBatch) ([]Effe
 			}
 			rows = append(rows, encoded)
 		}
+		logProjectedDescriptions(provider, effect, rows)
 		rebuilt, err := BuildEffectBatch(effect.Destination, effect.Recovery, rows)
 		if err != nil {
 			return nil, err
@@ -279,6 +315,35 @@ func projectPreparedRouteEffects(provider string, effects []EffectBatch) ([]Effe
 		projected = append(projected, rebuilt)
 	}
 	return projected, nil
+}
+
+// logProjectedDescriptions counts, for one work_items effect, the rows that
+// state a description and the rows whose description the projection cut;
+// counts only, never the text.
+func logProjectedDescriptions(provider string, effect EffectBatch, projected []json.RawMessage) {
+	if _, cuts := preparedRouteValueCuts[effect.Destination]["description"]; !cuts {
+		return
+	}
+	var stated, cut int
+	for index, row := range projected {
+		var after, before struct {
+			Description *string `json:"description"`
+		}
+		if json.Unmarshal(row, &after) != nil || json.Unmarshal(effect.Rows[index], &before) != nil {
+			continue
+		}
+		if after.Description != nil && *after.Description != "" {
+			stated++
+		}
+		if before.Description != nil && after.Description != nil && len(*before.Description) != len(*after.Description) {
+			cut++
+		}
+	}
+	slog.Debug(
+		"provider_sync.prepared_projection_descriptions",
+		"provider", provider, "destination", effect.Destination,
+		"rows", len(projected), "with_description", stated, "cut", cut,
+	)
 }
 
 // preparedRouteRowsAreProjected reports whether every row of an effect whose
@@ -300,6 +365,11 @@ func preparedRouteRowsAreProjected(provider string, effects []EffectBatch) bool 
 			projected, err := projectedRow(effect.Destination, columns, row)
 			if err != nil || len(projected) != len(object) {
 				return false
+			}
+			for key, value := range projected {
+				if !bytes.Equal(value, object[key]) {
+					return false
+				}
 			}
 		}
 	}

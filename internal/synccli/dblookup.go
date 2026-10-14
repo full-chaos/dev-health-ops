@@ -81,7 +81,6 @@ const (
 	reasonDecryptFailed          = "credential_decrypt_failed"
 	reasonPayloadNotJSON         = "credential_payload_not_json"
 	reasonPayloadNotObject       = "credential_payload_not_object"
-	reasonFieldNotAccepted       = "credential_field_not_accepted"
 	reasonFieldNotText           = "credential_field_not_text"
 	reasonPrivateKeyPathUnread   = "credential_private_key_path_unreadable"
 	reasonCredentialShapeInvalid = "credential_shape_invalid"

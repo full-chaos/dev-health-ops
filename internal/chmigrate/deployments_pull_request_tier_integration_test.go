@@ -15,7 +15,7 @@ import (
 
 // CHAOS-9610: migration 126 adds deployments.pull_request_tier and
 // rollback/126_*.down.sql drops it. The test rehearses both on the pre-126
-// shape: a row written before the upgrade reads '' with its number intact, a
+// shape: a row written before the upgrade reads ” with its number intact, a
 // tier written after it survives, the downgrade drops the column and keeps the
 // number, and the upgrade runs again (and twice).
 func TestDeploymentsPullRequestTierMigrationUpgradesAndDowngrades(t *testing.T) {

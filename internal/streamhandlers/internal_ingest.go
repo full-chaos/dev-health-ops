@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -137,6 +138,7 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 		return sendBatch(reviewBatch)
 	case "deployments":
 		rows := make([]storedversion.Row, 0, len(envelope.Items))
+		pushed := 0
 		for _, item := range envelope.Items {
 			if stringValue(item, "deployment_id") == "" || stringValue(item, "status") == "" || stringValue(item, "environment") == "" {
 				return &streamrunner.PermanentError{Reason: "invalid_deployment"}
@@ -149,7 +151,11 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 				Values: []any{envelope.OrgID, repoID, stringValue(item, "deployment_id"), nullable(item, "status"), nullable(item, "environment"), nullableTime(started), nullableTime(finished), nullableTime(deployed), nil, nullableUint(item, "pull_request_number"), internalPullRequestTier(item), releaseRef, confidence, now},
 				Carry:  internalCarry(internalDeploymentContract, item),
 			})
+			if internalPullRequestTier(item) != "" {
+				pushed++
+			}
 		}
+		slog.Debug("streamhandlers.internal_ingest.deployment_pull_request_tiers", "org_id", envelope.OrgID, "rows", len(rows), "pushed", pushed, "no_link", len(rows)-pushed)
 		if err := applyContract(ctx, h.conn, internalDeploymentContract, envelope.OrgID, internalDeploymentInsert, rows); err != nil {
 			return err
 		}

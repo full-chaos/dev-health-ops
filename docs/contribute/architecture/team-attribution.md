@@ -1389,9 +1389,9 @@ project (section 0.1): a native team key gives one team.
   carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
   passes the primary team only.
 - **The team review quadrant reads repository ownership (CHAOS-9339).** At the team grain the quadrant's
-  `user_metrics_daily` metrics (review load, review latency, and churn, which the churn/throughput pair forces to the
-  repository grain) group a row by the team that owns its repository now (`teamscope.OwnerShares`, active teams only),
-  never by the row's stored `team_id`: that id is the PERSON's membership team. A team's review load and review latency
+  `user_metrics_daily` metrics (review load, review latency, and churn, which the churn/throughput pair reads at the
+  repository grain unless `scope_type=service`) group a row by the team that owns its repository now
+  (`teamscope.OwnerShares`, active teams only), never by the row's stored `team_id`: that id is the PERSON's membership team. A team's review load and review latency
   are the reviews in the repositories the team owns, not the reviews by its members. A repository with no owner is no
   team's point. Selected teams narrow the owners, after the shares are computed over every owner. Asserted on real
   ClickHouse by `TestTheTeamReviewQuadrantGroupsByTheRepositoryOwner`.
@@ -1409,6 +1409,11 @@ project (section 0.1): a native team key gives one team.
     invented and the item's teams split it equally. An item of one team weighs 1. Throughput is the sum of the item
     weights over the team's distinct items; cycle time is the weighted mean over the items that have one. Asserted by
     `TestTheCycleThroughputTeamPointsSplitAnItemByOwnerShareAndConserveTheOrgTotal`.
+  - Churn x throughput at the team grain (`scope_type=service`, the one route that serves a team-keyed churn, read by
+    the Landscape Teams tab; the org and team scopes force the repository grain, CHAOS-2079): churn is additive, a
+    team's churn is the sum over its repositories of the repository's churn x the owner's share (CHAOS-9693).
+    Throughput on that route stays the rollup's team. Asserted by
+    `TestTheTeamChurnQuadrantSumsEachRepositoryTimesOwnerShareAndConservesTheOrgChurn`.
   - Known limit: owners whose team is inactive hold a share that no point shows, so the organization's units in a
     repository with an inactive owner are partly in no point.
 - **The person quadrant reads only that person's own rows (CHAOS-9343).** At the person grain the quadrant resolves the

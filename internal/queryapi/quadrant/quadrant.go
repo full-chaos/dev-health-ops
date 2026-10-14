@@ -169,9 +169,12 @@ const teamLabelExpr = "ifNull(nullIf(m.team_name, ''), m.team_id)"
 // ownership only. A team's review load and review latency are therefore the
 // reviews in the repositories the team owns, not the reviews by its members.
 var TeamMetrics = map[string]MetricSpec{
+	// churn is additive: a team's churn is the sum over its repositories of the
+	// repository's churn x the owner's share (D5998, CHAOS-9693), so the team
+	// points conserve the organization's churn.
 	"churn": {
 		Metric: "churn", Label: "Churn", Unit: "loc",
-		Table: "user_metrics_daily AS m", ValueExpr: "sum(m.loc_touched)",
+		Table: "user_metrics_daily AS m", ValueExpr: "sum(toFloat64(m.loc_touched) * o.owner_share)",
 		EntityExpr: ownerTeamIDExpr, LabelExpr: ownerTeamLabelExpr,
 		Transform: identity, OwnerTeam: true,
 	},

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import re
@@ -666,11 +667,14 @@ def test_the_plan_checker_fails_each_planted_defect(
         for i, line in enumerate(lines)
         if line.startswith("  SHARD ")
     ]
+    shard_sizes = collections.Counter(int(m.group("shard")) for _, m in rows if m)
     movable = max(
         (
             (int(m.group("weight")), i, m)
             for i, m in rows
-            if m is not None and m.group("package") not in SPLIT_PACKAGES
+            if m is not None
+            and m.group("package") not in SPLIT_PACKAGES
+            and shard_sizes[int(m.group("shard"))] > 1
         ),
         key=lambda item: item[0],
     )

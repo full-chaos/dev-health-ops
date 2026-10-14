@@ -239,6 +239,7 @@ func resolveAIImpactRepoToTeam(
 	repoIDs []uuid.UUID, repoNamesByID map[string]string,
 	patternResolver numerical.RepoTeamResolver,
 ) (map[string][]string, error) {
+	// CHAOS-9410/CHAOS-9601, D5994: this family stores its counters as unsigned integers, so it still takes the main owner(s) only, each whole; lesser owners at their own share follow with the Float64 widening (CHAOS-9601).
 	ownershipMap, err := teamownership.AuthoritativeOwnersByRepo(ctx, conn, organizationID, asOf)
 	if err != nil {
 		slog.Error("ai_impact team resolution: authoritative repo ownership query failed",

@@ -235,7 +235,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) openProviderAccessOwnership(
 SELECT team_id, project_id, project_key, toString(source), is_primary, specificity, priority, valid_from, valid_to
 FROM team_project_ownership FINAL
 WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
-  AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`,
+  AND (valid_to IS NULL OR (valid_to > now64(3, 'UTC') AND valid_to > valid_from))`,
 		orgID, gitlabTeamCatalogProvider, gitlabTeamCatalogSource, teamIDs)
 	if err != nil {
 		return nil, err
@@ -269,7 +269,7 @@ WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
 // returns the rows to write and the plan.
 const gitlabOwnershipTeamsQuery = `SELECT DISTINCT team_id FROM team_project_ownership FINAL
 WHERE org_id = ? AND provider = ? AND source = ? AND startsWith(team_id, ?)
-  AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`
+  AND (valid_to IS NULL OR (valid_to > now64(3, 'UTC') AND valid_to > valid_from))`
 
 // OpenOwnershipTeamsNotListed reads the teams under the run's root group
 // (team ids that start with teamPrefix) that hold an open provider_access row

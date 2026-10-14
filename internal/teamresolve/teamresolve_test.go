@@ -11,6 +11,8 @@ import (
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // fakePatternResolver is a minimal numerical.RepoTeamResolver for testing
@@ -187,4 +189,34 @@ func TestResolveFromOwnershipMapKeepsEveryMainOwner(t *testing.T) {
 	if want := []string{"team-c"}; !slices.Equal(got[single.String()], want) {
 		t.Errorf("single-owner repo: got %q, want %q", got[single.String()], want)
 	}
+}
+
+// CHAOS-9410, D5988: the owner-shares resolution keeps the main owner and every
+// lesser owner of a repository with their shares; the pattern fallback gives one
+// team holding the repository whole; a repo outside the catalog is never guessed.
+func TestResolveSharesFromOwnershipMapKeepsEveryOwnerAtItsShare(t *testing.T) {
+	owned, patterned, stale := uuid.New(), uuid.New(), uuid.New()
+	names := map[string]string{owned.String(): "acme/owned", patterned.String(): "acme/patterned"}
+	ownership := map[string][]teamownership.OwnerShare{
+		owned.String(): {{TeamID: "main", Main: true, Share: 0.7}, {TeamID: "lesser", Share: 0.3}},
+		stale.String(): {{TeamID: "main", Main: true, Share: 1}},
+	}
+	got := ResolveSharesFromOwnershipMap(ownership, []uuid.UUID{owned, patterned, stale}, names, namePatternResolver{"acme/patterned": "pattern-team"})
+
+	if owners := got[owned.String()]; len(owners) != 2 || owners[0] != (teamownership.OwnerShare{TeamID: "main", Main: true, Share: 0.7}) ||
+		owners[1] != (teamownership.OwnerShare{TeamID: "lesser", Share: 0.3}) {
+		t.Errorf("owned repo owners %v, want main at 0.7 and lesser at 0.3", owners)
+	}
+	if owners := got[patterned.String()]; len(owners) != 1 || owners[0] != (teamownership.OwnerShare{TeamID: "pattern-team", Main: true, Share: 1}) {
+		t.Errorf("patterned repo owners %v, want pattern-team whole", owners)
+	}
+	if _, ok := got[stale.String()]; ok {
+		t.Errorf("a repo the catalog does not carry resolved to %v", got[stale.String()])
+	}
+}
+
+type namePatternResolver map[string]string
+
+func (resolver namePatternResolver) ResolveRepo(name string) (string, string) {
+	return resolver[name], ""
 }

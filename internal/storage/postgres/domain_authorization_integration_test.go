@@ -57,7 +57,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.integrations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.integration_sources (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.integration_datasets (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.integration_credentials (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.integration_credentials (id bigint PRIMARY KEY, is_active boolean, updated_at timestamptz)",
 		"CREATE TABLE public.provider_oauth_credentials (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.github_app_installations (id bigint PRIMARY KEY, installation_id bigint, account_login text, account_type text, org_id text, suspended_at timestamptz, created_at timestamptz, updated_at timestamptz)",
 		"CREATE TABLE public.webhook_sync_requests (delivery_id bigint PRIMARY KEY, org_id text, sync_config_id uuid, mode text, source_ids text[], scheduled_for timestamptz, created_at timestamptz, attempts int, next_attempt_at timestamptz, last_error text, refused_at timestamptz, refused_reason text, minted_at timestamptz, occurrence_id text)",
@@ -199,6 +199,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_reference_discoveries TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.sync_run_post_dispatches, public.sync_compute_checkpoints TO " + authorizedDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + authorizedDomainRole,
+		"GRANT UPDATE (is_active, updated_at) ON TABLE public.integration_credentials TO " + authorizedDomainRole,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

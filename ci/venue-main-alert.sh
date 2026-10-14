@@ -7,7 +7,7 @@
 # for two days because no PR check carries it. The workflow venue-oracles-main-alert.yml
 # calls this script once per completed main-push run.
 #
-# RED IS THE RUN'S OWN CONCLUSION. failure, timed_out or cancelled opens the issue, or
+# RED IS THE RUN'S OWN CONCLUSION. failure, startup_failure, timed_out or cancelled opens the issue, or
 # comments on the open one (once per run id). No step of the run is inspected, so no kind
 # of failed run can pass unseen.
 #
@@ -55,7 +55,7 @@ write() {
 }
 
 case "${conclusion}" in
-  failure|timed_out|cancelled|success) ;;
+  failure|startup_failure|timed_out|cancelled|success) ;;
   *) log "run ${run_id} concluded '${conclusion}'; nothing to do"; exit 0 ;;
 esac
 

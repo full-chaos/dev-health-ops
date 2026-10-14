@@ -141,6 +141,7 @@ def test_the_conclusion_alone_decides_red(tmp_path):
         ("failure", SKIPPED),
         ("failure", PARTIAL),
         ("timed_out", SKIPPED),
+        ("startup_failure", SKIPPED),
         ("cancelled", SKIPPED),
     ):
         proc, writes = _run(tmp_path, [(300, conclusion, jobs)], 300)

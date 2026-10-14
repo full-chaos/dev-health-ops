@@ -604,7 +604,8 @@ func (writer *Writer) WriteChangeFailure(ctx context.Context, rows []ChangeFailu
 	// census of internal/storedversion can read which table this insert names.
 	batch, err := writer.conn.PrepareBatch(ctx, `INSERT INTO repo_change_failure_daily (
 		org_id, repo_id, day, deployments_count, failed_deployments_native,
-		failed_deployments_heuristic, incidents_direct, incidents_via_deployment, computed_at
+		failed_deployments_heuristic, incidents_direct, incidents_via_deployment,
+		failed_deployments_status, deployments_status_known, computed_at
 	)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare %s batch: %w", changefailure.Table, err)
@@ -613,6 +614,7 @@ func (writer *Writer) WriteChangeFailure(ctx context.Context, rows []ChangeFailu
 		values := []uint64{
 			row.Counts.Deployments, row.Counts.FailedNative, row.Counts.FailedHeuristic,
 			row.Counts.IncidentsDirect, row.Counts.IncidentsViaDeployment,
+			row.Counts.FailedStatus, row.Counts.StatusKnown,
 		}
 		narrowed := make([]any, 0, len(values))
 		for index, value := range values {

@@ -1,0 +1,34 @@
+-- A deployment's own status counts toward change failure rate (CHAOS-9621).
+--
+-- Until now a deployment failed only through a deployment-incident link
+-- (migration 112), so a repository hosted on a provider with no incident
+-- source always read "unknown", though it had failed deployments. Two count
+-- columns carry the deployment's own status:
+--
+--   failed_deployments_status  deployments whose own status is failed
+--                              (deploymentstatus.Classify: failure, failed,
+--                              error) that NO incident link names. A failed
+--                              deployment that a link also names counts once,
+--                              as native or heuristic. Failed in total =
+--                              native + heuristic + status.
+--   deployments_status_known   deployments with a final status (succeeded or
+--                              failed). This is the status evidence: with no
+--                              incident tied to the view and none of these,
+--                              the rate stays unknown. With some, it is
+--                              measured and a 0 is a measured 0.
+--
+-- deployments_count no longer counts a cancelled deployment: it never reached
+-- its environment, so it is neither a deployment nor a failure.
+--
+-- The evidence basis of a measured rate is derived from the sums, never
+-- stored: "incident" when incidents tie to the view and no deployment has a
+-- final status, "status" when none ties and some deployment has one, "both"
+-- otherwise.
+--
+-- This migration only ADDS. Old pods read the columns they know, so an old
+-- reader on a new row keeps the link-only numerator and the old unknown rule:
+-- never a wrong number, only the old answer. A row written before this
+-- migration reads 0 in both new columns and keeps its old meaning until the
+-- day is recomputed (metrics finalize-redrive for the days wanted).
+ALTER TABLE repo_change_failure_daily ADD COLUMN IF NOT EXISTS failed_deployments_status UInt32 DEFAULT 0;
+ALTER TABLE repo_change_failure_daily ADD COLUMN IF NOT EXISTS deployments_status_known UInt32 DEFAULT 0;

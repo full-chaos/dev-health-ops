@@ -79,26 +79,46 @@ immediately preceding window of equal duration when comparison is requested.
 
 ## Change failure rate
 
-Change failure rate is the share of deployments that are linked to an
-incident. It answers "how often does a change we ship cause a failure?", so it
-needs incident evidence: without it, the platform cannot tell a healthy
-repository from one whose incidents are not recorded.
+Change failure rate is the share of deployments that failed: a deployment
+that an incident names, or whose own status is failed. It answers "how often
+does a change we ship cause a failure?", so it needs evidence: an incident that
+ties to the view, or a deployment with a final status. Without either, the
+platform cannot tell a healthy repository from one whose outcomes are not
+recorded.
 
 - **Deployments.** The deployments of the view's repositories whose day
   (`deployed_at`, else `finished_at`, else `started_at`, else `last_synced`)
-  is in the view's window.
+  is in the view's window, except a cancelled one: it never reached its
+  environment, so it is not a deployment.
+- **Deployment status.** One meaning for every provider and every delivery
+  metric (`internal/jobs/metrics/deploymentstatus`): `failure`, `failed` and
+  `error` are failed (GitHub says `failure`, GitLab `failed`); `success` is
+  succeeded; `canceled` and `cancelled` are cancelled and counted nowhere;
+  every other value (in progress, queued, pending, inactive, blocked, an unknown
+  string, none) is a deployment that is neither failed nor an outcome yet.
+  Deployment failure rate and the deploy metrics of a day use the same meaning.
 - **Failed deployments.** The deployments among them that at least one
-  deployment-incident link names. A deployment with a native link counts as
+  deployment-incident link names, or whose own status is failed. A failed
+  deployment that an incident also names counts once. A deployment with a native link counts as
   native; a deployment with only heuristic links counts as heuristic. Today
   the daily link producer writes heuristic links only: an incident links to
   every deployment of its repository on the incident's day. The stored counts
   keep the two tiers apart, and `/explain` names the weakest tier behind a
-  measured rate in `link_tier` (`heuristic` or `native`).
+  measured rate in `link_tier` (`heuristic` or `native`); a deployment failed by
+  its own status alone has no link tier.
 - **Incident evidence.** The incidents that started in the window and tie to
   the view's repositories. An incident ties to a repository directly, through
   a service-to-repository mapping. Only when it has no direct tie does it tie
   through the repository of its linked deployment. A deployment id that names
   more than one repository ties nothing.
+- **Status evidence.** The deployments among them with a final status
+  (succeeded or failed). With them the rate is measured even where no incident
+  source exists, and a view whose deployments all succeeded reads a measured
+  zero.
+- **Evidence basis.** A measured rate stands on `incident` (incidents tie to the
+  view, no deployment has a final status), `status` (no incident ties to the
+  view, deployments have final statuses) or `both`. `/explain` serves it in
+  `evidence_basis`. It is derived from the stored sums, never stored.
 - **Subject.** A repository view counts that repository. A team view counts
   the repositories the team owns. An organization view counts every
   repository. The window is the view's time filter; a view without one is all
@@ -108,8 +128,8 @@ repository from one whose incidents are not recorded.
 | --- | --- | --- |
 | No stored counts in the window | none | no state (empty) |
 | Stored counts, no deployment | none: not applicable | `not_applicable_no_deployments` |
-| Deployments, no incident evidence | none: unknown | `unknown_no_incident_evidence` |
-| Deployments and incident evidence | failed deployments / deployments (0 is a measured zero) | `measured` |
+| Deployments, no incident evidence and no deployment with a final status | none: unknown | `unknown_no_incident_evidence` |
+| Deployments, and incident evidence or a deployment with a final status | failed deployments / deployments (0 is a measured zero) | `measured` |
 
 The three states with no value are different answers, so every surface that
 shows the rate also gives the state: `/api/v1/explain` in `rate_state` (beside
@@ -123,8 +143,9 @@ buckets (a day, a week, a repository, the total): a bucket with no measured
 rate has no point.
 
 The daily inputs are stored per repository and day in
-`repo_change_failure_daily` (deployments, failed deployments by tier,
-incidents by tie). A repository and day with no deployment and no incident has
+`repo_change_failure_daily` (deployments, failed deployments by tier, failed
+deployments by status alone, deployments with a final status, incidents by
+tie). A repository and day with no deployment and no incident has
 no row. Readers sum the counts over the view, so the rate is never an average
 of daily rates. `repo_metrics_daily.change_failure_rate_incident` holds the
 one-day value for the repository-day rows of that table, and is empty when the

@@ -21,16 +21,23 @@ func TestRateKeepsNotApplicableUnknownAndMeasuredZeroApart(t *testing.T) {
 		value *float64
 		state State
 		tier  string
+		basis string
 	}{
-		{"nothing", Counts{}, nil, StateNotApplicable, ""},
-		{"incidents without a deployment", Counts{IncidentsDirect: 2}, nil, StateNotApplicable, ""},
-		{"deployments without incident evidence", Counts{Deployments: 4}, nil, StateUnknown, ""},
+		{"nothing", Counts{}, nil, StateNotApplicable, "", ""},
+		{"incidents without a deployment", Counts{IncidentsDirect: 2}, nil, StateNotApplicable, "", ""},
+		{"deployments without incident evidence", Counts{Deployments: 4}, nil, StateUnknown, "", ""},
 		// A failed count without incident evidence still has no value and no tier.
-		{"failed deployments without incident evidence", Counts{Deployments: 4, FailedNative: 1}, nil, StateUnknown, ""},
-		{"deployments with a direct incident, none failed", Counts{Deployments: 4, IncidentsDirect: 1}, ptr(0), StateMeasured, ""},
-		{"deployments with a via-deployment incident", Counts{Deployments: 4, FailedHeuristic: 1, IncidentsViaDeployment: 1}, ptr(0.25), StateMeasured, TierHeuristic},
-		{"native and heuristic both count", Counts{Deployments: 4, FailedNative: 1, FailedHeuristic: 1, IncidentsDirect: 1}, ptr(0.5), StateMeasured, TierHeuristic},
-		{"native only", Counts{Deployments: 4, FailedNative: 1, IncidentsDirect: 1}, ptr(0.25), StateMeasured, TierNative},
+		{"failed deployments without incident evidence", Counts{Deployments: 4, FailedNative: 1}, nil, StateUnknown, "", ""},
+		{"deployments with a direct incident, none failed", Counts{Deployments: 4, IncidentsDirect: 1}, ptr(0), StateMeasured, "", BasisIncident},
+		{"deployments with a via-deployment incident", Counts{Deployments: 4, FailedHeuristic: 1, IncidentsViaDeployment: 1}, ptr(0.25), StateMeasured, TierHeuristic, BasisIncident},
+		{"native and heuristic both count", Counts{Deployments: 4, FailedNative: 1, FailedHeuristic: 1, IncidentsDirect: 1}, ptr(0.5), StateMeasured, TierHeuristic, BasisIncident},
+		{"native only", Counts{Deployments: 4, FailedNative: 1, IncidentsDirect: 1}, ptr(0.25), StateMeasured, TierNative, BasisIncident},
+		// CHAOS-9621: a deployment's own status is evidence.
+		{"statuses only, all succeeded", Counts{Deployments: 4, StatusKnown: 4}, ptr(0), StateMeasured, "", BasisStatus},
+		{"statuses only, one failed", Counts{Deployments: 4, StatusKnown: 3, FailedStatus: 1}, ptr(0.25), StateMeasured, "", BasisStatus},
+		{"statuses only, a failed status needs no link tier", Counts{Deployments: 2, StatusKnown: 2, FailedStatus: 2}, ptr(1), StateMeasured, "", BasisStatus},
+		{"only unfinished statuses stay unknown", Counts{Deployments: 4}, nil, StateUnknown, "", ""},
+		{"incident and status evidence", Counts{Deployments: 4, StatusKnown: 4, FailedNative: 1, FailedStatus: 1, IncidentsDirect: 1}, ptr(0.5), StateMeasured, TierNative, BasisBoth},
 	}
 	for _, tc := range cases {
 		got := Rate(tc.in)
@@ -42,6 +49,9 @@ func TestRateKeepsNotApplicableUnknownAndMeasuredZeroApart(t *testing.T) {
 		}
 		if got.LinkTier != tc.tier {
 			t.Errorf("%s: link tier %q, want %q", tc.name, got.LinkTier, tc.tier)
+		}
+		if got.Basis != tc.basis {
+			t.Errorf("%s: basis %q, want %q", tc.name, got.Basis, tc.basis)
 		}
 	}
 }
@@ -108,7 +118,7 @@ func TestViewScanDestMatchesViewSumsSQL(t *testing.T) {
 	for i := range dest {
 		*(dest[i].(*uint64)) = uint64(i + 1)
 	}
-	if view != (View{Counts: Counts{Deployments: 1, FailedNative: 2, FailedHeuristic: 3, IncidentsDirect: 4, IncidentsViaDeployment: 5}, StoredRows: 6}) {
+	if view != (View{Counts: Counts{Deployments: 1, FailedNative: 2, FailedHeuristic: 3, IncidentsDirect: 4, IncidentsViaDeployment: 5, FailedStatus: 6, StatusKnown: 7}, StoredRows: 8}) {
 		t.Fatalf("scan order = %+v", view)
 	}
 	position := 0
@@ -150,9 +160,9 @@ func TestLowestTierNamesTheWeakestContributingLink(t *testing.T) {
 
 func TestCountDayTiersTiesAndDeploymentScope(t *testing.T) {
 	deployments := []Deployment{
-		{repoA, "d1"}, {repoA, "d2"}, {repoA, "d3"}, {repoA, "d1"}, // d1 twice: counted once
-		{repoB, "b1"},
-		{repoA, ""}, // no id: not a deployment
+		{RepoID: repoA, DeploymentID: "d1"}, {RepoID: repoA, DeploymentID: "d2"}, {RepoID: repoA, DeploymentID: "d3"}, {RepoID: repoA, DeploymentID: "d1"}, // d1 twice: counted once
+		{RepoID: repoB, DeploymentID: "b1"},
+		{RepoID: repoA}, // no id: not a deployment
 	}
 	ties := []IncidentTie{
 		{RepoID: repoA, IncidentID: "i-direct"},
@@ -214,7 +224,7 @@ func TestTableAndCountColumnsNameTheMigratedTable(t *testing.T) {
 	if Table != "repo_change_failure_daily" {
 		t.Fatalf("Table = %q", Table)
 	}
-	want := []string{"deployments_count", "failed_deployments_native", "failed_deployments_heuristic", "incidents_direct", "incidents_via_deployment"}
+	want := []string{"deployments_count", "failed_deployments_native", "failed_deployments_heuristic", "incidents_direct", "incidents_via_deployment", "failed_deployments_status", "deployments_status_known"}
 	if len(CountColumns) != len(want) {
 		t.Fatalf("CountColumns = %v, want %v", CountColumns, want)
 	}
@@ -251,5 +261,51 @@ func TestALinkAcrossTwoDaysCountsNoFailedDeployment(t *testing.T) {
 	sameDay := Rate(CountDay([]Deployment{deployment}, []IncidentTie{incident}, []Link{link})[repoA])
 	if sameDay.Value == nil || *sameDay.Value != 1 || sameDay.LinkTier != TierNative {
 		t.Fatalf("same-day control = %+v, want 1 with a native tier", sameDay)
+	}
+}
+
+// CHAOS-9621: a deployment's own status, by value, with and without a link.
+// Providers spell a failure differently (GitHub "failure", GitLab "failed"):
+// every spelling is one failed meaning, a canceled deployment is not a
+// deployment, and a failed deployment that an incident names counts once.
+func TestCountDayStatusMeaningWithAndWithoutALink(t *testing.T) {
+	link := Link{RepoID: repoA, DeploymentID: "d", IncidentID: "i", Source: TierHeuristic}
+	tie := IncidentTie{RepoID: repoA, IncidentID: "i"}
+	for _, tc := range []struct {
+		status string
+		// without a link
+		bare Counts
+		// with a linked incident
+		linked Counts
+	}{
+		{"failure", Counts{Deployments: 1, FailedStatus: 1, StatusKnown: 1}, Counts{Deployments: 1, FailedHeuristic: 1, StatusKnown: 1, IncidentsDirect: 1}},
+		{"failed", Counts{Deployments: 1, FailedStatus: 1, StatusKnown: 1}, Counts{Deployments: 1, FailedHeuristic: 1, StatusKnown: 1, IncidentsDirect: 1}},
+		{"error", Counts{Deployments: 1, FailedStatus: 1, StatusKnown: 1}, Counts{Deployments: 1, FailedHeuristic: 1, StatusKnown: 1, IncidentsDirect: 1}},
+		{"  FAILURE ", Counts{Deployments: 1, FailedStatus: 1, StatusKnown: 1}, Counts{Deployments: 1, FailedHeuristic: 1, StatusKnown: 1, IncidentsDirect: 1}},
+		{"success", Counts{Deployments: 1, StatusKnown: 1}, Counts{Deployments: 1, FailedHeuristic: 1, StatusKnown: 1, IncidentsDirect: 1}},
+		{"canceled", Counts{}, Counts{IncidentsDirect: 1}},
+		{"cancelled", Counts{}, Counts{IncidentsDirect: 1}},
+		{"inactive", Counts{Deployments: 1}, Counts{Deployments: 1, FailedHeuristic: 1, IncidentsDirect: 1}},
+		{"blocked", Counts{Deployments: 1}, Counts{Deployments: 1, FailedHeuristic: 1, IncidentsDirect: 1}},
+		{"in_progress", Counts{Deployments: 1}, Counts{Deployments: 1, FailedHeuristic: 1, IncidentsDirect: 1}},
+		{"", Counts{Deployments: 1}, Counts{Deployments: 1, FailedHeuristic: 1, IncidentsDirect: 1}},
+		{"weird", Counts{Deployments: 1}, Counts{Deployments: 1, FailedHeuristic: 1, IncidentsDirect: 1}},
+	} {
+		deployments := []Deployment{{RepoID: repoA, DeploymentID: "d", Status: tc.status}}
+		if got := CountDay(deployments, nil, nil)[repoA]; got != tc.bare {
+			t.Errorf("status %q without a link: %+v, want %+v", tc.status, got, tc.bare)
+		}
+		if got := CountDay(deployments, []IncidentTie{tie}, []Link{link})[repoA]; got != tc.linked {
+			t.Errorf("status %q with a linked incident: %+v, want %+v", tc.status, got, tc.linked)
+		}
+	}
+}
+
+// A repository with a canceled deployment only has nothing to count: no
+// deployment, no incident, so no row.
+func TestACanceledDeploymentAloneStoresNoRow(t *testing.T) {
+	got := CountDay([]Deployment{{RepoID: repoA, DeploymentID: "d", Status: "canceled"}}, nil, nil)
+	if len(got) != 0 {
+		t.Fatalf("a canceled deployment alone counted %+v, want no row", got)
 	}
 }

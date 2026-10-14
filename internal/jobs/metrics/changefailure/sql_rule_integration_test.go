@@ -21,7 +21,7 @@ import (
 // The rule exists twice: in Go (Rate, Evaluate) for a reader that serves the
 // rate, and in ClickHouse (WindowRateSQL) for a reader that ranks or draws.
 // They must give the same answer for the same stored rows. Every combination
-// of "has / has not" over the five counts is one repository, written by the
+// of "has / has not" over the seven counts is one repository, written by the
 // real writer, in one day and split over two days; an older version of each
 // day says something else, so the newest-version read is part of the check.
 func TestTheSQLRuleAndTheGoRuleAgreeOnStoredRows(t *testing.T) {
@@ -49,7 +49,7 @@ func TestTheSQLRuleAndTheGoRuleAgreeOnStoredRows(t *testing.T) {
 	newer := older.Add(time.Hour)
 	want := map[uuid.UUID]changefailure.Counts{}
 	var stale, current []repouser.ChangeFailureDaily
-	for mask := 0; mask < 32; mask++ {
+	for mask := 0; mask < 128; mask++ {
 		bit := func(position int, value uint64) uint64 {
 			if mask&(1<<position) != 0 {
 				return value
@@ -59,13 +59,14 @@ func TestTheSQLRuleAndTheGoRuleAgreeOnStoredRows(t *testing.T) {
 		counts := changefailure.Counts{
 			Deployments: bit(0, 4), FailedNative: bit(1, 1), FailedHeuristic: bit(2, 2),
 			IncidentsDirect: bit(3, 1), IncidentsViaDeployment: bit(4, 1),
+			FailedStatus: bit(5, 1), StatusKnown: bit(6, 2),
 		}
 		// One repository holds the counts in one day, a second one holds the
 		// same counts split over two days (deployments and failures on the
 		// first, incident evidence on the second).
 		oneDay, twoDays := uuid.New(), uuid.New()
 		want[oneDay], want[twoDays] = counts, counts
-		first := changefailure.Counts{Deployments: counts.Deployments, FailedNative: counts.FailedNative, FailedHeuristic: counts.FailedHeuristic}
+		first := changefailure.Counts{Deployments: counts.Deployments, FailedNative: counts.FailedNative, FailedHeuristic: counts.FailedHeuristic, FailedStatus: counts.FailedStatus, StatusKnown: counts.StatusKnown}
 		second := changefailure.Counts{IncidentsDirect: counts.IncidentsDirect, IncidentsViaDeployment: counts.IncidentsViaDeployment}
 		wrong := changefailure.Counts{Deployments: 9, FailedNative: 9, IncidentsDirect: 9}
 		stale = append(stale,
@@ -127,10 +128,10 @@ GROUP BY repo_id`
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	// 32 combinations twice. 12 of the 32 are measured (a deployment and one
-	// or both kinds of incident evidence): the comparison is not only NULL
-	// against nil.
-	if seen != 64 || measured != 24 {
-		t.Fatalf("compared %d repositories, %d measured; want 64 and 24", seen, measured)
+	// 128 combinations twice. 56 of the 128 are measured (a deployment, and
+	// incident evidence or a deployment with a final status): the comparison is
+	// not only NULL against nil.
+	if seen != 256 || measured != 112 {
+		t.Fatalf("compared %d repositories, %d measured; want 256 and 112", seen, measured)
 	}
 }

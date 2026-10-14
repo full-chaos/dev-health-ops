@@ -16,7 +16,7 @@ import (
 )
 
 // TestSunburstTeamScopeWeighsARepositoryByTheOwnersShare pins CHAOS-9413 (D5988, D5990) on the Investment sunburst:
-// a team scope gives each owning team its own linked share of a repository (COUNT, and CHURN_LOC on explicit request), never the whole repository.
+// a team scope gives each owning team its own linked share of a repository (COUNT), never the whole repository.
 // repo-lead (effort 100): team-main 0.6, team-co 0.4. repo-tie (50): team-main 0.5, team-tie 0.5. repo-solo (10): team-main 1.0.
 func TestSunburstTeamScopeWeighsARepositoryByTheOwnersShare(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -62,38 +62,33 @@ func TestSunburstTeamScopeWeighsARepositoryByTheOwnersShare(t *testing.T) {
 		t.Fatalf("reader: %v", err)
 	}
 
-	// One unit per repository: COUNT reads the owners' shares of it (1 per unit), CHURN_LOC their shares of its lines.
+	// One unit per repository: COUNT reads the owners' shares of it (1 per unit).
 	for _, tc := range []struct {
-		name         string
-		teams        []string
-		count, lines float64
+		name  string
+		teams []string
+		count float64
 	}{
-		{"co-owner at 0.4 reads 0.4 of the repository", []string{"team-co"}, 0.4, 40},
-		{"main owner reads its own 0.6, half of the tie and all of its solo repository", []string{"team-main"}, 0.6 + 0.5 + 1, 60 + 25 + 10},
-		{"a tied owner reads its equal half", []string{"team-tie"}, 0.5, 25},
-		{"the owners of one repository read it once", []string{"team-main", "team-co"}, 1 + 0.5 + 1, 100 + 25 + 10},
+		{"co-owner at 0.4 reads 0.4 of the repository", []string{"team-co"}, 0.4},
+		{"main owner reads its own 0.6, half of the tie and all of its solo repository", []string{"team-main"}, 0.6 + 0.5 + 1},
+		{"a tied owner reads its equal half", []string{"team-tie"}, 0.5},
+		{"the owners of one repository read it once", []string{"team-main", "team-co"}, 1 + 0.5 + 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			condition, bindings := teamscope.RepoCondition(org, "repo_id", tc.teams, asOf)
-			for _, m := range []struct {
-				measure string
-				want    float64
-			}{{investmentexplain.MeasureCount, tc.count}, {investmentexplain.MeasureChurnLOC, tc.lines}} {
-				rows, err := reader.FetchInvestmentSunburst(ctx, SunburstFilters{
-					OrgID: org, StartTS: from.AddDate(0, 0, -1), EndTS: to.AddDate(0, 0, 1), Limit: 100,
-					TeamScopeCondition: condition, TeamScopeBindings: bindings, TeamIDs: tc.teams, TeamAsOf: asOf,
-					Measure: m.measure,
-				})
-				if err != nil {
-					t.Fatalf("sunburst %v %s: %v", tc.teams, m.measure, err)
-				}
-				var got float64
-				for _, row := range rows {
-					got += row.Value
-				}
-				if math.Abs(got-m.want) > 1e-3 {
-					t.Errorf("sunburst %s = %v, want %v", m.measure, got, m.want)
-				}
+			rows, err := reader.FetchInvestmentSunburst(ctx, SunburstFilters{
+				OrgID: org, StartTS: from.AddDate(0, 0, -1), EndTS: to.AddDate(0, 0, 1), Limit: 100,
+				TeamScopeCondition: condition, TeamScopeBindings: bindings, TeamIDs: tc.teams, TeamAsOf: asOf,
+				Measure: investmentexplain.MeasureCount,
+			})
+			if err != nil {
+				t.Fatalf("sunburst %v: %v", tc.teams, err)
+			}
+			var got float64
+			for _, row := range rows {
+				got += row.Value
+			}
+			if math.Abs(got-tc.count) > 1e-3 {
+				t.Errorf("sunburst COUNT = %v, want %v", got, tc.count)
 			}
 		})
 	}

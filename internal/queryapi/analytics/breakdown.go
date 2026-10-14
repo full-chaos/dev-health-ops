@@ -122,7 +122,7 @@ func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSec
 		}
 	}
 	// Force a uniform Float64 result type. ClickHouse returns UInt64 for
-	// the SUM()-based measures (COUNT, THROUGHPUT, CHURN_LOC) and Float64
+	// the SUM()-based measures (COUNT, THROUGHPUT) and Float64
 	// for the AVG/ratio ones, and the native driver will NOT convert
 	// between them at scan time -- it errors, exactly as
 	// reviewedges.go:145 documents for UInt32. Coercing in SQL keeps ONE

@@ -15,7 +15,7 @@ func TestInvestmentShareMeasureIsCount(t *testing.T) {
 }
 
 // CHAOS-9622: the one SQL definition of a measure. COUNT never reads effort_value (the changed lines of
-// code); CHURN_LOC reads it only for churn_loc units and only when asked.
+// code). CHAOS-9695: there is no lines-of-code measure to ask for.
 func TestMeasureValueSQL(t *testing.T) {
 	count, err := MeasureValueSQL(MeasureCount, "allocation_weight", "owner_share")
 	if err != nil {
@@ -27,14 +27,7 @@ func TestMeasureValueSQL(t *testing.T) {
 	if strings.Contains(count, "effort_value") {
 		t.Errorf("COUNT reads effort_value: %q", count)
 	}
-	lines, err := MeasureValueSQL(MeasureChurnLOC, "allocation_weight", "owner_share")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(lines, "effort_metric = 'churn_loc'") || !strings.Contains(lines, "effort_value") {
-		t.Errorf("CHURN_LOC = %q, want the explicit lines-of-code expression", lines)
-	}
-	for _, name := range []string{"", "EFFORT", "effort_value", "SIZE"} {
+	for _, name := range []string{"", "EFFORT", "effort_value", "SIZE", "CHURN_LOC", "churn_loc"} {
 		if _, err := MeasureValueSQL(name, "1.0", "1.0"); !errors.Is(err, ErrMeasureRequired) {
 			t.Errorf("MeasureValueSQL(%q) error = %v, want ErrMeasureRequired: there is no default weight", name, err)
 		}
@@ -42,9 +35,9 @@ func TestMeasureValueSQL(t *testing.T) {
 }
 
 // FetchInvestmentBreakdown reads MeasureValueSQL, the one definition: its query holds the shared expression of the
-// measure it is given, for both measures, scoped and not.
+// measure it is given, scoped and not.
 func TestBreakdownReadsTheSharedMeasureSQL(t *testing.T) {
-	for _, measure := range []string{MeasureCount, MeasureChurnLOC} {
+	for _, measure := range []string{MeasureCount} {
 		client := &capturingClient{}
 		reader, err := NewReader(client)
 		if err != nil {
@@ -90,7 +83,6 @@ func TestThemeEffortReadWeighsByTheNamedMeasure(t *testing.T) {
 		measure, want, notWant string
 	}{
 		{MeasureCount, "toFloat64(sum(subcategory_kv.2 * 1.0 * 1.0)) AS value", "toFloat64(sum(subcategory_kv.2 * effort_value"},
-		{MeasureChurnLOC, "toFloat64(sum(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0) * 1.0)) AS value", ""},
 	} {
 		client := &capturingClient{}
 		reader, err := NewReader(client)

@@ -37,9 +37,10 @@ So **"60% Feature Delivery" means 60% of the work units**, not 60% of lines of c
 the average probability. **Lines of code are not a measure of effort** (D5999): a WorkUnit's
 `effort_value` (built from churn LOC, then active hours) is never a weight. A read must name
 its measure; a read that names none is refused (`ErrMeasureRequired`), so no path can fall back
-to a weight. `CHURN_LOC` (the changed lines of code) exists only when asked for by name.
-Sizing the work by issue size (CHAOS-9619) will change the one named measure; it will not
-bring lines of code back.
+to a weight. There is no lines-of-code measure, unit or field in the Investment contract
+(CHAOS-9695, D6014): `CHURN_LOC` is not a `MeasureInput`, the flow's `unit` is `WORK_UNITS`
+only, and the Home tile and the work units carry no lines of code. Sizing the work by issue
+size (CHAOS-9619) will change the one named measure; it will not bring lines of code back.
 
 The Home tile dates a unit by its END day (D5933) and the Operating Review serves the same
 measure per week under the metric names `<theme>_work` (unit `work units`).
@@ -50,7 +51,7 @@ On a team scope (`scope.level = team` with ids) each repository a unit touches i
 teams in view hold (`teamscope.RepoShare`, D5988: the linked share of the main owner, the lesser share of a
 co-owner; the scoped teams that co-own one repository together read it once, never more). The REST routes, the
 explanation and the Investment page (breakdown, timeseries, sankey, flow matrix and coverage) apply this one
-weight (CHAOS-9629). Additive measures (COUNT, CHURN_LOC) sum `value x share`; an intensive measure (cycle
+weight (CHAOS-9629). Additive measures (COUNT) sum `value x share`; an intensive measure (cycle
 time) is the share-weighted mean `sum(value x share) / sum(share)`, never `value x share` (D5998). The TEAM
 dimension keeps its ownership join and applies the same share once.
 
@@ -73,8 +74,10 @@ Computed at materialization time by `_effort_from_work_unit`, with this preceden
 | 3 | Issue active hours | `active_hours` |
 | 4 | none → `0.0` | `churn_loc` |
 
-It stays in the table (the explicit `CHURN_LOC` measure and the Home tile's `churn_loc` line
-read it) but no share is weighted by it.
+It stays in the table, but no read serves it and no share is weighted by it. The work-unit
+list serves each unit's `effort` as `{"metric": "work_units", "value": <count>}`: the work-unit
+count the row stands for (1 for a whole unit, the unit's allocation weight under a repository
+scope), ordered by that count, then by the end of the unit.
 
 ---
 

@@ -151,7 +151,6 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 			Allocation:    a.Allocation,
 			AllocationPct: a.AllocationPct,
 			PrsMerged:     int(a.PRsMerged),
-			ChurnLoc:      int(a.ChurnLOC),
 		})
 	}
 

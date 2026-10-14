@@ -77,8 +77,7 @@ type WorkUnitInvestmentRow struct {
 	ToTS                          time.Time
 	RepoID                        *string
 	Provider                      *string
-	EffortMetric                  *string
-	EffortValue                   *float64
+	WorkUnitCount                 float64
 	ThemeDistributionKeys         []string
 	ThemeDistributionValues       []float64
 	SubcategoryDistributionKeys   []string
@@ -139,8 +138,12 @@ func (reader *Reader) FetchWorkUnitInvestments(ctx context.Context, filter WorkU
 	// allocation total (CHAOS-9248). Team and org scope read the whole unit, once, as before; a team scope still
 	// admits a unit through any of its repository rows (CHAOS-9221).
 	source := analytics.LatestWorkUnitInvestmentsSource()
+	// The row's work-unit count (CHAOS-9695, D5999): 1 for a whole unit, its allocation_weight (its share of the unit)
+	// in a repository scope, so the rows of a repository scope sum to the COUNT of that scope.
+	countSQL := "1.0"
 	if len(filter.RepoIDs) > 0 {
 		source = analytics.RepoAllocationInvestmentSource()
+		countSQL = "allocation_weight"
 	} else {
 		scopeSQL = teamscope.UnitScope(scopeSQL, analytics.LatestWorkUnitRepoEffortSource())
 	}
@@ -172,8 +175,7 @@ SELECT
     to_ts,
     repo_id,
     provider,
-    effort_metric,
-    effort_value,
+    toFloat64(%s) AS work_unit_count,
     mapKeys(theme_distribution_json) AS theme_distribution_keys,
     mapValues(theme_distribution_json) AS theme_distribution_values,
     mapKeys(subcategory_distribution_json) AS subcategory_distribution_keys,
@@ -191,10 +193,10 @@ WHERE work_unit_investments.from_ts < {end_date:Date}
   AND work_unit_investments.org_id = {org_id:String}
 %s
 %s
-ORDER BY effort_value DESC, work_unit_id ASC
+ORDER BY work_unit_count DESC, to_ts DESC, work_unit_id ASC
 LIMIT {limit:UInt64}
 %s
-`, source, aliasIfPlain(source), scopeSQL, workUnitSQL, settingsMaxExecutionTime())
+`, countSQL, source, aliasIfPlain(source), scopeSQL, workUnitSQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -208,7 +210,7 @@ LIMIT {limit:UInt64}
 		if err := rows.Scan(
 			&row.WorkUnitID, &row.WorkUnitType, &row.WorkUnitName,
 			&row.FromTS, &row.ToTS, &row.RepoID, &row.Provider,
-			&row.EffortMetric, &row.EffortValue,
+			&row.WorkUnitCount,
 			&row.ThemeDistributionKeys, &row.ThemeDistributionValues,
 			&row.SubcategoryDistributionKeys, &row.SubcategoryDistributionValues,
 			&row.StructuralEvidenceJSON,

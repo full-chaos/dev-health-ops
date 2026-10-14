@@ -179,57 +179,7 @@
   },
   {
     "operation": "home",
-    "digest": "51ab11890b50e1548f98741203012c13581874a5c061231ce949323928112106"
-  },
-  {
-    "operation": "home",
-    "digest": "9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554",
-    "legacy": true
-  },
-  {
-    "operation": "home",
-    "digest": "c02bb493d709b8c445e2ac711bdf93d6a2cdb7933d1073a20bf7dad3ffd06545",
-    "legacy": true
-  },
-  {
-    "operation": "home",
-    "digest": "cff105a9f8c5d5f2363f3d50510db34081c84c9c652afe380975b49c15a4c6eb",
-    "legacy": true
-  },
-  {
-    "operation": "home",
-    "digest": "f920722d8e56ae44b85ce535ab0364ab10eb6baf70da1b49cc60a1f915abe7a1",
-    "legacy": true
-  },
-  {
-    "operation": "home",
-    "digest": "5351e92b61599543ce5913591687ac01f642e27b6ab01577357e442b15e27dce",
-    "legacy": true
-  },
-  {
-    "operation": "home",
-    "digest": "c63a70236aa38c12f3cb4f062bf549af507e264d93268b74fe951f8b627270fb",
-    "legacy": true
-  },
-  {
-    "operation": "home",
-    "digest": "0ebba562ab32dabadd58305a4cc65ddf53604fe41fe4a4ac73e8837c684455e8",
-    "legacy": true
-  },
-  {
-    "operation": "home",
-    "digest": "c59c472017b6fad5049df55d06bb1f31d4638bead8695e49063f6b83958004e9",
-    "legacy": true
-  },
-  {
-    "operation": "home",
-    "digest": "2b19544f33247e2c9e2a58d30af85f4742742249163f7645144dada467d20450",
-    "legacy": true
-  },
-  {
-    "operation": "home",
-    "digest": "b42f3f95a8621cb7db6793b73b657144ce8681aff265767fa9d24d01ffc1fb4d",
-    "legacy": true
+    "digest": "15ed87c7b1ce410262d5f8360ef9be80d708f5f9e1d6675d34e13669a1716aed"
   },
   {
     "operation": "hotspots",

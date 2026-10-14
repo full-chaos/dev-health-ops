@@ -460,8 +460,20 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 				t.Fatalf("%s: the seeded quote carries no source_title key: %s", tc.Name, goWritten)
 			}
 			goWritten = strings.ReplaceAll(goWritten, goOnlyTitle, "")
+			// CHAOS-9695 (D5999, D6014): the frozen Python answer carries the unit's effort as lines of code
+			// ({"metric": "churn_loc", "value": 10.0}); Go serves the work-unit count. Both are replaced by one
+			// placeholder, and the seeded unit must be served as one work unit, so the comparison still reads every
+			// other key and the key order.
+			const goEffort = `"effort":{"metric":"work_units","value":1.0}`
+			if !strings.Contains(goWritten, goEffort) {
+				t.Fatalf("%s: the seeded unit is not served as one work unit (%s): %s", tc.Name, goEffort, goWritten)
+			}
+			goWritten = strings.ReplaceAll(goWritten, goEffort, declaredWorkUnitEffort)
 		}
 		answerBody := answer.Body
+		if tc.Kind == "work_units" {
+			answerBody = pythonLinesOfCodeEffort.ReplaceAllString(answerBody, declaredWorkUnitEffort)
+		}
 		if tc.Kind == "investment" && recorder.Code == http.StatusOK && answer.Status == http.StatusOK {
 			// CHAOS-9622 (D5999): Go reads the COUNT of the units, the frozen Python answer weighs them by
 			// effort_value. The key order of the answer is compared; the values of the two distributions are
@@ -647,3 +659,9 @@ func dictOrderScrub(text string) string {
 func dictOrderWithoutAddress(text string, venue *venueoracle.Venue, t *testing.T) string {
 	return strings.ReplaceAll(text, venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB), "<CLICKHOUSE_URI>")
 }
+
+// declaredWorkUnitEffort stands for a work unit's effort on both sides of the work-units comparison (CHAOS-9695,
+// D6014): Python's lines of code and Go's work-unit count are different quantities by ruling.
+const declaredWorkUnitEffort = `"effort":"<declared D6014: work-unit count>"`
+
+var pythonLinesOfCodeEffort = regexp.MustCompile(`"effort":\{"metric":"(?:churn_loc|active_hours)","value":[0-9.eE+-]+\}`)

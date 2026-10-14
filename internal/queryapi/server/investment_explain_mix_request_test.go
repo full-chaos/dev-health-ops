@@ -33,6 +33,7 @@ func TestExplainRequestRefusesABadMeasureOrDateRange(t *testing.T) {
 	for name, body := range map[string]string{
 		"unknown measure":           `{"measure":"HOURS"}`,
 		"effort measure":            `{"measure":"EFFORT"}`,
+		"lines of code measure":     `{"measure":"CHURN_LOC"}`,
 		"blank measure":             `{"measure":" "}`,
 		"measure not a string":      `{"measure":3}`,
 		"use_investment type":       `{"use_investment":"maybe"}`,
@@ -76,9 +77,9 @@ func TestExplainOptionsDefaultToThePagesMeasureAndTakeItsWindow(t *testing.T) {
 		t.Errorf("relative window = [%s, %s), want 14 days", relative.StartTS, relative.EndTS)
 	}
 
-	absolute := build(`{"measure":"CHURN_LOC","date_range":{"start_date":"2026-09-30","end_date":"2026-10-14"},"filters":{"time":{"range_days":3},"scope":{"level":"team","ids":[]}}}`)
-	if absolute.Measure != investmentexplain.MeasureChurnLOC {
-		t.Errorf("measure = %q, want CHURN_LOC", absolute.Measure)
+	absolute := build(`{"measure":"THROUGHPUT","date_range":{"start_date":"2026-09-30","end_date":"2026-10-14"},"filters":{"time":{"range_days":3},"scope":{"level":"team","ids":[]}}}`)
+	if absolute.Measure != investmentexplain.MeasureCount {
+		t.Errorf("measure = %q, want COUNT (THROUGHPUT is COUNT on the investment path)", absolute.Measure)
 	}
 	if !absolute.StartTS.Equal(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)) || !absolute.EndTS.Equal(time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("absolute window = [%s, %s), want the page's [2026-09-30, 2026-10-14) over filters.time", absolute.StartTS, absolute.EndTS)

@@ -31,7 +31,6 @@ var payloadFieldLabels = map[string]string{
 	"work_unit_count":                           "work unit count",
 	"total_effort":                              "total effort",
 	"total_work":                                "total work",
-	"total_changed_lines":                       "total changed lines",
 }
 
 var (

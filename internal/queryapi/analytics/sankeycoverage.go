@@ -288,21 +288,17 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// `count()` counts wure-fanned-out JOIN rows so a multi-repo unit
 		// counted once per repo -- are avoided by aggregating through the
 		// fan-out-safe weighted sum and testing the RAW repo id.
-		var repoEffortCol string
-		if req.Measure == MeasureChurnLOC {
-			repoEffortCol = "if(wure.work_unit_id != '', wure.repo_effort_value, work_unit_investments.effort_value)"
-		} else {
-			// The 1.0 / wure_counts.repo_row_count arm is CHAOS-4241
-			// codex round 2: effort_value <= 0 made every repo-allocation
-			// row divide to 0 and the unit vanished from the denominator
-			// even though the Sankey's SUM(subcategory_kv.2) still counts
-			// it as exactly 1. A window function cannot be nested inside
-			// sum() (ClickHouse ILLEGAL_AGGREGATION), hence the joined
-			// wure_counts aggregate above.
-			repoEffortCol = "if(wure.work_unit_id != '', " +
-				allocationWeightExpr("wure", "wure_counts") + ", " +
-				"1.0)"
-		}
+		//
+		// The 1.0 / wure_counts.repo_row_count arm is CHAOS-4241
+		// codex round 2: effort_value <= 0 made every repo-allocation
+		// row divide to 0 and the unit vanished from the denominator
+		// even though the Sankey's SUM(subcategory_kv.2) still counts
+		// it as exactly 1. A window function cannot be nested inside
+		// sum() (ClickHouse ILLEGAL_AGGREGATION), hence the joined
+		// wure_counts aggregate above.
+		repoEffortCol := "if(wure.work_unit_id != '', " +
+			allocationWeightExpr("wure", "wure_counts") + ", " +
+			"1.0)"
 		// CHAOS-9629 (D5988): under a team scope every weighted column of coverage is weighed by the share of the
 		// unit's repository the teams in view hold (teamscope.RepoShare, the expression the chart's measure and the
 		// explanation use), so a co-owner reads its own share of a repository in the numerators AND the

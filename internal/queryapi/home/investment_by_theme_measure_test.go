@@ -23,8 +23,8 @@ func (measureEmptyRows) Scan(...any) error { return nil }
 func (measureEmptyRows) Err() error        { return nil }
 func (measureEmptyRows) Close() error      { return nil }
 
-// CHAOS-9622 (D5999): the tile's allocation is the COUNT of the units, never their effort_value; the churn_loc
-// line stays the explicit lines-of-code figure.
+// CHAOS-9622 (D5999): the tile's allocation is the COUNT of the units, never their effort_value. CHAOS-9695: the
+// tile carries no lines-of-code figure.
 func TestInvestmentByThemeReadsTheCountMeasure(t *testing.T) {
 	client := &measureCapturingClient{}
 	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
@@ -33,7 +33,7 @@ func TestInvestmentByThemeReadsTheCountMeasure(t *testing.T) {
 	}
 	var theme string
 	for _, statement := range client.statements {
-		if strings.Contains(statement, "AS churn_loc") {
+		if strings.Contains(statement, "AS prs") {
 			theme = statement
 		}
 	}
@@ -46,7 +46,7 @@ func TestInvestmentByThemeReadsTheCountMeasure(t *testing.T) {
 	if strings.Contains(theme, "toFloat64(sum(subcategory_kv.2 * effort_value") {
 		t.Errorf("the tile weighs by effort_value:\n%s", theme)
 	}
-	if !strings.Contains(theme, "AS churn_loc") {
-		t.Errorf("the explicit churn_loc line is gone:\n%s", theme)
+	if strings.Contains(theme, "churn_loc") {
+		t.Errorf("the tile reads churn_loc:\n%s", theme)
 	}
 }

@@ -61,7 +61,6 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
       allocation
       allocationPct
       prsMerged
-      churnLoc
       __typename
     }
     summary {

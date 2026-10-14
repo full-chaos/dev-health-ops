@@ -1262,7 +1262,6 @@ type ComplexityRoot struct {
 	ReworkThemeAllocation struct {
 		Allocation    func(childComplexity int) int
 		AllocationPct func(childComplexity int) int
-		ChurnLoc      func(childComplexity int) int
 		Label         func(childComplexity int) int
 		PrsMerged     func(childComplexity int) int
 		Theme         func(childComplexity int) int
@@ -7739,13 +7738,6 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ReworkThemeAllocation.AllocationPct(childComplexity), true
 
-	case "ReworkThemeAllocation.churnLoc":
-		if e.complexity.ReworkThemeAllocation.ChurnLoc == nil {
-			break
-		}
-
-		return e.complexity.ReworkThemeAllocation.ChurnLoc(childComplexity), true
-
 	case "ReworkThemeAllocation.label":
 		if e.complexity.ReworkThemeAllocation.Label == nil {
 			break
@@ -10769,7 +10761,6 @@ type MappingCoverage {
 
 enum MeasureInput {
   COUNT
-  CHURN_LOC
   PR_REWORK_RATIO
   CYCLE_TIME_HOURS
   THROUGHPUT
@@ -11426,7 +11417,6 @@ type ReworkThemeAllocation {
   allocation: Float!
   allocationPct: Float!
   prsMerged: Int!
-  churnLoc: Int!
 }
 
 type SankeyCoverage {
@@ -11468,7 +11458,6 @@ type SankeyResult {
 
 enum SankeyValueUnit {
   WORK_UNITS
-  LOC
 }
 
 type SavedReportConnection {
@@ -37094,8 +37083,6 @@ func (ec *executionContext) fieldContext_HomeResult_reworkThemeAllocation(_ cont
 				return ec.fieldContext_ReworkThemeAllocation_allocationPct(ctx, field)
 			case "prsMerged":
 				return ec.fieldContext_ReworkThemeAllocation_prsMerged(ctx, field)
-			case "churnLoc":
-				return ec.fieldContext_ReworkThemeAllocation_churnLoc(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ReworkThemeAllocation", field.Name)
 		},
@@ -54325,50 +54312,6 @@ func (ec *executionContext) _ReworkThemeAllocation_prsMerged(ctx context.Context
 }
 
 func (ec *executionContext) fieldContext_ReworkThemeAllocation_prsMerged(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ReworkThemeAllocation",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ReworkThemeAllocation_churnLoc(ctx context.Context, field graphql.CollectedField, obj *model.ReworkThemeAllocation) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_ReworkThemeAllocation_churnLoc(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.ChurnLoc, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(int)
-	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_ReworkThemeAllocation_churnLoc(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ReworkThemeAllocation",
 		Field:      field,
@@ -77012,11 +76955,6 @@ func (ec *executionContext) _ReworkThemeAllocation(ctx context.Context, sel ast.
 			}
 		case "prsMerged":
 			out.Values[i] = ec._ReworkThemeAllocation_prsMerged(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "churnLoc":
-			out.Values[i] = ec._ReworkThemeAllocation_churnLoc(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

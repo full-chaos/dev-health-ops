@@ -87,14 +87,14 @@ func (explainFixtureClient) Query(_ context.Context, statement string, _ []dhcli
 			{"quality.bugfix", "quality", 10.0},
 		}}, nil
 
-	case strings.Contains(statement, "ORDER BY effort_value DESC, work_unit_id ASC"):
+	case strings.Contains(statement, "ORDER BY work_unit_count DESC, to_ts DESC, work_unit_id ASC"):
 		// FetchWorkUnitInvestments
 		return &fixtureRowScanner{rows: [][]any{
 			{
 				"unit-1", strPtr("issue"), strPtr("Ship the new thing"),
 				time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC),
 				strPtr("repo-1"), strPtr("github"),
-				strPtr("churn_loc"), floatPtr(40.0),
+				1.0,
 				[]string{"velocity"}, []float64{40.0}, []string{"velocity.feature"}, []float64{40.0},
 				strPtr(`{"issues": ["issue-a"], "prs": []}`),
 				floatPtr(0.8), strPtr("high"),
@@ -105,7 +105,7 @@ func (explainFixtureClient) Query(_ context.Context, statement string, _ []dhcli
 				"unit-2", strPtr("issue"), strPtr("Fix the bug"),
 				time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC),
 				strPtr("repo-1"), strPtr("github"),
-				strPtr("churn_loc"), floatPtr(10.0),
+				0.5,
 				[]string{"quality"}, []float64{10.0}, []string{"quality.bugfix"}, []float64{10.0},
 				strPtr(`{"issues": ["issue-b"], "prs": []}`),
 				floatPtr(0.3), strPtr("low"),

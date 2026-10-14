@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"crypto/ed25519"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -92,7 +93,19 @@ type registeredEdgeDocument struct {
 	Kind      string `json:"kind"`
 	// Legacy marks a text the operation accepted BEFORE its current one (CHAOS-8000 dual accept).
 	Legacy bool `json:"legacy"`
+	// GoDocument, when set, is the text the Go plane is sent in place of Document, the text the Python
+	// plane's frozen answer was recorded for (see frozenHomeDocument).
+	GoDocument string `json:"-"`
 }
+
+// frozenHomeDocument is the text of the home operation the frozen Python answers were recorded for: the oldest
+// Home text the Go plane once accepted as a legacy text. It selects reworkThemeAllocation.churnLoc, a field that left
+// the schema (CHAOS-9695, D6014), so no Home text before the current one validates any more and the Go plane no
+// longer registers one. The Python plane is still sent this text, whose recorded answer replays by its digest; the
+// Go plane is sent the current text, and the comparison of the two is retired by the ruling (retireHomeEdgeCase).
+//
+//go:embed testdata/venue/home-frozen-v1.graphql
+var frozenHomeDocument string
 
 // postFreezeOperations are registered operations with no frozen Python answer (CHAOS-8598: capacityCompletionDistribution, an MCP-only read).
 var postFreezeOperations = map[string]bool{"capacityCompletionDistribution": true}
@@ -141,6 +154,11 @@ func registeredEdgeDocuments(t *testing.T, root string) []registeredEdgeDocument
 	for operation := range edgeGoOnlyFromBirth {
 		delete(measured, operation)
 	}
+	home, ok := measured["home"]
+	if !ok || home.Legacy {
+		t.Fatalf("home is registered with a legacy text (%v): CHAOS-9695 retired every earlier Home text, so the oracle's frozen text is its own", ok && home.Legacy)
+	}
+	measured["home"] = registeredEdgeDocument{Operation: home.Operation, Document: frozenHomeDocument, Digest: digestHex(frozenHomeDocument), Kind: home.Kind, Legacy: true, GoDocument: home.Document}
 	docs = docs[:0]
 	for _, doc := range measured {
 		docs = append(docs, doc)
@@ -199,6 +217,9 @@ type edgeCase struct {
 	// value on each plane is pyWant.header / goWant.header ("" = absent), and
 	// every other part of the two answers must be the same.
 	header string
+	// goRequest, when set, is what the Go plane is sent in place of request (the text of the current registered
+	// document, where request holds the frozen text the Python answer was recorded for): the comparison is retired.
+	goRequest *venueoracle.Request
 }
 
 type edgeAnswer struct {
@@ -435,6 +456,11 @@ func edgeOracleCases(t *testing.T, docs []registeredEdgeDocument, users []edgeUs
 		name := documentOperationName(doc.Document)
 		post := edgeCase{request: edgePost("POST "+doc.Operation, member, urqlBody(t, name, doc.Document, variables), nil)}
 		get := edgeCase{request: edgeGet("GET "+doc.Operation, member, urqlGETPath(t, edgeOrgA, name, doc.Document, variables), nil)}
+		if doc.GoDocument != "" {
+			goPost := edgePost("POST "+doc.Operation, member, urqlBody(t, name, doc.GoDocument, variables), nil)
+			goGet := edgeGet("GET "+doc.Operation, member, urqlGETPath(t, edgeOrgA, name, doc.GoDocument, variables), nil)
+			post.goRequest, get.goRequest = &goPost, &goGet
+		}
 		if doc.Operation == "createSavedReport" {
 			writes = append(writes, post)
 			continue
@@ -639,6 +665,11 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 	var parityPython []venueoracle.Response
 	var receipt strings.Builder
 	for i, c := range cs {
+		if c.goRequest != nil {
+			retireHomeEdgeCase(t, goBase, c, python[i], golden)
+			fmt.Fprintf(&receipt, "%-58s python=%d go=retired D6014 Home text retired\n", c.request.Name, python[i].Status)
+			continue
+		}
 		if key, ok := chaos8169GraphQLEdgeHomeLedgerKey(c.request.Name); ok {
 			goResponse := venueoracle.Do(t, goBase, c.request)
 			if golden != nil {
@@ -767,4 +798,36 @@ func headersThatDiffer(request venueoracle.Request, python, goResponse venueorac
 		}
 	}
 	return differing
+}
+
+// homeEdgeRetired is the ruling that retires the comparison of the Home answers: the frozen Python answer was recorded
+// for a text that selects reworkThemeAllocation.churnLoc (lines of code, which Investment does not serve:
+// CHAOS-9695, D6014), and the Go plane no longer accepts that text. The Go plane answers the current text, the one the
+// web sends, and its answer is held to the contract the rule tests of the Home package own.
+const homeEdgeRetired = "D6014 (CHAOS-9695): Investment serves no lines of code, so no Home text of the frozen recording is accepted by query-api any more"
+
+// retireHomeEdgeCase retires the Python answer of a Home case and holds the Go answer of the current text to what is
+// still comparable without it: the request is answered, it carries the Home object and the theme allocation list,
+// and the answer names no lines-of-code field.
+func retireHomeEdgeCase(t *testing.T, goBase string, c edgeCase, python venueoracle.Response, golden *venueoracle.Golden) {
+	t.Helper()
+	goResponse := venueoracle.Do(t, goBase, *c.goRequest)
+	golden.Retired(t, homeEdgeRetired, python)
+	if goResponse.Status != python.Status {
+		t.Errorf("%s: status python=%d go=%d", c.request.Name, python.Status, goResponse.Status)
+	}
+	if differing := headersThatDiffer(c.request, python, goResponse); len(differing) > 0 {
+		t.Errorf("%s: the retired Home case also differs in headers %v\n python %v\n go     %v", c.request.Name, differing, python.Headers, goResponse.Headers)
+	}
+	body := venueGoBody(goResponse.Body)
+	for _, want := range []string{`"home":{`, `"reworkThemeAllocation":[`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("%s: the Go answer of the current Home text lacks %s: %s", c.request.Name, want, truncateOracleBody(body))
+		}
+	}
+	for _, banned := range []string{"churnLoc", "churn_loc", `"errors"`} {
+		if strings.Contains(body, banned) {
+			t.Errorf("%s: the Go answer of the current Home text holds %s: %s", c.request.Name, banned, truncateOracleBody(body))
+		}
+	}
 }

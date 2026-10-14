@@ -745,7 +745,7 @@ var investmentExplainDeterministicFloats = map[string]string{
 // recorded Python answer never had (CHAOS-9555): the measure the share is in, and the two sums share_pct is
 // the ratio of.
 var investmentExplainGoOnlyKeys = map[string]GoOnlyKey{
-	"data.top_findings.evidence.measure":     {Ticket: "CHAOS-9555", Reason: "Go-only: the measure (COUNT or CHURN_LOC) share_pct is read in; the Python reference never served it."},
+	"data.top_findings.evidence.measure":     {Ticket: "CHAOS-9555", Reason: "Go-only: the measure (COUNT) share_pct is read in; the Python reference never served it."},
 	"data.top_findings.evidence.numerator":   {Ticket: "CHAOS-9555", Reason: "Go-only: the finding's sum, the numerator of share_pct; the Python reference never served it."},
 	"data.top_findings.evidence.denominator": {Ticket: "CHAOS-9555", Reason: "Go-only: the total of all themes, the denominator of share_pct; the Python reference never served it."},
 }

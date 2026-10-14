@@ -127,8 +127,6 @@ func measureFromInput(m model.MeasureInput) (Measure, error) {
 	switch m {
 	case model.MeasureInputCount:
 		return MeasureCount, nil
-	case model.MeasureInputChurnLoc:
-		return MeasureChurnLOC, nil
 	case model.MeasureInputPrReworkRatio:
 		return MeasurePRReworkRatio, nil
 	case model.MeasureInputCycleTimeHours:

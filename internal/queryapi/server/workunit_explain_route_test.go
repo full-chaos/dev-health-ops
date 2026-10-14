@@ -641,7 +641,7 @@ func (s *ollamaFixtureRowScanner) Close() error { return nil }
 type ollamaSingleWorkUnitClient struct{}
 
 func (ollamaSingleWorkUnitClient) Query(_ context.Context, statement string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-	if strings.Contains(statement, "ORDER BY effort_value DESC, work_unit_id ASC") {
+	if strings.Contains(statement, "ORDER BY work_unit_count DESC, to_ts DESC, work_unit_id ASC") {
 		fromTS := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 		toTS := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
 		return &ollamaFixtureRowScanner{rows: [][]any{
@@ -649,7 +649,7 @@ func (ollamaSingleWorkUnitClient) Query(_ context.Context, statement string, _ [
 				"wu-ABC-123", strPtrForTest("issue"), strPtrForTest("Ship the new thing"),
 				fromTS, toTS,
 				strPtrForTest("repo-1"), strPtrForTest("github"),
-				strPtrForTest("churn_loc"), floatPtrForTest(40.0),
+				1.0,
 				[]string{"velocity"}, []float64{40.0}, []string{"velocity.feature"}, []float64{40.0},
 				strPtrForTest(`{"issues": [], "prs": []}`),
 				floatPtrForTest(0.8), strPtrForTest("high"),

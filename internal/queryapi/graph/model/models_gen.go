@@ -1463,7 +1463,6 @@ type ReworkThemeAllocation struct {
 	Allocation    float64 `json:"allocation"`
 	AllocationPct float64 `json:"allocationPct"`
 	PrsMerged     int     `json:"prsMerged"`
-	ChurnLoc      int     `json:"churnLoc"`
 }
 
 type SankeyRequestInput struct {
@@ -2441,7 +2440,6 @@ type MeasureInput string
 
 const (
 	MeasureInputCount                MeasureInput = "COUNT"
-	MeasureInputChurnLoc             MeasureInput = "CHURN_LOC"
 	MeasureInputPrReworkRatio        MeasureInput = "PR_REWORK_RATIO"
 	MeasureInputCycleTimeHours       MeasureInput = "CYCLE_TIME_HOURS"
 	MeasureInputThroughput           MeasureInput = "THROUGHPUT"
@@ -2465,7 +2463,6 @@ const (
 
 var AllMeasureInput = []MeasureInput{
 	MeasureInputCount,
-	MeasureInputChurnLoc,
 	MeasureInputPrReworkRatio,
 	MeasureInputCycleTimeHours,
 	MeasureInputThroughput,
@@ -2489,7 +2486,7 @@ var AllMeasureInput = []MeasureInput{
 
 func (e MeasureInput) IsValid() bool {
 	switch e {
-	case MeasureInputCount, MeasureInputChurnLoc, MeasureInputPrReworkRatio, MeasureInputCycleTimeHours, MeasureInputThroughput, MeasureInputPipelineSuccessRate, MeasureInputPipelineFailureRate, MeasureInputPipelineDurationP95, MeasureInputPipelineQueueTime, MeasureInputPipelineRerunRate, MeasureInputTestPassRate, MeasureInputTestFailureRate, MeasureInputTestFlakeRate, MeasureInputTestSuiteDurationP95, MeasureInputCoverageLinePct, MeasureInputCoverageBranchPct, MeasureInputCoverageDeltaPct, MeasureInputFlagFrictionDelta, MeasureInputFlagErrorRateDelta, MeasureInputFlagCoverageRatio, MeasureInputFlagActivationRate:
+	case MeasureInputCount, MeasureInputPrReworkRatio, MeasureInputCycleTimeHours, MeasureInputThroughput, MeasureInputPipelineSuccessRate, MeasureInputPipelineFailureRate, MeasureInputPipelineDurationP95, MeasureInputPipelineQueueTime, MeasureInputPipelineRerunRate, MeasureInputTestPassRate, MeasureInputTestFailureRate, MeasureInputTestFlakeRate, MeasureInputTestSuiteDurationP95, MeasureInputCoverageLinePct, MeasureInputCoverageBranchPct, MeasureInputCoverageDeltaPct, MeasureInputFlagFrictionDelta, MeasureInputFlagErrorRateDelta, MeasureInputFlagCoverageRatio, MeasureInputFlagActivationRate:
 		return true
 	}
 	return false
@@ -2563,17 +2560,15 @@ type SankeyValueUnit string
 
 const (
 	SankeyValueUnitWorkUnits SankeyValueUnit = "WORK_UNITS"
-	SankeyValueUnitLoc       SankeyValueUnit = "LOC"
 )
 
 var AllSankeyValueUnit = []SankeyValueUnit{
 	SankeyValueUnitWorkUnits,
-	SankeyValueUnitLoc,
 }
 
 func (e SankeyValueUnit) IsValid() bool {
 	switch e {
-	case SankeyValueUnitWorkUnits, SankeyValueUnitLoc:
+	case SankeyValueUnitWorkUnits:
 		return true
 	}
 	return false

@@ -138,7 +138,6 @@ type ReworkThemeAllocation struct {
 	Allocation    float64 `json:"allocation"`
 	AllocationPct float64 `json:"allocation_pct"`
 	PRsMerged     int64   `json:"prs_merged"`
-	ChurnLOC      int64   `json:"churn_loc"`
 }
 
 // SummarySentence is the wire shape of SummarySentence (schemas.py:45-48).

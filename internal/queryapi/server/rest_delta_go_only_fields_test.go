@@ -30,19 +30,50 @@ type homePythonMetricDelta struct {
 	Spark    []home.SparkPoint `json:"spark"`
 }
 
+// homePythonReworkThemeAllocation is the frozen Python ReworkThemeAllocation. It ends with churn_loc, the lines of
+// code of the theme, which the production type does not have since CHAOS-9695 (D6014: Investment serves no lines
+// of code). The frozen response-model oracle still checks THIS shape; TestHomeReworkThemeAllocationIsThePythonShapeLessChurnLOC
+// ties it to the production type.
+type homePythonReworkThemeAllocation struct {
+	Theme         string  `json:"theme"`
+	Label         string  `json:"label"`
+	Allocation    float64 `json:"allocation"`
+	AllocationPct float64 `json:"allocation_pct"`
+	PRsMerged     int64   `json:"prs_merged"`
+	ChurnLOC      int64   `json:"churn_loc"`
+}
+
+func TestHomeReworkThemeAllocationIsThePythonShapeLessChurnLOC(t *testing.T) {
+	python := fieldShapes(reflect.TypeOf(homePythonReworkThemeAllocation{}))
+	want := python[:len(python)-1]
+	if last := python[len(python)-1]; last.name != "ChurnLOC" {
+		t.Fatalf("the last field of the frozen shape is %v, want ChurnLOC", last)
+	}
+	if got := fieldShapes(reflect.TypeOf(home.ReworkThemeAllocation{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("home.ReworkThemeAllocation fields =\n %v\nwant the frozen Python fields without churn_loc:\n %v", got, want)
+	}
+	body, err := json.Marshal(home.ReworkThemeAllocation{Theme: "risk", Label: "Risk", Allocation: 1, AllocationPct: 100, PRsMerged: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "churn") {
+		t.Errorf("the REST Home theme allocation body carries a lines-of-code key: %s", body)
+	}
+}
+
 // homePythonResponse is the frozen Python HomeResponse.
 type homePythonResponse struct {
-	Freshness             home.Freshness               `json:"freshness"`
-	Deltas                []homePythonMetricDelta      `json:"deltas"`
-	ReworkThemeAllocation []home.ReworkThemeAllocation `json:"rework_theme_allocation"`
-	Summary               []home.SummarySentence       `json:"summary"`
-	Tiles                 pyjson.OrderedMap[home.Tile] `json:"tiles"`
-	Constraint            home.ConstraintCard          `json:"constraint"`
-	Events                []home.EventItem             `json:"events"`
-	HealthState           home.HealthState             `json:"health_state"`
-	Signals               []home.Signal                `json:"signals"`
-	LimitingFactor        home.LimitingFactor          `json:"limiting_factor"`
-	DataConfidence        home.DataConfidence          `json:"data_confidence"`
+	Freshness             home.Freshness                    `json:"freshness"`
+	Deltas                []homePythonMetricDelta           `json:"deltas"`
+	ReworkThemeAllocation []homePythonReworkThemeAllocation `json:"rework_theme_allocation"`
+	Summary               []home.SummarySentence            `json:"summary"`
+	Tiles                 pyjson.OrderedMap[home.Tile]      `json:"tiles"`
+	Constraint            home.ConstraintCard               `json:"constraint"`
+	Events                []home.EventItem                  `json:"events"`
+	HealthState           home.HealthState                  `json:"health_state"`
+	Signals               []home.Signal                     `json:"signals"`
+	LimitingFactor        home.LimitingFactor               `json:"limiting_factor"`
+	DataConfidence        home.DataConfidence               `json:"data_confidence"`
 }
 
 // peoplePythonDelta is the frozen Python PersonDelta.
@@ -129,9 +160,9 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 			return
 		}
 		for index := range leg {
-			if prod[index].name == "Deltas" {
-				if leg[index].name != "Deltas" || prod[index].tag != leg[index].tag {
-					t.Errorf("%s Deltas field = %v, frozen %v", production, prod[index], leg[index])
+			if prod[index].name == "Deltas" || prod[index].name == "ReworkThemeAllocation" {
+				if leg[index].name != prod[index].name || prod[index].tag != leg[index].tag {
+					t.Errorf("%s %s field = %v, frozen %v", production, prod[index].name, prod[index], leg[index])
 				}
 				continue
 			}

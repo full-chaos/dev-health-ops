@@ -88,7 +88,6 @@ type Measure string
 
 const (
 	MeasureCount                Measure = "count"
-	MeasureChurnLOC             Measure = "churn_loc"
 	MeasurePRReworkRatio        Measure = "pr_rework_ratio"
 	MeasureCycleTimeHours       Measure = "cycle_time_hours"
 	MeasureThroughput           Measure = "throughput"
@@ -270,8 +269,6 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 		switch measure {
 		case MeasureCount, MeasureThroughput:
 			return throughputExpr, nil
-		case MeasureChurnLOC:
-			return "SUM(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0))", nil
 		case MeasureCycleTimeHours:
 			return cycleTimeExpr, nil
 		default:
@@ -282,8 +279,6 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	switch measure {
 	case MeasureCount:
 		return "SUM(work_items_completed)", nil
-	case MeasureChurnLOC:
-		return "SUM(churn_loc)", nil
 	case MeasurePRReworkRatio:
 		// The ratio of the bucket's summed counts over REVIEWED pull requests
 		// (package prrework), NULL when the bucket holds none: a pull request

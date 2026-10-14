@@ -525,10 +525,10 @@ func TestBuildWorkUnitsResponseMatchesPythonGolden(t *testing.T) {
 	// baseRow mirrors BASE_ROW above exactly -- categorization_run_id
 	// "run-1" (not nil) so the include_text branch has a real quote to
 	// either fetch or skip.
-	baseRow := func(unitID string, effortValue float64, runID *string) []any {
+	baseRow := func(unitID string, workUnitCount float64, runID *string) []any {
 		return []any{
 			unitID, (*string)(nil), strPtr("Some Name"), fromTS, toTS,
-			(*string)(nil), (*string)(nil), strPtr("churn_loc"), floatPtr(effortValue),
+			(*string)(nil), (*string)(nil), workUnitCount,
 			[]string{"feature_delivery", "maintenance"}, []float64{0.8, 0.2},
 			[]string{}, []float64{},
 			strPtr(`{"note":"x"}`), floatPtr(0.75), strPtr("high"),
@@ -548,7 +548,7 @@ func TestBuildWorkUnitsResponseMatchesPythonGolden(t *testing.T) {
 		{
 			name:        "default",
 			golden:      "testdata/workunits_golden_default.json",
-			fixtureRows: [][]any{baseRow("abc-123", 12.5, strPtr("run-1"))},
+			fixtureRows: [][]any{baseRow("abc-123", 1.0, strPtr("run-1"))},
 			quoteRows:   [][]any{quoteRow},
 			includeText: true,
 			limit:       200,
@@ -556,7 +556,7 @@ func TestBuildWorkUnitsResponseMatchesPythonGolden(t *testing.T) {
 		{
 			name:        "include_text_false",
 			golden:      "testdata/workunits_golden_include_text_false.json",
-			fixtureRows: [][]any{baseRow("abc-123", 12.5, strPtr("run-1"))},
+			fixtureRows: [][]any{baseRow("abc-123", 1.0, strPtr("run-1"))},
 			quoteRows:   [][]any{quoteRow},
 			includeText: false,
 			limit:       200,
@@ -565,8 +565,8 @@ func TestBuildWorkUnitsResponseMatchesPythonGolden(t *testing.T) {
 			name:   "limit_path",
 			golden: "testdata/workunits_golden_limit_path.json",
 			fixtureRows: [][]any{
-				baseRow("abc-123", 12.5, nil),
-				baseRow("abc-000", 1.0, nil),
+				baseRow("abc-123", 1.0, nil),
+				baseRow("abc-000", 0.5, nil),
 			},
 			quoteRows:   nil,
 			includeText: true,
@@ -610,6 +610,7 @@ func TestBuildWorkUnitsResponseMatchesPythonGolden(t *testing.T) {
 				t.Fatalf("decode want: %v", err)
 			}
 			stripServedQuoteSourceTitles(t, got, tc.includeText && len(tc.quoteRows) > 0)
+			stripWorkUnitEffort(t, got, want)
 			// jsonAlmostEqual, not reflect.DeepEqual: span_days is computed
 			// via toTS.Sub(fromTS).Hours()/24 (workunitassembly.go) on this
 			// side and via (to_ts - from_ts).total_seconds()/86400.0 on
@@ -628,6 +629,28 @@ func TestBuildWorkUnitsResponseMatchesPythonGolden(t *testing.T) {
 				t.Fatalf("wire encoding mismatch:\n--- got ---\n%s\n--- want (%s) ---\n%s", gotPretty, tc.golden, wantPretty)
 			}
 		})
+	}
+}
+
+// stripWorkUnitEffort is the declared divergence of CHAOS-9695 (D5999, D6014): the recorded Python goldens carry the
+// work unit's effort as lines of code ({"metric": "churn_loc", "value": 12.5}); the Go route serves the work-unit
+// count ({"metric": "work_units", "value": 1}). It checks the served one and removes the effort of both sides, so the
+// recorded golden stays byte-identical and every other key is still compared.
+func stripWorkUnitEffort(t *testing.T, got, want any) {
+	t.Helper()
+	items, _ := got.([]any)
+	for _, item := range items {
+		object, _ := item.(map[string]any)
+		effort, _ := object["effort"].(map[string]any)
+		if effort["metric"] != "work_units" {
+			t.Fatalf("effort = %v, want the work-unit count metric work_units", object["effort"])
+		}
+		delete(object, "effort")
+	}
+	recorded, _ := want.([]any)
+	for _, item := range recorded {
+		object, _ := item.(map[string]any)
+		delete(object, "effort")
 	}
 }
 
@@ -840,13 +863,13 @@ func TestNewWorkUnitsPostHandlerWorkCategoryFilterNarrowsResults(t *testing.T) {
 	toTS := time.Date(2024, 1, 20, 0, 0, 0, 0, time.UTC)
 	matchingRow := []any{
 		"wu-match", (*string)(nil), strPtr("Matches the filter"), fromTS, toTS, (*string)(nil), (*string)(nil),
-		strPtr("churn_loc"), floatPtr(5.0),
+		1.0,
 		[]string{"feature_delivery"}, []float64{1.0}, []string{}, []float64{},
 		strPtr(`{}`), floatPtr(0.5), strPtr("moderate"), strPtr("ok"), strPtr("v1"), (*string)(nil), toTS,
 	}
 	nonMatchingRow := []any{
 		"wu-nomatch", (*string)(nil), strPtr("Does not match"), fromTS, toTS, (*string)(nil), (*string)(nil),
-		strPtr("churn_loc"), floatPtr(3.0),
+		1.0,
 		[]string{"maintenance"}, []float64{1.0}, []string{}, []float64{},
 		strPtr(`{}`), floatPtr(0.5), strPtr("moderate"), strPtr("ok"), strPtr("v1"), (*string)(nil), toTS,
 	}

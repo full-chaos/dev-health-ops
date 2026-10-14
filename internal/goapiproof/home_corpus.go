@@ -51,8 +51,8 @@ var homeDeltaGoOnlyKeys = map[string]GoOnlyKey{
 //   - data.rework_theme_allocation.allocation: sum(work_items_completed)
 //     (api/queries/metrics.py fetch_rework_theme_allocation) -- a bare
 //     sum of a count column, not a merged floating aggregate.
-//   - data.rework_theme_allocation.prs_merged / .churn_loc: the same
-//     table's sum(prs_merged) / sum(churn_loc) -- bare count sums.
+//   - data.rework_theme_allocation.prs_merged: the same
+//     table's sum(prs_merged) -- a bare count sum.
 //   - data.signals.evidence_count: len(evidence) / a row count -- never
 //     a floating aggregate.
 //
@@ -160,7 +160,6 @@ var homeNumericLeaves = Options{
 	IntegerLeaves: map[string]string{
 		"data.rework_theme_allocation.allocation": "fetch_rework_theme_allocation's sum(work_items_completed) -- a bare count sum.",
 		"data.rework_theme_allocation.prs_merged": "the same query's sum(prs_merged) -- a bare count sum.",
-		"data.rework_theme_allocation.churn_loc":  "the same query's sum(churn_loc) -- a bare count sum.",
 		"data.signals.evidence_count":             "a row count / len(evidence) (services/home.py) -- never a floating aggregate.",
 	},
 	// data.events.ts is EventItem.ts (schemas.py's `EventItem(ts=datetime.

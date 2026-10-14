@@ -5,6 +5,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -247,11 +248,12 @@ func TestDeploymentsEffectsCarryPullRequestForwardAgainstMigratedSchema(t *testi
 		}
 
 		good := deploymentIntegrationFullRow(claim, provider+"-pull-request-carry", now, 42)
+		good.PullRequestTier = pullRequestTierExactMergeSHA
 		if err := sink.WriteEffect(ctx, claim, deploymentEffect(t, good)); err != nil {
 			t.Fatal(err)
 		}
 		failed := good
-		failed.MergedAt, failed.PullRequestNumber = nil, nil
+		failed.MergedAt, failed.PullRequestNumber, failed.PullRequestTier = nil, nil, ""
 		failed.PullRequestLookupFailed = true
 		failed.LastSynced = now.Add(time.Minute)
 		freshEnvironment := "staging"
@@ -267,6 +269,9 @@ func TestDeploymentsEffectsCarryPullRequestForwardAgainstMigratedSchema(t *testi
 		if environment == nil || *environment != freshEnvironment {
 			t.Fatalf("%s: environment=%v want %q: every other column must land fresh", provider, environment, freshEnvironment)
 		}
+		if tier := readDeploymentPullRequestTier(t, ctx, conn, good); tier != pullRequestTierExactMergeSHA {
+			t.Fatalf("%s: tier=%q want %q carried forward with the number", provider, tier, pullRequestTierExactMergeSHA)
+		}
 		assertDeploymentInspection(t, ctx, sink, claim, failedEffect, EffectExact)
 
 		honest := failed
@@ -280,11 +285,14 @@ func TestDeploymentsEffectsCarryPullRequestForwardAgainstMigratedSchema(t *testi
 		if mergedAt == nil || !mergedAt.Equal(*good.MergedAt) || number == nil || *number != 42 {
 			t.Fatalf("%s: merged_at=%v pull_request_number=%v want %v/42: an empty lookup over a held merge keeps the pair", provider, mergedAt, number, good.MergedAt)
 		}
+		if tier := readDeploymentPullRequestTier(t, ctx, conn, good); tier != pullRequestTierExactMergeSHA {
+			t.Fatalf("%s: tier=%q want %q kept with the held pair", provider, tier, pullRequestTierExactMergeSHA)
+		}
 		assertDeploymentInspection(t, ctx, sink, claim, honestEffect, EffectExact)
 
 		foundMerged := now.Add(3 * time.Minute)
 		found := honest
-		found.MergedAt, found.PullRequestNumber = &foundMerged, intPointer(7)
+		found.MergedAt, found.PullRequestNumber, found.PullRequestTier = &foundMerged, intPointer(7), pullRequestTierFirstListed
 		found.LastSynced = now.Add(3 * time.Minute)
 		foundEffect := deploymentEffect(t, found)
 		if err := sink.WriteEffect(ctx, claim, foundEffect); err != nil {
@@ -294,8 +302,67 @@ func TestDeploymentsEffectsCarryPullRequestForwardAgainstMigratedSchema(t *testi
 		if mergedAt == nil || !mergedAt.Equal(foundMerged) || number == nil || *number != 7 {
 			t.Fatalf("%s: merged_at=%v pull_request_number=%v want %v/7: a found pull request is written", provider, mergedAt, number, foundMerged)
 		}
+		if tier := readDeploymentPullRequestTier(t, ctx, conn, good); tier != pullRequestTierFirstListed {
+			t.Fatalf("%s: tier=%q want %q: a found pull request writes its own tier", provider, tier, pullRequestTierFirstListed)
+		}
 		assertDeploymentInspection(t, ctx, sink, claim, foundEffect, EffectExact)
 	}
+}
+
+// TestDeploymentsEffectsStoreThePullRequestTierAgainstMigratedSchema writes
+// one row per provider and tier through the real insert and reads the tier and
+// the number back: the tier stored is the one the row carries, the number is
+// unchanged, and a row with no link stores no tier.
+func TestDeploymentsEffectsStoreThePullRequestTierAgainstMigratedSchema(t *testing.T) {
+	ctx, conn := newDeploymentsIntegrationConn(t)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	tiersByProvider := map[string][]string{
+		"github": {pullRequestTierExactMergeSHA, pullRequestTierMergedPR, pullRequestTierFirstListed, ""},
+		"gitlab": {pullRequestTierMergedPR, ""},
+	}
+	for provider, tiers := range tiersByProvider {
+		claim := nativeTestClaim(provider, "deployments")
+		var sink deploymentEffectsIntegrationSink = GitHubDeploymentsClickHouseEffects{Conn: conn, Lease: lease}
+		if provider == "gitlab" {
+			sink = GitLabDeploymentsClickHouseEffects{Conn: conn, Lease: lease}
+		}
+		for index, tier := range tiers {
+			row := deploymentIntegrationFullRow(claim, fmt.Sprintf("%s-tier-%d", provider, index), now, 40+index)
+			row.PullRequestTier = tier
+			if tier == "" {
+				row.MergedAt, row.PullRequestNumber = nil, nil
+			}
+			effect := deploymentEffect(t, row)
+			if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+				t.Fatal(err)
+			}
+			_, number, _ := readDeploymentPullRequestPair(t, ctx, conn, row)
+			if got := readDeploymentPullRequestTier(t, ctx, conn, row); got != tier {
+				t.Fatalf("%s: tier=%q want %q", provider, got, tier)
+			}
+			if tier == "" && number != nil {
+				t.Fatalf("%s: a row with no link stored number %d", provider, *number)
+			}
+			if tier != "" && (number == nil || *number != uint32(40+index)) {
+				t.Fatalf("%s tier %s: number=%v want %d unchanged", provider, tier, number, 40+index)
+			}
+			assertDeploymentInspection(t, ctx, sink, claim, effect, EffectExact)
+		}
+	}
+}
+
+func readDeploymentPullRequestTier(t *testing.T, ctx context.Context, conn driver.Conn, row deploymentRow) string {
+	t.Helper()
+	var tier string
+	if err := conn.QueryRow(
+		ctx,
+		`SELECT pull_request_tier FROM deployments FINAL WHERE org_id = ? AND repo_id = ? AND deployment_id = ?`,
+		row.OrgID, row.RepoID, row.DeploymentID,
+	).Scan(&tier); err != nil {
+		t.Fatal(err)
+	}
+	return tier
 }
 
 func readDeploymentPullRequestPair(

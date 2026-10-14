@@ -88,7 +88,7 @@ func (sink deploymentsClickHouseEffects) WriteEffect(ctx context.Context, claim 
 	}
 	defer batch.Abort()
 	for _, row := range rows {
-		if err := batch.Append(row.RepoID, row.DeploymentID, row.Status, row.Environment, row.StartedAt, row.FinishedAt, row.DeployedAt, row.MergedAt, nullableUInt32(row.PullRequestNumber), row.ReleaseRef, row.ReleaseRefConfidence, row.OrgID, row.LastSynced); err != nil {
+		if err := batch.Append(row.RepoID, row.DeploymentID, row.Status, row.Environment, row.StartedAt, row.FinishedAt, row.DeployedAt, row.MergedAt, nullableUInt32(row.PullRequestNumber), row.PullRequestTier, row.ReleaseRef, row.ReleaseRefConfidence, row.OrgID, row.LastSynced); err != nil {
 			return err
 		}
 	}
@@ -155,7 +155,7 @@ func (sink deploymentsClickHouseEffects) InspectEffect(ctx context.Context, clai
 }
 
 func (sink deploymentsClickHouseEffects) inspectDeployment(ctx context.Context, expected deploymentRow) (EffectInspection, error) {
-	rows, err := sink.Conn.Query(ctx, `SELECT repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number, release_ref, release_ref_confidence, org_id, last_synced FROM deployments FINAL WHERE org_id = ? AND repo_id = ? AND deployment_id = ?`, expected.OrgID, expected.RepoID, expected.DeploymentID)
+	rows, err := sink.Conn.Query(ctx, `SELECT repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number, pull_request_tier, release_ref, release_ref_confidence, org_id, last_synced FROM deployments FINAL WHERE org_id = ? AND repo_id = ? AND deployment_id = ?`, expected.OrgID, expected.RepoID, expected.DeploymentID)
 	if err != nil {
 		return EffectConflict, err
 	}
@@ -166,7 +166,7 @@ func (sink deploymentsClickHouseEffects) inspectDeployment(ctx context.Context, 
 	)
 	found := false
 	for rows.Next() {
-		if err := rows.Scan(&actual.RepoID, &actual.DeploymentID, &actual.Status, &actual.Environment, &actual.StartedAt, &actual.FinishedAt, &actual.DeployedAt, &actual.MergedAt, &pullRequestNumber, &actual.ReleaseRef, &actual.ReleaseRefConfidence, &actual.OrgID, &actual.LastSynced); err != nil {
+		if err := rows.Scan(&actual.RepoID, &actual.DeploymentID, &actual.Status, &actual.Environment, &actual.StartedAt, &actual.FinishedAt, &actual.DeployedAt, &actual.MergedAt, &pullRequestNumber, &actual.PullRequestTier, &actual.ReleaseRef, &actual.ReleaseRefConfidence, &actual.OrgID, &actual.LastSynced); err != nil {
 			return EffectConflict, err
 		}
 		actual.PullRequestNumber = uint32PointerAsInt(pullRequestNumber)
@@ -188,7 +188,7 @@ func compareDeploymentVersion(expected, actual deploymentRow, found bool) Effect
 	if actual.LastSynced.UTC().After(expected.LastSynced.UTC()) {
 		return EffectConflict
 	}
-	if actual.RepoID != expected.RepoID || actual.DeploymentID != expected.DeploymentID || actual.OrgID != expected.OrgID || !stringPointersEqual(actual.Status, expected.Status) || !stringPointersEqual(actual.Environment, expected.Environment) || !timePointersEqual(actual.StartedAt, expected.StartedAt) || !timePointersEqual(actual.FinishedAt, expected.FinishedAt) || !timePointersEqual(actual.DeployedAt, expected.DeployedAt) || !timePointersEqual(actual.MergedAt, expected.MergedAt) || !intPointersEqual(actual.PullRequestNumber, expected.PullRequestNumber) || actual.ReleaseRef != expected.ReleaseRef || actual.ReleaseRefConfidence != expected.ReleaseRefConfidence {
+	if actual.RepoID != expected.RepoID || actual.DeploymentID != expected.DeploymentID || actual.OrgID != expected.OrgID || !stringPointersEqual(actual.Status, expected.Status) || !stringPointersEqual(actual.Environment, expected.Environment) || !timePointersEqual(actual.StartedAt, expected.StartedAt) || !timePointersEqual(actual.FinishedAt, expected.FinishedAt) || !timePointersEqual(actual.DeployedAt, expected.DeployedAt) || !timePointersEqual(actual.MergedAt, expected.MergedAt) || !intPointersEqual(actual.PullRequestNumber, expected.PullRequestNumber) || actual.PullRequestTier != expected.PullRequestTier || actual.ReleaseRef != expected.ReleaseRef || actual.ReleaseRefConfidence != expected.ReleaseRefConfidence {
 		return EffectConflict
 	}
 	return EffectExact

@@ -24,6 +24,20 @@ Concepts include:
 
 Graph proximity is not causation or ownership. A missing edge can represent unavailable source data, unsupported mapping, or incomplete processing.
 
+## Deployment pull request link tier
+
+A deployment row stores the pull or merge request number it was linked to (`deployments.pull_request_number`) and, beside it, the rule that chose that number (`deployments.pull_request_tier`). A consumer must read the tier before it names the pull request as the cause of a deployment.
+
+| Tier | Provider | Rule |
+|---|---|---|
+| `exact_merge_sha` | GitHub | A merged pull request whose `merge_commit_sha` is the deployed sha. |
+| `merged_pr` | GitHub, GitLab | No exact match: the first merged pull or merge request listed for the sha. |
+| `first_listed` | GitHub | No merged pull request: the first one listed (it can be unmerged, and `merged_at` stays empty). |
+| `pushed` | Push API | The caller asserted the number; no provider rule ran. |
+| empty | any | No link, or a row written before the column existed. |
+
+A row written before the column existed keeps its number with an empty tier: the tier is unknown until the next sync of its unit rewrites the row. No backfill is run. The tier is kept together with the number and `merged_at` when a lookup fails.
+
 ## Team attribution
 
 Every work item's primary team is selected by a staged, provider-agnostic precedence — the resolver

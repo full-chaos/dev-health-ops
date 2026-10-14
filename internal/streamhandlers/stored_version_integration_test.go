@@ -190,6 +190,18 @@ func TestStoredVersionsKeepEstablishedValuesAgainstRealClickHouse(t *testing.T) 
 		})
 	})
 
+	t.Run("internal deployment stores the pushed tier beside the number it was given", func(t *testing.T) {
+		internalIngest(ctx, t, conn, firstWriteAt, "deployments", internalRepo,
+			`[{"deployment_id":"deploy-tier-1","status":"success","environment":"prod","pull_request_number":12},`+
+				`{"deployment_id":"deploy-tier-2","status":"success","environment":"prod","pull_request_number":null}]`)
+		expectColumns(t, finalColumns(ctx, t, conn, "deployments", "repo_id = ? AND deployment_id = ?", []string{"pull_request_number", "pull_request_tier"}, internalRepoID.String(), "deploy-tier-1"), map[string]string{
+			"pull_request_number": "12", "pull_request_tier": "pushed",
+		})
+		expectColumns(t, finalColumns(ctx, t, conn, "deployments", "repo_id = ? AND deployment_id = ?", []string{"pull_request_number", "pull_request_tier"}, internalRepoID.String(), "deploy-tier-2"), map[string]string{
+			"pull_request_number": "NULL", "pull_request_tier": "",
+		})
+	})
+
 	t.Run("internal work item keeps columns the ingest payload has no field for", func(t *testing.T) {
 		establishRow(ctx, t, conn, "INSERT INTO work_items (org_id,repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,closed_at,labels,sprint_id,sprint_name,parent_id,epic_id,url,service_class,due_at,last_synced)",
 			storedVersionOrg, uuid.Nil, "jira:ABC-123", "jira", "Old", "bug", "done", "Done", "ABC", "10001", "TEAM", "Platform", []string{}, "", created, merged, merged, []string{},

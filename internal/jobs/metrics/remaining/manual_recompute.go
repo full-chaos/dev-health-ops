@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -129,6 +130,7 @@ func (store *PostgresStore) manualRecompute(
 	if !slices.Contains(ManualRecomputeFamilies, family) {
 		return ManualRecomputeOutcome{}, ErrInvalidState
 	}
+	organizationID = uuid.MustParse(organizationID).String()
 	scope, err := manualBackfillDayScope(family, day)
 	if err != nil {
 		return ManualRecomputeOutcome{}, err

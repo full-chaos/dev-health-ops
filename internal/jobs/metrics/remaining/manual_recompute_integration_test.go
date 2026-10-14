@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,6 +189,39 @@ func TestAnAutomaticDoraStartAfterARecomputeCreatesNoSecondRun(t *testing.T) {
 	}
 }
 
+func TestStartManualRecomputeRunTreatsOrganizationSpellingsAsOneOrganization(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	store, pool := recomputeTestStore(t, ctx)
+	day := time.Now().UTC().AddDate(0, 0, -3).Format("2006-01-02")
+	seedSucceededDoraPartition(t, ctx, store, pool, recomputeTestOrg, day, 7, "post-sync:covered")
+
+	upper := strings.ToUpper(recomputeTestOrg)
+	for _, spelling := range []string{upper, "{" + recomputeTestOrg + "}", "urn:uuid:" + upper} {
+		first, err := store.StartManualRecomputeRun(ctx, "dora", spelling, day, "cfr-125", nopPartitionPublisher{})
+		if err != nil {
+			t.Fatalf("spelling %q: %v", spelling, err)
+		}
+		if first.Disposition != RecomputeStarted && first.Disposition != RecomputeAlreadyRan {
+			t.Fatalf("spelling %q = %+v", spelling, first)
+		}
+	}
+	lower, err := store.StartManualRecomputeRun(ctx, "dora", recomputeTestOrg, day, "cfr-125", nopPartitionPublisher{})
+	if err != nil || lower.Disposition != RecomputeAlreadyRan {
+		t.Fatalf("canonical spelling after the others = %+v, %v; want already_ran", lower, err)
+	}
+	var runs int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM public.remaining_metric_runs WHERE generation LIKE 'manual-recompute:%'").Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 {
+		t.Fatalf("%d recompute runs for one organization, day and basis, want 1", runs)
+	}
+	if want := ManualRecomputeGeneration("cfr-125", "dora", recomputeTestOrg); lower.Generation != want {
+		t.Fatalf("generation %q, want %q", lower.Generation, want)
+	}
+}
+
 func TestStartManualRecomputeRunRefusesBadInput(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -362,5 +396,119 @@ func TestManualRecomputeRewritesACoveredDayToTheNewBasisAndLeavesAnUncoveredDayA
 	}
 	if value, rows := latest(coveredDay); value != 1 || rows != 2 {
 		t.Fatalf("after the second run the covered day reads %v over %d rows, want 1 over 2: the second run is a no-op", value, rows)
+	}
+}
+
+// TestARecomputeAndAWiderPostSyncWindowThatOverlapsItLandTheSameValue pins the
+// named limit in RISK-NOTES: a post-sync run anchored on the NEXT day with
+// backfill_days=2 locks its own anchor day and does not see the pending
+// recompute, so both runs compute the overlapping day. The test executes both
+// partitions on real stores and shows the limit costs a duplicate computation,
+// not a wrong value: every row either run appended for the day carries the
+// new-basis value and the served (newest) value is that one.
+func TestARecomputeAndAWiderPostSyncWindowThatOverlapsItLandTheSameValue(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store, pool := recomputeTestStore(t, ctx)
+	conn := migratedClickHouse(t, ctx, OperationalOrderingRevision)
+
+	const repoID = "11111111-2222-4333-8444-555555559675"
+	now := time.Now().UTC()
+	day := now.AddDate(0, 0, -3).Truncate(24 * time.Hour)
+	nextDay := day.AddDate(0, 0, 1)
+
+	deployments, err := conn.PrepareBatch(ctx, `INSERT INTO deployments (repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number, release_ref, release_ref_confidence, org_id, last_synced)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, status := range []string{"success", "canceled"} {
+		at := day.Add(time.Duration(9+index) * time.Hour)
+		if err := deployments.Append(repoID, "deploy-9675-"+status, status, "production",
+			&at, &at, &at, (*time.Time)(nil), nil, "", 0.0, recomputeTestOrg, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := deployments.Send(); err != nil {
+		t.Fatal(err)
+	}
+	oldRows, err := conn.PrepareBatch(ctx, "INSERT INTO dora_metrics_daily (repo_id, day, metric_name, value, computed_at, org_id)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oldRows.Append(repoID, day, "deployment_frequency", 2.0, now.Add(-72*time.Hour), recomputeTestOrg); err != nil {
+		t.Fatal(err)
+	}
+	if err := oldRows.Send(); err != nil {
+		t.Fatal(err)
+	}
+	dayString := day.Format("2006-01-02")
+	seedSucceededDoraPartition(t, ctx, store, pool, recomputeTestOrg, dayString, 1, "post-sync:old-basis")
+
+	recompute, err := store.StartManualRecomputeRun(ctx, "dora", recomputeTestOrg, dayString, "cfr-125", nopPartitionPublisher{})
+	if err != nil || recompute.Disposition != RecomputeStarted {
+		t.Fatalf("recompute = %+v, %v", recompute, err)
+	}
+	wideScope := json.RawMessage(`{"version":1,"day":"` + nextDay.Format("2006-01-02") + `","sink":"auto","interval":"daily","backfill_days":2}`)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wide, err := store.StartRunTx(ctx, tx, StartRunRequest{
+		OrganizationID: recomputeTestOrg, Family: "dora", Generation: "post-sync:wide",
+		ScopeKey: nextDay.Format("2006-01-02"), Scopes: []json.RawMessage{wideScope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if wide.ID == recompute.RunID {
+		t.Fatal("setup: the wide post-sync run was folded into the recompute; the named limit no longer exists as described")
+	}
+
+	executor, err := NewDORAExecutor(ctx, conn, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewPartitionHandler[jobruntime.RemainingDORAArgs](store, executor, "dora")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, partitionID := range []string{recompute.PartitionID, deterministicPartitionID(wide.ID, 1)} {
+		args := jobruntime.RemainingDORAArgs{
+			EnvelopeArgs: jobruntime.EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]{
+				ContractVersion: jobcontract.ContractVersionV1,
+				OrganizationID:  strPtr(recomputeTestOrg),
+				CorrelationID:   "chaos-9674-overlap",
+				IdempotencyKey:  partitionID,
+				Domain:          jobcontract.DomainLink{Type: "remaining_metric_partition", ID: partitionID},
+				Payload:         jobcontract.NewRemainingMetricsPartitionPayload(jobcontract.KindRemainingDORA, partitionID),
+			},
+		}
+		execution := &jobruntime.Execution[jobruntime.RemainingDORAArgs]{
+			JobID: 1, Attempt: 1, Args: args, Envelope: args.ContractEnvelope(),
+			CorrelationID: "chaos-9674-overlap", OrganizationID: strPtr(recomputeTestOrg),
+		}
+		if err := handler.Work(ctx, execution); err != nil {
+			t.Fatalf("PartitionHandler.Work: %v", err)
+		}
+	}
+
+	var newest float64
+	var newRows, wrongNewRows uint64
+	row := conn.QueryRow(ctx, `
+		SELECT argMax(value, computed_at), countIf(computed_at > now() - INTERVAL 1 DAY), countIf(computed_at > now() - INTERVAL 1 DAY AND value != 1)
+		FROM dora_metrics_daily
+		WHERE org_id = {org_id:String} AND day = {day:Date} AND metric_name = 'deployment_frequency' AND toString(repo_id) = {repo_id:String}`,
+		clickhouse.Named("org_id", recomputeTestOrg), clickhouse.Named("day", dayString), clickhouse.Named("repo_id", repoID))
+	if err := row.Scan(&newest, &newRows, &wrongNewRows); err != nil {
+		t.Fatal(err)
+	}
+	if newRows != 2 {
+		t.Fatalf("new-basis rows for the day = %d, want 2 (both runs computed it)", newRows)
+	}
+	if newest != 1 || wrongNewRows != 0 {
+		t.Fatalf("served value %v with %d new rows off the new basis; want 1 and 0: the overlap must cost a duplicate, never a wrong value", newest, wrongNewRows)
 	}
 }

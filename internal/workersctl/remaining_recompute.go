@@ -13,7 +13,7 @@ import (
 // recomputeUsage is the --recompute help text of `metrics remaining start`.
 const recomputeUsage = "rewrite the COVERED closed days of [--day, --to] after a basis change (family dora only; needs --basis and an explicit --to; at most 31 days; the window must end before today UTC). " +
 	"Eligible: a day that a succeeded partition of the family already covers. Not eligible, reported not_covered and left alone: a day with no succeeded run with output (run `start` without --recompute for it; for the daily families partition-recompute only redrives days that have a succeeded scheduled fan-out run). " +
-	"A day with an automatic run still pending or running is reported in_progress and left alone. Runs only on the go-heavy pod (operator_backend_unavailable elsewhere). Idempotent per basis and day. Use --dry-run first"
+	"A day with an automatic run still pending or running is reported in_progress and left alone. Runs only on the go-heavy pod (operator_backend_unavailable elsewhere); like every dho workers verb it needs POSTGRES_URI, WORKER_DATABASE_URI and COORDINATOR_DATABASE_URI set. Idempotent per basis and day. Use --dry-run first"
 
 // remainingRecomputeRequest is the validated input of `metrics remaining
 // start --recompute`.

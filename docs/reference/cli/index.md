@@ -1592,14 +1592,27 @@ Per-day `status`:
 | `exhausted` | Every generation of this basis for the day failed or was canceled. Exit code is nonzero. | Read the runs, fix the cause. |
 | `error` | Store or publisher failure for the day. Exit code is nonzero. | Read the error. |
 
-It cannot run at the same time as an automatic run of the same days: it takes
-the same advisory lock as `start`, refuses a day with a pending or running
-automatic run (`in_progress`), and the partition itself runs through the usual
-claim and lease of the remaining worker. **The verb runs only on the go-heavy
-pod** (`operator_backend_unavailable` from go-scheduler: it needs the domain
-pool and the River registry; `--dry-run` needs the domain pool only).
+Concurrency with automatic runs: it takes the same `(org, day)` advisory lock
+as `start` and the dora automatic path, refuses a day that a pending or running
+automatic run's window already holds (`in_progress`), and the partition itself
+runs through the usual claim and lease of the remaining worker. **Named limit:**
+an automatic post-sync run that is *anchored on a later day* with
+`backfill_days > 1` and starts after the recompute run was inserted locks its
+own anchor day and does not see the pending recompute, so both runs compute the
+overlapping day. Both append the same values with their own `computed_at` and
+readers take the newest, so the served number is the same; it is a duplicate
+computation, not a wrong value. Do not run it while a wide post-sync catch-up of
+the window is expected.
 
-The rewrite appends: `dora_metrics_daily` and `release_impact_daily` keep every
+**The verb runs only on the go-heavy pod** (`operator_backend_unavailable` from
+go-scheduler: it needs the domain pool and the River registry; `--dry-run`
+needs the domain pool only). Like every `dho workers` verb it also needs
+`POSTGRES_URI`, `WORKER_DATABASE_URI` and `COORDINATOR_DATABASE_URI` in the
+process environment (`configuration_error` otherwise); the `heavy` process of
+`deploy/go-workers/deployment.json` declares only the first two, the
+`worker-operator` operator CLI declares all three. Run it where all three are set.
+
+The rewrite appends: `dora_metrics_daily` keeps every
 generation and readers take the newest `computed_at` per key, so the old rows
 stay in the table and stop being read. The readback hint prints
 `count()` and `max(computed_at)` per day: after the worker finished,

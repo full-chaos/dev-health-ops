@@ -3198,6 +3198,13 @@ func dispatchMetricsRemainingStart(ctx context.Context, runtime *operatorRuntime
 	if _, err := uuid.Parse(*org); err != nil {
 		return writeError(stderr, "invalid_request")
 	}
+	if *recompute {
+		canonicalOrg, err := canonicalUUID(*org)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		*org = canonicalOrg
+	}
 	if !*recompute && (*basis != "" || *dryRun) {
 		return writeError(stderr, "invalid_request")
 	}

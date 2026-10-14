@@ -20,7 +20,7 @@ import (
 
 // explainMeasureValues are the measures the explain request names: the Investment page's COUNT,
 // THROUGHPUT and CHURN_LOC, and the effort weighting every answer used before CHAOS-9555.
-var explainMeasureValues = []string{"COUNT", "THROUGHPUT", "CHURN_LOC", "EFFORT"}
+var explainMeasureValues = []string{"COUNT", "THROUGHPUT", "CHURN_LOC"}
 
 // decodeExplainDateRange reads the page's dateRange: both dates are required, and the end is not
 // before the start (the page's own rule, analytics validateDateRange).

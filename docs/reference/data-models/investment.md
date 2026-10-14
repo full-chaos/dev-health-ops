@@ -228,7 +228,7 @@ next to `filters`:
 
 | Field | Meaning | Default |
 |---|---|---|
-| `measure` | `COUNT` (the page's measure), `THROUGHPUT` (same as `COUNT`), `CHURN_LOC`, or `EFFORT` (the unit's effort, the weighting every answer used before this change) | `COUNT` |
+| `measure` | `COUNT` (the page's measure), `THROUGHPUT` (same as `COUNT`), or `CHURN_LOC` (changed lines of code, only when asked). The explanation never weighs by a unit's `effort_value`, which defaults to churn_loc | `COUNT` |
 | `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is `[start_date, end_date)`. It replaces `filters.time`. | `filters.time` (a relative `range_days` ends tomorrow, so it covers today) |
 | `use_investment` | Accepted for parity with the page; no effect, because theme and subcategory always read the canonical categorization on both surfaces | none |
 
@@ -236,7 +236,7 @@ next to `filters`:
 
 Each finding's `evidence` carries `measure`, `numerator` and `denominator`: `share_pct` is `numerator / denominator * 100`, where
 the numerator is the finding's subcategory (or theme) sum and the denominator is the sum of all themes in the window. The text of a
-finding names what the share counts ("of work" for `COUNT`, "of changed lines" for `CHURN_LOC`, "of effort" for `EFFORT`).
+finding names what the share counts ("of work" for `COUNT` and "of changed lines" for `CHURN_LOC`).
 
 ## Deprecated: `investment_metrics_daily` / `investment_areas.yaml`
 

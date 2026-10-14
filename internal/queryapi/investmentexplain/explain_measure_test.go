@@ -31,7 +31,6 @@ func TestExplainReadsTheMeasureOfTheRequest(t *testing.T) {
 		{"COUNT", "sum(subcategory_kv.2 * 1.0 * 1.0)", "subcategory_kv.2 * effort_value"},
 		{"THROUGHPUT", "sum(subcategory_kv.2 * 1.0 * 1.0)", "subcategory_kv.2 * effort_value"},
 		{"CHURN_LOC", "sum(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0) * 1.0)", ""},
-		{"EFFORT", "sum(subcategory_kv.2 * effort_value * 1.0)", ""},
 		{"", "sum(subcategory_kv.2 * 1.0 * 1.0)", "subcategory_kv.2 * effort_value"},
 	}
 	for _, tc := range cases {
@@ -54,6 +53,25 @@ func TestExplainReadsTheMeasureOfTheRequest(t *testing.T) {
 				t.Errorf("breakdown statement holds %q for measure %s:\n%s", tc.notWant, tc.measure, statement)
 			}
 		})
+	}
+}
+
+func TestExplainNeverWeighsByEffortValue(t *testing.T) {
+	for _, measure := range []string{"", "COUNT", "THROUGHPUT", "EFFORT", "bogus"} {
+		var statement string
+		reader, err := NewReader(statementRecorder{mixAgreementClient: mixAgreementClient{breakdown: mixRows()}, breakdownStatement: &statement})
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts := explainOpts()
+		opts.Measure = measure
+		var calls int
+		if _, err := reader.ExplainInvestmentMix(context.Background(), nil, alwaysAvailable, countingComplete(completionWithKeys(64), &calls), opts); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(statement, "subcategory_kv.2 * effort_value") || strings.Contains(statement, "'churn_loc'") {
+			t.Errorf("measure %q reads effort_value or churn_loc:\n%s", measure, statement)
+		}
 	}
 }
 
@@ -95,8 +113,8 @@ func TestExplainCacheKeyCarriesTheMeasure(t *testing.T) {
 		}
 		return k
 	}
-	if key("COUNT") == key("EFFORT") {
-		t.Error("COUNT and EFFORT over the same shares share one cache key")
+	if key("COUNT") == key("CHURN_LOC") {
+		t.Error("COUNT and CHURN_LOC over the same shares share one cache key")
 	}
 	if key("COUNT") != key("THROUGHPUT") {
 		t.Error("THROUGHPUT is COUNT on the investment path and must share its key")

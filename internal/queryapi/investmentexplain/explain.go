@@ -87,8 +87,8 @@ type ExplainInvestmentMixOptions struct {
 	// but must NOT filter the breakdown by them. See ExplainInvestmentMix's
 	// own comment at the breakdown-fetch call site.
 	ScopeLevel string
-	// Measure is the measure the mix is read in: "COUNT", "THROUGHPUT", "CHURN_LOC" or "EFFORT" (see
-	// NormalizeMeasure). Empty is the Investment page's COUNT; every answer read EFFORT before CHAOS-9555.
+	// Measure is the measure the mix is read in: "COUNT", "THROUGHPUT" or "CHURN_LOC" (see
+	// NormalizeMeasure). Empty is the Investment page's COUNT. The explanation never weighs by effort_value (churn_loc by default); CHURN_LOC is the explicit lines-of-code measure.
 	Measure            string
 	WorkCategory       []string
 	Theme              string
@@ -171,14 +171,14 @@ func (reader *Reader) fetchMixDistributions(ctx context.Context, opts ExplainInv
 
 // effectiveMeasure is the measure of the mix read: the Investment page's COUNT when the option is
 // empty (the explanation is of the mix the user sees), else NormalizeMeasure of it. A name it does not
-// know reads as EFFORT; the route has already refused those.
+// know reads as COUNT; the route has already refused those.
 func (opts ExplainInvestmentMixOptions) effectiveMeasure() string {
 	if strings.TrimSpace(opts.Measure) == "" {
 		return MeasureCount
 	}
 	measure, ok := NormalizeMeasure(opts.Measure)
 	if !ok {
-		return MeasureEffort
+		return MeasureCount
 	}
 	return measure
 }
@@ -191,7 +191,7 @@ func shareNoun(measure string) string {
 	case MeasureChurnLOC:
 		return "changed lines"
 	}
-	return "effort"
+	return "work"
 }
 
 // annotateFindings gives each finding the numerator, denominator and measure of its share, taken from

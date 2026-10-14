@@ -32,6 +32,7 @@ func TestExplainRequestNamesThePagesMeasureDateRangeAndUseInvestment(t *testing.
 func TestExplainRequestRefusesABadMeasureOrDateRange(t *testing.T) {
 	for name, body := range map[string]string{
 		"unknown measure":      `{"measure":"HOURS"}`,
+		"effort measure":       `{"measure":"EFFORT"}`,
 		"blank measure":        `{"measure":" "}`,
 		"measure not a string": `{"measure":3}`,
 		"use_investment type":  `{"use_investment":"maybe"}`,

@@ -135,22 +135,22 @@ type BreakdownFilters struct {
 	// D5933). Every other rule of the read (latest row of a unit, every categorization status,
 	// the scope, the category filters) is the Investment page's own.
 	DatedByEnd bool
-	// Measure says what a row's value counts. "" and MeasureEffort are the effort of the unit (the
-	// readers of the REST investment endpoint and the Home tile)
-	// (effort_value); MeasureCount is the share of the unit the row stands for, the Investment page's
+	// Measure says what a row's value counts. "" is the unit's effort_value, as the REST investment
+	// endpoint and the Home tile read it (the explanation never uses it); MeasureCount is the share of the unit the row stands for, the Investment page's
 	// COUNT; MeasureChurnLOC is the changed lines of code, the page's CHURN_LOC.
 	Measure string
 }
 
-// The measures of an investment mix read. They are the page's own (analytics.Measure COUNT,
-// THROUGHPUT, CHURN_LOC) plus the effort weighting every explain answer used before CHAOS-9555.
+// The measures of an explain mix read: the page's own (analytics.Measure COUNT, THROUGHPUT,
+// CHURN_LOC). Lines of code are never a weight by default: churn_loc is the explicit CHURN_LOC measure only.
+// A BreakdownFilters with no Measure keeps the effort weighting of the other readers of the package
+// (REST investment endpoint, Home tile); the explanation never reads it.
 const (
 	MeasureCount    = "COUNT"
 	MeasureChurnLOC = "CHURN_LOC"
-	MeasureEffort   = "EFFORT"
 )
 
-// NormalizeMeasure maps a request measure to one of the three measures of a mix read. THROUGHPUT is
+// NormalizeMeasure maps a request measure to one of the two measures of an explain mix read. THROUGHPUT is
 // COUNT on the investment path (analytics dbExpression). ok is false for any other name.
 func NormalizeMeasure(name string) (measure string, ok bool) {
 	switch strings.ToUpper(strings.TrimSpace(name)) {
@@ -158,8 +158,6 @@ func NormalizeMeasure(name string) (measure string, ok bool) {
 		return MeasureCount, true
 	case "CHURN_LOC":
 		return MeasureChurnLOC, true
-	case "EFFORT":
-		return MeasureEffort, true
 	}
 	return "", false
 }

@@ -74,6 +74,14 @@ var validToOutsideTheSnapshotRule = map[string]string{
 	"internal/providersync.pagerDutyServiceMappingTombstone": "PagerDuty reference tombstone (the ported _reference_tombstone): the sink " +
 		"is given a CompleteRouteBatch only, and the route returns an error and no batch for a failed page or the page bound. An " +
 		"empty complete answer tombstones every active row: ported behaviour of an operational table, not under the team catalog rule",
+	"internal/providersync.mergedRow": "ownership interval compaction (one-time operator data step, dho workers providersync compact-ownership-intervals): " +
+		"folds a run of adjacent closed rows of one shape into its first row with the valid_to of its last row; it opens and closes no fact, " +
+		"and the owner-at-T differential is asked before the write and before the delete",
+	"internal/providersync.ownershipCompactionSpec.scan": "ownership interval compaction: copies the valid_to a stored row already holds into the " +
+		"in-memory row it reads; sets no new close",
+	"internal/providersync.tombstoneOf": "ownership interval compaction: writes the rows a merged run folds again under their own sort key " +
+		"as supersede tombstones (valid_to = valid_from, covering no instant), so a reader sees the merged row and no inner row in one step; " +
+		"the tombstones are deleted after the readback",
 }
 
 // TestSnapshotKindCensus pins the fact kinds: every NewSnapshotKind call of

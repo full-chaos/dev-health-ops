@@ -80,13 +80,45 @@ def _run(tmp_path: Path, *verb: str, env_extra: dict[str, str | None]) -> list[s
     return [line for line in log.read_text().splitlines() if line]
 
 
+def _multi_package_shard() -> str:
+    """A `packages` shard that runs several packages in one `go test` (the Ryuk case).
+
+    Read from the real plan, not hard-coded: shard numbers move whenever a package is
+    isolated or split by test name and its slot no longer has a `packages` job.
+    """
+    proc = subprocess.run(
+        ["bash", str(CHECK_GO), "integration-shard-plan"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:] + proc.stdout[-2000:]
+    shards = [
+        int(m.group(1))
+        for m in re.finditer(
+            r"^integration shard (\d+): estimated \d+s, (\d+) package\(s\)$",
+            proc.stdout,
+            re.MULTILINE,
+        )
+        if int(m.group(2)) >= 2
+    ]
+    assert shards, "the plan has no integration shard with more than one package"
+    return str(shards[0])
+
+
 def _values(lines: list[str]) -> set[str]:
     return {line.split("|", 1)[0] for line in lines}
 
 
 def test_shard_run_disables_ryuk_in_ci(tmp_path: Path) -> None:
     lines = _run(
-        tmp_path, "integration-shard", "packages", "4", env_extra={"CI": "true"}
+        tmp_path,
+        "integration-shard",
+        "packages",
+        _multi_package_shard(),
+        env_extra={"CI": "true"},
     )
     # A measurement that did not happen must fail: the shard ran go test.
     assert lines, "the stand-in go recorded no `go test` call"
@@ -95,7 +127,9 @@ def test_shard_run_disables_ryuk_in_ci(tmp_path: Path) -> None:
 
 
 def test_shard_run_keeps_ryuk_outside_ci(tmp_path: Path) -> None:
-    lines = _run(tmp_path, "integration-shard", "packages", "4", env_extra={})
+    lines = _run(
+        tmp_path, "integration-shard", "packages", _multi_package_shard(), env_extra={}
+    )
     assert lines
     assert _values(lines) == {"<unset>"}, lines
 
@@ -105,7 +139,7 @@ def test_a_caller_value_wins(tmp_path: Path) -> None:
         tmp_path,
         "integration-shard",
         "packages",
-        "4",
+        _multi_package_shard(),
         env_extra={"CI": "true", "TESTCONTAINERS_RYUK_DISABLED": "false"},
     )
     assert lines

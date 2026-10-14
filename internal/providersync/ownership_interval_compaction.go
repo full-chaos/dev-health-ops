@@ -858,10 +858,20 @@ func verifyOwnershipTableShape(ctx context.Context, conn driver.Conn, spec owner
 	return nil
 }
 
-// requireQuietOrg refuses when either ownership table of the organization holds a row written within the window.
+// requireQuietOrg refuses when either ownership table was written within the window.
 func requireQuietOrg(ctx context.Context, conn driver.Conn, orgID string, quietSeconds int) error {
 	if quietSeconds <= 0 {
 		return nil
+	}
+	// Provider timestamps are not monotonic, so a row's own updated_at cannot say when it was written. The server
+	// can: an insert makes a new part, and an active part modified within the window is a write (or the merge of
+	// one) in either table, of any organization. Conservative on purpose: with the workers paused it is quiet.
+	var parts uint64
+	if err := conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM system.parts WHERE database = currentDatabase() AND active AND table IN ('team_repo_ownership', 'team_project_ownership') AND modification_time > now() - toIntervalSecond(%d)", quietSeconds)).Scan(&parts); err != nil {
+		return fmt.Errorf("%w: %v", ErrOwnershipCompactionWritesActive, err)
+	}
+	if parts != 0 {
+		return fmt.Errorf("%w: %d parts", ErrOwnershipCompactionWritesActive, parts)
 	}
 	for _, query := range []string{
 		fmt.Sprintf("SELECT count() FROM team_repo_ownership WHERE org_id = {org_id:String} AND updated_at > now64(3, 'UTC') - toIntervalSecond(%d) AND updated_at <= now64(3, 'UTC') + toIntervalSecond(60)", quietSeconds),
@@ -1373,6 +1383,11 @@ func RestoreOwnershipCompaction(ctx context.Context, conn driver.Conn, runID str
 		return outcome, fmt.Errorf("%w: no backup rows for this run id", ErrOwnershipCompactionBackup)
 	}
 	for _, spec := range specs {
+		if held, err := backupRowsOfRunInTable(ctx, conn, spec, runID); err != nil {
+			return outcome, err
+		} else if held == 0 {
+			continue
+		}
 		if err := verifyOwnershipTableShape(ctx, conn, spec); err != nil {
 			return outcome, err
 		}
@@ -1413,22 +1428,31 @@ func RestoreOwnershipCompaction(ctx context.Context, conn driver.Conn, runID str
 func backupRowsOfRun(ctx context.Context, conn driver.Conn, specs []ownershipCompactionSpec, runID string) (uint64, error) {
 	var total uint64
 	for _, spec := range specs {
-		var exists uint64
-		if err := conn.QueryRow(ctx, "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = {name:String}",
-			clickhouse.Named("name", spec.backupTable())).Scan(&exists); err != nil {
-			return 0, fmt.Errorf("%w: %v", ErrOwnershipCompactionBackup, err)
-		}
-		if exists == 0 {
-			continue
-		}
-		var count uint64
-		if err := conn.QueryRow(ctx, "SELECT count() FROM "+spec.backupTable()+" WHERE run_id = {run_id:String}",
-			clickhouse.Named("run_id", runID)).Scan(&count); err != nil {
-			return 0, fmt.Errorf("%w: %v", ErrOwnershipCompactionBackup, err)
+		count, err := backupRowsOfRunInTable(ctx, conn, spec, runID)
+		if err != nil {
+			return 0, err
 		}
 		total += count
 	}
 	return total, nil
+}
+
+// backupRowsOfRunInTable counts the rows one backup table holds for the run; a table that does not exist holds none.
+func backupRowsOfRunInTable(ctx context.Context, conn driver.Conn, spec ownershipCompactionSpec, runID string) (uint64, error) {
+	var exists uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = {name:String}",
+		clickhouse.Named("name", spec.backupTable())).Scan(&exists); err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrOwnershipCompactionBackup, err)
+	}
+	if exists == 0 {
+		return 0, nil
+	}
+	var count uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM "+spec.backupTable()+" WHERE run_id = {run_id:String}",
+		clickhouse.Named("run_id", runID)).Scan(&count); err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrOwnershipCompactionBackup, err)
+	}
+	return count, nil
 }
 
 func restoreOwnershipOrg(

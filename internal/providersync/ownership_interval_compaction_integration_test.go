@@ -1059,6 +1059,66 @@ func TestCompactOwnershipIntervalsRefusesAWriteWhileWorkersMayBeWriting(t *testi
 	}
 }
 
+// A run of one table restores without naming the table: the table that has no backup for the run is skipped.
+func TestCompactOwnershipIntervalsRestoresATableScopedRunWithoutTheTableFilter(t *testing.T) {
+	f := newCmpFixture(t)
+	opts := cmpOptions(f.orgA)
+	opts.Table = OwnershipCompactionRepoTable
+	outcome, err := CompactOwnershipIntervals(f.ctx, f.conn, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoreAll := cmpOptions(f.orgA)
+	restoreAll.Orgs, restoreAll.AllOrgs = nil, true
+	restored, err := RestoreOwnershipCompaction(f.ctx, f.conn, outcome.RunID, restoreAll)
+	if err != nil {
+		t.Fatalf("restore of a table-scoped run without --table: %v", err)
+	}
+	if got := cmpTable(t, restored, OwnershipCompactionRepoTable); got.RowsMerged == 0 {
+		t.Fatalf("the repository table was not restored: %+v", got)
+	}
+	if len(restored.Tables) != 1 {
+		t.Fatalf("the table with no backup for the run must be skipped, got %d tables", len(restored.Tables))
+	}
+}
+
+// An older-stamp version of a tombstoned key is invisible (FINAL keeps the tombstone). The delete takes it away with
+// the tombstone it hides, so the FINAL state of the key does not change; a version that survived would become the
+// key's FINAL row and put its interval back. Every answer is the same before and after.
+func TestCompactOwnershipIntervalsDeleteKeepsTheFinalStateWhenAnInvisibleOlderVersionAppears(t *testing.T) {
+	f := newCmpFixture(t)
+	instants := f.instants()
+	before := f.snapshots(f.orgA, instants)
+	opts := cmpOptions(f.orgA)
+	opts.Table = OwnershipCompactionRepoTable
+	opts.afterInsert = func(string) {
+		// A sync writes, after phase A, an old-stamped version of an inner key of the first run (valid 01-02..01-03):
+		// it loses FINAL to the tombstone of phase A.
+		older := cmpRepoRow(cmpTeam1, cmpRepo1, "acme/api", 1, 2, 0.1, 2)
+		older.UpdatedAt = cmpDay(-100)
+		f.insert(repoSpec(), f.orgA, []ownershipIntervalRow{older})
+	}
+	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, opts); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	f.assertSameAnswers(f.orgA, instants, before, "an invisible older version appeared")
+}
+
+// A write is refused while a part of either table was modified within the quiet window, whatever the stamps of
+// its rows say: provider timestamps are not monotonic.
+func TestCompactOwnershipIntervalsQuietCheckSeesAnInsertWithAnOldProviderStamp(t *testing.T) {
+	f := newCmpFixture(t)
+	// An organization with no row of its own: neither its updated_at nor its last_synced can show a write. Only the
+	// table's parts, which the fixture insert just made, can.
+	other := "00000000-0000-4000-8000-0000000000c3"
+	if err := requireQuietOrg(f.ctx, f.conn, other, 3600); !errors.Is(err, ErrOwnershipCompactionWritesActive) {
+		t.Fatalf("an insert with old provider stamps, by another organization, just now: %v", err)
+	}
+	if err := requireQuietOrg(f.ctx, f.conn, other, 0); err != nil {
+		t.Fatalf("the check turned off: %v", err)
+	}
+}
+
 func TestCompactOwnershipIntervalsChecksTheBackupBeforeAnyRewrite(t *testing.T) {
 	f := newCmpFixture(t)
 	physical := f.physicalCount(OwnershipCompactionRepoTable, f.orgA)

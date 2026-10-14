@@ -1658,6 +1658,100 @@ kubectl exec -i <worker-pod> -- dho workers providersync carry-team-ids \
   --org-stdin --reason <code> --correlation-id <id> < org-id-source
 ```
 
+#### `providersync compact-ownership-intervals` (CHAOS-9556)
+
+A one-time data step. The old per-sync writer closed the open ownership row of
+an unchanged fact at every sync and opened a new one, so a key holds runs of
+adjacent closed intervals of one shape. This verb merges each such run into one
+interval (the first `valid_from`, the last `valid_to`) in `team_project_ownership`
+(source `native`) and `team_repo_ownership` (source `inferred`), and drops the
+supersede tombstones (`valid_to` = `valid_from`) that cover no instant. The
+ownership timeline stays exact: for every key and every instant T, the rows
+valid at T have the same shape before and after.
+
+**It deletes rows, so it writes nothing unless `--apply` is given. This is an
+exception to the house pattern of the sibling verbs above, which write unless
+`--dry-run` is given.** Without
+`--apply` (a dry run, the default) it reads, plans, proves the owner-at-T
+differential and reports. `--dry-run` is accepted and does the same; it is
+refused together with `--apply`. `--apply` needs `--reason` and
+`--correlation-id` and runs under one audit row.
+
+Two runs merge when they are adjacent (`valid_to` of one is `valid_from` of
+the next) and every column but the version is equal: `project_key` (project
+table), `repo_id`, `match_type`, `share` (repository table; share drift is a
+real change, D5991), `is_primary`, `specificity`, `priority`. `updated_at` and
+`last_synced` are ignored. Open rows, gaps, close-before-open rows
+and rows of any other source are never touched. An overlap on a key is counted
+(`overlaps`); an adjacent equal-shape pair next to an overlap is still merged
+(the timeline stays exact; CHAOS-9675 tracks keeping such a key whole). A run is also kept when a row of
+another source of the same (provider, repository or project, team) would
+change which row wins the "newest version" choice of the cascade readers
+(`runs_kept_multi_source`). A tombstone is dropped unless it is the earliest row
+of its key (`tombstones_kept_anchor`: the team-id carry and the context-fabric
+edge read `min(valid_from)` of a key as its "since when") or the latest row of
+its key by the context-fabric `ownershipFactOrder`, that is, the key has no open
+row and no row that ends after it (`tombstones_kept_latest`: the edge reads
+`latest_valid_to` and the latest row's columns from it) or the holder of the
+key's newest `updated_at` (`tombstones_kept_stamp`: the edge and the work-item
+scope check page on that maximum, which merging never lowers).
+
+Method, per batch of runs: (A) one insert of the merged first row and, for the
+other rows of the run, the same rows again as tombstones, so a reader sees the
+merged row and no inner row in one step; the rows are read back and the
+differential is asked again; (B) only then an `ALTER TABLE ... DELETE` of the
+tombstones (`mutations_sync=2`; the delete names the key AND the `updated_at` of every physical version it read, so a version a sync writes after that read survives and is counted in `rows_newer_than_the_delete`). Rewritten
+rows take an `updated_at` from the run's own history, never `now()`, so the
+work-item attribution scope check queues no recompute. The workers need not be
+stopped. Before the first insert of an organization the tool copies every row
+it will rewrite or drop into `<table>_compaction_bak` (created if missing) and
+checks the copy is not empty and has the expected row count. A key that a sync
+wrote between the plan and the insert is skipped and counted
+(`runs_changed_during_run`). `--restore-run <run_id> --apply` puts the rows of a
+run back from the backup table: the FINAL rows are restored with an `updated_at` above the current version, a logical key (provider, repository or project, team, source) that a sync wrote since the run started, that is, any current row of it stamped after the run's start, is left whole as the sync made it (`rows_changed_since_the_run`; the tool's own rows carry near-history stamps), an unknown run id is refused,
+the superseded stale physical versions (which no FINAL reader sees) are not restored, and the backup of a project row keeps the original `last_synced` (a restored or merged row gets a fresh server stamp). The tool never drops the backup table: it stays
+until the next pin readback after the step and is dropped on the word of the GWC
+lead. In production the step runs inside a roll window (minutes :10-:33 or
+:46-:55 of the hour, between the hourly syncs), with the workers running.
+
+**Supported procedure and its limit (D6010).** Pause the providersync writers
+for the whole window (the scheduler, then the `sync` and `sync-provider`
+ScaledObjects at 0, wait for the running jobs of queues `sync` and
+`sync_provider` to drain), run the dry run, run `--apply --workers-paused`, read
+the owner-answer differential back (counts only: `differential.mismatches` 0, a
+second `--apply` reports `runs_merged` 0) in the same paused window, and if
+anything is wrong run `--restore-run <run_id> --apply --workers-paused`
+IMMEDIATELY, in that window; then resume the writers in the reverse order. A
+restore after the writers have resumed is NOT supported: a sync write that
+reached a key during or after the run, with a provider timestamp older than the
+run, is not seen as a later write. The backup tables are dropped only after the
+next pin readback after the step, on the GWC lead's word.
+
+**Pause the workers first.** No per-organization lease exists that the tool could take (the sync leases are per sync unit), so a write, `--apply` or `--restore-run ... --apply`, is refused unless `--workers-paused` is given: the operator's statement that the sync workers that write ownership rows are paused for the organization. As the data side of that pause, the write is also refused (`ownership_compaction_writes_active`) while a part of either ownership table was modified within `--quiet-seconds` (default 60; 0 turns the check off) by the server clock (provider timestamps are not monotonic, so the check reads the server's part times, of any organization, and the `updated_at` and `last_synced` of the organization's rows); a run with nothing to do is not stopped by it. A dry run needs neither.
+
+`--org-stdin` (one organization on stdin, rules of
+[`metrics daily-start`](#metrics-daily-start-chaos-5055)) or `--all-orgs`
+(every organization that holds a row of the source). A run always covers both
+ownership tables (there is no table option); `--batch-size` is the number of
+runs per insert (default 2000).
+Output: counts only, under `compact_ownership_intervals`, per table and per
+organization (numbered, never named) and in total: `rows_before`/`rows_after`,
+`open_*`, `closed_*`, `tombstones_*`, `close_before_open_*`, `runs_found`,
+`runs_merged`, `rows_merged`, `rows_kept`, `runs_kept_multi_source`,
+`runs_changed_during_run`, `gaps`, `overlaps`, `tombstones_found`,
+`tombstones_dropped`, `tombstones_kept_anchor`, `tombstones_kept_latest`, `tombstones_kept_stamp`, `backup_rows`, `rows_newer_than_the_delete`, `rows_changed_since_the_run`, `differential`
+(`groups_total`, `groups_checked`, `instants_checked`, `mismatches`) and
+`elapsed_ms`. A second `--apply` reports zero runs merged and writes nothing.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-intervals \
+  --org-stdin < org-id-source
+kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-intervals \
+  --all-orgs
+kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-intervals \
+  --all-orgs --apply --workers-paused --reason <code> --correlation-id <id>
+```
+
 #### `providersync retire-jira-project-as-team` (CHAOS-8888)
 
 Earlier versions of the Jira team catalog made a team of every Jira project

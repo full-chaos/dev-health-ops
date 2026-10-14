@@ -160,3 +160,11 @@ func TestLinearEnsureRowCarriesAState(t *testing.T) {
 		t.Fatalf("ensure row updated_at = %v, want the epoch anchor", row.UpdatedAt)
 	}
 }
+
+func TestJiraCatalogArchivedProjectRowIsCompletedAndInactive(t *testing.T) {
+	row := normalizeJiraArchivedProjectRow("org-1", testPID("20001"), "OLD", "Old", time.Now())
+	requireProjectState(t, "jira catalog archived", row.State, row.StateSource, "completed", "jira.project.status=archived")
+	if row.IsActive != 0 {
+		t.Fatalf("archived project is_active=%d, want 0", row.IsActive)
+	}
+}

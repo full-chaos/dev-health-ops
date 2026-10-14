@@ -461,8 +461,8 @@ func TestAnArchivedJiraProjectKeepsItsOwnership(t *testing.T) {
 	if got := countRows(t, ctx, conn, `SELECT count() FROM teams FINAL WHERE org_id = ? AND id IN ('ZZZ', 'NEVER', 'OPS')`, orgID); got != 0 {
 		t.Fatalf("%d team rows for projects, want none: a project is not a team, live or archived", got)
 	}
-	if got := countRows(t, ctx, conn, `SELECT count() FROM projects FINAL WHERE org_id = ? AND id IN ('20001', '30001')`, orgID); got != 0 {
-		t.Fatalf("%d project rows for archived projects, want none", got)
+	if got := countRows(t, ctx, conn, `SELECT count() FROM projects FINAL WHERE org_id = ? AND id IN ('20001', '30001') AND state = 'completed' AND state_source = 'jira.project.status=archived' AND is_active = 0`, orgID); got != 2 {
+		t.Fatalf("%d completed project rows for the 2 archived projects, want 2", got)
 	}
 
 	// 2. The archived read fails: the live answer has no ZZZ, and nothing

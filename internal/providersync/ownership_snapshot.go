@@ -617,11 +617,7 @@ func PlanSnapshot[R any](
 	sort.Ints(closes)
 	for _, index := range closes {
 		row := open[index]
-		closedAt := at
-		if closedAt.Before(validFrom(row)) {
-			closedAt = validFrom(row)
-		}
-		plan.Retract = append(plan.Retract, SnapshotRetraction{Open: index, ClosedAt: closedAt})
+		plan.Retract = append(plan.Retract, SnapshotRetraction{Open: index, ClosedAt: intervalCloseAt(validFrom(row), at)})
 		plan.Kinds[owners[index]].Closed++
 	}
 	return plan

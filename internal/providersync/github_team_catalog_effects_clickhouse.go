@@ -186,7 +186,7 @@ SELECT team_id, repo_id, repo_full_name, match_type, is_primary, specificity, pr
 FROM team_repo_ownership FINAL
 WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
   AND startsWith(repo_full_name, ?)
-  AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`,
+  AND (valid_to IS NULL OR (valid_to > now64(3, 'UTC') AND valid_to > valid_from))`,
 		orgID, githubTeamCatalogProvider, githubTeamCatalogSource, teamIDs, githubOrg+"/")
 	if err != nil {
 		return nil, err
@@ -214,7 +214,7 @@ WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
 
 const githubRepoOwnershipTeamsQuery = `SELECT DISTINCT team_id FROM team_repo_ownership FINAL
 WHERE org_id = ? AND provider = ? AND source = ? AND startsWith(repo_full_name, ?)
-  AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`
+  AND (valid_to IS NULL OR (valid_to > now64(3, 'UTC') AND valid_to > valid_from))`
 
 // OpenRepoOwnershipTeamsNotListed reads the teams that hold an open
 // provider_access row under the run's GitHub org (repo full name prefix

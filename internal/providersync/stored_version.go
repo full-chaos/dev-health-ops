@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -287,11 +288,15 @@ func StoredVersionSpecs() map[string][]storedversion.Spec {
 		"work_items": {
 			{
 				Name: "provider sync work items", Contract: workItemsContract, Insert: withHeldWorkItemColumns(gitHubWorkItemsInsert),
-				NullIsUnstated: true, Carry: workItemsPayloadCarry,
+				NullIsUnstated: true, Carry: workItemsPayloadCarry(workItemsContract),
 			},
 			{
-				Name: "provider sync linear work items", Contract: workItemsContract, Insert: withHeldWorkItemColumns(linearWorkItemsInsert),
-				NullIsUnstated: true, Carry: workItemsPayloadCarry,
+				Name: "provider sync dated work items", Contract: datedWorkItemsContract, Insert: withHeldWorkItemColumns(gitHubWorkItemsInsert),
+				NullIsUnstated: true, Carry: workItemsPayloadCarry(datedWorkItemsContract),
+			},
+			{
+				Name: "provider sync linear work items", Contract: datedWorkItemsContract, Insert: withHeldWorkItemColumns(linearWorkItemsInsert),
+				NullIsUnstated: true, Carry: workItemsPayloadCarry(datedWorkItemsContract),
 			},
 		},
 		"projects": projectsStoredVersionSpecs(),
@@ -302,36 +307,75 @@ const workItemDescriptionField = "description"
 
 // workItemsHeldColumns are the work_items columns the Python-parity column
 // lists omit, so the writers append them. description carries the bounded
-// provider text when the row states one and the held value otherwise; the
-// other three never get a provider value and carry the held one.
+// provider text when the row states one and the held value otherwise;
+// priority_raw and service_class never get a provider value and carry the
+// held one. due_at is written as the provider row states it when the row's
+// provider states due dates (workItemDueAtStated) and carries the held value
+// otherwise.
 var workItemsHeldColumns = []string{"description", "priority_raw", "service_class", "due_at"}
 
-// workItemsContract is the contract table of the provider-sync work-item
-// writers (the direct adapter shared by github, gitlab and jira rows, and the
-// linear adapter): every column of the Python-parity list is stated as the
-// provider row produces it, and the four held columns are R1.
-var workItemsContract = storedversion.Contract{Writer: "provider_sync", Table: "work_items", Columns: joinColumns(
-	contractColumns(storedversion.Identity, "repo_id", "work_item_id"),
-	contractColumns(storedversion.Writer, "provider"),
-	contractColumns(storedversion.Stated, "title", "type", "status", "status_raw", "project_key", "project_id",
-		"native_team_key", "project_name", "assignees", "reporter", "created_at", "updated_at"),
-	contractColumns(storedversion.StateCoupled, "started_at", "completed_at", "closed_at"),
-	contractColumns(storedversion.Stated, "labels", "story_points", "sprint_id", "sprint_name", "parent_id", "epic_id", "url"),
-	contractColumns(storedversion.Writer, "last_synced", "org_id", "source_id"),
-	[]storedversion.Column{
-		{Name: "description", Rule: storedversion.Unstated, Fields: []string{workItemDescriptionField}},
-		{Name: "priority_raw", Rule: storedversion.NoField},
-		{Name: "service_class", Rule: storedversion.NoField}, {Name: "due_at", Rule: storedversion.NoField},
-	},
-)}
-
-func workItemsCarry(descriptionUnstated bool) map[string]bool {
-	return workItemsContract.Carry(func(field string) bool { return field == workItemDescriptionField && descriptionUnstated })
+// workItemDueAtStated reports whether a provider's work-item rows state a due
+// date: GitLab due_date, Jira duedate and Linear dueDate. A row of such a
+// provider with no date states "none", so a due date removed at the provider
+// is cleared. GitHub issues have no due date of their own (a milestone's
+// due_on is the sprint's end), so a GitHub row states nothing and keeps the
+// held value; so does any provider not named here.
+func workItemDueAtStated(provider string) bool {
+	switch provider {
+	case "gitlab", "jira", "linear":
+		return true
+	}
+	return false
 }
 
-func workItemsPayloadCarry(payload map[string]any) map[string]bool {
-	description, _ := payload[workItemDescriptionField].(string)
-	return workItemsCarry(description == "")
+func workItemsContractFor(row workItemStoredRow) storedversion.Contract {
+	if workItemRowStatesDueAt(row) {
+		return datedWorkItemsContract
+	}
+	return workItemsContract
+}
+
+func workItemsContractColumns(dueAt storedversion.Column) []storedversion.Column {
+	return joinColumns(
+		contractColumns(storedversion.Identity, "repo_id", "work_item_id"),
+		contractColumns(storedversion.Writer, "provider"),
+		contractColumns(storedversion.Stated, "title", "type", "status", "status_raw", "project_key", "project_id",
+			"native_team_key", "project_name", "assignees", "reporter", "created_at", "updated_at"),
+		contractColumns(storedversion.StateCoupled, "started_at", "completed_at", "closed_at"),
+		contractColumns(storedversion.Stated, "labels", "story_points", "sprint_id", "sprint_name", "parent_id", "epic_id", "url"),
+		contractColumns(storedversion.Writer, "last_synced", "org_id", "source_id"),
+		[]storedversion.Column{
+			{Name: "description", Rule: storedversion.Unstated, Fields: []string{workItemDescriptionField}},
+			{Name: "priority_raw", Rule: storedversion.NoField},
+			{Name: "service_class", Rule: storedversion.NoField}, dueAt,
+		},
+	)
+}
+
+// workItemsContract is the contract table of the provider-sync work-item
+// writers for rows whose provider states no due date (github): every column
+// of the Python-parity list is stated as the provider row produces it, and
+// priority_raw, service_class and due_at are R1.
+var workItemsContract = storedversion.Contract{Writer: "provider_sync", Table: "work_items", Columns: workItemsContractColumns(
+	storedversion.Column{Name: "due_at", Rule: storedversion.NoField},
+)}
+
+// datedWorkItemsContract is the same writer's contract table for rows whose
+// provider states a due date (gitlab, jira, linear): due_at is stated, a
+// value replaces the held one and a stated none clears it.
+var datedWorkItemsContract = storedversion.Contract{Writer: "provider_sync", Table: "work_items", Columns: workItemsContractColumns(
+	storedversion.Column{Name: "due_at", Rule: storedversion.Stated, Fields: []string{"due_at"}},
+)}
+
+func workItemsCarry(contract storedversion.Contract, descriptionUnstated bool) map[string]bool {
+	return contract.Carry(func(field string) bool { return field == workItemDescriptionField && descriptionUnstated })
+}
+
+func workItemsPayloadCarry(contract storedversion.Contract) func(map[string]any) map[string]bool {
+	return func(payload map[string]any) map[string]bool {
+		description, _ := payload[workItemDescriptionField].(string)
+		return workItemsCarry(contract, description == "")
+	}
 }
 
 // withHeldWorkItemColumns appends the held columns to a Python-parity
@@ -346,7 +390,13 @@ func workItemStoredVersionRows(rows []workItemStoredRow) []storedversion.Row {
 	for i, row := range rows {
 		values := append(row.values(), make([]any, len(workItemsHeldColumns))...)
 		values[len(values)-len(workItemsHeldColumns)] = row.Description
-		stored[i] = storedversion.Row{Values: values, Carry: workItemsCarry(workItemDescriptionUnstated(row.Description))}
+		if workItemRowStatesDueAt(row) {
+			values[len(values)-1] = nullableTimePointer(row.DueAt)
+		}
+		stored[i] = storedversion.Row{
+			Values: values,
+			Carry:  workItemsCarry(workItemsContractFor(row), workItemDescriptionUnstated(row.Description)),
+		}
 	}
 	return stored
 }
@@ -359,11 +409,32 @@ func writeWorkItemsKeepingHeldColumns(
 ) error {
 	extended := withHeldWorkItemColumns(insert)
 	stored := workItemStoredVersionRows(rows)
-	outcomes, err := workItemsContract.Apply(ctx, conn, orgID, extended, stored)
-	if err != nil {
-		return err
+	for _, dated := range []bool{false, true} {
+		contract := workItemsContract
+		if dated {
+			contract = datedWorkItemsContract
+		}
+		var group []storedversion.Row
+		var positions []int
+		for i, row := range rows {
+			if workItemRowStatesDueAt(row) == dated {
+				group = append(group, stored[i])
+				positions = append(positions, i)
+			}
+		}
+		if len(group) == 0 {
+			continue
+		}
+		outcomes, err := contract.Apply(ctx, conn, orgID, extended, group)
+		if err != nil {
+			return err
+		}
+		for j, i := range positions {
+			stored[i] = group[j]
+		}
+		contract.Log(ctx, orgID, storedVersionCarriedEvent, storedVersionRefusedEvent, outcomes)
 	}
-	workItemsContract.Log(ctx, orgID, storedVersionCarriedEvent, storedVersionRefusedEvent, outcomes)
+	logWorkItemDueDates(ctx, rows)
 	batch, err := conn.PrepareBatch(ctx, extended)
 	if err != nil {
 		return err
@@ -375,6 +446,65 @@ func writeWorkItemsKeepingHeldColumns(
 		}
 	}
 	return batch.Send()
+}
+
+const (
+	workItemDueDatesEvent    = "providersync.work_items.due_dates"
+	workItemDueAtAbsentEvent = "providersync.work_items.due_at_absent_kept_held"
+)
+
+// workItemRowStatesDueAt reports whether a row states the provider's due date
+// (or none). A row of a dated provider decoded from an effect with no due_at
+// key states nothing: the held value is kept (see decodeWorkItemEffectRows).
+func workItemRowStatesDueAt(row workItemStoredRow) bool {
+	return workItemDueAtStated(row.Provider) && !row.DueAtAbsent
+}
+
+// decodeWorkItemEffectRows decodes work_items effect rows and marks each row
+// whose JSON has no due_at key. A prepared snapshot written before the
+// projection kept due_at has none; replaying it must not read as "the provider
+// states no due date" and clear a held one. A row built by a normalizer always
+// has the key (null when the provider states none).
+func decodeWorkItemEffectRows[T any](effect EffectBatch, markAbsent func(*T)) ([]T, error) {
+	rows, err := decodeEffectRows[T](effect)
+	if err != nil {
+		return nil, err
+	}
+	for i, raw := range effect.Rows {
+		var probe struct {
+			DueAt json.RawMessage `json:"due_at"`
+		}
+		if json.Unmarshal(raw, &probe) != nil {
+			return nil, ErrEffectRecoveryUnsafe
+		}
+		if probe.DueAt == nil {
+			markAbsent(&rows[i])
+		}
+	}
+	return rows, nil
+}
+
+// logWorkItemDueDates counts, for one write, the rows whose provider states a
+// due date and how many of them state one; counts only, no ids or text. Rows
+// of a dated provider that carried no due_at key are a warning: their held
+// value was kept instead of the provider's statement.
+func logWorkItemDueDates(ctx context.Context, rows []workItemStoredRow) {
+	dated, withDueDate, absent := 0, 0, 0
+	for _, row := range rows {
+		switch {
+		case workItemRowStatesDueAt(row):
+			dated++
+			if row.DueAt != nil {
+				withDueDate++
+			}
+		case workItemDueAtStated(row.Provider):
+			absent++
+		}
+	}
+	slog.DebugContext(ctx, workItemDueDatesEvent, "rows", len(rows), "dated_provider_rows", dated, "with_due_date", withDueDate)
+	if absent > 0 {
+		slog.WarnContext(ctx, workItemDueAtAbsentEvent, "rows", absent)
+	}
 }
 
 const repositoryInsert = `

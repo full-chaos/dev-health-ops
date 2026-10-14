@@ -129,7 +129,7 @@ func TestExplainFindingSharesAgreeWithMixAndLeakNoRawKeys(t *testing.T) {
 	if share := got.TopFindings[0].Evidence.SharePct; share != wantSubcategory {
 		t.Fatalf("finding share = %v, want the mix's %v", share, wantSubcategory)
 	}
-	if !strings.Contains(got.TopFindings[0].Finding, "~10% of effort") {
+	if !strings.Contains(got.TopFindings[0].Finding, "~10% of work") {
 		t.Fatalf("finding text = %q, want the mix share", got.TopFindings[0].Finding)
 	}
 

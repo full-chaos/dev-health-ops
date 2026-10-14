@@ -147,7 +147,7 @@ const manualMembershipRowsQuery = `
 SELECT org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, source, is_primary, specificity, priority, valid_from, valid_to, updated_at
 FROM team_memberships FINAL
 WHERE org_id = {org_id:String} AND provider = {provider:String}
-  AND source = 'manual' AND (valid_to IS NULL OR valid_to > now())
+  AND source = 'manual' AND (valid_to IS NULL OR (valid_to > now() AND valid_to > valid_from))
 ORDER BY member_id, team_id`
 
 func fetchManualMembershipRows(ctx context.Context, conn driver.Conn, orgID, provider string) ([]manualMembershipRow, error) {

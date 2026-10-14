@@ -1000,7 +1000,9 @@ QAPISERVER_INTEGRATION_PACKAGE_KEY="internal/queryapi/server"
 # Packages that get a shard of their own at their TRUE weight (CHAOS-8935).
 # One `go test` starts packages in alphabetical order, so a long package that
 # sorts last starts minutes late and sets the shard's wall time, not its weight.
-INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server} "
+# internal/jobs/metrics/remaining (CHAOS-9631) runs 1,053-1,164 s on its own and
+# sat in a shard with 20 other packages whose job took 22-25 of the 25 minutes.
+INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining} "
 DAILY_TEST_SHARD_COUNT=0
 DAILY_INTEGRATION_TEST_WEIGHT=0
 DAILY_ORDINARY_TEST_WEIGHT=0

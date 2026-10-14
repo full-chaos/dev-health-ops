@@ -37,7 +37,8 @@ type Response struct {
 	Edges                       []map[string]any           `json:"edges" pyjson:"nullable"`
 	// Measure and Denominator are Go-only (CHAOS-9622): what the distributions count, and the sum the
 	// shares are shares of (the sum of the themes). The distribution values are the numerators, so
-	// share = value / denominator. Left out of an empty response, which has no shares.
+	// share = value / denominator. Left out when the table or its columns are absent; a window with no units serves
+	// COUNT and a denominator of 0 (no shares to divide).
 	Measure     string   `json:"measure,omitempty"`
 	Denominator *float64 `json:"denominator,omitempty"`
 }

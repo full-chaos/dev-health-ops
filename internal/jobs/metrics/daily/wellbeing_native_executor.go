@@ -180,13 +180,16 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 	// team_cognitive_load, team_complexity, compounding_risk_team); the
 	// repo_patterns fallback only serves a repository no owner row resolves.
 	// A repository with no owner is "unassigned".
-	// CHAOS-9410/CHAOS-9601, D5994: this family stores its counters as unsigned integers, so it still takes the main owner(s) only, each whole; lesser owners at their own share follow with the Float64 widening (CHAOS-9601).
-	owners, err := teamownership.AuthoritativeOwnersByRepo(ctx, executor.conn, run.OrganizationID, day)
+	// The main owner(s) and every lesser owner of a repository take its
+	// commits at their own linked share (D5988, D5994, CHAOS-9601): a fraction
+	// of a commit count, not rounded (D5991). The repo_patterns fallback gives
+	// one team holding the repository whole.
+	owners, err := teamownership.OwnerSharesByRepo(ctx, executor.conn, run.OrganizationID, day)
 	if err != nil {
 		return 0, fmt.Errorf("resolve authoritative repo ownership: %w", err)
 	}
 	repoResolver, repoKeyByID := newOwnershipRepoResolver(
-		teamresolve.ResolveFromOwnershipMap(owners, repoIDs, repoNamesByID, NewRepoPatternResolver(teams)), teams)
+		teamresolve.ResolveSharesFromOwnershipMap(owners, repoIDs, repoNamesByID, NewRepoPatternResolver(teams)), teams)
 	start := day
 	end := start.Add(24 * time.Hour)
 	commits, err := LoadWellbeingCommits(ctx, executor.conn, run.OrganizationID, start, end, repoIDs)
@@ -378,22 +381,24 @@ func parseRepositoryUUIDs(ids []RepositoryID) ([]uuid.UUID, error) {
 // repository id (newOwnershipRepoResolver returns the identity map to pass as
 // repoNamesByID), so two repositories of one name never share a team.
 type ownershipRepoResolver struct {
-	teamByRepoID map[string][]string
-	nameByTeamID map[string]string
+	ownersByRepoID map[string][]teamownership.OwnerShare
+	nameByTeamID   map[string]string
 }
 
-func newOwnershipRepoResolver(teamByRepoID map[string][]string, teams []WellbeingTeam) (numerical.RepoTeamResolver, map[string]string) {
+func newOwnershipRepoResolver(ownersByRepoID map[string][]teamownership.OwnerShare, teams []WellbeingTeam) (numerical.RepoTeamResolver, map[string]string) {
 	names := make(map[string]string, len(teams))
 	for _, team := range teams {
 		names[strings.TrimSpace(team.ID)] = strings.TrimSpace(team.Name)
 	}
-	keys := make(map[string]string, len(teamByRepoID))
-	for repoID := range teamByRepoID {
+	keys := make(map[string]string, len(ownersByRepoID))
+	for repoID := range ownersByRepoID {
 		keys[repoID] = repoID
 	}
-	return &ownershipRepoResolver{teamByRepoID: teamByRepoID, nameByTeamID: names}, keys
+	return &ownershipRepoResolver{ownersByRepoID: ownersByRepoID, nameByTeamID: names}, keys
 }
 
+// ResolveRepo is the first owner of the repository (the main owner, or the
+// first of a full tie, D5990), for a caller that takes one team.
 func (resolver *ownershipRepoResolver) ResolveRepo(repoID string) (string, string) {
 	owners := resolver.ResolveRepoOwners(repoID)
 	if len(owners) == 0 {
@@ -402,13 +407,26 @@ func (resolver *ownershipRepoResolver) ResolveRepo(repoID string) (string, strin
 	return owners[0].ID, owners[0].Name
 }
 
-// ResolveRepoOwners is every owning team of the repository id: one, or every
-// main owner of a full ownership tie (D5990).
+// ResolveRepoOwners is every owning team of the repository id, the main
+// owner(s) first, each lesser owner after.
 func (resolver *ownershipRepoResolver) ResolveRepoOwners(repoID string) []numerical.TeamRef {
 	var owners []numerical.TeamRef
-	for _, teamID := range resolver.teamByRepoID[repoID] {
-		if teamID != "" {
-			owners = append(owners, numerical.TeamRef{ID: teamID, Name: resolver.nameByTeamID[teamID]})
+	for _, owner := range resolver.ResolveRepoOwnerShares(repoID) {
+		owners = append(owners, owner.TeamRef)
+	}
+	return owners
+}
+
+// ResolveRepoOwnerShares is every owning team of the repository id with its
+// own linked share of it (D5988).
+func (resolver *ownershipRepoResolver) ResolveRepoOwnerShares(repoID string) []numerical.ShareTeamRef {
+	var owners []numerical.ShareTeamRef
+	for _, owner := range resolver.ownersByRepoID[repoID] {
+		if owner.TeamID != "" {
+			owners = append(owners, numerical.ShareTeamRef{
+				TeamRef: numerical.TeamRef{ID: owner.TeamID, Name: resolver.nameByTeamID[owner.TeamID]},
+				Share:   owner.Share,
+			})
 		}
 	}
 	return owners

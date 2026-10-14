@@ -210,9 +210,20 @@ func TestFoldWorkItemInspectionsTreatsMixedBatchAsConflict(t *testing.T) {
 
 // pythonSinkDivergences is the one list of columns the Go work_items write
 // states although write_work_items omits them. description: CHAOS-9484, a
-// decided divergence (bounded text, held when a row has none).
+// decided divergence (bounded text, held when a row has none). due_at:
+// CHAOS-9612, a decided divergence (a gitlab, jira or linear row states its
+// provider's due date, or none, and replaces the held value; a github row has
+// no due date and keeps it).
 var pythonSinkDivergences = map[string]string{
 	"description": "bounded provider text is written; a row with none keeps the held value",
+	"due_at":      "a row of a provider that states due dates writes its date or none; a github row keeps the held value",
+}
+
+// divergenceRules is the contract rule each listed divergence has in the
+// contract that states it.
+var divergenceRules = map[string]storedversion.Rule{
+	"description": storedversion.Unstated,
+	"due_at":      storedversion.Stated,
 }
 
 // The Python-parity insert list omits description/priority_raw/service_class/
@@ -225,8 +236,13 @@ func TestDirectAdapterColumnListsMirrorThePythonSinkOmissions(t *testing.T) {
 	t.Parallel()
 	extended := withHeldWorkItemColumns(gitHubWorkItemsInsert)
 	rules := map[string]storedversion.Rule{}
-	for _, column := range workItemsContract.Columns {
+	for _, column := range datedWorkItemsContract.Columns {
 		rules[column.Name] = column.Rule
+	}
+	for _, column := range workItemsContract.Columns {
+		if column.Name == "due_at" && column.Rule != storedversion.NoField {
+			t.Fatalf("a row of a provider with no due date must keep the held due_at, rule %d", column.Rule)
+		}
 	}
 	for _, omitted := range []string{"description", "priority_raw", "service_class", "due_at"} {
 		if containsColumn(gitHubWorkItemsInsert, omitted) {
@@ -236,7 +252,7 @@ func TestDirectAdapterColumnListsMirrorThePythonSinkOmissions(t *testing.T) {
 			if !containsColumn(extended, omitted) {
 				t.Fatalf("work_items insert no longer writes %q, a listed divergence from the Python sink", omitted)
 			}
-			if rules[omitted] != storedversion.Unstated || !containsColumn(gitHubWorkItemsSelect, omitted) {
+			if rules[omitted] != divergenceRules[omitted] || !containsColumn(gitHubWorkItemsSelect, omitted) {
 				t.Fatalf("%q is a listed divergence but is not stated by the row and compared by the readback", omitted)
 			}
 			continue

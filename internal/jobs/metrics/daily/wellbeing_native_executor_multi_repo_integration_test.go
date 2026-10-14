@@ -61,7 +61,7 @@ func TestComputeFamilyWritesOneRowPerRepoForAMultiRepoTeam(t *testing.T) {
 		// promotion, folded into the same migration).
 		`CREATE TABLE team_metrics_daily (
     day Date, team_id LowCardinality(String), team_name String,
-    commits_count UInt32, after_hours_commits_count UInt32, weekend_commits_count UInt32,
+    commits_count Float64, after_hours_commits_count Float64, weekend_commits_count Float64,
     after_hours_commit_ratio Float64, weekend_commit_ratio Float64,
     computed_at DateTime64(6, 'UTC'), org_id String, repo_id String
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day)`,
@@ -148,10 +148,10 @@ ORDER BY commits_count`, orgID)
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	var commitCounts []uint32
+	var commitCounts []float64
 	var repoIDs []string
 	for rows.Next() {
-		var count uint32
+		var count float64
 		var repoID string
 		if err := rows.Scan(&count, &repoID); err != nil {
 			t.Fatal(err)

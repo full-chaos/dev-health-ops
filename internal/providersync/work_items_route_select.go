@@ -74,7 +74,7 @@ func SelectWorkItemsRouteHandler(provider, dataset string, deps WorkItemsRouteDe
 		return JiraAtlassianRouteHandler{StatusMapping: deps.StatusMapping}, true
 	case "linear":
 		return LinearWorkItemFamilyRouteHandler{
-			Direct: LinearWorkItemsRouteHandler{GlobalDiscovery: true},
+			Direct: LinearWorkItemsRouteHandler{},
 		}, true
 	}
 	return nil, false

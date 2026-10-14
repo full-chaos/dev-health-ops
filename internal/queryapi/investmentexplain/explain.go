@@ -86,7 +86,10 @@ type ExplainInvestmentMixOptions struct {
 	// query, which applies them unconditionally -- work_units.py:253)
 	// but must NOT filter the breakdown by them. See ExplainInvestmentMix's
 	// own comment at the breakdown-fetch call site.
-	ScopeLevel         string
+	ScopeLevel string
+	// Measure is the measure the mix is read in: "COUNT", "THROUGHPUT" or "CHURN_LOC" (see
+	// NormalizeMeasure). Empty is the Investment page's COUNT. The explanation never weighs by effort_value (churn_loc by default); CHURN_LOC is the explicit lines-of-code measure.
+	Measure            string
 	WorkCategory       []string
 	Theme              string
 	Subcategory        string
@@ -141,6 +144,7 @@ func (reader *Reader) fetchMixDistributions(ctx context.Context, opts ExplainInv
 		EndTS:         opts.EndTS,
 		Themes:        themeFilters,
 		Subcategories: subcategoryFilters,
+		Measure:       opts.effectiveMeasure(),
 	}
 	// RepoIDs is applied to the BREAKDOWN query for a team or repo scope, as the
 	// reference does (investment.py:175: `if filters.scope.level in {"team",
@@ -163,6 +167,82 @@ func (reader *Reader) fetchMixDistributions(ctx context.Context, opts ExplainInv
 	}
 	themes, subcategories = buildInvestmentBreakdownDistributions(breakdownRows)
 	return themes, subcategories, nil
+}
+
+// effectiveMeasure is the measure of the mix read: the Investment page's COUNT when the option is
+// empty (the explanation is of the mix the user sees), else NormalizeMeasure of it. A name it does not
+// know reads as COUNT; the route has already refused those.
+func (opts ExplainInvestmentMixOptions) effectiveMeasure() string {
+	if strings.TrimSpace(opts.Measure) == "" {
+		return MeasureCount
+	}
+	measure, ok := NormalizeMeasure(opts.Measure)
+	if !ok {
+		return MeasureCount
+	}
+	return measure
+}
+
+// shareNoun is the noun the finding text puts after the share: what the mix counts.
+func shareNoun(measure string) string {
+	switch measure {
+	case MeasureCount:
+		return "work"
+	case MeasureChurnLOC:
+		return "changed lines"
+	}
+	return "work"
+}
+
+func capitalizeFirst(text string) string {
+	if text == "" {
+		return text
+	}
+	return strings.ToUpper(text[:1]) + text[1:]
+}
+
+func totalKeyOf(measure string) string {
+	if measure == MeasureChurnLOC {
+		return "total_changed_lines"
+	}
+	return "total_work"
+}
+
+func totalKey(key string) string {
+	if key == "" {
+		return "total_effort"
+	}
+	return key
+}
+
+// annotateFindings gives each finding the numerator, denominator and measure of its share, taken from
+// the same distributions the share is: numerator is the value of the subcategory (or of the theme when
+// the finding names none), denominator the total of the themes. A reader can divide them and get
+// share_pct, and can read which measure the mix is in.
+func annotateFindings(explanation *InvestmentMixExplanation, measure string, themes, subcategories *orderedFloatMap) {
+	total := 0.0
+	for _, kv := range themes.Items() {
+		total += kv.Value
+	}
+	valueOf := func(items []keyValue, key string) float64 {
+		for _, kv := range items {
+			if kv.Key == key {
+				return kv.Value
+			}
+		}
+		return 0
+	}
+	for i := range explanation.TopFindings {
+		evidence := &explanation.TopFindings[i].Evidence
+		numerator := valueOf(themes.Items(), evidence.Theme)
+		if evidence.Subcategory != nil {
+			numerator = valueOf(subcategories.Items(), *evidence.Subcategory)
+		}
+		denominator := total
+		evidence.Measure = measure
+		evidence.Numerator = &numerator
+		evidence.Denominator = &denominator
+	}
 }
 
 // mixCacheFilters extends the request filters of the cache key with the resolved
@@ -195,6 +275,7 @@ func mixCacheFilters(opts ExplainInvestmentMixOptions, themes, subcategories *or
 		"window_start": opts.StartTS.UTC().Format("2006-01-02"),
 		"window_end":   opts.EndTS.UTC().Format("2006-01-02"),
 		"mix_sha256":   hex.EncodeToString(digest.Sum(nil)),
+		"measure":      opts.effectiveMeasure(),
 	}
 }
 
@@ -245,7 +326,7 @@ func llmUnavailableExplanation() InvestmentMixExplanation {
 // invalidLLMOutputExplanation ports explain_investment_mix's fallback
 // InvestmentMixExplanation construction on a parse failure
 // (investment_mix_explain.py:455-495).
-func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, confidenceLevel string, qualityMean, qualityStddev *float64, bandCounts BandMix, qualityDrivers []string) InvestmentMixExplanation {
+func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, confidenceLevel string, qualityMean, qualityStddev *float64, bandCounts BandMix, qualityDrivers []string, noun string) InvestmentMixExplanation {
 	fallbackFindings := make([]InvestmentMixFinding, 0, 2)
 	for _, kv := range topThemes[:min(2, len(topThemes))] {
 		pct := 0.0
@@ -254,7 +335,7 @@ func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, conf
 		}
 		theme := kv.Key
 		fallbackFindings = append(fallbackFindings, InvestmentMixFinding{
-			Finding: "Effort appears concentrated in " + theme + " (~" + formatPercentZeroDecimals(pct) + "% of total).",
+			Finding: capitalizeFirst(noun) + " appears concentrated in " + theme + " (~" + formatPercentZeroDecimals(pct) + "% of total).",
 			Evidence: InvestmentMixFindingEvidence{
 				Theme:               theme,
 				SharePct:            pct,
@@ -264,7 +345,7 @@ func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, conf
 	}
 	status := "invalid_llm_output"
 	return InvestmentMixExplanation{
-		Summary:     "This mix suggests effort leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.",
+		Summary:     "This mix suggests " + noun + " leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.",
 		TopFindings: fallbackFindings,
 		Confidence: InvestmentMixConfidence{
 			Level:         confidenceLevel,
@@ -616,6 +697,7 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 		Theme:            theme,
 		Subcategory:      opts.Subcategory,
 		TotalEffort:      totalEffort,
+		TotalKey:         totalKeyOf(opts.effectiveMeasure()),
 		TopThemes:        topThemes,
 		TopSubcategories: topSubcategories,
 		WorkUnitCount:    totalUnits,
@@ -675,6 +757,7 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 	parseResult := ParseInvestmentMixResponse(completion.Text, ParseOptions{
 		ThemeSharesPct:       themeSharesPct,
 		SubcategorySharesPct: subcategorySharesPct,
+		ShareNoun:            shareNoun(opts.effectiveMeasure()),
 		FallbackLevel:        confidenceLevel,
 		FallbackBandMix:      bandCounts,
 		FallbackDrivers:      qualityDrivers,
@@ -684,10 +767,13 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 
 	if parseResult.Output == nil {
 		logRejectedExplainOutput(ctx, parseResult, resolvedProvider, resolvedModel, completion)
-		return invalidLLMOutputExplanation(topThemes, totalEffort, confidenceLevel, qualityMean, qualityStddev, bandCounts, qualityDrivers), nil
+		fallback := invalidLLMOutputExplanation(topThemes, totalEffort, confidenceLevel, qualityMean, qualityStddev, bandCounts, qualityDrivers, shareNoun(opts.effectiveMeasure()))
+		annotateFindings(&fallback, opts.effectiveMeasure(), themeDistribution, subcategoryDistribution)
+		return fallback, nil
 	}
 
 	result := explainOutputToExplanation(*parseResult.Output)
+	annotateFindings(&result, opts.effectiveMeasure(), themeDistribution, subcategoryDistribution)
 
 	if opts.LLMProvider != "mock" && writer != nil {
 		if explanationJSON, encodeErr := EncodeInvestmentMixExplanation(result); encodeErr == nil {
@@ -815,9 +901,12 @@ type sampleQuoteEntry struct {
 }
 
 type explainPayloadInput struct {
-	Theme            string
-	Subcategory      string
-	TotalEffort      float64
+	Theme       string
+	Subcategory string
+	TotalEffort float64
+	// TotalKey names the total in the payload: total_work or total_changed_lines for the measure read
+	// (CHAOS-9555), so the model cannot call a count "effort". Empty keeps the reference name total_effort.
+	TotalKey         string
 	TopThemes        []keyValue
 	TopSubcategories []keyValue
 	WorkUnitCount    int
@@ -878,11 +967,11 @@ func buildExplainPayload(in explainPayloadInput) map[string]any {
 	}
 
 	return map[string]any{
-		"focus":                        map[string]any{"theme": theme, "subcategory": subcategory},
-		"total_effort":                 in.TotalEffort,
-		"theme_distribution_top":       themeTop,
-		"subcategory_distribution_top": subcategoryTop,
-		"work_unit_count":              in.WorkUnitCount,
+		"focus":                                     map[string]any{"theme": theme, "subcategory": subcategory},
+		totalKey(in.TotalKey):                       in.TotalEffort,
+		"theme_distribution_top":                    themeTop,
+		"subcategory_distribution_top":              subcategoryTop,
+		"work_unit_count":                           in.WorkUnitCount,
 		"work_unit_dominant_subcategory_counts_top": dominantTop,
 		"evidence_quality_band_counts":              bandCounts,
 		"evidence_quality_mean":                     optionalFloatToAny(in.QualityMean),

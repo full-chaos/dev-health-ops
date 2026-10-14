@@ -78,13 +78,20 @@ func TestJiraProjectTargetFollowsOpenVersionsThroughTheCatalogWrite(t *testing.T
 		}
 	}
 	at := func(step int) int64 { return start.Add(time.Duration(step) * time.Hour).UnixMilli() }
-	want := func(step int, ops string) {
+	// readStep is the step whose answer NODATE's target is: the walk reads the
+	// project bodies in order, so a failed body stops it and the projects after it
+	// are unread that run (held).
+	want := func(step, readStep int, ops string) {
 		t.Helper()
 		if got := storedProjectTarget(t, ctx, conn, orgID, "jira", "10001"); got != ops {
 			t.Fatalf("step %d: OPS target = %s, want %s", step, got, ops)
 		}
-		if got, none := storedProjectTarget(t, ctx, conn, orgID, "jira", "20001"), fmt.Sprintf("NULL|none_dated|||||NULL|%d", at(step)); got != none {
-			t.Fatalf("step %d: NODATE target = %s, want %s: a measured absence", step, got, none)
+		state := "none_dated"
+		if readStep != step {
+			state = "held"
+		}
+		if got, none := storedProjectTarget(t, ctx, conn, orgID, "jira", "20001"), fmt.Sprintf("NULL|%s|||||NULL|%d", state, at(readStep)); got != none {
+			t.Fatalf("step %d: NODATE target = %s, want %s", step, got, none)
 		}
 	}
 
@@ -94,7 +101,7 @@ func TestJiraProjectTargetFollowsOpenVersionsThroughTheCatalogWrite(t *testing.T
 		{"id":"103","name":"1.8","released":true,"archived":false,"releaseDate":"2026-08-01"},
 		{"id":"104","name":"1.7","released":false,"archived":true,"releaseDate":"2026-07-01"},
 		{"id":"105","name":"3.0","released":false,"archived":false}]}`, http.StatusOK)
-	want(1, fmt.Sprintf("2026-09-30|stated|version|jira.version.releaseDate|102|1.9|1|%d", at(1)))
+	want(1, 1, fmt.Sprintf("2026-09-30|stated|version|jira.version.releaseDate|102|1.9|1|%d", at(1)))
 
 	// An ensure row of the Jira work-items route (a work item moved into the
 	// project) is newer than the catalog row and names no target: it keeps the
@@ -109,23 +116,23 @@ func TestJiraProjectTargetFollowsOpenVersionsThroughTheCatalogWrite(t *testing.T
 		GitHubWorkItemEffectIdentity{OrgID: orgID, Provider: "jira", Dataset: "work-items", Destination: "projects", RowCount: len(ensureEffect.Rows)}, ensureEffect); err != nil {
 		t.Fatal(err)
 	}
-	want(1, fmt.Sprintf("2026-09-30|held|version|jira.version.releaseDate|102|1.9|1|%d", at(1)))
+	want(1, 1, fmt.Sprintf("2026-09-30|held|version|jira.version.releaseDate|102|1.9|1|%d", at(1)))
 
 	sync(2, `{"projectTypeKey":"software","versions":[
 		{"id":"101","name":"2.0","released":false,"archived":false,"releaseDate":"2026-12-15"},
 		{"id":"102","name":"1.9","released":true,"archived":false,"releaseDate":"2026-09-30"}]}`, http.StatusOK)
-	want(2, fmt.Sprintf("2026-12-15|stated|version|jira.version.releaseDate|101|2.0|0|%d", at(2)))
+	want(2, 2, fmt.Sprintf("2026-12-15|stated|version|jira.version.releaseDate|101|2.0|0|%d", at(2)))
 
 	held := fmt.Sprintf("2026-12-15|held|version|jira.version.releaseDate|101|2.0|0|%d", at(2))
 	sync(3, `{"projectTypeKey":"software"}`, http.StatusOK)
-	want(3, held)
+	want(3, 3, held)
 
 	sync(4, `{}`, http.StatusInternalServerError)
-	want(4, held)
+	want(4, 3, held)
 
 	sync(5, `{"projectTypeKey":"software","versions":[
 		{"id":"101","name":"2.0","released":true,"archived":false,"releaseDate":"2026-12-15"}]}`, http.StatusOK)
-	want(5, fmt.Sprintf("NULL|none_dated|||||NULL|%d", at(5)))
+	want(5, 5, fmt.Sprintf("NULL|none_dated|||||NULL|%d", at(5)))
 }
 
 type gitlabMilestoneServer struct {

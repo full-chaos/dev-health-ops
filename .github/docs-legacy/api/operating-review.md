@@ -65,7 +65,7 @@ cross-team behavior per metric.
 
 | Metric key | Aggregation across teams | Notes |
 |------------|--------------------------|-------|
-| `feature_delivery_effort` / `operational_effort` / `maintenance_effort` / `quality_effort` / `risk_effort` (`effort`) | **SUM** | Effort of the units that END in the week, per canonical theme (the Jev categorization, `work_unit_investments`; a team = the repositories it owns). Replaces `ktlo_units` / `new_value_units` / `security_units` / `infra_units` (legacy rule classifier; CHAOS-9199, D5940). |
+| `feature_delivery_work` / `operational_work` / `maintenance_work` / `quality_work` / `risk_work` (`work units`) | **SUM** | COUNT of the units that END in the week, per canonical theme (each unit counts 1 over the themes it spreads over; its lines of code are not a weight, CHAOS-9622, D5999; the keys were `<theme>_effort` with the unit `effort` while the value was `effort_value`) (the Jev categorization, `work_unit_investments`; a team = the repositories it owns). Replaces `ktlo_units` / `new_value_units` / `security_units` / `infra_units` (legacy rule classifier; CHAOS-9199, D5940). |
 
 ### AI Workflow Intelligence
 

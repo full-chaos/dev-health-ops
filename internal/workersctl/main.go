@@ -1805,8 +1805,11 @@ func dispatchProvidersyncCompactOwnershipIntervals(
 	restoreRun := flags.String("restore-run", "", "put the rows of this earlier run back from its backup table (with --apply; without it, counts only)")
 	workersPaused := flags.Bool("workers-paused", false, "required with --apply: the statement that the sync workers that write ownership rows are paused for the organization (no per-organization lease exists for the tool to take)")
 	quietSeconds := flags.Int("quiet-seconds", 60, "with --apply: refuse while a row of the organization's ownership tables was written within this many seconds (0 turns the check off)")
+	timeout := flags.Duration("timeout", 10*time.Minute, "bounds the read-and-plan phase of a compaction run (every table and organization); the run writes only after every plan finished, so on a timeout it exits non-zero with ownership_compaction_timeout and has written nothing (--restore-run does not use it)")
+	progressEvery := flags.Int("progress-every", 5000, "print a counts-only progress line to stderr every this many rows of each plan phase (0 turns it off)")
 	mutation := addMutationFlags(flags)
-	if flags.Parse(args) != nil || flags.NArg() != 0 || *orgStdin == *allOrgs || (*apply && *dryRun) || *batchSize < 1 || *quietSeconds < 0 || !mutation.valid(!*apply) {
+	if flags.Parse(args) != nil || flags.NArg() != 0 || *orgStdin == *allOrgs || (*apply && *dryRun) || *batchSize < 1 || *quietSeconds < 0 ||
+		*timeout <= 0 || *progressEvery < 0 || !mutation.valid(!*apply) {
 		return writeError(stderr, "invalid_request")
 	}
 	org, scope := "", "*"
@@ -1818,7 +1821,13 @@ func dispatchProvidersyncCompactOwnershipIntervals(
 		scope = org
 	}
 	options := providersync.OwnershipCompactionOptions{AllOrgs: *allOrgs, BatchSize: *batchSize, Apply: *apply,
-		WorkersPaused: *workersPaused, QuietSeconds: *quietSeconds}
+		WorkersPaused: *workersPaused, QuietSeconds: *quietSeconds, PlanTimeout: *timeout, ProgressEvery: *progressEvery}
+	if *progressEvery > 0 {
+		progress := json.NewEncoder(stderr)
+		options.Progress = func(line providersync.OwnershipCompactionProgress) {
+			_ = progress.Encode(map[string]any{"progress": line})
+		}
+	}
 	if org != "" {
 		options.Orgs = []string{org}
 	}
@@ -1879,6 +1888,8 @@ func ownershipCompactionErrorCode(err error) string {
 		return "ownership_compaction_writes_active"
 	case errors.Is(err, providersync.ErrOwnershipCompactionTable):
 		return "ownership_compaction_table_unexpected"
+	case errors.Is(err, providersync.ErrOwnershipCompactionTimeout):
+		return "ownership_compaction_timeout"
 	default:
 		return "ownership_compaction_failed"
 	}

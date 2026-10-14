@@ -45,6 +45,9 @@ func TestTextReplacesEachClassAndKeepsTheRest(t *testing.T) {
 		{"value that starts like a date", "password is 2026-10-13secret9 ok", "secret9", "password is [REDACTED] ok", func(c Counts) int { return c.Credentials }},
 		{"value that starts like a version", "the token is v1.2.3secret9 ok", "secret9", "the token is [REDACTED] ok", func(c Counts) int { return c.Credentials }},
 		{"address with a plus before a tag-like host", "mail jane.doe+ops@latest today", "jane.doe", "mail [email-1] today", func(c Counts) int { return c.Emails }},
+		{"provided with a colon", "the api key was provided: abcd1234 earlier", "abcd1234", "the api key was provided: [REDACTED] earlier", func(c Counts) int { return c.Credentials }},
+		{"generated as", "the password was generated as abcd1234 today", "abcd1234", "the password was generated as [REDACTED] today", func(c Counts) int { return c.Credentials }},
+		{"scoped pin next to a real mention", "upgrade @scope/pkg@latest and ask @bob", "bob", "upgrade @scope/pkg@latest and ask [user-1]", func(c Counts) int { return c.Mentions }},
 		{"real email next to a package pin", "mail bob@corp.example about lodash@latest", "bob@", "mail [email-1] about lodash@latest", func(c Counts) int { return c.Emails }},
 		{"dist-tag name inside a real address", "mail ann@beta.example.com today", "ann@", "mail [email-1] today", func(c Counts) int { return c.Emails }},
 		{"v-version host inside a real address", "mail ann@v2.example.com today", "ann@", "mail [email-1] today", func(c Counts) int { return c.Emails }},
@@ -85,6 +88,9 @@ func TestTextKeepsPlainEngineeringProse(t *testing.T) {
 		"The token is PROJ-12345 per the ticket; the secret is v1.2.3-rc.1 in the log",
 		"The token was issued 2026-10-13T12:30:45Z; the password is 2026-10-13",
 		"The secret is in the vault; the key is the primary index",
+		"The token is src/v2/h1234.go and the secret is docs/v1.2/readme.md",
+		"The token is 12:30:45Z and the secret is 12:30:45+02:00 or 12:30:45.123-0500",
+		"Upgrade @scope/pkg@latest, @types/node@18.3.1 and @acme/ui@next-1042 today",
 		"The token is 2026/10/13 and the secret is v1.2.3+build9; the password is 13/10/2026",
 		"The token was issued 2026-10-13T12:30:45.123+02:00; the secret is 12:30:45 server time",
 		"The pwd is /home/build1/work and the password is https://vault.example/v1/x",
@@ -161,6 +167,18 @@ func TestPackageTagStringsAreKeptAndCountNoEmail(t *testing.T) {
 		if f.Counts().Emails != 0 {
 			t.Errorf("counted an email in %q", in)
 		}
+	}
+}
+
+func TestScopedPinKeepsTheNextMentionNumbering(t *testing.T) {
+	f := NewFilter()
+	got := f.Text("@amy then @scope/pkg@beta.3 then @bob then @amy")
+	want := "[user-1] then @scope/pkg@beta.3 then [user-2] then [user-1]"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if f.Counts().Mentions != 3 {
+		t.Fatalf("counts %+v", f.Counts())
 	}
 }
 

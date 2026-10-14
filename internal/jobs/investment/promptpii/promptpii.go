@@ -7,10 +7,11 @@
 //
 // Named limits: a credential written as a plain word with no digit ("the
 // password is hunterpass") reads like "the password is invalid" and stays; a
-// package pin whose tag is not a known release channel or a "v" version
-// (name@somebranch) is read as an address; and a real address whose dotless host
-// is a release channel or version (alice@latest) cannot be told from a pin and
-// stays.
+// credential behind wording outside the filler list is not matched; a package
+// pin whose tag is not a known release channel or a "v" version
+// (name@somebranch) is read as an address; and a real address whose dotless
+// host is a release channel or version (alice@latest) cannot be told from a pin
+// and stays.
 package promptpii
 
 import (
@@ -64,10 +65,18 @@ var (
 	// "the api key is abcd1234", "password was set to Tr0ub4dor3". The value is
 	// checked by proseSecretShaped; without a digit it is a word ("the token is
 	// invalid") and stays.
-	proseSecretPattern = regexp.MustCompile(`(?i)\b(passwords?|passwd|pwd|passphrase|secret|api[ _-]?keys?|access[ _-]?token|auth[ _-]?token|client[ _-]?secret|credentials?|token)((?:[ \t]+(?:is|was|are|set|to|equals?))+[ \t:]+["'` + "`" + `]?)([^\s"'` + "`" + `<>,;()\[\]{}]{8,})`)
+	proseSecretPattern = regexp.MustCompile(`(?i)\b(passwords?|passwd|pwd|passphrase|secret|api[ _-]?keys?|access[ _-]?token|auth[ _-]?token|client[ _-]?secret|credentials?|token)((?:[ \t]+(?:is|was|were|are|be|been|being|set|to|as|equals?|provided|generated|given|assigned|now|currently|still|shown|stored|saved|reset|changed|updated))+[ \t:]+["'` + "`" + `]?)([^\s"'` + "`" + `<>,;()\[\]{}]{8,})`)
 	issueKeyPattern    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*-\d+$`)
 	versionPattern     = regexp.MustCompile(`^[vV]?\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.+-]+)?$`)
-	datePattern        = regexp.MustCompile(`^(?:\d{4}[-/]\d{2}[-/]\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?|\d{2}[-/.]\d{2}[-/.]\d{4}|\d{1,2}:\d{2}(?::\d{2})?)$`)
+	datePattern        = regexp.MustCompile(`^(?:\d{4}[-/]\d{2}[-/]\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?|\d{2}[-/.]\d{2}[-/.]\d{4}|\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)$`)
+
+	// A relative file path with an extension ("src/v2/handler1234.go").
+	filePathPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~@-]+)+\.[A-Za-z0-9]{1,6}$`)
+
+	// A scoped package pin ("@scope/pkg@latest", "@types/node@18.3.1"): the
+	// mention pass must not read its scope as a mention.
+	scopedPinPattern = regexp.MustCompile(`@[A-Za-z0-9][A-Za-z0-9._~-]*/[A-Za-z0-9][A-Za-z0-9._~-]*@([A-Za-z0-9][A-Za-z0-9._+-]*)`)
+	scopedTagVersion = regexp.MustCompile(`^\d[A-Za-z0-9._+-]*$`)
 
 	// The host part of a package@tag pin: a release channel or a "v"-version,
 	// optionally followed by digit-only parts ("beta.3", "next-1042", "v18.3.1").
@@ -180,11 +189,7 @@ func (f *Filter) Text(text string) string {
 		f.counts.Mentions++
 		return "[user-" + strconv.Itoa(ordinal(f.mentions, m)) + "]"
 	})
-	filtered = mentionPattern.ReplaceAllStringFunc(filtered, func(m string) string {
-		at := strings.IndexByte(m, '@')
-		f.counts.Mentions++
-		return m[:at] + "[user-" + strconv.Itoa(ordinal(f.mentions, m[at:])) + "]"
-	})
+	filtered = f.replaceMentions(filtered)
 	for _, pattern := range phonePatterns {
 		filtered = pattern.ReplaceAllStringFunc(filtered, func(m string) string {
 			if digits := countDigits(m); digits < 8 || digits > 15 {
@@ -215,7 +220,7 @@ func proseSecretShaped(value string) bool {
 	if len(value) < 8 || strings.ContainsAny(value, "[]") || countDigits(value) == 0 {
 		return false
 	}
-	if value[0] == '/' || value[0] == '~' || strings.Contains(value, "://") {
+	if value[0] == '/' || value[0] == '~' || strings.Contains(value, "://") || filePathPattern.MatchString(value) {
 		return false
 	}
 	return !issueKeyPattern.MatchString(value) && !versionPattern.MatchString(value) && !datePattern.MatchString(value)
@@ -224,6 +229,38 @@ func proseSecretShaped(value string) bool {
 // isPackagePin: the local part uses only characters of a package or action name
 // (no "+", "%" or quote, which only an address carries) and the host part is a
 // release channel or a version. "alice@latest" cannot be told from "lodash@latest".
+// replaceMentions replaces @-mentions outside scoped package pins.
+func (f *Filter) replaceMentions(text string) string {
+	if !strings.Contains(text, "@") {
+		return text
+	}
+	var out strings.Builder
+	last := 0
+	for _, match := range scopedPinPattern.FindAllStringSubmatchIndex(text, -1) {
+		start, end := match[0], match[1]
+		tag := text[match[2]:match[3]]
+		if start > 0 && strings.IndexByte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@.]", text[start-1]) >= 0 {
+			continue
+		}
+		if !packageTagPattern.MatchString(tag) && !scopedTagVersion.MatchString(tag) {
+			continue
+		}
+		out.WriteString(f.mentionSegment(text[last:start]))
+		out.WriteString(text[start:end])
+		last = end
+	}
+	out.WriteString(f.mentionSegment(text[last:]))
+	return out.String()
+}
+
+func (f *Filter) mentionSegment(text string) string {
+	return mentionPattern.ReplaceAllStringFunc(text, func(m string) string {
+		at := strings.IndexByte(m, '@')
+		f.counts.Mentions++
+		return m[:at] + "[user-" + strconv.Itoa(ordinal(f.mentions, m[at:])) + "]"
+	})
+}
+
 func isPackagePin(m string) bool {
 	at := strings.LastIndexByte(m, '@')
 	return packageNamePattern.MatchString(m[:at]) && packageTagPattern.MatchString(m[at+1:])

@@ -3080,9 +3080,12 @@ func dispatchMetricsRemainingStart(ctx context.Context, runtime *operatorRuntime
 	day := flags.String("day", "", "first target day, inclusive (YYYY-MM-DD, UTC)")
 	to := flags.String("to", "", "last target day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
 	org := flags.String("org", "", "organization id (uuid)")
-	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: why this historical day needs a manual backfill (e.g. \"CHAOS-4384 -- day frozen at 0 rows by the pre-fix same-day coverage bug, source data has since landed\")")
+	reviewEvidence := flags.String("review-evidence", "", "REQUIRED (unless --dry-run with --recompute): why this historical day needs a manual backfill or recompute (e.g. \"CHAOS-4384 -- day frozen at 0 rows by the pre-fix same-day coverage bug, source data has since landed\")")
+	recompute := flags.Bool("recompute", false, recomputeUsage)
+	basis := flags.String("basis", "", "REQUIRED with --recompute: label of the basis change being applied (1-40 of a-z 0-9 . _ -, e.g. cfr-125). The same basis never recomputes a day twice; a new basis change takes a new label")
+	dryRun := flags.Bool("dry-run", false, "only with --recompute: report the outcome each day would reach without writing anything (no run, no audit row)")
 	mutation := addMutationFlags(flags)
-	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(false) {
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	if !slices.Contains(remaining.ManualBackfillDayScopedFamilies, *family) {
@@ -3091,7 +3094,13 @@ func dispatchMetricsRemainingStart(ctx context.Context, runtime *operatorRuntime
 	if _, err := uuid.Parse(*org); err != nil {
 		return writeError(stderr, "invalid_request")
 	}
-	if strings.TrimSpace(*reviewEvidence) == "" {
+	if !*recompute && (*basis != "" || *dryRun) {
+		return writeError(stderr, "invalid_request")
+	}
+	if *recompute && (!remaining.ValidRecomputeBasis(*basis) || *to == "") {
+		return writeError(stderr, "invalid_request")
+	}
+	if strings.TrimSpace(*reviewEvidence) == "" && !(*recompute && *dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	fromDay, err := time.Parse("2006-01-02", *day)
@@ -3132,6 +3141,12 @@ func dispatchMetricsRemainingStart(ctx context.Context, runtime *operatorRuntime
 	// dispatched at all is, by construction, already in the past).
 	if !toDay.Before(time.Now().UTC().Truncate(24 * time.Hour)) {
 		return writeError(stderr, "invalid_request")
+	}
+	if *recompute {
+		return dispatchMetricsRemainingRecompute(ctx, runtime, stdout, stderr, remainingRecomputeRequest{
+			family: *family, org: *org, from: fromDay, to: toDay, fromRaw: *day, toRaw: toRaw,
+			basis: *basis, reviewEvidence: *reviewEvidence, dryRun: *dryRun, mutation: mutation,
+		})
 	}
 	perform := func(ctx context.Context) int {
 		if runtime.pools == nil || runtime.registry == nil {

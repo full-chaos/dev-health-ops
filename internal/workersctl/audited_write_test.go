@@ -57,6 +57,7 @@ func directWriteVerbs() map[string]directWriteVerb {
 		"metrics finalize-redrive":                           {argv: []string{"metrics", "finalize-redrive", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01", "--review-evidence", "testing"}, dryRun: true},
 		"metrics partition-recompute":                        {argv: []string{"metrics", "partition-recompute", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01", "--family", "repo_user_commit", "--review-evidence", "testing"}, dryRun: true},
 		"metrics remaining start":                            {argv: []string{"metrics", "remaining", "start", "--family", "dora", "--org", org, "--day", "2026-01-01", "--review-evidence", "testing"}},
+		"metrics remaining start --recompute":                {argv: []string{"metrics", "remaining", "start", "--recompute", "--basis", "cfr-125", "--family", "dora", "--org", org, "--day", "2026-01-01", "--to", "2026-01-02", "--review-evidence", "testing"}, dryRun: true},
 		"metrics remaining trigger-backstop":                 {argv: []string{"metrics", "remaining", "trigger-backstop", "--family", "dora", "--org", org, "--review-evidence", "testing"}},
 		"metrics remaining redrive":                          {argv: []string{"metrics", "remaining", "redrive", "--org", org, "--review-evidence", "testing"}, dryRun: true},
 		"external-recompute replay":                          {argv: []string{"external-recompute", "replay", "--review-evidence", "testing"}, dryRun: true},

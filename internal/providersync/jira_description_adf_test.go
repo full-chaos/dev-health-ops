@@ -123,3 +123,42 @@ func TestJiraDescriptionFlatteningIsBounded(t *testing.T) {
 		t.Fatalf("a tree nested past the depth bound stated %q", *got)
 	}
 }
+
+// A card node reads as its URL whether it is inline or a block of its own; a
+// description that is only a smart link is still a description.
+func TestJiraDescriptionReadsEveryCardNodeAsItsURL(t *testing.T) {
+	for _, kind := range []string{"inlineCard", "blockCard", "embedCard"} {
+		document := map[string]any{"type": "doc", "version": 1, "content": []any{
+			map[string]any{"type": kind, "attrs": map[string]any{"url": "https://example.atlassian.net/browse/PAY-9"}},
+		}}
+		if got := jiraDescriptionOf(t, document); got == nil || *got != "https://example.atlassian.net/browse/PAY-9" {
+			t.Errorf("%s: description=%q", kind, valueOrNil(got))
+		}
+	}
+	data := map[string]any{"type": "doc", "content": []any{
+		map[string]any{"type": "blockCard", "attrs": map[string]any{"data": map[string]any{"url": "https://example.com/d"}}},
+	}}
+	if got := jiraDescriptionOf(t, data); got == nil || *got != "https://example.com/d" {
+		t.Errorf("blockCard with data.url: description=%q", valueOrNil(got))
+	}
+}
+
+// One node larger than the whole bound costs no more than the bound, on a rune
+// boundary, for every node kind that writes text.
+func TestJiraDescriptionFlatteningBoundsASingleLargeNode(t *testing.T) {
+	huge := strings.Repeat("😀", 262144)
+	for name, node := range map[string]map[string]any{
+		"text":       {"type": "text", "text": huge},
+		"mention":    {"type": "mention", "attrs": map[string]any{"text": huge}},
+		"inlineCard": {"type": "inlineCard", "attrs": map[string]any{"url": huge}},
+	} {
+		got := jiraDescriptionOf(t, map[string]any{"type": "doc", "content": []any{
+			map[string]any{"type": "paragraph", "content": []any{node}},
+		}})
+		if got == nil || len(*got) > 4*workItemDescriptionMaxRunes || !utf8.ValidString(*got) ||
+			utf8.RuneCountInString(*got) < workItemDescriptionMaxRunes {
+			t.Errorf("%s: flattened %d bytes (valid utf8 %v), want between %d runes and %d bytes on a rune boundary",
+				name, len(valueOrNil(got)), got != nil && utf8.ValidString(*got), workItemDescriptionMaxRunes, 4*workItemDescriptionMaxRunes)
+		}
+	}
+}

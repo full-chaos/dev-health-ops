@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -891,6 +892,16 @@ const jiraDocumentMaxDepth = 32
 func flattenJiraDocument(root map[string]any) string {
 	var text strings.Builder
 	limit := 4 * workItemDescriptionMaxRunes
+	write := func(value string) {
+		room := limit - text.Len()
+		if len(value) > room {
+			for room > 0 && !utf8.RuneStart(value[room]) {
+				room--
+			}
+			value = value[:max(room, 0)]
+		}
+		text.WriteString(value)
+	}
 	var walk func(node map[string]any, depth int)
 	walk = func(node map[string]any, depth int) {
 		if depth > jiraDocumentMaxDepth || text.Len() >= limit {
@@ -901,7 +912,7 @@ func flattenJiraDocument(root map[string]any) string {
 		switch kind {
 		case "text":
 			if value, ok := node["text"].(string); ok {
-				text.WriteString(value)
+				write(value)
 			}
 			return
 		case "hardBreak":
@@ -909,12 +920,16 @@ func flattenJiraDocument(root map[string]any) string {
 			return
 		case "mention", "emoji", "status":
 			if value, ok := attrs["text"].(string); ok {
-				text.WriteString(value)
+				write(value)
 			}
 			return
-		case "inlineCard":
+		case "inlineCard", "blockCard", "embedCard":
 			if value, ok := attrs["url"].(string); ok {
-				text.WriteString(value)
+				write(value)
+			} else if data, ok := attrs["data"].(map[string]any); ok {
+				if value, ok := data["url"].(string); ok {
+					write(value)
+				}
 			}
 			return
 		case "media", "mediaSingle", "mediaGroup", "mediaInline":

@@ -3,6 +3,7 @@ package promptpii
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTextReplacesEachClassAndKeepsTheRest(t *testing.T) {
@@ -34,6 +35,15 @@ func TestTextReplacesEachClassAndKeepsTheRest(t *testing.T) {
 		{"authorization header", "sent header Authorization: Bearer abc123xyz to the gateway", "abc123xyz", "Authorization: Bearer [REDACTED]", func(c Counts) int { return c.Credentials }},
 		{"bearer in prose", "send bearer abc123xyz to the gateway", "abc123xyz", "send bearer [REDACTED] to the gateway", func(c Counts) int { return c.Credentials }},
 		{"password in prose", "password: Tr0ub4dor3xx was pasted here", "Tr0ub4dor", "", func(c Counts) int { return c.Credentials }},
+		{"api key behind filler", "the api key is abcd1234 for staging", "abcd1234", "the api key is [REDACTED] for staging", func(c Counts) int { return c.Credentials }},
+		{"password set to", "the password was set to Tr0ub4dor3 yesterday", "Tr0ub4dor3", "password was set to [REDACTED] yesterday", func(c Counts) int { return c.Credentials }},
+		{"token is quoted", `our token is "q9w8e7r6t5" now`, "q9w8e7r6t5", `our token is "[REDACTED]" now`, func(c Counts) int { return c.Credentials }},
+		{"secret equals with trailing stop", "The secret equals k3y9m4ster.", "k3y9m4ster", "The secret equals [REDACTED].", func(c Counts) int { return c.Credentials }},
+		{"numeric password in prose", "password is 12345678 per the ticket", "12345678", "password is [REDACTED] per the ticket", func(c Counts) int { return c.Credentials }},
+		{"real email next to a package pin", "mail bob@corp.example about lodash@latest", "bob@", "mail [email-1] about lodash@latest", func(c Counts) int { return c.Emails }},
+		{"dist-tag name inside a real address", "mail ann@beta.example.com today", "ann@", "mail [email-1] today", func(c Counts) int { return c.Emails }},
+		{"v-version host inside a real address", "mail ann@v2.example.com today", "ann@", "mail [email-1] today", func(c Counts) int { return c.Emails }},
+		{"dotless address that is not a tag", "mail alice@internal today", "alice@", "mail [email-1] today", func(c Counts) int { return c.Emails }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -63,6 +73,13 @@ func TestTextKeepsPlainEngineeringProse(t *testing.T) {
 		"Pin react@18.3.1 and lodash@4.17.21 before the 2026-10-13 release; call 555-0132 maybe",
 		"The token is invalid and the password expired",
 		"The bearer of bad news and an authorization flow review",
+		"Upgrade lodash@latest, react@next, vite@beta.3, esbuild@canary-1042 and typescript@rc",
+		"Pin pkg@v18.3.1 and tool@v2 and image nginx@sha256 before release",
+		"The password is invalid and the token is expired; the secret is rotated nightly",
+		"The api key is required and the token is missing; credentials are stored elsewhere",
+		"The token is PROJ-12345 per the ticket; the secret is v1.2.3-rc.1 in the log",
+		"The token was issued 2026-10-13T12:30:45Z; the password is 2026-10-13",
+		"The secret is in the vault; the key is the primary index",
 		"",
 	} {
 		f := NewFilter()
@@ -94,6 +111,7 @@ func TestTextIsIdempotent(t *testing.T) {
 		"see https://deploy:hunter2pass@git.corp.example/x password: Tr0ub4dor3xx ghp_abcdefghijklmnopqrstuvwxyz0123456789",
 		"mail alice@localhost, δοκιμή@example.gr; call (02) 9374 4000 or 01 23 45 67 89; set token=abcdefgh, password: \"correct horse\"",
 		"plain text with nothing to hide",
+		"the api key is abcd1234 and lodash@latest; mail bob@corp.example",
 	}
 	for _, in := range inputs {
 		once := NewFilter().Text(in)
@@ -117,5 +135,43 @@ func TestCountsNeverHoldValues(t *testing.T) {
 	}
 	if got := c.Add(c).Total(); got != 4 {
 		t.Fatalf("Add/Total = %d, want 4", got)
+	}
+}
+
+func TestPackageTagStringsAreKeptAndCountNoEmail(t *testing.T) {
+	for _, in := range []string{
+		"bump lodash@latest",
+		"try react@next and vite@beta.3",
+		"esbuild@canary-1042 broke the build",
+		"pin pkg@v18.3.1-rc.2 for now",
+		"image nginx@sha256:a1b2c3d4e5f6 is deployed",
+	} {
+		f := NewFilter()
+		if got := f.Text(in); got != in {
+			t.Errorf("package pin changed:\n in: %q\nout: %q", in, got)
+		}
+		if f.Counts().Emails != 0 {
+			t.Errorf("counted an email in %q", in)
+		}
+	}
+}
+
+func TestUnlabeledLetterOnlyProseSecretIsANamedLimit(t *testing.T) {
+	in := "The password is hunterpass"
+	if got := NewFilter().Text(in); got != in {
+		t.Fatalf("a letter-only value cannot be told from %q; got %q", "The password is invalid", got)
+	}
+}
+
+func TestLongDescriptionStaysFast(t *testing.T) {
+	line := "The api key is abcd1234 and lodash@latest broke; mail bob@corp.example, token is invalid. "
+	in := strings.Repeat(line, 20000)
+	start := time.Now()
+	out := NewFilter().Text(in)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("filter took %s for %d bytes", elapsed, len(in))
+	}
+	if strings.Contains(out, "abcd1234") || strings.Contains(out, "bob@") {
+		t.Fatal("value survived in a long description")
 	}
 }

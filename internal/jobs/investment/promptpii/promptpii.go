@@ -4,6 +4,11 @@
 // phone numbers and @-mentions before the text bundle is built, so the prompt,
 // the bundle hash and every quote the model returns are all made from the same
 // filtered text.
+//
+// Named limits: a credential written as a plain word with no digit ("the
+// password is hunterpass") reads like "the password is invalid" and stays; a
+// package pin whose tag is not a known release channel or a "v" version
+// (name@somebranch) is read as an address.
 package promptpii
 
 import (
@@ -52,6 +57,20 @@ var (
 	// bad news" stays).
 	authorizationPattern = regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*(?:(?:bearer|basic|token)\s+)?)([^\s"',;]+)`)
 	bearerPattern        = regexp.MustCompile(`(?i)\b(bearer\s+)([^\s"',;]*\d[^\s"',;]*)`)
+
+	// A credential written in prose behind filler words, with no separator:
+	// "the api key is abcd1234", "password was set to Tr0ub4dor3". The value is
+	// checked by proseSecretShaped; without a digit it is a word ("the token is
+	// invalid") and stays.
+	proseSecretPattern = regexp.MustCompile(`(?i)\b(passwords?|passwd|passphrase|secret|api[ _-]?keys?|access[ _-]?token|auth[ _-]?token|client[ _-]?secret|credentials?|token)((?:[ \t]+(?:is|was|are|set|to|equals?))+[ \t:]+["'` + "`" + `]?)([A-Za-z0-9_+/=.\-]{8,})`)
+	issueKeyPattern    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*-\d+$`)
+	versionPattern     = regexp.MustCompile(`^[vV]?\d+(?:\.\d+)+(?:-[A-Za-z0-9.]+)?$`)
+	datePattern        = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`)
+
+	// The host part of a package@tag pin: a release channel or a "v"-version,
+	// optionally followed by digit-only parts ("beta.3", "next-1042", "v18.3.1").
+	// A host with a name part ("beta.example.com") is still an address.
+	packageTagPattern = regexp.MustCompile(`(?i)^(?:(?:latest|next|beta|alpha|canary|nightly|rc|lts|insiders|experimental|preview|snapshot)(?:[.-]\d+)*|v\d+(?:[.-]\d+)*(?:-(?:alpha|beta|rc)(?:[.-]\d+)*)?|sha(?:256|512))$`)
 
 	// Jira wiki mentions: [~username] and [~accountid:...].
 	jiraMentionPattern = regexp.MustCompile(`\[~[^\]\s]{1,128}\]`)
@@ -138,7 +157,19 @@ func (f *Filter) Text(text string) string {
 		})
 	}
 
+	filtered = proseSecretPattern.ReplaceAllStringFunc(filtered, func(m string) string {
+		sub := proseSecretPattern.FindStringSubmatch(m)
+		if !proseSecretShaped(sub[3]) {
+			return m
+		}
+		f.counts.Credentials++
+		return sub[1] + sub[2] + credentialMarker + sub[3][len(strings.TrimRight(sub[3], ".-,")):]
+	})
+
 	filtered = emailPattern.ReplaceAllStringFunc(filtered, func(m string) string {
+		if isPackageTag(m[strings.LastIndexByte(m, '@')+1:]) {
+			return m
+		}
 		f.counts.Emails++
 		return "[email-" + strconv.Itoa(ordinal(f.emails, m)) + "]"
 	})
@@ -169,6 +200,18 @@ func (f *Filter) Text(text string) string {
 	})
 	return filtered
 }
+
+// proseSecretShaped: at least 8 bytes holding a digit, and not an issue key, a
+// version or a date, which follow the same words in ordinary text.
+func proseSecretShaped(value string) bool {
+	value = strings.TrimRight(value, ".-,")
+	if len(value) < 8 || strings.ContainsAny(value, "[]") || countDigits(value) == 0 {
+		return false
+	}
+	return !issueKeyPattern.MatchString(value) && !versionPattern.MatchString(value) && !datePattern.MatchString(value)
+}
+
+func isPackageTag(host string) bool { return packageTagPattern.MatchString(host) }
 
 func countDigits(s string) int {
 	n := 0

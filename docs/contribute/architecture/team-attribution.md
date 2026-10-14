@@ -1018,8 +1018,10 @@ project's items by id. Now:
     (`status=archived`, the same paging and bound). The archived answer is an identity set (native id
     and key of each project). Every open ownership row of this writer whose project is in that set, by
     the native id OR by the id built from the key (`{org_id}:jira:{KEY}`, rows written before the one-id
-    rule), is left as it is: it is not given to the snapshot rule, and nothing is written or re-keyed
-    for an archived project (`jira_team_catalog_archived_ownership_held`). This read failing at any
+    rule), is left as it is: it is not given to the snapshot rule, and no ownership row is written or
+    re-keyed for an archived project (`jira_team_catalog_archived_ownership_held`). The project row of an
+    archived project is written as `completed` with source `jira.project.status=archived` and
+    `is_active` 0 (CHAOS-9438 rule), so it does not keep the empty state it had before states were written. This read failing at any
     page, the first one included, does not fail the walk: the snapshot is not complete
     (`jira_team_catalog_archived_project_search_incomplete`) and nothing is closed. A project in
     neither answer (deleted, or no longer visible to the credential) loses its rows on a complete run.
@@ -1264,6 +1266,21 @@ controls: a link that is gone and an explicit empty list are closed).
 > 0.4 of a repository reads 0.4 of it, a tied owner its equal half, and the owners of one repository together read it
 > once. An owner with no measured share (`provider_access`, `native` or `manual` rows) is the known limit: the owners
 > of that repository split it equally.
+>
+> **The daily team tables read the owner shares too (CHAOS-9410).** `teamownership.OwnerSharesByRepo` is the one Go
+> reader of "who owns a repository": the main owner (every tied team of a full tie, D5990) first, then every lesser
+> owner, each with its own share (`team_repo_ownership.share`, the largest non-NULL share of the team's open rows,
+> divided by the sum over all owners; equal where any owner has no measure; no rounding, threshold or cap, D5991).
+> `AuthoritativeOwnersByRepo` is the same read cut to the main owners. A caller picks its rule by the kind of measure:
+> - **An additive measure** (a sum over repositories) takes each owner at its share. `team_cognitive_load_daily`
+>   does so: the pull-request interruption load, the review request load and the context-spread count are the sums
+>   of the repository values times the owner's share, and the after-hours and weekend ratios are recomputed from the
+>   share-weighted commit counts. The counts of repositories and authors stay whole.
+> - **A measure that does not add** (a mean of repository scores, a ratio, a percentile) gives every owner, main and
+>   lesser, the repository's own value, unweighted. `compounding_risk_daily` (team scope) does so, through
+>   `teamresolve.ResolveOwnershipThenPatterns`.
+> - **A table with one row per repository** (the four TestOps families, one row per organization, repository and
+>   day) takes the main owner only; a full tie takes the first tied team by rank. A second team has no row to live in.
 
 A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
 teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active

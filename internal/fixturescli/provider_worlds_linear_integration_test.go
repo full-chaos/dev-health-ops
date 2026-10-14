@@ -339,7 +339,7 @@ var linearWorld = providerWorld{
 			Sources:  [][2]string{{"41001", "chaos-gl/billing-service"}},
 			Datasets: append([]string{"repo-metadata", "prs"}, workItemDatasets...)},
 		{Kind: "sync", Provider: "linear", Credential: linearToken, DepthDays: 200, Phase: "second",
-			Sources: [][2]string{{"ENG", "Engineering"}}, Datasets: workItemDatasets},
+			Sources: [][2]string{{"ENG", "Engineering"}, {"MOB", "Mobile"}}, Datasets: workItemDatasets},
 		{Kind: "work_graph"},
 	},
 }

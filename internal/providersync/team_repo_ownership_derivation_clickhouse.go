@@ -1348,7 +1348,7 @@ func retractTeamRepoOwnershipRows(
 			row.Specificity,
 			row.Priority,
 			row.ValidFrom,
-			teamRepoOwnershipCloseAt(row.ValidFrom, now),
+			intervalCloseAt(row.ValidFrom, now),
 			now,
 			row.Share,
 		); err != nil {
@@ -1361,14 +1361,15 @@ func retractTeamRepoOwnershipRows(
 	return len(toRetract), nil
 }
 
-// teamRepoOwnershipCloseAt is the valid_to a retraction or role-change close
-// writes. Contract: a close never lands at or before its own open, so the
-// row it closes keeps a non-empty interval (valid_to > valid_from). A row
-// opened in the same millisecond as the run, or ahead of this run's clock,
-// closes 1 ms after its open. The only deliberate empty interval is the
-// supersede tombstone (supersedeTeamRepoOwnershipRows), which the reader
-// filter "valid_to > valid_from" below relies on.
-func teamRepoOwnershipCloseAt(validFrom, now time.Time) time.Time {
+// intervalCloseAt is the valid_to every close of an interval row writes
+// (ownership, membership; the retract, role-change, snapshot, departure,
+// retire and carry paths). Contract: a close never lands at or before its own
+// open, so the row it closes keeps a non-empty interval (valid_to >
+// valid_from). A row opened in the same millisecond as the run, or ahead of
+// the run clock, closes 1 ms after its open. The only deliberate empty
+// interval is the supersede tombstone (supersedeTeamRepoOwnershipRows), which
+// the readers' filter "valid_to > valid_from" relies on.
+func intervalCloseAt(validFrom, now time.Time) time.Time {
 	floor := validFrom.UTC().Add(time.Millisecond)
 	if now.Before(floor) {
 		return floor
@@ -1378,7 +1379,7 @@ func teamRepoOwnershipCloseAt(validFrom, now time.Time) time.Time {
 
 // supersedeTeamRepoOwnershipRows closes each row at its own valid_from: a
 // deliberate empty-interval tombstone (valid_to = valid_from), the one close
-// exempt from teamRepoOwnershipCloseAt. A closed row overlapping the
+// exempt from intervalCloseAt. A closed row overlapping the
 // evidence-start row would double-count the team. Readers ignore it through
 // valid_to > valid_from. It is a replacement under the same key with a newer
 // updated_at. The row then covers no instant, and the claim's row at its

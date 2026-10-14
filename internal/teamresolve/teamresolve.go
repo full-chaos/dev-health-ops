@@ -95,7 +95,11 @@ func ResolveFromOwnershipMap(
 	return repoToTeam
 }
 
-// ResolveOwnershipThenPatterns builds {repo_id_str: team_id} exactly as
+// ResolveOwnershipThenPatterns builds {repo_id_str: team_ids}: every owner of a
+// repository, the main owner(s) first and each lesser owner after (D5988,
+// CHAOS-9410), for the callers whose measure does not add over repositories
+// (a mean, a ratio, a percentile): each owner reads the repository's own
+// value, unweighted. It builds {repo_id_str: team_id} exactly as
 // job_daily.py:497 _repo_to_team_map_for_compounding_risk's REAL production
 // caller does (_write_compounding_risk_team_rows_for_day, job_daily.py:~635):
 // it resolves the org-wide authoritative ownership map ONCE via
@@ -154,9 +158,45 @@ func ResolveOwnershipThenPatterns(
 	repoIDs []uuid.UUID, repoNamesByID map[string]string,
 	patternResolver numerical.RepoTeamResolver,
 ) (map[string][]string, error) {
-	ownershipMap, err := teamownership.AuthoritativeOwnersByRepo(ctx, conn, organizationID, asOf)
+	shares, err := teamownership.OwnerSharesByRepo(ctx, conn, organizationID, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("teamresolve: resolve authoritative repo ownership: %w", err)
 	}
-	return ResolveFromOwnershipMap(ownershipMap, repoIDs, repoNamesByID, patternResolver), nil
+	resolved := ResolveSharesFromOwnershipMap(shares, repoIDs, repoNamesByID, patternResolver)
+	repoToTeam := make(map[string][]string, len(resolved))
+	for repoID, owners := range resolved {
+		for _, owner := range owners {
+			repoToTeam[repoID] = append(repoToTeam[repoID], owner.TeamID)
+		}
+	}
+	return repoToTeam, nil
+}
+
+// ResolveSharesFromOwnershipMap is ResolveFromOwnershipMap over the owner-shares
+// contract (CHAOS-9410, D5988): a repository maps to its main owner(s) and every
+// lesser owner, each with its own linked share. The pattern fallback gives one
+// team holding the repository whole.
+func ResolveSharesFromOwnershipMap(
+	ownership map[string][]teamownership.OwnerShare, repoIDs []uuid.UUID, repoNamesByID map[string]string,
+	patternResolver numerical.RepoTeamResolver,
+) map[string][]teamownership.OwnerShare {
+	resolved := make(map[string][]teamownership.OwnerShare, len(repoIDs))
+	for _, repoID := range repoIDs {
+		key := repoID.String()
+		name, known := repoNamesByID[key]
+		if !known {
+			continue
+		}
+		if owners := ownership[key]; len(owners) > 0 {
+			resolved[key] = owners
+			continue
+		}
+		if patternResolver == nil {
+			continue
+		}
+		if teamID, _ := patternResolver.ResolveRepo(name); teamID != "" {
+			resolved[key] = []teamownership.OwnerShare{{TeamID: teamID, Main: true, Share: 1}}
+		}
+	}
+	return resolved
 }

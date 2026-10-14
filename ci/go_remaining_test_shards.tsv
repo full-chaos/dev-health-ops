@@ -1,0 +1,12 @@
+# Top-level-test shards of internal/jobs/metrics/remaining for integration CI (CHAOS-9639).
+#
+# One `go test` of this package took 1,053 to 1,164 s on the hosted runner, 1,122 s
+# when isolated in a shard of its own (CHAOS-9631): 21 of the 25 minutes of its
+# job. ci/check_go.sh therefore runs the package ONLY as these name-partitioned
+# shards (the same mechanism as go_queryapi_server_test_shards.tsv, CHAOS-9162)
+# and never in the `packages` target. Every discovered top-level test lands in
+# exactly one shard, so a new test cannot fall outside every shard.
+# Weights are relative classes (integration-tagged vs ordinary), not seconds.
+shards	4
+integration-test-weight	100
+ordinary-test-weight	1

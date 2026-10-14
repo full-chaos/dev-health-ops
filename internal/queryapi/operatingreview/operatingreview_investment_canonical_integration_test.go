@@ -48,10 +48,12 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run
 	}
 }
 
-// CHAOS-9199: the Investment section is the week's effort per CANONICAL theme (the Jev
+// CHAOS-9199: the Investment section is the week's work per CANONICAL theme (the Jev
 // categorization, work_unit_investments), dated by the unit's end day, narrowed by owned
-// repositories for a team, and blind to the legacy rule classifier's table.
-func TestRealClickHouse_InvestmentSectionIsTheCanonicalEffortPerTheme(t *testing.T) {
+// repositories for a team, and blind to the legacy rule classifier's table. CHAOS-9622 (D5999): the value is the COUNT of the units (each unit
+// counts 1 over the themes it spreads over), never their effort_value (lines of code): wu-a carries 100 lines and
+// wu-b 50, and they count 1 each.
+func TestRealClickHouse_InvestmentSectionIsTheCanonicalWorkPerTheme(t *testing.T) {
 	ctx, admin, client := startOperatingReviewSchema(t)
 	const org = "org-9199"
 	week := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
@@ -97,19 +99,19 @@ func TestRealClickHouse_InvestmentSectionIsTheCanonicalEffortPerTheme(t *testing
 			}
 		}
 	}
-	want(review(nil), map[string]float64{"feature_delivery_effort": 60, "risk_effort": 40, "maintenance_effort": 50, "quality_effort": 0, "operational_effort": 0}, "all teams")
-	want(review([]string{"team-a"}), map[string]float64{"feature_delivery_effort": 60, "risk_effort": 40, "maintenance_effort": 0}, "team A (owned repo A only)")
-	want(review([]string{"team-a", "team-b"}), map[string]float64{"feature_delivery_effort": 60, "maintenance_effort": 50}, "teams A and B")
+	want(review(nil), map[string]float64{"feature_delivery_work": 0.6, "risk_work": 0.4, "maintenance_work": 1, "quality_work": 0, "operational_work": 0}, "all teams")
+	want(review([]string{"team-a"}), map[string]float64{"feature_delivery_work": 0.6, "risk_work": 0.4, "maintenance_work": 0}, "team A (owned repo A only)")
+	want(review([]string{"team-a", "team-b"}), map[string]float64{"feature_delivery_work": 0.6, "maintenance_work": 1}, "teams A and B")
 
-	// The prior week's value rides the delta: wu-prior (20, feature delivery) is the prior week.
+	// The prior week's value rides the delta: wu-prior (one unit, feature delivery) is the prior week.
 	prior, err := ResolveInput(ctx, client, org, nil, nil, graphqldate.New(week))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, section := range prior.Sections {
 		for _, m := range section.Metrics {
-			if m.Key == "feature_delivery_effort" && (m.Delta.PriorValue != 20 || !m.Delta.HasPriorData) {
-				t.Errorf("feature_delivery_effort prior = %v (hasPriorData %v), want 20", m.Delta.PriorValue, m.Delta.HasPriorData)
+			if m.Key == "feature_delivery_work" && (math.Abs(m.Delta.PriorValue-1) > 1e-3 || !m.Delta.HasPriorData) {
+				t.Errorf("feature_delivery_work prior = %v (hasPriorData %v), want 1", m.Delta.PriorValue, m.Delta.HasPriorData)
 			}
 		}
 	}

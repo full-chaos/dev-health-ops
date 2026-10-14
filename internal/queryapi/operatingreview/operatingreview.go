@@ -898,11 +898,11 @@ func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, st
 	return out, rows.Err()
 }
 
-// investmentRow is one canonical theme of the week: its effort over the units that END in the
+// investmentRow is one canonical theme of the week: its work (InvestmentShareMeasure) over the units that END in the
 // week (the Jev categorization, work_unit_investments: the Investment page's own read; CHAOS-9199).
 type investmentRow struct {
-	theme  string
-	effort float64
+	theme string
+	value float64
 }
 
 // ownershipAsOf is the instant team ownership is read at: the week's end, or now for a week that has
@@ -914,7 +914,7 @@ func ownershipAsOf(weekEnd time.Time) time.Time {
 	return weekEnd
 }
 
-// fetchInvestment reads the week's effort per canonical theme from the categorization the
+// fetchInvestment reads the week's work per canonical theme from the categorization the
 // Investment page reads (investmentexplain.FetchInvestmentThemeEffort: the latest row of each
 // unit, every categorization status, a unit dated by its END day as the Home tile dates it).
 // A week with units but no effort stores zeros (a stored zero is not a missing week).
@@ -926,7 +926,7 @@ func fetchInvestment(ctx context.Context, client QueryClient, orgID string, team
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: investment: %w", err)
 	}
-	filters := investmentexplain.BreakdownFilters{OrgID: orgID, StartTS: start, EndTS: end, DatedByEnd: true}
+	filters := investmentexplain.BreakdownFilters{OrgID: orgID, StartTS: start, EndTS: end, DatedByEnd: true, Measure: investmentexplain.InvestmentShareMeasure}
 	if len(teams) > 0 {
 		filters.TeamScopeCondition, filters.TeamScopeBindings = teamscope.RepoCondition(orgID, "repo_id", []string(teams), ownershipAsOf(end))
 		filters.TeamIDs, filters.TeamAsOf = []string(teams), ownershipAsOf(end)
@@ -938,7 +938,7 @@ func fetchInvestment(ctx context.Context, client QueryClient, orgID string, team
 	var out []investmentRow
 	for _, row := range themeRows {
 		if units.IsTheme(row.Theme) {
-			out = append(out, investmentRow{theme: row.Theme, effort: row.Effort})
+			out = append(out, investmentRow{theme: row.Theme, value: row.Value})
 		}
 	}
 	return out, nil
@@ -1970,7 +1970,7 @@ var investmentThemes = []struct{ key, label string }{
 	{"risk", "Risk / security"},
 }
 
-// investmentUnits is the effort per canonical theme; a theme with no effort is 0.
+// investmentUnits is the work per canonical theme (InvestmentShareMeasure); a theme with no work is 0.
 func investmentUnits(rows []investmentRow) map[string]float64 {
 	out := make(map[string]float64, len(investmentThemes))
 	for _, theme := range investmentThemes {
@@ -1978,7 +1978,7 @@ func investmentUnits(rows []investmentRow) map[string]float64 {
 	}
 	for _, row := range rows {
 		if _, ok := out[row.theme]; ok {
-			out[row.theme] += row.effort
+			out[row.theme] += row.value
 		}
 	}
 	return out
@@ -2182,7 +2182,10 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 	})
 }
 
-// investmentSection is the week's effort per canonical theme (CHAOS-9199). Feature delivery
+// investmentSection is the week's work per canonical theme (CHAOS-9199), in the measure
+// investmentexplain.InvestmentShareMeasure names (COUNT, CHAOS-9622, D5999: the share of the
+// units, never their lines of code). The metrics are named <theme>_work with the unit "work units"
+// (they were <theme>_effort and "effort" while the value was the unit's churn_loc effort_value). Feature delivery
 // reads higher-is-better and maintenance lower-is-better, as "new value" and "KTLO" did; the
 // other themes are neutral.
 func investmentSection(current, prior periodRows) reviewSection {
@@ -2197,7 +2200,7 @@ func investmentSection(current, prior periodRows) reviewSection {
 		case "maintenance":
 			direction = lowerIsBetter
 		}
-		metrics = append(metrics, buildMetric(theme.key+"_effort", theme.label, currentUnits[theme.key], priorUnits[theme.key], "effort", direction).dataIn(current, prior, hasInvestmentRows))
+		metrics = append(metrics, buildMetric(theme.key+"_work", theme.label, currentUnits[theme.key], priorUnits[theme.key], "work units", direction).dataIn(current, prior, hasInvestmentRows))
 	}
 	return buildSection("investment", "Investment", metrics)
 }

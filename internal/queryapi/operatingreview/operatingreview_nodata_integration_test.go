@@ -51,7 +51,7 @@ func TestRealClickHouse_HasDataSeparatesStoredZerosFromNoRows(t *testing.T) {
 				if m.Delta.PriorValue != 0 || m.Delta.HasPriorData {
 					t.Errorf("%s: prior %v hasPriorData %v, want the 0 placeholder of a week with no row", m.Key, m.Delta.PriorValue, m.Delta.HasPriorData)
 				}
-			case "mttr_hours", "change_failure_rate", "throughput", "bus_factor", "maintenance_effort", "ai_adoption_ratio":
+			case "mttr_hours", "change_failure_rate", "throughput", "bus_factor", "maintenance_work", "ai_adoption_ratio":
 				seen++
 				// MTTR is NULL in the stored incident row, no deployment gives no failure rate, and
 				// the other tables hold no row for this org.

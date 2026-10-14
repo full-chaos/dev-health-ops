@@ -222,7 +222,7 @@ func TestOrganisationMetricsAreTheOnesWhoseReadsHaveNoTeam(t *testing.T) {
 	teamRows := periodRows{
 		workItems:      []workItemsRow{{itemsCompleted: 1, cycleTimeP50Hours: fp(1), wipAgeP90Hours: fp(1)}},
 		stateDurations: []stateDurationRow{{itemsTouched: 1, durationHours: 1}},
-		investment:     []investmentRow{{theme: "maintenance", effort: 1}},
+		investment:     []investmentRow{{theme: "maintenance", value: 1}},
 		aiImpact: []aiImpactRow{{prsTotal: 2, aiAssistedPrs: 1, aiCycleTimeDeltaHours: fp(1), aiReviewAmplification: fp(1),
 			reworkDragRate: fp(0.1), testGapRate: fp(0.1), incidentDragRate: fp(0.1)}},
 		aiGovernance: []aiGovernanceRawRow{{aiArtifacts: 1, declaredArtifacts: 1}},
@@ -298,10 +298,10 @@ func TestUnionOfTwoTeams_IsNotAMeanOfTeamValues(t *testing.T) {
 	}
 
 	// Investment units: a count, summed.
-	invUnion := periodRows{investment: []investmentRow{{theme: "maintenance", effort: 7}}}
-	invA := periodRows{investment: []investmentRow{{theme: "maintenance", effort: 3}}}
-	invB := periodRows{investment: []investmentRow{{theme: "maintenance", effort: 4}}}
-	if got, sum := valueOf(t, invUnion, "maintenance_effort"), valueOf(t, invA, "maintenance_effort")+valueOf(t, invB, "maintenance_effort"); got != 7 || got != sum {
+	invUnion := periodRows{investment: []investmentRow{{theme: "maintenance", value: 7}}}
+	invA := periodRows{investment: []investmentRow{{theme: "maintenance", value: 3}}}
+	invB := periodRows{investment: []investmentRow{{theme: "maintenance", value: 4}}}
+	if got, sum := valueOf(t, invUnion, "maintenance_work"), valueOf(t, invA, "maintenance_work")+valueOf(t, invB, "maintenance_work"); got != 7 || got != sum {
 		t.Errorf("ktlo_units = %v, want the sum %v", got, sum)
 	}
 }

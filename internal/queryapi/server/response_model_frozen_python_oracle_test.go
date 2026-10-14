@@ -142,6 +142,72 @@ func TestFilterOptionsResponseIsThePythonResponsePlusTeamNames(t *testing.T) {
 	}
 }
 
+// investmentPythonResponse is the shape the frozen FastAPI model of /api/v1/investment has.
+// investment.Response has two more fields since CHAOS-9622 (measure, denominator), which the Python model
+// never had; the frozen program is not recorded again, so the oracle still checks THAT shape, written by
+// the production writer. TestInvestmentResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields ties it to
+// the production type: exactly these six fields, in this order, then exactly the declared Go-only two.
+type investmentPythonResponse struct {
+	ThemeDistribution           pyjson.OrderedMap[float64]       `json:"theme_distribution"`
+	SubcategoryDistribution     pyjson.OrderedMap[float64]       `json:"subcategory_distribution"`
+	EvidenceQualityDistribution pyjson.OrderedMap[float64]       `json:"evidence_quality_distribution" pyjson:"nullable"`
+	EvidenceQualityStats        *investment.EvidenceQualityStats `json:"evidence_quality_stats"`
+	Unit                        *string                          `json:"unit"`
+	Edges                       []map[string]any                 `json:"edges" pyjson:"nullable"`
+}
+
+// investmentGoOnlyResponseFields are the fields of investment.Response the Python model does not have:
+// the measure the distributions count and the sum their shares are shares of (the distribution values
+// are the numerators). Both are left out of an empty response.
+var investmentGoOnlyResponseFields = []struct{ name, goType, tag string }{
+	{"Measure", "string", `json:"measure,omitempty"`},
+	{"Denominator", "*float64", `json:"denominator,omitempty"`},
+}
+
+func TestInvestmentResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := fieldsOf(reflect.TypeOf(investmentPythonResponse{}))
+	for _, goOnly := range investmentGoOnlyResponseFields {
+		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})
+	}
+	if got := fieldsOf(reflect.TypeOf(investment.Response{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("investment.Response fields =\n %v\nwant the Python fields, then measure and denominator:\n %v", got, want)
+	}
+
+	// The production writer writes the two fields after the Python ones, and leaves them out of an empty response.
+	denominator := 23.0
+	var full strings.Builder
+	recorder := httptest.NewRecorder()
+	if err := writeModelResponse(recorder, &investment.Response{
+		ThemeDistribution: pyjson.NewOrderedMap[float64](), SubcategoryDistribution: pyjson.NewOrderedMap[float64](),
+		Edges: []map[string]any{}, Measure: "COUNT", Denominator: &denominator,
+	}); err != nil {
+		t.Fatalf("writeModelResponse: %v", err)
+	}
+	full.WriteString(recorder.Body.String())
+	if !strings.HasSuffix(strings.TrimSpace(full.String()), `"edges":[],"measure":"COUNT","denominator":23.0}`) {
+		t.Errorf("investment body = %s, want measure then denominator after the Python fields", full.String())
+	}
+	recorder = httptest.NewRecorder()
+	if err := writeModelResponse(recorder, &investment.Response{
+		ThemeDistribution: pyjson.NewOrderedMap[float64](), SubcategoryDistribution: pyjson.NewOrderedMap[float64](),
+		Edges: []map[string]any{},
+	}); err != nil {
+		t.Fatalf("writeModelResponse: %v", err)
+	}
+	if strings.Contains(recorder.Body.String(), "measure") || strings.Contains(recorder.Body.String(), "denominator") {
+		t.Errorf("empty investment body = %s, want neither Go-only field", recorder.Body.String())
+	}
+}
+
 // opportunitiesPythonCard and opportunitiesPythonResponse are the shape the
 // frozen FastAPI model of /api/v1/opportunities has: the five fields the
 // Python reference served. The Go response (opportunities.Card) has four more
@@ -721,8 +787,8 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/people/{person_id}/drilldown/issues": plain((*personIssuesPythonResponse)(nil)),
 		"GET /api/v1/opportunities":                       plain((*opportunitiesPythonResponse)(nil)),
 		"POST /api/v1/opportunities":                      plain((*opportunitiesPythonResponse)(nil)),
-		"GET /api/v1/investment":                          plain((*investment.Response)(nil)),
-		"POST /api/v1/investment":                         plain((*investment.Response)(nil)),
+		"GET /api/v1/investment":                          plain((*investmentPythonResponse)(nil)),
+		"POST /api/v1/investment":                         plain((*investmentPythonResponse)(nil)),
 		"GET /api/v1/investment/sunburst":                 plain([]investment.SunburstSlice(nil)),
 		"POST /api/v1/investment/explain": {
 			response: investmentMixPythonResponse{},

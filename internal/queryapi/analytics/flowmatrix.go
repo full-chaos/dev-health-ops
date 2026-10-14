@@ -216,6 +216,12 @@ type compiledQuery struct {
 // ClickHouse-query-and-scan step is meant to be caught by a caller that
 // wants Python's swallow-to-empty-FlowMatrixResult behavior.
 func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, filters *model.FilterInput) (nodes compiledQuery, edges compiledQuery, err error) {
+	// CHAOS-9695 (D5999, D6014): lines of code are no Investment measure. WORK_TYPE and the fixed TEAM and REPO
+	// templates never read the measure, so the refusal must not depend on which query the request compiles to.
+	if req.Measure == MeasureChurnLOC && resolveUseInvestment([]Dimension{req.Dimension}, req.UseInvestment) {
+		_, err := dbExpression(MeasureChurnLOC, true, false)
+		return compiledQuery{}, compiledQuery{}, err
+	}
 	switch req.Dimension {
 	case DimensionTeam, DimensionRepo:
 		if resolveUseInvestment([]Dimension{req.Dimension}, req.UseInvestment) {

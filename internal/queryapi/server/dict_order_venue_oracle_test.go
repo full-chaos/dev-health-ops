@@ -250,6 +250,14 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	seedNow := time.Now().UTC()
 	fromTS := seedNow.AddDate(0, 0, -3).Format("2006-01-02 15:04:05")
 	toTS := seedNow.AddDate(0, 0, -1).Format("2006-01-02 15:04:05")
+	// CHAOS-9695 (D5999, D6014): the list is ordered by the work-unit count, then the end of the unit, then the id (it was
+	// ordered by effort_value, 10 / 5 / 4 here). Every seeded unit counts 1, so the later two end one and two seconds
+	// earlier: the order stays the one the frozen Python answer has, and the span of each unit stays the same.
+	shifted := func(base time.Time, seconds int) string {
+		return base.Add(-time.Duration(seconds) * time.Second).Format("2006-01-02 15:04:05")
+	}
+	fromTyped, toTyped := shifted(seedNow.AddDate(0, 0, -3), 1), shifted(seedNow.AddDate(0, 0, -1), 1)
+	fromNull, toNull := shifted(seedNow.AddDate(0, 0, -3), 2), shifted(seedNow.AddDate(0, 0, -1), 2)
 	seedWorkUnits := func(databases []string) {
 		for _, database := range databases {
 			conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
@@ -286,7 +294,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 				 'churn_loc', 4.0, map('quality', 1.0), map('quality.bugfix', 1.0),
 				 'null',
 				 0.5, 'moderate', 'ok', '', 'v1', 'hash', 'run-3', now64(3), '%s')`,
-					workUnitID, fromTS, toTS, orgID, workUnitID, fromTS, toTS, orgID),
+					workUnitID, fromTyped, toTyped, orgID, workUnitID, fromNull, toNull, orgID),
 				fmt.Sprintf(`INSERT INTO work_unit_investment_quotes (work_unit_id, quote, source_type, source_id, computed_at, categorization_run_id, org_id)
 			VALUES ('%s', 'Fix the flaky login test.', 'pr_body', 'pr-7', now64(3), 'run-1', '%s')`, workUnitID, orgID),
 			} {

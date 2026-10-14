@@ -53,3 +53,38 @@ func TestCompileSankey_ChurnLOCIsRefusedOnTheInvestmentPath(t *testing.T) {
 		t.Fatalf("CompileSankey(team and repository path, churn_loc, non-investment) = %v, want it compiled: the health measure stays", err)
 	}
 }
+
+// CHAOS-9695, round 1: WORK_TYPE (and the fixed TEAM and REPO templates) never read the measure, so the investment
+// refusal sits at the top of CompileFlowMatrix and covers every dimension.
+func TestCompileFlowMatrix_ChurnLOCIsRefusedOnTheInvestmentPathForEveryDimension(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name          string
+		dimension     Dimension
+		useInvestment *bool
+		refused       bool
+	}{
+		{"work type, unset (investment by default)", DimensionWorkType, nil, true},
+		{"work type, forced", DimensionWorkType, &yes, true},
+		{"theme", DimensionTheme, nil, true},
+		{"theme, explicit false (canonical only)", DimensionTheme, &no, true},
+		{"subcategory", DimensionSubcategory, nil, true},
+		{"team, forced investment", DimensionTeam, &yes, true},
+		{"repo, forced investment", DimensionRepo, &yes, true},
+		{"team, health", DimensionTeam, nil, false},
+		{"repo, health", DimensionRepo, &no, false},
+	} {
+		req := FlowMatrixRequest{
+			Dimension: tc.dimension, Measure: MeasureChurnLOC, UseInvestment: tc.useInvestment,
+			StartDate: mustDate(t, "2026-01-01"), EndDate: mustDate(t, "2026-01-31"), MaxNodes: 100, MaxEdges: 500,
+		}
+		_, _, err := CompileFlowMatrix(req, "org-1", 30, nil)
+		var validation *ValidationError
+		switch {
+		case tc.refused && !errors.As(err, &validation):
+			t.Errorf("%s: CompileFlowMatrix(churn_loc) error = %v, want a *ValidationError", tc.name, err)
+		case !tc.refused && err != nil:
+			t.Errorf("%s: CompileFlowMatrix(churn_loc) = %v, want the health read compiled", tc.name, err)
+		}
+	}
+}

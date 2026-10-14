@@ -159,7 +159,7 @@ func TestGitHubCredentialFromJSON(t *testing.T) {
 		{"both", `{"token":"t","app_id":"1","private_key":"k","installation_id":"2"}`, "", false},
 		{"partial app", `{"app_id":"1"}`, "", false},
 		{"unused key is ignored (CHAOS-9678)", `{"token":"t","x":"y"}`, CredentialPAT, true},
-		{"non-string token", `{"token":5}`, "", false},
+		{"non-string token is read as Python str() reads it (the worker's decode, CHAOS-9678)", `{"token":5}`, CredentialPAT, true},
 		{"list", `[1]`, "", false},
 		{"null", `null`, "", false},
 		{"dropped nulls", `{"token":"t","app_id":null}`, CredentialPAT, true},

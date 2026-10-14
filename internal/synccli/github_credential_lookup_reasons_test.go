@@ -72,36 +72,34 @@ func TestEveryCredentialLookupBranchHasItsOwnReason(t *testing.T) {
 		ciphertext string
 		env        map[string]string
 		reason     string
-		field      string
 		hasToken   bool
 		hasApp     bool
 	}{
-		{"no encryption key", sealed(`{"token":"t"}`), nil, reasonEncryptionKeyNotSet, "", false, false},
-		{"encryption key given twice", sealed(`{"token":"t"}`), map[string]string{"SETTINGS_ENCRYPTION_KEY": reasonTestKey, "SETTINGS_ENCRYPTION_KEY_FILE": missingFile}, reasonEncryptionKeyUnusable, "", false, false},
-		{"encryption key file unreadable", sealed(`{"token":"t"}`), map[string]string{"SETTINGS_ENCRYPTION_KEY_FILE": missingFile}, reasonEncryptionKeyUnusable, "", false, false},
-		{"salt given twice", sealed(`{"token":"t"}`), map[string]string{"SETTINGS_ENCRYPTION_KEY": reasonTestKey, "SETTINGS_ENCRYPTION_SALT": "s", "SETTINGS_ENCRYPTION_SALT_FILE": missingFile}, reasonEncryptionKeyUnusable, "", false, false},
-		{"garbage ciphertext", "v1:garbage", key, reasonDecryptFailed, "", false, false},
-		{"wrong key", sealPayload(t, "another-key", "", `{"token":"t"}`), key, reasonDecryptFailed, "", false, false},
-		{"wrong salt", sealPayload(t, reasonTestKey, "another-salt", `{"token":"t"}`), key, reasonDecryptFailed, "", false, false},
-		{"payload not json", sealed(`not json`), key, reasonPayloadNotJSON, "", false, false},
-		{"payload a list", sealed(`["a"]`), key, reasonPayloadNotObject, "", false, false},
-		{"payload null", sealed(`null`), key, reasonPayloadNotObject, "", false, false},
-		{"token not text", sealed(`{"token":5}`), key, reasonFieldNotText, "token", false, false},
-		{"installation id beside a token not text", sealed(`{"token":"t","installation_id":5}`), key, reasonFieldNotText, "installation_id", false, false},
-		{"alias key not text", sealed(`{"appId":5}`), key, reasonFieldNotText, "app_id", false, false},
-		{"private key path unreadable", sealed(`{"app_id":"1","private_key_path":"/nonexistent/key.pem","installation_id":"2"}`), key, reasonPrivateKeyPathUnread, "", false, false},
-		{"token and an app", sealed(`{"token":"t","app_id":"1","private_key":"k","installation_id":"2"}`), key, reasonCredentialShapeInvalid, "", true, true},
-		{"partial app", sealed(`{"app_id":"1"}`), key, reasonCredentialShapeInvalid, "", false, true},
-		{"nothing usable", sealed(`{}`), key, reasonCredentialShapeInvalid, "", false, false},
-		{"empty token", sealed(`{"token":""}`), key, reasonCredentialShapeInvalid, "", false, false},
+		{"no encryption key", sealed(`{"token":"t"}`), nil, reasonEncryptionKeyNotSet, false, false},
+		{"encryption key given twice", sealed(`{"token":"t"}`), map[string]string{"SETTINGS_ENCRYPTION_KEY": reasonTestKey, "SETTINGS_ENCRYPTION_KEY_FILE": missingFile}, reasonEncryptionKeyUnusable, false, false},
+		{"encryption key file unreadable", sealed(`{"token":"t"}`), map[string]string{"SETTINGS_ENCRYPTION_KEY_FILE": missingFile}, reasonEncryptionKeyUnusable, false, false},
+		{"salt given twice", sealed(`{"token":"t"}`), map[string]string{"SETTINGS_ENCRYPTION_KEY": reasonTestKey, "SETTINGS_ENCRYPTION_SALT": "s", "SETTINGS_ENCRYPTION_SALT_FILE": missingFile}, reasonEncryptionKeyUnusable, false, false},
+		{"garbage ciphertext", "v1:garbage", key, reasonDecryptFailed, false, false},
+		{"wrong key", sealPayload(t, "another-key", "", `{"token":"t"}`), key, reasonDecryptFailed, false, false},
+		{"wrong salt", sealPayload(t, reasonTestKey, "another-salt", `{"token":"t"}`), key, reasonDecryptFailed, false, false},
+		{"payload not json", sealed(`not json`), key, reasonPayloadNotJSON, false, false},
+		{"payload a list", sealed(`["a"]`), key, reasonPayloadNotObject, false, false},
+		{"payload null", sealed(`null`), key, reasonPayloadNotObject, false, false},
+		{"installation id beside a token (not text, read as Python str())", sealed(`{"token":"t","installation_id":5}`), key, reasonCredentialShapeInvalid, true, true},
+		{"alias app id alone (not text)", sealed(`{"appId":5}`), key, reasonCredentialShapeInvalid, false, true},
+		{"private key path unreadable", sealed(`{"app_id":"1","private_key_path":"/nonexistent/key.pem","installation_id":"2"}`), key, reasonPrivateKeyPathUnread, false, false},
+		{"token and an app", sealed(`{"token":"t","app_id":"1","private_key":"k","installation_id":"2"}`), key, reasonCredentialShapeInvalid, true, true},
+		{"partial app", sealed(`{"app_id":"1"}`), key, reasonCredentialShapeInvalid, false, true},
+		{"nothing usable", sealed(`{}`), key, reasonCredentialShapeInvalid, false, false},
+		{"empty token", sealed(`{"token":""}`), key, reasonCredentialShapeInvalid, false, false},
 	}
 	seen := map[string]bool{}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := githubCredentialFromCiphertext(context.Background(), tc.ciphertext, "org-1", envOf(tc.env))
 			failure := failureOf(t, err)
-			if failure.Reason != tc.reason || failure.Field != tc.field || failure.HasToken != tc.hasToken || failure.HasApp != tc.hasApp {
-				t.Fatalf("failure = %+v, want reason %q field %q has_token %v has_app %v", failure, tc.reason, tc.field, tc.hasToken, tc.hasApp)
+			if failure.Reason != tc.reason || failure.HasToken != tc.hasToken || failure.HasApp != tc.hasApp {
+				t.Fatalf("failure = %+v, want reason %q has_token %v has_app %v", failure, tc.reason, tc.hasToken, tc.hasApp)
 			}
 			if tc.reason == reasonDecryptFailed && (failure.Class == "" || failure.Type == "") {
 				t.Fatalf("a decrypt failure carries no class and type: %+v", failure)
@@ -110,7 +108,7 @@ func TestEveryCredentialLookupBranchHasItsOwnReason(t *testing.T) {
 		})
 	}
 	// Reasons that need the database or the network have their own tests below and in the integration test.
-	for _, reason := range []string{reasonEncryptionKeyNotSet, reasonEncryptionKeyUnusable, reasonDecryptFailed, reasonPayloadNotJSON, reasonPayloadNotObject, reasonFieldNotText, reasonPrivateKeyPathUnread, reasonCredentialShapeInvalid} {
+	for _, reason := range []string{reasonEncryptionKeyNotSet, reasonEncryptionKeyUnusable, reasonDecryptFailed, reasonPayloadNotJSON, reasonPayloadNotObject, reasonPrivateKeyPathUnread, reasonCredentialShapeInvalid} {
 		if !seen[reason] {
 			t.Errorf("reason %q has no case", reason)
 		}
@@ -176,7 +174,7 @@ func TestTheLookupLogsTheReasonAndTheIgnoredKeyNamesNeverAValue(t *testing.T) {
 // The exit text of every failure is the one ported text: a reason changes the
 // log, never the contract.
 func TestEveryLookupFailureEndsInTheMissingCredentialsText(t *testing.T) {
-	for _, reason := range []string{reasonDatabaseURLNotUsable, reasonDatabaseConnectFailed, reasonDatabaseQueryFailed, reasonCredentialRowNotFound, reasonCiphertextEmpty, reasonEncryptionKeyNotSet, reasonEncryptionKeyUnusable, reasonDecryptFailed, reasonPayloadNotJSON, reasonPayloadNotObject, reasonFieldNotText, reasonPrivateKeyPathUnread, reasonCredentialShapeInvalid} {
+	for _, reason := range []string{reasonDatabaseURLNotUsable, reasonDatabaseConnectFailed, reasonDatabaseQueryFailed, reasonCredentialRowNotFound, reasonCiphertextEmpty, reasonEncryptionKeyNotSet, reasonEncryptionKeyUnusable, reasonDecryptFailed, reasonPayloadNotJSON, reasonPayloadNotObject, reasonPrivateKeyPathUnread, reasonCredentialShapeInvalid} {
 		h := &lookupHarness{org: "org-1", orgFound: true, credErr: lookupFailure(reason)}
 		code, _, stderr := runVerb(t, "security", h.executor(), githubGitArgs("--org", "org-1"), dbEnv)
 		if code == cli.ExitOK || !strings.Contains(stderr, missingGitHubCredentials) {
@@ -198,7 +196,9 @@ func TestUnusedKeysAndAliasesInTheStoredPayload(t *testing.T) {
 		{"the later key of the document wins over its alias", `{"app_id":"1","appId":"9","private_key":"k","installation_id":"2"}`, CredentialApp, "", "9"},
 		{"the later canonical key wins over an alias", `{"appId":"9","app_id":"1","private_key":"k","installation_id":"2"}`, CredentialApp, "", "1"},
 		{"a null alias never replaces a value", `{"app_id":"1","appId":null,"private_key":"k","installation_id":"2"}`, CredentialApp, "", "1"},
-		{"dataclass fields are accepted and not used", `{"token":"t","provider":"github","credential_name":"x","extra":{"a":1}}`, CredentialPAT, "", ""},
+		{"the dataclass keys are not used by the worker either and are named", `{"token":"t","provider":"github","credential_name":"x","extra":{"a":1}}`, CredentialPAT, "credential_name,extra,provider", ""},
+		{"a token that is not a string is read as Python str() reads it", `{"token":5}`, CredentialPAT, "", ""},
+		{"private_key_path is used, not ignored", `{"token":"t","private_key_path":""}`, CredentialPAT, "", ""},
 		{"an unused key of any type is ignored", `{"token":"t","org":5,"flags":[1]}`, CredentialPAT, "flags,org", ""},
 	}
 	for _, tc := range cases {

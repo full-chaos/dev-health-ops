@@ -5,14 +5,11 @@ import (
 	"errors"
 	"log/slog"
 	"net/url"
-	"os"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -38,15 +35,14 @@ import (
 // Named divergences from Python, each outside the oracle corpus on purpose
 // (the two of CHAOS-9678 are inside it as named entries, see
 // dbLookupNamedDivergences):
-//   - a payload key the credential does not use is IGNORED (its name is logged)
-//     and the camelCase spellings are aliased, as the worker does
-//     (github_credentials_from_mapping); Python's sync verb refused both
-//     (_build_credential, GitHubCredentials(**dict)), which made every
-//     credential the web saved (with an `org` key) unusable for the verb;
-//   - is_active is NOT read (Python's get() does not filter on it either), but
-//     a stored value that is not a JSON string (a number, a bool) for a field
-//     the credential uses is "no database credentials" here; Python would keep
-//     the value and fail later inside the provider call;
+//   - the payload is decoded by the WORKER's decode and shape rule
+//     (providerfoundation.DecodeStoredGitHubCredential, one shared function): a
+//     payload key the credential does not use is IGNORED (its name is logged at
+//     Warn), the camelCase spellings are aliased, and a value that is not a
+//     string is read the way Python's str() reads it; Python's sync verb refused
+//     the first two (_build_credential, GitHubCredentials(**dict)), which made
+//     every credential the web saved (with an `org` key) unusable for the verb;
+//   - is_active is NOT read (Python's get() does not filter on it either);
 //   - SETTINGS_ENCRYPTION_SALT set to the EMPTY string: Python derives the v1
 //     key with an empty salt, providerfoundation.FernetDecryptor treats an
 //     empty salt as the default;
@@ -81,19 +77,18 @@ const (
 	reasonDecryptFailed          = "credential_decrypt_failed"
 	reasonPayloadNotJSON         = "credential_payload_not_json"
 	reasonPayloadNotObject       = "credential_payload_not_object"
-	reasonFieldNotText           = "credential_field_not_text"
 	reasonPrivateKeyPathUnread   = "credential_private_key_path_unreadable"
 	reasonCredentialShapeInvalid = "credential_shape_invalid"
 )
 
 // credentialLookupFailure is one reason the lookup found nothing usable. It is
 // an errNoDBCredential (errors.Is), so every caller that maps "nothing usable"
-// keeps doing so. Field names a payload key (a key name, never a value); Class
-// and Type are the error class and Go type of a driver or decryptor error, never
-// its text.
+// keeps doing so. Class and Type are the error class and Go type of a driver or
+// decryptor error, never its text; HasToken and HasApp say what a refused
+// payload held.
 type credentialLookupFailure struct {
-	Reason, Field, Class, Type string
-	HasToken, HasApp           bool
+	Reason, Class, Type string
+	HasToken, HasApp    bool
 }
 
 func (failure credentialLookupFailure) Error() string {
@@ -110,10 +105,6 @@ func lookupFailureWith(reason string, cause error) credentialLookupFailure {
 	return credentialLookupFailure{Reason: reason, Class: logging.ErrorClass(cause), Type: logging.ErrorType(cause)}
 }
 
-func fieldFailure(reason, field string) credentialLookupFailure {
-	return credentialLookupFailure{Reason: reason, Field: field}
-}
-
 const (
 	credentialLookupFailedEvent  = "synccli.github_credential_lookup_failed"
 	credentialFieldsIgnoredEvent = "synccli.github_credential_fields_ignored"
@@ -123,7 +114,7 @@ const (
 // credential lookup: the reason and what names it, never a value.
 func logCredentialLookupFailure(ctx context.Context, orgID string, failure credentialLookupFailure) {
 	slog.WarnContext(ctx, credentialLookupFailedEvent,
-		"org_id", orgID, "reason", failure.Reason, "field", failure.Field,
+		"org_id", orgID, "reason", failure.Reason,
 		"error_class", failure.Class, "error_type", failure.Type,
 		"has_token", failure.HasToken, "has_app", failure.HasApp)
 }
@@ -232,13 +223,6 @@ func asyncEngineRefusal(dbURL string) string {
 	return "NoSuchModuleError"
 }
 
-// githubDBFields are the keys GitHubCredentials(**dict) accepts.
-var githubDBFields = map[string]bool{
-	"provider": true, "source": true, "credential_name": true, "extra": true,
-	"token": true, "app_id": true, "private_key": true, "private_key_path": true,
-	"installation_id": true, "base_url": true,
-}
-
 // githubCredentialFromDB is resolve_credentials_sync("github", ...) followed by
 // _build_credential and GitHubCredentials.__post_init__. It returns
 // errNoDBCredential for every "found nothing usable" outcome, and a *Refusal
@@ -299,7 +283,7 @@ func githubCredentialFromCiphertext(ctx context.Context, ciphertext, orgID strin
 	}
 	credential, ignored, err := githubCredentialFromJSON(plaintext)
 	if len(ignored) > 0 {
-		slog.InfoContext(ctx, credentialFieldsIgnoredEvent, "org_id", orgID, "fields", strings.Join(ignored, ","))
+		slog.WarnContext(ctx, credentialFieldsIgnoredEvent, "org_id", orgID, "fields", strings.Join(ignored, ","))
 	}
 	return credential, err
 }
@@ -361,93 +345,51 @@ func settingsDecryptor(env cli.Env) (providerfoundation.FernetDecryptor, error) 
 	return providerfoundation.NewFernetDecryptor(key, salt.Reveal())
 }
 
-// githubFieldAliases are the camelCase spellings a credential written by the web
-// can carry, mapped to the canonical keys: the alias dict of Python's
-// github_credentials_from_mapping (credentials/resolver.py:259-265).
-var githubFieldAliases = map[string]string{
-	"appId":          "app_id",
-	"baseUrl":        "base_url",
-	"installationId": "installation_id",
-	"privateKey":     "private_key",
-	"privateKeyPath": "private_key_path",
-}
-
-// githubCredentialFromJSON builds the credential from the decrypted payload the
-// way the worker does (github_credentials_from_mapping, and
-// providerfoundation's decodeCredential): the camelCase aliases are applied,
-// a later key of the document wins over an earlier one with the same canonical
-// name, a null is dropped, and a key the credential does not use is IGNORED, its
-// name returned in ignored (never its value). A credential saved by the web
-// carries such keys (an `org`), so the strict GitHubCredentials(**dict) of
-// Python's sync verb (_build_credential, resolver.py:222-241) made every web-written
-// row unusable for the verb (CHAOS-9678). The rest is the Python shape rule:
-// a token, or a complete app triple, and not both.
+// githubCredentialFromJSON builds the credential from the decrypted payload
+// through the WORKER's own decode and shape rule
+// (providerfoundation.DecodeStoredGitHubCredential: the camelCase aliases
+// applied, a later key of the document wins, a null dropped, a key the
+// credential does not use IGNORED with its name returned in ignored, never its
+// value). Python's sync verb refused those payloads (_build_credential,
+// GitHubCredentials(**dict), resolver.py:222-241), which made every credential
+// the web saves (with an `org` key) unusable for the verb while the worker
+// reads the same row (CHAOS-9678). A refusal is a typed credentialLookupFailure.
 func githubCredentialFromJSON(plaintext []byte) (credential *GitHubCredentials, ignored []string, err error) {
-	decoded, decodeErr := pyjson.DecodeString(string(plaintext))
+	stored, decodeErr := providerfoundation.DecodeStoredGitHubCredential(plaintext)
+	var refused *providerfoundation.StoredCredentialFailure
+	if errors.As(decodeErr, &refused) {
+		failure := lookupFailure(storedFailureReason(refused.Reason))
+		failure.HasToken, failure.HasApp = refused.HasToken, refused.HasApp
+		return nil, nil, failure
+	}
 	if decodeErr != nil {
-		return nil, nil, lookupFailure(reasonPayloadNotJSON)
-	}
-	object, ok := decoded.(*pyjson.Object)
-	if !ok {
-		return nil, nil, lookupFailure(reasonPayloadNotObject)
-	}
-	fields := map[string]string{}
-	present := map[string]bool{}
-	for _, key := range object.Keys() {
-		value, _ := object.Get(key)
-		if value == nil { // _build_credential drops None values
-			continue
-		}
-		name := key
-		if canonical, aliased := githubFieldAliases[key]; aliased {
-			name = canonical
-		}
-		delete(fields, name)
-		delete(present, name)
-		if !githubDBFields[name] {
-			ignored = append(ignored, key)
-			continue
-		}
-		present[name] = true
-		text, isText := value.(string)
-		switch name {
-		case "extra", "source", "credential_name", "provider":
-			continue
-		}
-		if !isText {
-			return nil, nil, fieldFailure(reasonFieldNotText, name)
-		}
-		fields[name] = text
-	}
-	sort.Strings(ignored)
-	if !present["private_key"] { // "private_key" not in cred_dict (None was dropped)
-		if path := fields["private_key_path"]; path != "" {
-			data, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return nil, nil, lookupFailureWith(reasonPrivateKeyPathUnread, readErr)
-			}
-			fields["private_key"] = string(data)
-		}
-	}
-	hasToken := fields["token"] != ""
-	hasApp := fields["app_id"] != "" || fields["private_key"] != "" || fields["installation_id"] != ""
-	hasCompleteApp := fields["app_id"] != "" && fields["private_key"] != "" && fields["installation_id"] != ""
-	if (hasToken && hasApp) || (!hasToken && !hasCompleteApp) {
-		failure := lookupFailure(reasonCredentialShapeInvalid)
-		failure.HasToken, failure.HasApp = hasToken, hasApp
-		return nil, ignored, failure
+		return nil, nil, lookupFailureWith(reasonPayloadNotObject, decodeErr)
 	}
 	built := &GitHubCredentials{Name: "default"}
-	if value := fields["base_url"]; value != "" {
+	if baseURL := stored.BaseURL; baseURL.Configured() {
+		value := baseURL.Reveal()
 		built.BaseURL = &value
 	}
-	if hasToken {
-		built.Mode, built.Token = CredentialPAT, fields["token"]
-		return built, ignored, nil
+	if stored.Token.Configured() {
+		built.Mode, built.Token = CredentialPAT, stored.Token.Reveal()
+		return built, stored.Ignored, nil
 	}
 	built.Mode = CredentialApp
-	built.AppID, built.PrivateKey, built.InstallationID = fields["app_id"], fields["private_key"], fields["installation_id"]
-	return built, ignored, nil
+	built.AppID, built.PrivateKey, built.InstallationID = stored.AppID.Reveal(), stored.PrivateKey.Reveal(), stored.InstallationID.Reveal()
+	return built, stored.Ignored, nil
+}
+
+// storedFailureReason maps a refusal of the shared decode to this lookup's reason code.
+func storedFailureReason(reason string) string {
+	switch reason {
+	case providerfoundation.StoredCredentialPayloadNotJSON:
+		return reasonPayloadNotJSON
+	case providerfoundation.StoredCredentialPayloadNotObject:
+		return reasonPayloadNotObject
+	case providerfoundation.StoredCredentialPrivateKeyPathUnread:
+		return reasonPrivateKeyPathUnread
+	}
+	return reasonCredentialShapeInvalid
 }
 
 // resolveDBLookups fills what the plan left to the executor: the first

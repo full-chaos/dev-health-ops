@@ -65,6 +65,7 @@ func directWriteVerbs() map[string]directWriteVerb {
 		"providersync retire-jira-key-projects":              {argv: []string{"providersync", "retire-jira-key-projects", "--org", org}, dryRun: true},
 		"providersync retire-jira-project-as-team":           {argv: []string{"providersync", "retire-jira-project-as-team", "--org-stdin"}, dryRun: true, stdin: org + "\n"},
 		"providersync carry-team-ids":                        {argv: []string{"providersync", "carry-team-ids", "--org-stdin"}, dryRun: true, stdin: org + "\n"},
+		"providersync compact-ownership-intervals":           {argv: []string{"providersync", "compact-ownership-intervals", "--org-stdin", "--apply"}, stdin: org + "\n"},
 		"sync-dispatch-outbox close-backlog":                 {argv: []string{"sync-dispatch-outbox", "close-backlog"}, dryRun: true},
 	}
 }

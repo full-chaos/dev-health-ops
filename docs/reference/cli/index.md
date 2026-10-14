@@ -1658,6 +1658,72 @@ kubectl exec -i <worker-pod> -- dho workers providersync carry-team-ids \
   --org-stdin --reason <code> --correlation-id <id> < org-id-source
 ```
 
+#### `providersync compact-ownership-intervals` (CHAOS-9556)
+
+A one-time data step. The old per-sync writer closed the open ownership row of
+an unchanged fact at every sync and opened a new one, so a key holds runs of
+adjacent closed intervals of one shape. This verb merges each such run into one
+interval (the first `valid_from`, the last `valid_to`) in `team_project_ownership`
+(source `native`) and `team_repo_ownership` (source `inferred`), and drops the
+supersede tombstones (`valid_to` = `valid_from`) that cover no instant. The
+ownership timeline stays exact: for every key and every instant T, the rows
+valid at T have the same shape before and after.
+
+**It deletes rows, so it writes nothing unless `--apply` is given.** Without
+`--apply` (a dry run, the default) it reads, plans, proves the owner-at-T
+differential and reports. `--dry-run` is accepted and does the same; it is
+refused together with `--apply`. `--apply` needs `--reason` and
+`--correlation-id` and runs under one audit row.
+
+Two runs merge when they are adjacent (`valid_to` of one is `valid_from` of
+the next) and every column but the version is equal: `project_key` (project
+table), `repo_id`, `match_type`, `share` (repository table; share drift is a
+real change, D5991), `is_primary`, `specificity`, `priority`. `updated_at` and
+`last_synced` are ignored. Open rows, gaps, overlaps, close-before-open rows
+and rows of any other source are never touched. A run is also kept when a row of
+another source of the same (provider, repository or project, team) would
+change which row wins the "newest version" choice of the cascade readers
+(`runs_kept_multi_source`). A tombstone is dropped unless it is the earliest row
+of its key (`tombstones_kept_anchor`): the team-id carry reads `min(valid_from)`
+of a key as its "since when".
+
+Method, per batch of runs: (A) one insert of the merged first row and, for the
+other rows of the run, the same rows again as tombstones, so a reader sees the
+merged row and no inner row in one step; the rows are read back and the
+differential is asked again; (B) only then an `ALTER TABLE ... DELETE` of the
+tombstones (`mutations_sync=2`, every physical version of the key). Rewritten
+rows take an `updated_at` from the run's own history, never `now()`, so the
+work-item attribution scope check queues no recompute. The workers need not be
+stopped. Before the first insert of an organization the tool copies every row
+it will rewrite or drop into `<table>_compaction_bak` (created if missing) and
+checks the copy is not empty and has the expected row count. A key that a sync
+wrote between the plan and the insert is skipped and counted
+(`runs_changed_during_run`). `--restore-run <run_id> --apply` puts the rows of a
+run back from the backup table; the backup table is dropped by an operator after
+the readback.
+
+`--org-stdin` (one organization on stdin, rules of
+[`metrics daily-start`](#metrics-daily-start-chaos-5055)) or `--all-orgs`
+(every organization that holds a row of the source). `--table` limits the run
+to one table, `--batch-size` is the number of runs per insert (default 2000).
+Output: counts only, under `compact_ownership_intervals`, per table and per
+organization (numbered, never named) and in total: `rows_before`/`rows_after`,
+`open_*`, `closed_*`, `tombstones_*`, `close_before_open_*`, `runs_found`,
+`runs_merged`, `rows_merged`, `rows_kept`, `runs_kept_multi_source`,
+`runs_changed_during_run`, `gaps`, `overlaps`, `tombstones_found`,
+`tombstones_dropped`, `tombstones_kept_anchor`, `backup_rows`, `differential`
+(`groups_total`, `groups_checked`, `instants_checked`, `mismatches`) and
+`elapsed_ms`. A second `--apply` reports zero runs merged and writes nothing.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-intervals \
+  --org-stdin < org-id-source
+kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-intervals \
+  --all-orgs
+kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-intervals \
+  --all-orgs --apply --reason <code> --correlation-id <id>
+```
+
 #### `providersync retire-jira-project-as-team` (CHAOS-8888)
 
 Earlier versions of the Jira team catalog made a team of every Jira project

@@ -25,11 +25,12 @@ func orgStdinVerbs() map[string][]string {
 			"--family", "repo_user_commit", "--review-evidence", "testing"},
 		"providersync retire-jira-project-as-team": {"providersync", "retire-jira-project-as-team"},
 		"providersync carry-team-ids":              {"providersync", "carry-team-ids"},
+		"providersync compact-ownership-intervals": {"providersync", "compact-ownership-intervals", "--apply"},
 	}
 }
 
 // orgStdinOnlyVerbs have no --org flag: the organization comes from stdin only.
-var orgStdinOnlyVerbs = map[string]bool{"providersync retire-jira-project-as-team": true, "providersync carry-team-ids": true}
+var orgStdinOnlyVerbs = map[string]bool{"providersync retire-jira-project-as-team": true, "providersync carry-team-ids": true, "providersync compact-ownership-intervals": true}
 
 // The test table and the preflight set name the same verbs.
 func TestOrgStdinVerbsAreThePreflightSet(t *testing.T) {

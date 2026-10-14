@@ -413,6 +413,11 @@ func TestGitLabTeamCatalogCollectAllSelections(t *testing.T) {
 		if row.IsActive == 1 {
 			activeCount++
 		}
+		wantState, wantSource := "started", "gitlab.project.archived=false"
+		if row.IsActive == 0 {
+			wantState, wantSource = "completed", "gitlab.project.archived=true"
+		}
+		requireProjectState(t, "gitlab route project", row.State, row.StateSource, wantState, wantSource)
 	}
 	if activeCount != 2 {
 		t.Fatalf("active native projects = %d, want 2", activeCount)

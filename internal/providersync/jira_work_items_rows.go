@@ -80,7 +80,7 @@ func normalizeJiraWorkItem(
 	if title == "" {
 		return jiraWorkItemRow{}, nil, providerfoundation.ErrNormalizationInvalid
 	}
-	description := nullableJiraString(jiraField(fields, "description", issue.ObjectShape))
+	description := jiraDescriptionText(jiraField(fields, "description", issue.ObjectShape))
 	statusRaw, statusCategory := jiraStatus(fields["status"], issue.ObjectShape)
 	labels := jiraLabels(jiraField(fields, "labels", issue.ObjectShape))
 	typeRaw := jiraNamedValue(jiraField(fields, "issuetype", issue.ObjectShape), "name", issue.ObjectShape)
@@ -857,6 +857,85 @@ func jiraFloat(value any) *float64 {
 		return nil
 	}
 	return &parsed
+}
+
+// jiraDescriptionText is the plain text of a Jira description. Jira Cloud v3
+// sends an Atlassian Document Format tree, Server and v2 a string. A string is
+// kept as given; a tree is flattened (flattenJiraDocument); a value of another
+// shape states no description.
+func jiraDescriptionText(value any) *string {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		text := flattenJiraDocument(typed)
+		if text == "" {
+			return nil
+		}
+		return &text
+	case []any:
+		return nil
+	default:
+		return nullableJiraString(value)
+	}
+}
+
+const jiraDocumentMaxDepth = 32
+
+// flattenJiraDocument joins the text nodes of an Atlassian Document Format
+// tree: block nodes (paragraphs, headings, list items, code blocks) end in a
+// newline, a hard break is a newline, a mention, emoji, status or card reads as
+// its own text, and media reads as nothing. It stops once the text holds the
+// most the description bound can keep (four bytes a rune at most), so a
+// provider-sized tree costs a bounded amount.
+func flattenJiraDocument(root map[string]any) string {
+	var text strings.Builder
+	limit := 4 * workItemDescriptionMaxRunes
+	var walk func(node map[string]any, depth int)
+	walk = func(node map[string]any, depth int) {
+		if depth > jiraDocumentMaxDepth || text.Len() >= limit {
+			return
+		}
+		kind, _ := node["type"].(string)
+		attrs, _ := node["attrs"].(map[string]any)
+		switch kind {
+		case "text":
+			if value, ok := node["text"].(string); ok {
+				text.WriteString(value)
+			}
+			return
+		case "hardBreak":
+			text.WriteByte('\n')
+			return
+		case "mention", "emoji", "status":
+			if value, ok := attrs["text"].(string); ok {
+				text.WriteString(value)
+			}
+			return
+		case "inlineCard":
+			if value, ok := attrs["url"].(string); ok {
+				text.WriteString(value)
+			}
+			return
+		case "media", "mediaSingle", "mediaGroup", "mediaInline":
+			return
+		}
+		children, _ := node["content"].([]any)
+		for _, child := range children {
+			if mapped, ok := child.(map[string]any); ok {
+				walk(mapped, depth+1)
+			}
+		}
+		switch kind {
+		case "doc", "bulletList", "orderedList", "table", "tableRow", "tableCell", "tableHeader":
+		default:
+			if text.Len() > 0 && !strings.HasSuffix(text.String(), "\n") {
+				text.WriteByte('\n')
+			}
+		}
+	}
+	walk(root, 0)
+	return strings.TrimSpace(text.String())
 }
 
 func nullableJiraString(value any) *string {

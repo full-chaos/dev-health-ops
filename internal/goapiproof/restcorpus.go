@@ -726,6 +726,15 @@ var investmentExplainDeterministicFloats = map[string]string{
 	"data.top_findings.evidence.evidence_quality_mean": "avgIf(evidence_quality)-shaped ClickHouse float aggregate",
 }
 
+// investmentExplainGoOnlyKeys declares the three evidence keys the investment explanation serves and the
+// recorded Python answer never had (CHAOS-9555): the measure the share is in, and the two sums share_pct is
+// the ratio of.
+var investmentExplainGoOnlyKeys = map[string]GoOnlyKey{
+	"data.top_findings.evidence.measure":     {Ticket: "CHAOS-9555", Reason: "Go-only: the measure (COUNT or CHURN_LOC) share_pct is read in; the Python reference never served it."},
+	"data.top_findings.evidence.numerator":   {Ticket: "CHAOS-9555", Reason: "Go-only: the finding's sum, the numerator of share_pct; the Python reference never served it."},
+	"data.top_findings.evidence.denominator": {Ticket: "CHAOS-9555", Reason: "Go-only: the total of all themes, the denominator of share_pct; the Python reference never served it."},
+}
+
 // investmentExplainIntegerLeaves declares investment/explain's one
 // count-shaped numeric leaf: EncodeInvestmentMixExplanation
 // (investmentexplain/explanation.go) writes confidence.band_mix as an
@@ -4230,6 +4239,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					VolatileFields:        investmentExplainProseFields,
 					NumericLeavesDeclared: true,
 					FloatTierB:            investmentExplainDeterministicFloats,
+					GoOnlyKeys:            investmentExplainGoOnlyKeys,
 					IntegerLeaves:         investmentExplainIntegerLeaves,
 				},
 			},
@@ -4292,6 +4302,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					VolatileFields:        investmentExplainProseFields,
 					NumericLeavesDeclared: true,
 					FloatTierB:            investmentExplainDeterministicFloats,
+					GoOnlyKeys:            investmentExplainGoOnlyKeys,
 					IntegerLeaves:         investmentExplainIntegerLeaves,
 				},
 			},
@@ -4312,6 +4323,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					VolatileFields:        investmentExplainProseFields,
 					NumericLeavesDeclared: true,
 					FloatTierB:            investmentExplainDeterministicFloats,
+					GoOnlyKeys:            investmentExplainGoOnlyKeys,
 					IntegerLeaves:         investmentExplainIntegerLeaves,
 				},
 			},

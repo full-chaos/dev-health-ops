@@ -144,3 +144,12 @@ func TestExplainPromptNamesTheTotalAfterTheMeasure(t *testing.T) {
 		}
 	}
 }
+
+func TestInvalidFallbackNamesTheMeasure(t *testing.T) {
+	for measure, want := range map[string]string{"COUNT": "Work appears concentrated in velocity", "CHURN_LOC": "Changed lines appears concentrated in velocity"} {
+		fallback := invalidLLMOutputExplanation([]keyValue{{Key: "velocity", Value: 8}, {Key: "quality", Value: 2}}, 10, "unknown", nil, nil, BandMix{}, nil, shareNoun(measure))
+		if !strings.HasPrefix(fallback.TopFindings[0].Finding, want) || strings.Contains(fallback.Summary, "effort") {
+			t.Errorf("measure %s: fallback = %q / %q, want %q and no effort", measure, fallback.TopFindings[0].Finding, fallback.Summary, want)
+		}
+	}
+}

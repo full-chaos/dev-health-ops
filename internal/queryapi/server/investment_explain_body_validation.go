@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 )
 
@@ -22,8 +24,8 @@ import (
 // THROUGHPUT and CHURN_LOC, and the effort weighting every answer used before CHAOS-9555.
 var explainMeasureValues = []string{"COUNT", "THROUGHPUT", "CHURN_LOC"}
 
-// decodeExplainDateRange reads the page's dateRange: both dates are required, and the end is not
-// before the start (the page's own rule, analytics validateDateRange).
+// decodeExplainDateRange reads the page's dateRange: both dates are required, and the range
+// obeys the page's own rule (analytics.ValidateDateRange).
 func decodeExplainDateRange(loc []any, value pyjson.Value) (*investmentExplainDateRange, []pydanticErrorDetail) {
 	object, isObject := value.(*pyjson.Object)
 	if !isObject {
@@ -46,8 +48,10 @@ func decodeExplainDateRange(loc []any, value pyjson.Value) (*investmentExplainDa
 	}
 	start, startOK := read("start_date")
 	end, endOK := read("end_date")
-	if startOK && endOK && end.Before(start) {
-		errs = append(errs, pydanticErrorDetail{Type: "value_error", Loc: loc, Msg: "Value error, end_date must be >= start_date", Input: value})
+	if startOK && endOK {
+		if err := analytics.ValidateDateRange(graphqldate.New(start), graphqldate.New(end)); err != nil {
+			errs = append(errs, pydanticErrorDetail{Type: "value_error", Loc: loc, Msg: "Value error, " + err.Error(), Input: value})
+		}
 	}
 	if len(errs) > 0 {
 		return nil, errs

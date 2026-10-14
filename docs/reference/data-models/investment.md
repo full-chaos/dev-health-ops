@@ -220,19 +220,19 @@ work-unit investment path carries repository provenance; the deprecated daily
 path below has no such column, so it reports null there. Null means "not
 measured here"; zero would mean "measured, and none of it is team fallback".
 
-## The explanation reads the mix the page shows
+## Explain request fields
 
-`POST /api/v1/investment/explain` explains the mix the Investment page shows: every share, and the sum behind it,
-equals what `InvestmentBreakdown` reads for the same request (CHAOS-9555). The body takes the page's own fields
+`POST /api/v1/investment/explain` explains what the Investment page shows: every share, and the sum behind it,
+equals what `InvestmentBreakdown` reads for the same request (CHAOS-9555). The request body takes the page's own fields
 next to `filters`:
 
 | Field | Meaning | Default |
 |---|---|---|
 | `measure` | `COUNT` (the page's measure), `THROUGHPUT` (same as `COUNT`), or `CHURN_LOC` (changed lines of code, only when asked). The explanation never weighs by a unit's `effort_value`, which defaults to churn_loc | `COUNT` |
 | `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is `[start_date, end_date)`. It replaces `filters.time`. | `filters.time` (a relative `range_days` ends tomorrow, so it covers today) |
-| `use_investment` | Accepted for parity with the page; no effect, because theme and subcategory always read the canonical categorization on both surfaces | none |
+| `use_investment` | Accepted for parity with the page; no effect, because theme and subcategory always use the canonical categorization on both surfaces | none |
 
-`filters.scope.level` keeps its lowercase values. Scope `org` and scope `team` with no ids read the same rows, as on the page.
+`filters.scope.level` keeps its lowercase values. Scope `org` and scope `team` with no ids cover the same rows, as on the page.
 
 Each finding's `evidence` carries `measure`, `numerator` and `denominator`: `share_pct` is `numerator / denominator * 100`, where
 the numerator is the finding's subcategory (or theme) sum and the denominator is the sum of all themes in the window. The text of a

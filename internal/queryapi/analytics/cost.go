@@ -50,6 +50,10 @@ func settingsMaxExecutionTime(timeoutSeconds int) string {
 }
 
 // validateDateRange ports validate_date_range (cost.py:34-59).
+// ValidateDateRange is the page's own date-range rule (end not before start, at most maxDays days), for
+// the surfaces that take the page's dateRange (the investment explanation).
+func ValidateDateRange(start, end graphqldate.Date) error { return validateDateRange(start, end) }
+
 func validateDateRange(start, end graphqldate.Date) error {
 	if end.Time().Before(start.Time()) {
 		return newValidationError("date_range", nil, "end_date must be >= start_date")

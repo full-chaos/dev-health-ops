@@ -31,15 +31,16 @@ func TestExplainRequestNamesThePagesMeasureDateRangeAndUseInvestment(t *testing.
 
 func TestExplainRequestRefusesABadMeasureOrDateRange(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown measure":      `{"measure":"HOURS"}`,
-		"effort measure":       `{"measure":"EFFORT"}`,
-		"blank measure":        `{"measure":" "}`,
-		"measure not a string": `{"measure":3}`,
-		"use_investment type":  `{"use_investment":"maybe"}`,
-		"range without end":    `{"date_range":{"start_date":"2026-09-30"}}`,
-		"range end first":      `{"date_range":{"start_date":"2026-10-14","end_date":"2026-09-30"}}`,
-		"range bad date":       `{"date_range":{"start_date":"yesterday","end_date":"2026-10-14"}}`,
-		"range not an object":  `{"date_range":"2026-09-30"}`,
+		"unknown measure":           `{"measure":"HOURS"}`,
+		"effort measure":            `{"measure":"EFFORT"}`,
+		"blank measure":             `{"measure":" "}`,
+		"measure not a string":      `{"measure":3}`,
+		"use_investment type":       `{"use_investment":"maybe"}`,
+		"range without end":         `{"date_range":{"start_date":"2026-09-30"}}`,
+		"range end first":           `{"date_range":{"start_date":"2026-10-14","end_date":"2026-09-30"}}`,
+		"range bad date":            `{"date_range":{"start_date":"yesterday","end_date":"2026-10-14"}}`,
+		"range over the page limit": `{"date_range":{"start_date":"1990-01-01","end_date":"2026-10-14"}}`,
+		"range not an object":       `{"date_range":"2026-09-30"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, errs := decodeExplainBodyForTest(t, body); len(errs) == 0 {

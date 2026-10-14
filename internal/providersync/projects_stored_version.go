@@ -282,3 +282,54 @@ func providerDateOnly(value string) (time.Time, bool) {
 	}
 	return parsed.UTC(), true
 }
+
+// projectTargetColumnsMatch reads the target columns of a stored project row
+// and compares them with the values the contract gave the expected row, for
+// the recovery readback.
+func projectTargetColumnsMatch(ctx context.Context, conn storedversion.Querier, orgID, provider, id string, values []any) (bool, error) {
+	result, err := conn.Query(ctx, `SELECT target_state, target_kind, target_source, target_ref, target_ref_name, target_other_open, target_fetched_at
+		FROM projects FINAL WHERE org_id = ? AND provider = ? AND id = ?`, orgID, provider, id)
+	if err != nil {
+		return false, err
+	}
+	defer result.Close()
+	matched := false
+	for result.Next() {
+		var state, kind, source, ref, name string
+		var otherOpen *uint32
+		var fetchedAt *time.Time
+		if err := result.Scan(&state, &kind, &source, &ref, &name, &otherOpen, &fetchedAt); err != nil {
+			return false, err
+		}
+		position := projectsInsertPositions
+		matched = fmt.Sprint(values[position["target_state"]], values[position["target_kind"]], values[position["target_source"]],
+			values[position["target_ref"]], values[position["target_ref_name"]]) == fmt.Sprint(state, kind, source, ref, name) &&
+			sameOtherOpen(values[position["target_other_open"]], otherOpen) &&
+			sameFetchedAt(values[position["target_fetched_at"]], fetchedAt)
+	}
+	return matched, result.Err()
+}
+
+func sameOtherOpen(expected any, stored *uint32) bool {
+	switch value := expected.(type) {
+	case nil:
+		return stored == nil
+	case uint32:
+		return stored != nil && *stored == value
+	case *uint32:
+		return value == nil && stored == nil || value != nil && stored != nil && *value == *stored
+	}
+	return false
+}
+
+func sameFetchedAt(expected any, stored *time.Time) bool {
+	switch value := expected.(type) {
+	case nil:
+		return stored == nil
+	case time.Time:
+		return stored != nil && stored.Equal(value)
+	case *time.Time:
+		return value == nil && stored == nil || value != nil && stored != nil && stored.Equal(*value)
+	}
+	return false
+}

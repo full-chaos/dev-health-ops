@@ -142,12 +142,14 @@ func (sink JiraTeamCatalogClickHouseEffects) InspectEffect(ctx context.Context, 
 		}
 		// WriteEffect kept the held target columns of a row whose versions were
 		// not read; the same contract runs here against the same stored state.
+		targetValues := make(map[string][]any, len(expected))
 		if len(expected) > 0 {
 			stored := jiraProjectStoredRows(expected)
 			if err := applyProjectsContract(ctx, sink.Conn, claim.OrgID, stored, false); err != nil {
 				return EffectConflict, err
 			}
 			for index := range expected {
+				targetValues[expected[index].ID.String()] = stored[index].Values
 				date, err := projectTargetDate(stored[index].Values)
 				if err != nil {
 					return EffectConflict, err
@@ -156,7 +158,18 @@ func (sink JiraTeamCatalogClickHouseEffects) InspectEffect(ctx context.Context, 
 			}
 		}
 		return inspectJiraTeamCatalogRows(expected, func(row jiraTeamCatalogProjectRow) (EffectInspection, error) {
-			return sink.inspectProject(ctx, claim, row)
+			inspection, err := sink.inspectProject(ctx, claim, row)
+			if err != nil || inspection != EffectExact {
+				return inspection, err
+			}
+			matched, err := projectTargetColumnsMatch(ctx, sink.Conn, claim.OrgID, row.Provider, row.ID.String(), targetValues[row.ID.String()])
+			if err != nil {
+				return EffectConflict, err
+			}
+			if !matched {
+				return EffectConflict, nil
+			}
+			return EffectExact, nil
 		})
 	case jiraTeamCatalogSprintsDestination:
 		expected, err := decodeEffectRows[jiraSprintRow](effect)

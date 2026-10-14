@@ -43,22 +43,37 @@ func TestJiraProjectTargetFollowsOpenVersionsThroughTheCatalogWrite(t *testing.T
 
 	sync := func(step int, opsBody string, opsStatus int) {
 		t.Helper()
-		doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
-			jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"id":"10001","key":"OPS","name":"Ops"},{"id":"20001","key":"NODATE","name":"No date"}],"isLast":true}`},
-			"/rest/api/3/project/OPS":       {status: opsStatus, body: opsBody},
-			"/rest/api/3/project/NODATE": {body: `{"projectTypeKey":"business","versions":[
+		newDoer := func() *jiraTeamCatalogFixtureDoer {
+			return &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
+				jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"id":"10001","key":"OPS","name":"Ops"},{"id":"20001","key":"NODATE","name":"No date"}],"isLast":true}`},
+				"/rest/api/3/project/OPS":       {status: opsStatus, body: opsBody},
+				"/rest/api/3/project/NODATE": {body: `{"projectTypeKey":"business","versions":[
 				{"id":"9","released":false,"archived":false},{"id":"8","released":true,"releaseDate":"2026-01-01"}]}`},
-			"/rest/agile/1.0/board?maxResults=100&projectKeyOrId=OPS&startAt=0": {body: `{"values":[],"isLast":true}`},
-		}}
-		_, err := JiraTeamCatalogCollector{
-			ScopeCensus: staticScopeCensus{},
-			Handler:     JiraTeamCatalogRouteHandler{},
-			Sink:        JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
-		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: fmt.Sprintf("run-%d", step), IntegrationID: "integration-a"},
-			providerfoundation.Credential{Provider: "jira"}, jiraTeamCatalogTestClient(t, fakehttp.Client(doer)),
-			TeamCatalogSelections{Projects: true}, start.Add(time.Duration(step)*time.Hour))
+				"/rest/agile/1.0/board?maxResults=100&projectKeyOrId=OPS&startAt=0": {body: `{"values":[],"isLast":true}`},
+			}}
+		}
+		sink := JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}
+		ref := TeamCatalogReference{OrgID: orgID, SyncRunID: fmt.Sprintf("run-%d", step), IntegrationID: "integration-a"}
+		credential := providerfoundation.Credential{Provider: "jira"}
+		syncAt := start.Add(time.Duration(step) * time.Hour)
+		_, err := JiraTeamCatalogCollector{ScopeCensus: staticScopeCensus{}, Handler: JiraTeamCatalogRouteHandler{}, Sink: sink}.CollectTeamCatalog(
+			ctx, ref, credential, jiraTeamCatalogTestClient(t, fakehttp.Client(newDoer())), TeamCatalogSelections{Projects: true}, syncAt)
 		if err != nil {
 			t.Fatalf("step %d: %v", step, err)
+		}
+		// The recovery readback of the same answer finds the rows exactly as written.
+		batch, err := JiraTeamCatalogRouteHandler{}.CollectTeamCatalog(
+			ctx, ref, credential, jiraTeamCatalogTestClient(t, fakehttp.Client(newDoer())), TeamCatalogSelections{Projects: true}, syncAt)
+		if err != nil {
+			t.Fatalf("step %d: %v", step, err)
+		}
+		effect, err := effectBatchFromValues(jiraTeamCatalogProjectsDestination, EffectReadbackRequired, batch.Rows.Projects)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claim := Claim{Unit: Unit{OrgID: orgID, Provider: "jira"}}
+		if inspection, err := sink.InspectEffect(ctx, claim, effect); err != nil || inspection != EffectExact {
+			t.Fatalf("step %d: readback %s %v, want exact", step, inspection, err)
 		}
 	}
 	at := func(step int) int64 { return start.Add(time.Duration(step) * time.Hour).UnixMilli() }
@@ -149,9 +164,20 @@ func TestGitLabProjectTargetFollowsOpenMilestonesThroughTheCatalogWrite(t *testi
 		}, ScopeCensus: staticScopeCensus{}}
 		ref := TeamCatalogReference{OrgID: orgID, SyncRunID: fmt.Sprintf("run-%d", step), IntegrationID: "integration-a"}
 		credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+		syncAt := start.Add(time.Duration(step) * time.Hour)
 		if _, err := collector.CollectTeamCatalog(ctx, ref, credential, gitlabTeamCatalogTestClient(t, server.URL),
-			TeamCatalogSelections{Projects: true}, start.Add(time.Duration(step)*time.Hour)); err != nil {
+			TeamCatalogSelections{Projects: true}, syncAt); err != nil {
 			t.Fatalf("step %d: %v", step, err)
+		}
+		// The recovery readback of the same answer finds the rows exactly as written.
+		batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(ctx, ref, credential,
+			gitlabTeamCatalogTestClient(t, server.URL), TeamCatalogSelections{Projects: true}, syncAt)
+		if err != nil {
+			t.Fatalf("step %d: %v", step, err)
+		}
+		claim := Claim{Unit: Unit{OrgID: orgID, Provider: "gitlab"}}
+		if inspection, err := collector.Sink.InspectEffect(ctx, claim, *batch.Effects.Projects); err != nil || inspection != EffectExact {
+			t.Fatalf("step %d: readback %s %v, want exact", step, inspection, err)
 		}
 		if projectID == "" {
 			if err := conn.QueryRow(ctx, `SELECT id FROM projects FINAL WHERE org_id = ? AND provider = 'gitlab'`, orgID).Scan(&projectID); err != nil {

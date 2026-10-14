@@ -28,6 +28,10 @@ func TestDispatchMetricsRemainingRecomputeValidatesFlagsBeforeTouchingTheBackend
 			"--day", closedDay, "--to", closedDayTo, "--reason", "operator_test", "--correlation-id", "corr-1"},
 		"basis without recompute":   base("--basis", "cfr-125", "--day", closedDay),
 		"dry-run without recompute": base("--dry-run", "--day", closedDay),
+		"recompute of complexity": {"remaining", "start", "--recompute", "--basis", "cfr-125", "--family", "complexity", "--org", org,
+			"--day", closedDay, "--to", closedDayTo, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1"},
+		"recompute of release_impact": {"remaining", "start", "--recompute", "--basis", "cfr-125", "--family", "release_impact", "--org", org,
+			"--day", closedDay, "--to", closedDayTo, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1"},
 		"recompute of capacity": {"remaining", "start", "--recompute", "--basis", "cfr-125", "--family", "capacity", "--org", org,
 			"--day", closedDay, "--to", closedDayTo, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1"},
 	}

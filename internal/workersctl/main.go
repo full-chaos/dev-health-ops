@@ -3097,7 +3097,7 @@ func dispatchMetricsRemainingStart(ctx context.Context, runtime *operatorRuntime
 	if !*recompute && (*basis != "" || *dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
-	if *recompute && (!remaining.ValidRecomputeBasis(*basis) || *to == "") {
+	if *recompute && (!remaining.ValidRecomputeBasis(*basis) || *to == "" || !slices.Contains(remaining.ManualRecomputeFamilies, *family)) {
 		return writeError(stderr, "invalid_request")
 	}
 	if strings.TrimSpace(*reviewEvidence) == "" && !(*recompute && *dryRun) {

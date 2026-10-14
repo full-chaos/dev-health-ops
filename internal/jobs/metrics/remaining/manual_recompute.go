@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,6 +38,15 @@ const (
 	// or was canceled; the operator must look at the runs.
 	RecomputeExhausted RecomputeDisposition = "exhausted"
 )
+
+// ManualRecomputeFamilies lists the families `start --recompute` accepts. Only
+// dora: its automatic triggers (post-sync, fixed schedule) take the same
+// (org, day) advisory lock and treat a covered closed day as covered
+// (StartRunTx), so a recompute cannot race them into a second run. complexity
+// and release_impact have no such cross-trigger lock or dedup on a post-sync
+// run, so a recompute of them could not promise "never concurrent with an
+// automatic run of the same day".
+var ManualRecomputeFamilies = []string{"dora"}
 
 // ManualRecomputeOutcome reports what StartManualRecomputeRun (or the dry-run
 // preview) decided for one day.
@@ -85,9 +95,9 @@ func ManualRecomputeGeneration(basis, family, organizationID string) string {
 //     the worker executes like any other partition (ClaimPartition and its
 //     lease), -> RecomputeStarted.
 //
-// The rewrite appends: dora_metrics_daily and release_impact_daily keep every
-// generation and readers take the newest computed_at per key
-// (internal/jobs/report/tablereads.go); complexity replaces by generation.
+// The rewrite appends: dora_metrics_daily keeps every generation and readers
+// take the newest computed_at per key (internal/jobs/report/tablereads.go).
+// Only ManualRecomputeFamilies are accepted.
 func (store *PostgresStore) StartManualRecomputeRun(
 	ctx context.Context,
 	family, organizationID, day, basis string,
@@ -114,6 +124,9 @@ func (store *PostgresStore) manualRecompute(
 		return ManualRecomputeOutcome{}, ErrUnavailable
 	}
 	if !validUUID(organizationID) || !validDate(day) || !ValidRecomputeBasis(basis) {
+		return ManualRecomputeOutcome{}, ErrInvalidState
+	}
+	if !slices.Contains(ManualRecomputeFamilies, family) {
 		return ManualRecomputeOutcome{}, ErrInvalidState
 	}
 	scope, err := manualBackfillDayScope(family, day)

@@ -4,6 +4,7 @@ package remaining
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -148,6 +149,45 @@ func TestStartManualRecomputeRunRetriesAFailedRunUnderANumberedGeneration(t *tes
 	}
 }
 
+// An automatic dora dispatch of the same closed day, after the recompute run
+// committed pending, must not insert a second run: StartRunTx takes the same
+// advisory lock and reads the old succeeded partition as coverage.
+func TestAnAutomaticDoraStartAfterARecomputeCreatesNoSecondRun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	store, pool := recomputeTestStore(t, ctx)
+	day := time.Now().UTC().AddDate(0, 0, -3).Format("2006-01-02")
+	seededRunID := seedSucceededDoraPartition(t, ctx, store, pool, recomputeTestOrg, day, 7, "post-sync:covered")
+
+	started, err := store.StartManualRecomputeRun(ctx, "dora", recomputeTestOrg, day, "cfr-125", nopPartitionPublisher{})
+	if err != nil || started.Disposition != RecomputeStarted {
+		t.Fatalf("recompute = %+v, %v", started, err)
+	}
+	runsAfterRecompute := countRemainingRuns(t, ctx, pool)
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := json.RawMessage(`{"version":1,"day":"` + day + `","sink":"auto","interval":"daily","backfill_days":1}`)
+	automatic, err := store.StartRunTx(ctx, tx, StartRunRequest{
+		OrganizationID: recomputeTestOrg, Family: "dora",
+		Generation: "post-sync:later", ScopeKey: day, Scopes: []json.RawMessage{scope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if automatic.ID != seededRunID {
+		t.Fatalf("automatic start returned run %s, want the covering run %s", automatic.ID, seededRunID)
+	}
+	if got := countRemainingRuns(t, ctx, pool); got != runsAfterRecompute {
+		t.Fatalf("an automatic start after the recompute inserted a run: %d -> %d", runsAfterRecompute, got)
+	}
+}
+
 func TestStartManualRecomputeRunRefusesBadInput(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -163,6 +203,14 @@ func TestStartManualRecomputeRunRefusesBadInput(t *testing.T) {
 		},
 		"bad day": func() error {
 			_, err := store.StartManualRecomputeRun(ctx, "dora", recomputeTestOrg, "nope", "cfr-125", nil)
+			return err
+		},
+		"complexity": func() error {
+			_, err := store.StartManualRecomputeRun(ctx, "complexity", recomputeTestOrg, "2026-09-01", "cfr-125", nil)
+			return err
+		},
+		"release_impact": func() error {
+			_, err := store.PreviewManualRecompute(ctx, "release_impact", recomputeTestOrg, "2026-09-01", "cfr-125")
 			return err
 		},
 		"capacity": func() error {
@@ -266,7 +314,7 @@ func TestManualRecomputeRewritesACoveredDayToTheNewBasisAndLeavesAnUncoveredDayA
 				ContractVersion: jobcontract.ContractVersionV1,
 				OrganizationID:  strPtr(recomputeTestOrg),
 				CorrelationID:   "chaos-9674-rehearsal",
-				IdempotencyKey:  "chaos-9674-rehearsal-" + partitionID,
+				IdempotencyKey:  partitionID,
 				Domain:          jobcontract.DomainLink{Type: "remaining_metric_partition", ID: partitionID},
 				Payload:         jobcontract.NewRemainingMetricsPartitionPayload(jobcontract.KindRemainingDORA, partitionID),
 			},

@@ -1574,7 +1574,11 @@ dho workers metrics remaining start --recompute --basis cfr-125 \
 - Audited as the `start` action (the audit action set is a database
   constraint): tell a recompute from a start by its `--reason` code, its
   correlation id and the `"recompute": true` field of the printed result.
-- Same families as `start`: `complexity`, `dora`, `release_impact`.
+- Family `dora` only. Its automatic triggers (post-sync, fixed schedule) take
+  the same `(org, day)` advisory lock and see a covered closed day as covered,
+  so a recompute cannot race them into a second run. `complexity` and
+  `release_impact` have no such cross-trigger lock and dedup on a post-sync
+  run, so `--recompute` refuses them (`invalid_request`).
 
 Per-day `status`:
 

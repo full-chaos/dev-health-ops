@@ -597,3 +597,23 @@ func TestComputeWithNoInputHasNoScoreAndALowCoverageIsNotCapped(t *testing.T) {
 		t.Errorf("coverage = %v, want 0.30", coverage)
 	}
 }
+
+// CHAOS-9410, D5988: a team score is a mean of repository values, which do not
+// add, so a lesser owner reads the repository's own value like the main owner
+// (no share weight) and gets its own row.
+func TestBuildTeamRowsGivesALesserOwnerARowFromTheRepositoryValue(t *testing.T) {
+	rework := 0.4
+	repoInputs := []RepoInputs{{RepoID: "repo-1", Inputs: Inputs{ReworkChurn: &rework}}}
+	repoToTeam := map[string][]string{"repo-1": {"main", "lesser"}}
+	rows := BuildTeamRows(
+		time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC), "acme", repoInputs, repoToTeam, time.Now(),
+		DefaultWeights, DefaultThresholds, DefaultReferences,
+	)
+	got := map[string]*float64{}
+	for _, row := range rows {
+		got[row.ScopeID] = row.ReworkChurn
+	}
+	if len(got) != 2 || got["main"] == nil || got["lesser"] == nil || *got["main"] != rework || *got["lesser"] != rework {
+		t.Fatalf("rework churn by team %v, want both owners at the repository's own 0.4", got)
+	}
+}

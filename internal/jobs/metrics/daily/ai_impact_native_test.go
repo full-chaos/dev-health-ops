@@ -231,7 +231,9 @@ func (r *fakeOwnershipRows) Scan(dest ...any) error {
 	*(dest[0].(*string)) = row.repoID
 	*(dest[1].(*string)) = row.teamID
 	*(dest[2].(*uint8)) = row.mainOwner
-	*(dest[3].(*uint16)) = row.specificity
+	*(dest[3].(*uint8)) = 0
+	*(dest[4].(*uint16)) = row.specificity
+	*(dest[5].(**float64)) = nil
 	return nil
 }
 

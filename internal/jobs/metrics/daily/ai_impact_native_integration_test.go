@@ -135,7 +135,7 @@ QUALIFY ROW_NUMBER() OVER (
     org_id String, provider String, team_id String, repo_id Nullable(UUID),
     repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
     source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
-    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0,
+    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0, share Nullable(Float64),
     valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')),
     updated_at DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(updated_at)
@@ -930,7 +930,7 @@ QUALIFY ROW_NUMBER() OVER (
     org_id String, provider String, team_id String, repo_id Nullable(UUID),
     repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
     source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
-    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0,
+    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0, share Nullable(Float64),
     valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')),
     updated_at DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(updated_at)
@@ -1119,7 +1119,7 @@ QUALIFY ROW_NUMBER() OVER (
     org_id String, provider String, team_id String, repo_id Nullable(UUID),
     repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
     source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
-    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0,
+    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0, share Nullable(Float64),
     valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')),
     updated_at DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(updated_at)

@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -11,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
+	"github.com/full-chaos/dev-health-ops/internal/teamresolve"
 )
 
 // TeamCognitiveLoadExecutor is the NATIVE, FINALIZE-SCOPE implementation of
@@ -131,7 +133,7 @@ func (executor *TeamCognitiveLoadExecutor) ComputeFinalizeFamily(
 	// -- day-start midnight UTC, no sub-second component (the same value the
 	// query-parameter truncation caveat on load_team_repo_ownership_map warns
 	// callers to already be using).
-	repoToTeam, err := resolveDailyFinalizeRepoToTeam(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, patternResolver)
+	repoToTeam, err := resolveDailyFinalizeRepoOwnerShares(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, patternResolver)
 	if err != nil {
 		return 0, fmt.Errorf("team_cognitive_load: %w", err)
 	}
@@ -166,6 +168,45 @@ func (executor *TeamCognitiveLoadExecutor) supersedeStaleKeys(
 		return written, fmt.Errorf("%w: team_cognitive_load failed after %d row(s) already landed: %w", ErrPartialWrite, written, err)
 	}
 	return written, nil
+}
+
+// resolveDailyFinalizeRepoOwnerShares builds {repo_id_str: owners with their
+// linked shares} (teamownership.OwnerSharesByRepo, CHAOS-9410, D5988): the main
+// owner (or every tied team of a full tie, D5990) and every lesser owner, each
+// at its own share, for the sums of team_cognitive_load. The repo-pattern
+// resolver only serves a repo no ownership row resolves AND that is still in
+// the org's repos catalog (repoNamesByID); a repo the catalog does not carry is
+// never guessed (CHAOS-4365 codex r2 P1: a stale ownership row of a removed
+// repo is not trusted either).
+func resolveDailyFinalizeRepoOwnerShares(
+	ctx context.Context, conn driver.Conn, organizationID string, asOf time.Time,
+	repoIDs []uuid.UUID, repoNamesByID map[string]string,
+	patternResolver numerical.RepoTeamResolver,
+) (map[string][]teamownership.OwnerShare, error) {
+	// A resolution failure is PROPAGATED, never swallowed (CHAOS-5141, #2255
+	// r1 finding 3): team_cognitive_load is finalize-scope and must fail
+	// closed (Retryable -> River redrive).
+	owners, err := teamownership.OwnerSharesByRepo(ctx, conn, organizationID, asOf)
+	if err != nil {
+		return nil, fmt.Errorf("resolve authoritative repo ownership: %w", err)
+	}
+	known := make(map[string][]teamownership.OwnerShare, len(owners))
+	for repoID, repoOwners := range owners {
+		if _, inCatalog := repoNamesByID[repoID]; inCatalog {
+			known[repoID] = repoOwners
+		}
+	}
+	resolved := teamresolve.ResolveSharesFromOwnershipMap(known, repoIDs, repoNamesByID, patternResolver)
+	// Ownership rows of repos outside this partition stay in the map: the
+	// builder only looks up the repos of its input rows.
+	for repoID, repoOwners := range known {
+		if _, ok := resolved[repoID]; !ok {
+			resolved[repoID] = repoOwners
+		}
+	}
+	slog.Debug("team_cognitive_load repository owners with shares",
+		"organization_id", organizationID, "repos_total", len(repoIDs), "repos_with_owners", len(resolved))
+	return resolved, nil
 }
 
 // authoritativeOwnersKnownToRepoCatalog filters an org-wide authoritative
@@ -217,6 +258,7 @@ func resolveDailyFinalizeRepoToTeam(
 	// (Retryable -> River redrive), not silently return a success outcome
 	// with zero/partial rows that the finalize handler would mark Computed
 	// and skip the Python bridge for.
+	// CHAOS-9410/CHAOS-9601, D5994: this family stores its counters as unsigned integers, so it still takes the main owner(s) only, each whole; lesser owners at their own share follow with the Float64 widening (CHAOS-9601).
 	owners, err := teamownership.AuthoritativeOwnersByRepo(ctx, conn, organizationID, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("resolve authoritative repo ownership: %w", err)

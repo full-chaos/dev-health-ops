@@ -458,7 +458,8 @@ func BuildTeamRows(
 	byTeam := make(map[string][]Inputs, len(repoToTeam))
 	windowsByTeam := make(map[string][]*ReviewWindow, len(repoToTeam))
 	teamOrder := make([]string, 0, len(repoToTeam))
-	// A repo with several main owners (D5990) counts whole in each of them.
+	// Every owner of a repo, main or lesser (D5988, CHAOS-9410), reads its own value:
+	// a mean of repository scores does not add, so no share weight applies.
 	for _, ri := range repoInputs {
 		for _, teamID := range repoToTeam[ri.RepoID] {
 			if teamID == "" {

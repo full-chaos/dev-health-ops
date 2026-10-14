@@ -66,6 +66,10 @@ const (
 // after the compaction. Nothing is deleted when it is returned.
 var ErrOwnershipCompactionDifferential = errors.New("ownership compaction: owner-at-T differential failed")
 
+// ErrOwnershipCompactionTimeout means the plan did not finish within its time.
+// Nothing is written when it is returned.
+var ErrOwnershipCompactionTimeout = errors.New("ownership compaction: plan timeout, nothing written")
+
 // ErrOwnershipCompactionBackup means the rollback copy is missing or has the
 // wrong row count. Nothing is rewritten when it is returned.
 var ErrOwnershipCompactionBackup = errors.New("ownership compaction: backup table check failed")
@@ -113,6 +117,13 @@ type OwnershipCompactionOptions struct {
 	QuietSeconds int
 	// Now is the clock of the backup stamp and the run id (default time.Now).
 	Now func() time.Time
+	// PlanTimeout, when above zero, bounds the read-and-plan phase of every table and organization. The run writes
+	// only after every plan finished, so a timeout writes nothing (ErrOwnershipCompactionTimeout).
+	PlanTimeout time.Duration
+	// Progress, when set, receives a counts-only line every ProgressEvery rows of each plan phase (read, plan, runs,
+	// differential) and at the end of each phase.
+	Progress      func(OwnershipCompactionProgress)
+	ProgressEvery int
 
 	// beforeBatch runs after the plan is read and before the batch is
 	// re-checked; a test uses it to write a row the way a concurrent sync does.
@@ -405,11 +416,28 @@ type ownershipCompactionPlan struct {
 	org       OwnershipCompactionOrg
 	byGroup   map[string][]ownershipIntervalRow
 	compacted ownershipCompactionSpec
+	// pending holds the candidate runs in key order until acceptRuns checks them.
+	pending [][]ownershipIntervalRow
 }
 
 // planOwnershipCompaction finds the runs and the droppable tombstones of the
 // compacted source. It reads rows and writes nothing.
 func planOwnershipCompaction(spec ownershipCompactionSpec, rows []ownershipIntervalRow) ownershipCompactionPlan {
+	plan, _ := planOwnershipCompactionWithin(newCompactionMeter(context.Background(), nil, 0), spec, rows)
+	return plan
+}
+
+// planOwnershipCompactionWithin is planOwnershipCompaction under a meter: it
+// reports progress and stops with the context's error.
+//
+// CHAOS-9704: the cost is near n log n in the rows of a (provider, natural,
+// team) group. The 9556 planner re-listed every instant of the whole group for
+// each run and scanned every row of the group at each instant; on a repository
+// with thousands of per-sync rows it spun for minutes. The answers are the same
+// (TestCompactionPlannerEqualsThe9556Planner).
+func planOwnershipCompactionWithin(
+	meter *compactionMeter, spec ownershipCompactionSpec, rows []ownershipIntervalRow,
+) (ownershipCompactionPlan, error) {
 	plan := ownershipCompactionPlan{byGroup: map[string][]ownershipIntervalRow{}, compacted: spec}
 	byKey := map[string][]ownershipIntervalRow{}
 	for _, row := range rows {
@@ -435,12 +463,33 @@ func planOwnershipCompaction(spec ownershipCompactionSpec, rows []ownershipInter
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	meter.phase("plan", plan.org.RowsBefore)
 	for _, key := range keys {
 		keyRows := byKey[key]
 		sort.Slice(keyRows, func(i, j int) bool { return keyRows[i].ValidFrom.Before(keyRows[j].ValidFrom) })
 		plan.planKey(keyRows)
+		if err := meter.add(len(keyRows)); err != nil {
+			return plan, err
+		}
 	}
-	return plan
+	meter.done()
+	candidates := plan.pending
+	plan.pending = nil
+	accepted, err := acceptRuns(meter, plan.byGroup, candidates, len(rows))
+	if err != nil {
+		return plan, err
+	}
+	for index, run := range candidates {
+		plan.org.RunsFound++
+		if !accepted[index] {
+			plan.org.RunsKeptMultiSource++
+			continue
+		}
+		plan.runs = append(plan.runs, compactionRun{rows: run, merged: mergedRow(run)})
+		plan.org.RunsMerged++
+		plan.org.RowsMerged += len(run) - 1
+	}
+	return plan, nil
 }
 
 func (plan *ownershipCompactionPlan) planKey(keyRows []ownershipIntervalRow) {
@@ -508,7 +557,7 @@ func (plan *ownershipCompactionPlan) planKey(keyRows []ownershipIntervalRow) {
 	var run []ownershipIntervalRow
 	flush := func() {
 		if len(run) >= 2 {
-			plan.consider(run)
+			plan.pending = append(plan.pending, run)
 		}
 		run = nil
 	}
@@ -539,40 +588,119 @@ func (plan *ownershipCompactionPlan) planKey(keyRows []ownershipIntervalRow) {
 	flush()
 }
 
-// consider accepts a run when the winner of its (provider, natural, team)
+// acceptRuns accepts a run when the winner of its (provider, natural, team)
 // group is the same at every instant of the run before and after the merge.
 // The winner is what the cascade reads: among the rows valid at T of every
 // source, the newest by (updated_at, valid_from). Two sources on one key can
 // disagree on it; the run then stays as it is.
-func (plan *ownershipCompactionPlan) consider(run []ownershipIntervalRow) {
-	plan.org.RunsFound++
-	merged := mergedRow(run)
-	first := run[0]
-	groupRows := plan.byGroup[first.groupOf()]
-	var pre, post []ownershipIntervalRow
-	inRun := map[string]bool{}
-	for _, row := range run {
-		inRun[row.sortKey()] = true
+//
+// The instants asked are the instants of the whole team group (instantsOf)
+// inside [first valid_from - 1 ms, last valid_to + 1 ms]: the merged row adds
+// no boundary, so they are the instants of the group before and after the
+// merge. One sweep per team group answers every run of the group.
+func acceptRuns(
+	meter *compactionMeter, byGroup map[string][]ownershipIntervalRow, candidates [][]ownershipIntervalRow, totalRows int,
+) ([]bool, error) {
+	type teamGroup struct{ group, team string }
+	byTeam := map[teamGroup][]int{}
+	var order []teamGroup
+	for index, run := range candidates {
+		key := teamGroup{group: run[0].groupOf(), team: run[0].TeamID}
+		if _, ok := byTeam[key]; !ok {
+			order = append(order, key)
+		}
+		byTeam[key] = append(byTeam[key], index)
 	}
-	for _, row := range groupRows {
-		if row.TeamID != first.TeamID {
+	accepted := make([]bool, len(candidates))
+	meter.phase("runs", totalRows)
+	for _, key := range order {
+		var teamRows []ownershipIntervalRow
+		for _, row := range byGroup[key.group] {
+			if row.TeamID == key.team {
+				teamRows = append(teamRows, row)
+			}
+		}
+		if err := acceptRunsOfTeam(meter, teamRows, candidates, byTeam[key], accepted); err != nil {
+			return accepted, err
+		}
+		if err := meter.add(len(teamRows)); err != nil {
+			return accepted, err
+		}
+	}
+	meter.done()
+	return accepted, nil
+}
+
+type runWindow struct {
+	index       int
+	lo, hi      int
+	inRun       map[string]bool
+	merged      ownershipIntervalRow
+	mergedShape string
+}
+
+func acceptRunsOfTeam(
+	meter *compactionMeter, teamRows []ownershipIntervalRow, candidates [][]ownershipIntervalRow, indexes []int, accepted []bool,
+) error {
+	instants := instantsOf(nil, nil, teamRows)
+	windows := make([]runWindow, 0, len(indexes))
+	for _, index := range indexes {
+		run := candidates[index]
+		accepted[index] = true
+		low := run[0].ValidFrom.Add(-time.Millisecond)
+		high := run[len(run)-1].ValidTo.Add(time.Millisecond)
+		window := runWindow{
+			index: index,
+			lo:    sort.Search(len(instants), func(i int) bool { return !instants[i].Before(low) }),
+			hi:    sort.Search(len(instants), func(i int) bool { return instants[i].After(high) }),
+			inRun: make(map[string]bool, len(run)),
+		}
+		if window.lo >= window.hi {
 			continue
 		}
-		pre = append(pre, row)
-		if inRun[row.sortKey()] {
+		for _, row := range run {
+			window.inRun[row.sortKey()] = true
+		}
+		window.merged = mergedRow(run)
+		window.mergedShape = window.merged.shape()
+		windows = append(windows, window)
+	}
+	sort.SliceStable(windows, func(i, j int) bool { return windows[i].lo < windows[j].lo })
+	sweep := newAnswerSweep(teamRows, true)
+	var open []*runWindow
+	next := 0
+	for i, at := range instants {
+		if i&1023 == 0 {
+			if err := meter.check(); err != nil {
+				return err
+			}
+		}
+		for next < len(windows) && windows[next].lo <= i {
+			open = append(open, &windows[next])
+			next++
+		}
+		kept := open[:0]
+		for _, window := range open {
+			if window.hi > i && accepted[window.index] {
+				kept = append(kept, window)
+			}
+		}
+		open = kept
+		if len(open) == 0 {
+			if next == len(windows) {
+				break
+			}
 			continue
 		}
-		post = append(post, row)
+		sweep.advance(at)
+		pre := sweep.answer(at, nil, nil, "")
+		for _, window := range open {
+			if sweep.answer(at, window.inRun, &window.merged, window.mergedShape) != pre {
+				accepted[window.index] = false
+			}
+		}
 	}
-	post = append(post, merged)
-	from, to := first.ValidFrom, *run[len(run)-1].ValidTo
-	if _, mismatches := compareOwnerAnswers(pre, post, &from, &to); mismatches > 0 {
-		plan.org.RunsKeptMultiSource++
-		return
-	}
-	plan.runs = append(plan.runs, compactionRun{rows: run, merged: merged})
-	plan.org.RunsMerged++
-	plan.org.RowsMerged += len(run) - 1
+	return nil
 }
 
 // final is the state the rows end in: merged rows in, inner rows and dropped
@@ -605,34 +733,120 @@ func (plan ownershipCompactionPlan) final(rows []ownershipIntervalRow) []ownersh
 	return out
 }
 
-// answerAt is what a reader that asks "who owns this at T" sees for one group:
-// the multiset of (team, source, shape) valid at T, and per team the winner.
-func answerAt(rows []ownershipIntervalRow, at time.Time) string {
-	var valid []string
-	winners := map[string]ownershipIntervalRow{}
-	for _, row := range rows {
-		if !row.validAt(at) {
-			continue
-		}
-		valid = append(valid, row.TeamID+"\x01"+row.Source+"\x01"+row.shape())
+// answerEntry is one row valid at T, with its shape computed once.
+type answerEntry struct {
+	row   *ownershipIntervalRow
+	shape string
+}
+
+// ownerAnswer is what a reader that asks "who owns this at T" sees for one
+// group, given the rows valid at T in row order: the multiset of (team, source,
+// shape) valid at T, and per team the winner (newest by updated_at, then
+// valid_from; on a full tie the first row wins).
+func ownerAnswer(valid []answerEntry) string {
+	listed := make([]string, 0, len(valid))
+	winners := map[string]answerEntry{}
+	for _, entry := range valid {
+		row := entry.row
+		listed = append(listed, row.TeamID+"\x01"+row.Source+"\x01"+entry.shape)
 		best, ok := winners[row.TeamID]
-		if !ok || row.UpdatedAt.After(best.UpdatedAt) || (row.UpdatedAt.Equal(best.UpdatedAt) && row.ValidFrom.After(best.ValidFrom)) {
-			winners[row.TeamID] = row
+		if !ok || row.UpdatedAt.After(best.row.UpdatedAt) || (row.UpdatedAt.Equal(best.row.UpdatedAt) && row.ValidFrom.After(best.row.ValidFrom)) {
+			winners[row.TeamID] = entry
 		}
 	}
-	sort.Strings(valid)
+	sort.Strings(listed)
 	teams := make([]string, 0, len(winners))
 	for team := range winners {
 		teams = append(teams, team)
 	}
 	sort.Strings(teams)
 	var out strings.Builder
-	out.WriteString(strings.Join(valid, "\x02"))
+	out.WriteString(strings.Join(listed, "\x02"))
 	out.WriteString("\x03")
 	for _, team := range teams {
-		out.WriteString(team + "\x01" + winners[team].shape() + "\x02")
+		out.WriteString(team + "\x01" + winners[team].shape + "\x02")
 	}
 	return out.String()
+}
+
+// answerSweep keeps the rows valid at T (valid_from <= T < valid_to, or open)
+// while T only moves forward, in row order. A row with valid_to <= valid_from
+// (a tombstone, a close-before-open row) is valid at no instant.
+type answerSweep struct {
+	rows     []ownershipIntervalRow
+	shapes   []string
+	sortKeys []string
+	byStart  []int
+	byEnd    []int
+	starts   int
+	ends     int
+	active   []int
+	entries  []answerEntry
+}
+
+func newAnswerSweep(rows []ownershipIntervalRow, withSortKeys bool) *answerSweep {
+	sweep := &answerSweep{rows: rows, shapes: make([]string, len(rows))}
+	if withSortKeys {
+		sweep.sortKeys = make([]string, len(rows))
+	}
+	for index := range rows {
+		row := &rows[index]
+		sweep.shapes[index] = row.shape()
+		if withSortKeys {
+			sweep.sortKeys[index] = row.sortKey()
+		}
+		if row.ValidTo != nil && !row.ValidTo.After(row.ValidFrom) {
+			continue
+		}
+		sweep.byStart = append(sweep.byStart, index)
+		if row.ValidTo != nil {
+			sweep.byEnd = append(sweep.byEnd, index)
+		}
+	}
+	sort.SliceStable(sweep.byStart, func(i, j int) bool {
+		return rows[sweep.byStart[i]].ValidFrom.Before(rows[sweep.byStart[j]].ValidFrom)
+	})
+	sort.SliceStable(sweep.byEnd, func(i, j int) bool {
+		return rows[sweep.byEnd[i]].ValidTo.Before(*rows[sweep.byEnd[j]].ValidTo)
+	})
+	return sweep
+}
+
+// advance moves the sweep to at; at never goes back.
+func (sweep *answerSweep) advance(at time.Time) {
+	for sweep.starts < len(sweep.byStart) && !sweep.rows[sweep.byStart[sweep.starts]].ValidFrom.After(at) {
+		index := sweep.byStart[sweep.starts]
+		position := sort.SearchInts(sweep.active, index)
+		sweep.active = append(sweep.active, 0)
+		copy(sweep.active[position+1:], sweep.active[position:])
+		sweep.active[position] = index
+		sweep.starts++
+	}
+	for sweep.ends < len(sweep.byEnd) && !sweep.rows[sweep.byEnd[sweep.ends]].ValidTo.After(at) {
+		index := sweep.byEnd[sweep.ends]
+		position := sort.SearchInts(sweep.active, index)
+		if position < len(sweep.active) && sweep.active[position] == index {
+			sweep.active = append(sweep.active[:position], sweep.active[position+1:]...)
+		}
+		sweep.ends++
+	}
+}
+
+// answer is ownerAnswer at the current instant at, leaving out the rows whose
+// sort key is in skip and adding extra (with its shape) last when it is valid
+// at at.
+func (sweep *answerSweep) answer(at time.Time, skip map[string]bool, extra *ownershipIntervalRow, extraShape string) string {
+	sweep.entries = sweep.entries[:0]
+	for _, index := range sweep.active {
+		if skip != nil && skip[sweep.sortKeys[index]] {
+			continue
+		}
+		sweep.entries = append(sweep.entries, answerEntry{row: &sweep.rows[index], shape: sweep.shapes[index]})
+	}
+	if extra != nil && extra.validAt(at) {
+		sweep.entries = append(sweep.entries, answerEntry{row: extra, shape: extraShape})
+	}
+	return ownerAnswer(sweep.entries)
 }
 
 // instantsOf lists every instant worth asking about for two row sets: each
@@ -683,19 +897,17 @@ func instantsOf(from, to *time.Time, sets ...[]ownershipIntervalRow) []time.Time
 	return limited
 }
 
-func compareOwnerAnswers(pre, post []ownershipIntervalRow, from, to *time.Time) (instants, mismatches int) {
-	for _, at := range instantsOf(from, to, pre, post) {
-		instants++
-		if answerAt(pre, at) != answerAt(post, at) {
-			mismatches++
-		}
-	}
-	return instants, mismatches
-}
-
 // ownershipDifferential asks the owner-at-T question of every group that the
 // change touches, for both row sets, at every boundary and midpoint.
 func ownershipDifferential(pre, post []ownershipIntervalRow) OwnershipCompactionDifferential {
+	result, _ := ownershipDifferentialWithin(newCompactionMeter(context.Background(), nil, 0), pre, post)
+	return result
+}
+
+// ownershipDifferentialWithin is ownershipDifferential under a meter. Each
+// group is one sweep over its instants (CHAOS-9704: the 9556 code scanned every
+// row of the group at each instant).
+func ownershipDifferentialWithin(meter *compactionMeter, pre, post []ownershipIntervalRow) (OwnershipCompactionDifferential, error) {
 	preGroups, postGroups := map[string][]ownershipIntervalRow{}, map[string][]ownershipIntervalRow{}
 	for _, row := range pre {
 		preGroups[row.groupOf()] = append(preGroups[row.groupOf()], row)
@@ -716,16 +928,90 @@ func ownershipDifferential(pre, post []ownershipIntervalRow) OwnershipCompaction
 		names = append(names, group)
 	}
 	sort.Strings(names)
+	meter.phase("differential", len(pre))
 	for _, group := range names {
-		if sameRowSet(preGroups[group], postGroups[group]) {
-			continue
+		before, after := preGroups[group], postGroups[group]
+		if !sameRowSet(before, after) {
+			result.GroupsChecked++
+			instants, mismatches, err := compareGroupAnswers(meter, before, after)
+			result.InstantsChecked += instants
+			result.Mismatches += mismatches
+			if err != nil {
+				return result, err
+			}
 		}
-		result.GroupsChecked++
-		instants, mismatches := compareOwnerAnswers(preGroups[group], postGroups[group], nil, nil)
-		result.InstantsChecked += instants
-		result.Mismatches += mismatches
+		if err := meter.add(len(before)); err != nil {
+			return result, err
+		}
 	}
-	return result
+	meter.done()
+	return result, nil
+}
+
+func compareGroupAnswers(meter *compactionMeter, pre, post []ownershipIntervalRow) (instants, mismatches int, err error) {
+	before, after := newAnswerSweep(pre, false), newAnswerSweep(post, false)
+	for index, at := range instantsOf(nil, nil, pre, post) {
+		if index&1023 == 0 {
+			if err := meter.check(); err != nil {
+				return instants, mismatches, err
+			}
+		}
+		before.advance(at)
+		after.advance(at)
+		instants++
+		if before.answer(at, nil, nil, "") != after.answer(at, nil, nil, "") {
+			mismatches++
+		}
+	}
+	return instants, mismatches, nil
+}
+
+// OwnershipCompactionProgress is one progress line of a run: counts only.
+type OwnershipCompactionProgress struct {
+	Table      string `json:"table"`
+	OrgOrdinal int    `json:"org_ordinal"`
+	Phase      string `json:"phase"`
+	Done       int    `json:"done"`
+	Total      int    `json:"total"`
+}
+
+// compactionMeter reports progress every `every` rows of a phase and stops
+// the planner with the context's error (a deadline, a cancel).
+type compactionMeter struct {
+	ctx    context.Context
+	report func(OwnershipCompactionProgress)
+	every  int
+	line   OwnershipCompactionProgress
+	next   int
+}
+
+func newCompactionMeter(ctx context.Context, report func(OwnershipCompactionProgress), every int) *compactionMeter {
+	return &compactionMeter{ctx: ctx, report: report, every: every}
+}
+
+func (meter *compactionMeter) phase(name string, total int) {
+	meter.line.Phase, meter.line.Total, meter.line.Done = name, total, 0
+	meter.next = meter.every
+}
+
+func (meter *compactionMeter) add(rows int) error {
+	meter.line.Done += rows
+	if meter.report != nil && meter.every > 0 && meter.line.Done >= meter.next {
+		meter.report(meter.line)
+		for meter.next <= meter.line.Done {
+			meter.next += meter.every
+		}
+	}
+	return meter.ctx.Err()
+}
+
+func (meter *compactionMeter) check() error { return meter.ctx.Err() }
+
+// done prints the last line of a phase.
+func (meter *compactionMeter) done() {
+	if meter.report != nil && meter.every > 0 {
+		meter.report(meter.line)
+	}
 }
 
 func rowSignature(row ownershipIntervalRow) string {
@@ -909,6 +1195,11 @@ func listOwnershipOrgs(ctx context.Context, conn driver.Conn, spec ownershipComp
 // CompactOwnershipIntervals plans and, with Apply, runs the compaction. It
 // returns the report so far together with the first error: a failed run still
 // tells the operator how far it got.
+//
+// It plans every table and organization first (reads, plan, differential)
+// and writes only after every plan finished. PlanTimeout bounds that first
+// phase: on the deadline the run stops with ErrOwnershipCompactionTimeout and
+// has written nothing.
 func CompactOwnershipIntervals(ctx context.Context, conn driver.Conn, opts OwnershipCompactionOptions) (OwnershipCompactionOutcome, error) {
 	if conn == nil {
 		return OwnershipCompactionOutcome{}, ErrInvalidConfiguration
@@ -930,19 +1221,40 @@ func CompactOwnershipIntervals(ctx context.Context, conn driver.Conn, opts Owner
 		return OwnershipCompactionOutcome{}, ErrOwnershipCompactionNotPaused
 	}
 	outcome := OwnershipCompactionOutcome{RunID: newCompactionRunID(opts.Now()), Apply: opts.Apply}
+	planCtx, cancel := ctx, context.CancelFunc(func() {})
+	if opts.PlanTimeout > 0 {
+		planCtx, cancel = context.WithTimeout(ctx, opts.PlanTimeout)
+	}
+	defer cancel()
+	planned := make([]plannedOwnershipTable, 0, len(specs))
 	for _, spec := range specs {
-		if err := verifyOwnershipTableShape(ctx, conn, spec); err != nil {
-			return outcome, err
+		if err := verifyOwnershipTableShape(planCtx, conn, spec); err != nil {
+			return outcome, planError(planCtx, err)
 		}
-		table := OwnershipCompactionTable{Table: spec.table, Source: spec.source}
 		orgs := opts.Orgs
 		if opts.AllOrgs {
-			if orgs, err = listOwnershipOrgs(ctx, conn, spec); err != nil {
+			if orgs, err = listOwnershipOrgs(planCtx, conn, spec); err != nil {
+				return outcome, planError(planCtx, err)
+			}
+		}
+		table := plannedOwnershipTable{spec: spec}
+		for index, orgID := range orgs {
+			plannedOrg, err := planOwnershipOrg(planCtx, conn, spec, orgID, index+1, opts, outcome.RunID)
+			table.orgs = append(table.orgs, plannedOrg)
+			if err != nil {
+				// Nothing is written: report every plan so far, the failed one last.
+				for _, done := range append(planned, table) {
+					outcome.Tables = append(outcome.Tables, done.report())
+				}
 				return outcome, err
 			}
 		}
-		for index, orgID := range orgs {
-			report, err := compactOwnershipOrg(ctx, conn, spec, orgID, index+1, opts, outcome.RunID)
+		planned = append(planned, table)
+	}
+	for _, plannedTable := range planned {
+		table := OwnershipCompactionTable{Table: plannedTable.spec.table, Source: plannedTable.spec.source}
+		for _, plannedOrg := range plannedTable.orgs {
+			report, err := applyOwnershipOrg(ctx, conn, plannedOrg, opts, outcome.RunID)
 			table.Orgs = append(table.Orgs, report)
 			table.Totals.add(report)
 			if err != nil {
@@ -955,36 +1267,112 @@ func CompactOwnershipIntervals(ctx context.Context, conn driver.Conn, opts Owner
 	return outcome, nil
 }
 
-func compactOwnershipOrg(
+// plannedOwnershipTable is the plans of one table, one per organization.
+type plannedOwnershipTable struct {
+	spec ownershipCompactionSpec
+	orgs []plannedOwnershipOrg
+}
+
+func (planned plannedOwnershipTable) report() OwnershipCompactionTable {
+	table := OwnershipCompactionTable{Table: planned.spec.table, Source: planned.spec.source}
+	for _, org := range planned.orgs {
+		table.Orgs = append(table.Orgs, org.report)
+		table.Totals.add(org.report)
+	}
+	return table
+}
+
+// planError names a plan that ran out of its time as a timeout.
+func planError(planCtx context.Context, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(planCtx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %v", ErrOwnershipCompactionTimeout, err)
+	}
+	return err
+}
+
+// plannedOwnershipOrg is the read-only half of one table in one organization.
+type plannedOwnershipOrg struct {
+	spec    ownershipCompactionSpec
+	orgID   string
+	rows    []ownershipIntervalRow
+	plan    ownershipCompactionPlan
+	report  OwnershipCompactionOrg
+	elapsed time.Duration
+	logger  *slog.Logger
+}
+
+func (planned plannedOwnershipOrg) log(ctx context.Context, report OwnershipCompactionOrg, err error) {
+	planned.logger.InfoContext(ctx, "ownership_interval_compaction.table",
+		"rows_before", report.RowsBefore, "closed_before", report.ClosedBefore, "closed_after", report.ClosedAfter,
+		"runs_found", report.RunsFound, "runs_merged", report.RunsMerged, "rows_merged", report.RowsMerged,
+		"rows_kept", report.RowsKept, "runs_kept_multi_source", report.RunsKeptMultiSource,
+		"runs_changed_during_run", report.RunsChangedDuringRun, "tombstones_found", report.TombstonesFound,
+		"tombstones_dropped", report.TombstonesDropped, "tombstones_kept_anchor", report.TombstonesKeptAnchor, "tombstones_kept_latest", report.TombstonesKeptLatest, "tombstones_kept_stamp", report.TombstonesKeptStamp,
+		"differential_mismatches", report.Differential.Mismatches, "elapsed_ms", report.ElapsedMS, "failed", err != nil)
+}
+
+func planOwnershipOrg(
 	ctx context.Context, conn driver.Conn, spec ownershipCompactionSpec, orgID string, ordinal int,
 	opts OwnershipCompactionOptions, runID string,
-) (OwnershipCompactionOrg, error) {
+) (plannedOwnershipOrg, error) {
 	started := time.Now()
-	logger := slog.Default().With("table", spec.table, "source", spec.source, "org_ordinal", ordinal, "run_id", runID, "apply", opts.Apply)
+	planned := plannedOwnershipOrg{
+		spec: spec, orgID: orgID, report: OwnershipCompactionOrg{OrgOrdinal: ordinal},
+		logger: slog.Default().With("table", spec.table, "source", spec.source, "org_ordinal", ordinal, "run_id", runID, "apply", opts.Apply),
+	}
+	meter := newCompactionMeter(ctx, opts.Progress, opts.ProgressEvery)
+	meter.line.Table, meter.line.OrgOrdinal = spec.table, ordinal
+	fail := func(err error) (plannedOwnershipOrg, error) {
+		err = planError(ctx, err)
+		planned.report.ElapsedMS = time.Since(started).Milliseconds()
+		planned.logger.InfoContext(ctx, "ownership_interval_compaction.plan_stopped",
+			"phase", meter.line.Phase, "done", meter.line.Done, "total", meter.line.Total, "timeout", errors.Is(err, ErrOwnershipCompactionTimeout))
+		planned.log(context.WithoutCancel(ctx), planned.report, err)
+		return planned, err
+	}
 	rows, err := readOwnershipRows(ctx, conn, spec, orgID)
 	if err != nil {
-		return OwnershipCompactionOrg{OrgOrdinal: ordinal}, fmt.Errorf("ownership compaction: read %s: %w", spec.table, err)
+		return fail(fmt.Errorf("ownership compaction: read %s: %w", spec.table, err))
 	}
-	plan := planOwnershipCompaction(spec, rows)
-	report := plan.org
-	report.OrgOrdinal = ordinal
+	planned.rows = rows
+	meter.phase("read", len(rows))
+	if err := meter.add(len(rows)); err != nil {
+		return fail(err)
+	}
+	meter.done()
+	plan, err := planOwnershipCompactionWithin(meter, spec, rows)
+	planned.report = plan.org
+	planned.report.OrgOrdinal = ordinal
+	if err != nil {
+		return fail(err)
+	}
+	planned.plan = plan
 	final := plan.final(rows)
-	report.Differential = ownershipDifferential(rows, final)
-	report.setAfter(final, spec.source)
-	finish := func(err error) (OwnershipCompactionOrg, error) {
-		report.ElapsedMS = time.Since(started).Milliseconds()
-		failed := err != nil
-		logger.InfoContext(ctx, "ownership_interval_compaction.table",
-			"rows_before", report.RowsBefore, "closed_before", report.ClosedBefore, "closed_after", report.ClosedAfter,
-			"runs_found", report.RunsFound, "runs_merged", report.RunsMerged, "rows_merged", report.RowsMerged,
-			"rows_kept", report.RowsKept, "runs_kept_multi_source", report.RunsKeptMultiSource,
-			"runs_changed_during_run", report.RunsChangedDuringRun, "tombstones_found", report.TombstonesFound,
-			"tombstones_dropped", report.TombstonesDropped, "tombstones_kept_anchor", report.TombstonesKeptAnchor, "tombstones_kept_latest", report.TombstonesKeptLatest, "tombstones_kept_stamp", report.TombstonesKeptStamp,
-			"differential_mismatches", report.Differential.Mismatches, "elapsed_ms", report.ElapsedMS, "failed", failed)
-		return report, err
+	planned.report.Differential, err = ownershipDifferentialWithin(meter, rows, final)
+	if err != nil {
+		return fail(err)
 	}
-	if report.Differential.Mismatches > 0 {
-		return finish(fmt.Errorf("%w: %d instants", ErrOwnershipCompactionDifferential, report.Differential.Mismatches))
+	planned.report.setAfter(final, spec.source)
+	planned.elapsed = time.Since(started)
+	if planned.report.Differential.Mismatches > 0 {
+		planned.report.ElapsedMS = planned.elapsed.Milliseconds()
+		err := fmt.Errorf("%w: %d instants", ErrOwnershipCompactionDifferential, planned.report.Differential.Mismatches)
+		planned.log(ctx, planned.report, err)
+		return planned, err
+	}
+	return planned, nil
+}
+
+func applyOwnershipOrg(
+	ctx context.Context, conn driver.Conn, planned plannedOwnershipOrg, opts OwnershipCompactionOptions, runID string,
+) (OwnershipCompactionOrg, error) {
+	started := time.Now()
+	spec, orgID, rows, plan, logger := planned.spec, planned.orgID, planned.rows, planned.plan, planned.logger
+	report := planned.report
+	finish := func(err error) (OwnershipCompactionOrg, error) {
+		report.ElapsedMS = (planned.elapsed + time.Since(started)).Milliseconds()
+		planned.log(ctx, report, err)
+		return report, err
 	}
 	if !opts.Apply || (len(plan.runs) == 0 && len(plan.drops) == 0) {
 		return finish(nil)

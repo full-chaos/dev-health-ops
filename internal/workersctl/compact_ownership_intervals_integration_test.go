@@ -87,10 +87,21 @@ func TestCompactOwnershipIntervalsVerbIsDryByDefault(t *testing.T) {
 		if len(auditor.events) != wantAudit {
 			t.Fatalf("%v: %d audit rows, want %d", args, len(auditor.events), wantAudit)
 		}
-		var answer map[string]providersync.OwnershipCompactionOutcome
+		answer := map[string]providersync.OwnershipCompactionOutcome{}
 		if stdout.Len() > 0 {
-			if err := json.Unmarshal(stdout.Bytes(), &answer); err != nil {
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(stdout.Bytes(), &raw); err != nil {
 				t.Fatalf("decode %q: %v", stdout.String(), err)
+			}
+			for key, value := range raw {
+				if key == "error" {
+					continue
+				}
+				var outcome providersync.OwnershipCompactionOutcome
+				if err := json.Unmarshal(value, &outcome); err != nil {
+					t.Fatalf("decode %s: %v", key, err)
+				}
+				answer[key] = outcome
 			}
 		}
 		return answer, stderr.String()
@@ -100,10 +111,29 @@ func TestCompactOwnershipIntervalsVerbIsDryByDefault(t *testing.T) {
 		t.Fatalf("seeded rows %d", rowCount())
 	}
 	// No --apply: a dry run, no audit row, no write, no reason needed.
-	answer, _ := run(0, 0)
+	answer, progress := run(0, 0, "--progress-every", "1")
 	dry := answer["compact_ownership_intervals"]
 	if dry.Apply || dry.Tables[0].Totals.RunsMerged != 1 || rowCount() != 4 {
 		t.Fatalf("default run: %+v rows %d", dry, rowCount())
+	}
+	// CHAOS-9704: counts-only progress lines on stderr, one per phase at least.
+	for _, phase := range []string{`"phase":"read"`, `"phase":"plan"`, `"phase":"runs"`, `"phase":"differential"`} {
+		if !strings.Contains(progress, `{"progress":{"table":"team_project_ownership","org_ordinal":1,`+phase) {
+			t.Fatalf("no %s progress line in %q", phase, progress)
+		}
+	}
+	if _, quiet := run(0, 0, "--progress-every", "0"); strings.Contains(quiet, "progress") {
+		t.Fatalf("--progress-every 0 printed progress: %q", quiet)
+	}
+	run(2, 0, "--timeout", "0")
+	run(2, 0, "--timeout", "-1s")
+	run(2, 0, "--progress-every", "-1")
+	// A plan that runs out of its time exits non-zero with a typed code and writes nothing, also under --apply.
+	if _, stderr := run(1, 1, append([]string{"--apply", "--workers-paused", "--quiet-seconds", "0", "--timeout", "1ns"}, auditFlags()...)...); !strings.Contains(stderr, `"code":"ownership_compaction_timeout"`) {
+		t.Fatalf("timeout stderr %q", stderr)
+	}
+	if rowCount() != 4 {
+		t.Fatal("a timed-out run wrote rows")
 	}
 	// --dry-run is accepted; --dry-run with --apply is refused; --apply needs its audit flags.
 	run(0, 0, "--dry-run")

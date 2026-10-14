@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"sort"
 	"strings"
@@ -1407,4 +1408,122 @@ func TestExportOwnershipCompactionFixtureBefore(t *testing.T) {
 	}
 	f := newCmpFixture(t)
 	t.Logf("exported physical rows per table: %v", exportOwnershipTSV(t, f.ctx, f.conn, dir, "fixture-before"))
+}
+
+// TestCompactOwnershipIntervalsPlannerEqualsThe9556PlannerOnTheFixture reads the fixture back through FINAL (both
+// tables, both organizations) and proves the CHAOS-9704 planner and differential give the plan and the counts of the
+// 9556 code on it.
+func TestCompactOwnershipIntervalsPlannerEqualsThe9556PlannerOnTheFixture(t *testing.T) {
+	f := newCmpFixture(t)
+	rng := rand.New(rand.NewSource(9704))
+	for _, spec := range ownershipCompactionSpecs {
+		for _, org := range []string{f.orgA, f.orgB} {
+			rows := f.rows(spec, org)
+			if len(rows) == 0 {
+				t.Fatalf("%s: no fixture rows", spec.table)
+			}
+			compareWithLegacy(t, spec.table, spec, rows, rng)
+		}
+	}
+}
+
+// TestCompactOwnershipIntervalsPlanTimeoutWritesNothing runs --apply with a plan deadline that passes while the
+// SECOND table is planned: the run stops with the timeout error and neither table, nor a backup table, nor a
+// mutation was written. The first table's plan is reported.
+func TestCompactOwnershipIntervalsPlanTimeoutWritesNothing(t *testing.T) {
+	f := newCmpFixture(t)
+	physical := map[string]uint64{}
+	for _, table := range []string{OwnershipCompactionProjectTable, OwnershipCompactionRepoTable} {
+		physical[table] = f.physicalCount(table, f.orgA)
+	}
+	opts := cmpOptions(f.orgA)
+	opts.PlanTimeout = 2 * time.Second
+	opts.ProgressEvery = 1
+	var lines []OwnershipCompactionProgress
+	slept := false
+	opts.Progress = func(line OwnershipCompactionProgress) {
+		lines = append(lines, line)
+		if line.Table == OwnershipCompactionRepoTable && line.Phase == "plan" && !slept {
+			slept = true
+			time.Sleep(2500 * time.Millisecond)
+		}
+	}
+	started := time.Now()
+	outcome, err := CompactOwnershipIntervals(f.ctx, f.conn, opts)
+	if !errors.Is(err, ErrOwnershipCompactionTimeout) {
+		t.Fatalf("want the plan timeout, got %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 30*time.Second {
+		t.Fatalf("the timeout took %s", elapsed)
+	}
+	for table, before := range physical {
+		if got := f.physicalCount(table, f.orgA); got != before {
+			t.Fatalf("%s: physical rows %d -> %d after a timed-out run", table, before, got)
+		}
+		if cmpMutations(t, f.ctx, f.conn, table) != 0 {
+			t.Fatalf("%s: a timed-out run ran a mutation", table)
+		}
+	}
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name LIKE '%compaction_bak'"); got != 0 {
+		t.Fatalf("a timed-out run created a backup table (%d)", got)
+	}
+	if len(outcome.Tables) != 2 || cmpTable(t, outcome, OwnershipCompactionProjectTable).RunsMerged == 0 {
+		t.Fatalf("the report of a timed-out run: %+v", outcome.Tables)
+	}
+	phases := map[string]bool{}
+	for _, line := range lines {
+		phases[line.Table+"/"+line.Phase] = true
+	}
+	for _, want := range []string{"team_project_ownership/read", "team_project_ownership/plan", "team_project_ownership/differential", "team_repo_ownership/plan"} {
+		if !phases[want] {
+			t.Fatalf("no progress line %s in %v", want, phases)
+		}
+	}
+}
+
+// TestCompactOwnershipIntervalsProdShapedOrgOnRealStore runs the real tool path (read FINAL, plan, differential,
+// backup, insert, readback, delete, recount) on the synthetic prod-shaped organization (CHAOS-9704: 44,367 inferred
+// rows) under a plan deadline: the dry run and the apply finish, the differential holds, a second run is a no-op.
+func TestCompactOwnershipIntervalsProdShapedOrgOnRealStore(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := cmpFixture{t: t, ctx: ctx, conn: conn}
+	org := "00000000-0000-4000-8000-000000009704"
+	rows := prodShapedRepoRows(9704, 1)
+	for start := 0; start < len(rows); start += 10000 {
+		f.insert(repoSpec(), org, rows[start:min(start+10000, len(rows))])
+	}
+	opts := OwnershipCompactionOptions{Orgs: []string{org}, PlanTimeout: 90 * time.Second, onlyTable: OwnershipCompactionRepoTable}
+	started := time.Now()
+	dry, err := CompactOwnershipIntervals(ctx, conn, opts)
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	dryElapsed := time.Since(started)
+	report := cmpTable(t, dry, OwnershipCompactionRepoTable)
+	if report.RowsBefore != 44367 || report.OpenBefore != 32 || report.ClosedBefore != 44312 || report.TombstonesBefore != 23 {
+		t.Fatalf("prod-shaped counts %+v", report)
+	}
+	if report.RunsMerged == 0 || report.Differential.Mismatches != 0 {
+		t.Fatalf("dry run report %+v", report)
+	}
+	opts.Apply, opts.WorkersPaused = true, true
+	started = time.Now()
+	applied, err := CompactOwnershipIntervals(ctx, conn, opts)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	applyElapsed := time.Since(started)
+	after := cmpTable(t, applied, OwnershipCompactionRepoTable)
+	if after.RunsMerged != report.RunsMerged || after.ClosedAfter != report.ClosedAfter || after.Differential.Mismatches != 0 {
+		t.Fatalf("apply report %+v, dry %+v", after, report)
+	}
+	second, err := CompactOwnershipIntervals(ctx, conn, opts)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if again := cmpTable(t, second, OwnershipCompactionRepoTable); again.RunsMerged != 0 || again.TombstonesDropped != 0 {
+		t.Fatalf("second run %+v", again)
+	}
+	t.Logf("prod shape on the real store: closed %d -> %d, runs merged %d, kept multi-source %d, differential instants %d mismatches 0; dry run %s, apply %s",
+		report.ClosedBefore, after.ClosedAfter, after.RunsMerged, after.RunsKeptMultiSource, after.Differential.InstantsChecked, dryElapsed, applyElapsed)
 }

@@ -191,12 +191,12 @@ func TestGoOnlyMetricsMaskRemovesOnlyThoseTwoMetrics(t *testing.T) {
 
 // The ruled divergence of operatingReview's investment section (D5940, CHAOS-9199; chris "Yes", D5933): the
 // recorded Python answer holds the four legacy-vocabulary metrics (ktlo_units, new_value_units, security_units,
-// infra_units); query-api serves the five canonical themes (feature_delivery_effort ... risk_effort). ONLY the
+// infra_units); query-api serves the five canonical themes (feature_delivery_work ... risk_work). ONLY the
 // contiguous run of those metric objects is replaced by one placeholder, on operating review answers, on both
 // sides; every other section, metric and field is still compared by Diff. The raw Go answer is asserted to carry
 // the five canonical metrics in order and none of the four old ones (investmentSectionInspect), so the mask cannot
 // hide a wrong section.
-const investmentSectionMetricKeys = `ktlo_units|new_value_units|security_units|infra_units|feature_delivery_effort|operational_effort|maintenance_effort|quality_effort|risk_effort`
+const investmentSectionMetricKeys = `ktlo_units|new_value_units|security_units|infra_units|feature_delivery_work|operational_work|maintenance_work|quality_work|risk_work`
 
 var investmentSectionMetricObject = `\{"key":"(?:` + investmentSectionMetricKeys + `)",[^{}]*"delta":\{[^{}]*\}[^{}]*\}`
 
@@ -235,7 +235,7 @@ func investmentSectionInspect(request venueoracle.Request, goBody string) (bool,
 		return false, "query-api must serve the investment section (D5940)"
 	}
 	last := -1
-	for _, key := range []string{"feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort"} {
+	for _, key := range []string{"feature_delivery_work", "operational_work", "maintenance_work", "quality_work", "risk_work"} {
 		at := strings.Index(section, `"key":"`+key+`"`)
 		if at < 0 || at < last {
 			return false, "query-api must serve the canonical investment metric " + key + " in theme order, inside the investment section (D5940)"
@@ -267,7 +267,7 @@ func TestInvestmentSectionMaskReplacesOnlyTheInvestmentMetricRun(t *testing.T) {
 	wrap := func(sections ...string) string {
 		return `{"data":{"operatingReview":{"sections":[` + strings.Join(sections, ",") + `]}}}`
 	}
-	canon := []string{"feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort"}
+	canon := []string{"feature_delivery_work", "operational_work", "maintenance_work", "quality_work", "risk_work"}
 	python := wrap(section("reliability", "Reliability", "incidents_count"), section("investment", "Investment", "ktlo_units", "new_value_units", "security_units", "infra_units"),
 		section("ai_workflow_intelligence", "AI", "ai_adoption_ratio"))
 	goBody := wrap(section("reliability", "Reliability", "incidents_count"), section("investment", "Investment", canon...),
@@ -295,7 +295,7 @@ func TestInvestmentSectionMaskReplacesOnlyTheInvestmentMetricRun(t *testing.T) {
 	if ok, why := investmentSectionInspect(request, goBody); !ok {
 		t.Fatalf("the canonical section fails the inspection: %s", why)
 	}
-	short := wrap(section("investment", "Investment", "feature_delivery_effort", "risk_effort"), section("ai_workflow_intelligence", "AI", "ai_adoption_ratio"))
+	short := wrap(section("investment", "Investment", "feature_delivery_work", "risk_work"), section("ai_workflow_intelligence", "AI", "ai_adoption_ratio"))
 	if ok, _ := investmentSectionInspect(request, short); ok {
 		t.Fatal("a section missing three themes passes the inspection")
 	}

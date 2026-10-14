@@ -11,12 +11,13 @@ import (
 )
 
 // CHAOS-9195 (D5932, D5933) with CHAOS-9150 (D5900): the Home tile "Investment by theme" is the
-// effort over the canonical themes of the units (work_unit_investments), narrowed by the scope
+// COUNT over the canonical themes of the units (work_unit_investments; CHAOS-9622, D5999: one unit counts 1
+// whatever its lines), narrowed by the scope
 // like every other repository-keyed read: a team scope that also names a repository serves the
 // REPOSITORY's number; a repository the team does not hold, or one that does not resolve,
 // serves nothing (D5841); filters AND and never widen (D5844).
 //
-//	team-alpha holds repository A (a unit of effort 5) and B (100) by ownership; repository C (7)
+//	team-alpha holds repository A (a unit of 5 lines) and B (100 lines) by ownership; repository C (7 lines)
 //	is held by nobody. All three units are 100% quality.
 func TestInvestmentByThemeFollowsTheRepositoryFilterUnderATeam(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -66,18 +67,18 @@ func TestInvestmentByThemeFollowsTheRepositoryFilterUnderATeam(t *testing.T) {
 		f    Filters
 		want string
 	}{
-		{"the team alone: the repositories it holds", Filters{Scope: team}, "105"},
-		{"team and a repository it holds: the repository's number", Filters{Scope: team, What: WhatFilter{Repos: []string{repoA}}}, "5"},
-		{"team and that repository by name", Filters{Scope: team, What: WhatFilter{Repos: []string{"acme/a"}}}, "5"},
+		{"the team alone: the repositories it holds", Filters{Scope: team}, "2"},
+		{"team and a repository it holds: the repository's number", Filters{Scope: team, What: WhatFilter{Repos: []string{repoA}}}, "1"},
+		{"team and that repository by name", Filters{Scope: team, What: WhatFilter{Repos: []string{"acme/a"}}}, "1"},
 		{"team and a repository it does not hold: nothing", Filters{Scope: team, What: WhatFilter{Repos: []string{repoC}}}, "none"},
 		{"team and a repository that resolves to nothing: nothing", Filters{Scope: team, What: WhatFilter{Repos: []string{"acme/missing"}}}, "none"},
-		{"an organization scope and a repository: the repository's number", Filters{What: WhatFilter{Repos: []string{repoC}}}, "7"},
-		{"a repo-level scope", Filters{Scope: ScopeFilter{Level: "repo", IDs: []string{repoB}}}, "100"},
-		{"the organization: every unit", Filters{}, "112"},
+		{"an organization scope and a repository: the repository's number", Filters{What: WhatFilter{Repos: []string{repoC}}}, "1"},
+		{"a repo-level scope", Filters{Scope: ScopeFilter{Level: "repo", IDs: []string{repoB}}}, "1"},
+		{"the organization: every unit", Filters{}, "3"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := quality(tc.f); got != tc.want {
-				t.Errorf("quality effort = %s, want %s", got, tc.want)
+				t.Errorf("quality count = %s, want %s", got, tc.want)
 			}
 		})
 	}

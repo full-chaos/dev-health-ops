@@ -40,9 +40,10 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', ?, 'jev-test', 'run-1'
 	}
 }
 
-// The tile is the effort over the canonical themes of the units, dated by their END day, every
-// categorization status counted as on the Investment page, the legacy table ignored.
-func TestInvestmentByThemeIsTheCanonicalEffortOfTheUnits(t *testing.T) {
+// The tile is the COUNT over the canonical themes of the units (CHAOS-9622, D5999: a unit's effort_value, its
+// changed lines, is not a weight), dated by their END day, every categorization status counted as on the
+// Investment page, the legacy table ignored. The three units carry 100, 50 and 1000 lines and count 1 each.
+func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	admin, client := newHomeTestClickHouse(ctx, t)
@@ -75,12 +76,12 @@ func TestInvestmentByThemeIsTheCanonicalEffortOfTheUnits(t *testing.T) {
 		order = append(order, row.Theme)
 	}
 	want := map[string]struct {
-		effort, churn float64
-		prs           int64
+		count, churn float64
+		prs          int64
 	}{
-		"feature_delivery": {60, 60, 1}, // 100 x 0.6; 2 PRs x 0.6 = 1.2 -> 1
-		"risk":             {40, 40, 1}, // 100 x 0.4; 2 PRs x 0.4 = 0.8 -> 1
-		"maintenance":      {50, 50, 1},
+		"feature_delivery": {0.6, 60, 1}, // 1 unit x 0.6; 100 lines x 0.6 (the explicit churn_loc line); 2 PRs x 0.6 = 1.2 -> 1
+		"risk":             {0.4, 40, 1}, // 1 unit x 0.4; 100 lines x 0.4; 2 PRs x 0.4 = 0.8 -> 1
+		"maintenance":      {1, 50, 1},   // 1 unit; 50 lines
 	}
 	if len(got) != len(want) {
 		t.Fatalf("themes = %v, want exactly %d canonical themes (no legacy key, no unit outside the window): %+v", order, len(want), resp.ReworkThemeAllocation)
@@ -88,15 +89,15 @@ func TestInvestmentByThemeIsTheCanonicalEffortOfTheUnits(t *testing.T) {
 	for theme, w := range want {
 		g, ok := got[theme]
 		// The shares are Float32 in the shared read (the Investment page's own narrowing).
-		if !ok || math.Abs(g.Allocation-w.effort) > 1e-3 || float64(g.ChurnLOC) != w.churn || g.PRsMerged != w.prs {
-			t.Errorf("%s = %+v, want effort %v churn %v prs %d", theme, g, w.effort, w.churn, w.prs)
+		if !ok || math.Abs(g.Allocation-w.count) > 1e-3 || float64(g.ChurnLOC) != w.churn || g.PRsMerged != w.prs {
+			t.Errorf("%s = %+v, want count %v churn %v prs %d", theme, g, w.count, w.churn, w.prs)
 		}
 		if g.Label == "" {
 			t.Errorf("%s has no label", theme)
 		}
 	}
-	if order[0] != "feature_delivery" {
-		t.Errorf("order = %v, want the largest effort first", order)
+	if order[0] != "maintenance" {
+		t.Errorf("order = %v, want the largest count first (maintenance 1, feature_delivery 0.6, risk 0.4), not the largest effort (feature_delivery 100 lines)", order)
 	}
 	sum := 0.0
 	for _, row := range resp.ReworkThemeAllocation {
@@ -169,18 +170,18 @@ VALUES ('unit-null', ?, ?, NULL, 'churn_loc', 40, ?, ?, ?, 0.8, 'high', 'ok', 'j
 		return out
 	}
 	a, b := tile(repoA), tile(repoB)
-	if len(a) != 2 || math.Abs(a["feature_delivery"]-100) > 1e-3 || math.Abs(a["risk"]-20) > 1e-3 {
-		t.Errorf("repository A tile = %v, want feature_delivery 100 (own column, no repository row: its whole effort) and risk 20 (the A row of the unit with no own repo_id)", a)
+	if len(a) != 2 || math.Abs(a["feature_delivery"]-1) > 1e-3 || math.Abs(a["risk"]-0.5) > 1e-3 {
+		t.Errorf("repository A tile = %v, want feature_delivery 1 (own column, no repository row: the whole unit) and risk 0.5 (the A row of the unit with no own repo_id)", a)
 	}
-	if len(b) != 2 || math.Abs(b["quality"]-500) > 1e-3 || math.Abs(b["risk"]-20) > 1e-3 {
-		t.Errorf("repository B tile = %v, want quality 500 and risk 20 (the B row of the same unit)", b)
+	if len(b) != 2 || math.Abs(b["quality"]-1) > 1e-3 || math.Abs(b["risk"]-0.5) > 1e-3 {
+		t.Errorf("repository B tile = %v, want quality 1 and risk 0.5 (the B row of the same unit)", b)
 	}
-	// The invariant: the repositories of a unit sum to the unit's effort (40), never twice it; and no scope = the whole.
-	if sum := a["risk"] + b["risk"]; math.Abs(sum-40) > 1e-3 {
-		t.Errorf("risk over repositories A + B = %v, want the unit's effort 40", sum)
+	// The invariant: the repositories of a unit sum to the unit (1), never twice it; and no scope = the whole.
+	if sum := a["risk"] + b["risk"]; math.Abs(sum-1) > 1e-3 {
+		t.Errorf("risk over repositories A + B = %v, want the one unit", sum)
 	}
 	whole := tile("")
-	if math.Abs(whole["risk"]-40) > 1e-3 {
-		t.Errorf("unscoped risk = %v, want 40", whole["risk"])
+	if math.Abs(whole["risk"]-1) > 1e-3 {
+		t.Errorf("unscoped risk = %v, want 1", whole["risk"])
 	}
 }

@@ -531,10 +531,10 @@ func TestAIGovernanceCoverage_RatioOfSumsWeightsByArtifactCount(t *testing.T) {
 
 func TestInvestmentUnits_SumsByThemeIgnoresUnknown(t *testing.T) {
 	rows := []investmentRow{
-		{theme: "maintenance", effort: 3},
-		{theme: "maintenance", effort: 2},
-		{theme: "feature_delivery", effort: 10},
-		{theme: "ktlo", effort: 999}, // the retired legacy vocabulary is not a theme
+		{theme: "maintenance", value: 3},
+		{theme: "maintenance", value: 2},
+		{theme: "feature_delivery", value: 10},
+		{theme: "ktlo", value: 999}, // the retired legacy vocabulary is not a theme
 	}
 	units := investmentUnits(rows)
 	if units["maintenance"] != 5 || units["feature_delivery"] != 10 {

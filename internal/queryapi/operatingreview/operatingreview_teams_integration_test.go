@@ -83,7 +83,7 @@ func TestRealClickHouse_ReviewOfSeveralTeamsIsTheUnionOfTheirRows(t *testing.T) 
 		"throughput":           8,  // 3 + 5: a count is a sum; team C and the team-less row are out
 		"wip_count":            9,  // the largest stored WIP of the two teams
 		"cycle_time_p50_hours": 20, // the mean of the two stored values of the day
-		"maintenance_effort":   7,  // 3 + 4
+		"maintenance_work":     2,  // one unit of team A + one of team B (their lines, 3 and 4, are not a weight)
 		"deployments_count":    5,  // the organisation's: no team narrows it
 	} {
 		if m := metric(ab, key); m.Value != want || !m.HasData {

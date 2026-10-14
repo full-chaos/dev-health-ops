@@ -164,7 +164,7 @@ func (g goldenRows) toPeriodRows() periodRows {
 	}
 	for _, r := range g["investment"] {
 		theme, _ := r["theme"].(string)
-		p.investment = append(p.investment, investmentRow{theme: theme, effort: gNum(r, "effort")})
+		p.investment = append(p.investment, investmentRow{theme: theme, value: gNum(r, "value")})
 	}
 	for _, r := range g["ai_impact"] {
 		p.aiImpact = append(p.aiImpact, aiImpactRow{

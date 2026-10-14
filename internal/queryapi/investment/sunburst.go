@@ -9,6 +9,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
@@ -35,6 +36,9 @@ type SunburstFilters struct {
 	Themes        []string
 	Subcategories []string
 	Limit         int
+	// Measure is what a slice's value counts: investmentexplain.InvestmentShareMeasure (CHAOS-9622).
+	// Empty is refused; there is no effort_value default.
+	Measure string
 }
 
 func (f SunburstFilters) categoryFilters() categoryFilters {
@@ -77,7 +81,7 @@ func (r *Reader) FetchInvestmentSunburst(ctx context.Context, filters SunburstFi
 	)
 	scopeSQL, scopeBindings := combinedScopeClause(filters.ReposNamed, filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings)
 	shareSQL, shareBindings := "1.0", []dhclickhouse.Binding(nil)
-	if scoped := strings.TrimSpace(strings.TrimPrefix(scopeSQL, " AND ")); scoped != "" && scoped != "1 = 0" && len(filters.TeamIDs) > 0 {
+	if sunburstScoped(scopeSQL) && len(filters.TeamIDs) > 0 {
 		asOf := filters.TeamAsOf
 		if asOf.IsZero() {
 			asOf = time.Now().UTC()
@@ -87,12 +91,21 @@ func (r *Reader) FetchInvestmentSunburst(ctx context.Context, filters SunburstFi
 		}
 	}
 
+	unitWeightSQL := "1.0"
+	if sunburstScoped(scopeSQL) {
+		unitWeightSQL = "allocation_weight"
+	}
+	valueSQL, err := investmentexplain.MeasureValueSQL(filters.Measure, unitWeightSQL, shareSQL)
+	if err != nil {
+		return nil, err
+	}
+
 	query := fmt.Sprintf(`
 SELECT
     subcategory_kv.1 AS subcategory,
     splitByChar('.', subcategory_kv.1)[1] AS theme,
     ifNull(r.repo, toString(repo_id)) AS scope,
-    sum(subcategory_kv.2 * effort_value * %s) AS value
+    %s AS value
 FROM %s
 LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -105,7 +118,7 @@ GROUP BY theme, subcategory, scope
 ORDER BY value DESC
 LIMIT {limit:Int64}
 %s
-`, shareSQL, sunburstSource(scopeSQL), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, valueSQL, sunburstSource(scopeSQL), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	// filters.Limit is bound AS GIVEN -- no clamping, no zero/negative
 	// default-substitution here. Python's own investment_sunburst query
@@ -148,11 +161,18 @@ LIMIT {limit:Int64}
 	return results, nil
 }
 
+// sunburstScoped says the scope clause narrows the read to repositories (a scope that resolved to nothing,
+// "1 = 0", is not a scope: it reads the unit's whole value as an org-wide read does).
+func sunburstScoped(scopeSQL string) bool {
+	t := strings.TrimSpace(strings.TrimPrefix(scopeSQL, " AND "))
+	return t != "" && t != "1 = 0"
+}
+
 // sunburstSource: under a repository or team scope one row per (unit, repository) with the repository's allocated
-// effort, so a unit that touches several repositories adds each its share and the repositories sum to the unit's
-// effort (CHAOS-9221); with no scope the unit's whole effort.
+// share, so a unit that touches several repositories adds each its share and the repositories sum to the unit's
+// value (CHAOS-9221); with no scope the unit's whole value.
 func sunburstSource(scopeSQL string) string {
-	if t := strings.TrimSpace(strings.TrimPrefix(scopeSQL, " AND ")); t != "" && t != "1 = 0" {
+	if sunburstScoped(scopeSQL) {
 		return analytics.RepoAllocationInvestmentSource()
 	}
 	return analytics.LatestWorkUnitInvestmentsSource() + " AS work_unit_investments"

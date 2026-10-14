@@ -29,6 +29,12 @@ func analyticsSelection(ctx context.Context) analytics.Selection {
 	var selected analytics.Selection
 	for _, field := range graphql.CollectFieldsCtx(ctx, nil) {
 		switch field.Name {
+		case "timeseries":
+			for _, inner := range graphql.CollectFields(graphql.GetOperationContext(ctx), field.Selections, nil) {
+				if inner.Name == "scope" {
+					selected.TimeseriesScope = true
+				}
+			}
 		case "breakdowns":
 			selected.Breakdowns = true
 		case "evidenceQualityStats", "evidenceQualityDistribution":

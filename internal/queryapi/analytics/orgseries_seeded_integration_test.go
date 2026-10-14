@@ -111,7 +111,7 @@ func TestResolveOneTimeseries_OrgSeries_SeededRealClickHouse(t *testing.T) {
 		{model.MeasureInputPipelineSuccessRate, 10},
 		{model.MeasureInputCoverageLinePct, 40},
 	} {
-		got, err := resolveOneTimeseries(ctx, client, orgID, tsInput(model.DimensionInputTeam, tc.measure), false, nil)
+		got, err := resolveOneTimeseries(ctx, client, orgID, tsInput(model.DimensionInputTeam, tc.measure), false, nil, true)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.measure, err)
 		}

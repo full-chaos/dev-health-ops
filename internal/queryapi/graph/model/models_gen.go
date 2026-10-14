@@ -1787,7 +1787,7 @@ type TimeseriesResult struct {
 	Dimension      string `json:"dimension"`
 	DimensionValue string `json:"dimensionValue"`
 	Measure        string `json:"measure"`
-	// DIMENSION for a series of the requested dimension; ORG for the org-level series, which covers all repositories of the org (including repositories with no owning team) under the request's own repository and time filters. The ORG result has dimensionValue "org" and follows the DIMENSION results.
+	// DIMENSION for a series of the requested dimension; ORG for the org-level series, which covers all repositories of the org (including repositories with no owning team) under the request's own repository and time filters. The ORG result has dimensionValue "org" and follows the DIMENSION results. It is served only to an operation that selects this field; an operation that does not select scope gets the DIMENSION series only.
 	Scope   TimeseriesScope    `json:"scope"`
 	Buckets []TimeseriesBucket `json:"buckets"`
 }

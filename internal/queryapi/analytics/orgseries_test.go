@@ -24,7 +24,7 @@ func TestResolveOneTimeseries_OrgSeriesIsTheCountRateNotTheMeanOfTeams(t *testin
 		},
 		[][]any{{mustTime("2026-01-01"), 2.0, 10.0}},
 	)
-	got, err := resolveOneTimeseries(context.Background(), client, "org-1", tsInput(model.DimensionInputTeam, model.MeasureInputPipelineSuccessRate), false, nil)
+	got, err := resolveOneTimeseries(context.Background(), client, "org-1", tsInput(model.DimensionInputTeam, model.MeasureInputPipelineSuccessRate), false, nil, true)
 	if err != nil {
 		t.Fatalf("resolveOneTimeseries: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestResolveOneTimeseries_OrgSeriesNilWhenNoDenominator(t *testing.T) {
 		{mustTime("2026-01-01"), 0.0, 0.0},
 		{mustTime("2026-01-02"), nil, nil},
 	})
-	got, err := resolveOneTimeseries(context.Background(), client, "org-1", tsInput(model.DimensionInputTeam, model.MeasureInputCoverageLinePct), false, nil)
+	got, err := resolveOneTimeseries(context.Background(), client, "org-1", tsInput(model.DimensionInputTeam, model.MeasureInputCoverageLinePct), false, nil, true)
 	if err != nil {
 		t.Fatalf("resolveOneTimeseries: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestResolveOneTimeseries_OrgSeriesNilWhenNoDenominator(t *testing.T) {
 func TestResolveOneTimeseries_NoOrgSeriesForOtherMeasures(t *testing.T) {
 	for _, m := range []model.MeasureInput{model.MeasureInputTestFlakeRate, model.MeasureInputTestPassRate, model.MeasureInputPipelineDurationP95} {
 		client := orgSeriesClient([][]any{{mustTime("2026-01-01"), "team-a", 1.0}}, nil)
-		got, err := resolveOneTimeseries(context.Background(), client, "org-1", tsInput(model.DimensionInputTeam, m), false, nil)
+		got, err := resolveOneTimeseries(context.Background(), client, "org-1", tsInput(model.DimensionInputTeam, m), false, nil, true)
 		if err != nil {
 			t.Fatalf("%s: %v", m, err)
 		}
@@ -101,5 +101,24 @@ func TestCompileOrgTimeseries_UsesCountsAndIgnoresDimension(t *testing.T) {
 	}
 	if _, ok, _ := CompileOrgTimeseries(req, "org-1", 30, true, nil); ok {
 		t.Error("investment path must not compile an org series")
+	}
+}
+
+func TestCompileOrgTimeseries_AppliesTheRequestsFiltersAndBucket(t *testing.T) {
+	in := tsInput(model.DimensionInputTeam, model.MeasureInputPipelineSuccessRate)
+	in.Interval = model.BucketIntervalInputWeek
+	req, err := TimeseriesRequestFromInput(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filters := &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputRepo, Ids: []string{"repo-1"}}}
+	q, ok, err := CompileOrgTimeseries(req, "org-1", 30, false, filters)
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	for _, want := range []string{"date_trunc('week'", "repo_id IN {scope_ids:Array(String)}", "org_id = {org_id:String}"} {
+		if !strings.Contains(q.sql, want) {
+			t.Errorf("sql lacks %q:\n%s", want, q.sql)
+		}
 	}
 }

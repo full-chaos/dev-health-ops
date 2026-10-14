@@ -105,11 +105,14 @@ type Selection struct {
 	EvidenceQualityStats   bool
 	EvidenceQualityByGroup bool
 	SankeyCoverage         bool
+	// TimeseriesScope: the operation selects timeseries.scope, so it can tell the org series from a dimension series.
+	// An operation that does not select it is served the dimension series only (CHAOS-9736).
+	TimeseriesScope bool
 }
 
 // EverythingSelected is the selection of a caller that reads every part.
 func EverythingSelected() Selection {
-	return Selection{Breakdowns: true, EvidenceQualityStats: true, EvidenceQualityByGroup: true, SankeyCoverage: true}
+	return Selection{Breakdowns: true, EvidenceQualityStats: true, EvidenceQualityByGroup: true, SankeyCoverage: true, TimeseriesScope: true}
 }
 
 // ResolveSelected is Resolve for an operation whose selection is known: the
@@ -199,7 +202,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	for i, input := range batch.Timeseries {
 		go func(i int, input model.TimeseriesRequestInput) {
 			defer wg.Done()
-			tsOutcomes[i].result, tsOutcomes[i].err = resolveOneTimeseries(ctx, client, orgID, input, useInvestment, resolvedFilters)
+			tsOutcomes[i].result, tsOutcomes[i].err = resolveOneTimeseries(ctx, client, orgID, input, useInvestment, resolvedFilters, selected.TimeseriesScope)
 		}(i, input)
 	}
 	for i, input := range batch.Breakdowns {
@@ -300,7 +303,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	}, nil
 }
 
-func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string, input model.TimeseriesRequestInput, useInvestment bool, filters *model.FilterInput) ([]model.TimeseriesResult, error) {
+func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string, input model.TimeseriesRequestInput, useInvestment bool, filters *model.FilterInput, withOrgSeries bool) ([]model.TimeseriesResult, error) {
 	req, err := TimeseriesRequestFromInput(input)
 	if err != nil {
 		return nil, err
@@ -333,6 +336,9 @@ func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string,
 	results, err := ExecuteTimeseries(ctx, client, q, string(input.Dimension), string(input.Measure))
 	if err != nil {
 		return nil, err
+	}
+	if !withOrgSeries {
+		return results, nil
 	}
 	orgQ, hasOrg, err := CompileOrgTimeseries(req, orgID, queryTimeoutSecs, useInvestment, filters)
 	if err != nil {

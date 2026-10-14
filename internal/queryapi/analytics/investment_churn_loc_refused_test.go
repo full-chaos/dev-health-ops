@@ -34,7 +34,7 @@ func TestDbExpression_ChurnLOCIsRefusedOnTheInvestmentPathOnly(t *testing.T) {
 	}
 }
 
-func TestCompileSankey_ChurnLOCIsRefusedOnTheInvestmentPath(t *testing.T) {
+func TestCompileSankey_ChurnLOCIsRefusedEverywhere(t *testing.T) {
 	req := SankeyRequest{
 		Path:      []Dimension{DimensionTeam, DimensionTheme},
 		Measure:   MeasureChurnLOC,
@@ -48,15 +48,24 @@ func TestCompileSankey_ChurnLOCIsRefusedOnTheInvestmentPath(t *testing.T) {
 	if !errors.As(err, &validation) {
 		t.Fatalf("CompileSankey(theme path, churn_loc) error = %v, want a *ValidationError", err)
 	}
+	// The Sankey sends work units only (its unit is always WORK_UNITS): a health path is refused too, never labelled
+	// as work units while carrying churn values; the grouped compiler refuses the same way.
 	req.Path = []Dimension{DimensionTeam, DimensionRepo}
+	if _, _, err := CompileSankey(req, "org-1", 30, false, nil); !errors.As(err, &validation) || validation.Field != "measure" {
+		t.Fatalf("CompileSankey(team and repository path, churn_loc, health) error = %v, want a *ValidationError on measure", err)
+	}
+	if _, err := CompileSankeyGrouped(req, "org-1", 30, false, nil); !errors.As(err, &validation) || validation.Field != "measure" {
+		t.Fatalf("CompileSankeyGrouped(churn_loc, health) error = %v, want a *ValidationError on measure", err)
+	}
+	req.Measure = MeasureCount
 	if _, _, err := CompileSankey(req, "org-1", 30, false, nil); err != nil {
-		t.Fatalf("CompileSankey(team and repository path, churn_loc, non-investment) = %v, want it compiled: the health measure stays", err)
+		t.Fatalf("CompileSankey(count) = %v", err)
 	}
 }
 
-// CHAOS-9695, round 1: WORK_TYPE (and the fixed TEAM and REPO templates) never read the measure, so the investment
-// refusal sits at the top of CompileFlowMatrix and covers every dimension.
-func TestCompileFlowMatrix_ChurnLOCIsRefusedOnTheInvestmentPathForEveryDimension(t *testing.T) {
+// CHAOS-9695, round 1: WORK_TYPE (and the fixed TEAM and REPO templates) never read the measure, so the refusal sits at
+// the top of CompileFlowMatrix and covers every dimension: the flow carries work units only.
+func TestCompileFlowMatrix_ChurnLOCIsRefusedForEveryDimension(t *testing.T) {
 	yes, no := true, false
 	for _, tc := range []struct {
 		name          string
@@ -71,8 +80,8 @@ func TestCompileFlowMatrix_ChurnLOCIsRefusedOnTheInvestmentPathForEveryDimension
 		{"subcategory", DimensionSubcategory, nil, true},
 		{"team, forced investment", DimensionTeam, &yes, true},
 		{"repo, forced investment", DimensionRepo, &yes, true},
-		{"team, health", DimensionTeam, nil, false},
-		{"repo, health", DimensionRepo, &no, false},
+		{"team, health", DimensionTeam, nil, true},
+		{"repo, health", DimensionRepo, &no, true},
 	} {
 		req := FlowMatrixRequest{
 			Dimension: tc.dimension, Measure: MeasureChurnLOC, UseInvestment: tc.useInvestment,
@@ -83,8 +92,6 @@ func TestCompileFlowMatrix_ChurnLOCIsRefusedOnTheInvestmentPathForEveryDimension
 		switch {
 		case tc.refused && !errors.As(err, &validation):
 			t.Errorf("%s: CompileFlowMatrix(churn_loc) error = %v, want a *ValidationError", tc.name, err)
-		case !tc.refused && err != nil:
-			t.Errorf("%s: CompileFlowMatrix(churn_loc) = %v, want the health read compiled", tc.name, err)
 		}
 	}
 }

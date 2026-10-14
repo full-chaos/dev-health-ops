@@ -216,11 +216,12 @@ type compiledQuery struct {
 // ClickHouse-query-and-scan step is meant to be caught by a caller that
 // wants Python's swallow-to-empty-FlowMatrixResult behavior.
 func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, filters *model.FilterInput) (nodes compiledQuery, edges compiledQuery, err error) {
-	// CHAOS-9695 (D5999, D6014): lines of code are no Investment measure. WORK_TYPE and the fixed TEAM and REPO
-	// templates never read the measure, so the refusal must not depend on which query the request compiles to.
-	if req.Measure == MeasureChurnLOC && resolveUseInvestment([]Dimension{req.Dimension}, req.UseInvestment) {
-		_, err := dbExpression(MeasureChurnLOC, true, false)
-		return compiledQuery{}, compiledQuery{}, err
+	// CHAOS-9695 (D5999, D6014): the flow sends work units only, so lines of code are no measure of it. WORK_TYPE and
+	// the fixed TEAM and REPO templates never read the measure, so the refusal does not depend on which query the
+	// request compiles to (and takes no part in the investment flag).
+	if req.Measure == MeasureChurnLOC {
+		return compiledQuery{}, compiledQuery{}, newValidationError("measure", string(req.Measure),
+			"measure %q is not available on the flow matrix: it carries work units only", req.Measure)
 	}
 	switch req.Dimension {
 	case DimensionTeam, DimensionRepo:

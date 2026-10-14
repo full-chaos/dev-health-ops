@@ -41,23 +41,26 @@ func TestMeasureValueSQL(t *testing.T) {
 	}
 }
 
-// The measure FetchInvestmentBreakdown reads (valueExpr) and the one the theme and sunburst reads take
-// (MeasureValueSQL) are one definition.
-func TestBreakdownValueExprIsTheSharedMeasureSQL(t *testing.T) {
+// FetchInvestmentBreakdown reads MeasureValueSQL, the one definition: its query holds the shared expression of the
+// measure it is given, for both measures, scoped and not.
+func TestBreakdownReadsTheSharedMeasureSQL(t *testing.T) {
 	for _, measure := range []string{MeasureCount, MeasureChurnLOC} {
-		for _, scoped := range []bool{false, true} {
-			scopeSQL, weight := "", "1.0"
-			if scoped {
-				scopeSQL, weight = " AND repo_id IN {scope_ids:Array(String)}", "allocation_weight"
-			}
-			filters := BreakdownFilters{Measure: measure}
-			want, err := MeasureValueSQL(measure, weight, "owner_share")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := filters.valueExpr(scopeSQL, "owner_share"); got != want {
-				t.Errorf("%s scoped=%v: valueExpr = %q, MeasureValueSQL = %q", measure, scoped, got, want)
-			}
+		client := &capturingClient{}
+		reader, err := NewReader(client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reader.FetchInvestmentBreakdown(context.Background(), BreakdownFilters{
+			OrgID: "org-1", StartTS: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), EndTS: time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC), Measure: measure,
+		}); err != nil {
+			t.Fatalf("%s: %v", measure, err)
+		}
+		want, err := MeasureValueSQL(measure, "1.0", "1.0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(client.lastQuery, want+" AS value") {
+			t.Errorf("%s: the breakdown query lacks %q:\n%s", measure, want, client.lastQuery)
 		}
 	}
 }

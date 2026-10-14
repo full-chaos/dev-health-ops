@@ -475,7 +475,7 @@ func planOwnershipCompactionWithin(
 	meter.done()
 	candidates := plan.pending
 	plan.pending = nil
-	accepted, err := acceptRuns(meter, plan.byGroup, candidates, len(rows))
+	accepted, err := acceptRuns(meter, plan.byGroup, candidates)
 	if err != nil {
 		return plan, err
 	}
@@ -599,7 +599,7 @@ func (plan *ownershipCompactionPlan) planKey(keyRows []ownershipIntervalRow) {
 // no boundary, so they are the instants of the group before and after the
 // merge. One sweep per team group answers every run of the group.
 func acceptRuns(
-	meter *compactionMeter, byGroup map[string][]ownershipIntervalRow, candidates [][]ownershipIntervalRow, totalRows int,
+	meter *compactionMeter, byGroup map[string][]ownershipIntervalRow, candidates [][]ownershipIntervalRow,
 ) ([]bool, error) {
 	type teamGroup struct{ group, team string }
 	byTeam := map[teamGroup][]int{}
@@ -612,17 +612,32 @@ func acceptRuns(
 		byTeam[key] = append(byTeam[key], index)
 	}
 	accepted := make([]bool, len(candidates))
-	meter.phase("runs", totalRows)
-	for _, key := range order {
-		var teamRows []ownershipIntervalRow
+	groupRows := make([][]ownershipIntervalRow, len(order))
+	total := 0
+	for index, key := range order {
 		for _, row := range byGroup[key.group] {
 			if row.TeamID == key.team {
-				teamRows = append(teamRows, row)
+				groupRows[index] = append(groupRows[index], row)
 			}
 		}
+		total += len(groupRows[index])
+	}
+	meter.phase("runs", total)
+	for index, key := range order {
+		teamRows := groupRows[index]
+		started := time.Now()
 		if err := acceptRunsOfTeam(meter, teamRows, candidates, byTeam[key], accepted); err != nil {
 			return accepted, err
 		}
+		elapsed := time.Since(started)
+		// Per team group, counts only: the 9556 planner hid a quadratic group behind one silent table line.
+		level := slog.LevelDebug
+		if elapsed >= time.Second {
+			level = slog.LevelInfo
+		}
+		slog.Default().Log(meter.ctx, level, "ownership_interval_compaction.team_group_checked",
+			"table", meter.line.Table, "org_ordinal", meter.line.OrgOrdinal, "rows", len(teamRows),
+			"runs", len(byTeam[key]), "elapsed_ms", elapsed.Milliseconds())
 		if err := meter.add(len(teamRows)); err != nil {
 			return accepted, err
 		}

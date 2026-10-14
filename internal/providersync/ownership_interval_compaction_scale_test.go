@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -15,22 +16,27 @@ import (
 )
 
 // CHAOS-9704: the prod dry run of compact-ownership-intervals spun at 1 CPU for
-// over 200 s on one organization's team_repo_ownership (inferred 44,367 rows:
-// open 32, closed 44,312, tombstones 23; shares and several sources), while
-// the rehearsal at the same row count took 5 s. The rows below are SYNTHETIC:
-// the same counts and ratios, no prod data. What the rehearsal fixture lacked
-// is the per-repository depth: a few repositories hold thousands of per-sync
-// intervals of one team, and the share drifts often, so a key splits into many
-// short runs.
+// over 200 s on one organization's team_repo_ownership, while the rehearsal at
+// the same row count took 5 s. The rows below are SYNTHETIC, built from the
+// counts and shapes GWC read on prod (no prod data): team_repo_ownership
+// inferred 44,367 rows (open 32, closed 44,312, tombstones 23) over 42 keys,
+// median 1 row, max 4,432 (about 10 keys near 4,400), 2 rows of other
+// sources; team_project_ownership native 67,462 rows (open 36, closed 67,426)
+// over 94 keys, max 6,169, p99 about 3,500, 7 rows of other sources. The
+// rehearsal fixture had chains of 11 rows; the planner was quadratic in the
+// rows of one key.
 
 const (
 	prodShapeInferredClosed = 44312
 	prodShapeInferredOpen   = 32
 	prodShapeInferredTombs  = 23
+	prodShapeNativeClosed   = 67426
+	prodShapeNativeOpen     = 36
 )
 
 // prodShapedRepoRows builds one organization's team_repo_ownership rows. scale
-// shrinks the closed rows (1 = prod size); the open and tombstone counts stay.
+// shrinks the ten deep keys (1 = prod size); the shallow keys, the open rows
+// and the tombstones stay.
 func prodShapedRepoRows(seed int64, scale float64) []ownershipIntervalRow {
 	rng := rand.New(rand.NewSource(seed))
 	epoch := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
@@ -40,36 +46,38 @@ func prodShapedRepoRows(seed int64, scale float64) []ownershipIntervalRow {
 		team string
 		rank uint8
 	}
+	// Ten deep keys: five repositories with two co-owning teams each, whose
+	// share drifts. 32 shallow keys: one team each, an open row, ten of them
+	// with three closed rows before it.
 	var keys []key
-	for repo := 0; repo < 18; repo++ {
+	for repo := 0; repo < 37; repo++ {
 		name := fmt.Sprintf("org2/repo-%02d", repo)
 		id := uuid.NewSHA1(uuid.NameSpaceURL, []byte(name))
-		for team := 0; team < 2+repo%3; team++ {
-			keys = append(keys, key{repo: name, id: id, team: fmt.Sprintf("gh:team-%02d", (repo+team*5)%13), rank: uint8(team + 1)})
+		teams := 1
+		if repo < 5 {
+			teams = 2
+		}
+		for team := 0; team < teams; team++ {
+			keys = append(keys, key{repo: name, id: id, team: fmt.Sprintf("gh:team-%02d", (repo+team*7)%19), rank: uint8(team + 1)})
 		}
 	}
-	// A heavy tail: the first keys hold thousands of rows, the last a handful.
-	weights := make([]float64, len(keys))
-	total := 0.0
-	for index := range keys {
-		weights[index] = 1 / math.Pow(float64(index+1), 1.1)
-		total += weights[index]
-	}
-	closedTarget := int(math.Round(prodShapeInferredClosed * scale))
 	quotas := make([]int, len(keys))
-	assigned := 0
-	for index := range keys {
-		quotas[index] = int(float64(closedTarget) * weights[index] / total)
-		assigned += quotas[index]
+	deep := prodShapeInferredClosed - 10*3
+	// The deepest key holds 4,432 rows with its three tombstones.
+	quotas[0] = 4429
+	for index := 1; index < 10; index++ {
+		quotas[index] = (deep - 4429) / 9
 	}
-	for index := 0; assigned < closedTarget; index = (index + 1) % len(keys) {
+	for index := 1; index <= (deep-4429)%9; index++ {
 		quotas[index]++
-		assigned++
+	}
+	for index := 0; index < 10; index++ {
+		quotas[index] = int(math.Round(float64(quotas[index]) * scale))
+		quotas[10+index] = 3
 	}
 	shares := []float64{1, 0.5, 0.75, 0.25, 0.6, 0.4}
 	var rows []ownershipIntervalRow
-	var inferredByKey [][]int
-	accessKeys := map[string]bool{}
+	var deepRows [][]int
 	for index, k := range keys {
 		id := k.id
 		base := ownershipIntervalRow{
@@ -83,12 +91,11 @@ func prodShapedRepoRows(seed int64, scale float64) []ownershipIntervalRow {
 			if rng.Float64() < 0.3 {
 				share = shares[rng.Intn(len(shares))]
 			}
-			step := time.Duration(30+rng.Intn(330)) * time.Minute
 			row := base
 			s := share
 			row.Share = &s
 			row.ValidFrom = at
-			end := at.Add(step)
+			end := at.Add(time.Duration(30+rng.Intn(150)) * time.Minute)
 			row.ValidTo = &end
 			row.UpdatedAt = end.Add(time.Duration(rng.Intn(900)) * time.Millisecond)
 			mine = append(mine, len(rows))
@@ -102,56 +109,39 @@ func prodShapedRepoRows(seed int64, scale float64) []ownershipIntervalRow {
 				at = end
 			}
 		}
-		if index < prodShapeInferredOpen {
+		if index >= 10 {
 			row := base
 			s := share
 			row.Share = &s
 			row.ValidFrom = at
 			row.UpdatedAt = at.Add(time.Duration(rng.Intn(900)) * time.Millisecond)
-			mine = append(mine, len(rows))
 			rows = append(rows, row)
-		}
-		inferredByKey = append(inferredByKey, mine)
-		// Other sources on the same (repository, team): provider_access spans
-		// that are newer than some inferred rows and older than others, and an
-		// open codeowners row on every third key.
-		if index%2 == 0 && len(mine) > 4 {
-			for span := 0; span < 3; span++ {
-				first := rows[mine[rng.Intn(len(mine))]]
-				row := first
-				row.Source = "provider_access"
-				s := 0.25
-				row.Share = &s
-				row.IsPrimary = 2
-				end := first.ValidFrom.Add(time.Duration(6+rng.Intn(200)) * time.Hour)
-				row.ValidTo = &end
-				row.UpdatedAt = first.ValidFrom.Add(time.Duration(rng.Intn(400)-200) * time.Hour)
-				if !accessKeys[row.sortKey()] {
-					accessKeys[row.sortKey()] = true
-					rows = append(rows, row)
-				}
-			}
-		}
-		if index%3 == 0 {
-			row := base
-			row.Source = "codeowners"
-			row.Share = nil
-			row.ValidFrom = epoch.Add(-time.Duration(1+rng.Intn(48)) * time.Hour)
-			row.UpdatedAt = epoch.Add(time.Duration(rng.Intn(24*200)) * time.Hour)
-			rows = append(rows, row)
+		} else {
+			deepRows = append(deepRows, mine)
 		}
 	}
-	// Supersede tombstones: an anchor before the first row, ones inside a key's
-	// history, and one holding a key's newest stamp.
+	// Two rows of another source inside deep keys, newer than the inferred rows
+	// before them and older than the ones after.
+	for index := 0; index < 2; index++ {
+		mine := deepRows[index]
+		row := rows[mine[len(mine)/2]]
+		row.Source = "provider_access"
+		row.Share = nil
+		row.IsPrimary = 2
+		end := row.ValidFrom.Add(200 * time.Hour)
+		row.ValidTo = &end
+		row.UpdatedAt = row.ValidFrom.Add(100 * time.Hour)
+		rows = append(rows, row)
+	}
+	// Supersede tombstones in the deep keys: anchors before the first row, ones
+	// inside the history, and some holding the key's newest stamp.
 	for n := 0; n < prodShapeInferredTombs; n++ {
-		k := n % len(keys)
-		mine := inferredByKey[k]
+		mine := deepRows[n%10]
 		var row ownershipIntervalRow
-		switch {
-		case n%7 == 0:
+		if n < 10 && n%4 == 0 {
 			row = rows[mine[0]]
 			row.ValidFrom = row.ValidFrom.Add(-time.Hour)
-		default:
+		} else {
 			row = rows[mine[rng.Intn(len(mine))]]
 			row.ValidFrom = row.ValidFrom.Add(17*time.Minute + time.Duration(n)*time.Millisecond)
 		}
@@ -167,15 +157,112 @@ func prodShapedRepoRows(seed int64, scale float64) []ownershipIntervalRow {
 	return rows
 }
 
-func TestProdShapedRepoRowsHaveTheProdCounts(t *testing.T) {
-	rows := prodShapedRepoRows(9704, 1)
-	total, open, closed, tombstones, reversed := countClasses(rows, "inferred")
-	if total != 44367 || open != 32 || closed != 44312 || tombstones != 23 || reversed != 0 {
-		t.Fatalf("inferred total %d open %d closed %d tombstones %d close-before-open %d; want 44367/32/44312/23/0",
-			total, open, closed, tombstones, reversed)
+// prodShapedProjectRows builds one organization's team_project_ownership rows:
+// 94 keys, one of 6,169 rows, the next ones near 3,500, a long tail; open 36,
+// no tombstone, 7 rows of another source; the priority changes rarely.
+func prodShapedProjectRows(seed int64) []ownershipIntervalRow {
+	rng := rand.New(rand.NewSource(seed))
+	epoch := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	const keys = 94
+	quotas := make([]int, keys)
+	quotas[0] = 6168 // 6,169 rows with its open row
+	rest := prodShapeNativeClosed - quotas[0]
+	weights := make([]float64, keys)
+	total := 0.0
+	for index := 1; index < keys; index++ {
+		weights[index] = 1 / math.Pow(float64(index), 0.6)
+		total += weights[index]
 	}
-	if other := len(rows) - total; other == 0 {
-		t.Fatal("the shape needs rows of other sources on the same keys")
+	assigned := quotas[0]
+	for index := 1; index < keys; index++ {
+		quotas[index] = min(3515, int(float64(rest)*weights[index]/total))
+		assigned += quotas[index]
+	}
+	for index := keys - 1; assigned < prodShapeNativeClosed; index-- {
+		if index == 0 {
+			index = keys - 1
+		}
+		if quotas[index] < 3515 {
+			quotas[index]++
+			assigned++
+		}
+	}
+	var rows []ownershipIntervalRow
+	for index := 0; index < keys; index++ {
+		projectKey := fmt.Sprintf("P%02d", index)
+		base := ownershipIntervalRow{
+			Provider: "linear", Natural: fmt.Sprintf("proj-%02d", index), TeamID: fmt.Sprintf("linear:team-%02d", index%23),
+			Source: "native", ProjectKey: &projectKey, IsPrimary: 1, Specificity: 100, Priority: 10,
+		}
+		at := epoch.Add(time.Duration(rng.Intn(24*60)) * time.Minute)
+		for n := 0; n < quotas[index]; n++ {
+			if rng.Float64() < 0.01 {
+				base.Priority = int32(10 + 10*rng.Intn(3))
+			}
+			row := base
+			row.ValidFrom = at
+			end := at.Add(time.Duration(30+rng.Intn(150)) * time.Minute)
+			row.ValidTo = &end
+			row.UpdatedAt = end
+			row.LastSynced = end
+			rows = append(rows, row)
+			at = end
+		}
+		if index < prodShapeNativeOpen {
+			row := base
+			row.ValidFrom, row.UpdatedAt, row.LastSynced = at, at, at
+			rows = append(rows, row)
+		}
+		if index < 7 {
+			row := base
+			row.Source = "jira_legacy"
+			row.ValidFrom = epoch.Add(-48 * time.Hour)
+			end := epoch.Add(-24 * time.Hour)
+			row.ValidTo = &end
+			row.UpdatedAt, row.LastSynced = end, end
+			rows = append(rows, row)
+		}
+	}
+	rng.Shuffle(len(rows), func(i, j int) { rows[i], rows[j] = rows[j], rows[i] })
+	return rows
+}
+
+// keyDepths is the number of rows per key of one source, largest first.
+func keyDepths(rows []ownershipIntervalRow, source string) []int {
+	byKey := map[string]int{}
+	for _, row := range rows {
+		if row.Source == source {
+			byKey[row.keyOf()]++
+		}
+	}
+	depths := make([]int, 0, len(byKey))
+	for _, n := range byKey {
+		depths = append(depths, n)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(depths)))
+	return depths
+}
+
+func TestProdShapedRowsHaveTheProdCounts(t *testing.T) {
+	repo := prodShapedRepoRows(9704, 1)
+	total, open, closed, tombstones, reversed := countClasses(repo, "inferred")
+	if total != 44367 || open != 32 || closed != 44312 || tombstones != 23 || reversed != 0 || len(repo)-total != 2 {
+		t.Fatalf("repo inferred total %d open %d closed %d tombstones %d close-before-open %d other %d; want 44367/32/44312/23/0/2",
+			total, open, closed, tombstones, reversed, len(repo)-total)
+	}
+	depths := keyDepths(repo, "inferred")
+	if len(depths) != 42 || depths[0] != 4432 || depths[9] < 4400 || depths[len(depths)/2] != 1 {
+		t.Fatalf("repo key depths: keys %d, deepest %v, median %d", len(depths), depths[:10], depths[len(depths)/2])
+	}
+	project := prodShapedProjectRows(9704)
+	total, open, closed, tombstones, reversed = countClasses(project, "native")
+	if total != 67462 || open != 36 || closed != 67426 || tombstones != 0 || reversed != 0 || len(project)-total != 7 {
+		t.Fatalf("project native total %d open %d closed %d tombstones %d close-before-open %d other %d; want 67462/36/67426/0/0/7",
+			total, open, closed, tombstones, reversed, len(project)-total)
+	}
+	depths = keyDepths(project, "native")
+	if len(depths) != 94 || depths[0] != 6169 || depths[1] > 3516 {
+		t.Fatalf("project key depths: keys %d, deepest %v", len(depths), depths[:3])
 	}
 }
 
@@ -190,36 +277,41 @@ func compactionBound() time.Duration {
 	return 60 * time.Second
 }
 
-// TestCompactionPlansAProdShapedRepositoryOrgInBoundedTime fails on the 9556
+// TestCompactionPlansTheProdShapedTablesInBoundedTime fails on the 9556
 // planner: it calls only functions that exist there, so the same file run on
 // f850e8f9 times out at the bound.
-func TestCompactionPlansAProdShapedRepositoryOrgInBoundedTime(t *testing.T) {
-	rows := prodShapedRepoRows(9704, 1)
-	type result struct {
-		plan ownershipCompactionPlan
-		diff OwnershipCompactionDifferential
-	}
-	done := make(chan result, 1)
-	started := time.Now()
-	go func() {
-		plan := planOwnershipCompaction(repoSpec(), rows)
-		done <- result{plan: plan, diff: ownershipDifferential(rows, plan.final(rows))}
-	}()
-	bound := compactionBound()
-	select {
-	case got := <-done:
-		elapsed := time.Since(started)
-		t.Logf("prod shape: rows %d, runs found %d merged %d kept multi-source %d, rows merged %d, tombstones dropped %d, differential groups %d instants %d mismatches %d, elapsed %s",
-			len(rows), got.plan.org.RunsFound, got.plan.org.RunsMerged, got.plan.org.RunsKeptMultiSource, got.plan.org.RowsMerged,
-			got.plan.org.TombstonesDropped, got.diff.GroupsChecked, got.diff.InstantsChecked, got.diff.Mismatches, elapsed)
-		if got.diff.Mismatches != 0 {
-			t.Fatalf("differential mismatches %d", got.diff.Mismatches)
+func TestCompactionPlansTheProdShapedTablesInBoundedTime(t *testing.T) {
+	for _, shape := range []struct {
+		name string
+		spec ownershipCompactionSpec
+		rows []ownershipIntervalRow
+	}{
+		{"team_repo_ownership", repoSpec(), prodShapedRepoRows(9704, 1)},
+		{"team_project_ownership", projectSpec(), prodShapedProjectRows(9704)},
+	} {
+		type result struct {
+			plan ownershipCompactionPlan
+			diff OwnershipCompactionDifferential
 		}
-		if got.plan.org.RunsMerged == 0 || got.plan.org.RunsKeptMultiSource == 0 {
-			t.Fatalf("the shape must hold mergeable runs and multi-source runs: %+v", got.plan.org)
+		done := make(chan result, 1)
+		started := time.Now()
+		go func() {
+			plan := planOwnershipCompaction(shape.spec, shape.rows)
+			done <- result{plan: plan, diff: ownershipDifferential(shape.rows, plan.final(shape.rows))}
+		}()
+		bound := compactionBound()
+		select {
+		case got := <-done:
+			elapsed := time.Since(started)
+			t.Logf("%s prod shape: rows %d, runs found %d merged %d kept multi-source %d, rows merged %d, tombstones dropped %d, differential groups %d instants %d mismatches %d, elapsed %s",
+				shape.name, len(shape.rows), got.plan.org.RunsFound, got.plan.org.RunsMerged, got.plan.org.RunsKeptMultiSource, got.plan.org.RowsMerged,
+				got.plan.org.TombstonesDropped, got.diff.GroupsChecked, got.diff.InstantsChecked, got.diff.Mismatches, elapsed)
+			if got.diff.Mismatches != 0 || got.plan.org.RunsMerged == 0 {
+				t.Fatalf("%s: plan %+v differential %+v", shape.name, got.plan.org, got.diff)
+			}
+		case <-time.After(bound):
+			t.Fatalf("%s: plan + differential of the prod-shaped organization (%d rows) did not finish within %s", shape.name, len(shape.rows), bound)
 		}
-	case <-time.After(bound):
-		t.Fatalf("plan + differential of the prod-shaped organization (%d rows) did not finish within %s", len(rows), bound)
 	}
 }
 

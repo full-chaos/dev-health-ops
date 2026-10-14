@@ -113,7 +113,10 @@ class InternalServiceCredential(Base):
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         return now <= expires_at
 
-    def public_metadata(self) -> dict[str, str | list[str] | None]:
+    def public_metadata(
+        self, now: datetime | None = None
+    ) -> dict[str, str | bool | list[str] | None]:
+        now = now or datetime.now(timezone.utc)
         return {
             "id": str(self.id),
             "service_name": self.service_name,
@@ -124,6 +127,7 @@ class InternalServiceCredential(Base):
             "last_used_at": self.last_used_at.isoformat()
             if self.last_used_at
             else None,
+            "is_valid": self.is_valid(now),
         }
 
 

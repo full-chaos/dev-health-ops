@@ -31,8 +31,8 @@ import (
 // commands share, so option abbreviations, single-dash forms, "--", repeated options and the type
 // checks of each occurrence mean what they mean to argparse; parseCredentialArgs is compared with the
 // real parser over a generated corpus (servicecredentials_args_oracle_test.go).
-// list keeps Python's shape: it shows no computed validity (CHAOS-4032 stays open: an
-// expired credential and a live one print alike).
+// list adds the computed is_valid (not revoked, not past expires_at) to each credential, as Python's
+// public_metadata does, so an expired credential and a live one no longer print alike (CHAOS-4032).
 
 // ServiceCredentialsCommand is the `service-credentials` group.
 func ServiceCredentialsCommand() cli.Command {
@@ -274,9 +274,10 @@ func runCredentialList(ctx context.Context, env cli.Env) int {
 	if err != nil {
 		return finishCredential(env, err)
 	}
+	now := time.Now()
 	documents := make([]any, len(list))
 	for i, item := range list {
-		documents[i] = item.Document()
+		documents[i] = item.Document(now)
 	}
 	line, err := pythonparity.MarshalPythonJSONSorted(documents)
 	if err != nil {

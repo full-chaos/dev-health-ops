@@ -20,8 +20,12 @@ A path that is not declared still selects nothing on a pull request; the full ru
 main is the check for it. Add a row when a main run goes red after a green pull request.
 
 `internal/testsupport/venuechanged` (TestEveryProducerAVenueTestImportsIsDeclaredAsATrigger,
-CHAOS-9578) fails when a package with a `run` row imports a producer package (internal/,
-outside testsupport) that no row of its file covers. Known gaps are listed in
-`ci/venue_oracle_trigger_gaps.tsv` (`<package dir>	<producer package>`, sorted): a new gap
-fails the test, and a line whose gap got covered must be removed. Close a gap by declaring the
-producer here and deleting its line there.
+CHAOS-9578, per test since CHAOS-9614) fails when a `run` test uses a producer package
+(internal/, outside testsupport) that no row of ITS OWN covers. Selection is per test, so a
+row for one test of a package never covers another test of it. A test uses the producers
+named in its function, in every same-package test-file declaration it reaches through
+identifiers (helpers, fixtures, types, methods), and in the blank imports of the package.
+Known gaps are listed in `ci/venue_oracle_trigger_gaps.tsv`
+(`<package dir>	<Test function>	<producer package>`, sorted): a new gap fails the test, and a
+line whose gap got covered must be removed. Close a gap by declaring the producer here for
+that test and deleting its line there.

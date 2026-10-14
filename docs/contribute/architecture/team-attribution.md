@@ -1394,6 +1394,13 @@ project (section 0.1): a native team key gives one team.
   are the reviews in the repositories the team owns, not the reviews by its members. A repository of several owners is
   a point of each owner; a repository with no owner is no team's point. Selected teams narrow the owners. Asserted on
   real ClickHouse by `TestTheTeamReviewQuadrantGroupsByTheRepositoryOwner`.
+- **A churn/throughput repository point names its owners (CHAOS-9693).** The churn/throughput quadrant plots one point
+  per repository at the org and team scopes, so a consumer that wants a TEAM's churn (the Landscape Teams tab) cannot
+  join it to a team id. Each repository point carries `owner_shares`: the active teams that own the repository with the
+  share each holds (`teamscope.OwnerShares`; the shares of one repository sum to 1 over all its owners, and selected
+  teams remove rows without re-weighing the rest). Churn is additive, so a team's churn is the sum over its
+  repositories of churn x owner share (D5998). The point's own `x` and `y` stay the whole repository's. Asserted on
+  real ClickHouse by `TestChurnPointsNameTheirActiveOwnersWithShares`.
 - **The person quadrant reads only that person's own rows (CHAOS-9343).** At the person grain the quadrant resolves the
   person id to the person's identity strings and binds each read (`user_metrics_daily.identity_id`,
   `work_item_user_metrics_daily.user_identity`) to them. There is no membership-team lookup (`identities.team_ids`) and

@@ -47,6 +47,17 @@ type Point struct {
 	WindowEnd    string            `json:"window_end"`
 	EvidenceLink string            `json:"evidence_link"`
 	Trajectory   []PointTrajectory `json:"trajectory" pyjson:"nullable"`
+	// OwnerShares is Go-only (CHAOS-9693) and served on churn_throughput repository points only: the active
+	// teams that own the repository with their share of it (teamscope.OwnerShares, D5988). Omitted when the
+	// repository has no active owner. It is metadata: the point's x and y stay the whole repository's.
+	OwnerShares []OwnerShare `json:"owner_shares,omitempty"`
+}
+
+// OwnerShare is one owning team of a repository point and the share of the repository it holds.
+type OwnerShare struct {
+	TeamID    string  `json:"team_id"`
+	TeamLabel string  `json:"team_label"`
+	Share     float64 `json:"share"`
 }
 
 // Annotation is the wire shape of QuadrantAnnotation (schemas.py:536-540).
@@ -404,6 +415,10 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 			EvidenceLink: evidenceLink(definition.EvidenceMetric),
 			Trajectory:   trajectory,
 		})
+	}
+
+	if definition.Type == "churn_throughput" && scope == "repo" {
+		attachOwnerShares(ctx, client, orgID, points, selected.ownerTeams)
 	}
 
 	return &Response{

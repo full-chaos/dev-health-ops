@@ -121,6 +121,8 @@ func TestGoldenCycleThroughputTeamAttributionQuirk(t *testing.T) {
 func TestGoldenChurnThroughputForcesRepoGrain(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		switch {
+		case strings.Contains(query, "AS repo_name"):
+			return &fixtureRowScanner{}, nil
 		case strings.Contains(query, "FROM teams FINAL"):
 			t.Fatal("team-label resolution must not run for repo-grain churn")
 		case strings.Contains(query, "total_loc_touched"):

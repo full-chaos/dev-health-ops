@@ -21,6 +21,9 @@ type selection struct {
 	// teams are the selected teams at the team grain: an OwnerTeam read narrows
 	// the repository owners to them (teamscope.OwnerShares).
 	teams []string
+	// ownerTeams are the selected teams at the repository grain: the owners a point reports are narrowed to
+	// them (CHAOS-9693), the way OwnerShares narrows rows of a team scope without re-weighing them.
+	ownerTeams []string
 	// repoFilterApplied is null when no repository is named, true when the
 	// repository grain was narrowed by it, false when the grain cannot be.
 	repoFilterApplied *bool
@@ -54,6 +57,7 @@ func resolveSelection(ctx context.Context, client QueryClient, orgID, scope stri
 			out.attributedTeams = extraScope{SQL: "\n              AND t.team_id IN {scope_team_ids:Array(String)}", Bindings: bindings}
 		}
 	case "repo":
+		out.ownerTeams = filter.TeamIDs
 		var explicitSQL string
 		var explicitBindings []dhclickhouse.Binding
 		if len(filter.RepoIDs) > 0 {

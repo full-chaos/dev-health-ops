@@ -1,8 +1,13 @@
 package analytics
 
 import (
+	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
 
 // CHAOS-9629 (D5988): a team scope weighs every non-TEAM investment read by the share of each repository the teams in
@@ -50,5 +55,41 @@ func TestInvestmentContextWeighsATeamScopeByTheRepoShareWithoutAJoin(t *testing.
 	count, err := unscoped.measure(MeasureCount)
 	if err != nil || count != "SUM(subcategory_kv.2)" {
 		t.Errorf("unscoped COUNT = %q (%v), want SUM(subcategory_kv.2)", count, err)
+	}
+}
+
+// Every named parameter of a compiled team-scoped statement has a binding (CHAOS-9629): the REPO flow matrix embeds the
+// node context's measure in its edge statement, and the scope share's bindings must travel with it. A statement with
+// an unbound name is refused by ClickHouse and the page degrades to an empty matrix.
+func TestTeamScopedFlowMatrixStatementsBindEveryName(t *testing.T) {
+	scoped := &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputTeam, Ids: []string{"team-co", "team-main"}}}
+	start := graphqldate.New(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	end := graphqldate.New(time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC))
+	useInvestment := true
+	names := regexp.MustCompile(`\{([a-z_0-9]+):`)
+	for _, dimension := range []Dimension{DimensionRepo, DimensionTeam, DimensionTheme} {
+		nodes, edges, err := CompileFlowMatrix(FlowMatrixRequest{Dimension: dimension, Measure: MeasureCount, StartDate: start, EndDate: end, MaxNodes: 10, MaxEdges: 10, UseInvestment: &useInvestment}, "org-1", 30, scoped)
+		if err != nil {
+			t.Fatalf("%s: %v", dimension, err)
+		}
+		for label, query := range map[string]compiledQuery{"nodes": nodes, "edges": edges} {
+			if query.sql == "" {
+				continue
+			}
+			bound := map[string]int{}
+			for _, binding := range query.bindings {
+				bound[binding.Name]++
+			}
+			for _, match := range names.FindAllStringSubmatch(query.sql, -1) {
+				if bound[match[1]] == 0 {
+					t.Errorf("%s %s: parameter %q has no binding", dimension, label, match[1])
+				}
+			}
+			for name, count := range bound {
+				if count > 1 {
+					t.Errorf("%s %s: parameter %q is bound %d times", dimension, label, name, count)
+				}
+			}
+		}
 	}
 }

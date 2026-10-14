@@ -88,11 +88,12 @@ func TestInvestmentPageWeighsATeamScopeByTheOwnersShareLikeTheExplanation(t *tes
 		teams        []string
 		subcategory  map[string]float64 // expected COUNT per subcategory
 		wantTotalSum float64
+		leadShare    float64 // the owners in view's share of repo-lead
 	}{
-		{"co-owner at 0.4 of a repository", []string{"team-co"}, map[string]float64{"maintenance.debt": 0.2, "quality.bugfix": 0.2}, 0.4},
-		{"main owner: its 0.6, half of the tie, all of the solo repository", []string{"team-main"}, map[string]float64{"maintenance.debt": 0.3 + 1, "quality.bugfix": 0.3, "risk.security": 0.5}, 2.1},
-		{"a tied owner reads its equal half", []string{"team-tie"}, map[string]float64{"risk.security": 0.5}, 0.5},
-		{"the owners of one repository read it once", []string{"team-main", "team-co"}, map[string]float64{"maintenance.debt": 0.5 + 1, "quality.bugfix": 0.5, "risk.security": 0.5}, 2.5},
+		{"co-owner at 0.4 of a repository", []string{"team-co"}, map[string]float64{"maintenance.debt": 0.2, "quality.bugfix": 0.2}, 0.4, 0.4},
+		{"main owner: its 0.6, half of the tie, all of the solo repository", []string{"team-main"}, map[string]float64{"maintenance.debt": 0.3 + 1, "quality.bugfix": 0.3, "risk.security": 0.5}, 2.1, 0.6},
+		{"a tied owner reads its equal half", []string{"team-tie"}, map[string]float64{"risk.security": 0.5}, 0.5, 0},
+		{"the owners of one repository read it once", []string{"team-main", "team-co"}, map[string]float64{"maintenance.debt": 0.5 + 1, "quality.bugfix": 0.5, "risk.security": 0.5}, 2.5, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			filters := &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputTeam, Ids: tc.teams}}
@@ -201,6 +202,34 @@ func TestInvestmentPageWeighsATeamScopeByTheOwnersShareLikeTheExplanation(t *tes
 				}
 			}
 			near("page flow matrix nodes total", nodes, tc.wantTotalSum)
+
+			// The REPO flow matrix runs a node and an edge statement; the edge statement embeds the node measure and must
+			// carry the scope share's bindings (a missing one made ClickHouse refuse it and the matrix degrade to empty).
+			repoMatrix, err := analytics.Resolve(ctx, client, org, model.AnalyticsRequestInput{
+				Filters:       filters,
+				UseInvestment: &useInvestment,
+				FlowMatrix:    &model.FlowMatrixRequestInput{Dimension: model.DimensionInputRepo, Measure: model.MeasureInputCount, DateRange: window, MaxNodes: 30, MaxEdges: 60},
+			})
+			if err != nil || repoMatrix.FlowMatrix == nil {
+				t.Fatalf("REPO flow matrix: %v %+v", err, repoMatrix)
+			}
+			if repoMatrix.FlowMatrix.DegradedReason != nil {
+				t.Fatalf("REPO flow matrix degraded: %s", *repoMatrix.FlowMatrix.DegradedReason)
+			}
+			edgeValue := map[string]float64{}
+			for _, edge := range repoMatrix.FlowMatrix.Edges {
+				if edge.Value != nil {
+					edgeValue[edge.Source+">"+edge.Target] = *edge.Value
+				}
+			}
+			if tc.teams[0] == "team-main" {
+				// Three repositories share the team bridge: six edges, each valued by the SOURCE repository's share-weighted work.
+				if len(edgeValue) != 6 {
+					t.Errorf("REPO flow matrix edges = %v, want 6", edgeValue)
+				}
+				near("edge repo-lead>repo-solo (lead weighed by the owners in view)", edgeValue["REPO:acme/repo-lead>REPO:acme/repo-solo"], tc.leadShare)
+				near("edge repo-solo>repo-lead", edgeValue["REPO:acme/repo-solo>REPO:acme/repo-lead"], 1)
+			}
 		})
 	}
 }

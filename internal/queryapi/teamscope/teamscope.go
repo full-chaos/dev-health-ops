@@ -332,15 +332,17 @@ func NarrowRepoScope(named bool, explicitSQL string, explicitBindings []dhclickh
 	case named && explicitCondition == "":
 		return " AND 1 = 0", nil
 	case explicitCondition != "" && teamCondition != "":
-		// Two membership tests on one repository column, a String list AND the team's
-		// ownership subquery (also Strings): ClickHouse 26.7.1.1315 (prod) fails
-		// analysis of that pair on a UUID column with code 169 "Cannot compare UUID with
-		// String" (CHAOS-9183: Home answered 503 for a team AND a repository the team
-		// holds). Every surface builds the pair HERE, so both sides compare the column as
-		// TEXT here, once (a String column works too). The cost: no repo_id key pruning for
-		// the combined filter (org_id and day pruning stay); a UUID-typed form that keeps
-		// it is a follow-up to be proven on the prod server.
-		return " AND (" + textRepoMembership(explicitCondition) + " AND " + textRepoMembership(teamCondition) + ")", append(append([]dhclickhouse.Binding(nil), explicitBindings...), teamBindings...)
+		// Two membership tests on one repository column. A String list AND an ownership
+		// subquery that also yields Strings fail analysis on ClickHouse 26.7.1.1315 (prod)
+		// with code 169 "Cannot compare UUID with String" on a UUID column (CHAOS-9183).
+		// The subquery side yields UUIDs here (toUUIDOrNull), so the column keeps its
+		// type and the primary key can prune by repo_id (CHAOS-9187; proven on the prod
+		// server by EXPLAIN indexes=1). A column that is already text keeps the
+		// text comparison on both sides.
+		if isTextRepoColumn(explicitCondition) {
+			return " AND (" + textRepoMembership(explicitCondition) + " AND " + textRepoMembership(teamCondition) + ")", append(append([]dhclickhouse.Binding(nil), explicitBindings...), teamBindings...)
+		}
+		return " AND (" + explicitCondition + " AND " + uuidOwnedRepoSubquery(teamCondition) + ")", append(append([]dhclickhouse.Binding(nil), explicitBindings...), teamBindings...)
 	case explicitCondition != "":
 		return " AND " + explicitCondition, explicitBindings
 	case teamCondition != "":
@@ -496,4 +498,20 @@ func UnitScope(filterSQL, latestEffortSource string) string {
 	return " AND (" + condition + ` OR work_unit_investments.work_unit_id IN (
     SELECT work_unit_id FROM ` + latestEffortSource + ` AS latest_repo_rows
     WHERE repo_id IS NOT NULL AND ` + inner + "))"
+}
+
+// ownedRepoIDSelect is the select list of the ownership subquery of ownedRepoCondition.
+const ownedRepoIDSelect = "SELECT DISTINCT coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id"
+
+// uuidOwnedRepoSubquery makes the ownership subquery of a team condition yield UUIDs
+// (toUUIDOrNull: a value that is not a UUID becomes NULL and matches no repository).
+func uuidOwnedRepoSubquery(teamCondition string) string {
+	return strings.Replace(teamCondition, ownedRepoIDSelect,
+		"SELECT DISTINCT toUUIDOrNull(coalesce(toString(o.repo_id), toString(r.id))) AS owned_repo_id", 1)
+}
+
+// isTextRepoColumn reports whether the membership test compares text already.
+func isTextRepoColumn(condition string) bool {
+	column, _, found := strings.Cut(condition, " IN ")
+	return found && strings.HasPrefix(strings.TrimSpace(strings.TrimLeft(column, "(")), "toString(")
 }

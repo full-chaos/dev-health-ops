@@ -509,8 +509,8 @@ func TestCarryTeamIDsMovesTheParentOfAnObservation(t *testing.T) {
 	}
 }
 
-// An open link whose validity starts after the carry is closed at its own
-// start, never before it.
+// An open link whose validity starts after the carry is closed 1 ms after its
+// own start, never at or before it.
 func TestCarryTeamIDsClosesAFutureLinkAtItsStart(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
@@ -521,8 +521,8 @@ func TestCarryTeamIDsClosesAFutureLinkAtItsStart(t *testing.T) {
 	if _, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.str(`SELECT toString(valid_to) FROM team_memberships FINAL WHERE org_id = ? AND team_id = 'ENG' AND member_id = 'm1'`); got != "2026-10-10 12:00:00.000" {
-		t.Errorf("old link valid_to = %s, want its own valid_from 2026-10-10 12:00:00.000", got)
+	if got := f.str(`SELECT toString(valid_to) FROM team_memberships FINAL WHERE org_id = ? AND team_id = 'ENG' AND member_id = 'm1'`); got != "2026-10-10 12:00:00.001" {
+		t.Errorf("old link valid_to = %s, want 1 ms after its valid_from 2026-10-10 12:00:00.000", got)
 	}
 }
 

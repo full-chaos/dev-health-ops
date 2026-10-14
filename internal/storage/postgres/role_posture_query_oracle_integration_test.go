@@ -293,6 +293,37 @@ type oracleEnv struct {
 	other  string
 }
 
+// oracleDomainPosture is the domain posture the FROZEN legacy query can judge.
+// CHAOS-6747 made integration_credentials a mixed table (table-wide SELECT plus
+// a column-scoped UPDATE of is_active and updated_at); the legacy query predates
+// that shape and refuses it, and it must not be edited to agree. So the oracle
+// compares the two queries on the domain posture without the mixed table's
+// column entries, with those column grants revoked from the role. The mixed
+// shape itself is pinned by TestMixedTable* in role_posture_integration_test.go.
+func oracleDomainPosture(t *testing.T, ctx context.Context, env oracleEnv, role string) RolePosture {
+	t.Helper()
+	posture := domainPosture()
+	table := map[string]bool{}
+	for _, required := range posture.RequiredTables {
+		table[required.TableName] = true
+	}
+	var kept []ColumnPrivilege
+	for _, column := range posture.ColumnScoped {
+		if !table[column.TableName] {
+			kept = append(kept, column)
+			continue
+		}
+		statement := fmt.Sprintf("REVOKE %s (%s) ON public.%s FROM %s", column.Privilege,
+			pgx.Identifier{column.ColumnName}.Sanitize(), pgx.Identifier{column.TableName}.Sanitize(),
+			pgx.Identifier{role}.Sanitize())
+		if _, err := env.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	posture.ColumnScoped = kept
+	return posture
+}
+
 func oraclePlaceholders(env oracleEnv, role string, posture RolePosture) map[string]string {
 	values := map[string]string{
 		"role": pgx.Identifier{role}.Sanitize(), "db": pgx.Identifier{env.dbName}.Sanitize(),
@@ -420,7 +451,7 @@ func TestRolePostureQueryAgreesWithTheLegacyQueryAcrossTheGrantMatrix(t *testing
 		isDom   bool
 	}
 	subjects := []subject{
-		{roles.domain, domainPosture(), true},
+		{roles.domain, oracleDomainPosture(t, ctx, env, roles.domain), true},
 		{roles.coordinator, coordinatorPosture(), false},
 	}
 	answers := map[string]int{"true": 0, "false": 0}
@@ -503,7 +534,7 @@ func TestRolePostureQueryIsCheaperOnAProdSizedCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool := env.pools[roles.domain]
-	posture := domainPosture()
+	posture := oracleDomainPosture(t, ctx, env, roles.domain)
 	measure := func(query string) (time.Duration, bool) {
 		var answer bool
 		var samples []time.Duration
@@ -541,7 +572,7 @@ func TestCallerColumnGrantsAreTheRowsInformationSchemaShowsForTheCaller(t *testi
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	env, roles, _ := startOracleEnv(t, ctx)
-	posture := domainPosture()
+	posture := oracleDomainPosture(t, ctx, env, roles.domain)
 	if len(posture.ColumnScoped) == 0 {
 		t.Fatal("the domain posture has no column-scoped pair; the oracle needs one")
 	}
@@ -703,7 +734,7 @@ func TestBuiltInDefaultFunctionAclCountsAsEffectiveInTheRiverSchemaCheck(t *test
 		t.Fatalf("the function must have a NULL proacl for this test to mean anything: acl=%v err=%v", acl, err)
 	}
 	pool := env.pools[roles.domain]
-	posture := domainPosture()
+	posture := oracleDomainPosture(t, ctx, env, roles.domain)
 	for _, step := range []struct {
 		name string
 		sql  string

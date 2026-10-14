@@ -138,7 +138,13 @@ def test_a_change_far_from_any_venue_test_still_selects_nothing(tmp_path: Path) 
 def test_the_real_trigger_rows_pass_the_static_check() -> None:
     proc = _check(ROOT)
     assert proc.returncode == 0, proc.stderr
-    assert "venue-oracle-triggers: 2 declared path(s)" in proc.stdout, proc.stdout
+    declared = sum(
+        1
+        for file in (ROOT / "ci" / "venue_oracle_triggers.d").glob("*.tsv")
+        for line in file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    )
+    assert f"venue-oracle-triggers: {declared} declared path(s)" in proc.stdout, proc.stdout
 
 
 # --- the selection rule -----------------------------------------------------

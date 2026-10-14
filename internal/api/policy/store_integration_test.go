@@ -158,6 +158,11 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 	}
 	// Every other table the api posture declares (other route areas' tables)
 	// gets a stand-in, so readiness can hold exactly the posture.
+	// integration_credentials carries the two columns the domain role's
+	// column-scoped UPDATE grant names (a column GRANT needs the column).
+	if _, err := admin.Exec(ctx, "CREATE TABLE IF NOT EXISTS public.integration_credentials (id uuid PRIMARY KEY, is_active boolean, updated_at timestamptz)"); err != nil {
+		t.Fatalf("stand-in integration_credentials: %v", err)
+	}
 	for _, table := range postgres.APIPosture().RequiredTables {
 		if _, err := admin.Exec(ctx, "CREATE TABLE IF NOT EXISTS public."+table.TableName+" (id uuid PRIMARY KEY)"); err != nil {
 			t.Fatalf("stand-in %s: %v", table.TableName, err)

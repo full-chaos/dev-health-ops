@@ -354,3 +354,12 @@ func TestWorkItemTeamQuadrantQuerySplitsAnItemByOwnerShare(t *testing.T) {
 		t.Error("an unsupported metric gave no error")
 	}
 }
+
+// TestTeamChurnSpecSumsChurnTimesOwnerShare pins the additive rule of the team
+// churn read (CHAOS-9693, D5998): churn x owner share, summed per owning team.
+func TestTeamChurnSpecSumsChurnTimesOwnerShare(t *testing.T) {
+	churn := quadrantMetricQuery(ownerTeamSpec(TeamMetrics["churn"]), "week", "")
+	if !strings.Contains(churn, "toFloat64(sum(toFloat64(m.loc_touched) * o.owner_share)) AS value") {
+		t.Errorf("team churn query is not the sum of churn x owner share:\n%s", churn)
+	}
+}

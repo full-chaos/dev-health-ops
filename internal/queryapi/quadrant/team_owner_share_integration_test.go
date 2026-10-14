@@ -223,3 +223,50 @@ func TestTheReviewQuadrantTeamPointsWeighEachRowByOwnerShareAndConserveTheOrgRev
 
 	checkPoints(t, run([]string{"team-b"}), map[string][2]float64{"team-b": {14.0 / 1.6, (0.3*4 + 0.3*8 + 3) / 1.6}})
 }
+
+// TestTheTeamChurnQuadrantSumsEachRepositoryTimesOwnerShareAndConservesTheOrgChurn reads churn x throughput at the
+// team grain (scope_type=service, the one route that serves a team-keyed churn; CHAOS-9693, D5983, D5998). Churn is
+// additive: a team's churn is the sum over its repositories of the repository's churn x the owner's share.
+//
+//	repo-1 (team-a 0.7, team-b 0.3) 100 loc    repo-2 (team-a) 40 loc    repo-3 (team-b) 60 loc
+//
+// team-a 0.7*100 + 40 = 110, team-b 0.3*100 + 60 = 90, the org 200 (a whole point for each owner gives 140 and 160).
+func TestTheTeamChurnQuadrantSumsEachRepositoryTimesOwnerShareAndConservesTheOrgChurn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, client := crossorg.Start(ctx, t)
+	repo1, repo2, repo3 := seedOwnerShareRepos(ctx, t, admin)
+
+	var orgChurn float64
+	for _, row := range []struct {
+		repo string
+		loc  uint32
+	}{{repo1, 100}, {repo2, 40}, {repo3, 60}} {
+		orgChurn += float64(row.loc)
+		crossorg.Exec(ctx, t, admin, `INSERT INTO user_metrics_daily (org_id, repo_id, day, author_email, identity_id, team_id, loc_touched, computed_at) VALUES (?, ?, ?, ?, ?, 'team-member', ?, now())`,
+			ownerShareOrg, row.repo, ownerShareDay, row.repo+"@x", row.repo+"@x", row.loc)
+	}
+	for _, team := range []string{"team-a", "team-b"} {
+		crossorg.Exec(ctx, t, admin, `INSERT INTO work_item_metrics_daily (org_id, day, provider, work_scope_id, team_id, items_completed, wip_count_end_of_day, computed_at) VALUES (?, ?, 'github', 's', ?, 3, 2, now())`,
+			ownerShareOrg, ownerShareDay, team)
+	}
+
+	run := func(teams []string) map[string][2]float64 {
+		t.Helper()
+		resp, err := BuildResponse(ctx, client, ownerShareOrg, Params{
+			Type: "churn_throughput", ScopeType: "service", Bucket: "week", RangeDays: 30, EndDate: &ownerShareEnd, TeamIDs: teams,
+		})
+		if err != nil {
+			t.Fatalf("BuildResponse(teams %v): %v", teams, err)
+		}
+		return pointsByTeam(t, resp)
+	}
+
+	all := run(nil)
+	checkPoints(t, all, map[string][2]float64{"team-a": {110, 3}, "team-b": {90, 3}})
+	if sum, ok := conservesTotal(all, 0, orgChurn); !ok {
+		t.Errorf("sum of churn over the team points = %v, want the org's %v", sum, orgChurn)
+	}
+	// A team in view keeps its own share of a co-owned repository.
+	checkPoints(t, run([]string{"team-b"}), map[string][2]float64{"team-b": {90, 3}})
+}

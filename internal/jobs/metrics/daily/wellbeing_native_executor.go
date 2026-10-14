@@ -180,6 +180,7 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 	// team_cognitive_load, team_complexity, compounding_risk_team); the
 	// repo_patterns fallback only serves a repository no owner row resolves.
 	// A repository with no owner is "unassigned".
+	// CHAOS-9410/CHAOS-9601, D5994: this family stores its counters as unsigned integers, so it still takes the main owner(s) only, each whole; lesser owners at their own share follow with the Float64 widening (CHAOS-9601).
 	owners, err := teamownership.AuthoritativeOwnersByRepo(ctx, executor.conn, run.OrganizationID, day)
 	if err != nil {
 		return 0, fmt.Errorf("resolve authoritative repo ownership: %w", err)

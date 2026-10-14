@@ -32,11 +32,12 @@ import (
 //     day: the first owner teamownership.AuthoritativeOwnersByRepo gives, by
 //     (is_primary = 1) DESC, specificity DESC, updated_at DESC, team_id ASC.
 //     One team, not all of them, even for a repository with several main
-//     owners (a full ownership tie, D5990), because each TestOps daily table
-//     holds one row per (org, repo, day): a second team has no row to live in.
-//     The families whose tables key a row by team (team_cognitive_load_daily,
-//     team_complexity_daily, compounding_risk_daily, team_metrics_daily,
-//     ai_impact_metrics_daily) count the repository whole in each main owner.
+//     owners (a full ownership tie, D5990) or lesser owners at their own share
+//     (D5988, CHAOS-9410), because each TestOps daily table holds one row per
+//     (org, repo, day): a second team has no row to live in. This is the rule
+//     for this caller: the main owner only, ties by rank.
+//     The families whose tables key a row by team read the owner shares
+//     (teamownership.OwnerSharesByRepo; see team-attribution.md section 0.4d).
 //  3. Else NULL. A repository with no owner row is not guessed: there is no
 //     fallback to teams.repo_patterns and none to a person's team membership.
 //

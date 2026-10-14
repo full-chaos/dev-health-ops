@@ -31,7 +31,9 @@ package teamownership
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -156,6 +158,33 @@ func AuthoritativeOwnersByRepo(
 	if orgID == "" {
 		return nil, fmt.Errorf("AuthoritativeOwnersByRepo: orgID is required")
 	}
+	shares, err := OwnerSharesByRepo(ctx, conn, orgID, asOf)
+	if err != nil {
+		return nil, err
+	}
+	owners := make(map[string][]string, len(shares))
+	for repoID, repoShares := range shares {
+		for _, owner := range repoShares {
+			if owner.Main {
+				owners[repoID] = append(owners[repoID], owner.TeamID)
+			}
+		}
+	}
+	return owners, nil
+}
+
+// OwnerSharesByRepo is the owner-shares contract (CHAOS-9410, D5988): for every
+// repo team_repo_ownership claims in orgID, active as of asOf, the main owner
+// (every tied team on a full tie, D5990) plus every other owning team at its own
+// linked share (D5991: the stored share, no rounding, threshold or cap). The
+// ranking, the active-team rule and the repository resolution are those of
+// AuthoritativeOwnersByRepo, which is this read projected to its main owners.
+func OwnerSharesByRepo(
+	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
+) (map[string][]OwnerShare, error) {
+	if orgID == "" {
+		return nil, fmt.Errorf("OwnerSharesByRepo: orgID is required")
+	}
 	// Named {org_id:String}/{as_of:DateTime64(3, 'UTC')} parameters, not
 	// positional `?`: this driver round-trips a positional `?` bound to a
 	// time.Time at whole-SECOND precision (confirmed empirically -- SELECT
@@ -180,14 +209,16 @@ func AuthoritativeOwnersByRepo(
 	// owner map built without it would give a repository to a replaced team.
 	inactive, err := teamactive.LoadInactive(ctx, conn, orgID)
 	if err != nil {
-		return nil, fmt.Errorf("AuthoritativeOwnersByRepo: %w", err)
+		return nil, fmt.Errorf("OwnerSharesByRepo: %w", err)
 	}
 	rows, err := conn.Query(ctx, `
         SELECT
             toString(coalesce(o.repo_id, r.id)) AS repo_id,
             o.team_id AS team_id,
             toUInt8(o.is_primary = 1) AS main_owner,
-            o.specificity AS specificity
+            toUInt8(o.is_primary = 2) AS co_owner,
+            o.specificity AS specificity,
+            o.share AS stored_share
         FROM team_repo_ownership AS o FINAL
         LEFT JOIN (
             SELECT org_id, provider, id, repo, 1 AS matched
@@ -198,7 +229,6 @@ func AuthoritativeOwnersByRepo(
                AND lower(r.repo) = lower(o.repo_full_name)
         WHERE o.org_id = {org_id:String}
           AND (o.repo_id IS NOT NULL OR r.matched = 1)
-          AND o.is_primary != 2
           AND o.valid_from <= {as_of:DateTime64(3, 'UTC')}
           AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
         ORDER BY (o.is_primary = 1) DESC, o.specificity DESC, o.updated_at DESC, o.team_id ASC
@@ -212,12 +242,21 @@ func AuthoritativeOwnersByRepo(
 		mainOwner   uint8
 		specificity uint16
 	}
-	owners := map[string][]string{}
+	type teamRows struct {
+		main   bool
+		share  *float64
+		linked bool
+	}
 	firstRank := map[string]rank{}
+	mainTeams := map[string][]string{}
+	teams := map[string]map[string]*teamRows{}
+	order := map[string][]string{}
 	for rows.Next() {
 		var repoIDText, teamID string
 		var row rank
-		if err := rows.Scan(&repoIDText, &teamID, &row.mainOwner, &row.specificity); err != nil {
+		var coOwner uint8
+		var storedShare *float64
+		if err := rows.Scan(&repoIDText, &teamID, &row.mainOwner, &coOwner, &row.specificity, &storedShare); err != nil {
 			return nil, err
 		}
 		if inactive.Has(teamID) {
@@ -236,35 +275,125 @@ func AuthoritativeOwnersByRepo(
 		}
 		if teamID == "" {
 			// CHAOS-5141, #2255 r2 finding 1: the schema permits an empty
-			// team_id (051_team_attribution_dimensions.sql has no NOT NULL /
-			// non-empty constraint on it), and Python's
-			// load_team_repo_ownership_map skips this row entirely --
-			// `if not repo_id or not team_id: continue` (teams.py:411) --
-			// rather than let an empty string win a repo. Skipping here (not
-			// just failing to overwrite) matters: it lets a LOWER-ranked row
-			// for the SAME repo, if one exists with a real team_id, still
-			// win via the setdefault-equivalent check below -- an empty
-			// authoritative owner must never suppress a real one further
-			// down the ranked order, and must never suppress the
-			// pattern-resolver fallback the caller applies when this map
-			// has no entry for a repo at all.
+			// team_id and Python's load_team_repo_ownership_map skips the row
+			// (`if not repo_id or not team_id: continue`, teams.py:411), so a
+			// LOWER-ranked row with a real team_id can still win and the
+			// caller's pattern fallback still applies.
 			continue
 		}
-		// ORDER BY already put the best (is_primary, specificity, updated_at)
-		// row for a given repo first -- keep the FIRST team seen per repo,
-		// matching Python's setdefault semantics, and beside it every other
-		// main owner at the first row's rank.
+		byTeam := teams[repoIDText]
+		if byTeam == nil {
+			byTeam = map[string]*teamRows{}
+			teams[repoIDText] = byTeam
+		}
+		owner := byTeam[teamID]
+		if owner == nil {
+			owner = &teamRows{}
+			byTeam[teamID] = owner
+			order[repoIDText] = append(order[repoIDText], teamID)
+		}
+		if storedShare != nil {
+			owner.linked = true
+			if owner.share == nil || *storedShare > *owner.share {
+				share := *storedShare
+				owner.share = &share
+			}
+		}
+		if coOwner == 1 {
+			// A co-owner row (is_primary = 2) is a lesser owner at its own
+			// share (D5988); it never ranks as the authoritative owner.
+			continue
+		}
+		// ORDER BY put the best (is_primary, specificity, updated_at) row of a
+		// repository first: its team is the main owner, matching Python's
+		// setdefault, and beside it every other main owner at its rank.
 		first, exists := firstRank[repoIDText]
 		if !exists {
 			firstRank[repoIDText] = row
-			owners[repoIDText] = []string{teamID}
+			mainTeams[repoIDText] = []string{teamID}
 			continue
 		}
-		if first.mainOwner == 1 && row == first && !slices.Contains(owners[repoIDText], teamID) {
-			owners[repoIDText] = append(owners[repoIDText], teamID)
+		if first.mainOwner == 1 && row == first && !slices.Contains(mainTeams[repoIDText], teamID) {
+			mainTeams[repoIDText] = append(mainTeams[repoIDText], teamID)
 		}
 	}
-	return owners, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	owners := make(map[string][]OwnerShare, len(teams))
+	for repoIDText, byTeam := range teams {
+		repoOwners := ownerSharesOfRepo(order[repoIDText], mainTeams[repoIDText], func(teamID string) *float64 {
+			return byTeam[teamID].share
+		})
+		if len(repoOwners) == 0 {
+			continue
+		}
+		owners[repoIDText] = repoOwners
+		slog.Debug("repository owners with their linked shares",
+			"org_id", orgID, "repo_id", repoIDText, "owners", len(repoOwners),
+			"main_owners", len(mainTeams[repoIDText]))
+	}
+	return owners, nil
+}
+
+// OwnerShare is one owning team of a repository with its share of it.
+type OwnerShare struct {
+	TeamID string
+	// Main is a main owner: the top rank of the repository (D5432), or every
+	// tied team of a full tie (D5990). Every other owner is a lesser owner.
+	Main bool
+	// Share is the owner's linked share of the repository (D5988): the shares
+	// of one repository sum to 1.
+	Share float64
+}
+
+// ownerSharesOfRepo lists the main owners first, in rank order, then the
+// lesser owners by share (largest first, then team id). A share is the largest
+// stored share of the team's open rows, divided by the sum over ALL owners of
+// the repository; when any owner has no measured share or the measured shares
+// sum to nothing, no weight is invented and the owners split equally. This is
+// the rule of teamscope.OwnerShares (D5988) and D5991 (no rounding, no
+// threshold).
+func ownerSharesOfRepo(teamOrder, mainOwners []string, storedShare func(string) *float64) []OwnerShare {
+	if len(teamOrder) == 0 {
+		return nil
+	}
+	measured, sum := true, 0.0
+	for _, teamID := range teamOrder {
+		share := storedShare(teamID)
+		if share == nil {
+			measured = false
+			break
+		}
+		sum += *share
+	}
+	shareOf := func(teamID string) float64 {
+		if measured && sum > 0 {
+			return *storedShare(teamID) / sum
+		}
+		return 1.0 / float64(len(teamOrder))
+	}
+	result := make([]OwnerShare, 0, len(teamOrder))
+	for _, teamID := range mainOwners {
+		result = append(result, OwnerShare{TeamID: teamID, Main: true, Share: shareOf(teamID)})
+	}
+	var lesser []OwnerShare
+	for _, teamID := range teamOrder {
+		if !slices.Contains(mainOwners, teamID) {
+			lesser = append(lesser, OwnerShare{TeamID: teamID, Share: shareOf(teamID)})
+		}
+	}
+	slices.SortStableFunc(lesser, func(a, b OwnerShare) int {
+		if a.Share != b.Share {
+			if a.Share > b.Share {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.TeamID, b.TeamID)
+	})
+	return append(result, lesser...)
 }
 
 // OwnersByRepo answers membership for EVERY team at once: the active teams

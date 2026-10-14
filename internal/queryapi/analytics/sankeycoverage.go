@@ -303,6 +303,18 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 				allocationWeightExpr("wure", "wure_counts") + ", " +
 				"1.0)"
 		}
+		// CHAOS-9629 (D5988): under a team scope every weighted column of coverage is weighed by the share of the
+		// unit's repository the teams in view hold (teamscope.RepoShare, the expression the chart's measure and the
+		// explanation use), so a co-owner reads its own share of a repository in the numerators AND the
+		// denominator, never the whole of it. No team scope = weight 1 (the expression is empty).
+		var scopeShareBindings []clickhouse.Binding
+		if scoped := teamScopeIDs(filters); len(scoped) > 0 {
+			var scopeShare string
+			scopeShare, scopeShareBindings = teamscope.RepoShare(orgID, unitRepoExpr("wure", "work_unit_investments"), scoped, time.Now().UTC())
+			if scopeShare != "" {
+				repoEffortCol = "(" + repoEffortCol + " * " + scopeShare + ")"
+			}
+		}
 		repoAssignedCol := "if(wure.work_unit_id != '', wure.repo_id, work_unit_investments.repo_id)"
 
 		totalExpr = fmt.Sprintf("sum(%s)", repoEffortCol)
@@ -316,7 +328,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// DIVERGENCE from the reference number (analytics.py:707 votes); the denominator is unchanged.
 		ownedCondition, ownedBindings := teamscope.AnyTeamRepoCondition(orgID, "work_unit_investments.repo_id", time.Now().UTC())
 		ownedUnit := strings.TrimPrefix(teamscope.UnitScope(" AND "+ownedCondition, repoEffortSrc), " AND ")
-		coverageExtraBindings = ownedBindings
+		coverageExtraBindings = append(scopeShareBindings, ownedBindings...)
 		assignedTeamCountExpr = fmt.Sprintf("sumIf(%s, %s)", repoEffortCol, ownedUnit)
 		assignedRepoCountExpr = fmt.Sprintf("sumIf(%s, %s IS NOT NULL)", repoEffortCol, repoAssignedCol)
 

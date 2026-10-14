@@ -44,6 +44,16 @@ bring lines of code back.
 The Home tile dates a unit by its END day (D5933) and the Operating Review serves the same
 measure per week under the metric names `<theme>_work` (unit `work units`).
 
+### Team scope: every read weighs a repository by the owners' share
+
+On a team scope (`scope.level = team` with ids) each repository a unit touches is weighed by the share of it the
+teams in view hold (`teamscope.RepoShare`, D5988: the linked share of the main owner, the lesser share of a
+co-owner; the scoped teams that co-own one repository together read it once, never more). The REST routes, the
+explanation and the Investment page (breakdown, timeseries, sankey, flow matrix and coverage) apply this one
+weight (CHAOS-9629). Additive measures (COUNT, CHURN_LOC) sum `value x share`; an intensive measure (cycle
+time) is the share-weighted mean `sum(value x share) / sum(share)`, never `value x share` (D5998). The TEAM
+dimension keeps its ownership join and applies the same share once.
+
 ### What the REST `/investment` response says about its measure
 
 Besides `theme_distribution`, `subcategory_distribution` and the evidence-quality fields, the

@@ -114,7 +114,15 @@ recorded.
 - **Status evidence.** The deployments among them with a final status
   (succeeded or failed), K of the D deployments. With them the rate is
   measured even where no incident source exists, and a view whose deployments
-  all succeeded reads a measured zero.
+  all succeeded reads a measured zero. A GitHub deployment's status comes
+  from its statuses history (the deployments list carries none). A run
+  that cannot read it (a failed or rate-limited lookup, or a lookup skipped
+  after one) stores no status, and every later run looks the repository's
+  recent deployments with no stored status up again, whatever its window
+  (the last 30 days, at most 100 per run, newest first), until a status is
+  stored. A deployment that has no status at all stays without one and stays
+  out of K. The run logs one `github_deployments.status_lookups` line with the
+  counts: stored, empty, failed, skipped and retried.
 - **Evidence basis and base.** A measured rate stands on `incident` (incidents
   tie to the view, no deployment has a final status: failed / D), `both`
   (incidents and final statuses: failed by link or by status, each deployment

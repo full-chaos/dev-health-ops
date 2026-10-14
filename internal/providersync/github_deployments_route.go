@@ -132,7 +132,13 @@ type gitHubDeploymentStatusPayload struct {
 
 // GitHubDeploymentsRouteHandler mirrors _fetch_github_deployments_async. It
 // owns only deployments, including Python's release and PR enrichment.
-type GitHubDeploymentsRouteHandler struct{ MaxDeployments int }
+type GitHubDeploymentsRouteHandler struct {
+	MaxDeployments int
+	// Holds names the repository's stored deployments that still have no
+	// status, so a run looks those up again whatever its window (CHAOS-9678).
+	// nil: no retry (the window alone decides).
+	Holds GitHubDeploymentStatusHolds
+}
 
 func (handler GitHubDeploymentsRouteHandler) Collect(
 	ctx context.Context,
@@ -192,10 +198,19 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 	statusesRateLimited := false
 	statusLookupsSkippedForRateLimit := 0
 	enrichmentPages := 0
+	retry := handler.deploymentsWithoutStatus(ctx, claim, repoID, normalizedAt)
+	var outcomes deploymentStatusLookupOutcomes
 	for _, deployment := range deployments {
 		row, include := normalizeGitHubDeployment(claim, repoID, deployment, releases, normalizedAt)
-		if !include || deploymentOutsideWindow(row.DeployedAt, claim) {
+		if !include {
 			continue
+		}
+		_, retried := retry[row.DeploymentID]
+		if deploymentOutsideWindow(row.DeployedAt, claim) && !retried {
+			continue
+		}
+		if retried {
+			outcomes.Retried++
 		}
 		if deployment.SHA != nil && strings.TrimSpace(*deployment.SHA) != "" {
 			pulls, pullPages, _, pullErr := fetchGitHubDeploymentsPage[gitHubPullPayload](ctx, &counted, root+"/commits/"+url.PathEscape(*deployment.SHA)+"/pulls", 1)
@@ -216,6 +231,7 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 			// than multiply that cost; the summary line below reports how
 			// many were skipped this way.
 			statusLookupsSkippedForRateLimit++
+			outcomes.Skipped++
 			row.LifecycleLookupFailed = true
 		default:
 			statuses, statusPages, statusesTruncated, statusErr := fetchGitHubDeploymentsPage[gitHubDeploymentStatusPayload](ctx, &counted, root+"/deployments/"+stringValue(deployment.ID)+"/statuses", maxDeploymentStatusPages)
@@ -224,14 +240,21 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 			case statusErr != nil:
 				slog.Warn("github_deployments.status_lookup_failed", logging.ProviderIDAttr("deployment_id", row.DeploymentID), "cause", statusErr.Error())
 				row.LifecycleLookupFailed = true
+				outcomes.Failed++
 				if isRateLimitExhausted(statusErr) {
 					statusesRateLimited = true
 				}
 			case len(statuses) == 0:
+				outcomes.Empty++
 				slog.Warn("github_deployments.status_lookup_empty", logging.ProviderIDAttr("deployment_id", row.DeploymentID), "cause", "no deployment statuses returned")
 			default:
 				row.StartedAt, row.FinishedAt = deploymentLifecycleFromStatuses(statuses)
 				row.Status = deploymentLatestStatus(statuses)
+				if row.Status != nil {
+					outcomes.Stored++
+				} else {
+					outcomes.Empty++
+				}
 				if statusesTruncated {
 					// The provider had more status pages than
 					// maxDeploymentStatusPages fetched -- an earlier
@@ -248,11 +271,51 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 		slog.Warn("github_deployments.status_lookup_rate_limited_skip", "count", statusLookupsSkippedForRateLimit, "cause", "statuses lookup rate limited; remaining deployments in this sync unit skipped")
 	}
 	logDeploymentPullRequestTiers(claim, rows)
+	outcomes.log(claim, len(rows))
 	effect, err := effectBatchFromValues("deployments", EffectReadbackRequired, rows)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	return CompleteRouteBatch{Effects: []EffectBatch{effect}, Result: map[string]any{"deployments_synced": len(rows), "repo": repoPayload.FullName}, Watermark: claim.BeforeAt, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: releasePages + deploymentPages + enrichmentPages, Records: len(rows)}}, nil
+}
+
+// deploymentsWithoutStatus is the set of the repository's stored deployments
+// that still have no status and are recent enough to look up again. The read
+// is best effort: a failed read logs and leaves the window alone to decide.
+func (handler GitHubDeploymentsRouteHandler) deploymentsWithoutStatus(ctx context.Context, claim Claim, repoID string, now time.Time) map[string]struct{} {
+	if handler.Holds == nil {
+		return nil
+	}
+	ids, err := handler.Holds.DeploymentsWithoutStatus(ctx, claim.OrgID, repoID, now.Add(-deploymentStatusRetryHorizon), deploymentStatusRetryMax)
+	if err != nil {
+		slog.Warn("github_deployments.status_retry_read_failed", "org_id", claim.OrgID, "unit_id", claim.ID, "cause", err.Error())
+		return nil
+	}
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set
+}
+
+// deploymentStatusLookupOutcomes counts what the statuses lookups of one unit
+// did (CHAOS-9678), so a status that stays empty can be told apart by its
+// cause: Stored (a status was stored), Empty (the lookup succeeded and the
+// deployment has no status), Failed (the lookup failed), Skipped (not tried:
+// an earlier lookup of the unit exhausted the rate limit) and Retried (the
+// deployment was outside the window and is looked up again because its stored
+// status is empty).
+type deploymentStatusLookupOutcomes struct {
+	Stored, Empty, Failed, Skipped, Retried int
+}
+
+const deploymentStatusLookupsEvent = "github_deployments.status_lookups"
+
+func (outcomes deploymentStatusLookupOutcomes) log(claim Claim, rows int) {
+	slog.Info(deploymentStatusLookupsEvent,
+		"org_id", claim.OrgID, "unit_id", claim.ID, "rows", rows,
+		"stored", outcomes.Stored, "empty", outcomes.Empty, "failed", outcomes.Failed,
+		"skipped", outcomes.Skipped, "retried", outcomes.Retried)
 }
 
 // fetchGitHubDeploymentsPage's fourth return value reports whether the

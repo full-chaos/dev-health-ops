@@ -299,3 +299,44 @@ func TestFetchAIGovernanceRealClickHouse_RatioOfSumsUsesSelectedRawGroups(t *tes
 		t.Errorf("aiGovernanceCoverage(zero-activity team) = %v, want %v (as for no row)", got, want)
 	}
 }
+
+// CHAOS-9676: the AI impact writer stores the group-wide ai_assisted_prs,
+// agent_created_prs, human_prs and unknown_prs on EVERY bucket row of a (day,
+// repository, team, work type) group. The adoption ratio must take each count
+// from its own bucket row, not add the repeated group-wide column over the
+// bucket rows. The group below has 2 AI-assisted and 1 human pull request and
+// the writer's three rows (ai_assisted, human, unknown with no pull request);
+// adoption is 2 / 3. The planted case runs the pre-fix query shape over the
+// same rows and requires it to read 2: the overcount the gate must keep finding.
+func TestFetchAIImpactAdoptionCountsEachBucketOnceNotTheRepeatedGroupCounts(t *testing.T) {
+	ctx, admin, client := startOperatingReviewSchema(t)
+
+	repoID := "99999999-9999-4999-8999-999999999998"
+	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	insert := `INSERT INTO ai_impact_metrics_daily
+		(org_id, team_id, repo_id, work_type, day, attribution_bucket,
+		 prs_total, ai_assisted_prs, agent_created_prs, human_prs, unknown_prs, computed_at)
+		VALUES ('org-9676', 'team-a', ?, 'feature', ?, ?, ?, 2, 0, 1, 0, ?)`
+	for bucket, prs := range map[string]float64{"ai_assisted": 2, "human": 1, "unknown": 0} {
+		if err := admin.Exec(ctx, insert, repoID, day, bucket, prs, day.Add(time.Hour)); err != nil {
+			t.Fatalf("insert %s row: %v", bucket, err)
+		}
+	}
+
+	rows, err := fetchAIImpact(ctx, client, "org-9676", nil, day, day.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("fetchAIImpact: %v", err)
+	}
+	if got := aiAdoptionRatio(rows); math.Abs(got-2.0/3.0) > 1e-9 {
+		t.Errorf("AI adoption = %v, want 2/3 (each bucket counted once)", got)
+	}
+
+	var legacyAI, legacyTotal float64
+	if err := admin.QueryRow(ctx, `SELECT toFloat64(sum(ai_assisted_prs) + sum(agent_created_prs)), toFloat64(sum(prs_total))
+		FROM ai_impact_metrics_daily WHERE org_id = 'org-9676'`).Scan(&legacyAI, &legacyTotal); err != nil {
+		t.Fatalf("legacy sum: %v", err)
+	}
+	if legacyTotal == 0 || legacyAI/legacyTotal != 2.0 {
+		t.Errorf("the pre-fix sum over the stored group-wide columns reads %v / %v, want 6 / 3 = 2: the planted overcount no longer reproduces", legacyAI, legacyTotal)
+	}
+}

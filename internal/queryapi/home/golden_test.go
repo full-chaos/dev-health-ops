@@ -214,7 +214,7 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 			if isCurrentWindow(bindings) {
 				failed = uint64(fx.current * 100)
 			}
-			return &fixtureRowScanner{rows: [][]any{{uint64(100), failed, uint64(0), uint64(1), uint64(0), uint64(7)}}}, nil
+			return &fixtureRowScanner{rows: [][]any{{uint64(100), failed, uint64(0), uint64(1), uint64(0), uint64(0), uint64(0), uint64(7)}}}, nil
 
 		case strings.Contains(q, "FROM recommendations_daily"):
 			t.Fatal("recommendations_daily must not be read at org scope")

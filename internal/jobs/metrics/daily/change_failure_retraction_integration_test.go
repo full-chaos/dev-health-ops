@@ -86,13 +86,16 @@ func TestRecomputeReplacesChangeFailureCountsWhoseEvidenceIsGone(t *testing.T) {
 	}
 	for _, statement := range []string{
 		"INSERT INTO git_commits (repo_id, hash, author_name, author_email, author_when, committer_when, parents, last_synced, org_id) VALUES ('" + deploys.String() + "', 'c1', 'Ada', 'ada@example.com', '" + stamp + "', '" + stamp + "', 1, now64(3), '" + org + "')",
-		"INSERT INTO deployments (repo_id, deployment_id, status, deployed_at, last_synced, org_id) VALUES ('" + deploys.String() + "', 'd1', 'success', '" + stamp + "', now64(3), '" + org + "')",
-		"INSERT INTO deployments (repo_id, deployment_id, status, deployed_at, last_synced, org_id) VALUES ('" + deploys.String() + "', 'd2', 'success', '" + stamp + "', now64(3), '" + org + "')",
+		"INSERT INTO deployments (repo_id, deployment_id, status, deployed_at, last_synced, org_id) VALUES ('" + deploys.String() + "', 'd1', 'running', '" + stamp + "', now64(3), '" + org + "')",
+		"INSERT INTO deployments (repo_id, deployment_id, status, deployed_at, last_synced, org_id) VALUES ('" + deploys.String() + "', 'd2', 'running', '" + stamp + "', now64(3), '" + org + "')",
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// The deployments are still running, so they carry no status evidence of
+	// their own (CHAOS-9621): once the incident is gone nothing is left to
+	// measure from.
 	started := day.Add(11 * time.Hour)
 	opfixture.InsertMapping(ctx, t, conn, opfixture.Mapping{Org: org, ID: "m-gone", ServiceID: "svc-gone", RepoID: gone.String(), Revision: 1, Active: true, At: day})
 	opfixture.InsertMapping(ctx, t, conn, opfixture.Mapping{Org: org, ID: "m-deploys", ServiceID: "svc-deploys", RepoID: deploys.String(), Revision: 1, Active: true, At: day})

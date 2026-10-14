@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/deploymentstatus"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workgraphedges"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -185,6 +186,7 @@ ORDER BY repo_id`,
 // this one, so its table cannot be read for the same day), plus the persisted
 // via-deployment tier.
 func changeFailureCounts(
+	ctx context.Context,
 	deployments []workgraphedges.DeploymentRow,
 	started []IncidentRow,
 	via ViaDeploymentLinks,
@@ -209,7 +211,17 @@ func changeFailureCounts(
 	}
 	days := make([]changefailure.Deployment, 0, len(deployments))
 	for _, row := range deployments {
-		days = append(days, changefailure.Deployment{RepoID: row.RepoID, DeploymentID: row.DeploymentID})
+		days = append(days, changefailure.Deployment{RepoID: row.RepoID, DeploymentID: row.DeploymentID, Status: row.Status})
+		switch class := deploymentstatus.Classify(row.Status); class {
+		case deploymentstatus.Failed:
+			slog.Default().DebugContext(ctx, "metrics daily: change failure status rule",
+				"org_id", organizationID, "repo_id", row.RepoID, "deployment_id", row.DeploymentID,
+				"status", row.Status, "rule", "own status is failed: a failed change, counted once with any incident link")
+		case deploymentstatus.Canceled:
+			slog.Default().DebugContext(ctx, "metrics daily: change failure status rule",
+				"org_id", organizationID, "repo_id", row.RepoID, "deployment_id", row.DeploymentID,
+				"status", row.Status, "rule", "own status is canceled: not a deployment, not a change")
+		}
 	}
 	ties := make([]changefailure.IncidentTie, 0, len(started)+len(via.Ties))
 	for _, row := range started {

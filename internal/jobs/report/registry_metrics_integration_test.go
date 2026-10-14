@@ -236,8 +236,9 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 	// order of that list. An input that is a registry metric of its own keeps
 	// the value it was seeded with above.
 	ruleInputValues := map[string][]float64{
-		// 10 deployments, 3 of them linked to an incident, 4 incidents.
-		"change_failure_rate": {10, 2, 1, 3, 1},
+		// 10 deployments, 3 of them linked to an incident, 4 incidents, none
+		// failed or finished by status alone.
+		"change_failure_rate": {10, 2, 1, 3, 1, 0, 0},
 		// 10 merged pull requests, 4 reviewed, 1 of those with changes requested.
 		"pr_rework_ratio": {10, 4, 1, 0},
 	}

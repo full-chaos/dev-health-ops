@@ -152,6 +152,7 @@ type OwnershipCompactionOrg struct {
 	RowsAppearedDuringRun  int `json:"rows_appeared_during_run"`
 	GroupsDriftedDuringRun int `json:"groups_drifted_during_run"`
 	RowsNewerThanTheDelete int `json:"rows_newer_than_the_delete"`
+	RowsChangedSinceTheRun int `json:"rows_changed_since_the_run"`
 
 	Differential OwnershipCompactionDifferential `json:"differential"`
 	ElapsedMS    int64                           `json:"elapsed_ms"`
@@ -798,6 +799,7 @@ func (org *OwnershipCompactionOrg) add(other OwnershipCompactionOrg) {
 	org.RowsAppearedDuringRun += other.RowsAppearedDuringRun
 	org.GroupsDriftedDuringRun += other.GroupsDriftedDuringRun
 	org.RowsNewerThanTheDelete += other.RowsNewerThanTheDelete
+	org.RowsChangedSinceTheRun += other.RowsChangedSinceTheRun
 	org.Differential.GroupsTotal += other.Differential.GroupsTotal
 	org.Differential.GroupsChecked += other.Differential.GroupsChecked
 	org.Differential.InstantsChecked += other.Differential.InstantsChecked
@@ -922,13 +924,14 @@ func compactOwnershipOrg(
 	report.setAfter(final, spec.source)
 	finish := func(err error) (OwnershipCompactionOrg, error) {
 		report.ElapsedMS = time.Since(started).Milliseconds()
+		failed := err != nil
 		logger.InfoContext(ctx, "ownership_interval_compaction.table",
 			"rows_before", report.RowsBefore, "closed_before", report.ClosedBefore, "closed_after", report.ClosedAfter,
 			"runs_found", report.RunsFound, "runs_merged", report.RunsMerged, "rows_merged", report.RowsMerged,
 			"rows_kept", report.RowsKept, "runs_kept_multi_source", report.RunsKeptMultiSource,
 			"runs_changed_during_run", report.RunsChangedDuringRun, "tombstones_found", report.TombstonesFound,
 			"tombstones_dropped", report.TombstonesDropped, "tombstones_kept_anchor", report.TombstonesKeptAnchor, "tombstones_kept_latest", report.TombstonesKeptLatest, "tombstones_kept_stamp", report.TombstonesKeptStamp,
-			"differential_mismatches", report.Differential.Mismatches, "elapsed_ms", report.ElapsedMS, "error", err != nil)
+			"differential_mismatches", report.Differential.Mismatches, "elapsed_ms", report.ElapsedMS, "failed", failed)
 		return report, err
 	}
 	if report.Differential.Mismatches > 0 {
@@ -961,9 +964,13 @@ func compactOwnershipOrg(
 		return finish(err)
 	}
 
+	// The rows to delete, each as the TOMBSTONE this run expects to find: a pre-existing tombstone as it is, an
+	// inner row as phase A wrote it. A physical version newer than that stamp is a sync's and must survive.
 	deletes := append([]ownershipIntervalRow(nil), plan.drops...)
 	for _, run := range applied {
-		deletes = append(deletes, run.inner()...)
+		for _, inner := range run.inner() {
+			deletes = append(deletes, tombstoneOf(inner))
+		}
 	}
 	survivors, err := deleteOwnershipTombstones(ctx, conn, spec, orgID, deletes)
 	report.RowsNewerThanTheDelete = survivors
@@ -1203,7 +1210,11 @@ func deleteOwnershipTombstones(
 		}
 		// The delete names the physical VERSIONS (key and updated_at) that are on disk now, not the keys: a
 		// version that a sync inserts after this read has another updated_at and survives the mutation.
-		versions, err := physicalVersionTokens(ctx, conn, spec, scope, args)
+		expected := make(map[string]int64, end-start)
+		for _, row := range rows[start:end] {
+			expected[row.token()] = row.UpdatedAt.UnixMilli()
+		}
+		versions, err := physicalVersionTokens(ctx, conn, spec, scope, args, expected)
 		if err != nil {
 			return survivors, err
 		}
@@ -1246,7 +1257,8 @@ const ownershipCompactionVersionsMatch = `(provider, %s, team_id, toString(sourc
 	`FROM (SELECT splitByChar(':', p) AS parts FROM (SELECT arrayJoin({versions:Array(String)}) AS p)))`
 
 // physicalVersionTokens lists every physical row (not FINAL) of the keys as key token + updated_at.
-func physicalVersionTokens(ctx context.Context, conn driver.Conn, spec ownershipCompactionSpec, scope string, args []any) ([]string, error) {
+// A version newer than the stamp the run expects for its key (expected, in ms) is left out: it is a sync's write.
+func physicalVersionTokens(ctx context.Context, conn driver.Conn, spec ownershipCompactionSpec, scope string, args []any, expected map[string]int64) ([]string, error) {
 	rows, err := conn.Query(ctx, "SELECT provider, "+spec.natural+", team_id, toString(source), valid_from, toUnixTimestamp64Milli(updated_at) FROM "+spec.table+" WHERE "+scope, args...)
 	if err != nil {
 		return nil, fmt.Errorf("%w: list versions: %v", ErrOwnershipCompactionMutation, err)
@@ -1261,6 +1273,9 @@ func physicalVersionTokens(ctx context.Context, conn driver.Conn, spec ownership
 			return nil, fmt.Errorf("%w: list versions: %v", ErrOwnershipCompactionMutation, err)
 		}
 		row := ownershipIntervalRow{Provider: provider, Natural: natural, TeamID: team, Source: source, ValidFrom: from.UTC()}
+		if bound, known := expected[row.token()]; known && stamp > bound {
+			continue
+		}
 		out = append(out, row.token()+":"+strconv.FormatInt(stamp, 10))
 	}
 	if err := rows.Err(); err != nil {
@@ -1284,6 +1299,13 @@ func RestoreOwnershipCompaction(ctx context.Context, conn driver.Conn, runID str
 		return OwnershipCompactionOutcome{}, err
 	}
 	outcome := OwnershipCompactionOutcome{RunID: runID, Apply: opts.Apply, Restore: true}
+	saved, err := backupRowsOfRun(ctx, conn, specs, runID)
+	if err != nil {
+		return outcome, err
+	}
+	if saved == 0 {
+		return outcome, fmt.Errorf("%w: no backup rows for this run id", ErrOwnershipCompactionBackup)
+	}
 	for _, spec := range specs {
 		if err := verifyOwnershipTableShape(ctx, conn, spec); err != nil {
 			return outcome, err
@@ -1320,6 +1342,29 @@ func RestoreOwnershipCompaction(ctx context.Context, conn driver.Conn, runID str
 	return outcome, nil
 }
 
+// backupRowsOfRun counts the rows the run saved, over the backup tables that exist (a run that touched one table
+// created only that table's backup).
+func backupRowsOfRun(ctx context.Context, conn driver.Conn, specs []ownershipCompactionSpec, runID string) (uint64, error) {
+	var total uint64
+	for _, spec := range specs {
+		var exists uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = {name:String}",
+			clickhouse.Named("name", spec.backupTable())).Scan(&exists); err != nil {
+			return 0, fmt.Errorf("%w: %v", ErrOwnershipCompactionBackup, err)
+		}
+		if exists == 0 {
+			continue
+		}
+		var count uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM "+spec.backupTable()+" WHERE run_id = {run_id:String}",
+			clickhouse.Named("run_id", runID)).Scan(&count); err != nil {
+			return 0, fmt.Errorf("%w: %v", ErrOwnershipCompactionBackup, err)
+		}
+		total += count
+	}
+	return total, nil
+}
+
 func restoreOwnershipOrg(
 	ctx context.Context, conn driver.Conn, spec ownershipCompactionSpec, orgID string, ordinal int, runID string, apply bool,
 ) (OwnershipCompactionOrg, error) {
@@ -1351,8 +1396,27 @@ func restoreOwnershipOrg(
 	for _, row := range current {
 		now[row.sortKey()] = row
 	}
+	// A key that a sync has written since the run (a current version newer than the newest version the run
+	// saw, plus the 1 ms the run itself adds) is left as the sync made it: restoring over it would put the old
+	// shape back on top of the newer fact. All rows of that key are skipped, so the key is never half restored.
+	newest := map[string]time.Time{}
+	for _, row := range saved {
+		if row.UpdatedAt.After(newest[row.keyOf()]) {
+			newest[row.keyOf()] = row.UpdatedAt
+		}
+	}
+	changedSince := map[string]bool{}
+	for _, row := range saved {
+		if have, ok := now[row.sortKey()]; ok && have.UpdatedAt.After(newest[row.keyOf()].Add(time.Millisecond)) {
+			changedSince[row.keyOf()] = true
+		}
+	}
 	var restore []ownershipIntervalRow
 	for _, row := range saved {
+		if changedSince[row.keyOf()] {
+			report.RowsChangedSinceTheRun++
+			continue
+		}
 		if have, ok := now[row.sortKey()]; ok && sameInstant(have.ValidTo, row.ValidTo) && have.shape() == row.shape() {
 			continue
 		}

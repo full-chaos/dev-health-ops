@@ -112,11 +112,13 @@ func newCmpFixture(t *testing.T) cmpFixture {
 	f := cmpFixture{t: t, ctx: ctx, conn: conn, orgA: "00000000-0000-4000-8000-0000000000a1", orgB: "00000000-0000-4000-8000-0000000000b2"}
 	repo := repoSpec()
 	project := projectSpec()
-	// Stale physical versions are part of the fixture (they are on prod until a merge removes them): keep the
-	// background merges off the two tables so the physical rows are the rows that were inserted.
-	for _, table := range []string{OwnershipCompactionProjectTable, OwnershipCompactionRepoTable} {
-		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
-			t.Fatalf("stop merges: %v", err)
+	// The export test keeps the stale physical versions as inserted: no background merge on the two tables. Only
+	// there: ALTER TABLE ... DELETE runs in the merge pool and would wait for ever with merges stopped.
+	if os.Getenv("OWNERSHIP_COMPACTION_EXPORT_DIR") != "" {
+		for _, table := range []string{OwnershipCompactionProjectTable, OwnershipCompactionRepoTable} {
+			if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
+				t.Fatalf("stop merges: %v", err)
+			}
 		}
 	}
 
@@ -802,6 +804,15 @@ func TestCompactOwnershipIntervalsFailedMutationLeavesTheBackupAndTheAnswers(t *
 	}}
 	opts := cmpOptions(f.orgA)
 	opts.Table = OwnershipCompactionRepoTable
+	watermarks := func() map[string]string {
+		out := map[string]string{}
+		for _, line := range f.acrRepositoryEdge(f.orgA) {
+			parts := strings.SplitN(line, " | ", 2)
+			out[strings.SplitN(parts[0], " latest_repo=", 2)[0]] = strings.TrimPrefix(parts[1], "watermark=")
+		}
+		return out
+	}
+	beforeRun := watermarks()
 	outcome, err := CompactOwnershipIntervals(f.ctx, broken, opts)
 	if !errors.Is(err, ErrOwnershipCompactionMutation) {
 		t.Fatalf("a failed mutation must fail loudly, got %v", err)
@@ -811,9 +822,23 @@ func TestCompactOwnershipIntervalsFailedMutationLeavesTheBackupAndTheAnswers(t *
 	}
 	// The tombstones are inert: the answers are the answers of the rows before.
 	f.assertSameAnswers(f.orgA, instants, before, "between phase A and phase B")
+	midRun := watermarks()
 	// A new run finishes the job: it finds the tombstones and the rest.
 	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, cmpOptions(f.orgA)); err != nil {
 		t.Fatalf("resume: %v", err)
+	}
+	// The watermark of every key after the resume is never below its value BEFORE the first run (the tool's own
+	// tombstones raised some of them by 1 ms while the run was half done; that excess goes with them, and no cursor
+	// that was pending before the run can have moved past a key it had not read).
+	for group, was := range beforeRun {
+		if now := watermarks()[group]; now < was {
+			t.Fatalf("after the resume the watermark of %s is below its value before the run: %s -> %s", group, was, now)
+		}
+	}
+	for group, mid := range midRun {
+		if now := watermarks()[group]; now < mid {
+			t.Logf("BACKREF resume: the watermark of %s is %s after the resume, %s while the run was half done (the tool's own +1 ms tombstone; never below the value before the run %s)", group, now, mid, beforeRun[group])
+		}
 	}
 	f.assertSameAnswers(f.orgA, instants, before, "after the resume")
 	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND valid_to = valid_from", f.orgA); got != 3 {
@@ -851,6 +876,65 @@ func TestCompactOwnershipIntervalsDeleteSparesAVersionWrittenAfterTheRead(t *tes
 	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = 'acme/api' AND team_id = ? AND valid_from = ? AND updated_at = ?",
 		f.orgA, cmpTeam1, cmpDay(1), cmpDay(5000)); got != 1 {
 		t.Fatalf("the sync's row was deleted by the compaction: %d", got)
+	}
+}
+
+// A sync restamps a tombstone the run means to drop (a newer tombstone version) after phase A. The delete is bounded
+// by the stamp it expects for that key, so the sync's version survives and the key's maximum does not fall.
+func TestCompactOwnershipIntervalsDeleteSparesANewerTombstoneVersion(t *testing.T) {
+	f := newCmpFixture(t)
+	opts := cmpOptions(f.orgA)
+	opts.Table = OwnershipCompactionRepoTable
+	// The droppable tombstone of the fixture: acme/web, gh:beta, valid_from day 3.
+	opts.afterInsert = func(string) {
+		newer := cmpRepoRow(cmpTeam2, cmpRepo2, "acme/web", 3, 3, 1, 1)
+		newer.UpdatedAt = cmpDay(9000)
+		f.insert(repoSpec(), f.orgA, []ownershipIntervalRow{newer})
+	}
+	outcome, err := CompactOwnershipIntervals(f.ctx, f.conn, opts)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if repo := cmpTable(t, outcome, OwnershipCompactionRepoTable); repo.RowsNewerThanTheDelete < 1 {
+		t.Fatalf("the spared version must be reported: %+v", repo)
+	}
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership WHERE org_id = ? AND repo_full_name = 'acme/web' AND team_id = ? AND valid_from = ? AND updated_at = ?",
+		f.orgA, cmpTeam2, cmpDay(3), cmpDay(9000)); got != 1 {
+		t.Fatalf("the sync's newer tombstone version was deleted: %d", got)
+	}
+}
+
+// A run is restored only where no sync has written since: a newer sync fact is never put back to the old shape.
+func TestCompactOwnershipIntervalsRestoreLeavesAKeyASyncChanged(t *testing.T) {
+	f := newCmpFixture(t)
+	opts := cmpOptions(f.orgA)
+	opts.Table = OwnershipCompactionRepoTable
+	outcome, err := CompactOwnershipIntervals(f.ctx, f.conn, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A sync rewrites the merged row of acme/api / gh:alpha (valid 01-01..01-06) with a newer share.
+	synced := cmpRepoRow(cmpTeam1, cmpRepo1, "acme/api", 0, 5, 0.95, 1)
+	synced.UpdatedAt = cmpDay(9000)
+	f.insert(repoSpec(), f.orgA, []ownershipIntervalRow{synced})
+	opts.Apply = true
+	restored, err := RestoreOwnershipCompaction(f.ctx, f.conn, outcome.RunID, opts)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if repo := cmpTable(t, restored, OwnershipCompactionRepoTable); repo.RowsChangedSinceTheRun == 0 {
+		t.Fatalf("the skipped rows must be reported: %+v", repo)
+	}
+	var share float64
+	if err := f.conn.QueryRow(f.ctx, "SELECT share FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = 'acme/api' AND team_id = ? AND valid_from = ?",
+		f.orgA, cmpTeam1, cmpDay(0)).Scan(&share); err != nil {
+		t.Fatal(err)
+	}
+	if share != 0.95 {
+		t.Fatalf("the restore overwrote the sync's newer fact: share %v", share)
+	}
+	if _, err := RestoreOwnershipCompaction(f.ctx, f.conn, "compact-does-not-exist", opts); !errors.Is(err, ErrOwnershipCompactionBackup) {
+		t.Fatalf("an unknown run id must be refused, got %v", err)
 	}
 }
 

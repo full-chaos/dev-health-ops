@@ -1706,7 +1706,8 @@ it will rewrite or drop into `<table>_compaction_bak` (created if missing) and
 checks the copy is not empty and has the expected row count. A key that a sync
 wrote between the plan and the insert is skipped and counted
 (`runs_changed_during_run`). `--restore-run <run_id> --apply` puts the rows of a
-run back from the backup table: the FINAL rows are restored with an `updated_at` above the current version, the superseded stale physical versions (which no FINAL reader sees) are not, and the backup of a project row keeps the original `last_synced` (a restored or merged row gets a fresh server stamp). The tool never drops the backup table: it stays
+run back from the backup table: the FINAL rows are restored with an `updated_at` above the current version, a key that a sync has written since the run is left as the sync made it (`rows_changed_since_the_run`, never half restored), an unknown run id is refused,
+the superseded stale physical versions (which no FINAL reader sees) are not restored, and the backup of a project row keeps the original `last_synced` (a restored or merged row gets a fresh server stamp). The tool never drops the backup table: it stays
 until the next pin readback after the step and is dropped on the word of the GWC
 lead. In production the step runs inside a roll window (minutes :10-:33 or
 :46-:55 of the hour, between the hourly syncs), with the workers running.
@@ -1720,7 +1721,7 @@ organization (numbered, never named) and in total: `rows_before`/`rows_after`,
 `open_*`, `closed_*`, `tombstones_*`, `close_before_open_*`, `runs_found`,
 `runs_merged`, `rows_merged`, `rows_kept`, `runs_kept_multi_source`,
 `runs_changed_during_run`, `gaps`, `overlaps`, `tombstones_found`,
-`tombstones_dropped`, `tombstones_kept_anchor`, `tombstones_kept_latest`, `tombstones_kept_stamp`, `backup_rows`, `rows_newer_than_the_delete`, `differential`
+`tombstones_dropped`, `tombstones_kept_anchor`, `tombstones_kept_latest`, `tombstones_kept_stamp`, `backup_rows`, `rows_newer_than_the_delete`, `rows_changed_since_the_run`, `differential`
 (`groups_total`, `groups_checked`, `instants_checked`, `mismatches`) and
 `elapsed_ms`. A second `--apply` reports zero runs merged and writes nothing.
 

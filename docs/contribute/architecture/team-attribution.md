@@ -1341,7 +1341,8 @@ project (section 0.1): a native team key gives one team.
   An item has exactly one `1` row, so an organization total counts it once. A team view (a filter on one team)
   and a team(s) view (a filter on several teams) read `IN (1, 2)` and show the item under each of their teams
   that owns it. A team-grouped view (one row, point or node per team, not summed into an organization total)
-  also reads `IN (1, 2)`. Team-scoped and team-grouped readers today: the issues drilldown with a team scope
+  also reads `IN (1, 2)`. The team cycle/throughput quadrant is the exception that weighs: it splits the item among
+  its teams (CHAOS-9562, D5998), see "The team quadrants weigh by owner share" below. Team-scoped and team-grouped readers today: the issues drilldown with a team scope
   (`internal/queryapi/drilldown/issues.go`), the aggregated-flame throughput with a team
   (`internal/queryapi/aggflame/clickhouse.go`), the team cycle/throughput quadrant
   (`internal/queryapi/quadrant/quadrant.go`, one point per team) and the TEAM and REPO flow-matrix dimensions
@@ -1396,9 +1397,25 @@ project (section 0.1): a native team key gives one team.
   `user_metrics_daily` metrics (review load, review latency, and churn, which the churn/throughput pair forces to the
   repository grain) group a row by the team that owns its repository now (`teamscope.OwnerShares`, active teams only),
   never by the row's stored `team_id`: that id is the PERSON's membership team. A team's review load and review latency
-  are the reviews in the repositories the team owns, not the reviews by its members. A repository of several owners is
-  a point of each owner; a repository with no owner is no team's point. Selected teams narrow the owners. Asserted on
-  real ClickHouse by `TestTheTeamReviewQuadrantGroupsByTheRepositoryOwner`.
+  are the reviews in the repositories the team owns, not the reviews by its members. A repository with no owner is no
+  team's point. Selected teams narrow the owners, after the shares are computed over every owner. Asserted on real
+  ClickHouse by `TestTheTeamReviewQuadrantGroupsByTheRepositoryOwner`.
+- **The team quadrants weigh by owner share (CHAOS-9562, D5983, D5998).** A co-owned unit is split among its owners
+  so the team points conserve the organization's total (the sum of the additive axis over the team points equals the
+  organization's count) and a sole owner reads the unweighted value.
+  - Review load x review latency: each `user_metrics_daily` row of a repository has the weight `owner_share` of the
+    owning team (the shares of one repository's owners sum to 1). The load is the sum of reviews x share over the sum,
+    over the distinct reviewers of the team's point, of the reviewer's largest share in it; the latency is the
+    share-weighted mean over the rows that carry a latency. Asserted by
+    `TestTheReviewQuadrantTeamPointsWeighEachRowByOwnerShareAndConserveTheOrgReviews`.
+  - Cycle time x throughput: the attribution row has no share column, so an item's weight for a team is the team's
+    `owner_share` of the item's repository, renormalised over the item's teams so the weights of one item sum to 1. A
+    team that does not own the item's repository (a project-only co-owner) holds no repository share: no weight is
+    invented and the item's teams split it equally. An item of one team weighs 1. Throughput is the sum of the item
+    weights over the team's distinct items; cycle time is the weighted mean over the items that have one. Asserted by
+    `TestTheCycleThroughputTeamPointsSplitAnItemByOwnerShareAndConserveTheOrgTotal`.
+  - Known limit: owners whose team is inactive hold a share that no point shows, so the organization's units in a
+    repository with an inactive owner are partly in no point.
 - **The person quadrant reads only that person's own rows (CHAOS-9343).** At the person grain the quadrant resolves the
   person id to the person's identity strings and binds each read (`user_metrics_daily.identity_id`,
   `work_item_user_metrics_daily.user_identity`) to them. There is no membership-team lookup (`identities.team_ids`) and

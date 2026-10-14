@@ -21,10 +21,11 @@ import (
 //     repository), p2 stores team-old (inactive now). Both are team-own's.
 //   - repo-none (owned by nobody): p3 stores team-own. No team's point.
 //   - repo-retired (owned by team-retired, inactive now): p4. No point.
-//   - repo-shared (owned by team-own AND team-co): p5. A point of each owner.
+//   - repo-shared (owned by team-own AND team-co, no linked share measured, so
+//     0.5 each): p5. A point of each owner, at half weight (CHAOS-9562).
 //
-// team-own: review load (6+2+3)/3, review latency (4+8+5)/3.
-// team-co: review load 3, review latency 5.
+// team-own: review load (6+2+0.5*3)/(1+1+0.5), review latency (4+8+0.5*5)/(1+1+0.5).
+// team-co: review load 0.5*3/0.5, review latency 5.
 func TestTheTeamReviewQuadrantGroupsByTheRepositoryOwner(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -90,8 +91,8 @@ func TestTheTeamReviewQuadrantGroupsByTheRepositoryOwner(t *testing.T) {
 		teams []string
 		want  string
 	}{
-		{"every team", nil, "[team-co(Name of team-co) load=3.0000 latency=5.0000 team-own(Name of team-own) load=3.6667 latency=5.6667]"},
-		{"the owner selected", []string{"team-own"}, "[team-own(Name of team-own) load=3.6667 latency=5.6667]"},
+		{"every team", nil, "[team-co(Name of team-co) load=3.0000 latency=5.0000 team-own(Name of team-own) load=3.8000 latency=5.8000]"},
+		{"the owner selected", []string{"team-own"}, "[team-own(Name of team-own) load=3.8000 latency=5.8000]"},
 		{"a co-owner selected", []string{"team-co"}, "[team-co(Name of team-co) load=3.0000 latency=5.0000]"},
 		{"a membership-only team selected", []string{"team-member"}, "[]"},
 	} {

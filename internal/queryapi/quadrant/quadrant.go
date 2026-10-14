@@ -86,6 +86,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -126,6 +127,12 @@ type MetricSpec struct {
 	// OwnerTeam groups the rows by the team that OWNS the row's repository
 	// (teamscope.OwnerShares, alias o), not by a team id the row stores.
 	OwnerTeam bool
+	// ReaderExpr, set with OwnerTeam, makes the read a ratio of a weighted sum
+	// to a weighted count of distinct readers: ValueExpr is the numerator over
+	// the rows of one reader, ReaderWeightExpr is that reader's weight, and the
+	// value is sum(numerator) / sum(reader weight) over the readers of the group.
+	ReaderExpr       string
+	ReaderWeightExpr string
 	// DayExpr is the UTC date a row falls on, for the window filter and the
 	// bucket. Empty means the daily table's own day column.
 	DayExpr string
@@ -188,15 +195,24 @@ var TeamMetrics = map[string]MetricSpec{
 		EntityExpr: "m.team_id", LabelExpr: teamLabelExpr,
 		WhereClause: "AND m.team_id != ''", Transform: identity,
 	},
+	// review_load and review_latency weigh each row of a repository by the
+	// owner's share of it (owner_share, D5998, CHAOS-9562), so the weights of
+	// one repository's owners sum to 1 and the team points conserve the
+	// organization's reviews. The load is sum(share x reviews) over the share
+	// held by each distinct reviewer (the reviewer's largest share in the
+	// group); the latency is the share-weighted mean over the rows that carry
+	// one. A sole owner (share 1 everywhere) reads the unweighted values.
 	"review_load": {
 		Metric: "review_load", Label: "Review Load", Unit: "reviews",
-		Table: "user_metrics_daily AS m", ValueExpr: "sum(m.reviews_given) / nullIf(countDistinct(m.identity_id), 0)",
+		Table: "user_metrics_daily AS m", ValueExpr: "sum(toFloat64(m.reviews_given) * o.owner_share)",
+		ReaderExpr: "m.identity_id", ReaderWeightExpr: "max(o.owner_share)",
 		EntityExpr: ownerTeamIDExpr, LabelExpr: ownerTeamLabelExpr,
 		Transform: identity, OwnerTeam: true,
 	},
 	"review_latency": {
 		Metric: "review_latency", Label: "Review Latency", Unit: "hours",
-		Table: "user_metrics_daily AS m", ValueExpr: "avg(m.pr_first_review_p50_hours)",
+		Table:      "user_metrics_daily AS m",
+		ValueExpr:  "sum(m.pr_first_review_p50_hours * o.owner_share) / nullIf(sum(o.owner_share), 0)",
 		EntityExpr: ownerTeamIDExpr, LabelExpr: ownerTeamLabelExpr,
 		WhereClause: "AND m.pr_first_review_p50_hours IS NOT NULL",
 		Transform:   identity, OwnerTeam: true,
@@ -209,10 +225,11 @@ const (
 )
 
 // ownerTeamRead is an OwnerTeam spec with the ownership join it reads through:
-// each row of a repository counts for every ACTIVE team that owns the repository
-// now (a repository of two owners is a point of each; no reader sums the team
-// points), and a repository with no owner gives no team a point. selectedTeams
-// narrows the owners to the teams of the request.
+// each row of a repository is a row of every ACTIVE team that owns the
+// repository now (a repository of two owners is a point of each), and a
+// repository with no owner gives no team a point. The spec's value expression
+// reads o.owner_share, the weight of the row in the team's point. selectedTeams
+// narrows the owners to the teams of the request AFTER the shares are computed.
 func ownerTeamRead(spec MetricSpec, orgID string, selectedTeams []string, asOf time.Time) (MetricSpec, extraScope) {
 	shares, bindings := teamscope.OwnerShares(orgID, selectedTeams, asOf)
 	spec.JoinClause = "INNER JOIN " + shares + " AS o ON o.owner_repo_id = toString(m.repo_id)"
@@ -465,6 +482,31 @@ func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string, scopes ...e
 		scopeSQL = "\nAND m.team_id = {team_id:String}"
 	}
 	dayExpr := specDayExpr(spec)
+	if spec.ReaderExpr != "" {
+		return fmt.Sprintf(`
+        SELECT
+            bucket,
+            entity_id,
+            entity_label,
+            toFloat64(sum(reader_value) / nullIf(sum(reader_weight), 0)) AS value
+        FROM (
+            SELECT
+                %s AS bucket,
+                %s AS entity_id,
+                %s AS entity_label,
+                %s AS reader,
+                %s AS reader_value,
+                %s AS reader_weight
+            FROM %s%s
+            WHERE %s >= {start_day:Date} AND %s < {end_day:Date}%s
+              AND org_id = {org_id:String}%s%s%s
+            GROUP BY bucket, entity_id, entity_label, reader
+        )
+        GROUP BY bucket, entity_id, entity_label
+        ORDER BY bucket
+    `, bucketExpr(bucket, dayExpr), spec.EntityExpr, spec.LabelExpr, spec.ReaderExpr, spec.ValueExpr, spec.ReaderWeightExpr,
+			dedupFrom(spec.Table), joinSQL, dayExpr, dayExpr, whereSQL, scopeSQL, liveRowClause(spec.Table), extra.SQL)
+	}
 	return fmt.Sprintf(`
         SELECT
             %s AS bucket,
@@ -533,29 +575,68 @@ func fetchQuadrantMetricIn(ctx context.Context, client QueryClient, spec MetricS
 
 // teamScopedWorkItemTeamAttributionSource reads an item's latest attribution
 // rows of its primary team (is_primary = 1) and of each co-owner team
-// (is_primary = 2, teamattribution.AttributionCoOwner). Its one caller
-// (fetchWorkItemTeamQuadrantMetric) plots one point per team, so an item of a
-// project with several owning teams counts for each of those teams; no reader
-// here sums the points into an organization total.
-const teamScopedWorkItemTeamAttributionSource = `(
+// (is_primary = 2, teamattribution.AttributionCoOwner), one row per (item,
+// team), with the weight of the team in the item: the item counts once in the
+// organization, split among its teams (D5983, D5998, CHAOS-9562).
+//
+// The weight of a team is its owner_share of the item's repository
+// (teamscope.OwnerShares), renormalised over the item's teams so the weights of
+// one item sum to 1. When any team of the item is not an owner of the item's
+// repository (a project-only co-owner holds no repository share), or the shares
+// sum to nothing, no weight is invented: the teams split the item equally, the
+// documented fallback. An item of one team weighs 1. The shares are computed
+// over EVERY owner of the repository and the item's teams over EVERY team of the
+// item, before any selected-team narrowing, so a team in view keeps its own
+// share of the item, never the whole item.
+const teamScopedWorkItemTeamAttributionSourceFmt = `(
     SELECT
-        work_item_id,
-        team_id,
-        team_name
-    FROM work_item_team_attributions FINAL
-    WHERE org_id = {org_id:String}
-      AND is_primary IN (1, 2)
-      AND (work_item_id, computed_at) IN (
-          SELECT work_item_id, max(computed_at)
-          FROM work_item_team_attributions
-          WHERE org_id = {org_id:String}
-          GROUP BY work_item_id
-      )
+        w.work_item_id AS work_item_id,
+        w.team_id AS team_id,
+        w.team_name AS team_name,
+        if(
+            sum(w.owner_matched) OVER (PARTITION BY w.work_item_id) = count() OVER (PARTITION BY w.work_item_id)
+                AND sum(w.owner_share) OVER (PARTITION BY w.work_item_id) > 0,
+            w.owner_share / sum(w.owner_share) OVER (PARTITION BY w.work_item_id),
+            1.0 / count() OVER (PARTITION BY w.work_item_id)
+        ) AS weight
+    FROM (
+        SELECT
+            a.work_item_id AS work_item_id,
+            a.tid AS team_id,
+            a.team_name AS team_name,
+            s.owner_share AS owner_share,
+            s.owner_matched AS owner_matched
+        FROM (
+            SELECT
+                work_item_id,
+                ifNull(team_id, '') AS tid,
+                any(team_name) AS team_name,
+                any(repo_id) AS repo_id
+            FROM work_item_team_attributions FINAL
+            WHERE org_id = {org_id:String}
+              AND is_primary IN (1, 2)
+              AND team_id IS NOT NULL
+              AND team_id != ''
+              AND (work_item_id, computed_at) IN (
+                  SELECT work_item_id, max(computed_at)
+                  FROM work_item_team_attributions
+                  WHERE org_id = {org_id:String}
+                  GROUP BY work_item_id
+              )
+            GROUP BY work_item_id, tid
+        ) AS a
+        LEFT JOIN %s AS s
+          ON s.owner_repo_id = toString(a.repo_id) AND s.owner_team_id = a.tid
+    ) AS w
 )`
 
 // fetchWorkItemTeamQuadrantMetric ports fetch_work_item_team_quadrant_metric
-// (queries/quadrant.py:61-108) verbatim -- the cycle_throughput/team
-// attribution-quirk reader.
+// (queries/quadrant.py:61-108) -- the cycle_throughput/team attribution-quirk
+// reader -- with one declared difference: an item of several teams is split
+// among them by owner share (teamScopedWorkItemTeamAttributionSourceFmt), so
+// throughput is the sum over the team's distinct items of the item weight and
+// cycle time is the weighted mean over its items, never the whole item for each
+// team (CHAOS-9562).
 //
 // UNSAFE STATEMENT: this query was a `WITH team_activity AS
 // (...) SELECT ...` CTE until this fix: dev-health-go's client-side
@@ -569,37 +650,80 @@ const teamScopedWorkItemTeamAttributionSource = `(
 // exactly once (in the outer FROM), so inlining it as an ordinary
 // derived-table subquery is a purely mechanical, semantically identical
 // rewrite.
-func fetchWorkItemTeamQuadrantMetric(ctx context.Context, client QueryClient, metric string, startDay, endDay time.Time, bucket, orgID string) ([]metricRow, error) {
-	return fetchWorkItemTeamQuadrantMetricIn(ctx, client, metric, startDay, endDay, bucket, orgID, extraScope{})
+func fetchWorkItemTeamQuadrantMetric(ctx context.Context, client QueryClient, metric string, startDay, endDay time.Time, bucket, orgID string, asOf time.Time) ([]metricRow, error) {
+	return fetchWorkItemTeamQuadrantMetricIn(ctx, client, metric, startDay, endDay, bucket, orgID, asOf, extraScope{})
 }
 
 // fetchWorkItemTeamQuadrantMetricIn is fetchWorkItemTeamQuadrantMetric under the
-// selected teams of the request (extra: a condition on t.team_id).
-func fetchWorkItemTeamQuadrantMetricIn(ctx context.Context, client QueryClient, metric string, startDay, endDay time.Time, bucket, orgID string, extra extraScope) ([]metricRow, error) {
-	var valueExpr, metricFilter string
+// selected teams of the request (extra: a condition on t.team_id). asOf is the
+// instant the repository owners are read at.
+func fetchWorkItemTeamQuadrantMetricIn(ctx context.Context, client QueryClient, metric string, startDay, endDay time.Time, bucket, orgID string, asOf time.Time, extra extraScope) ([]metricRow, error) {
+	query, shareBindings, err := workItemTeamQuadrantQuery(metric, bucket, orgID, asOf, extra)
+	if err != nil {
+		return nil, err
+	}
+	slog.Debug("quadrant: team points weigh each item by the owner share of its teams",
+		"org_id", orgID, "metric", metric, "bucket", bucket, "as_of", asOf, "teams_selected", len(extra.Bindings) > 0)
+	bindings := append([]dhclickhouse.Binding{
+		{Name: "start_day", Value: formatDay(startDay)},
+		{Name: "end_day", Value: formatDay(endDay)},
+		{Name: "org_id", Value: orgID},
+	}, shareBindings...)
+	bindings = append(bindings, extra.Bindings...)
+	return scanMetricRows(ctx, client, query, bindings, "quadrant: fetch_work_item_team_quadrant_metric")
+}
+
+// workItemTeamQuadrantQuery builds the statement of one attributed team metric
+// and the bindings of its owner-share source (the request's own bindings are the
+// caller's).
+func workItemTeamQuadrantQuery(metric, bucket, orgID string, asOf time.Time, extra extraScope) (string, []dhclickhouse.Binding, error) {
+	var outer, metricFilter string
 	switch metric {
 	case "throughput":
-		valueExpr = "uniqExact(work_item_id)"
-	case "cycle_time":
-		valueExpr = "avg(cycle_time_hours)"
-		metricFilter = "\n              AND cycle_time_hours IS NOT NULL"
-	default:
-		return nil, fmt.Errorf("quadrant: unsupported attributed team quadrant metric: %s", metric)
-	}
-
-	query := fmt.Sprintf(`
+		outer = `
         SELECT
-            %s AS bucket,
+            bucket,
             toString(team_id) AS entity_id,
             ifNull(nullIf(any(team_name), ''), toString(team_id)) AS entity_label,
-            toFloat64(%s) AS value
+            toFloat64(sum(item_weight)) AS value
         FROM (
             SELECT
-                wct.day,
-                wct.work_item_id,
-                wct.cycle_time_hours,
+                bucket,
+                team_id,
+                any(team_name) AS team_name,
+                work_item_id,
+                any(weight) AS item_weight
+            FROM (%[1]s) AS team_activity
+            GROUP BY bucket, team_id, work_item_id
+        )
+        GROUP BY bucket, entity_id
+        ORDER BY bucket
+    `
+	case "cycle_time":
+		outer = `
+        SELECT
+            bucket,
+            toString(team_id) AS entity_id,
+            ifNull(nullIf(any(team_name), ''), toString(team_id)) AS entity_label,
+            toFloat64(sum(cycle_time_hours * weight) / sum(weight)) AS value
+        FROM (%[1]s) AS team_activity
+        GROUP BY bucket, entity_id
+        ORDER BY bucket
+    `
+		metricFilter = "\n              AND cycle_time_hours IS NOT NULL"
+	default:
+		return "", nil, fmt.Errorf("quadrant: unsupported attributed team quadrant metric: %s", metric)
+	}
+
+	shares, shareBindings := teamscope.OwnerShares(orgID, nil, asOf)
+	rows := fmt.Sprintf(`
+            SELECT
+                %s AS bucket,
+                wct.work_item_id AS work_item_id,
+                wct.cycle_time_hours AS cycle_time_hours,
                 t.team_id AS team_id,
-                t.team_name AS team_name
+                t.team_name AS team_name,
+                t.weight AS weight
             FROM work_item_cycle_times AS wct FINAL
             INNER JOIN %s AS t
               ON t.work_item_id = wct.work_item_id
@@ -607,17 +731,8 @@ func fetchWorkItemTeamQuadrantMetricIn(ctx context.Context, client QueryClient, 
               AND wct.org_id = {org_id:String}
               AND t.team_id IS NOT NULL
               AND t.team_id != ''%s%s
-        ) AS team_activity
-        GROUP BY bucket, entity_id
-        ORDER BY bucket
-    `, bucketExpr(bucket, "day"), valueExpr, teamScopedWorkItemTeamAttributionSource, metricFilter, extra.SQL)
-
-	bindings := append([]dhclickhouse.Binding{
-		{Name: "start_day", Value: formatDay(startDay)},
-		{Name: "end_day", Value: formatDay(endDay)},
-		{Name: "org_id", Value: orgID},
-	}, extra.Bindings...)
-	return scanMetricRows(ctx, client, query, bindings, "quadrant: fetch_work_item_team_quadrant_metric")
+        `, bucketExpr(bucket, "wct.day"), fmt.Sprintf(teamScopedWorkItemTeamAttributionSourceFmt, shares), metricFilter, extra.SQL)
+	return fmt.Sprintf(outer, rows), shareBindings, nil
 }
 
 func scanMetricRows(ctx context.Context, client QueryClient, query string, bindings []dhclickhouse.Binding, errPrefix string) ([]metricRow, error) {

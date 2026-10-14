@@ -295,7 +295,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 
 	fetch := func(spec MetricSpec) ([]metricRow, error) {
 		if definition.Type == "cycle_throughput" && scope == "team" && spec.UsePrimaryTeamAttribution {
-			return fetchWorkItemTeamQuadrantMetricIn(ctx, client, spec.Metric, startDay, endDay, params.Bucket, orgID, selected.attributedTeams)
+			return fetchWorkItemTeamQuadrantMetricIn(ctx, client, spec.Metric, startDay, endDay, params.Bucket, orgID, time.Now().UTC(), selected.attributedTeams)
 		}
 		if scope == "team" && spec.OwnerTeam {
 			read, owners := ownerTeamRead(spec, orgID, selected.teams, time.Now().UTC())

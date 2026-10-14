@@ -279,3 +279,78 @@ func (emptyRowScannerStub) Next() bool        { return false }
 func (emptyRowScannerStub) Scan(...any) error { return nil }
 func (emptyRowScannerStub) Err() error        { return nil }
 func (emptyRowScannerStub) Close() error      { return nil }
+
+// TestTeamReviewSpecsWeighRowsByOwnerShare pins the shape of the team review
+// reads (CHAOS-9562, D5998): every value expression reads o.owner_share, and the
+// load is a ratio of a weighted sum to the weight of its distinct readers.
+func TestTeamReviewSpecsWeighRowsByOwnerShare(t *testing.T) {
+	load := quadrantMetricQuery(ownerTeamSpec(TeamMetrics["review_load"]), "week", "")
+	for _, want := range []string{
+		"sum(toFloat64(m.reviews_given) * o.owner_share) AS reader_value",
+		"max(o.owner_share) AS reader_weight",
+		"GROUP BY bucket, entity_id, entity_label, reader",
+		"sum(reader_value) / nullIf(sum(reader_weight), 0)",
+	} {
+		if !strings.Contains(load, want) {
+			t.Errorf("review_load query lacks %q:\n%s", want, load)
+		}
+	}
+	latency := quadrantMetricQuery(ownerTeamSpec(TeamMetrics["review_latency"]), "week", "")
+	if !strings.Contains(latency, "sum(m.pr_first_review_p50_hours * o.owner_share) / nullIf(sum(o.owner_share), 0)") {
+		t.Errorf("review_latency query is not the share-weighted mean:\n%s", latency)
+	}
+	if !strings.Contains(latency, "AND m.pr_first_review_p50_hours IS NOT NULL") {
+		t.Errorf("review_latency query weighs rows without a latency:\n%s", latency)
+	}
+}
+
+// TestWorkItemTeamQuadrantQuerySplitsAnItemByOwnerShare pins the shape of the
+// attributed team reads (CHAOS-9562, D5983): the weight of a team in an item is
+// computed before any team selection, throughput sums each item's weight once per
+// team, and cycle time is the weighted mean.
+func TestWorkItemTeamQuadrantQuerySplitsAnItemByOwnerShare(t *testing.T) {
+	asOf := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
+	selected := extraScope{SQL: "\n              AND t.team_id IN {scope_team_ids:Array(String)}"}
+	throughput, bindings, err := workItemTeamQuadrantQuery("throughput", "week", "org-1", asOf, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"toFloat64(sum(item_weight)) AS value",
+		"GROUP BY bucket, team_id, work_item_id",
+		"OVER (PARTITION BY w.work_item_id)",
+		"AS owner_share",
+		"LEFT JOIN (",
+	} {
+		if !strings.Contains(throughput, want) {
+			t.Errorf("throughput query lacks %q:\n%s", want, throughput)
+		}
+	}
+	if strings.Index(throughput, "OVER (PARTITION BY w.work_item_id)") > strings.Index(throughput, "AND t.team_id IN {scope_team_ids:Array(String)}") {
+		t.Error("the team selection is applied before the item weights are computed")
+	}
+	names := map[string]bool{}
+	for _, b := range bindings {
+		names[b.Name] = true
+	}
+	for _, name := range []string{"owner_shares_org_id", "owner_shares_as_of"} {
+		if !names[name] {
+			t.Errorf("owner-share bindings lack %q: %v", name, bindings)
+		}
+	}
+	if names["owner_shares_team_ids"] {
+		t.Error("the owner shares are narrowed to the selected teams; they must be computed over every owner")
+	}
+
+	cycle, _, err := workItemTeamQuadrantQuery("cycle_time", "week", "org-1", asOf, extraScope{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cycle, "toFloat64(sum(cycle_time_hours * weight) / sum(weight)) AS value") ||
+		!strings.Contains(cycle, "AND cycle_time_hours IS NOT NULL") {
+		t.Errorf("cycle_time query is not the weighted mean over rows with a cycle time:\n%s", cycle)
+	}
+	if _, _, err := workItemTeamQuadrantQuery("wip", "week", "org-1", asOf, extraScope{}); err == nil {
+		t.Error("an unsupported metric gave no error")
+	}
+}

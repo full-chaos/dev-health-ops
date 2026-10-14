@@ -21,7 +21,7 @@
 //     hook -- the hook CHAOS-4287's docstring said team rows were waiting on;
 //     that hook now exists, so CHAOS-5084 uses it and CHAOS-4287 closes).
 //     Team resolution goes through internal/teamresolve
-//     (ResolveOwnershipThenPatterns), the SAME shared entry point
+//     (ResolveOwnerSharesThenPatterns), the SAME shared entry point
 //     team_cognitive_load and team_complexity use for the identical Python
 //     function (_repo_to_team_map_for_compounding_risk /
 //     job_daily.py:497) -- this package never calls teamownership.OwnedRepoIDs

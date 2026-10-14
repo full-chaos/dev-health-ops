@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -200,6 +201,7 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 	enrichmentPages := 0
 	retry := handler.deploymentsWithoutStatus(ctx, claim, repoID, normalizedAt)
 	var outcomes deploymentStatusLookupOutcomes
+	deployments = appendUnlistedHeldDeployments(ctx, &counted, root, deployments, retry, &outcomes)
 	for _, deployment := range deployments {
 		row, include := normalizeGitHubDeployment(claim, repoID, deployment, releases, normalizedAt)
 		if !include {
@@ -302,6 +304,43 @@ func (handler GitHubDeploymentsRouteHandler) deploymentsWithoutStatus(ctx contex
 	return set
 }
 
+// appendUnlistedHeldDeployments adds the held deployments that the list did not
+// return, so they are looked up again too: the list is the repository's newest
+// deployments (at most the unit's cap), and a held deployment past that page
+// would otherwise never be reached. Each is one call; a rate limit that
+// exhausts the retry budget stops the fetching (the next run goes on).
+func appendUnlistedHeldDeployments(ctx context.Context, client *providerfoundation.HTTPClient, root string, listed []gitHubDeploymentPayload, held map[string]struct{}, outcomes *deploymentStatusLookupOutcomes) []gitHubDeploymentPayload {
+	if len(held) == 0 {
+		return listed
+	}
+	seen := make(map[string]struct{}, len(listed))
+	for _, deployment := range listed {
+		seen[stringValue(deployment.ID)] = struct{}{}
+	}
+	var missing []string
+	for id := range held {
+		if _, found := seen[id]; !found {
+			missing = append(missing, id)
+		}
+	}
+	sort.Strings(missing)
+	for _, id := range missing {
+		var deployment gitHubDeploymentPayload
+		if err := fetchObject(ctx, client, root+"/deployments/"+url.PathEscape(id), &deployment); err != nil || stringValue(deployment.ID) != id {
+			outcomes.UnlistedFailed++
+			errorClass, errorType := logging.ErrorClass(err), logging.ErrorType(err) // never the error text (CHAOS-7933)
+			slog.Warn("github_deployments.held_deployment_fetch_failed", logging.ProviderIDAttr("deployment_id", id), "error_class", errorClass, "error_type", errorType)
+			if err != nil && isRateLimitExhausted(err) {
+				break
+			}
+			continue
+		}
+		outcomes.UnlistedFetched++
+		listed = append(listed, deployment)
+	}
+	return listed
+}
+
 // deploymentStatusLookupOutcomes counts what the statuses lookups of one unit
 // did (CHAOS-9678), so a status that stays empty can be told apart by its
 // cause: Stored (a status was stored), Empty (the lookup succeeded and the
@@ -309,8 +348,13 @@ func (handler GitHubDeploymentsRouteHandler) deploymentsWithoutStatus(ctx contex
 // an earlier lookup of the unit exhausted the rate limit) and Retried (the
 // deployment was outside the window and is looked up again because its stored
 // status is empty).
+//
+// UnlistedFetched and UnlistedFailed count the held deployments the list did not
+// return (the list holds a repository's newest deployments only) that were
+// fetched one by one, and the ones that could not be fetched.
 type deploymentStatusLookupOutcomes struct {
 	Stored, Empty, Failed, Skipped, Retried int
+	UnlistedFetched, UnlistedFailed         int
 }
 
 const deploymentStatusLookupsEvent = "github_deployments.status_lookups"
@@ -319,7 +363,8 @@ func (outcomes deploymentStatusLookupOutcomes) log(claim Claim, rows int) {
 	slog.Info(deploymentStatusLookupsEvent,
 		"org_id", claim.OrgID, "unit_id", claim.ID, "rows", rows,
 		"stored", outcomes.Stored, "empty", outcomes.Empty, "failed", outcomes.Failed,
-		"skipped", outcomes.Skipped, "retried", outcomes.Retried)
+		"skipped", outcomes.Skipped, "retried", outcomes.Retried,
+		"unlisted_fetched", outcomes.UnlistedFetched, "unlisted_failed", outcomes.UnlistedFailed)
 }
 
 // fetchGitHubDeploymentsPage's fourth return value reports whether the

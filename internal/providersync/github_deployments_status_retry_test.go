@@ -42,7 +42,9 @@ func (holds *recordingStatusHolds) DeploymentsWithoutStatus(ctx context.Context,
 type githubDeploymentStatusRetryDoer struct {
 	statuses map[string]string
 	limited  map[string]bool
-	asked    []string
+	// single serves GET /deployments/{id}, the deployment the list did not return; any other id is 404.
+	single map[string]string
+	asked  []string
 }
 
 func (doer *githubDeploymentStatusRetryDoer) Do(request *http.Request) (*http.Response, error) {
@@ -57,6 +59,16 @@ func (doer *githubDeploymentStatusRetryDoer) Do(request *http.Request) (*http.Re
 		return respond(http.StatusOK, `[]`)
 	case "/repos/acme/api/deployments":
 		return respond(http.StatusOK, `[{"id":701,"created_at":"2026-07-22T10:00:00Z"},{"id":702,"created_at":"2026-07-22T10:05:00Z"},{"id":703,"created_at":"2026-06-10T10:00:00Z"}]`)
+	}
+	if strings.HasPrefix(request.URL.Path, "/repos/acme/api/deployments/") && !strings.HasSuffix(request.URL.Path, "/statuses") {
+		doer.asked = append(doer.asked, request.URL.Path)
+		if doer.limited[request.URL.Path] {
+			return respond(http.StatusTooManyRequests, `{"message":"rate limited"}`)
+		}
+		if body, ok := doer.single[request.URL.Path]; ok {
+			return respond(http.StatusOK, body)
+		}
+		return respond(http.StatusNotFound, `{"message":"Not Found"}`)
 	}
 	if strings.HasSuffix(request.URL.Path, "/statuses") {
 		doer.asked = append(doer.asked, request.URL.Path)
@@ -221,6 +233,62 @@ func TestGitHubDeploymentsRouteCountsOnlyDeploymentsOutsideTheWindowAsRetried(t 
 	for _, want := range []string{"github_deployments.status_lookups", "rows=3", "stored=3", "retried=1"} {
 		if !strings.Contains(log.String(), want) {
 			t.Fatalf("log lacks %q (701 is held but inside the window: not a retry; 703 is the one retry): %s", want, log.String())
+		}
+	}
+}
+
+// A held deployment the list did not return (the list holds the repository's
+// newest deployments only) is fetched by id and looked up again, so the cap of
+// the list never keeps an old held deployment out of the retry.
+func TestGitHubDeploymentsRouteLooksUpAgainAHeldDeploymentTheListDidNotReturn(t *testing.T) {
+	log := captureSlog(t)
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &githubDeploymentStatusRetryDoer{
+		single: map[string]string{"/repos/acme/api/deployments/704": `{"id":704,"created_at":"2026-06-05T10:00:00Z"}`},
+		statuses: map[string]string{
+			"/repos/acme/api/deployments/701/statuses": `[{"id":1,"state":"success","created_at":"2026-07-22T10:01:00Z"}]`,
+			"/repos/acme/api/deployments/702/statuses": `[{"id":2,"state":"success","created_at":"2026-07-22T10:06:00Z"}]`,
+			"/repos/acme/api/deployments/704/statuses": `[{"id":4,"state":"success","created_at":"2026-06-05T10:01:00Z"}]`,
+		},
+	}
+	rows := collectStatusRetryRows(t, doer, &recordingStatusHolds{ids: []string{"704"}}, nativeTestClaim("github", "deployments"), now)
+	if got := rows["704"].Status; len(rows) != 3 || got == nil || *got != "success" {
+		t.Fatalf("rows = %d, status of 704 = %v, want the two of the window and 704 stored as success", len(rows), got)
+	}
+	for _, want := range []string{"rows=3", "stored=3", "retried=1", "unlisted_fetched=1", "unlisted_failed=0"} {
+		if !strings.Contains(log.String(), want) {
+			t.Fatalf("log lacks %q: %s", want, log.String())
+		}
+	}
+}
+
+func TestGitHubDeploymentsRouteSurvivesAHeldDeploymentThatCannotBeFetched(t *testing.T) {
+	log := captureSlog(t)
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &githubDeploymentStatusRetryDoer{statuses: map[string]string{}}
+	// 704 does not exist (404): the unit goes on with the deployments it has.
+	rows := collectStatusRetryRows(t, doer, &recordingStatusHolds{ids: []string{"704"}}, nativeTestClaim("github", "deployments"), now)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want the two deployments of the window", len(rows))
+	}
+	for _, want := range []string{"github_deployments.held_deployment_fetch_failed", "deployment_id=704", "unlisted_fetched=0", "unlisted_failed=1"} {
+		if !strings.Contains(log.String(), want) {
+			t.Fatalf("log lacks %q: %s", want, log.String())
+		}
+	}
+}
+
+func TestGitHubDeploymentsRouteStopsFetchingHeldDeploymentsAfterARateLimit(t *testing.T) {
+	captureSlog(t)
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &githubDeploymentStatusRetryDoer{
+		limited:  map[string]bool{"/repos/acme/api/deployments/704": true},
+		statuses: map[string]string{},
+	}
+	collectStatusRetryRows(t, doer, &recordingStatusHolds{ids: []string{"704", "705"}}, nativeTestClaim("github", "deployments"), now)
+	for _, path := range doer.asked {
+		if strings.Contains(path, "/705") {
+			t.Fatalf("705 was fetched after 704 exhausted the rate limit: %v", doer.asked)
 		}
 	}
 }

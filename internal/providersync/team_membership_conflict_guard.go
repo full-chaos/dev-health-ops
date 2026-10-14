@@ -13,7 +13,7 @@ const activeManualMembershipsQuery = `
 SELECT member_id, team_id
 FROM team_memberships FINAL
 WHERE org_id = {org_id:String} AND provider = {provider:String}
-  AND source = 'manual' AND (valid_to IS NULL OR valid_to > now())`
+  AND source = 'manual' AND (valid_to IS NULL OR (valid_to > now() AND valid_to > valid_from))`
 
 // resolveActiveManualMembershipTeams batch-reads every active manual
 // team_memberships row for this org+provider, grouped by member_id into the

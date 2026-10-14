@@ -34,8 +34,14 @@ import (
 //     The links-not-written warning prints counts only. The team id carry's
 //     failure (table names only) goes through redact() too.
 //   - teamscatalog.go: constant messages and redact() for every ClickHouse text.
+//   - dblookup.go (CHAOS-9678): the two lines of the stored GitHub credential
+//     lookup print a fixed reason code, the organization id, payload key NAMES
+//     (never a value), and the error class and Go type of a driver or decryptor
+//     error (logging.ErrorClass / ErrorType, never its text): no database login
+//     or password and no credential value.
 var classifiedPrintSites = map[string]int{
 	"batch.go":        3,
+	"dblookup.go":     2,
 	"local.go":        1,
 	"synccli.go":      17,
 	"target.go":       5,

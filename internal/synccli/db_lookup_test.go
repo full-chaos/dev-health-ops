@@ -158,8 +158,8 @@ func TestGitHubCredentialFromJSON(t *testing.T) {
 		{"app", `{"app_id":"1","private_key":"k","installation_id":"2"}`, CredentialApp, true},
 		{"both", `{"token":"t","app_id":"1","private_key":"k","installation_id":"2"}`, "", false},
 		{"partial app", `{"app_id":"1"}`, "", false},
-		{"unknown key", `{"token":"t","x":"y"}`, "", false},
-		{"non-string token", `{"token":5}`, "", false},
+		{"unused key is ignored (CHAOS-9678)", `{"token":"t","x":"y"}`, CredentialPAT, true},
+		{"non-string token is read as Python str() reads it (the worker's decode, CHAOS-9678)", `{"token":5}`, CredentialPAT, true},
 		{"list", `[1]`, "", false},
 		{"null", `null`, "", false},
 		{"dropped nulls", `{"token":"t","app_id":null}`, CredentialPAT, true},
@@ -167,7 +167,7 @@ func TestGitHubCredentialFromJSON(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := githubCredentialFromJSON([]byte(tc.payload))
+			got, _, err := githubCredentialFromJSON([]byte(tc.payload))
 			if (err == nil) != tc.ok || (tc.ok && got.Mode != tc.mode) {
 				t.Fatalf("got %+v, %v; want ok=%v mode=%q", got, err, tc.ok, tc.mode)
 			}
@@ -188,11 +188,11 @@ func TestAsyncEngineRefusalNamesPythonsException(t *testing.T) {
 }
 
 func TestEmptyBaseURLIsNoBaseURL(t *testing.T) {
-	got, err := githubCredentialFromJSON([]byte(`{"token":"t","base_url":""}`))
+	got, _, err := githubCredentialFromJSON([]byte(`{"token":"t","base_url":""}`))
 	if err != nil || got.BaseURL != nil {
 		t.Fatalf("got %+v, %v: an empty base_url is falsy in Python and must not override the default host", got, err)
 	}
-	got, err = githubCredentialFromJSON([]byte(`{"token":"t","base_url":"https://ghe.example.com/api/v3"}`))
+	got, _, err = githubCredentialFromJSON([]byte(`{"token":"t","base_url":"https://ghe.example.com/api/v3"}`))
 	if err != nil || got.BaseURL == nil || *got.BaseURL != "https://ghe.example.com/api/v3" {
 		t.Fatalf("got %+v, %v", got, err)
 	}

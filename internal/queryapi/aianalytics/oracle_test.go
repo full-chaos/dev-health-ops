@@ -91,7 +91,7 @@ func fptr(m map[string]any, k string) any {
 	return v.(float64)
 }
 
-func u32(m map[string]any, k string) uint32 { return uint32(m[k].(float64)) }
+func u32(m map[string]any, k string) float64 { return m[k].(float64) }
 
 func mustDay(s string) time.Time {
 	t, err := time.Parse("2006-01-02", s)

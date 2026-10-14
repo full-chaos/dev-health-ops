@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -143,17 +144,17 @@ ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from)`,
 		`CREATE TABLE ai_impact_metrics_daily (
     org_id String, team_id String, repo_id UUID, work_type LowCardinality(String),
     day Date, attribution_bucket LowCardinality(String),
-    prs_total UInt32, prs_merged UInt32, ai_assisted_prs UInt32, agent_created_prs UInt32,
-    human_prs UInt32, unknown_prs UInt32, ai_assisted_pr_ratio Nullable(Float64),
-    agent_created_pr_count UInt32,
+    prs_total Float64, prs_merged Float64, ai_assisted_prs Float64, agent_created_prs Float64,
+    human_prs Float64, unknown_prs Float64, ai_assisted_pr_ratio Nullable(Float64),
+    agent_created_pr_count Float64,
     cycle_time_avg_hours Nullable(Float64), baseline_cycle_time_avg_hours Nullable(Float64),
     ai_cycle_time_delta_hours Nullable(Float64),
     reviews_per_pr Nullable(Float64), baseline_reviews_per_pr Nullable(Float64),
     ai_review_amplification Nullable(Float64), changes_requested_per_pr Nullable(Float64),
-    rework_prs UInt32, rework_drag_rate Nullable(Float64), followup_commits_count UInt32,
-    revert_prs UInt32, revert_rate Nullable(Float64),
-    incidents_count UInt32, incident_drag_rate Nullable(Float64),
-    test_gap_prs UInt32, test_gap_rate Nullable(Float64),
+    rework_prs Float64, rework_drag_rate Nullable(Float64), followup_commits_count Float64,
+    revert_prs Float64, revert_rate Nullable(Float64),
+    incidents_count Float64, incident_drag_rate Nullable(Float64),
+    test_gap_prs Float64, test_gap_rate Nullable(Float64),
     leverage_prs_component Float64, leverage_cycle_time_component Nullable(Float64),
     leverage_review_component Nullable(Float64), leverage_rework_component Nullable(Float64),
     leverage_test_component Nullable(Float64), leverage_incident_component Nullable(Float64),
@@ -938,17 +939,17 @@ ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from)`,
 		`CREATE TABLE ai_impact_metrics_daily (
     org_id String, team_id String, repo_id UUID, work_type LowCardinality(String),
     day Date, attribution_bucket LowCardinality(String),
-    prs_total UInt32, prs_merged UInt32, ai_assisted_prs UInt32, agent_created_prs UInt32,
-    human_prs UInt32, unknown_prs UInt32, ai_assisted_pr_ratio Nullable(Float64),
-    agent_created_pr_count UInt32,
+    prs_total Float64, prs_merged Float64, ai_assisted_prs Float64, agent_created_prs Float64,
+    human_prs Float64, unknown_prs Float64, ai_assisted_pr_ratio Nullable(Float64),
+    agent_created_pr_count Float64,
     cycle_time_avg_hours Nullable(Float64), baseline_cycle_time_avg_hours Nullable(Float64),
     ai_cycle_time_delta_hours Nullable(Float64),
     reviews_per_pr Nullable(Float64), baseline_reviews_per_pr Nullable(Float64),
     ai_review_amplification Nullable(Float64), changes_requested_per_pr Nullable(Float64),
-    rework_prs UInt32, rework_drag_rate Nullable(Float64), followup_commits_count UInt32,
-    revert_prs UInt32, revert_rate Nullable(Float64),
-    incidents_count UInt32, incident_drag_rate Nullable(Float64),
-    test_gap_prs UInt32, test_gap_rate Nullable(Float64),
+    rework_prs Float64, rework_drag_rate Nullable(Float64), followup_commits_count Float64,
+    revert_prs Float64, revert_rate Nullable(Float64),
+    incidents_count Float64, incident_drag_rate Nullable(Float64),
+    test_gap_prs Float64, test_gap_rate Nullable(Float64),
     leverage_prs_component Float64, leverage_cycle_time_component Nullable(Float64),
     leverage_review_component Nullable(Float64), leverage_rework_component Nullable(Float64),
     leverage_test_component Nullable(Float64), leverage_incident_component Nullable(Float64),
@@ -1026,6 +1027,123 @@ INSERT INTO repos (id, repo, last_synced, org_id) VALUES
 	}
 }
 
+// aiImpactOwnershipSchema is the schema of the ownership-resolving ai_impact tests.
+var aiImpactOwnershipSchema = []string{
+	`CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, title Nullable(String), body Nullable(String),
+    created_at DateTime64(3, 'UTC'), merged_at Nullable(DateTime64(3, 'UTC')),
+    additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
+    changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
+	`CREATE TABLE git_pull_request_reviews (
+    repo_id UUID, number UInt32, review_id String, reviewer String, state String,
+    submitted_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id)`,
+	`CREATE TABLE ai_attribution (
+    record_id UUID, org_id UUID, provider LowCardinality(String),
+    subject_type LowCardinality(String), subject_id String, repo_id Nullable(UUID),
+    kind LowCardinality(String), source LowCardinality(String), confidence Float32,
+    actor Nullable(String), evidence String,
+    observed_at DateTime64(3, 'UTC'), ingested_at DateTime64(3, 'UTC'),
+    superseded_by Nullable(UUID), computed_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(computed_at)
+ORDER BY (org_id, provider, subject_type, repo_id, subject_id, source)
+SETTINGS allow_nullable_key = 1`,
+	`CREATE VIEW ai_attribution_resolved AS
+SELECT record_id, org_id, provider, subject_type, subject_id, repo_id, kind,
+       source, confidence, actor, evidence, observed_at, ingested_at,
+       superseded_by, computed_at
+FROM (
+    SELECT *, multiIf(
+        source = 'manual', 1, source = 'pr_label', 2, source = 'bot_author', 3,
+        source = 'commit_trailer', 4, source = 'ci_annotation', 5,
+        source = 'branch_name', 6, source = 'pr_body', 7, 8) AS _source_priority
+    FROM ai_attribution FINAL WHERE superseded_by IS NULL
+)
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY org_id, subject_type, repo_id, subject_id
+    ORDER BY _source_priority ASC, confidence DESC) = 1`,
+	`CREATE TABLE work_graph_issue_pr (
+    repo_id UUID, pr_number UInt32, work_item_id String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, pr_number, work_item_id)`,
+	`CREATE TABLE work_items (
+    repo_id UUID, work_item_id String, type Nullable(String),
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, work_item_id)`,
+	`CREATE TABLE work_graph_pr_commit (
+    repo_id UUID, pr_number UInt32, commit_hash String, evidence String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, pr_number, commit_hash)`,
+	`CREATE TABLE git_commits (
+    repo_id UUID, hash String, committer_when DateTime64(3, 'UTC'),
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, hash)`,
+	`CREATE TABLE git_commit_stats (
+    repo_id UUID, commit_hash String, file_path String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`,
+	// repo_patterns is present but deliberately EMPTY -- this team has an
+	// ownership row below, never a pattern, so a pass reaching the pattern
+	// resolver ALONE would resolve nothing for this repo.
+	`CREATE TABLE teams (
+    id String, name String, repo_patterns Array(String), is_active UInt8 DEFAULT 1,
+    updated_at DateTime64(6), last_synced DateTime64(6) DEFAULT now(), org_id String
+) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
+	`CREATE TABLE repos (
+    id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String,
+    provider String DEFAULT 'github'
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
+	// The table teamownership.AuthoritativeOwnersByRepo reads -- absent from
+	// every other test in this file, since none of them exercise ownership.
+	`CREATE TABLE team_repo_ownership (
+    org_id String, provider String, team_id String, repo_id Nullable(UUID),
+    repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
+    source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
+    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0, share Nullable(Float64),
+    valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')),
+    updated_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from)`,
+	`CREATE TABLE ai_impact_metrics_daily (
+    org_id String, team_id String, repo_id UUID, work_type LowCardinality(String),
+    day Date, attribution_bucket LowCardinality(String),
+    prs_total Float64, prs_merged Float64, ai_assisted_prs Float64, agent_created_prs Float64,
+    human_prs Float64, unknown_prs Float64, ai_assisted_pr_ratio Nullable(Float64),
+    agent_created_pr_count Float64,
+    cycle_time_avg_hours Nullable(Float64), baseline_cycle_time_avg_hours Nullable(Float64),
+    ai_cycle_time_delta_hours Nullable(Float64),
+    reviews_per_pr Nullable(Float64), baseline_reviews_per_pr Nullable(Float64),
+    ai_review_amplification Nullable(Float64), changes_requested_per_pr Nullable(Float64),
+    rework_prs Float64, rework_drag_rate Nullable(Float64), followup_commits_count Float64,
+    revert_prs Float64, revert_rate Nullable(Float64),
+    incidents_count Float64, incident_drag_rate Nullable(Float64),
+    test_gap_prs Float64, test_gap_rate Nullable(Float64),
+    leverage_prs_component Float64, leverage_cycle_time_component Nullable(Float64),
+    leverage_review_component Nullable(Float64), leverage_rework_component Nullable(Float64),
+    leverage_test_component Nullable(Float64), leverage_incident_component Nullable(Float64),
+    computed_at DateTime64(3, 'UTC') DEFAULT now64()
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day)
+ORDER BY (org_id, team_id, repo_id, work_type, day, attribution_bucket)`,
+	`CREATE TABLE operational_incidents (
+    id String, org_id String, service_id String, normalized_status String,
+    started_at DateTime64(3, 'UTC'), resolved_at Nullable(DateTime64(3, 'UTC')),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0,
+    is_deleted UInt8 DEFAULT 0, last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
+	`CREATE TABLE operational_service_repository_mappings (
+    org_id String, id String DEFAULT '', service_id String, repo_id Nullable(UUID), is_active UInt8 DEFAULT 1,
+    valid_from Nullable(DateTime64(3, 'UTC')), valid_to Nullable(DateTime64(3, 'UTC')),
+    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
+    ingest_revision UInt128 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(ingest_revision)
+ORDER BY (org_id, id, source_revision, source_conflict_key)`,
+}
+
 // TestAIImpactComputeFamilyResolvesAnOwnershipOnlyRepo is the live-ClickHouse
 // proof that a repo whose ONLY team signal is a team_repo_ownership row (the
 // teams table below carries a real team but no repo_patterns at all, so the
@@ -1046,121 +1164,7 @@ func TestAIImpactComputeFamilyResolvesAnOwnershipOnlyRepo(t *testing.T) {
 	}
 	defer conn.Close()
 
-	for _, statement := range []string{
-		`CREATE TABLE git_pull_requests (
-    repo_id UUID, number UInt32, title Nullable(String), body Nullable(String),
-    created_at DateTime64(3, 'UTC'), merged_at Nullable(DateTime64(3, 'UTC')),
-    additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
-    changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
-    last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
-		`CREATE TABLE git_pull_request_reviews (
-    repo_id UUID, number UInt32, review_id String, reviewer String, state String,
-    submitted_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id)`,
-		`CREATE TABLE ai_attribution (
-    record_id UUID, org_id UUID, provider LowCardinality(String),
-    subject_type LowCardinality(String), subject_id String, repo_id Nullable(UUID),
-    kind LowCardinality(String), source LowCardinality(String), confidence Float32,
-    actor Nullable(String), evidence String,
-    observed_at DateTime64(3, 'UTC'), ingested_at DateTime64(3, 'UTC'),
-    superseded_by Nullable(UUID), computed_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(computed_at)
-ORDER BY (org_id, provider, subject_type, repo_id, subject_id, source)
-SETTINGS allow_nullable_key = 1`,
-		`CREATE VIEW ai_attribution_resolved AS
-SELECT record_id, org_id, provider, subject_type, subject_id, repo_id, kind,
-       source, confidence, actor, evidence, observed_at, ingested_at,
-       superseded_by, computed_at
-FROM (
-    SELECT *, multiIf(
-        source = 'manual', 1, source = 'pr_label', 2, source = 'bot_author', 3,
-        source = 'commit_trailer', 4, source = 'ci_annotation', 5,
-        source = 'branch_name', 6, source = 'pr_body', 7, 8) AS _source_priority
-    FROM ai_attribution FINAL WHERE superseded_by IS NULL
-)
-QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY org_id, subject_type, repo_id, subject_id
-    ORDER BY _source_priority ASC, confidence DESC) = 1`,
-		`CREATE TABLE work_graph_issue_pr (
-    repo_id UUID, pr_number UInt32, work_item_id String,
-    last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, pr_number, work_item_id)`,
-		`CREATE TABLE work_items (
-    repo_id UUID, work_item_id String, type Nullable(String),
-    last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, work_item_id)`,
-		`CREATE TABLE work_graph_pr_commit (
-    repo_id UUID, pr_number UInt32, commit_hash String, evidence String,
-    last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, pr_number, commit_hash)`,
-		`CREATE TABLE git_commits (
-    repo_id UUID, hash String, committer_when DateTime64(3, 'UTC'),
-    last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, hash)`,
-		`CREATE TABLE git_commit_stats (
-    repo_id UUID, commit_hash String, file_path String,
-    last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`,
-		// repo_patterns is present but deliberately EMPTY -- this team has an
-		// ownership row below, never a pattern, so a pass reaching the pattern
-		// resolver ALONE would resolve nothing for this repo.
-		`CREATE TABLE teams (
-    id String, name String, repo_patterns Array(String), is_active UInt8 DEFAULT 1,
-    updated_at DateTime64(6), last_synced DateTime64(6) DEFAULT now(), org_id String
-) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
-		`CREATE TABLE repos (
-    id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String,
-    provider String DEFAULT 'github'
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
-		// The table teamownership.AuthoritativeOwnersByRepo reads -- absent from
-		// every other test in this file, since none of them exercise ownership.
-		`CREATE TABLE team_repo_ownership (
-    org_id String, provider String, team_id String, repo_id Nullable(UUID),
-    repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
-    source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
-    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0, share Nullable(Float64),
-    valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')),
-    updated_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(updated_at)
-ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from)`,
-		`CREATE TABLE ai_impact_metrics_daily (
-    org_id String, team_id String, repo_id UUID, work_type LowCardinality(String),
-    day Date, attribution_bucket LowCardinality(String),
-    prs_total UInt32, prs_merged UInt32, ai_assisted_prs UInt32, agent_created_prs UInt32,
-    human_prs UInt32, unknown_prs UInt32, ai_assisted_pr_ratio Nullable(Float64),
-    agent_created_pr_count UInt32,
-    cycle_time_avg_hours Nullable(Float64), baseline_cycle_time_avg_hours Nullable(Float64),
-    ai_cycle_time_delta_hours Nullable(Float64),
-    reviews_per_pr Nullable(Float64), baseline_reviews_per_pr Nullable(Float64),
-    ai_review_amplification Nullable(Float64), changes_requested_per_pr Nullable(Float64),
-    rework_prs UInt32, rework_drag_rate Nullable(Float64), followup_commits_count UInt32,
-    revert_prs UInt32, revert_rate Nullable(Float64),
-    incidents_count UInt32, incident_drag_rate Nullable(Float64),
-    test_gap_prs UInt32, test_gap_rate Nullable(Float64),
-    leverage_prs_component Float64, leverage_cycle_time_component Nullable(Float64),
-    leverage_review_component Nullable(Float64), leverage_rework_component Nullable(Float64),
-    leverage_test_component Nullable(Float64), leverage_incident_component Nullable(Float64),
-    computed_at DateTime64(3, 'UTC') DEFAULT now64()
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day)
-ORDER BY (org_id, team_id, repo_id, work_type, day, attribution_bucket)`,
-		`CREATE TABLE operational_incidents (
-    id String, org_id String, service_id String, normalized_status String,
-    started_at DateTime64(3, 'UTC'), resolved_at Nullable(DateTime64(3, 'UTC')),
-    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
-    ingest_revision UInt128 DEFAULT 0,
-    is_deleted UInt8 DEFAULT 0, last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(ingest_revision)
-ORDER BY (org_id, id, source_revision, source_conflict_key)`,
-		`CREATE TABLE operational_service_repository_mappings (
-    org_id String, id String DEFAULT '', service_id String, repo_id Nullable(UUID), is_active UInt8 DEFAULT 1,
-    valid_from Nullable(DateTime64(3, 'UTC')), valid_to Nullable(DateTime64(3, 'UTC')),
-    source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
-    ingest_revision UInt128 DEFAULT 0,
-    last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(ingest_revision)
-ORDER BY (org_id, id, source_revision, source_conflict_key)`,
-	} {
+	for _, statement := range aiImpactOwnershipSchema {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("schema: %v\nstatement: %s", err, statement)
 		}
@@ -1241,4 +1245,100 @@ func parseLinkageUnavailableCounter(t *testing.T, prometheusText string) uint64 
 	}
 	t.Fatalf("no %q line in prometheus output: %s", prefix, prometheusText)
 	return 0
+}
+
+// CHAOS-9604, D5988/D5998, against a real store: a repository with a main owner
+// at 0.7 and a lesser owner at 0.3 gives each owner rows whose additive counts
+// are the repository's at its share (they sum to the repository's), while the
+// ratios and averages are the repository's own and never scaled.
+func TestAIImpactComputeFamilyTakesCountsAtEachOwnersShare(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	for _, statement := range aiImpactOwnershipSchema {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("schema: %v\nstatement: %s", err, statement)
+		}
+	}
+
+	const (
+		orgID  = "00000000-0000-4000-8000-0000000000b2"
+		repoID = "00000000-0000-4000-8000-0000000000b3"
+	)
+	// Ten unmerged pull requests of the day, none attributed to a team: the
+	// owners come from team_repo_ownership. Five of them requested changes
+	// (rework), so the repository's rework rate is 0.5.
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, additions, deletions,
+    changed_files, changes_requested_count, reviews_count, last_synced, org_id)
+SELECT toUUID('`+repoID+`'), number, toDateTime64('2026-10-03 01:00:00', 3, 'UTC'), NULL,
+    NULL, NULL, NULL, if(number <= 5, 1, 0), 2, toDateTime64('2026-10-03 09:00:00', 3, 'UTC'), '`+orgID+`'
+FROM numbers(1, 10)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO repos (id, repo, last_synced, org_id) VALUES (toUUID('` + repoID + `'), 'acme/shared', toDateTime64('2026-10-01 00:00:00', 3, 'UTC'), '` + orgID + `')`,
+		`INSERT INTO teams (id, name, repo_patterns, is_active, updated_at, org_id) VALUES
+('team-main', 'Main', [], 1, toDateTime64('2026-10-01 00:00:00', 6), '` + orgID + `'),
+('team-lesser', 'Lesser', [], 1, toDateTime64('2026-10-01 00:00:00', 6), '` + orgID + `')`,
+		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type,
+    source, is_primary, specificity, priority, share, valid_from, valid_to, updated_at) VALUES
+('` + orgID + `', 'github', 'team-main', toUUID('` + repoID + `'), 'acme/shared', 'exact', 'inferred', 1, 10, 0, 0.7,
+ toDateTime64('2026-10-01 00:00:00', 3, 'UTC'), NULL, toDateTime64('2026-10-01 00:00:00', 3, 'UTC')),
+('` + orgID + `', 'github', 'team-lesser', toUUID('` + repoID + `'), 'acme/shared', 'exact', 'inferred', 2, 10, 0, 0.3,
+ toDateTime64('2026-10-01 00:00:00', 3, 'UTC'), NULL, toDateTime64('2026-10-01 00:00:00', 3, 'UTC'))`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	executor, err := NewAIImpactExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{OrganizationID: orgID, TargetDay: time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)}
+	if _, err := executor.ComputeFamily(ctx, run, Partition{ID: "p1", RepoIDs: []RepositoryID{RepositoryID(repoID)}}); err != nil {
+		t.Fatalf("ComputeFamily against a real ClickHouse: %v", err)
+	}
+
+	type row struct{ prs, rework, followups, incidents, leverage, reworkRate float64 }
+	read := func(team string) row {
+		t.Helper()
+		var r row
+		var rate *float64
+		if err := conn.QueryRow(ctx, `
+SELECT sum(prs_total), sum(rework_prs), sum(followup_commits_count), sum(incidents_count), sum(leverage_prs_component), any(rework_drag_rate)
+FROM ai_impact_metrics_daily FINAL WHERE org_id = ? AND team_id = ? AND attribution_bucket = 'unknown'`, orgID, team).
+			Scan(&r.prs, &r.rework, &r.followups, &r.incidents, &r.leverage, &rate); err != nil {
+			t.Fatalf("read %s: %v", team, err)
+		}
+		if rate != nil {
+			r.reworkRate = *rate
+		}
+		return r
+	}
+	main, lesser := read("team-main"), read("team-lesser")
+	near := func(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+	if !near(main.prs, 7) || !near(lesser.prs, 3) {
+		t.Errorf("pull requests main %v lesser %v, want 7 and 3 (0.7 and 0.3 of the repository's 10)", main.prs, lesser.prs)
+	}
+	if !near(main.rework, 3.5) || !near(lesser.rework, 1.5) {
+		t.Errorf("rework pull requests main %v lesser %v, want 3.5 and 1.5 (0.7 and 0.3 of 5)", main.rework, lesser.rework)
+	}
+	if !near(main.rework+lesser.rework, 5) || !near(main.prs+lesser.prs, 10) {
+		t.Errorf("the owners together hold %v pull requests and %v rework, want the repository's 10 and 5", main.prs+lesser.prs, main.rework+lesser.rework)
+	}
+	if !near(main.reworkRate, 0.5) || !near(lesser.reworkRate, 0.5) {
+		t.Errorf("rework rate main %v lesser %v, want the repository's own 0.5 for both (a share never scales a rate)", main.reworkRate, lesser.reworkRate)
+	}
 }

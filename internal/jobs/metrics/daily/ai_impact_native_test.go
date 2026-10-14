@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 func TestNewAIImpactExecutorRejectsNilConn(t *testing.T) {
@@ -209,7 +211,9 @@ type fakeOwnershipRow struct {
 	repoID      string
 	teamID      string
 	mainOwner   uint8
+	coOwner     uint8
 	specificity uint16
+	share       *float64
 }
 
 // fakeOwnershipRows is a minimal chdriver.Rows fake carrying canned
@@ -231,9 +235,9 @@ func (r *fakeOwnershipRows) Scan(dest ...any) error {
 	*(dest[0].(*string)) = row.repoID
 	*(dest[1].(*string)) = row.teamID
 	*(dest[2].(*uint8)) = row.mainOwner
-	*(dest[3].(*uint8)) = 0
+	*(dest[3].(*uint8)) = row.coOwner
 	*(dest[4].(*uint16)) = row.specificity
-	*(dest[5].(**float64)) = nil
+	*(dest[5].(**float64)) = row.share
 	return nil
 }
 
@@ -259,8 +263,8 @@ func TestResolveAIImpactRepoToTeamAttributesAnOwnershipOnlyRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveAIImpactRepoToTeam: %v", err)
 	}
-	if !slices.Equal(got[repoID.String()], []string{"team-owner"}) {
-		t.Fatalf("team=%q, want team-owner -- an ownership-only repo (no repo_patterns match) "+
+	if !slices.Equal(ownerTeamIDs(got[repoID.String()]), []string{"team-owner"}) {
+		t.Fatalf("team=%v, want team-owner -- an ownership-only repo (no repo_patterns match) "+
 			"must still resolve to its team_repo_ownership row", got[repoID.String()])
 	}
 }
@@ -286,8 +290,8 @@ func TestResolveAIImpactRepoToTeamOwnershipBeatsAPatternMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveAIImpactRepoToTeam: %v", err)
 	}
-	if !slices.Equal(got[repoID.String()], []string{"team-owner"}) {
-		t.Fatalf("team=%q, want team-owner -- ownership must beat a repo_patterns match "+
+	if !slices.Equal(ownerTeamIDs(got[repoID.String()]), []string{"team-owner"}) {
+		t.Fatalf("team=%v, want team-owner -- ownership must beat a repo_patterns match "+
 			"for the same repo", got[repoID.String()])
 	}
 }
@@ -310,8 +314,8 @@ func TestResolveAIImpactRepoToTeamFallsBackToPatternsWhenUnowned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveAIImpactRepoToTeam: %v", err)
 	}
-	if !slices.Equal(got[repoID.String()], []string{"team-pattern"}) {
-		t.Fatalf("team=%q, want team-pattern -- an unowned repo must still fall back to its "+
+	if !slices.Equal(ownerTeamIDs(got[repoID.String()]), []string{"team-pattern"}) {
+		t.Fatalf("team=%v, want team-pattern -- an unowned repo must still fall back to its "+
 			"repo_patterns match", got[repoID.String()])
 	}
 }
@@ -337,5 +341,36 @@ func TestResolveAIImpactRepoToTeamPropagatesOwnershipQueryError(t *testing.T) {
 	}
 	if !errors.Is(err, errOwnershipQueryFailed) {
 		t.Fatalf("err=%v, want it to wrap errOwnershipQueryFailed", err)
+	}
+}
+
+func ownerTeamIDs(owners []teamownership.OwnerShare) []string {
+	ids := make([]string, 0, len(owners))
+	for _, owner := range owners {
+		ids = append(ids, owner.TeamID)
+	}
+	return ids
+}
+
+// CHAOS-9604, D5988: the resolution names the main owner and every lesser owner
+// of a repository, each with its own stored share.
+func TestResolveAIImpactRepoToTeamNamesEveryOwnerAtItsShare(t *testing.T) {
+	repoID := uuid.New()
+	share := func(v float64) *float64 { return &v }
+	conn := &governanceQueryRecorder{rows: &fakeOwnershipRows{rows: []fakeOwnershipRow{
+		{repoID: repoID.String(), teamID: "main", mainOwner: 1, share: share(0.7)},
+		{repoID: repoID.String(), teamID: "lesser", coOwner: 1, share: share(0.3)},
+	}}}
+	got, err := resolveAIImpactRepoToTeam(
+		context.Background(), conn, "acme", time.Now().UTC(),
+		[]uuid.UUID{repoID}, map[string]string{repoID.String(): "acme/shared"}, aiimpact.BuildRepoPatternResolver(nil),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := got[repoID.String()]
+	if len(owners) != 2 || owners[0].TeamID != "main" || !owners[0].Main || math.Abs(owners[0].Share-0.7) > 1e-12 ||
+		owners[1].TeamID != "lesser" || owners[1].Main || math.Abs(owners[1].Share-0.3) > 1e-12 {
+		t.Fatalf("owners %+v, want main at 0.7 then lesser at 0.3", owners)
 	}
 }

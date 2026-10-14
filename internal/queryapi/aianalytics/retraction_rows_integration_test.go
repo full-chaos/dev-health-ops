@@ -217,7 +217,7 @@ VALUES (?, ?, ?, 'feature', ?, 'unknown', ?)`,
 	// requests on each of six days; the daily list holds a row for each team
 	// and day and the one measured row with no pull request.
 	if control.TotalPrs != 6*(4+5+6+7) || len(control.Daily) != 6*4+1 || !control.DataAvailable {
-		t.Fatalf("control summary: %d pull requests, %d daily rows, data %v; want 132, 25, true",
+		t.Fatalf("control summary: %v pull requests, %d daily rows, data %v; want 132, 25, true",
 			control.TotalPrs, len(control.Daily), control.DataAvailable)
 	}
 

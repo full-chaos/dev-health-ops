@@ -64,7 +64,7 @@ func TestPlanOwnershipSnapshotKeepsFirstSeenAndRetractsTheRest(t *testing.T) {
 	}
 	want := []OwnershipSnapshotRetraction{
 		{Open: 0, ClosedAt: now}, {Open: 2, ClosedAt: now}, {Open: 3, ClosedAt: now}, {Open: 4, ClosedAt: now},
-		{Open: 5, ClosedAt: now.Add(time.Hour)}, // valid_to is never before valid_from
+		{Open: 5, ClosedAt: now.Add(time.Hour + time.Millisecond)}, // a close never lands at or before its own open
 	}
 	if !reflect.DeepEqual(plan.Retract, want) {
 		t.Fatalf("retract=%+v\n   want=%+v", plan.Retract, want)

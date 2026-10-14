@@ -13,12 +13,12 @@ func TestTeamRepoOwnershipCloseAtNeverLandsAtOrBeforeItsOpen(t *testing.T) {
 		"open ahead of now": now.Add(5 * time.Second),
 	}
 	for name, validFrom := range cases {
-		closeAt := teamRepoOwnershipCloseAt(validFrom, now)
+		closeAt := intervalCloseAt(validFrom, now)
 		if !closeAt.After(validFrom) {
 			t.Errorf("%s: close %v is not after open %v", name, closeAt, validFrom)
 		}
 	}
-	if got := teamRepoOwnershipCloseAt(now.Add(-time.Hour), now); !got.Equal(now) {
+	if got := intervalCloseAt(now.Add(-time.Hour), now); !got.Equal(now) {
 		t.Errorf("a normal close must stay at now, got %v", got)
 	}
 }

@@ -76,8 +76,8 @@ type AIComparisonDelta {
 
 type AIComparisonSide {
   bucket: String!
-  prsTotal: Int!
-  prsMerged: Int!
+  prsTotal: Float!
+  prsMerged: Float!
   cycleTimeAvgHours: Float
   reviewsPerPr: Float
   reworkRate: Float
@@ -159,28 +159,28 @@ type AIHotspotOverlapRow {
 
 type AIImpactBucketRow {
   bucket: String!
-  prsTotal: Int!
-  prsMerged: Int!
+  prsTotal: Float!
+  prsMerged: Float!
   cycleTimeAvgHours: Float
   reviewsPerPr: Float
   changesRequestedPerPr: Float
-  reworkPrs: Int!
+  reworkPrs: Float!
   reworkRate: Float
-  revertPrs: Int!
+  revertPrs: Float!
   revertRate: Float
-  incidentsCount: Int!
+  incidentsCount: Float!
   incidentRate: Float
-  testGapPrs: Int!
+  testGapPrs: Float!
   testGapRate: Float
   day: Date!
 }
 
 type AIImpactBucketTotals {
   bucket: String!
-  prsTotal: Int!
-  prsMerged: Int!
+  prsTotal: Float!
+  prsMerged: Float!
   aiAssistedPrRatio: Float
-  agentCreatedPrCount: Int!
+  agentCreatedPrCount: Float!
   cycleTimeAvgHours: Float
   aiCycleTimeDeltaHours: Float
   aiReviewAmplification: Float
@@ -194,7 +194,7 @@ type AIImpactBucketTotals {
 type AIImpactScopeRollupRow {
   scopeId: String!
   scopeLabel: String!
-  aiPrsTotal: Int!
+  aiPrsTotal: Float!
   aiAssistedPrRatio: Float
   reworkRateDelta: Float
 }
@@ -203,11 +203,11 @@ type AIImpactSummary {
   orgId: String!
   startDate: Date!
   endDate: Date!
-  totalPrs: Int!
-  aiAssistedPrs: Int!
-  agentCreatedPrs: Int!
-  humanPrs: Int!
-  unknownPrs: Int!
+  totalPrs: Float!
+  aiAssistedPrs: Float!
+  agentCreatedPrs: Float!
+  humanPrs: Float!
+  unknownPrs: Float!
   aiAssistedPrRatio: Float
   byBucket: [AIImpactBucketTotals!]!
   daily: [AIImpactBucketRow!]!
@@ -285,12 +285,12 @@ type AIReviewLoadResult {
 
 type AIReviewLoadRow {
   bucket: String!
-  prsTotal: Int!
-  reviewsTotal: Int!
+  prsTotal: Float!
+  reviewsTotal: Float!
   reviewsPerPr: Float
   changesRequestedPerPr: Float
   reviewAmplification: Float
-  postFirstReviewPushesCount: Int!
+  postFirstReviewPushesCount: Float!
   postFirstReviewPushesPerPr: Float
   pickupLatencyHours: Float
   reviewCommentsPerLoc: Float
@@ -315,14 +315,14 @@ type AIRiskBreakdownResult {
 
 type AIRiskBreakdownRow {
   bucket: String!
-  prsTotal: Int!
-  reworkPrs: Int!
+  prsTotal: Float!
+  reworkPrs: Float!
   reworkRate: Float
-  revertPrs: Int!
+  revertPrs: Float!
   revertRate: Float
-  testGapPrs: Int!
+  testGapPrs: Float!
   testGapRate: Float
-  incidentsCount: Int!
+  incidentsCount: Float!
   incidentRate: Float
 }
 

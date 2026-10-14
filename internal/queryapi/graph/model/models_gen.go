@@ -76,8 +76,8 @@ type AIComparisonDelta struct {
 
 type AIComparisonSide struct {
 	Bucket            string   `json:"bucket"`
-	PrsTotal          int      `json:"prsTotal"`
-	PrsMerged         int      `json:"prsMerged"`
+	PrsTotal          float64  `json:"prsTotal"`
+	PrsMerged         float64  `json:"prsMerged"`
 	CycleTimeAvgHours *float64 `json:"cycleTimeAvgHours,omitempty"`
 	ReviewsPerPr      *float64 `json:"reviewsPerPr,omitempty"`
 	ReworkRate        *float64 `json:"reworkRate,omitempty"`
@@ -151,28 +151,28 @@ type AIHotspotOverlapRow struct {
 
 type AIImpactBucketRow struct {
 	Bucket                string           `json:"bucket"`
-	PrsTotal              int              `json:"prsTotal"`
-	PrsMerged             int              `json:"prsMerged"`
+	PrsTotal              float64          `json:"prsTotal"`
+	PrsMerged             float64          `json:"prsMerged"`
 	CycleTimeAvgHours     *float64         `json:"cycleTimeAvgHours,omitempty"`
 	ReviewsPerPr          *float64         `json:"reviewsPerPr,omitempty"`
 	ChangesRequestedPerPr *float64         `json:"changesRequestedPerPr,omitempty"`
-	ReworkPrs             int              `json:"reworkPrs"`
+	ReworkPrs             float64          `json:"reworkPrs"`
 	ReworkRate            *float64         `json:"reworkRate,omitempty"`
-	RevertPrs             int              `json:"revertPrs"`
+	RevertPrs             float64          `json:"revertPrs"`
 	RevertRate            *float64         `json:"revertRate,omitempty"`
-	IncidentsCount        int              `json:"incidentsCount"`
+	IncidentsCount        float64          `json:"incidentsCount"`
 	IncidentRate          *float64         `json:"incidentRate,omitempty"`
-	TestGapPrs            int              `json:"testGapPrs"`
+	TestGapPrs            float64          `json:"testGapPrs"`
 	TestGapRate           *float64         `json:"testGapRate,omitempty"`
 	Day                   graphqldate.Date `json:"day"`
 }
 
 type AIImpactBucketTotals struct {
 	Bucket                string                `json:"bucket"`
-	PrsTotal              int                   `json:"prsTotal"`
-	PrsMerged             int                   `json:"prsMerged"`
+	PrsTotal              float64               `json:"prsTotal"`
+	PrsMerged             float64               `json:"prsMerged"`
 	AiAssistedPrRatio     *float64              `json:"aiAssistedPrRatio,omitempty"`
-	AgentCreatedPrCount   int                   `json:"agentCreatedPrCount"`
+	AgentCreatedPrCount   float64               `json:"agentCreatedPrCount"`
 	CycleTimeAvgHours     *float64              `json:"cycleTimeAvgHours,omitempty"`
 	AiCycleTimeDeltaHours *float64              `json:"aiCycleTimeDeltaHours,omitempty"`
 	AiReviewAmplification *float64              `json:"aiReviewAmplification,omitempty"`
@@ -186,7 +186,7 @@ type AIImpactBucketTotals struct {
 type AIImpactScopeRollupRow struct {
 	ScopeID           string   `json:"scopeId"`
 	ScopeLabel        string   `json:"scopeLabel"`
-	AiPrsTotal        int      `json:"aiPrsTotal"`
+	AiPrsTotal        float64  `json:"aiPrsTotal"`
 	AiAssistedPrRatio *float64 `json:"aiAssistedPrRatio,omitempty"`
 	ReworkRateDelta   *float64 `json:"reworkRateDelta,omitempty"`
 }
@@ -195,11 +195,11 @@ type AIImpactSummary struct {
 	OrgID             string                   `json:"orgId"`
 	StartDate         graphqldate.Date         `json:"startDate"`
 	EndDate           graphqldate.Date         `json:"endDate"`
-	TotalPrs          int                      `json:"totalPrs"`
-	AiAssistedPrs     int                      `json:"aiAssistedPrs"`
-	AgentCreatedPrs   int                      `json:"agentCreatedPrs"`
-	HumanPrs          int                      `json:"humanPrs"`
-	UnknownPrs        int                      `json:"unknownPrs"`
+	TotalPrs          float64                  `json:"totalPrs"`
+	AiAssistedPrs     float64                  `json:"aiAssistedPrs"`
+	AgentCreatedPrs   float64                  `json:"agentCreatedPrs"`
+	HumanPrs          float64                  `json:"humanPrs"`
+	UnknownPrs        float64                  `json:"unknownPrs"`
 	AiAssistedPrRatio *float64                 `json:"aiAssistedPrRatio,omitempty"`
 	ByBucket          []AIImpactBucketTotals   `json:"byBucket"`
 	Daily             []AIImpactBucketRow      `json:"daily"`
@@ -260,12 +260,12 @@ type AIReviewLoadResult struct {
 
 type AIReviewLoadRow struct {
 	Bucket                     string   `json:"bucket"`
-	PrsTotal                   int      `json:"prsTotal"`
-	ReviewsTotal               int      `json:"reviewsTotal"`
+	PrsTotal                   float64  `json:"prsTotal"`
+	ReviewsTotal               float64  `json:"reviewsTotal"`
 	ReviewsPerPr               *float64 `json:"reviewsPerPr,omitempty"`
 	ChangesRequestedPerPr      *float64 `json:"changesRequestedPerPr,omitempty"`
 	ReviewAmplification        *float64 `json:"reviewAmplification,omitempty"`
-	PostFirstReviewPushesCount int      `json:"postFirstReviewPushesCount"`
+	PostFirstReviewPushesCount float64  `json:"postFirstReviewPushesCount"`
 	PostFirstReviewPushesPerPr *float64 `json:"postFirstReviewPushesPerPr,omitempty"`
 	PickupLatencyHours         *float64 `json:"pickupLatencyHours,omitempty"`
 	ReviewCommentsPerLoc       *float64 `json:"reviewCommentsPerLoc,omitempty"`
@@ -290,14 +290,14 @@ type AIRiskBreakdownResult struct {
 
 type AIRiskBreakdownRow struct {
 	Bucket         string   `json:"bucket"`
-	PrsTotal       int      `json:"prsTotal"`
-	ReworkPrs      int      `json:"reworkPrs"`
+	PrsTotal       float64  `json:"prsTotal"`
+	ReworkPrs      float64  `json:"reworkPrs"`
 	ReworkRate     *float64 `json:"reworkRate,omitempty"`
-	RevertPrs      int      `json:"revertPrs"`
+	RevertPrs      float64  `json:"revertPrs"`
 	RevertRate     *float64 `json:"revertRate,omitempty"`
-	TestGapPrs     int      `json:"testGapPrs"`
+	TestGapPrs     float64  `json:"testGapPrs"`
 	TestGapRate    *float64 `json:"testGapRate,omitempty"`
-	IncidentsCount int      `json:"incidentsCount"`
+	IncidentsCount float64  `json:"incidentsCount"`
 	IncidentRate   *float64 `json:"incidentRate,omitempty"`
 }
 

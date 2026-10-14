@@ -8291,8 +8291,8 @@
    "engagementError": false,
    "expected": {
     "agentCreatedPrs": 0,
-    "aiAssistedPrRatio": 0.07586206896551724,
-    "aiAssistedPrs": 11,
+    "aiAssistedPrRatio": 0.6206896551724138,
+    "aiAssistedPrs": 90,
     "byBucket": [
      {
       "agentCreatedPrCount": 0,

@@ -33,7 +33,7 @@ const jiraTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, desc
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const jiraTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 const jiraTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
-const jiraTeamCatalogProjectsInsert = `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, state_source, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced)`
+const jiraTeamCatalogProjectsInsert = projectsCatalogInsert
 
 func (sink JiraTeamCatalogClickHouseEffects) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
@@ -86,7 +86,7 @@ func (sink JiraTeamCatalogClickHouseEffects) WriteEffect(ctx context.Context, cl
 				return err
 			}
 		}
-		return sink.writeProjects(ctx, rows)
+		return sink.writeProjects(ctx, claim, rows)
 	case jiraTeamCatalogSprintsDestination:
 		rows, err := decodeEffectRows[jiraSprintRow](effect)
 		if err != nil {
@@ -140,8 +140,36 @@ func (sink JiraTeamCatalogClickHouseEffects) InspectEffect(ctx context.Context, 
 		if err != nil {
 			return EffectConflict, err
 		}
+		// WriteEffect kept the held target columns of a row whose versions were
+		// not read; the same contract runs here against the same stored state.
+		targetValues := make(map[string][]any, len(expected))
+		if len(expected) > 0 {
+			stored := jiraProjectStoredRows(expected)
+			if err := applyProjectsContract(ctx, sink.Conn, claim.OrgID, stored, false); err != nil {
+				return EffectConflict, err
+			}
+			for index := range expected {
+				targetValues[expected[index].ID.String()] = stored[index].Values
+				date, err := projectTargetDate(stored[index].Values)
+				if err != nil {
+					return EffectConflict, err
+				}
+				expected[index].TargetDate = date
+			}
+		}
 		return inspectJiraTeamCatalogRows(expected, func(row jiraTeamCatalogProjectRow) (EffectInspection, error) {
-			return sink.inspectProject(ctx, claim, row)
+			inspection, err := sink.inspectProject(ctx, claim, row)
+			if err != nil || inspection != EffectExact {
+				return inspection, err
+			}
+			matched, err := projectTargetColumnsMatch(ctx, sink.Conn, claim.OrgID, row.Provider, row.ID.String(), targetValues[row.ID.String()], false)
+			if err != nil {
+				return EffectConflict, err
+			}
+			if !matched {
+				return EffectConflict, nil
+			}
+			return EffectExact, nil
 		})
 	case jiraTeamCatalogSprintsDestination:
 		expected, err := decodeEffectRows[jiraSprintRow](effect)
@@ -264,17 +292,21 @@ func (sink JiraTeamCatalogClickHouseEffects) writeMemberships(ctx context.Contex
 	return batch.Send()
 }
 
-func (sink JiraTeamCatalogClickHouseEffects) writeProjects(ctx context.Context, rows []jiraTeamCatalogProjectRow) error {
+func (sink JiraTeamCatalogClickHouseEffects) writeProjects(ctx context.Context, claim Claim, rows []jiraTeamCatalogProjectRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, jiraTeamCatalogProjectsInsert)
+	stored := jiraProjectStoredRows(rows)
+	if err := applyProjectsContract(ctx, sink.Conn, claim.OrgID, stored, true); err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, projectsCatalogInsert)
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
-	for _, row := range rows {
-		if err := batch.Append(row.ID, row.OrgID, row.Provider, row.ProjectKey, row.Name, row.IsActive, row.State, row.StateSource, row.TargetDate, row.URL, row.TeamIDs, row.TeamKeys, row.LeadID, row.LeadName, row.LeadEmail, row.UpdatedAt, row.LastSynced); err != nil {
+	for _, row := range stored {
+		if err := batch.Append(row.Values...); err != nil {
 			return err
 		}
 	}
@@ -282,6 +314,16 @@ func (sink JiraTeamCatalogClickHouseEffects) writeProjects(ctx context.Context, 
 		return err
 	}
 	return batch.Send()
+}
+
+func jiraProjectStoredRows(rows []jiraTeamCatalogProjectRow) []projectStoredRow {
+	stored := make([]projectStoredRow, len(rows))
+	for index, row := range rows {
+		stored[index] = newProjectStoredRow(row.ID.String(), row.OrgID, row.Provider, row.ProjectKey, row.Name, row.IsActive,
+			row.State, row.StateSource, row.TargetDate, row.projectTargetFacts, row.URL, row.TeamIDs, row.TeamKeys,
+			row.LeadID, row.LeadName, row.LeadEmail, row.UpdatedAt, row.LastSynced)
+	}
+	return stored
 }
 
 // writeSprints shares the `sprints` table and its INSERT column list with

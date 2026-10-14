@@ -32,26 +32,26 @@ type dailyRow struct {
 	DayTime time.Time
 	Bucket  string
 
-	PrsTotal            int64
-	PrsMerged           int64
-	AIAssistedPrs       int64
-	AgentCreatedPrs     int64
-	HumanPrs            int64
-	UnknownPrs          int64
+	PrsTotal            float64
+	PrsMerged           float64
+	AIAssistedPrs       float64
+	AgentCreatedPrs     float64
+	HumanPrs            float64
+	UnknownPrs          float64
 	AIAssistedPrRatio   *float64
 	CycleTimeAvgHours   *float64
 	AICycleTimeDelta    *float64
 	ReviewsPerPr        *float64
 	AIReviewAmp         *float64
 	ChangesRequestedPer *float64
-	ReworkPrs           int64
+	ReworkPrs           float64
 	ReworkDragRate      *float64
-	FollowupCommits     int64
-	RevertPrs           int64
+	FollowupCommits     float64
+	RevertPrs           float64
 	RevertRate          *float64
-	IncidentsCount      int64
+	IncidentsCount      float64
 	IncidentDragRate    *float64
-	TestGapPrs          int64
+	TestGapPrs          float64
 	TestGapRate         *float64
 
 	LevPrs      float64
@@ -110,25 +110,33 @@ func delta(a, b *float64) *float64 {
 	return &out
 }
 
-// reviewTotalForRow is round-half-even(reviews_per_pr * prs_total).
-func reviewTotalForRow(r dailyRow) int64 {
+// reviewTotalForRow is reviews_per_pr * prs_total. A whole prs_total gives a
+// whole number of reviews, so the product is round-half-even to take out the
+// float noise of the stored average (the value of the integer-count era); a
+// fractional prs_total (a co-owner's share of a repository's pull requests,
+// D5988) is left as it is: nothing is rounded (D5991).
+func reviewTotalForRow(r dailyRow) float64 {
 	perPr := 0.0
 	if r.ReviewsPerPr != nil {
 		perPr = *r.ReviewsPerPr
 	}
-	return int64(math.RoundToEven(float64(perPr * float64(r.PrsTotal))))
+	total := float64(perPr * r.PrsTotal)
+	if r.PrsTotal == math.Trunc(r.PrsTotal) {
+		return math.RoundToEven(total)
+	}
+	return total
 }
 
-func pairsOf(rows []dailyRow, value func(dailyRow) *float64, weight func(dailyRow) int64) []pair {
+func pairsOf(rows []dailyRow, value func(dailyRow) *float64, weight func(dailyRow) float64) []pair {
 	out := make([]pair, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, pair{value: value(r), weight: float64(weight(r))})
+		out = append(out, pair{value: value(r), weight: weight(r)})
 	}
 	return out
 }
 
-func byPrsTotal(r dailyRow) int64  { return r.PrsTotal }
-func byPrsMerged(r dailyRow) int64 { return r.PrsMerged }
+func byPrsTotal(r dailyRow) float64  { return r.PrsTotal }
+func byPrsMerged(r dailyRow) float64 { return r.PrsMerged }
 
 // groupByBucket groups rows by bucket, keeping row order inside a group and
 // returning the bucket names in ascending order.
@@ -145,8 +153,23 @@ func groupByBucket(rows []dailyRow) (map[string][]dailyRow, []string) {
 	return groups, names
 }
 
-func sumInt(rows []dailyRow, f func(dailyRow) int64) int64 {
-	var total int64
+// bucketPrs is the pull requests of one attribution bucket: the prs_total of the
+// rows of that bucket. The stored ai_assisted_prs, agent_created_prs, human_prs
+// and unknown_prs columns carry the whole (team, repository, work type, day)
+// group's counts on EVERY bucket row of the group, so adding one of them over
+// rows counts the group once per emitted bucket row (CHAOS-9676).
+func bucketPrs(rows []dailyRow, bucket string) float64 {
+	var total float64
+	for _, r := range rows {
+		if r.Bucket == bucket {
+			total = total + r.PrsTotal
+		}
+	}
+	return total
+}
+
+func sumInt(rows []dailyRow, f func(dailyRow) float64) float64 {
+	var total float64
 	for _, r := range rows {
 		total = total + f(r)
 	}

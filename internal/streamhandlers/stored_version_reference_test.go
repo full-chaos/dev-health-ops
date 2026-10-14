@@ -153,7 +153,9 @@ func TestExternalStatementVariantsMatchThePythonReference(t *testing.T) {
 
 // internalUnreferencedColumns are columns the internal ingest writer inserts
 // that the Python persist path does not.
-var internalUnreferencedColumns = map[string][]string{}
+var internalUnreferencedColumns = map[string][]string{
+	"deployments": {"pull_request_tier"},
+}
 
 // internalUndefinedReferences are cells where the persist path hands None to
 // a non-Nullable column, so the reference defines no value; the writer's own

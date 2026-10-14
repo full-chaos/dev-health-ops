@@ -21,8 +21,10 @@ import (
 // value for work_items priority_raw/service_class/due_at, and
 // `work_item_transitions` never writes provider. The work_items write appends
 // those three columns and description (the stored-version contract in
-// stored_version.go): priority_raw/service_class/due_at carry the value the
-// key already holds; description is written, cut to
+// stored_version.go): priority_raw/service_class carry the value the key
+// already holds; due_at is written as the row states it for gitlab, jira and
+// linear rows (a row with no date clears it) and carries the held value for a
+// github row, which has no due date; description is written, cut to
 // workItemDescriptionMaxRunes, when the provider row has one and carries the
 // held value when it has none, so a sync never clears one another writer set.
 
@@ -109,7 +111,7 @@ type GitHubWorkItemsClickHouseAdapter struct{ Conn driver.Conn }
 
 const gitHubWorkItemsInsert = `INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, status_raw, project_key, project_id, native_team_key, project_name, assignees, reporter, created_at, updated_at, started_at, completed_at, closed_at, labels, story_points, sprint_id, sprint_name, parent_id, epic_id, url, last_synced, org_id, source_id)`
 
-const gitHubWorkItemsSelect = `SELECT repo_id, work_item_id, provider, title, type, status, status_raw, project_key, project_id, native_team_key, project_name, assignees, reporter, created_at, updated_at, started_at, completed_at, closed_at, labels, story_points, sprint_id, sprint_name, parent_id, epic_id, url, last_synced, org_id, source_id, description FROM work_items FINAL WHERE org_id = ? AND repo_id = ? AND work_item_id = ?`
+const gitHubWorkItemsSelect = `SELECT repo_id, work_item_id, provider, title, type, status, status_raw, project_key, project_id, native_team_key, project_name, assignees, reporter, created_at, updated_at, started_at, completed_at, closed_at, labels, story_points, sprint_id, sprint_name, parent_id, epic_id, url, last_synced, org_id, source_id, description, due_at FROM work_items FINAL WHERE org_id = ? AND repo_id = ? AND work_item_id = ?`
 
 // workItemStoredRow is the stored projection of the columns this unit owns. It
 // is deliberately not githubWorkItemRow: the semantic row carries fields this
@@ -145,6 +147,7 @@ type workItemStoredRow struct {
 	OrgID         string
 	SourceID      *uuid.UUID
 	Description   *string
+	DueAt         *time.Time
 }
 
 // projectWorkItem applies exactly the coercions write_work_items applies.
@@ -179,6 +182,7 @@ func projectWorkItem(row githubWorkItemRow) workItemStoredRow {
 		// source_id is NULL for native sync; only the external-ingest sink
 		// stamps it (CHAOS-2698 D1), and this unit is never that writer.
 		SourceID: nil, Description: boundedWorkItemDescription(row.Description),
+		DueAt: utcPointer(row.DueAt),
 	}
 }
 
@@ -257,7 +261,7 @@ func (adapter GitHubWorkItemsClickHouseAdapter) InspectGitHubWorkItemEffect(
 				&actual.ClosedAt, &actual.Labels, &actual.StoryPoints,
 				&actual.SprintID, &actual.SprintName, &actual.ParentID,
 				&actual.EpicID, &actual.URL, &actual.LastSynced, &actual.OrgID,
-				&actual.SourceID, &actual.Description,
+				&actual.SourceID, &actual.Description, &actual.DueAt,
 			); err != nil {
 				return EffectConflict, err
 			}
@@ -300,7 +304,8 @@ func workItemStoredRowsEqual(expected, actual workItemStoredRow) EffectInspectio
 		expected.ParentID != actual.ParentID || expected.EpicID != actual.EpicID ||
 		expected.URL != actual.URL || expected.OrgID != actual.OrgID ||
 		!uuidPointersEqual(expected.SourceID, actual.SourceID) ||
-		(expected.Description != nil && !stringPointersEqual(expected.Description, actual.Description)) {
+		(expected.Description != nil && !stringPointersEqual(expected.Description, actual.Description)) ||
+		(workItemDueAtStated(expected.Provider) && !timePointersEqual(expected.DueAt, actual.DueAt)) {
 		return EffectConflict
 	}
 	return EffectExact

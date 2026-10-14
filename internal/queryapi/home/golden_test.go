@@ -280,9 +280,97 @@ func TestGoldenOrgScopeDefault(t *testing.T) {
 
 // assertResponseEqual is shared by every golden test in this package
 // (org/team/repo scope).
+//
+// The goldens are Python recordings and cannot hold the GraphQL-only change
+// failure evidence of a delta (CHAOS-9630, json "-"): it is compared without
+// it here, and TestChangeFailureEvidenceIsServedWithTheRate holds it by value.
 func assertResponseEqual(t *testing.T, got, want Response) {
 	t.Helper()
+	got.Deltas = append([]MetricDelta(nil), got.Deltas...)
+	for i := range got.Deltas {
+		got.Deltas[i].ChangeFailureEvidence = nil
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", got, want)
 	}
+}
+
+// CHAOS-9630: the change failure rate delta carries what the rate stands on,
+// read off the same outcome as the rate; no other metric carries it.
+func TestChangeFailureEvidenceIsServedWithTheRate(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: orgGoldenHandler(t)}
+	got, err := BuildResponse(context.Background(), client, nil, "org-1", Filters{
+		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
+		Scope: ScopeFilter{Level: "org"},
+	}, time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("BuildResponse: %v", err)
+	}
+	served := 0
+	for _, delta := range got.Deltas {
+		if delta.Metric != "change_failure_rate" {
+			if delta.ChangeFailureEvidence != nil {
+				t.Errorf("metric %s serves change failure evidence: %+v", delta.Metric, delta.ChangeFailureEvidence)
+			}
+			continue
+		}
+		served++
+		// The fixture's view: 100 deployments, 10 failed through a native link,
+		// one direct incident, no deployment status stored.
+		evidence := delta.ChangeFailureEvidence
+		if evidence == nil {
+			t.Fatal("change_failure_rate serves no evidence")
+		}
+		if evidence.Basis == nil || *evidence.Basis != "incident" {
+			t.Errorf("basis = %v, want incident", evidence.Basis)
+		}
+		if evidence.Deployments != 100 || evidence.StatusKnown != 0 {
+			t.Errorf("D = %d, K = %d, want 100, 0", evidence.Deployments, evidence.StatusKnown)
+		}
+		if evidence.Coverage == nil || *evidence.Coverage != 0 {
+			t.Errorf("coverage = %v, want a served 0 (K / D)", evidence.Coverage)
+		}
+		if evidence.UnknownReason != nil {
+			t.Errorf("unknown reason = %q, want none for a measured rate", *evidence.UnknownReason)
+		}
+	}
+	if served != 1 {
+		t.Fatalf("change_failure_rate deltas = %d, want 1", served)
+	}
+}
+
+// An empty window still serves the evidence of the unknown rate: the reason,
+// and no basis.
+func TestChangeFailureEvidenceOfAWindowWithNothingStoredNamesTheReason(t *testing.T) {
+	base := orgGoldenHandler(t)
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM repo_change_failure_daily") && strings.Contains(query, changefailure.ViewSumsSQL) {
+			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
+		}
+		return base(t, query, bindings)
+	}}
+	got, err := BuildResponse(context.Background(), client, nil, "org-1", Filters{
+		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
+		Scope: ScopeFilter{Level: "org"},
+	}, time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("BuildResponse: %v", err)
+	}
+	for _, delta := range got.Deltas {
+		if delta.Metric != "change_failure_rate" {
+			continue
+		}
+		evidence := delta.ChangeFailureEvidence
+		if evidence == nil {
+			t.Fatal("an unknown change failure rate serves no evidence")
+		}
+		if evidence.Basis != nil || evidence.Coverage != nil || evidence.Deployments != 0 || evidence.StatusKnown != 0 {
+			t.Errorf("evidence of nothing stored = %+v, want no basis, no coverage and zero counts", evidence)
+		}
+		if evidence.UnknownReason == nil || *evidence.UnknownReason != "not_collected" {
+			t.Errorf("unknown reason = %v, want not_collected", evidence.UnknownReason)
+		}
+		return
+	}
+	t.Fatal("no change_failure_rate delta")
 }

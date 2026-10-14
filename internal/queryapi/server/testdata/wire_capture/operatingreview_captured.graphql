@@ -18,6 +18,14 @@ query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
         hasData
         scope
         rateState
+        changeFailureEvidence {
+          basis
+          deployments
+          deploymentsWithStatus
+          coverage
+          unknownReason
+          __typename
+        }
         delta {
           value
           priorValue

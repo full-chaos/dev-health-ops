@@ -434,3 +434,52 @@ func TestChangeFailureRateCarriesTheStateOfTheCurrentWeek(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-9630: change failure rate carries what the week's rate stands on, read
+// off the same outcome as the rate and its state: the evidence basis, D, K,
+// coverage K / D and, with no rate, the unknown reason. No other metric
+// carries it.
+func TestChangeFailureRateCarriesTheEvidenceOfTheCurrentWeek(t *testing.T) {
+	rows := func(counts changefailure.Counts, stored uint64) periodRows {
+		return periodRows{changeFailure: []changeFailureAggRow{{view: changefailure.View{Counts: counts, StoredRows: stored}}}}
+	}
+	week := day("2026-08-24")
+	str := func(v string) *string { return &v }
+	num := func(v float64) *float64 { return &v }
+	for _, tc := range []struct {
+		name        string
+		rows        periodRows
+		basis       *string
+		deployments int
+		withStatus  int
+		coverage    *float64
+		reason      *string
+	}{
+		{"no read result", periodRows{}, nil, 0, 0, nil, str("not_collected")},
+		{"no stored row", rows(changefailure.Counts{}, 0), nil, 0, 0, nil, str("not_collected")},
+		{"stored rows, no deployment", rows(changefailure.Counts{IncidentsDirect: 1}, 3), nil, 0, 0, nil, str("no_deployments_in_window")},
+		{"deployments without an outcome", rows(changefailure.Counts{Deployments: 4}, 2), nil, 4, 0, num(0), str("deployments_without_outcome")},
+		{"incident links only", rows(changefailure.Counts{Deployments: 4, FailedNative: 1, IncidentsDirect: 1}, 2), str("incident"), 4, 0, num(0), nil},
+		{"statuses only, half of them final", rows(changefailure.Counts{Deployments: 4, StatusKnown: 2, FailedStatus: 1}, 2), str("status"), 4, 2, num(0.5), nil},
+		{"statuses only, a measured zero", rows(changefailure.Counts{Deployments: 3, StatusKnown: 3}, 1), str("status"), 3, 3, num(1), nil},
+		{"incident links and statuses", rows(changefailure.Counts{Deployments: 4, StatusKnown: 4, FailedNative: 1, IncidentsDirect: 1}, 2), str("both"), 4, 4, num(1), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := metricsByKey(t, computeReview("org-1", nil, week, tc.rows, periodRows{}))
+			got := current["change_failure_rate"].ChangeFailureEvidence
+			if got == nil {
+				t.Fatal("change_failure_rate serves no evidence")
+			}
+			same := func(a, b *string) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
+			sameNum := func(a, b *float64) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
+			if !same(got.Basis, tc.basis) || got.Deployments != tc.deployments || got.DeploymentsWithStatus != tc.withStatus || !sameNum(got.Coverage, tc.coverage) || !same(got.UnknownReason, tc.reason) {
+				t.Errorf("evidence = %+v, want basis %v D %d K %d coverage %v reason %v", got, tc.basis, tc.deployments, tc.withStatus, tc.coverage, tc.reason)
+			}
+			for key, m := range current {
+				if key != "change_failure_rate" && m.ChangeFailureEvidence != nil {
+					t.Errorf("%s carries change failure evidence %+v", key, m.ChangeFailureEvidence)
+				}
+			}
+		})
+	}
+}

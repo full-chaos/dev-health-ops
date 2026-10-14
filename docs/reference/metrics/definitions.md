@@ -149,6 +149,20 @@ shows the rate also gives the state: `/api/v1/explain` in `rate_state` (beside
 means that nothing was counted for the window: the days were not computed, or
 no repository of the view had a deployment or an incident.
 
+What the rate stands on (CHAOS-9630). `/explain` serves the basis in
+`evidence_basis`. The GraphQL `home` deltas and `operatingReview` metrics serve
+`changeFailureEvidence` (type `ChangeFailureEvidence`): `basis` (`status`,
+`incident` or `both`; null when there is no rate), `deployments` (D),
+`deploymentsWithStatus` (K), `coverage` (K / D, from 0 to 1; null when D is 0)
+and `unknownReason` (`not_collected`, `no_deployments_in_window` or
+`deployments_without_outcome`; null when the rate is measured). The field is
+served for change failure rate whatever its state, so an unknown rate names its
+reason, and is null for every other metric. All five values are read off the
+`Outcome` of the one rule (`Outcome.Evidence`), so they never disagree with the
+rate. The REST Home answer and the frozen operating review documents do not
+carry it. `not_collected` also covers a window whose read failed: the operating
+review drops a failed read and serves it as nothing stored.
+
 A report chart of change failure rate uses the same rule for each of its
 buckets (a day, a week, a repository, the total): a bucket with no measured
 rate has no point.

@@ -55,7 +55,7 @@ cross-team behavior per metric.
 | Metric key | Aggregation across teams | Notes |
 |------------|--------------------------|-------|
 | `deployments_count` | **SUM** | Repo-scoped; unchanged across modes. |
-| `change_failure_rate` | `changefailure.Evaluate` over the week's summed `repo_change_failure_daily` counts; no data without a deployment or without incident evidence (CHAOS-8981). The metric's `rateState` says which: `measured`, `unknown_no_incident_evidence`, `not_applicable_no_deployments`, or null when the week holds no stored counts. Null for every other metric | Repo-scoped; unchanged across modes. |
+| `change_failure_rate` | `changefailure.Evaluate` over the week's summed `repo_change_failure_daily` counts; no data without a deployment or without incident evidence (CHAOS-8981). The metric's `rateState` says which: `measured`, `unknown_no_incident_evidence`, `not_applicable_no_deployments`, or null when the week holds no stored counts. `changeFailureEvidence` (CHAOS-9630) gives the evidence basis, D, K, coverage K / D and the unknown reason of the same outcome, whatever its state. Null for every other metric | Repo-scoped; unchanged across modes. |
 | `deployment_failure_rate` | failed deployment runs / deployments (`deploy_metrics_daily`) | Repo-scoped; unchanged across modes. |
 | `revert_rate` | total reverted / total merged pull requests (`repo_metrics_daily.revert_rate` weighted by `prs_merged`); no data while no writer measures it | Repo-scoped; unchanged across modes. |
 | `incidents_count` | **SUM** | Repo-scoped; unchanged across modes. |

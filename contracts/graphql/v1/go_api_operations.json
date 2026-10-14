@@ -179,7 +179,7 @@
   },
   {
     "operation": "home",
-    "digest": "b42f3f95a8621cb7db6793b73b657144ce8681aff265767fa9d24d01ffc1fb4d"
+    "digest": "51ab11890b50e1548f98741203012c13581874a5c061231ce949323928112106"
   },
   {
     "operation": "home",
@@ -227,6 +227,11 @@
     "legacy": true
   },
   {
+    "operation": "home",
+    "digest": "b42f3f95a8621cb7db6793b73b657144ce8681aff265767fa9d24d01ffc1fb4d",
+    "legacy": true
+  },
+  {
     "operation": "hotspots",
     "digest": "e5a6ed356c1b4deca559bf5954509b5fb7a0bb9310d7c4bb7643cd95f752e59f"
   },
@@ -271,7 +276,7 @@
   },
   {
     "operation": "operatingReview",
-    "digest": "54a442197685a26436f6287e8377a26b6451de33e251e857afa30abe32df9ac9"
+    "digest": "0ba2df77565f6c9c91564108fb182f72928b6d3a3a6f850659c7d8216eecabd6"
   },
   {
     "operation": "operatingReview",
@@ -286,6 +291,11 @@
   {
     "operation": "operatingReview",
     "digest": "fef895a373f536846afdb3bb93ef12dd03d8af8d23f3663b290c350e622ed8c3",
+    "legacy": true
+  },
+  {
+    "operation": "operatingReview",
+    "digest": "54a442197685a26436f6287e8377a26b6451de33e251e857afa30abe32df9ac9",
     "legacy": true
   },
   {

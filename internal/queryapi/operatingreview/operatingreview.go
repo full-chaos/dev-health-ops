@@ -143,6 +143,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/changefailureevidence"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
@@ -1518,11 +1519,17 @@ type reviewMetric struct {
 	// (changefailure.Outcome.StateOrNil): why it has a value or not. nil for
 	// every other metric and for a week with no stored counts (CHAOS-8981).
 	rateState *string
+	// changeFailureEvidence is what the week's change failure rate stands on
+	// (changefailure.Outcome.Evidence, CHAOS-9630): basis, D, K, coverage and
+	// the unknown reason. nil for every other metric.
+	changeFailureEvidence *changefailure.Evidence
 }
 
-// state attaches the week's change-failure state to the metric.
+// state attaches the week's change-failure state and its evidence to the
+// metric.
 func (m reviewMetric) state(outcome changefailure.Outcome) reviewMetric {
 	m.rateState = outcome.StateOrNil()
+	m.changeFailureEvidence = outcome.Evidence()
 	return m
 }
 
@@ -2053,6 +2060,8 @@ func toGraphQLSection(s reviewSection) model.OperatingReviewSection {
 			HasData:   m.hasData,
 			Scope:     metricScope(m),
 			RateState: m.rateState,
+
+			ChangeFailureEvidence: changefailureevidence.Model(m.changeFailureEvidence),
 			Delta: &model.OperatingReviewDelta{
 				Value:        m.delta.value,
 				PriorValue:   m.delta.priorValue,

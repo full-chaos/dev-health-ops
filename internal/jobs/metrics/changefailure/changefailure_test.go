@@ -389,3 +389,52 @@ func TestAMixedWindowOfOldAndRecomputedRows(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-9630: the evidence a reader serves is read off the outcome of the one
+// rule, whatever the state: an unknown rate keeps its reason and the counts that
+// explain it, a measured one its basis.
+func TestEvidenceNamesTheBasisTheCountsAndTheReasonWhateverTheState(t *testing.T) {
+	str := func(v string) *string { return &v }
+	cases := []struct {
+		name     string
+		in       Counts
+		stored   uint64
+		basis    *string
+		d, k     uint64
+		coverage *float64
+		reason   *string
+	}{
+		{"nothing stored", Counts{}, 0, nil, 0, 0, nil, str("not_collected")},
+		{"stored rows, no deployment", Counts{IncidentsDirect: 1}, 2, nil, 0, 0, nil, str("no_deployments_in_window")},
+		{"deployments, no outcome", Counts{Deployments: 5}, 1, nil, 5, 0, ptr(0), str("deployments_without_outcome")},
+		{"incident basis", Counts{Deployments: 5, IncidentsDirect: 1}, 1, str("incident"), 5, 0, ptr(0), nil},
+		{"status basis", Counts{Deployments: 5, StatusKnown: 4, FailedStatus: 1}, 1, str("status"), 5, 4, ptr(0.8), nil},
+		{"both bases", Counts{Deployments: 5, StatusKnown: 5, FailedNative: 1, IncidentsDirect: 1}, 1, str("both"), 5, 5, ptr(1), nil},
+	}
+	for _, tc := range cases {
+		got := Evaluate(View{Counts: tc.in, StoredRows: tc.stored}).Evidence()
+		if got == nil {
+			t.Errorf("%s: no evidence", tc.name)
+			continue
+		}
+		if (got.Basis == nil) != (tc.basis == nil) || (got.Basis != nil && *got.Basis != *tc.basis) {
+			t.Errorf("%s: basis %v, want %v", tc.name, deref2(got.Basis), deref2(tc.basis))
+		}
+		if got.Deployments != tc.d || got.StatusKnown != tc.k {
+			t.Errorf("%s: D %d K %d, want %d %d", tc.name, got.Deployments, got.StatusKnown, tc.d, tc.k)
+		}
+		if (got.Coverage == nil) != (tc.coverage == nil) || (got.Coverage != nil && *got.Coverage != *tc.coverage) {
+			t.Errorf("%s: coverage %v, want %v", tc.name, deref(got.Coverage), deref(tc.coverage))
+		}
+		if (got.UnknownReason == nil) != (tc.reason == nil) || (got.UnknownReason != nil && *got.UnknownReason != *tc.reason) {
+			t.Errorf("%s: unknown reason %v, want %v", tc.name, deref2(got.UnknownReason), deref2(tc.reason))
+		}
+	}
+}
+
+func deref2(v *string) string {
+	if v == nil {
+		return "<nil>"
+	}
+	return *v
+}

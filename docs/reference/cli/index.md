@@ -1681,8 +1681,10 @@ Two runs merge when they are adjacent (`valid_to` of one is `valid_from` of
 the next) and every column but the version is equal: `project_key` (project
 table), `repo_id`, `match_type`, `share` (repository table; share drift is a
 real change, D5991), `is_primary`, `specificity`, `priority`. `updated_at` and
-`last_synced` are ignored. Open rows, gaps, overlaps, close-before-open rows
-and rows of any other source are never touched. A run is also kept when a row of
+`last_synced` are ignored. Open rows, gaps, close-before-open rows
+and rows of any other source are never touched. An overlap on a key is counted
+(`overlaps`); an adjacent equal-shape pair next to an overlap is still merged
+(the timeline stays exact; CHAOS-9675 tracks keeping such a key whole). A run is also kept when a row of
 another source of the same (provider, repository or project, team) would
 change which row wins the "newest version" choice of the cascade readers
 (`runs_kept_multi_source`). A tombstone is dropped unless it is the earliest row
@@ -1711,6 +1713,19 @@ the superseded stale physical versions (which no FINAL reader sees) are not rest
 until the next pin readback after the step and is dropped on the word of the GWC
 lead. In production the step runs inside a roll window (minutes :10-:33 or
 :46-:55 of the hour, between the hourly syncs), with the workers running.
+
+**Supported procedure and its limit (D6010).** Pause the providersync writers
+for the whole window (the scheduler, then the `sync` and `sync-provider`
+ScaledObjects at 0, wait for the running jobs of queues `sync` and
+`sync_provider` to drain), run the dry run, run `--apply --workers-paused`, read
+the owner-answer differential back (counts only: `differential.mismatches` 0, a
+second `--apply` reports `runs_merged` 0) in the same paused window, and if
+anything is wrong run `--restore-run <run_id> --apply --workers-paused`
+IMMEDIATELY, in that window; then resume the writers in the reverse order. A
+restore after the writers have resumed is NOT supported: a sync write that
+reached a key during or after the run, with a provider timestamp older than the
+run, is not seen as a later write. The backup tables are dropped only after the
+next pin readback after the step, on the GWC lead's word.
 
 **Pause the workers first.** No per-organization lease exists that the tool could take (the sync leases are per sync unit), so a write, `--apply` or `--restore-run ... --apply`, is refused unless `--workers-paused` is given: the operator's statement that the sync workers that write ownership rows are paused for the organization. As the data side of that pause, the write is also refused (`ownership_compaction_writes_active`) while a part of either ownership table was modified within `--quiet-seconds` (default 60; 0 turns the check off) by the server clock (provider timestamps are not monotonic, so the check reads the server's part times, of any organization, and the `updated_at` and `last_synced` of the organization's rows); a run with nothing to do is not stopped by it. A dry run needs neither.
 

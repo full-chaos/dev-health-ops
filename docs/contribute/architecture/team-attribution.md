@@ -1273,16 +1273,27 @@ controls: a link that is gone and an explicit empty list are closed).
 > - **An additive measure** (a sum over repositories) takes each owner at its share. `team_cognitive_load_daily`
 >   does so: the pull-request interruption load, the review request load and the context-spread count are the sums
 >   of the repository values times the owner's share, and the after-hours and weekend ratios are recomputed from the
->   share-weighted commit counts. The counts of repositories and authors stay whole.
-> - **A score that does not add** (a mean of repository measures, a ratio, a percentile, a composite) gives every owner,
->   main and lesser, a row from the repository's own raw inputs: a share of a p90 or a ratio is no measure.
->   `compounding_risk_daily` (team scope) does so, through `teamresolve.ResolveOwnerSharesThenPatterns`, and the
->   owner's share (CHAOS-9620, D5994) scales the score columns of the row (`compounding_risk` and the four norms): a
->   lesser owner's row is the repository's score times its share, and the rows of one repository's owners sum to the
->   repository's score (exact for a team that owns that one repository; for a team of several repositories the
->   multiplier is its mean share over them). The raw inputs and the severity stay the repository's own (the severity
->   names the repository's risk). The two review-window counts (`merged_prs_30d`, `reviewed_prs_30d`, UInt32) stay
->   whole until their column is widened. A sole owner (share 1) is unchanged, bit for bit.
+>   share-weighted commit counts. The counts of repositories and authors stay whole. `team_complexity_daily`
+>   (lines of code, cyclomatic total, the two function counts) and `team_metrics_daily` (the commit, after-hours and
+>   weekend counts, written per team and repository by the wellbeing executor) do the same since migration 124
+>   (CHAOS-9601): their counter columns are Float64, a co-owning team holds a fraction of a count, nothing is
+>   rounded, and the ratios are recomputed from the weighted sums. The cognitive-load executor reads
+>   `team_metrics_daily` per repository and sums the rows of one generation, so the owners' shares of a repository
+>   (which sum to 1) give the whole repository back before the cognitive-load share is applied once.
+>   `ai_impact_metrics_daily` (UInt32 counters, served as GraphQL `Int`) still takes the main owner(s) only, each whole
+>   (D5994; the public count type is a separate decision).
+> - **The share is the weight of a repository in a team's aggregate (D5998, CHAOS-9620).** `compounding_risk_daily`
+>   (team scope) gives every owner, main and lesser, a row. Its additive columns are the pooled review-window counts
+>   (`merged_prs_30d`, `reviewed_prs_30d`, Float64 since migration 124): the sum over the team's repositories of the
+>   repository's count times the owner's share. Its intensive columns are the six raw inputs (`rework_churn`,
+>   `complexity_delta`, `bus_factor`, `ownership_gini`, `single_owner_ratio`, `review_latency_p90h`) and, derived from
+>   them, the four norms, `compounding_risk` and `severity`: each input is the share-weighted mean over the team's
+>   repositories (only over the repositories that carry that input), and the norms, the score and the severity are
+>   recomputed from those inputs with the same formula. `review_share_30d` is reviewed over merged of the weighted
+>   counts. A share is never multiplied into a score, a norm, a mean or a percentile: a team that owns one repository at
+>   0.3 reads that repository's intensive values and score, and only its counts are fractional (risk intensity is a
+>   property of the repository; the share scales exposure counts). A sole owner of every repository it owns (share 1)
+>   is unchanged, bit for bit. Resolved through `teamresolve.ResolveOwnerSharesThenPatterns`.
 > - **A table with one row per repository** (the four TestOps families, one row per organization, repository and
 >   day) takes the main owner only; a full tie takes the first tied team by rank. A second team has no row to live in.
 

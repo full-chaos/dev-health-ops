@@ -31,8 +31,9 @@ func TestBuildTeamRowsCountsARepositoryWholeInEachMainOwner(t *testing.T) {
 	if _, ok := byTeam["team-b"]; !ok {
 		t.Fatalf("no row for team-b, a main owner of repo-tied: %v", byTeam)
 	}
-	// team-b holds repo-tied only (0.5); team-a holds both (mean 0.3).
-	if a, b := byTeam["team-a"], byTeam["team-b"]; a.ReworkChurn == nil || b.ReworkChurn == nil || *b.ReworkChurn != 0.5 || *a.ReworkChurn < 0.2999 || *a.ReworkChurn > 0.3001 {
-		t.Errorf("rework churn team-a %v team-b %v, want 0.3 and 0.5", a.ReworkChurn, b.ReworkChurn)
+	// team-b holds repo-tied only (0.5); team-a holds both, repo-tied at its
+	// share 0.5 and repo-single whole: (0.5 x 0.5 + 0.1 x 1) / 1.5 (D5998).
+	if a, b := byTeam["team-a"], byTeam["team-b"]; a.ReworkChurn == nil || b.ReworkChurn == nil || *b.ReworkChurn != 0.5 || *a.ReworkChurn < 0.23333 || *a.ReworkChurn > 0.23334 {
+		t.Errorf("rework churn team-a %v team-b %v, want 0.2333 and 0.5", a.ReworkChurn, b.ReworkChurn)
 	}
 }

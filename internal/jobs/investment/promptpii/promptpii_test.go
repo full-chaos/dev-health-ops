@@ -163,15 +163,34 @@ func TestUnlabeledLetterOnlyProseSecretIsANamedLimit(t *testing.T) {
 	}
 }
 
-func TestLongDescriptionStaysFast(t *testing.T) {
+func TestLongDescriptionScalesLinearly(t *testing.T) {
 	line := "The api key is abcd1234 and lodash@latest broke; mail bob@corp.example, token is invalid. "
-	in := strings.Repeat(line, 20000)
-	start := time.Now()
-	out := NewFilter().Text(in)
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("filter took %s for %d bytes", elapsed, len(in))
+	run := func(repeat int) (time.Duration, string) {
+		in := strings.Repeat(line, repeat)
+		start := time.Now()
+		out := NewFilter().Text(in)
+		return time.Since(start), out
 	}
+	run(20)
+	best := func(repeat int) (time.Duration, string) {
+		var out string
+		low := time.Duration(1<<62 - 1)
+		for i := 0; i < 2; i++ {
+			d, o := run(repeat)
+			out = o
+			if d < low {
+				low = d
+			}
+		}
+		return low, out
+	}
+	small, _ := best(100)
+	large, out := best(800)
 	if strings.Contains(out, "abcd1234") || strings.Contains(out, "bob@") {
 		t.Fatal("value survived in a long description")
+	}
+	// 8x the input: a linear filter takes about 8x as long; a quadratic one 64x.
+	if large > 24*small+50*time.Millisecond {
+		t.Fatalf("filter does not scale linearly: %s for 100 lines, %s for 800 lines", small, large)
 	}
 }

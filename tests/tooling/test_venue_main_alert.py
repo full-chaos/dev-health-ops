@@ -48,7 +48,7 @@ printf '%s\n' "$*" >> "$FAKE_CALLS"
 if [ "$1" = "api" ]; then
   endpoint="$2"
   case "${endpoint}" in
-    */workflows/venue-oracles.yml/runs*) jq .runs "${fx}" ;;
+    */workflows/venue-oracles.yml/runs*) n="${endpoint##*per_page=}"; jq ".runs | .workflow_runs |= .[:${n}]" "${fx}" ;;
     */actions/runs/*/jobs*) id="${endpoint#*/actions/runs/}"; id="${id%%/*}"; jq ".jobs[\"${id}\"]" "${fx}" ;;
     *) exit 9 ;;
   esac
@@ -191,25 +191,33 @@ def test_green_executed_run_closes_the_open_issue(tmp_path):
     assert "actions/runs/300" in writes[0]
 
 
+def test_green_oracle_steps_on_a_failed_run_do_not_close_the_issue(tmp_path):
+    proc, writes = _run(
+        tmp_path,
+        [(300, "failure", GREEN), (200, "failure", RED)],
+        300,
+        issues=[_issue(41)],
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert writes == []
+    assert "not success" in proc.stdout
+
+
+def test_red_run_behind_many_skipped_runs_still_opens_the_issue(tmp_path):
+    skipped = [(1000 + i, "success", SKIPPED) for i in range(25)]
+    proc, writes = _run(tmp_path, [*skipped, (200, "failure", RED)], 1024)
+    assert proc.returncode == 0, proc.stderr
+    assert writes[-1].startswith("issue create")
+    assert "actions/runs/200" in writes[-1]
+
+
 def test_green_with_no_open_issue_changes_nothing(tmp_path):
     proc, writes = _run(tmp_path, [(300, "success", GREEN)], 300)
     assert proc.returncode == 0, proc.stderr
     assert writes == []
 
 
-def test_skipped_run_never_closes_the_issue(tmp_path):
-    proc, writes = _run(
-        tmp_path,
-        [(300, "success", SKIPPED), (200, "failure", RED)],
-        300,
-        issues=[_issue(41)],
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert writes == []
-    assert "not the newest executed run" in proc.stdout
-
-
-def test_skipped_run_after_red_adds_no_comment(tmp_path):
+def test_skipped_run_over_a_red_state_never_closes_the_issue(tmp_path):
     proc, writes = _run(
         tmp_path,
         [(300, "success", SKIPPED), (200, "failure", RED)],
@@ -218,9 +226,32 @@ def test_skipped_run_after_red_adds_no_comment(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert writes == []
+    assert "already on issue #41" in proc.stdout
 
 
-def test_older_run_that_completes_late_changes_nothing(tmp_path):
+def test_skipped_run_makes_up_a_lost_red_alert_without_duplicating(tmp_path):
+    proc, writes = _run(
+        tmp_path,
+        [(300, "success", SKIPPED), (200, "failure", RED)],
+        300,
+        issues=[_issue(41, body="Run https://github.com/o/r/actions/runs/100 at x")],
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert len(writes) == 1 and writes[0].startswith("issue comment 41 ")
+    assert "actions/runs/200" in writes[0]
+
+
+def test_older_run_that_completes_late_reads_the_current_state(tmp_path):
+    proc, writes = _run(
+        tmp_path,
+        [(300, "success", GREEN), (200, "failure", RED)],
+        200,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert writes == []
+
+
+def test_older_red_event_does_not_reopen_while_main_is_green(tmp_path):
     proc, writes = _run(
         tmp_path,
         [(300, "success", GREEN), (200, "failure", RED)],
@@ -228,7 +259,7 @@ def test_older_run_that_completes_late_changes_nothing(tmp_path):
         issues=[_issue(41)],
     )
     assert proc.returncode == 0, proc.stderr
-    assert writes == []
+    assert len(writes) == 1 and writes[0].startswith("issue close 41 ")
 
 
 def test_no_executed_run_in_the_window_warns_and_changes_nothing(tmp_path):
@@ -280,8 +311,10 @@ def test_workflow_listens_to_the_venue_workflow_by_its_name():
 
 def test_workflow_only_handles_main_push_runs():
     job = _workflow()["jobs"]["alert"]
-    assert "workflow_run.head_branch == 'main'" in job["if"]
-    assert "workflow_run.event == 'push'" in job["if"]
+    assert job["if"] == (
+        "github.event.workflow_run.head_branch == 'main'"
+        " && github.event.workflow_run.event == 'push'"
+    )
 
 
 def test_workflow_token_is_least_privilege_at_job_level():
@@ -294,8 +327,10 @@ def test_workflow_token_is_least_privilege_at_job_level():
     }
 
 
-def test_workflow_serialises_alert_jobs_and_never_cancels_one():
-    concurrency = _workflow()["concurrency"]
+def test_workflow_serialises_alert_jobs_after_the_filter_and_never_cancels_one():
+    doc = _workflow()
+    assert "concurrency" not in doc
+    concurrency = doc["jobs"]["alert"]["concurrency"]
     assert concurrency["group"] == "venue-oracles-main-alert"
     assert concurrency["cancel-in-progress"] is False
 

@@ -336,14 +336,15 @@ func TestLinearProjectRowsAreTheSameByValueBeforeAndAfterTheContract(t *testing.
 
 // The recovery readback of a project row is exact in the target columns too:
 // a stored row whose target provenance differs from what the write gave it is
-// a conflict, not an exact match, for every writer of projects. A row an older
+// a conflict, not an exact match, for every writer of projects (for an ensure
+// row, a state that claims a target it never read). A row an older
 // writer left (no fetch time) is still accepted for Linear.
 func TestProjectReadbackDetectsTargetProvenanceDrift(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	now := time.Date(2026, 8, 10, 12, 34, 56, 789000000, time.UTC)
-	tamper := func(orgID, provider string) {
+	tamper := func(orgID, provider, column, value string) {
 		t.Helper()
-		if err := conn.Exec(ctx, `ALTER TABLE projects UPDATE target_source = 'tampered' WHERE org_id = ? AND provider = ? SETTINGS mutations_sync = 2`, orgID, provider); err != nil {
+		if err := conn.Exec(ctx, `ALTER TABLE projects UPDATE `+column+` = ? WHERE org_id = ? AND provider = ? SETTINGS mutations_sync = 2`, value, orgID, provider); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -362,7 +363,7 @@ func TestProjectReadbackDetectsTargetProvenanceDrift(t *testing.T) {
 		if inspection, err := sink.InspectEffect(ctx, claim, effect); err != nil || inspection != EffectExact {
 			t.Fatalf("readback of the written row = %s %v, want exact", inspection, err)
 		}
-		tamper(claim.OrgID, "linear")
+		tamper(claim.OrgID, "linear", "target_source", "tampered")
 		if inspection, err := sink.InspectEffect(ctx, claim, effect); err != nil || inspection != EffectConflict {
 			t.Fatalf("readback after the provenance changed = %s %v, want conflict", inspection, err)
 		}
@@ -396,7 +397,9 @@ func TestProjectReadbackDetectsTargetProvenanceDrift(t *testing.T) {
 		if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
 			t.Fatalf("readback of the written row = %s %v, want exact", inspection, err)
 		}
-		tamper(orgID, "github")
+		// An ensure row names no target: the columns it keeps are whatever the
+		// key held, so only a state that claims a target it did not read is drift.
+		tamper(orgID, "github", "target_state", projectTargetStated)
 		if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectConflict {
 			t.Fatalf("readback after the provenance changed = %s %v, want conflict", inspection, err)
 		}

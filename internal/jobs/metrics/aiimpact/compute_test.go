@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -208,14 +209,14 @@ type pythonRecord struct {
 	WorkType                  string   `json:"work_type"`
 	Day                       string   `json:"day"`
 	AttributionBucket         string   `json:"attribution_bucket"`
-	PRsTotal                  uint32   `json:"prs_total"`
-	PRsMerged                 uint32   `json:"prs_merged"`
-	AIAssistedPRs             uint32   `json:"ai_assisted_prs"`
-	AgentCreatedPRs           uint32   `json:"agent_created_prs"`
-	HumanPRs                  uint32   `json:"human_prs"`
-	UnknownPRs                uint32   `json:"unknown_prs"`
+	PRsTotal                  float64  `json:"prs_total"`
+	PRsMerged                 float64  `json:"prs_merged"`
+	AIAssistedPRs             float64  `json:"ai_assisted_prs"`
+	AgentCreatedPRs           float64  `json:"agent_created_prs"`
+	HumanPRs                  float64  `json:"human_prs"`
+	UnknownPRs                float64  `json:"unknown_prs"`
 	AIAssistedPRRatio         *float64 `json:"ai_assisted_pr_ratio"`
-	AgentCreatedPRCount       uint32   `json:"agent_created_pr_count"`
+	AgentCreatedPRCount       float64  `json:"agent_created_pr_count"`
 	CycleTimeAvgHours         *float64 `json:"cycle_time_avg_hours"`
 	BaselineCycleTimeAvgHours *float64 `json:"baseline_cycle_time_avg_hours"`
 	AICycleTimeDeltaHours     *float64 `json:"ai_cycle_time_delta_hours"`
@@ -223,14 +224,14 @@ type pythonRecord struct {
 	BaselineReviewsPerPR      *float64 `json:"baseline_reviews_per_pr"`
 	AIReviewAmplification     *float64 `json:"ai_review_amplification"`
 	ChangesRequestedPerPR     *float64 `json:"changes_requested_per_pr"`
-	ReworkPRs                 uint32   `json:"rework_prs"`
+	ReworkPRs                 float64  `json:"rework_prs"`
 	ReworkDragRate            *float64 `json:"rework_drag_rate"`
-	FollowupCommitsCount      uint32   `json:"followup_commits_count"`
-	RevertPRs                 uint32   `json:"revert_prs"`
+	FollowupCommitsCount      float64  `json:"followup_commits_count"`
+	RevertPRs                 float64  `json:"revert_prs"`
 	RevertRate                *float64 `json:"revert_rate"`
-	IncidentsCount            uint32   `json:"incidents_count"`
+	IncidentsCount            float64  `json:"incidents_count"`
 	IncidentDragRate          *float64 `json:"incident_drag_rate"`
-	TestGapPRs                uint32   `json:"test_gap_prs"`
+	TestGapPRs                float64  `json:"test_gap_prs"`
 	TestGapRate               *float64 `json:"test_gap_rate"`
 	LeveragePRs               float64  `json:"leverage_prs_component"`
 	LeverageCycleTime         *float64 `json:"leverage_cycle_time_component"`
@@ -445,7 +446,7 @@ func TestUnavailableLinkageYieldsNullTestGapRate(t *testing.T) {
 	params.PRCommitStats, params.HasCommitStats = nil, false
 	for _, record := range Compute(params) {
 		if record.TestGapPRs != 0 {
-			t.Fatalf("bucket %s counted %d test gaps with NO linkage available", record.AttributionBucket, record.TestGapPRs)
+			t.Fatalf("bucket %s counted %v test gaps with NO linkage available", record.AttributionBucket, record.TestGapPRs)
 		}
 		if record.TestGapRate != nil {
 			t.Fatalf("bucket %s has test_gap_rate %v with NO linkage available; want null",
@@ -639,13 +640,13 @@ func TestComputeIsOrderInvariantOverItsInput(t *testing.T) {
 	}
 }
 
-// A repository with several main owners (a full ownership tie, D5990): a pull
+// A repository with owners that have no OwnerShare hook (share 1): a pull
 // request without an attributed team counts whole in each owner's records.
-func TestComputeCountsAPullRequestWholeInEachMainOwner(t *testing.T) {
+func TestComputeCountsAPullRequestWholeInEachOwnerWithoutShares(t *testing.T) {
 	params := fixtureParams()
 	params.Attributions = nil
 	params.TeamResolver = func(uuid.UUID, string) []string { return []string{"team-b", "team-a"} }
-	totals := map[string]uint32{}
+	totals := map[string]float64{}
 	for _, record := range Compute(params) {
 		if record.TeamID == nil {
 			t.Fatalf("record without a team: %+v", record)
@@ -655,11 +656,75 @@ func TestComputeCountsAPullRequestWholeInEachMainOwner(t *testing.T) {
 	single := fixtureParams()
 	single.Attributions = nil
 	single.TeamResolver = func(uuid.UUID, string) []string { return []string{"team-a"} }
-	var want uint32
+	var want float64
 	for _, record := range Compute(single) {
 		want += record.PRsTotal
 	}
 	if len(totals) != 2 || want == 0 || totals["team-a"] != want || totals["team-b"] != want {
-		t.Errorf("pull requests by team %v, want %d for each of team-a and team-b", totals, want)
+		t.Errorf("pull requests by team %v, want %v for each of team-a and team-b", totals, want)
 	}
+}
+
+// CHAOS-9604, D5988/D5998: the main owner and a lesser owner of a repository
+// each get records. The additive counts of a record are the pull requests' sums
+// at the owner's share; the ratios, averages and the baseline are the
+// repository's own and never scaled by the share.
+func TestComputeTakesCountsAtTheOwnersShareAndRatiosFromTheRepository(t *testing.T) {
+	whole := fixtureParams()
+	whole.Attributions = nil
+	whole.TeamResolver = func(uuid.UUID, string) []string { return []string{"main"} }
+	wholeByKey := map[string]Record{}
+	for _, record := range Compute(whole) {
+		wholeByKey[recordKey(asPythonRecord(record))] = record
+	}
+	if len(wholeByKey) == 0 {
+		t.Fatal("no records; the case is not set")
+	}
+
+	shared := fixtureParams()
+	shared.Attributions = nil
+	shared.TeamResolver = func(uuid.UUID, string) []string { return []string{"main", "lesser"} }
+	shares := map[string]float64{"main": 0.7, "lesser": 0.3}
+	shared.OwnerShare = func(_ uuid.UUID, team string) float64 { return shares[team] }
+	near := func(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+	seen := map[string]int{}
+	for _, record := range Compute(shared) {
+		team := *record.TeamID
+		share := shares[team]
+		seen[team]++
+		base, ok := wholeByKey[recordKey(asPythonRecord(withTeam(record, "main")))]
+		if !ok {
+			t.Fatalf("%s record %+v has no whole-repository counterpart", team, record)
+		}
+		for name, pair := range map[string][2]float64{
+			"prs_total": {record.PRsTotal, base.PRsTotal}, "prs_merged": {record.PRsMerged, base.PRsMerged},
+			"ai_assisted_prs": {record.AIAssistedPRs, base.AIAssistedPRs}, "human_prs": {record.HumanPRs, base.HumanPRs},
+			"unknown_prs": {record.UnknownPRs, base.UnknownPRs}, "rework_prs": {record.ReworkPRs, base.ReworkPRs},
+			"followup_commits_count": {record.FollowupCommitsCount, base.FollowupCommitsCount},
+			"revert_prs":             {record.RevertPRs, base.RevertPRs}, "test_gap_prs": {record.TestGapPRs, base.TestGapPRs},
+			"incidents_count": {record.IncidentsCount, base.IncidentsCount}, "leverage_prs_component": {record.LeveragePRsComponent, base.LeveragePRsComponent},
+		} {
+			if !near(pair[0], pair[1]*share) {
+				t.Errorf("%s %s = %v, want the repository's %v x %v", team, name, pair[0], pair[1], share)
+			}
+		}
+		for name, pair := range map[string][2]*float64{
+			"ai_assisted_pr_ratio": {record.AIAssistedPRRatio, base.AIAssistedPRRatio}, "cycle_time_avg_hours": {record.CycleTimeAvgHours, base.CycleTimeAvgHours},
+			"reviews_per_pr": {record.ReviewsPerPR, base.ReviewsPerPR}, "rework_drag_rate": {record.ReworkDragRate, base.ReworkDragRate},
+			"revert_rate": {record.RevertRate, base.RevertRate}, "test_gap_rate": {record.TestGapRate, base.TestGapRate},
+			"incident_drag_rate": {record.IncidentDragRate, base.IncidentDragRate},
+		} {
+			if (pair[0] == nil) != (pair[1] == nil) || (pair[0] != nil && *pair[0] != *pair[1]) {
+				t.Errorf("%s %s = %v, want the repository's own %v (a share never scales a ratio or an average)", team, name, pair[0], pair[1])
+			}
+		}
+	}
+	if seen["main"] == 0 || seen["main"] != seen["lesser"] {
+		t.Errorf("records by owner %v, want the same rows for main and lesser", seen)
+	}
+}
+
+func withTeam(record Record, team string) Record {
+	record.TeamID = &team
+	return record
 }

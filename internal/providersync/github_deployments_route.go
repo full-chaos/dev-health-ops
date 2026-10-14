@@ -38,6 +38,14 @@ const defaultGitHubDeploymentsMax = 1_000
 // unbounded per-deployment request budget.
 const maxDeploymentStatusPages = 3
 
+// maxStatusRateLimitExhaustions is the unit's budget of statuses lookups that
+// may exhaust their retry budget on a rate-limited response before the rest of
+// the unit's lookups are skipped (CHAOS-9678). Every exhausted lookup pays the
+// full backoff, so the budget is small; but one exhausted lookup no longer
+// leaves every later deployment of the unit without a status, as it did when
+// the first exhaustion stopped them all.
+const maxStatusRateLimitExhaustions = 3
+
 // githubDeploymentsListPageBudget is the page cap request_plan.go's
 // github/deployments base term assumes for BOTH the releases and the
 // deployments-list fetch: Collect (below) derives its own `pages` value from
@@ -189,8 +197,9 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 		deployments = deployments[:maxDeployments]
 	}
 	rows := make([]deploymentRow, 0, len(deployments))
-	statusesRateLimited := false
+	statusRateLimitExhaustions := 0
 	statusLookupsSkippedForRateLimit := 0
+	var outcomes deploymentStatusLookupOutcomes
 	enrichmentPages := 0
 	for _, deployment := range deployments {
 		row, include := normalizeGitHubDeployment(claim, repoID, deployment, releases, normalizedAt)
@@ -208,14 +217,15 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 			}
 		}
 		switch {
-		case statusesRateLimited:
-			// The statuses endpoint already exhausted its retry budget once
-			// in this unit -- a second, third, ... call would each pay the
-			// same full backoff again for a deployment count that can run to
-			// maxDeployments. Skip the remaining lookups outright rather
-			// than multiply that cost; the summary line below reports how
-			// many were skipped this way.
+		case statusRateLimitExhaustions >= maxStatusRateLimitExhaustions:
+			// The statuses endpoint already exhausted its retry budget
+			// maxStatusRateLimitExhaustions times in this unit -- each further
+			// call would pay the same full backoff again for a deployment
+			// count that can run to maxDeployments. Skip the remaining
+			// lookups outright rather than multiply that cost; the summary
+			// line below reports how many were skipped this way.
 			statusLookupsSkippedForRateLimit++
+			outcomes.Skipped++
 			row.LifecycleLookupFailed = true
 		default:
 			statuses, statusPages, statusesTruncated, statusErr := fetchGitHubDeploymentsPage[gitHubDeploymentStatusPayload](ctx, &counted, root+"/deployments/"+stringValue(deployment.ID)+"/statuses", maxDeploymentStatusPages)
@@ -224,14 +234,21 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 			case statusErr != nil:
 				slog.Warn("github_deployments.status_lookup_failed", logging.ProviderIDAttr("deployment_id", row.DeploymentID), "cause", statusErr.Error())
 				row.LifecycleLookupFailed = true
+				outcomes.Failed++
 				if isRateLimitExhausted(statusErr) {
-					statusesRateLimited = true
+					statusRateLimitExhaustions++
 				}
 			case len(statuses) == 0:
+				outcomes.Empty++
 				slog.Warn("github_deployments.status_lookup_empty", logging.ProviderIDAttr("deployment_id", row.DeploymentID), "cause", "no deployment statuses returned")
 			default:
 				row.StartedAt, row.FinishedAt = deploymentLifecycleFromStatuses(statuses)
 				row.Status = deploymentLatestStatus(statuses)
+				if row.Status != nil {
+					outcomes.Stored++
+				} else {
+					outcomes.Empty++
+				}
 				if statusesTruncated {
 					// The provider had more status pages than
 					// maxDeploymentStatusPages fetched -- an earlier
@@ -248,11 +265,30 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 		slog.Warn("github_deployments.status_lookup_rate_limited_skip", "count", statusLookupsSkippedForRateLimit, "cause", "statuses lookup rate limited; remaining deployments in this sync unit skipped")
 	}
 	logDeploymentPullRequestTiers(claim, rows)
+	outcomes.log(claim, len(rows))
 	effect, err := effectBatchFromValues("deployments", EffectReadbackRequired, rows)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	return CompleteRouteBatch{Effects: []EffectBatch{effect}, Result: map[string]any{"deployments_synced": len(rows), "repo": repoPayload.FullName}, Watermark: claim.BeforeAt, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: releasePages + deploymentPages + enrichmentPages, Records: len(rows)}}, nil
+}
+
+// deploymentStatusLookupOutcomes counts what the statuses lookups of one unit
+// did (CHAOS-9678), so a status that stays empty can be told apart by its
+// cause: Stored (a status was stored), Empty (the lookup succeeded and the
+// deployment has no status), Failed (the lookup failed) and Skipped (not tried:
+// the unit's rate-limit budget was spent).
+type deploymentStatusLookupOutcomes struct {
+	Stored, Empty, Failed, Skipped int
+}
+
+const deploymentStatusLookupsEvent = "github_deployments.status_lookups"
+
+func (outcomes deploymentStatusLookupOutcomes) log(claim Claim, rows int) {
+	slog.Info(deploymentStatusLookupsEvent,
+		"org_id", claim.OrgID, "unit_id", claim.ID, "rows", rows,
+		"stored", outcomes.Stored, "empty", outcomes.Empty, "failed", outcomes.Failed,
+		"skipped", outcomes.Skipped)
 }
 
 // fetchGitHubDeploymentsPage's fourth return value reports whether the

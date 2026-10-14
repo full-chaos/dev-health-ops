@@ -85,8 +85,8 @@ func loadDaily(ctx context.Context, client QueryClient, orgID string, startDay, 
 		var (
 			r                                                          dailyRow
 			day                                                        time.Time
-			prsTotal, prsMerged, aiPrs, agentPrs, humanPrs, unknownPrs uint32
-			reworkPrs, followups, revertPrs, incidents, testGapPrs     uint32
+			prsTotal, prsMerged, aiPrs, agentPrs, humanPrs, unknownPrs float64
+			reworkPrs, followups, revertPrs, incidents, testGapPrs     float64
 		)
 		if err := rs.Scan(
 			&r.TeamID, &r.RepoID, &day, &r.Bucket,
@@ -102,11 +102,11 @@ func loadDaily(ctx context.Context, client QueryClient, orgID string, startDay, 
 		}
 		r.Day = day.UTC().Format("2006-01-02")
 		r.DayTime = day.UTC()
-		r.PrsTotal, r.PrsMerged = int64(prsTotal), int64(prsMerged)
-		r.AIAssistedPrs, r.AgentCreatedPrs = int64(aiPrs), int64(agentPrs)
-		r.HumanPrs, r.UnknownPrs = int64(humanPrs), int64(unknownPrs)
-		r.ReworkPrs, r.FollowupCommits, r.RevertPrs = int64(reworkPrs), int64(followups), int64(revertPrs)
-		r.IncidentsCount, r.TestGapPrs = int64(incidents), int64(testGapPrs)
+		r.PrsTotal, r.PrsMerged = prsTotal, prsMerged
+		r.AIAssistedPrs, r.AgentCreatedPrs = aiPrs, agentPrs
+		r.HumanPrs, r.UnknownPrs = humanPrs, unknownPrs
+		r.ReworkPrs, r.FollowupCommits, r.RevertPrs = reworkPrs, followups, revertPrs
+		r.IncidentsCount, r.TestGapPrs = incidents, testGapPrs
 		out = append(out, r)
 	}
 	if err := rs.Err(); err != nil {

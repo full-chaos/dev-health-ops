@@ -47,32 +47,32 @@ type impactRow struct {
 	RepoID     string
 	TeamID     string
 	Bucket     string
-	PrsTotal   int64
+	PrsTotal   float64
 	ReviewsPer *float64
 	CycleHours *float64
-	ReworkPrs  int64
-	TestGapPrs int64
+	ReworkPrs  float64
+	TestGapPrs float64
 }
 
 // bucketAgg accumulates one bucket group's inputs.
 type bucketAgg struct {
-	prsTotal        int64
+	prsTotal        float64
 	reviewsWeighted float64
-	reviewsWeight   int64
+	reviewsWeight   float64
 	cycleWeighted   float64
-	cycleWeight     int64
-	reworkPrs       int64
-	testGapPrs      int64
+	cycleWeight     float64
+	reworkPrs       float64
+	testGapPrs      float64
 }
 
 func (a *bucketAgg) add(r impactRow) {
 	a.prsTotal = a.prsTotal + r.PrsTotal
 	if r.ReviewsPer != nil && r.PrsTotal > 0 {
-		a.reviewsWeighted = a.reviewsWeighted + float64((*r.ReviewsPer)*float64(r.PrsTotal))
+		a.reviewsWeighted = a.reviewsWeighted + float64((*r.ReviewsPer)*r.PrsTotal)
 		a.reviewsWeight = a.reviewsWeight + r.PrsTotal
 	}
 	if r.CycleHours != nil && r.PrsTotal > 0 {
-		a.cycleWeighted = a.cycleWeighted + float64((*r.CycleHours)*float64(r.PrsTotal))
+		a.cycleWeighted = a.cycleWeighted + float64((*r.CycleHours)*r.PrsTotal)
 		a.cycleWeight = a.cycleWeight + r.PrsTotal
 	}
 	a.reworkPrs = a.reworkPrs + r.ReworkPrs
@@ -80,13 +80,13 @@ func (a *bucketAgg) add(r impactRow) {
 }
 
 func (a *bucketAgg) reviewsPerPr() *float64 {
-	return ratioOrNil(a.reviewsWeighted, float64(a.reviewsWeight))
+	return ratioOrNil(a.reviewsWeighted, a.reviewsWeight)
 }
-func (a *bucketAgg) cycleHours() *float64 { return ratioOrNil(a.cycleWeighted, float64(a.cycleWeight)) }
+func (a *bucketAgg) cycleHours() *float64 { return ratioOrNil(a.cycleWeighted, a.cycleWeight) }
 func (a *bucketAgg) reworkRate() *float64 {
-	return ratioOrNil(float64(a.reworkPrs), float64(a.prsTotal))
+	return ratioOrNil(a.reworkPrs, a.prsTotal)
 }
-func (a *bucketAgg) testGapRate() *float64 { return intRatioOrNil(a.testGapPrs, a.prsTotal) }
+func (a *bucketAgg) testGapRate() *float64 { return ratioOrNil(a.testGapPrs, a.prsTotal) }
 
 type repoAgg struct {
 	repoID string
@@ -153,7 +153,7 @@ func metricRules(a *repoAgg) []opportunity {
 	if a.human.prsTotal >= minPRs && humanGap != nil && *humanGap >= testGenGapThreshold {
 		out = append(out, newOpportunity(model.AIOpportunityKindTestGeneration, a.repoID, a.teamID,
 			"Test generation candidate in "+a.repoID,
-			"Human-authored PRs had a "+pct(*humanGap, 0)+" test gap rate across "+strconv.FormatInt(a.human.prsTotal, 10)+" PRs over the last 30 days.",
+			"Human-authored PRs had a "+pct(*humanGap, 0)+" test gap rate across "+strconv.FormatFloat(a.human.prsTotal, 'f', -1, 64)+" PRs over the last 30 days.",
 			scoreDelta(*humanGap, testGenGapThreshold),
 			[]string{"ai_impact_metrics_daily:test_gap_rate:" + a.repoID}))
 	}
@@ -279,12 +279,12 @@ GROUP BY org_id, team_id, repo_id, work_type, day, attribution_bucket`, bindings
 	for rs.Next() {
 		var (
 			r                    impactRow
-			prs, rework, testGap uint32
+			prs, rework, testGap float64
 		)
 		if err := rs.Scan(&r.TeamID, &r.RepoID, &r.Bucket, &prs, &r.ReviewsPer, &r.CycleHours, &rework, &testGap); err != nil {
 			return nil, fmt.Errorf("aianalytics: opportunity impact scan: %w", err)
 		}
-		r.PrsTotal, r.ReworkPrs, r.TestGapPrs = int64(prs), int64(rework), int64(testGap)
+		r.PrsTotal, r.ReworkPrs, r.TestGapPrs = prs, rework, testGap
 		out = append(out, r)
 	}
 	if err := rs.Err(); err != nil {

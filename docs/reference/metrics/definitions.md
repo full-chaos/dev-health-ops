@@ -114,7 +114,17 @@ recorded.
 - **Status evidence.** The deployments among them with a final status
   (succeeded or failed), K of the D deployments. With them the rate is
   measured even where no incident source exists, and a view whose deployments
-  all succeeded reads a measured zero.
+  all succeeded reads a measured zero. A GitHub deployment's status comes
+  from its statuses history (the deployments list carries none). A lookup that
+  fails or is rate limited stores no status for that deployment in that run (a
+  status already stored is kept, never cleared), and a unit goes on with the
+  next deployments until three lookups of it have exhausted the rate limit;
+  the rest of that unit's lookups are then skipped. A deployment that has no
+  status at all stays without one and stays out of K. A deployment missed that
+  way is filled by looking it up again: `dho sync deployments --provider github
+  --org <org> --since <day>` lists the repository's deployments again and
+  looks up each one. The run logs one `github_deployments.status_lookups` line
+  with the counts: stored, empty, failed and skipped.
 - **Evidence basis and base.** A measured rate stands on `incident` (incidents
   tie to the view, no deployment has a final status: failed / D), `both`
   (incidents and final statuses: failed by link or by status, each deployment

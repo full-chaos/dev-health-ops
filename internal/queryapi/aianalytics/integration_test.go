@@ -171,8 +171,8 @@ func TestRealClickHouse_AIRollups(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: %v", c.name, err)
 			}
-			if got.TotalPrs != c.want {
-				t.Errorf("%s: total prs = %d, want %d", c.name, got.TotalPrs, c.want)
+			if got.TotalPrs != float64(c.want) {
+				t.Errorf("%s: total prs = %v, want %d", c.name, got.TotalPrs, c.want)
 			}
 		}
 	})

@@ -38,16 +38,16 @@ func RiskBreakdown(ctx context.Context, client QueryClient, orgID string, dr mod
 	for _, name := range names {
 		g := groups[name]
 		prs := sumInt(g, byPrsTotal)
-		rework := sumInt(g, func(r dailyRow) int64 { return r.ReworkPrs })
-		revert := sumInt(g, func(r dailyRow) int64 { return r.RevertPrs })
-		testGap := sumInt(g, func(r dailyRow) int64 { return r.TestGapPrs })
-		incidents := sumInt(g, func(r dailyRow) int64 { return r.IncidentsCount })
+		rework := sumInt(g, func(r dailyRow) float64 { return r.ReworkPrs })
+		revert := sumInt(g, func(r dailyRow) float64 { return r.RevertPrs })
+		testGap := sumInt(g, func(r dailyRow) float64 { return r.TestGapPrs })
+		incidents := sumInt(g, func(r dailyRow) float64 { return r.IncidentsCount })
 		byBucket = append(byBucket, model.AIRiskBreakdownRow{
-			Bucket: name, PrsTotal: int(prs),
-			ReworkPrs: int(rework), ReworkRate: ratio(float64(rework), float64(prs)),
-			RevertPrs: int(revert), RevertRate: ratio(float64(revert), float64(prs)),
-			TestGapPrs: int(testGap), TestGapRate: ratio(float64(testGap), float64(prs)),
-			IncidentsCount: int(incidents), IncidentRate: ratio(float64(incidents), float64(prs)),
+			Bucket: name, PrsTotal: prs,
+			ReworkPrs: rework, ReworkRate: ratio(float64(rework), float64(prs)),
+			RevertPrs: revert, RevertRate: ratio(float64(revert), float64(prs)),
+			TestGapPrs: testGap, TestGapRate: ratio(float64(testGap), float64(prs)),
+			IncidentsCount: incidents, IncidentRate: ratio(float64(incidents), float64(prs)),
 		})
 	}
 

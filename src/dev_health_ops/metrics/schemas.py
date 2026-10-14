@@ -88,14 +88,16 @@ class AIImpactMetricsDailyRecord:
     work_type: str
     day: date
     attribution_bucket: str
-    prs_total: int
-    prs_merged: int
-    ai_assisted_prs: int
-    agent_created_prs: int
-    human_prs: int
-    unknown_prs: int
+    # The counts are Float64 columns since migration 128 (CHAOS-9604): a
+    # co-owning team holds a share of a repository's pull requests (D5988).
+    prs_total: float
+    prs_merged: float
+    ai_assisted_prs: float
+    agent_created_prs: float
+    human_prs: float
+    unknown_prs: float
     ai_assisted_pr_ratio: float | None
-    agent_created_pr_count: int
+    agent_created_pr_count: float
     cycle_time_avg_hours: float | None
     baseline_cycle_time_avg_hours: float | None
     ai_cycle_time_delta_hours: float | None
@@ -103,14 +105,14 @@ class AIImpactMetricsDailyRecord:
     baseline_reviews_per_pr: float | None
     ai_review_amplification: float | None
     changes_requested_per_pr: float | None
-    rework_prs: int
+    rework_prs: float
     rework_drag_rate: float | None
-    followup_commits_count: int
-    revert_prs: int
+    followup_commits_count: float
+    revert_prs: float
     revert_rate: float | None
-    incidents_count: int
+    incidents_count: float
     incident_drag_rate: float | None
-    test_gap_prs: int
+    test_gap_prs: float
     test_gap_rate: float | None
     leverage: AIOperatingLeverageComponents
     computed_at: datetime

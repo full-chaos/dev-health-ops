@@ -45,9 +45,10 @@ var teamIDDynamicWriters = map[string]struct {
 	count int
 	route string
 }{
-	"internal/providersync/team_id_carry.go": {1, "the carry: keyed ids only (teamIDCarryGuard)"},
-	"internal/chmigrate/apply.go":            {2, "schema migrations: no team row"},
-	"internal/providerfoundation/sinks.go":   {1, "raw provider record tables: no team-keyed table"},
+	"internal/providersync/team_id_carry.go":                 {1, "the carry: keyed ids only (teamIDCarryGuard)"},
+	"internal/providersync/ownership_interval_compaction.go": {3, "CHAOS-9556 compaction and restore: stored ownership rows written again under their own key (valid_to, updated_at), the team id is the stored one; plus the backup table copy"},
+	"internal/chmigrate/apply.go":                            {2, "schema migrations: no team row"},
+	"internal/providerfoundation/sinks.go":                   {1, "raw provider record tables: no team-keyed table"},
 	// The stale-key rule of the daily metric families writes a row of zeros
 	// over a stored key of a derived daily table. It stores the team id that
 	// the superseded row holds, also a bare id of a team that was replaced: a

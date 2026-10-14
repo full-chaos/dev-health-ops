@@ -32,7 +32,7 @@ from sqlalchemy.sql.selectable import TableClause
 revision: str = "0150"
 down_revision: str | None = "0149"
 branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = "0066"
+depends_on: str | Sequence[str] | None = None
 
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
@@ -75,28 +75,22 @@ def upgrade() -> None:
                 f"worker job route {kind!r} conflicts with the native River route"
             )
     missing = [kind for kind in _KINDS if kind not in existing]
-    if missing:
-        now = datetime.now(UTC)
-        bind.execute(
-            routes.insert(),
-            [
-                {
-                    "job_kind": kind,
-                    "transport": _TRANSPORT,
-                    "paused": False,
-                    "generation": 1,
-                    "updated_at": now,
-                }
-                for kind in missing
-            ],
-        )
-    # Heap order of this tiny table follows its update history (the River
-    # activation rewrote every row), so a new row lands at a position that a
-    # table rebuilt from the baseline dump does not reproduce. Rewriting the
-    # heap in primary key order gives both the same physical order; the
-    # clustering flag CLUSTER leaves on the index is cleared again.
-    op.execute(sa.text("CLUSTER worker_job_routes USING worker_job_routes_pkey"))
-    op.execute(sa.text("ALTER TABLE worker_job_routes SET WITHOUT CLUSTER"))
+    if not missing:
+        return
+    now = datetime.now(UTC)
+    bind.execute(
+        routes.insert(),
+        [
+            {
+                "job_kind": kind,
+                "transport": _TRANSPORT,
+                "paused": False,
+                "generation": 1,
+                "updated_at": now,
+            }
+            for kind in missing
+        ],
+    )
 
 
 def downgrade() -> None:

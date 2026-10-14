@@ -331,9 +331,9 @@ func activeGitHubIntegration(ctx context.Context, pool *pgxpool.Pool, orgID stri
 		if err := rows.Scan(&id, &provider, &credential); err != nil {
 			return "", "", lookupFailureWith(reasonDatabaseQueryFailed, err)
 		}
-		// The provider column is unconstrained text: the workers compare it as ToLower(TrimSpace(..)) in Go
-		// (scheduler/sync normalizeSourceKey), never with a SQL predicate, and so does this.
-		if strings.ToLower(strings.TrimSpace(provider)) != "github" {
+		// The provider column is unconstrained text: the workers compare it in Go through the shared
+		// normalizer, never with a SQL predicate, and so does this.
+		if providerfoundation.NormalizeSourceKey(provider) != "github" {
 			continue
 		}
 		ids, credentialIDs = append(ids, id), append(credentialIDs, credential)

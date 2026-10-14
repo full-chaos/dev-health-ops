@@ -47,5 +47,8 @@ def test_public_metadata_serves_is_valid(fields, expected):
 
 
 def test_public_metadata_defaults_now_to_the_clock():
-    expired = _credential(expires_at=datetime(2000, 1, 1, tzinfo=timezone.utc))
-    assert expired.public_metadata()["is_valid"] is False
+    soon = datetime.now(timezone.utc) + timedelta(seconds=30)
+    credential = _credential(expires_at=soon)
+    assert credential.public_metadata()["is_valid"] is True
+    credential.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    assert credential.public_metadata()["is_valid"] is False

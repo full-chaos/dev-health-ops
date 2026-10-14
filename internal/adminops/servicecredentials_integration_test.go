@@ -418,8 +418,31 @@ func (db *database) credSession(t *testing.T, run func(*testing.T, *database, []
 }
 
 // compareCredentials is compare plus the normalized stderr of every step.
+// isValidField is the computed is_valid key CHAOS-4032 added to list; the frozen Python build (adminPythonBuild)
+// predates it, so a list answer is compared without it and the key is checked on its own.
+var isValidField = regexp.MustCompile(`"is_valid": (true|false), `)
+
+func withoutIsValid(t *testing.T, steps []stepResult) []stepResult {
+	t.Helper()
+	out := make([]stepResult, len(steps))
+	copy(out, steps)
+	for index, step := range out {
+		if len(step.Args) == 0 || step.Args[0] != "list" || step.Exit != 0 {
+			continue
+		}
+		if found, ids := len(isValidField.FindAllString(step.Stdout, -1)), strings.Count(step.Stdout, `"id": `); found != ids {
+			t.Errorf("step %d (%s): %d is_valid keys for %d credentials: %s", index, strings.Join(step.Args, " "), found, ids, step.Stdout)
+		}
+		out[index].Stdout = isValidField.ReplaceAllString(step.Stdout, "")
+	}
+	return out
+}
+
 func compareCredentials(t *testing.T, got, want []stepResult, wantName string) {
 	t.Helper()
+	if wantName == "frozen Python" {
+		got = withoutIsValid(t, got)
+	}
 	compare(t, got, want, wantName)
 	for index := range got {
 		if index < len(want) && got[index].Stderr != want[index].Stderr {

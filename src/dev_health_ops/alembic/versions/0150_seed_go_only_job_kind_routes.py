@@ -32,7 +32,7 @@ from sqlalchemy.sql.selectable import TableClause
 revision: str = "0150"
 down_revision: str | None = "0149"
 branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = "0066"
 
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 

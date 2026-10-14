@@ -56,7 +56,7 @@ if [ "$1" = "api" ]; then
 fi
 if [ "${FAKE_GH_FAIL_ISSUE_LIST:-0}" = "1" ] && [ "$1 $2" = "issue list" ]; then exit 1; fi
 case "$1 $2" in
-  "issue list") jq -c '[.issues[] | {number}]' "${fx}" | jq -r 'map(.number) | sort | .[0] // empty' ;;
+  "issue list") jq -r '[.issues[].number] | sort | .[]' "${fx}" ;;
   "issue view") jq -r --argjson n "$3" '.issues[] | select(.number == $n) | ([.body] + .comments) | join("\n")' "${fx}" ;;
   "issue create") echo "https://github.com/o/r/issues/99" ;;
   "issue comment"|"issue close"|"label create") ;;
@@ -97,6 +97,8 @@ def _run(
         "FAKE_CALLS": str(calls),
         "GITHUB_REPOSITORY": "o/r",
         "RUN_ID": str(run_id),
+        "RUN_CONCLUSION": next((c for rid, c, _ in runs if rid == run_id), "unknown"),
+        "RUN_SHA": f"{run_id:040x}",
         **extra_env,
     }
     proc = subprocess.run(
@@ -168,7 +170,8 @@ def test_lowest_numbered_issue_is_the_one_when_two_are_open(tmp_path):
         issues=[_issue(50), _issue(41)],
     )
     assert proc.returncode == 0, proc.stderr
-    assert writes[0].startswith("issue comment 41 ")
+    assert [w.split(" -R")[0] for w in writes] == ["issue comment 41", "issue close 50"]
+    assert "Duplicate" in writes[1] and "#41" in writes[1]
 
 
 def test_incomplete_run_is_reported_as_not_green(tmp_path):
@@ -191,7 +194,7 @@ def test_green_executed_run_closes_the_open_issue(tmp_path):
     assert "actions/runs/300" in writes[0]
 
 
-def test_green_oracle_steps_on_a_failed_run_do_not_close_the_issue(tmp_path):
+def test_green_oracle_steps_on_a_failed_run_alert_and_never_close(tmp_path):
     proc, writes = _run(
         tmp_path,
         [(300, "failure", GREEN), (200, "failure", RED)],
@@ -199,8 +202,35 @@ def test_green_oracle_steps_on_a_failed_run_do_not_close_the_issue(tmp_path):
         issues=[_issue(41)],
     )
     assert proc.returncode == 0, proc.stderr
+    assert len(writes) == 1 and writes[0].startswith("issue comment 41 ")
+    assert "concluded 'failure'" in writes[0]
+
+
+def test_green_oracle_steps_on_a_failed_run_open_the_issue_when_none_exists(tmp_path):
+    proc, writes = _run(tmp_path, [(300, "failure", GREEN)], 300)
+    assert proc.returncode == 0, proc.stderr
+    assert writes[-1].startswith("issue create")
+    assert "concluded 'failure'" in writes[-1]
+
+
+def test_every_leg_timing_out_still_alerts(tmp_path):
+    proc, writes = _run(tmp_path, [(300, "failure", SKIPPED), (200, "success", GREEN)], 300)
+    assert proc.returncode == 0, proc.stderr
+    assert writes[-1].startswith("issue create")
+    assert "actions/runs/300" in writes[-1]
+    assert "no leg executed" in writes[-1]
+
+
+def test_a_cancelled_run_is_no_signal(tmp_path):
+    proc, writes = _run(tmp_path, [(300, "cancelled", SKIPPED), (200, "success", GREEN)], 300)
+    assert proc.returncode == 0, proc.stderr
     assert writes == []
-    assert "not success" in proc.stdout
+
+
+def test_an_older_failed_run_does_not_alert_once_a_newer_executed_run_exists(tmp_path):
+    proc, writes = _run(tmp_path, [(300, "success", GREEN), (200, "failure", SKIPPED)], 200)
+    assert proc.returncode == 0, proc.stderr
+    assert writes == []
 
 
 def test_red_run_behind_many_skipped_runs_still_opens_the_issue(tmp_path):
@@ -297,6 +327,13 @@ def test_run_id_must_be_numeric(tmp_path):
     assert proc.returncode == 2
 
 
+def test_conclusion_and_sha_are_validated(tmp_path):
+    proc, _ = _run(tmp_path, [(300, "failure", RED)], 300, RUN_CONCLUSION="x;rm")
+    assert proc.returncode == 2
+    proc, _ = _run(tmp_path, [(300, "failure", RED)], 300, RUN_SHA="x;rm")
+    assert proc.returncode == 2
+
+
 def _workflow() -> dict:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
@@ -341,5 +378,8 @@ def test_workflow_passes_event_data_through_env_only():
     run_steps = [s for s in steps if "run" in s]
     assert len(run_steps) == 1
     assert "${{" not in run_steps[0]["run"]
-    assert run_steps[0]["env"]["RUN_ID"] == "${{ github.event.workflow_run.id }}"
+    env = run_steps[0]["env"]
+    assert env["RUN_ID"] == "${{ github.event.workflow_run.id }}"
+    assert env["RUN_CONCLUSION"] == "${{ github.event.workflow_run.conclusion }}"
+    assert env["RUN_SHA"] == "${{ github.event.workflow_run.head_sha }}"
     assert "secrets." not in text

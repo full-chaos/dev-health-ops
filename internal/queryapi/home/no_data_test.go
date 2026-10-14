@@ -36,7 +36,7 @@ func TestBuildResponseEmptyCurrentWindowIsNoData(t *testing.T) {
 		// rows, which the shared rule reads as no stored counts.
 		if strings.Contains(query, "FROM repo_change_failure_daily") && !strings.Contains(query, "delta_pct") {
 			if strings.Contains(query, changefailure.ViewSumsSQL) {
-				return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
+				return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
 			}
 			return &fixtureRowScanner{}, nil
 		}
@@ -90,7 +90,7 @@ func TestBuildResponseNoCurrentDataDoesNotTurnPriorDataIntoAClaim(t *testing.T) 
 			return &fixtureRowScanner{rows: [][]any{{int64(0), 0.0}}}, nil
 		}
 		if strings.Contains(query, "FROM repo_change_failure_daily") && strings.Contains(query, changefailure.ViewSumsSQL) {
-			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
+			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
 		}
 		if strings.Contains(query, prrework.ViewSumsSQL) {
 			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil

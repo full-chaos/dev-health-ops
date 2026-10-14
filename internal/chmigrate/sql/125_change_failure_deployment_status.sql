@@ -1,0 +1,44 @@
+-- A deployment's own status counts toward change failure rate (CHAOS-9621).
+--
+-- Until now a deployment failed only through a deployment-incident link
+-- (migration 112), so a repository hosted on a provider with no incident
+-- source always read "unknown", though it had failed deployments. Two count
+-- columns carry the deployment's own status:
+--
+--   failed_deployments_status  deployments whose own status is failed
+--                              (deploymentstatus.Classify: failure, failed,
+--                              error) that NO incident link names. A failed
+--                              deployment that a link also names counts once,
+--                              as native or heuristic. Failed in total =
+--                              native + heuristic + status.
+--   deployments_status_known   deployments with a final status (succeeded or
+--                              failed). This is the status evidence: with no
+--                              incident tied to the view and none of these,
+--                              the rate stays unknown. With some, it is
+--                              measured and a 0 is a measured 0.
+--
+-- deployments_count no longer counts a cancelled deployment: it never reached
+-- its environment, so it is neither a deployment nor a failure. This holds from
+-- this migration on for every reader of the column, and the recompute of the
+-- days makes history consistent.
+--
+-- The rule (internal/jobs/metrics/changefailure ApplyRule) reads the sums:
+--   no stored row                              -> unknown, not collected
+--   deployments_count = 0                      -> unknown, no deployments in window
+--   no incident evidence, status_known = 0     -> unknown, deployments without outcome
+--   incident evidence present                  -> (native + heuristic + status) / deployments_count
+--   final statuses only (no incident evidence) -> failed_deployments_status / deployments_status_known
+-- The evidence basis of a measured rate is derived from the sums, never
+-- stored: incident, status or both.
+--
+-- This migration only ADDS. Old pods read the columns they know, so an old
+-- reader on a new row keeps the link-only numerator and the old unknown rule:
+-- never a wrong number, only the old answer. A row written before this
+-- migration reads 0 in both new columns and keeps its old meaning until the
+-- day is recomputed (dho workers metrics partition-recompute for the days wanted).
+-- A window that sums old and new rows has deployments_status_known only from the
+-- new rows, so with no incident evidence its rate stands on those rows alone and
+-- the coverage (status_known / deployments_count) shows the gap.
+ALTER TABLE repo_change_failure_daily ADD COLUMN IF NOT EXISTS failed_deployments_status UInt32 DEFAULT 0 COMMENT 'Deployments whose own status is failed that no incident link names. Failed in total is native plus heuristic plus status.';
+ALTER TABLE repo_change_failure_daily ADD COLUMN IF NOT EXISTS deployments_status_known UInt32 DEFAULT 0 COMMENT 'Deployments with a final status, succeeded or failed. The status evidence and the base of a rate that only statuses state.';
+ALTER TABLE repo_change_failure_daily COMMENT COLUMN deployments_count 'Deployments of the day but a cancelled one: a cancelled deployment never reached its environment. This meaning holds from migration 125 on, and the recompute makes older days consistent.';

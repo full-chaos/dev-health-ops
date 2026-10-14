@@ -89,7 +89,7 @@ func TestGitLabDeploymentsRouteMirrorsPythonReleaseMRWindowSinglePageAndEvidence
 		row.StartedAt == nil || !row.StartedAt.Equal(wantStartedAt) ||
 		row.FinishedAt == nil || !row.FinishedAt.Equal(wantFinishedAt) ||
 		row.DeployedAt == nil ||
-		row.PullRequestNumber == nil || *row.PullRequestNumber != 45 || row.MergedAt == nil ||
+		row.PullRequestNumber == nil || *row.PullRequestNumber != 45 || row.PullRequestTier != pullRequestTierMergedPR || row.MergedAt == nil ||
 		row.PullRequestLookupFailed ||
 		row.ReleaseRef != "v1.2.3" || row.ReleaseRefConfidence != 1 ||
 		row.OrgID != claim.OrgID ||

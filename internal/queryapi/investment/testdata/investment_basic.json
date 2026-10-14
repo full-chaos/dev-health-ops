@@ -35,5 +35,7 @@
     "engineering": 20.0,
     "growth": 3.0
   },
-  "unit": null
+  "unit": null,
+  "measure": "COUNT",
+  "denominator": 23.0
 }

@@ -20,6 +20,10 @@ import (
 // rate is now change_failure_rate_incident: NULL (unknown) here, and a
 // measured value only when an incident ties to the repository.
 //
+// The deployments are still running: a deployment with a final status is
+// evidence of its own (CHAOS-9621, TestChangeFailureStatusMatrix), and these
+// have none.
+//
 // The test reads the column that holds the change failure rate in the schema
 // it runs against, so the same file is red on the commit before the fix
 // (which has only the old column) and green after it.
@@ -38,8 +42,8 @@ func TestRepoUserCommitStoresNoZeroChangeFailureRateWithoutIncidentEvidence(t *t
 		for _, statement := range []string{
 			"INSERT INTO repos (id, repo, created_at, last_synced, org_id) VALUES ('" + repo.String() + "', 'acme/" + repo.String()[:4] + "', now64(3), now64(3), '" + org + "')",
 			"INSERT INTO git_commits (repo_id, hash, author_name, author_email, author_when, committer_when, parents, last_synced, org_id) VALUES ('" + repo.String() + "', 'c1', 'Ada', 'ada@example.com', '" + stamp + "', '" + stamp + "', 1, now64(3), '" + org + "')",
-			"INSERT INTO deployments (repo_id, deployment_id, status, deployed_at, last_synced, org_id) VALUES ('" + repo.String() + "', 'd1', 'success', '" + stamp + "', now64(3), '" + org + "')",
-			"INSERT INTO deployments (repo_id, deployment_id, status, deployed_at, last_synced, org_id) VALUES ('" + repo.String() + "', 'd2', 'success', '" + stamp + "', now64(3), '" + org + "')",
+			"INSERT INTO deployments (repo_id, deployment_id, status, deployed_at, last_synced, org_id) VALUES ('" + repo.String() + "', 'd1', 'running', '" + stamp + "', now64(3), '" + org + "')",
+			"INSERT INTO deployments (repo_id, deployment_id, status, deployed_at, last_synced, org_id) VALUES ('" + repo.String() + "', 'd2', 'running', '" + stamp + "', now64(3), '" + org + "')",
 		} {
 			if err := conn.Exec(ctx, statement); err != nil {
 				t.Fatal(err)

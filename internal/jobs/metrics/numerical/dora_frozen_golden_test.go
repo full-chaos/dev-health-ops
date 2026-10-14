@@ -107,6 +107,26 @@ func TestComputeDORAMatchesFrozenPythonGolden(t *testing.T) {
 				renamed++
 			}
 		}
+		// CHAOS-9621 divergence from the frozen Python golden: the one
+		// cancelled deployment of case 0 (repo ...0a) never reached its
+		// environment, so it is not a deployment of the day. The repo keeps its
+		// failure rate (the cancelled row and the failed row were both
+		// "failed" in Python; now one failed of one), and loses the deployment
+		// and its lead time (Python: 2 deployments, median lead 9000s).
+		if index == 0 {
+			for i := range testCase.Expected {
+				row := &testCase.Expected[i]
+				if row.RepoID != "00000000-0000-4000-8000-00000000000a" {
+					continue
+				}
+				switch row.Name {
+				case "deployment_frequency":
+					row.Value = 1
+				case "lead_time_for_changes":
+					row.Value = 7200
+				}
+			}
+		}
 		if index == 0 && renamed == 0 {
 			t.Fatalf("case 0: golden carries no change_failure_rate row -- the rename mapping above is untested")
 		}

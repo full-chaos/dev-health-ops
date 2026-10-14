@@ -420,7 +420,7 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true')
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -469,12 +469,12 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        # timeout-minutes: 8, the double-bound lesson from go.yml's own
+        # timeout-minutes: 20, the double-bound lesson from go.yml's own
         # pilots (CF, 09-03, acr's near-miss) -- native GitHub Actions
         # per-step syntax, since this is a `uses:` action with no command
         # line to wrap a shell `timeout` around. Fires as a clean step
-        # failure well before this job's own 10m outer cap.
-        timeout-minutes: 8
+        # failure well before this job's own 25m outer cap.
+        timeout-minutes: 20
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .

@@ -153,10 +153,10 @@ func runRepoOwnerFamilies(t *testing.T, ctx context.Context, conn driver.Conn, c
 // repoOwnerFamiliesRead is what a reader of the newest rows sees for the day,
 // for one team id or (team "") for every team.
 type repoOwnerFamiliesRead struct {
-	commits, afterHoursCommits uint64   // team_metrics_daily
+	commits, afterHoursCommits float64  // team_metrics_daily
 	interruptionLoad           float64  // team_cognitive_load_daily
 	afterHoursRatio            *float64 // team_cognitive_load_daily
-	locTotal                   uint64   // team_complexity_daily
+	locTotal                   float64  // team_complexity_daily
 	scoredTeams                uint64   // compounding_risk_daily, scope team
 	riskSum                    float64
 }
@@ -166,7 +166,7 @@ func (read repoOwnerFamiliesRead) String() string {
 	if read.afterHoursRatio != nil {
 		ratio = fmt.Sprint(*read.afterHoursRatio)
 	}
-	return fmt.Sprintf("commits=%d after_hours_commits=%d interruption_load=%v after_hours_ratio=%s loc_total=%d scored_teams=%d risk=%.6f",
+	return fmt.Sprintf("commits=%v after_hours_commits=%v interruption_load=%v after_hours_ratio=%s loc_total=%v scored_teams=%d risk=%.6f",
 		read.commits, read.afterHoursCommits, read.interruptionLoad, ratio, read.locTotal, read.scoredTeams, read.riskSum)
 }
 
@@ -187,11 +187,11 @@ func readRepoOwnerFamilies(t *testing.T, ctx context.Context, conn driver.Conn, 
 			t.Fatalf("%s of team %q: %v", what, team, err)
 		}
 	}
-	scan("team_metrics_daily", `SELECT toUInt64(sum(commits_count)), toUInt64(sum(after_hours_commits_count))
+	scan("team_metrics_daily", `SELECT toFloat64(sum(commits_count)), toFloat64(sum(after_hours_commits_count))
 FROM team_metrics_daily FINAL WHERE org_id = ? AND day = ?%s`, "team_id", &read.commits, &read.afterHoursCommits)
 	scan("team_cognitive_load_daily", `SELECT sum(pr_interruption_load), max(after_hours_commit_ratio)
 FROM team_cognitive_load_daily FINAL WHERE org_id = ? AND day = ?%s`, "team_id", &read.interruptionLoad, &read.afterHoursRatio)
-	scan("team_complexity_daily", `SELECT toUInt64(sum(loc_total))
+	scan("team_complexity_daily", `SELECT toFloat64(sum(loc_total))
 FROM team_complexity_daily FINAL WHERE org_id = ? AND day = ?%s`, "team_id", &read.locTotal)
 	scan("compounding_risk_daily", `SELECT toUInt64(countIf(compounding_risk IS NOT NULL)), toFloat64(sum(ifNull(compounding_risk, 0)))
 FROM compounding_risk_daily FINAL WHERE org_id = ? AND day = ? AND scope = 'team'%s`, "scope_id", &read.scoredTeams, &read.riskSum)

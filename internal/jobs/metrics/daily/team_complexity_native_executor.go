@@ -101,13 +101,13 @@ func (executor *TeamComplexityExecutor) ComputeFinalizeFamily(
 		return 0, err
 	}
 
-	repoToTeam, err := resolveDailyFinalizeRepoToTeam(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, patternResolver)
+	repoOwners, err := resolveDailyFinalizeRepoOwnerShares(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, patternResolver)
 	if err != nil {
 		return 0, err
 	}
 
 	computedAt := executor.nowUTC()
-	rows := buildTeamComplexityRows(run.OrganizationID, day, repoRows, repoToTeam, computedAt)
+	rows := buildTeamComplexityRows(run.OrganizationID, day, repoRows, repoOwners, computedAt)
 	produced := make([]staleKey, 0, len(rows))
 	for _, row := range rows {
 		produced = append(produced, staleKey{row.TeamID})

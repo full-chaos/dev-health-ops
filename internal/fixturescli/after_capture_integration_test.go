@@ -125,6 +125,9 @@ var emptyColumnsAfterTheCapture = map[string]map[string]string{
 		"target_ref":      "127_projects_target_provenance.sql",
 		"target_ref_name": "127_projects_target_provenance.sql",
 	},
+	// The rule that matched a deployment's pull request link (CHAOS-9610): a
+	// captured deployment has no tier.
+	"deployments": {"pull_request_tier": "126_deployments_pull_request_tier.sql"},
 }
 
 // defaultedColumnsAfterTheCapture names the String columns a migration added

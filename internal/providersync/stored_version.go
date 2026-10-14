@@ -580,7 +580,7 @@ const (
 	pullRequestLookupField = "pull_request_lookup"
 )
 
-const deploymentsInsert = `INSERT INTO deployments (repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number, release_ref, release_ref_confidence, org_id, last_synced)`
+const deploymentsInsert = `INSERT INTO deployments (repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number, pull_request_tier, release_ref, release_ref_confidence, org_id, last_synced)`
 
 // deploymentsContract is the provider-sync deployment writer's contract table
 // (github and gitlab share it). The lifecycle columns are unstated when the
@@ -601,6 +601,7 @@ var deploymentsContract = storedversion.Contract{Writer: "provider_sync", Table:
 	[]storedversion.Column{
 		{Name: "merged_at", Rule: storedversion.Unstated, Fields: []string{pullRequestLookupField}, Terminal: true},
 		{Name: "pull_request_number", Rule: storedversion.Unstated, Fields: []string{pullRequestLookupField}, With: "merged_at"},
+		{Name: "pull_request_tier", Rule: storedversion.Unstated, Fields: []string{pullRequestLookupField}, With: "merged_at"},
 	},
 	contractColumns(storedversion.Stated, "release_ref", "release_ref_confidence"),
 	contractColumns(storedversion.Writer, "org_id", "last_synced"),
@@ -621,7 +622,7 @@ func deploymentValues(row deploymentRow) []any {
 	return []any{
 		row.RepoID, row.DeploymentID, nullableStringPointer(row.Status), nullableStringPointer(row.Environment),
 		nullableTimePointer(row.StartedAt), nullableTimePointer(row.FinishedAt), nullableTimePointer(row.DeployedAt),
-		nullableTimePointer(row.MergedAt), number, row.ReleaseRef, row.ReleaseRefConfidence, row.OrgID, row.LastSynced,
+		nullableTimePointer(row.MergedAt), number, row.PullRequestTier, row.ReleaseRef, row.ReleaseRefConfidence, row.OrgID, row.LastSynced,
 	}
 }
 
@@ -653,6 +654,15 @@ func setDeploymentKept(row *deploymentRow, column string, value any) error {
 			row.PullRequestNumber = &number
 		default:
 			err = fmt.Errorf("stored version: deployments pull_request_number %T is not a count", value)
+		}
+	case "pull_request_tier":
+		switch held := value.(type) {
+		case nil:
+			row.PullRequestTier = ""
+		case string:
+			row.PullRequestTier = held
+		default:
+			err = fmt.Errorf("stored version: deployments pull_request_tier %T is not a string", value)
 		}
 	default:
 		err = fmt.Errorf("stored version: deployments column %s is not kept", column)
@@ -709,7 +719,7 @@ func logDeploymentOutcomes(ctx context.Context, claim Claim, rows []deploymentRo
 			switch {
 			case rows[i].LifecycleLookupFailed && (column == "status" || column == "started_at" || column == "finished_at"):
 				lifecycleCarried = true
-			case rows[i].PullRequestLookupFailed && (column == "merged_at" || column == "pull_request_number"):
+			case rows[i].PullRequestLookupFailed && (column == "merged_at" || column == "pull_request_number" || column == "pull_request_tier"):
 				pullRequestCarried = true
 			default:
 				other.Carried = append(other.Carried, column)
@@ -723,7 +733,7 @@ func logDeploymentOutcomes(ctx context.Context, claim Claim, rows []deploymentRo
 		}
 		pairRefused := false
 		for _, column := range outcome.Refused {
-			if column == "merged_at" || column == "pull_request_number" {
+			if column == "merged_at" || column == "pull_request_number" || column == "pull_request_tier" {
 				pairRefused = true
 				continue
 			}

@@ -301,9 +301,11 @@ class TeamMetricsDailyRecord:
     day: date
     team_id: str
     team_name: str
-    commits_count: int
-    after_hours_commits_count: int
-    weekend_commits_count: int
+    #: Float64 columns since migration 124 (CHAOS-9601): a co-owning team
+    #: holds a share of a repository's commits (D5988).
+    commits_count: float
+    after_hours_commits_count: float
+    weekend_commits_count: float
     after_hours_commit_ratio: float
     weekend_commit_ratio: float
     computed_at: datetime
@@ -366,17 +368,18 @@ class TeamComplexityDailyRecord:
 
     team_id: str
     day: date
-    #: Summed across every repo_complexity_daily row this team owns.
-    loc_total: int
-    cyclomatic_total: int
+    #: Summed across every repo_complexity_daily row this team owns, each repo
+    #: at the team's linked share of it (CHAOS-9601, D5988): a Float64 column.
+    loc_total: float
+    cyclomatic_total: float
     #: Recomputed from the summed totals above
     #: (``cyclomatic_total / (loc_total / 1000)``) -- never averaged
     #: directly across owned repos' own per-repo ratios (a ratio is not
     #: additive; see append-only daily-tables reader-dedup contract, same
     #: rule TeamCognitiveLoadDailyRecord's ratio fields follow).
     cyclomatic_per_kloc: float
-    high_complexity_functions: int
-    very_high_complexity_functions: int
+    high_complexity_functions: float
+    very_high_complexity_functions: float
     #: How many distinct owned repos contributed a repo_complexity_daily
     #: row this day (diagnosability).
     contributing_repo_count: int

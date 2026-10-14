@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -137,6 +138,7 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 		return sendBatch(reviewBatch)
 	case "deployments":
 		rows := make([]storedversion.Row, 0, len(envelope.Items))
+		pushed := 0
 		for _, item := range envelope.Items {
 			if stringValue(item, "deployment_id") == "" || stringValue(item, "status") == "" || stringValue(item, "environment") == "" {
 				return &streamrunner.PermanentError{Reason: "invalid_deployment"}
@@ -146,10 +148,14 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 			deployed, _ := itemTime(item, "deployed_at")
 			releaseRef, confidence := internalReleaseRef(item)
 			rows = append(rows, storedversion.Row{
-				Values: []any{envelope.OrgID, repoID, stringValue(item, "deployment_id"), nullable(item, "status"), nullable(item, "environment"), nullableTime(started), nullableTime(finished), nullableTime(deployed), nil, nullableUint(item, "pull_request_number"), releaseRef, confidence, now},
+				Values: []any{envelope.OrgID, repoID, stringValue(item, "deployment_id"), nullable(item, "status"), nullable(item, "environment"), nullableTime(started), nullableTime(finished), nullableTime(deployed), nil, nullableUint(item, "pull_request_number"), internalPullRequestTier(item), releaseRef, confidence, now},
 				Carry:  internalCarry(internalDeploymentContract, item),
 			})
+			if internalPullRequestTier(item) != "" {
+				pushed++
+			}
 		}
+		slog.Debug("streamhandlers.internal_ingest.deployment_pull_request_tiers", "org_id", envelope.OrgID, "rows", len(rows), "pushed", pushed, "no_link", len(rows)-pushed)
 		if err := applyContract(ctx, h.conn, internalDeploymentContract, envelope.OrgID, internalDeploymentInsert, rows); err != nil {
 			return err
 		}
@@ -380,6 +386,15 @@ func nullableUint(item map[string]any, key string) any {
 	}
 	return uint32(number(item, key, 0))
 }
+
+// internalPullRequestTier is the match tier of a pushed deployment's pull
+// request: the caller asserts the number, so no provider rule matched it.
+func internalPullRequestTier(item map[string]any) string {
+	if item["pull_request_number"] == nil {
+		return ""
+	}
+	return "pushed"
+}
 func nullableFloat(item map[string]any, key string) any {
 	if item[key] == nil {
 		return nil
@@ -422,7 +437,7 @@ const (
 	internalCommitInsert      = "INSERT INTO git_commits (org_id,repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced)"
 	internalReviewInsert      = "INSERT INTO git_pull_request_reviews (org_id,repo_id,number,review_id,reviewer,state,submitted_at,last_synced)"
 	internalPullRequestInsert = "INSERT INTO git_pull_requests (org_id,repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced)"
-	internalDeploymentInsert  = "INSERT INTO deployments (org_id,repo_id,deployment_id,status,environment,started_at,finished_at,deployed_at,merged_at,pull_request_number,release_ref,release_ref_confidence,last_synced)"
+	internalDeploymentInsert  = "INSERT INTO deployments (org_id,repo_id,deployment_id,status,environment,started_at,finished_at,deployed_at,merged_at,pull_request_number,pull_request_tier,release_ref,release_ref_confidence,last_synced)"
 	internalWorkItemInsert    = "INSERT INTO work_items (org_id,repo_id,work_item_id,provider,title,description,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,priority_raw,service_class,due_at,last_synced)"
 )
 
@@ -497,7 +512,7 @@ var (
 		[]storedversion.Column{idOrg}, identity("repo_id", "deployment_id"),
 		stated("status", "environment", "started_at", "finished_at", "deployed_at"),
 		[]storedversion.Column{{Name: "merged_at", Rule: storedversion.NoField, Terminal: true}},
-		stated("pull_request_number", "release_ref", "release_ref_confidence"),
+		stated("pull_request_number", "pull_request_tier", "release_ref", "release_ref_confidence"),
 		[]storedversion.Column{idLastSynced},
 	)}
 	internalWorkItemContract = storedversion.Contract{Writer: "internal_ingest", Table: "work_items", Columns: contractColumns(

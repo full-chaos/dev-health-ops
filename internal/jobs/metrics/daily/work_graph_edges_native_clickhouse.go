@@ -159,7 +159,7 @@ func LoadWorkGraphEdgeDeployments(
 	}
 
 	rows, err := conn.Query(ctx, `
-SELECT repo_id, deployment_id, pull_request_number,
+SELECT repo_id, deployment_id, status, pull_request_number,
        started_at, finished_at, deployed_at, last_synced
 FROM deployments FINAL
 WHERE org_id = ? AND repo_id IN ?
@@ -178,6 +178,7 @@ ORDER BY repo_id, deployment_id`,
 		var (
 			repoID       uuid.UUID
 			deploymentID string
+			status       *string
 			prNumber     *uint32
 			startedAt    *time.Time
 			finishedAt   *time.Time
@@ -185,7 +186,7 @@ ORDER BY repo_id, deployment_id`,
 			lastSynced   *time.Time
 		)
 		if err := rows.Scan(
-			&repoID, &deploymentID, &prNumber,
+			&repoID, &deploymentID, &status, &prNumber,
 			&startedAt, &finishedAt, &deployedAt, &lastSynced,
 		); err != nil {
 			return nil, fmt.Errorf("scan work_graph_edges deployment row: %w", err)
@@ -194,6 +195,7 @@ ORDER BY repo_id, deployment_id`,
 			RepoID: repoID,
 			// Feeds edge_id's sha256 -- see the review loop's note.
 			DeploymentID:      pythonparity.DecodeClickHouseStringValue(deploymentID),
+			Status:            derefWellbeingString(status),
 			PullRequestNumber: prNumber,
 			StartedAt:         startedAt,
 			FinishedAt:        finishedAt,

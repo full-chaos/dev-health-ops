@@ -169,7 +169,7 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 		if claim.BeforeAt != nil && row.DeployedAt.After(claim.BeforeAt.UTC()) {
 			continue
 		}
-		row.PullRequestNumber, row.MergedAt = resolveGitLabDeploymentMergeRequest(
+		row.PullRequestNumber, row.MergedAt, row.PullRequestTier = resolveGitLabDeploymentMergeRequest(
 			mergeRequestsByDeploymentID[row.DeploymentID],
 		)
 		row.PullRequestLookupFailed = mergeRequestLookupFailed[row.DeploymentID]
@@ -202,6 +202,7 @@ func gitLabDeploymentsBatch(
 	requests int,
 	pages int,
 ) (CompleteRouteBatch, error) {
+	logDeploymentPullRequestTiers(claim, rows)
 	effect, err := effectBatchFromValues("deployments", EffectReadbackRequired, rows)
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -408,7 +409,7 @@ func gitLabDeploymentExplicitConfidence(payload map[string]any) float64 {
 
 func resolveGitLabDeploymentMergeRequest(
 	mergeRequests []map[string]any,
-) (*int, *time.Time) {
+) (*int, *time.Time, string) {
 	var chosen map[string]any
 	for _, mergeRequest := range mergeRequests {
 		if stringValue(mergeRequest["state"]) == "merged" {
@@ -417,13 +418,15 @@ func resolveGitLabDeploymentMergeRequest(
 		}
 	}
 	if chosen == nil {
-		return nil, nil
+		return nil, nil, ""
 	}
 	var number *int
+	tier := ""
 	if parsed, err := strconv.Atoi(strings.TrimSpace(stringValue(chosen["iid"]))); err == nil {
 		number = &parsed
+		tier = pullRequestTierMergedPR
 	}
-	return number, parseGitLabDeploymentTime(chosen["merged_at"])
+	return number, parseGitLabDeploymentTime(chosen["merged_at"]), tier
 }
 
 var _ CompleteRouteHandler = GitLabDeploymentsRouteHandler{}

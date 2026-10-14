@@ -276,16 +276,16 @@ WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-
 		if err != nil {
 			t.Fatal(err)
 		}
-		commits := map[string]int{}
+		commits := map[string]float64{}
 		for _, input := range inputs {
 			commits[input.RepoID.String()] += input.CommitsCount
 		}
-		total := 0
+		total := 0.0
 		for _, count := range commits {
 			total += count
 		}
 		if total != 7 || commits[sharedScopeRepoAPI.String()] != 7 || commits[orgDayRepoGone.String()] != 0 {
-			t.Errorf("the reader of team_metrics_daily counts %d commit(s) for the day (by repository %v), want only the 7 of the run's repository",
+			t.Errorf("the reader of team_metrics_daily counts %v commit(s) for the day (by repository %v), want only the 7 of the run's repository",
 				total, commits)
 		}
 		// A read with no newest-generation step and no filter: the newest row

@@ -5,6 +5,7 @@ package daily
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -40,7 +41,7 @@ var compoundingRiskTeamSchema = append(append([]string{}, compoundingRiskSchema.
 	// omitting the column makes that query fail at parse time, not merely
 	// return fewer rows -- caught by this test initially producing 0 rows
 	// everywhere, the OwnedRepoIDs error swallowed by
-	// ResolveOwnershipThenPatterns' per-team fail-open `continue` (matching
+	// ResolveOwnerSharesThenPatterns' per-team fail-open `continue` (matching
 	// Python's own defensive `except Exception`), leaving repoToTeam empty
 	// with no visible error. Matches LoadRepoNames' production query too
 	// (id, argMax(repo, last_synced) FROM repos WHERE org_id = ? AND id IN ?
@@ -77,7 +78,7 @@ var compoundingRiskTeamSchema = append(append([]string{}, compoundingRiskSchema.
 // ONE repo BOTH teams claim (team-lead's explicit ask for this PR) --
 // proving the shared repo lands under EXACTLY ONE team's aggregate, never
 // both (double-counted) and never neither (dropped), via
-// internal/teamresolve.ResolveOwnershipThenPatterns, the same shared entry
+// internal/teamresolve.ResolveOwnerSharesThenPatterns, the same shared entry
 // point team_cognitive_load and team_complexity use.
 //
 // Both teams hold a main-owner row (is_primary = 1) of the shared repo at one
@@ -217,16 +218,18 @@ ORDER BY scope_id
 			gotA != nil, gotB != nil, got)
 	}
 
-	// Derived via the SAME kernel function under test, not hand-typed
-	// arithmetic -- see compoundingRiskSchema's sibling test for why.
-	sharedToA := *compoundingrisk.MeanOrNone([]*float64{&churnA, &churnShared})
-	sharedToB := *compoundingrisk.MeanOrNone([]*float64{&churnB, &churnShared})
+	// The shared repository is held by two main owners with no measured share:
+	// the owners split it equally (0.5 each, D5988 known limit), and a share is
+	// the WEIGHT of the repository in the team's mean (D5998): each team's
+	// rework churn is the share-weighted mean of its repositories, by hand.
+	wantA := (churnA*1 + churnShared*0.5) / 1.5
+	wantB := (churnB*1 + churnShared*0.5) / 1.5
 
-	if *gotA != sharedToA || *gotB != sharedToB {
+	if math.Abs(*gotA-wantA) > 1e-12 || math.Abs(*gotB-wantB) > 1e-12 {
 		t.Fatalf(
 			"team-a rework_churn=%v team-b rework_churn=%v, want a=%v b=%v -- the shared repo "+
-				"of two main owners counts whole in each (a tie-break to one team gives a=%v b=%v)",
-			*gotA, *gotB, sharedToA, sharedToB, sharedToA, churnB,
+				"of two main owners weighs 0.5 in each team's mean",
+			*gotA, *gotB, wantA, wantB,
 		)
 	}
 }
@@ -311,7 +314,7 @@ INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, first_rev
 
 	type teamRow struct {
 		latency, share   *float64
-		merged, reviewed *uint32
+		merged, reviewed *float64
 	}
 	rows, err := conn.Query(ctx, `
 SELECT scope_id, review_latency_p90h, review_share_30d, merged_prs_30d, reviewed_prs_30d

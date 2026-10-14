@@ -461,8 +461,34 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			}
 			goWritten = strings.ReplaceAll(goWritten, goOnlyTitle, "")
 		}
+		answerBody := answer.Body
+		if tc.Kind == "investment" && recorder.Code == http.StatusOK && answer.Status == http.StatusOK {
+			// CHAOS-9622 (D5999): Go reads the COUNT of the units, the frozen Python answer weighs them by
+			// effort_value. The key order of the answer is compared; the values of the two distributions are
+			// zeroed on both sides, and Go's own are asserted against the COUNT of the seeded units: the stored
+			// distribution of the seeded unit (quality 0.6, feature_delivery 0.4) plus the two quality-only units.
+			goOut, pythonOut, values, err := investmentForOrderComparison(goWritten, answerBody)
+			if err != nil {
+				t.Errorf("%s: %v", tc.Name, err)
+				continue
+			}
+			for distribution, wants := range map[string]map[string]float64{
+				"theme_distribution":       {"quality": 2.6, "feature_delivery": 0.4},
+				"subcategory_distribution": {"quality.bugfix": 2.6, "feature_delivery.customer": 0.4},
+			} {
+				for key, want := range wants {
+					if got := values.Distribution[distribution][key]; got < want-1e-3 || got > want+1e-3 {
+						t.Errorf("%s: Go %s[%s] = %v, want the COUNT %v", tc.Name, distribution, key, got, want)
+					}
+				}
+			}
+			if values.Denominator < 3-1e-3 || values.Denominator > 3+1e-3 {
+				t.Errorf("%s: Go denominator = %v, want 3", tc.Name, values.Denominator)
+			}
+			goWritten, answerBody = goOut, pythonOut
+		}
 		goBody := golden.Project(t, venueoracle.Response{Status: recorder.Code, Body: goWritten}).Body
-		pythonBody := golden.Project(t, venueoracle.Response{Status: answer.Status, Body: answer.Body}).Body
+		pythonBody := golden.Project(t, venueoracle.Response{Status: answer.Status, Body: answerBody}).Body
 		if tc.Kind == "people_summary" && recorder.Code == http.StatusOK && answer.Status == http.StatusOK {
 			// The person summary is compared on its freshness object only
 			// (it holds sources, the dict under test). Its other lists

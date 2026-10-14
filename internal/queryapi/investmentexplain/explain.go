@@ -194,6 +194,20 @@ func shareNoun(measure string) string {
 	return "work"
 }
 
+func totalKeyOf(measure string) string {
+	if measure == MeasureChurnLOC {
+		return "total_changed_lines"
+	}
+	return "total_work"
+}
+
+func totalKey(key string) string {
+	if key == "" {
+		return "total_effort"
+	}
+	return key
+}
+
 // annotateFindings gives each finding the numerator, denominator and measure of its share, taken from
 // the same distributions the share is: numerator is the value of the subcategory (or of the theme when
 // the finding names none), denominator the total of the themes. A reader can divide them and get
@@ -676,6 +690,7 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 		Theme:            theme,
 		Subcategory:      opts.Subcategory,
 		TotalEffort:      totalEffort,
+		TotalKey:         totalKeyOf(opts.effectiveMeasure()),
 		TopThemes:        topThemes,
 		TopSubcategories: topSubcategories,
 		WorkUnitCount:    totalUnits,
@@ -879,9 +894,12 @@ type sampleQuoteEntry struct {
 }
 
 type explainPayloadInput struct {
-	Theme            string
-	Subcategory      string
-	TotalEffort      float64
+	Theme       string
+	Subcategory string
+	TotalEffort float64
+	// TotalKey names the total in the payload: total_work or total_changed_lines for the measure read
+	// (CHAOS-9555), so the model cannot call a count "effort". Empty keeps the reference name total_effort.
+	TotalKey         string
 	TopThemes        []keyValue
 	TopSubcategories []keyValue
 	WorkUnitCount    int
@@ -942,11 +960,11 @@ func buildExplainPayload(in explainPayloadInput) map[string]any {
 	}
 
 	return map[string]any{
-		"focus":                        map[string]any{"theme": theme, "subcategory": subcategory},
-		"total_effort":                 in.TotalEffort,
-		"theme_distribution_top":       themeTop,
-		"subcategory_distribution_top": subcategoryTop,
-		"work_unit_count":              in.WorkUnitCount,
+		"focus":                                     map[string]any{"theme": theme, "subcategory": subcategory},
+		totalKey(in.TotalKey):                       in.TotalEffort,
+		"theme_distribution_top":                    themeTop,
+		"subcategory_distribution_top":              subcategoryTop,
+		"work_unit_count":                           in.WorkUnitCount,
 		"work_unit_dominant_subcategory_counts_top": dominantTop,
 		"evidence_quality_band_counts":              bandCounts,
 		"evidence_quality_mean":                     optionalFloatToAny(in.QualityMean),

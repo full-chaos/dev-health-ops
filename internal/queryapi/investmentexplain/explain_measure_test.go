@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 )
 
 // statementRecorder keeps the statement of the breakdown read.
@@ -118,5 +120,27 @@ func TestExplainCacheKeyCarriesTheMeasure(t *testing.T) {
 	}
 	if key("COUNT") != key("THROUGHPUT") {
 		t.Error("THROUGHPUT is COUNT on the investment path and must share its key")
+	}
+}
+
+func TestExplainPromptNamesTheTotalAfterTheMeasure(t *testing.T) {
+	for measure, want := range map[string]string{"COUNT": `"total_work"`, "CHURN_LOC": `"total_changed_lines"`} {
+		reader, err := NewReader(mixAgreementClient{breakdown: mixRows()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts := explainOpts()
+		opts.Measure = measure
+		var prompt string
+		complete := func(_ context.Context, _, _, fullPrompt string) (categorize.CompletionResult, string, string, error) {
+			prompt = fullPrompt
+			return categorize.CompletionResult{Text: completionWithKeys(64), Model: "fake"}, "openai", "gpt-5-mini", nil
+		}
+		if _, err := reader.ExplainInvestmentMix(context.Background(), nil, alwaysAvailable, complete, opts); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(prompt, want) || strings.Contains(prompt, "total_effort") {
+			t.Errorf("measure %s: prompt total key wrong (want %s, no total_effort)", measure, want)
+		}
 	}
 }

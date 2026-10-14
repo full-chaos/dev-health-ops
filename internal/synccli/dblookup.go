@@ -320,7 +320,7 @@ func storedGitHubCredential(ctx context.Context, dbURL, orgID string, env cli.En
 func activeGitHubIntegration(ctx context.Context, pool *pgxpool.Pool, orgID string) (integrationID, credentialID string, err error) {
 	rows, err := pool.Query(ctx,
 		`SELECT id::text, COALESCE(credential_id::text, '') FROM integrations
-		 WHERE org_id = $1 AND lower(provider) = 'github' AND is_active = TRUE ORDER BY id`, orgID)
+		 WHERE org_id = $1 AND lower(btrim(provider)) = 'github' AND is_active = TRUE ORDER BY id`, orgID)
 	if err != nil {
 		return "", "", lookupFailureWith(reasonDatabaseQueryFailed, err)
 	}

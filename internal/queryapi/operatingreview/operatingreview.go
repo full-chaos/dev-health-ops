@@ -958,6 +958,13 @@ type aiImpactRow struct {
 	incidentDragRate      *float64
 }
 
+// CHAOS-9676: the stored ai_assisted_prs, agent_created_prs, human_prs and
+// unknown_prs carry the whole (day, repository, team, work type) group's counts
+// on EVERY bucket row of the group, so summing one of them over the bucket rows
+// counted the group once per emitted bucket row and the adoption ratio read
+// too high. The query now takes each of the four from the row's own bucket: the
+// prs_total of the ai_assisted, agent_created, human and unknown rows.
+//
 // fetchAIImpact ports the "ai_impact" query verbatim
 // (metrics/operating_review.py:302-342). Verified column-by-column against
 // migration 036_ai_metrics.sql's real ai_impact_metrics_daily schema --
@@ -972,11 +979,11 @@ func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams 
 	query := `
         SELECT
           attribution_bucket,
-          sum(prs_total) AS prs_total,
-          sum(ai_assisted_prs) AS ai_assisted_prs,
-          sum(agent_created_prs) AS agent_created_prs,
-          sum(human_prs) AS human_prs,
-          sum(unknown_prs) AS unknown_prs,
+          sum(prs_total) AS bucket_prs_total,
+          if(attribution_bucket = 'ai_assisted', bucket_prs_total, 0) AS bucket_ai_assisted_prs,
+          if(attribution_bucket = 'agent_created', bucket_prs_total, 0) AS bucket_agent_created_prs,
+          if(attribution_bucket = 'human', bucket_prs_total, 0) AS bucket_human_prs,
+          if(attribution_bucket = 'unknown', bucket_prs_total, 0) AS bucket_unknown_prs,
           avg(ai_cycle_time_delta_hours) AS ai_cycle_time_delta_hours,
           avg(ai_review_amplification) AS ai_review_amplification,
           avg(rework_drag_rate) AS rework_drag_rate,

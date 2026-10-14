@@ -153,6 +153,21 @@ func groupByBucket(rows []dailyRow) (map[string][]dailyRow, []string) {
 	return groups, names
 }
 
+// bucketPrs is the pull requests of one attribution bucket: the prs_total of the
+// rows of that bucket. The stored ai_assisted_prs, agent_created_prs, human_prs
+// and unknown_prs columns carry the whole (team, repository, work type, day)
+// group's counts on EVERY bucket row of the group, so adding one of them over
+// rows counts the group once per emitted bucket row (CHAOS-9676).
+func bucketPrs(rows []dailyRow, bucket string) float64 {
+	var total float64
+	for _, r := range rows {
+		if r.Bucket == bucket {
+			total = total + r.PrsTotal
+		}
+	}
+	return total
+}
+
 func sumInt(rows []dailyRow, f func(dailyRow) float64) float64 {
 	var total float64
 	for _, r := range rows {

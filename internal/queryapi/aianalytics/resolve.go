@@ -313,8 +313,8 @@ func ImpactSummary(ctx context.Context, client QueryClient, orgID string, dr mod
 	repoBreakdown, teamBreakdown := loadScopeBreakdowns(ctx, client, orgID, rows)
 
 	total := sumInt(rows, byPrsTotal)
-	aiAssisted := sumInt(rows, func(r dailyRow) float64 { return r.AIAssistedPrs })
-	unknown := sumInt(rows, func(r dailyRow) float64 { return r.UnknownPrs })
+	aiAssisted := bucketPrs(rows, "ai_assisted")
+	unknown := bucketPrs(rows, "unknown")
 
 	var computedAt *time.Time
 	for _, r := range rows {
@@ -349,8 +349,8 @@ func ImpactSummary(ctx context.Context, client QueryClient, orgID string, dr mod
 		EndDate:           dr.EndDate,
 		TotalPrs:          total,
 		AiAssistedPrs:     aiAssisted,
-		AgentCreatedPrs:   sumInt(rows, func(r dailyRow) float64 { return r.AgentCreatedPrs }),
-		HumanPrs:          sumInt(rows, func(r dailyRow) float64 { return r.HumanPrs }),
+		AgentCreatedPrs:   bucketPrs(rows, "agent_created"),
+		HumanPrs:          bucketPrs(rows, bucketHuman),
 		UnknownPrs:        unknown,
 		AiAssistedPrRatio: ratio(float64(aiAssisted), float64(total)),
 		ByBucket:          aggregateBucketTotals(rows),

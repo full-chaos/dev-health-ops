@@ -81,20 +81,20 @@ func loadGolden(t *testing.T, name string) Response {
 func TestGoldenCycleThroughputTeamAttributionQuirk(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		switch {
-		case strings.Contains(query, "FROM teams FINAL"):
-			return &fixtureRowScanner{rows: [][]any{{"team-a", "Team Alpha"}}}, nil
-		case strings.Contains(query, "AS team_activity") && strings.Contains(query, "uniqExact(work_item_id)"):
+		case strings.Contains(query, "AS team_activity") && strings.Contains(query, "sum(item_weight)"):
 			return &fixtureRowScanner{rows: [][]any{
 				{day(2024, 1, 1), "team-a", "team-a", 5.0},
 				{day(2024, 1, 8), "team-a", "team-a", 9.0},
 				{day(2024, 1, 1), "team-b", "team-b", 3.0},
 			}}, nil
-		case strings.Contains(query, "AS team_activity") && strings.Contains(query, "avg(cycle_time_hours)"):
+		case strings.Contains(query, "AS team_activity") && strings.Contains(query, "sum(cycle_time_hours * weight)"):
 			return &fixtureRowScanner{rows: [][]any{
 				{day(2024, 1, 1), "team-a", "team-a", 48.0},
 				{day(2024, 1, 8), "team-a", "team-a", 24.0},
 				{day(2024, 1, 1), "team-b", "team-b", 72.0},
 			}}, nil
+		case strings.Contains(query, "FROM teams FINAL"):
+			return &fixtureRowScanner{rows: [][]any{{"team-a", "Team Alpha"}}}, nil
 		default:
 			t.Fatalf("unexpected query for cycle_throughput team fixture:\n%s", query)
 			return nil, nil

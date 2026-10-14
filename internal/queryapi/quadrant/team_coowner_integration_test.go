@@ -4,6 +4,7 @@ package quadrant
 
 import (
 	"context"
+	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -72,9 +73,10 @@ VALUES (?, ?, ?, ?, 'story', 'done', ?, ?, ?, 5, 6, ?, ?)`,
 }
 
 // The team cycle/throughput quadrant plots one point per team. An item of a
-// project of teams A and B counts for both teams; the inactive team C has no
+// project of teams A and B is split between them (the repository holds no owner
+// share of either, so equally: 0.5 each, D5983); the inactive team C has no
 // point. Every provider, rows written by the real producer.
-func TestTheTeamQuadrantCountsAnItemOfAProjectOfTwoTeamsForEachTeam(t *testing.T) {
+func TestTheTeamQuadrantSplitsAnItemOfAProjectOfTwoTeamsBetweenThem(t *testing.T) {
 	ctx := context.Background()
 	admin, client := crossorg.Start(ctx, t)
 	org := crossorg.Default().OrgA
@@ -82,7 +84,7 @@ func TestTheTeamQuadrantCountsAnItemOfAProjectOfTwoTeamsForEachTeam(t *testing.T
 	seedCoOwnedItemsThroughTheProducer(ctx, t, admin, org, day)
 	for _, metric := range []string{"throughput", "cycle_time"} {
 		t.Run(metric, func(t *testing.T) {
-			rows, err := fetchWorkItemTeamQuadrantMetric(ctx, client, metric, day.AddDate(0, 0, -7), day.AddDate(0, 0, 7), "week", org)
+			rows, err := fetchWorkItemTeamQuadrantMetric(ctx, client, metric, day.AddDate(0, 0, -7), day.AddDate(0, 0, 7), "week", org, day)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,12 +105,12 @@ func TestTheTeamQuadrantCountsAnItemOfAProjectOfTwoTeamsForEachTeam(t *testing.T
 			if strings.Join(teams, ",") != strings.Join(want, ",") {
 				t.Fatalf("%s points by team = %v, want one point for each of %v", metric, got, want)
 			}
-			wantValue := 1.0
+			wantValue := 0.5
 			if metric == "cycle_time" {
 				wantValue = 5
 			}
 			for team, value := range got {
-				if value != wantValue {
+				if math.Abs(value-wantValue) > 1e-9 {
 					t.Errorf("%s of %s = %v, want %v", metric, team, value, wantValue)
 				}
 			}
@@ -129,7 +131,7 @@ func TestTheTeamQuadrantAttributionReadIsNarrowedByTheSelectedTeams(t *testing.T
 		SQL:      "\n              AND t.team_id IN {scope_team_ids:Array(String)}",
 		Bindings: []dhclickhouse.Binding{{Name: "scope_team_ids", Value: selected}},
 	}
-	rows, err := fetchWorkItemTeamQuadrantMetricIn(ctx, client, "throughput", day.AddDate(0, 0, -7), day.AddDate(0, 0, 7), "week", org, extra)
+	rows, err := fetchWorkItemTeamQuadrantMetricIn(ctx, client, "throughput", day.AddDate(0, 0, -7), day.AddDate(0, 0, 7), "week", org, day, extra)
 	if err != nil {
 		t.Fatal(err)
 	}

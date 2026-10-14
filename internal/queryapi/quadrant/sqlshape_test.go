@@ -130,3 +130,27 @@ func ownerTeamSpec(spec MetricSpec) MetricSpec {
 	read, _ := ownerTeamRead(spec, "org-1", nil, time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC))
 	return read
 }
+
+// TestOrgIDScopesTheWorkItemAttributionSourceAtTheSameDepthAsItsFinal pins the
+// attribution source of the team cycle x throughput read: its FINAL table is
+// bound by org_id in the same statement (the owner shares bind their own org).
+func TestOrgIDScopesTheWorkItemAttributionSourceAtTheSameDepthAsItsFinal(t *testing.T) {
+	query, _, err := workItemTeamQuadrantQuery("throughput", "week", "org-1", time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC), extraScope{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "FROM work_item_team_attributions FINAL"
+	idx := strings.Index(query, marker)
+	if idx < 0 {
+		t.Fatalf("no %q in:\n%s", marker, query)
+	}
+	depths := sqlshape.Depths(query)
+	rest := query[idx+len(marker):]
+	orgIdx := strings.Index(rest, "org_id = {org_id:String}")
+	if orgIdx < 0 {
+		t.Fatalf("no org_id predicate after %q", marker)
+	}
+	if depths[idx+len(marker)+orgIdx] != depths[idx] {
+		t.Fatalf("org_id sits at depth %d, FINAL at depth %d", depths[idx+len(marker)+orgIdx], depths[idx])
+	}
+}

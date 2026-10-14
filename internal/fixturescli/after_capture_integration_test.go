@@ -63,6 +63,12 @@ var columnsAfterTheCapture = map[string]map[string]string{
 	"work_unit_investments": {
 		"evidence_quote_count": "106_work_unit_investment_quote_count.sql",
 	},
+	// When a project's target date was last read (CHAOS-9613), and how many
+	// other open dated entries it had: no captured project was read.
+	"projects": {
+		"target_fetched_at": "127_projects_target_provenance.sql",
+		"target_other_open": "127_projects_target_provenance.sql",
+	},
 }
 
 // viewFilledTable is one table that a materialized view fills.
@@ -113,7 +119,42 @@ var viewFilledAfterTheCapture = map[string]viewFilledTable{
 // value for them, so the load must leave them empty.
 var emptyColumnsAfterTheCapture = map[string]map[string]string{
 	// The provider fact that decided a project's state category (CHAOS-9438).
-	"projects": {"state_source": "123_projects_state_source.sql"},
+	// Where a project's target date came from (CHAOS-9613).
+	"projects": {
+		"state_source":    "123_projects_state_source.sql",
+		"target_ref":      "127_projects_target_provenance.sql",
+		"target_ref_name": "127_projects_target_provenance.sql",
+	},
+}
+
+// defaultedColumnsAfterTheCapture names the String columns a migration added
+// after the capture whose default is not empty, or depends on the row: table ->
+// column -> the migration and the value a captured row reads. A captured row
+// has no value for them, so the load must leave the default. value gives the
+// loaded value of another column of the same row.
+var defaultedColumnsAfterTheCapture = map[string]map[string]defaultedColumn{
+	// A project no sync has read the target of is unknown, never "none dated";
+	// a Linear project that carries a date reads as stated by its own project
+	// date, because that date is Linear's own (CHAOS-9613).
+	"projects": {
+		"target_state":  {Migration: "127_projects_target_provenance.sql", Want: linearDateOr("stated", "unknown")},
+		"target_kind":   {Migration: "127_projects_target_provenance.sql", Want: linearDateOr("project", "")},
+		"target_source": {Migration: "127_projects_target_provenance.sql", Want: linearDateOr("linear.project.targetDate", "")},
+	},
+}
+
+type defaultedColumn struct {
+	Migration string
+	Want      func(value func(column string) any) string
+}
+
+func linearDateOr(linear, other string) func(value func(column string) any) string {
+	return func(value func(column string) any) string {
+		if fmt.Sprint(value("provider")) == "linear" && value("target_date") != nil {
+			return linear
+		}
+		return other
+	}
 }
 
 // withoutColumnsAfterTheCapture checks the columns of table that
@@ -129,9 +170,12 @@ func withoutColumnsAfterTheCapture(table FrozenTable) (FrozenTable, []string) {
 	}
 	// A defaulted-empty String column (emptyColumnsAfterTheCapture) is held to
 	// "" instead of NULL.
-	empty := emptyColumnsAfterTheCapture[table.Name]
-	for name, migration := range empty {
-		added[name] = migration
+	empty := map[string]func(value func(column string) any) string{}
+	for name, migration := range emptyColumnsAfterTheCapture[table.Name] {
+		added[name], empty[name] = migration, func(func(string) any) string { return "" }
+	}
+	for name, column := range defaultedColumnsAfterTheCapture[table.Name] {
+		added[name], empty[name] = column.Migration, column.Want
 	}
 	if len(added) == 0 {
 		return table, nil
@@ -155,7 +199,7 @@ func withoutColumnsAfterTheCapture(table FrozenTable) (FrozenTable, []string) {
 			continue
 		}
 		drop[position] = true
-		if _, isEmpty := empty[name]; isEmpty {
+		if want, isEmpty := empty[name]; isEmpty {
 			columnType := table.Columns[position].Type
 			if columnType != "String" && columnType != "LowCardinality(String)" {
 				problems = append(problems, fmt.Sprintf("%s.%s (added by %s) is %s, not a defaulted String", table.Name, name, added[name], columnType))
@@ -163,7 +207,16 @@ func withoutColumnsAfterTheCapture(table FrozenTable) (FrozenTable, []string) {
 			}
 			valued := 0
 			for _, row := range table.Rows {
-				if position >= len(row) || (row[position] != nil && row[position] != "") {
+				value := func(column string) any {
+					for index, candidate := range table.Columns {
+						if candidate.Name == column && index < len(row) {
+							return row[index]
+						}
+					}
+					return nil
+				}
+				wantValue := want(value)
+				if position >= len(row) || row[position] == nil && wantValue != "" || row[position] != nil && fmt.Sprint(row[position]) != wantValue {
 					valued++
 				}
 			}

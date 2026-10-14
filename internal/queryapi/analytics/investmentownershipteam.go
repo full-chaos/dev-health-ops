@@ -46,15 +46,19 @@ func teamScopeIDs(filters *model.FilterInput) []string {
 	return nil
 }
 
-// ownershipDbExpression is dbExpression(measure, true, true) weighted by the owner's share of the repository.
-func ownershipDbExpression(measure Measure) (string, error) {
+// ownershipDbExpression is dbExpression(measure, true, true) weighted by shareExpr, the share of the repository the
+// row stands for: the `ut` join's owner share (ownershipShareExpr: the TEAM dimension, each owning team its own
+// share) or the team scope's RepoShare (every other dimension under a team scope, the owners in view together
+// never more than the repository once; CHAOS-9629, D5988). One weighting, two sources of the share, the same
+// arithmetic as investmentexplain's measure for the same rows.
+func ownershipDbExpression(measure Measure, shareExpr string) (string, error) {
 	switch measure {
 	case MeasureCount, MeasureThroughput:
-		return "SUM(subcategory_kv.2 * allocation_weight * " + ownershipShareExpr + ")", nil
+		return "SUM(subcategory_kv.2 * allocation_weight * " + shareExpr + ")", nil
 	case MeasureChurnLOC:
-		return "SUM(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0) * " + ownershipShareExpr + ")", nil
+		return "SUM(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0) * " + shareExpr + ")", nil
 	case MeasureCycleTimeHours:
-		return "SUM(dateDiff('hour', from_ts, to_ts) * allocation_weight * " + ownershipShareExpr + ") / NULLIF(SUM(allocation_weight * " + ownershipShareExpr + "), 0)", nil
+		return "SUM(dateDiff('hour', from_ts, to_ts) * allocation_weight * " + shareExpr + ") / NULLIF(SUM(allocation_weight * " + shareExpr + "), 0)", nil
 	}
 	return dbExpression(measure, true, true)
 }

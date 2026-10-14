@@ -139,6 +139,41 @@ func (o Outcome) BasisOrNil() *string {
 	return &basis
 }
 
+// UnknownReasonOrNil is the unknown reason as a reader serves it: nil when the
+// rate is measured.
+func (o Outcome) UnknownReasonOrNil() *string {
+	if o.UnknownReason == NotUnknown {
+		return nil
+	}
+	reason := string(o.UnknownReason)
+	return &reason
+}
+
+// Evidence is what a rate stands on as the GraphQL surfaces serve it
+// (CHAOS-9630): the basis, the deployments (D), the deployments with a final
+// status (K), their coverage K / D and, with no rate, the unknown reason. It
+// is read off the Outcome of the one rule, so no reader derives it a second
+// time.
+type Evidence struct {
+	Basis         *string
+	Deployments   uint64
+	StatusKnown   uint64
+	Coverage      *float64
+	UnknownReason *string
+}
+
+// Evidence is the evidence of the outcome, served whatever the state: an
+// unknown rate carries its reason and the counts that explain it.
+func (o Outcome) Evidence() *Evidence {
+	return &Evidence{
+		Basis:         o.BasisOrNil(),
+		Deployments:   o.Deployments,
+		StatusKnown:   o.StatusKnown,
+		Coverage:      o.Coverage,
+		UnknownReason: o.UnknownReasonOrNil(),
+	}
+}
+
 // StateOrNil is the state as a reader serves it: nil for StateNoStoredCounts.
 func (o Outcome) StateOrNil() *string {
 	if o.State == StateNoStoredCounts {

@@ -340,7 +340,7 @@ func trancheOptionsFor(name string) (Options, bool) {
 	case "investment sunburst":
 		return investmentSunburstParity, true
 	case "investment explain":
-		return Options{NumericLeavesDeclared: true, FloatTierB: investmentExplainDeterministicFloats, IntegerLeaves: investmentExplainIntegerLeaves}, true
+		return Options{NumericLeavesDeclared: true, FloatTierB: investmentExplainDeterministicFloats, GoOnlyKeys: investmentExplainGoOnlyKeys, IntegerLeaves: investmentExplainIntegerLeaves}, true
 	case "investment flow dynamic":
 		return investmentFlowDynamicParity, true
 	case "investment flow mode":

@@ -4,6 +4,12 @@
 // phone numbers and @-mentions before the text bundle is built, so the prompt,
 // the bundle hash and every quote the model returns are all made from the same
 // filtered text.
+//
+// Named limits: a package pin whose tag is not a known release channel or a
+// version (name@somebranch), and an image digest (name@sha256:...), are read as
+// an address; a real address whose dotless host is a release channel or version
+// (alice@latest) cannot be told from a pin and stays; a credential written in
+// prose with no label (the password is hunterpass) is not matched.
 package promptpii
 
 import (
@@ -52,6 +58,17 @@ var (
 	// bad news" stays).
 	authorizationPattern = regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*(?:(?:bearer|basic|token)\s+)?)([^\s"',;]+)`)
 	bearerPattern        = regexp.MustCompile(`(?i)\b(bearer\s+)([^\s"',;]*\d[^\s"',;]*)`)
+
+	// A package pin: a package or action name, "@", and a release channel or a
+	// version ("lodash@latest", "vite@beta.3", "pkg@v18.3.1"). The name holds only
+	// package-name characters (no "+", "%" or quote, which only an address
+	// carries). A host with a name part ("beta.example.com") is still an address.
+	packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
+	pinTagPattern      = regexp.MustCompile(`(?i)^(?:(?:latest|next|beta|alpha|canary|nightly|rc|lts|insiders|experimental|preview|snapshot)(?:[.-]\d+)*|v?\d+(?:\.\d+)*(?:[-+][A-Za-z0-9.+-]+)?)$`)
+
+	// A scoped package pin ("@scope/pkg@latest", "@types/node@18.3.1"): the
+	// mention pass must not read its scope as a mention.
+	scopedPinPattern = regexp.MustCompile(`@[A-Za-z0-9][A-Za-z0-9._~-]*/[A-Za-z0-9][A-Za-z0-9._~-]*@([A-Za-z0-9][A-Za-z0-9._+-]*)`)
 
 	// Jira wiki mentions: [~username] and [~accountid:...].
 	jiraMentionPattern = regexp.MustCompile(`\[~[^\]\s]{1,128}\]`)
@@ -139,6 +156,9 @@ func (f *Filter) Text(text string) string {
 	}
 
 	filtered = emailPattern.ReplaceAllStringFunc(filtered, func(m string) string {
+		if isPackagePin(m) {
+			return m
+		}
 		f.counts.Emails++
 		return "[email-" + strconv.Itoa(ordinal(f.emails, m)) + "]"
 	})
@@ -146,11 +166,7 @@ func (f *Filter) Text(text string) string {
 		f.counts.Mentions++
 		return "[user-" + strconv.Itoa(ordinal(f.mentions, m)) + "]"
 	})
-	filtered = mentionPattern.ReplaceAllStringFunc(filtered, func(m string) string {
-		at := strings.IndexByte(m, '@')
-		f.counts.Mentions++
-		return m[:at] + "[user-" + strconv.Itoa(ordinal(f.mentions, m[at:])) + "]"
-	})
+	filtered = f.replaceMentions(filtered)
 	for _, pattern := range phonePatterns {
 		filtered = pattern.ReplaceAllStringFunc(filtered, func(m string) string {
 			if digits := countDigits(m); digits < 8 || digits > 15 {
@@ -168,6 +184,44 @@ func (f *Filter) Text(text string) string {
 		return "[phone-" + strconv.Itoa(ordinal(f.phones, m)) + "]"
 	})
 	return filtered
+}
+
+// isPackagePin: "alice@latest" cannot be told from "lodash@latest" and stays; a
+// plus-address, a host with a name part and any other dotless host are addresses.
+func isPackagePin(m string) bool {
+	at := strings.LastIndexByte(m, '@')
+	return packageNamePattern.MatchString(m[:at]) && pinTagPattern.MatchString(m[at+1:])
+}
+
+// replaceMentions replaces @-mentions outside scoped package pins.
+func (f *Filter) replaceMentions(text string) string {
+	if !strings.Contains(text, "@") {
+		return text
+	}
+	var out strings.Builder
+	last := 0
+	for _, match := range scopedPinPattern.FindAllStringSubmatchIndex(text, -1) {
+		start, end := match[0], match[1]
+		if start > 0 && strings.IndexByte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@.]", text[start-1]) >= 0 {
+			continue
+		}
+		if !pinTagPattern.MatchString(text[match[2]:match[3]]) {
+			continue
+		}
+		out.WriteString(f.mentionSegment(text[last:start]))
+		out.WriteString(text[start:end])
+		last = end
+	}
+	out.WriteString(f.mentionSegment(text[last:]))
+	return out.String()
+}
+
+func (f *Filter) mentionSegment(text string) string {
+	return mentionPattern.ReplaceAllStringFunc(text, func(m string) string {
+		at := strings.IndexByte(m, '@')
+		f.counts.Mentions++
+		return m[:at] + "[user-" + strconv.Itoa(ordinal(f.mentions, m[at:])) + "]"
+	})
 }
 
 func countDigits(s string) int {

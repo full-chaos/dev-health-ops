@@ -7,16 +7,10 @@ import (
 	"math"
 	"math/big"
 	"sort"
-	"strings"
 	"time"
-)
 
-var failedDeploymentStatuses = map[string]struct{}{
-	"failure":  {},
-	"failed":   {},
-	"error":    {},
-	"canceled": {},
-}
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/deploymentstatus"
+)
 
 type Deployment struct {
 	RepoID     string
@@ -59,13 +53,19 @@ func ComputeDORA(day time.Time, deployments []Deployment, incidents []Incident) 
 		if deployedAt.IsZero() || deployedAt.Before(start) || !deployedAt.Before(end) {
 			continue
 		}
+		class := deploymentstatus.Classify(deployment.Status)
+		if class == deploymentstatus.Canceled {
+			// A cancelled deployment never reached its environment: it is
+			// not a deployment of the day (CHAOS-9621).
+			continue
+		}
 		bucket := deploys[deployment.RepoID]
 		if bucket == nil {
 			bucket = &deployBucket{}
 			deploys[deployment.RepoID] = bucket
 		}
 		bucket.total++
-		if _, failed := failedDeploymentStatuses[strings.ToLower(strings.TrimSpace(deployment.Status))]; failed {
+		if class == deploymentstatus.Failed {
 			bucket.failed++
 		}
 		if !deployment.MergedAt.IsZero() {

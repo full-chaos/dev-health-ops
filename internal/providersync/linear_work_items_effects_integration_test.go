@@ -46,7 +46,7 @@ func TestLinearClickHouseAdaptersWriteAndReadBackTenantFencedRows(t *testing.T) 
 	if err := itemAdapter.WriteLinearWorkItemEffect(ctx, itemIdentity, itemEffect); err != nil {
 		t.Fatal(err)
 	}
-	expectHeldWorkItemColumns(ctx, t, conn, claim.OrgID, projectLinearWorkItem(item), heldDue, "held body")
+	expectHeldWorkItemColumns(ctx, t, conn, claim.OrgID, projectLinearWorkItem(item), item.DueAt, "held body")
 	if inspection, err := itemAdapter.InspectLinearWorkItemEffect(ctx, itemIdentity, itemEffect); err != nil || inspection != EffectExact {
 		t.Fatalf("work item inspection=%s error=%v", inspection, err)
 	}
@@ -217,7 +217,7 @@ func TestLinearWorkItemSyncWritesAStatedDescriptionOverAHeldOne(t *testing.T) {
 	if err := adapter.WriteLinearWorkItemEffect(ctx, identity, effect); err != nil {
 		t.Fatal(err)
 	}
-	expectHeldWorkItemColumns(ctx, t, conn, claim.OrgID, projectLinearWorkItem(item), heldDue, "linear body")
+	expectHeldWorkItemColumns(ctx, t, conn, claim.OrgID, projectLinearWorkItem(item), nil, "linear body")
 	if inspection, err := adapter.InspectLinearWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
 		t.Fatalf("inspection=%s error=%v", inspection, err)
 	}

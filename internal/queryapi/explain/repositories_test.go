@@ -335,9 +335,9 @@ func TestSourceOfATeamMetricIsTheWorkItemProviders(t *testing.T) {
 // no state for a window with no stored counts. No other metric carries a state
 // or a tier.
 func TestChangeFailureRateIsServedWithItsStateAndLinkTier(t *testing.T) {
-	// view: 10 deployments unless stated; the last value is the stored rows.
-	view := func(deployments, native, heuristic, direct, via, stored uint64) [][]any {
-		return [][]any{{deployments, native, heuristic, direct, via, stored}}
+	// view: the summed counts, then the stored rows.
+	view := func(deployments, native, heuristic, direct, via, failedStatus, statusKnown, stored uint64) [][]any {
+		return [][]any{{deployments, native, heuristic, direct, via, failedStatus, statusKnown, stored}}
 	}
 	for _, tc := range []struct {
 		name    string
@@ -347,17 +347,22 @@ func TestChangeFailureRateIsServedWithItsStateAndLinkTier(t *testing.T) {
 		hasData bool
 		state   string
 		tier    string
+		basis   string
 	}{
-		{"heuristic only", "change_failure_rate", view(10, 0, 3, 1, 0, 4), 30, true, "measured", "heuristic"},
-		{"native and heuristic", "change_failure_rate", view(10, 2, 1, 0, 1, 4), 30, true, "measured", "heuristic"},
-		{"native only", "change_failure_rate", view(10, 2, 0, 1, 0, 4), 20, true, "measured", "native"},
-		{"measured zero", "change_failure_rate", view(10, 0, 0, 1, 0, 4), 0, true, "measured", "null"},
-		{"unknown", "change_failure_rate", view(10, 0, 0, 0, 0, 4), 0, false, "unknown_no_incident_evidence", "null"},
-		{"not applicable", "change_failure_rate", view(0, 0, 0, 2, 0, 4), 0, false, "not_applicable_no_deployments", "null"},
-		{"retraction rows only", "change_failure_rate", view(0, 0, 0, 0, 0, 4), 0, false, "not_applicable_no_deployments", "null"},
-		{"no stored row", "change_failure_rate", view(0, 0, 0, 0, 0, 0), 0, false, "null", "null"},
-		{"no row from the read", "change_failure_rate", nil, 0, false, "null", "null"},
-		{"another metric", "revert_rate", view(10, 0, 3, 1, 0, 4), 0.5, true, "null", "null"},
+		{"heuristic only", "change_failure_rate", view(10, 0, 3, 1, 0, 0, 0, 4), 30, true, "measured", "heuristic", "incident"},
+		{"native and heuristic", "change_failure_rate", view(10, 2, 1, 0, 1, 0, 0, 4), 30, true, "measured", "heuristic", "incident"},
+		{"native only", "change_failure_rate", view(10, 2, 0, 1, 0, 0, 0, 4), 20, true, "measured", "native", "incident"},
+		{"measured zero", "change_failure_rate", view(10, 0, 0, 1, 0, 0, 0, 4), 0, true, "measured", "null", "incident"},
+		{"unknown", "change_failure_rate", view(10, 0, 0, 0, 0, 0, 0, 4), 0, false, "unknown_no_incident_evidence", "null", "null"},
+		{"not applicable", "change_failure_rate", view(0, 0, 0, 2, 0, 0, 0, 4), 0, false, "not_applicable_no_deployments", "null", "null"},
+		{"retraction rows only", "change_failure_rate", view(0, 0, 0, 0, 0, 0, 0, 4), 0, false, "not_applicable_no_deployments", "null", "null"},
+		{"no stored row", "change_failure_rate", view(0, 0, 0, 0, 0, 0, 0, 0), 0, false, "null", "null", "null"},
+		{"no row from the read", "change_failure_rate", nil, 0, false, "null", "null", "null"},
+		{"another metric", "revert_rate", view(10, 0, 3, 1, 0, 0, 0, 4), 0.5, true, "null", "null", "null"},
+		// CHAOS-9621: deployment statuses are evidence without any incident.
+		{"statuses only, two failed", "change_failure_rate", view(10, 0, 0, 0, 0, 2, 10, 4), 20, true, "measured", "null", "status"},
+		{"statuses only, all succeeded", "change_failure_rate", view(10, 0, 0, 0, 0, 0, 10, 4), 0, true, "measured", "null", "status"},
+		{"statuses and incidents", "change_failure_rate", view(10, 1, 0, 1, 0, 2, 10, 4), 30, true, "measured", "native", "both"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dispatch := &explainQueryDispatch{changeFailureViewRows: tc.rows}
@@ -376,6 +381,9 @@ func TestChangeFailureRateIsServedWithItsStateAndLinkTier(t *testing.T) {
 			}
 			if served(got.LinkTier) != tc.tier {
 				t.Errorf("link_tier = %s, want %s", served(got.LinkTier), tc.tier)
+			}
+			if served(got.EvidenceBasis) != tc.basis {
+				t.Errorf("evidence_basis = %s, want %s", served(got.EvidenceBasis), tc.basis)
 			}
 			if got.HasData != tc.hasData {
 				t.Errorf("has_data = %v, want %v", got.HasData, tc.hasData)

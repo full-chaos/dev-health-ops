@@ -54,7 +54,7 @@ func TestWorkGraphEdgesDecodesInvalidUTF8LikePython(t *testing.T) {
 	conn := wgeClickHouse(ctx, t)
 
 	if err := conn.Exec(ctx, `CREATE TABLE deployments (
-    repo_id UUID, deployment_id String, pull_request_number Nullable(UInt32),
+    repo_id UUID, deployment_id String, status Nullable(String), pull_request_number Nullable(UInt32),
     started_at Nullable(DateTime64(3,'UTC')), finished_at Nullable(DateTime64(3,'UTC')),
     deployed_at Nullable(DateTime64(3,'UTC')), last_synced DateTime64(3,'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, deployment_id)`); err != nil {

@@ -2,19 +2,21 @@ package numerical
 
 import (
 	"sort"
-	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/deploymentstatus"
 )
 
 // DeployRow mirrors compute_deployments.py's DeploymentRow input shape
 // (src/dev_health_ops/metrics/schemas.py:128) for the ONE family
 // ComputeDeployMetrics ports: compute_deploy_metrics_daily
-// (compute_deployments.py:53, CHAOS-4293). It reuses failedDeploymentStatuses
-// (parity.go, DORA's own compute) since both families read the same
-// `deployments` table and Python's DEPLOYMENT_FAILURE_STATUSES constant is
-// the shared, provider-agnostic source of truth (compute_deployments.py:20)
-// -- one Go set instead of two avoids exactly the silent-provider-bias
-// divergence that constant's own docstring warns about.
+// (compute_deployments.py:53, CHAOS-4293). It classifies a status with
+// deploymentstatus.Classify (CHAOS-9621), the one meaning that DORA's own
+// compute (parity.go) and change failure rate use as well: all of them read
+// the same `deployments` table, and one set instead of several avoids the
+// silent-provider-bias divergence that Python's DEPLOYMENT_FAILURE_STATUSES
+// docstring (compute_deployments.py:20) warns about. A cancelled deployment
+// is not counted at all.
 //
 // Distinct from the pre-existing Deployment type above (DORA's own input
 // shape, job_dora.py -> parity.go): same table, different family, different
@@ -86,6 +88,12 @@ func ComputeDeployMetrics(day time.Time, deployments []DeployRow, computedAt tim
 			continue
 		}
 
+		class := deploymentstatus.Classify(row.Status)
+		if class == deploymentstatus.Canceled {
+			// Never reached its environment: not a deployment (CHAOS-9621).
+			continue
+		}
+
 		bucket, ok := byRepo[row.RepoID]
 		if !ok {
 			bucket = &deployMetricsBucket{}
@@ -93,8 +101,7 @@ func ComputeDeployMetrics(day time.Time, deployments []DeployRow, computedAt tim
 			repoOrder = append(repoOrder, row.RepoID)
 		}
 		bucket.deployments++
-		status := strings.ToLower(strings.TrimSpace(row.Status))
-		if _, failed := failedDeploymentStatuses[status]; failed {
+		if class == deploymentstatus.Failed {
 			bucket.failed++
 		}
 

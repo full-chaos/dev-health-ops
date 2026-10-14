@@ -62,6 +62,9 @@ type DeploymentRow struct {
 	RepoID uuid.UUID
 	// DeploymentID is the opaque provider id, NOT a UUID.
 	DeploymentID string
+	// Status is the deployment's own stored status; "" when it has none. Only
+	// change failure rate reads it (CHAOS-9621): the edge extractor does not.
+	Status string
 	// PullRequestNumber is Nullable(UInt32). Nil means this deployment
 	// produces no PR->deployment edge (Python: `if pr_number_value is None:
 	// continue`), but it still registers in the per-repo index above that

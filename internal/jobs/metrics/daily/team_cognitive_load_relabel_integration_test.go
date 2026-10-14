@@ -50,9 +50,9 @@ CREATE TABLE team_metrics_daily (
     team_id LowCardinality(String),
     team_name String,
     repo_id String DEFAULT '',
-    commits_count UInt32,
-    after_hours_commits_count UInt32,
-    weekend_commits_count UInt32,
+    commits_count Float64,
+    after_hours_commits_count Float64,
+    weekend_commits_count Float64,
     after_hours_commit_ratio Float64,
     weekend_commit_ratio Float64,
     computed_at DateTime64(6, 'UTC')
@@ -75,7 +75,7 @@ CREATE TABLE team_metrics_daily (
 	// Generation 1, under the OLD team: 10 commits, earlier computed_at.
 	if err := batch.Append(
 		"acme", day, "team-old", "Old Team", repoID.String(),
-		uint32(10), uint32(2), uint32(1), 0.2, 0.1, older,
+		float64(10), float64(2), float64(1), 0.2, 0.1, older,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ CREATE TABLE team_metrics_daily (
 	// computed_at -- the TRUE current generation.
 	if err := batch.Append(
 		"acme", day, "team-new", "New Team", repoID.String(),
-		uint32(20), uint32(4), uint32(2), 0.2, 0.1, newer,
+		float64(20), float64(4), float64(2), 0.2, 0.1, newer,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -103,12 +103,12 @@ CREATE TABLE team_metrics_daily (
 		t.Fatalf("repo_id=%s, want %s", rows[0].RepoID, repoID)
 	}
 	if rows[0].CommitsCount != 20 {
-		t.Fatalf("commits_count=%d, want 20 (the latest generation's count "+
+		t.Fatalf("commits_count=%v, want 20 (the latest generation's count "+
 			"only -- 30 would be both generations double-counted, CHAOS-5141 "+
 			"finding 1)", rows[0].CommitsCount)
 	}
 	if rows[0].AfterHoursCommitsCount != 4 || rows[0].WeekendCommitsCount != 2 {
-		t.Fatalf("after_hours=%d weekend=%d, want 4/2 (latest generation only)",
+		t.Fatalf("after_hours=%v weekend=%v, want 4/2 (latest generation only)",
 			rows[0].AfterHoursCommitsCount, rows[0].WeekendCommitsCount)
 	}
 }

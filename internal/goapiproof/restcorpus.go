@@ -726,6 +726,15 @@ var investmentExplainDeterministicFloats = map[string]string{
 	"data.top_findings.evidence.evidence_quality_mean": "avgIf(evidence_quality)-shaped ClickHouse float aggregate",
 }
 
+// investmentExplainGoOnlyKeys declares the three evidence keys the investment explanation serves and the
+// recorded Python answer never had (CHAOS-9555): the measure the share is in, and the two sums share_pct is
+// the ratio of.
+var investmentExplainGoOnlyKeys = map[string]GoOnlyKey{
+	"data.top_findings.evidence.measure":     {Ticket: "CHAOS-9555", Reason: "Go-only: the measure (COUNT or CHURN_LOC) share_pct is read in; the Python reference never served it."},
+	"data.top_findings.evidence.numerator":   {Ticket: "CHAOS-9555", Reason: "Go-only: the finding's sum, the numerator of share_pct; the Python reference never served it."},
+	"data.top_findings.evidence.denominator": {Ticket: "CHAOS-9555", Reason: "Go-only: the total of all themes, the denominator of share_pct; the Python reference never served it."},
+}
+
 // investmentExplainIntegerLeaves declares investment/explain's one
 // count-shaped numeric leaf: EncodeInvestmentMixExplanation
 // (investmentexplain/explanation.go) writes confidence.band_mix as an
@@ -1421,6 +1430,7 @@ var explainGoOnlyKeys = map[string]GoOnlyKey{
 	"data.source":                      {Ticket: "CHAOS-8910", Reason: "Go-only: the stored provider(s) behind the item; the Python reference never served it."},
 	"data.link_tier":                   {Ticket: "CHAOS-8981", Reason: "Go-only: the weakest deployment-incident link tier behind a measured change failure rate; null for every other metric. The Python reference never served it."},
 	"data.rate_state":                  {Ticket: "CHAOS-8981", Reason: "Go-only: why change failure rate has a value or not; null for every other metric. The Python reference never served it."},
+	"data.evidence_basis":              {Ticket: "CHAOS-9621", Reason: "Go-only: what a measured change failure rate stands on (incident, status or both); null for every other metric and for a rate that is not measured. The Python reference never served it."},
 	"data.drivers.has_data":            {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the current window; the Python reference never served it."},
 	"data.drivers.has_prior_data":      {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the comparison window; false = delta_pct is null. The Python reference never served it."},
 	"data.contributors.has_data":       {Ticket: "CHAOS-9063", Reason: "Go-only: the contributor holds a stored value in the current window; the Python reference never served it."},
@@ -4230,6 +4240,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					VolatileFields:        investmentExplainProseFields,
 					NumericLeavesDeclared: true,
 					FloatTierB:            investmentExplainDeterministicFloats,
+					GoOnlyKeys:            investmentExplainGoOnlyKeys,
 					IntegerLeaves:         investmentExplainIntegerLeaves,
 				},
 			},
@@ -4292,6 +4303,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					VolatileFields:        investmentExplainProseFields,
 					NumericLeavesDeclared: true,
 					FloatTierB:            investmentExplainDeterministicFloats,
+					GoOnlyKeys:            investmentExplainGoOnlyKeys,
 					IntegerLeaves:         investmentExplainIntegerLeaves,
 				},
 			},
@@ -4312,6 +4324,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					VolatileFields:        investmentExplainProseFields,
 					NumericLeavesDeclared: true,
 					FloatTierB:            investmentExplainDeterministicFloats,
+					GoOnlyKeys:            investmentExplainGoOnlyKeys,
 					IntegerLeaves:         investmentExplainIntegerLeaves,
 				},
 			},

@@ -359,10 +359,7 @@ func (writer MembershipSnapshotWriter[R]) planSnapshot(
 	}
 	for _, row := range open {
 		if key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: row.TeamID, MemberID: row.MemberID}); renamedAway[key] && !retracted[membershipOpenRowKey(row)] {
-			closedAt := at
-			if closedAt.Before(row.ValidFrom) {
-				closedAt = row.ValidFrom
-			}
+			closedAt := intervalCloseAt(row.ValidFrom, at)
 			closes = append(closes, closing{row, closedAt})
 		}
 	}
@@ -380,10 +377,7 @@ func (writer MembershipSnapshotWriter[R]) planSnapshot(
 				continue
 			}
 			alreadyClosing[membershipOpenRowKey(row)] = true
-			closedAt := at
-			if closedAt.Before(row.ValidFrom) {
-				closedAt = row.ValidFrom
-			}
+			closedAt := intervalCloseAt(row.ValidFrom, at)
 			closes = append(closes, closing{row, closedAt})
 		}
 	}

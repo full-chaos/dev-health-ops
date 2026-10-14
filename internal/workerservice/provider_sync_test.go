@@ -169,8 +169,8 @@ func TestBuildProviderSyncHandlerConfiguresLinearAccountDiscovery(t *testing.T) 
 	if !ok {
 		t.Fatalf("handler=%T want providersync.LinearWorkItemFamilyRouteHandler", executor.Handler)
 	}
-	if !linearHandler.Direct.GlobalDiscovery {
-		t.Fatal("production Linear account unit must discover every accessible team")
+	if linearHandler.Direct.GlobalDiscovery {
+		t.Fatal("production Linear units must scope discovery to their own source unless it is the org-wide placeholder")
 	}
 }
 

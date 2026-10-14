@@ -1,10 +1,13 @@
 package daily
 
 import (
+	"math"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 var (
@@ -21,7 +24,7 @@ func TestBuildTeamComplexityRowsAggregatesByOwnershipAndComputesRatio(t *testing
 	}
 	repoToTeam := map[string]string{repoID.String(): "gh:platform"}
 
-	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, oneOwnerEach(repoToTeam), teamComplexityTestComputedAt)
+	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, soleOwnerShares(repoToTeam), teamComplexityTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
@@ -37,19 +40,19 @@ func TestBuildTeamComplexityRowsAggregatesByOwnershipAndComputesRatio(t *testing
 		t.Fatalf("day=%v, want %v", row.Day, teamComplexityTestDay)
 	}
 	if row.LOCTotal != 2000 {
-		t.Fatalf("loc_total=%d, want 2000", row.LOCTotal)
+		t.Fatalf("loc_total=%v, want 2000", row.LOCTotal)
 	}
 	if row.CyclomaticTotal != 100 {
-		t.Fatalf("cyclomatic_total=%d, want 100", row.CyclomaticTotal)
+		t.Fatalf("cyclomatic_total=%v, want 100", row.CyclomaticTotal)
 	}
 	if row.CyclomaticPerKLOC != 50.0 { // 100 / (2000/1000)
 		t.Fatalf("cyclomatic_per_kloc=%v, want 50.0", row.CyclomaticPerKLOC)
 	}
 	if row.HighComplexityFunctions != 3 {
-		t.Fatalf("high_complexity_functions=%d, want 3", row.HighComplexityFunctions)
+		t.Fatalf("high_complexity_functions=%v, want 3", row.HighComplexityFunctions)
 	}
 	if row.VeryHighComplexityFunctions != 1 {
-		t.Fatalf("very_high_complexity_functions=%d, want 1", row.VeryHighComplexityFunctions)
+		t.Fatalf("very_high_complexity_functions=%v, want 1", row.VeryHighComplexityFunctions)
 	}
 	if row.ContributingRepoCount != 1 {
 		t.Fatalf("contributing_repo_count=%d, want 1", row.ContributingRepoCount)
@@ -69,23 +72,23 @@ func TestBuildTeamComplexityRowsSumsAcrossEveryRepoAndRecomputesTheRatio(t *test
 	}
 	repoToTeam := map[string]string{repoA.String(): "gh:platform", repoB.String(): "gh:platform"}
 
-	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, oneOwnerEach(repoToTeam), teamComplexityTestComputedAt)
+	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, soleOwnerShares(repoToTeam), teamComplexityTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
 	}
 	row := records[0]
 	if row.LOCTotal != 10000 {
-		t.Fatalf("loc_total=%d, want 10000", row.LOCTotal)
+		t.Fatalf("loc_total=%v, want 10000", row.LOCTotal)
 	}
 	if row.CyclomaticTotal != 140 {
-		t.Fatalf("cyclomatic_total=%d, want 140", row.CyclomaticTotal)
+		t.Fatalf("cyclomatic_total=%v, want 140", row.CyclomaticTotal)
 	}
 	if row.HighComplexityFunctions != 3 {
-		t.Fatalf("high_complexity_functions=%d, want 3", row.HighComplexityFunctions)
+		t.Fatalf("high_complexity_functions=%v, want 3", row.HighComplexityFunctions)
 	}
 	if row.VeryHighComplexityFunctions != 1 {
-		t.Fatalf("very_high_complexity_functions=%d, want 1", row.VeryHighComplexityFunctions)
+		t.Fatalf("very_high_complexity_functions=%v, want 1", row.VeryHighComplexityFunctions)
 	}
 	if row.ContributingRepoCount != 2 {
 		t.Fatalf("contributing_repo_count=%d, want 2", row.ContributingRepoCount)
@@ -110,7 +113,7 @@ func TestBuildTeamComplexityRowsLOCTotalZeroYieldsZeroRatioNotADivisionError(t *
 	}
 	repoToTeam := map[string]string{repoID.String(): "gh:platform"}
 
-	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, oneOwnerEach(repoToTeam), teamComplexityTestComputedAt)
+	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, soleOwnerShares(repoToTeam), teamComplexityTestComputedAt)
 
 	if len(records) != 1 {
 		t.Fatalf("records=%d, want 1: %#v", len(records), records)
@@ -128,7 +131,7 @@ func TestBuildTeamComplexityRowsUnownedRepoContributesToNoTeam(t *testing.T) {
 		{RepoID: unownedRepo, LOCTotal: 1000, CyclomaticTotal: 10},
 	}
 
-	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, map[string][]string{}, teamComplexityTestComputedAt)
+	records := buildTeamComplexityRows("acme", teamComplexityTestDay, rows, map[string][]teamownership.OwnerShare{}, teamComplexityTestComputedAt)
 
 	if len(records) != 0 {
 		t.Fatalf("records=%d, want 0 (unowned repo must contribute to no team): %#v", len(records), records)
@@ -139,8 +142,37 @@ func TestBuildTeamComplexityRowsUnownedRepoContributesToNoTeam(t *testing.T) {
 // analogue of ComputeFinalizeFamily's own `if len(repoRows) == 0 { return
 // 0, nil }` early exit.
 func TestBuildTeamComplexityRowsEmptyInputProducesNoRows(t *testing.T) {
-	records := buildTeamComplexityRows("acme", teamComplexityTestDay, nil, map[string][]string{}, teamComplexityTestComputedAt)
+	records := buildTeamComplexityRows("acme", teamComplexityTestDay, nil, map[string][]teamownership.OwnerShare{}, teamComplexityTestComputedAt)
 	if len(records) != 0 {
 		t.Fatalf("records=%d, want 0", len(records))
+	}
+}
+
+// CHAOS-9601, D5988: the main owner and every lesser owner take a repository's
+// counters at their own linked share; the per-kloc ratio is recomputed from the
+// weighted sums; the contributing repo count stays whole; nothing is rounded.
+func TestBuildTeamComplexityRowsTakesTheMainOwnerAndEveryLesserOwnerAtItsShare(t *testing.T) {
+	shared, own := uuid.New(), uuid.New()
+	owners := map[string][]teamownership.OwnerShare{
+		shared.String(): {{TeamID: "main", Main: true, Share: 0.6}, {TeamID: "lesser", Share: 0.4}},
+		own.String():    {{TeamID: "lesser", Main: true, Share: 1}},
+	}
+	rows := []repoComplexityInput{
+		{RepoID: shared, LOCTotal: 1000, CyclomaticTotal: 50, HighComplexityFunctions: 3, VeryHighComplexityFunctions: 1},
+		{RepoID: own, LOCTotal: 500, CyclomaticTotal: 10, HighComplexityFunctions: 1, VeryHighComplexityFunctions: 0},
+	}
+	got := map[string]teamComplexityRow{}
+	for _, row := range buildTeamComplexityRows("acme", teamComplexityTestDay, rows, owners, teamComplexityTestComputedAt) {
+		got[row.TeamID] = row
+	}
+	main, lesser := got["main"], got["lesser"]
+	if len(got) != 2 || main.LOCTotal != 600 || main.CyclomaticTotal != 30 || math.Abs(main.HighComplexityFunctions-1.8) > 1e-9 {
+		t.Fatalf("main owner %+v, want 60%% of the shared repository (600 loc, 30 cyclomatic, 1.8 high)", main)
+	}
+	if lesser.LOCTotal != 400+500 || lesser.CyclomaticTotal != 20+10 || lesser.ContributingRepoCount != 2 || main.ContributingRepoCount != 1 {
+		t.Fatalf("lesser owner %+v, want 40%% of the shared repository plus the whole of its own (900 loc, 30 cyclomatic, 2 repos)", lesser)
+	}
+	if want := 30 / (900.0 / 1000.0); lesser.CyclomaticPerKLOC != want {
+		t.Errorf("lesser per-kloc %v, want %v recomputed from the weighted sums", lesser.CyclomaticPerKLOC, want)
 	}
 }

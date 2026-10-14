@@ -317,11 +317,10 @@ func WriteTeamMetricsDailyPerRepo(
 			if err := batch.Append(
 				dayValue, row.TeamID, row.TeamName,
 				// commits_count/after_hours_commits_count/weekend_commits_count
-				// are per-(team, day) tallies incremented once per commit
-				// row with no LIMIT -- bounded by a day's commit volume,
-				// never negative -- so they keep a direct conversion.
-				uint32(row.CommitsCount),
-				uint32(row.AfterHoursCommitsCount), uint32(row.WeekendCommitsCount),
+				// are Float64 since migration 124 (CHAOS-9601): a co-owning
+				// team holds a share of a repository's commits, unrounded.
+				row.CommitsCount,
+				row.AfterHoursCommitsCount, row.WeekendCommitsCount,
 				row.AfterHoursCommitRatio, row.WeekendCommitRatio,
 				computedAt, organizationID, row.RepoID,
 			); err != nil {

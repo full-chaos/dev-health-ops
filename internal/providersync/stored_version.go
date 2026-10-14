@@ -299,6 +299,7 @@ func StoredVersionSpecs() map[string][]storedversion.Spec {
 				NullIsUnstated: true, Carry: workItemsPayloadCarry(datedWorkItemsContract),
 			},
 		},
+		"projects": projectsStoredVersionSpecs(),
 	}
 }
 

@@ -31,7 +31,7 @@ const linearReferenceMembershipsInsert = `INSERT INTO team_memberships (org_id, 
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const linearReferenceOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
-const linearReferenceProjectsInsert = `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, state_source, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced)`
+const linearReferenceProjectsInsert = projectsCatalogInsert
 
 func (sink LinearReferenceCatalogClickHouseEffects) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
@@ -84,7 +84,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) WriteEffect(ctx context.Cont
 				return err
 			}
 		}
-		return sink.writeProjects(ctx, rows)
+		return sink.writeProjects(ctx, claim, rows)
 	case linearReferenceCatalogOwnershipDestination:
 		rows, err := decodeEffectRows[linearReferenceOwnershipRow](effect)
 		if err != nil {
@@ -367,17 +367,26 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeMemberships(ctx context
 	return batch.Send()
 }
 
-func (sink LinearReferenceCatalogClickHouseEffects) writeProjects(ctx context.Context, rows []linearReferenceProjectRow) error {
+func (sink LinearReferenceCatalogClickHouseEffects) writeProjects(ctx context.Context, claim Claim, rows []linearReferenceProjectRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, linearReferenceProjectsInsert)
+	stored := make([]projectStoredRow, len(rows))
+	for index, row := range rows {
+		stored[index] = linearProjectStoredRow(row)
+	}
+	// Linear states every project's target date, a date or none, so the
+	// contract keeps nothing from the held version.
+	if err := applyProjectsContract(ctx, sink.Conn, claim.OrgID, stored, true); err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, projectsCatalogInsert)
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
-	for _, row := range rows {
-		if err := batch.Append(row.ID, row.OrgID, row.Provider, row.ProjectKey, row.Name, row.IsActive, row.State, row.StateSource, linearReferenceTargetDate(row.TargetDate), row.URL, row.TeamIDs, row.TeamKeys, row.LeadID, row.LeadName, row.LeadEmail, row.UpdatedAt, row.LastSynced); err != nil {
+	for _, row := range stored {
+		if err := batch.Append(row.Values...); err != nil {
 			return err
 		}
 	}
@@ -385,6 +394,25 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeProjects(ctx context.Co
 		return err
 	}
 	return batch.Send()
+}
+
+func linearProjectStoredRow(row linearReferenceProjectRow) projectStoredRow {
+	date := linearReferenceTargetDate(row.TargetDate)
+	return newProjectStoredRow(row.ID.String(), row.OrgID, row.Provider, row.ProjectKey, row.Name, row.IsActive,
+		row.State, row.StateSource, date, linearProjectTargetFacts(date, row.LastSynced), row.URL, row.TeamIDs, row.TeamKeys,
+		row.LeadID, row.LeadName, row.LeadEmail, row.UpdatedAt, row.LastSynced)
+}
+
+// linearProjectTargetSource is the provider fact a Linear target date is: the
+// project's own date, with no version or milestone behind it.
+const linearProjectTargetSource = "linear.project.targetDate"
+
+func linearProjectTargetFacts(date *time.Time, fetchedAt time.Time) projectTargetFacts {
+	fetched := fetchedAt.UTC()
+	if date == nil {
+		return projectTargetFacts{TargetState: projectTargetNoneDate, TargetFetchedAt: &fetched}
+	}
+	return projectTargetFacts{TargetState: projectTargetStated, TargetKind: projectTargetKindProject, TargetSource: linearProjectTargetSource, TargetFetchedAt: &fetched}
 }
 
 func (sink LinearReferenceCatalogClickHouseEffects) writeOwnership(ctx context.Context, rows []linearReferenceOwnershipRow) error {
@@ -587,6 +615,14 @@ func (sink LinearReferenceCatalogClickHouseEffects) inspectProjects(ctx context.
 			return EffectAbsent, nil
 		}
 		if found != 1 || !equalLinearReferenceProject(row, actual) {
+			return EffectConflict, nil
+		}
+		// The target columns are the answer Linear stated with the row.
+		matched, err := projectTargetColumnsMatch(ctx, sink.Conn, claim.OrgID, "linear", row.ID.String(), linearProjectStoredRow(row).Values, true)
+		if err != nil {
+			return EffectConflict, err
+		}
+		if !matched {
 			return EffectConflict, nil
 		}
 		return EffectExact, nil

@@ -37,6 +37,14 @@ const (
 	gitlabTeamCatalogProjectsMaxPages    = 5  // 500 projects per group (MAX_GITLAB_DISCOVERY_PROJECTS)
 	gitlabTeamCatalogAllProjectsMaxPages = 50 // 5000 projects (MAX_GITLAB_DISCOVERY_ALL_PROJECTS)
 	gitlabTeamCatalogMembersMaxPages     = 50 // 5000 members per group; unbounded in Python, capped here defensively
+	// gitlabTeamCatalogMilestoneProjectBudget is the number of projects whose
+	// milestones one run reads: the bound of the project discovery itself, so
+	// every project the run lists can be read. A project past it is unread.
+	gitlabTeamCatalogMilestoneProjectBudget = gitlabTeamCatalogAllProjectsMaxPages * gitlabTeamCatalogListPerPage
+	// gitlabTeamCatalogMilestonesMaxPages bounds the open milestones read of
+	// one project (300). A project at the bound is unread: the earliest of a
+	// partial list is not the earliest.
+	gitlabTeamCatalogMilestonesMaxPages = 3
 )
 
 // GitLabTeamCatalogRouteHandler owns the provider-only team/project-ownership/
@@ -458,6 +466,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			evidence.Truncated = true
 		}
 		discoveredIDs := make(map[string]bool, len(allProjectPages.Items))
+		nativeIDByProject := make(map[string]string, len(allProjectPages.Items))
 		for _, raw := range allProjectPages.Items {
 			var project gitlabTeamCatalogProjectPayload
 			if err := json.Unmarshal(raw, &project); err != nil {
@@ -473,8 +482,12 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				continue
 			}
 			rows.Projects = append(rows.Projects, row)
+			nativeIDByProject[row.ID.String()] = nativeID
 		}
 		rows.Projects = dedupeGitLabProjectCatalogRows(rows.Projects)
+		if err := handler.collectProjectTargets(ctx, client, ref.OrgID, rows.Projects, nativeIDByProject, normalizedAt); err != nil {
+			return GitLabTeamCatalogBatch{}, err
+		}
 		// codex round 5, P2: a selected source id discovery never returned
 		// at all (deleted project, revoked access, or a pagination bound
 		// hit before reaching it) is a DIFFERENT gap from the filter above
@@ -772,3 +785,88 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 }
 
 var _ TeamCatalogCollector = GitLabTeamCatalogCollector{}
+
+// gitlabProjectTargetSource is the provider fact a GitLab target date is.
+const gitlabProjectTargetSource = "gitlab.milestone.due_date"
+
+// collectProjectTargets reads the open milestones of every listed project that
+// is not archived, one call each (more pages only for a project with over 100
+// open milestones), and states each project's target by the shared rule. A
+// project whose read failed, ran into its page bound, is archived or is past
+// the run's budget is left unread: it states nothing and the write keeps what
+// the key holds. The calls are a part of the run's own request count.
+func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	orgID string,
+	projects []gitlabTeamCatalogProjectRow,
+	nativeIDByProject map[string]string,
+	normalizedAt time.Time,
+) error {
+	read, failed, incomplete, overBudget, archived, withTarget, noneDated := 0, 0, 0, 0, 0, 0, 0
+	for index := range projects {
+		row := &projects[index]
+		nativeID := nativeIDByProject[row.ID.String()]
+		if row.IsActive == 0 || row.ProjectKey == nil || nativeID == "" {
+			archived++
+			continue
+		}
+		if read+failed+incomplete >= gitlabTeamCatalogMilestoneProjectBudget {
+			overBudget++
+			continue
+		}
+		pages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
+			Path:    providerRelativePath(client, "api", "v4", "projects", nativeID, "milestones"),
+			PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMilestonesMaxPages,
+			Query: url.Values{"state": {"active"}},
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			failed++
+			continue
+		}
+		if pages.PageBudgetExhausted {
+			incomplete++
+			continue
+		}
+		candidates := make([]projectTargetCandidate, 0, len(pages.Items))
+		decoded := true
+		for _, raw := range pages.Items {
+			var milestone gitlabIssueMilestonePayload
+			if json.Unmarshal(raw, &milestone) != nil {
+				decoded = false
+				break
+			}
+			id := milestone.ID.String()
+			if id == "" || id == "0" {
+				continue
+			}
+			date := ""
+			if milestone.DueDate != nil {
+				date = *milestone.DueDate
+			}
+			candidates = append(candidates, projectTargetCandidate{
+				ID: id, Ref: gitlabMilestoneSprintID(*row.ProjectKey, id), Name: milestone.Title, Date: date,
+				Open: strings.EqualFold(strings.TrimSpace(milestone.State), "active"),
+			})
+		}
+		if !decoded {
+			failed++
+			continue
+		}
+		read++
+		row.TargetDate, row.projectTargetFacts = pickProjectTarget(projectTargetKindMilestone, gitlabProjectTargetSource, normalizedAt, candidates)
+		if row.TargetDate != nil {
+			withTarget++
+		} else {
+			noneDated++
+		}
+	}
+	slog.Default().DebugContext(ctx, "gitlab_team_catalog_project_targets",
+		"org_id", orgID, "projects_total", len(projects), "projects_read", read, "read_failed", failed,
+		"read_incomplete", incomplete, "over_budget", overBudget, "archived_skipped", archived,
+		"with_target", withTarget, "none_dated", noneDated)
+	return nil
+}

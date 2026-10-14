@@ -214,17 +214,36 @@ func (adapter GitHubProjectCatalogClickHouseAdapter) WriteGitHubWorkItemEffect(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := adapter.Conn.PrepareBatch(ctx, projectmembership.ProjectsInsert)
+	// An ensure row names the project and nothing about its target, so the
+	// target columns of the catalog row it out-versions are kept (the projects
+	// contract), whoever wrote them.
+	stored := make([]projectStoredRow, len(rows))
+	for index, row := range rows {
+		stored[index] = ensureProjectStoredRow(projectCatalogStored(row))
+	}
+	if err := applyProjectsContract(ctx, adapter.Conn, identity.OrgID, stored, true); err != nil {
+		return err
+	}
+	batch, err := adapter.Conn.PrepareBatch(ctx, projectsCatalogInsert)
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
-	for _, row := range rows {
-		if err := batch.Append(projectCatalogStored(row).Values()...); err != nil {
+	for _, row := range stored {
+		if err := batch.Append(row.Values...); err != nil {
 			return err
 		}
 	}
 	return batch.Send()
+}
+
+// ensureProjectStoredRow is the full projects row of an ensure row: the base
+// columns it names, the rest at their defaults, the target unread.
+func ensureProjectStoredRow(catalog projectmembership.CatalogRow) projectStoredRow {
+	key := catalog.ProjectKey
+	return newProjectStoredRow(catalog.ID, catalog.OrgID, catalog.Provider, &key, catalog.Name, catalog.IsActive,
+		catalog.State, catalog.StateSource, nil, projectTargetFacts{}, "", []string{}, []string{}, nil, nil, nil,
+		catalog.UpdatedAt, catalog.LastSynced)
 }
 
 func (adapter GitHubProjectCatalogClickHouseAdapter) InspectGitHubWorkItemEffect(
@@ -290,6 +309,19 @@ func (adapter GitHubProjectCatalogClickHouseAdapter) InspectGitHubWorkItemEffect
 		if expected.ProjectKey != actual.ProjectKey || expected.Name != actual.Name ||
 			expected.IsActive != actual.IsActive ||
 			expected.State != actual.State || expected.StateSource != actual.StateSource {
+			return EffectConflict, nil
+		}
+		// The row written is exact in the target columns too: the held values
+		// the write kept, through the same contract.
+		stored := []projectStoredRow{ensureProjectStoredRow(expected)}
+		if err := applyProjectsContract(ctx, adapter.Conn, identity.OrgID, stored, false); err != nil {
+			return EffectConflict, err
+		}
+		matched, err := projectTargetColumnsMatch(ctx, adapter.Conn, expected.OrgID, expected.Provider, expected.ID, stored[0].Values, false)
+		if err != nil {
+			return EffectConflict, err
+		}
+		if !matched {
 			return EffectConflict, nil
 		}
 		return EffectExact, nil

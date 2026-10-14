@@ -636,6 +636,13 @@ func normalizeGitLabNotes(
 	return rows
 }
 
+// gitlabMilestoneSprintID is the sprints row key of a project milestone: the
+// project's full path and the milestone's own id. The project catalog names
+// the milestone that supplied a project's target date by this same value.
+func gitlabMilestoneSprintID(fullName, milestoneID string) string {
+	return "gitlab:" + fullName + ":milestone:" + milestoneID
+}
+
 func normalizeGitLabSprint(
 	claim Claim,
 	fullName string,
@@ -656,7 +663,7 @@ func normalizeGitLabSprint(
 	}
 	name := payload.Title
 	row := gitlabSprintRow{
-		Provider: "gitlab", SprintID: "gitlab:" + fullName + ":milestone:" + payload.ID.String(),
+		Provider: "gitlab", SprintID: gitlabMilestoneSprintID(fullName, payload.ID.String()),
 		Name: &name, State: &state, StartedAt: parseGitLabWorkItemTime(payload.StartDate),
 		EndedAt: parseGitLabWorkItemTime(payload.DueDate), LastSynced: normalizedAt.UTC(),
 		OrgID: claim.OrgID,

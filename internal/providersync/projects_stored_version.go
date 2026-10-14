@@ -333,3 +333,17 @@ func sameFetchedAt(expected any, stored *time.Time) bool {
 	}
 	return false
 }
+
+// projectsStoredVersionSpecs lists the writers of `projects` under the
+// contract for the invariant enumeration: the Linear, Jira and GitLab catalog
+// writers share one insert and one contract. A row whose payload carries no
+// target field is one whose target was not read.
+func projectsStoredVersionSpecs() []storedversion.Spec {
+	return []storedversion.Spec{{
+		Name: "provider sync projects", Contract: projectsContract, Insert: projectsCatalogInsert,
+		Carry: func(payload map[string]any) map[string]bool {
+			_, read := payload["target"]
+			return projectsContract.Carry(func(string) bool { return !read })
+		},
+	}}
+}

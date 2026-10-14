@@ -214,13 +214,27 @@ func (adapter GitHubProjectCatalogClickHouseAdapter) WriteGitHubWorkItemEffect(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := adapter.Conn.PrepareBatch(ctx, projectmembership.ProjectsInsert)
+	// An ensure row names the project and nothing about its target, so the
+	// target columns of the catalog row it out-versions are kept (the projects
+	// contract), whoever wrote them.
+	stored := make([]projectStoredRow, len(rows))
+	for index, row := range rows {
+		catalog := projectCatalogStored(row)
+		key := catalog.ProjectKey
+		stored[index] = newProjectStoredRow(catalog.ID, catalog.OrgID, catalog.Provider, &key, catalog.Name, catalog.IsActive,
+			catalog.State, catalog.StateSource, nil, projectTargetFacts{}, "", []string{}, []string{}, nil, nil, nil,
+			catalog.UpdatedAt, catalog.LastSynced)
+	}
+	if err := applyProjectsContract(ctx, adapter.Conn, identity.OrgID, stored, true); err != nil {
+		return err
+	}
+	batch, err := adapter.Conn.PrepareBatch(ctx, projectsCatalogInsert)
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
-	for _, row := range rows {
-		if err := batch.Append(projectCatalogStored(row).Values()...); err != nil {
+	for _, row := range stored {
+		if err := batch.Append(row.Values...); err != nil {
 			return err
 		}
 	}

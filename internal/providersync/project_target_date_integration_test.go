@@ -14,6 +14,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
@@ -94,6 +95,21 @@ func TestJiraProjectTargetFollowsOpenVersionsThroughTheCatalogWrite(t *testing.T
 		{"id":"104","name":"1.7","released":false,"archived":true,"releaseDate":"2026-07-01"},
 		{"id":"105","name":"3.0","released":false,"archived":false}]}`, http.StatusOK)
 	want(1, fmt.Sprintf("2026-09-30|stated|version|jira.version.releaseDate|102|1.9|1|%d", at(1)))
+
+	// An ensure row of the Jira work-items route (a work item moved into the
+	// project) is newer than the catalog row and names no target: it keeps the
+	// target columns and says held.
+	ensure := projectmembership.EnsureProjectsRow(orgID, "jira", "10001", "OPS", "Ops", start.Add(90*time.Minute)).
+		WithState(projectmembership.JiraProjectState(projectmembership.JiraStatusLive))
+	ensureEffect, err := effectBatchFromValues("projects", EffectReadbackRequired, []projectmembership.CatalogRow{ensure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (JiraProjectCatalogClickHouseAdapter{Delegate: GitHubProjectCatalogClickHouseAdapter{Conn: conn}}).WriteGitHubWorkItemEffect(ctx,
+		GitHubWorkItemEffectIdentity{OrgID: orgID, Provider: "jira", Dataset: "work-items", Destination: "projects", RowCount: len(ensureEffect.Rows)}, ensureEffect); err != nil {
+		t.Fatal(err)
+	}
+	want(1, fmt.Sprintf("2026-09-30|held|version|jira.version.releaseDate|102|1.9|1|%d", at(1)))
 
 	sync(2, `{"projectTypeKey":"software","versions":[
 		{"id":"101","name":"2.0","released":false,"archived":false,"releaseDate":"2026-12-15"},

@@ -34,7 +34,7 @@ var preparedRouteInsertStatements = map[string]string{
 	"work_item_transitions":                   gitHubWorkItemTransitionsInsert,
 	"work_item_user_metrics_daily":            gitHubWorkItemUserMetricsDailyInsert,
 	"project_membership_transitions":          projectmembership.TransitionsInsert,
-	"projects":                                projectmembership.ProjectsInsert,
+	"projects":                                projectsCatalogInsert,
 	"work_items":                              gitHubWorkItemsInsert,
 	"git_commit_stats":                        gitCommitStatsInsert,
 	"git_commits":                             gitCommitsInsert,

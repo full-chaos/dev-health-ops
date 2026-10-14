@@ -294,6 +294,7 @@ func StoredVersionSpecs() map[string][]storedversion.Spec {
 				NullIsUnstated: true, Carry: workItemsPayloadCarry,
 			},
 		},
+		"projects": projectsStoredVersionSpecs(),
 	}
 }
 

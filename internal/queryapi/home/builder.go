@@ -60,6 +60,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	var series []dayValueRow
 	var rateState *string
 	var rateCoverage *float64
+	var changeFailureEvidence *changefailure.Evidence
 
 	if spec.Table == changefailure.Table {
 		// Change failure rate: the window's summed counts through the one rule
@@ -97,6 +98,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		hasData = currentOutcome.State == changefailure.StateMeasured
 		hasPriorData = previousOutcome.State == changefailure.StateMeasured
 		rateState = currentOutcome.StateOrNil()
+		changeFailureEvidence = currentOutcome.Evidence()
 	} else if isPRRework(spec.Table, spec.Column) {
 		// The pull request rework ratio: the window's summed counts through
 		// the one rule (prrework.Evaluate). A window with no reviewed pull
@@ -205,6 +207,8 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		RateState:         rateState,
 		RateCoverage:      rateCoverage,
 		RepoFilterApplied: repoFilterApplied(f, spec.Scope),
+
+		ChangeFailureEvidence: changeFailureEvidence,
 	}, nil
 }
 

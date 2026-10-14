@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -42,11 +43,14 @@ func sealPayload(t *testing.T, key, salt, payload string) string {
 	return sealed.Reveal()
 }
 
+// captureLookupLog installs the PRODUCTION logger (logging.NewJSON, whose ReplaceAttr redacts every attribute whose name says
+// token, key or secret) as the default for the test: a bare text handler would let an attribute through that the process logger
+// redacts.
 func captureLookupLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buffer bytes.Buffer
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+	slog.SetDefault(logging.NewJSON(&buffer, slog.LevelDebug))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	return &buffer
 }
@@ -148,7 +152,7 @@ func TestTheLookupLogsTheReasonAndTheIgnoredKeyNamesNeverAValue(t *testing.T) {
 	log := captureLookupLog(t)
 	_, err := githubCredentialFromDB(context.Background(), "postgresql+asyncpg://u:p@h/db?bogus=1", "org-1", envOf(nil))
 	failureOf(t, err)
-	for _, want := range []string{"synccli.github_credential_lookup_failed", "org_id=org-1", "reason=database_url_not_usable"} {
+	for _, want := range []string{`"msg":"synccli.github_credential_lookup_failed"`, `"org_id":"org-1"`, `"reason":"database_url_not_usable"`, `"payload_holds":"nothing"`} {
 		if !strings.Contains(log.String(), want) {
 			t.Fatalf("log lacks %q: %s", want, log.String())
 		}
@@ -159,7 +163,7 @@ func TestTheLookupLogsTheReasonAndTheIgnoredKeyNamesNeverAValue(t *testing.T) {
 	if err != nil || credential == nil || credential.Mode != CredentialPAT || credential.Token != "ghp_value_that_must_not_be_logged" {
 		t.Fatalf("credential = %+v, %v, want the PAT with the unused keys ignored", credential, err)
 	}
-	for _, want := range []string{"synccli.github_credential_fields_ignored", "org_id=org-1", "fields=org,zeta"} {
+	for _, want := range []string{`"msg":"synccli.github_credential_fields_ignored"`, `"org_id":"org-1"`, `"fields":"org,zeta"`} {
 		if !strings.Contains(log.String(), want) {
 			t.Fatalf("log lacks %q: %s", want, log.String())
 		}
@@ -208,5 +212,45 @@ func TestUnusedKeysAndAliasesInTheStoredPayload(t *testing.T) {
 				t.Fatalf("got %+v ignored %v err %v, want mode %q ignored %q app id %q", got, ignored, err, tc.mode, tc.ignored, tc.appID)
 			}
 		})
+	}
+}
+
+// The ported refusal of a database URL the async engine cannot use keeps its text and exit code, and is logged with its own
+// reason like every other failure of the lookup; nothing the production logger redacts is among the attributes.
+func TestARefusedDatabaseURLIsLoggedAndKeepsItsExitText(t *testing.T) {
+	log := captureLookupLog(t)
+	_, err := githubCredentialFromDB(context.Background(), "postgresql://u:p@h/db", "org-1", envOf(nil))
+	var refusal *Refusal
+	if !errors.As(err, &refusal) || refusal.Type != "InvalidRequestError" || !strings.Contains(refusal.Message, "InvalidRequestError") {
+		t.Fatalf("err = %v, want the ported InvalidRequestError refusal", err)
+	}
+	for _, want := range []string{`"msg":"synccli.github_credential_lookup_failed"`, `"reason":"database_url_refused"`, `"error_type":"InvalidRequestError"`} {
+		if !strings.Contains(log.String(), want) {
+			t.Fatalf("log lacks %q: %s", want, log.String())
+		}
+	}
+	if strings.Contains(log.String(), "REDACTED") || strings.Contains(log.String(), "u:p@") {
+		t.Fatalf("the log carries a redacted attribute or the DSN: %s", log.String())
+	}
+}
+
+// Through the production logger every attribute of the failure line survives: one of them used to be named has_token and was
+// replaced by a redaction marker, so a shape refusal could not say what the payload held.
+func TestTheFailureLineSurvivesTheProductionLoggerWhole(t *testing.T) {
+	for _, tc := range []struct {
+		failure credentialLookupFailure
+		want    string
+	}{
+		{credentialLookupFailure{Reason: reasonCredentialShapeInvalid, HasToken: true, HasApp: true}, "token_and_app"},
+		{credentialLookupFailure{Reason: reasonCredentialShapeInvalid, HasToken: true}, "token"},
+		{credentialLookupFailure{Reason: reasonCredentialShapeInvalid, HasApp: true}, "app"},
+		{credentialLookupFailure{Reason: reasonCredentialShapeInvalid}, "nothing"},
+		{lookupFailureWith(reasonDecryptFailed, errors.New("cannot decrypt")), "nothing"},
+	} {
+		log := captureLookupLog(t)
+		logCredentialLookupFailure(context.Background(), "org-1", tc.failure)
+		if !strings.Contains(log.String(), `"payload_holds":"`+tc.want+`"`) || strings.Contains(log.String(), "REDACTED") {
+			t.Errorf("failure %+v: log %s, want payload_holds %q and no redaction marker", tc.failure, log.String(), tc.want)
+		}
 	}
 }

@@ -61,7 +61,7 @@ func TestGitHubCredentialLookupReasonsAgainstMigratedSchema(t *testing.T) {
 	if err != nil || credential == nil || credential.Mode != CredentialPAT || credential.Token != "ghp_integration_token_value" {
 		t.Fatalf("credential = %+v, %v, want the PAT of a payload with an unused `org` key", credential, err)
 	}
-	if !strings.Contains(log.String(), "fields=org") || strings.Contains(log.String(), "ghp_integration_token_value") {
+	if !strings.Contains(log.String(), `"fields":"org"`) || strings.Contains(log.String(), "ghp_integration_token_value") {
 		t.Fatalf("the ignored key name is not logged, or a value is: %s", log.String())
 	}
 

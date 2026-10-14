@@ -67,6 +67,7 @@ var errNoDBCredential = errors.New("no usable database credential")
 // is its own value, and githubCredentialFromDB logs it, so an operator can tell a
 // wrong key from a missing row from a payload field the verb does not accept.
 const (
+	reasonDatabaseURLRefused     = "database_url_refused"
 	reasonDatabaseURLNotUsable   = "database_url_not_usable"
 	reasonDatabaseConnectFailed  = "database_connect_failed"
 	reasonDatabaseQueryFailed    = "database_query_failed"
@@ -116,7 +117,22 @@ func logCredentialLookupFailure(ctx context.Context, orgID string, failure crede
 	slog.WarnContext(ctx, credentialLookupFailedEvent,
 		"org_id", orgID, "reason", failure.Reason,
 		"error_class", failure.Class, "error_type", failure.Type,
-		"has_token", failure.HasToken, "has_app", failure.HasApp)
+		"payload_holds", failure.payloadHolds())
+}
+
+// payloadHolds says what a refused payload held, as a word: the production logger
+// redacts every attribute whose NAME says token, key or secret, so the
+// flags are one value of a neutral attribute.
+func (failure credentialLookupFailure) payloadHolds() string {
+	switch {
+	case failure.HasToken && failure.HasApp:
+		return "token_and_app"
+	case failure.HasToken:
+		return "token"
+	case failure.HasApp:
+		return "app"
+	}
+	return "nothing"
 }
 
 // missingGitHubCredentials is Python's SystemExit text, verbatim, and the same
@@ -229,6 +245,9 @@ func asyncEngineRefusal(dbURL string) string {
 // for the one failure Python does not catch.
 func githubCredentialFromDB(ctx context.Context, dbURL, orgID string, env cli.Env) (*GitHubCredentials, error) {
 	if kind := asyncEngineRefusal(dbURL); kind != "" {
+		// The ported refusal (Python's create_async_engine raises outside the lookup's own
+		// try/except) keeps its text and exit; it is logged like every other failure.
+		logCredentialLookupFailure(ctx, orgID, credentialLookupFailure{Reason: reasonDatabaseURLRefused, Type: kind})
 		return nil, &Refusal{Code: cli.ExitFailure, Stage: "error", Type: kind,
 			Message: kind + ": the database URL cannot be used for the credential lookup (Python's create_async_engine refuses it)"}
 	}

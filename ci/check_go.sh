@@ -2503,7 +2503,12 @@ check_integration_package_shard() {
     fi
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      rc=0
+      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -json -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}" > "${RUNNER_TEMP:-.}/t.json" || rc=$?
+      echo "TEMP-MEASURE slowest top-level tests (seconds):"
+      jq -r 'select(.Action=="pass" and .Test!=null and (.Test|contains("/")|not)) | "\(.Elapsed) \(.Package) \(.Test)"' "${RUNNER_TEMP:-.}/t.json" | sort -rn | head -15
+      jq -r 'select(.Action=="pass" and .Test==null) | "TEMP-MEASURE package \(.Package) \(.Elapsed)"' "${RUNNER_TEMP:-.}/t.json"
+      exit "${rc}"
     )
   done
 

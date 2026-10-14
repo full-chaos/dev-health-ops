@@ -1698,7 +1698,7 @@ Method, per batch of runs: (A) one insert of the merged first row and, for the
 other rows of the run, the same rows again as tombstones, so a reader sees the
 merged row and no inner row in one step; the rows are read back and the
 differential is asked again; (B) only then an `ALTER TABLE ... DELETE` of the
-tombstones (`mutations_sync=2`, every physical version of the key). Rewritten
+tombstones (`mutations_sync=2`; the delete names the key AND the `updated_at` of every physical version it read, so a version a sync writes after that read survives and is counted in `rows_newer_than_the_delete`). Rewritten
 rows take an `updated_at` from the run's own history, never `now()`, so the
 work-item attribution scope check queues no recompute. The workers need not be
 stopped. Before the first insert of an organization the tool copies every row
@@ -1706,7 +1706,7 @@ it will rewrite or drop into `<table>_compaction_bak` (created if missing) and
 checks the copy is not empty and has the expected row count. A key that a sync
 wrote between the plan and the insert is skipped and counted
 (`runs_changed_during_run`). `--restore-run <run_id> --apply` puts the rows of a
-run back from the backup table. The tool never drops the backup table: it stays
+run back from the backup table: the FINAL rows are restored with an `updated_at` above the current version, the superseded stale physical versions (which no FINAL reader sees) are not, and the backup of a project row keeps the original `last_synced` (a restored or merged row gets a fresh server stamp). The tool never drops the backup table: it stays
 until the next pin readback after the step and is dropped on the word of the GWC
 lead. In production the step runs inside a roll window (minutes :10-:33 or
 :46-:55 of the hour, between the hourly syncs), with the workers running.
@@ -1720,7 +1720,7 @@ organization (numbered, never named) and in total: `rows_before`/`rows_after`,
 `open_*`, `closed_*`, `tombstones_*`, `close_before_open_*`, `runs_found`,
 `runs_merged`, `rows_merged`, `rows_kept`, `runs_kept_multi_source`,
 `runs_changed_during_run`, `gaps`, `overlaps`, `tombstones_found`,
-`tombstones_dropped`, `tombstones_kept_anchor`, `tombstones_kept_latest`, `tombstones_kept_stamp`, `backup_rows`, `differential`
+`tombstones_dropped`, `tombstones_kept_anchor`, `tombstones_kept_latest`, `tombstones_kept_stamp`, `backup_rows`, `rows_newer_than_the_delete`, `differential`
 (`groups_total`, `groups_checked`, `instants_checked`, `mismatches`) and
 `elapsed_ms`. A second `--apply` reports zero runs merged and writes nothing.
 

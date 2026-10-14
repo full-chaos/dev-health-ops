@@ -151,6 +151,7 @@ type OwnershipCompactionOrg struct {
 	BackupRows             int `json:"backup_rows"`
 	RowsAppearedDuringRun  int `json:"rows_appeared_during_run"`
 	GroupsDriftedDuringRun int `json:"groups_drifted_during_run"`
+	RowsNewerThanTheDelete int `json:"rows_newer_than_the_delete"`
 
 	Differential OwnershipCompactionDifferential `json:"differential"`
 	ElapsedMS    int64                           `json:"elapsed_ms"`
@@ -186,6 +187,9 @@ type ownershipIntervalRow struct {
 	ValidFrom                         time.Time
 	ValidTo                           *time.Time
 	UpdatedAt                         time.Time
+	// LastSynced is read from team_project_ownership only, to keep it in the backup. The rewritten row
+	// does not carry it: the server stamps it (ruled: the content changed, so the fresh stamp stays).
+	LastSynced time.Time
 }
 
 // shape is every column of the row besides its key (provider, natural, team,
@@ -288,12 +292,15 @@ func (spec ownershipCompactionSpec) backupDDL() string {
 		"run_id String, backed_up_at DateTime64(3, 'UTC'), org_id String, provider String, team_id String, " +
 		"project_id String, project_key Nullable(String), source String, is_primary UInt8, " +
 		"specificity UInt16, priority Int32, valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')), " +
-		"updated_at DateTime64(3, 'UTC')) " +
+		"updated_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) " +
 		"ENGINE = MergeTree ORDER BY (run_id, org_id, provider, project_id, team_id, source, valid_from)"
 }
 
 func (spec ownershipCompactionSpec) backupInsert() string {
 	cols := strings.Replace(spec.columns(), "org_id,", "run_id, backed_up_at, org_id,", 1)
+	if !spec.repo {
+		cols += ", last_synced"
+	}
 	return "INSERT INTO " + spec.backupTable() + " (" + cols + ")"
 }
 
@@ -301,7 +308,7 @@ func (spec ownershipCompactionSpec) selectColumns() string {
 	if spec.repo {
 		return "provider, repo_full_name, team_id, toString(source), repo_id, toString(match_type), is_primary, specificity, priority, share, valid_from, valid_to, updated_at"
 	}
-	return "provider, project_id, team_id, toString(source), project_key, is_primary, specificity, priority, valid_from, valid_to, updated_at"
+	return "provider, project_id, team_id, toString(source), project_key, is_primary, specificity, priority, valid_from, valid_to, updated_at, last_synced"
 }
 
 func (spec ownershipCompactionSpec) scan(rows driver.Rows) (ownershipIntervalRow, error) {
@@ -312,7 +319,7 @@ func (spec ownershipCompactionSpec) scan(rows driver.Rows) (ownershipIntervalRow
 			&row.IsPrimary, &row.Specificity, &row.Priority, &row.Share, &row.ValidFrom, &row.ValidTo, &row.UpdatedAt)
 	} else {
 		err = rows.Scan(&row.Provider, &row.Natural, &row.TeamID, &row.Source, &row.ProjectKey,
-			&row.IsPrimary, &row.Specificity, &row.Priority, &row.ValidFrom, &row.ValidTo, &row.UpdatedAt)
+			&row.IsPrimary, &row.Specificity, &row.Priority, &row.ValidFrom, &row.ValidTo, &row.UpdatedAt, &row.LastSynced)
 	}
 	if err != nil {
 		return row, err
@@ -470,6 +477,10 @@ func (plan *ownershipCompactionPlan) planKey(keyRows []ownershipIntervalRow) {
 	//     and the work-item scope check reads it, so a key whose maximum FELL
 	//     could slip behind a cursor that has not read it yet. A merged row
 	//     takes the newest updated_at of its run, so merging never lowers it.
+	//     DO NOT WEAKEN THIS CLAUSE: a falling max(updated_at) is SILENT for
+	//     the acr edges (the group is simply not read again, nothing fails), so
+	//     this clause and TestCompactOwnershipIntervalsNeverLowersAKeysNewestStamp
+	//     are the only protection a consumer has.
 	for _, tombstone := range tombstones {
 		plan.org.TombstonesFound++
 		switch {
@@ -786,6 +797,7 @@ func (org *OwnershipCompactionOrg) add(other OwnershipCompactionOrg) {
 	org.BackupRows += other.BackupRows
 	org.RowsAppearedDuringRun += other.RowsAppearedDuringRun
 	org.GroupsDriftedDuringRun += other.GroupsDriftedDuringRun
+	org.RowsNewerThanTheDelete += other.RowsNewerThanTheDelete
 	org.Differential.GroupsTotal += other.Differential.GroupsTotal
 	org.Differential.GroupsChecked += other.Differential.GroupsChecked
 	org.Differential.InstantsChecked += other.Differential.InstantsChecked
@@ -953,7 +965,9 @@ func compactOwnershipOrg(
 	for _, run := range applied {
 		deletes = append(deletes, run.inner()...)
 	}
-	if err := deleteOwnershipTombstones(ctx, conn, spec, orgID, deletes); err != nil {
+	survivors, err := deleteOwnershipTombstones(ctx, conn, spec, orgID, deletes)
+	report.RowsNewerThanTheDelete = survivors
+	if err != nil {
 		return finish(err)
 	}
 	after, err := readOwnershipRows(ctx, conn, spec, orgID)
@@ -990,6 +1004,9 @@ func writeOwnershipBackup(
 	stamp := now.UTC()
 	for _, row := range rows {
 		args := append([]any{runID, stamp}, spec.appendArgs(orgID, row)...)
+		if !spec.repo {
+			args = append(args, row.LastSynced)
+		}
 		if err := batch.Append(args...); err != nil {
 			_ = batch.Abort()
 			return fmt.Errorf("%w: append: %v", ErrOwnershipCompactionBackup, err)
@@ -1167,7 +1184,7 @@ const ownershipCompactionKeysMatch = `(provider, %s, team_id, toString(source), 
 // older version would come back through FINAL.
 func deleteOwnershipTombstones(
 	ctx context.Context, conn driver.Conn, spec ownershipCompactionSpec, orgID string, rows []ownershipIntervalRow,
-) error {
+) (survivors int, err error) {
 	match := fmt.Sprintf(ownershipCompactionKeysMatch, spec.natural)
 	for start := 0; start < len(rows); start += ownershipCompactionDeleteKeysPerMutation {
 		end := min(start+ownershipCompactionDeleteKeysPerMutation, len(rows))
@@ -1179,35 +1196,77 @@ func deleteOwnershipTombstones(
 		scope := "org_id = {org_id:String} AND source = '" + spec.source + "' AND " + match
 		var tombstoned uint64
 		if err := conn.QueryRow(ctx, "SELECT count() FROM "+spec.table+" FINAL WHERE valid_to = valid_from AND "+scope, args...).Scan(&tombstoned); err != nil {
-			return fmt.Errorf("%w: check tombstones: %v", ErrOwnershipCompactionMutation, err)
+			return survivors, fmt.Errorf("%w: check tombstones: %v", ErrOwnershipCompactionMutation, err)
 		}
 		if tombstoned != uint64(len(tokens)) {
-			return fmt.Errorf("%w: %d of %d keys are tombstones", ErrOwnershipCompactionMutation, tombstoned, len(tokens))
+			return survivors, fmt.Errorf("%w: %d of %d keys are tombstones", ErrOwnershipCompactionMutation, tombstoned, len(tokens))
 		}
+		// The delete names the physical VERSIONS (key and updated_at) that are on disk now, not the keys: a
+		// version that a sync inserts after this read has another updated_at and survives the mutation.
+		versions, err := physicalVersionTokens(ctx, conn, spec, scope, args)
+		if err != nil {
+			return survivors, err
+		}
+		versionArgs := []any{clickhouse.Named("org_id", orgID), clickhouse.Named("versions", versions)}
+		versionScope := "org_id = {org_id:String} AND source = '" + spec.source + "' AND " + fmt.Sprintf(ownershipCompactionVersionsMatch, spec.natural)
 		mutationCtx, cancel := context.WithTimeout(ctx, ownershipCompactionMutationTimeout)
 		syncCtx := clickhouse.Context(mutationCtx, clickhouse.WithSettings(clickhouse.Settings{"mutations_sync": "2"}))
-		err := conn.Exec(syncCtx, "ALTER TABLE "+spec.table+" DELETE WHERE "+scope, args...)
+		err = conn.Exec(syncCtx, "ALTER TABLE "+spec.table+" DELETE WHERE "+versionScope, versionArgs...)
 		cancel()
 		if err != nil {
-			return fmt.Errorf("%w: %v", ErrOwnershipCompactionMutation, err)
+			return survivors, fmt.Errorf("%w: %v", ErrOwnershipCompactionMutation, err)
 		}
-		var remaining uint64
-		if err := conn.QueryRow(ctx, "SELECT count() FROM "+spec.table+" WHERE "+scope, args...).Scan(&remaining); err != nil {
-			return fmt.Errorf("%w: count remaining: %v", ErrOwnershipCompactionMutation, err)
+		var remaining, left uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM "+spec.table+" WHERE "+versionScope, versionArgs...).Scan(&remaining); err != nil {
+			return survivors, fmt.Errorf("%w: count remaining: %v", ErrOwnershipCompactionMutation, err)
 		}
 		if remaining != 0 {
-			return fmt.Errorf("%w: %d rows remain", ErrOwnershipCompactionMutation, remaining)
+			return survivors, fmt.Errorf("%w: %d rows remain", ErrOwnershipCompactionMutation, remaining)
 		}
-		slog.Default().InfoContext(ctx, "ownership_interval_compaction.tombstones_deleted", "table", spec.table, "keys", len(tokens))
+		if err := conn.QueryRow(ctx, "SELECT count() FROM "+spec.table+" WHERE "+scope, args...).Scan(&left); err != nil {
+			return survivors, fmt.Errorf("%w: count survivors: %v", ErrOwnershipCompactionMutation, err)
+		}
+		survivors += int(left)
+		slog.Default().InfoContext(ctx, "ownership_interval_compaction.tombstones_deleted", "table", spec.table, "keys", len(tokens),
+			"versions", len(versions), "rows_newer_than_the_delete", left)
 		var failed uint64
 		if err := conn.QueryRow(ctx, "SELECT count() FROM system.mutations WHERE database = currentDatabase() AND table = {table:String} AND NOT is_done AND latest_fail_reason != ''",
 			clickhouse.Named("table", spec.table)).Scan(&failed); err != nil {
 			slog.Default().WarnContext(ctx, "ownership_interval_compaction.mutation_state_unreadable", "table", spec.table)
 		} else if failed != 0 {
-			return fmt.Errorf("%w: %d mutations report a failure", ErrOwnershipCompactionMutation, failed)
+			return survivors, fmt.Errorf("%w: %d mutations report a failure", ErrOwnershipCompactionMutation, failed)
 		}
 	}
-	return nil
+	return survivors, nil
+}
+
+// ownershipCompactionVersionsMatch matches physical rows by key AND updated_at (milliseconds).
+const ownershipCompactionVersionsMatch = `(provider, %s, team_id, toString(source), valid_from, toUnixTimestamp64Milli(updated_at)) IN (` +
+	`SELECT unhex(parts[1]), unhex(parts[2]), unhex(parts[3]), unhex(parts[4]), fromUnixTimestamp64Milli(toInt64(parts[5]), 'UTC'), toInt64(parts[6]) ` +
+	`FROM (SELECT splitByChar(':', p) AS parts FROM (SELECT arrayJoin({versions:Array(String)}) AS p)))`
+
+// physicalVersionTokens lists every physical row (not FINAL) of the keys as key token + updated_at.
+func physicalVersionTokens(ctx context.Context, conn driver.Conn, spec ownershipCompactionSpec, scope string, args []any) ([]string, error) {
+	rows, err := conn.Query(ctx, "SELECT provider, "+spec.natural+", team_id, toString(source), valid_from, toUnixTimestamp64Milli(updated_at) FROM "+spec.table+" WHERE "+scope, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%w: list versions: %v", ErrOwnershipCompactionMutation, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var provider, natural, team, source string
+		var from time.Time
+		var stamp int64
+		if err := rows.Scan(&provider, &natural, &team, &source, &from, &stamp); err != nil {
+			return nil, fmt.Errorf("%w: list versions: %v", ErrOwnershipCompactionMutation, err)
+		}
+		row := ownershipIntervalRow{Provider: provider, Natural: natural, TeamID: team, Source: source, ValidFrom: from.UTC()}
+		out = append(out, row.token()+":"+strconv.FormatInt(stamp, 10))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: list versions: %v", ErrOwnershipCompactionMutation, err)
+	}
+	return out, nil
 }
 
 // RestoreOwnershipCompaction puts the rows of one run back from the backup

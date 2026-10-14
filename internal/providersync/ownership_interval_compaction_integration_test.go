@@ -36,6 +36,7 @@ var (
 	cmpRepo3 = uuid.MustParse("33333333-3333-4333-8333-333333333333")
 	cmpRepo4 = uuid.MustParse("44444444-4444-4444-8444-444444444444")
 	cmpRepo5 = uuid.MustParse("55555555-5555-4555-8555-555555555555")
+	cmpRepo6 = uuid.MustParse("66666666-6666-4666-8666-666666666666")
 )
 
 func cmpDay(n int) time.Time { return cmpBase.AddDate(0, 0, n) }
@@ -108,9 +109,16 @@ func cmpChain(build func(from, to int) ownershipIntervalRow, from, until int) []
 func newCmpFixture(t *testing.T) cmpFixture {
 	t.Helper()
 	ctx, conn := newWorkItemEffectsConn(t)
-	f := cmpFixture{t: t, ctx: ctx, conn: conn, orgA: uuid.NewString(), orgB: uuid.NewString()}
+	f := cmpFixture{t: t, ctx: ctx, conn: conn, orgA: "00000000-0000-4000-8000-0000000000a1", orgB: "00000000-0000-4000-8000-0000000000b2"}
 	repo := repoSpec()
 	project := projectSpec()
+	// Stale physical versions are part of the fixture (they are on prod until a merge removes them): keep the
+	// background merges off the two tables so the physical rows are the rows that were inserted.
+	for _, table := range []string{OwnershipCompactionProjectTable, OwnershipCompactionRepoTable} {
+		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
+			t.Fatalf("stop merges: %v", err)
+		}
+	}
 
 	var repoRows []ownershipIntervalRow
 	// R1, team 1: an unchanged run of 5, a share change, a run of 3, a gap, a run of 3, then open.
@@ -146,6 +154,18 @@ func newCmpFixture(t *testing.T) cmpFixture {
 	stampTomb := cmpRepoRow(cmpTeam1, cmpRepo5, "acme/stamp", 2, 2, 1, 1)
 	stampTomb.UpdatedAt = cmpDay(400)
 	repoRows = append(repoRows, stampTomb)
+
+	// R6: two sources alternating in time on ONE (repo, team) key. The inferred run (6 rows, stamps 1..6 days) is
+	// outranked by provider_access (stamp 100 days) in [0,2) and [4,6) and outranks it (stamp 0) in [2,4): the
+	// winner by (updated_at, valid_from) alternates, and the merge keeps it at every instant, so the run merges.
+	repoRows = append(repoRows, cmpChain(func(a, b int) ownershipIntervalRow {
+		return cmpRepoRow(cmpTeam1, cmpRepo6, "acme/interleave", a, b, 1, 1)
+	}, 0, 6)...)
+	for _, span := range [][3]int{{0, 2, 100}, {2, 4, 0}, {4, 6, 100}} {
+		row := cmpRepoRow(cmpTeam1, cmpRepo6, "acme/interleave", span[0], span[1], 0.25, 2)
+		row.Source, row.UpdatedAt = "provider_access", cmpDay(span[2])
+		repoRows = append(repoRows, row)
+	}
 
 	var projectRows []ownershipIntervalRow
 	eng := "ENG"
@@ -451,6 +471,13 @@ func TestCompactOwnershipIntervalsNeverLowersAKeysNewestStamp(t *testing.T) {
 	if withoutTombstone > cursor {
 		t.Fatal("setup: the what-if maximum must stand on the cursor")
 	}
+	// A cursor standing on the OLD maximum of a key whose maximum RISES (the non-monotone run, +1 ms): the key is read after.
+	oddKey := "github " + cmpRepo4.String() + " " + cmpTeam1 + " inferred"
+	oddCursor := before[oddKey]
+	t.Logf("BACKREF stamp-rise key acme/odd: cursor %s, acr HAVING watermark > cursor: before=%t, after=%t (read after the compaction)", oddCursor, before[oddKey] > oddCursor, after[oddKey] > oddCursor)
+	if before[oddKey] > oddCursor || !(after[oddKey] > oddCursor) {
+		t.Fatalf("a cursor on the old maximum must not read the key before and must read it after: before %s after %s", before[oddKey], after[oddKey])
+	}
 	t.Logf("BACKREF stamp-fall: acr HAVING watermark > cursor: before=%t, after (guard)=%t, what-if drop=%t (a MISS if false while before is true)",
 		before[stampKey] > cursor, after[stampKey] > cursor, withoutTombstone > cursor)
 }
@@ -557,7 +584,7 @@ func TestCompactOwnershipIntervalsDryRunWritesNothing(t *testing.T) {
 		t.Fatalf("dry run: %v", err)
 	}
 	repo := cmpTable(t, outcome, OwnershipCompactionRepoTable)
-	if repo.RunsMerged != 7 || repo.ClosedBefore != 23 || repo.ClosedAfter != 11 {
+	if repo.RunsMerged != 8 || repo.ClosedBefore != 29 || repo.ClosedAfter != 12 {
 		t.Fatalf("dry run report %+v", repo)
 	}
 	if f.physicalCount(OwnershipCompactionRepoTable, f.orgA) != physicalBefore {
@@ -594,10 +621,10 @@ func TestCompactOwnershipIntervalsKeepsEveryOwnerAnswer(t *testing.T) {
 
 	repo := cmpTable(t, outcome, OwnershipCompactionRepoTable)
 	project := cmpTable(t, outcome, OwnershipCompactionProjectTable)
-	if repo.RunsMerged != 7 || repo.RunsKeptMultiSource != 1 || repo.RowsMerged != 12 {
+	if repo.RunsMerged != 8 || repo.RunsKeptMultiSource != 1 || repo.RowsMerged != 17 {
 		t.Fatalf("repo report %+v", repo)
 	}
-	if repo.RowsBefore != 30 || repo.ClosedBefore != 23 || repo.ClosedAfter != 11 || repo.RowsAfter != 17 || repo.OpenAfter != 2 {
+	if repo.RowsBefore != 36 || repo.ClosedBefore != 29 || repo.ClosedAfter != 12 || repo.RowsAfter != 18 || repo.OpenAfter != 2 {
 		t.Fatalf("repo counts %+v", repo)
 	}
 	if repo.TombstonesFound != 4 || repo.TombstonesDropped != 1 || repo.TombstonesKeptAnchor != 1 || repo.TombstonesKeptLatest != 1 || repo.TombstonesKeptStamp != 1 || repo.TombstonesAfter != 3 || repo.CloseBeforeOpenAfter != 1 {
@@ -609,7 +636,7 @@ func TestCompactOwnershipIntervalsKeepsEveryOwnerAnswer(t *testing.T) {
 	if repo.Differential.Mismatches != 0 || repo.Differential.InstantsChecked == 0 || repo.Differential.GroupsChecked == 0 {
 		t.Fatalf("differential %+v", repo.Differential)
 	}
-	if repo.BackupRows != 19+1 || repo.RunsChangedDuringRun != 0 {
+	if repo.BackupRows != 25+1 || repo.RunsChangedDuringRun != 0 {
 		t.Fatalf("backup %d, changed %d", repo.BackupRows, repo.RunsChangedDuringRun)
 	}
 	// The physical rows are gone, every version of them (the stale open copies too).
@@ -623,7 +650,7 @@ func TestCompactOwnershipIntervalsKeepsEveryOwnerAnswer(t *testing.T) {
 		t.Fatalf("merged interval rows: %d", got)
 	}
 	// The backup holds the rows before the rewrite.
-	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership_compaction_bak WHERE org_id = ?", f.orgA); got != 20 {
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership_compaction_bak WHERE org_id = ?", f.orgA); got != 26 {
 		t.Fatalf("backup rows %d", got)
 	}
 }
@@ -794,6 +821,39 @@ func TestCompactOwnershipIntervalsFailedMutationLeavesTheBackupAndTheAnswers(t *
 	}
 }
 
+// A sync writes a newer version of a tombstoned key between the tombstone check and the delete. The delete names the
+// versions it read, so the sync's row survives and is counted; a delete by key alone would remove it.
+func TestCompactOwnershipIntervalsDeleteSparesAVersionWrittenAfterTheRead(t *testing.T) {
+	f := newCmpFixture(t)
+	synced := cmpRepoRow(cmpTeam1, cmpRepo1, "acme/api", 1, 2, 0.6, 1)
+	synced.UpdatedAt = cmpDay(5000)
+	inserted := false
+	racing := failingConn{Conn: f.conn, failExec: func(query string) error {
+		if strings.HasPrefix(query, "ALTER TABLE team_repo_ownership DELETE") && !inserted {
+			inserted = true
+			f.insert(repoSpec(), f.orgA, []ownershipIntervalRow{synced})
+		}
+		return nil
+	}}
+	opts := cmpOptions(f.orgA)
+	opts.Table = OwnershipCompactionRepoTable
+	outcome, err := CompactOwnershipIntervals(f.ctx, racing, opts)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !inserted {
+		t.Fatal("setup: the racing write did not happen")
+	}
+	repo := cmpTable(t, outcome, OwnershipCompactionRepoTable)
+	if repo.RowsNewerThanTheDelete != 1 {
+		t.Fatalf("the delete must report the version it spared: %+v", repo)
+	}
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = 'acme/api' AND team_id = ? AND valid_from = ? AND updated_at = ?",
+		f.orgA, cmpTeam1, cmpDay(1), cmpDay(5000)); got != 1 {
+		t.Fatalf("the sync's row was deleted by the compaction: %d", got)
+	}
+}
+
 func TestCompactOwnershipIntervalsChecksTheBackupBeforeAnyRewrite(t *testing.T) {
 	f := newCmpFixture(t)
 	physical := f.physicalCount(OwnershipCompactionRepoTable, f.orgA)
@@ -910,7 +970,7 @@ func TestCompactOwnershipIntervalsKeyExtendedByASyncKeepsTheAnswers(t *testing.T
 		t.Fatal(err)
 	}
 	repo := cmpTable(t, outcome, OwnershipCompactionRepoTable)
-	if repo.RunsChangedDuringRun != 0 || repo.RunsMerged != 7 || repo.RowsAppearedDuringRun != 2 {
+	if repo.RunsChangedDuringRun != 0 || repo.RunsMerged != 8 || repo.RowsAppearedDuringRun != 2 {
 		t.Fatalf("report %+v", repo)
 	}
 	var early []time.Time
@@ -1035,4 +1095,51 @@ func TestCompactOwnershipIntervalsAtProdSize(t *testing.T) {
 		t.Fatalf("second run merged runs: %+v", again.Tables)
 	}
 	t.Logf("second run: %s", time.Since(started))
+}
+
+// exportOwnershipTSV writes every PHYSICAL row (not FINAL: stale versions included, so a replay loads the table as
+// it was) of both ownership tables, all columns, to <dir>/<phase>-<table>.tsv: one header line, millisecond
+// timestamps as stored, \\N for NULL. It returns the row counts per table.
+func exportOwnershipTSV(t *testing.T, ctx context.Context, conn driver.Conn, dir, phase string) map[string]int {
+	t.Helper()
+	counts := map[string]int{}
+	for _, spec := range ownershipCompactionSpecs {
+		rows, err := conn.Query(ctx, "SELECT name FROM system.columns WHERE database = currentDatabase() AND table = ? ORDER BY position", spec.table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names, cells []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatal(err)
+			}
+			names = append(names, name)
+			cells = append(cells, "coalesce(toString("+name+"), '\\\\N')")
+		}
+		rows.Close()
+		lines := (cmpFixture{t: t, ctx: ctx, conn: conn}).cmpStrings("SELECT concat("+strings.Join(cells, ", '\t', ")+"), '' FROM "+spec.table, 2)
+		var out strings.Builder
+		out.WriteString(strings.Join(names, "\t") + "\n")
+		for _, line := range lines {
+			out.WriteString(strings.TrimSuffix(line, " | ") + "\n")
+		}
+		if err := os.WriteFile(dir+"/"+phase+"-"+spec.table+".tsv", []byte(out.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		counts[spec.table] = len(lines)
+	}
+	return counts
+}
+
+// TestExportOwnershipCompactionFixtureBefore writes the fixture as the tool finds it. The workersctl test
+// TestCompactOwnershipIntervalsVerbOnTheExportedFixture loads this file, runs the verb with --apply and writes the
+// after file. Set OWNERSHIP_COMPACTION_EXPORT_DIR to run both.
+func TestExportOwnershipCompactionFixtureBefore(t *testing.T) {
+	dir := os.Getenv("OWNERSHIP_COMPACTION_EXPORT_DIR")
+	if dir == "" {
+		t.Skip("set OWNERSHIP_COMPACTION_EXPORT_DIR to export the fixture")
+	}
+	f := newCmpFixture(t)
+	t.Logf("exported physical rows per table: %v", exportOwnershipTSV(t, f.ctx, f.conn, dir, "fixture-before"))
 }

@@ -1,0 +1,55 @@
+# CHAOS-9597: a red main-push `Venue oracles` run opens or updates ONE GitHub issue.
+#
+# The main venue run is informational (R430, no PR check carries it), and a red run on
+# main once sat unseen for two days. This workflow runs after every completed main-push
+# `Venue oracles` run and calls ci/venue-main-alert.sh:
+#   - the run's own conclusion failure, timed_out or cancelled: opens the one issue (label
+#     venue-oracles-main-red), or comments on the open one, once per run. No step is read;
+#   - success: closes the open issue only when ci/last-venue-run.sh proves this run is the
+#     newest EXECUTED run and green (a skipped run also concludes success and is not a pass,
+#     Trap #408); otherwise the issue stays open until a later executed green run.
+#
+# TOKEN. The job's own GITHUB_TOKEN only; no Linear token in CI. Permissions are set on
+# the job (issues: write to open/comment/close the issue and create the label; actions:
+# read for the run and job API; contents: read for the checkout). Nothing from the event
+# reaches a shell except the run id, conclusion and sha, passed through env and validated.
+#
+# CHECKOUT. A workflow_run job checks out the default branch, never the run's commit, so
+# the script that runs is the one on main.
+name: Venue oracles main alert
+
+on:
+  workflow_run:
+    workflows: ['Venue oracles']
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  alert:
+    if: github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # One alert job at a time, so two completions cannot both find "no issue" and open two.
+    # On the JOB, after the `if`: a manual or non-main run is skipped before it takes the
+    # group and cannot evict a queued main alert. Never cancelled.
+    concurrency:
+      group: venue-oracles-main-alert
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open, update or close the main venue-oracles issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: bash ci/venue-main-alert.sh

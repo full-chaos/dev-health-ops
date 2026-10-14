@@ -466,6 +466,46 @@ Jira archived projects get a state only on the ensure-row path (a work item
 moved to or from an archived project): the team-catalog walk reads archived
 projects only to keep ownership rows open and writes no project row for them.
 
+### Project target date
+
+`projects.target_date` is the day a project is committed to, and seven columns say
+where it came from, the same for every provider (lead ruling D6009; the product
+owner may override). Linear's own project date is stated as it is. Jira and
+GitLab have none, so the target is the earliest OPEN dated version (Jira: not
+released, not archived) or milestone (GitLab: state `active`), a past date
+included: an overdue target stays the target until the provider releases, closes
+or archives it, and only then does the next open dated one take its place. Equal
+dates pick the lower provider id, compared as a number. The rule is one function
+for both providers (`pickProjectTarget`).
+
+| Column | Meaning |
+| --- | --- |
+| `target_state` | `stated` (one open dated entry supplied the date), `none_dated` (read, and no open entry has a date), `held` (not read this run: every target column is the value of the last run that read it), `unknown` (no run ever read it; the default) |
+| `target_kind` | `project`, `version` or `milestone`; empty when there is no target |
+| `target_source` | `<provider>.<kind>.<field>`: `linear.project.targetDate`, `jira.version.releaseDate`, `gitlab.milestone.due_date`; empty when there is no target |
+| `target_ref`, `target_ref_name` | the supplying version's or milestone's stable id and display name; for GitLab the id is the `sprints` row key of the same milestone |
+| `target_other_open` | the number of other open dated entries of the project; NULL unless the value is a stated one (state `stated`, or `held` over one) |
+| `target_fetched_at` | the time of the last successful read of the target |
+
+A read that succeeded states the target, a date or none. A read that failed, or
+was not made (an archived project, a project past the run's budget), states
+nothing: the row keeps the held target columns and writes `target_state` `held`
+(or `unknown` when nothing was ever read), so a held date reads as stale by
+`target_fetched_at`. A row written before the columns existed reads `unknown`,
+never `none_dated`, except a Linear project that carries a date, which reads
+`stated` (kind `project`, source `linear.project.targetDate`, fetch time NULL):
+the first three columns have DEFAULT expressions on `provider` and `target_date`
+(migration 127 adds no data mutation), so an older writer that does not name the
+columns gets the same reading. A later DROP of `provider` or `target_date` needs
+those defaults removed first. Jira's versions come from the project body the sprint walk
+already reads; GitLab costs one call per non-archived project per sync
+(`GET /projects/:id/milestones?state=active`).
+
+GitLab GROUP milestones are not read: only the project's own milestones are, the
+same set the `sprints` rows come from, so the milestone named by `target_ref` is
+always a `sprints` row. A project whose only dated milestone is a group milestone
+reads `none_dated`.
+
 ## Migration rules
 
 Every migration needs:

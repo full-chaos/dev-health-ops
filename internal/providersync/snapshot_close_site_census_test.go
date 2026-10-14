@@ -440,6 +440,7 @@ var heldSetWalks = map[string]struct {
 		{"the projects of one group", "gitlab_group_project_grants", "one response, or GitLab's answer for the project"},
 		{"the members of one group", "no close", "none needed"},
 		{"all projects with subgroups", "no held set of a grant: the catalog's project rows", "none needed"},
+		{"the open milestones of one project", "no held set of a grant: a project's target columns (an unread project keeps its held value)", "none needed"},
 	}},
 	"internal/providersync/jira_team_catalog_route.go": {`:= jiraTeamCatalogSearchProjects\(`, []heldSetWalk{
 		{"the live project search", "jira_legacy_ownership", "every walk one response, or Jira's answer for live and archived"},

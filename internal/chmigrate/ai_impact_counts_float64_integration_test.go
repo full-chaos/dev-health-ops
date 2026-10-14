@@ -18,9 +18,9 @@ var aiImpactCountColumns = []string{
 	"agent_created_pr_count", "rework_prs", "followup_commits_count", "revert_prs", "incidents_count", "test_gap_prs",
 }
 
-// CHAOS-9604: migration 125 widens the twelve count columns of
-// ai_impact_metrics_daily to Float64 and rollback/125_*.down.sql narrows them.
-// The test rehearses both on the pre-125 shape: whole counts convert exactly in
+// CHAOS-9604: migration 126 widens the twelve count columns of
+// ai_impact_metrics_daily to Float64 and rollback/126_*.down.sql narrows them.
+// The test rehearses both on the pre-126 shape: whole counts convert exactly in
 // both directions, a fraction written after the upgrade survives until the
 // downgrade and is truncated toward zero by it, and the upgrade runs again.
 func TestAIImpactCountsMigrationUpgradesAndDowngrades(t *testing.T) {
@@ -88,8 +88,8 @@ ORDER BY (org_id, team_id, repo_id, work_type, day, attribution_bucket)`)
     rework_prs, followup_commits_count, revert_prs, incidents_count, test_gap_prs)
 VALUES ('o', 't', generateUUIDv4(), 'pull_request', '2026-08-01', 'human', 10, 8, 3, 2, 4, 1, 2, 5, 7, 1, 2, 4)`)
 
-	const up = "sql/125_ai_impact_counts_float64.sql"
-	const down = "rollback/125_ai_impact_counts_float64.down.sql"
+	const up = "sql/126_ai_impact_counts_float64.sql"
+	const down = "rollback/126_ai_impact_counts_float64.down.sql"
 	run(up)
 	for _, column := range aiImpactCountColumns {
 		if got := columnType(column); got != "Float64" {

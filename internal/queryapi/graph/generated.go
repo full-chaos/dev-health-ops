@@ -9509,8 +9509,8 @@ type AIComparisonDelta {
 
 type AIComparisonSide {
   bucket: String!
-  prsTotal: Int!
-  prsMerged: Int!
+  prsTotal: Float!
+  prsMerged: Float!
   cycleTimeAvgHours: Float
   reviewsPerPr: Float
   reworkRate: Float
@@ -9592,28 +9592,28 @@ type AIHotspotOverlapRow {
 
 type AIImpactBucketRow {
   bucket: String!
-  prsTotal: Int!
-  prsMerged: Int!
+  prsTotal: Float!
+  prsMerged: Float!
   cycleTimeAvgHours: Float
   reviewsPerPr: Float
   changesRequestedPerPr: Float
-  reworkPrs: Int!
+  reworkPrs: Float!
   reworkRate: Float
-  revertPrs: Int!
+  revertPrs: Float!
   revertRate: Float
-  incidentsCount: Int!
+  incidentsCount: Float!
   incidentRate: Float
-  testGapPrs: Int!
+  testGapPrs: Float!
   testGapRate: Float
   day: Date!
 }
 
 type AIImpactBucketTotals {
   bucket: String!
-  prsTotal: Int!
-  prsMerged: Int!
+  prsTotal: Float!
+  prsMerged: Float!
   aiAssistedPrRatio: Float
-  agentCreatedPrCount: Int!
+  agentCreatedPrCount: Float!
   cycleTimeAvgHours: Float
   aiCycleTimeDeltaHours: Float
   aiReviewAmplification: Float
@@ -9627,7 +9627,7 @@ type AIImpactBucketTotals {
 type AIImpactScopeRollupRow {
   scopeId: String!
   scopeLabel: String!
-  aiPrsTotal: Int!
+  aiPrsTotal: Float!
   aiAssistedPrRatio: Float
   reworkRateDelta: Float
 }
@@ -9636,11 +9636,11 @@ type AIImpactSummary {
   orgId: String!
   startDate: Date!
   endDate: Date!
-  totalPrs: Int!
-  aiAssistedPrs: Int!
-  agentCreatedPrs: Int!
-  humanPrs: Int!
-  unknownPrs: Int!
+  totalPrs: Float!
+  aiAssistedPrs: Float!
+  agentCreatedPrs: Float!
+  humanPrs: Float!
+  unknownPrs: Float!
   aiAssistedPrRatio: Float
   byBucket: [AIImpactBucketTotals!]!
   daily: [AIImpactBucketRow!]!
@@ -9718,12 +9718,12 @@ type AIReviewLoadResult {
 
 type AIReviewLoadRow {
   bucket: String!
-  prsTotal: Int!
-  reviewsTotal: Int!
+  prsTotal: Float!
+  reviewsTotal: Float!
   reviewsPerPr: Float
   changesRequestedPerPr: Float
   reviewAmplification: Float
-  postFirstReviewPushesCount: Int!
+  postFirstReviewPushesCount: Float!
   postFirstReviewPushesPerPr: Float
   pickupLatencyHours: Float
   reviewCommentsPerLoc: Float
@@ -9748,14 +9748,14 @@ type AIRiskBreakdownResult {
 
 type AIRiskBreakdownRow {
   bucket: String!
-  prsTotal: Int!
-  reworkPrs: Int!
+  prsTotal: Float!
+  reworkPrs: Float!
   reworkRate: Float
-  revertPrs: Int!
+  revertPrs: Float!
   revertRate: Float
-  testGapPrs: Int!
+  testGapPrs: Float!
   testGapRate: Float
-  incidentsCount: Int!
+  incidentsCount: Float!
   incidentRate: Float
 }
 
@@ -17206,9 +17206,9 @@ func (ec *executionContext) _AIComparisonSide_prsTotal(ctx context.Context, fiel
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIComparisonSide_prsTotal(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -17218,7 +17218,7 @@ func (ec *executionContext) fieldContext_AIComparisonSide_prsTotal(_ context.Con
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -17250,9 +17250,9 @@ func (ec *executionContext) _AIComparisonSide_prsMerged(ctx context.Context, fie
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIComparisonSide_prsMerged(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -17262,7 +17262,7 @@ func (ec *executionContext) fieldContext_AIComparisonSide_prsMerged(_ context.Co
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -19319,9 +19319,9 @@ func (ec *executionContext) _AIImpactBucketRow_prsTotal(ctx context.Context, fie
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactBucketRow_prsTotal(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -19331,7 +19331,7 @@ func (ec *executionContext) fieldContext_AIImpactBucketRow_prsTotal(_ context.Co
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -19363,9 +19363,9 @@ func (ec *executionContext) _AIImpactBucketRow_prsMerged(ctx context.Context, fi
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactBucketRow_prsMerged(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -19375,7 +19375,7 @@ func (ec *executionContext) fieldContext_AIImpactBucketRow_prsMerged(_ context.C
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -19530,9 +19530,9 @@ func (ec *executionContext) _AIImpactBucketRow_reworkPrs(ctx context.Context, fi
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactBucketRow_reworkPrs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -19542,7 +19542,7 @@ func (ec *executionContext) fieldContext_AIImpactBucketRow_reworkPrs(_ context.C
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -19615,9 +19615,9 @@ func (ec *executionContext) _AIImpactBucketRow_revertPrs(ctx context.Context, fi
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactBucketRow_revertPrs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -19627,7 +19627,7 @@ func (ec *executionContext) fieldContext_AIImpactBucketRow_revertPrs(_ context.C
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -19700,9 +19700,9 @@ func (ec *executionContext) _AIImpactBucketRow_incidentsCount(ctx context.Contex
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactBucketRow_incidentsCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -19712,7 +19712,7 @@ func (ec *executionContext) fieldContext_AIImpactBucketRow_incidentsCount(_ cont
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -19785,9 +19785,9 @@ func (ec *executionContext) _AIImpactBucketRow_testGapPrs(ctx context.Context, f
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactBucketRow_testGapPrs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -19797,7 +19797,7 @@ func (ec *executionContext) fieldContext_AIImpactBucketRow_testGapPrs(_ context.
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -19958,9 +19958,9 @@ func (ec *executionContext) _AIImpactBucketTotals_prsTotal(ctx context.Context, 
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactBucketTotals_prsTotal(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -19970,7 +19970,7 @@ func (ec *executionContext) fieldContext_AIImpactBucketTotals_prsTotal(_ context
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -20002,9 +20002,9 @@ func (ec *executionContext) _AIImpactBucketTotals_prsMerged(ctx context.Context,
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactBucketTotals_prsMerged(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -20014,7 +20014,7 @@ func (ec *executionContext) fieldContext_AIImpactBucketTotals_prsMerged(_ contex
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -20087,9 +20087,9 @@ func (ec *executionContext) _AIImpactBucketTotals_agentCreatedPrCount(ctx contex
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactBucketTotals_agentCreatedPrCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -20099,7 +20099,7 @@ func (ec *executionContext) fieldContext_AIImpactBucketTotals_agentCreatedPrCoun
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -20564,9 +20564,9 @@ func (ec *executionContext) _AIImpactScopeRollupRow_aiPrsTotal(ctx context.Conte
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactScopeRollupRow_aiPrsTotal(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -20576,7 +20576,7 @@ func (ec *executionContext) fieldContext_AIImpactScopeRollupRow_aiPrsTotal(_ con
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -20822,9 +20822,9 @@ func (ec *executionContext) _AIImpactSummary_totalPrs(ctx context.Context, field
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactSummary_totalPrs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -20834,7 +20834,7 @@ func (ec *executionContext) fieldContext_AIImpactSummary_totalPrs(_ context.Cont
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -20866,9 +20866,9 @@ func (ec *executionContext) _AIImpactSummary_aiAssistedPrs(ctx context.Context, 
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactSummary_aiAssistedPrs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -20878,7 +20878,7 @@ func (ec *executionContext) fieldContext_AIImpactSummary_aiAssistedPrs(_ context
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -20910,9 +20910,9 @@ func (ec *executionContext) _AIImpactSummary_agentCreatedPrs(ctx context.Context
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactSummary_agentCreatedPrs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -20922,7 +20922,7 @@ func (ec *executionContext) fieldContext_AIImpactSummary_agentCreatedPrs(_ conte
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -20954,9 +20954,9 @@ func (ec *executionContext) _AIImpactSummary_humanPrs(ctx context.Context, field
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactSummary_humanPrs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -20966,7 +20966,7 @@ func (ec *executionContext) fieldContext_AIImpactSummary_humanPrs(_ context.Cont
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -20998,9 +20998,9 @@ func (ec *executionContext) _AIImpactSummary_unknownPrs(ctx context.Context, fie
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactSummary_unknownPrs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -21010,7 +21010,7 @@ func (ec *executionContext) fieldContext_AIImpactSummary_unknownPrs(_ context.Co
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -22953,9 +22953,9 @@ func (ec *executionContext) _AIReviewLoadRow_prsTotal(ctx context.Context, field
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIReviewLoadRow_prsTotal(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -22965,7 +22965,7 @@ func (ec *executionContext) fieldContext_AIReviewLoadRow_prsTotal(_ context.Cont
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -22997,9 +22997,9 @@ func (ec *executionContext) _AIReviewLoadRow_reviewsTotal(ctx context.Context, f
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIReviewLoadRow_reviewsTotal(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -23009,7 +23009,7 @@ func (ec *executionContext) fieldContext_AIReviewLoadRow_reviewsTotal(_ context.
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -23164,9 +23164,9 @@ func (ec *executionContext) _AIReviewLoadRow_postFirstReviewPushesCount(ctx cont
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIReviewLoadRow_postFirstReviewPushesCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -23176,7 +23176,7 @@ func (ec *executionContext) fieldContext_AIReviewLoadRow_postFirstReviewPushesCo
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -23908,9 +23908,9 @@ func (ec *executionContext) _AIRiskBreakdownRow_prsTotal(ctx context.Context, fi
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIRiskBreakdownRow_prsTotal(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -23920,7 +23920,7 @@ func (ec *executionContext) fieldContext_AIRiskBreakdownRow_prsTotal(_ context.C
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -23952,9 +23952,9 @@ func (ec *executionContext) _AIRiskBreakdownRow_reworkPrs(ctx context.Context, f
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIRiskBreakdownRow_reworkPrs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -23964,7 +23964,7 @@ func (ec *executionContext) fieldContext_AIRiskBreakdownRow_reworkPrs(_ context.
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -24037,9 +24037,9 @@ func (ec *executionContext) _AIRiskBreakdownRow_revertPrs(ctx context.Context, f
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIRiskBreakdownRow_revertPrs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -24049,7 +24049,7 @@ func (ec *executionContext) fieldContext_AIRiskBreakdownRow_revertPrs(_ context.
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -24122,9 +24122,9 @@ func (ec *executionContext) _AIRiskBreakdownRow_testGapPrs(ctx context.Context, 
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIRiskBreakdownRow_testGapPrs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -24134,7 +24134,7 @@ func (ec *executionContext) fieldContext_AIRiskBreakdownRow_testGapPrs(_ context
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -24207,9 +24207,9 @@ func (ec *executionContext) _AIRiskBreakdownRow_incidentsCount(ctx context.Conte
 		}
 		return graphql.Null
 	}
-	res := resTmp.(int)
+	res := resTmp.(float64)
 	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIRiskBreakdownRow_incidentsCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -24219,7 +24219,7 @@ func (ec *executionContext) fieldContext_AIRiskBreakdownRow_incidentsCount(_ con
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil

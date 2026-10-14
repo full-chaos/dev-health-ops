@@ -117,14 +117,14 @@ type Record struct {
 	WorkType                  string
 	Day                       time.Time
 	AttributionBucket         AttributionBucket
-	PRsTotal                  uint32
-	PRsMerged                 uint32
-	AIAssistedPRs             uint32
-	AgentCreatedPRs           uint32
-	HumanPRs                  uint32
-	UnknownPRs                uint32
+	PRsTotal                  float64
+	PRsMerged                 float64
+	AIAssistedPRs             float64
+	AgentCreatedPRs           float64
+	HumanPRs                  float64
+	UnknownPRs                float64
 	AIAssistedPRRatio         *float64
-	AgentCreatedPRCount       uint32
+	AgentCreatedPRCount       float64
 	CycleTimeAvgHours         *float64
 	BaselineCycleTimeAvgHours *float64
 	AICycleTimeDeltaHours     *float64
@@ -132,14 +132,14 @@ type Record struct {
 	BaselineReviewsPerPR      *float64
 	AIReviewAmplification     *float64
 	ChangesRequestedPerPR     *float64
-	ReworkPRs                 uint32
+	ReworkPRs                 float64
 	ReworkDragRate            *float64
-	FollowupCommitsCount      uint32
-	RevertPRs                 uint32
+	FollowupCommitsCount      float64
+	RevertPRs                 float64
 	RevertRate                *float64
-	IncidentsCount            uint32
+	IncidentsCount            float64
 	IncidentDragRate          *float64
-	TestGapPRs                uint32
+	TestGapPRs                float64
 	TestGapRate               *float64
 	LeveragePRsComponent      float64
 	LeverageCycleTime         *float64
@@ -173,7 +173,13 @@ type Params struct {
 	PRCommitStats  map[PRKey][]CommitStatRow
 	HasCommitStats bool
 	TeamResolver   TeamResolver
-	RepoNamesByID  map[uuid.UUID]string
+	// OwnerShare is the linked share of a repository the owning team named by
+	// TeamResolver holds (D5988, CHAOS-9604): the counts of a pull request the
+	// resolver gave to that team enter its rows at this share, the ratios and
+	// averages stay the repository's own (D5998). nil, or a team the attribution
+	// row itself named, is share 1.
+	OwnerShare    func(repoID uuid.UUID, teamID string) float64
+	RepoNamesByID map[uuid.UUID]string
 }
 
 // PRKey is the (repo_id, number) tuple Python uses as a dict key throughout.
@@ -197,6 +203,9 @@ type prFact struct {
 	changedFiles     uint32
 	hasTestChange    *bool // nil = commit linkage unavailable for this PR
 	followupCommits  uint32
+	// share is the weight of this pull request in its team's counts: the owning
+	// team's linked share of the repository, 1 for an attributed team.
+	share float64
 }
 
 type aggregate struct {
@@ -214,6 +223,12 @@ type aggregate struct {
 	incidentRate          *float64
 	testGapPRs            uint32
 	testGapRate           *float64
+
+	// The additive counts at the facts' shares (D5998): the sums of the share
+	// of each pull request that counts. With every share 1 each is the
+	// unsigned count above, exactly.
+	weightedTotal, weightedMerged, weightedRework      float64
+	weightedFollowup, weightedRevert, weightedTestGaps float64
 }
 
 // mean ports _avg (:95). pythonparity.Sum is REQUIRED, not a stylistic
@@ -370,11 +385,18 @@ func Compute(params Params) []Record {
 		}
 		bucket := safeBucket(kind)
 		teamIDs := []*string{teamID}
+		shares := []float64{1}
 		if teamID == nil && params.TeamResolver != nil {
 			if resolved := params.TeamResolver(pr.RepoID, params.RepoNamesByID[pr.RepoID]); len(resolved) > 0 {
 				teamIDs = teamIDs[:0]
+				shares = shares[:0]
 				for _, team := range resolved {
 					teamIDs = append(teamIDs, &team)
+					share := 1.0
+					if params.OwnerShare != nil {
+						share = params.OwnerShare(pr.RepoID, team)
+					}
+					shares = append(shares, share)
 				}
 			}
 		}
@@ -401,8 +423,9 @@ func Compute(params Params) []Record {
 			cycle = &hours
 		}
 
-		for _, teamID := range teamIDs {
+		for teamIndex, teamID := range teamIDs {
 			facts = append(facts, prFact{
+				share:  shares[teamIndex],
 				repoID: pr.RepoID, number: pr.Number, bucket: bucket, workType: workType,
 				teamID: teamID, merged: mergedAt != nil, cycleHours: cycle,
 				reviews: reviews, changesRequested: changesRequested,
@@ -585,6 +608,7 @@ func aggregateFacts(facts []prFact, incidentsCount uint32) aggregate {
 	cycles := make([]float64, 0, len(facts))
 	var prsMerged, reworkPRs, followupCommits, revertPRs uint32
 	var knownTestPRs, testGapPRs uint32
+	var weightedTotal, weightedMerged, weightedRework, weightedFollowup, weightedRevert, weightedTestGaps float64
 	// WIDENED TO uint64 ON PURPOSE (codex round chaos-4280-r1, finding 3).
 	// Each fact.reviews/fact.changesRequested is a UInt32 wire value, so any
 	// ONE of them fits uint32 -- but Python sums arbitrary-precision integers
@@ -594,18 +618,22 @@ func aggregateFacts(facts []prFact, incidentsCount uint32) aggregate {
 	// that to 1_705_032_704, corrupting reviews_per_pr for the whole group.
 	var reviews, changesRequested uint64
 	for _, fact := range facts {
+		weightedTotal += fact.share
 		if fact.cycleHours != nil {
 			cycles = append(cycles, *fact.cycleHours)
 		}
 		if fact.merged {
 			prsMerged++
+			weightedMerged += fact.share
 		}
 		reviews += uint64(fact.reviews)
 		changesRequested += uint64(fact.changesRequested)
 		if fact.changesRequested > 0 || fact.followupCommits > 0 {
 			reworkPRs++
+			weightedRework += fact.share
 		}
 		followupCommits += fact.followupCommits
+		weightedFollowup += float64(float64(fact.followupCommits) * fact.share)
 		// Integer comparison, exactly as Python: deletions > additions*2 AND
 		// deletions >= 50. No float anywhere, so no FMA site.
 		//
@@ -619,6 +647,7 @@ func aggregateFacts(facts []prFact, incidentsCount uint32) aggregate {
 		// Pinned by TestRevertRuleDoesNotWrapOnLargeAdditions.
 		if uint64(fact.deletions) > uint64(fact.additions)*2 && fact.deletions >= 50 {
 			revertPRs++
+			weightedRevert += fact.share
 		}
 		// Only PRs whose test-change status is KNOWN contribute to the gap
 		// denominator (CHAOS-2183): counting unknowns as gaps recreates the
@@ -627,6 +656,7 @@ func aggregateFacts(facts []prFact, incidentsCount uint32) aggregate {
 			knownTestPRs++
 			if !*fact.hasTestChange {
 				testGapPRs++
+				weightedTestGaps += fact.share
 			}
 		}
 	}
@@ -646,6 +676,9 @@ func aggregateFacts(facts []prFact, incidentsCount uint32) aggregate {
 		incidentRate:          ratio(float64(incidentsCount), float64(prsMerged)),
 		testGapPRs:            testGapPRs,
 		testGapRate:           ratio(float64(testGapPRs), float64(knownTestPRs)),
+
+		weightedTotal: weightedTotal, weightedMerged: weightedMerged, weightedRework: weightedRework,
+		weightedFollowup: weightedFollowup, weightedRevert: weightedRevert, weightedTestGaps: weightedTestGaps,
 	}
 }
 
@@ -700,21 +733,31 @@ func buildRecords(
 		groupTotal := uint32(len(groupFacts))
 
 		var aiCount, aiAssistedCount, agentCreatedCount, humanCount, unknownCount uint32
+		var weightedAI, weightedAIAssisted, weightedAgentCreated, weightedHuman, weightedUnknown float64
 		for _, fact := range groupFacts {
 			if isAIBucket(fact.bucket) {
 				aiCount++
+				weightedAI += fact.share
 			}
 			switch fact.bucket {
 			case BucketAIAssisted:
 				aiAssistedCount++
+				weightedAIAssisted += fact.share
 			case BucketAgentCreated:
 				agentCreatedCount++
+				weightedAgentCreated += fact.share
 			case BucketHuman:
 				humanCount++
+				weightedHuman += fact.share
 			case BucketUnknown:
 				unknownCount++
+				weightedUnknown += fact.share
 			}
 		}
+		// The incidents of a repository are counted once per group; they enter
+		// the group's rows at the group's share (every pull request of one
+		// (team, repository) group carries the same share).
+		groupShare := groupFacts[0].share
 
 		var teamID *string
 		if key.hasTeam {
@@ -744,22 +787,22 @@ func buildRecords(
 			records = append(records, Record{
 				OrgID: params.OrgID, TeamID: teamID, RepoID: key.repoID,
 				WorkType: key.workType, Day: day, AttributionBucket: bucket,
-				PRsTotal: agg.prsTotal, PRsMerged: agg.prsMerged,
-				AIAssistedPRs: aiAssistedCount, AgentCreatedPRs: agentCreatedCount,
-				HumanPRs: humanCount, UnknownPRs: unknownCount,
+				PRsTotal: agg.weightedTotal, PRsMerged: agg.weightedMerged,
+				AIAssistedPRs: weightedAIAssisted, AgentCreatedPRs: weightedAgentCreated,
+				HumanPRs: weightedHuman, UnknownPRs: weightedUnknown,
 				AIAssistedPRRatio:   ratio(float64(aiAssistedCount), float64(groupTotal)),
-				AgentCreatedPRCount: agentCreatedCount,
+				AgentCreatedPRCount: weightedAgentCreated,
 				CycleTimeAvgHours:   agg.cycleAvg, BaselineCycleTimeAvgHours: baseline.cycleAvg,
 				AICycleTimeDeltaHours: cycleDelta,
 				ReviewsPerPR:          agg.reviewsPerPR, BaselineReviewsPerPR: baseline.reviewsPerPR,
 				AIReviewAmplification: reviewAmplification,
 				ChangesRequestedPerPR: agg.changesRequestedPerPR,
-				ReworkPRs:             agg.reworkPRs, ReworkDragRate: agg.reworkRate,
-				FollowupCommitsCount: agg.followupCommits,
-				RevertPRs:            agg.revertPRs, RevertRate: agg.revertRate,
-				IncidentsCount: agg.incidentsCount, IncidentDragRate: agg.incidentRate,
-				TestGapPRs: agg.testGapPRs, TestGapRate: agg.testGapRate,
-				LeveragePRsComponent: float64(aiCount),
+				ReworkPRs:             agg.weightedRework, ReworkDragRate: agg.reworkRate,
+				FollowupCommitsCount: agg.weightedFollowup,
+				RevertPRs:            agg.weightedRevert, RevertRate: agg.revertRate,
+				IncidentsCount: float64(float64(agg.incidentsCount) * groupShare), IncidentDragRate: agg.incidentRate,
+				TestGapPRs: agg.weightedTestGaps, TestGapRate: agg.testGapRate,
+				LeveragePRsComponent: weightedAI,
 				LeverageCycleTime:    componentDelta(agg.cycleAvg, baseline.cycleAvg, true),
 				LeverageReview:       reviewAmplification,
 				LeverageRework:       componentDelta(agg.reworkRate, baseline.reworkRate, true),

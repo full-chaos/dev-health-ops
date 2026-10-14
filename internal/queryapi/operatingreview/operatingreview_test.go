@@ -615,17 +615,17 @@ func TestResolve_HappyPath_ComputesRealPayload(t *testing.T) {
 	// period gets all-empty responses (10 scanners), so numeric delta fields
 	// use their 0 placeholder but cannot make a comparison claim.
 	current := []*fakeRowScanner{
-		{rows: [][]any{{day("2026-08-24"), uint64(10), uint64(8), uint32(4), 5.0, 9.0, 1.0, 2.0}}},                   // work_items
-		{rows: [][]any{{"in_review", uint64(6), 3.0, 1.5}}},                                                          // state_durations
-		{rows: [][]any{{uint64(20), 4.0, 0.6, 0.3, uint32(3), 0.1, 2.0, uint64(20)}}},                                // repo_metrics (+ CHAOS-4563 known_count)
-		{rows: [][]any{{0.4, uint64(5)}}},                                                                            // hotspots
-		{rows: [][]any{{12.5, uint64(3)}}},                                                                           // complexity (+ CHAOS-4563 known_count)
-		{rows: [][]any{{uint64(9), uint64(1), uint64(4)}}},                                                           // deployments (+ CHAOS-8115 known_count)
-		{rows: [][]any{{uint64(2), 3.0, uint64(2)}}},                                                                 // incidents (+ CHAOS-8115 known_count)
-		{rows: [][]any{{"feature_delivery", uint64(7)}}},                                                             // investment
-		{rows: [][]any{{"human", uint64(10), uint64(2), uint64(1), uint64(6), uint64(1), 1.0, 1.2, 0.1, 0.05, 0.0}}}, // ai_impact
-		{rows: [][]any{{day("2026-08-24"), nil, nil, uint64(4), uint64(3), uint64(2), uint64(4), uint64(4)}}},        // ai_governance
-		{rows: [][]any{{uint64(9), uint64(1), uint64(2), uint64(1), uint64(1), uint64(4)}}},                          // change_failure
+		{rows: [][]any{{day("2026-08-24"), uint64(10), uint64(8), uint32(4), 5.0, 9.0, 1.0, 2.0}}},                        // work_items
+		{rows: [][]any{{"in_review", uint64(6), 3.0, 1.5}}},                                                               // state_durations
+		{rows: [][]any{{uint64(20), 4.0, 0.6, 0.3, uint32(3), 0.1, 2.0, uint64(20)}}},                                     // repo_metrics (+ CHAOS-4563 known_count)
+		{rows: [][]any{{0.4, uint64(5)}}},                                                                                 // hotspots
+		{rows: [][]any{{12.5, uint64(3)}}},                                                                                // complexity (+ CHAOS-4563 known_count)
+		{rows: [][]any{{uint64(9), uint64(1), uint64(4)}}},                                                                // deployments (+ CHAOS-8115 known_count)
+		{rows: [][]any{{uint64(2), 3.0, uint64(2)}}},                                                                      // incidents (+ CHAOS-8115 known_count)
+		{rows: [][]any{{"feature_delivery", uint64(7)}}},                                                                  // investment
+		{rows: [][]any{{"human", float64(10), float64(2), float64(1), float64(6), float64(1), 1.0, 1.2, 0.1, 0.05, 0.0}}}, // ai_impact
+		{rows: [][]any{{day("2026-08-24"), nil, nil, uint64(4), uint64(3), uint64(2), uint64(4), uint64(4)}}},             // ai_governance
+		{rows: [][]any{{uint64(9), uint64(1), uint64(2), uint64(1), uint64(1), uint64(4)}}},                               // change_failure
 	}
 	client := &fakeClient{
 		responses: append(append([]*fakeRowScanner{}, current...), emptyScanners(11)...),

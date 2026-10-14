@@ -137,8 +137,8 @@ func (f *fixtureClientD) Query(_ context.Context, st string, b []clickhouse.Bind
 	case strings.Contains(st, "FROM ai_impact_metrics_daily"):
 		var rows [][]any
 		for _, m := range c.Impact {
-			rows = append(rows, []any{m["team_id"].(string), m["repo_id"].(string), m["attribution_bucket"].(string), uint32(m["prs_total"].(float64)),
-				optF(m, "reviews_per_pr"), optF(m, "cycle_time_avg_hours"), uint32(m["rework_prs"].(float64)), uint32(m["test_gap_prs"].(float64))})
+			rows = append(rows, []any{m["team_id"].(string), m["repo_id"].(string), m["attribution_bucket"].(string), m["prs_total"].(float64),
+				optF(m, "reviews_per_pr"), optF(m, "cycle_time_avg_hours"), m["rework_prs"].(float64), m["test_gap_prs"].(float64)})
 		}
 		return &scriptedRows{rows: rows}, nil
 	case strings.Contains(st, "title_prefix"):

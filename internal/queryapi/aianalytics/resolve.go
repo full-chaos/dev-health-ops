@@ -155,10 +155,10 @@ func aggregateBucketTotals(rows []dailyRow) []model.AIImpactBucketTotals {
 		}
 		out = append(out, model.AIImpactBucketTotals{
 			Bucket:                name,
-			PrsTotal:              int(sumInt(g, byPrsTotal)),
-			PrsMerged:             int(sumInt(g, byPrsMerged)),
+			PrsTotal:              sumInt(g, byPrsTotal),
+			PrsMerged:             sumInt(g, byPrsMerged),
 			AiAssistedPrRatio:     weightedAvg(pairsOf(g, func(r dailyRow) *float64 { return r.AIAssistedPrRatio }, byPrsTotal)),
-			AgentCreatedPrCount:   int(sumInt(g, func(r dailyRow) int64 { return r.AgentCreatedPrs })),
+			AgentCreatedPrCount:   sumInt(g, func(r dailyRow) float64 { return r.AgentCreatedPrs }),
 			CycleTimeAvgHours:     weightedAvg(pairsOf(g, func(r dailyRow) *float64 { return r.CycleTimeAvgHours }, byPrsMerged)),
 			AiCycleTimeDeltaHours: weightedAvg(pairsOf(g, func(r dailyRow) *float64 { return r.AICycleTimeDelta }, byPrsMerged)),
 			AiReviewAmplification: weightedAvg(pairsOf(g, func(r dailyRow) *float64 { return r.AIReviewAmp }, byPrsTotal)),
@@ -173,25 +173,25 @@ func aggregateBucketTotals(rows []dailyRow) []model.AIImpactBucketTotals {
 }
 
 // pairsOfFloat is pairsOf for a value that is always present.
-func pairsOfFloat(rows []dailyRow, value func(dailyRow) *float64, weight func(dailyRow) int64) []pair {
+func pairsOfFloat(rows []dailyRow, value func(dailyRow) *float64, weight func(dailyRow) float64) []pair {
 	return pairsOf(rows, value, weight)
 }
 
 func rowToDaily(r dailyRow) model.AIImpactBucketRow {
 	return model.AIImpactBucketRow{
 		Bucket:                r.Bucket,
-		PrsTotal:              int(r.PrsTotal),
-		PrsMerged:             int(r.PrsMerged),
+		PrsTotal:              r.PrsTotal,
+		PrsMerged:             r.PrsMerged,
 		CycleTimeAvgHours:     r.CycleTimeAvgHours,
 		ReviewsPerPr:          r.ReviewsPerPr,
 		ChangesRequestedPerPr: r.ChangesRequestedPer,
-		ReworkPrs:             int(r.ReworkPrs),
+		ReworkPrs:             r.ReworkPrs,
 		ReworkRate:            r.ReworkDragRate,
-		RevertPrs:             int(r.RevertPrs),
+		RevertPrs:             r.RevertPrs,
 		RevertRate:            r.RevertRate,
-		IncidentsCount:        int(r.IncidentsCount),
+		IncidentsCount:        r.IncidentsCount,
 		IncidentRate:          r.IncidentDragRate,
-		TestGapPrs:            int(r.TestGapPrs),
+		TestGapPrs:            r.TestGapPrs,
 		TestGapRate:           r.TestGapRate,
 		Day:                   graphqldate.New(r.DayTime),
 	}
@@ -238,7 +238,7 @@ func scopeRollups(rows []dailyRow, key func(dailyRow) string, labels map[string]
 		out = append(out, model.AIImpactScopeRollupRow{
 			ScopeID:           id,
 			ScopeLabel:        label,
-			AiPrsTotal:        int(aiTotal),
+			AiPrsTotal:        aiTotal,
 			AiAssistedPrRatio: ratio(float64(aiTotal), float64(all)),
 			ReworkRateDelta:   delta(aiRework, humanRework),
 		})
@@ -313,8 +313,8 @@ func ImpactSummary(ctx context.Context, client QueryClient, orgID string, dr mod
 	repoBreakdown, teamBreakdown := loadScopeBreakdowns(ctx, client, orgID, rows)
 
 	total := sumInt(rows, byPrsTotal)
-	aiAssisted := sumInt(rows, func(r dailyRow) int64 { return r.AIAssistedPrs })
-	unknown := sumInt(rows, func(r dailyRow) int64 { return r.UnknownPrs })
+	aiAssisted := sumInt(rows, func(r dailyRow) float64 { return r.AIAssistedPrs })
+	unknown := sumInt(rows, func(r dailyRow) float64 { return r.UnknownPrs })
 
 	var computedAt *time.Time
 	for _, r := range rows {
@@ -347,11 +347,11 @@ func ImpactSummary(ctx context.Context, client QueryClient, orgID string, dr mod
 		OrgID:             orgID,
 		StartDate:         dr.StartDate,
 		EndDate:           dr.EndDate,
-		TotalPrs:          int(total),
-		AiAssistedPrs:     int(aiAssisted),
-		AgentCreatedPrs:   int(sumInt(rows, func(r dailyRow) int64 { return r.AgentCreatedPrs })),
-		HumanPrs:          int(sumInt(rows, func(r dailyRow) int64 { return r.HumanPrs })),
-		UnknownPrs:        int(unknown),
+		TotalPrs:          total,
+		AiAssistedPrs:     aiAssisted,
+		AgentCreatedPrs:   sumInt(rows, func(r dailyRow) float64 { return r.AgentCreatedPrs }),
+		HumanPrs:          sumInt(rows, func(r dailyRow) float64 { return r.HumanPrs }),
+		UnknownPrs:        unknown,
 		AiAssistedPrRatio: ratio(float64(aiAssisted), float64(total)),
 		ByBucket:          aggregateBucketTotals(rows),
 		Daily:             daily,
@@ -371,8 +371,8 @@ func aggregateSide(rows []dailyRow, label string) *model.AIComparisonSide {
 	}
 	return &model.AIComparisonSide{
 		Bucket:            label,
-		PrsTotal:          int(sumInt(rows, byPrsTotal)),
-		PrsMerged:         int(sumInt(rows, byPrsMerged)),
+		PrsTotal:          sumInt(rows, byPrsTotal),
+		PrsMerged:         sumInt(rows, byPrsMerged),
 		CycleTimeAvgHours: weightedAvg(pairsOf(rows, func(r dailyRow) *float64 { return r.CycleTimeAvgHours }, byPrsMerged)),
 		ReviewsPerPr:      weightedAvg(pairsOf(rows, func(r dailyRow) *float64 { return r.ReviewsPerPr }, byPrsTotal)),
 		ReworkRate:        weightedAvg(pairsOf(rows, func(r dailyRow) *float64 { return r.ReworkDragRate }, byPrsTotal)),
@@ -504,12 +504,12 @@ func ReviewLoad(ctx context.Context, client QueryClient, orgID string, dr model.
 	for _, r := range rows {
 		row := model.AIReviewLoadRow{
 			Bucket:                     r.Bucket,
-			PrsTotal:                   int(r.PrsTotal),
-			ReviewsTotal:               int(reviewTotalForRow(r)),
+			PrsTotal:                   r.PrsTotal,
+			ReviewsTotal:               reviewTotalForRow(r),
 			ReviewsPerPr:               r.ReviewsPerPr,
 			ChangesRequestedPerPr:      r.ChangesRequestedPer,
 			ReviewAmplification:        r.AIReviewAmp,
-			PostFirstReviewPushesCount: int(r.FollowupCommits),
+			PostFirstReviewPushesCount: r.FollowupCommits,
 			PostFirstReviewPushesPerPr: ratio(float64(r.FollowupCommits), float64(r.PrsTotal)),
 		}
 		if s := byDay[r.Bucket+"\x00"+r.Day]; s != nil {
@@ -524,19 +524,19 @@ func ReviewLoad(ctx context.Context, client QueryClient, orgID string, dr model.
 	for _, name := range names {
 		g := groups[name]
 		prs := sumInt(g, byPrsTotal)
-		var reviews int64
+		var reviews float64
 		for _, r := range g {
 			reviews = reviews + reviewTotalForRow(r)
 		}
-		pushes := sumInt(g, func(r dailyRow) int64 { return r.FollowupCommits })
+		pushes := sumInt(g, func(r dailyRow) float64 { return r.FollowupCommits })
 		row := model.AIReviewLoadRow{
 			Bucket:                     name,
-			PrsTotal:                   int(prs),
-			ReviewsTotal:               int(reviews),
+			PrsTotal:                   prs,
+			ReviewsTotal:               reviews,
 			ReviewsPerPr:               weightedAvg(pairsOf(g, func(r dailyRow) *float64 { return r.ReviewsPerPr }, byPrsTotal)),
 			ChangesRequestedPerPr:      weightedAvg(pairsOf(g, func(r dailyRow) *float64 { return r.ChangesRequestedPer }, byPrsTotal)),
 			ReviewAmplification:        weightedAvg(pairsOf(g, func(r dailyRow) *float64 { return r.AIReviewAmp }, byPrsTotal)),
-			PostFirstReviewPushesCount: int(pushes),
+			PostFirstReviewPushesCount: pushes,
 			PostFirstReviewPushesPerPr: ratio(float64(pushes), float64(prs)),
 		}
 		if s := byBucketEng[name]; s != nil {

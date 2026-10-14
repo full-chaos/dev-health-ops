@@ -1016,17 +1016,17 @@ func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams 
 	var out []aiImpactRow
 	for rows.Next() {
 		var bucket string
-		var prsTotal, aiAssistedPrs, agentCreatedPrs, humanPrs, unknownPrs uint64
+		var prsTotal, aiAssistedPrs, agentCreatedPrs, humanPrs, unknownPrs float64
 		var aiCycleTimeDelta, aiReviewAmp, reworkDrag, testGap, incidentDrag *float64
 		if scanErr := rows.Scan(&bucket, &prsTotal, &aiAssistedPrs, &agentCreatedPrs, &humanPrs, &unknownPrs, &aiCycleTimeDelta, &aiReviewAmp, &reworkDrag, &testGap, &incidentDrag); scanErr != nil {
 			return nil, fmt.Errorf("operatingreview: ai_impact scan: %w", scanErr)
 		}
 		out = append(out, aiImpactRow{
-			prsTotal:              float64(prsTotal),
-			aiAssistedPrs:         float64(aiAssistedPrs),
-			agentCreatedPrs:       float64(agentCreatedPrs),
-			humanPrs:              float64(humanPrs),
-			unknownPrs:            float64(unknownPrs),
+			prsTotal:              prsTotal,
+			aiAssistedPrs:         aiAssistedPrs,
+			agentCreatedPrs:       agentCreatedPrs,
+			humanPrs:              humanPrs,
+			unknownPrs:            unknownPrs,
 			aiCycleTimeDeltaHours: aiCycleTimeDelta,
 			aiReviewAmplification: aiReviewAmp,
 			reworkDragRate:        reworkDrag,

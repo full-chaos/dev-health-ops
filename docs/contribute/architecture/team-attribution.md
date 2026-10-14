@@ -1282,8 +1282,13 @@ controls: a link that is gone and an explicit empty list are closed).
 >   rounded, and the ratios are recomputed from the weighted sums. The cognitive-load executor reads
 >   `team_metrics_daily` per repository and sums the rows of one generation, so the owners' shares of a repository
 >   (which sum to 1) give the whole repository back before the cognitive-load share is applied once.
->   `ai_impact_metrics_daily` (UInt32 counters, served as GraphQL `Int`) still takes the main owner(s) only, each whole
->   (D5994; the public count type is a separate decision).
+>   `ai_impact_metrics_daily` does the same since migration 125 (CHAOS-9604, D5998): its twelve count columns are
+>   Float64 and the AI impact GraphQL count fields are `Float!`. A pull request that the ownership read gives to a
+>   team counts in that team's rows at the owner's share (`total`, `merged`, the bucket counts, rework, follow-up
+>   commits, reverts, incidents, test-gap pull requests, and the leverage pull-request component); the ratios, the
+>   averages (cycle time, reviews per pull request) and the baselines are the repository's own and are never scaled,
+>   so a lesser owner reads the repository's rates and a fraction of its counts. The readers that add rows (the impact
+>   summary, the comparison, the risk breakdown, the review load) add the fractions and weight the averages by them.
 > - **A measure that does not add** (a mean of repository scores, a ratio, a percentile) gives every owner, main and
 >   lesser, the repository's own value, unweighted. `compounding_risk_daily` (team scope) does so, through
 >   `teamresolve.ResolveOwnershipThenPatterns`.

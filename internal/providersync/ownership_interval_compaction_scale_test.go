@@ -357,6 +357,42 @@ func TestCompactionPlansHeavyOverlapInBoundedTime(t *testing.T) {
 	}
 }
 
+// manyTeamRows is one repository owned by many teams, each with one run of
+// two rows (the r2 review shape of CHAOS-9704).
+func manyTeamRows(teams int) []ownershipIntervalRow {
+	epoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rows := make([]ownershipIntervalRow, 0, teams*2)
+	for team := 0; team < teams; team++ {
+		from := epoch.Add(time.Duration(team) * time.Millisecond)
+		middle := from.Add(time.Hour)
+		to := middle.Add(time.Hour)
+		rows = append(rows,
+			repoRow("t"+strconv.Itoa(team), "acme/shared", 0, 0, 0), repoRow("t"+strconv.Itoa(team), "acme/shared", 0, 0, 0))
+		rows[len(rows)-2].ValidFrom, rows[len(rows)-2].ValidTo, rows[len(rows)-2].UpdatedAt = from, &middle, middle
+		rows[len(rows)-1].ValidFrom, rows[len(rows)-1].ValidTo, rows[len(rows)-1].UpdatedAt = middle, &to, to
+	}
+	return rows
+}
+
+func TestCompactionPlansManyTeamsInOneGroupInBoundedTime(t *testing.T) {
+	rows := manyTeamRows(30000)
+	done := make(chan string, 1)
+	started := time.Now()
+	go func() {
+		plan := planOwnershipCompaction(repoSpec(), rows)
+		diff := ownershipDifferential(rows, plan.final(rows))
+		done <- fmt.Sprintf("runs found %d merged %d, differential instants %d mismatches %d",
+			plan.org.RunsFound, plan.org.RunsMerged, diff.InstantsChecked, diff.Mismatches)
+	}()
+	bound := compactionBound()
+	select {
+	case got := <-done:
+		t.Logf("many teams, %d rows in one group: %s, elapsed %s", len(rows), got, time.Since(started))
+	case <-time.After(bound):
+		t.Fatalf("plan + differential of %d rows of 30,000 teams in one group did not finish within %s", len(rows), bound)
+	}
+}
+
 func TestCompactionPlanStopsAtItsDeadline(t *testing.T) {
 	rows := prodShapedRepoRows(9704, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -576,6 +612,7 @@ func TestCompactionPlannerEqualsThe9556Planner(t *testing.T) {
 		compareWithLegacy(t, name, repoSpec(), rows, rng)
 	}
 	compareWithLegacy(t, "heavy overlap", repoSpec(), overlappingSourceRows(150), rng)
+	compareWithLegacy(t, "many teams", repoSpec(), manyTeamRows(120), rng)
 	for seed := int64(1); seed <= 3; seed++ {
 		compareWithLegacy(t, "prod shape 1.5% seed "+strconv.FormatInt(seed, 10), repoSpec(), prodShapedRepoRows(seed, 0.015), rng)
 	}

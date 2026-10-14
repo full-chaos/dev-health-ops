@@ -612,15 +612,29 @@ func acceptRuns(
 		byTeam[key] = append(byTeam[key], index)
 	}
 	accepted := make([]bool, len(candidates))
-	groupRows := make([][]ownershipIntervalRow, len(order))
-	total := 0
+	// One pass over each group hands its rows to the teams that have a candidate run (a scan per team would be
+	// quadratic in the teams of a group).
+	slots := make(map[teamGroup]int, len(order))
 	for index, key := range order {
+		slots[key] = index
+	}
+	groupRows := make([][]ownershipIntervalRow, len(order))
+	scanned := map[string]bool{}
+	total := 0
+	for _, key := range order {
+		if scanned[key.group] {
+			continue
+		}
+		scanned[key.group] = true
 		for _, row := range byGroup[key.group] {
-			if row.TeamID == key.team {
-				groupRows[index] = append(groupRows[index], row)
+			if slot, ok := slots[teamGroup{group: key.group, team: row.TeamID}]; ok {
+				groupRows[slot] = append(groupRows[slot], row)
+				total++
 			}
 		}
-		total += len(groupRows[index])
+		if err := meter.check(); err != nil {
+			return accepted, err
+		}
 	}
 	meter.phase("runs", total)
 	for index, key := range order {

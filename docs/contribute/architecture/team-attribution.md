@@ -1274,9 +1274,15 @@ controls: a link that is gone and an explicit empty list are closed).
 >   does so: the pull-request interruption load, the review request load and the context-spread count are the sums
 >   of the repository values times the owner's share, and the after-hours and weekend ratios are recomputed from the
 >   share-weighted commit counts. The counts of repositories and authors stay whole.
-> - **A measure that does not add** (a mean of repository scores, a ratio, a percentile) gives every owner, main and
->   lesser, the repository's own value, unweighted. `compounding_risk_daily` (team scope) does so, through
->   `teamresolve.ResolveOwnershipThenPatterns`.
+> - **A score that does not add** (a mean of repository measures, a ratio, a percentile, a composite) gives every owner,
+>   main and lesser, a row from the repository's own raw inputs: a share of a p90 or a ratio is no measure.
+>   `compounding_risk_daily` (team scope) does so, through `teamresolve.ResolveOwnerSharesThenPatterns`, and the
+>   owner's share (CHAOS-9620, D5994) scales the score columns of the row (`compounding_risk` and the four norms): a
+>   lesser owner's row is the repository's score times its share, and the rows of one repository's owners sum to the
+>   repository's score (exact for a team that owns that one repository; for a team of several repositories the
+>   multiplier is its mean share over them). The raw inputs and the severity stay the repository's own (the severity
+>   names the repository's risk). The two review-window counts (`merged_prs_30d`, `reviewed_prs_30d`, UInt32) stay
+>   whole until their column is widened. A sole owner (share 1) is unchanged, bit for bit.
 > - **A table with one row per repository** (the four TestOps families, one row per organization, repository and
 >   day) takes the main owner only; a full tie takes the first tied team by rank. A second team has no row to live in.
 

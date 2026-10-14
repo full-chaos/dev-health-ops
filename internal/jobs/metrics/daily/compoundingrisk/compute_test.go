@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // goldenRecord is CompoundingRiskDailyRecord as the Python generator
@@ -598,22 +600,54 @@ func TestComputeWithNoInputHasNoScoreAndALowCoverageIsNotCapped(t *testing.T) {
 	}
 }
 
-// CHAOS-9410, D5988: a team score is a mean of repository values, which do not
-// add, so a lesser owner reads the repository's own value like the main owner
-// (no share weight) and gets its own row.
-func TestBuildTeamRowsGivesALesserOwnerARowFromTheRepositoryValue(t *testing.T) {
-	rework := 0.4
-	repoInputs := []RepoInputs{{RepoID: "repo-1", Inputs: Inputs{ReworkChurn: &rework}}}
-	repoToTeam := map[string][]string{"repo-1": {"main", "lesser"}}
-	rows := BuildTeamRows(
-		time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC), "acme", repoInputs, repoToTeam, time.Now(),
-		DefaultWeights, DefaultThresholds, DefaultReferences,
-	)
-	got := map[string]*float64{}
-	for _, row := range rows {
-		got[row.ScopeID] = row.ReworkChurn
+// CHAOS-9620, D5988/D5994: the main owner and two lesser owners of one
+// repository each get a row. The score columns of a row are the repository's
+// score times the owner's share, so the rows sum to the repository's score; the
+// raw inputs, the severity and the review-window counts are the repository's
+// own; a sole owner (share 1) is unchanged.
+func TestBuildTeamRowsGivesEachOwnerTheRepositoryScoreTimesItsShare(t *testing.T) {
+	rework, delta, gini := 0.4, 0.3, 0.5
+	window := &ReviewWindow{MergedPRs: 10, ReviewedPRs: 6}
+	inputs := Inputs{ReworkChurn: &rework, ComplexityDelta: &delta, OwnershipGini: &gini}
+	day := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	repo := Compute(day, "repo-1", "acme", inputs, time.Now(), DefaultWeights, DefaultThresholds, DefaultReferences)
+	if repo.CompoundingRisk == nil {
+		t.Fatal("the repository has no score; the case is not set")
 	}
-	if len(got) != 2 || got["main"] == nil || got["lesser"] == nil || *got["main"] != rework || *got["lesser"] != rework {
-		t.Fatalf("rework churn by team %v, want both owners at the repository's own 0.4", got)
+	rows := BuildTeamRows(
+		day, "acme", []RepoInputs{{RepoID: "repo-1", Inputs: inputs, ReviewWindow: window}},
+		map[string][]teamownership.OwnerShare{"repo-1": {
+			{TeamID: "main", Main: true, Share: 0.5},
+			{TeamID: "lesser-1", Share: 0.3},
+			{TeamID: "lesser-2", Share: 0.2},
+		}},
+		time.Now(), DefaultWeights, DefaultThresholds, DefaultReferences,
+	)
+	shares := map[string]float64{"main": 0.5, "lesser-1": 0.3, "lesser-2": 0.2}
+	if len(rows) != 3 {
+		t.Fatalf("%d team rows, want one per owner", len(rows))
+	}
+	sum := 0.0
+	for _, row := range rows {
+		share, ok := shares[row.ScopeID]
+		if !ok || row.CompoundingRisk == nil {
+			t.Fatalf("unexpected row %+v", row)
+		}
+		if want := *repo.CompoundingRisk * share; math.Abs(*row.CompoundingRisk-want) > 1e-12 {
+			t.Errorf("%s score %v, want the repository's %v x %v = %v", row.ScopeID, *row.CompoundingRisk, *repo.CompoundingRisk, share, want)
+		}
+		if row.ChurnNorm == nil || math.Abs(*row.ChurnNorm-*repo.ChurnNorm*share) > 1e-12 {
+			t.Errorf("%s churn norm %v, want %v x %v", row.ScopeID, row.ChurnNorm, *repo.ChurnNorm, share)
+		}
+		if row.ReworkChurn == nil || *row.ReworkChurn != rework || row.Severity != repo.Severity {
+			t.Errorf("%s raw input %v severity %q, want the repository's own %v %q", row.ScopeID, row.ReworkChurn, row.Severity, rework, repo.Severity)
+		}
+		if row.MergedPRs30D == nil || *row.MergedPRs30D != 10 || row.ReviewedPRs30D == nil || *row.ReviewedPRs30D != 6 {
+			t.Errorf("%s review window counts %v %v, want the repository's whole 10 and 6", row.ScopeID, row.MergedPRs30D, row.ReviewedPRs30D)
+		}
+		sum += *row.CompoundingRisk
+	}
+	if math.Abs(sum-*repo.CompoundingRisk) > 1e-12 {
+		t.Errorf("the owners' scores sum to %v, want the repository's %v", sum, *repo.CompoundingRisk)
 	}
 }

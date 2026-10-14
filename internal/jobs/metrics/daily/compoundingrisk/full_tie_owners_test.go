@@ -1,9 +1,13 @@
 package compoundingrisk
 
-import "testing"
+import (
+	"testing"
 
-// A repository with several main owners (a full ownership tie, D5990) counts
-// whole in each of them: each owner's team row has the repository's inputs.
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
+)
+
+// A repository with several main owners (a full ownership tie, D5990) is in
+// each of them: each owner's team row has the repository's own raw inputs.
 func TestBuildTeamRowsCountsARepositoryWholeInEachMainOwner(t *testing.T) {
 	repoInputs := []RepoInputs{
 		{RepoID: "repo-tied", Inputs: Inputs{ReworkChurn: ptr(0.5)}},
@@ -11,7 +15,10 @@ func TestBuildTeamRowsCountsARepositoryWholeInEachMainOwner(t *testing.T) {
 	}
 	records := BuildTeamRows(
 		goldenDay(), teamGoldenOrgID, repoInputs,
-		map[string][]string{"repo-tied": {"team-b", "team-a"}, "repo-single": {"team-a"}}, goldenStamp(),
+		map[string][]teamownership.OwnerShare{
+			"repo-tied":   {{TeamID: "team-b", Main: true, Share: 0.5}, {TeamID: "team-a", Main: true, Share: 0.5}},
+			"repo-single": {{TeamID: "team-a", Main: true, Share: 1}},
+		}, goldenStamp(),
 		DefaultWeights, DefaultThresholds, DefaultReferences,
 	)
 	byTeam := map[string]Record{}

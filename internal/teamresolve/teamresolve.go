@@ -95,11 +95,10 @@ func ResolveFromOwnershipMap(
 	return repoToTeam
 }
 
-// ResolveOwnershipThenPatterns builds {repo_id_str: team_ids}: every owner of a
-// repository, the main owner(s) first and each lesser owner after (D5988,
-// CHAOS-9410), for the callers whose measure does not add over repositories
-// (a mean, a ratio, a percentile): each owner reads the repository's own
-// value, unweighted. It builds {repo_id_str: team_id} exactly as
+// ResolveOwnerSharesThenPatterns builds {repo_id_str: owners with shares}: the
+// main owner(s) first and each lesser owner after, each with its linked share
+// (D5988, CHAOS-9410, CHAOS-9620), the repo-pattern fallback giving one team
+// that holds the repository whole. It builds the map exactly as
 // job_daily.py:497 _repo_to_team_map_for_compounding_risk's REAL production
 // caller does (_write_compounding_risk_team_rows_for_day, job_daily.py:~635):
 // it resolves the org-wide authoritative ownership map ONCE via
@@ -153,23 +152,16 @@ func ResolveFromOwnershipMap(
 // (chaos-5084-2275-r1, P2) having stopped short of it because
 // teamresolve.go was "owned by #2298, under separate review" at the time;
 // #2298 has since merged, so that scope boundary no longer applies.
-func ResolveOwnershipThenPatterns(
+func ResolveOwnerSharesThenPatterns(
 	ctx context.Context, conn driver.Conn, organizationID string, asOf time.Time,
 	repoIDs []uuid.UUID, repoNamesByID map[string]string,
 	patternResolver numerical.RepoTeamResolver,
-) (map[string][]string, error) {
+) (map[string][]teamownership.OwnerShare, error) {
 	shares, err := teamownership.OwnerSharesByRepo(ctx, conn, organizationID, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("teamresolve: resolve authoritative repo ownership: %w", err)
 	}
-	resolved := ResolveSharesFromOwnershipMap(shares, repoIDs, repoNamesByID, patternResolver)
-	repoToTeam := make(map[string][]string, len(resolved))
-	for repoID, owners := range resolved {
-		for _, owner := range owners {
-			repoToTeam[repoID] = append(repoToTeam[repoID], owner.TeamID)
-		}
-	}
-	return repoToTeam, nil
+	return ResolveSharesFromOwnershipMap(shares, repoIDs, repoNamesByID, patternResolver), nil
 }
 
 // ResolveSharesFromOwnershipMap is ResolveFromOwnershipMap over the owner-shares

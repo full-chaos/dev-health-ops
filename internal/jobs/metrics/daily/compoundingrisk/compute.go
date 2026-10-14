@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // pythonMax reproduces CPython's two-argument builtin `max(a, b)`.
@@ -449,19 +450,23 @@ func BuildTeamRows(
 	day time.Time,
 	orgID string,
 	repoInputs []RepoInputs,
-	repoToTeam map[string][]string,
+	repoOwners map[string][]teamownership.OwnerShare,
 	computedAt time.Time,
 	weights Weights,
 	thresholds Thresholds,
 	references References,
 ) []Record {
-	byTeam := make(map[string][]Inputs, len(repoToTeam))
-	windowsByTeam := make(map[string][]*ReviewWindow, len(repoToTeam))
-	teamOrder := make([]string, 0, len(repoToTeam))
-	// Every owner of a repo, main or lesser (D5988, CHAOS-9410), reads its own value:
-	// a mean of repository scores does not add, so no share weight applies.
+	byTeam := make(map[string][]Inputs, len(repoOwners))
+	windowsByTeam := make(map[string][]*ReviewWindow, len(repoOwners))
+	sharesByTeam := make(map[string][]float64, len(repoOwners))
+	teamOrder := make([]string, 0, len(repoOwners))
+	// Every owner of a repo, main or lesser (D5988, CHAOS-9410, CHAOS-9620),
+	// gets a row. The raw inputs are the repository's own values (a mean of
+	// repository measures does not add, so a share of a p90 or a ratio is no
+	// measure); the owner's share scales the score columns below.
 	for _, ri := range repoInputs {
-		for _, teamID := range repoToTeam[ri.RepoID] {
+		for _, owner := range repoOwners[ri.RepoID] {
+			teamID := owner.TeamID
 			if teamID == "" {
 				continue
 			}
@@ -470,6 +475,7 @@ func BuildTeamRows(
 			}
 			byTeam[teamID] = append(byTeam[teamID], ri.Inputs)
 			windowsByTeam[teamID] = append(windowsByTeam[teamID], ri.ReviewWindow)
+			sharesByTeam[teamID] = append(sharesByTeam[teamID], owner.Share)
 		}
 	}
 
@@ -506,9 +512,46 @@ func BuildTeamRows(
 			// null).
 			BusFactor: MeanOrNone(busFactor),
 		}
-		out = append(out, ComputeTeam(
+		record := ComputeTeam(
 			day, teamID, orgID, teamInputs, computedAt, weights, thresholds, references,
-		).WithReviewWindow(pooledReviewWindow(windowsByTeam[teamID])))
+		).WithReviewWindow(pooledReviewWindow(windowsByTeam[teamID]))
+		out = append(out, record.scaledByShare(meanShare(sharesByTeam[teamID])))
 	}
 	return out
+}
+
+// meanShare is the mean of the owner's shares over the repositories it owns:
+// 1 for a sole owner of every repository it owns.
+func meanShare(shares []float64) float64 {
+	sum := 0.0
+	for _, share := range shares {
+		sum += share
+	}
+	return sum / float64(len(shares))
+}
+
+// scaledByShare multiplies the score columns (compounding_risk and the four
+// norms) by the owner's share (D5988, CHAOS-9620): a lesser owner's row is the
+// repository's score times its share, and the rows of one single-repository
+// team's owners sum to the repository's score. The raw inputs, the severity
+// (it names the repository's risk, not the owner's part of it) and the
+// review-window counts (unsigned integer columns, CHAOS-9601 follow-up) stay
+// the repository's own. A share of 1 changes nothing, bit for bit.
+func (record Record) scaledByShare(share float64) Record {
+	if share == 1 {
+		return record
+	}
+	scale := func(value *float64) *float64 {
+		if value == nil {
+			return nil
+		}
+		scaled := float64(*value * share)
+		return &scaled
+	}
+	record.CompoundingRisk = scale(record.CompoundingRisk)
+	record.ChurnNorm = scale(record.ChurnNorm)
+	record.ComplexityNorm = scale(record.ComplexityNorm)
+	record.OwnershipNorm = scale(record.OwnershipNorm)
+	record.ReviewNorm = scale(record.ReviewNorm)
+	return record
 }

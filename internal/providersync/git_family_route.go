@@ -93,8 +93,7 @@ func SelectGitFamilyRoute(provider, dataset string, deps GitFamilyDeps) (route G
 			return GitFamilyRoute{GitHubCommitsRouteHandler{}, sink, sink}, true
 		case "deployments":
 			sink := GitHubDeploymentsClickHouseEffects{Conn: conn, Lease: lease}
-			handler := GitHubDeploymentsRouteHandler{Holds: GitHubDeploymentStatusHoldsClickHouse{Conn: conn, Lease: lease}}
-			return GitFamilyRoute{handler, sink, sink}, true
+			return GitFamilyRoute{GitHubDeploymentsRouteHandler{}, sink, sink}, true
 		case "security":
 			sink := GitHubSecurityClickHouseEffects{Conn: conn, Lease: lease}
 			return GitFamilyRoute{GitHubSecurityRouteHandler{}, sink, sink}, true

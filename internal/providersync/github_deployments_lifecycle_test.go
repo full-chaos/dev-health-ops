@@ -449,13 +449,14 @@ func TestGitHubDeploymentsRoutePersistsRunningStatusForFlameReader(t *testing.T)
 	}
 }
 
-// TestGitHubDeploymentsRouteSkipsRemainingStatusLookupsAfterRateLimitExhaustion
-// pins the class ruling: once one deployment's statuses lookup exhausts its
-// retry budget on a rate-limited response, every remaining deployment in
-// the same sync unit skips its own statuses call outright (leaving NULLs)
-// rather than each paying the same exhausted backoff again -- and the
-// skip is reported once, with the count, not once per deployment.
-func TestGitHubDeploymentsRouteSkipsRemainingStatusLookupsAfterRateLimitExhaustion(t *testing.T) {
+// TestGitHubDeploymentsRouteOneExhaustedStatusLookupDoesNotStarveTheRestOfTheUnit
+// pins the class ruling of CHAOS-9678: one deployment's statuses lookup that
+// exhausts its retry budget on a rate-limited response leaves that row without a
+// status (marked failed, so a held status is kept), and every later deployment
+// of the unit still gets its own lookup and its status. Only
+// maxStatusRateLimitExhaustions exhausted lookups stop the rest of the unit
+// (TestGitHubDeploymentsRouteSkipsTheRestOfTheUnitOnceTheRateLimitBudgetIsSpent).
+func TestGitHubDeploymentsRouteOneExhaustedStatusLookupDoesNotStarveTheRestOfTheUnit(t *testing.T) {
 	// Not t.Parallel(): captureSlog swaps the process-global slog default,
 	// which a concurrently running captureSlog test would race.
 	log := captureSlog(t)
@@ -470,28 +471,91 @@ func TestGitHubDeploymentsRouteSkipsRemainingStatusLookupsAfterRateLimitExhausti
 	if len(batch.Effects) != 1 || len(batch.Effects[0].Rows) != 2 {
 		t.Fatalf("effects=%+v", batch.Effects)
 	}
-	var rows []deploymentRow
+	rows := map[string]deploymentRow{}
 	for _, raw := range batch.Effects[0].Rows {
 		var row deploymentRow
 		if err := json.Unmarshal(raw, &row); err != nil {
 			t.Fatal(err)
 		}
-		rows = append(rows, row)
+		rows[row.DeploymentID] = row
 	}
-	for _, row := range rows {
-		if row.StartedAt != nil || row.FinishedAt != nil {
-			t.Fatalf("row %s carries a lifecycle timestamp despite the rate-limit skip: %+v", row.DeploymentID, row)
+	// The fixture's list payload carries a state of its own, which is not the lookup's: only the failed mark matters here.
+	if failed := rows["501"]; !failed.LifecycleLookupFailed || failed.StartedAt != nil || failed.FinishedAt != nil {
+		t.Fatalf("501 (rate limited) = %+v, want a failed lookup and no lifecycle, so a held one is kept", failed)
+	}
+	if stored := rows["502"]; stored.Status == nil || *stored.Status != "success" || stored.LifecycleLookupFailed {
+		t.Fatalf("502 (after the exhausted lookup) = %+v, want its own status success and no failed lookup", stored)
+	}
+	if doer.statusesRequests != 2 {
+		t.Fatalf("statusesRequests=%d, want 2 (the second deployment's lookup is made, not skipped)", doer.statusesRequests)
+	}
+	if strings.Contains(log.String(), "github_deployments.status_lookup_rate_limited_skip") {
+		t.Fatalf("a skip was reported although the budget is not spent: %s", log.String())
+	}
+	for _, want := range []string{"github_deployments.status_lookups", "rows=2", "stored=1", "empty=0", "failed=1", "skipped=0"} {
+		if !strings.Contains(log.String(), want) {
+			t.Fatalf("the per-unit counts line lacks %q: %s", want, log.String())
 		}
-		if !row.LifecycleLookupFailed {
-			t.Fatalf("row %s is not marked LifecycleLookupFailed despite a failed/skipped statuses lookup -- the write-once carry-forward guard would never protect it", row.DeploymentID)
+	}
+}
+
+// Once maxStatusRateLimitExhaustions lookups exhausted the retry budget, every
+// remaining lookup of the unit is skipped outright (each would pay the same
+// full backoff), the rows are marked failed so held values are kept, and the
+// skip is reported once, with the count.
+func TestGitHubDeploymentsRouteSkipsTheRestOfTheUnitOnceTheRateLimitBudgetIsSpent(t *testing.T) {
+	log := captureSlog(t)
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &githubDeploymentStatusBudgetDoer{}
+	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
+	claim := nativeTestClaim("github", "deployments")
+	batch, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Effects) != 1 || len(batch.Effects[0].Rows) != 5 {
+		t.Fatalf("effects=%+v", batch.Effects)
+	}
+	for _, raw := range batch.Effects[0].Rows {
+		var row deploymentRow
+		if err := json.Unmarshal(raw, &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.Status != nil || !row.LifecycleLookupFailed {
+			t.Fatalf("row %s = %+v, want no status and a failed lookup (exhausted or skipped)", row.DeploymentID, row)
 		}
 	}
-	if doer.statusesRequests != 1 {
-		t.Fatalf("statusesRequests=%d, want exactly 1 (the second deployment's lookup must be skipped, not attempted)", doer.statusesRequests)
+	if doer.statusesRequests != maxStatusRateLimitExhaustions {
+		t.Fatalf("statusesRequests=%d, want %d: the lookups after the budget is spent are skipped, not attempted", doer.statusesRequests, maxStatusRateLimitExhaustions)
 	}
-	if !strings.Contains(log.String(), "github_deployments.status_lookup_rate_limited_skip") || !strings.Contains(log.String(), "count=1") {
-		t.Fatalf("expected a status_lookup_rate_limited_skip log line with count=1, got: %s", log.String())
+	for _, want := range []string{"github_deployments.status_lookup_rate_limited_skip", "count=2", "failed=3", "skipped=2", "stored=0"} {
+		if !strings.Contains(log.String(), want) {
+			t.Fatalf("log lacks %q: %s", want, log.String())
+		}
 	}
+}
+
+// githubDeploymentStatusBudgetDoer serves five deployments whose statuses
+// lookups are ALL rate limited; the route must stop calling after the budget.
+type githubDeploymentStatusBudgetDoer struct {
+	statusesRequests int
+}
+
+func (doer *githubDeploymentStatusBudgetDoer) Do(request *http.Request) (*http.Response, error) {
+	header := http.Header{"Content-Type": {"application/json"}}
+	respond := func(code int, body string) (*http.Response, error) {
+		return &http.Response{StatusCode: code, Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	}
+	switch {
+	case request.URL.Path == "/repos/acme/api":
+		return respond(http.StatusOK, gitHubRepositoryFixture)
+	case request.URL.Path == "/repos/acme/api/deployments":
+		return respond(http.StatusOK, `[{"id":511,"created_at":"2026-07-22T10:00:00Z"},{"id":512,"created_at":"2026-07-22T10:01:00Z"},{"id":513,"created_at":"2026-07-22T10:02:00Z"},{"id":514,"created_at":"2026-07-22T10:03:00Z"},{"id":515,"created_at":"2026-07-22T10:04:00Z"}]`)
+	case strings.HasSuffix(request.URL.Path, "/statuses"):
+		doer.statusesRequests++
+		return respond(http.StatusTooManyRequests, `{"message":"rate limited"}`)
+	}
+	return respond(http.StatusOK, `[]`)
 }
 
 type githubDeploymentStatusRateLimitedDoer struct {

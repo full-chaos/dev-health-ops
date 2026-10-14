@@ -288,7 +288,8 @@ func (handler GitHubDeploymentsRouteHandler) deploymentsWithoutStatus(ctx contex
 	}
 	ids, err := handler.Holds.DeploymentsWithoutStatus(ctx, claim.OrgID, repoID, now.Add(-deploymentStatusRetryHorizon), deploymentStatusRetryMax)
 	if err != nil {
-		slog.Warn("github_deployments.status_retry_read_failed", "org_id", claim.OrgID, "unit_id", claim.ID, "cause", err.Error())
+		failure := logging.ErrorArgs(err)
+		slog.Warn("github_deployments.status_retry_read_failed", append([]any{"org_id", claim.OrgID, "unit_id", claim.ID}, failure...)...)
 		return nil
 	}
 	set := make(map[string]struct{}, len(ids))

@@ -246,10 +246,15 @@ func dbScenarioViews(scenarios []dbScenario) []scenarioView {
 // so a payload key the dataclass does not have, or a camelCase spelling of a key it has, ends in "Missing GitHub
 // credentials". A credential saved by the web carries such keys (an `org`), and the worker already reads the row
 // through github_credentials_from_mapping (aliases applied, unknown keys ignored), so the Go verb does the same.
-// Value: the stage the Go verb must reach.
-var dbLookupNamedDivergences = map[string]string{
-	"camelCase keys are not aliased": "ok",
-	"unknown key":                    "ok",
+// Value: the stages Python answered and the Go verb must reach. The Go verb also reads the credential its
+// org's active github integration points at (the seed writes one per github credential), through the worker's
+// repository: that one reads a credential of any name, so "only a non-default name" is taken, and only an
+// ACTIVE credential, so "inactive default is still read" is refused.
+var dbLookupNamedDivergences = map[string]struct{ python, golang string }{
+	"camelCase keys are not aliased": {"exit", "ok"},
+	"unknown key":                    {"exit", "ok"},
+	"only a non-default name":        {"exit", "ok"},
+	"inactive default is still read": {"ok", "exit"},
 }
 
 // TestDBLookupsMatchFrozenPython compares the two Postgres reads of `dho sync <target>` (the first
@@ -340,13 +345,13 @@ func TestDBLookupsMatchFrozenPython(t *testing.T) {
 		wantJSON, _ := json.Marshal(want)
 		stage, _ := want["stage"].(map[string]any)
 		stages[fmt.Sprint(stage["v"])]++
-		if wantGoStage, divergent := dbLookupNamedDivergences[scenario.Name]; divergent {
+		if divergence, divergent := dbLookupNamedDivergences[scenario.Name]; divergent {
 			// The Python verb refused the payload; the Go verb takes the credential, as the worker does
 			// (CHAOS-9678). The frozen answer must still show the refusal, or the entry is stale.
 			gotStage, _ := gotRedacted["stage"].(map[string]any)
-			if fmt.Sprint(stage["v"]) != "exit" || fmt.Sprint(gotStage["v"]) != wantGoStage {
+			if fmt.Sprint(stage["v"]) != divergence.python || fmt.Sprint(gotStage["v"]) != divergence.golang {
 				mismatches++
-				t.Errorf("%s: named divergence: python stage %v, go stage %v, want python exit and go %s", scenario.Name, stage["v"], gotStage["v"], wantGoStage)
+				t.Errorf("%s: named divergence: python stage %v, go stage %v, want python %s and go %s", scenario.Name, stage["v"], gotStage["v"], divergence.python, divergence.golang)
 			}
 			continue
 		}

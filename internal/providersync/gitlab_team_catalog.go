@@ -127,14 +127,18 @@ type gitlabTeamCatalogProjectRow struct {
 	State       string     `json:"state"`
 	StateSource string     `json:"state_source"`
 	TargetDate  *time.Time `json:"target_date"`
-	URL         string     `json:"url"`
-	TeamIDs     []string   `json:"team_ids"`
-	TeamKeys    []string   `json:"team_keys"`
-	LeadID      *string    `json:"lead_id"`
-	LeadName    *string    `json:"lead_name"`
-	LeadEmail   *string    `json:"lead_email"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	LastSynced  time.Time  `json:"last_synced"`
+	// projectTargetFacts is the provenance of TargetDate; empty when this run
+	// did not read the project's milestones, and the write then keeps the
+	// target columns the key already holds.
+	projectTargetFacts
+	URL        string    `json:"url"`
+	TeamIDs    []string  `json:"team_ids"`
+	TeamKeys   []string  `json:"team_keys"`
+	LeadID     *string   `json:"lead_id"`
+	LeadName   *string   `json:"lead_name"`
+	LeadEmail  *string   `json:"lead_email"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	LastSynced time.Time `json:"last_synced"`
 }
 
 type GitLabTeamCatalogRows struct {

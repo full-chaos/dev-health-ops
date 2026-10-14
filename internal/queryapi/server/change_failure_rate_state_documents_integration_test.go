@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -167,7 +166,7 @@ func TestRegisteredDocumentsServeTheStateOfChangeFailureRate(t *testing.T) {
 				value           float64
 			}{
 				// Home serves the rate in percent, the review as a ratio.
-				{"home", registeredHomeDocument, homeWithoutTheRateSelections(registeredHomeDocument),
+				{"home", registeredHomeDocument, registeredHomeV4Document,
 					map[string]any{"orgId": tc.org, "window": map[string]any{"rangeDays": 7}}, homeDelta, tc.ratio * 100},
 				{"operatingReview", registeredOperatingReviewDocument, registeredOperatingReviewV3Document,
 					map[string]any{"orgId": tc.org, "input": map[string]any{"weekStart": "2026-08-24"}}, reviewMetric, tc.ratio},
@@ -214,10 +213,3 @@ func (noSyncRunPostgres) QueryRow(context.Context, string, ...any) pgx.Row { ret
 type noPostgresRow struct{}
 
 func (noPostgresRow) Scan(...any) error { return pgx.ErrNoRows }
-
-// homeWithoutTheRateSelections is the Home text of a client that selects none of the rate fields: the state of a
-// rate, its coverage and the change failure evidence of a delta.
-func homeWithoutTheRateSelections(document string) string {
-	const evidenceFields = "      changeFailureEvidence {\n        basis\n        deployments\n        deploymentsWithStatus\n        coverage\n        unknownReason\n        __typename\n      }\n"
-	return strings.NewReplacer("      rateState\n", "", "      rateCoverage\n", "", evidenceFields, "").Replace(document)
-}

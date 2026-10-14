@@ -88,6 +88,7 @@ type Measure string
 
 const (
 	MeasureCount                Measure = "count"
+	MeasureChurnLOC             Measure = "churn_loc"
 	MeasurePRReworkRatio        Measure = "pr_rework_ratio"
 	MeasureCycleTimeHours       Measure = "cycle_time_hours"
 	MeasureThroughput           Measure = "throughput"
@@ -269,6 +270,10 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 		switch measure {
 		case MeasureCount, MeasureThroughput:
 			return throughputExpr, nil
+		case MeasureChurnLOC:
+			// CHAOS-9695 (D5999, D6014): lines of code are a health measure of delivery (the non-investment path
+			// below), never an Investment measure: a request for it on the investment path is refused.
+			return "", newValidationError("measure", string(measure), "measure %q is not an Investment measure: lines of code are not a measure of effort", measure)
 		case MeasureCycleTimeHours:
 			return cycleTimeExpr, nil
 		default:
@@ -279,6 +284,8 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	switch measure {
 	case MeasureCount:
 		return "SUM(work_items_completed)", nil
+	case MeasureChurnLOC:
+		return "SUM(churn_loc)", nil
 	case MeasurePRReworkRatio:
 		// The ratio of the bucket's summed counts over REVIEWED pull requests
 		// (package prrework), NULL when the bucket holds none: a pull request

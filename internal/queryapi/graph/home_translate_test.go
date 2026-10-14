@@ -104,7 +104,7 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 			},
 		},
 		ReworkThemeAllocation: []home.ReworkThemeAllocation{
-			{Theme: "feature_delivery", Label: "Feature Delivery", Allocation: 10, AllocationPct: 50, PRsMerged: 3},
+			{Theme: "feature_delivery", Label: "Feature Delivery", Allocation: 10, AllocationPct: 50, PRsMerged: 3, ChurnLOC: 100},
 		},
 	}
 
@@ -141,7 +141,7 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 		t.Fatalf("ReworkThemeAllocation = %d entries, want 1", len(got.ReworkThemeAllocation))
 	}
 	a := got.ReworkThemeAllocation[0]
-	if a.Theme != "feature_delivery" || a.Label != "Feature Delivery" || a.Allocation != 10 || a.AllocationPct != 50 || a.PrsMerged != 3 {
+	if a.Theme != "feature_delivery" || a.Label != "Feature Delivery" || a.Allocation != 10 || a.AllocationPct != 50 || a.PrsMerged != 3 || a.ChurnLoc != 100 {
 		t.Errorf("ReworkThemeAllocation[0] = %+v, want the mapped ReworkThemeAllocation", a)
 	}
 }
@@ -267,7 +267,7 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheDomainResponse(t *testin
 			{Metric: "pr_rework_ratio", Label: "PR Rework Ratio", Unit: "%", RateState: &reworkState, RateCoverage: &reworkCoverage},
 		},
 		ReworkThemeAllocation: []home.ReworkThemeAllocation{
-			{Theme: "feature_delivery", Label: "Feature Delivery", Allocation: 10, AllocationPct: 50, PRsMerged: 3},
+			{Theme: "feature_delivery", Label: "Feature Delivery", Allocation: 10, AllocationPct: 50, PRsMerged: 3, ChurnLOC: 100},
 		},
 		Summary: []home.SummarySentence{
 			{ID: "s1", Text: "Throughput is up.", EvidenceLink: "/evidence/s1"},

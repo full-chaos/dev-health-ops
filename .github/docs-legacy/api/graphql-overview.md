@@ -148,7 +148,7 @@ query FullAnalytics {
       }]
       breakdowns: [{
         dimension: REPO
-        measure: COUNT
+        measure: CHURN_LOC
         dateRange: {
           startDate: "2025-01-01"
           endDate: "2025-01-31"
@@ -248,6 +248,7 @@ curl -s -X POST "http://localhost:3000/graphql?org_id=default" \
 | Measure | Description |
 |---------|-------------|
 | `COUNT` | Count of work units |
+| `CHURN_LOC` | Lines of code changed |
 | `CYCLE_TIME_HOURS` | Average cycle time in hours |
 | `THROUGHPUT` | Distinct work units completed |
 

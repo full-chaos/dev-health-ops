@@ -24,6 +24,8 @@ import (
 //   - allocation: the work of the theme in that measure (each unit counts its share of the theme,
 //     one unit counts 1 over the themes and repositories it spreads over); allocation_pct its share
 //     of the response. A unit's effort_value is not a weight.
+//   - churn_loc: the changed lines of code of the units, an explicit measure of its own (D5999),
+//     never the weight of allocation.
 //   - prs_merged: the pull requests of the units' evidence weighted by the theme share, rounded
 //     (the name is the wire's; the evidence of a unit names the pull requests behind it).
 //
@@ -92,6 +94,7 @@ func themeAllocationFromEffort(rows []investmentexplain.ThemeEffortRow) []Rework
 			Allocation:    row.Value,
 			AllocationPct: pct,
 			PRsMerged:     int64(math.Round(row.PRs)),
+			ChurnLOC:      int64(math.Round(row.ChurnLOC)),
 		})
 	}
 	return out

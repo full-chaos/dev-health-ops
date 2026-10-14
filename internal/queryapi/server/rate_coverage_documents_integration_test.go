@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -190,21 +189,21 @@ func TestRegisteredHomeDocumentsServeTheCoverageOfTheReworkRatio(t *testing.T) {
 				}
 			}
 
-			// A text that selects the state but not the coverage: the same delta, no coverage key.
-			earlier := deltas(t, tc.org, strings.Replace(currentText, "      rateCoverage\n", "", 1))["pr_rework_ratio"]
+			// The text that was current before: the same delta, no coverage key.
+			earlier := deltas(t, tc.org, registeredHomeV5Document)["pr_rework_ratio"]
 			if _, selected := earlier["rateCoverage"]; selected {
-				t.Errorf("no-coverage text: the response has a rateCoverage key the text does not select")
+				t.Errorf("V5 text: the response has a rateCoverage key the text does not select")
 			}
 			if earlier["rateState"] != delta["rateState"] || earlier["value"] != delta["value"] || earlier["hasData"] != delta["hasData"] {
-				t.Errorf("no-coverage text: rateState %v value %v hasData %v, the current text %v %v %v",
+				t.Errorf("V5 text: rateState %v value %v hasData %v, the current text %v %v %v",
 					earlier["rateState"], earlier["value"], earlier["hasData"], delta["rateState"], delta["value"], delta["hasData"])
 			}
-			// A text that selects neither key: the same value.
-			web := deltas(t, tc.org, strings.NewReplacer("      rateState\n", "", "      rateCoverage\n", "").Replace(currentText))["pr_rework_ratio"]
+			// The text the web sends today: neither key, the same value.
+			web := deltas(t, tc.org, registeredHomeV4Document)["pr_rework_ratio"]
 			_, hasState := web["rateState"]
 			_, hasCoverage := web["rateCoverage"]
 			if hasState || hasCoverage || web["value"] != delta["value"] || web["hasData"] != delta["hasData"] {
-				t.Errorf("no-rate text: rateState key %v, rateCoverage key %v, value %v hasData %v; want no key and the current text's %v %v",
+				t.Errorf("V4 text: rateState key %v, rateCoverage key %v, value %v hasData %v; want no key and the current text's %v %v",
 					hasState, hasCoverage, web["value"], web["hasData"], delta["value"], delta["hasData"])
 			}
 		})

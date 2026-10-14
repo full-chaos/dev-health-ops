@@ -50,6 +50,7 @@ type catalogMeasureEntry struct {
 
 var catalogMeasures = []catalogMeasureEntry{
 	{MeasureCount, "Count of work units"},
+	{MeasureChurnLOC, "Lines of code changed"},
 	{MeasurePRReworkRatio, "Share of PRs that required multiple review rounds"},
 	{MeasureCycleTimeHours, "Average cycle time in hours"},
 	{MeasureThroughput, "Distinct work units completed"},

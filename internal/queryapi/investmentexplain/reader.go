@@ -142,7 +142,7 @@ type BreakdownFilters struct {
 }
 
 // The measure of a read of this package: the page's own COUNT (analytics.Measure COUNT, THROUGHPUT).
-// Lines of code are not a measure of Investment, and MeasureValueSQL is the one definition of it.
+// Lines of code are not a measure of Investment (CHAOS-9695, D6014), and MeasureValueSQL is the one definition of it.
 const MeasureCount = "COUNT"
 
 // NormalizeMeasure maps a request measure to the measure of an explain mix read. THROUGHPUT is
@@ -416,15 +416,18 @@ func joinOR(conditions []string) string {
 
 // ThemeEffortRow is one theme of FetchInvestmentThemeEffort: the value of the theme in the measure the
 // filters name (BreakdownFilters.Measure; InvestmentShareMeasure for the Home tile and the Operating
-// Review), and the pull requests of the units' evidence weighted by the theme share.
+// Review), the part of the units' effort measured in changed lines of code (effort_metric churn_loc; the
+// Home tile's churn_loc line, never a weight and never an Investment measure), and the pull requests of the
+// units' evidence weighted by the theme share.
 type ThemeEffortRow struct {
-	Theme string
-	Value float64
-	PRs   float64
+	Theme    string
+	Value    float64
+	ChurnLOC float64
+	PRs      float64
 }
 
 // FetchInvestmentThemeEffort reads the Investment page's own breakdown, rolled up to the theme,
-// with the extra measure the Home tile "Investment by theme" serves (CHAOS-9195): the
+// with the two extra measures the Home tile "Investment by theme" serves (CHAOS-9195): the
 // SAME source (the latest row of each unit), the SAME scope and category clauses and the SAME
 // rule for every categorization status (a unit with insufficient evidence counts, as on the
 // Investment page); only the dating of a unit may differ (BreakdownFilters.DatedByEnd). The value
@@ -452,6 +455,7 @@ func (reader *Reader) FetchInvestmentThemeEffort(ctx context.Context, filters Br
 SELECT
     splitByChar('.', subcategory_kv.1)[1] AS theme,
     toFloat64(%[8]s) AS value,
+    toFloat64(sum(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value * %[1]s, 0))) AS churn_loc,
     toFloat64(sum(subcategory_kv.2 * %[2]s * %[1]s * length(JSONExtractArrayRaw(structural_evidence_json, 'prs')))) AS prs
 FROM %[3]s
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -472,7 +476,7 @@ ORDER BY value DESC, theme ASC
 	out := make([]ThemeEffortRow, 0, 5)
 	for rows.Next() {
 		var row ThemeEffortRow
-		if err := rows.Scan(&row.Theme, &row.Value, &row.PRs); err != nil {
+		if err := rows.Scan(&row.Theme, &row.Value, &row.ChurnLOC, &row.PRs); err != nil {
 			return nil, fmt.Errorf("scan investment theme effort row: %w", err)
 		}
 		out = append(out, row)

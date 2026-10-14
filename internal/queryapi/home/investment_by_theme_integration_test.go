@@ -76,12 +76,12 @@ func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 		order = append(order, row.Theme)
 	}
 	want := map[string]struct {
-		count float64
-		prs   int64
+		count, churn float64
+		prs          int64
 	}{
-		"feature_delivery": {0.6, 1}, // 1 unit x 0.6; 2 PRs x 0.6 = 1.2 -> 1
-		"risk":             {0.4, 1}, // 1 unit x 0.4; 2 PRs x 0.4 = 0.8 -> 1
-		"maintenance":      {1, 1},   // 1 unit
+		"feature_delivery": {0.6, 60, 1}, // 1 unit x 0.6; 100 lines x 0.6 (the explicit churn_loc line); 2 PRs x 0.6 = 1.2 -> 1
+		"risk":             {0.4, 40, 1}, // 1 unit x 0.4; 100 lines x 0.4; 2 PRs x 0.4 = 0.8 -> 1
+		"maintenance":      {1, 50, 1},   // 1 unit; 50 lines
 	}
 	if len(got) != len(want) {
 		t.Fatalf("themes = %v, want exactly %d canonical themes (no legacy key, no unit outside the window): %+v", order, len(want), resp.ReworkThemeAllocation)
@@ -89,8 +89,8 @@ func TestInvestmentByThemeIsTheCanonicalCountOfTheUnits(t *testing.T) {
 	for theme, w := range want {
 		g, ok := got[theme]
 		// The shares are Float32 in the shared read (the Investment page's own narrowing).
-		if !ok || math.Abs(g.Allocation-w.count) > 1e-3 || g.PRsMerged != w.prs {
-			t.Errorf("%s = %+v, want count %v prs %d", theme, g, w.count, w.prs)
+		if !ok || math.Abs(g.Allocation-w.count) > 1e-3 || float64(g.ChurnLOC) != w.churn || g.PRsMerged != w.prs {
+			t.Errorf("%s = %+v, want count %v churn %v prs %d", theme, g, w.count, w.churn, w.prs)
 		}
 		if g.Label == "" {
 			t.Errorf("%s has no label", theme)

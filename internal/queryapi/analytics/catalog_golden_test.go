@@ -246,7 +246,6 @@ func TestCatalogMatchesTheFrozenGolden(t *testing.T) {
 			if tc.Expected["values"] == nil {
 				delete(want, "values")
 			}
-			withoutLinesOfCodeMeasure(t, want)
 			if !reflect.DeepEqual(gotMap, want) {
 				g, _ := json.MarshalIndent(gotMap, "", " ")
 				w, _ := json.MarshalIndent(want, "", " ")
@@ -254,29 +253,6 @@ func TestCatalogMatchesTheFrozenGolden(t *testing.T) {
 			}
 		})
 	}
-}
-
-// withoutLinesOfCodeMeasure is the declared divergence of CHAOS-9695 (D5999, D6014): the recorded Python catalog lists the
-// measure churn_loc ("Lines of code changed"); the Go catalog lists no lines-of-code measure. The recorded golden
-// stays as recorded: the entry is removed from the expected measures, and it must be there, so the golden still pins
-// the measures after it.
-func withoutLinesOfCodeMeasure(t *testing.T, want map[string]any) {
-	t.Helper()
-	measures, ok := want["measures"].([]any)
-	if !ok {
-		return
-	}
-	kept := make([]any, 0, len(measures))
-	for _, entry := range measures {
-		if object, _ := entry.(map[string]any); object["name"] == "churn_loc" {
-			continue
-		}
-		kept = append(kept, entry)
-	}
-	if len(kept) != len(measures)-1 {
-		t.Fatalf("the recorded catalog lists churn_loc %d times, want once", len(measures)-len(kept))
-	}
-	want["measures"] = kept
 }
 
 func jsonNumberText(f float64) string {

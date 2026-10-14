@@ -545,59 +545,486 @@ const registeredOperatingReviewV1Document = `query OperatingReview($orgId: Strin
   }
 }`
 
-// registeredHomeDocument is the registered document for the home
-// operation: the wire form of the web app's HOME_QUERY (variables orgId,
-// filters, window), kept byte-identical in
-// testdata/wire_capture/home_captured.graphql (see that directory's
-// README for how the wire form is produced from the web repo's own
-// pinned urql). Its selection set covers the schema's own
-// type declarations (contracts/graphql/v1/schema.graphql: HomeResult,
-// Freshness, HomeFreshnessSource, Coverage, MetricDelta, SparkPoint,
-// ReworkThemeAllocation, SummarySentence, HomeTileEntry, HomeTile,
-// ConstraintCard, ConstraintEvidence, EventItem, HealthState, HomeSignal,
-// ScopeEntityRef, SignalAttribution, SignalAttributionSourceCount,
-// SignalAttributionConfidenceCount, HomeLimitingFactor, HomeDataConfidence,
-// HomeScopeDataConfidence -- every field each type declares, not a hand-picked
-// subset), formatted to match
-// this file's other entries' urql-print convention (multi-line,
-// `__typename` on every object selection). The digest of the captured
-// wire fixture must equal this constant's
-// (query_route_wire_capture_test.go's
-// TestRegisteredHomeDocument_MatchesCapturedWireFixture); the web repo's
-// graphql-wire-parity check runs the current HOME_QUERY against the
-// digest registered here. query_route_integration_test.go's
-// TestHomeRoute_ReachableOnlyWhenSwitchEnabled proves an in-process
-// request built from THIS EXACT constant reaches queryResolver.Home
-// (routing/auth gating only -- it does not assert response content),
-// and registered_home_document_schema_parity_test.go's
-// TestRegisteredHomeDocumentSelectsEveryHomeResultField is the content
-// side: it fails the moment this constant's selection set falls behind
-// what contracts/graphql/v1/schema.graphql's HomeResult (recursively)
-// declares -- the defect class where the schema grows but the registered
-// document does not (see the comment below).
-//
-// Why the selection must track the schema: growing HomeResult's SDL and
-// homeResultFromResponse's mapping to the full home payload while leaving
-// THIS constant selecting only the original 3 fields
-// (freshness/deltas/reworkThemeAllocation) would leave every new field the SDL
-// and the resolver now support (summary/tiles/constraint/events/
-// healthState/signals/limitingFactor/dataConfidence,
-// freshness.latestSuccessfulSyncAt, freshness.sources)
-// UNREACHABLE through /query: operationForDocument matches by exact
-// document digest (see that function below), so any client selecting a
-// new field got a 404 digest-miss even though queryResolver.Home mapped
-// it correctly. So this selection set is exhaustive per type.
-//
-// Two lines are NOT a capture: `rateState` in deltas (the state of a rate
-// that is a ratio of stored counts) and `rateCoverage` after it (the coverage
-// of the pull request rework ratio). The lines are here because a field no
-// registered text selects is unreachable. The web's real capture wins over this
-// text if they differ when the web selects the fields (testdata/wire_capture/README.md).
-//
-// It does not select `churnLoc` of reworkThemeAllocation (CHAOS-9695, D6014): the
-// field left the schema, so every earlier Home text, each of which selected it,
-// no longer validates and is no longer registered.
-const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+// registeredHomeV6Document is the Home text from before a signal carried its coverage
+// (CHAOS-6545: the share of a compounding-risk score's weight that was present,
+// `HomeSignal.coverage`): the V5 text plus CHAOS-9072's `rateCoverage`. It stays a legacy text
+// so every web build that does not select `coverage` remains accepted. Its fixture is
+// testdata/wire_capture/home_v6_captured.graphql.
+const registeredHomeV6Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV7Document is the Home text from before a metric and a signal carried
+// whether the request's repository filter narrowed them (CHAOS-9093: `MetricDelta.repoFilterApplied`
+// and `HomeSignal.repoFilterApplied`): the V6 text plus a signal's `coverage` (CHAOS-6545). It stays
+// a legacy text (see legacyDigestsByOperation) so every web build that does not select the field
+// remains accepted. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/home_v7_captured.graphql).
+const registeredHomeV7Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      coverage
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV8Document is the Home text from before a metric under a repository filter said
+// how it was served (CHAOS-9094: `MetricDelta.repoLinkState`, `repoLinkBasis`, `repoLinkMultiRepoItems`
+// and `repoLinkCoverage`). It stays a legacy text (see legacyDigestsByOperation) so every web build that
+// does not select the fields remains accepted. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/home_v8_captured.graphql).
+const registeredHomeV8Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      repoFilterApplied
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      coverage
+      repoFilterApplied
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV9Document is the Home text from before the answer carried why the repositories a
+// request names matched nothing (CHAOS-9098: `HomeResult.filterEmptyReason`): the V8 text plus the
+// fields that say how a metric under a repository filter was served (CHAOS-9094). It stays a legacy
+// text (see legacyDigestsByOperation) so every web build that does not select the field remains
+// accepted. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/home_v9_captured.graphql).
+const registeredHomeV9Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
   home(orgId: $orgId, filters: $filters, window: $window) {
     freshness {
       lastIngestedAt
@@ -644,12 +1071,175 @@ const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInpu
         itemsInWindow
         __typename
       }
-      changeFailureEvidence {
-        basis
-        deployments
-        deploymentsWithStatus
-        coverage
-        unknownReason
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      coverage
+      repoFilterApplied
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV10Document is the Home text from before a metric carried what its change failure rate stands on
+// (CHAOS-9630: `MetricDelta.changeFailureEvidence`): the V9 text plus `filterEmptyReason` (CHAOS-9098). It stays a
+// legacy text (see legacyDigestsByOperation) so every web build that does not select the field remains accepted.
+// Remove it with the cleanup ticket once no client sends it (testdata/wire_capture/home_v10_captured.graphql).
+const registeredHomeV10Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      repoFilterApplied
+      repoLinkState
+      repoLinkBasis {
+        native
+        explicitText
+        heuristic
+        __typename
+      }
+      repoLinkMultiRepoItems
+      repoLinkCoverage {
+        linkedItems
+        itemsInWindow
         __typename
       }
       __typename
@@ -660,6 +1250,7 @@ const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInpu
       allocation
       allocationPct
       prsMerged
+      churnLoc
       __typename
     }
     summary {
@@ -768,6 +1359,935 @@ const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInpu
       __typename
     }
     filterEmptyReason
+    __typename
+  }
+}`
+
+// registeredHomeDocument is the registered document for the home
+// operation: the wire form of the web app's HOME_QUERY (variables orgId,
+// filters, window), kept byte-identical in
+// testdata/wire_capture/home_captured.graphql (see that directory's
+// README for how the wire form is produced from the web repo's own
+// pinned urql). Its selection set covers the schema's own
+// type declarations (contracts/graphql/v1/schema.graphql: HomeResult,
+// Freshness, HomeFreshnessSource, Coverage, MetricDelta, SparkPoint,
+// ReworkThemeAllocation, SummarySentence, HomeTileEntry, HomeTile,
+// ConstraintCard, ConstraintEvidence, EventItem, HealthState, HomeSignal,
+// ScopeEntityRef, SignalAttribution, SignalAttributionSourceCount,
+// SignalAttributionConfidenceCount, HomeLimitingFactor, HomeDataConfidence,
+// HomeScopeDataConfidence -- every field each type declares, not a hand-picked
+// subset), formatted to match
+// this file's other entries' urql-print convention (multi-line,
+// `__typename` on every object selection). The digest of the captured
+// wire fixture must equal this constant's
+// (query_route_wire_capture_test.go's
+// TestRegisteredHomeDocument_MatchesCapturedWireFixture); the web repo's
+// graphql-wire-parity check runs the current HOME_QUERY against the
+// digest registered here. query_route_integration_test.go's
+// TestHomeRoute_ReachableOnlyWhenSwitchEnabled proves an in-process
+// request built from THIS EXACT constant reaches queryResolver.Home
+// (routing/auth gating only -- it does not assert response content),
+// and registered_home_document_schema_parity_test.go's
+// TestRegisteredHomeDocumentSelectsEveryHomeResultField is the content
+// side: it fails the moment this constant's selection set falls behind
+// what contracts/graphql/v1/schema.graphql's HomeResult (recursively)
+// declares -- the defect class where the schema grows but the registered
+// document does not (see the comment below).
+//
+// Why the selection must track the schema: growing HomeResult's SDL and
+// homeResultFromResponse's mapping to the full home payload while leaving
+// THIS constant selecting only the original 3 fields
+// (freshness/deltas/reworkThemeAllocation) would leave every new field the SDL
+// and the resolver now support (summary/tiles/constraint/events/
+// healthState/signals/limitingFactor/dataConfidence,
+// freshness.latestSuccessfulSyncAt, freshness.sources)
+// UNREACHABLE through /query: operationForDocument matches by exact
+// document digest (see that function below), so any client selecting a
+// new field got a 404 digest-miss even though queryResolver.Home mapped
+// it correctly. So this selection set is exhaustive per type.
+//
+// Two lines are NOT a capture: `rateState` in deltas (the state of a rate
+// that is a ratio of stored counts) and `rateCoverage` after it (the coverage
+// of the pull request rework ratio). The web selects neither yet and sends
+// the V4 text below; the lines are here because a field no registered text
+// selects is unreachable. The web's real capture wins over this text if they
+// differ when the web selects the fields (testdata/wire_capture/README.md).
+const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      repoFilterApplied
+      repoLinkState
+      repoLinkBasis {
+        native
+        explicitText
+        heuristic
+        __typename
+      }
+      repoLinkMultiRepoItems
+      repoLinkCoverage {
+        linkedItems
+        itemsInWindow
+        __typename
+      }
+      changeFailureEvidence {
+        basis
+        deployments
+        deploymentsWithStatus
+        coverage
+        unknownReason
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      coverage
+      repoFilterApplied
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    filterEmptyReason
+    __typename
+  }
+}`
+
+// registeredHomeV5Document is the Home text from before CHAOS-9072 added
+// MetricDelta.rateCoverage: the V4 text plus `rateState`. It was the current
+// registered text and no capture, so a client can have been built against it;
+// it stays a legacy text so such a client remains accepted. Its fixture is
+// testdata/wire_capture/home_v5_captured.graphql.
+const registeredHomeV5Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV4Document is the real Home text from before CHAOS-8981
+// added MetricDelta.rateState (the state of change failure rate). It stays
+// a legacy text so every web build that does not select the state remains
+// accepted; it is the text the web sends until it selects `rateState`. Its
+// captured wire form is testdata/wire_capture/home_v4_captured.graphql.
+const registeredHomeV4Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV3Document is the real Home text from before CHAOS-8102
+// added HomeSignal.attribution. It stays a legacy text so the CHAOS-8107
+// web build remains accepted while the attribution query rolls out. Its
+// captured wire form is testdata/wire_capture/home_v3_captured.graphql.
+const registeredHomeV3Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV2Document is the real Home text from before CHAOS-8107
+// added scopeDataConfidence. It stays a legacy text so the CHAOS-8169
+// web build remains accepted while the scoped-confidence query rolls out.
+// Its captured wire form is testdata/wire_capture/home_v2_captured.graphql.
+const registeredHomeV2Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV1Document is the real Home text from before CHAOS-8169
+// added the two per-window data-presence selections. It stays a legacy text
+// so deployed web builds continue to resolve while the new query rolls out.
+// Its captured wire form is testdata/wire_capture/home_v1_captured.graphql.
+const registeredHomeV1Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      spark {
+        ts
+        value
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
     __typename
   }
 }`
@@ -4564,6 +6084,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
+	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document), digestHex(registeredHomeV10Document)},
 	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
 	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},

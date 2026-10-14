@@ -565,11 +565,16 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		"coverage_nil", coverage == nil,
 	)
 
+	unit := model.SankeyValueUnitWorkUnits
+	if req.Measure == MeasureChurnLOC {
+		unit = model.SankeyValueUnitLoc
+	}
+
 	return &model.SankeyResult{
 		Nodes:    nodes,
 		Edges:    edges,
 		Coverage: coverage,
-		Unit:     model.SankeyValueUnitWorkUnits,
+		Unit:     unit,
 	}, nil
 }
 

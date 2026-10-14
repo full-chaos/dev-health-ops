@@ -208,14 +208,16 @@
       "label": "Feature Delivery",
       "allocation": 100,
       "allocation_pct": 66.66666666666666,
-      "prs_merged": 20
+      "prs_merged": 20,
+      "churn_loc": 500
     },
     {
       "theme": "maintenance",
       "label": "Maintenance / Tech Debt",
       "allocation": 50,
       "allocation_pct": 33.33333333333333,
-      "prs_merged": 10
+      "prs_merged": 10,
+      "churn_loc": 300
     }
   ],
   "summary": [

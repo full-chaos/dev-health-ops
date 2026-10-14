@@ -274,6 +274,7 @@ func TestDimensionFromInput_Invalid(t *testing.T) {
 func TestMeasureFromInput_AllValues(t *testing.T) {
 	cases := map[model.MeasureInput]Measure{
 		model.MeasureInputCount:                MeasureCount,
+		model.MeasureInputChurnLoc:             MeasureChurnLOC,
 		model.MeasureInputPrReworkRatio:        MeasurePRReworkRatio,
 		model.MeasureInputCycleTimeHours:       MeasureCycleTimeHours,
 		model.MeasureInputThroughput:           MeasureThroughput,

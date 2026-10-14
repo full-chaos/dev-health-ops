@@ -5,6 +5,7 @@ package analytics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -132,6 +133,18 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run
 	check("repository A scope (own column U1, repository row U2, 0.6 of UX)", count(repo(repoA)), 2.6)
 	check("repository B scope", count(repo(repoB)), 1.4)
 	check("units: team A + team B = the org", count(team("team-a"))+count(team("team-b")), count(nil))
+	// Lines of code are no Investment measure (CHAOS-9695, D6014): the same breakdown over the investment
+	// categorization, at org, team and repository scope, is refused as a validation error naming the measure.
+	for label, filters := range map[string]*model.FilterInput{"org": nil, "team": team("team-a"), "repository": repo(repoA)} {
+		_, err := Resolve(ctx, client, org, model.AnalyticsRequestInput{
+			Filters:    filters,
+			Breakdowns: []model.BreakdownRequestInput{{Dimension: model.DimensionInputTheme, Measure: model.MeasureInputChurnLoc, DateRange: dates, TopN: 10}},
+		})
+		var validation *ValidationError
+		if !errors.As(err, &validation) || validation.Field != "measure" {
+			t.Errorf("CHURN_LOC over the investment categorization at %s scope: error = %v, want a *ValidationError on measure", label, err)
+		}
+	}
 
 	// An org WITH a complete membership run (prod and bigboy have one): the readers keep only the units of the
 	// latest run, and the team / repository predicates still resolve inside it. U1 and U2 are members; U3 is not.

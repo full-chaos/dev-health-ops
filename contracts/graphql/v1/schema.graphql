@@ -1277,6 +1277,7 @@ type MappingCoverage {
 
 enum MeasureInput {
   COUNT
+  CHURN_LOC
   PR_REWORK_RATIO
   CYCLE_TIME_HOURS
   THROUGHPUT
@@ -1933,6 +1934,7 @@ type ReworkThemeAllocation {
   allocation: Float!
   allocationPct: Float!
   prsMerged: Int!
+  churnLoc: Int!
 }
 
 type SankeyCoverage {
@@ -1974,6 +1976,7 @@ type SankeyResult {
 
 enum SankeyValueUnit {
   WORK_UNITS
+  LOC
 }
 
 type SavedReportConnection {

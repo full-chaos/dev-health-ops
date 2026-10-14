@@ -210,7 +210,7 @@ func TestSankeyGrouped_SeededRealClickHouse_EqualsPerDimensionQueries(t *testing
 	var domain []diffCase
 	for _, useInvestment := range []bool{true, false} {
 		for _, path := range groupedSankeyPaths(dims) {
-			for _, measure := range []Measure{MeasureCount, MeasureCycleTimeHours} {
+			for _, measure := range []Measure{MeasureCount, MeasureChurnLOC} {
 				for _, lim := range limits {
 					for _, filters := range []*model.FilterInput{nil, themeFilter} {
 						domain = append(domain, diffCase{

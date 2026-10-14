@@ -49,6 +49,7 @@ enum DimensionInput.SUBCATEGORY other
 enum DimensionInput.TEAM other
 enum DimensionInput.THEME other
 enum DimensionInput.WORK_TYPE other
+enum MeasureInput.CHURN_LOC other
 enum MeasureInput.COUNT other
 enum MeasureInput.COVERAGE_BRANCH_PCT other
 enum MeasureInput.COVERAGE_DELTA_PCT other

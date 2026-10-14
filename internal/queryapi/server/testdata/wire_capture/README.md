@@ -247,6 +247,14 @@ to the query source text.
 
 # home wire-capture fixture
 
+Newest text (CHAOS-9630): `home_captured.graphql` is NOT a capture. It is
+`home_v10_captured.graphql` (the previous current text, byte-identical, kept as a
+legacy registration) plus the selection `changeFailureEvidence { basis deployments
+deploymentsWithStatus coverage unknownReason }` in `deltas` after `repoLinkCoverage`, in the
+form urql prints. The web change that selects it must put the field at that place in
+`HOME_QUERY` and run `scripts/capture-graphql-wire-fixture.ts --operation home`; if the real
+capture differs, the capture wins and this file and `registeredHomeDocument` move to it.
+
 Newest text (CHAOS-9098): `home_captured.graphql` is NOT a capture. It is
 `home_v9_captured.graphql` (the previous current text, byte-identical, kept as a
 legacy registration) plus one line, `filterEmptyReason`, in `home` after
@@ -352,6 +360,13 @@ operation's legacy text (`legacyDigestsByOperation`). Remove it with the
 cleanup ticket once no client sends it.
 
 # operatingReview wire fixture
+
+Newest text (CHAOS-9630): `operatingreview_captured.graphql` is NOT a capture. It is
+`operatingreview_v4_captured.graphql` (the previous current text, byte-identical, kept as a
+legacy registration) plus the selection `changeFailureEvidence { basis deployments
+deploymentsWithStatus coverage unknownReason }` in `metrics`, after `rateState`, in the form
+urql prints. The web change that selects it must put the field at that place in
+`OPERATING_REVIEW_QUERY`; its real wire text wins over this file if they differ.
 
 `operatingreview_captured.graphql` is the current registered text. Like
 the Home file it is NOT a capture: it is

@@ -64,7 +64,7 @@ func TestGitHubDeploymentsRouteMirrorsPythonEnrichmentAndWindow(t *testing.T) {
 	}
 	wantStartedAt := time.Date(2026, 7, 22, 9, 59, 0, 0, time.UTC)
 	wantFinishedAt := time.Date(2026, 7, 22, 10, 1, 0, 0, time.UTC)
-	if row.OrgID != claim.OrgID || row.DeploymentID != "101" || row.ReleaseRef != "v1.2.3" || row.ReleaseRefConfidence != 1 || row.PullRequestNumber == nil || *row.PullRequestNumber != 42 || row.MergedAt == nil || row.DeployedAt == nil ||
+	if row.OrgID != claim.OrgID || row.DeploymentID != "101" || row.ReleaseRef != "v1.2.3" || row.ReleaseRefConfidence != 1 || row.PullRequestNumber == nil || *row.PullRequestNumber != 42 || row.PullRequestTier != pullRequestTierExactMergeSHA || row.MergedAt == nil || row.DeployedAt == nil ||
 		row.StartedAt == nil || !row.StartedAt.Equal(wantStartedAt) || row.FinishedAt == nil || !row.FinishedAt.Equal(wantFinishedAt) {
 		t.Fatalf("row=%+v", row)
 	}
@@ -180,6 +180,7 @@ func TestDeploymentReadbackRejectsEachPersistedFieldMismatch(t *testing.T) {
 			found:  true,
 			want:   EffectConflict,
 		},
+		{name: "pull request tier", mutate: func(row *deploymentRow) { row.PullRequestTier = pullRequestTierFirstListed }, found: true, want: EffectConflict},
 		{name: "release ref", mutate: func(row *deploymentRow) { row.ReleaseRef = "other" }, found: true, want: EffectConflict},
 		{name: "release confidence", mutate: func(row *deploymentRow) { row.ReleaseRefConfidence = 0.5 }, found: true, want: EffectConflict},
 		{name: "last synced zero", mutate: func(row *deploymentRow) { row.LastSynced = time.Time{} }, found: true, want: EffectAbsent},

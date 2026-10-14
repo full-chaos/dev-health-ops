@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // goldenRecord is CompoundingRiskDailyRecord as the Python generator
@@ -598,22 +600,89 @@ func TestComputeWithNoInputHasNoScoreAndALowCoverageIsNotCapped(t *testing.T) {
 	}
 }
 
-// CHAOS-9410, D5988: a team score is a mean of repository values, which do not
-// add, so a lesser owner reads the repository's own value like the main owner
-// (no share weight) and gets its own row.
-func TestBuildTeamRowsGivesALesserOwnerARowFromTheRepositoryValue(t *testing.T) {
-	rework := 0.4
-	repoInputs := []RepoInputs{{RepoID: "repo-1", Inputs: Inputs{ReworkChurn: &rework}}}
-	repoToTeam := map[string][]string{"repo-1": {"main", "lesser"}}
-	rows := BuildTeamRows(
-		time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC), "acme", repoInputs, repoToTeam, time.Now(),
-		DefaultWeights, DefaultThresholds, DefaultReferences,
-	)
-	got := map[string]*float64{}
-	for _, row := range rows {
-		got[row.ScopeID] = row.ReworkChurn
+// CHAOS-9620, D5998: the owner's share is the WEIGHT of a repository in the
+// team's aggregate. A team's intensive inputs are the share-weighted mean over
+// its repositories; the norms, score and severity are recomputed from them with
+// the same formula (never multiplied by a share); the additive review-window
+// counts are sums of count x share.
+func TestBuildTeamRowsWeightsRepositoriesByShare(t *testing.T) {
+	day := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	f := func(v float64) *float64 { return &v }
+	repoOne := RepoInputs{RepoID: "repo-1", Inputs: Inputs{ReworkChurn: f(0.2), OwnershipGini: f(0.4), ReviewLatencyP90H: f(10)}, ReviewWindow: &ReviewWindow{MergedPRs: 10, ReviewedPRs: 5}}
+	repoTwo := RepoInputs{RepoID: "repo-2", Inputs: Inputs{ReworkChurn: f(0.6), OwnershipGini: f(0.8)}, ReviewWindow: &ReviewWindow{MergedPRs: 20, ReviewedPRs: 10}}
+	near := func(got *float64, want float64) bool { return got != nil && math.Abs(*got-want) < 1e-12 }
+
+	t.Run("repositories at shares 1.0 and 0.3 give the weighted mean", func(t *testing.T) {
+		rows := BuildTeamRows(day, "acme", []RepoInputs{repoOne, repoTwo},
+			map[string][]teamownership.OwnerShare{
+				"repo-1": {{TeamID: "team", Main: true, Share: 1}},
+				"repo-2": {{TeamID: "team", Share: 0.3}},
+			}, time.Now(), DefaultWeights, DefaultThresholds, DefaultReferences)
+		if len(rows) != 1 {
+			t.Fatalf("%d rows, want 1", len(rows))
+		}
+		row := rows[0]
+		// (0.2 x 1 + 0.6 x 0.3) / 1.3 and (0.4 x 1 + 0.8 x 0.3) / 1.3, by hand.
+		wantChurn, wantGini := (0.2+0.6*0.3)/1.3, (0.4+0.8*0.3)/1.3
+		if !near(row.ReworkChurn, wantChurn) || !near(row.OwnershipGini, wantGini) {
+			t.Errorf("weighted inputs churn %v gini %v, want %v and %v", row.ReworkChurn, row.OwnershipGini, wantChurn, wantGini)
+		}
+		// Only repo-1 carries a review latency, so the mean is over it alone.
+		if !near(row.ReviewLatencyP90H, 10) {
+			t.Errorf("review latency %v, want 10 (the one repository that has it)", row.ReviewLatencyP90H)
+		}
+		wantRecord := Compute(day, "team", "acme", Inputs{ReworkChurn: &wantChurn, OwnershipGini: &wantGini, ReviewLatencyP90H: f(10)},
+			time.Now(), DefaultWeights, DefaultThresholds, DefaultReferences)
+		if row.CompoundingRisk == nil || wantRecord.CompoundingRisk == nil || !near(row.CompoundingRisk, *wantRecord.CompoundingRisk) || row.Severity != wantRecord.Severity {
+			t.Errorf("score %v severity %q, want the same formula on the weighted inputs: %v %q", deref(row.CompoundingRisk), row.Severity, deref(wantRecord.CompoundingRisk), wantRecord.Severity)
+		}
+		// Counts: 10 x 1 + 20 x 0.3 = 16 merged, 5 x 1 + 10 x 0.3 = 8 reviewed.
+		if !near(row.MergedPRs30D, 16) || !near(row.ReviewedPRs30D, 8) || !near(row.ReviewShare30D, 0.5) {
+			t.Errorf("counts %v/%v share %v, want 16/8 and 0.5", row.MergedPRs30D, row.ReviewedPRs30D, row.ReviewShare30D)
+		}
+	})
+
+	t.Run("a team of one repository at 0.3 reads the repository's intensive values and 0.3 of its counts", func(t *testing.T) {
+		repo := Compute(day, "repo-1", "acme", repoOne.Inputs, time.Now(), DefaultWeights, DefaultThresholds, DefaultReferences)
+		rows := BuildTeamRows(day, "acme", []RepoInputs{repoOne},
+			map[string][]teamownership.OwnerShare{"repo-1": {{TeamID: "main", Main: true, Share: 0.7}, {TeamID: "lesser", Share: 0.3}}},
+			time.Now(), DefaultWeights, DefaultThresholds, DefaultReferences)
+		if len(rows) != 2 {
+			t.Fatalf("%d rows, want one per owner", len(rows))
+		}
+		for _, row := range rows {
+			share := map[string]float64{"main": 0.7, "lesser": 0.3}[row.ScopeID]
+			if row.CompoundingRisk == nil || repo.CompoundingRisk == nil || *row.CompoundingRisk != *repo.CompoundingRisk || row.Severity != repo.Severity {
+				t.Errorf("%s score %v severity %q, want the repository's own %v %q (a share never scales a score)", row.ScopeID, deref(row.CompoundingRisk), row.Severity, deref(repo.CompoundingRisk), repo.Severity)
+			}
+			if !near(row.ReworkChurn, 0.2) || !near(row.ChurnNorm, *repo.ChurnNorm) {
+				t.Errorf("%s churn %v norm %v, want the repository's own", row.ScopeID, row.ReworkChurn, row.ChurnNorm)
+			}
+			if !near(row.MergedPRs30D, 10*share) || !near(row.ReviewedPRs30D, 5*share) || !near(row.ReviewShare30D, 0.5) {
+				t.Errorf("%s counts %v/%v share %v, want %v/%v and 0.5", row.ScopeID, row.MergedPRs30D, row.ReviewedPRs30D, row.ReviewShare30D, 10*share, 5*share)
+			}
+		}
+	})
+
+	t.Run("a sole owner of every repository is unchanged", func(t *testing.T) {
+		rows := BuildTeamRows(day, "acme", []RepoInputs{repoOne, repoTwo},
+			map[string][]teamownership.OwnerShare{
+				"repo-1": {{TeamID: "team", Main: true, Share: 1}},
+				"repo-2": {{TeamID: "team", Main: true, Share: 1}},
+			}, time.Now(), DefaultWeights, DefaultThresholds, DefaultReferences)
+		plain := MeanOrNone([]*float64{repoOne.Inputs.ReworkChurn, repoTwo.Inputs.ReworkChurn})
+		if len(rows) != 1 || rows[0].ReworkChurn == nil || *rows[0].ReworkChurn != *plain {
+			t.Fatalf("rows %+v, want the plain mean %v bit for bit", rows, plain)
+		}
+		if !near(rows[0].MergedPRs30D, 30) || !near(rows[0].ReviewedPRs30D, 15) {
+			t.Errorf("counts %v/%v, want 30/15", rows[0].MergedPRs30D, rows[0].ReviewedPRs30D)
+		}
+	})
+}
+
+func deref(value *float64) any {
+	if value == nil {
+		return nil
 	}
-	if len(got) != 2 || got["main"] == nil || got["lesser"] == nil || *got["main"] != rework || *got["lesser"] != rework {
-		t.Fatalf("rework churn by team %v, want both owners at the repository's own 0.4", got)
-	}
+	return *value
 }

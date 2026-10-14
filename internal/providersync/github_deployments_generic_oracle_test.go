@@ -10,6 +10,8 @@ import (
 var oracleDeploymentsGoOnlyFields = map[string]string{
 	"org_id":      "carried from the Go claim to keep ClickHouse writes tenant-scoped",
 	"last_synced": "stamped from normalizedAt by the Go complete-route handler",
+
+	"pull_request_tier": "Go-only match tier of the pull request link (CHAOS-9610)",
 }
 
 var oracleDeploymentsNormalizedAt = time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
@@ -51,7 +53,7 @@ func buildDeploymentRowForOracle(t *testing.T, input map[string]any) deploymentR
 		t.Fatal(err)
 	}
 	if deployment.SHA != nil {
-		row.PullRequestNumber, row.MergedAt = chooseDeploymentPullRequest(pulls, *deployment.SHA)
+		row.PullRequestNumber, row.MergedAt, row.PullRequestTier = chooseDeploymentPullRequest(pulls, *deployment.SHA)
 	}
 	return row
 }

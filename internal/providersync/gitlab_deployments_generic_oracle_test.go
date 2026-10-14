@@ -16,6 +16,8 @@ var oracleGitLabDeploymentsNormalizedAt = time.Date(2026, 8, 9, 12, 0, 0, 0, tim
 var oracleGitLabDeploymentsGoOnlyFields = map[string]string{
 	"org_id":      "carried from the Go claim to keep ClickHouse writes tenant-scoped",
 	"last_synced": "stamped from normalizedAt by the Go complete-route handler",
+
+	"pull_request_tier": "Go-only match tier of the pull request link (CHAOS-9610)",
 }
 
 func decodeGitLabDeploymentOracleObject(t *testing.T, value any) map[string]any {
@@ -63,7 +65,7 @@ func buildGitLabDeploymentRowForOracle(t *testing.T, input map[string]any) deplo
 	for _, value := range mergeRequestsBySHA[stringValue(payload["sha"])] {
 		mergeRequests = append(mergeRequests, decodeGitLabDeploymentOracleObject(t, value))
 	}
-	row.PullRequestNumber, row.MergedAt = resolveGitLabDeploymentMergeRequest(mergeRequests)
+	row.PullRequestNumber, row.MergedAt, row.PullRequestTier = resolveGitLabDeploymentMergeRequest(mergeRequests)
 	return row
 }
 

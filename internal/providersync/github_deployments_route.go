@@ -80,6 +80,7 @@ type deploymentRow struct {
 	DeployedAt           *time.Time `json:"deployed_at"`
 	MergedAt             *time.Time `json:"merged_at"`
 	PullRequestNumber    *int       `json:"pull_request_number"`
+	PullRequestTier      string     `json:"pull_request_tier,omitempty"`
 	ReleaseRef           string     `json:"release_ref"`
 	ReleaseRefConfidence float64    `json:"release_ref_confidence"`
 	OrgID                string     `json:"org_id"`
@@ -203,7 +204,7 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 				slog.Warn("github_deployments.pull_request_lookup_failed", logging.ProviderIDAttr("deployment_id", row.DeploymentID), "cause", pullErr.Error())
 				row.PullRequestLookupFailed = true
 			} else {
-				row.PullRequestNumber, row.MergedAt = chooseDeploymentPullRequest(pulls, *deployment.SHA)
+				row.PullRequestNumber, row.MergedAt, row.PullRequestTier = chooseDeploymentPullRequest(pulls, *deployment.SHA)
 			}
 		}
 		switch {
@@ -246,6 +247,7 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 	if statusLookupsSkippedForRateLimit > 0 {
 		slog.Warn("github_deployments.status_lookup_rate_limited_skip", "count", statusLookupsSkippedForRateLimit, "cause", "statuses lookup rate limited; remaining deployments in this sync unit skipped")
 	}
+	logDeploymentPullRequestTiers(claim, rows)
 	effect, err := effectBatchFromValues("deployments", EffectReadbackRequired, rows)
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -422,34 +424,66 @@ func optionalString(values ...any) *string {
 func deploymentOutsideWindow(deployedAt *time.Time, claim Claim) bool {
 	return deployedAt == nil || (claim.SinceAt != nil && deployedAt.Before(claim.SinceAt.UTC())) || (claim.BeforeAt != nil && deployedAt.After(claim.BeforeAt.UTC()))
 }
-func chooseDeploymentPullRequest(pulls []gitHubPullPayload, sha string) (*int, *time.Time) {
+
+// Match tiers of a deployment's pull request link, stored beside the number.
+// An empty tier means no link (or a row written before the column existed).
+const (
+	pullRequestTierExactMergeSHA = "exact_merge_sha"
+	pullRequestTierMergedPR      = "merged_pr"
+	pullRequestTierFirstListed   = "first_listed"
+	pullRequestTierPushed        = "pushed"
+)
+
+const deploymentPullRequestTiersEvent = "providersync.deployment.pull_request_tiers"
+
+// logDeploymentPullRequestTiers emits one DEBUG line per sync run: how many
+// rows landed in each tier. Counts only; no ids or text.
+func logDeploymentPullRequestTiers(claim Claim, rows []deploymentRow) {
+	counts := map[string]int{}
+	lookupFailed := 0
+	for _, row := range rows {
+		counts[row.PullRequestTier]++
+		if row.PullRequestLookupFailed {
+			lookupFailed++
+		}
+	}
+	slog.Debug(deploymentPullRequestTiersEvent,
+		"org_id", claim.OrgID, "provider", claim.Provider, "unit_id", claim.ID, "rows", len(rows),
+		pullRequestTierExactMergeSHA, counts[pullRequestTierExactMergeSHA],
+		pullRequestTierMergedPR, counts[pullRequestTierMergedPR],
+		pullRequestTierFirstListed, counts[pullRequestTierFirstListed],
+		"no_link", counts[""], "lookup_failed", lookupFailed)
+}
+
+func chooseDeploymentPullRequest(pulls []gitHubPullPayload, sha string) (*int, *time.Time, string) {
 	var chosen *gitHubPullPayload
+	tier := ""
 	for i := range pulls {
 		if parseGitHubWorkflowTime(pulls[i].MergedAt) != nil && stringValue(pulls[i].MergeCommitSHA) == sha {
-			chosen = &pulls[i]
+			chosen, tier = &pulls[i], pullRequestTierExactMergeSHA
 			break
 		}
 	}
 	if chosen == nil {
 		for i := range pulls {
 			if parseGitHubWorkflowTime(pulls[i].MergedAt) != nil {
-				chosen = &pulls[i]
+				chosen, tier = &pulls[i], pullRequestTierMergedPR
 				break
 			}
 		}
 	}
 	if chosen == nil && len(pulls) > 0 {
-		chosen = &pulls[0]
+		chosen, tier = &pulls[0], pullRequestTierFirstListed
 	}
 	if chosen == nil {
-		return nil, nil
+		return nil, nil, ""
 	}
 	number, err := json.Number(stringValue(chosen.Number)).Int64()
 	if err != nil {
-		return nil, parseGitHubWorkflowTime(chosen.MergedAt)
+		return nil, parseGitHubWorkflowTime(chosen.MergedAt), ""
 	}
 	value := int(number)
-	return &value, parseGitHubWorkflowTime(chosen.MergedAt)
+	return &value, parseGitHubWorkflowTime(chosen.MergedAt), tier
 }
 
 func (row deploymentRow) validate(claim Claim) error {

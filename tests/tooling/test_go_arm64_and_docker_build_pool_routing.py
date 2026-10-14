@@ -298,10 +298,10 @@ def test_docker_build_depends_on_dind() -> None:
 def test_docker_build_has_a_shorter_inner_timeout() -> None:
     job = _job(DOCKER_WORKFLOW_PATH, _DOCKER_BUILD_JOB)
     job_timeout = job.get("timeout-minutes")
-    assert job_timeout == 10, (
+    assert job_timeout == 25, (
         f"{DOCKER_WORKFLOW_PATH.name}: {_DOCKER_BUILD_JOB!r}'s "
         f"timeout-minutes ({job_timeout!r}) does not match the expected "
-        "sizing (10m)"
+        "sizing (25m)"
     )
     step = _step_by_name(job, _DOCKER_BUILD_RUN_STEP)
     # This step is a `uses:` action, so the double bound is native per-step

@@ -45,6 +45,14 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
         itemsInWindow
         __typename
       }
+      changeFailureEvidence {
+        basis
+        deployments
+        deploymentsWithStatus
+        coverage
+        unknownReason
+        __typename
+      }
       __typename
     }
     reworkThemeAllocation {

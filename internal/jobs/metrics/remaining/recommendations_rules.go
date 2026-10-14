@@ -516,8 +516,9 @@ func compoundingRiskFromComposite(snapshot MetricsSnapshot, now time.Time) (*Rec
 		// A score from fewer than all four inputs names its coverage and the
 		// inputs it stands on.
 		if snapshot.CompoundingRiskCoverageKnown && snapshot.CompoundingRiskCoverage < 1 && len(snapshot.CompoundingRiskInputs) > 0 {
-			rationale += fmt.Sprintf(", computed from %.0f%% of its inputs (%s)",
-				snapshot.CompoundingRiskCoverage*100, strings.Join(snapshot.CompoundingRiskInputs, ", "))
+			percent := float64(snapshot.CompoundingRiskCoverage * 100)
+			rationale = fmt.Sprintf("%s, computed from %.0f%% of its inputs (%s)",
+				rationale, percent, strings.Join(snapshot.CompoundingRiskInputs, ", "))
 		}
 		rationale += "." + compoundingRiskDriverSentence(snapshot.CompoundingRiskDrivers)
 	}

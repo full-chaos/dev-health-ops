@@ -107,7 +107,11 @@ func newGitLabGrantServer(t *testing.T, projects []string) *gitlabGrantServer {
 			}
 			writeGitLabTeamCatalogJSON(t, w, out)
 		default:
-			t.Errorf("unexpected GitLab request %s", r.URL)
+			// The project milestones are read for the target date, which this
+			// test does not follow: the project reads as unread.
+			if !(strings.HasPrefix(r.URL.Path, "/api/v4/projects/") && strings.HasSuffix(r.URL.Path, "/milestones")) {
+				t.Errorf("unexpected GitLab request %s", r.URL)
+			}
 			http.NotFound(w, r)
 		}
 	}))

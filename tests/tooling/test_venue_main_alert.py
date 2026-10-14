@@ -56,7 +56,7 @@ if [ "$1" = "api" ]; then
 fi
 if [ "${FAKE_GH_FAIL_ISSUE_LIST:-0}" = "1" ] && [ "$1 $2" = "issue list" ]; then exit 1; fi
 case "$1 $2" in
-  "issue list") jq -r '[.issues[].number] | sort | .[]' "${fx}" ;;
+  "issue list") jq -r '[.issues[].number] | sort | .[0] // empty' "${fx}" ;;
   "issue view") jq -r --argjson n "$3" '.issues[] | select(.number == $n) | ([.body] + .comments) | join("\n")' "${fx}" ;;
   "issue create") echo "https://github.com/o/r/issues/99" ;;
   "issue comment"|"issue close"|"label create") ;;
@@ -117,20 +117,50 @@ def _issue(number: int, body: str = "", comments: list[str] | None = None) -> di
     return {"number": number, "body": body, "comments": comments or []}
 
 
-def test_red_executed_run_opens_one_labelled_issue(tmp_path):
+def _api_calls(tmp_path: Path) -> list[str]:
+    return [
+        line for line in (tmp_path / "calls.log").read_text().splitlines()
+        if line.startswith("api ")
+    ]
+
+
+def test_failed_run_opens_one_labelled_issue(tmp_path):
     proc, writes = _run(tmp_path, [(300, "failure", RED), (200, "success", GREEN)], 300)
     assert proc.returncode == 0, proc.stderr
     assert [w.split(" -R")[0] for w in writes] == ["label create venue-oracles-main-red", "issue create"]
     create = writes[1]
     assert f"--label {LABEL}" in create
     assert "actions/runs/300" in create
+    assert "concluded `failure`" in create
     assert "--title Main venue-oracles run is red" in create
 
 
-def test_red_run_with_open_issue_comments_instead_of_a_second_issue(tmp_path):
+def test_the_conclusion_alone_decides_red(tmp_path):
+    for conclusion, jobs in (
+        ("failure", GREEN),
+        ("failure", SKIPPED),
+        ("failure", PARTIAL),
+        ("timed_out", SKIPPED),
+        ("cancelled", SKIPPED),
+    ):
+        proc, writes = _run(tmp_path, [(300, conclusion, jobs)], 300)
+        assert proc.returncode == 0, proc.stderr
+        assert writes[-1].startswith("issue create"), (conclusion, writes)
+        assert f"concluded `{conclusion}`" in writes[-1]
+        assert _api_calls(tmp_path) == []
+
+
+def test_a_red_run_behind_many_skipped_runs_still_opens_the_issue(tmp_path):
+    skipped = [(1000 + i, "success", SKIPPED) for i in range(40)]
+    proc, writes = _run(tmp_path, [(1100, "failure", RED), *skipped], 1100)
+    assert proc.returncode == 0, proc.stderr
+    assert writes[-1].startswith("issue create")
+
+
+def test_failed_run_with_open_issue_comments_instead_of_a_second_issue(tmp_path):
     proc, writes = _run(
         tmp_path,
-        [(300, "failure", RED), (200, "failure", RED)],
+        [(300, "failure", RED)],
         300,
         issues=[_issue(41, body="Run https://github.com/o/r/actions/runs/200 at x")],
     )
@@ -162,26 +192,13 @@ def test_a_run_id_that_is_a_prefix_of_a_reported_id_is_still_reported(tmp_path):
     assert len(writes) == 1 and writes[0].startswith("issue comment 41 ")
 
 
-def test_lowest_numbered_issue_is_the_one_when_two_are_open(tmp_path):
-    proc, writes = _run(
-        tmp_path,
-        [(300, "failure", RED)],
-        300,
-        issues=[_issue(50), _issue(41)],
-    )
+def test_the_lowest_numbered_open_issue_is_the_one(tmp_path):
+    proc, writes = _run(tmp_path, [(300, "failure", RED)], 300, issues=[_issue(50), _issue(41)])
     assert proc.returncode == 0, proc.stderr
-    assert [w.split(" -R")[0] for w in writes] == ["issue comment 41", "issue close 50"]
-    assert "Duplicate" in writes[1] and "#41" in writes[1]
+    assert len(writes) == 1 and writes[0].startswith("issue comment 41 ")
 
 
-def test_incomplete_run_is_reported_as_not_green(tmp_path):
-    proc, writes = _run(tmp_path, [(300, "failure", PARTIAL)], 300)
-    assert proc.returncode == 0, proc.stderr
-    assert writes[-1].startswith("issue create")
-    assert "did not finish" in writes[-1]
-
-
-def test_green_executed_run_closes_the_open_issue(tmp_path):
+def test_proven_executed_green_run_closes_the_open_issue(tmp_path):
     proc, writes = _run(
         tmp_path,
         [(300, "success", GREEN), (200, "failure", RED)],
@@ -194,122 +211,56 @@ def test_green_executed_run_closes_the_open_issue(tmp_path):
     assert "actions/runs/300" in writes[0]
 
 
-def test_green_oracle_steps_on_a_failed_run_alert_and_never_close(tmp_path):
+def test_a_skipped_success_never_closes_the_issue(tmp_path):
     proc, writes = _run(
         tmp_path,
-        [(300, "failure", GREEN), (200, "failure", RED)],
+        [(300, "success", SKIPPED), (200, "failure", RED)],
         300,
         issues=[_issue(41)],
     )
     assert proc.returncode == 0, proc.stderr
-    assert len(writes) == 1 and writes[0].startswith("issue comment 41 ")
-    assert "concluded 'failure'" in writes[0]
+    assert writes == []
+    assert "stays open" in proc.stdout
 
 
-def test_green_oracle_steps_on_a_failed_run_open_the_issue_when_none_exists(tmp_path):
-    proc, writes = _run(tmp_path, [(300, "failure", GREEN)], 300)
-    assert proc.returncode == 0, proc.stderr
-    assert writes[-1].startswith("issue create")
-    assert "concluded 'failure'" in writes[-1]
-
-
-def test_every_leg_timing_out_still_alerts(tmp_path):
-    proc, writes = _run(tmp_path, [(300, "failure", SKIPPED), (200, "success", GREEN)], 300)
-    assert proc.returncode == 0, proc.stderr
-    assert writes[-1].startswith("issue create")
-    assert "actions/runs/300" in writes[-1]
-    assert "no leg executed" in writes[-1]
-
-
-def test_a_cancelled_run_is_no_signal(tmp_path):
-    proc, writes = _run(tmp_path, [(300, "cancelled", SKIPPED), (200, "success", GREEN)], 300)
+def test_a_success_that_is_not_the_newest_executed_run_closes_nothing(tmp_path):
+    proc, writes = _run(
+        tmp_path,
+        [(400, "success", GREEN), (300, "success", GREEN)],
+        300,
+        issues=[_issue(41)],
+    )
     assert proc.returncode == 0, proc.stderr
     assert writes == []
 
 
-def test_an_older_failed_run_does_not_alert_once_a_newer_executed_run_exists(tmp_path):
-    proc, writes = _run(tmp_path, [(300, "success", GREEN), (200, "failure", SKIPPED)], 200)
-    assert proc.returncode == 0, proc.stderr
-    assert writes == []
-
-
-def test_red_run_behind_many_skipped_runs_still_opens_the_issue(tmp_path):
-    skipped = [(1000 + i, "success", SKIPPED) for i in range(25)]
-    proc, writes = _run(tmp_path, [*skipped, (200, "failure", RED)], 1024)
-    assert proc.returncode == 0, proc.stderr
-    assert writes[-1].startswith("issue create")
-    assert "actions/runs/200" in writes[-1]
-
-
-def test_green_with_no_open_issue_changes_nothing(tmp_path):
+def test_success_with_no_open_issue_reads_nothing(tmp_path):
     proc, writes = _run(tmp_path, [(300, "success", GREEN)], 300)
     assert proc.returncode == 0, proc.stderr
     assert writes == []
+    assert _api_calls(tmp_path) == []
 
 
-def test_skipped_run_over_a_red_state_never_closes_the_issue(tmp_path):
-    proc, writes = _run(
-        tmp_path,
-        [(300, "success", SKIPPED), (200, "failure", RED)],
-        300,
-        issues=[_issue(41, body="Run https://github.com/o/r/actions/runs/200 at x")],
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert writes == []
-    assert "already on issue #41" in proc.stdout
-
-
-def test_skipped_run_makes_up_a_lost_red_alert_without_duplicating(tmp_path):
-    proc, writes = _run(
-        tmp_path,
-        [(300, "success", SKIPPED), (200, "failure", RED)],
-        300,
-        issues=[_issue(41, body="Run https://github.com/o/r/actions/runs/100 at x")],
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert len(writes) == 1 and writes[0].startswith("issue comment 41 ")
-    assert "actions/runs/200" in writes[0]
-
-
-def test_older_run_that_completes_late_reads_the_current_state(tmp_path):
-    proc, writes = _run(
-        tmp_path,
-        [(300, "success", GREEN), (200, "failure", RED)],
-        200,
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert writes == []
-
-
-def test_older_red_event_does_not_reopen_while_main_is_green(tmp_path):
-    proc, writes = _run(
-        tmp_path,
-        [(300, "success", GREEN), (200, "failure", RED)],
-        200,
-        issues=[_issue(41)],
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert len(writes) == 1 and writes[0].startswith("issue close 41 ")
-
-
-def test_no_executed_run_in_the_window_warns_and_changes_nothing(tmp_path):
-    proc, writes = _run(tmp_path, [(300, "success", SKIPPED)], 300)
-    assert proc.returncode == 0, proc.stderr
-    assert writes == []
-    assert "::warning" in proc.stdout
+def test_other_conclusions_do_nothing(tmp_path):
+    for conclusion in ("skipped", "neutral", "action_required", "stale"):
+        proc, writes = _run(tmp_path, [(300, conclusion, GREEN)], 300, issues=[_issue(41)])
+        assert proc.returncode == 0, proc.stderr
+        assert writes == []
 
 
 def test_a_failed_issue_read_fails_the_job(tmp_path):
-    proc, writes = _run(
-        tmp_path, [(300, "failure", RED)], 300, FAKE_GH_FAIL_ISSUE_LIST="1"
-    )
+    proc, writes = _run(tmp_path, [(300, "failure", RED)], 300, FAKE_GH_FAIL_ISSUE_LIST="1")
     assert proc.returncode != 0
     assert writes == []
 
 
-def test_a_failed_state_read_fails_the_job(tmp_path):
+def test_a_failed_state_read_fails_the_job_and_closes_nothing(tmp_path):
     proc, writes = _run(
-        tmp_path, [(300, "failure", RED)], 300, VENUE_ALERT_LAST_RUN="/nonexistent/last-run.sh"
+        tmp_path,
+        [(300, "success", GREEN)],
+        300,
+        issues=[_issue(41)],
+        VENUE_ALERT_LAST_RUN="/nonexistent/last-run.sh",
     )
     assert proc.returncode != 0
     assert writes == []
@@ -322,16 +273,11 @@ def test_dry_run_prints_the_write_and_does_not_make_it(tmp_path):
     assert "DRY-RUN: gh issue create" in proc.stdout
 
 
-def test_run_id_must_be_numeric(tmp_path):
-    proc, _ = _run(tmp_path, [(300, "failure", RED)], 300, RUN_ID="3;rm")
-    assert proc.returncode == 2
-
-
-def test_conclusion_and_sha_are_validated(tmp_path):
-    proc, _ = _run(tmp_path, [(300, "failure", RED)], 300, RUN_CONCLUSION="x;rm")
-    assert proc.returncode == 2
-    proc, _ = _run(tmp_path, [(300, "failure", RED)], 300, RUN_SHA="x;rm")
-    assert proc.returncode == 2
+def test_inputs_are_validated(tmp_path):
+    for name in ("RUN_ID", "RUN_CONCLUSION", "RUN_SHA"):
+        proc, writes = _run(tmp_path, [(300, "failure", RED)], 300, **{name: "x;rm"})
+        assert proc.returncode == 2, name
+        assert writes == []
 
 
 def _workflow() -> dict:

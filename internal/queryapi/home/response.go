@@ -22,6 +22,7 @@ package home
 import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 )
 
 // Coverage is the Home freshness coverage response. A nil field means its
@@ -119,6 +120,14 @@ type MetricDelta struct {
 	RepoLinkBasis          *RepoLinkBasis    `json:"-"`
 	RepoLinkMultiRepoItems *int              `json:"-"`
 	RepoLinkCoverage       *RepoLinkCoverage `json:"-"`
+
+	// ChangeFailureEvidence (CHAOS-9630) is what the change failure rate of the
+	// window stands on: the evidence basis, the deployments (D), the deployments
+	// with a final status (K), their coverage K / D and, with no rate, the
+	// unknown reason (changefailure.Outcome.Evidence). GraphQL only (json "-":
+	// the REST bodies are frozen). nil for every other metric; set for change
+	// failure rate whatever its state.
+	ChangeFailureEvidence *changefailure.Evidence `json:"-"`
 }
 
 // ReworkThemeAllocation is the wire shape of ReworkThemeAllocation

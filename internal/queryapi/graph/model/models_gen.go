@@ -576,6 +576,20 @@ type CatalogValueItem struct {
 	Count int    `json:"count"`
 }
 
+// What a change failure rate stands on (CHAOS-9630), from the same rule that computes the rate (CHAOS-9621): the deployments of the window and the ones with a final status say how much of the rate is stated by deployment statuses, and the basis names the evidence.
+type ChangeFailureEvidence struct {
+	// The evidence a measured rate stands on: ``status`` (no incident ties to the scope; deployments with a final status stand for the rate, so the rate is divided by K), ``incident`` (incidents tie to the scope and no deployment has a final status; divided by D) or ``both`` (incidents tie to the scope and deployments have final statuses; divided by D). A measured 0 with ``status`` is a rate measured from deployment statuses, not from incident links. Null when the rate is not measured.
+	Basis *string `json:"basis,omitempty"`
+	// D: the deployments of the window, a cancelled deployment excluded (a cancelled deployment is not a deployment for any delivery metric). 0 when none is stored.
+	Deployments int `json:"deployments"`
+	// K: the deployments of the window that have a final status (succeeded or failed). A deployment whose status is not stored, or is not final (running, queued, inactive ...), is in D and not in K.
+	DeploymentsWithStatus int `json:"deploymentsWithStatus"`
+	// K / D, from 0 to 1, not a percent. Null when the window holds no deployment.
+	Coverage *float64 `json:"coverage,omitempty"`
+	// Why there is no rate: ``not_collected`` (nothing is stored for the window), ``no_deployments_in_window`` (stored rows, and no deployment in them) or ``deployments_without_outcome`` (deployments, and neither an incident tied to the scope nor a deployment with a final status says how they went). Null when the rate is measured.
+	UnknownReason *string `json:"unknownReason,omitempty"`
+}
+
 type CloneSavedReportInput struct {
 	SourceReportID     string           `json:"sourceReportId"`
 	NewName            *string          `json:"newName,omitempty"`
@@ -1091,6 +1105,8 @@ type MetricDelta struct {
 	RepoLinkMultiRepoItems *int `json:"repoLinkMultiRepoItems,omitempty"`
 	// How much of the organization's work a repository view can see: the items in the window that have a link to any repository over all items in the window (CHAOS-9094). Null unless repoLinkState is set.
 	RepoLinkCoverage *RepoLinkCoverage `json:"repoLinkCoverage,omitempty"`
+	// What the change failure rate of the window stands on (CHAOS-9630): the evidence basis, the deployments (D), the deployments with a final status (K), their coverage K / D and, when there is no rate, why. Null for every other metric. Served for change failure rate whatever its state, so an unknown rate says which of the three reasons it has.
+	ChangeFailureEvidence *ChangeFailureEvidence `json:"changeFailureEvidence,omitempty"`
 }
 
 type MetricLineage struct {
@@ -1148,6 +1164,8 @@ type OperatingReviewMetric struct {
 	Scope OperatingReviewMetricScope `json:"scope"`
 	// Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the organization in the week) or not_applicable_no_deployments. Null when the week holds no stored counts, and for every other metric.
 	RateState *string `json:"rateState,omitempty"`
+	// What the change failure rate of the week stands on (CHAOS-9630): the evidence basis, the deployments (D), the deployments with a final status (K), their coverage K / D and, when there is no rate, why. Null for every other metric. Served for change failure rate whatever its state.
+	ChangeFailureEvidence *ChangeFailureEvidence `json:"changeFailureEvidence,omitempty"`
 }
 
 type OperatingReviewSection struct {

@@ -313,6 +313,49 @@ const registeredHotspotsV1Document = `query Hotspots($input: HotspotsInput!) {
   }
 }`
 
+// registeredOperatingReviewV4Document is the text of `operatingReview` BEFORE a metric carried what its change
+// failure rate stands on (CHAOS-9630, `changeFailureEvidence`): the text of CHAOS-8981, with `rateState`. It stays a
+// legacy text (see legacyDigestsByOperation) beside V1 to V3, so a web build still sending it keeps working. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/operatingreview_v4_captured.graphql).
+const registeredOperatingReviewV4Document = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
+  operatingReview(orgId: $orgId, input: $input) {
+    orgId
+    teamId
+    weekStart
+    priorWeekStart
+    sections {
+      key
+      title
+      changed
+      improved
+      worsened
+      metrics {
+        key
+        label
+        value
+        unit
+        hasData
+        scope
+        rateState
+        delta {
+          value
+          priorValue
+          absolute
+          percent
+          status
+          hasPriorData
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    recommendations
+    recommendationsEmptyState
+    __typename
+  }
+}`
+
 // registeredOperatingReviewDocument is CHAOS-4352 Wave 4 Lane B's
 // (CHAOS-4505) registered document for the operatingReview operation --
 // same "registered documents only" contract, same "sourced from the real
@@ -351,6 +394,14 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
         hasData
         scope
         rateState
+        changeFailureEvidence {
+          basis
+          deployments
+          deploymentsWithStatus
+          coverage
+          unknownReason
+          __typename
+        }
         delta {
           value
           priorValue
@@ -1140,6 +1191,178 @@ const registeredHomeV9Document = `query Home($orgId: String!, $filters: FilterIn
   }
 }`
 
+// registeredHomeV10Document is the Home text from before a metric carried what its change failure rate stands on
+// (CHAOS-9630: `MetricDelta.changeFailureEvidence`): the V9 text plus `filterEmptyReason` (CHAOS-9098). It stays a
+// legacy text (see legacyDigestsByOperation) so every web build that does not select the field remains accepted.
+// Remove it with the cleanup ticket once no client sends it (testdata/wire_capture/home_v10_captured.graphql).
+const registeredHomeV10Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      repoFilterApplied
+      repoLinkState
+      repoLinkBasis {
+        native
+        explicitText
+        heuristic
+        __typename
+      }
+      repoLinkMultiRepoItems
+      repoLinkCoverage {
+        linkedItems
+        itemsInWindow
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      coverage
+      repoFilterApplied
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    filterEmptyReason
+    __typename
+  }
+}`
+
 // registeredHomeDocument is the registered document for the home
 // operation: the wire form of the web app's HOME_QUERY (variables orgId,
 // filters, window), kept byte-identical in
@@ -1234,6 +1457,14 @@ const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInpu
       repoLinkCoverage {
         linkedItems
         itemsInWindow
+        __typename
+      }
+      changeFailureEvidence {
+        basis
+        deployments
+        deploymentsWithStatus
+        coverage
+        unknownReason
         __typename
       }
       __typename
@@ -5853,9 +6084,9 @@ var legacyDigestsByOperation = map[string][]string{
 	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
-	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document)},
+	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document), digestHex(registeredHomeV10Document)},
 	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
-	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document)},
+	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
 }
 

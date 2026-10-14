@@ -15,32 +15,32 @@ func TestResolveGitLabDeploymentMergeRequestRequiresMergedState(t *testing.T) {
 
 	t.Run("unmerged first, merged later picks the merged one", func(t *testing.T) {
 		t.Parallel()
-		number, mergedAt := resolveGitLabDeploymentMergeRequest([]map[string]any{
+		number, mergedAt, tier := resolveGitLabDeploymentMergeRequest([]map[string]any{
 			{"iid": "44", "state": "opened", "merged_at": ""},
 			{"iid": "45", "state": "merged", "merged_at": "2026-07-21T10:00:00Z"},
 		})
 		want := time.Date(2026, 7, 21, 10, 0, 0, 0, time.UTC)
-		if number == nil || *number != 45 || mergedAt == nil || !mergedAt.Equal(want) {
-			t.Fatalf("number=%v mergedAt=%v want number=45 mergedAt=%v", number, mergedAt, want)
+		if number == nil || *number != 45 || mergedAt == nil || !mergedAt.Equal(want) || tier != pullRequestTierMergedPR {
+			t.Fatalf("number=%v mergedAt=%v tier=%q want number=45 mergedAt=%v tier=merged_pr", number, mergedAt, tier, want)
 		}
 	})
 
 	t.Run("unmerged only stays nil", func(t *testing.T) {
 		t.Parallel()
-		number, mergedAt := resolveGitLabDeploymentMergeRequest([]map[string]any{
+		number, mergedAt, tier := resolveGitLabDeploymentMergeRequest([]map[string]any{
 			{"iid": "44", "state": "opened", "merged_at": ""},
 			{"iid": "46", "state": "closed", "merged_at": ""},
 		})
-		if number != nil || mergedAt != nil {
-			t.Fatalf("number=%v mergedAt=%v want nil, nil (no merged entry)", number, mergedAt)
+		if number != nil || mergedAt != nil || tier != "" {
+			t.Fatalf("number=%v mergedAt=%v tier=%q want nil, nil, no tier (no merged entry)", number, mergedAt, tier)
 		}
 	})
 
 	t.Run("empty list stays nil", func(t *testing.T) {
 		t.Parallel()
-		number, mergedAt := resolveGitLabDeploymentMergeRequest(nil)
-		if number != nil || mergedAt != nil {
-			t.Fatalf("number=%v mergedAt=%v want nil, nil (empty input)", number, mergedAt)
+		number, mergedAt, tier := resolveGitLabDeploymentMergeRequest(nil)
+		if number != nil || mergedAt != nil || tier != "" {
+			t.Fatalf("number=%v mergedAt=%v tier=%q want nil, nil, no tier (empty input)", number, mergedAt, tier)
 		}
 	})
 }

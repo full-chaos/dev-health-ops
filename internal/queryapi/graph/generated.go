@@ -502,6 +502,14 @@ type ComplexityRoot struct {
 		Value func(childComplexity int) int
 	}
 
+	ChangeFailureEvidence struct {
+		Basis                 func(childComplexity int) int
+		Coverage              func(childComplexity int) int
+		Deployments           func(childComplexity int) int
+		DeploymentsWithStatus func(childComplexity int) int
+		UnknownReason         func(childComplexity int) int
+	}
+
 	CognitiveLoadResult struct {
 		OrgID     func(childComplexity int) int
 		Signals   func(childComplexity int) int
@@ -877,6 +885,7 @@ type ComplexityRoot struct {
 	}
 
 	MetricDelta struct {
+		ChangeFailureEvidence  func(childComplexity int) int
 		DeltaPct               func(childComplexity int) int
 		HasData                func(childComplexity int) int
 		HasPriorData           func(childComplexity int) int
@@ -935,14 +944,15 @@ type ComplexityRoot struct {
 	}
 
 	OperatingReviewMetric struct {
-		Delta     func(childComplexity int) int
-		HasData   func(childComplexity int) int
-		Key       func(childComplexity int) int
-		Label     func(childComplexity int) int
-		RateState func(childComplexity int) int
-		Scope     func(childComplexity int) int
-		Unit      func(childComplexity int) int
-		Value     func(childComplexity int) int
+		ChangeFailureEvidence func(childComplexity int) int
+		Delta                 func(childComplexity int) int
+		HasData               func(childComplexity int) int
+		Key                   func(childComplexity int) int
+		Label                 func(childComplexity int) int
+		RateState             func(childComplexity int) int
+		Scope                 func(childComplexity int) int
+		Unit                  func(childComplexity int) int
+		Value                 func(childComplexity int) int
 	}
 
 	OperatingReviewSection struct {
@@ -3899,6 +3909,41 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.CatalogValueItem.Value(childComplexity), true
 
+	case "ChangeFailureEvidence.basis":
+		if e.complexity.ChangeFailureEvidence.Basis == nil {
+			break
+		}
+
+		return e.complexity.ChangeFailureEvidence.Basis(childComplexity), true
+
+	case "ChangeFailureEvidence.coverage":
+		if e.complexity.ChangeFailureEvidence.Coverage == nil {
+			break
+		}
+
+		return e.complexity.ChangeFailureEvidence.Coverage(childComplexity), true
+
+	case "ChangeFailureEvidence.deployments":
+		if e.complexity.ChangeFailureEvidence.Deployments == nil {
+			break
+		}
+
+		return e.complexity.ChangeFailureEvidence.Deployments(childComplexity), true
+
+	case "ChangeFailureEvidence.deploymentsWithStatus":
+		if e.complexity.ChangeFailureEvidence.DeploymentsWithStatus == nil {
+			break
+		}
+
+		return e.complexity.ChangeFailureEvidence.DeploymentsWithStatus(childComplexity), true
+
+	case "ChangeFailureEvidence.unknownReason":
+		if e.complexity.ChangeFailureEvidence.UnknownReason == nil {
+			break
+		}
+
+		return e.complexity.ChangeFailureEvidence.UnknownReason(childComplexity), true
+
 	case "CognitiveLoadResult.orgId":
 		if e.complexity.CognitiveLoadResult.OrgID == nil {
 			break
@@ -5556,6 +5601,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.MappingCoverage.WorkItems(childComplexity), true
 
+	case "MetricDelta.changeFailureEvidence":
+		if e.complexity.MetricDelta.ChangeFailureEvidence == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.ChangeFailureEvidence(childComplexity), true
+
 	case "MetricDelta.deltaPct":
 		if e.complexity.MetricDelta.DeltaPct == nil {
 			break
@@ -5860,6 +5912,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.OperatingReviewDelta.Value(childComplexity), true
+
+	case "OperatingReviewMetric.changeFailureEvidence":
+		if e.complexity.OperatingReviewMetric.ChangeFailureEvidence == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewMetric.ChangeFailureEvidence(childComplexity), true
 
 	case "OperatingReviewMetric.delta":
 		if e.complexity.OperatingReviewMetric.Delta == nil {
@@ -10758,6 +10817,34 @@ type MetricDelta {
   repoLinkMultiRepoItems: Int
   "How much of the organization's work a repository view can see: the items in the window that have a link to any repository over all items in the window (CHAOS-9094). Null unless repoLinkState is set."
   repoLinkCoverage: RepoLinkCoverage
+  "What the change failure rate of the window stands on (CHAOS-9630): the evidence basis, the deployments (D), the deployments with a final status (K), their coverage K / D and, when there is no rate, why. Null for every other metric. Served for change failure rate whatever its state, so an unknown rate says which of the three reasons it has."
+  changeFailureEvidence: ChangeFailureEvidence
+}
+
+"""
+What a change failure rate stands on (CHAOS-9630), from the same rule that computes the rate (CHAOS-9621): the deployments of the window and the ones with a final status say how much of the rate is stated by deployment statuses, and the basis names the evidence.
+"""
+type ChangeFailureEvidence {
+  """
+  The evidence a measured rate stands on: ` + "`" + `` + "`" + `status` + "`" + `` + "`" + ` (no incident ties to the scope; deployments with a final status stand for the rate, so the rate is divided by K), ` + "`" + `` + "`" + `incident` + "`" + `` + "`" + ` (incidents tie to the scope and no deployment has a final status; divided by D) or ` + "`" + `` + "`" + `both` + "`" + `` + "`" + ` (incidents tie to the scope and deployments have final statuses; divided by D). A measured 0 with ` + "`" + `` + "`" + `status` + "`" + `` + "`" + ` is a rate measured from deployment statuses, not from incident links. Null when the rate is not measured.
+  """
+  basis: String
+  """
+  D: the deployments of the window, a cancelled deployment excluded (a cancelled deployment is not a deployment for any delivery metric). 0 when none is stored.
+  """
+  deployments: Int!
+  """
+  K: the deployments of the window that have a final status (succeeded or failed). A deployment whose status is not stored, or is not final (running, queued, inactive ...), is in D and not in K.
+  """
+  deploymentsWithStatus: Int!
+  """
+  K / D, from 0 to 1, not a percent. Null when the window holds no deployment.
+  """
+  coverage: Float
+  """
+  Why there is no rate: ` + "`" + `` + "`" + `not_collected` + "`" + `` + "`" + ` (nothing is stored for the window), ` + "`" + `` + "`" + `no_deployments_in_window` + "`" + `` + "`" + ` (stored rows, and no deployment in them) or ` + "`" + `` + "`" + `deployments_without_outcome` + "`" + `` + "`" + ` (deployments, and neither an incident tied to the scope nor a deployment with a final status says how they went). Null when the rate is measured.
+  """
+  unknownReason: String
 }
 
 """Item counts of a repository view by the best provenance tier of their links (CHAOS-9094)."""
@@ -10852,6 +10939,10 @@ type OperatingReviewMetric {
   Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the organization in the week) or not_applicable_no_deployments. Null when the week holds no stored counts, and for every other metric.
   """
   rateState: String
+  """
+  What the change failure rate of the week stands on (CHAOS-9630): the evidence basis, the deployments (D), the deployments with a final status (K), their coverage K / D and, when there is no rate, why. Null for every other metric. Served for change failure rate whatever its state.
+  """
+  changeFailureEvidence: ChangeFailureEvidence
 }
 
 enum OperatingReviewMetricScope {
@@ -29574,6 +29665,217 @@ func (ec *executionContext) fieldContext_CatalogValueItem_count(_ context.Contex
 	return fc, nil
 }
 
+func (ec *executionContext) _ChangeFailureEvidence_basis(ctx context.Context, field graphql.CollectedField, obj *model.ChangeFailureEvidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ChangeFailureEvidence_basis(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Basis, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ChangeFailureEvidence_basis(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChangeFailureEvidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ChangeFailureEvidence_deployments(ctx context.Context, field graphql.CollectedField, obj *model.ChangeFailureEvidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ChangeFailureEvidence_deployments(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Deployments, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ChangeFailureEvidence_deployments(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChangeFailureEvidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ChangeFailureEvidence_deploymentsWithStatus(ctx context.Context, field graphql.CollectedField, obj *model.ChangeFailureEvidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ChangeFailureEvidence_deploymentsWithStatus(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DeploymentsWithStatus, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ChangeFailureEvidence_deploymentsWithStatus(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChangeFailureEvidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ChangeFailureEvidence_coverage(ctx context.Context, field graphql.CollectedField, obj *model.ChangeFailureEvidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ChangeFailureEvidence_coverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Coverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ChangeFailureEvidence_coverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChangeFailureEvidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ChangeFailureEvidence_unknownReason(ctx context.Context, field graphql.CollectedField, obj *model.ChangeFailureEvidence) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ChangeFailureEvidence_unknownReason(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UnknownReason, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ChangeFailureEvidence_unknownReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChangeFailureEvidence",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _CognitiveLoadResult_orgId(ctx context.Context, field graphql.CollectedField, obj *model.CognitiveLoadResult) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_CognitiveLoadResult_orgId(ctx, field)
 	if err != nil {
@@ -36734,6 +37036,8 @@ func (ec *executionContext) fieldContext_HomeResult_deltas(_ context.Context, fi
 				return ec.fieldContext_MetricDelta_repoLinkMultiRepoItems(ctx, field)
 			case "repoLinkCoverage":
 				return ec.fieldContext_MetricDelta_repoLinkCoverage(ctx, field)
+			case "changeFailureEvidence":
+				return ec.fieldContext_MetricDelta_changeFailureEvidence(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type MetricDelta", field.Name)
 		},
@@ -41003,6 +41307,59 @@ func (ec *executionContext) fieldContext_MetricDelta_repoLinkCoverage(_ context.
 	return fc, nil
 }
 
+func (ec *executionContext) _MetricDelta_changeFailureEvidence(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_changeFailureEvidence(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ChangeFailureEvidence, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.ChangeFailureEvidence)
+	fc.Result = res
+	return ec.marshalOChangeFailureEvidence2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐChangeFailureEvidence(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_changeFailureEvidence(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "basis":
+				return ec.fieldContext_ChangeFailureEvidence_basis(ctx, field)
+			case "deployments":
+				return ec.fieldContext_ChangeFailureEvidence_deployments(ctx, field)
+			case "deploymentsWithStatus":
+				return ec.fieldContext_ChangeFailureEvidence_deploymentsWithStatus(ctx, field)
+			case "coverage":
+				return ec.fieldContext_ChangeFailureEvidence_coverage(ctx, field)
+			case "unknownReason":
+				return ec.fieldContext_ChangeFailureEvidence_unknownReason(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ChangeFailureEvidence", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _MetricLineage_metricId(ctx context.Context, field graphql.CollectedField, obj *model.MetricLineage) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_MetricLineage_metricId(ctx, field)
 	if err != nil {
@@ -42645,6 +43002,59 @@ func (ec *executionContext) fieldContext_OperatingReviewMetric_rateState(_ conte
 	return fc, nil
 }
 
+func (ec *executionContext) _OperatingReviewMetric_changeFailureEvidence(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewMetric_changeFailureEvidence(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ChangeFailureEvidence, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.ChangeFailureEvidence)
+	fc.Result = res
+	return ec.marshalOChangeFailureEvidence2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐChangeFailureEvidence(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewMetric_changeFailureEvidence(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "basis":
+				return ec.fieldContext_ChangeFailureEvidence_basis(ctx, field)
+			case "deployments":
+				return ec.fieldContext_ChangeFailureEvidence_deployments(ctx, field)
+			case "deploymentsWithStatus":
+				return ec.fieldContext_ChangeFailureEvidence_deploymentsWithStatus(ctx, field)
+			case "coverage":
+				return ec.fieldContext_ChangeFailureEvidence_coverage(ctx, field)
+			case "unknownReason":
+				return ec.fieldContext_ChangeFailureEvidence_unknownReason(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ChangeFailureEvidence", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _OperatingReviewSection_key(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewSection) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_OperatingReviewSection_key(ctx, field)
 	if err != nil {
@@ -42788,6 +43198,8 @@ func (ec *executionContext) fieldContext_OperatingReviewSection_metrics(_ contex
 				return ec.fieldContext_OperatingReviewMetric_scope(ctx, field)
 			case "rateState":
 				return ec.fieldContext_OperatingReviewMetric_rateState(ctx, field)
+			case "changeFailureEvidence":
+				return ec.fieldContext_OperatingReviewMetric_changeFailureEvidence(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type OperatingReviewMetric", field.Name)
 		},
@@ -70757,6 +71169,56 @@ func (ec *executionContext) _CatalogValueItem(ctx context.Context, sel ast.Selec
 	return out
 }
 
+var changeFailureEvidenceImplementors = []string{"ChangeFailureEvidence"}
+
+func (ec *executionContext) _ChangeFailureEvidence(ctx context.Context, sel ast.SelectionSet, obj *model.ChangeFailureEvidence) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, changeFailureEvidenceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ChangeFailureEvidence")
+		case "basis":
+			out.Values[i] = ec._ChangeFailureEvidence_basis(ctx, field, obj)
+		case "deployments":
+			out.Values[i] = ec._ChangeFailureEvidence_deployments(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "deploymentsWithStatus":
+			out.Values[i] = ec._ChangeFailureEvidence_deploymentsWithStatus(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "coverage":
+			out.Values[i] = ec._ChangeFailureEvidence_coverage(ctx, field, obj)
+		case "unknownReason":
+			out.Values[i] = ec._ChangeFailureEvidence_unknownReason(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var cognitiveLoadResultImplementors = []string{"CognitiveLoadResult"}
 
 func (ec *executionContext) _CognitiveLoadResult(ctx context.Context, sel ast.SelectionSet, obj *model.CognitiveLoadResult) graphql.Marshaler {
@@ -73414,6 +73876,8 @@ func (ec *executionContext) _MetricDelta(ctx context.Context, sel ast.SelectionS
 			out.Values[i] = ec._MetricDelta_repoLinkMultiRepoItems(ctx, field, obj)
 		case "repoLinkCoverage":
 			out.Values[i] = ec._MetricDelta_repoLinkCoverage(ctx, field, obj)
+		case "changeFailureEvidence":
+			out.Values[i] = ec._MetricDelta_changeFailureEvidence(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -73780,6 +74244,8 @@ func (ec *executionContext) _OperatingReviewMetric(ctx context.Context, sel ast.
 			}
 		case "rateState":
 			out.Values[i] = ec._OperatingReviewMetric_rateState(ctx, field, obj)
+		case "changeFailureEvidence":
+			out.Values[i] = ec._OperatingReviewMetric_changeFailureEvidence(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -85504,6 +85970,13 @@ func (ec *executionContext) marshalOCatalogValueItem2ᚕgithubᚗcomᚋfullᚑch
 	}
 
 	return ret
+}
+
+func (ec *executionContext) marshalOChangeFailureEvidence2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐChangeFailureEvidence(ctx context.Context, sel ast.SelectionSet, v *model.ChangeFailureEvidence) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ChangeFailureEvidence(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOCompoundingRiskFilterInput2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐCompoundingRiskFilterInput(ctx context.Context, v any) (*model.CompoundingRiskFilterInput, error) {

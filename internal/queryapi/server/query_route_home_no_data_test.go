@@ -21,14 +21,29 @@ func TestHomeCurrentAndLegacyDocumentsCarryTheirOwnSelections(t *testing.T) {
 			t.Fatal("a pre-CHAOS-8102 legacy Home document selects attribution")
 		}
 	}
-	// CHAOS-9098: the current text is the V9 text plus exactly the answer's filterEmptyReason, the last selection
+	// CHAOS-9630: the current text is the V10 text plus exactly the change failure evidence of a delta, after its
+	// repoLinkCoverage; no legacy text asks for it.
+	evidenceFields := "      changeFailureEvidence {\n        basis\n        deployments\n        deploymentsWithStatus\n        coverage\n        unknownReason\n        __typename\n      }\n"
+	if strings.Count(registeredHomeDocument, "changeFailureEvidence") != 1 || strings.Count(registeredHomeDocument, evidenceFields) != 1 {
+		t.Fatal("current Home document must select changeFailureEvidence and its five fields exactly once")
+	}
+	if strings.Count(registeredHomeDocument, "        itemsInWindow\n        __typename\n      }\n"+evidenceFields+"      __typename\n    }") != 1 {
+		t.Fatal("current Home document must select changeFailureEvidence right after a delta's repoLinkCoverage, last in the delta")
+	}
+	if without := strings.Replace(registeredHomeDocument, evidenceFields, "", 1); without != registeredHomeV10Document {
+		t.Fatalf("the current Home document less the changeFailureEvidence selection is not the V10 text:\n%s", without)
+	}
+	if strings.Contains(registeredHomeV10Document, "changeFailureEvidence") {
+		t.Fatal("the V10 Home document selects changeFailureEvidence; it must be the text from before")
+	}
+	// CHAOS-9098: the V10 text is the V9 text plus exactly the answer's filterEmptyReason, the last selection
 	// of home, after scopeDataConfidence; no older text asks for it.
 	emptyReasonLine := "    filterEmptyReason\n"
-	if strings.Count(registeredHomeDocument, "filterEmptyReason") != 1 || strings.Count(registeredHomeDocument, emptyReasonLine+"    __typename\n  }\n}") != 1 {
-		t.Fatal("current Home document must select filterEmptyReason exactly once, last in home")
+	if strings.Count(registeredHomeV10Document, "filterEmptyReason") != 1 || strings.Count(registeredHomeV10Document, emptyReasonLine+"    __typename\n  }\n}") != 1 {
+		t.Fatal("V10 Home document must select filterEmptyReason exactly once, last in home")
 	}
-	if without := strings.Replace(registeredHomeDocument, emptyReasonLine, "", 1); without != registeredHomeV9Document {
-		t.Fatalf("the current Home document less the filterEmptyReason selection is not the V9 text:\n%s", without)
+	if without := strings.Replace(registeredHomeV10Document, emptyReasonLine, "", 1); without != registeredHomeV9Document {
+		t.Fatalf("the V10 Home document less the filterEmptyReason selection is not the V9 text:\n%s", without)
 	}
 	if strings.Contains(registeredHomeV9Document, "filterEmptyReason") {
 		t.Fatal("the V9 Home document selects filterEmptyReason; it must be the text from before")
@@ -124,6 +139,7 @@ func TestHomeCurrentAndLegacyDocumentsCarryTheirOwnSelections(t *testing.T) {
 	}
 	documents := map[string]string{
 		"current": registeredHomeDocument,
+		"V10":     registeredHomeV10Document,
 		"V9":      registeredHomeV9Document,
 		"V8":      registeredHomeV8Document,
 		"V7":      registeredHomeV7Document,
@@ -146,8 +162,8 @@ func TestHomeCurrentAndLegacyDocumentsCarryTheirOwnSelections(t *testing.T) {
 
 func TestHomeCurrentAndLegacyTextsResolveToHome(t *testing.T) {
 	legacy := legacyDigestsByOperation["home"]
-	if len(legacy) != 9 || legacy[0] != digestHex(registeredHomeV1Document) || legacy[1] != digestHex(registeredHomeV2Document) || legacy[2] != digestHex(registeredHomeV3Document) || legacy[3] != digestHex(registeredHomeV4Document) || legacy[4] != digestHex(registeredHomeV5Document) || legacy[5] != digestHex(registeredHomeV6Document) || legacy[6] != digestHex(registeredHomeV7Document) || legacy[7] != digestHex(registeredHomeV8Document) || legacy[8] != digestHex(registeredHomeV9Document) {
-		t.Fatalf("legacyDigestsByOperation[home] = %v, want the V1 to V9 document digests", legacy)
+	if len(legacy) != 10 || legacy[0] != digestHex(registeredHomeV1Document) || legacy[1] != digestHex(registeredHomeV2Document) || legacy[2] != digestHex(registeredHomeV3Document) || legacy[3] != digestHex(registeredHomeV4Document) || legacy[4] != digestHex(registeredHomeV5Document) || legacy[5] != digestHex(registeredHomeV6Document) || legacy[6] != digestHex(registeredHomeV7Document) || legacy[7] != digestHex(registeredHomeV8Document) || legacy[8] != digestHex(registeredHomeV9Document) || legacy[9] != digestHex(registeredHomeV10Document) {
+		t.Fatalf("legacyDigestsByOperation[home] = %v, want the V1 to V10 document digests", legacy)
 	}
 	byDigest, err := buildOperationByDigest(
 		map[string]string{"home": digestHex(registeredHomeDocument)},
@@ -156,7 +172,7 @@ func TestHomeCurrentAndLegacyTextsResolveToHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"home_captured.graphql", "home_v9_captured.graphql", "home_v8_captured.graphql", "home_v7_captured.graphql", "home_v6_captured.graphql", "home_v5_captured.graphql", "home_v4_captured.graphql", "home_v3_captured.graphql", "home_v2_captured.graphql", "home_v1_captured.graphql"} {
+	for _, name := range []string{"home_captured.graphql", "home_v10_captured.graphql", "home_v9_captured.graphql", "home_v8_captured.graphql", "home_v7_captured.graphql", "home_v6_captured.graphql", "home_v5_captured.graphql", "home_v4_captured.graphql", "home_v3_captured.graphql", "home_v2_captured.graphql", "home_v1_captured.graphql"} {
 		text, err := os.ReadFile("testdata/wire_capture/" + name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)

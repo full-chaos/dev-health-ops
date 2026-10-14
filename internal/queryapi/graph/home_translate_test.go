@@ -24,6 +24,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
@@ -642,5 +643,31 @@ func TestHomeResultFromResponse_MapsTheFilterEmptyReason(t *testing.T) {
 	}
 	if got := homeResultFromResponse(&home.Response{}); got.FilterEmptyReason != nil {
 		t.Errorf("filterEmptyReason = %q, want null", *got.FilterEmptyReason)
+	}
+}
+
+// CHAOS-9630: the change failure evidence of a delta is GraphQL only (json "-"
+// on the domain type, so the leaf-path oracle above cannot hold it). Every
+// field goes through by value, and a delta without evidence serves none.
+func TestHomeResultFromResponse_MapsTheChangeFailureEvidence(t *testing.T) {
+	basis, reason := "status", "deployments_without_outcome"
+	resp := &home.Response{Deltas: []home.MetricDelta{
+		{Metric: "throughput"},
+		{Metric: "change_failure_rate", ChangeFailureEvidence: &changefailure.Evidence{Basis: &basis, Deployments: 9, StatusKnown: 6, Coverage: floatPtr(6.0 / 9.0)}},
+		{Metric: "change_failure_rate", ChangeFailureEvidence: &changefailure.Evidence{Deployments: 3, UnknownReason: &reason, Coverage: floatPtr(0)}},
+	}}
+	got := homeResultFromResponse(resp).Deltas
+	if len(got) != 3 || got[0].ChangeFailureEvidence != nil {
+		t.Fatalf("deltas = %+v, want 3 and none for throughput", got)
+	}
+	status := got[1].ChangeFailureEvidence
+	if status == nil || status.Basis == nil || *status.Basis != "status" || status.Deployments != 9 || status.DeploymentsWithStatus != 6 ||
+		status.Coverage == nil || *status.Coverage != 6.0/9.0 || status.UnknownReason != nil {
+		t.Errorf("measured evidence = %+v, want status, D 9, K 6, coverage 6/9, no reason", status)
+	}
+	unknown := got[2].ChangeFailureEvidence
+	if unknown == nil || unknown.Basis != nil || unknown.Deployments != 3 || unknown.DeploymentsWithStatus != 0 ||
+		unknown.Coverage == nil || *unknown.Coverage != 0 || unknown.UnknownReason == nil || *unknown.UnknownReason != "deployments_without_outcome" {
+		t.Errorf("unknown evidence = %+v, want no basis, D 3, K 0, coverage 0, deployments_without_outcome", unknown)
 	}
 }

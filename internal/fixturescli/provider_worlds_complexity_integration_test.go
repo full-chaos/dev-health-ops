@@ -5,6 +5,7 @@ package fixturescli
 import (
 	"context"
 	"encoding/json"
+	"path"
 	"path/filepath"
 	"testing"
 	"time"
@@ -41,18 +42,20 @@ func runRepoComplexity(ctx context.Context, t *testing.T, conn driver.Conn, worl
 	if err != nil {
 		t.Fatalf("complexity: %v", err)
 	}
-	rows, err := conn.Query(ctx, `SELECT r.id, c.loc_total, c.cyclomatic_total, c.cyclomatic_per_kloc, c.high_complexity_functions, c.very_high_complexity_functions
+	rows, err := conn.Query(ctx, `SELECT r.id, r.repo, c.loc_total, c.cyclomatic_total, c.cyclomatic_per_kloc, c.high_complexity_functions, c.very_high_complexity_functions
 		FROM repos AS r LEFT JOIN (SELECT * FROM repo_complexity_daily WHERE org_id = ? AND day = toDate(?)) AS c ON c.repo_id = r.id
 		WHERE r.org_id = ? ORDER BY r.id`, world.OrgID, asOf, world.OrgID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	measured := map[uuid.UUID]demoComplexityDay{}
+	repoNames := map[uuid.UUID]string{}
 	var repoIDs []uuid.UUID
 	for rows.Next() {
 		var repoID uuid.UUID
+		var repoName string
 		day := demoComplexityDay{Day: asOf}
-		if err := rows.Scan(&repoID, &day.LOCTotal, &day.CyclomaticTotal, &day.CyclomaticPerKLOC, &day.HighComplexityFunctions, &day.VeryHighComplexityFunc); err != nil {
+		if err := rows.Scan(&repoID, &repoName, &day.LOCTotal, &day.CyclomaticTotal, &day.CyclomaticPerKLOC, &day.HighComplexityFunctions, &day.VeryHighComplexityFunc); err != nil {
 			t.Fatal(err)
 		}
 		if day.LOCTotal == 0 {
@@ -60,6 +63,7 @@ func runRepoComplexity(ctx context.Context, t *testing.T, conn driver.Conn, worl
 		}
 		repoIDs = append(repoIDs, repoID)
 		measured[repoID] = day
+		repoNames[repoID] = repoName
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -76,7 +80,7 @@ func runRepoComplexity(ctx context.Context, t *testing.T, conn driver.Conn, worl
 		t.Fatal(err)
 	}
 	for _, repoID := range repoIDs {
-		for _, row := range demoRepoComplexity(repoID.String(), measured[repoID], demoDepthDays-1) {
+		for _, row := range demoRepoComplexity(path.Base(repoNames[repoID]), measured[repoID], demoDepthDays-1) {
 			day, err := time.Parse(time.DateOnly, row.Day)
 			if err != nil {
 				t.Fatal(err)

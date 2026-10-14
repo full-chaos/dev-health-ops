@@ -25,7 +25,7 @@ func orgStdinVerbs() map[string][]string {
 			"--family", "repo_user_commit", "--review-evidence", "testing"},
 		"providersync retire-jira-project-as-team": {"providersync", "retire-jira-project-as-team"},
 		"providersync carry-team-ids":              {"providersync", "carry-team-ids"},
-		"providersync compact-ownership-intervals": {"providersync", "compact-ownership-intervals", "--apply"},
+		"providersync compact-ownership-intervals": {"providersync", "compact-ownership-intervals", "--apply", "--workers-paused"},
 	}
 }
 

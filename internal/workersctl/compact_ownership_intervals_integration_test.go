@@ -109,18 +109,20 @@ func TestCompactOwnershipIntervalsVerbIsDryByDefault(t *testing.T) {
 	run(0, 0, "--dry-run")
 	run(2, 0, "--apply", "--dry-run")
 	run(2, 0, "--apply")
+	// Without the pause statement the audited write is refused after its audit row, and nothing is written.
+	run(1, 1, append([]string{"--apply", "--quiet-seconds", "0"}, auditFlags()...)...)
 	run(2, 0, "--batch-size", "0")
 	run(2, 0, "--all-orgs")
 	if rowCount() != 4 {
 		t.Fatal("a refused request wrote rows")
 	}
 
-	applied, _ := run(0, 1, append([]string{"--apply"}, auditFlags()...)...)
+	applied, _ := run(0, 1, append([]string{"--apply", "--workers-paused", "--quiet-seconds", "0"}, auditFlags()...)...)
 	result := applied["compact_ownership_intervals"]
 	if !result.Apply || result.Tables[0].Totals.RunsMerged != 1 || result.Tables[0].Totals.ClosedAfter != 1 || rowCount() != 1 {
 		t.Fatalf("apply: %+v rows %d", result, rowCount())
 	}
-	second, _ := run(0, 1, append([]string{"--apply"}, auditFlags()...)...)
+	second, _ := run(0, 1, append([]string{"--apply", "--workers-paused", "--quiet-seconds", "0"}, auditFlags()...)...)
 	if again := second["compact_ownership_intervals"].Tables[0].Totals; again.RunsMerged != 0 || again.BackupRows != 0 {
 		t.Fatalf("second apply: %+v", again)
 	}
@@ -129,7 +131,7 @@ func TestCompactOwnershipIntervalsVerbIsDryByDefault(t *testing.T) {
 	if got := restored["restore_ownership_compaction"].Tables[0].Totals.RowsMerged; got != 4 || rowCount() != 1 {
 		t.Fatalf("restore dry run counts %d, rows %d", got, rowCount())
 	}
-	run(0, 1, append([]string{"--restore-run", result.RunID, "--apply"}, auditFlags()...)...)
+	run(0, 1, append([]string{"--restore-run", result.RunID, "--apply", "--workers-paused", "--quiet-seconds", "0"}, auditFlags()...)...)
 	if rowCount() != 4 {
 		t.Fatalf("rows after the restore: %d", rowCount())
 	}
@@ -341,8 +343,8 @@ func TestCompactOwnershipIntervalsVerbOnTheExportedFixture(t *testing.T) {
 		return stdout.String(), stderr.String()
 	}
 	dry, _ := run("--all-orgs")
-	applied, _ := run(append([]string{"--all-orgs", "--apply"}, auditFlags()...)...)
-	second, _ := run(append([]string{"--all-orgs", "--apply"}, auditFlags()...)...)
+	applied, _ := run(append([]string{"--all-orgs", "--apply", "--workers-paused", "--quiet-seconds", "0"}, auditFlags()...)...)
+	second, _ := run(append([]string{"--all-orgs", "--apply", "--workers-paused", "--quiet-seconds", "0"}, auditFlags()...)...)
 	after := writeOwnershipTSV(t, ctx, conn, dir, "fixture-after")
 	for name, body := range map[string]string{"verb-dry-run.json": dry, "verb-apply.json": applied, "verb-second-apply.json": second} {
 		if err := os.WriteFile(dir+"/"+name, []byte(body), 0o644); err != nil {

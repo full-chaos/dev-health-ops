@@ -1706,11 +1706,13 @@ it will rewrite or drop into `<table>_compaction_bak` (created if missing) and
 checks the copy is not empty and has the expected row count. A key that a sync
 wrote between the plan and the insert is skipped and counted
 (`runs_changed_during_run`). `--restore-run <run_id> --apply` puts the rows of a
-run back from the backup table: the FINAL rows are restored with an `updated_at` above the current version, a key whose folded row a sync has rewritten since the run is left as the sync made it (`rows_changed_since_the_run`, never half restored), and a row the run never touched (a sync's append with a new `valid_from`, the open row, a kept tombstone) is never changed by a restore, an unknown run id is refused,
+run back from the backup table: the FINAL rows are restored with an `updated_at` above the current version, a logical key (provider, repository or project, team, source) that a sync wrote since the run started, that is, any current row of it stamped after the run's start, is left whole as the sync made it (`rows_changed_since_the_run`; the tool's own rows carry near-history stamps), an unknown run id is refused,
 the superseded stale physical versions (which no FINAL reader sees) are not restored, and the backup of a project row keeps the original `last_synced` (a restored or merged row gets a fresh server stamp). The tool never drops the backup table: it stays
 until the next pin readback after the step and is dropped on the word of the GWC
 lead. In production the step runs inside a roll window (minutes :10-:33 or
 :46-:55 of the hour, between the hourly syncs), with the workers running.
+
+**Pause the workers first.** No per-organization lease exists that the tool could take (the sync leases are per sync unit), so a write, `--apply` or `--restore-run ... --apply`, is refused unless `--workers-paused` is given: the operator's statement that the sync workers that write ownership rows are paused for the organization. As the data side of that pause, the write is also refused (`ownership_compaction_writes_active`) while a row of the organization's two ownership tables was written within `--quiet-seconds` (default 60; 0 turns the check off) by the server clock; a run with nothing to do is not stopped by it. A dry run needs neither.
 
 `--org-stdin` (one organization on stdin, rules of
 [`metrics daily-start`](#metrics-daily-start-chaos-5055)) or `--all-orgs`
@@ -1731,7 +1733,7 @@ kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-inter
 kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-intervals \
   --all-orgs
 kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-intervals \
-  --all-orgs --apply --reason <code> --correlation-id <id>
+  --all-orgs --apply --workers-paused --reason <code> --correlation-id <id>
 ```
 
 #### `providersync retire-jira-project-as-team` (CHAOS-8888)

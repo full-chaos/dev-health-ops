@@ -1804,8 +1804,10 @@ func dispatchProvidersyncCompactOwnershipIntervals(
 	apply := flags.Bool("apply", false, "write: merge the runs and delete the rows they fold. EXCEPTION to the house pattern (the sibling verbs write unless --dry-run is given): this verb deletes rows, so it is dry unless --apply is given")
 	dryRun := flags.Bool("dry-run", false, "the default, accepted for the habit of the other verbs; refused together with --apply")
 	restoreRun := flags.String("restore-run", "", "put the rows of this earlier run back from its backup table (with --apply; without it, counts only)")
+	workersPaused := flags.Bool("workers-paused", false, "required with --apply: the statement that the sync workers that write ownership rows are paused for the organization (no per-organization lease exists for the tool to take)")
+	quietSeconds := flags.Int("quiet-seconds", 60, "with --apply: refuse while a row of the organization's ownership tables was written within this many seconds (0 turns the check off)")
 	mutation := addMutationFlags(flags)
-	if flags.Parse(args) != nil || flags.NArg() != 0 || *orgStdin == *allOrgs || (*apply && *dryRun) || *batchSize < 1 || !mutation.valid(!*apply) {
+	if flags.Parse(args) != nil || flags.NArg() != 0 || *orgStdin == *allOrgs || (*apply && *dryRun) || *batchSize < 1 || *quietSeconds < 0 || !mutation.valid(!*apply) {
 		return writeError(stderr, "invalid_request")
 	}
 	org, scope := "", "*"
@@ -1816,11 +1818,15 @@ func dispatchProvidersyncCompactOwnershipIntervals(
 		}
 		scope = org
 	}
-	options := providersync.OwnershipCompactionOptions{AllOrgs: *allOrgs, Table: *table, BatchSize: *batchSize, Apply: *apply}
+	options := providersync.OwnershipCompactionOptions{AllOrgs: *allOrgs, Table: *table, BatchSize: *batchSize, Apply: *apply,
+		WorkersPaused: *workersPaused, QuietSeconds: *quietSeconds}
 	if org != "" {
 		options.Orgs = []string{org}
 	}
 	perform := func(ctx context.Context) int {
+		if *apply && !*workersPaused {
+			return writeError(stderr, "ownership_compaction_workers_not_paused")
+		}
 		if runtime.lookup == nil {
 			return writeError(stderr, "operator_backend_unavailable")
 		}
@@ -1868,6 +1874,10 @@ func ownershipCompactionErrorCode(err error) string {
 		return "ownership_compaction_readback_failed"
 	case errors.Is(err, providersync.ErrOwnershipCompactionMutation):
 		return "ownership_compaction_mutation_failed"
+	case errors.Is(err, providersync.ErrOwnershipCompactionNotPaused):
+		return "ownership_compaction_workers_not_paused"
+	case errors.Is(err, providersync.ErrOwnershipCompactionWritesActive):
+		return "ownership_compaction_writes_active"
 	case errors.Is(err, providersync.ErrOwnershipCompactionTable):
 		return "ownership_compaction_table_unexpected"
 	default:

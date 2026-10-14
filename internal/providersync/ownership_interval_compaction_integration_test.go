@@ -330,7 +330,7 @@ func (f cmpFixture) assertSameAnswers(org string, instants []time.Time, before m
 }
 
 func cmpOptions(org string) OwnershipCompactionOptions {
-	return OwnershipCompactionOptions{Orgs: []string{org}, Apply: true, BatchSize: 3}
+	return OwnershipCompactionOptions{Orgs: []string{org}, Apply: true, WorkersPaused: true, BatchSize: 3}
 }
 
 func cmpTable(t *testing.T, outcome OwnershipCompactionOutcome, table string) OwnershipCompactionOrg {
@@ -645,6 +645,11 @@ func TestCompactOwnershipIntervalsKeepsEveryOwnerAnswer(t *testing.T) {
 	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership WHERE org_id = ? AND repo_full_name = 'acme/api' AND team_id = ? AND valid_from IN (?, ?, ?)",
 		f.orgA, cmpTeam1, cmpDay(1), cmpDay(2), cmpDay(3)); got != 0 {
 		t.Fatalf("%d physical rows of a merged run remain (a stale version would resurrect through FINAL)", got)
+	}
+	// The same for the project table: the folded rows of proj-1 (valid_from days 1..4) are gone, every version.
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_project_ownership WHERE org_id = ? AND project_id = 'proj-1' AND team_id = ? AND valid_from IN (?, ?, ?, ?)",
+		f.orgA, cmpTeam1, cmpDay(1), cmpDay(2), cmpDay(3), cmpDay(4)); got != 0 {
+		t.Fatalf("%d physical project rows of a merged run remain", got)
 	}
 	// The merged row keeps the first valid_from and the last valid_to.
 	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = 'acme/api' AND team_id = ? AND valid_from = ? AND valid_to = ?",
@@ -971,9 +976,10 @@ func TestCompactOwnershipIntervalsDeleteSparesASameStampSyncWrite(t *testing.T) 
 	}
 }
 
-// Restore re-inserts the rows the run folded and nothing else: a row the run never touched, such as a sync's
-// append with a NEW valid_from, stays exactly as it is.
-func TestCompactOwnershipIntervalsRestoreKeepsARowASyncAppended(t *testing.T) {
+// A logical key that a sync wrote since the run started (any current row of it stamped after the run's start,
+// including an append with a NEW valid_from) is left whole as the sync made it: nothing of it is restored. A key no
+// sync touched is restored in full.
+func TestCompactOwnershipIntervalsRestoreLeavesWholeAKeyASyncAppendedTo(t *testing.T) {
 	f := newCmpFixture(t)
 	opts := cmpOptions(f.orgA)
 	opts.Table = OwnershipCompactionRepoTable
@@ -981,21 +987,75 @@ func TestCompactOwnershipIntervalsRestoreKeepsARowASyncAppended(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A sync appends a row with a NEW valid_from to the logical key acme/api / gh:alpha, stamped after the run.
 	appended := cmpRepoRow(cmpTeam1, cmpRepo1, "acme/api", 200, 201, 0.7, 1)
-	appended.UpdatedAt = cmpDay(9000)
+	appended.UpdatedAt = time.Now().UTC().Add(time.Minute).Truncate(time.Millisecond)
 	f.insert(repoSpec(), f.orgA, []ownershipIntervalRow{appended})
 	opts.Apply = true
-	if _, err := RestoreOwnershipCompaction(f.ctx, f.conn, outcome.RunID, opts); err != nil {
+	restored, err := RestoreOwnershipCompaction(f.ctx, f.conn, outcome.RunID, opts)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = 'acme/api' AND team_id = ? AND valid_from = ? AND share = 0.7 AND updated_at = ?",
-		f.orgA, cmpTeam1, cmpDay(200), cmpDay(9000)); got != 1 {
-		t.Fatalf("the sync's appended row was changed by the restore: %d", got)
+	if repo := cmpTable(t, restored, OwnershipCompactionRepoTable); repo.RowsChangedSinceTheRun == 0 {
+		t.Fatalf("the skipped rows must be reported: %+v", repo)
 	}
-	// And the folded rows are back: the run A rows 01-01..01-02 exist again.
+	// The sync's key is untouched by the restore: its first merged row is still merged.
 	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = 'acme/api' AND team_id = ? AND valid_from = ? AND valid_to = ?",
-		f.orgA, cmpTeam1, cmpDay(0), cmpDay(1)); got != 1 {
-		t.Fatalf("the folded rows were not restored: %d", got)
+		f.orgA, cmpTeam1, cmpDay(0), cmpDay(5)); got != 1 {
+		t.Fatalf("the sync's key was partly restored: %d", got)
+	}
+	// A key no sync touched (acme/web, gh:alpha) is restored in full: its two folded rows are back.
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = 'acme/web' AND team_id = ? AND valid_to > valid_from AND valid_from IN (?, ?)",
+		f.orgA, cmpTeam1, cmpDay(4), cmpDay(6)); got == 0 {
+		t.Fatal("the untouched key was not restored")
+	}
+}
+
+// A write is refused without the statement that the workers are paused, and while the organization was written
+// within the quiet window; a read-only run is never refused, and a run with nothing to do is not stopped by activity.
+func TestCompactOwnershipIntervalsRefusesAWriteWhileWorkersMayBeWriting(t *testing.T) {
+	f := newCmpFixture(t)
+	physical := f.physicalCount(OwnershipCompactionRepoTable, f.orgA)
+	opts := cmpOptions(f.orgA)
+	opts.Table = OwnershipCompactionRepoTable
+	opts.WorkersPaused = false
+	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, opts); !errors.Is(err, ErrOwnershipCompactionNotPaused) {
+		t.Fatalf("an apply without the pause statement: %v", err)
+	}
+	opts.Apply = false
+	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, opts); err != nil {
+		t.Fatalf("a dry run needs no statement: %v", err)
+	}
+	// A row written just now by a "sync".
+	live := cmpRepoRow(cmpTeam3, cmpRepo6, "acme/live", 0, -1, 1, 1)
+	live.UpdatedAt = time.Now().UTC().Truncate(time.Millisecond)
+	f.insert(repoSpec(), f.orgA, []ownershipIntervalRow{live})
+	opts.Apply, opts.WorkersPaused, opts.QuietSeconds = true, true, 3600
+	physical = f.physicalCount(OwnershipCompactionRepoTable, f.orgA)
+	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, opts); !errors.Is(err, ErrOwnershipCompactionWritesActive) {
+		t.Fatalf("an apply while a row was just written: %v", err)
+	}
+	if f.physicalCount(OwnershipCompactionRepoTable, f.orgA) != physical || cmpMutations(t, f.ctx, f.conn, OwnershipCompactionRepoTable) != 0 {
+		t.Fatal("a refused write changed the table")
+	}
+	if got := countRows(t, f.ctx, f.conn, "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name LIKE '%compaction_bak'"); got != 0 {
+		t.Fatalf("a refused write created a backup table (%d)", got)
+	}
+	opts.QuietSeconds = 0
+	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, opts); err != nil {
+		t.Fatalf("the check turned off: %v", err)
+	}
+	// Nothing left to do: activity does not stop a run that would write nothing.
+	opts.QuietSeconds = 3600
+	again := cmpRepoRow(cmpTeam3, cmpRepo6, "acme/live2", 0, -1, 1, 1)
+	again.UpdatedAt = time.Now().UTC().Truncate(time.Millisecond)
+	f.insert(repoSpec(), f.orgA, []ownershipIntervalRow{again})
+	outcome, err := CompactOwnershipIntervals(f.ctx, f.conn, opts)
+	if err != nil {
+		t.Fatalf("a run with nothing to do: %v", err)
+	}
+	if repo := cmpTable(t, outcome, OwnershipCompactionRepoTable); repo.RunsMerged != 0 {
+		t.Fatalf("setup: the second run must have nothing to do: %+v", repo)
 	}
 }
 
@@ -1136,7 +1196,7 @@ func TestCompactOwnershipIntervalsKeyExtendedByASyncKeepsTheAnswers(t *testing.T
 
 func TestCompactOwnershipIntervalsAllOrgsAndTableFilter(t *testing.T) {
 	f := newCmpFixture(t)
-	opts := OwnershipCompactionOptions{AllOrgs: true, Apply: true, Table: OwnershipCompactionProjectTable}
+	opts := OwnershipCompactionOptions{AllOrgs: true, Apply: true, WorkersPaused: true, Table: OwnershipCompactionProjectTable}
 	outcome, err := CompactOwnershipIntervals(f.ctx, f.conn, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -1209,7 +1269,7 @@ func TestCompactOwnershipIntervalsAtProdSize(t *testing.T) {
 	}
 	t.Logf("dry run: %s", time.Since(started))
 	started = time.Now()
-	outcome, err := CompactOwnershipIntervals(ctx, conn, OwnershipCompactionOptions{AllOrgs: true, Apply: true})
+	outcome, err := CompactOwnershipIntervals(ctx, conn, OwnershipCompactionOptions{AllOrgs: true, Apply: true, WorkersPaused: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1232,7 +1292,7 @@ func TestCompactOwnershipIntervalsAtProdSize(t *testing.T) {
 		t.Logf("production readers: %d instants of one organization identical before and after", len(probeInstants[org]))
 	}
 	started = time.Now()
-	again, err := CompactOwnershipIntervals(ctx, conn, OwnershipCompactionOptions{AllOrgs: true, Apply: true})
+	again, err := CompactOwnershipIntervals(ctx, conn, OwnershipCompactionOptions{AllOrgs: true, Apply: true, WorkersPaused: true})
 	if err != nil {
 		t.Fatal(err)
 	}

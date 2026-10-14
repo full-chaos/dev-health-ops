@@ -102,6 +102,14 @@ type OwnershipCompactionOptions struct {
 	BatchSize int
 	// Apply writes. Without it the tool reads and reports only.
 	Apply bool
+	// WorkersPaused is the operator's statement that the sync workers that write ownership rows are paused for
+	// the organization. There is no per-organization lease the tool could take (the leases are per sync unit),
+	// so a write (apply or restore) is refused without it.
+	WorkersPaused bool
+	// QuietSeconds, when above zero, refuses a write while any row of either ownership table of the
+	// organization was written (updated_at or last_synced) within that many seconds by the server clock: the data
+	// side of the pause. Zero turns the check off.
+	QuietSeconds int
 	// Now is the clock of the backup stamp and the run id (default time.Now).
 	Now func() time.Time
 
@@ -825,6 +833,13 @@ func pickSpecs(table string) ([]ownershipCompactionSpec, error) {
 	return nil, fmt.Errorf("ownership compaction: unknown table")
 }
 
+// ErrOwnershipCompactionNotPaused means a write was asked for without the statement that the workers are paused.
+var ErrOwnershipCompactionNotPaused = errors.New("ownership compaction: a write needs the statement that the sync workers are paused")
+
+// ErrOwnershipCompactionWritesActive means a row of the organization was written within the quiet window: the
+// workers are not paused, or the pause has not taken effect yet. Nothing is written.
+var ErrOwnershipCompactionWritesActive = errors.New("ownership compaction: the ownership tables of the organization were written within the quiet window")
+
 // ErrOwnershipCompactionTable means the table is not the table the tool was
 // written for. The tool reads the sort key and the version column from the
 // server and refuses anything else, before it reads a row.
@@ -839,6 +854,26 @@ func verifyOwnershipTableShape(ctx context.Context, conn driver.Conn, spec owner
 	wantKey := "org_id, provider, " + spec.natural + ", team_id, source, valid_from"
 	if !strings.HasPrefix(engineFull, "ReplacingMergeTree(updated_at)") || sortingKey != wantKey {
 		return ErrOwnershipCompactionTable
+	}
+	return nil
+}
+
+// requireQuietOrg refuses when either ownership table of the organization holds a row written within the window.
+func requireQuietOrg(ctx context.Context, conn driver.Conn, orgID string, quietSeconds int) error {
+	if quietSeconds <= 0 {
+		return nil
+	}
+	for _, query := range []string{
+		fmt.Sprintf("SELECT count() FROM team_repo_ownership WHERE org_id = {org_id:String} AND updated_at > now64(3, 'UTC') - toIntervalSecond(%d) AND updated_at <= now64(3, 'UTC') + toIntervalSecond(60)", quietSeconds),
+		fmt.Sprintf("SELECT count() FROM team_project_ownership WHERE org_id = {org_id:String} AND (last_synced > now64(3, 'UTC') - toIntervalSecond(%d) OR (updated_at > now64(3, 'UTC') - toIntervalSecond(%d) AND updated_at <= now64(3, 'UTC') + toIntervalSecond(60)))", quietSeconds, quietSeconds),
+	} {
+		var recent uint64
+		if err := conn.QueryRow(ctx, query, clickhouse.Named("org_id", orgID)).Scan(&recent); err != nil {
+			return fmt.Errorf("%w: %v", ErrOwnershipCompactionWritesActive, err)
+		}
+		if recent != 0 {
+			return fmt.Errorf("%w: %d rows", ErrOwnershipCompactionWritesActive, recent)
+		}
 	}
 	return nil
 }
@@ -879,6 +914,9 @@ func CompactOwnershipIntervals(ctx context.Context, conn driver.Conn, opts Owner
 	specs, err := pickSpecs(opts.Table)
 	if err != nil {
 		return OwnershipCompactionOutcome{}, err
+	}
+	if opts.Apply && !opts.WorkersPaused {
+		return OwnershipCompactionOutcome{}, ErrOwnershipCompactionNotPaused
 	}
 	outcome := OwnershipCompactionOutcome{RunID: newCompactionRunID(opts.Now()), Apply: opts.Apply}
 	for _, spec := range specs {
@@ -941,6 +979,9 @@ func compactOwnershipOrg(
 		return finish(nil)
 	}
 
+	if err := requireQuietOrg(ctx, conn, orgID, opts.QuietSeconds); err != nil {
+		return finish(err)
+	}
 	backup := plan.backupRows()
 	if err := writeOwnershipBackup(ctx, conn, spec, orgID, runID, opts.Now(), backup); err != nil {
 		return finish(err)
@@ -1220,6 +1261,16 @@ func deleteOwnershipTombstones(
 		}
 		versionArgs := []any{clickhouse.Named("org_id", orgID), clickhouse.Named("versions", versions)}
 		versionScope := "org_id = {org_id:String} AND source = '" + spec.source + "' AND " + fmt.Sprintf(ownershipCompactionVersionsMatch, spec.natural, spec.contentHash())
+		// The predicate must match the rows that were read: a predicate that matches nothing would "delete" nothing
+		// and the check after it would pass. A version a background merge removed in between may be missing, so
+		// fewer is allowed, none is not.
+		var matched uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM "+spec.table+" WHERE "+versionScope, versionArgs...).Scan(&matched); err != nil {
+			return survivors, fmt.Errorf("%w: match check: %v", ErrOwnershipCompactionMutation, err)
+		}
+		if matched == 0 || matched > uint64(len(versions)) {
+			return survivors, fmt.Errorf("%w: the delete predicate matches %d rows of the %d versions read", ErrOwnershipCompactionMutation, matched, len(versions))
+		}
 		mutationCtx, cancel := context.WithTimeout(ctx, ownershipCompactionMutationTimeout)
 		syncCtx := clickhouse.Context(mutationCtx, clickhouse.WithSettings(clickhouse.Settings{"mutations_sync": "2"}))
 		err = conn.Exec(syncCtx, "ALTER TABLE "+spec.table+" DELETE WHERE "+versionScope, versionArgs...)
@@ -1258,12 +1309,13 @@ const ownershipCompactionVersionsMatch = `(provider, %s, team_id, toString(sourc
 	`SELECT unhex(parts[1]), unhex(parts[2]), unhex(parts[3]), unhex(parts[4]), fromUnixTimestamp64Milli(toInt64(parts[5]), 'UTC'), toInt64(parts[6]), toUInt64(parts[7]) ` +
 	`FROM (SELECT splitByChar(':', p) AS parts FROM (SELECT arrayJoin({versions:Array(String)}) AS p)))`
 
-// contentHash is the hash of the columns that are neither the key nor the stamp.
+// contentHash is the hash of the columns that are neither the key nor the stamp. A Nullable argument makes
+// cityHash64 return NULL, which never matches: every nullable column goes in as text with a marker for NULL.
 func (spec ownershipCompactionSpec) contentHash() string {
 	if spec.repo {
-		return "cityHash64(valid_to, updated_at, repo_id, toString(match_type), is_primary, specificity, priority, share)"
+		return "cityHash64(ifNull(toString(valid_to), '~'), toString(updated_at), ifNull(toString(repo_id), '~'), toString(match_type), is_primary, specificity, priority, ifNull(toString(share), '~'))"
 	}
-	return "cityHash64(valid_to, updated_at, project_key, is_primary, specificity, priority, last_synced)"
+	return "cityHash64(ifNull(toString(valid_to), '~'), toString(updated_at), ifNull(project_key, '~'), is_primary, specificity, priority, toString(last_synced))"
 }
 
 // physicalVersionTokens lists every physical row (not FINAL) of the keys as key token + updated_at.
@@ -1309,6 +1361,9 @@ func RestoreOwnershipCompaction(ctx context.Context, conn driver.Conn, runID str
 	if err != nil {
 		return OwnershipCompactionOutcome{}, err
 	}
+	if opts.Apply && !opts.WorkersPaused {
+		return OwnershipCompactionOutcome{}, ErrOwnershipCompactionNotPaused
+	}
 	outcome := OwnershipCompactionOutcome{RunID: runID, Apply: opts.Apply, Restore: true}
 	saved, err := backupRowsOfRun(ctx, conn, specs, runID)
 	if err != nil {
@@ -1340,7 +1395,7 @@ func RestoreOwnershipCompaction(ctx context.Context, conn driver.Conn, runID str
 			rows.Close()
 		}
 		for index, orgID := range orgs {
-			report, err := restoreOwnershipOrg(ctx, conn, spec, orgID, index+1, runID, opts.Apply)
+			report, err := restoreOwnershipOrg(ctx, conn, spec, orgID, index+1, runID, opts)
 			table.Orgs = append(table.Orgs, report)
 			table.Totals.add(report)
 			if err != nil {
@@ -1377,8 +1432,9 @@ func backupRowsOfRun(ctx context.Context, conn driver.Conn, specs []ownershipCom
 }
 
 func restoreOwnershipOrg(
-	ctx context.Context, conn driver.Conn, spec ownershipCompactionSpec, orgID string, ordinal int, runID string, apply bool,
+	ctx context.Context, conn driver.Conn, spec ownershipCompactionSpec, orgID string, ordinal int, runID string, opts OwnershipCompactionOptions,
 ) (OwnershipCompactionOrg, error) {
+	apply := opts.Apply
 	started := time.Now()
 	report := OwnershipCompactionOrg{OrgOrdinal: ordinal}
 	rows, err := conn.Query(ctx, "SELECT "+spec.selectColumns()+" FROM "+spec.backupTable()+" WHERE run_id = {run_id:String} AND org_id = {org_id:String}",
@@ -1407,18 +1463,23 @@ func restoreOwnershipOrg(
 	for _, row := range current {
 		now[row.sortKey()] = row
 	}
-	// A key that a sync has written since the run (a current version newer than the newest version the run
-	// saw, plus the 1 ms the run itself adds) is left as the sync made it: restoring over it would put the old
-	// shape back on top of the newer fact. All rows of that key are skipped, so the key is never half restored.
-	newest := map[string]time.Time{}
+	// A logical key that a sync has written since the run started is left as the sync made it, whole: restoring
+	// part of it would mix the old shape with the newer fact. The tool's own rows carry near-history stamps (a
+	// merged row takes the newest stamp of its run), so a current row of the key stamped AFTER the run started was
+	// written by a sync. A write stamped before the run started cannot win a key it replaces, and is not seen here.
+	var runStart time.Time
+	if err := conn.QueryRow(ctx, "SELECT max(backed_up_at) FROM "+spec.backupTable()+" WHERE run_id = {run_id:String} AND org_id = {org_id:String}",
+		clickhouse.Named("run_id", runID), clickhouse.Named("org_id", orgID)).Scan(&runStart); err != nil {
+		return report, fmt.Errorf("%w: run start: %v", ErrOwnershipCompactionBackup, err)
+	}
+	runStart = runStart.UTC()
+	savedKeys := map[string]bool{}
 	for _, row := range saved {
-		if row.UpdatedAt.After(newest[row.keyOf()]) {
-			newest[row.keyOf()] = row.UpdatedAt
-		}
+		savedKeys[row.keyOf()] = true
 	}
 	changedSince := map[string]bool{}
-	for _, row := range saved {
-		if have, ok := now[row.sortKey()]; ok && have.UpdatedAt.After(newest[row.keyOf()].Add(time.Millisecond)) {
+	for _, row := range current {
+		if savedKeys[row.keyOf()] && row.UpdatedAt.After(runStart) {
 			changedSince[row.keyOf()] = true
 		}
 	}
@@ -1439,6 +1500,9 @@ func restoreOwnershipOrg(
 	report.BackupRows = len(saved)
 	report.RowsMerged = len(restore)
 	if apply && len(restore) > 0 {
+		if err := requireQuietOrg(ctx, conn, orgID, opts.QuietSeconds); err != nil {
+			return report, err
+		}
 		batch, err := conn.PrepareBatch(ctx, "INSERT INTO "+spec.table+" ("+spec.columns()+")")
 		if err != nil {
 			return report, err

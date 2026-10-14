@@ -149,14 +149,30 @@ ON CONFLICT (installation_id) DO NOTHING`, installationID, now); err != nil {
 		return err
 	}
 
+	var deactivated int64
 	if action == "deleted" && orgID != nil && *orgID != "" {
-		if _, err := tx.Exec(ctx, `
+		tag, err := tx.Exec(ctx, `
 UPDATE public.integration_credentials
 SET is_active = false, updated_at = $1
-WHERE org_id = $2 AND provider = 'github' AND name = 'github-app'`, now, *orgID); err != nil {
+WHERE org_id = $2 AND provider = 'github' AND name = 'github-app'`, now, *orgID)
+		if err != nil {
+			slog.ErrorContext(ctx, "github app installation deleted: credential deactivation failed",
+				"installation_id", installationID, "error_class", fmt.Sprintf("%T", err))
 			return err
 		}
+		deactivated = tag.RowsAffected()
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		if action == "deleted" && orgID != nil && *orgID != "" {
+			slog.ErrorContext(ctx, "github app installation deleted: commit failed, credential unchanged",
+				"installation_id", installationID, "rows_pending", deactivated, "error_class", fmt.Sprintf("%T", err))
+		}
+		return err
+	}
+	if action == "deleted" && orgID != nil && *orgID != "" {
+		slog.InfoContext(ctx, "github app installation deleted: credential deactivated",
+			"installation_id", installationID, "rows_deactivated", deactivated)
+	}
+	return nil
 }

@@ -4,29 +4,62 @@ package fixturescli
 
 import (
 	"context"
+	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// runRepoComplexity writes the daily complexity history of every repository the world's syncs wrote
-// (demoRepoComplexity), for the days the world's syncs read. The world holds no file text, so there is no
-// complexity job to run over it.
+// runRepoComplexity runs the complexity job (remaining.ComplexityExecutor, the executor the worker runs)
+// over the files the world's files syncs wrote, for the as-of day, on the world's clock: it writes
+// file_complexity_snapshots and that day's repo_complexity_daily row of every repository. The days before
+// it hold no tree to scan (the world syncs the files once), so each repository's earlier history is
+// seeded to drift into the level the job measured (demoRepoComplexity).
 func runRepoComplexity(ctx context.Context, t *testing.T, conn driver.Conn, world providerWorld) {
 	t.Helper()
-	rows, err := conn.Query(ctx, "SELECT id FROM repos WHERE org_id = ? ORDER BY id", world.OrgID)
+	root, err := moduleroot.Root()
 	if err != nil {
 		t.Fatal(err)
 	}
+	executor, err := remaining.NewComplexityExecutorAt(ctx, conn, filepath.Join(root, "src", "dev_health_ops", "config", "complexity.yaml"), nil,
+		func() time.Time { return world.FrozenAt })
+	if err != nil {
+		t.Fatal(err)
+	}
+	asOf := world.FrozenAt.UTC().Format(time.DateOnly)
+	scope, err := json.Marshal(map[string]any{"version": 1, "day": asOf, "backfill_days": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := executor.ComputePartition(ctx, remaining.Run{OrganizationID: world.OrgID}, remaining.Partition{ID: "demo-complexity", Scope: scope})
+	if err != nil {
+		t.Fatalf("complexity: %v", err)
+	}
+	rows, err := conn.Query(ctx, `SELECT r.id, c.loc_total, c.cyclomatic_total, c.cyclomatic_per_kloc, c.high_complexity_functions, c.very_high_complexity_functions
+		FROM repos AS r LEFT JOIN (SELECT * FROM repo_complexity_daily WHERE org_id = ? AND day = toDate(?)) AS c ON c.repo_id = r.id
+		WHERE r.org_id = ? ORDER BY r.id`, world.OrgID, asOf, world.OrgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	measured := map[uuid.UUID]demoComplexityDay{}
 	var repoIDs []uuid.UUID
 	for rows.Next() {
 		var repoID uuid.UUID
-		if err := rows.Scan(&repoID); err != nil {
+		day := demoComplexityDay{Day: asOf}
+		if err := rows.Scan(&repoID, &day.LOCTotal, &day.CyclomaticTotal, &day.CyclomaticPerKLOC, &day.HighComplexityFunctions, &day.VeryHighComplexityFunc); err != nil {
 			t.Fatal(err)
 		}
+		if day.LOCTotal == 0 {
+			t.Fatalf("complexity: repository %s has no measured complexity on %s: its files sync wrote no Go file", repoID, asOf)
+		}
 		repoIDs = append(repoIDs, repoID)
+		measured[repoID] = day
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -43,8 +76,8 @@ func runRepoComplexity(ctx context.Context, t *testing.T, conn driver.Conn, worl
 		t.Fatal(err)
 	}
 	for _, repoID := range repoIDs {
-		for _, row := range demoRepoComplexity(repoID.String(), world.FrozenAt, demoDepthDays) {
-			day, err := time.Parse("2006-01-02", row.Day)
+		for _, row := range demoRepoComplexity(repoID.String(), measured[repoID], demoDepthDays-1) {
+			day, err := time.Parse(time.DateOnly, row.Day)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -57,7 +90,7 @@ func runRepoComplexity(ctx context.Context, t *testing.T, conn driver.Conn, worl
 	if err := batch.Send(); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("repo_complexity: %d repositories, %d days each", len(repoIDs), demoDepthDays)
+	t.Logf("complexity: %+v; repo_complexity: %d repositories, %d seeded days each before %s", outcome, len(repoIDs), demoDepthDays-1, asOf)
 }
 
 // TestDemoWorldHoldsComplexityHistoryForEveryRepository: a risk score's complexity part is the change
@@ -80,7 +113,11 @@ func TestDemoWorldHoldsComplexityHistoryForEveryRepository(t *testing.T) {
 	if repos == nil || complexity == nil {
 		t.Fatalf("the demo world holds repos=%v repo_complexity_daily=%v", repos != nil, complexity != nil)
 	}
-	last := demoInstant.UTC().Truncate(24 * time.Hour)
+	frozenAt, err := time.Parse(time.RFC3339Nano, world.FrozenAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := frozenAt.UTC().Truncate(24 * time.Hour)
 	midpoint := last.AddDate(0, 0, -29+15).Format("2006-01-02")
 	start := last.AddDate(0, 0, -29).Format("2006-01-02")
 	firstHalf, secondHalf := map[string]int{}, map[string]int{}

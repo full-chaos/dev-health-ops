@@ -47,12 +47,15 @@ type linearProject struct {
 	ID, Name  string
 	Teams     []string // team keys
 	CreatedAt string
+	// StartDate and TargetDate are the project's planned start and committed end (YYYY-MM-DD, "" = none);
+	// UpdatedAt is its last update ("" = the provider worlds' fixed stamp).
+	StartDate, TargetDate, UpdatedAt string
 }
 
 var linearProjects = []linearProject{
 	// A project of two teams.
-	{"9f00d0e1-0000-4000-8000-00000000d001", "Checkout Revamp", []string{"ENG", "MOB"}, "2026-03-02T09:00:00Z"},
-	{"9f00d0e1-0000-4000-8000-00000000d002", "API Hardening", []string{"ENG"}, "2026-04-06T09:00:00Z"},
+	{"9f00d0e1-0000-4000-8000-00000000d001", "Checkout Revamp", []string{"ENG", "MOB"}, "2026-03-02T09:00:00Z", "", "", ""},
+	{"9f00d0e1-0000-4000-8000-00000000d002", "API Hardening", []string{"ENG"}, "2026-04-06T09:00:00Z", "", "", ""},
 }
 
 // linearOldTeam was a team of the API Hardening project at the organization's first sync and is gone
@@ -62,7 +65,7 @@ var linearOldTeam = linearTeam{"7e40c0de-0000-4000-8000-00000000c004", "OLD", "O
 // linearFirstProjects are the projects at the first sync: API Hardening also had the old team.
 var linearFirstProjects = []linearProject{
 	linearProjects[0],
-	{"9f00d0e1-0000-4000-8000-00000000d002", "API Hardening", []string{"ENG", "OLD"}, "2026-04-06T09:00:00Z"},
+	{"9f00d0e1-0000-4000-8000-00000000d002", "API Hardening", []string{"ENG", "OLD"}, "2026-04-06T09:00:00Z", "", "", ""},
 }
 
 func linearTeamByKey(key string) linearTeam {
@@ -95,6 +98,16 @@ type linearIssue struct {
 	Labels []string
 	// Description is the issue's description ("" = none).
 	Description string
+	// Estimate is the issue's estimate in points (0 = none).
+	Estimate float64
+}
+
+// linearEstimate is an issue's estimate as Linear sends it: a number, or null when none is set.
+func linearEstimate(points float64) any {
+	if points == 0 {
+		return nil
+	}
+	return points
 }
 
 func (issue linearIssue) payload() map[string]any {
@@ -135,7 +148,7 @@ func (issue linearIssue) payload() map[string]any {
 			"fromProjectId": nil, "toProjectId": nil, "actor": map[string]any{"name": issue.Assignee.Name, "email": issue.Assignee.Email}})
 	}
 	return map[string]any{
-		"id": issue.ID, "identifier": issue.Identifier, "title": issue.Title, "description": nullable(issue.Description), "priority": 2, "estimate": nil,
+		"id": issue.ID, "identifier": issue.Identifier, "title": issue.Title, "description": nullable(issue.Description), "priority": 2, "estimate": linearEstimate(issue.Estimate),
 		"createdAt": issue.CreatedAt, "updatedAt": issue.UpdatedAt, "startedAt": nullable(issue.StartedAt), "completedAt": nullable(issue.CompletedAt),
 		"canceledAt": nil, "dueDate": nil, "url": "https://linear.app/chaos-fx/issue/" + strings.ToLower(issue.Identifier), "archivedAt": nil,
 		"state":    state,
@@ -240,8 +253,8 @@ func linearGraphQLAnswer(linearTeams []linearTeam, linearProjects []linearProjec
 					projects = append(projects, map[string]any{
 						"id": project.ID, "name": project.Name, "description": project.Name,
 						"status":  map[string]any{"id": project.ID + "-s", "name": "In Progress", "type": "started"},
-						"trashed": false, "progress": 0.5, "startDate": nil, "targetDate": nil,
-						"createdAt": project.CreatedAt, "updatedAt": "2026-10-01T09:00:00Z", "archivedAt": nil,
+						"trashed": false, "progress": 0.5, "startDate": nullable(project.StartDate), "targetDate": nullable(project.TargetDate),
+						"createdAt": project.CreatedAt, "updatedAt": orDefault(project.UpdatedAt, "2026-10-01T09:00:00Z"), "archivedAt": nil,
 						"url":   "https://linear.app/chaos-fx/project/" + strings.ToLower(strings.ReplaceAll(project.Name, " ", "-")),
 						"lead":  map[string]any{"id": linLea.ID, "name": linLea.Name, "email": linLea.Email},
 						"teams": linearPage(teams),

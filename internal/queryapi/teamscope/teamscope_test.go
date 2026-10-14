@@ -242,7 +242,7 @@ func TestNarrowRepoScope(t *testing.T) {
 		{"nothing named, no team", false, "", "", "", 0},
 		{"team only", false, "", team, " AND " + team, 1},
 		{"named and resolved, no team", true, explicit, "", explicit, 1},
-		{"named and resolved with a team: the intersection, both as text", true, explicit, team, " AND (toString(repo_id) IN {scope_ids:Array(String)} AND toString(" + strings.Replace(team, " IN ", ") IN ", 1) + ")", 2},
+		{"named and resolved with a team: the intersection, the ownership subquery yields UUIDs", true, explicit, team, " AND (repo_id IN {scope_ids:Array(String)} AND " + strings.Replace(team, ownedRepoIDSelect, "SELECT DISTINCT toUUIDOrNull(coalesce(toString(o.repo_id), toString(r.id))) AS owned_repo_id", 1) + ")", 2},
 		{"named, resolved to nothing, no team: nothing", true, "", "", " AND 1 = 0", 0},
 		{"named, resolved to nothing, with a team: nothing, not the team's", true, "", team, " AND 1 = 0", 0},
 	} {
@@ -471,6 +471,16 @@ func TestOwnerSharesReadsTheOneOwnershipPredicate(t *testing.T) {
 		if b.Name == BindingOrgID || b.Name == BindingTeamIDs || b.Name == BindingAsOf {
 			t.Errorf("binding %q collides with RepoCondition's names", b.Name)
 		}
+	}
+}
+
+// CHAOS-9187: the combined filter keeps the column UUID-typed (the primary key prunes by
+// repo_id); only a column that is already text compares as text on both sides.
+func TestNarrowRepoScopeTextColumnStaysText(t *testing.T) {
+	team, _ := RepoCondition("org-1", "toString(repo_id)", []string{"team-x"}, asOf)
+	got, _ := NarrowRepoScope(true, " AND toString(repo_id) IN {scope_ids:Array(String)}", nil, team, nil)
+	if !strings.HasPrefix(got, " AND (toString(repo_id) IN {scope_ids:Array(String)} AND toString(repo_id) IN (") || strings.Contains(got, "toUUIDOrNull") {
+		t.Errorf("a text column must compare as text on both sides:\n%s", got)
 	}
 }
 

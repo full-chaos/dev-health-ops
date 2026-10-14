@@ -88,13 +88,23 @@ type githubRepo struct {
 	Name        string
 	Description string
 	CreatedAt   string
+	// PushedAt is the repository's last push and update ("" = the provider worlds' fixed stamp).
+	PushedAt string
+}
+
+// orDefault is text, or fallback when text is empty.
+func orDefault(text, fallback string) string {
+	if text == "" {
+		return fallback
+	}
+	return text
 }
 
 var githubRepos = map[string]githubRepo{
-	"payments-api":  {9101, "payments-api", "Payments API", "2025-01-06T09:00:00Z"},
-	"platform-core": {9102, "platform-core", "Shared platform core", "2025-01-06T09:30:00Z"},
+	"payments-api":  {9101, "payments-api", "Payments API", "2025-01-06T09:00:00Z", ""},
+	"platform-core": {9102, "platform-core", "Shared platform core", "2025-01-06T09:30:00Z", ""},
 	// The repository of the jira and linear worlds' pull requests.
-	"ledger": {9103, "ledger", "General ledger", "2025-03-03T09:00:00Z"},
+	"ledger": {9103, "ledger", "General ledger", "2025-03-03T09:00:00Z", ""},
 }
 
 func (repo githubRepo) payload() map[string]any {
@@ -104,7 +114,7 @@ func (repo githubRepo) payload() map[string]any {
 		"private": true, "owner": map[string]any{"login": githubOrg, "id": 7000, "type": "Organization"},
 		"html_url": "https://github.com/" + full, "description": repo.Description, "fork": false,
 		"url": "https://api.github.com/repos/" + full, "created_at": repo.CreatedAt,
-		"updated_at": "2026-10-11T08:00:00Z", "pushed_at": "2026-10-11T08:00:00Z",
+		"updated_at": orDefault(repo.PushedAt, "2026-10-11T08:00:00Z"), "pushed_at": orDefault(repo.PushedAt, "2026-10-11T08:00:00Z"),
 		"default_branch": "main", "language": "Go", "archived": false, "disabled": false,
 		"visibility": "private", "topics": []string{},
 		"permissions": map[string]any{"admin": false, "maintain": true, "push": true, "triage": true, "pull": true},

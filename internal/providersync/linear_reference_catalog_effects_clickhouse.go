@@ -373,10 +373,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeProjects(ctx context.Co
 	}
 	stored := make([]projectStoredRow, len(rows))
 	for index, row := range rows {
-		date := linearReferenceTargetDate(row.TargetDate)
-		stored[index] = newProjectStoredRow(row.ID.String(), row.OrgID, row.Provider, row.ProjectKey, row.Name, row.IsActive,
-			row.State, row.StateSource, date, linearProjectTargetFacts(date, row.LastSynced), row.URL, row.TeamIDs, row.TeamKeys,
-			row.LeadID, row.LeadName, row.LeadEmail, row.UpdatedAt, row.LastSynced)
+		stored[index] = linearProjectStoredRow(row)
 	}
 	// Linear states every project's target date, a date or none, so the
 	// contract keeps nothing from the held version.
@@ -397,6 +394,13 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeProjects(ctx context.Co
 		return err
 	}
 	return batch.Send()
+}
+
+func linearProjectStoredRow(row linearReferenceProjectRow) projectStoredRow {
+	date := linearReferenceTargetDate(row.TargetDate)
+	return newProjectStoredRow(row.ID.String(), row.OrgID, row.Provider, row.ProjectKey, row.Name, row.IsActive,
+		row.State, row.StateSource, date, linearProjectTargetFacts(date, row.LastSynced), row.URL, row.TeamIDs, row.TeamKeys,
+		row.LeadID, row.LeadName, row.LeadEmail, row.UpdatedAt, row.LastSynced)
 }
 
 // linearProjectTargetSource is the provider fact a Linear target date is: the
@@ -611,6 +615,14 @@ func (sink LinearReferenceCatalogClickHouseEffects) inspectProjects(ctx context.
 			return EffectAbsent, nil
 		}
 		if found != 1 || !equalLinearReferenceProject(row, actual) {
+			return EffectConflict, nil
+		}
+		// The target columns are the answer Linear stated with the row.
+		matched, err := projectTargetColumnsMatch(ctx, sink.Conn, claim.OrgID, "linear", row.ID.String(), linearProjectStoredRow(row).Values, true)
+		if err != nil {
+			return EffectConflict, err
+		}
+		if !matched {
 			return EffectConflict, nil
 		}
 		return EffectExact, nil

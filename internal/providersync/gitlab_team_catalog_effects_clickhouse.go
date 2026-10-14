@@ -158,7 +158,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) InspectEffect(ctx context.Context
 			if err != nil || inspection != EffectExact {
 				return inspection, err
 			}
-			matched, err := projectTargetColumnsMatch(ctx, sink.Conn, claim.OrgID, row.Provider, row.ID.String(), targetValues[row.ID.String()])
+			matched, err := projectTargetColumnsMatch(ctx, sink.Conn, claim.OrgID, row.Provider, row.ID.String(), targetValues[row.ID.String()], false)
 			if err != nil {
 				return EffectConflict, err
 			}

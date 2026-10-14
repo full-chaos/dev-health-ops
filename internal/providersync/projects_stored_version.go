@@ -285,8 +285,10 @@ func providerDateOnly(value string) (time.Time, bool) {
 
 // projectTargetColumnsMatch reads the target columns of a stored project row
 // and compares them with the values the contract gave the expected row, for
-// the recovery readback.
-func projectTargetColumnsMatch(ctx context.Context, conn storedversion.Querier, orgID, provider, id string, values []any) (bool, error) {
+// the recovery readback. acceptLegacy also accepts the row an older writer
+// left (Linear only): the DEFAULT-expression reading of a row written without
+// the target columns, which carries no fetch time.
+func projectTargetColumnsMatch(ctx context.Context, conn storedversion.Querier, orgID, provider, id string, values []any, acceptLegacy bool) (bool, error) {
 	result, err := conn.Query(ctx, `SELECT target_state, target_kind, target_source, target_ref, target_ref_name, target_other_open, target_fetched_at
 		FROM projects FINAL WHERE org_id = ? AND provider = ? AND id = ?`, orgID, provider, id)
 	if err != nil {
@@ -306,6 +308,11 @@ func projectTargetColumnsMatch(ctx context.Context, conn storedversion.Querier, 
 			values[position["target_ref"]], values[position["target_ref_name"]]) == fmt.Sprint(state, kind, source, ref, name) &&
 			sameOtherOpen(values[position["target_other_open"]], otherOpen) &&
 			sameFetchedAt(values[position["target_fetched_at"]], fetchedAt)
+		if !matched && acceptLegacy && fetchedAt == nil && otherOpen == nil && ref == "" && name == "" &&
+			(state == projectTargetStated && kind == projectTargetKindProject && source == linearProjectTargetSource ||
+				state == projectTargetUnknown && kind == "" && source == "") {
+			matched = true
+		}
 	}
 	return matched, result.Err()
 }

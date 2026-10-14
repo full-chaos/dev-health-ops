@@ -333,3 +333,72 @@ func TestLinearProjectRowsAreTheSameByValueBeforeAndAfterTheContract(t *testing.
 		}
 	}
 }
+
+// The recovery readback of a project row is exact in the target columns too:
+// a stored row whose target provenance differs from what the write gave it is
+// a conflict, not an exact match, for every writer of projects. A row an older
+// writer left (no fetch time) is still accepted for Linear.
+func TestProjectReadbackDetectsTargetProvenanceDrift(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	now := time.Date(2026, 8, 10, 12, 34, 56, 789000000, time.UTC)
+	tamper := func(orgID, provider string) {
+		t.Helper()
+		if err := conn.Exec(ctx, `ALTER TABLE projects UPDATE target_source = 'tampered' WHERE org_id = ? AND provider = ? SETTINGS mutations_sync = 2`, orgID, provider); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("linear", func(t *testing.T) {
+		sink := LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
+		claim := nativeTestClaim("linear", "work-items")
+		claim.OrgID = uuid.NewString()
+		effect, err := effectBatchFromValues(linearReferenceCatalogProjectsDestination, EffectReadbackRequired, linearReferenceCatalogIntegrationRows(claim, now).Projects)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+			t.Fatal(err)
+		}
+		if inspection, err := sink.InspectEffect(ctx, claim, effect); err != nil || inspection != EffectExact {
+			t.Fatalf("readback of the written row = %s %v, want exact", inspection, err)
+		}
+		tamper(claim.OrgID, "linear")
+		if inspection, err := sink.InspectEffect(ctx, claim, effect); err != nil || inspection != EffectConflict {
+			t.Fatalf("readback after the provenance changed = %s %v, want conflict", inspection, err)
+		}
+
+		// A row of the writer before the contract carries no target columns: its readback stays exact.
+		legacyClaim := claim
+		legacyClaim.OrgID = uuid.NewString()
+		legacyRows := linearReferenceCatalogIntegrationRows(legacyClaim, now).Projects
+		legacyLinearProjectsWrite(t, ctx, conn, legacyRows)
+		legacyEffect, err := effectBatchFromValues(linearReferenceCatalogProjectsDestination, EffectReadbackRequired, legacyRows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if inspection, err := sink.InspectEffect(ctx, legacyClaim, legacyEffect); err != nil || inspection != EffectExact {
+			t.Fatalf("readback of a row the old writer left = %s %v, want exact", inspection, err)
+		}
+	})
+
+	t.Run("github ensure row", func(t *testing.T) {
+		adapter := GitHubProjectCatalogClickHouseAdapter{Conn: conn}
+		orgID := uuid.NewString()
+		ensure := projectmembership.EnsureProjectsRow(orgID, "github", "ghprojv2:acme#1", "", "Board", now)
+		effect, err := effectBatchFromValues("projects", EffectReadbackRequired, []projectmembership.CatalogRow{ensure})
+		if err != nil {
+			t.Fatal(err)
+		}
+		identity := GitHubWorkItemEffectIdentity{OrgID: orgID, Provider: "github", Dataset: "work-items", Destination: "projects", RowCount: len(effect.Rows)}
+		if err := adapter.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+			t.Fatal(err)
+		}
+		if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
+			t.Fatalf("readback of the written row = %s %v, want exact", inspection, err)
+		}
+		tamper(orgID, "github")
+		if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectConflict {
+			t.Fatalf("readback after the provenance changed = %s %v, want conflict", inspection, err)
+		}
+	})
+}

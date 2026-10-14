@@ -33,7 +33,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/operatingreview"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -132,7 +131,6 @@ func TestInvestmentSharesOfEverySurfaceAreTheCountTheInvestmentPageReads(t *test
 
 	start := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 1, 12, 0, 0, 0, 0, time.UTC)
-	week := graphqldate.New(start)
 	dateRange := &model.DateRangeInput{StartDate: graphqldate.New(start), EndDate: graphqldate.New(end)}
 
 	cases := []struct {
@@ -234,34 +232,8 @@ func TestInvestmentSharesOfEverySurfaceAreTheCountTheInvestmentPageReads(t *test
 		})
 	}
 
-	// Operating Review: the week's work per theme (an organization read; its metric keys are measure-neutral).
-	review, err := operatingreview.ResolveInput(ctx, client, measureOrg, nil, nil, week)
-	if err != nil {
-		t.Fatalf("operating review: %v", err)
-	}
-	values := map[string]float64{}
-	for _, section := range review.Sections {
-		if section.Key != "investment" {
-			continue
-		}
-		for _, metric := range section.Metrics {
-			if metric.Unit != "work units" {
-				t.Errorf("operating review %s unit = %q, want %q", metric.Key, metric.Unit, "work units")
-			}
-			values[metric.Key] = metric.Value
-		}
-	}
-	for key, want := range map[string]float64{"feature_delivery_work": 1, "maintenance_work": 1.5, "risk_work": 0.5, "quality_work": 0, "operational_work": 0} {
-		got, ok := values[key]
-		if !ok || math.Abs(got-want) > 1e-3 {
-			t.Errorf("operating review %s = %v (present %v), want the COUNT %v", key, got, ok, want)
-		}
-	}
-	for key := range values {
-		if len(key) > 7 && key[len(key)-7:] == "_effort" {
-			t.Errorf("operating review still serves the effort-named metric %s", key)
-		}
-	}
+	// The Operating Review reads the same measure through the same shared reader; its metrics are pinned by value in
+	// the operatingreview package (operatingreview_investment_canonical_integration_test.go), not imported here.
 
 	// No read can fall back to a weight: a read that names no measure is refused.
 	explainReader, err := investmentexplain.NewReader(client)

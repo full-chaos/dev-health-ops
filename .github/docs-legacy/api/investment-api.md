@@ -49,8 +49,8 @@ measure per week under the metric names `<theme>_work` (unit `work units`).
 Besides `theme_distribution`, `subcategory_distribution` and the evidence-quality fields, the
 response carries two additive Go-only fields (CHAOS-9622): `measure` (`"COUNT"`) and
 `denominator` (the sum of all themes in the window). The values of the distributions are the
-numerators, so `share = value / denominator`. An empty response (no table, no data) leaves
-both out.
+numerators, so `share = value / denominator`. A response for a store with no investment table (or without its columns) leaves both out; a window with no
+units serves `COUNT` and a `denominator` of 0.
 
 ### What `effort_value` is (stored, not a weight)
 

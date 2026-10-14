@@ -205,11 +205,14 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 		if !include {
 			continue
 		}
-		_, retried := retry[row.DeploymentID]
-		if deploymentOutsideWindow(row.DeployedAt, claim) && !retried {
+		_, held := retry[row.DeploymentID]
+		outside := deploymentOutsideWindow(row.DeployedAt, claim)
+		if outside && !held {
 			continue
 		}
-		if retried {
+		if outside {
+			// Only a deployment the window does not reach is a retry; a held
+			// deployment inside the window is a normal lookup.
 			outcomes.Retried++
 		}
 		if deployment.SHA != nil && strings.TrimSpace(*deployment.SHA) != "" {

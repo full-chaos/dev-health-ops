@@ -16,7 +16,7 @@ import (
 // A deployment that has no status at all (GitHub keeps none for a deployment
 // that nothing reported on) must not be looked up for ever: the retry stops
 // once the deployment is older than the horizon, and a run retries at most
-// deploymentStatusRetryMax of them, newest first. A deployment older than the
+// deploymentStatusRetryMax of them, the least recently synced first. A deployment older than the
 // horizon is the work of the explicit resync (`dho sync deployments --since`).
 const (
 	deploymentStatusRetryHorizon = 3 * 24 * time.Hour
@@ -28,8 +28,11 @@ const (
 // itself holds no connection.
 type GitHubDeploymentStatusHolds interface {
 	// DeploymentsWithoutStatus returns the ids of the repository's stored
-	// deployments with no status that were deployed at or after since, newest
-	// first, at most limit of them.
+	// deployments with no status that were deployed at or after since, at most
+	// limit of them, the least recently synced first (then the newest): a
+	// deployment a run just looked up again and found empty is written with a
+	// new last_synced, so it moves behind the others and a run of the capped
+	// set never starves an older held deployment.
 	DeploymentsWithoutStatus(ctx context.Context, orgID, repoID string, since time.Time, limit int) ([]string, error)
 }
 
@@ -47,7 +50,7 @@ func (holds GitHubDeploymentStatusHoldsClickHouse) DeploymentsWithoutStatus(ctx 
 	if err := holds.Lease.Assert(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := holds.Conn.Query(ctx, `SELECT deployment_id FROM deployments FINAL WHERE org_id = ? AND repo_id = ? AND (status IS NULL OR status = '') AND deployed_at >= ? ORDER BY deployed_at DESC LIMIT ?`, orgID, repoID, since.UTC(), uint64(limit))
+	rows, err := holds.Conn.Query(ctx, `SELECT deployment_id FROM deployments FINAL WHERE org_id = ? AND repo_id = ? AND (status IS NULL OR status = '') AND deployed_at >= ? ORDER BY last_synced ASC, deployed_at DESC LIMIT ?`, orgID, repoID, since.UTC(), uint64(limit))
 	if err != nil {
 		return nil, err
 	}

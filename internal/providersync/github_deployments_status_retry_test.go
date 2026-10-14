@@ -202,3 +202,25 @@ func TestGitHubDeploymentsRouteKeepsTheWindowWhenTheHeldReadFails(t *testing.T) 
 		t.Fatalf("the failed held read is not logged: %s", log.String())
 	}
 }
+
+// A held deployment that the window also reaches is a normal lookup, not a
+// retry: only a deployment outside the window counts as retried.
+func TestGitHubDeploymentsRouteCountsOnlyDeploymentsOutsideTheWindowAsRetried(t *testing.T) {
+	log := captureSlog(t)
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &githubDeploymentStatusRetryDoer{statuses: map[string]string{
+		"/repos/acme/api/deployments/701/statuses": `[{"id":1,"state":"success","created_at":"2026-07-22T10:01:00Z"}]`,
+		"/repos/acme/api/deployments/702/statuses": `[{"id":2,"state":"success","created_at":"2026-07-22T10:06:00Z"}]`,
+		"/repos/acme/api/deployments/703/statuses": `[{"id":3,"state":"failure","created_at":"2026-06-10T10:01:00Z"}]`,
+	}}
+	// 701 and 702 are inside the window of the claim, 703 is outside it; the store holds 701 and 703.
+	rows := collectStatusRetryRows(t, doer, &recordingStatusHolds{ids: []string{"701", "703"}}, nativeTestClaim("github", "deployments"), now)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want the two of the window and the held one outside it", len(rows))
+	}
+	for _, want := range []string{"github_deployments.status_lookups", "rows=3", "stored=3", "retried=1"} {
+		if !strings.Contains(log.String(), want) {
+			t.Fatalf("log lacks %q (701 is held but inside the window: not a retry; 703 is the one retry): %s", want, log.String())
+		}
+	}
+}

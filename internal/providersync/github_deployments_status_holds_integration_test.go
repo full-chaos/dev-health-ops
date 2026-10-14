@@ -78,3 +78,45 @@ func TestGitHubDeploymentStatusHoldsAgainstMigratedSchema(t *testing.T) {
 		t.Fatal("a read with no lease guard succeeded; the read must fail, never read as empty")
 	}
 }
+
+// A run that looks a held deployment up again and finds it still empty writes
+// it with a new last_synced, so the capped read moves on to the others: the
+// newest deployments with no status never starve an older held one.
+func TestGitHubDeploymentStatusHoldsRotateThroughMoreHeldDeploymentsThanTheLimit(t *testing.T) {
+	ctx, conn := newDeploymentsIntegrationConn(t)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	sink := GitHubDeploymentsClickHouseEffects{Conn: conn, Lease: lease}
+	holds := GitHubDeploymentStatusHoldsClickHouse{Conn: conn, Lease: lease}
+	claim := nativeTestClaim("github", "deployments")
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	repo := "c7198fbc-1945-3717-05d8-eb78866b4e79"
+	write := func(id string, deployedAgo, syncedAgo time.Duration) {
+		t.Helper()
+		row := deploymentIntegrationRow(claim, id, now.Add(-syncedAgo))
+		deployedAt := now.Add(-deployedAgo)
+		row.DeployedAt = &deployedAt
+		if err := sink.WriteEffect(ctx, claim, deploymentEffect(t, row)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(limit int) []string {
+		t.Helper()
+		ids, err := holds.DeploymentsWithoutStatus(ctx, claim.OrgID, repo, now.Add(-deploymentStatusRetryHorizon), limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ids
+	}
+	// The newest deployment was synced last; the oldest deployment was synced first.
+	write("oldest-deployment", 40*time.Hour, 3*time.Hour)
+	write("middle-deployment", 20*time.Hour, 2*time.Hour)
+	write("newest-deployment", 2*time.Hour, 1*time.Hour)
+	if got, want := read(2), []string{"oldest-deployment", "middle-deployment"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("held (limit 2) = %v, want the two least recently synced %v", got, want)
+	}
+	// The run looked the oldest one up, found it empty and wrote it again.
+	write("oldest-deployment", 40*time.Hour, 0)
+	if got, want := read(2), []string{"middle-deployment", "newest-deployment"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("held (limit 2) after the oldest was written again = %v, want %v: a deployment just looked up moves behind the others", got, want)
+	}
+}

@@ -2891,7 +2891,7 @@ var sankeyInvestmentParity = Options{
 	// sibling FloatTierB table in this service already declares.
 	NumericLeavesDeclared: true,
 	FloatTierB: map[string]string{
-		"data.links.value": "investment mode's own sum(theme_kv.2 * effort_value) (sankey/queries.go fetchInvestmentFlowItems) over Float64 effort_value/Float32 theme weight -- a genuine merged ClickHouse float aggregate.",
+		"data.links.value": "investment mode's own sum(theme_kv.2 * repo share) (sankey/queries.go fetchInvestmentFlowItems; the COUNT of the work units since CHAOS-9695, the recorded Python answer weighs by effort_value: a declared divergence of the values) over Float32 theme weight -- a genuine merged ClickHouse float aggregate.",
 	},
 }
 

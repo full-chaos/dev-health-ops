@@ -477,13 +477,13 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 				t.Fatalf("%s: the seeded unit is not served as one work unit (%s): %s", tc.Name, goEffort, goWritten)
 			}
 			goWritten = strings.ReplaceAll(goWritten, goEffort, declaredWorkUnitEffort)
-			// The lines-of-code fact (CHAOS-9695, Go-only, last key of the unit): the seeded unit stored churn 10, the split
-			// is not stored per unit. The frozen Python model never had the key: compared without it, and only it.
-			const goOnlyChangeSet = `,"change_set":{"additions":null,"deletions":null,"total":10}`
-			if !strings.Contains(goWritten, goOnlyChangeSet) {
-				t.Fatalf("%s: the seeded unit carries no change_set of total 10: %s", tc.Name, goWritten)
+			// The lines-of-code fact (CHAOS-9695, Go-only, last key of each unit): the three seeded units stored churn 10, 5
+			// and 4, the split is not stored per unit. The frozen Python model never had the key: compared without it,
+			// and only it.
+			if got := len(goOnlyChangeSet.FindAllString(goWritten, -1)); got != 3 || !strings.Contains(goWritten, `,"change_set":{"additions":null,"deletions":null,"total":10}`) {
+				t.Fatalf("%s: want a change_set on each of the three seeded units, the first with total 10: %s", tc.Name, goWritten)
 			}
-			goWritten = strings.ReplaceAll(goWritten, goOnlyChangeSet, "")
+			goWritten = goOnlyChangeSet.ReplaceAllString(goWritten, "")
 		}
 		answerBody := answer.Body
 		if tc.Kind == "work_units" {
@@ -680,3 +680,5 @@ func dictOrderWithoutAddress(text string, venue *venueoracle.Venue, t *testing.T
 const declaredWorkUnitEffort = `"effort":"<declared D6014: work-unit count>"`
 
 var pythonLinesOfCodeEffort = regexp.MustCompile(`"effort":\{"metric":"(?:churn_loc|active_hours)","value":[0-9.eE+-]+\}`)
+
+var goOnlyChangeSet = regexp.MustCompile(`,"change_set":\{"additions":null,"deletions":null,"total":[0-9]+\}`)

@@ -25,7 +25,7 @@ func buildInvestmentFlow(ctx context.Context, client QueryClient, startDay, endD
 		return nil, nil, nil
 	}
 	if !columnsPresent(ctx, client, "work_unit_investments", []string{
-		"theme_distribution_json", "effort_value", "from_ts", "to_ts", "repo_id",
+		"theme_distribution_json", "from_ts", "to_ts", "repo_id",
 	}) {
 		return nil, nil, nil
 	}

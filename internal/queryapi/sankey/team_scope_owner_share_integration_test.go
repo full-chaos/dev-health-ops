@@ -14,8 +14,9 @@ import (
 )
 
 // TestSankeyInvestmentFlowTeamScopeWeighsARepositoryByTheOwnersShare pins CHAOS-9413 (D5988, D5990) on the investment
-// flow: a team scope gives each owning team its own linked share of a repository's effort.
-// repo-lead (effort 100): team-main 0.6, team-co 0.4. repo-tie (50): team-main 0.5, team-tie 0.5. repo-solo (10): team-main 1.0.
+// flow: a team scope gives each owning team its own linked share of a repository's work units (a link counts the unit,
+// never its lines of code, CHAOS-9695): one unit per repository.
+// repo-lead: team-main 0.6, team-co 0.4. repo-tie (50): team-main 0.5, team-tie 0.5. repo-solo (10): team-main 1.0.
 func TestSankeyInvestmentFlowTeamScopeWeighsARepositoryByTheOwnersShare(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -59,10 +60,10 @@ func TestSankeyInvestmentFlowTeamScopeWeighsARepositoryByTheOwnersShare(t *testi
 		teams []string
 		want  float64
 	}{
-		{"co-owner at 0.4 reads 0.4 of the repository", []string{"team-co"}, 40},
-		{"main owner reads its own 0.6, half of the tie and all of its solo repository", []string{"team-main"}, 60 + 25 + 10},
-		{"a tied owner reads its equal half", []string{"team-tie"}, 25},
-		{"the owners of one repository read it once", []string{"team-main", "team-co"}, 100 + 25 + 10},
+		{"co-owner at 0.4 reads 0.4 of the repository", []string{"team-co"}, 0.4},
+		{"main owner reads its own 0.6, half of the tie and all of its solo repository", []string{"team-main"}, 0.6 + 0.5 + 1},
+		{"a tied owner reads its equal half", []string{"team-tie"}, 0.5},
+		{"the owners of one repository read it once", []string{"team-main", "team-co"}, 1 + 0.5 + 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			response, err := BuildResponse(ctx, client, org, Params{

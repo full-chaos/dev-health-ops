@@ -100,6 +100,26 @@ func TestBuildInvestmentFlow(t *testing.T) {
 	}
 }
 
+// CHAOS-9695 (D5999, D6014): an investment link counts the work units, never their lines of code.
+func TestBuildInvestmentFlowReadsNoEffortValue(t *testing.T) {
+	var seen string
+	client := dispatchClient(t, func(t *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "ARRAY JOIN CAST(work_unit_investments.theme_distribution_json") {
+			seen = query
+		}
+		return &fixtureRowScanner{}, nil
+	})
+	if _, _, err := buildInvestmentFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, nil, "org-1", teamScopeAsOf); err != nil {
+		t.Fatalf("buildInvestmentFlow: %v", err)
+	}
+	if seen == "" {
+		t.Fatal("no investment flow query ran")
+	}
+	if strings.Contains(seen, "theme_kv.2 * work_unit_investments.effort_value") || !strings.Contains(seen, "sum(theme_kv.2 * 1.0) AS value") {
+		t.Errorf("the investment flow is not the COUNT of the units:\n%s", seen)
+	}
+}
+
 // TestBuildExpenseFlow pins the unplanned/rework/abandoned clamp math
 // (services/sankey.py:368-370).
 func TestBuildExpenseFlow(t *testing.T) {

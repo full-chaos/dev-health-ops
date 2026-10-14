@@ -144,6 +144,8 @@ type investmentFlowItemRow struct {
 // sankeyRepoDedupParity): an unmerged repos row, or a same-id row from a
 // different org (this table has no compound key preventing that), could
 // surface as an extra/relabeled target node here. Go is correct.
+// CHAOS-9695 (D5999, D6014): the value of a link is the COUNT of the work units (each unit counts its theme share, one
+// unit counts 1 over the themes it spreads over), never weighted by the unit's effort_value (lines of code).
 func fetchInvestmentFlowItems(ctx context.Context, client QueryClient, startTS, endTS time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, effortShareSQL string, limit int, orgID string) ([]investmentFlowItemRow, error) {
 	if effortShareSQL == "" {
 		effortShareSQL = "1.0"
@@ -152,7 +154,7 @@ func fetchInvestmentFlowItems(ctx context.Context, client QueryClient, startTS, 
         SELECT
             theme_kv.1 AS source,
             r.repo AS target,
-            sum(theme_kv.2 * work_unit_investments.effort_value * %s) AS value
+            sum(theme_kv.2 * %s) AS value
         FROM %s AS work_unit_investments
         LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(work_unit_investments.repo_id) AND r.org_id = {org_id:String}
         ARRAY JOIN CAST(work_unit_investments.theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv

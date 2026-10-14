@@ -1784,10 +1784,12 @@ type TimeseriesRequestInput struct {
 }
 
 type TimeseriesResult struct {
-	Dimension      string             `json:"dimension"`
-	DimensionValue string             `json:"dimensionValue"`
-	Measure        string             `json:"measure"`
-	Buckets        []TimeseriesBucket `json:"buckets"`
+	Dimension      string `json:"dimension"`
+	DimensionValue string `json:"dimensionValue"`
+	Measure        string `json:"measure"`
+	// DIMENSION for a series of the requested dimension; ORG for the org-level series, which covers all repositories of the org (including repositories with no owning team) under the request's own repository and time filters. The ORG result has dimensionValue "org" and follows the DIMENSION results.
+	Scope   TimeseriesScope    `json:"scope"`
+	Buckets []TimeseriesBucket `json:"buckets"`
 }
 
 type TrendPoint struct {
@@ -3010,6 +3012,48 @@ func (e *TimeGranularity) UnmarshalGQL(v any) error {
 }
 
 func (e TimeGranularity) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+// Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE and COVERAGE_LINE_PCT carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
+type TimeseriesScope string
+
+const (
+	TimeseriesScopeDimension TimeseriesScope = "DIMENSION"
+	TimeseriesScopeOrg       TimeseriesScope = "ORG"
+)
+
+var AllTimeseriesScope = []TimeseriesScope{
+	TimeseriesScopeDimension,
+	TimeseriesScopeOrg,
+}
+
+func (e TimeseriesScope) IsValid() bool {
+	switch e {
+	case TimeseriesScopeDimension, TimeseriesScopeOrg:
+		return true
+	}
+	return false
+}
+
+func (e TimeseriesScope) String() string {
+	return string(e)
+}
+
+func (e *TimeseriesScope) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = TimeseriesScope(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid TimeseriesScope", str)
+	}
+	return nil
+}
+
+func (e TimeseriesScope) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 

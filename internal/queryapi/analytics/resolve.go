@@ -330,7 +330,22 @@ func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string,
 			RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
 		}
 	}
-	return ExecuteTimeseries(ctx, client, q, string(input.Dimension), string(input.Measure))
+	results, err := ExecuteTimeseries(ctx, client, q, string(input.Dimension), string(input.Measure))
+	if err != nil {
+		return nil, err
+	}
+	orgQ, hasOrg, err := CompileOrgTimeseries(req, orgID, queryTimeoutSecs, useInvestment, filters)
+	if err != nil {
+		return nil, err
+	}
+	if !hasOrg {
+		return results, nil
+	}
+	orgResult, err := ExecuteOrgTimeseries(ctx, client, orgQ, orgID, string(input.Dimension), string(input.Measure), req.Measure)
+	if err != nil {
+		return nil, fmt.Errorf("org series: %w", err)
+	}
+	return append(results, orgResult), nil
 }
 
 func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, input model.BreakdownRequestInput, useInvestment bool, filters *model.FilterInput, selected bool) (model.BreakdownResult, error) {

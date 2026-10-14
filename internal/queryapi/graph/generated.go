@@ -1532,6 +1532,7 @@ type ComplexityRoot struct {
 		Dimension      func(childComplexity int) int
 		DimensionValue func(childComplexity int) int
 		Measure        func(childComplexity int) int
+		Scope          func(childComplexity int) int
 	}
 
 	TrendPoint struct {
@@ -8894,6 +8895,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.TimeseriesResult.Measure(childComplexity), true
 
+	case "TimeseriesResult.scope":
+		if e.complexity.TimeseriesResult.Scope == nil {
+			break
+		}
+
+		return e.complexity.TimeseriesResult.Scope(childComplexity), true
+
 	case "TrendPoint.day":
 		if e.complexity.TrendPoint.Day == nil {
 			break
@@ -11815,10 +11823,20 @@ input TimeseriesRequestInput {
   dateRange: DateRangeInput!
 }
 
+"""
+Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE and COVERAGE_LINE_PCT carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
+"""
+enum TimeseriesScope {
+  DIMENSION
+  ORG
+}
+
 type TimeseriesResult {
   dimension: String!
   dimensionValue: String!
   measure: String!
+  "DIMENSION for a series of the requested dimension; ORG for the org-level series, which covers all repositories of the org (including repositories with no owning team) under the request's own repository and time filters. The ORG result has dimensionValue \"org\" and follows the DIMENSION results."
+  scope: TimeseriesScope!
   buckets: [TimeseriesBucket!]!
 }
 
@@ -26412,6 +26430,8 @@ func (ec *executionContext) fieldContext_AnalyticsResult_timeseries(_ context.Co
 				return ec.fieldContext_TimeseriesResult_dimensionValue(ctx, field)
 			case "measure":
 				return ec.fieldContext_TimeseriesResult_measure(ctx, field)
+			case "scope":
+				return ec.fieldContext_TimeseriesResult_scope(ctx, field)
 			case "buckets":
 				return ec.fieldContext_TimeseriesResult_buckets(ctx, field)
 			}
@@ -61577,6 +61597,50 @@ func (ec *executionContext) fieldContext_TimeseriesResult_measure(_ context.Cont
 	return fc, nil
 }
 
+func (ec *executionContext) _TimeseriesResult_scope(ctx context.Context, field graphql.CollectedField, obj *model.TimeseriesResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TimeseriesResult_scope(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Scope, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.TimeseriesScope)
+	fc.Result = res
+	return ec.marshalNTimeseriesScope2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTimeseriesScope(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TimeseriesResult_scope(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TimeseriesResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type TimeseriesScope does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TimeseriesResult_buckets(ctx context.Context, field graphql.CollectedField, obj *model.TimeseriesResult) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_TimeseriesResult_buckets(ctx, field)
 	if err != nil {
@@ -78862,6 +78926,11 @@ func (ec *executionContext) _TimeseriesResult(ctx context.Context, sel ast.Selec
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "scope":
+			out.Values[i] = ec._TimeseriesResult_scope(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "buckets":
 			out.Values[i] = ec._TimeseriesResult_buckets(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -85017,6 +85086,16 @@ func (ec *executionContext) marshalNTimeseriesResult2ᚕgithubᚗcomᚋfullᚑch
 	}
 
 	return ret
+}
+
+func (ec *executionContext) unmarshalNTimeseriesScope2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTimeseriesScope(ctx context.Context, v any) (model.TimeseriesScope, error) {
+	var res model.TimeseriesScope
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNTimeseriesScope2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTimeseriesScope(ctx context.Context, sel ast.SelectionSet, v model.TimeseriesScope) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalNTrendPoint2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐTrendPoint(ctx context.Context, sel ast.SelectionSet, v model.TrendPoint) graphql.Marshaler {

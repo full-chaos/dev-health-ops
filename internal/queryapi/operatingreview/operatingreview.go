@@ -979,11 +979,11 @@ func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams 
 	query := `
         SELECT
           attribution_bucket,
-          sum(prs_total) AS prs_total,
-          if(attribution_bucket = 'ai_assisted', sum(prs_total), 0) AS ai_assisted_prs,
-          if(attribution_bucket = 'agent_created', sum(prs_total), 0) AS agent_created_prs,
-          if(attribution_bucket = 'human', sum(prs_total), 0) AS human_prs,
-          if(attribution_bucket = 'unknown', sum(prs_total), 0) AS unknown_prs,
+          sum(prs_total) AS bucket_prs_total,
+          if(attribution_bucket = 'ai_assisted', bucket_prs_total, 0) AS bucket_ai_assisted_prs,
+          if(attribution_bucket = 'agent_created', bucket_prs_total, 0) AS bucket_agent_created_prs,
+          if(attribution_bucket = 'human', bucket_prs_total, 0) AS bucket_human_prs,
+          if(attribution_bucket = 'unknown', bucket_prs_total, 0) AS bucket_unknown_prs,
           avg(ai_cycle_time_delta_hours) AS ai_cycle_time_delta_hours,
           avg(ai_review_amplification) AS ai_review_amplification,
           avg(rework_drag_rate) AS rework_drag_rate,

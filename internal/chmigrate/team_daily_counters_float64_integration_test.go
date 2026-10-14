@@ -14,7 +14,7 @@ import (
 )
 
 // CHAOS-9601: migration 124 widens the counters of team_complexity_daily and
-// team_metrics_daily to Float64 and testdata/rollback/124_*.down.sql narrows them. The
+// team_metrics_daily to Float64 and rollback/124_*.down.sql narrows them. The
 // test rehearses both on the pre-124 shape: whole numbers convert exactly in
 // both directions, a fraction written after the upgrade survives until the
 // downgrade and is truncated toward zero by it, and the upgrade runs again.
@@ -82,7 +82,7 @@ func TestTeamDailyCountersMigrationUpgradesAndDowngrades(t *testing.T) {
 	exec(`INSERT INTO team_metrics_daily VALUES ('2026-08-01', 't', 'T', 20, 4, 2, 0.2, 0.1, now64(6), 'o', 'r')`)
 
 	const up = "sql/124_team_daily_counters_float64.sql"
-	const down = "testdata/rollback/124_team_daily_counters_float64.down.sql"
+	const down = "rollback/124_team_daily_counters_float64.down.sql"
 	run(up)
 	for _, column := range [][2]string{
 		{"team_complexity_daily", "loc_total"}, {"team_complexity_daily", "cyclomatic_total"},

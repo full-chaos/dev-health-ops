@@ -26,7 +26,7 @@ var ddls = []string{
       ownership_gini Nullable(Float64), single_owner_ratio Nullable(Float64), review_latency_p90h Nullable(Float64),
       w_churn Float64, w_complexity Float64, w_ownership Float64, w_review Float64,
       threshold_elevated Float64, threshold_high Float64, computed_at DateTime DEFAULT now(),
-      merged_prs_30d Nullable(UInt32), reviewed_prs_30d Nullable(UInt32), review_share_30d Nullable(Float64))
+      merged_prs_30d Nullable(Float64), reviewed_prs_30d Nullable(Float64), review_share_30d Nullable(Float64))
       ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, scope, scope_id, day, computed_at)`,
 	`CREATE TABLE repos (id UUID, repo String, provider String DEFAULT 'unknown', org_id String DEFAULT 'default',
       created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY id`,

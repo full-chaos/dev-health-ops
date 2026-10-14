@@ -134,7 +134,7 @@ func TestTeamComplexityEndToEndFromNativeComplexityExecutor(t *testing.T) {
 	}
 	var (
 		teamID                                                        string
-		locTotal, cyclomaticTotal, highComplexity, veryHighComplexity uint64
+		locTotal, cyclomaticTotal, highComplexity, veryHighComplexity float64
 		contributingRepoCnt                                           uint32
 		cyclomaticPerKLOC                                             float64
 	)
@@ -152,10 +152,10 @@ func TestTeamComplexityEndToEndFromNativeComplexityExecutor(t *testing.T) {
 		t.Errorf("team_id = %q, want team-metrics", teamID)
 	}
 	if locTotal != 48 {
-		t.Errorf("loc_total = %d, want 48 (2x the proven per-repo 24)", locTotal)
+		t.Errorf("loc_total = %v, want 48 (2x the proven per-repo 24)", locTotal)
 	}
 	if cyclomaticTotal != 16 {
-		t.Errorf("cyclomatic_total = %d, want 16 (2x the proven per-repo 8)", cyclomaticTotal)
+		t.Errorf("cyclomatic_total = %v, want 16 (2x the proven per-repo 8)", cyclomaticTotal)
 	}
 	if contributingRepoCnt != 2 {
 		t.Errorf("contributing_repo_count = %d, want 2", contributingRepoCnt)

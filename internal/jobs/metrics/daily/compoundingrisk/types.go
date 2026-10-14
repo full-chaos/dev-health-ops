@@ -188,8 +188,8 @@ type Record struct {
 
 	// The review window behind ReviewLatencyP90H (nil = not read).
 	// ReviewShare30D is nil when no pull request merged in the window.
-	MergedPRs30D   *uint32
-	ReviewedPRs30D *uint32
+	MergedPRs30D   *float64
+	ReviewedPRs30D *float64
 	ReviewShare30D *float64
 
 	WChurn      float64

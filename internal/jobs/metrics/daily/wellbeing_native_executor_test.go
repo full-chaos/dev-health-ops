@@ -153,11 +153,11 @@ func TestComputeWellbeingPerRepoScopesBucketsToOneRepoAtATime(t *testing.T) {
 	}
 	// repo-a's group must count ONLY repo-a's 2 commits, never repo-b's.
 	if got[0][0].CommitsCount != 2 {
-		t.Fatalf("repo-a group: commits_count=%d, want 2 (repo-b's commit must not leak in)", got[0][0].CommitsCount)
+		t.Fatalf("repo-a group: commits_count=%v, want 2 (repo-b's commit must not leak in)", got[0][0].CommitsCount)
 	}
 	// repo-b's group must count ONLY repo-b's 1 commit.
 	if got[1][0].CommitsCount != 1 {
-		t.Fatalf("repo-b group: commits_count=%d, want 1 (repo-a's commits must not leak in)", got[1][0].CommitsCount)
+		t.Fatalf("repo-b group: commits_count=%v, want 1 (repo-a's commits must not leak in)", got[1][0].CommitsCount)
 	}
 }
 

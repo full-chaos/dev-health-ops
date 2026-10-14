@@ -38,14 +38,18 @@ func TestARepositoryWithSeveralMainOwnersCountsWholeInEach(t *testing.T) {
 		}
 	})
 
-	t.Run("team complexity", func(t *testing.T) {
-		rows := []repoComplexityInput{{RepoID: tied, LOCTotal: 2000, CyclomaticTotal: 100}, {RepoID: single, LOCTotal: 50, CyclomaticTotal: 5}}
-		got := map[string]int64{}
-		for _, row := range buildTeamComplexityRows("acme", teamComplexityTestDay, rows, owners, teamComplexityTestComputedAt) {
-			got[row.TeamID] = int64(row.LOCTotal)
+	t.Run("team complexity takes each owner at its share", func(t *testing.T) {
+		shares := map[string][]teamownership.OwnerShare{
+			tied.String():   {{TeamID: "team-b", Main: true, Share: 0.5}, {TeamID: "team-a", Main: true, Share: 0.5}},
+			single.String(): {{TeamID: "team-c", Main: true, Share: 1}},
 		}
-		if len(got) != 3 || got["team-a"] != 2000 || got["team-b"] != 2000 || got["team-c"] != 50 {
-			t.Errorf("loc by team %v, want team-a and team-b 2000, team-c 50", got)
+		rows := []repoComplexityInput{{RepoID: tied, LOCTotal: 2000, CyclomaticTotal: 100}, {RepoID: single, LOCTotal: 50, CyclomaticTotal: 5}}
+		got := map[string]float64{}
+		for _, row := range buildTeamComplexityRows("acme", teamComplexityTestDay, rows, shares, teamComplexityTestComputedAt) {
+			got[row.TeamID] = row.LOCTotal
+		}
+		if len(got) != 3 || got["team-a"] != 1000 || got["team-b"] != 1000 || got["team-c"] != 50 {
+			t.Errorf("loc by team %v, want team-a and team-b 1000, team-c 50", got)
 		}
 	})
 
@@ -57,7 +61,9 @@ func TestARepositoryWithSeveralMainOwnersCountsWholeInEach(t *testing.T) {
 	})
 
 	t.Run("wellbeing", func(t *testing.T) {
-		resolver, _ := newOwnershipRepoResolver(owners, []WellbeingTeam{{ID: "team-a", Name: "A"}, {ID: "team-b", Name: "B"}})
+		resolver, _ := newOwnershipRepoResolver(map[string][]teamownership.OwnerShare{
+			tied.String(): {{TeamID: "team-b", Main: true, Share: 0.5}, {TeamID: "team-a", Main: true, Share: 0.5}},
+		}, []WellbeingTeam{{ID: "team-a", Name: "A"}, {ID: "team-b", Name: "B"}})
 		multi, ok := resolver.(numerical.RepoOwnersResolver)
 		if !ok {
 			t.Fatal("the ownership resolver does not name several owners")

@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 	"github.com/full-chaos/dev-health-ops/internal/teamresolve"
 )
 
@@ -35,7 +36,7 @@ import (
 // (compoundingrisk.LoadRepoMetricsForOrgDay, org-wide, already
 // argMax-deduped).
 //
-// Team resolution goes through internal/teamresolve.ResolveOwnershipThenPatterns,
+// Team resolution goes through internal/teamresolve.ResolveOwnerSharesThenPatterns,
 // the SAME shared entry point team_cognitive_load (#2255) and team_complexity
 // (#2256) use for the identical Python function
 // (_repo_to_team_map_for_compounding_risk, job_daily.py:497) -- this executor
@@ -138,19 +139,19 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	// tzinfo=utc)` -- day-start midnight UTC, no sub-second component. `day`
 	// above is already exactly that.
 	//
-	// #2298 r1 (P1): ResolveOwnershipThenPatterns no longer takes an explicit
+	// #2298 r1 (P1): ResolveOwnerSharesThenPatterns no longer takes an explicit
 	// teamIDs list -- it resolves ownership via a single org-wide
 	// teamownership.AuthoritativeOwnersByRepo query (correctly ranked by
 	// is_primary/specificity/updated_at/team_id), not a per-team loop, so
 	// there is nothing left here to build a teamIDs slice from.
 	//
-	// CHAOS-5084 r1 (P1, codex, confirmed via repro): ResolveOwnershipThenPatterns
+	// CHAOS-5084 r1 (P1, codex, confirmed via repro): ResolveOwnerSharesThenPatterns
 	// now PROPAGATES an ownership-query failure instead of degrading to an
 	// empty map -- an earlier round's log-only mitigation stopped short of
 	// this (see that function's own doc comment for why, and why the reason
 	// no longer applies). Propagated here exactly like every other error in
 	// this executor: NO FAIL-OPEN, the finalize retries.
-	repoToTeam, err := teamresolve.ResolveOwnershipThenPatterns(
+	repoToTeam, err := teamresolve.ResolveOwnerSharesThenPatterns(
 		ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, patternResolver,
 	)
 	if err != nil {
@@ -207,7 +208,7 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	}
 	for _, repo := range withoutMetrics {
 		resolvedRepoIDs = append(resolvedRepoIDs, repo.id)
-		repoToTeam[repo.id.String()] = repo.teams
+		repoToTeam[repo.id.String()] = repo.owners
 	}
 	reviewWindows, err := executor.loader.LoadReviewWindows(ctx, run.OrganizationID, resolvedRepoIDs, day)
 	if err != nil {
@@ -284,8 +285,8 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 }
 
 type ownedRepository struct {
-	id    uuid.UUID
-	teams []string
+	id     uuid.UUID
+	owners []teamownership.OwnerShare
 }
 
 // ownedRepositoriesWithoutMetrics is every repository of the organization with
@@ -294,7 +295,7 @@ type ownedRepository struct {
 // already resolve to, in repository id order, with those of its owners.
 func (executor *CompoundingRiskTeamExecutor) ownedRepositoriesWithoutMetrics(
 	ctx context.Context, organizationID string, day time.Time,
-	orgRepoMetrics []compoundingrisk.RepoMetricsRow, repoToTeam map[string][]string,
+	orgRepoMetrics []compoundingrisk.RepoMetricsRow, repoToTeam map[string][]teamownership.OwnerShare,
 	patternResolver numerical.RepoTeamResolver,
 ) ([]ownedRepository, error) {
 	withMetrics := make(map[string]bool, len(orgRepoMetrics))
@@ -302,9 +303,9 @@ func (executor *CompoundingRiskTeamExecutor) ownedRepositoriesWithoutMetrics(
 		withMetrics[row.RepoID] = true
 	}
 	teamsOfTheDay := map[string]bool{}
-	for _, teams := range repoToTeam {
-		for _, team := range teams {
-			teamsOfTheDay[team] = true
+	for _, owners := range repoToTeam {
+		for _, owner := range owners {
+			teamsOfTheDay[owner.TeamID] = true
 		}
 	}
 	all, err := executor.loader.LoadOrgRepoIDs(ctx, organizationID)
@@ -324,20 +325,20 @@ func (executor *CompoundingRiskTeamExecutor) ownedRepositoriesWithoutMetrics(
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := teamresolve.ResolveOwnershipThenPatterns(ctx, executor.conn, organizationID, day, candidates, names, patternResolver)
+	resolved, err := teamresolve.ResolveOwnerSharesThenPatterns(ctx, executor.conn, organizationID, day, candidates, names, patternResolver)
 	if err != nil {
 		return nil, err
 	}
 	var owned []ownedRepository
 	for _, id := range candidates {
-		var teams []string
-		for _, team := range resolved[id.String()] {
-			if teamsOfTheDay[team] {
-				teams = append(teams, team)
+		var owners []teamownership.OwnerShare
+		for _, owner := range resolved[id.String()] {
+			if teamsOfTheDay[owner.TeamID] {
+				owners = append(owners, owner)
 			}
 		}
-		if len(teams) > 0 {
-			owned = append(owned, ownedRepository{id: id, teams: teams})
+		if len(owners) > 0 {
+			owned = append(owned, ownedRepository{id: id, owners: owners})
 		}
 	}
 	return owned, nil

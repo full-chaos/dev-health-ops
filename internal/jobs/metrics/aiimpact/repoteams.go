@@ -137,7 +137,7 @@ func (resolver *RepoPatternResolver) Resolve(repoName string) *string {
 // ResolveRepo adapts this resolver to numerical.RepoTeamResolver, the
 // interface the shared ownership-then-patterns resolver
 // (internal/teamresolve.ResolveFromOwnershipMap /
-// ResolveOwnershipThenPatterns) takes for its pattern-fallback argument. A
+// ResolveOwnerSharesThenPatterns) takes for its pattern-fallback argument. A
 // team name is not tracked per pattern rule, so the second return value is
 // always empty; only the id is used by that resolver.
 func (resolver *RepoPatternResolver) ResolveRepo(repoName string) (teamID, teamName string) {

@@ -37,10 +37,10 @@ func (f fakePatternResolver) ResolveRepo(repoName string) (teamID, teamName stri
 // never gets the chance to try).
 //
 // CORRECTED (CHAOS-5084/CHAOS-5141, codex round r1 on #2298): this test
-// used to call ResolveOwnershipThenPatterns (with teamIDs: nil, exploiting
+// used to call ResolveOwnerSharesThenPatterns (with teamIDs: nil, exploiting
 // the old per-team loop's early-exit for an empty team list to avoid
 // touching ClickHouse) -- that parameter no longer exists after fixing
-// ResolveOwnershipThenPatterns to call teamownership.AuthoritativeOwnersByRepo
+// ResolveOwnerSharesThenPatterns to call teamownership.AuthoritativeOwnersByRepo
 // unconditionally (see teamresolve.go's own doc for why). What this test
 // actually exercises -- the fallback/gating logic -- lives entirely in
 // ResolveFromOwnershipMap, the pure core; calling it directly (with an
@@ -78,9 +78,9 @@ func TestResolveFromOwnershipMapFallsBackOnlyForKnownUnresolvedRepos(t *testing.
 
 // TestResolveFromOwnershipMapNilResolverDoesNotPanic: a caller with no
 // pattern resolver at all (nil interface) must degrade to ownership-only,
-// not panic -- ResolveOwnershipThenPatterns is called from three sites and
+// not panic -- ResolveOwnerSharesThenPatterns is called from three sites and
 // not all of them are guaranteed to have wired a resolver at every call;
-// this pins the same guarantee at the pure-core level ResolveOwnershipThenPatterns
+// this pins the same guarantee at the pure-core level ResolveOwnerSharesThenPatterns
 // itself delegates to.
 func TestResolveFromOwnershipMapNilResolverDoesNotPanic(t *testing.T) {
 	repo := uuid.New()
@@ -97,7 +97,7 @@ func TestResolveFromOwnershipMapNilResolverDoesNotPanic(t *testing.T) {
 // internal/jobs/metrics/daily's own erroringOwnershipConn
 // (team_cognitive_load_test.go), which proves the identical propagation
 // contract for resolveDailyFinalizeRepoToTeam;
-// ResolveOwnershipThenPatterns's only conn use is the single
+// ResolveOwnerSharesThenPatterns's only conn use is the single
 // teamownership.AuthoritativeOwnersByRepo call (a conn.Query), so this is a
 // faithful, minimal fake for testing that path's error propagation here too.
 type erroringOwnershipConn struct{}
@@ -139,7 +139,7 @@ func (erroringOwnershipConn) CheckNamedValue(*stddriver.NamedValue) error {
 
 var errOwnershipQueryFailed = errors.New("clickhouse: connection reset by peer")
 
-// TestResolveOwnershipThenPatternsPropagatesOwnershipQueryError is the
+// TestResolveOwnerSharesThenPatternsPropagatesOwnershipQueryError is the
 // failing-first proof for CHAOS-5084 r1 finding P1 (codex, confirmed via
 // repro): a transient ClickHouse error while loading ownership must FAIL
 // this resolution, never silently degrade to an empty map. The prior
@@ -150,11 +150,11 @@ var errOwnershipQueryFailed = errors.New("clickhouse: connection reset by peer")
 // compounding_risk_team Computed for that run, silently losing the family.
 // Same bug class, same fix shape, as CHAOS-5141's
 // TestResolveDailyFinalizeRepoToTeamPropagatesOwnershipQueryError.
-func TestResolveOwnershipThenPatternsPropagatesOwnershipQueryError(t *testing.T) {
+func TestResolveOwnerSharesThenPatternsPropagatesOwnershipQueryError(t *testing.T) {
 	repo := uuid.New()
 	repoNamesByID := map[string]string{repo.String(): "acme/repo"}
 
-	got, err := ResolveOwnershipThenPatterns(
+	got, err := ResolveOwnerSharesThenPatterns(
 		context.Background(), erroringOwnershipConn{}, "acme", time.Now().UTC(),
 		[]uuid.UUID{repo}, repoNamesByID, nil,
 	)

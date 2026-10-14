@@ -383,13 +383,14 @@ func TestTeamScopeOwnership_InvestmentRoutesNarrowToTheOwnedRepos(t *testing.T) 
 		t.Fatalf("investment.BuildResponse (team scope): %v", err)
 	}
 
+	// The measure is the COUNT of the work units (CHAOS-9622, D5999): the units carry 10 and 990 lines and count 1 each.
 	orgEffort := totalThemeEffort(orgWide.ThemeDistribution)
 	teamEffort := totalThemeEffort(teamScoped.ThemeDistribution)
-	if orgEffort != 1000 {
-		t.Fatalf("org-wide investment total = %v, want 1000 (both seeded work units)", orgEffort)
+	if orgEffort != 2 {
+		t.Fatalf("org-wide investment total = %v, want 2 (both seeded work units, one each)", orgEffort)
 	}
-	if teamEffort != 10 {
-		t.Fatalf("team-scoped investment total = %v, want 10 (the owned repository's work unit only); equal to the org-wide total means the team scope applied no filter at all", teamEffort)
+	if teamEffort != 1 {
+		t.Fatalf("team-scoped investment total = %v, want 1 (the owned repository's work unit only); equal to the org-wide total means the team scope applied no filter at all", teamEffort)
 	}
 
 	orgSlices, err := investment.BuildSunburstResponse(ctx, reader, orgID, investment.SunburstParams{
@@ -407,11 +408,11 @@ func TestTeamScopeOwnership_InvestmentRoutesNarrowToTheOwnedRepos(t *testing.T) 
 	}
 	orgSunburst := totalSliceValue(orgSlices)
 	teamSunburst := totalSliceValue(teamSlices)
-	if orgSunburst != 1000 {
-		t.Fatalf("org-wide sunburst total = %v, want 1000 (both seeded work units)", orgSunburst)
+	if orgSunburst != 2 {
+		t.Fatalf("org-wide sunburst total = %v, want 2 (both seeded work units, one each)", orgSunburst)
 	}
-	if teamSunburst != 10 {
-		t.Fatalf("team-scoped sunburst total = %v, want 10 (the owned repository's work unit only); equal to the org-wide total means the team scope applied no filter at all", teamSunburst)
+	if teamSunburst != 1 {
+		t.Fatalf("team-scoped sunburst total = %v, want 1 (the owned repository's work unit only); equal to the org-wide total means the team scope applied no filter at all", teamSunburst)
 	}
 }
 

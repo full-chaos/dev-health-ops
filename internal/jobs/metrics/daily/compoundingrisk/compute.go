@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // pythonMax reproduces CPython's two-argument builtin `max(a, b)`.
@@ -366,23 +367,77 @@ func MeanOrNone(values []*float64) *float64 {
 	return &mean
 }
 
-// pooledReviewWindow adds the counts of a team's repositories, so the team's
-// share is reviewed over merged across them, not a mean of repository shares.
-// The team's p90 stays the mean of the repository p90s (BuildTeamRows), as for
-// every other input. nil when no repository carries a window.
-func pooledReviewWindow(windows []*ReviewWindow) *ReviewWindow {
-	var pooled *ReviewWindow
-	for _, window := range windows {
+// weightedMeanOrNone is the mean of the present values weighted by shares
+// (D5998, CHAOS-9620): sum(value x share) / sum(share) over the repositories
+// that carry the value. With every share 1 it is MeanOrNone, bit for bit (the
+// parity golden). When the shares of the present values sum to nothing the
+// repository still gives its own value: risk intensity is a property of the
+// repository, the share only weights it against the team's other repositories.
+func weightedMeanOrNone(values []*float64, shares []float64) *float64 {
+	allWhole := true
+	for _, share := range shares {
+		if share != 1 {
+			allWhole = false
+			break
+		}
+	}
+	if allWhole {
+		return MeanOrNone(values)
+	}
+	var weighted, weights []float64
+	for index, value := range values {
+		if value == nil {
+			continue
+		}
+		weighted = append(weighted, float64(*value*shares[index]))
+		weights = append(weights, shares[index])
+	}
+	if len(weighted) == 0 {
+		return nil
+	}
+	if len(weighted) == 1 {
+		// One repository: its own value, exactly (value x share / share can
+		// differ from value in the last bit).
+		for _, value := range values {
+			if value != nil {
+				only := *value
+				return &only
+			}
+		}
+	}
+	total := pythonparity.Sum(weights)
+	if total <= 0 {
+		return MeanOrNone(values)
+	}
+	mean := pythonparity.Sum(weighted) / total
+	return &mean
+}
+
+// withWeightedReviewWindow stores the review window behind the record's review
+// input: the pooled pull-request counts are additive, so each repository's
+// count enters at the owner's share (sum of count x share, D5998); the share
+// reviewed over merged is that of the weighted counts, nil when nothing merged.
+// The window is stored, never scored. nil when no repository carries a window.
+func (record Record) withWeightedReviewWindow(windows []*ReviewWindow, shares []float64) Record {
+	var merged, reviewed float64
+	found := false
+	for index, window := range windows {
 		if window == nil {
 			continue
 		}
-		if pooled == nil {
-			pooled = &ReviewWindow{}
-		}
-		pooled.MergedPRs += window.MergedPRs
-		pooled.ReviewedPRs += window.ReviewedPRs
+		found = true
+		merged += float64(float64(window.MergedPRs) * shares[index])
+		reviewed += float64(float64(window.ReviewedPRs) * shares[index])
 	}
-	return pooled
+	if !found {
+		return record
+	}
+	record.MergedPRs30D, record.ReviewedPRs30D = &merged, &reviewed
+	if merged > 0 {
+		share := reviewed / merged
+		record.ReviewShare30D = &share
+	}
+	return record
 }
 
 // RepoInputs pairs one repo's Inputs with its repo_id, so BuildTeamRows can
@@ -449,19 +504,26 @@ func BuildTeamRows(
 	day time.Time,
 	orgID string,
 	repoInputs []RepoInputs,
-	repoToTeam map[string][]string,
+	repoOwners map[string][]teamownership.OwnerShare,
 	computedAt time.Time,
 	weights Weights,
 	thresholds Thresholds,
 	references References,
 ) []Record {
-	byTeam := make(map[string][]Inputs, len(repoToTeam))
-	windowsByTeam := make(map[string][]*ReviewWindow, len(repoToTeam))
-	teamOrder := make([]string, 0, len(repoToTeam))
-	// Every owner of a repo, main or lesser (D5988, CHAOS-9410), reads its own value:
-	// a mean of repository scores does not add, so no share weight applies.
+	byTeam := make(map[string][]Inputs, len(repoOwners))
+	windowsByTeam := make(map[string][]*ReviewWindow, len(repoOwners))
+	sharesByTeam := make(map[string][]float64, len(repoOwners))
+	teamOrder := make([]string, 0, len(repoOwners))
+	// Every owner of a repo, main or lesser (D5988, CHAOS-9410), gets a row. The
+	// owner's share is the WEIGHT of the repository in the team's aggregate
+	// (D5998, CHAOS-9620): each intensive input is the share-weighted mean over
+	// the team's repositories and the norms, the score and the severity are
+	// recomputed from those inputs with the same formula; the additive review
+	// window counts are the sums of count x share. A share is never multiplied
+	// into a score, a norm, a mean or a percentile.
 	for _, ri := range repoInputs {
-		for _, teamID := range repoToTeam[ri.RepoID] {
+		for _, owner := range repoOwners[ri.RepoID] {
+			teamID := owner.TeamID
 			if teamID == "" {
 				continue
 			}
@@ -470,12 +532,14 @@ func BuildTeamRows(
 			}
 			byTeam[teamID] = append(byTeam[teamID], ri.Inputs)
 			windowsByTeam[teamID] = append(windowsByTeam[teamID], ri.ReviewWindow)
+			sharesByTeam[teamID] = append(sharesByTeam[teamID], owner.Share)
 		}
 	}
 
 	out := make([]Record, 0, len(teamOrder))
 	for _, teamID := range teamOrder {
 		allInputs := byTeam[teamID]
+		shares := sharesByTeam[teamID]
 		reworkChurn := make([]*float64, len(allInputs))
 		complexityDelta := make([]*float64, len(allInputs))
 		reviewLatency := make([]*float64, len(allInputs))
@@ -491,11 +555,11 @@ func BuildTeamRows(
 			busFactor[i] = inputs.BusFactor
 		}
 		teamInputs := Inputs{
-			ReworkChurn:       MeanOrNone(reworkChurn),
-			ComplexityDelta:   MeanOrNone(complexityDelta),
-			ReviewLatencyP90H: MeanOrNone(reviewLatency),
-			SingleOwnerRatio:  MeanOrNone(singleOwnerRatio),
-			OwnershipGini:     MeanOrNone(ownershipGini),
+			ReworkChurn:       weightedMeanOrNone(reworkChurn, shares),
+			ComplexityDelta:   weightedMeanOrNone(complexityDelta, shares),
+			ReviewLatencyP90H: weightedMeanOrNone(reviewLatency, shares),
+			SingleOwnerRatio:  weightedMeanOrNone(singleOwnerRatio, shares),
+			OwnershipGini:     weightedMeanOrNone(ownershipGini, shares),
 			// BusFactor IS aggregated too (compounding_risk.py:590), even
 			// though it is pure metadata never consumed by the formula -- a
 			// team row still persists a mean bus_factor for inspectability,
@@ -504,11 +568,12 @@ func BuildTeamRows(
 			// by the golden oracle (team-alpha/beta/solo's bus_factor came back
 			// non-null from live Python where this function was producing
 			// null).
-			BusFactor: MeanOrNone(busFactor),
+			BusFactor: weightedMeanOrNone(busFactor, shares),
 		}
-		out = append(out, ComputeTeam(
+		record := ComputeTeam(
 			day, teamID, orgID, teamInputs, computedAt, weights, thresholds, references,
-		).WithReviewWindow(pooledReviewWindow(windowsByTeam[teamID])))
+		).withWeightedReviewWindow(windowsByTeam[teamID], shares)
+		out = append(out, record)
 	}
 	return out
 }

@@ -140,7 +140,7 @@ func TestGitHubCredentialIsTheOneTheActiveIntegrationPointsAt(t *testing.T) {
 		reset()
 		wanted := credential("github-prod", `{"token":"ghp_spaced_provider_value"}`)
 		id := integration(&wanted, true)
-		if _, err := pool.Exec(ctx, `UPDATE integrations SET provider = ' GitHub ' WHERE id = $1`, id); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE integrations SET provider = E'\t GitHub\n ' WHERE id = $1`, id); err != nil {
 			t.Fatal(err)
 		}
 		got, err := storedGitHubCredential(ctx, baseURL, orgID, env)

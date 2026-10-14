@@ -319,17 +319,22 @@ func storedGitHubCredential(ctx context.Context, dbURL, orgID string, env cli.En
 // when there are several (the verb does not guess).
 func activeGitHubIntegration(ctx context.Context, pool *pgxpool.Pool, orgID string) (integrationID, credentialID string, err error) {
 	rows, err := pool.Query(ctx,
-		`SELECT id::text, COALESCE(credential_id::text, '') FROM integrations
-		 WHERE org_id = $1 AND lower(btrim(provider)) = 'github' AND is_active = TRUE ORDER BY id`, orgID)
+		`SELECT id::text, provider, COALESCE(credential_id::text, '') FROM integrations
+		 WHERE org_id = $1 AND is_active = TRUE ORDER BY id`, orgID)
 	if err != nil {
 		return "", "", lookupFailureWith(reasonDatabaseQueryFailed, err)
 	}
 	defer rows.Close()
 	var ids, credentialIDs []string
 	for rows.Next() {
-		var id, credential string
-		if err := rows.Scan(&id, &credential); err != nil {
+		var id, provider, credential string
+		if err := rows.Scan(&id, &provider, &credential); err != nil {
 			return "", "", lookupFailureWith(reasonDatabaseQueryFailed, err)
+		}
+		// The provider column is unconstrained text: the workers compare it as ToLower(TrimSpace(..)) in Go
+		// (scheduler/sync normalizeSourceKey), never with a SQL predicate, and so does this.
+		if strings.ToLower(strings.TrimSpace(provider)) != "github" {
+			continue
 		}
 		ids, credentialIDs = append(ids, id), append(credentialIDs, credential)
 	}

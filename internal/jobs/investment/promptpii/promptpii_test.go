@@ -40,6 +40,11 @@ func TestTextReplacesEachClassAndKeepsTheRest(t *testing.T) {
 		{"token is quoted", `our token is "q9w8e7r6t5" now`, "q9w8e7r6t5", `our token is "[REDACTED]" now`, func(c Counts) int { return c.Credentials }},
 		{"secret equals with trailing stop", "The secret equals k3y9m4ster.", "k3y9m4ster", "The secret equals [REDACTED].", func(c Counts) int { return c.Credentials }},
 		{"numeric password in prose", "password is 12345678 per the ticket", "12345678", "password is [REDACTED] per the ticket", func(c Counts) int { return c.Credentials }},
+		{"pwd behind filler", "the pwd is abcd1234 for staging", "abcd1234", "the pwd is [REDACTED] for staging", func(c Counts) int { return c.Credentials }},
+		{"value with a colon", "the api key is abc:def1234 here", "def1234", "the api key is [REDACTED] here", func(c Counts) int { return c.Credentials }},
+		{"value that starts like a date", "password is 2026-10-13secret9 ok", "secret9", "password is [REDACTED] ok", func(c Counts) int { return c.Credentials }},
+		{"value that starts like a version", "the token is v1.2.3secret9 ok", "secret9", "the token is [REDACTED] ok", func(c Counts) int { return c.Credentials }},
+		{"address with a plus before a tag-like host", "mail jane.doe+ops@latest today", "jane.doe", "mail [email-1] today", func(c Counts) int { return c.Emails }},
 		{"real email next to a package pin", "mail bob@corp.example about lodash@latest", "bob@", "mail [email-1] about lodash@latest", func(c Counts) int { return c.Emails }},
 		{"dist-tag name inside a real address", "mail ann@beta.example.com today", "ann@", "mail [email-1] today", func(c Counts) int { return c.Emails }},
 		{"v-version host inside a real address", "mail ann@v2.example.com today", "ann@", "mail [email-1] today", func(c Counts) int { return c.Emails }},
@@ -80,6 +85,9 @@ func TestTextKeepsPlainEngineeringProse(t *testing.T) {
 		"The token is PROJ-12345 per the ticket; the secret is v1.2.3-rc.1 in the log",
 		"The token was issued 2026-10-13T12:30:45Z; the password is 2026-10-13",
 		"The secret is in the vault; the key is the primary index",
+		"The token is 2026/10/13 and the secret is v1.2.3+build9; the password is 13/10/2026",
+		"The token was issued 2026-10-13T12:30:45.123+02:00; the secret is 12:30:45 server time",
+		"The pwd is /home/build1/work and the password is https://vault.example/v1/x",
 		"",
 	} {
 		f := NewFilter()
@@ -153,6 +161,13 @@ func TestPackageTagStringsAreKeptAndCountNoEmail(t *testing.T) {
 		if f.Counts().Emails != 0 {
 			t.Errorf("counted an email in %q", in)
 		}
+	}
+}
+
+func TestDotlessAddressThatIsAPinShapeStaysAsANamedLimit(t *testing.T) {
+	in := "mail alice@latest"
+	if got := NewFilter().Text(in); got != in {
+		t.Fatalf("alice@latest cannot be told from lodash@latest; got %q", got)
 	}
 }
 

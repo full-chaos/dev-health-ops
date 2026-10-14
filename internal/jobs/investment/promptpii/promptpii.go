@@ -8,7 +8,9 @@
 // Named limits: a credential written as a plain word with no digit ("the
 // password is hunterpass") reads like "the password is invalid" and stays; a
 // package pin whose tag is not a known release channel or a "v" version
-// (name@somebranch) is read as an address.
+// (name@somebranch) is read as an address; and a real address whose dotless host
+// is a release channel or version (alice@latest) cannot be told from a pin and
+// stays.
 package promptpii
 
 import (
@@ -62,15 +64,16 @@ var (
 	// "the api key is abcd1234", "password was set to Tr0ub4dor3". The value is
 	// checked by proseSecretShaped; without a digit it is a word ("the token is
 	// invalid") and stays.
-	proseSecretPattern = regexp.MustCompile(`(?i)\b(passwords?|passwd|passphrase|secret|api[ _-]?keys?|access[ _-]?token|auth[ _-]?token|client[ _-]?secret|credentials?|token)((?:[ \t]+(?:is|was|are|set|to|equals?))+[ \t:]+["'` + "`" + `]?)([A-Za-z0-9_+/=.\-]{8,})`)
+	proseSecretPattern = regexp.MustCompile(`(?i)\b(passwords?|passwd|pwd|passphrase|secret|api[ _-]?keys?|access[ _-]?token|auth[ _-]?token|client[ _-]?secret|credentials?|token)((?:[ \t]+(?:is|was|are|set|to|equals?))+[ \t:]+["'` + "`" + `]?)([^\s"'` + "`" + `<>,;()\[\]{}]{8,})`)
 	issueKeyPattern    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*-\d+$`)
-	versionPattern     = regexp.MustCompile(`^[vV]?\d+(?:\.\d+)+(?:-[A-Za-z0-9.]+)?$`)
-	datePattern        = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`)
+	versionPattern     = regexp.MustCompile(`^[vV]?\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.+-]+)?$`)
+	datePattern        = regexp.MustCompile(`^(?:\d{4}[-/]\d{2}[-/]\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?|\d{2}[-/.]\d{2}[-/.]\d{4}|\d{1,2}:\d{2}(?::\d{2})?)$`)
 
 	// The host part of a package@tag pin: a release channel or a "v"-version,
 	// optionally followed by digit-only parts ("beta.3", "next-1042", "v18.3.1").
 	// A host with a name part ("beta.example.com") is still an address.
-	packageTagPattern = regexp.MustCompile(`(?i)^(?:(?:latest|next|beta|alpha|canary|nightly|rc|lts|insiders|experimental|preview|snapshot)(?:[.-]\d+)*|v\d+(?:[.-]\d+)*(?:-(?:alpha|beta|rc)(?:[.-]\d+)*)?|sha(?:256|512))$`)
+	packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
+	packageTagPattern  = regexp.MustCompile(`(?i)^(?:(?:latest|next|beta|alpha|canary|nightly|rc|lts|insiders|experimental|preview|snapshot)(?:[.-]\d+)*|v\d+(?:[.-]\d+)*(?:-(?:alpha|beta|rc)(?:[.-]\d+)*)?|sha(?:256|512))$`)
 
 	// Jira wiki mentions: [~username] and [~accountid:...].
 	jiraMentionPattern = regexp.MustCompile(`\[~[^\]\s]{1,128}\]`)
@@ -163,11 +166,11 @@ func (f *Filter) Text(text string) string {
 			return m
 		}
 		f.counts.Credentials++
-		return sub[1] + sub[2] + credentialMarker + sub[3][len(strings.TrimRight(sub[3], ".-,")):]
+		return sub[1] + sub[2] + credentialMarker + sub[3][len(strings.TrimRight(sub[3], proseSecretTrim)):]
 	})
 
 	filtered = emailPattern.ReplaceAllStringFunc(filtered, func(m string) string {
-		if isPackageTag(m[strings.LastIndexByte(m, '@')+1:]) {
+		if isPackagePin(m) {
 			return m
 		}
 		f.counts.Emails++
@@ -201,17 +204,30 @@ func (f *Filter) Text(text string) string {
 	return filtered
 }
 
-// proseSecretShaped: at least 8 bytes holding a digit, and not an issue key, a
-// version or a date, which follow the same words in ordinary text.
+// proseSecretTrim is the sentence punctuation that may end a prose value.
+const proseSecretTrim = ".-,:"
+
+// proseSecretShaped: at least 8 bytes holding a digit, and not a path, a URL, an
+// issue key, a version, a date or a time, which follow the same words in
+// ordinary text. The date, version and time forms are whole-value matches.
 func proseSecretShaped(value string) bool {
-	value = strings.TrimRight(value, ".-,")
+	value = strings.TrimRight(value, proseSecretTrim)
 	if len(value) < 8 || strings.ContainsAny(value, "[]") || countDigits(value) == 0 {
+		return false
+	}
+	if value[0] == '/' || value[0] == '~' || strings.Contains(value, "://") {
 		return false
 	}
 	return !issueKeyPattern.MatchString(value) && !versionPattern.MatchString(value) && !datePattern.MatchString(value)
 }
 
-func isPackageTag(host string) bool { return packageTagPattern.MatchString(host) }
+// isPackagePin: the local part uses only characters of a package or action name
+// (no "+", "%" or quote, which only an address carries) and the host part is a
+// release channel or a version. "alice@latest" cannot be told from "lodash@latest".
+func isPackagePin(m string) bool {
+	at := strings.LastIndexByte(m, '@')
+	return packageNamePattern.MatchString(m[:at]) && packageTagPattern.MatchString(m[at+1:])
+}
 
 func countDigits(s string) int {
 	n := 0

@@ -122,7 +122,7 @@ const jiraProjectAsTeamCloseOwnership = `INSERT INTO team_project_ownership ` +
 
 const jiraProjectAsTeamCloseRepoOwnership = teamRepoOwnershipInsert + ` ` +
 	`SELECT org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, ` +
-	`greatest({at:DateTime64(3, 'UTC')}, valid_from), greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)) ` +
+	`greatest({at:DateTime64(3, 'UTC')}, valid_from + toIntervalMillisecond(1)), greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)) ` +
 	`FROM team_repo_ownership FINAL WHERE ` + jiraProjectAsTeamRepoOwnershipPredicate
 
 // jiraProjectAsTeamOldestCreated is the oldest creation evidence of each team

@@ -267,6 +267,9 @@ func (reader *Reader) FetchInvestmentBreakdown(ctx context.Context, filters Brea
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
 	}
+	if err := filters.requireMeasure(); err != nil {
+		return nil, err
+	}
 
 	categorySQL, categoryBindings := filters.categoryClause()
 	scopeSQL, scopeBindings := filters.scopeClause()
@@ -427,13 +430,13 @@ func joinOR(conditions []string) string {
 	return joined
 }
 
-// ThemeEffortRow is one theme of FetchInvestmentThemeEffort: the effort of the units over the
-// theme (each unit's effort_value weighted by its share of the theme), the part of it measured in
-// changed lines of code (effort_metric churn_loc), and the pull requests of the units' evidence
-// weighted the same way.
+// ThemeEffortRow is one theme of FetchInvestmentThemeEffort: the value of the theme in the measure the
+// filters name (BreakdownFilters.Measure; InvestmentShareMeasure for the Home tile and the Operating
+// Review), the part of the units' effort measured in changed lines of code (effort_metric churn_loc;
+// explicit, never a weight), and the pull requests of the units' evidence weighted by the theme share.
 type ThemeEffortRow struct {
 	Theme    string
-	Effort   float64
+	Value    float64
 	ChurnLOC float64
 	PRs      float64
 }
@@ -442,14 +445,22 @@ type ThemeEffortRow struct {
 // with the two extra measures the Home tile "Investment by theme" serves (CHAOS-9195): the
 // SAME source (the latest row of each unit), the SAME scope and category clauses and the SAME
 // rule for every categorization status (a unit with insufficient evidence counts, as on the
-// Investment page); only the dating of a unit may differ (BreakdownFilters.DatedByEnd).
+// Investment page); only the dating of a unit may differ (BreakdownFilters.DatedByEnd). The value
+// is MeasureValueSQL of the filters' measure, the one definition FetchInvestmentBreakdown reads.
 func (reader *Reader) FetchInvestmentThemeEffort(ctx context.Context, filters BreakdownFilters) ([]ThemeEffortRow, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
 	}
+	if err := filters.requireMeasure(); err != nil {
+		return nil, err
+	}
 	categorySQL, categoryBindings := filters.categoryClause()
 	scopeSQL, scopeBindings := filters.scopeClause()
 	shareSQL, shareBindings := filters.teamShare(scopeSQL)
+	valueSQL, err := MeasureValueSQL(filters.Measure, filters.unitWeight(scopeSQL), shareSQL)
+	if err != nil {
+		return nil, err
+	}
 	bindings := filters.baseBindings()
 	bindings = append(bindings, scopeBindings...)
 	bindings = append(bindings, shareBindings...)
@@ -458,7 +469,7 @@ func (reader *Reader) FetchInvestmentThemeEffort(ctx context.Context, filters Br
 	query := fmt.Sprintf(`
 SELECT
     splitByChar('.', subcategory_kv.1)[1] AS theme,
-    toFloat64(sum(subcategory_kv.2 * effort_value * %[1]s)) AS effort,
+    toFloat64(%[8]s) AS value,
     toFloat64(sum(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value * %[1]s, 0))) AS churn_loc,
     toFloat64(sum(subcategory_kv.2 * %[2]s * %[1]s * length(JSONExtractArrayRaw(structural_evidence_json, 'prs')))) AS prs
 FROM %[3]s
@@ -468,9 +479,9 @@ WHERE %[4]s
 %[5]s
 %[6]s
 GROUP BY theme
-ORDER BY effort DESC, theme ASC
+ORDER BY value DESC, theme ASC
 %[7]s
-`, shareSQL, filters.unitWeight(scopeSQL), filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, shareSQL, filters.unitWeight(scopeSQL), filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime(), valueSQL)
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -480,7 +491,7 @@ ORDER BY effort DESC, theme ASC
 	out := make([]ThemeEffortRow, 0, 5)
 	for rows.Next() {
 		var row ThemeEffortRow
-		if err := rows.Scan(&row.Theme, &row.Effort, &row.ChurnLOC, &row.PRs); err != nil {
+		if err := rows.Scan(&row.Theme, &row.Value, &row.ChurnLOC, &row.PRs); err != nil {
 			return nil, fmt.Errorf("scan investment theme effort row: %w", err)
 		}
 		out = append(out, row)

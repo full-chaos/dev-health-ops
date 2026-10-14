@@ -35,6 +35,11 @@ type Response struct {
 	EvidenceQualityStats        *EvidenceQualityStats      `json:"evidence_quality_stats"`
 	Unit                        *string                    `json:"unit"`
 	Edges                       []map[string]any           `json:"edges" pyjson:"nullable"`
+	// Measure and Denominator are Go-only (CHAOS-9622): what the distributions count, and the sum the
+	// shares are shares of (the sum of the themes). The distribution values are the numerators, so
+	// share = value / denominator. Left out of an empty response, which has no shares.
+	Measure     string   `json:"measure,omitempty"`
+	Denominator *float64 `json:"denominator,omitempty"`
 }
 
 // EvidenceQualityStats is the wire shape of EvidenceQualityStats
@@ -207,6 +212,7 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
 		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
 		Themes: themes, Subcategories: subcategories,
+		Measure: investmentexplain.InvestmentShareMeasure,
 	}
 	rows, err := reader.explainR.FetchInvestmentBreakdown(ctx, breakdownFilters)
 	if err != nil {
@@ -245,6 +251,11 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 		}
 	}
 
+	denominator := 0.0
+	for _, value := range themeDistribution.All() {
+		denominator += value
+	}
+
 	qualityStats := computeQualityStats(qualityRow, found)
 	// investment.py builds this dict from band_counts.items(), so it keeps
 	// band_counts' order.
@@ -259,6 +270,8 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 		EvidenceQualityDistribution: evidenceQualityDistribution,
 		EvidenceQualityStats:        &qualityStats,
 		Edges:                       []map[string]any{},
+		Measure:                     breakdownFilters.Measure,
+		Denominator:                 &denominator,
 	}, nil
 }
 
@@ -334,6 +347,7 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
 		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
 		Themes: themes, Subcategories: subcategories, Limit: params.Limit,
+		Measure: investmentexplain.InvestmentShareMeasure,
 	})
 	if err != nil {
 		return nil, err

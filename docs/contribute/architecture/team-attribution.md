@@ -1275,7 +1275,15 @@ controls: a link that is gone and an explicit empty list are closed).
 > - **An additive measure** (a sum over repositories) takes each owner at its share. `team_cognitive_load_daily`
 >   does so: the pull-request interruption load, the review request load and the context-spread count are the sums
 >   of the repository values times the owner's share, and the after-hours and weekend ratios are recomputed from the
->   share-weighted commit counts. The counts of repositories and authors stay whole.
+>   share-weighted commit counts. The counts of repositories and authors stay whole. `team_complexity_daily`
+>   (lines of code, cyclomatic total, the two function counts) and `team_metrics_daily` (the commit, after-hours and
+>   weekend counts, written per team and repository by the wellbeing executor) do the same since migration 124
+>   (CHAOS-9601): their counter columns are Float64, a co-owning team holds a fraction of a count, nothing is
+>   rounded, and the ratios are recomputed from the weighted sums. The cognitive-load executor reads
+>   `team_metrics_daily` per repository and sums the rows of one generation, so the owners' shares of a repository
+>   (which sum to 1) give the whole repository back before the cognitive-load share is applied once.
+>   `ai_impact_metrics_daily` (UInt32 counters, served as GraphQL `Int`) still takes the main owner(s) only, each whole
+>   (D5994; the public count type is a separate decision).
 > - **A measure that does not add** (a mean of repository scores, a ratio, a percentile) gives every owner, main and
 >   lesser, the repository's own value, unweighted. `compounding_risk_daily` (team scope) does so, through
 >   `teamresolve.ResolveOwnershipThenPatterns`.

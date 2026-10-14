@@ -59,7 +59,7 @@ var compoundingRiskSchema = []string{
     w_churn Float64, w_complexity Float64, w_ownership Float64, w_review Float64,
     threshold_elevated Float64, threshold_high Float64,
     computed_at DateTime DEFAULT now(),
-    merged_prs_30d Nullable(UInt32), reviewed_prs_30d Nullable(UInt32),
+    merged_prs_30d Nullable(Float64), reviewed_prs_30d Nullable(Float64),
     review_share_30d Nullable(Float64)
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day)
   ORDER BY (org_id, scope, scope_id, day, computed_at)`,
@@ -279,8 +279,8 @@ INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, first_rev
 
 	var (
 		gotLatency   *float64
-		gotMerged    *uint32
-		gotReviewed  *uint32
+		gotMerged    *float64
+		gotReviewed  *float64
 		gotShare     *float64
 		gotScope     string
 		gotScopeID   string

@@ -52,13 +52,13 @@ func TestWellbeingInactiveOwnerNeverWins(t *testing.T) {
 
 	wellbeingOwnershipCompute(t, ctx, conn, []uuid.UUID{r1, r2}, wellbeingOwnershipDay.Add(30*time.Hour))
 	got := wellbeingOwnershipRead(t, ctx, conn)
-	want := map[string]uint32{"github:active|" + r1.String(): 2, "unassigned|" + r2.String(): 2}
+	want := map[string]float64{"github:active|" + r1.String(): 2, "unassigned|" + r2.String(): 2}
 	if len(got) != len(want) {
 		t.Errorf("rows = %v, want %v", got, want)
 	}
 	for k, v := range want {
 		if got[k] != v {
-			t.Errorf("row %s = %d, want %d (all %v)", k, got[k], v, got)
+			t.Errorf("row %s = %v, want %v (all %v)", k, got[k], v, got)
 		}
 	}
 }
@@ -78,13 +78,13 @@ func TestWellbeingOwnershipOutranksPatternAndPatternStillFallsBack(t *testing.T)
 
 	wellbeingOwnershipCompute(t, ctx, conn, []uuid.UUID{owned, patterned}, wellbeingOwnershipDay.Add(30*time.Hour))
 	got := wellbeingOwnershipRead(t, ctx, conn)
-	want := map[string]uint32{"github:owner|" + owned.String(): 2, "github:pattern|" + patterned.String(): 2}
+	want := map[string]float64{"github:owner|" + owned.String(): 2, "github:pattern|" + patterned.String(): 2}
 	if len(got) != len(want) {
 		t.Errorf("rows = %v, want %v", got, want)
 	}
 	for k, v := range want {
 		if got[k] != v {
-			t.Errorf("row %s = %d, want %d (all %v)", k, got[k], v, got)
+			t.Errorf("row %s = %v, want %v (all %v)", k, got[k], v, got)
 		}
 	}
 }

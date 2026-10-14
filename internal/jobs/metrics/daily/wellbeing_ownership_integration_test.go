@@ -85,7 +85,7 @@ func wellbeingOwnershipCompute(t *testing.T, ctx context.Context, conn driver.Co
 
 // wellbeingOwnershipRead is the newest generation of every (team, repository)
 // key of the day: "team|repo" -> commits_count.
-func wellbeingOwnershipRead(t *testing.T, ctx context.Context, conn driver.Conn) map[string]uint32 {
+func wellbeingOwnershipRead(t *testing.T, ctx context.Context, conn driver.Conn) map[string]float64 {
 	t.Helper()
 	rows, err := conn.Query(ctx, `SELECT team_id, repo_id, argMax(commits_count, computed_at)
 FROM team_metrics_daily WHERE org_id = ? AND day = ? GROUP BY team_id, repo_id`, wellbeingOwnershipOrg, wellbeingOwnershipDay)
@@ -93,10 +93,10 @@ FROM team_metrics_daily WHERE org_id = ? AND day = ? GROUP BY team_id, repo_id`,
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	out := map[string]uint32{}
+	out := map[string]float64{}
 	for rows.Next() {
 		var team, repo string
-		var commits uint32
+		var commits float64
 		if err := rows.Scan(&team, &repo, &commits); err != nil {
 			t.Fatal(err)
 		}
@@ -142,7 +142,7 @@ func TestWellbeingTeamIsTheOwnerOfTheRepositoryNeverAMemberOfATeam(t *testing.T)
 	wellbeingOwnershipCompute(t, ctx, conn, repos, wellbeingOwnershipDay.Add(30*time.Hour))
 	got := wellbeingOwnershipRead(t, ctx, conn)
 
-	want := map[string]uint32{"unassigned|" + unowned.String(): 2}
+	want := map[string]float64{"unassigned|" + unowned.String(): 2}
 	for _, item := range ownedRepos {
 		want[item.team+"|"+item.repo.String()] = 2
 	}
@@ -151,7 +151,7 @@ func TestWellbeingTeamIsTheOwnerOfTheRepositoryNeverAMemberOfATeam(t *testing.T)
 	}
 	for key, commits := range want {
 		if got[key] != commits {
-			t.Errorf("row %s = %d commits, want %d (all rows: %v)", key, got[key], commits, got)
+			t.Errorf("row %s = %v commits, want %v (all rows: %v)", key, got[key], commits, got)
 		}
 	}
 	for key := range got {
@@ -186,6 +186,6 @@ func TestWellbeingRecomputeOnceOwnedSupersedesTheUnassignedRows(t *testing.T) {
 		t.Errorf("the owner does not hold the commits after the recompute: %v", got)
 	}
 	if got["unassigned|"+repo.String()] != 0 {
-		t.Errorf("the unassigned key still holds %d commits of a repository that is owned now: %v", got["unassigned|"+repo.String()], got)
+		t.Errorf("the unassigned key still holds %v commits of a repository that is owned now: %v", got["unassigned|"+repo.String()], got)
 	}
 }

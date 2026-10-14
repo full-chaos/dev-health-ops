@@ -8,12 +8,12 @@
 // repositories, or the organization) and applies Rate in Go or WindowRateSQL
 // in ClickHouse. Both encode the same rule:
 //
-//   - no stored row in the view                -> no value, no state
+//   - no stored row in the view                -> no value, no state (not collected)
 //   - no deployments in the view               -> no value, not applicable
 //   - no incident tied to the view's subject
 //     and no deployment with a final status    -> no value, unknown
-//   - else (failed native + failed heuristic + failed by status) / deployments;
-//     0 is a measured 0
+//   - else the failed deployments over the denominator of ApplyRule; 0 is a
+//     measured 0
 //
 // A deployment's own status is evidence (CHAOS-9621): a deployment whose
 // status is failed is a failed change, with or without an incident link, and
@@ -75,36 +75,67 @@ const (
 	StateNoStoredCounts State = ""
 )
 
-// Evidence bases of a measured rate: what the rate stands on.
+// Basis is the evidence a measured rate stands on (CHAOS-9621).
+type Basis string
+
 const (
+	// BasisNone: the rate is not measured, so it stands on nothing.
+	BasisNone Basis = "none"
 	// BasisIncident: incidents tie to the view, and no deployment has a final
-	// status.
-	BasisIncident = "incident"
+	// status. The denominator is every deployment.
+	BasisIncident Basis = "incident"
 	// BasisStatus: no incident ties to the view; deployments with a final
-	// status stand for it.
-	BasisStatus = "status"
-	// BasisBoth: incidents tie to the view and deployments have final statuses.
-	BasisBoth = "both"
+	// status stand for it. The denominator is those deployments.
+	BasisStatus Basis = "status"
+	// BasisBoth: incidents tie to the view and deployments have final
+	// statuses. The denominator is every deployment.
+	BasisBoth Basis = "both"
+)
+
+// UnknownReason says why a view has no rate. The three values are the three
+// different answers behind an empty rate, and a reader (ops or acr) shows
+// which one it has instead of one "unknown".
+type UnknownReason string
+
+const (
+	// NotUnknown: the rate is measured.
+	NotUnknown UnknownReason = ""
+	// ReasonNotCollected: no stored row in the view. Nothing was counted for
+	// it: the days were never computed, or the subject had no deployment and
+	// no incident on them.
+	ReasonNotCollected UnknownReason = "not_collected"
+	// ReasonNoDeploymentsInWindow: stored rows, and no deployment in them.
+	ReasonNoDeploymentsInWindow UnknownReason = "no_deployments_in_window"
+	// ReasonDeploymentsWithoutOutcome: deployments exist, and neither an
+	// incident tied to the view nor a deployment with a final status says how
+	// they went.
+	ReasonDeploymentsWithoutOutcome UnknownReason = "deployments_without_outcome"
 )
 
 // Outcome is the answer for a view: the rate when it is measured, the state
-// that says why it is or is not, the weakest link tier that contributes a
-// failed deployment to a measured rate ("" when no failure came through a
-// link), and the evidence basis of a measured rate ("" otherwise).
+// that says why it is or is not, the unknown reason (one of three when there
+// is no rate), the weakest link tier that contributes a failed deployment to a
+// measured rate ("" when no failure came through a link), the evidence basis,
+// and the deployments (D) and deployments with a final status (K) the rate was
+// computed from with their coverage K / D.
 type Outcome struct {
-	Value    *float64
-	State    State
-	LinkTier string
-	Basis    string
+	Value         *float64
+	State         State
+	LinkTier      string
+	Basis         Basis
+	UnknownReason UnknownReason
+	Deployments   uint64
+	StatusKnown   uint64
+	Coverage      *float64
 }
 
 // BasisOrNil is the evidence basis as a reader serves it: nil when the rate is
 // not measured.
 func (o Outcome) BasisOrNil() *string {
-	if o.Basis == "" {
+	if o.Basis == "" || o.Basis == BasisNone {
 		return nil
 	}
-	basis := o.Basis
+	basis := string(o.Basis)
 	return &basis
 }
 
@@ -137,10 +168,7 @@ type View struct {
 // Evaluate is the one rule every reader applies to a view. A view with no
 // stored row has no state; any other view has the Rate of its counts.
 func Evaluate(v View) Outcome {
-	if v.StoredRows == 0 {
-		return Outcome{State: StateNoStoredCounts}
-	}
-	return Rate(v.Counts)
+	return outcomeOf(v.Counts, v.StoredRows)
 }
 
 // Deployment is one deployment of a repository on the counted day. Status is
@@ -213,27 +241,34 @@ func (c Counts) Empty() bool {
 
 // Rate applies the rule of this package to the counts of stored rows.
 func Rate(c Counts) Outcome {
-	if c.Deployments == 0 {
-		return Outcome{State: StateNotApplicable}
-	}
-	incidentEvidence := c.IncidentsDirect+c.IncidentsViaDeployment > 0
-	statusEvidence := c.StatusKnown > 0
-	if !incidentEvidence && !statusEvidence {
-		return Outcome{State: StateUnknown}
-	}
-	value := float64(c.Failed()) / float64(c.Deployments)
-	return Outcome{Value: &value, State: StateMeasured, LinkTier: LowestTier(c), Basis: basisOf(incidentEvidence, statusEvidence)}
+	return outcomeOf(c, 1)
 }
 
-func basisOf(incidentEvidence, statusEvidence bool) string {
-	switch {
-	case incidentEvidence && statusEvidence:
-		return BasisBoth
-	case statusEvidence:
-		return BasisStatus
-	default:
-		return BasisIncident
+func outcomeOf(c Counts, storedRows uint64) Outcome {
+	result := ApplyRule(RuleInputs{
+		StoredRows:           storedRows,
+		Deployments:          c.Deployments,
+		StatusKnown:          c.StatusKnown,
+		FailedStatusOnly:     c.FailedStatus,
+		FailedIncidentLinked: c.FailedNative + c.FailedHeuristic,
+		IncidentEvidence:     c.IncidentsDirect+c.IncidentsViaDeployment > 0,
+	})
+	out := Outcome{
+		Value: result.Rate, Basis: result.Basis, UnknownReason: result.UnknownReason,
+		Deployments: result.Deployments, StatusKnown: result.StatusKnown, Coverage: result.Coverage,
 	}
+	switch result.UnknownReason {
+	case ReasonNotCollected:
+		out.State = StateNoStoredCounts
+	case ReasonNoDeploymentsInWindow:
+		out.State = StateNotApplicable
+	case ReasonDeploymentsWithoutOutcome:
+		out.State = StateUnknown
+	default:
+		out.State = StateMeasured
+		out.LinkTier = LowestTier(c)
+	}
+	return out
 }
 
 // LowestTier names the lowest link tier that contributes a failed deployment:

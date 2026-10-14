@@ -112,13 +112,24 @@ recorded.
   through the repository of its linked deployment. A deployment id that names
   more than one repository ties nothing.
 - **Status evidence.** The deployments among them with a final status
-  (succeeded or failed). With them the rate is measured even where no incident
-  source exists, and a view whose deployments all succeeded reads a measured
-  zero.
-- **Evidence basis.** A measured rate stands on `incident` (incidents tie to the
-  view, no deployment has a final status), `status` (no incident ties to the
-  view, deployments have final statuses) or `both`. `/explain` serves it in
-  `evidence_basis`. It is derived from the stored sums, never stored.
+  (succeeded or failed), K of the D deployments. With them the rate is
+  measured even where no incident source exists, and a view whose deployments
+  all succeeded reads a measured zero.
+- **Evidence basis and base.** A measured rate stands on `incident` (incidents
+  tie to the view, no deployment has a final status: failed / D), `both`
+  (incidents and final statuses: failed by link or by status, each deployment
+  once, / D) or `status` (no incident ties to the view: failed by status / K,
+  because a deployment without an outcome is neither failed nor healthy). The
+  answer carries D, K and the coverage K / D, so deployments without an
+  outcome (a status lookup that was skipped) stay visible. `/explain` serves
+  the basis in `evidence_basis`. It is derived from the stored sums, never
+  stored. One function holds the rule: `changefailure.ApplyRule`.
+- **Unknown, three ways.** No stored row: `not_collected`. Stored rows and no
+  deployment: `no_deployments_in_window`. Deployments, no incident evidence and
+  no final status: `deployments_without_outcome`. `Outcome.UnknownReason`
+  carries them for every Go reader. In the stored table they are: no row (or
+  all rows absent), `deployments_count = 0`, and `deployments_count > 0` with
+  `deployments_status_known = 0` and no incident count.
 - **Subject.** A repository view counts that repository. A team view counts
   the repositories the team owns. An organization view counts every
   repository. The window is the view's time filter; a view without one is all
@@ -129,7 +140,7 @@ recorded.
 | No stored counts in the window | none | no state (empty) |
 | Stored counts, no deployment | none: not applicable | `not_applicable_no_deployments` |
 | Deployments, no incident evidence and no deployment with a final status | none: unknown | `unknown_no_incident_evidence` |
-| Deployments, and incident evidence or a deployment with a final status | failed deployments / deployments (0 is a measured zero) | `measured` |
+| Deployments, and incident evidence or a deployment with a final status | failed deployments / D (incident, both) or / K (status only); 0 is a measured zero | `measured` |
 
 The three states with no value are different answers, so every surface that
 shows the rate also gives the state: `/api/v1/explain` in `rate_state` (beside

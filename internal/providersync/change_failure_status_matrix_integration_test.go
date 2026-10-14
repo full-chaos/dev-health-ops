@@ -221,8 +221,11 @@ WHERE database = currentDatabase() AND table = 'repo_change_failure_daily'
 		var wantRate *float64
 		switch {
 		case wantDeployments == 0: // not applicable
-		case wantIncidents > 0 || wantKnown > 0:
+		case wantIncidents > 0:
 			rate := float64(wantFailed) / float64(wantDeployments)
+			wantRate = &rate
+		case wantKnown > 0:
+			rate := float64(wantFailed) / float64(wantKnown)
 			wantRate = &rate
 		}
 		if got := f.windowRate(org, day, nextDay, cell.repo); showFloat(got) != showFloat(wantRate) {
@@ -238,14 +241,14 @@ WHERE database = currentDatabase() AND table = 'repo_change_failure_daily'
 			t.Errorf("%s: failed by status %d known %d; want %d and %d", cell.name(), view.FailedStatus, view.StatusKnown, wantStatusOnly, wantKnown)
 		}
 		outcome := changefailure.Evaluate(view)
-		wantState, wantBasis := changefailure.StateMeasured, ""
+		wantState, wantBasis, wantReason := changefailure.StateMeasured, changefailure.BasisNone, changefailure.NotUnknown
 		switch {
 		case !wantFound:
-			wantState = changefailure.StateNoStoredCounts
+			wantState, wantReason = changefailure.StateNoStoredCounts, changefailure.ReasonNotCollected
 		case wantDeployments == 0:
-			wantState = changefailure.StateNotApplicable
+			wantState, wantReason = changefailure.StateNotApplicable, changefailure.ReasonNoDeploymentsInWindow
 		case wantIncidents == 0 && wantKnown == 0:
-			wantState = changefailure.StateUnknown
+			wantState, wantReason = changefailure.StateUnknown, changefailure.ReasonDeploymentsWithoutOutcome
 		case wantIncidents > 0 && wantKnown > 0:
 			wantBasis = changefailure.BasisBoth
 		case wantIncidents > 0:
@@ -253,10 +256,101 @@ WHERE database = currentDatabase() AND table = 'repo_change_failure_daily'
 		default:
 			wantBasis = changefailure.BasisStatus
 		}
-		if outcome.State != wantState || outcome.Basis != wantBasis {
-			t.Errorf("%s: state %q basis %q, want %q and %q", cell.name(), outcome.State, outcome.Basis, wantState, wantBasis)
+		if outcome.State != wantState || outcome.Basis != wantBasis || outcome.UnknownReason != wantReason {
+			t.Errorf("%s: state %q basis %q reason %q, want %q %q %q", cell.name(), outcome.State, outcome.Basis, outcome.UnknownReason, wantState, wantBasis, wantReason)
+		}
+		if outcome.Deployments != wantDeployments || outcome.StatusKnown != wantKnown {
+			t.Errorf("%s: D %d K %d, want %d %d", cell.name(), outcome.Deployments, outcome.StatusKnown, wantDeployments, wantKnown)
 		}
 	}
+}
+
+// TestChangeFailureStatusCoverage is the part of the matrix where a repository
+// has several deployments and only some have a final status: a rate that only
+// statuses state is over the deployments with a final status (K), the answer
+// always carries D, K and the coverage K / D, and incident evidence puts the
+// base back to every deployment (D).
+func TestChangeFailureStatusCoverage(t *testing.T) {
+	t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "2")
+	ctx, conn := newDeploymentsIntegrationConn(t)
+	f := changeFailureFixture{t: t, ctx: ctx, conn: conn,
+		lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
+
+	const org = "3f8e9a40-0000-4000-8000-0000000000ca"
+	day := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	nextDay := day.AddDate(0, 0, 1)
+
+	cases := []struct {
+		name     string
+		provider string
+		statuses []*string
+		incident bool
+		d, k     uint64
+		value    float64
+		basis    changefailure.Basis
+		coverage float64
+	}{
+		{"succeeded and still running", "github", []*string{strptr("success"), strptr("in_progress")}, false, 2, 1, 0, changefailure.BasisStatus, 0.5},
+		{"failed, running and canceled", "gitlab", []*string{strptr("failed"), strptr("running"), strptr("canceled")}, false, 2, 1, 1, changefailure.BasisStatus, 0.5},
+		{"one failed of three with a final status, one without", "github", []*string{strptr("failure"), strptr("success"), strptr("success"), strptr("pending")}, false, 4, 3, 1.0 / 3.0, changefailure.BasisStatus, 0.75},
+		{"a status lookup that was skipped leaves NULL", "github", []*string{nil, nil, strptr("failure")}, false, 3, 1, 1, changefailure.BasisStatus, 1.0 / 3.0},
+		{"incident evidence: the base is every deployment", "gitlab", []*string{strptr("failed"), strptr("success"), strptr("running")}, true, 3, 2, 1, changefailure.BasisBoth, 2.0 / 3.0},
+	}
+	var repos []uuid.UUID
+	ids := make([]uuid.UUID, len(cases))
+	issue := 7500
+	for i, tc := range cases {
+		name := fmt.Sprintf("Acme/coverage-%d", i)
+		id, err := repositoryIdentity(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[i] = uuid.MustParse(id)
+		repos = append(repos, ids[i])
+		if err := conn.Exec(ctx, fmt.Sprintf(
+			"INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider) VALUES ('%s', '%s', now64(3), now64(3), '%s', '%s')",
+			ids[i], name, org, tc.provider)); err != nil {
+			t.Fatal(err)
+		}
+		for j, status := range tc.statuses {
+			row := statusRow(t, org, tc.provider, ids[i], fmt.Sprint(6000+j), status, day.Add(time.Duration(8+j)*time.Hour))
+			effect, err := effectBatchFromValues("deployments", EffectReadbackRequired, []deploymentRow{row})
+			if err != nil {
+				t.Fatal(err)
+			}
+			claim := f.claim(org, tc.provider, "deployments")
+			if tc.provider == "github" {
+				err = GitHubDeploymentsClickHouseEffects{Conn: conn, Lease: f.lease}.WriteEffect(ctx, claim, effect)
+			} else {
+				err = GitLabDeploymentsClickHouseEffects{Conn: conn, Lease: f.lease}.WriteEffect(ctx, claim, effect)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if tc.incident {
+			issue++
+			f.gitLabIncident(org, name, issue, day.Add(20*time.Hour))
+		}
+	}
+	f.compute(org, day, repos...)
+
+	for i, tc := range cases {
+		outcome := changefailure.Evaluate(readStatusView(t, f, org, ids[i], day))
+		if outcome.Value == nil || !nearly(*outcome.Value, tc.value) || outcome.Basis != tc.basis || outcome.Deployments != tc.d || outcome.StatusKnown != tc.k ||
+			outcome.Coverage == nil || !nearly(*outcome.Coverage, tc.coverage) {
+			t.Errorf("%s: rate %s basis %s D %d K %d coverage %s; want %v %s %d %d %v", tc.name,
+				showFloat(outcome.Value), outcome.Basis, outcome.Deployments, outcome.StatusKnown, showFloat(outcome.Coverage), tc.value, tc.basis, tc.d, tc.k, tc.coverage)
+		}
+		if sql := f.windowRate(org, day, nextDay, ids[i]); sql == nil || !nearly(*sql, tc.value) {
+			t.Errorf("%s: served SQL rate %s, want %v", tc.name, showFloat(sql), tc.value)
+		}
+	}
+}
+
+func nearly(a, b float64) bool {
+	d := a - b
+	return d < 1e-9 && d > -1e-9
 }
 
 // readStatusView reads the newest stored row of one repository and day through

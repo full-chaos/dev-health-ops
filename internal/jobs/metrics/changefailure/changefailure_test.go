@@ -16,28 +16,34 @@ func ptr(v float64) *float64 { return &v }
 
 func TestRateKeepsNotApplicableUnknownAndMeasuredZeroApart(t *testing.T) {
 	cases := []struct {
-		name  string
-		in    Counts
-		value *float64
-		state State
-		tier  string
-		basis string
+		name   string
+		in     Counts
+		value  *float64
+		state  State
+		tier   string
+		basis  Basis
+		reason UnknownReason
 	}{
-		{"nothing", Counts{}, nil, StateNotApplicable, "", ""},
-		{"incidents without a deployment", Counts{IncidentsDirect: 2}, nil, StateNotApplicable, "", ""},
-		{"deployments without incident evidence", Counts{Deployments: 4}, nil, StateUnknown, "", ""},
+		{"nothing", Counts{}, nil, StateNotApplicable, "", BasisNone, ReasonNoDeploymentsInWindow},
+		{"incidents without a deployment", Counts{IncidentsDirect: 2}, nil, StateNotApplicable, "", BasisNone, ReasonNoDeploymentsInWindow},
+		{"deployments without incident evidence", Counts{Deployments: 4}, nil, StateUnknown, "", BasisNone, ReasonDeploymentsWithoutOutcome},
 		// A failed count without incident evidence still has no value and no tier.
-		{"failed deployments without incident evidence", Counts{Deployments: 4, FailedNative: 1}, nil, StateUnknown, "", ""},
-		{"deployments with a direct incident, none failed", Counts{Deployments: 4, IncidentsDirect: 1}, ptr(0), StateMeasured, "", BasisIncident},
-		{"deployments with a via-deployment incident", Counts{Deployments: 4, FailedHeuristic: 1, IncidentsViaDeployment: 1}, ptr(0.25), StateMeasured, TierHeuristic, BasisIncident},
-		{"native and heuristic both count", Counts{Deployments: 4, FailedNative: 1, FailedHeuristic: 1, IncidentsDirect: 1}, ptr(0.5), StateMeasured, TierHeuristic, BasisIncident},
-		{"native only", Counts{Deployments: 4, FailedNative: 1, IncidentsDirect: 1}, ptr(0.25), StateMeasured, TierNative, BasisIncident},
-		// CHAOS-9621: a deployment's own status is evidence.
-		{"statuses only, all succeeded", Counts{Deployments: 4, StatusKnown: 4}, ptr(0), StateMeasured, "", BasisStatus},
-		{"statuses only, one failed", Counts{Deployments: 4, StatusKnown: 3, FailedStatus: 1}, ptr(0.25), StateMeasured, "", BasisStatus},
-		{"statuses only, a failed status needs no link tier", Counts{Deployments: 2, StatusKnown: 2, FailedStatus: 2}, ptr(1), StateMeasured, "", BasisStatus},
-		{"only unfinished statuses stay unknown", Counts{Deployments: 4}, nil, StateUnknown, "", ""},
-		{"incident and status evidence", Counts{Deployments: 4, StatusKnown: 4, FailedNative: 1, FailedStatus: 1, IncidentsDirect: 1}, ptr(0.5), StateMeasured, TierNative, BasisBoth},
+		{"failed deployments without incident evidence", Counts{Deployments: 4, FailedNative: 1}, nil, StateUnknown, "", BasisNone, ReasonDeploymentsWithoutOutcome},
+		{"deployments with a direct incident, none failed", Counts{Deployments: 4, IncidentsDirect: 1}, ptr(0), StateMeasured, "", BasisIncident, NotUnknown},
+		{"deployments with a via-deployment incident", Counts{Deployments: 4, FailedHeuristic: 1, IncidentsViaDeployment: 1}, ptr(0.25), StateMeasured, TierHeuristic, BasisIncident, NotUnknown},
+		{"native and heuristic both count", Counts{Deployments: 4, FailedNative: 1, FailedHeuristic: 1, IncidentsDirect: 1}, ptr(0.5), StateMeasured, TierHeuristic, BasisIncident, NotUnknown},
+		{"native only", Counts{Deployments: 4, FailedNative: 1, IncidentsDirect: 1}, ptr(0.25), StateMeasured, TierNative, BasisIncident, NotUnknown},
+		// CHAOS-9621: a deployment's own status is evidence. With statuses as
+		// the only evidence the base of the rate is the deployments with a
+		// final status.
+		{"statuses only, all succeeded", Counts{Deployments: 4, StatusKnown: 4}, ptr(0), StateMeasured, "", BasisStatus, NotUnknown},
+		{"statuses only, one failed", Counts{Deployments: 4, StatusKnown: 4, FailedStatus: 1}, ptr(0.25), StateMeasured, "", BasisStatus, NotUnknown},
+		{"statuses only, the base is the final statuses", Counts{Deployments: 4, StatusKnown: 2, FailedStatus: 1}, ptr(0.5), StateMeasured, "", BasisStatus, NotUnknown},
+		{"statuses only, a failed status needs no link tier", Counts{Deployments: 2, StatusKnown: 2, FailedStatus: 2}, ptr(1), StateMeasured, "", BasisStatus, NotUnknown},
+		{"only unfinished statuses stay unknown", Counts{Deployments: 4}, nil, StateUnknown, "", BasisNone, ReasonDeploymentsWithoutOutcome},
+		// With incident evidence the base is every deployment, as before.
+		{"incident and status evidence", Counts{Deployments: 4, StatusKnown: 2, FailedNative: 1, FailedStatus: 1, IncidentsDirect: 1}, ptr(0.5), StateMeasured, TierNative, BasisBoth, NotUnknown},
+		{"incident basis ignores unfinished deployments in no way", Counts{Deployments: 4, FailedNative: 1, IncidentsDirect: 1}, ptr(0.25), StateMeasured, TierNative, BasisIncident, NotUnknown},
 	}
 	for _, tc := range cases {
 		got := Rate(tc.in)
@@ -52,6 +58,44 @@ func TestRateKeepsNotApplicableUnknownAndMeasuredZeroApart(t *testing.T) {
 		}
 		if got.Basis != tc.basis {
 			t.Errorf("%s: basis %q, want %q", tc.name, got.Basis, tc.basis)
+		}
+		if got.UnknownReason != tc.reason {
+			t.Errorf("%s: unknown reason %q, want %q", tc.name, got.UnknownReason, tc.reason)
+		}
+	}
+}
+
+// The three unknown answers stay apart in the rule itself (CHAOS-9621, for
+// every reader and for acr): nothing collected, no deployment in the window,
+// and deployments whose outcome was not collected. D, K and the coverage go
+// out with every answer.
+func TestApplyRuleKeepsTheThreeUnknownReasonsApart(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		in           RuleInputs
+		reason       UnknownReason
+		basis        Basis
+		rate         *float64
+		d, k         uint64
+		coverageNil  bool
+		coverageWant float64
+	}{
+		{"not collected: no stored row", RuleInputs{}, ReasonNotCollected, BasisNone, nil, 0, 0, true, 0},
+		{"no deployments in the window: a stored row with none", RuleInputs{StoredRows: 3, IncidentEvidence: true}, ReasonNoDeploymentsInWindow, BasisNone, nil, 0, 0, true, 0},
+		{"deployments without outcome", RuleInputs{StoredRows: 2, Deployments: 5}, ReasonDeploymentsWithoutOutcome, BasisNone, nil, 5, 0, false, 0},
+		{"status basis divides by K", RuleInputs{StoredRows: 2, Deployments: 5, StatusKnown: 4, FailedStatusOnly: 1}, NotUnknown, BasisStatus, ptr(0.25), 5, 4, false, 0.8},
+		{"incident basis divides by D", RuleInputs{StoredRows: 2, Deployments: 5, FailedIncidentLinked: 1, IncidentEvidence: true}, NotUnknown, BasisIncident, ptr(0.2), 5, 0, false, 0},
+		{"both: the union divides by D", RuleInputs{StoredRows: 2, Deployments: 5, StatusKnown: 4, FailedStatusOnly: 1, FailedIncidentLinked: 1, IncidentEvidence: true}, NotUnknown, BasisBoth, ptr(0.4), 5, 4, false, 0.8},
+	} {
+		got := ApplyRule(tc.in)
+		if got.UnknownReason != tc.reason || got.Basis != tc.basis || got.Deployments != tc.d || got.StatusKnown != tc.k {
+			t.Errorf("%s: reason %q basis %q D %d K %d; want %q %q %d %d", tc.name, got.UnknownReason, got.Basis, got.Deployments, got.StatusKnown, tc.reason, tc.basis, tc.d, tc.k)
+		}
+		if (got.Rate == nil) != (tc.rate == nil) || (got.Rate != nil && *got.Rate != *tc.rate) {
+			t.Errorf("%s: rate %v, want %v", tc.name, deref(got.Rate), deref(tc.rate))
+		}
+		if (got.Coverage == nil) != tc.coverageNil || (got.Coverage != nil && *got.Coverage != tc.coverageWant) {
+			t.Errorf("%s: coverage %v", tc.name, deref(got.Coverage))
 		}
 	}
 }

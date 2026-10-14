@@ -169,7 +169,8 @@ type Response struct {
 	// EvidenceBasis (CHAOS-9621, Go-only, last) names what a measured change
 	// failure rate stands on: "incident" (incidents tie to the scope, no
 	// deployment has a final status), "status" (no incident ties to the scope,
-	// and deployments with a final status stand for it) or "both". A 0 with
+	// and deployments with a final status stand for it, so the base of the
+	// rate is those deployments) or "both". A 0 with
 	// basis "status" is a rate measured from deployment statuses, not from
 	// incident links. null for every other metric and for a rate that is not
 	// measured.

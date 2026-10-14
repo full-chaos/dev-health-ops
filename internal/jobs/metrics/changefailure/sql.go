@@ -14,11 +14,11 @@ var CountColumns = []string{
 	"deployments_status_known",
 }
 
-// WindowRateSQL is Rate as a ClickHouse aggregate expression over rows of
+// WindowRateSQL is ApplyRule as a ClickHouse aggregate expression over rows of
 // Table that are already deduplicated to the newest computed_at per
 // (org_id, repo_id, day). It is NULL when the view is not applicable or
 // unknown, so a reader must scan it into a nullable destination.
-const WindowRateSQL = `if(sum(deployments_count) = 0 OR (sum(incidents_direct) + sum(incidents_via_deployment) = 0 AND sum(deployments_status_known) = 0), NULL, toFloat64(sum(failed_deployments_native) + sum(failed_deployments_heuristic) + sum(failed_deployments_status)) / toFloat64(sum(deployments_count)))`
+const WindowRateSQL = `if(sum(deployments_count) = 0 OR (sum(incidents_direct) + sum(incidents_via_deployment) = 0 AND sum(deployments_status_known) = 0), NULL, if(sum(incidents_direct) + sum(incidents_via_deployment) > 0, toFloat64(sum(failed_deployments_native) + sum(failed_deployments_heuristic) + sum(failed_deployments_status)) / toFloat64(sum(deployments_count)), toFloat64(sum(failed_deployments_status)) / toFloat64(sum(deployments_status_known))))`
 
 // LatestRowsSQL selects the newest row per (org_id, repo_id, day) of Table for
 // one organization and a half-open day range, with extraWhere (which starts

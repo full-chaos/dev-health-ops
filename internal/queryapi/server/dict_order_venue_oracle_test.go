@@ -250,6 +250,14 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	seedNow := time.Now().UTC()
 	fromTS := seedNow.AddDate(0, 0, -3).Format("2006-01-02 15:04:05")
 	toTS := seedNow.AddDate(0, 0, -1).Format("2006-01-02 15:04:05")
+	// CHAOS-9695 (D5999, D6014): the list is ordered by the work-unit count, then the end of the unit, then the id (it was
+	// ordered by effort_value, 10 / 5 / 4 here). Every seeded unit counts 1, so the later two end one and two seconds
+	// earlier: the order stays the one the frozen Python answer has, and the span of each unit stays the same.
+	shifted := func(base time.Time, seconds int) string {
+		return base.Add(-time.Duration(seconds) * time.Second).Format("2006-01-02 15:04:05")
+	}
+	fromTyped, toTyped := shifted(seedNow.AddDate(0, 0, -3), 1), shifted(seedNow.AddDate(0, 0, -1), 1)
+	fromNull, toNull := shifted(seedNow.AddDate(0, 0, -3), 2), shifted(seedNow.AddDate(0, 0, -1), 2)
 	seedWorkUnits := func(databases []string) {
 		for _, database := range databases {
 			conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
@@ -286,7 +294,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 				 'churn_loc', 4.0, map('quality', 1.0), map('quality.bugfix', 1.0),
 				 'null',
 				 0.5, 'moderate', 'ok', '', 'v1', 'hash', 'run-3', now64(3), '%s')`,
-					workUnitID, fromTS, toTS, orgID, workUnitID, fromTS, toTS, orgID),
+					workUnitID, fromTyped, toTyped, orgID, workUnitID, fromNull, toNull, orgID),
 				fmt.Sprintf(`INSERT INTO work_unit_investment_quotes (work_unit_id, quote, source_type, source_id, computed_at, categorization_run_id, org_id)
 			VALUES ('%s', 'Fix the flaky login test.', 'pr_body', 'pr-7', now64(3), 'run-1', '%s')`, workUnitID, orgID),
 			} {
@@ -460,8 +468,27 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 				t.Fatalf("%s: the seeded quote carries no source_title key: %s", tc.Name, goWritten)
 			}
 			goWritten = strings.ReplaceAll(goWritten, goOnlyTitle, "")
+			// CHAOS-9695 (D5999, D6014): the frozen Python answer carries the unit's effort as lines of code
+			// ({"metric": "churn_loc", "value": 10.0}); Go serves the work-unit count. Both are replaced by one
+			// placeholder, and the seeded unit must be served as one work unit, so the comparison still reads every
+			// other key and the key order.
+			const goEffort = `"effort":{"metric":"work_units","value":1.0}`
+			if !strings.Contains(goWritten, goEffort) {
+				t.Fatalf("%s: the seeded unit is not served as one work unit (%s): %s", tc.Name, goEffort, goWritten)
+			}
+			goWritten = strings.ReplaceAll(goWritten, goEffort, declaredWorkUnitEffort)
+			// The lines-of-code fact (CHAOS-9695, Go-only, last key of each unit): the three seeded units stored churn 10, 5
+			// and 4, the split is not stored per unit. The frozen Python model never had the key: compared without it,
+			// and only it.
+			if got := len(goOnlyChangeSet.FindAllString(goWritten, -1)); got != 3 || !strings.Contains(goWritten, `,"change_set":{"additions":null,"deletions":null,"total":10}`) {
+				t.Fatalf("%s: want a change_set on each of the three seeded units, the first with total 10: %s", tc.Name, goWritten)
+			}
+			goWritten = goOnlyChangeSet.ReplaceAllString(goWritten, "")
 		}
 		answerBody := answer.Body
+		if tc.Kind == "work_units" {
+			answerBody = pythonLinesOfCodeEffort.ReplaceAllString(answerBody, declaredWorkUnitEffort)
+		}
 		if tc.Kind == "investment" && recorder.Code == http.StatusOK && answer.Status == http.StatusOK {
 			// CHAOS-9622 (D5999): Go reads the COUNT of the units, the frozen Python answer weighs them by
 			// effort_value. The key order of the answer is compared; the values of the two distributions are
@@ -647,3 +674,11 @@ func dictOrderScrub(text string) string {
 func dictOrderWithoutAddress(text string, venue *venueoracle.Venue, t *testing.T) string {
 	return strings.ReplaceAll(text, venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB), "<CLICKHOUSE_URI>")
 }
+
+// declaredWorkUnitEffort stands for a work unit's effort on both sides of the work-units comparison (CHAOS-9695,
+// D6014): Python's lines of code and Go's work-unit count are different quantities by ruling.
+const declaredWorkUnitEffort = `"effort":"<declared D6014: work-unit count>"`
+
+var pythonLinesOfCodeEffort = regexp.MustCompile(`"effort":\{"metric":"(?:churn_loc|active_hours)","value":[0-9.eE+-]+\}`)
+
+var goOnlyChangeSet = regexp.MustCompile(`,"change_set":\{"additions":null,"deletions":null,"total":[0-9]+\}`)

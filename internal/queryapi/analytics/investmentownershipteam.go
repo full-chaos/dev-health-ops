@@ -55,8 +55,6 @@ func ownershipDbExpression(measure Measure, shareExpr string) (string, error) {
 	switch measure {
 	case MeasureCount, MeasureThroughput:
 		return "SUM(subcategory_kv.2 * allocation_weight * " + shareExpr + ")", nil
-	case MeasureChurnLOC:
-		return "SUM(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0) * " + shareExpr + ")", nil
 	case MeasureCycleTimeHours:
 		return "SUM(dateDiff('hour', from_ts, to_ts) * allocation_weight * " + shareExpr + ") / NULLIF(SUM(allocation_weight * " + shareExpr + "), 0)", nil
 	}

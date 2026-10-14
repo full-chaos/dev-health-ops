@@ -116,7 +116,7 @@ func (c *quoteTitleStore) Query(_ context.Context, query string, bindings []dhcl
 	case strings.Contains(query, "FROM work_unit_investments"):
 		return &reflectScanner{rows: [][]any{{
 			"wu-1", "work_unit", "Unit", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC),
-			nil, nil, "items_completed", 3.0,
+			nil, nil, "churn_loc", 3.0, 1.0,
 			[]string{"feature_delivery"}, []float64{1}, []string{"feature_delivery.customer"}, []float64{1},
 			"{}", 0.8, "high", "ok", "v1", "run-1", time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC),
 		}}}, nil

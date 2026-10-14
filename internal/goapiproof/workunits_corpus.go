@@ -156,7 +156,7 @@ var workUnitsTeamScopeSubsetDefect = BaselineDefect{
 		// own package-level doc comment): both `data` lists share the
 		// route's own default LIMIT 200 (boundedWorkUnitsLimit,
 		// workunits_route.go), and effort.value is exactly the leaf
-		// effort_value DESC, work_unit_id ASC (workunitreader.go) ranks
+		// work_unit_count DESC, to_ts DESC, work_unit_id ASC (workunitreader.go) ranks
 		// both queries by -- the SAME quantity a candidate-only work
 		// unit's own rank-below-the-cutoff claim needs. Established from
 		// this route's own captured team_scoped evidence: every

@@ -5,6 +5,7 @@ package analytics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -132,13 +133,18 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run
 	check("repository A scope (own column U1, repository row U2, 0.6 of UX)", count(repo(repoA)), 2.6)
 	check("repository B scope", count(repo(repoB)), 1.4)
 	check("units: team A + team B = the org", count(team("team-a"))+count(team("team-b")), count(nil))
-	// Effort (CHURN_LOC): each unit contributes the repository's allocated effort; the sum over the repositories of a
-	// unit is the unit's effort; teams owning disjoint repositories sum to the org total.
-	churn := func(f *model.FilterInput) float64 { return measure(model.MeasureInputChurnLoc, f) }
-	check("org effort", churn(nil), 130)
-	check("team A effort (U1 10 + U2 10 + UX 60)", churn(team("team-a")), 80)
-	check("team B effort (U3 10 + UX 40)", churn(team("team-b")), 50)
-	check("effort: repository A + repository B = the org", churn(repo(repoA))+churn(repo(repoB)), churn(nil))
+	// Lines of code are no Investment measure (CHAOS-9695, D6014): the same breakdown over the investment
+	// categorization, at org, team and repository scope, is refused as a validation error naming the measure.
+	for label, filters := range map[string]*model.FilterInput{"org": nil, "team": team("team-a"), "repository": repo(repoA)} {
+		_, err := Resolve(ctx, client, org, model.AnalyticsRequestInput{
+			Filters:    filters,
+			Breakdowns: []model.BreakdownRequestInput{{Dimension: model.DimensionInputTheme, Measure: model.MeasureInputChurnLoc, DateRange: dates, TopN: 10}},
+		})
+		var validation *ValidationError
+		if !errors.As(err, &validation) || validation.Field != "measure" {
+			t.Errorf("CHURN_LOC over the investment categorization at %s scope: error = %v, want a *ValidationError on measure", label, err)
+		}
+	}
 
 	// An org WITH a complete membership run (prod and bigboy have one): the readers keep only the units of the
 	// latest run, and the team / repository predicates still resolve inside it. U1 and U2 are members; U3 is not.

@@ -14,15 +14,15 @@ import (
 )
 
 // TestInvestmentTeamScopeWeighsARepositoryByTheOwnersShare pins CHAOS-9413 (D5988, D5990) on the Investment page's
-// own sums, in both measures the reads take (COUNT, and CHURN_LOC on explicit request), against a real ClickHouse: a team scope gives each owning team ITS OWN linked share of a
+// own sums, in the measure the reads take (COUNT), against a real ClickHouse: a team scope gives each owning team ITS OWN linked share of a
 // repository's effort, never the whole repository.
 //
 //   - repo-lead (effort 100): team-main 0.6 (is_primary 1), team-co 0.4 (is_primary 2)
 //   - repo-tie  (effort  50): team-main 0.5 and team-tie 0.5, both is_primary 1 (D5990)
 //   - repo-solo (effort  10): team-main alone, share 1.0
 //
-// The teams of one repository read it once between them: main + co on repo-lead is 100 changed lines (one unit in COUNT),
-// never 140 (never 1.4).
+// The teams of one repository read it once between them: main + co on repo-lead is one unit in COUNT,
+// never 1.4.
 func TestInvestmentTeamScopeWeighsARepositoryByTheOwnersShare(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -99,31 +99,25 @@ func TestInvestmentTeamScopeWeighsARepositoryByTheOwnersShare(t *testing.T) {
 		return breakdown, themeEffort
 	}
 
-	// Each repository holds one unit: COUNT reads the owners' shares of it (1 per unit), CHURN_LOC their
-	// shares of its changed lines.
+	// Each repository holds one unit: COUNT reads the owners' shares of it (1 per unit).
 	for _, tc := range []struct {
-		name         string
-		teams        []string
-		count, lines float64
+		name  string
+		teams []string
+		count float64
 	}{
-		{"co-owner at 0.4 reads 0.4 of the repository", []string{"team-co"}, 0.4, 40},
-		{"main owner reads its own 0.6 on the lead repository and 0.5 of the tie and all of its solo repository", []string{"team-main"}, 0.6 + 0.5 + 1, 60 + 25 + 10},
-		{"a tied owner reads its equal half", []string{"team-tie"}, 0.5, 25},
-		{"the owners of one repository read it once", []string{"team-main", "team-co"}, 1 + 0.5 + 1, 100 + 25 + 10},
-		{"every owner of every repository reads each once", []string{"team-main", "team-co", "team-tie"}, 3, 100 + 50 + 10},
+		{"co-owner at 0.4 reads 0.4 of the repository", []string{"team-co"}, 0.4},
+		{"main owner reads its own 0.6 on the lead repository and 0.5 of the tie and all of its solo repository", []string{"team-main"}, 0.6 + 0.5 + 1},
+		{"a tied owner reads its equal half", []string{"team-tie"}, 0.5},
+		{"the owners of one repository read it once", []string{"team-main", "team-co"}, 1 + 0.5 + 1},
+		{"every owner of every repository reads each once", []string{"team-main", "team-co", "team-tie"}, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, m := range []struct {
-				measure string
-				want    float64
-			}{{MeasureCount, tc.count}, {MeasureChurnLOC, tc.lines}} {
-				breakdown, themeValue := read(m.measure, tc.teams...)
-				if math.Abs(breakdown-m.want) > 1e-3 {
-					t.Errorf("%s breakdown = %v, want %v", m.measure, breakdown, m.want)
-				}
-				if math.Abs(themeValue-m.want) > 1e-3 {
-					t.Errorf("%s theme value = %v, want %v", m.measure, themeValue, m.want)
-				}
+			breakdown, themeValue := read(MeasureCount, tc.teams...)
+			if math.Abs(breakdown-tc.count) > 1e-3 {
+				t.Errorf("COUNT breakdown = %v, want %v", breakdown, tc.count)
+			}
+			if math.Abs(themeValue-tc.count) > 1e-3 {
+				t.Errorf("COUNT theme value = %v, want %v", themeValue, tc.count)
 			}
 		})
 	}

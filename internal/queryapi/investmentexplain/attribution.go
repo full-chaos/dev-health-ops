@@ -26,14 +26,6 @@ func cleanOptionalText(value *string) *string {
 	return &trimmed
 }
 
-// effortMetric ports work_units.py's _effort_metric (work_units.py:53-54).
-func effortMetric(value string) string {
-	if value == "active_hours" {
-		return "active_hours"
-	}
-	return "churn_loc"
-}
-
 // evidenceQualityBand ports work_units.py's _evidence_quality_band
 // (work_units.py:57-67).
 func evidenceQualityBand(value string) string {

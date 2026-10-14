@@ -28,6 +28,12 @@ type sankeyShape struct {
 }
 
 func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, filters *model.FilterInput) (sankeyShape, error) {
+	// CHAOS-9695 (D6014, chris): the Sankey sends work units only, and its unit is always WORK_UNITS. A measure of lines
+	// of code would put churn values under that label, so it is refused on every Sankey, health paths included.
+	if req.Measure == MeasureChurnLOC {
+		return sankeyShape{}, newValidationError("measure", string(req.Measure),
+			"measure %q is not available on the Sankey: it carries work units only", req.Measure)
+	}
 	for _, dim := range req.Path {
 		if dim == DimensionAuthor {
 			// dbColumn would reject this per-dimension anyway, but

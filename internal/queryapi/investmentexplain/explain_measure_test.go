@@ -32,7 +32,6 @@ func TestExplainReadsTheMeasureOfTheRequest(t *testing.T) {
 	}{
 		{"COUNT", "sum(subcategory_kv.2 * 1.0 * 1.0)", "subcategory_kv.2 * effort_value"},
 		{"THROUGHPUT", "sum(subcategory_kv.2 * 1.0 * 1.0)", "subcategory_kv.2 * effort_value"},
-		{"CHURN_LOC", "sum(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0) * 1.0)", ""},
 		{"", "sum(subcategory_kv.2 * 1.0 * 1.0)", "subcategory_kv.2 * effort_value"},
 	}
 	for _, tc := range cases {
@@ -115,16 +114,13 @@ func TestExplainCacheKeyCarriesTheMeasure(t *testing.T) {
 		}
 		return k
 	}
-	if key("COUNT") == key("CHURN_LOC") {
-		t.Error("COUNT and CHURN_LOC over the same shares share one cache key")
-	}
 	if key("COUNT") != key("THROUGHPUT") {
 		t.Error("THROUGHPUT is COUNT on the investment path and must share its key")
 	}
 }
 
 func TestExplainPromptNamesTheTotalAfterTheMeasure(t *testing.T) {
-	for measure, want := range map[string]string{"COUNT": `"total_work"`, "CHURN_LOC": `"total_changed_lines"`} {
+	for measure, want := range map[string]string{"COUNT": `"total_work"`} {
 		reader, err := NewReader(mixAgreementClient{breakdown: mixRows()})
 		if err != nil {
 			t.Fatal(err)
@@ -146,8 +142,8 @@ func TestExplainPromptNamesTheTotalAfterTheMeasure(t *testing.T) {
 }
 
 func TestInvalidFallbackNamesTheMeasure(t *testing.T) {
-	for measure, want := range map[string]string{"COUNT": "Work appears concentrated in velocity", "CHURN_LOC": "Changed lines appears concentrated in velocity"} {
-		fallback := invalidLLMOutputExplanation([]keyValue{{Key: "velocity", Value: 8}, {Key: "quality", Value: 2}}, 10, "unknown", nil, nil, BandMix{}, nil, shareNoun(measure))
+	for measure, want := range map[string]string{"COUNT": "Work appears concentrated in velocity"} {
+		fallback := invalidLLMOutputExplanation([]keyValue{{Key: "velocity", Value: 8}, {Key: "quality", Value: 2}}, 10, "unknown", nil, nil, BandMix{}, nil, "work")
 		if !strings.HasPrefix(fallback.TopFindings[0].Finding, want) || strings.Contains(fallback.Summary, "effort") {
 			t.Errorf("measure %s: fallback = %q / %q, want %q and no effort", measure, fallback.TopFindings[0].Finding, fallback.Summary, want)
 		}

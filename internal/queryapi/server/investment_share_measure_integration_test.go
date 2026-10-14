@@ -19,7 +19,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -248,16 +247,8 @@ func TestInvestmentSharesOfEverySurfaceAreTheCountTheInvestmentPageReads(t *test
 		t.Error("FetchInvestmentThemeEffort with no measure returned no error")
 	}
 
-	// CHURN_LOC stays available on explicit request: it is the lines (1000 / 5 / 5), not a count.
-	lines, err := explainReader.FetchInvestmentThemeEffort(ctx, investmentexplain.BreakdownFilters{OrgID: measureOrg, StartTS: start, EndTS: end, Measure: investmentexplain.MeasureChurnLOC})
-	if err != nil {
-		t.Fatal(err)
-	}
-	linesByTheme := map[string]float64{}
-	for _, row := range lines {
-		linesByTheme[row.Theme] = row.Value
-	}
-	if math.Abs(linesByTheme["feature_delivery"]-1000) > 1e-3 || fmt.Sprint(math.Round(linesByTheme["maintenance"])) != "15" {
-		t.Errorf("CHURN_LOC by theme = %v, want feature_delivery 1000 and maintenance 15", linesByTheme)
+	// Lines of code are no measure of Investment (CHAOS-9695): a read that names CHURN_LOC is refused too.
+	if _, err := explainReader.FetchInvestmentThemeEffort(ctx, investmentexplain.BreakdownFilters{OrgID: measureOrg, StartTS: start, EndTS: end, Measure: "CHURN_LOC"}); err == nil {
+		t.Error("FetchInvestmentThemeEffort with measure CHURN_LOC returned no error")
 	}
 }

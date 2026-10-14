@@ -1282,7 +1282,7 @@ controls: a link that is gone and an explicit empty list are closed).
 >   rounded, and the ratios are recomputed from the weighted sums. The cognitive-load executor reads
 >   `team_metrics_daily` per repository and sums the rows of one generation, so the owners' shares of a repository
 >   (which sum to 1) give the whole repository back before the cognitive-load share is applied once.
->   `ai_impact_metrics_daily` does the same since migration 126 (CHAOS-9604, D5998): its twelve count columns are
+>   `ai_impact_metrics_daily` does the same since migration 128 (CHAOS-9604, D5998): its twelve count columns are
 >   Float64 and the AI impact GraphQL count fields are `Float!`. A pull request that the ownership read gives to a
 >   team counts in that team's rows at the owner's share (`total`, `merged`, the bucket counts, rework, follow-up
 >   commits, reverts, incidents, test-gap pull requests, and the leverage pull-request component); the ratios, the

@@ -1,4 +1,4 @@
--- Rollback of 126_ai_impact_counts_float64.sql (CHAOS-9604). It is NOT part of
+-- Rollback of 128_ai_impact_counts_float64.sql (CHAOS-9604). It is NOT part of
 -- the chain (the migrator reads sql/ only); an operator runs it by hand after
 -- the writers are back on a build that writes whole counts.
 --

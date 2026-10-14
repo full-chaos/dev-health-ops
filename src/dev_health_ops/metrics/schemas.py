@@ -88,7 +88,7 @@ class AIImpactMetricsDailyRecord:
     work_type: str
     day: date
     attribution_bucket: str
-    # The counts are Float64 columns since migration 126 (CHAOS-9604): a
+    # The counts are Float64 columns since migration 128 (CHAOS-9604): a
     # co-owning team holds a share of a repository's pull requests (D5988).
     prs_total: float
     prs_merged: float

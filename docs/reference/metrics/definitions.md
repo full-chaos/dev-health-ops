@@ -122,8 +122,9 @@ recorded.
   the rest of that unit's lookups are then skipped. A deployment that has no
   status at all stays without one and stays out of K. A deployment missed that
   way is filled by looking it up again: `dho sync deployments --provider github
-  --org <org> --since <day>` lists the repository's deployments again and
-  looks up each one. The run logs one `github_deployments.status_lookups` line
+  --owner <owner> --repo <repo> --since <day>` (or `--group <org> -s <name
+  fragment>` for a few repositories) lists the repository's deployments again
+  and looks up each one. The run logs one `github_deployments.status_lookups` line
   with the counts: stored, empty, failed and skipped.
 - **Evidence basis and base.** A measured rate stands on `incident` (incidents
   tie to the view, no deployment has a final status: failed / D), `both`

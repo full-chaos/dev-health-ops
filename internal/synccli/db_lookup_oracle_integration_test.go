@@ -241,6 +241,17 @@ func dbScenarioViews(scenarios []dbScenario) []scenarioView {
 	return views
 }
 
+// dbLookupNamedDivergences are the scenarios where the Go verb deliberately differs from the frozen Python
+// answer (CHAOS-9678): Python's sync verb builds the credential with GitHubCredentials(**dict) (_build_credential),
+// so a payload key the dataclass does not have, or a camelCase spelling of a key it has, ends in "Missing GitHub
+// credentials". A credential saved by the web carries such keys (an `org`), and the worker already reads the row
+// through github_credentials_from_mapping (aliases applied, unknown keys ignored), so the Go verb does the same.
+// Value: the stage the Go verb must reach.
+var dbLookupNamedDivergences = map[string]string{
+	"camelCase keys are not aliased": "ok",
+	"unknown key":                    "ok",
+}
+
 // TestDBLookupsMatchFrozenPython compares the two Postgres reads of `dho sync <target>` (the first
 // organization and the stored GitHub credential) with what the REAL dev-hops producers answered over every
 // scenario (database URL forms included), against a database each side seeded the same way. The answers were
@@ -329,6 +340,16 @@ func TestDBLookupsMatchFrozenPython(t *testing.T) {
 		wantJSON, _ := json.Marshal(want)
 		stage, _ := want["stage"].(map[string]any)
 		stages[fmt.Sprint(stage["v"])]++
+		if wantGoStage, divergent := dbLookupNamedDivergences[scenario.Name]; divergent {
+			// The Python verb refused the payload; the Go verb takes the credential, as the worker does
+			// (CHAOS-9678). The frozen answer must still show the refusal, or the entry is stale.
+			gotStage, _ := gotRedacted["stage"].(map[string]any)
+			if fmt.Sprint(stage["v"]) != "exit" || fmt.Sprint(gotStage["v"]) != wantGoStage {
+				mismatches++
+				t.Errorf("%s: named divergence: python stage %v, go stage %v, want python exit and go %s", scenario.Name, stage["v"], gotStage["v"], wantGoStage)
+			}
+			continue
+		}
 		if canonical(gotJSON) != canonical(wantJSON) {
 			mismatches++
 			t.Errorf("%s: %s", scenario.Name, diffLeaves(gotRedacted, want))

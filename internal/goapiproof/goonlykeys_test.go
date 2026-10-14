@@ -67,3 +67,23 @@ func TestValidateGoOnlyKeysRefusesAnIncompleteOrWildcardDeclaration(t *testing.T
 		t.Fatalf("complete declaration refused: %v", err)
 	}
 }
+
+// CHAOS-9555: the investment explanation's evidence carries measure, numerator and denominator, which the
+// recorded Python answer never had. The route's registered options must excuse exactly those three keys.
+func TestInvestmentExplainParityDeclaresTheMeasureEvidenceKeys(t *testing.T) {
+	spec, ok := restEndpointSpecs["REST:POST:/api/v1/investment/explain"]
+	if !ok {
+		t.Fatal("no registered investment explain endpoint")
+	}
+	opts := spec.Requests[0].Parity
+	const evidence = `"theme":"quality","subcategory":null,"share_pct":25.0,"delta_pct_points":null,"evidence_quality_mean":null,"evidence_quality_band":null`
+	baseline := snapshotFromJSON(t, `{"data":{"top_findings":[{"evidence":{`+evidence+`}}]}}`)
+	withKeys := snapshotFromJSON(t, `{"data":{"top_findings":[{"evidence":{`+evidence+`,"measure":"COUNT","numerator":1.0,"denominator":4.0}}]}}`)
+	if result := Compare(baseline, withKeys, opts); !result.IsMatch() {
+		t.Fatalf("the declared Go-only evidence keys must match, got %s %v", result.TerminalState, findingPaths(result))
+	}
+	other := snapshotFromJSON(t, `{"data":{"top_findings":[{"evidence":{`+evidence+`,"unit":"x"}}]}}`)
+	if result := Compare(baseline, other, opts); result.TerminalState != TerminalStateMismatch {
+		t.Fatalf("an undeclared evidence key must still mismatch, got %s", result.TerminalState)
+	}
+}

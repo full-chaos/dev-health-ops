@@ -333,8 +333,8 @@ var investmentBaselineDefects = []BaselineDefect{
 var investmentQualityStatsFloats = map[string]string{
 	"data.evidence_quality_stats.mean":   "avgIf(evidence_quality)-shaped ClickHouse float aggregate over the request's attributed work units",
 	"data.evidence_quality_stats.stddev": "stddevPopIf(evidence_quality)-shaped ClickHouse float aggregate",
-	"data.theme_distribution":            "sum(theme_kv.2 * effort_value) (investmentexplain/reader.go FetchInvestmentBreakdown) -- genuine merged ClickHouse float aggregate over Float64 effort_value/Float32 theme weight",
-	"data.subcategory_distribution":      "sum(subcategory_kv.2 * effort_value) (investmentexplain/reader.go FetchInvestmentBreakdown) -- genuine merged ClickHouse float aggregate over Float64 effort_value/Float32 subcategory weight",
+	"data.theme_distribution":            "sum(theme_kv.2 * unit weight) (investmentexplain/reader.go FetchInvestmentBreakdown, measure COUNT since CHAOS-9622) -- genuine merged ClickHouse float aggregate over Float32 theme weights",
+	"data.subcategory_distribution":      "sum(subcategory_kv.2 * unit weight) (investmentexplain/reader.go FetchInvestmentBreakdown, measure COUNT since CHAOS-9622) -- genuine merged ClickHouse float aggregate over Float32 subcategory weights",
 }
 
 // investmentIntegerLeaves declares GET/POST /api/v1/investment's
@@ -349,12 +349,26 @@ var investmentIntegerLeaves = map[string]string{
 	"data.evidence_quality_stats.band_counts": "countIf() per quality band (investment/qualitystats.go) -- bare row counts.",
 }
 
+// investmentGoOnlyKeys declares the two keys GET and POST /api/v1/investment serve and the recorded Python
+// answer never had (CHAOS-9622): the measure the distributions count, and the sum their shares are shares of.
+// The values of data.theme_distribution and data.subcategory_distribution are the numerators.
+//
+// DECLARED DIVERGENCE of those two distributions' VALUES (CHAOS-9622, D5999): Go reads the COUNT of the work
+// units; the recorded Python answer weighs every unit by effort_value (changed lines of code). The two are
+// different measures by ruling, in no fixed direction, so a live differential on these values shows the ruled
+// change, not a defect of either plane.
+var investmentGoOnlyKeys = map[string]GoOnlyKey{
+	"data.measure":     {Ticket: "CHAOS-9622", Reason: "Go-only: the measure (COUNT) the distributions are read in; the Python reference never served it."},
+	"data.denominator": {Ticket: "CHAOS-9622", Reason: "Go-only: the sum of all themes, the denominator the distribution values are numerators of; the Python reference never served it."},
+}
+
 // investmentParity is GET and POST /api/v1/investment's own shared Parity.
 var investmentParity = Options{
 	BaselineDefects:       investmentBaselineDefects,
 	NumericLeavesDeclared: true,
 	FloatTierB:            investmentQualityStatsFloats,
 	IntegerLeaves:         investmentIntegerLeaves,
+	GoOnlyKeys:            investmentGoOnlyKeys,
 }
 
 // investmentTeamScopeDictSubsetDefects extends FOUR of
@@ -482,6 +496,7 @@ var investmentTeamScopedParity = Options{
 	NumericLeavesDeclared: true,
 	FloatTierB:            investmentParity.FloatTierB,
 	IntegerLeaves:         investmentParity.IntegerLeaves,
+	GoOnlyKeys:            investmentGoOnlyKeys,
 }
 
 // investmentSunburstBaselineDefects extends investmentBaselineDefects
@@ -613,7 +628,7 @@ var investmentSunburstParity = Options{
 	OrderInsensitiveLists: investmentSunburstOrderInsensitiveLists,
 	NumericLeavesDeclared: true,
 	FloatTierB: map[string]string{
-		"data.value": "sum(subcategory_kv.2 * effort_value) (investment/sunburst.go FetchInvestmentSunburst) -- genuine merged ClickHouse float aggregate.",
+		"data.value": "sum(subcategory_kv.2 * unit weight) (investment/sunburst.go FetchInvestmentSunburst, measure COUNT since CHAOS-9622) -- genuine merged ClickHouse float aggregate.",
 	},
 }
 
@@ -724,6 +739,15 @@ var investmentExplainDeterministicFloats = map[string]string{
 	"data.top_findings.evidence.share_pct":             "derived from a ClickHouse float aggregate over attributed work-unit effort",
 	"data.top_findings.evidence.delta_pct_points":      "derived from the same float aggregates as share_pct",
 	"data.top_findings.evidence.evidence_quality_mean": "avgIf(evidence_quality)-shaped ClickHouse float aggregate",
+}
+
+// investmentExplainGoOnlyKeys declares the three evidence keys the investment explanation serves and the
+// recorded Python answer never had (CHAOS-9555): the measure the share is in, and the two sums share_pct is
+// the ratio of.
+var investmentExplainGoOnlyKeys = map[string]GoOnlyKey{
+	"data.top_findings.evidence.measure":     {Ticket: "CHAOS-9555", Reason: "Go-only: the measure (COUNT or CHURN_LOC) share_pct is read in; the Python reference never served it."},
+	"data.top_findings.evidence.numerator":   {Ticket: "CHAOS-9555", Reason: "Go-only: the finding's sum, the numerator of share_pct; the Python reference never served it."},
+	"data.top_findings.evidence.denominator": {Ticket: "CHAOS-9555", Reason: "Go-only: the total of all themes, the denominator of share_pct; the Python reference never served it."},
 }
 
 // investmentExplainIntegerLeaves declares investment/explain's one
@@ -1421,6 +1445,7 @@ var explainGoOnlyKeys = map[string]GoOnlyKey{
 	"data.source":                      {Ticket: "CHAOS-8910", Reason: "Go-only: the stored provider(s) behind the item; the Python reference never served it."},
 	"data.link_tier":                   {Ticket: "CHAOS-8981", Reason: "Go-only: the weakest deployment-incident link tier behind a measured change failure rate; null for every other metric. The Python reference never served it."},
 	"data.rate_state":                  {Ticket: "CHAOS-8981", Reason: "Go-only: why change failure rate has a value or not; null for every other metric. The Python reference never served it."},
+	"data.evidence_basis":              {Ticket: "CHAOS-9621", Reason: "Go-only: what a measured change failure rate stands on (incident, status or both); null for every other metric and for a rate that is not measured. The Python reference never served it."},
 	"data.drivers.has_data":            {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the current window; the Python reference never served it."},
 	"data.drivers.has_prior_data":      {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the comparison window; false = delta_pct is null. The Python reference never served it."},
 	"data.contributors.has_data":       {Ticket: "CHAOS-9063", Reason: "Go-only: the contributor holds a stored value in the current window; the Python reference never served it."},
@@ -4230,6 +4255,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					VolatileFields:        investmentExplainProseFields,
 					NumericLeavesDeclared: true,
 					FloatTierB:            investmentExplainDeterministicFloats,
+					GoOnlyKeys:            investmentExplainGoOnlyKeys,
 					IntegerLeaves:         investmentExplainIntegerLeaves,
 				},
 			},
@@ -4292,6 +4318,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					VolatileFields:        investmentExplainProseFields,
 					NumericLeavesDeclared: true,
 					FloatTierB:            investmentExplainDeterministicFloats,
+					GoOnlyKeys:            investmentExplainGoOnlyKeys,
 					IntegerLeaves:         investmentExplainIntegerLeaves,
 				},
 			},
@@ -4312,6 +4339,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					VolatileFields:        investmentExplainProseFields,
 					NumericLeavesDeclared: true,
 					FloatTierB:            investmentExplainDeterministicFloats,
+					GoOnlyKeys:            investmentExplainGoOnlyKeys,
 					IntegerLeaves:         investmentExplainIntegerLeaves,
 				},
 			},

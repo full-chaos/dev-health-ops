@@ -179,7 +179,7 @@ func scopeRoutes(t *testing.T) []scopeRoute {
 			if err != nil {
 				return nil, err
 			}
-			return reader.FetchInvestmentBreakdown(ctx, investmentexplain.BreakdownFilters{OrgID: orgID, StartTS: start, EndTS: end})
+			return reader.FetchInvestmentBreakdown(ctx, investmentexplain.BreakdownFilters{OrgID: orgID, StartTS: start, EndTS: end, Measure: investmentexplain.InvestmentShareMeasure})
 		}},
 		{"/api/v1/work-units", func(ctx context.Context, client analytics.QueryClient, orgID string) (any, error) {
 			reader, err := investmentexplain.NewReader(client)

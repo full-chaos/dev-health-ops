@@ -531,10 +531,10 @@ func TestAIGovernanceCoverage_RatioOfSumsWeightsByArtifactCount(t *testing.T) {
 
 func TestInvestmentUnits_SumsByThemeIgnoresUnknown(t *testing.T) {
 	rows := []investmentRow{
-		{theme: "maintenance", effort: 3},
-		{theme: "maintenance", effort: 2},
-		{theme: "feature_delivery", effort: 10},
-		{theme: "ktlo", effort: 999}, // the retired legacy vocabulary is not a theme
+		{theme: "maintenance", value: 3},
+		{theme: "maintenance", value: 2},
+		{theme: "feature_delivery", value: 10},
+		{theme: "ktlo", value: 999}, // the retired legacy vocabulary is not a theme
 	}
 	units := investmentUnits(rows)
 	if units["maintenance"] != 5 || units["feature_delivery"] != 10 {
@@ -625,7 +625,7 @@ func TestResolve_HappyPath_ComputesRealPayload(t *testing.T) {
 		{rows: [][]any{{"feature_delivery", uint64(7)}}},                                                             // investment
 		{rows: [][]any{{"human", uint64(10), uint64(2), uint64(1), uint64(6), uint64(1), 1.0, 1.2, 0.1, 0.05, 0.0}}}, // ai_impact
 		{rows: [][]any{{day("2026-08-24"), nil, nil, uint64(4), uint64(3), uint64(2), uint64(4), uint64(4)}}},        // ai_governance
-		{rows: [][]any{{uint64(9), uint64(1), uint64(2), uint64(1), uint64(1), uint64(4)}}},                          // change_failure
+		{rows: [][]any{{uint64(9), uint64(1), uint64(2), uint64(1), uint64(1), uint64(0), uint64(0), uint64(4)}}},    // change_failure
 	}
 	client := &fakeClient{
 		responses: append(append([]*fakeRowScanner{}, current...), emptyScanners(11)...),

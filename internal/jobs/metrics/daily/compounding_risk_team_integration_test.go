@@ -311,7 +311,7 @@ INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, first_rev
 
 	type teamRow struct {
 		latency, share   *float64
-		merged, reviewed *uint32
+		merged, reviewed *float64
 	}
 	rows, err := conn.Query(ctx, `
 SELECT scope_id, review_latency_p90h, review_share_30d, merged_prs_30d, reviewed_prs_30d

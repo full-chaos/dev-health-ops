@@ -17,9 +17,9 @@ type wellbeingExpectedRow struct {
 	TeamID                 string  `json:"team_id"`
 	TeamName               string  `json:"team_name"`
 	RepoID                 string  `json:"repo_id"`
-	CommitsCount           int     `json:"commits_count"`
-	AfterHoursCommitsCount int     `json:"after_hours_commits_count"`
-	WeekendCommitsCount    int     `json:"weekend_commits_count"`
+	CommitsCount           float64 `json:"commits_count"`
+	AfterHoursCommitsCount float64 `json:"after_hours_commits_count"`
+	WeekendCommitsCount    float64 `json:"weekend_commits_count"`
 	AfterHoursCommitRatio  float64 `json:"after_hours_commit_ratio"`
 	WeekendCommitRatio     float64 `json:"weekend_commit_ratio"`
 }

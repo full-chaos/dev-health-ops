@@ -196,7 +196,7 @@ func (record Record) WithReviewWindow(window *ReviewWindow) Record {
 	if window == nil {
 		return record
 	}
-	merged, reviewed := uint32(window.MergedPRs), uint32(window.ReviewedPRs)
+	merged, reviewed := float64(window.MergedPRs), float64(window.ReviewedPRs)
 	record.MergedPRs30D, record.ReviewedPRs30D, record.ReviewShare30D = &merged, &reviewed, window.Share()
 	return record
 }

@@ -191,7 +191,19 @@ func preparedRouteColumns(provider, destination string) (map[string]bool, bool) 
 	if !ok || len(insertStatementColumns(statement)) == 0 {
 		return nil, false
 	}
-	return projectionKeys(statement), true
+	keys := projectionKeys(statement)
+	for _, column := range preparedRouteProjectionExtraColumns[destination] {
+		keys[column] = true
+	}
+	return keys, true
+}
+
+// preparedRouteProjectionExtraColumns are columns a destination's sink writes
+// beyond the statement above: the work-item sinks append due_at for the
+// providers that state a due date (workItemDueAtStated), so a prepared route
+// must keep it or the sink would clear every stored due date.
+var preparedRouteProjectionExtraColumns = map[string][]string{
+	"work_items": {"due_at"},
 }
 
 // projectionKeys returns the column names of an INSERT statement.

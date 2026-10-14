@@ -142,6 +142,72 @@ func TestFilterOptionsResponseIsThePythonResponsePlusTeamNames(t *testing.T) {
 	}
 }
 
+// investmentPythonResponse is the shape the frozen FastAPI model of /api/v1/investment has.
+// investment.Response has two more fields since CHAOS-9622 (measure, denominator), which the Python model
+// never had; the frozen program is not recorded again, so the oracle still checks THAT shape, written by
+// the production writer. TestInvestmentResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields ties it to
+// the production type: exactly these six fields, in this order, then exactly the declared Go-only two.
+type investmentPythonResponse struct {
+	ThemeDistribution           pyjson.OrderedMap[float64]       `json:"theme_distribution"`
+	SubcategoryDistribution     pyjson.OrderedMap[float64]       `json:"subcategory_distribution"`
+	EvidenceQualityDistribution pyjson.OrderedMap[float64]       `json:"evidence_quality_distribution" pyjson:"nullable"`
+	EvidenceQualityStats        *investment.EvidenceQualityStats `json:"evidence_quality_stats"`
+	Unit                        *string                          `json:"unit"`
+	Edges                       []map[string]any                 `json:"edges" pyjson:"nullable"`
+}
+
+// investmentGoOnlyResponseFields are the fields of investment.Response the Python model does not have:
+// the measure the distributions count and the sum their shares are shares of (the distribution values
+// are the numerators). Both are left out of an empty response.
+var investmentGoOnlyResponseFields = []struct{ name, goType, tag string }{
+	{"Measure", "string", `json:"measure,omitempty"`},
+	{"Denominator", "*float64", `json:"denominator,omitempty"`},
+}
+
+func TestInvestmentResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := fieldsOf(reflect.TypeOf(investmentPythonResponse{}))
+	for _, goOnly := range investmentGoOnlyResponseFields {
+		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})
+	}
+	if got := fieldsOf(reflect.TypeOf(investment.Response{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("investment.Response fields =\n %v\nwant the Python fields, then measure and denominator:\n %v", got, want)
+	}
+
+	// The production writer writes the two fields after the Python ones, and leaves them out of an empty response.
+	denominator := 23.0
+	var full strings.Builder
+	recorder := httptest.NewRecorder()
+	if err := writeModelResponse(recorder, &investment.Response{
+		ThemeDistribution: pyjson.NewOrderedMap[float64](), SubcategoryDistribution: pyjson.NewOrderedMap[float64](),
+		Edges: []map[string]any{}, Measure: "COUNT", Denominator: &denominator,
+	}); err != nil {
+		t.Fatalf("writeModelResponse: %v", err)
+	}
+	full.WriteString(recorder.Body.String())
+	if !strings.HasSuffix(strings.TrimSpace(full.String()), `"edges":[],"measure":"COUNT","denominator":23.0}`) {
+		t.Errorf("investment body = %s, want measure then denominator after the Python fields", full.String())
+	}
+	recorder = httptest.NewRecorder()
+	if err := writeModelResponse(recorder, &investment.Response{
+		ThemeDistribution: pyjson.NewOrderedMap[float64](), SubcategoryDistribution: pyjson.NewOrderedMap[float64](),
+		Edges: []map[string]any{},
+	}); err != nil {
+		t.Fatalf("writeModelResponse: %v", err)
+	}
+	if strings.Contains(recorder.Body.String(), "measure") || strings.Contains(recorder.Body.String(), "denominator") {
+		t.Errorf("empty investment body = %s, want neither Go-only field", recorder.Body.String())
+	}
+}
+
 // opportunitiesPythonCard and opportunitiesPythonResponse are the shape the
 // frozen FastAPI model of /api/v1/opportunities has: the five fields the
 // Python reference served. The Go response (opportunities.Card) has four more
@@ -340,6 +406,7 @@ var explainGoOnlyResponseFields = []struct{ name, goType, tag string }{
 	{"Source", "*string", `json:"source"`},
 	{"LinkTier", "*string", `json:"link_tier"`},
 	{"RateState", "*string", `json:"rate_state"`},
+	{"EvidenceBasis", "*string", `json:"evidence_basis"`},
 }
 
 func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
@@ -384,9 +451,9 @@ func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testin
 	}{
 		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}, Repositories: &repositories, SourceURL: &sourceURL, HasData: true, HasPriorData: true}, []string{
 			`"repositories":[{"id":"repo-a","name":"webapp","value":3.0,"source_url":"https://github.com/acme/webapp"},{"id":"repo-b","name":null,"value":1.0,"source_url":null}]`,
-			`"source_url":"https://github.com/acme/webapp","has_data":true,"has_prior_data":true,"source":null,"link_tier":null,"rate_state":null}`,
+			`"source_url":"https://github.com/acme/webapp","has_data":true,"has_prior_data":true,"source":null,"link_tier":null,"rate_state":null,"evidence_basis":null}`,
 		}},
-		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}}, []string{`"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null,"link_tier":null,"rate_state":null}`}},
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}}, []string{`"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null,"link_tier":null,"rate_state":null,"evidence_basis":null}`}},
 	} {
 		recorder := httptest.NewRecorder()
 		if err := writeModelResponse(recorder, &testCase.response); err != nil {
@@ -441,7 +508,7 @@ func assertExplainTailMatchesProducerModel(t *testing.T, rawSchema json.RawMessa
 		}
 		fmt.Fprintf(&prefix, "%q:null", name)
 	}
-	valid := prefix.String() + `,"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null,"link_tier":null,"rate_state":null}`
+	valid := prefix.String() + `,"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null,"link_tier":null,"rate_state":null,"evidence_basis":null}`
 	if got, err := withoutExplainGoOnlyFields(valid); err != nil || got != prefix.String()+`}` {
 		t.Fatalf("withoutExplainGoOnlyFields(valid producer body) = %s, %v; want %s", got, err, prefix.String()+`}`)
 	}
@@ -542,7 +609,7 @@ func TestWithoutExplainGoOnlyFieldsLeavesThePythonShapeOrFails(t *testing.T) {
 		}
 		fmt.Fprintf(&prefix, "%q:null", name)
 	}
-	valid := prefix.String() + `,"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null,"link_tier":null,"rate_state":null}`
+	valid := prefix.String() + `,"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null,"link_tier":null,"rate_state":null,"evidence_basis":null}`
 	for _, testCase := range []struct{ body, want string }{
 		{valid, prefix.String() + `}`},
 	} {
@@ -720,16 +787,24 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/people/{person_id}/drilldown/issues": plain((*personIssuesPythonResponse)(nil)),
 		"GET /api/v1/opportunities":                       plain((*opportunitiesPythonResponse)(nil)),
 		"POST /api/v1/opportunities":                      plain((*opportunitiesPythonResponse)(nil)),
-		"GET /api/v1/investment":                          plain((*investment.Response)(nil)),
-		"POST /api/v1/investment":                         plain((*investment.Response)(nil)),
+		"GET /api/v1/investment":                          plain((*investmentPythonResponse)(nil)),
+		"POST /api/v1/investment":                         plain((*investmentPythonResponse)(nil)),
 		"GET /api/v1/investment/sunburst":                 plain([]investment.SunburstSlice(nil)),
 		"POST /api/v1/investment/explain": {
-			response: investmentexplain.InvestmentMixExplanation{},
+			response: investmentMixPythonResponse{},
 			data: func(value any) (string, error) {
-				return investmentexplain.EncodeInvestmentMixExplanation(value.(investmentexplain.InvestmentMixExplanation))
+				explanation, err := investmentMixFromPythonShape(value)
+				if err != nil {
+					return "", err
+				}
+				return investmentexplain.EncodeInvestmentMixExplanation(explanation)
 			},
 			write: func(value any) ([]byte, error) {
-				body, err := investmentexplain.EncodeInvestmentMixExplanation(value.(investmentexplain.InvestmentMixExplanation))
+				explanation, err := investmentMixFromPythonShape(value)
+				if err != nil {
+					return nil, err
+				}
+				body, err := investmentexplain.EncodeInvestmentMixExplanation(explanation)
 				if err != nil {
 					return nil, err
 				}
@@ -1331,4 +1406,94 @@ func checkNullableTags(t *testing.T, path string, goType reflect.Type, schema ma
 		return count
 	}
 	return 0
+}
+
+// investmentMixPythonResponse is the shape the frozen FastAPI model of POST /api/v1/investment/explain
+// has. The production evidence has three more fields since CHAOS-9555 (measure, numerator, denominator),
+// which the Python model never had; the frozen program was recorded for the Python shape, so the oracle
+// still checks THAT shape. TestInvestmentMixEvidenceIsThePythonEvidencePlusTheDeclaredGoOnlyFields ties
+// both widenings to the production type.
+type investmentMixPythonResponse struct {
+	Summary         string                                      `json:"summary"`
+	TopFindings     []investmentMixPythonFinding                `json:"top_findings"`
+	Confidence      investmentexplain.InvestmentMixConfidence   `json:"confidence"`
+	WhatToCheckNext []investmentexplain.InvestmentMixActionItem `json:"what_to_check_next"`
+	AntiClaims      []string                                    `json:"anti_claims"`
+	Status          *string                                     `json:"status"`
+}
+
+type investmentMixPythonFinding struct {
+	Finding  string                      `json:"finding"`
+	Evidence investmentMixPythonEvidence `json:"evidence"`
+}
+
+type investmentMixPythonEvidence struct {
+	Theme               string   `json:"theme"`
+	Subcategory         *string  `json:"subcategory"`
+	SharePct            float64  `json:"share_pct"`
+	DeltaPctPoints      *float64 `json:"delta_pct_points"`
+	EvidenceQualityMean *float64 `json:"evidence_quality_mean"`
+	EvidenceQualityBand *string  `json:"evidence_quality_band"`
+}
+
+func investmentMixFromPythonShape(value any) (investmentexplain.InvestmentMixExplanation, error) {
+	python, ok := value.(investmentMixPythonResponse)
+	if !ok {
+		return investmentexplain.InvestmentMixExplanation{}, fmt.Errorf("investment mix response: got %T", value)
+	}
+	explanation := investmentexplain.InvestmentMixExplanation{
+		Summary: python.Summary, Confidence: python.Confidence, WhatToCheckNext: python.WhatToCheckNext,
+		AntiClaims: python.AntiClaims, Status: python.Status,
+	}
+	if python.TopFindings != nil {
+		explanation.TopFindings = make([]investmentexplain.InvestmentMixFinding, len(python.TopFindings))
+	}
+	for i, finding := range python.TopFindings {
+		e := finding.Evidence
+		explanation.TopFindings[i] = investmentexplain.InvestmentMixFinding{Finding: finding.Finding, Evidence: investmentexplain.InvestmentMixFindingEvidence{
+			Theme: e.Theme, Subcategory: e.Subcategory, SharePct: e.SharePct, DeltaPctPoints: e.DeltaPctPoints,
+			EvidenceQualityMean: e.EvidenceQualityMean, EvidenceQualityBand: e.EvidenceQualityBand,
+		}}
+	}
+	return explanation, nil
+}
+
+var investmentMixGoOnlyEvidenceFields = []struct{ name, goType, tag string }{
+	{"Measure", "string", `json:"measure,omitempty"`},
+	{"Numerator", "*float64", `json:"numerator,omitempty"`},
+	{"Denominator", "*float64", `json:"denominator,omitempty"`},
+}
+
+func TestInvestmentMixEvidenceIsThePythonEvidencePlusTheDeclaredGoOnlyFields(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := fieldsOf(reflect.TypeOf(investmentMixPythonEvidence{}))
+	for _, goOnly := range investmentMixGoOnlyEvidenceFields {
+		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})
+	}
+	if got := fieldsOf(reflect.TypeOf(investmentexplain.InvestmentMixFindingEvidence{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("InvestmentMixFindingEvidence fields =\n %v\nwant the six Python fields, then the three Go-only ones:\n %v", got, want)
+	}
+
+	numerator, denominator := 25.0, 100.0
+	encoded, err := investmentexplain.EncodeInvestmentMixExplanation(investmentexplain.InvestmentMixExplanation{
+		TopFindings: []investmentexplain.InvestmentMixFinding{{Finding: "f", Evidence: investmentexplain.InvestmentMixFindingEvidence{
+			Theme: "quality", SharePct: 25, Measure: "COUNT", Numerator: &numerator, Denominator: &denominator,
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	for _, part := range []string{`"measure": "COUNT"`, `"numerator": 25.0`, `"denominator": 100.0`} {
+		if !strings.Contains(encoded, part) {
+			t.Errorf("the production body has no %s: %s", part, encoded)
+		}
+	}
 }

@@ -418,7 +418,7 @@ func TestDirectAdaptersLeaveThePythonOmittedColumnsAtTheirDefaults(t *testing.T)
 		if err := adapter.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		expectHeldWorkItemColumns(ctx, t, conn, orgID, projected, heldDue, "provider body")
+		expectHeldWorkItemColumns(ctx, t, conn, orgID, projected, &heldDue, "provider body")
 		if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
 			t.Fatalf("inspection=%s err=%v, want exact", inspection, err)
 		}
@@ -437,7 +437,7 @@ func TestDirectAdaptersLeaveThePythonOmittedColumnsAtTheirDefaults(t *testing.T)
 		if err := adapter.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		expectHeldWorkItemColumns(ctx, t, conn, orgID, projected, heldDue, "held body")
+		expectHeldWorkItemColumns(ctx, t, conn, orgID, projected, &heldDue, "held body")
 		if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
 			t.Fatalf("inspection=%s err=%v, want exact", inspection, err)
 		}
@@ -895,7 +895,7 @@ func insertHeldWorkItemColumns(ctx context.Context, t *testing.T, conn driver.Co
 	}
 }
 
-func expectHeldWorkItemColumns(ctx context.Context, t *testing.T, conn driver.Conn, orgID string, row workItemStoredRow, due time.Time, wantDescription string) {
+func expectHeldWorkItemColumns(ctx context.Context, t *testing.T, conn driver.Conn, orgID string, row workItemStoredRow, due *time.Time, wantDescription string) {
 	t.Helper()
 	var description, priorityRaw, serviceClass *string
 	var dueAt *time.Time
@@ -907,8 +907,50 @@ func expectHeldWorkItemColumns(ctx context.Context, t *testing.T, conn driver.Co
 		t.Fatal(err)
 	}
 	if title != row.Title || description == nil || *description != wantDescription || priorityRaw == nil || *priorityRaw != "p0" ||
-		serviceClass == nil || *serviceClass != "expedite" || dueAt == nil || !dueAt.Equal(due.Truncate(time.Millisecond)) {
-		t.Fatalf("FINAL title=%q description=%v priority_raw=%v service_class=%v due_at=%v; want the sync's title, description %q and the held three",
-			title, description, priorityRaw, serviceClass, dueAt, wantDescription)
+		serviceClass == nil || *serviceClass != "expedite" || !sameDueAt(dueAt, truncatedDueAt(due)) {
+		t.Fatalf("FINAL title=%q description=%v priority_raw=%v service_class=%v due_at=%v; want the sync's title, description %q, the held priority_raw and service_class, and due_at %v",
+			title, description, priorityRaw, serviceClass, dueAt, wantDescription, due)
 	}
+}
+
+// A gitlab (or jira) row states its provider's due date: the stored row takes
+// it over a held value, and a later row stating none clears it. A github row
+// of the same shape keeps the held value.
+func TestDirectAdapterStoresAStatedDueDateAndClearsARemovedOne(t *testing.T) {
+	orgID := workItemTestOrgID(t)
+	now := time.Date(2026, 8, 31, 23, 30, 0, 123456789, time.UTC)
+	ctx, conn := newWorkItemEffectsConn(t)
+	adapter := GitHubWorkItemsClickHouseAdapter{Conn: conn}
+	row := workItemTestRow(orgID, now)
+	row.Provider, row.WorkItemID = "gitlab", "gl:acme/api#42"
+	stated := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	row.DueAt = &stated
+	insertHeldWorkItemColumns(ctx, t, conn, orgID, projectWorkItem(row), now.Add(-time.Hour), now.Add(-24*time.Hour))
+
+	identity, effect := workItemEffect(t, "work_items", row)
+	if err := adapter.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	expectHeldWorkItemColumns(ctx, t, conn, orgID, projectWorkItem(row), &stated, "held body")
+	if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
+		t.Fatalf("inspection=%s err=%v, want exact", inspection, err)
+	}
+
+	row.DueAt, row.LastSynced = nil, now.Add(time.Hour)
+	identity, effect = workItemEffect(t, "work_items", row)
+	if err := adapter.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	expectHeldWorkItemColumns(ctx, t, conn, orgID, projectWorkItem(row), nil, "held body")
+	if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
+		t.Fatalf("inspection=%s err=%v, want exact", inspection, err)
+	}
+}
+
+func truncatedDueAt(due *time.Time) *time.Time {
+	if due == nil {
+		return nil
+	}
+	truncated := due.Truncate(time.Millisecond)
+	return &truncated
 }

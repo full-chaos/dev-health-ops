@@ -5,7 +5,7 @@ Where investment categorization is persisted, and how to read it correctly.
 Investment analytics are **ClickHouse-only**. PostgreSQL holds none of this data — it is
 the semantic/admin layer only. Tables are written by the materializer (see
 [Investment Categorization Pipeline](investment-categorization-pipeline.md)) and read,
-**effort-weighted**, by the API (see [Investment API](../api/investment-api.md)).
+by the API as a **COUNT of work units** (see [Investment API](../api/investment-api.md)).
 
 Migrations live in `src/dev_health_ops/migrations/clickhouse/`.
 
@@ -28,7 +28,7 @@ One row per WorkUnit per materialization run. Created in
 | `repo_id` | `Nullable(UUID)` | Null → surfaces as `unassigned` scope in the API |
 | `provider` | `Nullable(String)` | Source provider |
 | `effort_metric` | `String` | **Runtime values: `churn_loc` or `active_hours`** |
-| `effort_value` | `Float64` | Weight used by the API (see below) |
+| `effort_value` | `Float64` | Churn-LOC / active-hours figure of the unit. **Not a weight**: lines of code are not a measure of effort (D5999); read only by the explicit `CHURN_LOC` measure |
 | `theme_distribution_json` | `Map(String, Float64)` | 5 themes → probability (~sums to 1) |
 | `subcategory_distribution_json` | `Map(String, Float64)` | 15 subcategories → probability |
 | `structural_evidence_json` | `String` | Serialized structural signals |

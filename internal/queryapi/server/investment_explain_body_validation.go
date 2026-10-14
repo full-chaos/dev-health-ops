@@ -10,7 +10,54 @@
 // only the field-by-field wiring for THIS route's own request shape.
 package server
 
-import "github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+import (
+	"strings"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+)
+
+// explainMeasureValues are the measures the explain request names: the Investment page's COUNT,
+// THROUGHPUT and CHURN_LOC, and the effort weighting every answer used before CHAOS-9555.
+var explainMeasureValues = []string{"COUNT", "THROUGHPUT", "CHURN_LOC"}
+
+// decodeExplainDateRange reads the page's dateRange: both dates are required, and the range
+// obeys the page's own rule (analytics.ValidateDateRange).
+func decodeExplainDateRange(loc []any, value pyjson.Value) (*investmentExplainDateRange, []pydanticErrorDetail) {
+	object, isObject := value.(*pyjson.Object)
+	if !isObject {
+		return nil, []pydanticErrorDetail{modelAttributesTypeError(loc, value)}
+	}
+	var errs []pydanticErrorDetail
+	read := func(name string) (parsed time.Time, ok bool) {
+		fieldLoc := appendLoc(loc, name)
+		field, has := object.Get(name)
+		if !has || field == nil {
+			errs = append(errs, pydanticErrorDetail{Type: "missing", Loc: fieldLoc, Msg: "Field required", Input: value})
+			return time.Time{}, false
+		}
+		if detail := validateBodyDateField(fieldLoc, field); detail != nil {
+			errs = append(errs, *detail)
+			return time.Time{}, false
+		}
+		parsed, ok = dateFromAny(legacyJSON(field))
+		return parsed, ok
+	}
+	start, startOK := read("start_date")
+	end, endOK := read("end_date")
+	if startOK && endOK {
+		if err := analytics.ValidateDateRange(graphqldate.New(start), graphqldate.New(end)); err != nil {
+			errs = append(errs, pydanticErrorDetail{Type: "value_error", Loc: loc, Msg: "Value error, " + err.Error(), Input: value})
+		}
+	}
+	if len(errs) > 0 {
+		return nil, errs
+	}
+	return &investmentExplainDateRange{StartDate: start.UTC(), EndDate: end.UTC()}, nil
+}
 
 // decodeInvestmentExplainRequestBody decodes bodyBytes into
 // investmentExplainRequestBody at loc (["body"]). A non-empty errs
@@ -62,6 +109,27 @@ func decodeInvestmentExplainRequestBody(loc []any, bodyBytes []byte) (investment
 	}
 
 	reqBody.LLMModel = optionalString("llm_model")
+
+	// The mix fields of the Investment page (CHAOS-9555), Go-only.
+	reqBody.Measure = optionalString("measure")
+	if reqBody.Measure != nil {
+		if _, known := investmentexplain.NormalizeMeasure(*reqBody.Measure); !known || strings.TrimSpace(*reqBody.Measure) == "" {
+			errs = append(errs, literalErrorDetail(appendLoc(loc, "measure"), *reqBody.Measure, explainMeasureValues))
+		}
+	}
+	if useValue, has := raw.Get("use_investment"); has {
+		useInvestment, present, detail := coerceBoolBodyField(appendLoc(loc, "use_investment"), useValue)
+		if detail != nil {
+			errs = append(errs, *detail)
+		} else if present {
+			reqBody.UseInvestment = &useInvestment
+		}
+	}
+	if rangeValue, has := raw.Get("date_range"); has && rangeValue != nil {
+		dateRange, rangeErrs := decodeExplainDateRange(appendLoc(loc, "date_range"), rangeValue)
+		errs = append(errs, rangeErrs...)
+		reqBody.DateRange = dateRange
+	}
 
 	if len(errs) > 0 {
 		return investmentExplainRequestBody{}, errs

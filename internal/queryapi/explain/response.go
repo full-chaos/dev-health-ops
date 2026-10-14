@@ -141,6 +141,7 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		currentRaw, previousRaw float64
 		hasData, hasPriorData   bool
 		rateState, linkTier     *string
+		evidenceBasis           *string
 	)
 	if config.Table == changefailure.Table {
 		// Change failure rate: the window's summed counts through the one rule
@@ -160,6 +161,7 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		currentRaw, hasData = floatOrZero(currentOutcome.Value), currentOutcome.State == changefailure.StateMeasured
 		previousRaw, hasPriorData = floatOrZero(previousOutcome.Value), previousOutcome.State == changefailure.StateMeasured
 		rateState, linkTier = currentOutcome.StateOrNil(), currentOutcome.LinkTierOrNil()
+		evidenceBasis = currentOutcome.BasisOrNil()
 	} else {
 		var err error
 		currentRaw, hasData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL)
@@ -287,11 +289,12 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 			pyjson.KeyValue[string]{Key: "prs", Value: fmt.Sprintf("/api/v1/drilldown/prs?metric=%s", params.Metric)},
 			pyjson.KeyValue[string]{Key: "issues", Value: fmt.Sprintf("/api/v1/drilldown/issues?metric=%s", params.Metric)},
 		),
-		Repositories: repositories,
-		SourceURL:    sourceURL,
-		Source:       source,
-		LinkTier:     linkTier,
-		RateState:    rateState,
+		Repositories:  repositories,
+		SourceURL:     sourceURL,
+		Source:        source,
+		LinkTier:      linkTier,
+		RateState:     rateState,
+		EvidenceBasis: evidenceBasis,
 	}, nil
 }
 

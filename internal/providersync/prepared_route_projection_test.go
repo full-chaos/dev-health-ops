@@ -64,7 +64,7 @@ var preparedRouteRowTypes = map[string][]any{
 // route builds that no sink writes or reads. A change here is a change to what
 // a prepared route persists.
 var preparedRouteDroppedKeys = map[string][]string{
-	"work_items": {"description", "due_at", "priority_raw", "service_class"},
+	"work_items": {"description", "priority_raw", "service_class"},
 }
 
 // preparedRouteProviderRowTypes are the row types of a provider whose sink

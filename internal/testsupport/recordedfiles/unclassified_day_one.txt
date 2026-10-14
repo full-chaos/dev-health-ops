@@ -648,7 +648,6 @@ internal/queryapi/flame/testdata/issue_no_backlog_wait.json
 internal/queryapi/flame/testdata/issue_with_backlog_wait.json
 internal/queryapi/flame/testdata/pr_no_review.json
 internal/queryapi/flame/testdata/pr_with_rework.json
-internal/queryapi/investment/testdata/investment_basic.json
 internal/queryapi/investment/testdata/investment_missing_table.json
 internal/queryapi/investment/testdata/sunburst_basic.json
 internal/queryapi/investment/testdata/sunburst_missing_table.json

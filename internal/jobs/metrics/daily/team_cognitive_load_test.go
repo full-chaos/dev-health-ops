@@ -3,7 +3,6 @@ package daily
 import (
 	"context"
 	"errors"
-	"slices"
 	"testing"
 	"time"
 
@@ -188,17 +187,17 @@ func TestApplyOwnershipToRepoToTeamRequiresRepoNamesByIDMembership(t *testing.T)
 	staleRepo := uuid.New() // owned, but absent from repoNamesByID
 	repoNamesByID := map[string]string{knownRepo.String(): "acme/known-repo"}
 
-	owners := map[string][]string{
-		knownRepo.String(): {"team-platform"},
-		staleRepo.String(): {"team-platform"},
+	owners := map[string][]teamownership.OwnerShare{
+		knownRepo.String(): {{TeamID: "team-platform", Main: true, Share: 1}},
+		staleRepo.String(): {{TeamID: "team-platform", Main: true, Share: 1}},
 	}
-	repoToTeam := authoritativeOwnersKnownToRepoCatalog(owners, repoNamesByID)
+	repoToTeam := ownersKnownToRepoCatalog(owners, repoNamesByID)
 
-	if got := repoToTeam[knownRepo.String()]; !slices.Equal(got, []string{"team-platform"}) {
-		t.Fatalf("known repo team=%q, want team-platform", got)
+	if got := repoToTeam[knownRepo.String()]; len(got) != 1 || got[0].TeamID != "team-platform" {
+		t.Fatalf("known repo owners=%v, want team-platform", got)
 	}
 	if teamID, resolved := repoToTeam[staleRepo.String()]; resolved {
-		t.Fatalf("stale repo (owned but absent from repo_names_by_id) resolved to %q, want "+
+		t.Fatalf("stale repo (owned but absent from repo_names_by_id) resolved to %v, want "+
 			"unresolved -- an owned repo_id the current repos catalog does not carry must never "+
 			"be trusted, matching Python's guard", teamID)
 	}
@@ -207,8 +206,8 @@ func TestApplyOwnershipToRepoToTeamRequiresRepoNamesByIDMembership(t *testing.T)
 // erroringOwnershipConn is a driver.Conn whose ONLY reachable method is
 // Query, always failing -- everything else panics if reached (mirrors
 // stubDriverConn's "unimplemented" discipline, wellbeing_native_executor_test.go).
-// resolveDailyFinalizeRepoToTeam's only conn use is the single
-// AuthoritativeOwnersByRepo call, so this is a faithful, minimal fake for
+// resolveDailyFinalizeRepoOwnerShares's only conn use is the single
+// OwnerSharesByRepo call, so this is a faithful, minimal fake for
 // testing that path's error propagation.
 type erroringOwnershipConn struct{ stubDriverConn }
 
@@ -218,7 +217,7 @@ func (erroringOwnershipConn) Query(context.Context, string, ...any) (chdriver.Ro
 	return nil, errOwnershipQueryFailed
 }
 
-// TestResolveDailyFinalizeRepoToTeamPropagatesOwnershipQueryError is the
+// TestResolveDailyFinalizeRepoOwnerSharesPropagatesOwnershipQueryError is the
 // failing-first proof for CHAOS-5141, #2255 r1 finding 3: a transient
 // ClickHouse error while loading ownership must FAIL this resolution, never
 // silently degrade to an empty map. A prior revision swallowed this error
@@ -227,12 +226,12 @@ func (erroringOwnershipConn) Query(context.Context, string, ...any) (chdriver.Ro
 // infrastructure failure, and the finalize handler then marked
 // team_cognitive_load Computed and skipped the Python bridge for that run,
 // silently losing the family for the whole run.
-func TestResolveDailyFinalizeRepoToTeamPropagatesOwnershipQueryError(t *testing.T) {
+func TestResolveDailyFinalizeRepoOwnerSharesPropagatesOwnershipQueryError(t *testing.T) {
 	repoID := uuid.New()
 	repoNamesByID := map[string]string{repoID.String(): "acme/repo"}
 	patternResolver := NewRepoPatternResolver(nil)
 
-	_, err := resolveDailyFinalizeRepoToTeam(
+	_, err := resolveDailyFinalizeRepoOwnerShares(
 		context.Background(), erroringOwnershipConn{}, "acme", cognitiveLoadTestDay,
 		[]uuid.UUID{repoID}, repoNamesByID, patternResolver,
 	)

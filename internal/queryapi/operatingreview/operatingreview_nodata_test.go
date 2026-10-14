@@ -23,7 +23,7 @@ var allMetricKeys = []string{
 	"state_duration_hours", "review_latency_hours", "wip_age_p90_hours",
 	"hotspot_risk_score", "ownership_concentration", "complexity_per_kloc", "bus_factor",
 	"deployments_count", "change_failure_rate", "deployment_failure_rate", "revert_rate", "incidents_count", "mttr_hours",
-	"feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort",
+	"feature_delivery_work", "operational_work", "maintenance_work", "quality_work", "risk_work",
 	"ai_adoption_ratio", "ai_cycle_time_delta_hours", "ai_review_amplification", "ai_risk_drag",
 	"ai_governance_coverage", "ai_opportunity_signals",
 }
@@ -85,12 +85,12 @@ func sameKeys(a, b []string) bool {
 // zeros / NULL / NaN with a known count of 0.
 func emptyWeekScanners() []*fakeRowScanner {
 	out := emptyScanners(11)
-	out[2] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), nil, nil, uint64(0)}}} // repo_metrics
-	out[3] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                  // hotspots
-	out[4] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                  // complexity
-	out[5] = &fakeRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0)}}}                                        // deployments
-	out[6] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, uint64(0)}}}                                              // incidents
-	out[10] = &fakeRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}      // change_failure
+	out[2] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), nil, nil, uint64(0)}}}                  // repo_metrics
+	out[3] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                                   // hotspots
+	out[4] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                                   // complexity
+	out[5] = &fakeRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0)}}}                                                         // deployments
+	out[6] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, uint64(0)}}}                                                               // incidents
+	out[10] = &fakeRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}} // change_failure
 	return out
 }
 
@@ -109,7 +109,7 @@ func storedZeroWeekScanners() []*fakeRowScanner {
 		{rows: [][]any{{"feature_delivery", 0.0, 0.0, 0.0}}},                                                       // investment
 		{rows: [][]any{{"human", uint64(5), uint64(0), uint64(0), uint64(5), uint64(0), 0.0, 0.0, 0.0, 0.0, 0.0}}}, // ai_impact
 		{rows: [][]any{{day("2026-08-24"), nil, nil, uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}},      // ai_governance
-		{rows: [][]any{{uint64(1), uint64(0), uint64(0), uint64(1), uint64(0), uint64(1)}}},                        // change_failure
+		{rows: [][]any{{uint64(1), uint64(0), uint64(0), uint64(1), uint64(0), uint64(0), uint64(0), uint64(1)}}},  // change_failure
 	}
 }
 
@@ -258,7 +258,7 @@ func TestHasData_AFailedReadIsNoDataForItsMetricsOnly(t *testing.T) {
 		"complexity":    {4, []string{"complexity_per_kloc"}},
 		"deployments":   {5, []string{"deployments_count", "deployment_failure_rate"}},
 		"incidents":     {6, []string{"incidents_count"}},
-		"investment":    {7, []string{"feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort"}},
+		"investment":    {7, []string{"feature_delivery_work", "operational_work", "maintenance_work", "quality_work", "risk_work"}},
 		"ai_impact":     {8, []string{"ai_adoption_ratio", "ai_cycle_time_delta_hours", "ai_review_amplification", "ai_risk_drag"}},
 		"ai_governance": {9, []string{"ai_governance_coverage"}},
 		// change failure rate has one source: its own counts.
@@ -336,7 +336,7 @@ func TestHasData_PresenceRuleOfEachMetric(t *testing.T) {
 		{"an incident MTTR", periodRows{incidents: []incidentsAggRow{{mttrP50Hours: fp(0), storedRows: 1}}},
 			[]string{"incidents_count", "mttr_hours"}},
 		{"an investment row of a theme the review does not show", periodRows{investment: []investmentRow{{theme: "other"}}},
-			[]string{"feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort"}},
+			[]string{"feature_delivery_work", "operational_work", "maintenance_work", "quality_work", "risk_work"}},
 		{"AI rows that count no pull request", periodRows{aiImpact: []aiImpactRow{{}}}, nil},
 		{"AI rows with pull requests", periodRows{aiImpact: []aiImpactRow{{prsTotal: 3}}}, []string{"ai_adoption_ratio"}},
 		{"an AI cycle time delta", periodRows{aiImpact: []aiImpactRow{{aiCycleTimeDeltaHours: fp(0)}}}, []string{"ai_cycle_time_delta_hours"}},

@@ -74,7 +74,7 @@ func TestTeamComplexityMatchesTheFrozenPythonGolden(t *testing.T) {
 		// repoOrphan deliberately absent.
 	}
 
-	got := buildTeamComplexityRows(orgID, day, repoRows, oneOwnerEach(repoToTeam), computedAt)
+	got := buildTeamComplexityRows(orgID, day, repoRows, soleOwnerShares(repoToTeam), computedAt)
 
 	if len(got) != len(golden.TeamComplexity) {
 		t.Fatalf("row count: golden=%d got=%d (got=%+v)", len(golden.TeamComplexity), len(got), got)
@@ -88,20 +88,20 @@ func TestTeamComplexityMatchesTheFrozenPythonGolden(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: missing from Go's output entirely (got=%+v)", want.TeamID, got)
 		}
-		if row.LOCTotal != want.LOCTotal {
-			t.Errorf("%s: LOCTotal = %d, want %d", want.TeamID, row.LOCTotal, want.LOCTotal)
+		if row.LOCTotal != float64(want.LOCTotal) {
+			t.Errorf("%s: LOCTotal = %v, want %d", want.TeamID, row.LOCTotal, want.LOCTotal)
 		}
-		if row.CyclomaticTotal != want.CyclomaticTotal {
-			t.Errorf("%s: CyclomaticTotal = %d, want %d", want.TeamID, row.CyclomaticTotal, want.CyclomaticTotal)
+		if row.CyclomaticTotal != float64(want.CyclomaticTotal) {
+			t.Errorf("%s: CyclomaticTotal = %v, want %d", want.TeamID, row.CyclomaticTotal, want.CyclomaticTotal)
 		}
 		if math.Abs(row.CyclomaticPerKLOC-want.CyclomaticPerKLOC) > 1e-9 {
 			t.Errorf("%s: CyclomaticPerKLOC = %v, want %v", want.TeamID, row.CyclomaticPerKLOC, want.CyclomaticPerKLOC)
 		}
-		if row.HighComplexityFunctions != want.HighComplexityFunctions {
-			t.Errorf("%s: HighComplexityFunctions = %d, want %d", want.TeamID, row.HighComplexityFunctions, want.HighComplexityFunctions)
+		if row.HighComplexityFunctions != float64(want.HighComplexityFunctions) {
+			t.Errorf("%s: HighComplexityFunctions = %v, want %d", want.TeamID, row.HighComplexityFunctions, want.HighComplexityFunctions)
 		}
-		if row.VeryHighComplexityFunctions != want.VeryHighComplexityFunctions {
-			t.Errorf("%s: VeryHighComplexityFunctions = %d, want %d", want.TeamID, row.VeryHighComplexityFunctions, want.VeryHighComplexityFunctions)
+		if row.VeryHighComplexityFunctions != float64(want.VeryHighComplexityFunctions) {
+			t.Errorf("%s: VeryHighComplexityFunctions = %v, want %d", want.TeamID, row.VeryHighComplexityFunctions, want.VeryHighComplexityFunctions)
 		}
 		if row.ContributingRepoCount != want.ContributingRepoCount {
 			t.Errorf("%s: ContributingRepoCount = %d, want %d", want.TeamID, row.ContributingRepoCount, want.ContributingRepoCount)

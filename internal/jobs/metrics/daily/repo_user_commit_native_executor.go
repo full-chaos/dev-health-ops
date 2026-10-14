@@ -138,7 +138,7 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	if err != nil {
 		return 0, err
 	}
-	changeFailure, err := changeFailureCounts(deployments, startedIncidents, viaDeployment, run.OrganizationID, computedAt)
+	changeFailure, err := changeFailureCounts(ctx, deployments, startedIncidents, viaDeployment, run.OrganizationID, computedAt)
 	if err != nil {
 		return 0, err
 	}
@@ -154,6 +154,7 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 		"org_id", run.OrganizationID, "day", dayStart.Format(time.DateOnly), "partition_id", partition.ID,
 		"repositories", len(changeFailure), "deployments", changeFailureTotal.Deployments,
 		"failed_native", changeFailureTotal.FailedNative, "failed_heuristic", changeFailureTotal.FailedHeuristic,
+		"failed_status", changeFailureTotal.FailedStatus, "status_known", changeFailureTotal.StatusKnown,
 		"incidents_direct", changeFailureTotal.IncidentsDirect, "incidents_via_deployment", changeFailureTotal.IncidentsViaDeployment,
 		"ambiguous_links", viaDeployment.Ambiguous, "stored_repositories", len(storedChangeFailure))
 

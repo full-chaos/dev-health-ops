@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -270,6 +271,7 @@ func assertWrittenCacheRecordMatchesGolden(t *testing.T, golden explainGolden, c
 	}
 	row := batch.appended[0]
 	gotExplanationJSON, _ := row[1].(string)
+	gotExplanationJSON = withoutGoOnlyEvidence(gotExplanationJSON)
 	if gotExplanationJSON != golden.WrittenCacheRecord.ExplanationJSON {
 		t.Fatalf("explanation_json byte mismatch:\n--- want (python) ---\n%s\n--- got (go) ---\n%s", golden.WrittenCacheRecord.ExplanationJSON, gotExplanationJSON)
 	}
@@ -323,6 +325,7 @@ func assertExplanationMatchesGolden(t *testing.T, golden explainGolden, got Inve
 	if err != nil {
 		t.Fatalf("EncodeInvestmentMixExplanation: %v", err)
 	}
+	gotJSON = withoutGoOnlyEvidence(gotJSON)
 	var gotAny, wantAny any
 	if err := json.Unmarshal([]byte(gotJSON), &gotAny); err != nil {
 		t.Fatalf("re-decode got JSON: %v", err)
@@ -335,4 +338,16 @@ func assertExplanationMatchesGolden(t *testing.T, golden explainGolden, got Inve
 	if string(gotCanon) != string(wantCanon) {
 		t.Fatalf("case %q mismatch:\n--- want (python) ---\n%s\n--- got (go) ---\n%s", golden.Case, wantCanon, gotCanon)
 	}
+}
+
+var goOnlyEvidencePattern = regexp.MustCompile(`, ?"(?:measure|numerator|denominator)": ?(?:"[^"]*"|[-0-9.eE+]+)`)
+
+// withoutGoOnlyEvidence removes the three evidence fields the Python reference does not have
+// (measure, numerator, denominator; CHAOS-9555) and the share noun, so the differential still compares the Python shape.
+func withoutGoOnlyEvidence(body string) string {
+	body = goOnlyEvidencePattern.ReplaceAllString(body, "")
+	// The Python reference words the share as "of effort"; the Go answer names the measure it reads.
+	body = strings.ReplaceAll(body, "% of work)", "% of effort)")
+	body = strings.ReplaceAll(body, "Work appears concentrated", "Effort appears concentrated")
+	return strings.ReplaceAll(body, "suggests work leans", "suggests effort leans")
 }

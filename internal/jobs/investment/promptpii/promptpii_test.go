@@ -34,6 +34,13 @@ func TestTextReplacesEachClassAndKeepsTheRest(t *testing.T) {
 		{"authorization header", "sent header Authorization: Bearer abc123xyz to the gateway", "abc123xyz", "Authorization: Bearer [REDACTED]", func(c Counts) int { return c.Credentials }},
 		{"bearer in prose", "send bearer abc123xyz to the gateway", "abc123xyz", "send bearer [REDACTED] to the gateway", func(c Counts) int { return c.Credentials }},
 		{"password in prose", "password: Tr0ub4dor3xx was pasted here", "Tr0ub4dor", "", func(c Counts) int { return c.Credentials }},
+		{"plus-address before a tag-like host", "mail jane.doe+ops@latest today", "jane.doe", "mail [email-1] today", func(c Counts) int { return c.Emails }},
+		{"scoped pin next to a real mention", "upgrade @scope/pkg@latest and ask @bob", "bob", "upgrade @scope/pkg@latest and ask [user-1]", func(c Counts) int { return c.Mentions }},
+		{"real email next to a package pin", "mail bob@corp.example about lodash@latest", "bob@", "mail [email-1] about lodash@latest", func(c Counts) int { return c.Emails }},
+		{"dist-tag name inside a real address", "mail ann@beta.example.com today", "ann@", "mail [email-1] today", func(c Counts) int { return c.Emails }},
+		{"v-version host inside a real address", "mail ann@v2.example.com today", "ann@", "mail [email-1] today", func(c Counts) int { return c.Emails }},
+		{"dotless address that is not a tag", "mail alice@internal today", "alice@", "mail [email-1] today", func(c Counts) int { return c.Emails }},
+		{"dotless address named like a digest", "mail alice@sha256 today", "alice@", "mail [email-1] today", func(c Counts) int { return c.Emails }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -63,6 +70,9 @@ func TestTextKeepsPlainEngineeringProse(t *testing.T) {
 		"Pin react@18.3.1 and lodash@4.17.21 before the 2026-10-13 release; call 555-0132 maybe",
 		"The token is invalid and the password expired",
 		"The bearer of bad news and an authorization flow review",
+		"Upgrade lodash@latest, react@next, vite@beta.3, esbuild@canary-1042 and typescript@rc",
+		"Pin pkg@v18.3.1 and tool@v2 and @scope/pkg@v18.3.1+build9 before release",
+		"Upgrade @scope/pkg@latest, @types/node@18.3.1 and @acme/ui@next-1042 today",
 		"",
 	} {
 		f := NewFilter()
@@ -94,6 +104,7 @@ func TestTextIsIdempotent(t *testing.T) {
 		"see https://deploy:hunter2pass@git.corp.example/x password: Tr0ub4dor3xx ghp_abcdefghijklmnopqrstuvwxyz0123456789",
 		"mail alice@localhost, δοκιμή@example.gr; call (02) 9374 4000 or 01 23 45 67 89; set token=abcdefgh, password: \"correct horse\"",
 		"plain text with nothing to hide",
+		"lodash@latest and @scope/pkg@beta.3; mail bob@corp.example",
 	}
 	for _, in := range inputs {
 		once := NewFilter().Text(in)
@@ -117,5 +128,44 @@ func TestCountsNeverHoldValues(t *testing.T) {
 	}
 	if got := c.Add(c).Total(); got != 4 {
 		t.Fatalf("Add/Total = %d, want 4", got)
+	}
+}
+
+func TestPackagePinsAreKeptAndCountNoEmail(t *testing.T) {
+	for _, in := range []string{
+		"bump lodash@latest",
+		"try react@next and vite@beta.3",
+		"esbuild@canary-1042 broke the build",
+		"pin pkg@v18.3.1-rc.2 for now",
+		"pin @scope/pkg@latest for now",
+	} {
+		f := NewFilter()
+		if got := f.Text(in); got != in {
+			t.Errorf("package pin changed:\n in: %q\nout: %q", in, got)
+		}
+		if f.Counts().Total() != 0 {
+			t.Errorf("counted %+v in %q", f.Counts(), in)
+		}
+	}
+}
+
+func TestScopedPinKeepsTheNextMentionNumbering(t *testing.T) {
+	f := NewFilter()
+	got := f.Text("@amy then @scope/pkg@beta.3 then @bob then @amy")
+	want := "[user-1] then @scope/pkg@beta.3 then [user-2] then [user-1]"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if f.Counts().Mentions != 3 {
+		t.Fatalf("counts %+v", f.Counts())
+	}
+}
+
+func TestNamedLimitsOfThePinRule(t *testing.T) {
+	if in := "mail alice@latest"; NewFilter().Text(in) != in {
+		t.Fatal("alice@latest cannot be told from lodash@latest")
+	}
+	if got := NewFilter().Text("deploy name@release-branch"); got != "deploy [email-1]" {
+		t.Fatalf("a tag outside the channel list is read as an address; got %q", got)
 	}
 }

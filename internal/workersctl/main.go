@@ -1584,6 +1584,8 @@ func dispatchProvidersync(ctx context.Context, runtime *operatorRuntime, args []
 		return dispatchProvidersyncRetireJiraProjectAsTeam(ctx, runtime, args[1:], stdout, stderr)
 	case "carry-team-ids":
 		return dispatchProvidersyncCarryTeamIDs(ctx, runtime, args[1:], stdout, stderr)
+	case "compact-ownership-intervals":
+		return dispatchProvidersyncCompactOwnershipIntervals(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
@@ -1778,6 +1780,108 @@ func dispatchProvidersyncCarryTeamIDs(
 		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionProvidersyncCleanup, "organization", org, perform)
 	}
 	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", org, false, perform)
+}
+
+// dispatchProvidersyncCompactOwnershipIntervals handles `providersync
+// compact-ownership-intervals` (CHAOS-9556): a ONE-TIME data step that merges
+// each run of adjacent closed ownership intervals of one shape into one
+// interval and drops the supersede tombstones that cover no instant, in
+// team_project_ownership (source native) and team_repo_ownership (source
+// inferred). It DELETES rows, so unlike the other verbs of this group it
+// writes nothing unless --apply is given; without it, it reads, plans, proves
+// the owner-at-T differential and reports. --restore-run puts the rows of an
+// earlier run back from its backup table (also dry by default). The
+// organization comes from stdin (--org-stdin) or the verb takes every
+// organization (--all-orgs); the output holds counts only.
+func dispatchProvidersyncCompactOwnershipIntervals(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("providersync compact-ownership-intervals")
+	orgStdin := flags.Bool("org-stdin", false, orgStdinUsage)
+	allOrgs := flags.Bool("all-orgs", false, "compact every organization that holds a row of the compacted source")
+	batchSize := flags.Int("batch-size", providersync.OwnershipCompactionDefaultBatchSize, "runs per insert block")
+	apply := flags.Bool("apply", false, "write: merge the runs and delete the rows they fold. EXCEPTION to the house pattern (the sibling verbs write unless --dry-run is given): this verb deletes rows, so it is dry unless --apply is given")
+	dryRun := flags.Bool("dry-run", false, "the default, accepted for the habit of the other verbs; refused together with --apply")
+	restoreRun := flags.String("restore-run", "", "put the rows of this earlier run back from its backup table (with --apply; without it, counts only)")
+	workersPaused := flags.Bool("workers-paused", false, "required with --apply: the statement that the sync workers that write ownership rows are paused for the organization (no per-organization lease exists for the tool to take)")
+	quietSeconds := flags.Int("quiet-seconds", 60, "with --apply: refuse while a row of the organization's ownership tables was written within this many seconds (0 turns the check off)")
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || *orgStdin == *allOrgs || (*apply && *dryRun) || *batchSize < 1 || *quietSeconds < 0 || !mutation.valid(!*apply) {
+		return writeError(stderr, "invalid_request")
+	}
+	org, scope := "", "*"
+	if *orgStdin {
+		var code int
+		if org, code = resolveOrgFlag(runtime, "", true, stderr); code != 0 {
+			return code
+		}
+		scope = org
+	}
+	options := providersync.OwnershipCompactionOptions{AllOrgs: *allOrgs, BatchSize: *batchSize, Apply: *apply,
+		WorkersPaused: *workersPaused, QuietSeconds: *quietSeconds}
+	if org != "" {
+		options.Orgs = []string{org}
+	}
+	perform := func(ctx context.Context) int {
+		if *apply && !*workersPaused {
+			return writeError(stderr, "ownership_compaction_workers_not_paused")
+		}
+		if runtime.lookup == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		dsn, err := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, runtime.lookup)
+		if err != nil {
+			return writeConfigError(stderr, err)
+		}
+		logResolvedDatabase(stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse", dsn)
+		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		defer func() { _ = conn.Close() }()
+		var outcome providersync.OwnershipCompactionOutcome
+		key := "compact_ownership_intervals"
+		if *restoreRun != "" {
+			key = "restore_ownership_compaction"
+			outcome, err = providersync.RestoreOwnershipCompaction(ctx, conn, *restoreRun, options)
+		} else {
+			outcome, err = providersync.CompactOwnershipIntervals(ctx, conn, options)
+		}
+		if err != nil {
+			// The report so far goes to stdout so that an operator sees how far
+			// the run got; the error is a fixed code, never the driver text.
+			_ = writeResult(stdout, stderr, map[string]any{key: outcome, "error": ownershipCompactionErrorCode(err)})
+			return writeError(stderr, ownershipCompactionErrorCode(err))
+		}
+		return writeResult(stdout, stderr, map[string]any{key: outcome})
+	}
+	if !*apply {
+		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionProvidersyncCleanup, "organization", scope, perform)
+	}
+	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", scope, false, perform)
+}
+
+// ownershipCompactionErrorCode names why a compaction run stopped, with a fixed
+// code. Nothing of the error text is printed: it can hold ids.
+func ownershipCompactionErrorCode(err error) string {
+	switch {
+	case errors.Is(err, providersync.ErrOwnershipCompactionDifferential):
+		return "ownership_compaction_differential_failed"
+	case errors.Is(err, providersync.ErrOwnershipCompactionBackup):
+		return "ownership_compaction_backup_failed"
+	case errors.Is(err, providersync.ErrOwnershipCompactionReadback):
+		return "ownership_compaction_readback_failed"
+	case errors.Is(err, providersync.ErrOwnershipCompactionMutation):
+		return "ownership_compaction_mutation_failed"
+	case errors.Is(err, providersync.ErrOwnershipCompactionNotPaused):
+		return "ownership_compaction_workers_not_paused"
+	case errors.Is(err, providersync.ErrOwnershipCompactionWritesActive):
+		return "ownership_compaction_writes_active"
+	case errors.Is(err, providersync.ErrOwnershipCompactionTable):
+		return "ownership_compaction_table_unexpected"
+	default:
+		return "ownership_compaction_failed"
+	}
 }
 
 // runProvidersyncCleanup opens ClickHouse and runs one providersync cleanup,
@@ -3289,6 +3393,7 @@ var orgStdinVerbNames = map[string]bool{
 	"metrics partition-recompute":              true,
 	"providersync retire-jira-project-as-team": true,
 	"providersync carry-team-ids":              true,
+	"providersync compact-ownership-intervals": true,
 }
 
 // orgStdinVerb reports whether args (after the optional leading "workers")

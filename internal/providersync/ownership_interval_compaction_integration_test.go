@@ -808,7 +808,7 @@ func TestCompactOwnershipIntervalsFailedMutationLeavesTheBackupAndTheAnswers(t *
 		return nil
 	}}
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	watermarks := func() map[string]string {
 		out := map[string]string{}
 		for _, line := range f.acrRepositoryEdge(f.orgA) {
@@ -866,7 +866,7 @@ func TestCompactOwnershipIntervalsDeleteSparesAVersionWrittenAfterTheRead(t *tes
 		return nil
 	}}
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	outcome, err := CompactOwnershipIntervals(f.ctx, racing, opts)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -889,7 +889,7 @@ func TestCompactOwnershipIntervalsDeleteSparesAVersionWrittenAfterTheRead(t *tes
 func TestCompactOwnershipIntervalsDeleteSparesANewerTombstoneVersion(t *testing.T) {
 	f := newCmpFixture(t)
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	// The droppable tombstone of the fixture: acme/web, gh:beta, valid_from day 3.
 	opts.afterInsert = func(string) {
 		newer := cmpRepoRow(cmpTeam2, cmpRepo2, "acme/web", 3, 3, 1, 1)
@@ -913,7 +913,7 @@ func TestCompactOwnershipIntervalsDeleteSparesANewerTombstoneVersion(t *testing.
 func TestCompactOwnershipIntervalsRestoreLeavesAKeyASyncChanged(t *testing.T) {
 	f := newCmpFixture(t)
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	outcome, err := CompactOwnershipIntervals(f.ctx, f.conn, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -959,7 +959,7 @@ func TestCompactOwnershipIntervalsDeleteSparesASameStampSyncWrite(t *testing.T) 
 		return nil
 	}}
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	outcome, err := CompactOwnershipIntervals(f.ctx, hook, opts)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -982,7 +982,7 @@ func TestCompactOwnershipIntervalsDeleteSparesASameStampSyncWrite(t *testing.T) 
 func TestCompactOwnershipIntervalsRestoreLeavesWholeAKeyASyncAppendedTo(t *testing.T) {
 	f := newCmpFixture(t)
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	outcome, err := CompactOwnershipIntervals(f.ctx, f.conn, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -1017,7 +1017,7 @@ func TestCompactOwnershipIntervalsRefusesAWriteWhileWorkersMayBeWriting(t *testi
 	f := newCmpFixture(t)
 	physical := f.physicalCount(OwnershipCompactionRepoTable, f.orgA)
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	opts.WorkersPaused = false
 	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, opts); !errors.Is(err, ErrOwnershipCompactionNotPaused) {
 		t.Fatalf("an apply without the pause statement: %v", err)
@@ -1063,7 +1063,7 @@ func TestCompactOwnershipIntervalsRefusesAWriteWhileWorkersMayBeWriting(t *testi
 func TestCompactOwnershipIntervalsRestoresATableScopedRunWithoutTheTableFilter(t *testing.T) {
 	f := newCmpFixture(t)
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	outcome, err := CompactOwnershipIntervals(f.ctx, f.conn, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -1090,7 +1090,7 @@ func TestCompactOwnershipIntervalsDeleteKeepsTheFinalStateWhenAnInvisibleOlderVe
 	instants := f.instants()
 	before := f.snapshots(f.orgA, instants)
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	opts.afterInsert = func(string) {
 		// A sync writes, after phase A, an old-stamped version of an inner key of the first run (valid 01-02..01-03):
 		// it loses FINAL to the tombstone of phase A.
@@ -1141,7 +1141,7 @@ func TestCompactOwnershipIntervalsChecksTheBackupBeforeAnyRewrite(t *testing.T) 
 	}
 	for name, conn := range cases {
 		opts := cmpOptions(f.orgA)
-		opts.Table = OwnershipCompactionRepoTable
+		opts.onlyTable = OwnershipCompactionRepoTable
 		if _, err := CompactOwnershipIntervals(f.ctx, conn, opts); !errors.Is(err, ErrOwnershipCompactionBackup) {
 			t.Fatalf("%s: got %v", name, err)
 		}
@@ -1154,7 +1154,7 @@ func TestCompactOwnershipIntervalsChecksTheBackupBeforeAnyRewrite(t *testing.T) 
 func TestCompactOwnershipIntervalsReadbackFailureStopsBeforeTheDelete(t *testing.T) {
 	f := newCmpFixture(t)
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	opts.afterInsert = func(string) {
 		// A sync re-stamps an inner row of a merged run with a newer version: the tombstone loses.
 		row := cmpRepoRow(cmpTeam1, cmpRepo1, "acme/api", 1, 2, 1.0, 1)
@@ -1174,7 +1174,7 @@ func TestCompactOwnershipIntervalsSkipsAKeyAConcurrentSyncWrote(t *testing.T) {
 	f := newCmpFixture(t)
 	instants := f.instants()
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	opts.BatchSize = 100
 	opts.beforeBatch = func(table string, batch int) {
 		// A sync re-stamps one closed row of the first run (same key, newer version, closed 1 ms later),
@@ -1222,7 +1222,7 @@ func TestCompactOwnershipIntervalsKeyExtendedByASyncKeepsTheAnswers(t *testing.T
 	instants := f.instants()
 	before := f.snapshots(f.orgA, instants)
 	opts := cmpOptions(f.orgA)
-	opts.Table = OwnershipCompactionRepoTable
+	opts.onlyTable = OwnershipCompactionRepoTable
 	opts.BatchSize = 100
 	opts.beforeBatch = func(string, int) {
 		f.insert(repoSpec(), f.orgA, []ownershipIntervalRow{
@@ -1256,7 +1256,7 @@ func TestCompactOwnershipIntervalsKeyExtendedByASyncKeepsTheAnswers(t *testing.T
 
 func TestCompactOwnershipIntervalsAllOrgsAndTableFilter(t *testing.T) {
 	f := newCmpFixture(t)
-	opts := OwnershipCompactionOptions{AllOrgs: true, Apply: true, WorkersPaused: true, Table: OwnershipCompactionProjectTable}
+	opts := OwnershipCompactionOptions{AllOrgs: true, Apply: true, WorkersPaused: true, onlyTable: OwnershipCompactionProjectTable}
 	outcome, err := CompactOwnershipIntervals(f.ctx, f.conn, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -1275,7 +1275,7 @@ func TestCompactOwnershipIntervalsAllOrgsAndTableFilter(t *testing.T) {
 	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, OwnershipCompactionOptions{Orgs: []string{f.orgA}, AllOrgs: true}); err == nil {
 		t.Fatal("organizations and all organizations together must be refused")
 	}
-	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, OwnershipCompactionOptions{Table: "teams", AllOrgs: true}); err == nil {
+	if _, err := CompactOwnershipIntervals(f.ctx, f.conn, OwnershipCompactionOptions{onlyTable: "teams", AllOrgs: true}); err == nil {
 		t.Fatal("an unknown table must be refused")
 	}
 }

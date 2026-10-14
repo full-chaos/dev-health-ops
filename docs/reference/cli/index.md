@@ -1716,8 +1716,9 @@ lead. In production the step runs inside a roll window (minutes :10-:33 or
 
 `--org-stdin` (one organization on stdin, rules of
 [`metrics daily-start`](#metrics-daily-start-chaos-5055)) or `--all-orgs`
-(every organization that holds a row of the source). `--table` limits the run
-to one table, `--batch-size` is the number of runs per insert (default 2000).
+(every organization that holds a row of the source). A run always covers both
+ownership tables (there is no table option); `--batch-size` is the number of
+runs per insert (default 2000).
 Output: counts only, under `compact_ownership_intervals`, per table and per
 organization (numbered, never named) and in total: `rows_before`/`rows_after`,
 `open_*`, `closed_*`, `tombstones_*`, `close_before_open_*`, `runs_found`,

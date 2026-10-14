@@ -96,8 +96,9 @@ type OwnershipCompactionOptions struct {
 	// that holds a row of the compacted source. Exactly one of the two.
 	Orgs    []string
 	AllOrgs bool
-	// Table limits the run to one table ("" = both).
-	Table string
+	// onlyTable limits a run to one table; the tests use it, the verb has no such option: a run always covers
+	// both ownership tables.
+	onlyTable string
 	// BatchSize is the number of runs per insert block (default 2000).
 	BatchSize int
 	// Apply writes. Without it the tool reads and reports only.
@@ -921,7 +922,7 @@ func CompactOwnershipIntervals(ctx context.Context, conn driver.Conn, opts Owner
 	if opts.AllOrgs == (len(opts.Orgs) > 0) {
 		return OwnershipCompactionOutcome{}, fmt.Errorf("ownership compaction: give organizations or all organizations, not both and not neither")
 	}
-	specs, err := pickSpecs(opts.Table)
+	specs, err := pickSpecs(opts.onlyTable)
 	if err != nil {
 		return OwnershipCompactionOutcome{}, err
 	}
@@ -1367,7 +1368,7 @@ func RestoreOwnershipCompaction(ctx context.Context, conn driver.Conn, runID str
 	if opts.AllOrgs == (len(opts.Orgs) > 0) {
 		return OwnershipCompactionOutcome{}, fmt.Errorf("ownership compaction: give organizations or all organizations, not both and not neither")
 	}
-	specs, err := pickSpecs(opts.Table)
+	specs, err := pickSpecs(opts.onlyTable)
 	if err != nil {
 		return OwnershipCompactionOutcome{}, err
 	}

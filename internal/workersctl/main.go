@@ -1799,7 +1799,6 @@ func dispatchProvidersyncCompactOwnershipIntervals(
 	flags := quietFlags("providersync compact-ownership-intervals")
 	orgStdin := flags.Bool("org-stdin", false, orgStdinUsage)
 	allOrgs := flags.Bool("all-orgs", false, "compact every organization that holds a row of the compacted source")
-	table := flags.String("table", "", "only this table: team_project_ownership or team_repo_ownership (default both)")
 	batchSize := flags.Int("batch-size", providersync.OwnershipCompactionDefaultBatchSize, "runs per insert block")
 	apply := flags.Bool("apply", false, "write: merge the runs and delete the rows they fold. EXCEPTION to the house pattern (the sibling verbs write unless --dry-run is given): this verb deletes rows, so it is dry unless --apply is given")
 	dryRun := flags.Bool("dry-run", false, "the default, accepted for the habit of the other verbs; refused together with --apply")
@@ -1818,7 +1817,7 @@ func dispatchProvidersyncCompactOwnershipIntervals(
 		}
 		scope = org
 	}
-	options := providersync.OwnershipCompactionOptions{AllOrgs: *allOrgs, Table: *table, BatchSize: *batchSize, Apply: *apply,
+	options := providersync.OwnershipCompactionOptions{AllOrgs: *allOrgs, BatchSize: *batchSize, Apply: *apply,
 		WorkersPaused: *workersPaused, QuietSeconds: *quietSeconds}
 	if org != "" {
 		options.Orgs = []string{org}

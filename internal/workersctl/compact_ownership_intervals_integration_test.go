@@ -77,7 +77,7 @@ func TestCompactOwnershipIntervalsVerbIsDryByDefault(t *testing.T) {
 		}
 		runtime.stdin = strings.NewReader(orgID + "\n")
 		var stdout, stderr bytes.Buffer
-		full := append([]string{"providersync", "compact-ownership-intervals", "--org-stdin", "--table", "team_project_ownership"}, args...)
+		full := append([]string{"providersync", "compact-ownership-intervals", "--org-stdin"}, args...)
 		if code := dispatch(ctx, runtime, full, &stdout, &stderr); code != wantCode {
 			t.Fatalf("%v: code=%d, want %d, stderr=%q", args, code, wantCode, stderr.String())
 		}

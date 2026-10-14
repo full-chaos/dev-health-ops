@@ -50,9 +50,9 @@ CREATE TABLE team_metrics_daily (
     team_id LowCardinality(String),
     team_name String,
     repo_id String DEFAULT '',
-    commits_count UInt32,
-    after_hours_commits_count UInt32,
-    weekend_commits_count UInt32,
+    commits_count Float64,
+    after_hours_commits_count Float64,
+    weekend_commits_count Float64,
     after_hours_commit_ratio Float64,
     weekend_commit_ratio Float64,
     computed_at DateTime64(6, 'UTC')
@@ -75,7 +75,7 @@ CREATE TABLE team_metrics_daily (
 	// Generation 1, under the OLD team: 10 commits, earlier computed_at.
 	if err := batch.Append(
 		"acme", day, "team-old", "Old Team", repoID.String(),
-		uint32(10), uint32(2), uint32(1), 0.2, 0.1, older,
+		float64(10), float64(2), float64(1), 0.2, 0.1, older,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ CREATE TABLE team_metrics_daily (
 	// computed_at -- the TRUE current generation.
 	if err := batch.Append(
 		"acme", day, "team-new", "New Team", repoID.String(),
-		uint32(20), uint32(4), uint32(2), 0.2, 0.1, newer,
+		float64(20), float64(4), float64(2), 0.2, 0.1, newer,
 	); err != nil {
 		t.Fatal(err)
 	}

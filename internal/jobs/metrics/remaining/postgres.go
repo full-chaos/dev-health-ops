@@ -339,6 +339,8 @@ func (store *PostgresStore) StartRunTx(
 	// caller (post-sync's writer) only needs a valid run ID to derive its
 	// own completion key from -- correct regardless of which generation
 	// actually did the work.
+	var overlapDay string
+	var overlapBackfillDays int
 	if request.Family == "dora" && len(request.Scopes) == 1 {
 		if day, backfillDays, ok := doraScopeDayAndBackfill(request.Scopes[0]); ok {
 			if _, err := tx.Exec(ctx,
@@ -385,12 +387,17 @@ func (store *PostgresStore) StartRunTx(
 			// day with it computes that day too. The values are identical and
 			// readers take the newest computed_at, so nothing is skipped and
 			// nothing is wrong; the overlap is logged and counted so the
-			// duplicate computation can be seen.
-			store.reportManualWindowOverlaps(ctx, tx, request, day, backfillDays)
+			// duplicate computation can be seen. The report waits until the
+			// run is inserted and published (CHAOS-9841): a start that fails
+			// and rolls back left no run to overlap with.
+			overlapDay, overlapBackfillDays = day, backfillDays
 		}
 	}
 
-	run, _, err := store.insertRun(ctx, tx, request, publisher)
+	run, inserted, err := store.insertRun(ctx, tx, request, publisher)
+	if err == nil && inserted && overlapDay != "" {
+		store.reportManualWindowOverlaps(ctx, tx, request, run.ID, overlapDay, overlapBackfillDays)
+	}
 	return run, err
 }
 

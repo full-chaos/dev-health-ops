@@ -122,12 +122,12 @@ func (store *PostgresStore) findManualWindowOverlaps(
 }
 
 // reportManualWindowOverlaps logs and counts every manual run the automatic
-// start for (org, family, anchorDay, backfillDays) is about to compute
+// run runID, just inserted for (org, family, anchorDay, backfillDays), computes
 // alongside. It is telemetry: it never changes the start and never fails it. The
 // lookup runs inside a savepoint so a failing read cannot abort the caller's
 // transaction.
 func (store *PostgresStore) reportManualWindowOverlaps(
-	ctx context.Context, tx pgx.Tx, request StartRunRequest, anchorDay string, backfillDays int,
+	ctx context.Context, tx pgx.Tx, request StartRunRequest, runID, anchorDay string, backfillDays int,
 ) {
 	logger := store.logger
 	if logger == nil {
@@ -151,7 +151,6 @@ func (store *PostgresStore) reportManualWindowOverlaps(
 			"family", request.Family, "organization_id", request.OrganizationID, "operation", "release savepoint", "error", err.Error())
 		return
 	}
-	runID := deterministicRunID(request)
 	for _, overlap := range overlaps {
 		logger.InfoContext(ctx, "remaining metrics automatic start overlaps a manual run",
 			"family", request.Family,

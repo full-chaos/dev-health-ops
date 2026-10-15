@@ -217,6 +217,23 @@ func gitlabMilestoneFixture(t *testing.T, projects map[string]string, milestones
 				http.NotFound(w, r)
 				return
 			}
+			if r.URL.Query().Get("include_parent_milestones") != "true" {
+				// GitLab lists the ancestor groups' milestones (they carry group_id)
+				// only when asked.
+				var all, own []json.RawMessage
+				if json.Unmarshal([]byte(body), &all) == nil {
+					for _, raw := range all {
+						if !strings.Contains(string(raw), `"group_id"`) {
+							own = append(own, raw)
+						}
+					}
+					filtered, _ := json.Marshal(own)
+					body = string(filtered)
+					if own == nil {
+						body = `[]`
+					}
+				}
+			}
 			_, _ = w.Write([]byte(body))
 		default:
 			http.NotFound(w, r)
@@ -537,6 +554,66 @@ func TestGitLabSprintKeysAreByteIdenticalToTheKeysStoredBeforeTheSharedFunction(
 					t.Fatalf("fixture sprint key = %q, want the stored form %q", row.SprintID, want)
 				}
 			}
+		}
+	}
+}
+
+// CHAOS-9702: a project whose only open dated milestone belongs to an ancestor
+// group states that date, with provenance naming the group, from the same one
+// call per project (D6009).
+func TestGitLabProjectTargetCountsGroupMilestones(t *testing.T) {
+	t.Parallel()
+	batch, requests := collectGitLabProjectTargets(t,
+		map[string]string{"100": "org/only-group", "101": "org/group-earlier", "102": "org/project-earlier"},
+		map[string]string{
+			"100": `[{"id":31,"title":"Group Q4","state":"active","due_date":"2026-12-31","group_id":1,"web_url":"https://gitlab.example/groups/org/-/milestones/2"},
+				{"id":5,"title":"Undated","state":"active","due_date":null}]`,
+			"101": `[{"id":32,"title":"Group Q3","state":"active","due_date":"2026-09-30","group_id":1,"web_url":"https://gitlab.example/groups/org/-/milestones/3"},
+				{"id":8,"title":"Project Q4","state":"active","due_date":"2026-12-31"}]`,
+			"102": `[{"id":33,"title":"Group Q4","state":"active","due_date":"2026-12-31","group_id":1,"web_url":"https://gitlab.example/groups/org/-/milestones/4"},
+				{"id":9,"title":"Project Q3","state":"active","due_date":"2026-09-30"}]`,
+		})
+	onlyGroup := gitlabProjectRowByKey(t, batch, "org/only-group")
+	want := projectTargetFacts{
+		TargetState: projectTargetStated, TargetKind: "milestone", TargetSource: "gitlab.group_milestone.due_date",
+		TargetRef: gitlabMilestoneSprintID("org", "31"), TargetRefName: "Group Q4", TargetFetchedAt: &targetFetchedAt,
+	}
+	if !sameDay(onlyGroup.TargetDate, utcDay(2026, 12, 31)) || !reflect.DeepEqual(onlyGroup.projectTargetFacts, want) {
+		t.Fatalf("only-group target=%v facts=%+v, want the group milestone 2026-12-31 with %+v", onlyGroup.TargetDate, onlyGroup.projectTargetFacts, want)
+	}
+	groupEarlier := gitlabProjectRowByKey(t, batch, "org/group-earlier")
+	if !sameDay(groupEarlier.TargetDate, utcDay(2026, 9, 30)) || groupEarlier.TargetSource != "gitlab.group_milestone.due_date" ||
+		groupEarlier.TargetRef != gitlabMilestoneSprintID("org", "32") || groupEarlier.TargetOtherOpen != 1 {
+		t.Fatalf("group-earlier target=%v facts=%+v, want the earlier group milestone, one other open", groupEarlier.TargetDate, groupEarlier.projectTargetFacts)
+	}
+	projectEarlier := gitlabProjectRowByKey(t, batch, "org/project-earlier")
+	if !sameDay(projectEarlier.TargetDate, utcDay(2026, 9, 30)) || projectEarlier.TargetSource != "gitlab.milestone.due_date" ||
+		projectEarlier.TargetRef != gitlabMilestoneSprintID("org/project-earlier", "9") {
+		t.Fatalf("project-earlier target=%v facts=%+v, want the earlier project milestone and project provenance", projectEarlier.TargetDate, projectEarlier.projectTargetFacts)
+	}
+	calls := 0
+	for _, request := range requests {
+		if strings.Contains(request, "/projects/100/milestones") {
+			calls++
+			if !strings.Contains(request, "include_parent_milestones=true") {
+				t.Fatalf("milestone read %q does not ask for the parent groups' milestones", request)
+			}
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("project 100 milestone calls = %d, want 1", calls)
+	}
+}
+
+func TestGitLabGroupMilestoneOwnerNamesTheGroup(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ webURL, groupID, want string }{
+		{"https://gitlab.example/groups/org/sub/-/milestones/4", "7", "org/sub"},
+		{"", "7", "group:7"},
+		{"https://gitlab.example/org/api/-/milestones/4", "7", "group:7"},
+	} {
+		if got := gitlabGroupMilestoneOwner(gitlabIssueMilestonePayload{GroupID: json.Number(tc.groupID), WebURL: tc.webURL}); got != tc.want {
+			t.Errorf("owner(%q, %s) = %q, want %q", tc.webURL, tc.groupID, got, tc.want)
 		}
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/externalurl"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -132,7 +133,14 @@ func newOpenAICompatibleReadinessProber(doer providerfoundation.HTTPDoer) *openA
 		// the saved API key rides these requests: a supplied *http.Client follows no redirect (D4124)
 		return &openAICompatibleReadinessProber{client: doer}
 	}
-	return &openAICompatibleReadinessProber{client: &http.Client{
+	return &openAICompatibleReadinessProber{client: newReadinessHTTPClient(externalurl.GuardedTransport())}
+}
+
+// newReadinessHTTPClient is the readiness probe's hardened client over the
+// given transport (production: the SSRF-guarded one; a test against a
+// loopback server passes a plain one).
+func newReadinessHTTPClient(transport http.RoundTripper) *http.Client {
+	return &http.Client{
 		// Codex r3 hardening-table audit (D3016, CHAOS-6976): matches
 		// Python's make_hardened_async_httpx2_client's timeout=60.0
 		// (providers/_http.py:27) exactly -- this value had never been
@@ -164,8 +172,12 @@ func newOpenAICompatibleReadinessProber(doer providerfoundation.HTTPDoer) *openA
 		// exact class of target the SSRF gate exists to keep unreachable.
 		// Proxy: nil is Go's trust_env=False: no proxy is ever consulted,
 		// env-configured or otherwise.
-		Transport: &http.Transport{Proxy: nil},
-	}}
+		// CHAOS-2558: the saved key rides this request to the org's base_url,
+		// which the route validated once; GuardedTransport also refuses an
+		// internal address at dial time (DNS rebinding) and never uses a
+		// proxy (Proxy nil, as above).
+		Transport: transport,
+	}
 }
 
 // chatMessage is one element of the wire "messages" array

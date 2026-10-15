@@ -15,7 +15,12 @@ import (
 	"time"
 )
 
-func refuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+func refuseRedirects(req *http.Request, via []*http.Request) error {
+	if len(via) > 0 && !SameOrigin(req.URL, via[0].URL) {
+		RecordLeftOrigin(req.Context(), ActionRefused, "httpguard.no_redirects", via[0].URL, req.URL)
+	}
+	return http.ErrUseLastResponse
+}
 
 // NoRedirects is the client with its redirect policy replaced by "answer the 3xx, follow nothing" (a nil client stays
 // nil). A followed redirect carries the credential to wherever the server sends it: Go drops only Authorization and

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"log/slog"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 )
 
 func mustURL(t *testing.T, raw string) *url.URL {
@@ -95,5 +97,22 @@ func TestRecordLeftOriginLogsOriginsOnlyAtWarn(t *testing.T) {
 		if !strings.Contains(lines[0], want) {
 			t.Fatalf("missing %q in %s", want, lines[0])
 		}
+	}
+}
+
+func TestNoRedirectsRecordsACrossOriginRefusal(t *testing.T) {
+	var lines []string
+	previous := slog.Default()
+	slog.SetDefault(slog.New(captureHandler{&lines}))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	probe := redirectprobe.New(t)
+	response, err := NoRedirects(probe.Client()).Get(probe.Base.URL + "/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	probe.Assert(t)
+	if len(lines) != 1 || !strings.Contains(lines[0], "action=refused") || !strings.Contains(lines[0], "site=httpguard.no_redirects") {
+		t.Fatalf("want one refused line, got %v", lines)
 	}
 }

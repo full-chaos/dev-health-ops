@@ -53,8 +53,8 @@ func OriginOf(u *url.URL) Origin {
 // IsZero reports whether o is "no origin".
 func (o Origin) IsZero() bool { return o == Origin{} }
 
-// String is scheme://host[:port], safe to log: it never holds userinfo, path or query.
-func (o Origin) String() string {
+// Label is scheme://host[:port], safe to log: it never holds userinfo, path or query.
+func (o Origin) Label() string {
 	if o.IsZero() {
 		return ""
 	}
@@ -107,7 +107,7 @@ func RecordLeftOrigin(ctx context.Context, action, site string, from, to *url.UR
 	}
 	fromOrigin, toOrigin := OriginOf(from), OriginOf(to)
 	slog.WarnContext(ctx, "credential origin departure",
-		"action", action, "site", site, "from_origin", fromOrigin.String(), "to_origin", toOrigin.String(),
+		"action", action, "site", site, "from_origin", fromOrigin.Label(), "to_origin", toOrigin.Label(),
 		"scheme_downgrade", fromOrigin.scheme == "https" && toOrigin.scheme == "http")
 	leftOriginCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("action", action), attribute.String("site", site)))
 }

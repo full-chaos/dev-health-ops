@@ -65,6 +65,11 @@ func TestNoPackageComparesURLOriginsByItself(t *testing.T) {
 			return err
 		}
 		walked++
+		for _, spec := range file.Imports {
+			if spec.Path.Value == `"net/http/cookiejar"` {
+				t.Errorf("%s: imports net/http/cookiejar; a client with a Jar adds cookies after CheckRedirect has stripped them, which the origin rule cannot undo", fset.Position(spec.Pos()))
+			}
+		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			bin, ok := n.(*ast.BinaryExpr)
 			if _, exempt := notAnOriginRule[filepath.ToSlash(rel)]; exempt {

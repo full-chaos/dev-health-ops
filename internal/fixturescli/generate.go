@@ -61,12 +61,12 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb",
 	"testdata/generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz": "8470b539f55e1ecd22b8ba9b52dd0921a9b51222dfd6a7d5a8050139e9f2abd8",
 	// The provider worlds (producedWorlds).
-	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "2e714dce4122c4990d7ab0c578233b5d292506818ccf57209840437e1fb3f24d",
-	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "78bbd894d399b0d15960caa02bf8e321fb960da97c8a12d5e36c5de29092675c",
-	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "8ef7fe2ed0cf8c2da9031e10d3fcba04797993e33ddb0e4af8c5a4e2f9acef38",
-	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "bf1aa14c0e6e1394b7fdae9bd7a1c2e31ffd254820c7b0aae9f22eea45142ee6",
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "1101c0250fc1bdd40326b28c3d02c6b6f9b3997e14f285d8aa073830d6923810",
+	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "19c19501c72cc4cb2a9c9ff9cf107be295f080a27f142c172f8997342b63d4e7",
+	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "8c2b08be53a9d689645b20e3c3ef2e914187f266517d3d461e1d9bb828086bca",
+	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "67df8689d21ef7bcc36debf95996243ca9aae89ecaa7a984d5f7addca52cd3eb",
 	// The mixed-provider demo world (provider_worlds_demo_*).
-	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz": "6d43e236689d6f8e520b522e3644316101471397bd28519e6b702f720a1fb6f1",
+	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz": "2f491023f7bd5453db0ce46d2b3b0771015a5d290a34b8c0946f9abb26ed5f9f",
 }
 
 // producedWorlds are the provider worlds (github of the real shape, gitlab, jira, linear): written by the

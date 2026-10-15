@@ -50,13 +50,13 @@ func classifyTransportReason(err error) string {
 }
 
 // transportFailure builds the transient error for a request that got no HTTP
-// response and logs its reason; neither the cause text nor the path is logged (a path can carry a member login).
-func (c *HTTPClient) transportFailure(cause error, path string, attempt int) *ProviderError {
+// response and logs its reason; neither the cause text nor the request path appears in the error or log (a path can carry a member login).
+func (c *HTTPClient) transportFailure(cause error, attempt int) *ProviderError {
 	reason := classifyTransportReason(cause)
 	slog.Warn("provider transport error",
 		"provider", c.Provider,
 		"attempt", attempt,
 		"reason", reason,
 	)
-	return &ProviderError{Class: ErrorTransient, Path: path, Reason: reason}
+	return &ProviderError{Class: ErrorTransient, Reason: reason}
 }

@@ -47,7 +47,7 @@ func TestTransportUnknownAuthorityReachesCaller(t *testing.T) {
 	defer server.Close()
 	logs := captureLogs(t)
 	client := transportClient(t, &http.Client{}, server.URL)
-	_, err := client.Do(context.Background(), http.MethodGet, "/repos/octo/hello/deployments?token=secret-query", nil)
+	_, err := client.Do(context.Background(), http.MethodGet, "/orgs/acme/teams/platform/memberships/octocat-login?token=secret-query", nil)
 	var providerErr *ProviderError
 	if !errors.As(err, &providerErr) {
 		t.Fatalf("err = %v, want *ProviderError", err)
@@ -55,8 +55,8 @@ func TestTransportUnknownAuthorityReachesCaller(t *testing.T) {
 	if providerErr.Class != ErrorTransient || providerErr.Reason != TransportReasonTLSUnknownAuthority {
 		t.Fatalf("class=%q reason=%q, want transient/%s", providerErr.Class, providerErr.Reason, TransportReasonTLSUnknownAuthority)
 	}
-	if !strings.Contains(err.Error(), "reason=tls_unknown_authority") || !strings.Contains(err.Error(), "path=/repos/octo/hello/deployments") {
-		t.Fatalf("Error() = %q lacks reason or path", err.Error())
+	if !strings.Contains(err.Error(), "reason=tls_unknown_authority") {
+		t.Fatalf("Error() = %q lacks the reason", err.Error())
 	}
 	if !strings.Contains(logs.String(), `"reason":"tls_unknown_authority"`) {
 		t.Fatalf("no log line with the reason: %s", logs.String())
@@ -64,8 +64,8 @@ func TestTransportUnknownAuthorityReachesCaller(t *testing.T) {
 	if strings.Contains(err.Error(), "secret-query") || strings.Contains(logs.String(), "secret-query") {
 		t.Fatal("query string leaked")
 	}
-	if strings.Contains(logs.String(), "octo/hello") {
-		t.Fatalf("path in log line: %s", logs.String())
+	if strings.Contains(logs.String(), "octocat-login") || strings.Contains(err.Error(), "octocat-login") || providerErr.Path != "" {
+		t.Fatalf("request path reached the error or log: %q / %s", err.Error(), logs.String())
 	}
 }
 

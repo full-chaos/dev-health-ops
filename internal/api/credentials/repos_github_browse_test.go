@@ -162,3 +162,22 @@ func TestBrowseOfAnOrganizationReportsOrg(t *testing.T) {
 		t.Fatalf("body %v", body)
 	}
 }
+
+func TestBrowseSearch404IsAnEmptyListNotAnOwnerNotFound(t *testing.T) {
+	transport := &browseTransport{} // every route, /search/repositories included, answers 404
+	logs := &bytes.Buffer{}
+	h := newHandlers(Deps{HTTPClient: &http.Client{Transport: transport}, Logger: slog.New(slog.NewTextHandler(logs, nil)),
+		HostLookup: func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+		}})
+	decrypted := pyjson.NewObject()
+	decrypted.Set("base_url", "https://ghe.example.com")
+	decrypted.Set("token", "tok")
+	recorder := httptest.NewRecorder()
+	h.listGitHubRepos(recorder, httptest.NewRequest(http.MethodGet, "/credentials/x/repos", nil), &repoCredential{provider: "github", decrypted: decrypted}, "acme", "api", nil)
+
+	var body map[string]any
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &body) != nil || body["diagnostic"] != nil || body["total"] != float64(0) {
+		t.Fatalf("status %d body %s, want 200, an empty list and no diagnostic", recorder.Code, recorder.Body.String())
+	}
+}

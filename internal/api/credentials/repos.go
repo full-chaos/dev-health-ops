@@ -339,7 +339,6 @@ func (h handlers) listGitHubRepos(w http.ResponseWriter, r *http.Request, creden
 	var repos []githubcode.Repo
 	var err error
 	scope := githubScope{installation: gc.app}
-	ownerBranch := false
 	switch {
 	case group == "" && gc.app:
 		repos, err = client.ListInstallationRepositories(ctx, search, maxRepos)
@@ -347,7 +346,6 @@ func (h handlers) listGitHubRepos(w http.ResponseWriter, r *http.Request, creden
 		var listing githubcode.NamespaceListing
 		listing, err = client.ListNamespace(ctx, githubcode.NamespaceOptions{Owner: group, UserRepos: !gc.app, Pattern: pattern(search), MaxRepos: maxRepos})
 		repos, scope.ownerType, scope.notFound = listing.Repos, listing.OwnerType, listing.NotFound
-		ownerBranch = true
 		if listing.NamespaceErr != nil {
 			h.logger.WarnContext(ctx, "github repo browse namespace listing failed; keeping the credential's repositories only",
 				slog.Int("token_repos", len(repos)), slog.Bool("installation_scoped", scope.installation),
@@ -356,7 +354,6 @@ func (h handlers) listGitHubRepos(w http.ResponseWriter, r *http.Request, creden
 	case group != "":
 		repos, err = client.ListRepositories(ctx, githubcode.ListOptions{Org: group, Search: search, MaxRepos: maxRepos})
 		err = githubcode.RedactOwner(err, group)
-		ownerBranch = true
 	default:
 		repos, err = client.ListRepositories(ctx, githubcode.ListOptions{Pattern: pattern(search), MaxRepos: maxRepos})
 	}
@@ -365,10 +362,9 @@ func (h handlers) listGitHubRepos(w http.ResponseWriter, r *http.Request, creden
 		if errors.As(err, &listErr) {
 			switch listErr.Class {
 			case "NotFoundException":
-				// Only an owner route's 404 is "owner not found"; the credential-wide listings keep their empty answer.
-				scope.notFound = ownerBranch
-				h.logger.InfoContext(ctx, "github repo browse found nothing to list", slog.Bool("owner_not_found", scope.notFound),
-					slog.Bool("installation_scoped", scope.installation))
+				// Only an owner route's 404, which ListNamespace reports itself, is "owner not found": a 404 of the search
+				// or of a credential-wide listing keeps the empty answer it always had.
+				h.logger.InfoContext(ctx, "github repo browse found nothing to list", slog.Bool("installation_scoped", scope.installation))
 				policy.WriteModel(w, http.StatusOK, githubRepoListing(nil, scope), nil)
 				return
 			case "AuthenticationException":

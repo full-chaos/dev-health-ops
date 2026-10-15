@@ -493,7 +493,7 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 		// CHAOS-6695: each window first mints the webhook worker's pending
 		// scoped-sync requests on this coordinator pool, so their occurrences
 		// are consumed in the same window.
-		return reconciler.WithWebhookRequests(), nil
+		return reconciler.WithWebhookRequests().WithInitialBackfill(), nil
 	},
 }
 

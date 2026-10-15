@@ -53,6 +53,21 @@ var (
 
 const pagerDutyMaxResponseBody = 1 << 20
 
+// PagerDutyExchangeTransportError is ErrPagerDutyExchangeUnavailable with the closed-set transport Reason; Error() text and errors.Is are unchanged, the reason is in the field and the log.
+type PagerDutyExchangeTransportError struct{ Reason string }
+
+func (e *PagerDutyExchangeTransportError) Error() string {
+	return ErrPagerDutyExchangeUnavailable.Error()
+}
+
+func (e *PagerDutyExchangeTransportError) Is(target error) bool {
+	return target == ErrPagerDutyExchangeUnavailable
+}
+
+func pagerDutyExchangeTransportError(cause error) error {
+	return &PagerDutyExchangeTransportError{Reason: transportProviderError("pagerduty", cause, 1).Reason}
+}
+
 // ExchangePagerDutyAuthorizationCode is oauth.py's exchange_code: one form
 // POST to the token URL (no redirect following, 10s), the response turned
 // into tokens by _tokens.
@@ -102,14 +117,14 @@ func postPagerDutyTokenForm(ctx context.Context, doer HTTPDoer, config PagerDuty
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response, err := pagerDutyFormClient(doer, 10*time.Second).Do(request)
 	if err != nil {
-		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeUnavailable
+		return PagerDutyOAuthTokens{}, pagerDutyExchangeTransportError(err)
 	}
 	defer response.Body.Close()
 	// httpx reads the whole body inside client.post, so a body that ends
 	// early is a transport error whatever the status said.
 	body, err := io.ReadAll(io.LimitReader(response.Body, pagerDutyMaxResponseBody))
 	if err != nil {
-		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeUnavailable
+		return PagerDutyOAuthTokens{}, pagerDutyExchangeTransportError(err)
 	}
 	switch {
 	case response.StatusCode >= 400 && response.StatusCode < 500:

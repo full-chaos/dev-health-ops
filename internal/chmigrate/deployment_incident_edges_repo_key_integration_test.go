@@ -110,25 +110,26 @@ VALUES ('e-` + deployment + `', '` + org + `', '` + deployment + `', '` + incide
 	if got := text(`SELECT sorting_key FROM system.tables WHERE database = currentDatabase() AND name = 'work_graph_deployment_incident_edges'`); got != "org_id, deployment_id, incident_id, source" {
 		t.Fatalf("sorting key after the rollback = %q", got)
 	}
-	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL`); got != 3 {
-		t.Fatalf("the rollback kept %d rows, want 3", got)
+	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL`); got != 2 {
+		t.Fatalf("the rollback kept %d rows, want 2 (the old key holds the shared deployment id of two repositories as one row)", got)
 	}
 
-	// Legacy rows with no repository keep their row, one for each pair.
+	// Legacy rows with no repository keep their row. A row of the same pair with a repository is another key.
 	insert("d-one", "i-3", "NULL", "heuristic", "2026-10-01 03:00:00")
-	insert("d-one", "i-3", "'"+repoA+"'", "heuristic", "2026-10-01 03:00:00")
 	insert("d-none", "i-5", "NULL", "heuristic", "2026-10-01 03:00:00")
 	chschema.Apply(ctx, t, instance)
 	if recorded() == 0 || leftover() != 0 {
 		t.Fatalf("the upgrade after the rollback: version rows %d, leftover tables %d", recorded(), leftover())
 	}
+	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL WHERE repo_id IS NULL`); got != 2 {
+		t.Errorf("%d rows without a repository after the upgrade, want 2", got)
+	}
+	insert("d-one", "i-3", "'"+repoA+"'", "heuristic", "2026-10-01 04:00:00")
+	exec(`OPTIMIZE TABLE work_graph_deployment_incident_edges FINAL`)
 	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL WHERE deployment_id = 'd-one'`); got != 2 {
-		t.Errorf("d-one holds %d rows after the upgrade, want 2 (one with a repository, one without)", got)
+		t.Errorf("d-one holds %d rows, want 2 (one without a repository, one with)", got)
 	}
-	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL WHERE deployment_id = 'd-none' AND repo_id IS NULL`); got != 1 {
-		t.Errorf("the legacy row of d-none: %d rows without a repository, want 1", got)
-	}
-	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL`); got != 6 {
-		t.Errorf("the table holds %d rows after the upgrade, want 6", got)
+	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL`); got != 5 {
+		t.Errorf("the table holds %d rows, want 5", got)
 	}
 }

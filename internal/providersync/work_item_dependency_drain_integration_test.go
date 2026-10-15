@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
 )
 
 // CHAOS-9706 real-store tests at the migration head. The fixture holds one row
@@ -437,5 +438,50 @@ func TestDrainRefusesWhenTheDifferentialFails(t *testing.T) {
 	}
 	if after := f.rows(drainOrg); !reflect.DeepEqual(before, after) {
 		t.Fatal("rows changed although the differential refused")
+	}
+}
+
+// The edge of a drained relation stays in work_graph_edges until the next workgraph run (the window the PR body
+// names); that run's cleanup (the sequence the issue<->issue pre-step performs) retracts it, because no
+// dependency row backs it any more.
+func TestDrainedRelationEdgeIsRetractedByTheNextWorkgraphCleanup(t *testing.T) {
+	f := newDrainFixture(t)
+	edgeID := edges.EdgeID(edges.NodeTypeIssue, "linear:OPS-1", edges.EdgeTypeBlocks, edges.NodeTypeIssue, "gh:a/r#1")
+	seeded := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	f.exec(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, provenance,
+ confidence, evidence, discovered_at, last_synced, event_ts, day, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		edgeID, "issue", "linear:OPS-1", "issue", "gh:a/r#1", "blocks", "native", float32(0.9), "linear_relation:blocks",
+		seeded, seeded, seeded, seeded, drainOrg)
+	live := func() uint64 {
+		return f.count("SELECT count() FROM work_graph_edges FINAL WHERE edge_id = ? AND is_deleted = 0", edgeID)
+	}
+	if _, err := DrainWorkItemDependencies(f.ctx, f.conn, drainApply()); err != nil {
+		t.Fatal(err)
+	}
+	if live() != 1 {
+		t.Fatal("the edge is gone before any workgraph run: the window the PR body names does not exist")
+	}
+	dependencies, err := edges.ReadDependencies(f.ctx, f.conn, drainOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived, err := edges.DeriveIssueIssueEdges(dependencies, drainNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing, err := edges.ReadExistingDependencyEdgeIDs(f.ctx, f.conn, drainOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := edges.BuildCleanupPlan(dependencies, existing)
+	versions, err := edges.ReadIssueIssueEdgeVersions(f.ctx, f.conn, drainOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := edges.DeleteEdgesByID(f.ctx, f.conn, drainOrg, plan, versions, derived.Edges, drainNow); err != nil {
+		t.Fatal(err)
+	}
+	if live() != 0 {
+		t.Fatal("the next workgraph cleanup did not retract the edge of a drained relation")
 	}
 }

@@ -217,14 +217,6 @@ func signalDirection(delta float64) string {
 	return "flat"
 }
 
-// priorValue ports _prior_value (services/home.py:327-330).
-func priorValue(current, delta float64) (float64, bool) {
-	if absFloat(delta+100.0) < 0.0001 {
-		return 0, false
-	}
-	return current / (1.0 + (delta / 100.0)), true
-}
-
 // metricImpact ports _metric_impact (services/home.py:333-341).
 func metricImpact(metric string, delta float64) float64 {
 	dir := signalDirection(delta)
@@ -406,14 +398,20 @@ var metricReasons = map[string]string{
 
 var movementWords = map[string]string{"up": "rising", "down": "falling", "flat": "flat"}
 
-// whyForMetric ports _why_for_metric (services/home.py:412-434).
-func whyForMetric(metric, label, dir string) string {
-	movement := movementWords[dir]
+// whyPartsForMetric returns the parts of the why-it-matters sentence of a
+// metric (services/home.py:412-434).
+func whyPartsForMetric(metric, label, dir string) WhyParts {
 	reason, ok := metricReasons[metric]
 	if !ok {
 		reason = fmt.Sprintf("%s movement suggests an operating signal to inspect.", label)
 	}
-	return fmt.Sprintf("%s appears %s; %s", label, movement, reason)
+	return WhyParts{Label: label, Movement: movementWords[dir], Reason: reason}
+}
+
+// whyForMetric ports _why_for_metric (services/home.py:412-434).
+func whyForMetric(metric, label, dir string) string {
+	parts := whyPartsForMetric(metric, label, dir)
+	return fmt.Sprintf("%s appears %s; %s", parts.Label, parts.Movement, parts.Reason)
 }
 
 // coveragePctFromCoverage ports _coverage_pct_from_coverage
@@ -486,12 +484,12 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 		if !delta.HasData {
 			continue
 		}
-		// The percent, the prior value and the delta text are derived from the
-		// delta, so they exist only when it states a move between two measured
-		// values (deltarule). With no value in a window there is no trend and no
-		// prior; from a measured 0 the prior is that 0, the delta is the change in
-		// absolute values and the direction is the sign of the current value
-		// (CHAOS-9063).
+		// The percent and the delta text are derived from the delta, so they exist
+		// only when it states a move between two measured values (deltarule). With
+		// no value in a window there is no trend. The prior value is not derived: it
+		// is the comparison window's stored value (CHAOS-9817), shown whenever that
+		// window has one. From a measured 0 the delta is the change in absolute
+		// values and the direction is the sign of the current value (CHAOS-9063).
 		pct, hasPct := delta.Percent()
 		fromZero := delta.FromZero()
 		complete := hasPct || fromZero
@@ -502,23 +500,21 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 		case hasPct:
 			dir = signalDirection(pct)
 			impact = metricImpact(delta.Metric, pct)
-			if prior, ok := priorValue(delta.Value, pct); ok {
-				s := formatValue(prior, delta.Unit)
-				priorValueStr = &s
-			}
 			deltaStr = formatDeltaValue(&pct)
 		case fromZero:
 			dir = "up"
 			if delta.Value < 0 {
 				dir = "down"
 			}
-			prior := formatValue(0, delta.Unit)
-			priorValueStr = &prior
 			change := "+" + formatValue(delta.Value, delta.Unit)
 			if delta.Value < 0 {
 				change = formatValue(delta.Value, delta.Unit)
 			}
 			deltaStr = &change
+		}
+		if delta.PriorValue != nil {
+			s := formatValue(*delta.PriorValue, delta.Unit)
+			priorValueStr = &s
 		}
 		evidenceCount := len(delta.Spark)
 		evidenceRefStr := evidenceLink(delta.Metric, f)
@@ -529,6 +525,7 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 		}
 
 		title := fmt.Sprintf("%s appears %s", delta.Label, dir)
+		whyParts := whyPartsForMetric(delta.Metric, delta.Label, dir)
 		why := whyForMetric(delta.Metric, delta.Label, dir)
 		if !complete {
 			title = fmt.Sprintf("%s has no prior period to compare", delta.Label)
@@ -537,6 +534,7 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 		signals = append(signals, Signal{
 			ID:                fmt.Sprintf("metric:%s", delta.Metric),
 			Title:             title,
+			ClaimSubject:      delta.Label,
 			Metric:            delta.Metric,
 			CurrentValue:      formatValue(delta.Value, delta.Unit),
 			PriorValue:        priorValueStr,
@@ -547,6 +545,7 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 			AffectedScope:     primaryScopeLabel(f),
 			EvidenceCount:     evidenceCount,
 			WhyItMatters:      why,
+			Why:               &whyParts,
 			RecommendedAction: actionForMetric(delta.Metric),
 			EvidenceRef:       &evidenceRefStr,
 			Category:          category,
@@ -647,9 +646,19 @@ func BuildHealthState(signals []Signal, dataConfidence DataConfidence, asOf *tim
 	return HealthState{
 		Status:   status,
 		Headline: fmt.Sprintf("%s across %s", top.Title, top.AffectedScope),
-		Summary:  fmt.Sprintf("The strongest signal suggests %s", top.WhyItMatters),
+		Summary:  healthSummary(top),
 		AsOf:     (*pytime.NaiveDateTime)(asOf),
 	}
+}
+
+// healthSummary is the health-state summary: the strongest signal's
+// why-it-matters under one hedge word of its own. A signal with no parts
+// (a recommendation) is quoted whole.
+func healthSummary(top Signal) string {
+	if top.Why == nil {
+		return fmt.Sprintf("The strongest signal suggests %s", top.WhyItMatters)
+	}
+	return fmt.Sprintf("The strongest signal suggests %s is %s; %s", top.Why.Label, top.Why.Movement, top.Why.Reason)
 }
 
 // BuildLimitingFactor ports build_limiting_factor (services/home.py:566-576).
@@ -658,8 +667,12 @@ func BuildLimitingFactor(signals []Signal) LimitingFactor {
 		return DefaultLimitingFactor()
 	}
 	top := signals[0]
+	subject := top.ClaimSubject
+	if subject == "" {
+		subject = top.Title
+	}
 	return LimitingFactor{
-		Claim:             fmt.Sprintf("%s appears to be the current limiting factor.", top.Title),
+		Claim:             fmt.Sprintf("%s appears to be the current limiting factor.", subject),
 		WhyItMatters:      top.WhyItMatters,
 		RecommendedAction: top.RecommendedAction,
 		Confidence:        top.Confidence,
@@ -831,9 +844,11 @@ func RiskSignal(row RiskRow, f Filters, dataConfidence DataConfidence) (Signal, 
 	}
 
 	affectedScope := scopeType + "s"
+	riskWhy := whyPartsForMetric("compounding_risk", "Compounding Risk", "flat")
 	return Signal{
 		ID:                fmt.Sprintf("risk:%s:%s", scopeType, scopeID),
 		Title:             fmt.Sprintf("Compounding risk appears %s for %s", rawSeverity, entityName),
+		ClaimSubject:      fmt.Sprintf("Compounding risk for %s", entityName),
 		Metric:            "compounding_risk",
 		CurrentValue:      formatValue(currentValue, "%"),
 		Direction:         "flat",
@@ -842,6 +857,7 @@ func RiskSignal(row RiskRow, f Filters, dataConfidence DataConfidence) (Signal, 
 		AffectedScope:     affectedScope,
 		EvidenceCount:     1,
 		WhyItMatters:      whyForMetric("compounding_risk", "Compounding Risk", "flat"),
+		Why:               &riskWhy,
 		RecommendedAction: actionForMetric("compounding_risk"),
 		Category:          CategoryDurability,
 		ScopeEntity:       &ScopeEntityRef{ID: scopeID, DisplayName: entityName},

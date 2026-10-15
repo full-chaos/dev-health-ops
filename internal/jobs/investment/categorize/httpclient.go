@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/externalurl"
 )
 
 // hardenedHTTPTimeout is llm/providers/_http.py's make_hardened_*_client
@@ -35,6 +37,31 @@ func newHardenedHTTPClient() *http.Client {
 // `/v1//responses` -- a double slash a strict router can reject -- because
 // nothing ever trimmed the operator-configured trailing slash before
 // concatenation.
+// orgHTTPClient picks the client for an org BYO provider. When the org
+// supplied a base_url, the client's transport is the SSRF-guarded one: the
+// address each connection actually dials is checked against the internal
+// ranges (loopback, RFC1918, link-local incl. 169.254.169.254, unique-local,
+// multicast, unspecified) and refused before any byte -- the bearer key
+// included -- is written. The org's stored base_url is validated once when
+// read, but the resolver may answer differently at dial time (DNS
+// rebinding); this closes that gap (CHAOS-2558). With no base_url the
+// provider's own default endpoint is not customer-controlled and the plain
+// hardened client is used (nil here selects it).
+//
+// transport nil means the guarded transport; a caller (a test against a
+// loopback server) may pass its own.
+func orgHTTPClient(baseURL string, transport http.RoundTripper) *http.Client {
+	if strings.TrimSpace(baseURL) == "" {
+		return nil
+	}
+	client := newHardenedHTTPClient()
+	if transport == nil {
+		transport = externalurl.GuardedTransport()
+	}
+	client.Transport = transport
+	return client
+}
+
 func trimBaseURL(baseURL string) string {
 	return strings.TrimRight(baseURL, "/")
 }

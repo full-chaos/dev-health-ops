@@ -1363,6 +1363,186 @@ const registeredHomeV10Document = `query Home($orgId: String!, $filters: FilterI
   }
 }`
 
+// registeredHomeV11Document is the Home text from before a delta carried the value its comparison window stored
+// (CHAOS-9817: `MetricDelta.priorValue`): the V10 text plus `changeFailureEvidence` (CHAOS-9630). It stays a legacy
+// text (see legacyDigestsByOperation) so every web build that does not select the field remains accepted. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/home_v11_captured.graphql).
+const registeredHomeV11Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      repoFilterApplied
+      repoLinkState
+      repoLinkBasis {
+        native
+        explicitText
+        heuristic
+        __typename
+      }
+      repoLinkMultiRepoItems
+      repoLinkCoverage {
+        linkedItems
+        itemsInWindow
+        __typename
+      }
+      changeFailureEvidence {
+        basis
+        deployments
+        deploymentsWithStatus
+        coverage
+        unknownReason
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      coverage
+      repoFilterApplied
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    filterEmptyReason
+    __typename
+  }
+}`
+
 // registeredHomeDocument is the registered document for the home
 // operation: the wire form of the web app's HOME_QUERY (variables orgId,
 // filters, window), kept byte-identical in
@@ -1406,7 +1586,9 @@ const registeredHomeV10Document = `query Home($orgId: String!, $filters: FilterI
 // new field got a 404 digest-miss even though queryResolver.Home mapped
 // it correctly. So this selection set is exhaustive per type.
 //
-// Two lines are NOT a capture: `rateState` in deltas (the state of a rate
+// The line `priorValue` in deltas (CHAOS-9817, the value the comparison window stored), right after
+// `hasPriorData`, is NOT a capture either; the web change that selects it puts it at that place.
+// Two other lines are NOT a capture: `rateState` in deltas (the state of a rate
 // that is a ratio of stored counts) and `rateCoverage` after it (the coverage
 // of the pull request rework ratio). The web selects neither yet and sends
 // the V4 text below; the lines are here because a field no registered text
@@ -1438,6 +1620,7 @@ const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInpu
       deltaPct
       hasData
       hasPriorData
+      priorValue
       spark {
         ts
         value
@@ -2537,6 +2720,47 @@ const registeredInvestmentEvidenceQualityDocument = `query InvestmentEvidenceQua
   }
 }`
 
+// registeredInvestmentFullV1Document is the InvestmentFull text the web sent before CHAOS-9808: coverage without
+// sizingCoverage and unsizedUnitCount. Kept registered (legacyDigestsByOperation) so a web build of either side of the
+// rollout routes.
+const registeredInvestmentFullV1Document = `query InvestmentFull($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    sankey {
+      nodes {
+        id
+        label
+        dimension
+        value
+        __typename
+      }
+      edges {
+        source
+        target
+        value
+        __typename
+      }
+      coverage {
+        teamCoverage
+        repoCoverage
+        __typename
+      }
+      unit
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredInvestmentFullDocument is CHAOS-4538's registered document
 // for the combined investment breakdowns+sankey `analytics` query --
 // same contract as registeredInvestmentBreakdownDocument above. Copied
@@ -2583,6 +2807,8 @@ const registeredInvestmentFullDocument = `query InvestmentFull($orgId: String!, 
       coverage {
         teamCoverage
         repoCoverage
+        sizingCoverage
+        unsizedUnitCount
         __typename
       }
       unit
@@ -6157,10 +6383,11 @@ var legacyDigestsByOperation = map[string][]string{
 	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
-	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document), digestHex(registeredHomeV10Document)},
+	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document), digestHex(registeredHomeV10Document), digestHex(registeredHomeV11Document)},
 	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
 	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
+	"investmentFull":        {digestHex(registeredInvestmentFullV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

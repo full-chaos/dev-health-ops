@@ -626,6 +626,71 @@ func (store *PostgresStore) findManualBackfillBlocker(
 	}
 	upperBound := requested.AddDate(0, 0, maxDayScopedBackfillDays-1).Format("2006-01-02")
 	requireExactScope, scopeFilter := remainingCoverageScopeFilter(family, scope)
+	rows, err := store.queryWindowRunRows(ctx, tx, organizationID, family, day, upperBound, requireExactScope, scopeFilter)
+	if err != nil {
+		return "", blockReasonNone, err
+	}
+
+	var coveredRunID string
+	for _, row := range rows {
+		anchor, parseErr := time.Parse("2006-01-02", row.anchorDay)
+		if parseErr != nil {
+			continue
+		}
+		if !windowContainsDay(anchor, row.backfillDays, requested) {
+			continue // this partition's window does not contain the requested day
+		}
+		if (row.runStatus == "pending" || row.runStatus == "running") && !isSameManualBackfillRequest(row.generation, generation) {
+			// The most actionable signal -- return immediately rather than
+			// keep scanning for a "covered" reason that matters less.
+			return row.runID, blockReasonInProgress, nil
+		}
+		if row.runStatus != "succeeded" || row.partitionStatus != "succeeded" {
+			continue
+		}
+		if row.backfillDays > 1 || !isZeroRowEvidence(row.outputEvidence) {
+			coveredRunID = row.runID
+		}
+	}
+	if coveredRunID != "" {
+		return coveredRunID, blockReasonCovered, nil
+	}
+	return "", blockReasonNone, nil
+}
+
+// windowRunRow is one partition of a pending, running or succeeded run whose
+// anchor day lies in the range queryWindowRunRows was asked for.
+type windowRunRow struct {
+	runID           string
+	generation      string
+	runStatus       string
+	partitionStatus string
+	anchorDay       string
+	backfillDays    int
+	outputEvidence  *string
+}
+
+// windowContainsDay reports whether the window of backfillDays days ending on
+// anchor holds day: the one containment rule every window check here shares.
+func windowContainsDay(anchor time.Time, backfillDays int, day time.Time) bool {
+	windowStart := anchor.AddDate(0, 0, -(backfillDays - 1))
+	return !day.Before(windowStart) && !day.After(anchor)
+}
+
+// queryWindowRunRows reads the partitions of (org, family) runs that are
+// pending, running or succeeded and whose anchor day (the partition's own day,
+// else the run's scope key) lies in [fromDay, toDay]. The caller applies the
+// window containment: an anchor late in the range can still hold an earlier
+// day through its backfill_days. A pending run whose handoff is provably dead
+// under deadHandoffReasonSQL (redrive.go -- the SAME predicate
+// UnstartableRuns/terminalizeUnstartableRuns use, kept in one place on
+// purpose) will never be claimed, so it can never become the genuine
+// in-progress collision this query exists to catch, and is left out; 'running'
+// and 'succeeded' rows are untouched by that exclusion.
+func (store *PostgresStore) queryWindowRunRows(
+	ctx context.Context, tx pgx.Tx, organizationID, family, fromDay, toDay string,
+	requireExactScope bool, scopeFilter json.RawMessage,
+) ([]windowRunRow, error) {
 	rows, err := tx.Query(ctx, `
 SELECT run.id::text, run.generation, run.status, partition.status,
        coalesce(partition.scope->>'day', run.scope_key),
@@ -637,59 +702,23 @@ WHERE run.org_id = $1::uuid AND run.family = $2
   AND coalesce(partition.scope->>'day', run.scope_key) >= $3
   AND coalesce(partition.scope->>'day', run.scope_key) <= $4
   AND (NOT $5 OR partition.scope = $6::jsonb)
-  -- CHAOS gap: a 'pending' run whose handoff is provably dead under
-  -- deadHandoffReasonSQL (redrive.go -- the SAME predicate
-  -- UnstartableRuns/terminalizeUnstartableRuns use, kept in one place on
-  -- purpose) will never be claimed, so it can never become the genuine
-  -- blockReasonInProgress collision this query exists to catch. Left
-  -- unfiltered, a zombie pending run with a dead handoff would refuse an
-  -- operator's manual backfill for a day nothing will ever actually
-  -- compute. 'running' and 'succeeded' rows are untouched by this
-  -- exclusion -- their handoff already delivered (running) or is
-  -- irrelevant to a completed partition's own coverage value (succeeded),
-  -- so narrowing it to run.status = 'pending' keeps every other coverage
-  -- and in-progress rule exactly as before.
   AND NOT (run.status = 'pending' AND `+deadHandoffReasonSQL+` <> 'deliverable')`,
-		organizationID, family, day, upperBound, requireExactScope, scopeFilter,
+		organizationID, family, fromDay, toDay, requireExactScope, scopeFilter,
 	)
 	if err != nil {
-		return "", blockReasonNone, ErrUnavailable
+		return nil, ErrUnavailable
 	}
 	defer rows.Close()
-
-	var coveredRunID string
+	var out []windowRunRow
 	for rows.Next() {
-		var id, runGeneration, runStatus, partitionStatus, anchorDay string
-		var backfillDays int
-		var outputEvidence *string
-		if err := rows.Scan(&id, &runGeneration, &runStatus, &partitionStatus, &anchorDay, &backfillDays, &outputEvidence); err != nil {
-			return "", blockReasonNone, ErrUnavailable
+		var row windowRunRow
+		if err := rows.Scan(&row.runID, &row.generation, &row.runStatus, &row.partitionStatus, &row.anchorDay, &row.backfillDays, &row.outputEvidence); err != nil {
+			return nil, ErrUnavailable
 		}
-		anchor, parseErr := time.Parse("2006-01-02", anchorDay)
-		if parseErr != nil {
-			continue
-		}
-		windowStart := anchor.AddDate(0, 0, -(backfillDays - 1))
-		if requested.Before(windowStart) || requested.After(anchor) {
-			continue // this partition's window does not contain the requested day
-		}
-		if (runStatus == "pending" || runStatus == "running") && !isSameManualBackfillRequest(runGeneration, generation) {
-			// The most actionable signal -- return immediately rather than
-			// keep scanning for a "covered" reason that matters less.
-			return id, blockReasonInProgress, nil
-		}
-		if runStatus != "succeeded" || partitionStatus != "succeeded" {
-			continue
-		}
-		if backfillDays > 1 || !isZeroRowEvidence(outputEvidence) {
-			coveredRunID = id
-		}
+		out = append(out, row)
 	}
 	if rows.Err() != nil {
-		return "", blockReasonNone, ErrUnavailable
+		return nil, ErrUnavailable
 	}
-	if coveredRunID != "" {
-		return coveredRunID, blockReasonCovered, nil
-	}
-	return "", blockReasonNone, nil
+	return out, nil
 }

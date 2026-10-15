@@ -218,6 +218,10 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 	var contextBindings []clickhouse.Binding
 	if useInvestment {
 		ictx := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
+		ictx, err = ictx.sizedFor(req.Measure)
+		if err != nil {
+			return compiledQuery{}, err
+		}
 		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
 		contextBindings = ictx.Bindings
 		measureExpr, err = ictx.measure(req.Measure)
@@ -238,6 +242,9 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 		if err != nil {
 			return compiledQuery{}, err
 		}
+	}
+	if measureExpr, err = exactSums(measureExpr); err != nil {
+		return compiledQuery{}, err
 	}
 	// Force a uniform Float64 result type. ClickHouse returns UInt64 for
 	// the SUM()-based measures (COUNT, THROUGHPUT, CHURN_LOC) and Float64

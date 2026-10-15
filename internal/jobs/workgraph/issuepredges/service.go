@@ -33,7 +33,10 @@ type TextParseOutcome struct {
 	GitLabRefsFound  int
 	CrossRefsFound   int
 	AmbiguousKeys    int
-	Duration         time.Duration
+	// OutrankedByNative counts resolved references not linked because the pull
+	// request or the issue already has a native link.
+	OutrankedByNative int
+	Duration          time.Duration
 }
 
 // Service orchestrates both issue<->PR edge sub-builders against ClickHouse.
@@ -135,8 +138,15 @@ func (service *Service) ProduceTextParseEdges(ctx context.Context, orgID string,
 		return TextParseOutcome{OrganizationID: orgID}, err
 	}
 
+	native, err := service.loader.LoadNativeLinks(ctx, orgID)
+	if err != nil {
+		service.logger.Error("issue-pr text-parse edges: native link load failed",
+			slog.String("organization_id", orgID), slog.Any("error", err))
+		return TextParseOutcome{OrganizationID: orgID}, err
+	}
+
 	buildTime := service.now().UTC()
-	result := DeriveTextParseEdges(prs, workItems, buildTime)
+	result := DeriveTextParseEdges(prs, workItems, native, buildTime)
 
 	for index := range result.Links {
 		result.Links[index].OrgID = orgID
@@ -161,16 +171,17 @@ func (service *Service) ProduceTextParseEdges(ctx context.Context, orgID string,
 	}
 
 	outcome := TextParseOutcome{
-		OrganizationID:   orgID,
-		PullRequestsRead: len(prs),
-		EdgesWritten:     edgesWritten,
-		LinksWritten:     len(result.Links),
-		JiraRefsFound:    result.JiraRefsFound,
-		GitHubRefsFound:  result.GitHubRefsFound,
-		GitLabRefsFound:  result.GitLabRefsFound,
-		CrossRefsFound:   result.CrossRefsFound,
-		AmbiguousKeys:    result.AmbiguousKeys,
-		Duration:         service.now().Sub(started),
+		OrganizationID:    orgID,
+		PullRequestsRead:  len(prs),
+		EdgesWritten:      edgesWritten,
+		LinksWritten:      len(result.Links),
+		JiraRefsFound:     result.JiraRefsFound,
+		GitHubRefsFound:   result.GitHubRefsFound,
+		GitLabRefsFound:   result.GitLabRefsFound,
+		CrossRefsFound:    result.CrossRefsFound,
+		AmbiguousKeys:     result.AmbiguousKeys,
+		OutrankedByNative: result.OutrankedByNative,
+		Duration:          service.now().Sub(started),
 	}
 	service.logger.Info("issue-pr text-parse edges produced",
 		slog.String("organization_id", outcome.OrganizationID),
@@ -179,6 +190,7 @@ func (service *Service) ProduceTextParseEdges(ctx context.Context, orgID string,
 		slog.Int("links_written", outcome.LinksWritten),
 		slog.Int("cross_refs_found", outcome.CrossRefsFound),
 		slog.Int("ambiguous_keys", outcome.AmbiguousKeys),
+		slog.Int("outranked_by_native", outcome.OutrankedByNative),
 		slog.Duration("duration", outcome.Duration),
 	)
 	return outcome, nil
@@ -214,11 +226,19 @@ func (service *Service) ProduceHeuristicEdges(ctx context.Context, orgID string,
 		return HeuristicOutcome{OrganizationID: orgID}, err
 	}
 
+	native, err := service.loader.LoadNativeLinks(ctx, orgID)
+	if err != nil {
+		service.logger.Error("issue-pr heuristic edges: native link load failed",
+			slog.String("organization_id", orgID), slog.Any("error", err))
+		return HeuristicOutcome{OrganizationID: orgID}, err
+	}
+
 	buildTime := service.now().UTC()
 	result := DeriveHeuristicEdges(HeuristicInputs{
 		WorkItems:           workItems,
 		PullRequests:        pullRequests,
 		ExplicitLinks:       explicitLinks,
+		Native:              native,
 		HeuristicDaysWindow: window.HeuristicDaysWindow,
 		HeuristicConfidence: window.HeuristicConfidence,
 	}, buildTime)

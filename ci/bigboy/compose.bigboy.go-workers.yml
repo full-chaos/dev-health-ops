@@ -1,0 +1,906 @@
+services:
+  pgbouncer-river-queue:
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      DB_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      DB_NAME: ${POSTGRES_DB:-devhealth}
+      LISTEN_PORT: "6433"
+      POOL_MODE: session
+      AUTH_TYPE: scram-sha-256
+      # Session mode pins one server connection per client session for the
+      # life of that session, so DEFAULT_POOL_SIZE is a hard ceiling on how
+      # many worker replicas can start -- not a throughput knob. Measured cost
+      # per River worker replica is 3 server connections (2 pgxpool, from
+      # WORKER_DATABASE_MAX_CONNS, plus one long-lived River notifier session).
+      #
+      #   3 x (go-worker + go-worker-heavy + go-worker-ops replicas)
+      # + 2 go-scheduler + 2 go-reconciler + 1 riverui + one-shot activators
+      #
+      # The former "22" was exactly a 2-replica budget with zero headroom: a
+      # third replica of any worker group got no server connection, its
+      # queue-database readiness checks timed out at 2s, and preclaim-readiness
+      # aborted Start -- an exit-1 restart loop reporting
+      # failed_checks=queue_postgres,queued_contract_versions,river_schema.
+      # 40 covers 3 replicas of every worker group plus headroom; raise the
+      # variable (and postgres max_connections) before scaling past 4.
+      MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_QUEUE_MAX_CLIENT_CONN:-128}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-40}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=$$DB_PASSWORD pg_isready -h 127.0.0.1 -p 6433 -U $$DB_USER -d $$DB_NAME",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+      start_interval: 1s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - dev-health
+
+  # Coordinators hold locks across statements, so they receive their own
+  # bounded session pool rather than the transaction-mode domain endpoint.
+  pgbouncer-river-coordinator:
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      DB_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      DB_NAME: ${POSTGRES_DB:-devhealth}
+      LISTEN_PORT: "6434"
+      POOL_MODE: session
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: "32"
+      DEFAULT_POOL_SIZE: "10"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=$$DB_PASSWORD pg_isready -h 127.0.0.1 -p 6434 -U $$DB_USER -d $$DB_NAME",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+      start_interval: 1s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - dev-health
+  # Local operator UI for the River queue. The dedicated River pool preserves
+  # the session features that transaction-mode PgBouncer cannot preserve while
+  # keeping this long-lived control client inside the bounded queue pool.
+  riverui:
+    image: ghcr.io/riverqueue/riverui:latest
+    restart: unless-stopped
+    labels:
+      logging.service.name: dev-health-riverui
+      logging.service.namespace: dev-health
+      traefik.enable: "true"
+      traefik.scope: dev-health
+      traefik.http.routers.riverui.rule: "Host(`river.localhost`)"
+      traefik.http.routers.riverui.entrypoints: "web"
+      traefik.http.services.riverui.loadbalancer.server.port: "8080"
+    environment:
+      DATABASE_URL: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}?sslmode=disable
+      RIVER_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_LOG_LEVEL: ${RIVER_UI_LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "/bin/riverui", "-healthcheck=complete"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+      pgbouncer-river-queue:
+        condition: service_healthy
+    networks:
+      - dev-health
+
+  # Activates the provider-unit route after the complete Go runtime is ready.
+  #  The sync-dispatch activators below reuse this operator boundary so planned
+  #  runs, including focused backfills, never depend on a Celery worker to reach
+  #  the Go coordinator and provider-unit executors.
+  go-worker-route-activate: &go-worker-route-activate
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
+    pull_policy: build
+
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    env_file:
+      - path: ./ops/.env
+        required: false
+    environment:
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      COORDINATOR_DATABASE_MODE: session
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERATIONAL_ORDERING_CONTRACT: "${OPERATIONAL_ORDERING_CONTRACT:-2}"
+      # CHAOS-4543 (lane-4543, 2026-08-29): dev-health-workerctl's `metrics
+      # daily-redrive`/`daily-finalize` need these two to reach the
+      # ledger-repair endpoint -- WORKER_OPERATIONAL_BRIDGE_URL was
+      # previously absent here too (every prior invocation had to pass it
+      # via `docker compose run -e ...` by hand); WORKER_METRIC_REPAIR_TOKEN
+      # is the distinct operator-only repair token
+      # (worker_auth.authorize_metric_repair rejects it if equal to
+      # WORKER_OPERATIONAL_BRIDGE_TOKEN). See compose.yml's `api` service
+      # for the matching wiring on the endpoint side.
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+    command:
+      - job-routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-start
+      - sync.provider_unit
+    depends_on:
+      go-worker-consumers-ready:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+    networks:
+      - dev-health
+
+  go-sync-dispatch-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-dispatch-sync-run
+      - dispatch_sync_run
+    depends_on:
+      go-worker:
+        condition: service_started
+      go-reconciler:
+        condition: service_started
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+
+  go-sync-finalize-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-finalize-sync-run
+      - finalize_sync_run
+    depends_on:
+      # The operator intentionally permits one audited mutation at a time.
+      # Serialize the four coordinator routes instead of racing its advisory
+      # lock with four parallel one-shot containers.
+      go-sync-dispatch-route-activate:
+        condition: service_completed_successfully
+      go-worker:
+        condition: service_started
+      go-reconciler:
+        condition: service_started
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+
+  go-sync-post-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-post-sync
+      - post_sync
+    depends_on:
+      go-sync-finalize-route-activate:
+        condition: service_completed_successfully
+      go-worker:
+        condition: service_started
+      go-reconciler:
+        condition: service_started
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+
+  go-sync-reference-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-reference-discovery
+      - reference_discovery
+    depends_on:
+      go-sync-post-route-activate:
+        condition: service_completed_successfully
+      go-worker:
+        condition: service_started
+      go-reconciler:
+        condition: service_started
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+
+  go-river-provision:
+    image: postgres:18-alpine
+
+    restart: "no"
+    env_file:
+      - ./ops/.env
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        exec psql \
+          --host=postgres \
+          --username="${POSTGRES_USER:-devhealth}" \
+          --dbname="${POSTGRES_DB:-devhealth}" \
+          --set=ON_ERROR_STOP=1 \
+          --set=domain_role="$$RIVER_DOMAIN_DATABASE_ROLE" \
+          --set=queue_role="$$RIVER_QUEUE_DATABASE_ROLE" \
+          --set=coordinator_role="$$RIVER_COORDINATOR_DATABASE_ROLE" \
+          --set=domain_password="$$RIVER_DOMAIN_DATABASE_PASSWORD" \
+          --set=queue_password="$$RIVER_QUEUE_DATABASE_PASSWORD" \
+          --set=coordinator_password="$$RIVER_COORDINATOR_DATABASE_PASSWORD" \
+          --file=/opt/dev-health/provision_river_roles.sql
+    volumes:
+      - ${DEV_HEALTH_OPS_ROOT:-./ops}/scripts/worker/provision_river_roles.sql:/opt/dev-health/provision_river_roles.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - dev-health
+
+  # Applies the pinned River schema and the per-table grants for the three
+  # runtime roles. The elevated migration DSN is confined to this one-shot
+  # process; the long-running Go services below only ever receive unprivileged
+  # runtime DSNs. It must complete before either of them starts.
+  #
+  # This root file is the local development stack, so it owns the complete
+  # schema bootstrap. Python creates the semantic tables first; this service
+  # then applies River schema and role grants; only then may the Go processes
+  # start. Keeping those edges explicit prevents the to_regclass-guarded grant
+  # statements from silently skipping tables that are still being migrated.
+  go-worker-migrate:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: migrate
+    # Local source checkouts must never reuse a months-old grant manifest.
+    # BuildKit reuses unchanged layers, while `pull_policy: build` guarantees
+    # this target is evaluated against the same checkout as the worker.
+    pull_policy: build
+    env_file:
+      - ./ops/.env
+
+    restart: "no"
+    labels:
+      logging.service.name: dev-health-go-worker-migrate
+      logging.service.namespace: dev-health
+    environment:
+      # Direct postgres:5432, never pgbouncer, and never a runtime role.
+      MIGRATION_DATABASE_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      go-river-provision:
+        condition: service_completed_successfully
+      # Python owns the semantic tables. Apply the Go/River role grants only
+      # after those tables exist; the grant SQL deliberately skips absent
+      # relations, so running these two migrators concurrently leaves the
+      # long-running roles permanently under-granted.
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - dev-health
+
+  # Validates the built image's embedded job registry (contracts/jobs/v1/registry.json)
+  # against deployment.json's deployment groups before any Go workload starts.
+  # Wired the same as ops/deploy/docker-compose/compose.go-workers.yml's
+  # canonical go-contractcheck: runs after the migration step, gates every
+  # worker group's readiness. Not profile-gated locally (matches the rest of
+  # this file's local convention — prod gates on `profiles: [go-workers]`,
+  # local does not).
+  go-contractcheck:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: contractcheck
+    pull_policy: build
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    command: [validate]
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+
+  # The provider-unit River handler, running the `sync` deployment group from
+  # ops/deploy/go-workers/deployment.json.
+  #
+  # IMPORTANT — this service fails closed at startup unless at least one route
+  # switch is enabled, and will crash-loop until you enable one. That is
+  # intentional, not a wiring bug: the selected sync queues construct the
+  # sync.team_autoimport handler whenever the sync queue is selected and a domain
+  # DSN is present, then requires an exact match between what it constructed
+  # and the full job_kinds set the sync worker group declares — which includes
+  # sync.provider_unit. With both switches off, that match fails. To watch the
+  # path actually execute, set this in ops/.env:
+  #
+  #   DEV_HEALTH_ENV=local GO_PROVIDER_ROUTES=all
+  #
+  # All route switches default to false. The local-only `all` preset expands to
+  # every compatible complete route family with canonical alias choices; it is
+  # rejected outside DEV_HEALTH_ENV=local. The SAME preset and explicit switch
+  # names are read by the Python producer gate and this Go worker, so one local
+  # override moves both halves coherently.
+  go-worker: &go-worker-process
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: worker
+    pull_policy: build
+
+    restart: unless-stopped
+    labels:
+      logging.service.name: dev-health-go-worker
+      logging.service.namespace: dev-health
+    env_file:
+      # NOT ${DEV_HEALTH_OPS_ROOT} — deliberately. The build context follows
+      # that override so a worktree's Dockerfile and Go source get built, but
+      # the developer's real local configuration always lives at ./ops/.env and
+      # a worktree has none. Parameterizing this path made it resolve to a
+      # nonexistent file which `required: false` then skipped in silence, so
+      # SETTINGS_ENCRYPTION_KEY never reached the container and the sync
+      # worker group failed closed with a generic "configure runtime dependencies".
+      # deployment.json lists SETTINGS_ENCRYPTION_KEY in the sync process's
+      # secret_env, so it is required, not optional.
+      - path: ./ops/.env
+        required: false
+    command:
+      - --queues=sync,sync_provider
+      - --queue-concurrency=sync=4,sync_provider=2
+      - --worker-group=sync
+      - --shutdown-timeout=960s
+    environment: &go-worker-environment
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DATABASE_MODE: session
+      # Native protocol port 9000, NOT the HTTP port 8123 every Python service
+      # in this file uses. internal/storage/clickhouse opens with
+      # ClickHouse/clickhouse-go/v2, which speaks the native wire protocol and
+      # Pings eagerly at construction — pointed at 8123 it fails immediately
+      # with "ClickHouse readiness check failed".
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      VALKEY_URI: redis://valkey:6379/1
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      # CHAOS-5133: go-worker/go-worker-heavy/go-worker-ops claim
+      # work_graph_execution_requests rows via a coordinator-role connection,
+      # same as go-reconciler/go-scheduler below -- without these two, this
+      # process cannot reach the coordinator at all (silently: nothing here
+      # gates readiness on it today). go-stream-ingest/external/pagerduty
+      # alias this same anchor but explicitly neutralize both keys back to
+      # empty in their own environment blocks -- they are not River-queue
+      # consumers and have no coordinator-claim path to wire up.
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      COORDINATOR_DATABASE_MODE: session
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      # sync.team_autoimport's post-sync bridge is constructed unconditionally
+      # for the sync worker group, and the HTTP bridge fails closed on an empty
+      # base URL or token, so both are required for this service to start even
+      # though the group's secret_env list does not name them. The token
+      # below is a local placeholder, not a credential.
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+      WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: ${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}
+      # CHAOS-4543 (lane-4543, 2026-08-29): dev-health-workerctl's `metrics
+      # daily-redrive`/`daily-finalize` attach this as the Bearer token for
+      # the ledger-repair HTTP call (cmd/dev-health-workerctl/main.go
+      # redriveDailyMetricsLedgerChunk) -- distinct from
+      # WORKER_OPERATIONAL_BRIDGE_TOKEN above by design
+      # (worker_auth.authorize_metric_repair rejects a repair token equal to
+      # the bridge token). See compose.yml's `api` service for the matching
+      # wiring on the endpoint side.
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERATIONAL_ORDERING_CONTRACT: "${OPERATIONAL_ORDERING_CONTRACT:-2}"
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+    expose:
+      # Internal operator/readiness surface: /readyz, /healthz, /metrics.
+      - "8080"
+    stop_grace_period: 960s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+        reservations:
+          memory: 512M
+    networks:
+      - dev-health
+
+  # Heavy metrics, reports, work-graph, and investment work has its own River
+  # process. Queue budgets remain independent inside the process
+  # (investment=1, metrics=2, reports=2, workgraph=1), while this service keeps
+  # the entire heavy class away from sync latency and operational webhooks.
+  go-worker-heavy:
+    <<: *go-worker-process
+    labels:
+      logging.service.name: dev-health-go-worker-heavy
+      logging.service.namespace: dev-health
+    command:
+      - --queues=investment,metrics,reports,workgraph
+      - --queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1
+      - --worker-group=heavy
+      - --shutdown-timeout=7260s
+    environment:
+      <<: *go-worker-environment
+      # Provider route switches belong only to the sync process. Neutralize
+      # the local all-routes preset inherited from ops/.env so this process's
+      # readiness contract covers only its heavy handler families.
+      GO_PROVIDER_ROUTES: ""
+    volumes: []
+    pre_stop: []
+    stop_grace_period: 7260s
+    deploy:
+      resources:
+        limits:
+          memory: 2.5G
+          cpus: "1.0"
+        reservations:
+          memory: 1G
+
+  # Operational billing/webhook work and heartbeat/retention maintenance run
+  # separately from both sync and heavy work. River reserves one heartbeat,
+  # one retention, and four webhook workers in this process.
+  go-worker-ops:
+    <<: *go-worker-process
+    labels:
+      logging.service.name: dev-health-go-worker-ops
+      logging.service.namespace: dev-health
+    command:
+      - --queues=coverage,heartbeat,retention,webhooks
+      - --queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4
+      - --worker-group=ops
+      - --shutdown-timeout=960s
+    environment:
+      <<: *go-worker-environment
+      # Provider route switches belong only to the sync process. Neutralize
+      # the local all-routes preset inherited from ops/.env so this process's
+      # readiness contract covers only its operational handler families.
+      GO_PROVIDER_ROUTES: ""
+    volumes: []
+    pre_stop: []
+    stop_grace_period: 960s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+
+  # Stream ingestion is not a River queue and must not share a worker process.
+  # These runners replace the blocking ingest consumers with one bounded local
+  # replica per consumer family.
+  go-stream-ingest:
+    <<: *go-worker-process
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: stream-runner
+    labels:
+      logging.service.name: dev-health-go-stream-ingest
+      logging.service.namespace: dev-health
+    command: []
+    environment:
+      <<: *go-worker-environment
+      DEV_HEALTH_PROFILE: ingest
+      DEV_HEALTH_STREAM_REPLICAS: "1"
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
+      # CHAOS-5133: not a River-queue consumer, no coordinator-claim path --
+      # neutralize the anchor's coordinator config rather than inherit it.
+      COORDINATOR_DATABASE_URI: ""
+      COORDINATOR_DATABASE_MODE: ""
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+    volumes: []
+    pre_stop: []
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+
+  go-stream-external:
+    <<: *go-worker-process
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: stream-runner
+    labels:
+      logging.service.name: dev-health-go-stream-external
+      logging.service.namespace: dev-health
+    command: []
+    environment:
+      <<: *go-worker-environment
+      DEV_HEALTH_PROFILE: external
+      DEV_HEALTH_STREAM_REPLICAS: "1"
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
+      # CHAOS-5133: not a River-queue consumer, no coordinator-claim path --
+      # neutralize the anchor's coordinator config rather than inherit it.
+      COORDINATOR_DATABASE_URI: ""
+      COORDINATOR_DATABASE_MODE: ""
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+    volumes: []
+    pre_stop: []
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+
+  # PagerDuty webhook admission/receipts are independently routable from both
+  # provider polling and the generic stream families. Keep this consumer in a
+  # separate process so webhook bursts cannot starve ingest or external work.
+  go-stream-pagerduty:
+    <<: *go-worker-process
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: stream-runner
+    labels:
+      logging.service.name: dev-health-go-stream-pagerduty
+      logging.service.namespace: dev-health
+    command: []
+    environment:
+      <<: *go-worker-environment
+      DEV_HEALTH_PROFILE: pagerduty
+      DEV_HEALTH_STREAM_REPLICAS: "1"
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
+      PAGERDUTY_WEBHOOK_TRANSPORT: river
+      # CHAOS-5133: not a River-queue consumer, no coordinator-claim path --
+      # neutralize the anchor's coordinator config rather than inherit it.
+      COORDINATOR_DATABASE_URI: ""
+      COORDINATOR_DATABASE_MODE: ""
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+    volumes: []
+    pre_stop: []
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+
+  # Relays worker_job_outbox rows into River and observes the sync-dispatch
+  # outbox. This is a coordinator-role binary, so COORDINATOR_DATABASE_URI is
+  # required and MUST use the dedicated session pool — transaction-mode pooling cannot
+  # hold the cross-statement row and table locks the coordinator takes, and the
+  # process rejects the transaction pooler at startup rather than risking
+  # them silently spanning connections. It declares no deployment profile, so
+  # DEV_HEALTH_PROFILE must not be set here.
+  go-reconciler:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: reconciler
+    pull_policy: build
+
+    restart: unless-stopped
+    labels:
+      logging.service.name: dev-health-go-reconciler
+      logging.service.namespace: dev-health
+    env_file:
+      - path: ./ops/.env
+        required: false
+    environment:
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      COORDINATOR_DATABASE_MODE: session
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      WORKER_COORDINATOR_DATABASE_MAX_CONNS: ${WORKER_COORDINATOR_DATABASE_MAX_CONNS:-2}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERATIONAL_ORDERING_CONTRACT: "${OPERATIONAL_ORDERING_CONTRACT:-2}"
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+    expose:
+      - "8080"
+    networks:
+      - dev-health
+
+  # Owns both scheduled sync markers and the fixed periodic-work inventory.
+  # This process is intentionally separate from the River workers: it creates
+  # durable handoffs, while queue-specific worker replicas execute them.
+  go-scheduler:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: scheduler
+    pull_policy: build
+
+    restart: unless-stopped
+    labels:
+      logging.service.name: dev-health-go-scheduler
+      logging.service.namespace: dev-health
+    env_file:
+      - path: ./ops/.env
+        required: false
+    environment:
+      DEV_HEALTH_HTTP_ADDR: ":8080"
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      COORDINATOR_DATABASE_MODE: session
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      WORKER_COORDINATOR_DATABASE_MAX_CONNS: ${WORKER_COORDINATOR_DATABASE_MAX_CONNS:-2}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERATIONAL_ORDERING_CONTRACT: "${OPERATIONAL_ORDERING_CONTRACT:-2}"
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+    expose:
+      - "8080"
+    # JOB 6 R111 trim (team-lead 2026-09-10 21:0xZ, decided §6.3 of
+    # job6-prep-2026-09-10.md): this overlay's deploy.resources block used to
+    # halve root's go-scheduler budget (0.5 cpu / 512M vs root's 1 cpu / 1G)
+    # with no comment or ticket explaining why, and measured usage was 16.8
+    # MiB (3.28% of the old 512M limit) -- nothing was tuned to fit. Removed
+    # so go-scheduler inherits root's `&go-worker-resources` anchor
+    # (1.0 cpu / 1G limit, 0.25 cpu / 256M reservation) via `<<: *go-worker`.
+    networks:
+      - dev-health
+
+  # Compose-native provider-route readiness barrier after sync-dispatch route
+  # convergence. Provider-unit activation waits only for the Go runtimes that
+  # execute or relay provider work. The scheduler is a separate periodic-work
+  # owner: its /readyz remains an operator-visible degradation signal, but a
+  # fixed-schedule failure must not prevent provider routes from activating.
+  # The sync activators run earlier because those routes are themselves
+  # required by the worker/reconciler readiness fences.
+  # CHAOS-3903: the narrow readiness gate for provider-unit ROUTE ACTIVATION.
+  #
+  # go-worker-route-activate used to depend on go-worker-ready, which waits on
+  # all eight long-running Go services -- including go-scheduler, whose
+  # readiness includes the fixed MAINTENANCE loop. That loop is documented as
+  # deliberately optional (cmd/dev-health-scheduler/dependencies.go: its
+  # construction failure is explicitly tolerated so product scheduling
+  # survives a maintenance outage), yet routing its degradation through a
+  # required readiness name made a maintenance fault block route activation
+  # entirely. A single organization row the job contract rejected therefore
+  # left sync.provider_unit unactivated on every local stack.
+  #
+  # This gate waits only on the services that actually CONSUME the route. It is
+  # deliberately NOT a replacement for go-worker-ready, which still waits on
+  # everything (including go-scheduler) so `docker compose up` does not return
+  # before the periodic-work owner is ready -- that entry was added on purpose
+  # and must stay.
+  go-worker-consumers-ready:
+    image: postgres:18-alpine
+
+    restart: "no"
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        for url in \
+          http://go-worker:8080/readyz \
+          http://go-worker-heavy:8080/readyz \
+          http://go-worker-ops:8080/readyz; do
+          attempt=0
+          until wget -qO- "$$url" >/dev/null; do
+            attempt=$$((attempt + 1))
+            if [ "$$attempt" -ge 90 ]; then
+              echo "timed out waiting for $$url" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+        done
+    depends_on:
+      go-worker:
+        condition: service_started
+      go-worker-heavy:
+        condition: service_started
+      go-worker-ops:
+        condition: service_started
+    networks:
+      - dev-health
+
+  go-worker-ready:
+    image: postgres:18-alpine
+
+    restart: "no"
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        for url in \
+          http://go-worker:8080/readyz \
+          http://go-worker-heavy:8080/readyz \
+          http://go-worker-ops:8080/readyz \
+          http://go-stream-ingest:8080/readyz \
+          http://go-stream-external:8080/readyz \
+          http://go-stream-pagerduty:8080/readyz \
+          http://go-reconciler:8080/readyz \
+          http://go-scheduler:8080/readyz; do
+          attempt=0
+          until wget -qO- "$$url" >/dev/null; do
+            attempt=$$((attempt + 1))
+            if [ "$$attempt" -ge 90 ]; then
+              echo "timed out waiting for $$url" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+        done
+    depends_on:
+      go-worker:
+        condition: service_started
+      go-worker-heavy:
+        condition: service_started
+      go-worker-ops:
+        condition: service_started
+      go-stream-ingest:
+        condition: service_started
+      go-stream-external:
+        condition: service_started
+      go-stream-pagerduty:
+        condition: service_started
+      go-reconciler:
+        condition: service_started
+      go-scheduler:
+        condition: service_started
+      go-sync-dispatch-route-activate:
+        condition: service_completed_successfully
+      go-sync-finalize-route-activate:
+        condition: service_completed_successfully
+      go-sync-post-route-activate:
+        condition: service_completed_successfully
+      go-sync-reference-route-activate:
+        condition: service_completed_successfully
+    networks:
+      - dev-health

@@ -278,6 +278,7 @@ func TestMeasureFromInput_AllValues(t *testing.T) {
 		model.MeasureInputPrReworkRatio:        MeasurePRReworkRatio,
 		model.MeasureInputCycleTimeHours:       MeasureCycleTimeHours,
 		model.MeasureInputThroughput:           MeasureThroughput,
+		model.MeasureInputIssueSize:            MeasureIssueSize,
 		model.MeasureInputPipelineSuccessRate:  MeasurePipelineSuccessRate,
 		model.MeasureInputPipelineFailureRate:  MeasurePipelineFailureRate,
 		model.MeasureInputPipelineDurationP95:  MeasurePipelineDurationP95,

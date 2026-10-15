@@ -127,6 +127,8 @@ func measureFromInput(m model.MeasureInput) (Measure, error) {
 	switch m {
 	case model.MeasureInputCount:
 		return MeasureCount, nil
+	case model.MeasureInputIssueSize:
+		return MeasureIssueSize, nil
 	case model.MeasureInputChurnLoc:
 		return MeasureChurnLOC, nil
 	case model.MeasureInputPrReworkRatio:
@@ -373,6 +375,10 @@ func compileFlowMatrixInvestmentDimension(req FlowMatrixRequest, orgID string, t
 	var contextBindings []clickhouse.Binding
 	if useInvestment {
 		ictx := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
+		ictx, err = ictx.sizedFor(req.Measure)
+		if err != nil {
+			return compiledQuery{}, compiledQuery{}, err
+		}
 		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
 		contextBindings = ictx.Bindings
 		measureExpr, err = ictx.measure(req.Measure)
@@ -381,6 +387,9 @@ func compileFlowMatrixInvestmentDimension(req FlowMatrixRequest, orgID string, t
 		measureExpr, err = dbExpression(req.Measure, false, false)
 	}
 	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
+	if measureExpr, err = exactSums(measureExpr); err != nil {
 		return compiledQuery{}, compiledQuery{}, err
 	}
 	// Force a uniform Float64 result type -- see CompileTimeseries's doc
@@ -504,9 +513,15 @@ func compileFlowMatrixInvestmentTeamRepoDimension(req FlowMatrixRequest, orgID s
 		return compiledQuery{}, compiledQuery{}, err
 	}
 
-	nodeCtx := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
+	nodeCtx, err := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters)).sizedFor(req.Measure)
+	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
 	measureExpr, err := nodeCtx.measure(req.Measure)
 	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
+	if measureExpr, err = exactSums(measureExpr); err != nil {
 		return compiledQuery{}, compiledQuery{}, err
 	}
 	// Force a uniform Float64 result type -- see CompileTimeseries's doc
@@ -540,7 +555,10 @@ LIMIT {limit_per_dim:UInt32}
 	nodesBindings = append(nodesBindings, nodeCtx.Bindings...)
 
 	edgeForceTeamJoin := req.Dimension == DimensionRepo
-	edgeCtx := investmentContextFor(orgID, []Dimension{req.Dimension}, edgeForceTeamJoin, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
+	edgeCtx, err := investmentContextFor(orgID, []Dimension{req.Dimension}, edgeForceTeamJoin, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters)).sizedFor(req.Measure)
+	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
 
 	var bridgeCol, bridgeNotEmpty string
 	switch req.Dimension {
@@ -581,7 +599,7 @@ SELECT
     '%s' AS target_dimension,
     toString(a.entity) AS source,
     toString(b.entity) AS target,
-    toFloat64(SUM(a.value)) AS value
+    %s AS value
 FROM (%s) AS a
 INNER JOIN (%s) AS b ON a.bridge = b.bridge
 WHERE a.entity != b.entity
@@ -589,7 +607,7 @@ GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC
 LIMIT {max_edges:UInt32}
 %s
-`, dimUpper, dimUpper, activitySelect, activitySelect, settingsMaxExecutionTime(timeoutSeconds))
+`, dimUpper, dimUpper, exactSum("a.value"), activitySelect, activitySelect, settingsMaxExecutionTime(timeoutSeconds))
 	edgesBindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},

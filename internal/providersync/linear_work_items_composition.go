@@ -145,7 +145,7 @@ func NewLinearWorkItemFamilyClickHouseEffects(
 				Delegate: GitHubWorkItemInteractionsClickHouseAdapter{Conn: conn},
 			},
 			Sprints: LinearSprintsClickHouseAdapter{
-				Delegate: GitHubSprintsClickHouseAdapter{Conn: conn},
+				Delegate: GitHubSprintsClickHouseAdapter{Conn: conn, SharedAcrossUnits: true},
 			},
 			ProjectMemberships: LinearProjectMembershipClickHouseAdapter{
 				Delegate: GitHubProjectMembershipClickHouseAdapter{Conn: conn},

@@ -77,6 +77,7 @@ func TestDeploymentsPullRequestTierMigrationUpgradesAndDowngrades(t *testing.T) 
 
 	const up = "sql/126_deployments_pull_request_tier.sql"
 	const down = "rollback/126_deployments_pull_request_tier.down.sql"
+	versionRows := useSchemaMigrations(t, ctx, conn, "126_deployments_pull_request_tier.sql")
 	run(up)
 	if got := columnType("pull_request_tier"); got != "LowCardinality(String)" {
 		t.Fatalf("after the upgrade pull_request_tier is %q, want LowCardinality(String)", got)
@@ -91,6 +92,9 @@ func TestDeploymentsPullRequestTierMigrationUpgradesAndDowngrades(t *testing.T) 
 	run(up)
 
 	run(down)
+	if n := versionRows(); n != 0 {
+		t.Errorf("after the rollback the version row is still recorded (%d rows)", n)
+	}
 	if got := columnType("pull_request_tier"); got != "" {
 		t.Errorf("after the downgrade pull_request_tier is still %q", got)
 	}
@@ -98,6 +102,9 @@ func TestDeploymentsPullRequestTierMigrationUpgradesAndDowngrades(t *testing.T) 
 		t.Errorf("a number after the downgrade = %q, want 8 unchanged", got)
 	}
 	run(down)
+	if n := versionRows(); n != 0 {
+		t.Errorf("after the rollback the version row is still recorded (%d rows)", n)
+	}
 
 	run(up)
 	if got := columnType("pull_request_tier"); got != "LowCardinality(String)" {

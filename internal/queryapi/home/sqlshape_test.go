@@ -269,16 +269,16 @@ func TestFetchMetricDriverDeltaScopesATableWithNoNaturalKey(t *testing.T) {
 		t.Fatalf("expected one statement, got %d", len(captured))
 	}
 	query := captured[0]
-	for _, window := range []string{"{start_day:Date}", "{compare_start:Date}"} {
-		marker := "FROM " + table
-		at := strings.Index(query, window)
-		if at < 0 {
-			t.Fatalf("the statement has no %s window:\n%s", window, query)
+	marker := "FROM " + table
+	if got := strings.Count(query, marker); got != 2 {
+		t.Fatalf("expected the current and the comparison window to read %s, got %d reads:\n%s", table, got, query)
+	}
+	for at := strings.Index(query, marker); at >= 0; {
+		assertOrgIDSameDepthAsMarker(t, query[at:], marker)
+		next := strings.Index(query[at+len(marker):], marker)
+		if next < 0 {
+			break
 		}
-		from := strings.LastIndex(query[:at], marker)
-		if from < 0 {
-			t.Fatalf("the %s window is not on a %s read:\n%s", window, table, query)
-		}
-		assertOrgIDSameDepthAsMarker(t, query[from:], marker)
+		at += len(marker) + next
 	}
 }

@@ -418,7 +418,11 @@ Two rules hold for every read of the tree:
    work-graph build first retracts the lower-tier rows a native link outranks
    (pre-step `issue_pr_fallback_retraction`, from `work_graph_issue_pr` and
    from `work_graph_edges`), so a row written before the rule, or before its
-   native link arrived, is gone after the next build. The `explicit_text` tier is provider-agnostic: a pull request's
+   native link arrived, is gone after the next build. A pull or merge request
+   work item (`ghpr:<owner>/<repo>#<n>`, `gitlab:<path>!<n>`) is never the
+   issue side of a row: the text matcher and the heuristic skip it, and the
+   same pre-step retracts a stored lower-tier row whose issue side is one.
+   The `explicit_text` tier is provider-agnostic: a pull request's
    title, body or head branch that names an issue resolves to a link only
    against an actual issue row of the org, through one shared matcher with a
    key grammar per provider family (Jira and Linear `KEY-n`; GitHub `#n` and

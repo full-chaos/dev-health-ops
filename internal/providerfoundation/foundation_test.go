@@ -191,10 +191,13 @@ func TestHTTPClientSurfacesStatusPathAndBodyOnFailure(t *testing.T) {
 		t.Fatalf("Path = %q, want the request path without its query string", providerErr.Path)
 	}
 	message := providerErr.Error()
-	for _, want := range []string{"status=400", "path=/rest/api/3/search/jql"} {
+	for _, want := range []string{"status=400"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("Error() = %q, want it to contain %q", message, want)
 		}
+	}
+	if strings.Contains(message, "/rest/api/3/search/jql") {
+		t.Fatalf("Error() = %q carries the raw request path", message)
 	}
 	// The provider's own reason is reachable through the explicit accessor,
 	// never through Error(): error text flows into every log line and

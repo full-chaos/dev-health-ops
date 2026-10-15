@@ -67,6 +67,9 @@ func WriteError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, ste
 		ctx, path = r.Context(), r.URL.Path
 	}
 	requestID := w.Header().Get(RequestIDHeader)
+	if requestID == "" && r != nil {
+		requestID = r.Header.Get(RequestIDHeader)
+	}
 	logger.ErrorContext(ctx, "api route failed",
 		slog.String("path", path), slog.String("step", step),
 		slog.Int("status", status), slog.Bool("client_error", client),

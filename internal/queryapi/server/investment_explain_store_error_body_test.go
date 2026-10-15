@@ -78,3 +78,32 @@ func TestInvestmentExplainStoreFailureLogsAtErrorLevelAndEchoesTheRequestID(t *t
 		t.Fatalf("a request id with reserved characters was echoed: %q", got)
 	}
 }
+
+func TestInvestmentExplainStreamingFailureLogsTheRequestID(t *testing.T) {
+	logs := &bytes.Buffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	reader, err := investmentexplain.NewReader(failingStoreClient{})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=mock", strings.NewReader(`{}`))
+	req.Header.Set("X-Request-Id", "stream-review-1")
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if got := rec.Header().Get("X-Request-Id"); got != "stream-review-1" {
+		t.Fatalf("X-Request-Id = %q, want the caller's id", got)
+	}
+	if !strings.Contains(logs.String(), "streaming error") || !strings.Contains(logs.String(), "request_id=stream-review-1") || !strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("streaming failure log lacks level, message or request id: %s", logs.String())
+	}
+	if strings.Contains(rec.Body.String(), "store-host") {
+		t.Fatalf("body carries driver text: %s", rec.Body.String())
+	}
+}

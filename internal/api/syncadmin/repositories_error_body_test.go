@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -63,5 +64,22 @@ func TestGitLabGroupListingFailureKeepsProviderTextOutOfTheRefusal(t *testing.T)
 	}
 	if !strings.Contains(logs.String(), "gitlab-body-marker") {
 		t.Fatalf("log lacks the provider cause: %s", logs.String())
+	}
+}
+
+func TestFailLogsTheRequestIDAtErrorLevelAndKeepsTheCauseOutOfTheBody(t *testing.T) {
+	logs := &bytes.Buffer{}
+	h := &handlers{logger: slog.New(slog.NewTextHandler(logs, nil))}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/x", nil)
+	request.Header.Set("X-Request-Id", "sync-review-1")
+	h.fail(recorder, request, "replace repositories", context.Canceled)
+	if recorder.Code != http.StatusInternalServerError || strings.Contains(recorder.Body.String(), "canceled") {
+		t.Fatalf("status %d body %s", recorder.Code, recorder.Body.String())
+	}
+	for _, want := range []string{"level=ERROR", "request_id=sync-review-1", "context canceled"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("log lacks %q: %s", want, logs.String())
+		}
 	}
 }

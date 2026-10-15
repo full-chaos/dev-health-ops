@@ -136,6 +136,42 @@ func buildInvestmentBreakdownDistributions(rows []BreakdownRow) (themes, subcate
 // rows, same scope and category filters) and aggregates it to the theme and
 // subcategory distributions every share of the explanation is measured against.
 func (reader *Reader) fetchMixDistributions(ctx context.Context, opts ExplainInvestmentMixOptions) (themes, subcategories *orderedFloatMap, err error) {
+	breakdownRows, err := reader.FetchInvestmentBreakdown(ctx, mixBreakdownFilters(opts))
+	if err != nil {
+		return nil, nil, err
+	}
+	themes, subcategories = buildInvestmentBreakdownDistributions(breakdownRows)
+	return themes, subcategories, nil
+}
+
+// fetchMixSizing is the sizing coverage of the mix read in ISSUE_SIZE (CHAOS-9619, D6027), nil for COUNT.
+func (reader *Reader) fetchMixSizing(ctx context.Context, opts ExplainInvestmentMixOptions) (*SizingCoverage, error) {
+	measure := opts.effectiveMeasure()
+	slog.DebugContext(ctx, "investmentexplain: mix measure", "org_id", opts.OrgID, "measure", measure)
+	if measure != MeasureIssueSize {
+		return nil, nil
+	}
+	coverage, err := reader.FetchSizingCoverage(ctx, mixBreakdownFilters(opts))
+	if err != nil {
+		return nil, err
+	}
+	return &coverage, nil
+}
+
+// applySizing puts the sizing coverage of the mix on every finding; nil (COUNT) leaves them without it.
+func applySizing(explanation *InvestmentMixExplanation, sizing *SizingCoverage) {
+	for i := range explanation.TopFindings {
+		evidence := &explanation.TopFindings[i].Evidence
+		evidence.SizingCoverage, evidence.UnsizedUnitCount = nil, nil
+		if sizing != nil {
+			evidence.SizingCoverage = sizing.Share()
+			evidence.UnsizedUnitCount = sizing.Unsized()
+		}
+	}
+}
+
+// mixBreakdownFilters are the filters of the breakdown the Investment mix itself reads.
+func mixBreakdownFilters(opts ExplainInvestmentMixOptions) BreakdownFilters {
 	themeFilters, subcategoryFilters := SplitCategoryFilters(opts.WorkCategory)
 
 	breakdownFilter := BreakdownFilters{
@@ -161,12 +197,7 @@ func (reader *Reader) fetchMixDistributions(ctx context.Context, opts ExplainInv
 		breakdownFilter.TeamIDs = opts.TeamIDs
 		breakdownFilter.TeamAsOf = opts.TeamAsOf
 	}
-	breakdownRows, err := reader.FetchInvestmentBreakdown(ctx, breakdownFilter)
-	if err != nil {
-		return nil, nil, err
-	}
-	themes, subcategories = buildInvestmentBreakdownDistributions(breakdownRows)
-	return themes, subcategories, nil
+	return breakdownFilter
 }
 
 // effectiveMeasure is the measure of the mix read: the Investment page's COUNT when the option is
@@ -477,11 +508,15 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 	// carry the resolved window and the shares of the data behind it, else an answer
 	// computed on an older day or older work units replays for the same filters.
 	var themeDistribution, subcategoryDistribution *orderedFloatMap
+	var sizing *SizingCoverage
 	cacheFilters := opts.FiltersForCacheKey
 	if opts.WindowErr == nil {
 		var fetchErr error
 		themeDistribution, subcategoryDistribution, fetchErr = reader.fetchMixDistributions(ctx, opts)
 		if fetchErr != nil {
+			return InvestmentMixExplanation{}, fetchErr
+		}
+		if sizing, fetchErr = reader.fetchMixSizing(ctx, opts); fetchErr != nil {
 			return InvestmentMixExplanation{}, fetchErr
 		}
 		dataVersion, versionErr := reader.FetchInvestmentDataVersion(ctx, opts.OrgID)
@@ -505,6 +540,8 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 		if err == nil && cached != nil {
 			if explanation, decodeErr := DecodeInvestmentMixExplanation(cached.ExplanationJSON); decodeErr == nil {
 				if opts.WindowErr != nil || cachedSharesMatchMix(explanation, themeDistribution, subcategoryDistribution) {
+					// The sizing coverage is the live read's, never the cached one's.
+					applySizing(&explanation, sizing)
 					return explanation, nil
 				}
 				slog.WarnContext(ctx, "query_api.investment_mix_explain.cache_stale", "org_id", opts.OrgID)
@@ -751,11 +788,13 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 		logRejectedExplainOutput(ctx, parseResult, resolvedProvider, resolvedModel, completion)
 		fallback := invalidLLMOutputExplanation(topThemes, totalEffort, confidenceLevel, qualityMean, qualityStddev, bandCounts, qualityDrivers, "work")
 		annotateFindings(&fallback, opts.effectiveMeasure(), themeDistribution, subcategoryDistribution)
+		applySizing(&fallback, sizing)
 		return fallback, nil
 	}
 
 	result := explainOutputToExplanation(*parseResult.Output)
 	annotateFindings(&result, opts.effectiveMeasure(), themeDistribution, subcategoryDistribution)
+	applySizing(&result, sizing)
 
 	if opts.LLMProvider != "mock" && writer != nil {
 		if explanationJSON, encodeErr := EncodeInvestmentMixExplanation(result); encodeErr == nil {

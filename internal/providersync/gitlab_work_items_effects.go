@@ -177,7 +177,7 @@ func NewGitLabWorkItemClickHouseEffects(
 		Dependencies:      GitLabWorkItemDependenciesClickHouseAdapter{Delegate: GitHubWorkItemDependenciesClickHouseAdapter{Conn: conn}},
 		ReopenEvents:      GitLabWorkItemReopenEventsClickHouseAdapter{Delegate: GitHubWorkItemReopenEventsClickHouseAdapter{Conn: conn}},
 		Interactions:      GitLabWorkItemInteractionsClickHouseAdapter{Delegate: GitHubWorkItemInteractionsClickHouseAdapter{Conn: conn}},
-		Sprints:           GitLabSprintsClickHouseAdapter{Delegate: GitHubSprintsClickHouseAdapter{Conn: conn}},
+		Sprints:           GitLabSprintsClickHouseAdapter{Delegate: GitHubSprintsClickHouseAdapter{Conn: conn, SharedAcrossUnits: true}},
 	}
 }
 

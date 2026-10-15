@@ -5,6 +5,8 @@ package analytics
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/big"
 	"reflect"
 	"testing"
 	"time"
@@ -22,8 +24,10 @@ const (
 )
 
 // seedExactSumPart writes one part of exactSumRowsPerPart work units, each
-// carrying one subcategory. Its weights span eight orders of magnitude, so a
-// Float64 sum of them depends on the order it is taken in. The weights are a
+// carrying one subcategory. Its weights k * 2^e (k 1..1000, e -12..12) span
+// seven orders of magnitude, so a Float64 sum of them depends on the order it is
+// taken in; each one is exact in Float32 (the query reads weights as Float32),
+// so exactSumWeight gives the exact total to check against. The weights are a
 // function of logicalPart only: two subcategories seeded over the same set of
 // logical parts carry the same multiset of weights, so their exact sums tie.
 func seedExactSumPart(ctx context.Context, t *testing.T, conn stdclickhouse.Conn, orgID, subcategory string, physicalPart, logicalPart int) {
@@ -36,7 +40,7 @@ INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, provid
 SELECT
     concat('%[1]s-', toString(%[2]d), '-', toString(number)),
     toDateTime64('2026-01-01 00:00:00', 3), toDateTime64('2026-01-05 00:00:00', 3), NULL, NULL, 'fte_days', 1.0,
-    map(), map('%[1]s', ((number * 7919 + %[3]d * 104729) %% 1000 + 1) / 3.0 * pow(10, toInt64((number + %[3]d) %% 9) - 4)),
+    map(), map('%[1]s', ((number * 7919 + %[3]d * 104729) %% 1000 + 1) * pow(2, toInt64((number + %[3]d) %% 25) - 12)),
     '', 1.0, 'high', 'ok', '', 'v1', 'hash', 'run', toDateTime64('2026-01-06 00:00:00', 3), 'story', 'unit', '%[4]s'
 FROM numbers(%[5]d)`, subcategory, physicalPart, logicalPart, orgID, exactSumRowsPerPart)
 	if err := conn.Exec(ctx, insert); err != nil {
@@ -116,13 +120,36 @@ func TestFlowMatrixInvestmentAnswerIsTheSameOnEveryRun(t *testing.T) {
 	}
 
 	if len(firstNodes) != 2 || firstNodes[0].ID != "THEME:feature_delivery" || firstNodes[1].ID != "THEME:quality" ||
-		firstNodes[0].Value == nil || firstNodes[1].Value == nil || *firstNodes[0].Value != *firstNodes[1].Value {
-		t.Fatalf("nodes = %s, want THEME:feature_delivery then THEME:quality with one equal value", flowNodesText(firstNodes))
+		firstNodes[0].Value == nil || firstNodes[1].Value == nil || *firstNodes[0].Value != *firstNodes[1].Value ||
+		!closeToExact(*firstNodes[0].Value, exactSumTotal()) {
+		t.Fatalf("nodes = %s, want THEME:feature_delivery then THEME:quality, both %.17g", flowNodesText(firstNodes), exactSumTotal())
 	}
 	if len(firstEdges) != 2 || firstEdges[0].Source != "THEME:feature_delivery" || firstEdges[1].Source != "THEME:quality" ||
-		firstEdges[0].Value == nil || firstEdges[1].Value == nil || *firstEdges[0].Value != *firstEdges[1].Value {
-		t.Fatalf("edges = %s, want the feature_delivery then the quality self-pair with one equal value", flowEdgesText(firstEdges))
+		firstEdges[0].Value == nil || firstEdges[1].Value == nil || *firstEdges[0].Value != *firstEdges[1].Value ||
+		!closeToExact(*firstEdges[0].Value, exactSumTotal()) {
+		t.Fatalf("edges = %s, want the feature_delivery then the quality self-pair, both %.17g", flowEdgesText(firstEdges), exactSumTotal())
 	}
+}
+
+// exactSumTotal is one theme's exact total: the weights of logical parts
+// 0..exactSumParts-1, summed as integers in units of 2^-12, then rounded once.
+func exactSumTotal() float64 {
+	total := new(big.Int)
+	for part := 0; part < exactSumParts; part++ {
+		for number := 0; number < exactSumRowsPerPart; number++ {
+			k := int64((number*7919+part*104729)%1000 + 1)
+			shift := uint((number + part) % 25)
+			total.Add(total, new(big.Int).Lsh(big.NewInt(k), shift))
+		}
+	}
+	exact, _ := new(big.Rat).SetFrac(total, new(big.Int).Lsh(big.NewInt(1), 12)).Float64()
+	return exact
+}
+
+// closeToExact allows the one rounding of the Decimal128 total to Float64 and
+// nothing more: a lossy term conversion is off by about 1e-8.
+func closeToExact(got, exact float64) bool {
+	return math.Abs(got-exact) <= 1e-15*math.Abs(exact)
 }
 
 func flowNodesText(nodes []model.SankeyNode) string {

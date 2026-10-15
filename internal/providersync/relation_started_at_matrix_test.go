@@ -132,6 +132,29 @@ func TestRelationStartedAtJiraLinksOfTwoTypesToOneIssue(t *testing.T) {
 	}
 }
 
+// The inward side of a link (the issue under sync is the one blocked) reads the same changelog.
+func TestRelationStartedAtJiraInwardLink(t *testing.T) {
+	claim := Claim{Unit: Unit{OrgID: "org-1"}}
+	synced := matrixTime(t, "2026-10-12T12:00:00Z")
+	issue := map[string]any{
+		"fields": map[string]any{"issuelinks": []any{map[string]any{
+			"type":        map[string]any{"name": "Blocks", "outward": "blocks", "inward": "is blocked by"},
+			"inwardIssue": map[string]any{"key": "OPS-9"},
+		}}},
+		"changelog": map[string]any{"histories": []any{map[string]any{
+			"id": "1", "created": "2026-09-10T08:00:00.000+0000",
+			"items": []any{map[string]any{"field": "Link", "to": "OPS-9", "toString": "This issue is blocked by OPS-9"}},
+		}}},
+	}
+	rows := normalizeJiraDependencies(claim, "jira:OPS-1", issue, synced)
+	if len(rows) != 1 || rows[0].SourceWorkItemID != "jira:OPS-9" || rows[0].TargetWorkItemID != "jira:OPS-1" {
+		t.Fatalf("rows %+v", rows)
+	}
+	if got := rows[0].RelationStartedAt; got == nil || !got.Equal(matrixTime(t, "2026-09-10T08:00:00Z")) {
+		t.Errorf("inward link start %v, want 2026-09-10T08:00:00Z", got)
+	}
+}
+
 func TestRelationStartedAtGitLab(t *testing.T) {
 	claim := Claim{Unit: Unit{OrgID: "org-1"}}
 	synced := matrixTime(t, "2026-10-12T12:00:00Z")

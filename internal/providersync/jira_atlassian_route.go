@@ -602,9 +602,20 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		RawDestinations:            append([]string(nil), jiraAtlassianRawDestinations...),
 		WatermarkHeldForIncomplete: len(optionalIncomplete) > 0,
 	}
+	blockerLinks, blockerLinksWithoutStart := 0, 0
+	for _, dependency := range rows.Dependencies {
+		if dependency.RelationshipType == "blocks" {
+			blockerLinks++
+			if dependency.RelationStartedAt == nil {
+				blockerLinksWithoutStart++
+			}
+		}
+	}
 	result := map[string]any{
 		"work_items_synced": len(rows.WorkItems), "transitions_synced": len(rows.Transitions),
 		"dependencies_synced": len(rows.Dependencies), "reopen_events_synced": len(rows.ReopenEvents),
+		// The blocked-age readers use the link's start; a blocker without one falls back to the first sync.
+		"blocker_links_synced": blockerLinks, "blocker_links_without_start": blockerLinksWithoutStart,
 		"interactions_synced": len(rows.Interactions), "sprints_synced": len(rows.Sprints),
 		"worklogs_synced": len(rows.Worklogs), "project_key": projectKey,
 		"project_memberships_synced":     len(rows.ProjectMemberships),

@@ -140,6 +140,9 @@ func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T)
 		t.Fatalf("watermark=%v want=%v", batch.Watermark, claim.BeforeAt)
 	}
 	assertJiraAtlassianRawOnlyEffects(t, batch)
+	if batch.Result["blocker_links_synced"] != 1 || batch.Result["blocker_links_without_start"] != 1 {
+		t.Fatalf("blocker link counts %v / %v, want 1 link without a start (the changelog names none)", batch.Result["blocker_links_synced"], batch.Result["blocker_links_without_start"])
+	}
 	if batch.Result["worklogs_synced"] != 1 || batch.Result["sprints_synced"] != 1 || batch.Result["dependencies_synced"] != 1 || batch.Result["interactions_synced"] != 1 {
 		t.Fatalf("result=%#v", batch.Result)
 	}

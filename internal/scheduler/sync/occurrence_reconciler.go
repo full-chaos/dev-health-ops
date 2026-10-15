@@ -181,6 +181,20 @@ type OccurrenceReconciler struct {
 	// webhookRequests mints webhook scoped-sync requests at the start of each
 	// window (CHAOS-6695); nil until WithWebhookRequests.
 	webhookRequests *webhookRequestMinter
+	// initialBackfill mints the one backfill of a configuration's first
+	// successful sync (CHAOS-2275); nil until WithInitialBackfill.
+	initialBackfill *initialBackfillEnqueuer
+}
+
+// WithInitialBackfill makes each Reconcile window also enqueue the initial
+// backfill of configurations whose first sync just succeeded, so the
+// occurrence is consumed in the same window. It needs INSERT on
+// backfill_jobs for the coordinator role.
+func (reconciler *OccurrenceReconciler) WithInitialBackfill() *OccurrenceReconciler {
+	if reconciler != nil {
+		reconciler.initialBackfill = newInitialBackfillEnqueuer(reconciler.pool)
+	}
+	return reconciler
 }
 
 // WithWebhookRequests makes each Reconcile window first mint the pending
@@ -233,6 +247,11 @@ func (reconciler *OccurrenceReconciler) WritePrometheus(output io.Writer) error 
 	}
 	if reconciler.webhookRequests != nil {
 		if err := reconciler.webhookRequests.writePrometheus(output); err != nil {
+			return err
+		}
+	}
+	if reconciler.initialBackfill != nil {
+		if err := reconciler.initialBackfill.writePrometheus(output); err != nil {
 			return err
 		}
 	}
@@ -304,6 +323,14 @@ func (reconciler *OccurrenceReconciler) Reconcile(
 	if reconciler.webhookRequests != nil {
 		if err := reconciler.webhookRequests.mintPending(ctx, now, limit); err != nil {
 			slog.ErrorContext(ctx, "sync.webhook_request.claim_failed", slog.String("error", err.Error()))
+		}
+	}
+
+	// The same rule: a failed enqueue is logged and retried next window while
+	// the first success is inside the age bound; it never stops consumption.
+	if reconciler.initialBackfill != nil {
+		if err := reconciler.initialBackfill.enqueuePending(ctx, now, limit); err != nil {
+			slog.ErrorContext(ctx, "sync.initial_backfill.scan_failed", slog.String("error", safeErrorSummary(err)))
 		}
 	}
 

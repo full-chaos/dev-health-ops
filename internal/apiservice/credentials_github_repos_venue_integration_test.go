@@ -403,7 +403,13 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	pythonProvider := strings.Split(golden.InspectRows(t, "python provider requests", func() string {
 		return strings.Join(stub.take(), "\n")
 	}), "\n")
-	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{Golden: golden})
+	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
+		Golden:    golden,
+		Normalize: dropGoOnlyBrowseScope,
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			assertBrowseScopeFields(t, request, goResponse)
+		},
+	})
 	goProvider := stub.take()
 
 	providerSame := len(goProvider) > 0 && strings.Join(pythonProvider, "\n") == strings.Join(goProvider, "\n")
@@ -412,4 +418,77 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	}
 	t.Logf("\n%sprovider requests (%d): %s\n", receipt, len(goProvider), venueoracle.Mark(providerSame))
 	golden.Finish(t)
+}
+
+// browseScopeFields are the three fields the Go browse adds to every GitHub repo listing (CHAOS-9787). The Python
+// reference of this pair is a frozen golden (its route no longer exists in src/), so it cannot emit them: they are a
+// ruled Go-only extension, as the legacy ingest, webhook intake, customer push and GraphQL edge oracles rule their own
+// differences through Normalize. assertBrowseScopeFields checks them on every raw Go response instead.
+var browseScopeFields = []string{"owner_type", "installation_scoped", "diagnostic"}
+
+// dropGoOnlyBrowseScope removes the Go-only scope fields from a 200 listing body; every other byte still has to agree.
+func dropGoOnlyBrowseScope(request venueoracle.Request, body string) string {
+	if !strings.HasPrefix(request.Name, "github repos: ") {
+		return body
+	}
+	var decoded map[string]json.RawMessage
+	if json.Unmarshal([]byte(body), &decoded) != nil {
+		return body
+	}
+	removed := false
+	for _, field := range browseScopeFields {
+		if _, present := decoded[field]; present {
+			delete(decoded, field)
+			removed = true
+		}
+	}
+	if !removed {
+		return body
+	}
+	out, err := json.Marshal(decoded)
+	if err != nil {
+		return body
+	}
+	return string(out)
+}
+
+// assertBrowseScopeFields checks, on every raw Go 200 listing, that all three scope fields are present with a valid
+// value, and that installation_scoped is true exactly for the GitHub App credentials.
+func assertBrowseScopeFields(t *testing.T, request venueoracle.Request, goResponse venueoracle.Response) {
+	t.Helper()
+	if !strings.HasPrefix(request.Name, "github repos: ") || goResponse.Status != http.StatusOK {
+		return
+	}
+	var body map[string]any
+	if json.Unmarshal([]byte(goResponse.Body), &body) != nil {
+		return
+	}
+	if _, listing := body["repos"]; !listing {
+		return
+	}
+	switch value := body["owner_type"].(type) {
+	case nil:
+	case string:
+		if value != "org" && value != "user" {
+			t.Errorf("%s: owner_type %q is not org, user or null", request.Name, value)
+		}
+	default:
+		t.Errorf("%s: owner_type %v is not a string or null", request.Name, value)
+	}
+	scoped, isBool := body["installation_scoped"].(bool)
+	if !isBool {
+		t.Errorf("%s: installation_scoped %v is not a bool", request.Name, body["installation_scoped"])
+	}
+	if wantScoped := strings.HasPrefix(request.Name, "github repos: app "); scoped != wantScoped {
+		t.Errorf("%s: installation_scoped=%v, want %v (true exactly for the App credentials)", request.Name, scoped, wantScoped)
+	}
+	switch value := body["diagnostic"].(type) {
+	case nil:
+	case string:
+		if value != "owner_not_found" {
+			t.Errorf("%s: diagnostic %q is not owner_not_found or null", request.Name, value)
+		}
+	default:
+		t.Errorf("%s: diagnostic %v is not a string or null", request.Name, value)
+	}
 }

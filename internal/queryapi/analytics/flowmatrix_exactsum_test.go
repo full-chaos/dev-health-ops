@@ -7,7 +7,7 @@ import (
 )
 
 func TestExactSumsRewritesEverySumAndNothingElse(t *testing.T) {
-	exact := func(inner string) string { return "toFloat64(sum(toDecimal128(" + inner + ", 18)))" }
+	exact := func(inner string) string { return "toFloat64(sum(toDecimal128(toFloat64(" + inner + "), 18)))" }
 	cases := []struct{ in, want string }{
 		{"SUM(subcategory_kv.2)", exact("subcategory_kv.2")},
 		{"SUM(subcategory_kv.2 * allocation_weight * if(ut.owner_matched = 1, ut.owner_share, 1.0))",
@@ -54,7 +54,7 @@ func TestFlowMatrixSumsAreExactOnEveryInvestmentPath(t *testing.T) {
 					t.Errorf("%s: a Float64 SUM( is left in the query", name)
 				}
 				if measure != MeasureCycleTimeHours || dimension == DimensionTeam || dimension == DimensionRepo {
-					if !strings.Contains(q.sql, "sum(toDecimal128(") {
+					if !strings.Contains(q.sql, "sum(toDecimal128(toFloat64(") {
 						t.Errorf("%s: no exact Decimal128 sum in the query", name)
 					}
 				}

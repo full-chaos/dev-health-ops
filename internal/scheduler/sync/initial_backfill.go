@@ -155,9 +155,10 @@ func (enqueuer *initialBackfillEnqueuer) enqueuePending(ctx context.Context, now
 		}
 		if err := enqueuer.enqueueOne(ctx, now, candidate); err != nil {
 			enqueuer.count(initialBackfillOutcomeFailed)
+			summary := safeErrorSummary(err)
 			slog.ErrorContext(ctx, "sync.initial_backfill.failed",
 				slog.String("org_id", candidate.orgID), slog.String("sync_config_id", candidate.configID),
-				slog.String("error", safeErrorSummary(err)))
+				slog.String("error", summary))
 		}
 	}
 	return nil

@@ -336,7 +336,8 @@ func (reconciler *OccurrenceReconciler) Reconcile(
 	// the first success is inside the age bound; it never stops consumption.
 	if reconciler.initialBackfill != nil {
 		if err := reconciler.initialBackfill.enqueuePending(ctx, now, limit); err != nil {
-			slog.ErrorContext(ctx, "sync.initial_backfill.scan_failed", slog.String("error", safeErrorSummary(err)))
+			summary := safeErrorSummary(err)
+			slog.ErrorContext(ctx, "sync.initial_backfill.scan_failed", slog.String("error", summary))
 		}
 	}
 

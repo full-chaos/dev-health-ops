@@ -153,6 +153,10 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 				{"ci", time.Date(2024, 1, 7, 9, 0, 0, 0, time.UTC)},
 			}}, nil
 
+		case strings.Contains(q, "AS sized_units"):
+			// The sizing of the tile's units (CHAOS-9624): 3 of 10 units carry an issue size.
+			return &fixtureRowScanner{rows: [][]any{{uint64(3), uint64(10)}}}, nil
+
 		case strings.Contains(q, "splitByChar('.', subcategory_kv.1)[1] AS theme"):
 			// The Home tile "Investment by theme" (CHAOS-9195): theme, effort, churn_loc, prs
 			// of the canonical categorization (allocation 100/50, prs 20/10, churn 500/300).
@@ -297,7 +301,8 @@ func assertResponseEqual(t *testing.T, got, want Response) {
 		got.Deltas[i].PriorValue = nil
 	}
 	// CHAOS-9624: the tile's measure fields are GraphQL only (json "-"): the golden cannot hold them. The
-	// tile is measured in WORK_UNITS, with the denominator its percentages divide by and no sizing.
+	// tile is measured in ISSUE_SIZE, with the denominator its percentages divide by and the sizing of the
+	// fixture (3 of 10 units sized).
 	got.ReworkThemeAllocation = append([]ReworkThemeAllocation{}, got.ReworkThemeAllocation...)
 	total := 0.0
 	for _, row := range got.ReworkThemeAllocation {
@@ -305,9 +310,11 @@ func assertResponseEqual(t *testing.T, got, want Response) {
 	}
 	for i := range got.ReworkThemeAllocation {
 		row := &got.ReworkThemeAllocation[i]
-		if row.Measure != "WORK_UNITS" || row.Denominator != total || row.SizingCoverage != nil || row.UnsizedUnitCount != nil || row.WorkUnitCount != nil {
-			t.Errorf("theme %s measure fields = %+v, want WORK_UNITS over denominator %v and no sizing", row.Theme, *row, total)
+		if row.Measure != "ISSUE_SIZE" || row.Denominator != total || row.SizingCoverage == nil || *row.SizingCoverage != 0.3 ||
+			row.UnsizedUnitCount == nil || *row.UnsizedUnitCount != 7 || row.WorkUnitCount == nil || *row.WorkUnitCount != 10 {
+			t.Errorf("theme %s measure fields = %+v, want ISSUE_SIZE over denominator %v and 3 of 10 units sized", row.Theme, *row, total)
 		}
+		row.SizingCoverage, row.UnsizedUnitCount, row.WorkUnitCount = nil, nil, nil
 		row.Measure, row.Denominator = "", 0
 	}
 	if !reflect.DeepEqual(got, want) {

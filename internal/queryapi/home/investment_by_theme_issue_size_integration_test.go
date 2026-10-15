@@ -67,16 +67,29 @@ func TestInvestmentByThemeIssueSizeCarriesDenominatorAndSizing(t *testing.T) {
 		}
 	}
 
-	// The same data in COUNT, through the production entry point: the tile is WORK_UNITS over 4 units and carries no
-	// sizing, whatever sizes are stored.
+	// Through the production entry point the tile is in ISSUE_SIZE: the same numbers and sizing as the direct read.
 	resp, err := BuildResponse(ctx, client, nil, org, f, end)
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
 	}
 	if len(resp.ReworkThemeAllocation) != 3 {
-		t.Fatalf("COUNT tile = %+v, want 3 themes", resp.ReworkThemeAllocation)
+		t.Fatalf("tile = %+v, want 3 themes", resp.ReworkThemeAllocation)
 	}
 	for _, row := range resp.ReworkThemeAllocation {
+		if row.Measure != "ISSUE_SIZE" || math.Abs(row.Denominator-10) > 1e-3 || row.SizingCoverage == nil || *row.SizingCoverage != 0.5 || row.WorkUnitCount == nil || *row.WorkUnitCount != 4 {
+			t.Errorf("row %s = %+v, want ISSUE_SIZE over 10 with 2 of 4 units sized", row.Theme, row)
+		}
+	}
+
+	// The COUNT read of the same data: WORK_UNITS over 4 units, no sizing whatever sizes are stored.
+	counted, err := fetchThemeAllocationIn(ctx, client, f, org, startDay, endDay, end, investmentexplain.MeasureCount)
+	if err != nil {
+		t.Fatalf("COUNT read: %v", err)
+	}
+	if len(counted) != 3 {
+		t.Fatalf("COUNT tile = %+v, want 3 themes", counted)
+	}
+	for _, row := range counted {
 		if row.Measure != "WORK_UNITS" || math.Abs(row.Denominator-4) > 1e-3 || row.SizingCoverage != nil || row.UnsizedUnitCount != nil || row.WorkUnitCount != nil {
 			t.Errorf("COUNT row %s = %+v, want WORK_UNITS over 4 and no sizing", row.Theme, row)
 		}

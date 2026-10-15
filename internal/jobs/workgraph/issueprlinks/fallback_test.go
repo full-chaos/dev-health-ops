@@ -8,6 +8,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
 )
 
 var (
@@ -33,12 +35,12 @@ func TestPlanOutrankedFallbacksPullRequestSide(t *testing.T) {
 			t.Run(nativeProvider+"_native/"+textProvider+"_text", func(t *testing.T) {
 				stored := []Link{
 					link(fallbackRepoA, 704, nativeIDs[0], ProvenanceNative),
-					link(fallbackRepoA, 704, textIDs[1], ProvenanceExplicitText),
-					link(fallbackRepoA, 704, textIDs[1]+"x", ProvenanceHeuristic),
+					link(fallbackRepoA, 704, textIDs[1], edges.ProvenanceExplicitText),
+					link(fallbackRepoA, 704, textIDs[1]+"x", edges.ProvenanceHeuristic),
 					// Controls: no native link on either side.
-					link(fallbackRepoA, 705, textIDs[1], ProvenanceExplicitText),
+					link(fallbackRepoA, 705, textIDs[1], edges.ProvenanceExplicitText),
 					// Same number, other repository: another pull request.
-					link(fallbackRepoB, 704, textIDs[1]+"y", ProvenanceExplicitText),
+					link(fallbackRepoB, 704, textIDs[1]+"y", edges.ProvenanceExplicitText),
 				}
 				got := PlanOutrankedFallbacks(stored)
 				want := []Link{stored[1], stored[2]}
@@ -56,10 +58,10 @@ func TestPlanOutrankedFallbacksIssueSide(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			stored := []Link{
 				link(fallbackRepoA, 704, ids[0], ProvenanceNative),
-				link(fallbackRepoA, 706, ids[0], ProvenanceExplicitText),
-				link(fallbackRepoB, 3, ids[0], ProvenanceHeuristic),
+				link(fallbackRepoA, 706, ids[0], edges.ProvenanceExplicitText),
+				link(fallbackRepoB, 3, ids[0], edges.ProvenanceHeuristic),
 				// Control: another issue on another pull request.
-				link(fallbackRepoA, 706, ids[1], ProvenanceExplicitText),
+				link(fallbackRepoA, 706, ids[1], edges.ProvenanceExplicitText),
 			}
 			got := PlanOutrankedFallbacks(stored)
 			want := []Link{stored[1], stored[2]}
@@ -106,8 +108,8 @@ func (recorder *execRecorder) Exec(_ context.Context, query string, args ...any)
 func TestRetractOutrankedTargetsExactlyThePlannedRows(t *testing.T) {
 	recorder := &execRecorder{}
 	rows := []Link{
-		link(fallbackRepoA, 704, "jira:API-1", ProvenanceExplicitText),
-		link(fallbackRepoA, 706, "jira:OPS-7", ProvenanceHeuristic),
+		link(fallbackRepoA, 704, "jira:API-1", edges.ProvenanceExplicitText),
+		link(fallbackRepoA, 706, "jira:OPS-7", edges.ProvenanceHeuristic),
 	}
 	if err := RetractOutranked(context.Background(), recorder, "org-9821", rows); err != nil {
 		t.Fatal(err)
@@ -155,7 +157,7 @@ func TestRetractOutrankedRefusesANativeRow(t *testing.T) {
 func TestRetractOutrankedRequiresAnOrganization(t *testing.T) {
 	recorder := &execRecorder{}
 	err := RetractOutranked(context.Background(), recorder, "",
-		[]Link{link(fallbackRepoA, 704, "jira:API-1", ProvenanceExplicitText)})
+		[]Link{link(fallbackRepoA, 704, "jira:API-1", edges.ProvenanceExplicitText)})
 	if err == nil || len(recorder.queries) != 0 {
 		t.Fatalf("want a refusal and no mutation, got err=%v queries=%v", err, recorder.queries)
 	}

@@ -6,6 +6,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
 )
 
 const storedLinksQuery = `
@@ -75,7 +77,7 @@ func RetractOutranked(ctx context.Context, connection ExecConn, orgID string, ou
 	}
 	keys := make([]string, 0, len(outranked))
 	for _, link := range outranked {
-		if link.Provenance != ProvenanceExplicitText && link.Provenance != ProvenanceHeuristic {
+		if link.Provenance != edges.ProvenanceExplicitText && link.Provenance != edges.ProvenanceHeuristic {
 			return fmt.Errorf("issueprlinks: refusing to retract a %q row", link.Provenance)
 		}
 		keys = append(keys, retractionKey(link))

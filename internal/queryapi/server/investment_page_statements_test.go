@@ -192,7 +192,7 @@ func TestTheInvestmentPageSendsOnlyTheStatementsItsDocumentsSelect(t *testing.T)
 	}
 
 	// Every selected field holds its value.
-	const coverage = `"coverage":{"teamCoverage":0.75,"repoCoverage":0.6,"__typename":"SankeyCoverage"}`
+	const coverage = `"coverage":{"teamCoverage":0.75,"repoCoverage":0.6,"sizingCoverage":0.75,"unsizedUnitCount":10,"__typename":"SankeyCoverage"}`
 	for _, name := range []string{"A the flow", "B the baseline flow", "C the repository and team flow"} {
 		if answer := string(answers[name]); !strings.Contains(answer, coverage) || strings.Contains(answer, "evidenceQuality") {
 			t.Errorf("%s selects sankey.coverage and no evidence quality field: %s", name, answer)

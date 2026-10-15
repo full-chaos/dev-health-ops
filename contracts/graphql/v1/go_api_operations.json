@@ -264,7 +264,12 @@
   },
   {
     "operation": "investmentFull",
-    "digest": "663e516c6152c81e28780d27809fcbe5aeae8c92b07d34b19978b7d59913cb3d"
+    "digest": "f8b95e4455abf87f4dc7a13a147cac27535367db174d8e136d672c77b9bcbaa1"
+  },
+  {
+    "operation": "investmentFull",
+    "digest": "663e516c6152c81e28780d27809fcbe5aeae8c92b07d34b19978b7d59913cb3d",
+    "legacy": true
   },
   {
     "operation": "mappingCoverageHealth",

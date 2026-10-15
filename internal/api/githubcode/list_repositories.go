@@ -24,6 +24,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/restcore"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyidna"
 )
@@ -177,6 +178,9 @@ func (c Client) listPages(ctx context.Context, path, operation, dataKey, extra, 
 		// The token goes only to the origin it was configured for: a next page on another origin is refused, not
 		// followed without the token (an unauthenticated page 2 could return a silent partial list).
 		if nextOrigin := originOf(next); nextOrigin == (origin{}) || nextOrigin != baseOrigin {
+			fromURL, _ := url.Parse(base)
+			toURL, _ := url.Parse(next)
+			httpguard.RecordLeftOrigin(ctx, httpguard.ActionRefused, "githubcode.next_link", fromURL, toURL)
 			return nil, &Error{Class: CrossOriginLinkClass, Message: "refused a next page link on another origin"}
 		}
 	}

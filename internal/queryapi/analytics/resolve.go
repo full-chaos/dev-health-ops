@@ -347,7 +347,7 @@ func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string,
 	if !hasOrg {
 		return results, nil
 	}
-	orgResult, err := ExecuteOrgTimeseries(ctx, client, orgQ, orgID, string(input.Dimension), string(input.Measure), req.Measure)
+	orgResult, err := ExecuteOrgTimeseries(ctx, client, orgQ, string(input.Dimension), string(input.Measure), req.Measure)
 	if err != nil {
 		return nil, fmt.Errorf("org series: %w", err)
 	}

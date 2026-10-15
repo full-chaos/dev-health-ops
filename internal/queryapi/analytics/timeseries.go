@@ -434,9 +434,17 @@ ORDER BY bucket ASC
 	return compiledQuery{sql: sql, bindings: bindings}, true, nil
 }
 
+// orgMeasureLabel is a fixed label for the log line, so no request text reaches the log.
+func orgMeasureLabel(measure Measure) string {
+	if measure == MeasureCoverageLinePct {
+		return "coverage_line_pct"
+	}
+	return "pipeline_success_rate"
+}
+
 // ExecuteOrgTimeseries runs the compiled org query into the one ORG result. A bucket with no denominator (no
 // stored count, or a sum of 0) has a nil value, never a 0: no measurement is not a rate of 0.
-func ExecuteOrgTimeseries(ctx context.Context, client QueryClient, q compiledQuery, orgID, dimensionName, measureName string, measure Measure) (model.TimeseriesResult, error) {
+func ExecuteOrgTimeseries(ctx context.Context, client QueryClient, q compiledQuery, dimensionName, measureName string, measure Measure) (model.TimeseriesResult, error) {
 	_, _, scale, _ := orgRateTerms(measure)
 	rows, err := client.Query(ctx, q.sql, q.bindings)
 	if err != nil {
@@ -457,7 +465,7 @@ func ExecuteOrgTimeseries(ctx context.Context, client QueryClient, q compiledQue
 			value = &v
 		}
 		slog.DebugContext(ctx, "analytics: org series point",
-			"measure", measureName, "org_id", orgID, "bucket", bucketDay.Format("2006-01-02"),
+			"measure", orgMeasureLabel(measure), "bucket", bucketDay.Format("2006-01-02"),
 			"numerator", num, "denominator", den, "has_value", value != nil)
 		buckets = append(buckets, model.TimeseriesBucket{Date: graphqldate.New(bucketDay), Value: value})
 	}

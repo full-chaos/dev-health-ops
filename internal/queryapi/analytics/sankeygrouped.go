@@ -75,6 +75,9 @@ func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, fil
 	// reviewedges.go:145 documents for UInt32. Coercing in SQL keeps ONE
 	// scan type for every measure. Python does the same coercion one
 	// layer later with `float(row["value"])`, so values are unchanged.
+	if shape.measureExpr, err = exactSums(shape.measureExpr); err != nil {
+		return sankeyShape{}, err
+	}
 	shape.measureExpr = "toFloat64(" + shape.measureExpr + ")"
 
 	// limit_per_dim = max(1, max_nodes // len(dimensions)), compiler.py:413.

@@ -29,30 +29,119 @@ import (
 // function cannot go unscoped behind the first.
 //
 // A function that takes its scope from its caller (a WHERE fragment passed in)
-// or from a helper of another package is listed below with the place that
-// scopes it. An entry that no longer matches a flagged function fails.
+// or from a clause it shares between statements is listed below with the
+// function that writes its org_id predicate and that predicate's exact text.
+// The census checks both ways: an entry that no longer matches a flagged
+// function fails, and an entry whose cited function no longer holds its
+// predicate fails, so the list cannot rot.
 //
-// What the census does not prove: that a caller-scoped fragment really holds
-// org_id at every call site, or that a predicate sits on the right table of a
-// join. The cross-tenant behaviour of each query family is held by its own
-// tests.
+// What the census does not prove: that every call site of a caller-scoped
+// function passes the cited fragment, or that a predicate sits on the right
+// table of a join. The cross-tenant behaviour of each query family is held by
+// its own tests.
 
 var orgScopeCensusRoots = []string{"internal/queryapi", "internal/api"}
 
-var orgScopeReadsScopedElsewhere = map[string]string{
-	"internal/queryapi/cognitiveload/cognitiveload.go:retractedUserDaysQuery": "innerWhere from fetchUserMetrics starts WHERE org_id = {org_id:String}",
-	"internal/queryapi/cognitiveload/cognitiveload.go:retractedTeamDaysQuery": "innerWhere from fetchTeamMetrics starts WHERE org_id = {org_id:String}",
-	"internal/queryapi/security/overview.go:readKpis":                         "filterClause from buildFilter holds r.org_id and sa.org_id (security/filter.go)",
-	"internal/queryapi/security/overview.go:readBreakdown":                    "filterClause from buildFilter holds r.org_id and sa.org_id (security/filter.go)",
-	"internal/queryapi/security/overview.go:readTopRepos":                     "filterClause from buildFilter holds r.org_id and sa.org_id (security/filter.go)",
-	"internal/queryapi/security/overview.go:readTrend":                        "filterClause from buildFilter holds r.org_id and sa.org_id (security/filter.go)",
-	"internal/queryapi/teamscope/teamscope.go:UnitScope":                      "latestEffortSource is analytics.LatestWorkUnitRepoEffortSource, which binds org_id",
-	"internal/queryapi/newestrow/newestrow.go:PerTeamPredicate":               "the caller's where holds its org_id predicate",
-	"internal/queryapi/analytics/timeseries.go:dedupFromMeasureSource":        "the dedup key holds org_id; every caller filters <alias>.org_id = {org_id:String} on the source it returns",
-	"internal/queryapi/home/queries_metrics.go:fetchRateDriverDelta":          "both FROM sources are metricFromClause of fetchMetricDriverDelta, which writes org_id = {org_id:String}",
-	"internal/queryapi/featureflags/featureflags.go:Resolve":                  "one org_id clause is the WHERE of both its statements",
-	"internal/queryapi/featureflags/events.go:ResolveEvents":                  "one org_id clause is the WHERE of both its statements",
-	"internal/queryapi/throughputforecast/clickhouse.go:loadWorkItemOverlay":  "one scopeFilter WHERE (org_id first) is spliced into both reads and the newest-row predicate",
+// orgScopeSite is the function (file and name) that writes an org_id
+// predicate, and the predicate as one line of that function's SQL text.
+type orgScopeSite struct {
+	file, function, predicate string
+}
+
+type orgScopeElsewhere struct {
+	reason string
+	sites  []orgScopeSite
+}
+
+var orgScopeReadsScopedElsewhere = map[string]orgScopeElsewhere{
+	"internal/queryapi/cognitiveload/cognitiveload.go:retractedUserDaysQuery": {
+		"its innerWhere is fetchUserMetrics's, which starts with the org_id predicate",
+		[]orgScopeSite{{"internal/queryapi/cognitiveload/cognitiveload.go", "fetchUserMetrics", "WHERE org_id = {org_id:String}"}},
+	},
+	"internal/queryapi/cognitiveload/cognitiveload.go:retractedTeamDaysQuery": {
+		"its innerWhere is fetchTeamMetrics's, which starts with the org_id predicate",
+		[]orgScopeSite{{"internal/queryapi/cognitiveload/cognitiveload.go", "fetchTeamMetrics", "WHERE org_id = {org_id:String}"}},
+	},
+	"internal/queryapi/security/overview.go:readKpis":      orgScopeSecurityFilter,
+	"internal/queryapi/security/overview.go:readBreakdown": orgScopeSecurityFilter,
+	"internal/queryapi/security/overview.go:readTopRepos":  orgScopeSecurityFilter,
+	"internal/queryapi/security/overview.go:readTrend":     orgScopeSecurityFilter,
+	"internal/queryapi/teamscope/teamscope.go:UnitScope": {
+		"its latestEffortSource is analytics.LatestWorkUnitRepoEffortSource, which scopes both of its reads",
+		[]orgScopeSite{{"internal/queryapi/analytics/investment.go", "LatestWorkUnitRepoEffortSource", "WHERE org_id = {org_id:String}"}},
+	},
+	"internal/queryapi/newestrow/newestrow.go:PerTeamPredicate": {
+		"its where is the caller's scope filter, which starts with the org_id predicate",
+		[]orgScopeSite{
+			{"internal/queryapi/throughputforecast/clickhouse.go", "scopeFilter", "org_id = {org_id:String}"},
+			{"internal/queryapi/capacityforecast/clickhouse.go", "capacityScopeFilters", "org_id = {org_id:String}"},
+		},
+	},
+	"internal/queryapi/analytics/timeseries.go:dedupFromMeasureSource": {
+		"its dedup key holds org_id, and the compiled statement filters the alias it returns",
+		[]orgScopeSite{{"internal/queryapi/analytics/timeseries.go", "CompileTimeseries", "AND %s.org_id = {org_id:String}"}},
+	},
+	"internal/queryapi/home/queries_metrics.go:fetchRateDriverDelta": {
+		"both FROM sources are metricFromClause's, which scopes every source it returns",
+		[]orgScopeSite{{"internal/queryapi/home/queries_metrics.go", "metricFromClause", "AND org_id = {org_id:String}"}},
+	},
+	"internal/queryapi/featureflags/featureflags.go:Resolve": {
+		"one flagWhere clause, the org_id predicate first, is the WHERE of both statements",
+		[]orgScopeSite{{"internal/queryapi/featureflags/featureflags.go", "flagWhere", "org_id = {org_id:String}"}},
+	},
+	"internal/queryapi/featureflags/events.go:ResolveEvents": {
+		"one eventWhere clause, the org_id predicate first, is the WHERE of both statements",
+		[]orgScopeSite{{"internal/queryapi/featureflags/events.go", "eventWhere", "org_id = {org_id:String}"}},
+	},
+	"internal/queryapi/throughputforecast/clickhouse.go:loadWorkItemOverlay": {
+		"one scopeFilter WHERE is spliced into both reads and the newest-row predicate",
+		[]orgScopeSite{{"internal/queryapi/throughputforecast/clickhouse.go", "scopeFilter", "org_id = {org_id:String}"}},
+	},
+}
+
+var orgScopeSecurityFilter = orgScopeElsewhere{
+	"its filterClause is buildFilter's, which holds the org_id predicate of both joined tables",
+	[]orgScopeSite{{"internal/queryapi/security/filter.go", "buildFilter", "r.org_id = {org_id:String}"},
+		{"internal/queryapi/security/filter.go", "buildFilter", "sa.org_id = {org_id:String}"}},
+}
+
+// orgScopeSiteLine is the line of the cited predicate in the cited function,
+// or 0 when the function or the predicate is gone. The predicate must be a
+// whole line of one of the function's string literals.
+func orgScopeSiteLine(t *testing.T, root string, site orgScopeSite) int {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join(root, filepath.FromSlash(site.file)), nil, 0)
+	if err != nil {
+		t.Errorf("read %s: %v", site.file, err)
+		return 0
+	}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || fn.Name.Name != site.function {
+			continue
+		}
+		line := 0
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING || line != 0 {
+				return true
+			}
+			value, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				return true
+			}
+			for offset, text := range strings.Split(value, "\n") {
+				if strings.TrimSpace(text) == site.predicate {
+					line = fset.Position(lit.Pos()).Line + offset
+					return false
+				}
+			}
+			return true
+		})
+		return line
+	}
+	return 0
 }
 
 var (
@@ -400,9 +489,30 @@ func TestEveryServedClickHouseReadOfAnOrganizationTableIsScopedByOrgID(t *testin
 		}
 		t.Errorf("%s reads an organization's ClickHouse table %d time(s) with %d org_id predicate(s) in its SQL: add org_id = {org_id:String} to each statement", finding.key, finding.reads, finding.scopes)
 	}
+	keys := make([]string, 0, len(orgScopeReadsScopedElsewhere))
 	for key := range orgScopeReadsScopedElsewhere {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		entry := orgScopeReadsScopedElsewhere[key]
 		if !matched[key] {
 			t.Errorf("%s is listed as scoped elsewhere but the census does not flag it: remove the entry", key)
+		}
+		if strings.TrimSpace(entry.reason) == "" || len(entry.sites) == 0 {
+			t.Errorf("%s is listed as scoped elsewhere with no reason or no cited predicate", key)
+		}
+		for _, site := range entry.sites {
+			if !orgScopePredicate.MatchString(site.predicate) {
+				t.Errorf("%s cites %q, which is not an org_id predicate", key, site.predicate)
+				continue
+			}
+			line := orgScopeSiteLine(t, root, site)
+			if line == 0 {
+				t.Errorf("%s cites %s %s for %q, which no longer holds it: re-read the caller and fix the read or the entry", key, site.file, site.function, site.predicate)
+				continue
+			}
+			t.Logf("scoped elsewhere: %s <- %s:%d (%s) %q", key, site.file, line, site.function, site.predicate)
 		}
 	}
 	t.Logf("org scope census: %d functions read organization tables, %d scoped by their caller or another package", checked, len(matched))

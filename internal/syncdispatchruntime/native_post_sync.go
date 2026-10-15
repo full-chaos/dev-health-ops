@@ -6,6 +6,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/aftercommit"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -170,6 +171,10 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		return ErrPostSyncUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// Writers that stage a signal inside this transaction (the dora overlap
+	// report of the remaining store) queue it here and it runs only once the
+	// commit below has succeeded (CHAOS-9841).
+	ctx, afterCommit := aftercommit.WithHooks(ctx)
 
 	current, err := currentPostSyncReference(ctx, tx, args)
 	if err != nil {
@@ -295,6 +300,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		return err
 	}
 	committed = true
+	afterCommit.Run()
 	if touchedTake != nil {
 		service.finishTouchedDays(ctx, args, touchedTake, touchedResult)
 	}

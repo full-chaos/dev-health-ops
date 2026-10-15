@@ -88,6 +88,7 @@ func TestTeamDailyCountersMigrationUpgradesAndDowngrades(t *testing.T) {
 
 	const up = "sql/124_team_daily_counters_float64.sql"
 	const down = "rollback/124_team_daily_counters_float64.down.sql"
+	versionRows := useSchemaMigrations(t, ctx, conn, "124_team_daily_counters_float64.sql")
 	run(up)
 	for _, column := range [][2]string{
 		{"team_complexity_daily", "loc_total"}, {"team_complexity_daily", "cyclomatic_total"},
@@ -117,6 +118,9 @@ func TestTeamDailyCountersMigrationUpgradesAndDowngrades(t *testing.T) {
 	}
 
 	run(down)
+	if n := versionRows(); n != 0 {
+		t.Errorf("after the rollback the version row is still recorded (%d rows)", n)
+	}
 	for _, column := range [][3]string{
 		{"team_complexity_daily", "loc_total", "UInt64"}, {"team_complexity_daily", "high_complexity_functions", "UInt64"},
 		{"team_metrics_daily", "commits_count", "UInt32"}, {"team_metrics_daily", "weekend_commits_count", "UInt32"},

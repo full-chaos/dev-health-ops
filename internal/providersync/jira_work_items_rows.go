@@ -122,7 +122,7 @@ func normalizeJiraWorkItem(
 	urlValue := stringPointerIfNonEmpty(raw["self"])
 	storyPoints := jiraStoryPoints(claim, fields, issue.PointsFields, issue.ObjectShape)
 	sprintID, sprintName := jiraSprint(jiraField(fields, jiraOptionString(claim, "sprint_field", "customfield_10020"), issue.ObjectShape), issue.ObjectShape)
-	parentID := jiraParentID(jiraField(fields, "parent", issue.ObjectShape), issue.ObjectShape)
+	parentID := jiraParentID(jiraField(fields, "parent", issue.ObjectShape))
 	epicField := jiraOptionString(claim, "epic_link_field", "")
 	var epicID *string
 	if epicField != "" {
@@ -814,18 +814,15 @@ func jiraResolveMapUser(value any, resolver jiraIdentityResolver) string {
 	return strings.TrimSpace(displayName)
 }
 
-func jiraParentID(value any, objectShape bool) *string {
-	if value == nil {
+func jiraParentID(value any) *string {
+	mapped, ok := jiraMapValue(value)
+	if !ok {
 		return nil
 	}
-	key := ""
-	if objectShape {
-		if mapped, ok := jiraMapValue(value); ok {
-			key = stringFrom(mapped["key"])
-		}
+	key := strings.TrimSpace(stringFrom(mapped["key"]))
+	if key == "" {
+		return nil
 	}
-	// Python's f"jira:{getattr(..., None) or ''}" is truthy even when the
-	// attribute is absent, so JSON-shaped parent objects produce "jira:".
 	result := "jira:" + key
 	return &result
 }

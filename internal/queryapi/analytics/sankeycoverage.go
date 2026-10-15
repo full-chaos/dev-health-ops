@@ -313,7 +313,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		}
 		repoAssignedCol := "if(wure.work_unit_id != '', wure.repo_id, work_unit_investments.repo_id)"
 
-		totalExpr = fmt.Sprintf("sum(%s)", repoEffortCol)
+		totalExpr = exactSum(repoEffortCol)
 		repoTotalExpr = totalExpr
 		// CHAOS-9264 (chris 2026-10-11, "Team coverage: ok change it"): a unit HAS a team when a team OWNS one of the
 		// unit's repository rows -- the one shared ownership predicate of the team scope (teamscope.RepoCondition
@@ -325,8 +325,8 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		ownedCondition, ownedBindings := teamscope.AnyTeamRepoCondition(orgID, "work_unit_investments.repo_id", time.Now().UTC())
 		ownedUnit := strings.TrimPrefix(teamscope.UnitScope(" AND "+ownedCondition, repoEffortSrc), " AND ")
 		coverageExtraBindings = append(scopeShareBindings, ownedBindings...)
-		assignedTeamCountExpr = fmt.Sprintf("sumIf(%s, %s)", repoEffortCol, ownedUnit)
-		assignedRepoCountExpr = fmt.Sprintf("sumIf(%s, %s IS NOT NULL)", repoEffortCol, repoAssignedCol)
+		assignedTeamCountExpr = exactSumIf(repoEffortCol, ownedUnit)
+		assignedRepoCountExpr = exactSumIf(repoEffortCol, repoAssignedCol+" IS NOT NULL")
 
 		// CHAOS-5483 -- splitting assigned_repo into the two claims it
 		// silently conflates.
@@ -380,8 +380,8 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// direct by definition and must never be classified as fallback.
 		isTeamFallback := "(wure.work_unit_id != '' AND ifNull(wure.repo_source LIKE 'team:%', 0))"
 		assignedRepoPredicate := fmt.Sprintf("%s IS NOT NULL", repoAssignedCol)
-		directRepoExpr = fmt.Sprintf("toNullable(sumIf(%s, %s AND NOT %s))", repoEffortCol, assignedRepoPredicate, isTeamFallback)
-		teamFallbackRepoExpr = fmt.Sprintf("toNullable(sumIf(%s, %s AND %s))", repoEffortCol, assignedRepoPredicate, isTeamFallback)
+		directRepoExpr = fmt.Sprintf("toNullable(%s)", exactSumIf(repoEffortCol, assignedRepoPredicate+" AND NOT "+isTeamFallback))
+		teamFallbackRepoExpr = fmt.Sprintf("toNullable(%s)", exactSumIf(repoEffortCol, assignedRepoPredicate+" AND "+isTeamFallback))
 
 		// Fan-out WIDTH, so a saturating fallback is visible as saturation
 		// rather than read as precision: team-fallback repo allocations

@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"log/slog"
 	"math"
 	"strings"
 	"sync"
@@ -203,6 +204,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		DeltaPct:          pctChange,
 		HasData:           hasData,
 		HasPriorData:      hasPriorData,
+		PriorValue:        measuredPriorValue(spec, previousValue, hasData, hasPriorData),
 		Spark:             spark,
 		RateState:         rateState,
 		RateCoverage:      rateCoverage,
@@ -210,6 +212,24 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 
 		ChangeFailureEvidence: changeFailureEvidence,
 	}, nil
+}
+
+// measuredPriorValue is the comparison window's stored value in the unit of the
+// delta's value, or nil when that window stored none (CHAOS-9817). It reads the
+// same previous value and presence flag that deltarule.Of takes, so the prior
+// value and hasPriorData cannot disagree. A window pair where only one side has
+// data is logged: the delta is then not a statement and the prior is the only
+// number of the comparison window a client can show.
+func measuredPriorValue(spec metricSpec, previousValue float64, hasData, hasPriorData bool) *float64 {
+	if hasData != hasPriorData {
+		slog.Debug("home: current and prior windows disagree on coverage",
+			"metric", spec.Metric, "has_data", hasData, "has_prior_data", hasPriorData)
+	}
+	if !hasPriorData {
+		return nil
+	}
+	prior := safeFloat(spec.Transform(previousValue))
+	return &prior
 }
 
 // computeMetricDeltas ports _metric_deltas (services/home.py:863-950):

@@ -31,10 +31,28 @@ func TestReadinessProbeRefusesAnInternalBaseURLAtDial(t *testing.T) {
 }
 
 // An empty base_url probes OpenAI's public endpoint, so the unconditional
-// dial guard never blocks the default path.
+// dial guard never blocks the default path; and the default prober's client
+// really is the guarded one (its dial refuses a loopback address, not only the
+// endpoint string being public).
 func TestReadinessProbeEmptyBaseURLTargetsThePublicDefault(t *testing.T) {
 	endpoint := chatCompletionsEndpoint("")
 	if !strings.HasPrefix(endpoint, "https://api.openai.com/") {
 		t.Fatalf("empty base_url endpoint = %q, want OpenAI's public endpoint", endpoint)
+	}
+	client, ok := newOpenAICompatibleReadinessProber(nil).client.(*http.Client)
+	if !ok {
+		t.Fatalf("the default prober client is %T, want *http.Client", newOpenAICompatibleReadinessProber(nil).client)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.DialContext == nil || transport.Proxy != nil {
+		t.Fatalf("the default transport = %#v, want a proxy-free transport with a guarded dialer", client.Transport)
+	}
+	conn, err := transport.DialContext(t.Context(), "tcp", "127.0.0.1:9")
+	if err == nil {
+		conn.Close()
+		t.Fatal("the default prober dialled a loopback address")
+	}
+	if !strings.Contains(err.Error(), "Connection to private/internal networks is not allowed") {
+		t.Fatalf("dial error = %v, want the internal-network refusal", err)
 	}
 }

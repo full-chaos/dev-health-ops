@@ -91,6 +91,12 @@ func TestJiraDescriptionKeepsAStringAndStatesNothingForOtherShapes(t *testing.T)
 		"empty document":    map[string]any{"type": "doc", "version": 1, "content": []any{}},
 		"media only":        map[string]any{"type": "doc", "content": []any{map[string]any{"type": "mediaSingle", "content": []any{map[string]any{"type": "media"}}}}},
 		"a list":            []any{"x"},
+		"an integer":        42,
+		"a float":           42.5,
+		"a json number":     json.Number("42"),
+		"a number node":     map[string]any{"type": "doc", "content": []any{map[string]any{"type": "paragraph", "content": []any{map[string]any{"type": "text", "text": 42}}}}},
+		"true":              true,
+		"false":             false,
 		"a map, no content": map[string]any{"unexpected": "shape"},
 	} {
 		if got := jiraDescriptionOf(t, value); got != nil {

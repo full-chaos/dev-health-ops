@@ -182,7 +182,7 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 	// branch for a mutation to hide behind. One fail-closed check, not two
 	// that must be kept in sync.
 	var repoPayload gitHubRepositoryPayload
-	if err := fetchObject(ctx, &counted, root, &repoPayload); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, githubRepoRoute, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	repoID, err := repositoryIdentity(repoPayload.FullName)
@@ -209,7 +209,7 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 	// unit) on every attempt, forever, even though Python syncs it fine.
 	page, err := providerfoundation.CollectGitHubLinkPages(
 		ctx, &counted, providerfoundation.GitHubPageOptions{
-			Path: root + "/pulls", Query: query, MaxPages: maxPages,
+			Path: root + "/pulls", Route: githubPullsRoute, Query: query, MaxPages: maxPages,
 			StopAt: func(raw json.RawMessage) bool {
 				return pullCrossedSinceBoundary(raw, claim)
 			},
@@ -245,8 +245,8 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 		// same bytes feed normalizeGitHubPullRequest and the detector the
 		// work-items route runs, so the prs route needs no extra request.
 		var raw json.RawMessage
-		if err := fetchObject(
-			ctx, &counted, root+"/pulls/"+strconv.Itoa(number), &raw,
+		if err := fetchObjectRoute(
+			ctx, &counted, githubPullRoute, root+"/pulls/"+strconv.Itoa(number), &raw,
 		); err != nil {
 			return CompleteRouteBatch{}, err
 		}

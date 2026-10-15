@@ -51,7 +51,7 @@ func TestDeriveFastPathAndTextParseEdgesMatchFrozenPythonGolden(t *testing.T) {
 
 	prs := golden.pullRequests(t)
 	workItems := golden.workItems(t)
-	result := issuepredges.DeriveTextParseEdges(prs, workItems, golden.frozenNow(t))
+	result := issuepredges.DeriveTextParseEdges(prs, workItems, issueprlinks.NativeLinks{}, golden.frozenNow(t))
 	// CHAOS-9457 DELIBERATE DIVERGENCE FROM PYTHON: Python never text-matched a
 	// Linear key; the Go tier does. The frozen golden stays untouched, so the
 	// Linear rows are split off, asserted on their own, and the remainder must

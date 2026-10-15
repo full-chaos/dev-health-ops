@@ -207,6 +207,10 @@ func buildJiraWorkItemOraclePrepRow(
 	if err != nil {
 		t.Fatalf("normalize Jira issue: %v", err)
 	}
+	parentID := row.ParentID
+	if input["issue_shape"] != "object" {
+		parentID = frozenPythonJSONShapeParentID(parentID)
+	}
 	return jiraWorkItemOraclePrepRow{
 		WorkItemID: row.WorkItemID, Provider: row.Provider, Title: row.Title,
 		Type: row.Type, Status: row.Status, StatusRaw: row.StatusRaw,
@@ -217,7 +221,7 @@ func buildJiraWorkItemOraclePrepRow(
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, StartedAt: row.StartedAt,
 		CompletedAt: row.CompletedAt, ClosedAt: row.ClosedAt, Labels: row.Labels,
 		StoryPoints: row.StoryPoints, SprintID: row.SprintID, SprintName: row.SprintName,
-		ParentID: row.ParentID, EpicID: row.EpicID, URL: row.URL,
+		ParentID: parentID, EpicID: row.EpicID, URL: row.URL,
 		PriorityRaw: row.PriorityRaw, ServiceClass: row.ServiceClass, DueAt: row.DueAt,
 		OrgID: row.OrgID,
 	}
@@ -234,4 +238,17 @@ func jiraOracleIdentity(email, accountID, displayName string) string {
 		return strings.TrimSpace(displayName)
 	}
 	return "unknown"
+}
+
+// frozenPythonJSONShapeParentID is a deliberate, narrow divergence from the frozen Python recording. That producer
+// stored the literal "jira:" for a JSON-shaped parent even when the parent had a key; that was the defect of CHAOS-9835
+// (raised to High: every Jira parent link on prod was lost). Go now stores "jira:<KEY>". Only that case is mapped back
+// to the recorded "jira:"; every other value, a missing parent_id included, is returned unchanged, so any other
+// parent_id mismatch against the recording still fails the oracle.
+func frozenPythonJSONShapeParentID(parentID *string) *string {
+	if parentID == nil || !strings.HasPrefix(*parentID, "jira:") || len(*parentID) == len("jira:") {
+		return parentID
+	}
+	legacy := "jira:"
+	return &legacy
 }

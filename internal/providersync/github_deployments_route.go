@@ -164,7 +164,7 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 	counted.Doer = gitHubDeploymentCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(&counted, "repos", owner, repository)
 	var repoPayload gitHubRepositoryPayload
-	if err := fetchObject(ctx, &counted, root, &repoPayload); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, githubRepoRoute, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	repoID, err := repositoryIdentity(repoPayload.FullName)
@@ -179,12 +179,12 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	pages := (maxDeployments + nativePerPage - 1) / nativePerPage
-	releases, releasePages, _, err := fetchGitHubDeploymentsPage[gitHubReleasePayload](ctx, &counted, root+"/releases", pages)
+	releases, releasePages, _, err := fetchGitHubDeploymentsPage[gitHubReleasePayload](ctx, &counted, githubReleasesRoute, root+"/releases", pages)
 	if err != nil {
 		// Python treats release enrichment as best effort.
 		releases, releasePages = nil, 0
 	}
-	deployments, deploymentPages, _, err := fetchGitHubDeploymentsPage[gitHubDeploymentPayload](ctx, &counted, root+"/deployments", pages)
+	deployments, deploymentPages, _, err := fetchGitHubDeploymentsPage[gitHubDeploymentPayload](ctx, &counted, githubDeploymentsRoute, root+"/deployments", pages)
 	if err != nil {
 		// Python logs and returns the successful empty batch for this optional collection.
 		effect, effectErr := effectBatchFromValues("deployments", EffectReadbackRequired, []deploymentRow{})
@@ -207,7 +207,7 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 			continue
 		}
 		if deployment.SHA != nil && strings.TrimSpace(*deployment.SHA) != "" {
-			pulls, pullPages, _, pullErr := fetchGitHubDeploymentsPage[gitHubPullPayload](ctx, &counted, root+"/commits/"+url.PathEscape(*deployment.SHA)+"/pulls", 1)
+			pulls, pullPages, _, pullErr := fetchGitHubDeploymentsPage[gitHubPullPayload](ctx, &counted, githubCommitPullsRoute, root+"/commits/"+url.PathEscape(*deployment.SHA)+"/pulls", 1)
 			enrichmentPages += pullPages
 			if pullErr != nil {
 				slog.Warn("github_deployments.pull_request_lookup_failed", logging.ProviderIDAttr("deployment_id", row.DeploymentID), "cause", pullErr.Error())
@@ -228,7 +228,7 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 			outcomes.Skipped++
 			row.LifecycleLookupFailed = true
 		default:
-			statuses, statusPages, statusesTruncated, statusErr := fetchGitHubDeploymentsPage[gitHubDeploymentStatusPayload](ctx, &counted, root+"/deployments/"+stringValue(deployment.ID)+"/statuses", maxDeploymentStatusPages)
+			statuses, statusPages, statusesTruncated, statusErr := fetchGitHubDeploymentsPage[gitHubDeploymentStatusPayload](ctx, &counted, githubStatusesRoute, root+"/deployments/"+stringValue(deployment.ID)+"/statuses", maxDeploymentStatusPages)
 			enrichmentPages += statusPages
 			switch {
 			case statusErr != nil:
@@ -301,8 +301,8 @@ func (outcomes deploymentStatusLookupOutcomes) log(claim Claim, rows int) {
 // gitHubDeploymentCountingDoer wrapping every call this unit makes, so a
 // failed or retried wire attempt (including one that never decoded a page)
 // is never dropped from the count.
-func fetchGitHubDeploymentsPage[T any](ctx context.Context, client *providerfoundation.HTTPClient, path string, maxPages int) ([]T, int, bool, error) {
-	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: path, Query: url.Values{"per_page": {"100"}}, MaxPages: maxPages})
+func fetchGitHubDeploymentsPage[T any](ctx context.Context, client *providerfoundation.HTTPClient, route, path string, maxPages int) ([]T, int, bool, error) {
+	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: path, Route: route, Query: url.Values{"per_page": {"100"}}, MaxPages: maxPages})
 	if err != nil {
 		return nil, 0, false, err
 	}

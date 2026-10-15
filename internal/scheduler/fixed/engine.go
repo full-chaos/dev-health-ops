@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/aftercommit"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/jackc/pgx/v5"
@@ -403,6 +404,10 @@ func (engine *Engine) runOccurrence(
 		defer cancel()
 		_ = tx.Rollback(rollbackCtx)
 	}()
+	// A producer that stages a signal inside this transaction (the dora overlap
+	// report of the remaining store) queues it here and it runs only once the
+	// occurrence commits (CHAOS-9841).
+	ctx, afterCommit := aftercommit.WithHooks(ctx)
 
 	claim, err := engine.ledger.Claim(ctx, tx, occurrence)
 	if err != nil {
@@ -476,6 +481,7 @@ func (engine *Engine) runOccurrence(
 		return 0, 0, 0, 0, "", false, fmt.Errorf("commit fixed schedule occurrence %s: %w", occurrence.Key, err)
 	}
 	committed = true
+	afterCommit.Run()
 	// ONLY a producer-reported condition becomes Degraded. A SkipReason is
 	// deliberately NOT promoted, and that distinction is load-bearing rather than
 	// tidy:

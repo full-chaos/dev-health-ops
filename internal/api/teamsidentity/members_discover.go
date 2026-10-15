@@ -142,7 +142,7 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 	// requested at the team's own "url" from that payload, not at the path
 	// the slug came in on. A missing team fails here, as it does in Python.
 	detailPath := "/orgs/" + orgName + "/teams/" + pyQuoteNoSafe(teamSlug)
-	response, err := client.Do(ctx, "GET", detailPath, nil)
+	response, err := client.DoRoute(ctx, "GET", "/orgs/{org}/teams/{slug}", detailPath, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 	var entries []*pyjson.Object
 	next := teamPath + "/members?per_page=100"
 	for next != "" {
-		response, err := client.Do(ctx, "GET", next, nil)
+		response, err := client.DoRoute(ctx, "GET", "/orgs/{org}/teams/{slug}/members", next, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -237,7 +237,7 @@ func discoverMembersGitLab(ctx context.Context, token secrets.Value, baseURL, gr
 	var entries []*pyjson.Object
 	next := "/api/v4/groups/" + strconv.FormatInt(group.ID, 10) + "/members?per_page=100"
 	for next != "" {
-		response, err := client.Do(ctx, "GET", next, nil)
+		response, err := client.DoRoute(ctx, "GET", "/groups/{group}/members", next, nil)
 		if err != nil {
 			return nil, err
 		}

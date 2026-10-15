@@ -71,3 +71,20 @@ func TestGraphQLResolverStoreFailureKeepsDriverTextOutOfTheResponse(t *testing.T
 		t.Fatalf("response lacks the generic message or the request id: %s", body)
 	}
 }
+
+// The web passes a message starting with policy.PlanGatePrefix through as
+// product copy. The presenter must keep that exact text for a typed plan gate,
+// also when a resolver wraps it, and still mask the same words in an untyped error.
+func TestSafeGraphQLErrorPresenterKeepsThePlanGateSentence(t *testing.T) {
+	present := safeGraphQLErrorPresenter("test", nil)
+	gate := policy.PlanGate("Team plan or higher.", errors.New(driverText))
+	for name, err := range map[string]error{"typed": gate, "wrapped by a resolver": fmt.Errorf("saveReport: %w", gate)} {
+		got := present(context.Background(), err)
+		if got.Message != "This feature requires the Team plan or higher." || !strings.HasPrefix(got.Message, "This feature requires the ") {
+			t.Fatalf("%s: message = %q, want the exact plan-gate sentence", name, got.Message)
+		}
+	}
+	if got := present(context.Background(), errors.New("This feature requires the Team plan or higher.")); got.Message != graphQLInternalMessage {
+		t.Fatalf("an untyped plan-gate sentence = %q, want it masked", got.Message)
+	}
+}

@@ -75,7 +75,7 @@ func TestJobInputsOfANamedRetiredTeamGiveRetractionRowsNoWeight(t *testing.T) {
 		var riskCoverage float64
 		var riskCoverageKnown bool
 		var riskInputs []string
-		if out.RiskScore, out.RiskKnown, out.Severity, riskCoverage, riskCoverageKnown, riskInputs, err = loader.loadCompoundingRiskPersisted(ctx, teamID, start, end); err != nil {
+		if out.RiskScore, out.RiskKnown, out.Severity, riskCoverage, riskCoverageKnown, riskInputs, _, err = loader.loadCompoundingRiskPersisted(ctx, teamID, start, end); err != nil {
 			t.Fatalf("%s %s risk: %v", org, teamID, err)
 		}
 		_, _, _ = riskCoverage, riskCoverageKnown, riskInputs

@@ -55,14 +55,14 @@ SELECT '`+org+`', toDate('`+day+`'), 'team', '`+team+`', `+score+`, '`+severity+
 	}
 	start, end := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
 
-	score, known, severity, _, _, _, err := loader.loadCompoundingRiskPersisted(ctx, "team-mobile", start, end)
+	score, known, severity, _, _, _, _, err := loader.loadCompoundingRiskPersisted(ctx, "team-mobile", start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !known || score != 0.246 || severity != "low" {
 		t.Errorf("team-mobile: score %v (known %v) severity %q, want 0.246 low from the latest day 2026-10-12", score, known, severity)
 	}
-	score, known, severity, _, _, _, err = loader.loadCompoundingRiskPersisted(ctx, "team-retied", start, end)
+	score, known, severity, _, _, _, _, err = loader.loadCompoundingRiskPersisted(ctx, "team-retied", start, end)
 	if err != nil {
 		t.Fatal(err)
 	}

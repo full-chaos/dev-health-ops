@@ -547,7 +547,7 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
 // column.
 func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 	ctx context.Context, teamID string, windowStart, windowEnd time.Time,
-) (score float64, scoreKnown bool, severity string, coverage float64, coverageKnown bool, inputs []string, err error) {
+) (score float64, scoreKnown bool, severity string, coverage float64, coverageKnown bool, inputs []string, drivers []string, err error) {
 	// argMax over a TUPLE, so the score and the severity are taken from the
 	// SAME row. Two separate argMax calls could take them from different rows
 	// if their computed_at values ever tie, which would pair a score with
@@ -574,7 +574,7 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 	rows, err := loader.conn.Query(ctx, query,
 		namedArguments(loader.windowArguments(teamID, windowStart, windowEnd))...)
 	if err != nil {
-		return 0, false, "", 0, false, nil, fmt.Errorf("load compounding risk: %w", err)
+		return 0, false, "", 0, false, nil, nil, fmt.Errorf("load compounding risk: %w", err)
 	}
 	defer rows.Close()
 
@@ -585,7 +585,7 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 		var wChurn, wComplexity, wOwnership, wReview float64
 		if scanErr := rows.Scan(&rawScore, &rawSeverity, &churnNorm, &complexityNorm, &ownershipNorm, &reviewNorm,
 			&wChurn, &wComplexity, &wOwnership, &wReview); scanErr != nil {
-			return 0, false, "", 0, false, nil, fmt.Errorf("scan compounding risk: %w", scanErr)
+			return 0, false, "", 0, false, nil, nil, fmt.Errorf("scan compounding risk: %w", scanErr)
 		}
 		score, scoreKnown = safeFloat(rawScore)
 		// The coverage of the score: the weights of the present component
@@ -604,6 +604,9 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 				if input.norm != nil {
 					present += input.weight
 					inputs = append(inputs, input.name)
+					if *input.norm*input.weight > 0 {
+						drivers = append(drivers, input.name)
+					}
 				}
 			}
 			if total > 0 {
@@ -615,9 +618,9 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 		// "", so both map to "" and no conversion is needed -- the identity is
 		// stated rather than written, because a reader checking parity against
 		// the Python `if severity else None` will look for it here.
-		return score, scoreKnown, rawSeverity, coverage, coverageKnown, inputs, rows.Err()
+		return score, scoreKnown, rawSeverity, coverage, coverageKnown, inputs, drivers, rows.Err()
 	}
-	return 0, false, "", 0, false, nil, rows.Err()
+	return 0, false, "", 0, false, nil, nil, rows.Err()
 }
 
 // LoadTeamMetricsWindow ports load_team_metrics_window: every signal for one
@@ -669,7 +672,7 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
-	score, scoreKnown, severity, coverage, coverageKnown, inputs, err := scoped.loadCompoundingRiskPersisted(ctx, teamID, windowStart, windowEnd)
+	score, scoreKnown, severity, coverage, coverageKnown, inputs, drivers, err := scoped.loadCompoundingRiskPersisted(ctx, teamID, windowStart, windowEnd)
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
@@ -701,6 +704,7 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 		CompoundingRiskCoverage:      coverage,
 		CompoundingRiskCoverageKnown: coverageKnown,
 		CompoundingRiskInputs:        inputs,
+		CompoundingRiskDrivers:       drivers,
 	}, nil
 }
 

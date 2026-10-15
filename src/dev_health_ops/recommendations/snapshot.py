@@ -111,6 +111,10 @@ class MetricsSnapshot:
     # hotspot_complexity_delta / hotspot_churn_overlap proxy.
     compounding_risk_score: float | None = None
     compounding_risk_severity: str | None = None
+    # Inputs whose stored norm times weight is above zero, in the order
+    # churn, complexity trend, ownership concentration, review latency. Only
+    # these are named as compounding in the rationale.
+    compounding_risk_drivers: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------

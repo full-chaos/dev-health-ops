@@ -5932,6 +5932,9 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 		// before the body is parsed, and the refusals the Python edge
 		// answered itself keep its status and body.
 		edge := isGraphQLEdge(r.Context())
+		// Every request line of this route names its document; a refusal before
+		// the document is resolved says so (recorded again once it is).
+		httpapi.RecordGraphQLDocument(r.Context(), "", "", httpapi.GraphQLDigestNotResolved)
 		viaGET := edge && r.Method == http.MethodGet
 		if r.Method != http.MethodPost && !viaGET {
 			if edge {
@@ -6049,13 +6052,13 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			// intended safe default) or a registered document whose const
 			// has drifted from what a real client sends (the CHAOS-4696
 			// defect class); an operator cannot tell those apart without a
-			// log line naming the digest that missed. Bounded the same way
-			// the CHAOS-4647 unwrap-chain log line is (maxUnwrapChainLogBytes
-			// above): the query text is caller-supplied, so truncate before
-			// logging it rather than trusting its length.
+			// log line naming the digest that missed. The text itself is never
+			// logged (CHAOS-9779): it is caller-supplied and can carry literal
+			// values; the digest names the document and its length bounds the
+			// readback.
 			log.Printf(
-				"query-api: unregistered document digest-miss: digest=%s query=%s",
-				digestHex(query), truncateForLog(query, maxUnwrapChainLogBytes),
+				"query-api: unregistered document digest-miss: digest=%s query_bytes=%d",
+				digestHex(query), len(query),
 			)
 			httpapi.RecordNotFoundCause(r.Context(), httpapi.NotFoundUnregisteredDocument)
 			if edge {

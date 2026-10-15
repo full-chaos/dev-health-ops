@@ -381,7 +381,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			return nil, ErrCredentialInvalid
 		}
 		if requestErr != nil {
-			last = &ProviderError{Class: ErrorTransient}
+			last = c.transportFailure(requestErr, target.Path, attempt)
 			c.observe(last.Class)
 			if attempt == c.Retry.MaxAttempts {
 				return nil, last
@@ -508,8 +508,9 @@ func (c *HTTPClient) DoUnauthenticated(
 	}
 	response, err = c.Doer.Do(request)
 	if err != nil {
-		c.observe(ErrorTransient)
-		return nil, &ProviderError{Class: ErrorTransient}
+		failure := c.transportFailure(err, target.Path, 1)
+		c.observe(failure.Class)
+		return nil, failure
 	}
 	classification := ClassifyHTTP(c.Provider, response.StatusCode, response.Header)
 	if classification == nil {

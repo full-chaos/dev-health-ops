@@ -70,6 +70,10 @@ var mcpParityGeneratedTables = []string{
 // served shape, so it is excluded and named, never counted as a match.
 var mcpPolicyRefusalStatuses = map[int]bool{http.StatusBadRequest: true, http.StatusForbidden: true, http.StatusUnprocessableEntity: true}
 
+// mcpParityExcused is a corpus case the step does not measure, with the reason and the ticket that owns it. An
+// excused shape is listed in the output and never counts as measured.
+type mcpParityExcused struct{ label, root, reason, ticket string }
+
 type mcpParityShape struct {
 	operation, variant, root string
 	document                 string
@@ -136,7 +140,7 @@ VALUES ($1, 'primary', 'parity-oracle', $2, 'mcp-class-parity-oracle')`, mcpclas
 	_ = settings
 	defer leave()
 	token := edgeOracleToken(t, edgeOracleJWTKey, user, time.Now().Add(time.Hour))
-	shapes, excludedAtSource := mcpParityShapes(t, root, now)
+	shapes, excludedAtSource := mcpParityShapes(ctx, t, conn, root, now)
 
 	type tally struct {
 		executed, nonEmpty, excluded int
@@ -185,7 +189,14 @@ VALUES ($1, 'primary', 'parity-oracle', $2, 'mcp-class-parity-oracle')`, mcpclas
 	var problems []string
 	for _, rootField := range mcpclass.SortedRoots() {
 		tl := byRoot[rootField]
-		t.Logf("root %-22s executed=%d non_empty=%d excluded=%d failed=%d", rootField, tl.executed, tl.nonEmpty, tl.excluded, len(tl.failed))
+		excusedAtSource := 0
+		for _, excused := range excludedAtSource {
+			if excused.root == rootField {
+				excusedAtSource++
+			}
+		}
+		t.Logf("ROOT %-22s measured=%d matched=%d (non_empty=%d) excused=%d failed=%d", rootField,
+			tl.executed+len(tl.failed), tl.executed, tl.nonEmpty, tl.excluded+excusedAtSource, len(tl.failed))
 		for _, why := range tl.excludedWhy {
 			t.Logf("  excluded %s", why)
 		}
@@ -193,14 +204,14 @@ VALUES ($1, 'primary', 'parity-oracle', $2, 'mcp-class-parity-oracle')`, mcpclas
 			problems = append(problems, rootField+" "+failure)
 		}
 		switch {
-		case tl.executed+tl.excluded+len(tl.failed) == 0:
-			problems = append(problems, rootField+": no shape was measured for this root")
+		case tl.executed == 0 && len(tl.failed) == 0:
+			problems = append(problems, rootField+": no shape was measured for this root (a shape that is excused is not measured)")
 		case tl.nonEmpty == 0 && len(tl.failed) == 0:
 			problems = append(problems, rootField+": every executed shape was empty on both routes, so nothing was compared")
 		}
 	}
-	for _, why := range excludedAtSource {
-		t.Logf("not measured: %s", why)
+	for _, excused := range excludedAtSource {
+		t.Logf("EXCUSED %-40s root=%s not measured (%s): %s", excused.label, excused.root, excused.ticket, excused.reason)
 	}
 	if len(problems) > 0 {
 		sort.Strings(problems)
@@ -310,6 +321,9 @@ func mcpParityInsertSQL(table string, columns []mcpParityColumn, org, repo strin
 	var names, exprs []string
 	for _, c := range columns {
 		expr, ok := mcpParityValue(c.name, c.typ, org, repo, teamArray)
+		if override, has := mcpParityOverrides[table][c.name]; has {
+			expr, ok = strings.NewReplacer("%REPO%", repo, "%TEAMS%", teamArray).Replace(override), true
+		}
 		if !ok {
 			continue
 		}
@@ -318,6 +332,15 @@ func mcpParityInsertSQL(table string, columns []mcpParityColumn, org, repo strin
 	}
 	return fmt.Sprintf("INSERT INTO `%s` (%s) SELECT %s FROM (SELECT number AS n, intDiv(number, %d) %% 14 AS dayoff, number %% %d AS entity FROM numbers(%d))",
 		table, strings.Join(names, ", "), strings.Join(exprs, ", "), len(teams), len(teams), 14*len(teams)), nil
+}
+
+// mcpParityOverrides are the columns whose meaning a type cannot give: the row's scope and its owner.
+// entity 0 is the repository, 1 and 2 are teams.
+var mcpParityOverrides = map[string]map[string]string{
+	"compounding_risk_daily": {
+		"scope":    "CAST(if(entity = 0, 'repo', 'team') AS Enum8('repo' = 1, 'team' = 2))",
+		"scope_id": "if(entity = 0, '%REPO%', arrayElement(%TEAMS%, entity + 1))",
+	},
 }
 
 func mcpParityValue(name, typ, org, repo, teamArray string) (string, bool) {
@@ -545,10 +568,44 @@ func mcpParityHoldsData(value any) bool {
 	return true
 }
 
+// mcpParityInstance finds, in the seeded data, the stored row a variant's kind of identifier names. A kind it cannot
+// resolve is an error, never a skipped shape.
+func mcpParityInstance(ctx context.Context, t *testing.T, conn driver.Conn, kind string) string {
+	t.Helper()
+	var query string
+	switch {
+	case strings.Contains(kind, "team id that has stored team-scope compounding-risk"):
+		query = "SELECT scope_id FROM compounding_risk_daily WHERE scope = 'team' LIMIT 1"
+	case strings.Contains(kind, "repository id that has stored compounding-risk"):
+		query = "SELECT scope_id FROM compounding_risk_daily WHERE scope = 'repo' LIMIT 1"
+	case strings.Contains(kind, "repository id that has open alerts"), strings.Contains(kind, "repository id that has alerts"):
+		query = "SELECT toString(repo_id) FROM security_alerts GROUP BY repo_id ORDER BY count() DESC LIMIT 1"
+	case strings.Contains(kind, "search term"):
+		query = "SELECT cve_id FROM security_alerts WHERE cve_id IS NOT NULL AND cve_id != '' LIMIT 1"
+	case strings.Contains(kind, "alert state"):
+		query = "SELECT lower(state) FROM security_alerts WHERE state IS NOT NULL GROUP BY state ORDER BY count() DESC LIMIT 1"
+	case strings.Contains(kind, "node type whose whole edge set as a source is below 200"):
+		query = "SELECT source_type FROM work_graph_edges GROUP BY source_type HAVING count() < 200 ORDER BY count() DESC LIMIT 1"
+	case strings.Contains(kind, "node type that has edges as a source"):
+		query = "SELECT source_type FROM work_graph_edges GROUP BY source_type ORDER BY count() DESC LIMIT 1"
+	case strings.Contains(kind, "node id that is the source or target of at least one edge and of fewer than 200"):
+		query = "SELECT source_id FROM work_graph_edges GROUP BY source_id HAVING count() < 200 ORDER BY count() DESC LIMIT 1"
+	case strings.Contains(kind, "node id that is the source or target of at least one edge"):
+		query = "SELECT source_id FROM work_graph_edges LIMIT 1"
+	default:
+		t.Fatalf("no seeded value is known for the instance kind %q: add one to mcpParityInstance", kind)
+	}
+	var value string
+	if err := conn.QueryRow(ctx, query).Scan(&value); err != nil || value == "" {
+		t.Fatalf("no row for the instance kind %q (%v): the seeded data lacks it", kind, err)
+	}
+	return value
+}
+
 // mcpParityShapes lists every request the oracle sends: for each operation whose response root is an MCP class
 // root, the registered document's current text with the corpus's base variables and each variant. A shape that needs
 // a real instance id, and a variant marked as a known refusal, are returned as not measured with their reason.
-func mcpParityShapes(t *testing.T, root string, now time.Time) ([]mcpParityShape, []string) {
+func mcpParityShapes(ctx context.Context, t *testing.T, conn driver.Conn, root string, now time.Time) ([]mcpParityShape, []mcpParityExcused) {
 	t.Helper()
 	roots := mcpclass.AllowedRoots()
 	documents := map[string]string{}
@@ -560,7 +617,7 @@ func mcpParityShapes(t *testing.T, root string, now time.Time) ([]mcpParityShape
 	}
 	window := mcpParityWindow(now)
 	var shapes []mcpParityShape
-	var notMeasured []string
+	var notMeasured []mcpParityExcused
 	for _, operation := range goapiproof.KnownOperations() {
 		spec, err := goapiproof.SpecFor(operation)
 		if err != nil || !roots[spec.ResponseRoot] {
@@ -568,11 +625,11 @@ func mcpParityShapes(t *testing.T, root string, now time.Time) ([]mcpParityShape
 		}
 		document, registered := documents[operation]
 		if !registered {
-			notMeasured = append(notMeasured, operation+": not a registered query document")
+			notMeasured = append(notMeasured, mcpParityExcused{label: operation, root: spec.ResponseRoot, reason: "not a registered query document", ticket: "CHAOS-9802"})
 			continue
 		}
 		if spec.InstanceVariable != "" {
-			notMeasured = append(notMeasured, operation+": needs one stored row's id")
+			notMeasured = append(notMeasured, mcpParityExcused{label: operation, root: spec.ResponseRoot, reason: "needs one stored row's id (" + spec.InstanceVariable + ")", ticket: "CHAOS-9802"})
 		} else {
 			shapes = append(shapes, mcpParityShape{
 				operation: operation, root: spec.ResponseRoot, document: document,
@@ -582,13 +639,17 @@ func mcpParityShapes(t *testing.T, root string, now time.Time) ([]mcpParityShape
 		for _, variant := range mcpParityExtraVariants(operation, spec.Variants) {
 			switch {
 			case variant.KnownRefusal != nil:
-				notMeasured = append(notMeasured, operation+":"+variant.Name+": known refusal "+variant.KnownRefusal.Ticket)
-			case variant.Instance != nil:
-				notMeasured = append(notMeasured, operation+":"+variant.Name+": needs a real instance id")
+				notMeasured = append(notMeasured, mcpParityExcused{label: operation + ":" + variant.Name, root: spec.ResponseRoot, reason: variant.KnownRefusal.Reason, ticket: variant.KnownRefusal.Ticket})
 			default:
+				variables, parity := variant.Variables(mcpParityOrg, window), variant.Parity
+				if variant.Instance != nil {
+					value := mcpParityInstance(ctx, t, conn, variant.Instance.Kind)
+					variant.Instance.Bind(variables, value)
+					parity.ScopeEcho = append(append([]goapiproof.ScopeEcho(nil), parity.ScopeEcho...), variant.Instance.Echo(value)...)
+				}
 				shapes = append(shapes, mcpParityShape{
 					operation: operation, variant: variant.Name, root: spec.ResponseRoot, document: document,
-					variables: variant.Variables(mcpParityOrg, window), parity: mcpParityOptions(operation, variant.Name, variant.Parity),
+					variables: variables, parity: mcpParityOptions(operation, variant.Name, parity),
 				})
 			}
 		}

@@ -158,16 +158,27 @@ VALUES ($1, 'primary', 'parity-oracle', $2, 'mcp-class-parity-oracle')`, mcpclas
 		if class.status != http.StatusOK && mcpPolicyRefusalStatuses[class.status] && reference.status == http.StatusOK {
 			tl.excluded++
 			tl.excludedWhy = append(tl.excludedWhy, fmt.Sprintf("%s=%d %s", shape.label(), class.status, mcpParityTrim(class.body)))
+			t.Logf("EXCUSED %-40s MCP policy refusal %d: %s", shape.label(), class.status, mcpParityTrim(class.body))
 			continue
 		}
 		if verdict := mcpParityJudge(shape, reference, class); verdict.failure != "" {
 			tl.failed = append(tl.failed, shape.label()+": "+verdict.failure)
+			t.Logf("FAILED  %-40s %s", shape.label(), verdict.failure)
 			continue
 		} else {
 			tl.executed++
 			if verdict.nonEmpty {
 				tl.nonEmpty++
 			}
+			excused := make([]string, 0, len(shape.parity.VolatileFields)+len(shape.parity.FloatTierB))
+			for path, reason := range shape.parity.VolatileFields {
+				excused = append(excused, "volatile "+path+": "+reason)
+			}
+			for path, reason := range shape.parity.FloatTierB {
+				excused = append(excused, "tier-b "+path+": "+reason)
+			}
+			sort.Strings(excused)
+			t.Logf("MATCHED %-40s non_empty=%t excused=%d %s", shape.label(), verdict.nonEmpty, len(excused), strings.Join(excused, " | "))
 		}
 	}
 
@@ -568,7 +579,7 @@ func mcpParityShapes(t *testing.T, root string, now time.Time) ([]mcpParityShape
 				variables: spec.Variables(mcpParityOrg, window), parity: mcpParityOptions(operation, "", spec.Parity),
 			})
 		}
-		for _, variant := range spec.Variants {
+		for _, variant := range mcpParityExtraVariants(operation, spec.Variants) {
 			switch {
 			case variant.KnownRefusal != nil:
 				notMeasured = append(notMeasured, operation+":"+variant.Name+": known refusal "+variant.KnownRefusal.Ticket)
@@ -586,30 +597,6 @@ func mcpParityShapes(t *testing.T, root string, now time.Time) ([]mcpParityShape
 		t.Fatal("no registered document has an MCP class root as its response root: nothing would be measured")
 	}
 	return shapes, notMeasured
-}
-
-// mcpParityOptions is the shape's own comparator configuration for Go against Go: the declared Python defects
-// describe a difference from Python, so none applies; the volatile fields stay excused. flowMatrix over TEAM and REPO
-// with useInvestment sums a parallel Float64 merge in no fixed order (CHAOS-9803), so its node and edge values
-// compare at the Tier B tolerance and its lists by key; a WORK_TYPE flowMatrix is exact.
-func mcpParityOptions(operation, variant string, declared goapiproof.Options) goapiproof.Options {
-	declared.BaselineDefects = nil
-	if operation == "flowMatrix" && (variant == "TEAM" || variant == "REPO") {
-		declared.FloatTierB = map[string]string{
-			"data.analytics.flowMatrix.nodes.value": "the investment measure is a parallel Float64 sum merged in no fixed order (CHAOS-9803)",
-			"data.analytics.flowMatrix.edges.value": "the investment measure is a parallel Float64 sum merged in no fixed order (CHAOS-9803)",
-		}
-		declared.OrderInsensitiveLists = append(declared.OrderInsensitiveLists,
-			goapiproof.OrderInsensitiveList{
-				Path: "data.analytics.flowMatrix.nodes", KeyFields: []string{"id"}, Ticket: "CHAOS-9803",
-				Reason: "near-tied values flip the row order of the same parallel sum, so the list order carries no signal",
-			},
-			goapiproof.OrderInsensitiveList{
-				Path: "data.analytics.flowMatrix.edges", KeyFields: []string{"source", "target"}, Ticket: "CHAOS-9803",
-				Reason: "near-tied values flip the row order of the same parallel sum, so the list order carries no signal",
-			})
-	}
-	return declared
 }
 
 // mcpParityWindow is the 14-day window the frozen world ends in: its last day is today.

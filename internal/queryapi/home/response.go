@@ -215,6 +215,10 @@ type Signal struct {
 	// response model (pinned by a recorded golden) does not carry it. It is nil on
 	// every other signal.
 	Coverage *float64 `json:"-"`
+	// ClaimSubject names the signal's subject without a hedge ("Cycle Time"),
+	// for the limiting-factor claim, which adds its own. Empty: the claim falls
+	// back to Title. Never served.
+	ClaimSubject string `json:"-"`
 	// RepoFilterApplied (CHAOS-9093) is the field of the metric the signal is
 	// built from (MetricDelta.RepoFilterApplied). It is nil on a signal that does
 	// not come from a metric spec (a risk signal, a recommendation). GraphQL only,

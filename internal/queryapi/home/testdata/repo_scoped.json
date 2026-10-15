@@ -445,7 +445,7 @@
     }
   ],
   "limiting_factor": {
-    "claim": "Compounding risk appears high for checkout-service appears to be the current limiting factor.",
+    "claim": "Compounding risk for checkout-service appears to be the current limiting factor.",
     "why_it_matters": "Compounding Risk appears flat; compounding risk combines churn, complexity, ownership, and review pressure into one persisted signal.",
     "recommended_action": "Inspect the highest-risk scope and reduce the strongest component before adding scope.",
     "confidence": "low",

@@ -527,6 +527,7 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 		signals = append(signals, Signal{
 			ID:                fmt.Sprintf("metric:%s", delta.Metric),
 			Title:             title,
+			ClaimSubject:      delta.Label,
 			Metric:            delta.Metric,
 			CurrentValue:      formatValue(delta.Value, delta.Unit),
 			PriorValue:        priorValueStr,
@@ -648,8 +649,12 @@ func BuildLimitingFactor(signals []Signal) LimitingFactor {
 		return DefaultLimitingFactor()
 	}
 	top := signals[0]
+	subject := top.ClaimSubject
+	if subject == "" {
+		subject = top.Title
+	}
 	return LimitingFactor{
-		Claim:             fmt.Sprintf("%s appears to be the current limiting factor.", top.Title),
+		Claim:             fmt.Sprintf("%s appears to be the current limiting factor.", subject),
 		WhyItMatters:      top.WhyItMatters,
 		RecommendedAction: top.RecommendedAction,
 		Confidence:        top.Confidence,
@@ -824,6 +829,7 @@ func RiskSignal(row RiskRow, f Filters, dataConfidence DataConfidence) (Signal, 
 	return Signal{
 		ID:                fmt.Sprintf("risk:%s:%s", scopeType, scopeID),
 		Title:             fmt.Sprintf("Compounding risk appears %s for %s", rawSeverity, entityName),
+		ClaimSubject:      fmt.Sprintf("Compounding risk for %s", entityName),
 		Metric:            "compounding_risk",
 		CurrentValue:      formatValue(currentValue, "%"),
 		Direction:         "flat",

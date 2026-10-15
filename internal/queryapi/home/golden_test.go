@@ -296,6 +296,10 @@ func assertResponseEqual(t *testing.T, got, want Response) {
 		}
 		got.Deltas[i].PriorValue = nil
 	}
+	got.Signals = append([]Signal(nil), got.Signals...)
+	for i := range got.Signals {
+		got.Signals[i].ClaimSubject = ""
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", got, want)
 	}

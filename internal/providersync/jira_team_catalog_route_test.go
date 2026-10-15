@@ -1196,3 +1196,127 @@ func TestJiraUnionProjectSearchEntriesIsByProjectID(t *testing.T) {
 		t.Fatalf("union = %+v, want the first entry kept, a renamed id not repeated, a new id and an id-less key added once", got)
 	}
 }
+
+// A failed project body loses that project's target and the sprints of the
+// run, never the version reads of the projects listed after it.
+func TestJiraTeamCatalogFailedProjectBodyDoesNotStopLaterProjectTargets(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
+		jiraTeamCatalogProjectSearchURI: {
+			body: `{"values":[{"id":"10001","key":"AAA","name":"A"},{"id":"10002","key":"BBB","name":"B"},{"id":"10003","key":"CCC","name":"C"}]}`,
+		},
+		"/rest/api/3/project/AAA": {status: http.StatusInternalServerError, body: `{"errorMessages":["boom"]}`},
+		"/rest/api/3/project/BBB": {body: `{"projectTypeKey":"business","versions":[{"id":"1","name":"v1","released":false,"archived":false,"releaseDate":"2026-09-15"}]}`},
+		"/rest/api/3/project/CCC": {body: `{"projectTypeKey":"business","versions":[{"id":"2","name":"v2","released":false,"archived":false,"releaseDate":"2026-10-01"}]}`},
+	}}
+	handler := JiraTeamCatalogRouteHandler{}
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
+
+	batch, err := handler.CollectTeamCatalog(
+		context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"},
+		providerfoundation.Credential{Provider: "jira"}, client,
+		TeamCatalogSelections{Teams: true},
+		now,
+	)
+	if err != nil {
+		t.Fatalf("non-strict run must absorb the failed body: %v", err)
+	}
+	if len(batch.Rows.Sprints) != 0 {
+		t.Fatalf("sprints=%+v, want none: the failed walk loses its sprints", batch.Rows.Sprints)
+	}
+	dates := map[string]*time.Time{}
+	for _, project := range batch.Rows.Projects {
+		if project.ProjectKey != nil {
+			dates[*project.ProjectKey] = project.TargetDate
+		}
+	}
+	if dates["AAA"] != nil {
+		t.Fatalf("AAA body failed: its target must stay unread, got %v", dates["AAA"])
+	}
+	for key, want := range map[string]string{"BBB": "2026-09-15", "CCC": "2026-10-01"} {
+		got := dates[key]
+		if got == nil || got.Format("2006-01-02") != want {
+			t.Fatalf("%s target=%v, want %s: a later project is read after a failed body", key, got, want)
+		}
+	}
+}
+
+// A board listing failure of an early project aborts the sprint rows only:
+// the later project bodies are still read and the later boards are not.
+func TestJiraTeamCatalogFailedBoardListingStillReadsLaterProjectBodies(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
+		jiraTeamCatalogProjectSearchURI: {
+			body: `{"values":[{"id":"10001","key":"AAA","name":"A"},{"id":"10002","key":"BBB","name":"B"}]}`,
+		},
+		"/rest/api/3/project/AAA": {body: `{"projectTypeKey":"software"}`},
+		"/rest/agile/1.0/board?maxResults=100&projectKeyOrId=AAA&startAt=0": {
+			status: http.StatusForbidden, body: `{"errorMessages":["Forbidden"]}`,
+		},
+		"/rest/api/3/project/BBB": {body: `{"projectTypeKey":"software","versions":[{"id":"1","name":"v1","released":false,"archived":false,"releaseDate":"2026-09-15"}]}`},
+	}}
+	handler := JiraTeamCatalogRouteHandler{}
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
+
+	batch, err := handler.CollectTeamCatalog(
+		context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"},
+		providerfoundation.Credential{Provider: "jira"}, client,
+		TeamCatalogSelections{Teams: true},
+		now,
+	)
+	if err != nil {
+		t.Fatalf("non-strict run must absorb the board failure: %v", err)
+	}
+	if len(batch.Rows.Sprints) != 0 {
+		t.Fatalf("sprints=%+v, want none", batch.Rows.Sprints)
+	}
+	for _, request := range doer.requests {
+		if strings.Contains(request, "projectKeyOrId=BBB") {
+			t.Fatalf("board call for BBB after the walk aborted: %q", request)
+		}
+	}
+	for _, project := range batch.Rows.Projects {
+		if project.ProjectKey != nil && *project.ProjectKey == "BBB" {
+			if project.TargetDate == nil || project.TargetDate.Format("2006-01-02") != "2026-09-15" {
+				t.Fatalf("BBB target=%v, want 2026-09-15", project.TargetDate)
+			}
+			return
+		}
+	}
+	t.Fatal("BBB project row missing")
+}
+
+// Under strict the first failure drops the whole batch, so no later project
+// body is requested.
+func TestJiraTeamCatalogStrictBodyFailureStopsTheWalkImmediately(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
+		jiraTeamCatalogProjectSearchURI: {
+			body: `{"values":[{"id":"10001","key":"AAA","name":"A"},{"id":"10002","key":"BBB","name":"B"}]}`,
+		},
+		"/rest/api/3/project/AAA": {status: http.StatusInternalServerError, body: `{"errorMessages":["boom"]}`},
+	}}
+	handler := JiraTeamCatalogRouteHandler{}
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
+
+	_, err := handler.CollectTeamCatalog(
+		context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: true},
+		providerfoundation.Credential{Provider: "jira"}, client,
+		TeamCatalogSelections{Teams: true},
+		now,
+	)
+	if err == nil {
+		t.Fatal("strict run must return the body error")
+	}
+	for _, request := range doer.requests {
+		if strings.Contains(request, "/project/BBB") {
+			t.Fatalf("strict run requested a later body after the first failure: %q", request)
+		}
+	}
+}

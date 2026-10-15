@@ -61,7 +61,7 @@ func discoverGitLab(ctx context.Context, credential providerfoundation.Credentia
 	if err != nil {
 		return nil, false, nil, err
 	}
-	subgroups, subTruncated, err := gitlabListGroupPages(ctx, client, "/api/v4/groups/"+url.PathEscape(groupPath)+"/subgroups", maxGitLabDiscoverySubgroups)
+	subgroups, subTruncated, err := gitlabListGroupPages(ctx, client, "/groups/{group}/subgroups", "/api/v4/groups/"+url.PathEscape(groupPath)+"/subgroups", maxGitLabDiscoverySubgroups)
 	if err != nil {
 		return nil, false, nil, err
 	}
@@ -71,7 +71,7 @@ func discoverGitLab(ctx context.Context, credential providerfoundation.Credentia
 
 	groups := append([]gitlabGroupEntry{rootGroup}, subgroups...)
 	for _, group := range groups {
-		projects, groupTruncated, err := gitlabListProjectPages(ctx, client, "/api/v4/groups/"+strconv.FormatInt(group.ID, 10)+"/projects", maxGitLabDiscoveryProjects, false)
+		projects, groupTruncated, err := gitlabListProjectPages(ctx, client, "/groups/{group}/projects", "/api/v4/groups/"+strconv.FormatInt(group.ID, 10)+"/projects", maxGitLabDiscoveryProjects, false)
 		if err != nil {
 			return nil, false, nil, err
 		}
@@ -97,7 +97,7 @@ func discoverGitLab(ctx context.Context, credential providerfoundation.Credentia
 	// The flat, include_subgroups=true walk against the root group: its
 	// items are never surfaced by this route (see the doc comment above),
 	// only its truncation status.
-	_, allTruncated, err := gitlabListProjectPages(ctx, client, "/api/v4/groups/"+strconv.FormatInt(rootGroup.ID, 10)+"/projects", maxGitLabDiscoveryAllProjects, true)
+	_, allTruncated, err := gitlabListProjectPages(ctx, client, "/groups/{group}/projects", "/api/v4/groups/"+strconv.FormatInt(rootGroup.ID, 10)+"/projects", maxGitLabDiscoveryAllProjects, true)
 	if err != nil {
 		return nil, false, nil, err
 	}
@@ -113,7 +113,7 @@ func gitlabTruncationWarning(what, scope string, limit int) string {
 }
 
 func gitlabGetGroup(ctx context.Context, client *providerfoundation.HTTPClient, groupPath string) (gitlabGroupEntry, error) {
-	response, err := client.Do(ctx, "GET", "/api/v4/groups/"+url.PathEscape(groupPath), nil)
+	response, err := client.DoRoute(ctx, "GET", "/groups/{group}", "/api/v4/groups/"+url.PathEscape(groupPath), nil)
 	if err != nil {
 		return gitlabGroupEntry{}, err
 	}
@@ -135,11 +135,11 @@ func gitlabGetGroup(ctx context.Context, client *providerfoundation.HTTPClient, 
 // `itertools.islice(..., limit + 1)` truncation check (_bounded_list,
 // team_discovery.py:42-66): truncated is true when MORE than limit items
 // were available, never merely when exactly limit were returned.
-func gitlabListGroupPages(ctx context.Context, client *providerfoundation.HTTPClient, path string, limit int) ([]gitlabGroupEntry, bool, error) {
+func gitlabListGroupPages(ctx context.Context, client *providerfoundation.HTTPClient, route, path string, limit int) ([]gitlabGroupEntry, bool, error) {
 	var out []gitlabGroupEntry
 	page := 1
 	for {
-		response, err := client.Do(ctx, "GET", fmt.Sprintf("%s?per_page=100&page=%d", path, page), nil)
+		response, err := client.DoRoute(ctx, "GET", route, fmt.Sprintf("%s?per_page=100&page=%d", path, page), nil)
 		if err != nil {
 			return nil, false, err
 		}
@@ -169,7 +169,7 @@ func gitlabListGroupPages(ctx context.Context, client *providerfoundation.HTTPCl
 	return out, false, nil
 }
 
-func gitlabListProjectPages(ctx context.Context, client *providerfoundation.HTTPClient, path string, limit int, includeSubgroups bool) ([]gitlabProjectEntry, bool, error) {
+func gitlabListProjectPages(ctx context.Context, client *providerfoundation.HTTPClient, route, path string, limit int, includeSubgroups bool) ([]gitlabProjectEntry, bool, error) {
 	var out []gitlabProjectEntry
 	page := 1
 	for {
@@ -177,7 +177,7 @@ func gitlabListProjectPages(ctx context.Context, client *providerfoundation.HTTP
 		if includeSubgroups {
 			query += "&include_subgroups=true"
 		}
-		response, err := client.Do(ctx, "GET", query, nil)
+		response, err := client.DoRoute(ctx, "GET", route, query, nil)
 		if err != nil {
 			return nil, false, err
 		}

@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,5 +39,42 @@ func TestInvestmentExplainStoreFailureKeepsDriverTextOutOfTheBody(t *testing.T) 
 	}
 	if got, want := strings.TrimSpace(rec.Body.String()), `{"detail":"Internal Server Error"}`; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func TestInvestmentExplainStoreFailureLogsAtErrorLevelAndEchoesTheRequestID(t *testing.T) {
+	logs := &bytes.Buffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	reader, err := investmentexplain.NewReader(failingStoreClient{})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain",
+		strings.NewReader(`{"filters":{"what":{"repos":["some-repo"]}}}`))
+	req.Header.Set("X-Request-Id", "review-request-1")
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if got := rec.Header().Get("X-Request-Id"); got != "review-request-1" {
+		t.Fatalf("X-Request-Id = %q, want the caller's id", got)
+	}
+	for _, want := range []string{"level=ERROR", "request_id=review-request-1", "store-host.internal"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("log lacks %q: %s", want, logs.String())
+		}
+	}
+	bad := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain", strings.NewReader(`{"filters":{"what":{"repos":["r"]}}}`))
+	bad.Header.Set("X-Request-Id", "a b\tc")
+	bad = bad.WithContext(authctx.WithClaims(bad.Context(), authctx.Claims{OrgID: "org-1"}))
+	badRec := httptest.NewRecorder()
+	handler(badRec, bad)
+	if got := badRec.Header().Get("X-Request-Id"); got != "" {
+		t.Fatalf("a request id with reserved characters was echoed: %q", got)
 	}
 }

@@ -91,9 +91,7 @@ type handlers struct {
 }
 
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, err error) {
-	h.logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.URL.Path),
-		slog.String("step", what), slog.String("error", err.Error()))
-	policy.WriteInternal(w)
+	policy.WriteError(w, r, h.logger, what, err)
 }
 
 // providerFailure answers a provider client error with fixed text; the

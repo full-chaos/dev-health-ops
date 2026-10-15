@@ -1,7 +1,11 @@
 package credentials
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -33,6 +37,22 @@ func TestGitHubBrowseProviderFailuresKeepProviderTextOutOfTheBody(t *testing.T) 
 		}
 		if !strings.Contains(logs, "github ") || (tc.providerStatus == http.StatusForbidden && !strings.Contains(logs, "denied")) {
 			t.Fatalf("log lacks the provider cause: %s", logs)
+		}
+	}
+}
+
+func TestUnclassifiedBrowseFailureLogsTheRequestID(t *testing.T) {
+	logs := &bytes.Buffer{}
+	h := newHandlers(Deps{HTTPClient: &http.Client{Transport: &browseTransport{}}, Logger: slog.New(slog.NewTextHandler(logs, nil))})
+	recorder := httptest.NewRecorder()
+	recorder.Header().Set("X-Request-Id", "req-browse-1")
+	h.internal(recorder, httptest.NewRequest(http.MethodGet, "/credentials/x/repos", nil), "list github repositories", errors.New("transport marker"))
+	if recorder.Code != http.StatusInternalServerError || strings.Contains(recorder.Body.String(), "marker") {
+		t.Fatalf("status %d body %s", recorder.Code, recorder.Body.String())
+	}
+	for _, want := range []string{"level=ERROR", "request_id=req-browse-1", "transport marker"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("log lacks %q: %s", want, logs.String())
 		}
 	}
 }

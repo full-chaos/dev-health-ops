@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"math"
 	"math/big"
 	"net/http"
@@ -346,7 +347,8 @@ func writeKeepAliveJSON(ctx context.Context, w http.ResponseWriter, work func(co
 				// error bodies never carry attacker-controlled data, so a
 				// hand-written literal is safe and exact, not a shortcut.
 				writeStreamErrorChunks(w, flusher)
-				log.Printf("query-api: investment/explain streaming error: %v", result.err)
+				slog.Default().ErrorContext(ctx, "query-api: investment/explain streaming error",
+					slog.String("error", result.err.Error()))
 				return
 			}
 			// result.body is EncodeInvestmentMixExplanation's own JSON
@@ -448,8 +450,10 @@ func newInvestmentExplainWorkHandler(
 			// lookup), never on a request value, so the cause goes to the log
 			// and the client sees a generic answer.
 			status, message, _ := policy.MapError(buildErr)
-			log.Printf("query-api: investment_explain: building the options failed: org_id=%s request_id=%s status=%d err=%v",
-				claims.OrgID, envelopeRequestID(r), status, buildErr)
+			echoRequestID(w, r)
+			slog.Default().ErrorContext(r.Context(), "query-api: investment_explain: building the options failed",
+				slog.String("org_id", claims.OrgID), slog.String("request_id", envelopeRequestID(r)),
+				slog.Int("status", status), slog.String("error", buildErr.Error()))
 			writeRESTError(w, r, "investment_explain", claims.OrgID, status, message)
 			return
 		}

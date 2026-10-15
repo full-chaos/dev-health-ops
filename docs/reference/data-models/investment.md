@@ -178,8 +178,9 @@ unit's rows is its weight. When no unit of a scope carries a size, `ISSUE_SIZE` 
 scales are not normalized: a Linear estimate, Jira story points and a GitLab weight add as stored.
 
 `SankeyCoverage.sizingCoverage` is the share of the window's work units that carry a size and
-`SankeyCoverage.unsizedUnitCount` the units that do not: read them before reading an `ISSUE_SIZE` mix, because with
-low sizing coverage the mix is mostly the work-unit count. Both are counted for every measure on the work-unit path,
+`SankeyCoverage.unsizedUnitCount` the units that do not: read them before reading an `ISSUE_SIZE` mix. When less
+than half of the units carry a size, the mix is mostly unsized: "Mostly unsized: n of m work units have an issue size.
+The other u have no size, so each counts as 1 work unit." Both are counted for every measure on the work-unit path,
 and are null where they are not measured (the non-investment path, or a window with no unit). A Sankey read in
 `ISSUE_SIZE` names its unit `ISSUE_SIZE`; every other Investment Sankey names `WORK_UNITS`. Under `ISSUE_SIZE` every
 weighted coverage share (`teamCoverage`, `repoCoverage` and its split) is weighed the same way as the chart.

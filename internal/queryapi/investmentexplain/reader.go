@@ -313,7 +313,7 @@ ORDER BY value DESC
 
 // SizingCoverage is how many distinct work units of a read carry an issue size, and how many units it holds
 // (CHAOS-9619, D6027): a share in ISSUE_SIZE is read together with it, because with few sized units the mix is
-// mostly the work-unit count.
+// mostly unsized units, each counted as 1 work unit.
 type SizingCoverage struct {
 	SizedUnits int
 	Units      int

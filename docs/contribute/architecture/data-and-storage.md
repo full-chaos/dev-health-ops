@@ -482,7 +482,7 @@ for both providers (`pickProjectTarget`).
 | --- | --- |
 | `target_state` | `stated` (one open dated entry supplied the date), `none_dated` (read, and no open entry has a date), `held` (not read this run: every target column is the value of the last run that read it), `unknown` (no run ever read it; the default) |
 | `target_kind` | `project`, `version` or `milestone`; empty when there is no target |
-| `target_source` | `<provider>.<kind>.<field>`: `linear.project.targetDate`, `jira.version.releaseDate`, `gitlab.milestone.due_date`; empty when there is no target |
+| `target_source` | `<provider>.<kind>.<field>`: `linear.project.targetDate`, `jira.version.releaseDate`, `gitlab.milestone.due_date` (`gitlab.group_milestone.due_date` when the earliest open dated milestone belongs to an ancestor group; the ref then names the group); empty when there is no target |
 | `target_ref`, `target_ref_name` | the supplying version's or milestone's stable id and display name; for GitLab the id is the `sprints` row key of the same milestone |
 | `target_other_open` | the number of other open dated entries of the project; NULL unless the value is a stated one (state `stated`, or `held` over one) |
 | `target_fetched_at` | the time of the last successful read of the target |

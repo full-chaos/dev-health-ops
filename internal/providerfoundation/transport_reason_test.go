@@ -82,7 +82,7 @@ type failureRecorder interface {
 func failUnexpectedServerErrors(t failureRecorder, logged string) {
 	t.Helper()
 	for _, line := range strings.Split(logged, "\n") {
-		if line == "" || strings.Contains(line, "TLS handshake error") {
+		if line == "" || strings.HasPrefix(line, "http: TLS handshake error from ") {
 			continue
 		}
 		t.Errorf("unexpected server error: %s", line)
@@ -226,5 +226,13 @@ func TestQuietTLSServerDropsOnlyTheHandshakeLines(t *testing.T) {
 	failUnexpectedServerErrors(&failure, "http: TLS handshake error from 127.0.0.1:1: EOF\n")
 	if failure.failed {
 		t.Fatal("a TLS handshake error line failed the test")
+	}
+}
+
+func TestUnexpectedServerErrorContainingHandshakePhraseIsReported(t *testing.T) {
+	var failure recordedFailure
+	failUnexpectedServerErrors(&failure, "unexpected handler error: TLS handshake error\n")
+	if !failure.failed {
+		t.Fatal("an unexpected server error containing the handshake phrase was hidden")
 	}
 }

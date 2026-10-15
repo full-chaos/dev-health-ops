@@ -937,7 +937,7 @@ func (adapter GitHubSprintsClickHouseAdapter) InspectGitHubWorkItemEffect(
 		contentEqual := sprintContentEqual(actual, actualNativeTeamKey, row)
 		if verdict, final := workItemVersionVerdict(actual.LastSynced, clickHouseMillis(row.LastSynced)); final {
 			if verdict == EffectConflict {
-				return adapter.sprintNewerRowVerdict(ctx, row, contentEqual), nil
+				return sprintNewerRowVerdict(ctx, row, contentEqual, adapter.SharedAcrossUnits), nil
 			}
 			return verdict, nil
 		}
@@ -971,14 +971,14 @@ var sprintRecoveryNewerRow = func() metric.Int64Counter {
 // write older data the table drops anyway, so the effect counts as committed
 // (EffectExact; the vocabulary has no superseded verdict). On a single-owner
 // key a newer row means another writer owns the key, which stays a conflict.
-func (adapter GitHubSprintsClickHouseAdapter) sprintNewerRowVerdict(
-	ctx context.Context, row githubSprintRow, contentEqual bool,
+func sprintNewerRowVerdict(
+	ctx context.Context, row githubSprintRow, contentEqual, sharedAcrossUnits bool,
 ) EffectInspection {
 	reason, verdict := sprintNewerRowSingleOwner, EffectConflict
 	switch {
 	case contentEqual:
 		reason, verdict = sprintNewerRowSameContent, EffectExact
-	case adapter.SharedAcrossUnits:
+	case sharedAcrossUnits:
 		reason, verdict = sprintNewerRowSuperseded, EffectExact
 	}
 	sprintRecoveryNewerRow.Add(ctx, 1, metric.WithAttributes(
@@ -987,7 +987,7 @@ func (adapter GitHubSprintsClickHouseAdapter) sprintNewerRowVerdict(
 		attribute.String("verdict", string(verdict))))
 	slog.Default().InfoContext(ctx, "sprint_effect_readback_newer_row",
 		"org_id", row.OrgID, "provider", row.Provider, "sprint_id", row.SprintID,
-		"reason", reason, "verdict", string(verdict), "shared_across_units", adapter.SharedAcrossUnits)
+		"reason", reason, "verdict", string(verdict), "shared_across_units", sharedAcrossUnits)
 	return verdict
 }
 

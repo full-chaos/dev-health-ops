@@ -522,8 +522,8 @@ replay would only write older data). Equal content logs reason
 (log `sprint_effect_readback_newer_row`, counter
 `provider_sync_sprint_recovery_newer_row_total`). A GitHub milestone key
 (`ghms:<repository>:<id>`) has one writing unit, so a newer row with different
-content there stays a recovery conflict. The Linear reference catalog keeps its
-own readback, which still asks for an equal `last_synced`.
+content there stays a recovery conflict. The Linear reference catalog's own
+sprints readback applies the same rule to a newer work-items row.
 
 ## Migration rules
 

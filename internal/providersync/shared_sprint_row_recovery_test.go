@@ -43,7 +43,14 @@ func (rows *sprintReadbackRows) Scan(dest ...any) error {
 	row := rows.rows[rows.index]
 	*dest[0].(*string) = row.Provider
 	*dest[1].(*string) = row.SprintID
-	*dest[2].(*string) = derefString(row.NativeTeamKey)
+	switch target := dest[2].(type) {
+	case *string:
+		*target = derefString(row.NativeTeamKey)
+	case **string:
+		*target = row.NativeTeamKey
+	default:
+		return fmt.Errorf("sprintReadbackRows: native_team_key scanned into %T", dest[2])
+	}
 	*dest[3].(**string) = row.Name
 	*dest[4].(**string) = row.State
 	*dest[5].(**time.Time) = utcPointer(row.StartedAt)
@@ -248,5 +255,39 @@ func TestLinearCycleReadbackAfterNewerCatalogWrite(t *testing.T) {
 	}
 	if got != EffectExact {
 		t.Fatalf("inspection = %q, want %q", got, EffectExact)
+	}
+}
+
+// The reverse order: the catalog recovers its crashed write after a newer
+// work-items row under the same cycle key.
+func TestLinearCatalogSprintReadbackAfterNewerWorkItemsWrite(t *testing.T) {
+	claim := nativeTestClaim("linear", "work-items")
+	effect, err := effectBatchFromValues(linearReferenceCatalogSprintsDestination, EffectReadbackRequired,
+		[]linearSprintRow{sprintFixture("linear", "linear:cycle:c1", "Cycle 3", unitAWrite)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		stored linearSprintRow
+		want   EffectInspection
+	}{
+		{"own write landed", sprintFixture("linear", "linear:cycle:c1", "Cycle 3", unitAWrite), EffectExact},
+		{"work-items rewrote same content later", sprintFixture("linear", "linear:cycle:c1", "Cycle 3", unitBWrite), EffectExact},
+		{"work-items wrote newer observation later", sprintFixture("linear", "linear:cycle:c1", "Cycle 3 (completed)", unitBWrite), EffectExact},
+		{"different content at own version", sprintFixture("linear", "linear:cycle:c1", "Cycle 3 (completed)", unitAWrite), EffectConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := LinearReferenceCatalogClickHouseEffects{
+				Conn: &sprintReadbackConn{stored: []githubSprintRow{tc.stored}}, Lease: sprintTestLease(),
+			}
+			got, err := sink.InspectEffect(context.Background(), claim, effect)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("inspection = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

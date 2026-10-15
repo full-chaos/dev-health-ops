@@ -52,6 +52,7 @@ for e in "${ENVF[@]}"; do ARGS+=(--env-file "$e"); done
 for p in "${PROFILES[@]}"; do ARGS+=(--profile "$p"); done
 for f in "${FILES[@]}"; do ARGS+=(-f "$f"); done
 cd "$R"
+export BIGBOY_ROOT="$R" BIGBOY_TOOLS_DIR="$T"
 export DHO_API_CH_USERS_XML="${DHO_API_CH_USERS_XML:-$R/.go-api-dev/dho_api_ch.xml}"
 if [ -z "${BIGBOY_OPERATOR_IMAGE:-}" ] && grep -qs 'BIGBOY_OPERATOR_IMAGE' "${FILES[@]}"; then
   BIGBOY_OPERATOR_IMAGE=$(docker compose -p "$PROJECT" ps --format '{{.Image}}' go-reconciler 2>/dev/null | head -1 || true)
@@ -92,7 +93,7 @@ run_logged() {
 case $VERB in
   config)
     case ${1:-} in
-      "") exec "$HERE/compose-config-redacted.sh" "${ARGS[@]}" ;;
+      "") rm -f "$ERRF"; exec "$HERE/compose-config-redacted.sh" "${ARGS[@]}" ;;
       --quiet|--images|--services) [ $# -eq 1 ] || die "config takes one flag"; safe_config "$1" ;;
       *) die "config accepts no argument, --quiet, --images or --services" ;;
     esac ;;

@@ -196,3 +196,23 @@ def test_service_name_with_a_newline_is_refused(tmp_path: Path) -> None:
 def test_read_verbs_print_nothing_on_stderr(tmp_path: Path) -> None:
     _, tools, env = _tree(tmp_path)
     assert _run(tools, env, "config", "--quiet").stderr == ""
+
+
+def test_repin_web_child_gets_absolute_root_and_tools_paths(tmp_path: Path) -> None:
+    r, tools, env = _tree(tmp_path)
+    seen = tmp_path / "child.env"
+    child = tools / "bigboy-repin-web.sh"
+    child.write_text(
+        f'#!/usr/bin/env bash\necho "$BIGBOY_ROOT $BIGBOY_TOOLS_DIR" > {seen}\n'
+    )
+    child.chmod(child.stat().st_mode | stat.S_IEXEC)
+    rel = {**env, "BIGBOY_ROOT": "root", "BIGBOY_TOOLS_DIR": "tools"}
+    res = subprocess.run(
+        [str(tools / "stack.sh"), "repin-web"],
+        env=rel,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert seen.read_text().split() == [str(r), str(tools)]

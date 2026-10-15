@@ -68,6 +68,7 @@ func LoadViaDeploymentIncidentLinks(
 	}
 	currentIncidents := remaining.CurrentOperationalRowsSQL("operational_incidents", []string{
 		"is_deleted = 0",
+		"started_at IS NOT NULL",
 	}, contract)
 	currentMappings := activeServiceRepositoryMappingsSQL(contract)
 	rows, err := conn.Query(ctx, `

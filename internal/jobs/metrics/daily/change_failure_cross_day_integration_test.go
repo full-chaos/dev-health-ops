@@ -70,3 +70,33 @@ func TestChangeFailureNativeLinkAcrossUTCDayBoundary(t *testing.T) {
 		}
 	}
 }
+
+// An incident with no start time belongs to no day: a native link to it is no
+// evidence for any day, as before the cross-day read.
+func TestChangeFailureNativeLinkToIncidentWithoutStartTimeCountsNothing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	_, conn := opfixture.Start(ctx, t)
+	const org = "5d0c2c1e-0000-4000-8000-0000000009b2"
+	repo := uuid.MustParse("eeeeeeee-9019-4111-8111-111111111111")
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	for _, statement := range []string{
+		"INSERT INTO repos (id, repo, created_at, last_synced, org_id) VALUES ('" + repo.String() + "', 'acme/nostart', now64(3), now64(3), '" + org + "')",
+		"INSERT INTO deployments (repo_id, deployment_id, status, deployed_at, last_synced, org_id) VALUES ('" + repo.String() + "', 'd-nostart', 'success', '" + day.Add(10*time.Hour).Format("2006-01-02 15:04:05") + "', now64(3), '" + org + "')",
+		fmt.Sprintf("INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, provider, repo_id, confidence, source, evidence, observed_at) VALUES ('e-nostart', '%s', 'd-nostart', 'I-nostart', 'github', NULL, 1, 'native', '{}', now64(3))", org),
+		fmt.Sprintf(`INSERT INTO operational_incidents
+(org_id, provider, provider_instance_id, source_entity_type, external_id, source_version_at,
+ source_revision, source_conflict_key, ingest_revision, ordering_contract, id, observed_at, last_synced,
+ normalized_status, title, started_at, service_id, is_deleted)
+VALUES ('%s','pagerduty','acme','incident','I-nostart', now64(6), 1, 'k1', 1, 2, 'I-nostart', now64(6), now64(6), 'open', 'nostart', NULL, '', 0)`, org),
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	computeChangeFailureDay(ctx, t, conn, org, day, day.Add(30*time.Hour), repo)
+	got, _ := newestChangeFailure(ctx, t, conn, org, repo, day)
+	if got != (changefailure.Counts{Deployments: 1}) {
+		t.Fatalf("counts %+v, want one deployment and no failure, no incident", got)
+	}
+}

@@ -1085,6 +1085,7 @@ func TestDiscoverGitHubAllReposScopedNamespaceDecisionRule(t *testing.T) {
 		{name: "U ok, N ok: union deduplicated", statuses: []int{200, 404, 200}, bodies: []string{"[" + collab + "]", notFnd, "[" + collab + "," + public + "]"}, want: []string{"alice/collab", "alice/public"}, wantPaths: 3},
 		{name: "U ok, N org ok", statuses: []int{200, 200}, bodies: []string{"[" + collab + "]", "[" + public + "]"}, want: []string{"alice/collab", "alice/public"}, wantPaths: 2},
 		{name: "U ok, N both fail: U only, logged", statuses: []int{200, 404, 404}, bodies: []string{"[" + collab + "]", notFnd, notFnd}, want: []string{"alice/collab"}, wantPaths: 3, wantLogged: true},
+		{name: "U ok, N 401 both: U only, logged", statuses: []int{200, 401, 401}, bodies: []string{"[" + collab + "]", `{"message":"Bad credentials"}`, `{"message":"Bad credentials"}`}, want: []string{"alice/collab"}, wantPaths: 3, wantLogged: true},
 		{name: "U 401, N ok: error, not partial success", statuses: []int{401, 404, 200}, bodies: []string{`{"message":"Bad credentials"}`, notFnd, "[" + public + "]"}, wantErr: true, wantPaths: 1},
 		{name: "U 500, N ok: error", statuses: []int{500, 200}, bodies: []string{`{"message":"x"}`, "[" + public + "]"}, wantErr: true, wantPaths: 1},
 		{name: "U fails, N fails: error", statuses: []int{400}, bodies: []string{`{"message":"Bad"}`}, wantErr: true, wantPaths: 1},

@@ -191,6 +191,10 @@ func buildProviderLookup(workItems []WorkItemRow) providerLookup {
 		gitlab: make(map[[2]string]string),
 	}
 	for _, wi := range workItems {
+		// A pull or merge request work item is never the issue side.
+		if issueprlinks.IsPullRequestWorkItem(wi.WorkItemID) {
+			continue
+		}
 		lookup.byID[strings.ToLower(wi.WorkItemID)] = wi.WorkItemID
 		switch wi.Provider {
 		case "jira", "linear":

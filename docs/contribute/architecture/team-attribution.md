@@ -3333,6 +3333,11 @@ over Jira, Linear, GitHub and GitLab). Where it is held:
   --review-evidence "<why>"` (no window is needed; the retraction is org-wide). The step's ledger evidence and its log
   line `issue-pr fallback retraction done` report `links_retracted` and `edges_retired`. Ownership rows that a
   retracted link supported are re-derived by the next `sync.team_repo_ownership_derivation` run (§0.4d).
+- **A pull request is never the issue side.** A pull or merge request work item (`ghpr:<owner>/<repo>#<n>`,
+  `gitlab:<path>!<n>`, `issueprlinks.IsPullRequestWorkItem`) is no issue: the text matcher's issue lookup and the
+  heuristic's work items skip it, and `issue_pr_fallback_retraction` retracts a stored lower-tier row and edge whose
+  issue side is one (prod had `ghpr:...#120 -> 121` text rows and heuristic self-links). Tests:
+  `pr_never_issue_side_test.go`.
 - **Readers.** Every reader of the link table, `team_repo_ownership` derivation (§0.4d) included, sees only links the
   rule allows once the build has run; no reader re-applies it.
 

@@ -132,7 +132,7 @@ var demoPaymentsStories = []demoStory{
 	// Support Tools waits on it (SUP "Refund lookup in the support console").
 	feature("Refund status API for support agents", 15, -1, change("payments-gateway", 12, -1)).blocksIn("support", 24),
 	// The as-of day: the newest event of every repository is within hours of the world's instant.
-	chore("Tune the gateway retry backoff", 2, 0, change("payments-gateway", 1, 0).deploy(), change("payments-ledger", 1, 0), change("shared-api", 1, 0)),
+	chore("Tune the gateway retry backoff", 2, -1, change("payments-gateway", 1, 0).deploy(), change("payments-ledger", 1, 0), change("shared-api", 1, 0)),
 }
 
 // Checkout (Linear CHK): features until a month ago, then mostly regressions and hotfixes. Its order

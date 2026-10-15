@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -145,12 +146,18 @@ type BreakdownFilters struct {
 // Lines of code are not a measure of Investment (CHAOS-9695, D6014), and MeasureValueSQL is the one definition of it.
 const MeasureCount = "COUNT"
 
+// MeasureIssueSize is Investment measured by work-unit issue size (CHAOS-9619, D5999): each unit weighs the sum of
+// its issues' story points, 1 when it has none. Lines of code never.
+const MeasureIssueSize = "ISSUE_SIZE"
+
 // NormalizeMeasure maps a request measure to the measure of an explain mix read. THROUGHPUT is
 // COUNT on the investment path (analytics dbExpression). ok is false for any other name.
 func NormalizeMeasure(name string) (measure string, ok bool) {
 	switch strings.ToUpper(strings.TrimSpace(name)) {
 	case "COUNT", "THROUGHPUT":
 		return MeasureCount, true
+	case MeasureIssueSize:
+		return MeasureIssueSize, true
 	}
 	return "", false
 }
@@ -262,6 +269,11 @@ func (reader *Reader) FetchInvestmentBreakdown(ctx context.Context, filters Brea
 	if err != nil {
 		return nil, err
 	}
+	source, err := MeasureSource(filters.Measure, filters.unitSource(scopeSQL))
+	if err != nil {
+		return nil, err
+	}
+	slog.DebugContext(ctx, "investmentexplain: breakdown measure", "measure", filters.Measure, "scoped", filters.scoped(scopeSQL), "dated_by_end", filters.DatedByEnd)
 
 	query := fmt.Sprintf(`
 SELECT
@@ -277,7 +289,7 @@ WHERE %s
 GROUP BY subcategory, theme
 ORDER BY value DESC
 %s
-`, valueSQL, filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, valueSQL, source, filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -297,6 +309,82 @@ ORDER BY value DESC
 		return nil, fmt.Errorf("iterate investment breakdown rows: %w", err)
 	}
 	return results, nil
+}
+
+// SizingCoverage is how many distinct work units of a read carry an issue size, and how many units it holds
+// (CHAOS-9619, D6027): a share in ISSUE_SIZE is read together with it, because with few sized units the mix is
+// mostly unsized units, each counted as 1 work unit.
+type SizingCoverage struct {
+	SizedUnits int
+	Units      int
+}
+
+// Share is the sized share of the units, nil when the read holds no unit (not measured, never 0).
+func (c SizingCoverage) Share() *float64 {
+	if c.Units <= 0 {
+		return nil
+	}
+	share := float64(c.SizedUnits) / float64(c.Units)
+	return &share
+}
+
+// Unsized is the number of units without a size, nil when the read holds no unit.
+func (c SizingCoverage) Unsized() *int {
+	if c.Units <= 0 {
+		return nil
+	}
+	unsized := c.Units - c.SizedUnits
+	return &unsized
+}
+
+// FetchSizingCoverage counts the distinct units FetchInvestmentBreakdown reads for the same filters (same source,
+// window, scope and category clauses) and the ones among them that carry an issue size.
+func (reader *Reader) FetchSizingCoverage(ctx context.Context, filters BreakdownFilters) (SizingCoverage, error) {
+	if reader == nil || reader.client == nil {
+		return SizingCoverage{}, ErrUnavailable
+	}
+	categorySQL, categoryBindings := filters.categoryClause()
+	scopeSQL, scopeBindings := filters.scopeClause()
+	source, err := MeasureSource(MeasureIssueSize, filters.unitSource(scopeSQL))
+	if err != nil {
+		return SizingCoverage{}, err
+	}
+	bindings := filters.baseBindings()
+	bindings = append(bindings, scopeBindings...)
+	bindings = append(bindings, categoryBindings...)
+	query := fmt.Sprintf(`
+SELECT
+    toUInt64(uniqExactIf(work_unit_investments.work_unit_id, %s > 0)) AS sized_units,
+    toUInt64(uniqExact(work_unit_investments.work_unit_id)) AS units
+FROM %s
+ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
+WHERE %s
+  AND work_unit_investments.org_id = {org_id:String}
+%s
+%s
+%s
+`, analytics.UnitIssueSizeColumn, source, filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+	rows, err := reader.client.Query(ctx, query, bindings)
+	if err != nil {
+		return SizingCoverage{}, fmt.Errorf("query investment sizing coverage: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return SizingCoverage{}, fmt.Errorf("iterate investment sizing coverage: %w", err)
+		}
+		return SizingCoverage{}, fmt.Errorf("query investment sizing coverage: no row")
+	}
+	var sized, units uint64
+	if err := rows.Scan(&sized, &units); err != nil {
+		return SizingCoverage{}, fmt.Errorf("scan investment sizing coverage: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return SizingCoverage{}, fmt.Errorf("iterate investment sizing coverage: %w", err)
+	}
+	coverage := SizingCoverage{SizedUnits: int(sized), Units: int(units)}
+	slog.DebugContext(ctx, "investmentexplain: sizing coverage", "sized_units", coverage.SizedUnits, "units", coverage.Units, "scoped", filters.scoped(scopeSQL))
+	return coverage, nil
 }
 
 // FetchMockFixtureInvestmentRowCount ports
@@ -446,6 +534,10 @@ func (reader *Reader) FetchInvestmentThemeEffort(ctx context.Context, filters Br
 	if err != nil {
 		return nil, err
 	}
+	source, err := MeasureSource(filters.Measure, filters.unitSource(scopeSQL))
+	if err != nil {
+		return nil, err
+	}
 	bindings := filters.baseBindings()
 	bindings = append(bindings, scopeBindings...)
 	bindings = append(bindings, shareBindings...)
@@ -466,7 +558,7 @@ WHERE %[4]s
 GROUP BY theme
 ORDER BY value DESC, theme ASC
 %[7]s
-`, shareSQL, filters.unitWeight(scopeSQL), filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime(), valueSQL)
+`, shareSQL, filters.unitWeight(scopeSQL), source, filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime(), valueSQL)
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {

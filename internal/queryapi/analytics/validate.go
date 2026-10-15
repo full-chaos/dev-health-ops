@@ -88,6 +88,7 @@ type Measure string
 
 const (
 	MeasureCount                Measure = "count"
+	MeasureIssueSize            Measure = "issue_size"
 	MeasureChurnLOC             Measure = "churn_loc"
 	MeasurePRReworkRatio        Measure = "pr_rework_ratio"
 	MeasureCycleTimeHours       Measure = "cycle_time_hours"
@@ -270,6 +271,13 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 		switch measure {
 		case MeasureCount, MeasureThroughput:
 			return throughputExpr, nil
+		case MeasureIssueSize:
+			// CHAOS-9619 (D5999): each unit weighs its issue size, 1 when unsized; the source carries
+			// unit_size_weight only when the context was sized for this measure (investmentContext.sizedFor).
+			if useRepoAllocation {
+				return "SUM(subcategory_kv.2 * allocation_weight * " + UnitSizeWeightColumn + ")", nil
+			}
+			return "SUM(subcategory_kv.2 * " + UnitSizeWeightColumn + ")", nil
 		case MeasureChurnLOC:
 			// CHAOS-9695 (D5999, D6014): lines of code are a health measure of delivery (the non-investment path
 			// below), never an Investment measure: a request for it on the investment path is refused.
@@ -284,6 +292,8 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	switch measure {
 	case MeasureCount:
 		return "SUM(work_items_completed)", nil
+	case MeasureIssueSize:
+		return "", newValidationError("measure", string(measure), "measure %q is an Investment measure: it needs a theme or subcategory dimension", measure)
 	case MeasureChurnLOC:
 		return "SUM(churn_loc)", nil
 	case MeasurePRReworkRatio:

@@ -27,9 +27,12 @@ type localHarness struct {
 func (h *localHarness) executor() Executor {
 	return InlineExecutor(InlineDeps{
 		OpenStore: func(context.Context, string) (driver.Conn, error) { h.opened++; return fakeStore{}, nil },
-		FirstOrg: func(_ context.Context, dbURL string) (string, bool) {
+		FirstOrg: func(_ context.Context, dbURL string) (string, error) {
 			h.firstOrg = append(h.firstOrg, dbURL)
-			return h.org, h.found
+			if !h.found {
+				return "", lookupFailure(reasonOrganizationNotFound)
+			}
+			return h.org, nil
 		},
 		Local: func(_ context.Context, plan Plan, _ driver.Conn, _ cli.Env, _ time.Time) error {
 			h.plans = append(h.plans, plan)

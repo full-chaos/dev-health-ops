@@ -90,6 +90,8 @@ type linearIssue struct {
 	CreatedAt, UpdatedAt  string
 	StartedAt             string
 	CompletedAt           string
+	// HistoryFrom is when the issue moved from Todo to In Progress: the issue history carries that entry ("" = none).
+	HistoryFrom string
 	// Attachments are the URLs of the pull requests the GitHub and GitLab integrations attach.
 	Attachments []string
 	// Relations are "related <identifier>@<createdAt>".
@@ -142,6 +144,11 @@ func (issue linearIssue) payload() map[string]any {
 		labels = append(labels, map[string]any{"id": issue.ID + "-l-" + strings.ToLower(name), "name": name})
 	}
 	history := []any{}
+	if issue.HistoryFrom != "" {
+		history = append(history, map[string]any{"id": issue.ID + "-h0", "createdAt": issue.HistoryFrom,
+			"fromState": map[string]any{"name": "Todo", "type": "unstarted"}, "toState": map[string]any{"name": "In Progress", "type": "started"},
+			"fromProjectId": nil, "toProjectId": nil, "actor": map[string]any{"name": issue.Assignee.Name, "email": issue.Assignee.Email}})
+	}
 	if issue.CompletedAt != "" {
 		history = append(history, map[string]any{"id": issue.ID + "-h1", "createdAt": issue.CompletedAt,
 			"fromState": map[string]any{"name": "In Progress", "type": "started"}, "toState": map[string]any{"name": "Done", "type": "completed"},

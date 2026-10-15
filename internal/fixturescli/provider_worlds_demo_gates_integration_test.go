@@ -928,3 +928,56 @@ func TestDemoGateG10BlockerLinksCarryTheirStartTime(t *testing.T) {
 		t.Fatal("the world has no blocker link")
 	}
 }
+
+// G11: the daily state-duration job skips an item with no status transition, so an item without one has no
+// state time and no blocked hours. Every item a tracker keeps (Jira, Linear, and the GitHub and GitLab
+// issues) has a status history that starts at its creation and ends at its current status, written by the
+// trackers' own history (changelog, issue history, label and state events), and every item of a blocker
+// link has one.
+func TestDemoGateG11TrackerItemsHaveAStatusHistory(t *testing.T) {
+	world, _ := demoGateWorld(t)
+	transitions := map[string][]map[string]any{}
+	for _, row := range demoGateRows(world, "work_item_transitions") {
+		id := gateText(row["work_item_id"])
+		transitions[id] = append(transitions[id], row)
+	}
+	inBlocker := map[string]bool{}
+	for _, row := range demoGateRows(world, "work_item_dependencies") {
+		if gateText(row["relationship_type"]) == "blocks" {
+			inBlocker[gateText(row["source_work_item_id"])] = true
+			inBlocker[gateText(row["target_work_item_id"])] = true
+		}
+	}
+	checked, without := 0, 0
+	for _, item := range demoGateRows(world, "work_items") {
+		id := gateText(item["work_item_id"])
+		// A pull request or merge request is a work item too; no tracker event maps an open one to a status.
+		tracker := strings.HasPrefix(id, "jira:") || strings.HasPrefix(id, "linear:") ||
+			(strings.HasPrefix(id, "gh:") || (strings.HasPrefix(id, "gitlab:") && strings.Contains(id, "#")))
+		if !tracker && !inBlocker[id] {
+			continue
+		}
+		checked++
+		rows := transitions[id]
+		if len(rows) == 0 {
+			without++
+			t.Errorf("%s (status %s) has no status transition: the daily job skips it", id, gateText(item["status"]))
+			continue
+		}
+		last := ""
+		var lastAt time.Time
+		for _, row := range rows {
+			at, ok := gateTime(row["occurred_at"])
+			if ok && !at.Before(lastAt) {
+				lastAt, last = at, gateText(row["to_status"])
+			}
+		}
+		if status := gateText(item["status"]); last != status {
+			t.Errorf("%s: its status history ends at %q, its current status is %q", id, last, status)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("the world has no tracker item")
+	}
+	t.Logf("%d tracker or blocker items checked, %d without a history", checked, without)
+}

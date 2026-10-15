@@ -189,6 +189,10 @@ type gitlabItem struct {
 	// ApprovedAt, on a merged merge request, is when its reviewer approved it: GitLab's "approved this
 	// merge request" system note ("" = no note, the approval list alone).
 	ApprovedAt string
+	// StatusLabel is the status label an issue got at StatusAt ("in progress", "to do"): a label event adds it,
+	// and an open issue keeps it. A closed issue's current labels do not hold it (its state says done).
+	StatusLabel string
+	StatusAt    string
 }
 
 // commitsListing is GET /merge_requests/:iid/commits: newest commit first, each with its id.
@@ -228,7 +232,7 @@ func (item gitlabItem) payload(project gitlabProject) map[string]any {
 	out := map[string]any{
 		"id": project.ID*100 + item.IID, "iid": item.IID, "project_id": project.ID, "title": item.Title,
 		"description": nullable(item.Description), "state": item.state(), "created_at": item.CreatedAt, "updated_at": item.UpdatedAt,
-		"closed_at": nullable(item.ClosedAt), "labels": append([]string{}, item.Labels...), "milestone": nil,
+		"closed_at": nullable(item.ClosedAt), "labels": item.currentLabels(), "milestone": nil,
 		"assignees": gitlabUsers(item.Assignees), "author": item.Author.payload(), "web_url": web,
 		"references":       map[string]any{"short": sigil + strconv.Itoa(item.IID), "full": project.Path + sigil + strconv.Itoa(item.IID)},
 		"user_notes_count": 0, "upvotes": 0, "downvotes": 0,
@@ -243,6 +247,29 @@ func (item gitlabItem) payload(project gitlabProject) map[string]any {
 		}
 	}
 	return out
+}
+
+func (item gitlabItem) currentLabels() []string {
+	labels := append([]string{}, item.Labels...)
+	if item.StatusLabel != "" && item.ClosedAt == "" {
+		labels = append(labels, item.StatusLabel)
+	}
+	return labels
+}
+
+// labelEvents is the issue's label history: the status label being added.
+func (item gitlabItem) labelEvents() []any {
+	if item.StatusLabel == "" || item.StatusAt == "" {
+		return []any{}
+	}
+	events := []any{map[string]any{"id": item.IID*10 + 2, "action": "add", "created_at": item.StatusAt, "user": item.Author.payload(),
+		"resource_type": "Issue", "label": map[string]any{"id": item.IID*10 + 3, "name": item.StatusLabel}}}
+	if item.ClosedAt != "" {
+		// The tracker's status labels are how a GitLab issue's workflow is read: closing it also gets the done label.
+		events = append(events, map[string]any{"id": item.IID*10 + 4, "action": "add", "created_at": item.ClosedAt, "user": item.Author.payload(),
+			"resource_type": "Issue", "label": map[string]any{"id": item.IID*10 + 5, "name": "done"}})
+	}
+	return events
 }
 
 func (item gitlabItem) stateEvents() []map[string]any {
@@ -327,7 +354,7 @@ func gitlabProjectAnswers(path string, items []gitlabItem) []providerAnswer {
 				"references": map[string]any{"short": "#" + iid, "full": ref}})
 		}
 		answers = append(answers,
-			glList(issueRoot+"/resource_label_events", "*", []any{}),
+			glList(issueRoot+"/resource_label_events", "*", item.labelEvents()),
 			glList(issueRoot+"/resource_state_events", "*", item.stateEvents()),
 			glList(issueRoot+"/links", "*", links),
 			glList(issueRoot+"/closed_by", "*", closedBy),

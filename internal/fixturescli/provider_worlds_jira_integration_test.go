@@ -177,6 +177,9 @@ type jiraIssue struct {
 	// LinkedAt is when the Blocks links were added (RFC 3339): the changelog carries a "Link" entry at that time
 	// for each, as Jira Cloud's changelog does; "" sends none, and the link then has no start time.
 	LinkedAt string
+	// StartedAt is when the issue moved from To Do to In Progress (RFC 3339): the changelog carries a status
+	// entry at that time, as Jira Cloud's does; "" sends none.
+	StartedAt string
 	// Description is the issue's description, sent as Jira Cloud v3 sends it: an Atlassian Document
 	// Format document ("" = no description field).
 	Description string
@@ -249,6 +252,12 @@ func (issue jiraIssue) changelog() map[string]any {
 		histories = append(histories, map[string]any{
 			"id": issue.ID + "01", "created": jiraTime(issue.Resolved), "author": issue.Assignee.payload(),
 			"items": []any{map[string]any{"field": "status", "fieldtype": "jira", "from": "3", "fromString": "In Progress", "to": "10001", "toString": "Done"}},
+		})
+	}
+	if issue.StartedAt != "" {
+		histories = append(histories, map[string]any{
+			"id": issue.ID + "03", "created": jiraTime(issue.StartedAt), "author": issue.Assignee.payload(),
+			"items": []any{map[string]any{"field": "status", "fieldtype": "jira", "from": "10000", "fromString": "To Do", "to": "3", "toString": "In Progress"}},
 		})
 	}
 	if issue.LinkedAt != "" {

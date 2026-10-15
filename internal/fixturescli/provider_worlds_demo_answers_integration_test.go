@@ -426,6 +426,16 @@ func (build *demoBuild) addTeam(team demoTeam) {
 		points := demoPoints(team, story)
 		blocked := build.blockedRefs(team, story)
 		linkedAt := demoAfter(created, 45)
+		// The status history the trackers keep: the move to In Progress (or the To Do label of an item no change
+		// has started) shortly after the item was created, before it was done.
+		startedAt := demoAfter(created, 120)
+		if done != "" && startedAt >= done {
+			startedAt = demoAfter(created, 10)
+		}
+		statusLabel := "in progress"
+		if len(story.Changes) == 0 {
+			statusLabel = "to do"
+		}
 		issueNumber := 0
 		switch team.Tracker {
 		case "github":
@@ -476,7 +486,7 @@ func (build *demoBuild) addTeam(team demoTeam) {
 				ID: strconv.Itoa(30000 + build.id()), Key: key, Project: team.Project, Summary: story.Title, Type: kind,
 				Assignee: assignee, Reporter: team.Jira[(index+1)%len(team.Jira)], Created: created, Updated: updated,
 				Resolved: done, Labels: labels, PullRequests: nativePRs, Description: demoIssueText(story),
-				Blocks: blocked, LinkedAt: linkedAt, StoryPoints: points,
+				Blocks: blocked, LinkedAt: linkedAt, StartedAt: startedAt, StoryPoints: points,
 			}
 			build.Jira = append(build.Jira, issue)
 		case "linear":
@@ -489,7 +499,7 @@ func (build *demoBuild) addTeam(team demoTeam) {
 			build.Linear = append(build.Linear, linearIssue{
 				ID: fmt.Sprintf("a2000000-0000-4000-8000-%012d", build.id()), Identifier: key, Title: story.Title,
 				Team: team.Key, Project: team.LinearPrj, Assignee: assignee, Creator: team.Linear[(index+1)%len(team.Linear)],
-				CreatedAt: created, UpdatedAt: updated, StartedAt: started, CompletedAt: done,
+				CreatedAt: created, UpdatedAt: updated, StartedAt: started, HistoryFrom: started, CompletedAt: done,
 				Attachments: attachments, Labels: []string{demoLabel(story.Kind)}, Description: demoIssueText(story),
 				Relations: relations, Estimate: points,
 			})
@@ -499,6 +509,7 @@ func (build *demoBuild) addTeam(team demoTeam) {
 			repo.Items = append(repo.Items, githubIssue{
 				Number: issueNumber, Title: story.Title, Body: demoIssueText(story), Author: author, Assignees: []githubUser{author},
 				Labels: []string{strings.ToLower(demoLabel(story.Kind))}, CreatedAt: created, UpdatedAt: updated, ClosedAt: done,
+				StatusLabel: statusLabel, StatusAt: startedAt,
 			})
 		case "gitlab":
 			author := team.GitLab[index%len(team.GitLab)]
@@ -510,7 +521,7 @@ func (build *demoBuild) addTeam(team demoTeam) {
 			project.Items = append(project.Items, gitlabItem{
 				IID: issueNumber, Title: story.Title, Description: demoIssueText(story), Author: author, Assignees: []gitlabUser{author},
 				Labels: []string{strings.ToLower(demoLabel(story.Kind))}, CreatedAt: created, UpdatedAt: updated, ClosedAt: done,
-				ClosedBy: closedBy, Links: links, Weight: int(points),
+				ClosedBy: closedBy, Links: links, Weight: int(points), StatusLabel: statusLabel, StatusAt: startedAt,
 			})
 		}
 	}

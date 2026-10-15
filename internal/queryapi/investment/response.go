@@ -219,7 +219,7 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
 		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
 		Themes: themes, Subcategories: subcategories,
-		Measure: investmentexplain.InvestmentShareMeasure,
+		Measure: investmentexplain.RESTInvestmentMeasure,
 	}
 	rows, err := reader.explainR.FetchInvestmentBreakdown(ctx, breakdownFilters)
 	if err != nil {
@@ -362,7 +362,7 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
 		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
 		Themes: themes, Subcategories: subcategories, Limit: params.Limit,
-		Measure: investmentexplain.InvestmentShareMeasure,
+		Measure: investmentexplain.SunburstMeasure,
 	})
 	if err != nil {
 		return nil, err

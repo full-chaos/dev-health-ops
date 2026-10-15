@@ -14,9 +14,9 @@ import (
 )
 
 // TestRestInvestmentReadsTheIssueSizeAndSaysHowMuchIsSized pins CHAOS-9809 (D5999, D6027, D6031) against a real
-// ClickHouse: REST /investment and its sunburst read each unit's issue size (1 when unsized) by default, never its
-// lines of code; the response carries the sizing coverage, and the "mostly unsized" sentence when fewer than half of
-// the units carry a size.
+// ClickHouse: REST /investment reads each unit's issue size (1 when unsized) by default, never its lines of code; the
+// response carries the sizing coverage, and the "mostly unsized" sentence when fewer than half of the units carry a
+// size. The sunburst carries no coverage, so it stays on COUNT (one per unit).
 //
 //   - mostly unsized org: four units (jira, gitlab, github, linear), one sized 5: total 5+1+1+1 = 8, coverage 1/4.
 //   - half sized org: four units, two sized 5 and 2: total 5+2+1+1 = 9, coverage 2/4, no sentence (not below half).
@@ -80,8 +80,8 @@ func TestRestInvestmentReadsTheIssueSizeAndSaysHowMuchIsSized(t *testing.T) {
 			for _, slice := range slices {
 				sunburst += slice.Value
 			}
-			if math.Abs(sunburst-tc.wantTotal) > 1e-6 {
-				t.Errorf("sunburst total = %v, want %v", sunburst, tc.wantTotal)
+			if math.Abs(sunburst-4) > 1e-6 {
+				t.Errorf("sunburst total = %v, want the COUNT 4", sunburst)
 			}
 		})
 	}

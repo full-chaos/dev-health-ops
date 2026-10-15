@@ -11,9 +11,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 )
 
-// CHAOS-9809 (D5999, D6027, D6031): the REST investment breakdown and the sunburst read the issue size (1 when
-// unsized), never effort_value, and the response names the measure, the sum its shares are shares of, and the
-// sizing coverage with the "mostly unsized" sentence.
+// CHAOS-9809 (D5999, D6027, D6031): the REST investment breakdown reads the issue size (1 when unsized), never
+// effort_value, and the response names the measure, the sum its shares are shares of, and the sizing coverage with
+// the "mostly unsized" sentence. The sunburst, which carries no coverage, stays on COUNT.
 func TestRestInvestmentReadsTheIssueSizeMeasure(t *testing.T) {
 	var breakdown, sunburst string
 	client := fakeQueryClient{t: t, handler: tablePresentHandler(func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
@@ -47,10 +47,13 @@ func TestRestInvestmentReadsTheIssueSizeMeasure(t *testing.T) {
 	if _, err := BuildSunburstResponse(context.Background(), reader, "org-1", SunburstParams{StartTS: day(2024, 1, 1), EndTS: day(2024, 1, 8), ScopeLevel: "org", Limit: 10}); err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(breakdown, "sum(subcategory_kv.2 * 1.0 * 1.0 * unit_size_weight) AS value") {
+		t.Errorf("breakdown query does not sum the issue size:\n%s", breakdown)
+	}
+	if !strings.Contains(sunburst, "sum(subcategory_kv.2 * 1.0 * 1.0) AS value") || strings.Contains(sunburst, "unit_size_weight") {
+		t.Errorf("sunburst query does not sum the COUNT:\n%s", sunburst)
+	}
 	for name, query := range map[string]string{"breakdown": breakdown, "sunburst": sunburst} {
-		if !strings.Contains(query, "sum(subcategory_kv.2 * 1.0 * 1.0 * unit_size_weight) AS value") {
-			t.Errorf("%s query does not sum the issue size:\n%s", name, query)
-		}
 		if strings.Contains(query, "effort_value *") {
 			t.Errorf("%s query weighs by effort_value:\n%s", name, query)
 		}

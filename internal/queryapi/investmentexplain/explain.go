@@ -201,17 +201,17 @@ func mixBreakdownFilters(opts ExplainInvestmentMixOptions) BreakdownFilters {
 	return breakdownFilter
 }
 
-// effectiveMeasure is the measure of the mix read: InvestmentShareMeasure (ISSUE_SIZE, the Investment
+// effectiveMeasure is the measure of the mix read: ExplanationDefaultMeasure (ISSUE_SIZE, the Investment
 // page's measure) when the option is empty (the explanation is of the mix the user sees), else
-// NormalizeMeasure of it. A name it does not know reads as InvestmentShareMeasure; the route has already
+// NormalizeMeasure of it. A name it does not know reads as ExplanationDefaultMeasure; the route has already
 // refused those.
 func (opts ExplainInvestmentMixOptions) effectiveMeasure() string {
 	if strings.TrimSpace(opts.Measure) == "" {
-		return InvestmentShareMeasure
+		return ExplanationDefaultMeasure
 	}
 	measure, ok := NormalizeMeasure(opts.Measure)
 	if !ok {
-		return InvestmentShareMeasure
+		return ExplanationDefaultMeasure
 	}
 	return measure
 }

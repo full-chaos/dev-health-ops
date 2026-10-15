@@ -7,15 +7,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 )
 
-// InvestmentShareMeasure is THE measure the investment shares of the REST investment endpoint
-// (breakdown and sunburst), the Home tile "Investment by theme", the Operating Review investment
-// section and the explanation's default are read in: the work-unit issue size (CHAOS-9809, D5999,
-// D6027), as the Investment page reads it. A unit with no size counts 1 work unit, so with no sized
-// unit in scope it equals COUNT. Lines of code are not a measure of effort and Investment offers no
-// lines-of-code option (CHAOS-9695, D6014), so a share is never weighted by a unit's effort_value.
+// The measure each Investment surface reads its shares in: the ONE place that names them; no caller names a
+// measure of its own. Lines of code are not a measure of effort and Investment offers no lines-of-code option
+// (CHAOS-9695, D6014), so a share is never weighted by a unit's effort_value.
 //
-// It is the ONE place that names the measure; no caller names a measure of its own.
-const InvestmentShareMeasure = MeasureIssueSize
+// ISSUE_SIZE (D5999) weighs each unit by its issue size, 1 when unsized, and is served only by a surface that
+// carries its sizing coverage in the same answer (D6027): the REST investment response (sizing_coverage,
+// unsized_unit_count, sizing_note) and the explanation (on each finding). The surfaces that carry no coverage yet
+// stay on COUNT (each unit 1): the Home tile (CHAOS-9624 adds its coverage) and the sunburst and the Operating
+// Review (their own sub-issue).
+const (
+	RESTInvestmentMeasure     = MeasureIssueSize
+	ExplanationDefaultMeasure = MeasureIssueSize
+	HomeTileMeasure           = MeasureCount
+	SunburstMeasure           = MeasureCount
+	OperatingReviewMeasure    = MeasureCount
+)
 
 // ErrMeasureRequired is returned by a read whose BreakdownFilters name no measure, or one the read
 // does not know. There is no default: a read that fell back to a weight would fall back to the

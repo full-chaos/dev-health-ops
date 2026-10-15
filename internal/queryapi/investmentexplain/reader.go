@@ -138,7 +138,7 @@ type BreakdownFilters struct {
 	DatedByEnd bool
 	// Measure says what a row's value counts, and every read of this package REQUIRES one (ErrMeasureRequired):
 	// MeasureCount is the share of the unit the row stands for, the Investment page's COUNT
-	// (InvestmentShareMeasure for the REST investment endpoint, the Home tile and the Operating Review).
+	// (the per-surface measures of measure.go for the REST investment endpoint, the Home tile and the Operating Review).
 	Measure string
 }
 
@@ -513,7 +513,7 @@ func joinOR(conditions []string) string {
 }
 
 // ThemeEffortRow is one theme of FetchInvestmentThemeEffort: the value of the theme in the measure the
-// filters name (BreakdownFilters.Measure; InvestmentShareMeasure for the Home tile and the Operating
+// filters name (BreakdownFilters.Measure; HomeTileMeasure / OperatingReviewMeasure for the Home tile and the Operating
 // Review), the part of the units' effort measured in changed lines of code (effort_metric churn_loc; the
 // Home tile's churn_loc line, never a weight and never an Investment measure), and the pull requests of the
 // units' evidence weighted by the theme share.

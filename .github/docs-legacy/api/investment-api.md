@@ -17,9 +17,11 @@ those probabilities directly. It reports the measure `ISSUE_SIZE` (CHAOS-9809, D
 WorkUnit counts its issue size (the sum of the story points of its issues, from `work_unit_issue_size`), or **1**
 when it has none, in total, spread over the themes and subcategories by its stored
 probabilities, and over the repositories it touches by its repository allocation weight.
-The REST `/investment` and `/investment/sunburst`, the Home tile "Investment by theme" and the
-Operating Review investment section all read this one measure, the one the Investment page
-reads (`investmentexplain.InvestmentShareMeasure`, `MeasureValueSQL`):
+The REST `/investment` response and the explanation read this measure by default, the one the Investment page
+reads (`investmentexplain.RESTInvestmentMeasure`, `ExplanationDefaultMeasure`, `MeasureValueSQL`), because they
+carry its sizing coverage in the same answer (D6027). The sunburst, the Home tile "Investment by theme" and the
+Operating Review investment section carry no coverage yet and read `COUNT` (each unit 1; `SunburstMeasure`,
+`HomeTileMeasure`, `OperatingReviewMeasure`):
 
 ```sql
 -- investmentexplain.Reader.FetchInvestmentBreakdown, measure ISSUE_SIZE (simplified)

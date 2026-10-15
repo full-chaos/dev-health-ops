@@ -172,10 +172,11 @@ Investment measure. Two measures read the same rows:
 | `COUNT` (and `THROUGHPUT`, the same) | 1 work unit |
 | `ISSUE_SIZE` | The unit's newest issue size (`work_unit_issue_size`): the sum of the story points of its issues. A unit with no size weighs 1 work unit, so it is never dropped from the mix. |
 
-`ISSUE_SIZE` is the default of every Investment reader: the REST `/investment` and `/investment/sunburst`, the
-Home tile "Investment by theme", the Operating Review investment section and the explanation (CHAOS-9809). The REST
-`/investment` response then carries `sizing_coverage`, `unsized_unit_count` and, when fewer than half of the units
-carry a size, `sizing_note`; the explanation carries the same three fields on each finding's evidence.
+`ISSUE_SIZE` is served only where its sizing coverage rides in the same answer (D6027). It is the default of the
+REST `/investment` response, which then carries `sizing_coverage`, `unsized_unit_count` and, when fewer than half of
+the units carry a size, `sizing_note`, and of the explanation, which carries the same three fields on each finding's
+evidence (CHAOS-9809). The sunburst, the Home tile "Investment by theme" and the Operating Review investment section
+carry no sizing coverage yet and stay on `COUNT` until they do.
 
 In both, a unit's weight is spread over its subcategories by their probabilities and over its repositories by their
 allocation weights, and a team scope takes each repository at the share the teams in view hold, so the sum of a

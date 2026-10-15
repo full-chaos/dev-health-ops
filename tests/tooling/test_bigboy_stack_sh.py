@@ -13,7 +13,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BIGBOY = ROOT / "ci" / "bigboy"
-STACK = BIGBOY / "stack.sh"
 
 
 def _tree(tmp_path: Path, *, skip: str = "") -> tuple[Path, Path, dict[str, str]]:

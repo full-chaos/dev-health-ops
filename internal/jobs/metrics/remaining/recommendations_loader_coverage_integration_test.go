@@ -42,6 +42,7 @@ SELECT '`+org+`', toDate('2026-08-20'), 'team', '`+team+`', `+score+`, '`+severi
 	}
 	insert("team-partial", "0.7", "high", "0.8", "NULL", "0.5", "NULL")
 	insert("team-full", "0.7", "high", "0.8", "0.6", "0.5", "0.7")
+	insert("team-zero", "0.7", "high", "0.8", "0.0", "0.5", "0.7")
 	insert("team-old", "NULL", "unknown", "0.8", "0.6", "NULL", "NULL")
 
 	loader, err := NewRecommendationsLoader(conn, org)
@@ -51,11 +52,11 @@ SELECT '`+org+`', toDate('2026-08-20'), 'team', '`+team+`', `+score+`, '`+severi
 	start, end := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	read := func(team string) MetricsSnapshot {
 		t.Helper()
-		_, _, _, coverage, known, inputs, err := loader.loadCompoundingRiskPersisted(ctx, team, start, end)
+		_, _, _, coverage, known, inputs, drivers, err := loader.loadCompoundingRiskPersisted(ctx, team, start, end)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return MetricsSnapshot{CompoundingRiskCoverage: coverage, CompoundingRiskCoverageKnown: known, CompoundingRiskInputs: inputs}
+		return MetricsSnapshot{CompoundingRiskCoverage: coverage, CompoundingRiskCoverageKnown: known, CompoundingRiskInputs: inputs, CompoundingRiskDrivers: drivers}
 	}
 	if got := read("team-partial"); !got.CompoundingRiskCoverageKnown || got.CompoundingRiskCoverage < 0.5-1e-12 || got.CompoundingRiskCoverage > 0.5+1e-12 ||
 		len(got.CompoundingRiskInputs) != 2 || got.CompoundingRiskInputs[0] != "churn" || got.CompoundingRiskInputs[1] != "ownership concentration" {
@@ -64,6 +65,13 @@ SELECT '`+org+`', toDate('2026-08-20'), 'team', '`+team+`', `+score+`, '`+severi
 	}
 	if got := read("team-full"); !got.CompoundingRiskCoverageKnown || got.CompoundingRiskCoverage != 1.0 || len(got.CompoundingRiskInputs) != 4 {
 		t.Errorf("full team: coverage %v inputs %v, want 1 from all four", got.CompoundingRiskCoverage, got.CompoundingRiskInputs)
+	}
+	if got := read("team-zero"); len(got.CompoundingRiskInputs) != 4 || len(got.CompoundingRiskDrivers) != 3 ||
+		got.CompoundingRiskDrivers[0] != "churn" || got.CompoundingRiskDrivers[1] != "ownership concentration" || got.CompoundingRiskDrivers[2] != "review latency" {
+		t.Errorf("zero-complexity team: inputs %v drivers %v, want four present and three drivers without complexity trend", got.CompoundingRiskInputs, got.CompoundingRiskDrivers)
+	}
+	if got := read("team-full"); len(got.CompoundingRiskDrivers) != 4 {
+		t.Errorf("full team: drivers %v, want all four", got.CompoundingRiskDrivers)
 	}
 	if got := read("team-old"); got.CompoundingRiskCoverageKnown || len(got.CompoundingRiskInputs) != 0 {
 		t.Errorf("an old row has no score and so no coverage: %v %v", got.CompoundingRiskCoverage, got.CompoundingRiskInputs)

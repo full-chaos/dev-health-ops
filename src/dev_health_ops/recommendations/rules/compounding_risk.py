@@ -45,6 +45,21 @@ SUCCESS_CRITERION = (
 )
 
 
+def _driver_sentence(drivers: tuple[str, ...]) -> str:
+    """Name only the inputs that contribute to the score; with none, claim nothing."""
+    if not drivers:
+        return ""
+    first = drivers[0][:1].upper() + drivers[0][1:]
+    if len(drivers) == 1:
+        return f" {first} is compounding above its tuned threshold."
+    if len(drivers) == 2:
+        return (
+            f" {first} and {drivers[1]} are compounding above their tuned thresholds."
+        )
+    head = ", ".join((first, *drivers[1:-1]))
+    return f" {head}, and {drivers[-1]} are compounding above their tuned thresholds."
+
+
 def evaluate_compounding_risk(
     snapshot: MetricsSnapshot,
     now: datetime,
@@ -65,9 +80,8 @@ def evaluate_compounding_risk(
         rationale = (
             (
                 f"Compounding Risk score is {score:.3f} "
-                f"(severity: {snapshot.compounding_risk_severity}). "
-                "Churn, complexity trend, ownership concentration, and review "
-                "latency are compounding above their tuned thresholds."
+                f"(severity: {snapshot.compounding_risk_severity})."
+                f"{_driver_sentence(snapshot.compounding_risk_drivers)}"
             )
             if score is not None
             else (f"Compounding Risk severity is {snapshot.compounding_risk_severity}.")

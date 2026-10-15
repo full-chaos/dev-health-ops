@@ -69,7 +69,8 @@ type goldenSnapshot struct {
 	// the fixture even though both map to "" -- the corpus contains BOTH
 	// (severity None and severity "") and they must produce the same outcome
 	// for the right reason, not by the decoder erasing the difference.
-	CompoundingRiskSeverity *string `json:"compounding_risk_severity"`
+	CompoundingRiskSeverity *string  `json:"compounding_risk_severity"`
+	CompoundingRiskDrivers  []string `json:"compounding_risk_drivers"`
 }
 
 type goldenCase struct {
@@ -205,6 +206,7 @@ func decodeSnapshot(t *testing.T, encoded goldenSnapshot) MetricsSnapshot {
 		CompoundingRiskScore:        score,
 		CompoundingRiskScoreKnown:   scoreKnown,
 		CompoundingRiskSeverity:     severity,
+		CompoundingRiskDrivers:      encoded.CompoundingRiskDrivers,
 	}
 }
 
@@ -649,43 +651,67 @@ func TestFrozenEnvironmentIsPortable(t *testing.T) {
 // A score from fewer than all four inputs says so (CHAOS-6545): the rationale
 // names the coverage and the inputs it stands on, and claims only those. A
 // score from all four keeps the text of the Python reference.
-func TestCompoundingRiskRationaleNamesTheCoverageOfAPartialScore(t *testing.T) {
+func TestCompoundingRiskRationaleNamesOnlyContributingDrivers(t *testing.T) {
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	base := MetricsSnapshot{
 		TeamID: "team-1", OrgID: "org-1", WindowStart: now.AddDate(0, 0, -14), WindowEnd: now,
 		CompoundingRiskScore: 0.72, CompoundingRiskScoreKnown: true, CompoundingRiskSeverity: "high",
+		CompoundingRiskCoverage: 1.0, CompoundingRiskCoverageKnown: true,
+		CompoundingRiskInputs: []string{"churn", "complexity trend", "ownership concentration", "review latency"},
 	}
+	cases := []struct {
+		name    string
+		drivers []string
+		want    string
+	}{
+		{"all four", []string{"churn", "complexity trend", "ownership concentration", "review latency"},
+			"Compounding Risk score is 0.720 (severity: high). Churn, complexity trend, ownership concentration, and review latency are compounding above their tuned thresholds."},
+		{"complexity at zero is not named", []string{"churn", "ownership concentration", "review latency"},
+			"Compounding Risk score is 0.720 (severity: high). Churn, ownership concentration, and review latency are compounding above their tuned thresholds."},
+		{"two", []string{"churn", "review latency"},
+			"Compounding Risk score is 0.720 (severity: high). Churn and review latency are compounding above their tuned thresholds."},
+		{"one", []string{"review latency"},
+			"Compounding Risk score is 0.720 (severity: high). Review latency is compounding above its tuned threshold."},
+		{"none", nil, "Compounding Risk score is 0.720 (severity: high)."},
+	}
+	for _, c := range cases {
+		snapshot := base
+		snapshot.CompoundingRiskDrivers = c.drivers
+		got, err := evaluateCompoundingRisk(snapshot, now)
+		if err != nil || got == nil {
+			t.Fatalf("%s: %v %v", c.name, got, err)
+		}
+		if got.Rationale != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got.Rationale, c.want)
+		}
+		if got.Severity != "critical" {
+			t.Errorf("%s: the recommendation severity follows the score severity, got %q", c.name, got.Severity)
+		}
+	}
+}
 
-	full := base
-	full.CompoundingRiskCoverage, full.CompoundingRiskCoverageKnown = 1.0, true
-	full.CompoundingRiskInputs = []string{"churn", "complexity trend", "ownership concentration", "review latency"}
-	got, err := evaluateCompoundingRisk(full, now)
-	if err != nil || got == nil {
-		t.Fatalf("full coverage: %v %v", got, err)
+// A score from fewer than all four inputs names its coverage and the inputs it stands on, and claims
+// as compounding only the drivers.
+func TestCompoundingRiskRationaleNamesTheCoverageOfAPartialScore(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	snapshot := MetricsSnapshot{
+		TeamID: "team-1", OrgID: "org-1", WindowStart: now.AddDate(0, 0, -14), WindowEnd: now,
+		CompoundingRiskScore: 0.72, CompoundingRiskScoreKnown: true, CompoundingRiskSeverity: "high",
+		CompoundingRiskCoverage: 0.5, CompoundingRiskCoverageKnown: true,
+		CompoundingRiskInputs:  []string{"churn", "review latency"},
+		CompoundingRiskDrivers: []string{"churn"},
 	}
-	const reference = "Compounding Risk score is 0.720 (severity: high). Churn, complexity trend, ownership concentration, and review latency are compounding above their tuned thresholds."
-	if got.Rationale != reference {
-		t.Errorf("a score from all four inputs keeps the reference text:\n got %q\nwant %q", got.Rationale, reference)
-	}
-
-	partial := base
-	partial.CompoundingRiskCoverage, partial.CompoundingRiskCoverageKnown = 0.5, true
-	partial.CompoundingRiskInputs = []string{"churn", "review latency"}
-	got, err = evaluateCompoundingRisk(partial, now)
+	got, err := evaluateCompoundingRisk(snapshot, now)
 	if err != nil || got == nil {
 		t.Fatalf("partial coverage: %v %v", got, err)
 	}
-	for _, fragment := range []string{"0.720", "severity: high", "computed from 50% of its inputs", "churn, review latency", "inputs that were present"} {
-		if !strings.Contains(got.Rationale, fragment) {
-			t.Errorf("the rationale of a partial score lacks %q: %q", fragment, got.Rationale)
-		}
+	const want = "Compounding Risk score is 0.720 (severity: high), computed from 50% of its inputs (churn, review latency). Churn is compounding above its tuned threshold."
+	if got.Rationale != want {
+		t.Errorf("got %q\nwant %q", got.Rationale, want)
 	}
 	for _, claimed := range []string{"complexity trend", "ownership concentration"} {
 		if strings.Contains(got.Rationale, claimed) {
-			t.Errorf("the rationale of a partial score claims the missing input %q: %q", claimed, got.Rationale)
+			t.Errorf("the rationale claims the missing input %q: %q", claimed, got.Rationale)
 		}
-	}
-	if got.Severity != "critical" {
-		t.Errorf("the recommendation severity follows the score severity, got %q", got.Severity)
 	}
 }

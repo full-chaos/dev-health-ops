@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/aftercommit"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/jackc/pgx/v5"
@@ -853,5 +854,60 @@ func TestDeferredRouteIsChosenFromTheRegistryNotTheProducer(t *testing.T) {
 			"publication deferred=%t but the checked route says executable=%t",
 			publisher.deferred[0], descriptor.Executable(),
 		)
+	}
+}
+
+// queueingProducer wraps the heartbeat producer and, like the remaining store's
+// dora overlap report, stages a signal inside the occurrence transaction.
+type queueingProducer struct {
+	Producer
+	ran *int
+}
+
+func (producer queueingProducer) Produce(ctx context.Context, tx pgx.Tx, schedule Schedule, occurrence Occurrence) (Outcome, error) {
+	result, err := producer.Producer.Produce(ctx, tx, schedule, occurrence)
+	if err != nil {
+		return result, err
+	}
+	if !aftercommit.Defer(ctx, func() { *producer.ran++ }) {
+		*producer.ran++
+	}
+	return result, nil
+}
+
+// A signal a producer stages inside the occurrence transaction runs once the
+// occurrence has committed, and is dropped when the commit fails (CHAOS-9841).
+func TestAStagedSignalRunsOnlyAfterTheOccurrenceCommits(t *testing.T) {
+	ctx := context.Background()
+	schedule := heartbeatSchedule(t)
+	observedAt := mustTime(t, "2026-07-24T00:05:00Z")
+	for _, c := range []struct {
+		name       string
+		failCommit bool
+		wantRan    int
+	}{
+		{"commit succeeds", false, 1},
+		{"commit fails", true, 0},
+	} {
+		ledger := newMemoryLedger()
+		seedAnchor(ledger, schedule, mustTime(t, "2026-07-23T00:00:00Z"))
+		ran := 0
+		producers, err := NewProducerSet(queueingProducer{Producer: NewHeartbeatProducer(), ran: &ran}, NewRetentionProducer())
+		if err != nil {
+			t.Fatal(err)
+		}
+		engine, err := newEngine(EngineConfig{
+			Schedules: []Schedule{schedule}, Producers: producers, Ledger: ledger,
+			Publisher: &recordingPublisher{}, Registry: testRegistry(t),
+		}, stubBeginner{tx: &stubTx{failCommit: c.failCommit}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := engine.Step(ctx, observedAt); err != nil {
+			t.Fatalf("%s: Step() = %v", c.name, err)
+		}
+		if ran != c.wantRan {
+			t.Fatalf("%s: the staged signal ran %d times, want %d", c.name, ran, c.wantRan)
+		}
 	}
 }

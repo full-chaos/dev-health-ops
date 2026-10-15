@@ -16,6 +16,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/aftercommit"
 )
 
 type recordingOverlapObserver struct {
@@ -233,5 +235,73 @@ func TestAnAutomaticDoraStartThatRollsBackIsNotReportedAndAReplayIsReportedOnce(
 	}
 	if lines := overlapLines(t, logs); len(lines) != 1 || observer.count() != 1 {
 		t.Fatalf("the replay of a start was reported again: %d lines, %d observations\n%s", len(lines), observer.count(), logs.String())
+	}
+}
+
+// The owner of the transaction decides when the report is true: with hooks on
+// the context, a start whose outer transaction rolls back after StartRunTx
+// returned (a later stage failed, or the commit did) leaves no log line and no
+// count, and the same start committed reports once when the owner runs the hooks.
+func TestAnOverlapIsReportedOnlyWhenTheOwnerOfTheTransactionCommits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	store, pool, logs, observer := overlapTestStore(t, ctx)
+
+	day := time.Now().UTC().AddDate(0, 0, -3).Truncate(24 * time.Hour)
+	dayString := day.Format("2006-01-02")
+	nextDay := day.AddDate(0, 0, 1).Format("2006-01-02")
+	seedSucceededDoraPartition(t, ctx, store, pool, recomputeTestOrg, dayString, 1, "post-sync:old-basis")
+	recompute, err := store.StartManualRecomputeRun(ctx, "dora", recomputeTestOrg, dayString, "cfr-9841b", nopPartitionPublisher{})
+	if err != nil || recompute.Disposition != RecomputeStarted {
+		t.Fatalf("recompute = %+v, %v", recompute, err)
+	}
+	seedOutboxRow(t, ctx, pool, recompute.PartitionID, "pending", "")
+	scope := json.RawMessage(`{"version":1,"day":"` + nextDay + `","sink":"auto","interval":"daily","backfill_days":2}`)
+	start := func(hookCtx context.Context) (Run, pgx.Tx) {
+		t.Helper()
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := store.StartRunTx(hookCtx, tx, StartRunRequest{
+			OrganizationID: recomputeTestOrg, Family: "dora", Generation: "post-sync:owner",
+			ScopeKey: nextDay, Scopes: []json.RawMessage{scope},
+		}, nopPartitionPublisher{})
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		return run, tx
+	}
+
+	runsBefore := countRemainingRuns(t, ctx, pool)
+	rolledCtx, rolledHooks := aftercommit.WithHooks(ctx)
+	_, rolled := start(rolledCtx)
+	if lines := overlapLines(t, logs); len(lines) != 0 || observer.count() != 0 {
+		t.Fatalf("the overlap was reported before the owner committed: %d lines, %d observations", len(lines), observer.count())
+	}
+	if err := rolled.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRemainingRuns(t, ctx, pool); got != runsBefore {
+		t.Fatalf("the rolled back start left a run: %d -> %d", runsBefore, got)
+	}
+	_ = rolledHooks // the owner did not commit: it never runs the hooks
+	if lines := overlapLines(t, logs); len(lines) != 0 || observer.count() != 0 {
+		t.Fatalf("a start whose outer transaction rolled back was reported: %d lines, %d observations\n%s", len(lines), observer.count(), logs.String())
+	}
+
+	committedCtx, committedHooks := aftercommit.WithHooks(ctx)
+	run, committed := start(committedCtx)
+	if err := committed.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if lines := overlapLines(t, logs); len(lines) != 0 {
+		t.Fatalf("the overlap was reported before the owner ran the hooks: %d lines", len(lines))
+	}
+	committedHooks.Run()
+	lines := overlapLines(t, logs)
+	if len(lines) != 1 || observer.count() != 1 || lines[0]["run_id"] != run.ID || lines[0]["manual_run_id"] != recompute.RunID {
+		t.Fatalf("the committed start was not reported once after the commit: %d lines, %d observations\n%s", len(lines), observer.count(), logs.String())
 	}
 }

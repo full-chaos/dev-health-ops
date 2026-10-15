@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/aftercommit"
 )
 
 // Manual run kinds: the generation prefixes StartManualBackfillRun
@@ -151,20 +153,32 @@ func (store *PostgresStore) reportManualWindowOverlaps(
 			"family", request.Family, "organization_id", request.OrganizationID, "operation", "release savepoint", "error", err.Error())
 		return
 	}
-	for _, overlap := range overlaps {
-		logger.InfoContext(ctx, "remaining metrics automatic start overlaps a manual run",
-			"family", request.Family,
-			"organization_id", request.OrganizationID,
-			"run_id", runID,
-			"generation", request.Generation,
-			"anchor_day", anchorDay,
-			"backfill_days", backfillDays,
-			"manual_run_id", overlap.runID,
-			"manual_kind", overlap.kind,
-			"overlap_from", overlap.from,
-			"overlap_to", overlap.to,
-			"overlap_days", overlap.days,
-		)
-		store.observeManualOverlap(request.Family)
+	if len(overlaps) == 0 {
+		return
+	}
+	emit := func() {
+		for _, overlap := range overlaps {
+			logger.InfoContext(context.WithoutCancel(ctx), "remaining metrics automatic start overlaps a manual run",
+				"family", request.Family,
+				"organization_id", request.OrganizationID,
+				"run_id", runID,
+				"generation", request.Generation,
+				"anchor_day", anchorDay,
+				"backfill_days", backfillDays,
+				"manual_run_id", overlap.runID,
+				"manual_kind", overlap.kind,
+				"overlap_from", overlap.from,
+				"overlap_to", overlap.to,
+				"overlap_days", overlap.days,
+			)
+			store.observeManualOverlap(request.Family)
+		}
+	}
+	// The caller owns the transaction: a later step or the commit can still roll
+	// the run back, so the report waits for the commit when the caller said it
+	// would run the hooks (CHAOS-9841). A caller that did not has nothing to wait
+	// for from here and gets the report now.
+	if !aftercommit.Defer(ctx, emit) {
+		emit()
 	}
 }

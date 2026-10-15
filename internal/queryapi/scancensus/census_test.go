@@ -29,7 +29,7 @@ type Site struct {
 	// Statements holds every maximal constant SQL string of the enclosing
 	// function that holds a SELECT.
 	Statements []string
-	// Source is the text of the file the site is in.
+	// Source is the enclosing function and every SQL string constant of its file.
 	Source string
 }
 
@@ -116,7 +116,7 @@ func LoadSites(moduleRoot, pattern string) ([]Site, error) {
 					if !scansRows(p, sel.X) {
 						return true
 					}
-					site := Site{Func: fd.Name.Name, Source: fileSource(p, fd)}
+					site := Site{Func: fd.Name.Name, Source: siteSource(p, f, fd)}
 					pos := p.Fset.Position(call.Pos())
 					site.File, site.Line = pos.Filename, pos.Line
 					for _, a := range call.Args {
@@ -681,12 +681,29 @@ func hasScanMethod(t types.Type, pkg *types.Package) bool {
 	return sig.Results().At(0).Type().String() == "error"
 }
 
-// fileSource is the source text of the file holding fd: the statement a pinned
-// site reads is usually a constant or a helper beside it.
-func fileSource(p *packages.Package, fd *ast.FuncDecl) string {
-	data, err := os.ReadFile(p.Fset.Position(fd.Pos()).Filename)
-	if err != nil {
-		return ""
+// siteSource is the text of fd and every maximal SQL string constant of its
+// file: the statement a pinned site reads is usually a constant beside it, and
+// an edit elsewhere in the file leaves the pin alone.
+func siteSource(p *packages.Package, f *ast.File, fd *ast.FuncDecl) string {
+	var b strings.Builder
+	start, end := p.Fset.Position(fd.Pos()), p.Fset.Position(fd.End())
+	if data, err := os.ReadFile(start.Filename); err == nil && end.Offset <= len(data) {
+		b.Write(data[start.Offset:end.Offset])
 	}
-	return string(data)
+	ast.Inspect(f, func(n ast.Node) bool {
+		e, ok := n.(ast.Expr)
+		if !ok {
+			return true
+		}
+		tv, ok := p.TypesInfo.Types[e]
+		if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+			return true
+		}
+		if v := constant.StringVal(tv.Value); strings.Contains(strings.ToUpper(v), "SELECT") {
+			b.WriteString("\x00")
+			b.WriteString(v)
+		}
+		return false
+	})
+	return b.String()
 }

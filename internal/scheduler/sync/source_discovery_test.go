@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -1033,5 +1034,33 @@ func TestDiscoverGitHubAllReposScopedNamespaceUnionsUserReposAndOwnerListing(t *
 	}
 	if len(sources) != 2 || sources[0].FullName != "alice/collab" || sources[1].FullName != "alice/public" {
 		t.Fatalf("discoverGitHub() = %#v, want alice/collab then alice/public once each", sources)
+	}
+}
+
+// A scoped namespace listing that cannot be read must not pass silently when
+// /user/repos returned something.
+func TestDiscoverGitHubAllReposScopedNamespaceFailureIsLogged(t *testing.T) {
+	doer := &sequencedSourceDiscoveryDoer{
+		t:        t,
+		statuses: []int{http.StatusOK, http.StatusNotFound, http.StatusNotFound},
+		bodies: []string{
+			`[{"name":"visible","full_name":"alice/visible","owner":{"login":"alice"}}]`,
+			`{"message":"Not Found"}`,
+			`{"message":"Not Found"}`,
+		},
+	}
+	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now, logger: logger}
+	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true, "owner": "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || !strings.Contains(logs.String(), "namespace listing failed") {
+		t.Fatalf("sources=%#v log=%q, want one source and a namespace-listing warning", sources, logs.String())
 	}
 }

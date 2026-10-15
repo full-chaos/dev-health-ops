@@ -657,10 +657,17 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 			// collaborates on or reaches through org membership, so it is
 			// never complete for a scoped namespace (another user, an org
 			// the token is not a member of, public repositories). Union it
-			// with the namespace's own listing, org first then user; a
-			// failed or truncated namespace listing keeps the /user/repos
-			// result.
-			if ownerPage, ownerErr := collectGitHubOwnerRepos(ctx, client, namespace); ownerErr == nil && !ownerPage.PageBudgetExhausted {
+			// with the namespace's own listing, org first then user. A
+			// failed listing is logged and keeps the /user/repos result; a
+			// truncated one is a truncated discovery.
+			ownerPage, ownerErr := collectGitHubOwnerRepos(ctx, client, namespace)
+			switch {
+			case ownerErr != nil:
+				service.log().WarnContext(ctx, "github all_repos namespace listing failed; keeping user repos only",
+					"namespace", namespace, "user_repos", len(page.Items), "error", ownerErr)
+			case ownerPage.PageBudgetExhausted:
+				return nil, fmt.Errorf("github: %w", ErrSourceDiscoveryTruncated)
+			default:
 				page.Items = mergeGitHubRepoItems(page.Items, ownerPage.Items)
 			}
 		}

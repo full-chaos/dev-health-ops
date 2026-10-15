@@ -1,6 +1,7 @@
 package units
 
 import (
+	"math"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -150,40 +151,22 @@ func FloatValue(value any) float64 {
 	}
 }
 
-// LexicalArgmax ports membership.lexical_argmax.
+// LexicalArgmax ports membership.lexical_argmax, with the CHAOS-4840 fix.
 //
-// Python:
+// Rule (total order, independent of insertion order):
 //
-//	return min(distribution, key=lambda k: (-_float_value(distribution[k]), k))
+//  1. A NaN weight is treated as ABSENT: a real weight (including -Inf) always
+//     beats it. A NaN category is dominant only when every weight is NaN.
+//  2. Among the candidates that remain, the highest weight wins; +Inf is the
+//     highest.
+//  3. Equal weights (and all-NaN) break lexically: the smallest key wins.
 //
-// # THE DOCSTRING'S GUARANTEE IS FALSE, AND THIS REPRODUCES THE TRUE BEHAVIOUR
+// The previous behaviour (Python `min` over `(-weight, key)`) compared False
+// against every NaN, never reached the lexical key, and returned whichever entry
+// came first, so a NaN could outrank a real 0.9 purely by being inserted first,
+// and is_dominant is persisted. The frozen Python reference keeps the old behaviour (see chaos4840Divergence in the tests).
 //
-// The reference claims the lexical tie-break "makes the dominant choice
-// deterministic across runs regardless of dict ordering". That holds only while
-// every weight is a real number.
-//
-// `min` replaces its running candidate only on STRICTLY LESS THAN. Tuple
-// comparison reaches the second element only when the first elements compare
-// equal, and every comparison involving NaN is False -- including equality. So
-// with a NaN weight the lexical key is never consulted and the FIRST entry in
-// iteration order survives. Measured:
-//
-//	{"a.one": nan, "b.two": nan}  -> "a.one"
-//	{"b.two": nan, "a.one": nan}  -> "b.two"     (not lexical)
-//	{"a.nan": nan, "b.real": 0.9} -> "a.nan"     (NaN beats 0.9)
-//
-// The third line is the damaging one: a NaN outranks a real weight purely by
-// being inserted first, and is_dominant is persisted. Filed as CHAOS-4840. The
-// port reproduces it because bit-exact parity including reproduced bugs is the
-// contract -- diverging unilaterally would put the two planes in disagreement.
-// When CHAOS-4840 is fixed in Python, the corpus here fails deliberately; that
-// failure is the guard working, and the fixture is regenerated as part of the
-// fix.
-//
-// This is written as an explicit fold rather than a sort, because a sort needs a
-// total order and the comparison here is NOT one: with NaN present it is not
-// even reflexive. Handing a non-total comparator to sort.Slice is undefined
-// behaviour in Go and would not reproduce `min` in any case.
+// This is an explicit fold rather than a sort so the order is visibly total.
 func LexicalArgmax(distribution *Distribution) string {
 	if distribution.Len() == 0 {
 		// Python: `if not distribution: return "unknown"`.
@@ -191,26 +174,35 @@ func LexicalArgmax(distribution *Distribution) string {
 	}
 
 	best := distribution.categories[0]
-	bestWeight := -FloatValue(distribution.weights[best])
+	bestWeight := FloatValue(distribution.weights[best])
 
 	for _, category := range distribution.categories[1:] {
-		weight := -FloatValue(distribution.weights[category])
-		// Python's min keeps the incumbent unless the candidate is strictly
-		// less. Reproduced literally: `<` is false for every NaN comparison, so
-		// a NaN candidate never displaces, and a NaN incumbent is never
-		// displaced.
-		if weight < bestWeight {
+		weight := FloatValue(distribution.weights[category])
+		if argmaxBeats(category, weight, best, bestWeight) {
 			best, bestWeight = category, weight
-			continue
-		}
-		// The lexical tie-break, reached only when the weights compare EQUAL.
-		// NaN never compares equal, so this line is unreachable whenever either
-		// side is NaN -- which is precisely the defect above.
-		if weight == bestWeight && category < best {
-			best = category
 		}
 	}
 	return best
+}
+
+// argmaxBeats reports whether (category, weight) outranks the incumbent under
+// the LexicalArgmax rule.
+func argmaxBeats(category string, weight float64, incumbent string, incumbentWeight float64) bool {
+	candidateNaN, incumbentNaN := math.IsNaN(weight), math.IsNaN(incumbentWeight)
+	switch {
+	case candidateNaN && incumbentNaN:
+		return category < incumbent
+	case candidateNaN:
+		return false
+	case incumbentNaN:
+		return true
+	case weight > incumbentWeight:
+		return true
+	case weight == incumbentWeight:
+		return category < incumbent
+	default:
+		return false
+	}
 }
 
 // MembershipRow is one (category, weight, is_dominant) triple.
@@ -234,8 +226,7 @@ type MembershipRow struct {
 // nothing.
 //
 // Note `nan >= threshold` is False, so a NaN-weighted category is emitted only
-// when it is dominant. Combined with the LexicalArgmax defect above, that means
-// the bug is what puts such a row in the table at all.
+// when it is dominant, which LexicalArgmax allows only when every weight is NaN.
 func MembershipCategories(distribution *Distribution) []MembershipRow {
 	if distribution.Len() == 0 {
 		// Python returns [] for an empty distribution, before computing an

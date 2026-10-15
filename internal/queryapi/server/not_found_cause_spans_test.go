@@ -65,8 +65,12 @@ func TestGraphQLEdge404SpansCarryTheirCause(t *testing.T) {
 			if !present || cause != tc.wantCause {
 				t.Errorf("%s = %q (present %v), want %q", httpapi.NotFoundCauseAttribute, cause, present, tc.wantCause)
 			}
+			// CHAOS-9772: the digest (a hash, never the text) rides only its own attribute.
+			if got, _ := spanString(spans[0], httpapi.GraphQLDigestAttribute); tc.wantCause == "unregistered_document" && got != digestHex("query Other { probe }") {
+				t.Errorf("%s = %q, want the unregistered document's digest", httpapi.GraphQLDigestAttribute, got)
+			}
 			text := spanFieldTextForServer(spans[0])
-			for _, leak := range []string{"query Other", "InternalAuthProbe", digestHex("query Other { probe }"), digestHex(iaDocument), ecOrg.String(), member} {
+			for _, leak := range []string{"query Other", "InternalAuthProbe", ecOrg.String(), member} {
 				if strings.Contains(text, leak) {
 					t.Errorf("the span carries request/document text %q: %s", leak, text)
 				}

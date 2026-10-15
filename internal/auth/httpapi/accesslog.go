@@ -45,6 +45,7 @@ type observedRoute struct {
 	pattern string
 	// notFoundCause is what RecordNotFoundCause stored (an index; 0 = nothing).
 	notFoundCause atomic.Uint32
+	graphQL       graphQLDocumentSink
 }
 
 // recordRoute notes the registered pattern that took r, for the access
@@ -64,6 +65,7 @@ type accessRecorder struct {
 	// notFoundCause is what RecordNotFoundCause stored when this recorder is
 	// the cause sink (TraceHandler); the access observer uses observedRoute.
 	notFoundCause atomic.Uint32
+	graphQL       graphQLDocumentSink
 }
 
 func (a *accessRecorder) WriteHeader(status int) {
@@ -138,8 +140,8 @@ func (o *accessObserver) wrap(next http.Handler) http.Handler {
 		// http.ErrAbortHandler (Recover re-panics it): an aborted request is
 		// still a request that reached the route.
 		defer func() {
-			o.spans.finish(span, boundedMethod(r.Method), match.pattern, recorder.status, !returned, match.notFoundCause.Load())
-			o.observe(r, match.pattern, recorder.status, time.Now().Sub(start))
+			o.spans.finish(span, boundedMethod(r.Method), match.pattern, recorder.status, !returned, match.notFoundCause.Load(), match.graphQL.load())
+			o.observe(r, match.pattern, recorder.status, time.Now().Sub(start), match.graphQL.load())
 		}()
 		next.ServeHTTP(recorder, r.WithContext(context.WithValue(spanCtx, observedRouteKey{}, match)))
 		returned = true
@@ -151,7 +153,7 @@ func (o *accessObserver) wrap(next http.Handler) http.Handler {
 	})
 }
 
-func (o *accessObserver) observe(r *http.Request, pattern string, status int, elapsed time.Duration) {
+func (o *accessObserver) observe(r *http.Request, pattern string, status int, elapsed time.Duration, doc *graphQLDocument) {
 	if pattern == "" {
 		pattern = UnmatchedRoute
 	}
@@ -176,7 +178,7 @@ func (o *accessObserver) observe(r *http.Request, pattern string, status int, el
 	if o.duration != nil {
 		o.duration.Record(ctx, elapsed.Seconds(), attrs)
 	}
-	o.logger.LogAttrs(ctx, slog.LevelInfo, "http request",
+	line := []slog.Attr{
 		slog.String("method", method),
 		slog.String("route", pattern),
 		slog.Int("status", status),
@@ -184,7 +186,8 @@ func (o *accessObserver) observe(r *http.Request, pattern string, status int, el
 		slog.String("listener", o.listener),
 		slog.String("request_id", LoggableRequestID(ctx)),
 		slog.String("peer", peerHost(r.RemoteAddr)),
-	)
+	}
+	o.logger.LogAttrs(ctx, slog.LevelInfo, "http request", append(line, doc.logAttrs()...)...)
 }
 
 // statusClass is "2xx".."5xx"; a response that never committed a status (an

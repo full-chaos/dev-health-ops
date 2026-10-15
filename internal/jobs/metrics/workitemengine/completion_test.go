@@ -136,3 +136,20 @@ func TestComputeWorkItemCompletionDailyChurnIsZeroWithNoLinkedPullRequest(t *tes
 		t.Fatalf("rows = %+v, want one row with 1 completed item and churn_loc 0", rows)
 	}
 }
+
+func TestChurnInputsCountsTiersAndMissingSizes(t *testing.T) {
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	repo := uuid.New()
+	done := timePointer(day.Add(time.Hour))
+	items := []Item{
+		{WorkItemID: "1", CompletedAt: done, LinkedPRs: []LinkedPR{
+			linkedPR(repo, 1, LinkTierNative, lines(1), lines(1)), linkedPR(repo, 2, LinkTierHeuristic, nil, nil)}},
+		{WorkItemID: "2", CompletedAt: done},
+		{WorkItemID: "3", LinkedPRs: []LinkedPR{linkedPR(repo, 3, LinkTierNative, lines(1), lines(1))}},
+	}
+	stats := ChurnInputs(items, day, day.AddDate(0, 0, 1))
+	if stats.CompletedItems != 2 || stats.ItemsWithoutLinkedPR != 1 || stats.LinksByTier[LinkTierNative] != 1 ||
+		stats.LinksByTier[LinkTierHeuristic] != 1 || stats.LinkedPRsWithoutSize != 1 {
+		t.Fatalf("stats = %+v", stats)
+	}
+}

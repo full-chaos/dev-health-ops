@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"time"
 
@@ -88,6 +89,18 @@ func (executor *WorkItemInvestmentExecutor) ComputeFamily(
 			ctx, executor.conn, run.OrganizationID, items, scope.start, scope.end,
 		); err != nil {
 			return wrapWorkItemPartialWrite(WorkItemInvestmentFamilyName, total, repoID, err)
+		}
+
+		if stats := workitemengine.ChurnInputs(items, scope.start, scope.end); stats.CompletedItems > 0 {
+			slog.Default().DebugContext(ctx, "metrics daily: completion churn inputs",
+				"day", scope.start.Format("2006-01-02"), "repo_id", repoID.String(),
+				"completed_items", stats.CompletedItems,
+				"completed_items_without_linked_pr", stats.ItemsWithoutLinkedPR,
+				"links_native", stats.LinksByTier[workitemengine.LinkTierNative],
+				"links_explicit_text", stats.LinksByTier[workitemengine.LinkTierExplicitText],
+				"links_heuristic", stats.LinksByTier[workitemengine.LinkTierHeuristic],
+				"linked_prs_without_size", stats.LinkedPRsWithoutSize,
+				"churn_zero_means_no_linked_pr", stats.ItemsWithoutLinkedPR == stats.CompletedItems)
 		}
 
 		computedAt := executor.nowUTC()

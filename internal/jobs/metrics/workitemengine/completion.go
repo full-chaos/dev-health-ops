@@ -1,7 +1,6 @@
 package workitemengine
 
 import (
-	"log/slog"
 	"math"
 	"sort"
 	"time"
@@ -46,8 +45,6 @@ func ComputeWorkItemCompletionDaily(
 ) ([]WorkItemCompletionDailyRow, error) {
 	buckets := make(map[completionKey]*completionBucket)
 	order := make([]completionKey, 0, len(items))
-	completedItems, itemsWithoutLinkedPR, unknownSizePRs := 0, 0, 0
-	tierLinks := map[string]int{}
 	for index, item := range items {
 		created := item.CreatedAt.UTC()
 		if !created.Before(end) ||
@@ -82,12 +79,7 @@ func ComputeWorkItemCompletionDaily(
 			return nil, ErrUnrepresentableDeliveryUnits
 		}
 		bucket.deliveryUnits += int(math.Trunc(points))
-		completedItems++
-		if len(item.LinkedPRs) == 0 {
-			itemsWithoutLinkedPR++
-		}
 		for _, pr := range item.LinkedPRs {
-			tierLinks[pr.Provenance]++
 			if bucket.prs == nil {
 				bucket.prs = make(map[linkedPRKey]struct{})
 			}
@@ -97,7 +89,6 @@ func ComputeWorkItemCompletionDaily(
 			}
 			bucket.prs[prKey] = struct{}{}
 			if pr.Additions == nil || pr.Deletions == nil {
-				unknownSizePRs++
 				continue
 			}
 			bucket.churn += int(*pr.Additions) + int(*pr.Deletions)
@@ -110,7 +101,6 @@ func ComputeWorkItemCompletionDaily(
 		}
 	}
 
-	logChurnInputs(dayUTC, completedItems, itemsWithoutLinkedPR, tierLinks, unknownSizePRs)
 	rows := make([]WorkItemCompletionDailyRow, 0, len(order))
 	for _, key := range order {
 		bucket := buckets[key]
@@ -131,26 +121,37 @@ func ComputeWorkItemCompletionDaily(
 	return rows, nil
 }
 
-// logChurnInputs writes the debug lines that explain a churn_loc of 0: on a day with completed items it means no
-// linked pull request (or none with a size), not that no lines changed. The tier mix names how the links were
-// found; only a native link is native.
-func logChurnInputs(
-	dayUTC time.Time, completedItems, itemsWithoutLinkedPR int, tierLinks map[string]int, unknownSizePRs int,
-) {
-	if completedItems == 0 {
-		return
+// ChurnStats describes the inputs of a day's churn_loc: it explains a churn of 0 on a day with completed items, which
+// means no linked pull request (or none with a size), not that no lines changed.
+type ChurnStats struct {
+	CompletedItems       int
+	ItemsWithoutLinkedPR int
+	LinksByTier          map[string]int
+	LinkedPRsWithoutSize int
+}
+
+// ChurnInputs counts, for the items completed in [dayUTC, end), the links by provenance tier and the linked pull
+// requests with no stored size. The caller logs it; this package holds no logger.
+func ChurnInputs(items []Item, dayUTC, end time.Time) ChurnStats {
+	stats := ChurnStats{LinksByTier: map[string]int{}}
+	for _, item := range items {
+		if item.CompletedAt == nil {
+			continue
+		}
+		done := item.CompletedAt.UTC()
+		if done.Before(dayUTC) || !done.Before(end) {
+			continue
+		}
+		stats.CompletedItems++
+		if len(item.LinkedPRs) == 0 {
+			stats.ItemsWithoutLinkedPR++
+		}
+		for _, pr := range item.LinkedPRs {
+			stats.LinksByTier[pr.Provenance]++
+			if pr.Additions == nil || pr.Deletions == nil {
+				stats.LinkedPRsWithoutSize++
+			}
+		}
 	}
-	logger := slog.Default()
-	logger.Debug("workitemengine: completion churn inputs",
-		"day", dayUTC.Format("2006-01-02"),
-		"completed_items", completedItems,
-		"completed_items_without_linked_pr", itemsWithoutLinkedPR,
-		"links_native", tierLinks[LinkTierNative],
-		"links_explicit_text", tierLinks[LinkTierExplicitText],
-		"links_heuristic", tierLinks[LinkTierHeuristic],
-		"linked_prs_without_size", unknownSizePRs)
-	if itemsWithoutLinkedPR == completedItems {
-		logger.Debug("workitemengine: completion churn is 0 because no completed item has a linked pull request",
-			"day", dayUTC.Format("2006-01-02"), "completed_items", completedItems)
-	}
+	return stats
 }

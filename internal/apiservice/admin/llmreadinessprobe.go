@@ -133,6 +133,10 @@ func newOpenAICompatibleReadinessProber(doer providerfoundation.HTTPDoer) *openA
 		// the saved API key rides these requests: a supplied *http.Client follows no redirect (D4124)
 		return &openAICompatibleReadinessProber{client: doer}
 	}
+	// The guarded transport applies whatever the base_url: unlike the
+	// categorize providers (an empty base_url keeps a plain client there),
+	// an empty base_url here means OpenAI's public chat/completions endpoint
+	// (chatCompletionsEndpoint), which the guard lets through.
 	return &openAICompatibleReadinessProber{client: newReadinessHTTPClient(externalurl.GuardedTransport())}
 }
 

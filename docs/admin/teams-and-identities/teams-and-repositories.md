@@ -19,4 +19,6 @@ lifecycle: active
 5. Save and verify the team or repository appears in the expected product scope.
 6. Check coverage before interpreting historical gaps.
 
+When several teams own one repository, each owner keeps its own share of that repository: one main owner for the whole history, and lesser owners with their own smaller shares. Team count numbers (commits, after-hours and weekend commits, and the other counts) are taken at that share, so a co-owning team can show a fraction. See [Team counts at the owner's share](../../reference/metrics/team-counts-at-owner-share.md).
+
 Changing scope can change every downstream metric and view. Record the effective time and avoid comparing periods across a major scope change without disclosure.

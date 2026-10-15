@@ -154,6 +154,8 @@ Project status is one familiar place where connected context matters. A tracking
 
 The same fabric supports broader operating questions: project and portfolio health, team conditions and workload pressure, investment balance, operational deficiencies, ownership and dependency risk, changes in delivery or reliability, prior decisions that govern new work, and the quality or freshness of the available evidence.
 
+Team count numbers in answers (commits, after-hours and weekend commits, and the other team counts) are taken at the team's share of each repository it owns, so a team that shares a repository can show a fraction and the owners together count it once. The value is one day, the latest day, not a window total or an average. See [Team counts at the owner's share](../reference/metrics/team-counts-at-owner-share.md).
+
 It gives a leader a connected view before deciding where to intervene, a team a better starting point for a conversation, and an agent the relevant history and constraints before it edits code, reviews a change, updates documentation, investigates a failure, or runs automation.
 
 </section>

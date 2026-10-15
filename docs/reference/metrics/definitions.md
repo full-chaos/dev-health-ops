@@ -27,6 +27,10 @@ Generate one entry per currently supported metric with:
 
 Do not publish a metric from an old planning document when no current computation or product surface supports it.
 
+## Team counts
+
+A team's daily commit, after-hours commit, weekend commit and other count numbers are the repository's count times the team's share of that repository, summed over the repositories the team owns. They can be fractional, and ratios are recomputed from the shared counts. The full contract is in [Team counts at the owner's share](team-counts-at-owner-share.md).
+
 ## Ask Dev V1 metric registry
 
 Ask Dev V1 exposes exactly these eight metrics. The registry version is

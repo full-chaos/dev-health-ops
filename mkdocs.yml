@@ -229,6 +229,7 @@ nav:
           - reference/metrics/index.md
           - Definitions: reference/metrics/definitions.md
           - Weighting and aggregation: reference/metrics/weighting-and-aggregation.md
+          - Team counts at the owner's share: reference/metrics/team-counts-at-owner-share.md
       - Taxonomies:
           - reference/taxonomies/index.md
           - Investment: reference/taxonomies/investment.md

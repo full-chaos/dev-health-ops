@@ -17,6 +17,8 @@ The scope bar at the top of a page sets the scope and time window. It has **Orga
 4. Record the context before opening evidence or another view.
 5. Preserve it when comparing results.
 
+At Team scope, count numbers such as commits, after-hours commits and weekend commits are taken at the team's share of each repository it owns. When teams share a repository, each reads its own part, so a team can show a fraction, and the teams together read the repository once. Repository scope reads the whole repository. See [Team counts at the owner's share](../../reference/metrics/team-counts-at-owner-share.md).
+
 A wider period can test coverage, but it changes the analytical question. A team and a repository can contain different work, attribution, and coverage even when their names appear related.
 
 Use [Unexpected scope or filters](../troubleshooting/scope-and-filters.md) when the result does not match the visible context.

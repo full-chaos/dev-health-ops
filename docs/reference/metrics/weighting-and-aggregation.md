@@ -25,6 +25,10 @@ displayed share          = contribution ÷ Σ(positive theme contributions)
 
 The query groups by subcategory and theme and orders positive contributions from largest to smallest. The service omits non-positive values from the returned theme and subcategory maps. The web chart computes percentages against the total positive theme value in the current response.
 
+## Team counts
+
+Team count numbers (commits, after-hours and weekend commits, and the other team counts) are not Investment contributions. They are taken at each owner's share of a repository, so a co-owning team can show a fraction. See [Team counts at the owner's share](team-counts-at-owner-share.md) for what, how and why.
+
 ## Time and scope
 
 A row is included when its interval overlaps the selected window:

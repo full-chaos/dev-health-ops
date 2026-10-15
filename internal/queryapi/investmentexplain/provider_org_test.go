@@ -773,6 +773,13 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 
 		t.Run(string(kind)+"/org_byo_stored_model", func(t *testing.T) {
 			srv.reset()
+			// The capturing server is on loopback, which the org BYO guard refuses
+			// at dial time; this scenario is about model resolution, not egress.
+			previous := newProviderFromCredentials
+			newProviderFromCredentials = func(kind categorize.ProviderKind, apiKey, baseURL, model string) (categorize.Provider, error) {
+				return categorize.NewProviderFromCredentialsWithTransport(kind, apiKey, baseURL, model, http.DefaultTransport)
+			}
+			t.Cleanup(func() { newProviderFromCredentials = previous })
 			resolver := &fakeOrgResolver{
 				credentials: llmorgsettings.Credentials{
 					APIKey:  secrets.NewHidden("org-secret-key"),

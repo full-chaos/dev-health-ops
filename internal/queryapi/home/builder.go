@@ -369,6 +369,9 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		}
 	}
 	metricSignals = AttachSignalAttribution(metricSignals, attribution)
+	if err := attachDriverCaptions(ctx, chClient, f, orgID, now, startDay, endDay, compareStart, compareEnd, deltas, metricSignals); err != nil {
+		return nil, err
+	}
 
 	attachTeamNames(ctx, chClient, orgID, recommendationRows)
 	var recommendationSignals []Signal

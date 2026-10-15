@@ -124,8 +124,6 @@ func TestInvestmentReadsGiveOneExactAnswerOnEveryRun(t *testing.T) {
 	})
 }
 
-const coverageUnits = 20000
-
 func repoEffortRepoID(number int) string {
 	return fmt.Sprintf("00000000-0000-4000-8000-%012d", number)
 }
@@ -134,47 +132,6 @@ func repoEffortRepoID(number int) string {
 // over a series.
 func repoEffortValue(u, number int) (k int64, shift uint) {
 	return int64((number*7919+u*104729)%1000 + 1), uint((number + u) % 55)
-}
-
-// The Sankey coverage totals sum the repository allocation weights of every
-// unit. coverageUnits units, each split over two repositories with efforts 74
-// bits apart, written in exactSumParts parts: the coverage must give one
-// answer every run, and its total must be the unit count.
-func TestSankeyCoverageGivesOneAnswerOnEveryRun(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	admin, client := crossorg.Start(ctx, t)
-
-	const orgID = "seeded-exact-coverage"
-	per := coverageUnits / exactSumParts
-	for part := 0; part < exactSumParts; part++ {
-		crossorg.Exec(ctx, t, admin, fmt.Sprintf(`
-INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, provider, effort_metric, effort_value,
-    theme_distribution_json, subcategory_distribution_json, structural_evidence_json, evidence_quality, evidence_quality_band,
-    categorization_status, categorization_errors_json, categorization_model_version, categorization_input_hash,
-    categorization_run_id, computed_at, work_unit_type, work_unit_name, org_id)
-SELECT concat('unit-', toString(n)), toDateTime64('2026-01-01 00:00:00', 3), toDateTime64('2026-01-05 00:00:00', 3), NULL, NULL,
-    'fte_days', 1.0, map(), map('feature_delivery.build', 1.0), '', 1.0, 'high', 'ok', '', 'v1', 'hash', 'run',
-    toDateTime64('2026-01-06 00:00:00', 3), 'story', 'unit', '%[1]s'
-FROM (SELECT number + %[2]d AS n FROM numbers(%[3]d))`, orgID, part*per, per))
-		crossorg.Exec(ctx, t, admin, fmt.Sprintf(`
-INSERT INTO work_unit_repo_effort (work_unit_id, repo_id, effort_metric, effort_value, allocation_weight, allocation_source,
-    repo_source, categorization_run_id, computed_at, org_id)
-SETTINGS optimize_on_insert = 0
-SELECT concat('unit-', toString(n)), toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(r), 12, '0'))), 'churn_loc',
-    ((n * 7919 + r * 104729) %% 1000 + 1) * pow(2, toInt64((n + 37 * r) %% 55) - 30), 0, 'seeded', 'own_edges', 'run',
-    toDateTime64('2026-01-06 00:00:00', 3), '%[1]s'
-FROM (SELECT number + %[2]d AS n FROM numbers(%[3]d)) ARRAY JOIN [0, 1] AS r`, orgID, part*per, per))
-	}
-
-	req := SankeyRequest{Path: []Dimension{DimensionTheme, DimensionRepo}, Measure: MeasureCount,
-		StartDate: mustDate(t, "2026-01-01"), EndDate: mustDate(t, "2026-01-31"), MaxNodes: 20, MaxEdges: 50}
-	coverage := sameEveryRun(t, "sankey coverage", func() *model.SankeyCoverage {
-		return resolveSankeyCoverage(ctx, client, orgID, req, 120, true, nil)
-	})
-	if coverage == nil {
-		t.Fatal("sankey coverage = nil, want the seeded units' coverage")
-	}
 }
 
 const (

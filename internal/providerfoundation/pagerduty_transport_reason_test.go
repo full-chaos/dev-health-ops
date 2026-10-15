@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +18,7 @@ import (
 )
 
 func TestPagerDutyExchangeTransportFailureKeepsReason(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server := newQuietTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer server.Close()
 	config := PagerDutyRevokeConfig{ClientID: "c", ClientSecret: "hunter2", TokenURL: server.URL + "/oauth/token"}
 	for name, call := range map[string]func() error{
@@ -44,7 +43,7 @@ func TestPagerDutyExchangeTransportFailureKeepsReason(t *testing.T) {
 }
 
 func TestPagerDutyValidationTransportFailureKeepsReason(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server := newQuietTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer server.Close()
 	_, err := ValidatePagerDutyCredential(context.Background(), &http.Client{},
 		PagerDutyRevokeConfig{APIBaseOverride: server.URL},

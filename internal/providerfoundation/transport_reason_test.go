@@ -5,10 +5,13 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"io"
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -32,19 +35,48 @@ func transportClient(t *testing.T, doer fakehttp.Doer, base string) *HTTPClient 
 	return client
 }
 
-func captureLogs(t *testing.T) *bytes.Buffer {
+// lockedBuffer is a bytes.Buffer safe for the test goroutine to read while
+// another goroutine (an httptest server's logger) writes through slog.
+type lockedBuffer struct {
+	mutex  sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return b.buffer.String()
+}
+
+// newQuietTLSServer is httptest.NewTLSServer whose own error log (the
+// "TLS handshake error" line a rejecting client provokes) is discarded, so it
+// never reaches the slog default a test captures.
+func newQuietTLSServer(handler http.Handler) *httptest.Server {
+	server := httptest.NewUnstartedServer(handler)
+	server.Config.ErrorLog = log.New(io.Discard, "", 0)
+	server.StartTLS()
+	return server
+}
+
+func captureLogs(t *testing.T) *lockedBuffer {
 	t.Helper()
-	var out bytes.Buffer
+	out := &lockedBuffer{}
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&out, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(out, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
-	return &out
+	return out
 }
 
 // A client that does not trust the server's CA (the go-api-tools image without a CA bundle)
 // must surface tls_unknown_authority, not a bare transient error.
 func TestTransportUnknownAuthorityReachesCaller(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server := newQuietTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer server.Close()
 	logs := captureLogs(t)
 	client := transportClient(t, &http.Client{}, server.URL)
@@ -121,4 +153,25 @@ func TestAuthHelpersSurfaceTransportReason(t *testing.T) {
 	want("pagerduty client credentials", auth.Apply(request))
 	want("pagerduty revoke", RevokePagerDutyOAuthToken(context.Background(), fakehttp.Client(errDoer{cause}), PagerDutyRevokeConfig{ClientID: "cid"}, "tok"))
 	want("github app", transportProviderError("github", cause, 1))
+}
+
+// A goroutine the test does not own (an httptest server logging through the
+// std log, which slog.SetDefault redirects) writes to the captured buffer
+// while the test reads it: run under -race.
+func TestCaptureLogsIsSafeWhileAnotherGoroutineLogs(t *testing.T) {
+	logs := captureLogs(t)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			slog.Warn("background line", "n", i)
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		_ = logs.String()
+	}
+	<-done
+	if !strings.Contains(logs.String(), `"n":199`) {
+		t.Fatal("background lines missing")
+	}
 }

@@ -384,6 +384,22 @@ def test_relative_paths_of_the_tracked_base_resolve_against_the_bigboy_root(
         "BIGBOY_OPERATOR_IMAGE": _DHO,
     }
     env["DHO_API_CH_USERS_XML"] = str(r / ".go-api-dev/dho_api_ch.xml")
+    real = shutil.which("docker")
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    log = tmp_path / "shim.log"
+    (shim / "docker").write_text(
+        f'#!/usr/bin/env bash\necho "$*" >> {log}\nexec {real} "$@"\n'
+    )
+    (shim / "docker").chmod(0o755)
+    through = subprocess.run(
+        [str(STACK_SH), "config", "--quiet"],
+        env={**env, "PATH": f"{shim}:{env['PATH']}"},
+        capture_output=True,
+        text=True,
+    )
+    assert through.returncode == 0, through.stderr
+    assert f"--project-directory {r} " in log.read_text()
     files = subprocess.run(
         [str(STACK_SH), "files"], env=env, capture_output=True, text=True
     ).stdout.split()
@@ -419,3 +435,50 @@ def test_relative_paths_of_the_tracked_base_resolve_against_the_bigboy_root(
     ]
     assert any(p.startswith(str(r)) for p in paths)
     assert not [p for p in paths if p.startswith(str(BIGBOY))]
+
+
+def test_run_is_a_logged_one_off_with_rm_no_deps_and_no_tty(tmp_path: Path) -> None:
+    r, tools, env = _tree(tmp_path)
+    res = _run(
+        tools,
+        env,
+        "-s",
+        "river-apply",
+        "run",
+        "venue-river",
+        "migrate",
+        "river",
+        "--apply-and-check",
+    )
+    assert res.returncode == 0, res.stderr
+    cmd = [
+        ln for ln in Path(env["DOCKER_LOG"]).read_text().splitlines() if " run " in ln
+    ][0]
+    assert cmd.endswith(
+        "run --rm --no-deps -T venue-river migrate river --apply-and-check"
+    )
+    assert "--profile venue" in cmd
+    line = (r / "_records/stack-runs.log").read_text().splitlines()
+    assert len(line) == 1 and "verb=run" in line[0] and "service=venue-river" in line[0]
+
+
+def test_exec_passes_stdin_through_and_is_not_logged(tmp_path: Path) -> None:
+    r, tools, env = _tree(tmp_path)
+    res = subprocess.run(
+        [str(tools / "stack.sh"), "exec", "postgres", "psql", "-X"],
+        env=env,
+        input="select 1;\n",
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "exec -T postgres psql -X" in Path(env["DOCKER_LOG"]).read_text()
+    assert not (r / "_records/stack-runs.log").exists()
+
+
+def test_run_and_exec_refuse_a_missing_or_bad_service(tmp_path: Path) -> None:
+    _, tools, env = _tree(tmp_path)
+    for verb in ("run", "exec"):
+        assert _run(tools, env, verb).returncode == 2
+        assert _run(tools, env, verb, "--rm").returncode == 2
+        assert _run(tools, env, verb, "web\nx").returncode == 2

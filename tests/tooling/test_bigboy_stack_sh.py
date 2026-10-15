@@ -356,3 +356,66 @@ def test_check_host_copies_flags_a_static_copy_that_differs(tmp_path: Path) -> N
         text=True,
     )
     assert "INFO pin file differs" in pin.stdout
+
+
+@pytest.mark.skipif(not _REAL_COMPOSE, reason="needs docker compose")
+def test_relative_paths_of_the_tracked_base_resolve_against_the_bigboy_root(
+    tmp_path: Path,
+) -> None:
+    """The base file now lives in ci/bigboy, not at the root: without --project-directory its `./ops` build contexts
+    and `./.go-api-dev` bind mounts would resolve against ci/bigboy."""
+    r = tmp_path / "root"
+    for d in ("compose", "ops", ".remember/lanes/team-lead", ".go-api-dev", "_records"):
+        (r / d).mkdir(parents=True)
+    shutil.copy(
+        BIGBOY / "compose.bigboy.images.yml", r / "compose/compose.bigboy.images.yml"
+    )
+    (r / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
+        "services: {}\n"
+    )
+    (r / "ops/.env").write_text("")
+    (r / ".go-api-dev/go-api.env").write_text("")
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "BIGBOY_"))
+    }
+    env |= {
+        "BIGBOY_ROOT": str(r),
+        "BIGBOY_TOOLS_DIR": str(BIGBOY),
+        "BIGBOY_OPERATOR_IMAGE": _DHO,
+    }
+    env["DHO_API_CH_USERS_XML"] = str(r / ".go-api-dev/dho_api_ch.xml")
+    files = subprocess.run(
+        [str(STACK_SH), "files"], env=env, capture_output=True, text=True
+    ).stdout.split()
+    cmd = [
+        "docker",
+        "compose",
+        "-p",
+        "dev-health",
+        "--project-directory",
+        str(r),
+        "--env-file",
+        "ops/.env",
+    ]
+    for f in files:
+        cmd += ["-f", f]
+    out = subprocess.run(
+        [*cmd, "config", "--format", "json"],
+        env=env,
+        cwd=r,
+        capture_output=True,
+        text=True,
+    )
+    assert out.returncode == 0, out.stderr[-300:]
+    import json
+
+    services = json.loads(out.stdout)["services"]
+    paths = [s["build"]["context"] for s in services.values() if "build" in s]
+    paths += [
+        v["source"]
+        for s in services.values()
+        for v in s.get("volumes", [])
+        if v.get("type") == "bind"
+    ]
+    assert any(p.startswith(str(r)) for p in paths)
+    assert not [p for p in paths if p.startswith(str(BIGBOY))]

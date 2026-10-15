@@ -10,8 +10,8 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd)
 rc=0
 same() { # <tracked> <host> <strict>
-  if [ ! -f "$2" ]; then echo "MISSING host file $2"; [ "$3" = strict ] && rc=1; return; fi
-  if cmp -s "$1" "$2"; then echo "SAME $(sha256sum "$1" | cut -c1-12) ${1##*/}"; else echo "DIFF ${1##*/} vs $2"; [ "$3" = strict ] && rc=1; fi
+  if [ ! -f "$2" ]; then echo "MISSING host file $2"; if [ "$3" = strict ]; then rc=1; fi; return 0; fi
+  if cmp -s "$1" "$2"; then echo "SAME $(sha256sum "$1" | cut -c1-12) ${1##*/}"; else echo "DIFF ${1##*/} vs $2"; if [ "$3" = strict ]; then rc=1; fi; fi
 }
 same "$HERE/compose.bigboy.base.yml" "$R/compose.yml" strict
 same "$HERE/compose.bigboy.go-workers.yml" "$R/compose/compose.go.workers.yml" strict

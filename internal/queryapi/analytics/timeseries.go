@@ -380,7 +380,8 @@ const orgSeriesDimensionValue = "org"
 // factor the ratio is scaled by (the dimension series serve a percent). ok is false for every other measure.
 //
 // The org rate is the org's summed numerator over its summed denominator, never a mean of the dimension series
-// (CHAOS-9736). TEST_FLAKE_RATE is the summed flake cases over the summed distinct case names (CHAOS-9737).
+// (CHAOS-9736). TEST_FLAKE_RATE is the summed flake cases over the summed distinct case names (CHAOS-9737); a bucket
+// with any row lacking the counts is unavailable.
 //
 // Coverage counts only the rows that carry both line counts: a row with a percent but no counts, or with no lines,
 // adds to neither side.
@@ -392,10 +393,10 @@ func orgRateTerms(measure Measure) (numerator, denominator string, scale float64
 		const counted = "lines_covered IS NOT NULL AND lines_total IS NOT NULL AND lines_total > 0"
 		return "sumIf(lines_covered, " + counted + ")", "sumIf(lines_total, " + counted + ")", 100, true
 	case MeasureTestFlakeRate:
-		// Rows written before migration 129 carry NULL counts and add to neither side, so a day with no counts has no
-		// value (nil), never a rate computed from the stored flake_rate.
-		const counted = "flake_cases IS NOT NULL AND distinct_cases IS NOT NULL AND distinct_cases > 0"
-		return "sumIf(flake_cases, " + counted + ")", "sumIf(distinct_cases, " + counted + ")", 100, true
+		// All or nothing per bucket: one row without counts (written before migration 129 and not yet recomputed)
+		// makes the whole bucket unavailable (NULL), so a rate never covers a subset of the org's rows.
+		const uncounted = "(flake_cases IS NULL OR distinct_cases IS NULL)"
+		return "if(countIf(" + uncounted + ") > 0, NULL, SUM(flake_cases))", "if(countIf(" + uncounted + ") > 0, NULL, SUM(distinct_cases))", 100, true
 	}
 	return "", "", 0, false
 }

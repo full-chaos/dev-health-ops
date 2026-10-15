@@ -151,7 +151,7 @@ func TestResolveOneTimeseries_OrgFlakeRateDiffersFromMeanOfTeamRates(t *testing.
 	}
 }
 
-func TestCompileOrgTimeseries_FlakeRateSkipsRowsWithoutCounts(t *testing.T) {
+func TestCompileOrgTimeseries_FlakeRateBucketIsNilWhenAnyRowLacksCounts(t *testing.T) {
 	req, err := TimeseriesRequestFromInput(tsInput(model.DimensionInputTeam, model.MeasureInputTestFlakeRate))
 	if err != nil {
 		t.Fatal(err)
@@ -160,12 +160,24 @@ func TestCompileOrgTimeseries_FlakeRateSkipsRowsWithoutCounts(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
-	for _, want := range []string{"sumIf(flake_cases,", "sumIf(distinct_cases,", "flake_cases IS NOT NULL", "distinct_cases IS NOT NULL", "testops_test_metrics_daily"} {
+	for _, want := range []string{"countIf((flake_cases IS NULL OR distinct_cases IS NULL)) > 0, NULL, SUM(flake_cases)", "NULL, SUM(distinct_cases)", "testops_test_metrics_daily"} {
 		if !strings.Contains(q.sql, want) {
 			t.Errorf("sql lacks %q:\n%s", want, q.sql)
 		}
 	}
 	if strings.Contains(q.sql, "flake_rate") {
 		t.Errorf("org sql must not use the stored rate:\n%s", q.sql)
+	}
+}
+
+// One team recomputed (counts), one not (NULL): the SQL returns NULL sums for the bucket and the series is nil.
+func TestResolveOneTimeseries_OrgFlakeRateNilWhenOneTeamNotBackfilled(t *testing.T) {
+	client := orgSeriesClient(nil, [][]any{{mustTime("2026-01-01"), nil, nil}})
+	got, err := resolveOneTimeseries(context.Background(), client, "org-1", tsInput(model.DimensionInputTeam, model.MeasureInputTestFlakeRate), false, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Scope != model.TimeseriesScopeOrg || got[0].Buckets[0].Value != nil {
+		t.Fatalf("got %+v, want one ORG series with a nil bucket", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -60,23 +62,39 @@ func startAutomaticDora(
 	generation, anchorDay string, backfillDays int,
 ) Run {
 	t.Helper()
+	run, err := tryStartAutomaticDora(ctx, store, pool, nopPartitionPublisher{}, generation, anchorDay, backfillDays)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+// tryStartAutomaticDora is startAutomaticDora returning the start's error. A
+// failed start rolls its transaction back, as post-sync does.
+func tryStartAutomaticDora(
+	ctx context.Context, store *PostgresStore, pool *pgxpool.Pool, publisher PartitionPublisher,
+	generation, anchorDay string, backfillDays int,
+) (Run, error) {
 	scope := json.RawMessage(`{"version":1,"day":"` + anchorDay + `","sink":"auto","interval":"daily","backfill_days":` + strconv.Itoa(backfillDays) + `}`)
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		t.Fatal(err)
+		return Run{}, err
 	}
 	run, err := store.StartRunTx(ctx, tx, StartRunRequest{
 		OrganizationID: recomputeTestOrg, Family: "dora", Generation: generation,
 		ScopeKey: anchorDay, Scopes: []json.RawMessage{scope},
-	}, nopPartitionPublisher{})
+	}, publisher)
 	if err != nil {
 		_ = tx.Rollback(ctx)
-		t.Fatal(err)
+		return Run{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	return run
+	return run, tx.Commit(ctx)
+}
+
+type failingPartitionPublisher struct{}
+
+func (failingPartitionPublisher) PublishPartitionTx(context.Context, pgx.Tx, Run, Partition, string) error {
+	return errors.New("publisher unavailable")
 }
 
 func overlapTestStore(t *testing.T, ctx context.Context) (*PostgresStore, *pgxpool.Pool, *bytes.Buffer, *recordingOverlapObserver) {
@@ -172,5 +190,48 @@ func TestAnAutomaticDoraStartIsReportedOnlyWhenItsWindowSharesADayWithAManualRun
 	if lines[0]["manual_kind"] != "manual_backfill" || lines[0]["manual_run_id"] != backfill.RunID || lines[0]["run_id"] != wide.ID ||
 		lines[0]["overlap_from"] != manualDayString || lines[0]["overlap_to"] != manualDayString || lines[0]["overlap_days"] != float64(1) {
 		t.Fatalf("overlap line = %v", lines[0])
+	}
+}
+
+// A start that fails after the overlap is known (the publisher cannot hand the
+// partition off) rolls back and leaves no run, so it leaves no log line and no
+// count either; the same start retried and committed is reported once, and its
+// replay, which only finds the run again, is not reported a second time.
+func TestAnAutomaticDoraStartThatRollsBackIsNotReportedAndAReplayIsReportedOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	store, pool, logs, observer := overlapTestStore(t, ctx)
+
+	day := time.Now().UTC().AddDate(0, 0, -3).Truncate(24 * time.Hour)
+	dayString := day.Format("2006-01-02")
+	nextDay := day.AddDate(0, 0, 1).Format("2006-01-02")
+	seedSucceededDoraPartition(t, ctx, store, pool, recomputeTestOrg, dayString, 1, "post-sync:old-basis")
+	recompute, err := store.StartManualRecomputeRun(ctx, "dora", recomputeTestOrg, dayString, "cfr-9841", nopPartitionPublisher{})
+	if err != nil || recompute.Disposition != RecomputeStarted {
+		t.Fatalf("recompute = %+v, %v", recompute, err)
+	}
+	seedOutboxRow(t, ctx, pool, recompute.PartitionID, "pending", "")
+
+	runsBefore := countRemainingRuns(t, ctx, pool)
+	if _, err := tryStartAutomaticDora(ctx, store, pool, failingPartitionPublisher{}, "post-sync:rolls-back", nextDay, 2); err == nil {
+		t.Fatal("the start with a failing publisher succeeded: the test does not exercise a rollback")
+	}
+	if got := countRemainingRuns(t, ctx, pool); got != runsBefore {
+		t.Fatalf("the failed start left a run: %d -> %d", runsBefore, got)
+	}
+	if lines := overlapLines(t, logs); len(lines) != 0 || observer.count() != 0 {
+		t.Fatalf("a start that rolled back was reported: %d lines, %d observations\n%s", len(lines), observer.count(), logs.String())
+	}
+
+	first := startAutomaticDora(t, ctx, store, pool, "post-sync:rolls-back", nextDay, 2)
+	if lines := overlapLines(t, logs); len(lines) != 1 || observer.count() != 1 || lines[0]["run_id"] != first.ID {
+		t.Fatalf("the committed start was not reported once with its run id: %d lines, %d observations\n%s", len(lines), observer.count(), logs.String())
+	}
+	replay := startAutomaticDora(t, ctx, store, pool, "post-sync:rolls-back", nextDay, 2)
+	if replay.ID != first.ID {
+		t.Fatalf("the replay started another run: %s then %s", first.ID, replay.ID)
+	}
+	if lines := overlapLines(t, logs); len(lines) != 1 || observer.count() != 1 {
+		t.Fatalf("the replay of a start was reported again: %d lines, %d observations\n%s", len(lines), observer.count(), logs.String())
 	}
 }

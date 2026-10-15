@@ -38,6 +38,7 @@ var routeTemplateNotCovered = map[string]string{
 	"jira_atlassian_route.go":           "Jira routes",
 	"jira_dev_status.go":                "Jira routes",
 	"jira_incidents_route.go":           "Jira routes",
+	"jira_story_points_field.go":        "Jira routes",
 	"jira_work_items_route.go":          "Jira routes",
 	"launchdarkly_route.go":             "LaunchDarkly routes",
 	"linear_absence.go":                 "Linear GraphQL",

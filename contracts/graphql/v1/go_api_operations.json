@@ -353,11 +353,21 @@
   },
   {
     "operation": "testOpsCoverage",
-    "digest": "404b55a3066388c00846a9330032aafdaff6f3441cca5258217ade4fb845ecac"
+    "digest": "0b94aef78a67da6a837174b6915d38e7a38c0ae7a84b5070cca46812a1ab5b09"
+  },
+  {
+    "operation": "testOpsCoverage",
+    "digest": "404b55a3066388c00846a9330032aafdaff6f3441cca5258217ade4fb845ecac",
+    "legacy": true
   },
   {
     "operation": "testOpsPipeline",
-    "digest": "f380dda5b10c60b0887b888f4612bfd204409c1913b3e06458540a0295048df5"
+    "digest": "e164c9da32dbdd7768614d1ba0747e303ba05135709189035465e429501ced38"
+  },
+  {
+    "operation": "testOpsPipeline",
+    "digest": "f380dda5b10c60b0887b888f4612bfd204409c1913b3e06458540a0295048df5",
+    "legacy": true
   },
   {
     "operation": "testOpsTest",

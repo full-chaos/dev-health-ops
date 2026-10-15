@@ -185,6 +185,10 @@ func buildGitLabFetchWorkItemOracleRow(t *testing.T, input map[string]any) gitla
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The pair's producer is gitlab_issue_to_work_item alone; Python's provider
+	// adds the label priority right after it (provider.py:261), and the Go
+	// adapter reads it in the same row (CHAOS-9852). Compare the normalizer.
+	row.PriorityRaw, row.ServiceClass = nil, nil
 	return row
 }
 

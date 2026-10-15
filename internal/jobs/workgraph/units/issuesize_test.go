@@ -33,6 +33,7 @@ func TestComputeIssueSizeAcrossProviders(t *testing.T) {
 		{name: "NaN is no size", issues: []string{"linear:ENG-6"}, points: map[string]float64{"linear:ENG-6": math.NaN()}, wantIssues: 1, wantWeight: 1},
 		{name: "infinity is no size", issues: []string{"linear:ENG-7"}, points: map[string]float64{"linear:ENG-7": math.Inf(1)}, wantIssues: 1, wantWeight: 1},
 		{name: "partly sized unit is the sum of its sized issues", issues: []string{"jira:PAY-6", "jira:PAY-7", "linear:ENG-8"}, points: map[string]float64{"jira:PAY-6": 3, "linear:ENG-8": 2}, wantValue: 5, wantSized: 2, wantIssues: 3, wantWeight: 5, wantIsSized: true},
+		{name: "a sum that overflows is no size", issues: []string{"jira:PAY-8", "jira:PAY-9"}, points: map[string]float64{"jira:PAY-8": math.MaxFloat64, "jira:PAY-9": math.MaxFloat64}, wantIssues: 2, wantWeight: 1},
 		{name: "a repeated issue counts once", issues: []string{"jira:PAY-1", "jira:PAY-1"}, points: map[string]float64{"jira:PAY-1": 3}, wantValue: 3, wantSized: 1, wantIssues: 1, wantWeight: 3, wantIsSized: true},
 	}
 	for _, tc := range cases {

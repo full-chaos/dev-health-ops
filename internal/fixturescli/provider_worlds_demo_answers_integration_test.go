@@ -476,7 +476,7 @@ func (build *demoBuild) addTeam(team demoTeam) {
 				ID: strconv.Itoa(30000 + build.id()), Key: key, Project: team.Project, Summary: story.Title, Type: kind,
 				Assignee: assignee, Reporter: team.Jira[(index+1)%len(team.Jira)], Created: created, Updated: updated,
 				Resolved: done, Labels: labels, PullRequests: nativePRs, Description: demoIssueText(story),
-				Blocks: blocked, StoryPoints: points,
+				Blocks: blocked, LinkedAt: linkedAt, StoryPoints: points,
 			}
 			build.Jira = append(build.Jira, issue)
 		case "linear":

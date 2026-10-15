@@ -448,6 +448,7 @@ func normalizeJiraDependencies(
 ) []jiraWorkItemDependencyRow {
 	fields, _ := jiraMapValue(issue["fields"])
 	dependencies := make([]jiraWorkItemDependencyRow, 0)
+	linkedAt := jiraLinkStartTimes(issue)
 	for _, linkValue := range mapSlice(jiraField(fields, "issuelinks", false)) {
 		link, ok := jiraMapValue(linkValue)
 		if !ok {
@@ -469,7 +470,9 @@ func normalizeJiraDependencies(
 				if relationship == "blocked_by" {
 					source, destination, relationship = destination, source, "blocks"
 				}
-				dependencies = append(dependencies, jiraDependencyRow(claim, source, destination, relationship, outwardRaw, normalizedAt))
+				row := jiraDependencyRow(claim, source, destination, relationship, outwardRaw, normalizedAt)
+				row.RelationStartedAt = linkStart(linkedAt, target, normalizedAt)
+				dependencies = append(dependencies, row)
 			}
 		}
 		if inward, ok := jiraMapValue(link["inwardIssue"]); ok {
@@ -481,12 +484,96 @@ func normalizeJiraDependencies(
 				} else if relationship == "blocks" {
 					source, destination = destination, source
 				}
-				dependencies = append(dependencies, jiraDependencyRow(claim, source, destination, relationship, inwardRaw, normalizedAt))
+				row := jiraDependencyRow(claim, source, destination, relationship, inwardRaw, normalizedAt)
+				row.RelationStartedAt = linkStart(linkedAt, sourceKey, normalizedAt)
+				dependencies = append(dependencies, row)
 			}
 		}
 	}
 
 	return dependencies
+}
+
+var jiraIssueKeyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*-[0-9]+$`)
+
+// jiraLinkItemKey is the key of the linked issue a changelog "Link" item names: the `to` (or `from`) value,
+// else the last word of its description ("This issue blocks PAY-11").
+func jiraLinkItemKey(item map[string]any, valueField, textField string) string {
+	if value := strings.TrimSpace(stringFrom(item[valueField])); jiraIssueKeyPattern.MatchString(value) {
+		return value
+	}
+	words := strings.Fields(stringFrom(item[textField]))
+	if len(words) == 0 {
+		return ""
+	}
+	if last := words[len(words)-1]; jiraIssueKeyPattern.MatchString(last) {
+		return last
+	}
+	return ""
+}
+
+// jiraLinkStartTimes is, by the key of the linked issue, the time of the changelog entry that added the issue
+// link on this issue: the provider's own time of the link. Jira's issuelinks carry no time; the changelog
+// does (a "Link" item, `to` set when a link is added, `from` set when it is removed). A link removed and
+// added again starts at its last addition; a removed link has no entry. A link without a changelog entry
+// is absent from the map, and its row keeps a NULL start: no time is invented.
+func jiraLinkStartTimes(issue map[string]any) map[string]time.Time {
+	changelog, _ := jiraMapValue(issue["changelog"])
+	type linkEvent struct {
+		at    time.Time
+		index int
+		key   string
+		added bool
+	}
+	var events []linkEvent
+	for index, historyValue := range mapSlice(changelog["histories"]) {
+		history, ok := jiraMapValue(historyValue)
+		if !ok {
+			continue
+		}
+		at := jiraTime(history["created"])
+		if at == nil {
+			continue
+		}
+		for _, itemValue := range mapSlice(history["items"]) {
+			item, ok := jiraMapValue(itemValue)
+			if !ok || !strings.EqualFold(stringFrom(item["field"]), "link") {
+				continue
+			}
+			if key := jiraLinkItemKey(item, "from", "fromString"); key != "" {
+				events = append(events, linkEvent{at: *at, index: index, key: key})
+			}
+			if key := jiraLinkItemKey(item, "to", "toString"); key != "" {
+				events = append(events, linkEvent{at: *at, index: index, key: key, added: true})
+			}
+		}
+	}
+	sort.SliceStable(events, func(left, right int) bool {
+		if events[left].at.Equal(events[right].at) {
+			return events[left].index < events[right].index
+		}
+		return events[left].at.Before(events[right].at)
+	})
+	started := map[string]time.Time{}
+	for _, event := range events {
+		if event.added {
+			started[event.key] = event.at
+		} else {
+			delete(started, event.key)
+		}
+	}
+	return started
+}
+
+// linkStart is the start time of the link to the issue key, or nil: none in the changelog, or one after the
+// sync clock (a clock that disagrees with the provider is not a start).
+func linkStart(started map[string]time.Time, key string, normalizedAt time.Time) *time.Time {
+	at, ok := started[key]
+	if !ok || at.After(normalizedAt) {
+		return nil
+	}
+	value := at.UTC()
+	return &value
 }
 
 func jiraReopenEvents(

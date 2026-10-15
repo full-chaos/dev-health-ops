@@ -88,3 +88,48 @@ func TestSafeGraphQLErrorPresenterKeepsThePlanGateSentence(t *testing.T) {
 		t.Fatalf("an untyped plan-gate sentence = %q, want it masked", got.Message)
 	}
 }
+
+// acr keys on errors[].extensions.code and extensions.reason. The presenter
+// keeps both unchanged on every typed error, and adds the request id beside
+// them on a masked one.
+func TestSafeGraphQLErrorPresenterKeepsCodeAndReasonExtensions(t *testing.T) {
+	present := safeGraphQLErrorPresenter("test", nil)
+	typed := func(code, reason string) *gqlerror.Error {
+		return &gqlerror.Error{Message: "refused", Extensions: map[string]any{"code": code, "reason": reason}}
+	}
+	cases := []struct {
+		name         string
+		err          error
+		code, reason string
+		message      string
+	}{
+		{"read budget bytes ceiling", typed("MCP_READ_BUDGET_EXCEEDED", "bytes_ceiling"), "MCP_READ_BUDGET_EXCEEDED", "bytes_ceiling", "refused"},
+		{"read budget rows ceiling", typed("MCP_READ_BUDGET_EXCEEDED", "rows_ceiling"), "MCP_READ_BUDGET_EXCEEDED", "rows_ceiling", "refused"},
+		{"refused", typed("MCP_REFUSED", "complexity"), "MCP_REFUSED", "complexity", "refused"},
+		{"refused wrapped by a resolver", fmt.Errorf("outer: %w", typed("MCP_REFUSED", "depth")), "MCP_REFUSED", "depth", "refused"},
+		{"cause-carrying gqlerror with a typed client error keeps its extensions",
+			&gqlerror.Error{Err: &policy.ClientError{Status: 400, Message: "safe text", Cause: errors.New(driverText)},
+				Message: driverText, Extensions: map[string]any{"code": "MCP_REFUSED", "reason": "depth"}}, "MCP_REFUSED", "depth", "safe text"},
+		{"masked error keeps the code and reason beside the request id",
+			&gqlerror.Error{Err: errors.New(driverText), Message: driverText,
+				Extensions: map[string]any{"code": "MCP_READ_BUDGET_EXCEEDED", "reason": "time_ceiling"}}, "MCP_READ_BUDGET_EXCEEDED", "time_ceiling", graphQLInternalMessage},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := present(context.Background(), tc.err)
+			if got.Extensions["code"] != tc.code || got.Extensions["reason"] != tc.reason {
+				t.Fatalf("extensions = %v, want code %q reason %q", got.Extensions, tc.code, tc.reason)
+			}
+			if got.Message != tc.message {
+				t.Fatalf("message = %q, want %q", got.Message, tc.message)
+			}
+			if strings.Contains(got.Message, "store-host") {
+				t.Fatalf("message carries internal text: %q", got.Message)
+			}
+		})
+	}
+	masked := present(context.Background(), errors.New(driverText))
+	if _, present := masked.Extensions["request_id"]; !present {
+		t.Fatalf("masked error lacks request_id: %v", masked.Extensions)
+	}
+}

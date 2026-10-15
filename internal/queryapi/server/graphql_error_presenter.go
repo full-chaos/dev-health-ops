@@ -58,7 +58,7 @@ func safeGraphQLErrorPresenter(label string, observe func(context.Context)) grap
 			presented.Message = client.Message
 		default:
 			presented.Message = graphQLInternalMessage
-			presented.Extensions = map[string]any{"request_id": requestID}
+			presented.Extensions = withRequestID(presented.Extensions, requestID)
 			log.Printf("query-api: %s resolver error masked from the client: request_id=%s unwrap chain: %s",
 				label, requestID, truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
 			return withMutationLocation(ctx, presented)
@@ -83,4 +83,15 @@ func authoredGraphQLError(err error) bool {
 		}
 	}
 	return false
+}
+
+// withRequestID adds the request id beside the extensions the error already
+// carries (code, reason): acr keys on those, so they are never replaced.
+func withRequestID(existing map[string]any, requestID string) map[string]any {
+	merged := make(map[string]any, len(existing)+1)
+	for key, value := range existing {
+		merged[key] = value
+	}
+	merged["request_id"] = requestID
+	return merged
 }

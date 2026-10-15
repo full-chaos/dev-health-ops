@@ -50,7 +50,7 @@ type InlineDeps struct {
 	Now       func() time.Time
 
 	// The two Postgres reads (CHAOS-6710); nil uses the real ones.
-	FirstOrg         func(ctx context.Context, dbURL string) (string, bool)
+	FirstOrg         func(ctx context.Context, dbURL string) (string, error)
 	GitHubCredential func(ctx context.Context, dbURL, orgID string, env cli.Env) (*GitHubCredentials, error)
 
 	// Local syncs a local repository (CHAOS-6775): the store connection is open.

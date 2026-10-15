@@ -133,12 +133,13 @@ func TestMembershipThresholdMatchesPython(t *testing.T) {
 	}
 }
 
-// TestLexicalArgmaxMatchesPython includes the NaN cases, where the reference's
-// documented order-independence does not hold. See CHAOS-4840 -- the corpus pins
-// the MEASURED behaviour, so fixing Python will fail this deliberately.
+// TestLexicalArgmaxMatchesPython includes the NaN cases. CHAOS-4840 fixed the Go
+// plane only: NaN is absent from the argmax. The frozen Python reference keeps
+// the old answer, and chaos4840Divergence overrides the three affected cases.
 func TestLexicalArgmaxMatchesPython(t *testing.T) {
 	golden := loadMembershipGolden(t)
-	for _, testCase := range golden.Cases {
+	for _, goldenCase := range golden.Cases {
+		testCase := withChaos4840(t, goldenCase)
 		t.Run(testCase.Label, func(t *testing.T) {
 			got := LexicalArgmax(testCase.distribution(t))
 			if got != testCase.Dominant {
@@ -156,7 +157,8 @@ func TestLexicalArgmaxMatchesPython(t *testing.T) {
 // likely way to get this wrong.
 func TestMembershipCategoriesMatchesPython(t *testing.T) {
 	golden := loadMembershipGolden(t)
-	for _, testCase := range golden.Cases {
+	for _, goldenCase := range golden.Cases {
+		testCase := withChaos4840(t, goldenCase)
 		t.Run(testCase.Label, func(t *testing.T) {
 			rows := MembershipCategories(testCase.distribution(t))
 
@@ -204,9 +206,9 @@ func TestMembershipCorpusStillCoversItsAxes(t *testing.T) {
 		"empty",
 		"nondominant_exactly_at_threshold", // the >= vs > boundary
 		"nondominant_just_below_threshold",
-		"nan_tie_za",           // argmax is insertion-ordered, not lexical
-		"nan_with_real_weight", // a NaN outranks a real weight
-		"real_weight_then_nan", // ... and only because it was first
+		"nan_tie_za",           // all-NaN tie is lexical, not insertion-ordered
+		"nan_with_real_weight", // a NaN never outranks a real weight
+		"real_weight_then_nan", // ... whatever the insertion order
 		"exact_tie_resolved_lexically",
 		"exact_tie_reversed_insertion_order",
 		"bool_true_coerces_to_zero", // isinstance(True, int) is True

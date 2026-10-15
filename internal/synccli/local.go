@@ -23,7 +23,7 @@ func runLocalRepo(ctx context.Context, deps InlineDeps, lookups dbLookups, plan 
 		if plan.DB != nil {
 			dbURL = *plan.DB
 		}
-		if id, found := lookups.FirstOrg(ctx, dbURL); found {
+		if id, err := lookups.FirstOrg(ctx, dbURL); err == nil {
 			plan.Org, plan.OrgSource = &id, OrgFromDB
 		}
 	}

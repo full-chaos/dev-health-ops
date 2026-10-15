@@ -290,6 +290,7 @@ func TestGoldenOrgScopeDefault(t *testing.T) {
 // it here, and TestChangeFailureEvidenceIsServedWithTheRate holds it by value.
 func assertResponseEqual(t *testing.T, got, want Response) {
 	t.Helper()
+	walkServedProse(t, "built response", got)
 	got.Deltas = append([]MetricDelta(nil), got.Deltas...)
 	for i := range got.Deltas {
 		got.Deltas[i].ChangeFailureEvidence = nil
@@ -316,6 +317,11 @@ func assertResponseEqual(t *testing.T, got, want Response) {
 		}
 		row.SizingCoverage, row.UnsizedUnitCount, row.WorkUnitCount = nil, nil, nil
 		row.Measure, row.Denominator = "", 0
+	}
+	got.Signals = append([]Signal(nil), got.Signals...)
+	for i := range got.Signals {
+		got.Signals[i].ClaimSubject = ""
+		got.Signals[i].Why = nil
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", got, want)

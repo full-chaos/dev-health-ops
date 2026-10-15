@@ -56,7 +56,7 @@ for e in "${ENVF[@]}"; do [ -f "$R/$e" ] || die "env file missing: $R/$e"; done
 
 if [ "$VERB" = files ]; then printf '%s\n' "${FILES[@]}"; exit 0; fi
 
-ARGS=(-p "$PROJECT")
+ARGS=(-p "$PROJECT" --project-directory "$R")
 for e in "${ENVF[@]}"; do ARGS+=(--env-file "$e"); done
 for p in "${PROFILES[@]}"; do ARGS+=(--profile "$p"); done
 for f in "${FILES[@]}"; do ARGS+=(-f "$f"); done

@@ -53,6 +53,11 @@ func identityOf(row Row) edgeIdentity {
 // EdgeVersions indexes one organization's stored edge versions by identity.
 type EdgeVersions map[edgeIdentity]EdgeVersion
 
+// Put indexes version under its latest row's identity.
+func (versions EdgeVersions) Put(version EdgeVersion) {
+	versions[identityOf(version.Latest)] = version
+}
+
 // versionAfter is the last_synced a write needs to supersede prior at
 // DateTime64(3) precision: the clock when it is already newer, else one
 // millisecond past prior.
@@ -64,8 +69,8 @@ func versionAfter(clock, prior time.Time) time.Time {
 	return clock
 }
 
-// edgeVersionsSQL reads the latest version of every issue<->issue identity for
-// an organization. One tupled argMax, so the winner is one physical row even
+// edgeVersionsSQL reads the latest version of every identity of one
+// source_type -> target_type pair for an organization. One tupled argMax, so the winner is one physical row even
 // when two versions tie on last_synced.
 const edgeVersionsSQL = `
         SELECT
@@ -80,8 +85,8 @@ const edgeVersionsSQL = `
                 max(last_synced) AS max_last_synced
             FROM work_graph_edges
             WHERE org_id = {org_id:String}
-              AND source_type = 'issue'
-              AND target_type = 'issue'
+              AND source_type = {source_type:String}
+              AND target_type = {target_type:String}
               %s
             GROUP BY source_type, source_id, edge_type, target_type, target_id
         )
@@ -101,11 +106,21 @@ func ReadIssueIssueEdgeVersions(ctx context.Context, conn driver.Conn, organizat
 func readEdgeVersions(
 	ctx context.Context, conn driver.Conn, organizationID, narrowing string,
 ) (EdgeVersions, error) {
+	return readEdgeVersionsOf(ctx, conn, organizationID, NodeTypeIssue, NodeTypeIssue, narrowing)
+}
+
+func readEdgeVersionsOf(
+	ctx context.Context, conn driver.Conn, organizationID, sourceType, targetType, narrowing string, args ...any,
+) (EdgeVersions, error) {
 	if err := requireEdgeScope(organizationID); err != nil {
 		return nil, err
 	}
-	rows, err := conn.Query(ctx, fmt.Sprintf(edgeVersionsSQL, narrowing),
-		clickhouse.Named("org_id", organizationID))
+	bound := append([]any{
+		clickhouse.Named("org_id", organizationID),
+		clickhouse.Named("source_type", sourceType),
+		clickhouse.Named("target_type", targetType),
+	}, args...)
+	rows, err := conn.Query(ctx, fmt.Sprintf(edgeVersionsSQL, narrowing), bound...)
 	if err != nil {
 		return nil, fmt.Errorf("read work_graph_edges versions: %w", err)
 	}
@@ -311,4 +326,44 @@ func WriteTombstones(ctx context.Context, conn driver.Conn, organizationID strin
 		return 0, fmt.Errorf("send work_graph_edges tombstone batch: %w", err)
 	}
 	return len(rows), nil
+}
+
+// prIssueEdgeNarrowing keeps the pull request -> issue identities that touch a
+// given pull request or a given issue.
+const prIssueEdgeNarrowing = `AND (source_id IN {pr_ids:Array(String)} OR target_id IN {issue_ids:Array(String)})`
+
+// ReadPRIssueEdgeVersions loads the latest version of every pull request ->
+// issue edge identity whose pull request is in prIDs or whose issue is in
+// issueIDs, tombstones included. Both lists empty reads nothing.
+func ReadPRIssueEdgeVersions(
+	ctx context.Context, conn driver.Conn, organizationID string, prIDs, issueIDs []string,
+) (EdgeVersions, error) {
+	if err := requireEdgeScope(organizationID); err != nil {
+		return nil, err
+	}
+	if len(prIDs) == 0 && len(issueIDs) == 0 {
+		return EdgeVersions{}, nil
+	}
+	if prIDs == nil {
+		prIDs = []string{}
+	}
+	if issueIDs == nil {
+		issueIDs = []string{}
+	}
+	return readEdgeVersionsOf(ctx, conn, organizationID, NodeTypePR, NodeTypeIssue, prIssueEdgeNarrowing,
+		clickhouse.Named("pr_ids", prIDs), clickhouse.Named("issue_ids", issueIDs))
+}
+
+// PlanTombstonesWhere is one tombstone per live identity whose latest version
+// retire accepts.
+func PlanTombstonesWhere(versions EdgeVersions, clock time.Time, retire func(Row) bool) []Row {
+	var tombstones []Row
+	for _, version := range versions {
+		if version.IsDeleted || !retire(version.Latest) {
+			continue
+		}
+		tombstones = append(tombstones, tombstoneOf(version, clock))
+	}
+	sortTombstones(tombstones)
+	return tombstones
 }

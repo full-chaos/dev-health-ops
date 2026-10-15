@@ -101,6 +101,8 @@ type WorkItemDependencyDrainOptions struct {
 
 	// afterBackup runs after the backup is written and before the delete; a test writes a row the way a sync does.
 	afterBackup func(orgID string)
+	// planned lets a test change the drain list after the plan, the way a defect in the plan would.
+	planned func(orgID string, drain []workitemmetrics.BlockingRelation) []workitemmetrics.BlockingRelation
 }
 
 // WorkItemDependencyDrainOrg is the counts-only result for one organization.
@@ -385,6 +387,9 @@ func DrainWorkItemDependencies(ctx context.Context, conn driver.Conn, opts WorkI
 			outcome.Orgs = append(outcome.Orgs, report)
 			return outcome, err
 		}
+		if opts.planned != nil {
+			drain = opts.planned(orgID, drain)
+		}
 		report.DifferentialItems, report.DifferentialMismatches = dependencyDrainDifferential(relations, ends, drain, cutoff)
 		report.ElapsedMS = time.Since(started).Milliseconds()
 		outcome.Orgs = append(outcome.Orgs, report)
@@ -401,16 +406,24 @@ func DrainWorkItemDependencies(ctx context.Context, conn driver.Conn, opts WorkI
 	runID := newDependencyDrainRunID(now)
 	outcome.RunID = runID
 	outcome.Totals = WorkItemDependencyDrainOrg{}
+	// The quiet check reads the server's part times of the whole table, so it runs ONCE, before the first write:
+	// run per organization it would see the parts of the run's own delete and refuse the second organization after
+	// the first was changed.
+	anyToDrain := false
+	for _, plan := range plans {
+		anyToDrain = anyToDrain || len(plan.drain) > 0
+	}
+	if anyToDrain {
+		if err := requireQuietDependencies(ctx, conn, opts.QuietSeconds); err != nil {
+			return outcome, err
+		}
+	}
 	for index, plan := range plans {
 		if len(plan.drain) == 0 {
 			outcome.Totals.add(plan.report)
 			continue
 		}
 		started := time.Now()
-		if err := requireQuietDependencies(ctx, conn, opts.QuietSeconds); err != nil {
-			outcome.Totals.add(plan.report)
-			return outcome, err
-		}
 		report, err := applyDependencyDrain(ctx, conn, plan.orgID, runID, now, plan.report, plan.before, plan.drain, opts)
 		report.ElapsedMS += time.Since(started).Milliseconds()
 		outcome.Orgs[index] = report
@@ -452,7 +465,9 @@ func dependencyVersionsArgs(orgID string, versions []dependencyVersion) []any {
 	targets := make([]string, 0, len(versions))
 	types := make([]string, 0, len(versions))
 	stamps := make([]int64, 0, len(versions))
+	tokens := make([]string, 0, len(versions))
 	for _, version := range versions {
+		tokens = append(tokens, version.source+"\x1f"+version.target+"\x1f"+version.relationship)
 		sources = append(sources, version.source)
 		targets = append(targets, version.target)
 		types = append(types, version.relationship)
@@ -460,14 +475,17 @@ func dependencyVersionsArgs(orgID string, versions []dependencyVersion) []any {
 	}
 	return []any{
 		clickhouse.Named("org_id", orgID), clickhouse.Named("sources", sources), clickhouse.Named("targets", targets),
-		clickhouse.Named("types", types), clickhouse.Named("stamps", stamps),
+		clickhouse.Named("types", types), clickhouse.Named("tokens", tokens), clickhouse.Named("stamps", stamps),
 	}
 }
 
-// dependencyVersionsMatch matches the physical rows by key and last_synced (milliseconds): a row a sync writes with
-// the same key and a later stamp is not the row that was read, and survives.
-const dependencyVersionsMatch = `org_id = {org_id:String} AND (source_work_item_id, target_work_item_id, relationship_type, toUnixTimestamp64Milli(last_synced)) IN (` +
-	`SELECT z.1, z.2, z.3, z.4 FROM (SELECT arrayJoin(arrayZip({sources:Array(String)}, {targets:Array(String)}, {types:Array(String)}, {stamps:Array(Int64)})) AS z))`
+// dependencyVersionsMatch matches the physical rows of the keys read whose last_synced (milliseconds) is at or before
+// the stamp read for the key. An older version that no merge has folded yet is part of the same relation: left
+// behind, it would show under FINAL once the newest is gone. A row a sync writes after the read has a later stamp
+// and survives.
+const dependencyVersionsMatch = `org_id = {org_id:String} AND (source_work_item_id, target_work_item_id, relationship_type) IN (` +
+	`SELECT z.1, z.2, z.3 FROM (SELECT arrayJoin(arrayZip({sources:Array(String)}, {targets:Array(String)}, {types:Array(String)})) AS z)) ` +
+	`AND toUnixTimestamp64Milli(last_synced) <= mapFromArrays({tokens:Array(String)}, {stamps:Array(Int64)})[concat(source_work_item_id, char(31), target_work_item_id, char(31), relationship_type)]`
 
 func applyDependencyDrain(
 	ctx context.Context, conn driver.Conn, orgID, runID string, now time.Time, report WorkItemDependencyDrainOrg,
@@ -510,9 +528,10 @@ func applyDependencyDrain(
 		clickhouse.Named("run_id", runID), clickhouse.Named("org_id", orgID)).Scan(&stored); err != nil {
 		return report, fmt.Errorf("%w: count: %v", ErrWorkItemDependencyDrainBackup, err)
 	}
-	// A background merge may already have folded a superseded version, so fewer is allowed; none is not.
-	if stored == 0 || stored > uint64(len(versions)) {
-		return report, fmt.Errorf("%w: wrote %d rows for %d versions", ErrWorkItemDependencyDrainBackup, stored, len(versions))
+	// Older unmerged versions of a key are copied too, so more rows than keys is normal. A sync that wrote a key
+	// after the read may have merged the version read away, so fewer is allowed; none is not.
+	if stored == 0 {
+		return report, fmt.Errorf("%w: no row copied for %d keys", ErrWorkItemDependencyDrainBackup, len(versions))
 	}
 	report.BackupRows = int(stored)
 	if opts.afterBackup != nil {
@@ -612,6 +631,9 @@ func RestoreWorkItemDependencyDrain(ctx context.Context, conn driver.Conn, runID
 	}
 	list := strings.Join(columns, ", ")
 	prefixed := "b." + strings.Join(columns, ", b.")
+	// Once per run, before the first write: the check reads the part times of the whole table, so a later check
+	// would see this run's own insert.
+	quietChecked := false
 	for index, orgID := range orgs {
 		report := WorkItemDependencyDrainOrg{OrgOrdinal: index + 1}
 		var saved, missing uint64
@@ -633,8 +655,11 @@ func RestoreWorkItemDependencyDrain(ctx context.Context, conn driver.Conn, runID
 		}
 		report.Restored = int(missing)
 		if opts.Apply && missing > 0 {
-			if err := requireQuietDependencies(ctx, conn, opts.QuietSeconds); err != nil {
-				return outcome, err
+			if !quietChecked {
+				if err := requireQuietDependencies(ctx, conn, opts.QuietSeconds); err != nil {
+					return outcome, err
+				}
+				quietChecked = true
 			}
 			if err := conn.Exec(ctx, "INSERT INTO "+WorkItemDependencyDrainTable+" ("+list+") SELECT "+prefixed+" "+missingSQL, args...); err != nil {
 				return outcome, fmt.Errorf("%w: %v", ErrWorkItemDependencyDrainBackup, err)

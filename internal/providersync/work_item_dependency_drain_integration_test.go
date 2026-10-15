@@ -14,6 +14,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
 // CHAOS-9706 real-store tests at the migration head. The fixture holds one row
@@ -360,5 +361,81 @@ FROM numbers(` + fmt.Sprint(old) + `)`)
 	}
 	if n := f.count("SELECT count() FROM work_item_dependencies FINAL WHERE org_id = ?", drainOrg); n != 6 {
 		t.Fatalf("rows left: %d, want the 6 kept", n)
+	}
+}
+
+// An older version of a key that no merge has folded yet is deleted with the newest: left behind it would show under
+// FINAL as a removed row again.
+func TestDrainDeletesUnmergedOlderVersionsOfADrainedKey(t *testing.T) {
+	f := newDrainFixture(t)
+	f.exec("SYSTEM STOP MERGES work_item_dependencies")
+	f.relation(drainOrg, "linear:OPS-1", "gh:a/r#1", "blocks", "linear_relation:blocks", canonical, "2026-04-01 00:00:00")
+	if n := f.count("SELECT count() FROM work_item_dependencies WHERE org_id = ? AND source_work_item_id = 'linear:OPS-1' AND target_work_item_id = 'gh:a/r#1'", drainOrg); n < 2 {
+		t.Skipf("the older version was merged away at once (%d physical rows): nothing to prove", n)
+	}
+	f.exec("SYSTEM START MERGES work_item_dependencies")
+	outcome, err := DrainWorkItemDependencies(f.ctx, f.conn, drainApply())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Totals.SurvivedTheDelete != 0 {
+		t.Fatalf("outcome: %+v", outcome.Totals)
+	}
+	if n := f.count("SELECT count() FROM work_item_dependencies WHERE org_id = ? AND source_work_item_id = 'linear:OPS-1' AND target_work_item_id = 'gh:a/r#1'", drainOrg); n != 0 {
+		t.Fatalf("%d physical versions of a drained key are left", n)
+	}
+}
+
+// Two organizations in one apply: the second is not refused because of the first one's own delete.
+func TestDrainAllOrgsApplyDrainsEveryOrganization(t *testing.T) {
+	f := newDrainFixture(t)
+	for _, org := range []string{drainOrg, drainOtherOrg} {
+		f.relation(org, "linear:OPS-1", "gh:a/r#1", "blocks", "linear_relation:blocks", canonical, "2026-05-01 00:00:00")
+	}
+	options := drainApply()
+	options.Orgs, options.AllOrgs = nil, true
+	options.QuietSeconds = 60
+	options.afterBackup = nil
+	// The quiet window is judged by the server clock against the fixture inserts above, so wait them out.
+	options.QuietSeconds = 1
+	time.Sleep(2 * time.Second)
+	outcome, err := DrainWorkItemDependencies(f.ctx, f.conn, options)
+	if err != nil {
+		t.Fatalf("%v: %+v", err, outcome.Totals)
+	}
+	if len(outcome.Orgs) != 2 || outcome.Orgs[0].Deleted == 0 || outcome.Orgs[1].Deleted == 0 {
+		t.Fatalf("both organizations are drained: %+v", outcome.Orgs)
+	}
+	restore := WorkItemDependencyDrainOptions{AllOrgs: true, Apply: true, WorkersPaused: true, QuietSeconds: 1}
+	time.Sleep(2 * time.Second)
+	restored, err := RestoreWorkItemDependencyDrain(f.ctx, f.conn, outcome.RunID, restore)
+	if err != nil || len(restored.Orgs) != 2 || restored.Orgs[1].Restored == 0 {
+		t.Fatalf("restore of both organizations: %+v, %v", restored.Orgs, err)
+	}
+}
+
+// The differential gate refuses before anything is written, through the production entry point.
+func TestDrainRefusesWhenTheDifferentialFails(t *testing.T) {
+	f := newDrainFixture(t)
+	before := f.rows(drainOrg)
+	options := drainApply()
+	options.planned = func(orgID string, drain []workitemmetrics.BlockingRelation) []workitemmetrics.BlockingRelation {
+		relations, err := workitemblockers.LoadRelations(f.ctx, f.conn, orgID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, relation := range relations {
+			if relation.TargetID == "gh:a/r#3" {
+				return append(drain, relation)
+			}
+		}
+		t.Fatal("fixture relation missing")
+		return drain
+	}
+	if _, err := DrainWorkItemDependencies(f.ctx, f.conn, options); !errors.Is(err, ErrWorkItemDependencyDrainDifferential) {
+		t.Fatalf("a live relation in the drain list: %v", err)
+	}
+	if after := f.rows(drainOrg); !reflect.DeepEqual(before, after) {
+		t.Fatal("rows changed although the differential refused")
 	}
 }

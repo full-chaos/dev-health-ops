@@ -100,9 +100,18 @@ func (native NativeLinks) Empty() bool {
 	return len(native.pullRequests) == 0 && len(native.issues) == 0
 }
 
-// PlanOutrankedFallbacks returns the stored lower-tier rows a native link
-// outranks: the rows to retract. stored is the current (deduplicated) content
-// of work_graph_issue_pr for one organization, every tier.
+// IsPullRequestWorkItem reports whether a work item id names a pull or merge
+// request (ParsePRSource's grammar). Such an item is never the issue side of
+// an issue <> pull request link.
+func IsPullRequestWorkItem(workItemID string) bool {
+	_, ok := ParsePRSource(workItemID)
+	return ok
+}
+
+// PlanOutrankedFallbacks returns the stored lower-tier rows to retract: the
+// rows a native link outranks, and the rows whose issue side is a pull
+// request. stored is the current (deduplicated) content of
+// work_graph_issue_pr for one organization, every tier.
 func PlanOutrankedFallbacks(stored []Link) []Link {
 	native := NewNativeLinks(stored)
 	var outranked []Link
@@ -110,7 +119,7 @@ func PlanOutrankedFallbacks(stored []Link) []Link {
 		if link.Provenance != edges.ProvenanceExplicitText && link.Provenance != edges.ProvenanceHeuristic {
 			continue
 		}
-		if native.Outranks(link.RepoID, link.PRNumber, link.WorkItemID) {
+		if native.Outranks(link.RepoID, link.PRNumber, link.WorkItemID) || IsPullRequestWorkItem(link.WorkItemID) {
 			outranked = append(outranked, link)
 		}
 	}

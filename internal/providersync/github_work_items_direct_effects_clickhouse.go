@@ -2,11 +2,15 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Concrete ClickHouse adapters for the six direct fact surfaces the Python
@@ -831,7 +835,14 @@ func (adapter GitHubWorkItemInteractionsClickHouseAdapter) InspectGitHubWorkItem
 // (metrics/sinks/clickhouse/work_graph.py:393), including its pre-insert
 // `replace(native_team_key or "")`: the column is a non-nullable String, so a
 // missing native team key is stored as the empty string, not NULL.
-type GitHubSprintsClickHouseAdapter struct{ Conn driver.Conn }
+//
+// SharedAcrossUnits declares that more than one sync unit writes the same
+// sprint key (a GitLab group milestone, a Jira sprint): readback then treats a
+// newer stored row as the effect already applied, see sprintNewerRowVerdict.
+type GitHubSprintsClickHouseAdapter struct {
+	Conn              driver.Conn
+	SharedAcrossUnits bool
+}
 
 const gitHubSprintsInsert = `INSERT INTO sprints (provider, sprint_id, native_team_key, name, state, started_at, ended_at, completed_at, last_synced, org_id)`
 
@@ -923,21 +934,72 @@ func (adapter GitHubSprintsClickHouseAdapter) InspectGitHubWorkItemEffect(
 		if verdict, final := workItemReadbackVerdict(found); final {
 			return verdict, nil
 		}
+		contentEqual := sprintContentEqual(actual, actualNativeTeamKey, row)
 		if verdict, final := workItemVersionVerdict(actual.LastSynced, clickHouseMillis(row.LastSynced)); final {
+			if verdict == EffectConflict {
+				return sprintNewerRowVerdict(ctx, row, contentEqual, adapter.SharedAcrossUnits), nil
+			}
 			return verdict, nil
 		}
-		if actual.Provider != row.Provider || actual.SprintID != row.SprintID ||
-			actualNativeTeamKey != derefString(row.NativeTeamKey) ||
-			!stringPointersEqual(actual.Name, row.Name) ||
-			!stringPointersEqual(actual.State, row.State) ||
-			!timePointersEqual(actual.StartedAt, utcPointer(row.StartedAt)) ||
-			!timePointersEqual(actual.EndedAt, utcPointer(row.EndedAt)) ||
-			!timePointersEqual(actual.CompletedAt, utcPointer(row.CompletedAt)) ||
-			actual.OrgID != row.OrgID {
+		if !contentEqual {
 			return EffectConflict, nil
 		}
 		return EffectExact, nil
 	})
+}
+
+const (
+	sprintNewerRowSameContent  = "rewritten_by_newer_sibling"
+	sprintNewerRowSuperseded   = "superseded_by_newer_sibling"
+	sprintNewerRowSingleOwner  = "newer_row_on_single_owner_key"
+	sprintRecoveryNewerRowName = "provider_sync_sprint_recovery_newer_row_total"
+)
+
+var sprintRecoveryNewerRow = func() metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/providersync").Int64Counter(
+		sprintRecoveryNewerRowName,
+		metric.WithDescription("Sprint effect readbacks that found a newer stored row for the key, by reason and verdict."))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(sprintRecoveryNewerRowName)
+	}
+	return counter
+}()
+
+// sprintNewerRowVerdict judges a stored row newer than the effect's own. With
+// equal content the effect's state is already in the table. On a shared key a
+// different newer row is a sibling unit's later observation: a replay would
+// write older data the table drops anyway, so the effect counts as committed
+// (EffectExact; the vocabulary has no superseded verdict). On a single-owner
+// key a newer row means another writer owns the key, which stays a conflict.
+func sprintNewerRowVerdict(
+	ctx context.Context, row githubSprintRow, contentEqual, sharedAcrossUnits bool,
+) EffectInspection {
+	reason, verdict := sprintNewerRowSingleOwner, EffectConflict
+	switch {
+	case contentEqual:
+		reason, verdict = sprintNewerRowSameContent, EffectExact
+	case sharedAcrossUnits:
+		reason, verdict = sprintNewerRowSuperseded, EffectExact
+	}
+	sprintRecoveryNewerRow.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("provider", row.Provider),
+		attribute.String("reason", reason),
+		attribute.String("verdict", string(verdict))))
+	slog.Default().InfoContext(ctx, "sprint_effect_readback_newer_row",
+		"org_id", row.OrgID, "provider", row.Provider, "sprint_id", row.SprintID,
+		"reason", reason, "verdict", string(verdict), "shared_across_units", sharedAcrossUnits)
+	return verdict
+}
+
+func sprintContentEqual(actual githubSprintRow, actualNativeTeamKey string, row githubSprintRow) bool {
+	return actual.Provider == row.Provider && actual.SprintID == row.SprintID &&
+		actualNativeTeamKey == derefString(row.NativeTeamKey) &&
+		stringPointersEqual(actual.Name, row.Name) &&
+		stringPointersEqual(actual.State, row.State) &&
+		timePointersEqual(actual.StartedAt, utcPointer(row.StartedAt)) &&
+		timePointersEqual(actual.EndedAt, utcPointer(row.EndedAt)) &&
+		timePointersEqual(actual.CompletedAt, utcPointer(row.CompletedAt)) &&
+		actual.OrgID == row.OrgID
 }
 
 // -----------------------------------------------------------------------------

@@ -160,6 +160,7 @@ func TestTheUsersRouteErrorsNameATemplateNotTheLogin(t *testing.T) {
 		name     string
 		response scripted
 	}{
+		{"not found", status(404, `{"message":"Not Found"}`)},
 		{"unauthorized", status(401, `{}`)},
 		{"forbidden", status(403, `{"message":"no"}`)},
 		{"server error", status(500, `boom`)},
@@ -167,12 +168,33 @@ func TestTheUsersRouteErrorsNameATemplateNotTheLogin(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			transport := &scriptedTransport{responses: []scripted{tc.response, tc.response, tc.response, tc.response}}
-			_, err := namespaceClient(transport).ListRepositories(context.Background(), ListOptions{User: "secret-login"})
+			_, err := namespaceClient(transport).ListRepositories(context.Background(), ListOptions{User: "plantedlogin"})
 			if err == nil {
 				t.Fatal("no error")
 			}
-			if strings.Contains(err.Error(), "secret-login") {
+			typed, _ := err.(*Error)
+			if strings.Contains(err.Error(), "plantedlogin") || (typed != nil && strings.Contains(typed.Class, "plantedlogin")) {
 				t.Fatalf("the error names the login: %v", err)
+			}
+		})
+	}
+}
+
+// The organization route's failure text names the owner (Python-parity operation, request URL): ListNamespace hands
+// back the text with the login replaced.
+func TestListNamespaceErrorsDoNotCarryTheOwnerLogin(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		first scripted
+	}{
+		{"forbidden both routes", status(403, `{"message":"denied"}`)},
+		{"server error both routes", status(500, `boom`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := &scriptedTransport{responses: []scripted{tc.first, tc.first, tc.first, tc.first, tc.first, tc.first, tc.first, tc.first}}
+			_, err := namespaceClient(transport).ListNamespace(context.Background(), NamespaceOptions{Owner: "plantedlogin"})
+			if err == nil || strings.Contains(err.Error(), "plantedlogin") {
+				t.Fatalf("error %v, want one without the login", err)
 			}
 		})
 	}

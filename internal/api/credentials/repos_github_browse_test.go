@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -16,14 +17,19 @@ import (
 )
 
 type browseTransport struct {
-	routes map[string]string
-	seen   []string
+	routes   map[string]string
+	statuses map[string]int
+	seen     []string
 }
 
 func (b *browseTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	b.seen = append(b.seen, request.URL.Path)
 	body, status := `{"message":"Not Found"}`, http.StatusNotFound
-	if routed, found := b.routes[request.URL.Path]; found {
+	if code, found := b.statuses[request.URL.Path]; found {
+		body, status = `{"message":"denied"}`, code
+	} else if strings.HasSuffix(request.URL.Path, "/access_tokens") {
+		body, status = `{"token":"inst_ok","expires_at":"2099-01-01T00:00:00Z"}`, http.StatusCreated
+	} else if routed, found := b.routes[request.URL.Path]; found {
 		body, status = routed, http.StatusOK
 	}
 	return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
@@ -34,6 +40,19 @@ func browseItem(fullName string) string {
 }
 
 func browse(t *testing.T, transport *browseTransport, stored map[string]pyjson.Value, owner string) (map[string]any, string) {
+	t.Helper()
+	recorder, logs := browseRaw(t, transport, stored, owner, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	return body, logs
+}
+
+func browseRaw(t *testing.T, transport *browseTransport, stored map[string]pyjson.Value, owner string, maxRepos *big.Int) (*httptest.ResponseRecorder, string) {
 	t.Helper()
 	logs := &bytes.Buffer{}
 	h := newHandlers(Deps{HTTPClient: &http.Client{Transport: transport}, Logger: slog.New(slog.NewTextHandler(logs, nil)),
@@ -47,15 +66,8 @@ func browse(t *testing.T, transport *browseTransport, stored map[string]pyjson.V
 	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/credentials/x/repos", nil)
-	h.listGitHubRepos(recorder, request, &repoCredential{provider: "github", decrypted: decrypted}, owner, "", nil)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
-	}
-	var body map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	return body, logs.String()
+	h.listGitHubRepos(recorder, request, &repoCredential{provider: "github", decrypted: decrypted}, owner, "", maxRepos)
+	return recorder, logs.String()
 }
 
 func TestBrowseOfAPersonalOwnerListsTheirRepositoriesAndSaysTheOwnerIsAUser(t *testing.T) {
@@ -88,16 +100,65 @@ func TestBrowseOfAnUnknownOwnerReportsOwnerNotFoundInsteadOfASilentEmptyList(t *
 	}
 }
 
-func TestBrowseOfAnOrganizationReportsOrgAndTheResponseFlagsInstallationScope(t *testing.T) {
+func TestBrowseOfAnAppInstallationFlagsTheInstallationScopeAndNeverCallsUserRepos(t *testing.T) {
+	transport := &browseTransport{routes: map[string]string{"/orgs/acme/repos": "[" + browseItem("acme/api") + "]"}}
+	stored := map[string]pyjson.Value{"app_id": "1", "private_key": testPrivateKey(t), "installation_id": "111"}
+
+	body, _ := browse(t, transport, stored, "acme")
+
+	if body["installation_scoped"] != true || body["owner_type"] != "org" {
+		t.Fatalf("body %v, want installation_scoped true, owner_type org", body)
+	}
+	for _, path := range transport.seen {
+		if path == "/user/repos" {
+			t.Fatalf("an installation credential called /user/repos: %v", transport.seen)
+		}
+	}
+}
+
+func TestBrowseNeverReturnsTheOwnerLoginInAnErrorText(t *testing.T) {
+	transport := &browseTransport{statuses: map[string]int{
+		"/orgs/private-login/repos":  http.StatusForbidden,
+		"/users/private-login/repos": http.StatusForbidden,
+	}, routes: map[string]string{"/user/repos": "[]"}}
+
+	recorder, logs := browseRaw(t, transport, map[string]pyjson.Value{"token": "tok"}, "private-login", nil)
+
+	if recorder.Code != http.StatusUnauthorized || strings.Contains(recorder.Body.String(), "private-login") || strings.Contains(logs, "private-login") {
+		t.Fatalf("status %d body %s log %s, want a 401 whose text and log carry no login", recorder.Code, recorder.Body.String(), logs)
+	}
+}
+
+func TestBrowseTreatsAMissingTokenListingAsACredentialFaultNotAMissingOwner(t *testing.T) {
+	transport := &browseTransport{} // /user/repos answers 404
+
+	recorder, _ := browseRaw(t, transport, map[string]pyjson.Value{"token": "tok"}, "acme", nil)
+
+	if recorder.Code != http.StatusBadGateway || strings.Contains(recorder.Body.String(), "owner_not_found") {
+		t.Fatalf("status %d body %s, want 502 and no owner_not_found diagnostic", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestBrowseWithANegativeMaxReposKeepsOneRepositoryAndDoesNotPanic(t *testing.T) {
+	transport := &browseTransport{routes: map[string]string{
+		"/user/repos":      "[]",
+		"/orgs/acme/repos": "[" + browseItem("acme/api") + "," + browseItem("acme/web") + "]",
+	}}
+
+	recorder, _ := browseRaw(t, transport, map[string]pyjson.Value{"token": "tok"}, "acme", big.NewInt(-1))
+
+	var body map[string]any
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &body) != nil || body["total"] != float64(1) {
+		t.Fatalf("status %d body %s, want 200 with one repository", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestBrowseOfAnOrganizationReportsOrg(t *testing.T) {
 	transport := &browseTransport{routes: map[string]string{"/user/repos": "[]", "/orgs/acme/repos": "[" + browseItem("acme/api") + "]"}}
-	// An App credential needs a minted installation token, so the scope flag is asserted at the response builder and the
-	// no-/user/repos rule at the client (githubcode list_namespace_test.go).
+
 	body, _ := browse(t, transport, map[string]pyjson.Value{"token": "tok"}, "acme")
+
 	if body["owner_type"] != "org" || body["installation_scoped"] != false {
 		t.Fatalf("body %v", body)
-	}
-	scoped := githubRepoListing(nil, githubScope{installation: true, ownerType: "org"})
-	if value, _ := scoped.Get("installation_scoped"); value != true {
-		t.Fatalf("installation_scoped %v, want true", value)
 	}
 }

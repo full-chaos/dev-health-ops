@@ -48,6 +48,10 @@ func (c Client) ListNamespace(ctx context.Context, opts NamespaceOptions) (Names
 	var tokenRepos []Repo
 	if opts.UserRepos {
 		all, err := c.ListRepositories(ctx, ListOptions{Pattern: opts.Pattern})
+		if isNotFound(err) {
+			// The token's own listing is not an owner route: its 404 is a credential or base URL fault, never "owner not found".
+			return NamespaceListing{}, &Error{Class: "APIException", Message: "github token repository listing was not found; check the credential's base URL"}
+		}
 		if err != nil {
 			return NamespaceListing{}, err
 		}
@@ -60,6 +64,7 @@ func (c Client) ListNamespace(ctx context.Context, opts NamespaceOptions) (Names
 	}
 	listing := NamespaceListing{OwnerType: OwnerTypeOrg}
 	owned, err := c.ListRepositories(ctx, ListOptions{Org: opts.Owner, Pattern: opts.Pattern, MaxRepos: opts.MaxRepos})
+	err = RedactOwner(err, opts.Owner)
 	if err != nil {
 		var userErr error
 		owned, userErr = c.ListRepositories(ctx, ListOptions{User: opts.Owner, Pattern: opts.Pattern, MaxRepos: opts.MaxRepos})
@@ -82,8 +87,10 @@ func (c Client) ListNamespace(ctx context.Context, opts NamespaceOptions) (Names
 		}
 	}
 	listing.Repos = providerfoundation.UnionByKey(tokenRepos, owned, func(repo Repo) string { return strings.ToLower(repo.FullName) })
+	// A cap below one keeps one repository, as ListRepositories does for the same value.
 	if opts.MaxRepos != nil && big.NewInt(int64(len(listing.Repos))).Cmp(opts.MaxRepos) > 0 {
-		listing.Repos = listing.Repos[:opts.MaxRepos.Int64()]
+		keep := max(opts.MaxRepos.Int64(), 1)
+		listing.Repos = listing.Repos[:keep]
 	}
 	return listing, nil
 }

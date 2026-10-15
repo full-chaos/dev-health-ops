@@ -283,6 +283,16 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	jiraProjectCache := make(map[string]jiraProjectCatalogEntry)
 	unresolvedProjectMemberships := 0
 
+	var pointsFields []string
+	if jiraStoryPointsDiscoveryNeeded(claim) {
+		discovered, discoverErr := discoverJiraStoryPointsFields(ctx, client)
+		if discoverErr != nil {
+			optionalIncomplete = append(optionalIncomplete, "story_points_field")
+		}
+		pointsFields = discovered
+	}
+	var pointsStats jiraStoryPointsStats
+	defer func() { pointsStats.log(ctx) }()
 	for _, issue := range issues {
 		key := stringFrom(issue["key"])
 		if key == "" {
@@ -295,13 +305,14 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		}
 		issue["changelog"] = map[string]any{"histories": changelog}
 		item, transitions, normalizeErr := normalizeJiraWorkItem(
-			claim, jiraWorkItemFixtureInput{Raw: issue, AtlassianShape: true}, handler.StatusMapping,
+			claim, jiraWorkItemFixtureInput{Raw: issue, AtlassianShape: true, PointsFields: pointsFields}, handler.StatusMapping,
 			handler.Identity, normalizedAt,
 		)
 		if normalizeErr != nil {
 			return CompleteRouteBatch{}, normalizeErr
 		}
 		rows.WorkItems = append(rows.WorkItems, item)
+		pointsStats.observe(item)
 		rows.Transitions = append(rows.Transitions, transitions...)
 		rows.Dependencies = append(rows.Dependencies,
 			normalizeJiraDependencies(claim, item.WorkItemID, issue, normalizedAt)...)

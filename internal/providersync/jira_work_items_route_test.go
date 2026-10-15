@@ -45,6 +45,8 @@ func (doer *jiraWorkItemsDoer) Do(request *http.Request) (*http.Response, error)
 		body = `{"comments":[{"id":"10001","created":"2026-07-21T11:00:00Z","author":{"accountId":"jira-commenter"},"body":"verified"}],"isLast":true}`
 	case request.URL.Path == "/rest/agile/1.0/sprint/9001":
 		body = `{"id":9001,"name":"July support","state":"closed","startDate":"2026-07-01T00:00:00Z","endDate":"2026-07-15T00:00:00Z","completeDate":"2026-07-16T00:00:00Z"}`
+	case request.URL.Path == "/rest/api/3/field":
+		body = `[]`
 	default:
 		doer.t.Fatalf("unexpected Jira request %s", request.URL.String())
 	}
@@ -107,7 +109,7 @@ func TestJiraWorkItemsRouteCollectsCanonicalFamilyAndWithholdsWatermarkOnOptiona
 	if len(batch.Effects) != 8 {
 		t.Fatalf("effects=%v", batch.Effects)
 	}
-	if batch.Evidence.Records != 1 || batch.Evidence.Pages != 1 || batch.Evidence.Requests != 3 {
+	if batch.Evidence.Records != 1 || batch.Evidence.Pages != 1 || batch.Evidence.Requests != 4 {
 		t.Fatalf("evidence=%+v", batch.Evidence)
 	}
 	foundSearch := false
@@ -201,6 +203,8 @@ func TestJiraWorkItemsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		case request.URL.Path == "/rest/agile/1.0/sprint/9001":
 			sprintAttempts++
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		case request.URL.Path == "/rest/api/3/field":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
 		default:
 			t.Fatalf("unexpected Jira request %s", request.URL.String())
 			return nil, nil
@@ -230,9 +234,9 @@ func TestJiraWorkItemsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 	if batch.Result["sprints_synced"] != 0 {
 		t.Fatalf("result=%#v: a failed sprint fetch must not synthesize a row", batch.Result)
 	}
-	// 1 search + 2 comments + 2 sprint = 5.
-	if batch.Evidence.Requests != 5 {
-		t.Fatalf("evidence=%+v want Requests=5 (every physical attempt, from one source)", batch.Evidence)
+	// 1 search + 1 field list + 2 comments + 2 sprint = 6.
+	if batch.Evidence.Requests != 6 {
+		t.Fatalf("evidence=%+v want Requests=6 (every physical attempt, from one source)", batch.Evidence)
 	}
 }
 
@@ -243,6 +247,9 @@ func TestJiraWorkItemsRouteOptionalCommentFailureIsTypedAndDoesNotAdvance(t *tes
 	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path == "/rest/api/3/search/jql" {
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"issues":[{"key":"OPS-103","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-103","fields":{"project":{"key":"OPS"},"summary":"Optional child failure","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-07-20T00:00:00Z","updated":"2026-07-21T00:00:00Z"},"changelog":{"histories":[]}}],"isLast":true}`)), Request: request}, nil
+		}
+		if request.URL.Path == "/rest/api/3/field" {
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
 		}
 		return nil, errors.New("comments endpoint unavailable")
 	})

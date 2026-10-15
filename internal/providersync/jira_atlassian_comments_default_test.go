@@ -191,6 +191,8 @@ func (doer *jiraBudgetDoer) Do(request *http.Request) (*http.Response, error) {
 	}
 	path := request.URL.Path
 	switch {
+	case request.URL.Path == "/rest/api/3/field":
+		return respond(`[]`)
 	case path == "/rest/api/3/search/jql":
 		if err := jiraSleep(request.Context(), doer.searchDelay); err != nil {
 			return nil, err

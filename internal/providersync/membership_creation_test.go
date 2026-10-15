@@ -236,6 +236,8 @@ func (doer *jiraCreationDoer) Do(request *http.Request) (*http.Response, error) 
 		body = doer.changelog
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/project/"):
 		return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: request}, nil
+	case request.URL.Path == "/rest/api/3/field":
+		body = `[]`
 	default:
 		doer.t.Fatalf("unexpected request %s", request.URL.String())
 	}

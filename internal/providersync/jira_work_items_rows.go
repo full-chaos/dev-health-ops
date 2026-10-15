@@ -56,6 +56,9 @@ type jiraWorkItemFixtureInput struct {
 	// this route even though the legacy JSON compatibility path intentionally
 	// retains its historical getattr(dict, ...) behavior.
 	AtlassianShape bool
+	// PointsFields are the discovered story point field ids in preference
+	// order; empty when story_points_field is configured or none was found.
+	PointsFields []string
 }
 
 func normalizeJiraWorkItem(
@@ -117,7 +120,7 @@ func normalizeJiraWorkItem(
 	}
 	closedAt := jiraTime(jiraField(fields, "resolutiondate", issue.ObjectShape))
 	urlValue := stringPointerIfNonEmpty(raw["self"])
-	storyPoints := jiraFloat(jiraField(fields, jiraOptionString(claim, "story_points_field", ""), issue.ObjectShape))
+	storyPoints := jiraStoryPoints(claim, fields, issue.PointsFields, issue.ObjectShape)
 	sprintID, sprintName := jiraSprint(jiraField(fields, jiraOptionString(claim, "sprint_field", "customfield_10020"), issue.ObjectShape), issue.ObjectShape)
 	parentID := jiraParentID(jiraField(fields, "parent", issue.ObjectShape), issue.ObjectShape)
 	epicField := jiraOptionString(claim, "epic_link_field", "")

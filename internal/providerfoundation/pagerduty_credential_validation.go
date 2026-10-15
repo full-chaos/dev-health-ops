@@ -40,7 +40,11 @@ type ValidatedPagerDutyCredential struct {
 
 // PagerDutyValidationError is PagerDutyCredentialValidationError: a typed
 // failure whose Code never carries secret material.
-type PagerDutyValidationError struct{ Code string }
+type PagerDutyValidationError struct {
+	Code string
+	// Reason is the closed-set transport reason, set only when no HTTP response arrived. Not part of Error().
+	Reason string
+}
 
 func (e *PagerDutyValidationError) Error() string { return e.Code }
 
@@ -173,7 +177,7 @@ func pagerDutyValidateRead(ctx context.Context, client HTTPDoer, config PagerDut
 func pagerDutyDo(client HTTPDoer, request *http.Request) ([]byte, error) {
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, validationFailure("live_read_failed")
+		return nil, &PagerDutyValidationError{Code: "live_read_failed", Reason: transportProviderError("pagerduty", err, 1).Reason}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

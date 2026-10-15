@@ -1,0 +1,84 @@
+package providerfoundation
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
+)
+
+func TestPagerDutyExchangeTransportFailureKeepsReason(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	logs := captureLogs(t)
+	config := PagerDutyRevokeConfig{ClientID: "c", ClientSecret: "hunter2", TokenURL: server.URL + "/oauth/token"}
+	for name, call := range map[string]func() error{
+		"code": func() error {
+			_, err := ExchangePagerDutyAuthorizationCode(context.Background(), &http.Client{}, config, "code", "verifier", time.Now())
+			return err
+		},
+		"client credentials": func() error {
+			_, err := RequestPagerDutyClientCredentialsToken(context.Background(), &http.Client{}, config, "acme", "us", time.Now())
+			return err
+		},
+	} {
+		err := call()
+		var transport *PagerDutyExchangeTransportError
+		if !errors.Is(err, ErrPagerDutyExchangeUnavailable) || !errors.As(err, &transport) || transport.Reason != TransportReasonTLSUnknownAuthority {
+			t.Fatalf("%s: err = %v, want unavailable with tls_unknown_authority", name, err)
+		}
+		if strings.Contains(err.Error(), "hunter2") {
+			t.Fatalf("%s: secret leaked", name)
+		}
+	}
+	if !strings.Contains(logs.String(), `"reason":"tls_unknown_authority"`) || strings.Contains(logs.String(), "hunter2") {
+		t.Fatalf("log: %s", logs.String())
+	}
+}
+
+func TestPagerDutyValidationTransportFailureKeepsReason(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	logs := captureLogs(t)
+	_, err := ValidatePagerDutyCredential(context.Background(), &http.Client{},
+		PagerDutyRevokeConfig{APIBaseOverride: server.URL},
+		PagerDutyCredentialCandidate{AuthMode: "api_token", APIToken: "tok-secret", Region: "us"}, PagerDutyReadScopeSet())
+	var validation *PagerDutyValidationError
+	if !errors.As(err, &validation) || validation.Code != "live_read_failed" || validation.Reason != TransportReasonTLSUnknownAuthority {
+		t.Fatalf("err = %v, want live_read_failed/tls_unknown_authority", err)
+	}
+	if err.Error() != "live_read_failed" {
+		t.Fatalf("Error() changed: %q", err.Error())
+	}
+	if !strings.Contains(logs.String(), `"reason":"tls_unknown_authority"`) || strings.Contains(logs.String(), "tok-secret") {
+		t.Fatalf("log: %s", logs.String())
+	}
+}
+
+func TestGitHubAppInstallationTokenTransportFailureKeepsReason(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemKey := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	credential := NewCredential("github", "id", nil, map[string]secrets.Value{"app_id": secrets.NewValue("1"), "private_key": secrets.NewValue(pemKey), "installation_id": secrets.NewValue("2")})
+	auth, err := NewGitHubAppAuth(credential, "https://api.github.com", fakehttp.Client(errDoer{x509.UnknownAuthorityError{}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = auth.installationToken(context.Background())
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Reason != TransportReasonTLSUnknownAuthority || providerErr.Class != ErrorTransient {
+		t.Fatalf("err = %v, want transient/tls_unknown_authority", err)
+	}
+}

@@ -72,6 +72,12 @@ def _run_harness(tmp_path: Path, *args: str) -> tuple[int, list[list[str]]]:
         f"services:\n  venue-prove:\n    image: ghcr.io/example/go-api-tools@{DIGEST}\n",
         encoding="utf-8",
     )
+    (root / ".remember/lanes/team-lead").mkdir(parents=True)
+    (root / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
+    (root / "ops").mkdir()
+    (root / "ops/.env").write_text("", encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "docker").write_text(DOCKER_STUB, encoding="utf-8")

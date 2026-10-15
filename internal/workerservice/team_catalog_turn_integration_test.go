@@ -4,6 +4,7 @@ package workerservice
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"sync"
 	"testing"
 	"time"
@@ -94,7 +95,7 @@ func TestCatalogLeaseTurnKeepsOneOpenRowOfANewFactAcrossOverlappingRuns(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(poolB.Close)
-	turns := []catalogLeaseTurn{newCatalogLeaseTurn(poolA), newCatalogLeaseTurn(poolB)}
+	turns := []jobruntime.TeamCatalogTurn{jobruntime.NewTeamCatalogTurn(poolA), jobruntime.NewTeamCatalogTurn(poolB)}
 
 	openRows := func(org string) uint64 {
 		t.Helper()

@@ -32,7 +32,8 @@ func (size IssueSize) Weight() float64 {
 // ComputeIssueSize sizes a unit from the story points of its issues. storyPoints holds the issues that
 // have a stored size; an issue absent from it is unsized. A size that is zero, negative or not finite
 // is no size: a stored 0 is how most providers read "not estimated", and a unit must never weigh 0.
-// An issue listed twice counts once: the unit worked on it once.
+// An issue listed twice counts once: the unit worked on it once. A sum that is not finite (sizes so large that their
+// sum overflows) is no size either: no weight is invented from it, and the unit counts 1.
 func ComputeIssueSize(issueIDs []string, storyPoints map[string]float64) IssueSize {
 	var size IssueSize
 	seen := make(map[string]struct{}, len(issueIDs))
@@ -48,6 +49,9 @@ func ComputeIssueSize(issueIDs []string, storyPoints map[string]float64) IssueSi
 		}
 		size.Value += points
 		size.SizedIssues++
+	}
+	if math.IsInf(size.Value, 1) {
+		size.Value, size.SizedIssues = 0, 0
 	}
 	return size
 }

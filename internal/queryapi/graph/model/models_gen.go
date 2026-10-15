@@ -1089,8 +1089,10 @@ type MetricDelta struct {
 	// Whether the current window has one or more stored source rows. A stored zero has this field set to true.
 	HasData bool `json:"hasData"`
 	// Whether the comparison window has one or more stored source rows.
-	HasPriorData bool         `json:"hasPriorData"`
-	Spark        []SparkPoint `json:"spark"`
+	HasPriorData bool `json:"hasPriorData"`
+	// The value the comparison window stored, in the unit and scale of value (the same transform), read by the query that sets hasPriorData. Null exactly when hasPriorData is false: a window with no stored value is unknown, never 0. A stored zero is 0. Not derived from value and deltaPct (CHAOS-9817).
+	PriorValue *float64     `json:"priorValue,omitempty"`
+	Spark      []SparkPoint `json:"spark"`
 	// Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric.
 	RateState *string `json:"rateState,omitempty"`
 	// The coverage of the pull request rework ratio (CHAOS-9072), from 0 to 1, not a percent: the merged pull requests of the window that have review data from a provider that stores a changes-requested review, divided by all merged pull requests of the window, of every stored day: a day stored before the review counts existed is in the denominator only, so a window that is partly not counted has a low coverage. 0 when rateState is unknown_no_review_evidence or not_applicable_no_rework_signal. Null when no stored day of the window holds a merged pull request, when rateState is null (no stored day of the window holds review counts), and for every other metric.

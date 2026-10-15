@@ -891,6 +891,7 @@ type ComplexityRoot struct {
 		HasPriorData           func(childComplexity int) int
 		Label                  func(childComplexity int) int
 		Metric                 func(childComplexity int) int
+		PriorValue             func(childComplexity int) int
 		RateCoverage           func(childComplexity int) int
 		RateState              func(childComplexity int) int
 		RepoFilterApplied      func(childComplexity int) int
@@ -5645,6 +5646,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.MetricDelta.Metric(childComplexity), true
+
+	case "MetricDelta.priorValue":
+		if e.complexity.MetricDelta.PriorValue == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.PriorValue(childComplexity), true
 
 	case "MetricDelta.rateCoverage":
 		if e.complexity.MetricDelta.RateCoverage == nil {
@@ -10827,6 +10835,8 @@ type MetricDelta {
   hasData: Boolean!
   "Whether the comparison window has one or more stored source rows."
   hasPriorData: Boolean!
+  "The value the comparison window stored, in the unit and scale of value (the same transform), read by the query that sets hasPriorData. Null exactly when hasPriorData is false: a window with no stored value is unknown, never 0. A stored zero is 0. Not derived from value and deltaPct (CHAOS-9817)."
+  priorValue: Float
   spark: [SparkPoint!]!
   "Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric."
   rateState: String
@@ -37059,6 +37069,8 @@ func (ec *executionContext) fieldContext_HomeResult_deltas(_ context.Context, fi
 				return ec.fieldContext_MetricDelta_hasData(ctx, field)
 			case "hasPriorData":
 				return ec.fieldContext_MetricDelta_hasPriorData(ctx, field)
+			case "priorValue":
+				return ec.fieldContext_MetricDelta_priorValue(ctx, field)
 			case "spark":
 				return ec.fieldContext_MetricDelta_spark(ctx, field)
 			case "rateState":
@@ -40990,6 +41002,47 @@ func (ec *executionContext) fieldContext_MetricDelta_hasPriorData(_ context.Cont
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_priorValue(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_priorValue(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PriorValue, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_priorValue(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -74026,6 +74079,8 @@ func (ec *executionContext) _MetricDelta(ctx context.Context, sel ast.SelectionS
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "priorValue":
+			out.Values[i] = ec._MetricDelta_priorValue(ctx, field, obj)
 		case "spark":
 			out.Values[i] = ec._MetricDelta_spark(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

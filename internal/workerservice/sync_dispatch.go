@@ -654,6 +654,11 @@ func buildSyncCoordinatorWorker(
 	if scopeRefusalObserver, ok := observer.(remaining.ScopeRefusalObserver); ok {
 		remainingStore.SetScopeRefusalObserver(scopeRefusalObserver)
 	}
+	// CHAOS-9692: the same store runs the post-sync dora StartRunTx, which is
+	// where an automatic start meets a pending manual run of the same days.
+	if manualOverlapObserver, ok := observer.(remaining.ManualOverlapObserver); ok {
+		remainingStore.SetManualOverlapObserver(manualOverlapObserver)
+	}
 	remainingPublisher, remainingPublisherErr := remaining.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
 	producer, producerErr := joboutbox.NewProducer(postgresDatabase.pools.Domain, registry)
 	workGraphWriter, workGraphWriterErr := workgraph.NewRequestWriter(registry)

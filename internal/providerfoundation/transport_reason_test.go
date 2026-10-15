@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
-	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -54,14 +53,40 @@ func (b *lockedBuffer) String() string {
 	return b.buffer.String()
 }
 
-// newQuietTLSServer is httptest.NewTLSServer whose own error log (the
-// "TLS handshake error" line a rejecting client provokes) is discarded, so it
-// never reaches the slog default a test captures.
-func newQuietTLSServer(handler http.Handler) *httptest.Server {
-	server := httptest.NewUnstartedServer(handler)
-	server.Config.ErrorLog = log.New(io.Discard, "", 0)
-	server.StartTLS()
+// newQuietTLSServer is httptest.NewTLSServer with its error log captured. The "TLS handshake error"
+// lines a rejecting client provokes are expected and dropped; any other server error (a handler panic,
+// an accept error) fails the test when it ends.
+func newQuietTLSServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	server, errs := startCapturedTLSServer(handler)
+	t.Cleanup(func() {
+		server.Close()
+		failUnexpectedServerErrors(t, errs.String())
+	})
 	return server
+}
+
+func startCapturedTLSServer(handler http.Handler) (*httptest.Server, *lockedBuffer) {
+	errs := &lockedBuffer{}
+	server := httptest.NewUnstartedServer(handler)
+	server.Config.ErrorLog = log.New(errs, "", 0)
+	server.StartTLS()
+	return server, errs
+}
+
+type failureRecorder interface {
+	Helper()
+	Errorf(format string, args ...any)
+}
+
+func failUnexpectedServerErrors(t failureRecorder, logged string) {
+	t.Helper()
+	for _, line := range strings.Split(logged, "\n") {
+		if line == "" || strings.HasPrefix(line, "http: TLS handshake error from ") {
+			continue
+		}
+		t.Errorf("unexpected server error: %s", line)
+	}
 }
 
 func captureLogs(t *testing.T) *lockedBuffer {
@@ -76,7 +101,7 @@ func captureLogs(t *testing.T) *lockedBuffer {
 // A client that does not trust the server's CA (the go-api-tools image without a CA bundle)
 // must surface tls_unknown_authority, not a bare transient error.
 func TestTransportUnknownAuthorityReachesCaller(t *testing.T) {
-	server := newQuietTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server := newQuietTLSServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer server.Close()
 	logs := captureLogs(t)
 	client := transportClient(t, &http.Client{}, server.URL)
@@ -173,5 +198,41 @@ func TestCaptureLogsIsSafeWhileAnotherGoroutineLogs(t *testing.T) {
 	<-done
 	if !strings.Contains(logs.String(), `"n":199`) {
 		t.Fatal("background lines missing")
+	}
+}
+
+type recordedFailure struct{ failed bool }
+
+func (r *recordedFailure) Helper()               {}
+func (r *recordedFailure) Errorf(string, ...any) { r.failed = true }
+
+func TestQuietTLSServerReportsAHandlerPanic(t *testing.T) {
+	server, errs := startCapturedTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") }))
+	defer server.Close()
+	_, _ = server.Client().Get(server.URL)
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(errs.String(), "http: panic serving") && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	var failure recordedFailure
+	failUnexpectedServerErrors(&failure, errs.String())
+	if !failure.failed {
+		t.Fatalf("a handler panic was not reported as an unexpected server error: %s", errs.String())
+	}
+}
+
+func TestQuietTLSServerDropsOnlyTheHandshakeLines(t *testing.T) {
+	var failure recordedFailure
+	failUnexpectedServerErrors(&failure, "http: TLS handshake error from 127.0.0.1:1: EOF\n")
+	if failure.failed {
+		t.Fatal("a TLS handshake error line failed the test")
+	}
+}
+
+func TestUnexpectedServerErrorContainingHandshakePhraseIsReported(t *testing.T) {
+	var failure recordedFailure
+	failUnexpectedServerErrors(&failure, "unexpected handler error: TLS handshake error\n")
+	if !failure.failed {
+		t.Fatal("an unexpected server error containing the handshake phrase was hidden")
 	}
 }

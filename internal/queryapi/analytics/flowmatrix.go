@@ -389,6 +389,9 @@ func compileFlowMatrixInvestmentDimension(req FlowMatrixRequest, orgID string, t
 	if err != nil {
 		return compiledQuery{}, compiledQuery{}, err
 	}
+	if measureExpr, err = exactSums(measureExpr); err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
 	// Force a uniform Float64 result type -- see CompileTimeseries's doc
 	// comment for the full reasoning; identical here.
 	measureExpr = "toFloat64(" + measureExpr + ")"
@@ -518,6 +521,9 @@ func compileFlowMatrixInvestmentTeamRepoDimension(req FlowMatrixRequest, orgID s
 	if err != nil {
 		return compiledQuery{}, compiledQuery{}, err
 	}
+	if measureExpr, err = exactSums(measureExpr); err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
 	// Force a uniform Float64 result type -- see CompileTimeseries's doc
 	// comment for the full reasoning; identical here.
 	measureExpr = "toFloat64(" + measureExpr + ")"
@@ -593,7 +599,7 @@ SELECT
     '%s' AS target_dimension,
     toString(a.entity) AS source,
     toString(b.entity) AS target,
-    toFloat64(SUM(a.value)) AS value
+    %s AS value
 FROM (%s) AS a
 INNER JOIN (%s) AS b ON a.bridge = b.bridge
 WHERE a.entity != b.entity
@@ -601,7 +607,7 @@ GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC
 LIMIT {max_edges:UInt32}
 %s
-`, dimUpper, dimUpper, activitySelect, activitySelect, settingsMaxExecutionTime(timeoutSeconds))
+`, dimUpper, dimUpper, exactSum("a.value"), activitySelect, activitySelect, settingsMaxExecutionTime(timeoutSeconds))
 	edgesBindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},

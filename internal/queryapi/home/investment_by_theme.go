@@ -111,16 +111,14 @@ func themeAllocationFromEffort(rows []investmentexplain.ThemeEffortRow, measure 
 	// measure is ISSUE_SIZE and the window holds a unit.
 	var sizingCoverage *float64
 	var unsized, units *int64
-	if sizing != nil && measure == investmentexplain.MeasureIssueSize {
+	if sizing != nil && measure == investmentexplain.MeasureIssueSize && sizing.Units > 0 {
 		sizingCoverage = sizing.Share()
 		if u := sizing.Unsized(); u != nil {
 			v := int64(*u)
 			unsized = &v
 		}
-		if sizing.Units > 0 {
-			v := int64(sizing.Units)
-			units = &v
-		}
+		v := int64(sizing.Units)
+		units = &v
 	}
 	out := make([]ReworkThemeAllocation, 0, len(kept))
 	for _, row := range kept {

@@ -87,16 +87,6 @@ def _tracked(files: list[str]) -> list[str]:
     return [_TRACKED_COPY.get(f, f) for f in files]
 
 
-def _dash_f(text: str) -> list[str]:
-    return [m.strip('"') for m in re.findall(r"-f\s+(\"?[^\s\")]+\"?)", text)]
-
-
-def _block(script: str, start: str) -> str:
-    text = (BIGBOY / script).read_text()
-    i = text.index(start)
-    return text[i : text.index("\n\n", i) if "\n\n" in text[i:] else len(text)]
-
-
 def test_stack_set_equals_bigboy_cut_chain() -> None:
     match = re.search(
         r"^export COMPOSE_FILE=(\S+)$", (BIGBOY / "bigboy-cut.sh").read_text(), re.M

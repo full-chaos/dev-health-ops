@@ -10,6 +10,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,6 +29,8 @@ type Site struct {
 	// Statements holds every maximal constant SQL string of the enclosing
 	// function that holds a SELECT.
 	Statements []string
+	// Source is the text of the file the site is in.
+	Source string
 }
 
 // LoadSites returns every Scan call of a RowScanner in the non-test code of
@@ -110,11 +113,10 @@ func LoadSites(moduleRoot, pattern string) ([]Site, error) {
 					if !ok || sel.Sel.Name != "Scan" {
 						return true
 					}
-					recv := p.TypesInfo.TypeOf(sel.X)
-					if recv == nil || !strings.Contains(recv.String(), "RowScanner") {
+					if !scansRows(p, sel.X) {
 						return true
 					}
-					site := Site{Func: fd.Name.Name}
+					site := Site{Func: fd.Name.Name, Source: fileSource(p, fd)}
 					pos := p.Fset.Position(call.Pos())
 					site.File, site.Line = pos.Filename, pos.Line
 					for _, a := range call.Args {
@@ -603,3 +605,43 @@ func (r *resolver) litContext(p *packages.Package, fd *ast.FuncDecl, obj types.O
 }
 
 func globalKey(o types.Object) string { return o.Pkg().Path() + "|" + o.Name() }
+
+// scansRows reports whether the receiver has the method set of a row scanner,
+// Scan(...any) error, whatever its declared type is called: a reader that
+// declares its own narrow interface is a reader too.
+func scansRows(p *packages.Package, recv ast.Expr) bool {
+	return hasScanMethod(p.TypesInfo.TypeOf(recv), p.Types)
+}
+
+func hasScanMethod(t types.Type, pkg *types.Package) bool {
+	if t == nil {
+		return false
+	}
+	obj, _, _ := types.LookupFieldOrMethod(t, true, pkg, "Scan")
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return false
+	}
+	sig := fn.Type().(*types.Signature)
+	if !sig.Variadic() || sig.Params().Len() != 1 || sig.Results().Len() != 1 {
+		return false
+	}
+	elem, ok := sig.Params().At(0).Type().(*types.Slice)
+	if !ok {
+		return false
+	}
+	if iface, ok := elem.Elem().Underlying().(*types.Interface); !ok || iface.NumMethods() != 0 {
+		return false
+	}
+	return sig.Results().At(0).Type().String() == "error"
+}
+
+// fileSource is the source text of the file holding fd: the statement a pinned
+// site reads is usually a constant or a helper beside it.
+func fileSource(p *packages.Package, fd *ast.FuncDecl) string {
+	data, err := os.ReadFile(p.Fset.Position(fd.Pos()).Filename)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}

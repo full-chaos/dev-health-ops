@@ -1844,6 +1844,49 @@ kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-inter
   --all-orgs --apply --workers-paused --reason <code> --correlation-id <id>
 ```
 
+#### `providersync drain-removed-dependencies` (CHAOS-9706)
+
+A data step. A link removed at the provider leaves its `work_item_dependencies`
+row behind (the table is insert-only), and nothing removed it. This verb deletes
+the blocking rows (`blocks`, `blocked_by`, canonical semantics) that the end
+rule of the blocked intervals calls gone (an item that writes the relation has a
+later read that did not write it) and whose `last_synced` is older than
+`--retain-days` (default 90, floor 30). It keeps:
+
+- every current relation, and every relation the rule cannot decide (an end that
+  is no stored item, another semantics version);
+- every removed row inside the retention: it is the only record that the graph
+  projector can still retract the edge from, and the blocked-hours recompute
+  still reads it;
+- every row of another relationship type (blocking never drives team
+  attribution);
+- `work_item_dependency_first_seen` and `work_item_relations_read`.
+
+**It deletes rows, so it writes nothing unless `--apply` is given.** A dry run
+(the default) reads, plans, proves that the blocked intervals of every item,
+clipped to the retention window, are the same without the rows to delete, and
+reports. `--apply` needs `--workers-paused` (the statement that the sync workers
+that write `work_item_dependencies` are paused), `--reason` and
+`--correlation-id`, and is refused (`work_item_dependency_drain_writes_active`)
+while a part of `work_item_dependencies` or `work_items` was modified within
+`--quiet-seconds` (default 60). It copies the rows to
+`work_item_dependencies_drain_bak` under a run id, deletes exactly the versions
+it read (a row a sync wrote after the read has a newer `last_synced` and
+survives), and reads the relations back. `--restore-run <run_id>` puts the saved
+rows back, except a key a sync has written since with a newer `last_synced`
+(also dry by default). Output: counts only, under `drain_removed_dependencies`,
+per organization (numbered) and in total: `relations`, `current`, `undecided`,
+`removed`, `drainable`, `kept_in_retention`, `oldest_drainable_days`,
+`newest_drainable_days`, `differential_items`, `differential_mismatches`,
+`backup_rows`, `deleted`, `survived_the_delete`, `restored`, `elapsed_ms`.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers providersync drain-removed-dependencies \
+  --all-orgs
+kubectl exec -i <worker-pod> -- dho workers providersync drain-removed-dependencies \
+  --all-orgs --apply --workers-paused --reason <code> --correlation-id <id>
+```
+
 #### `providersync retire-jira-project-as-team` (CHAOS-8888)
 
 Earlier versions of the Jira team catalog made a team of every Jira project

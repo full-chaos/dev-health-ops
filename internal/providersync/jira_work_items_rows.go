@@ -863,7 +863,7 @@ func jiraFloat(value any) *float64 {
 // jiraDescriptionText is the plain text of a Jira description. Jira Cloud v3
 // sends an Atlassian Document Format tree, Server and v2 a string. A string is
 // kept as given; a tree is flattened (flattenJiraDocument); a value of another
-// shape states no description.
+// shape (list, number, boolean) states no description, so a held one is kept.
 func jiraDescriptionText(value any) *string {
 	switch typed := value.(type) {
 	case nil:
@@ -874,10 +874,10 @@ func jiraDescriptionText(value any) *string {
 			return nil
 		}
 		return &text
-	case []any:
-		return nil
+	case string:
+		return nullableJiraString(typed)
 	default:
-		return nullableJiraString(value)
+		return nil
 	}
 }
 

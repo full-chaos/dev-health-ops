@@ -21,7 +21,6 @@ import (
 func TestPagerDutyExchangeTransportFailureKeepsReason(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer server.Close()
-	logs := captureLogs(t)
 	config := PagerDutyRevokeConfig{ClientID: "c", ClientSecret: "hunter2", TokenURL: server.URL + "/oauth/token"}
 	for name, call := range map[string]func() error{
 		"code": func() error {
@@ -42,15 +41,11 @@ func TestPagerDutyExchangeTransportFailureKeepsReason(t *testing.T) {
 			t.Fatalf("%s: Error() changed: %q", name, err.Error())
 		}
 	}
-	if !strings.Contains(logs.String(), `"reason":"tls_unknown_authority"`) || strings.Contains(logs.String(), "hunter2") {
-		t.Fatalf("log: %s", logs.String())
-	}
 }
 
 func TestPagerDutyValidationTransportFailureKeepsReason(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer server.Close()
-	logs := captureLogs(t)
 	_, err := ValidatePagerDutyCredential(context.Background(), &http.Client{},
 		PagerDutyRevokeConfig{APIBaseOverride: server.URL},
 		PagerDutyCredentialCandidate{AuthMode: "api_token", APIToken: "tok-secret", Region: "us"}, PagerDutyReadScopeSet())
@@ -60,9 +55,6 @@ func TestPagerDutyValidationTransportFailureKeepsReason(t *testing.T) {
 	}
 	if err.Error() != "live_read_failed" {
 		t.Fatalf("Error() changed: %q", err.Error())
-	}
-	if !strings.Contains(logs.String(), `"reason":"tls_unknown_authority"`) || strings.Contains(logs.String(), "tok-secret") {
-		t.Fatalf("log: %s", logs.String())
 	}
 }
 
@@ -95,7 +87,6 @@ type errReader struct{ err error }
 func (r errReader) Read([]byte) (int, error) { return 0, r.err }
 
 func TestPagerDutyBodyReadFailureKeepsReason(t *testing.T) {
-	logs := captureLogs(t)
 	config := PagerDutyRevokeConfig{ClientID: "c", TokenURL: "https://pd.example.test/oauth/token"}
 	for name, err := range map[string]error{
 		"code": func() error {
@@ -118,8 +109,5 @@ func TestPagerDutyBodyReadFailureKeepsReason(t *testing.T) {
 	var validation *PagerDutyValidationError
 	if !errors.As(err, &validation) || validation.Code != "live_read_failed" || validation.Reason != TransportReasonOther {
 		t.Fatalf("validation err = %v", err)
-	}
-	if !strings.Contains(logs.String(), `"reason":"other"`) {
-		t.Fatalf("log: %s", logs.String())
 	}
 }

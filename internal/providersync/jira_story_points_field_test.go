@@ -238,3 +238,19 @@ func TestJiraRoutesLeaveUnsizedNullWhenNeitherFieldExists(t *testing.T) {
 		t.Fatal("no points field on the site is not an incomplete run")
 	}
 }
+
+func TestJiraRoutesIgnoreANonNumberStoryPointsField(t *testing.T) {
+	for _, live := range []bool{true, false} {
+		route := &jiraPointsRoute{fieldCode: http.StatusOK, fieldBody: `[{"id":"customfield_10042","name":"Story Points","custom":true,"schema":{"type":"string"}},{"id":"customfield_10016","name":"Story point estimate","custom":true,"schema":{"type":"option"}}]`}
+		batch := collectJiraPoints(t, live, map[string]any{"fetch_comments": false}, route)
+		got := jiraPointsByKey(t, batch)
+		if len(got) != 3 {
+			t.Fatalf("live=%v rows=%d want 3", live, len(got))
+		}
+		for key, points := range got {
+			if points != nil {
+				t.Fatalf("live=%v %s sized %v from a non-number field", live, key, *points)
+			}
+		}
+	}
+}

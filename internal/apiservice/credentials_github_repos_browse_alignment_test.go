@@ -55,3 +55,44 @@ func TestBrowseProviderAlignmentRefusesAnExtraCallOfAnUnretiredRequest(t *testin
 		t.Fatal("an extra provider call of a request that is not retired was accepted")
 	}
 }
+
+func tokenListingFailureFixture(path string) ([]venueoracle.Request, []string, map[string][]string, map[string]int) {
+	request := venueoracle.Request{Name: "github repos: failing", Path: path}
+	user := "GET /user/repos?per_page=100 auth=token t accept=a"
+	python := []string{"GET /search/repositories?per_page=100&q=o+org%3Aother auth=token t accept=a"}
+	return []venueoracle.Request{request}, python, map[string][]string{request.Name: {user}}, map[string]int{request.Name: 502}
+}
+
+// A request that failed on the token's own listing is excused from the call comparison only when it carries an owner,
+// whose Python call went to the owner; a search request that fails on /user/repos while Python searched is a mismatch.
+func TestBrowseProviderAlignmentRefusesASearchRequestThatCalledUserRepos(t *testing.T) {
+	requests, python, goCalls, goStatus := tokenListingFailureFixture("/api/v1/admin/credentials/c/repos?search=o")
+
+	if aligned, _ := alignBrowseProviderCalls(requests, goCalls, goStatus, python); aligned {
+		t.Fatal("Go called /user/repos for a search request and the alignment accepted Python's /search/repositories")
+	}
+}
+
+func TestBrowseProviderAlignmentExcusesAnOwnerRequestThatFailedOnTheTokenListing(t *testing.T) {
+	requests, python, goCalls, goStatus := tokenListingFailureFixture("/api/v1/admin/credentials/c/repos?owner=other")
+	python[0] = "GET /orgs/other/repos?per_page=100 auth=token t accept=a"
+
+	if aligned, detail := alignBrowseProviderCalls(requests, goCalls, goStatus, python); !aligned {
+		t.Fatalf("an owner request that failed on the token listing is refused: %s", detail)
+	}
+}
+
+func TestBrowseRequestNamesOwner(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/repos":                  false,
+		"/repos?owner=":           false,
+		"/repos?search=o":         false,
+		"/repos?owner=acme":       true,
+		"/repos?search=o&owner=a": true,
+		"/repos?owner=&owner=a":   true,
+	} {
+		if got := browseRequestNamesOwner(venueoracle.Request{Path: path}); got != want {
+			t.Errorf("%s: named owner = %v, want %v", path, got, want)
+		}
+	}
+}

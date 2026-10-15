@@ -130,6 +130,9 @@ type Stats struct {
 	TotalComponents     int            `json:"total_components"`
 	Records             int            `json:"records"`
 	RepoEffortRecords   int            `json:"repo_effort_records"`
+	IssueSizeRecords    int            `json:"issue_size_records"` // work_unit_issue_size rows: one per unit of the run
+	SizedUnits          int            `json:"sized_units"`        // units with a size; 0 = the run reads as the work-unit count
+	SizedIssues         int            `json:"sized_issues"`       // issues with a positive size (CHAOS-9619)
 	Quotes              int            `json:"quotes"`
 	SkippedExisting     int            `json:"skipped_existing"`
 	LLMCalls            int            `json:"llm_calls"`
@@ -475,7 +478,8 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		componentInput := MaterializeComponentInput{
 			Component: component, WorkItems: entities.WorkItems, PRs: entities.PRs, Commits: entities.Commits,
 			EdgeRepoIDs: edgeRepoIDs, PRChurn: entities.PRChurn, CommitChurn: entities.CommitChurn,
-			ActiveHours: entities.ActiveHours, ParentTitles: entities.ParentTitles, EpicTitles: entities.EpicTitles,
+			ActiveHours: entities.ActiveHours, StoryPoints: entities.StoryPoints,
+			ParentTitles: entities.ParentTitles, EpicTitles: entities.EpicTitles,
 			FromTS: cfg.FromTS, ToTS: cfg.ToTS,
 			CascadeRepoID: cascade.RepoID, CascadeRepoSource: cascade.Source,
 		}
@@ -640,6 +644,19 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	investments := make([]chwrite.InvestmentRecord, 0, len(all))
 	repoEfforts := make([]chwrite.RepoEffortRecord, 0, len(all))
 	quotes := make([]chwrite.QuoteRecord, 0)
+	// Every unit of the run gets its size row, written or skipped: the size is read from the provider's
+	// work items, not from the model, and a skipped unit's size can have changed since its last row.
+	issueSizes := make([]chwrite.IssueSizeRecord, 0, len(all))
+	for _, entry := range all {
+		size := entry.result.IssueSize
+		size.CategorizationRunID = cfg.RunID
+		size.ComputedAt = cfg.ComputedAt
+		issueSizes = append(issueSizes, size)
+		if size.IssueSize > 0 {
+			stats.SizedUnits++
+		}
+		stats.SizedIssues += int(size.SizedIssueCount)
+	}
 
 	for _, entry := range all {
 		// A unit skipped as unchanged still gets its repo-effort rows.
@@ -789,6 +806,11 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			return Stats{}, fmt.Errorf("write work_unit_repo_effort: %w", err)
 		}
 	}
+	if len(issueSizes) > 0 {
+		if _, err := m.writer.WriteIssueSizes(ctx, cfg.OrgID, issueSizes); err != nil {
+			return Stats{}, fmt.Errorf("write work_unit_issue_size: %w", err)
+		}
+	}
 	if len(investments) > 0 {
 		if _, err := m.writer.WriteInvestments(ctx, cfg.OrgID, investments); err != nil {
 			return Stats{}, fmt.Errorf("write work_unit_investments: %w", err)
@@ -797,6 +819,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 	stats.Records = len(investments)
 	stats.RepoEffortRecords = len(repoEfforts)
+	stats.IssueSizeRecords = len(issueSizes)
 	stats.Quotes = len(quotes)
 
 	_ = fallbackCount
@@ -814,6 +837,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		"components", stats.Components, "records", stats.Records, "quotes", stats.Quotes,
 		"skipped_existing", stats.SkippedExisting, "skipped_terminal", skippedTerminal,
 		"skipped_fallback", skippedFallback,
+		"issue_size_records", stats.IssueSizeRecords, "sized_units", stats.SizedUnits, "sized_issues", stats.SizedIssues,
 		"rejected_confidences", stats.RejectedConfidences,
 		"llm", categorize.FormatFailureSummary(len(outcomes)-fallbackCount, stats.LLMFailureCounts),
 	)
@@ -1127,6 +1151,7 @@ type entitySet struct {
 	PRChurn      map[string]float64
 	CommitChurn  map[string]float64
 	ActiveHours  map[string]float64
+	StoryPoints  map[string]float64
 	ParentTitles map[string]string
 	EpicTitles   map[string]string
 }
@@ -1148,10 +1173,15 @@ func (m *Materializer) fetchEntities(ctx context.Context, cfg Config, components
 	// that path skips the read entirely rather than tripping the refusal --
 	// active hours are simply absent from an unscoped run's components.
 	activeHours := map[string]float64{}
+	storyPoints := map[string]float64{}
 	if cfg.OrgID != "" {
 		activeHours, err = m.reader.FetchWorkItemActiveHours(ctx, issueIDs, cfg.OrgID)
 		if err != nil {
 			return entitySet{}, fmt.Errorf("fetch work item active hours: %w", err)
+		}
+		storyPoints, err = m.reader.FetchWorkItemStoryPoints(ctx, issueIDs, cfg.OrgID)
+		if err != nil {
+			return entitySet{}, fmt.Errorf("fetch work item story points: %w", err)
 		}
 	}
 	prs, err := m.reader.FetchPullRequests(ctx, groupPRsByRepo(prIDs), cfg.OrgID)
@@ -1211,7 +1241,7 @@ func (m *Materializer) fetchEntities(ctx context.Context, cfg Config, components
 
 	return entitySet{
 		WorkItems: workItemMap, PRs: prMap, Commits: commitMap,
-		PRChurn: prChurn, CommitChurn: commitChurn, ActiveHours: activeHours,
+		PRChurn: prChurn, CommitChurn: commitChurn, ActiveHours: activeHours, StoryPoints: storyPoints,
 		ParentTitles: parentTitles, EpicTitles: epicTitles,
 	}, nil
 }

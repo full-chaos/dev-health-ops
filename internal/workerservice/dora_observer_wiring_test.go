@@ -139,3 +139,28 @@ func TestTheRealCollectorSatisfiesTheScopeRefusalObserver(t *testing.T) {
 		t.Fatalf("the wired observer must accept a valid observation: %v", err)
 	}
 }
+
+// TestTheRealCollectorSatisfiesTheManualOverlapObserver guards the CHAOS-9692
+// type assertion in sync_dispatch.go, the same shape and for the same reason as
+// the OpenDayZeroRow and ScopeRefusal assertions above: a failed assertion is
+// SILENT, remainingStore.manualOverlapObserver stays nil, and every automatic
+// start that overlaps a manual run goes uncounted with nothing to say why.
+func TestTheRealCollectorSatisfiesTheManualOverlapObserver(t *testing.T) {
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+	var observer jobruntime.Observer = collector
+
+	candidate, ok := observer.(remaining.ManualOverlapObserver)
+	if !ok {
+		t.Fatal(
+			"the worker's observer does NOT satisfy remaining.ManualOverlapObserver, " +
+				"so sync_dispatch.go passes nil and the manual-overlap counter " +
+				"stays at zero with nothing to indicate why",
+		)
+	}
+	if err := candidate.ObserveRemainingMetricsManualOverlap("dora"); err != nil {
+		t.Fatalf("the wired observer must accept a valid observation: %v", err)
+	}
+}

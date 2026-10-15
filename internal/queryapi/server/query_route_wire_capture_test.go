@@ -248,6 +248,7 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/home_v8_captured.graphql", registeredHomeV8Document},
 		{"testdata/wire_capture/home_v9_captured.graphql", registeredHomeV9Document},
 		{"testdata/wire_capture/home_v10_captured.graphql", registeredHomeV10Document},
+		{"testdata/wire_capture/home_v11_captured.graphql", registeredHomeV11Document},
 		{"testdata/wire_capture/saved_reports_captured.graphql", registeredSavedReportsDocument},
 		{"testdata/wire_capture/saved_report_captured.graphql", registeredSavedReportDocument},
 		{"testdata/wire_capture/report_runs_captured.graphql", registeredReportRunsDocument},

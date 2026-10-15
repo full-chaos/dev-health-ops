@@ -188,11 +188,17 @@ type OccurrenceReconciler struct {
 
 // WithInitialBackfill makes each Reconcile window also enqueue the initial
 // backfill of configurations whose first sync just succeeded, so the
-// occurrence is consumed in the same window. It needs INSERT on
+// occurrence is consumed in the same window. It is on only when
+// INITIAL_BACKFILL_NOT_BEFORE names the roll instant, and it needs INSERT on
 // backfill_jobs for the coordinator role.
 func (reconciler *OccurrenceReconciler) WithInitialBackfill() *OccurrenceReconciler {
 	if reconciler != nil {
-		reconciler.initialBackfill = newInitialBackfillEnqueuer(reconciler.pool)
+		if notBefore, ok := initialBackfillNotBefore(); ok {
+			reconciler.initialBackfill = newInitialBackfillEnqueuer(reconciler.pool, notBefore)
+			slog.Info("sync.initial_backfill.enabled", slog.Time("not_before", notBefore))
+		} else {
+			slog.Info("sync.initial_backfill.disabled", slog.String("reason", initialBackfillNotBeforeEnv+" is unset"))
+		}
 	}
 	return reconciler
 }

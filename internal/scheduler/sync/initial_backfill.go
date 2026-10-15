@@ -37,13 +37,15 @@ import (
 // waits for a concurrent winner to commit). The backfill_jobs row is written in
 // the same transaction as the occurrence.
 //
-// Only a configuration whose FIRST successful run completed within
-// initialBackfillMaxAge is a candidate, so a rollout never backfills the
-// installed base: an older first success is never read.
+// Only a configuration whose FIRST successful run started at or after the roll
+// instant (INITIAL_BACKFILL_NOT_BEFORE; the feature is off without it) and
+// completed within initialBackfillMaxAge is a candidate, so a rollout never
+// backfills a configuration that was already syncing.
 const (
 	initialBackfillMaxAge          = 24 * time.Hour
 	initialBackfillDefaultHorizon  = 365
 	initialBackfillHorizonEnv      = "INITIAL_BACKFILL_HORIZON_DAYS"
+	initialBackfillNotBeforeEnv    = "INITIAL_BACKFILL_NOT_BEFORE"
 	initialBackfillTriggeredBy     = "backfill"
 	initialBackfillMode            = SyncModeBackfill
 	initialBackfillOutcomeEnqueued = "enqueued"
@@ -68,6 +70,10 @@ type initialBackfillCandidate struct {
 type initialBackfillEnqueuer struct {
 	pool   *pgxpool.Pool
 	maxAge time.Duration
+	// notBefore is the roll instant: only a first sync that STARTED at or after
+	// it is a candidate, so a configuration that was already syncing when the
+	// feature went live is never backfilled.
+	notBefore time.Time
 
 	mu       gosync.Mutex
 	outcomes map[string]uint64
@@ -76,9 +82,25 @@ type initialBackfillEnqueuer struct {
 	seen map[string]struct{}
 }
 
-func newInitialBackfillEnqueuer(pool *pgxpool.Pool) *initialBackfillEnqueuer {
+// initialBackfillNotBefore reads INITIAL_BACKFILL_NOT_BEFORE (RFC 3339). The
+// feature is OFF when it is unset or unparseable: it is switched on by the roll
+// that sets it, never by the image alone.
+func initialBackfillNotBefore() (time.Time, bool) {
+	raw := strings.TrimSpace(os.Getenv(initialBackfillNotBeforeEnv))
+	if raw == "" {
+		return time.Time{}, false
+	}
+	instant, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		slog.Error("sync.initial_backfill.disabled", slog.String("reason", "unparseable "+initialBackfillNotBeforeEnv))
+		return time.Time{}, false
+	}
+	return instant.UTC(), true
+}
+
+func newInitialBackfillEnqueuer(pool *pgxpool.Pool, notBefore time.Time) *initialBackfillEnqueuer {
 	return &initialBackfillEnqueuer{
-		pool: pool, maxAge: initialBackfillMaxAge,
+		pool: pool, maxAge: initialBackfillMaxAge, notBefore: notBefore,
 		outcomes: map[string]uint64{}, seen: map[string]struct{}{},
 	}
 }
@@ -159,11 +181,12 @@ JOIN LATERAL (
 ) AS first_run ON TRUE
 WHERE cfg.integration_id IS NOT NULL
   AND first_run.completed_at >= $1
+  AND first_run.created_at >= $3
   AND NOT EXISTS (
     SELECT 1 FROM public.scheduled_sync_occurrences AS occurrence
     WHERE occurrence.sync_config_id = cfg.id AND occurrence.scheduled_for = date_trunc('microseconds', first_run.completed_at))
 ORDER BY first_run.completed_at, cfg.id
-LIMIT $2`, now.Add(-enqueuer.maxAge), limit)
+LIMIT $2`, now.Add(-enqueuer.maxAge), limit, enqueuer.notBefore)
 	if err != nil {
 		return nil, fmt.Errorf("list initial backfill candidates: %w", err)
 	}

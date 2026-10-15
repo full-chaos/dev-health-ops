@@ -56,7 +56,7 @@ func TestInitialBackfillHorizonDaysEnv(t *testing.T) {
 }
 
 func TestInitialBackfillSkipCountedOncePerFirstSuccess(t *testing.T) {
-	enqueuer := newInitialBackfillEnqueuer(nil)
+	enqueuer := newInitialBackfillEnqueuer(nil, time.Time{})
 	candidate := initialBackfillCandidate{configID: "c1", completedAt: time.Unix(100, 0)}
 	if !enqueuer.countSkipOnce(candidate, InitialBackfillSkipCapNotAboveDepth) {
 		t.Fatal("first skip not counted")
@@ -70,5 +70,21 @@ func TestInitialBackfillSkipCountedOncePerFirstSuccess(t *testing.T) {
 	enqueuer.pruneSeen(nil)
 	if len(enqueuer.seen) != 0 {
 		t.Fatalf("seen not pruned: %v", enqueuer.seen)
+	}
+}
+
+func TestInitialBackfillNotBeforeEnv(t *testing.T) {
+	t.Setenv(initialBackfillNotBeforeEnv, "")
+	if _, ok := initialBackfillNotBefore(); ok {
+		t.Fatal("unset must leave the feature off")
+	}
+	t.Setenv(initialBackfillNotBeforeEnv, "not a time")
+	if _, ok := initialBackfillNotBefore(); ok {
+		t.Fatal("unparseable must leave the feature off")
+	}
+	t.Setenv(initialBackfillNotBeforeEnv, "2026-10-15T12:00:00+02:00")
+	got, ok := initialBackfillNotBefore()
+	if !ok || !got.Equal(time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("got %s ok=%t", got, ok)
 	}
 }

@@ -40,6 +40,12 @@ VALUES (gen_random_uuid(), $1, $2::uuid, $3, 'incremental', 'success', 1, 1, 0, 
 	}
 }
 
+// rollInstant is the roll: before the fixture's first run, after the epoch.
+func rollInstant(t *testing.T, _ webhookRequestFixture) time.Time {
+	t.Helper()
+	return time.Now().UTC().Add(-time.Hour)
+}
+
 type initialBackfillState struct {
 	occurrences, triggers, jobs int
 }
@@ -63,7 +69,7 @@ func TestInitialBackfillEnqueuesOnceAfterTheFirstSuccess(t *testing.T) {
 	completed := now.Add(-10 * time.Minute).Truncate(time.Microsecond)
 	fixture.successRun(t, "schedule", completed)
 
-	enqueuer := newInitialBackfillEnqueuer(fixture.pool)
+	enqueuer := newInitialBackfillEnqueuer(fixture.pool, rollInstant(t, fixture))
 	if err := enqueuer.enqueuePending(ctx, now, 10); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +108,7 @@ FROM scheduled_sync_occurrences o JOIN sync_manual_triggers t USING (occurrence_
 		t.Fatal(err)
 	}
 	fixture.successRun(t, "schedule", now.Add(time.Minute))
-	other := newInitialBackfillEnqueuer(fixture.pool)
+	other := newInitialBackfillEnqueuer(fixture.pool, rollInstant(t, fixture))
 	if err := other.enqueuePending(ctx, now.Add(2*time.Minute), 10); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +126,7 @@ func TestInitialBackfillIgnoresAConfigWithAnEarlierSuccess(t *testing.T) {
 	fixture.successRun(t, "schedule", now.Add(-10*24*time.Hour))
 	fixture.successRun(t, "schedule", now.Add(-time.Hour))
 
-	enqueuer := newInitialBackfillEnqueuer(fixture.pool)
+	enqueuer := newInitialBackfillEnqueuer(fixture.pool, rollInstant(t, fixture))
 	if err := enqueuer.enqueuePending(ctx, now, 10); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +141,7 @@ func TestInitialBackfillIgnoresBackfillRuns(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	fixture.successRun(t, "backfill", now.Add(-time.Hour))
 
-	enqueuer := newInitialBackfillEnqueuer(fixture.pool)
+	enqueuer := newInitialBackfillEnqueuer(fixture.pool, rollInstant(t, fixture))
 	if err := enqueuer.enqueuePending(context.Background(), now, 10); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +164,7 @@ func TestInitialBackfillRaceMakesOneBackfill(t *testing.T) {
 		go func() {
 			defer group.Done()
 			<-start
-			errs <- newInitialBackfillEnqueuer(fixture.pool).enqueuePending(context.Background(), now, 10)
+			errs <- newInitialBackfillEnqueuer(fixture.pool, rollInstant(t, fixture)).enqueuePending(context.Background(), now, 10)
 		}()
 	}
 	close(start)
@@ -181,7 +187,7 @@ func TestInitialBackfillSkipsWhenTheCapIsNotAboveTheDepth(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	fixture.successRun(t, "schedule", now.Add(-10*time.Minute))
 
-	enqueuer := newInitialBackfillEnqueuer(fixture.pool)
+	enqueuer := newInitialBackfillEnqueuer(fixture.pool, rollInstant(t, fixture))
 	for range 2 {
 		if err := enqueuer.enqueuePending(context.Background(), now, 10); err != nil {
 			t.Fatal(err)
@@ -204,7 +210,7 @@ func TestInitialBackfillSkipsAConfigThatIsNotPlannerManaged(t *testing.T) {
 	}
 	fixture.successRun(t, "schedule", now.Add(-10*time.Minute))
 
-	enqueuer := newInitialBackfillEnqueuer(fixture.pool)
+	enqueuer := newInitialBackfillEnqueuer(fixture.pool, rollInstant(t, fixture))
 	if err := enqueuer.enqueuePending(context.Background(), now, 10); err != nil {
 		t.Fatal(err)
 	}
@@ -213,5 +219,21 @@ func TestInitialBackfillSkipsAConfigThatIsNotPlannerManaged(t *testing.T) {
 	}
 	if got := enqueuer.outcomes[InitialBackfillSkipNotPlanner]; got != 1 {
 		t.Fatalf("not_planner_managed counted %d times, want once", got)
+	}
+}
+
+// A first sync that started before the roll instant is not a candidate, even
+// when it completes after it and inside the age bound.
+func TestInitialBackfillIgnoresAFirstSyncThatStartedBeforeTheRoll(t *testing.T) {
+	fixture := initialBackfillFixture(t, "team")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	fixture.successRun(t, "schedule", now.Add(-10*time.Minute)) // created 15 min ago
+
+	enqueuer := newInitialBackfillEnqueuer(fixture.pool, now.Add(-10*time.Minute))
+	if err := enqueuer.enqueuePending(context.Background(), now, 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.initialBackfillState(t); got != (initialBackfillState{}) {
+		t.Fatalf("state = %+v, want nothing for a sync that began before the roll", got)
 	}
 }

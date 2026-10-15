@@ -349,7 +349,7 @@ func (h handlers) listGitHubRepos(w http.ResponseWriter, r *http.Request, creden
 		if listing.NamespaceErr != nil {
 			h.logger.WarnContext(ctx, "github repo browse namespace listing failed; keeping the credential's repositories only",
 				slog.Int("token_repos", len(repos)), slog.Bool("installation_scoped", scope.installation),
-				slog.String("error_class", logging.ErrorClass(listing.NamespaceErr)), slog.String("error_type", logging.ErrorType(listing.NamespaceErr)))
+				slog.String("error_class", providerErrorClass(listing.NamespaceErr)), slog.String("error_type", logging.ErrorType(listing.NamespaceErr)))
 		}
 	case group != "":
 		repos, err = client.ListRepositories(ctx, githubcode.ListOptions{Org: group, Search: search, MaxRepos: maxRepos})
@@ -432,4 +432,15 @@ func githubRepoListing(repos []pyjson.Value, scope githubScope) *pyjson.Object {
 func mustGet(object *pyjson.Object, key string) pyjson.Value {
 	value, _ := object.Get(key)
 	return value
+}
+
+// providerErrorClass is the class of a failed provider listing: the bounded exception class the client raised
+// (AuthenticationException, NotFoundException, RateLimitException, ...), so a permission failure, a missing route and
+// throttling stay apart in a log; any other error takes the logging package's class.
+func providerErrorClass(err error) string {
+	var listErr *githubcode.Error
+	if errors.As(err, &listErr) && listErr.Class != "" {
+		return listErr.Class
+	}
+	return logging.ErrorClass(err)
 }

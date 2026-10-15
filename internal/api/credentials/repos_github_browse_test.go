@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/githubcode"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
@@ -179,5 +181,50 @@ func TestBrowseSearch404IsAnEmptyListNotAnOwnerNotFound(t *testing.T) {
 	var body map[string]any
 	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &body) != nil || body["diagnostic"] != nil || body["total"] != float64(0) {
 		t.Fatalf("status %d body %s, want 200, an empty list and no diagnostic", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestBrowseOfAnOwnerWithEmptyListingsReturnsAnEmptyListForEveryMaxRepos(t *testing.T) {
+	for _, limit := range []int64{-1, 0, 100} {
+		transport := &browseTransport{routes: map[string]string{"/user/repos": "[]", "/orgs/acme/repos": "[]"}}
+
+		recorder, _ := browseRaw(t, transport, map[string]pyjson.Value{"token": "tok"}, "acme", big.NewInt(limit))
+
+		var body map[string]any
+		if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &body) != nil || body["total"] != float64(0) {
+			t.Fatalf("max_repos=%d: status %d body %s, want 200 and an empty list", limit, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestBrowseWarningKeepsTheProviderErrorClassOfAFailedOwnerListing(t *testing.T) {
+	for status, want := range map[int]string{
+		http.StatusForbidden: "AuthenticationException",
+		http.StatusNotFound:  "NotFoundException",
+	} {
+		transport := &browseTransport{
+			routes:   map[string]string{"/user/repos": "[" + browseItem("acme/visible") + "]"},
+			statuses: map[string]int{"/orgs/acme/repos": status, "/users/acme/repos": status},
+		}
+		if status == http.StatusNotFound {
+			transport.statuses = nil
+		}
+
+		_, logs := browse(t, transport, map[string]pyjson.Value{"token": "tok"}, "acme")
+
+		if !strings.Contains(logs, "error_class="+want) {
+			t.Fatalf("upstream %d: log %s, want error_class=%s", status, logs, want)
+		}
+	}
+}
+
+func TestProviderErrorClassKeepsTheBoundedExceptionClass(t *testing.T) {
+	for _, class := range []string{"AuthenticationException", "NotFoundException", "RateLimitException", "APIException"} {
+		if got := providerErrorClass(&githubcode.Error{Class: class, Message: "m"}); got != class {
+			t.Fatalf("class %q, want %q", got, class)
+		}
+	}
+	if got := providerErrorClass(errors.New("plain")); got != "other" {
+		t.Fatalf("class %q for a plain error, want other", got)
 	}
 }

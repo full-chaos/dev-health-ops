@@ -87,10 +87,11 @@ func (c Client) ListNamespace(ctx context.Context, opts NamespaceOptions) (Names
 		}
 	}
 	listing.Repos = providerfoundation.UnionByKey(tokenRepos, owned, func(repo Repo) string { return strings.ToLower(repo.FullName) })
-	// A cap below one keeps one repository, as ListRepositories does for the same value.
-	if opts.MaxRepos != nil && big.NewInt(int64(len(listing.Repos))).Cmp(opts.MaxRepos) > 0 {
-		keep := max(opts.MaxRepos.Int64(), 1)
-		listing.Repos = listing.Repos[:keep]
+	// A cap below one keeps one repository, as ListRepositories does for the same value; a cap past int64 cuts nothing.
+	if opts.MaxRepos != nil && opts.MaxRepos.IsInt64() {
+		if limit := max(opts.MaxRepos.Int64(), 1); int64(len(listing.Repos)) > limit {
+			listing.Repos = listing.Repos[:limit]
+		}
 	}
 	return listing, nil
 }

@@ -29,6 +29,10 @@ type githubIssue struct {
 	Closes []string
 	// Reviews are the PR's reviews.
 	Reviews []githubReview
+	// StatusLabel is the status label the issue got at StatusAt ("in progress", "to do"): a labeled event adds
+	// it, and an open issue keeps it. A closed issue's current labels do not hold it (its state says done).
+	StatusLabel string
+	StatusAt    string
 }
 
 // githubReview is one review of a pull request.
@@ -83,7 +87,7 @@ func (issue githubIssue) restIssue(repo string) map[string]any {
 		"url":      fmt.Sprintf("https://api.github.com/repos/%s/issues/%d", full, issue.Number),
 		"html_url": fmt.Sprintf("https://github.com/%s/issues/%d", full, issue.Number),
 		"number":   issue.Number, "title": issue.Title, "body": nullable(issue.Body), "state": issue.state(),
-		"state_reason": nil, "locked": false, "user": issue.Author.simple(), "labels": githubLabels(issue.Labels),
+		"state_reason": nil, "locked": false, "user": issue.Author.simple(), "labels": githubLabels(issue.currentLabels()),
 		"assignee": assignee, "assignees": githubUsers(issue.Assignees), "milestone": nil, "comments": 0,
 		"created_at": issue.CreatedAt, "updated_at": issue.UpdatedAt, "closed_at": nullable(issue.ClosedAt),
 		"author_association": "MEMBER", "draft": false,
@@ -102,6 +106,15 @@ func (issue githubIssue) restIssue(repo string) map[string]any {
 	return out
 }
 
+// currentLabels are the issue's labels now: a closed issue no longer holds its status label.
+func (issue githubIssue) currentLabels() []string {
+	labels := append([]string{}, issue.Labels...)
+	if issue.StatusLabel != "" && issue.ClosedAt == "" {
+		labels = append(labels, issue.StatusLabel)
+	}
+	return labels
+}
+
 // restEvents is the issue's event list: the assignment when it was opened, and its close.
 func (issue githubIssue) restEvents(repo string) []map[string]any {
 	events := []map[string]any{}
@@ -116,6 +129,11 @@ func (issue githubIssue) restEvents(repo string) []map[string]any {
 		assigned := event(800000+issue.Number*10+index, "assigned", issue.CreatedAt, issue.Author)
 		assigned["assignee"], assigned["assigner"] = assignee.simple(), issue.Author.simple()
 		events = append(events, assigned)
+	}
+	if issue.StatusLabel != "" && issue.StatusAt != "" {
+		labeled := event(800000+issue.Number*10+8, "labeled", issue.StatusAt, issue.Author)
+		labeled["label"] = map[string]any{"name": issue.StatusLabel, "color": "ededed"}
+		events = append(events, labeled)
 	}
 	if issue.ClosedAt != "" {
 		events = append(events, event(800000+issue.Number*10+9, "closed", issue.ClosedAt, issue.Author))

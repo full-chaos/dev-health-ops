@@ -17,9 +17,14 @@
 -- replacing merge tree cannot replace it.
 --
 -- ClickHouse cannot change a sort key in place, so the table is rebuilt and
--- swapped. Every statement can run again: the first drops a half-built copy, and
--- a run after the swap rebuilds the table from itself. Rows an older build wrote
--- between the copy and the swap are not copied; the daily job writes them again.
+-- swapped. The copy reads every physical row, not FINAL: under the old key
+-- (which has no repository) FINAL would merge the rows of two repositories
+-- before they get their own key, and the old table can hold them side by side
+-- (two partitions). The new table's own key and version_rank pick the survivor
+-- of a pair. After the swap the old table is copied into the new one once more,
+-- so a row an older build wrote between the first copy and the swap is kept.
+-- Every statement can run again: the first drops a half-built copy, and a run
+-- after the swap rebuilds the table from itself.
 DROP TABLE IF EXISTS work_graph_deployment_incident_edges_new;
 
 CREATE TABLE work_graph_deployment_incident_edges_new
@@ -44,8 +49,13 @@ SETTINGS index_granularity = 8192;
 INSERT INTO work_graph_deployment_incident_edges_new
     (edge_id, org_id, deployment_id, incident_id, provider, repo_id, confidence, source, evidence, observed_at, computed_at)
 SELECT edge_id, org_id, deployment_id, incident_id, provider, repo_id, confidence, source, evidence, observed_at, computed_at
-FROM work_graph_deployment_incident_edges FINAL;
+FROM work_graph_deployment_incident_edges;
 
 EXCHANGE TABLES work_graph_deployment_incident_edges AND work_graph_deployment_incident_edges_new;
+
+INSERT INTO work_graph_deployment_incident_edges
+    (edge_id, org_id, deployment_id, incident_id, provider, repo_id, confidence, source, evidence, observed_at, computed_at)
+SELECT edge_id, org_id, deployment_id, incident_id, provider, repo_id, confidence, source, evidence, observed_at, computed_at
+FROM work_graph_deployment_incident_edges_new;
 
 DROP TABLE IF EXISTS work_graph_deployment_incident_edges_new;

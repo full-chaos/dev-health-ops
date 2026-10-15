@@ -33,6 +33,7 @@ var rollbackRehearsals = []rollbackRehearsal{
 	{"127_projects_target_provenance.down.sql", "projects", "target_kind", "*", ""},
 	{"128_ai_impact_counts_float64.down.sql", "ai_impact_metrics_daily", "prs_total", "Float64", "UInt32"},
 	{"129_testops_test_flake_counts.down.sql", "testops_test_metrics_daily", "distinct_cases", "*", ""},
+	{"130_work_unit_issue_size.down.sql", "work_unit_issue_size", "issue_size", "*", ""},
 }
 
 // Every operator rollback file is rehearsed through the production migrator: the

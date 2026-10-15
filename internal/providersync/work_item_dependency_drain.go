@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -123,6 +124,8 @@ type WorkItemDependencyDrainOrg struct {
 	DifferentialItems      int `json:"differential_items"`
 	DifferentialMismatches int `json:"differential_mismatches"`
 	BackupRows             int `json:"backup_rows"`
+	// Deleted counts relations (keys); BackupRows counts the physical versions saved, which is more when a key held
+	// older versions no merge had folded.
 	Deleted                int `json:"deleted"`
 	// SurvivedTheDelete is drainable versions that are still stored after the delete. Always 0 when it returns.
 	SurvivedTheDelete int   `json:"survived_the_delete"`
@@ -464,14 +467,14 @@ func dependencyVersionsArgs(orgID string, versions []dependencyVersion) []any {
 	sources := make([]string, 0, len(versions))
 	targets := make([]string, 0, len(versions))
 	types := make([]string, 0, len(versions))
-	stamps := make([]int64, 0, len(versions))
+	stamps := make([]string, 0, len(versions))
 	tokens := make([]string, 0, len(versions))
 	for _, version := range versions {
 		tokens = append(tokens, version.source+"\x1f"+version.target+"\x1f"+version.relationship)
 		sources = append(sources, version.source)
 		targets = append(targets, version.target)
 		types = append(types, version.relationship)
-		stamps = append(stamps, version.lastSynced.UnixMilli())
+		stamps = append(stamps, strconv.FormatInt(version.lastSynced.UnixMilli(), 10))
 	}
 	return []any{
 		clickhouse.Named("org_id", orgID), clickhouse.Named("sources", sources), clickhouse.Named("targets", targets),
@@ -485,7 +488,7 @@ func dependencyVersionsArgs(orgID string, versions []dependencyVersion) []any {
 // and survives.
 const dependencyVersionsMatch = `org_id = {org_id:String} AND (source_work_item_id, target_work_item_id, relationship_type) IN (` +
 	`SELECT z.1, z.2, z.3 FROM (SELECT arrayJoin(arrayZip({sources:Array(String)}, {targets:Array(String)}, {types:Array(String)})) AS z)) ` +
-	`AND toUnixTimestamp64Milli(last_synced) <= mapFromArrays({tokens:Array(String)}, {stamps:Array(Int64)})[concat(source_work_item_id, char(31), target_work_item_id, char(31), relationship_type)]`
+	`AND toUnixTimestamp64Milli(last_synced) <= mapFromArrays({tokens:Array(String)}, arrayMap(x -> toInt64(x), {stamps:Array(String)}))[concat(source_work_item_id, char(31), target_work_item_id, char(31), relationship_type)]`
 
 func applyDependencyDrain(
 	ctx context.Context, conn driver.Conn, orgID, runID string, now time.Time, report WorkItemDependencyDrainOrg,
@@ -517,9 +520,9 @@ func applyDependencyDrain(
 	list := strings.Join(columns, ", ")
 	for start := 0; start < len(versions); start += workItemDependencyDrainDeleteVersionsPerMutation {
 		chunk := versions[start:min(start+workItemDependencyDrainDeleteVersionsPerMutation, len(versions))]
-		args := append(dependencyVersionsArgs(orgID, chunk), clickhouse.Named("run_id", runID), clickhouse.Named("stamp", now))
+		args := append(dependencyVersionsArgs(orgID, chunk), clickhouse.Named("run_id", runID), clickhouse.Named("stamp", now.Format("2006-01-02 15:04:05.000")))
 		if err := conn.Exec(ctx, "INSERT INTO "+workItemDependencyDrainBackup+" ("+list+", run_id, backed_up_at) SELECT "+list+
-			", {run_id:String}, {stamp:DateTime64(3, 'UTC')} FROM "+WorkItemDependencyDrainTable+" WHERE "+dependencyVersionsMatch, args...); err != nil {
+			", {run_id:String}, toDateTime64({stamp:String}, 3, 'UTC') FROM "+WorkItemDependencyDrainTable+" WHERE "+dependencyVersionsMatch, args...); err != nil {
 			return report, fmt.Errorf("%w: copy: %v", ErrWorkItemDependencyDrainBackup, err)
 		}
 	}

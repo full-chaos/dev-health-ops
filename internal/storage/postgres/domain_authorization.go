@@ -1144,6 +1144,11 @@ func coordinatorPosture() RolePosture {
 			// scheduler writes a webhook delivery's trigger payload through
 			// synchandoff.Mint. No UPDATE or DELETE.
 			{"sync_manual_triggers", true, false, false},
+			// backfill_jobs (CHAOS-2275): INSERT only. The scheduler records the
+			// history row of a configuration's initial backfill in the transaction
+			// that mints its occurrence. No UPDATE (the domain worker terminalizes
+			// the row) and no DELETE; the domain role still never creates one.
+			{"backfill_jobs", true, false, false},
 			// webhook_sync_requests (CHAOS-6695): the scheduler claims a
 			// webhook worker's request (FOR UPDATE SKIP LOCKED), records a
 			// failed attempt or a refusal (UPDATE), and deletes it in the

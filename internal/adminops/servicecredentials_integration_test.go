@@ -393,11 +393,12 @@ func credPython(t *testing.T, db *database, args []string) (int, string, string)
 	return code, stdout.String(), credStderr(code, stderr.String(), true)
 }
 
-func (db *database) credSession(t *testing.T, run func(*testing.T, *database, []string) (int, string, string)) []stepResult {
+func (db *database) credSession(t *testing.T, run func(*testing.T, *database, []string) (int, string, string)) ([]stepResult, map[int]map[string]bool) {
 	t.Helper()
 	db.credReset(t)
 	session := &credentialRun{tokens: map[string]string{}, full: map[string]string{}, expiry: map[string]expirySeen{}}
 	var out []stepResult
+	validity := map[int]map[string]bool{}
 	for index, s := range credScript {
 		start := time.Now()
 		if s.sql != "" {
@@ -413,16 +414,57 @@ func (db *database) credSession(t *testing.T, run func(*testing.T, *database, []
 		}
 		code, stdout, stderr := run(t, db, args)
 		out = append(out, stepResult{Args: s.args, Exit: code, Stdout: maskStdout(session, index, stdout), Stderr: session.m.mask(stderr), State: session.m.mask(db.credState(t, session, start))})
+		if s.args[0] == "list" && code == 0 {
+			validity[index] = db.expectedValidity(t, &session.m, stdout, start)
+		}
+	}
+	return out, validity
+}
+
+// expectedValidity is is_valid of each credential a list step prints, at the clock reading of that step:
+// not revoked, and not past expires_at. The rows' expiries are an hour in the past, 2001 or 2099, so the
+// reading never lands on a boundary and the value does not depend on how long the run took. It is keyed
+// by the label the masked stdout gives the credential.
+func (db *database) expectedValidity(t *testing.T, m *masker, stdout string, now time.Time) map[string]bool {
+	t.Helper()
+	var listed []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
+		t.Fatalf("list output is not JSON: %v", err)
+	}
+	rows, err := db.conn.Query(context.Background(), `SELECT id::text, revoked_at, expires_at FROM internal_service_credentials`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	valid := map[string]bool{}
+	for rows.Next() {
+		var id string
+		var revokedAt, expires *time.Time
+		if err := rows.Scan(&id, &revokedAt, &expires); err != nil {
+			t.Fatal(err)
+		}
+		valid[id] = revokedAt == nil && (expires == nil || !now.After(*expires))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]bool{}
+	for _, item := range listed {
+		if want, ok := valid[item.ID]; ok {
+			out[m.mask(item.ID)] = want
+		}
 	}
 	return out
 }
 
 // compareCredentials is compare plus the normalized stderr of every step.
 // isValidField is the computed is_valid key CHAOS-4032 added to list; the frozen Python build (adminPythonBuild)
-// predates it, so a list answer is compared without it and the key is checked on its own.
+// predates it, so a list answer is compared without it, and the key is checked against the rows at that step.
 var isValidField = regexp.MustCompile(`"is_valid": (true|false), `)
 
-func withoutIsValid(t *testing.T, steps []stepResult) []stepResult {
+func withoutIsValid(t *testing.T, steps []stepResult, validity map[int]map[string]bool) []stepResult {
 	t.Helper()
 	out := make([]stepResult, len(steps))
 	copy(out, steps)
@@ -433,15 +475,27 @@ func withoutIsValid(t *testing.T, steps []stepResult) []stepResult {
 		if found, ids := len(isValidField.FindAllString(step.Stdout, -1)), strings.Count(step.Stdout, `"id": `); found != ids {
 			t.Errorf("step %d (%s): %d is_valid keys for %d credentials: %s", index, strings.Join(step.Args, " "), found, ids, step.Stdout)
 		}
+		var listed []struct {
+			ID      string `json:"id"`
+			IsValid bool   `json:"is_valid"`
+		}
+		if err := json.Unmarshal([]byte(step.Stdout), &listed); err != nil {
+			t.Fatalf("step %d (%s): list output is not JSON: %v", index, strings.Join(step.Args, " "), err)
+		}
+		for _, item := range listed {
+			if want, ok := validity[index][item.ID]; !ok || want != item.IsValid {
+				t.Errorf("step %d (%s): credential %s is_valid %v, rows say %v", index, strings.Join(step.Args, " "), item.ID, item.IsValid, want)
+			}
+		}
 		out[index].Stdout = isValidField.ReplaceAllString(step.Stdout, "")
 	}
 	return out
 }
 
-func compareCredentials(t *testing.T, got, want []stepResult, wantName string) {
+func compareCredentials(t *testing.T, got, want []stepResult, validity map[int]map[string]bool, wantName string) {
 	t.Helper()
 	if wantName == "frozen Python" {
-		got = withoutIsValid(t, got)
+		got = withoutIsValid(t, got, validity)
 	}
 	compare(t, got, want, wantName)
 	for index := range got {
@@ -470,7 +524,8 @@ func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
 	request := venueoracle.ProgramRequest("service-credentials script", credPythonProgram, input, adminPythonSettings)
 	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
 		useAdminProducer(t, producer)
-		body, err := json.Marshal(startDatabase(t).credSession(t, credPython))
+		steps, _ := startDatabase(t).credSession(t, credPython)
+		body, err := json.Marshal(steps)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -482,8 +537,8 @@ func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := startDatabase(t)
-	got := db.credSession(t, credGo)
-	compareCredentials(t, got, frozen, "frozen Python")
+	got, validity := db.credSession(t, credGo)
+	compareCredentials(t, got, frozen, validity, "frozen Python")
 	refused, printed, usage := 0, 0, 0
 	for _, item := range frozen {
 		switch {

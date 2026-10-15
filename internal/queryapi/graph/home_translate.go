@@ -153,6 +153,12 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 			AllocationPct: a.AllocationPct,
 			PrsMerged:     int(a.PRsMerged),
 			ChurnLoc:      int(a.ChurnLOC),
+
+			Measure:          model.SankeyValueUnit(a.Measure),
+			Denominator:      a.Denominator,
+			SizingCoverage:   a.SizingCoverage,
+			UnsizedUnitCount: intPtr(a.UnsizedUnitCount),
+			WorkUnitCount:    intPtr(a.WorkUnitCount),
 		})
 	}
 
@@ -453,4 +459,13 @@ func homeFieldSelected(ctx context.Context, name string) bool {
 		}
 	}
 	return false
+}
+
+// intPtr narrows a nullable count; nil stays nil (not measured), a zero stays a zero.
+func intPtr(v *int64) *int {
+	if v == nil {
+		return nil
+	}
+	n := int(*v)
+	return &n
 }

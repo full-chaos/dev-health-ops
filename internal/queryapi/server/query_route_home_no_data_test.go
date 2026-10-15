@@ -21,14 +21,26 @@ func TestHomeCurrentAndLegacyDocumentsCarryTheirOwnSelections(t *testing.T) {
 			t.Fatal("a pre-CHAOS-8102 legacy Home document selects attribution")
 		}
 	}
-	// CHAOS-9817: the current text is the V11 text plus exactly the measured prior value of a delta, right after
+	// CHAOS-9624: the current text is the V12 text plus exactly the five measure selections of a rework theme
+	// allocation, right after churnLoc; no legacy text asks for them.
+	measureLines := "      measure\n      denominator\n      sizingCoverage\n      unsizedUnitCount\n      workUnitCount\n"
+	if strings.Count(registeredHomeDocument, "      churnLoc\n"+measureLines+"      __typename\n") != 1 {
+		t.Fatal("current Home document must select the tile measure fields exactly once, right after churnLoc")
+	}
+	if without := strings.Replace(registeredHomeDocument, measureLines, "", 1); without != registeredHomeV12Document {
+		t.Fatalf("the current Home document less the tile measure selections is not the V12 text:\n%s", without)
+	}
+	if strings.Contains(registeredHomeV12Document, "      denominator\n") {
+		t.Fatal("the V12 Home document selects the tile denominator; it must be the text from before")
+	}
+	// CHAOS-9817: the V12 text is the V11 text plus exactly the measured prior value of a delta, right after
 	// hasPriorData; no legacy text asks for it.
 	priorValueLine := "      priorValue\n"
-	if strings.Count(registeredHomeDocument, "      hasPriorData\n"+priorValueLine+"      spark {") != 1 {
-		t.Fatal("current Home document must select priorValue exactly once, right after a delta's hasPriorData")
+	if strings.Count(registeredHomeV12Document, "      hasPriorData\n"+priorValueLine+"      spark {") != 1 {
+		t.Fatal("V12 Home document must select priorValue exactly once, right after a delta's hasPriorData")
 	}
-	if without := strings.Replace(registeredHomeDocument, "      hasPriorData\n"+priorValueLine, "      hasPriorData\n", 1); without != registeredHomeV11Document {
-		t.Fatalf("the current Home document less the priorValue selection is not the V11 text:\n%s", without)
+	if without := strings.Replace(registeredHomeV12Document, "      hasPriorData\n"+priorValueLine, "      hasPriorData\n", 1); without != registeredHomeV11Document {
+		t.Fatalf("the V12 Home document less the priorValue selection is not the V11 text:\n%s", without)
 	}
 	if strings.Contains(registeredHomeV11Document, "      hasPriorData\n"+priorValueLine) {
 		t.Fatal("the V11 Home document selects a delta's priorValue; it must be the text from before")
@@ -151,6 +163,7 @@ func TestHomeCurrentAndLegacyDocumentsCarryTheirOwnSelections(t *testing.T) {
 	}
 	documents := map[string]string{
 		"current": registeredHomeDocument,
+		"V12":     registeredHomeV12Document,
 		"V11":     registeredHomeV11Document,
 		"V10":     registeredHomeV10Document,
 		"V9":      registeredHomeV9Document,
@@ -175,8 +188,8 @@ func TestHomeCurrentAndLegacyDocumentsCarryTheirOwnSelections(t *testing.T) {
 
 func TestHomeCurrentAndLegacyTextsResolveToHome(t *testing.T) {
 	legacy := legacyDigestsByOperation["home"]
-	if len(legacy) != 11 || legacy[0] != digestHex(registeredHomeV1Document) || legacy[1] != digestHex(registeredHomeV2Document) || legacy[2] != digestHex(registeredHomeV3Document) || legacy[3] != digestHex(registeredHomeV4Document) || legacy[4] != digestHex(registeredHomeV5Document) || legacy[5] != digestHex(registeredHomeV6Document) || legacy[6] != digestHex(registeredHomeV7Document) || legacy[7] != digestHex(registeredHomeV8Document) || legacy[8] != digestHex(registeredHomeV9Document) || legacy[9] != digestHex(registeredHomeV10Document) || legacy[10] != digestHex(registeredHomeV11Document) {
-		t.Fatalf("legacyDigestsByOperation[home] = %v, want the V1 to V11 document digests", legacy)
+	if len(legacy) != 12 || legacy[0] != digestHex(registeredHomeV1Document) || legacy[1] != digestHex(registeredHomeV2Document) || legacy[2] != digestHex(registeredHomeV3Document) || legacy[3] != digestHex(registeredHomeV4Document) || legacy[4] != digestHex(registeredHomeV5Document) || legacy[5] != digestHex(registeredHomeV6Document) || legacy[6] != digestHex(registeredHomeV7Document) || legacy[7] != digestHex(registeredHomeV8Document) || legacy[8] != digestHex(registeredHomeV9Document) || legacy[9] != digestHex(registeredHomeV10Document) || legacy[10] != digestHex(registeredHomeV11Document) || legacy[11] != digestHex(registeredHomeV12Document) {
+		t.Fatalf("legacyDigestsByOperation[home] = %v, want the V1 to V12 document digests", legacy)
 	}
 	byDigest, err := buildOperationByDigest(
 		map[string]string{"home": digestHex(registeredHomeDocument)},
@@ -185,7 +198,7 @@ func TestHomeCurrentAndLegacyTextsResolveToHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"home_captured.graphql", "home_v11_captured.graphql", "home_v10_captured.graphql", "home_v9_captured.graphql", "home_v8_captured.graphql", "home_v7_captured.graphql", "home_v6_captured.graphql", "home_v5_captured.graphql", "home_v4_captured.graphql", "home_v3_captured.graphql", "home_v2_captured.graphql", "home_v1_captured.graphql"} {
+	for _, name := range []string{"home_captured.graphql", "home_v12_captured.graphql", "home_v11_captured.graphql", "home_v10_captured.graphql", "home_v9_captured.graphql", "home_v8_captured.graphql", "home_v7_captured.graphql", "home_v6_captured.graphql", "home_v5_captured.graphql", "home_v4_captured.graphql", "home_v3_captured.graphql", "home_v2_captured.graphql", "home_v1_captured.graphql"} {
 		text, err := os.ReadFile("testdata/wire_capture/" + name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)

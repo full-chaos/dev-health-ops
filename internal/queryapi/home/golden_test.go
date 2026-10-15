@@ -296,6 +296,20 @@ func assertResponseEqual(t *testing.T, got, want Response) {
 		}
 		got.Deltas[i].PriorValue = nil
 	}
+	// CHAOS-9624: the tile's measure fields are GraphQL only (json "-"): the golden cannot hold them. The
+	// tile is measured in WORK_UNITS, with the denominator its percentages divide by and no sizing.
+	got.ReworkThemeAllocation = append([]ReworkThemeAllocation{}, got.ReworkThemeAllocation...)
+	total := 0.0
+	for _, row := range got.ReworkThemeAllocation {
+		total += row.Allocation
+	}
+	for i := range got.ReworkThemeAllocation {
+		row := &got.ReworkThemeAllocation[i]
+		if row.Measure != "WORK_UNITS" || row.Denominator != total || row.SizingCoverage != nil || row.UnsizedUnitCount != nil || row.WorkUnitCount != nil {
+			t.Errorf("theme %s measure fields = %+v, want WORK_UNITS over denominator %v and no sizing", row.Theme, *row, total)
+		}
+		row.Measure, row.Denominator = "", 0
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", got, want)
 	}

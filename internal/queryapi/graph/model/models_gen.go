@@ -1460,12 +1460,17 @@ type ReviewEdgesResult struct {
 }
 
 type ReworkThemeAllocation struct {
-	Theme         string  `json:"theme"`
-	Label         string  `json:"label"`
-	Allocation    float64 `json:"allocation"`
-	AllocationPct float64 `json:"allocationPct"`
-	PrsMerged     int     `json:"prsMerged"`
-	ChurnLoc      int     `json:"churnLoc"`
+	Theme            string          `json:"theme"`
+	Label            string          `json:"label"`
+	Allocation       float64         `json:"allocation"`
+	AllocationPct    float64         `json:"allocationPct"`
+	PrsMerged        int             `json:"prsMerged"`
+	ChurnLoc         int             `json:"churnLoc"`
+	Measure          SankeyValueUnit `json:"measure"`
+	Denominator      float64         `json:"denominator"`
+	SizingCoverage   *float64        `json:"sizingCoverage,omitempty"`
+	UnsizedUnitCount *int            `json:"unsizedUnitCount,omitempty"`
+	WorkUnitCount    *int            `json:"workUnitCount,omitempty"`
 }
 
 type SankeyRequestInput struct {

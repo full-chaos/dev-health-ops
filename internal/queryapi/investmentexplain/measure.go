@@ -14,12 +14,12 @@ import (
 // ISSUE_SIZE (D5999) weighs each unit by its issue size, 1 when unsized, and is served only by a surface that
 // carries its sizing coverage in the same answer (D6027): the REST investment response (sizing_coverage,
 // unsized_unit_count, sizing_note) and the explanation (on each finding). The surfaces that carry no coverage yet
-// stay on COUNT (each unit 1): the Home tile (CHAOS-9624 adds its coverage) and the sunburst and the Operating
-// Review (their own sub-issue).
+// stay on COUNT (each unit 1): the sunburst and the Operating Review (their own sub-issue). The Home tile carries its
+// coverage (CHAOS-9624: sizingCoverage, unsizedUnitCount, workUnitCount on each theme row) and is on ISSUE_SIZE.
 const (
 	RESTInvestmentMeasure     = MeasureIssueSize
 	ExplanationDefaultMeasure = MeasureIssueSize
-	HomeTileMeasure           = MeasureCount
+	HomeTileMeasure           = MeasureIssueSize
 	SunburstMeasure           = MeasureCount
 	OperatingReviewMeasure    = MeasureCount
 )

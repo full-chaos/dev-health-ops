@@ -62,6 +62,28 @@ type Item struct {
 	StartedAt   *time.Time
 	CompletedAt *time.Time
 	StoryPoints *float64
+	// LinkedPRs are the pull requests linked to the item through work_graph_issue_pr. The daily completion
+	// compute reads them for churn_loc; no other compute does.
+	LinkedPRs []LinkedPR
+}
+
+// Link tiers of work_graph_issue_pr.provenance, strongest first. All three count as a link; a consumer names the
+// tier and never presents a lower one as native.
+const (
+	LinkTierNative       = "native"
+	LinkTierExplicitText = "explicit_text"
+	LinkTierHeuristic    = "heuristic"
+)
+
+// LinkedPR is one pull request linked to a work item. RepoID and Number are the pull request's own key (the
+// repo_id of work_graph_issue_pr is the pull request's repository, not the item's). Additions and Deletions are
+// nil when the pull request row is missing or holds no size: the size is unknown, which is not zero lines.
+type LinkedPR struct {
+	RepoID     uuid.UUID
+	Number     uint32
+	Provenance string
+	Additions  *uint32
+	Deletions  *uint32
 }
 
 // TeamResolver returns the raw team id of the item at `index` of the item
@@ -229,4 +251,5 @@ func ComputeIssueTypeMetricsDaily(
 type completionBucket struct {
 	deliveryUnits, completed, churn int
 	cycleHours                      []float64
+	prs                             map[linkedPRKey]struct{}
 }

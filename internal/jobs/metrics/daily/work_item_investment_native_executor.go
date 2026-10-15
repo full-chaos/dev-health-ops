@@ -84,6 +84,12 @@ func (executor *WorkItemInvestmentExecutor) ComputeFamily(
 			}
 		}
 
+		if err := attachWorkItemLinkedPullRequests(
+			ctx, executor.conn, run.OrganizationID, items, scope.start, scope.end,
+		); err != nil {
+			return wrapWorkItemPartialWrite(WorkItemInvestmentFamilyName, total, repoID, err)
+		}
+
 		computedAt := executor.nowUTC()
 		rows, err := workitemengine.ComputeWorkItemCompletionDaily(
 			items, scope.start, scope.end, workItemEngineTeamResolver(items, attributions),
@@ -114,4 +120,29 @@ func isNilEngine(engine any) bool {
 	}
 	value := reflect.ValueOf(engine)
 	return value.Kind() == reflect.Pointer && value.IsNil()
+}
+
+// attachWorkItemLinkedPullRequests loads the linked pull requests of the items completed on the day, the only items
+// the completion compute reads them for, and sets them on those items.
+func attachWorkItemLinkedPullRequests(
+	ctx context.Context, conn repositoryRows, organizationID string, items []workitemengine.Item, start, end time.Time,
+) error {
+	var completedIDs []string
+	for _, item := range items {
+		if item.CompletedAt == nil {
+			continue
+		}
+		completed := item.CompletedAt.UTC()
+		if !completed.Before(start) && completed.Before(end) {
+			completedIDs = append(completedIDs, item.WorkItemID)
+		}
+	}
+	linked, err := LoadWorkItemLinkedPullRequests(ctx, conn, organizationID, completedIDs)
+	if err != nil {
+		return err
+	}
+	for index := range items {
+		items[index].LinkedPRs = linked[items[index].WorkItemID]
+	}
+	return nil
 }

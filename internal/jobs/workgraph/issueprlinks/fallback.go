@@ -5,6 +5,8 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
 )
 
 // # Native outranks every fallback (chris, 2026-10-15)
@@ -16,12 +18,6 @@ import (
 // issue with a native pull request link gets no lower-tier link to any pull
 // request. The rule is provider-agnostic: a pull request is (repo_id, number)
 // and an issue is its work_item_id, whatever system minted either.
-
-// Provenance tiers below native. Only these are ever outranked.
-const (
-	ProvenanceExplicitText = "explicit_text"
-	ProvenanceHeuristic    = "heuristic"
-)
 
 // PullRequestKey names one pull request the way work_graph_issue_pr does.
 type PullRequestKey struct {
@@ -111,7 +107,7 @@ func PlanOutrankedFallbacks(stored []Link) []Link {
 	native := NewNativeLinks(stored)
 	var outranked []Link
 	for _, link := range stored {
-		if link.Provenance != ProvenanceExplicitText && link.Provenance != ProvenanceHeuristic {
+		if link.Provenance != edges.ProvenanceExplicitText && link.Provenance != edges.ProvenanceHeuristic {
 			continue
 		}
 		if native.Outranks(link.RepoID, link.PRNumber, link.WorkItemID) {

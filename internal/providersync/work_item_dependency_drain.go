@@ -126,7 +126,7 @@ type WorkItemDependencyDrainOrg struct {
 	BackupRows             int `json:"backup_rows"`
 	// Deleted counts relations (keys); BackupRows counts the physical versions saved, which is more when a key held
 	// older versions no merge had folded.
-	Deleted                int `json:"deleted"`
+	Deleted int `json:"deleted"`
 	// SurvivedTheDelete is drainable versions that are still stored after the delete. Always 0 when it returns.
 	SurvivedTheDelete int   `json:"survived_the_delete"`
 	Restored          int   `json:"restored"`

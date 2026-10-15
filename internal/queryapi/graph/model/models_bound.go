@@ -73,6 +73,11 @@ type SankeyCoverage struct {
 	DirectRepoCoverage       *float64 `json:"directRepoCoverage"`
 	TeamFallbackRepoCoverage *float64 `json:"teamFallbackRepoCoverage"`
 	RepoFanoutReposPerUnit   *float64 `json:"repoFanoutReposPerUnit"`
+	// SizingCoverage is the share of the window's work units that carry an issue size, and UnsizedUnitCount the
+	// units that do not (CHAOS-9619): an unsized unit counts 1 in the ISSUE_SIZE measure. Null = not measured
+	// (the non-investment path, or no unit in the window).
+	SizingCoverage   *float64 `json:"sizingCoverage"`
+	UnsizedUnitCount *int     `json:"unsizedUnitCount"`
 }
 
 // DataHealth is the operator data-health result. Team is the requested team

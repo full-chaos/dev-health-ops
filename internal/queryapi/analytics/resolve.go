@@ -590,8 +590,17 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		Nodes:    nodes,
 		Edges:    edges,
 		Coverage: coverage,
-		Unit:     model.SankeyValueUnitWorkUnits,
+		Unit:     sankeyValueUnit(req.Measure),
 	}, nil
+}
+
+// sankeyValueUnit names what a Sankey value counts: the issue size of the work units under ISSUE_SIZE
+// (CHAOS-9619, an unsized unit counts 1), work units otherwise.
+func sankeyValueUnit(measure Measure) model.SankeyValueUnit {
+	if measure == MeasureIssueSize {
+		return model.SankeyValueUnitIssueSize
+	}
+	return model.SankeyValueUnitWorkUnits
 }
 
 // resolveFlowMatrix ports the batch.flow_matrix branch of

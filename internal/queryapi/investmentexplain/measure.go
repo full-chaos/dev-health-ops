@@ -3,6 +3,8 @@ package investmentexplain
 import (
 	"errors"
 	"fmt"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 )
 
 // InvestmentShareMeasure is THE measure the investment shares of the REST investment endpoint
@@ -30,10 +32,15 @@ var ErrMeasureRequired = errors.New("investmentexplain: the read names no known 
 //
 // COUNT is the unit's probability for the subcategory times those two shares: one unit counts 1
 // across the repositories it touches and the subcategories it spreads over.
+//
+// ISSUE_SIZE (CHAOS-9619, D5999) is COUNT weighed by the unit's issue size, 1 when the unit has none: the source must
+// carry analytics.UnitSizeWeightColumn (MeasureSource). With no sized unit in scope it equals COUNT.
 func MeasureValueSQL(measure, unitWeightSQL, shareSQL string) (string, error) {
 	switch measure {
 	case MeasureCount:
 		return fmt.Sprintf("sum(subcategory_kv.2 * %s * %s)", unitWeightSQL, shareSQL), nil
+	case MeasureIssueSize:
+		return fmt.Sprintf("sum(subcategory_kv.2 * %s * %s * %s)", unitWeightSQL, shareSQL, analytics.UnitSizeWeightColumn), nil
 	}
 	return "", fmt.Errorf("%w: %q", ErrMeasureRequired, measure)
 }
@@ -41,8 +48,18 @@ func MeasureValueSQL(measure, unitWeightSQL, shareSQL string) (string, error) {
 // requireMeasure refuses a read that names no known measure.
 func (f BreakdownFilters) requireMeasure() error {
 	switch f.Measure {
-	case MeasureCount:
+	case MeasureCount, MeasureIssueSize:
 		return nil
 	}
 	return fmt.Errorf("%w: %q", ErrMeasureRequired, f.Measure)
+}
+
+// MeasureSource is the work-unit source ("(...) AS work_unit_investments") a read of measure runs on: for
+// ISSUE_SIZE the source with each unit's size weight (analytics.IssueSizedSource), for COUNT the source unchanged,
+// so a COUNT read's SQL does not move.
+func MeasureSource(measure, aliasedSource string) (string, error) {
+	if measure != MeasureIssueSize {
+		return aliasedSource, nil
+	}
+	return analytics.IssueSizedSource(aliasedSource, "work_unit_investments")
 }

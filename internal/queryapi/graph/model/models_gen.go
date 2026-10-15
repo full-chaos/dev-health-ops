@@ -2445,6 +2445,7 @@ type MeasureInput string
 
 const (
 	MeasureInputCount                MeasureInput = "COUNT"
+	MeasureInputIssueSize            MeasureInput = "ISSUE_SIZE"
 	MeasureInputChurnLoc             MeasureInput = "CHURN_LOC"
 	MeasureInputPrReworkRatio        MeasureInput = "PR_REWORK_RATIO"
 	MeasureInputCycleTimeHours       MeasureInput = "CYCLE_TIME_HOURS"
@@ -2469,6 +2470,7 @@ const (
 
 var AllMeasureInput = []MeasureInput{
 	MeasureInputCount,
+	MeasureInputIssueSize,
 	MeasureInputChurnLoc,
 	MeasureInputPrReworkRatio,
 	MeasureInputCycleTimeHours,
@@ -2493,7 +2495,7 @@ var AllMeasureInput = []MeasureInput{
 
 func (e MeasureInput) IsValid() bool {
 	switch e {
-	case MeasureInputCount, MeasureInputChurnLoc, MeasureInputPrReworkRatio, MeasureInputCycleTimeHours, MeasureInputThroughput, MeasureInputPipelineSuccessRate, MeasureInputPipelineFailureRate, MeasureInputPipelineDurationP95, MeasureInputPipelineQueueTime, MeasureInputPipelineRerunRate, MeasureInputTestPassRate, MeasureInputTestFailureRate, MeasureInputTestFlakeRate, MeasureInputTestSuiteDurationP95, MeasureInputCoverageLinePct, MeasureInputCoverageBranchPct, MeasureInputCoverageDeltaPct, MeasureInputFlagFrictionDelta, MeasureInputFlagErrorRateDelta, MeasureInputFlagCoverageRatio, MeasureInputFlagActivationRate:
+	case MeasureInputCount, MeasureInputIssueSize, MeasureInputChurnLoc, MeasureInputPrReworkRatio, MeasureInputCycleTimeHours, MeasureInputThroughput, MeasureInputPipelineSuccessRate, MeasureInputPipelineFailureRate, MeasureInputPipelineDurationP95, MeasureInputPipelineQueueTime, MeasureInputPipelineRerunRate, MeasureInputTestPassRate, MeasureInputTestFailureRate, MeasureInputTestFlakeRate, MeasureInputTestSuiteDurationP95, MeasureInputCoverageLinePct, MeasureInputCoverageBranchPct, MeasureInputCoverageDeltaPct, MeasureInputFlagFrictionDelta, MeasureInputFlagErrorRateDelta, MeasureInputFlagCoverageRatio, MeasureInputFlagActivationRate:
 		return true
 	}
 	return false
@@ -2567,15 +2569,17 @@ type SankeyValueUnit string
 
 const (
 	SankeyValueUnitWorkUnits SankeyValueUnit = "WORK_UNITS"
+	SankeyValueUnitIssueSize SankeyValueUnit = "ISSUE_SIZE"
 )
 
 var AllSankeyValueUnit = []SankeyValueUnit{
 	SankeyValueUnitWorkUnits,
+	SankeyValueUnitIssueSize,
 }
 
 func (e SankeyValueUnit) IsValid() bool {
 	switch e {
-	case SankeyValueUnitWorkUnits:
+	case SankeyValueUnitWorkUnits, SankeyValueUnitIssueSize:
 		return true
 	}
 	return false

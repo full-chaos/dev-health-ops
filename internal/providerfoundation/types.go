@@ -396,7 +396,11 @@ type ProviderError struct {
 	// that produced this classification. Empty when the error never reached
 	// an HTTP response (e.g. a rate-limit gate denial before the request
 	// went out).
-	Path string
+	Path string `json:"-"`
+	// Route is a caller-supplied template for Path (e.g. /users/{login}),
+	// the only request-derived text Error() prints. Empty when the caller
+	// named none. Never holds a raw path.
+	Route string
 	// Body is the provider's response body as read (bounded by
 	// maxProviderErrorBody), kept for classification parsers that need the
 	// provider's own rejection detail. Error() never formats it: error text
@@ -417,8 +421,8 @@ func (e *ProviderError) Error() string {
 	if e.StatusCode != 0 {
 		message += fmt.Sprintf(" status=%d", e.StatusCode)
 	}
-	if e.Path != "" {
-		message += fmt.Sprintf(" path=%s", e.Path)
+	if e.Route != "" {
+		message += fmt.Sprintf(" route=%s", e.Route)
 	}
 	if e.Reason != "" {
 		message += fmt.Sprintf(" reason=%s", e.Reason)

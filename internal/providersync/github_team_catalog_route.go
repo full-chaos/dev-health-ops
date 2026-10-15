@@ -374,7 +374,7 @@ func (collector GitHubTeamCatalogRouteHandler) resolveEmail(
 	// A single user resource, not a list -- CollectGitHubLinkPages expects a
 	// bare-array or DataKey-wrapped page and cannot decode this shape, so the
 	// request goes straight through the client.
-	response, err := collector.Client.Do(ctx, http.MethodGet, "/users/"+url.PathEscape(login), nil)
+	response, err := collector.Client.Do(providerfoundation.WithRouteTemplate(ctx, "/users/{login}"), http.MethodGet, "/users/"+url.PathEscape(login), nil)
 	if err != nil {
 		return nil, err
 	}

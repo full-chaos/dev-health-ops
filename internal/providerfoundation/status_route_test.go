@@ -1,0 +1,54 @@
+package providerfoundation
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// A provider HTTP-status error must not print a path that carries a member
+// login (CHAOS-9761); it prints the caller's route template instead.
+func TestStatusErrorCarriesRouteTemplateNotRawPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	for name, tc := range map[string]struct {
+		path, route string
+	}{
+		"user":       {"/users/octocat-login", "/users/{login}"},
+		"membership": {"/orgs/acme/teams/platform/memberships/octocat-login", "/orgs/{org}/teams/{slug}/memberships/{login}"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureLogs(t)
+			client := transportClient(t, &http.Client{}, server.URL)
+			ctx := WithRouteTemplate(context.Background(), tc.route)
+			_, err := client.Do(ctx, http.MethodGet, tc.path+"?token=secret-query", nil)
+			var providerErr *ProviderError
+			if !errors.As(err, &providerErr) || providerErr.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("err = %v, want a 500 *ProviderError", err)
+			}
+			if strings.Contains(err.Error(), "octocat-login") || strings.Contains(logs.String(), "octocat-login") {
+				t.Fatalf("login reached the error or log: %q / %s", err.Error(), logs.String())
+			}
+			if !strings.Contains(err.Error(), "route="+tc.route) {
+				t.Fatalf("Error() = %q lacks route=%s", err.Error(), tc.route)
+			}
+		})
+	}
+}
+
+func TestStatusErrorWithoutRouteHasNoPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	client := transportClient(t, &http.Client{}, server.URL)
+	_, err := client.Do(context.Background(), http.MethodGet, "/users/octocat-login", nil)
+	if err == nil || strings.Contains(err.Error(), "octocat-login") || strings.Contains(err.Error(), "route=") {
+		t.Fatalf("Error() = %v, want no path and no route", err)
+	}
+}

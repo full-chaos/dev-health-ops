@@ -295,6 +295,20 @@ func responseLeftOrigin(response *http.Response, target *url.URL) bool {
 		!sameOrigin(response.Request.URL, target)
 }
 
+type routeKey struct{}
+
+// WithRouteTemplate names the route of the next Do call with a template
+// (e.g. /users/{login}) so a failure can say which route failed without
+// printing a path that carries a member login.
+func WithRouteTemplate(ctx context.Context, template string) context.Context {
+	return context.WithValue(ctx, routeKey{}, template)
+}
+
+func routeTemplate(ctx context.Context) string {
+	template, _ := ctx.Value(routeKey{}).(string)
+	return template
+}
+
 func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader) (response *http.Response, err error) {
 	if c == nil || c.BaseURL == nil {
 		return nil, ErrCredentialInvalid
@@ -407,6 +421,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		// doc comment); Body is kept for classification parsers and never
 		// reaches a log.
 		classification.Path = target.Path
+		classification.Route = routeTemplate(ctx)
 		classification.Body = string(message)
 		retryDelay := c.retryDelay(attempt, classification.RetryAfter, classification.Class)
 		if classification.Class == ErrorRateLimited && c.Gate != nil {

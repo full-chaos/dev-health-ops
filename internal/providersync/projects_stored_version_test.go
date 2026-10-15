@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -217,7 +218,7 @@ func gitlabMilestoneFixture(t *testing.T, projects map[string]string, milestones
 				http.NotFound(w, r)
 				return
 			}
-			if r.URL.Query().Get("include_parent_milestones") != "true" {
+			if r.URL.Query().Get("include_ancestors") != "true" && r.URL.Query().Get("include_parent_milestones") != "true" {
 				// GitLab lists the ancestor groups' milestones (they carry group_id)
 				// only when asked.
 				var all, own []json.RawMessage
@@ -595,8 +596,9 @@ func TestGitLabProjectTargetCountsGroupMilestones(t *testing.T) {
 	for _, request := range requests {
 		if strings.Contains(request, "/projects/100/milestones") {
 			calls++
-			if !strings.Contains(request, "include_parent_milestones=true") {
-				t.Fatalf("milestone read %q does not ask for the parent groups' milestones", request)
+			query := mustParseRequestQuery(t, request)
+			if query.Get("include_ancestors") != "true" || query.Get("include_parent_milestones") != "true" {
+				t.Fatalf("milestone read %q does not ask for the ancestor groups' milestones by both names", request)
 			}
 		}
 	}
@@ -616,4 +618,13 @@ func TestGitLabGroupMilestoneOwnerNamesTheGroup(t *testing.T) {
 			t.Errorf("owner(%q, %s) = %q, want %q", tc.webURL, tc.groupID, got, tc.want)
 		}
 	}
+}
+
+func mustParseRequestQuery(t *testing.T, request string) url.Values {
+	t.Helper()
+	parsed, err := url.Parse(request)
+	if err != nil {
+		t.Fatalf("request %q: %v", request, err)
+	}
+	return parsed.Query()
 }

@@ -2908,7 +2908,16 @@ ClickHouse, every ordered pair of jira, gitlab, github and linear).
 The derivation counts each team's candidates on a repo per link tier. The tier of a `work_graph_issue_pr` candidate is that
 row's `provenance`; a pull request's / merge request's own `repo_id` (`work_items.type` `pr` or `merge_request`) and its
 `work_item_dependencies` donor edge are provider-recorded facts and count as `native` (the issue<->PR link builder stamps
-the same dependency row `native`). An issue's own `repo_id` is never a candidate (entity tree: Repository <> Pull request
+the same dependency row `native`). **A key parsed from the pull request's text is not (chris, 2026-10-15: text is a
+fallback only).** A donor reached only through an `extkey:KEY` target (`external_issue_key` or `relates_to`, from the
+pull request body, head branch or a comment) counts as `explicit_text`; a native donor edge of the same pull request is
+used first, whatever the order of the targets; and a pull request that has a `native` row in `work_graph_issue_pr`
+gets no candidate from its text key at all. The same holds for a `work_graph_issue_pr` row whose work item reaches a
+team only through a text key: it counts at `explicit_text` or its own lower tier. The run logs
+`team_repo_ownership_derivation.text_key_donors` (`explicit_text_candidates`, `skipped_for_native_link`); tests:
+`team_repo_ownership_text_key_tier_test.go` (GitHub pull requests and GitLab merge requests, Jira and Linear keys, an
+owner issue of each of jira, linear, github and gitlab). The prod case: deploy pull requests whose text named `WEB-5`
+made the Web team a co-owner of the deploy repository at the native tier. An issue's own `repo_id` is never a candidate (entity tree: Repository <> Pull request
 <> Issue <> Project): a GitHub or GitLab issue reaches a repo only through its linked pull request rows in
 `work_graph_issue_pr`, with that link's tier. A repo whose only evidence is an issue's own `repo_id` gets no inferred
 owner. **Every team with a link of any tier owns the repo** (all three tiers are links) and gets its own

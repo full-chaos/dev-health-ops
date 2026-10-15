@@ -73,3 +73,12 @@ func TestRouteTemplateDoesNotOutliveItsCall(t *testing.T) {
 		t.Fatalf("Error() = %v, want no route on a plain Do", err)
 	}
 }
+
+func TestObjectTooLargeErrorCarriesNoPath(t *testing.T) {
+	for _, length := range []int64{123, -1} {
+		message := (&ObjectTooLargeError{Path: "/api/v4/groups/secret-group", CapBytes: 10, ContentLength: length}).Error()
+		if strings.Contains(message, "secret-group") || strings.Contains(message, "/api/") {
+			t.Fatalf("Error() = %q carries the request path", message)
+		}
+	}
+}

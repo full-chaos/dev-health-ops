@@ -86,7 +86,8 @@ func (e *EffectBoundError) Unwrap() []error {
 // uses errors.As to react to the cap specifically instead of failing closed.
 type ObjectTooLargeError struct {
 	// Path is the request path fetchObject was reading when the cap was hit.
-	Path string
+	// Error() never prints it: a path can carry a group or member name.
+	Path string `json:"-"`
 	// CapBytes is the shared cap (nativeMaxObjectBytes) that was exceeded.
 	CapBytes int
 	// ContentLength is the server-reported response size in bytes, or -1
@@ -96,9 +97,9 @@ type ObjectTooLargeError struct {
 
 func (e *ObjectTooLargeError) Error() string {
 	if e.ContentLength >= 0 {
-		return fmt.Sprintf("provider object at %s exceeds %d byte cap: %d bytes", e.Path, e.CapBytes, e.ContentLength)
+		return fmt.Sprintf("provider object exceeds %d byte cap: %d bytes", e.CapBytes, e.ContentLength)
 	}
-	return fmt.Sprintf("provider object at %s exceeds %d byte cap (content-length unknown)", e.Path, e.CapBytes)
+	return fmt.Sprintf("provider object exceeds %d byte cap (content-length unknown)", e.CapBytes)
 }
 
 func (e *ObjectTooLargeError) Unwrap() error { return ErrNormalizationInvalid }

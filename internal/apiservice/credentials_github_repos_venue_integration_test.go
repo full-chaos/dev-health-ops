@@ -12,7 +12,9 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -403,20 +405,27 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	pythonProvider := strings.Split(golden.InspectRows(t, "python provider requests", func() string {
 		return strings.Join(stub.take(), "\n")
 	}), "\n")
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/credential-github-repos.go-pin.json", SHA256: browsePinSHA256, Ruling: browseRuling})
+	goCalls := map[string][]string{}
+	goStatus := map[string]int{}
 	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
 		Golden:    golden,
 		Normalize: dropGoOnlyBrowseScope,
+		Retire:    retiredBrowseRequest,
+		Pin:       pin,
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			calls := stub.take()
+			goCalls[request.Name], goStatus[request.Name] = calls, goResponse.Status
 			assertBrowseScopeFields(t, request, goResponse)
+			if retiredBrowseRequest(request) {
+				assertRetiredBrowse(t, request, goResponse, calls)
+				pin.Check(t, "provider: "+request.Name, strings.Join(calls, "\n"))
+			}
 		},
 	})
-	goProvider := stub.take()
-
-	providerSame := len(goProvider) > 0 && strings.Join(pythonProvider, "\n") == strings.Join(goProvider, "\n")
-	if !providerSame {
-		t.Errorf("provider requests differ:\n python:\n%s\n go:\n%s", strings.Join(pythonProvider, "\n"), strings.Join(goProvider, "\n"))
-	}
-	t.Logf("\n%sprovider requests (%d): %s\n", receipt, len(goProvider), venueoracle.Mark(providerSame))
+	providerSame := checkBrowseProviderRequests(t, requests, goCalls, goStatus, pythonProvider)
+	t.Logf("\n%sprovider requests: %s\n", receipt, venueoracle.Mark(providerSame))
+	pin.Finish(t)
 	golden.Finish(t)
 }
 
@@ -428,7 +437,7 @@ var browseScopeFields = []string{"owner_type", "installation_scoped", "diagnosti
 
 // dropGoOnlyBrowseScope removes the Go-only scope fields from a 200 listing body; every other byte still has to agree.
 func dropGoOnlyBrowseScope(request venueoracle.Request, body string) string {
-	if !strings.HasPrefix(request.Name, "github repos: ") {
+	if !strings.HasPrefix(request.Name, "github repos: ") || retiredBrowseRequest(request) {
 		return body
 	}
 	var decoded map[string]json.RawMessage
@@ -491,4 +500,258 @@ func assertBrowseScopeFields(t *testing.T, request venueoracle.Request, goRespon
 	default:
 		t.Errorf("%s: diagnostic %v is not a string or null", request.Name, value)
 	}
+}
+
+// browseRuling is the one-line ruling the pinned requests carry: GWC D6026 (the oracle's Python reference is the frozen
+// golden of D6025, so it cannot express a personal-owner browse).
+const browseRuling = "GWC D6026 (CHAOS-9787): an owner browse unions the token's /user/repos with the owner's own listing, calls /user/repos first and falls back to /users; the frozen Python reference of D6025 lists the owner route only"
+
+// browsePinSHA256 is the digest of testdata/venue/credential-github-repos.go-pin.json.
+const browsePinSHA256 = "e3b3b8c2952c4ca55064fe4cea3ace316ec12b2346931b039d55d5045118a0a2"
+
+// retiredBrowseNames are the owner requests whose Python answer the ruling retires: the 35 the frozen reference cannot
+// express (the union adds the token's repositories, a token listing that 404s is a credential fault, the owner's login
+// is redacted from the failure text, and the failing call named is /user/repos). Every other request, search with an
+// owner and every non-owner request included, is still compared byte for byte.
+var retiredBrowseNames = map[string]bool{
+	"github repos: org max_repos=1":                           true,
+	"github repos: org max_repos=2":                           true,
+	"github repos: org max_repos=3":                           true,
+	"github repos: org max_repos=4":                           true,
+	"github repos: org max_repos=0":                           true,
+	"github repos: org max_repos=-1":                          true,
+	"github repos: org max_repos=-3":                          true,
+	"github repos: org max_repos=100000":                      true,
+	"github repos: org max_repos=99999999999999999999999999":  true,
+	"github repos: org max_repos=-99999999999999999999999999": true,
+	"github repos: credential orgcfg with an owner":           true,
+	"github repos: credential orgdec with an owner":           true,
+	"github repos: credential orgboth with an owner":          true,
+	"github repos: credential orgnonstr with an owner":        true,
+	"github repos: credential orgemptycfg with an owner":      true,
+	"github repos: credential orgnonstrboth with an owner":    true,
+	"github repos: credential ghe with an owner":              true,
+	"github repos: credential gheorg with an owner":           true,
+	"github repos: credential cfgbase with an owner":          true,
+	"github repos: credential emptybase with an owner":        true,
+	"github repos: credential nullbase with an owner":         true,
+	"github repos: credential aliasbase with an owner":        true,
+	"github repos: credential bothbase with an owner":         true,
+	"github repos: credential aliasandcfg with an owner":      true,
+	"github repos: credential basequery with an owner":        true,
+	"github repos: credential basefrag with an owner":         true,
+	"github repos: credential basequeryfrag with an owner":    true,
+	"github repos: provider answer denied for an org":         true,
+	"github repos: provider answer forbidden for an org":      true,
+	"github repos: provider answer limited for an org":        true,
+	"github repos: provider answer toomany for an org":        true,
+	"github repos: provider answer notfound for an org":       true,
+	"github repos: provider answer teapot for an org":         true,
+	"github repos: provider answer dict for an org":           true,
+	"github repos: app appdenied with an owner":               true,
+}
+
+func retiredBrowseRequest(request venueoracle.Request) bool { return retiredBrowseNames[request.Name] }
+
+const browseBaseURLText = "github token repository listing was not found; check the credential's base URL"
+
+var browseCallPath = regexp.MustCompile(`^GET (/[^?\s]*)`)
+
+var browseRouteMarkers = []string{"/app/installations/", "/installation/repositories", "/search/repositories", "/orgs/", "/users/", "/user/repos"}
+
+// callRoute is the route of a recorded call, past a GitHub Enterprise base prefix; routeless is set when the call shows
+// no route at all (a base URL holding a query or a fragment folds the route into the query).
+func callRoute(call string) (route string, routeless bool) {
+	match := browseCallPath.FindStringSubmatch(call)
+	if match == nil {
+		return call, true
+	}
+	best := -1
+	for _, marker := range browseRouteMarkers {
+		if index := strings.Index(match[1], marker); index >= 0 && (best < 0 || index < best) {
+			best = index
+		}
+	}
+	if best < 0 {
+		return match[1], true
+	}
+	return match[1][best:], false
+}
+
+func callPath(call string) string {
+	route, _ := callRoute(call)
+	return route
+}
+
+// userReposCall reports a call to the token's own listing: the route /user/repos, or a call that shows no route at all.
+func userReposCall(call string) bool {
+	if !strings.HasPrefix(call, "GET ") {
+		return false
+	}
+	route, routeless := callRoute(call)
+	return routeless || route == "/user/repos"
+}
+
+// assertRetiredBrowse states, for a retired request, the specific Go behaviour the pin freezes, so a change to any clause
+// fails here with its name and not only as a pin diff: the owner is unioned with the token's repositories (token's
+// first), /user/repos is called before the owner's listing for a token credential and never for an App, a token
+// listing that 404s is a credential fault with the base URL text, and a failure text names the call that failed and
+// never the owner's login.
+func assertRetiredBrowse(t *testing.T, request venueoracle.Request, response venueoracle.Response, calls []string) {
+	t.Helper()
+	name := strings.TrimPrefix(request.Name, "github repos: ")
+	app := strings.HasPrefix(name, "app ")
+	paths := make([]string, 0, len(calls))
+	for _, call := range calls {
+		paths = append(paths, callPath(call))
+	}
+	if app {
+		for _, call := range calls {
+			if userReposCall(call) {
+				t.Errorf("%s: an App credential called /user/repos: %v", request.Name, calls)
+			}
+		}
+	} else if len(calls) == 0 || !userReposCall(calls[0]) {
+		t.Errorf("%s: a token credential's first provider call is %v, want /user/repos before the owner's listing", request.Name, calls)
+	}
+	for index, path := range paths {
+		if strings.HasPrefix(path, "/users/") && (index == 0 || !strings.HasPrefix(paths[index-1], "/orgs/")) {
+			t.Errorf("%s: %s is not the fallback after an /orgs call: %v", request.Name, path, paths)
+		}
+	}
+	var body struct {
+		Detail     string `json:"detail"`
+		Diagnostic string `json:"diagnostic"`
+		Repos      []struct {
+			FullName string `json:"full_name"`
+		} `json:"repos"`
+	}
+	if json.Unmarshal([]byte(response.Body), &body) != nil {
+		t.Errorf("%s: the answer is not JSON: %s", request.Name, response.Body)
+		return
+	}
+	if app && response.Status >= http.StatusBadRequest {
+		last := len(paths) - 1
+		if last < 1 || !strings.HasPrefix(paths[last], "/users/") || !strings.HasPrefix(paths[last-1], "/orgs/") {
+			t.Errorf("%s: an owner route that failed is not retried under /users/{owner}/repos: %v", request.Name, paths)
+		}
+	}
+	if body.Diagnostic == "owner_not_found" && !app && len(calls) < 2 {
+		t.Errorf("%s: owner_not_found after %v: a token listing that did not answer is not a missing owner", request.Name, calls)
+	}
+	switch response.Status {
+	case http.StatusOK:
+		if !app && strings.Contains(request.Path, "owner=other") && (len(body.Repos) == 0 || body.Repos[0].FullName != "other/Docs") {
+			t.Errorf("%s: the listing %v does not start with the token's own other/Docs: the union lists the token's repositories first", request.Name, body.Repos)
+		}
+	case http.StatusBadGateway:
+		if strings.HasPrefix(body.Detail, "github token repository listing") {
+			if body.Detail != browseBaseURLText || len(calls) != 1 || !userReposCall(calls[0]) {
+				t.Errorf("%s: a token listing 404 answered %q after %v, want %q after /user/repos only", request.Name, body.Detail, calls, browseBaseURLText)
+			}
+		}
+	}
+	if response.Status >= 400 && response.Status != http.StatusBadGateway || strings.HasPrefix(body.Detail, "github ") {
+		switch {
+		case strings.Contains(body.Detail, "acme"):
+			t.Errorf("%s: the failure text names the owner's login: %s", request.Name, body.Detail)
+		case app && strings.Contains(body.Detail, "/orgs/") && !strings.Contains(body.Detail, "/orgs/{login}/"):
+			t.Errorf("%s: an owner route failure does not carry {login}: %s", request.Name, body.Detail)
+		case !app && body.Detail != browseBaseURLText && strings.Contains(body.Detail, "repo:GET ") && !strings.Contains(body.Detail, "repo:GET /user/repos"):
+			t.Errorf("%s: the failure names %q, want the first failing call /user/repos", request.Name, body.Detail)
+		}
+	}
+}
+
+// checkBrowseProviderRequests holds the provider traffic of every request the ruling does not retire to Python's: a
+// request's Go calls equal Python's for it once the /user/repos and /users/{owner}/repos calls the ruling adds are
+// set aside. The retired requests' Python calls are unknown in number, so the check lines the other requests up
+// against Python's flat sequence, skipping a retired request's calls where it must.
+func checkBrowseProviderRequests(t *testing.T, requests []venueoracle.Request, goCalls map[string][]string, goStatus map[string]int, python []string) bool {
+	t.Helper()
+	expected := make([][]string, len(requests))
+	// free marks the requests whose Python calls are not lined up: the retired ones, and a request that failed on the
+	// token's own listing before the owner's (Go's only calls are /user/repos, and Python's call went to the owner).
+	free := make([]bool, len(requests))
+	maybeFree := make([]bool, len(requests))
+	for index, request := range requests {
+		if retiredBrowseRequest(request) {
+			free[index] = true
+			continue
+		}
+		onlyTokenListing := len(goCalls[request.Name]) > 0 && goStatus[request.Name] >= http.StatusBadRequest
+		for _, call := range goCalls[request.Name] {
+			onlyTokenListing = onlyTokenListing && callPath(call) == "/user/repos"
+		}
+		if onlyTokenListing {
+			maybeFree[index] = true
+		}
+		calls := goCalls[request.Name]
+		firstOrg := -1
+		for position, call := range calls {
+			if strings.HasPrefix(callPath(call), "/orgs/") {
+				firstOrg = position
+				break
+			}
+		}
+		for position, call := range calls {
+			path := callPath(call)
+			// The ruling's two added calls: every /user/repos page before the owner's /orgs listing, and the
+			// /users/{owner}/repos fallback after it.
+			if path == "/user/repos" && firstOrg > position {
+				continue
+			}
+			if strings.HasPrefix(path, "/users/") && strings.HasSuffix(path, "/repos") && firstOrg >= 0 && firstOrg < position {
+				continue
+			}
+			expected[index] = append(expected[index], call)
+		}
+	}
+	type state struct{ request, cursor int }
+	failed := map[state]bool{}
+	deepest := state{}
+	var match func(request, cursor int) bool
+	match = func(request, cursor int) bool {
+		if request > deepest.request {
+			deepest = state{request, cursor}
+		}
+		if request == len(requests) {
+			return cursor == len(python)
+		}
+		key := state{request, cursor}
+		if failed[key] {
+			return false
+		}
+		if free[request] {
+			for skip := 0; skip <= 12 && cursor+skip <= len(python); skip++ {
+				if match(request+1, cursor+skip) {
+					return true
+				}
+			}
+		} else {
+			if cursor+len(expected[request]) <= len(python) && strings.Join(python[cursor:cursor+len(expected[request])], "\n") == strings.Join(expected[request], "\n") {
+				if match(request+1, cursor+len(expected[request])) {
+					return true
+				}
+			}
+			if maybeFree[request] {
+				for skip := 0; skip <= 12 && cursor+skip <= len(python); skip++ {
+					if match(request+1, cursor+skip) {
+						return true
+					}
+				}
+			}
+		}
+		failed[key] = true
+		return false
+	}
+	if !match(0, 0) {
+		next := ""
+		if deepest.request < len(requests) {
+			next = requests[deepest.request].Name + " expects " + strings.Join(expected[deepest.request], " | ") + " at python line " + strconv.Itoa(deepest.cursor)
+		}
+		t.Errorf("the provider traffic of the requests that are not retired differs from Python's; no alignment past: %s", next)
+		return false
+	}
+	return true
 }

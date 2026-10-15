@@ -471,7 +471,7 @@ func normalizeJiraDependencies(
 					source, destination, relationship = destination, source, "blocks"
 				}
 				row := jiraDependencyRow(claim, source, destination, relationship, outwardRaw, normalizedAt)
-				row.RelationStartedAt = linkStart(linkedAt, target, normalizedAt)
+				row.RelationStartedAt = linkStart(linkedAt, target, outwardRaw, normalizedAt)
 				dependencies = append(dependencies, row)
 			}
 		}
@@ -485,7 +485,7 @@ func normalizeJiraDependencies(
 					source, destination = destination, source
 				}
 				row := jiraDependencyRow(claim, source, destination, relationship, inwardRaw, normalizedAt)
-				row.RelationStartedAt = linkStart(linkedAt, sourceKey, normalizedAt)
+				row.RelationStartedAt = linkStart(linkedAt, sourceKey, inwardRaw, normalizedAt)
 				dependencies = append(dependencies, row)
 			}
 		}
@@ -497,26 +497,36 @@ func normalizeJiraDependencies(
 var jiraIssueKeyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*-[0-9]+$`)
 
 // jiraLinkItemKey is the key of the linked issue a changelog "Link" item names: the `to` (or `from`) value,
-// else the last word of its description ("This issue blocks PAY-11").
-func jiraLinkItemKey(item map[string]any, valueField, textField string) string {
+// else the last word of its description ("This issue blocks PAY-11"). The phrase is the link type's wording
+// in that description ("blocks", "relates to", "is blocked by"), lower-cased, or "" when the description does
+// not have the "This issue <phrase> <key>" form.
+func jiraLinkItemKey(item map[string]any, valueField, textField string) (key, phrase string) {
+	text := strings.TrimSpace(stringFrom(item[textField]))
+	words := strings.Fields(text)
 	if value := strings.TrimSpace(stringFrom(item[valueField])); jiraIssueKeyPattern.MatchString(value) {
-		return value
+		key = value
+	} else if len(words) > 0 && jiraIssueKeyPattern.MatchString(words[len(words)-1]) {
+		key = words[len(words)-1]
 	}
-	words := strings.Fields(stringFrom(item[textField]))
-	if len(words) == 0 {
-		return ""
+	if key == "" {
+		return "", ""
 	}
-	if last := words[len(words)-1]; jiraIssueKeyPattern.MatchString(last) {
-		return last
+	if rest, found := strings.CutPrefix(strings.ToLower(text), "this issue "); found {
+		phrase = strings.TrimSpace(strings.TrimSuffix(rest, strings.ToLower(key)))
 	}
-	return ""
+	return key, phrase
 }
 
-// jiraLinkStartTimes is, by the key of the linked issue, the time of the changelog entry that added the issue
-// link on this issue: the provider's own time of the link. Jira's issuelinks carry no time; the changelog
-// does (a "Link" item, `to` set when a link is added, `from` set when it is removed). A link removed and
-// added again starts at its last addition; a removed link has no entry. A link without a changelog entry
-// is absent from the map, and its row keeps a NULL start: no time is invented.
+func jiraLinkStartKey(key, phrase string) string {
+	return key + "\x00" + strings.ToLower(strings.TrimSpace(phrase))
+}
+
+// jiraLinkStartTimes is, by the linked issue's key and the link type's wording, the time of the changelog entry
+// that added that issue link on this issue: the provider's own time of the link. Jira's issuelinks carry no
+// time; the changelog does (a "Link" item, `to` set when a link is added, `from` set when it is removed).
+// Two links of different types to one issue keep their own times. A link removed and added again starts at
+// its last addition; a removed link has no entry. A link without a changelog entry is absent from the map,
+// and its row keeps a NULL start: no time is invented.
 func jiraLinkStartTimes(issue map[string]any) map[string]time.Time {
 	changelog, _ := jiraMapValue(issue["changelog"])
 	type linkEvent struct {
@@ -540,11 +550,11 @@ func jiraLinkStartTimes(issue map[string]any) map[string]time.Time {
 			if !ok || !strings.EqualFold(stringFrom(item["field"]), "link") {
 				continue
 			}
-			if key := jiraLinkItemKey(item, "from", "fromString"); key != "" {
-				events = append(events, linkEvent{at: *at, index: index, key: key})
+			if key, phrase := jiraLinkItemKey(item, "from", "fromString"); key != "" {
+				events = append(events, linkEvent{at: *at, index: index, key: jiraLinkStartKey(key, phrase)})
 			}
-			if key := jiraLinkItemKey(item, "to", "toString"); key != "" {
-				events = append(events, linkEvent{at: *at, index: index, key: key, added: true})
+			if key, phrase := jiraLinkItemKey(item, "to", "toString"); key != "" {
+				events = append(events, linkEvent{at: *at, index: index, key: jiraLinkStartKey(key, phrase), added: true})
 			}
 		}
 	}
@@ -565,10 +575,14 @@ func jiraLinkStartTimes(issue map[string]any) map[string]time.Time {
 	return started
 }
 
-// linkStart is the start time of the link to the issue key, or nil: none in the changelog, or one after the
-// sync clock (a clock that disagrees with the provider is not a start).
-func linkStart(started map[string]time.Time, key string, normalizedAt time.Time) *time.Time {
-	at, ok := started[key]
+// linkStart is the start time of the link of that type to the issue key, or nil: none in the changelog, or one
+// after the sync clock (a clock that disagrees with the provider is not a start). An entry whose description
+// names no link type applies to a link of any type to that issue.
+func linkStart(started map[string]time.Time, key, phrase string, normalizedAt time.Time) *time.Time {
+	at, ok := started[jiraLinkStartKey(key, phrase)]
+	if !ok {
+		at, ok = started[jiraLinkStartKey(key, "")]
+	}
 	if !ok || at.After(normalizedAt) {
 		return nil
 	}

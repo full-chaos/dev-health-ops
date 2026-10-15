@@ -79,6 +79,59 @@ func TestRelationStartedAtJira(t *testing.T) {
 	}
 }
 
+// Two links of different types to the same issue each keep their own time, and removing one leaves the
+// other's: the changelog entry names the link type in its description ("This issue blocks OPS-2").
+func TestRelationStartedAtJiraLinksOfTwoTypesToOneIssue(t *testing.T) {
+	claim := Claim{Unit: Unit{OrgID: "org-1"}}
+	synced := matrixTime(t, "2026-10-12T12:00:00Z")
+	typed := func(created, from, to, phrase string) map[string]any {
+		item := map[string]any{"field": "Link", "fieldtype": "jira"}
+		if to != "" {
+			item["to"], item["toString"] = to, "This issue "+phrase+" "+to
+		}
+		if from != "" {
+			item["from"], item["fromString"] = from, "This issue "+phrase+" "+from
+		}
+		return map[string]any{"id": created + phrase, "created": created, "items": []any{item}}
+	}
+	issue := func(histories ...any) map[string]any {
+		return map[string]any{
+			"fields": map[string]any{"issuelinks": []any{
+				map[string]any{"type": map[string]any{"name": "Blocks", "outward": "blocks", "inward": "is blocked by"}, "outwardIssue": map[string]any{"key": "OPS-2"}},
+				map[string]any{"type": map[string]any{"name": "Relates", "outward": "relates to", "inward": "relates to"}, "outwardIssue": map[string]any{"key": "OPS-2"}},
+			}},
+			"changelog": map[string]any{"histories": histories},
+		}
+	}
+	startOf := func(rows []jiraWorkItemDependencyRow, relationship string) *time.Time {
+		for _, row := range rows {
+			if row.RelationshipType == relationship {
+				return row.RelationStartedAt
+			}
+		}
+		t.Fatalf("no %s row in %+v", relationship, rows)
+		return nil
+	}
+	both := issue(
+		typed("2026-09-01T09:00:00.000+0000", "", "OPS-2", "blocks"),
+		typed("2026-09-20T09:00:00.000+0000", "", "OPS-2", "relates to"))
+	rows := normalizeJiraDependencies(claim, "jira:OPS-1", both, synced)
+	if got := startOf(rows, "blocks"); got == nil || !got.Equal(matrixTime(t, "2026-09-01T09:00:00Z")) {
+		t.Errorf("blocks link start %v, want 2026-09-01T09:00:00Z (the relates-to link's later time was used)", got)
+	}
+	if got := startOf(rows, "relates_to"); got == nil || !got.Equal(matrixTime(t, "2026-09-20T09:00:00Z")) {
+		t.Errorf("relates-to link start %v, want 2026-09-20T09:00:00Z", got)
+	}
+	removed := issue(
+		typed("2026-09-01T09:00:00.000+0000", "", "OPS-2", "blocks"),
+		typed("2026-09-20T09:00:00.000+0000", "", "OPS-2", "relates to"),
+		typed("2026-09-22T09:00:00.000+0000", "OPS-2", "", "relates to"))
+	rows = normalizeJiraDependencies(claim, "jira:OPS-1", removed, synced)
+	if got := startOf(rows, "blocks"); got == nil || !got.Equal(matrixTime(t, "2026-09-01T09:00:00Z")) {
+		t.Errorf("after the relates-to link was removed the blocks start is %v, want 2026-09-01T09:00:00Z", got)
+	}
+}
+
 func TestRelationStartedAtGitLab(t *testing.T) {
 	claim := Claim{Unit: Unit{OrgID: "org-1"}}
 	synced := matrixTime(t, "2026-10-12T12:00:00Z")

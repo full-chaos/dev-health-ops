@@ -113,12 +113,12 @@ func ListGitHubRepositories(ctx context.Context, client *providerfoundation.HTTP
 	org, user := effectiveGitHubOwner(listing)
 	// Paths are relative to the client's base URL; HTTPClient.Do joins them under
 	// the base path (a GitHub Enterprise /api/v3 prefix).
-	path := "/user/repos"
+	path, route := "/user/repos", "/user/repos"
 	switch {
 	case org != "":
-		path = "/orgs/" + pythonparity.Quote(org, "") + "/repos"
+		path, route = "/orgs/"+pythonparity.Quote(org, "")+"/repos", "/orgs/{org}/repos"
 	case user != "":
-		path = "/users/" + pythonparity.Quote(user, "") + "/repos"
+		path, route = "/users/"+pythonparity.Quote(user, "")+"/repos", "/users/{user}/repos"
 	}
 	matched := 0
 	keep := func(raw json.RawMessage) bool {
@@ -130,6 +130,7 @@ func ListGitHubRepositories(ctx context.Context, client *providerfoundation.HTTP
 	}
 	options := providerfoundation.GitHubPageOptions{
 		Path:     path,
+		Route:    route,
 		Query:    url.Values{"per_page": {fmt.Sprint(repoListingPerPage)}},
 		MaxPages: repoListingMaxPages,
 		Keep:     keep,
@@ -194,9 +195,9 @@ func ListGitLabProjects(ctx context.Context, client *providerfoundation.HTTPClie
 	// /api/v4 onto it (gitlab_rest_base_url: base with a trailing slash trimmed,
 	// then /api/v4, always); Do joins the request path under the base path.
 	root := gitLabRESTPrefix
-	path := root + "/projects"
+	path, route := root+"/projects", "/projects"
 	if group := effectiveGitLabGroup(listing); group != "" {
-		path = root + "/groups/" + pythonparity.Quote(group, "") + "/projects"
+		path, route = root+"/groups/"+pythonparity.Quote(group, "")+"/projects", "/groups/{group}/projects"
 	}
 	// `1_000_000 if pattern and max_projects is not None else max_projects or
 	// 1_000_000`: a pattern reads everything, and a max of 0 is falsy here.
@@ -209,7 +210,7 @@ func ListGitLabProjects(ctx context.Context, client *providerfoundation.HTTPClie
 		maxPages = 1
 	}
 	page, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-		Path: path, PerPage: repoListingPerPage, MaxPages: maxPages,
+		Path: path, Route: route, PerPage: repoListingPerPage, MaxPages: maxPages,
 	})
 	if err != nil {
 		return nil, err

@@ -123,7 +123,7 @@ func (GitHubFilesRouteHandler) Collect(
 	client = &counted
 	root := providerRelativePath(client, "repos", owner, repository)
 	var repoPayload gitHubRepositoryPayload
-	if err := fetchObject(ctx, client, root, &repoPayload); err != nil {
+	if err := fetchObjectRoute(ctx, client, githubRepoRoute, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	repoID, err := repositoryIdentity(repoPayload.FullName)
@@ -153,7 +153,7 @@ func (GitHubFilesRouteHandler) Collect(
 	// rather than failing the unit over a well-formed response that was
 	// simply too big for the shared cap.
 	var tree gitHubTreePayload
-	treeErr := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree)
+	treeErr := fetchObjectRoute(ctx, client, githubTreeRoute, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree)
 	var tooLarge *providerfoundation.ObjectTooLargeError
 	treeCapExceeded := errors.As(treeErr, &tooLarge)
 	if treeCapExceeded {
@@ -223,7 +223,7 @@ func gitHubWalkTree(
 	root, sha, prefix string,
 ) ([]string, map[string]*int, error) {
 	var tree gitHubTreePayload
-	if err := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(sha), &tree); err != nil {
+	if err := fetchObjectRoute(ctx, client, githubTreeRoute, root+"/git/trees/"+url.PathEscape(sha), &tree); err != nil {
 		return nil, nil, fmt.Errorf("path=%q: %w", prefix, err)
 	}
 	if tree.Truncated {
@@ -291,7 +291,7 @@ func gitHubFilesTreeRef(
 		var commits []struct {
 			SHA string `json:"sha"`
 		}
-		if err := fetchObject(ctx, client, root+"/commits?"+query.Encode(), &commits); err != nil {
+		if err := fetchObjectRoute(ctx, client, githubCommitsRoute, root+"/commits?"+query.Encode(), &commits); err != nil {
 			return "", err
 		}
 		if len(commits) == 0 {
@@ -300,7 +300,7 @@ func gitHubFilesTreeRef(
 		return commits[0].SHA, nil
 	}
 	var branchPayload gitHubBranchPayload
-	if err := fetchObject(ctx, client, root+"/branches/"+url.PathEscape(branch), &branchPayload); err != nil {
+	if err := fetchObjectRoute(ctx, client, githubBranchRoute, root+"/branches/"+url.PathEscape(branch), &branchPayload); err != nil {
 		return "", err
 	}
 	return branchPayload.Commit.SHA, nil
@@ -371,7 +371,7 @@ func fetchGitHubFileContents(
 		if err != nil {
 			return nil, providerfoundation.ErrNormalizationInvalid
 		}
-		response, err := client.Do(ctx, "POST", gitHubGraphQLURL(client), bytes.NewReader(body))
+		response, err := client.DoRoute(ctx, "POST", graphQLRoute, gitHubGraphQLURL(client), bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}

@@ -23,6 +23,15 @@ const (
 	githubRunJobsRoute      = githubRepoRoute + "/actions/runs/{run}/jobs"
 	githubRunArtifactsRoute = githubRepoRoute + "/actions/runs/{run}/artifacts"
 
+	githubTreeRoute         = githubRepoRoute + "/git/trees/{ref}"
+	githubBranchRoute       = githubRepoRoute + "/branches/{branch}"
+	githubCommitRoute       = githubRepoRoute + "/commits/{sha}"
+	githubDependabotRoute   = githubRepoRoute + "/dependabot/alerts"
+	githubCodeScanningRoute = githubRepoRoute + "/code-scanning/alerts"
+	githubAdvisoriesRoute   = githubRepoRoute + "/security-advisories"
+
+	graphQLRoute = "/graphql"
+
 	gitlabProjectRoute = "/projects/{project}"
 
 	gitlabCommitsRoute       = gitlabProjectRoute + "/repository/commits"
@@ -33,5 +42,11 @@ const (
 	gitlabDeploymentsRoute   = gitlabProjectRoute + "/deployments"
 	gitlabReleasesRoute      = gitlabProjectRoute + "/releases"
 	gitlabLabelsRoute        = gitlabProjectRoute + "/labels"
+	gitlabTreeRoute          = gitlabProjectRoute + "/repository/tree"
+	gitlabBlameRoute         = gitlabProjectRoute + "/repository/files/{file}/blame"
+	gitlabCommitRoute        = gitlabProjectRoute + "/repository/commits/{sha}"
+	gitlabFeatureFlagsRoute  = gitlabProjectRoute + "/feature_flags"
+	gitlabFindingsRoute      = gitlabProjectRoute + "/vulnerability_findings"
+	gitlabDependenciesRoute  = gitlabProjectRoute + "/dependencies"
 	gitlabMilestonesRoute    = gitlabProjectRoute + "/milestones"
 )

@@ -56,7 +56,7 @@ func (prover githubRepoGrantAbsence) OwnershipAbsence(ctx context.Context, row O
 		strings.TrimSpace(slug) == "" || strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" || strings.Contains(repo, "/") {
 		return SnapshotAbsenceNotProven
 	}
-	response, err := prover.client.Do(ctx, http.MethodGet,
+	response, err := prover.client.DoRoute(ctx, http.MethodGet, "/orgs/{org}/teams/{slug}/repos/{owner}/{repo}",
 		"/orgs/"+url.PathEscape(prover.org)+"/teams/"+url.PathEscape(slug)+"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo), nil)
 	if err != nil {
 		if githubLookupNotFound(err) {
@@ -99,7 +99,7 @@ func (prover gitlabGroupProjectAbsence) OwnershipAbsence(ctx context.Context, ro
 	if name == "" {
 		return SnapshotAbsenceNotProven
 	}
-	response, err := prover.client.Do(ctx, http.MethodGet,
+	response, err := prover.client.DoRoute(ctx, http.MethodGet, "/groups/{group}/projects",
 		providerRelativePath(prover.client, "api", "v4", "groups", strings.TrimSpace(groupPath))+
 			"/projects?per_page="+strconv.Itoa(gitlabAbsenceSearchPerPage)+"&search="+url.QueryEscape(name), nil)
 	if err != nil {
@@ -171,7 +171,7 @@ func (prover jiraProjectAbsence) OwnershipAbsence(ctx context.Context, row Owner
 	}
 	query := url.Values{parameter: {value}, "maxResults": {"50"}, "status": jiraProjectAbsenceStatuses}
 	var page jiraTeamCatalogProjectSearchPayload
-	if err := jiraFetchObject(ctx, prover.client, http.MethodGet, "/rest/api/3/project/search?"+query.Encode(), nil, &page); err != nil {
+	if err := jiraFetchObject(ctx, prover.client, http.MethodGet, "/rest/api/3/project/search", "/rest/api/3/project/search?"+query.Encode(), nil, &page); err != nil {
 		return SnapshotAbsenceNotProven
 	}
 	if len(page.ErrorMessages) > 0 {
@@ -207,7 +207,7 @@ func (prover githubTeamAbsence) TeamAbsence(ctx context.Context, teamID string) 
 	if !okTeam || prover.client == nil || strings.TrimSpace(prover.org) == "" || strings.TrimSpace(slug) == "" {
 		return SnapshotAbsenceNotProven
 	}
-	response, err := prover.client.Do(ctx, http.MethodGet,
+	response, err := prover.client.DoRoute(ctx, http.MethodGet, "/orgs/{org}/teams/{slug}",
 		"/orgs/"+url.PathEscape(prover.org)+"/teams/"+url.PathEscape(slug), nil)
 	if err != nil {
 		if githubLookupNotFound(err) {
@@ -260,7 +260,7 @@ func (prover gitlabTeamAbsence) TeamAbsence(ctx context.Context, teamID string) 
 	if !okTeam || prover.client == nil || groupPath == "" {
 		return SnapshotAbsenceNotProven
 	}
-	response, err := prover.client.Do(ctx, http.MethodGet, providerRelativePath(prover.client, "api", "v4", "groups", groupPath), nil)
+	response, err := prover.client.DoRoute(ctx, http.MethodGet, "/groups/{group}", providerRelativePath(prover.client, "api", "v4", "groups", groupPath), nil)
 	if err != nil {
 		if gitlabLookupGroupNotFound(err) {
 			return SnapshotAbsenceProven

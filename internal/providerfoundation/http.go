@@ -302,10 +302,16 @@ type routeKey struct{}
 // /users/{login}) instead of the path. The template must be a static literal,
 // never built from a request value. It applies to this call only.
 func (c *HTTPClient) DoRoute(ctx context.Context, method, template, path string, body io.Reader) (*http.Response, error) {
+	if ctx == nil {
+		return c.Do(ctx, method, path, body)
+	}
 	return c.Do(context.WithValue(ctx, routeKey{}, template), method, path, body)
 }
 
 func routeTemplate(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
 	template, _ := ctx.Value(routeKey{}).(string)
 	return template
 }

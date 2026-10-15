@@ -71,7 +71,7 @@ func (handler GitLabCommitStatsRouteHandler) Collect(
 	counted.Doer = gitLabCommitStatsCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, &counted, root, &project); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -110,7 +110,7 @@ func (handler GitLabCommitStatsRouteHandler) Collect(
 		ctx,
 		&counted,
 		providerfoundation.GitLabPageOptions{
-			Path: root + "/repository/commits", Query: query,
+			Path: root + "/repository/commits", Route: gitlabCommitsRoute, Query: query,
 			PerPage: perPage, MaxPages: maxPages,
 		},
 	)
@@ -155,8 +155,8 @@ func (handler GitLabCommitStatsRouteHandler) Collect(
 	rows := make([]commitStatsRow, 0, statsLimit)
 	for _, commitHash := range commitHashes[:statsLimit] {
 		var detail gitLabCommitStatsPayload
-		if err := fetchObject(
-			ctx, &counted, root+"/repository/commits/"+url.PathEscape(commitHash), &detail,
+		if err := fetchObjectRoute(
+			ctx, &counted, gitlabCommitRoute, root+"/repository/commits/"+url.PathEscape(commitHash), &detail,
 		); err != nil {
 			// Preserve Python's accepted soft degradation only for ordinary
 			// per-commit detail failures. Authentication, rate limits, lease or

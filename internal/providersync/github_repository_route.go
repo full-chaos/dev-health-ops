@@ -147,7 +147,7 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 	counted.Doer = gitHubRepositoryCountingDoer{delegate: client.Doer, attempts: &requests}
 	var payload gitHubRepositoryPayload
 	path := providerRelativePath(&counted, "repos", owner, repository)
-	if err := fetchObject(ctx, &counted, path, &payload); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, githubRepoRoute, path, &payload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	fullName := payload.FullName

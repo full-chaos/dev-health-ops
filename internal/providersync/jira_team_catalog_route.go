@@ -442,7 +442,7 @@ func jiraTeamCatalogSearchProjects(
 			query.Set("status", status)
 		}
 		var page jiraTeamCatalogProjectSearchPayload
-		if fetchErr := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/project/search?"+query.Encode(), nil, &page); fetchErr != nil {
+		if fetchErr := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/project/search", "/rest/api/3/project/search?"+query.Encode(), nil, &page); fetchErr != nil {
 			if pages == 0 {
 				return search, false, 0, "page_error", fetchErr
 			}
@@ -490,7 +490,7 @@ func (handler JiraTeamCatalogRouteHandler) collectSprints(
 	for _, key := range projectKeys {
 		var detail jiraTeamCatalogProjectDetailPayload
 		detailPath := "/rest/api/3/project/" + url.PathEscape(key)
-		if err := jiraFetchObject(ctx, client, http.MethodGet, detailPath, nil, &detail); err != nil {
+		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/project/{project}", detailPath, nil, &detail); err != nil {
 			if strict || ctx.Err() != nil {
 				return nil, targets, err
 			}
@@ -628,7 +628,7 @@ func (handler JiraTeamCatalogRouteHandler) iterBoards(
 			"projectKeyOrId": {projectKey},
 		}
 		var page jiraTeamCatalogBoardsPage
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/board?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/board", "/rest/agile/1.0/board?"+query.Encode(), nil, &page); err != nil {
 			return nil, err
 		}
 		if len(page.Values) == 0 {
@@ -666,7 +666,7 @@ func (handler JiraTeamCatalogRouteHandler) iterBoardSprints(
 		query := url.Values{"startAt": {strconv.Itoa(startAt)}, "maxResults": {strconv.Itoa(jiraTeamCatalogPerPage)}}
 		path := "/rest/agile/1.0/board/" + url.PathEscape(boardID) + "/sprint?" + query.Encode()
 		var page jiraTeamCatalogSprintsPage
-		fetchErr := jiraFetchObject(ctx, client, http.MethodGet, path, nil, &page)
+		fetchErr := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/board/{board}/sprint", path, nil, &page)
 		if fetchErr != nil {
 			var providerErr *providerfoundation.ProviderError
 			if errors.As(fetchErr, &providerErr) && providerErr.StatusCode == http.StatusBadRequest {

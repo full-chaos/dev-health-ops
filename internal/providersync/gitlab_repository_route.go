@@ -63,7 +63,7 @@ func (GitLabRepositoryRouteHandler) Collect(
 	counted.Doer = gitLabRepositoryCountingDoer{delegate: client.Doer, attempts: &requests}
 	var payload repositoryPayload
 	path := providerRelativePath(&counted, "api", "v4", "projects", projectID)
-	if err := fetchObject(ctx, &counted, path, &payload); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, path, &payload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := payload.ID.Int64()

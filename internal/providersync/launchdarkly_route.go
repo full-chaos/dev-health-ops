@@ -152,7 +152,7 @@ func (handler LaunchDarklyRouteHandler) Collect(
 		ctx,
 		&counted,
 		providerfoundation.LaunchDarklyOffsetOptions{
-			Path: "/api/v2/flags/" + url.PathEscape(projectKey), MaxPages: maxPages,
+			Path: "/api/v2/flags/" + url.PathEscape(projectKey), Route: "/api/v2/flags/{project}", MaxPages: maxPages,
 		},
 	)
 	if err != nil {
@@ -291,9 +291,10 @@ func fetchLaunchDarklyCodeReferences(
 		"withReferencesForDefaultBranch": {"1"},
 		"projKey":                        {projectKey},
 	}
-	response, err := client.Do(
+	response, err := client.DoRoute(
 		ctx,
 		http.MethodGet,
+		"/api/v2/code-refs/repositories",
 		"/api/v2/code-refs/repositories?"+query.Encode(),
 		nil,
 	)

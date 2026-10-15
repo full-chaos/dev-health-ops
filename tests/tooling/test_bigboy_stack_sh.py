@@ -39,6 +39,7 @@ def _tree(tmp_path: Path, *, skip: str = "") -> tuple[Path, Path, dict[str, str]
     stub = bin_dir / "docker"
     stub.write_text(
         '#!/usr/bin/env bash\necho "$*" >> "$DOCKER_LOG"\n'
+        'if [ -n "${STUB_CONFIG_FAIL:-}" ]; then case "$*" in *" config "*) echo "resolved=SENTINEL" >&2; exit 1;; esac; fi\n'
         'case "$*" in *"config --images"*) echo ghcr.io/full-chaos/dev-health-web@sha256:'
         + "a" * 64
         + ";; esac\n"
@@ -124,3 +125,34 @@ def test_venue_set_adds_its_profile(tmp_path: Path) -> None:
     _, tools, env = _tree(tmp_path)
     assert _run(tools, env, "-s", "river-apply", "ps").returncode == 0
     assert "--profile venue" in Path(env["DOCKER_LOG"]).read_text()
+
+
+def test_failing_config_never_prints_compose_stderr(tmp_path: Path) -> None:
+    _, tools, env = _tree(tmp_path)
+    res = _run(tools, {**env, "STUB_CONFIG_FAIL": "1"}, "restart", "web")
+    assert res.returncode == 2
+    assert "SENTINEL" not in res.stdout + res.stderr
+    assert "restart web" not in Path(env["DOCKER_LOG"]).read_text()
+    flag = _run(tools, {**env, "STUB_CONFIG_FAIL": "1"}, "config", "--quiet")
+    assert flag.returncode == 2 and "SENTINEL" not in flag.stdout + flag.stderr
+
+
+def test_caller_cannot_replace_the_file_list_or_project(tmp_path: Path) -> None:
+    _, tools, env = _tree(tmp_path)
+    other = tmp_path / "other.files"
+    other.write_text("stack project hacked-project\nstack root compose.yml\n")
+    res = _run(tools, {**env, "STACK_FILES": str(other)}, "restart", "web")
+    assert res.returncode == 0, res.stderr
+    log = Path(env["DOCKER_LOG"]).read_text()
+    assert "-p dev-health " in log and "hacked-project" not in log
+
+
+def test_operator_image_is_only_required_when_a_file_uses_it(tmp_path: Path) -> None:
+    r, tools, env = _tree(tmp_path)
+    env = {k: v for k, v in env.items() if k != "BIGBOY_OPERATOR_IMAGE"}
+    res = _run(tools, env, "-s", "river-apply", "ps")
+    assert res.returncode == 0, res.stderr
+    assert "--format" not in Path(env["DOCKER_LOG"]).read_text()
+    refused = _run(tools, env, "ps")
+    assert refused.returncode == 2 and "BIGBOY_OPERATOR_IMAGE" in refused.stderr
+    assert "--format" in Path(env["DOCKER_LOG"]).read_text()

@@ -115,21 +115,41 @@ def test_no_unlisted_bigboy_overlay_file() -> None:
     assert listed <= on_disk, sorted(listed - on_disk)
 
 
-def test_no_new_raw_chain_outside_stack_files() -> None:
-    raw = re.compile(
-        r"COMPOSE_FILE=|docker compose[^|\n]*\s-f\s|compose-config-redacted\.sh[^|\n]*\s-f\s"
-    )
-    offenders = {
-        p.name
-        for p in BIGBOY.glob("*.sh")
-        if p.name != "stack.sh"
-        and any(
-            raw.search(ln)
-            for ln in p.read_text().splitlines()
-            if not ln.lstrip().startswith("#")
+_RAW_CHAIN = re.compile(
+    r"COMPOSE_FILE=|(?<!\[)\s-f\s+\"?(\$\{?\w*(COMPOSE|FILE|OV)\w*|\S*compose\S*\.ya?ml)|docker compose[^|\n]*\s-f\s"
+)
+
+
+def _raw_chain_scripts(directory: Path) -> set[str]:
+    out = set()
+    for p in directory.rglob("*.sh"):
+        if p.name == "stack.sh":
+            continue
+        lines = (
+            ln for ln in p.read_text().splitlines() if not ln.lstrip().startswith("#")
         )
-    }
+        if any(_RAW_CHAIN.search(ln) for ln in lines):
+            out.add(p.name)
+    return out
+
+
+def test_no_new_raw_chain_outside_stack_files() -> None:
+    offenders = _raw_chain_scripts(BIGBOY)
     assert offenders <= LEGACY_CHAIN_SCRIPTS, (
         f"raw compose -f / COMPOSE_FILE chain in {sorted(offenders - LEGACY_CHAIN_SCRIPTS)}: "
         "add the files to ci/bigboy/stack.files and call ci/bigboy/stack.sh"
     )
+    assert LEGACY_CHAIN_SCRIPTS <= offenders, (
+        "a legacy script no longer builds a raw chain: remove it from LEGACY_CHAIN_SCRIPTS"
+    )
+
+
+def test_raw_chain_guard_detects_nested_and_array_built_chains(tmp_path: Path) -> None:
+    nested = tmp_path / "sub" / "deep"
+    nested.mkdir(parents=True)
+    (nested / "a.sh").write_text(
+        'ARGS=(--env-file x -f "$ROOT/compose.yml" -f "$OV")\ndocker compose "${ARGS[@]}" up\n'
+    )
+    (nested / "b.sh").write_text("export COMPOSE_FILE=a.yml:b.yml\n")
+    (nested / "c.sh").write_text("docker compose ps\n# docker compose -f x.yml up\n")
+    assert _raw_chain_scripts(tmp_path) == {"a.sh", "b.sh"}

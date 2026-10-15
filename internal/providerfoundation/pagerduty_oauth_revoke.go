@@ -101,7 +101,7 @@ func RevokePagerDutyOAuthToken(ctx context.Context, doer HTTPDoer, config PagerD
 	// The token rides in the form body, which a 307 would re-send: a supplied *http.Client follows no redirect.
 	response, err := pagerDutyFormClient(doer, 10*time.Second).Do(request)
 	if err != nil {
-		return &ProviderError{Class: ErrorTransient}
+		return transportProviderError("pagerduty", err, 1)
 	}
 	defer response.Body.Close()
 	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {

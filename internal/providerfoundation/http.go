@@ -299,7 +299,8 @@ type routeKey struct{}
 
 // WithRouteTemplate names the route of the next Do call with a template
 // (e.g. /users/{login}) so a failure can say which route failed without
-// printing a path that carries a member login.
+// printing a path that carries a member login. The template must be a
+// static literal, never built from a request value.
 func WithRouteTemplate(ctx context.Context, template string) context.Context {
 	return context.WithValue(ctx, routeKey{}, template)
 }

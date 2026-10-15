@@ -52,3 +52,12 @@ func TestStatusErrorWithoutRouteHasNoPath(t *testing.T) {
 		t.Fatalf("Error() = %v, want no path and no route", err)
 	}
 }
+
+func TestProviderErrorMessagePrintsEachPartOnce(t *testing.T) {
+	message := (&ProviderError{Class: ErrorTransient, StatusCode: 500, Route: "/users/{login}", Reason: TransportReasonOther}).Error()
+	for _, part := range []string{"status=500", "route=/users/{login}", "reason=other"} {
+		if strings.Count(message, part) != 1 {
+			t.Fatalf("Error() = %q, want %q exactly once", message, part)
+		}
+	}
+}

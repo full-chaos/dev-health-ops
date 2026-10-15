@@ -427,9 +427,6 @@ func (e *ProviderError) Error() string {
 	if e.Reason != "" {
 		message += fmt.Sprintf(" reason=%s", e.Reason)
 	}
-	if e.Reason != "" {
-		message += fmt.Sprintf(" reason=%s", e.Reason)
-	}
 	return message
 }
 

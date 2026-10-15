@@ -23,6 +23,7 @@ import (
 // members_discover.go needs a row in guardRoutes.
 type guardRoute struct {
 	name  string
+	route string
 	run   func(context.Context) error
 	match func(*http.Request) bool
 }
@@ -56,19 +57,19 @@ func guardRoutes() []guardRoute {
 		return request.URL.Path == "/api/v4/groups/7/projects" && !strings.Contains(request.URL.RawQuery, "include_subgroups")
 	}
 	return []guardRoute{
-		{"github discover: team list", githubDiscover, pathIs("/orgs/secret-org/teams")},
-		{"github discover: team repos", githubDiscover, pathIs("/orgs/secret-org/teams/secret-team/repos")},
-		{"github discover: team detail", githubDiscover, pathIs("/orgs/secret-org/teams/secret-team")},
-		{"github members: team detail", githubMembers, pathIs("/orgs/secret-org/teams/secret-team")},
-		{"github members: member list", githubMembers, pathIs("/orgs/secret-org/teams/secret-team/members")},
-		{"github members: user", githubMembers, pathIs("/users/secret-login")},
-		{"gitlab discover: group", gitlabDiscover, pathIs("/api/v4/groups/secret/group")},
-		{"gitlab discover: subgroups", gitlabDiscover, pathIs("/api/v4/groups/secret/group/subgroups")},
-		{"gitlab discover: root projects", gitlabDiscover, rootProjects},
-		{"gitlab discover: subgroup projects", gitlabDiscover, pathIs("/api/v4/groups/8/projects")},
-		{"gitlab discover: all projects", gitlabDiscover, flat},
-		{"gitlab members: group", gitlabMembers, pathIs("/api/v4/groups/secret/group")},
-		{"gitlab members: member list", gitlabMembers, pathIs("/api/v4/groups/7/members")},
+		{"github discover: team list", "/orgs/{org}/teams", githubDiscover, pathIs("/orgs/secret-org/teams")},
+		{"github discover: team repos", "/orgs/{org}/teams/{slug}/repos", githubDiscover, pathIs("/orgs/secret-org/teams/secret-team/repos")},
+		{"github discover: team detail", "/orgs/{org}/teams/{slug}", githubDiscover, pathIs("/orgs/secret-org/teams/secret-team")},
+		{"github members: team detail", "/orgs/{org}/teams/{slug}", githubMembers, pathIs("/orgs/secret-org/teams/secret-team")},
+		{"github members: member list", "/orgs/{org}/teams/{slug}/members", githubMembers, pathIs("/orgs/secret-org/teams/secret-team/members")},
+		{"github members: user", "/users/{login}", githubMembers, pathIs("/users/secret-login")},
+		{"gitlab discover: group", "/groups/{group}", gitlabDiscover, pathIs("/api/v4/groups/secret/group")},
+		{"gitlab discover: subgroups", "/groups/{group}/subgroups", gitlabDiscover, pathIs("/api/v4/groups/secret/group/subgroups")},
+		{"gitlab discover: root projects", "/groups/{group}/projects", gitlabDiscover, rootProjects},
+		{"gitlab discover: subgroup projects", "/groups/{group}/projects", gitlabDiscover, pathIs("/api/v4/groups/8/projects")},
+		{"gitlab discover: all projects", "/groups/{group}/projects", gitlabDiscover, flat},
+		{"gitlab members: group", "/groups/{group}", gitlabMembers, pathIs("/api/v4/groups/secret/group")},
+		{"gitlab members: member list", "/groups/{group}/members", gitlabMembers, pathIs("/api/v4/groups/7/members")},
 	}
 }
 
@@ -133,6 +134,9 @@ func TestDiscoveryRoutesNeverCarryPlantedNamesInErrorsOrLogs(t *testing.T) {
 					t.Fatalf("want a %s error", kind)
 				}
 				text := err.Error()
+				if kind != "decode" && !strings.Contains(text, "route="+route.route) {
+					t.Fatalf("error %q does not name the route template %q", text, route.route)
+				}
 				for _, name := range forbidden {
 					if strings.Contains(text, name) || strings.Contains(logs.String(), name) {
 						t.Fatalf("%q reached the error or log:\nerr=%s\nlog=%s", name, text, logs.String())

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,11 @@ func newBatchVenueIDs() batchVenueIDs {
 // answers and then the same rows in integrations, sync_configurations,
 // integration_sources, integration_datasets and scheduled_jobs. Row ids
 // (uuid4 on each plane) are replaced by the names they point at.
+// gitlabListingFailure is the 400 detail for a failed group listing. Python
+// appends GitLab's message; Go keeps it out of the body (a named divergence),
+// so both planes are reduced to the fixed lead text.
+var gitlabListingFailure = regexp.MustCompile(`"(Failed to list GitLab projects for group '[^']*')(?:: [^"]*)?"`)
+
 func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 	resetIDs(t)
 	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name()))
@@ -168,6 +174,7 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
 			body = fakeJiraAddress.ReplaceAllString(body, "127.0.0.1:<port>")
+			body = gitlabListingFailure.ReplaceAllString(body, `"$1"`)
 			return uuidPattern.ReplaceAllString(body, `"id":"<uuid4>"`)
 		},
 	})

@@ -174,7 +174,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	counted.Doer = gitLabWorkItemsCountingDoer{delegate: client.Doer, requests: &requests}
 	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, &counted, root, &project); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -216,7 +216,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 
 	if fetchMilestones {
 		milestones, milestonePages, milestoneErr := collectGitLabMilestones(
-			ctx, &counted, root+"/milestones", perPage, nestedMaxPages,
+			ctx, &counted, gitlabMilestonesRoute, root+"/milestones", perPage, nestedMaxPages,
 		)
 		if milestoneErr != nil {
 			return CompleteRouteBatch{}, milestoneErr
@@ -255,7 +255,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		query.Set("updated_after", claim.SinceAt.UTC().Format(time.RFC3339Nano))
 	}
 	issuePayloads, issuePages, issueErr := collectGitLabPayloads(
-		ctx, &counted, root+"/issues", query, perPage, maxPages,
+		ctx, &counted, gitlabIssuesRoute, root+"/issues", query, perPage, maxPages,
 	)
 	if issueErr != nil {
 		return CompleteRouteBatch{}, issueErr
@@ -270,7 +270,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		if fetchLabels {
 			var labelPages int
 			labelEvents, labelPages, err = collectGitLabLabelEvents(
-				ctx, &counted, root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_label_events",
+				ctx, &counted, gitlabIssuesRoute+"/{iid}/resource_label_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_label_events",
 				perPage, nestedMaxPages,
 			)
 			if err != nil {
@@ -294,7 +294,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
 		if fetchHistory {
 			events, eventPages, eventErr := collectGitLabStateEvents(
-				ctx, &counted, root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_state_events",
+				ctx, &counted, gitlabIssuesRoute+"/{iid}/resource_state_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_state_events",
 				perPage, nestedMaxPages,
 			)
 			if eventErr != nil {
@@ -306,7 +306,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		}
 		if fetchLinks {
 			links, linkPages, linkErr := collectGitLabIssueLinks(
-				ctx, &counted, root+"/issues/"+strconv.Itoa(payload.IID)+"/links",
+				ctx, &counted, gitlabIssuesRoute+"/{iid}/links", root+"/issues/"+strconv.Itoa(payload.IID)+"/links",
 				perPage, nestedMaxPages,
 			)
 			if linkErr != nil {
@@ -331,7 +331,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "count", unsupported)
 			}
 			closing, closingPages, closingErr := collectGitLabClosingMergeRequests(
-				ctx, &counted, root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
+				ctx, &counted, gitlabIssuesRoute+"/{iid}/closed_by", root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
 				perPage, nestedMaxPages,
 			)
 			pages += closingPages
@@ -365,7 +365,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		}
 		if fetchComments {
 			notes, notePages, noteErr := collectGitLabNotes(
-				ctx, &counted, root+"/issues/"+strconv.Itoa(payload.IID)+"/notes",
+				ctx, &counted, gitlabIssuesRoute+"/{iid}/notes", root+"/issues/"+strconv.Itoa(payload.IID)+"/notes",
 				perPage, nestedMaxPages,
 			)
 			if noteErr != nil {
@@ -379,7 +379,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 
 	if includeMRs {
 		mergeRequests, mergeRequestPages, mergeRequestErr := collectGitLabPayloads(
-			ctx, &counted, root+"/merge_requests", query, perPage, maxPages,
+			ctx, &counted, gitlabMergeRequestsRoute, root+"/merge_requests", query, perPage, maxPages,
 		)
 		if mergeRequestErr != nil {
 			return CompleteRouteBatch{}, mergeRequestErr
@@ -394,7 +394,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			if fetchHistory {
 				var statePages int
 				stateEvents, statePages, err = collectGitLabStateEvents(
-					ctx, &counted, root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/resource_state_events",
+					ctx, &counted, gitlabMergeRequestsRoute+"/{iid}/resource_state_events", root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/resource_state_events",
 					perPage, nestedMaxPages,
 				)
 				if err != nil {
@@ -415,7 +415,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			// writer per ai_attribution key); this route emits none.
 			if fetchComments {
 				notes, notePages, noteErr := collectGitLabNotes(
-					ctx, &counted, root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/notes",
+					ctx, &counted, gitlabMergeRequestsRoute+"/{iid}/notes", root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/notes",
 					perPage, nestedMaxPages,
 				)
 				if noteErr != nil {
@@ -489,12 +489,12 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 func collectGitLabPayloads(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	path string,
+	route, path string,
 	query url.Values,
 	perPage, maxPages int,
 ) ([]json.RawMessage, int, error) {
 	page, err := providerfoundation.CollectGitLabPageParamPages(ctx, client,
-		providerfoundation.GitLabPageOptions{Path: path, Query: query, PerPage: perPage, MaxPages: maxPages})
+		providerfoundation.GitLabPageOptions{Path: path, Route: route, Query: query, PerPage: perPage, MaxPages: maxPages})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -512,7 +512,7 @@ func collectGitLabPayloads(
 func collectGitLabNestedPayloads(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	path string,
+	route, path string,
 	query url.Values,
 	perPage, maxPages int,
 ) ([]json.RawMessage, int, error) {
@@ -523,7 +523,7 @@ func collectGitLabNestedPayloads(
 	// row on it is a row past the bound and fails closed.
 	var items []json.RawMessage
 	collected, err := providerfoundation.VisitGitLabPageParamPages(ctx, client,
-		providerfoundation.GitLabPageOptions{Path: path, Query: query, PerPage: perPage, MaxPages: maxPages + 1},
+		providerfoundation.GitLabPageOptions{Path: path, Route: route, Query: query, PerPage: perPage, MaxPages: maxPages + 1},
 		func(visit providerfoundation.PageVisit) error {
 			if visit.Pages > maxPages && len(visit.Items) > 0 {
 				return errGitLabNestedPastBound
@@ -576,10 +576,10 @@ func gitLabNestedOwnerAndField(path string) (owner, field string) {
 }
 
 func collectGitLabMilestones(
-	ctx context.Context, client *providerfoundation.HTTPClient, path string,
+	ctx context.Context, client *providerfoundation.HTTPClient, route, path string,
 	perPage, maxPages int,
 ) ([]gitlabIssueMilestonePayload, int, error) {
-	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, url.Values{"state": {"all"}, "include_ancestors": {"true"}, "include_parent_milestones": {"true"}}, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, route, path, url.Values{"state": {"all"}, "include_ancestors": {"true"}, "include_parent_milestones": {"true"}}, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}
@@ -595,10 +595,10 @@ func collectGitLabMilestones(
 }
 
 func collectGitLabLabelEvents(
-	ctx context.Context, client *providerfoundation.HTTPClient, path string,
+	ctx context.Context, client *providerfoundation.HTTPClient, route, path string,
 	perPage, maxPages int,
 ) ([]gitlabLabelEventPayload, int, error) {
-	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, route, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}
@@ -614,10 +614,10 @@ func collectGitLabLabelEvents(
 }
 
 func collectGitLabStateEvents(
-	ctx context.Context, client *providerfoundation.HTTPClient, path string,
+	ctx context.Context, client *providerfoundation.HTTPClient, route, path string,
 	perPage, maxPages int,
 ) ([]gitlabStateEventPayload, int, error) {
-	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, route, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}
@@ -633,10 +633,10 @@ func collectGitLabStateEvents(
 }
 
 func collectGitLabIssueLinks(
-	ctx context.Context, client *providerfoundation.HTTPClient, path string,
+	ctx context.Context, client *providerfoundation.HTTPClient, route, path string,
 	perPage, maxPages int,
 ) ([]gitlabIssueLinkPayload, int, error) {
-	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, route, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}
@@ -652,10 +652,10 @@ func collectGitLabIssueLinks(
 }
 
 func collectGitLabClosingMergeRequests(
-	ctx context.Context, client *providerfoundation.HTTPClient, path string,
+	ctx context.Context, client *providerfoundation.HTTPClient, route, path string,
 	perPage, maxPages int,
 ) ([]gitlabClosingMergeRequestPayload, int, error) {
-	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, route, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}
@@ -674,10 +674,10 @@ func collectGitLabClosingMergeRequests(
 }
 
 func collectGitLabNotes(
-	ctx context.Context, client *providerfoundation.HTTPClient, path string,
+	ctx context.Context, client *providerfoundation.HTTPClient, route, path string,
 	perPage, maxPages int,
 ) ([]gitlabNotePayload, int, error) {
-	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, route, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}

@@ -73,7 +73,7 @@ func (handler GitLabCommitsRouteHandler) Collect(
 	counted.Doer = gitLabCommitsCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, &counted, root, &project); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -105,7 +105,7 @@ func (handler GitLabCommitsRouteHandler) Collect(
 		ctx,
 		&counted,
 		providerfoundation.GitLabPageOptions{
-			Path: root + "/repository/commits", Query: query,
+			Path: root + "/repository/commits", Route: gitlabCommitsRoute, Query: query,
 			PerPage: perPage, MaxPages: maxPages,
 		},
 	)

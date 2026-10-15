@@ -143,8 +143,18 @@ func graphQLEdgeChain(query http.HandlerFunc, deps graphQLEdgeDeps) http.Handler
 	// see one answer.
 	handler = deps.auth.ReadOnce(handler)
 	handler = correlationID(handler)
+	// Every /graphql line names its document; a refusal before the document is
+	// resolved says so, rather than carrying nothing.
+	handler = markGraphQLDocumentNotResolved(handler)
 	handler = pyheaders.UnhandledErrorShape(handler)
 	return withProofProvenance(handler.ServeHTTP, runningBuild())
+}
+
+func markGraphQLDocumentNotResolved(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpapi.RecordGraphQLDocument(r.Context(), "", "", httpapi.GraphQLDigestNotResolved)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // mountGraphQLRoute registers /graphql. It stays unmounted -- a 404, and a

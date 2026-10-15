@@ -100,7 +100,7 @@ func (s spanObserver) start(r *http.Request) (context.Context, trace.Span) {
 // return (http.ErrAbortHandler re-panicked to net/http): the response was cut
 // off, whatever status had been committed before, so the span is an error one.
 // status is 0 when none was committed.
-func (s spanObserver) finish(span trace.Span, method, pattern string, status int, aborted bool, recorded uint32) {
+func (s spanObserver) finish(span trace.Span, method, pattern string, status int, aborted bool, recorded uint32, doc *graphQLDocument) {
 	if span == nil {
 		return
 	}
@@ -117,6 +117,7 @@ func (s spanObserver) finish(span trace.Span, method, pattern string, status int
 	if status == http.StatusNotFound {
 		span.SetAttributes(attribute.String(NotFoundCauseAttribute, string(notFoundCauseFor(recorded, matched))))
 	}
+	span.SetAttributes(doc.spanAttrs()...)
 	switch {
 	case aborted:
 		span.SetStatus(codes.Error, "aborted")

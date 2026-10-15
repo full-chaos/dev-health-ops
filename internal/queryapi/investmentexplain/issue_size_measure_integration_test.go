@@ -4,6 +4,7 @@ package investmentexplain
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -280,16 +281,58 @@ func TestIssueSizeMeasureWeighsEachUnitByItsIssueSize(t *testing.T) {
 	if coverage == nil || coverage.SizingCoverage == nil || coverage.UnsizedUnitCount == nil {
 		t.Fatalf("sankey coverage = %+v, want the sizing fields", coverage)
 	}
-	var units, sizedUnits int
+	var windowUnits, sizedUnits int
 	for _, u := range seeded {
 		if inWindow(u, windowStart, windowEnd, false) {
-			units++
+			windowUnits++
 			if u.sized {
 				sizedUnits++
 			}
 		}
 	}
-	if *coverage.UnsizedUnitCount != units-sizedUnits || math.Abs(*coverage.SizingCoverage-float64(sizedUnits)/float64(units)) > 1e-9 {
-		t.Errorf("sizing coverage = (%v, %d unsized), want (%v, %d unsized)", *coverage.SizingCoverage, *coverage.UnsizedUnitCount, float64(sizedUnits)/float64(units), units-sizedUnits)
+	if *coverage.UnsizedUnitCount != windowUnits-sizedUnits || math.Abs(*coverage.SizingCoverage-float64(sizedUnits)/float64(windowUnits)) > 1e-9 {
+		t.Errorf("sizing coverage = (%v, %d unsized), want (%v, %d unsized)", *coverage.SizingCoverage, *coverage.UnsizedUnitCount, float64(sizedUnits)/float64(windowUnits), windowUnits-sizedUnits)
+	}
+
+	// The explanation in ISSUE_SIZE: every finding carries the share of the size measure and the sizing coverage.
+	completion, err := json.Marshal(map[string]any{
+		"summary": "Work appears spread across the mix.",
+		"top_findings": []any{map[string]any{
+			"finding": "this work appears in the mix",
+			"evidence": map[string]any{
+				"theme": units.ThemeOf(subcategories[0]), "subcategory": nil, "share_pct": 1.0,
+				"delta_pct_points": nil, "evidence_quality_mean": nil, "evidence_quality_band": nil,
+			},
+		}},
+		"confidence": map[string]any{
+			"level": "moderate", "quality_mean": 0.55, "quality_stddev": 0.25,
+			"band_mix": map[string]any{"high": 1, "moderate": 0, "low": 1, "very_low": 0, "unknown": 0}, "drivers": []any{},
+		},
+		"what_to_check_next": []any{map[string]any{"action": "Open the evidence", "why": "It shows the mix", "where": "Evidence panel"}},
+		"anti_claims":        []any{"This does not rank people."},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	explanation, err := reader.ExplainInvestmentMix(ctx, nil, alwaysAvailable, countingComplete(string(completion), &calls), ExplainInvestmentMixOptions{
+		OrgID: org, StartTS: windowStart, EndTS: windowEnd, ScopeLevel: "org", Measure: MeasureIssueSize,
+		LLMProvider: "openai", Now: explainFixtureNow, FiltersForCacheKey: defaultMetricFilterForCacheKey(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(explanation.TopFindings) == 0 {
+		t.Fatal("the explanation has no finding")
+	}
+	for _, finding := range explanation.TopFindings {
+		evidence := finding.Evidence
+		if evidence.Measure != MeasureIssueSize || evidence.Denominator == nil || math.Abs(*evidence.Denominator-sizedRead.total) > 1e-3 {
+			t.Errorf("finding %s: measure %q, denominator %v; want ISSUE_SIZE over %v", evidence.Theme, evidence.Measure, evidence.Denominator, sizedRead.total)
+		}
+		if evidence.SizingCoverage == nil || evidence.UnsizedUnitCount == nil ||
+			math.Abs(*evidence.SizingCoverage-float64(sizedUnits)/float64(windowUnits)) > 1e-9 || *evidence.UnsizedUnitCount != windowUnits-sizedUnits {
+			t.Errorf("finding %s: sizing (%v, %v), want (%v, %d)", evidence.Theme, evidence.SizingCoverage, evidence.UnsizedUnitCount, float64(sizedUnits)/float64(windowUnits), windowUnits-sizedUnits)
+		}
 	}
 }

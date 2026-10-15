@@ -343,6 +343,10 @@ func RepoAllocationInvestmentSource() string { return repoAllocationInvestmentSo
 // UnitSizeWeightColumn is the column IssueSizedSource adds: what a unit weighs in the ISSUE_SIZE measure.
 const UnitSizeWeightColumn = "unit_size_weight"
 
+// UnitIssueSizeColumn is the other column IssueSizedSource adds: the unit's issue size, 0 when it has none, so a
+// read can tell a unit sized 1 from an unsized one.
+const UnitIssueSizeColumn = "unit_issue_size"
+
 // LatestWorkUnitIssueSizeSource is the newest issue size of each work unit of the organization
 // (work_unit_issue_size, migration 130, CHAOS-9619): argMax over computed_at per (org_id, work_unit_id).
 func LatestWorkUnitIssueSizeSource() string {
@@ -354,7 +358,7 @@ func LatestWorkUnitIssueSizeSource() string {
             )`
 }
 
-// IssueSizedSource adds UnitSizeWeightColumn to a work-unit source written as "(...) AS <alias>": the unit's
+// IssueSizedSource adds UnitSizeWeightColumn and UnitIssueSizeColumn to a work-unit source written as "(...) AS <alias>": the unit's
 // issue size, or 1 when it has none or no size row (D5999: an unsized unit counts one work unit). Every other
 // column, and the rows, are the source's own, so a reader that weighs by the column reads the same rows as COUNT.
 func IssueSizedSource(aliasedSource, alias string) (string, error) {
@@ -364,12 +368,13 @@ func IssueSizedSource(aliasedSource, alias string) (string, error) {
 	}
 	inner := strings.TrimSuffix(aliasedSource, suffix)
 	return fmt.Sprintf(`(
-            SELECT sized_unit.*, if(unit_size.issue_size > 0, unit_size.issue_size, 1.0) AS %s
+            SELECT sized_unit.*, if(unit_size.issue_size > 0, unit_size.issue_size, 1.0) AS %s,
+                if(unit_size.issue_size > 0, unit_size.issue_size, 0.0) AS %s
             FROM %s AS sized_unit
             LEFT JOIN %s AS unit_size
                 ON unit_size.org_id = sized_unit.org_id
                 AND unit_size.work_unit_id = sized_unit.work_unit_id
-        )%s`, UnitSizeWeightColumn, inner, LatestWorkUnitIssueSizeSource(), suffix), nil
+        )%s`, UnitSizeWeightColumn, UnitIssueSizeColumn, inner, LatestWorkUnitIssueSizeSource(), suffix), nil
 }
 
 // sizedFor is the context a read of measure m runs on: for ISSUE_SIZE its source carries UnitSizeWeightColumn

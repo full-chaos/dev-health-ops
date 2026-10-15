@@ -114,22 +114,67 @@ VALUES ('e-` + deployment + `', '` + org + `', '` + deployment + `', '` + incide
 		t.Fatalf("the rollback kept %d rows, want 2 (the old key holds the shared deployment id of two repositories as one row)", got)
 	}
 
-	// Legacy rows with no repository keep their row. A row of the same pair with a repository is another key.
+	// The old table holds, side by side, what its key says is one row: two repositories' rows of one pair in two
+	// months (two partitions), and legacy rows with no repository. The upgrade copies every physical row (no row is
+	// dropped), and a row an older build writes between the copy and the swap is copied too.
+	insertAt := func(deployment, repo, observedAt string) {
+		t.Helper()
+		exec(`INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, provider, repo_id, confidence, source, evidence, observed_at, computed_at)
+VALUES ('e-` + deployment + `', '` + org + `', '` + deployment + `', 'i-x', 'github', ` + repo + `, 0.5, 'heuristic', '', '` + observedAt + `', '2026-10-01 05:00:00')`)
+	}
+	insertAt("d-x", "'"+repoA+"'", "2026-09-01 00:00:00")
+	insertAt("d-x", "'"+repoB+"'", "2026-10-01 00:00:00")
 	insert("d-one", "i-3", "NULL", "heuristic", "2026-10-01 03:00:00")
 	insert("d-none", "i-5", "NULL", "heuristic", "2026-10-01 03:00:00")
+	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges WHERE deployment_id = 'd-x'`); got != 2 {
+		t.Fatalf("the old table holds %d physical rows of d-x, want 2 (two partitions)", got)
+	}
+
+	up, err := os.ReadFile("sql/131_deployment_incident_edges_repo_key.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := false
+	for _, statement := range chmigrate.SplitStatements(string(up)) {
+		exec(statement)
+		if !copied && strings.Contains(statement, "INSERT INTO work_graph_deployment_incident_edges_new") {
+			copied = true
+			insertAt("d-late", "'"+repoA+"'", "2026-10-01 00:00:00")
+		}
+	}
+	if !copied {
+		t.Fatal("the migration has no copy statement")
+	}
+	check := func(when string) {
+		t.Helper()
+		if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL WHERE deployment_id = 'd-x'`); got != 2 {
+			t.Errorf("%s: d-x holds %d rows, want 2 (one for each repository)", when, got)
+		}
+		if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL WHERE deployment_id = 'd-late'`); got != 1 {
+			t.Errorf("%s: the row written between the copy and the swap is gone (%d rows)", when, got)
+		}
+		if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL WHERE repo_id IS NULL`); got != 2 {
+			t.Errorf("%s: %d rows without a repository, want 2", when, got)
+		}
+		if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL`); got != 7 {
+			t.Errorf("%s: the table holds %d rows, want 7", when, got)
+		}
+		if leftover() != 0 {
+			t.Errorf("%s: a leftover table remains", when)
+		}
+	}
+	check("after the migration")
+
+	// The version row was not written by the statements above: the migrator runs the file again over the new table.
 	chschema.Apply(ctx, t, instance)
-	if recorded() == 0 || leftover() != 0 {
-		t.Fatalf("the upgrade after the rollback: version rows %d, leftover tables %d", recorded(), leftover())
+	if recorded() == 0 {
+		t.Fatal("the upgrade did not record the version")
 	}
-	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL WHERE repo_id IS NULL`); got != 2 {
-		t.Errorf("%d rows without a repository after the upgrade, want 2", got)
-	}
+	check("after the migration ran again")
+
 	insert("d-one", "i-3", "'"+repoA+"'", "heuristic", "2026-10-01 04:00:00")
 	exec(`OPTIMIZE TABLE work_graph_deployment_incident_edges FINAL`)
 	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL WHERE deployment_id = 'd-one'`); got != 2 {
 		t.Errorf("d-one holds %d rows, want 2 (one without a repository, one with)", got)
-	}
-	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL`); got != 5 {
-		t.Errorf("the table holds %d rows, want 5", got)
 	}
 }

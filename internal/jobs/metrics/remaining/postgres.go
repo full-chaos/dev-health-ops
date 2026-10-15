@@ -95,6 +95,7 @@ type PostgresStore struct {
 	leaseObserver          jobruntime.RemainingMetricsLeaseObserver
 	openDayZeroRowObserver OpenDayZeroRowObserver
 	manualBackfillObserver ManualBackfillObserver
+	manualOverlapObserver  ManualOverlapObserver
 	scopeRefusalObserver   ScopeRefusalObserver
 	logger                 *slog.Logger
 }
@@ -378,6 +379,14 @@ func (store *PostgresStore) StartRunTx(
 			// Not found: the lock is still held for the rest of this
 			// function, so a concurrent caller for the same org+day now
 			// blocks behind whichever insert happens below.
+			//
+			// CHAOS-9692: this run computes its whole window. A pending or
+			// running manual backfill or recompute run whose window shares a
+			// day with it computes that day too. The values are identical and
+			// readers take the newest computed_at, so nothing is skipped and
+			// nothing is wrong; the overlap is logged and counted so the
+			// duplicate computation can be seen.
+			store.reportManualWindowOverlaps(ctx, tx, request, day, backfillDays)
 		}
 	}
 

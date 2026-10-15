@@ -1601,8 +1601,13 @@ an automatic post-sync run that is *anchored on a later day* with
 own anchor day and does not see the pending recompute, so both runs compute the
 overlapping day. Both append the same values with their own `computed_at` and
 readers take the newest, so the served number is the same; it is a duplicate
-computation, not a wrong value. Do not run it while a wide post-sync catch-up of
-the window is expected.
+computation, not a wrong value. The automatic start is not changed (it does not
+wait for the manual run and does not skip a day), but it is now visible: it logs
+`remaining metrics automatic start overlaps a manual run` at Info (family,
+organization_id, run_id, manual_run_id, manual_kind, overlap_from, overlap_to,
+overlap_days) and counts `dev_health_remaining_metrics_manual_overlap_total{family}`
+once per overlapped manual backfill or recompute run that is pending or running.
+Do not run it while a wide post-sync catch-up of the window is expected.
 
 **Where to run it:** from a worker pod that holds the coordinator DSN
 (`go-scheduler` or `go-reconciler` on prod), **not** `go-heavy`. Like every

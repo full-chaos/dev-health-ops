@@ -20,7 +20,8 @@ type RetractionOutcome struct {
 }
 
 // PlanOutrankedEdgeTombstones retires every live pull request -> issue edge of
-// a fallback tier whose pull request or issue has a native link in stored.
+// a fallback tier whose pull request or issue has a native link in stored, or
+// whose issue side is a pull request work item.
 // One shape is kept: an IMPLEMENTS edge between a natively linked pair,
 // because the fast-path step rewrites that identity as native and a tombstone
 // could only race it.
@@ -42,6 +43,9 @@ func PlanOutrankedEdgeTombstones(versions edges.EdgeVersions, stored []issueprli
 		}
 		if row.Provenance != edges.ProvenanceExplicitText && row.Provenance != edges.ProvenanceHeuristic {
 			return false
+		}
+		if issueprlinks.IsPullRequestWorkItem(row.TargetID) {
+			return true
 		}
 		_, prNative := nativePRIDs[row.SourceID]
 		if !prNative && !native.HasIssue(row.TargetID) {
@@ -94,12 +98,18 @@ func (service *Service) RetractOutrankedFallbacks(ctx context.Context, orgID str
 	}
 
 	retired := 0
-	if !native.Empty() {
-		prIDs := make([]string, 0, len(native.PullRequests()))
-		for _, key := range native.PullRequests() {
-			prIDs = append(prIDs, edges.GeneratePRID(key.RepoID, int(key.PRNumber)))
+	prIDs := make([]string, 0, len(native.PullRequests()))
+	for _, key := range native.PullRequests() {
+		prIDs = append(prIDs, edges.GeneratePRID(key.RepoID, int(key.PRNumber)))
+	}
+	issueIDs := native.Issues()
+	for _, link := range outranked {
+		if issueprlinks.IsPullRequestWorkItem(link.WorkItemID) {
+			issueIDs = append(issueIDs, link.WorkItemID)
 		}
-		versions, err := edges.ReadPRIssueEdgeVersions(ctx, service.rawConn, orgID, prIDs, native.Issues())
+	}
+	if len(prIDs) > 0 || len(issueIDs) > 0 {
+		versions, err := edges.ReadPRIssueEdgeVersions(ctx, service.rawConn, orgID, prIDs, issueIDs)
 		if err != nil {
 			service.logger.Error("issue-pr fallback retraction: edge read failed",
 				slog.String("organization_id", orgID), slog.Any("error", err))

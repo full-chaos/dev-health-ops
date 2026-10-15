@@ -8,6 +8,10 @@
 -- reads 0 and 1.8 reads 1. The fractions are lost for the rows already written;
 -- the next compute of each day writes whole counts again. A negative value would
 -- wrap, and none is ever written.
+-- The version row goes too: with it left in schema_migrations, a later
+-- `dho migrate clickhouse upgrade` on a build that has the migration reads it
+-- as applied and never applies it again, so the schema would stay rolled back
+-- under a build that expects it.
 ALTER TABLE ai_impact_metrics_daily
     MODIFY COLUMN prs_total UInt32,
     MODIFY COLUMN prs_merged UInt32,
@@ -21,3 +25,4 @@ ALTER TABLE ai_impact_metrics_daily
     MODIFY COLUMN revert_prs UInt32,
     MODIFY COLUMN incidents_count UInt32,
     MODIFY COLUMN test_gap_prs UInt32;
+ALTER TABLE schema_migrations DELETE WHERE version = '128_ai_impact_counts_float64.sql' SETTINGS mutations_sync = 2;

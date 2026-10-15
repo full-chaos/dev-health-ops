@@ -9,6 +9,10 @@
 -- next compute of each day writes whole counts again. A negative value would
 -- wrap, and none is ever written (a share is in [0, 1] and a count is not
 -- negative).
+-- The version row goes too: with it left in schema_migrations, a later
+-- `dho migrate clickhouse upgrade` on a build that has the migration reads it
+-- as applied and never applies it again, so the schema would stay rolled back
+-- under a build that expects it.
 ALTER TABLE team_complexity_daily
     MODIFY COLUMN loc_total UInt64,
     MODIFY COLUMN cyclomatic_total UInt64,
@@ -23,3 +27,4 @@ ALTER TABLE team_metrics_daily
 ALTER TABLE compounding_risk_daily
     MODIFY COLUMN merged_prs_30d Nullable(UInt32),
     MODIFY COLUMN reviewed_prs_30d Nullable(UInt32);
+ALTER TABLE schema_migrations DELETE WHERE version = '124_team_daily_counters_float64.sql' SETTINGS mutations_sync = 2;

@@ -270,7 +270,7 @@ next to `filters`:
 `filters.scope.level` keeps its lowercase values. Scope `org` and scope `team` with no ids cover the same rows, as on the page.
 
 Each finding's `evidence` carries `measure`, `numerator` and `denominator`: `share_pct` is `numerator / denominator * 100`, where
-the numerator is the finding's subcategory (or theme) sum and the denominator is the sum of all themes in the window. Under `ISSUE_SIZE` each finding's `evidence` also carries `sizing_coverage` (the share of the mix's work units that carry an issue size) and `unsized_unit_count` (the units that count 1 because they have none), read live on every answer, a cached one too. The text of a
+the numerator is the finding's subcategory (or theme) sum and the denominator is the sum of all themes in the window. Under `ISSUE_SIZE` each finding's `evidence` also carries `sizing_coverage` (the share of the mix's work units that carry an issue size), `unsized_unit_count` (the units that count 1 because they have none) and, when fewer than half of the units carry a size, `sizing_note` (the "Mostly unsized" sentence), read live on every answer, a cached one too. The text of a
 finding names what the share counts ("of work").
 
 ## Deprecated: `investment_metrics_daily` / `investment_areas.yaml`

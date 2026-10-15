@@ -126,6 +126,7 @@ var orgDeleteTablesAfterThePythonFreeze = map[string]string{
 	"work_item_completion_daily":        "119_work_item_completion_daily.sql",         // CHAOS-9264
 	"work_item_measure_capability":      "111_work_item_measure_capability.sql",       // CHAOS-8895
 	"repo_change_failure_daily":         "112_change_failure_rate_incident_basis.sql", // CHAOS-8981
+	"work_unit_issue_size":              "130_work_unit_issue_size.sql",               // CHAOS-9807
 }
 
 // orgDeleteTablesDroppedAfterThePythonFreeze names each ClickHouse table a migration dropped after

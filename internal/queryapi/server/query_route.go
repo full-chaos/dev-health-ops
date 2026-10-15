@@ -3045,8 +3045,41 @@ const registeredCompoundingRiskDocument = `query CompoundingRisk($orgId: String!
 
 // registeredTestOpsPipelineDocument is the registered document for the `testOpsPipeline`
 // operation, the exact wire-form text a real web client sends
-// (testdata/wire_capture/testopspipeline_captured.graphql).
+// (testdata/wire_capture/testopspipeline_captured.graphql): the V1 text plus `scope` on every timeseries
+// (CHAOS-9736, CHAOS-9745), so the Govern area can tell the org series from a team series.
 const registeredTestOpsPipelineDocument = `query TestOpsPipeline($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      scope
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredTestOpsPipelineV1Document is the text of `testOpsPipeline` BEFORE the web selected `scope`
+// (testdata/wire_capture/testopspipeline_v1_captured.graphql). It stays a legacy text (see legacyDigestsByOperation) so a web
+// build still sending it keeps working while the new web rolls out. Remove it with the cleanup ticket once no
+// client sends it.
+const registeredTestOpsPipelineV1Document = `query TestOpsPipeline($orgId: String!, $batch: AnalyticsRequestInput!) {
   analytics(orgId: $orgId, batch: $batch) {
     timeseries {
       dimension
@@ -3105,8 +3138,42 @@ const registeredTestOpsTestDocument = `query TestOpsTest($orgId: String!, $batch
 
 // registeredTestOpsCoverageDocument is the registered document for the `testOpsCoverage`
 // operation, the exact wire-form text a real web client sends
-// (testdata/wire_capture/testopscoverage_captured.graphql).
+// (testdata/wire_capture/testopscoverage_captured.graphql): the V1 text plus `scope` on every timeseries
+// (CHAOS-9736, CHAOS-9745), so the Govern area can tell the org series from a team series.
 const registeredTestOpsCoverageDocument = `query TestOpsCoverage($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      scope
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        label
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredTestOpsCoverageV1Document is the text of `testOpsCoverage` BEFORE the web selected `scope`
+// (testdata/wire_capture/testopscoverage_v1_captured.graphql). It stays a legacy text (see legacyDigestsByOperation) so a web
+// build still sending it keeps working while the new web rolls out. Remove it with the cleanup ticket once no
+// client sends it.
+const registeredTestOpsCoverageV1Document = `query TestOpsCoverage($orgId: String!, $batch: AnalyticsRequestInput!) {
   analytics(orgId: $orgId, batch: $batch) {
     timeseries {
       dimension
@@ -6072,6 +6139,8 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
+	"testOpsPipeline":       {digestHex(registeredTestOpsPipelineV1Document)},
+	"testOpsCoverage":       {digestHex(registeredTestOpsCoverageV1Document)},
 	"testopsRisk":           {digestHex(registeredTestopsRiskV1Document)},
 	"dataHealthIdentity":    {digestHex(registeredDataHealthIdentityV1Document)},
 	"aiGovernanceSummary":   {digestHex(registeredAiGovernanceSummaryV1Document)},

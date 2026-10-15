@@ -81,3 +81,25 @@ func TestExplanationSaysWhenTheMixIsMostlyUnsized(t *testing.T) {
 		}
 	}
 }
+
+// TestCachedExplanationCarriesTheLiveSizing pins that a served cached answer takes the sizing of the live read, not
+// the cached one: the cached JSON carries none, and the answer still says 1 of 4 sized with the sentence.
+func TestCachedExplanationCarriesTheLiveSizing(t *testing.T) {
+	client := sizedMixClient{mixAgreementClient: mixAgreementClient{breakdown: mixRows(), cachedJSON: cachedExplanationJSON(t, 10.0000001), cachedAt: explainFixtureNow}, sized: 1, units: 4}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	got, err := reader.ExplainInvestmentMix(context.Background(), nil, alwaysAvailable, countingComplete(completionWithKeys(10), &calls), explainOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 || got.Summary != "cached" {
+		t.Fatalf("calls %d summary %q: want the cached answer served", calls, got.Summary)
+	}
+	evidence := got.TopFindings[0].Evidence
+	if evidence.SizingCoverage == nil || *evidence.SizingCoverage != 0.25 || evidence.UnsizedUnitCount == nil || *evidence.UnsizedUnitCount != 3 || !strings.HasPrefix(evidence.SizingNote, "Mostly unsized: 1 of 4") {
+		t.Fatalf("cached answer sizing = (%v, %v, %q), want the live 1 of 4", evidence.SizingCoverage, evidence.UnsizedUnitCount, evidence.SizingNote)
+	}
+}

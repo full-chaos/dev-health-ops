@@ -87,8 +87,8 @@ type ExplainInvestmentMixOptions struct {
 	// but must NOT filter the breakdown by them. See ExplainInvestmentMix's
 	// own comment at the breakdown-fetch call site.
 	ScopeLevel string
-	// Measure is the measure the mix is read in: "COUNT" or "THROUGHPUT" (see NormalizeMeasure). Empty is the
-	// Investment page's COUNT. The explanation never weighs by effort_value.
+	// Measure is the measure the mix is read in: "ISSUE_SIZE", "COUNT" or "THROUGHPUT" (see NormalizeMeasure). Empty is
+	// ExplanationDefaultMeasure (ISSUE_SIZE, the Investment page's measure). The explanation never weighs by effort_value.
 	Measure            string
 	WorkCategory       []string
 	Theme              string

@@ -24,9 +24,9 @@ const (
 )
 
 // seedExactSumPart writes one part of exactSumRowsPerPart work units, each
-// carrying one subcategory. Its weights k * 2^e (k 1..1000, e -12..12) span
-// seven orders of magnitude, so a Float64 sum of them depends on the order it is
-// taken in; each one is exact in Float32 (the query reads weights as Float32),
+// carrying one subcategory. Its weights k * 2^e (k 1..1000, e -30..24) span 74
+// bits, more than a Float64 holds, so a Float64 sum of them depends on the order
+// it is taken in; each one is exact in Float32 (the query reads weights as Float32),
 // so exactSumWeight gives the exact total to check against. The weights are a
 // function of logicalPart only: two subcategories seeded over the same set of
 // logical parts carry the same multiset of weights, so their exact sums tie.
@@ -40,7 +40,7 @@ INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, provid
 SELECT
     concat('%[1]s-', toString(%[2]d), '-', toString(number)),
     toDateTime64('2026-01-01 00:00:00', 3), toDateTime64('2026-01-05 00:00:00', 3), NULL, NULL, 'fte_days', 1.0,
-    map(), map('%[1]s', ((number * 7919 + %[3]d * 104729) %% 1000 + 1) * pow(2, toInt64((number + %[3]d) %% 25) - 12)),
+    map(), map('%[1]s', ((number * 7919 + %[3]d * 104729) %% 1000 + 1) * pow(2, toInt64((number + %[3]d) %% 55) - 30)),
     '', 1.0, 'high', 'ok', '', 'v1', 'hash', 'run', toDateTime64('2026-01-06 00:00:00', 3), 'story', 'unit', '%[4]s'
 FROM numbers(%[5]d)`, subcategory, physicalPart, logicalPart, orgID, exactSumRowsPerPart)
 	if err := conn.Exec(ctx, insert); err != nil {
@@ -132,17 +132,17 @@ func TestFlowMatrixInvestmentAnswerIsTheSameOnEveryRun(t *testing.T) {
 }
 
 // exactSumTotal is one theme's exact total: the weights of logical parts
-// 0..exactSumParts-1, summed as integers in units of 2^-12, then rounded once.
+// 0..exactSumParts-1, summed as integers in units of 2^-30, then rounded once.
 func exactSumTotal() float64 {
 	total := new(big.Int)
 	for part := 0; part < exactSumParts; part++ {
 		for number := 0; number < exactSumRowsPerPart; number++ {
 			k := int64((number*7919+part*104729)%1000 + 1)
-			shift := uint((number + part) % 25)
+			shift := uint((number + part) % 55)
 			total.Add(total, new(big.Int).Lsh(big.NewInt(k), shift))
 		}
 	}
-	exact, _ := new(big.Rat).SetFrac(total, new(big.Int).Lsh(big.NewInt(1), 12)).Float64()
+	exact, _ := new(big.Rat).SetFrac(total, new(big.Int).Lsh(big.NewInt(1), 30)).Float64()
 	return exact
 }
 

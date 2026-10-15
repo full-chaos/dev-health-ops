@@ -118,6 +118,14 @@ func forecastBodyAt(t *testing.T, base time.Time, plane string, overrides map[st
 		"insufficientHistory": false,
 		"highVariance":        false,
 		"__typename":          "CapacityForecast",
+		"completionDistribution": map[string]any{
+			"__typename":     "CapacityDistribution",
+			"runs":           10000,
+			"unfinishedRuns": 0,
+			"horizonDays":    30,
+			"days":           []any{map[string]any{"value": 2, "count": 5000, "cumulativeShare": 0.5, "__typename": "CapacityDistributionBin"}, map[string]any{"value": 3, "count": 5000, "cumulativeShare": 1.0, "__typename": "CapacityDistributionBin"}},
+			"items":          nil,
+		},
 	}
 	if plane == "python" {
 		fields["computedAt"] = base.Add(654321 * time.Microsecond).Format("2006-01-02 15:04:05.000000+00:00")

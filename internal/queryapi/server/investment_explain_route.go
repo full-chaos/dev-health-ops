@@ -444,12 +444,13 @@ func newInvestmentExplainWorkHandler(
 
 		opts, buildErr := buildExplainOptions(r.Context(), reader, claims.OrgID, reqBody, llmProvider, forceRefresh)
 		if buildErr != nil {
-			// Python's `except ValueError as exc: raise HTTPException(400,
-			// detail=str(exc))` (main.py:1345-1346) -- buildErr's own
-			// message text is already the ported parity string (see
-			// resolve_repo_filter_ids's citation in this file's own package
-			// doc comment), so only the encoding changes here.
-			writeRESTError(w, r, "investment_explain", claims.OrgID, http.StatusBadRequest, buildErr.Error())
+			// buildExplainOptions fails only on a store read (the repo ref
+			// lookup), never on a request value, so the cause goes to the log
+			// and the client sees a generic answer.
+			status, message, _ := policy.MapError(buildErr)
+			log.Printf("query-api: investment_explain: building the options failed: org_id=%s request_id=%s status=%d err=%v",
+				claims.OrgID, envelopeRequestID(r), status, buildErr)
+			writeRESTError(w, r, "investment_explain", claims.OrgID, status, message)
 			return
 		}
 

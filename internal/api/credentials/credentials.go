@@ -96,6 +96,16 @@ func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, 
 	policy.WriteInternal(w)
 }
 
+// providerFailure answers a provider client error with fixed text; the
+// provider's own message goes to the log through policy.WriteError.
+func (h handlers) providerFailure(w http.ResponseWriter, r *http.Request, what, class string, err error) {
+	if failure := policy.ProviderFailure(class, err); failure != nil {
+		policy.WriteError(w, r, h.logger, what, failure)
+		return
+	}
+	policy.WriteError(w, r, h.logger, what, err)
+}
+
 func orgIDOf(ctx context.Context) string { return policy.UserFrom(ctx).OrgID }
 
 // credential mirrors the IntegrationCredential row the routes expose.

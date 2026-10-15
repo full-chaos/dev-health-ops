@@ -35,7 +35,6 @@ package workitemengine
 
 import (
 	"errors"
-	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -165,7 +164,6 @@ func ComputeIssueTypeMetricsDaily(
 ) []IssueTypeMetricsDailyRow {
 	buckets := make(map[issueTypeMetricsKey]*issueTypeMetricsBucket)
 	order := make([]issueTypeMetricsKey, 0, len(items))
-	completedOnDay, leadExcluded := 0, 0
 	for index, item := range items {
 		teamID := resolveTeam(index)
 		key := issueTypeMetricsKey{
@@ -188,7 +186,6 @@ func ComputeIssueTypeMetricsDaily(
 			completed := item.CompletedAt.UTC()
 			if !completed.Before(dayUTC) && completed.Before(end) {
 				bucket.completed++
-				completedOnDay++
 				if item.StartedAt != nil {
 					cycle := completed.Sub(item.StartedAt.UTC()).Hours()
 					if cycle >= 0 {
@@ -197,12 +194,9 @@ func ComputeIssueTypeMetricsDaily(
 				}
 				// Lead time runs from creation to completion. An item with no
 				// created_at (the zero time) or a creation after its
-				// completion has no lead time: it is left out of the p50 and
-				// counted in the debug line below, never taken as 0 hours.
-				lead := completed.Sub(created).Hours()
-				if item.CreatedAt.IsZero() || lead < 0 {
-					leadExcluded++
-				} else {
+				// completion has no lead time: it is left out of the p50 (see
+				// LeadTimeInputs), never taken as 0 hours.
+				if lead := completed.Sub(created).Hours(); !item.CreatedAt.IsZero() && lead >= 0 {
 					bucket.leadHours = append(bucket.leadHours, lead)
 				}
 			}
@@ -239,12 +233,6 @@ func ComputeIssueTypeMetricsDaily(
 			LeadP50Hours:   leadP50,
 		})
 	}
-	if completedOnDay > 0 {
-		slog.Default().Debug("workitemengine: issue type lead time",
-			"day", dayUTC.Format("2006-01-02"),
-			"completed_items", completedOnDay,
-			"lead_time_excluded_items", leadExcluded)
-	}
 	return result
 }
 
@@ -252,4 +240,24 @@ type completionBucket struct {
 	deliveryUnits, completed, churn int
 	cycleHours                      []float64
 	prs                             map[linkedPRKey]struct{}
+}
+
+// LeadTimeInputs counts the items completed in [dayUTC, end) and, of those, the ones left out of the lead-time p50
+// because they have no created_at or were created after they completed. The caller logs it; this package holds no
+// logger.
+func LeadTimeInputs(items []Item, dayUTC, end time.Time) (completed, excluded int) {
+	for _, item := range items {
+		if item.CompletedAt == nil {
+			continue
+		}
+		done := item.CompletedAt.UTC()
+		if done.Before(dayUTC) || !done.Before(end) {
+			continue
+		}
+		completed++
+		if item.CreatedAt.IsZero() || done.Sub(item.CreatedAt.UTC()) < 0 {
+			excluded++
+		}
+	}
+	return completed, excluded
 }

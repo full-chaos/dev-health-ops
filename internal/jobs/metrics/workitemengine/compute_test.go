@@ -146,3 +146,17 @@ func TestComputeIssueTypeMetricsDailyLeadTimeIsZeroWhenNothingCompletedHasOne(t 
 		t.Fatalf("rows = %+v, want one row that counts 1 completed item and has no lead time", rows)
 	}
 }
+
+func TestLeadTimeInputsCountsCompletedAndExcludedItems(t *testing.T) {
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	items := []Item{
+		{WorkItemID: "1", CreatedAt: day.Add(-time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "2", CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "3", CreatedAt: day.Add(5 * time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "4", CreatedAt: day.Add(-time.Hour)},
+		{WorkItemID: "5", CreatedAt: day.Add(-48 * time.Hour), CompletedAt: timePointer(day.Add(-time.Hour))},
+	}
+	if completed, excluded := LeadTimeInputs(items, day, day.AddDate(0, 0, 1)); completed != 3 || excluded != 2 {
+		t.Fatalf("completed=%d excluded=%d, want 3 and 2", completed, excluded)
+	}
+}

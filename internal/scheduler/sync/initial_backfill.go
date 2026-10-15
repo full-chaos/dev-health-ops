@@ -39,10 +39,11 @@ import (
 //
 // Only a configuration whose FIRST successful run started at or after the roll
 // instant (INITIAL_BACKFILL_NOT_BEFORE; the feature is off without it) and
-// completed within initialBackfillMaxAge is a candidate, so a rollout never
-// backfills a configuration that was already syncing.
+// completed within initialBackfillMaxAge is a candidate, and a configuration
+// with ANY run (failed ones included) created before the roll instant is not,
+// so a rollout never backfills a configuration that was already syncing.
 const (
-	initialBackfillMaxAge          = 24 * time.Hour
+	initialBackfillMaxAge          = 7 * 24 * time.Hour
 	initialBackfillDefaultHorizon  = 365
 	initialBackfillHorizonEnv      = "INITIAL_BACKFILL_HORIZON_DAYS"
 	initialBackfillNotBeforeEnv    = "INITIAL_BACKFILL_NOT_BEFORE"
@@ -77,9 +78,10 @@ type initialBackfillEnqueuer struct {
 
 	mu       gosync.Mutex
 	outcomes map[string]uint64
-	// seen keeps the skips already counted for a (configuration, first success)
-	// so a candidate that stays a candidate for the window is counted once.
-	seen map[string]struct{}
+	// seen keeps the skips already counted for a (configuration, first success),
+	// with that first success's instant, so a candidate that stays one for the
+	// window is counted once and is left out of the next scan.
+	seen map[string]time.Time
 }
 
 // initialBackfillNotBefore reads INITIAL_BACKFILL_NOT_BEFORE (RFC 3339). The
@@ -101,7 +103,7 @@ func initialBackfillNotBefore() (time.Time, bool) {
 func newInitialBackfillEnqueuer(pool *pgxpool.Pool, notBefore time.Time) *initialBackfillEnqueuer {
 	return &initialBackfillEnqueuer{
 		pool: pool, maxAge: initialBackfillMaxAge, notBefore: notBefore,
-		outcomes: map[string]uint64{}, seen: map[string]struct{}{},
+		outcomes: map[string]uint64{}, seen: map[string]time.Time{},
 	}
 }
 
@@ -119,24 +121,33 @@ func (enqueuer *initialBackfillEnqueuer) countSkipOnce(candidate initialBackfill
 	if _, done := enqueuer.seen[key]; done {
 		return false
 	}
-	enqueuer.seen[key] = struct{}{}
+	enqueuer.seen[key] = candidate.completedAt
 	enqueuer.outcomes[reason]++
 	return true
 }
 
-func (enqueuer *initialBackfillEnqueuer) pruneSeen(candidates []initialBackfillCandidate) {
-	live := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		live[candidate.configID+"|"+candidate.completedAt.UTC().Format(time.RFC3339Nano)+"|"] = struct{}{}
-	}
+// pruneSeen forgets the skips whose first success is past the age bound; those
+// configurations can no longer be candidates.
+func (enqueuer *initialBackfillEnqueuer) pruneSeen(now time.Time) {
 	enqueuer.mu.Lock()
 	defer enqueuer.mu.Unlock()
-	for key := range enqueuer.seen {
-		prefix := key[:strings.LastIndex(key, "|")+1]
-		if _, ok := live[prefix]; !ok {
+	for key, completedAt := range enqueuer.seen {
+		if completedAt.Before(now.Add(-enqueuer.maxAge)) {
 			delete(enqueuer.seen, key)
 		}
 	}
+}
+
+// skippedConfigs are the configurations already skipped for their current first
+// success, left out of the candidate query so they cannot starve newer ones.
+func (enqueuer *initialBackfillEnqueuer) skippedConfigs() []string {
+	enqueuer.mu.Lock()
+	defer enqueuer.mu.Unlock()
+	ids := make([]string, 0, len(enqueuer.seen))
+	for key := range enqueuer.seen {
+		ids = append(ids, key[:strings.Index(key, "|")])
+	}
+	return ids
 }
 
 // enqueuePending mints the initial backfill of every candidate, one
@@ -144,11 +155,11 @@ func (enqueuer *initialBackfillEnqueuer) pruneSeen(candidates []initialBackfillC
 // stops the others; it is retried next window while the candidate stays inside
 // the age bound.
 func (enqueuer *initialBackfillEnqueuer) enqueuePending(ctx context.Context, now time.Time, limit int) error {
+	enqueuer.pruneSeen(now)
 	candidates, err := enqueuer.candidates(ctx, now, limit)
 	if err != nil {
 		return err
 	}
-	enqueuer.pruneSeen(candidates)
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -183,11 +194,15 @@ JOIN LATERAL (
 WHERE cfg.integration_id IS NOT NULL
   AND first_run.completed_at >= $1
   AND first_run.created_at >= $3
+  AND NOT (cfg.id::text = ANY($4::text[]))
+  AND NOT EXISTS (
+    SELECT 1 FROM public.sync_runs AS earlier
+    WHERE earlier.org_id = cfg.org_id AND earlier.integration_id = cfg.integration_id AND earlier.created_at < $3)
   AND NOT EXISTS (
     SELECT 1 FROM public.scheduled_sync_occurrences AS occurrence
     WHERE occurrence.sync_config_id = cfg.id AND occurrence.scheduled_for = date_trunc('microseconds', first_run.completed_at))
 ORDER BY first_run.completed_at, cfg.id
-LIMIT $2`, now.Add(-enqueuer.maxAge), limit, enqueuer.notBefore)
+LIMIT $2`, now.Add(-enqueuer.maxAge), limit, enqueuer.notBefore, enqueuer.skippedConfigs())
 	if err != nil {
 		return nil, fmt.Errorf("list initial backfill candidates: %w", err)
 	}
@@ -252,7 +267,7 @@ func (enqueuer *initialBackfillEnqueuer) enqueueOne(ctx context.Context, now tim
 		return enqueuer.skip(ctx, candidate, InitialBackfillSkipConfigGone)
 	case !config.IsActive:
 		return enqueuer.skip(ctx, candidate, InitialBackfillSkipInactive)
-	case !config.PlannerManaged || config.IntegrationID == nil:
+	case !config.PlannerManaged || config.SourceID != nil || config.IntegrationID == nil:
 		return enqueuer.skip(ctx, candidate, InitialBackfillSkipNotPlanner)
 	}
 	tierCap, _, err := loadPlanLimits(ctx, tx, config.OrgID, 0)

@@ -237,3 +237,62 @@ func TestInitialBackfillIgnoresAFirstSyncThatStartedBeforeTheRoll(t *testing.T) 
 		t.Fatalf("state = %+v, want nothing for a sync that began before the roll", got)
 	}
 }
+
+// A first success that is days old (an outage, a long first sync) is still
+// backfilled once, inside the age bound.
+func TestInitialBackfillEnqueuesALateFirstSuccess(t *testing.T) {
+	fixture := initialBackfillFixture(t, "team")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	fixture.successRun(t, "schedule", now.Add(-3*24*time.Hour))
+
+	enqueuer := newInitialBackfillEnqueuer(fixture.pool, now.Add(-4*24*time.Hour))
+	if err := enqueuer.enqueuePending(context.Background(), now, 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.initialBackfillState(t); got != (initialBackfillState{1, 1, 1}) {
+		t.Fatalf("state = %+v, want one of each", got)
+	}
+}
+
+// A config with a failed attempt before the roll was already syncing: a later
+// success is not a first sync.
+func TestInitialBackfillIgnoresAConfigWithAPreRollFailedAttempt(t *testing.T) {
+	fixture := initialBackfillFixture(t, "team")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := fixture.pool.Exec(context.Background(), `
+INSERT INTO sync_runs (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units, created_at, completed_at)
+VALUES (gen_random_uuid(), $1, $2::uuid, 'schedule', 'incremental', 'failed', 1, 0, 1, $3, $3)`,
+		fixture.org, fixture.integrationID, now.Add(-3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.successRun(t, "schedule", now.Add(-10*time.Minute))
+
+	enqueuer := newInitialBackfillEnqueuer(fixture.pool, now.Add(-time.Hour))
+	if err := enqueuer.enqueuePending(context.Background(), now, 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.initialBackfillState(t); got != (initialBackfillState{}) {
+		t.Fatalf("state = %+v, want nothing", got)
+	}
+}
+
+// A source-scoped child configuration is not the planner-managed parent.
+func TestInitialBackfillSkipsASourceScopedChild(t *testing.T) {
+	fixture := initialBackfillFixture(t, "team")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := fixture.pool.Exec(context.Background(), `UPDATE sync_configurations SET source_id = $2::uuid WHERE id = $1`, fixture.configID, fixture.sourceID); err != nil {
+		t.Fatal(err)
+	}
+	fixture.successRun(t, "schedule", now.Add(-10*time.Minute))
+
+	enqueuer := newInitialBackfillEnqueuer(fixture.pool, rollInstant(t, fixture))
+	if err := enqueuer.enqueuePending(context.Background(), now, 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.initialBackfillState(t); got != (initialBackfillState{}) {
+		t.Fatalf("state = %+v, want nothing", got)
+	}
+	if got := enqueuer.outcomes[InitialBackfillSkipNotPlanner]; got != 1 {
+		t.Fatalf("not_planner_managed counted %d times, want once", got)
+	}
+}

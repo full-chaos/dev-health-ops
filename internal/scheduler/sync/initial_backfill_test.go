@@ -67,7 +67,10 @@ func TestInitialBackfillSkipCountedOncePerFirstSuccess(t *testing.T) {
 	if enqueuer.outcomes[InitialBackfillSkipCapNotAboveDepth] != 1 {
 		t.Fatalf("outcomes = %v", enqueuer.outcomes)
 	}
-	enqueuer.pruneSeen(nil)
+	if ids := enqueuer.skippedConfigs(); len(ids) != 1 || ids[0] != "c1" {
+		t.Fatalf("skippedConfigs = %v", ids)
+	}
+	enqueuer.pruneSeen(time.Unix(100, 0).Add(initialBackfillMaxAge + time.Hour))
 	if len(enqueuer.seen) != 0 {
 		t.Fatalf("seen not pruned: %v", enqueuer.seen)
 	}

@@ -1,6 +1,7 @@
 package apiservice
 
 import (
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -91,6 +92,21 @@ func userReposCall(call string) bool {
 	return routeless || route == "/user/repos"
 }
 
+// browseRequestNamesOwner reports whether the request's query carries a non-empty owner.
+func browseRequestNamesOwner(request venueoracle.Request) bool {
+	_, rawQuery, _ := strings.Cut(request.Path, "?")
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return false
+	}
+	for _, owner := range query["owner"] {
+		if owner != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // alignBrowseProviderCalls holds the provider traffic of the credential repos oracle's Go answers to Python's flat
 // sequence of calls, request by request. Go's calls for one request are tied to that request: set aside the two kinds
 // of call the ruling adds (every /user/repos page before the owner's /orgs listing, and the /users/{owner}/repos
@@ -110,7 +126,7 @@ func alignBrowseProviderCalls(requests []venueoracle.Request, goCalls map[string
 			}
 		}
 		var expected []string
-		onlyTokenListing := len(calls) > 0 && goStatus[request.Name] >= 400
+		onlyTokenListing := len(calls) > 0 && goStatus[request.Name] >= 400 && browseRequestNamesOwner(request)
 		for position, call := range calls {
 			path := callPath(call)
 			if path != "/user/repos" {

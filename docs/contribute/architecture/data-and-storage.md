@@ -411,7 +411,14 @@ Two rules hold for every read of the tree:
    `work_graph_issue_pr`. Each row carries a `provenance` tier, ranked
    **native > explicit_text > heuristic**. All three tiers count as links.
    A consumer names the tier it read and never presents a lower tier as
-   native. The `explicit_text` tier is provider-agnostic: a pull request's
+   native. The two lower tiers are a **fallback only** (chris, 2026-10-15):
+   a pull request that has a native issue link gets no `explicit_text` or
+   `heuristic` link, and an issue that has a native pull request link gets
+   none either. The text and heuristic writers skip both sides, and every
+   work-graph build first retracts the lower-tier rows a native link outranks
+   (pre-step `issue_pr_fallback_retraction`, from `work_graph_issue_pr` and
+   from `work_graph_edges`), so a row written before the rule, or before its
+   native link arrived, is gone after the next build. The `explicit_text` tier is provider-agnostic: a pull request's
    title, body or head branch that names an issue resolves to a link only
    against an actual issue row of the org, through one shared matcher with a
    key grammar per provider family (Jira and Linear `KEY-n`; GitHub `#n` and

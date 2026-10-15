@@ -133,9 +133,9 @@ func TestMembershipThresholdMatchesPython(t *testing.T) {
 	}
 }
 
-// TestLexicalArgmaxMatchesPython includes the NaN cases. CHAOS-4840 fixed both
-// planes: NaN is absent from the argmax, and the fixture is regenerated from the
-// fixed reference.
+// TestLexicalArgmaxMatchesPython includes the NaN cases. CHAOS-4840 fixed the Go
+// plane only: NaN is absent from the argmax. The frozen Python reference keeps
+// the old answer, and chaos4840Divergence overrides the three affected cases.
 func TestLexicalArgmaxMatchesPython(t *testing.T) {
 	golden := loadMembershipGolden(t)
 	for _, goldenCase := range golden.Cases {

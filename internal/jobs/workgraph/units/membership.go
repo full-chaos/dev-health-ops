@@ -164,7 +164,7 @@ func FloatValue(value any) float64 {
 // The previous behaviour (Python `min` over `(-weight, key)`) compared False
 // against every NaN, never reached the lexical key, and returned whichever entry
 // came first, so a NaN could outrank a real 0.9 purely by being inserted first,
-// and is_dominant is persisted. The Python reference carries the same fix.
+// and is_dominant is persisted. The frozen Python reference keeps the old behaviour (see chaos4840Divergence in the tests).
 //
 // This is an explicit fold rather than a sort so the order is visibly total.
 func LexicalArgmax(distribution *Distribution) string {

@@ -511,3 +511,43 @@ func isInsufficientPrivilege(err error) bool {
 func collapse(statement string) string {
 	return strings.Join(strings.Fields(statement), " ")
 }
+
+// TestCoordinatorInsertsBackfillJobsAndDomainIsDenied executes the initial-backfill INSERT the scheduler
+// runs (CHAOS-2275) as each role. The coordinator records the job and nothing else; the domain role
+// never creates one. The harness table is the reconciliation stub; the columns and defaults the
+// production INSERT relies on (migration 0002) are added here, in this test's own database.
+func TestCoordinatorInsertsBackfillJobsAndDomainIsDenied(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, uri, roles := startGrantHarness(t, ctx)
+	if _, err := admin.Exec(ctx, `ALTER TABLE public.backfill_jobs
+		ADD COLUMN status text NOT NULL DEFAULT 'pending',
+		ADD COLUMN total_chunks integer NOT NULL DEFAULT 0,
+		ADD COLUMN completed_chunks integer NOT NULL DEFAULT 0,
+		ADD COLUMN failed_chunks integer NOT NULL DEFAULT 0,
+		ALTER COLUMN created_at SET DEFAULT now(),
+		ALTER COLUMN updated_at SET DEFAULT now()`); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
+
+	insert := `INSERT INTO public.backfill_jobs
+		(id, org_id, sync_config_id, celery_task_id, status, since_date, before_date, total_chunks, completed_chunks, failed_chunks)
+		VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'sync_run:' || gen_random_uuid()::text,
+			'pending', '2026-01-01', '2026-01-31', 0, 0, 0)`
+	if err := execInRolledBackTransaction(t, ctx, coordinator, insert); err != nil {
+		t.Errorf("coordinator cannot record the initial backfill job: %v\n  statement: %s", err, collapse(insert))
+	}
+	for _, statement := range []string{
+		"UPDATE public.backfill_jobs SET status = 'done'",
+		"DELETE FROM public.backfill_jobs",
+	} {
+		if err := execInRolledBackTransaction(t, ctx, coordinator, statement); !isInsufficientPrivilege(err) {
+			t.Errorf("coordinator may run a statement it should not: error=%v\n  statement: %s", err, collapse(statement))
+		}
+	}
+	if err := execInRolledBackTransaction(t, ctx, domain, insert); !isInsufficientPrivilege(err) {
+		t.Errorf("domain role recorded a backfill job: error=%v\n  statement: %s", err, collapse(insert))
+	}
+}

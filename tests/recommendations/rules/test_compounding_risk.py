@@ -216,3 +216,48 @@ def test_persisted_score_takes_precedence_over_legacy_proxy() -> None:
     assert result is not None
     assert result.severity == "critical"
     assert "compounding_risk_daily" in {ev.metric_table for ev in result.evidence}
+
+
+# ---------------------------------------------------------------------------
+# 9. The rationale names only the drivers (norm * weight above zero)
+# ---------------------------------------------------------------------------
+
+
+def _rationale(drivers: tuple[str, ...]) -> str:
+    snap = make_snapshot(
+        compounding_risk_score=0.7,
+        compounding_risk_severity="high",
+        compounding_risk_drivers=drivers,
+    )
+    result = evaluate_compounding_risk(snap, NOW)
+    assert result is not None
+    return result.rationale
+
+
+def test_rationale_names_all_four_drivers() -> None:
+    assert _rationale(
+        ("churn", "complexity trend", "ownership concentration", "review latency")
+    ) == (
+        "Compounding Risk score is 0.700 (severity: high). Churn, complexity trend, "
+        "ownership concentration, and review latency are compounding above their "
+        "tuned thresholds."
+    )
+
+
+def test_rationale_leaves_out_a_zero_contribution_input() -> None:
+    text = _rationale(("churn", "ownership concentration", "review latency"))
+    assert "complexity" not in text
+    assert text.endswith(
+        "Churn, ownership concentration, and review latency are compounding above "
+        "their tuned thresholds."
+    )
+
+
+def test_rationale_with_two_one_and_no_drivers() -> None:
+    assert _rationale(("churn", "review latency")).endswith(
+        "Churn and review latency are compounding above their tuned thresholds."
+    )
+    assert _rationale(("review latency",)).endswith(
+        "Review latency is compounding above its tuned threshold."
+    )
+    assert _rationale(()) == "Compounding Risk score is 0.700 (severity: high)."

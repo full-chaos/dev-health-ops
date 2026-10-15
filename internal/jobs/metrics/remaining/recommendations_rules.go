@@ -118,6 +118,10 @@ type MetricsSnapshot struct {
 	CompoundingRiskCoverage      float64
 	CompoundingRiskCoverageKnown bool
 	CompoundingRiskInputs        []string
+	// CompoundingRiskDrivers names the inputs whose stored norm times weight
+	// is above zero, in the order of the four inputs. Only these are named
+	// as compounding; an input present at zero contribution is not.
+	CompoundingRiskDrivers []string
 }
 
 // EvidenceRef mirrors the reference's frozen EvidenceRef. Value is already
@@ -461,6 +465,28 @@ func evaluateCompoundingRisk(snapshot MetricsSnapshot, now time.Time) (*Recommen
 	return compoundingRiskFromHotspotProxy(snapshot, now)
 }
 
+// compoundingRiskDriverSentence names only the inputs that contribute to the
+// score (norm times weight above zero). With none it claims nothing.
+func compoundingRiskDriverSentence(drivers []string) string {
+	switch len(drivers) {
+	case 0:
+		return ""
+	case 1:
+		return " " + upperFirst(drivers[0]) + " is compounding above its tuned threshold."
+	case 2:
+		return " " + upperFirst(drivers[0]) + " and " + drivers[1] + " are compounding above their tuned thresholds."
+	}
+	last := len(drivers) - 1
+	return " " + upperFirst(strings.Join(drivers[:last], ", ")) + ", and " + drivers[last] + " are compounding above their tuned thresholds."
+}
+
+func upperFirst(text string) string {
+	if text == "" {
+		return text
+	}
+	return strings.ToUpper(text[:1]) + text[1:]
+}
+
 func compoundingRiskFromComposite(snapshot MetricsSnapshot, now time.Time) (*Recommendation, error) {
 	severity := snapshot.CompoundingRiskSeverity
 
@@ -486,21 +512,15 @@ func compoundingRiskFromComposite(snapshot MetricsSnapshot, now time.Time) (*Rec
 		if err != nil {
 			return nil, err
 		}
-		rationale = fmt.Sprintf(
-			"Compounding Risk score is %s (severity: %s). "+
-				"Churn, complexity trend, ownership concentration, and review "+
-				"latency are compounding above their tuned thresholds.",
-			scoreText, severity,
-		)
+		rationale = fmt.Sprintf("Compounding Risk score is %s (severity: %s)", scoreText, severity)
 		// A score from fewer than all four inputs names its coverage and the
-		// inputs it stands on, and claims only those.
+		// inputs it stands on.
 		if snapshot.CompoundingRiskCoverageKnown && snapshot.CompoundingRiskCoverage < 1 && len(snapshot.CompoundingRiskInputs) > 0 {
-			rationale = fmt.Sprintf(
-				"Compounding Risk score is %s (severity: %s), computed from %.0f%% of its inputs (%s). "+
-					"The inputs that were present are compounding above their tuned thresholds.",
-				scoreText, severity, snapshot.CompoundingRiskCoverage*100, strings.Join(snapshot.CompoundingRiskInputs, ", "),
-			)
+			percent := float64(snapshot.CompoundingRiskCoverage * 100)
+			rationale = fmt.Sprintf("%s, computed from %.0f%% of its inputs (%s)",
+				rationale, percent, strings.Join(snapshot.CompoundingRiskInputs, ", "))
 		}
+		rationale += "." + compoundingRiskDriverSentence(snapshot.CompoundingRiskDrivers)
 	}
 
 	recommendationSeverity := "warning"

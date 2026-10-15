@@ -42,6 +42,15 @@ from dev_health_ops.recommendations.snapshot import MetricsSnapshot  # noqa: E40
 
 OUTPUT_PATH = Path(__file__).parent / "recommendations_rules_golden.json"
 
+DRIVER_SETS: list[tuple[str, ...]] = [
+    (),
+    ("churn", "complexity trend", "ownership concentration", "review latency"),
+    ("churn", "ownership concentration", "review latency"),
+    ("churn", "review latency"),
+    ("review latency",),
+    ("complexity trend",),
+]
+
 # Per-case identity and window, for the same reason `now` is per-case.
 #
 # Round 2 fixed the frozen `computed_at` and stopped there. Every case still
@@ -162,6 +171,7 @@ def snapshot(**overrides) -> MetricsSnapshot:
         hotspot_churn_overlap=0.6,
         compounding_risk_score=None,
         compounding_risk_severity=None,
+        compounding_risk_drivers=(),
     )
     base.update(overrides)
     return MetricsSnapshot(**base)
@@ -226,6 +236,19 @@ def build_cases() -> list[tuple[str, MetricsSnapshot]]:
                     f"composite-{severity!r}-{score!r}",
                     snapshot(
                         compounding_risk_severity=severity, compounding_risk_score=score
+                    ),
+                )
+            )
+    # The rationale names only the drivers (norm * weight above zero).
+    for drivers in DRIVER_SETS:
+        for severity in ("elevated", "high"):
+            cases.append(
+                (
+                    f"composite-{severity}-drivers-{len(drivers)}-{'-'.join(drivers) or 'none'}",
+                    snapshot(
+                        compounding_risk_severity=severity,
+                        compounding_risk_score=0.7,
+                        compounding_risk_drivers=drivers,
                     ),
                 )
             )
@@ -316,6 +339,7 @@ def build_cases() -> list[tuple[str, MetricsSnapshot]]:
                     hotspot_churn_overlap=rng.choice(pool_scalar),
                     compounding_risk_score=rng.choice(pool_scalar),
                     compounding_risk_severity=rng.choice(SEVERITY_VALUES),
+                    compounding_risk_drivers=DRIVER_SETS[index % len(DRIVER_SETS)],
                 ),
             )
         )
@@ -378,6 +402,7 @@ def encode_snapshot(snap: MetricsSnapshot) -> dict:
         "hotspot_churn_overlap": encode_float(snap.hotspot_churn_overlap),
         "compounding_risk_score": encode_float(snap.compounding_risk_score),
         "compounding_risk_severity": snap.compounding_risk_severity,
+        "compounding_risk_drivers": list(snap.compounding_risk_drivers),
     }
 
 

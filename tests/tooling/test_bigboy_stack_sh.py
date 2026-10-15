@@ -384,6 +384,22 @@ def test_relative_paths_of_the_tracked_base_resolve_against_the_bigboy_root(
         "BIGBOY_OPERATOR_IMAGE": _DHO,
     }
     env["DHO_API_CH_USERS_XML"] = str(r / ".go-api-dev/dho_api_ch.xml")
+    real = shutil.which("docker")
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    log = tmp_path / "shim.log"
+    (shim / "docker").write_text(
+        f'#!/usr/bin/env bash\necho "$*" >> {log}\nexec {real} "$@"\n'
+    )
+    (shim / "docker").chmod(0o755)
+    through = subprocess.run(
+        [str(STACK_SH), "config", "--quiet"],
+        env={**env, "PATH": f"{shim}:{env['PATH']}"},
+        capture_output=True,
+        text=True,
+    )
+    assert through.returncode == 0, through.stderr
+    assert f"--project-directory {r} " in log.read_text()
     files = subprocess.run(
         [str(STACK_SH), "files"], env=env, capture_output=True, text=True
     ).stdout.split()

@@ -652,27 +652,23 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 			},
 			MaxPages: sourceDiscoveryMaxPages,
 		})
+		if err == nil && !page.PageBudgetExhausted && namespace != "" && !githubItemsHaveOwner(page.Items, namespace) {
+			// /user/repos only lists repositories the credential owns,
+			// collaborates on or reaches through org membership. A scoped
+			// namespace outside that set (another user, an org the token
+			// is not a member of) is empty there even though the
+			// credential can read its repositories: list the namespace
+			// directly, org first then user, as the non-all_repos branch does.
+			if ownerPage, ownerErr := collectGitHubOwnerRepos(ctx, client, namespace); ownerErr == nil {
+				page = ownerPage
+			}
+		}
 	} else if owner == "" {
 		// Python: `if not owner: return []` -- no scope resolved at all, no
 		// API call, no sources. NOT the same as all_repos with no namespace.
 		return nil, nil
 	} else {
-		query := url.Values{"per_page": {strconv.Itoa(sourceDiscoveryPerPage)}, "type": {"all"}}
-		page, err = providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-			Path: "/orgs/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
-		})
-		if err != nil {
-			// Python's discover_github_repos falls back from org to user
-			// lookup (an owner that is a user account, not an org, 404s
-			// under /orgs/{owner}/repos). Retry once under /users/ before
-			// giving up.
-			userPage, userErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-				Path: "/users/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
-			})
-			if userErr == nil {
-				page, err = userPage, nil
-			}
-		}
+		page, err = collectGitHubOwnerRepos(ctx, client, owner)
 	}
 	if err != nil {
 		return nil, err
@@ -711,7 +707,46 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 			Metadata: metadataOf("owner", repo.Owner.Login),
 		})
 	}
+	if allRepos && len(result) == 0 {
+		service.log().WarnContext(ctx, "github all_repos discovery found no repositories",
+			"namespace", namespace, "app_auth", githubCredentialIsAppAuth(credential),
+			"candidates", len(page.Items))
+	}
 	return result, nil
+}
+
+// collectGitHubOwnerRepos lists one owner's repositories under /orgs first,
+// then /users: an owner that is a user account 404s under /orgs/{owner}/repos
+// (discover_github_repos' org-to-user fallback).
+func collectGitHubOwnerRepos(ctx context.Context, client *providerfoundation.HTTPClient, owner string) (providerfoundation.PageCollection, error) {
+	query := url.Values{"per_page": {strconv.Itoa(sourceDiscoveryPerPage)}, "type": {"all"}}
+	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+		Path: "/orgs/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
+	})
+	if err == nil {
+		return page, nil
+	}
+	userPage, userErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+		Path: "/users/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
+	})
+	if userErr != nil {
+		return page, err
+	}
+	return userPage, nil
+}
+
+func githubItemsHaveOwner(items []json.RawMessage, owner string) bool {
+	for _, raw := range items {
+		var repo struct {
+			Owner struct {
+				Login string `json:"login"`
+			} `json:"owner"`
+		}
+		if json.Unmarshal(raw, &repo) == nil && strings.EqualFold(repo.Owner.Login, owner) {
+			return true
+		}
+	}
+	return false
 }
 
 // gitlabDiscoveryOptions mirrors discover_gitlab_repos' group/owner/search/

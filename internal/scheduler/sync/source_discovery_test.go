@@ -957,3 +957,55 @@ func TestDiscoveryKeepsTheProviderStatusOfAnAuthenticationFailure(t *testing.T) 
 		}
 	}
 }
+
+// A scoped all_repos namespace the credential does not reach through
+// /user/repos (a personal account other than the token's own) must be listed
+// from the namespace itself: /orgs 404s, /users answers.
+func TestDiscoverGitHubAllReposScopedPersonalNamespaceFallsBackToUserListing(t *testing.T) {
+	doer := &sequencedSourceDiscoveryDoer{
+		t:        t,
+		statuses: []int{http.StatusOK, http.StatusNotFound, http.StatusOK},
+		bodies: []string{
+			`[{"name":"mine","full_name":"token-owner/mine","owner":{"login":"token-owner"}}]`,
+			`{"message":"Not Found"}`,
+			`[{"name":"dotfiles","full_name":"chrisgeo/dotfiles","owner":{"login":"chrisgeo"}}]`,
+		},
+	}
+	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true, "owner": "chrisgeo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].FullName != "chrisgeo/dotfiles" {
+		t.Fatalf("discoverGitHub() = %#v, want chrisgeo/dotfiles", sources)
+	}
+	want := []string{"/user/repos", "/orgs/chrisgeo/repos", "/users/chrisgeo/repos"}
+	if strings.Join(doer.paths, ",") != strings.Join(want, ",") {
+		t.Fatalf("requested paths = %v, want %v", doer.paths, want)
+	}
+}
+
+// No namespace: token-wide listing keeps every owner, personal and org, and
+// makes exactly one call.
+func TestDiscoverGitHubAllReposWithoutNamespaceKeepsPersonalAndOrgRepos(t *testing.T) {
+	doer := &fakeSourceDiscoveryDoer{t: t, body: `[
+		{"name":"dotfiles","full_name":"chrisgeo/dotfiles","owner":{"login":"chrisgeo"}},
+		{"name":"api","full_name":"acme/api","owner":{"login":"acme"}}
+	]`}
+	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 2 || len(doer.paths) != 1 || doer.paths[0] != "/user/repos" {
+		t.Fatalf("sources=%#v paths=%v, want both repos from one /user/repos call", sources, doer.paths)
+	}
+}

@@ -1289,3 +1289,34 @@ func TestJiraTeamCatalogFailedBoardListingStillReadsLaterProjectBodies(t *testin
 	}
 	t.Fatal("BBB project row missing")
 }
+
+// Under strict the first failure drops the whole batch, so no later project
+// body is requested.
+func TestJiraTeamCatalogStrictBodyFailureStopsTheWalkImmediately(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
+		jiraTeamCatalogProjectSearchURI: {
+			body: `{"values":[{"id":"10001","key":"AAA","name":"A"},{"id":"10002","key":"BBB","name":"B"}]}`,
+		},
+		"/rest/api/3/project/AAA": {status: http.StatusInternalServerError, body: `{"errorMessages":["boom"]}`},
+	}}
+	handler := JiraTeamCatalogRouteHandler{}
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(doer))
+
+	_, err := handler.CollectTeamCatalog(
+		context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: true},
+		providerfoundation.Credential{Provider: "jira"}, client,
+		TeamCatalogSelections{Teams: true},
+		now,
+	)
+	if err == nil {
+		t.Fatal("strict run must return the body error")
+	}
+	for _, request := range doer.requests {
+		if strings.Contains(request, "/project/BBB") {
+			t.Fatalf("strict run requested a later body after the first failure: %q", request)
+		}
+	}
+}

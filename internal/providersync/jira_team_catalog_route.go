@@ -321,7 +321,7 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		}
 	}
 
-	sprints, targets, sprintErr := handler.collectSprints(ctx, client, claim, projectKeys, normalizedAt)
+	sprints, targets, sprintErr := handler.collectSprints(ctx, client, claim, projectKeys, normalizedAt, ref.Strict)
 	applyJiraProjectTargets(ctx, ref.OrgID, rows.Projects, targets)
 	if sprintErr != nil {
 		if ref.Strict {
@@ -474,7 +474,7 @@ func jiraTeamCatalogSearchProjects(
 // one documented per-board 400 shape. The caller decides strict-vs-non-strict
 // handling of that returned error; this function itself never distinguishes.
 func (handler JiraTeamCatalogRouteHandler) collectSprints(
-	ctx context.Context, client *providerfoundation.HTTPClient, claim Claim, projectKeys []string, normalizedAt time.Time,
+	ctx context.Context, client *providerfoundation.HTTPClient, claim Claim, projectKeys []string, normalizedAt time.Time, strict bool,
 ) ([]jiraSprintRow, map[string]jiraProjectTarget, error) {
 	sprints := make([]jiraSprintRow, 0)
 	// targets holds the target date of each project whose body was read, even
@@ -482,15 +482,16 @@ func (handler JiraTeamCatalogRouteHandler) collectSprints(
 	// answers already read, and not the bodies of the projects after it.
 	targets := make(map[string]jiraProjectTarget, len(projectKeys))
 	// walkErr is the first failure. Once set, the sprint rows are lost (the
-	// Python outer try/except), so the loop only reads the remaining bodies:
-	// the same calls the happy path makes, and no board or sprint call.
+	// Python outer try/except), so a non-strict loop only reads the remaining
+	// bodies. A strict run drops the whole batch on the error, so it returns at
+	// the first failure and makes no later call.
 	var walkErr error
 	failedBodies := 0
 	for _, key := range projectKeys {
 		var detail jiraTeamCatalogProjectDetailPayload
 		detailPath := "/rest/api/3/project/" + url.PathEscape(key)
 		if err := jiraFetchObject(ctx, client, http.MethodGet, detailPath, nil, &detail); err != nil {
-			if ctx.Err() != nil {
+			if strict || ctx.Err() != nil {
 				return nil, targets, err
 			}
 			failedBodies++
@@ -513,10 +514,16 @@ func (handler JiraTeamCatalogRouteHandler) collectSprints(
 		if !jiraTeamCatalogBoardCapableProjectTypes[projectType] {
 			walkErr = fmt.Errorf("%w: unrecognized jira project type %q for project_key=%q",
 				providerfoundation.ErrNormalizationInvalid, detail.ProjectTypeKey, key)
+			if strict {
+				return nil, targets, walkErr
+			}
 			continue
 		}
 		boardSprints, err := handler.collectProjectSprints(ctx, client, claim, key, normalizedAt)
 		if err != nil {
+			if strict {
+				return nil, targets, err
+			}
 			walkErr = err
 			continue
 		}

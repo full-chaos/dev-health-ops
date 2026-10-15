@@ -23,16 +23,14 @@ func TestStatusErrorCarriesRouteTemplateNotRawPath(t *testing.T) {
 		"membership": {"/orgs/acme/teams/platform/memberships/octocat-login", "/orgs/{org}/teams/{slug}/memberships/{login}"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			logs := captureLogs(t)
 			client := transportClient(t, &http.Client{}, server.URL)
-			ctx := WithRouteTemplate(context.Background(), tc.route)
-			_, err := client.Do(ctx, http.MethodGet, tc.path+"?token=secret-query", nil)
+			_, err := client.DoRoute(context.Background(), http.MethodGet, tc.route, tc.path+"?token=secret-query", nil)
 			var providerErr *ProviderError
 			if !errors.As(err, &providerErr) || providerErr.StatusCode != http.StatusInternalServerError {
 				t.Fatalf("err = %v, want a 500 *ProviderError", err)
 			}
-			if strings.Contains(err.Error(), "octocat-login") || strings.Contains(logs.String(), "octocat-login") {
-				t.Fatalf("login reached the error or log: %q / %s", err.Error(), logs.String())
+			if strings.Contains(err.Error(), "octocat-login") {
+				t.Fatalf("login reached the error: %q", err.Error())
 			}
 			if !strings.Contains(err.Error(), "route="+tc.route) {
 				t.Fatalf("Error() = %q lacks route=%s", err.Error(), tc.route)
@@ -59,5 +57,19 @@ func TestProviderErrorMessagePrintsEachPartOnce(t *testing.T) {
 		if strings.Count(message, part) != 1 {
 			t.Fatalf("Error() = %q, want %q exactly once", message, part)
 		}
+	}
+}
+
+func TestRouteTemplateDoesNotOutliveItsCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client := transportClient(t, &http.Client{}, server.URL)
+	ctx := context.Background()
+	_, _ = client.DoRoute(ctx, http.MethodGet, "/users/{login}", "/users/octocat-login", nil)
+	_, err := client.Do(ctx, http.MethodGet, "/repos/acme/api", nil)
+	if err == nil || strings.Contains(err.Error(), "route=") {
+		t.Fatalf("Error() = %v, want no route on a plain Do", err)
 	}
 }

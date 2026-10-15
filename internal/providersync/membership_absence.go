@@ -49,7 +49,7 @@ func (prover githubMembershipAbsence) Absence(ctx context.Context, teamID, membe
 	if !okTeam || !okMember || strings.TrimSpace(slug) == "" || strings.TrimSpace(login) == "" || prover.client == nil {
 		return AbsenceUnproven
 	}
-	response, err := prover.client.Do(providerfoundation.WithRouteTemplate(ctx, "/orgs/{org}/teams/{slug}/memberships/{login}"), http.MethodGet,
+	response, err := prover.client.DoRoute(ctx, http.MethodGet, "/orgs/{org}/teams/{slug}/memberships/{login}",
 		"/orgs/"+url.PathEscape(prover.org)+"/teams/"+url.PathEscape(slug)+"/memberships/"+url.PathEscape(login), nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
@@ -91,7 +91,7 @@ func (prover gitlabMembershipAbsence) Absence(ctx context.Context, teamID, membe
 	if !okMember || !okTeam || strings.TrimSpace(username) == "" || prover.client == nil {
 		return AbsenceUnproven
 	}
-	response, err := prover.client.Do(providerfoundation.WithRouteTemplate(ctx, "/orgs/{org}/teams/{slug}/memberships/{login}"), http.MethodGet,
+	response, err := prover.client.DoRoute(ctx, http.MethodGet, "/orgs/{org}/teams/{slug}/memberships/{login}",
 		groupPath+"/members?per_page=100&query="+url.QueryEscape(username), nil)
 	if err != nil {
 		return AbsenceUnproven

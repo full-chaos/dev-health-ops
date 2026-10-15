@@ -297,12 +297,12 @@ func responseLeftOrigin(response *http.Response, target *url.URL) bool {
 
 type routeKey struct{}
 
-// WithRouteTemplate names the route of the next Do call with a template
-// (e.g. /users/{login}) so a failure can say which route failed without
-// printing a path that carries a member login. The template must be a
-// static literal, never built from a request value.
-func WithRouteTemplate(ctx context.Context, template string) context.Context {
-	return context.WithValue(ctx, routeKey{}, template)
+// DoRoute is Do for a route whose path carries a member login or other
+// personal data: a failure names the route by template (for example
+// /users/{login}) instead of the path. The template must be a static literal,
+// never built from a request value. It applies to this call only.
+func (c *HTTPClient) DoRoute(ctx context.Context, method, template, path string, body io.Reader) (*http.Response, error) {
+	return c.Do(context.WithValue(ctx, routeKey{}, template), method, path, body)
 }
 
 func routeTemplate(ctx context.Context) string {

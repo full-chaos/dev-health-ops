@@ -189,7 +189,7 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 		completed := false
 		attribute := func(key string) (*string, error) {
 			if _, present := source.Get(key); !present && !completed {
-				response, err := client.Do(providerfoundation.WithRouteTemplate(ctx, "/users/{login}"), "GET", githubUserURLPath(entry, login), nil)
+				response, err := client.DoRoute(ctx, "GET", "/users/{login}", githubUserURLPath(entry, login), nil)
 				if err != nil {
 					return nil, err
 				}

@@ -108,6 +108,7 @@ type credentialLookupFailure struct {
 	Reason, Class, Type string
 	HasToken, HasApp    bool
 	IgnoredFields       []string
+	IgnoredCount        int
 	IntegrationIDs      []string
 }
 
@@ -140,7 +141,7 @@ func logCredentialLookupFailure(ctx context.Context, orgID string, failure crede
 		"integration_ids", strings.Join(failure.IntegrationIDs, ","),
 	}
 	if failure.Reason == reasonCredentialShapeInvalid {
-		attrs = append(attrs, "ignored_fields", ignoredFieldsText(failure.IgnoredFields))
+		attrs = append(attrs, "ignored_fields", ignoredFieldsText(failure.IgnoredFields), "ignored_field_count", failure.IgnoredCount)
 	}
 	slog.WarnContext(ctx, credentialLookupFailedEvent, attrs...)
 }
@@ -487,7 +488,7 @@ func githubCredentialFromJSON(plaintext []byte) (credential *GitHubCredentials, 
 	if errors.As(decodeErr, &refused) {
 		failure := lookupFailure(storedFailureReason(refused.Reason))
 		failure.HasToken, failure.HasApp = refused.HasToken, refused.HasApp
-		failure.IgnoredFields = refused.Ignored
+		failure.IgnoredFields, failure.IgnoredCount = refused.Ignored, refused.IgnoredCount
 		return nil, nil, failure
 	}
 	if decodeErr != nil {

@@ -107,3 +107,13 @@ func TestShapeRefusalCarriesTheIgnoredKeyNamesNotTheirValues(t *testing.T) {
 		t.Fatalf("Ignored carries a value: %v", refused.Ignored)
 	}
 }
+
+func TestShapeRefusalCountsBlankKeysThatTheNamesOmit(t *testing.T) {
+	for _, payload := range []string{`{"":"blank-value"}`, `{" ":"space-value"}`} {
+		_, err := DecodeStoredGitHubCredential([]byte(payload))
+		var refused *StoredCredentialFailure
+		if !errors.As(err, &refused) || refused.IgnoredCount != 1 || len(refused.Ignored) != 0 {
+			t.Fatalf("payload %s: refusal = %+v, want IgnoredCount 1 and no names", payload, refused)
+		}
+	}
+}

@@ -39,6 +39,7 @@ type StoredCredentialFailure struct {
 	Reason           string
 	HasToken, HasApp bool
 	Ignored          []string
+	IgnoredCount     int
 }
 
 func (failure *StoredCredentialFailure) Error() string {
@@ -88,7 +89,7 @@ func DecodeStoredGitHubCredential(plaintext []byte) (StoredGitHubCredential, err
 	stored.Token, stored.AppID, stored.InstallationID, stored.BaseURL = value("token"), value("app_id"), value("installation_id"), value("base_url")
 	if shapeErr := ValidateCredentialShape(credential); shapeErr != nil {
 		hasApp := stored.AppID.Configured() || stored.PrivateKey.Configured() || stored.InstallationID.Configured()
-		return StoredGitHubCredential{}, &StoredCredentialFailure{Reason: StoredCredentialShapeInvalid, HasToken: stored.Token.Configured(), HasApp: hasApp, Ignored: stored.Ignored}
+		return StoredGitHubCredential{}, &StoredCredentialFailure{Reason: StoredCredentialShapeInvalid, HasToken: stored.Token.Configured(), HasApp: hasApp, Ignored: stored.Ignored, IgnoredCount: ignoredFieldCount(credential, githubUsedFields)}
 	}
 	return stored, nil
 }
@@ -113,4 +114,21 @@ func ignoredFieldNames(credential Credential, used map[string]bool) []string {
 	}
 	sort.Strings(ignored)
 	return ignored
+}
+
+// ignoredFieldCount is how many distinct keys the credential does not use, blank names included:
+// the count stays true when the names list cannot show a blank key.
+func ignoredFieldCount(credential Credential, used map[string]bool) int {
+	seen := map[string]bool{}
+	for name := range credential.fields {
+		if !used[name] {
+			seen[name] = true
+		}
+	}
+	for name := range credential.deferred {
+		if !used[name] {
+			seen[name] = true
+		}
+	}
+	return len(seen)
 }

@@ -222,13 +222,29 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			return CompleteRouteBatch{}, milestoneErr
 		}
 		pages += milestonePages
+		seenMilestone := make(map[string]bool, len(milestones))
 		for _, milestone := range milestones {
-			sprint, sprintErr := normalizeGitLabSprint(claim, fullName, milestone, normalizedAt)
+			// A milestone's id is global: one listed twice is one sprint row.
+			if id := milestone.ID.String(); seenMilestone[id] {
+				continue
+			} else {
+				seenMilestone[id] = true
+			}
+			// A group milestone is keyed by its group (the key the project target
+			// names), so every project of the group writes the same row.
+			owner := fullName
+			if milestone.isGroupMilestone() {
+				owner = gitlabGroupMilestoneOwner(milestone)
+			}
+			sprint, sprintErr := normalizeGitLabSprint(claim, owner, milestone, normalizedAt)
 			if sprintErr != nil {
 				return CompleteRouteBatch{}, sprintErr
 			}
 			rows.Sprints = append(rows.Sprints, sprint)
 		}
+		slog.Default().DebugContext(ctx, "gitlab_work_items_milestones",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "milestones_listed", len(milestones), "sprints_written", len(rows.Sprints),
+			"group_milestones", countGroupMilestones(milestones))
 	}
 
 	query := url.Values{"state": {"all"}}
@@ -563,7 +579,7 @@ func collectGitLabMilestones(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages int,
 ) ([]gitlabIssueMilestonePayload, int, error) {
-	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, url.Values{"state": {"all"}}, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, url.Values{"state": {"all"}, "include_ancestors": {"true"}, "include_parent_milestones": {"true"}}, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}

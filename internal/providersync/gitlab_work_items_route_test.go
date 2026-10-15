@@ -354,3 +354,64 @@ func TestGitLabWorkItemsRouteAcceptsOnlyCanonicalClaimAcrossFiveAliases(t *testi
 func jsonUnmarshalEffect(raw []byte, target any) error {
 	return json.Unmarshal(raw, target)
 }
+
+// CHAOS-9782: a milestone owned by an ancestor group becomes a sprints row keyed by
+// its group (the key a project's target names), once however often it is listed,
+// and the issue planned on it carries its id.
+func TestGitLabWorkItemsRouteWritesGroupMilestoneSprintRows(t *testing.T) {
+	responses := gitLabWorkItemResponses()
+	root := "/api/v4/projects/123"
+	const group = `{"id":31,"title":"Group Q3","state":"active","start_date":"2026-07-01","due_date":"2026-09-30","group_id":1,"web_url":"https://gitlab.example/groups/acme/-/milestones/2"}`
+	responses[root+"/milestones?page=1"] = []string{`[{"id":7,"title":"July","state":"closed","start_date":"2026-07-01","due_date":"2026-07-31"},` + group + `,` + group + `]`, `[]`}
+	issues := responses[root+"/issues?page=1"]
+	issues[0] = strings.Replace(issues[0], `"milestone":{"id":7,"title":"July"}`, `"milestone":{"id":31,"title":"Group Q3"}`, 1)
+	doer := &gitLabWorkItemsDoer{responses: responses}
+	claim := nativeTestClaim("gitlab", "work-items")
+	client := gitLabWorkItemsClient(t, fakehttp.Client(doer))
+	batch, err := (GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), PerPage: 3, MaxPages: 10, NestedMaxPages: 10}).Collect(
+		context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID}, client,
+		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{}
+	for _, effect := range batch.Effects {
+		if effect.Destination != "sprints" {
+			continue
+		}
+		for _, raw := range effect.Rows {
+			var sprint gitlabSprintRow
+			if err := jsonUnmarshalEffect(raw, &sprint); err != nil {
+				t.Fatal(err)
+			}
+			keys = append(keys, sprint.SprintID)
+		}
+	}
+	slices.Sort(keys)
+	if want := []string{gitlabMilestoneSprintID("acme/api", "7"), gitlabMilestoneSprintID("acme", "31")}; !slices.Equal(keys, want) {
+		t.Fatalf("sprint keys = %v, want %v (group milestone once, under its group)", keys, want)
+	}
+	for _, effect := range batch.Effects {
+		if effect.Destination != "work_items" {
+			continue
+		}
+		for _, raw := range effect.Rows {
+			var item gitlabWorkItemRow
+			if err := jsonUnmarshalEffect(raw, &item); err != nil {
+				t.Fatal(err)
+			}
+			if item.WorkItemID == "gitlab:acme/api#42" && (item.SprintID == nil || *item.SprintID != "31") {
+				t.Fatalf("issue sprint id = %v, want 31", item.SprintID)
+			}
+		}
+	}
+	for _, request := range doer.requests {
+		if strings.HasSuffix(request.URL.Path, "/milestones") {
+			query := request.URL.Query()
+			if query.Get("include_ancestors") != "true" || query.Get("include_parent_milestones") != "true" {
+				t.Fatalf("milestone read %s lacks the ancestor parameters", request.URL.String())
+			}
+		}
+	}
+}

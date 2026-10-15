@@ -82,8 +82,11 @@ var orgScopeReadsScopedElsewhere = map[string]orgScopeElsewhere{
 		[]orgScopeSite{{"internal/queryapi/analytics/timeseries.go", "CompileTimeseries", "AND %s.org_id = {org_id:String}"}},
 	},
 	"internal/queryapi/home/queries_metrics.go:fetchRateDriverDelta": {
-		"both FROM sources are metricFromClause's, which scopes every source it returns",
-		[]orgScopeSite{{"internal/queryapi/home/queries_metrics.go", "metricFromClause", "AND org_id = {org_id:String}"}},
+		"both FROM sources are fetchMetricDriverDelta's driverDeltaSource, which scopes a table with no natural key itself and takes metricFromClause's scoped source for the others",
+		[]orgScopeSite{
+			{"internal/queryapi/home/driver_delta_source.go", "driverDeltaSource", "AND org_id = {org_id:String}"},
+			{"internal/queryapi/home/queries_metrics.go", "metricFromClause", "AND org_id = {org_id:String}"},
+		},
 	},
 	"internal/queryapi/featureflags/featureflags.go:Resolve": {
 		"one flagWhere clause, the org_id predicate first, is the WHERE of both statements",
@@ -151,10 +154,14 @@ var (
 	orgScopeTableName   = regexp.MustCompile("(?i)CREATE TABLE(?: IF NOT EXISTS)?\\s+`?([a-z_][a-z0-9_]*)`?")
 	orgScopeAddColumn   = regexp.MustCompile("(?i)ALTER TABLE\\s+`?([a-z_][a-z0-9_]*)`?[^;]*ADD COLUMN(?: IF NOT EXISTS)?\\s+`?org_id`?")
 	orgScopeColumn      = regexp.MustCompile("(?i)[(,]\\s*`?org_id`?\\s")
+	orgScopeViewName    = regexp.MustCompile("(?i)CREATE (?:MATERIALIZED )?VIEW(?: IF NOT EXISTS)?\\s+`?([a-z_][a-z0-9_]*)`?")
+	orgScopeWord        = regexp.MustCompile(`(?i)\borg_id\b`)
 )
 
 // orgScopedClickHouseTables is every table and view of the ClickHouse head
-// (the baseline plus the chain after it) that carries an org_id column.
+// (the baseline plus the chain after it) that carries an org_id column. A view
+// counts when its statement names org_id at all: its columns are its select
+// list, which the column pattern of a table does not read.
 func orgScopedClickHouseTables(t *testing.T) map[string]bool {
 	t.Helper()
 	baseline, err := chmigrate.LoadBaseline()
@@ -167,13 +174,16 @@ func orgScopedClickHouseTables(t *testing.T) map[string]bool {
 	}
 	tables := map[string]bool{}
 	for _, object := range baseline.Objects {
-		if orgScopeColumn.MatchString(object.Create) {
+		if orgScopeColumn.MatchString(object.Create) || (object.IsView() && orgScopeWord.MatchString(object.Create)) {
 			tables[strings.ToLower(object.Name)] = true
 		}
 	}
 	for _, file := range chain {
 		for _, statement := range chmigrate.SplitStatements(chmigrate.StripLineComments(file.SQL)) {
 			if m := orgScopeTableName.FindStringSubmatch(statement); m != nil && orgScopeColumn.MatchString(statement) {
+				tables[strings.ToLower(m[1])] = true
+			}
+			if m := orgScopeViewName.FindStringSubmatch(statement); m != nil && orgScopeWord.MatchString(statement) {
 				tables[strings.ToLower(m[1])] = true
 			}
 			if m := orgScopeAddColumn.FindStringSubmatch(statement); m != nil {
@@ -475,6 +485,12 @@ func TestEveryServedClickHouseReadOfAnOrganizationTableIsScopedByOrgID(t *testin
 	// nothing.
 	if len(tables) < 100 {
 		t.Fatalf("the ClickHouse head names %d tables with an org_id column; the census reads the head wrong", len(tables))
+	}
+	// A table of the baseline, a table of the chain and a view of the chain.
+	for _, name := range []string{"repo_metrics_daily", "work_unit_issue_size", "work_item_interactions_current"} {
+		if !tables[name] {
+			t.Fatalf("the census table set misses %s, which carries org_id", name)
+		}
 	}
 	root := filepath.Join("..", "..", "..")
 	checked, flagged := censusOrgScope(t, root, orgScopeCensusRoots, tables)

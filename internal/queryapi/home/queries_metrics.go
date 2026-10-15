@@ -26,20 +26,10 @@ func formatDay(t time.Time) string { return t.Format("2006-01-02") }
 // 61-104). startParam/endParam name the bound day-range params so the
 // same shape serves both the primary window (start_day/end_day) and the
 // driver-delta comparison window (compare_start/compare_end).
-//
-// A table with no natural key still gets its window, scope and org_id
-// predicate: the driver-delta reader puts this source straight after FROM with
-// no WHERE of its own, so a bare table name would read every organization.
 func metricFromClause(table, column, scopeFilter, startParam, endParam string) string {
 	naturalKey, dedup := dedupByComputedAt[table]
 	if !dedup {
-		return fmt.Sprintf(`(
-            SELECT *
-            FROM %s
-            WHERE day >= {%s:Date} AND day < {%s:Date}
-            %s
-              AND org_id = {org_id:String}
-        )`, table, startParam, endParam, scopeFilter)
+		return table
 	}
 	valueColumns := []string{column}
 	if table == changefailure.Table {
@@ -371,8 +361,8 @@ type driverRow struct {
 // internal/analytics/flowmatrix.go's own identical fix for the same
 // guard (see that file's flowMatrixTeamActivitySelect doc comment).
 func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
-	currentFrom := metricFromClause(table, column, scopeFilter, "start_day", "end_day")
-	previousFrom := metricFromClause(table, column, scopeFilter, "compare_start", "compare_end")
+	currentFrom := driverDeltaSource(table, column, scopeFilter, "start_day", "end_day")
+	previousFrom := driverDeltaSource(table, column, scopeFilter, "compare_start", "compare_end")
 	if isPRRework(table, column) {
 		return fetchRateDriverDelta(ctx, client, prrework.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
 	}

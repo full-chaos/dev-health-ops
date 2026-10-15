@@ -128,7 +128,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 	counted.Doer = gitLabTestsCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(client, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, &counted, root, &project); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -149,7 +149,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 		query.Set("updated_before", claim.BeforeAt.UTC().Format(time.RFC3339Nano))
 	}
 	adapterPage, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-		Path: root + "/pipelines", Query: query, PerPage: nativePerPage, MaxPages: maxPages,
+		Path: root + "/pipelines", Route: gitlabPipelinesRoute, Query: query, PerPage: nativePerPage, MaxPages: maxPages,
 	})
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -186,6 +186,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 		}
 		jobPage, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
 			Path:  root + "/pipelines/" + url.PathEscape(pipeline.RunID) + "/jobs",
+			Route: gitlabPipelineJobsRoute,
 			Query: url.Values{"include_retried": {"true"}}, PerPage: nativePerPage, MaxPages: maxPages,
 		})
 		if err != nil {
@@ -227,7 +228,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 		reportQuery.Set("updated_after", claim.SinceAt.UTC().Format(time.RFC3339Nano))
 	}
 	reportPage, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-		Path: root + "/pipelines", Query: reportQuery, PerPage: nativePerPage, MaxPages: maxPages,
+		Path: root + "/pipelines", Route: gitlabPipelinesRoute, Query: reportQuery, PerPage: nativePerPage, MaxPages: maxPages,
 	})
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -278,7 +279,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 			cases = append(cases, reportCases...)
 		}
 		jobPage, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-			Path: root + "/pipelines/" + url.PathEscape(runID) + "/jobs", PerPage: nativePerPage, MaxPages: 1, SinglePage: true,
+			Path: root + "/pipelines/" + url.PathEscape(runID) + "/jobs", Route: gitlabPipelineJobsRoute, PerPage: nativePerPage, MaxPages: 1, SinglePage: true,
 		})
 		if err != nil {
 			if fatal := gitLabTestsOptionalError(ctx, err); fatal != nil {
@@ -587,7 +588,7 @@ func resolveGitLabTestsMergeRequest(ctx context.Context, client *providerfoundat
 	if sha == "" {
 		return nil, nil
 	}
-	response, err := client.Do(ctx, http.MethodGet, root+"/repository/commits/"+url.PathEscape(sha)+"/merge_requests", nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, gitlabProjectRoute+"/repository/commits/{sha}/merge_requests", root+"/repository/commits/"+url.PathEscape(sha)+"/merge_requests", nil)
 	if err != nil {
 		if fatal := gitLabTestsOptionalError(ctx, err); fatal != nil {
 			return nil, fatal
@@ -672,7 +673,7 @@ func projectGitLabTestsChecks(claim Claim, repoID string, pipeline githubTestsPi
 
 func fetchGitLabTestsReport(ctx context.Context, client *providerfoundation.HTTPClient, root, runID string) (gitLabTestsReportPayload, bool, error) {
 	var result gitLabTestsReportPayload
-	response, err := client.Do(ctx, http.MethodGet, root+"/pipelines/"+url.PathEscape(runID)+"/test_report", nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, gitlabPipelinesRoute+"/{pipeline}/test_report", root+"/pipelines/"+url.PathEscape(runID)+"/test_report", nil)
 	if err != nil {
 		if fatal := gitLabTestsOptionalError(ctx, err); fatal != nil {
 			return result, false, fatal
@@ -823,7 +824,7 @@ func gitLabTestsJSONTruthy(value any) bool {
 }
 
 func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation.HTTPClient, root, jobID string) ([]byte, error) {
-	response, err := client.Do(ctx, http.MethodGet, root+"/jobs/"+url.PathEscape(jobID)+"/artifacts", nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, gitlabProjectRoute+"/jobs/{job}/artifacts", root+"/jobs/"+url.PathEscape(jobID)+"/artifacts", nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusGone) {

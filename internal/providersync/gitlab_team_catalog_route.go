@@ -836,6 +836,7 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 		}
 		pages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 			Path:    providerRelativePath(client, "api", "v4", "projects", nativeID, "milestones"),
+			Route:   gitlabMilestonesRoute,
 			PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMilestonesMaxPages,
 			// include_ancestors is GitLab's documented name; include_parent_milestones
 			// (deprecated) is sent too because the API docs give no minimum version for

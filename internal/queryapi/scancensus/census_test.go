@@ -511,15 +511,60 @@ func SelectListSplices(statement string) bool {
 	}
 	list := s[:end]
 	for _, loc := range formatVerb.FindAllStringIndex(list, -1) {
-		before := list[:loc[0]]
-		if open := strings.LastIndex(before, "("); open >= 0 && strings.Count(before[open:], ")") == 0 {
-			before = before[open:]
-		}
-		if !conditionKeyword.MatchString(before) {
+		group := innermostGroup(list[:loc[0]])
+		if group == "" || !conditionKeyword.MatchString(withoutGroups(group)) {
 			return true
 		}
 	}
 	return false
+}
+
+// innermostGroup is the text from the innermost parenthesis still open at the
+// end of s, or "" at depth 0.
+func innermostGroup(s string) string {
+	var open []int
+	inString := false
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case inString:
+			if c == '\\' {
+				i++
+			} else if c == '\'' {
+				inString = false
+			}
+		case c == '\'':
+			inString = true
+		case c == '(':
+			open = append(open, i)
+		case c == ')' && len(open) > 0:
+			open = open[:len(open)-1]
+		}
+	}
+	if len(open) == 0 {
+		return ""
+	}
+	return s[open[len(open)-1]:]
+}
+
+// withoutGroups drops every balanced parenthesised group of s, so a WHERE
+// inside a closed sibling subquery is not taken for the keyword of the group
+// the verb stands in.
+func withoutGroups(s string) string {
+	var b strings.Builder
+	depth := 0
+	for i := 1; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		default:
+			if depth == 0 {
+				b.WriteByte(s[i])
+			}
+		}
+	}
+	return b.String()
 }
 
 var conditionKeyword = regexp.MustCompile(`(?i)\b(WHERE|AND|OR|ON|HAVING|PREWHERE)\b`)

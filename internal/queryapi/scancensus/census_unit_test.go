@@ -39,6 +39,9 @@ func TestSelectListSplices(t *testing.T) {
 		{"SELECT a, (SELECT count() FROM u WHERE k = 1 AND %s) AS n FROM t", false},
 		{"SELECT a, (%s) AS n FROM t", true},
 		{"SELECT a, 'FROM %s' FROM t", true},
+		{"SELECT (SELECT count() FROM u WHERE k = 1) AS c, %s AS n FROM t", true},
+		{"SELECT (SELECT count() FROM u WHERE k = 1) AS c, (SELECT 1 FROM v WHERE %s) AS d FROM t", false},
+		{"SELECT (SELECT max(x) FROM u WHERE k = 1), coalesce(%s, 0) AS n FROM t", true},
 	}
 	for _, c := range cases {
 		if got := SelectListSplices(c.statement); got != c.want {

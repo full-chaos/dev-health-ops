@@ -297,6 +297,18 @@ func TestScanTypeCensusRejectsAUInt64IntoFloat64(t *testing.T) {
 	}
 }
 
+// TestScanTypeCensusPinsAnOuterSplicedSelectItem: a spliced fragment in the
+// outer select list is never neutralized to a literal that scans cleanly, even
+// when a sibling subquery holds a WHERE.
+func TestScanTypeCensusPinsAnOuterSplicedSelectItem(t *testing.T) {
+	ctx, conn := openCensusConn(t)
+	statement := "SELECT (SELECT count() FROM repos WHERE id != toUUID('00000000-0000-0000-0000-000000000000')) AS c, %s AS n FROM work_item_state_durations_daily"
+	verdict := Classify(ctx, conn, []Site{{File: "planted.go", Func: "planted", Dests: []string{"*uint64", "*uint8"}, Statements: []string{statement}}})[0]
+	if verdict.Unresolved == "" || len(verdict.Mismatches) != 0 {
+		t.Errorf("verdict = %+v, want unresolved without a verdict on the spliced column", verdict)
+	}
+}
+
 // unverifiedSites is `file|func|destinations|digest|reason`; see reasonClass.
 const unverifiedSites = `
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|0fdd93221b9d|not-describable

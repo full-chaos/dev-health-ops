@@ -3,6 +3,7 @@ package credentials
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/restcore"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // repoCredential is what list_credential_repos reads of a stored credential:
@@ -336,11 +338,22 @@ func (h handlers) listGitHubRepos(w http.ResponseWriter, r *http.Request, creden
 	client := githubcode.Client{Token: token, BaseURL: baseURL, HTTP: withTimeout(h.repoClient, restcore.DefaultTimeout)}
 	var repos []githubcode.Repo
 	var err error
+	scope := githubScope{installation: gc.app}
 	switch {
 	case group == "" && gc.app:
 		repos, err = client.ListInstallationRepositories(ctx, search, maxRepos)
+	case group != "" && search == "":
+		var listing githubcode.NamespaceListing
+		listing, err = client.ListNamespace(ctx, githubcode.NamespaceOptions{Owner: group, UserRepos: !gc.app, Pattern: pattern(search), MaxRepos: maxRepos})
+		repos, scope.ownerType, scope.notFound = listing.Repos, listing.OwnerType, listing.NotFound
+		if listing.NamespaceErr != nil {
+			h.logger.WarnContext(ctx, "github repo browse namespace listing failed; keeping the credential's repositories only",
+				slog.Int("token_repos", len(repos)), slog.Bool("installation_scoped", scope.installation),
+				slog.String("error_class", providerErrorClass(listing.NamespaceErr)), slog.String("error_type", logging.ErrorType(listing.NamespaceErr)))
+		}
 	case group != "":
 		repos, err = client.ListRepositories(ctx, githubcode.ListOptions{Org: group, Search: search, MaxRepos: maxRepos})
+		err = githubcode.RedactOwner(err, group)
 	default:
 		repos, err = client.ListRepositories(ctx, githubcode.ListOptions{Pattern: pattern(search), MaxRepos: maxRepos})
 	}
@@ -349,7 +362,10 @@ func (h handlers) listGitHubRepos(w http.ResponseWriter, r *http.Request, creden
 		if errors.As(err, &listErr) {
 			switch listErr.Class {
 			case "NotFoundException":
-				policy.WriteModel(w, http.StatusOK, repoListing("github", nil), nil)
+				// Only an owner route's 404, which ListNamespace reports itself, is "owner not found": a 404 of the search
+				// or of a credential-wide listing keeps the empty answer it always had.
+				h.logger.InfoContext(ctx, "github repo browse found nothing to list", slog.Bool("installation_scoped", scope.installation))
+				policy.WriteModel(w, http.StatusOK, githubRepoListing(nil, scope), nil)
 				return
 			case "AuthenticationException":
 				policy.WriteDetail(w, http.StatusUnauthorized, listErr.Message, nil)
@@ -378,11 +394,53 @@ func (h handlers) listGitHubRepos(w http.ResponseWriter, r *http.Request, creden
 		item.Set("url", repo.URL)
 		listed = append(listed, item)
 	}
-	policy.WriteModel(w, http.StatusOK, repoListing("github", listed), nil)
+	if scope.notFound {
+		h.logger.InfoContext(ctx, "github repo browse owner not found", slog.Bool("installation_scoped", scope.installation),
+			slog.Bool("owner_set", group != ""))
+	}
+	policy.WriteModel(w, http.StatusOK, githubRepoListing(listed, scope), nil)
+}
+
+// githubScope is what a GitHub browse reports about its results beyond the repositories.
+type githubScope struct {
+	// ownerType is "org" or "user" when the owner's own listing answered, empty otherwise.
+	ownerType string
+	// installation is set for a GitHub App credential: its results are limited to the installation's repositories.
+	installation bool
+	// notFound is set when the owner reached nothing and GitHub answered 404.
+	notFound bool
+}
+
+// githubRepoListing is repoListing with the three fields the repo selector reads: owner_type (null when no owner
+// listing answered), installation_scoped, and diagnostic ("owner_not_found" or null).
+func githubRepoListing(repos []pyjson.Value, scope githubScope) *pyjson.Object {
+	out := repoListing("github", repos)
+	var ownerType, diagnostic pyjson.Value
+	if scope.ownerType != "" {
+		ownerType = scope.ownerType
+	}
+	if scope.notFound {
+		diagnostic = "owner_not_found"
+	}
+	out.Set("owner_type", ownerType)
+	out.Set("installation_scoped", scope.installation)
+	out.Set("diagnostic", diagnostic)
+	return out
 }
 
 // mustGet is object.get(key) for an object known to be one.
 func mustGet(object *pyjson.Object, key string) pyjson.Value {
 	value, _ := object.Get(key)
 	return value
+}
+
+// providerErrorClass is the class of a failed provider listing: the bounded exception class the client raised
+// (AuthenticationException, NotFoundException, RateLimitException, ...), so a permission failure, a missing route and
+// throttling stay apart in a log; any other error takes the logging package's class.
+func providerErrorClass(err error) string {
+	var listErr *githubcode.Error
+	if errors.As(err, &listErr) && listErr.Class != "" {
+		return listErr.Class
+	}
+	return logging.ErrorClass(err)
 }

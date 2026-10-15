@@ -747,8 +747,7 @@ func collectGitHubOwnerRepos(ctx context.Context, client *providerfoundation.HTT
 }
 
 func mergeGitHubRepoItems(primary, extra []json.RawMessage) []json.RawMessage {
-	seen := make(map[string]struct{}, len(primary))
-	key := func(raw json.RawMessage) string {
+	return providerfoundation.UnionByKey(primary, extra, func(raw json.RawMessage) string {
 		var repo struct {
 			FullName string `json:"full_name"`
 		}
@@ -756,21 +755,7 @@ func mergeGitHubRepoItems(primary, extra []json.RawMessage) []json.RawMessage {
 			return ""
 		}
 		return strings.ToLower(repo.FullName)
-	}
-	for _, raw := range primary {
-		seen[key(raw)] = struct{}{}
-	}
-	merged := primary
-	for _, raw := range extra {
-		if k := key(raw); k != "" {
-			if _, dup := seen[k]; dup {
-				continue
-			}
-			seen[k] = struct{}{}
-		}
-		merged = append(merged, raw)
-	}
-	return merged
+	})
 }
 
 // gitlabDiscoveryOptions mirrors discover_gitlab_repos' group/owner/search/

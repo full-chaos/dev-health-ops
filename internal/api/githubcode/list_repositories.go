@@ -74,6 +74,9 @@ type Client struct {
 // searched only with an Org; Pattern is fnmatch-ed against the lowered full
 // name; MaxRepos nil is max_repos=None.
 type ListOptions struct {
+	// User, with Org and Search empty, lists /users/{User}/repos: the
+	// personal-account counterpart of Org.
+	User                 string
 	Org, Search, Pattern string
 	MaxRepos             *big.Int
 }
@@ -89,6 +92,10 @@ func (c Client) ListRepositories(ctx context.Context, opts ListOptions) ([]Repo,
 		return c.listPages(ctx, "/search/repositories", repoFamily+":GET /search/repositories", "items", "&q="+url.QueryEscape(query), opts.Pattern, opts.MaxRepos)
 	}
 	switch {
+	case opts.User != "":
+		// A static template, never the login: this route's failures name it in an error a client may read.
+		repos, err := c.listPages(ctx, "/users/"+pythonparity.Quote(opts.User, "")+"/repos", repoFamily+":GET /users/{login}/repos", "", "", opts.Pattern, opts.MaxRepos)
+		return repos, RedactOwner(err, opts.User)
 	case opts.Org != "":
 		return c.listPages(ctx, "/orgs/"+pythonparity.Quote(opts.Org, "")+"/repos", repoFamily+":GET /orgs/"+opts.Org+"/repos", "", "", opts.Pattern, opts.MaxRepos)
 	}

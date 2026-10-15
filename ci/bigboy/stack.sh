@@ -76,7 +76,7 @@ fi
 export RIVER_DHO_IMAGE="${RIVER_DHO_IMAGE:-}" DHO_SMOKE_DIR="${DHO_SMOKE_DIR:-$T}"
 for v in "${NEEDS[@]}"; do [ -n "${!v:-}" ] || die "set '$SET' needs $v exported by its step script"; done
 # an env file's COMPOSE_PROFILES would add profiles: the process value (the declared profiles only) wins over it
-COMPOSE_PROFILES=$(IFS=,; echo "${PROFILES[*]}"); export COMPOSE_PROFILES
+COMPOSE_PROFILES=""; for p in "${PROFILES[@]}"; do COMPOSE_PROFILES+="${COMPOSE_PROFILES:+,}$p"; done; export COMPOSE_PROFILES
 
 valid_service() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "not a service name: refused"; }
 compose() { docker compose "${ARGS[@]}" "$@"; }

@@ -65,18 +65,8 @@ def _resolved_lines(name: str) -> list[tuple[str, str]]:
     return lines + [(k, v) for k, v in raw[name] if k != "include"]
 
 
-# The legacy scripts still name the two static host files; stack.files names their tracked copies (content equality
-# with the host files is check-host-copies.sh's job: the host files are not in this repo).
-_TRACKED_COPY = {
-    "compose.yml": "$HERE/compose.bigboy.base.yml",
-    "compose/compose.go.workers.yml": "$HERE/compose.bigboy.go-workers.yml",
-}
 # What a root entry may still be: per-cut state, never static configuration.
 ROOT_STATE_FILES = {"_records/compose.bigboy.images.yml"}
-
-
-def _tracked(files: list[str]) -> list[str]:
-    return [_TRACKED_COPY.get(f, f) for f in files]
 
 
 def test_the_cut_and_the_checks_call_stack_sh_and_build_no_chain() -> None:

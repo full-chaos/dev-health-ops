@@ -344,6 +344,9 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	inspected, entitlementsInspected, stripeFailures := 0, 0, 0
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		// The Python answers are reduced before Diff, so the lengths of the reduced and the
+		// original Stripe 502 bodies differ; the raw Go body is checked in Inspect.
+		SkipContentLength: func(request venueoracle.Request) bool { return request.Name == "void: stripe fails" },
 		Normalize: func(_ venueoracle.Request, body string) string {
 			dropped, _ := dropGoOnlyFeature(normalize(body))
 			return dropped

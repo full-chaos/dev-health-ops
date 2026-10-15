@@ -130,6 +130,10 @@ func DeriveHeuristicEdges(inputs HeuristicInputs, buildTime time.Time) Heuristic
 		if _, linked := linkedWorkItems[workItem.WorkItemID]; linked {
 			continue
 		}
+		// A pull or merge request work item is never the issue side.
+		if issueprlinks.IsPullRequestWorkItem(workItem.WorkItemID) {
+			continue
+		}
 		if workItem.UpdatedAt.IsZero() {
 			continue
 		}

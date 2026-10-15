@@ -53,11 +53,11 @@ var (
 
 const pagerDutyMaxResponseBody = 1 << 20
 
-// PagerDutyExchangeTransportError is ErrPagerDutyExchangeUnavailable with the closed-set transport Reason; errors.Is still matches the sentinel.
+// PagerDutyExchangeTransportError is ErrPagerDutyExchangeUnavailable with the closed-set transport Reason; Error() text and errors.Is are unchanged, the reason is in the field and the log.
 type PagerDutyExchangeTransportError struct{ Reason string }
 
 func (e *PagerDutyExchangeTransportError) Error() string {
-	return ErrPagerDutyExchangeUnavailable.Error() + " reason=" + e.Reason
+	return ErrPagerDutyExchangeUnavailable.Error()
 }
 
 func (e *PagerDutyExchangeTransportError) Is(target error) bool {
@@ -124,7 +124,7 @@ func postPagerDutyTokenForm(ctx context.Context, doer HTTPDoer, config PagerDuty
 	// early is a transport error whatever the status said.
 	body, err := io.ReadAll(io.LimitReader(response.Body, pagerDutyMaxResponseBody))
 	if err != nil {
-		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeUnavailable
+		return PagerDutyOAuthTokens{}, pagerDutyExchangeTransportError(err)
 	}
 	switch {
 	case response.StatusCode >= 400 && response.StatusCode < 500:

@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,8 +38,8 @@ func TestPagerDutyExchangeTransportFailureKeepsReason(t *testing.T) {
 		if !errors.Is(err, ErrPagerDutyExchangeUnavailable) || !errors.As(err, &transport) || transport.Reason != TransportReasonTLSUnknownAuthority {
 			t.Fatalf("%s: err = %v, want unavailable with tls_unknown_authority", name, err)
 		}
-		if strings.Contains(err.Error(), "hunter2") {
-			t.Fatalf("%s: secret leaked", name)
+		if err.Error() != ErrPagerDutyExchangeUnavailable.Error() {
+			t.Fatalf("%s: Error() changed: %q", name, err.Error())
 		}
 	}
 	if !strings.Contains(logs.String(), `"reason":"tls_unknown_authority"`) || strings.Contains(logs.String(), "hunter2") {
@@ -80,5 +81,45 @@ func TestGitHubAppInstallationTokenTransportFailureKeepsReason(t *testing.T) {
 	var providerErr *ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Reason != TransportReasonTLSUnknownAuthority || providerErr.Class != ErrorTransient {
 		t.Fatalf("err = %v, want transient/tls_unknown_authority", err)
+	}
+}
+
+type truncatedBodyDoer struct{}
+
+func (truncatedBodyDoer) Do(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(io.MultiReader(strings.NewReader("{"), errReader{io.ErrUnexpectedEOF}))}, nil
+}
+
+type errReader struct{ err error }
+
+func (r errReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestPagerDutyBodyReadFailureKeepsReason(t *testing.T) {
+	logs := captureLogs(t)
+	config := PagerDutyRevokeConfig{ClientID: "c", TokenURL: "https://pd.example.test/oauth/token"}
+	for name, err := range map[string]error{
+		"code": func() error {
+			_, err := ExchangePagerDutyAuthorizationCode(context.Background(), truncatedBodyDoer{}, config, "code", "verifier", time.Now())
+			return err
+		}(),
+		"client credentials": func() error {
+			_, err := RequestPagerDutyClientCredentialsToken(context.Background(), truncatedBodyDoer{}, config, "acme", "us", time.Now())
+			return err
+		}(),
+	} {
+		var transport *PagerDutyExchangeTransportError
+		if !errors.Is(err, ErrPagerDutyExchangeUnavailable) || !errors.As(err, &transport) || transport.Reason != TransportReasonOther {
+			t.Fatalf("%s: err = %v, want unavailable with a reason", name, err)
+		}
+	}
+	_, err := ValidatePagerDutyCredential(context.Background(), truncatedBodyDoer{},
+		PagerDutyRevokeConfig{APIBaseOverride: "https://pd.example.test"},
+		PagerDutyCredentialCandidate{AuthMode: "api_token", APIToken: "tok", Region: "us"}, PagerDutyReadScopeSet())
+	var validation *PagerDutyValidationError
+	if !errors.As(err, &validation) || validation.Code != "live_read_failed" || validation.Reason != TransportReasonOther {
+		t.Fatalf("validation err = %v", err)
+	}
+	if !strings.Contains(logs.String(), `"reason":"other"`) {
+		t.Fatalf("log: %s", logs.String())
 	}
 }

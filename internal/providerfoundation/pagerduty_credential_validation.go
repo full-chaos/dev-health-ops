@@ -177,7 +177,7 @@ func pagerDutyValidateRead(ctx context.Context, client HTTPDoer, config PagerDut
 func pagerDutyDo(client HTTPDoer, request *http.Request) ([]byte, error) {
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, &PagerDutyValidationError{Code: "live_read_failed", Reason: transportProviderError("pagerduty", err, 1).Reason}
+		return nil, pagerDutyLiveReadTransportFailure(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -185,9 +185,13 @@ func pagerDutyDo(client HTTPDoer, request *http.Request) ([]byte, error) {
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, pagerDutyMaxResponseBody))
 	if err != nil {
-		return nil, validationFailure("live_read_failed")
+		return nil, pagerDutyLiveReadTransportFailure(err)
 	}
 	return body, nil
+}
+
+func pagerDutyLiveReadTransportFailure(cause error) error {
+	return &PagerDutyValidationError{Code: "live_read_failed", Reason: transportProviderError("pagerduty", cause, 1).Reason}
 }
 
 // pagerDutyAccountIdentity is _account_identity.

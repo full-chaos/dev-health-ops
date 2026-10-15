@@ -50,7 +50,7 @@ const (
 
 // ProvenanceNative is the only provenance this package writes. The other two
 // values in the column's vocabulary (`explicit_text`, `heuristic`) belong to
-// the Python fallback writers; see the package doc.
+// the issuepredges fallback writers, which the tier rule in fallback.go gates.
 const ProvenanceNative = "native"
 
 // NativeConfidence is the confidence every provider-attached row carries.

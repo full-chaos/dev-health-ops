@@ -239,6 +239,9 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 			return compiledQuery{}, err
 		}
 	}
+	if measureExpr, err = exactSums(measureExpr); err != nil {
+		return compiledQuery{}, err
+	}
 	// Force a uniform Float64 result type. ClickHouse returns UInt64 for
 	// the SUM()-based measures (COUNT, THROUGHPUT, CHURN_LOC) and Float64
 	// for the AVG/ratio ones, and the native driver will NOT convert

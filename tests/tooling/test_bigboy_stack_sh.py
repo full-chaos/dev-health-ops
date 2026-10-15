@@ -38,7 +38,7 @@ def _tree(tmp_path: Path, *, skip: str = "") -> tuple[Path, Path, dict[str, str]
     log = tmp_path / "docker.log"
     stub = bin_dir / "docker"
     stub.write_text(
-        '#!/usr/bin/env bash\necho "$*" >> "$DOCKER_LOG"\n'
+        '#!/usr/bin/env bash\necho "$*" >> "$DOCKER_LOG"\nenv | grep "^COMPOSE_" | sed "s/^/ENV /" >> "$DOCKER_LOG" || true\n'
         'if [ -n "${STUB_CONFIG_FAIL:-}" ]; then case "$*" in *" config "*) echo "resolved=SENTINEL" >&2; exit 1;; esac; fi\n'
         'case "$*" in *"config --images"*) echo ghcr.io/full-chaos/dev-health-web@sha256:'
         + "a" * 64
@@ -156,3 +156,43 @@ def test_operator_image_is_only_required_when_a_file_uses_it(tmp_path: Path) -> 
     refused = _run(tools, env, "ps")
     assert refused.returncode == 2 and "BIGBOY_OPERATOR_IMAGE" in refused.stderr
     assert "--format" in Path(env["DOCKER_LOG"]).read_text()
+
+
+def test_inherited_compose_variables_are_dropped(tmp_path: Path) -> None:
+    _, tools, env = _tree(tmp_path)
+    inherited = {
+        **env,
+        "COMPOSE_PROFILES": "secret-profile",
+        "COMPOSE_FILE": "x.yml",
+        "COMPOSE_PROJECT_NAME": "hacked",
+        "COMPOSE_ENV_FILES": "y.env",
+    }
+    res = _run(tools, inherited, "restart", "web")
+    assert res.returncode == 0, res.stderr
+    assert "ENV COMPOSE_" not in Path(env["DOCKER_LOG"]).read_text()
+
+
+def test_relative_root_and_tools_paths_work(tmp_path: Path) -> None:
+    r, tools, env = _tree(tmp_path)
+    rel = {**env, "BIGBOY_ROOT": "root", "BIGBOY_TOOLS_DIR": "tools"}
+    res = subprocess.run(
+        [str(tools / "stack.sh"), "restart", "web"],
+        env=rel,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert f"-f {r}/compose.yml" in Path(env["DOCKER_LOG"]).read_text()
+
+
+def test_service_name_with_a_newline_is_refused(tmp_path: Path) -> None:
+    r, tools, env = _tree(tmp_path)
+    assert _run(tools, env, "restart", "web\nINJECTED").returncode == 2
+    assert _run(tools, env, "up", "web", "a b").returncode == 2
+    assert not (r / "_records/stack-runs.log").exists()
+
+
+def test_read_verbs_print_nothing_on_stderr(tmp_path: Path) -> None:
+    _, tools, env = _tree(tmp_path)
+    assert _run(tools, env, "config", "--quiet").stderr == ""

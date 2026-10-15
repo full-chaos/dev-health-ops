@@ -105,9 +105,19 @@ def test_every_set_names_project_and_env_file() -> None:
         assert kinds["env-file"] == ["ops/.env"], name
 
 
+def _overlays(directory: Path) -> set[str]:
+    return {str(p.relative_to(directory)) for p in directory.rglob("compose*.y*ml")}
+
+
+def test_overlay_scan_sees_nested_files(tmp_path: Path) -> None:
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    (tmp_path / "a" / "b" / "compose.x.yml").write_text("")
+    assert _overlays(tmp_path) == {"a/b/compose.x.yml"}
+
+
 def test_no_unlisted_bigboy_overlay_file() -> None:
-    listed = {Path(v).name for s in _sets().values() for v in s.get("tools", [])}
-    on_disk = {p.name for p in BIGBOY.glob("compose*.y*ml")}
+    listed = {v for s in _sets().values() for v in s.get("tools", [])}
+    on_disk = _overlays(BIGBOY)
     assert on_disk - listed == UNLISTED_OVERLAYS, (
         "a compose overlay in ci/bigboy is not in stack.files; add it there: "
         f"{sorted(on_disk - listed - UNLISTED_OVERLAYS)}"

@@ -12,9 +12,11 @@
 # Before a mutating verb it prints the file list and the pinned image refs. After it, one line goes to
 # $BIGBOY_ROOT/_records/stack-runs.log: time, verb, service, tools sha, image digests, rc.
 set -euo pipefail
+# the chain comes from stack.files only: no inherited compose variable may add a file, profile, project or env file
+for v in $(compgen -e | grep '^COMPOSE_' || true); do unset "$v"; done
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-R=${BIGBOY_ROOT:-/home/ubuntu/devhealth}
-T=${BIGBOY_TOOLS_DIR:-$HERE}
+R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" 2>/dev/null && pwd) || { echo "stack.sh: BIGBOY_ROOT is not a directory" >&2; exit 2; }
+T=$(cd "${BIGBOY_TOOLS_DIR:-$HERE}" 2>/dev/null && pwd) || { echo "stack.sh: BIGBOY_TOOLS_DIR is not a directory" >&2; exit 2; }
 LIST=$HERE/stack.files
 SET=stack
 die() { echo "stack.sh: $*" >&2; exit 2; }
@@ -57,9 +59,13 @@ if [ -z "${BIGBOY_OPERATOR_IMAGE:-}" ] && grep -qs 'BIGBOY_OPERATOR_IMAGE' "${FI
 fi
 export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-}"
 
+valid_service() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "not a service name: refused"; }
 compose() { docker compose "${ARGS[@]}" "$@"; }
-echo "stack.sh set=$SET project=$PROJECT root=$R" >&2
-printf 'stack.sh file %s\n' "${FILES[@]}" >&2
+MUTATING=0; case $VERB in up|restart|repin-web) MUTATING=1 ;; esac
+if [ "$MUTATING" = 1 ]; then
+  echo "stack.sh set=$SET project=$PROJECT root=$R" >&2
+  printf 'stack.sh file %s\n' "${FILES[@]}" >&2
+fi
 ERRF=$(mktemp); trap 'rm -f "$ERRF"' EXIT
 # compose's stderr can quote a resolved value, so only the NAME of a missing required variable is surfaced
 safe_config() {
@@ -69,7 +75,7 @@ safe_config() {
   return "$rc"
 }
 IMAGES=$(safe_config --images | sort -u; exit "${PIPESTATUS[0]}") || die "compose config failed: no verb runs on a chain that does not render"
-while read -r img; do echo "stack.sh image $img" >&2; done <<<"$IMAGES"
+if [ "$MUTATING" = 1 ]; then while read -r img; do echo "stack.sh image $img" >&2; done <<<"$IMAGES"; fi
 
 run_logged() {
   local rc=0 svc=${1:-} sha digests
@@ -92,7 +98,7 @@ case $VERB in
     esac ;;
   ps) compose ps "$@" ;;
   logs) [ $# -gt 0 ] || set -- --tail=200; compose logs "$@" ;;
-  up) [ $# -gt 0 ] || die "up needs at least one service name"; run_logged "$*" compose up -d --no-deps --no-build "$@" ;;
-  restart) [ $# -eq 1 ] || die "restart takes exactly one service name"; run_logged "$1" compose restart "$1" ;;
+  up) [ $# -gt 0 ] || die "up needs at least one service name"; for a in "$@"; do valid_service "$a"; done; run_logged "$*" compose up -d --no-deps --no-build "$@" ;;
+  restart) [ $# -eq 1 ] || die "restart takes exactly one service name"; valid_service "$1"; run_logged "$1" compose restart "$1" ;;
   repin-web) run_logged web "$HERE/bigboy-repin-web.sh" ;;
 esac

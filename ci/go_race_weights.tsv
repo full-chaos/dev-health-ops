@@ -25,6 +25,7 @@ contracts/sync-dispatch/v1	1
 deploy/helm/dev-health	27
 internal/admincli	1
 internal/adminops	19
+internal/aftercommit	1
 internal/aicli	1
 internal/api/apimetrics	1
 internal/api/audit	1

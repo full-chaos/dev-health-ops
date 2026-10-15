@@ -84,8 +84,8 @@ func TestThePointIsTheWholeWindowAndTheTrajectoryKeepsTheBuckets(t *testing.T) {
 					t.Fatalf("points = %+v, want one", resp.Points)
 				}
 				p := resp.Points[0]
-				if p.X != 60/c.xDiv || p.Y != 12 {
-					t.Errorf("point (x, y) = (%v, %v), want the window's (%v, 12), not the last bucket's (%v, 9)", p.X, p.Y, 60/c.xDiv, 30/c.xDiv)
+				if *p.X != 60/c.xDiv || *p.Y != 12 {
+					t.Errorf("point (x, y) = (%v, %v), want the window's (%v, 12), not the last bucket's (%v, 9)", *p.X, *p.Y, 60/c.xDiv, 30/c.xDiv)
 				}
 				if p.WindowStart != "2024-01-01" || p.WindowEnd != "2024-01-22" {
 					t.Errorf("window = %s..%s, want the requested 2024-01-01..2024-01-22", p.WindowStart, p.WindowEnd)
@@ -107,7 +107,7 @@ func TestAOneBucketWindowHasAPointAndNoTrajectory(t *testing.T) {
 			if len(resp.Points) != 1 {
 				t.Fatalf("points = %+v, want one", resp.Points)
 			}
-			if p := resp.Points[0]; p.X != 10/c.xDiv || p.Y != 4 || p.Trajectory != nil {
+			if p := resp.Points[0]; *p.X != 10/c.xDiv || *p.Y != 4 || p.Trajectory != nil {
 				t.Errorf("point = %+v, want (%v, 4) and no trajectory", p, 10/c.xDiv)
 			}
 		})
@@ -132,7 +132,7 @@ func TestAPointNeedsBothAxesInTheWindowNotInOneBucket(t *testing.T) {
 	weekly := map[string][]float64{"x": {10}, "y": {}}
 	window := map[string][]float64{"x": {10}, "y": {7}}
 	resp := buildWindow(t, windowReads(c, weekly, window, "e1"), c, "week")
-	if len(resp.Points) != 1 || resp.Points[0].Y != 7 || resp.Points[0].Trajectory != nil {
+	if len(resp.Points) != 1 || *resp.Points[0].Y != 7 || resp.Points[0].Trajectory != nil {
 		t.Errorf("points = %+v, want one window point without a trajectory", resp.Points)
 	}
 }

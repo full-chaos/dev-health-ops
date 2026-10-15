@@ -745,8 +745,45 @@ func TestPersonDrilldownRowsArePythonRowsPlusTheDeclaredNameFields(t *testing.T)
 // (TestQuadrantAndHeatmapResponsesArePythonPlusTheDeclaredTail).
 type quadrantPythonResponse struct {
 	Axes        quadrant.Axes         `json:"axes"`
-	Points      []quadrant.Point      `json:"points"`
+	Points      []quadrantPythonPoint `json:"points"`
 	Annotations []quadrant.Annotation `json:"annotations"`
+}
+
+// quadrantPythonPoint is the frozen Python QuadrantPoint. The production Point
+// differs in two declared ways (CHAOS-9815): x and y are nullable, and a last
+// field no_data is set on a team in scope with no point in the window.
+type quadrantPythonPoint struct {
+	EntityID     string                     `json:"entity_id"`
+	EntityLabel  string                     `json:"entity_label"`
+	X            float64                    `json:"x"`
+	Y            float64                    `json:"y"`
+	WindowStart  string                     `json:"window_start"`
+	WindowEnd    string                     `json:"window_end"`
+	EvidenceLink string                     `json:"evidence_link"`
+	Trajectory   []quadrant.PointTrajectory `json:"trajectory" pyjson:"nullable"`
+}
+
+func TestQuadrantPointIsPythonPlusTheDeclaredNoDataChange(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := fieldsOf(reflect.TypeOf(quadrantPythonPoint{}))
+	for i := range want {
+		if want[i].name == "X" || want[i].name == "Y" {
+			want[i].goType = "*float64"
+			want[i].tag += ` pyjson:"nullable"`
+		}
+	}
+	want = append(want, field{"NoData", "bool", `json:"no_data,omitempty"`})
+	if got := fieldsOf(reflect.TypeOf(quadrant.Point{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("quadrant.Point fields =\n %v\nwant the frozen fields with nullable x and y, then no_data:\n %v", got, want)
+	}
 }
 
 type heatmapPythonResponse struct {
@@ -783,7 +820,12 @@ func TestQuadrantAndHeatmapResponsesArePythonPlusTheDeclaredTail(t *testing.T) {
 		{"quadrant.Response", reflect.TypeOf(quadrant.Response{}), reflect.TypeOf(quadrantPythonResponse{}), tail},
 		{"heatmap.Response", reflect.TypeOf(heatmap.Response{}), reflect.TypeOf(heatmapPythonResponse{}), heatmapTail},
 	} {
-		want := append(fieldsOf(tc.python), tc.tail...)
+		python := fieldsOf(tc.python)
+		for i := range python {
+			// the point type is checked field by field in TestQuadrantPointIsPythonPlusTheDeclaredNoDataChange
+			python[i].goType = strings.ReplaceAll(python[i].goType, "server.quadrantPythonPoint", "quadrant.Point")
+		}
+		want := append(python, tc.tail...)
 		if got := fieldsOf(tc.production); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s fields =\n %v\nwant the frozen fields, then repo_filter_applied and filter_empty_reason:\n %v", tc.name, got, want)
 		}

@@ -121,7 +121,7 @@ func TestGoldenCycleThroughputTeamAttributionQuirk(t *testing.T) {
 	want := withWholeWindowPoints(loadGolden(t, "cycle_throughput_team.json"), "2024-01-01", "2024-01-09")
 	// The point is the window's own aggregate (CHAOS-9816), read by a separate
 	// whole-window read; the frozen Python golden carries the last bucket.
-	want.Points[0].X, want.Points[0].Y = 1.5, 14.0
+	want.Points[0].X, want.Points[0].Y = fp(1.5), fp(14.0)
 	if !reflect.DeepEqual(*got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", *got, want)
 	}
@@ -254,7 +254,7 @@ func TestGoldenPersonScopeOwnRowsOnly(t *testing.T) {
 		Points: []Point{
 			{
 				EntityID: PersonIDForIdentity("jane@example.com"), EntityLabel: displayNameForIdentity("jane@example.com"),
-				X: 5.0, Y: 12.0,
+				X: fp(5.0), Y: fp(12.0),
 				WindowStart: "2024-01-01", WindowEnd: "2024-01-02",
 				EvidenceLink: "/api/v1/explain?metric=throughput",
 			},
@@ -283,6 +283,8 @@ func withWholeWindowPoints(resp Response, start, end string) Response {
 	resp.Points = points
 	return resp
 }
+
+func fp(v float64) *float64 { return &v }
 
 func bindingValue(bindings []dhclickhouse.Binding, name string) any {
 	for _, b := range bindings {

@@ -79,17 +79,20 @@ func TestTheTeamPointAggregatesTheWholeWindowNotTheLastBucket(t *testing.T) {
 		"team-a": {66.0 / 24, 4},
 		"team-b": {24.0 / 24, 2},
 	})
+	var a Point
 	for _, point := range resp.Points {
+		if point.NoData {
+			continue
+		}
+		if point.EntityID == "team-a" {
+			a = point
+		}
 		if len(point.Trajectory) < 2 {
 			t.Errorf("%s trajectory = %v, want one entry per weekly bucket", point.EntityID, point.Trajectory)
 		}
-		if point.Trajectory[len(point.Trajectory)-1].Y == point.Y {
-			t.Errorf("%s: the point equals its last weekly bucket (%v): the window was not aggregated", point.EntityID, point.Y)
+		if point.Trajectory[len(point.Trajectory)-1].Y == *point.Y {
+			t.Errorf("%s: the point equals its last weekly bucket (%v): the window was not aggregated", point.EntityID, *point.Y)
 		}
-	}
-	a := resp.Points[0]
-	if a.EntityID != "team-a" {
-		a = resp.Points[1]
 	}
 	wantTrajectory := []PointTrajectory{
 		{X: 1, Y: 1, Window: "2026-08-30"}, {X: 60.0 / 24, Y: 2, Window: "2026-09-06"}, {X: 5, Y: 1, Window: "2026-09-13"},

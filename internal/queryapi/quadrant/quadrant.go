@@ -45,6 +45,11 @@
 // (bucketWindow). Python plots the last bucket's values and window_start /
 // window_end. The trajectory keeps one entry per bucket.
 //
+// Declared difference (CHAOS-9815): at the team grain every ACTIVE team of the
+// org in scope (the selected teams when the request names some) is a point. A
+// team with no point in the window is sent as a no-data point (Point.NoData:
+// x and y null, no_data true), never absent and never a zero. See idle.go.
+//
 // Data-layer note: ClickHouse reads follow src/dev_health_ops/
 // clickhouse_dedup.py's dedup_from IN INTENT, not in the reference's own
 // current text -- all four daily-family tables the ported metric specs

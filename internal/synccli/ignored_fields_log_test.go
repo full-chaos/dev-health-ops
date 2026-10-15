@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
 func TestShapeRefusalLogsTheIgnoredKeyNamesNeverTheirValues(t *testing.T) {
@@ -36,5 +38,17 @@ func TestIgnoredKeyNamesAreBoundedInTheRefusalLine(t *testing.T) {
 	}
 	if strings.Contains(out, "k20") {
 		t.Fatalf("log carries more than the bounded names: %s", out)
+	}
+}
+
+func TestNonShapeRefusalsKeepTheirKeySet(t *testing.T) {
+	log := captureLookupLog(t)
+	logCredentialLookupFailure(context.Background(), "org-1", credentialLookupFailure{Reason: reasonDecryptFailed, IgnoredFields: []string{"org"}})
+	_, err := githubCredentialFromDB(context.Background(), "mysql://dho_user:s3cret-pw@127.0.0.1:1/dho", "org-1", cli.Env{})
+	if err == nil {
+		t.Fatal("want a refusal for a database URL the lookup cannot use")
+	}
+	if strings.Contains(log.String(), "ignored_fields") {
+		t.Fatalf("a non-shape refusal line carries ignored_fields: %s", log.String())
 	}
 }

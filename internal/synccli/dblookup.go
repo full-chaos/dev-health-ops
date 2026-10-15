@@ -133,12 +133,16 @@ const (
 // logCredentialLookupFailure writes the Warn line for a failure of the stored
 // credential lookup: the reason and what names it, never a value.
 func logCredentialLookupFailure(ctx context.Context, orgID string, failure credentialLookupFailure) {
-	slog.WarnContext(ctx, credentialLookupFailedEvent,
+	attrs := []any{
 		"org_id", orgID, "reason", failure.Reason,
 		"error_class", failure.Class, "error_type", failure.Type,
 		"payload_holds", failure.payloadHolds(),
 		"integration_ids", strings.Join(failure.IntegrationIDs, ","),
-		"ignored_fields", ignoredFieldsText(failure.IgnoredFields))
+	}
+	if failure.Reason == reasonCredentialShapeInvalid {
+		attrs = append(attrs, "ignored_fields", ignoredFieldsText(failure.IgnoredFields))
+	}
+	slog.WarnContext(ctx, credentialLookupFailedEvent, attrs...)
 }
 
 // maxLoggedFieldNames bounds the ignored key names a refusal line carries. The names are the

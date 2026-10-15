@@ -111,3 +111,23 @@ func TestNormalizeJiraDependenciesRelatesTo(t *testing.T) {
 		t.Fatalf("unexpected inward edge direction: %+v", inward)
 	}
 }
+
+func TestJiraParentIDOmitsParentWithoutKey(t *testing.T) {
+	for name, tc := range map[string]struct {
+		value any
+		want  *string
+	}{
+		"absent":              {nil, nil},
+		"object without key":  {map[string]any{"id": "10"}, nil},
+		"object empty key":    {map[string]any{"key": ""}, nil},
+		"json shape with key": {map[string]any{"key": "OPS-1"}, stringPointer("jira:OPS-1")},
+		"object with key":     {map[string]any{"key": "OPS-91"}, stringPointer("jira:OPS-91")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := jiraParentID(tc.value)
+			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+				t.Fatalf("jiraParentID = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

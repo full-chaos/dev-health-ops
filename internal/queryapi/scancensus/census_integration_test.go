@@ -109,9 +109,6 @@ type Verdict struct {
 	Site       Site
 	Unresolved string
 	Mismatches []string
-	// Ambiguous: another statement of the function with the same column count
-	// scans clean, so the site is not told apart from it.
-	Ambiguous []string
 }
 
 // Classify pairs every site's destinations with the column types the server
@@ -128,7 +125,6 @@ func Classify(ctx context.Context, conn driver.Conn, sites []Site) []Verdict {
 		}
 		var matched bool
 		var describeErr error
-		var clean int
 		var failing []string
 		for _, st := range s.Statements {
 			if SelectListSplices(st) {
@@ -144,7 +140,6 @@ func Classify(ctx context.Context, conn driver.Conn, sites []Site) []Verdict {
 				continue
 			}
 			matched = true
-			var bad []string
 			for i, ct := range cols {
 				k := pairKey{ct, s.Dests[i]}
 				err, seen := probed[k]
@@ -153,20 +148,11 @@ func Classify(ctx context.Context, conn driver.Conn, sites []Site) []Verdict {
 					probed[k] = err
 				}
 				if err != nil {
-					bad = append(bad, fmt.Sprintf("column %d: %s into %s: %s", i+1, ct, s.Dests[i], firstLine(err.Error())))
+					failing = append(failing, fmt.Sprintf("column %d: %s into %s: %s", i+1, ct, s.Dests[i], firstLine(err.Error())))
 				}
 			}
-			if len(bad) == 0 {
-				clean++
-			} else {
-				failing = append(failing, bad...)
-			}
 		}
-		if clean == 0 {
-			v.Mismatches = failing
-		} else if len(failing) > 0 {
-			v.Ambiguous = failing
-		}
+		v.Mismatches = failing
 		if !matched {
 			v.Unresolved = "no statement of the function resolves to the destination count"
 			if describeErr != nil {

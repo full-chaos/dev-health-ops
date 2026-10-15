@@ -49,7 +49,7 @@ func TestTheRepositoryPointAggregatesTheWholeWindow(t *testing.T) {
 			repo1, day, uint32(10*(i+1)), uint32(i+1), ownerShareOrg)
 	}
 	resp := runWindow(ctx, t, client, "churn_throughput", "repo", "week")
-	if len(resp.Points) != 1 || resp.Points[0].EntityID != "acme/one" || resp.Points[0].X != 60 || resp.Points[0].Y != 6 {
+	if len(resp.Points) != 1 || resp.Points[0].EntityID != "acme/one" || *resp.Points[0].X != 60 || *resp.Points[0].Y != 6 {
 		t.Fatalf("points = %+v, want acme/one at (60, 6)", resp.Points)
 	}
 	if got := len(resp.Points[0].Trajectory); got != 3 {

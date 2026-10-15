@@ -528,6 +528,21 @@ the earliest open dated one supplies the target with source
 `gitlab.group_milestone.due_date` and a `target_ref` that names the group. It has
 a `sprints` row under the same key (the work-items unit lists the same ancestor milestones and writes a group milestone once, keyed by its group), so `target_ref` joins the sprint row.
 
+Several units write the same `sprints` row: every project unit of a GitLab group
+writes the group milestone row; every Jira project unit, and the Jira Atlassian
+route, writes the rows of the sprints its issues reference; the Linear reference
+catalog and the Linear work-items unit write the same `linear:cycle:<id>` row.
+These sprint writers declare their keys shared across units. When a unit
+recovers a crashed sprints write and reads back a newer row under the key, that
+row is a later write of another unit, and the effect counts as committed (a
+replay would only write older data). Equal content logs reason
+`rewritten_by_newer_sibling`, different content `superseded_by_newer_sibling`
+(log `sprint_effect_readback_newer_row`, counter
+`provider_sync_sprint_recovery_newer_row_total`). A GitHub milestone key
+(`ghms:<repository>:<id>`) has one writing unit, so a newer row with different
+content there stays a recovery conflict. The Linear reference catalog's own
+sprints readback applies the same rule to a newer work-items row.
+
 ## Migration rules
 
 Every migration needs:

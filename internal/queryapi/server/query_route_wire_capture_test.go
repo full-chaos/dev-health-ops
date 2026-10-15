@@ -232,6 +232,8 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/aiattributedprs_v1_captured.graphql", registeredAiAttributedPrsV1Document},
 		{"testdata/wire_capture/aiattributionoverview_captured.graphql", registeredAiAttributionOverviewDocument},
 		{"testdata/wire_capture/aiattributionoverview_v1_captured.graphql", registeredAiAttributionOverviewV1Document},
+		{"testdata/wire_capture/investmentfull_captured.graphql", registeredInvestmentFullDocument},
+		{"testdata/wire_capture/investmentfull_v1_captured.graphql", registeredInvestmentFullV1Document},
 		{"testdata/wire_capture/testopspipeline_captured.graphql", registeredTestOpsPipelineDocument},
 		{"testdata/wire_capture/testopspipeline_v1_captured.graphql", registeredTestOpsPipelineV1Document},
 		{"testdata/wire_capture/testopstest_captured.graphql", registeredTestOpsTestDocument},

@@ -74,6 +74,23 @@ def _resolved_lines(name: str) -> list[tuple[str, str]]:
     return lines + [(k, v) for k, v in raw[name] if k != "include"]
 
 
+# The legacy scripts still name the two static host files; stack.files names their tracked copies (content equality
+# with the host files is check-host-copies.sh's job: the host files are not in this repo).
+_TRACKED_COPY = {
+    "compose.yml": "$HERE/compose.bigboy.base.yml",
+    "compose/compose.go.workers.yml": "$HERE/compose.bigboy.go-workers.yml",
+}
+# What a root entry may still be: per-cut state and the lane override, never static configuration.
+ROOT_STATE_FILES = {
+    "compose/compose.bigboy.images.yml",
+    ".remember/lanes/team-lead/reconciler-sweep-override.yml",
+}
+
+
+def _tracked(files: list[str]) -> list[str]:
+    return [_TRACKED_COPY.get(f, f) for f in files]
+
+
 def _dash_f(text: str) -> list[str]:
     return [m.strip('"') for m in re.findall(r"-f\s+(\"?[^\s\")]+\"?)", text)]
 
@@ -89,13 +106,13 @@ def test_stack_set_equals_bigboy_cut_chain() -> None:
         r"^export COMPOSE_FILE=(\S+)$", (BIGBOY / "bigboy-cut.sh").read_text(), re.M
     )
     assert match
-    assert _files("stack") == match.group(1).split(":")
+    assert _files("stack") == _tracked(match.group(1).split(":"))
 
 
 def test_smoke_set_equals_web_path_smoke_chain() -> None:
     block = _block("web-path-smoke.sh", "BASE_COMPOSE_ARGS=(")
     block = block[: block.index(")") + 1]
-    assert _files("smoke") == _dash_f(block)
+    assert _files("smoke") == _tracked(_dash_f(block))
 
 
 def test_prove_set_equals_graphql_prove_chain() -> None:
@@ -103,7 +120,7 @@ def test_prove_set_equals_graphql_prove_chain() -> None:
     base = text[text.index("BASE=(") :]
     base = base[: base.index(")\n") + 1]
     run = [ln for ln in text.splitlines() if 'docker compose "${BASE[@]}" -f' in ln][0]
-    assert _files("prove") == _dash_f(base) + _dash_f(run)
+    assert _files("prove") == _tracked(_dash_f(base) + _dash_f(run))
     assert "--profile venue" in base and _sets()["prove"]["profile"] == ["venue"]
 
 
@@ -124,7 +141,7 @@ def test_hook_check_and_river_apply_sets_equal_the_chain_they_run_in_the_cut() -
         assert m, script
         assert m.group(2) == f"$HERE/{overlay}"
         # the script appends its overlay to the COMPOSE_FILE the cut exported
-        assert _files(name) == cut.group(1).split(":") + [m.group(2)]
+        assert _files(name) == _tracked(cut.group(1).split(":")) + [m.group(2)]
         assert _sets()[name]["profile"] == ["venue"]
 
 
@@ -148,6 +165,12 @@ def test_needs_cover_every_required_variable_of_each_set() -> None:
             name,
             sorted(required - derived - env_file - set(kinds.get("needs", []))),
         )
+
+
+def test_root_entries_are_only_per_cut_state_and_the_lane_override() -> None:
+    for name in _raw():
+        roots = {v for k, v in _resolved_lines(name) if k == "root"}
+        assert roots <= ROOT_STATE_FILES, (name, sorted(roots - ROOT_STATE_FILES))
 
 
 def test_every_set_names_project_and_env_file() -> None:

@@ -35,6 +35,7 @@ package workitemengine
 
 import (
 	"errors"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -126,6 +127,7 @@ type issueTypeMetricsKey struct {
 type issueTypeMetricsBucket struct {
 	created, completed, active int
 	cycleHours                 []float64
+	leadHours                  []float64
 }
 
 // ComputeIssueTypeMetricsDaily mirrors the issue-type path in the production
@@ -141,6 +143,7 @@ func ComputeIssueTypeMetricsDaily(
 ) []IssueTypeMetricsDailyRow {
 	buckets := make(map[issueTypeMetricsKey]*issueTypeMetricsBucket)
 	order := make([]issueTypeMetricsKey, 0, len(items))
+	completedOnDay, leadExcluded := 0, 0
 	for index, item := range items {
 		teamID := resolveTeam(index)
 		key := issueTypeMetricsKey{
@@ -163,11 +166,22 @@ func ComputeIssueTypeMetricsDaily(
 			completed := item.CompletedAt.UTC()
 			if !completed.Before(dayUTC) && completed.Before(end) {
 				bucket.completed++
+				completedOnDay++
 				if item.StartedAt != nil {
 					cycle := completed.Sub(item.StartedAt.UTC()).Hours()
 					if cycle >= 0 {
 						bucket.cycleHours = append(bucket.cycleHours, cycle)
 					}
+				}
+				// Lead time runs from creation to completion. An item with no
+				// created_at (the zero time) or a creation after its
+				// completion has no lead time: it is left out of the p50 and
+				// counted in the debug line below, never taken as 0 hours.
+				lead := completed.Sub(created).Hours()
+				if item.CreatedAt.IsZero() || lead < 0 {
+					leadExcluded++
+				} else {
+					bucket.leadHours = append(bucket.leadHours, lead)
 				}
 			}
 		}
@@ -181,10 +195,14 @@ func ComputeIssueTypeMetricsDaily(
 	for _, key := range order {
 		bucket := buckets[key]
 		sort.Float64s(bucket.cycleHours)
-		var p50, p90 float64
+		sort.Float64s(bucket.leadHours)
+		var p50, p90, leadP50 float64
 		if len(bucket.cycleHours) > 0 {
 			p50 = bucket.cycleHours[len(bucket.cycleHours)/2]
 			p90 = bucket.cycleHours[int(float64(len(bucket.cycleHours))*0.9)]
+		}
+		if len(bucket.leadHours) > 0 {
+			leadP50 = bucket.leadHours[len(bucket.leadHours)/2]
 		}
 		result = append(result, IssueTypeMetricsDailyRow{
 			RepoID:         key.repoID.pointer(),
@@ -196,8 +214,14 @@ func ComputeIssueTypeMetricsDaily(
 			ActiveCount:    bucket.active,
 			CycleP50Hours:  p50,
 			CycleP90Hours:  p90,
-			LeadP50Hours:   0,
+			LeadP50Hours:   leadP50,
 		})
+	}
+	if completedOnDay > 0 {
+		slog.Default().Debug("workitemengine: issue type lead time",
+			"day", dayUTC.Format("2006-01-02"),
+			"completed_items", completedOnDay,
+			"lead_time_excluded_items", leadExcluded)
 	}
 	return result
 }

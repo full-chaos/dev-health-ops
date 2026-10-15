@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -33,8 +34,12 @@ import (
 //     in Python's "Missing GitHub credentials ..." message.
 //
 // Named divergences from Python, each outside the oracle corpus on purpose
-// (the two of CHAOS-9678 are inside it as named entries, see
+// (the ones of CHAOS-9678 are inside it as named entries, see
 // dbLookupNamedDivergences):
+//   - the credential is the one the org's ACTIVE github integration points at
+//     (credential_id), read by the worker's own repository, not the row named
+//     "default" (prod rows are not so named); no, no-credential or several
+//     active integrations are typed refusals;
 //   - the payload is decoded by the WORKER's decode and shape rule
 //     (providerfoundation.DecodeStoredGitHubCredential, one shared function): a
 //     payload key the credential does not use is IGNORED (its name is logged at
@@ -80,6 +85,11 @@ const (
 	reasonPayloadNotObject       = "credential_payload_not_object"
 	reasonPrivateKeyPathUnread   = "credential_private_key_path_unreadable"
 	reasonCredentialShapeInvalid = "credential_shape_invalid"
+
+	reasonGitHubIntegrationNotFound     = "github_integration_not_found"
+	reasonGitHubIntegrationNoCredential = "github_integration_no_credential"
+	reasonGitHubIntegrationsAmbiguous   = "github_integrations_ambiguous"
+	reasonCredentialConfigInvalid       = "credential_config_invalid"
 )
 
 // credentialLookupFailure is one reason the lookup found nothing usable. It is
@@ -90,6 +100,7 @@ const (
 type credentialLookupFailure struct {
 	Reason, Class, Type string
 	HasToken, HasApp    bool
+	IntegrationIDs      []string
 }
 
 func (failure credentialLookupFailure) Error() string {
@@ -117,7 +128,8 @@ func logCredentialLookupFailure(ctx context.Context, orgID string, failure crede
 	slog.WarnContext(ctx, credentialLookupFailedEvent,
 		"org_id", orgID, "reason", failure.Reason,
 		"error_class", failure.Class, "error_type", failure.Type,
-		"payload_holds", failure.payloadHolds())
+		"payload_holds", failure.payloadHolds(),
+		"integration_ids", strings.Join(failure.IntegrationIDs, ","))
 }
 
 // payloadHolds says what a refused payload held, as a word: the production logger
@@ -260,30 +272,88 @@ func githubCredentialFromDB(ctx context.Context, dbURL, orgID string, env cli.En
 }
 
 // storedGitHubCredential is the lookup itself: every branch that finds nothing
-// usable returns its own credentialLookupFailure.
+// usable returns its own credentialLookupFailure. The credential is the one the
+// org's ACTIVE github integration points at (credential_id), read through the
+// worker's own providerfoundation.PostgresCredentialRepository; no credential
+// name is assumed (CHAOS-9678: prod rows are not named "default").
 func storedGitHubCredential(ctx context.Context, dbURL, orgID string, env cli.Env) (*GitHubCredentials, error) {
 	dsn, ok := asyncpgToPgx(dbURL)
 	if !ok {
 		return nil, lookupFailure(reasonDatabaseURLNotUsable)
 	}
-	conn, err := pgx.Connect(ctx, dsn)
+	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, lookupFailureWith(reasonDatabaseConnectFailed, err)
 	}
-	defer func() { _ = conn.Close(ctx) }()
-	var ciphertext *string
-	err = conn.QueryRow(ctx,
-		"SELECT credentials_encrypted FROM integration_credentials WHERE org_id = $1 AND provider = 'github' AND name = 'default'",
-		orgID).Scan(&ciphertext)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return nil, lookupFailure(reasonCredentialRowNotFound)
-	case err != nil:
-		return nil, lookupFailureWith(reasonDatabaseQueryFailed, err)
-	case ciphertext == nil || *ciphertext == "":
-		return nil, lookupFailure(reasonCiphertextEmpty)
+	defer pool.Close()
+	if err := pool.Ping(ctx); err != nil {
+		return nil, lookupFailureWith(reasonDatabaseConnectFailed, err)
 	}
-	return githubCredentialFromCiphertext(ctx, *ciphertext, orgID, env)
+	integrationID, credentialID, err := activeGitHubIntegration(ctx, pool, orgID)
+	if err != nil {
+		return nil, err
+	}
+	record, err := providerfoundation.PostgresCredentialRepository{Pool: pool}.ResolveEncrypted(ctx, providerfoundation.TenantScope{
+		OrgID: orgID, Provider: "github", IntegrationID: integrationID, CredentialID: credentialID,
+	})
+	switch {
+	case errors.Is(err, providerfoundation.ErrCredentialNotFound):
+		failure := lookupFailure(reasonCredentialRowNotFound)
+		failure.IntegrationIDs = []string{integrationID}
+		return nil, failure
+	case err != nil:
+		failure := lookupFailureWith(reasonCredentialConfigInvalid, err)
+		failure.IntegrationIDs = []string{integrationID}
+		return nil, failure
+	case !record.Ciphertext.Configured():
+		failure := lookupFailure(reasonCiphertextEmpty)
+		failure.IntegrationIDs = []string{integrationID}
+		return nil, failure
+	}
+	return githubCredentialFromCiphertext(ctx, record.Ciphertext.Reveal(), orgID, env)
+}
+
+// activeGitHubIntegration returns the id and credential id of the org's one
+// active github integration. It refuses, with a typed reason that names the
+// integration ids, when there is none, when it has no stored credential, and
+// when there are several (the verb does not guess).
+func activeGitHubIntegration(ctx context.Context, pool *pgxpool.Pool, orgID string) (integrationID, credentialID string, err error) {
+	rows, err := pool.Query(ctx,
+		`SELECT id::text, provider, COALESCE(credential_id::text, '') FROM integrations
+		 WHERE org_id = $1 AND is_active = TRUE ORDER BY id`, orgID)
+	if err != nil {
+		return "", "", lookupFailureWith(reasonDatabaseQueryFailed, err)
+	}
+	defer rows.Close()
+	var ids, credentialIDs []string
+	for rows.Next() {
+		var id, provider, credential string
+		if err := rows.Scan(&id, &provider, &credential); err != nil {
+			return "", "", lookupFailureWith(reasonDatabaseQueryFailed, err)
+		}
+		// The provider column is unconstrained text: the workers compare it in Go through the shared
+		// normalizer, never with a SQL predicate, and so does this.
+		if providerfoundation.NormalizeSourceKey(provider) != "github" {
+			continue
+		}
+		ids, credentialIDs = append(ids, id), append(credentialIDs, credential)
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", lookupFailureWith(reasonDatabaseQueryFailed, err)
+	}
+	switch {
+	case len(ids) == 0:
+		return "", "", lookupFailure(reasonGitHubIntegrationNotFound)
+	case len(ids) > 1:
+		failure := lookupFailure(reasonGitHubIntegrationsAmbiguous)
+		failure.IntegrationIDs = ids
+		return "", "", failure
+	case credentialIDs[0] == "":
+		failure := lookupFailure(reasonGitHubIntegrationNoCredential)
+		failure.IntegrationIDs = ids
+		return "", "", failure
+	}
+	return ids[0], credentialIDs[0], nil
 }
 
 // githubCredentialFromCiphertext decrypts the stored payload and builds the

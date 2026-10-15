@@ -25,20 +25,30 @@ func TestGitHubCredentialLookupReasonsAgainstMigratedSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := envOf(map[string]string{"SETTINGS_ENCRYPTION_KEY": reasonTestKey})
-	insert := func(name string, ciphertext *string) {
+	insert := func(name string, ciphertext *string) uuid.UUID {
 		t.Helper()
+		id := uuid.New()
 		if _, err := pool.Exec(ctx, `INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
-			VALUES ($1, $2, 'github', $3, true, $4, '{}'::jsonb, now(), now())`, uuid.New(), orgID, name, ciphertext); err != nil {
+			VALUES ($1, $2, 'github', $3, true, $4, '{}'::jsonb, now(), now())`, id, orgID, name, ciphertext); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	integrate := func(credentialID *uuid.UUID) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
+			VALUES ($1, $2, 'github', $3, 'gh', '{}', true, now(), now())`, uuid.New(), orgID, credentialID); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	_, err := storedGitHubCredential(ctx, baseURL, orgID, env)
-	if failure := failureOf(t, err); failure.Reason != reasonCredentialRowNotFound {
-		t.Fatalf("no row: reason %q, want %q", failure.Reason, reasonCredentialRowNotFound)
+	if failure := failureOf(t, err); failure.Reason != reasonGitHubIntegrationNotFound {
+		t.Fatalf("no integration: reason %q, want %q", failure.Reason, reasonGitHubIntegrationNotFound)
 	}
 
-	insert("default", nil)
+	credentialID := insert("default", nil)
+	integrate(&credentialID)
 	_, err = storedGitHubCredential(ctx, baseURL, orgID, env)
 	if failure := failureOf(t, err); failure.Reason != reasonCiphertextEmpty {
 		t.Fatalf("NULL ciphertext: reason %q, want %q", failure.Reason, reasonCiphertextEmpty)
@@ -66,12 +76,124 @@ func TestGitHubCredentialLookupReasonsAgainstMigratedSchema(t *testing.T) {
 	}
 
 	// A table the database refuses to read: the query fails, and the reason is not "no row".
-	if _, err := pool.Exec(ctx, `ALTER TABLE integration_credentials RENAME TO integration_credentials_moved`); err != nil {
+	if _, err := pool.Exec(ctx, `ALTER TABLE integrations RENAME TO integrations_moved`); err != nil {
 		t.Fatal(err)
 	}
 	_, err = storedGitHubCredential(ctx, baseURL, orgID, env)
 	failure := failureOf(t, err)
 	if failure.Reason != reasonDatabaseQueryFailed || failure.Class == "" || failure.Type == "" {
 		t.Fatalf("missing table: %+v, want %q with an error class and type", failure, reasonDatabaseQueryFailed)
+	}
+}
+
+// CHAOS-9678: prod's github credential rows are not named "default"; the active github integration points at
+// one by credential_id and the verb reads that row (red on main: credential_row_not_found).
+func TestGitHubCredentialIsTheOneTheActiveIntegrationPointsAt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pool, baseURL := startDBLookupPostgres(ctx, t)
+	orgID := uuid.NewString()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+		VALUES ($1, 'cred-integration', 'cred-integration', 'community', 'manual', true, now(), now())`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	env := envOf(map[string]string{"SETTINGS_ENCRYPTION_KEY": reasonTestKey})
+	credential := func(name, payload string) uuid.UUID {
+		t.Helper()
+		id, sealed := uuid.New(), sealPayload(t, reasonTestKey, "", payload)
+		if _, err := pool.Exec(ctx, `INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
+			VALUES ($1, $2, 'github', $3, true, $4, '{}'::jsonb, now(), now())`, id, orgID, name, sealed); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	integration := func(credentialID *uuid.UUID, active bool) uuid.UUID {
+		t.Helper()
+		id := uuid.New()
+		if _, err := pool.Exec(ctx, `INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
+			VALUES ($1, $2, 'github', $3, $4, '{}', $5, now(), now())`, id, orgID, credentialID, "gh-"+id.String(), active); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	reset := func() {
+		t.Helper()
+		for _, statement := range []string{`DELETE FROM integrations`, `DELETE FROM integration_credentials`} {
+			if _, err := pool.Exec(ctx, statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	t.Run("a credential not named default", func(t *testing.T) {
+		reset()
+		credential("decoy-default-looking", `{"token":"ghp_decoy"}`)
+		wanted := credential("github-prod", `{"token":"ghp_wanted_token_value"}`)
+		integration(&wanted, true)
+		got, err := storedGitHubCredential(ctx, baseURL, orgID, env)
+		if err != nil || got == nil || got.Token != "ghp_wanted_token_value" {
+			t.Fatalf("credential = %+v, %v, want the token of the credential the integration points at", got, err)
+		}
+	})
+
+	t.Run("a provider spelled with spaces and capitals", func(t *testing.T) {
+		reset()
+		wanted := credential("github-prod", `{"token":"ghp_spaced_provider_value"}`)
+		id := integration(&wanted, true)
+		if _, err := pool.Exec(ctx, `UPDATE integrations SET provider = E'\t GitHub\n ' WHERE id = $1`, id); err != nil {
+			t.Fatal(err)
+		}
+		got, err := storedGitHubCredential(ctx, baseURL, orgID, env)
+		if err != nil || got == nil || got.Token != "ghp_spaced_provider_value" {
+			t.Fatalf("credential = %+v, %v, want the integration found whatever the provider's case and surrounding spaces", got, err)
+		}
+	})
+
+	refusals := []struct {
+		name   string
+		seed   func() []uuid.UUID
+		reason string
+	}{
+		{"no active github integration", func() []uuid.UUID {
+			id := credential("github-prod", `{"token":"ghp_t"}`)
+			integration(&id, false)
+			return nil
+		}, reasonGitHubIntegrationNotFound},
+		{"an integration with no credential", func() []uuid.UUID {
+			credential("default", `{"token":"ghp_t"}`)
+			return []uuid.UUID{integration(nil, true)}
+		}, reasonGitHubIntegrationNoCredential},
+		{"two active github integrations", func() []uuid.UUID {
+			one, two := credential("one", `{"token":"ghp_1"}`), credential("two", `{"token":"ghp_2"}`)
+			return []uuid.UUID{integration(&one, true), integration(&two, true)}
+		}, reasonGitHubIntegrationsAmbiguous},
+	}
+	for _, refusal := range refusals {
+		t.Run(refusal.name, func(t *testing.T) {
+			reset()
+			ids := refusal.seed()
+			log := captureLookupLog(t)
+			_, err := githubCredentialFromDB(ctx, baseURL, orgID, env)
+			failure := failureOf(t, err)
+			if failure.Reason != refusal.reason {
+				t.Fatalf("reason %q, want %q", failure.Reason, refusal.reason)
+			}
+			if len(failure.IntegrationIDs) != len(ids) {
+				t.Fatalf("integration ids %v, want %d", failure.IntegrationIDs, len(ids))
+			}
+			for _, id := range ids {
+				if !strings.Contains(log.String(), id.String()) {
+					t.Fatalf("log lacks integration id %s: %s", id, log.String())
+				}
+			}
+			for _, want := range []string{`"reason":"` + refusal.reason + `"`, orgID} {
+				if !strings.Contains(log.String(), want) {
+					t.Fatalf("log lacks %q: %s", want, log.String())
+				}
+			}
+			if strings.Contains(log.String(), "ghp_") {
+				t.Fatalf("log carries a secret: %s", log.String())
+			}
+		})
 	}
 }

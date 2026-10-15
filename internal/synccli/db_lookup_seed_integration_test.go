@@ -51,6 +51,9 @@ func startDBLookupPostgres(ctx context.Context, t *testing.T) (*pgxpool.Pool, st
 // (the v1 PBKDF2 ciphertext, or the legacy SHA-256 derived one).
 func seedDBLookup(ctx context.Context, t *testing.T, pool *pgxpool.Pool, scenario dbScenario) {
 	t.Helper()
+	if _, err := pool.Exec(ctx, "DELETE FROM integrations"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, "DELETE FROM integration_credentials"); err != nil {
 		t.Fatal(err)
 	}
@@ -86,9 +89,17 @@ func seedDBLookup(ctx context.Context, t *testing.T, pool *pgxpool.Pool, scenari
 		if cred.Active != nil {
 			active = *cred.Active
 		}
+		credentialID := uuid.New()
 		if _, err := pool.Exec(ctx, `INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, now(), now())`, uuid.New(), cred.OrgID, provider, name, active, ciphertext); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, now(), now())`, credentialID, cred.OrgID, provider, name, active, ciphertext); err != nil {
 			t.Fatal(err)
+		}
+		// The verb reads the credential its org's active github integration points at (CHAOS-9678).
+		if provider == "github" {
+			if _, err := pool.Exec(ctx, `INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
+				VALUES ($1, $2, 'github', $3, 'github', '{}', true, now(), now())`, uuid.New(), cred.OrgID, credentialID); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 }

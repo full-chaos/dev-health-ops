@@ -3,6 +3,7 @@ package providersync
 import (
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -403,7 +404,9 @@ const (
 // value to its tier. A pull request's or merge request's own repo_id, and
 // its work_item_dependencies donor edge, are provider-recorded facts: the
 // issue<->PR link builder stamps the same dependency row "native", so those
-// candidates count as native.
+// candidates count as native. A donor reached only through a key parsed from
+// the pull request's text (`extkey:KEY`) is the exception: it counts as
+// explicit_text (see isTextKeyTarget).
 func teamRepoOwnershipIssuePRLinkTier(provenance string) int {
 	switch provenance {
 	case "native":
@@ -458,7 +461,36 @@ type TeamRepoOwnershipTie struct {
 type teamRepoOwnershipDerivation struct {
 	Rows []DerivedTeamRepoOwnershipRow
 	Ties []TeamRepoOwnershipTie
+	// CoOwnersBelowShareFloor counts the co-owners the share floor gave no row.
+	CoOwnersBelowShareFloor int
+	// TextKeyCandidates counts the candidates a key parsed from pull request
+	// text gave (explicit_text tier); TextKeysSkippedForNative counts the pull
+	// requests whose text key was not used because they have a native link.
+	TextKeyCandidates        int
+	TextKeysSkippedForNative int
 }
+
+// isTextKeyTarget reports whether a dependency target is a key parsed from
+// pull request text (`extkey:KEY`): a text inference, never a native link.
+func isTextKeyTarget(targetID string) bool {
+	return strings.HasPrefix(targetID, "extkey:")
+}
+
+// changeRequestNumber is the number at the end of a pull request
+// (`ghpr:<owner>/<repo>#<n>`) or merge request (`gitlab:<path>!<n>`) work
+// item id, or "" when the id has neither separator.
+func changeRequestNumber(workItemID string) string {
+	index := strings.LastIndexAny(workItemID, "#!")
+	if index < 0 {
+		return ""
+	}
+	return workItemID[index+1:]
+}
+
+// teamRepoOwnershipCoOwnerShareFloor is the smallest linked share a co-owner
+// needs for a row (chris, 2026-10-15: "Drop them if they're < 1%"). A main
+// owner keeps its row whatever its share.
+const teamRepoOwnershipCoOwnerShareFloor = 0.01
 
 // deriveTeamRepoOwnership implements both signal paths plus PR inheritance
 // against ALREADY-LOADED rows for one org (loading is the caller's job --
@@ -478,7 +510,8 @@ type teamRepoOwnershipDerivation struct {
 // its share. When two or more teams tie for the top at every tier, the repo is
 // reported in Ties and the tied teams are marked Tied: the write side keeps
 // the tied team that is already the main owner, else the repo has no main
-// owner.
+// owner. A co-owner whose share is below teamRepoOwnershipCoOwnerShareFloor
+// gets no row; the shares of the other rows keep their denominator.
 func deriveTeamRepoOwnership(
 	// orgID is unused inside this function as of CHAOS-4537 (the last
 	// internal use, reconstructing the linear_team_key identity, is gone --
@@ -515,6 +548,24 @@ func deriveTeamRepoOwnership(
 	}
 
 	donorTeamID := buildDonorTeamIDResolver(byID, dependencyEdges, projectToTeam, knownLinearTeamKeys)
+	// A key parsed from pull request text is a fallback only (chris,
+	// 2026-10-15): the native resolver walks every donor edge except text
+	// keys, and the full resolver is asked only when the native one finds no
+	// team. A team found only through a text key counts at the explicit_text
+	// tier, and never for a pull request that has a native issue link.
+	var nativeEdges []TeamRepoOwnershipDependencyEdge
+	for _, edge := range dependencyEdges {
+		if !isTextKeyTarget(edge.TargetWorkItemID) {
+			nativeEdges = append(nativeEdges, edge)
+		}
+	}
+	nativeDonorTeamID := buildDonorTeamIDResolver(byID, nativeEdges, projectToTeam, knownLinearTeamKeys)
+	nativeLinkedPRs := map[[2]string]bool{}
+	for _, link := range issuePRLinks {
+		if teamRepoOwnershipIssuePRLinkTier(link.Provenance) == teamRepoOwnershipLinkTierNative {
+			nativeLinkedPRs[[2]string{link.RepoID, strconv.FormatUint(uint64(link.PRNumber), 10)}] = true
+		}
+	}
 
 	tallies := map[string]map[string]*teamRepoOwnershipLinkCounts{}
 	repoArm := map[string]map[string]string{}
@@ -549,13 +600,25 @@ func deriveTeamRepoOwnership(
 
 	// Path 1 + 2: every pull request and merge request with a repo_id. An
 	// issue's own repo_id is not a relation; issues count through issuePRLinks.
+	var result teamRepoOwnershipDerivation
 	for _, item := range workItems {
 		if item.RepoID == "" || !teamRepoOwnershipChangeRequestTypes[item.Type] {
 			continue
 		}
-		if teamID, arm := donorTeamID(item.WorkItemID); teamID != "" {
+		if teamID, arm := nativeDonorTeamID(item.WorkItemID); teamID != "" {
 			assign(item.RepoID, teamID, arm, teamRepoOwnershipLinkTierNative, item.CreatedAt)
+			continue
 		}
+		teamID, arm := donorTeamID(item.WorkItemID)
+		if teamID == "" {
+			continue
+		}
+		if nativeLinkedPRs[[2]string{item.RepoID, changeRequestNumber(item.WorkItemID)}] {
+			result.TextKeysSkippedForNative++
+			continue
+		}
+		result.TextKeyCandidates++
+		assign(item.RepoID, teamID, arm, teamRepoOwnershipLinkTierExplicitText, item.CreatedAt)
 	}
 
 	// PR inheritance: work_graph_issue_pr's OWN repo_id, resolved via the
@@ -566,12 +629,17 @@ func deriveTeamRepoOwnership(
 		if link.RepoID == "" {
 			continue
 		}
+		tier := teamRepoOwnershipIssuePRLinkTier(link.Provenance)
+		if teamID, arm := nativeDonorTeamID(link.WorkItemID); teamID != "" {
+			assign(link.RepoID, teamID, arm, tier, link.EvidenceAt)
+			continue
+		}
 		if teamID, arm := donorTeamID(link.WorkItemID); teamID != "" {
-			assign(link.RepoID, teamID, arm, teamRepoOwnershipIssuePRLinkTier(link.Provenance), link.EvidenceAt)
+			result.TextKeyCandidates++
+			assign(link.RepoID, teamID, arm, max(tier, teamRepoOwnershipLinkTierExplicitText), link.EvidenceAt)
 		}
 	}
 
-	var result teamRepoOwnershipDerivation
 	for repoID, teams := range tallies {
 		total := 0
 		for _, counts := range teams {
@@ -617,6 +685,9 @@ func deriveTeamRepoOwnership(
 			if leader[teamID] {
 				row.IsPrimary = teamRepoOwnershipMainOwner
 				row.EvidenceFrom = repoEarliest
+			} else if row.Share < teamRepoOwnershipCoOwnerShareFloor {
+				result.CoOwnersBelowShareFloor++
+				continue
 			}
 			result.Rows = append(result.Rows, row)
 		}

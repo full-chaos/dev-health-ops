@@ -671,3 +671,26 @@ func TestHomeResultFromResponse_MapsTheChangeFailureEvidence(t *testing.T) {
 		t.Errorf("unknown evidence = %+v, want no basis, D 3, K 0, coverage 0, deployments_without_outcome", unknown)
 	}
 }
+
+// A measured prior is served as it was stored, a measured 0 stays 0, and a
+// window without data stays null (CHAOS-9817).
+func TestHomeResultCarriesTheMeasuredPriorValue(t *testing.T) {
+	resp := &home.Response{Deltas: []home.MetricDelta{
+		{Metric: "churn", HasData: true, HasPriorData: true, PriorValue: pctp(120)},
+		{Metric: "throughput", HasData: true, HasPriorData: true, PriorValue: pctp(0)},
+		{Metric: "deploy_freq", HasData: true, HasPriorData: false},
+	}}
+	got := homeResultFromResponse(resp)
+	if len(got.Deltas) != 3 {
+		t.Fatalf("Deltas = %d, want 3", len(got.Deltas))
+	}
+	if p := got.Deltas[0].PriorValue; p == nil || *p != 120 {
+		t.Errorf("churn priorValue = %v, want 120", p)
+	}
+	if p := got.Deltas[1].PriorValue; p == nil || *p != 0 {
+		t.Errorf("throughput priorValue = %v, want a measured 0", p)
+	}
+	if p := got.Deltas[2].PriorValue; p != nil {
+		t.Errorf("deploy_freq priorValue = %v, want null", *p)
+	}
+}

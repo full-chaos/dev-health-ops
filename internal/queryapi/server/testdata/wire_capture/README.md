@@ -247,6 +247,14 @@ to the query source text.
 
 # home wire-capture fixture
 
+Newest text (CHAOS-9817): `home_captured.graphql` is NOT a capture. It is
+`home_v11_captured.graphql` (the previous current text, byte-identical, kept as a
+legacy registration) plus the selection `priorValue` in `deltas`, right after
+`hasPriorData`, in the form urql prints. The web change that selects it must put the
+field at that place in `HOME_QUERY` and run
+`scripts/capture-graphql-wire-fixture.ts --operation home`; if the real capture differs,
+the capture wins and this file and `registeredHomeDocument` move to it.
+
 Newest text (CHAOS-9630): `home_captured.graphql` is NOT a capture. It is
 `home_v10_captured.graphql` (the previous current text, byte-identical, kept as a
 legacy registration) plus the selection `changeFailureEvidence { basis deployments

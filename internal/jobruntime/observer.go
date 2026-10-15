@@ -161,6 +161,16 @@ type RemainingMetricsScopeRefusalObserver interface {
 	ObserveRemainingMetricsScopeRefused(family, reason string) error
 }
 
+// RemainingMetricsManualOverlapObserver is the narrow capability the
+// remaining-metrics store depends on (CHAOS-9692) when an automatic dora start
+// finds a pending or running manual backfill or recompute run whose window
+// shares a day with its own. Generic runtime middleware cannot infer this: only
+// the store that just looked at both windows knows the two runs compute the
+// same day.
+type RemainingMetricsManualOverlapObserver interface {
+	ObserveRemainingMetricsManualOverlap(family string) error
+}
+
 // ReportDedupGuardObserver is the narrow capability the weekly-report query
 // adapter depends on after running a chart read over an append-only daily
 // rollup through its dedup guard (CHAOS-4140). Generic runtime middleware

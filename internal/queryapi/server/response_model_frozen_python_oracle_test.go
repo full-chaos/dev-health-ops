@@ -1534,6 +1534,8 @@ var investmentMixGoOnlyEvidenceFields = []struct{ name, goType, tag string }{
 	{"Measure", "string", `json:"measure,omitempty"`},
 	{"Numerator", "*float64", `json:"numerator,omitempty"`},
 	{"Denominator", "*float64", `json:"denominator,omitempty"`},
+	{"SizingCoverage", "*float64", `json:"sizing_coverage,omitempty"`},
+	{"UnsizedUnitCount", "*int", `json:"unsized_unit_count,omitempty"`},
 }
 
 func TestInvestmentMixEvidenceIsThePythonEvidencePlusTheDeclaredGoOnlyFields(t *testing.T) {
@@ -1551,19 +1553,20 @@ func TestInvestmentMixEvidenceIsThePythonEvidencePlusTheDeclaredGoOnlyFields(t *
 		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})
 	}
 	if got := fieldsOf(reflect.TypeOf(investmentexplain.InvestmentMixFindingEvidence{})); !reflect.DeepEqual(got, want) {
-		t.Errorf("InvestmentMixFindingEvidence fields =\n %v\nwant the six Python fields, then the three Go-only ones:\n %v", got, want)
+		t.Errorf("InvestmentMixFindingEvidence fields =\n %v\nwant the six Python fields, then the Go-only ones:\n %v", got, want)
 	}
 
-	numerator, denominator := 25.0, 100.0
+	numerator, denominator, sizing, unsized := 25.0, 100.0, 0.25, 3
 	encoded, err := investmentexplain.EncodeInvestmentMixExplanation(investmentexplain.InvestmentMixExplanation{
 		TopFindings: []investmentexplain.InvestmentMixFinding{{Finding: "f", Evidence: investmentexplain.InvestmentMixFindingEvidence{
-			Theme: "quality", SharePct: 25, Measure: "COUNT", Numerator: &numerator, Denominator: &denominator,
+			Theme: "quality", SharePct: 25, Measure: "ISSUE_SIZE", Numerator: &numerator, Denominator: &denominator,
+			SizingCoverage: &sizing, UnsizedUnitCount: &unsized,
 		}}},
 	})
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	for _, part := range []string{`"measure": "COUNT"`, `"numerator": 25.0`, `"denominator": 100.0`} {
+	for _, part := range []string{`"measure": "ISSUE_SIZE"`, `"numerator": 25.0`, `"denominator": 100.0`, `"sizing_coverage": 0.25`, `"unsized_unit_count": 3`} {
 		if !strings.Contains(encoded, part) {
 			t.Errorf("the production body has no %s: %s", part, encoded)
 		}

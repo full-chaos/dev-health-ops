@@ -28,6 +28,10 @@ Two things are never counted at a share:
 
 A team count in a Context Fabric answer is **one day**: the latest day of the window, shown in the fact's `day` field. It is not an average over the window and not a total for the window. To see more days, read the daily series.
 
+## How an answer states it
+
+The team and project metrics facts that Context Fabric serves carry the field `commit_counts_basis` with the value `owner_share_weighted_latest_day`, next to `commits_count`, `after_hours_commits_count` and `weekend_commits_count`. It names the basis of those counts: the latest day, at the team's share of each repository. The repository fact does not carry it, because a repository's counts are not share-weighted.
+
 ## How it is computed
 
 1. Each repository has one value for the day, for example its commits.

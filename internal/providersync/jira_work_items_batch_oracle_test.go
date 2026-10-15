@@ -263,7 +263,7 @@ func jiraBatchSemanticWorkItem(row jiraWorkItemRow) jiraWorkItemOraclePrepRow {
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, StartedAt: row.StartedAt,
 		CompletedAt: row.CompletedAt, ClosedAt: row.ClosedAt, Labels: row.Labels,
 		StoryPoints: row.StoryPoints, SprintID: row.SprintID, SprintName: row.SprintName,
-		ParentID: row.ParentID, EpicID: row.EpicID, URL: row.URL,
+		ParentID: frozenPythonJSONShapeParentID(row.ParentID), EpicID: row.EpicID, URL: row.URL,
 		PriorityRaw: row.PriorityRaw, ServiceClass: row.ServiceClass, DueAt: row.DueAt,
 		OrgID: row.OrgID,
 	}

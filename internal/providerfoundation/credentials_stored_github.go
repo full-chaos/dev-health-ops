@@ -38,6 +38,7 @@ const (
 type StoredCredentialFailure struct {
 	Reason           string
 	HasToken, HasApp bool
+	Ignored          []string
 }
 
 func (failure *StoredCredentialFailure) Error() string {
@@ -87,7 +88,7 @@ func DecodeStoredGitHubCredential(plaintext []byte) (StoredGitHubCredential, err
 	stored.Token, stored.AppID, stored.InstallationID, stored.BaseURL = value("token"), value("app_id"), value("installation_id"), value("base_url")
 	if shapeErr := ValidateCredentialShape(credential); shapeErr != nil {
 		hasApp := stored.AppID.Configured() || stored.PrivateKey.Configured() || stored.InstallationID.Configured()
-		return StoredGitHubCredential{}, &StoredCredentialFailure{Reason: StoredCredentialShapeInvalid, HasToken: stored.Token.Configured(), HasApp: hasApp}
+		return StoredGitHubCredential{}, &StoredCredentialFailure{Reason: StoredCredentialShapeInvalid, HasToken: stored.Token.Configured(), HasApp: hasApp, Ignored: stored.Ignored}
 	}
 	return stored, nil
 }

@@ -93,3 +93,17 @@ func TestDecodeStoredGitHubCredentialRefusalsHaveAReasonAndNoValue(t *testing.T)
 		})
 	}
 }
+
+func TestShapeRefusalCarriesTheIgnoredKeyNamesNotTheirValues(t *testing.T) {
+	_, err := DecodeStoredGitHubCredential([]byte(`{"org":"acme","zz_extra":"distinctive-secret-9727"}`))
+	var refused *StoredCredentialFailure
+	if !errors.As(err, &refused) || refused.Reason != StoredCredentialShapeInvalid {
+		t.Fatalf("err = %v, want a shape refusal", err)
+	}
+	if strings.Join(refused.Ignored, ",") != "org,zz_extra" {
+		t.Fatalf("Ignored = %v, want the key names sorted", refused.Ignored)
+	}
+	if strings.Contains(strings.Join(refused.Ignored, ","), "distinctive-secret-9727") {
+		t.Fatalf("Ignored carries a value: %v", refused.Ignored)
+	}
+}

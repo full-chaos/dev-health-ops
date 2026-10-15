@@ -288,7 +288,7 @@ func TestTeamReviewSpecsWeighRowsByOwnerShare(t *testing.T) {
 	for _, want := range []string{
 		"sum(toFloat64(m.reviews_given) * o.owner_share) AS reader_value",
 		"max(o.owner_share) AS reader_weight",
-		"GROUP BY bucket, entity_id, entity_label, reader",
+		"GROUP BY bucket, entity_id, reader",
 		"sum(reader_value) / nullIf(sum(reader_weight), 0)",
 	} {
 		if !strings.Contains(load, want) {

@@ -40,6 +40,11 @@
 // quadrant.py:493's own `normalized_scope in {"org", "team"}` gate) and the
 // cycle_throughput attribution quirk above -- is ported verbatim.
 //
+// Declared difference (CHAOS-9816): a point is the aggregate of the whole
+// requested window, read once by the same reader with one bucket for the window
+// (bucketWindow). Python plots the last bucket's values and window_start /
+// window_end. The trajectory keeps one entry per bucket.
+//
 // Data-layer note: ClickHouse reads follow src/dev_health_ops/
 // clickhouse_dedup.py's dedup_from IN INTENT, not in the reference's own
 // current text -- all four daily-family tables the ported metric specs
@@ -436,7 +441,14 @@ type metricRow struct {
 	Value       float64
 }
 
+// bucketWindow is the bucket of a read that aggregates the whole requested
+// window into one row per entity: the window's first day.
+const bucketWindow = "window"
+
 func bucketExpr(bucket, dayExpr string) string {
+	if bucket == bucketWindow {
+		return "toDate({start_day:Date})"
+	}
 	if bucket == "month" {
 		return "toStartOfMonth(" + dayExpr + ")"
 	}

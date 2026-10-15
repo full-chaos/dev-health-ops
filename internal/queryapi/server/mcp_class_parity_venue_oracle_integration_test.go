@@ -1,0 +1,624 @@
+//go:build integration
+
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
+
+	"github.com/full-chaos/dev-health-ops/internal/fixturescli"
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
+	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+)
+
+// The MCP caller class against query-api's own /graphql document route (CHAOS-9802). Both are the real query-api,
+// built by the real Build over one migrated ClickHouse and Postgres, served by the real listeners: the MCP listener
+// (its own gqlgen server, its own ClickHouse client, its own caps and admission) and the public /graphql route. For
+// every registered query document whose response root is an MCP class root, with the proof corpus's variables, the
+// two answers are compared by the proof comparator. A difference is a defect of one of the two routes.
+//
+// This replaces the manual prove and repoint ceremony of the MCP class rows: the class decision no longer rests on a
+// receipt written by hand, it rests on this comparison going green on every change and on main.
+//
+// The data is the frozen synthetic world with metrics and work graph, moved to end today, plus generated rows for
+// the metric tables that world does not hold (mcpParityGeneratedTables). Every class root must have at least one
+// shape where both answers hold data: a root measured only on empty answers is a failure, not a pass.
+
+const (
+	mcpParityOrg    = "9802a000-0000-4000-8000-00000000000a"
+	mcpParityUserID = "9802a000-0000-4000-8000-0000000000b1"
+)
+
+// mcpParityGeneratedTables are the ClickHouse tables the class roots read that the frozen world leaves empty. Each
+// is filled by mcpParitySeedTable from its own column types, so a migration that adds a column needs no change here.
+var mcpParityGeneratedTables = []string{
+	"capacity_forecasts",
+	"compounding_risk_daily",
+	"estimate_coverage_metrics_daily",
+	"incident_metrics_daily",
+	"repo_metrics_daily",
+	"team_cognitive_load_daily",
+	"team_metrics_daily",
+	"team_repo_ownership",
+	"testops_coverage_metrics_daily",
+	"testops_pipeline_metrics_daily",
+	"testops_test_metrics_daily",
+	"user_metrics_daily",
+	"work_item_completion_daily",
+	"work_item_metrics_daily",
+}
+
+// mcpPolicyRefusalStatuses are the statuses of the MCP listener's own policy gates (a size or cost cap, an
+// allowlist, an identity rule): a shape the class refuses by policy while the document route serves it is not a
+// served shape, so it is excluded and named, never counted as a match.
+var mcpPolicyRefusalStatuses = map[int]bool{http.StatusBadRequest: true, http.StatusForbidden: true, http.StatusUnprocessableEntity: true}
+
+type mcpParityShape struct {
+	operation, variant, root string
+	document                 string
+	variables                map[string]any
+	parity                   goapiproof.Options
+}
+
+func (s mcpParityShape) label() string {
+	if s.variant == "" {
+		return s.operation
+	}
+	return s.operation + ":" + s.variant
+}
+
+func TestMCPClassParityVenueOracle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	defer cancel()
+	root := repoRootFromHere(t)
+
+	user := edgeUser{
+		name: "mcpparity", id: uuid.MustParse(mcpParityUserID), active: true,
+		tokenOrg: mcpParityOrg, tokenRole: "admin", memberships: map[string]string{mcpParityOrg: "admin"},
+	}
+	schemaDigest := digest.Schema(schemav1.SDL)
+	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Root: root, GoOnly: true, JWTKey: edgeOracleJWTKey,
+		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
+			t.Helper()
+			exec := func(sql string, args ...any) {
+				t.Helper()
+				if _, err := admin.Exec(ctx, sql, args...); err != nil {
+					t.Fatalf("seed: %v\n%s", err, sql)
+				}
+			}
+			exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+VALUES ($1, 'mcp-parity', 'MCP parity', 'community', 'stripe', true, now(), now())`, mcpParityOrg)
+			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, 'mcpparity@example.com', true, true, false, 0, now(), now())`, user.id)
+			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), mcpParityOrg, user.id)
+			// The class decision of every root: served. The decision is the listener's own gate; what it
+			// serves is what is compared here.
+			for _, rootField := range mcpclass.SortedRoots() {
+				exec(`INSERT INTO go_api_class_decision (operation, mode, current_candidate_build, schema_digest, recorded_by)
+VALUES ($1, 'primary', 'parity-oracle', $2, 'mcp-class-parity-oracle')`, mcpclass.Operation(rootField), schemaDigest)
+			}
+			return nil
+		},
+	})
+
+	chURI := venue.AdminClickHouseURI(t, venue.GoClickHouseDB)
+	conn, err := chstorage.Open(ctx, chstorage.DefaultConfig(chURI))
+	if err != nil {
+		t.Fatalf("open the venue ClickHouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	now := time.Now().UTC()
+	loaded := mcpParityLoadWorld(ctx, t, conn, now)
+	generated := mcpParitySeedGeneratedTables(ctx, t, conn, now)
+	t.Logf("world rows by table: %v", loaded)
+	t.Logf("generated rows by table: %v", generated)
+
+	settings, goBase, mcpBase, leave := mcpParityStartPlane(t, ctx, venue, root, chURI)
+	_ = settings
+	defer leave()
+	token := edgeOracleToken(t, edgeOracleJWTKey, user, time.Now().Add(time.Hour))
+	shapes, excludedAtSource := mcpParityShapes(t, root, now)
+
+	type tally struct {
+		executed, nonEmpty, excluded int
+		failed                       []string
+		excludedWhy                  []string
+	}
+	byRoot := map[string]*tally{}
+	for _, rootField := range mcpclass.SortedRoots() {
+		byRoot[rootField] = &tally{}
+	}
+	client := &http.Client{Timeout: 90 * time.Second}
+	for _, shape := range shapes {
+		tl := byRoot[shape.root]
+		reference := mcpParityPost(t, client, goBase+"/graphql", map[string]string{"Authorization": "Bearer " + token},
+			urqlBody(t, documentOperationName(shape.document), shape.document, shape.variables))
+		class := mcpParityPost(t, client, mcpBase+"/query", mcpParityIdentityHeaders(),
+			mcpBody(t, shape.document, shape.variables))
+
+		if class.status != http.StatusOK && mcpPolicyRefusalStatuses[class.status] && reference.status == http.StatusOK {
+			tl.excluded++
+			tl.excludedWhy = append(tl.excludedWhy, fmt.Sprintf("%s=%d %s", shape.label(), class.status, mcpParityTrim(class.body)))
+			continue
+		}
+		if verdict := mcpParityJudge(shape, reference, class); verdict.failure != "" {
+			tl.failed = append(tl.failed, shape.label()+": "+verdict.failure)
+			continue
+		} else {
+			tl.executed++
+			if verdict.nonEmpty {
+				tl.nonEmpty++
+			}
+		}
+	}
+
+	var problems []string
+	for _, rootField := range mcpclass.SortedRoots() {
+		tl := byRoot[rootField]
+		t.Logf("root %-22s executed=%d non_empty=%d excluded=%d failed=%d", rootField, tl.executed, tl.nonEmpty, tl.excluded, len(tl.failed))
+		for _, why := range tl.excludedWhy {
+			t.Logf("  excluded %s", why)
+		}
+		for _, failure := range tl.failed {
+			problems = append(problems, rootField+" "+failure)
+		}
+		switch {
+		case tl.executed+tl.excluded+len(tl.failed) == 0:
+			problems = append(problems, rootField+": no shape was measured for this root")
+		case tl.nonEmpty == 0 && len(tl.failed) == 0:
+			problems = append(problems, rootField+": every executed shape was empty on both routes, so nothing was compared")
+		}
+	}
+	for _, why := range excludedAtSource {
+		t.Logf("not measured: %s", why)
+	}
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		t.Fatalf("the MCP class and the /graphql document route disagree, or a root was not measured (%d):\n%s", len(problems), strings.Join(problems, "\n"))
+	}
+	venueoracle.WriteGoOnlyProof(t, "every MCP class root answers each registered document of its response root the same as query-api's /graphql document route, over one seeded ClickHouse")
+}
+
+func mcpParityLoadWorld(ctx context.Context, t *testing.T, conn driver.Conn, now time.Time) map[string]int {
+	t.Helper()
+	world, err := fixturescli.LoadFrozenWorld(fixturescli.GenerateParams{
+		Provider: "synthetic", RepoName: "acme/live-e2e", RepoCount: 1, Days: 14, CommitsPerDay: 6, PRCount: 24, TeamCount: 10,
+		Seed: 20260219, WithMetrics: true, WithWorkGraph: true,
+	})
+	if err != nil {
+		t.Fatalf("load the frozen world: %v", err)
+	}
+	counts, err := fixturescli.LoadWorld(ctx, conn, world, mcpParityOrg, now)
+	if err != nil {
+		t.Fatalf("insert the frozen world: %v", err)
+	}
+	return counts
+}
+
+// mcpParitySeedGeneratedTables fills each table of mcpParityGeneratedTables that is still empty with 14 days of rows
+// for three entities (the world's teams, and its repository), typed from the table's own columns.
+func mcpParitySeedGeneratedTables(ctx context.Context, t *testing.T, conn driver.Conn, now time.Time) map[string]uint64 {
+	t.Helper()
+	queryStrings := func(query string) []string {
+		rows, err := conn.Query(ctx, query)
+		if err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var s string
+			if err := rows.Scan(&s); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+	repos := queryStrings("SELECT toString(id) FROM repos ORDER BY id LIMIT 1")
+	teams := queryStrings("SELECT toString(id) FROM teams ORDER BY id LIMIT 3")
+	if len(repos) == 0 || len(teams) == 0 {
+		t.Fatalf("the frozen world holds %d repositories and %d teams, want at least one of each", len(repos), len(teams))
+	}
+	out := map[string]uint64{}
+	for _, table := range mcpParityGeneratedTables {
+		var existing uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM `"+table+"`").Scan(&existing); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if existing > 0 {
+			continue
+		}
+		columns, err := mcpParityColumns(ctx, conn, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		insert, err := mcpParityInsertSQL(table, columns, mcpParityOrg, repos[0], teams)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.Exec(ctx, insert); err != nil {
+			t.Fatalf("seed %s: %v\n%s", table, err, insert)
+		}
+		var rows uint64
+		_ = conn.QueryRow(ctx, "SELECT count() FROM `"+table+"`").Scan(&rows)
+		out[table] = rows
+	}
+	return out
+}
+
+type mcpParityColumn struct{ name, typ string }
+
+func mcpParityColumns(ctx context.Context, conn driver.Conn, table string) ([]mcpParityColumn, error) {
+	rows, err := conn.Query(ctx, "SELECT name, type FROM system.columns WHERE database = currentDatabase() AND table = ? AND default_kind NOT IN ('MATERIALIZED', 'ALIAS', 'EPHEMERAL') ORDER BY position", table)
+	if err != nil {
+		return nil, fmt.Errorf("columns of %s: %w", table, err)
+	}
+	defer rows.Close()
+	var out []mcpParityColumn
+	for rows.Next() {
+		var c mcpParityColumn
+		if err := rows.Scan(&c.name, &c.typ); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("table %s has no columns in the venue database", table)
+	}
+	return out, nil
+}
+
+// mcpParityInsertSQL builds an INSERT ... SELECT of 14 days x len(teams) rows. entity is the team (and the
+// row's repository owner), dayoff the day offset from today.
+func mcpParityInsertSQL(table string, columns []mcpParityColumn, org, repo string, teams []string) (string, error) {
+	quoted := make([]string, len(teams))
+	for i, team := range teams {
+		quoted[i] = "'" + team + "'"
+	}
+	teamArray := "[" + strings.Join(quoted, ",") + "]"
+	var names, exprs []string
+	for _, c := range columns {
+		expr, ok := mcpParityValue(c.name, c.typ, org, repo, teamArray)
+		if !ok {
+			continue
+		}
+		names = append(names, "`"+c.name+"`")
+		exprs = append(exprs, expr)
+	}
+	return fmt.Sprintf("INSERT INTO `%s` (%s) SELECT %s FROM (SELECT number AS n, intDiv(number, %d) %% 14 AS dayoff, number %% %d AS entity FROM numbers(%d))",
+		table, strings.Join(names, ", "), strings.Join(exprs, ", "), len(teams), len(teams), 14*len(teams)), nil
+}
+
+func mcpParityValue(name, typ, org, repo, teamArray string) (string, bool) {
+	base := typ
+	for _, wrapper := range []string{"LowCardinality(", "Nullable("} {
+		for strings.HasPrefix(base, wrapper) {
+			base = strings.TrimSuffix(strings.TrimPrefix(base, wrapper), ")")
+		}
+	}
+	cast := func(expr string) (string, bool) { return "CAST(" + expr + " AS " + typ + ")", true }
+	lower := strings.ToLower(name)
+	switch {
+	case base == "UUID":
+		if strings.Contains(lower, "repo") {
+			return cast("toUUID('" + repo + "')")
+		}
+		return cast("generateUUIDv4()")
+	case base == "Date" || base == "Date32":
+		return cast("today() - dayoff")
+	case strings.HasPrefix(base, "DateTime64"), strings.HasPrefix(base, "DateTime"):
+		if strings.HasSuffix(lower, "computed_at") || strings.HasSuffix(lower, "_at") && !strings.Contains(lower, "date") {
+			return cast("now()")
+		}
+		return cast("now() - toIntervalDay(dayoff)")
+	case base == "String", strings.HasPrefix(base, "FixedString"):
+		switch {
+		case lower == "org_id":
+			return cast("'" + org + "'")
+		case lower == "team_id":
+			return cast("arrayElement(" + teamArray + ", entity + 1)")
+		case strings.Contains(lower, "repo"):
+			return cast("'" + repo + "'")
+		case strings.Contains(lower, "status"), strings.Contains(lower, "state"):
+			return cast("'active'")
+		case strings.HasSuffix(lower, "id"):
+			return cast("concat('" + name + "-', toString(n))")
+		}
+		return cast("concat('" + name + "-', toString(entity))")
+	case strings.HasPrefix(base, "Float"), strings.HasPrefix(base, "Decimal"):
+		return cast("1.5 + entity + dayoff * 0.25")
+	case strings.HasPrefix(base, "UInt"), strings.HasPrefix(base, "Int"), base == "Bool":
+		if base == "Bool" || base == "UInt8" {
+			return cast("1")
+		}
+		return cast("1 + entity + dayoff % 3")
+	case strings.HasPrefix(base, "Array("):
+		return cast("[]")
+	case strings.HasPrefix(base, "Map("):
+		return cast("map()")
+	}
+	return "", false
+}
+
+// mcpParityStartPlane builds query-api as prod does (the real Build over the real settings) with the MCP listener on
+// its own port, and returns the bases of the public and the MCP listener.
+func mcpParityStartPlane(t *testing.T, ctx context.Context, venue *venueoracle.Venue, root, chURI string) (map[string]string, string, string, func()) {
+	t.Helper()
+	jwksPath, _ := edgeOracleJWKS(t)
+	settings := map[string]string{
+		"CLICKHOUSE_URI":               chURI,
+		"GO_API_REGISTRY_POSTGRES_URI": venue.AdminURI(t, venue.GoDB),
+		"GO_API_ENVELOPE_JWKS_PATH":    jwksPath,
+		"GO_API_ENVELOPE_ISSUER":       "mcp-parity-issuer",
+		"GO_API_ENVELOPE_AUDIENCE":     "mcp-parity-audience",
+		edgeJWTSecretEnvVar:            edgeOracleJWTKey,
+	}
+	leave := enterRepositoryRoot(t, root)
+	plane, err := Build(func(key string) string { return settings[key] })
+	if err != nil {
+		t.Fatalf("build query-api: %v", err)
+	}
+	t.Cleanup(plane.Close)
+	_, loopback, _ := net.ParseCIDR("127.0.0.1/32")
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, []*net.IPNet{loopback})
+	mcp := MCPListener("127.0.0.1:0", plane, []*net.IPNet{loopback})
+	for _, listener := range []*Listener{public, internal, mcp} {
+		if listener == nil {
+			t.Fatal("a listener was not built")
+		}
+		if err := listener.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		listener := listener
+		t.Cleanup(func() { _ = listener.Shutdown(context.Background()) })
+	}
+	return settings, "http://" + public.Address(), "http://" + mcp.Address(), leave
+}
+
+func mcpParityIdentityHeaders() map[string]string {
+	headers := map[string]string{}
+	for key, values := range mcpHeaders(mcpParityOrg, "member", "false", "false") {
+		headers[key] = values[0]
+	}
+	return headers
+}
+
+type mcpParityAnswer struct {
+	status int
+	body   string
+}
+
+func mcpParityPost(t *testing.T, client *http.Client, url string, headers map[string]string, body string) mcpParityAnswer {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		request.Header.Set(key, value)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read %s: %v", url, err)
+	}
+	return mcpParityAnswer{status: response.StatusCode, body: string(raw)}
+}
+
+func mcpParityTrim(body string) string {
+	body = strings.Join(strings.Fields(body), " ")
+	if len(body) > 160 {
+		return body[:160] + "..."
+	}
+	return body
+}
+
+type mcpParityVerdict struct {
+	failure  string
+	nonEmpty bool
+}
+
+// mcpParityJudge decides one shape: the reference (the /graphql document route) must have executed, the class must
+// have served the same status, and the two bodies must compare as a match under the shape's own parity options.
+func mcpParityJudge(shape mcpParityShape, reference, class mcpParityAnswer) mcpParityVerdict {
+	if reference.status != http.StatusOK {
+		return mcpParityVerdict{failure: fmt.Sprintf("the /graphql document route answered %d: %s", reference.status, mcpParityTrim(reference.body))}
+	}
+	if class.status != http.StatusOK {
+		return mcpParityVerdict{failure: fmt.Sprintf("the MCP listener answered %d where /graphql served: %s", class.status, mcpParityTrim(class.body))}
+	}
+	baseline, err := goapiproof.DecodeSnapshot([]byte(reference.body))
+	if err != nil {
+		return mcpParityVerdict{failure: "the /graphql answer does not decode: " + err.Error()}
+	}
+	candidate, err := goapiproof.DecodeSnapshot([]byte(class.body))
+	if err != nil {
+		return mcpParityVerdict{failure: "the MCP answer does not decode: " + err.Error()}
+	}
+	if len(baseline.Errors) > 0 {
+		return mcpParityVerdict{failure: "the /graphql answer carries errors: " + mcpParityTrim(reference.body)}
+	}
+	if len(candidate.Errors) > 0 {
+		return mcpParityVerdict{failure: "the MCP answer carries errors: " + mcpParityTrim(class.body)}
+	}
+	result := goapiproof.Compare(baseline, candidate, shape.parity)
+	if !result.IsMatch() && !mcpParityStochasticOnly(result) {
+		return mcpParityVerdict{failure: mcpParityDescribe(result)}
+	}
+	return mcpParityVerdict{nonEmpty: mcpParityHoldsData(baseline.Data) && mcpParityHoldsData(candidate.Data)}
+}
+
+// mcpParityStochasticOnly: a shape under the stochastic leaf class is executed and checked for type, order and date
+// offset instead of compared by value; it is never a match, and passes when the class found nothing to refuse.
+func mcpParityStochasticOnly(result goapiproof.Result) bool {
+	return result.StochasticLeafCitation != "" && len(result.StochasticLeafRefusals) == 0 && result.StructuralRefusal == "" &&
+		len(result.UnusedExclusions) == 0 && len(result.UnusedTierB) == 0 && result.DifferencesOutsideBaselineDefect == 0
+}
+
+func mcpParityDescribe(result goapiproof.Result) string {
+	parts := []string{"state " + result.TerminalState}
+	for i, finding := range result.Findings {
+		if i == 6 {
+			parts = append(parts, fmt.Sprintf("... %d more", len(result.Findings)-i))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s %s: %s", finding.Kind, finding.Path, mcpParityTrim(finding.Detail)))
+	}
+	for label, list := range map[string][]string{
+		"unused_exclusions": result.UnusedExclusions, "unused_tier_b": result.UnusedTierB,
+		"undeclared_numeric_leaves": result.UndeclaredNumericLeaves, "unused_order_insensitive": result.UnusedOrderInsensitiveLists,
+		"order_insensitive_refusals": result.OrderInsensitiveListRefusals,
+	} {
+		if len(list) > 0 {
+			parts = append(parts, label+" "+strings.Join(list, ","))
+		}
+	}
+	if result.StructuralRefusal != "" {
+		parts = append(parts, "structural "+result.StructuralRefusal+": "+mcpParityTrim(result.StructuralDetail))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// mcpParityHoldsData reports whether the answer carries at least one scalar other than a null, an empty string, a
+// zero-length list or __typename: two empty answers agree without either route having read anything.
+func mcpParityHoldsData(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case map[string]any:
+		for key, child := range v {
+			if key != "__typename" && mcpParityHoldsData(child) {
+				return true
+			}
+		}
+		return false
+	case []any:
+		for _, child := range v {
+			if mcpParityHoldsData(child) {
+				return true
+			}
+		}
+		return false
+	case string:
+		return v != ""
+	case json.Number:
+		return true
+	case float64, bool:
+		return true
+	}
+	return true
+}
+
+// mcpParityShapes lists every request the oracle sends: for each operation whose response root is an MCP class
+// root, the registered document's current text with the corpus's base variables and each variant. A shape that needs
+// a real instance id, and a variant marked as a known refusal, are returned as not measured with their reason.
+func mcpParityShapes(t *testing.T, root string, now time.Time) ([]mcpParityShape, []string) {
+	t.Helper()
+	roots := mcpclass.AllowedRoots()
+	documents := map[string]string{}
+	for _, doc := range registeredEdgeDocuments(t, root) {
+		if doc.Legacy || doc.Kind != "query" {
+			continue
+		}
+		documents[doc.Operation] = doc.Document
+	}
+	window := mcpParityWindow(now)
+	var shapes []mcpParityShape
+	var notMeasured []string
+	for _, operation := range goapiproof.KnownOperations() {
+		spec, err := goapiproof.SpecFor(operation)
+		if err != nil || !roots[spec.ResponseRoot] {
+			continue
+		}
+		document, registered := documents[operation]
+		if !registered {
+			notMeasured = append(notMeasured, operation+": not a registered query document")
+			continue
+		}
+		if spec.InstanceVariable != "" {
+			notMeasured = append(notMeasured, operation+": needs one stored row's id")
+		} else {
+			shapes = append(shapes, mcpParityShape{
+				operation: operation, root: spec.ResponseRoot, document: document,
+				variables: spec.Variables(mcpParityOrg, window), parity: mcpParityOptions(operation, "", spec.Parity),
+			})
+		}
+		for _, variant := range spec.Variants {
+			switch {
+			case variant.KnownRefusal != nil:
+				notMeasured = append(notMeasured, operation+":"+variant.Name+": known refusal "+variant.KnownRefusal.Ticket)
+			case variant.Instance != nil:
+				notMeasured = append(notMeasured, operation+":"+variant.Name+": needs a real instance id")
+			default:
+				shapes = append(shapes, mcpParityShape{
+					operation: operation, variant: variant.Name, root: spec.ResponseRoot, document: document,
+					variables: variant.Variables(mcpParityOrg, window), parity: mcpParityOptions(operation, variant.Name, variant.Parity),
+				})
+			}
+		}
+	}
+	if len(shapes) == 0 {
+		t.Fatal("no registered document has an MCP class root as its response root: nothing would be measured")
+	}
+	return shapes, notMeasured
+}
+
+// mcpParityOptions is the shape's own comparator configuration for Go against Go: the declared Python defects
+// describe a difference from Python, so none applies; the volatile fields stay excused. flowMatrix over TEAM and REPO
+// with useInvestment sums a parallel Float64 merge in no fixed order (CHAOS-9803), so its node and edge values
+// compare at the Tier B tolerance and its lists by key; a WORK_TYPE flowMatrix is exact.
+func mcpParityOptions(operation, variant string, declared goapiproof.Options) goapiproof.Options {
+	declared.BaselineDefects = nil
+	if operation == "flowMatrix" && (variant == "TEAM" || variant == "REPO") {
+		declared.FloatTierB = map[string]string{
+			"data.analytics.flowMatrix.nodes.value": "the investment measure is a parallel Float64 sum merged in no fixed order (CHAOS-9803)",
+			"data.analytics.flowMatrix.edges.value": "the investment measure is a parallel Float64 sum merged in no fixed order (CHAOS-9803)",
+		}
+		declared.OrderInsensitiveLists = append(declared.OrderInsensitiveLists,
+			goapiproof.OrderInsensitiveList{
+				Path: "data.analytics.flowMatrix.nodes", KeyFields: []string{"id"}, Ticket: "CHAOS-9803",
+				Reason: "near-tied values flip the row order of the same parallel sum, so the list order carries no signal",
+			},
+			goapiproof.OrderInsensitiveList{
+				Path: "data.analytics.flowMatrix.edges", KeyFields: []string{"source", "target"}, Ticket: "CHAOS-9803",
+				Reason: "near-tied values flip the row order of the same parallel sum, so the list order carries no signal",
+			})
+	}
+	return declared
+}
+
+// mcpParityWindow is the 14-day window the frozen world ends in: its last day is today.
+func mcpParityWindow(now time.Time) goapiproof.Window {
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	since := today.AddDate(0, 0, -13)
+	weekStart := today.AddDate(0, 0, -(int(today.Weekday())+6)%7)
+	return goapiproof.Window{
+		SinceUTC: since.Format(time.RFC3339), UntilUTC: today.AddDate(0, 0, 1).Format(time.RFC3339),
+		SinceDate: since.Format("2006-01-02"), UntilDate: today.Format("2006-01-02"), WeekStart: weekStart.Format("2006-01-02"),
+	}
+}

@@ -101,7 +101,7 @@ func VisitGitHubLinkPages(
 			return result, nil
 		}
 		cursorBefore := next
-		response, err := client.Do(ctx, http.MethodGet, next, nil)
+		response, err := client.DoRoute(ctx, http.MethodGet, options.Route, next, nil)
 		if err != nil {
 			return result, err
 		}
@@ -156,7 +156,7 @@ func VisitGitLabPageParamPages(
 		if err != nil {
 			return PageCollection{}, err
 		}
-		response, err := client.Do(ctx, http.MethodGet, target, nil)
+		response, err := client.DoRoute(ctx, http.MethodGet, options.Route, target, nil)
 		if err != nil {
 			return result, err
 		}
@@ -184,7 +184,10 @@ func VisitGitLabPageParamPages(
 }
 
 type GitHubPageOptions struct {
-	Path     string
+	Path string
+	// Route is the static route template (for example /orgs/{org}/teams) a
+	// failure names in place of the path. Empty names none.
+	Route    string
 	Query    url.Values
 	DataKey  string
 	MaxPages int
@@ -252,7 +255,7 @@ func CollectGitHubLinkPages(
 			result.PageBudgetExhausted = true
 			return result, nil
 		}
-		response, err := client.Do(ctx, http.MethodGet, next, nil)
+		response, err := client.DoRoute(ctx, http.MethodGet, options.Route, next, nil)
 		if err != nil {
 			return result, err
 		}
@@ -293,7 +296,10 @@ func CollectGitHubLinkPages(
 }
 
 type GitLabPageOptions struct {
-	Path       string
+	Path string
+	// Route is the static route template a failure names in place of the
+	// path. Empty names none.
+	Route      string
 	Query      url.Values
 	PerPage    int
 	MaxPages   int
@@ -334,7 +340,7 @@ func CollectGitLabPageParamPages(
 		if err != nil {
 			return PageCollection{}, err
 		}
-		response, err := client.Do(ctx, http.MethodGet, target, nil)
+		response, err := client.DoRoute(ctx, http.MethodGet, options.Route, target, nil)
 		if err != nil {
 			return PageCollection{}, err
 		}

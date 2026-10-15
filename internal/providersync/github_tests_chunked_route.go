@@ -1204,7 +1204,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	root := providerRelativePath(client, "repos", owner, repository)
 	var repo gitHubRepositoryPayload
-	if err := fetchObject(ctx, client, root, &repo); err != nil {
+	if err := fetchObjectRoute(ctx, client, githubRepoRoute, root, &repo); err != nil {
 		return err
 	}
 	cursor.Repo = repo.FullName
@@ -1264,6 +1264,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			if include && !ciPipelineRunOutsideWindow(pipeline.StartedAt, claim) {
 				jobPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 					Path:     root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs",
+					Route:    githubRunJobsRoute,
 					Query:    url.Values{"per_page": {strconv.Itoa(githubTestsPerRunPerPage)}},
 					DataKey:  "jobs",
 					MaxPages: jobPages,
@@ -1396,7 +1397,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		case budgetErr != nil:
 			return budgetErr
 		default:
-			pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
+			pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
 			collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
 			if visitErr != nil {
 				return visitErr
@@ -1480,6 +1481,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				if include && !githubTestsReportRunOutsideWindow(pipeline, claim) {
 					artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 						Path:  root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts",
+						Route: githubRunArtifactsRoute,
 						Query: url.Values{"per_page": {"100"}}, DataKey: "artifacts", MaxPages: 1,
 					})
 					if pageErr != nil {
@@ -1867,7 +1869,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		case budgetErr != nil:
 			return budgetErr
 		default:
-			collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
+			collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
 			if visitErr != nil {
 				return visitErr
 			}

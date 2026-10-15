@@ -71,7 +71,7 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 	counted.Doer = gitLabDeploymentCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, &counted, root, &project); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -87,7 +87,7 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 	perPage := min(maxDeployments, gitLabDeploymentsMaximumPerPage)
 
 	releases, releasePages, releaseErr := fetchGitLabDeploymentObjects(
-		ctx, &counted, root+"/releases", url.Values{}, perPage,
+		ctx, &counted, gitlabReleasesRoute, root+"/releases", url.Values{}, perPage,
 	)
 	if controlErr := gitLabDeploymentControlError(ctx, releaseErr); controlErr != nil {
 		return CompleteRouteBatch{}, controlErr
@@ -101,6 +101,7 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 	deployments, deploymentPages, deploymentsErr := fetchGitLabDeploymentObjects(
 		ctx,
 		&counted,
+		gitlabDeploymentsRoute,
 		root+"/deployments",
 		url.Values{"order_by": {"created_at"}, "sort": {"desc"}},
 		perPage,
@@ -130,6 +131,7 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 		mergeRequests, mergeRequestPages, mergeRequestErr := fetchGitLabDeploymentObjects(
 			ctx,
 			&counted,
+			gitlabProjectRoute+"/repository/commits/{sha}/merge_requests",
 			root+"/repository/commits/"+url.PathEscape(sha)+"/merge_requests",
 			url.Values{},
 			gitLabDeploymentsMaximumPerPage,
@@ -225,7 +227,7 @@ func gitLabDeploymentsBatch(
 func fetchGitLabDeploymentObjects(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	path string,
+	route, path string,
 	query url.Values,
 	perPage int,
 ) ([]map[string]any, int, error) {
@@ -233,7 +235,7 @@ func fetchGitLabDeploymentObjects(
 		ctx,
 		client,
 		providerfoundation.GitLabPageOptions{
-			Path: path, Query: query, PerPage: perPage, MaxPages: 1, SinglePage: true,
+			Path: path, Route: route, Query: query, PerPage: perPage, MaxPages: 1, SinglePage: true,
 		},
 	)
 	if err != nil {

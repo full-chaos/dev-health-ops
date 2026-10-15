@@ -93,7 +93,7 @@ VALUES ('e-` + deployment + `', '` + org + `', '` + deployment + `', '` + incide
 	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL WHERE deployment_id = 'd-shared'`); got != 2 {
 		t.Errorf("two repositories sharing a deployment id hold %d rows, want 2", got)
 	}
-	if got := text(`SELECT groupArray(source) FROM (SELECT source FROM work_graph_deployment_incident_edges FINAL WHERE deployment_id = 'd-pair')`); got != "['native']" {
+	if got := text(`SELECT arrayStringConcat(groupArray(toString(source)), ',') FROM work_graph_deployment_incident_edges FINAL WHERE deployment_id = 'd-pair'`); got != "native" {
 		t.Errorf("the pair holds %s, want only the native row", got)
 	}
 

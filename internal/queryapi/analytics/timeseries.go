@@ -3,6 +3,7 @@ package analytics
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -364,8 +365,118 @@ func ExecuteTimeseries(ctx context.Context, client QueryClient, q compiledQuery,
 			Dimension:      dimensionName,
 			DimensionValue: dimValue,
 			Measure:        measureName,
+			Scope:          model.TimeseriesScopeDimension,
 			Buckets:        buckets[dimValue],
 		})
 	}
 	return out, nil
+}
+
+// orgSeriesDimensionValue is the dimensionValue of the ORG result. A team or repository may carry the same text;
+// scope, not this value, tells the two apart.
+const orgSeriesDimensionValue = "org"
+
+// orgRateTerms returns the numerator and denominator SQL of the measures that serve an org-level series, and the
+// factor the ratio is scaled by (the dimension series serve a percent). ok is false for every other measure.
+//
+// The org rate is the org's summed numerator over its summed denominator, never a mean of the dimension series
+// (CHAOS-9736). TEST_FLAKE_RATE has no term here on purpose: only the rate is stored, and its denominator is the
+// distinct case names of the day, which no column holds.
+//
+// Coverage counts only the rows that carry both line counts: a row with a percent but no counts, or with no lines,
+// adds to neither side.
+func orgRateTerms(measure Measure) (numerator, denominator string, scale float64, ok bool) {
+	switch measure {
+	case MeasurePipelineSuccessRate:
+		return "SUM(success_count)", "SUM(pipelines_count)", 100, true
+	case MeasureCoverageLinePct:
+		const counted = "lines_covered IS NOT NULL AND lines_total IS NOT NULL AND lines_total > 0"
+		return "sumIf(lines_covered, " + counted + ")", "sumIf(lines_total, " + counted + ")", 100, true
+	}
+	return "", "", 0, false
+}
+
+// CompileOrgTimeseries compiles the org-level series of a measure that has one: one row per bucket with the
+// org's numerator and denominator. ok is false when the measure has no org series or the request is on the
+// investment path. The request's own repository/team filters and date range apply; the dimension does not.
+func CompileOrgTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, investmentPath bool, filters *model.FilterInput) (q compiledQuery, ok bool, err error) {
+	if investmentPath {
+		return compiledQuery{}, false, nil
+	}
+	numerator, denominator, _, has := orgRateTerms(req.Measure)
+	if !has {
+		return compiledQuery{}, false, nil
+	}
+	fc, err := translateFilters(orgID, filters, false, defaultFilterColumns())
+	if err != nil {
+		return compiledQuery{}, false, err
+	}
+	source, alias, dateFilter := nonInvestmentSourceAndDateFilter(req.Measure)
+	sql := fmt.Sprintf(`
+SELECT
+    date_trunc('%s', %s) AS bucket,
+    toFloat64(%s) AS numerator,
+    toFloat64(%s) AS denominator
+FROM %s
+WHERE %s
+  AND %s.org_id = {org_id:String}
+%s
+GROUP BY bucket
+ORDER BY bucket ASC
+%s
+`, dateTruncUnit(req.Interval), firstDateFilterToken(dateFilter), numerator, denominator, source, dateFilter, alias, fc.sql, settingsMaxExecutionTime(timeoutSeconds))
+	bindings := []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
+		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
+	}
+	bindings = append(bindings, fc.bindings...)
+	return compiledQuery{sql: sql, bindings: bindings}, true, nil
+}
+
+// orgMeasureLabel is a fixed label for the log line, so no request text reaches the log.
+func orgMeasureLabel(measure Measure) string {
+	if measure == MeasureCoverageLinePct {
+		return "coverage_line_pct"
+	}
+	return "pipeline_success_rate"
+}
+
+// ExecuteOrgTimeseries runs the compiled org query into the one ORG result. A bucket with no denominator (no
+// stored count, or a sum of 0) has a nil value, never a 0: no measurement is not a rate of 0.
+func ExecuteOrgTimeseries(ctx context.Context, client QueryClient, q compiledQuery, dimensionName, measureName string, measure Measure) (model.TimeseriesResult, error) {
+	_, _, scale, _ := orgRateTerms(measure)
+	rows, err := client.Query(ctx, q.sql, q.bindings)
+	if err != nil {
+		return model.TimeseriesResult{}, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	buckets := []model.TimeseriesBucket{}
+	for rows.Next() {
+		var bucketDay time.Time
+		var num, den *float64
+		if scanErr := rows.Scan(&bucketDay, &num, &den); scanErr != nil {
+			return model.TimeseriesResult{}, fmt.Errorf("scan: %w", scanErr)
+		}
+		var value *float64
+		if num != nil && den != nil && *den > 0 {
+			v := *num / *den * scale
+			value = &v
+		}
+		slog.DebugContext(ctx, "analytics: org series point",
+			"measure", orgMeasureLabel(measure), "bucket", bucketDay.Format("2006-01-02"),
+			"numerator", num, "denominator", den, "has_value", value != nil)
+		buckets = append(buckets, model.TimeseriesBucket{Date: graphqldate.New(bucketDay), Value: value})
+	}
+	if err := rows.Err(); err != nil {
+		return model.TimeseriesResult{}, fmt.Errorf("rows: %w", err)
+	}
+	return model.TimeseriesResult{
+		Dimension:      dimensionName,
+		DimensionValue: orgSeriesDimensionValue,
+		Measure:        measureName,
+		Scope:          model.TimeseriesScopeOrg,
+		Buckets:        buckets,
+	}, nil
 }

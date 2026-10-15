@@ -458,7 +458,14 @@ type TeamRepoOwnershipTie struct {
 type teamRepoOwnershipDerivation struct {
 	Rows []DerivedTeamRepoOwnershipRow
 	Ties []TeamRepoOwnershipTie
+	// CoOwnersBelowShareFloor counts the co-owners the share floor gave no row.
+	CoOwnersBelowShareFloor int
 }
+
+// teamRepoOwnershipCoOwnerShareFloor is the smallest linked share a co-owner
+// needs for a row (chris, 2026-10-15: "Drop them if they're < 1%"). A main
+// owner keeps its row whatever its share.
+const teamRepoOwnershipCoOwnerShareFloor = 0.01
 
 // deriveTeamRepoOwnership implements both signal paths plus PR inheritance
 // against ALREADY-LOADED rows for one org (loading is the caller's job --
@@ -478,7 +485,8 @@ type teamRepoOwnershipDerivation struct {
 // its share. When two or more teams tie for the top at every tier, the repo is
 // reported in Ties and the tied teams are marked Tied: the write side keeps
 // the tied team that is already the main owner, else the repo has no main
-// owner.
+// owner. A co-owner whose share is below teamRepoOwnershipCoOwnerShareFloor
+// gets no row; the shares of the other rows keep their denominator.
 func deriveTeamRepoOwnership(
 	// orgID is unused inside this function as of CHAOS-4537 (the last
 	// internal use, reconstructing the linear_team_key identity, is gone --
@@ -617,6 +625,9 @@ func deriveTeamRepoOwnership(
 			if leader[teamID] {
 				row.IsPrimary = teamRepoOwnershipMainOwner
 				row.EvidenceFrom = repoEarliest
+			} else if row.Share < teamRepoOwnershipCoOwnerShareFloor {
+				result.CoOwnersBelowShareFloor++
+				continue
 			}
 			result.Rows = append(result.Rows, row)
 		}

@@ -1251,7 +1251,15 @@ controls: a link that is gone and an explicit empty list are closed).
 > share as the share they have."* The measure (lead D5988, from the D5432 ranking in section 1.1): a team's share of a
 > repository is its **linked share**, the link counts per tier (`native`, then `explicit_text`, then `heuristic`); the
 > team with the largest linked share is the main owner and keeps `is_primary` over the whole history, and every other
-> owning team gets a row with its own share. The writer stores the share (`team_repo_ownership.share`, section 1.1)
+> owning team gets a row with its own share. **Co-owner share floor (chris, 2026-10-15, verbatim): *"Drop them if
+> they're < 1%"*.** A co-owner whose linked share is below 0.01 gets no row (`teamRepoOwnershipCoOwnerShareFloor` in
+> `internal/providersync/team_repo_ownership_derivation.go`); a co-owner at exactly 0.01 keeps its row, and the main
+> owner (every tied main owner too) keeps its row whatever its share. The kept rows store their linked share over all
+> links of the repository, dropped teams included. An open row of a dropped co-owner, and an open row that no current
+> link supports, is retracted by the derivation's own diff (`diffTeamRepoOwnershipRetractions`: a replacement row
+> with `valid_to` set and a newer `updated_at`, never a delete), under the retraction guard (CHAOS-9045). The run logs
+> `team_repo_ownership_derivation.co_owner_below_share_floor` with the count (tests:
+> `team_repo_ownership_co_owner_floor_test.go`, every provider pair). The writer stores the share (`team_repo_ownership.share`, section 1.1)
 > and the investment and quadrant readers weigh a co-owned repository by it (CHAOS-9408, `teamscope.OwnerShares`,
 > next to "The team review quadrant" and "Every analytics team grouping on the investment path" below). Other text
 > below that says "same rank", "owners at the winner's rank" or "shared equally" about the attribution cascade
@@ -1270,7 +1278,7 @@ controls: a link that is gone and an explicit empty list are closed).
 > **The daily team tables read the owner shares too (CHAOS-9410).** `teamownership.OwnerSharesByRepo` is the one Go
 > reader of "who owns a repository": the main owner (every tied team of a full tie, D5990) first, then every lesser
 > owner, each with its own share (`team_repo_ownership.share`, the largest non-NULL share of the team's open rows,
-> divided by the sum over all owners; equal where any owner has no measure; no rounding, threshold or cap, D5991).
+> divided by the sum over all owners; equal where any owner has no measure; no rounding, threshold or cap in the reader, D5991; the writer's co-owner floor above decides which rows exist).
 > `AuthoritativeOwnersByRepo` is the same read cut to the main owners. A caller picks its rule by the kind of measure:
 > - **An additive measure** (a sum over repositories) takes each owner at its share. `team_cognitive_load_daily`
 >   does so: the pull-request interruption load, the review request load and the context-spread count are the sums

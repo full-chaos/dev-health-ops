@@ -123,6 +123,9 @@ type TeamRepoOwnershipDerivationStats struct {
 	// Superseded is how many open rows the run closed because the claim they
 	// record now starts at its evidence time (a row at that time was written).
 	Superseded int
+	// CoOwnersBelowShareFloor is how many co-owners the run gave no row because their linked share is below 1%; an open
+	// row of one is retracted by the run's diff like any row the run does not derive.
+	CoOwnersBelowShareFloor int
 }
 
 // Derive is DeriveWithStats without the stats (the form the integration tests and the older callers use).
@@ -238,6 +241,12 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	}
 
 	derivation := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks, knownTeams)
+
+	stats.CoOwnersBelowShareFloor = derivation.CoOwnersBelowShareFloor
+	if derivation.CoOwnersBelowShareFloor > 0 {
+		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.co_owner_below_share_floor",
+			"org_id", orgID, "co_owners", derivation.CoOwnersBelowShareFloor, "floor", teamRepoOwnershipCoOwnerShareFloor)
+	}
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {

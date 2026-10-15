@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -1008,5 +1009,131 @@ func TestDemoGateG12MeasuredComplexityIsRealistic(t *testing.T) {
 	}
 	if checked < 18 {
 		t.Fatalf("%d repositories measured on %s, want all 18", checked, newest)
+	}
+}
+
+// Commit hours are spread over the day: the world's commits fall at many hours, some before 09:00 or
+// after 17:00 UTC and some on weekends, and the share of a team's weekday commits outside 09:00-17:00
+// differs between the teams and stays near the team's AfterHoursShare (no shared constant such as one
+// early commit per repository day).
+func TestDemoGateCommitHoursSpread(t *testing.T) {
+	world, frozenAt := demoGateWorld(t)
+	type tally struct{ weekday, after, weekend, recentWeekday, recentAfter int }
+	byRepo := map[string]*tally{}
+	// Per repository and day: commits and after-hours commits (the team metrics row of that day).
+	type dayCount struct{ commits, after int }
+	byRepoDay := map[string]map[string]*dayCount{}
+	hours := map[int]bool{}
+	early, late, weekend := 0, 0, 0
+	for _, row := range demoGateRows(world, "git_commits") {
+		at, ok := gateTime(row["committer_when"])
+		if !ok {
+			continue
+		}
+		at = at.UTC()
+		hours[at.Hour()] = true
+		repoID := gateText(row["repo_id"])
+		if byRepo[repoID] == nil {
+			byRepo[repoID] = &tally{}
+		}
+		counts := byRepo[repoID]
+		if byRepoDay[repoID] == nil {
+			byRepoDay[repoID] = map[string]*dayCount{}
+		}
+		day := at.Format(time.DateOnly)
+		if byRepoDay[repoID][day] == nil {
+			byRepoDay[repoID][day] = &dayCount{}
+		}
+		byRepoDay[repoID][day].commits++
+		recent := frozenAt.Sub(at) <= 30*24*time.Hour
+		if at.Weekday() == time.Saturday || at.Weekday() == time.Sunday {
+			counts.weekend++
+			weekend++
+			continue
+		}
+		counts.weekday++
+		if at.Hour() < 9 || at.Hour() >= 17 {
+			byRepoDay[repoID][day].after++
+		}
+		if recent {
+			counts.recentWeekday++
+		}
+		if at.Hour() < 9 || at.Hour() >= 17 {
+			counts.after++
+			if recent {
+				counts.recentAfter++
+			}
+			if at.Hour() < 9 {
+				early++
+			} else {
+				late++
+			}
+		}
+	}
+	if len(hours) < 10 || early == 0 || late == 0 || weekend == 0 {
+		t.Errorf("commits fall at %d distinct UTC hours (%d before 09:00, %d from 17:00, %d on weekends), want at least 10 hours and some of each", len(hours), early, late, weekend)
+	}
+	shares := map[string][]string{}
+	latestRatios := map[string][]string{}
+	for team, repos := range demoGateTeamRepos(world) {
+		latest := ""
+		for _, repoID := range repos {
+			for day := range byRepoDay[repoID] {
+				if weekday, err := time.Parse(time.DateOnly, day); err == nil && weekday.Weekday() != time.Saturday && weekday.Weekday() != time.Sunday {
+					latest = max(latest, day)
+				}
+			}
+		}
+		var onLatest dayCount
+		for _, repoID := range repos {
+			if counts := byRepoDay[repoID][latest]; counts != nil {
+				onLatest.commits += counts.commits
+				onLatest.after += counts.after
+			}
+		}
+		if onLatest.commits > 0 {
+			ratio := fmt.Sprintf("%.2f", float64(onLatest.after)/float64(onLatest.commits))
+			latestRatios[ratio] = append(latestRatios[ratio], team+" "+latest)
+		}
+		var sum tally
+		for _, repoID := range repos {
+			if counts := byRepo[repoID]; counts != nil {
+				sum.weekday += counts.weekday
+				sum.after += counts.after
+				sum.weekend += counts.weekend
+				sum.recentWeekday += counts.recentWeekday
+				sum.recentAfter += counts.recentAfter
+			}
+		}
+		if sum.weekday == 0 {
+			t.Errorf("%s: no weekday commit", team)
+			continue
+		}
+		share := float64(sum.after) / float64(sum.weekday)
+		recentShare := 0.0
+		if sum.recentWeekday > 0 {
+			recentShare = float64(sum.recentAfter) / float64(sum.recentWeekday)
+		}
+		t.Logf("%s: %d of %d weekday commits outside 09:00-17:00 UTC (%.2f), last 30 days %d of %d (%.2f), %d weekend commits", team, sum.after, sum.weekday, share, sum.recentAfter, sum.recentWeekday, recentShare, sum.weekend)
+		want := float64(demoTeamNamed(strings.Fields(strings.ToLower(team))[0]).AfterHoursShare) / 100
+		if math.Abs(share-want) > 0.15 {
+			t.Errorf("%s: %.2f of the weekday commits are outside 09:00-17:00 UTC, want within 0.15 of the team's AfterHoursShare %.2f", team, share, want)
+		}
+		key := fmt.Sprintf("%.2f", share)
+		shares[key] = append(shares[key], team)
+	}
+	// The served team metrics row is the latest day's. On a weekday no single value may stand for most
+	// teams (on a weekend every team's ratio is 0 by the rule: weekend commits are never after hours).
+	for ratio, teams := range latestRatios {
+		if len(teams) >= 6 {
+			sort.Strings(teams)
+			t.Errorf("%d teams share the after-hours ratio %s on their latest weekday with commits: %v", len(teams), ratio, teams)
+		}
+	}
+	for share, teams := range shares {
+		if len(teams) > 1 {
+			sort.Strings(teams)
+			t.Errorf("teams %v share the after-hours share %s of their weekday commits", teams, share)
+		}
 	}
 }

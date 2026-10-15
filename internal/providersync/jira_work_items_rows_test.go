@@ -131,3 +131,21 @@ func TestJiraParentIDOmitsParentWithoutKey(t *testing.T) {
 		})
 	}
 }
+
+func TestFrozenPythonParentIDAdapterMapsOnlyAKeyedJiraParent(t *testing.T) {
+	for in, want := range map[string]*string{
+		"jira:OPS-90": stringPointer("jira:"),
+		"jira:":       stringPointer("jira:"),
+		"gh:OPS-90":   stringPointer("gh:OPS-90"),
+		"OPS-90":      stringPointer("OPS-90"),
+		"":            stringPointer(""),
+	} {
+		got := frozenPythonJSONShapeParentID(&in)
+		if *got != *want {
+			t.Errorf("adapter(%q) = %q, want %q", in, *got, *want)
+		}
+	}
+	if frozenPythonJSONShapeParentID(nil) != nil {
+		t.Error("adapter(nil) must stay nil: a missing parent_id is a finding against a recording that holds one")
+	}
+}

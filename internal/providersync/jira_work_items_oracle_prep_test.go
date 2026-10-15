@@ -240,14 +240,14 @@ func jiraOracleIdentity(email, accountID, displayName string) string {
 	return "unknown"
 }
 
-// frozenPythonJSONShapeParentID maps the Go parent_id back to what the retired Python producer recorded for a
-// JSON-shaped issue. The frozen snapshots are immutable recordings of that producer, which stored the literal "jira:"
-// for every JSON-shaped parent (it read the key from an attribute a JSON object lacks). Go now stores "jira:<key>", or
-// no parent_id without a key (CHAOS-9835, TestJiraParentIDOmitsParentWithoutKey); only this adapter keeps the
-// comparison against the old recording, so the divergence is named here and nowhere else.
+// frozenPythonJSONShapeParentID is a deliberate, narrow divergence from the frozen Python recording. That producer
+// stored the literal "jira:" for a JSON-shaped parent even when the parent had a key; that was the defect of CHAOS-9835
+// (raised to High: every Jira parent link on prod was lost). Go now stores "jira:<KEY>". Only that case is mapped back
+// to the recorded "jira:"; every other value, a missing parent_id included, is returned unchanged, so any other
+// parent_id mismatch against the recording still fails the oracle.
 func frozenPythonJSONShapeParentID(parentID *string) *string {
-	if parentID == nil {
-		return nil
+	if parentID == nil || !strings.HasPrefix(*parentID, "jira:") || len(*parentID) == len("jira:") {
+		return parentID
 	}
 	legacy := "jira:"
 	return &legacy

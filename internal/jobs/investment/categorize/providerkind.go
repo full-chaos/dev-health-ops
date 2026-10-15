@@ -496,14 +496,14 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 // the whole suite if that guarantee is ever broken by a future edit
 // here.
 func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string) (Provider, error) {
-	return NewProviderFromCredentialsWithTransport(kind, apiKey, baseURL, model, nil)
+	return newProviderFromCredentialsWithTransport(kind, apiKey, baseURL, model, nil)
 }
 
-// NewProviderFromCredentialsWithTransport is NewProviderFromCredentials with
+// newProviderFromCredentialsWithTransport is NewProviderFromCredentials with
 // the transport an org-supplied base_url is dialled through: nil is the
 // SSRF-guarded transport (what production uses); a test against a loopback
 // server passes its own.
-func NewProviderFromCredentialsWithTransport(
+func newProviderFromCredentialsWithTransport(
 	kind ProviderKind, apiKey, baseURL, model string, transport http.RoundTripper,
 ) (Provider, error) {
 	switch kind {

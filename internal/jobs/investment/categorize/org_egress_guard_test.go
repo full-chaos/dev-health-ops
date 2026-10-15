@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -65,5 +67,32 @@ func TestOrgHTTPClientIsGuardedOnlyForASuppliedBaseURL(t *testing.T) {
 	}
 	if client := orgHTTPClient("https://org.example/v1", nil); client == nil || client.Transport == nil {
 		t.Fatal("a supplied base_url must get the guarded client")
+	}
+}
+
+// The transport-injecting constructor is a guard bypass: no production file
+// may call it except NewProviderFromCredentials, which passes nil (the guarded
+// transport). Tests in this package may call it.
+func TestOnlyNewProviderFromCredentialsCallsTheTransportInjectingConstructor(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(raw)
+		calls := strings.Count(text, "newProviderFromCredentialsWithTransport(")
+		switch {
+		case name == "providerkind.go" && calls == 2 && strings.Contains(text, "newProviderFromCredentialsWithTransport(kind, apiKey, baseURL, model, nil)"):
+		case calls == 0:
+		default:
+			t.Errorf("%s calls newProviderFromCredentialsWithTransport (%d occurrences): only NewProviderFromCredentials may, with a nil transport", name, calls)
+		}
 	}
 }

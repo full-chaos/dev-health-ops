@@ -777,7 +777,20 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 			// at dial time; this scenario is about model resolution, not egress.
 			previous := newProviderFromCredentials
 			newProviderFromCredentials = func(kind categorize.ProviderKind, apiKey, baseURL, model string) (categorize.Provider, error) {
-				return categorize.NewProviderFromCredentialsWithTransport(kind, apiKey, baseURL, model, http.DefaultTransport)
+				// Test-only: build the provider with a plain client (the real
+				// constructor dials through the SSRF guard, which refuses loopback).
+				plain := &http.Client{}
+				switch kind {
+				case categorize.ProviderKindOpenAI:
+					return categorize.NewOpenAIProvider(categorize.OpenAIProviderConfig{
+						APIKey: secrets.NewHidden(apiKey), BaseURL: baseURL, Model: model, HTTPClient: plain,
+					}), nil
+				case categorize.ProviderKindLocal, categorize.ProviderKindOllama:
+					return categorize.NewLocalProvider(categorize.LocalProviderConfig{
+						APIKey: secrets.NewHidden(apiKey), BaseURL: baseURL, Model: model, HTTPClient: plain,
+					}), nil
+				}
+				return categorize.NewProviderFromCredentials(kind, apiKey, baseURL, model)
 			}
 			t.Cleanup(func() { newProviderFromCredentials = previous })
 			resolver := &fakeOrgResolver{

@@ -133,7 +133,7 @@ func TestReviewReproOrgBYOOllamaV1URLHitsChatCompletionsNotNativeAPIChat(t *test
 	}))
 	defer srv.Close()
 
-	provider, err := NewProviderFromCredentialsWithTransport(ProviderKindOllama, "org-key", srv.URL+"/v1", "gemma3:4b", http.DefaultTransport)
+	provider, err := newProviderFromCredentialsWithTransport(ProviderKindOllama, "org-key", srv.URL+"/v1", "gemma3:4b", http.DefaultTransport)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

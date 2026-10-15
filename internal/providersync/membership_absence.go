@@ -91,7 +91,7 @@ func (prover gitlabMembershipAbsence) Absence(ctx context.Context, teamID, membe
 	if !okMember || !okTeam || strings.TrimSpace(username) == "" || prover.client == nil {
 		return AbsenceUnproven
 	}
-	response, err := prover.client.DoRoute(ctx, http.MethodGet, "/orgs/{org}/teams/{slug}/memberships/{login}",
+	response, err := prover.client.DoRoute(ctx, http.MethodGet, "/groups/{group}/members",
 		groupPath+"/members?per_page=100&query="+url.QueryEscape(username), nil)
 	if err != nil {
 		return AbsenceUnproven

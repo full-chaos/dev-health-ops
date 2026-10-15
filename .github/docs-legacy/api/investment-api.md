@@ -68,7 +68,7 @@ response carries additive Go-only fields (CHAOS-9622, CHAOS-9809): `measure` (`"
 carry a size), `unsized_unit_count` and, below half sized, `sizing_note` ("Mostly unsized: n of m work units have an
 issue size. The other u have no size, so each counts as 1 work unit."; D6031). The values of the distributions are the
 numerators, so `share = value / denominator`. A response for a store with no investment table (or without its columns) leaves them out; a window with no
-units serves `ISSUE_SIZE`, a `denominator` of 0 and no sizing fields.
+units serves `ISSUE_SIZE`, a `denominator` of 0, `unsized_unit_count` 0 and no `sizing_coverage` (no unit to take a share of).
 
 ### What `effort_value` is (stored, not a weight)
 

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,5 +98,18 @@ func TestExplainOptionsDefaultToThePagesMeasureAndTakeItsWindow(t *testing.T) {
 	}
 	if team.ScopeLevel != "team" || org.ScopeLevel != "org" {
 		t.Errorf("scope levels = %q/%q", org.ScopeLevel, team.ScopeLevel)
+	}
+}
+
+// CHAOS-9809: the explain request accepts ISSUE_SIZE, and the refusal of an unknown measure names it among the
+// accepted values, so a client reading the error learns the whole contract.
+func TestExplainRequestAcceptsIssueSizeAndNamesItInTheRefusal(t *testing.T) {
+	body, errs := decodeExplainBodyForTest(t, `{"measure":"ISSUE_SIZE"}`)
+	if len(errs) > 0 || body.Measure == nil || *body.Measure != "ISSUE_SIZE" {
+		t.Fatalf("ISSUE_SIZE: body %v, errors %+v", body.Measure, errs)
+	}
+	_, errs = decodeExplainBodyForTest(t, `{"measure":"HOURS"}`)
+	if len(errs) != 1 || errs[0].Type != "literal_error" || !strings.Contains(errs[0].Msg, "'ISSUE_SIZE'") || !strings.Contains(errs[0].Msg, "'COUNT'") || !strings.Contains(errs[0].Msg, "'THROUGHPUT'") {
+		t.Fatalf("HOURS refusal = %+v, want one literal_error naming ISSUE_SIZE, COUNT and THROUGHPUT", errs)
 	}
 }

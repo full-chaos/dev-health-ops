@@ -37,5 +37,6 @@
   },
   "unit": null,
   "measure": "ISSUE_SIZE",
-  "denominator": 23.0
+  "denominator": 23.0,
+  "unsized_unit_count": 0
 }

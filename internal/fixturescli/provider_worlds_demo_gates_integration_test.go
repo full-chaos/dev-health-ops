@@ -981,3 +981,32 @@ func TestDemoGateG11TrackerItemsHaveAStatusHistory(t *testing.T) {
 	}
 	t.Logf("%d tracker or blocker items checked, %d without a history", checked, without)
 }
+
+// G12: the measured complexity of a demo repository is where real code is. The complexity job measured
+// 411 to 520 cyclomatic per thousand lines on files that held nothing but branches; real code is about 10 to 60.
+// Each repository's measured day (the as-of day's repo_complexity_daily row, which the job wrote from the
+// repository's files) reads between 20 and 80.
+func TestDemoGateG12MeasuredComplexityIsRealistic(t *testing.T) {
+	world, _ := demoGateWorld(t)
+	rows := demoGateRows(world, "repo_complexity_daily")
+	newest := ""
+	for _, row := range rows {
+		if day := gateText(row["day"]); day > newest {
+			newest = day
+		}
+	}
+	checked := 0
+	for _, row := range rows {
+		if gateText(row["day"]) != newest {
+			continue
+		}
+		checked++
+		perKLOC, _ := gateNumber(row["cyclomatic_per_kloc"])
+		if perKLOC < 20 || perKLOC > 80 {
+			t.Errorf("repository %v measures %.1f cyclomatic per thousand lines on %s, want 20..80", row["repo_id"], perKLOC, newest)
+		}
+	}
+	if checked < 18 {
+		t.Fatalf("%d repositories measured on %s, want all 18", checked, newest)
+	}
+}

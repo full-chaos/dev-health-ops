@@ -1854,6 +1854,27 @@ Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderT
 - **Legacy rows.** Rows written before migration 113, and rows written by a Python writer, have `created_at = NULL`. No mutation backfills them (versions already merged away cannot be recovered). The carry fills the column from the oldest surviving version at the team's next Go write. Until then readers show `coalesce(created_at, updated_at)`, so for such a team `created_at` can equal `updated_at`; this is a fallback, not a measured creation time.
 - **Reader.** The admin teams API (`GET/POST/PATCH /admin/teams`) renders the stored `created_at` and an unchanged `updated_at`. `identities` still render `created_at = updated_at`.
 
+#### 0.4i A team's provider identity (`teams.provider_team_id`, `provider_name`, `gone_at`; CHAOS-9432)
+
+Migration 133 adds three columns to `teams`. `provider_team_id` is the provider's immutable id of the team as text (the
+GitHub team id, the GitLab group id, the Linear team uuid, the Atlassian team uuid), `provider_name` is the name the
+provider reports (the `name` column can be edited by an admin under the team's sync policy), and `gone_at` is the time
+a run proved the team gone at the provider; NULL = not gone. The row id is minted once from the first slug, path or key
+the sync saw and is never changed: a rename at the provider changes `native_team_key`, and the stored provider id is
+what tells the sync it is the same team (the rename change builds on it). `is_active` is not touched by `gone_at`: a
+gone team keeps its past reads and attribution (chris ruling, CHAOS-9432: never deactivate a gone team).
+
+- **Carry.** Every Go writer of `teams` calls `internal/teamprovider.Carry` before its INSERT, as it does for
+  `created_at` (section 0.4h): `provider_team_id` and `provider_name` are the newest NON-EMPTY values over every stored
+  version (a writer that does not know the provider's id never erases it), `gone_at` is the value of the newest version
+  (a catalog write of a listed team sets it NULL; every other writer keeps it). The Python `insert_teams` carries the
+  same values. The writers are the same as in section 0.4h; a census test (`internal/teamprovider`) fails when an
+  `INSERT INTO teams` drops one of the three columns or a writer does not call `Carry`, and the team id carry's column
+  list is checked too.
+- **Fill.** The GitHub, GitLab and Linear catalog writers store the provider's id and name of each listed team on every
+  run, so an existing row gets its provider id on the first sync that lists the team (no backfill job). A team listed
+  under a key whose stored provider id differs is logged at Warn with counts (`team_provider_identity_written`).
+
 #### 0.4g A stored day after a team id changes (CHAOS-9026)
 
 A daily table whose sorting key holds a team id keeps one row for each team id. The tables are append only and a

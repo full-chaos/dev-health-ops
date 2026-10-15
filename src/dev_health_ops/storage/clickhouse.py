@@ -1728,6 +1728,11 @@ class ClickHouseStore:
         if rows_missing_manual_members:
             await self._preserve_existing_manual_members(rows_missing_manual_members)
 
+        # CHAOS-9432: provider_team_id, provider_name and gone_at belong to the
+        # provider's catalog sync (Go); this writer never knows them, so it
+        # carries them from the stored versions it replaces.
+        await self._carry_team_provider_identity(rows)
+
         await self._insert_rows(
             "teams",
             [
@@ -1747,9 +1752,57 @@ class ClickHouseStore:
                 "native_team_key",
                 "parent_team_id",
                 "source_id",
+                "provider_team_id",
+                "provider_name",
+                "gone_at",
             ],
             rows,
         )
+
+    async def _carry_team_provider_identity(self, rows: list[dict[str, Any]]) -> None:
+        """Set ``provider_team_id``, ``provider_name`` and ``gone_at`` on ROWS
+        (mutated in place) from the stored versions of their ``(org_id, id)``
+        (CHAOS-9432). ``teams`` is a ReplacingMergeTree(updated_at): the newest
+        version wins, so a writer that omits these columns would reset them.
+        The first two are the newest NON-EMPTY values over every stored
+        version; ``gone_at`` is the newest version's. A team with no stored
+        version gets '' / '' / NULL. Mirrors ``internal/teamprovider`` (Go).
+        """
+        assert self.client is not None
+        org_ids = sorted({str(row["org_id"]) for row in rows})
+        ids = sorted({str(row["id"]) for row in rows})
+        query = (
+            "SELECT org_id, id, "
+            "argMaxIf(provider_team_id, (updated_at, last_synced), provider_team_id != ''), "
+            "argMaxIf(provider_name, (updated_at, last_synced), provider_name != ''), "
+            "nullIf(argMax(ifNull(gone_at, toDateTime64(0, 6)), "
+            "(updated_at, last_synced)), toDateTime64(0, 6)) "
+            "FROM teams WHERE org_id IN {org_ids:Array(String)} "
+            "AND id IN {ids:Array(String)} GROUP BY org_id, id"
+        )
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query,
+                query,
+                parameters={"org_ids": org_ids, "ids": ids},
+            )
+        stored: dict[tuple[str, str], tuple[str, str, Any]] = {
+            (str(org_id), str(team_id)): (
+                str(provider_team_id or ""),
+                str(provider_name or ""),
+                gone_at,
+            )
+            for org_id, team_id, provider_team_id, provider_name, gone_at in (
+                result.result_rows or []
+            )
+        }
+        for row in rows:
+            provider_team_id, provider_name, gone_at = stored.get(
+                (str(row["org_id"]), str(row["id"])), ("", "", None)
+            )
+            row["provider_team_id"] = provider_team_id
+            row["provider_name"] = provider_name
+            row["gone_at"] = gone_at
 
     async def _preserve_existing_manual_members(
         self, rows: list[dict[str, Any]]

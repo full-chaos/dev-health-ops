@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // LinearReferenceCatalogClickHouseEffects is the concrete bridge from the
@@ -25,7 +26,7 @@ type LinearReferenceCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const linearReferenceTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
+const linearReferenceTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at, provider_team_id, provider_name, gone_at)`
 const linearReferenceMembersInsert = `INSERT INTO members (org_id, member_id, name, email, provider_identities, is_active, updated_at)`
 const linearReferenceMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
 
@@ -306,25 +307,36 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 	if err != nil {
 		return err
 	}
+	stored, err := teamprovider.Carry(ctx, sink.Conn, rows[0].OrgID, teamIDs)
+	if err != nil {
+		return err
+	}
 	batch, err := sink.Conn.PrepareBatch(ctx, linearReferenceTeamsInsert)
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
+	var tally teamprovider.Tally
 	for _, row := range rows {
 		teamUUID, err := uuid.Parse(row.TeamUUID)
 		if err != nil {
 			return ErrInvalidConfiguration
 		}
 		manualMembers := existingManualMembers[row.ID]
-		if err := batch.Append(row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt)); err != nil {
+		tally.Add(stored, row.ID, row.ProviderTeamID)
+		identity := teamprovider.Merge(stored, row.ID, row.ProviderTeamID, row.ProviderName)
+		if err := batch.Append(row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt), identity.ProviderTeamID, identity.ProviderName, identity.GoneAt); err != nil {
 			return err
 		}
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
-	return batch.Send()
+	if err := batch.Send(); err != nil {
+		return err
+	}
+	tally.Log(ctx, "linear", rows[0].OrgID)
+	return nil
 }
 
 func (sink LinearReferenceCatalogClickHouseEffects) writeMembers(ctx context.Context, rows []linearReferenceMemberRow) error {

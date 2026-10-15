@@ -34,6 +34,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // teamNamespace/identityNamespace mirror Python's uuid.uuid5(NAMESPACE_URL,
@@ -419,7 +420,7 @@ type teamInsertRow struct {
 // delete that leaves the team active, a team created again that cannot be
 // read). It returns the creation time and the time the row was written with.
 func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time, time.Time, error) {
-	const insertSQL = "INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id, created_at, deleted_at)"
+	const insertSQL = "INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id, created_at, deleted_at, provider_team_id, provider_name, gone_at)"
 	if err := checkKeyedTeamID(row.ID); err != nil {
 		return time.Time{}, time.Time{}, err
 	}
@@ -435,6 +436,11 @@ func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time,
 		return time.Time{}, time.Time{}, fmt.Errorf("carry team created_at: %w", err)
 	}
 	createdAt := teamcreated.For(carried, row.ID, row.UpdatedAt)
+	provider, err := teamprovider.Carry(ctx, s.Conn, row.OrgID, []string{row.ID})
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("carry team provider identity: %w", err)
+	}
+	identity := teamprovider.Keep(provider, row.ID)
 	batch, err := s.Conn.PrepareBatch(ctx, insertSQL)
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("prepare team insert: %w", err)
@@ -449,6 +455,7 @@ func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time,
 		row.ID, row.TeamUUID, row.Name, row.Description, row.ManualMembers,
 		row.ProjectKeys, row.RepoPatterns, isActive, row.UpdatedAt, now, row.OrgID,
 		row.Origin.Provider, row.Origin.NativeTeamKey, row.Origin.ParentTeamID, row.Origin.SourceID, createdAt, row.DeletedAt,
+		identity.ProviderTeamID, identity.ProviderName, identity.GoneAt,
 	); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("append team row: %w", err)
 	}

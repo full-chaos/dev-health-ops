@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // github_team_catalog_effects_clickhouse.go is the direct ClickHouse write
@@ -18,7 +19,7 @@ import (
 // clickhouse.go), reusing its exact column lists for the shared "teams" and
 // "team_memberships" tables so both writers stay byte-compatible with every
 // other provider's rows in the same ReplacingMergeTree.
-const githubTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
+const githubTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at, provider_team_id, provider_name, gone_at)`
 const githubTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
 
 // githubTeamCatalogRepoOwnershipInsert matches team_repo_ownership's exact
@@ -70,11 +71,16 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 	if err != nil {
 		return ErrEffectRecoveryUnsafe
 	}
+	stored, err := teamprovider.Carry(ctx, sink.Conn, orgID, teamIDs)
+	if err != nil {
+		return ErrEffectRecoveryUnsafe
+	}
 	batch, err := sink.Conn.PrepareBatch(ctx, githubTeamCatalogTeamsInsert)
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
+	var tally teamprovider.Tally
 	for _, row := range rows {
 		if !sink.validRow(orgID, row) {
 			return ErrInvalidConfiguration
@@ -87,15 +93,22 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 		if manualMembers == nil {
 			manualMembers = []string{}
 		}
+		tally.Add(stored, row.ID, row.ProviderTeamID)
+		identity := teamprovider.Merge(stored, row.ID, row.ProviderTeamID, row.ProviderName)
 		if err := batch.Append(
 			row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys,
 			row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider,
 			row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt),
+			identity.ProviderTeamID, identity.ProviderName, identity.GoneAt,
 		); err != nil {
 			return err
 		}
 	}
-	return batch.Send()
+	if err := batch.Send(); err != nil {
+		return err
+	}
+	tally.Log(ctx, githubTeamCatalogProvider, orgID)
+	return nil
 }
 
 // WriteMemberships upserts every membership row.

@@ -43,6 +43,11 @@ var columnsAfterTheCapture = map[string]map[string]string{
 		"created_at": "113_teams_created_at.sql",
 		// The time of an admin delete: no team of a frozen world was deleted.
 		"deleted_at": "115_teams_deleted_at.sql",
+		// The provider's own id and name of a team and the time a run proved
+		// it gone (CHAOS-9432): the frozen worlds' team rows carry none.
+		"provider_team_id": "133_teams_provider_identity.sql",
+		"provider_name":    "133_teams_provider_identity.sql",
+		"gone_at":          "133_teams_provider_identity.sql",
 	},
 	// The provider's own stable user id of a member (CHAOS-9144): the frozen
 	// worlds' membership rows were written before it and carry none.

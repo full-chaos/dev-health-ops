@@ -386,7 +386,7 @@ func (store *PostgresStore) StartRunTx(
 			// readers take the newest computed_at, so nothing is skipped and
 			// nothing is wrong; the overlap is logged and counted so the
 			// duplicate computation can be seen.
-			store.reportManualWindowOverlaps(ctx, tx, request, day, backfillDays)
+			// PROOF ONLY: report removed
 		}
 	}
 

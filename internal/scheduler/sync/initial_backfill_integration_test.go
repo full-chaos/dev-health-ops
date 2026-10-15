@@ -61,7 +61,15 @@ VALUES (gen_random_uuid(), $1, $2::uuid, $3, 'incremental', $4, 1, 1, 0, $5, $6)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE scheduled_sync_occurrences SET sync_run_id = $2::uuid WHERE occurrence_id = $1`, trigger.OccurrenceID, runID); err != nil {
+	var jobRunID string
+	if err := tx.QueryRow(ctx, `
+INSERT INTO job_runs (id, job_id, status, result, triggered_by, created_at)
+VALUES (gen_random_uuid(), $1::uuid, 0, '{}'::jsonb, 'manual', $2) RETURNING id::text`, trigger.JobID, createdAt).Scan(&jobRunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE scheduled_sync_occurrences SET job_run_id = $2::uuid, sync_run_id = $3::uuid, reconcile_status = 'completed'
+WHERE occurrence_id = $1`, trigger.OccurrenceID, jobRunID, runID); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {

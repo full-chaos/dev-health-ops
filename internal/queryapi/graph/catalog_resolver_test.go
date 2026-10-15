@@ -100,7 +100,7 @@ func TestCatalog_StaticListsNeedNoQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Catalog: %v", err)
 	}
-	if ch.called || res.Values != nil || len(res.Dimensions) != 6 || len(res.Measures) != 21 {
+	if ch.called || res.Values != nil || len(res.Dimensions) != 6 || len(res.Measures) != 22 {
 		t.Fatalf("called=%v values=%v dims=%d measures=%d", ch.called, res.Values, len(res.Dimensions), len(res.Measures))
 	}
 }

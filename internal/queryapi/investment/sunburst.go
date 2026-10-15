@@ -99,6 +99,10 @@ func (r *Reader) FetchInvestmentSunburst(ctx context.Context, filters SunburstFi
 	if err != nil {
 		return nil, err
 	}
+	source, err := investmentexplain.MeasureSource(filters.Measure, sunburstSource(scopeSQL))
+	if err != nil {
+		return nil, err
+	}
 
 	query := fmt.Sprintf(`
 SELECT
@@ -118,7 +122,7 @@ GROUP BY theme, subcategory, scope
 ORDER BY value DESC
 LIMIT {limit:Int64}
 %s
-`, valueSQL, sunburstSource(scopeSQL), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, valueSQL, source, scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	// filters.Limit is bound AS GIVEN -- no clamping, no zero/negative
 	// default-substitution here. Python's own investment_sunburst query

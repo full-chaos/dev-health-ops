@@ -1,0 +1,37 @@
+query InvestmentFull($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    sankey {
+      nodes {
+        id
+        label
+        dimension
+        value
+        __typename
+      }
+      edges {
+        source
+        target
+        value
+        __typename
+      }
+      coverage {
+        teamCoverage
+        repoCoverage
+        __typename
+      }
+      unit
+      __typename
+    }
+    __typename
+  }
+}

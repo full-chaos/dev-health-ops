@@ -59,6 +59,7 @@ enum MeasureInput.FLAG_ACTIVATION_RATE other
 enum MeasureInput.FLAG_COVERAGE_RATIO other
 enum MeasureInput.FLAG_ERROR_RATE_DELTA other
 enum MeasureInput.FLAG_FRICTION_DELTA other
+enum MeasureInput.ISSUE_SIZE other
 enum MeasureInput.PIPELINE_DURATION_P95 other
 enum MeasureInput.PIPELINE_FAILURE_RATE other
 enum MeasureInput.PIPELINE_QUEUE_TIME other

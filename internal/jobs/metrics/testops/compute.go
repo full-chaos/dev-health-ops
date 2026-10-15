@@ -153,6 +153,8 @@ type TestMetric struct {
 	PassRate                float64
 	FailureRate             float64
 	FlakeRate               float64
+	FlakeCases              int
+	DistinctCases           int
 	RetryDependencyRate     float64
 	TotalSuites             int
 	SuiteDurationP50Seconds *float64
@@ -831,7 +833,7 @@ func (accumulator *TestAccumulator) Finish(historicalFailedNames map[string]stru
 	metric := TestMetric{
 		RepoID: repoID, TotalCases: totalCases, PassedCount: passedCount,
 		FailedCount: failedCount, SkippedCount: skippedCount, QuarantinedCount: quarantinedCount,
-		TotalSuites: len(suites),
+		TotalSuites: len(suites), FlakeCases: flakeCases, DistinctCases: distinctCases,
 	}
 	if totalCases > 0 {
 		metric.PassRate = float64(passedCount) / float64(totalCases)

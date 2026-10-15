@@ -32,9 +32,9 @@ func TestDiscoveryDecodeErrorsCarryNoRequestPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	_, githubErr := githubListAllPages[map[string]any](ctx, client, "/orgs/secret-org/teams/secret-team/repos?per_page=100")
-	_, _, groupErr := gitlabListGroupPages(ctx, client, "/api/v4/groups/secret%2Forg/subgroups", 100)
-	_, _, projectErr := gitlabListProjectPages(ctx, client, "/api/v4/groups/secret-group/projects", 100, false)
+	_, githubErr := githubListAllPages[map[string]any](ctx, client, "/orgs/{org}/teams/{slug}/repos", "/orgs/secret-org/teams/secret-team/repos?per_page=100")
+	_, _, groupErr := gitlabListGroupPages(ctx, client, "/groups/{group}/subgroups", "/api/v4/groups/secret%2Forg/subgroups", 100)
+	_, _, projectErr := gitlabListProjectPages(ctx, client, "/groups/{group}/projects", "/api/v4/groups/secret-group/projects", 100, false)
 	for name, err := range map[string]error{"github": githubErr, "gitlab group": groupErr, "gitlab project": projectErr} {
 		if err == nil {
 			t.Fatalf("%s: want a decode error", name)

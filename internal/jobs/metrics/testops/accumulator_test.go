@@ -126,6 +126,10 @@ func TestTestAccumulatorCaseGroupMatchesRawCaseRows(t *testing.T) {
 	if !testMetricsIdentical(want[0], got[0]) {
 		t.Fatalf("case-group path differs:\nrows  =%+v\ngroups=%+v", want[0], got[0])
 	}
+	// CHAOS-9737: the counts behind flake_rate are carried, 1 flaky of 3 distinct names.
+	if want[0].FlakeCases != 1 || want[0].DistinctCases != 3 || got[0].FlakeCases != 1 || got[0].DistinctCases != 3 {
+		t.Fatalf("flake counts = %d/%d (rows), %d/%d (groups), want 1/3", want[0].FlakeCases, want[0].DistinctCases, got[0].FlakeCases, got[0].DistinctCases)
+	}
 	// Guard against a vacuous pass: the fixture must actually exercise the
 	// three derived rates, or "identical" would prove nothing.
 	if want[0].FlakeRate == 0 || want[0].RetryDependencyRate == 0 || want[0].FailureRecurrence == 0 {

@@ -61,13 +61,13 @@ func discoverGitHub(ctx context.Context, credential providerfoundation.Credentia
 	if err != nil {
 		return nil, err
 	}
-	entries, err := githubListAllPages[githubTeamListEntry](ctx, client, "/orgs/"+orgName+"/teams?per_page=100")
+	entries, err := githubListAllPages[githubTeamListEntry](ctx, client, "/orgs/{org}/teams", "/orgs/"+orgName+"/teams?per_page=100")
 	if err != nil {
 		return nil, err
 	}
 	teams := make([]discoveredTeam, 0, len(entries))
 	for _, entry := range entries {
-		repoEntries, err := githubListAllPages[githubRepoListEntry](ctx, client, "/orgs/"+orgName+"/teams/"+entry.Slug+"/repos?per_page=100")
+		repoEntries, err := githubListAllPages[githubRepoListEntry](ctx, client, "/orgs/{org}/teams/{slug}/repos", "/orgs/"+orgName+"/teams/"+entry.Slug+"/repos?per_page=100")
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +95,7 @@ func discoverGitHub(ctx context.Context, credential providerfoundation.Credentia
 }
 
 func githubTeamDetailFor(ctx context.Context, client *providerfoundation.HTTPClient, orgName, slug string) (githubTeamDetail, error) {
-	response, err := client.Do(ctx, "GET", "/orgs/"+orgName+"/teams/"+slug, nil)
+	response, err := client.DoRoute(ctx, "GET", "/orgs/{org}/teams/{slug}", "/orgs/"+orgName+"/teams/"+slug, nil)
 	if err != nil {
 		return githubTeamDetail{}, err
 	}
@@ -115,11 +115,11 @@ func githubTeamDetailFor(ctx context.Context, client *providerfoundation.HTTPCli
 // for any GET endpoint returning a bare JSON array, matching PyGithub's
 // own PaginatedList behavior of walking every page with no upper bound
 // for org.get_teams()/team.get_repos().
-func githubListAllPages[T any](ctx context.Context, client *providerfoundation.HTTPClient, path string) ([]T, error) {
+func githubListAllPages[T any](ctx context.Context, client *providerfoundation.HTTPClient, route, path string) ([]T, error) {
 	var out []T
 	next := path
 	for next != "" {
-		response, err := client.Do(ctx, "GET", next, nil)
+		response, err := client.DoRoute(ctx, "GET", route, next, nil)
 		if err != nil {
 			return nil, err
 		}

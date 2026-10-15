@@ -121,7 +121,7 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 	counted.Doer = gitLabPullRequestCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, &counted, root, &project); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -293,7 +293,7 @@ func collectGitLabPullRequestPages(
 ) ([]json.RawMessage, int, bool, error) {
 	query := url.Values{"state": {"all"}, "order_by": {"updated_at"}, "sort": {"desc"}}
 	items, pages, capped, err := collectGitLabRawPages(
-		ctx, client, path, query, perPage, maxPages,
+		ctx, client, gitlabMergeRequestsRoute, path, query, perPage, maxPages,
 		func(raw json.RawMessage) bool {
 			if claim.SinceAt == nil {
 				return false
@@ -314,7 +314,7 @@ func collectGitLabPullRequestPages(
 func collectGitLabRawPages(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	path string,
+	route, path string,
 	baseQuery url.Values,
 	perPage, maxPages int,
 	stopAt func(json.RawMessage) bool,
@@ -330,7 +330,7 @@ func collectGitLabRawPages(
 		query := cloneGitLabPullRequestValues(baseQuery)
 		query.Set("page", strconv.Itoa(page))
 		query.Set("per_page", strconv.Itoa(perPage))
-		response, err := client.Do(ctx, http.MethodGet, path+"?"+query.Encode(), nil)
+		response, err := client.DoRoute(ctx, http.MethodGet, route, path+"?"+query.Encode(), nil)
 		if err != nil {
 			return nil, pages, false, err
 		}
@@ -496,7 +496,7 @@ func fetchGitLabMergeRequestReviews(
 	result := gitLabMergeRequestReviewFetch{}
 	var approvals map[string]any
 	approvalPath := providerRelativePath(client, "api", "v4", "projects", projectID, "merge_requests", strconv.Itoa(iid), "approvals")
-	if err := fetchObject(ctx, client, approvalPath, &approvals); err != nil {
+	if err := fetchObjectRoute(ctx, client, gitlabMergeRequestsRoute+"/{iid}/approvals", approvalPath, &approvals); err != nil {
 		if controlErr := gitLabPullRequestControlError(ctx, err); controlErr != nil {
 			return result, controlErr
 		}
@@ -506,7 +506,7 @@ func fetchGitLabMergeRequestReviews(
 	}
 	notesPath := providerRelativePath(client, "api", "v4", "projects", projectID, "merge_requests", strconv.Itoa(iid), "notes")
 	notes, pages, capReached, err := collectGitLabRawPages(
-		ctx, client, notesPath,
+		ctx, client, gitlabMergeRequestsRoute+"/{iid}/notes", notesPath,
 		url.Values{"sort": {"asc"}, "order_by": {"created_at"}},
 		perPage, maxPages, nil, nil,
 	)

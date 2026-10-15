@@ -82,3 +82,40 @@ func TestObjectTooLargeErrorCarriesNoPath(t *testing.T) {
 		}
 	}
 }
+
+// A paginated route that names its template fails with that template and
+// never with the request path (CHAOS-9776).
+func TestPaginatedStatusErrorNamesRouteTemplate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+	client := transportClient(t, &http.Client{}, server.URL)
+	ctx := context.Background()
+	_, githubErr := CollectGitHubLinkPages(ctx, client, GitHubPageOptions{
+		Path: "/orgs/secret-org/teams", Route: "/orgs/{org}/teams", MaxPages: 1,
+	})
+	_, gitlabErr := CollectGitLabPageParamPages(ctx, client, GitLabPageOptions{
+		Path: "/api/v4/groups/secret-group/members", Route: "/groups/{group}/members", PerPage: 100, MaxPages: 1,
+	})
+	for name, tc := range map[string]struct {
+		err   error
+		route string
+	}{"github": {githubErr, "/orgs/{org}/teams"}, "gitlab": {gitlabErr, "/groups/{group}/members"}} {
+		if tc.err == nil || !strings.Contains(tc.err.Error(), "route="+tc.route) || strings.Contains(tc.err.Error(), "secret-") {
+			t.Fatalf("%s: err = %v, want route=%s and no name", name, tc.err, tc.route)
+		}
+	}
+}
+
+func TestTransportErrorNamesRouteTemplate(t *testing.T) {
+	logs := captureLogs(t)
+	client := transportClient(t, errDoer{errors.New("boom")}, "https://example.test")
+	_, err := client.DoRoute(context.Background(), http.MethodGet, "/users/{login}", "/users/octocat-login", nil)
+	if err == nil || !strings.Contains(err.Error(), "route=/users/{login}") || strings.Contains(err.Error(), "octocat-login") {
+		t.Fatalf("err = %v, want route=/users/{login} and no login", err)
+	}
+	if !strings.Contains(logs.String(), `"route":"/users/{login}"`) || strings.Contains(logs.String(), "octocat-login") {
+		t.Fatalf("log = %s, want the route and no login", logs.String())
+	}
+}

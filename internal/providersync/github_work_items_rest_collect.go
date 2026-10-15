@@ -186,7 +186,7 @@ func (collector GitHubWorkItemsRESTCollector) Collect(
 	}
 
 	var repo githubWorkItemsRESTRepositoryPayload
-	if err := fetchObject(ctx, &counted, root, &repo); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, githubRepoRoute, root, &repo); err != nil {
 		return result, err
 	}
 	result.RepoFullName = strings.TrimSpace(repo.FullName)
@@ -203,6 +203,7 @@ func (collector GitHubWorkItemsRESTCollector) Collect(
 		page, pageErr := providerfoundation.CollectGitHubLinkPages(
 			ctx, &counted, providerfoundation.GitHubPageOptions{
 				Path:     root + "/milestones",
+				Route:    githubMilestonesRoute,
 				Query:    url.Values{"state": {"all"}, "per_page": {"100"}},
 				MaxPages: maxPages,
 			},
@@ -290,7 +291,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 	}
 	page, err := providerfoundation.CollectGitHubLinkPages(
 		ctx, client, providerfoundation.GitHubPageOptions{
-			Path: root + "/issues", Query: query, MaxPages: collector.maxPages(),
+			Path: root + "/issues", Route: githubIssuesRoute, Query: query, MaxPages: collector.maxPages(),
 		},
 	)
 	result.addPageEvidence(page)
@@ -312,7 +313,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 			continue
 		}
 		events, eventPage, err := collectGitHubWorkItemChildPages(
-			ctx, client, root+"/issues/"+strconv.Itoa(listed.Number)+"/events",
+			ctx, client, githubIssueEventsRoute, root+"/issues/"+strconv.Itoa(listed.Number)+"/events",
 			collector.maxPages(), 0,
 		)
 		result.addPageEvidence(eventPage)
@@ -325,7 +326,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 		comments := []json.RawMessage{}
 		if options.fetchComments && options.commentsLimit > 0 {
 			commentRows, commentPage, commentErr := collectGitHubWorkItemChildPages(
-				ctx, client, root+"/issues/"+strconv.Itoa(listed.Number)+"/comments",
+				ctx, client, githubIssueCommentRoute, root+"/issues/"+strconv.Itoa(listed.Number)+"/comments",
 				// One row past the limit tells a real cut from a list that holds
 				// exactly the limit.
 				collector.maxPages(), githubWorkItemCommentLookahead(options.commentsLimit),
@@ -388,7 +389,7 @@ func (collector GitHubWorkItemsRESTCollector) collectPullRequests(
 	}
 	page, err := providerfoundation.CollectGitHubLinkPages(
 		ctx, client, providerfoundation.GitHubPageOptions{
-			Path: root + "/pulls", Query: query, MaxPages: collector.maxPages(),
+			Path: root + "/pulls", Route: githubPullsRoute, Query: query, MaxPages: collector.maxPages(),
 			StopAt: func(raw json.RawMessage) bool {
 				return pullCrossedSinceBoundary(raw, claim)
 			},
@@ -407,8 +408,8 @@ func (collector GitHubWorkItemsRESTCollector) collectPullRequests(
 	}
 	for _, number := range numbers {
 		var raw json.RawMessage
-		if err := fetchObject(
-			ctx, client, root+"/pulls/"+strconv.Itoa(number), &raw,
+		if err := fetchObjectRoute(
+			ctx, client, githubPullRoute, root+"/pulls/"+strconv.Itoa(number), &raw,
 		); err != nil {
 			return err
 		}
@@ -440,7 +441,7 @@ func (collector GitHubWorkItemsRESTCollector) maxPages() int {
 func collectGitHubWorkItemChildPages(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	path string,
+	route, path string,
 	maxPages int,
 	itemLimit int,
 ) ([]json.RawMessage, providerfoundation.PageCollection, error) {
@@ -449,7 +450,7 @@ func collectGitHubWorkItemChildPages(
 	// reaching it with a rel=next is never relabeled as successful partial data.
 	page, err := providerfoundation.CollectGitHubLinkPages(
 		ctx, client, providerfoundation.GitHubPageOptions{
-			Path: path, Query: url.Values{"per_page": {"100"}},
+			Path: path, Route: route, Query: url.Values{"per_page": {"100"}},
 			MaxPages: maxPages, MaxItems: itemLimit,
 		},
 	)

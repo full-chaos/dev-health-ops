@@ -426,8 +426,8 @@ func latestDistributionsQuery() string {
 //
 // theme_distribution_json/subcategory_distribution_json are
 // Map(String, Float64) columns. units.Distribution preserves INSERTION
-// ORDER (see membership.go's doc comment: LexicalArgmax is insertion-order
-// dependent when a weight is NaN, CHAOS-4840) -- but clickhouse-go's Map
+// ORDER (the emitted row sequence follows it; LexicalArgmax itself is order
+// independent since CHAOS-4840) -- but clickhouse-go's Map
 // column decodes into a genuine Go map via reflect.MakeMap
 // (lib/column/map.go), and Go map iteration order is randomised by design.
 // Scanning the Map column directly would therefore silently discard the

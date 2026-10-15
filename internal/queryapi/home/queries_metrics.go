@@ -26,10 +26,20 @@ func formatDay(t time.Time) string { return t.Format("2006-01-02") }
 // 61-104). startParam/endParam name the bound day-range params so the
 // same shape serves both the primary window (start_day/end_day) and the
 // driver-delta comparison window (compare_start/compare_end).
+//
+// A table with no natural key still gets its window, scope and org_id
+// predicate: the driver-delta reader puts this source straight after FROM with
+// no WHERE of its own, so a bare table name would read every organization.
 func metricFromClause(table, column, scopeFilter, startParam, endParam string) string {
 	naturalKey, dedup := dedupByComputedAt[table]
 	if !dedup {
-		return table
+		return fmt.Sprintf(`(
+            SELECT *
+            FROM %s
+            WHERE day >= {%s:Date} AND day < {%s:Date}
+            %s
+              AND org_id = {org_id:String}
+        )`, table, startParam, endParam, scopeFilter)
 	}
 	valueColumns := []string{column}
 	if table == changefailure.Table {

@@ -4,9 +4,9 @@ package server
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -40,17 +40,51 @@ func TestCapacityForecastRoute_IsServedByTheCatalog(t *testing.T) {
 	token := signTestEnvelope(t, priv, "org-1")
 
 	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {
-		rec := postGraphQLWithVariables(t, handler, registeredCapacityCompletionDistributionDocument, token,
+		rec := postGraphQLWithVariables(t, handler, registeredCapacityForecastDocument, token,
 			map[string]any{"orgId": "org-1", "input": map[string]any{"teamId": "team-a"}})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("no routing-state row: got %d, want 200, body=%s", rec.Code, rec.Body.String())
 		}
-		body := rec.Body.String()
-		if strings.Contains(body, `"errors"`) || strings.Contains(body, "no Python implementation") {
-			t.Fatalf("capacityForecast answered with errors: %s", body)
+		var out struct {
+			Data struct {
+				CapacityForecast *struct {
+					ForecastID             string `json:"forecastId"`
+					TeamID                 string `json:"teamId"`
+					BacklogSize            int    `json:"backlogSize"`
+					HistoryDays            int    `json:"historyDays"`
+					CompletionDistribution *struct {
+						Days []struct {
+							Count int `json:"count"`
+						} `json:"days"`
+					} `json:"completionDistribution"`
+				} `json:"capacityForecast"`
+			} `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
 		}
-		if !strings.Contains(body, `"completionDistribution"`) || !strings.Contains(body, `"days"`) {
-			t.Fatalf("capacityForecast carries no completionDistribution days: %s", body)
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("response is not GraphQL JSON: %v, body=%s", err, rec.Body.String())
+		}
+		if len(out.Errors) > 0 {
+			t.Fatalf("capacityForecast answered with GraphQL errors %v", out.Errors)
+		}
+		f := out.Data.CapacityForecast
+		if f == nil {
+			t.Fatalf("data.capacityForecast is null: %s", rec.Body.String())
+		}
+		if f.ForecastID == "" || f.TeamID != "team-a" || f.BacklogSize != 30 || f.HistoryDays != 5 {
+			t.Fatalf("forecast = %+v, want an id, teamId team-a, backlogSize 30 (fake count), historyDays 5 (the five fake throughput days)", *f)
+		}
+		if f.CompletionDistribution == nil || len(f.CompletionDistribution.Days) == 0 {
+			t.Fatalf("completionDistribution carries no day bins: %s", rec.Body.String())
+		}
+		total := 0
+		for _, bin := range f.CompletionDistribution.Days {
+			total += bin.Count
+		}
+		if total == 0 {
+			t.Fatalf("completionDistribution day counts sum to 0: %s", rec.Body.String())
 		}
 	})
 }

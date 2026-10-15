@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -263,9 +264,37 @@ func TestScanTypeCensus(t *testing.T) {
 	listed := strings.Split(strings.TrimSpace(unverifiedSites), "\n")
 	sort.Strings(listed)
 	if got, want := strings.Join(unresolved, "\n"), strings.Join(listed, "\n"); got != want {
+		if os.Getenv("SCANCENSUS_WRITE_PINS") == "1" {
+			rewritePins(t, got)
+			return
+		}
 		t.Errorf("sites the census cannot verify changed (verified %d of %d). Put new sites in unverifiedSites only after reading their statement against the column types; remove sites that are now verified.\n--- got ---\n%s\n--- want ---\n%s",
 			len(sites)-len(unresolved), len(sites), got, want)
 	}
+}
+
+// rewritePins replaces unverifiedSites in this file with pins: the regeneration
+// step after a reviewed edit to a pinned reader's SQL (SCANCENSUS_WRITE_PINS=1).
+// A mismatch is never rewritten away: the census still fails on any MISMATCH.
+func rewritePins(t *testing.T, pins string) {
+	t.Helper()
+	const path = "census_integration_test.go"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	const marker = "const unverifiedSites = `\n"
+	start := strings.Index(text, marker)
+	if start < 0 {
+		t.Fatal("unverifiedSites not found")
+	}
+	start += len(marker)
+	end := start + strings.Index(text[start:], "\n`")
+	if err := os.WriteFile(path, []byte(text[:start]+pins+text[end:]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("rewrote the pin list in %s; review the diff", path)
 }
 
 // TestScanTypeCensusRejectsAUInt64IntoFloat64 plants the CHAOS-5866 defect: a

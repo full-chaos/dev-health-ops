@@ -344,10 +344,10 @@ func assertExplanationMatchesGolden(t *testing.T, golden explainGolden, got Inve
 	}
 }
 
-var goOnlyEvidencePattern = regexp.MustCompile(`, ?"(?:measure|numerator|denominator)": ?(?:"[^"]*"|[-0-9.eE+]+)`)
+var goOnlyEvidencePattern = regexp.MustCompile(`, ?"(?:measure|numerator|denominator|sizing_coverage|unsized_unit_count|sizing_note)": ?(?:"[^"]*"|[-0-9.eE+]+)`)
 
-// withoutGoOnlyEvidence removes the three evidence fields the Python reference does not have
-// (measure, numerator, denominator; CHAOS-9555) and the share noun, so the differential still compares the Python shape.
+// withoutGoOnlyEvidence removes the evidence fields the Python reference does not have (measure, numerator,
+// denominator, CHAOS-9555; sizing_coverage, unsized_unit_count, sizing_note, CHAOS-9809) and the share noun, so the differential still compares the Python shape.
 func withoutGoOnlyEvidence(body string) string {
 	body = goOnlyEvidencePattern.ReplaceAllString(body, "")
 	// The Python reference words the share as "of effort"; the Go answer names the measure it reads.

@@ -83,3 +83,29 @@ func TestSunburstWithoutAMeasureIsRefused(t *testing.T) {
 		t.Errorf("a query ran for a sunburst with no measure:\n%s", client.lastQuery)
 	}
 }
+
+// CHAOS-9809 (D6027): an ISSUE_SIZE answer always carries its coverage. A window with no unit says 0 unsized and no
+// sizing share (there is no unit to take a share of), never no coverage at all.
+func TestRestInvestmentOverAnEmptyWindowStillCarriesItsCoverage(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: tablePresentHandler(func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		switch {
+		case strings.Contains(query, "SELECT count() AS count"):
+			return &fixtureRowScanner{rows: [][]any{{uint64(0)}}}, nil
+		case strings.Contains(query, "AS sized_units"):
+			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0)}}}, nil
+		default:
+			return &fixtureRowScanner{}, nil
+		}
+	})}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := BuildResponse(context.Background(), reader, "org-1", Params{StartTS: day(2024, 1, 1), EndTS: day(2024, 1, 8), ScopeLevel: "org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Measure != "ISSUE_SIZE" || got.UnsizedUnitCount == nil || *got.UnsizedUnitCount != 0 || got.SizingCoverage != nil || got.SizingNote != "" {
+		t.Errorf("empty window: measure %q, unsized %v, coverage %v, note %q; want ISSUE_SIZE, 0, no share, no sentence", got.Measure, got.UnsizedUnitCount, got.SizingCoverage, got.SizingNote)
+	}
+}

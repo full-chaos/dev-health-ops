@@ -338,12 +338,13 @@ func (c SizingCoverage) Note() string {
 		c.SizedUnits, c.Units, c.Units-c.SizedUnits)
 }
 
-// Unsized is the number of units without a size, nil when the read holds no unit.
+// Unsized is the number of units without a size: 0 for a read with no unit, so an ISSUE_SIZE answer always carries
+// its coverage (D6027) while Share stays nil (no unit to take a share of).
 func (c SizingCoverage) Unsized() *int {
-	if c.Units <= 0 {
-		return nil
+	unsized := 0
+	if c.Units > 0 {
+		unsized = c.Units - c.SizedUnits
 	}
-	unsized := c.Units - c.SizedUnits
 	return &unsized
 }
 

@@ -1064,3 +1064,41 @@ func TestDiscoverGitHubAllReposScopedNamespaceFailureIsLogged(t *testing.T) {
 		t.Fatalf("sources=%#v log=%q, want one source and a namespace-listing warning", sources, logs.String())
 	}
 }
+
+// A transient /user/repos failure must not hide a readable scoped namespace.
+func TestDiscoverGitHubAllReposScopedNamespaceSurvivesUserReposFailure(t *testing.T) {
+	doer := &sequencedSourceDiscoveryDoer{
+		t:        t,
+		statuses: []int{http.StatusBadRequest, http.StatusNotFound, http.StatusOK},
+		bodies: []string{
+			`{"message":"Bad"}`,
+			`{"message":"Not Found"}`,
+			`[{"name":"public","full_name":"alice/public","owner":{"login":"alice"}}]`,
+		},
+	}
+	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true, "owner": "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].FullName != "alice/public" {
+		t.Fatalf("discoverGitHub() = %#v, want alice/public", sources)
+	}
+}
+
+// Both listings failing is still an error, never an empty success.
+func TestDiscoverGitHubAllReposScopedNamespaceBothListingsFailing(t *testing.T) {
+	doer := &sequencedSourceDiscoveryDoer{t: t, statuses: []int{http.StatusBadRequest}, bodies: []string{`{"message":"Bad"}`}}
+	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	if _, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true, "owner": "alice"}); err == nil {
+		t.Fatal("discoverGitHub() = nil error, want the /user/repos failure")
+	}
+}

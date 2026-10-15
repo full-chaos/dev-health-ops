@@ -131,6 +131,8 @@ var demoPaymentsStories = []demoStory{
 	bug("Refund amount off by a cent on JPY", 110, 98, change("payments-gateway", 100, 99).deploy()),
 	// Support Tools waits on it (SUP "Refund lookup in the support console").
 	feature("Refund status API for support agents", 15, -1, change("payments-gateway", 12, -1)).blocksIn("support", 24),
+	// The as-of day: the newest event of every repository is within hours of the world's instant.
+	chore("Tune the gateway retry backoff", 2, 0, change("payments-gateway", 1, 0).deploy(), change("payments-ledger", 1, 0), change("shared-api", 1, 0)),
 }
 
 // Checkout (Linear CHK): features until a month ago, then mostly regressions and hotfixes. Its order
@@ -165,6 +167,8 @@ var demoCheckoutStories = []demoStory{
 	feature("Split shipment tracking emails", 9, -1, change("checkout-api", 7, -1)),
 	// Mobile waits on it (MOB "In-app order status screen").
 	feature("Order status endpoint for the mobile app", 13, -1, change("checkout-api", 10, -1)).blocksIn("mobile", 17),
+	// The as-of day: the newest event of every repository is within hours of the world's instant.
+	feature("Saved address autofill", 2, 0, change("checkout-api", 1, 0).deploy(), change("checkout-web", 1, 0).deploy()),
 }
 
 // Support Tools (Jira SUP): mostly bugs, escalations and support requests.
@@ -197,6 +201,8 @@ var demoSupportStories = []demoStory{
 	feature("Macro rollback for agents", 5, -1, change("support-macros", 3, -1)),
 	// Waits on Payments ("Refund status API for support agents").
 	feature("Refund lookup in the support console", 11, -1, change("support-console", 9, -1)),
+	// The as-of day: the newest event of every repository is within hours of the world's instant.
+	support("Macro search lists archived macros", 2, 0, change("support-console", 1, 0).deploy(), change("support-macros", 1, 0)),
 }
 
 // Identity (GitHub issues, team grant): security work and security alerts on its repositories.
@@ -218,6 +224,8 @@ var demoIdentityStories = []demoStory{
 	feature("Audit log export", 115, 95, change("identity-service", 105, 96).deploy()),
 	// The last days.
 	bug("Session cookie missing SameSite on redirect", 5, 1, change("identity-service", 4, 1).deploy()),
+	// The as-of day: the newest event of every repository is within hours of the world's instant.
+	security("Rotate the SDK signing keys", 2, 0, change("identity-service", 1, 0).deploy(), change("identity-sdk", 1, 0)),
 }
 
 // Mobile (Linear MOB): steady delivery, every review by the same person.
@@ -243,6 +251,8 @@ var demoMobileStories = []demoStory{
 	bug("Hotfix: order tracking map crash", 3, 2, change("mobile-bff", 3, 2).deploy()),
 	// Waits on Checkout ("Order status endpoint for the mobile app").
 	feature("In-app order status screen", 10, -1, change("mobile-app", 8, -1)),
+	// The as-of day: the newest event of every repository is within hours of the world's instant.
+	bug("Deep link opens the wrong tab", 2, 0, change("mobile-app", 1, 0), change("mobile-bff", 1, 0).deploy()),
 }
 
 // Delivery (GitLab root group): the deploy pipeline breaks often; shared-infra changes. Its pipeline
@@ -274,6 +284,8 @@ var demoDeliveryStories = []demoStory{
 	// Data waits on it (data "Nightly ETL deploys through the shared pipeline").
 	chore("Deploy pipeline environment for data jobs", 12, -1, change("chaos-gl/deploy-pipeline", 10, -1).files("ci/data-jobs.gitlab-ci.yml", "internal/rollout/environments.go")).blocksIn("data", 15),
 	feature("Canary analysis for the payments service", 9, -1, change("chaos-gl/deploy-pipeline", 7, -1).files("internal/canary/analysis.go", "deploy/canary.yaml")),
+	// The as-of day: the newest event of every repository is within hours of the world's instant.
+	chore("Pin the runner image", 2, 0, change("chaos-gl/deploy-pipeline", 1, 0).deploy(), change("chaos-gl/release-tools", 1, 0).deploy(), change("chaos-gl/shared-infra", 1, 0)),
 }
 
 // Data (GitLab subgroup data): a healthy, steady flow; two of its issues are closed by shared-infra
@@ -298,6 +310,8 @@ var demoDataStories = []demoStory{
 	feature("Backfill job for the cohort tables", 6, 1, change("chaos-gl/data/warehouse-etl", 5, 1).deploy()),
 	// Waits on Delivery ("Deploy pipeline environment for data jobs").
 	feature("Nightly ETL deploys through the shared pipeline", 8, -1, change("chaos-gl/data/warehouse-etl", 6, -1)),
+	// The as-of day: the newest event of every repository is within hours of the world's instant.
+	chore("Compact the metrics store partitions", 2, 0, change("chaos-gl/data/warehouse-etl", 1, 0).deploy(), change("chaos-gl/data/metrics-store", 1, 0)),
 }
 
 // Web (GitLab subgroup web): little recorded work, a trickle of it in the last two weeks, and no tracked
@@ -312,6 +326,8 @@ var demoWebStories = []demoStory{
 	// The last days.
 	feature("Pricing page copy refresh", 10, 4, change("chaos-gl/web/marketing-site", 9, 4)),
 	chore("Design system focus ring tokens", 8, 3, change("chaos-gl/web/design-system", 7, 3)),
+	// The as-of day: the newest event of every repository is within hours of the world's instant.
+	feature("Footer links audit", 2, 0, change("chaos-gl/web/marketing-site", 1, 0).deploy(), change("chaos-gl/web/design-system", 1, 0).deploy()),
 }
 
 // Delivery's incidents on the deploy pipeline (GitLab incident issues).

@@ -16,8 +16,12 @@ const exactSumScale = 18
 // aggregates in. A Float64 SUM does (CHAOS-5451): two identical requests
 // differed in the last bits of every investment value and, on near-ties,
 // in the row order the ORDER BY ... LIMIT cut reads.
+//
+// The term goes through toFloat64 first: ClickHouse converts a Float32 to
+// Decimal128 at scale 18 lossily (0.1f reads 0.0999999984) and wraps past
+// about 9.22, and subcategory weights are Float32. Float32 to Float64 is exact.
 func exactSum(expr string) string {
-	return fmt.Sprintf("toFloat64(sum(toDecimal128(%s, %d)))", expr, exactSumScale)
+	return fmt.Sprintf("toFloat64(sum(toDecimal128(toFloat64(%s), %d)))", expr, exactSumScale)
 }
 
 // exactSums rewrites every SUM(...) in a measure expression into exactSum.

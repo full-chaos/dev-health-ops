@@ -153,7 +153,7 @@ func (handler GitLabFilesRouteHandler) Collect(
 	counted.Doer = gitLabFilesCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, &counted, root, &project); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, gitLabFilesTraversalError(err)
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -182,7 +182,8 @@ func (handler GitLabFilesRouteHandler) Collect(
 
 	tree, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted,
 		providerfoundation.GitLabPageOptions{
-			Path: root + "/repository/tree",
+			Path:  root + "/repository/tree",
+			Route: gitlabTreeRoute,
 			Query: url.Values{
 				"ref": {treeRef}, "recursive": {"true"},
 			},
@@ -248,7 +249,8 @@ func gitLabFilesTreeRef(
 	}
 	page, err := providerfoundation.CollectGitLabPageParamPages(ctx, client,
 		providerfoundation.GitLabPageOptions{
-			Path: root + "/repository/commits",
+			Path:  root + "/repository/commits",
+			Route: gitlabCommitsRoute,
 			Query: url.Values{
 				"ref_name": {branch}, "until": {beforeAt.UTC().Format(time.RFC3339Nano)},
 			},
@@ -370,7 +372,7 @@ func fetchGitLabGraphQLBlobs(
 	if err != nil {
 		return nil, providerfoundation.ErrNormalizationInvalid
 	}
-	response, err := client.Do(ctx, http.MethodPost, gitLabGraphQLURL(client), bytes.NewReader(body))
+	response, err := client.DoRoute(ctx, http.MethodPost, graphQLRoute, gitLabGraphQLURL(client), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

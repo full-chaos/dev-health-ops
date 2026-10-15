@@ -83,7 +83,7 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 	counted.Doer = gitHubSecurityCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(&counted, "repos", owner, repository)
 	var repo gitHubRepositoryPayload
-	if err := fetchObject(ctx, &counted, root, &repo); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, githubRepoRoute, root, &repo); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	repoID, err := repositoryIdentity(repo.FullName)
@@ -101,14 +101,14 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 	rows := make([]securityAlertRow, 0)
 	decodedPages := 0
 	for _, source := range []struct {
-		name, path string
-		query      url.Values
+		name, route, path string
+		query             url.Values
 	}{
-		{"dependabot", root + "/dependabot/alerts", url.Values{"state": {"open"}, "per_page": {"100"}}},
-		{"code_scanning", root + "/code-scanning/alerts", url.Values{"state": {"open"}, "per_page": {"100"}}},
-		{"advisory", root + "/security-advisories", url.Values{"per_page": {"100"}}},
+		{"dependabot", githubDependabotRoute, root + "/dependabot/alerts", url.Values{"state": {"open"}, "per_page": {"100"}}},
+		{"code_scanning", githubCodeScanningRoute, root + "/code-scanning/alerts", url.Values{"state": {"open"}, "per_page": {"100"}}},
+		{"advisory", githubAdvisoriesRoute, root + "/security-advisories", url.Values{"per_page": {"100"}}},
 	} {
-		items, fetched, ok := fetchGitHubSecurityPage(ctx, &counted, source.path, source.query, pages)
+		items, fetched, ok := fetchGitHubSecurityPage(ctx, &counted, source.route, source.path, source.query, pages)
 		decodedPages += fetched
 		if !ok {
 			continue
@@ -131,8 +131,8 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 	return CompleteRouteBatch{Effects: []EffectBatch{effect}, Result: map[string]any{"security_alerts_synced": len(rows), "repo": repo.FullName}, Watermark: claim.BeforeAt, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: decodedPages, Records: len(rows)}}, nil
 }
 
-func fetchGitHubSecurityPage(ctx context.Context, client *providerfoundation.HTTPClient, path string, query url.Values, maxPages int) ([]gitHubSecurityPayload, int, bool) {
-	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: path, Query: query, MaxPages: maxPages})
+func fetchGitHubSecurityPage(ctx context.Context, client *providerfoundation.HTTPClient, route, path string, query url.Values, maxPages int) ([]gitHubSecurityPayload, int, bool) {
+	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: path, Route: route, Query: query, MaxPages: maxPages})
 	if err != nil {
 		return nil, 0, false
 	}

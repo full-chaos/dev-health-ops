@@ -921,7 +921,7 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 		return nil, err
 	}
 	page, err := providerfoundation.CollectJiraTokenOffsetPages(ctx, client, providerfoundation.JiraPageOptions{
-		Path: "/rest/api/3/project/search", DataKey: "values",
+		Path: "/rest/api/3/project/search", Route: "/rest/api/3/project/search", DataKey: "values",
 		MaxResults: sourceDiscoveryPerPage, MaxPages: sourceDiscoveryMaxPages,
 	})
 	if err != nil {

@@ -877,7 +877,7 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 				ID: id, Ref: gitlabMilestoneSprintID(*row.ProjectKey, id), Name: milestone.Title, Date: date,
 				Open: strings.EqualFold(strings.TrimSpace(milestone.State), "active"),
 			}
-			if groupID := milestone.GroupID.String(); groupID != "" && groupID != "0" {
+			if milestone.isGroupMilestone() {
 				candidate.Ref = gitlabMilestoneSprintID(gitlabGroupMilestoneOwner(milestone), id)
 				candidate.Kind, candidate.Source = projectTargetKindMilestone, gitlabGroupTargetSource
 				groupSeen++

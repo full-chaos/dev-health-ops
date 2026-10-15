@@ -44,6 +44,21 @@ type gitlabWorkItemUserPayload struct {
 	Bot      bool    `json:"bot"`
 }
 
+func (m gitlabIssueMilestonePayload) isGroupMilestone() bool {
+	id := m.GroupID.String()
+	return id != "" && id != "0"
+}
+
+func countGroupMilestones(milestones []gitlabIssueMilestonePayload) int {
+	count := 0
+	for _, milestone := range milestones {
+		if milestone.isGroupMilestone() {
+			count++
+		}
+	}
+	return count
+}
+
 type gitlabIssueMilestonePayload struct {
 	ID        json.Number `json:"id"`
 	Title     string      `json:"title"`

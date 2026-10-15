@@ -707,3 +707,79 @@ func siteSource(p *packages.Package, f *ast.File, fd *ast.FuncDecl) string {
 	})
 	return b.String()
 }
+
+// pinIdentity is the site a pin line names: file, function and destinations.
+func pinIdentity(line string) string {
+	parts := strings.Split(line, "|")
+	if len(parts) < 3 {
+		return line
+	}
+	return strings.Join(parts[:3], "|")
+}
+
+// diffPins compares the pinned lines with the lines the census derived.
+// changed are derived lines whose site is pinned under another digest or
+// reason; added are derived lines of sites with no pin; stale are pinned lines
+// whose site is no longer unverifiable (verified now, or gone).
+func diffPins(listed, got []string) (changed, added, stale []string) {
+	remaining := map[string]int{}
+	for _, l := range listed {
+		remaining[l]++
+	}
+	var unmatched []string
+	for _, g := range got {
+		if remaining[g] > 0 {
+			remaining[g]--
+			continue
+		}
+		unmatched = append(unmatched, g)
+	}
+	var leftover []string
+	for _, l := range listed {
+		if remaining[l] > 0 {
+			remaining[l]--
+			leftover = append(leftover, l)
+		}
+	}
+	byIdentity := map[string]int{}
+	for _, l := range leftover {
+		byIdentity[pinIdentity(l)]++
+	}
+	pairedPins := map[string]int{}
+	for _, g := range unmatched {
+		id := pinIdentity(g)
+		if byIdentity[id] > 0 {
+			byIdentity[id]--
+			pairedPins[id]++
+			changed = append(changed, g)
+		} else {
+			added = append(added, g)
+		}
+	}
+	for _, l := range leftover {
+		id := pinIdentity(l)
+		if pairedPins[id] > 0 {
+			pairedPins[id]--
+			continue
+		}
+		stale = append(stale, l)
+	}
+	return changed, added, stale
+}
+
+// removePins returns listed without one occurrence of each stale line.
+func removePins(listed, stale []string) []string {
+	drop := map[string]int{}
+	for _, s := range stale {
+		drop[s]++
+	}
+	var out []string
+	for _, l := range listed {
+		if drop[l] > 0 {
+			drop[l]--
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}

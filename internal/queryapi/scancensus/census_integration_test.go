@@ -262,21 +262,27 @@ func TestScanTypeCensus(t *testing.T) {
 	}
 	sort.Strings(unresolved)
 	listed := strings.Split(strings.TrimSpace(unverifiedSites), "\n")
-	sort.Strings(listed)
-	if got, want := strings.Join(unresolved, "\n"), strings.Join(listed, "\n"); got != want {
-		if os.Getenv("SCANCENSUS_WRITE_PINS") == "1" {
-			rewritePins(t, got)
-			return
-		}
-		t.Errorf("sites the census cannot verify changed (verified %d of %d). Put new sites in unverifiedSites only after reading their statement against the column types; remove sites that are now verified.\n--- got ---\n%s\n--- want ---\n%s",
-			len(sites)-len(unresolved), len(sites), got, want)
+	changed, added, stale := diffPins(listed, unresolved)
+	if len(stale) > 0 && os.Getenv("SCANCENSUS_WRITE_PINS") == "1" {
+		rewritePins(t, removePins(listed, stale))
+		stale = nil
 	}
+	for _, c := range changed {
+		t.Errorf("pinned site changed and is still unverifiable: %s\nA changed pin is never regenerated. Read the new statement against the column types, then edit the pin line by hand (digest and a reason) in unverifiedSites and say why in the PR.", c)
+	}
+	for _, a := range added {
+		t.Errorf("site the census cannot verify is not pinned: %s\nResolve it so the census can check it, or add a pin line by hand with a reason after reading its statement against the column types.", a)
+	}
+	for _, st := range stale {
+		t.Errorf("pin for a site that is now verified or gone: %s\nRemove it (SCANCENSUS_WRITE_PINS=1 removes such pins).", st)
+	}
+	t.Logf("verified %d of %d sites", len(sites)-len(unresolved), len(sites))
 }
 
-// rewritePins replaces unverifiedSites in this file with pins: the regeneration
-// step after a reviewed edit to a pinned reader's SQL (SCANCENSUS_WRITE_PINS=1).
-// A mismatch is never rewritten away: the census still fails on any MISMATCH.
-func rewritePins(t *testing.T, pins string) {
+// rewritePins replaces unverifiedSites in this file with pins. It is only ever
+// handed the current pins minus the stale ones: the census can remove a pin,
+// never add one or refresh the digest of a site it cannot verify.
+func rewritePins(t *testing.T, pins []string) {
 	t.Helper()
 	const path = "census_integration_test.go"
 	data, err := os.ReadFile(path)
@@ -291,10 +297,10 @@ func rewritePins(t *testing.T, pins string) {
 	}
 	start += len(marker)
 	end := start + strings.Index(text[start:], "\n`")
-	if err := os.WriteFile(path, []byte(text[:start]+pins+text[end:]), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(text[:start]+strings.Join(pins, "\n")+text[end:]), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("rewrote the pin list in %s; review the diff", path)
+	t.Logf("removed %d stale pin(s) from %s; review the diff", len(strings.Split(text[start:end], "\n"))-len(pins), path)
 }
 
 // TestScanTypeCensusRejectsAUInt64IntoFloat64 plants the CHAOS-5866 defect: a

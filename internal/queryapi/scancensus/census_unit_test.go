@@ -82,3 +82,38 @@ func (typed) Scan(dest ...string) error { return nil }
 		}
 	}
 }
+
+func TestDiffPinsNeverClearsAChangedOrNewSite(t *testing.T) {
+	a := "internal/queryapi/x/a.go|read|*string,*float64|aaaaaaaaaaaa|spliced-select-list"
+	aEdited := "internal/queryapi/x/a.go|read|*string,*float64|bbbbbbbbbbbb|spliced-select-list"
+	b := "internal/queryapi/x/b.go|other|*uint64|cccccccccccc|not-describable"
+	c := "internal/queryapi/x/c.go|fresh|*uint64|dddddddddddd|not-describable"
+
+	changed, added, stale := diffPins([]string{a, b}, []string{a, b})
+	if len(changed)+len(added)+len(stale) != 0 {
+		t.Errorf("identical sets differ: %v %v %v", changed, added, stale)
+	}
+	// A planted SQL edit at a pinned site changes its digest: changed, never stale.
+	changed, added, stale = diffPins([]string{a, b}, []string{aEdited, b})
+	if len(changed) != 1 || changed[0] != aEdited || len(added) != 0 || len(stale) != 0 {
+		t.Errorf("edited pin: changed=%v added=%v stale=%v", changed, added, stale)
+	}
+	// A new unverifiable site is never pinned by the tool.
+	changed, added, stale = diffPins([]string{a, b}, []string{a, b, c})
+	if len(added) != 1 || added[0] != c || len(changed) != 0 || len(stale) != 0 {
+		t.Errorf("new site: changed=%v added=%v stale=%v", changed, added, stale)
+	}
+	// A site made verifiable (or deleted) leaves its pin stale; only that is removable.
+	changed, added, stale = diffPins([]string{a, b}, []string{b})
+	if len(stale) != 1 || stale[0] != a || len(changed) != 0 || len(added) != 0 {
+		t.Errorf("verifiable site: changed=%v added=%v stale=%v", changed, added, stale)
+	}
+	if got := removePins([]string{a, b}, stale); len(got) != 1 || got[0] != b {
+		t.Errorf("removePins = %v, want only %s", got, b)
+	}
+	// Edited and made verifiable at once cannot hide: the edited one is changed, the other stale.
+	changed, _, stale = diffPins([]string{a, b}, []string{aEdited})
+	if len(changed) != 1 || len(stale) != 1 || stale[0] != b {
+		t.Errorf("mixed: changed=%v stale=%v", changed, stale)
+	}
+}

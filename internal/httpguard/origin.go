@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -41,7 +42,12 @@ func OriginOf(u *url.URL) Origin {
 	if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
 		port = ""
 	}
-	return Origin{scheme: scheme, host: strings.ToLower(u.Hostname()), port: port}
+	host := strings.ToLower(u.Hostname())
+	// An IP literal is one address however it is spelled (case, zeros, compression).
+	if address, err := netip.ParseAddr(host); err == nil {
+		host = address.String()
+	}
+	return Origin{scheme: scheme, host: host, port: port}
 }
 
 // IsZero reports whether o is "no origin".

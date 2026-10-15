@@ -244,7 +244,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 
 	rootPath := providerRelativePath(client, "api", "v4", "groups", groupPath)
 	var root gitlabTeamCatalogGroupPayload
-	if err := fetchObject(ctx, client, rootPath, &root); err != nil {
+	if err := fetchObjectRoute(ctx, client, "/groups/{group}", rootPath, &root); err != nil {
 		return gitlabTeamCatalogWalkFailure(ctx, ref, "root_group_fetch_failed", requests, err)
 	}
 	if strings.TrimSpace(root.FullPath) == "" {
@@ -252,7 +252,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	}
 
 	subgroupPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-		Path: rootPath + "/subgroups", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogSubgroupsMaxPages,
+		Path: rootPath + "/subgroups", Route: "/groups/{group}/subgroups", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogSubgroupsMaxPages,
 	})
 	if err != nil {
 		return gitlabTeamCatalogWalkFailure(ctx, ref, "subgroups_fetch_failed", requests, err)
@@ -306,7 +306,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		projectListingProven, projectListingResponses := false, 0
 		if selections.Teams || selections.Projects {
 			projectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-				Path: groupPathValue + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogProjectsMaxPages,
+				Path: groupPathValue + "/projects", Route: "/groups/{group}/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogProjectsMaxPages,
 			})
 			if err != nil {
 				return gitlabTeamCatalogWalkFailure(ctx, ref, "group_projects_fetch_failed", requests, err)
@@ -362,7 +362,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			teamID := gitlabTeamID(group.FullPath)
 			groupByTeam[teamID] = groupPathValue
 			memberPages, memberErr := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-				Path: groupPathValue + "/members", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMembersMaxPages,
+				Path: groupPathValue + "/members", Route: "/groups/{group}/members", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMembersMaxPages,
 			})
 			if memberErr != nil {
 				// A single group's member-fetch failure under non-strict
@@ -455,7 +455,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			sourceExternalIDs[id] = true
 		}
 		allProjectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-			Path: rootPath + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogAllProjectsMaxPages,
+			Path: rootPath + "/projects", Route: "/groups/{group}/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogAllProjectsMaxPages,
 			Query: url.Values{"include_subgroups": {"true"}},
 		})
 		if err != nil {

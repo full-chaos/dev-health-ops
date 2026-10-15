@@ -662,7 +662,13 @@ func (handler NativeRESTHandler) normalizeChildren(
 }
 
 func fetchObject(ctx context.Context, client *providerfoundation.HTTPClient, path string, target any) error {
-	response, err := client.Do(ctx, http.MethodGet, path, nil)
+	return fetchObjectRoute(ctx, client, "", path, target)
+}
+
+// fetchObjectRoute is fetchObject for a path that carries an org, group or
+// member name: a failure names the static route template instead.
+func fetchObjectRoute(ctx context.Context, client *providerfoundation.HTTPClient, route, path string, target any) error {
+	response, err := client.DoRoute(ctx, http.MethodGet, route, path, nil)
 	if err != nil {
 		return err
 	}

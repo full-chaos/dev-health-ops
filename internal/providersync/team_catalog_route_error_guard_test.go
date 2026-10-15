@@ -24,6 +24,7 @@ import (
 // catalogGuardRoutes.
 type catalogGuardRoute struct {
 	name  string
+	route string // empty: the error is swallowed by the caller, so no route is visible
 	run   func(*testing.T, *providerfoundation.HTTPClient) error
 	match func(*http.Request) bool
 }
@@ -62,16 +63,16 @@ func catalogGuardRoutes() []catalogGuardRoute {
 		return nil
 	}
 	return []catalogGuardRoute{
-		{"github catalog: team list", github, catalogPathIs("/orgs/secret-org/teams")},
-		{"github catalog: team repos", github, catalogPathIs("/orgs/secret-org/teams/secret-team/repos")},
-		{"github catalog: team members", github, catalogPathIs("/orgs/secret-org/teams/secret-team/members")},
-		{"github catalog: user", github, catalogPathIs("/users/secret-login")},
-		{"github membership absence", githubAbsence, catalogPathIs("/orgs/secret-org/teams/secret-team/memberships/secret-login")},
-		{"gitlab catalog: root group", gitlab, catalogPathIs("/api/v4/groups/secret-group")},
-		{"gitlab catalog: subgroups", gitlab, catalogPathIs("/api/v4/groups/secret-group/subgroups")},
-		{"gitlab catalog: projects", gitlab, catalogPathIs("/api/v4/groups/secret-group/projects")},
-		{"gitlab catalog: members", gitlab, catalogPathIs("/api/v4/groups/secret-group/members")},
-		{"gitlab membership absence", gitlabAbsence, catalogPathIs("/api/v4/groups/secret-group/members")},
+		{"github catalog: team list", "/orgs/{org}/teams", github, catalogPathIs("/orgs/secret-org/teams")},
+		{"github catalog: team repos", "/orgs/{org}/teams/{slug}/repos", github, catalogPathIs("/orgs/secret-org/teams/secret-team/repos")},
+		{"github catalog: team members", "/orgs/{org}/teams/{slug}/members", github, catalogPathIs("/orgs/secret-org/teams/secret-team/members")},
+		{"github catalog: user", "/users/{login}", github, catalogPathIs("/users/secret-login")},
+		{"github membership absence", "", githubAbsence, catalogPathIs("/orgs/secret-org/teams/secret-team/memberships/secret-login")},
+		{"gitlab catalog: root group", "/groups/{group}", gitlab, catalogPathIs("/api/v4/groups/secret-group")},
+		{"gitlab catalog: subgroups", "/groups/{group}/subgroups", gitlab, catalogPathIs("/api/v4/groups/secret-group/subgroups")},
+		{"gitlab catalog: projects", "/groups/{group}/projects", gitlab, catalogPathIs("/api/v4/groups/secret-group/projects")},
+		{"gitlab catalog: members", "/groups/{group}/members", gitlab, catalogPathIs("/api/v4/groups/secret-group/members")},
+		{"gitlab membership absence", "", gitlabAbsence, catalogPathIs("/api/v4/groups/secret-group/members")},
 	}
 }
 
@@ -138,6 +139,9 @@ func TestCatalogRoutesNeverCarryPlantedNamesInErrorsOrLogs(t *testing.T) {
 				text := ""
 				if runErr != nil {
 					text = runErr.Error()
+				}
+				if route.route != "" && kind != "decode" && !strings.Contains(text+logs.String(), route.route) {
+					t.Fatalf("neither the error nor the log names the route template %q:\nerr=%s\nlog=%s", route.route, text, logs.String())
 				}
 				for _, name := range forbidden {
 					if strings.Contains(text, name) || strings.Contains(logs.String(), name) {

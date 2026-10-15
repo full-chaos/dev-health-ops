@@ -227,3 +227,30 @@ func TestRealClickHouse_AIGroupC(t *testing.T) {
 		}
 	})
 }
+
+// Two repositories run the deployment id "d-shared" and each holds a link row to the incident, under one edge id
+// (the id names the deployment and the incident, not the repository). The drilldown serves one edge for each
+// repository, not the first row only.
+func TestRealClickHouse_AIWorkflowDeploymentIncidentPerRepository(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	seedStore(t, ctx, conn)
+	exec(t, ctx, conn, `INSERT INTO work_graph_pr_deployment_edges (edge_id, org_id, pr_id, deployment_id, provider, repo_id, confidence, source, evidence, observed_at, computed_at)
+        SELECT 'dep-s', '%s', 'r:9', 'd-shared', 'github', NULL, 0.7, 's', '', now64(3), now64(3)`, org1)
+	for _, repo := range []string{rA, rB} {
+		exec(t, ctx, conn, `INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, provider, repo_id, confidence, source, evidence, observed_at, computed_at)
+            SELECT 'inc-s', '%s', 'd-shared', 'i-shared', 'github', '%s', 0.7, 'heuristic', '', now64(3), now64(3)`, org1, repo)
+	}
+	got, err := WorkflowDrilldown(ctx, client, org1, model.AIWorkflowRootTypeInputPr, "r:9", 3, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos := map[string]bool{}
+	for _, e := range got.Edges {
+		if e.EdgeID == "inc-s" && e.RepoID != nil {
+			repos[*e.RepoID] = true
+		}
+	}
+	if len(repos) != 2 || !repos[rA] || !repos[rB] {
+		t.Fatalf("the drilldown serves the shared deployment's incident edge for repositories %v, want both %s and %s: %+v", repos, rA, rB, got.Edges)
+	}
+}

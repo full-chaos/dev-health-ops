@@ -78,13 +78,13 @@ func TestJiraWorkItemStoryPointsSelection(t *testing.T) {
 		want       *float64
 	}{
 		{"configured field wins over discovery", map[string]any{"story_points_field": "customfield_555"}, both,
-			map[string]any{"customfield_555": 8.0, "customfield_10042": 3.0}, ptrFloat(8)},
+			map[string]any{"customfield_555": 8.0, "customfield_10042": 3.0}, jiraPointsFloatPtr(8)},
 		{"configured field is the only one read", map[string]any{"story_points_field": "customfield_555"}, both,
 			map[string]any{"customfield_10042": 3.0}, nil},
-		{"unset, Story Points present", nil, both, map[string]any{"customfield_10042": 5.0}, ptrFloat(5)},
-		{"unset, only the estimate field exists", nil, []string{"customfield_10016"}, map[string]any{"customfield_10016": 2.0}, ptrFloat(2)},
-		{"both exist, value only in the estimate", nil, both, map[string]any{"customfield_10016": 13.0}, ptrFloat(13)},
-		{"both hold a value, Story Points first", nil, both, map[string]any{"customfield_10042": 5.0, "customfield_10016": 13.0}, ptrFloat(5)},
+		{"unset, Story Points present", nil, both, map[string]any{"customfield_10042": 5.0}, jiraPointsFloatPtr(5)},
+		{"unset, only the estimate field exists", nil, []string{"customfield_10016"}, map[string]any{"customfield_10016": 2.0}, jiraPointsFloatPtr(2)},
+		{"both exist, value only in the estimate", nil, both, map[string]any{"customfield_10016": 13.0}, jiraPointsFloatPtr(13)},
+		{"both hold a value, Story Points first", nil, both, map[string]any{"customfield_10042": 5.0, "customfield_10016": 13.0}, jiraPointsFloatPtr(5)},
 		{"both exist, both null", nil, both, map[string]any{"customfield_10042": nil, "customfield_10016": nil}, nil},
 		{"neither field exists", nil, nil, map[string]any{"customfield_10042": 5.0}, nil},
 	}
@@ -98,7 +98,7 @@ func TestJiraWorkItemStoryPointsSelection(t *testing.T) {
 	}
 }
 
-func ptrFloat(v float64) *float64 { return &v }
+func jiraPointsFloatPtr(v float64) *float64 { return &v }
 
 func derefFloat(v *float64) any {
 	if v == nil {

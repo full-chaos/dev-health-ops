@@ -484,6 +484,9 @@ type extraScope struct {
 // bindings are built separately since they carry request VALUES, not
 // shape.
 
+// The rows of one entity group on its id alone and carry one label (max): a
+// label that changed inside the bucket (a renamed team) must not split the entity
+// into two rows, of which the response keeps the last.
 func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string, scopes ...extraScope) string {
 	var extra extraScope
 	if len(scopes) > 0 {
@@ -507,22 +510,22 @@ func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string, scopes ...e
         SELECT
             bucket,
             entity_id,
-            entity_label,
+            max(entity_label) AS label,
             toFloat64(sum(reader_value) / nullIf(sum(reader_weight), 0)) AS value
         FROM (
             SELECT
                 %s AS bucket,
                 %s AS entity_id,
-                %s AS entity_label,
+                max(%s) AS entity_label,
                 %s AS reader,
                 %s AS reader_value,
                 %s AS reader_weight
             FROM %s%s
             WHERE %s >= {start_day:Date} AND %s < {end_day:Date}%s
               AND org_id = {org_id:String}%s%s%s
-            GROUP BY bucket, entity_id, entity_label, reader
+            GROUP BY bucket, entity_id, reader
         )
-        GROUP BY bucket, entity_id, entity_label
+        GROUP BY bucket, entity_id
         ORDER BY bucket
     `, bucketExpr(bucket, dayExpr), spec.EntityExpr, spec.LabelExpr, spec.ReaderExpr, spec.ValueExpr, spec.ReaderWeightExpr,
 			dedupFrom(spec.Table), joinSQL, dayExpr, dayExpr, whereSQL, scopeSQL, liveRowClause(spec.Table), extra.SQL)
@@ -531,12 +534,12 @@ func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string, scopes ...e
         SELECT
             %s AS bucket,
             %s AS entity_id,
-            %s AS entity_label,
+            max(%s) AS entity_label,
             toFloat64(%s) AS value
         FROM %s%s
         WHERE %s >= {start_day:Date} AND %s < {end_day:Date}%s
           AND org_id = {org_id:String}%s%s%s
-        GROUP BY bucket, entity_id, entity_label
+        GROUP BY bucket, entity_id
         ORDER BY bucket
     `, bucketExpr(bucket, dayExpr), spec.EntityExpr, spec.LabelExpr, spec.ValueExpr, dedupFrom(spec.Table), joinSQL, dayExpr, dayExpr, whereSQL, scopeSQL, liveRowClause(spec.Table), extra.SQL)
 }

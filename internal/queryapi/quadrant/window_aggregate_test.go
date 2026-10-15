@@ -151,3 +151,27 @@ func TestTheWindowReadHasOneBucketForTheWholeWindow(t *testing.T) {
 		}
 	}
 }
+
+// An entity is one row per bucket whatever label its rows carry: no reader
+// groups by the label, so a renamed team is not split into two rows (the
+// response keeps the last of them).
+func TestNoReaderGroupsByTheEntityLabel(t *testing.T) {
+	for scope, specs := range metricsByScope {
+		for name, spec := range specs {
+			if scope == "team" && spec.OwnerTeam {
+				spec, _ = ownerTeamRead(spec, "org-1", nil, day(2024, 1, 1))
+			}
+			for _, bucket := range []string{"week", "month", bucketWindow} {
+				query := quadrantMetricQuery(spec, bucket, "")
+				for _, line := range strings.Split(query, "\n") {
+					if strings.Contains(line, "GROUP BY") && strings.Contains(line, "entity_label") {
+						t.Errorf("%s %s (%s) groups by the label: %s", scope, name, bucket, strings.TrimSpace(line))
+					}
+				}
+				if !strings.Contains(query, "max(") {
+					t.Errorf("%s %s (%s) has no single label per entity:\n%s", scope, name, bucket, query)
+				}
+			}
+		}
+	}
+}

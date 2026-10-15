@@ -71,6 +71,11 @@ func (o Origin) Label() string {
 	return label
 }
 
+// noLineBreaks is the sink-side guard CodeQL's log-injection query recognises; Label already holds the closed alphabet.
+func noLineBreaks(text string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(text, "\n", ""), "\r", "")
+}
+
 func logSafe(text string, limit int) string {
 	if len(text) > limit {
 		text = text[:limit]
@@ -130,7 +135,8 @@ func RecordLeftOrigin(ctx context.Context, action, site string, from, to *url.UR
 	}
 	fromOrigin, toOrigin := OriginOf(from), OriginOf(to)
 	slog.WarnContext(ctx, "credential origin departure",
-		"action", action, "site", site, "from_origin", fromOrigin.Label(), "to_origin", toOrigin.Label(),
+		"action", noLineBreaks(action), "site", noLineBreaks(site),
+		"from_origin", noLineBreaks(fromOrigin.Label()), "to_origin", noLineBreaks(toOrigin.Label()),
 		"scheme_downgrade", fromOrigin.scheme == "https" && toOrigin.scheme == "http")
 	leftOriginCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("action", action), attribute.String("site", site)))
 }

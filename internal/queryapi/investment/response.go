@@ -41,6 +41,12 @@ type Response struct {
 	// COUNT and a denominator of 0 (no shares to divide).
 	Measure     string   `json:"measure,omitempty"`
 	Denominator *float64 `json:"denominator,omitempty"`
+	// SizingCoverage, UnsizedUnitCount and SizingNote are Go-only (CHAOS-9809, D6027, D6031): in ISSUE_SIZE the share of
+	// the response's work units that carry an issue size, the units that do not (each counts 1), and the "mostly
+	// unsized" sentence when fewer than half carry one. Left out for COUNT and for a window with no unit.
+	SizingCoverage   *float64 `json:"sizing_coverage,omitempty"`
+	UnsizedUnitCount *int     `json:"unsized_unit_count,omitempty"`
+	SizingNote       string   `json:"sizing_note,omitempty"`
 }
 
 // EvidenceQualityStats is the wire shape of EvidenceQualityStats
@@ -265,7 +271,7 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 		evidenceQualityDistribution.Set(band, float64(count))
 	}
 
-	return &Response{
+	response := &Response{
 		ThemeDistribution:           themeDistribution,
 		SubcategoryDistribution:     subcategoryDistribution,
 		EvidenceQualityDistribution: evidenceQualityDistribution,
@@ -273,7 +279,15 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 		Edges:                       []map[string]any{},
 		Measure:                     breakdownFilters.Measure,
 		Denominator:                 &denominator,
-	}, nil
+	}
+	if breakdownFilters.Measure == investmentexplain.MeasureIssueSize {
+		sizing, err := reader.explainR.FetchSizingCoverage(ctx, breakdownFilters)
+		if err != nil {
+			return nil, err
+		}
+		response.SizingCoverage, response.UnsizedUnitCount, response.SizingNote = sizing.Share(), sizing.Unsized(), sizing.Note()
+	}
+	return response, nil
 }
 
 // SunburstParams is BuildSunburstResponse's input -- see Params' own doc

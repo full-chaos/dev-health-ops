@@ -162,10 +162,11 @@ func (reader *Reader) fetchMixSizing(ctx context.Context, opts ExplainInvestment
 func applySizing(explanation *InvestmentMixExplanation, sizing *SizingCoverage) {
 	for i := range explanation.TopFindings {
 		evidence := &explanation.TopFindings[i].Evidence
-		evidence.SizingCoverage, evidence.UnsizedUnitCount = nil, nil
+		evidence.SizingCoverage, evidence.UnsizedUnitCount, evidence.SizingNote = nil, nil, ""
 		if sizing != nil {
 			evidence.SizingCoverage = sizing.Share()
 			evidence.UnsizedUnitCount = sizing.Unsized()
+			evidence.SizingNote = sizing.Note()
 		}
 	}
 }
@@ -200,16 +201,17 @@ func mixBreakdownFilters(opts ExplainInvestmentMixOptions) BreakdownFilters {
 	return breakdownFilter
 }
 
-// effectiveMeasure is the measure of the mix read: the Investment page's COUNT when the option is
-// empty (the explanation is of the mix the user sees), else NormalizeMeasure of it. A name it does not
-// know reads as COUNT; the route has already refused those.
+// effectiveMeasure is the measure of the mix read: InvestmentShareMeasure (ISSUE_SIZE, the Investment
+// page's measure) when the option is empty (the explanation is of the mix the user sees), else
+// NormalizeMeasure of it. A name it does not know reads as InvestmentShareMeasure; the route has already
+// refused those.
 func (opts ExplainInvestmentMixOptions) effectiveMeasure() string {
 	if strings.TrimSpace(opts.Measure) == "" {
-		return MeasureCount
+		return InvestmentShareMeasure
 	}
 	measure, ok := NormalizeMeasure(opts.Measure)
 	if !ok {
-		return MeasureCount
+		return InvestmentShareMeasure
 	}
 	return measure
 }

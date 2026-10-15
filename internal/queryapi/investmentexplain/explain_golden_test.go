@@ -80,6 +80,10 @@ var explainFixtureNow = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 func (explainFixtureClient) Query(_ context.Context, statement string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 	switch {
+	case strings.Contains(statement, "AS sized_units"):
+		// FetchSizingCoverage: no unit in the fixture window carries a size row, so the counts read 0
+		// (the fixture scanner leaves *uint64 at zero) and the answer carries no sizing fields.
+		return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0)}}}, nil
 	case strings.Contains(statement, "ARRAY JOIN CAST(subcategory_distribution_json") && strings.Contains(statement, "subcategory_kv.1 AS subcategory"):
 		// FetchInvestmentBreakdown
 		return &fixtureRowScanner{rows: [][]any{

@@ -572,7 +572,7 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 		filtersForCacheKey = investmentexplain.DefaultMetricFilterForCacheKey()
 	}
 
-	measure := investmentexplain.MeasureCount
+	measure := investmentexplain.InvestmentShareMeasure
 	if body.Measure != nil {
 		measure, _ = investmentexplain.NormalizeMeasure(*body.Measure)
 	}

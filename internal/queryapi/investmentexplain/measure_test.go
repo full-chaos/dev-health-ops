@@ -8,9 +8,10 @@ import (
 	"time"
 )
 
-func TestInvestmentShareMeasureIsCount(t *testing.T) {
-	if InvestmentShareMeasure != MeasureCount {
-		t.Fatalf("InvestmentShareMeasure = %q, want %q (the Investment page's measure, D5999)", InvestmentShareMeasure, MeasureCount)
+// CHAOS-9809 (D5999, D6027): the shared default is the work-unit issue size, the Investment page's measure.
+func TestInvestmentShareMeasureIsIssueSize(t *testing.T) {
+	if InvestmentShareMeasure != MeasureIssueSize {
+		t.Fatalf("InvestmentShareMeasure = %q, want %q (the Investment page's measure, D5999)", InvestmentShareMeasure, MeasureIssueSize)
 	}
 }
 

@@ -172,6 +172,11 @@ Investment measure. Two measures read the same rows:
 | `COUNT` (and `THROUGHPUT`, the same) | 1 work unit |
 | `ISSUE_SIZE` | The unit's newest issue size (`work_unit_issue_size`): the sum of the story points of its issues. A unit with no size weighs 1 work unit, so it is never dropped from the mix. |
 
+`ISSUE_SIZE` is the default of every Investment reader: the REST `/investment` and `/investment/sunburst`, the
+Home tile "Investment by theme", the Operating Review investment section and the explanation (CHAOS-9809). The REST
+`/investment` response then carries `sizing_coverage`, `unsized_unit_count` and, when fewer than half of the units
+carry a size, `sizing_note`; the explanation carries the same three fields on each finding's evidence.
+
 In both, a unit's weight is spread over its subcategories by their probabilities and over its repositories by their
 allocation weights, and a team scope takes each repository at the share the teams in view hold, so the sum of a
 unit's rows is its weight. When no unit of a scope carries a size, `ISSUE_SIZE` equals `COUNT` exactly. Provider
@@ -251,7 +256,7 @@ next to `filters`:
 
 | Field | Meaning | Default |
 |---|---|---|
-| `measure` | `COUNT` (the page's measure), `THROUGHPUT` (same as `COUNT`) or `ISSUE_SIZE` (each unit weighs its issue size, 1 when unsized); any other name, `CHURN_LOC` included, is refused. The explanation never weighs by a unit's `effort_value` | `COUNT` |
+| `measure` | `ISSUE_SIZE` (the page's measure: each unit weighs its issue size, 1 when unsized), `COUNT` or `THROUGHPUT` (same as `COUNT`); any other name, `CHURN_LOC` included, is refused. The explanation never weighs by a unit's `effort_value` | `ISSUE_SIZE` |
 | `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is `[start_date, end_date)`. It replaces `filters.time`. | `filters.time` (a relative `range_days` ends tomorrow, so it covers today) |
 | `use_investment` | Accepted for parity with the page; no effect, because theme and subcategory always use the canonical categorization on both surfaces | none |
 

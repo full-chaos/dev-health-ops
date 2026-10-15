@@ -2199,8 +2199,8 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 }
 
 // investmentSection is the week's work per canonical theme (CHAOS-9199), in the measure
-// investmentexplain.InvestmentShareMeasure names (COUNT, CHAOS-9622, D5999: the share of the
-// units, never their lines of code). The metrics are named <theme>_work with the unit "work units"
+// investmentexplain.InvestmentShareMeasure names (ISSUE_SIZE, CHAOS-9809, D5999: each unit its issue size, 1 when
+// unsized, never its lines of code). The metrics are named <theme>_work with the unit "work units"
 // (they were <theme>_effort and "effort" while the value was the unit's churn_loc effort_value). Feature delivery
 // reads higher-is-better and maintenance lower-is-better, as "new value" and "KTLO" did; the
 // other themes are neutral.

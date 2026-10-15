@@ -70,8 +70,8 @@ func TestExplainOptionsDefaultToThePagesMeasureAndTakeItsWindow(t *testing.T) {
 	}
 
 	relative := build(`{"filters":{"time":{"range_days":14,"compare_days":14},"scope":{"level":"org","ids":[]}}}`)
-	if relative.Measure != investmentexplain.MeasureCount {
-		t.Errorf("measure with none sent = %q, want the page's COUNT", relative.Measure)
+	if relative.Measure != investmentexplain.MeasureIssueSize {
+		t.Errorf("measure with none sent = %q, want the page's ISSUE_SIZE", relative.Measure)
 	}
 	if want := relative.StartTS.AddDate(0, 0, 14); !relative.EndTS.Equal(want) {
 		t.Errorf("relative window = [%s, %s), want 14 days", relative.StartTS, relative.EndTS)

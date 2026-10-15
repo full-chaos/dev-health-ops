@@ -328,6 +328,16 @@ func (c SizingCoverage) Share() *float64 {
 	return &share
 }
 
+// Note is the "mostly unsized" sentence (D6031): when fewer than half of the units carry a size, the mix in ISSUE_SIZE
+// is mostly unsized units counted 1 each, and the answer says so. Empty otherwise, and for a read with no unit.
+func (c SizingCoverage) Note() string {
+	if 2*c.SizedUnits >= c.Units {
+		return ""
+	}
+	return fmt.Sprintf("Mostly unsized: %d of %d work units have an issue size. The other %d have no size, so each counts as 1 work unit.",
+		c.SizedUnits, c.Units, c.Units-c.SizedUnits)
+}
+
 // Unsized is the number of units without a size, nil when the read holds no unit.
 func (c SizingCoverage) Unsized() *int {
 	if c.Units <= 0 {

@@ -191,6 +191,8 @@ type HealthState struct {
 	AsOf     *pytime.NaiveDateTime `json:"as_of"`
 }
 
+type WhyParts struct{ Label, Movement, Reason string }
+
 // Signal is the wire shape of HomeSignal (schemas.py:88-106).
 type Signal struct {
 	ID                string          `json:"id"`
@@ -219,6 +221,10 @@ type Signal struct {
 	// for the limiting-factor claim, which adds its own. Empty: the claim falls
 	// back to Title. Never served.
 	ClaimSubject string `json:"-"`
+	// Why holds the parts WhyItMatters was built from, for the health summary,
+	// which adds its own hedge. Nil: the summary quotes WhyItMatters whole.
+	// Never served.
+	Why *WhyParts `json:"-"`
 	// RepoFilterApplied (CHAOS-9093) is the field of the metric the signal is
 	// built from (MetricDelta.RepoFilterApplied). It is nil on a signal that does
 	// not come from a metric spec (a risk signal, a recommendation). GraphQL only,

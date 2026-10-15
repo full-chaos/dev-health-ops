@@ -398,14 +398,20 @@ var metricReasons = map[string]string{
 
 var movementWords = map[string]string{"up": "rising", "down": "falling", "flat": "flat"}
 
-// whyForMetric ports _why_for_metric (services/home.py:412-434).
-func whyForMetric(metric, label, dir string) string {
-	movement := movementWords[dir]
+// whyPartsForMetric returns the parts of the why-it-matters sentence of a
+// metric (services/home.py:412-434).
+func whyPartsForMetric(metric, label, dir string) WhyParts {
 	reason, ok := metricReasons[metric]
 	if !ok {
 		reason = fmt.Sprintf("%s movement suggests an operating signal to inspect.", label)
 	}
-	return fmt.Sprintf("%s appears %s; %s", label, movement, reason)
+	return WhyParts{Label: label, Movement: movementWords[dir], Reason: reason}
+}
+
+// whyForMetric ports _why_for_metric (services/home.py:412-434).
+func whyForMetric(metric, label, dir string) string {
+	parts := whyPartsForMetric(metric, label, dir)
+	return fmt.Sprintf("%s appears %s; %s", parts.Label, parts.Movement, parts.Reason)
 }
 
 // coveragePctFromCoverage ports _coverage_pct_from_coverage
@@ -519,6 +525,7 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 		}
 
 		title := fmt.Sprintf("%s appears %s", delta.Label, dir)
+		whyParts := whyPartsForMetric(delta.Metric, delta.Label, dir)
 		why := whyForMetric(delta.Metric, delta.Label, dir)
 		if !complete {
 			title = fmt.Sprintf("%s has no prior period to compare", delta.Label)
@@ -538,6 +545,7 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 			AffectedScope:     primaryScopeLabel(f),
 			EvidenceCount:     evidenceCount,
 			WhyItMatters:      why,
+			Why:               &whyParts,
 			RecommendedAction: actionForMetric(delta.Metric),
 			EvidenceRef:       &evidenceRefStr,
 			Category:          category,
@@ -638,9 +646,19 @@ func BuildHealthState(signals []Signal, dataConfidence DataConfidence, asOf *tim
 	return HealthState{
 		Status:   status,
 		Headline: fmt.Sprintf("%s across %s", top.Title, top.AffectedScope),
-		Summary:  fmt.Sprintf("The strongest signal suggests %s", top.WhyItMatters),
+		Summary:  healthSummary(top),
 		AsOf:     (*pytime.NaiveDateTime)(asOf),
 	}
+}
+
+// healthSummary is the health-state summary: the strongest signal's
+// why-it-matters under one hedge word of its own. A signal with no parts
+// (a recommendation) is quoted whole.
+func healthSummary(top Signal) string {
+	if top.Why == nil {
+		return fmt.Sprintf("The strongest signal suggests %s", top.WhyItMatters)
+	}
+	return fmt.Sprintf("The strongest signal suggests %s is %s; %s", top.Why.Label, top.Why.Movement, top.Why.Reason)
 }
 
 // BuildLimitingFactor ports build_limiting_factor (services/home.py:566-576).
@@ -826,6 +844,7 @@ func RiskSignal(row RiskRow, f Filters, dataConfidence DataConfidence) (Signal, 
 	}
 
 	affectedScope := scopeType + "s"
+	riskWhy := whyPartsForMetric("compounding_risk", "Compounding Risk", "flat")
 	return Signal{
 		ID:                fmt.Sprintf("risk:%s:%s", scopeType, scopeID),
 		Title:             fmt.Sprintf("Compounding risk appears %s for %s", rawSeverity, entityName),
@@ -838,6 +857,7 @@ func RiskSignal(row RiskRow, f Filters, dataConfidence DataConfidence) (Signal, 
 		AffectedScope:     affectedScope,
 		EvidenceCount:     1,
 		WhyItMatters:      whyForMetric("compounding_risk", "Compounding Risk", "flat"),
+		Why:               &riskWhy,
 		RecommendedAction: actionForMetric("compounding_risk"),
 		Category:          CategoryDurability,
 		ScopeEntity:       &ScopeEntityRef{ID: scopeID, DisplayName: entityName},

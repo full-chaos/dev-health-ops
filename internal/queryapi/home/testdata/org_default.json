@@ -340,7 +340,7 @@
   "health_state": {
     "status": "at_risk",
     "headline": "Compounding risk appears high for checkout-service across repos",
-    "summary": "The strongest signal suggests Compounding Risk appears flat; compounding risk combines churn, complexity, ownership, and review pressure into one persisted signal.",
+    "summary": "The strongest signal suggests Compounding Risk is flat; compounding risk combines churn, complexity, ownership, and review pressure into one persisted signal.",
     "as_of": "2024-01-08T10:00:00"
   },
   "signals": [

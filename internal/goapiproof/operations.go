@@ -546,8 +546,9 @@ var operationSpecs = map[string]OperationSpec{
 		},
 		Parity: Options{
 			VolatileFields: map[string]string{
-				"data.capacityForecast.forecastId": volatileForecastIdentity,
-				"data.capacityForecast.computedAt": volatileForecastIdentity,
+				"data.capacityForecast.forecastId":                  volatileForecastIdentity,
+				"data.capacityForecast.computedAt":                  volatileForecastIdentity,
+				"data.capacityForecast.completionDistribution.days": volatileDistributionBins,
 			},
 			StochasticLeaves: capacityForecastStochasticLeaves,
 		},

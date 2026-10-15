@@ -901,3 +901,30 @@ func TestDemoGateCheckoutFailedDeploysCarryTheRevertedFeatures(t *testing.T) {
 		t.Errorf("Checkout holds %d failed deployments, want at least 2", failed)
 	}
 }
+
+// G10: every blocker link of the world has the provider's own time of the link, dated before the world
+// instant, so the oldest blocked age of a team is its real wait and not the time of the load: the Jira
+// links read it from the issue changelog, the GitLab and Linear links from their own link times.
+func TestDemoGateG10BlockerLinksCarryTheirStartTime(t *testing.T) {
+	world, frozenAt := demoGateWorld(t)
+	blockers := 0
+	for _, row := range demoGateRows(world, "work_item_dependencies") {
+		if gateText(row["relationship_type"]) != "blocks" {
+			continue
+		}
+		blockers++
+		pair := gateText(row["source_work_item_id"]) + " -> " + gateText(row["target_work_item_id"])
+		started := gateText(row["relation_started_at"])
+		if started == "" || row["relation_started_at"] == nil {
+			t.Errorf("blocker %s has no start time of its link: its age would read the time of the load", pair)
+			continue
+		}
+		at, err := time.Parse("2006-01-02 15:04:05.000", started)
+		if err != nil || !at.Before(frozenAt.Add(-24*time.Hour)) {
+			t.Errorf("blocker %s starts %q: not a time more than a day before the world instant", pair, started)
+		}
+	}
+	if blockers == 0 {
+		t.Fatal("the world has no blocker link")
+	}
+}

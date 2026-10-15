@@ -69,6 +69,9 @@ func TestRepositoryReadbackClassifiesEveryVersionRelationship(t *testing.T) {
 	withRef := repositoryReadbackVersion(expected)
 	withRef.Ref = "refs/heads/main"
 
+	otherProviderRepoID := repositoryReadbackVersion(expected)
+	otherProviderRepoID.Row.ProviderRepoID = "456"
+
 	for name, test := range map[string]struct {
 		actual repositoryVersion
 		want   EffectInspection
@@ -80,6 +83,7 @@ func TestRepositoryReadbackClassifiesEveryVersionRelationship(t *testing.T) {
 		"same version, new content":  {differentContent, EffectConflict},
 		"external ingest stamped it": {externallyStamped, EffectConflict},
 		"unexpected ref":             {withRef, EffectConflict},
+		"another provider repo id":   {otherProviderRepoID, EffectConflict},
 	} {
 		test := test
 		t.Run(name, func(t *testing.T) {

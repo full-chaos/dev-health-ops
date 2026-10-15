@@ -84,6 +84,7 @@ func TestProjectsTargetProvenanceMigrationUpgradesAndDowngrades(t *testing.T) {
 
 	const up = "sql/127_projects_target_provenance.sql"
 	const down = "rollback/127_projects_target_provenance.down.sql"
+	versionRows := useSchemaMigrations(t, ctx, conn, "127_projects_target_provenance.sql")
 	columns := map[string]string{
 		"target_state": "LowCardinality(String)", "target_kind": "LowCardinality(String)", "target_source": "LowCardinality(String)", "target_ref": "String",
 		"target_ref_name": "String", "target_other_open": "Nullable(UInt32)", "target_fetched_at": "Nullable(DateTime64(3, 'UTC'))",
@@ -131,6 +132,9 @@ func TestProjectsTargetProvenanceMigrationUpgradesAndDowngrades(t *testing.T) {
 	run(up)
 
 	run(down)
+	if n := versionRows(); n != 0 {
+		t.Errorf("after the rollback the version row is still recorded (%d rows)", n)
+	}
 	for column := range columns {
 		if got := columnType(column); got != "" {
 			t.Errorf("after the downgrade %s is still %q", column, got)
@@ -140,6 +144,9 @@ func TestProjectsTargetProvenanceMigrationUpgradesAndDowngrades(t *testing.T) {
 		t.Errorf("target_date after the downgrade = %q, want 2026-12-15 unchanged", got)
 	}
 	run(down)
+	if n := versionRows(); n != 0 {
+		t.Errorf("after the rollback the version row is still recorded (%d rows)", n)
+	}
 
 	run(up)
 	for column, want := range columns {

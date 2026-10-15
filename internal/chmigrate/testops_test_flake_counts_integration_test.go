@@ -73,6 +73,7 @@ func TestTestopsTestFlakeCountsMigrationUpgradesAndDowngrades(t *testing.T) {
 
 	const up = "sql/129_testops_test_flake_counts.sql"
 	const down = "rollback/129_testops_test_flake_counts.down.sql"
+	versionRows := useSchemaMigrations(t, ctx, conn, "129_testops_test_flake_counts.sql")
 	run(up)
 	for _, column := range []string{"flake_cases", "distinct_cases"} {
 		if got := columnType(column); got != "Nullable(UInt32)" {
@@ -89,6 +90,9 @@ func TestTestopsTestFlakeCountsMigrationUpgradesAndDowngrades(t *testing.T) {
 	run(up)
 
 	run(down)
+	if n := versionRows(); n != 0 {
+		t.Errorf("after the rollback the version row is still recorded (%d rows)", n)
+	}
 	for _, column := range []string{"flake_cases", "distinct_cases"} {
 		if got := columnType(column); got != "" {
 			t.Errorf("after the downgrade %s is still %q", column, got)
@@ -98,6 +102,9 @@ func TestTestopsTestFlakeCountsMigrationUpgradesAndDowngrades(t *testing.T) {
 		t.Errorf("flake_rate after the downgrade = %q, want 0.25 unchanged", got)
 	}
 	run(down)
+	if n := versionRows(); n != 0 {
+		t.Errorf("after the rollback the version row is still recorded (%d rows)", n)
+	}
 
 	run(up)
 	if got := columnType("flake_cases"); got != "Nullable(UInt32)" {

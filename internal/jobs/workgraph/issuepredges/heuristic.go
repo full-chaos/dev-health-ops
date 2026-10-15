@@ -44,9 +44,14 @@ type ExplicitLink struct {
 // shape, same reasoning as prcommit.Inputs/issueprlinks.Inputs: testable
 // without ClickHouse.
 type HeuristicInputs struct {
-	WorkItems           []HeuristicWorkItemRow
-	PullRequests        []HeuristicPullRequestRow
-	ExplicitLinks       []ExplicitLink
+	WorkItems     []HeuristicWorkItemRow
+	PullRequests  []HeuristicPullRequestRow
+	ExplicitLinks []ExplicitLink
+	// Native is every natively linked pull request. A heuristic link is a
+	// fallback only: its pull request may not already have a native link. The
+	// issue side needs no second check, because ExplicitLinks carries every
+	// stored tier and any link already excludes the issue.
+	Native              issueprlinks.NativeLinks
 	HeuristicDaysWindow int
 	HeuristicConfidence float32
 }
@@ -139,6 +144,9 @@ func DeriveHeuristicEdges(inputs HeuristicInputs, buildTime time.Time) Heuristic
 		for index := left; index < right; index++ {
 			candidate := prs[index]
 			if _, linked := linkedPairs[ExplicitLink{WorkItemID: workItem.WorkItemID, PRNumber: candidate.Number}]; linked {
+				continue
+			}
+			if inputs.Native.HasPullRequest(candidate.RepoID, uint32(candidate.Number)) {
 				continue
 			}
 			diff := candidate.CreatedAt.Sub(workItem.UpdatedAt)

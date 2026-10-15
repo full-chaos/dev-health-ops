@@ -652,30 +652,25 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 			},
 			MaxPages: sourceDiscoveryMaxPages,
 		})
-		if namespace != "" && !(err == nil && page.PageBudgetExhausted) {
-			// /user/repos only lists repositories the credential owns,
-			// collaborates on or reaches through org membership, so it is
-			// never complete for a scoped namespace (another user, an org
-			// the token is not a member of, public repositories). Union it
-			// with the namespace's own listing, org first then user. Either
-			// listing may fail alone: the other one carries the result and
-			// the failure is logged; both failing returns the /user/repos
-			// error. A truncated namespace listing is a truncated discovery.
+		if namespace != "" && err == nil && !page.PageBudgetExhausted {
+			// Decision rule for a scoped PAT namespace. /user/repos (U) is
+			// authoritative for the credential and is never complete for a
+			// namespace (another user, an org the token is not a member of,
+			// public repositories), so it is unioned with the namespace's
+			// own listing (N), org first then user. Any U error is raised
+			// as is: N is a public listing, so N alone would be a partial
+			// success. U truncated or N truncated is a truncated discovery.
+			// U ok and N failed keeps U only and logs the failure.
 			ownerPage, ownerErr := collectGitHubOwnerRepos(ctx, client, namespace)
 			switch {
 			case ownerErr == nil && ownerPage.PageBudgetExhausted:
 				return nil, fmt.Errorf("github: %w", ErrSourceDiscoveryTruncated)
-			case err != nil && ownerErr == nil:
-				userErrClass, userErrType := logging.ErrorClass(err), logging.ErrorType(err)
-				service.log().LogAttrs(ctx, slog.LevelWarn, "github all_repos user listing failed; using namespace listing only",
-					slog.String("namespace", namespace), slog.String("error_class", userErrClass), slog.String("error_type", userErrType))
-				page, err = ownerPage, nil
-			case err == nil && ownerErr != nil:
+			case ownerErr != nil:
 				ownerErrClass, ownerErrType := logging.ErrorClass(ownerErr), logging.ErrorType(ownerErr)
 				service.log().LogAttrs(ctx, slog.LevelWarn, "github all_repos namespace listing failed; keeping user repos only",
 					slog.String("namespace", namespace), slog.Int("user_repos", len(page.Items)),
 					slog.String("error_class", ownerErrClass), slog.String("error_type", ownerErrType))
-			case err == nil:
+			default:
 				page.Items = mergeGitHubRepoItems(page.Items, ownerPage.Items)
 			}
 		}

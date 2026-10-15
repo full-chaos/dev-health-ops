@@ -1065,40 +1065,56 @@ func TestDiscoverGitHubAllReposScopedNamespaceFailureIsLogged(t *testing.T) {
 	}
 }
 
-// A transient /user/repos failure must not hide a readable scoped namespace.
-func TestDiscoverGitHubAllReposScopedNamespaceSurvivesUserReposFailure(t *testing.T) {
-	doer := &sequencedSourceDiscoveryDoer{
-		t:        t,
-		statuses: []int{http.StatusBadRequest, http.StatusNotFound, http.StatusOK},
-		bodies: []string{
-			`{"message":"Bad"}`,
-			`{"message":"Not Found"}`,
-			`[{"name":"public","full_name":"alice/public","owner":{"login":"alice"}}]`,
-		},
+// Table over every combination of the scoped-namespace decision rule:
+// U = /user/repos, N = the namespace listing (/orgs 404 then /users).
+func TestDiscoverGitHubAllReposScopedNamespaceDecisionRule(t *testing.T) {
+	const (
+		collab = `{"name":"collab","full_name":"alice/collab","owner":{"login":"alice"}}`
+		public = `{"name":"public","full_name":"alice/public","owner":{"login":"alice"}}`
+		notFnd = `{"message":"Not Found"}`
+	)
+	cases := []struct {
+		name       string
+		statuses   []int
+		bodies     []string
+		want       []string
+		wantErr    bool
+		wantPaths  int
+		wantLogged bool
+	}{
+		{name: "U ok, N ok: union deduplicated", statuses: []int{200, 404, 200}, bodies: []string{"[" + collab + "]", notFnd, "[" + collab + "," + public + "]"}, want: []string{"alice/collab", "alice/public"}, wantPaths: 3},
+		{name: "U ok, N org ok", statuses: []int{200, 200}, bodies: []string{"[" + collab + "]", "[" + public + "]"}, want: []string{"alice/collab", "alice/public"}, wantPaths: 2},
+		{name: "U ok, N both fail: U only, logged", statuses: []int{200, 404, 404}, bodies: []string{"[" + collab + "]", notFnd, notFnd}, want: []string{"alice/collab"}, wantPaths: 3, wantLogged: true},
+		{name: "U 401, N ok: error, not partial success", statuses: []int{401, 404, 200}, bodies: []string{`{"message":"Bad credentials"}`, notFnd, "[" + public + "]"}, wantErr: true, wantPaths: 1},
+		{name: "U 500, N ok: error", statuses: []int{500, 200}, bodies: []string{`{"message":"x"}`, "[" + public + "]"}, wantErr: true, wantPaths: 1},
+		{name: "U fails, N fails: error", statuses: []int{400}, bodies: []string{`{"message":"Bad"}`}, wantErr: true, wantPaths: 1},
 	}
-	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
-	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true, "owner": "alice"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sources) != 1 || sources[0].FullName != "alice/public" {
-		t.Fatalf("discoverGitHub() = %#v, want alice/public", sources)
-	}
-}
-
-// Both listings failing is still an error, never an empty success.
-func TestDiscoverGitHubAllReposScopedNamespaceBothListingsFailing(t *testing.T) {
-	doer := &sequencedSourceDiscoveryDoer{t: t, statuses: []int{http.StatusBadRequest}, bodies: []string{`{"message":"Bad"}`}}
-	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
-	if _, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true, "owner": "alice"}); err == nil {
-		t.Fatal("discoverGitHub() = nil error, want the /user/repos failure")
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			doer := &sequencedSourceDiscoveryDoer{t: t, statuses: testCase.statuses, bodies: testCase.bodies}
+			credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var logs strings.Builder
+			service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now, logger: slog.New(slog.NewTextHandler(&logs, nil))}
+			sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true, "owner": "alice"})
+			if (err != nil) != testCase.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, testCase.wantErr)
+			}
+			if len(doer.paths) != testCase.wantPaths {
+				t.Fatalf("paths = %v, want %d calls", doer.paths, testCase.wantPaths)
+			}
+			var got []string
+			for _, source := range sources {
+				got = append(got, source.FullName)
+			}
+			if strings.Join(got, ",") != strings.Join(testCase.want, ",") {
+				t.Fatalf("sources = %v, want %v", got, testCase.want)
+			}
+			if logged := strings.Contains(logs.String(), "namespace listing failed"); logged != testCase.wantLogged {
+				t.Fatalf("namespace-failure warning logged = %v, want %v (%q)", logged, testCase.wantLogged, logs.String())
+			}
+		})
 	}
 }

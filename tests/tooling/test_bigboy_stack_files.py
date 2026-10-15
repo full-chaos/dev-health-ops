@@ -13,39 +13,65 @@ ROOT = Path(__file__).resolve().parents[2]
 BIGBOY = ROOT / "ci" / "bigboy"
 LIST = BIGBOY / "stack.files"
 
-# Legacy scripts that still build their own chain. Switching one to stack.sh removes it from this set;
-# nothing may be added to it.
-LEGACY_CHAIN_SCRIPTS = {
-    "bigboy-cut.sh",
-    "bigboy-graphql-prove.sh",
-    "bigboy-hook-check.sh",
-    "bigboy-river-apply.sh",
-    "web-path-smoke.sh",
+# Legacy scripts that still build their own chain, with the number of raw-chain lines each has today. Switching one
+# to stack.sh lowers its number; no number may rise and no script may be added.
+LEGACY_CHAIN_LINES = {
+    "bigboy-cut.sh": 2,
+    "bigboy-graphql-prove.sh": 3,
+    "bigboy-hook-check.sh": 1,
+    "bigboy-river-apply.sh": 1,
+    "web-path-smoke.sh": 3,
 }
 # compose.bigboy.images.yml is the tracked copy of the host file compose/compose.bigboy.images.yml, which the
 # chain names under the bigboy root.
 UNLISTED_OVERLAYS = {"compose.bigboy.images.yml"}
 
 
-def _sets() -> dict[str, dict[str, list[str]]]:
-    out: dict[str, dict[str, list[str]]] = {}
+def _raw() -> dict[str, list[tuple[str, str]]]:
+    out: dict[str, list[tuple[str, str]]] = {}
     for line in LIST.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         name, kind, value = line.split()[:3]
-        out.setdefault(name, {}).setdefault(kind, []).append(value)
+        out.setdefault(name, []).append((kind, value))
+    return out
+
+
+def _sets() -> dict[str, dict[str, list[str]]]:
+    """Each set with its `include`d sets resolved first, as stack.sh reads it."""
+    raw = _raw()
+
+    def resolve(name: str) -> list[tuple[str, str]]:
+        lines: list[tuple[str, str]] = []
+        for kind, value in raw[name]:
+            if kind == "include":
+                lines += resolve(value)
+        return lines + [(k, v) for k, v in raw[name] if k != "include"]
+
+    out: dict[str, dict[str, list[str]]] = {}
+    for name in raw:
+        for kind, value in resolve(name):
+            out.setdefault(name, {}).setdefault(kind, []).append(value)
     return out
 
 
 def _files(name: str) -> list[str]:
     """Ordered files of a set; tools files are written as `$HERE/<name>` like the legacy scripts."""
     entries: list[tuple[str, str]] = []
-    for line in LIST.read_text().splitlines():
-        parts = line.split()
-        if len(parts) >= 3 and parts[0] == name and parts[1] in ("root", "tools"):
-            entries.append((parts[1], parts[2]))
+    for kind, value in _resolved_lines(name):
+        if kind in ("root", "tools"):
+            entries.append((kind, value))
     return [f"$HERE/{v}" if k == "tools" else v for k, v in entries]
+
+
+def _resolved_lines(name: str) -> list[tuple[str, str]]:
+    raw = _raw()
+    lines: list[tuple[str, str]] = []
+    for kind, value in raw[name]:
+        if kind == "include":
+            lines += _resolved_lines(value)
+    return lines + [(k, v) for k, v in raw[name] if k != "include"]
 
 
 def _dash_f(text: str) -> list[str]:
@@ -81,7 +107,11 @@ def test_prove_set_equals_graphql_prove_chain() -> None:
     assert "--profile venue" in base and _sets()["prove"]["profile"] == ["venue"]
 
 
-def test_hook_check_and_river_apply_sets_equal_their_scripts() -> None:
+def test_hook_check_and_river_apply_sets_equal_the_chain_they_run_in_the_cut() -> None:
+    cut = re.search(
+        r"^export COMPOSE_FILE=(\S+)$", (BIGBOY / "bigboy-cut.sh").read_text(), re.M
+    )
+    assert cut
     for script, name, overlay in (
         ("bigboy-hook-check.sh", "hook-check", "compose.bigboy.hook-check.yml"),
         ("bigboy-river-apply.sh", "river-apply", "compose.bigboy.river-apply.yml"),
@@ -92,11 +122,32 @@ def test_hook_check_and_river_apply_sets_equal_their_scripts() -> None:
             re.M,
         )
         assert m, script
-        assert (
-            _files(name) == [m.group(1), m.group(2)]
-            and m.group(2) == f"$HERE/{overlay}"
-        )
+        assert m.group(2) == f"$HERE/{overlay}"
+        # the script appends its overlay to the COMPOSE_FILE the cut exported
+        assert _files(name) == cut.group(1).split(":") + [m.group(2)]
         assert _sets()[name]["profile"] == ["venue"]
+
+
+def test_needs_cover_every_required_variable_of_each_set() -> None:
+    derived = {
+        "BIGBOY_OPERATOR_IMAGE",
+        "RIVER_DHO_IMAGE",
+        "DHO_SMOKE_DIR",
+        "DHO_API_CH_USERS_XML",
+    }
+    env_file = {
+        "JWT_SECRET_KEY",
+        "DHO_SMOKE_ADMIN_EMAIL",
+        "DHO_SMOKE_ADMIN_PASSWORD_FILE",
+    }
+    for name, kinds in _sets().items():
+        required = set()
+        for f in kinds.get("tools", []):
+            required |= set(re.findall(r"\$\{([A-Z_]+):\?", (BIGBOY / f).read_text()))
+        assert required <= derived | env_file | set(kinds.get("needs", [])), (
+            name,
+            sorted(required - derived - env_file - set(kinds.get("needs", []))),
+        )
 
 
 def test_every_set_names_project_and_env_file() -> None:
@@ -126,31 +177,33 @@ def test_no_unlisted_bigboy_overlay_file() -> None:
 
 
 _RAW_CHAIN = re.compile(
-    r"COMPOSE_FILE=|(?<!\[)\s-f\s+\"?(\$\{?\w*(COMPOSE|FILE|OV)\w*|\S*compose\S*\.ya?ml)|docker compose[^|\n]*\s-f\s"
+    r"COMPOSE_FILE=|(?<!\[)\s-f\s*\"?(\$\{?\w*(COMPOSE|FILE|OV)\w*|\S*compose\S*\.ya?ml)|docker compose[^|\n]*\s-f\s"
 )
 
 
-def _raw_chain_scripts(directory: Path) -> set[str]:
-    out = set()
+def _raw_chain_lines(directory: Path) -> dict[str, int]:
+    out: dict[str, int] = {}
     for p in directory.rglob("*.sh"):
         if p.name == "stack.sh":
             continue
         lines = (
             ln for ln in p.read_text().splitlines() if not ln.lstrip().startswith("#")
         )
-        if any(_RAW_CHAIN.search(ln) for ln in lines):
-            out.add(p.name)
+        n = sum(1 for ln in lines if _RAW_CHAIN.search(ln))
+        if n:
+            out[p.name] = n
     return out
 
 
 def test_no_new_raw_chain_outside_stack_files() -> None:
-    offenders = _raw_chain_scripts(BIGBOY)
-    assert offenders <= LEGACY_CHAIN_SCRIPTS, (
-        f"raw compose -f / COMPOSE_FILE chain in {sorted(offenders - LEGACY_CHAIN_SCRIPTS)}: "
+    found = _raw_chain_lines(BIGBOY)
+    grown = {k: v for k, v in found.items() if v > LEGACY_CHAIN_LINES.get(k, 0)}
+    assert not grown, (
+        f"more raw compose -f / COMPOSE_FILE chain lines than today in {grown}: "
         "add the files to ci/bigboy/stack.files and call ci/bigboy/stack.sh"
     )
-    assert LEGACY_CHAIN_SCRIPTS <= offenders, (
-        "a legacy script no longer builds a raw chain: remove it from LEGACY_CHAIN_SCRIPTS"
+    assert found == LEGACY_CHAIN_LINES, (
+        f"a legacy script changed its raw-chain line count: lower the number in LEGACY_CHAIN_LINES to {found}"
     )
 
 
@@ -162,4 +215,6 @@ def test_raw_chain_guard_detects_nested_and_array_built_chains(tmp_path: Path) -
     )
     (nested / "b.sh").write_text("export COMPOSE_FILE=a.yml:b.yml\n")
     (nested / "c.sh").write_text("docker compose ps\n# docker compose -f x.yml up\n")
-    assert _raw_chain_scripts(tmp_path) == {"a.sh", "b.sh"}
+    assert set(_raw_chain_lines(tmp_path)) == {"a.sh", "b.sh"}
+    (nested / "d.sh").write_text('docker compose -f"$X/compose.y.yml" up\n')
+    assert "d.sh" in _raw_chain_lines(tmp_path)

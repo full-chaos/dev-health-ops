@@ -11,6 +11,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 BIGBOY = ROOT / "ci" / "bigboy"
 
@@ -150,7 +152,7 @@ def test_caller_cannot_replace_the_file_list_or_project(tmp_path: Path) -> None:
 def test_operator_image_is_only_required_when_a_file_uses_it(tmp_path: Path) -> None:
     r, tools, env = _tree(tmp_path)
     env = {k: v for k, v in env.items() if k != "BIGBOY_OPERATOR_IMAGE"}
-    res = _run(tools, env, "-s", "river-apply", "ps")
+    res = _run(tools, {**env, "DHO_SMOKE_CATALOG_FILE": "x"}, "-s", "smoke", "ps")
     assert res.returncode == 0, res.stderr
     assert "--format" not in Path(env["DOCKER_LOG"]).read_text()
     refused = _run(tools, env, "ps")
@@ -169,7 +171,12 @@ def test_inherited_compose_variables_are_dropped(tmp_path: Path) -> None:
     }
     res = _run(tools, inherited, "restart", "web")
     assert res.returncode == 0, res.stderr
-    assert "ENV COMPOSE_" not in Path(env["DOCKER_LOG"]).read_text()
+    envs = {
+        ln
+        for ln in Path(env["DOCKER_LOG"]).read_text().splitlines()
+        if ln.startswith("ENV COMPOSE_")
+    }
+    assert envs == {"ENV COMPOSE_PROFILES="}
 
 
 def test_relative_root_and_tools_paths_work(tmp_path: Path) -> None:
@@ -216,3 +223,78 @@ def test_repin_web_child_gets_absolute_root_and_tools_paths(tmp_path: Path) -> N
     )
     assert res.returncode == 0, res.stderr
     assert seen.read_text().split() == [str(r), str(tools)]
+
+
+_REAL_COMPOSE = (
+    subprocess.run(["docker", "compose", "version"], capture_output=True).returncode
+    == 0
+)
+_DHO = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "d" * 64
+
+
+def _real_tree(tmp_path: Path, *, env_file: str = "") -> tuple[Path, dict[str, str]]:
+    """A tiny tree rendered by the REAL docker compose (config only, no daemon call): no stub on PATH."""
+    r = tmp_path / "root"
+    (r / "compose").mkdir(parents=True)
+    (r / "ops").mkdir()
+    (r / "ops/.env").write_text(env_file)
+    (r / "compose.yml").write_text(
+        "name: dev-health\nnetworks:\n  dev-health: {}\nservices:\n"
+        "  main:\n    image: busybox\n  extra:\n    image: busybox\n    profiles: [secret-profile]\n"
+    )
+    (r / "compose/compose.bigboy.images.yml").write_text(
+        f"# pins\n# {_DHO}\nservices: {{}}\n"
+    )
+    tools = tmp_path / "tools"
+    shutil.copytree(BIGBOY, tools)
+    (tools / "stack.files").write_text(
+        "stack project dev-health\nstack env-file ops/.env\nstack root compose.yml\n"
+        "stack root compose/compose.bigboy.images.yml\n"
+        "river-apply include stack\nriver-apply profile venue\nriver-apply tools compose.bigboy.river-apply.yml\n"
+        "hook-check include stack\nhook-check profile venue\nhook-check tools compose.bigboy.hook-check.yml\n"
+        "hook-check needs HOOK_OPERATOR_IMAGE\n"
+    )
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("COMPOSE_", "BIGBOY_", "HOOK_", "RIVER_"))
+    }
+    env |= {"BIGBOY_ROOT": str(r), "BIGBOY_TOOLS_DIR": str(tools)}
+    return tools, env
+
+
+@pytest.mark.skipif(not _REAL_COMPOSE, reason="needs docker compose")
+def test_river_apply_set_renders_with_the_derived_dho_image_under_real_compose(
+    tmp_path: Path,
+) -> None:
+    tools, env = _real_tree(tmp_path)
+    res = _run(tools, env, "-s", "river-apply", "config", "--quiet")
+    assert res.returncode == 0, res.stderr
+
+
+@pytest.mark.skipif(not _REAL_COMPOSE, reason="needs docker compose")
+def test_hook_check_set_names_the_variable_its_step_script_must_export(
+    tmp_path: Path,
+) -> None:
+    tools, env = _real_tree(tmp_path)
+    refused = _run(tools, env, "-s", "hook-check", "config", "--quiet")
+    assert refused.returncode == 2 and "needs HOOK_OPERATOR_IMAGE" in refused.stderr
+    ok = _run(
+        tools,
+        {**env, "HOOK_OPERATOR_IMAGE": _DHO},
+        "-s",
+        "hook-check",
+        "config",
+        "--quiet",
+    )
+    assert ok.returncode == 0, ok.stderr
+
+
+@pytest.mark.skipif(not _REAL_COMPOSE, reason="needs docker compose")
+def test_env_file_compose_profiles_cannot_add_a_profile_under_real_compose(
+    tmp_path: Path,
+) -> None:
+    tools, env = _real_tree(tmp_path, env_file="COMPOSE_PROFILES=secret-profile\n")
+    res = _run(tools, env, "config", "--services")
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.split() == ["main"]

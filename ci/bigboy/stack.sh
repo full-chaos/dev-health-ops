@@ -28,18 +28,27 @@ case $VERB in files|config|ps|logs|up|restart|repin-web) ;; *) die "unknown verb
 
 [ -f "$LIST" ] || die "file list $LIST is missing"
 grep -qE "^${SET}[[:space:]]" "$LIST" || die "unknown set '$SET' in $LIST"
-PROJECT=""; ENVF=(); PROFILES=(); FILES=()
-while read -r s kind val _; do
-  [ "$s" = "$SET" ] || continue
-  case $kind in
-    project) PROJECT=$val ;;
-    env-file) ENVF+=("$val") ;;
-    profile) PROFILES+=("$val") ;;
-    root) FILES+=("$R/$val") ;;
-    tools) FILES+=("$T/$val") ;;
-    *) die "bad kind '$kind' in $LIST" ;;
-  esac
-done < <(grep -vE '^[[:space:]]*(#|$)' "$LIST")
+PROJECT=""; ENVF=(); PROFILES=(); FILES=(); NEEDS=()
+read_set() {
+  local want=$1 s kind val
+  while read -r s kind val _; do
+    [ "$s" = "$want" ] && [ "$kind" = include ] && read_set "$val"
+  done < <(grep -vE '^[[:space:]]*(#|$)' "$LIST")
+  while read -r s kind val _; do
+    [ "$s" = "$want" ] || continue
+    case $kind in
+      include) ;;
+      project) PROJECT=$val ;;
+      env-file) ENVF+=("$val") ;;
+      profile) PROFILES+=("$val") ;;
+      root) FILES+=("$R/$val") ;;
+      tools) FILES+=("$T/$val") ;;
+      needs) NEEDS+=("$val") ;;
+      *) die "bad kind '$kind' in $LIST" ;;
+    esac
+  done < <(grep -vE '^[[:space:]]*(#|$)' "$LIST")
+}
+read_set "$SET"
 [ -n "$PROJECT" ] || die "set '$SET' has no project line"
 [ "${#FILES[@]}" -gt 0 ] || die "set '$SET' has no compose files"
 for f in "${FILES[@]}"; do [ -f "$f" ] || die "overlay file missing: $f"; done
@@ -59,6 +68,15 @@ if [ -z "${BIGBOY_OPERATOR_IMAGE:-}" ] && grep -qs 'BIGBOY_OPERATOR_IMAGE' "${FI
   [ -n "$BIGBOY_OPERATOR_IMAGE" ] || die "BIGBOY_OPERATOR_IMAGE is unset and no running go-reconciler names it; export it"
 fi
 export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-}"
+if [ -z "${RIVER_DHO_IMAGE:-}" ]; then
+  for f in "${FILES[@]}"; do
+    [ "${f##*/}" = compose.bigboy.images.yml ] && RIVER_DHO_IMAGE=$(grep -oE 'ghcr.io/full-chaos/dev-health-go-dho@sha256:[0-9a-f]{64}' "$f" | head -1 || true)
+  done
+fi
+export RIVER_DHO_IMAGE="${RIVER_DHO_IMAGE:-}" DHO_SMOKE_DIR="${DHO_SMOKE_DIR:-$T}"
+for v in "${NEEDS[@]}"; do [ -n "${!v:-}" ] || die "set '$SET' needs $v exported by its step script"; done
+# an env file's COMPOSE_PROFILES would add profiles: the process value (the declared profiles only) wins over it
+COMPOSE_PROFILES=$(IFS=,; echo "${PROFILES[*]}"); export COMPOSE_PROFILES
 
 valid_service() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "not a service name: refused"; }
 compose() { docker compose "${ARGS[@]}" "$@"; }

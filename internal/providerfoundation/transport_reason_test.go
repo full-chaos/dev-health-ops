@@ -64,6 +64,9 @@ func TestTransportUnknownAuthorityReachesCaller(t *testing.T) {
 	if strings.Contains(err.Error(), "secret-query") || strings.Contains(logs.String(), "secret-query") {
 		t.Fatal("query string leaked")
 	}
+	if strings.Contains(logs.String(), "octo/hello") {
+		t.Fatalf("path in log line: %s", logs.String())
+	}
 }
 
 func TestTransportReasonNeverCarriesCauseText(t *testing.T) {

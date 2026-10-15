@@ -692,7 +692,7 @@ jobs:
           target: runtime
           platforms: linux/amd64
           load: true
-          tags: go-api-tools-ca-check:local
+          tags: ghcr.io/full-chaos/go-api-tools-ca-check:local
           build-args: |
             VERSION=${{ steps.versioning.outputs.version }}
             COMMIT=${{ steps.versioning.outputs.commit }}
@@ -702,7 +702,7 @@ jobs:
 
       - name: Assert CA bundle exists
         if: matrix.platform == 'linux/amd64'
-        run: docker run --rm --entrypoint test go-api-tools-ca-check:local -s /etc/ssl/certs/ca-certificates.crt
+        run: docker run --rm --entrypoint test ghcr.io/full-chaos/go-api-tools-ca-check:local -s /etc/ssl/certs/ca-certificates.crt
 
       - name: Export digest
         if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')

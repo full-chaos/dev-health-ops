@@ -144,3 +144,18 @@ def test_an_unknown_edge_argument_is_refused_before_anything_runs(
     """The edge is never guessed from a misspelt flag: usage, exit 2, and no docker call."""
     rc, calls = _run_harness(tmp_path, SHA, second)
     assert rc == 2 and calls == []
+
+
+def test_the_org_read_runs_without_the_prove_overlay_and_the_prover_with_it(
+    tmp_path: Path,
+) -> None:
+    """The psql exec reads the org the overlay needs, so it runs on the set WITHOUT compose.bigboy.prove.yml; the
+    prover runs on the set WITH it. Swapping the two sets fails here."""
+    status, calls = _run_harness(tmp_path, SHA)
+    assert status == 0, calls
+    execs = [c for c in calls if "exec" in c and "postgres" in c]
+    proves = [c for c in calls if "venue-prove" in c and "run" in c]
+    assert len(execs) == 1 and len(proves) == 1, calls
+    assert not any(a.endswith("compose.bigboy.prove.yml") for a in execs[0])
+    assert any(a.endswith("compose.bigboy.prove.yml") for a in proves[0])
+    assert "venue" in proves[0] and "venue" in execs[0]

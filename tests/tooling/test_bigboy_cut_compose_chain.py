@@ -179,7 +179,7 @@ case "$1" in
   buildx) echo '{"digest":"'"$FAKE_DIGEST"'"}'; exit 0 ;;
   compose)
     if printf '%s\n' "$@" | grep -qx 'config'; then echo "ghcr.io/full-chaos/dev-health-go-dho@$FAKE_DIGEST"; exit 0; fi
-    if printf '%s\n' "$@" | grep -qx 'ps'; then echo "ghcr.io/full-chaos/dev-health-go-operator@$FAKE_DIGEST"; exit 0; fi
+    if printf '%s\n' "$@" | grep -qx 'ps'; then [ -n "${FAKE_NO_RECONCILER:-}" ] && exit 0; echo "ghcr.io/full-chaos/dev-health-go-operator@$FAKE_DIGEST"; exit 0; fi
     if printf '%s\n' "$@" | grep -qx 'venue-hook'; then
       h=$(( $(cat "$d/hook-n" 2>/dev/null || echo 0) + 1 )); echo "$h" > "$d/hook-n"
       echo '{"msg":"migrate step ok","time":"t"}'; echo '{"state":"clean"}'
@@ -443,6 +443,16 @@ def test_an_inherited_compose_file_never_decides_the_chain(tmp_path: Path) -> No
             "/compose.bigboy.base.yml"
         ) and "x.yml" not in " ".join(files), (name, files)
         assert "--profile" in last["argv"] and "venue" in last["argv"], name
+
+
+def test_river_apply_by_hand_needs_no_running_reconciler(tmp_path: Path) -> None:
+    """Standalone (BIGBOY_OPERATOR_IMAGE unset, no go-reconciler running) the apply still runs: the one-off starts
+    no worker (--no-deps), so the worker overlay's image reference only has to interpolate."""
+    script = _c_stage(tmp_path, "bigboy-river-apply.sh")
+    p, fake = _c_run(tmp_path, script, extra_env={"FAKE_NO_RECONCILER": "1"})
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    assert [c for c in _c_calls(fake) if "venue-river" in c["argv"]]
+    assert "river_apply_rc=0" in p.stdout
 
 
 def test_river_apply_redacts_the_dsn_it_prints(tmp_path: Path) -> None:

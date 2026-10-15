@@ -13,6 +13,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 cd "$R"   # compose project root (bigboy-cut.sh runs from here too)
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE   # CHAOS-8693: the chain, project, env file and profile come from ci/bigboy/stack.files
 export RIVER_DHO_IMAGE=$DHO   # an image reference, not a credential
+export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-$DHO}"   # by hand: the worker overlay only has to interpolate; this one-off runs --no-deps and starts no worker
 "$HERE/stack.sh" -s river-apply run venue-river migrate river --apply-and-check 2>&1 | sed -E 's#(://[^:/@]*:)[^@/]*@#\1<redacted>@#g' | tail -8 | cut -c1-200
 rc=${PIPESTATUS[0]}
 echo "river_apply_rc=$rc image=${DHO##*@}"

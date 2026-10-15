@@ -121,16 +121,42 @@ func TestServiceCredentialIDs(t *testing.T) {
 
 func TestMetadataDocumentIsPublicMetadata(t *testing.T) {
 	at := time.Date(2099, 1, 2, 3, 4, 5, 123456000, time.UTC)
-	document := ServiceCredentialMetadata{ID: "i", ServiceName: "acr", TokenPrefix: "svc_acr_abcdefgh", Scopes: []string{"entitlements:read"}, ExpiresAt: &at}.Document()
+	document := ServiceCredentialMetadata{ID: "i", ServiceName: "acr", TokenPrefix: "svc_acr_abcdefgh", Scopes: []string{"entitlements:read"}, ExpiresAt: &at}.Document(time.Date(2098, 1, 1, 0, 0, 0, 0, time.UTC))
 	if document["expires_at"] != "2099-01-02T03:04:05.123456+00:00" || document["revoked_at"] != nil || document["last_used_at"] != nil {
 		t.Fatalf("document %v", document)
 	}
-	if len(document) != 7 {
-		t.Fatalf("public_metadata has 7 keys, got %d: %v", len(document), document)
+	if len(document) != 8 {
+		t.Fatalf("public_metadata has 8 keys, got %d: %v", len(document), document)
+	}
+	if document["is_valid"] != true {
+		t.Fatalf("is_valid %v", document["is_valid"])
 	}
 	for _, secret := range []string{"token_hash", "token"} {
 		if _, ok := document[secret]; ok {
 			t.Fatalf("the document carries %s", secret)
+		}
+	}
+}
+
+func TestMetadataIsValidPerState(t *testing.T) {
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	past, future := now.Add(-time.Second), now.Add(time.Hour)
+	for name, tc := range map[string]struct {
+		item ServiceCredentialMetadata
+		want bool
+	}{
+		"no expiry":        {ServiceCredentialMetadata{}, true},
+		"future expiry":    {ServiceCredentialMetadata{ExpiresAt: &future}, true},
+		"expires exactly":  {ServiceCredentialMetadata{ExpiresAt: &now}, true},
+		"expired":          {ServiceCredentialMetadata{ExpiresAt: &past}, false},
+		"revoked":          {ServiceCredentialMetadata{RevokedAt: &past}, false},
+		"revoked, in date": {ServiceCredentialMetadata{RevokedAt: &past, ExpiresAt: &future}, false},
+	} {
+		if got := tc.item.IsValid(now); got != tc.want {
+			t.Errorf("%s: IsValid = %v, want %v", name, got, tc.want)
+		}
+		if got := tc.item.Document(now)["is_valid"]; got != tc.want {
+			t.Errorf("%s: document is_valid = %v, want %v", name, got, tc.want)
 		}
 	}
 }

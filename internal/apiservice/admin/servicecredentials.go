@@ -258,8 +258,16 @@ func (o Operator) ListServiceCredentials(ctx context.Context, service string) ([
 	return list, rows.Err()
 }
 
-// Document is the value json.dumps(public_metadata(), sort_keys=True) writes for one credential.
-func (item ServiceCredentialMetadata) Document() map[string]any {
+// IsValid is InternalServiceCredential.is_valid(now): not revoked and not past expires_at.
+func (item ServiceCredentialMetadata) IsValid(now time.Time) bool {
+	if item.RevokedAt != nil {
+		return false
+	}
+	return item.ExpiresAt == nil || !now.After(*item.ExpiresAt)
+}
+
+// Document is the value json.dumps(public_metadata(now), sort_keys=True) writes for one credential.
+func (item ServiceCredentialMetadata) Document(now time.Time) map[string]any {
 	stamp := func(at *time.Time) any {
 		if at == nil {
 			return nil
@@ -273,6 +281,7 @@ func (item ServiceCredentialMetadata) Document() map[string]any {
 	return map[string]any{
 		"id": item.ID, "service_name": item.ServiceName, "token_prefix": item.TokenPrefix, "scopes": scopes,
 		"expires_at": stamp(item.ExpiresAt), "revoked_at": stamp(item.RevokedAt), "last_used_at": stamp(item.LastUsedAt),
+		"is_valid": item.IsValid(now),
 	}
 }
 

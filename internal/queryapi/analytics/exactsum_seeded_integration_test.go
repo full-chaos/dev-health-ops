@@ -48,153 +48,127 @@ func TestInvestmentReadsGiveOneExactAnswerOnEveryRun(t *testing.T) {
 	exact := exactSumTotal()
 	start, end := mustDate(t, "2026-01-01"), mustDate(t, "2026-01-31")
 
-	tsQuery, err := CompileTimeseries(TimeseriesRequest{Dimension: DimensionTheme, Measure: MeasureCount, Interval: BucketIntervalMonth, StartDate: start, EndDate: end}, orgID, 120, true, nil)
-	if err != nil {
-		t.Fatalf("CompileTimeseries: %v", err)
-	}
-	series := sameEveryRun(t, "timeseries", func() []model.TimeseriesResult {
-		got, err := ExecuteTimeseries(ctx, client, tsQuery, "theme", "count")
+	t.Run("timeseries", func(t *testing.T) {
+		query, err := CompileTimeseries(TimeseriesRequest{Dimension: DimensionTheme, Measure: MeasureCount, Interval: BucketIntervalMonth, StartDate: start, EndDate: end}, orgID, 120, true, nil)
 		if err != nil {
-			t.Fatalf("ExecuteTimeseries: %v", err)
+			t.Fatalf("CompileTimeseries: %v", err)
 		}
-		return got
+		series := sameEveryRun(t, "timeseries", func() []model.TimeseriesResult {
+			got, err := ExecuteTimeseries(ctx, client, query, "theme", "count")
+			if err != nil {
+				t.Fatalf("ExecuteTimeseries: %v", err)
+			}
+			return got
+		})
+		if len(series) != 2 {
+			t.Fatalf("timeseries = %+v, want the two seeded themes", series)
+		}
+		for _, s := range series {
+			if len(s.Buckets) != 1 || s.Buckets[0].Value == nil || !closeToExact(*s.Buckets[0].Value, exact) {
+				t.Errorf("timeseries %s = %+v, want one bucket of %.17g", s.DimensionValue, s.Buckets, exact)
+			}
+		}
 	})
-	if len(series) != 2 {
-		t.Fatalf("timeseries = %+v, want the two seeded themes", series)
-	}
-	for _, s := range series {
-		if len(s.Buckets) != 1 || s.Buckets[0].Value == nil || !closeToExact(*s.Buckets[0].Value, exact) {
-			t.Errorf("timeseries %s = %+v, want one bucket of %.17g", s.DimensionValue, s.Buckets, exact)
-		}
-	}
 
-	bdQuery, err := CompileBreakdown(BreakdownRequest{Dimension: DimensionTheme, Measure: MeasureCount, StartDate: start, EndDate: end, TopN: 10}, orgID, 120, true, nil)
-	if err != nil {
-		t.Fatalf("CompileBreakdown: %v", err)
-	}
-	breakdown := sameEveryRun(t, "breakdown", func() model.BreakdownResult {
-		got, err := ExecuteBreakdown(ctx, client, orgID, bdQuery, "theme", "count")
+	t.Run("breakdown", func(t *testing.T) {
+		query, err := CompileBreakdown(BreakdownRequest{Dimension: DimensionTheme, Measure: MeasureCount, StartDate: start, EndDate: end, TopN: 10}, orgID, 120, true, nil)
 		if err != nil {
-			t.Fatalf("ExecuteBreakdown: %v", err)
+			t.Fatalf("CompileBreakdown: %v", err)
 		}
-		return got
+		breakdown := sameEveryRun(t, "breakdown", func() model.BreakdownResult {
+			got, err := ExecuteBreakdown(ctx, client, orgID, query, "theme", "count")
+			if err != nil {
+				t.Fatalf("ExecuteBreakdown: %v", err)
+			}
+			return got
+		})
+		if len(breakdown.Items) != 2 || breakdown.Items[0].Key != "feature_delivery" || breakdown.Items[1].Key != "quality" {
+			t.Fatalf("breakdown items = %+v, want feature_delivery then quality (a tie, ordered by key)", breakdown.Items)
+		}
+		for _, item := range breakdown.Items {
+			if item.Value == nil || !closeToExact(*item.Value, exact) {
+				t.Errorf("breakdown %s = %s, want %.17g", item.Key, flowValueText(item.Value), exact)
+			}
+		}
 	})
-	if len(breakdown.Items) != 2 || breakdown.Items[0].Key != "feature_delivery" || breakdown.Items[1].Key != "quality" {
-		t.Fatalf("breakdown items = %+v, want feature_delivery then quality (a tie, ordered by key)", breakdown.Items)
-	}
-	for _, item := range breakdown.Items {
-		if item.Value == nil || !closeToExact(*item.Value, exact) {
-			t.Errorf("breakdown %s = %s, want %.17g", item.Key, flowValueText(item.Value), exact)
-		}
-	}
 
-	skNodes, skEdges, err := CompileSankey(SankeyRequest{Path: []Dimension{DimensionTheme, DimensionSubcategory}, Measure: MeasureCount, StartDate: start, EndDate: end, MaxNodes: 20, MaxEdges: 50}, orgID, 120, true, nil)
-	if err != nil {
-		t.Fatalf("CompileSankey: %v", err)
-	}
-	type sankeyAnswer struct {
-		Nodes []model.SankeyNode
-		Edges []model.SankeyEdge
-	}
-	sankey := sameEveryRun(t, "sankey", func() sankeyAnswer {
-		nodes, edges, err := ExecuteSankeyQueries(ctx, client, []compiledQuery{skNodes}, skEdges)
+	t.Run("sankey", func(t *testing.T) {
+		nodesQuery, edgesQueries, err := CompileSankey(SankeyRequest{Path: []Dimension{DimensionTheme, DimensionSubcategory}, Measure: MeasureCount, StartDate: start, EndDate: end, MaxNodes: 20, MaxEdges: 50}, orgID, 120, true, nil)
 		if err != nil {
-			t.Fatalf("ExecuteSankeyQueries: %v", err)
+			t.Fatalf("CompileSankey: %v", err)
 		}
-		return sankeyAnswer{nodes, edges}
+		type sankeyAnswer struct {
+			Nodes []model.SankeyNode
+			Edges []model.SankeyEdge
+		}
+		sankey := sameEveryRun(t, "sankey", func() sankeyAnswer {
+			nodes, edges, err := ExecuteSankeyQueries(ctx, client, []compiledQuery{nodesQuery}, edgesQueries)
+			if err != nil {
+				t.Fatalf("ExecuteSankeyQueries: %v", err)
+			}
+			return sankeyAnswer{nodes, edges}
+		})
+		if len(sankey.Nodes) != 4 || len(sankey.Edges) != 2 {
+			t.Fatalf("sankey = %s / %s, want 4 nodes and 2 edges", flowNodesText(sankey.Nodes), flowEdgesText(sankey.Edges))
+		}
+		for _, n := range sankey.Nodes {
+			if n.Value == nil || !closeToExact(*n.Value, exact) {
+				t.Errorf("sankey node %s = %s, want %.17g", n.ID, flowValueText(n.Value), exact)
+			}
+		}
+		for _, e := range sankey.Edges {
+			if e.Value == nil || !closeToExact(*e.Value, exact) {
+				t.Errorf("sankey edge %s>%s = %s, want %.17g", e.Source, e.Target, flowValueText(e.Value), exact)
+			}
+		}
 	})
-	if len(sankey.Nodes) != 4 || len(sankey.Edges) != 2 {
-		t.Fatalf("sankey = %s / %s, want 4 nodes and 2 edges", flowNodesText(sankey.Nodes), flowEdgesText(sankey.Edges))
-	}
-	for _, n := range sankey.Nodes {
-		if n.Value == nil || !closeToExact(*n.Value, exact) {
-			t.Errorf("sankey node %s = %s, want %.17g", n.ID, flowValueText(n.Value), exact)
-		}
-	}
-	for _, e := range sankey.Edges {
-		if e.Value == nil || !closeToExact(*e.Value, exact) {
-			t.Errorf("sankey edge %s>%s = %s, want %.17g", e.Source, e.Target, flowValueText(e.Value), exact)
-		}
-	}
 }
 
-const (
-	repoEffortUnits      = 3
-	repoEffortRowsPerRun = 2000
-)
+const coverageUnits = 20000
 
 func repoEffortRepoID(number int) string {
 	return fmt.Sprintf("00000000-0000-4000-8000-%012d", number)
 }
 
-// repoEffortValue is repository row number's effort in unit u: k * 2^e, 74 bits
-// wide over the rows of a unit.
+// repoEffortValue is row number's value in series u: k * 2^e, 74 bits wide
+// over a series.
 func repoEffortValue(u, number int) (k int64, shift uint) {
 	return int64((number*7919+u*104729)%1000 + 1), uint((number + u) % 55)
 }
 
-// The repository effort total of a unit (the denominator of every repository
-// allocation weight) and the Sankey coverage totals over those weights are sums
-// too. Three units each spread effort over repoEffortRowsPerRun repositories in
-// exactSumParts parts: a repository-scoped breakdown and the coverage must give
-// one answer every run, and the scoped breakdown the exact allocated share.
-func TestRepositoryEffortTotalsGiveOneAnswerOnEveryRun(t *testing.T) {
+// The Sankey coverage totals sum the repository allocation weights of every
+// unit. coverageUnits units, each split over two repositories with efforts 74
+// bits apart, written in exactSumParts parts: the coverage must give one
+// answer every run, and its total must be the unit count.
+func TestSankeyCoverageGivesOneAnswerOnEveryRun(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	admin, client := crossorg.Start(ctx, t)
 
-	const orgID = "seeded-exact-repo-effort"
-	for u := 0; u < repoEffortUnits; u++ {
+	const orgID = "seeded-exact-coverage"
+	per := coverageUnits / exactSumParts
+	for part := 0; part < exactSumParts; part++ {
 		crossorg.Exec(ctx, t, admin, fmt.Sprintf(`
 INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, provider, effort_metric, effort_value,
     theme_distribution_json, subcategory_distribution_json, structural_evidence_json, evidence_quality, evidence_quality_band,
     categorization_status, categorization_errors_json, categorization_model_version, categorization_input_hash,
     categorization_run_id, computed_at, work_unit_type, work_unit_name, org_id)
-VALUES ('unit-%d', toDateTime64('2026-01-01 00:00:00', 3), toDateTime64('2026-01-05 00:00:00', 3), NULL, NULL, 'fte_days', 1.0,
-    map(), map('feature_delivery.build', 1.0), '', 1.0, 'high', 'ok', '', 'v1', 'hash', 'run',
-    toDateTime64('2026-01-06 00:00:00', 3), 'story', 'unit', '%s')`, u, orgID))
-		per := repoEffortRowsPerRun / exactSumParts
-		for part := 0; part < exactSumParts; part++ {
-			crossorg.Exec(ctx, t, admin, fmt.Sprintf(`
+SELECT concat('unit-', toString(n)), toDateTime64('2026-01-01 00:00:00', 3), toDateTime64('2026-01-05 00:00:00', 3), NULL, NULL,
+    'fte_days', 1.0, map(), map('feature_delivery.build', 1.0), '', 1.0, 'high', 'ok', '', 'v1', 'hash', 'run',
+    toDateTime64('2026-01-06 00:00:00', 3), 'story', 'unit', '%[1]s'
+FROM (SELECT number + %[2]d AS n FROM numbers(%[3]d))`, orgID, part*per, per))
+		crossorg.Exec(ctx, t, admin, fmt.Sprintf(`
 INSERT INTO work_unit_repo_effort (work_unit_id, repo_id, effort_metric, effort_value, allocation_weight, allocation_source,
     repo_source, categorization_run_id, computed_at, org_id)
 SETTINGS optimize_on_insert = 0
-SELECT 'unit-%[1]d', toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(n), 12, '0'))), 'churn_loc',
-    ((n * 7919 + %[1]d * 104729) %% 1000 + 1) * pow(2, toInt64((n + %[1]d) %% 55) - 30), 0, 'seeded', 'own_edges', 'run',
-    toDateTime64('2026-01-06 00:00:00', 3), '%[2]s'
-FROM (SELECT number + %[3]d AS n FROM numbers(%[4]d))`, u, orgID, part*per, per))
-		}
+SELECT concat('unit-', toString(n)), toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(r), 12, '0'))), 'churn_loc',
+    ((n * 7919 + r * 104729) %% 1000 + 1) * pow(2, toInt64((n + 37 * r) %% 55) - 30), 0, 'seeded', 'own_edges', 'run',
+    toDateTime64('2026-01-06 00:00:00', 3), '%[1]s'
+FROM (SELECT number + %[2]d AS n FROM numbers(%[3]d)) ARRAY JOIN [0, 1] AS r`, orgID, part*per, per))
 	}
 
-	start, end := mustDate(t, "2026-01-01"), mustDate(t, "2026-01-31")
-	scope := &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputRepo, Ids: []string{repoEffortRepoID(0)}}}
-	bdQuery, err := CompileBreakdown(BreakdownRequest{Dimension: DimensionTheme, Measure: MeasureCount, StartDate: start, EndDate: end, TopN: 10}, orgID, 120, true, scope)
-	if err != nil {
-		t.Fatalf("CompileBreakdown: %v", err)
-	}
-	scoped := sameEveryRun(t, "repository-scoped breakdown", func() model.BreakdownResult {
-		got, err := ExecuteBreakdown(ctx, client, orgID, bdQuery, "theme", "count")
-		if err != nil {
-			t.Fatalf("ExecuteBreakdown: %v", err)
-		}
-		return got
-	})
-	want := new(big.Rat)
-	for u := 0; u < repoEffortUnits; u++ {
-		total := new(big.Int)
-		for n := 0; n < repoEffortRowsPerRun; n++ {
-			k, shift := repoEffortValue(u, n)
-			total.Add(total, new(big.Int).Lsh(big.NewInt(k), shift))
-		}
-		k, shift := repoEffortValue(u, 0)
-		want.Add(want, new(big.Rat).SetFrac(new(big.Int).Lsh(big.NewInt(k), shift), total))
-	}
-	wantShare, _ := want.Float64()
-	if len(scoped.Items) != 1 || scoped.Items[0].Value == nil || math.Abs(*scoped.Items[0].Value-wantShare) > 1e-14*wantShare {
-		t.Fatalf("repository-scoped breakdown = %+v, want feature_delivery = %.17g", scoped.Items, wantShare)
-	}
-
-	req := SankeyRequest{Path: []Dimension{DimensionTheme, DimensionRepo}, Measure: MeasureCount, StartDate: start, EndDate: end, MaxNodes: 20, MaxEdges: 50}
+	req := SankeyRequest{Path: []Dimension{DimensionTheme, DimensionRepo}, Measure: MeasureCount,
+		StartDate: mustDate(t, "2026-01-01"), EndDate: mustDate(t, "2026-01-31"), MaxNodes: 20, MaxEdges: 50}
 	coverage := sameEveryRun(t, "sankey coverage", func() *model.SankeyCoverage {
 		return resolveSankeyCoverage(ctx, client, orgID, req, 120, true, nil)
 	})

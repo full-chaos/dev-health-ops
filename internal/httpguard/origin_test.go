@@ -116,3 +116,19 @@ func TestNoRedirectsRecordsACrossOriginRefusal(t *testing.T) {
 		t.Fatalf("want one refused line, got %v", lines)
 	}
 }
+
+func TestALogLabelNeverCarriesALineBreakOrSpace(t *testing.T) {
+	hostile := &url.URL{Scheme: "ht\ntp", Host: "evil.test\nWARN forged line=1"}
+	label := OriginOf(hostile).Label()
+	if strings.ContainsAny(label, "\n\r \t") || !strings.HasPrefix(label, "other://evil.test_warn_forged_line_1") {
+		t.Fatalf("label %q is not sanitized", label)
+	}
+	var lines []string
+	previous := slog.Default()
+	slog.SetDefault(slog.New(captureHandler{&lines}))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	RecordLeftOrigin(context.Background(), ActionRefused, "test.site", mustURL(t, "https://a.test/"), hostile)
+	if len(lines) != 1 || strings.ContainsAny(lines[0], "\n\r") {
+		t.Fatalf("log line is not one clean line: %q", lines)
+	}
+}

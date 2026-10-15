@@ -53,15 +53,38 @@ func OriginOf(u *url.URL) Origin {
 // IsZero reports whether o is "no origin".
 func (o Origin) IsZero() bool { return o == Origin{} }
 
-// Label is scheme://host[:port], safe to log: it never holds userinfo, path or query.
+// Label is scheme://host[:port] for a log line. Every part comes from the server's URL, so each is reduced to a closed
+// alphabet: an unknown scheme becomes "other", any host or port character outside letters, digits and ".-:[]" becomes "_"
+// (a line break or space cannot survive), and the host is cut at 255 bytes. It never holds userinfo, path or query.
 func (o Origin) Label() string {
 	if o.IsZero() {
 		return ""
 	}
-	if o.port == "" {
-		return o.scheme + "://" + o.host
+	scheme := "other"
+	if o.scheme == "http" || o.scheme == "https" {
+		scheme = o.scheme
 	}
-	return o.scheme + "://" + o.host + ":" + o.port
+	label := scheme + "://" + logSafe(o.host, 255)
+	if o.port != "" {
+		label += ":" + logSafe(o.port, 5)
+	}
+	return label
+}
+
+func logSafe(text string, limit int) string {
+	if len(text) > limit {
+		text = text[:limit]
+	}
+	var out strings.Builder
+	for _, r := range text {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == ':', r == '[', r == ']':
+			out.WriteRune(r)
+		default:
+			out.WriteByte('_')
+		}
+	}
+	return out.String()
 }
 
 // SameOrigin reports whether a and b are one origin. Two URLs with no origin are not the same.

@@ -656,6 +656,7 @@ func computeRepoLinkedDelta(ctx context.Context, client QueryClient, spec metric
 		Metric: spec.Metric, Label: spec.Label, Unit: spec.Unit,
 		Value:    safeFloat(spec.Transform(currentValue)),
 		DeltaPct: pct, HasData: current.hasData, HasPriorData: previous.hasData,
+		PriorValue:        measuredPriorValue(spec, previousValue, current.hasData, previous.hasData),
 		Spark:             sparkPoints(current.series, spec.Transform),
 		RepoFilterApplied: &applied,
 

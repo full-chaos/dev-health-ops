@@ -228,4 +228,8 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// by org_id and written by the daily metrics job, so an organization's rows
 	// must go when the organization is deleted.
 	"repo_change_failure_daily": "112_change_failure_rate_incident_basis.sql",
+	// The issue size of each work unit (CHAOS-9619). Keyed by org_id and
+	// written by the investment worker, so an organization's rows must go when
+	// the organization is deleted.
+	"work_unit_issue_size": "130_work_unit_issue_size.sql",
 }

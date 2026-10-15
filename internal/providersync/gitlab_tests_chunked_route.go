@@ -343,7 +343,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	counted.Doer = gitLabTestsCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(client, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, &counted, root, &project); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
 		return err
 	}
 	cursor.Requests = requests
@@ -421,6 +421,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					}
 					jobPage, pageErr := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
 						Path:  root + "/pipelines/" + url.PathEscape(pipeline.RunID) + "/jobs",
+						Route: gitlabPipelineJobsRoute,
 						Query: url.Values{"include_retried": {"true"}}, PerPage: nativePerPage,
 						MaxPages: gitLabTestsPerRunJobPages,
 					})
@@ -505,7 +506,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			return budgetErr
 		default:
 			collection, visitErr := providerfoundation.VisitGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-				Path: root + "/pipelines", Query: query, PerPage: nativePerPage, MaxPages: allowance, InitialPage: cursor.Page,
+				Path: root + "/pipelines", Route: gitlabPipelinesRoute, Query: query, PerPage: nativePerPage, MaxPages: allowance, InitialPage: cursor.Page,
 			}, visit)
 			if visitErr != nil {
 				return visitErr
@@ -583,7 +584,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					suites, cases = reportSuites, reportCases
 				}
 				jobPage, jobErr := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-					Path: root + "/pipelines/" + url.PathEscape(runID) + "/jobs", PerPage: nativePerPage, MaxPages: 1, SinglePage: true,
+					Path: root + "/pipelines/" + url.PathEscape(runID) + "/jobs", Route: gitlabPipelineJobsRoute, PerPage: nativePerPage, MaxPages: 1, SinglePage: true,
 				})
 				if jobErr != nil {
 					if fatal := gitLabTestsOptionalError(ctx, jobErr); fatal != nil {
@@ -676,7 +677,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		return reportBudgetErr
 	default:
 		collection, visitErr := providerfoundation.VisitGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-			Path: root + "/pipelines", Query: reportQuery, PerPage: nativePerPage, MaxPages: reportAllowance, InitialPage: cursor.Page,
+			Path: root + "/pipelines", Route: gitlabPipelinesRoute, Query: reportQuery, PerPage: nativePerPage, MaxPages: reportAllowance, InitialPage: cursor.Page,
 		}, reportVisit)
 		if visitErr != nil {
 			return visitErr

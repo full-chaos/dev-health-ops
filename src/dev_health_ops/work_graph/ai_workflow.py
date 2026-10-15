@@ -173,9 +173,12 @@ async def load_ai_workflow_graph(
         next_frontier: set[tuple[str, str]] = set()
         for row in rows:
             edge = _edge_from_row(row)
-            if not edge.edge_id or edge.edge_id in edges_by_id:
+            # A deployment-incident edge id names (deployment, incident); two
+            # repositories that run one deployment id each hold their own row.
+            edge_key = f"{edge.edge_id}\x00{edge.repo_id or ''}"
+            if not edge.edge_id or edge_key in edges_by_id:
                 continue
-            edges_by_id[edge.edge_id] = edge
+            edges_by_id[edge_key] = edge
             _add_node(nodes, edge.source_type, edge.source_id)
             _add_node(nodes, edge.target_type, edge.target_id)
             for key in (

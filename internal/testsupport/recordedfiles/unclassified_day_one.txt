@@ -409,7 +409,6 @@ internal/jobs/metrics/complexity/pycc/testdata/python_radon_cc_oracle.py
 internal/jobs/metrics/complexity/testdata/python_blame_maxfiles_oracle.py
 internal/jobs/metrics/complexity/testdata/python_should_process_oracle.py
 internal/jobs/metrics/daily/testdata/python_daily_discover_oracle.py
-internal/jobs/metrics/daily/testdata/testops_test_and_risk_outputs.golden
 internal/jobs/metrics/remaining/testdata/generate_recommendations_engine_golden.py
 internal/jobs/metrics/remaining/testdata/generate_recommendations_loader_golden.py
 internal/jobs/metrics/remaining/testdata/generate_recommendations_signals_golden.py

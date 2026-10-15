@@ -156,7 +156,7 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 	resolver := identityalias.LoadDefault()
 
 	teamPages, err := providerfoundation.CollectGitHubLinkPages(ctx, collector.Client, providerfoundation.GitHubPageOptions{
-		Path: "/orgs/" + url.PathEscape(org) + "/teams", Query: perPageQuery(perPage),
+		Path: "/orgs/" + url.PathEscape(org) + "/teams", Route: "/orgs/{org}/teams", Query: perPageQuery(perPage),
 		MaxPages: maxPages,
 	})
 	evidence.Pages += teamPages.Pages
@@ -192,7 +192,7 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 		var repoPatterns []string
 		if wantTeams {
 			repoPages, err := providerfoundation.CollectGitHubLinkPages(ctx, collector.Client, providerfoundation.GitHubPageOptions{
-				Path:  "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/repos",
+				Path: "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/repos", Route: "/orgs/{org}/teams/{slug}/repos",
 				Query: perPageQuery(perPage), MaxPages: maxPages,
 			})
 			evidence.Pages += repoPages.Pages
@@ -311,7 +311,7 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 	emailCache map[string]*string,
 ) ([]githubMembershipRow, bool, bool, error) {
 	pages, err := providerfoundation.CollectGitHubLinkPages(ctx, collector.Client, providerfoundation.GitHubPageOptions{
-		Path:  "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/members",
+		Path: "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/members", Route: "/orgs/{org}/teams/{slug}/members",
 		Query: perPageQuery(perPage), MaxPages: maxPages,
 	})
 	if err != nil {

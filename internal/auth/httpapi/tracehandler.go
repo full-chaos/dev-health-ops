@@ -57,8 +57,8 @@ func TraceHandler(next http.Handler, options TraceOptions) http.Handler {
 		returned := false
 		defer func() {
 			pattern := registeredPattern(traced)
-			observer.finish(span, boundedMethod(r.Method), pattern, recorder.status, !returned, recorder.notFoundCause.Load())
-			access.observe(traced, pattern, recorder.status, time.Since(start))
+			observer.finish(span, boundedMethod(r.Method), pattern, recorder.status, !returned, recorder.notFoundCause.Load(), recorder.graphQL.load())
+			access.observe(traced, pattern, recorder.status, time.Since(start), recorder.graphQL.load())
 		}()
 		next.ServeHTTP(recorder, traced)
 		returned = true

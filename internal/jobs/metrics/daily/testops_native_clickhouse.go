@@ -430,6 +430,11 @@ func writeTestopsPipelineMetrics(
 	return len(metrics), nil
 }
 
+func uint32PtrOf(n int) *uint32 {
+	v := uint32(n)
+	return &v
+}
+
 func writeTestopsTestMetrics(
 	ctx context.Context, conn testopsNativeBatchConn, organizationID string,
 	day time.Time, computedAt time.Time, metrics []testops.TestMetric,
@@ -441,7 +446,7 @@ func writeTestopsTestMetrics(
 		repo_id, day, total_cases, passed_count, failed_count, skipped_count, quarantined_count,
 		pass_rate, failure_rate, flake_rate, retry_dependency_rate, total_suites,
 		suite_duration_p50_seconds, suite_duration_p95_seconds, failure_recurrence_score,
-		team_id, service_id, org_id, computed_at)`)
+		team_id, service_id, org_id, computed_at, flake_cases, distinct_cases)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare testops_test_metrics_daily batch: %w", err)
 	}
@@ -459,6 +464,10 @@ func writeTestopsTestMetrics(
 			uint32(metric.TotalSuites),
 			metric.SuiteDurationP50Seconds, metric.SuiteDurationP95Seconds, metric.FailureRecurrence,
 			metric.TeamID, metric.ServiceID, organizationID, computedAt.UTC(),
+			// flake_cases/distinct_cases are Nullable(UInt32): a row written before
+			// the columns existed reads NULL, a row written now carries both counts
+			// (CHAOS-9737), so the org series can sum them.
+			uint32PtrOf(metric.FlakeCases), uint32PtrOf(metric.DistinctCases),
 		); err != nil {
 			return 0, fmt.Errorf("append testops_test_metrics_daily row: %w", err)
 		}

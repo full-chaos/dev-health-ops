@@ -340,7 +340,7 @@ func (a *PagerDutyClientCredentialsAuth) accessToken(ctx context.Context) (secre
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response, err := httpguard.NoRedirectsDoer(a.doer).Do(request) // the client secret rides the form body
 	if err != nil {
-		return secrets.Value{}, &ProviderError{Class: ErrorTransient}
+		return secrets.Value{}, transportProviderError("pagerduty", err, 1)
 	}
 	defer response.Body.Close()
 	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {
@@ -474,7 +474,7 @@ func (a *GitHubAppAuth) installationToken(ctx context.Context) (secrets.Value, e
 	request.Header.Set("Accept", "application/vnd.github+json")
 	response, err := httpguard.NoRedirectsDoer(a.doer).Do(request) // the app JWT rides this request
 	if err != nil {
-		return secrets.Value{}, &ProviderError{Class: ErrorTransient}
+		return secrets.Value{}, transportProviderError("github", err, 1)
 	}
 	defer response.Body.Close()
 	if classification := ClassifyHTTP("github", response.StatusCode, response.Header); classification != nil {

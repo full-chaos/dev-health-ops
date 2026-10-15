@@ -206,7 +206,7 @@ func (h PagerDutyOAuthHydrator) refreshTokens(
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response, err := pagerDutyFormClient(h.Doer, 45*time.Second).Do(request) // client_secret and refresh_token ride the form body
 	if err != nil {
-		return Credential{}, PagerDutyOAuthTokenRotation{}, &ProviderError{Class: ErrorTransient}
+		return Credential{}, PagerDutyOAuthTokenRotation{}, transportProviderError("pagerduty", err, 1)
 	}
 	defer response.Body.Close()
 	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {

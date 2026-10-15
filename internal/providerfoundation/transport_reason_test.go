@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
@@ -99,4 +100,25 @@ func TestClassifyTransportReason(t *testing.T) {
 			t.Errorf("%s: got %q want %q", name, got, tc.want)
 		}
 	}
+}
+
+func TestAuthHelpersSurfaceTransportReason(t *testing.T) {
+	cause := x509.UnknownAuthorityError{}
+	want := func(name string, err error) {
+		t.Helper()
+		var providerErr *ProviderError
+		if !errors.As(err, &providerErr) || providerErr.Reason != TransportReasonTLSUnknownAuthority || providerErr.Class != ErrorTransient {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	credential := NewCredential("pagerduty", "id", map[string]string{"auth_mode": "client_credentials"}, map[string]secrets.Value{
+		"client_id": secrets.NewValue("cid"), "client_secret": secrets.NewValue("csecret"), "subdomain": secrets.NewValue("acme")})
+	auth, err := NewPagerDutyClientCredentialsAuth(credential, fakehttp.Client(errDoer{cause}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := http.NewRequest(http.MethodGet, "https://api.pagerduty.com/x", nil)
+	want("pagerduty client credentials", auth.Apply(request))
+	want("pagerduty revoke", RevokePagerDutyOAuthToken(context.Background(), fakehttp.Client(errDoer{cause}), PagerDutyRevokeConfig{ClientID: "cid"}, "tok"))
+	want("github app", transportProviderError("github", cause, 1))
 }

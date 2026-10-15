@@ -1,6 +1,9 @@
 -- work_graph_pr_commit keeps the link of the highest tier for a pair, whatever
 -- the sync order (a sync race).
 --
+-- Limit: a native row the old engine already merged away is gone, and a
+-- migration cannot restore it. A provider re-sync re-emits it (see the PR).
+--
 -- The table was ReplacingMergeTree(last_synced). The native writer (provider
 -- sync) and the text tier (prcommit.ProduceLinks) both stamp their rows with
 -- the time of their own run, so a text row written after a native row for the

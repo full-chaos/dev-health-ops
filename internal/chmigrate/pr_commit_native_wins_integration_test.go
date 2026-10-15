@@ -4,9 +4,11 @@ package chmigrate_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -90,5 +92,85 @@ func TestPRCommitNativeWinsWhateverTheSyncOrder(t *testing.T) {
 		if provenance != c.wantTier || evidence != c.wantSource || rows != 1 {
 			t.Errorf("%s: served %s/%s rows=%d, want %s/%s rows=1", c.name, provenance, evidence, rows, c.wantTier, c.wantSource)
 		}
+	}
+}
+
+// The named limit of migration 132: a pair whose native row the old ReplacingMergeTree(last_synced) already merged
+// away (native stamped before text) is not restored by the migration, which copies only the rows that remain. The
+// repair is a data step: a provider re-sync (dho backfill run) re-emits the native link with a new last_synced, and
+// the new version_rank then keeps it over the text row. A pair whose rows both remain physically is repaired by the copy.
+func TestPRCommitMigrationCannotRestoreANativeRowTheOldEngineAlreadyMergedAway(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	chschema.Apply(ctx, t, instance)
+
+	const repo = "11111111-2222-4333-8444-555555555555"
+	const org = "00000000-0000-4000-8000-000000000001"
+	run := func(path string) {
+		t.Helper()
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, statement := range chmigrate.SplitStatements(string(body)) {
+			if err := conn.Exec(ctx, statement); err != nil {
+				t.Fatalf("%s: %v", statement, err)
+			}
+		}
+	}
+	insert := func(pr int, provenance, evidence, at string) {
+		t.Helper()
+		if err := conn.Exec(ctx, `INSERT INTO work_graph_pr_commit (repo_id, pr_number, commit_hash, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, 'abc', 1, ?, ?, ?, ?)`,
+			repo, uint32(pr), provenance, evidence, at, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	served := func(pr int) string {
+		t.Helper()
+		var provenance string
+		if err := conn.QueryRow(ctx, `SELECT any(provenance) FROM work_graph_pr_commit FINAL WHERE org_id = ? AND pr_number = ? AND commit_hash = 'abc'`,
+			org, uint32(pr)).Scan(&provenance); err != nil {
+			t.Fatal(err)
+		}
+		return provenance
+	}
+
+	run("rollback/132_pr_commit_native_wins.down.sql")
+	insert(1, "native", "api_pr_commits", "2026-10-15 10:00:01")
+	insert(1, "explicit_text", "commit_message", "2026-10-15 10:00:02")
+	if err := conn.Exec(ctx, `OPTIMIZE TABLE work_graph_pr_commit FINAL`); err != nil {
+		t.Fatal(err)
+	}
+	insert(2, "native", "api_pr_commits", "2026-10-15 10:00:01")
+	insert(2, "explicit_text", "commit_message", "2026-10-15 10:00:02")
+	if got := served(1); got != "explicit_text" {
+		t.Fatalf("old engine after the merge serves %s, want explicit_text (the lost native row)", got)
+	}
+
+	run("sql/132_pr_commit_native_wins.sql")
+	if got := served(1); got != "explicit_text" {
+		t.Errorf("migration 132 restored a merged-away native row: serves %s; the limit changed, update the RISK-NOTES data step", got)
+	}
+	if got := served(2); got != "native" {
+		t.Errorf("a pair whose rows both remained physically serves %s after the migration, want native", got)
+	}
+
+	insert(1, "native", "api_pr_commits", "2026-10-16 09:00:00")
+	if got := served(1); got != "native" {
+		t.Errorf("after the provider re-sync the lost pair serves %s, want native", got)
 	}
 }

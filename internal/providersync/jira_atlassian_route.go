@@ -287,7 +287,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	if jiraStoryPointsDiscoveryNeeded(claim) {
 		discovered, discoverErr := discoverJiraStoryPointsFields(ctx, client)
 		if discoverErr != nil {
-			optionalIncomplete = append(optionalIncomplete, "story_points_field")
+			return CompleteRouteBatch{}, discoverErr
 		}
 		pointsFields = discovered
 	}

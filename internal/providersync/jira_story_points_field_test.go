@@ -155,6 +155,15 @@ func jiraPointsByKey(t *testing.T, batch CompleteRouteBatch) map[string]*float64
 
 func collectJiraPoints(t *testing.T, live bool, options map[string]any, route *jiraPointsRoute) CompleteRouteBatch {
 	t.Helper()
+	batch, err := tryCollectJiraPoints(t, live, options, route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return batch
+}
+
+func tryCollectJiraPoints(t *testing.T, live bool, options map[string]any, route *jiraPointsRoute) (CompleteRouteBatch, error) {
+	t.Helper()
 	claim := nativeTestClaim("jira", "work-items")
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = options
@@ -167,10 +176,7 @@ func collectJiraPoints(t *testing.T, live bool, options map[string]any, route *j
 	} else {
 		batch, err = (JiraWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t)}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	return batch
+	return batch, err
 }
 
 func TestJiraRoutesDiscoverTheStoryPointsFieldWhenUnset(t *testing.T) {
@@ -210,17 +216,23 @@ func TestJiraRoutesSkipDiscoveryWhenTheFieldIsConfigured(t *testing.T) {
 	}
 }
 
-func TestJiraRoutesHoldTheWatermarkWhenTheFieldListFails(t *testing.T) {
-	for _, live := range []bool{true, false} {
-		route := &jiraPointsRoute{fieldCode: http.StatusForbidden, fieldBody: `{}`}
-		batch := collectJiraPoints(t, live, map[string]any{"fetch_comments": false}, route)
-		incomplete, _ := batch.Result["incomplete"].([]string)
-		if batch.Watermark != nil || len(incomplete) != 1 || incomplete[0] != "story_points_field" {
-			t.Fatalf("live=%v watermark=%v incomplete=%v want the run held with story_points_field named", live, batch.Watermark, batch.Result["incomplete"])
-		}
-		for key, points := range jiraPointsByKey(t, batch) {
-			if points != nil {
-				t.Fatalf("live=%v %s invented points %v without a field", live, key, *points)
+func TestJiraRoutesStopTheRunWhenTheFieldListFails(t *testing.T) {
+	type response struct {
+		code int
+		body string
+	}
+	bodies := map[string]response{
+		"forbidden":  {http.StatusForbidden, `{}`},
+		"null body":  {http.StatusOK, `null`},
+		"empty list": {http.StatusOK, `[]`},
+		"not a list": {http.StatusOK, `{"fields":[]}`},
+	}
+	for name, seed := range bodies {
+		for _, live := range []bool{true, false} {
+			route := &jiraPointsRoute{fieldCode: seed.code, fieldBody: seed.body}
+			batch, err := tryCollectJiraPoints(t, live, map[string]any{"fetch_comments": false}, route)
+			if err == nil || batch.Watermark != nil || len(batch.Effects) != 0 {
+				t.Fatalf("%s live=%v err=%v watermark=%v effects=%d want the run stopped with no rows (a NULL row would overwrite stored points)", name, live, err, batch.Watermark, len(batch.Effects))
 			}
 		}
 	}

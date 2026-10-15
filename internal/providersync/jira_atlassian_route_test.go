@@ -68,7 +68,7 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 		}
 		body = doer.devStatusBody
 	case request.URL.Path == "/rest/api/3/field":
-		body = `[]`
+		body = `[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`
 	default:
 		doer.t.Fatalf("unexpected Atlassian request %s", request.URL.String())
 	}
@@ -224,7 +224,7 @@ func TestJiraAtlassianRouteCountsFailedAndRetriedAttemptsAcrossPaths(t *testing.
 			boardAttempts++
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
 		case request.URL.Path == "/rest/api/3/field":
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		default:
 			t.Fatalf("unexpected Atlassian request %s", request.URL.String())
 			return nil, nil
@@ -290,7 +290,7 @@ func TestJiraAtlassianRouteCountsFailedAndRetriedWorklogAndSprintAttempts(t *tes
 			sprintAttempts++
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
 		case request.URL.Path == "/rest/api/3/field":
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		default:
 			t.Fatalf("unexpected Atlassian request %s", request.URL.String())
 			return nil, nil
@@ -492,7 +492,7 @@ func TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues(t *testing.T) {
 			// exactly the remaining budget (2), leaving 0 for OPS-302.
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
 		case request.URL.Path == "/rest/api/3/field":
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		default:
 			t.Fatalf("unexpected request %s", request.URL.String())
 			return nil, nil
@@ -557,7 +557,7 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 			// should remain after OPS-401's single no-op call.
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
 		case request.URL.Path == "/rest/api/3/field":
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		default:
 			t.Fatalf("unexpected request %s", request.URL.String())
 			return nil, nil
@@ -787,7 +787,7 @@ func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
 					}
 					return respond(http.StatusOK, github)
 				case request.URL.Path == "/rest/api/3/field":
-					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
+					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 				default:
 					t.Fatalf("unexpected request %s", request.URL.String())
 					return nil, nil

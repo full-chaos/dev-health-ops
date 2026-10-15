@@ -46,7 +46,7 @@ func (doer *jiraWorkItemsDoer) Do(request *http.Request) (*http.Response, error)
 	case request.URL.Path == "/rest/agile/1.0/sprint/9001":
 		body = `{"id":9001,"name":"July support","state":"closed","startDate":"2026-07-01T00:00:00Z","endDate":"2026-07-15T00:00:00Z","completeDate":"2026-07-16T00:00:00Z"}`
 	case request.URL.Path == "/rest/api/3/field":
-		body = `[]`
+		body = `[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`
 	default:
 		doer.t.Fatalf("unexpected Jira request %s", request.URL.String())
 	}
@@ -204,7 +204,7 @@ func TestJiraWorkItemsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 			sprintAttempts++
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
 		case request.URL.Path == "/rest/api/3/field":
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		default:
 			t.Fatalf("unexpected Jira request %s", request.URL.String())
 			return nil, nil
@@ -249,7 +249,7 @@ func TestJiraWorkItemsRouteOptionalCommentFailureIsTypedAndDoesNotAdvance(t *tes
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"issues":[{"key":"OPS-103","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-103","fields":{"project":{"key":"OPS"},"summary":"Optional child failure","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-07-20T00:00:00Z","updated":"2026-07-21T00:00:00Z"},"changelog":{"histories":[]}}],"isLast":true}`)), Request: request}, nil
 		}
 		if request.URL.Path == "/rest/api/3/field" {
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		}
 		return nil, errors.New("comments endpoint unavailable")
 	})

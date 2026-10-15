@@ -27,13 +27,21 @@ type jiraFieldMetadata struct {
 // discoverJiraStoryPointsFields reads GET /rest/api/3/field once and returns
 // the ids of the custom number fields named like a story point field, in
 // preference order. A non-number field with a matching name is never used.
+// A failed lookup is an error: the caller stops the run, because persisting
+// NULL story points would overwrite the stored values.
 func discoverJiraStoryPointsFields(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
 ) ([]string, error) {
 	var fields []jiraFieldMetadata
-	if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/field", nil, &fields); err != nil {
-		slog.Warn("providersync.jira.story_points_field_discovery_failed")
+	err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/field", nil, &fields)
+	// Jira always lists its system fields: a null or empty body is a broken
+	// lookup, never "this site has no points field".
+	if err == nil && len(fields) == 0 {
+		err = providerfoundation.ErrNormalizationInvalid
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "providersync.jira.story_points_field_discovery_failed")
 		return nil, err
 	}
 	return pickJiraStoryPointsFields(ctx, fields), nil
@@ -105,6 +113,6 @@ func (stats *jiraStoryPointsStats) observe(item jiraWorkItemRow) {
 }
 
 func (stats jiraStoryPointsStats) log(ctx context.Context) {
-	slog.DebugContext(ctx, "providersync.jira.story_points_sized",
+	slog.InfoContext(ctx, "providersync.jira.story_points_sized",
 		"sized", stats.sized, "unsized", stats.unsized)
 }

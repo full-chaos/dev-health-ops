@@ -48,7 +48,7 @@ func (doer jiraSearchJQLMigrationDoer) Do(request *http.Request) (*http.Response
 			Body:       io.NopCloser(strings.NewReader(body)), Request: request,
 		}, nil
 	case request.URL.Path == "/rest/api/3/field":
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 	default:
 		doer.t.Fatalf("unexpected Jira request %s", request.URL.String())
 		return nil, nil

@@ -3,6 +3,7 @@ package synccli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"strconv"
@@ -106,6 +107,8 @@ var (
 type credentialLookupFailure struct {
 	Reason, Class, Type string
 	HasToken, HasApp    bool
+	IgnoredFields       []string
+	IgnoredCount        int
 	IntegrationIDs      []string
 }
 
@@ -131,11 +134,28 @@ const (
 // logCredentialLookupFailure writes the Warn line for a failure of the stored
 // credential lookup: the reason and what names it, never a value.
 func logCredentialLookupFailure(ctx context.Context, orgID string, failure credentialLookupFailure) {
-	slog.WarnContext(ctx, credentialLookupFailedEvent,
+	attrs := []any{
 		"org_id", orgID, "reason", failure.Reason,
 		"error_class", failure.Class, "error_type", failure.Type,
 		"payload_holds", failure.payloadHolds(),
-		"integration_ids", strings.Join(failure.IntegrationIDs, ","))
+		"integration_ids", strings.Join(failure.IntegrationIDs, ","),
+	}
+	if failure.Reason == reasonCredentialShapeInvalid {
+		attrs = append(attrs, "ignored_fields", ignoredFieldsText(failure.IgnoredFields), "ignored_field_count", failure.IgnoredCount)
+	}
+	slog.WarnContext(ctx, credentialLookupFailedEvent, attrs...)
+}
+
+// maxLoggedFieldNames bounds the ignored key names a refusal line carries. The names are the
+// payload's own keys, never their values, and a payload can hold many of them.
+const maxLoggedFieldNames = 20
+
+// ignoredFieldsText is the sorted, bounded list of ignored key names for a refusal line.
+func ignoredFieldsText(names []string) string {
+	if len(names) <= maxLoggedFieldNames {
+		return strings.Join(names, ",")
+	}
+	return strings.Join(names[:maxLoggedFieldNames], ",") + fmt.Sprintf(",(%d more)", len(names)-maxLoggedFieldNames)
 }
 
 // payloadHolds says what a refused payload held, as a word: the production logger
@@ -468,6 +488,7 @@ func githubCredentialFromJSON(plaintext []byte) (credential *GitHubCredentials, 
 	if errors.As(decodeErr, &refused) {
 		failure := lookupFailure(storedFailureReason(refused.Reason))
 		failure.HasToken, failure.HasApp = refused.HasToken, refused.HasApp
+		failure.IgnoredFields, failure.IgnoredCount = refused.Ignored, refused.IgnoredCount
 		return nil, nil, failure
 	}
 	if decodeErr != nil {

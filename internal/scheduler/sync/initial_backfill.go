@@ -175,7 +175,7 @@ func (enqueuer *initialBackfillEnqueuer) enqueuePending(ctx context.Context, now
 	return nil
 }
 
-// candidates are the configurations whose first successful (non-backfill) run
+// candidates are the configurations whose own first successful (non-backfill) run, the one their occurrence planned,
 // completed inside the age bound and that have no occurrence at that instant.
 func (enqueuer *initialBackfillEnqueuer) candidates(ctx context.Context, now time.Time, limit int) ([]initialBackfillCandidate, error) {
 	rows, err := enqueuer.pool.Query(ctx, `
@@ -186,6 +186,8 @@ JOIN public.integrations AS integration
 JOIN LATERAL (
   SELECT run.created_at, run.completed_at
   FROM public.sync_runs AS run
+  JOIN public.scheduled_sync_occurrences AS owner
+    ON owner.sync_run_id = run.id AND owner.sync_config_id = cfg.id
   WHERE run.org_id = cfg.org_id AND run.integration_id = cfg.integration_id
     AND run.status = 'success' AND run.triggered_by <> 'backfill' AND run.completed_at IS NOT NULL
   ORDER BY run.completed_at, run.id

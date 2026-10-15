@@ -32,18 +32,52 @@ VALUES ($1, 'ib', 'ib', '{}', $2, true, $3, $3)`, fixture.org, tier, now); err !
 
 func (fixture webhookRequestFixture) successRun(t *testing.T, triggeredBy string, completedAt time.Time) {
 	t.Helper()
-	if _, err := fixture.pool.Exec(context.Background(), `
+	fixture.runOf(t, fixture.configID, triggeredBy, "success", completedAt.Add(-5*time.Minute), completedAt)
+}
+
+// runOf writes one run of the integration owned by the configuration's own
+// occurrence (a different instant from the enqueuer's, so identities never meet).
+func (fixture webhookRequestFixture) runOf(t *testing.T, configID, triggeredBy, status string, createdAt, completedAt time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	var runID string
+	if err := fixture.pool.QueryRow(ctx, `
 INSERT INTO sync_runs (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units, created_at, completed_at)
-VALUES (gen_random_uuid(), $1, $2::uuid, $3, 'incremental', 'success', 1, 1, 0, $4, $5)`,
-		fixture.org, fixture.integrationID, triggeredBy, completedAt.Add(-5*time.Minute), completedAt); err != nil {
+VALUES (gen_random_uuid(), $1, $2::uuid, $3, 'incremental', $4, 1, 1, 0, $5, $6) RETURNING id::text`,
+		fixture.org, fixture.integrationID, triggeredBy, status, createdAt, completedAt).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := fixture.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	config, err := synchandoff.LoadConfig(ctx, tx, configID)
+	if err != nil || config == nil {
+		t.Fatalf("load config: %v", err)
+	}
+	at := createdAt.Add(-time.Second)
+	trigger, err := synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{Mode: "incremental", TriggeredBy: "manual", ScheduledFor: &at}, createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE scheduled_sync_occurrences SET sync_run_id = $2::uuid WHERE occurrence_id = $1`, trigger.OccurrenceID, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// rollInstant is the roll: before the fixture's first run, after the epoch.
+// rollInstant is the roll: before the fixture's first run.
 func rollInstant(t *testing.T, _ webhookRequestFixture) time.Time {
 	t.Helper()
 	return time.Now().UTC().Add(-time.Hour)
+}
+
+func (fixture webhookRequestFixture) countWhere(t *testing.T, from, where string) int {
+	t.Helper()
+	return fixture.count(t, from+" WHERE "+where)
 }
 
 type initialBackfillState struct {
@@ -53,8 +87,8 @@ type initialBackfillState struct {
 func (fixture webhookRequestFixture) initialBackfillState(t *testing.T) initialBackfillState {
 	t.Helper()
 	return initialBackfillState{
-		occurrences: fixture.count(t, "scheduled_sync_occurrences"),
-		triggers:    fixture.count(t, "sync_manual_triggers"),
+		occurrences: fixture.countWhere(t, "scheduled_sync_occurrences o JOIN sync_manual_triggers t USING (occurrence_id)", "t.triggered_by = 'backfill'"),
+		triggers:    fixture.count(t, "sync_manual_triggers WHERE triggered_by = 'backfill'"),
 		jobs:        fixture.count(t, "backfill_jobs"),
 	}
 }
@@ -81,7 +115,7 @@ func TestInitialBackfillEnqueuesOnceAfterTheFirstSuccess(t *testing.T) {
 	var since, before time.Time
 	if err := fixture.pool.QueryRow(ctx, `
 SELECT o.scheduled_for, t.mode, t.triggered_by, t.since, t.before
-FROM scheduled_sync_occurrences o JOIN sync_manual_triggers t USING (occurrence_id)`).Scan(&scheduledFor, &mode, &triggeredBy, &since, &before); err != nil {
+FROM scheduled_sync_occurrences o JOIN sync_manual_triggers t USING (occurrence_id) WHERE t.triggered_by = 'backfill'`).Scan(&scheduledFor, &mode, &triggeredBy, &since, &before); err != nil {
 		t.Fatal(err)
 	}
 	if !scheduledFor.Equal(completed) || mode != "backfill" || triggeredBy != "backfill" {
@@ -259,12 +293,7 @@ func TestInitialBackfillEnqueuesALateFirstSuccess(t *testing.T) {
 func TestInitialBackfillIgnoresAConfigWithAPreRollFailedAttempt(t *testing.T) {
 	fixture := initialBackfillFixture(t, "team")
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	if _, err := fixture.pool.Exec(context.Background(), `
-INSERT INTO sync_runs (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units, created_at, completed_at)
-VALUES (gen_random_uuid(), $1, $2::uuid, 'schedule', 'incremental', 'failed', 1, 0, 1, $3, $3)`,
-		fixture.org, fixture.integrationID, now.Add(-3*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	fixture.runOf(t, fixture.configID, "schedule", "failed", now.Add(-3*time.Hour), now.Add(-3*time.Hour))
 	fixture.successRun(t, "schedule", now.Add(-10*time.Minute))
 
 	enqueuer := newInitialBackfillEnqueuer(fixture.pool, now.Add(-time.Hour))
@@ -294,5 +323,28 @@ func TestInitialBackfillSkipsASourceScopedChild(t *testing.T) {
 	}
 	if got := enqueuer.outcomes[InitialBackfillSkipNotPlanner]; got != 1 {
 		t.Fatalf("not_planner_managed counted %d times, want once", got)
+	}
+}
+
+// A success of a legacy child configuration of the integration is not a first
+// sync of the planner-managed parent, which has never synced.
+func TestInitialBackfillIgnoresAChildRunForTheParent(t *testing.T) {
+	fixture := initialBackfillFixture(t, "team")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	var childID string
+	if err := fixture.pool.QueryRow(context.Background(), `
+INSERT INTO sync_configurations (id, org_id, name, provider, integration_id, source_id, sync_targets, sync_options, is_active, planner_managed, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, 'child', 'github', $2, $3, '[]', '{}', true, false, $4, $4) RETURNING id::text`,
+		fixture.org, fixture.integrationID, fixture.sourceID, now).Scan(&childID); err != nil {
+		t.Fatal(err)
+	}
+	fixture.runOf(t, childID, "schedule", "success", now.Add(-15*time.Minute), now.Add(-10*time.Minute))
+
+	enqueuer := newInitialBackfillEnqueuer(fixture.pool, rollInstant(t, fixture))
+	if err := enqueuer.enqueuePending(context.Background(), now, 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.initialBackfillState(t); got != (initialBackfillState{}) {
+		t.Fatalf("state = %+v, want nothing: the parent never synced", got)
 	}
 }

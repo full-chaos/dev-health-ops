@@ -67,8 +67,8 @@ def _run_harness(tmp_path: Path, *args: str) -> tuple[int, list[list[str]]]:
     """Run the harness in an isolated root with a recording docker and gh; return its exit
     status and every docker call it made."""
     root = tmp_path / "root"
-    (root / "compose").mkdir(parents=True)
-    (root / "compose" / "compose.bigboy.images.yml").write_text(
+    (root / "_records").mkdir(parents=True)
+    (root / "_records" / "compose.bigboy.images.yml").write_text(
         f"services:\n  venue-prove:\n    image: ghcr.io/example/go-api-tools@{DIGEST}\n",
         encoding="utf-8",
     )

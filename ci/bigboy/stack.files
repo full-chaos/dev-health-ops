@@ -18,8 +18,7 @@ stack project  dev-health
 stack env-file ops/.env
 stack tools    compose.bigboy.base.yml
 stack tools    compose.bigboy.go-workers.yml
-stack root     .remember/lanes/team-lead/reconciler-sweep-override.yml
-stack root     compose/compose.bigboy.images.yml
+stack root     _records/compose.bigboy.images.yml
 stack tools    compose.bigboy.workers.yml
 stack tools    compose.bigboy.clickhouse-users.yml
 stack tools    compose.bigboy.billing-edge.yml
@@ -29,8 +28,7 @@ smoke project  dev-health
 smoke env-file ops/.env
 smoke tools    compose.bigboy.base.yml
 smoke tools    compose.bigboy.go-workers.yml
-smoke root     .remember/lanes/team-lead/reconciler-sweep-override.yml
-smoke root     compose/compose.bigboy.images.yml
+smoke root     _records/compose.bigboy.images.yml
 smoke tools    compose.bigboy.router.yml
 smoke tools    compose.bigboy.smoke.yml
 smoke needs    DHO_SMOKE_CATALOG_FILE
@@ -40,8 +38,7 @@ prove-base env-file ops/.env
 prove-base profile  venue
 prove-base tools    compose.bigboy.base.yml
 prove-base tools    compose.bigboy.go-workers.yml
-prove-base root     .remember/lanes/team-lead/reconciler-sweep-override.yml
-prove-base root     compose/compose.bigboy.images.yml
+prove-base root     _records/compose.bigboy.images.yml
 
 prove include prove-base
 prove tools    compose.bigboy.prove.yml

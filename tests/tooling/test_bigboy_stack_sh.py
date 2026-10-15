@@ -25,10 +25,7 @@ def _tree(tmp_path: Path, *, skip: str = "") -> tuple[Path, Path, dict[str, str]
     (r / "ops").mkdir()
     (r / "_records").mkdir()
     (r / "ops/.env").write_text("")
-    for rel in (
-        ".remember/lanes/team-lead/reconciler-sweep-override.yml",
-        "compose/compose.bigboy.images.yml",
-    ):
+    for rel in ("_records/compose.bigboy.images.yml",):
         if rel != skip:
             (r / rel).write_text("services: {}\n")
     tools = tmp_path / "tools"
@@ -74,7 +71,7 @@ def test_unknown_verb_is_refused(tmp_path: Path) -> None:
 
 
 def test_missing_overlay_file_is_refused(tmp_path: Path) -> None:
-    _, tools, env = _tree(tmp_path, skip="compose/compose.bigboy.images.yml")
+    _, tools, env = _tree(tmp_path, skip="_records/compose.bigboy.images.yml")
     res = _run(tools, env, "ps")
     assert res.returncode == 2 and "overlay file missing" in res.stderr
     assert not Path(env["DOCKER_LOG"]).exists()
@@ -234,21 +231,21 @@ _DHO = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "d" * 64
 def _real_tree(tmp_path: Path, *, env_file: str = "") -> tuple[Path, dict[str, str]]:
     """A tiny tree rendered by the REAL docker compose (config only, no daemon call): no stub on PATH."""
     r = tmp_path / "root"
-    (r / "compose").mkdir(parents=True)
+    (r / "_records").mkdir(parents=True)
     (r / "ops").mkdir()
     (r / "ops/.env").write_text(env_file)
     (r / "compose.yml").write_text(
         "name: dev-health\nnetworks:\n  dev-health: {}\nservices:\n"
         "  main:\n    image: busybox\n  extra:\n    image: busybox\n    profiles: [secret-profile]\n"
     )
-    (r / "compose/compose.bigboy.images.yml").write_text(
+    (r / "_records/compose.bigboy.images.yml").write_text(
         f"# pins\n# {_DHO}\nservices: {{}}\n"
     )
     tools = tmp_path / "tools"
     shutil.copytree(BIGBOY, tools)
     (tools / "stack.files").write_text(
         "stack project dev-health\nstack env-file ops/.env\nstack root compose.yml\n"
-        "stack root compose/compose.bigboy.images.yml\n"
+        "stack root _records/compose.bigboy.images.yml\n"
         "river-apply include stack\nriver-apply profile venue\nriver-apply tools compose.bigboy.river-apply.yml\n"
         "hook-check include stack\nhook-check profile venue\nhook-check tools compose.bigboy.hook-check.yml\n"
         "hook-check needs HOOK_OPERATOR_IMAGE\n"
@@ -304,13 +301,10 @@ def test_live_chain_renders_from_ops_files_plus_root_state_only(tmp_path: Path) 
     """The base and go-worker files come from ci/bigboy; the root holds only the pin file, the lane override and
     host state files (CHAOS-8693: no host compose.yml, no host compose/ static files)."""
     r = tmp_path / "root"
-    for d in ("compose", "ops", ".remember/lanes/team-lead", ".go-api-dev", "_records"):
+    for d in ("ops", ".go-api-dev", "_records"):
         (r / d).mkdir(parents=True)
     shutil.copy(
-        BIGBOY / "compose.bigboy.images.yml", r / "compose/compose.bigboy.images.yml"
-    )
-    (r / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
-        "services:\n  go-reconciler:\n    environment:\n      SYNC_UNRECLAIMABLE_SWEEP: active\n"
+        BIGBOY / "compose.bigboy.images.yml", r / "_records/compose.bigboy.images.yml"
     )
     (r / "ops/.env").write_text("")
     (r / ".go-api-dev/go-api.env").write_text("")
@@ -334,12 +328,13 @@ def test_live_chain_renders_from_ops_files_plus_root_state_only(tmp_path: Path) 
 def test_check_host_copies_flags_a_static_copy_that_differs(tmp_path: Path) -> None:
     r = tmp_path / "root"
     (r / "compose").mkdir(parents=True)
+    (r / "_records").mkdir()
     shutil.copy(BIGBOY / "compose.bigboy.base.yml", r / "compose.yml")
     shutil.copy(
         BIGBOY / "compose.bigboy.go-workers.yml", r / "compose/compose.go.workers.yml"
     )
     shutil.copy(
-        BIGBOY / "compose.bigboy.images.yml", r / "compose/compose.bigboy.images.yml"
+        BIGBOY / "compose.bigboy.images.yml", r / "_records/compose.bigboy.images.yml"
     )
     script = BIGBOY / "check-host-copies.sh"
     env = {**os.environ, "BIGBOY_ROOT": str(r)}
@@ -348,7 +343,7 @@ def test_check_host_copies_flags_a_static_copy_that_differs(tmp_path: Path) -> N
     (r / "compose.yml").write_text((r / "compose.yml").read_text() + "# drift\n")
     bad = subprocess.run([str(script)], env=env, capture_output=True, text=True)
     assert bad.returncode == 1 and "DIFF compose.bigboy.base.yml" in bad.stdout
-    (r / "compose/compose.bigboy.images.yml").write_text("services: {}\n")
+    (r / "_records/compose.bigboy.images.yml").write_text("services: {}\n")
     pin = subprocess.run(
         [str(script)],
         env={**env, "BIGBOY_ROOT": str(r)},
@@ -365,13 +360,10 @@ def test_relative_paths_of_the_tracked_base_resolve_against_the_bigboy_root(
     """The base file now lives in ci/bigboy, not at the root: without --project-directory its `./ops` build contexts
     and `./.go-api-dev` bind mounts would resolve against ci/bigboy."""
     r = tmp_path / "root"
-    for d in ("compose", "ops", ".remember/lanes/team-lead", ".go-api-dev", "_records"):
+    for d in ("ops", ".go-api-dev", "_records"):
         (r / d).mkdir(parents=True)
     shutil.copy(
-        BIGBOY / "compose.bigboy.images.yml", r / "compose/compose.bigboy.images.yml"
-    )
-    (r / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
-        "services: {}\n"
+        BIGBOY / "compose.bigboy.images.yml", r / "_records/compose.bigboy.images.yml"
     )
     (r / "ops/.env").write_text("")
     (r / ".go-api-dev/go-api.env").write_text("")
@@ -426,6 +418,10 @@ def test_relative_paths_of_the_tracked_base_resolve_against_the_bigboy_root(
     import json
 
     services = json.loads(out.stdout)["services"]
+    # the reconciler sweep is `active` from the tracked workers overlay alone (the lane override file is not in the chain)
+    assert (
+        services["go-reconciler"]["environment"]["SYNC_UNRECLAIMABLE_SWEEP"] == "active"
+    )
     paths = [s["build"]["context"] for s in services.values() if "build" in s]
     paths += [
         v["source"]

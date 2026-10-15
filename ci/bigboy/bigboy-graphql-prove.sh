@@ -46,7 +46,7 @@ export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE   # CHAOS-8693: the chain, project,
 
 # 1. prover build == candidate build
 want=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-go-api-tools:sha-$S7" --format '{{json .Manifest}}' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null)
-pinned=$(awk '/^  venue-prove:/{f=1} f&&/image:/{sub(/.*@/,""); print; exit}' compose/compose.bigboy.images.yml)
+pinned=$(awk '/^  venue-prove:/{f=1} f&&/image:/{sub(/.*@/,""); print; exit}' _records/compose.bigboy.images.yml)
 if [ -n "$want" ] && [ "$want" = "$pinned" ]; then st prover-image 0; else
   st prover-image 1; echo "REFUSED: venue-prove image ${pinned:-<none>} is not go-api-tools:sha-$S7 (${want:-unresolved}) -- re-pin before proving" >&2; exit 1; fi
 

@@ -24,9 +24,14 @@ REQUIRED = ROOT / "ci" / "bigboy" / "check-web-env-required.sh"
 
 
 def _chain() -> list[str]:
-    match = re.search(r"^export COMPOSE_FILE=(\S+)$", CUT.read_text(), re.MULTILINE)
-    assert match, "bigboy-cut.sh no longer exports COMPOSE_FILE"
-    return match.group(1).split(":")
+    """The `stack` set of ci/bigboy/stack.files (what the cut runs through stack.sh), tools files as $HERE/<name>."""
+    out = []
+    for line in (ROOT / "ci" / "bigboy" / "stack.files").read_text().splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] == "stack" and parts[1] in ("root", "tools"):
+            out.append(f"$HERE/{parts[2]}" if parts[1] == "tools" else parts[2])
+    assert out, "stack.files has no `stack` files"
+    return out
 
 
 def test_chain_includes_the_router_overlay_last() -> None:
@@ -55,6 +60,15 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
     # into the chain through $HERE. It requires BIGBOY_OPERATOR_IMAGE and resets services this stub base does
     # not define, so the test stages the same empty overlay the stubbed host path used to get.
     (tools / "compose.bigboy.workers.yml").write_text("services: {}\n")
+    (tools / "compose.bigboy.go-workers.yml").write_text("services: {}\n")
+    (tools / "compose.bigboy.base.yml").write_text(
+        "services:\n"
+        "  web:\n    image: web:test\n    environment:\n      BACKEND_URL: http://api:8000\n"
+        "  traefik:\n    image: traefik:test\n"
+        "  clickhouse:\n    image: clickhouse:test\n"
+        "  go-api:\n    image: go-api:test\n"
+        "  billing-edge:\n    image: billing-edge:test\n"
+    )
     users_file = tmp_path / "dho_api_ch.xml"
     users_file.write_text("<clickhouse/>")
     chain = [entry.replace("$HERE", str(tools)) for entry in _chain()]
@@ -63,17 +77,7 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
             continue
         target = tmp_path / entry
         target.parent.mkdir(parents=True, exist_ok=True)
-        if entry == "compose.yml":
-            target.write_text(
-                "services:\n"
-                "  web:\n    image: web:test\n    environment:\n      BACKEND_URL: http://api:8000\n"
-                "  traefik:\n    image: traefik:test\n"
-                "  clickhouse:\n    image: clickhouse:test\n"
-                "  go-api:\n    image: go-api:test\n"
-                "  billing-edge:\n    image: billing-edge:test\n"
-            )
-        else:
-            target.write_text("services: {}\n")
+        target.write_text("services: {}\n")
     (tmp_path / ".traefik-dynamic").mkdir()
     proc = subprocess.run(
         ["docker", "compose", "config", "--format", "json"],
@@ -232,8 +236,8 @@ def _c_stage(tmp: Path, name: str, text: str | None = None) -> Path:
     host = tmp / "host"
     (host / "ops").mkdir(parents=True, exist_ok=True)
     (host / "ops" / ".env").write_text("X=1\n")
-    (host / "compose").mkdir(exist_ok=True)
-    (host / "compose" / "compose.bigboy.images.yml").write_text(
+    (host / "_records").mkdir(exist_ok=True)
+    (host / "_records" / "compose.bigboy.images.yml").write_text(
         f"image: ghcr.io/full-chaos/dev-health-go-dho@sha256:{'cd' * 32}\n"
     )
     rec = host / "rec"
@@ -486,12 +490,12 @@ def test_pg_grants_check_bigboy_uses_compose_exec_only(tmp_path: Path) -> None:
     )
     calls = _c_calls(fake)
     assert _c_violations(calls) == []
-    argv = calls[0]["argv"]
+    argv = [c for c in calls if "exec" in c["argv"]][0]["argv"]
     assert (
-        argv[:4] == ["compose", "--env-file", "ops/.env", "exec"]
-        and "-T" in argv
-        and "postgres" in argv
+        argv[:3] == ["compose", "-p", "dev-health"]
+        and argv[argv.index("--env-file") + 1] == "ops/.env"
     )
+    assert argv.index("exec") < argv.index("-T") < argv.index("postgres")
     # no password is set or expanded anywhere (D4344 pattern): psql runs with -w and no PGPASSWORD
     assert not any("PGPASSWORD" in a or "POSTGRES_PASSWORD" in a for a in argv)
     assert any("psql -w -U" in a for a in argv)
@@ -528,10 +532,14 @@ def test_grants_check_uses_compose_exec_only(tmp_path: Path) -> None:
     p, fake = _c_run(tmp_path, script, str(tmp_path / "host" / "rec"))
     calls = _c_calls(
         fake
-    )  # the later git/compare steps may fail in the sandbox; the first docker call is the subject
+    )  # the later git/compare steps may fail in the sandbox; the exec call is the subject
     assert calls and _c_violations(calls) == []
-    assert calls[0]["argv"][:4] == ["compose", "--env-file", "ops/.env", "exec"]
-    assert "clickhouse" in calls[0]["argv"] and "clickhouse-client" in calls[0]["argv"]
+    ex = [c for c in calls if "exec" in c["argv"]][0]["argv"]
+    assert (
+        ex[:3] == ["compose", "-p", "dev-health"]
+        and ex[ex.index("--env-file") + 1] == "ops/.env"
+    )
+    assert "clickhouse" in ex and "clickhouse-client" in ex and "-T" in ex
 
 
 def test_overlays_carry_no_literal_credential_and_use_compose_substitution() -> None:

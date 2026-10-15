@@ -56,6 +56,9 @@ services:
       DEV_HEALTH_CH_USER: ${CLICKHOUSE_USER:-ch}
       DEV_HEALTH_CH_PASSWORD: ${CLICKHOUSE_PASSWORD:-ch}
       DEV_HEALTH_CH_DB: ${CLICKHOUSE_DB:-default}
+      # CHAOS-8693: was the untracked lane override reconciler-sweep-override.yml. The compiled default of
+      # --unreclaimable-sweep is `shadow` (options.go); no other file of this chain sets it, so it is stated here.
+      SYNC_UNRECLAIMABLE_SWEEP: active
   go-stream-ingest:
     image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
     build: !reset null

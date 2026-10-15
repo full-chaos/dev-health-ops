@@ -7,7 +7,7 @@
 # bare `docker run`: compose verbs only.
 set -u
 R=/home/ubuntu/devhealth
-DHO=$(grep -oE 'ghcr.io/full-chaos/dev-health-go-dho@sha256:[0-9a-f]{64}' $R/compose/compose.bigboy.images.yml | head -1)
+DHO=$(grep -oE 'ghcr.io/full-chaos/dev-health-go-dho@sha256:[0-9a-f]{64}' $R/_records/compose.bigboy.images.yml | head -1)
 [[ -n $DHO ]] || { echo "no dho image in the overlay"; exit 3; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 cd "$R"   # compose project root (bigboy-cut.sh runs from here too)

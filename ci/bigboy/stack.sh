@@ -66,7 +66,7 @@ cd "$R"
 export BIGBOY_ROOT="$R" BIGBOY_TOOLS_DIR="$T"
 export DHO_API_CH_USERS_XML="${DHO_API_CH_USERS_XML:-$R/.go-api-dev/dho_api_ch.xml}"
 if [ -z "${BIGBOY_OPERATOR_IMAGE:-}" ] && grep -qs 'BIGBOY_OPERATOR_IMAGE' "${FILES[@]}"; then
-  BIGBOY_OPERATOR_IMAGE=$(docker compose -p "$PROJECT" ps --format '{{.Image}}' go-reconciler 2>/dev/null | head -1 || true)
+  BIGBOY_OPERATOR_IMAGE=$(docker compose -p "$PROJECT" ps --format '{{.Image}}' go-reconciler 2>/dev/null </dev/null | head -1 || true)
   [ -n "$BIGBOY_OPERATOR_IMAGE" ] || die "BIGBOY_OPERATOR_IMAGE is unset and no running go-reconciler names it; export it"
 fi
 export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-}"
@@ -91,7 +91,7 @@ ERRF=$(mktemp); trap 'rm -f "$ERRF"' EXIT
 # compose's stderr can quote a resolved value, so only the NAME of a missing required variable is surfaced
 safe_config() {
   local rc=0
-  compose config "$@" 2>"$ERRF" || rc=$?
+  compose config "$@" 2>"$ERRF" </dev/null || rc=$?
   [ "$rc" -eq 0 ] || grep -oE 'required variable [A-Za-z_][A-Za-z0-9_]* is missing' "$ERRF" >&2 || true
   return "$rc"
 }

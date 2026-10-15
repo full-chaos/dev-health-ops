@@ -5,6 +5,7 @@ import (
 	"fmt"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log"
+	"net/http"
 	"sort"
 	"strings"
 )
@@ -495,6 +496,16 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 // the whole suite if that guarantee is ever broken by a future edit
 // here.
 func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string) (Provider, error) {
+	return newProviderFromCredentialsWithTransport(kind, apiKey, baseURL, model, nil)
+}
+
+// newProviderFromCredentialsWithTransport is NewProviderFromCredentials with
+// the transport an org-supplied base_url is dialled through: nil is the
+// SSRF-guarded transport (what production uses); a test against a loopback
+// server passes its own.
+func newProviderFromCredentialsWithTransport(
+	kind ProviderKind, apiKey, baseURL, model string, transport http.RoundTripper,
+) (Provider, error) {
 	switch kind {
 	case ProviderKindMock:
 		return MockProvider{}, nil
@@ -507,9 +518,10 @@ func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string
 			return nil, fmt.Errorf("LLM provider %q is not configured: missing an api_key", kind)
 		}
 		return NewOpenAIProvider(OpenAIProviderConfig{
-			APIKey:  envsecrets.NewHidden(apiKey),
-			BaseURL: baseURL,
-			Model:   model,
+			APIKey:     envsecrets.NewHidden(apiKey),
+			BaseURL:    baseURL,
+			Model:      model,
+			HTTPClient: orgHTTPClient(baseURL, transport),
 		}), nil
 
 	case ProviderKindLocal:
@@ -518,9 +530,10 @@ func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string
 		// default endpoint fallback regardless of where the (empty)
 		// value came from.
 		return NewLocalProvider(LocalProviderConfig{
-			BaseURL: baseURL,
-			Model:   model,
-			APIKey:  envsecrets.NewHidden(apiKey),
+			BaseURL:    baseURL,
+			Model:      model,
+			APIKey:     envsecrets.NewHidden(apiKey),
+			HTTPClient: orgHTTPClient(baseURL, transport),
 		}), nil
 
 	case ProviderKindOllama:
@@ -544,9 +557,10 @@ func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string
 		// design -- that wire-protocol split is unaffected by the URL
 		// normalization.
 		return NewLocalProvider(LocalProviderConfig{
-			BaseURL: baseURL,
-			Model:   model,
-			APIKey:  envsecrets.NewHidden(apiKey),
+			BaseURL:    baseURL,
+			Model:      model,
+			APIKey:     envsecrets.NewHidden(apiKey),
+			HTTPClient: orgHTTPClient(baseURL, transport),
 		}), nil
 
 	// BYO LLM stubs: same narrowing as NewProviderFromEnv.

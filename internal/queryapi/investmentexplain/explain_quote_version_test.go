@@ -74,7 +74,7 @@ func TestDataVersionIsOneOrgScopedRoundTripOverBothTables(t *testing.T) {
 			t.Errorf("data version does not read %s", table)
 		}
 	}
-	if got := strings.Count(statement, "org_id = {org_id:String}"); got < 2 {
-		t.Errorf("org filter appears %d times, want it on each table read", got)
+	if got := strings.Count(statement, "org_id = {org_id:String}"); got < 3 {
+		t.Errorf("org filter appears %d times, want it on the work-unit read and on both quote subqueries (3)", got)
 	}
 }

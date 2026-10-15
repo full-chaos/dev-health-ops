@@ -31,7 +31,7 @@ func (c mixAgreementClient) Query(ctx context.Context, statement string, binding
 	case strings.Contains(statement, "ARRAY JOIN CAST(subcategory_distribution_json") && strings.Contains(statement, "subcategory_kv.1 AS subcategory"):
 		return &fixtureRowScanner{rows: c.breakdown}, nil
 	case strings.Contains(statement, "toString(max(computed_at))"):
-		return &fixtureRowScanner{rows: [][]any{{c.dataVersion, "4"}}}, nil
+		return &fixtureRowScanner{rows: [][]any{{c.dataVersion, "4", "2026-10-13 09:00:00.000", "9"}}}, nil
 	case strings.Contains(statement, "FROM investment_explanations"):
 		if c.cacheReadCount != nil {
 			*c.cacheReadCount++

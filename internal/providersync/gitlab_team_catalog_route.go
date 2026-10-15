@@ -854,6 +854,7 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 			continue
 		}
 		candidates := make([]projectTargetCandidate, 0, len(pages.Items))
+		seenMilestone := make(map[string]bool, len(pages.Items))
 		decoded := true
 		for _, raw := range pages.Items {
 			var milestone gitlabIssueMilestonePayload
@@ -862,9 +863,12 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 				break
 			}
 			id := milestone.ID.String()
-			if id == "" || id == "0" {
+			if id == "" || id == "0" || seenMilestone[id] {
 				continue
 			}
+			// A milestone's id is global: listed twice (own and parent, or by both
+			// query names) it is one milestone, counted once in target_other_open.
+			seenMilestone[id] = true
 			date := ""
 			if milestone.DueDate != nil {
 				date = *milestone.DueDate

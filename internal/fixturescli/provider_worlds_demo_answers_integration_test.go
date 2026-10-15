@@ -190,6 +190,11 @@ func demoTimesOf(team demoTeam, story demoStory, c demoChange) demoChangeTimes {
 		return times
 	}
 	times.Merged = demoAt(c.MergedAgo, 13+int(seed[3])%5, int(seed[4])%60)
+	if c.MergedAgo == 0 {
+		// Merged on the as-of day itself: the morning after the commits (which are at 8 to 10 on their day), 11:00 to
+		// 11:09, so it and the deployment (25 to 44 minutes later) are before the world's noon instant.
+		times.Merged = demoAt(0, 11, int(seed[4])%10)
+	}
 	times.Approved = demoAfter(times.Merged, -(20 + int(seed[5])%121))
 	if team.QuickReview {
 		// Reviewed one to three hours after opening, whenever it merges.
@@ -203,6 +208,9 @@ func demoTimesOf(team demoTeam, story demoStory, c demoChange) demoChangeTimes {
 	times.ChangesRequested = created.Add(approved.Sub(created) / 3).UTC().Format(time.RFC3339)
 	times.MainRun = demoAfter(times.Merged, 8)
 	times.Deploy = demoAfter(times.Merged, 25+int(seed[6])%61)
+	if c.MergedAgo == 0 {
+		times.Deploy = demoAfter(times.Merged, 25+int(seed[6])%20)
+	}
 	return times
 }
 
@@ -407,6 +415,10 @@ func (build *demoBuild) addTeam(team demoTeam) {
 		done := ""
 		if story.DoneAgo >= 0 {
 			done = demoAt(story.DoneAgo, 18+int(seed[2])%3, int(seed[3])%60)
+			if story.DoneAgo == 0 {
+				// Done on the as-of day: after its changes merged and deployed (before 11:54), before noon.
+				done = demoAt(0, 11, 54+int(seed[3])%5)
+			}
 		}
 		// The tracker item of a GitHub or GitLab team: an issue in the repository of its first change (its
 		// home repository when the change is in another team's repository).

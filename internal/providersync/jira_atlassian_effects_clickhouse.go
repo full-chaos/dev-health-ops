@@ -104,7 +104,7 @@ type JiraAtlassianClickHouseEffects struct {
 func NewJiraAtlassianClickHouseEffects(conn driver.Conn, lease providerfoundation.LeaseGuard) JiraAtlassianClickHouseEffects {
 	return JiraAtlassianClickHouseEffects{
 		Lease:              lease,
-		Sprints:            GitHubSprintsClickHouseAdapter{Conn: conn},
+		Sprints:            GitHubSprintsClickHouseAdapter{Conn: conn, SharedAcrossUnits: true},
 		Dependencies:       GitHubWorkItemDependenciesClickHouseAdapter{Conn: conn},
 		Interactions:       GitHubWorkItemInteractionsClickHouseAdapter{Conn: conn},
 		Reopens:            GitHubWorkItemReopenEventsClickHouseAdapter{Conn: conn},

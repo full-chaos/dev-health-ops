@@ -48,7 +48,7 @@ func TestResolveCatalog_StaticListsWithoutDimension(t *testing.T) {
 			t.Fatalf("dimension %d = %+v, want name %q with a description", i, res.Dimensions[i], name)
 		}
 	}
-	if len(res.Measures) != 21 || res.Measures[0].Name != "count" || res.Measures[20].Name != "flag_activation_rate" {
+	if len(res.Measures) != 22 || res.Measures[0].Name != "count" || res.Measures[1].Name != "issue_size" || res.Measures[21].Name != "flag_activation_rate" {
 		t.Fatalf("measures = %+v", res.Measures)
 	}
 	for _, m := range res.Measures {

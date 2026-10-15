@@ -170,6 +170,10 @@ func workgraphBuildPreSteps(
 	if issuePREdgesServiceErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
+	issuePRFallbackRetractionStep, issuePRFallbackRetractionStepErr := newIssuePRFallbackRetractionPreStep(issuePREdgesService)
+	if issuePRFallbackRetractionStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
 	issuePREdgesSharedWindow := newSharedIssuePREdgesWindow()
 	issuePREdgesFastPathStep, issuePREdgesFastPathStepErr := newIssuePREdgesFastPathPreStep(issuePREdgesService, issuePREdgesSharedWindow)
 	if issuePREdgesFastPathStepErr != nil {
@@ -253,7 +257,7 @@ func workgraphBuildPreSteps(
 
 	steps := []workgraph.NativePreStep{
 		staleDependencyCleanupStep,
-		step, issuePREdgesFastPathStep, issuePREdgesTextParseStep, issueCommitStep, issuePREdgesHeuristicStep,
+		step, issuePRFallbackRetractionStep, issuePREdgesFastPathStep, issuePREdgesTextParseStep, issueCommitStep, issuePREdgesHeuristicStep,
 		prCommitLinksStep, prCommitEdgesStep, commitFileEdgesStep, flagGuardsStep, operationalIncidentStep, edgeStep,
 	}
 
@@ -311,7 +315,10 @@ func buildPostStepOrder() []string {
 // action, before any derivation stage) -- it is pure cleanup deleting a
 // legacy mislabelled-edge shape and reads/writes nothing another pre-step
 // touches, so its position is free by the ordering invariant; first is
-// simply the position it always held. "issue_pr_edges_fast_path"
+// simply the position it always held. "issue_pr_fallback_retraction"
+// (CHAOS-9821) READS the native rows "issue_pr_links" WRITES and removes the
+// explicit_text/heuristic rows they outrank, so it registers right after it
+// and before every step that READS work_graph_issue_pr. "issue_pr_edges_fast_path"
 // (CHAOS-4924) READS work_graph_issue_pr, which "issue_pr_links" WRITES, so
 // it must register strictly after it; "issue_pr_edges_text_parse" has no such
 // table dependency on the fast-path step, but registers immediately after it
@@ -350,6 +357,7 @@ func buildPreStepOrder() []string {
 	return []string{
 		"stale_pr_dependency_issue_edges_cleanup",
 		"issue_pr_links",
+		"issue_pr_fallback_retraction",
 		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_commit_edges", "issue_pr_edges_heuristic",
 		"pr_commit_links", "pr_commit_edges", "commit_file_edges",
 		"flag_guards_edges", "operational_incident_edges", "issue_issue_edges",

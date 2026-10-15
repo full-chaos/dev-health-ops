@@ -1,0 +1,671 @@
+name: dev-health
+# Docker Compose for Dev Health Platform - Local Development
+# Usage: docker compose up -d
+#
+# Services:
+#   - postgres: Shared PostgreSQL for semantic data (ops) and licenses
+#   - clickhouse: Analytics database for ops
+#   - valkey: Celery broker and cache for ops
+#   - mailpit: Local email testing (SMTP :1025, UI :8025)
+#   - api: Dev Health Ops FastAPI backend (port 8000)
+#   - web: Dev Health Web Next.js frontend (port 3000)
+#   - acr-api: Agent Context Runtime hosted API (local runtime, port 8080, acr.localhost)
+
+# NOTE: ACR is defined natively below as a functional local runtime — NOT via the production
+# overlay at ./acr/deploy/compose/acr.compose.yml. That overlay is hardened for
+# hosting (immutable image digest, file-backed secrets, TLS-verified Postgres/
+# ClickHouse/entitlement) and cannot run against this plaintext dev stack. The
+# local runtime below uses test-only plaintext backing-store connections and
+# the in-process local entitlement provider. TLS remains only on web→ACR.
+
+x-acr-build: &acr-build
+  context: ./acr
+  dockerfile: Dockerfile
+  target: acr-api
+
+services:
+  # =============================================================================
+  # Databases
+  # =============================================================================
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-devhealth}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      POSTGRES_DB: ${POSTGRES_DB:-devhealth}
+      # CHAOS-1771: pin PGDATA to a subdirectory of the named-volume mount so
+      # data persists across `docker compose down/up`. Without this, postgres
+      # writes to its image-default PGDATA (`/var/lib/postgresql/<major>/docker`)
+      # which lives on an anonymous volume — wiped by `compose down`. Using a
+      # subdirectory (not the mount root) is required by the postgres image's
+      # init script, which refuses to initialize directly on a mount root.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    # The three poolers can together demand DEFAULT_POOL_SIZE(domain 20) +
+    # (queue 40) + (coordinator 10) = 70 backends, and direct clients
+    # (migrations, psql, riverui) take more. The image default of 100 leaves
+    # no margin once every worker group runs 3 replicas.
+    command:
+      - postgres
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-400}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Init script to create multiple databases
+      - ./ops/docker/init-extra-dbs.sh:/docker-entrypoint-initdb.d/init-extra-dbs.sh:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-devhealth} -d ${POSTGRES_DB:-devhealth}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - dev-health
+
+  pgbouncer:
+    # CHAOS-2065: transaction-mode pooler in front of postgres so the worker
+    # fleet cannot exhaust postgres max_connections. App services set
+    # PGBOUNCER_TRANSACTION_MODE=true (disables asyncpg prepared statements).
+    # Run migrations against postgres:5432 directly -- see
+    # ops/docs/ops/database-connection-pooling.md.
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-devhealth}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      DB_NAME: ${POSTGRES_DB:-devhealth}
+      LISTEN_PORT: "6432"
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "20"
+      ADMIN_USERS: ${POSTGRES_USER:-devhealth}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=$$DB_PASSWORD pg_isready -h 127.0.0.1 -p 6432 -U $$DB_USER -d $$DB_NAME",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+      start_interval: 1s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - dev-health
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_LISTEN_HOST: "0.0.0.0"
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ch}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-ch}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
+    ports:
+      - "${CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "${CLICKHOUSE_NATIVE_PORT:-9000}:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dev-health
+
+  valkey:
+    image: valkey/valkey:9-alpine
+    restart: unless-stopped
+    command: >
+      valkey-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - dev-health
+
+  # =============================================================================
+  # Email (Local Development)
+  # =============================================================================
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    # ports:
+    #   - "${MAILPIT_UI_PORT:-8025}:8025"
+    #   - "${MAILPIT_SMTP_PORT:-1025}:1025"
+    labels:
+      logging.service.name: mailpit
+      logging.service.namespace: dev-health
+      traefik.enable: "true"
+      traefik.scope: dev-health
+      traefik.http.routers.mailpit.rule: "Host(`mail.localhost`)"
+      traefik.http.routers.mailpit.entrypoints: "web"
+      traefik.http.services.mailpit.loadbalancer.server.port: "8025"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8025/livez"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - dev-health
+
+  # =============================================================================
+  # Reverse Proxy
+  # =============================================================================
+
+  traefik:
+    image: traefik:latest
+    restart: unless-stopped
+    labels:
+      logging.service.name: "traefik"
+      logging.service.namespace: "fullchaos"
+      traefik.enable: "true"
+      traefik.http.routers.traefik-dashboard.rule: "Host(`traefik.commanderkeen.dev`)"
+      traefik.http.routers.traefik-dashboard.service: "api@internal"
+      traefik.http.routers.traefik-dashboard.entrypoints: "web"
+      traefik.http.routers.bare-to-www.rule: "Host(`commanderkeen.dev`)"
+      traefik.http.routers.bare-to-www.entrypoints: "web"
+      traefik.http.routers.bare-to-www.middlewares: "redirect-to-www"
+      traefik.http.routers.bare-to-www.service: "noop@internal"
+      traefik.http.middlewares.redirect-to-www.redirectregex.regex: "^https?://commanderkeen\\.dev(.*)"
+      traefik.http.middlewares.redirect-to-www.redirectregex.replacement: "https://www.commanderkeen.dev$${1}"
+      traefik.http.middlewares.redirect-to-www.redirectregex.permanent: "true"
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=dev-health_dev-health"
+      - "--providers.docker.constraints=Label(`traefik.scope`,`dev-health`)"
+      - "--entrypoints.web.address=:3000"
+      - "--log.level=INFO"
+    ports:
+      - "3000:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - dev-health
+
+  # =============================================================================
+  # Database Migrations (one-shot — runs before app services)
+  # =============================================================================
+  # Applies PostgreSQL (Alembic) + ClickHouse schema migrations, then exits 0.
+  # App services (api, billing-edge, worker, beat) gate on this completing
+  # successfully via depends_on.condition: service_completed_successfully.
+  #
+  # Connects to postgres:5432 DIRECTLY (not pgbouncer): DDL must not run under
+  # the transaction-mode pooler. See ops/docs/ops/database-connection-pooling.md.
+
+  migrate:
+    # CHAOS-7054: `dho migrate upgrade` (the Go operator CLI) replaces the Python
+    # Alembic chain (`dev_health_ops.cli migrate postgres && migrate clickhouse`):
+    # the PostgreSQL head, the standard feature flags, then the ClickHouse head;
+    # --river also applies the River schema when MIGRATION_DATABASE_URI is set.
+    # Same service shape as ops/compose.yml's migrate.
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: dho
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    labels:
+      logging.service.name: dev-health-migrate
+      logging.service.namespace: dev-health
+    command: ["migrate", "upgrade", "--river"]
+    environment:
+      # Postgres direct (5432), NOT pgbouncer — migrations run raw DDL.
+      POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
+      MIGRATION_DATABASE_URI: ${MIGRATION_DATABASE_URI:-}
+      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: ${DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER:-1}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      # dho speaks the native protocol (9000), not Python's HTTP port.
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - dev-health
+
+  # =============================================================================
+  # Dev Health Ops (Backend)
+  # =============================================================================
+
+  api:
+    build:
+      # Use the same source override as the Go binaries so local migration
+      # branches can exercise their API producer changes in one stack.
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/Dockerfile
+      target: api
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    #stop_grace_period: 30s
+    # Host uid: the dev editable install (`pip install -e .`, entrypoint:
+    # below) writes into the bind-mounted ops/ tree and runs git for scm
+    # introspection; the image's default non-root uid (10001) can neither
+    # create files there nor pass git's ownership check (safe.directory)
+    # against the host-owned tree. Running as the host uid makes it the
+    # owner of the bind mount, so both pass. This dev-health root is not a
+    # git repo, so this is a host-local dev change only.
+    user: "1001:1001"
+    labels:
+      logging.service.name: dev-health-api
+      logging.service.namespace: dev-health
+      traefik.enable: "true"
+      traefik.scope: dev-health
+      traefik.http.routers.api.rule: Host(`api.localhost`)
+      traefik.http.routers.api.entrypoints: web
+      traefik.http.services.api.loadbalancer.server.port: "8000"
+    # LANE-4460-L3: GO_API_ENVELOPE_PRIVATE_KEY (Ed25519 PEM, principal_envelope.py)
+    # must be the literal PEM env var value, not a path -- so the private key
+    # file mounted read-only below (volumes:) is read into the environment
+    # HERE, at container start, rather than via a plain `environment:` entry
+    # (which cannot express "read this file's contents"). The private key
+    # itself never appears in this compose file, in git (dev-health root has
+    # no .git), or in any command echoed to a log -- `export ... "$(cat ...)"`
+    # does not print the value.
+    entrypoint: >
+      sh -c 'export GO_API_ENVELOPE_PRIVATE_KEY="$(cat /secrets/go-api-envelope-private-key.pem)" && pip install -e . && python -m dev_health_ops.cli --log-level debug api --host 0.0.0.0 --port 8000 --reload'
+    env_file:
+      - path: ./ops/.env
+        required: false
+    environment:
+      # Worktree bind mounts do not expose usable SCM metadata inside the
+      # container, but the dev entrypoint performs an editable install.
+      SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+      # user: "1001:1001" above has no /etc/passwd entry in this image (only
+      # the default appuser/10001 does), so $HOME is otherwise empty and
+      # pip's --user install fails writing /.local, /.cache/pip.
+      HOME: /tmp
+      # Database connections
+      DATABASE_URI: postgresql+asyncpg://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
+      REDIS_URL: redis://valkey:6379/1
+      CELERY_BROKER_URL: redis://valkey:6379/0
+      CELERY_RESULT_BACKEND: redis://valkey:6379/0
+      # Logging
+      # LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      GRAPHQL_QUERY_TIMEOUT: ${GRAPHQL_QUERY_TIMEOUT:-30}
+      LOG_LEVEL: DEBUG
+      # Schema is applied by the one-shot `migrate` service (gated via
+      # depends_on) — the API must never run migrations itself.
+      AUTO_RUN_MIGRATIONS: "false"
+      # CHAOS-4264: self-imposed RLIMIT_AS/RLIMIT_DATA for the daily/remaining
+      # metrics compatibility bridge's runner subprocess (worker_metrics_runner).
+      # Added here manually (2026-08-26, lane-deploy4) because THIS file is a
+      # hand-maintained root-level compose.yml, structurally separate from
+      # ops/compose.yml (different compose project name: "dev-health" here vs
+      # "dev-health-ops" there) and not tracked by any git repo (dev-health
+      # root has no .git) — ops/compose.yml's own copy of this block never
+      # reaches this file automatically. See ops/deploy/go-workers/README.md
+      # "Daily-metrics compatibility bridge" for the incident this closes.
+      DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES: ${DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES:-671088640}
+      DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY: ${DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY:-1}
+      # CHAOS-4543 (lane-4543, 2026-08-29): wires the distinct operator-only
+      # metric-repair token (worker_auth.authorize_metric_repair; deliberately
+      # NOT the same value as WORKER_OPERATIONAL_BRIDGE_TOKEN above) so
+      # `dev-health-workerctl metrics daily-redrive`'s ledger-repair step
+      # works locally the same way it does on prod (minted there in deploy
+      # 5.2). Empty by default so a fresh checkout is not silently
+      # unauthorized-but-passing; the value itself lives only in .env
+      # (gitignored / this root is not a git repo).
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      # Per-provider sync queues (CHAOS-2299) — the Sync Now trigger endpoint
+      # is a producer; worker -Q lists were expanded in the same change.
+      PROVIDER_SYNC_QUEUES_ENABLED: "true"
+      # CHAOS-2520: hide deprecated migrated child sync configs from
+      # GET /sync-configs. The filter runs in THIS api service via
+      # os.getenv(); it was previously only set on worker/web (where it is
+      # unused), so migrated children kept rendering. Must be on `api`.
+      HIDE_MIGRATED_CHILD_CONFIGS: "true"
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+      # The local Go PagerDuty stream runner is the single admission owner.
+      # Python still performs the synchronous compatibility reconciliation,
+      # but must not enqueue a competing Celery consumer for the same entry.
+      PAGERDUTY_WEBHOOK_TRANSPORT: river
+      # LANE-4460-L3 (CHAOS-4460 precondition 6): the go_api_dispatcher edge
+      # half. GO_API_ENVELOPE_PRIVATE_KEY itself is exported by entrypoint:
+      # above, from the file mounted below -- never written here as a literal.
+      # Issuer/audience MUST equal query-api's GO_API_ENVELOPE_ISSUER/
+      # AUDIENCE (deploy/go-api/compose-query-api.yml) or every envelope this
+      # process signs is rejected by query-api's verifier.
+      GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
+      GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
+      GO_API_ENVELOPE_KEY_ID: ${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08}
+      # GO_API_QUERY_API_URL is go_api_dispatcher.py's master kill switch
+      # (_maybe_dispatch_to_go): unset, the dispatcher returns None on every
+      # request before touching the registry at all -- "the dispatcher is
+      # off", not a per-request fallback. query-api is reached over the
+      # internal compose network (dev-health-query-api, port 8090 -- NOT the
+      # ${QUERY_API_PORT:-8091} host-mapped port compose-query-api.yml
+      # publishes for external curl checks).
+      GO_API_QUERY_API_URL: ${GO_API_QUERY_API_URL:-http://query-api:8090}
+      # CHAOS-4710: emits `x-dev-health-plane: go|python` on every GraphQL
+      # response, naming the plane that ACTUALLY served it (including every
+      # fallback path) -- puts the enablement evidence in chris's browser
+      # network tab. Default OFF everywhere (go_api_dispatcher.py's
+      # _plane_header_enabled(); a truthy-string parse: "1"/"true"/"yes"/"on",
+      # case-insensitive); ON here, on the local stack, ONLY (ruling:
+      # team-lead, 2026-09-01) -- this is a deliberate opt-in, never set this
+      # in a shared or prod environment without a fresh decision.
+      GO_API_PLANE_HEADER_ENABLED: ${GO_API_PLANE_HEADER_ENABLED:-true}
+      # Provider credentials (optional)
+      # GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      # GITLAB_URL: ${GITLAB_URL:-https://gitlab.com}
+      # JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      # JIRA_EMAIL: ${JIRA_EMAIL:-}
+      # JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      # LICENSE_PUBLIC_KEY: ${LICENSE_PUBLIC_KEY:-}
+      # LICENSE_PRIVATE_KEY: ${LICENSE_PRIVATE_KEY:-}
+      # JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-jwt-secret-min-32-chars!!}
+      # STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      # STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      # STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
+      # STRIPE_PRICE_ID_ENTERPRISE: ${STRIPE_PRICE_ID_ENTERPRISE:-}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      TRIAL_DAYS: ${TRIAL_DAYS:-14}
+      # SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
+      # Email (Resend)
+      # Email — defaults to Mailpit SMTP in local dev
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-smtp}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      # EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      # EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
+    volumes:
+      - ${DEV_HEALTH_OPS_ROOT:-./ops}:/app
+      # LANE-4460-L3: Ed25519 private key, read by entrypoint: above into
+      # GO_API_ENVELOPE_PRIVATE_KEY. Never committed (dev-health root has no
+      # .git); generated once via `openssl genpkey -algorithm ed25519`.
+      - ./.go-api-dev/envelope-private-key.pem:/secrets/go-api-envelope-private-key.pem:ro
+    working_dir: /app/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+      # pgbouncer:
+      #   condition: service_started
+      # migrate:
+      #   condition: service_completed_successfully
+      # pgbouncer-river-queue:
+      #   condition: service_healthy
+      # pgbouncer-river-coordinator:
+      #   condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dev-health
+
+  billing-edge:
+    build:
+      context: ./ops
+      dockerfile: docker/Dockerfile
+      target: api
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    restart: unless-stopped
+    labels:
+      logging.service.name: dev-health-billing-edge
+      logging.service.namespace: dev-health
+      traefik.enable: "true"
+      traefik.scope: dev-health
+      traefik.http.routers.billing.rule: Host(`billing.localhost`)
+      traefik.http.routers.billing.entrypoints: web
+      traefik.http.services.billing.loadbalancer.server.port: "8000"
+    volumes:
+      - ./ops:/app
+    working_dir: /app
+    entrypoint:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "dev_health_ops.api.billing_edge:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+        "--reload-dir",
+        "/app/src/dev_health_ops/api",
+      ]
+    env_file:
+      - path: ./ops/.env
+        required: false
+    environment:
+      DATABASE_URI: postgresql+asyncpg://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      POSTGRES_URI: postgresql+asyncpg://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      # LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      # STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      # STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
+      # STRIPE_PRICE_ID_ENTERPRISE: ${STRIPE_PRICE_ID_ENTERPRISE:-}
+      # LICENSE_PRIVATE_KEY: ${LICENSE_PRIVATE_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      # pgbouncer-river-queue:
+      #   condition: service_healthy
+      # pgbouncer-river-coordinator:
+      #   condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dev-health
+
+  # =============================================================================
+  # Go query-api (inlined from ops/deploy/go-api/compose-query-api.yml,
+  # chris 2026-09-03 "just inline it for now"; that overlay stays the
+  # reviewed source of truth -- re-sync from it when it changes). Profile
+  # removed so a bare `docker compose up -d` starts it; the api service's
+  # GO_API_QUERY_API_URL already points at http://query-api:8090.
+  # =============================================================================
+
+  query-api:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/query-api.Dockerfile
+      target: runtime
+    restart: unless-stopped
+    labels:
+      logging.service.name: dev-health-query-api
+      logging.service.namespace: dev-health
+    environment:
+      QUERY_API_ADDR: ":8090"
+      # Native ClickHouse port (9000), not the HTTP 8123 the Python services use.
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      GO_API_REGISTRY_POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      GO_API_ENVELOPE_JWKS_PATH: /secrets/envelope-jwks.json
+      GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
+      GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
+    # CHAOS-4654: stated, not measured, ceiling (see the overlay's comment).
+    mem_limit: 2g
+    ports:
+      - "${QUERY_API_PORT:-8091}:8090"
+    volumes:
+      - ./.go-api-dev/envelope-jwks.json:/secrets/envelope-jwks.json:ro
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # No healthcheck: distroless runtime image has no shell/wget; verify with
+    # `curl -sS localhost:${QUERY_API_PORT:-8091}/readyz` and assert the body.
+    networks:
+      - dev-health
+
+  # =============================================================================
+  # Dev Health Web (Frontend)
+  # =============================================================================
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      # CF Access cannot carry the Next.js dev HMR websocket, so login fails
+      # behind the edge. Build the prod (standalone) stage instead.
+      target: runner
+    restart: unless-stopped
+    labels:
+      logging.service.name: dev-health-web
+      logging.service.namespace: dev-health
+      traefik.enable: "true"
+      traefik.scope: dev-health
+      traefik.http.routers.web.rule: "Host(`www.commanderkeen.dev`) || Host(`commanderkeen.dev`) || Host(`${DOMAIN:-localhost}`)"
+      traefik.http.routers.web.entrypoints: web
+      traefik.http.services.web.loadbalancer.server.port: "3000"
+    env_file:
+      - path: ./web/.env
+        required: false
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      BACKEND_URL: http://api:8000
+      NEXT_PUBLIC_USE_GRAPHQL_ANALYTICS: ${NEXT_PUBLIC_USE_GRAPHQL_ANALYTICS:-true}
+      NEXT_PUBLIC_DEV_HEALTH_TEST_MODE: ${NEXT_PUBLIC_DEV_HEALTH_TEST_MODE:-false}
+      AUTH_SECRET: ${AUTH_SECRET:-dev-secret-change-in-development}
+      REDIS_URL: redis://valkey:6379/0
+      # Sentry/BugSink — NEXT_PUBLIC_ prefix required for client-side bundling
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+      SENTRY_DSN: ${SENTRY_DSN:-http://2ef3e827508b4275b8c85bc8171906a7@bugsink:8000/1}
+      # ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      # GitHub OAuth app — provide via env/.env, never commit the develop:
+      HIDE_MIGRATED_CHILD_CONFIGS: "true"
+      # Agent Context Runtime (Context Fabric panel). The web BFF signs an EdDSA
+      # assertion and calls acr-api directly on the private Compose network.
+      # TLS terminates only at the externally exposed edge.
+      ACR_API_ORIGIN: http://acr-api:8080
+      ACR_WEB_ASSERTION_ISSUER: dev-health-web
+      ACR_WEB_ASSERTION_AUDIENCE: dev-health-acr
+      ACR_WEB_ASSERTION_KID: acr-dev-web
+      ACR_WEB_ASSERTION_KEY_FILE: /secrets/web-assertion.key
+    depends_on:
+      valkey:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+      bugsink:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - ./.acr-dev/web-assertion.key:/secrets/web-assertion.key:ro
+    networks:
+      - dev-health
+
+  # ---------------------------------------------------------------------------
+  # Observability — BugSink (error tracking / Sentry-compatible)
+  # ---------------------------------------------------------------------------
+  # Web UI: http://localhost:8800
+  # Single container, uses the existing postgres (database: bugsink).
+  # Set SENTRY_DSN to a project DSN from the BugSink UI to enable error
+  # reporting — the Sentry SDK sends events to BugSink transparently.
+  # ---------------------------------------------------------------------------
+  bugsink:
+    image: bugsink/bugsink:latest
+    container_name: bugsink
+    restart: unless-stopped
+    labels:
+      logging.service.name: bugsink
+      logging.service.namespace: dev-health
+      traefik.enable: "true"
+      traefik.scope: dev-health
+      traefik.http.routers.bugsink.rule: "Host(`bugs.localhost`)"
+      traefik.http.routers.bugsink.entrypoints: "web"
+      traefik.http.services.bugsink.loadbalancer.server.port: "8000"
+    environment:
+      DATABASE_URL: postgresql://devhealth:devhealth@postgres:5432/bugsink
+      SECRET_KEY: ${BUGSINK_SECRET_KEY:-8b3526db037025ac466df192f45da65de5111896f4b7a4e40757dbb4b82ce191}
+      BASE_URL: ${BUGSINK_BASE_URL:-http://localhost:8800}
+      PORT: "8000"
+      CREATE_SUPERUSER: ${BUGSINK_CREATE_SUPERUSER:-admin@dho.com:devhealth}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # ports:
+    #   - "8800:8000"
+    networks:
+      - dev-health
+
+volumes:
+  postgres_data:
+    driver: local
+  clickhouse_data:
+    driver: local
+  valkey_data:
+    driver: local
+# =============================================================================
+# Networks
+# =============================================================================
+
+networks:
+  dev-health:
+    driver: bridge

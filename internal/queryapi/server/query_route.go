@@ -2720,6 +2720,47 @@ const registeredInvestmentEvidenceQualityDocument = `query InvestmentEvidenceQua
   }
 }`
 
+// registeredInvestmentFullV1Document is the InvestmentFull text the web sent before CHAOS-9808: coverage without
+// sizingCoverage and unsizedUnitCount. Kept registered (legacyDigestsByOperation) so a web build of either side of the
+// rollout routes.
+const registeredInvestmentFullV1Document = `query InvestmentFull($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    sankey {
+      nodes {
+        id
+        label
+        dimension
+        value
+        __typename
+      }
+      edges {
+        source
+        target
+        value
+        __typename
+      }
+      coverage {
+        teamCoverage
+        repoCoverage
+        __typename
+      }
+      unit
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredInvestmentFullDocument is CHAOS-4538's registered document
 // for the combined investment breakdowns+sankey `analytics` query --
 // same contract as registeredInvestmentBreakdownDocument above. Copied
@@ -2766,6 +2807,8 @@ const registeredInvestmentFullDocument = `query InvestmentFull($orgId: String!, 
       coverage {
         teamCoverage
         repoCoverage
+        sizingCoverage
+        unsizedUnitCount
         __typename
       }
       unit
@@ -6344,6 +6387,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
 	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
+	"investmentFull":        {digestHex(registeredInvestmentFullV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

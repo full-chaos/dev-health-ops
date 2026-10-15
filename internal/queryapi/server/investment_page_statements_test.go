@@ -37,8 +37,8 @@ func (client *pageStatements) Query(_ context.Context, statement string, _ []dhc
 	kind, row := "", []any(nil)
 	switch {
 	case strings.Contains(statement, "AS assigned_team"):
-		// total, assigned to a team, repo total, assigned to a repo, direct, team fallback, fan-out
-		kind, row = statementCoverage, []any{200.0, 150.0, 200.0, 120.0, 100.0, 20.0, 1.5}
+		// total, assigned to a team, repo total, assigned to a repo, direct, team fallback, fan-out, sized units, units
+		kind, row = statementCoverage, []any{200.0, 150.0, 200.0, 120.0, 100.0, 20.0, 1.5, 30.0, 40.0}
 	case strings.Contains(statement, "AS grouping_set,"):
 		kind = statementSankey
 	case strings.Contains(statement, "evidence_quality_group_key"):

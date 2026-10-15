@@ -1272,8 +1272,10 @@ type ComplexityRoot struct {
 		DirectRepoCoverage       func(childComplexity int) int
 		RepoCoverage             func(childComplexity int) int
 		RepoFanoutReposPerUnit   func(childComplexity int) int
+		SizingCoverage           func(childComplexity int) int
 		TeamCoverage             func(childComplexity int) int
 		TeamFallbackRepoCoverage func(childComplexity int) int
+		UnsizedUnitCount         func(childComplexity int) int
 	}
 
 	SankeyEdge struct {
@@ -7789,6 +7791,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.SankeyCoverage.RepoFanoutReposPerUnit(childComplexity), true
 
+	case "SankeyCoverage.sizingCoverage":
+		if e.complexity.SankeyCoverage.SizingCoverage == nil {
+			break
+		}
+
+		return e.complexity.SankeyCoverage.SizingCoverage(childComplexity), true
+
 	case "SankeyCoverage.teamCoverage":
 		if e.complexity.SankeyCoverage.TeamCoverage == nil {
 			break
@@ -7802,6 +7811,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.SankeyCoverage.TeamFallbackRepoCoverage(childComplexity), true
+
+	case "SankeyCoverage.unsizedUnitCount":
+		if e.complexity.SankeyCoverage.UnsizedUnitCount == nil {
+			break
+		}
+
+		return e.complexity.SankeyCoverage.UnsizedUnitCount(childComplexity), true
 
 	case "SankeyEdge.source":
 		if e.complexity.SankeyEdge.Source == nil {
@@ -10777,6 +10793,7 @@ type MappingCoverage {
 
 enum MeasureInput {
   COUNT
+  ISSUE_SIZE
   CHURN_LOC
   PR_REWORK_RATIO
   CYCLE_TIME_HOURS
@@ -11443,6 +11460,8 @@ type SankeyCoverage {
   directRepoCoverage: Float
   teamFallbackRepoCoverage: Float
   repoFanoutReposPerUnit: Float
+  sizingCoverage: Float
+  unsizedUnitCount: Int
 }
 
 type SankeyEdge {
@@ -11476,6 +11495,7 @@ type SankeyResult {
 
 enum SankeyValueUnit {
   WORK_UNITS
+  ISSUE_SIZE
 }
 
 type SavedReportConnection {
@@ -54611,6 +54631,88 @@ func (ec *executionContext) fieldContext_SankeyCoverage_repoFanoutReposPerUnit(_
 	return fc, nil
 }
 
+func (ec *executionContext) _SankeyCoverage_sizingCoverage(ctx context.Context, field graphql.CollectedField, obj *model.SankeyCoverage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SankeyCoverage_sizingCoverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SizingCoverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SankeyCoverage_sizingCoverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SankeyCoverage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SankeyCoverage_unsizedUnitCount(ctx context.Context, field graphql.CollectedField, obj *model.SankeyCoverage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SankeyCoverage_unsizedUnitCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UnsizedUnitCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SankeyCoverage_unsizedUnitCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SankeyCoverage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _SankeyEdge_source(ctx context.Context, field graphql.CollectedField, obj *model.SankeyEdge) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_SankeyEdge_source(ctx, field)
 	if err != nil {
@@ -55065,6 +55167,10 @@ func (ec *executionContext) fieldContext_SankeyResult_coverage(_ context.Context
 				return ec.fieldContext_SankeyCoverage_teamFallbackRepoCoverage(ctx, field)
 			case "repoFanoutReposPerUnit":
 				return ec.fieldContext_SankeyCoverage_repoFanoutReposPerUnit(ctx, field)
+			case "sizingCoverage":
+				return ec.fieldContext_SankeyCoverage_sizingCoverage(ctx, field)
+			case "unsizedUnitCount":
+				return ec.fieldContext_SankeyCoverage_unsizedUnitCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type SankeyCoverage", field.Name)
 		},
@@ -77133,6 +77239,10 @@ func (ec *executionContext) _SankeyCoverage(ctx context.Context, sel ast.Selecti
 			out.Values[i] = ec._SankeyCoverage_teamFallbackRepoCoverage(ctx, field, obj)
 		case "repoFanoutReposPerUnit":
 			out.Values[i] = ec._SankeyCoverage_repoFanoutReposPerUnit(ctx, field, obj)
+		case "sizingCoverage":
+			out.Values[i] = ec._SankeyCoverage_sizingCoverage(ctx, field, obj)
+		case "unsizedUnitCount":
+			out.Values[i] = ec._SankeyCoverage_unsizedUnitCount(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

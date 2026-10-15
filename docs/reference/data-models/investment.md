@@ -162,6 +162,28 @@ written on every run, including at zero, so that "nothing to allocate" can be
 told apart from "the counter was never computed". Field-by-field meaning:
 [CLI reference](../cli/index.md#investment).
 
+## Measure: work-unit count or issue size
+
+Investment measures effort, and effort is the size of the issues a unit worked on (D5999). Lines of code are never an
+Investment measure. Two measures read the same rows:
+
+| Measure | What a unit weighs |
+| --- | --- |
+| `COUNT` (and `THROUGHPUT`, the same) | 1 work unit |
+| `ISSUE_SIZE` | The unit's newest issue size (`work_unit_issue_size`): the sum of the story points of its issues. A unit with no size weighs 1 work unit, so it is never dropped from the mix. |
+
+In both, a unit's weight is spread over its subcategories by their probabilities and over its repositories by their
+allocation weights, and a team scope takes each repository at the share the teams in view hold, so the sum of a
+unit's rows is its weight. When no unit of a scope carries a size, `ISSUE_SIZE` equals `COUNT` exactly. Provider
+scales are not normalized: a Linear estimate, Jira story points and a GitLab weight add as stored.
+
+`SankeyCoverage.sizingCoverage` is the share of the window's work units that carry a size and
+`SankeyCoverage.unsizedUnitCount` the units that do not: read them before reading an `ISSUE_SIZE` mix, because with
+low sizing coverage the mix is mostly the work-unit count. Both are counted for every measure on the work-unit path,
+and are null where they are not measured (the non-investment path, or a window with no unit). A Sankey read in
+`ISSUE_SIZE` names its unit `ISSUE_SIZE`; every other Investment Sankey names `WORK_UNITS`. Under `ISSUE_SIZE` every
+weighted coverage share (`teamCoverage`, `repoCoverage` and its split) is weighed the same way as the chart.
+
 ## Team coverage: ownership, not the attribution vote
 
 `teamCoverage` is the share of effort whose work unit has a team, and a unit has a team when a team **owns** one of
@@ -228,7 +250,7 @@ next to `filters`:
 
 | Field | Meaning | Default |
 |---|---|---|
-| `measure` | `COUNT` (the page's measure) or `THROUGHPUT` (same as `COUNT`); any other name, `CHURN_LOC` included, is refused. The explanation never weighs by a unit's `effort_value` | `COUNT` |
+| `measure` | `COUNT` (the page's measure), `THROUGHPUT` (same as `COUNT`) or `ISSUE_SIZE` (each unit weighs its issue size, 1 when unsized); any other name, `CHURN_LOC` included, is refused. The explanation never weighs by a unit's `effort_value` | `COUNT` |
 | `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is `[start_date, end_date)`. It replaces `filters.time`. | `filters.time` (a relative `range_days` ends tomorrow, so it covers today) |
 | `use_investment` | Accepted for parity with the page; no effect, because theme and subcategory always use the canonical categorization on both surfaces | none |
 

@@ -252,6 +252,11 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 	directRepoExpr := notMeasurable
 	teamFallbackRepoExpr := notMeasurable
 	fanoutExpr := notMeasurable
+	// CHAOS-9619: the distinct units of the window and the ones that carry an issue size, NULL where not
+	// measurable (the non-investment path). Counted for every measure, so a COUNT read also says how much of
+	// its scope a size could weigh.
+	sizedUnitsExpr := notMeasurable
+	unitsExpr := notMeasurable
 
 	repoFilterColumn := repoCol
 	teamRepoColumn := ""
@@ -311,6 +316,14 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 				repoEffortCol = "(" + repoEffortCol + " * " + scopeShare + ")"
 			}
 		}
+		// CHAOS-9619 (D5999): the newest issue size of each unit; under ISSUE_SIZE every weighted column is weighed
+		// by it (1 when unsized) so the coverage cards read the same measure as the chart beside them.
+		joins = append(joins, fmt.Sprintf("LEFT JOIN %s AS unit_size ON unit_size.org_id = work_unit_investments.org_id AND unit_size.work_unit_id = work_unit_investments.work_unit_id", LatestWorkUnitIssueSizeSource()))
+		if req.Measure == MeasureIssueSize {
+			repoEffortCol = "(" + repoEffortCol + " * if(unit_size.issue_size > 0, unit_size.issue_size, 1.0))"
+		}
+		sizedUnitsExpr = "toNullable(toFloat64(uniqExactIf(work_unit_investments.work_unit_id, unit_size.issue_size > 0)))"
+		unitsExpr = "toNullable(toFloat64(uniqExact(work_unit_investments.work_unit_id)))"
 		repoAssignedCol := "if(wure.work_unit_id != '', wure.repo_id, work_unit_investments.repo_id)"
 
 		totalExpr = fmt.Sprintf("sum(%s)", repoEffortCol)
@@ -517,7 +530,9 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
     %s AS assigned_repo,
     %s AS direct_repo,
     %s AS team_fallback_repo,
-    %s AS fanout_repos_per_unit
+    %s AS fanout_repos_per_unit,
+    %s AS sized_units,
+    %s AS units
 FROM %s
 %s
 WHERE %s
@@ -526,6 +541,7 @@ WHERE %s
 %s`,
 		totalExpr, assignedTeamCountExpr, repoTotalExpr, assignedRepoCountExpr,
 		directRepoExpr, teamFallbackRepoExpr, fanoutExpr,
+		sizedUnitsExpr, unitsExpr,
 		baseTable,
 		strings.Join(joins, "\n"),
 		dateFilter, orgFilter, filterClause.sql,
@@ -639,8 +655,8 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 	// driver mechanic and the same reason as breakdownRow.Value
 	// (CHAOS-4650) and TimeseriesBucket.Value (CHAOS-4657); see
 	// breakdown.go's doc comment for the branch-by-branch detail.
-	var directRepo, teamFallbackRepo, fanoutReposPerUnit *float64
-	if scanErr := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &directRepo, &teamFallbackRepo, &fanoutReposPerUnit); scanErr != nil {
+	var directRepo, teamFallbackRepo, fanoutReposPerUnit, sizedUnits, units *float64
+	if scanErr := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &directRepo, &teamFallbackRepo, &fanoutReposPerUnit, &sizedUnits, &units); scanErr != nil {
 		reportInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageScan, queryID, fmt.Errorf("scan: %w", scanErr))
 		return nil
 	}
@@ -698,5 +714,14 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		}
 	}
 	coverage.RepoFanoutReposPerUnit = fanoutReposPerUnit
+	// CHAOS-9619: null when not measured (non-investment path) or when the window holds no unit; never a 0 that
+	// would read as "measured, nothing sized".
+	if sizedUnits != nil && units != nil && *units > 0 {
+		share := *sizedUnits / *units
+		unsized := int(*units - *sizedUnits)
+		coverage.SizingCoverage = &share
+		coverage.UnsizedUnitCount = &unsized
+	}
+	slog.DebugContext(ctx, "analytics: sankey coverage sizing", "measure", string(req.Measure), "measured", coverage.SizingCoverage != nil)
 	return coverage
 }

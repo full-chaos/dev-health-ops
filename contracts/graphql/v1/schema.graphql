@@ -1277,6 +1277,7 @@ type MappingCoverage {
 
 enum MeasureInput {
   COUNT
+  ISSUE_SIZE
   CHURN_LOC
   PR_REWORK_RATIO
   CYCLE_TIME_HOURS
@@ -1943,6 +1944,8 @@ type SankeyCoverage {
   directRepoCoverage: Float
   teamFallbackRepoCoverage: Float
   repoFanoutReposPerUnit: Float
+  sizingCoverage: Float
+  unsizedUnitCount: Int
 }
 
 type SankeyEdge {
@@ -1976,6 +1979,7 @@ type SankeyResult {
 
 enum SankeyValueUnit {
   WORK_UNITS
+  ISSUE_SIZE
 }
 
 type SavedReportConnection {

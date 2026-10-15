@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -145,12 +146,18 @@ type BreakdownFilters struct {
 // Lines of code are not a measure of Investment (CHAOS-9695, D6014), and MeasureValueSQL is the one definition of it.
 const MeasureCount = "COUNT"
 
+// MeasureIssueSize is Investment measured by work-unit issue size (CHAOS-9619, D5999): each unit weighs the sum of
+// its issues' story points, 1 when it has none. Lines of code never.
+const MeasureIssueSize = "ISSUE_SIZE"
+
 // NormalizeMeasure maps a request measure to the measure of an explain mix read. THROUGHPUT is
 // COUNT on the investment path (analytics dbExpression). ok is false for any other name.
 func NormalizeMeasure(name string) (measure string, ok bool) {
 	switch strings.ToUpper(strings.TrimSpace(name)) {
 	case "COUNT", "THROUGHPUT":
 		return MeasureCount, true
+	case MeasureIssueSize:
+		return MeasureIssueSize, true
 	}
 	return "", false
 }
@@ -262,6 +269,11 @@ func (reader *Reader) FetchInvestmentBreakdown(ctx context.Context, filters Brea
 	if err != nil {
 		return nil, err
 	}
+	source, err := MeasureSource(filters.Measure, filters.unitSource(scopeSQL))
+	if err != nil {
+		return nil, err
+	}
+	slog.DebugContext(ctx, "investmentexplain: breakdown measure", "measure", filters.Measure, "scoped", filters.scoped(scopeSQL), "dated_by_end", filters.DatedByEnd)
 
 	query := fmt.Sprintf(`
 SELECT
@@ -277,7 +289,7 @@ WHERE %s
 GROUP BY subcategory, theme
 ORDER BY value DESC
 %s
-`, valueSQL, filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, valueSQL, source, filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -446,6 +458,10 @@ func (reader *Reader) FetchInvestmentThemeEffort(ctx context.Context, filters Br
 	if err != nil {
 		return nil, err
 	}
+	source, err := MeasureSource(filters.Measure, filters.unitSource(scopeSQL))
+	if err != nil {
+		return nil, err
+	}
 	bindings := filters.baseBindings()
 	bindings = append(bindings, scopeBindings...)
 	bindings = append(bindings, shareBindings...)
@@ -466,7 +482,7 @@ WHERE %[4]s
 GROUP BY theme
 ORDER BY value DESC, theme ASC
 %[7]s
-`, shareSQL, filters.unitWeight(scopeSQL), filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime(), valueSQL)
+`, shareSQL, filters.unitWeight(scopeSQL), source, filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime(), valueSQL)
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {

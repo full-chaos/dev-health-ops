@@ -70,8 +70,10 @@ type MaterializeComponentInput struct {
 	PRChurn           map[string]float64
 	CommitChurn       map[string]float64
 	ActiveHours       map[string]float64
-	ParentTitles      map[string]string
-	EpicTitles        map[string]string
+	// StoryPoints is the stored size of each issue that has one (chquery.FetchWorkItemStoryPoints).
+	StoryPoints  map[string]float64
+	ParentTitles map[string]string
+	EpicTitles   map[string]string
 	// FromTS/ToTS is the run's window (config.from_ts/to_ts). A component
 	// whose computed time bounds fall entirely outside it is skipped, same
 	// as materialize.py:1335-1336.
@@ -93,7 +95,10 @@ type MaterializeComponentResult struct {
 	// CategorizationRunID/OrgID gap as Investment. WorkUnitID matches
 	// Investment.WorkUnitID.
 	RepoEffort []chwrite.RepoEffortRecord
-	Skipped    string
+	// IssueSize is the unit's size row (CHAOS-9619), with the same caller-filled ComputedAt/
+	// CategorizationRunID gap as Investment.
+	IssueSize chwrite.IssueSizeRecord
+	Skipped   string
 	// Bundle is the text bundle this component's assembly built.
 	//
 	// Returned rather than recomputed by the caller because the ORCHESTRATOR
@@ -273,8 +278,13 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 		repoEffortRecords[i] = record
 	}
 
+	issueSize := units.ComputeIssueSize(issueNodeIDs, input.StoryPoints)
 	return MaterializeComponentResult{
 		Investment: investment, RepoEffort: repoEffortRecords, Bundle: bundle, PromptRedactions: promptFilter.Counts(),
+		IssueSize: chwrite.IssueSizeRecord{
+			WorkUnitID: unitID, IssueSize: issueSize.Value,
+			SizedIssueCount: uint32(issueSize.SizedIssues), IssueCount: uint32(issueSize.Issues),
+		},
 		RejectedConfidences: rejectedConfidences,
 	}, nil
 }

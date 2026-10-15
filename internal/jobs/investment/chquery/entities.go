@@ -289,6 +289,60 @@ func (reader *Reader) FetchWorkItemActiveHours(ctx context.Context, workItemIDs 
 	return hours, nil
 }
 
+// FetchWorkItemStoryPoints returns the stored size (work_items.story_points) of each work item that has
+// one, from the same deduplicated work_items read as FetchWorkItems. An item whose size is NULL is absent
+// from the map. It has no Python counterpart: the Python materializer never read a size (CHAOS-9619).
+//
+// The org filter is mandatory for the reason FetchWorkItemActiveHours gives: work_item_id is not
+// tenant-scoped, so an unscoped read could hand one tenant's size to another's unit.
+func (reader *Reader) FetchWorkItemStoryPoints(ctx context.Context, workItemIDs []string, organizationID string) (map[string]float64, error) {
+	if reader == nil || reader.conn == nil {
+		return nil, ErrUnavailable
+	}
+	if organizationID == "" {
+		slog.Error("chquery: refused an unscoped read", "reader", "FetchWorkItemStoryPoints")
+		return nil, fmt.Errorf("FetchWorkItemStoryPoints: %w", ErrOrganizationIDRequired)
+	}
+	ids := dedupeStrings(workItemIDs)
+	if len(ids) == 0 {
+		return map[string]float64{}, nil
+	}
+
+	query := fmt.Sprintf(`
+        SELECT work_item_id, story_points
+        FROM %s
+        WHERE work_item_id IN {work_item_ids:Array(String)}
+          AND org_id = {org_id:String}
+          AND story_points IS NOT NULL
+    `, workItemsDeduped)
+	rows, err := reader.conn.Query(ctx, query,
+		clickhouse.Named("work_item_ids", ids),
+		clickhouse.Named("org_id", organizationID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query work_items story points: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	points := make(map[string]float64, len(ids))
+	for rows.Next() {
+		var (
+			workItemID string
+			value      *float64
+		)
+		if err := rows.Scan(&workItemID, &value); err != nil {
+			return nil, fmt.Errorf("scan work_items story points row: %w", err)
+		}
+		if value != nil {
+			points[pythonparity.DecodeClickHouseStringValue(workItemID)] = *value
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate work_items story points rows: %w", err)
+	}
+	return points, nil
+}
+
 // PullRequest is one git_pull_requests row.
 type PullRequest struct {
 	RepoID    string

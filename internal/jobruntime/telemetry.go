@@ -1049,6 +1049,11 @@ var dailyMetricsZeroRowsWithSourceFamilies = []string{"cicd", "deploy", "inciden
 // CHAOS-4263 daily-family list above is.
 var remainingMetricsOpenDayZeroRowFamilies = []string{"dora"}
 
+// remainingMetricsManualOverlapFamilies is the closed set of remaining-metrics
+// families CHAOS-9692's overlap counter covers: only dora's StartRunTx takes
+// the cross-trigger lock and looks at the day's other runs.
+var remainingMetricsManualOverlapFamilies = []string{"dora"}
+
 // remainingMetricsManualBackfillFamilies is the closed set of remaining-
 // metrics families the CHAOS-4254 `metrics remaining start` operator command
 // accepts -- the same day-scoped set
@@ -1528,6 +1533,11 @@ type MetricsCollector struct {
 	// day that has not closed yet, and therefore refusing to treat it as
 	// terminal coverage.
 	remainingOpenDayZeroRow map[string]uint64
+	// remainingManualOverlap (CHAOS-9692), keyed by family (only "dora" --
+	// remainingMetricsManualOverlapFamilies). Counts an automatic start whose
+	// window shares a day with a pending or running manual run, per overlapped
+	// manual run.
+	remainingManualOverlap map[string]uint64
 	// remainingManualBackfill (CHAOS-4254), keyed by family and outcome. See
 	// RemainingMetricsManualBackfillOutcome for the outcome vocabulary.
 	remainingManualBackfill map[remainingMetricsManualBackfillLabels]uint64
@@ -1731,6 +1741,7 @@ var _ TeamCatalogObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsOpenDayZeroRowObserver = (*MetricsCollector)(nil)
+var _ RemainingMetricsManualOverlapObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsManualBackfillObserver = (*MetricsCollector)(nil)
 var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
 var _ CoverageCacheInvalidationObserver = (*MetricsCollector)(nil)
@@ -1789,6 +1800,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsDiscovery:                make(map[dailyMetricsDiscoveryLabels]uint64, len(dailyMetricsDiscoverySeries())),
 		dailyMetricsFamilyZeroRowsWithSource: make(map[string]uint64, len(dailyMetricsZeroRowsWithSourceFamilies)),
 		remainingOpenDayZeroRow:              make(map[string]uint64, len(remainingMetricsOpenDayZeroRowFamilies)),
+		remainingManualOverlap:               make(map[string]uint64, len(remainingMetricsManualOverlapFamilies)),
 		remainingManualBackfill:              make(map[remainingMetricsManualBackfillLabels]uint64, len(remainingMetricsManualBackfillFamilies)*len(remainingMetricsManualBackfillOutcomes())),
 		remainingScopeRefusal:                make(map[remainingMetricsScopeRefusalLabels]uint64, len(remainingMetricsScopeRefusalFamilies)*len(remainingMetricsScopeRefusalReasons)),
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
@@ -1893,6 +1905,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, family := range remainingMetricsOpenDayZeroRowFamilies {
 		collector.remainingOpenDayZeroRow[family] = 0
+	}
+	for _, family := range remainingMetricsManualOverlapFamilies {
+		collector.remainingManualOverlap[family] = 0
 	}
 	for _, family := range remainingMetricsManualBackfillFamilies {
 		for _, outcome := range remainingMetricsManualBackfillOutcomes() {
@@ -3092,6 +3107,18 @@ func (collector *MetricsCollector) ObserveRemainingMetricsOpenDayZeroRow(family 
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.remainingOpenDayZeroRow[family]++
+	return nil
+}
+
+// ObserveRemainingMetricsManualOverlap records one automatic dora start that
+// overlaps a pending or running manual run (CHAOS-9692), by family.
+func (collector *MetricsCollector) ObserveRemainingMetricsManualOverlap(family string) error {
+	if !slices.Contains(remainingMetricsManualOverlapFamilies, family) {
+		return errors.New("remaining metrics manual overlap family is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.remainingManualOverlap[family]++
 	return nil
 }
 
@@ -4529,6 +4556,12 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	for _, family := range remainingMetricsOpenDayZeroRowFamilies {
 		writeUintSample(output, "dev_health_remaining_metrics_open_day_zero_row_total",
 			[]metricLabel{{"family", family}}, collector.remainingOpenDayZeroRow[family])
+	}
+
+	writeMetadata(output, "dev_health_remaining_metrics_manual_overlap_total", "Automatic dora starts whose window shares a day with a pending or running manual backfill or recompute run, per overlapped manual run (CHAOS-9692). Both runs compute the day; the values are identical.", "counter")
+	for _, family := range remainingMetricsManualOverlapFamilies {
+		writeUintSample(output, "dev_health_remaining_metrics_manual_overlap_total",
+			[]metricLabel{{"family", family}}, collector.remainingManualOverlap[family])
 	}
 
 	// Emitted for every (family, outcome) pair, including zeros -- same

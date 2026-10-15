@@ -305,6 +305,17 @@ complete. No reader selects it, no read model joins it, and the recorded Python 
 (`internal/jobs/investment/materialize_frozen_python_golden_test.go` pins the outcome, rollup and gate decisions, not a
 whole row). See the operator runbook note "Quotes of a crashed rewrite".
 
+**`work_unit_issue_size` (migration 130, CHAOS-9619)** holds the issue size of each work unit: Investment measures
+effort, and effort is the size of the issues a unit worked on (D5999); lines of code are never a size. One row per
+unit and materialization run: `issue_size` is the sum of the positive `work_items.story_points` of the unit's distinct
+issues, `sized_issue_count` how many of them carry one and `issue_count` how many issues the unit has. Every provider
+writes its size to that one column (Jira story points from the configured field, GitLab weight, Linear estimate, GitHub
+Projects number field). A size that is 0, negative or not finite is no size. `issue_size` 0 means the unit carries no
+size, and a reader then counts it 1 work unit, so a scope with no size at all reads the work-unit count. The row is
+written for every unit of every run, also for a unit whose investment row is skipped as unchanged, so a size set later
+in the provider reaches the next run. Readers take the newest row per `(org_id, work_unit_id)` with `argMax` over
+`computed_at`; a unit with no row is unsized. The operator rollback is `internal/chmigrate/rollback/130_*.down.sql`.
+
 **Consumers outside this repo must read the canonical join, never `investment_metrics_daily`.**
 CHAOS-4398 found that `dev-health-acr`'s `FactInvestment` producer (CHAOS-4363/#308) reads
 `investment_metrics_daily` and therefore surfaces the deprecated legacy taxonomy, not the

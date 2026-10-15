@@ -472,15 +472,10 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		})
 	}
 	if scope == "team" {
-		plotted := make(map[string]bool, len(points))
-		for _, point := range points {
-			plotted[point.EntityID] = true
-		}
-		idle, _, err := idleTeamPoints(ctx, client, orgID, selected.teams, plotted, startDay, endDay, evidenceLink(definition.EvidenceMetric))
-		if err != nil {
+		var err error
+		if points, err = withCatalogTeams(ctx, client, orgID, selected.teams, points, startDay, endDay, evidenceLink(definition.EvidenceMetric)); err != nil {
 			return nil, err
 		}
-		points = append(points, idle...)
 	}
 	slog.Debug("quadrant: points aggregate the whole window",
 		"org_id", orgID, "type", definition.Type, "scope", scope, "bucket", params.Bucket,

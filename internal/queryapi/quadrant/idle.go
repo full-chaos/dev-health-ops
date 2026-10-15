@@ -54,14 +54,29 @@ func listTeamsInScope(ctx context.Context, client QueryClient, orgID string, sel
 	return out, nil
 }
 
-// idleTeamPoints is one no-data point for every team in scope that has no
-// plotted point: a team with no work in the window is a distinct "no data"
-// answer, never an absent point and never a zero (check 12). The points follow
-// the plotted ones, ordered by label then id.
-func idleTeamPoints(ctx context.Context, client QueryClient, orgID string, selectedTeams []string, plotted map[string]bool, startDay, endDay time.Time, evidence string) ([]Point, int, error) {
+// withCatalogTeams makes the team points the teams of the catalog: a plotted
+// point whose id is no active team (a retired id that only survives in a
+// metrics table, activeteams) is dropped, and every active team in scope without
+// a plotted point is added as a no-data point. A team with no work in the window
+// is a distinct "no data" answer, never an absent point and never a zero (check
+// 12). No-data points follow the plotted ones, ordered by label then id.
+func withCatalogTeams(ctx context.Context, client QueryClient, orgID string, selectedTeams []string, points []Point, startDay, endDay time.Time, evidence string) ([]Point, error) {
 	teams, err := listTeamsInScope(ctx, client, orgID, selectedTeams)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
+	}
+	inCatalog := make(map[string]bool, len(teams))
+	for _, team := range teams {
+		inCatalog[team.ID] = true
+	}
+	plotted := make(map[string]bool, len(points))
+	kept := make([]Point, 0, len(points))
+	for _, point := range points {
+		if !inCatalog[point.EntityID] && point.EntityID != activeteams.UnassignedID {
+			continue
+		}
+		plotted[point.EntityID] = true
+		kept = append(kept, point)
 	}
 	label := func(team catalogTeam) string {
 		if team.Name == "" {
@@ -75,12 +90,13 @@ func idleTeamPoints(ctx context.Context, client QueryClient, orgID string, selec
 		}
 		return teams[i].ID < teams[j].ID
 	})
-	var idle []Point
+	idle := 0
 	for _, team := range teams {
 		if plotted[team.ID] {
 			continue
 		}
-		idle = append(idle, Point{
+		idle++
+		kept = append(kept, Point{
 			EntityID:     team.ID,
 			EntityLabel:  label(team),
 			WindowStart:  startDay.Format("2006-01-02"),
@@ -89,8 +105,8 @@ func idleTeamPoints(ctx context.Context, client QueryClient, orgID string, selec
 			NoData:       true,
 		})
 	}
-	slog.Debug("quadrant: teams in scope without a point are sent as no-data points",
-		"org_id", orgID, "teams_total", len(teams), "teams_idle", len(idle), "teams_plotted", len(teams)-len(idle),
+	slog.Debug("quadrant: team points follow the active team catalog",
+		"org_id", orgID, "teams_total", len(teams), "teams_idle", idle, "points_dropped_inactive", len(points)-len(plotted),
 		"teams_selected", len(selectedTeams))
-	return idle, len(teams), nil
+	return kept, nil
 }

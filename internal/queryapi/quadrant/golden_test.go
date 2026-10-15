@@ -103,6 +103,8 @@ func TestGoldenCycleThroughputTeamAttributionQuirk(t *testing.T) {
 				{day(2024, 1, 8), "team-a", "team-a", 24.0},
 				{day(2024, 1, 1), "team-b", "team-b", 72.0},
 			}}, nil
+		case strings.Contains(query, "is_active = 1") && strings.Contains(query, "SELECT toString(id) AS team_id, name AS team_name"):
+			return &fixtureRowScanner{rows: [][]any{{"team-a", "Team Alpha"}, {"team-b", ""}}}, nil
 		case strings.Contains(query, "FROM teams FINAL"):
 			return &fixtureRowScanner{rows: [][]any{{"team-a", "Team Alpha"}}}, nil
 		default:

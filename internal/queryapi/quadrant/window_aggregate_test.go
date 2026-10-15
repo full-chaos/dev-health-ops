@@ -33,6 +33,9 @@ var windowCases = []windowCase{
 // buckets) cannot equal the window value.
 func windowReads(c windowCase, weekly, window map[string][]float64, entity string) fakeQueryClient {
 	return fakeQueryClient{handler: func(t *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "SELECT toString(id) AS team_id, name AS team_name") && strings.Contains(query, "is_active = 1") {
+			return &fixtureRowScanner{rows: [][]any{{entity, entity}}}, nil
+		}
 		if strings.Contains(query, "SELECT toString(id) AS team_id") {
 			return &fixtureRowScanner{}, nil
 		}
@@ -118,8 +121,14 @@ func TestAnEmptyWindowHasNoPoints(t *testing.T) {
 	for _, c := range windowCases {
 		t.Run(c.name, func(t *testing.T) {
 			resp := buildWindow(t, windowReads(c, nil, nil, "e1"), c, "week")
-			if resp.Points == nil || len(resp.Points) != 0 {
-				t.Errorf("points = %#v, want an empty, non-null list", resp.Points)
+			// the team grain lists its catalog team as a no-data point; no grain plots anything
+			if resp.Points == nil {
+				t.Errorf("points = nil, want a non-null list")
+			}
+			for _, p := range resp.Points {
+				if !p.NoData || p.X != nil || p.Y != nil {
+					t.Errorf("point %+v plotted in an empty window", p)
+				}
 			}
 		})
 	}

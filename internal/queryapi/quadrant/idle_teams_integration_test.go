@@ -67,6 +67,15 @@ func TestEveryActiveTeamInScopeIsAPointAndAnIdleOneIsNoData(t *testing.T) {
 		})
 	}
 
+	// A retired team id that only survives in a metrics table is no team: no point.
+	crossorg.Exec(ctx, t, admin, `INSERT INTO work_item_metrics_daily (org_id, day, provider, work_scope_id, team_id, items_completed, wip_count_end_of_day, computed_at) VALUES (?, ?, 'github', 's', 'team-x', 5, 5, now())`,
+		ownerShareOrg, windowDays[0])
+	for _, p := range runWindow(ctx, t, client, "wip_throughput", "team", "week").Points {
+		if p.EntityID == "team-x" {
+			t.Errorf("inactive team-x with metric rows was returned: %+v", p)
+		}
+	}
+
 	// A selection narrows the no-data points to the selected active teams.
 	resp, err := BuildResponse(ctx, client, ownerShareOrg, Params{
 		Type: "wip_throughput", ScopeType: "team", Bucket: "week", RangeDays: 30, EndDate: &ownerShareEnd, TeamIDs: []string{"team-b", "team-x"},

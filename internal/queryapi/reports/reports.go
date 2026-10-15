@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
@@ -66,7 +68,7 @@ type Reader struct {
 // limit and offset.
 func checkInt32(name string, value int) error {
 	if value < math.MinInt32 || value > math.MaxInt32 {
-		return fmt.Errorf("Int cannot represent non 32-bit signed integer value: %d (%s)", value, name)
+		return clientError(fmt.Errorf("Int cannot represent non 32-bit signed integer value: %d (%s)", value, name))
 	}
 	return nil
 }
@@ -313,4 +315,11 @@ func scanReportRun(row scanner) (model.ReportRunType, error) {
 		TriggeredBy:       triggeredBy,
 		CreatedAt:         createdAt.UTC(),
 	}, nil
+}
+
+// clientError marks err as written for the client: a validation message
+// derived from the request itself. Every other error of this package is a
+// store failure and reaches the client as a generic message.
+func clientError(err error) error {
+	return &policy.ClientError{Status: http.StatusBadRequest, Message: err.Error(), Cause: err}
 }

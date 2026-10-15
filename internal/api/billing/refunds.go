@@ -131,7 +131,7 @@ func (h handlers) createRefund(w http.ResponseWriter, r *http.Request) {
 		made, err := madeRefund(ctx, client, pending)
 		if err != nil {
 			h.logger.ErrorContext(ctx, "billing: stripe refund lookup failed", "refund_id", pending.id.String(), "error", pyStripeError(err))
-			h.write(w, detail(http.StatusBadGateway, "Failed to read the refund from Stripe: "+pyStripeError(err)))
+			h.write(w, detail(http.StatusBadGateway, "Failed to read the refund from Stripe"))
 			return
 		}
 		refund = made
@@ -156,7 +156,7 @@ func (h handlers) createRefund(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		h.write(w, detail(http.StatusBadGateway, "Failed to create refund: "+pyStripeError(stripeErr)))
+		h.write(w, detail(http.StatusBadGateway, "Failed to create refund"))
 		return
 	}
 	answer, err = h.inTx(ctx, func(tx pgx.Tx) (reply, error) {
@@ -385,7 +385,7 @@ func (h handlers) reserveRefund(ctx context.Context, tx pgx.Tx, request refundRe
 		intent, chargeID, err := invoicePayment(ctx, client, stripeInvoiceID)
 		if err != nil {
 			h.logger.ErrorContext(ctx, "billing: stripe invoice payments read failed", "error", pyStripeError(err))
-			return early(detail(http.StatusBadGateway, "Failed to read the invoice payment: "+pyStripeError(err)))
+			return early(detail(http.StatusBadGateway, "Failed to read the invoice payment"))
 		}
 		switch {
 		case intent != "":

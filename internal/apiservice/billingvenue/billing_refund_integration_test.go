@@ -141,7 +141,7 @@ func TestRefundCreate(t *testing.T) {
 		map[string]any{"stripe_charge_id": "ch_bare", "stripe_payment_intent_id": nil, "amount": float64(500), "currency": "usd"})
 	refund("no Stripe payment", "super", `{"invoice_id":"`+invNone+`"}`, 400,
 		map[string]any{"detail": "Invoice has no Stripe payment to refund"})
-	refund("Stripe refuses", "super", `{"invoice_id":"`+invBad+`"}`, 502, map[string]any{"detail": "Failed to create refund: *"})
+	refund("Stripe refuses", "super", `{"invoice_id":"`+invBad+`"}`, 502, map[string]any{"detail": "Failed to create refund"})
 
 	expect := func(label, query, want string) {
 		got := venueoracle.TableRows(t, ctx, goURI, query)

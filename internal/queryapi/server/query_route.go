@@ -5866,14 +5866,7 @@ func newGraphQLServerWithLimits(resolver *graph.Resolver, complexityLimit, depth
 	// it is a size bound, not a redaction guarantee -- this log line was
 	// already carrying backend-authored diagnostic text before this
 	// change and still does, just with a hard ceiling on how much.
-	gqlHandler.SetErrorPresenter(func(ctx context.Context, err error) *gqlerror.Error {
-		chain := []string{err.Error()}
-		for unwrapped := errors.Unwrap(err); unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
-			chain = append(chain, unwrapped.Error())
-		}
-		log.Printf("query-api: resolver error unwrap chain: %s", truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
-		return withMutationLocation(ctx, graphql.DefaultErrorPresenter(ctx, err))
-	})
+	gqlHandler.SetErrorPresenter(safeGraphQLErrorPresenter("query", nil))
 	return gqlHandler
 }
 

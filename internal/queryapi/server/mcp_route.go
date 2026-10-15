@@ -316,17 +316,11 @@ func newMCPGraphQLServer(es graphql.ExecutableSchema, limits mcpLimits) *gqlhand
 	gql.AroundFields(graph.RefuseNullForNonNullArguments)
 	gql.Use(graph.OperationOrgGuard{})
 	gql.AroundResponses(recordErrorCount)
-	gql.SetErrorPresenter(func(ctx context.Context, err error) *gqlerror.Error {
+	gql.SetErrorPresenter(safeGraphQLErrorPresenter("mcp", func(ctx context.Context) {
 		if obs := mcpObservationFrom(ctx); obs != nil {
 			obs.fieldError()
 		}
-		chain := []string{err.Error()}
-		for unwrapped := errors.Unwrap(err); unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
-			chain = append(chain, unwrapped.Error())
-		}
-		log.Printf("query-api: mcp resolver error unwrap chain: %s", truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
-		return graphql.DefaultErrorPresenter(ctx, err)
-	})
+	}))
 	return gql
 }
 

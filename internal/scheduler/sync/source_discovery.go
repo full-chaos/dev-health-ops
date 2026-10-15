@@ -652,15 +652,16 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 			},
 			MaxPages: sourceDiscoveryMaxPages,
 		})
-		if err == nil && !page.PageBudgetExhausted && namespace != "" && !githubItemsHaveOwner(page.Items, namespace) {
+		if err == nil && !page.PageBudgetExhausted && namespace != "" {
 			// /user/repos only lists repositories the credential owns,
-			// collaborates on or reaches through org membership. A scoped
-			// namespace outside that set (another user, an org the token
-			// is not a member of) is empty there even though the
-			// credential can read its repositories: list the namespace
-			// directly, org first then user, as the non-all_repos branch does.
-			if ownerPage, ownerErr := collectGitHubOwnerRepos(ctx, client, namespace); ownerErr == nil {
-				page = ownerPage
+			// collaborates on or reaches through org membership, so it is
+			// never complete for a scoped namespace (another user, an org
+			// the token is not a member of, public repositories). Union it
+			// with the namespace's own listing, org first then user; a
+			// failed or truncated namespace listing keeps the /user/repos
+			// result.
+			if ownerPage, ownerErr := collectGitHubOwnerRepos(ctx, client, namespace); ownerErr == nil && !ownerPage.PageBudgetExhausted {
+				page.Items = mergeGitHubRepoItems(page.Items, ownerPage.Items)
 			}
 		}
 	} else if owner == "" {
@@ -735,18 +736,31 @@ func collectGitHubOwnerRepos(ctx context.Context, client *providerfoundation.HTT
 	return userPage, nil
 }
 
-func githubItemsHaveOwner(items []json.RawMessage, owner string) bool {
-	for _, raw := range items {
+func mergeGitHubRepoItems(primary, extra []json.RawMessage) []json.RawMessage {
+	seen := make(map[string]struct{}, len(primary))
+	key := func(raw json.RawMessage) string {
 		var repo struct {
-			Owner struct {
-				Login string `json:"login"`
-			} `json:"owner"`
+			FullName string `json:"full_name"`
 		}
-		if json.Unmarshal(raw, &repo) == nil && strings.EqualFold(repo.Owner.Login, owner) {
-			return true
+		if json.Unmarshal(raw, &repo) != nil {
+			return ""
 		}
+		return strings.ToLower(repo.FullName)
 	}
-	return false
+	for _, raw := range primary {
+		seen[key(raw)] = struct{}{}
+	}
+	merged := primary
+	for _, raw := range extra {
+		if k := key(raw); k != "" {
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+		}
+		merged = append(merged, raw)
+	}
+	return merged
 }
 
 // gitlabDiscoveryOptions mirrors discover_gitlab_repos' group/owner/search/

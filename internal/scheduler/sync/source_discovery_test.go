@@ -300,8 +300,8 @@ func TestDiscoverGitHubAllReposListsUserReposAndFiltersByNamespace(t *testing.T)
 	if len(sources) != 1 || sources[0].FullName != "acme/api" {
 		t.Fatalf("discoverGitHub() all_repos = %#v, want only the acme-owned repo", sources)
 	}
-	if len(doer.paths) != 1 || doer.paths[0] != "/user/repos" {
-		t.Fatalf("discoverGitHub() all_repos requested paths = %v, want /user/repos", doer.paths)
+	if len(doer.paths) != 2 || doer.paths[0] != "/user/repos" || doer.paths[1] != "/orgs/acme/repos" {
+		t.Fatalf("discoverGitHub() all_repos requested paths = %v, want /user/repos then /orgs/acme/repos", doer.paths)
 	}
 }
 
@@ -1007,5 +1007,31 @@ func TestDiscoverGitHubAllReposWithoutNamespaceKeepsPersonalAndOrgRepos(t *testi
 	}
 	if len(sources) != 2 || len(doer.paths) != 1 || doer.paths[0] != "/user/repos" {
 		t.Fatalf("sources=%#v paths=%v, want both repos from one /user/repos call", sources, doer.paths)
+	}
+}
+
+// /user/repos holding one repository of the scoped namespace must not stop
+// the namespace's own listing: the readable public repositories join it.
+func TestDiscoverGitHubAllReposScopedNamespaceUnionsUserReposAndOwnerListing(t *testing.T) {
+	doer := &sequencedSourceDiscoveryDoer{
+		t:        t,
+		statuses: []int{http.StatusOK, http.StatusNotFound, http.StatusOK},
+		bodies: []string{
+			`[{"name":"collab","full_name":"alice/collab","owner":{"login":"alice"}}]`,
+			`{"message":"Not Found"}`,
+			`[{"name":"collab","full_name":"alice/collab","owner":{"login":"alice"}},{"name":"public","full_name":"alice/public","owner":{"login":"alice"}}]`,
+		},
+	}
+	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: fakehttp.Client(doer), retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true, "owner": "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 2 || sources[0].FullName != "alice/collab" || sources[1].FullName != "alice/public" {
+		t.Fatalf("discoverGitHub() = %#v, want alice/collab then alice/public once each", sources)
 	}
 }

@@ -2,9 +2,11 @@ package categorize
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -70,29 +72,73 @@ func TestOrgHTTPClientIsGuardedOnlyForASuppliedBaseURL(t *testing.T) {
 	}
 }
 
-// The transport-injecting constructor is a guard bypass: no production file
-// may call it except NewProviderFromCredentials, which passes nil (the guarded
-// transport). Tests in this package may call it.
-func TestOnlyNewProviderFromCredentialsCallsTheTransportInjectingConstructor(t *testing.T) {
+// The transport-injecting constructor is a guard bypass: no production code
+// may reference it except NewProviderFromCredentials, which calls it with a
+// nil transport (the guarded one). Checked on the syntax tree, so an alias
+// (`var f = newProviderFromCredentialsWithTransport`), a method value or a
+// call with a transport argument fails too. Tests in this package may use it.
+func TestOnlyNewProviderFromCredentialsReferencesTheTransportInjectingConstructor(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
+	const target = "newProviderFromCredentialsWithTransport"
+	references := 0
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		raw, err := os.ReadFile(name)
+		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		text := string(raw)
-		calls := strings.Count(text, "newProviderFromCredentialsWithTransport(")
-		switch {
-		case name == "providerkind.go" && calls == 2 && strings.Contains(text, "newProviderFromCredentialsWithTransport(kind, apiKey, baseURL, model, nil)"):
-		case calls == 0:
-		default:
-			t.Errorf("%s calls newProviderFromCredentialsWithTransport (%d occurrences): only NewProviderFromCredentials may, with a nil transport", name, calls)
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok {
+				ast.Inspect(declaration, func(node ast.Node) bool {
+					if ident, ok := node.(*ast.Ident); ok && ident.Name == target {
+						t.Errorf("%s: %s is referenced outside a function body", name, target)
+					}
+					return true
+				})
+				continue
+			}
+			if function.Name.Name == target {
+				continue
+			}
+			allowed := name == "providerkind.go" && function.Name.Name == "NewProviderFromCredentials"
+			ast.Inspect(function, func(node ast.Node) bool {
+				switch value := node.(type) {
+				case *ast.CallExpr:
+					if ident, ok := value.Fun.(*ast.Ident); ok && ident.Name == target {
+						references++
+						last, isIdent := value.Args[len(value.Args)-1].(*ast.Ident)
+						if !allowed || !isIdent || last.Name != "nil" {
+							t.Errorf("%s: %s calls %s; only NewProviderFromCredentials may, with a nil transport", name, function.Name.Name, target)
+						}
+					}
+				case *ast.Ident:
+					if value.Name == target && !isCallee(function, value) {
+						t.Errorf("%s: %s uses %s other than as a direct call (an alias or a function value)", name, function.Name.Name, target)
+					}
+				}
+				return true
+			})
 		}
 	}
+	if references != 1 {
+		t.Errorf("found %d production calls of %s, want exactly 1 (in NewProviderFromCredentials)", references, target)
+	}
+}
+
+// isCallee reports whether ident is the function position of a call inside function.
+func isCallee(function *ast.FuncDecl, ident *ast.Ident) bool {
+	callee := false
+	ast.Inspect(function, func(node ast.Node) bool {
+		if call, ok := node.(*ast.CallExpr); ok && call.Fun == ast.Expr(ident) {
+			callee = true
+		}
+		return true
+	})
+	return callee
 }

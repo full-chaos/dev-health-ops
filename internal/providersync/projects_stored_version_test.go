@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -217,7 +218,7 @@ func gitlabMilestoneFixture(t *testing.T, projects map[string]string, milestones
 				http.NotFound(w, r)
 				return
 			}
-			if r.URL.Query().Get("include_parent_milestones") != "true" {
+			if r.URL.Query().Get("include_ancestors") != "true" && r.URL.Query().Get("include_parent_milestones") != "true" {
 				// GitLab lists the ancestor groups' milestones (they carry group_id)
 				// only when asked.
 				var all, own []json.RawMessage
@@ -595,8 +596,9 @@ func TestGitLabProjectTargetCountsGroupMilestones(t *testing.T) {
 	for _, request := range requests {
 		if strings.Contains(request, "/projects/100/milestones") {
 			calls++
-			if !strings.Contains(request, "include_parent_milestones=true") {
-				t.Fatalf("milestone read %q does not ask for the parent groups' milestones", request)
+			query := mustParseRequestQuery(t, request)
+			if query.Get("include_ancestors") != "true" || query.Get("include_parent_milestones") != "true" {
+				t.Fatalf("milestone read %q does not ask for the ancestor groups' milestones by both names", request)
 			}
 		}
 	}
@@ -615,5 +617,29 @@ func TestGitLabGroupMilestoneOwnerNamesTheGroup(t *testing.T) {
 		if got := gitlabGroupMilestoneOwner(gitlabIssueMilestonePayload{GroupID: json.Number(tc.groupID), WebURL: tc.webURL}); got != tc.want {
 			t.Errorf("owner(%q, %s) = %q, want %q", tc.webURL, tc.groupID, got, tc.want)
 		}
+	}
+}
+
+func mustParseRequestQuery(t *testing.T, request string) url.Values {
+	t.Helper()
+	parsed, err := url.Parse(request)
+	if err != nil {
+		t.Fatalf("request %q: %v", request, err)
+	}
+	return parsed.Query()
+}
+
+// A milestone listed twice (once as the project's own, once as a parent's) is one
+// open milestone: target_other_open counts it once.
+func TestGitLabProjectTargetCountsAMilestoneListedTwiceOnce(t *testing.T) {
+	t.Parallel()
+	batch, _ := collectGitLabProjectTargets(t,
+		map[string]string{"100": "org/api"},
+		map[string]string{"100": `[{"id":6,"title":"Q3","state":"active","due_date":"2026-09-30"},
+			{"id":7,"title":"Q4","state":"active","due_date":"2026-12-31"},
+			{"id":7,"title":"Q4","state":"active","due_date":"2026-12-31","group_id":1,"web_url":"https://gitlab.example/groups/org/-/milestones/2"}]`})
+	row := gitlabProjectRowByKey(t, batch, "org/api")
+	if !sameDay(row.TargetDate, utcDay(2026, 9, 30)) || row.TargetOtherOpen != 1 {
+		t.Fatalf("target=%v other_open=%d, want 2026-09-30 and 1 other open milestone (id 7 listed twice counts once)", row.TargetDate, row.TargetOtherOpen)
 	}
 }

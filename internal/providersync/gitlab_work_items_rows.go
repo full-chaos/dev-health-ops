@@ -51,7 +51,7 @@ type gitlabIssueMilestonePayload struct {
 	StartDate *string     `json:"start_date"`
 	DueDate   *string     `json:"due_date"`
 	// GroupID is set on a group milestone (an ancestor group's, listed with
-	// include_parent_milestones); WebURL names that group.
+	// include_ancestors); WebURL names that group.
 	GroupID json.Number `json:"group_id"`
 	WebURL  string      `json:"web_url"`
 }

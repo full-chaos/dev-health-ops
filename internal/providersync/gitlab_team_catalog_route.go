@@ -837,7 +837,10 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 		pages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 			Path:    providerRelativePath(client, "api", "v4", "projects", nativeID, "milestones"),
 			PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMilestonesMaxPages,
-			Query: url.Values{"state": {"active"}, "include_parent_milestones": {"true"}},
+			// include_ancestors is GitLab's documented name; include_parent_milestones
+			// (deprecated) is sent too because the API docs give no minimum version for
+			// the new one, and an instance that ignores it would drop group milestones.
+			Query: url.Values{"state": {"active"}, "include_ancestors": {"true"}, "include_parent_milestones": {"true"}},
 		})
 		if err != nil {
 			if ctx.Err() != nil {
@@ -851,6 +854,7 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 			continue
 		}
 		candidates := make([]projectTargetCandidate, 0, len(pages.Items))
+		seenMilestone := make(map[string]bool, len(pages.Items))
 		decoded := true
 		for _, raw := range pages.Items {
 			var milestone gitlabIssueMilestonePayload
@@ -859,9 +863,12 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 				break
 			}
 			id := milestone.ID.String()
-			if id == "" || id == "0" {
+			if id == "" || id == "0" || seenMilestone[id] {
 				continue
 			}
+			// A milestone's id is global: listed twice (own and parent, or by both
+			// query names) it is one milestone, counted once in target_other_open.
+			seenMilestone[id] = true
 			date := ""
 			if milestone.DueDate != nil {
 				date = *milestone.DueDate

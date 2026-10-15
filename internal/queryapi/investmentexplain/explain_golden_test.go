@@ -80,6 +80,11 @@ var explainFixtureNow = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 func (explainFixtureClient) Query(_ context.Context, statement string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 	switch {
+	case strings.Contains(statement, "toString(max(computed_at))"):
+		// FetchInvestmentDataVersion -- no rows, as before the version read the quotes table too (it names that table, so it must
+		// be matched before the quotes case below).
+		return &fixtureRowScanner{}, nil
+
 	case strings.Contains(statement, "ARRAY JOIN CAST(subcategory_distribution_json") && strings.Contains(statement, "subcategory_kv.1 AS subcategory"):
 		// FetchInvestmentBreakdown
 		return &fixtureRowScanner{rows: [][]any{

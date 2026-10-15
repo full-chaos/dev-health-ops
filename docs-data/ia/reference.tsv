@@ -19,6 +19,7 @@ ref-investment-model	ref-data-models	/reference/data-models/investment/	Investme
 ref-metrics	reference	/reference/metrics/	Metrics and computations	landing	true	public	planned	false	
 ref-metric-defs	ref-metrics	/reference/metrics/definitions/	Canonical metric definitions	generated-reference	true	public	planned	false	
 ref-weighting	ref-metrics	/reference/metrics/weighting-and-aggregation/	Weighting and aggregation	reference	true	public	planned	false	
+ref-team-counts-owner-share	ref-metrics	/reference/metrics/team-counts-at-owner-share/	Team counts at the owner's share	reference	true	public	planned	false	
 ref-taxonomy	reference	/reference/taxonomies/	Product taxonomies	landing	true	public	planned	false	
 ref-investment-taxonomy	ref-taxonomy	/reference/taxonomies/investment/	Investment taxonomy	generated-reference	true	public	planned	false	
 ref-limits	reference	/reference/limits-and-compatibility/	Provider limits and compatibility	landing	true	public	planned	false	

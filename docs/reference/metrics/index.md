@@ -13,5 +13,6 @@ lifecycle: active
 
 - [Canonical metric definitions](definitions.md)
 - [Weighting and aggregation](weighting-and-aggregation.md)
+- [Team counts at the owner's share](team-counts-at-owner-share.md)
 
 A metric definition must identify name, stable key, unit, population, time semantics, aggregation, filters, missing/zero behavior, source, applicability, and known limitations.

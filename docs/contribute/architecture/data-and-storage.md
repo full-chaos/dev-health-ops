@@ -483,7 +483,7 @@ for both providers (`pickProjectTarget`).
 | `target_state` | `stated` (one open dated entry supplied the date), `none_dated` (read, and no open entry has a date), `held` (not read this run: every target column is the value of the last run that read it), `unknown` (no run ever read it; the default) |
 | `target_kind` | `project`, `version` or `milestone`; empty when there is no target |
 | `target_source` | `<provider>.<kind>.<field>`: `linear.project.targetDate`, `jira.version.releaseDate`, `gitlab.milestone.due_date` (`gitlab.group_milestone.due_date` when the earliest open dated milestone belongs to an ancestor group; the ref then names the group); empty when there is no target |
-| `target_ref`, `target_ref_name` | the supplying version's or milestone's stable id and display name; for GitLab the id is the milestone key `gitlab:<owner path>:milestone:<id>`, where the owner is the project (a project milestone, the `sprints` row key of the same milestone) or the ancestor group (a group milestone, which has no `sprints` row yet: CHAOS-9782) |
+| `target_ref`, `target_ref_name` | the supplying version's or milestone's stable id and display name; for GitLab the id is the milestone key `gitlab:<owner path>:milestone:<id>`, where the owner is the project (a project milestone) or the ancestor group (a group milestone); either way it is the `sprints` row key of the same milestone, as the work-items unit also reads the ancestor groups' milestones |
 | `target_other_open` | the number of other open dated entries of the project; NULL unless the value is a stated one (state `stated`, or `held` over one) |
 | `target_fetched_at` | the time of the last successful read of the target |
 
@@ -508,7 +508,7 @@ docs state no minimum version for `include_ancestors` and an instance that does
 not know it would silently drop the group milestones). A group milestone that is
 the earliest open dated one supplies the target with source
 `gitlab.group_milestone.due_date` and a `target_ref` that names the group. It has
-no `sprints` row yet, so a reader must not assume `target_ref` joins a sprint.
+a `sprints` row under the same key (the work-items unit lists the same ancestor milestones and writes a group milestone once, keyed by its group), so `target_ref` joins the sprint row.
 
 ## Migration rules
 

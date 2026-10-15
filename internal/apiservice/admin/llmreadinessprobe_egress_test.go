@@ -29,3 +29,12 @@ func TestReadinessProbeRefusesAnInternalBaseURLAtDial(t *testing.T) {
 		t.Fatalf("safe error code %q carries the key", *code)
 	}
 }
+
+// An empty base_url probes OpenAI's public endpoint, so the unconditional
+// dial guard never blocks the default path.
+func TestReadinessProbeEmptyBaseURLTargetsThePublicDefault(t *testing.T) {
+	endpoint := chatCompletionsEndpoint("")
+	if !strings.HasPrefix(endpoint, "https://api.openai.com/") {
+		t.Fatalf("empty base_url endpoint = %q, want OpenAI's public endpoint", endpoint)
+	}
+}

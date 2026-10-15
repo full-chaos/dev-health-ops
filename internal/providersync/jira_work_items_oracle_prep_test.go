@@ -207,6 +207,10 @@ func buildJiraWorkItemOraclePrepRow(
 	if err != nil {
 		t.Fatalf("normalize Jira issue: %v", err)
 	}
+	parentID := row.ParentID
+	if input["issue_shape"] != "object" {
+		parentID = frozenPythonJSONShapeParentID(parentID)
+	}
 	return jiraWorkItemOraclePrepRow{
 		WorkItemID: row.WorkItemID, Provider: row.Provider, Title: row.Title,
 		Type: row.Type, Status: row.Status, StatusRaw: row.StatusRaw,
@@ -217,7 +221,7 @@ func buildJiraWorkItemOraclePrepRow(
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, StartedAt: row.StartedAt,
 		CompletedAt: row.CompletedAt, ClosedAt: row.ClosedAt, Labels: row.Labels,
 		StoryPoints: row.StoryPoints, SprintID: row.SprintID, SprintName: row.SprintName,
-		ParentID: row.ParentID, EpicID: row.EpicID, URL: row.URL,
+		ParentID: parentID, EpicID: row.EpicID, URL: row.URL,
 		PriorityRaw: row.PriorityRaw, ServiceClass: row.ServiceClass, DueAt: row.DueAt,
 		OrgID: row.OrgID,
 	}
@@ -234,4 +238,17 @@ func jiraOracleIdentity(email, accountID, displayName string) string {
 		return strings.TrimSpace(displayName)
 	}
 	return "unknown"
+}
+
+// frozenPythonJSONShapeParentID maps the Go parent_id back to what the retired Python producer recorded for a
+// JSON-shaped issue. The frozen snapshots are immutable recordings of that producer, which stored the literal "jira:"
+// for every JSON-shaped parent (it read the key from an attribute a JSON object lacks). Go now stores "jira:<key>", or
+// no parent_id without a key (CHAOS-9835, TestJiraParentIDOmitsParentWithoutKey); only this adapter keeps the
+// comparison against the old recording, so the divergence is named here and nowhere else.
+func frozenPythonJSONShapeParentID(parentID *string) *string {
+	if parentID == nil {
+		return nil
+	}
+	legacy := "jira:"
+	return &legacy
 }

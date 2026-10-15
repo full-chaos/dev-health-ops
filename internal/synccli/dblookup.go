@@ -205,22 +205,28 @@ func syncPostgresDSN(dbURL string) (string, bool) {
 }
 
 // firstOrganization is _resolve_first_org_id. It never returns a driver error:
-// its text can carry the DSN.
+// its text can carry the DSN, so a failure is logged by its type and class only.
+// An empty organizations table is not a failure and is not logged.
 func firstOrganization(ctx context.Context, dbURL string) (string, bool) {
 	if dbURL == "" {
 		return "", false
 	}
 	dsn, ok := syncPostgresDSN(dbURL)
 	if !ok {
+		logCredentialLookupFailure(ctx, "", lookupFailure(reasonDatabaseURLNotUsable))
 		return "", false
 	}
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
+		logCredentialLookupFailure(ctx, "", lookupFailureWith(reasonDatabaseConnectFailed, err))
 		return "", false
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	var id string
 	if err := conn.QueryRow(ctx, "SELECT id::text FROM organizations ORDER BY created_at ASC LIMIT 1").Scan(&id); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			logCredentialLookupFailure(ctx, "", lookupFailureWith(reasonDatabaseQueryFailed, err))
+		}
 		return "", false
 	}
 	return id, true

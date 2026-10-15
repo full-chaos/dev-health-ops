@@ -385,6 +385,7 @@ flowchart TB
     PROJ["Project<br/>projects"]
     TEAM["Team<br/>teams"]
     DEP["Deployment<br/>deployments"]
+    INC["Incident<br/>operational_incidents"]
 
     PR ==>|"BELONGS_TO_REPOSITORY<br/>the pull request's work_items.repo_id"| REPO
     PR ==>|"RELATES_TO<br/>work_graph_issue_pr link row"| ISSUE
@@ -392,6 +393,7 @@ flowchart TB
     REPO -.->|"OWNED_BY_TEAM<br/>team_repo_ownership"| TEAM
     PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership"| TEAM
     DEP -.->|"BELONGS_TO_REPOSITORY<br/>deployments.repo_id"| REPO
+    DEP -.->|"CORRELATED_WITH_INCIDENT<br/>work_graph_deployment_incident_edges"| INC
     REPO x-.-|"not the tree: the issue's<br/>own work_items.repo_id"| ISSUE
     ISSUE -.-x|"not ownership: OWNED_BY_TEAM<br/>work_item_team_attributions"| TEAM
 ```
@@ -403,7 +405,11 @@ specific to one provider.
   its pull requests; a project's repositories are reached through its issues'
   linked pull requests.
 - **Dotted edges** hang off the tree: a team owns a repository or a project,
-  and a deployment belongs to a repository.
+  a deployment belongs to a repository, and a deployment is correlated with an
+  incident (one row in `work_graph_deployment_incident_edges` for each
+  repository, deployment and incident; tier ranked **native > explicit_text >
+  heuristic** by `edges.ProvenanceRank`, `source` is the tier; two repositories
+  that run one deployment id each hold their own row).
 - **Crossed edges** exist but are never tree membership.
 
 Two rules hold for every read of the tree:

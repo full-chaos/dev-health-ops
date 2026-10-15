@@ -405,6 +405,9 @@ type ProviderError struct {
 	// structured log value (a map, a struct, a struct value) carries class,
 	// status, path and retry delay only.
 	Body string `json:"-"`
+	// Reason is a closed-set transport failure reason (TransportReason*),
+	// set only when no HTTP response arrived. Never raw cause text.
+	Reason string
 }
 
 const maxProviderErrorBodyInMessage = 500
@@ -416,6 +419,9 @@ func (e *ProviderError) Error() string {
 	}
 	if e.Path != "" {
 		message += fmt.Sprintf(" path=%s", e.Path)
+	}
+	if e.Reason != "" {
+		message += fmt.Sprintf(" reason=%s", e.Reason)
 	}
 	return message
 }

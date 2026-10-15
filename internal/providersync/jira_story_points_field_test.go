@@ -85,6 +85,8 @@ func TestJiraWorkItemStoryPointsSelection(t *testing.T) {
 		{"unset, only the estimate field exists", nil, []string{"customfield_10016"}, map[string]any{"customfield_10016": 2.0}, jiraPointsFloatPtr(2)},
 		{"both exist, value only in the estimate", nil, both, map[string]any{"customfield_10016": 13.0}, jiraPointsFloatPtr(13)},
 		{"both hold a value, Story Points first", nil, both, map[string]any{"customfield_10042": 5.0, "customfield_10016": 13.0}, jiraPointsFloatPtr(5)},
+		{"malformed classic value falls back to the estimate", nil, both, map[string]any{"customfield_10042": "n/a", "customfield_10016": 8.0}, jiraPointsFloatPtr(8)},
+		{"malformed value alone stays unsized", nil, both, map[string]any{"customfield_10042": "n/a", "customfield_10016": nil}, nil},
 		{"both exist, both null", nil, both, map[string]any{"customfield_10042": nil, "customfield_10016": nil}, nil},
 		{"neither field exists", nil, nil, map[string]any{"customfield_10042": 5.0}, nil},
 	}

@@ -2,9 +2,11 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -90,7 +92,7 @@ func jiraStoryPoints(claim Claim, fields map[string]any, discovered []string, ob
 		return jiraFloat(jiraField(fields, configured, objectShape))
 	}
 	for _, id := range discovered {
-		if value := jiraFloat(jiraField(fields, id, objectShape)); value != nil {
+		if value := jiraDiscoveredPoints(jiraField(fields, id, objectShape)); value != nil {
 			return value
 		}
 	}
@@ -115,4 +117,21 @@ func (stats *jiraStoryPointsStats) observe(item jiraWorkItemRow) {
 func (stats jiraStoryPointsStats) log(ctx context.Context) {
 	slog.InfoContext(ctx, "providersync.jira.story_points_sized",
 		"sized", stats.sized, "unsized", stats.unsized)
+}
+
+// jiraDiscoveredPoints is a number or a numeric string, else nil: a value
+// that does not parse must fall through to the next candidate instead of
+// becoming 0.
+func jiraDiscoveredPoints(value any) *float64 {
+	switch typed := value.(type) {
+	case json.Number:
+		if _, err := strconv.ParseFloat(string(typed), 64); err != nil {
+			return nil
+		}
+	case string:
+		if _, err := strconv.ParseFloat(strings.TrimSpace(typed), 64); err != nil {
+			return nil
+		}
+	}
+	return jiraFloat(value)
 }

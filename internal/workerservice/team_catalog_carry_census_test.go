@@ -3,7 +3,6 @@ package workerservice
 import (
 	"context"
 	"errors"
-	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"os"
 	"regexp"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )

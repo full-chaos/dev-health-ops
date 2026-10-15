@@ -424,3 +424,26 @@ func TestWorkerRolePosturesGainNoRepairAuditGrant(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-2275: the scheduler records the history row of an initial backfill
+// (INSERT only); the domain role terminalizes it (UPDATE only) and must never
+// create one.
+func TestBackfillJobsInsertIsCoordinatorOnly(t *testing.T) {
+	t.Parallel()
+	find := func(posture RolePosture) (TablePrivilege, bool) {
+		for _, table := range posture.RequiredTables {
+			if table.TableName == "backfill_jobs" {
+				return table, true
+			}
+		}
+		return TablePrivilege{}, false
+	}
+	coordinator, ok := find(coordinatorPosture())
+	if !ok || coordinator != (TablePrivilege{TableName: "backfill_jobs", AllowInsert: true}) {
+		t.Errorf("coordinator backfill_jobs = %+v (present=%t), want INSERT only", coordinator, ok)
+	}
+	domain, ok := find(domainPosture())
+	if !ok || domain != (TablePrivilege{TableName: "backfill_jobs", AllowUpdate: true}) {
+		t.Errorf("domain backfill_jobs = %+v (present=%t), want UPDATE only, never INSERT", domain, ok)
+	}
+}

@@ -113,6 +113,13 @@ LABEL org.opencontainers.image.title="Dev Health Go-API tools" \
       org.opencontainers.image.revision=${COMMIT} \
       org.opencontainers.image.created=${BUILD_TIME}
 
+# bookworm-slim ships no CA bundle: without it every outbound TLS call from
+# the one-off tools pod (e.g. `dho sync deployments`) fails certificate
+# verification (CHAOS-9731).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
 # Same non-root numeric-friendly convention as docker/Dockerfile's runtime
 # stage: a real user, not root, but one a Kubernetes securityContext can
 # still pin by uid.

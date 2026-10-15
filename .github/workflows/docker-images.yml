@@ -683,6 +683,27 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Check CA bundle in the built image
+        if: matrix.platform == 'linux/amd64'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/go-api-tools.Dockerfile
+          target: runtime
+          platforms: linux/amd64
+          load: true
+          tags: ghcr.io/full-chaos/go-api-tools-ca-check:local
+          build-args: |
+            VERSION=${{ steps.versioning.outputs.version }}
+            COMMIT=${{ steps.versioning.outputs.commit }}
+            BUILD_TIME=${{ steps.versioning.outputs.build_time }}
+            SOURCE_DATE_EPOCH=${{ steps.versioning.outputs.source_date_epoch }}
+          cache-from: type=gha
+
+      - name: Assert CA bundle exists
+        if: matrix.platform == 'linux/amd64'
+        run: docker run --rm --entrypoint test ghcr.io/full-chaos/go-api-tools-ca-check:local -s /etc/ssl/certs/ca-certificates.crt
+
       - name: Export digest
         if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
         run: |

@@ -78,9 +78,9 @@ func TestJiraProjectTargetFollowsOpenVersionsThroughTheCatalogWrite(t *testing.T
 		}
 	}
 	at := func(step int) int64 { return start.Add(time.Duration(step) * time.Hour).UnixMilli() }
-	// readStep is the step whose answer NODATE's target is: the walk reads the
-	// project bodies in order, so a failed body stops it and the projects after it
-	// are unread that run (held).
+	// readStep is the step whose answer NODATE's target is: a failed body of an
+	// earlier project does not stop the later bodies, so NODATE is read in every
+	// run; only the failed project itself is unread (held).
 	want := func(step, readStep int, ops string) {
 		t.Helper()
 		if got := storedProjectTarget(t, ctx, conn, orgID, "jira", "10001"); got != ops {
@@ -128,7 +128,7 @@ func TestJiraProjectTargetFollowsOpenVersionsThroughTheCatalogWrite(t *testing.T
 	want(3, 3, held)
 
 	sync(4, `{}`, http.StatusInternalServerError)
-	want(4, 3, held)
+	want(4, 4, held)
 
 	sync(5, `{"projectTypeKey":"software","versions":[
 		{"id":"101","name":"2.0","released":true,"archived":false,"releaseDate":"2026-12-15"}]}`, http.StatusOK)

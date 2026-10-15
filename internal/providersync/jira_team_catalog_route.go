@@ -321,7 +321,7 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		}
 	}
 
-	sprints, targets, sprintErr := handler.collectSprints(ctx, client, claim, projectKeys, normalizedAt)
+	sprints, targets, sprintErr := handler.collectSprints(ctx, client, claim, projectKeys, normalizedAt, ref.Strict)
 	applyJiraProjectTargets(ctx, ref.OrgID, rows.Projects, targets)
 	if sprintErr != nil {
 		if ref.Strict {
@@ -474,62 +474,107 @@ func jiraTeamCatalogSearchProjects(
 // one documented per-board 400 shape. The caller decides strict-vs-non-strict
 // handling of that returned error; this function itself never distinguishes.
 func (handler JiraTeamCatalogRouteHandler) collectSprints(
-	ctx context.Context, client *providerfoundation.HTTPClient, claim Claim, projectKeys []string, normalizedAt time.Time,
+	ctx context.Context, client *providerfoundation.HTTPClient, claim Claim, projectKeys []string, normalizedAt time.Time, strict bool,
 ) ([]jiraSprintRow, map[string]jiraProjectTarget, error) {
 	sprints := make([]jiraSprintRow, 0)
 	// targets holds the target date of each project whose body was read, even
-	// when a later step of the walk fails: the failure loses the sprints, not
-	// the answers already read.
+	// when a step of the walk fails: the failure loses the sprints, not the
+	// answers already read, and not the bodies of the projects after it.
 	targets := make(map[string]jiraProjectTarget, len(projectKeys))
+	// walkErr is the first failure. Once set, the sprint rows are lost (the
+	// Python outer try/except), so a non-strict loop only reads the remaining
+	// bodies. A strict run drops the whole batch on the error, so it returns at
+	// the first failure and makes no later call.
+	var walkErr error
+	failedBodies := 0
 	for _, key := range projectKeys {
 		var detail jiraTeamCatalogProjectDetailPayload
 		detailPath := "/rest/api/3/project/" + url.PathEscape(key)
 		if err := jiraFetchObject(ctx, client, http.MethodGet, detailPath, nil, &detail); err != nil {
-			return nil, targets, err
+			if strict || ctx.Err() != nil {
+				return nil, targets, err
+			}
+			failedBodies++
+			if walkErr == nil {
+				walkErr = err
+			}
+			continue
 		}
 		if detail.Versions != nil {
 			date, facts := pickProjectTarget(projectTargetKindVersion, jiraProjectTargetSource, normalizedAt, jiraProjectTargetCandidates(detail.Versions))
 			targets[key] = jiraProjectTarget{Date: date, Facts: facts, Versions: len(detail.Versions)}
+		}
+		if walkErr != nil {
+			continue
 		}
 		projectType := strings.ToLower(strings.TrimSpace(detail.ProjectTypeKey))
 		if jiraTeamCatalogNoBoardProjectTypes[projectType] {
 			continue
 		}
 		if !jiraTeamCatalogBoardCapableProjectTypes[projectType] {
-			return nil, targets, fmt.Errorf("%w: unrecognized jira project type %q for project_key=%q",
+			walkErr = fmt.Errorf("%w: unrecognized jira project type %q for project_key=%q",
 				providerfoundation.ErrNormalizationInvalid, detail.ProjectTypeKey, key)
-		}
-		boards, err := handler.iterBoards(ctx, client, key)
-		if err != nil {
-			return nil, targets, err
-		}
-		for _, board := range boards {
-			boardID := strings.TrimSpace(board.ID.String())
-			if boardID == "" {
-				continue
+			if strict {
+				return nil, targets, walkErr
 			}
-			boardSprints, skipDetail, err := handler.iterBoardSprints(ctx, client, boardID)
-			if err != nil {
+			continue
+		}
+		boardSprints, err := handler.collectProjectSprints(ctx, client, claim, key, normalizedAt)
+		if err != nil {
+			if strict {
 				return nil, targets, err
 			}
-			for _, raw := range boardSprints {
-				var payload map[string]any
-				if err := decodeJiraJSON(raw, &payload); err != nil {
-					return nil, targets, providerfoundation.ErrNormalizationInvalid
-				}
-				sprint, sprintErr := normalizeJiraSprint(claim, payload, normalizedAt)
-				if sprintErr != nil {
-					continue
-				}
-				sprints = append(sprints, sprint)
-			}
-			if skipDetail != "" {
-				slog.Default().WarnContext(ctx, "jira_team_catalog_board_sprints_skipped",
-					"org_id", claim.OrgID, logging.ProviderIDAttr("board_id", boardID), "skip_reason", "board_rejects_sprints")
-			}
+			walkErr = err
+			continue
 		}
+		sprints = append(sprints, boardSprints...)
+	}
+	if failedBodies > 0 {
+		slog.Default().WarnContext(ctx, "jira_team_catalog_project_bodies_failed",
+			"org_id", claim.OrgID, "failed_bodies", failedBodies, "projects", len(projectKeys), "read", len(targets))
+	}
+	if walkErr != nil {
+		return nil, targets, walkErr
 	}
 	return sprints, targets, nil
+}
+
+// collectProjectSprints reads the boards of one project and the sprints of
+// each board. Its error aborts the sprint walk of the whole run.
+func (handler JiraTeamCatalogRouteHandler) collectProjectSprints(
+	ctx context.Context, client *providerfoundation.HTTPClient, claim Claim, key string, normalizedAt time.Time,
+) ([]jiraSprintRow, error) {
+	sprints := make([]jiraSprintRow, 0)
+	boards, err := handler.iterBoards(ctx, client, key)
+	if err != nil {
+		return nil, err
+	}
+	for _, board := range boards {
+		boardID := strings.TrimSpace(board.ID.String())
+		if boardID == "" {
+			continue
+		}
+		boardSprints, skipDetail, err := handler.iterBoardSprints(ctx, client, boardID)
+		if err != nil {
+			return nil, err
+		}
+		for _, raw := range boardSprints {
+			var payload map[string]any
+			if err := decodeJiraJSON(raw, &payload); err != nil {
+				return nil, providerfoundation.ErrNormalizationInvalid
+			}
+			sprint, sprintErr := normalizeJiraSprint(claim, payload, normalizedAt)
+			if sprintErr != nil {
+				continue
+			}
+			sprints = append(sprints, sprint)
+		}
+		if skipDetail != "" {
+			slog.Default().WarnContext(ctx, "jira_team_catalog_board_sprints_skipped",
+				"org_id", claim.OrgID, logging.ProviderIDAttr("board_id", boardID), "skip_reason", "board_rejects_sprints")
+		}
+	}
+	return sprints, nil
 }
 
 // jiraProjectTarget is the answer of one project body about its target date:

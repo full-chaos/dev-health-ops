@@ -317,7 +317,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	}
 	root := providerRelativePath(client, "repos", owner, repository)
 	var repo gitHubRepositoryPayload
-	if err := fetchObject(ctx, client, root, &repo); err != nil {
+	if err := fetchObjectRoute(ctx, client, githubRepoRoute, root, &repo); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	repoID, err := repositoryIdentity(repo.FullName)
@@ -356,7 +356,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	}
 	runPages := (maxRuns + nativePerPage - 1) / nativePerPage
 	runsPage, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-		Path: root + "/actions/runs", Query: runQuery, DataKey: "workflow_runs", MaxPages: runPages,
+		Path: root + "/actions/runs", Route: githubRunsRoute, Query: runQuery, DataKey: "workflow_runs", MaxPages: runPages,
 	})
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -376,7 +376,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		artifactRunQuery.Set("created", ">="+claim.SinceAt.UTC().Format(time.DateOnly))
 	}
 	artifactRunsPage, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-		Path: root + "/actions/runs", Query: artifactRunQuery, DataKey: "workflow_runs", MaxPages: runPages,
+		Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactRunQuery, DataKey: "workflow_runs", MaxPages: runPages,
 	})
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -406,7 +406,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		}
 		pipelines = append(pipelines, pipeline)
 		jobPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-			Path: root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs", Query: url.Values{"per_page": {"100"}}, DataKey: "jobs", MaxPages: jobPages,
+			Path: root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs", Route: githubRunJobsRoute, Query: url.Values{"per_page": {"100"}}, DataKey: "jobs", MaxPages: jobPages,
 		})
 		if pageErr != nil {
 			return CompleteRouteBatch{}, pageErr
@@ -469,7 +469,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			continue
 		}
 		artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-			Path: root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts", Query: url.Values{"per_page": {"100"}}, DataKey: "artifacts", MaxPages: 1,
+			Path: root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts", Route: githubRunArtifactsRoute, Query: url.Values{"per_page": {"100"}}, DataKey: "artifacts", MaxPages: 1,
 		})
 		if pageErr != nil {
 			return CompleteRouteBatch{}, pageErr
@@ -788,7 +788,7 @@ type githubTestsPolicy struct {
 
 func fetchGitHubTestsPolicy(ctx context.Context, client *providerfoundation.HTTPClient, root, branch string) (githubTestsPolicy, error) {
 	path := root + "/branches/" + url.PathEscape(branch) + "/protection/required_status_checks"
-	response, err := client.Do(ctx, http.MethodGet, path, nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, githubRepoRoute+"/branches/{branch}/protection/required_status_checks", path, nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && providerErr.StatusCode > 0 {
@@ -891,7 +891,7 @@ func downloadGitHubTestsArtifact(
 	ctx context.Context, client *providerfoundation.HTTPClient, root, artifactID string,
 	maxBytes int64,
 ) (archive []byte, used int, notFound bool, err error) {
-	response, err := client.Do(ctx, http.MethodGet, root+"/actions/artifacts/"+url.PathEscape(artifactID)+"/zip", nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, githubRepoRoute+"/actions/artifacts/{artifact}/zip", root+"/actions/artifacts/"+url.PathEscape(artifactID)+"/zip", nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusGone) {

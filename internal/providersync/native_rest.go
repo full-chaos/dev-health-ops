@@ -114,7 +114,7 @@ func (handler NativeRESTHandler) fetchGitHub(
 	switch claim.Dataset {
 	case "repo-metadata":
 		var payload repositoryPayload
-		if err := fetchObject(ctx, &counted, root, &payload); err != nil {
+		if err := fetchObjectRoute(ctx, &counted, githubRepoRoute, root, &payload); err != nil {
 			return FetchResult{}, err
 		}
 		envelope, err := handler.normalizeRepository(claim, "github:repo:"+claim.SourceExternalID, payload)
@@ -129,14 +129,14 @@ func (handler NativeRESTHandler) fetchGitHub(
 		return resultWithEvidence(claim, envelopes, evidence, err)
 	case "work-item-labels":
 		page, err := providerfoundation.CollectGitHubLinkPages(ctx, &counted, providerfoundation.GitHubPageOptions{
-			Path: root + "/labels", Query: url.Values{"per_page": {"100"}},
+			Path: root + "/labels", Route: githubLabelsRoute, Query: url.Values{"per_page": {"100"}},
 			MaxPages: nativeMaxPages,
 		})
 		envelopes, normalizeErr := handler.normalizeNamedRecords(claim, "work_item_label", "label", page.Items)
 		return pageFetchResult(claim, envelopes, page, err, normalizeErr, requests)
 	case "work-item-projects":
 		page, err := providerfoundation.CollectGitHubLinkPages(ctx, &counted, providerfoundation.GitHubPageOptions{
-			Path: root + "/milestones", Query: url.Values{"state": {"all"}, "per_page": {"100"}},
+			Path: root + "/milestones", Route: githubMilestonesRoute, Query: url.Values{"state": {"all"}, "per_page": {"100"}},
 			MaxPages: nativeMaxPages,
 		})
 		envelopes, normalizeErr := handler.normalizeProjects(claim, page.Items)
@@ -164,7 +164,7 @@ func (handler NativeRESTHandler) fetchGitLab(
 	switch claim.Dataset {
 	case "repo-metadata":
 		var payload repositoryPayload
-		if err := fetchObject(ctx, &counted, root, &payload); err != nil {
+		if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &payload); err != nil {
 			return FetchResult{}, err
 		}
 		sourceID := "gitlab:project:" + projectID
@@ -180,13 +180,13 @@ func (handler NativeRESTHandler) fetchGitLab(
 		return resultWithEvidence(claim, envelopes, evidence, err)
 	case "work-item-labels":
 		page, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-			Path: root + "/labels", PerPage: nativePerPage, MaxPages: nativeMaxPages,
+			Path: root + "/labels", Route: gitlabLabelsRoute, PerPage: nativePerPage, MaxPages: nativeMaxPages,
 		})
 		envelopes, normalizeErr := handler.normalizeNamedRecords(claim, "work_item_label", "label", page.Items)
 		return pageFetchResult(claim, envelopes, page, err, normalizeErr, requests)
 	case "work-item-projects":
 		page, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-			Path: root + "/milestones", Query: url.Values{"state": {"all"}},
+			Path: root + "/milestones", Route: gitlabMilestonesRoute, Query: url.Values{"state": {"all"}},
 			PerPage: nativePerPage, MaxPages: nativeMaxPages,
 		})
 		envelopes, normalizeErr := handler.normalizeProjects(claim, page.Items)
@@ -269,7 +269,7 @@ func collectGitHubIssues(
 		query.Set("since", claim.SinceAt.UTC().Format(time.RFC3339))
 	}
 	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-		Path: root + "/issues", Query: query, MaxPages: nativeMaxPages,
+		Path: root + "/issues", Route: githubIssuesRoute, Query: query, MaxPages: nativeMaxPages,
 	})
 	evidence := FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Pages: page.Pages, CapReached: page.PageBudgetExhausted}
 	if err != nil {
@@ -309,7 +309,7 @@ func collectGitHubWorkItems(
 		"per_page":  {"100"},
 	}
 	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-		Path: root + "/pulls", Query: query, MaxPages: nativeMaxPages,
+		Path: root + "/pulls", Route: githubPullsRoute, Query: query, MaxPages: nativeMaxPages,
 	})
 	evidence.Pages += page.Pages
 	evidence.CapReached = evidence.CapReached || page.PageBudgetExhausted
@@ -335,9 +335,11 @@ func collectGitLabWorkItems(
 	}
 	var items []json.RawMessage
 	evidence := FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset}
-	for _, path := range []string{root + "/issues", root + "/merge_requests"} {
+	for _, target := range []struct{ route, path string }{
+		{gitlabIssuesRoute, root + "/issues"}, {gitlabMergeRequestsRoute, root + "/merge_requests"},
+	} {
 		page, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-			Path: path, Query: query, PerPage: nativePerPage, MaxPages: nativeMaxPages,
+			Path: target.path, Route: target.route, Query: query, PerPage: nativePerPage, MaxPages: nativeMaxPages,
 		})
 		evidence.Pages += page.Pages
 		evidence.CapReached = evidence.CapReached || page.PageBudgetExhausted
@@ -541,6 +543,7 @@ func (handler NativeRESTHandler) fetchGitHubChildren(
 		}
 		page, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 			Path:  root + "/issues/" + strconv.Itoa(item.Number) + suffix,
+			Route: githubRepoRoute + "/issues/{number}" + suffix,
 			Query: url.Values{"per_page": {"100"}}, MaxPages: maxPages,
 		})
 		evidence.Pages += page.Pages
@@ -580,17 +583,21 @@ func (handler NativeRESTHandler) fetchGitLabChildren(
 			resource = "merge_requests"
 		}
 		var paths []string
+		var routes []string
 		entityType, maxPages := "work_item_transition", nativeMaxHistoryPage
+		routeBase := gitlabProjectRoute + "/" + resource + "/{iid}"
 		if claim.Dataset == "work-item-comments" {
 			entityType, maxPages = "work_item_comment", nativeMaxCommentsPage
 			paths = []string{root + "/" + resource + "/" + strconv.Itoa(item.IID) + "/notes"}
+			routes = []string{routeBase + "/notes"}
 		} else {
 			base := root + "/" + resource + "/" + strconv.Itoa(item.IID)
 			paths = []string{base + "/resource_state_events", base + "/resource_label_events"}
+			routes = []string{routeBase + "/resource_state_events", routeBase + "/resource_label_events"}
 		}
-		for _, path := range paths {
+		for index, path := range paths {
 			page, pageErr := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-				Path: path, PerPage: nativePerPage, MaxPages: maxPages,
+				Path: path, Route: routes[index], PerPage: nativePerPage, MaxPages: maxPages,
 			})
 			evidence.Pages += page.Pages
 			evidence.CapReached = evidence.CapReached || page.PageBudgetExhausted
@@ -662,7 +669,13 @@ func (handler NativeRESTHandler) normalizeChildren(
 }
 
 func fetchObject(ctx context.Context, client *providerfoundation.HTTPClient, path string, target any) error {
-	response, err := client.Do(ctx, http.MethodGet, path, nil)
+	return fetchObjectRoute(ctx, client, "", path, target)
+}
+
+// fetchObjectRoute is fetchObject for a path that carries an org, group or
+// member name: a failure names the static route template instead.
+func fetchObjectRoute(ctx context.Context, client *providerfoundation.HTTPClient, route, path string, target any) error {
+	response, err := client.DoRoute(ctx, http.MethodGet, route, path, nil)
 	if err != nil {
 		return err
 	}

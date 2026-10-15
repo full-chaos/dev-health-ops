@@ -1277,6 +1277,7 @@ type MappingCoverage {
 
 enum MeasureInput {
   COUNT
+  ISSUE_SIZE
   CHURN_LOC
   PR_REWORK_RATIO
   CYCLE_TIME_HOURS
@@ -1310,6 +1311,8 @@ type MetricDelta {
   hasData: Boolean!
   "Whether the comparison window has one or more stored source rows."
   hasPriorData: Boolean!
+  "The value the comparison window stored, in the unit and scale of value (the same transform), read by the query that sets hasPriorData. Null exactly when hasPriorData is false: a window with no stored value is unknown, never 0. A stored zero is 0. Not derived from value and deltaPct (CHAOS-9817)."
+  priorValue: Float
   spark: [SparkPoint!]!
   "Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric."
   rateState: String
@@ -1943,6 +1946,8 @@ type SankeyCoverage {
   directRepoCoverage: Float
   teamFallbackRepoCoverage: Float
   repoFanoutReposPerUnit: Float
+  sizingCoverage: Float
+  unsizedUnitCount: Int
 }
 
 type SankeyEdge {
@@ -1976,6 +1981,7 @@ type SankeyResult {
 
 enum SankeyValueUnit {
   WORK_UNITS
+  ISSUE_SIZE
 }
 
 type SavedReportConnection {

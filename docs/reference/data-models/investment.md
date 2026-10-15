@@ -162,6 +162,29 @@ written on every run, including at zero, so that "nothing to allocate" can be
 told apart from "the counter was never computed". Field-by-field meaning:
 [CLI reference](../cli/index.md#investment).
 
+## Measure: work-unit count or issue size
+
+Investment measures effort, and effort is the size of the issues a unit worked on (D5999). Lines of code are never an
+Investment measure. Two measures read the same rows:
+
+| Measure | What a unit weighs |
+| --- | --- |
+| `COUNT` (and `THROUGHPUT`, the same) | 1 work unit |
+| `ISSUE_SIZE` | The unit's newest issue size (`work_unit_issue_size`): the sum of the story points of its issues. A unit with no size weighs 1 work unit, so it is never dropped from the mix. |
+
+In both, a unit's weight is spread over its subcategories by their probabilities and over its repositories by their
+allocation weights, and a team scope takes each repository at the share the teams in view hold, so the sum of a
+unit's rows is its weight. When no unit of a scope carries a size, `ISSUE_SIZE` equals `COUNT` exactly. Provider
+scales are not normalized: a Linear estimate, Jira story points and a GitLab weight add as stored.
+
+`SankeyCoverage.sizingCoverage` is the share of the window's work units that carry a size and
+`SankeyCoverage.unsizedUnitCount` the units that do not: read them before reading an `ISSUE_SIZE` mix. When less
+than half of the units carry a size, the mix is mostly unsized: "Mostly unsized: n of m work units have an issue size.
+The other u have no size, so each counts as 1 work unit." Both are counted for every measure on the work-unit path,
+and are null where they are not measured (the non-investment path, or a window with no unit). A Sankey read in
+`ISSUE_SIZE` names its unit `ISSUE_SIZE`; every other Investment Sankey names `WORK_UNITS`. Under `ISSUE_SIZE` every
+weighted coverage share (`teamCoverage`, `repoCoverage` and its split) is weighed the same way as the chart.
+
 ## Team coverage: ownership, not the attribution vote
 
 `teamCoverage` is the share of effort whose work unit has a team, and a unit has a team when a team **owns** one of
@@ -228,14 +251,14 @@ next to `filters`:
 
 | Field | Meaning | Default |
 |---|---|---|
-| `measure` | `COUNT` (the page's measure) or `THROUGHPUT` (same as `COUNT`); any other name, `CHURN_LOC` included, is refused. The explanation never weighs by a unit's `effort_value` | `COUNT` |
+| `measure` | `COUNT` (the page's measure), `THROUGHPUT` (same as `COUNT`) or `ISSUE_SIZE` (each unit weighs its issue size, 1 when unsized); any other name, `CHURN_LOC` included, is refused. The explanation never weighs by a unit's `effort_value` | `COUNT` |
 | `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is `[start_date, end_date)`. It replaces `filters.time`. | `filters.time` (a relative `range_days` ends tomorrow, so it covers today) |
 | `use_investment` | Accepted for parity with the page; no effect, because theme and subcategory always use the canonical categorization on both surfaces | none |
 
 `filters.scope.level` keeps its lowercase values. Scope `org` and scope `team` with no ids cover the same rows, as on the page.
 
 Each finding's `evidence` carries `measure`, `numerator` and `denominator`: `share_pct` is `numerator / denominator * 100`, where
-the numerator is the finding's subcategory (or theme) sum and the denominator is the sum of all themes in the window. The text of a
+the numerator is the finding's subcategory (or theme) sum and the denominator is the sum of all themes in the window. Under `ISSUE_SIZE` each finding's `evidence` also carries `sizing_coverage` (the share of the mix's work units that carry an issue size) and `unsized_unit_count` (the units that count 1 because they have none), read live on every answer, a cached one too. The text of a
 finding names what the share counts ("of work").
 
 ## Deprecated: `investment_metrics_daily` / `investment_areas.yaml`
@@ -304,6 +327,17 @@ writes its investment row, the row the readers show would keep fewer or no quote
 complete. No reader selects it, no read model joins it, and the recorded Python answers compare other columns only
 (`internal/jobs/investment/materialize_frozen_python_golden_test.go` pins the outcome, rollup and gate decisions, not a
 whole row). See the operator runbook note "Quotes of a crashed rewrite".
+
+**`work_unit_issue_size` (migration 130, CHAOS-9619)** holds the issue size of each work unit: Investment measures
+effort, and effort is the size of the issues a unit worked on (D5999); lines of code are never a size. One row per
+unit and materialization run: `issue_size` is the sum of the positive `work_items.story_points` of the unit's distinct
+issues, `sized_issue_count` how many of them carry one and `issue_count` how many issues the unit has. Every provider
+writes its size to that one column (Jira story points from the configured field, GitLab weight, Linear estimate, GitHub
+Projects number field). A size that is 0, negative or not finite is no size. `issue_size` 0 means the unit carries no
+size, and a reader then counts it 1 work unit, so a scope with no size at all reads the work-unit count. The row is
+written for every unit of every run, also for a unit whose investment row is skipped as unchanged, so a size set later
+in the provider reaches the next run. Readers take the newest row per `(org_id, work_unit_id)` with `argMax` over
+`computed_at`; a unit with no row is unsized. The operator rollback is `internal/chmigrate/rollback/130_*.down.sql`.
 
 **Consumers outside this repo must read the canonical join, never `investment_metrics_daily`.**
 CHAOS-4398 found that `dev-health-acr`'s `FactInvestment` producer (CHAOS-4363/#308) reads

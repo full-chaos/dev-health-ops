@@ -160,6 +160,9 @@ type TextParseResult struct {
 	// AmbiguousKeys counts key references (KEY-n) that match an issue row of more
 	// than one provider in the org; none of them is linked (CHAOS-9457).
 	AmbiguousKeys int
+	// OutrankedByNative counts resolved references not linked because the pull
+	// request or the issue already has a native link.
+	OutrankedByNative int
 }
 
 // providerLookup maps a provider's own issue-identifier shape to a
@@ -188,6 +191,10 @@ func buildProviderLookup(workItems []WorkItemRow) providerLookup {
 		gitlab: make(map[[2]string]string),
 	}
 	for _, wi := range workItems {
+		// A pull or merge request work item is never the issue side.
+		if issueprlinks.IsPullRequestWorkItem(wi.WorkItemID) {
+			continue
+		}
 		lookup.byID[strings.ToLower(wi.WorkItemID)] = wi.WorkItemID
 		switch wi.Provider {
 		case "jira", "linear":
@@ -229,7 +236,10 @@ func edgeTypeFor(refType textrefs.RefType) string {
 //
 // A PR with no title, body or head_branch is skipped entirely
 // (builder.py:846-847); a PR with no number is skipped too (builder.py:848-849).
-func DeriveTextParseEdges(prs []PullRequestRow, workItems []WorkItemRow, buildTime time.Time) TextParseResult {
+//
+// Text is a fallback only: a reference whose pull request or issue already has
+// a native link gives no edge and no link (see issueprlinks.NativeLinks).
+func DeriveTextParseEdges(prs []PullRequestRow, workItems []WorkItemRow, native issueprlinks.NativeLinks, buildTime time.Time) TextParseResult {
 	lookup := buildProviderLookup(workItems)
 	var result TextParseResult
 
@@ -248,6 +258,10 @@ func DeriveTextParseEdges(prs []PullRequestRow, workItems []WorkItemRow, buildTi
 		}
 
 		emit := func(workItemID, provider, rawMatch string, refType textrefs.RefType) {
+			if native.Outranks(repoID, uint32(pr.Number), workItemID) {
+				result.OutrankedByNative++
+				return
+			}
 			edgeType := edgeTypeFor(refType)
 			prID := edges.GeneratePRID(repoID, pr.Number)
 			edgeID := edges.EdgeID(edges.NodeTypePR, prID, edgeType, edges.NodeTypeIssue, workItemID)

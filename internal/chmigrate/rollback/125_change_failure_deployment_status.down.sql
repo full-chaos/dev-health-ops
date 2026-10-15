@@ -10,6 +10,11 @@
 -- compute of a day writes the row without them. deployments_count keeps the
 -- values written since 125 (a cancelled deployment is not counted); only its
 -- comment returns to none, as before 125.
+-- The version row goes too: with it left in schema_migrations, a later
+-- `dho migrate clickhouse upgrade` on a build that has the migration reads it
+-- as applied and never applies it again, so the schema would stay rolled back
+-- under a build that expects it.
 ALTER TABLE repo_change_failure_daily COMMENT COLUMN deployments_count '';
 ALTER TABLE repo_change_failure_daily DROP COLUMN IF EXISTS deployments_status_known;
 ALTER TABLE repo_change_failure_daily DROP COLUMN IF EXISTS failed_deployments_status;
+ALTER TABLE schema_migrations DELETE WHERE version = '125_change_failure_deployment_status.sql' SETTINGS mutations_sync = 2;

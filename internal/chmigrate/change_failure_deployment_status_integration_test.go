@@ -114,6 +114,7 @@ ORDER BY (org_id, repo_id, day)`)
 
 	const up = "sql/125_change_failure_deployment_status.sql"
 	const down = "rollback/125_change_failure_deployment_status.down.sql"
+	versionRows := useSchemaMigrations(t, ctx, conn, "125_change_failure_deployment_status.sql")
 	run(up)
 	after := columns()
 	for _, column := range []string{"failed_deployments_status", "deployments_status_known"} {
@@ -130,6 +131,9 @@ ORDER BY (org_id, repo_id, day)`)
 	exec(`INSERT INTO repo_change_failure_daily (org_id, repo_id, day, deployments_count, failed_deployments_status, deployments_status_known, computed_at) VALUES ('o', '00000000-0000-0000-0000-000000000002', '2026-08-01', 5, 2, 4, now64(3))`)
 
 	run(down)
+	if n := versionRows(); n != 0 {
+		t.Errorf("after the rollback the version row is still recorded (%d rows)", n)
+	}
 	afterDown := columns()
 	for _, column := range []string{"failed_deployments_status", "deployments_status_known"} {
 		if _, ok := afterDown[column]; ok {
@@ -155,6 +159,9 @@ ORDER BY (org_id, repo_id, day)`)
 	}
 
 	run(down)
+	if n := versionRows(); n != 0 {
+		t.Errorf("after the rollback the version row is still recorded (%d rows)", n)
+	}
 
 	run(up)
 	again := columns()

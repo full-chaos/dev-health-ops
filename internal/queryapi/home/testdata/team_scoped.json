@@ -388,7 +388,7 @@
       "title": "Rework Ratio appears up",
       "metric": "rework_ratio",
       "current_value": "20 %",
-      "prior_value": "15.0 %",
+      "prior_value": "15 %",
       "delta": "+33%",
       "direction": "up",
       "severity": "medium",

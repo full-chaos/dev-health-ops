@@ -289,6 +289,12 @@ func assertResponseEqual(t *testing.T, got, want Response) {
 	got.Deltas = append([]MetricDelta(nil), got.Deltas...)
 	for i := range got.Deltas {
 		got.Deltas[i].ChangeFailureEvidence = nil
+		// GraphQL only (json "-"): the golden cannot hold it. It must be there
+		// exactly when the comparison window has data (CHAOS-9817).
+		if (got.Deltas[i].PriorValue != nil) != got.Deltas[i].HasPriorData {
+			t.Errorf("delta %s: hasPriorData %v but priorValue %v", got.Deltas[i].Metric, got.Deltas[i].HasPriorData, got.Deltas[i].PriorValue)
+		}
+		got.Deltas[i].PriorValue = nil
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", got, want)

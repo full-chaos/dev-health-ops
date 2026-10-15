@@ -110,8 +110,17 @@ VALUES ('e-` + deployment + `', '` + org + `', '` + deployment + `', '` + incide
 	if got := text(`SELECT sorting_key FROM system.tables WHERE database = currentDatabase() AND name = 'work_graph_deployment_incident_edges'`); got != "org_id, deployment_id, incident_id, source" {
 		t.Fatalf("sorting key after the rollback = %q", got)
 	}
-	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL`); got != 2 {
-		t.Fatalf("the rollback kept %d rows, want 2 (the old key holds the shared deployment id of two repositories as one row)", got)
+	// The limit of the rollback, named in the PR's RISK-NOTES: the old key has no repository, so it cannot hold the
+	// two repositories' rows of one (deployment, incident, source). The newer row (repo B, computed later) is the one
+	// that survives; the other repository's row is lost. A pair of one row is kept as it is.
+	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL WHERE deployment_id = 'd-shared'`); got != 1 {
+		t.Fatalf("after the rollback the shared deployment id holds %d rows, want 1 (the old key cannot hold two repositories)", got)
+	}
+	if got := text(`SELECT toString(repo_id) FROM work_graph_deployment_incident_edges FINAL WHERE deployment_id = 'd-shared'`); got != repoB {
+		t.Fatalf("after the rollback the shared deployment id keeps repository %q, want %s (the newer row)", got, repoB)
+	}
+	if got := count(`SELECT count() FROM work_graph_deployment_incident_edges FINAL WHERE deployment_id = 'd-pair'`); got != 1 {
+		t.Fatalf("after the rollback the pair of one repository holds %d rows, want 1", got)
 	}
 
 	// The old table holds, side by side, what its key says is one row: two repositories' rows of one pair in two

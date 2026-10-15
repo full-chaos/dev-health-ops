@@ -391,7 +391,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			return nil, ErrCredentialInvalid
 		}
 		if requestErr != nil {
-			last = c.transportFailure(requestErr, attempt)
+			last = c.transportFailure(ctx, requestErr, attempt)
 			c.observe(last.Class)
 			if attempt == c.Retry.MaxAttempts {
 				return nil, last
@@ -519,7 +519,7 @@ func (c *HTTPClient) DoUnauthenticated(
 	}
 	response, err = c.Doer.Do(request)
 	if err != nil {
-		failure := c.transportFailure(err, 1)
+		failure := c.transportFailure(ctx, err, 1)
 		c.observe(failure.Class)
 		return nil, failure
 	}

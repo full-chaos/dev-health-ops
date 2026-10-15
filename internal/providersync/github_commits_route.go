@@ -81,7 +81,7 @@ func (handler GitHubCommitsRouteHandler) Collect(ctx context.Context, claim Clai
 	counted.Doer = gitHubCommitsCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(&counted, "repos", owner, repository)
 	var repoPayload gitHubRepositoryPayload
-	if err := fetchObject(ctx, &counted, root, &repoPayload); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, githubRepoRoute, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	repoID, err := repositoryIdentity(repoPayload.FullName)
@@ -103,7 +103,7 @@ func (handler GitHubCommitsRouteHandler) Collect(ctx context.Context, claim Clai
 	if claim.BeforeAt != nil {
 		query.Set("until", claim.BeforeAt.UTC().Format(time.RFC3339))
 	}
-	page, err := providerfoundation.CollectGitHubLinkPages(ctx, &counted, providerfoundation.GitHubPageOptions{Path: root + "/commits", Query: query, MaxPages: pages})
+	page, err := providerfoundation.CollectGitHubLinkPages(ctx, &counted, providerfoundation.GitHubPageOptions{Path: root + "/commits", Route: githubCommitsRoute, Query: query, MaxPages: pages})
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

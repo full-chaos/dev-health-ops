@@ -49,9 +49,12 @@ func TestWorkerPackageLevelLogCallsWriteThroughTheRedactingHandler(t *testing.T)
 	if strings.Contains(combined, "canary") {
 		t.Fatalf("a protected value or the body reached the output:\n%s", combined)
 	}
+	if strings.Contains(stdout.String(), "/repos/octo/hello/pulls/7") {
+		t.Fatalf("the request path reached the output:\n%s", stdout.String())
+	}
 	for _, want := range []string{
 		`"msg":"github_deployments.pull_request_lookup_failed"`,
-		`provider request failed: permanent status=400 path=/repos/octo/hello/pulls/7`,
+		`provider request failed: permanent status=400`,
 		`"msg":"provider_body_seen"`,
 		`page=2`,
 		`"msg":"provider_error"`,

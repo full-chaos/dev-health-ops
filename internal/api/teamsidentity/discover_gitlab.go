@@ -151,7 +151,7 @@ func gitlabListGroupPages(ctx context.Context, client *providerfoundation.HTTPCl
 		}
 		var entries []gitlabGroupEntry
 		if err := json.Unmarshal(raw, &entries); err != nil {
-			return nil, false, fmt.Errorf("decode gitlab group list page for %s: %w", path, err)
+			return nil, false, fmt.Errorf("decode gitlab group list page: %w", err)
 		}
 		out = append(out, entries...)
 		if len(out) > limit {
@@ -189,7 +189,7 @@ func gitlabListProjectPages(ctx context.Context, client *providerfoundation.HTTP
 		}
 		var entries []gitlabProjectEntry
 		if err := json.Unmarshal(raw, &entries); err != nil {
-			return nil, false, fmt.Errorf("decode gitlab project list page for %s: %w", path, err)
+			return nil, false, fmt.Errorf("decode gitlab project list page: %w", err)
 		}
 		out = append(out, entries...)
 		if len(out) > limit {

@@ -86,7 +86,8 @@ func (e *EffectBoundError) Unwrap() []error {
 // uses errors.As to react to the cap specifically instead of failing closed.
 type ObjectTooLargeError struct {
 	// Path is the request path fetchObject was reading when the cap was hit.
-	Path string
+	// Error() never prints it: a path can carry a group or member name.
+	Path string `json:"-"`
 	// CapBytes is the shared cap (nativeMaxObjectBytes) that was exceeded.
 	CapBytes int
 	// ContentLength is the server-reported response size in bytes, or -1
@@ -96,9 +97,9 @@ type ObjectTooLargeError struct {
 
 func (e *ObjectTooLargeError) Error() string {
 	if e.ContentLength >= 0 {
-		return fmt.Sprintf("provider object at %s exceeds %d byte cap: %d bytes", e.Path, e.CapBytes, e.ContentLength)
+		return fmt.Sprintf("provider object exceeds %d byte cap: %d bytes", e.CapBytes, e.ContentLength)
 	}
-	return fmt.Sprintf("provider object at %s exceeds %d byte cap (content-length unknown)", e.Path, e.CapBytes)
+	return fmt.Sprintf("provider object exceeds %d byte cap (content-length unknown)", e.CapBytes)
 }
 
 func (e *ObjectTooLargeError) Unwrap() error { return ErrNormalizationInvalid }
@@ -396,7 +397,11 @@ type ProviderError struct {
 	// that produced this classification. Empty when the error never reached
 	// an HTTP response (e.g. a rate-limit gate denial before the request
 	// went out).
-	Path string
+	Path string `json:"-"`
+	// Route is a caller-supplied template for Path (e.g. /users/{login}),
+	// the only request-derived text Error() prints. Empty when the caller
+	// named none. Never holds a raw path.
+	Route string
 	// Body is the provider's response body as read (bounded by
 	// maxProviderErrorBody), kept for classification parsers that need the
 	// provider's own rejection detail. Error() never formats it: error text
@@ -417,8 +422,8 @@ func (e *ProviderError) Error() string {
 	if e.StatusCode != 0 {
 		message += fmt.Sprintf(" status=%d", e.StatusCode)
 	}
-	if e.Path != "" {
-		message += fmt.Sprintf(" path=%s", e.Path)
+	if e.Route != "" {
+		message += fmt.Sprintf(" route=%s", e.Route)
 	}
 	if e.Reason != "" {
 		message += fmt.Sprintf(" reason=%s", e.Reason)

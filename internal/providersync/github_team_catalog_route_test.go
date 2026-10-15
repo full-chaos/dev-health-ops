@@ -505,3 +505,27 @@ func TestMemberReadFailureCauseIsAFixedWord(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-9761: a failed /users/{login} lookup returns the provider error raw
+// to the caller's log; it must name the route template, never the login.
+func TestGitHubTeamCatalogEmailLookupFailureNamesNoLogin(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
+		"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform"}]`,
+		"/orgs/acme/teams/platform/repos":   `[]`,
+		"/orgs/acme/teams/platform/members": `[{"login":"octocat-login"}]`,
+		"/users/octocat-login":              `{}`,
+	}, statuses: map[string]int{"/users/octocat-login": http.StatusInternalServerError}}
+	collector := GitHubTeamCatalogRouteHandler{
+		Client: githubTeamCatalogTestClient(t, fakehttp.Client(doer)), OrgName: "acme",
+		Now: func() time.Time { return now }, ResolveEmail: true, Strict: true,
+	}
+	_, _, err := collector.Collect(context.Background(), "org-1", true, true)
+	if err == nil {
+		t.Fatal("want the lookup failure")
+	}
+	if strings.Contains(err.Error(), "octocat-login") || !strings.Contains(err.Error(), "route=/users/{login}") {
+		t.Fatalf("err = %q, want route=/users/{login} and no login", err.Error())
+	}
+}

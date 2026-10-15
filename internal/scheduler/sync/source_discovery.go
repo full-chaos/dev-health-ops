@@ -652,27 +652,34 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 			},
 			MaxPages: sourceDiscoveryMaxPages,
 		})
+		if namespace != "" && err == nil && !page.PageBudgetExhausted {
+			// Decision rule for a scoped PAT namespace. /user/repos (U) is
+			// authoritative for the credential and is never complete for a
+			// namespace (another user, an org the token is not a member of,
+			// public repositories), so it is unioned with the namespace's
+			// own listing (N), org first then user. Any U error is raised
+			// as is: N is a public listing, so N alone would be a partial
+			// success. U truncated or N truncated is a truncated discovery.
+			// U ok and N failed keeps U only and logs the failure.
+			ownerPage, ownerErr := collectGitHubOwnerRepos(ctx, client, namespace)
+			switch {
+			case ownerErr == nil && ownerPage.PageBudgetExhausted:
+				return nil, fmt.Errorf("github: %w", ErrSourceDiscoveryTruncated)
+			case ownerErr != nil:
+				ownerErrClass, ownerErrType := logging.ErrorClass(ownerErr), logging.ErrorType(ownerErr)
+				service.log().LogAttrs(ctx, slog.LevelWarn, "github all_repos namespace listing failed; keeping user repos only",
+					slog.String("namespace", namespace), slog.Int("user_repos", len(page.Items)),
+					slog.String("error_class", ownerErrClass), slog.String("error_type", ownerErrType))
+			default:
+				page.Items = mergeGitHubRepoItems(page.Items, ownerPage.Items)
+			}
+		}
 	} else if owner == "" {
 		// Python: `if not owner: return []` -- no scope resolved at all, no
 		// API call, no sources. NOT the same as all_repos with no namespace.
 		return nil, nil
 	} else {
-		query := url.Values{"per_page": {strconv.Itoa(sourceDiscoveryPerPage)}, "type": {"all"}}
-		page, err = providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-			Path: "/orgs/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
-		})
-		if err != nil {
-			// Python's discover_github_repos falls back from org to user
-			// lookup (an owner that is a user account, not an org, 404s
-			// under /orgs/{owner}/repos). Retry once under /users/ before
-			// giving up.
-			userPage, userErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-				Path: "/users/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
-			})
-			if userErr == nil {
-				page, err = userPage, nil
-			}
-		}
+		page, err = collectGitHubOwnerRepos(ctx, client, owner)
 	}
 	if err != nil {
 		return nil, err
@@ -711,7 +718,59 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 			Metadata: metadataOf("owner", repo.Owner.Login),
 		})
 	}
+	if allRepos && len(result) == 0 {
+		service.log().WarnContext(ctx, "github all_repos discovery found no repositories",
+			"namespace", namespace, "app_auth", githubCredentialIsAppAuth(credential),
+			"candidates", len(page.Items))
+	}
 	return result, nil
+}
+
+// collectGitHubOwnerRepos lists one owner's repositories under /orgs first,
+// then /users: an owner that is a user account 404s under /orgs/{owner}/repos
+// (discover_github_repos' org-to-user fallback).
+func collectGitHubOwnerRepos(ctx context.Context, client *providerfoundation.HTTPClient, owner string) (providerfoundation.PageCollection, error) {
+	query := url.Values{"per_page": {strconv.Itoa(sourceDiscoveryPerPage)}, "type": {"all"}}
+	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+		Path: "/orgs/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
+	})
+	if err == nil {
+		return page, nil
+	}
+	userPage, userErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+		Path: "/users/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
+	})
+	if userErr != nil {
+		return page, err
+	}
+	return userPage, nil
+}
+
+func mergeGitHubRepoItems(primary, extra []json.RawMessage) []json.RawMessage {
+	seen := make(map[string]struct{}, len(primary))
+	key := func(raw json.RawMessage) string {
+		var repo struct {
+			FullName string `json:"full_name"`
+		}
+		if json.Unmarshal(raw, &repo) != nil {
+			return ""
+		}
+		return strings.ToLower(repo.FullName)
+	}
+	for _, raw := range primary {
+		seen[key(raw)] = struct{}{}
+	}
+	merged := primary
+	for _, raw := range extra {
+		if k := key(raw); k != "" {
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+		}
+		merged = append(merged, raw)
+	}
+	return merged
 }
 
 // gitlabDiscoveryOptions mirrors discover_gitlab_repos' group/owner/search/

@@ -295,6 +295,21 @@ func responseLeftOrigin(response *http.Response, target *url.URL) bool {
 		!sameOrigin(response.Request.URL, target)
 }
 
+type routeKey struct{}
+
+// DoRoute is Do for a route whose path carries a member login or other
+// personal data: a failure names the route by template (for example
+// /users/{login}) instead of the path. The template must be a static literal,
+// never built from a request value. It applies to this call only.
+func (c *HTTPClient) DoRoute(ctx context.Context, method, template, path string, body io.Reader) (*http.Response, error) {
+	return c.Do(context.WithValue(ctx, routeKey{}, template), method, path, body)
+}
+
+func routeTemplate(ctx context.Context) string {
+	template, _ := ctx.Value(routeKey{}).(string)
+	return template
+}
+
 func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader) (response *http.Response, err error) {
 	if c == nil || c.BaseURL == nil {
 		return nil, ErrCredentialInvalid
@@ -407,6 +422,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		// doc comment); Body is kept for classification parsers and never
 		// reaches a log.
 		classification.Path = target.Path
+		classification.Route = routeTemplate(ctx)
 		classification.Body = string(message)
 		retryDelay := c.retryDelay(attempt, classification.RetryAfter, classification.Class)
 		if classification.Class == ErrorRateLimited && c.Gate != nil {

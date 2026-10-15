@@ -177,8 +177,8 @@ func TestProviderUnitSafeCauseNeverCarriesProviderResponseContent(t *testing.T) 
 	// Precondition: the fixture really does carry both, so the assertions
 	// below cannot pass because the secrets were never there.
 	if !strings.Contains(providerErr.(*providerfoundation.ProviderError).Body, "ghp_do_not_log_this_value") ||
-		!strings.Contains(providerErr.Error(), "/repos/octo/hello") {
-		t.Fatalf("fixture no longer carries the path in Error() and the body in Body: %q", providerErr.Error())
+		!strings.Contains(providerErr.(*providerfoundation.ProviderError).Path, "/repos/octo/hello") {
+		t.Fatalf("fixture no longer carries the path in Path and the body in Body: %q", providerErr.Error())
 	}
 	if strings.Contains(cause, "ghp_do_not_log_this_value") {
 		t.Fatalf("cause %q leaked the response body", cause)

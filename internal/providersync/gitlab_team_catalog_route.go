@@ -789,6 +789,25 @@ var _ TeamCatalogCollector = GitLabTeamCatalogCollector{}
 // gitlabProjectTargetSource is the provider fact a GitLab target date is.
 const gitlabProjectTargetSource = "gitlab.milestone.due_date"
 
+// gitlabGroupTargetSource is the provider fact when the earliest open dated
+// milestone belongs to an ancestor group of the project.
+const gitlabGroupTargetSource = "gitlab.group_milestone.due_date"
+
+// gitlabGroupMilestoneOwner names the group of a group milestone: its full
+// path, read from the milestone's web_url (/groups/<path>/-/milestones/<n>),
+// else the group's numeric id as "group:<id>" (no GitLab path holds a colon, so
+// the key cannot collide with a project path).
+func gitlabGroupMilestoneOwner(milestone gitlabIssueMilestonePayload) string {
+	if parsed, err := url.Parse(milestone.WebURL); err == nil {
+		if rest, found := strings.CutPrefix(parsed.Path, "/groups/"); found {
+			if path, _, cut := strings.Cut(rest, "/-/milestones/"); cut && path != "" {
+				return path
+			}
+		}
+	}
+	return "group:" + milestone.GroupID.String()
+}
+
 // collectProjectTargets reads the open milestones of every listed project that
 // is not archived, one call each (more pages only for a project with over 100
 // open milestones), and states each project's target by the shared rule. A
@@ -803,7 +822,7 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 	nativeIDByProject map[string]string,
 	normalizedAt time.Time,
 ) error {
-	read, failed, incomplete, overBudget, archived, withTarget, noneDated := 0, 0, 0, 0, 0, 0, 0
+	read, failed, incomplete, overBudget, archived, withTarget, noneDated, groupSeen, groupTarget := 0, 0, 0, 0, 0, 0, 0, 0, 0
 	for index := range projects {
 		row := &projects[index]
 		nativeID := nativeIDByProject[row.ID.String()]
@@ -818,7 +837,10 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 		pages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 			Path:    providerRelativePath(client, "api", "v4", "projects", nativeID, "milestones"),
 			PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMilestonesMaxPages,
-			Query: url.Values{"state": {"active"}},
+			// include_ancestors is GitLab's documented name; include_parent_milestones
+			// (deprecated) is sent too because the API docs give no minimum version for
+			// the new one, and an instance that ignores it would drop group milestones.
+			Query: url.Values{"state": {"active"}, "include_ancestors": {"true"}, "include_parent_milestones": {"true"}},
 		})
 		if err != nil {
 			if ctx.Err() != nil {
@@ -832,6 +854,7 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 			continue
 		}
 		candidates := make([]projectTargetCandidate, 0, len(pages.Items))
+		seenMilestone := make(map[string]bool, len(pages.Items))
 		decoded := true
 		for _, raw := range pages.Items {
 			var milestone gitlabIssueMilestonePayload
@@ -840,17 +863,26 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 				break
 			}
 			id := milestone.ID.String()
-			if id == "" || id == "0" {
+			if id == "" || id == "0" || seenMilestone[id] {
 				continue
 			}
+			// A milestone's id is global: listed twice (own and parent, or by both
+			// query names) it is one milestone, counted once in target_other_open.
+			seenMilestone[id] = true
 			date := ""
 			if milestone.DueDate != nil {
 				date = *milestone.DueDate
 			}
-			candidates = append(candidates, projectTargetCandidate{
+			candidate := projectTargetCandidate{
 				ID: id, Ref: gitlabMilestoneSprintID(*row.ProjectKey, id), Name: milestone.Title, Date: date,
 				Open: strings.EqualFold(strings.TrimSpace(milestone.State), "active"),
-			})
+			}
+			if groupID := milestone.GroupID.String(); groupID != "" && groupID != "0" {
+				candidate.Ref = gitlabMilestoneSprintID(gitlabGroupMilestoneOwner(milestone), id)
+				candidate.Kind, candidate.Source = projectTargetKindMilestone, gitlabGroupTargetSource
+				groupSeen++
+			}
+			candidates = append(candidates, candidate)
 		}
 		if !decoded {
 			failed++
@@ -860,6 +892,9 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 		row.TargetDate, row.projectTargetFacts = pickProjectTarget(projectTargetKindMilestone, gitlabProjectTargetSource, normalizedAt, candidates)
 		if row.TargetDate != nil {
 			withTarget++
+			if row.TargetSource == gitlabGroupTargetSource {
+				groupTarget++
+			}
 		} else {
 			noneDated++
 		}
@@ -867,6 +902,6 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 	slog.Default().DebugContext(ctx, "gitlab_team_catalog_project_targets",
 		"org_id", orgID, "projects_total", len(projects), "projects_read", read, "read_failed", failed,
 		"read_incomplete", incomplete, "over_budget", overBudget, "archived_skipped", archived,
-		"with_target", withTarget, "none_dated", noneDated)
+		"with_target", withTarget, "none_dated", noneDated, "group_milestones_seen", groupSeen, "group_milestone_targets", groupTarget)
 	return nil
 }

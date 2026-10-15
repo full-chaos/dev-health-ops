@@ -482,8 +482,8 @@ for both providers (`pickProjectTarget`).
 | --- | --- |
 | `target_state` | `stated` (one open dated entry supplied the date), `none_dated` (read, and no open entry has a date), `held` (not read this run: every target column is the value of the last run that read it), `unknown` (no run ever read it; the default) |
 | `target_kind` | `project`, `version` or `milestone`; empty when there is no target |
-| `target_source` | `<provider>.<kind>.<field>`: `linear.project.targetDate`, `jira.version.releaseDate`, `gitlab.milestone.due_date`; empty when there is no target |
-| `target_ref`, `target_ref_name` | the supplying version's or milestone's stable id and display name; for GitLab the id is the `sprints` row key of the same milestone |
+| `target_source` | `<provider>.<kind>.<field>`: `linear.project.targetDate`, `jira.version.releaseDate`, `gitlab.milestone.due_date` (`gitlab.group_milestone.due_date` when the earliest open dated milestone belongs to an ancestor group; the ref then names the group); empty when there is no target |
+| `target_ref`, `target_ref_name` | the supplying version's or milestone's stable id and display name; for GitLab the id is the milestone key `gitlab:<owner path>:milestone:<id>`, where the owner is the project (a project milestone, the `sprints` row key of the same milestone) or the ancestor group (a group milestone, which has no `sprints` row yet: CHAOS-9782) |
 | `target_other_open` | the number of other open dated entries of the project; NULL unless the value is a stated one (state `stated`, or `held` over one) |
 | `target_fetched_at` | the time of the last successful read of the target |
 
@@ -499,12 +499,16 @@ the first three columns have DEFAULT expressions on `provider` and `target_date`
 columns gets the same reading. A later DROP of `provider` or `target_date` needs
 those defaults removed first. Jira's versions come from the project body the sprint walk
 already reads; GitLab costs one call per non-archived project per sync
-(`GET /projects/:id/milestones?state=active`).
+(`GET /projects/:id/milestones?state=active&include_ancestors=true`).
 
-GitLab GROUP milestones are not read: only the project's own milestones are, the
-same set the `sprints` rows come from, so the milestone named by `target_ref` is
-always a `sprints` row. A project whose only dated milestone is a group milestone
-reads `none_dated`.
+GitLab GROUP milestones count: the same call lists the milestones of every
+ancestor group (`include_ancestors`, the documented name since GitLab deprecated
+`include_parent_milestones`; the request sends both, because the GitLab API
+docs state no minimum version for `include_ancestors` and an instance that does
+not know it would silently drop the group milestones). A group milestone that is
+the earliest open dated one supplies the target with source
+`gitlab.group_milestone.due_date` and a `target_ref` that names the group. It has
+no `sprints` row yet, so a reader must not assume `target_ref` joins a sprint.
 
 ## Migration rules
 

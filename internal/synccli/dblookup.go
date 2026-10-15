@@ -90,6 +90,12 @@ const (
 	reasonGitHubIntegrationNoCredential = "github_integration_no_credential"
 	reasonGitHubIntegrationsAmbiguous   = "github_integrations_ambiguous"
 	reasonCredentialConfigInvalid       = "credential_config_invalid"
+	reasonOrganizationNotFound          = "organization_not_found"
+)
+
+var (
+	errNoDatabaseURL        = errors.New("no database URL is configured")
+	errDatabaseURLNotUsable = errors.New("the database URL is not usable for the first-organization read")
 )
 
 // credentialLookupFailure is one reason the lookup found nothing usable. It is
@@ -153,7 +159,7 @@ const missingGitHubCredentials = "Missing GitHub credentials (pass --auth, set G
 
 // dbLookups is the executor's view of the two Postgres reads.
 type dbLookups struct {
-	FirstOrg         func(ctx context.Context, dbURL string) (string, bool)
+	FirstOrg         func(ctx context.Context, dbURL string) (string, error)
 	GitHubCredential func(ctx context.Context, dbURL, orgID string, env cli.Env) (*GitHubCredentials, error)
 }
 
@@ -205,25 +211,38 @@ func syncPostgresDSN(dbURL string) (string, bool) {
 }
 
 // firstOrganization is _resolve_first_org_id. It never returns a driver error:
-// its text can carry the DSN.
-func firstOrganization(ctx context.Context, dbURL string) (string, bool) {
+// its text can carry the DSN, so a failure is a credentialLookupFailure that
+// names its reason and carries only the error's class and type.
+func firstOrganization(ctx context.Context, dbURL string) (string, error) {
 	if dbURL == "" {
-		return "", false
+		return "", errNoDatabaseURL
 	}
 	dsn, ok := syncPostgresDSN(dbURL)
 	if !ok {
-		return "", false
+		return "", lookupFailureWith(reasonDatabaseURLNotUsable, errDatabaseURLNotUsable)
 	}
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
-		return "", false
+		return "", lookupFailureWith(reasonDatabaseConnectFailed, err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	var id string
 	if err := conn.QueryRow(ctx, "SELECT id::text FROM organizations ORDER BY created_at ASC LIMIT 1").Scan(&id); err != nil {
-		return "", false
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", lookupFailure(reasonOrganizationNotFound)
+		}
+		return "", lookupFailureWith(reasonDatabaseQueryFailed, err)
 	}
-	return id, true
+	return id, nil
+}
+
+// logFirstOrganizationFailure logs a first-organization refusal with the lookup's keys. A missing
+// database URL is not a failure of a read, so it is not logged.
+func logFirstOrganizationFailure(ctx context.Context, err error) {
+	var failure credentialLookupFailure
+	if errors.As(err, &failure) {
+		logCredentialLookupFailure(ctx, "", failure)
+	}
 }
 
 // asyncEngineRefusal names the exception create_async_engine(db_url) raises for
@@ -490,9 +509,10 @@ func resolveDBLookups(ctx context.Context, lookups dbLookups, plan Plan, env cli
 	}
 	wantsDBCredential := plan.GitHub != nil && plan.GitHub.Mode == CredentialDB
 	if plan.OrgSource == OrgFromDBFirst {
-		id, found := lookups.FirstOrg(ctx, dbURL)
-		if !found {
+		id, err := lookups.FirstOrg(ctx, dbURL)
+		if err != nil {
 			if wantsDBCredential {
+				logFirstOrganizationFailure(ctx, err)
 				// ns.org stays None: `if db_url and org_id` is false.
 				return plan, exitRefusal(missingGitHubCredentials)
 			}

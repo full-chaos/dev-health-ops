@@ -130,7 +130,7 @@ func githubListAllPages[T any](ctx context.Context, client *providerfoundation.H
 		}
 		var page []T
 		if err := json.Unmarshal(raw, &page); err != nil {
-			return nil, fmt.Errorf("decode github list page for %s: %w", path, err)
+			return nil, fmt.Errorf("decode github list page: %w", err)
 		}
 		out = append(out, page...)
 		next = githubNextLink(response.Header.Get("Link"))

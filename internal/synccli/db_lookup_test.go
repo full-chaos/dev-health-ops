@@ -36,9 +36,12 @@ func (h *lookupHarness) executor() Executor {
 			h.listRuns = append(h.listRuns, run)
 			return githubRepos("acme/api"), nil
 		},
-		FirstOrg: func(_ context.Context, dbURL string) (string, bool) {
+		FirstOrg: func(_ context.Context, dbURL string) (string, error) {
 			h.firstOrgs = append(h.firstOrgs, dbURL)
-			return h.org, h.orgFound
+			if !h.orgFound {
+				return "", lookupFailure(reasonOrganizationNotFound)
+			}
+			return h.org, nil
 		},
 		GitHubCredential: func(_ context.Context, dbURL, orgID string, _ cli.Env) (*GitHubCredentials, error) {
 			h.credentials = append(h.credentials, dbURL+"|"+orgID)

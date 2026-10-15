@@ -100,6 +100,9 @@ type projectTargetCandidate struct {
 	Date string
 	// Open is true while the provider has not released, closed or archived it.
 	Open bool
+	// Kind and Source, when set, replace the call's own for a candidate whose
+	// provenance differs (a GitLab group milestone among project milestones).
+	Kind, Source string
 }
 
 // providerIDLess orders two provider ids: as numbers when both are decimal
@@ -150,6 +153,12 @@ func pickProjectTarget(kind, source string, fetchedAt time.Time, candidates []pr
 		return providerIDLess(open[i].ID, open[j].ID)
 	})
 	day := open[0].day
+	if open[0].Kind != "" {
+		kind = open[0].Kind
+	}
+	if open[0].Source != "" {
+		source = open[0].Source
+	}
 	return &day, projectTargetFacts{
 		TargetState: projectTargetStated, TargetKind: kind, TargetSource: source, TargetRef: open[0].Ref, TargetRefName: open[0].Name,
 		TargetOtherOpen: uint32(len(open) - 1), TargetFetchedAt: &fetched,

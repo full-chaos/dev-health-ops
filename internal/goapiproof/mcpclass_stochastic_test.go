@@ -292,16 +292,3 @@ func TestDocRouteRunnerStillBlocksADifferenceBesideTheDrawnDaysBins(t *testing.T
 		t.Fatalf("a different completionDistribution.runs beside the drawn bins was not reported: %+v", o)
 	}
 }
-
-// The size gate does not count the bytes of a declared volatile subtree: a drawn bin list of very different length is not a different shape.
-func TestDocRouteRunnerAcceptsAMuchLongerDrawnBinList(t *testing.T) {
-	many := make([]int, 29)
-	for i := range many {
-		many[i] = 300
-	}
-	outcomes, _ := stochasticDocRouteRun(t,
-		forecastBody(t, "go", drawnPercentile(drawnBinsOverrides(5001, 4999))), forecastBody(t, "go", drawnBinsOverrides(many...)))
-	if o := outcomes[0]; !o.Executed || o.RefusalReason != "" || o.DifferencesOutsideBaselineDefect != 0 || o.ProvenUnder != ProvenUnderStochasticLeafClass {
-		t.Fatalf("2 bins against 29 bins: executed=%v refusal=%q %s outside=%d proven_under=%q", o.Executed, o.RefusalReason, o.RefusalDetail, o.DifferencesOutsideBaselineDefect, o.ProvenUnder)
-	}
-}

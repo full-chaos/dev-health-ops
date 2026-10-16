@@ -252,8 +252,9 @@ var _ NativeFamilyExecutor = (*AIImpactExecutor)(nil)
 // resolveIncidents gives each incident the facts that place it on one team
 // (D6040, D6041): the team its source names, its triggering pull request, and,
 // for a repository whose main owners tie, the repository's team-owned merged
-// pull requests. A team reference that is not a team of the organization is
-// dropped: the source's own team reference is not a Dev Health team.
+// pull requests. The source's team reference is mapped through the team catalog
+// (provider and native_team_key); an unmapped reference is dropped, never
+// matched by raw equality with a team id.
 func (executor *AIImpactExecutor) resolveIncidents(
 	ctx context.Context, organizationID string, rows []IncidentRow, teams []aiimpact.Team,
 	mainOwners func(uuid.UUID) []string, before time.Time,
@@ -273,6 +274,13 @@ func (executor *AIImpactExecutor) resolveIncidents(
 	if err != nil {
 		return nil, nil, err
 	}
+	var catalog map[AIImpactProviderTeamRef][]string
+	if len(sourceTeams) > 0 {
+		catalog, err = LoadAIImpactTeamsByNativeKey(ctx, executor.conn, organizationID)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	triggers, err := LoadAIImpactIncidentTriggers(ctx, executor.conn, organizationID, ids)
 	if err != nil {
 		return nil, nil, err
@@ -282,8 +290,8 @@ func (executor *AIImpactExecutor) resolveIncidents(
 	var sourceNamed, sourceDropped, triggered int
 	for _, row := range rows {
 		incident := aiimpact.IncidentRow{ID: row.IncidentID, RepoID: row.RepoID, StartedAt: row.StartedAt}
-		if team, ok := sourceTeams[row.IncidentID]; ok {
-			if _, known := knownTeams[team]; known {
+		if ref, ok := sourceTeams[row.IncidentID]; ok {
+			if team, mapped := MapAIImpactProviderTeam(ref, catalog, knownTeams); mapped {
 				incident.SourceTeamID = &team
 				sourceNamed++
 			} else {
@@ -318,7 +326,7 @@ func (executor *AIImpactExecutor) resolveIncidents(
 	}
 	slog.Info("ai_impact incident team resolution",
 		"organization_id", organizationID, "incidents", len(rows),
-		"source_team_named", sourceNamed, "source_team_not_an_organization_team", sourceDropped,
+		"source_team_named", sourceNamed, "source_team_unmapped", sourceDropped,
 		"triggering_pull_request", triggered, "tied_main_owner_repos", len(tiedRepos))
 	return incidents, repoMergedPRTeams, nil
 }

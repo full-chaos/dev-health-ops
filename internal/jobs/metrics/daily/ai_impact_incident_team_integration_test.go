@@ -20,6 +20,13 @@ import (
 func aiImpactIncidentTeamSchema() []string {
 	schema := make([]string, 0, len(aiImpactOwnershipSchema)+5)
 	for _, statement := range aiImpactOwnershipSchema {
+		if strings.HasPrefix(statement, "CREATE TABLE teams") {
+			statement = `CREATE TABLE teams (
+    id String, name String, repo_patterns Array(String), is_active UInt8 DEFAULT 1,
+    provider String DEFAULT 'github', native_team_key Nullable(String),
+    updated_at DateTime64(6), last_synced DateTime64(6) DEFAULT now(), org_id String
+) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`
+		}
 		if strings.HasPrefix(statement, "CREATE TABLE work_graph_issue_pr") {
 			statement = `CREATE TABLE work_graph_issue_pr (
     repo_id UUID, pr_number UInt32, work_item_id String, provenance String DEFAULT 'native',
@@ -30,7 +37,7 @@ func aiImpactIncidentTeamSchema() []string {
 	}
 	return append(schema,
 		`CREATE TABLE operational_services (
-    id String, org_id String, owning_team_id Nullable(String),
+    id String, org_id String, provider String DEFAULT 'pagerduty', owning_team_id Nullable(String),
     source_revision UInt128 DEFAULT 0, source_conflict_key String DEFAULT '',
     ingest_revision UInt128 DEFAULT 0,
     is_deleted UInt8 DEFAULT 0, last_synced DateTime64(3, 'UTC')
@@ -57,15 +64,17 @@ ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source)`,
 
 // TestAIImpactIncidentsCountOnceForOneTeamAgainstRealClickHouse is the
 // live-store proof of D6040 and D6041. One repository has two tied main owners;
-// another has one. Four incidents start on the day:
+// another has one. Five incidents start on the day:
 //
-//	inc-source   its service names team-s                       -> team-s
+//	inc-source   its service names PD-S, the native key of team-s -> team-s
 //	inc-trigger  native edge to a deployment of PR 42 (owned by
 //	             team-a, native link), and a heuristic edge to a
 //	             deployment of PR 7 (owned by team-b)           -> team-a, on PR 42's row
 //	inc-tie      no edge, tied owners: team-b merged the most
 //	             recent owned PR before the incident            -> team-b
 //	inc-single   no edge, one main owner                        -> team-m
+//	inc-coincide its service names "team-a", which is a team id
+//	             but no native key                              -> team-m (main owner)
 //
 // PR 42 also has a heuristic link to an issue of team-b: the native link
 // shadows it, so PR 42 has one owner. Every answer differs from what the next
@@ -104,6 +113,8 @@ func TestAIImpactIncidentsCountOnceForOneTeamAgainstRealClickHouse(t *testing.T)
 ('team-b', 'B', [], 1, toDateTime64('2026-10-01 00:00:00', 6), '` + orgID + `'),
 ('team-m', 'M', [], 1, toDateTime64('2026-10-01 00:00:00', 6), '` + orgID + `'),
 ('team-s', 'S', [], 1, toDateTime64('2026-10-01 00:00:00', 6), '` + orgID + `')`,
+		`INSERT INTO teams (id, name, repo_patterns, is_active, provider, native_team_key, updated_at, org_id) VALUES
+('team-s', 'S', [], 1, 'pagerduty', 'PD-S', toDateTime64('2026-10-02 00:00:00', 6), '` + orgID + `')`,
 		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type,
     source, is_primary, specificity, priority, share, valid_from, valid_to, updated_at) VALUES
 ('` + orgID + `', 'github', 'team-a', toUUID('` + repoR + `'), 'acme/tied', 'exact', 'inferred', 1, 10, 0, 0.5, ` + ts + `, NULL, ` + ts + `),
@@ -135,18 +146,21 @@ func TestAIImpactIncidentsCountOnceForOneTeamAgainstRealClickHouse(t *testing.T)
 (generateUUIDv4(), toUUID('` + orgID + `'), 'github', 'pull_request', '42', toUUID('` + repoR + `'),
  'ai_assisted', 'pr_label', 0.95, NULL, '{}', ` + ts + `, now64(3), NULL, now64(3))`,
 		`INSERT INTO operational_services (id, org_id, owning_team_id, last_synced) VALUES
-('svc-source', '` + orgID + `', 'team-s', ` + ts + `),
+('svc-source', '` + orgID + `', 'PD-S', ` + ts + `),
+('svc-coincide', '` + orgID + `', 'team-a', ` + ts + `),
 ('svc-plain', '` + orgID + `', NULL, ` + ts + `),
 ('svc-single', '` + orgID + `', NULL, ` + ts + `)`,
 		`INSERT INTO operational_service_repository_mappings (org_id, id, service_id, repo_id, last_synced) VALUES
 ('` + orgID + `', 'm1', 'svc-source', toUUID('` + repoR + `'), ` + ts + `),
 ('` + orgID + `', 'm2', 'svc-plain', toUUID('` + repoR + `'), ` + ts + `),
-('` + orgID + `', 'm3', 'svc-single', toUUID('` + repoR2 + `'), ` + ts + `)`,
+('` + orgID + `', 'm3', 'svc-single', toUUID('` + repoR2 + `'), ` + ts + `),
+('` + orgID + `', 'm4', 'svc-coincide', toUUID('` + repoR2 + `'), ` + ts + `)`,
 		`INSERT INTO operational_incidents (id, org_id, service_id, normalized_status, started_at, last_synced) VALUES
 ('inc-source', '` + orgID + `', 'svc-source', 'resolved', toDateTime64('2026-10-03 03:00:00', 3, 'UTC'), ` + ts + `),
 ('inc-trigger', '` + orgID + `', 'svc-plain', 'resolved', toDateTime64('2026-10-03 04:00:00', 3, 'UTC'), ` + ts + `),
 ('inc-tie', '` + orgID + `', 'svc-plain', 'resolved', toDateTime64('2026-10-03 05:00:00', 3, 'UTC'), ` + ts + `),
-('inc-single', '` + orgID + `', 'svc-single', 'resolved', toDateTime64('2026-10-03 06:00:00', 3, 'UTC'), ` + ts + `)`,
+('inc-single', '` + orgID + `', 'svc-single', 'resolved', toDateTime64('2026-10-03 06:00:00', 3, 'UTC'), ` + ts + `),
+('inc-coincide', '` + orgID + `', 'svc-coincide', 'resolved', toDateTime64('2026-10-03 07:00:00', 3, 'UTC'), ` + ts + `)`,
 		`INSERT INTO deployments (repo_id, deployment_id, pull_request_number, last_synced, org_id) VALUES
 (toUUID('` + repoR + `'), 'dep-native', 42, ` + ts + `, '` + orgID + `'),
 (toUUID('` + repoR + `'), 'dep-guess', 7, ` + ts + `, '` + orgID + `')`,
@@ -198,7 +212,7 @@ FROM ai_impact_metrics_daily FINAL WHERE org_id = ? AND day = '2026-10-03'`, org
 		{"team-s", repoR, "incident", "human"}:           1,
 		{"team-a", repoR, "pull_request", "ai_assisted"}: 1,
 		{"team-b", repoR, "incident", "human"}:           1,
-		{"team-m", repoR2, "incident", "human"}:          1,
+		{"team-m", repoR2, "incident", "human"}:          2,
 	}
 	if len(got) != len(want) {
 		t.Errorf("incidents by row %v, want %v", got, want)
@@ -209,7 +223,7 @@ FROM ai_impact_metrics_daily FINAL WHERE org_id = ? AND day = '2026-10-03'`, org
 			break
 		}
 	}
-	if sum != 4 {
-		t.Errorf("incidents_count adds up to %v over every row, want the 4 incidents that started", sum)
+	if sum != 5 {
+		t.Errorf("incidents_count adds up to %v over every row, want the 5 incidents that started", sum)
 	}
 }

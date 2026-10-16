@@ -62,17 +62,24 @@ func aiImpactPullRequestOwnerSQL(extraLinkFilter string) string {
 )`
 }
 
-// LoadAIImpactIncidentSourceTeams returns, by incident id, the owning team of
-// the incident's service: the team the incident source names. An incident whose
-// service names no team is absent. The value is the source's own team
-// reference; the caller keeps it only when it is a team of the organization.
+// AIImpactProviderTeamRef is a team as an incident source names it: the
+// provider of the service and the provider's own team reference.
+type AIImpactProviderTeamRef struct {
+	Provider string
+	Ref      string
+}
+
+// LoadAIImpactIncidentSourceTeams returns, by incident id, the team the incident
+// source names: the owning team of the incident's service, as the provider's
+// own reference. An incident whose service names no team is absent. The
+// reference is not a Dev Health team id: MapAIImpactProviderTeam resolves it.
 func LoadAIImpactIncidentSourceTeams(
 	ctx context.Context, conn repositoryRows, organizationID string, incidentIDs []string,
-) (map[string]string, error) {
+) (map[string]AIImpactProviderTeamRef, error) {
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return nil, ErrInvalidState
 	}
-	result := make(map[string]string)
+	result := make(map[string]AIImpactProviderTeamRef)
 	if len(incidentIDs) == 0 {
 		return result, nil
 	}
@@ -90,11 +97,11 @@ func LoadAIImpactIncidentSourceTeams(
 		"owning_team_id != ''",
 	}, contract)
 	rows, err := conn.Query(ctx, `
-SELECT incident.id AS incident_id, service.owning_team_id AS owning_team_id
+SELECT incident.id AS incident_id, service.provider AS provider, service.owning_team_id AS owning_team_id
 FROM `+currentIncidents+` AS incident
 INNER JOIN `+currentServices+` AS service
     ON incident.org_id = service.org_id AND incident.service_id = service.id
-ORDER BY incident_id, owning_team_id`,
+ORDER BY incident_id, provider, owning_team_id`,
 		clickhouse.Named("org_id", organizationID),
 		clickhouse.Named("incident_ids", incidentIDs),
 	)
@@ -103,22 +110,83 @@ ORDER BY incident_id, owning_team_id`,
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var incidentID string
+		var incidentID, provider string
 		var team *string
-		if err := rows.Scan(&incidentID, &team); err != nil {
+		if err := rows.Scan(&incidentID, &provider, &team); err != nil {
 			return nil, fmt.Errorf("scan ai impact incident source team: %w", err)
 		}
 		if team == nil {
 			continue
 		}
 		if _, seen := result[incidentID]; !seen {
-			result[incidentID] = *team
+			result[incidentID] = AIImpactProviderTeamRef{Provider: provider, Ref: *team}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate ai impact incident source teams: %w", err)
 	}
 	return result, nil
+}
+
+// LoadAIImpactTeamsByNativeKey reads the team catalog the way team attribution
+// does: the teams of the organization keyed by provider and native_team_key.
+func LoadAIImpactTeamsByNativeKey(
+	ctx context.Context, conn repositoryRows, organizationID string,
+) (map[AIImpactProviderTeamRef][]string, error) {
+	if conn == nil || strings.TrimSpace(organizationID) == "" {
+		return nil, ErrInvalidState
+	}
+	rows, err := conn.Query(ctx, `
+SELECT provider, id, native_team_key
+FROM (
+    SELECT provider, id, tupleElement(argMax(tuple(native_team_key), updated_at), 1) AS native_team_key
+    FROM teams
+    WHERE org_id = ?
+    GROUP BY org_id, provider, id
+)
+WHERE native_team_key IS NOT NULL AND native_team_key != ''
+ORDER BY provider, native_team_key, id`, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("load ai impact teams by native key: %w", err)
+	}
+	defer rows.Close()
+	result := make(map[AIImpactProviderTeamRef][]string)
+	for rows.Next() {
+		var provider, id string
+		var key *string
+		if err := rows.Scan(&provider, &id, &key); err != nil {
+			return nil, fmt.Errorf("scan ai impact team native key: %w", err)
+		}
+		if key != nil {
+			ref := AIImpactProviderTeamRef{Provider: provider, Ref: *key}
+			result[ref] = append(result[ref], id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate ai impact team native keys: %w", err)
+	}
+	return result, nil
+}
+
+// MapAIImpactProviderTeam resolves a source's team reference to a Dev Health
+// team: the one active team of the organization whose provider and
+// native_team_key are the reference's. A reference that equals a team id but is
+// not in the catalog under that provider maps to nothing, and so does one that
+// names several teams.
+func MapAIImpactProviderTeam(
+	ref AIImpactProviderTeamRef, catalog map[AIImpactProviderTeamRef][]string, active map[string]struct{},
+) (string, bool) {
+	var found string
+	for _, id := range catalog[ref] {
+		if _, ok := active[id]; !ok {
+			continue
+		}
+		if found != "" {
+			return "", false
+		}
+		found = id
+	}
+	return found, found != ""
 }
 
 type aiImpactTriggerCandidate struct {

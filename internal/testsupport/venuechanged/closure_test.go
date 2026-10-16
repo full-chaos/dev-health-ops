@@ -101,12 +101,38 @@ func computeClosures(t *testing.T, root string, pkgs []string) map[string][]stri
 		sort.Strings(embedded)
 		closures[pkg] = append(list, embedded...)
 	}
-	for _, pkg := range pkgs {
-		if _, ok := closures[pkg]; !ok {
-			t.Fatalf("go list -test gave no test binary for the venue package %s", pkg)
-		}
+	if err := validateClosures(pkgs, closures); err != nil {
+		t.Fatal(err)
 	}
 	return closures
+}
+
+// validateClosures refuses a derivation that came back empty or incomplete: a venue test binary always links in-module packages, and
+// the repository embeds files (migrations, templates), so a closure with no package, or a whole derivation with no `~dir` line, means
+// `go list` output was not read, not that nothing is linked. Silent zeros here would select nothing for every pull request.
+func validateClosures(pkgs []string, closures map[string][]string) error {
+	embedded := false
+	for _, pkg := range pkgs {
+		lines, ok := closures[pkg]
+		if !ok {
+			return fmt.Errorf("go list -test gave no test binary for the venue package %s", pkg)
+		}
+		dirs := 0
+		for _, line := range lines {
+			if strings.HasPrefix(line, "~") {
+				embedded = true
+			} else {
+				dirs++
+			}
+		}
+		if dirs == 0 {
+			return fmt.Errorf("the venue package %s links no in-module package according to go list: the derivation is empty, not the closure", pkg)
+		}
+	}
+	if !embedded {
+		return fmt.Errorf("no venue package has an embedded-file directory (~dir): the EmbedFiles fields of go list were not read")
+	}
+	return nil
 }
 
 // embeddedDirs maps a package directory to the directories below it that hold a file the package

@@ -729,6 +729,11 @@ venue_oracle_changed_selects() {
   if [ -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
     local closure_file="${ROOT}/ci/venue_oracle_closure.d/${1//\//__}.txt"
     [ -r "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is missing; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+    # a file that is empty, or holds a line that is not `<dir>` or `~<dir>`, was not written by the generator: refuse it
+    [ -s "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is empty; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+    if grep -qvE '^~?[A-Za-z0-9_][A-Za-z0-9_./-]*$' "${closure_file}"; then
+      die "venue-oracles --changed: ${closure_file} has a line that is not a package directory or ~directory; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+    fi
     if [ -n "${VENUE_CHANGED_DIRS:-}" ] && grep -qxFf "${closure_file}" < <(printf '%s\n' "${VENUE_CHANGED_DIRS}"); then
       return 0
     fi
@@ -779,12 +784,18 @@ check_venue_oracles() {
     # CHAOS-7653: print the registry rows the changed paths select and run nothing (no
     # Go, jq, containers or Python needed). The registry-against-tree validation is the
     # run's own first step; the selection reads the registry rows alone, so it is fast.
-    local list_dir list_name list_kind
+    local list_dir list_name list_kind list_rows
+    # The rows are read first, so a registry that cannot be read (or holds no run row) is an error: a loop fed by
+    # a process substitution cannot see the failure of its producer and read it as "nothing selected" (CHAOS-9935).
+    list_rows="$(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2)" \
+      || die "venue-oracles --changed: the registry ci/venue_oracle_registry.d/ could not be read (see above)"
+    [ -n "$(printf '%s\n' "${list_rows}" | awk '$3 == "run"')" ] \
+      || die "venue-oracles --changed: ci/venue_oracle_registry.d/ holds no run row, so nothing could ever be selected"
     while read -r list_dir list_name list_kind; do
       if [ "${list_kind}" = run ] && venue_oracle_changed_selects "${list_dir}" "${list_name}"; then
         printf 'SELECT\t%s\t%s\n' "${list_dir}" "${list_name}"
       fi
-    done < <(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2)
+    done <<< "${list_rows}"
     return 0
   fi
   command -v jq >/dev/null 2>&1 \

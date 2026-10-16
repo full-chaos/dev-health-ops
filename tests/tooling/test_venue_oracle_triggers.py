@@ -16,6 +16,7 @@ ci/venue_oracle_triggers.d/ declares such paths. These tests hold:
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -470,3 +471,65 @@ def test_a_missing_closure_directory_fails_loudly_in_the_real_layout(
     assert (
         proc.returncode != 0 and "internal__apiservice.txt is missing" in proc.stderr
     ), proc.stderr[-300:]
+
+
+def _list_rc(tree: Path):
+    changed = tree / "changed.txt"
+    changed.write_text("internal/auth/signedtoken/x.go\n", encoding="utf-8")
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    return proc
+
+
+def test_the_selection_never_reads_an_unreadable_or_empty_registry_as_nothing_to_run(
+    tmp_path: Path,
+) -> None:
+    """CHAOS-9935 self-audit: the listing loop was fed by a process substitution, so a registry that could not be read ended as
+    exit 0 and "nothing selected"."""
+    tree = _scratch_tree(
+        tmp_path / "missing", {"internal/apiservice": ["TestVenueOracleX"]}
+    )
+    shutil.rmtree(tree / "ci" / "venue_oracle_registry.d")
+    proc = _list_rc(tree)
+    assert proc.returncode != 0 and "could not be read" in proc.stderr, (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+    tree = _scratch_tree(
+        tmp_path / "local-only",
+        {"internal/apiservice": ["TestVenueOracleX"]},
+        local=("TestVenueOracleX",),
+    )
+    proc = _list_rc(tree)
+    assert proc.returncode != 0 and "holds no run row" in proc.stderr, (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+
+
+def test_a_closure_file_that_is_empty_or_malformed_is_refused(tmp_path: Path) -> None:
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    closure = tree / "ci" / "venue_oracle_closure.d"
+    closure.mkdir()
+    file = closure / "internal__apiservice.txt"
+    for body, message in (
+        ("", "is empty"),
+        ("\n", "has a line that is not a package directory"),
+        ("internal/a b\n", "has a line that is not a package directory"),
+        ("~\n", "has a line that is not a package directory"),
+    ):
+        file.write_text(body, encoding="utf-8")
+        proc = _list_rc(tree)
+        assert proc.returncode != 0 and message in proc.stderr, (
+            body,
+            proc.returncode,
+            proc.stderr[-300:],
+        )
+    file.write_text(
+        "internal/auth/signedtoken\n~internal/auth/passwordpolicy/data\n",
+        encoding="utf-8",
+    )
+    proc = _list_rc(tree)
+    assert proc.returncode == 0 and "TestVenueOracleX" in proc.stdout, (
+        proc.returncode,
+        proc.stderr[-300:],
+    )

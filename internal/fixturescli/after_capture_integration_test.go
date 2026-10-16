@@ -460,7 +460,7 @@ func TestAfterCaptureRulesReportEveryDefectByName(t *testing.T) {
 		t.Fatalf("a named column that is not nullable: %q", problems)
 	}
 	// A table with no added column is returned as it is.
-	other := FrozenTable{Name: "repos", Columns: columns, Rows: [][]any{{"a", "value", "x", "o"}}}
+	other := FrozenTable{Name: "git_commits", Columns: columns, Rows: [][]any{{"a", "value", "x", "o"}}}
 	if out, problems := withoutColumnsAfterTheCapture(other); len(problems) != 0 || len(out.Columns) != 4 {
 		t.Fatalf("a table that is not in the list: %+v %v", out, problems)
 	}

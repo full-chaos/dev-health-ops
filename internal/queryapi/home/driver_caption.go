@@ -32,8 +32,14 @@ func driverCaption(label string, names []string) *string {
 }
 
 // statesDriverMove says whether a delta is a stated move with a driver to
-// name: a percent between two measured values that is not exactly 0 %.
+// name: a percent between two measured values that is not exactly 0 %. Not a
+// work-item metric under a repository filter: its value is the repo-linked
+// calculation, while the team daily table that names its drivers has no
+// repository dimension, so the teams named would not be the filtered ones.
 func statesDriverMove(d MetricDelta) bool {
+	if d.RepoFilterApplied != nil && *d.RepoFilterApplied && metricScope(d.Metric) == "team" {
+		return false
+	}
 	_, ok := d.Percent()
 	return ok && d.HasData && namesDrivers(d)
 }

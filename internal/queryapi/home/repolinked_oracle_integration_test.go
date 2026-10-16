@@ -559,3 +559,36 @@ SELECT org_id, 'github', 'team-big', id, repo, 'exact', 'inferred', 0, 0, 0, toD
 		t.Fatalf("held = %d repositories, want %d", len(held), n)
 	}
 }
+
+// TestRepoLinkedBasisCountsALinkOfAnotherProvenanceAsHeuristic holds the basis read, built from linktier.Rank, to what it
+// served when it spelled the ranks by hand: an item whose only link carries a provenance no writer produces today
+// (a row of an older build or a foreign writer) falls to the heuristic bucket, and the three known tiers count as
+// before. The unknown provenance now ranks 0 instead of 1; the bucket is the same.
+func TestRepoLinkedBasisCountsALinkOfAnotherProvenanceAsHeuristic(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	const org = "oracle-basis-foreign"
+	seedOracleWorld(ctx, t, admin, org, func(oracleItem) bool { return true })
+	for _, statement := range []string{
+		fmt.Sprintf(`INSERT INTO work_items (repo_id, work_item_id, provider, status, type, project_id, created_at, started_at, org_id, last_synced)
+VALUES (toUUID('%s'), 'gh:a/r#11', 'github', 'in_progress', 'task', 'a/r', %s, %s, '%s', %s)`,
+			oracleR1, oracleTS("2026-08-16 09:00:00"), oracleTS("2026-08-17 09:00:00"), org, oracleTS("2026-08-26 00:00:00")),
+		fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+VALUES (toUUID('%s'), 'gh:a/r#11', 301, 1.0, 'imported-by-a-foreign-writer', '', %s, '%s')`, oracleR1, oracleTS("2026-08-26 00:00:00"), org),
+	} {
+		if err := admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start, end := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	got, err := computeMetricDelta(ctx, client, metricSpecByName(t, "throughput"), start, end, time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC), start,
+		Filters{What: WhatFilter{Repos: []string{oracleR1}}}, org, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Repository 1 holds #1 (native), #2 (explicit_text) and #3 (heuristic), as in TestRepoLinkedViewSaysItsBasisAndCoverage, plus #11 of another provenance.
+	if got.RepoLinkBasis == nil || *got.RepoLinkBasis != (RepoLinkBasis{Native: 1, ExplicitText: 1, Heuristic: 2}) {
+		t.Errorf("basis = %+v, want native 1, explicit_text 1, heuristic 2 (the foreign provenance counts as heuristic, never as a higher tier)", got.RepoLinkBasis)
+	}
+}

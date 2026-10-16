@@ -3,6 +3,8 @@ package categorize
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -84,5 +86,32 @@ func TestSharedLocalMatchesTheOpsLocalProviderForCallers(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A schema-free request (the work-unit explanation) to a local
+// OpenAI-compatible server that accepts no response_format (an LM Studio or
+// vLLM build without json_object) is served, as the ops LocalProvider served
+// it: the request names no format the server cannot honour.
+func TestSharedLocalSchemaFreeRequestNamesNoFormat(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if _, named := body["response_format"]; named {
+			http.Error(w, `{"error":"'response_format.type' must be 'json_schema'"}`, http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"summary\":\"x\"}"},"finish_reason":"stop"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	for _, kind := range []ProviderKind{ProviderKindLocal, ProviderKindOllama} {
+		provider, err := newProviderFromCredentialsWithTransport(kind, "", server.URL, "gemma3:4b", http.DefaultTransport)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := provider.Complete(context.Background(), WorkUnitExplanationRequest("p"))
+		if err != nil || result.Text != `{"summary":"x"}` {
+			t.Fatalf("%s: result %q err %v, want the schema-free answer served", kind, result.Text, err)
+		}
 	}
 }

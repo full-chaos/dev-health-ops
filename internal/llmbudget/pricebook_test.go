@@ -1,6 +1,7 @@
 package llmbudget
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -94,5 +95,36 @@ func TestOpenAIPriceKeepsItsVersion(t *testing.T) {
 	price, err := PriceAt("openai", "gpt-5-nano", "", beforeChanges)
 	if err != nil || price == nil || price.Version != PricingVersion || price.Rates != (Rates{50_000, 50_000, 400_000}) {
 		t.Fatalf("openai nano: %+v, %v", price, err)
+	}
+}
+
+// A call is priced once, at the moment it is admitted: one that is reserved
+// before a dated price change and settled after it settles at the price it
+// was reserved at, never at the new one.
+func TestACallSettlesAtThePriceItWasReservedAt(t *testing.T) {
+	clock := []time.Time{
+		time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+		time.Date(2027, 1, 1, 0, 0, 1, 0, time.UTC),
+	}
+	reads := 0
+	store := &fakeStore{admit: Admission{ID: "r", BudgetConfigured: true}}
+	guard := Guard{Store: store, OrgID: "org", Provider: "gemini", Model: "gemini-3.8-flash", Now: func() time.Time {
+		at := clock[min(reads, len(clock)-1)]
+		reads++
+		return at
+	}}
+	err := guard.Run(context.Background(), Call{IdempotencyKey: "k", MaxInputTokens: 1_000_000, MaxOutputTokens: 0},
+		func(context.Context) (Usage, error) { return usage(1_000_000, 0, 0), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads < 2 {
+		t.Fatalf("the clock was read %d times: the test does not cross the boundary", reads)
+	}
+	if len(store.admitReq) != 1 || store.admitReq[0].MaxCost == nil || *store.admitReq[0].MaxCost != 750_000 {
+		t.Fatalf("admits %+v, want one reservation at the 2026 price 750000", store.admitReq)
+	}
+	if len(store.settleReq) != 1 || store.settleReq[0].Cost == nil || *store.settleReq[0].Cost != 750_000 {
+		t.Fatalf("settles %+v, want the call settled at the price it was reserved at, 750000", store.settleReq)
 	}
 }

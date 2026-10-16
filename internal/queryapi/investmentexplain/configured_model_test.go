@@ -39,6 +39,19 @@ func TestOrgWithNoStoredModelRunsTheSharedDefault(t *testing.T) {
 			t.Errorf("%s: runtime %q (found %v), status default %q, want both %q", kind, got, found, status, model)
 		}
 	}
+
+	// A generic LLM_MODEL meant for the platform's own provider never becomes
+	// a BYO org's default for another provider, at runtime or in its status.
+	// (The platform path, an org with no BYO settings, keeps the
+	// generic-first ruling; the budget status describes only BYO orgs.)
+	t.Setenv("LLM_PROVIDER", "")
+	t.Setenv("LLM_MODEL", "generic-model-for-the-platform")
+	resolver := &fakeOrgResolver{matches: true, model: ""}
+	got, _ := ResolveModelNameForOrg(context.Background(), categorize.ProviderKindGemini, "", "org-1", resolver)
+	status := llmbudget.DefaultModel("gemini", secrets.ProcessLookup)
+	if got != "gemini-3.8-flash" || status != got {
+		t.Errorf("BYO gemini with a platform-only LLM_MODEL: runtime %q, status %q, want both gemini-3.8-flash", got, status)
+	}
 }
 
 // With no model configured, a hosted kind uses the shared package's default,

@@ -235,12 +235,12 @@ func (g Guard) Run(ctx context.Context, call Call, invoke func(context.Context) 
 				reported = reporter.ReportedUsage()
 			}
 		}
-		if settleErr := g.settle(ctx, admission.ID, outcome, reported); settleErr != nil {
+		if settleErr := g.settle(ctx, admission.ID, outcome, reported, now); settleErr != nil {
 			return errors.Join(accounting("BYO LLM budget accounting is temporarily unavailable.", settleErr), invokeErr)
 		}
 		return invokeErr
 	}
-	billed, settleErr := g.settleWithBilled(ctx, admission.ID, OutcomeSucceeded, usage)
+	billed, settleErr := g.settleWithBilled(ctx, admission.ID, OutcomeSucceeded, usage, now)
 	if settleErr != nil {
 		return accounting("BYO LLM budget accounting is temporarily unavailable.", settleErr)
 	}
@@ -250,12 +250,15 @@ func (g Guard) Run(ctx context.Context, call Call, invoke func(context.Context) 
 	return nil
 }
 
-func (g Guard) settle(ctx context.Context, id string, outcome Outcome, usage Usage) error {
-	_, err := g.settleWithBilled(ctx, id, outcome, usage)
+func (g Guard) settle(ctx context.Context, id string, outcome Outcome, usage Usage, pricedAt time.Time) error {
+	_, err := g.settleWithBilled(ctx, id, outcome, usage, pricedAt)
 	return err
 }
 
-func (g Guard) settleWithBilled(ctx context.Context, id string, outcome Outcome, usage Usage) (*int64, error) {
+// settleWithBilled prices the usage at pricedAt, the moment the call was
+// admitted: a call is priced once, so a dated price change between its
+// reservation and its settlement never reprices it.
+func (g Guard) settleWithBilled(ctx context.Context, id string, outcome Outcome, usage Usage, pricedAt time.Time) (*int64, error) {
 	timeout := g.SettleTimeout
 	if timeout <= 0 {
 		timeout = 15 * time.Second
@@ -266,7 +269,7 @@ func (g Guard) settleWithBilled(ctx context.Context, id string, outcome Outcome,
 	defer cancel()
 	request := SettleRequest{ID: id, Outcome: outcome, Usage: usage, Now: g.now()}
 	if outcome != OutcomeVoided && usage.InputTokens != nil && usage.OutputTokens != nil && usage.CachedInputTokens != nil {
-		cost, err := CostMicroUSDAt(g.Provider, g.Model, g.BaseURL, *usage.InputTokens, *usage.OutputTokens, *usage.CachedInputTokens, request.Now)
+		cost, err := CostMicroUSDAt(g.Provider, g.Model, g.BaseURL, *usage.InputTokens, *usage.OutputTokens, *usage.CachedInputTokens, pricedAt)
 		if err != nil {
 			return nil, err
 		}

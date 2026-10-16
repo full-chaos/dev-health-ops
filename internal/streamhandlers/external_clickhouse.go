@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 	"github.com/google/uuid"
 )
 
@@ -99,6 +100,7 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		// function has never wrapped its per-kind writes in one transaction.)
 		var existingManualMembers map[string][]string
 		var createdAt map[string]time.Time
+		var storedProvider map[string]teamprovider.Stored
 		if kind == "team.v1" {
 			teamIDs := make([]string, 0, len(grouped[kind]))
 			for _, record := range grouped[kind] {
@@ -114,6 +116,12 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 			if err != nil {
 				return fmt.Errorf("carry existing team.v1 created_at: %w", err)
 			}
+			// provider_team_id, provider_name and gone_at are carried the same way:
+			// a push never knows them, and must not erase what a sync wrote.
+			storedProvider, err = teamprovider.Carry(ctx, s.conn, source.Pointer.OrgID, teamIDs)
+			if err != nil {
+				return fmt.Errorf("carry existing team.v1 provider identity: %w", err)
+			}
 		}
 		rows := make([]storedversion.Row, 0, len(grouped[kind]))
 		for _, record := range grouped[kind] {
@@ -124,7 +132,7 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 			if kind == "team.v1" {
 				// created_at is the last column of the team.v1 statement; a
 				// new team's creation time is its own first updated_at (values[9]).
-				values = withTeamCreatedAt(values, createdAt)
+				values = withTeamProviderIdentity(withTeamCreatedAt(values, createdAt), storedProvider)
 			}
 			rows = append(rows, storedversion.Row{Values: values})
 		}
@@ -350,7 +358,7 @@ func externalInsertQuery(kind string) (string, error) {
 		"commit.v1":               "INSERT INTO git_commits (repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id,org_id)",
 		"pull_request.v1":         "INSERT INTO git_pull_requests (repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id,org_id)",
 		"review.v1":               "INSERT INTO git_pull_request_reviews (repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id,org_id)",
-		"team.v1":                 "INSERT INTO teams (id,team_uuid,name,description,manual_members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id,created_at)",
+		"team.v1":                 "INSERT INTO teams (id,team_uuid,name,description,manual_members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id,created_at,provider_team_id,provider_name,gone_at)",
 		"identity.v1":             "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
 		"work_item.v1":            "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
 		"work_item_transition.v1": "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
@@ -387,6 +395,15 @@ func withTeamCreatedAt(values []any, carried map[string]time.Time) []any {
 	teamID, _ := values[0].(string)
 	firstWrite, _ := values[9].(time.Time)
 	return append(values, teamcreated.For(carried, teamID, firstWrite))
+}
+
+// withTeamProviderIdentity appends provider_team_id, provider_name and gone_at,
+// the three columns after created_at in the team.v1 statement, as the stored
+// versions of the team hold them.
+func withTeamProviderIdentity(values []any, stored map[string]teamprovider.Stored) []any {
+	teamID, _ := values[0].(string)
+	value := teamprovider.Keep(stored, teamID)
+	return append(values, value.ProviderTeamID, value.ProviderName, value.GoneAt)
 }
 
 func externalRecordValues(

@@ -76,6 +76,10 @@ type gitlabTeamCatalogTeamRow struct {
 	Provider      string    `json:"provider"`
 	NativeTeamKey *string   `json:"native_team_key"`
 	ParentTeamID  *string   `json:"parent_team_id"`
+	// ProviderTeamID is the provider's immutable id of the team and ProviderName its own
+	// name (teams.provider_team_id, provider_name); empty when the run did not read them.
+	ProviderTeamID string `json:"provider_team_id,omitempty"`
+	ProviderName   string `json:"provider_name,omitempty"`
 }
 
 type gitlabTeamCatalogOwnershipRow struct {
@@ -315,6 +319,7 @@ func normalizeGitLabTeamRow(
 		Members: []string{}, ProjectKeys: append([]string(nil), projectKeys...), RepoPatterns: []string{},
 		IsActive: 1, UpdatedAt: normalizedAt, OrgID: orgID, Provider: gitlabTeamCatalogProvider,
 		NativeTeamKey: &nativeTeamKey, ParentTeamID: gitlabParentTeamID(fullPath),
+		ProviderTeamID: group.ID.String(), ProviderName: strings.TrimSpace(group.Name),
 	}
 }
 

@@ -780,6 +780,27 @@ func teamsRules() map[string]teamsRule {
 			}
 			return ""
 		}, why: "legacy: none; catalog: the team's repositories as owner/name (its ownership grants)"},
+		"provider_team_id": {check: func(sc *teamsScenario, team fakeTeam, py, gr map[string]string) string {
+			none := func(value string) bool { return value == "" || value == "<NULL>" }
+			if !none(py["provider_team_id"]) || gr["provider_team_id"] != fmt.Sprint(team.ID) {
+				return fmt.Sprintf("provider_team_id: python %q (no such column), go %q (want the provider's own id %v)", py["provider_team_id"], gr["provider_team_id"], fmt.Sprint(team.ID))
+			}
+			return ""
+		}, why: "legacy rows carry no provider id; the catalog stores the team's own immutable id (CHAOS-9432)"},
+		"provider_name": {check: func(sc *teamsScenario, team fakeTeam, py, gr map[string]string) string {
+			none := func(value string) bool { return value == "" || value == "<NULL>" }
+			if !none(py["provider_name"]) || gr["provider_name"] != strings.TrimSpace(team.Name) {
+				return fmt.Sprintf("provider_name: python %q (no such column), go %q (want the team's name %q)", py["provider_name"], gr["provider_name"], team.Name)
+			}
+			return ""
+		}, why: "legacy rows carry no provider name; the catalog stores the name the provider reports (CHAOS-9432)"},
+		"gone_at": {check: func(sc *teamsScenario, team fakeTeam, py, gr map[string]string) string {
+			none := func(value string) bool { return value == "" || value == "<NULL>" }
+			if !none(py["gone_at"]) || !none(gr["gone_at"]) {
+				return fmt.Sprintf("gone_at: python %q (no such column), go %q (want no value: a listed team is not gone)", py["gone_at"], gr["gone_at"])
+			}
+			return ""
+		}, why: "only a run that proves a team gone sets it (CHAOS-9432); a team the sync lists holds none"},
 		"deleted_at": {check: func(sc *teamsScenario, team fakeTeam, py, gr map[string]string) string {
 			none := func(value string) bool { return value == "" || value == "<NULL>" }
 			if !none(py["deleted_at"]) || !none(gr["deleted_at"]) {

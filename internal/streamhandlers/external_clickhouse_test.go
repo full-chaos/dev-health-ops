@@ -737,8 +737,8 @@ func TestClickHouseExternalSinkCarriesTeamCreatedAtOnUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := connection.batch.rows[0]
-	if got, ok := row[len(row)-1].(time.Time); !ok || !got.Equal(original) {
-		t.Fatalf("created_at = %v, want the stored %v", row[len(row)-1], original)
+	if got, ok := row[len(row)-4].(time.Time); !ok || !got.Equal(original) {
+		t.Fatalf("created_at = %v, want the stored %v", row[len(row)-4], original)
 	}
 	if updated, _ := row[9].(time.Time); !updated.After(original) {
 		t.Fatalf("updated_at %v is not after created_at %v", row[9], original)
@@ -752,8 +752,8 @@ func TestClickHouseExternalSinkStampsNewTeamCreatedAtWithItsUpdatedAt(t *testing
 		t.Fatal(err)
 	}
 	row := connection.batch.rows[0]
-	if created, _ := row[len(row)-1].(time.Time); !created.Equal(row[9].(time.Time)) {
-		t.Fatalf("created_at = %v, want updated_at %v", row[len(row)-1], row[9])
+	if created, _ := row[len(row)-4].(time.Time); !created.Equal(row[9].(time.Time)) {
+		t.Fatalf("created_at = %v, want updated_at %v", row[len(row)-4], row[9])
 	}
 }
 

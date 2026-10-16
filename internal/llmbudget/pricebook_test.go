@@ -34,6 +34,7 @@ func TestListPricesMatchThePublishedPages(t *testing.T) {
 		{"qwen", "@cf/qwen/qwen3.8-27b", "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1", beforeChanges, perMTok{450_000, 450_000, 3_200_000}},
 		{"qwen", "@cf/qwen/qwq-32b", "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1", beforeChanges, perMTok{660_000, 660_000, 1_000_000}},
 		{"qwen", "@cf/qwen/qwen2.5-coder-32b-instruct", "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1", beforeChanges, perMTok{660_000, 660_000, 1_000_000}},
+		{"qwen", "@cf/qwen/qwen3-30b-a3b-fp8", "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/", beforeChanges, perMTok{51_000, 51_000, 335_000}},
 	} {
 		name := c.provider + "/" + c.model + "@" + c.at.Format(time.RFC3339)
 		price, err := PriceAt(c.provider, c.model, c.baseURL, c.at)
@@ -59,7 +60,8 @@ func TestListPricesMatchThePublishedPages(t *testing.T) {
 }
 
 // A gateway, a self-hosted server, plain http, another provider's host, a
-// look-alike host and an unlisted model are all unpriced: their prices are
+// look-alike host, a Workers AI model off the Workers AI route and an unlisted
+// model are all unpriced: their prices are
 // not the published list.
 func TestListPricesOnlyOnTheOfficialEndpoint(t *testing.T) {
 	for _, c := range []struct{ provider, model, baseURL string }{
@@ -75,6 +77,10 @@ func TestListPricesOnlyOnTheOfficialEndpoint(t *testing.T) {
 		{"qwen", "@cf/qwen/qwen3-30b-a3b-fp8", ""},
 		{"qwen", "@cf/qwen/qwen3-30b-a3b-fp8", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
 		{"qwen", "@cf/meta/llama-3.1-8b-instruct", "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1"},
+		{"qwen", "@cf/qwen/qwen3-30b-a3b-fp8", "https://api.cloudflare.com/not-workers-ai"},
+		{"qwen", "@cf/qwen/qwen3-30b-a3b-fp8", "https://api.cloudflare.com/client/v4/accounts/acct/ai/run"},
+		{"qwen", "@cf/qwen/qwen3-30b-a3b-fp8", "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/extra"},
+		{"qwen", "@cf/qwen/qwen3-30b-a3b-fp8", "https://api.cloudflare.com/client/v4/accounts//ai/v1"},
 		{"local", "llama3.2", ""},
 		{"ollama", "llama3.2", ""},
 		{"gemini", "claude-haiku-5-5", ""},

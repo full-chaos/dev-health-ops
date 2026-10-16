@@ -1,6 +1,7 @@
 package llmbudget
 
 import (
+	"regexp"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -43,6 +44,10 @@ type listPriceRow struct {
 	provider string
 	// hosts are the official API hosts the row's prices apply to.
 	hosts []string
+	// route, when set, is the base URL path the row's prices apply to: a
+	// host that serves more than this API (api.cloudflare.com) prices only
+	// the route the provider client calls.
+	route *regexp.Regexp
 	model string
 	from  time.Time
 	rates Rates
@@ -54,6 +59,9 @@ var (
 	dashscopeChinaHosts = []string{"dashscope.aliyuncs.com"}
 	dashscopeIntlHosts  = []string{"dashscope-intl.aliyuncs.com"}
 	workersAIHosts      = []string{"api.cloudflare.com"}
+	// workersAIRoute is the Workers AI OpenAI-compatible base path; the client
+	// posts to <base>/chat/completions, so no other path reaches Workers AI.
+	workersAIRoute = regexp.MustCompile(`\A/client/v4/accounts/[^/]+/ai/v1/?\z`)
 
 	// defaultHosts is the host of each provider's default endpoint in the
 	// shared llm package: the endpoint a call with no base URL reaches.
@@ -81,10 +89,10 @@ var listPrices = []listPriceRow{
 
 	{provider: "qwen", hosts: dashscopeChinaHosts, model: "qwen-plus", rates: listRates(689_000, 689_000, 6_881_000)},
 	{provider: "qwen", hosts: dashscopeIntlHosts, model: "qwen-plus", rates: listRates(1_200_000, 1_200_000, 3_600_000)},
-	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwen3-30b-a3b-fp8", rates: listRates(51_000, 51_000, 335_000)},
-	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwen3.8-27b", rates: listRates(450_000, 450_000, 3_200_000)},
-	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwq-32b", rates: listRates(660_000, 660_000, 1_000_000)},
-	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwen2.5-coder-32b-instruct", rates: listRates(660_000, 660_000, 1_000_000)},
+	{provider: "qwen", hosts: workersAIHosts, route: workersAIRoute, model: "@cf/qwen/qwen3-30b-a3b-fp8", rates: listRates(51_000, 51_000, 335_000)},
+	{provider: "qwen", hosts: workersAIHosts, route: workersAIRoute, model: "@cf/qwen/qwen3.8-27b", rates: listRates(450_000, 450_000, 3_200_000)},
+	{provider: "qwen", hosts: workersAIHosts, route: workersAIRoute, model: "@cf/qwen/qwq-32b", rates: listRates(660_000, 660_000, 1_000_000)},
+	{provider: "qwen", hosts: workersAIHosts, route: workersAIRoute, model: "@cf/qwen/qwen2.5-coder-32b-instruct", rates: listRates(660_000, 660_000, 1_000_000)},
 }
 
 func utcDay(year int, month time.Month, day int) time.Time {
@@ -113,7 +121,7 @@ func PriceAt(provider, model, baseURL string, at time.Time) (*Price, error) {
 	var found *listPriceRow
 	for index := range listPrices {
 		row := &listPrices[index]
-		if row.provider != normalizedProvider || row.model != normalized || at.Before(row.from) || !officialHost(normalizedProvider, baseURL, row.hosts) {
+		if row.provider != normalizedProvider || row.model != normalized || at.Before(row.from) || !officialEndpoint(normalizedProvider, baseURL, row.hosts, row.route) {
 			continue
 		}
 		if found == nil || row.from.After(found.from) {
@@ -126,16 +134,21 @@ func PriceAt(provider, model, baseURL string, at time.Time) (*Price, error) {
 	return &Price{Version: ListPricingVersion, Rates: found.rates}, nil
 }
 
-// officialHost reports whether baseURL is one of hosts over https; an empty
-// base URL is the provider's default endpoint.
-func officialHost(provider, baseURL string, hosts []string) bool {
-	host := defaultHosts[provider]
+// officialEndpoint reports whether baseURL is one of hosts over https, on
+// route when the row names one; an empty base URL is the provider's default
+// endpoint.
+func officialEndpoint(provider, baseURL string, hosts []string, route *regexp.Regexp) bool {
+	host, path := defaultHosts[provider], ""
 	if pythonparity.Strip(baseURL) != "" {
 		parsed, err := pythonparity.SplitURL(baseURL)
 		if err != nil || parsed.Scheme != "https" {
 			return false
 		}
 		host, _ = parsed.Hostname()
+		path = parsed.Path
+	}
+	if route != nil && !route.MatchString(path) {
+		return false
 	}
 	for _, official := range hosts {
 		if host == official {

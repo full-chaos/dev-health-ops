@@ -10,22 +10,25 @@ response builder is in `src/dev_health_ops/api/services/investment.py`.
 
 ---
 
-## The one thing to understand: values are a COUNT of work units
+## The one thing to understand: values are the issue size of work units
 
 A WorkUnit stores a **probability** per theme/subcategory. The API does **not** report
-those probabilities directly. It reports the measure `COUNT` (CHAOS-9622, D5999): each
-WorkUnit counts **1** in total, spread over the themes and subcategories by its stored
+those probabilities directly. It reports the measure `ISSUE_SIZE` (CHAOS-9809, D5999, D6027): each
+WorkUnit counts its issue size (the sum of the story points of its issues, from `work_unit_issue_size`), or **1**
+when it has none, in total, spread over the themes and subcategories by its stored
 probabilities, and over the repositories it touches by its repository allocation weight.
-The REST `/investment` and `/investment/sunburst`, the Home tile "Investment by theme" and the
-Operating Review investment section all read this one measure, the one the Investment page
-reads (`investmentexplain.InvestmentShareMeasure`, `MeasureValueSQL`):
+The REST `/investment` response and the explanation read this measure by default, the one the Investment page
+reads (`investmentexplain.RESTInvestmentMeasure`, `ExplanationDefaultMeasure`, `MeasureValueSQL`), because they
+carry its sizing coverage in the same answer (D6027). The sunburst, the Home tile "Investment by theme" and the
+Operating Review investment section carry no coverage yet and read `COUNT` (each unit 1; `SunburstMeasure`,
+`HomeTileMeasure`, `OperatingReviewMeasure`):
 
 ```sql
--- investmentexplain.Reader.FetchInvestmentBreakdown, measure COUNT (simplified)
+-- investmentexplain.Reader.FetchInvestmentBreakdown, measure ISSUE_SIZE (simplified)
 SELECT
     subcategory_kv.1 AS subcategory,
     splitByChar('.', subcategory_kv.1)[1] AS theme,
-    sum(subcategory_kv.2 * <allocation_weight under a repo/team scope, else 1> * <owner share, else 1>) AS value
+    sum(subcategory_kv.2 * <allocation_weight under a repo/team scope, else 1> * <owner share, else 1> * <issue size, else 1>) AS value
 FROM latest_work_unit_investments AS work_unit_investments
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
 WHERE from_ts < %(end_ts)s AND to_ts >= %(start_ts)s AND org_id = %(org_id)s
@@ -33,16 +36,16 @@ GROUP BY subcategory, theme
 ORDER BY value DESC
 ```
 
-So **"60% Feature Delivery" means 60% of the work units**, not 60% of lines of code, and not
-the average probability. **Lines of code are not a measure of effort** (D5999): a WorkUnit's
+So **"60% Feature Delivery" means 60% of the sized work** (an unsized unit counts 1), not 60% of lines of code, and not
+the average probability. With no sized unit in scope the measure equals `COUNT` (each unit 1). **Lines of code are not a measure of effort** (D5999): a WorkUnit's
 `effort_value` (built from churn LOC, then active hours) is never a weight. A read must name
 its measure; a read that names none is refused (`ErrMeasureRequired`), so no path can fall back
 to a weight. The Investment paths offer no lines-of-code measure, unit or field
 (CHAOS-9695, D6014): `CHURN_LOC` stays a measure for the delivery-health breakdown and timeseries
 (team and repository dimensions) and is refused on every Investment path (theme, subcategory and work
 type dimensions, mix, coverage and ownership reads, the explanation) and on the Sankey and the flow
-matrix, which send work units only (the Sankey `unit` is always `WORK_UNITS`), and a work unit's effort is its work-unit count, not lines of code. Sizing the work by issue
-size (CHAOS-9619) will change the one named measure; it will not bring lines of code back.
+matrix, which send work units only (the Sankey `unit` is `WORK_UNITS`, or `ISSUE_SIZE` for a read in that measure), and a work unit's effort is its work-unit count, not lines of code. Sizing the work by issue
+size (CHAOS-9619) changed the one named measure; it did not bring lines of code back.
 
 The Home tile dates a unit by its END day (D5933) and the Operating Review serves the same
 measure per week under the metric names `<theme>_work` (unit `work units`).
@@ -53,17 +56,19 @@ On a team scope (`scope.level = team` with ids) each repository a unit touches i
 teams in view hold (`teamscope.RepoShare`, D5988: the linked share of the main owner, the lesser share of a
 co-owner; the scoped teams that co-own one repository together read it once, never more). The REST routes, the
 explanation and the Investment page (breakdown, timeseries, sankey, flow matrix and coverage) apply this one
-weight (CHAOS-9629). Additive measures (COUNT) sum `value x share`; an intensive measure (cycle
+weight (CHAOS-9629). Additive measures (COUNT, ISSUE_SIZE) sum `value x share`; an intensive measure (cycle
 time) is the share-weighted mean `sum(value x share) / sum(share)`, never `value x share` (D5998). The TEAM
 dimension keeps its ownership join and applies the same share once.
 
 ### What the REST `/investment` response says about its measure
 
 Besides `theme_distribution`, `subcategory_distribution` and the evidence-quality fields, the
-response carries two additive Go-only fields (CHAOS-9622): `measure` (`"COUNT"`) and
-`denominator` (the sum of all themes in the window). The values of the distributions are the
-numerators, so `share = value / denominator`. A response for a store with no investment table (or without its columns) leaves both out; a window with no
-units serves `COUNT` and a `denominator` of 0.
+response carries additive Go-only fields (CHAOS-9622, CHAOS-9809): `measure` (`"ISSUE_SIZE"`) and
+`denominator` (the sum of all themes in the window), and in `ISSUE_SIZE` `sizing_coverage` (the share of the units that
+carry a size), `unsized_unit_count` and, below half sized, `sizing_note` ("Mostly unsized: n of m work units have an
+issue size. The other u have no size, so each counts as 1 work unit."; D6031). The values of the distributions are the
+numerators, so `share = value / denominator`. A response for a store with no investment table (or without its columns) leaves them out; a window with no
+units serves `ISSUE_SIZE`, a `denominator` of 0, `unsized_unit_count` 0 and no `sizing_coverage` (no unit to take a share of).
 
 ### What `effort_value` is (stored, not a weight)
 
@@ -90,7 +95,7 @@ the split is not stored per unit, so `additions` and `deletions` are null. It is
 
 | Function | Shape | Weighting |
 | -------- | ----- | --------- |
-| `fetch_investment_breakdown` | subcategory + theme → value | `subcategory_prob` (COUNT) |
+| `fetch_investment_breakdown` | subcategory + theme → value | `subcategory_prob` (ISSUE_SIZE: x the unit's issue size, 1 when unsized) |
 | `fetch_investment_edges` | theme → repo/scope → value | `theme_prob * effort_value` (Python reader, not changed by CHAOS-9622; the Go routes do not use it) |
 | `fetch_investment_subcategory_edges` | subcategory → repo/scope → value | `subcategory_prob * effort_value` (Python reader, not changed by CHAOS-9622; the Go routes do not use it) |
 | `fetch_investment_team_edges` | subcategory → team → value | `subcategory_prob * effort_value` (Python reader, not changed by CHAOS-9622; the Go routes do not use it) |

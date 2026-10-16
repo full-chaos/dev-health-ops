@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,8 +71,8 @@ func TestExplainOptionsDefaultToThePagesMeasureAndTakeItsWindow(t *testing.T) {
 	}
 
 	relative := build(`{"filters":{"time":{"range_days":14,"compare_days":14},"scope":{"level":"org","ids":[]}}}`)
-	if relative.Measure != investmentexplain.MeasureCount {
-		t.Errorf("measure with none sent = %q, want the page's COUNT", relative.Measure)
+	if relative.Measure != investmentexplain.MeasureIssueSize {
+		t.Errorf("measure with none sent = %q, want the page's ISSUE_SIZE", relative.Measure)
 	}
 	if want := relative.StartTS.AddDate(0, 0, 14); !relative.EndTS.Equal(want) {
 		t.Errorf("relative window = [%s, %s), want 14 days", relative.StartTS, relative.EndTS)
@@ -97,5 +98,18 @@ func TestExplainOptionsDefaultToThePagesMeasureAndTakeItsWindow(t *testing.T) {
 	}
 	if team.ScopeLevel != "team" || org.ScopeLevel != "org" {
 		t.Errorf("scope levels = %q/%q", org.ScopeLevel, team.ScopeLevel)
+	}
+}
+
+// CHAOS-9809: the explain request accepts ISSUE_SIZE, and the refusal of an unknown measure names it among the
+// accepted values, so a client reading the error learns the whole contract.
+func TestExplainRequestAcceptsIssueSizeAndNamesItInTheRefusal(t *testing.T) {
+	body, errs := decodeExplainBodyForTest(t, `{"measure":"ISSUE_SIZE"}`)
+	if len(errs) > 0 || body.Measure == nil || *body.Measure != "ISSUE_SIZE" {
+		t.Fatalf("ISSUE_SIZE: body %v, errors %+v", body.Measure, errs)
+	}
+	_, errs = decodeExplainBodyForTest(t, `{"measure":"HOURS"}`)
+	if len(errs) != 1 || errs[0].Type != "literal_error" || !strings.Contains(errs[0].Msg, "'ISSUE_SIZE'") || !strings.Contains(errs[0].Msg, "'COUNT'") || !strings.Contains(errs[0].Msg, "'THROUGHPUT'") {
+		t.Fatalf("HOURS refusal = %+v, want one literal_error naming ISSUE_SIZE, COUNT and THROUGHPUT", errs)
 	}
 }

@@ -3,8 +3,9 @@
 package server
 
 // CHAOS-9622 (D5999: lines of code are not a measure of effort). Every surface that serves an investment share
-// reads the SAME measure, COUNT, the one the Investment page reads: REST /investment, REST /investment/sunburst, the
-// Home tile "Investment by theme" and the Operating Review investment section. The fixture is built so that COUNT
+// reads the work-unit count, the one the Investment page reads, or ISSUE_SIZE where the surface carries its sizing
+// coverage (REST /investment, CHAOS-9809); with no sized unit the two are equal: REST /investment, REST
+// /investment/sunburst, the Home tile "Investment by theme" and the Operating Review investment section. The fixture is built so that COUNT
 // and effort_value (the changed lines of code) give very different shares: on the unfixed code every assertion
 // below is red.
 //
@@ -183,8 +184,13 @@ func TestInvestmentSharesOfEverySurfaceAreTheCountTheInvestmentPageReads(t *test
 			}
 			measureAssertShares(t, "REST /investment", measureShares(restValues), measureShares(pageValues))
 			measureAssertShares(t, "REST /investment (expected COUNT)", measureShares(restValues), wantShares)
-			if rest.Measure != "COUNT" {
-				t.Errorf("REST /investment measure = %q, want COUNT", rest.Measure)
+			// CHAOS-9809: REST /investment reads ISSUE_SIZE (it carries its sizing coverage); no unit of this fixture has a
+			// size, so every unit counts 1 and the numbers are the COUNT's.
+			if rest.Measure != investmentexplain.RESTInvestmentMeasure {
+				t.Errorf("REST /investment measure = %q, want %q", rest.Measure, investmentexplain.RESTInvestmentMeasure)
+			}
+			if rest.SizingCoverage == nil || *rest.SizingCoverage != 0 || rest.SizingNote == "" {
+				t.Errorf("REST /investment sizing = (%v, %q), want 0 sized and the mostly-unsized sentence", rest.SizingCoverage, rest.SizingNote)
 			}
 			if rest.Denominator == nil || math.Abs(*rest.Denominator-tc.wantTotal) > 1e-3 {
 				t.Errorf("REST /investment denominator = %v, want %v (the sum of the themes)", rest.Denominator, tc.wantTotal)

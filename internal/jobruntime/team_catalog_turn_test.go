@@ -1,20 +1,18 @@
-package workerservice
+package jobruntime
 
 import (
 	"context"
 	"errors"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
 type recordingBudget struct {
-	requests []jobruntime.BudgetRequest
+	requests []BudgetRequest
 	err      error
 	released int
 }
 
-func (budget *recordingBudget) Acquire(_ context.Context, request jobruntime.BudgetRequest) (jobruntime.BudgetLease, error) {
+func (budget *recordingBudget) Acquire(_ context.Context, request BudgetRequest) (BudgetLease, error) {
 	budget.requests = append(budget.requests, request)
 	if budget.err != nil {
 		return nil, budget.err
@@ -30,7 +28,7 @@ func (lease releaseCounter) Release() { lease.budget.released++ }
 // in the organization scope, released by the function it returns.
 func TestCatalogLeaseTurnAsksForOneLeasePerOrganizationAndProvider(t *testing.T) {
 	budget := &recordingBudget{}
-	turn := catalogLeaseTurn{budget: budget}
+	turn := TeamCatalogTurn{budget: budget}
 	release, err := turn.Serialize(context.Background(), "20000000-0000-4000-8000-000000000001", "github")
 	if err != nil {
 		t.Fatal(err)
@@ -50,11 +48,11 @@ func TestCatalogLeaseTurnAsksForOneLeasePerOrganizationAndProvider(t *testing.T)
 }
 
 func TestCatalogLeaseTurnFailsLoudlyWithoutAPoolOrALease(t *testing.T) {
-	if _, err := newCatalogLeaseTurn(nil).Serialize(context.Background(), "20000000-0000-4000-8000-000000000001", "linear"); err == nil {
+	if _, err := NewTeamCatalogTurn(nil).Serialize(context.Background(), "20000000-0000-4000-8000-000000000001", "linear"); err == nil {
 		t.Error("a turn without a Postgres pool served a run")
 	}
 	failed := errors.New("store down")
-	if _, err := (catalogLeaseTurn{budget: &recordingBudget{err: failed}}).Serialize(context.Background(), "20000000-0000-4000-8000-000000000001", "linear"); !errors.Is(err, failed) {
+	if _, err := (TeamCatalogTurn{budget: &recordingBudget{err: failed}}).Serialize(context.Background(), "20000000-0000-4000-8000-000000000001", "linear"); !errors.Is(err, failed) {
 		t.Errorf("err = %v, want the store's error wrapped", err)
 	}
 }
@@ -68,14 +66,14 @@ func (l lostLease) Lost() <-chan struct{} { return l.lost }
 
 type lossBudget struct{ lost chan struct{} }
 
-func (b lossBudget) Acquire(context.Context, jobruntime.BudgetRequest) (jobruntime.BudgetLease, error) {
+func (b lossBudget) Acquire(context.Context, BudgetRequest) (BudgetLease, error) {
 	return lostLease{releaseCounter{&recordingBudget{}}, b.lost}, nil
 }
 
 // Round 117 P1: the loss signal of the budget lease reaches the carry wrapper.
 func TestCatalogLeaseTurnPassesTheLeaseLossSignal(t *testing.T) {
 	lost := make(chan struct{})
-	release, got, err := (catalogLeaseTurn{budget: lossBudget{lost}}).SerializeWithLoss(context.Background(), "20000000-0000-4000-8000-000000000001", "linear")
+	release, got, err := (TeamCatalogTurn{budget: lossBudget{lost}}).SerializeWithLoss(context.Background(), "20000000-0000-4000-8000-000000000001", "linear")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +87,7 @@ func TestCatalogLeaseTurnPassesTheLeaseLossSignal(t *testing.T) {
 	default:
 		t.Error("the signal is not the lease's own")
 	}
-	if _, none, _ := (catalogLeaseTurn{budget: &recordingBudget{}}).SerializeWithLoss(context.Background(), "20000000-0000-4000-8000-000000000001", "linear"); none != nil {
+	if _, none, _ := (TeamCatalogTurn{budget: &recordingBudget{}}).SerializeWithLoss(context.Background(), "20000000-0000-4000-8000-000000000001", "linear"); none != nil {
 		t.Error("a lease that cannot be lost gave a signal")
 	}
 }

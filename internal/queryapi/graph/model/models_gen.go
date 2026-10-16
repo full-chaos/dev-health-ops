@@ -3021,7 +3021,7 @@ func (e TimeGranularity) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 
-// Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE and COVERAGE_LINE_PCT carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
+// Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE, COVERAGE_LINE_PCT and TEST_FLAKE_RATE carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
 type TimeseriesScope string
 
 const (

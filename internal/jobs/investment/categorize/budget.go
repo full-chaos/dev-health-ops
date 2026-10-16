@@ -18,6 +18,14 @@ import (
 // provider call and are returned unchanged.
 func WithBudget(provider Provider, guard llmbudget.Guard) Provider {
 	switch typed := provider.(type) {
+	case *SharedProvider:
+		guarded, err := typed.withBudget(guard)
+		if err != nil {
+			// The same config already built once; guard per Complete rather
+			// than ever returning the unguarded provider.
+			return &budgetedProvider{inner: provider, guard: guard}
+		}
+		return guarded
 	case *OpenAIProvider:
 		guarded := *typed
 		guarded.cfg.Budget = &guard

@@ -169,15 +169,15 @@ func TestNewProviderFromEnvOpenAIReadsEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	openAIProvider, ok := provider.(*OpenAIProvider)
-	if !ok {
-		t.Fatalf("provider = %T, want *OpenAIProvider", provider)
+	openAIProvider, ok := provider.(*SharedProvider)
+	if !ok || openAIProvider.cfg.Kind != ProviderKindOpenAI {
+		t.Fatalf("provider = %T, want the shared OpenAI provider", provider)
 	}
 	if openAIProvider.cfg.APIKey.Reveal() != "sk-test-key-value" {
 		t.Error("APIKey not read from OPENAI_API_KEY")
 	}
-	if openAIProvider.cfg.Model != "gpt-5-nano-preview" {
-		t.Errorf("Model = %q, want value from LLM_MODEL_OPENAI", openAIProvider.cfg.Model)
+	if openAIProvider.Model() != "gpt-5-nano-preview" {
+		t.Errorf("Model = %q, want value from LLM_MODEL_OPENAI", openAIProvider.Model())
 	}
 }
 
@@ -266,7 +266,7 @@ func TestNewProviderFromEnvGenericModelOverridesAnyProvider(t *testing.T) {
 	}{
 		{
 			"openai", ProviderKindOpenAI, "LLM_MODEL_OPENAI", "gpt-5-nano-preview",
-			func(p Provider) string { return p.(*OpenAIProvider).cfg.Model },
+			func(p Provider) string { return p.(*SharedProvider).Model() },
 		},
 		{
 			"local", ProviderKindLocal, "LOCAL_LLM_MODEL", "gemma-3-4b",
@@ -312,7 +312,7 @@ func TestNewProviderFromEnvGenericBaseURLAndAPIKeyOverrideAnyProvider(t *testing
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	openAIProvider := provider.(*OpenAIProvider)
+	openAIProvider := provider.(*SharedProvider)
 	if openAIProvider.cfg.APIKey.Reveal() != "sk-generic-override" {
 		t.Errorf("APIKey = %q, want generic LLM_API_KEY to win over OPENAI_API_KEY", openAIProvider.cfg.APIKey.Reveal())
 	}

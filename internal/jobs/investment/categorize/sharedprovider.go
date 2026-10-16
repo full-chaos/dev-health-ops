@@ -210,7 +210,16 @@ func (b sharedBudget) Run(ctx context.Context, attempt llm.Attempt, invoke func(
 		if err != nil {
 			return llmbudget.Usage{}, err
 		}
-		return llmbudget.UsageFrom(usage.InputTokens, usage.OutputTokens, usage.CachedInputTokens), nil
+		cached := usage.CachedInputTokens
+		if cached == nil && attempt.Provider != llm.KindOpenAI && usage.InputTokens != nil && usage.OutputTokens != nil {
+			// The Chat Completions providers report no cache reads. Settling
+			// them as zero bills every input token at the full input rate, an
+			// upper bound; leaving it unknown would refuse every call of a
+			// budgeted org after the provider already answered.
+			zero := 0
+			cached = &zero
+		}
+		return llmbudget.UsageFrom(usage.InputTokens, usage.OutputTokens, cached), nil
 	})
 }
 

@@ -198,12 +198,12 @@ func Compute(ctx context.Context, db DB, lookup LookupEnv, orgID string, in Inpu
 	if in.BaseURL != nil {
 		baseURL = *in.BaseURL
 	}
-	priced, err := ReliablePrice(in.Provider, in.Model, baseURL)
+	price, err := PriceAt(in.Provider, in.Model, baseURL, now)
 	if err != nil {
 		return Status{}, err
 	}
 	base := Status{Window: Window, ResetAt: resetAt, MaximumLimit: maximum}
-	if !priced {
+	if price == nil {
 		base.Limit = limit
 		base.EnforcementAvail = false
 		base.Reason = ReasonPricingUnavailable
@@ -212,7 +212,7 @@ func Compute(ctx context.Context, db DB, lookup LookupEnv, orgID string, in Inpu
 		}
 		return base, nil
 	}
-	version := PricingVersion
+	version := price.Version
 	base.PricingVersion = &version
 
 	used := new(big.Int)
@@ -359,8 +359,17 @@ func canonicalPricedModel(model string) (string, bool) {
 // prices this provider, model and endpoint. An absent pair is unavailable,
 // never zero.
 func ReliablePrice(provider, model, baseURL string) (bool, error) {
-	rates, err := PriceRates(provider, model, baseURL)
-	return rates != nil, err
+	price, err := PriceAt(provider, model, baseURL, time.Now())
+	return price != nil, err
+}
+
+// pricingVersionOf is the version stored with a reservation: the version of
+// the list that priced it.
+func pricingVersionOf(status Status) string {
+	if status.PricingVersion != nil {
+		return *status.PricingVersion
+	}
+	return PricingVersion
 }
 
 // PriceRates is reliable_price: the rates of this provider, model and

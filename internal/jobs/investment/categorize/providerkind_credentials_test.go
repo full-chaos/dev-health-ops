@@ -81,12 +81,12 @@ func TestNewProviderFromCredentialsLocalFallsBackWithEmptyBaseURL(t *testing.T) 
 	if err != nil {
 		t.Fatalf("unexpected error: local must fall back to a default endpoint, not require a base_url: %v", err)
 	}
-	localProvider, ok := provider.(*LocalProvider)
-	if !ok {
-		t.Fatalf("provider = %T, want *LocalProvider", provider)
+	localProvider, ok := provider.(*SharedProvider)
+	if !ok || localProvider.cfg.Kind != ProviderKindLocal {
+		t.Fatalf("provider = %T, want the shared local provider", provider)
 	}
-	if localProvider.cfg.BaseURL != defaultLocalBaseURL {
-		t.Errorf("BaseURL = %q, want the package default %q", localProvider.cfg.BaseURL, defaultLocalBaseURL)
+	if got := effectiveBaseURL(t, localProvider); got != "http://localhost:11434/v1" {
+		t.Errorf("BaseURL = %q, want the package default http://localhost:11434/v1", got)
 	}
 }
 
@@ -102,9 +102,9 @@ func TestNewProviderFromCredentialsOllamaUsesExplicitValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	localProvider, ok := provider.(*LocalProvider)
-	if !ok {
-		t.Fatalf("provider = %T, want *LocalProvider (OpenAI-compatible, matching Python's OllamaProvider)", provider)
+	localProvider, ok := provider.(*SharedProvider)
+	if !ok || localProvider.cfg.Kind != ProviderKindLocal {
+		t.Fatalf("provider = %T, want the shared OpenAI-compatible local provider (matching Python's OllamaProvider)", provider)
 	}
 	if localProvider.cfg.BaseURL != "https://org-ollama.example.com/v1" {
 		t.Errorf("BaseURL = %q, want the explicit argument", localProvider.cfg.BaseURL)
@@ -112,8 +112,8 @@ func TestNewProviderFromCredentialsOllamaUsesExplicitValues(t *testing.T) {
 	if localProvider.cfg.APIKey.Reveal() != "org-key" {
 		t.Errorf("APIKey = %q, want the explicit argument", localProvider.cfg.APIKey.Reveal())
 	}
-	if localProvider.cfg.Model != "gemma3:4b" {
-		t.Errorf("Model = %q, want the explicit argument", localProvider.cfg.Model)
+	if localProvider.Model() != "gemma3:4b" {
+		t.Errorf("Model = %q, want the explicit argument", localProvider.Model())
 	}
 }
 
@@ -140,8 +140,8 @@ func TestReviewReproOrgBYOOllamaV1URLHitsChatCompletionsNotNativeAPIChat(t *test
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, ok := provider.(*LocalProvider); !ok {
-		t.Fatalf("provider = %T, want *LocalProvider", provider)
+	if shared, ok := provider.(*SharedProvider); !ok || shared.cfg.Kind != ProviderKindLocal {
+		t.Fatalf("provider = %T, want the shared local provider", provider)
 	}
 	if _, err := provider.Complete(context.Background(), CompletionRequest{
 		Prompt:        "user",
@@ -154,10 +154,19 @@ func TestReviewReproOrgBYOOllamaV1URLHitsChatCompletionsNotNativeAPIChat(t *test
 	}
 }
 
-func TestNewProviderFromCredentialsUnimplementedKindsRefuseExplicitly(t *testing.T) {
+func TestNewProviderFromCredentialsHostedKindsUseTheSharedClient(t *testing.T) {
 	for _, kind := range []ProviderKind{ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen} {
-		if _, err := NewProviderFromCredentials(kind, "org-key", "", "org-model"); err != nil {
-			t.Fatalf("NewProviderFromCredentials(%q) returned an error, want a stub Provider: %v", kind, err)
+		provider, err := NewProviderFromCredentials(kind, "org-key", "https://org-gateway.example.com/v1", "org-model")
+		if err != nil {
+			t.Fatalf("NewProviderFromCredentials(%q): %v", kind, err)
+		}
+		shared, ok := provider.(*SharedProvider)
+		if !ok || shared.cfg.Kind != kind || shared.Model() != "org-model" || shared.cfg.APIKey.Reveal() != "org-key" ||
+			effectiveBaseURL(t, shared) != "https://org-gateway.example.com/v1" || shared.cfg.HTTPClient == nil {
+			t.Fatalf("NewProviderFromCredentials(%q) = %T %+v, want the shared client with the org's values and the guarded client", kind, provider, provider)
+		}
+		if _, err := NewProviderFromCredentials(kind, "", "", "org-model"); err == nil {
+			t.Fatalf("NewProviderFromCredentials(%q) with no api_key: want an error", kind)
 		}
 	}
 }

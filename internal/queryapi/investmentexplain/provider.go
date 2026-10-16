@@ -10,21 +10,17 @@
 // implementation has something concrete to be tested against today,
 // ahead of that caller landing").
 //
-// SCOPE, matching categorize.ResolveProviderKind's own documented
-// narrowing: this file resolves and constructs a provider for the
-// platform-default path only (mock, none, openai, local, ollama) -- org BYO
-// credential/model resolution (llm/credentials.py's
-// resolve_llm_org_settings_model / org_byo_provider_matches /
-// resolve_llm_credentials) and the anthropic/gemini/qwen backends have
-// no Go port anywhere in this repo yet, categorize's included. Widening
-// that is a separate, larger task than "wire provider.Complete with the
-// mock provider."
+// SCOPE: this file resolves and constructs a provider for the
+// platform-default path (mock, none, openai, anthropic, gemini, qwen, local,
+// ollama); provider_org.go adds the org BYO resolution.
 package investmentexplain
 
 import (
 	"context"
 	"fmt"
 	"os"
+
+	"github.com/full-chaos/dev-health-go/llm"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 )
@@ -33,15 +29,23 @@ import (
 // _MODEL_ENV_BY_PROVIDER, narrowed to the providers this port can
 // actually construct (categorize.IsProviderKindImplemented).
 var modelEnvByProvider = map[categorize.ProviderKind][]string{
-	categorize.ProviderKindOpenAI: {"LLM_MODEL_OPENAI"},
-	categorize.ProviderKindLocal:  {"LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"},
+	categorize.ProviderKindOpenAI:    {"LLM_MODEL_OPENAI"},
+	categorize.ProviderKindAnthropic: {"LLM_MODEL_ANTHROPIC"},
+	categorize.ProviderKindGemini:    {"LLM_MODEL_GEMINI", "GEMINI_MODEL"},
+	categorize.ProviderKindQwen:      {"LLM_MODEL_QWEN", "QWEN_MODEL"},
+	categorize.ProviderKindLocal:     {"LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"},
 }
 
-// defaultModelByProvider ports llm/providers/base.py's
-// DEFAULT_MODEL_BY_PROVIDER, narrowed the same way.
+// defaultModelByProvider is the model a provider uses when none is
+// configured: the shared llm package's default for each kind it serves
+// (base.py's anthropic and gemini defaults name a retired model and no
+// model).
 var defaultModelByProvider = map[categorize.ProviderKind]string{
-	categorize.ProviderKindOpenAI: "gpt-5-mini",
-	categorize.ProviderKindLocal:  "llama3.2",
+	categorize.ProviderKindOpenAI:    llm.DefaultModel(llm.KindOpenAI),
+	categorize.ProviderKindAnthropic: llm.DefaultModel(llm.KindAnthropic),
+	categorize.ProviderKindGemini:    llm.DefaultModel(llm.KindGemini),
+	categorize.ProviderKindQwen:      llm.DefaultModel(llm.KindQwen),
+	categorize.ProviderKindLocal:     llm.DefaultModel(llm.KindLocal),
 }
 
 // ResolveModelName ports resolve_model_name (llm/providers/__init__.py:
@@ -118,7 +122,8 @@ func providerHasRequiredConfig(kind categorize.ProviderKind) bool {
 		return true
 	case categorize.ProviderKindNone:
 		return false
-	case categorize.ProviderKindOpenAI, categorize.ProviderKindLocal, categorize.ProviderKindOllama:
+	case categorize.ProviderKindOpenAI, categorize.ProviderKindAnthropic, categorize.ProviderKindGemini,
+		categorize.ProviderKindQwen, categorize.ProviderKindLocal, categorize.ProviderKindOllama:
 		provider, err := categorize.NewProviderFromEnv(kind)
 		if err != nil {
 			return false
@@ -182,12 +187,9 @@ const (
 )
 
 var goUnsupportedButPythonKnownProviderKinds = map[categorize.ProviderKind]struct{}{
-	categorize.ProviderKindAnthropic: {},
-	categorize.ProviderKindGemini:    {},
-	categorize.ProviderKindQwen:      {},
-	providerKindLMStudio:             {},
-	providerKindQwenLocal:            {},
-	providerKindQwenLMStudio:         {},
+	providerKindLMStudio:     {},
+	providerKindQwenLocal:    {},
+	providerKindQwenLMStudio: {},
 }
 
 // ResolveUnsupportedProviderKind resolves requestedProvider the same way

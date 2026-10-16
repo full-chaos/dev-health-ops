@@ -3,3 +3,4 @@
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 -	header	golden/batch.golden.json
 f2fe8abb42d359ad7e5a3453b276370df471a9d40021f486cead2d1ba4408a47	provider-recorded	typesafe-systemone-real-response.json
+d2ff16b4a6662f780c95aad1c946ee793c97252f8a8048790fcfa5d8955fea38	provider-recorded	workersai-qwen-categorization-response.json

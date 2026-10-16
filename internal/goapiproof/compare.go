@@ -1152,8 +1152,7 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		// comparison below, which then judges the difference through that
 		// shape's own admission rule (classifyBaselineDefects) -- see
 		// bodySizeGateDeferred's own doc comment.
-		baselineBytes, candidateBytes := sizeGateBytes(baseline, opts), sizeGateBytes(candidate, opts)
-		if reason, detail := bodySizeDisagreement(baselineBytes, candidateBytes); reason != "" && !bodySizeGateDeferred(opts, baseline.Data, candidate.Data) {
+		if reason, detail := volatileAwareBodySizeDisagreement(baseline, candidate, opts); reason != "" && !bodySizeGateDeferred(opts, baseline.Data, candidate.Data) {
 			return Result{StructuralRefusal: reason, StructuralDetail: detail}
 		}
 	}
@@ -2598,19 +2597,48 @@ func compareListByKey(baseline, candidate []any, path string, decl OrderInsensit
 	return findings
 }
 
-// sizeGateBytes is the size the body-size ratio judges. With no declared volatile field it is the raw body length, as it always was.
-// With declared volatile fields those subtrees are not compared, so their bytes are no structural signal either (a drawn bin list
-// changes length between two draws): the size is then the COMPACT encoding of the decoded data minus the compact encoding of every
-// value at a volatile path. Both legs are measured the same way, so the whitespace and key order of the raw body play no part.
-func sizeGateBytes(snapshot Snapshot, opts Options) int {
-	if len(opts.VolatileFields) == 0 {
-		return snapshot.BodyBytes
+// volatileAwareBodySizeDisagreement is bodySizeDisagreement that a declared volatile subtree can excuse, and nothing else can. The raw
+// ratio decides first: a pair the raw gate lets through is never refused here, so this only ever relaxes the gate. When the raw gate
+// refuses and the operation declares VolatileFields, the pair is judged again on the two legs' observable response (data and errors, compact
+// encoded the same way on both legs) with the bytes of every value at a volatile path taken out; those subtrees are not compared, so their
+// length (a drawn bin list) is no structural signal. The adjusted sizes keep the minimum of the ratio check, so a skew outside the volatile
+// fields is still refused when the stable part is small.
+func volatileAwareBodySizeDisagreement(baseline, candidate Snapshot, opts Options) (reason, detail string) {
+	reason, detail = bodySizeDisagreement(baseline.BodyBytes, candidate.BodyBytes)
+	if reason == "" || len(opts.VolatileFields) == 0 {
+		return reason, detail
 	}
-	encoded, err := json.Marshal(snapshot.Data)
+	baselineBytes, okBaseline := stableObservableBytes(baseline, opts)
+	candidateBytes, okCandidate := stableObservableBytes(candidate, opts)
+	if !okBaseline || !okCandidate {
+		return reason, detail
+	}
+	if adjustedReason, adjustedDetail := bodySizeDisagreement(baselineBytes, candidateBytes); adjustedReason != "" {
+		return adjustedReason, adjustedDetail + " (declared volatile fields left out)"
+	}
+	return "", ""
+}
+
+// stableObservableBytes is the compact encoding of what Compare observes of a leg (its data and its errors) minus the compact encoding of
+// every value at a declared volatile path, floored at the ratio check's minimum when the raw body was past it (a small stable part is
+// not a licence to skip the check).
+func stableObservableBytes(snapshot Snapshot, opts Options) (int, bool) {
+	observable := map[string]any{}
+	if snapshot.DataPresent {
+		observable["data"] = snapshot.Data
+	}
+	if len(snapshot.Errors) > 0 {
+		observable["errors"] = snapshot.Errors
+	}
+	encoded, err := json.Marshal(observable)
 	if err != nil {
-		return snapshot.BodyBytes
+		return 0, false
 	}
-	return len(encoded) - volatileBytes(snapshot.Data, opts.VolatileFields)
+	size := len(encoded) - volatileBytes(snapshot.Data, opts.VolatileFields)
+	if snapshot.BodyBytes >= minBodySizeForRatioCheck && size < minBodySizeForRatioCheck {
+		size = minBodySizeForRatioCheck
+	}
+	return size, true
 }
 
 // volatileBytes is the compact encoded size of every value a declared volatile path reaches in data (data-relative, index-free

@@ -75,7 +75,9 @@ func (prover githubRepoGrantAbsence) OwnershipAbsence(ctx context.Context, row O
 // gitlabAbsenceSearchPerPage is the page size of the one search request.
 const gitlabAbsenceSearchPerPage = 100
 
-// gitlabGroupProjectAbsence asks the listing's own endpoint for one project:
+// gitlabGroupProjectAbsence asks GitLab about one project. A row keyed by the
+// catalog id is asked by its numeric id (projectByID). A row of the older form,
+// keyed by the path, is asked through the listing's own endpoint:
 // GET /groups/:id/projects?search=<project path>. A project of the answer
 // whose path_with_namespace is the fact's path is still a project of the
 // group. An answer with no such project that is the whole answer says it is
@@ -88,8 +90,15 @@ type gitlabGroupProjectAbsence struct {
 
 func (prover gitlabGroupProjectAbsence) OwnershipAbsence(ctx context.Context, row OwnershipSnapshotRow) SnapshotAbsence {
 	groupPath, okTeam := strings.CutPrefix(row.TeamID, teamid.Prefix(gitlabTeamCatalogProvider))
+	groupPath = strings.TrimSpace(groupPath)
+	if !okTeam || prover.client == nil || groupPath == "" {
+		return SnapshotAbsenceNotProven
+	}
+	if nativeID, ok := gitlabCatalogNativeID(row.ProjectID); ok {
+		return prover.projectByID(ctx, groupPath, nativeID)
+	}
 	projectPath := strings.TrimSpace(row.ProjectID.String())
-	if !okTeam || prover.client == nil || strings.TrimSpace(groupPath) == "" || projectPath == "" {
+	if projectPath == "" || strings.Contains(projectPath, ":") {
 		return SnapshotAbsenceNotProven
 	}
 	name := projectPath
@@ -100,7 +109,7 @@ func (prover gitlabGroupProjectAbsence) OwnershipAbsence(ctx context.Context, ro
 		return SnapshotAbsenceNotProven
 	}
 	response, err := prover.client.Do(ctx, http.MethodGet,
-		providerRelativePath(prover.client, "api", "v4", "groups", strings.TrimSpace(groupPath))+
+		providerRelativePath(prover.client, "api", "v4", "groups", groupPath)+
 			"/projects?per_page="+strconv.Itoa(gitlabAbsenceSearchPerPage)+"&search="+url.QueryEscape(name), nil)
 	if err != nil {
 		return SnapshotAbsenceNotProven
@@ -123,6 +132,40 @@ func (prover gitlabGroupProjectAbsence) OwnershipAbsence(ctx context.Context, ro
 		return SnapshotAbsenceProven
 	}
 	return SnapshotAbsenceNotProven
+}
+
+// projectByID asks GET /projects/:id for a row keyed by the catalog id: the
+// numeric id survives a rename, a path does not. The answer holds the grant
+// when the project's own namespace is still the group (the listing reads the
+// group's own projects). Another namespace, or GitLab's own 404 for the
+// project, says the group no longer has it. Any other answer proves nothing.
+func (prover gitlabGroupProjectAbsence) projectByID(ctx context.Context, groupPath, nativeID string) SnapshotAbsence {
+	response, err := prover.client.Do(ctx, http.MethodGet, providerRelativePath(prover.client, "api", "v4", "projects", nativeID), nil)
+	if err != nil {
+		if gitlabLookupNotFound(err, "404 Project Not Found") {
+			return SnapshotAbsenceProven
+		}
+		return SnapshotAbsenceNotProven
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxOwnershipLookupBody+1))
+	if err != nil || len(body) > maxOwnershipLookupBody || response.StatusCode != http.StatusOK {
+		return SnapshotAbsenceNotProven
+	}
+	var project struct {
+		ID        json.Number `json:"id"`
+		Namespace *struct {
+			FullPath string `json:"full_path"`
+		} `json:"namespace"`
+	}
+	if json.Unmarshal(body, &project) != nil || strings.TrimSpace(project.ID.String()) != nativeID ||
+		project.Namespace == nil || strings.TrimSpace(project.Namespace.FullPath) == "" {
+		return SnapshotAbsenceNotProven
+	}
+	if strings.TrimSpace(project.Namespace.FullPath) == groupPath {
+		return SnapshotFactStillHeld
+	}
+	return SnapshotAbsenceProven
 }
 
 // jiraProjectAbsence asks the project search itself for one project:
@@ -235,6 +278,13 @@ func (prover githubTeamAbsence) TeamAbsence(ctx context.Context, teamID string) 
 // body is not GitLab's (a gateway or a proxy in front of the host) and proves
 // nothing.
 func gitlabLookupGroupNotFound(err error) bool {
+	return gitlabLookupNotFound(err, "404 Group Not Found")
+}
+
+// gitlabLookupNotFound says GitLab itself answered 404 with its own message for
+// the looked-up object (message, e.g. "404 Project Not Found"): a 404 from a
+// gateway or a proxy in front of the host has another body and proves nothing.
+func gitlabLookupNotFound(err error, message string) bool {
 	var providerErr *providerfoundation.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorNotFound ||
 		providerErr.StatusCode != http.StatusNotFound {
@@ -244,7 +294,7 @@ func gitlabLookupGroupNotFound(err error) bool {
 		Message *string `json:"message"`
 	}
 	return json.Unmarshal([]byte(providerErr.Body), &answer) == nil && answer.Message != nil &&
-		strings.TrimSpace(*answer.Message) == "404 Group Not Found"
+		strings.TrimSpace(*answer.Message) == message
 }
 
 // gitlabTeamAbsence asks GET /groups/:id with the group's full path: a 200

@@ -251,9 +251,7 @@
       "provider": "gitlab",
       "entity": "projects",
       "check": "project_ownership_names_the_catalog_project",
-      "state": "known_red",
-      "ticket": "CHAOS-8883",
-      "why": "GitLab ownership names the project by path, the projects catalog by numeric id"
+      "state": "pass"
     },
     {
       "provider": "gitlab",

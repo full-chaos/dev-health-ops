@@ -447,15 +447,23 @@ WHERE work_unit_investments.from_ts < {end_date:Date}
 }
 
 // FetchInvestmentDataVersion reads the version of an organization's work-unit
-// investments: the newest write and the row count. The explain cache key carries it,
-// so an answer built on older work units (other quality, quotes or counts, even with
-// the same mix shares) is never served for the same filters.
+// investments: the newest write and the row count of work_unit_investments and of
+// work_unit_investment_quotes, in one query. The explain cache key carries it, so an
+// answer built on older work units or older quotes (other quality, quote text or
+// counts, even with the same mix shares) is never served for the same filters. The
+// quotes are part of it because the explain puts their text in the prompt and a run
+// that dies between its quote write and its work-unit write changes them alone
+// (CHAOS-9582). The cost is a scan of the organization's rows of both tables per call.
 func (reader *Reader) FetchInvestmentDataVersion(ctx context.Context, orgID string) (string, error) {
 	if reader == nil || reader.client == nil {
 		return "", ErrUnavailable
 	}
 	query := fmt.Sprintf(`
-SELECT toString(max(computed_at)) AS latest, toString(count()) AS row_count
+SELECT
+    toString(max(computed_at)) AS latest,
+    toString(count()) AS row_count,
+    (SELECT toString(max(computed_at)) FROM work_unit_investment_quotes WHERE org_id = {org_id:String}) AS quotes_latest,
+    (SELECT toString(count()) FROM work_unit_investment_quotes WHERE org_id = {org_id:String}) AS quotes_count
 FROM work_unit_investments
 WHERE org_id = {org_id:String}
 %s
@@ -471,14 +479,14 @@ WHERE org_id = {org_id:String}
 		}
 		return "none", nil
 	}
-	var latest, rowCount string
-	if err := rows.Scan(&latest, &rowCount); err != nil {
+	var latest, rowCount, quotesLatest, quotesCount string
+	if err := rows.Scan(&latest, &rowCount, &quotesLatest, &quotesCount); err != nil {
 		return "", fmt.Errorf("scan investment data version: %w", err)
 	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("iterate investment data version: %w", err)
 	}
-	return latest + "/" + rowCount, nil
+	return latest + "/" + rowCount + "/" + quotesLatest + "/" + quotesCount, nil
 }
 
 func dedupeStrings(values []string) []string {

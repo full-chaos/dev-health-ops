@@ -26,6 +26,7 @@ stack tools    compose.bigboy.router.yml
 
 smoke project  dev-health
 smoke env-file ops/.env
+smoke profile  smoke
 smoke tools    compose.bigboy.base.yml
 smoke tools    compose.bigboy.go-workers.yml
 smoke root     _records/compose.bigboy.images.yml

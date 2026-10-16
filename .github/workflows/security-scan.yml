@@ -32,7 +32,7 @@ permissions:
 jobs:
   # CHAOS-9919: a docs-only PR changes nothing pip-audit or Semgrep scan. Gitleaks stays
   # unfiltered because a secret can sit in a doc. None of these three jobs is a required
-  # check, so a skipped job leaves no check "expected". Push and merge_group always scan.
+  # check, so a skipped job leaves no check "expected". Push and merge_group always scan (a PR touching this file runs both jobs).
   changes:
     runs-on: ubuntu-latest
     permissions:

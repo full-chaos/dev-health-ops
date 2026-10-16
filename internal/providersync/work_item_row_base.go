@@ -132,7 +132,6 @@ var workItemHierarchyExceptions = map[string]map[string]workItemFieldException{
 	},
 	gitlabIssueSourceKind: {
 		workItemFieldParentID: {Ticket: "CHAOS-9858", Reason: "the GitLab work-item hierarchy parent is not collected yet"},
-		workItemFieldEpicID:   {Ticket: "CHAOS-9854", Reason: "the issue payload epic is not read yet (Python build_epic_id_for_issue)"},
 	},
 	gitlabMergeRequestSourceKind: {
 		workItemFieldParentID: {Ticket: "CHAOS-9852", Reason: "a GitLab merge request has no parent work item"},

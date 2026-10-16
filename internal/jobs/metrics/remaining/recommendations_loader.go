@@ -3,6 +3,7 @@ package remaining
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -360,7 +361,7 @@ func (loader *RecommendationsLoader) loadReworkRatio(
 // from the summed counts rather than averaged from per-repo ratios.
 func (loader *RecommendationsLoader) loadSustainabilitySignals(
 	ctx context.Context, teamID string, windowStart, windowEnd time.Time,
-) (afterHours float64, afterHoursKnown bool, cycleTimes []float64, err error) {
+) (afterHours float64, afterHoursKnown bool, cycleTimes []float64, cycleDays []time.Time, err error) {
 	arguments := loader.windowArguments(teamID, windowStart, windowEnd)
 
 	afterHoursQuery := `
@@ -393,18 +394,18 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
         `
 	afterHoursRows, err := loader.conn.Query(ctx, afterHoursQuery, namedArguments(arguments)...)
 	if err != nil {
-		return 0, false, nil, fmt.Errorf("load after-hours ratio: %w", err)
+		return 0, false, nil, nil, fmt.Errorf("load after-hours ratio: %w", err)
 	}
 	if afterHoursRows.Next() {
 		var average float64
 		if scanErr := afterHoursRows.Scan(&average); scanErr != nil {
 			afterHoursRows.Close()
-			return 0, false, nil, fmt.Errorf("scan after-hours ratio: %w", scanErr)
+			return 0, false, nil, nil, fmt.Errorf("scan after-hours ratio: %w", scanErr)
 		}
 		afterHours, afterHoursKnown = safeFloat(&average)
 	}
 	if closeErr := afterHoursRows.Close(); closeErr != nil {
-		return 0, false, nil, closeErr
+		return 0, false, nil, nil, closeErr
 	}
 
 	// cycle_time_p50_hours is Nullable(Float64) on work_item_metrics_daily;
@@ -424,16 +425,17 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
         `
 	cycleRows, err := loader.conn.Query(ctx, cycleQuery, namedArguments(arguments)...)
 	if err != nil {
-		return 0, false, nil, fmt.Errorf("load cycle times: %w", err)
+		return 0, false, nil, nil, fmt.Errorf("load cycle times: %w", err)
 	}
 	defer cycleRows.Close()
 
 	cycleRaw := []*float64{}
+	cycleRawDays := []time.Time{}
 	for cycleRows.Next() {
 		var day time.Time
 		var average *float64
 		if scanErr := cycleRows.Scan(&day, &average); scanErr != nil {
-			return 0, false, nil, fmt.Errorf("scan cycle times: %w", scanErr)
+			return 0, false, nil, nil, fmt.Errorf("scan cycle times: %w", scanErr)
 		}
 		// DROPS null rows rather than substituting 0.0 -- the opposite of
 		// loadWIPThroughput. Reproduced exactly: a dropped row SHORTENS the
@@ -441,11 +443,16 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
 		// sustainability-risk, so substituting zero here would make the rule
 		// fire on windows where the reference declines.
 		cycleRaw = append(cycleRaw, average)
+		cycleRawDays = append(cycleRawDays, day)
 	}
 	if err := cycleRows.Err(); err != nil {
-		return 0, false, nil, err
+		return 0, false, nil, nil, err
 	}
-	return afterHours, afterHoursKnown, cycleTimesFrom(cycleRaw), nil
+	cycleTimes, cycleDays = cycleSeriesFrom(cycleRawDays, cycleRaw)
+	slog.Debug("recommendations.cycle_time_series",
+		"team_id", teamID, "samples", len(cycleTimes), "rows", len(cycleRaw),
+		"first_day", firstDayText(cycleDays), "window_start", windowStart.Format("2006-01-02"), "window_end", windowEnd.Format("2006-01-02"))
+	return afterHours, afterHoursKnown, cycleTimes, cycleDays, nil
 }
 
 // loadCompoundingSignals ports _load_compounding_signals, the legacy hotspot
@@ -547,7 +554,7 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
 // column.
 func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 	ctx context.Context, teamID string, windowStart, windowEnd time.Time,
-) (score float64, scoreKnown bool, severity string, coverage float64, coverageKnown bool, inputs []string, drivers []string, err error) {
+) (score float64, scoreKnown bool, severity string, coverage float64, coverageKnown bool, inputs []string, drivers []string, asOfDay string, err error) {
 	// argMax over a TUPLE, so the score and the severity are taken from the
 	// SAME row. Two separate argMax calls could take them from different rows
 	// if their computed_at values ever tie, which would pair a score with
@@ -561,10 +568,11 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
                 tupleElement(latest_row, 1) AS score,
                 tupleElement(latest_row, 2) AS severity,
                 tupleElement(latest_row, 3), tupleElement(latest_row, 4), tupleElement(latest_row, 5), tupleElement(latest_row, 6),
-                tupleElement(latest_row, 7), tupleElement(latest_row, 8), tupleElement(latest_row, 9), tupleElement(latest_row, 10)
+                tupleElement(latest_row, 7), tupleElement(latest_row, 8), tupleElement(latest_row, 9), tupleElement(latest_row, 10),
+                toString(tupleElement(latest_row, 11))
             FROM (
                 SELECT argMax(tuple(compounding_risk, severity, churn_norm, complexity_norm, ownership_norm, review_norm,
-                                    w_churn, w_complexity, w_ownership, w_review), tuple(day, computed_at)) AS latest_row
+                                    w_churn, w_complexity, w_ownership, w_review, day), tuple(day, computed_at)) AS latest_row
                 FROM compounding_risk_daily
                 WHERE scope = 'team'
                   AND scope_id = {team_id:String}
@@ -574,7 +582,7 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 	rows, err := loader.conn.Query(ctx, query,
 		namedArguments(loader.windowArguments(teamID, windowStart, windowEnd))...)
 	if err != nil {
-		return 0, false, "", 0, false, nil, nil, fmt.Errorf("load compounding risk: %w", err)
+		return 0, false, "", 0, false, nil, nil, "", fmt.Errorf("load compounding risk: %w", err)
 	}
 	defer rows.Close()
 
@@ -583,9 +591,10 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 		var rawSeverity string
 		var churnNorm, complexityNorm, ownershipNorm, reviewNorm *float64
 		var wChurn, wComplexity, wOwnership, wReview float64
+		var rowDay string
 		if scanErr := rows.Scan(&rawScore, &rawSeverity, &churnNorm, &complexityNorm, &ownershipNorm, &reviewNorm,
-			&wChurn, &wComplexity, &wOwnership, &wReview); scanErr != nil {
-			return 0, false, "", 0, false, nil, nil, fmt.Errorf("scan compounding risk: %w", scanErr)
+			&wChurn, &wComplexity, &wOwnership, &wReview, &rowDay); scanErr != nil {
+			return 0, false, "", 0, false, nil, nil, "", fmt.Errorf("scan compounding risk: %w", scanErr)
 		}
 		score, scoreKnown = safeFloat(rawScore)
 		// The coverage of the score: the weights of the present component
@@ -618,9 +627,14 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 		// "", so both map to "" and no conversion is needed -- the identity is
 		// stated rather than written, because a reader checking parity against
 		// the Python `if severity else None` will look for it here.
-		return score, scoreKnown, rawSeverity, coverage, coverageKnown, inputs, drivers, rows.Err()
+		if scoreKnown {
+			asOfDay = rowDay
+			slog.Debug("recommendations.compounding_risk_basis",
+				"team_id", teamID, "as_of_day", asOfDay, "window_end", windowEnd.Format("2006-01-02"))
+		}
+		return score, scoreKnown, rawSeverity, coverage, coverageKnown, inputs, drivers, asOfDay, rows.Err()
 	}
-	return 0, false, "", 0, false, nil, nil, rows.Err()
+	return 0, false, "", 0, false, nil, nil, "", rows.Err()
 }
 
 // LoadTeamMetricsWindow ports load_team_metrics_window: every signal for one
@@ -664,7 +678,7 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
-	afterHours, afterHoursKnown, cycleTimes, err := scoped.loadSustainabilitySignals(ctx, teamID, windowStart, windowEnd)
+	afterHours, afterHoursKnown, cycleTimes, cycleDays, err := scoped.loadSustainabilitySignals(ctx, teamID, windowStart, windowEnd)
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
@@ -672,7 +686,7 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
-	score, scoreKnown, severity, coverage, coverageKnown, inputs, drivers, err := scoped.loadCompoundingRiskPersisted(ctx, teamID, windowStart, windowEnd)
+	score, scoreKnown, severity, coverage, coverageKnown, inputs, drivers, asOfDay, err := scoped.loadCompoundingRiskPersisted(ctx, teamID, windowStart, windowEnd)
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
@@ -693,6 +707,7 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 		AfterHoursRatio:             afterHours,
 		AfterHoursRatioKnown:        afterHoursKnown,
 		CycleTimeByDay:              cycleTimes,
+		CycleTimeDays:               cycleDays,
 		HotspotComplexityDelta:      complexityDelta,
 		HotspotComplexityDeltaKnown: complexityKnown,
 		HotspotChurnOverlap:         churnOverlap,
@@ -705,6 +720,7 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 		CompoundingRiskCoverageKnown: coverageKnown,
 		CompoundingRiskInputs:        inputs,
 		CompoundingRiskDrivers:       drivers,
+		CompoundingRiskAsOfDay:       asOfDay,
 	}, nil
 }
 
@@ -777,13 +793,32 @@ func churnOverlapFrom(complexityDelta float64, complexityKnown bool, totalHotspo
 // `len(cycle_times) < 2` guard, so substituting 0.0 here would make the rule
 // fire on windows where the reference declines.
 func cycleTimesFrom(values []*float64) []float64 {
+	cycleTimes, _ := cycleSeriesFrom(nil, values)
+	return cycleTimes
+}
+
+// cycleSeriesFrom drops the null rows from the values and from the days
+// together, so the day list stays aligned with the values. days may be nil
+// (values only); otherwise it has one entry per value.
+func cycleSeriesFrom(days []time.Time, values []*float64) ([]float64, []time.Time) {
 	cycleTimes := []float64{}
-	for _, value := range values {
+	cycleDays := []time.Time{}
+	for index, value := range values {
 		if value != nil {
 			cycleTimes = append(cycleTimes, *value)
+			if days != nil {
+				cycleDays = append(cycleDays, days[index])
+			}
 		}
 	}
-	return cycleTimes
+	return cycleTimes, cycleDays
+}
+
+func firstDayText(days []time.Time) string {
+	if len(days) == 0 {
+		return ""
+	}
+	return days[0].Format("2006-01-02")
 }
 
 // wipThroughputFrom ports the wip/throughput list build, which KEEPS null rows

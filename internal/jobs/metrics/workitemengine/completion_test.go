@@ -153,3 +153,20 @@ func TestChurnInputsCountsTiersAndMissingSizes(t *testing.T) {
 		t.Fatalf("stats = %+v", stats)
 	}
 }
+
+func TestComputeWorkItemCompletionDailyChurnCountsTheKnownPartOfAPartialSize(t *testing.T) {
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	repo := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	items := []Item{{WorkItemID: "1", Provider: "github", RepoID: &repo,
+		CreatedAt: day.AddDate(0, 0, -1), CompletedAt: timePointer(day.Add(time.Hour)), LinkedPRs: []LinkedPR{
+			linkedPR(repo, 1, LinkTierNative, nil, lines(12)),
+			linkedPR(repo, 2, LinkTierNative, lines(7), nil),
+			linkedPR(repo, 3, LinkTierNative, nil, nil)}}}
+	rows, err := ComputeWorkItemCompletionDaily(items, day, day.AddDate(0, 0, 1), teams(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ChurnLOC != 19 {
+		t.Fatalf("rows = %+v, want churn_loc 19", rows)
+	}
+}

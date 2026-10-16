@@ -76,7 +76,7 @@ const (
 
 // LinkedPR is one pull request linked to a work item. RepoID and Number are the pull request's own key (the
 // repo_id of work_graph_issue_pr is the pull request's repository, not the item's). Additions and Deletions are
-// nil when the pull request row is missing or holds no size: the size is unknown, which is not zero lines.
+// each nil when the pull request row is missing or holds no value for it: the part is unknown, which is not zero lines.
 type LinkedPR struct {
 	RepoID     uuid.UUID
 	Number     uint32

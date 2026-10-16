@@ -88,10 +88,13 @@ func ComputeWorkItemCompletionDaily(
 				continue
 			}
 			bucket.prs[prKey] = struct{}{}
-			if pr.Additions == nil || pr.Deletions == nil {
-				continue
+			// Each part counts on its own; a pull request with neither adds nothing.
+			if pr.Additions != nil {
+				bucket.churn += int(*pr.Additions)
 			}
-			bucket.churn += int(*pr.Additions) + int(*pr.Deletions)
+			if pr.Deletions != nil {
+				bucket.churn += int(*pr.Deletions)
+			}
 		}
 		if item.StartedAt != nil {
 			cycle := completed.Sub(item.StartedAt.UTC()).Hours()
@@ -148,7 +151,7 @@ func ChurnInputs(items []Item, dayUTC, end time.Time) ChurnStats {
 		}
 		for _, pr := range item.LinkedPRs {
 			stats.LinksByTier[pr.Provenance]++
-			if pr.Additions == nil || pr.Deletions == nil {
+			if pr.Additions == nil && pr.Deletions == nil {
 				stats.LinkedPRsWithoutSize++
 			}
 		}

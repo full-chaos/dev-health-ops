@@ -139,3 +139,40 @@ GROUP BY repo_id, team_id`, orgID, day, bareRepo.String()).Scan(&bareChurn, &bar
 		t.Fatalf("no linked pull request: completed=%d churn_loc=%d, want 1 completed and churn_loc 0", bareCompleted, bareChurn)
 	}
 }
+
+// git_pull_requests.additions and deletions are each nullable: a pull request can hold one and not the other. The
+// known part counts, as the readers' per-column coalesce does; only a pull request with neither adds nothing.
+func TestCompletionFamilyCountsAKnownPartOfAPartialPullRequestSize(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	orgID := "org-churn-partial-" + uuid.NewString()
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	at := day.Add(-72 * time.Hour)
+	itemRepo, prRepo := uuid.New(), uuid.New()
+	done := day.Add(10 * time.Hour)
+	lines := func(value uint32) *uint32 { return &value }
+	seedWorkItemWithProvider(t, ctx, conn, orgID, itemRepo, "github", "p-1", day.Add(-48*time.Hour), &done)
+	seedChurnPullRequest(t, ctx, conn, orgID, prRepo, 1, nil, lines(12), at)
+	seedChurnPullRequest(t, ctx, conn, orgID, prRepo, 2, lines(7), nil, at)
+	seedChurnPullRequest(t, ctx, conn, orgID, prRepo, 3, nil, nil, at)
+	for number := uint32(1); number <= 3; number++ {
+		seedChurnLink(t, ctx, conn, orgID, prRepo, "p-1", number, "native", at)
+	}
+	completion, err := NewWorkItemInvestmentExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{ID: uuid.NewString(), OrganizationID: orgID, TargetDay: day}
+	if _, err := completion.ComputeFamily(ctx, run, Partition{ID: "p1", RunID: "r1", RepoIDs: []RepositoryID{RepositoryID(itemRepo.String())}}); err != nil {
+		t.Fatal(err)
+	}
+	var churn uint64
+	if err := conn.QueryRow(ctx, `
+SELECT toUInt64(argMax(churn_loc, computed_at)) FROM work_item_completion_daily
+WHERE org_id = ? AND day = ? GROUP BY repo_id, team_id`, orgID, day).Scan(&churn); err != nil {
+		t.Fatal(err)
+	}
+	if churn != 19 {
+		t.Fatalf("churn_loc = %d, want 19 (deletions 12 of PR 1 + additions 7 of PR 2; PR 3 has no size)", churn)
+	}
+}

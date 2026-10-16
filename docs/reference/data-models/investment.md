@@ -307,8 +307,8 @@ as an empty cycle p50. Rows written before this rule hold 0 for every key until 
 `work_item_completion_daily.churn_loc` is the sum of `additions + deletions` of the pull requests linked to the items
 completed on the day, once per pull request for each (repository, team) row. The link is a `work_graph_issue_pr` row
 of any tier (native, explicit_text, heuristic), found by the item's id and read at the pull request's own repository
-and number; an issue-key prefix or the item's own repository column is never the relation. A pull request with no
-stored size adds 0. A churn of 0 on a day with completed items means "no linked pull request with a size", not "no
+and number; an issue-key prefix or the item's own repository column is never the relation. Each stored part (additions,
+deletions) counts on its own; a pull request with neither adds 0. A churn of 0 on a day with completed items means "no linked pull request with a size", not "no
 lines changed". Rows written before this rule hold 0 until the day is recomputed.
 
 **`work_item_completion_daily` replaces `investment_metrics_daily` as the daily completion source (CHAOS-9264).** The

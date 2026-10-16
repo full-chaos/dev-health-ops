@@ -114,16 +114,16 @@ func TestThePythonBillingEdgeServiceIsRetiredByProfile(t *testing.T) {
 }
 
 func TestTheOverrideIsInTheCutChainBeforeTheRouter(t *testing.T) {
-	var chain string
-	for _, line := range strings.Split(read(t, filepath.Join(toolsDir(t), "bigboy-cut.sh")), "\n") {
-		if strings.HasPrefix(line, "export COMPOSE_FILE=") {
-			chain = strings.TrimPrefix(line, "export COMPOSE_FILE=")
+	var files []string
+	for _, line := range strings.Split(read(t, filepath.Join(toolsDir(t), "stack.files")), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[0] == "stack" && (fields[1] == "tools" || fields[1] == "root") {
+			files = append(files, fields[2])
 		}
 	}
-	if chain == "" {
-		t.Fatal("the cut exports no COMPOSE_FILE")
+	if len(files) == 0 {
+		t.Fatal("the `stack` set of stack.files holds no compose file")
 	}
-	files := strings.Split(strings.TrimSpace(chain), ":")
 	index := func(name string) int {
 		for i, file := range files {
 			if file == name {
@@ -132,7 +132,7 @@ func TestTheOverrideIsInTheCutChainBeforeTheRouter(t *testing.T) {
 		}
 		return -1
 	}
-	billing, router := index("$HERE/compose.bigboy.billing-edge.yml"), index("$HERE/compose.bigboy.router.yml")
+	billing, router := index("compose.bigboy.billing-edge.yml"), index("compose.bigboy.router.yml")
 	if billing < 0 || router < 0 || billing >= router || router != len(files)-1 {
 		t.Fatalf("billing override at %d, router at %d of %d: the override must be in the chain before the router, which stays last (%v)", billing, router, len(files), files)
 	}

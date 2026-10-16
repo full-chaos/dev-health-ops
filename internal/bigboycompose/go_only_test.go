@@ -29,10 +29,11 @@ const (
 	proveScriptName     = "bigboy-graphql-prove.sh"
 	logChecksScriptName = "bigboy-log-checks.sh"
 	smokeScriptName     = "web-path-smoke.sh"
+	stackFilesName      = "stack.files"
 )
 
 // goOnlyFiles are the tracked files the check reads, by name.
-var goOnlyFiles = []string{imagesOverlayName, smokeOverlayName, cutScriptName, proveScriptName, logChecksScriptName, smokeScriptName}
+var goOnlyFiles = []string{imagesOverlayName, smokeOverlayName, cutScriptName, proveScriptName, logChecksScriptName, smokeScriptName, stackFilesName}
 
 type bigboyService struct {
 	Image       string               `yaml:"image"`
@@ -68,7 +69,7 @@ func codeLines(text string) []string {
 	return lines
 }
 
-var planesUpLine = regexp.MustCompile(`up -d --no-deps --no-build ([a-z0-9 -]+?) > \$REC/up\.out`)
+var planesUpLine = regexp.MustCompile(`stack\.sh" up ([a-z0-9 -]+?) > \$REC/up\.out`)
 
 // goOnlyFindings returns what in the tracked bigboy files still needs the Python api, one finding per defect.
 func goOnlyFindings(files map[string]string) ([]string, error) {
@@ -116,24 +117,17 @@ func goOnlyFindings(files map[string]string) ([]string, error) {
 	}
 
 	cut := files[cutScriptName]
-	chain := ""
-	for _, line := range codeLines(cut) {
-		if strings.HasPrefix(line, "export COMPOSE_FILE=") {
-			chain = line
-		}
-	}
-	switch {
-	case chain == "":
-		return nil, fmt.Errorf("%s exports no COMPOSE_FILE: nothing was checked", cutScriptName)
-	case strings.Contains(chain, "metrics-api"):
-		found("%s: the compose chain holds the metrics-api side file, a Python api service", cutScriptName)
-	}
 	up := planesUpLine.FindStringSubmatch(strings.Join(codeLines(cut), "\n"))
 	if up == nil {
-		return nil, fmt.Errorf("%s has no `up -d --no-deps --no-build <planes>` line: nothing was checked", cutScriptName)
+		return nil, fmt.Errorf("%s has no `stack.sh up <planes>` line: nothing was checked", cutScriptName)
 	}
 	if got := strings.Fields(up[1]); strings.Join(got, " ") != "query-api go-api web" {
 		found("%s: the planes `up` list is %v, want [query-api go-api web]: the Python api is not recreated", cutScriptName, got)
+	}
+	for _, line := range codeLines(files[stackFilesName]) {
+		if strings.Contains(line, "metrics-api") {
+			found("%s: a set names the metrics-api side file, a Python api service", stackFilesName)
+		}
 	}
 	for _, script := range []string{cutScriptName, proveScriptName, logChecksScriptName, smokeScriptName} {
 		for _, line := range codeLines(files[script]) {
@@ -240,16 +234,16 @@ func TestBigboyGoOnlyCheckSeesEachDefect(t *testing.T) {
 		{
 			name: "api back in the cut's up list",
 			file: cutScriptName,
-			old:  "up -d --no-deps --no-build query-api go-api web ",
-			new:  "up -d --no-deps --no-build api query-api go-api web ",
+			old:  "stack.sh\" up query-api go-api web ",
+			new:  "stack.sh\" up api query-api go-api web ",
 			want: "the planes `up` list is [api query-api go-api web]",
 		},
 		{
-			name: "the metrics-api side file back in the chain",
-			file: cutScriptName,
-			old:  "export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:",
-			new:  "export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:compose/compose.metrics-api.local.yml:",
-			want: "the compose chain holds the metrics-api side file",
+			name: "the metrics-api side file back in the stack set",
+			file: stackFilesName,
+			old:  "\nstack tools    compose.bigboy.router.yml\n",
+			new:  "\nstack root     compose/compose.metrics-api.local.yml\nstack tools    compose.bigboy.router.yml\n",
+			want: "stack.files: a set names the metrics-api side file",
 		},
 		{
 			name: "a two-plane leg back in the cut",
@@ -273,11 +267,11 @@ func TestBigboyGoOnlyCheckSeesEachDefect(t *testing.T) {
 			want: "bigboy-log-checks.sh: a line names the Python api container",
 		},
 		{
-			name: "the metrics-api side file back in the smoke chain",
-			file: smokeScriptName,
-			old:  "  -f .remember/lanes/team-lead/reconciler-sweep-override.yml \\\n",
-			new:  "  -f compose/compose.metrics-api.local.yml \\\n  -f .remember/lanes/team-lead/reconciler-sweep-override.yml \\\n",
-			want: "web-path-smoke.sh: a line names metrics-api",
+			name: "the metrics-api side file back in the smoke set",
+			file: stackFilesName,
+			old:  "smoke root     _records/compose.bigboy.images.yml\n",
+			new:  "smoke root     compose/compose.metrics-api.local.yml\nsmoke root     _records/compose.bigboy.images.yml\n",
+			want: "stack.files: a set names the metrics-api side file",
 		},
 	} {
 		t.Run(plant.name, func(t *testing.T) {

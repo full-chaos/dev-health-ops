@@ -126,6 +126,7 @@ type issueTypeMetricsKey struct {
 type issueTypeMetricsBucket struct {
 	created, completed, active int
 	cycleHours                 []float64
+	leadHours                  []float64
 }
 
 // ComputeIssueTypeMetricsDaily mirrors the issue-type path in the production
@@ -169,6 +170,13 @@ func ComputeIssueTypeMetricsDaily(
 						bucket.cycleHours = append(bucket.cycleHours, cycle)
 					}
 				}
+				// Lead time runs from creation to completion. An item with no
+				// created_at (the zero time) or a creation after its
+				// completion, or at the same instant, has no lead time: it is left out of the p50, so a stored 0 always means no lead time (see
+				// LeadTimeInputs), never taken as 0 hours.
+				if lead := completed.Sub(created).Hours(); hasCreationTime(item.CreatedAt) && lead > 0 {
+					bucket.leadHours = append(bucket.leadHours, lead)
+				}
 			}
 		}
 		if created.Before(end) &&
@@ -181,10 +189,14 @@ func ComputeIssueTypeMetricsDaily(
 	for _, key := range order {
 		bucket := buckets[key]
 		sort.Float64s(bucket.cycleHours)
-		var p50, p90 float64
+		sort.Float64s(bucket.leadHours)
+		var p50, p90, leadP50 float64
 		if len(bucket.cycleHours) > 0 {
 			p50 = bucket.cycleHours[len(bucket.cycleHours)/2]
 			p90 = bucket.cycleHours[int(float64(len(bucket.cycleHours))*0.9)]
+		}
+		if len(bucket.leadHours) > 0 {
+			leadP50 = bucket.leadHours[len(bucket.leadHours)/2]
 		}
 		result = append(result, IssueTypeMetricsDailyRow{
 			RepoID:         key.repoID.pointer(),
@@ -196,7 +208,7 @@ func ComputeIssueTypeMetricsDaily(
 			ActiveCount:    bucket.active,
 			CycleP50Hours:  p50,
 			CycleP90Hours:  p90,
-			LeadP50Hours:   0,
+			LeadP50Hours:   leadP50,
 		})
 	}
 	return result
@@ -205,4 +217,31 @@ func ComputeIssueTypeMetricsDaily(
 type completionBucket struct {
 	deliveryUnits, completed, churn int
 	cycleHours                      []float64
+}
+
+// hasCreationTime reports whether a creation time is a real one. The work_items.created_at column is not
+// nullable, so a missing creation time is stored and read back as the Unix epoch (and the Go zero time before it
+// is stored): neither is a date the item was created on.
+func hasCreationTime(created time.Time) bool {
+	return !created.IsZero() && created.UTC().After(time.Unix(0, 0))
+}
+
+// LeadTimeInputs counts the items completed in [dayUTC, end) and, of those, the ones left out of the lead-time p50
+// because they have no created_at or were created after they completed. The caller logs it; this package holds no
+// logger.
+func LeadTimeInputs(items []Item, dayUTC, end time.Time) (completed, excluded int) {
+	for _, item := range items {
+		if item.CompletedAt == nil {
+			continue
+		}
+		done := item.CompletedAt.UTC()
+		if done.Before(dayUTC) || !done.Before(end) {
+			continue
+		}
+		completed++
+		if !hasCreationTime(item.CreatedAt) || done.Sub(item.CreatedAt.UTC()) <= 0 {
+			excluded++
+		}
+	}
+	return completed, excluded
 }

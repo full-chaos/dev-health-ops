@@ -654,43 +654,9 @@ func BlockedIntervalsWithStats(relations []BlockingRelation, ends []RelationEnd)
 	if len(relations) == 0 || len(ends) == 0 {
 		return nil, stats
 	}
-	byID := make(map[string]RelationEnd, len(ends))
-	// readAt is, per item, the latest time its relations were read, over
-	// every row given for it: the store's rows and a sync unit's fresh one
-	// each carry their own.
-	readAt := map[string]time.Time{}
-	for _, end := range ends {
-		if end.WorkItemID == "" {
-			continue
-		}
-		if end.RelationsReadAt != nil {
-			if existing, seen := readAt[end.WorkItemID]; !seen || end.RelationsReadAt.After(existing) {
-				readAt[end.WorkItemID] = end.RelationsReadAt.UTC()
-			}
-		}
-		if existing, seen := byID[end.WorkItemID]; seen && !end.LastSynced.After(existing.LastSynced) {
-			continue
-		}
-		byID[end.WorkItemID] = end
-	}
-	// The time a writer last READ the item's relations: its stored read time,
-	// else its latest sync (an item with no read time stored, CHAOS-8578).
-	relationsRead := func(writer RelationEnd) (time.Time, bool) {
-		if read, stored := readAt[writer.WorkItemID]; stored {
-			return read, true
-		}
-		return writer.LastSynced, false
-	}
-	keyIndex := issueKeyIndex(byID)
-	resolve := func(id string) (RelationEnd, bool) {
-		if key, external := ExternalKey(id); external {
-			id = keyIndex[key]
-		} else if strings.HasPrefix(id, ExternalKeyPrefix) {
-			return RelationEnd{}, false
-		}
-		end, stored := byID[id]
-		return end, stored
-	}
+	index := newRelationEndIndex(ends)
+	relationsRead := index.relationsRead
+	resolve := index.resolve
 
 	result := map[string][]BlockedInterval{}
 	for _, relation := range relations {
@@ -741,6 +707,98 @@ func BlockedIntervalsWithStats(relations []BlockingRelation, ends []RelationEnd)
 		return nil, stats
 	}
 	return result, stats
+}
+
+// relationEndIndex resolves the ends of a relation and the time each writer
+// last read its relations. BlockedIntervalsWithStats and EndedBlockingRelations
+// both use it, so the interval rule and the drain of removed rows cannot
+// disagree about which relation is gone.
+type relationEndIndex struct {
+	byID    map[string]RelationEnd
+	readAt  map[string]time.Time
+	keyByID map[string]string
+}
+
+func newRelationEndIndex(ends []RelationEnd) relationEndIndex {
+	byID := make(map[string]RelationEnd, len(ends))
+	// readAt is, per item, the latest time its relations were read, over
+	// every row given for it: the store's rows and a sync unit's fresh one
+	// each carry their own.
+	readAt := map[string]time.Time{}
+	for _, end := range ends {
+		if end.WorkItemID == "" {
+			continue
+		}
+		if end.RelationsReadAt != nil {
+			if existing, seen := readAt[end.WorkItemID]; !seen || end.RelationsReadAt.After(existing) {
+				readAt[end.WorkItemID] = end.RelationsReadAt.UTC()
+			}
+		}
+		if existing, seen := byID[end.WorkItemID]; seen && !end.LastSynced.After(existing.LastSynced) {
+			continue
+		}
+		byID[end.WorkItemID] = end
+	}
+	return relationEndIndex{byID: byID, readAt: readAt, keyByID: issueKeyIndex(byID)}
+}
+
+// relationsRead is the time a writer last READ the item's relations: its
+// stored read time, else its latest sync (an item with no read time stored,
+// CHAOS-8578).
+func (index relationEndIndex) relationsRead(writer RelationEnd) (time.Time, bool) {
+	if read, stored := index.readAt[writer.WorkItemID]; stored {
+		return read, true
+	}
+	return writer.LastSynced, false
+}
+
+func (index relationEndIndex) resolve(id string) (RelationEnd, bool) {
+	if key, external := ExternalKey(id); external {
+		id = index.keyByID[key]
+	} else if strings.HasPrefix(id, ExternalKeyPrefix) {
+		return RelationEnd{}, false
+	}
+	end, stored := index.byID[id]
+	return end, stored
+}
+
+// EndedBlockingRelations splits the blocking relations by the end rule alone,
+// the rule BlockedIntervalsWithStats applies, whether or not a start is known:
+// the relations the provider no longer reports (a writer has a later read
+// that did not write them), the count that it still reports, and the count the
+// rule cannot decide (not a canonical blocking row, an end that is not a
+// stored item, or an item related to itself). Only an ended relation is ever
+// a candidate for a drain.
+func EndedBlockingRelations(relations []BlockingRelation, ends []RelationEnd) (ended []BlockingRelation, current, undecided int) {
+	index := newRelationEndIndex(ends)
+	for _, relation := range relations {
+		named, blocking := BlockingEndsOfRelation(relation)
+		if !blocking {
+			undecided++
+			continue
+		}
+		blocked, blockedStored := index.resolve(named.BlockedID)
+		blocker, blockerStored := index.resolve(named.BlockerID)
+		if !blockedStored || !blockerStored || blocked.WorkItemID == blocker.WorkItemID {
+			undecided++
+			continue
+		}
+		synced := make([]time.Time, 0, 2)
+		if named.BlockedWrites {
+			read, _ := index.relationsRead(blocked)
+			synced = append(synced, read)
+		}
+		if named.BlockerWrites {
+			read, _ := index.relationsRead(blocker)
+			synced = append(synced, read)
+		}
+		if RelationEndedBy(relation.LastSynced, synced...) >= 0 {
+			ended = append(ended, relation)
+			continue
+		}
+		current++
+	}
+	return ended, current, undecided
 }
 
 // issueKeyIndex indexes jira and linear work items by their bare issue key

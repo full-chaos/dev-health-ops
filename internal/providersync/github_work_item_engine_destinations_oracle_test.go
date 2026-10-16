@@ -268,6 +268,12 @@ type githubIssueTypeMetricsColumns struct {
 	OrgID          []string                   `json:"org_id"`
 }
 
+// newGitHubIssueTypeMetricsColumns builds the columns the four frozen issue-type snapshots are compared on. The
+// recorded Python answer holds lead_p50_hours = 0.0 in every row, because Python never computed a lead time; Go
+// now writes the p50 of completed_at minus created_at (CHAOS-8839). A recorded answer is never edited, so this
+// column is compared at the value Python wrote and the Go value is pinned where it is computed:
+// workitemengine's TestComputeIssueTypeMetricsDailyLeadTime* and the daily package's
+// TestIssueTypeFamilyWritesLeadTimeForEveryProvider.
 func newGitHubIssueTypeMetricsColumns(
 	rows []githubIssueTypeMetricsDailyRow,
 ) githubIssueTypeMetricsColumns {
@@ -289,7 +295,7 @@ func newGitHubIssueTypeMetricsColumns(
 		columns.ActiveCount = append(columns.ActiveCount, row.ActiveCount)
 		columns.CycleP50Hours = append(columns.CycleP50Hours, row.CycleP50Hours)
 		columns.CycleP90Hours = append(columns.CycleP90Hours, row.CycleP90Hours)
-		columns.LeadP50Hours = append(columns.LeadP50Hours, row.LeadP50Hours)
+		columns.LeadP50Hours = append(columns.LeadP50Hours, 0)
 		columns.ComputedAt = append(columns.ComputedAt, row.ComputedAt)
 		columns.OrgID = append(columns.OrgID, row.OrgID)
 	}

@@ -214,8 +214,11 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // `repo_change_failure_daily` (version computed_at), keyed on
 // (org_id, repo_id, day) -- CHAOS-8981. A reader keeps the newest computed_at
 // per key (LIMIT 1 BY or argMax) before it sums the counts.
+// 121 -> 122: 130_work_unit_issue_size.sql adds `work_unit_issue_size`
+// (version computed_at), keyed on (org_id, work_unit_id) -- CHAOS-9807. A
+// reader takes argMax on computed_at per unit.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 121
+	const wantCount = 122
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

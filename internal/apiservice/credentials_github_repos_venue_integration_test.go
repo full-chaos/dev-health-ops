@@ -34,6 +34,17 @@ type githubRepoStub struct {
 	server *httptest.Server
 	mu     sync.Mutex
 	seen   []string
+	status []int
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	code int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.code = code
+	r.ResponseWriter.WriteHeader(code)
 }
 
 func newGitHubRepoStub(t *testing.T) *githubRepoStub {
@@ -50,11 +61,17 @@ func (s *githubRepoStub) port() string {
 }
 
 func (s *githubRepoStub) take() []string {
+	calls, _ := s.takeWithStatus()
+	return calls
+}
+
+// takeWithStatus is take plus the HTTP status the stub answered each recorded call with.
+func (s *githubRepoStub) takeWithStatus() ([]string, []int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := s.seen
-	s.seen = nil
-	return out
+	out, status := s.seen, s.status
+	s.seen, s.status = nil, nil
+	return out, status
 }
 
 func ghItem(id int, name string) string {
@@ -111,7 +128,18 @@ func (s *githubRepoStub) handle(w http.ResponseWriter, r *http.Request) {
 	signature += " auth=" + kind + " " + credential + " accept=" + r.Header.Get("Accept")
 	s.mu.Lock()
 	s.seen = append(s.seen, signature)
+	s.status = append(s.status, 0)
+	index := len(s.seen) - 1
 	s.mu.Unlock()
+	recorder := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
+	w = recorder
+	defer func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if index < len(s.status) {
+			s.status[index] = recorder.code
+		}
+	}()
 
 	write := func(status int, body string, headers ...[2]string) {
 		w.Header().Set("Content-Type", "application/json")
@@ -412,9 +440,9 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 		Retire:    retiredBrowseRequest,
 		Pin:       pin,
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
-			calls := stub.take()
+			calls, callStatus := stub.takeWithStatus()
 			goCalls[request.Name], goStatus[request.Name] = calls, goResponse.Status
-			assertBrowseScopeFields(t, request, goResponse)
+			assertBrowseScopeFields(t, request, goResponse, calls, callStatus)
 			if retiredBrowseRequest(request) {
 				assertRetiredBrowse(t, request, goResponse, calls)
 				pin.Check(t, "provider: "+request.Name, strings.Join(calls, "\n"))
@@ -459,45 +487,107 @@ func dropGoOnlyBrowseScope(request venueoracle.Request, body string) string {
 	return string(out)
 }
 
-// assertBrowseScopeFields checks, on every raw Go 200 listing, that all three scope fields are present with a valid
-// value, and that installation_scoped is true exactly for the GitHub App credentials.
-func assertBrowseScopeFields(t *testing.T, request venueoracle.Request, goResponse venueoracle.Response) {
+// assertBrowseScopeFields checks, on every raw Go 200 listing, that all three scope fields are present (a nullable
+// field is null, never absent) with a valid value, that installation_scoped is true exactly for the GitHub App
+// credentials, and that owner_type and diagnostic agree with what the provider answered: both are null when no owner
+// listing was called, owner_type names the route that answered 200, and owner_not_found follows an /orgs/ 404 and a
+// /users/ 404 with no owner_type.
+func assertBrowseScopeFields(t *testing.T, request venueoracle.Request, goResponse venueoracle.Response, calls []string, callStatus []int) {
 	t.Helper()
+	for _, problem := range browseScopeFieldProblems(request, goResponse, calls, callStatus) {
+		t.Error(problem)
+	}
+}
+
+func browseScopeFieldProblems(request venueoracle.Request, goResponse venueoracle.Response, calls []string, callStatus []int) (problems []string) {
+	errorf := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	if !strings.HasPrefix(request.Name, "github repos: ") || goResponse.Status != http.StatusOK {
-		return
+		return nil
 	}
 	var body map[string]any
 	if json.Unmarshal([]byte(goResponse.Body), &body) != nil {
-		return
+		return nil
 	}
 	if _, listing := body["repos"]; !listing {
-		return
+		return nil
 	}
+	for _, field := range browseScopeFields {
+		if _, present := body[field]; !present {
+			errorf("%s: scope field %s is absent; a nullable field is present as null", request.Name, field)
+		}
+	}
+	ownerType, diagnostic := "", ""
 	switch value := body["owner_type"].(type) {
 	case nil:
 	case string:
 		if value != "org" && value != "user" {
-			t.Errorf("%s: owner_type %q is not org, user or null", request.Name, value)
+			errorf("%s: owner_type %q is not org, user or null", request.Name, value)
 		}
+		ownerType = value
 	default:
-		t.Errorf("%s: owner_type %v is not a string or null", request.Name, value)
+		errorf("%s: owner_type %v is not a string or null", request.Name, value)
 	}
 	scoped, isBool := body["installation_scoped"].(bool)
 	if !isBool {
-		t.Errorf("%s: installation_scoped %v is not a bool", request.Name, body["installation_scoped"])
+		errorf("%s: installation_scoped %v is not a bool", request.Name, body["installation_scoped"])
 	}
 	if wantScoped := strings.HasPrefix(request.Name, "github repos: app "); scoped != wantScoped {
-		t.Errorf("%s: installation_scoped=%v, want %v (true exactly for the App credentials)", request.Name, scoped, wantScoped)
+		errorf("%s: installation_scoped=%v, want %v (true exactly for the App credentials)", request.Name, scoped, wantScoped)
 	}
 	switch value := body["diagnostic"].(type) {
 	case nil:
 	case string:
 		if value != "owner_not_found" {
-			t.Errorf("%s: diagnostic %q is not owner_not_found or null", request.Name, value)
+			errorf("%s: diagnostic %q is not owner_not_found or null", request.Name, value)
 		}
+		diagnostic = value
 	default:
-		t.Errorf("%s: diagnostic %v is not a string or null", request.Name, value)
+		errorf("%s: diagnostic %v is not a string or null", request.Name, value)
 	}
+
+	if len(callStatus) != len(calls) {
+		errorf("%s: %d provider calls but %d recorded statuses", request.Name, len(calls), len(callStatus))
+		return problems
+	}
+	var orgs, users []int
+	for index, call := range calls {
+		route, routeless := callRoute(call)
+		if routeless {
+			// A base URL that folds the route into its query hides which route was called.
+			return problems
+		}
+		switch {
+		case strings.HasPrefix(route, "/orgs/"):
+			orgs = append(orgs, callStatus[index])
+		case strings.HasPrefix(route, "/users/"):
+			users = append(users, callStatus[index])
+		}
+	}
+	answered := func(statuses []int, want int) bool {
+		for _, status := range statuses {
+			if status == want {
+				return true
+			}
+		}
+		return false
+	}
+	if len(orgs)+len(users) == 0 && (ownerType != "" || diagnostic != "") {
+		errorf("%s: owner_type=%q diagnostic=%q with no owner listing called (%v): both must be null", request.Name, ownerType, diagnostic, calls)
+	}
+	switch ownerType {
+	case "org":
+		if !answered(orgs, http.StatusOK) {
+			errorf("%s: owner_type=org but no /orgs/ call answered 200: %v %v", request.Name, calls, callStatus)
+		}
+	case "user":
+		if !answered(users, http.StatusOK) {
+			errorf("%s: owner_type=user but no /users/ call answered 200: %v %v", request.Name, calls, callStatus)
+		}
+	}
+	if diagnostic == "owner_not_found" && (ownerType != "" || !answered(orgs, http.StatusNotFound) || !answered(users, http.StatusNotFound)) {
+		errorf("%s: owner_not_found with owner_type=%q after /orgs/ %v and /users/ %v, want null owner_type after a 404 from each", request.Name, ownerType, orgs, users)
+	}
+	return problems
 }
 
 // browseRuling is the one-line ruling the pinned requests carry: GWC D6026 (the oracle's Python reference is the frozen

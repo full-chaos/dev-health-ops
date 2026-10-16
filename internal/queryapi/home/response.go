@@ -76,10 +76,16 @@ type MetricDelta struct {
 	// when a window has no stored value (CHAOS-9111) and when the prior is a
 	// measured 0 and the current value is not (a percent change against zero is
 	// undefined); a measured 0 to 0 stays 0.
-	DeltaPct     *float64     `json:"delta_pct"`
-	HasData      bool         `json:"has_data"`
-	HasPriorData bool         `json:"has_prior_data"`
-	Spark        []SparkPoint `json:"spark"`
+	DeltaPct     *float64 `json:"delta_pct"`
+	HasData      bool     `json:"has_data"`
+	HasPriorData bool     `json:"has_prior_data"`
+	// PriorValue (CHAOS-9817) is the value the comparison window stored, in the
+	// unit of Value (the same transform), read by the same query that sets
+	// HasPriorData. nil exactly when HasPriorData is false: an unknown prior is
+	// null, never 0. A measured 0 stays 0. GraphQL only (json "-": the REST
+	// bodies are frozen).
+	PriorValue *float64     `json:"-"`
+	Spark      []SparkPoint `json:"spark"`
 	// RateState says why a rate that is a ratio of stored counts has a value
 	// or not. Change failure rate (CHAOS-8981): "measured" (the value may be
 	// 0), "unknown_no_incident_evidence" or "not_applicable_no_deployments".
@@ -139,6 +145,16 @@ type ReworkThemeAllocation struct {
 	AllocationPct float64 `json:"allocation_pct"`
 	PRsMerged     int64   `json:"prs_merged"`
 	ChurnLOC      int64   `json:"churn_loc"`
+
+	// Measure, Denominator and the sizing fields say what allocation is a share of (CHAOS-9624). GraphQL only
+	// (json "-": the REST body is frozen). Measure is WORK_UNITS (COUNT) or ISSUE_SIZE; Denominator is the total
+	// allocation_pct divides by. The three sizing fields are nil unless Measure is ISSUE_SIZE, and nil when the
+	// window holds no unit: nil is "not measured", never 0.
+	Measure          string   `json:"-"`
+	Denominator      float64  `json:"-"`
+	SizingCoverage   *float64 `json:"-"`
+	UnsizedUnitCount *int64   `json:"-"`
+	WorkUnitCount    *int64   `json:"-"`
 }
 
 // SummarySentence is the wire shape of SummarySentence (schemas.py:45-48).
@@ -185,6 +201,8 @@ type HealthState struct {
 	AsOf     *pytime.NaiveDateTime `json:"as_of"`
 }
 
+type WhyParts struct{ Label, Movement, Reason string }
+
 // Signal is the wire shape of HomeSignal (schemas.py:88-106).
 type Signal struct {
 	ID                string          `json:"id"`
@@ -209,6 +227,19 @@ type Signal struct {
 	// response model (pinned by a recorded golden) does not carry it. It is nil on
 	// every other signal.
 	Coverage *float64 `json:"-"`
+	// ClaimSubject names the signal's subject without a hedge ("Cycle Time"),
+	// for the limiting-factor claim, which adds its own. Empty: the claim falls
+	// back to Title. Never served.
+	ClaimSubject string `json:"-"`
+	// Why holds the parts WhyItMatters was built from, for the health summary,
+	// which adds its own hedge. Nil: the summary quotes WhyItMatters whole.
+	// Never served.
+	Why *WhyParts `json:"-"`
+	// Driver (CHAOS-8573) is the one-line caption of where the signal's move
+	// appears largest ("Cycle Time appears to have moved most in A, B and C."): a metric
+	// signal with a stated, non-zero move and at least one named driver. nil on
+	// every other signal. GraphQL only, like Coverage.
+	Driver *string `json:"-"`
 	// RepoFilterApplied (CHAOS-9093) is the field of the metric the signal is
 	// built from (MetricDelta.RepoFilterApplied). It is nil on a signal that does
 	// not come from a metric spec (a risk signal, a recommendation). GraphQL only,

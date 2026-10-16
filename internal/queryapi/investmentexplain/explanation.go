@@ -33,6 +33,12 @@ type InvestmentMixFindingEvidence struct {
 	Measure     string   `json:"measure,omitempty"`
 	Numerator   *float64 `json:"numerator,omitempty"`
 	Denominator *float64 `json:"denominator,omitempty"`
+	// SizingCoverage and UnsizedUnitCount (CHAOS-9619, D6027) come with every ISSUE_SIZE share: the share of the
+	// mix's work units that carry an issue size and the units that do not (each counts 1). Omitted for COUNT.
+	SizingCoverage   *float64 `json:"sizing_coverage,omitempty"`
+	UnsizedUnitCount *int     `json:"unsized_unit_count,omitempty"`
+	// SizingNote is the "mostly unsized" sentence (D6031) when fewer than half of the units carry a size.
+	SizingNote string `json:"sizing_note,omitempty"`
 }
 
 // InvestmentMixFinding ports InvestmentFinding.
@@ -184,6 +190,15 @@ func EncodeInvestmentMixExplanation(explanation InvestmentMixExplanation) (strin
 		}
 		if f.Evidence.Denominator != nil {
 			evidence = append(evidence, pythonparity.Member{Key: "denominator", Value: *f.Evidence.Denominator})
+		}
+		if f.Evidence.SizingCoverage != nil {
+			evidence = append(evidence, pythonparity.Member{Key: "sizing_coverage", Value: *f.Evidence.SizingCoverage})
+		}
+		if f.Evidence.UnsizedUnitCount != nil {
+			evidence = append(evidence, pythonparity.Member{Key: "unsized_unit_count", Value: *f.Evidence.UnsizedUnitCount})
+		}
+		if f.Evidence.SizingNote != "" {
+			evidence = append(evidence, pythonparity.Member{Key: "sizing_note", Value: f.Evidence.SizingNote})
 		}
 		findings[i] = pythonparity.OrderedObject{
 			{Key: "finding", Value: f.Finding},

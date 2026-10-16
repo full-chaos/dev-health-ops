@@ -21,7 +21,7 @@ services:
   # pre-#955 page). Pin `web` to its own CI-built image (Build Docker images workflow, ghcr.io/full-chaos/
   # dev-health-web:sha-<S7>), same pattern as the other 4 images below, instead of building on the host.
   web:
-    image: ghcr.io/full-chaos/dev-health-web@sha256:a087d8e24c15d0ac942f034b4c61efacc11db90239e6c479489804365dfddc38
+    image: ghcr.io/full-chaos/dev-health-web@sha256:8665742e20b47671855714f0fd2777015ed0cf01b84501822f4542d1d23b8192
     build: !reset null
     # CHAOS-8361: the base file makes web wait for a healthy `api`. That service is retired above, and compose
     # refuses a dependency on a service of a disabled profile, so the list is stated again without it. web
@@ -36,7 +36,7 @@ services:
   # can no longer build against this ops sha, so this overlay replaces its image/command/entrypoint entirely
   # rather than layering a digest onto it.
   query-api:
-    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:ffca8ecc8c94921023145a9bccdc96705d0d1926b1707b22b73ecba29dd96d31
     build: !reset null
     entrypoint: !override ["/usr/local/bin/dho"]
     command: !override ["query-api"]
@@ -117,6 +117,7 @@ services:
       GO_API_HEATMAP_ENABLED: "true"
       GO_API_SANKEY_ENABLED: "true"
       GO_API_INVESTMENT_ENABLED: "true"
+      GO_API_INVESTMENT_FLOW_ENABLED: "true"
       GO_API_INVESTMENT_SUNBURST_ENABLED: "true"
       GO_API_HOME_ENABLED: "true"
       GO_API_OPPORTUNITIES_ENABLED: "true"
@@ -146,7 +147,7 @@ services:
   # CHAOS-7054: migrate runs `dho migrate upgrade --river` (the base file's command) from the dho image, the same
   # digest as query-api above: the one-shot the cut runs before it recreates the planes.
   migrate:
-    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:ffca8ecc8c94921023145a9bccdc96705d0d1926b1707b22b73ecba29dd96d31
     build: !reset null
     # CHAOS-8744: the chart's migrations.hook.classDecisionLiveSchemaDigest, passed through from the invoking environment
     # (empty by default). This overlay is in the cut's chain (bigboy-cut.sh COMPOSE_FILE), so the base file's entry is
@@ -156,13 +157,13 @@ services:
   # CHAOS-8647: the web-path smoke runs `dho smoke web-path` from the dho image, the same digest as query-api and
   # migrate. compose.bigboy.smoke.yml (the smoke's own chain) holds the rest of the service.
   web-smoke:
-    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:ffca8ecc8c94921023145a9bccdc96705d0d1926b1707b22b73ecba29dd96d31
     build: !reset null
     profiles: ["smoke"]
   # one-off prover shell, never started by 'up' (profile venue). POSTGRES_URI is interpolated by compose from
   # the same defaults the stack uses, so no credential passes through a file or argv of this lane.
   venue-tools:
-    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:7c767865398aa0a9053dcad5cd93001b1f4771fbb4690570210c25d8369ae48f
+    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:9acc77c8ecc742bb402d7b386d4b9b35d6d7c229b73c08d3b88a4b5dadf6a4e1
     profiles: ["venue"]
     user: "1001:1001"
     entrypoint: ["sh", "-c"]
@@ -186,7 +187,7 @@ services:
   # query-api, postgres) and `dho-query-internal` (CHAOS-7214: the class proof reaches query-api's internal
   # listener :8095 and MCP listener :8096 from an allowed peer, 10.199.79.0/28).
   venue-prove:
-    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:7c767865398aa0a9053dcad5cd93001b1f4771fbb4690570210c25d8369ae48f
+    image: ghcr.io/full-chaos/dev-health-go-api-tools@sha256:9acc77c8ecc742bb402d7b386d4b9b35d6d7c229b73c08d3b88a4b5dadf6a4e1
     profiles: ["venue"]
     user: "1001:1001"
     entrypoint: ["sh", "-c"]
@@ -207,7 +208,7 @@ services:
   # R427 pre-prod venue (prod-ops, 2026-09-24): the dho api (Go plane) at prod's build. Its Postgres and ClickHouse
   # logins and this env file are provisioned by _records/bigboy-1152962/setup-goapi-logins.sh (0600, never printed).
   go-api:
-    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:970d2b765aac5da23e1ec58482663e51ac1ab5a78fc024d3d81feabfb0e14d44
+    image: ghcr.io/full-chaos/dev-health-go-dho@sha256:ffca8ecc8c94921023145a9bccdc96705d0d1926b1707b22b73ecba29dd96d31
     entrypoint: ["/usr/local/bin/dho"]
     command: ["api"]
     env_file:

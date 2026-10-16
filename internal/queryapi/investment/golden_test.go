@@ -132,6 +132,9 @@ func TestGoldenInvestmentBasic(t *testing.T) {
 			return &fixtureRowScanner{rows: [][]any{
 				{uint64(20), uint64(10), 0.3, 0.3, uint64(1), uint64(1), uint64(9), uint64(3), uint64(10)},
 			}}, nil
+		case strings.Contains(query, "AS sized_units"):
+			// FetchSizingCoverage: no unit of the fixture carries a size row.
+			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0)}}}, nil
 		case strings.Contains(query, "SELECT count() AS count"):
 			return &fixtureRowScanner{rows: [][]any{{uint64(0)}}}, nil
 		default:
@@ -191,6 +194,9 @@ func TestGoldenSunburstBasic(t *testing.T) {
 				{"growth.marketing", "growth", "repo-b", 2.0},
 				{"", "", "", 1.0},
 			}}, nil
+		case strings.Contains(query, "AS sized_units"):
+			// FetchSizingCoverage: no unit of the fixture carries a size row.
+			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0)}}}, nil
 		case strings.Contains(query, "SELECT count() AS count"):
 			return &fixtureRowScanner{rows: [][]any{{uint64(0)}}}, nil
 		default:

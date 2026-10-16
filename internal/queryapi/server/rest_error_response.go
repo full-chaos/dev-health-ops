@@ -287,3 +287,21 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 	}
 	return authctx.Claims{OrgID: claims.OrgID}, true
 }
+
+// echoRequestID puts the caller's X-Request-Id on the response so an operator
+// can join a client report to the log line. The query-api has no request-id
+// middleware, so a route that logs a masked cause calls this itself. The id is
+// echoed only when it is short and made of unreserved URL characters, which is
+// what keeps a header value from carrying anything else.
+func echoRequestID(w http.ResponseWriter, r *http.Request) {
+	id := envelopeRequestID(r)
+	if id == "" || len(id) > 128 {
+		return
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~') {
+			return
+		}
+	}
+	w.Header().Set("X-Request-Id", id)
+}

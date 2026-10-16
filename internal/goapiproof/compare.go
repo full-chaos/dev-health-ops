@@ -1152,7 +1152,11 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		// comparison below, which then judges the difference through that
 		// shape's own admission rule (classifyBaselineDefects) -- see
 		// bodySizeGateDeferred's own doc comment.
-		if reason, detail := bodySizeDisagreement(baseline.BodyBytes, candidate.BodyBytes); reason != "" && !bodySizeGateDeferred(opts, baseline.Data, candidate.Data) {
+		// Declared volatile subtrees are not compared, so the bytes they carry are not a structural signal either (a drawn
+		// bin list changes in length between two draws).
+		baselineBytes := baseline.BodyBytes - volatileBytes(baseline.Data, opts.VolatileFields)
+		candidateBytes := candidate.BodyBytes - volatileBytes(candidate.Data, opts.VolatileFields)
+		if reason, detail := bodySizeDisagreement(baselineBytes, candidateBytes); reason != "" && !bodySizeGateDeferred(opts, baseline.Data, candidate.Data) {
 			return Result{StructuralRefusal: reason, StructuralDetail: detail}
 		}
 	}
@@ -2595,4 +2599,43 @@ func compareListByKey(baseline, candidate []any, path string, decl OrderInsensit
 		}
 	}
 	return findings
+}
+
+// volatileBytes is the compact encoded size of every value a declared volatile path reaches in data (data-relative, index-free
+// paths as VolatileFields declares them).
+func volatileBytes(data any, volatile map[string]string) int {
+	total := 0
+	for path := range volatile {
+		segments := citedSegments(path)
+		if len(segments) == 0 {
+			continue
+		}
+		total += encodedSizeAt(data, segments)
+	}
+	return total
+}
+
+func encodedSizeAt(value any, segments []string) int {
+	switch typed := value.(type) {
+	case map[string]any:
+		child, present := typed[segments[0]]
+		if !present {
+			return 0
+		}
+		if len(segments) == 1 {
+			encoded, err := json.Marshal(child)
+			if err != nil {
+				return 0
+			}
+			return len(encoded)
+		}
+		return encodedSizeAt(child, segments[1:])
+	case []any:
+		total := 0
+		for _, element := range typed {
+			total += encodedSizeAt(element, segments)
+		}
+		return total
+	}
+	return 0
 }

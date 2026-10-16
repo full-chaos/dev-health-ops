@@ -223,14 +223,19 @@ func drawnBinsOverrides(counts ...int) map[string]any {
 		bins = append(bins, map[string]any{"value": i + 2, "count": count, "cumulativeShare": 1.0, "__typename": "CapacityDistributionBin"})
 	}
 	return map[string]any{
-		"p85Days": 4, "p85Date": forecastDay(4),
 		"completionDistribution": map[string]any{"__typename": "CapacityDistribution", "runs": 10000, "unfinishedRuns": 0, "horizonDays": 30, "days": bins, "items": nil},
 	}
 }
 
+// drawnPercentile is the candidate's drawn percentile leaves: they differ from forecastBody's, as two draws do.
+func drawnPercentile(overrides map[string]any) map[string]any {
+	overrides["p85Days"], overrides["p85Date"] = 4, forecastDay(4)
+	return overrides
+}
+
 func TestDocRouteRunnerAcceptsDrawnDaysBinsOfCapacityForecast(t *testing.T) {
 	outcomes, runner := stochasticDocRouteRun(t,
-		forecastBody(t, "go", drawnBinsOverrides(5001, 4999)), forecastBody(t, "go", drawnBinsOverrides(4000, 3000, 3000)))
+		forecastBody(t, "go", drawnPercentile(drawnBinsOverrides(5001, 4999))), forecastBody(t, "go", drawnBinsOverrides(4000, 3000, 3000)))
 	o := outcomes[0]
 	if !o.Executed || o.RefusalReason != "" || o.DifferencesOutsideBaselineDefect != 0 || o.ProvenUnder != ProvenUnderStochasticLeafClass {
 		t.Fatalf("drawn bins were not accepted by the Runner: executed=%v refusal=%q %s outside=%d proven_under=%q findings=%v",
@@ -248,7 +253,7 @@ func TestDocRouteRunnerAcceptsDrawnDaysBinsOfCapacityForecast(t *testing.T) {
 		}
 		return Snapshot{Data: data.(map[string]any)["data"], DataPresent: true}
 	}
-	result := Compare(snapshot(forecastBody(t, "go", drawnBinsOverrides(5001, 4999))), snapshot(forecastBody(t, "go", drawnBinsOverrides(4000, 3000, 3000))), spec.Parity)
+	result := Compare(snapshot(forecastBody(t, "go", drawnPercentile(drawnBinsOverrides(5001, 4999)))), snapshot(forecastBody(t, "go", drawnBinsOverrides(4000, 3000, 3000))), spec.Parity)
 	if len(result.StochasticLeafRefusals) != 0 || len(result.Acceptance()) != 0 {
 		t.Fatalf("stochastic refusals %v, acceptance %+v: want none", result.StochasticLeafRefusals, result.Acceptance())
 	}
@@ -272,7 +277,7 @@ func TestDocRouteRunnerBlocksDrawnDaysBinsWithoutTheDeclaration(t *testing.T) {
 	}
 	withOverriddenParity(t, "capacityForecast", parity)
 	outcomes, _ := stochasticDocRouteRun(t,
-		forecastBody(t, "go", drawnBinsOverrides(5001, 4999)), forecastBody(t, "go", drawnBinsOverrides(4000, 3000, 3000)))
+		forecastBody(t, "go", drawnPercentile(drawnBinsOverrides(5001, 4999))), forecastBody(t, "go", drawnBinsOverrides(4000, 3000, 3000)))
 	if o := outcomes[0]; o.DifferencesOutsideBaselineDefect == 0 {
 		t.Fatalf("drawn bins without the declaration were not reported: %+v", o)
 	}
@@ -282,8 +287,21 @@ func TestDocRouteRunnerBlocksDrawnDaysBinsWithoutTheDeclaration(t *testing.T) {
 func TestDocRouteRunnerStillBlocksADifferenceBesideTheDrawnDaysBins(t *testing.T) {
 	other := drawnBinsOverrides(4000, 3000, 3000)
 	other["completionDistribution"].(map[string]any)["runs"] = 9999
-	outcomes, _ := stochasticDocRouteRun(t, forecastBody(t, "go", drawnBinsOverrides(5001, 4999)), forecastBody(t, "go", other))
+	outcomes, _ := stochasticDocRouteRun(t, forecastBody(t, "go", drawnPercentile(drawnBinsOverrides(5001, 4999))), forecastBody(t, "go", other))
 	if o := outcomes[0]; o.DifferencesOutsideBaselineDefect == 0 {
 		t.Fatalf("a different completionDistribution.runs beside the drawn bins was not reported: %+v", o)
+	}
+}
+
+// The size gate does not count the bytes of a declared volatile subtree: a drawn bin list of very different length is not a different shape.
+func TestDocRouteRunnerAcceptsAMuchLongerDrawnBinList(t *testing.T) {
+	many := make([]int, 29)
+	for i := range many {
+		many[i] = 300
+	}
+	outcomes, _ := stochasticDocRouteRun(t,
+		forecastBody(t, "go", drawnPercentile(drawnBinsOverrides(5001, 4999))), forecastBody(t, "go", drawnBinsOverrides(many...)))
+	if o := outcomes[0]; !o.Executed || o.RefusalReason != "" || o.DifferencesOutsideBaselineDefect != 0 || o.ProvenUnder != ProvenUnderStochasticLeafClass {
+		t.Fatalf("2 bins against 29 bins: executed=%v refusal=%q %s outside=%d proven_under=%q", o.Executed, o.RefusalReason, o.RefusalDetail, o.DifferencesOutsideBaselineDefect, o.ProvenUnder)
 	}
 }

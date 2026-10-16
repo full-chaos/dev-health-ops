@@ -432,6 +432,8 @@ def test_the_go_side_weights_census_accepts_the_table_and_names_each_defect(
     assert stale.returncode != 0
     assert "internal/zz-gone-package" in stale.stderr
     assert "test_the_race_weights_table_is_clean" in stale.stderr
+    indented = _race_weights_rows(tmp_path, text + "  # an indented comment\n")
+    assert indented.returncode != 0, "the CI test reads an indented comment as a row"
     twice = _race_weights_rows(tmp_path, text + "cmd/auth-migrate\t1\n")
     assert twice.returncode != 0
     assert "test_the_race_weights_table_is_clean" in twice.stderr

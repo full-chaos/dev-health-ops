@@ -536,12 +536,12 @@ check_race_weights_rows() {
     || die "ci/go_race_missing_rows.awk failed"
   [ -z "${missing}" ] \
     || die "race package(s) with NO row in ci/go_race_weights.tsv (add each: its measured go test -race seconds, 1 if it has no test; CI-side guard tests/tooling/test_go_quality_legs.py::test_every_package_of_the_root_module_has_a_weights_row): $(printf '%s' "${missing}" | tr '\n' ' ')"
-  stale="$(grep -v '^[[:space:]]*\(#\|$\)' "${GO_RACE_WEIGHTS}" | cut -f1 | LC_ALL=C sort -u \
+  stale="$(grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_WEIGHTS}" | cut -f1 | LC_ALL=C sort -u \
     | LC_ALL=C comm -23 - <(printf '%s\n' "${listed}" | awk -v mod="${modpath}" '{ if ($0 == mod) print "."; else if (index($0, mod "/") == 1) print substr($0, length(mod) + 2); else print $0 }' | LC_ALL=C sort))"
   [ -z "${stale}" ] \
     || die "ci/go_race_weights.tsv names package(s) that no longer exist (delete each row; CI-side guard tests/tooling/test_go_quality_legs.py::test_the_race_weights_table_is_clean): $(printf '%s' "${stale}" | tr '\n' ' ')"
   local rows
-  rows="$(grep -v '^[[:space:]]*\(#\|$\)' "${GO_RACE_WEIGHTS}" | cut -f1)"
+  rows="$(grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_WEIGHTS}" | cut -f1)"
   printf '%s\n' "${rows}" | LC_ALL=C sort -c 2>/dev/null \
     || die "ci/go_race_weights.tsv is not sorted (LC_ALL=C) or weighs a package twice (CI-side guard tests/tooling/test_go_quality_legs.py::test_the_race_weights_table_is_clean)"
   [ -z "$(printf '%s\n' "${rows}" | LC_ALL=C sort | uniq -d)" ] \

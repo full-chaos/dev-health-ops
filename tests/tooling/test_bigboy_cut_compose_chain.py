@@ -36,7 +36,7 @@ def test_the_cut_runs_the_one_compose_file_and_no_overlay_chain() -> None:
 def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -> None:
     """Let `docker compose config` resolve the real file: web must come out with BACKEND_URL and AUTH_URL (CHAOS-7131: a web
     recreated without them lost the plane-split router and the auth origin)."""
-    from tests.tooling import _bigboy_compose as bb
+    from tests.tooling import test_bigboy_one_compose_file as bb
 
     web_env = bb.services(bb.scratch_root(tmp_path))["web"]["environment"]
     assert web_env["BACKEND_URL"] == "http://traefik:3000", web_env

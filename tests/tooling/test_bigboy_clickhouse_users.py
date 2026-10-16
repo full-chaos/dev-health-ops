@@ -24,7 +24,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "ci" / "bigboy"
-OVERLAY = TOOLS / "compose.bigboy.yml"
 CHECK = TOOLS / "check-dho-api-ch-user.sh"
 RENDER = TOOLS / "render-dho-api-ch-users.py"
 CUT = TOOLS / "bigboy-cut.sh"
@@ -278,7 +277,7 @@ def test_a_user_missing_from_the_live_server_fails_with_its_own_code(
 def test_the_compose_file_mounts_the_host_file_into_users_d_and_requires_the_path(
     tmp_path: Path,
 ) -> None:
-    from tests.tooling import _bigboy_compose as bb
+    from tests.tooling import test_bigboy_one_compose_file as bb
 
     root = bb.scratch_root(tmp_path)
     users = _users_file(tmp_path)

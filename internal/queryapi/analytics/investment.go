@@ -20,6 +20,7 @@ package analytics
 
 import (
 	"fmt"
+	"github.com/full-chaos/dev-health-go/readers"
 	"log/slog"
 	"strings"
 	"time"
@@ -340,50 +341,13 @@ func allocationWeightExpr(effortAlias, totalsAlias string) string {
 // its whole effort and weight 1. The sum over the repositories of a unit is the unit's effort (CHAOS-9221).
 func RepoAllocationInvestmentSource() string { return repoAllocationInvestmentSource() }
 
-// UnitSizeWeightColumn is the column IssueSizedSource adds: what a unit weighs in the ISSUE_SIZE measure.
-const UnitSizeWeightColumn = "unit_size_weight"
-
-// UnitIssueSizeColumn is the other column IssueSizedSource adds: the unit's issue size, 0 when it has none, so a
-// read can tell a unit sized 1 from an unsized one.
-const UnitIssueSizeColumn = "unit_issue_size"
-
-// LatestWorkUnitIssueSizeSource is the newest issue size of each work unit of the organization
-// (work_unit_issue_size, migration 130, CHAOS-9619): argMax over computed_at per (org_id, work_unit_id).
-func LatestWorkUnitIssueSizeSource() string {
-	return `(
-                SELECT org_id, work_unit_id, argMax(issue_size, computed_at) AS issue_size
-                FROM work_unit_issue_size
-                WHERE org_id = {org_id:String}
-                GROUP BY org_id, work_unit_id
-            )`
-}
-
-// IssueSizedSource adds UnitSizeWeightColumn and UnitIssueSizeColumn to a work-unit source written as "(...) AS <alias>": the unit's
-// issue size, or 1 when it has none or no size row (D5999: an unsized unit counts one work unit). Every other
-// column, and the rows, are the source's own, so a reader that weighs by the column reads the same rows as COUNT.
-func IssueSizedSource(aliasedSource, alias string) (string, error) {
-	suffix := " AS " + alias
-	if !strings.HasSuffix(aliasedSource, suffix) {
-		return "", fmt.Errorf("analytics: IssueSizedSource: the source does not end in %q", suffix)
-	}
-	inner := strings.TrimSuffix(aliasedSource, suffix)
-	return fmt.Sprintf(`(
-            SELECT sized_unit.*, if(unit_size.issue_size > 0, unit_size.issue_size, 1.0) AS %s,
-                if(unit_size.issue_size > 0, unit_size.issue_size, 0.0) AS %s
-            FROM %s AS sized_unit
-            LEFT JOIN %s AS unit_size
-                ON unit_size.org_id = sized_unit.org_id
-                AND unit_size.work_unit_id = sized_unit.work_unit_id
-        )%s`, UnitSizeWeightColumn, UnitIssueSizeColumn, inner, LatestWorkUnitIssueSizeSource(), suffix), nil
-}
-
 // sizedFor is the context a read of measure m runs on: for ISSUE_SIZE its source carries UnitSizeWeightColumn
 // (IssueSizedSource); for every other measure it is the context unchanged, so their SQL does not move.
 func (c investmentContext) sizedFor(m Measure) (investmentContext, error) {
 	if m != MeasureIssueSize {
 		return c, nil
 	}
-	source, err := IssueSizedSource(c.Source, c.Alias)
+	source, err := readers.IssueSizedSource(c.Source, c.Alias)
 	if err != nil {
 		return investmentContext{}, err
 	}

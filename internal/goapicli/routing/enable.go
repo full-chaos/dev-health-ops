@@ -9,8 +9,8 @@ package routing
 //  1. Is query-api reachable? No answer is not a pass.
 //  2. Do both planes hash the same SDL? The decision records the schema digest as provenance, and this binary must
 //     be built from the same commit as the deployed image.
-//  3. Has this exact candidate build been proven for the root (goapiproof.EnablementProofStage)? A class root is
-//     admitted by its per-root receipt and by nothing else.
+//  3. Nothing else: the per-root proof receipt is retired (D6024). MCP and GraphQL parity is held by the CI step
+//     TestMCPClassParityVenueOracle (CHAOS-9802), so enabling a root is the operator's recorded decision.
 //
 // A catalog operation has no routing state (query-api serves every registered operation), so this verb refuses it.
 
@@ -18,8 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
-	"strings"
 	"time"
 
 	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
@@ -39,18 +37,15 @@ import (
 // edge it is enabling rows for.
 func localSchemaDigest() string { return goapidigest.Schema(schemav1.SDL) }
 
-var allowExcludedName = regexp.MustCompile(`^[A-Za-z]{1,60}$`)
-
 func runEnable(argv []string) error {
 	set := newVerbFlagSet("enable")
 	var common commonFlags
-	var registryURL, buildInfoURL, expectBuild, mode, allowExcluded string
+	var registryURL, buildInfoURL, expectBuild, mode string
 	var rollout int
 	var dryRun bool
 	set.StringVar(&registryURL, "registry-url", "", "GET /registry on the DEPLOYED query-api (falls back to "+queryAPIURLEnvVar+"+\"/registry\")")
 	set.StringVar(&buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the candidate build written (falls back to "+queryAPIURLEnvVar+"+\"/buildinfo\")")
 	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_class_decision")
-	set.StringVar(&allowExcluded, "allow-excluded", "", "MCP class roots only (CHAOS-7512): comma-separated OPERATION names whose excluded (unmeasured) shapes on a class receipt you accept. Default empty = refuse any class receipt that lists an excluded shape. A name counts only if the go-served ledger also holds an UNPROVEN named-limit entry for that operation")
 	set.StringVar(&common.operations, "operations", "", classOperationsUsage)
 	set.StringVar(&common.recordedBy, "recorded-by", "", "WHO is running this, recorded on every row touched (required)")
 	set.StringVar(&common.reviewEvidence, "review-evidence", "", "WHY, in your own words, recorded on every row touched (required)")
@@ -73,17 +68,6 @@ func runEnable(argv []string) error {
 	}
 	if err := common.requireProvenance(); err != nil {
 		return err
-	}
-	var allowedNames []string
-	if strings.TrimSpace(allowExcluded) != "" {
-		for _, name := range strings.Split(allowExcluded, ",") {
-			name = strings.TrimSpace(name)
-			if !allowExcludedName.MatchString(name) {
-				return refuse("-allow-excluded: %q is not an operation name (letters only, up to 60)", name)
-			}
-			allowedNames = append(allowedNames, name)
-		}
-		fmt.Fprintf(stdout, "go-api-routing: allow-excluded in use: %s\n", strings.Join(allowedNames, ","))
 	}
 	if err := common.requirePostgres(); err != nil {
 		return err
@@ -220,26 +204,14 @@ func runEnable(argv []string) error {
 		ReviewEvidence:    common.reviewEvidence,
 		// CHAOS-5505: WHO THE CREDENTIAL SAYS is acting. Distinct from
 		// -recorded-by, which is what the operator typed about themselves.
-		PrincipalID:   principalID,
-		AllowExcluded: allowedNames,
-		DryRun:        dryRun,
+		PrincipalID: principalID,
+		DryRun:      dryRun,
 	})
 	if err != nil {
-		if errors.Is(err, goapiproof.ErrEnableUnproven) || errors.Is(err, goapiproof.ErrEnableRequestRefused) {
+		if errors.Is(err, goapiproof.ErrEnableRequestRefused) {
 			return refuse("%v", err)
 		}
 		return classifyWriteError(err)
-	}
-
-	var namedLimit int
-	for _, outcome := range outcomes {
-		if !outcome.Proven {
-			namedLimit++
-			// One structured line PER ROW: a log search must find WHICH roots were turned on without a proof run.
-			fmt.Fprintf(stderr,
-				"WARNING: go_api_routing.enabled_named_limit operation=%s stage_evidence=none named_limit_sha256=%s candidate_build=%s schema_digest=%s document_digest=%s mode=%s dry_run=%t\n",
-				outcome.Operation, goapiproof.NamedLimitDigest(outcome.NamedLimit), running, registry.SchemaDigest, outcome.DocumentDigest, mode, dryRun)
-		}
 	}
 
 	verb := "enabled"
@@ -257,14 +229,9 @@ func runEnable(argv []string) error {
 		goapiproof.EndpointLabelWithPort(registryURL), goapiproof.EndpointLabelWithPort(buildInfoURL))
 	fmt.Fprintf(stdout, "go-api-routing: schema_digest=%s candidate_build=%s mode=%s rollout=%d dry_run=%t\n",
 		registry.SchemaDigest, running, mode, rollout, dryRun)
-	fmt.Fprintf(stdout, "go-api-routing: %s total=%d proven=%d named_limit=%d\n",
-		verb, len(outcomes), len(outcomes)-namedLimit, namedLimit)
+	fmt.Fprintf(stdout, "go-api-routing: %s total=%d\n", verb, len(outcomes))
 	for _, outcome := range outcomes {
-		flag := ""
-		if !outcome.Proven {
-			flag = "  (NAMED-LIMIT " + goapiproof.NamedLimitDigest(outcome.NamedLimit) + ")"
-		}
-		fmt.Fprintf(stdout, "go-api-routing:   %-24s mode=%-8s %-40s digest=%s%s\n", outcome.Operation, outcome.Mode, outcome.CandidateBuild, outcome.DocumentDigest, flag)
+		fmt.Fprintf(stdout, "go-api-routing:   %-24s mode=%-8s %-40s digest=%s\n", outcome.Operation, outcome.Mode, outcome.CandidateBuild, outcome.DocumentDigest)
 		// r6 observability (1) (team-lead ruling): a structured line PER
 		// ROW, mirroring disable's `go_api_routing.disabled` and
 		// repoint's `go_api_routing.repointed` -- BEFORE-and-AFTER

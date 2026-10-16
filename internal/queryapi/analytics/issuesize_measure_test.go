@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"errors"
+	"github.com/full-chaos/dev-health-go/readers"
 	"strings"
 	"testing"
 )
@@ -26,11 +27,11 @@ func TestIssueSizeMeasureOnlyMovesTheSQLOfItsOwnReads(t *testing.T) {
 			t.Fatalf("the ISSUE_SIZE source does not read the unit sizes under the read's alias:\n%s", sized.Source)
 		}
 		expr, err := sized.measure(MeasureIssueSize)
-		if err != nil || !strings.Contains(expr, UnitSizeWeightColumn) {
-			t.Fatalf("the ISSUE_SIZE expression %q (%v) does not weigh by %s", expr, err, UnitSizeWeightColumn)
+		if err != nil || !strings.Contains(expr, readers.UnitSizeWeightColumn) {
+			t.Fatalf("the ISSUE_SIZE expression %q (%v) does not weigh by %s", expr, err, readers.UnitSizeWeightColumn)
 		}
 	}
-	if _, err := IssueSizedSource("(SELECT 1) AS something_else", "work_unit_investments"); err == nil {
+	if _, err := readers.IssueSizedSource("(SELECT 1) AS something_else", "work_unit_investments"); err == nil {
 		t.Fatal("a source without the read's alias was wrapped")
 	}
 	_, err := dbExpression(MeasureIssueSize, false, false)

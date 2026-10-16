@@ -395,6 +395,7 @@ flowchart TB
     PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership"| TEAM
     DEP -.->|"BELONGS_TO_REPOSITORY<br/>deployments.repo_id"| REPO
     DEP -.->|"CORRELATED_WITH_INCIDENT<br/>work_graph_deployment_incident_edges"| INC
+    ISSUE -.->|"PART_OF<br/>work_items.parent_id, the parent issue"| ISSUE
     REPO x-.-|"not the tree: the issue's<br/>own work_items.repo_id"| ISSUE
     ISSUE -.-x|"not ownership: OWNED_BY_TEAM<br/>work_item_team_attributions"| TEAM
 ```
@@ -406,11 +407,12 @@ specific to one provider.
   its pull requests; a project's repositories are reached through its issues'
   linked pull requests.
 - **Dotted edges** hang off the tree: a team owns a repository or a project,
-  a deployment belongs to a repository, and a deployment is correlated with an
+  a deployment belongs to a repository, a deployment is correlated with an
   incident (one row in `work_graph_deployment_incident_edges` for each
   repository, deployment and incident; tier ranked **native > explicit_text >
   heuristic** by `linktier.Rank`, `source` is the tier; two repositories
-  that run one deployment id each hold their own row).
+  that run one deployment id each hold their own row), and an issue is part of
+  its parent issue (`PART_OF`).
 - **Crossed edges** exist but are never tree membership.
 
 Two rules hold for every read of the tree:
@@ -453,6 +455,19 @@ Two rules hold for every read of the tree:
    to. The id each provider writes, and the one provider that does not hold
    the rule yet, are listed in
    [Work-item team attribution](team-attribution.md), section 0.4b.
+
+4. **An issue has at most one parent issue, and one open `PART_OF` edge.**
+   The edge comes from `work_items.parent_id`. Only Linear
+   (`linear:<IDENT>`) and Jira (`jira:<KEY>`) write it; both keys are unique in
+   the provider's own namespace, so the parent is the one work item of that
+   exact id anywhere in the org (the same exact-id match the investment
+   hierarchy cascade walks, `internal/jobs/investment/hierarchycascade.go`).
+   An id held by two or more work items names no parent and gives no edge. A
+   prefix with no key (`jira:`) is no parent. Any other id, a number that is
+   unique only inside one repository, names the work item of that id in the
+   issue's own repository and nothing else. When the parent changes, is
+   cleared, or stops resolving, the graph drops the old edge: it never holds
+   two open `PART_OF` edges for one issue.
 
 How each provider captures the pull request ↔ issue link is described in
 [Work-item team attribution](team-attribution.md), section 2.

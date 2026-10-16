@@ -6,6 +6,7 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -211,5 +212,68 @@ func TestStochasticShapeOfAnUnbackedDocumentOperationIsExcluded(t *testing.T) {
 	v := verdicts[0]
 	if len(receipts) != 0 || v.Executed != 0 || len(v.Stochastic) != 0 || len(v.Excluded) != 1 || !strings.HasSuffix(v.Excluded[0], "=doc_operation_not_receipt_backed") {
 		t.Fatalf("an unbacked stochastic shape was counted: receipts=%d verdict %+v", len(receipts), v)
+	}
+}
+
+// CHAOS-9762: the days bins are drawn per request, so two Go pipelines answer the real capacityForecast document with different bins as well as
+// different percentile leaves. Through the real Runner, that is still an executed, acceptance-clean measurement proven under the class.
+func drawnBinsOverrides(counts ...int) map[string]any {
+	bins := make([]any, 0, len(counts))
+	for i, count := range counts {
+		bins = append(bins, map[string]any{"value": i + 2, "count": count, "cumulativeShare": 1.0, "__typename": "CapacityDistributionBin"})
+	}
+	return map[string]any{
+		"p85Days": 4, "p85Date": forecastDay(4),
+		"completionDistribution": map[string]any{"__typename": "CapacityDistribution", "runs": 10000, "unfinishedRuns": 0, "horizonDays": 30, "days": bins, "items": nil},
+	}
+}
+
+func TestDocRouteRunnerAcceptsDrawnDaysBinsOfCapacityForecast(t *testing.T) {
+	outcomes, runner := stochasticDocRouteRun(t,
+		forecastBody(t, "go", drawnBinsOverrides(5001, 4999)), forecastBody(t, "go", drawnBinsOverrides(4000, 3000, 3000)))
+	o := outcomes[0]
+	if !o.Executed || o.RefusalReason != "" || o.DifferencesOutsideBaselineDefect != 0 || o.ProvenUnder != ProvenUnderStochasticLeafClass {
+		t.Fatalf("drawn bins were not accepted by the Runner: executed=%v refusal=%q %s outside=%d proven_under=%q findings=%v",
+			o.Executed, o.RefusalReason, o.RefusalDetail, o.DifferencesOutsideBaselineDefect, o.ProvenUnder, o.Findings)
+	}
+
+	spec, err := SpecFor("capacityForecast")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func(body string) Snapshot {
+		var data any
+		if err := json.Unmarshal([]byte(body), &data); err != nil {
+			t.Fatal(err)
+		}
+		return Snapshot{Data: data.(map[string]any)["data"], DataPresent: true}
+	}
+	result := Compare(snapshot(forecastBody(t, "go", drawnBinsOverrides(5001, 4999))), snapshot(forecastBody(t, "go", drawnBinsOverrides(4000, 3000, 3000))), spec.Parity)
+	if len(result.StochasticLeafRefusals) != 0 || len(result.Acceptance()) != 0 {
+		t.Fatalf("stochastic refusals %v, acceptance %+v: want none", result.StochasticLeafRefusals, result.Acceptance())
+	}
+
+	_, verdict, written := classOf(t, outcomes, runner)
+	if !written || len(verdict.Failed) != 0 || len(verdict.Stochastic) != 1 {
+		t.Fatalf("the class path did not carry the drawn-bins shape: verdict %+v written=%v", verdict, written)
+	}
+}
+
+// Plant: without the days-bin declaration the same Runner run reports the bins as a difference outside the class.
+func TestDocRouteRunnerBlocksDrawnDaysBinsWithoutTheDeclaration(t *testing.T) {
+	spec, err := SpecFor("capacityForecast")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parity := spec.Parity
+	parity.VolatileFields = map[string]string{
+		"data.capacityForecast.forecastId": volatileForecastIdentity,
+		"data.capacityForecast.computedAt": volatileForecastIdentity,
+	}
+	withOverriddenParity(t, "capacityForecast", parity)
+	outcomes, _ := stochasticDocRouteRun(t,
+		forecastBody(t, "go", drawnBinsOverrides(5001, 4999)), forecastBody(t, "go", drawnBinsOverrides(4000, 3000, 3000)))
+	if o := outcomes[0]; o.DifferencesOutsideBaselineDefect == 0 {
+		t.Fatalf("drawn bins without the declaration were not reported: %+v", o)
 	}
 }

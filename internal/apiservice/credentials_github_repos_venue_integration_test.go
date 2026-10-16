@@ -434,12 +434,19 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/credential-github-repos.go-pin.json", SHA256: browsePinSHA256, Ruling: browseRuling})
 	goCalls := map[string][]string{}
 	goStatus := map[string]int{}
+	failuresChecked := 0
 	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
-		Golden:    golden,
-		Normalize: dropGoOnlyBrowseScope,
-		Retire:    retiredBrowseRequest,
-		Pin:       pin,
+		Golden: golden,
+		Normalize: func(request venueoracle.Request, body string) string {
+			if retiredBrowseRequest(request) {
+				return dropGoOnlyBrowseScope(request, body)
+			}
+			return reduceProviderFailure(request, dropGoOnlyBrowseScope(request, body))
+		},
+		Retire: retiredBrowseRequest,
+		Pin:    pin,
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			assertProviderFailureSentence(t, request, goResponse, &failuresChecked)
 			calls, callStatus := stub.takeWithStatus()
 			goCalls[request.Name], goStatus[request.Name] = calls, goResponse.Status
 			assertBrowseScopeFields(t, request, goResponse, calls, callStatus)
@@ -449,6 +456,9 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 			}
 		},
 	})
+	if failuresChecked < 13 {
+		t.Errorf("checked %d provider failure answers, want at least 13", failuresChecked)
+	}
 	providerSame := checkBrowseProviderRequests(t, requests, goCalls, goStatus, pythonProvider)
 	t.Logf("\n%sprovider requests: %s\n", receipt, venueoracle.Mark(providerSame))
 	pin.Finish(t)
@@ -595,7 +605,7 @@ func browseScopeFieldProblems(request venueoracle.Request, goResponse venueoracl
 const browseRuling = "GWC D6026 (CHAOS-9787): an owner browse unions the token's /user/repos with the owner's own listing, calls /user/repos first and falls back to /users; the frozen Python reference of D6025 lists the owner route only"
 
 // browsePinSHA256 is the digest of testdata/venue/credential-github-repos.go-pin.json.
-const browsePinSHA256 = "e3b3b8c2952c4ca55064fe4cea3ace316ec12b2346931b039d55d5045118a0a2"
+const browsePinSHA256 = "0dc67fdfa0f3bed06538a3aaef29b1055f1cc68d49154f7649d32ed61a062fcc"
 
 // assertRetiredBrowse states, for a retired request, the specific Go behaviour the pin freezes, so a change to any clause
 // fails here with its name and not only as a pin diff: the owner is unioned with the token's repositories (token's

@@ -4,11 +4,14 @@ package daily
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
@@ -381,7 +384,8 @@ WHERE org_id = ? AND as_of_day = ? AND `+live+` GROUP BY identity_id`, org, day)
 	membership("closed", "github", "github:alpha", longBefore, &tenLater, longBefore.Add(time.Hour))
 	points, rows = run(tenLater)
 	if !reflect.DeepEqual(points["closed"], unassigned) || rows["closed"] != "unassigned / Unassigned" {
-		t.Errorf("after the membership ended at the day: point %v, row %q; want unassigned and unassigned / Unassigned", points["closed"], rows["closed"])
+		t.Errorf("after the membership ended at the day: point %v, row %q; want unassigned and unassigned / Unassigned\nevery stored row of closed that day, oldest first (a flake names its cause here):\n%s",
+			points["closed"], rows["closed"], storedRowHistory(ctx, t, conn, org, tenLater, "closed@example.com"))
 	}
 	var liveUnderAlpha, retractedUnderAlpha uint64
 	if err := conn.QueryRow(ctx, `SELECT countIf(`+live+`), countIf(NOT `+live+`) FROM ic_landscape_rolling_30d FINAL
@@ -397,4 +401,27 @@ WHERE org_id = ? AND as_of_day = ? AND identity_id = 'closed@example.com' AND te
 // owners of that repository are the teams of the person's point.
 func personRepo(org, person string) uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(org+":repo-of:"+person))
+}
+
+// storedRowHistory lists every stored user_metrics_daily row of a person and
+// day with its computed_at at the column's own precision and at the clock's, so a
+// failing read can be told apart: a tie of computed_at, a clock behind the
+// stored row, or a row another writer put there.
+func storedRowHistory(ctx context.Context, t *testing.T, conn driver.Conn, org string, day time.Time, person string) string {
+	t.Helper()
+	result, err := conn.Query(ctx, `SELECT toString(repo_id), toString(team_id), toString(team_name), toString(computed_at), toString(now64(3))
+FROM user_metrics_daily WHERE org_id = ? AND day = ? AND author_email = ? ORDER BY computed_at ASC, team_id ASC`, org, day, person)
+	if err != nil {
+		return "history unavailable: " + err.Error()
+	}
+	defer result.Close()
+	var lines []string
+	for result.Next() {
+		var repo, team, name, computedAt, now string
+		if err := result.Scan(&repo, &team, &name, &computedAt, &now); err != nil {
+			return "history scan failed: " + err.Error()
+		}
+		lines = append(lines, fmt.Sprintf("  repo %s team %s / %s computed_at %s (server now %s)", repo, team, name, computedAt, now))
+	}
+	return strings.Join(lines, "\n")
 }

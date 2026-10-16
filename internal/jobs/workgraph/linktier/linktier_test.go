@@ -1,4 +1,4 @@
-package edges
+package linktier
 
 import (
 	"os"
@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-// Every table that ranks a link tier writes the same ranks as ProvenanceRank.
+// Every table that ranks a link tier writes the same ranks as Rank.
 func TestMigrationVersionRanksAreTheExportedRanks(t *testing.T) {
 	t.Parallel()
-	if !(ProvenanceRank(ProvenanceNative) > ProvenanceRank(ProvenanceExplicitText) &&
-		ProvenanceRank(ProvenanceExplicitText) > ProvenanceRank(ProvenanceHeuristic) &&
-		ProvenanceRank(ProvenanceHeuristic) > ProvenanceRank("unknown")) {
+	if !(Rank(Native) > Rank(ExplicitText) &&
+		Rank(ExplicitText) > Rank(Heuristic) &&
+		Rank(Heuristic) > Rank("unknown")) {
 		t.Fatal("tier ranks must run native > explicit_text > heuristic > unknown")
 	}
 	for path, args := range map[string][2]string{
@@ -23,7 +23,7 @@ func TestMigrationVersionRanksAreTheExportedRanks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := ProvenanceVersionRankSQL(args[0], args[1])
+		want := VersionRankSQL(args[0], args[1])
 		if !strings.Contains(string(body), want) {
 			t.Errorf("%s does not hold the version_rank expression %q", path, want)
 		}

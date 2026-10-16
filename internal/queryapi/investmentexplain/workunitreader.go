@@ -379,7 +379,8 @@ WHERE work_item_id IN {work_item_ids:Array(String)}
 			return nil, fmt.Errorf("query work item team assignments: %w", err)
 		}
 		for rows.Next() {
-			var workItemID, teamID, teamName string
+			var workItemID string
+			var teamID, teamName *string
 			if err := rows.Scan(&workItemID, &teamID, &teamName); err != nil {
 				rows.Close()
 				return nil, fmt.Errorf("scan work item team assignment row: %w", err)

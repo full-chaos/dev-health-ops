@@ -86,6 +86,12 @@ func wgAssign(dest any, v any) error {
 		return nil
 	}
 	switch rv.Kind() {
+	case reflect.Ptr:
+		inner := reflect.New(rv.Type().Elem())
+		if err := wgAssign(inner.Interface(), v); err != nil {
+			return err
+		}
+		rv.Set(inner)
 	case reflect.String:
 		rv.SetString(v.(string))
 	case reflect.Float64:

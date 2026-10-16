@@ -45,7 +45,7 @@ CREATE SETTINGS PROFILE IF NOT EXISTS mcp_readonly_profile
 -- `dev-health` alone could still open a TCP connection to it. The real admission control
 -- for THIS user is HOST IP, a per-user ClickHouse setting checked at authentication
 -- regardless of which interface accepted the connection -- restricted to
--- `dho-clickhouse-readers`' own fixed subnet (ci/bigboy/compose.bigboy.images.yml's
+-- `dho-clickhouse-readers`' own fixed subnet (ci/bigboy/compose.bigboy.yml's
 -- `networks.dho-clickhouse-readers.ipam.config`), so mcp_readonly cannot authenticate
 -- from `dev-health` even with the correct password.
 CREATE USER IF NOT EXISTS mcp_readonly

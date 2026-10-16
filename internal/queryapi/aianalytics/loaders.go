@@ -301,11 +301,14 @@ func loadEngagement(ctx context.Context, client QueryClient, orgID string, start
 	for rs.Next() {
 		var (
 			r      engagementRow
-			day    time.Time
+			day    *time.Time
 			withFR uint64
 		)
 		if err := rs.Scan(&r.Bucket, &day, &withFR, &r.PickupLatency, &r.CommentsTotal, &r.LocTotal); err != nil {
 			return nil, fmt.Errorf("aianalytics: engagement scan: %w", err)
+		}
+		if day == nil {
+			continue
 		}
 		r.Day = day.UTC().Format("2006-01-02")
 		r.PrsWithFirstReview = float64(withFR)

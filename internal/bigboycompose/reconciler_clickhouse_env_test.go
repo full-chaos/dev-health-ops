@@ -22,10 +22,10 @@ func TestBigboyReconcilerOpensClickHouseByTheWorkerFleetComponents(t *testing.T)
 	}
 	var overlay struct {
 		Services map[string]struct {
-			Environment map[string]string `yaml:"environment"`
+			Environment environment `yaml:"environment"`
 		} `yaml:"services"`
 	}
-	path := filepath.Join(toolsDir(t), "compose.bigboy.workers.yml")
+	path := filepath.Join(toolsDir(t), composeName)
 	if err := yaml.Unmarshal([]byte(read(t, path)), &overlay); err != nil {
 		t.Fatal(err)
 	}

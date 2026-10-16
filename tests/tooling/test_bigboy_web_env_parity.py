@@ -13,7 +13,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "ci" / "bigboy" / "check-web-env-parity.py"
-OVERLAY = ROOT / "ci" / "bigboy" / "compose.bigboy.router.yml"
+OVERLAY = ROOT / "ci" / "bigboy" / "compose.bigboy.yml"
 
 PROD: dict[str, Any] = {
     "ops": {
@@ -42,6 +42,15 @@ def _mod() -> ModuleType:
     return mod
 
 
+def _overlay_doc() -> Any:
+    """The tracked compose file, with web.environment as a mapping (the file lists it as KEY=VALUE items)."""
+    doc = _mod().load_compose_yaml(OVERLAY.read_text(encoding="utf-8"))
+    env = doc["services"]["web"]["environment"]
+    if isinstance(env, list):
+        doc["services"]["web"]["environment"] = dict(item.split("=", 1) for item in env)
+    return doc
+
+
 def _write(tmp_path: Path, name: str, doc: Any) -> str:
     p = tmp_path / name
     p.write_text(yaml.safe_dump(doc), encoding="utf-8")
@@ -60,7 +69,7 @@ def test_new_prod_name_fails_named(tmp_path: Path) -> None:
 
 
 def test_missing_overlay_auth_url_fails(tmp_path: Path) -> None:
-    overlay = _mod().load_compose_yaml(OVERLAY.read_text(encoding="utf-8"))
+    overlay = _overlay_doc()
     del overlay["services"]["web"]["environment"]["AUTH_URL"]
     findings = _mod().check(
         _write(tmp_path, "v.yaml", PROD), _write(tmp_path, "o.yml", overlay), None
@@ -69,7 +78,7 @@ def test_missing_overlay_auth_url_fails(tmp_path: Path) -> None:
 
 
 def test_wrong_overlay_value_fails(tmp_path: Path) -> None:
-    overlay = _mod().load_compose_yaml(OVERLAY.read_text(encoding="utf-8"))
+    overlay = _overlay_doc()
     overlay["services"]["web"]["environment"]["BACKEND_URL"] = "http://api:8000"
     findings = _mod().check(
         _write(tmp_path, "v.yaml", PROD), _write(tmp_path, "o.yml", overlay), None
@@ -112,7 +121,7 @@ def test_empty_prod_web_env_is_not_a_pass(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("name", ["TRUST_PROXY", "TRUSTED_PROXY_HOPS"])
 def test_missing_overlay_trust_proxy_name_fails(tmp_path: Path, name: str) -> None:
-    overlay = _mod().load_compose_yaml(OVERLAY.read_text(encoding="utf-8"))
+    overlay = _overlay_doc()
     del overlay["services"]["web"]["environment"][name]
     findings = _mod().check(
         _write(tmp_path, "v.yaml", PROD), _write(tmp_path, "o.yml", overlay), None
@@ -126,7 +135,7 @@ def test_missing_overlay_trust_proxy_name_fails(tmp_path: Path, name: str) -> No
 def test_wrong_overlay_trust_proxy_value_fails(
     tmp_path: Path, name: str, wrong: str
 ) -> None:
-    overlay = _mod().load_compose_yaml(OVERLAY.read_text(encoding="utf-8"))
+    overlay = _overlay_doc()
     overlay["services"]["web"]["environment"][name] = wrong
     findings = _mod().check(
         _write(tmp_path, "v.yaml", PROD), _write(tmp_path, "o.yml", overlay), None

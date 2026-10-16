@@ -73,7 +73,10 @@ var policies = []Policy{
 // FamilyMembers returns the collapsible family's full canonical-order member
 // list for a CANONICAL dataset key (e.g. "cicd" -> ["cicd", "tests"], or
 // "prs" -> ["prs", "pr-reviews", "pr-comments"]), or false if `dataset` is
-// not a fold/atomic family's canonical identity. Independent families (e.g.
+// not a fold/atomic family's canonical identity. The key matches EXACTLY: no
+// case folding and no trimming, as Python's
+// `_CANONICAL_FAMILY_DATASETS.get(str(dataset_key))` does; a stored key such
+// as " Work-Items" or "WORK-ITEMS" is not a family. Independent families (e.g.
 // PagerDuty "incidents") are excluded: their membership is catalogued for
 // ownership/tests only and was never meant to collapse execution or
 // coverage math.
@@ -84,7 +87,6 @@ var policies = []Policy{
 // dataset's family contains, so scanning every policy regardless of its
 // provider set is safe.
 func FamilyMembers(dataset string) ([]string, bool) {
-	dataset = normalize(dataset)
 	for _, policy := range policies {
 		if policy.Mode == Independent {
 			continue

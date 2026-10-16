@@ -422,7 +422,8 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 		if apiKey == "" {
 			return nil, fmt.Errorf("LLM provider %q is not configured: set OPENAI_API_KEY", kind)
 		}
-		return NewOpenAIProvider(OpenAIProviderConfig{
+		return NewSharedProvider(SharedProviderConfig{
+			Kind:    ProviderKindOpenAI,
 			APIKey:  envsecrets.NewHidden(apiKey),
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OPENAI_BASE_URL"),
 			// Generic LLM_MODEL checked BEFORE the provider-specific
@@ -432,7 +433,7 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 			// OpenAI-compatible endpoint/model without touching each
 			// provider-specific var individually.
 			Model: resolved,
-		}), nil
+		})
 
 	case ProviderKindLocal:
 		// An unset LOCAL_LLM_BASE_URL is NOT an error for an explicitly
@@ -517,12 +518,13 @@ func newProviderFromCredentialsWithTransport(
 		if apiKey == "" {
 			return nil, fmt.Errorf("LLM provider %q is not configured: missing an api_key", kind)
 		}
-		return NewOpenAIProvider(OpenAIProviderConfig{
+		return NewSharedProvider(SharedProviderConfig{
+			Kind:       ProviderKindOpenAI,
 			APIKey:     envsecrets.NewHidden(apiKey),
 			BaseURL:    baseURL,
 			Model:      model,
 			HTTPClient: orgHTTPClient(baseURL, transport),
-		}), nil
+		})
 
 	case ProviderKindLocal:
 		// Same as NewProviderFromEnv's own comment: an empty base_url is

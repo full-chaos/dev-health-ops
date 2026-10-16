@@ -1,7 +1,7 @@
 package providersync
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"sort"
 	"strconv"
@@ -389,7 +389,7 @@ var teamRepoOwnershipInheritableRelationshipTypes = map[string]bool{
 }
 
 // teamRepoOwnershipLinkCounts is one team's link count per link tier on one
-// repo, indexed by edges.ProvenanceRank: native, explicit_text, heuristic, and
+// repo, indexed by linktier.Rank: native, explicit_text, heuristic, and
 // at rank 0 any other recorded provenance (counted, never dropped, and never
 // above a named tier). A pull request's or merge request's own repo_id, and
 // its work_item_dependencies donor edge, are provider-recorded facts: the
@@ -403,7 +403,7 @@ type teamRepoOwnershipLinkCounts map[int]int
 // with more native links wins; only an equal native count looks at
 // explicit_text, and so on. 0 means equal at every tier.
 func (counts teamRepoOwnershipLinkCounts) compare(other teamRepoOwnershipLinkCounts) int {
-	for rank := edges.ProvenanceRank(edges.ProvenanceNative); rank >= 0; rank-- {
+	for rank := linktier.Rank(linktier.Native); rank >= 0; rank-- {
 		if counts[rank] != other[rank] {
 			if counts[rank] > other[rank] {
 				return 1
@@ -538,7 +538,7 @@ func deriveTeamRepoOwnership(
 	nativeDonorTeamID := buildDonorTeamIDResolver(byID, nativeEdges, projectToTeam, knownLinearTeamKeys)
 	nativeLinkedPRs := map[[2]string]bool{}
 	for _, link := range issuePRLinks {
-		if link.Provenance == edges.ProvenanceNative {
+		if link.Provenance == linktier.Native {
 			nativeLinkedPRs[[2]string{link.RepoID, strconv.FormatUint(uint64(link.PRNumber), 10)}] = true
 		}
 	}
@@ -582,7 +582,7 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		if teamID, arm := nativeDonorTeamID(item.WorkItemID); teamID != "" {
-			assign(item.RepoID, teamID, arm, edges.ProvenanceRank(edges.ProvenanceNative), item.CreatedAt)
+			assign(item.RepoID, teamID, arm, linktier.Rank(linktier.Native), item.CreatedAt)
 			continue
 		}
 		teamID, arm := donorTeamID(item.WorkItemID)
@@ -594,7 +594,7 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		result.TextKeyCandidates++
-		assign(item.RepoID, teamID, arm, edges.ProvenanceRank(edges.ProvenanceExplicitText), item.CreatedAt)
+		assign(item.RepoID, teamID, arm, linktier.Rank(linktier.ExplicitText), item.CreatedAt)
 	}
 
 	// PR inheritance: work_graph_issue_pr's OWN repo_id, resolved via the
@@ -605,14 +605,14 @@ func deriveTeamRepoOwnership(
 		if link.RepoID == "" {
 			continue
 		}
-		rank := edges.ProvenanceRank(link.Provenance)
+		rank := linktier.Rank(link.Provenance)
 		if teamID, arm := nativeDonorTeamID(link.WorkItemID); teamID != "" {
 			assign(link.RepoID, teamID, arm, rank, link.EvidenceAt)
 			continue
 		}
 		if teamID, arm := donorTeamID(link.WorkItemID); teamID != "" {
 			result.TextKeyCandidates++
-			assign(link.RepoID, teamID, arm, min(rank, edges.ProvenanceRank(edges.ProvenanceExplicitText)), link.EvidenceAt)
+			assign(link.RepoID, teamID, arm, min(rank, linktier.Rank(linktier.ExplicitText)), link.EvidenceAt)
 		}
 	}
 

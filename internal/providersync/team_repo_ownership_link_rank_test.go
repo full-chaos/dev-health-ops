@@ -3,19 +3,19 @@ package providersync
 import (
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 )
 
-// The ownership tally counts links at edges.ProvenanceRank, the one source of
+// The ownership tally counts links at linktier.Rank, the one source of
 // the link-tier ranks: one link at a higher rank outranks any number of links
 // at every lower rank, and a provenance outside the three tiers ranks lowest.
-func TestTeamRepoOwnershipLinkCountsRankByProvenanceRank(t *testing.T) {
-	order := []string{edges.ProvenanceNative, edges.ProvenanceExplicitText, edges.ProvenanceHeuristic, "other"}
+func TestTeamRepoOwnershipLinkCountsRankByLinkTierRank(t *testing.T) {
+	order := []string{linktier.Native, linktier.ExplicitText, linktier.Heuristic, "other"}
 	for high := range order {
 		for low := high + 1; low < len(order); low++ {
 			one, many := teamRepoOwnershipLinkCounts{}, teamRepoOwnershipLinkCounts{}
-			one[edges.ProvenanceRank(order[high])]++
-			many[edges.ProvenanceRank(order[low])] += 50
+			one[linktier.Rank(order[high])]++
+			many[linktier.Rank(order[low])] += 50
 			if one.compare(many) <= 0 || many.compare(one) >= 0 {
 				t.Errorf("1 %s link vs 50 %s links: compare = %d, want the %s link to win",
 					order[high], order[low], one.compare(many), order[high])
@@ -39,9 +39,9 @@ func TestATextKeyDonorOnAHeuristicLinkStaysHeuristic(t *testing.T) {
 					{SourceWorkItemID: changeRequestID(cr, 3), TargetWorkItemID: "extkey:WEB-5", RelationshipType: "external_issue_key"},
 				}
 				links := []TeamRepoOwnershipIssuePRLink{
-					{WorkItemID: "linear:CHAOS-1", RepoID: "repo-1", PRNumber: 1, Provenance: edges.ProvenanceExplicitText},
-					{WorkItemID: changeRequestID(cr, 3), RepoID: "repo-1", PRNumber: 10, Provenance: edges.ProvenanceHeuristic},
-					{WorkItemID: changeRequestID(cr, 3), RepoID: "repo-1", PRNumber: 11, Provenance: edges.ProvenanceHeuristic},
+					{WorkItemID: "linear:CHAOS-1", RepoID: "repo-1", PRNumber: 1, Provenance: linktier.ExplicitText},
+					{WorkItemID: changeRequestID(cr, 3), RepoID: "repo-1", PRNumber: 10, Provenance: linktier.Heuristic},
+					{WorkItemID: changeRequestID(cr, 3), RepoID: "repo-1", PRNumber: 11, Provenance: linktier.Heuristic},
 				}
 				got := ownersOf(t, deriveTeamRepoOwnership("org-1", ownerAndWebLinks("linear", tracker), workItems, dependencyEdges, links, nil))
 				if got["owner"].primary != teamRepoOwnershipMainOwner || got["web"].primary != teamRepoOwnershipCoOwner {
@@ -59,7 +59,7 @@ func TestAnOtherProvenanceLinkRanksBelowHeuristic(t *testing.T) {
 		{WorkItemID: "jira:WEB-5", Provider: "jira", ProjectID: "web-proj"},
 	}
 	links := []TeamRepoOwnershipIssuePRLink{
-		{WorkItemID: "jira:OPS-1", RepoID: "repo-1", PRNumber: 1, Provenance: edges.ProvenanceHeuristic},
+		{WorkItemID: "jira:OPS-1", RepoID: "repo-1", PRNumber: 1, Provenance: linktier.Heuristic},
 		{WorkItemID: "jira:WEB-5", RepoID: "repo-1", PRNumber: 2, Provenance: "inferred_by_other_writer"},
 		{WorkItemID: "jira:WEB-5", RepoID: "repo-1", PRNumber: 3, Provenance: "inferred_by_other_writer"},
 	}

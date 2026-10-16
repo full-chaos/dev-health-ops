@@ -145,7 +145,7 @@ usage() {
          pull_request job runs, with a cost bounded by the packages a PR changes.
          A path that ci/venue_oracle_triggers.d/ declares for a test (code outside
          its package whose behaviour the test compares; CHAOS-9172) selects that
-         test too, and so does a file directly in a package of the test binary's dependency
+         test too, and so does a file directly in a package of the dependency
          closure (ci/venue_oracle_closure.d/, CHAOS-9935). No row selected is a loud no-op. With --list print the selected rows
          (SELECT, package, test, tab-separated) and run nothing.
   venue-oracle-plan COUNT

@@ -729,56 +729,114 @@ func withTeam(record Record, team string) Record {
 	return record
 }
 
-// CHAOS-9915: one (team, repository, work type) group can hold a pull request
-// whose attribution row names the team (share 1) and one that the ownership
-// read gives to the same team at its lesser share. The repository's incidents
-// enter the group's AI rows at the share of each of the group's pull requests
-// (the mean of the facts' shares), in any input order.
-func TestComputeWeighsIncidentsByEveryFactShareOfAMixedGroup(t *testing.T) {
-	const share = 0.4
+// CHAOS-9915, D6037: one (team, repository, work type) group can hold a pull
+// request whose attribution row names the team (share 1) and one that the
+// ownership read gives to the same team at its lesser share. An incident is an
+// event of the repository: each team takes the repository's incidents at its
+// ownership share, in any input order; a team named only by attribution rows
+// takes none; the teams' incidents add up to the repository's incident count.
+func TestComputeWeighsIncidentsByTheTeamsOwnershipShare(t *testing.T) {
+	shares := map[string]float64{"team-t": 0.4, "team-u": 0.6}
+	const incidentCount = 2
 	merged := timePtr(fixtureBase.Add(time.Hour))
 	pullRequest := strPtr("pull_request")
-	named := PullRequestRow{RepoID: fixtureRepo, Number: 1, CreatedAt: fixtureBase, MergedAt: merged}
-	resolved := PullRequestRow{RepoID: fixtureRepo, Number: 2, CreatedAt: fixtureBase, MergedAt: merged}
+	pr := func(number int64) PullRequestRow {
+		return PullRequestRow{RepoID: fixtureRepo, Number: number, CreatedAt: fixtureBase, MergedAt: merged}
+	}
+	namedOwner, resolved, namedOther := pr(1), pr(2), pr(3)
 	params := func(prs ...PullRequestRow) Params {
 		return Params{
 			Day: fixtureDay, OrgID: fixtureOrgID, PullRequests: prs,
 			Attributions: []AttributionRow{
 				{RepoID: fixtureRepo, Number: 1, Kind: strPtr("ai_assisted"), WorkType: pullRequest, TeamID: strPtr("team-t")},
 				{RepoID: fixtureRepo, Number: 2, Kind: strPtr("ai_assisted"), WorkType: pullRequest},
+				{RepoID: fixtureRepo, Number: 3, Kind: strPtr("ai_assisted"), WorkType: pullRequest, TeamID: strPtr("team-x")},
 			},
-			Incidents:     []IncidentRow{{RepoID: fixtureRepo, StartedAt: fixtureBase.Add(2 * time.Hour)}},
+			Incidents: []IncidentRow{
+				{RepoID: fixtureRepo, StartedAt: fixtureBase.Add(2 * time.Hour)},
+				{RepoID: fixtureRepo, StartedAt: fixtureBase.Add(3 * time.Hour)},
+			},
 			RepoNamesByID: map[uuid.UUID]string{fixtureRepo: "acme/alpha"},
 			TeamResolver:  func(uuid.UUID, string) []string { return []string{"team-t", "team-u"} },
-			OwnerShare: func(_ uuid.UUID, team string) float64 {
-				if team == "team-t" {
-					return share
-				}
-				return 1 - share
-			},
+			OwnerShare:    func(_ uuid.UUID, team string) float64 { return shares[team] },
 		}
 	}
-	incidents := func(records []Record) float64 {
-		var rows int
-		var value float64
-		for _, record := range records {
-			if record.TeamID != nil && *record.TeamID == "team-t" && record.AttributionBucket == BucketAIAssisted {
-				rows++
-				value = record.IncidentsCount
+	want := map[string]float64{
+		"team-t": incidentCount * shares["team-t"],
+		"team-u": incidentCount * shares["team-u"],
+		"team-x": 0,
+	}
+	for name, prs := range map[string][]PullRequestRow{
+		"named owner first": {namedOwner, resolved, namedOther},
+		"resolved first":    {resolved, namedOwner, namedOther},
+		"named other first": {namedOther, resolved, namedOwner},
+	} {
+		got := map[string]float64{}
+		rows := map[string]int{}
+		var sum float64
+		for _, record := range Compute(params(prs...)) {
+			if record.AttributionBucket != BucketAIAssisted {
+				continue
+			}
+			if record.TeamID == nil {
+				t.Fatalf("%s: ai_assisted record without a team: %+v", name, record)
+			}
+			got[*record.TeamID] = record.IncidentsCount
+			rows[*record.TeamID]++
+			sum += record.IncidentsCount
+		}
+		for team, value := range want {
+			if rows[team] != 1 {
+				t.Fatalf("%s: %s ai_assisted rows = %d, want 1", name, team, rows[team])
+			}
+			if math.Abs(got[team]-value) > 1e-9 {
+				t.Errorf("%s: %s incidents_count = %v, want %v (%d incidents at its ownership share)", name, team, got[team], value, incidentCount)
 			}
 		}
-		if rows != 1 {
-			t.Fatalf("team-t ai_assisted rows = %d, want 1", rows)
+		if math.Abs(sum-incidentCount) > 1e-9 {
+			t.Errorf("%s: the teams' incidents add up to %v, want the repository's %d", name, sum, incidentCount)
 		}
-		return value
 	}
-	want := (1 + share) / 2
-	for name, prs := range map[string][]PullRequestRow{
-		"named first":    {named, resolved},
-		"resolved first": {resolved, named},
+
+	unowned := params(resolved)
+	unowned.TeamResolver = func(uuid.UUID, string) []string { return nil }
+	var noTeamRows int
+	for _, record := range Compute(unowned) {
+		if record.AttributionBucket != BucketAIAssisted {
+			continue
+		}
+		noTeamRows++
+		if record.TeamID != nil || record.IncidentsCount != incidentCount {
+			t.Errorf("repository owned by no team: ai_assisted record team %v incidents_count %v, want no team and the repository's %d", record.TeamID, record.IncidentsCount, incidentCount)
+		}
+	}
+	if noTeamRows != 1 {
+		t.Errorf("repository owned by no team: ai_assisted rows = %d, want 1", noTeamRows)
+	}
+
+	for name, case_ := range map[string]struct {
+		params Params
+		want   map[string]float64
+	}{
+		// No ownership read at all: a team named by attribution rows holds no share.
+		"no resolver": {params: func() Params { p := params(namedOwner); p.TeamResolver = nil; return p }(), want: map[string]float64{"team-t": 0}},
+		// Owners without a share hook hold the repository whole, as their counts do.
+		"no share hook": {params: func() Params { p := params(resolved); p.OwnerShare = nil; return p }(), want: map[string]float64{"team-t": incidentCount, "team-u": incidentCount}},
 	} {
-		if got := incidents(Compute(params(prs...))); math.Abs(got-want) > 1e-9 {
-			t.Errorf("%s: team-t incidents_count = %v, want %v (one incident at the mean of shares 1 and %v)", name, got, want, share)
+		got := map[string]float64{}
+		for _, record := range Compute(case_.params) {
+			if record.AttributionBucket == BucketAIAssisted && record.TeamID != nil {
+				got[*record.TeamID] = record.IncidentsCount
+			}
+		}
+		if len(got) != len(case_.want) {
+			t.Errorf("%s: ai_assisted incidents by team %v, want %v", name, got, case_.want)
+			continue
+		}
+		for team, value := range case_.want {
+			if got[team] != value {
+				t.Errorf("%s: %s incidents_count = %v, want %v", name, team, got[team], value)
+			}
 		}
 	}
 }

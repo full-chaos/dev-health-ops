@@ -734,9 +734,7 @@ func buildRecords(
 
 		var aiCount, aiAssistedCount, agentCreatedCount, humanCount, unknownCount uint32
 		var weightedAI, weightedAIAssisted, weightedAgentCreated, weightedHuman, weightedUnknown float64
-		var groupWeight float64
 		for _, fact := range groupFacts {
-			groupWeight += fact.share
 			if isAIBucket(fact.bucket) {
 				aiCount++
 				weightedAI += fact.share
@@ -756,12 +754,7 @@ func buildRecords(
 				weightedUnknown += fact.share
 			}
 		}
-		// The incidents of a repository are counted once per group; they enter
-		// the group's rows at the mean share of the group's pull requests. One
-		// group can mix a pull request whose attribution row names the team
-		// (share 1) with one the ownership read gives to the team at its lesser
-		// share (CHAOS-9915), so no single fact's share stands for the group.
-		groupShare := groupWeight / float64(groupTotal)
+		groupShare := incidentShare(params, key)
 
 		var teamID *string
 		if key.hasTeam {
@@ -816,6 +809,35 @@ func buildRecords(
 		}
 	}
 	return records
+}
+
+// incidentShare is the weight of a repository's incidents in one group's rows
+// (D6037, CHAOS-9915). An incident is an event of the repository, not of a pull
+// request, so a team takes it at its ownership share of the repository, read
+// from the ownership resolver, never from the group's pull requests: one group
+// can mix a pull request whose attribution row names the team (share 1) with
+// one the ownership read gives to the team at a lesser share. A team that
+// holds no ownership of the repository (present only through attribution rows
+// that name it) takes 0, and the group without a team (a repository the
+// resolver gives to no team) takes the incidents whole, so the weights of one
+// repository's groups add up to its incident count.
+func incidentShare(params Params, key groupKey) float64 {
+	if !key.hasTeam {
+		return 1
+	}
+	if params.TeamResolver == nil {
+		return 0
+	}
+	for _, team := range params.TeamResolver(key.repoID, params.RepoNamesByID[key.repoID]) {
+		if team != key.teamID {
+			continue
+		}
+		if params.OwnerShare == nil {
+			return 1
+		}
+		return params.OwnerShare(key.repoID, team)
+	}
+	return 0
 }
 
 func filterBucket(facts []prFact, bucket AttributionBucket) []prFact {

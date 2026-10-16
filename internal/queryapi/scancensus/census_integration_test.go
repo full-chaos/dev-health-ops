@@ -51,9 +51,27 @@ func destType(name string) (reflect.Type, bool) {
 	return t, true
 }
 
+// nullableInner is the type inside a Nullable column type, looking through
+// LowCardinality(...) wrappers: LowCardinality(Nullable(String)) is as Nullable
+// as Nullable(String).
+func nullableInner(chType string) (string, bool) {
+	t := chType
+	for {
+		inner, ok := strings.CutPrefix(t, "LowCardinality(")
+		if !ok {
+			break
+		}
+		t = strings.TrimSuffix(inner, ")")
+	}
+	inner, ok := strings.CutPrefix(t, "Nullable(")
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSuffix(inner, ")"), true
+}
+
 func probeExpr(chType string) string {
-	if inner, ok := strings.CutPrefix(chType, "Nullable("); ok {
-		inner = strings.TrimSuffix(inner, ")")
+	if inner, ok := nullableInner(chType); ok {
 		return fmt.Sprintf("CAST(defaultValueOfTypeName('%s') AS %s)", strings.ReplaceAll(inner, "'", `\'`), chType)
 	}
 	return fmt.Sprintf("defaultValueOfTypeName('%s')", strings.ReplaceAll(chType, "'", `\'`))
@@ -61,7 +79,7 @@ func probeExpr(chType string) string {
 
 // nullProbeExpr is a NULL of a Nullable column type; ok is false for any other type.
 func nullProbeExpr(chType string) (string, bool) {
-	if !strings.HasPrefix(chType, "Nullable(") {
+	if _, ok := nullableInner(chType); !ok {
 		return "", false
 	}
 	return fmt.Sprintf("CAST(NULL AS %s)", chType), true
@@ -139,8 +157,9 @@ type Verdict struct {
 	Mismatches []string
 	// NullablePlain lists the columns the server types Nullable that the site
 	// scans into a plain destination ("col<i>:<type>"). clickhouse-go scans a
-	// NULL there without an error and leaves the zero value, so no probe fails:
-	// the read turns NULL into 0 / "" / the zero time silently.
+	// NULL there without an error and leaves the destination untouched (the zero
+	// value of a fresh variable, the previous row's value of a reused one), so no
+	// probe fails and the read turns NULL into a value silently.
 	NullablePlain []string
 }
 
@@ -329,10 +348,10 @@ func TestScanTypeCensus(t *testing.T) {
 		nStale = nil
 	}
 	for _, c := range nChanged {
-		t.Errorf("nullable-into-plain pin changed and the column is still scanned into a plain destination: %s\nA changed pin is never regenerated. Decide per site whether NULL read as the zero value is right, then edit the pin by hand and say why in the PR.", c)
+		t.Errorf("nullable-into-plain pin changed and the column is still scanned into a plain destination: %s\nA changed pin is never regenerated. Decide per site whether a NULL left as the destination's value is right, then edit the pin by hand and say why in the PR.", c)
 	}
 	for _, a := range nAdded {
-		t.Errorf("a Nullable column is scanned into a plain destination and is not pinned: %s\nclickhouse-go reads a NULL there as the zero value without an error. Scan into a pointer (**T) or CAST/coalesce in SQL; a pin is a reviewed exception, never added to make the census pass.", a)
+		t.Errorf("a Nullable column is scanned into a plain destination and is not pinned: %s\nclickhouse-go leaves the destination untouched on a NULL there, without an error. Scan into a pointer (**T) or CAST/coalesce in SQL; a pin is a reviewed exception, never added to make the census pass.", a)
 	}
 	for _, st := range nStale {
 		t.Errorf("nullable-into-plain pin for a site that no longer scans a Nullable column into a plain destination (or is gone): %s\nRemove it (SCANCENSUS_WRITE_PINS=1 removes such pins).", st)
@@ -395,7 +414,7 @@ func TestScanTypeCensusRejectsAUInt64IntoFloat64(t *testing.T) {
 
 // TestScanTypeCensusProbesNullForANullableColumn pins what the real driver
 // does with a NULL: it scans into a plain destination without an error and
-// leaves the zero value. That is why the census reports a Nullable column
+// leaves the destination untouched. That is why the census reports a Nullable column
 // scanned into a plain destination (Verdict.NullablePlain) instead of failing a
 // probe, and why a driver that starts to refuse a NULL there must turn this red.
 func TestScanTypeCensusProbesNullForANullableColumn(t *testing.T) {
@@ -403,17 +422,54 @@ func TestScanTypeCensusProbesNullForANullableColumn(t *testing.T) {
 	if err := scannable(ctx, conn, "Nullable(Float64)", "*float64", true); err != nil {
 		t.Fatalf("the driver now refuses a NULL in a plain destination (%v): a plain-destination pin is no longer a silent NULL-to-zero, revisit nullableIntoPlainSites", err)
 	}
+	// A NULL leaves the destination untouched: the zero value for a fresh variable, but the
+	// PREVIOUS row's value for one a loop reuses.
+	for _, c := range []struct {
+		chType string
+		dest   any
+	}{
+		{"Nullable(Float64)", new(float64)},
+		{"LowCardinality(Nullable(String))", new(string)},
+	} {
+		switch d := c.dest.(type) {
+		case *float64:
+			*d = 42.5
+		case *string:
+			*d = "kept"
+		}
+		expr, _ := nullProbeExpr(c.chType)
+		rows, err := conn.Query(ctx, "SELECT "+expr)
+		if err != nil || !rows.Next() {
+			t.Fatalf("NULL probe of %s: %v", c.chType, err)
+		}
+		if err := rows.Scan(c.dest); err != nil {
+			t.Fatalf("scan NULL of %s: %v", c.chType, err)
+		}
+		rows.Close()
+		switch d := c.dest.(type) {
+		case *float64:
+			if *d != 42.5 {
+				t.Fatalf("NULL of %s over a plain destination changed it to %v, want it untouched", c.chType, *d)
+			}
+		case *string:
+			if *d != "kept" {
+				t.Fatalf("NULL of %s over a plain destination changed it to %q, want it untouched", c.chType, *d)
+			}
+		}
+	}
 	if err := scannable(ctx, conn, "Float64", "*float64", true); err == nil {
 		t.Fatal("a NULL probe of a non-Nullable type must be refused, not pass")
 	}
-	statement := []string{"SELECT status, CAST(NULL AS Nullable(Float64)) AS n FROM work_item_state_durations_daily GROUP BY status"}
 	for _, c := range []struct {
-		dest string
-		want []string
+		dest, chType string
+		want         []string
 	}{
-		{"*float64", []string{"col2:Nullable(Float64)"}},
-		{"**float64", nil},
+		{"*float64", "Nullable(Float64)", []string{"col2:Nullable(Float64)"}},
+		{"**float64", "Nullable(Float64)", nil},
+		{"*string", "LowCardinality(Nullable(String))", []string{"col2:LowCardinality(Nullable(String))"}},
+		{"**string", "LowCardinality(Nullable(String))", nil},
 	} {
+		statement := []string{"SELECT status, CAST(NULL AS " + c.chType + ") AS n FROM work_item_state_durations_daily GROUP BY status"}
 		verdict := Classify(ctx, conn, []Site{{File: "planted.go", Func: "planted", Dests: []string{"*string", c.dest}, Statements: statement}})[0]
 		if verdict.Unresolved != "" || len(verdict.Mismatches) != 0 {
 			t.Fatalf("%s: unexpected verdict %+v", c.dest, verdict)
@@ -437,7 +493,7 @@ func TestScanTypeCensusPinsAnOuterSplicedSelectItem(t *testing.T) {
 }
 
 // nullableIntoPlainSites is `file|func|destinations|digest|nullable-into-plain|col<i>:<type>`: a Nullable column
-// scanned into a plain destination, which reads a NULL as the zero value. It only shrinks.
+// scanned into a plain destination, which reads a NULL as whatever the destination held (the zero value of a fresh variable). It only shrinks.
 const nullableIntoPlainSites = `
 internal/queryapi/aianalytics/loaders.go|loadEngagement|*string,*time.Time,*uint64,**float64,*int64,*int64|6e6a9b4b2a3c|nullable-into-plain|col2:Nullable(Date)
 internal/queryapi/filteroptions/filteroptions.go|distinctValues|*string|9f80251f99bb|nullable-into-plain|col1:Nullable(String)

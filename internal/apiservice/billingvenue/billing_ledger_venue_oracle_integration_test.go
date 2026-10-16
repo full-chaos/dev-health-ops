@@ -341,14 +341,25 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 		"reconcile: all orgs": {`"stripe_id":"in_B1","field":"status","local_value":"void","stripe_value":"uncollectible"`,
 			`"stripe_id":"sub_C","field":"status","local_value":"active","stripe_value":null`, `"sub_stripe_only"`, `"re_stripe_only"`},
 	}
-	inspected, entitlementsInspected := 0, 0
+	inspected, entitlementsInspected, stripeFailures := 0, 0, 0
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		// The Python answers are reduced before Diff, so the lengths of the reduced and the
+		// original Stripe 502 bodies differ; the raw Go body is checked in Inspect.
+		SkipContentLength: func(request venueoracle.Request) bool { return request.Name == "void: stripe fails" },
 		Normalize: func(_ venueoracle.Request, body string) string {
 			dropped, _ := dropGoOnlyFeature(normalize(body))
 			return dropped
 		},
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			// The normalizer reduces the Stripe 502 detail on both planes, so the raw Go body is
+			// asserted to hold the fixed lead and no Stripe suffix.
+			if request.Name == "void: stripe fails" {
+				stripeFailures++
+				if goResponse.Status != 502 || strings.TrimSpace(goResponse.Body) != `{"detail":"Failed to void invoice"}` {
+					t.Errorf("%s: go answered %d %s, want 502 with the fixed lead and no Stripe text", request.Name, goResponse.Status, goResponse.Body)
+				}
+			}
 			if strings.HasPrefix(request.Name, "ent: ") && goResponse.Status == 200 {
 				entitlementsInspected++
 				if _, held := dropGoOnlyFeature(goResponse.Body); !held {
@@ -367,6 +378,9 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 			}
 		},
 	})
+	if stripeFailures != 1 {
+		t.Errorf("inspected %d Stripe failure answers, want 1", stripeFailures)
+	}
 	if entitlementsInspected == 0 {
 		t.Error("no go entitlements answer was inspected for the Go-only member")
 	}

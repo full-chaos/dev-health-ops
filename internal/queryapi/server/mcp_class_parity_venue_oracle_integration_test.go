@@ -81,6 +81,7 @@ var mcpParityPolicyExcusals = map[string]struct{ reason, ticket string }{}
 type mcpParityExcused struct{ label, root, reason, ticket string }
 
 type mcpParityShape struct {
+	legacy                   bool
 	operation, variant, root string
 	document                 string
 	variables                map[string]any
@@ -175,6 +176,19 @@ VALUES ($1, 'primary', 'parity-oracle', $2, 'mcp-class-parity-oracle')`, mcpclas
 		class := mcpParityPost(t, client, mcpBase+"/query", mcpParityIdentityHeaders(),
 			mcpBody(t, shape.document, shape.variables))
 
+		if shape.legacy && (reference.status != http.StatusOK || mcpParityHasErrors(reference.body)) {
+			// A legacy text (the dual-accept window, CHAOS-8000) may declare other variables than the corpus sends.
+			// Both routes must then refuse it; one serving what the other refuses is a difference.
+			if class.status == http.StatusOK && !mcpParityHasErrors(class.body) {
+				tl.failed = append(tl.failed, shape.label()+": the MCP listener served a legacy text the /graphql document route refuses")
+				t.Logf("FAILED  %-40s the MCP listener served a legacy text the /graphql route refuses", shape.label())
+				continue
+			}
+			tl.excluded++
+			tl.excludedWhy = append(tl.excludedWhy, shape.label())
+			t.Logf("EXCUSED %-40s legacy text does not accept the corpus variables, refused by both routes (CHAOS-8001 removes it): %s", shape.label(), mcpParityTrim(reference.body))
+			continue
+		}
 		if excusal, declared := mcpParityPolicyExcusals[shape.label()]; declared && class.status != http.StatusOK && mcpPolicyRefusalStatuses[class.status] && reference.status == http.StatusOK && strings.Contains(class.body, excusal.reason) {
 			tl.excluded++
 			tl.excludedWhy = append(tl.excludedWhy, fmt.Sprintf("%s=%d %s", shape.label(), class.status, mcpParityTrim(class.body)))
@@ -554,6 +568,13 @@ func mcpParityDescribe(result goapiproof.Result) string {
 	return strings.Join(parts, "; ")
 }
 
+func mcpParityHasErrors(body string) bool {
+	var decoded struct {
+		Errors []json.RawMessage `json:"errors"`
+	}
+	return json.Unmarshal([]byte(body), &decoded) != nil || len(decoded.Errors) > 0
+}
+
 // mcpParityHoldsData reports whether the answer carries at least one scalar other than a null, an empty string, a
 // zero-length list or __typename: two empty answers agree without either route having read anything.
 func mcpParityHoldsData(value any) bool {
@@ -650,8 +671,13 @@ func mcpParityShapes(ctx context.Context, t *testing.T, conn driver.Conn, root s
 	t.Helper()
 	roots := mcpclass.AllowedRoots()
 	documents := map[string]string{}
+	legacyTexts := map[string][]registeredEdgeDocument{}
 	for _, doc := range mcpParityRegisteredDocuments(t, root) {
-		if doc.Legacy || doc.Kind != "query" {
+		if doc.Kind != "query" {
+			continue
+		}
+		if doc.Legacy {
+			legacyTexts[doc.Operation] = append(legacyTexts[doc.Operation], doc)
 			continue
 		}
 		documents[doc.Operation] = doc.Document
@@ -676,6 +702,14 @@ func mcpParityShapes(ctx context.Context, t *testing.T, conn driver.Conn, root s
 				operation: operation, root: spec.ResponseRoot, document: document,
 				variables: spec.Variables(mcpParityOrg, window), parity: mcpParityOptions(operation, "", spec.Parity),
 			})
+			// The legacy texts of the operation are still accepted by /graphql (CHAOS-8000): each is sent with the base
+			// variables too, so a regression limited to an old text is seen.
+			for _, old := range legacyTexts[operation] {
+				shapes = append(shapes, mcpParityShape{
+					legacy: true, operation: operation, variant: "legacy-" + strings.TrimPrefix(old.Digest, "sha256:")[:8], root: spec.ResponseRoot,
+					document: old.Document, variables: spec.Variables(mcpParityOrg, window), parity: mcpParityOptions(operation, "", spec.Parity),
+				})
+			}
 		}
 		for _, variant := range mcpParityExtraVariants(operation, spec.Variants) {
 			switch {

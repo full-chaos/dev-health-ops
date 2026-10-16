@@ -4,8 +4,29 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
+
+	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
+
+// mcpParityPathExists walks a declared "data.<root>.<field>..." path through the SDL and reports the first segment
+// that names no field of the type reached so far.
+func mcpParityPathExists(schema *ast.Schema, path string) (missing string, ok bool) {
+	current := schema.Query
+	for _, segment := range strings.Split(strings.TrimPrefix(path, "data."), ".") {
+		if current == nil {
+			return segment, false
+		}
+		field := current.Fields.ForName(segment)
+		if field == nil {
+			return segment, false
+		}
+		current = schema.Types[field.Type.Name()]
+	}
+	return "", true
+}
 
 // mcpParityTolerance is one tolerance of the MCP class parity step: the operation and variant it applies to, the
 // float paths compared at the Tier B tolerance (1e-9, max of absolute and relative) and the lists compared by key.
@@ -107,9 +128,16 @@ func TestMCPParityDeclarationsStillExist(t *testing.T) {
 		for _, list := range tolerance.lists {
 			paths = append(paths, list.Path)
 		}
+		schema, schemaErr := gqlparser.LoadSchema(&ast.Source{Name: "schema.graphql", Input: string(schemav1.SDL)})
+		if schemaErr != nil {
+			t.Fatalf("load the schema: %v", schemaErr)
+		}
 		for _, path := range paths {
 			if !strings.HasPrefix(path, "data."+spec.ResponseRoot+".") {
 				t.Errorf("tolerance for %s: path %s is not under the response root %s", tolerance.operation, path, spec.ResponseRoot)
+			}
+			if missing, ok := mcpParityPathExists(schema, path); !ok {
+				t.Errorf("tolerance for %s: path %s names %q, which the schema does not have at that place", tolerance.operation, path, missing)
 			}
 		}
 	}
@@ -120,5 +148,18 @@ func TestMCPParityDeclarationsStillExist(t *testing.T) {
 				t.Errorf("%s: volatile field %q needs a reason and a data. path", operation, path)
 			}
 		}
+	}
+}
+
+func TestMCPParityPathCheckSeesAMissingField(t *testing.T) {
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "schema.graphql", Input: string(schemav1.SDL)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing, ok := mcpParityPathExists(schema, "data.analytics.flowMatrix.nodes.value"); !ok {
+		t.Fatalf("a real path was refused at %q", missing)
+	}
+	if missing, ok := mcpParityPathExists(schema, "data.analytics.flowMatrix.nodes.missingValue"); ok || missing != "missingValue" {
+		t.Fatalf("a path with a field the schema lacks was accepted (missing=%q ok=%v)", missing, ok)
 	}
 }

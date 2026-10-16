@@ -17,7 +17,7 @@
 # most venue packages are 1-10 minutes; internal/apiservice/admin alone is about 36.
 # The job timeout is 60 minutes. A PR that changes no package with a registered venue
 # test costs the checkout and the selection (seconds): the path filter below starts it
-# only for changes under internal/, the registry, or the gate itself.
+# only for changes under internal/, the GraphQL contract, the registry, or the gate itself.
 #
 # NOT COVERED, on purpose: a change to the harness (internal/testsupport/venueoracle),
 # a shared helper outside a venue package that no trigger row declares, or the registry
@@ -29,6 +29,7 @@ on:
   pull_request:
     paths:
       - 'internal/**'
+      - 'contracts/graphql/**'
       - 'ci/venue_oracle_registry.d/**'
       - 'ci/venue_oracle_triggers.d/**'
       - 'ci/check_go.sh'

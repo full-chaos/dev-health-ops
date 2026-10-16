@@ -96,3 +96,14 @@ func errorText(err error) string {
 	}
 	return chain
 }
+
+// PlanGatePrefix opens every plan-gate sentence. The web shows a message with
+// this exact prefix as product copy (lib/actionFailure.ts PLAN_GATE), so a
+// plan gate is always a ClientError built here and never masked.
+const PlanGatePrefix = "This feature requires the "
+
+// PlanGate is the typed client error for a feature the org's plan lacks.
+// requirement completes the sentence, for example "Team plan.".
+func PlanGate(requirement string, cause error) *ClientError {
+	return &ClientError{Status: http.StatusForbidden, Message: PlanGatePrefix + requirement, Cause: cause}
+}

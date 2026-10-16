@@ -995,8 +995,8 @@ func Load(spec Spec) (Config, error) {
 			cfg.APIExpectedWorkerGroups = &groups
 		}
 		cfg.APIBilling = loadBillingConfig(lookup)
-		cfg.APIJWTIssuer = envOrDefault(lookup, "JWT_ISSUER", defaultJWTIssuer)
-		cfg.APIJWTAudience = envOrDefault(lookup, "JWT_AUDIENCE", defaultJWTAudience)
+		cfg.APIJWTIssuer = presenceOrDefault(lookup, "JWT_ISSUER", defaultJWTIssuer)
+		cfg.APIJWTAudience = presenceOrDefault(lookup, "JWT_AUDIENCE", defaultJWTAudience)
 	}
 	if cfg.Service == QueryAPIServiceName {
 		cfg.QueryAPIAddress = envOrDefault(lookup, "QUERY_API_ADDR", defaultQueryAPIAddress)
@@ -1260,6 +1260,17 @@ func boundedIntEnv(
 		return 0, fmt.Errorf("%s must be between %d and %d", key, minimum, maximum)
 	}
 	return value, nil
+}
+
+// presenceOrDefault mirrors os.getenv(key, default): the default applies only
+// when the variable is absent. A present empty or blank value is returned
+// verbatim, as the Python api reads JWT_ISSUER and JWT_AUDIENCE; the api
+// service refuses an empty one at startup.
+func presenceOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
+	if value, present := lookup(key); present {
+		return value
+	}
+	return fallback
 }
 
 func envOrDefault(lookup secrets.LookupEnv, key, fallback string) string {

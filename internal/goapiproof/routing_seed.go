@@ -2,7 +2,7 @@ package goapiproof
 
 // `seed` writes the first decision for an MCP class root that has none, in the one mode that cannot route a client
 // anywhere -- shadow. It never changes an existing decision and never writes another mode. A shadow decision does not
-// make a root reachable: the gates on shadow->canary (`enable`'s per-root receipt) are untouched. A catalog
+// make a root reachable: `enable` is still the step that lights it. A catalog
 // operation has no routing state (ErrDocumentOperationNotRouted).
 
 import (

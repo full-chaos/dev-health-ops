@@ -1042,7 +1042,60 @@ def test_reclaim_is_compare_and_delete_under_widened_window(tmp_path):
         lock_dir.unlink(missing_ok=True)
 
 
-def test_ln_s_failure_from_missing_parent_dir_dies_immediately(tmp_path):
+_VANISHING_LN_WRAPPER = """#!/bin/bash
+# Test-only ln wrapper (CHAOS-9923): the first `ln -s` fails with EEXIST while leaving NO
+# symlink behind, which is what a holder releasing its lock between ln's failure and the
+# caller's -L check looks like. Later calls are the real ln.
+marker="${LN_FAIL_ONCE_MARKER}"
+if [ ! -e "$marker" ]; then
+  : > "$marker"
+  if [ "${LN_MESSAGE_STYLE}" = "bsd" ]; then
+    echo "ln: ${@: -1}: File exists" >&2
+  else
+    echo "ln: failed to create symbolic link '${@: -1}': File exists" >&2
+  fi
+  exit 1
+fi
+exec /bin/ln "$@"
+"""
+
+
+@pytest.mark.parametrize("style", ["gnu", "bsd"])
+def test_a_lock_released_between_ln_failure_and_the_check_is_contention_not_a_fatal(
+    tmp_path, style
+):
+    """ln -s hits EEXIST, then the holder releases before try_acquire_once looks
+    at LOCK_DIR. That is contention (retry), never "cannot create lock symlink".
+    Deterministic form of the xdist flake: the race is forced with an ln wrapper
+    rather than waited for."""
+    wrapper_dir = tmp_path / "ln_bin"
+    wrapper_dir.mkdir()
+    wrapper = wrapper_dir / "ln"
+    wrapper.write_text(_VANISHING_LN_WRAPPER)
+    wrapper.chmod(0o755)
+
+    lock_dir = tmp_path / "vanish.lock"
+    probe = _spawn_probe(
+        lock_dir,
+        hold_secs=0.1,
+        wait_secs=10,
+        extra_env={
+            "LN_FAIL_ONCE_MARKER": str(tmp_path / "ln_failed_once"),
+            "LN_MESSAGE_STYLE": style,
+        },
+        path=f"{wrapper_dir}:{_BASE_PATH}",
+    )
+    out = probe.communicate(timeout=_REAP_SECS)[0]
+    assert probe.returncode == 0, out
+    assert "cannot create lock symlink" not in out, out
+    assert "lock-probe: acquired" in out, out
+    assert (tmp_path / "ln_failed_once").exists(), (
+        "the wrapper never ran, so the race was not forced"
+    )
+
+
+@pytest.mark.parametrize("parent_name", ["parent", "File exists"])
+def test_ln_s_failure_from_missing_parent_dir_dies_immediately(tmp_path, parent_name):
     """A LOCK_DIR whose parent directory doesn't exist must fail FAST with
     the real reason -- not be treated as lock contention and polled out to
     the full LOCK_WAIT_SECS with a diagnostic naming a PID that doesn't exist.
@@ -1052,7 +1105,8 @@ def test_ln_s_failure_from_missing_parent_dir_dies_immediately(tmp_path):
     permissions error all looked identical to real contention, and none of
     them will ever resolve by polling.
     """
-    bad_lock_dir = tmp_path / "no" / "such" / "parent" / "lock.file"
+    # "File exists" in the PATH must not read as the EEXIST error (CHAOS-9923 round 1).
+    bad_lock_dir = tmp_path / "no" / "such" / parent_name / "lock.file"
     started_at = time.monotonic()
     result = subprocess.run(
         ["bash", str(SCRIPT), "--lock-probe", "0.1"],

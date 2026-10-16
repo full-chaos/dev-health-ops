@@ -110,7 +110,7 @@ Change failure rate is the share of deployments that failed: named by an inciden
 - **Columns.** `deployments_count`; `failed_deployments_native` and `failed_deployments_heuristic` (deployments with at least one deployment-incident link, by the best tier of their links); `incidents_direct` and `incidents_via_deployment` (incidents that started on the day, by how they tie to the repository); `failed_deployments_status` (deployments whose own status is failed that no link names, so a failed deployment counts once: failed in total is native + heuristic + status) and `deployments_status_known` (deployments with a final status, succeeded or failed: the status evidence). `deployments_count` excludes cancelled deployments. The meaning of a status is `internal/jobs/metrics/deploymentstatus`, shared with deployment failure rate and the deploy metrics. The evidence basis (`incident`, `status`, `both`) is derived from the sums by `changefailure.Evaluate`, not stored.
 - **Writer.** The daily metrics job, family `repo_user_commit` (`internal/jobs/metrics/daily/change_failure_native_clickhouse.go`). It loads the day's deployments and the incidents that started on the day with the loaders of the `work_graph_edges` family, and derives the links with that family's own extraction function. It does not read `work_graph_deployment_incident_edges` for the same day, because `work_graph_edges` runs after `repo_user_commit`. Today the extraction is heuristic only: an incident links to every deployment of its repository on its day.
 - **Incident ties.** Direct: a current, active `operational_service_repository_mappings` row for the incident's service. Via deployment: only for an incident with no direct tie, a stored link row with no `repo_id` ties the incident to the repository of its deployment. A deployment id that names more than one repository of the organization ties nothing; the writer counts and logs it. A stored link whose incident started on another UTC day than its deployment makes the deployment failed (native or heuristic by the link's source) on the deployment's day only; the incident is counted once, on its own start day. An incident with no start time belongs to no day and its links are not read.
-- **Link table key.** `work_graph_deployment_incident_edges` (migration `131_deployment_incident_edges_repo_key.sql`) has one row for each `(org_id, repo_id, deployment_id, incident_id)`; `repo_id` stays nullable and a row without one keys on the zero uuid. The key has no `source`, so a native row and a heuristic row for one pair are one row, and `version_rank` keeps the higher tier whatever the time (ranks come from `internal/jobs/workgraph/edges.ProvenanceRank`, the same as `work_graph_issue_pr`). `edge_id` names `(deployment, incident)` and not the repository, so two repositories that run one deployment id share an edge id: a reader dedups by `(edge_id, repo_id)`. The standing rule is class-level: an end with a native link gets no lower-tier link. Today every written row is heuristic: the extraction kernel has a native branch (`workgraphedges`, an incident row that carries a `deployment_id`), but the only caller passes none. The incident-side fallback (a native link on an incident suppresses heuristic links to other deployments) applies once a caller feeds that branch.
+- **Link table key.** `work_graph_deployment_incident_edges` (migration `131_deployment_incident_edges_repo_key.sql`) has one row for each `(org_id, repo_id, deployment_id, incident_id)`; `repo_id` stays nullable and a row without one keys on the zero uuid. The key has no `source`, so a native row and a heuristic row for one pair are one row, and `version_rank` keeps the higher tier whatever the time (ranks come from `internal/jobs/workgraph/linktier.Rank`, the same as `work_graph_issue_pr` and the team-repo ownership derivation). `edge_id` names `(deployment, incident)` and not the repository, so two repositories that run one deployment id share an edge id: a reader dedups by `(edge_id, repo_id)`. The standing rule is class-level: an end with a native link gets no lower-tier link. Today every written row is heuristic: the extraction kernel has a native branch (`workgraphedges`, an incident row that carries a `deployment_id`), but the only caller passes none. The incident-side fallback (a native link on an incident suppresses heuristic links to other deployments) applies once a caller feeds that branch.
 - **PR-to-commit link tier.** `work_graph_pr_commit` (migration `132_pr_commit_native_wins.sql`) is `ReplacingMergeTree(version_rank)` over the same key as before, `(org_id, repo_id, pr_number, commit_hash)`. `version_rank` is the `work_graph_issue_pr` expression over `provenance` and `last_synced`, so a native row stays served when the text tier stamps a later row for the same pair, and within a tier the newer row wins. The native effect inspector (`inspectPRCommitLink`) counts a pair as applied only when the served row is native.
 - **Missing is not zero.** A repository and day with no deployment and no incident gets no row. A repository with counts but no commit or pull-request activity gets a row here and none in `repo_metrics_daily`.
 - **Reader contract.** Keep the newest `computed_at` per `(org_id, repo_id, day)`, sum the counts over the view's window and repositories (a team is its owned repositories), then apply the rule. A reader that serves the rate reads the sums and the number of stored rows (`changefailure.ViewSumsSQL`) and calls `changefailure.Evaluate`, which returns the value, its state and the weakest contributing link tier together: no stored row is no state, no deployments is not applicable, no incident and no deployment with a final status is unknown, else failed / D with incident evidence and failed-by-status / K without it (`changefailure.ApplyRule`). The three unknown answers (not collected, no deployments in window, deployments without outcome) are `Outcome.UnknownReason`. `/explain` (`rate_state`, `link_tier`, `evidence_basis`), Home and the operating review (`rateState`) serve the state, so the three empty answers stay apart at the surface. A reader that only ranks or draws (contributors, drivers, the Home series, flow opportunities, report charts) uses `changefailure.WindowRateSQL`, which is `NULL` for every state that is not measured, and leaves such a group or bucket out. Never average daily rates.
@@ -395,6 +395,7 @@ flowchart TB
     PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership"| TEAM
     DEP -.->|"BELONGS_TO_REPOSITORY<br/>deployments.repo_id"| REPO
     DEP -.->|"CORRELATED_WITH_INCIDENT<br/>work_graph_deployment_incident_edges"| INC
+    ISSUE -.->|"PART_OF<br/>work_items.parent_id, the parent issue"| ISSUE
     REPO x-.-|"not the tree: the issue's<br/>own work_items.repo_id"| ISSUE
     ISSUE -.-x|"not ownership: OWNED_BY_TEAM<br/>work_item_team_attributions"| TEAM
 ```
@@ -406,11 +407,12 @@ specific to one provider.
   its pull requests; a project's repositories are reached through its issues'
   linked pull requests.
 - **Dotted edges** hang off the tree: a team owns a repository or a project,
-  a deployment belongs to a repository, and a deployment is correlated with an
+  a deployment belongs to a repository, a deployment is correlated with an
   incident (one row in `work_graph_deployment_incident_edges` for each
   repository, deployment and incident; tier ranked **native > explicit_text >
-  heuristic** by `edges.ProvenanceRank`, `source` is the tier; two repositories
-  that run one deployment id each hold their own row).
+  heuristic** by `linktier.Rank`, `source` is the tier; two repositories
+  that run one deployment id each hold their own row), and an issue is part of
+  its parent issue (`PART_OF`).
 - **Crossed edges** exist but are never tree membership.
 
 Two rules hold for every read of the tree:
@@ -453,6 +455,19 @@ Two rules hold for every read of the tree:
    to. The id each provider writes, and the one provider that does not hold
    the rule yet, are listed in
    [Work-item team attribution](team-attribution.md), section 0.4b.
+
+4. **An issue has at most one parent issue, and one open `PART_OF` edge.**
+   The edge comes from `work_items.parent_id`. Only Linear
+   (`linear:<IDENT>`) and Jira (`jira:<KEY>`) write it; both keys are unique in
+   the provider's own namespace, so the parent is the one work item of that
+   exact id anywhere in the org (the same exact-id match the investment
+   hierarchy cascade walks, `internal/jobs/investment/hierarchycascade.go`).
+   An id held by two or more work items names no parent and gives no edge. A
+   prefix with no key (`jira:`) is no parent. Any other id, a number that is
+   unique only inside one repository, names the work item of that id in the
+   issue's own repository and nothing else. When the parent changes, is
+   cleared, or stops resolving, the graph drops the old edge: it never holds
+   two open `PART_OF` edges for one issue.
 
 How each provider captures the pull request ↔ issue link is described in
 [Work-item team attribution](team-attribution.md), section 2.

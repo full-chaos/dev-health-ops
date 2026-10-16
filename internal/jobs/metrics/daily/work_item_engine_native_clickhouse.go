@@ -95,6 +95,66 @@ ORDER BY work_item_id`
 	return items, nil
 }
 
+// LoadWorkItemLinkedPullRequests reads the pull requests linked to the given work items through
+// work_graph_issue_pr, with each pull request's size from git_pull_requests, keyed by work item id.
+//
+// # The relation
+//
+// The entity tree: an item reaches pull requests only through work_graph_issue_pr rows (all three provenance
+// tiers count; the tier is returned so a consumer can name it). Never an item's own repository column, never an
+// issue-key prefix. The repo_id of a link row is the pull request's repository, so the pull request is found by
+// (link repo_id, pr_number), whatever repository the item itself is stored under.
+//
+// Both tables are ReplacingMergeTree(last_synced): FINAL is a complete dedup. A link whose pull request row is
+// missing, or holds no additions or deletions, comes back with nil sizes: the size is unknown, not zero.
+func LoadWorkItemLinkedPullRequests(
+	ctx context.Context, conn repositoryRows, organizationID string, workItemIDs []string,
+) (map[string][]workitemengine.LinkedPR, error) {
+	if conn == nil || strings.TrimSpace(organizationID) == "" {
+		return nil, ErrInvalidState
+	}
+	linked := map[string][]workitemengine.LinkedPR{}
+	if len(workItemIDs) == 0 {
+		return linked, nil
+	}
+	rows, err := conn.Query(ctx, `
+SELECT l.work_item_id, l.repo_id, l.pr_number, l.provenance, pr.additions, pr.deletions
+FROM (
+    SELECT work_item_id, repo_id, pr_number, provenance
+    FROM work_graph_issue_pr FINAL
+    WHERE org_id = ? AND work_item_id IN (?)
+) AS l
+LEFT JOIN (
+    SELECT repo_id, number, additions, deletions
+    FROM git_pull_requests FINAL
+    WHERE org_id = ?
+      AND repo_id IN (SELECT repo_id FROM work_graph_issue_pr FINAL WHERE org_id = ? AND work_item_id IN (?))
+) AS pr ON pr.repo_id = l.repo_id AND pr.number = l.pr_number
+ORDER BY l.work_item_id, l.repo_id, l.pr_number`,
+		organizationID, workItemIDs, organizationID, organizationID, workItemIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load work item linked pull requests: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			workItemID string
+			link       workitemengine.LinkedPR
+			additions  *uint32
+			deletions  *uint32
+		)
+		if err := rows.Scan(&workItemID, &link.RepoID, &link.Number, &link.Provenance, &additions, &deletions); err != nil {
+			return nil, fmt.Errorf("scan work item linked pull request: %w", err)
+		}
+		link.Additions, link.Deletions = additions, deletions
+		linked[workItemID] = append(linked[workItemID], link)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate work item linked pull requests: %w", err)
+	}
+	return linked, nil
+}
+
 // workItemEngineTeamResolver answers from the stored primary attribution rows
 // (work_item_team_attributions, is_primary = 1), as every other work-item
 // daily family does. An item with no row, or with an empty team id, has no

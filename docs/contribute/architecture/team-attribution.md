@@ -764,7 +764,16 @@ project's work items by `(provider, project_id)`; no reader has to join on `proj
 | jira | native project id (`10001`) | the same id | the same id | one id |
 | linear | raw project UUID | the same UUID | the same UUID | one id |
 | github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`) | the same board id | one id |
-| gitlab | `{org_id}:gitlab:{native id}` | the project PATH | none: a GitLab project is this schema's repository | **known gap** (CHAOS-8883): ownership and catalog meet only through `project_key` |
+| gitlab | `{org_id}:gitlab:{native id}` | the same id (CHAOS-8883); the path is `project_key` | the project PATH (until CHAOS-3383 PR 3) | one id for catalog and ownership; a GitLab work item joins its ownership through `teamattribution.ProjectOwnershipJoinID` (the row's `project_key`) |
+
+GitLab ownership rows written before CHAOS-8883 hold the path as `project_id`. The next GitLab team-catalog sync
+moves an open one to the catalog id of the same project: the listed project at that path, or, when the store has seen
+exactly one project id at the path (`projects.project_key`, or `repos.repo` with `repos.provider_repo_id`), that
+project wherever it is listed now (a rename before the sync). The catalog-keyed row takes the grant's first instant,
+and the path row it replaces (and any duplicate of it) becomes an empty-interval tombstone (valid_to = valid_from, as
+the repository-ownership supersede writes), so at every instant exactly one row of the grant is valid. It does not move a row to the listed project at its path when the store has
+seen another project id at that path (a path a new project took over). That row is closed at the run, and the new
+project's grant starts at the run.
 
 Jira before this change: the three team-catalog writers (project-as-team, the legacy
 `jira_project_ops_team_links` carry-forward, Atlassian Teams) built the id from the project KEY
@@ -2327,8 +2336,12 @@ rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). S
 selects projects (`GitLabTeamCatalogCollector.CollectTeamCatalog`, `internal/providersync/gitlab_team_catalog_route.go`)
 asks `GitLabTeamCatalogClickHouseEffects.SnapshotOwnership` for the rows of the ownership write: the grants the group
 `/projects` listings returned, plus a closing version (the same sort key written again with `valid_to` set) of every
-open row GitLab no longer returns. It is the same one rule as GitHub and Jira, `PlanOwnershipSnapshot` (the project path
-is the project id); only the open-row read and the listed-team set are GitLab's. Scope of a close, all of it required:
+open row GitLab no longer returns. It is the same one rule as GitHub and Jira, `PlanOwnershipSnapshot` (the project id
+is the catalog id `{org}:gitlab:{native id}`, CHAOS-8883); only the open-row read and the listed-team set are GitLab's.
+The absence question for a catalog-keyed row asks GitLab by the numeric id (`GET /projects/:id`, a rename does not
+hide it): the project still in the group's namespace holds the row; another namespace, or GitLab's own
+`404 Project Not Found`, proves it gone; any other answer proves nothing. A row of the older path form is asked by
+its path as before. Scope of a close, all of it required:
 
 - org = the run's org, `provider = 'gitlab'`, `source = 'provider_access'`. A row of another org, another source
   (`manual`) or another provider (jira, linear, github) is never read and never closed, even with the same team id and

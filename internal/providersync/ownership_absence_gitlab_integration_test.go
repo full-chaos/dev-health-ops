@@ -49,7 +49,12 @@ func newGitLabGrantServer(t *testing.T, projects []string) *gitlabGrantServer {
 	t.Helper()
 	fake := &gitlabGrantServer{projects: projects}
 	payload := func(name string) map[string]any {
-		return map[string]any{"id": 1000 + len(name), "path_with_namespace": "org/" + name, "name": name, "archived": false,
+		// One numeric id per project, as GitLab gives: ownership rows are keyed by it.
+		id, err := strconv.ParseUint(testGitLabNativeProjectID("org/"+name), 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string]any{"id": id, "path_with_namespace": "org/" + name, "name": name, "archived": false,
 			"web_url": "https://gitlab.example.com/org/" + name}
 	}
 	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +111,31 @@ func newGitLabGrantServer(t *testing.T, projects []string) *gitlabGrantServer {
 				fake.afterPageOne = nil
 			}
 			writeGitLabTeamCatalogJSON(t, w, out)
+		case func() string {
+			if id := strings.TrimPrefix(path, "/api/v4/projects/"); id != path && !strings.Contains(id, "/") {
+				return path
+			}
+			return ""
+		}():
+			// The absence question for one grant keyed by the catalog id:
+			// GET /projects/:id, answered from the group's current projects.
+			fake.searches++
+			if fake.searchStatus != 0 {
+				http.Error(w, "simulated failure", fake.searchStatus)
+				return
+			}
+			id := strings.TrimPrefix(path, "/api/v4/projects/")
+			for _, name := range fake.projects {
+				if testGitLabNativeProjectID("org/"+name) == id {
+					project := payload(name)
+					project["namespace"] = map[string]any{"full_path": "org"}
+					writeGitLabTeamCatalogJSON(t, w, project)
+					return
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"404 Project Not Found"}`))
 		default:
 			// The project milestones are read for the target date, which this
 			// test does not follow: the project reads as unread.

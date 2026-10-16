@@ -30,7 +30,6 @@ func TestProjectIDConstructorsAreByteEqualToTheHandBuiltForms(t *testing.T) {
 				{"jira native id", func() (ProjectID, bool) { return JiraProjectID(native) }, native},
 				{"linear native id", func() (ProjectID, bool) { return LinearProjectID(native) }, native},
 				{"gitlab catalog id", func() (ProjectID, bool) { return GitLabCatalogProjectID(org, native) }, org + ":gitlab:" + native},
-				{"gitlab path (named exception)", func() (ProjectID, bool) { return GitLabPathOwnershipProjectID("grp/sub/" + native) }, "grp/sub/" + native},
 				{"github repo (named exception)", func() (ProjectID, bool) { return GitHubRepoProjectID("Acme/" + native) }, "Acme/" + native},
 				{"linear team key (named exception)", func() (ProjectID, bool) { return LinearTeamKeyProjectID(org, "ENG"+native) }, org + ":linear:" + "ENG" + native},
 			}
@@ -52,7 +51,6 @@ func TestProjectIDRefusesABlankInput(t *testing.T) {
 		"linear":              func() (ProjectID, bool) { return LinearProjectID("") },
 		"gitlab catalog":      func() (ProjectID, bool) { return GitLabCatalogProjectID(pidOrg, "\t") },
 		"gitlab catalog org":  func() (ProjectID, bool) { return GitLabCatalogProjectID("", "42") },
-		"gitlab path":         func() (ProjectID, bool) { return GitLabPathOwnershipProjectID("") },
 		"github repo":         func() (ProjectID, bool) { return GitHubRepoProjectID("  ") },
 		"linear team key":     func() (ProjectID, bool) { return LinearTeamKeyProjectID(pidOrg, "") },
 		"linear team key org": func() (ProjectID, bool) { return LinearTeamKeyProjectID("", "ENG") },
@@ -124,9 +122,9 @@ func TestProjectIDProducersMatchTheHandBuiltFormsAcrossProviders(t *testing.T) {
 	if !ok || project.ID.String() != pidOrg+":gitlab:42" {
 		t.Errorf("gitlab projects.id = %q ok=%v, want %q", project.ID.String(), ok, pidOrg+":gitlab:42")
 	}
-	ownership, ok := normalizeGitLabOwnershipRow(pidOrg, "gl:grp", "grp/api", gitlabTeamCatalogBaseSpecificity, now)
-	if !ok || ownership.ProjectID.String() != "grp/api" {
-		t.Errorf("gitlab ownership project_id = %q ok=%v, want the path (named exception until CHAOS-8883)", ownership.ProjectID.String(), ok)
+	ownership, ok := normalizeGitLabOwnershipRow(pidOrg, "gl:grp", "42", "grp/api", gitlabTeamCatalogBaseSpecificity, now)
+	if !ok || ownership.ProjectID.String() != project.ID.String() || ownership.ProjectKey == nil || *ownership.ProjectKey != "grp/api" {
+		t.Errorf("gitlab ownership project_id = %q key=%v ok=%v, want the projects.id %q and the path as project_key", ownership.ProjectID.String(), ownership.ProjectKey, ok, project.ID.String())
 	}
 
 	repoFact := OwnershipSnapshotRow{TeamID: "github:t", ProjectID: mustID(GitHubRepoProjectID("Acme/API")), Source: "x", ValidFrom: now}

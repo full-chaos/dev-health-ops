@@ -98,11 +98,22 @@ func loadMatrixContract(t *testing.T) matrixContract {
 
 type ownershipRow struct {
 	TeamID, Provider, RepoID, RepoName, ProjectID, Source string
-	ValidFrom                                             time.Time
-	ValidTo                                               *time.Time
+	// JoinID is the work-item project_id a project ownership row joins on,
+	// derived by the oracle from the projects catalog (gitlabOwnershipJoinIDs),
+	// not by the code under test; empty means ProjectID.
+	JoinID    string
+	ValidFrom time.Time
+	ValidTo   *time.Time
 	// IsPrimary, Specificity and Priority are the row's rank (repository and project ownership).
 	IsPrimary             uint8
 	Specificity, Priority int
+}
+
+func (row ownershipRow) joinID() string {
+	if row.JoinID != "" {
+		return row.JoinID
+	}
+	return row.ProjectID
 }
 
 func (row ownershipRow) validAt(at time.Time) bool {
@@ -135,6 +146,7 @@ type matrixFacts struct {
 	memberships []ownershipRow // RepoName holds the member id
 	repos       map[string]matrixRepo
 	projects    map[string]string // id -> provider
+	projectKeys map[string]string // id -> project_key of the projects catalog row
 	items       map[string]matrixItem
 	prs         map[string]matrixPR // "<repo_id>#<number>"
 	links       []matrixLink
@@ -180,7 +192,7 @@ func matrixQuery(ctx context.Context, t *testing.T, conn driver.Conn, query stri
 func loadMatrixFacts(ctx context.Context, t *testing.T, conn driver.Conn, org string, now time.Time) matrixFacts {
 	t.Helper()
 	facts := matrixFacts{
-		org: org, now: now, teams: map[string]matrixTeam{}, repos: map[string]matrixRepo{}, projects: map[string]string{},
+		org: org, now: now, teams: map[string]matrixTeam{}, repos: map[string]matrixRepo{}, projects: map[string]string{}, projectKeys: map[string]string{},
 		items: map[string]matrixItem{}, prs: map[string]matrixPR{}, deps: map[string][]string{}, attribution: map[string][]attributionRow{},
 		authors: map[string]string{},
 	}
@@ -236,12 +248,13 @@ FROM team_memberships FINAL WHERE org_id = ?`, args, func(rows driver.Rows) erro
 		facts.repos[id] = repo
 		return nil
 	})
-	matrixQuery(ctx, t, conn, `SELECT id, provider FROM projects FINAL WHERE org_id = ?`, args, func(rows driver.Rows) error {
-		var id, provider string
-		if err := rows.Scan(&id, &provider); err != nil {
+	matrixQuery(ctx, t, conn, `SELECT id, provider, ifNull(project_key, '') FROM projects FINAL WHERE org_id = ?`, args, func(rows driver.Rows) error {
+		var id, provider, key string
+		if err := rows.Scan(&id, &provider, &key); err != nil {
 			return err
 		}
 		facts.projects[id] = provider
+		facts.projectKeys[id] = key
 		return nil
 	})
 	matrixQuery(ctx, t, conn, `SELECT work_item_id, provider, type, status, project_id, toString(repo_id), native_team_key, reporter, assignees, created_at, completed_at
@@ -304,7 +317,24 @@ WHERE w.org_id = ?`, []any{org, org}, func(rows driver.Rows) error {
 		facts.attribution[item] = append(facts.attribution[item], row)
 		return nil
 	})
+	gitlabOwnershipJoinIDs(&facts)
 	return facts
+}
+
+// gitlabOwnershipJoinIDs gives each GitLab project ownership row the path its
+// work items carry. The oracle reads it from the projects catalog row the
+// ownership id names, not from the ownership row or from the reader under
+// test: a GitLab work item names its project by the path, the ownership row by
+// the catalog id. A row whose id the catalog does not hold joins on its id.
+func gitlabOwnershipJoinIDs(facts *matrixFacts) {
+	for index, row := range facts.projOwners {
+		if row.Provider != "gitlab" || facts.projects[row.ProjectID] != "gitlab" {
+			continue
+		}
+		if key := facts.projectKeys[row.ProjectID]; key != "" {
+			facts.projOwners[index].JoinID = key
+		}
+	}
 }
 
 // ---- the contract's ownership rule, written once, independent of every reader ----
@@ -344,8 +374,10 @@ func (facts matrixFacts) ownersAt(rows []ownershipRow, at time.Time) map[string]
 
 // isTeamKeyProject is the project a Linear team key stands for ("<org>:linear:<key>", the team-key
 // ownership kind): the team's own key, not a project of the projects catalog.
+// isTeamKeyProject is an ownership row keyed by a team key ({org}:linear:{key})
+// rather than a project; a GitLab catalog id ({org}:gitlab:{n}) is a project.
 func (facts matrixFacts) isTeamKeyProject(projectID string) bool {
-	return strings.HasPrefix(projectID, facts.org+":")
+	return strings.HasPrefix(projectID, facts.org+":") && !strings.HasPrefix(projectID, facts.org+":gitlab:")
 }
 
 func (facts matrixFacts) repoOwnerRows(repoID string) []ownershipRow {
@@ -362,7 +394,7 @@ func (facts matrixFacts) repoOwnerRows(repoID string) []ownershipRow {
 func (facts matrixFacts) projectOwnerRows(projectID string) []ownershipRow {
 	var out []ownershipRow
 	for _, row := range facts.projOwners {
-		if projectID != "" && row.ProjectID == projectID {
+		if projectID != "" && row.joinID() == projectID {
 			out = append(out, row)
 		}
 	}
@@ -1050,22 +1082,22 @@ var matrixChecks = map[string]matrixCheck{
 	"project_ownership_starts_at_its_evidence": {"projects", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
 		seen := map[string]bool{}
 		for _, row := range f.projOwners {
-			if row.Provider != p || seen[row.ProjectID] || f.isTeamKeyProject(row.ProjectID) {
+			if row.Provider != p || seen[row.joinID()] || f.isTeamKeyProject(row.ProjectID) {
 				continue
 			}
 			var first time.Time
 			for _, item := range f.items {
-				if item.ProjectID == row.ProjectID && (first.IsZero() || item.CreatedAt.Before(first)) {
+				if item.ProjectID == row.joinID() && (first.IsZero() || item.CreatedAt.Before(first)) {
 					first = item.CreatedAt
 				}
 			}
 			if first.IsZero() {
 				continue
 			}
-			seen[row.ProjectID] = true
+			seen[row.joinID()] = true
 			r.Subjects++
 			var earliest time.Time
-			for _, candidate := range f.projectOwnerRows(row.ProjectID) {
+			for _, candidate := range f.projectOwnerRows(row.joinID()) {
 				if earliest.IsZero() || candidate.ValidFrom.Before(earliest) {
 					earliest = candidate.ValidFrom
 				}
@@ -1386,7 +1418,7 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 			for index := range rows {
 				var first time.Time
 				for _, item := range f.items {
-					if item.ProjectID == rows[index].ProjectID && (first.IsZero() || item.CreatedAt.Before(first)) {
+					if item.ProjectID == rows[index].joinID() && (first.IsZero() || item.CreatedAt.Before(first)) {
 						first = item.CreatedAt
 					}
 				}

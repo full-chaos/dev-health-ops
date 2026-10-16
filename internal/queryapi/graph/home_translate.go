@@ -23,6 +23,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/changefailureevidence"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 )
 
 // homeFiltersFromGraphQL maps the GraphQL FilterInput and HomeWindowInput
@@ -468,4 +470,29 @@ func intPtr(v *int64) *int {
 	}
 	n := int(*v)
 	return &n
+}
+
+// homeTileMeasure is the measure the investment tile is read in for this Home document: ISSUE_SIZE only when the
+// document selects, under reworkThemeAllocation, the measure and the whole sizing coverage (measure, sizingCoverage,
+// unsizedUnitCount, workUnitCount), so a client never receives issue-size percentages it cannot label (D6027);
+// every other document, and a call that is not a GraphQL resolution, gets COUNT.
+func homeTileMeasure(ctx context.Context) string {
+	if graphql.GetFieldContext(ctx) == nil || !graphql.HasOperationContext(ctx) {
+		return ""
+	}
+	selected := map[string]bool{}
+	for _, field := range graphql.CollectFieldsCtx(ctx, nil) {
+		if field.Name != "reworkThemeAllocation" {
+			continue
+		}
+		for _, inner := range graphql.CollectFields(graphql.GetOperationContext(ctx), field.Selections, nil) {
+			selected[inner.Name] = true
+		}
+	}
+	if selected["measure"] && selected["sizingCoverage"] && selected["unsizedUnitCount"] && selected["workUnitCount"] {
+		slog.DebugContext(ctx, "home: investment tile measure", "measure", investmentexplain.HomeTileSizedMeasure)
+		return investmentexplain.HomeTileSizedMeasure
+	}
+	slog.DebugContext(ctx, "home: investment tile measure", "measure", investmentexplain.HomeTileMeasure)
+	return ""
 }

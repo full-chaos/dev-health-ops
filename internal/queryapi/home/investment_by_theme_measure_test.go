@@ -42,10 +42,10 @@ func (*measureOneRow) Close() error      { return nil }
 
 // CHAOS-9622, CHAOS-9624 (D5999): the tile's allocation is the issue size of the units (1 when unsized), never their
 // effort_value; the churn_loc line stays the explicit lines-of-code figure.
-func TestInvestmentByThemeReadsTheIssueSizeMeasure(t *testing.T) {
+func TestInvestmentByThemeReadsTheIssueSizeMeasureWhenAsked(t *testing.T) {
 	client := &measureCapturingClient{}
 	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
-	if _, err := fetchInvestmentThemeAllocation(context.Background(), client, Filters{}, "org-1", day, day.AddDate(0, 0, 7), day); err != nil {
+	if _, err := fetchInvestmentThemeAllocation(context.Background(), client, Filters{TileMeasure: "ISSUE_SIZE"}, "org-1", day, day.AddDate(0, 0, 7), day); err != nil {
 		t.Fatal(err)
 	}
 	var theme string
@@ -65,5 +65,27 @@ func TestInvestmentByThemeReadsTheIssueSizeMeasure(t *testing.T) {
 	}
 	if !strings.Contains(theme, "AS churn_loc") {
 		t.Errorf("the explicit churn_loc line is gone:\n%s", theme)
+	}
+}
+
+// CHAOS-9624: by default the tile sums the work-unit COUNT; a request that does not ask for the sized tile never
+// reads a unit size.
+func TestInvestmentByThemeReadsTheCountMeasureByDefault(t *testing.T) {
+	client := &measureCapturingClient{}
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	if _, err := fetchInvestmentThemeAllocation(context.Background(), client, Filters{}, "org-1", day, day.AddDate(0, 0, 7), day); err != nil {
+		t.Fatal(err)
+	}
+	var theme string
+	for _, statement := range client.statements {
+		if strings.Contains(statement, "AS churn_loc") {
+			theme = statement
+		}
+		if strings.Contains(statement, "AS sized_units") {
+			t.Errorf("the default tile read the sizing coverage:\n%s", statement)
+		}
+	}
+	if !strings.Contains(theme, "toFloat64(sum(subcategory_kv.2 * 1.0 * 1.0)) AS value") || strings.Contains(theme, "unit_size_weight") {
+		t.Errorf("the default tile does not sum the COUNT:\n%s", theme)
 	}
 }

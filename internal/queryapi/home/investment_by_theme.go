@@ -15,7 +15,7 @@ import (
 
 // fetchInvestmentThemeAllocation is the Home tile "Investment by theme" (CHAOS-9195, D5933;
 // the wire field is still rework_theme_allocation): the work over the five canonical themes, in the
-// measure investmentexplain.HomeTileMeasure names (ISSUE_SIZE, CHAOS-9624, D5999: lines of code are
+// measure Filters.TileMeasure names (COUNT by default, investmentexplain.HomeTileMeasure; ISSUE_SIZE, investmentexplain.HomeTileSizedMeasure, when the caller serves the sizing coverage with it, CHAOS-9624, D5999: lines of code are
 // not a measure of effort), that the Jev categorization writes (work_unit_investments), NOT the legacy rule classifier's
 // investment_area keys (D5932: that classifier is removed; before this the tile showed two themes
 // covering 2.5% of the completed items on real data). It is the Investment page's own read
@@ -32,7 +32,11 @@ import (
 //
 // DECLARED DIVERGENCE from the reference (which read investment_metrics_daily).
 func fetchInvestmentThemeAllocation(ctx context.Context, client QueryClient, f Filters, orgID string, startDay, endDay time.Time, asOf time.Time) ([]ReworkThemeAllocation, error) {
-	return fetchThemeAllocationIn(ctx, client, f, orgID, startDay, endDay, asOf, investmentexplain.HomeTileMeasure)
+	measure := investmentexplain.HomeTileMeasure
+	if f.TileMeasure == investmentexplain.HomeTileSizedMeasure {
+		measure = f.TileMeasure
+	}
+	return fetchThemeAllocationIn(ctx, client, f, orgID, startDay, endDay, asOf, measure)
 }
 
 // fetchThemeAllocationIn is the tile read in one named measure. Under ISSUE_SIZE it also reads the sizing

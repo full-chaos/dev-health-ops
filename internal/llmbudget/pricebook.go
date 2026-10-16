@@ -14,45 +14,39 @@ import (
 // priced at the input rate where the provider lists no cache price, which
 // over-reserves and never under-bills.
 //
-// Sources (each row's version names its page and the page's own date):
-//   - anthropic: https://platform.claude.com/docs/en/about-claude/pricing,
-//     read 2026-10-16. claude-haiku-5-5 is priced by prompt length: a request
-//     over 100,000 input tokens (cache reads and writes included) pays the
-//     higher prices.
+// A model priced by prompt length has ONE row, at its most expensive tier:
+// the guard must never count a call below its bill (ruling D6042). A
+// scheduled price change has a second row from the change date, and the row
+// in effect at the call's time prices it.
+//
+// Sources, read 2026-10-16:
+//   - anthropic: https://platform.claude.com/docs/en/about-claude/pricing.
+//     claude-haiku-5-5 is priced by prompt length (over 100,000 input tokens,
+//     cache reads and writes included, pays 0.50 / 0.05 / 2.50 per MTok
+//     instead of 0.10 / 0.01 / 0.50); its row is the higher tier.
 //   - gemini: https://ai.google.dev/gemini-api/docs/pricing ("Last updated
-//     2026-10-15 UTC"), paid tier, standard. The page announces the dated
-//     price changes the rows below carry.
+//     2026-10-15 UTC"), paid tier, standard, with the dated price changes the
+//     page announces.
 //   - qwen on DashScope: https://www.alibabacloud.com/help/en/model-studio/model-pricing
 //     (last updated 2026-10-15). International (Singapore) and Chinese
-//     mainland (Beijing) are priced apart by host; a request is billed whole at
-//     the tier its input tokens fall in. The page lists no qwen-plus cache
-//     price.
+//     mainland (Beijing) are priced apart by host. qwen-plus is priced by the
+//     request's input tokens; each row is its host's top tier (Beijing over
+//     256K, Singapore over 256K). The page lists no qwen-plus cache price.
 //   - qwen on Cloudflare Workers AI: https://developers.cloudflare.com/workers-ai/platform/pricing/
 //     (last updated 2026-10-15). The daily free neurons are not deducted.
 
-// priceTier covers the requests with at most maxInput input tokens; maxInput
-// 0 has no ceiling. Tiers are in ascending order.
-type priceTier struct {
-	maxInput int64
-	rates    Rates
-}
+// ListPricingVersion is the version of this list, stored with each
+// reservation it prices. The OpenAI book keeps PricingVersion.
+const ListPricingVersion = "provider-list-2026-10-16.v1"
 
 type listPriceRow struct {
 	provider string
 	// hosts are the official API hosts the row's prices apply to.
-	hosts   []string
-	model   string
-	from    time.Time
-	version string
-	tiers   []priceTier
+	hosts []string
+	model string
+	from  time.Time
+	rates Rates
 }
-
-const (
-	anthropicPricing = "anthropic-public-2026-10-16.v1"
-	geminiPricing    = "gemini-public-2026-10-15.v1"
-	dashscopePricing = "dashscope-public-2026-10-15.v1"
-	workersAIPricing = "workers-ai-public-2026-10-15.v1"
-)
 
 var (
 	anthropicHosts      = []string{"api.anthropic.com"}
@@ -70,37 +64,27 @@ var (
 	}
 )
 
-func flat(input, cached, output int64) []priceTier {
-	return []priceTier{{rates: Rates{Input: input, CachedInput: cached, Output: output}}}
+func listRates(input, cached, output int64) Rates {
+	return Rates{Input: input, CachedInput: cached, Output: output}
 }
 
 var listPrices = []listPriceRow{
-	{provider: "anthropic", hosts: anthropicHosts, model: "claude-haiku-5-5", version: anthropicPricing, tiers: []priceTier{
-		{maxInput: 100_000, rates: Rates{Input: 100_000, CachedInput: 10_000, Output: 500_000}},
-		{rates: Rates{Input: 500_000, CachedInput: 50_000, Output: 2_500_000}},
-	}},
-	{provider: "anthropic", hosts: anthropicHosts, model: "claude-sonnet-5-5", version: anthropicPricing, tiers: flat(2_000_000, 100_000, 10_000_000)},
-	{provider: "anthropic", hosts: anthropicHosts, model: "claude-opus-5-5", version: anthropicPricing, tiers: flat(4_000_000, 200_000, 20_000_000)},
+	{provider: "anthropic", hosts: anthropicHosts, model: "claude-haiku-5-5", rates: listRates(500_000, 50_000, 2_500_000)},
+	{provider: "anthropic", hosts: anthropicHosts, model: "claude-sonnet-5-5", rates: listRates(2_000_000, 100_000, 10_000_000)},
+	{provider: "anthropic", hosts: anthropicHosts, model: "claude-opus-5-5", rates: listRates(4_000_000, 200_000, 20_000_000)},
 
-	{provider: "gemini", hosts: geminiHosts, model: "gemini-3.8-flash", version: geminiPricing, tiers: flat(750_000, 75_000, 3_750_000)},
-	{provider: "gemini", hosts: geminiHosts, model: "gemini-3.8-flash", from: utcDay(2027, 1, 1), version: geminiPricing, tiers: flat(1_500_000, 150_000, 7_500_000)},
-	{provider: "gemini", hosts: geminiHosts, model: "gemini-4-argon", version: geminiPricing, tiers: flat(2_000_000, 100_000, 10_000_000)},
-	{provider: "gemini", hosts: geminiHosts, model: "gemini-4-argon", from: utcDay(2026, 12, 1), version: geminiPricing, tiers: flat(4_000_000, 200_000, 20_000_000)},
-	{provider: "gemini", hosts: geminiHosts, model: "gemini-3.5-flash-lite", version: geminiPricing, tiers: flat(300_000, 30_000, 2_500_000)},
+	{provider: "gemini", hosts: geminiHosts, model: "gemini-3.8-flash", rates: listRates(750_000, 75_000, 3_750_000)},
+	{provider: "gemini", hosts: geminiHosts, model: "gemini-3.8-flash", from: utcDay(2027, 1, 1), rates: listRates(1_500_000, 150_000, 7_500_000)},
+	{provider: "gemini", hosts: geminiHosts, model: "gemini-4-argon", rates: listRates(2_000_000, 100_000, 10_000_000)},
+	{provider: "gemini", hosts: geminiHosts, model: "gemini-4-argon", from: utcDay(2026, 12, 1), rates: listRates(4_000_000, 200_000, 20_000_000)},
+	{provider: "gemini", hosts: geminiHosts, model: "gemini-3.5-flash-lite", rates: listRates(300_000, 30_000, 2_500_000)},
 
-	{provider: "qwen", hosts: dashscopeChinaHosts, model: "qwen-plus", version: dashscopePricing, tiers: []priceTier{
-		{maxInput: 128_000, rates: Rates{Input: 115_000, CachedInput: 115_000, Output: 287_000}},
-		{maxInput: 256_000, rates: Rates{Input: 345_000, CachedInput: 345_000, Output: 2_868_000}},
-		{rates: Rates{Input: 689_000, CachedInput: 689_000, Output: 6_881_000}},
-	}},
-	{provider: "qwen", hosts: dashscopeIntlHosts, model: "qwen-plus", version: dashscopePricing, tiers: []priceTier{
-		{maxInput: 256_000, rates: Rates{Input: 400_000, CachedInput: 400_000, Output: 1_200_000}},
-		{rates: Rates{Input: 1_200_000, CachedInput: 1_200_000, Output: 3_600_000}},
-	}},
-	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwen3-30b-a3b-fp8", version: workersAIPricing, tiers: flat(51_000, 51_000, 335_000)},
-	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwen3.8-27b", version: workersAIPricing, tiers: flat(450_000, 450_000, 3_200_000)},
-	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwq-32b", version: workersAIPricing, tiers: flat(660_000, 660_000, 1_000_000)},
-	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwen2.5-coder-32b-instruct", version: workersAIPricing, tiers: flat(660_000, 660_000, 1_000_000)},
+	{provider: "qwen", hosts: dashscopeChinaHosts, model: "qwen-plus", rates: listRates(689_000, 689_000, 6_881_000)},
+	{provider: "qwen", hosts: dashscopeIntlHosts, model: "qwen-plus", rates: listRates(1_200_000, 1_200_000, 3_600_000)},
+	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwen3-30b-a3b-fp8", rates: listRates(51_000, 51_000, 335_000)},
+	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwen3.8-27b", rates: listRates(450_000, 450_000, 3_200_000)},
+	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwq-32b", rates: listRates(660_000, 660_000, 1_000_000)},
+	{provider: "qwen", hosts: workersAIHosts, model: "@cf/qwen/qwen2.5-coder-32b-instruct", rates: listRates(660_000, 660_000, 1_000_000)},
 }
 
 func utcDay(year int, month time.Month, day int) time.Time {
@@ -108,32 +92,21 @@ func utcDay(year int, month time.Month, day int) time.Time {
 }
 
 // Price is the price book's answer for one provider, model and endpoint at
-// one moment: the rates by input size, and the version of the list they come
-// from (stored with each reservation).
+// one moment: its rates, and the version of the list they come from.
 type Price struct {
 	Version string
-	tiers   []priceTier
-}
-
-// RatesFor is the rates of a request with this many input tokens.
-func (p *Price) RatesFor(inputTokens int64) Rates {
-	for _, tier := range p.tiers {
-		if tier.maxInput == 0 || inputTokens <= tier.maxInput {
-			return tier.rates
-		}
-	}
-	return p.tiers[len(p.tiers)-1].rates
+	Rates   Rates
 }
 
 // PriceAt prices a call made at the moment at: the OpenAI book (PriceRates,
 // unchanged) or a provider's list price, nil when neither prices it.
 func PriceAt(provider, model, baseURL string, at time.Time) (*Price, error) {
-	rates, err := PriceRates(provider, model, baseURL)
+	openAI, err := PriceRates(provider, model, baseURL)
 	if err != nil {
 		return nil, err
 	}
-	if rates != nil {
-		return &Price{Version: PricingVersion, tiers: []priceTier{{rates: *rates}}}, nil
+	if openAI != nil {
+		return &Price{Version: PricingVersion, Rates: *openAI}, nil
 	}
 	normalizedProvider := pythonparity.Lower(pythonparity.Strip(provider))
 	normalized := pythonparity.Lower(pythonparity.Strip(model))
@@ -150,7 +123,7 @@ func PriceAt(provider, model, baseURL string, at time.Time) (*Price, error) {
 	if found == nil {
 		return nil, nil
 	}
-	return &Price{Version: found.version, tiers: found.tiers}, nil
+	return &Price{Version: ListPricingVersion, Rates: found.rates}, nil
 }
 
 // officialHost reports whether baseURL is one of hosts over https; an empty

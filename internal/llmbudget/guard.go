@@ -156,7 +156,7 @@ func CostMicroUSD(provider, model, baseURL string, input, output, cached int64) 
 }
 
 // CostMicroUSDAt is CostMicroUSD for a call made at the moment at, at the
-// rates of the input-size tier the call falls in.
+// rates in effect then.
 func CostMicroUSDAt(provider, model, baseURL string, input, output, cached int64, at time.Time) (*int64, error) {
 	price, err := PriceAt(provider, model, baseURL, at)
 	if err != nil || price == nil {
@@ -165,7 +165,7 @@ func CostMicroUSDAt(provider, model, baseURL string, input, output, cached int64
 	if input < 0 || output < 0 || cached < 0 || cached > input {
 		return nil, nil
 	}
-	rates := price.RatesFor(input)
+	rates := price.Rates
 	numerator := new(big.Int).Mul(big.NewInt(input-cached), big.NewInt(rates.Input))
 	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(cached), big.NewInt(rates.CachedInput)))
 	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(output), big.NewInt(rates.Output)))
@@ -202,8 +202,6 @@ func (g Guard) RefuseUnderBudget(ctx context.Context) error {
 // open and returns the usage the provider reported.
 func (g Guard) Run(ctx context.Context, call Call, invoke func(context.Context) (Usage, error)) error {
 	now := g.now()
-	// The input bound selects the highest tier the call can reach, so the
-	// reservation never falls below what the call is billed.
 	maxCost, err := CostMicroUSDAt(g.Provider, g.Model, g.BaseURL, max(call.MaxInputTokens, 0), max(call.MaxOutputTokens, 0), 0, now)
 	if err != nil {
 		return accounting("BYO LLM budget reservation is temporarily unavailable.", err)

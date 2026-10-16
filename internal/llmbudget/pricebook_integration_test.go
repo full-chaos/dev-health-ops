@@ -28,15 +28,15 @@ func TestPostgresListPricedCallStoresItsListVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 1000 x 0.75 + 1000 x 3.75 reserved; 1000 x 0.75 + 200 x 3.75 billed.
-	if version != geminiPricing || reserved != 4500 || actual != 1500 {
-		t.Fatalf("row version %q reserved %d actual %d, want %q 4500 1500", version, reserved, actual, geminiPricing)
+	if version != ListPricingVersion || reserved != 4500 || actual != 1500 {
+		t.Fatalf("row version %q reserved %d actual %d, want %q 4500 1500", version, reserved, actual, ListPricingVersion)
 	}
 	status, err := Compute(context.Background(), pool, guard.Lookup, testOrg,
 		Input{Provider: "gemini", Model: "gemini-3.8-flash", RawLimit: strPtr("100000")}, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.PricingVersion == nil || *status.PricingVersion != geminiPricing || status.Used.Int64() != 1500 {
-		t.Fatalf("status version %v used %v, want %s 1500", status.PricingVersion, status.Used, geminiPricing)
+	if status.PricingVersion == nil || *status.PricingVersion != ListPricingVersion || status.Used.Int64() != 1500 {
+		t.Fatalf("status version %v used %v, want %s 1500", status.PricingVersion, status.Used, ListPricingVersion)
 	}
 }

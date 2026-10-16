@@ -29,10 +29,10 @@ func TestBudgetedHostedProvidersSettleAtTheListPrice(t *testing.T) {
 	}{
 		// gemini-3.8-flash before 2027: 750000 in, 3750000 out per MTok.
 		{ProviderKindGemini, "gemini-3.8-flash", `{"choices":[{"message":{"role":"assistant","content":"{\"ok\":true}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":200}}`, 1500},
-		// qwen-plus on DashScope's default (China) endpoint, under 128K: 115000 in, 287000 out.
-		{ProviderKindQwen, "qwen-plus", `{"choices":[{"message":{"role":"assistant","content":"{\"ok\":true}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":200}}`, 173},
-		// claude-haiku-5-5 under 100k: input_tokens 900 + cache read 100 = 1000 input, 100 at 10000.
-		{ProviderKindAnthropic, "claude-haiku-5-5", `{"content":[{"type":"text","text":"{\"ok\":true}"}],"stop_reason":"end_turn","usage":{"input_tokens":900,"cache_read_input_tokens":100,"output_tokens":200}}`, 191},
+		// qwen-plus on DashScope's default (Beijing) endpoint, one row at its top tier: 689000 in, 6881000 out.
+		{ProviderKindQwen, "qwen-plus", `{"choices":[{"message":{"role":"assistant","content":"{\"ok\":true}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":200}}`, 2066},
+		// claude-haiku-5-5 at its top tier: input_tokens 900 + cache read 100 = 1000 input, 100 at 50000.
+		{ProviderKindAnthropic, "claude-haiku-5-5", `{"content":[{"type":"text","text":"{\"ok\":true}"}],"stop_reason":"end_turn","usage":{"input_tokens":900,"cache_read_input_tokens":100,"output_tokens":200}}`, 955},
 	} {
 		t.Run(string(c.kind), func(t *testing.T) {
 			var bodyBytes int64

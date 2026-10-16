@@ -400,7 +400,7 @@ internal/queryapi/people/metricqueries.go|fetchPersonMetricValue|*uint64,*float6
 internal/queryapi/people/search.go|BuildSearchResponse|*string,*time.Time|d71e6f4a1e39|not-describable
 internal/queryapi/people/summary.go|fetchPersonCollaboration|*string,*string,*float64|d3c2e6e50c4f|not-describable
 internal/queryapi/producttelemetry/platform.go|LoadOrgNames|*string,*string,*string|64c4ca805d17|not-describable
-internal/queryapi/quadrant/quadrant.go|scanMetricRows|*time.Time,*string,*string,*float64|7f3cf34e2615|statement-not-static
+internal/queryapi/quadrant/quadrant.go|scanMetricRows|*time.Time,*string,*string,*float64|433c0a3205e2|statement-not-static
 internal/queryapi/reports/reports.go|scanCount|*int64|8d2d39db7d2b|not-describable
 internal/queryapi/reports/reports.go|scanReportRun|*string,*string,*string,**time.Time,**time.Time,**float64,**string,**string,**string,**string,*string,*time.Time|0121a67bb651|not-describable
 internal/queryapi/reports/reports.go|scanSavedReport|*string,*string,*string,**string,**string,*bool,**string,**string,**string,*bool,**time.Time,**string,*time.Time,*time.Time,**string|835998e4481b|not-describable

@@ -48,7 +48,9 @@ def _setup_steps() -> list[tuple[str, str, str, dict]]:
                 uses = str(step.get("uses", ""))
                 match = re.match(r"docker/(setup-buildx|setup-qemu)-action@", uses)
                 if match:
-                    found.append((path.name, job_name, match.group(1), step.get("with") or {}))
+                    found.append(
+                        (path.name, job_name, match.group(1), step.get("with") or {})
+                    )
     return found
 
 
@@ -62,7 +64,9 @@ def test_there_are_setup_steps_to_hold() -> None:
 
 
 @pytest.mark.parametrize("step", _setup_steps(), ids=lambda s: f"{s[0]}:{s[1]}:{s[2]}")
-def test_every_setup_step_pulls_the_pinned_ghcr_image(step: tuple[str, str, str, dict]) -> None:
+def test_every_setup_step_pulls_the_pinned_ghcr_image(
+    step: tuple[str, str, str, dict],
+) -> None:
     file_name, job, action, options = step
     declared = _declared()
     if action == "setup-buildx":

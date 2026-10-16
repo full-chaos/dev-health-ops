@@ -146,7 +146,9 @@ def test_the_real_trigger_rows_pass_the_static_check() -> None:
         for line in file.read_text(encoding="utf-8").splitlines()
         if line.strip()
     )
-    assert f"venue-oracle-triggers: {declared} declared path(s)" in proc.stdout, proc.stdout
+    assert f"venue-oracle-triggers: {declared} declared path(s)" in proc.stdout, (
+        proc.stdout
+    )
 
 
 # --- the selection rule -----------------------------------------------------

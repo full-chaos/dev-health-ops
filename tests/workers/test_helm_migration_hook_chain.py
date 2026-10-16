@@ -747,7 +747,9 @@ def _monitor_values(monitor: dict) -> str:
 
 def test_monitor_login_is_off_by_default(tmp_path: Path) -> None:
     job = _provision_job(tmp_path)
-    env = {item["name"] for item in job["spec"]["template"]["spec"]["containers"][0]["env"]}
+    env = {
+        item["name"] for item in job["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
     assert not env & _MONITOR_ENV, sorted(env)
 
 
@@ -756,11 +758,20 @@ def test_monitor_login_env_comes_from_the_separate_operator_secret(
 ) -> None:
     values = _monitor_values({"name": "otel_pg_monitor"})
     docs = _docs_from_values(values, tmp_path)
-    job = next(d for d in docs if d.get("kind") == "Job" and d["metadata"]["name"] == _PROVISION)
-    env = {i["name"]: i for i in job["spec"]["template"]["spec"]["containers"][0]["env"]}
+    job = next(
+        d
+        for d in docs
+        if d.get("kind") == "Job" and d["metadata"]["name"] == _PROVISION
+    )
+    env = {
+        i["name"]: i for i in job["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
     assert env["OTEL_PG_MONITOR_DATABASE_ROLE"]["value"] == "otel_pg_monitor"
     ref = env["OTEL_PG_MONITOR_DATABASE_PASSWORD"]["valueFrom"]["secretKeyRef"]
-    assert ref == {"name": "otel-collector-postgres", "key": "POSTGRES_MONITOR_PASSWORD"}
+    assert ref == {
+        "name": "otel-collector-postgres",
+        "key": "POSTGRES_MONITOR_PASSWORD",
+    }
     assert "value" not in env["OTEL_PG_MONITOR_DATABASE_PASSWORD"]
     # The chart never creates that Secret.
     names = {d["metadata"]["name"] for d in docs if d.get("kind") == "Secret"}
@@ -780,7 +791,9 @@ def test_monitor_login_secret_name_and_key_are_values(tmp_path: Path) -> None:
         for d in _docs_from_values(values, tmp_path)
         if d.get("kind") == "Job" and d["metadata"]["name"] == _PROVISION
     )
-    env = {i["name"]: i for i in job["spec"]["template"]["spec"]["containers"][0]["env"]}
+    env = {
+        i["name"]: i for i in job["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
     assert env["OTEL_PG_MONITOR_DATABASE_PASSWORD"]["valueFrom"]["secretKeyRef"] == {
         "name": "other-secret",
         "key": "PW",

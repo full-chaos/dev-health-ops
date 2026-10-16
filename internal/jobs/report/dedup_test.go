@@ -168,10 +168,10 @@ func TestBuildChartQueryReadsTheWorkItemDailyTablesByNewestRow(t *testing.T) {
 	}
 }
 
-// TestBuildChartQueryAveragesLeadTimeOverRowsWithACompletedItem holds the
-// mean of lead_p50_hours: a row with completed_count = 0 has no lead time and
-// is not part of the mean. A count metric of the same table stays a plain sum.
-func TestBuildChartQueryAveragesLeadTimeOverRowsWithACompletedItem(t *testing.T) {
+// TestBuildChartQueryAveragesLeadTimeAsAPlainMean holds the mean of lead_p50_hours: the column is Nullable and a row
+// with no lead time stores NULL (CHAOS-9920), which avg() leaves out, so the reader has no rule of its own. A count
+// metric of the same table stays a plain sum.
+func TestBuildChartQueryAveragesLeadTimeAsAPlainMean(t *testing.T) {
 	t.Parallel()
 	build := func(metric string) string {
 		t.Helper()
@@ -188,14 +188,11 @@ func TestBuildChartQueryAveragesLeadTimeOverRowsWithACompletedItem(t *testing.T)
 		}
 		return strings.Join(strings.Fields(query), " ")
 	}
-	if query := build("lead_p50_hours"); !strings.Contains(query, "avg(if(completed_count > 0 AND lead_p50_hours > 0, lead_p50_hours, NULL)) AS y") {
-		t.Fatalf("lead_p50_hours is not averaged over the rows with a completed item:\n%s", query)
+	if query := build("lead_p50_hours"); !strings.Contains(query, "avg(lead_p50_hours) AS y") || strings.Contains(query, "lead_p50_hours > 0") {
+		t.Fatalf("lead_p50_hours is not a plain mean (a stored 0 is data):\n%s", query)
 	}
 	if query := build("completed_count"); !strings.Contains(query, "toFloat64(sum(completed_count)) AS y") {
 		t.Fatalf("completed_count is not a plain sum:\n%s", query)
-	}
-	if got := averageExpression("cicd_metrics_daily", "success_rate"); got != "avg(success_rate)" {
-		t.Fatalf("a metric with no registered sample count = %q, want a plain avg", got)
 	}
 }
 

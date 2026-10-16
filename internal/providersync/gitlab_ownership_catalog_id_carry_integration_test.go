@@ -13,9 +13,9 @@ import (
 
 // A GitLab grant a store wrote before ownership was keyed by the catalog id
 // holds the project's path as project_id. The next run keys the same grant by
-// the catalog id: the path row keeps the grant's first instant and the
-// catalog-keyed row starts where it ends, so at every time exactly one row of
-// the grant is valid. A path row of a project the run does not list is not
+// the catalog id with the grant's first instant, and the path row becomes an
+// empty-interval tombstone, so at every time exactly one row of the grant is
+// valid. A path row of a project the run does not list is not
 // touched by the carry.
 func TestGitLabOwnershipPathRowMovesToTheCatalogIDWithItsValidFrom(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
@@ -66,15 +66,15 @@ WHERE org_id = ? AND provider = 'gitlab' AND team_id = 'gl:org'`, org)
 	rows := read()
 	catalogID := org + ":gitlab:" + testGitLabNativeProjectID("org/api")
 	moved, ok := rows[catalogID]
-	if !ok || moved.key != "org/api" || !moved.validFrom.Equal(granted.Add(time.Millisecond)) || moved.validTo != nil {
-		t.Fatalf("catalog-keyed row = %+v (present %v), want project_key org/api, valid_from %s (where the path row ends), open", moved, ok, granted.Add(time.Millisecond))
+	if !ok || moved.key != "org/api" || !moved.validFrom.Equal(granted) || moved.validTo != nil {
+		t.Fatalf("catalog-keyed row = %+v (present %v), want project_key org/api, valid_from %s (the grant's first instant), open", moved, ok, granted)
 	}
 	path := rows["org/api"]
-	if path.validTo == nil || !path.validTo.Equal(granted.Add(time.Millisecond)) {
-		t.Fatalf("path-keyed row valid_to = %v, want it to end where it began (%s + 1ms)", path.validTo, granted)
+	if path.validTo == nil || !path.validTo.Equal(granted) {
+		t.Fatalf("path-keyed row valid_to = %v, want the empty-interval tombstone at %s", path.validTo, granted)
 	}
 	gone, present := rows["org/gone"]
-	if !present || (gone.validTo != nil && !gone.validTo.After(granted.Add(time.Millisecond))) {
+	if !present || (gone.validTo != nil && !gone.validTo.After(granted)) {
 		t.Fatalf("the unlisted path row = %+v (present %v): the carry must not replace a row no listed project matches", gone, present)
 	}
 
@@ -91,8 +91,43 @@ WHERE org_id = ? AND provider = 'gitlab' AND team_id = 'gl:org' AND ifNull(proje
 	if _, err := gitlabSnapshotRun(ctx, t, conn, org, fake, TeamCatalogSelections{Projects: true}, false, run.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if again := read()[catalogID]; !again.validFrom.Equal(granted.Add(time.Millisecond)) || again.validTo != nil {
+	if again := read()[catalogID]; !again.validFrom.Equal(granted) || again.validTo != nil {
 		t.Fatalf("after a second run the catalog-keyed row = %+v, want unchanged", again)
+	}
+}
+
+// A grant written under a project's old path, for a project renamed before the
+// run: the repos row of the old path names the project's numeric id
+// (provider_repo_id), so the grant moves to the catalog id at the new path with
+// its first instant. The repos read is the real one.
+func TestGitLabOwnershipPathRowOfARenamedProjectIsCarriedByID(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	org, fake := "gl-catalog-rename", newGitLabSnapshotServer(t)
+	fake.set("", "", nil, map[string][]string{"org": {"org/new"}})
+	sink := GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
+	granted := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	run := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	nativeID := testGitLabNativeProjectID("org/new")
+	if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, provider_repo_id, created_at, last_synced) VALUES (generateUUIDv4(), 'org/old', ?, 'gitlab', ?, ?, ?)`,
+		org, nativeID, granted, granted); err != nil {
+		t.Fatal(err)
+	}
+	legacy := mustGitLabOwnershipRow(org, "gl:org", "org/old", gitlabTeamCatalogBaseSpecificity, granted)
+	legacy.ProjectID = testPID("org/old")
+	if err := sink.writeOwnership(ctx, []gitlabTeamCatalogOwnershipRow{legacy}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitlabSnapshotRun(ctx, t, conn, org, fake, TeamCatalogSelections{Projects: true}, false, run); err != nil {
+		t.Fatal(err)
+	}
+	var validFrom time.Time
+	var validTo *time.Time
+	if err := conn.QueryRow(ctx, `SELECT valid_from, valid_to FROM team_project_ownership FINAL
+WHERE org_id = ? AND provider = 'gitlab' AND team_id = 'gl:org' AND project_id = ?`, org, org+":gitlab:"+nativeID).Scan(&validFrom, &validTo); err != nil {
+		t.Fatal(err)
+	}
+	if !validFrom.Equal(granted) || validTo != nil {
+		t.Fatalf("renamed project's row = [%s, %v), want the grant's first instant (%s) and open", validFrom, validTo, granted)
 	}
 }
 

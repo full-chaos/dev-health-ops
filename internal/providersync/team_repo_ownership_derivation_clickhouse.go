@@ -1415,9 +1415,10 @@ func retractTeamRepoOwnershipRows(
 // retire and carry paths). Contract: a close never lands at or before its own
 // open, so the row it closes keeps a non-empty interval (valid_to >
 // valid_from). A row opened in the same millisecond as the run, or ahead of
-// the run clock, closes 1 ms after its open. The only deliberate empty
-// interval is the supersede tombstone (supersedeTeamRepoOwnershipRows), which
-// the readers' filter "valid_to > valid_from" relies on.
+// the run clock, closes 1 ms after its open. The deliberate empty intervals
+// are the supersede tombstones (supersedeTeamRepoOwnershipRows, and the GitLab
+// ownership path rows a catalog-keyed row replaces, gitlabOwnershipSnapshot),
+// which the readers' filter "valid_to > valid_from" relies on.
 func intervalCloseAt(validFrom, now time.Time) time.Time {
 	floor := validFrom.UTC().Add(time.Millisecond)
 	if now.Before(floor) {

@@ -126,51 +126,32 @@ func TestTheGitHubAnswerForOneGrant(t *testing.T) {
 	}
 }
 
-// A GitLab row keyed by the catalog id is asked for by its path (the row's
-// project_key): the search names the project, and an answer that holds the
-// path says the grant still holds. Asked by the id, GitLab finds nothing and a
-// whole empty answer would read as the project gone.
-func TestTheGitLabAnswerForACatalogKeyedRowAsksByThePath(t *testing.T) {
-	row := OwnershipSnapshotRow{TeamID: "gl:acme/platform", ProjectID: testPID("org:gitlab:4711"), ProjectKey: "acme/platform/api", Source: gitlabTeamCatalogSource}
-	var query string
-	client, err := providerfoundation.NewHTTPClient("gitlab", "https://gitlab.example",
-		fakehttp.Client(absenceAnswerDoer(func(request *http.Request) (*http.Response, error) {
-			query = request.URL.RawQuery
-			body := `[]`
-			if request.URL.Query().Get("search") == "api" {
-				body = `[{"id":4711,"path_with_namespace":"acme/platform/api"}]`
-			}
-			header := http.Header{"X-Next-Page": {""}, "Content-Type": {"application/json"}}
-			return &http.Response{StatusCode: 200, Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
-		})), func(*http.Request) error { return nil },
-		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: 1, MaxWait: 1},
-		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := (gitlabGroupProjectAbsence{client: client}).OwnershipAbsence(context.Background(), row); got != SnapshotFactStillHeld {
-		t.Errorf("the answer is %d, want %d (still held); query %q", got, SnapshotFactStillHeld, query)
-	}
-}
-
-// A catalog-keyed row names one project by its numeric id. A project of
-// another id at the same path (a path taken over after the grant's project
-// was deleted or moved) does not hold the grant; the grant's own id does,
-// whatever path it has now.
-func TestTheGitLabAnswerForACatalogKeyedRowMatchesTheProjectID(t *testing.T) {
-	row := OwnershipSnapshotRow{TeamID: "gl:acme/platform", ProjectID: testPID("org:gitlab:4711"), ProjectKey: "acme/platform/api", Source: gitlabTeamCatalogSource}
+// A catalog-keyed row is asked for by its numeric id (GET /projects/:id), so
+// a rename does not hide it: the project still in the group holds the grant,
+// in another namespace or answered by GitLab's own 404 it does not, and any
+// other answer proves nothing.
+func TestTheGitLabAnswerForACatalogKeyedRowFollowsTheProjectID(t *testing.T) {
+	row := OwnershipSnapshotRow{TeamID: "gl:acme/platform", ProjectID: testPID("org:gitlab:4711"), Source: gitlabTeamCatalogSource}
 	for _, test := range []struct {
-		name, body string
-		want       SnapshotAbsence
+		name   string
+		status int
+		body   string
+		want   SnapshotAbsence
 	}{
-		{"another project at the path", `[{"id":9999,"path_with_namespace":"acme/platform/api"}]`, SnapshotAbsenceProven},
-		{"the project itself", `[{"id":4711,"path_with_namespace":"acme/platform/api"}]`, SnapshotFactStillHeld},
+		{"renamed, still in the group", 200, `{"id":4711,"path_with_namespace":"acme/platform/new-name","namespace":{"full_path":"acme/platform"}}`, SnapshotFactStillHeld},
+		{"moved to another group", 200, `{"id":4711,"path_with_namespace":"other/new-name","namespace":{"full_path":"other"}}`, SnapshotAbsenceProven},
+		{"GitLab's own 404", 404, `{"message":"404 Project Not Found"}`, SnapshotAbsenceProven},
+		{"a 404 that is not GitLab's", 404, `<html>not found</html>`, SnapshotAbsenceNotProven},
+		{"another id in the answer", 200, `{"id":9999,"path_with_namespace":"acme/platform/new-name","namespace":{"full_path":"acme/platform"}}`, SnapshotAbsenceNotProven},
+		{"a server error", 500, `{}`, SnapshotAbsenceNotProven},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			var path string
 			client, err := providerfoundation.NewHTTPClient("gitlab", "https://gitlab.example",
 				fakehttp.Client(absenceAnswerDoer(func(request *http.Request) (*http.Response, error) {
-					header := http.Header{"X-Next-Page": {""}, "Content-Type": {"application/json"}}
-					return &http.Response{StatusCode: 200, Header: header, Body: io.NopCloser(strings.NewReader(test.body)), Request: request}, nil
+					path = request.URL.Path
+					header := http.Header{"Content-Type": {"application/json"}}
+					return &http.Response{StatusCode: test.status, Header: header, Body: io.NopCloser(strings.NewReader(test.body)), Request: request}, nil
 				})), func(*http.Request) error { return nil },
 				providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: 1, MaxWait: 1},
 				providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
@@ -178,7 +159,7 @@ func TestTheGitLabAnswerForACatalogKeyedRowMatchesTheProjectID(t *testing.T) {
 				t.Fatal(err)
 			}
 			if got := (gitlabGroupProjectAbsence{client: client}).OwnershipAbsence(context.Background(), row); got != test.want {
-				t.Errorf("the answer is %d, want %d", got, test.want)
+				t.Errorf("the answer is %d, want %d (request %s)", got, test.want, path)
 			}
 		})
 	}

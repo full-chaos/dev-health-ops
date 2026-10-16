@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -107,9 +108,43 @@ type GitLabWorkItemsRouteHandler struct {
 	FetchLinks      *bool
 	FetchMilestones *bool
 	IncludeMRs      *bool
+	// FetchEpics is Python's GITLAB_FETCH_EPICS: off, no issue is linked to
+	// its epic. Default on, as in Python.
+	FetchEpics *bool
 }
 
 func gitLabWorkItemsFlag(value *bool) bool { return value == nil || *value }
+
+// gitLabFetchEpicsEnv is the worker environment flag Python's GitLab provider
+// reads to link issues to epics (providers/gitlab/provider.py:114).
+const gitLabFetchEpicsEnv = "GITLAB_FETCH_EPICS"
+
+// gitLabFetchEpicsFromEnv reads GITLAB_FETCH_EPICS from the worker
+// environment with Python's env_flag rule.
+func gitLabFetchEpicsFromEnv() *bool {
+	raw, ok := os.LookupEnv(gitLabFetchEpicsEnv)
+	return pythonEnvFlag(gitLabFetchEpicsEnv, raw, ok)
+}
+
+// pythonEnvFlag is Python's env_flag (providers/utils.py) on a value the
+// caller read: 1/true/yes/on is true, 0/false/no/off is false, trimmed and
+// case-insensitive; unset or any other value is nil, so the route keeps its
+// default.
+func pythonEnvFlag(name, raw string, ok bool) *bool {
+	if !ok {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		value := true
+		return &value
+	case "0", "false", "no", "off":
+		value := false
+		return &value
+	}
+	slog.Warn("providersync.env_flag_ignored", "name", name)
+	return nil
+}
 
 func (handler GitLabWorkItemsRouteHandler) limits() (int, int, int, error) {
 	perPage, maxPages, nestedMaxPages := handler.PerPage, handler.MaxPages, handler.NestedMaxPages
@@ -208,6 +243,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	fetchLinks := gitLabWorkItemsFlag(handler.FetchLinks)
 	fetchMilestones := gitLabWorkItemsFlag(handler.FetchMilestones)
 	includeMRs := gitLabWorkItemsFlag(handler.IncludeMRs)
+	fetchEpics := gitLabWorkItemsFlag(handler.FetchEpics)
 	pages := 1 // the project binding request
 	closingSynced := 0
 	issueLinksUnsupported := 0
@@ -279,7 +315,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			pages += labelPages
 		}
 		item, transitions, normalizeErr := normalizeGitLabIssueWorkItem(
-			claim, fullName, repoID, payload, labelEvents, handler.StatusMapping,
+			claim, fullName, repoID, payload.withFetchEpics(fetchEpics), labelEvents, handler.StatusMapping,
 			handler.ResolveIdentity, normalizedAt,
 		)
 		if normalizeErr != nil {

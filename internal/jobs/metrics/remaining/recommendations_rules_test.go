@@ -199,6 +199,7 @@ func decodeSnapshot(t *testing.T, encoded goldenSnapshot) MetricsSnapshot {
 		AfterHoursRatio:             afterHours,
 		AfterHoursRatioKnown:        afterHoursKnown,
 		CycleTimeByDay:              parseList(t, encoded.CycleTimeByDay),
+		CycleTimeDays:               consecutiveDays(len(encoded.CycleTimeByDay)),
 		HotspotComplexityDelta:      complexity,
 		HotspotComplexityDeltaKnown: complexityKnown,
 		HotspotChurnOverlap:         overlap,
@@ -713,5 +714,107 @@ func TestCompoundingRiskRationaleNamesTheCoverageOfAPartialScore(t *testing.T) {
 		if strings.Contains(got.Rationale, claimed) {
 			t.Errorf("the rationale claims the missing input %q: %q", claimed, got.Rationale)
 		}
+	}
+}
+
+// consecutiveDays is the gap-free day list the frozen goldens imply: the
+// Python reference has no days and reads x as the list position, which is the
+// same slope whenever no day is missing.
+func consecutiveDays(count int) []time.Time {
+	days := make([]time.Time, count)
+	first := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	for index := range days {
+		days[index] = first.AddDate(0, 0, index)
+	}
+	return days
+}
+
+func sustainabilitySnapshot(values []float64, days []time.Time) MetricsSnapshot {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	return MetricsSnapshot{
+		TeamID: "team-1", OrgID: "org-1", WindowStart: now.AddDate(0, 0, -30), WindowEnd: now,
+		AfterHoursRatio: 0.5, AfterHoursRatioKnown: true,
+		CycleTimeByDay: values, CycleTimeDays: days,
+	}
+}
+
+// CHAOS-9888: the cycle-time slope is hours per CALENDAR day. The series drops
+// null days, so a gap between samples is a gap in x, not one step.
+func TestSustainabilityRiskSlopeIsPerCalendarDay(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	day := func(offset int) time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, offset) }
+
+	// Three samples 2 days apart rise 2 hours each: 1.0 hours/day, not 2.0.
+	got, err := evaluateSustainabilityRisk(sustainabilitySnapshot([]float64{10, 12, 14}, []time.Time{day(0), day(2), day(4)}), now)
+	if err != nil || got == nil {
+		t.Fatalf("gapped rise: %v %v", got, err)
+	}
+	if !strings.Contains(got.Rationale, "cycle time slope is 1.000 hours/day") {
+		t.Errorf("rationale %q, want slope 1.000 hours/day", got.Rationale)
+	}
+	if got.Evidence[1].Value != 1.0 {
+		t.Errorf("slope evidence = %v, want 1.0", got.Evidence[1].Value)
+	}
+
+	// 0.5 hours per sample but samples 10 days apart: 0.05 hours/day is under
+	// the 0.1 threshold, so the rule must not fire. Per list position it would.
+	got, err = evaluateSustainabilityRisk(sustainabilitySnapshot([]float64{10, 10.5, 11}, []time.Time{day(0), day(10), day(20)}), now)
+	if err != nil || got != nil {
+		t.Errorf("sparse samples: fired %v (%v), want no recommendation at 0.05 hours/day", got, err)
+	}
+
+	// The same values on consecutive days are 0.5 hours/day and fire.
+	got, err = evaluateSustainabilityRisk(sustainabilitySnapshot([]float64{10, 10.5, 11}, []time.Time{day(0), day(1), day(2)}), now)
+	if err != nil || got == nil {
+		t.Errorf("consecutive samples: %v %v, want a recommendation at 0.5 hours/day", got, err)
+	}
+
+	// A day list that does not match the series is an error, never an index fallback.
+	if _, err = evaluateSustainabilityRisk(sustainabilitySnapshot([]float64{10, 12, 14}, []time.Time{day(0), day(1)}), now); err == nil {
+		t.Error("mismatched day list: want an error")
+	}
+}
+
+// The rationale names the day of the row the score was read from (CHAOS-9885).
+// The window end is exclusive, so a rule run for a window ending on day N
+// reads day N-1: the rationale must say so instead of letting the score read
+// as today's. The sentence comes AFTER the score sentence so a reader of the
+// score sentence alone is unaffected.
+func TestCompoundingRiskRationaleNamesTheDayOfTheScore(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	snapshot := MetricsSnapshot{
+		TeamID: "team-1", OrgID: "org-1", WindowStart: now.AddDate(0, 0, -14), WindowEnd: now,
+		CompoundingRiskScore: 0.7389, CompoundingRiskScoreKnown: true, CompoundingRiskSeverity: "high",
+		CompoundingRiskCoverage: 0.5, CompoundingRiskCoverageKnown: true,
+		CompoundingRiskInputs:  []string{"churn", "review latency"},
+		CompoundingRiskDrivers: []string{"churn"},
+		CompoundingRiskAsOfDay: "2026-10-14",
+	}
+	got, err := evaluateCompoundingRisk(snapshot, now)
+	if err != nil || got == nil {
+		t.Fatalf("as-of day: %v %v", got, err)
+	}
+	const want = "Compounding Risk score is 0.739 (severity: high), computed from 50% of its inputs (churn, review latency). Score as of 2026-10-14. Churn is compounding above its tuned threshold."
+	if got.Rationale != want {
+		t.Errorf("got %q\nwant %q", got.Rationale, want)
+	}
+
+	snapshot.CompoundingRiskDrivers = nil
+	snapshot.CompoundingRiskCoverage = 1
+	got, err = evaluateCompoundingRisk(snapshot, now)
+	if err != nil || got == nil {
+		t.Fatalf("as-of day, no drivers: %v %v", got, err)
+	}
+	if want := "Compounding Risk score is 0.739 (severity: high). Score as of 2026-10-14."; got.Rationale != want {
+		t.Errorf("got %q\nwant %q", got.Rationale, want)
+	}
+
+	snapshot.CompoundingRiskAsOfDay = ""
+	got, err = evaluateCompoundingRisk(snapshot, now)
+	if err != nil || got == nil {
+		t.Fatalf("unknown day: %v %v", got, err)
+	}
+	if want := "Compounding Risk score is 0.739 (severity: high)."; got.Rationale != want {
+		t.Errorf("an unknown day must stay unnamed: got %q want %q", got.Rationale, want)
 	}
 }

@@ -42,7 +42,12 @@ SUCCESS_CRITERION = (
 
 
 def _linear_slope(values: list[float]) -> float:
-    """Return OLS slope of *values* (x = index, y = value). Returns 0.0 for < 2 points."""
+    """Return OLS slope of *values* (x = index, y = value). Returns 0.0 for < 2 points.
+
+    The Go rule (``LinearSlopePerDay``) uses x = calendar day, not index, so a
+    gap between samples is a gap in x (CHAOS-9888). This twin is index-based
+    and agrees with Go only for a series without gaps.
+    """
     n = len(values)
     if n < 2:
         return 0.0

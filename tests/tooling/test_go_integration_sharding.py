@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import atexit
 import collections
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -49,7 +51,38 @@ SPLIT_PACKAGES = {
     REMAINING_PACKAGE,
 }
 CONTAINER_HARNESS = ROOT / "internal" / "testsupport" / "containers" / "harness.go"
-TEST_GO_CACHE = Path(tempfile.gettempdir()) / "chaos3141-go-sharding-test-cache"
+
+
+def _go_env_cache() -> str:
+    probe = subprocess.run(
+        ["go", "env", "GOCACHE"], capture_output=True, text=True, check=False
+    )
+    return probe.stdout.strip() if probe.returncode == 0 else ""
+
+
+def _test_go_cache() -> Path:
+    """The Go build cache of the check_go.sh calls below.
+
+    A configured cache (DEV_HEALTH_GO_CACHE, then GOCACHE, then the one `go env`
+    reports) is used as is: it is the runner's own and outlives the run on
+    purpose. With none, the cache is a private directory removed when the process
+    exits. It used to be a fixed directory under the system temp directory that
+    nothing removed (about 850 MB left behind per host).
+    """
+    # "off" is Go's sentinel for no cache, not a directory: check_go.sh would create ./off for it.
+    for configured in (
+        os.environ.get("DEV_HEALTH_GO_CACHE"),
+        os.environ.get("GOCACHE"),
+        _go_env_cache(),
+    ):
+        if configured and configured != "off":
+            return Path(configured)
+    private = tempfile.mkdtemp(prefix="chaos3141-go-sharding-test-cache-")
+    atexit.register(shutil.rmtree, private, ignore_errors=True)
+    return Path(private)
+
+
+TEST_GO_CACHE = _test_go_cache()
 # Hosted job 93890967576 measured 49.596s for a cold planner invocation. This
 # test-process guard is deliberately above twice that observed completion; it
 # does not change the workflow job cap or the Go test timeout.
@@ -1054,7 +1087,9 @@ def test_an_isolated_package_key_matching_nothing_fails_loudly_and_workerservice
     (holder,) = [s for s, pkgs in by_shard.items() if "internal/workerservice" in pkgs]
     assert by_shard[holder] == ["internal/workerservice"]
     (server_holder,) = [s for s, pkgs in by_shard.items() if QAPISERVER_PACKAGE in pkgs]
-    assert by_shard[server_holder] == [QAPISERVER_PACKAGE], "queryapi/server shares a shard row with another package"
+    assert by_shard[server_holder] == [QAPISERVER_PACKAGE], (
+        "queryapi/server shares a shard row with another package"
+    )
     (remaining_holder,) = [
         s for s, pkgs in by_shard.items() if REMAINING_PACKAGE in pkgs
     ]

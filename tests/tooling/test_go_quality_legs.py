@@ -393,6 +393,61 @@ def test_a_failing_stage_prints_no_done_and_fails_the_leg(tmp_path: Path) -> Non
     assert "ci-leg race: OK" not in proc.stdout
 
 
+def _race_weights_rows(tmp_path: Path, text: str):
+    weights = tmp_path / "weights.tsv"
+    weights.write_text(text, encoding="utf-8")
+    return subprocess.run(
+        ["bash", str(CHECK_GO), "race-weights-rows"],
+        cwd=ROOT,
+        env={**os.environ, "GO_RACE_WEIGHTS": str(weights)},
+        capture_output=True,
+        text=True,
+        timeout=280,
+        check=False,
+    )
+
+
+def test_the_go_side_weights_census_accepts_the_table_and_names_each_defect(
+    tmp_path: Path,
+) -> None:
+    """CHAOS-4233: `check_go.sh race-weights-rows` (run by fast, ci and the static leg) fails
+    on the author's machine with the pytest node that guards the same rule in CI."""
+    text = WEIGHTS.read_text(encoding="utf-8")
+    green = _race_weights_rows(tmp_path, text)
+    assert green.returncode == 0, green.stderr
+    assert "race-weights-rows:" in green.stdout
+    victim = "internal/httpguard"
+    missing = _race_weights_rows(
+        tmp_path,
+        "".join(
+            line + "\n"
+            for line in text.splitlines()
+            if not line.startswith(victim + "\t")
+        ),
+    )
+    assert missing.returncode != 0
+    assert victim in missing.stderr
+    assert "test_every_package_of_the_root_module_has_a_weights_row" in missing.stderr
+    stale = _race_weights_rows(tmp_path, text + "internal/zz-gone-package\t1\n")
+    assert stale.returncode != 0
+    assert "internal/zz-gone-package" in stale.stderr
+    assert "test_the_race_weights_table_is_clean" in stale.stderr
+    indented = _race_weights_rows(tmp_path, text + "  # an indented comment\n")
+    assert indented.returncode != 0, "the CI test reads an indented comment as a row"
+    twice = _race_weights_rows(tmp_path, text + "cmd/auth-migrate\t1\n")
+    assert twice.returncode != 0
+    assert "test_the_race_weights_table_is_clean" in twice.stderr
+
+
+def test_fast_ci_all_and_the_static_leg_run_the_weights_census() -> None:
+    source = CHECK_GO.read_text(encoding="utf-8")
+    for verb in ("fast", "ci", "all"):
+        body = re.search(rf"(?ms)^  {verb}\)\n(.*?)^    ;;", source).group(1)
+        assert "check_race_weights_rows" in body, verb
+    static = re.search(r"(?ms)^    static\)\n(.*?)^      ;;", source).group(1)
+    assert "check_race_weights_rows" in static
+
+
 # ---------------------------------------------------------------------------
 # 4. The workflow.
 # ---------------------------------------------------------------------------

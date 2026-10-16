@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 )
 
 type signalsGolden struct {
@@ -199,4 +200,22 @@ func naiveLinearSlope(values []float64) float64 {
 		return 0.0
 	}
 	return numerator / denominator
+}
+
+// On consecutive days the per-day slope is the per-position slope to the last
+// bit (CHAOS-9888): the frozen goldens stay valid, and only a gap changes it.
+func TestLinearSlopePerDayEqualsLinearSlopeOnConsecutiveDays(t *testing.T) {
+	for _, values := range [][]float64{{0.1, 0.0, 1.0, 0.8, 0.2}, {12, 8, 15}, {3, 3}, {5}} {
+		got, err := LinearSlopePerDay(consecutiveDays(len(values)), values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := LinearSlope(values); math.Float64bits(got) != math.Float64bits(want) {
+			t.Errorf("LinearSlopePerDay(%v) = %v, LinearSlope = %v", values, got, want)
+		}
+	}
+	days := consecutiveDays(3)
+	if _, err := LinearSlopePerDay([]time.Time{days[0], days[2], days[1]}, []float64{1, 2, 3}); err == nil {
+		t.Error("days out of order: want an error")
+	}
 }

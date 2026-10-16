@@ -51,6 +51,9 @@ from dev_health_ops.models.work_items import (
     WorkItemDependency,
     WorkItemStatusTransition,
 )
+from dev_health_ops.storage.team_provider_identity import (
+    fetch_team_provider_identity,
+)
 
 from .operational_current import current_operational_rows_sql
 from .operational_ordering_guard import (
@@ -1762,40 +1765,14 @@ class ClickHouseStore:
     async def _carry_team_provider_identity(self, rows: list[dict[str, Any]]) -> None:
         """Set ``provider_team_id``, ``provider_name`` and ``gone_at`` on ROWS
         (mutated in place) from the stored versions of their ``(org_id, id)``
-        (CHAOS-9432). ``teams`` is a ReplacingMergeTree(updated_at): the newest
-        version wins, so a writer that omits these columns would reset them.
-        The first two are the newest NON-EMPTY values over every stored
-        version; ``gone_at`` is the newest version's. A team with no stored
-        version gets '' / '' / NULL. Mirrors ``internal/teamprovider`` (Go).
-        """
+        (CHAOS-9432); see ``storage.team_provider_identity``."""
         assert self.client is not None
-        org_ids = sorted({str(row["org_id"]) for row in rows})
-        ids = sorted({str(row["id"]) for row in rows})
-        query = (
-            "SELECT org_id, id, "
-            "argMaxIf(provider_team_id, (updated_at, last_synced), provider_team_id != ''), "
-            "argMaxIf(provider_name, (updated_at, last_synced), provider_name != ''), "
-            "nullIf(argMax(ifNull(gone_at, toDateTime64(0, 6)), "
-            "(updated_at, last_synced)), toDateTime64(0, 6)) "
-            "FROM teams WHERE org_id IN {org_ids:Array(String)} "
-            "AND id IN {ids:Array(String)} GROUP BY org_id, id"
-        )
         async with self._lock:
-            result = await asyncio.to_thread(
-                self.client.query,
-                query,
-                parameters={"org_ids": org_ids, "ids": ids},
+            stored = await asyncio.to_thread(
+                fetch_team_provider_identity,
+                self.client,
+                [(str(row["org_id"]), str(row["id"])) for row in rows],
             )
-        stored: dict[tuple[str, str], tuple[str, str, Any]] = {
-            (str(org_id), str(team_id)): (
-                str(provider_team_id or ""),
-                str(provider_name or ""),
-                gone_at,
-            )
-            for org_id, team_id, provider_team_id, provider_name, gone_at in (
-                result.result_rows or []
-            )
-        }
         for row in rows:
             provider_team_id, provider_name, gone_at = stored.get(
                 (str(row["org_id"]), str(row["id"])), ("", "", None)

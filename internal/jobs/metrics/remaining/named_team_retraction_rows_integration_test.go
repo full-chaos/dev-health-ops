@@ -69,7 +69,7 @@ func TestJobInputsOfANamedRetiredTeamGiveRetractionRowsNoWeight(t *testing.T) {
 		if out.WIP, out.Throughput, err = loader.loadWIPThroughput(ctx, teamID, start, end); err != nil {
 			t.Fatalf("%s %s WIP and throughput: %v", org, teamID, err)
 		}
-		if out.AfterHours, out.AfterHoursKnown, out.CycleTimes, err = loader.loadSustainabilitySignals(ctx, teamID, start, end); err != nil {
+		if out.AfterHours, out.AfterHoursKnown, out.CycleTimes, _, err = loader.loadSustainabilitySignals(ctx, teamID, start, end); err != nil {
 			t.Fatalf("%s %s sustainability: %v", org, teamID, err)
 		}
 		var riskCoverage float64
@@ -174,7 +174,7 @@ VALUES (?, ?, 'jira', 'SCOPE-A', ?, ?)`, org, day, team, store.NewComputedAt); e
 	if !reflect.DeepEqual(wip, []float64{4}) || !reflect.DeepEqual(throughput, []float64{5}) {
 		t.Errorf("WIP %v and throughput %v, want [4] and [5]: the measured scope of the day", wip, throughput)
 	}
-	_, _, cycleTimes, err := loader.loadSustainabilitySignals(ctx, team, start, end)
+	_, _, cycleTimes, _, err := loader.loadSustainabilitySignals(ctx, team, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -101,6 +101,10 @@ type MetricsSnapshot struct {
 	AfterHoursRatio      float64
 	AfterHoursRatioKnown bool
 	CycleTimeByDay       []float64
+	// CycleTimeDays is the calendar day of each CycleTimeByDay value, same
+	// length and order. The sustainability slope is per calendar day, so the
+	// x of every sample is its day, not its list position (CHAOS-9888).
+	CycleTimeDays []time.Time
 
 	HotspotComplexityDelta      float64
 	HotspotComplexityDeltaKnown bool
@@ -396,12 +400,19 @@ func evaluateSustainabilityRisk(snapshot MetricsSnapshot, now time.Time) (*Recom
 	if len(cycleTimes) < 2 {
 		return nil, nil
 	}
-	// The length guard above is redundant with LinearSlope's own < 2 check --
+	// The length guard above is redundant with the slope's own < 2 check --
 	// but only for the RESULT, not for the CONTROL FLOW. Without it a
 	// one-element list would give slope 0.0, fail the threshold and return None
 	// anyway; with a threshold of <= 0.0 it would not. Kept because the
 	// reference has it and its redundancy is contingent on a constant.
-	ctSlope := LinearSlope(cycleTimes)
+	//
+	// Hours per CALENDAR day, not per sample (CHAOS-9888): the series drops
+	// null days, so list position is not a day count. The Python twin is
+	// index-based; chris's ruling overrides parity here.
+	ctSlope, err := LinearSlopePerDay(snapshot.CycleTimeDays, cycleTimes)
+	if err != nil {
+		return nil, err
+	}
 	if ctSlope < cycleTimeRisingSlopeThreshold {
 		return nil, nil
 	}

@@ -64,7 +64,7 @@ func TestLoadSustainabilitySignalsDropsNewestNullCycleTimeDayNotStaleValue(t *te
 	if err != nil {
 		t.Fatalf("NewRecommendationsLoader: %v", err)
 	}
-	_, _, cycleTimes, err := loader.loadSustainabilitySignals(ctx, "team-4547", windowStart, windowEnd)
+	_, _, cycleTimes, _, err := loader.loadSustainabilitySignals(ctx, "team-4547", windowStart, windowEnd)
 	if err != nil {
 		t.Fatalf("loadSustainabilitySignals: %v", err)
 	}

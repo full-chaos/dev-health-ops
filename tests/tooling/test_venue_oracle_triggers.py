@@ -442,3 +442,31 @@ def test_the_job_step_fails_on_a_trigger_file_it_cannot_read(tree: Path) -> None
         + proc.stdout
     )
     assert output == ""
+
+
+def test_a_missing_closure_directory_fails_loudly_in_the_real_layout(
+    tmp_path: Path,
+) -> None:
+    """CHAOS-9935 round 3: with ci/venue_oracle_closure.d/ gone the selection used to drop every dependency rule and exit 0 with
+    "nothing to run". In a tree that holds the closure generator the directory is required, and so is a file per venue package."""
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    changed = tree / "changed.txt"
+    changed.write_text("internal/auth/signedtoken/x.go\n", encoding="utf-8")
+    # control: a scratch tree without the generator keeps the package and row rules and no closure directory
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    assert proc.returncode == 0, proc.stderr
+    # the real layout: the generator is there, the closure directory is not
+    (tree / "internal" / "testsupport" / "venuechanged").mkdir(parents=True)
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    assert (
+        proc.returncode != 0 and "ci/venue_oracle_closure.d is missing" in proc.stderr
+    ), (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+    # an empty directory: no file for the venue package
+    (tree / "ci" / "venue_oracle_closure.d").mkdir()
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    assert (
+        proc.returncode != 0 and "internal__apiservice.txt is missing" in proc.stderr
+    ), proc.stderr[-300:]

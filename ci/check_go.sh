@@ -757,6 +757,12 @@ check_venue_oracles() {
     [ -z "${shard}${shard_count}" ] || die "venue-oracles --changed does not combine with SHARD COUNT"
   fi
   if [ -n "${changed}" ]; then
+    # CHAOS-9935: in the real tree (it holds the generator of the closure files) a missing closure directory is an
+    # error, never "no closure": the selection would silently drop every dependency rule and read as a green no-op.
+    # A scratch tree with no Go module has neither the generator nor the directory and keeps the package and row rules.
+    if [ -d "${ROOT}/internal/testsupport/venuechanged" ] && [ ! -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
+      die "venue-oracles --changed: ${ROOT}/ci/venue_oracle_closure.d is missing; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+    fi
     # The package directory of every changed path (a path under .../testdata belongs to the package
     # above it), for the closure rule of venue_oracle_changed_selects.
     VENUE_CHANGED_DIRS="$(tr '\0' '\n' < "${changed}" | awk 'NF { d = $0; sub(/\/[^\/]*$/, "", d); sub(/\/testdata(\/.*)?$/, "", d); print d }' | LC_ALL=C sort -u)"

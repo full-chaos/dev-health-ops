@@ -24,7 +24,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "ci" / "bigboy"
-OVERLAY = TOOLS / "compose.bigboy.clickhouse-users.yml"
 CHECK = TOOLS / "check-dho-api-ch-user.sh"
 RENDER = TOOLS / "render-dho-api-ch-users.py"
 CUT = TOOLS / "bigboy-cut.sh"
@@ -195,11 +194,11 @@ def _check(
     to a 0600 file (tmp_path/xtrace.log). The scratch dir used is returned in proc.scratch."""
     env = _docker(tmp_path, count=count, rc=rc, login_ok=login_ok)
     env.update(_var_trap(tmp_path))
-    # the check reaches ClickHouse through ci/bigboy/stack.sh (CHAOS-8693): a bigboy root with the pin file and the env file
+    # the check reaches ClickHouse through `docker compose` on the one compose file (CHAOS-9962): a bigboy root with the pins file and the env file
     root = tmp_path / "bigboy-root"
     (root / "_records").mkdir(parents=True, exist_ok=True)
     (root / "ops").mkdir(exist_ok=True)
-    (root / "_records" / "compose.bigboy.images.yml").write_text("services: {}\n")
+    (root / "_records" / "images.env").write_text("")
     (root / "ops" / ".env").write_text("")
     env["BIGBOY_ROOT"] = str(root)
     env["BIGBOY_OPERATOR_IMAGE"] = (
@@ -275,27 +274,37 @@ def test_a_user_missing_from_the_live_server_fails_with_its_own_code(
         assert "CH_API_USER_LIVE_FAIL" in proc.stderr and "516" in proc.stderr
 
 
-def test_the_overlay_mounts_the_host_file_into_users_d_and_requires_the_path(
+def test_the_compose_file_mounts_the_host_file_into_users_d_and_requires_the_path(
     tmp_path: Path,
 ) -> None:
-    base = tmp_path / "compose.yml"
-    base.write_text("services:\n  clickhouse:\n    image: clickhouse:test\n")
+    from tests.tooling import test_bigboy_one_compose_file as bb
+
+    root = bb.scratch_root(tmp_path)
     users = _users_file(tmp_path)
-    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(tmp_path)}
-    argv = ["docker", "compose", "-f", str(base), "-f", str(OVERLAY), "config"]
-    ok = subprocess.run(
-        [*argv, "--format", "json"],
+    ok = bb.config(root, DHO_API_CH_USERS_XML=str(users))
+    assert ok.returncode == 0, ok.stderr
+    mounts = json.loads(ok.stdout)["services"]["clickhouse"]["volumes"]
+    (volume,) = [m for m in mounts if m["target"].endswith("users.d/dho_api_ch.xml")]
+    assert volume["source"] == str(users), volume
+    assert volume["read_only"] is True
+    env = bb.compose_env(root)
+    del env["DHO_API_CH_USERS_XML"]
+    # the env file names the path in a real root; without that line the variable is required, never defaulted
+    pins = root / "_records" / "images.env"
+    pins.write_text(
+        "".join(
+            line
+            for line in pins.read_text().splitlines(keepends=True)
+            if not line.startswith("DHO_API_CH_USERS_XML=")
+        )
+    )
+    missing = subprocess.run(
+        [*bb.compose_argv(root), "config"],
         capture_output=True,
         text=True,
-        env={**env, "DHO_API_CH_USERS_XML": str(users)},
+        env=env,
         timeout=60,
     )
-    assert ok.returncode == 0, ok.stderr
-    (volume,) = json.loads(ok.stdout)["services"]["clickhouse"]["volumes"]
-    assert volume["source"] == str(users), volume
-    assert volume["target"] == "/etc/clickhouse-server/users.d/dho_api_ch.xml"
-    assert volume["read_only"] is True
-    missing = subprocess.run(argv, capture_output=True, text=True, env=env, timeout=60)
     assert missing.returncode != 0
     assert "DHO_API_CH_USERS_XML" in missing.stderr
 
@@ -306,18 +315,16 @@ def test_the_cut_checks_dho_api_ch_before_it_recreates_go_api() -> None:
         i for i, line in enumerate(lines) if "check-dho-api-ch-user.sh" in line
     )
     up = next(
-        i for i, line in enumerate(lines) if 'stack.sh" up query-api go-api web' in line
+        i
+        for i, line in enumerate(lines)
+        if "up -d --no-deps --no-build query-api go-api web" in line
     )
     assert check < up, "the dho_api_ch check must run before go-api is recreated"
     gate = "\n".join(lines[check : check + 3])
     assert "exit 1" in gate and "ABORTING before go-api" in gate, gate
-    stack_tools = [
-        ln.split()[2]
-        for ln in (TOOLS / "stack.files").read_text().splitlines()
-        if ln.startswith("stack tools")
-    ]
-    assert "compose.bigboy.clickhouse-users.yml" in stack_tools
-    assert stack_tools[-1] == "compose.bigboy.router.yml", stack_tools
+    # one compose file: no separate clickhouse-users overlay or chain order left to get wrong (CHAOS-9962)
+    assert "compose.bigboy.clickhouse-users.yml" not in CUT.read_text()
+    assert '-f "$HERE/compose.bigboy.yml"' in CUT.read_text()
     assert any(line.startswith("export DHO_API_CH_USERS_XML=") for line in lines)
 
 

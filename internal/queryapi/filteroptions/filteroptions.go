@@ -251,12 +251,12 @@ func distinctValues(ctx context.Context, client QueryClient, query, errPrefix st
 
 	out := []string{}
 	for rows.Next() {
-		var value string
+		var value *string
 		if err := rows.Scan(&value); err != nil {
 			return nil, fmt.Errorf("%s scan: %w", errPrefix, err)
 		}
-		if value != "" {
-			out = append(out, value)
+		if value != nil && *value != "" {
+			out = append(out, *value)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -386,24 +386,28 @@ func namePairs(ctx context.Context, client QueryClient, query, what string, bind
 
 	var out map[string]string
 	for rows.Next() {
-		var key, name string
-		if err := rows.Scan(&key, &name); err != nil {
+		var key, rawName *string
+		if err := rows.Scan(&key, &rawName); err != nil {
 			return nil, fmt.Errorf("filteroptions: %s scan: %w", what, err)
 		}
-		name, ok := scopelabel.CleanName(name)
-		if key == "" || !ok {
+		if key == nil || rawName == nil {
+			continue
+		}
+		id := *key
+		name, ok := scopelabel.CleanName(*rawName)
+		if id == "" || !ok {
 			continue
 		}
 		if keep != nil {
-			if _, ok := keep[key]; !ok {
+			if _, ok := keep[id]; !ok {
 				continue
 			}
 		}
 		if out == nil {
 			out = map[string]string{}
 		}
-		if _, seen := out[key]; !seen {
-			out[key] = name
+		if _, seen := out[id]; !seen {
+			out[id] = name
 		}
 	}
 	if err := rows.Err(); err != nil {

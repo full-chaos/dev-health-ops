@@ -507,30 +507,8 @@ func TestScanTypeCensusPinsAnOuterSplicedSelectItem(t *testing.T) {
 }
 
 // nullableIntoPlainSites is `file|func|destinations|digest|nullable-into-plain|col<i>:<type>`: a Nullable column
-// scanned into a plain destination, which reads a NULL as whatever the destination held (the zero value of a fresh variable). It only shrinks.
+// scanned into a plain destination, which reads a NULL as whatever the destination held (the zero value of a fresh variable). It is empty and stays empty: scan a Nullable column into a **T.
 const nullableIntoPlainSites = `
-internal/queryapi/aianalytics/loaders.go|loadEngagement|*string,*time.Time,*uint64,**float64,*int64,*int64|6e6a9b4b2a3c|nullable-into-plain|col2:Nullable(Date)
-internal/queryapi/filteroptions/filteroptions.go|distinctValues|*string|9f80251f99bb|nullable-into-plain|col1:Nullable(String)
-internal/queryapi/filteroptions/filteroptions.go|distinctValues|*string|9f80251f99bb|nullable-into-plain|col1:Nullable(String)
-internal/queryapi/filteroptions/filteroptions.go|distinctValues|*string|9f80251f99bb|nullable-into-plain|col1:Nullable(String)
-internal/queryapi/filteroptions/filteroptions.go|distinctValues|*string|9f80251f99bb|nullable-into-plain|col1:Nullable(String)
-internal/queryapi/filteroptions/filteroptions.go|distinctValues|*string|9f80251f99bb|nullable-into-plain|col1:Nullable(String)
-internal/queryapi/filteroptions/filteroptions.go|distinctValues|*string|9f80251f99bb|nullable-into-plain|col1:Nullable(String)
-internal/queryapi/filteroptions/filteroptions.go|distinctValues|*string|9f80251f99bb|nullable-into-plain|col1:Nullable(String)
-internal/queryapi/filteroptions/filteroptions.go|distinctValues|*string|9f80251f99bb|nullable-into-plain|col1:Nullable(String)
-internal/queryapi/filteroptions/filteroptions.go|distinctValues|*string|9f80251f99bb|nullable-into-plain|col1:Nullable(String)
-internal/queryapi/filteroptions/filteroptions.go|namePairs|*string,*string|1a357a121003|nullable-into-plain|col1:Nullable(String)
-internal/queryapi/filteroptions/filteroptions.go|namePairs|*string,*string|1a357a121003|nullable-into-plain|col2:Nullable(String)
-internal/queryapi/heatmap/queries.go|fetchReviewWaitDensity|*int32,*int32,*float64|9e50e701fb16|nullable-into-plain|col3:Nullable(Float64)
-internal/queryapi/heatmap/queries.go|fetchReviewWaitEvidence|*string,*uint32,**string,*time.Time,*time.Time,**string,**string|e90c9a77914b|nullable-into-plain|col5:Nullable(DateTime64(3, 'UTC'))
-internal/queryapi/investmentexplain/reader.go|FetchInvestmentDataVersion|*string,*string,*string,*string|2cd348f35ddc|nullable-into-plain|col3:Nullable(String)
-internal/queryapi/investmentexplain/reader.go|FetchInvestmentDataVersion|*string,*string,*string,*string|2cd348f35ddc|nullable-into-plain|col4:Nullable(String)
-internal/queryapi/investmentexplain/workunitreader.go|FetchWorkItemTeamAssignments|*string,*string,*string|3d4e8e118914|nullable-into-plain|col2:Nullable(String)
-internal/queryapi/investmentexplain/workunitreader.go|FetchWorkItemTeamAssignments|*string,*string,*string|3d4e8e118914|nullable-into-plain|col3:Nullable(String)
-internal/queryapi/security/overview.go|readTrend|*time.Time,*uint64,*uint64|d6913906a3ee|nullable-into-plain|col1:Nullable(Date)
-internal/queryapi/workgraph/displaynames.go|resolveDeploymentDisplayNames|*string,*string|4ef0858be93f|nullable-into-plain|col2:Nullable(String)
-internal/queryapi/workgraph/displaynames.go|resolveIncidentDisplayNames|*string,*string,*string|9cf93c47ccf9|nullable-into-plain|col2:Nullable(String)
-internal/queryapi/workgraph/displaynames.go|resolvePRDisplayNames|*string,*uint32,*string|fd205b6671d8|nullable-into-plain|col3:Nullable(String)
 `
 
 // unverifiedSites is `file|func|destinations|digest|reason`; see reasonClass.

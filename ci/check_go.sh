@@ -182,7 +182,10 @@ usage() {
          Validate ci/go_integration_shards.d/ against live package discovery,
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
-         output when GITHUB_OUTPUT is set. No Docker required.
+         output (and `legs`, the leg count) when GITHUB_OUTPUT is set. No Docker
+         required. With INTEGRATION_AFFECTED_FILE set to the output of
+         ci/go_affected_integration.py (CHAOS-9947), the matrix holds only the legs
+         that cover an affected package; unset, or a FULL first line, keeps every leg.
   ratchets
          Hold every closed list named in ci/ratchets.tsv to its size on the merge base: a list may
          shrink and never grow, and no pull request edits a shared number to say so (CHAOS-7904).
@@ -746,14 +749,16 @@ check_venue_oracle_plan() {
 venue_oracle_changed_selects() {
   local escaped pkg name path
   escaped="$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')"
-  if tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}/([^/]+|testdata/.+)$"; then
+  # grep -q stops at its first match: it reads a process substitution, never a pipe whose writer would die of SIGPIPE and
+  # fail the whole pipeline under pipefail on a large change set (the match was lost and the run read as "nothing to run").
+  if grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
     return 0
   fi
   [ -n "${2:-}" ] || return 1
   while IFS=$'\t' read -r pkg name path; do
     { [ "${pkg}" = "$1" ] && [ "${name}" = "$2" ]; } || continue
     escaped="$(printf '%s' "${path}" | sed 's/[][\\.*^$/]/\\&/g')"
-    if tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}(/.*)?$"; then
+    if grep -qE "^${escaped}(/.*)?$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
       return 0
     fi
   done <<< "${VENUE_TRIGGER_ROWS:-}"
@@ -780,12 +785,18 @@ check_venue_oracles() {
     # CHAOS-7653: print the registry rows the changed paths select and run nothing (no
     # Go, jq, containers or Python needed). The registry-against-tree validation is the
     # run's own first step; the selection reads the registry rows alone, so it is fast.
-    local list_dir list_name list_kind
+    local list_dir list_name list_kind list_rows
+    # The rows are read first, so a registry that cannot be read (or holds no run row) is an error: a loop fed by a process
+    # substitution cannot see the failure of its producer and read it as "nothing selected".
+    list_rows="$(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2)" \
+      || die "venue-oracles --changed: the registry ci/venue_oracle_registry.d/ could not be read (see above)"
+    [ -n "$(printf '%s\n' "${list_rows}" | awk '$3 == "run"')" ] \
+      || die "venue-oracles --changed: ci/venue_oracle_registry.d/ holds no run row, so nothing could ever be selected"
     while read -r list_dir list_name list_kind; do
       if [ "${list_kind}" = run ] && venue_oracle_changed_selects "${list_dir}" "${list_name}"; then
         printf 'SELECT\t%s\t%s\n' "${list_dir}" "${list_name}"
       fi
-    done < <(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2)
+    done <<< "${list_rows}"
     return 0
   fi
   command -v jq >/dev/null 2>&1 \
@@ -1044,6 +1055,8 @@ check_contract() {
 declare -A INTEGRATION_DENYLIST=()
 declare -A INTEGRATION_SHARD_WEIGHTS=()
 declare -A INTEGRATION_SHARD_BY_KEY=()
+declare -A AFFECTED_KEYS=()
+AFFECTED_FILTER_ACTIVE=0
 declare -a INTEGRATION_SHARD_TOTALS=()
 declare -a INTEGRATION_SHARD_PACKAGE_COUNTS=()
 declare -a INTEGRATION_SHARD_NON_PROVIDER_COUNTS=()
@@ -2512,37 +2525,96 @@ check_remaining_test_shard() {
   )
 }
 
+# load_affected_selection reads INTEGRATION_AFFECTED_FILE, the output of
+# ci/go_affected_integration.py (CHAOS-9947). Unset, empty, or a first line other
+# than "AFFECTED <n>" means the whole suite. An AFFECTED key that is not a
+# planned package is a failure, never an ignored line.
+load_affected_selection() {
+  AFFECTED_FILTER_ACTIVE=0
+  AFFECTED_KEYS=()
+  local file="${INTEGRATION_AFFECTED_FILE:-}" first line count=0 declared
+  if [ -z "${file}" ]; then
+    return 0
+  fi
+  [ -f "${file}" ] || die "INTEGRATION_AFFECTED_FILE not found: ${file}"
+  first="$(head -n 1 "${file}")"
+  case "${first}" in
+    "AFFECTED "*) ;;
+    "FULL "*)
+      printf 'integration affected selection: %s -- running the full suite\n' "${first}"
+      return 0
+      ;;
+    *) die "INTEGRATION_AFFECTED_FILE ${file} has an unknown first line '${first}'" ;;
+  esac
+  declared="${first#AFFECTED }"
+  case "${declared}" in ""|*[!0-9]*) die "INTEGRATION_AFFECTED_FILE count is not numeric: '${declared}'" ;; esac
+  while IFS= read -r line; do
+    [ -n "${line}" ] || continue
+    [ -n "${INTEGRATION_SHARD_WEIGHTS[${line}]+set}" ] \
+      || die "affected selection names '${line}', which is not a planned integration package"
+    [ -z "${AFFECTED_KEYS[${line}]+set}" ] \
+      || die "affected selection lists '${line}' more than once"
+    AFFECTED_KEYS["${line}"]=1
+    count=$((count + 1))
+  done < <(tail -n +2 "${file}")
+  [ "${count}" -eq "${declared}" ] \
+    || die "affected selection declares ${declared} package(s) but lists ${count}"
+  AFFECTED_FILTER_ACTIVE=1
+  printf 'integration affected selection: %d package(s)\n' "${count}"
+  for line in "${!AFFECTED_KEYS[@]}"; do
+    printf '  AFFECTED %s\n' "${line}"
+  done | LC_ALL=C sort
+}
+
+# affected_includes KEY: true when the whole suite runs or KEY is selected.
+affected_includes() {
+  [ "${AFFECTED_FILTER_ACTIVE}" -eq 0 ] || [ -n "${AFFECTED_KEYS[$1]+set}" ]
+}
+
 emit_integration_shard_matrix() {
-  local matrix='{"include":[' separator="" shard
-  for ((shard = 1; shard <= PROVIDER_TEST_SHARD_COUNT; shard++)); do
-    matrix+="${separator}{\"target\":\"providersync\",\"shard\":${shard}}"
-    separator=","
-  done
-  for ((shard = 1; shard <= DAILY_TEST_SHARD_COUNT; shard++)); do
-    matrix+="${separator}{\"target\":\"daily\",\"shard\":${shard}}"
-    separator=","
-  done
-  for ((shard = 1; shard <= WORKERSERVICE_TEST_SHARD_COUNT; shard++)); do
-    matrix+="${separator}{\"target\":\"workerservice\",\"shard\":${shard}}"
-    separator=","
-  done
-  for ((shard = 1; shard <= QAPISERVER_TEST_SHARD_COUNT; shard++)); do
-    matrix+="${separator}{\"target\":\"queryapiserver\",\"shard\":${shard}}"
-    separator=","
-  done
-  for ((shard = 1; shard <= REMAINING_TEST_SHARD_COUNT; shard++)); do
-    matrix+="${separator}{\"target\":\"remaining\",\"shard\":${shard}}"
-    separator=","
+  load_affected_selection
+  local matrix='{"include":[' separator="" shard key count=0
+  local -a split_keys=(
+    "${PROVIDER_INTEGRATION_PACKAGE_KEY}" "${DAILY_INTEGRATION_PACKAGE_KEY}"
+    "${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" "${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
+    "${REMAINING_INTEGRATION_PACKAGE_KEY}"
+  )
+  local -a split_targets=(providersync daily workerservice queryapiserver remaining)
+  local -a split_counts=(
+    "${PROVIDER_TEST_SHARD_COUNT}" "${DAILY_TEST_SHARD_COUNT}"
+    "${WORKERSERVICE_TEST_SHARD_COUNT}" "${QAPISERVER_TEST_SHARD_COUNT}"
+    "${REMAINING_TEST_SHARD_COUNT}"
+  )
+  local i
+  for i in "${!split_targets[@]}"; do
+    affected_includes "${split_keys[${i}]}" || continue
+    for ((shard = 1; shard <= split_counts[i]; shard++)); do
+      matrix+="${separator}{\"target\":\"${split_targets[${i}]}\",\"shard\":${shard}}"
+      separator=","
+      count=$((count + 1))
+    done
   done
   for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
     [ "${INTEGRATION_SHARD_NON_PROVIDER_COUNTS[${shard}]}" -gt 0 ] || continue
+    if [ "${AFFECTED_FILTER_ACTIVE}" -eq 1 ]; then
+      local hit=0
+      for key in "${!INTEGRATION_SHARD_BY_KEY[@]}"; do
+        [ "${INTEGRATION_SHARD_BY_KEY[${key}]}" -eq "${shard}" ] || continue
+        for i in "${!split_keys[@]}"; do [ "${key}" != "${split_keys[${i}]}" ] || continue 2; done
+        [ -z "${AFFECTED_KEYS[${key}]+set}" ] || hit=1
+      done
+      [ "${hit}" -eq 1 ] || continue
+    fi
     matrix+="${separator}{\"target\":\"packages\",\"shard\":${shard}}"
     separator=","
+    count=$((count + 1))
   done
   matrix+=']}'
   printf 'integration shard matrix: %s\n' "${matrix}"
+  printf 'integration shard legs: %d\n' "${count}"
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     printf 'matrix=%s\n' "${matrix}" >> "${GITHUB_OUTPUT}"
+    printf 'legs=%d\n' "${count}" >> "${GITHUB_OUTPUT}"
   fi
 }
 

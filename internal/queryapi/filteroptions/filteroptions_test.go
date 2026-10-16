@@ -20,6 +20,9 @@ import (
 type fixtureRowScanner struct {
 	rows  []string
 	index int
+	// nullRows are the 1-based row numbers whose column is NULL: the real
+	// driver scans a Nullable(String) into a **string and leaves it nil.
+	nullRows map[int]bool
 }
 
 func (s *fixtureRowScanner) Next() bool {
@@ -31,11 +34,17 @@ func (s *fixtureRowScanner) Next() bool {
 }
 
 func (s *fixtureRowScanner) Scan(dest ...any) error {
-	ptr, ok := dest[0].(*string)
-	if !ok {
-		return errors.New("fixtureRowScanner: expected *string dest")
+	switch ptr := dest[0].(type) {
+	case **string:
+		if s.nullRows[s.index] {
+			*ptr = nil
+			return nil
+		}
+		v := s.rows[s.index-1]
+		*ptr = &v
+	default:
+		return errors.New("fixtureRowScanner: expected **string dest")
 	}
-	*ptr = s.rows[s.index-1]
 	return nil
 }
 
@@ -87,6 +96,8 @@ func (c byQueryClient) Query(_ context.Context, query string, bindings []dhclick
 type namePairScanner struct {
 	rows  [][2]string
 	index int
+	// nullKey and nullName are the 1-based row numbers whose id or name column is NULL.
+	nullKey, nullName map[int]bool
 }
 
 func (s *namePairScanner) Next() bool {
@@ -101,12 +112,26 @@ func (s *namePairScanner) Scan(dest ...any) error {
 	if len(dest) != 2 {
 		return errors.New("namePairScanner: expected two dests")
 	}
-	id, ok1 := dest[0].(*string)
-	name, ok2 := dest[1].(*string)
-	if !ok1 || !ok2 {
-		return errors.New("namePairScanner: expected *string dests")
+	row := s.rows[s.index-1]
+	null := [2]bool{s.nullKey[s.index], s.nullName[s.index]}
+	for i, d := range dest {
+		switch ptr := d.(type) {
+		case **string:
+			*ptr = nil
+			if !null[i] {
+				*ptr = &row[i]
+			}
+		case *string:
+			// The driver leaves a plain destination untouched on a NULL: a test row that is NULL
+			// here is a site that cannot tell NULL from a value.
+			if null[i] {
+				return errors.New("namePairScanner: NULL scanned into a plain *string")
+			}
+			*ptr = row[i]
+		default:
+			return errors.New("namePairScanner: expected *string or **string dests")
+		}
 	}
-	*id, *name = s.rows[s.index-1][0], s.rows[s.index-1][1]
 	return nil
 }
 

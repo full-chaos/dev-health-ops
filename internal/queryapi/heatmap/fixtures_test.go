@@ -54,6 +54,20 @@ func (s *fixtureRowScanner) Scan(dest ...any) error {
 			*typed = row[i].(float64)
 		case *time.Time:
 			*typed = row[i].(time.Time)
+		case **float64:
+			if row[i] == nil {
+				*typed = nil
+				continue
+			}
+			v := row[i].(float64)
+			*typed = &v
+		case **time.Time:
+			if row[i] == nil {
+				*typed = nil
+				continue
+			}
+			v := row[i].(time.Time)
+			*typed = &v
 		default:
 			return fmt.Errorf("fixtureRowScanner: unsupported dest type %T", d)
 		}

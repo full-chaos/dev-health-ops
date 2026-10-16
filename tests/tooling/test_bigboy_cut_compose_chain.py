@@ -181,7 +181,7 @@ def _c_stage(tmp: Path, name: str, text: str | None = None) -> Path:
     (host / "ops").mkdir(parents=True, exist_ok=True)
     (host / "ops" / ".env").write_text("X=1\n")
     (host / "_records").mkdir(exist_ok=True)
-    (host / "_records" / "bigboy-pins.env").write_text(
+    (host / "_records" / "images.env").write_text(
         f"BIGBOY_DHO_IMAGE=ghcr.io/full-chaos/dev-health-go-dho@sha256:{'cd' * 32}\n"
     )
     rec = host / "rec"
@@ -276,7 +276,7 @@ def _c_violations(calls: list[dict]) -> list[str]:
             if a.startswith("--env-file="):
                 val = a.split("=", 1)[1]
             if val is not None and not re.fullmatch(
-                r"(?:/[^\s]*/)?(?:ops/\.env|_records/bigboy-pins\.env)", val
+                r"(?:/[^\s]*/)?(?:ops/\.env|_records/images\.env)", val
             ):
                 v.append(f"foreign --env-file {val!r}")
         if any(a in ("printenv",) for a in argv):
@@ -332,7 +332,7 @@ def test_hook_check_obeys_every_class_rule(tmp_path: Path) -> None:
             "COMPOSE_FILE" not in c["env"]
         )  # CHAOS-9962: the one file is a -f argument
         assert any(a.endswith("/compose.bigboy.yml") for a in c["argv"])
-        assert "venue" in c["argv"]  # the profile of the one-off
+        assert "venue-hook" in c["argv"]  # the one-off has its own profile
         assert c["env"]["HOOK_OPERATOR_IMAGE"].endswith(
             "@" + _c_DIGEST
         )  # positive control: derived, passed as an image ref
@@ -388,7 +388,9 @@ def test_an_inherited_compose_file_never_decides_the_chain(tmp_path: Path) -> No
             name,
             files,
         )
-        assert "--profile" in last["argv"] and "venue" in last["argv"], name
+        assert "--profile" in last["argv"] and any(
+            profile in last["argv"] for profile in ("venue-hook", "venue-river")
+        ), name
 
 
 def test_river_apply_by_hand_needs_no_running_reconciler(tmp_path: Path) -> None:
@@ -422,10 +424,10 @@ def test_river_apply_obeys_every_class_rule(tmp_path: Path) -> None:
     assert runs[0]["argv"][-3:] == ["migrate", "river", "--apply-and-check"]
     assert "COMPOSE_FILE" not in runs[0]["env"]
     assert any(a.endswith("/compose.bigboy.yml") for a in runs[0]["argv"])
-    assert "venue" in runs[0]["argv"]
+    assert "venue-river" in runs[0]["argv"]
     assert (
         "image=sha256:" + "cd" * 32 in p.stdout
-    )  # the dho pin of _records/bigboy-pins.env, as an image reference only
+    )  # the dho pin of _records/images.env, as an image reference only
     assert "river_apply_rc=0" in p.stdout
 
 
@@ -513,7 +515,7 @@ def test_one_offs_carry_no_literal_credential_and_use_compose_substitution() -> 
         ("venue-river", "${BIGBOY_DHO_IMAGE:?"),
     ):
         s = doc["services"][svc]
-        assert "venue" in s["profiles"] and list(s["networks"]) == ["dev-health"]
+        assert s["profiles"] == [svc] and list(s["networks"]) == ["dev-health"]
         assert s["image"].startswith(image_prefix), s["image"]
         assert re.fullmatch(
             r"postgresql://devhealth:\$\{POSTGRES_PASSWORD:-devhealth\}@postgres:5432/devhealth\?sslmode=disable",
@@ -597,7 +599,7 @@ def test_graphql_prove_psql_line_is_a_compose_exec_on_the_stack_files() -> None:
 
 
 def test_the_one_offs_keep_their_compose_shape(tmp_path: Path) -> None:
-    """-p dev-health, --env-file ops/.env, --profile venue, run --rm --no-deps -T on the one-off service: pinned for BOTH."""
+    """-p dev-health, --env-file ops/.env, --profile <the one-off's own profile>, run --rm --no-deps -T on the one-off service: pinned for BOTH."""
     for name, service, args in (
         ("bigboy-hook-check.sh", "venue-hook", True),
         ("bigboy-river-apply.sh", "venue-river", False),
@@ -615,7 +617,7 @@ def test_the_one_offs_keep_their_compose_shape(tmp_path: Path) -> None:
             assert a[a.index("--env-file") + 1] == "ops/.env", (name, a)
             for needed in (
                 "--profile",
-                "venue",
+                service,
                 "run",
                 "--rm",
                 "--no-deps",
@@ -623,4 +625,4 @@ def test_the_one_offs_keep_their_compose_shape(tmp_path: Path) -> None:
                 service,
             ):
                 assert needed in a, (name, needed, a)
-            assert a.index("--profile") + 1 == a.index("venue")
+            assert a.index("--profile") + 1 == a.index(service)

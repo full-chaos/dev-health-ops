@@ -74,7 +74,7 @@ def _run_harness(tmp_path: Path, *args: str) -> tuple[int, list[list[str]]]:
     status and every docker call it made."""
     root = tmp_path / "root"
     (root / "_records").mkdir(parents=True)
-    (root / "_records" / "bigboy-pins.env").write_text(
+    (root / "_records" / "images.env").write_text(
         f"BIGBOY_API_TOOLS_IMAGE=ghcr.io/full-chaos/dev-health-go-api-tools@{DIGEST}\n",
         encoding="utf-8",
     )

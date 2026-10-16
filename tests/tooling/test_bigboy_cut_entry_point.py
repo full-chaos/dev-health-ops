@@ -57,7 +57,7 @@ def _build_bigboy_root(tmp_path: Path) -> Path:
     lines.append(
         f"BIGBOY_WEB_IMAGE=ghcr.io/full-chaos/dev-health-web@{_WEB_OLD_DIGEST}\n"
     )
-    (compose_dir / "bigboy-pins.env").write_text("".join(lines))
+    (compose_dir / "images.env").write_text("".join(lines))
     (root / "ops").mkdir()
     (root / "ops" / ".env").write_text("")
     old_records = root / "_records" / f"bigboy-{_OLD8}"

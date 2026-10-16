@@ -12,11 +12,14 @@ plain `docker compose` (the earlier `stack.sh` over twelve overlay files is reti
 twelve was). The project directory is the bigboy root, the env files are `ops/.env` and the pins file, the project is `dev-health`:
 
 ```
-cd "$BIGBOY_ROOT"      # /home/ubuntu/devhealth, the running tree
+cd "$BIGBOY_ROOT"      # /home/ubuntu/devhealth, the running tree (the checkout is ops/)
 docker compose -p dev-health --project-directory "$BIGBOY_ROOT" \
-  --env-file ops/.env --env-file _records/bigboy-pins.env \
-  -f ci/bigboy/compose.bigboy.yml  <verb>
+  --env-file ops/.env --env-file _records/images.env \
+  -f ops/ci/bigboy/compose.bigboy.yml \
+  up -d --no-deps --no-build query-api go-api web
 ```
+
+(`--profile` only for the optional services, e.g. `--profile smoke run --rm --no-deps -T web-smoke`; none for the live stack.)
 
 | What | Command (after the lines above) |
 |---|---|
@@ -24,23 +27,23 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" \
 | status, logs | `ps`, `logs --tail=200 <service>` |
 | start or recreate a service | `up -d --no-deps --no-build <service>...` (never the whole stack) |
 | one-off container | `run --rm --no-deps -T <service> [cmd...]` |
-| the optional services | add `--profile smoke` (web-smoke) or `--profile venue` (venue-prove, venue-tools, venue-hook, venue-river) |
+| the optional services | add `--profile smoke` (web-smoke), `--profile venue` (venue-prove, venue-tools), `--profile venue-hook` (venue-hook) or `--profile venue-river` (venue-river) |
 
 Do not export `COMPOSE_FILE`, `COMPOSE_PROFILES` or any other `COMPOSE_*` variable: the cut scripts unset them so nothing adds a file
 or a profile. `docker compose` interpolates every service of the file, also those of a profile that is not enabled, so a variable a
 one-off needs is read with an empty default (`${PROVE_ORG:-}`) and the script that starts the one-off checks it
 (web-path-smoke.sh, bigboy-graphql-prove.sh); only the variables the live stack needs are required (`:?`): the four image pins
-(`_records/bigboy-pins.env`) and `DHO_API_CH_USERS_XML` (the host file mounted into ClickHouse's users.d, default
+(`_records/images.env`) and `DHO_API_CH_USERS_XML` (the host file mounted into ClickHouse's users.d, default
 `$BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml`; bigboy-cut.sh exports it).
 
 **Pins.** The digests of the four images (`BIGBOY_DHO_IMAGE`, `BIGBOY_API_TOOLS_IMAGE`, `BIGBOY_WEB_IMAGE`, `BIGBOY_OPERATOR_IMAGE`) live
-in `_records/bigboy-pins.env`, the one file a cut rewrites (`bigboy-repin*.sh`; they also write the operator pin, so a plain
-`docker compose ps` needs nothing exported). The tracked `ci/bigboy/bigboy-pins.env` is the last pin a PR recorded; copy it to
+in `_records/images.env`, the one file a cut rewrites (`bigboy-repin*.sh`; they also write the operator pin, so a plain
+`docker compose ps` needs nothing exported). The tracked `ci/bigboy/images.env` is the last pin a PR recorded; copy it to
 `_records/` to start a bigboy root. `BIGBOY_OPERATOR_IMAGE` is absent from the tracked copy: the cut exports it, and repin writes it.
 
 **First use on a root that still has the old pin file** (read-only until the last line; GWC owns the switch window): the new file renders
 the live `stack` byte-identically (so no container is recreated by the switch itself), but the pins now come from an env file. Make
-`_records/bigboy-pins.env` from the digests the old `_records/compose.bigboy.images.yml` pins, with grep only (no value is a secret):
+`_records/images.env` from the digests the old `_records/compose.bigboy.images.yml` pins, with grep only (no value is a secret):
 
 ```
 cd "$BIGBOY_ROOT"
@@ -48,7 +51,7 @@ for pair in BIGBOY_DHO_IMAGE:dev-health-go-dho BIGBOY_API_TOOLS_IMAGE:dev-health
   var=${pair%%:*}; img=${pair##*:}
   ref=$(grep -ohE "ghcr.io/full-chaos/$img@sha256:[0-9a-f]{64}" _records/compose.bigboy.images.yml | head -1) || true
   [ -n "$ref" ] && echo "$var=$ref"
-done > _records/bigboy-pins.env
+done > _records/images.env
 ```
 
 then compare the render (names only: `ci/bigboy/compose-config-redacted.sh` with the arguments above) before running any `up`.
@@ -84,7 +87,7 @@ The bigboy stack runs no Python api, as prod does. The base `compose.yml` of the
   `--no-deps` on the cut's `up` skips none.
 
 ORDER for the first cut with these files (the same order the billing-edge retirement used): (1) put
-the tracked `bigboy-pins.env` in place of the pin file `_records/bigboy-pins.env`,
+the tracked `images.env` in place of the pin file `_records/images.env`,
 keeping the digests the host copy has; and repin the dho digests to a build that has the `dho smoke web-path` verb (the smoke works only with both); (2) with the OLD chain still exported, name and remove the two
 Python containers with compose verbs (`docker compose ... ps api metrics-api`, then
 `docker compose ... rm -sf api metrics-api`; one approved line, run on the lead's GO); (3) regenerate
@@ -205,7 +208,7 @@ query-api at all -- a real user's JWT was rejected outright with no way to serve
 `bigboy-cut.sh`'s `query-api-enabled-flags-current` STEP now does two checks, both required for
 `DEPLOY_SHA=<pinned deploy commit>` (see "Pinned deploy values" below):
 1. Every NAME the generator emits (flags + secret refs) is present in the checked-in
-   `_records/bigboy-pins.env` -- fails loud (STEP rc=1) naming exactly which name(s) are
+   `_records/images.env` -- fails loud (STEP rc=1) naming exactly which name(s) are
    missing, rather than a silent 404/401 surfacing hours later through a real user.
 2. Every secret-ref NAME resolves to a non-blank value through the LIVE, `--env-file`-substituted
    compose config -- fails loud (separate STEP `query-api-secret-refs-nonblank`, rc=1) if any

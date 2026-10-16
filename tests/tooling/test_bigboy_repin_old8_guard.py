@@ -3,7 +3,7 @@ ACTUALLY-running build (CHAOS-7014).
 
 D2801: a mistyped OLD8 (9 chars, "bd25cd0a9" instead of "bd25cd0a") made the repin's own `cp` of
 _records/bigboy-$OLD8/*.sh fail under `set -euo pipefail` BEFORE the sed rewrite of
-bigboy-pins.env ever ran. bigboy-pins.env was backed up but never actually
+images.env ever ran. images.env was backed up but never actually
 repointed, and every downstream STEP in bigboy-cut.sh (migrate/up/up-workers/rest/...) still
 reported rc=0 against the stale, pre-cut images -- a void proof run that looked green.
 """
@@ -45,11 +45,11 @@ def test_old8_shape_is_checked_before_any_file_is_touched() -> None:
 
 def _build_root(tmp_path: Path) -> Path:
     """A minimal real-shaped bigboy tree (BIGBOY_ROOT, CHAOS-7022 D2895): just enough to pass
-    bigboy-repin.sh's own layout check (_records/bigboy-pins.env + _records must
+    bigboy-repin.sh's own layout check (_records/images.env + _records must
     exist) without needing anything the shape guard runs before ever reaches."""
     root = tmp_path / "root"
     (root / "_records").mkdir(parents=True)
-    (root / "_records" / "bigboy-pins.env").write_text("placeholder\n")
+    (root / "_records" / "images.env").write_text("placeholder\n")
     return root
 
 
@@ -60,10 +60,10 @@ def test_old8_shape_guard_actually_rejects_a_bad_old8_before_any_write(
     the same ordering but neuters the check (e.g. drops the `exit 4`) would not catch. This
     drives the REAL bigboy-repin.sh with the exact D2801 typo shape (9 characters,
     'bd25cd0a9') and asserts the OUTCOME: nonzero exit, the D2801 error text, and -- the part
-    a text pin cannot see at all -- that neither bigboy-pins.env nor any
+    a text pin cannot see at all -- that neither images.env nor any
     `_records/bigboy-<N8>` dir was actually touched."""
     root = _build_root(tmp_path)
-    ov_path = root / "_records" / "bigboy-pins.env"
+    ov_path = root / "_records" / "images.env"
     ov_before = ov_path.read_text()
     proc = subprocess.run(
         ["bash", str(REPIN), "bd25cd0a9", "b" * 40],
@@ -77,7 +77,7 @@ def test_old8_shape_guard_actually_rejects_a_bad_old8_before_any_write(
     assert "not exactly 8 lowercase hex characters" in proc.stdout + proc.stderr, (
         f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     )
-    assert ov_path.read_text() == ov_before, "bigboy-pins.env must not be touched"
+    assert ov_path.read_text() == ov_before, "images.env must not be touched"
     assert not [
         p
         for p in (root / "_records").iterdir()
@@ -109,7 +109,7 @@ def test_old8_cross_checked_against_the_actually_pinned_digest_before_repin() ->
     dig_fn_at = _first(lines, "dig() {", start=mismatch_at)
     assert resolved_at < pinned_at < mismatch_at < dig_fn_at, (
         "OLD8 must be resolved against the registry and cross-checked against the digest "
-        "bigboy-pins.env currently pins BEFORE any digest resolution for the NEW "
+        "images.env currently pins BEFORE any digest resolution for the NEW "
         "build begins"
     )
 
@@ -136,7 +136,7 @@ def test_old8_registry_lookup_uses_the_seven_character_image_tag(
     cross-check (which then refuses, because the pinned digest differs from the resolved one)
     instead of failing as an unresolvable image."""
     root = _build_root(tmp_path)
-    (root / "_records" / "bigboy-pins.env").write_text(
+    (root / "_records" / "images.env").write_text(
         "image: ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "c" * 64 + "\n"
     )
     bin_dir = tmp_path / "bin"

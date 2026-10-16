@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "ci" / "bigboy"
 COMPOSE_FILE = TOOLS / "compose.bigboy.yml"
-PINS_FILE = TOOLS / "bigboy-pins.env"
+PINS_FILE = TOOLS / "images.env"
 OPERATOR_IMAGE = "ghcr.io/full-chaos/dev-health-go-operator@sha256:" + "0" * 64
 
 
@@ -21,15 +21,13 @@ def scratch_root(tmp_path: Path) -> Path:
     for rel in (
         "ops/.env",
         "web/.env",
-        "_records/bigboy-pins.env",
+        "_records/images.env",
         ".go-api-dev/go-api.env",
         ".go-api-dev/dho_api_ch.xml",
     ):
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            PINS_FILE.read_text() if rel.endswith("bigboy-pins.env") else ""
-        )
+        path.write_text(PINS_FILE.read_text() if rel.endswith("images.env") else "")
     return root
 
 
@@ -44,7 +42,7 @@ def compose_argv(root: Path, *profiles: str) -> list[str]:
         "--env-file",
         str(root / "ops" / ".env"),
         "--env-file",
-        str(root / "_records" / "bigboy-pins.env"),
+        str(root / "_records" / "images.env"),
         "-f",
         str(COMPOSE_FILE),
     ]

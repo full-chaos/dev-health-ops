@@ -1,15 +1,16 @@
 # ci/bigboy/compose.bigboy.yml (CHAOS-9962): the ONE compose file of the bigboy stack, with profiles for the optional services.
 # It is the compose merge of the twelve files stack.sh used to chain (base, go-workers, sweep, images, workers, clickhouse-users,
 # billing-edge, router and the one-off overlays smoke, prove, hook-check, river-apply); `docker compose config` of the old live chain
-# and of this file is byte-identical (tests/tooling/test_bigboy_one_compose_file.py). Start it with plain docker compose:
-#   docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env -f ci/bigboy/compose.bigboy.yml up -d --no-deps <service>
-# Profiles: smoke (web-smoke), venue (venue-prove, venue-tools, venue-hook, venue-river), retired-python-api, retired-billing-edge,
+# and of this file was byte-identical when this file was made (PR of CHAOS-9962; tests/tooling/test_bigboy_one_compose_file.py keeps the service list of each old set). Start it with plain docker compose:
+#   docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env -f ops/ci/bigboy/compose.bigboy.yml up -d --no-deps --no-build <service>
+# Profiles: smoke (web-smoke), venue (venue-prove, venue-tools), venue-hook, venue-river (one profile each: the old hook-check and river-apply
+# chains held only their own one-off), retired-python-api, retired-billing-edge,
 # and the others of the base file. A one-off service reads its variables with a default, never `:?`: compose interpolates the
 # services of an inactive profile too, so a required variable would fail every other command. The script that starts a one-off
 # service checks its variables first (web-path-smoke.sh, bigboy-graphql-prove.sh, bigboy-hook-check.sh, bigboy-river-apply.sh).
 # BIGBOY_OPERATOR_IMAGE (the workers) and DHO_API_CH_USERS_XML (clickhouse) stay required: the live stack needs them.
 # The image digests are NOT in this file: ${BIGBOY_DHO_IMAGE}, ${BIGBOY_API_TOOLS_IMAGE}, ${BIGBOY_WEB_IMAGE} and ${BIGBOY_OPERATOR_IMAGE}
-# come from the pins env file (_records/bigboy-pins.env, tracked copy ci/bigboy/bigboy-pins.env), which bigboy-repin*.sh rewrite at every cut.
+# come from the pins env file (_records/images.env, tracked copy ci/bigboy/images.env), which bigboy-repin*.sh rewrite at every cut.
 # The comment blocks below quote the retired files as they were: where one says the images overlay holds a digest, read the pins env file.
 #
 # The comments of the twelve retired files, one block each (the full text is in git history):
@@ -369,7 +370,7 @@ services:
     - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY:-}
     - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
     - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
-    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/images.env}'
     labels:
       traefik.enable: 'true'
       traefik.http.routers.billing-go.entrypoints: web
@@ -1420,7 +1421,7 @@ services:
     - RIVER_DOMAIN_DATABASE_ROLE=${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
     - RIVER_QUEUE_DATABASE_ROLE=${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
     - DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST=${DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST:-}
-    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/images.env}'
     labels:
       logging.service.name: dev-health-migrate
       logging.service.namespace: dev-health
@@ -1616,7 +1617,7 @@ services:
     - QUERY_API_MCP_ALLOWED_CIDRS=10.199.79.0/28
     - QUERY_API_MCP_BOUNDARY=allowed-cidrs
     - SETTINGS_ENCRYPTION_KEY=${SETTINGS_ENCRYPTION_KEY}
-    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/images.env}'
     labels:
       logging.service.name: dev-health-query-api
       logging.service.namespace: dev-health
@@ -1751,7 +1752,7 @@ services:
     networks:
       dev-health: null
     profiles:
-    - venue
+    - venue-hook
   venue-prove:
     entrypoint:
     - sh
@@ -1765,7 +1766,7 @@ services:
     - POSTGRES_URI=postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
     - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
     - PROVE_ORG=${PROVE_ORG:-}
-    image: '${BIGBOY_API_TOOLS_IMAGE:?BIGBOY_API_TOOLS_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    image: '${BIGBOY_API_TOOLS_IMAGE:?BIGBOY_API_TOOLS_IMAGE is the image pin: pass --env-file _records/images.env}'
     networks:
       dev-health: null
       dho-query-internal: null
@@ -1800,11 +1801,11 @@ services:
       RIVER_DATABASE_SCHEMA: river
       RIVER_DOMAIN_DATABASE_ROLE: devhealth_domain
       RIVER_QUEUE_DATABASE_ROLE: devhealth_queue
-    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/images.env}'
     networks:
       dev-health: null
     profiles:
-    - venue
+    - venue-river
   venue-tools:
     entrypoint:
     - sh
@@ -1817,7 +1818,7 @@ services:
       GO_API_PROVE_VENUE_ACK: bigboy-compose
       GO_API_QUERY_API_URL: http://query-api:8090
       POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
-    image: '${BIGBOY_API_TOOLS_IMAGE:?BIGBOY_API_TOOLS_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    image: '${BIGBOY_API_TOOLS_IMAGE:?BIGBOY_API_TOOLS_IMAGE is the image pin: pass --env-file _records/images.env}'
     networks:
       dev-health: null
     profiles:
@@ -1876,7 +1877,7 @@ services:
       - --spider
       - http://localhost:3000/health
       timeout: 10s
-    image: '${BIGBOY_WEB_IMAGE:?BIGBOY_WEB_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    image: '${BIGBOY_WEB_IMAGE:?BIGBOY_WEB_IMAGE is the image pin: pass --env-file _records/images.env}'
     labels:
       logging.service.name: dev-health-web
       logging.service.namespace: dev-health
@@ -1910,7 +1911,7 @@ services:
       DHO_SMOKE_RECEIPT_PATH: ${DHO_SMOKE_RECEIPT_PATH:-/receipts/web-path-smoke-receipt.json}
       DHO_SMOKE_ROUTING_OPS: /smoke/routing-ops.txt
       DHO_SMOKE_WEB_SRC: /web-src
-    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/images.env}'
     networks:
       dev-health: null
     profiles:

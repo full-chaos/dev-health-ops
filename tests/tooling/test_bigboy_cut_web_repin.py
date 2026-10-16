@@ -104,7 +104,7 @@ def _run_repin(
     tag of `image_for` and logs its call. Returns (completed process, overlay text, calls log text)."""
     root = tmp_path / "root"
     (root / "_records").mkdir(parents=True)
-    overlay = root / "_records" / "bigboy-pins.env"
+    overlay = root / "_records" / "images.env"
     overlay.write_text(
         f"BIGBOY_WEB_IMAGE=ghcr.io/full-chaos/dev-health-web@{OLD_DIGEST}\n"
     )

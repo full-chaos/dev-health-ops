@@ -44,11 +44,11 @@ mkdir -p "$OUT/proof/bodies"; chmod 0755 "$OUT" "$OUT/proof" "$OUT/proof/bodies"
 cd "$R"
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
 unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
-DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/bigboy-pins.env -f "$HERE/compose.bigboy.yml")
+DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
 
 # 1. prover build == candidate build
 want=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-go-api-tools:sha-$S7" --format '{{json .Manifest}}' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null)
-pinned=$(grep -oE 'dev-health-go-api-tools@sha256:[0-9a-f]{64}' _records/bigboy-pins.env | head -1 | cut -d@ -f2)   # venue-prove runs ${BIGBOY_API_TOOLS_IMAGE}
+pinned=$(grep -oE 'dev-health-go-api-tools@sha256:[0-9a-f]{64}' _records/images.env | head -1 | cut -d@ -f2)   # venue-prove runs ${BIGBOY_API_TOOLS_IMAGE}
 if [ -n "$want" ] && [ "$want" = "$pinned" ]; then st prover-image 0; else
   st prover-image 1; echo "REFUSED: venue-prove image ${pinned:-<none>} is not go-api-tools:sha-$S7 (${want:-unresolved}) -- re-pin before proving" >&2; exit 1; fi
 

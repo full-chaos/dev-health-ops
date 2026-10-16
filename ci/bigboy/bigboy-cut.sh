@@ -32,7 +32,7 @@ export BIGBOY_TOOLS_DIR=$HERE
 [ -f "$HERE/bigboy-repin.sh" ] || { echo "FAIL: BIGBOY_TOOLS_DIR=$HERE has no bigboy-repin.sh -- refusing to run with a directory that is not the bigboy cut tools" >&2; exit 1; }
 # Fail closed (D2895): refuse a root that is not shaped like a real bigboy tree, rather than
 # silently proceeding to `cd` into it and produce confusing failures many steps later.
-for need in _records/bigboy-pins.env _records; do
+for need in _records/images.env _records; do
   [ -e "$R/$need" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing $need -- refusing to run against a root that is not a real bigboy tree" >&2; exit 1; }
 done
 # CHAOS-7131: the router settings are part of the one compose file. It sets web's BACKEND_URL (the plane-split router)
@@ -45,7 +45,7 @@ done
 export DHO_API_CH_USERS_XML="${DHO_API_CH_USERS_XML:-$R/.go-api-dev/dho_api_ch.xml}"
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
 unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
-DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/bigboy-pins.env -f "$HERE/compose.bigboy.yml")
+DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
 cd "$R"
 st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 echo "cut start $(date -u +%T) new=$NEW root=$R tools=$HERE"
@@ -142,7 +142,7 @@ $HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; st repin $?
 # CHAOS-7019: `web` is a LOCAL BUILD service in the root compose.yml, unlike query-api/
 # go-api which the bigboy overlay pins to CI-built ghcr.io digests -- so a web-only merge (or a
 # web+ops merge landing together, like CHAOS-6262) left a stale host build silently serving
-# pages the backend underneath had already changed shape for. _records/bigboy-pins.env now
+# pages the backend underneath had already changed shape for. _records/images.env now
 # pins `web` by digest too (build: !reset null); this STEP repins it to the CI image for web's
 # OWN main branch HEAD, every cut, no host build, before `up` recreates it below.
 # CHAOS-7901: the caller picks the web build by the environment of THIS script: WEB_REPIN=skip (web stays as it is),

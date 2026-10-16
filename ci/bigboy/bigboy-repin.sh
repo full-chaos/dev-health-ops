@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # bigboy re-pin (gwc-prod-ops): bigboy-repin.sh <old-full-sha-dir-suffix e.g. a97b97ed> <new-full-sha>
-# Rewrites _records/bigboy-pins.env digests (backup .bak-<old>) and creates _records/bigboy-<new8>/ from
+# Rewrites _records/images.env digests (backup .bak-<old>) and creates _records/bigboy-<new8>/ from
 # _records/bigboy-<old>/ with the tools digest swapped. No compose up/recreate here (run separately, with the
 # one compose file and the pins env file). No secrets touched.
 set -euo pipefail
 OLD8=${1:?old8}; NEW=${2:?new full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
 # CHAOS-7022 D2895/D2886(2): same BIGBOY_ROOT root parameter as bigboy-cut.sh -- default is
 # byte-identical to the hardcoded path this script always used.
-R="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"; OV=$R/_records/bigboy-pins.env
+R="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"; OV=$R/_records/images.env
 echo "repin start root=$R old8=$OLD8 new=$NEW"
-for need in _records/bigboy-pins.env _records; do
+for need in _records/images.env _records; do
   [ -e "$R/$need" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing $need -- refusing to run against a root that is not a real bigboy tree" >&2; exit 4; }
 done
 # CHAOS-7674, CHAOS-8361: the Python api image is no longer built and the compose file names it nowhere (`api` is retired,
@@ -21,7 +21,7 @@ done
 # bigboy-cut.sh (migrate/up/up-workers/rest/...) still reported rc=0 against the stale, pre-cut
 # images. A measurement that did not happen must FAIL, loudly: OLD8 is checked BEFORE any file is
 # touched, both for shape and against the ACTUALLY-running build -- the digest
-# # bigboy-pins.env currently pins (nothing else rewrites this file, so it is live ground truth) must be
+# # images.env currently pins (nothing else rewrites this file, so it is live ground truth) must be
 # the same digest the registry resolves for OLD8, never trusted as a bare caller-supplied string.
 case "$OLD8" in
   [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;

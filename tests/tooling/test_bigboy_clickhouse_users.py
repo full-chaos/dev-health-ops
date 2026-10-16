@@ -199,7 +199,7 @@ def _check(
     root = tmp_path / "bigboy-root"
     (root / "_records").mkdir(parents=True, exist_ok=True)
     (root / "ops").mkdir(exist_ok=True)
-    (root / "_records" / "bigboy-pins.env").write_text("")
+    (root / "_records" / "images.env").write_text("")
     (root / "ops" / ".env").write_text("")
     env["BIGBOY_ROOT"] = str(root)
     env["BIGBOY_OPERATOR_IMAGE"] = (

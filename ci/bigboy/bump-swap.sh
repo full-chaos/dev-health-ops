@@ -35,4 +35,4 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 python3 "$HERE/bump-swap-rewrite-values.py" "$OLD" "$NEW" "$O7" "$S7" "$OLD_OP" "${NEWD[dev-health-go-operator]}" "$OLD_DHO" "${NEWD[dev-health-go-dho]}" "$DHO_ARM"
 git -C vendor/dev-health-ops fetch -q origin && git -C vendor/dev-health-ops checkout -q "$NEW"
 git update-index --cacheinfo 160000,"$NEW",vendor/dev-health-ops
-echo "applied. NEXT: make verify; update ci/bigboy/bigboy-pins.env (the tracked bigboy pins); commit."
+echo "applied. NEXT: make verify; update ci/bigboy/images.env (the tracked bigboy pins); commit."

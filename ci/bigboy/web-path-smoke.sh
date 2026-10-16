@@ -19,7 +19,7 @@ cd "$R"
 
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
 unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
-DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/bigboy-pins.env -f "$HERE/compose.bigboy.yml")
+DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
 STACK=("${DC[@]}" --profile smoke)
 
 st() { echo "STEP web-path-smoke rc=$1 $(date -u +%T)"; }

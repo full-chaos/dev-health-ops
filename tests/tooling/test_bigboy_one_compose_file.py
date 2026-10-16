@@ -6,7 +6,7 @@ went with a script." stack.sh, stack.files and the twelve overlay files are reti
 - one compose file and no chain script in ci/bigboy; no script names a second -f or a COMPOSE_* variable;
 - the service list per profile is what the old stack.sh chains rendered (the render of the old `stack` chain and of this file
   was byte-identical when the file was made; the lists below are the durable half of that gate);
-- the image digests live in bigboy-pins.env only, and the file renders with nothing but the pins file and the two variables
+- the image digests live in images.env only, and the file renders with nothing but the pins file and the two variables
   the live stack needs (a one-off service must never need its own variables to render, because compose interpolates the
   services of an inactive profile too).
 """
@@ -61,15 +61,12 @@ def test_profiles_add_only_their_own_services(tmp_path) -> None:
     root = bb.scratch_root(tmp_path)
     base = set(bb.services(root))
     assert set(bb.services(root, "smoke")) - base == {"web-smoke"}
-    assert set(bb.services(root, "venue")) - base == {
-        "venue-hook",
-        "venue-prove",
-        "venue-river",
-        "venue-tools",
-    }
+    assert set(bb.services(root, "venue")) - base == {"venue-prove", "venue-tools"}
+    assert set(bb.services(root, "venue-hook")) - base == {"venue-hook"}
+    assert set(bb.services(root, "venue-river")) - base == {"venue-river"}
     # retired services stay out of every default and one-off render (the Python api, the Python billing edge)
     assert not {"api", "billing-edge", "metrics-api"} & set(
-        bb.services(root, "smoke", "venue")
+        bb.services(root, "smoke", "venue", "venue-hook", "venue-river")
     )
 
 
@@ -92,7 +89,9 @@ def test_the_digests_are_in_the_pins_file_only(tmp_path) -> None:
             ref,
         )
         assert "${" + name + ":?" in compose, name
-    rendered = bb.services(bb.scratch_root(tmp_path), "smoke", "venue")
+    rendered = bb.services(
+        bb.scratch_root(tmp_path), "smoke", "venue", "venue-hook", "venue-river"
+    )
     assert rendered["query-api"]["image"] == pins["BIGBOY_DHO_IMAGE"]
     assert rendered["web"]["image"] == pins["BIGBOY_WEB_IMAGE"]
     assert rendered["venue-river"]["image"] == pins["BIGBOY_DHO_IMAGE"]
@@ -103,7 +102,14 @@ def test_a_one_off_needs_none_of_its_own_variables_to_render(tmp_path) -> None:
     """Only the pins file, BIGBOY_OPERATOR_IMAGE and DHO_API_CH_USERS_XML: a `:?` inside a one-off service would break every
     other command (compose interpolates an inactive profile too)."""
     root = bb.scratch_root(tmp_path)
-    for profile in ((), ("smoke",), ("venue",), ("smoke", "venue")):
+    for profile in (
+        (),
+        ("smoke",),
+        ("venue",),
+        ("venue-hook",),
+        ("venue-river",),
+        ("smoke", "venue", "venue-hook", "venue-river"),
+    ):
         proc = bb.config(root, *profile)
         assert proc.returncode == 0, (profile, proc.stderr[-400:])
     required = sorted(
@@ -127,3 +133,29 @@ def test_the_one_off_scripts_check_their_own_variables() -> None:
         "JWT_SECRET_KEY has no value in ops/.env" in prove
         and "exactly one org" in prove
     )
+
+
+# The six old stack.sh sets, as the profiles that select the same services in the one file (CHAOS-9962 gate). `stack`, `hook-check`
+# and `river-apply` rendered exactly these services before; `smoke`, `prove-base` and `prove` were short chains (no workers, no
+# ClickHouse users mount, no billing override) and also rendered the Python `billing-edge`, which the live chain retires: the one
+# file keeps it retired. Each of those three was only ever run by service name (`run --rm --no-deps -T web-smoke|venue-prove`).
+OLD_SETS = {
+    "stack": ((), set()),
+    "smoke": (("smoke",), {"web-smoke"}),
+    "prove-base": (("venue",), {"venue-prove", "venue-tools"}),
+    "prove": (("venue",), {"venue-prove", "venue-tools"}),
+    "hook-check": (
+        ("venue", "venue-hook"),
+        {"venue-prove", "venue-tools", "venue-hook"},
+    ),
+    "river-apply": (
+        ("venue", "venue-river"),
+        {"venue-prove", "venue-tools", "venue-river"},
+    ),
+}
+
+
+def test_each_old_set_renders_the_services_it_rendered(tmp_path) -> None:
+    root = bb.scratch_root(tmp_path)
+    for name, (profiles, extra) in OLD_SETS.items():
+        assert set(bb.services(root, *profiles)) == set(STACK_SERVICES) | extra, name

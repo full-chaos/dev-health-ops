@@ -22,7 +22,7 @@ const (
 	pythonAPIContainer  = "dev-health-api-1"
 	retiredAPIProfile   = "retired-python-api"
 	dhoImageRepository  = "ghcr.io/full-chaos/dev-health-go-dho"
-	pinsName            = "bigboy-pins.env"
+	pinsName            = "images.env"
 	cutScriptName       = "bigboy-cut.sh"
 	proveScriptName     = "bigboy-graphql-prove.sh"
 	logChecksScriptName = "bigboy-log-checks.sh"

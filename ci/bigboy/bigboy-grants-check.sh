@@ -5,7 +5,7 @@
 set -u; R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd); REC=${1:-$R/_records/bigboy-a2b9bf79}; SHA=$(cat "$REC/sha.txt")
 HERE=$(cd "$(dirname "$0")" && pwd)
 unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null
-DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/bigboy-pins.env -f "$HERE/compose.bigboy.yml")
+DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
 ACT=$(cd "$R" && "${DC[@]}" exec -T clickhouse clickhouse-client -q "SELECT access_type, table FROM system.grants WHERE user_name='dho_api_ch' ORDER BY table, access_type FORMAT TSV" 2>&1) || { echo "GRANTS_CHECK_FAIL query"; exit 1; }
 SRC=$(git -C $R/ops show "$SHA":internal/storage/clickhouse/authorization.go 2>/dev/null) || { echo "GRANTS_CHECK_FAIL no authorization.go at $SHA in the local ops clone (git fetch)"; exit 1; }
 # Extracted to a sibling file, not an inline here-document (CHAOS-3362/CHAOS-6964: body is well

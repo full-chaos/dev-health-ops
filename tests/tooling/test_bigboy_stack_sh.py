@@ -482,3 +482,51 @@ def test_run_and_exec_refuse_a_missing_or_bad_service(tmp_path: Path) -> None:
         assert _run(tools, env, verb).returncode == 2
         assert _run(tools, env, verb, "--rm").returncode == 2
         assert _run(tools, env, verb, "web\nx").returncode == 2
+
+
+@pytest.mark.skipif(not _REAL_COMPOSE, reason="needs docker compose")
+def test_smoke_set_activates_the_web_smoke_service_so_the_credential_gate_sees_its_variables(
+    tmp_path: Path,
+) -> None:
+    """web-path-smoke.sh decides from `stack.sh -s smoke config` (NAME=<length> lines) whether the admin email and the
+    password file resolve. web-smoke sits in the profile `smoke`: the set must activate it, or the rendered config
+    holds no DHO_SMOKE_ADMIN_* entry and the gate aborts with a misleading BLANK before the smoke runs."""
+    r = tmp_path / "root"
+    for d in ("ops", ".go-api-dev", "_records", "compose", ".remember/lanes/team-lead"):
+        (r / d).mkdir(parents=True)
+    for pin in (
+        "compose/compose.bigboy.images.yml",
+        "_records/compose.bigboy.images.yml",
+    ):
+        shutil.copy(BIGBOY / "compose.bigboy.images.yml", r / pin)
+    (r / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
+        "services: {}\n"
+    )
+    (r / "ops/.env").write_text("")
+    (r / ".go-api-dev/go-api.env").write_text("")
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "BIGBOY_"))
+    }
+    env |= {
+        "BIGBOY_ROOT": str(r),
+        "BIGBOY_TOOLS_DIR": str(BIGBOY),
+        "DHO_SMOKE_ADMIN_EMAIL": "admin@example.test",
+        "DHO_SMOKE_ADMIN_PASSWORD_FILE": str(tmp_path / "pw"),
+        "DHO_SMOKE_CATALOG_FILE": str(tmp_path / "catalog.json"),
+    }
+    (tmp_path / "pw").write_text("x")
+    (tmp_path / "catalog.json").write_text("{}")
+    res = subprocess.run(
+        [str(STACK_SH), "-s", "smoke", "config"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr[-300:]
+    lengths = dict(
+        line.split("=", 1) for line in res.stdout.splitlines() if "=" in line
+    )
+    assert (
+        int(lengths["DHO_SMOKE_ADMIN_EMAIL"]) > 0
+        and int(lengths["DHO_SMOKE_ADMIN_PASSWORD_FILE"]) > 0
+    ), lengths

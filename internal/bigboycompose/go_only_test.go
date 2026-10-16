@@ -29,10 +29,11 @@ const (
 	proveScriptName     = "bigboy-graphql-prove.sh"
 	logChecksScriptName = "bigboy-log-checks.sh"
 	smokeScriptName     = "web-path-smoke.sh"
+	stackFilesName      = "stack.files"
 )
 
 // goOnlyFiles are the tracked files the check reads, by name.
-var goOnlyFiles = []string{imagesOverlayName, smokeOverlayName, cutScriptName, proveScriptName, logChecksScriptName, smokeScriptName}
+var goOnlyFiles = []string{imagesOverlayName, smokeOverlayName, cutScriptName, proveScriptName, logChecksScriptName, smokeScriptName, stackFilesName}
 
 type bigboyService struct {
 	Image       string               `yaml:"image"`
@@ -134,6 +135,11 @@ func goOnlyFindings(files map[string]string) ([]string, error) {
 	}
 	if got := strings.Fields(up[1]); strings.Join(got, " ") != "query-api go-api web" {
 		found("%s: the planes `up` list is %v, want [query-api go-api web]: the Python api is not recreated", cutScriptName, got)
+	}
+	for _, line := range codeLines(files[stackFilesName]) {
+		if strings.Contains(line, "metrics-api") {
+			found("%s: a set names the metrics-api side file, a Python api service", stackFilesName)
+		}
 	}
 	for _, script := range []string{cutScriptName, proveScriptName, logChecksScriptName, smokeScriptName} {
 		for _, line := range codeLines(files[script]) {
@@ -273,11 +279,11 @@ func TestBigboyGoOnlyCheckSeesEachDefect(t *testing.T) {
 			want: "bigboy-log-checks.sh: a line names the Python api container",
 		},
 		{
-			name: "the metrics-api side file back in the smoke chain",
-			file: smokeScriptName,
-			old:  "  -f .remember/lanes/team-lead/reconciler-sweep-override.yml \\\n",
-			new:  "  -f compose/compose.metrics-api.local.yml \\\n  -f .remember/lanes/team-lead/reconciler-sweep-override.yml \\\n",
-			want: "web-path-smoke.sh: a line names metrics-api",
+			name: "the metrics-api side file back in the smoke set",
+			file: stackFilesName,
+			old:  "smoke root     compose/compose.bigboy.images.yml\n",
+			new:  "smoke root     compose/compose.metrics-api.local.yml\nsmoke root     compose/compose.bigboy.images.yml\n",
+			want: "stack.files: a set names the metrics-api side file",
 		},
 	} {
 		t.Run(plant.name, func(t *testing.T) {

@@ -31,3 +31,23 @@ func TestIssueSizeIsAnInvestmentMeasureAndLinesOfCodeAreNot(t *testing.T) {
 		t.Fatalf("a read in ISSUE_SIZE is refused: %v", err)
 	}
 }
+
+// TestSizingCoverageNoteIsOnlyBelowHalf pins the "mostly unsized" sentence (D6031): it is written when fewer than
+// half of the units carry a size, never at exactly half, never for a read with no unit.
+func TestSizingCoverageNoteIsOnlyBelowHalf(t *testing.T) {
+	for _, tc := range []struct {
+		sized, units int
+		want         string
+	}{
+		{1, 4, "Mostly unsized: 1 of 4 work units have an issue size. The other 3 have no size, so each counts as 1 work unit."},
+		{0, 3, "Mostly unsized: 0 of 3 work units have an issue size. The other 3 have no size, so each counts as 1 work unit."},
+		{2, 5, "Mostly unsized: 2 of 5 work units have an issue size. The other 3 have no size, so each counts as 1 work unit."},
+		{2, 4, ""},
+		{3, 5, ""},
+		{0, 0, ""},
+	} {
+		if got := (SizingCoverage{SizedUnits: tc.sized, Units: tc.units}).Note(); got != tc.want {
+			t.Errorf("Note(%d of %d) = %q, want %q", tc.sized, tc.units, got, tc.want)
+		}
+	}
+}

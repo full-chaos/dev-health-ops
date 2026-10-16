@@ -87,8 +87,8 @@ type ExplainInvestmentMixOptions struct {
 	// but must NOT filter the breakdown by them. See ExplainInvestmentMix's
 	// own comment at the breakdown-fetch call site.
 	ScopeLevel string
-	// Measure is the measure the mix is read in: "COUNT" or "THROUGHPUT" (see NormalizeMeasure). Empty is the
-	// Investment page's COUNT. The explanation never weighs by effort_value.
+	// Measure is the measure the mix is read in: "ISSUE_SIZE", "COUNT" or "THROUGHPUT" (see NormalizeMeasure). Empty is
+	// ExplanationDefaultMeasure (ISSUE_SIZE, the Investment page's measure). The explanation never weighs by effort_value.
 	Measure            string
 	WorkCategory       []string
 	Theme              string
@@ -162,10 +162,11 @@ func (reader *Reader) fetchMixSizing(ctx context.Context, opts ExplainInvestment
 func applySizing(explanation *InvestmentMixExplanation, sizing *SizingCoverage) {
 	for i := range explanation.TopFindings {
 		evidence := &explanation.TopFindings[i].Evidence
-		evidence.SizingCoverage, evidence.UnsizedUnitCount = nil, nil
+		evidence.SizingCoverage, evidence.UnsizedUnitCount, evidence.SizingNote = nil, nil, ""
 		if sizing != nil {
 			evidence.SizingCoverage = sizing.Share()
 			evidence.UnsizedUnitCount = sizing.Unsized()
+			evidence.SizingNote = sizing.Note()
 		}
 	}
 }
@@ -200,16 +201,17 @@ func mixBreakdownFilters(opts ExplainInvestmentMixOptions) BreakdownFilters {
 	return breakdownFilter
 }
 
-// effectiveMeasure is the measure of the mix read: the Investment page's COUNT when the option is
-// empty (the explanation is of the mix the user sees), else NormalizeMeasure of it. A name it does not
-// know reads as COUNT; the route has already refused those.
+// effectiveMeasure is the measure of the mix read: ExplanationDefaultMeasure (ISSUE_SIZE, the Investment
+// page's measure) when the option is empty (the explanation is of the mix the user sees), else
+// NormalizeMeasure of it. A name it does not know reads as ExplanationDefaultMeasure; the route has already
+// refused those.
 func (opts ExplainInvestmentMixOptions) effectiveMeasure() string {
 	if strings.TrimSpace(opts.Measure) == "" {
-		return MeasureCount
+		return ExplanationDefaultMeasure
 	}
 	measure, ok := NormalizeMeasure(opts.Measure)
 	if !ok {
-		return MeasureCount
+		return ExplanationDefaultMeasure
 	}
 	return measure
 }

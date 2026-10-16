@@ -61,6 +61,7 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
     # not define, so the test stages the same empty overlay the stubbed host path used to get.
     (tools / "compose.bigboy.workers.yml").write_text("services: {}\n")
     (tools / "compose.bigboy.go-workers.yml").write_text("services: {}\n")
+    (tools / "compose.bigboy.sweep.yml").write_text("services: {}\n")
     (tools / "compose.bigboy.base.yml").write_text(
         "services:\n"
         "  web:\n    image: web:test\n    environment:\n      BACKEND_URL: http://api:8000\n"

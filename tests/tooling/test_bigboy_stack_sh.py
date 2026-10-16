@@ -151,7 +151,7 @@ def test_operator_image_is_only_required_when_a_file_uses_it(tmp_path: Path) -> 
     res = _run(tools, {**env, "DHO_SMOKE_CATALOG_FILE": "x"}, "-s", "smoke", "ps")
     assert res.returncode == 0, res.stderr
     assert "--format" not in Path(env["DOCKER_LOG"]).read_text()
-    refused = _run(tools, env, "ps")
+    refused = _run(tools, env, "up", "go-worker")
     assert refused.returncode == 2 and "BIGBOY_OPERATOR_IMAGE" in refused.stderr
     assert "--format" in Path(env["DOCKER_LOG"]).read_text()
 
@@ -589,3 +589,101 @@ def test_the_cut_steps_that_call_stack_sh_run_in_the_root_they_are_given(
         assert calls, name
         outside = [ln for ln in calls if not ln.startswith(str(r.resolve()) + " ::")]
         assert not outside, (name, outside[:2])
+
+
+def test_a_verb_that_starts_no_worker_needs_no_operator_image(tmp_path: Path) -> None:
+    """With BIGBOY_OPERATOR_IMAGE unset and no go-reconciler running (an isolated root, a first look), exec/config/ps
+    still work: the worker overlay's image only has to interpolate. Anything that would start a worker stays refused."""
+    _, tools, env = _tree(tmp_path)
+    env = {k: v for k, v in env.items() if k != "BIGBOY_OPERATOR_IMAGE"}
+    for args in (
+        ("exec", "clickhouse", "true"),
+        ("config", "--quiet"),
+        ("ps",),
+        ("run", "migrate"),
+    ):
+        res = _run(tools, env, *args)
+        assert res.returncode == 0, (args, res.stderr)
+    for args in (
+        ("up", "go-worker"),
+        ("exec", "go-reconciler", "true"),
+        ("run", "go-worker", "x"),
+        ("restart", "go-worker"),
+    ):
+        res = _run(tools, env, *args)
+        assert res.returncode == 2 and "BIGBOY_OPERATOR_IMAGE" in res.stderr, (
+            args,
+            res.stderr,
+        )
+
+
+@pytest.mark.skipif(not _REAL_COMPOSE, reason="needs docker compose")
+def test_every_set_renders_the_reconciler_with_the_sweep_active(tmp_path: Path) -> None:
+    """The compiled default of --unreclaimable-sweep is shadow, and the old lane override sat in the base of every set;
+    a set that renders go-reconciler without SYNC_UNRECLAIMABLE_SWEEP=active is the 'override dropped' regression."""
+    import json
+
+    r = tmp_path / "root"
+    for d in ("ops", ".go-api-dev", "_records"):
+        (r / d).mkdir(parents=True)
+    shutil.copy(
+        BIGBOY / "compose.bigboy.images.yml", r / "_records/compose.bigboy.images.yml"
+    )
+    (r / "ops/.env").write_text("")
+    (r / ".go-api-dev/go-api.env").write_text("")
+    (tmp_path / "pw").write_text("x")
+    (tmp_path / "catalog.json").write_text("{}")
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "BIGBOY_"))
+    }
+    env |= {
+        "BIGBOY_ROOT": str(r),
+        "BIGBOY_TOOLS_DIR": str(BIGBOY),
+        "BIGBOY_OPERATOR_IMAGE": _DHO,
+        "DHO_API_CH_USERS_XML": str(r / ".go-api-dev/dho_api_ch.xml"),
+        "HOOK_OPERATOR_IMAGE": _DHO,
+        "PROVE_ORG": "o",
+        "PROVE_ARTIFACT_DIR": str(tmp_path),
+        "DHO_SMOKE_ADMIN_EMAIL": "a@example.test",
+        "DHO_SMOKE_ADMIN_PASSWORD_FILE": str(tmp_path / "pw"),
+        "DHO_SMOKE_CATALOG_FILE": str(tmp_path / "catalog.json"),
+        "DHO_SMOKE_DIR": str(BIGBOY),
+    }
+    sets = [
+        ln.split()[0]
+        for ln in (BIGBOY / "stack.files").read_text().splitlines()
+        if ln.strip() and not ln.startswith("#") and ln.split()[1] == "project"
+    ]
+    assert {"stack", "smoke", "prove-base"} <= set(sets), sets
+    for name in sets:
+        files = subprocess.run(
+            [str(STACK_SH), "-s", name, "files"],
+            env=env,
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+        cmd = [
+            "docker",
+            "compose",
+            "-p",
+            "dev-health",
+            "--project-directory",
+            str(r),
+            "--env-file",
+            "ops/.env",
+        ]
+        for f in files:
+            cmd += ["-f", f]
+        out = subprocess.run(
+            [*cmd, "config", "--format", "json"],
+            env=env,
+            cwd=r,
+            capture_output=True,
+            text=True,
+        )
+        assert out.returncode == 0, (name, out.stderr[-300:])
+        reconciler = json.loads(out.stdout)["services"].get("go-reconciler")
+        assert reconciler is not None, name
+        assert reconciler["environment"].get("SYNC_UNRECLAIMABLE_SWEEP") == "active", (
+            name
+        )

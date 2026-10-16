@@ -18,6 +18,7 @@ stack project  dev-health
 stack env-file ops/.env
 stack tools    compose.bigboy.base.yml
 stack tools    compose.bigboy.go-workers.yml
+stack tools    compose.bigboy.sweep.yml
 stack root     _records/compose.bigboy.images.yml
 stack tools    compose.bigboy.workers.yml
 stack tools    compose.bigboy.clickhouse-users.yml
@@ -29,6 +30,7 @@ smoke env-file ops/.env
 smoke profile  smoke
 smoke tools    compose.bigboy.base.yml
 smoke tools    compose.bigboy.go-workers.yml
+smoke tools    compose.bigboy.sweep.yml
 smoke root     _records/compose.bigboy.images.yml
 smoke tools    compose.bigboy.router.yml
 smoke tools    compose.bigboy.smoke.yml
@@ -39,6 +41,7 @@ prove-base env-file ops/.env
 prove-base profile  venue
 prove-base tools    compose.bigboy.base.yml
 prove-base tools    compose.bigboy.go-workers.yml
+prove-base tools    compose.bigboy.sweep.yml
 prove-base root     _records/compose.bigboy.images.yml
 
 prove include prove-base

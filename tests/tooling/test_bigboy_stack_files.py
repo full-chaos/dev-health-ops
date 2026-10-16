@@ -109,7 +109,7 @@ def test_smoke_and_prove_scripts_call_stack_sh_for_their_sets() -> None:
 def test_smoke_chain_is_the_stack_chain_minus_the_worker_overlays_plus_smoke() -> None:
     # web-path-smoke ran: base, go-workers, images, router, smoke (no workers/clickhouse-users/billing-edge)
     stack = _files("stack")
-    assert _files("smoke") == stack[:3] + [
+    assert _files("smoke") == stack[:4] + [
         "$HERE/compose.bigboy.router.yml",
         "$HERE/compose.bigboy.smoke.yml",
     ]
@@ -117,7 +117,7 @@ def test_smoke_chain_is_the_stack_chain_minus_the_worker_overlays_plus_smoke() -
 
 def test_prove_base_is_the_first_four_stack_files_with_the_venue_profile() -> None:
     # bigboy-graphql-prove's BASE chain (used for the psql exec) and prove = BASE + the prove overlay
-    assert _files("prove-base") == _files("stack")[:3]
+    assert _files("prove-base") == _files("stack")[:4]
     assert _sets()["prove-base"]["profile"] == ["venue"]
     assert _files("prove") == _files("prove-base") + ["$HERE/compose.bigboy.prove.yml"]
 

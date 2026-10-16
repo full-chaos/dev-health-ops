@@ -67,7 +67,16 @@ export BIGBOY_ROOT="$R" BIGBOY_TOOLS_DIR="$T"
 export DHO_API_CH_USERS_XML="${DHO_API_CH_USERS_XML:-$R/.go-api-dev/dho_api_ch.xml}"
 if [ -z "${BIGBOY_OPERATOR_IMAGE:-}" ] && grep -qs 'BIGBOY_OPERATOR_IMAGE' "${FILES[@]}"; then
   BIGBOY_OPERATOR_IMAGE=$(docker compose -p "$PROJECT" ps --format '{{.Image}}' go-reconciler 2>/dev/null </dev/null | head -1 || true)
-  [ -n "$BIGBOY_OPERATOR_IMAGE" ] || die "BIGBOY_OPERATOR_IMAGE is unset and no running go-reconciler names it; export it"
+  if [ -z "$BIGBOY_OPERATOR_IMAGE" ]; then
+    # only a verb that would start a worker needs the real image; anything else just has to interpolate
+    starts_worker=0
+    case $VERB in
+      up) starts_worker=1 ;;
+      restart|run|exec) case ${1:-} in go-*) starts_worker=1 ;; esac ;;
+    esac
+    [ "$starts_worker" = 0 ] || die "BIGBOY_OPERATOR_IMAGE is unset and no running go-reconciler names it; export it"
+    BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator:not-resolved
+  fi
 fi
 export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-}"
 if [ -z "${RIVER_DHO_IMAGE:-}" ]; then

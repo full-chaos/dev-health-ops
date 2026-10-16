@@ -60,8 +60,8 @@ func TestADroppedCoOwnerHoldsNoShareOnAnyDay(t *testing.T) {
 			if err != nil {
 				t.Fatalf("second Derive: %v", err)
 			}
-			if stats.CoOwnersBelowShareFloor != 1 {
-				t.Fatalf("second run below_floor=%d, want 1", stats.CoOwnersBelowShareFloor)
+			if stats.CoOwnersBelowShareFloor != 1 || stats.CoOwnersVoided != 1 {
+				t.Fatalf("second run below_floor=%d voided=%d, want 1 and 1", stats.CoOwnersBelowShareFloor, stats.CoOwnersVoided)
 			}
 
 			for day := t0.Add(2 * time.Hour); !day.After(t1.Add(24 * time.Hour)); day = day.Add(24 * time.Hour) {

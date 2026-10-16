@@ -121,6 +121,37 @@ func demoGateWorkItems(world FrozenWorld) map[string]map[string]any {
 
 // demoGateRepoOwners are each repository's current owning teams (team_repo_ownership rows that are not
 // closed), by repository id.
+// demoGateRepoShares is each repository's current owners with their ownership share (1 when the row
+// carries none).
+func demoGateRepoShares(world FrozenWorld) map[string]map[string]float64 {
+	byName := map[string]string{}
+	for _, row := range demoGateRows(world, "repos") {
+		byName[gateText(row["repo"])] = gateText(row["id"])
+	}
+	shares := map[string]map[string]float64{}
+	for _, row := range demoGateRows(world, "team_repo_ownership") {
+		if row["valid_to"] != nil {
+			continue
+		}
+		repoID := gateText(row["repo_id"])
+		if repoID == "" {
+			repoID = byName[gateText(row["repo_full_name"])]
+		}
+		if repoID == "" {
+			continue
+		}
+		if shares[repoID] == nil {
+			shares[repoID] = map[string]float64{}
+		}
+		share, ok := gateNumber(row["share"])
+		if !ok || share <= 0 {
+			share = 1
+		}
+		shares[repoID][gateText(row["team_id"])] = share
+	}
+	return shares
+}
+
 func demoGateRepoOwners(world FrozenWorld) map[string]map[string]bool {
 	byName := map[string]string{}
 	for _, row := range demoGateRows(world, "repos") {
@@ -1075,6 +1106,8 @@ func TestDemoGateCommitHoursSpread(t *testing.T) {
 	}
 	shares := map[string][]string{}
 	latestRatios := map[string][]string{}
+	ownerShares := demoGateRepoShares(world)
+	names := demoGateTeamNames(world)
 	for team, repos := range demoGateTeamRepos(world) {
 		latest := ""
 		for _, repoID := range repos {
@@ -1084,16 +1117,26 @@ func TestDemoGateCommitHoursSpread(t *testing.T) {
 				}
 			}
 		}
-		var onLatest dayCount
+		// The team row takes each repository's counts at the team's ownership share, as the writer does.
+		var latestCommits, latestAfter float64
 		for _, repoID := range repos {
-			if counts := byRepoDay[repoID][latest]; counts != nil {
-				onLatest.commits += counts.commits
-				onLatest.after += counts.after
+			counts := byRepoDay[repoID][latest]
+			if counts == nil {
+				continue
 			}
+			share := 1.0
+			for teamID, owned := range ownerShares[repoID] {
+				if names[teamID] == team {
+					share = owned
+				}
+			}
+			latestCommits += share * float64(counts.commits)
+			latestAfter += share * float64(counts.after)
 		}
-		if onLatest.commits > 0 {
-			ratio := fmt.Sprintf("%.2f", float64(onLatest.after)/float64(onLatest.commits))
+		if latestCommits > 0 {
+			ratio := fmt.Sprintf("%.2f", latestAfter/latestCommits)
 			latestRatios[ratio] = append(latestRatios[ratio], team+" "+latest)
+			t.Logf("%s: latest weekday %s after-hours ratio %s (%.2f of %.2f share-weighted commits)", team, latest, ratio, latestAfter, latestCommits)
 		}
 		var sum tally
 		for _, repoID := range repos {
@@ -1122,10 +1165,11 @@ func TestDemoGateCommitHoursSpread(t *testing.T) {
 		key := fmt.Sprintf("%.2f", share)
 		shares[key] = append(shares[key], team)
 	}
-	// The served team metrics row is the latest day's. On a weekday no single value may stand for most
-	// teams (on a weekend every team's ratio is 0 by the rule: weekend commits are never after hours).
+	// The served team metrics row is the latest day's. On a weekday no single value may stand for more
+	// than half the teams (on a weekend every team's ratio is 0 by the rule: weekend commits are never after hours).
+	teamCount := len(demoGateTeamRepos(world))
 	for ratio, teams := range latestRatios {
-		if len(teams) >= 6 {
+		if 2*len(teams) > teamCount {
 			sort.Strings(teams)
 			t.Errorf("%d teams share the after-hours ratio %s on their latest weekday with commits: %v", len(teams), ratio, teams)
 		}

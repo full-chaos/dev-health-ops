@@ -279,21 +279,26 @@ func normalizeGitLabIssueWorkItem(
 		name := payload.Milestone.Title
 		milestoneName = &name
 	}
-	row := gitlabWorkItemRow{
-		WorkItemID: "gitlab:" + fullName + "#" + strconv.Itoa(payload.IID),
-		Provider:   "gitlab", Title: payload.Title, Type: typeValue, Status: status,
-		StatusRaw: nullableString(payload.State), Description: description, RepoID: &repoID,
-		ProjectID: stringPointer(fullName), Assignees: assignees, Reporter: reporter,
-		CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC(), ClosedAt: closedAt,
-		Labels: labels, StoryPoints: payload.Weight, SprintID: milestoneID,
-		SprintName: milestoneName, URL: urlValue, DueAt: parseGitLabWorkItemTime(payload.DueDate),
-		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
-	}
+	workItemID := "gitlab:" + fullName + "#" + strconv.Itoa(payload.IID)
 	transitions := normalizeGitLabIssueLabelTransitions(
-		claim, row.WorkItemID, labelEvents, createdAt.UTC(), statusMapping, normalizedAt,
+		claim, workItemID, labelEvents, createdAt.UTC(), statusMapping, normalizedAt,
 	)
-	row.StartedAt, row.CompletedAt = gitlabWorkItemLifecycle(transitions, row.ClosedAt)
-	if err := validateGitLabWorkItemRow(row, claim); err != nil {
+	startedAt, completedAt := gitlabWorkItemLifecycle(transitions, closedAt)
+	// Python's provider enriches every issue with the label priority right
+	// after gitlab_issue_to_work_item (providers/gitlab/provider.py:261).
+	priority, serviceClass := gitlabPriorityFromLabels(labels)
+	row, err := buildWorkItemRow(claim, gitlabWorkItemSource{
+		kind: gitlabIssueSourceKind, workItemID: workItemID,
+		title: payload.Title, typeName: typeValue, status: status,
+		statusRaw: nullableString(payload.State), description: description, repoID: &repoID,
+		projectID: stringPointer(fullName), assignees: assignees, reporter: reporter,
+		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), startedAt: startedAt,
+		completedAt: completedAt, closedAt: closedAt, labels: labels, storyPoints: payload.Weight,
+		sprintID: milestoneID, sprintName: milestoneName, url: urlValue,
+		priorityRaw: priority, serviceClass: serviceClass,
+		dueAt: parseGitLabWorkItemTime(payload.DueDate),
+	}, normalizedAt)
+	if err != nil {
 		return gitlabWorkItemRow{}, nil, err
 	}
 	return row, transitions, nil
@@ -426,23 +431,23 @@ func normalizeGitLabMergeRequestWorkItem(
 	if closedValue == nil {
 		closedValue = mergedAt
 	}
-	row := gitlabWorkItemRow{
-		WorkItemID: "gitlab:" + fullName + "!" + strconv.Itoa(payload.IID),
-		Provider:   "gitlab", Title: payload.Title, Type: "merge_request", Status: status,
-		StatusRaw: nullableString(statusRaw), Description: description, RepoID: &repoID,
-		ProjectID: stringPointer(fullName), Assignees: assignees, Reporter: reporter,
-		CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC(), StartedAt: createdAt,
-		CompletedAt: completedAt, ClosedAt: closedValue, Labels: labels,
-		StoryPoints: payload.Weight, SprintID: milestoneID, SprintName: milestoneName,
-		URL: urlValue, PriorityRaw: priority, ServiceClass: serviceClass,
-		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
+	row, err := buildWorkItemRow(claim, gitlabWorkItemSource{
+		kind:       gitlabMergeRequestSourceKind,
+		workItemID: "gitlab:" + fullName + "!" + strconv.Itoa(payload.IID),
+		title:      payload.Title, typeName: "merge_request", status: status,
+		statusRaw: nullableString(statusRaw), description: description, repoID: &repoID,
+		projectID: stringPointer(fullName), assignees: assignees, reporter: reporter,
+		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), startedAt: createdAt,
+		completedAt: completedAt, closedAt: closedValue, labels: labels,
+		storyPoints: payload.Weight, sprintID: milestoneID, sprintName: milestoneName,
+		url: urlValue, priorityRaw: priority, serviceClass: serviceClass,
+	}, normalizedAt)
+	if err != nil {
+		return gitlabWorkItemRow{}, nil, nil, err
 	}
 	transitions, reopens := normalizeGitLabMRStateEvents(
 		claim, row.WorkItemID, stateEvents, createdAt.UTC(), resolveIdentity, normalizedAt,
 	)
-	if err := validateGitLabWorkItemRow(row, claim); err != nil {
-		return gitlabWorkItemRow{}, nil, nil, err
-	}
 	return row, transitions, reopens, nil
 }
 
@@ -939,4 +944,62 @@ func validateGitLabSprintRow(row gitlabSprintRow, claim Claim) error {
 		return providerfoundation.ErrInvalidScope
 	}
 	return nil
+}
+
+const (
+	gitlabIssueSourceKind        = "gitlab_issue"
+	gitlabMergeRequestSourceKind = "gitlab_merge_request"
+)
+
+// gitlabWorkItemSource is how a GitLab issue or merge request fills the shared
+// work-item row.
+type gitlabWorkItemSource struct {
+	kind string
+
+	workItemID, title, typeName, status              string
+	statusRaw, description, projectID, reporter, url *string
+	sprintID, sprintName, priorityRaw, serviceClass  *string
+	repoID                                           *uuid.UUID
+	assignees, labels                                []string
+	createdAt, updatedAt                             time.Time
+	startedAt, completedAt, closedAt, dueAt          *time.Time
+	storyPoints                                      *float64
+}
+
+func (s gitlabWorkItemSource) sourceKind() string { return s.kind }
+func (s gitlabWorkItemSource) validateRow(claim Claim, row workItemRow) error {
+	return validateGitLabWorkItemRow(row, claim)
+}
+func (s gitlabWorkItemSource) WorkItemID() string      { return s.workItemID }
+func (s gitlabWorkItemSource) Provider() string        { return "gitlab" }
+func (s gitlabWorkItemSource) Title() string           { return s.title }
+func (s gitlabWorkItemSource) Type() string            { return s.typeName }
+func (s gitlabWorkItemSource) Status() string          { return s.status }
+func (s gitlabWorkItemSource) StatusRaw() *string      { return s.statusRaw }
+func (s gitlabWorkItemSource) Description() *string    { return s.description }
+func (s gitlabWorkItemSource) RepoID() *uuid.UUID      { return s.repoID }
+func (s gitlabWorkItemSource) NativeTeamKey() *string  { return nil }
+func (s gitlabWorkItemSource) ProjectKey() *string     { return nil }
+func (s gitlabWorkItemSource) ProjectID() *string      { return s.projectID }
+func (s gitlabWorkItemSource) ProjectName() *string    { return nil }
+func (s gitlabWorkItemSource) Assignees() []string     { return s.assignees }
+func (s gitlabWorkItemSource) Reporter() *string       { return s.reporter }
+func (s gitlabWorkItemSource) CreatedAt() time.Time    { return s.createdAt }
+func (s gitlabWorkItemSource) UpdatedAt() time.Time    { return s.updatedAt }
+func (s gitlabWorkItemSource) StartedAt() *time.Time   { return s.startedAt }
+func (s gitlabWorkItemSource) CompletedAt() *time.Time { return s.completedAt }
+func (s gitlabWorkItemSource) ClosedAt() *time.Time    { return s.closedAt }
+func (s gitlabWorkItemSource) Labels() []string        { return s.labels }
+func (s gitlabWorkItemSource) StoryPoints() *float64   { return s.storyPoints }
+func (s gitlabWorkItemSource) SprintID() *string       { return s.sprintID }
+func (s gitlabWorkItemSource) SprintName() *string     { return s.sprintName }
+func (s gitlabWorkItemSource) URL() *string            { return s.url }
+func (s gitlabWorkItemSource) PriorityRaw() *string    { return s.priorityRaw }
+func (s gitlabWorkItemSource) ServiceClass() *string   { return s.serviceClass }
+func (s gitlabWorkItemSource) DueAt() *time.Time       { return s.dueAt }
+func (s gitlabWorkItemSource) ParentID() workItemRef {
+	return declaredWorkItemException(s.kind, workItemFieldParentID)
+}
+func (s gitlabWorkItemSource) EpicID() workItemRef {
+	return declaredWorkItemException(s.kind, workItemFieldEpicID)
 }

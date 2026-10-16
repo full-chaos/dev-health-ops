@@ -20,13 +20,12 @@
 # computed); 2 the user is not live; 3 the creds file/API_CH_PASSWORD is missing or dho_api_ch cannot log in with it; 4 the file is not the
 # canonical render (checked before any live check, so a stale hand-made live user cannot mask a wrong file).
 # ClickHouse is reached with `docker compose exec` on the service `clickhouse` (COMPOSE_FILE set as in bigboy-cut.sh, run from
-# BIGBOY_ROOT; BIGBOY_ENV_FILE overrides ops/.env), never by container name. DHO_API_CH_POSTURE_GO overrides the manifest
+# BIGBOY_ROOT; the env file is the one stack.files names), never by container name. DHO_API_CH_POSTURE_GO overrides the manifest
 # (default: this checkout's authorization.go).
 set -u
 FILE=${1:-${DHO_API_CH_USERS_XML:-}}
 CREDS=${2:-${DHO_API_CH_CREDS:-}}
 CH=clickhouse
-ENVF=${BIGBOY_ENV_FILE:-ops/.env}
 [ -n "$FILE" ] || { echo "CH_API_USER_FILE_FAIL: no users file given (arg 1 or DHO_API_CH_USERS_XML)" >&2; exit 1; }
 [ -f "$FILE" ] && [ ! -L "$FILE" ] || { echo "CH_API_USER_FILE_FAIL: $FILE is not a regular file (a missing bind-mount source becomes a directory and ClickHouse fails to start)" >&2; exit 1; }
 mode=$(stat -c %a "$FILE")
@@ -69,12 +68,12 @@ api_password | sha256sum | cut -d' ' -f1 > "$canon_dir/real.hash"
 awk -v ph="$placeholder_hash" 'NR==FNR { h=$1; next } { gsub(ph, h); print }' "$canon_dir/real.hash" "$canon_dir/placeholder.xml" > "$canon_dir/canonical.xml"
 cmp -s "$FILE" "$canon_dir/canonical.xml" || { echo "CH_API_USER_FILE_MISMATCH: $FILE is not the canonical render of the posture manifest and the API password (a comment, an edit, a malformed grant or a hash for another password all differ); regenerate it with ci/bigboy/render-dho-api-ch-users.py. ClickHouse would load whatever is mounted, and exits on a file it cannot parse" >&2; exit 4; }
 echo "ch_api_user_file=ok path=$FILE mode=$mode canonical=yes"
-count=$(docker compose --env-file "$ENVF" exec -T "$CH" clickhouse-client -q "SELECT count() FROM system.users WHERE name='dho_api_ch'" 2>/dev/null) || count=""
+count=$("$HERE/stack.sh" exec "$CH" clickhouse-client -q "SELECT count() FROM system.users WHERE name='dho_api_ch'" 2>/dev/null) || count=""
 [ "$count" = "1" ] || { echo "CH_API_USER_LIVE_FAIL: dho_api_ch is not in system.users of service $CH (count=${count:-unreadable}); go-api would fail every ClickHouse call with code 516" >&2; exit 2; }
 echo "ch_api_user_live=ok service=$CH"
 # Present is not usable: prove the API's own credential authenticates. The password goes by pipe into the stdin of ONE
 # `docker compose exec -T` as a clickhouse-client config file (--config-file /dev/stdin); the query is the only argument.
 # Not in any argument list, not in any environment, not in a -e, not on a disk.
-who=$({ printf '<clickhouse><user>dho_api_ch</user><password>'; api_password | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; printf '</password></clickhouse>'; } | docker compose --env-file "$ENVF" exec -T "$CH" clickhouse-client --config-file /dev/stdin -q "SELECT currentUser()" 2>/dev/null) || who=""
+who=$({ printf '<clickhouse><user>dho_api_ch</user><password>'; api_password | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; printf '</password></clickhouse>'; } | "$HERE/stack.sh" exec "$CH" clickhouse-client --config-file /dev/stdin -q "SELECT currentUser()" 2>/dev/null) || who=""
 [ "$who" = "dho_api_ch" ] || { echo "CH_API_USER_AUTH_FAIL: logging in to service $CH as dho_api_ch with the API password failed; the declared hash does not match the credential go-api uses (ClickHouse code 516)" >&2; exit 3; }
 echo "ch_api_user_auth=ok service=$CH"

@@ -609,7 +609,7 @@ appear here.
 ### Where `bigboy-cut.sh` finds its tools and its tree (CHAOS-7135)
 
 `ci/bigboy/bigboy-cut.sh` separates the two: `BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the
-running tree the cut acts on (`compose/compose.bigboy.images.yml`, `_records/`, `ops/.env`), and the
+running tree the cut acts on (`_records/compose.bigboy.images.yml`, `_records/`, `ops/.env`), and the
 tools (the sibling `bigboy-repin.sh`, `bigboy-repin-web.sh`, the check scripts) come from
 `BIGBOY_TOOLS_DIR`, which defaults to the directory the script itself runs from. A cut launched from
 a git worktree therefore needs no `ci/bigboy` symlink under the root; set `BIGBOY_TOOLS_DIR` only to

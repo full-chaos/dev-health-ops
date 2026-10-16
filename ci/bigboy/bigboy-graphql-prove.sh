@@ -34,7 +34,7 @@ case "${2:-}" in
 esac
 # BIGBOY_ROOT is the running tree (compose files, _records, ops/.env): the same root parameter
 # the bigboy-cut.sh family reads, with the same default.
-R=${BIGBOY_ROOT:-/home/ubuntu/devhealth}; HERE=$(cd "$(dirname "$0")" && pwd)
+R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd); HERE=$(cd "$(dirname "$0")" && pwd)
 TS=$(date -u +%Y%m%dT%H%M%SZ); OUT=$R/_records/bigboy-$N8/graphql-prove-$TS
 LOCAL_ADMIN_EMAIL=${LOCAL_ADMIN_EMAIL:-admin@test.com}
 KEY_ID=${PROVE_KEY_ID:-local-dev-20260906}  # D2726: the kid bigboy's query-api JWKS trusts
@@ -46,7 +46,7 @@ export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE   # CHAOS-8693: the chain, project,
 
 # 1. prover build == candidate build
 want=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-go-api-tools:sha-$S7" --format '{{json .Manifest}}' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null)
-pinned=$(awk '/^  venue-prove:/{f=1} f&&/image:/{sub(/.*@/,""); print; exit}' compose/compose.bigboy.images.yml)
+pinned=$(awk '/^  venue-prove:/{f=1} f&&/image:/{sub(/.*@/,""); print; exit}' _records/compose.bigboy.images.yml)
 if [ -n "$want" ] && [ "$want" = "$pinned" ]; then st prover-image 0; else
   st prover-image 1; echo "REFUSED: venue-prove image ${pinned:-<none>} is not go-api-tools:sha-$S7 (${want:-unresolved}) -- re-pin before proving" >&2; exit 1; fi
 

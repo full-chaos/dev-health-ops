@@ -143,6 +143,8 @@ on:
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
       - 'ci/bigboy/compose.bigboy.*.yml'
+      - 'ci/bigboy/compose.bigboy.yml'
+      - 'ci/bigboy/images.env'
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
@@ -345,6 +347,8 @@ on:
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
       - 'ci/bigboy/compose.bigboy.*.yml'
+      - 'ci/bigboy/compose.bigboy.yml'
+      - 'ci/bigboy/images.env'
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
@@ -616,14 +620,44 @@ jobs:
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      legs: ${{ steps.plan.outputs.legs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+
+      # CHAOS-9947: a pull request runs only the integration shards whose test
+      # binaries contain a changed package (go list -test, ci/go_affected_integration.py).
+      # A shared change, an unplaceable file or any failure here selects the FULL
+      # suite; main, merge_group and manual runs never run this step.
+      - name: Select the integration packages the change can affect
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          out="${RUNNER_TEMP}/affected.txt"
+          full() { printf 'FULL %s\n' "$1" > "${out}"; echo "::warning title=INTEGRATION SELECTION FELL BACK TO THE FULL SUITE::$1"; }
+          if ! bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt"; then
+            full "could not compute the changed-file list"
+          elif ! bash ci/check_go.sh integration-coverage | sed -n 's/^  RUN  //p' > "${RUNNER_TEMP}/keys.txt" \
+            || [ ! -s "${RUNNER_TEMP}/keys.txt" ]; then
+            full "could not list the integration packages"
+          elif ! go list -mod=readonly -tags=integration -test -json ./... > "${RUNNER_TEMP}/golist.json"; then
+            full "go list failed"
+          elif ! python3 -I ci/go_affected_integration.py --changed "${RUNNER_TEMP}/changed.txt" \
+            --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
+            --root "${GITHUB_WORKSPACE}" > "${out}"; then
+            full "selection script failed"
+          fi
+          cat "${out}"
+          echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"
 
       - name: Validate and emit deterministic integration shards
         id: plan
@@ -712,6 +746,7 @@ jobs:
   go-storage-integration-shard:
     name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
     needs: go-storage-integration-plan
+    if: needs.go-storage-integration-plan.result == 'success' && needs.go-storage-integration-plan.outputs.legs != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -769,6 +804,7 @@ jobs:
     env:
       PLAN_RESULT: ${{ needs.go-storage-integration-plan.result }}
       SHARD_RESULT: ${{ needs.go-storage-integration-shard.result }}
+      PLAN_LEGS: ${{ needs.go-storage-integration-plan.outputs.legs }}
     steps:
       - name: Require the plan and every shard to have passed
         run: |
@@ -776,6 +812,12 @@ jobs:
           if [ "${PLAN_RESULT}" != "success" ]; then
             echo "integration plan result: ${PLAN_RESULT}" >&2
             exit 1
+          fi
+          if [ "${PLAN_LEGS}" = "0" ] && [ "${SHARD_RESULT}" = "skipped" ]; then
+            # CHAOS-9947: the plan selected no package (no integration test binary
+            # contains the change). Skipped is valid ONLY with an explicit zero.
+            echo "plan selected 0 integration shards; none ran"
+            exit 0
           fi
           if [ "${SHARD_RESULT}" != "success" ]; then
             echo "shard result: ${SHARD_RESULT}" >&2

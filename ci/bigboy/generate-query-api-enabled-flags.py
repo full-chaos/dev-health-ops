@@ -34,7 +34,7 @@ Usage:
   static analyzer's naming heuristic a reason to flag it either.
 
   yaml (default): an `environment:` mapping fragment, ready to paste/diff into a compose overlay's
-    query-api service (2-space indent under `environment:`, matching compose.bigboy.images.yml's own
+    query-api service (2-space indent under `environment:`, matching compose.bigboy.yml's own
     style).
   compose-env: `NAME=value-or-${REF}` lines, one per var, for tooling that wants a plain list instead.
 

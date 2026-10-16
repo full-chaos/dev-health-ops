@@ -4,6 +4,7 @@ on:
   push:
     branches: [ main ]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [ "**" ]
   merge_group:
   workflow_dispatch:
@@ -73,8 +74,9 @@ jobs:
   live-e2e:
     needs: [changes]
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.code == 'true'
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     # Live E2E needs package read access for dependency installs.
     permissions:
@@ -226,8 +228,9 @@ jobs:
   metrics-executed-proof:
     needs: [changes]
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.code == 'true'
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.code == 'true')
     # Same ARC routing as `changes` above.
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     # CHAOS-5025: normal duration is ~6 min; one run hung with no output for

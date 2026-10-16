@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ func usersGroup() cli.Command {
 			{Name: "create", Summary: "create a new user", Kind: cli.Verb, Run: runUsersCreate},
 			{Name: "list", Summary: "list users", Kind: cli.Verb, Run: runUsersList},
 			{Name: "update", Summary: "update an existing user", Kind: cli.Verb, Run: runUsersUpdate},
+			{Name: "delete", Summary: "delete a user (needs --yes)", Kind: cli.Verb, Run: runUsersDelete},
 		},
 	}
 }
@@ -405,6 +407,39 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 	for _, change := range result.Changes {
 		fmt.Fprintf(env.Stdout, "  %s\n", change)
 	}
+	return cli.ExitOK
+}
+
+// runUsersDelete is `dho admin users delete`. There is no Python verb to port: the API's delete_user is the model.
+// Without --yes it reports what it would delete and exits 1 (nothing was deleted, and a script must not read it as done).
+func runUsersDelete(ctx context.Context, env cli.Env) int {
+	flags := newAccountFlags(env, "dho admin users delete")
+	var id, email, username optString
+	flags.Var(&id, "id", "user id to delete (identifier)")
+	flags.Var(&email, "email", "email of the user to delete (identifier)")
+	flags.Var(&username, "username", "username of the user to delete (identifier)")
+	yes := flags.Bool("yes", false, "confirm the deletion (without it the user is only reported)")
+	if code, ok := parseArgs(flags, env); !ok {
+		return code
+	}
+	op, closePool, code := accountOperator(ctx, env)
+	defer closePool()
+	if code != 0 {
+		return code
+	}
+	result, err := op.DeleteUser(ctx, admin.DeleteUserInput{ID: id.ptr(), Email: email.ptr(), Username: username.ptr(), Confirm: *yes})
+	if err != nil {
+		return report(env, accountRedactor(env), err)
+	}
+	if !result.Deleted {
+		fmt.Fprintf(env.Stdout, "Would delete user: %s (id: %s, superuser: %t, active: %t, memberships: %d). Nothing was deleted; add --yes to delete.\n",
+			result.User.Email, result.User.ID, result.User.IsSuperuser, result.User.IsActive, result.Memberships)
+		return cli.ExitFailure
+	}
+	logger := slog.New(slog.NewTextHandler(env.Stderr, nil))
+	logger.InfoContext(ctx, "admin: user deleted by the operator CLI", "user_id", result.User.ID.String(),
+		"is_superuser", result.User.IsSuperuser, "is_active", result.User.IsActive, "memberships_removed", result.Memberships)
+	fmt.Fprintf(env.Stdout, "Deleted user: %s (id: %s)\n", result.User.Email, result.User.ID)
 	return cli.ExitOK
 }
 

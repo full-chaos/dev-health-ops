@@ -13,9 +13,14 @@
 # `teams` write selects the protected-routes test of internal/apiservice).
 # Nothing selected is a plain notice and the heavy steps do not run.
 #
-# COST PER PR. The measured seconds of the selected rows (ci/venue_oracle_weights.d/):
-# most venue packages are 1-10 minutes; internal/apiservice/admin alone is about 36.
-# The job timeout is 60 minutes. A PR that changes no package with a registered venue
+# COST PER PR (D6039a). The measured seconds of the selected rows (ci/venue_oracle_weights.d/):
+# most venue packages are 1-10 minutes; internal/apiservice/admin alone is about 36. A change to a
+# widely linked package selects most of the registry (~9,000 s of tests in all), more than one job
+# may run in 60 minutes, so the job is a matrix of VENUE_LEGS legs: leg K runs the K-th of
+# VENUE_LEGS cost-balanced slices of the SELECTED rows (`check_go.sh venue-oracles --changed FILE
+# K VENUE_LEGS`), with no cap on what a change may select. Every leg reads the same change set
+# and computes the same partition; a leg whose slice is empty is a green no-op and starts none of
+# the heavy steps. Each leg's timeout is 60 minutes. A PR that changes no package with a registered venue
 # test costs the checkout and the selection (seconds): the path filter below starts it
 # only for changes under internal/, the GraphQL contract, the registry, or the gate itself.
 #
@@ -48,11 +53,17 @@ concurrency:
 jobs:
   venue-oracles-changed:
     if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
-    name: venue-oracles (changed packages)
+    name: venue-oracles (changed packages, shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+      VENUE_LEGS: 4
+      VENUE_LEG: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,13 +79,13 @@ jobs:
           git diff --name-only -z "${BASE_SHA}...${HEAD_SHA}" > changed.txt
           # The listing fails the step when the registry or a trigger file cannot be
           # read: a broken file must not read as "nothing selected".
-          bash ci/check_go.sh venue-oracles --changed changed.txt --list > listing.txt
+          bash ci/check_go.sh venue-oracles --changed changed.txt --list "${VENUE_LEG}" "${VENUE_LEGS}" > listing.txt
           grep '^SELECT' listing.txt > selected.txt || true
           count="$(wc -l < selected.txt | tr -d ' ')"
-          echo "selected ${count} venue oracle test(s):"
+          echo "leg ${VENUE_LEG}/${VENUE_LEGS} selected ${count} venue oracle test(s):"
           cat selected.txt
           if [ "${count}" -eq 0 ]; then
-            echo "::notice title=VENUE ORACLES NOT RUN::no changed path lies in a package with a registered venue oracle. This green is NOT oracle evidence."
+            echo "::notice title=VENUE ORACLES NOT RUN::no row of this leg's slice is selected (a change set that selects no registered venue oracle leaves every leg empty). This green is NOT oracle evidence."
             printf 'run=false\n' >> "${GITHUB_OUTPUT}"
           else
             printf 'run=true\n' >> "${GITHUB_OUTPUT}"
@@ -107,13 +118,13 @@ jobs:
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"
           mkdir -p "${DHO_CHAOS8509_CAPTURE_DIR}"
-          bash ci/check_go.sh venue-oracles --changed changed.txt 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
+          bash ci/check_go.sh venue-oracles --changed changed.txt "${VENUE_LEG}" "${VENUE_LEGS}" 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
 
       - name: Upload the venue oracle receipt
         if: steps.select.outputs.run == 'true' && always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: venue-oracle-receipt-changed-${{ github.run_id }}-${{ github.run_attempt }}
+          name: venue-oracle-receipt-changed-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/venue-oracle-receipt/receipt.log
             ${{ runner.temp }}/venue-oracle-receipt/chaos-8509/*.json

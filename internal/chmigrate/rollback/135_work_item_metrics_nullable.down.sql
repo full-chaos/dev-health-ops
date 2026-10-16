@@ -4,7 +4,8 @@
 -- ClickHouse refuses to narrow a Nullable column without a DEFAULT expression. So each NULL is first written as 0
 -- (the value the older build reads as "no data"), each column is narrowed with DEFAULT 0, and the default is then
 -- dropped again (the original columns have none). The difference between a measured 0 and no data is lost for the
--- rows already written.
+-- rows already written. The upgrade set every stored lead time of 0 to NULL (those 0 meant no lead time), so the
+-- rollback gives those rows their 0 back: the data returns to what it was, the rows written after the upgrade included.
 -- The version row goes too: with it left in schema_migrations, a later
 -- `dho migrate clickhouse upgrade` on a build that has the migration reads it
 -- as applied and never applies it again, so the schema would stay rolled back

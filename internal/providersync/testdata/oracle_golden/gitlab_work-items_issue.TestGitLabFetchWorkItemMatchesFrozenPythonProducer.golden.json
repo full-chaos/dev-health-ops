@@ -1,9 +1,9 @@
 {
   "header": {
     "test": "TestGitLabFetchWorkItemMatchesFrozenPythonProducer",
-    "python_build": "4e51adc71d32c71ea2d84203fa38258a89f67761",
-    "producer_digest": "43b2013b1d0e85995b3f091d3c664d08326349213b77d399f4ede21faca5ec84",
-    "recipe": "pair gitlab/work-items/issue: git worktree add --detach $DIR 4e51adc71d32c71ea2d84203fa38258a89f67761 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGitLabFetchWorkItemMatchesFrozenPythonProducer$' -python-root $DIR",
+    "python_build": "efb85285578233689bf30c09e3fadf157db56f97",
+    "producer_digest": "9bf12d3b436d85b64211e9271a5e90bfa2cfb980cf283084bf92deb18c64c1d2",
+    "recipe": "pair gitlab/work-items/issue: git worktree add --detach $DIR efb85285578233689bf30c09e3fadf157db56f97 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ -test '^TestGitLabFetchWorkItemMatchesFrozenPythonProducer$' -python-root $DIR",
     "recorded_by": "goldenrecord",
     "blanked": {}
   },
@@ -11,7 +11,7 @@
     {
       "name": "gitlab/work-items/issue",
       "method": "PYTHON",
-      "path": "program sha256 9633d444ccd778d9ad91729e4910a002b5c86c2add522092b7595e13ee411c01 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
+      "path": "program sha256 66a451a63d72dff30652575f4e39ee861d49a2cc51264a87553f87e304e00ab6 env sha256 39c398d6b7430d28c411c608d33260d4dcd2201d13572792e5bd953cce15c574",
       "body_sha256": "dcc9d4cda45a473d38b317c58c7a0b58dffab6a6b05c1a4374d9b6f6ef1569d8",
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,

@@ -13,11 +13,13 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// workItemRowCensusAllowed are the only non-test files that may build a work
-// item row field by field, each with its reason (CHAOS-9852).
+// workItemRowCensusAllowed are the only non-test functions ("file:function")
+// that may build a work item row field by field, each with its reason
+// (CHAOS-9852). The rest of their file is scanned like any other.
 var workItemRowCensusAllowed = map[string]string{
-	"work_item_row_base.go":        "the base: buildWorkItemRow and linearWorkItemRowFromBase",
-	"linear_work_items_derived.go": "copies a Linear row that buildWorkItemRow built, field for field, into the derivation row; it reads no payload",
+	"work_item_row_base.go:buildWorkItemRow":                  "the base constructor",
+	"work_item_row_base.go:linearWorkItemRowFromBase":         "the one conversion of a base row into the Linear effect row",
+	"linear_work_items_derived.go:linearWorkItemRowsAsGitHub": "copies a Linear row that buildWorkItemRow built, field for field, into the derivation row; it reads no payload",
 }
 
 // workItemRowCensusFieldWrites are the row fields that code outside the base may
@@ -32,8 +34,9 @@ type workItemRowCensusFinding struct {
 }
 
 // scanWorkItemRowWrites returns every row literal with fields and every row
-// field write outside the allowed files.
-func scanWorkItemRowWrites(pkg *packages.Package, rowTypes []types.Type) []workItemRowCensusFinding {
+// field write outside the allowed functions, and the allowed functions that
+// hold at least one row literal (an allowance that holds none is stale).
+func scanWorkItemRowWrites(pkg *packages.Package, rowTypes []types.Type) ([]workItemRowCensusFinding, map[string]bool) {
 	isRow := func(typ types.Type) bool {
 		if typ == nil {
 			return false
@@ -49,44 +52,56 @@ func scanWorkItemRowWrites(pkg *packages.Package, rowTypes []types.Type) []workI
 		return false
 	}
 	var findings []workItemRowCensusFinding
+	allowedWithLiteral := map[string]bool{}
 	for _, file := range pkg.Syntax {
 		name := filepath.Base(pkg.Fset.Position(file.Pos()).Filename)
-		if _, ok := workItemRowCensusAllowed[name]; ok {
-			continue
-		}
 		position := func(node ast.Node) string {
 			at := pkg.Fset.Position(node.Pos())
 			return filepath.Base(at.Filename) + ":" + itoaCensus(at.Line)
 		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			switch typed := node.(type) {
-			case *ast.CompositeLit:
-				if len(typed.Elts) > 0 && isRow(pkg.TypesInfo.TypeOf(typed)) {
-					findings = append(findings, workItemRowCensusFinding{position(typed), "row literal with fields"})
-				}
-			case *ast.AssignStmt:
-				if typed.Tok == token.DEFINE {
-					return true
-				}
-				for _, left := range typed.Lhs {
-					selector, ok := left.(*ast.SelectorExpr)
-					if !ok {
-						continue
-					}
-					selection := pkg.TypesInfo.Selections[selector]
-					if selection == nil || selection.Kind() != types.FieldVal || !isRow(selection.Recv()) {
-						continue
-					}
-					if _, ok := workItemRowCensusFieldWrites[selector.Sel.Name]; ok {
-						continue
-					}
-					findings = append(findings, workItemRowCensusFinding{position(selector), "write of row field " + selector.Sel.Name})
+		for _, declaration := range file.Decls {
+			allowedKey := ""
+			if function, ok := declaration.(*ast.FuncDecl); ok {
+				key := name + ":" + function.Name.Name
+				if _, ok := workItemRowCensusAllowed[key]; ok {
+					allowedKey = key
 				}
 			}
-			return true
-		})
+			ast.Inspect(declaration, func(node ast.Node) bool {
+				switch typed := node.(type) {
+				case *ast.CompositeLit:
+					if len(typed.Elts) == 0 || !isRow(pkg.TypesInfo.TypeOf(typed)) {
+						return true
+					}
+					if allowedKey != "" {
+						allowedWithLiteral[allowedKey] = true
+						return true
+					}
+					findings = append(findings, workItemRowCensusFinding{position(typed), "row literal with fields"})
+				case *ast.AssignStmt:
+					if typed.Tok == token.DEFINE || allowedKey != "" {
+						return true
+					}
+					for _, left := range typed.Lhs {
+						selector, ok := left.(*ast.SelectorExpr)
+						if !ok {
+							continue
+						}
+						selection := pkg.TypesInfo.Selections[selector]
+						if selection == nil || selection.Kind() != types.FieldVal || !isRow(selection.Recv()) {
+							continue
+						}
+						if _, ok := workItemRowCensusFieldWrites[selector.Sel.Name]; ok {
+							continue
+						}
+						findings = append(findings, workItemRowCensusFinding{position(selector), "write of row field " + selector.Sel.Name})
+					}
+				}
+				return true
+			})
+		}
 	}
-	return findings
+	return findings, allowedWithLiteral
 }
 
 func itoaCensus(value int) string {
@@ -128,22 +143,18 @@ func TestWorkItemRowBaseCensus(t *testing.T) {
 	if len(pkg.Syntax) < 100 {
 		t.Fatalf("scanned %d files: the census lost the package", len(pkg.Syntax))
 	}
-	allowedSeen := map[string]bool{}
 	for _, file := range pkg.Syntax {
-		name := filepath.Base(pkg.Fset.Position(file.Pos()).Filename)
-		if strings.HasSuffix(name, "_test.go") {
+		if name := filepath.Base(pkg.Fset.Position(file.Pos()).Filename); strings.HasSuffix(name, "_test.go") {
 			t.Fatalf("census scanned a test file %s", name)
 		}
-		if _, ok := workItemRowCensusAllowed[name]; ok {
-			allowedSeen[name] = true
+	}
+	findings, allowedWithLiteral := scanWorkItemRowWrites(pkg, rowTypes)
+	for key := range workItemRowCensusAllowed {
+		if !allowedWithLiteral[key] {
+			t.Errorf("allowed function %s builds no row literal (gone or renamed): remove its census entry", key)
 		}
 	}
-	for name := range workItemRowCensusAllowed {
-		if !allowedSeen[name] {
-			t.Errorf("allowed file %s no longer exists: remove its census entry", name)
-		}
-	}
-	for _, finding := range scanWorkItemRowWrites(pkg, rowTypes) {
+	for _, finding := range findings {
 		t.Errorf("%s: %s outside the work item base; read the field in the provider's workItemSource instead", finding.position, finding.what)
 	}
 }
@@ -152,7 +163,10 @@ func TestWorkItemRowBaseCensus(t *testing.T) {
 // base and proves the scan reports both shapes.
 func TestWorkItemRowBaseCensusCatchesABypass(t *testing.T) {
 	pkg, rowTypes := loadWorkItemRowCensusPackage(t, "testdata/workitem_row_census_plant", ".")
-	findings := scanWorkItemRowWrites(pkg, rowTypes)
+	findings, allowedWithLiteral := scanWorkItemRowWrites(pkg, rowTypes)
+	if !reflect.DeepEqual(allowedWithLiteral, map[string]bool{"work_item_row_base.go:buildWorkItemRow": true}) {
+		t.Fatalf("allowed functions with a literal = %v", allowedWithLiteral)
+	}
 	got := make([]string, 0, len(findings))
 	for _, finding := range findings {
 		got = append(got, finding.position+" "+finding.what)
@@ -163,6 +177,7 @@ func TestWorkItemRowBaseCensusCatchesABypass(t *testing.T) {
 		"plant.go:22 write of row field ParentID",
 		"plant.go:23 write of row field EpicID",
 		"plant.go:28 row literal with fields",
+		"work_item_row_base.go:12 row literal with fields",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("plant findings = %q, want %q", got, want)

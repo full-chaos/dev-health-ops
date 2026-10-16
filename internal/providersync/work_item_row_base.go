@@ -231,8 +231,8 @@ const (
 )
 
 // logWorkItemHierarchy is the per-write summary of the hierarchy fields:
-// counts only, no ids. A reader checks it to see whether a provider's batch
-// carried parents and epics at all.
+// counts only, no ids, at Info so that a provider that stops writing parents
+// or epics shows at the default level.
 func logWorkItemHierarchy(ctx context.Context, rows []workItemStoredRow) {
 	byProvider := map[string][3]int{}
 	for _, row := range rows {
@@ -247,7 +247,7 @@ func logWorkItemHierarchy(ctx context.Context, rows []workItemStoredRow) {
 		byProvider[row.Provider] = counts
 	}
 	for provider, counts := range byProvider {
-		slog.DebugContext(ctx, workItemHierarchyEvent, "provider", provider,
+		slog.InfoContext(ctx, workItemHierarchyEvent, "provider", provider,
 			"rows", counts[0], "with_parent_id", counts[1], "with_epic_id", counts[2])
 	}
 }

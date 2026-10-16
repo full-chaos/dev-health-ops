@@ -153,8 +153,10 @@ func TestExplainSharesEqualTheInvestmentPagesMix(t *testing.T) {
 		if finding.Evidence.Denominator == nil || math.Abs(*finding.Evidence.Denominator-pageTotal) > 1e-3 {
 			t.Errorf("%s: explain denominator = %v, the page's total is %v", key, finding.Evidence.Denominator, pageTotal)
 		}
-		if finding.Evidence.Measure != MeasureCount {
-			t.Errorf("%s: measure = %q, want COUNT", key, finding.Evidence.Measure)
+		// The request names no measure: the explanation reads its default, ISSUE_SIZE (CHAOS-9809); no unit of this
+		// fixture has a size, so every unit counts 1 and the shares are the page's COUNT shares.
+		if finding.Evidence.Measure != ExplanationDefaultMeasure {
+			t.Errorf("%s: measure = %q, want %q", key, finding.Evidence.Measure, ExplanationDefaultMeasure)
 		}
 	}
 }

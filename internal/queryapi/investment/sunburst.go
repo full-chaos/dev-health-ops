@@ -36,7 +36,7 @@ type SunburstFilters struct {
 	Themes        []string
 	Subcategories []string
 	Limit         int
-	// Measure is what a slice's value counts: investmentexplain.InvestmentShareMeasure (CHAOS-9622).
+	// Measure is what a slice's value counts: investmentexplain.SunburstMeasure (CHAOS-9622).
 	// Empty is refused; there is no effort_value default.
 	Measure string
 }

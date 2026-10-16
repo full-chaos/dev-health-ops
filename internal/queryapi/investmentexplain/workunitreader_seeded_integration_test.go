@@ -134,6 +134,17 @@ CREATE TABLE work_unit_investment_quotes (
     org_id String DEFAULT 'default'
 ) ENGINE = ReplacingMergeTree(computed_at)
 ORDER BY (work_unit_id, source_id, quote);
+
+CREATE TABLE work_unit_issue_size (
+    org_id String,
+    work_unit_id String,
+    issue_size Float64,
+    sized_issue_count UInt32,
+    issue_count UInt32,
+    categorization_run_id String,
+    computed_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(computed_at)
+ORDER BY (org_id, work_unit_id);
 `
 
 // TestFetchWorkUnitInvestments_SeededRealClickHouse_ScansMapColumns is

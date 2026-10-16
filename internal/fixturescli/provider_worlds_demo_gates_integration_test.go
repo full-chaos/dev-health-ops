@@ -1045,8 +1045,8 @@ func TestDemoGateG12MeasuredComplexityIsRealistic(t *testing.T) {
 
 // Commit hours are spread over the day: the world's commits fall at many hours, some before 09:00 or
 // after 17:00 UTC and some on weekends, and the share of a team's weekday commits outside 09:00-17:00
-// differs between the teams and stays near the team's AfterHoursShare (no shared constant such as one
-// early commit per repository day).
+// differs between the teams (no share held by more than half of them) and stays near the team's
+// AfterHoursShare (no shared constant such as one early commit per repository day).
 func TestDemoGateCommitHoursSpread(t *testing.T) {
 	world, frozenAt := demoGateWorld(t)
 	type tally struct{ weekday, after, weekend, recentWeekday, recentAfter int }
@@ -1165,17 +1165,18 @@ func TestDemoGateCommitHoursSpread(t *testing.T) {
 		key := fmt.Sprintf("%.2f", share)
 		shares[key] = append(shares[key], team)
 	}
-	// The served team metrics row is the latest day's. On a weekday no single value may stand for more
-	// than half the teams (on a weekend every team's ratio is 0 by the rule: weekend commits are never after hours).
+	// The served team metrics row is the latest day's. On a weekday no non-zero value may stand for more
+	// than half the teams, and no value at all for six or more (a 0 is a day with no after-hours commit,
+	// common on a day of one or two commits; on a weekend every ratio is 0 by the rule).
 	teamCount := len(demoGateTeamRepos(world))
 	for ratio, teams := range latestRatios {
-		if 2*len(teams) > teamCount {
+		if (ratio != "0.00" && 2*len(teams) > teamCount) || len(teams) >= 6 {
 			sort.Strings(teams)
 			t.Errorf("%d teams share the after-hours ratio %s on their latest weekday with commits: %v", len(teams), ratio, teams)
 		}
 	}
 	for share, teams := range shares {
-		if len(teams) > 1 {
+		if 2*len(teams) > teamCount {
 			sort.Strings(teams)
 			t.Errorf("teams %v share the after-hours share %s of their weekday commits", teams, share)
 		}

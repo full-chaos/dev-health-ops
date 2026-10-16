@@ -2647,12 +2647,22 @@ func volatileBytes(data any, volatile map[string]string) int {
 	total := 0
 	for path := range volatile {
 		segments := citedSegments(path)
-		if len(segments) == 0 {
+		if len(segments) == 0 || hasVolatileAncestor(path, volatile) {
 			continue
 		}
 		total += encodedSizeAt(data, segments)
 	}
 	return total
+}
+
+// hasVolatileAncestor reports whether another declared volatile path contains path, whose bytes the ancestor already takes out.
+func hasVolatileAncestor(path string, volatile map[string]string) bool {
+	for other := range volatile {
+		if other != path && strings.HasPrefix(path, other+".") {
+			return true
+		}
+	}
+	return false
 }
 
 func encodedSizeAt(value any, segments []string) int {

@@ -277,3 +277,13 @@ func TestDocRouteRunnerBlocksDrawnDaysBinsWithoutTheDeclaration(t *testing.T) {
 		t.Fatalf("drawn bins without the declaration were not reported: %+v", o)
 	}
 }
+
+// The days declaration is scoped to the bin list: a sibling of the bins that differs still blocks.
+func TestDocRouteRunnerStillBlocksADifferenceBesideTheDrawnDaysBins(t *testing.T) {
+	other := drawnBinsOverrides(4000, 3000, 3000)
+	other["completionDistribution"].(map[string]any)["runs"] = 9999
+	outcomes, _ := stochasticDocRouteRun(t, forecastBody(t, "go", drawnBinsOverrides(5001, 4999)), forecastBody(t, "go", other))
+	if o := outcomes[0]; o.DifferencesOutsideBaselineDefect == 0 {
+		t.Fatalf("a different completionDistribution.runs beside the drawn bins was not reported: %+v", o)
+	}
+}

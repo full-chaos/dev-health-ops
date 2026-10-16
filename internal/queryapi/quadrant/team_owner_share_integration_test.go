@@ -61,7 +61,10 @@ func pointsByTeam(t *testing.T, resp *Response) map[string][2]float64 {
 	t.Helper()
 	got := map[string][2]float64{}
 	for _, point := range resp.Points {
-		got[point.EntityID] = [2]float64{point.X, point.Y}
+		if point.NoData {
+			continue
+		}
+		got[point.EntityID] = [2]float64{*point.X, *point.Y}
 	}
 	return got
 }

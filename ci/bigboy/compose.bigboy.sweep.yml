@@ -1,0 +1,7 @@
+# CHAOS-8693: the bigboy reconciler runs the unreclaimable dispatch sweep ACTIVE. This was the untracked lane override
+# reconciler-sweep-override.yml. The compiled default of --unreclaimable-sweep is `shadow` (internal/platform/config/
+# options.go) and no other file of the chain sets it, so it is stated here, in every set that renders the base file.
+services:
+  go-reconciler:
+    environment:
+      SYNC_UNRECLAIMABLE_SWEEP: active

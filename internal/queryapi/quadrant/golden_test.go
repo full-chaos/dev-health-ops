@@ -81,6 +81,16 @@ func loadGolden(t *testing.T, name string) Response {
 func TestGoldenCycleThroughputTeamAttributionQuirk(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		switch {
+		case strings.Contains(query, "AS team_activity") && strings.Contains(query, "sum(item_weight)") && isWindowRead(query):
+			return &fixtureRowScanner{rows: [][]any{
+				{day(2024, 1, 1), "team-a", "team-a", 14.0},
+				{day(2024, 1, 1), "team-b", "team-b", 3.0},
+			}}, nil
+		case strings.Contains(query, "AS team_activity") && strings.Contains(query, "sum(cycle_time_hours * weight)") && isWindowRead(query):
+			return &fixtureRowScanner{rows: [][]any{
+				{day(2024, 1, 1), "team-a", "team-a", 36.0},
+				{day(2024, 1, 1), "team-b", "team-b", 72.0},
+			}}, nil
 		case strings.Contains(query, "AS team_activity") && strings.Contains(query, "sum(item_weight)"):
 			return &fixtureRowScanner{rows: [][]any{
 				{day(2024, 1, 1), "team-a", "team-a", 5.0},
@@ -93,6 +103,8 @@ func TestGoldenCycleThroughputTeamAttributionQuirk(t *testing.T) {
 				{day(2024, 1, 8), "team-a", "team-a", 24.0},
 				{day(2024, 1, 1), "team-b", "team-b", 72.0},
 			}}, nil
+		case strings.Contains(query, "is_active = 1") && strings.Contains(query, "SELECT toString(id) AS team_id, name AS team_name"):
+			return &fixtureRowScanner{rows: [][]any{{"team-a", "Team Alpha"}, {"team-b", ""}}}, nil
 		case strings.Contains(query, "FROM teams FINAL"):
 			return &fixtureRowScanner{rows: [][]any{{"team-a", "Team Alpha"}}}, nil
 		default:
@@ -108,7 +120,10 @@ func TestGoldenCycleThroughputTeamAttributionQuirk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
 	}
-	want := loadGolden(t, "cycle_throughput_team.json")
+	want := withWholeWindowPoints(loadGolden(t, "cycle_throughput_team.json"), "2024-01-01", "2024-01-09")
+	// The point is the window's own aggregate (CHAOS-9816), read by a separate
+	// whole-window read; the frozen Python golden carries the last bucket.
+	want.Points[0].X, want.Points[0].Y = fp(1.5), fp(14.0)
 	if !reflect.DeepEqual(*got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", *got, want)
 	}
@@ -139,7 +154,7 @@ func TestGoldenChurnThroughputForcesRepoGrain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
 	}
-	want := loadGolden(t, "churn_throughput_team_forces_repo.json")
+	want := withWholeWindowPoints(loadGolden(t, "churn_throughput_team_forces_repo.json"), "2024-01-01", "2024-01-09")
 	if !reflect.DeepEqual(*got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", *got, want)
 	}
@@ -176,7 +191,7 @@ func TestGoldenReviewLoadLatencyRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
 	}
-	want := loadGolden(t, "review_load_latency_repo.json")
+	want := withWholeWindowPoints(loadGolden(t, "review_load_latency_repo.json"), "2024-01-01", "2024-01-09")
 	if !reflect.DeepEqual(*got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", *got, want)
 	}
@@ -229,7 +244,7 @@ func TestGoldenPersonScopeOwnRowsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
 	}
-	if len(identityBindings) != 1 || !strings.Contains(identityBindings[0], "jane@example.com") || strings.Contains(identityBindings[0], "john") {
+	if len(identityBindings) != 2 || !strings.Contains(identityBindings[0], "jane@example.com") || strings.Contains(identityBindings[0], "john") {
 		t.Fatalf("identity binding = %v, want only jane's variants", identityBindings)
 	}
 
@@ -241,8 +256,8 @@ func TestGoldenPersonScopeOwnRowsOnly(t *testing.T) {
 		Points: []Point{
 			{
 				EntityID: PersonIDForIdentity("jane@example.com"), EntityLabel: displayNameForIdentity("jane@example.com"),
-				X: 5.0, Y: 12.0,
-				WindowStart: "2024-01-01", WindowEnd: "2024-01-08",
+				X: fp(5.0), Y: fp(12.0),
+				WindowStart: "2024-01-01", WindowEnd: "2024-01-02",
 				EvidenceLink: "/api/v1/explain?metric=throughput",
 			},
 		},
@@ -252,6 +267,26 @@ func TestGoldenPersonScopeOwnRowsOnly(t *testing.T) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", *got, want)
 	}
 }
+
+// isWindowRead is true for the read that aggregates the whole requested window
+// into one row per entity (bucketWindow).
+func isWindowRead(query string) bool {
+	return strings.Contains(query, "toDate({start_day:Date})")
+}
+
+// withWholeWindowPoints declares the one difference from the frozen Python
+// goldens: Python's window_start/window_end are the last bucket's, Go's are the
+// requested window's (CHAOS-9816). Values and trajectories are untouched.
+func withWholeWindowPoints(resp Response, start, end string) Response {
+	points := append([]Point(nil), resp.Points...)
+	for i := range points {
+		points[i].WindowStart, points[i].WindowEnd = start, end
+	}
+	resp.Points = points
+	return resp
+}
+
+func fp(v float64) *float64 { return &v }
 
 func bindingValue(bindings []dhclickhouse.Binding, name string) any {
 	for _, b := range bindings {

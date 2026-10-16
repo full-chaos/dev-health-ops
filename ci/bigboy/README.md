@@ -5,31 +5,42 @@ Tracked home of the bigboy-cut.sh script family and the bigboy-specific compose 
 host and are kept byte-identical to this directory by hand at every change (there is no automated
 sync yet).
 
-## Compose invocation (CHAOS-6987, D2724/D2726/D2728)
+## Operating the stack: `stack.sh` (CHAOS-8693)
 
-Every `docker compose` invocation against this stack MUST pass `--env-file ops/.env` explicitly.
-Docker Compose's own default `.env` auto-load only reads a `.env` at the **project root**, never
-`ops/.env` -- so any compose-level `${VAR}` substitution referencing a var that only lives in
-`ops/.env` (e.g. `query-api`'s `GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY}`) silently resolves to a
-blank string with a `"variable is not set"` warning easy to miss, not a hard failure. `bigboy-cut.sh`
-passes it on every invocation; do the same for any manual `docker compose up` against this overlay.
+One script owns the bigboy compose invocation: `ci/bigboy/stack.sh [-s set] <verb> [args]`. It owns the project
+name (`dev-health`), the working directory (`$BIGBOY_ROOT`, default `/home/ubuntu/devhealth`), `--env-file ops/.env`,
+the profiles and the ordered compose files, all read from `ci/bigboy/stack.files`. Nothing else names a `-f` list:
+a test fails on any raw `docker compose -f` chain or `COMPOSE_FILE` export in this directory, and on a compose file here
+that `stack.files` does not list. Every inherited `COMPOSE_*` variable is dropped.
 
-The full invocation (from `/home/ubuntu/devhealth`):
+| Verb | What it runs |
+|---|---|
+| `files` | prints the effective file list (no docker) |
+| `config [--quiet\|--images\|--services]` | no flag: `NAME=<length>` only through `compose-config-redacted.sh`; a flag: passed on |
+| `ps`, `logs` | read-only |
+| `up <service>...` | `up -d --no-deps --no-build <service>...` (never the whole stack) |
+| `restart <service>` | `restart <service>` |
+| `run <service> [cmd...]` | `run --rm --no-deps -T <service> [cmd...]` (a one-off container) |
+| `exec <service> [cmd...]` | `exec -T <service> [cmd...]` (stdin passes through) |
+| `repin-web` | `bigboy-repin-web.sh` |
+
+Any other verb is refused. Before a mutating verb (`up`, `restart`, `run`, `repin-web`) it prints the file list and the
+pinned image references; after it, one line goes to `$BIGBOY_ROOT/_records/stack-runs.log` (time, verb, set, service, tools
+sha, image digests, rc). It refuses when an overlay file is missing. `-s <set>` selects a set of `stack.files`: `stack` (the
+live chain the cut runs), `smoke`, `prove-base`, `prove`, `hook-check`, `river-apply`.
+
+The static compose files are tracked here: `compose.bigboy.base.yml` and `compose.bigboy.go-workers.yml` were byte copies of
+the host `compose.yml` and `compose/compose.go.workers.yml` (`check-host-copies.sh` compares them while the host files
+exist). The one file a cut rewrites is the image pin file `$BIGBOY_ROOT/_records/compose.bigboy.images.yml`
+(`bigboy-repin*.sh` write it; a pin sheet copies it); the tracked `compose.bigboy.images.yml` is the last pin a PR recorded.
 
 ```
-export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@<digest>
-docker compose --env-file ops/.env \
-  -f compose.yml -f compose/compose.go.workers.yml \
-  -f .remember/lanes/team-lead/reconciler-sweep-override.yml \
-  -f compose/compose.bigboy.images.yml -f ci/bigboy/compose.bigboy.workers.yml \
-  -f compose/compose.bigboy.router.yml \
-  up -d --no-deps --no-build <service...>
+export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@<digest>   # required to start a worker service; the cut exports it
+ci/bigboy/stack.sh config --quiet
+ci/bigboy/stack.sh up query-api go-api web
 ```
 
-`compose/compose.bigboy.router.yml` (this repo's tracked copy also lives here as
-`ci/bigboy/compose.bigboy.router.yml`) is REQUIRED in that `-f` list from now on -- omitting it
-silently drops the plane-split router (see below): web then gets the base file's `BACKEND_URL`, which
-names the retired Python api.
+Starting a service whose image is `${BIGBOY_OPERATOR_IMAGE}` (the workers) without that variable is refused; every other verb needs nothing. A set that needs a value only its step script knows lists it as `needs` in `stack.files`; `stack.sh` refuses and names it.
 
 ## Go-only stack (CHAOS-8361)
 
@@ -58,7 +69,7 @@ The bigboy stack runs no Python api, as prod does. The base `compose.yml` of the
   `--no-deps` on the cut's `up` skips none.
 
 ORDER for the first cut with these files (the same order the billing-edge retirement used): (1) put
-the tracked `compose.bigboy.images.yml` in place of the host copy `compose/compose.bigboy.images.yml`,
+the tracked `compose.bigboy.images.yml` in place of the pin file `_records/compose.bigboy.images.yml`,
 keeping the digests the host copy has (web-path-smoke.sh reads the HOST overlay, so the `web-smoke` block of the tracked file, which carries the smoke's image, must be in it); and repin the dho digests to a build that has the `dho smoke web-path` verb (the smoke works only with both); (2) with the OLD chain still exported, name and remove the two
 Python containers with compose verbs (`docker compose ... ps api metrics-api`, then
 `docker compose ... rm -sf api metrics-api`; one approved line, run on the lead's GO); (3) regenerate
@@ -179,7 +190,7 @@ query-api at all -- a real user's JWT was rejected outright with no way to serve
 `bigboy-cut.sh`'s `query-api-enabled-flags-current` STEP now does two checks, both required for
 `DEPLOY_SHA=<pinned deploy commit>` (see "Pinned deploy values" below):
 1. Every NAME the generator emits (flags + secret refs) is present in the checked-in
-   `compose/compose.bigboy.images.yml` -- fails loud (STEP rc=1) naming exactly which name(s) are
+   `_records/compose.bigboy.images.yml` -- fails loud (STEP rc=1) naming exactly which name(s) are
    missing, rather than a silent 404/401 surfacing hours later through a real user.
 2. Every secret-ref NAME resolves to a non-blank value through the LIVE, `--env-file`-substituted
    compose config -- fails loud (separate STEP `query-api-secret-refs-nonblank`, rc=1) if any
@@ -359,7 +370,7 @@ Prod serves the Stripe webhook host from go-api's billing-edge listener (:8010) 
 Python service carried) to port 8010; `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `LICENSE_PRIVATE_KEY`
 reach go-api by name from `ops/.env` (never written in the file; unset, the listener's `/health` names the
 missing one with a 503); the Python `billing-edge` service moves to the profile `retired-billing-edge`, which
-nothing enables. The file is in `bigboy-cut.sh`'s `COMPOSE_FILE` chain before the router (the router stays
+nothing enables. The file is in the `stack` set of `stack.files` before the router (the router stays
 last), so go-api is never recreated without them.
 
 Applying it recreates go-api, so it goes in with a cut, never on its own while go-api is in use, and the

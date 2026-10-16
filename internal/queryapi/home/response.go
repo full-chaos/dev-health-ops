@@ -145,6 +145,16 @@ type ReworkThemeAllocation struct {
 	AllocationPct float64 `json:"allocation_pct"`
 	PRsMerged     int64   `json:"prs_merged"`
 	ChurnLOC      int64   `json:"churn_loc"`
+
+	// Measure, Denominator and the sizing fields say what allocation is a share of (CHAOS-9624). GraphQL only
+	// (json "-": the REST body is frozen). Measure is WORK_UNITS (COUNT) or ISSUE_SIZE; Denominator is the total
+	// allocation_pct divides by. The three sizing fields are nil unless Measure is ISSUE_SIZE, and nil when the
+	// window holds no unit: nil is "not measured", never 0.
+	Measure          string   `json:"-"`
+	Denominator      float64  `json:"-"`
+	SizingCoverage   *float64 `json:"-"`
+	UnsizedUnitCount *int64   `json:"-"`
+	WorkUnitCount    *int64   `json:"-"`
 }
 
 // SummarySentence is the wire shape of SummarySentence (schemas.py:45-48).
@@ -225,6 +235,11 @@ type Signal struct {
 	// which adds its own hedge. Nil: the summary quotes WhyItMatters whole.
 	// Never served.
 	Why *WhyParts `json:"-"`
+	// Driver (CHAOS-8573) is the one-line caption of where the signal's move
+	// appears largest ("Cycle Time appears to have moved most in A, B and C."): a metric
+	// signal with a stated, non-zero move and at least one named driver. nil on
+	// every other signal. GraphQL only, like Coverage.
+	Driver *string `json:"-"`
 	// RepoFilterApplied (CHAOS-9093) is the field of the metric the signal is
 	// built from (MetricDelta.RepoFilterApplied). It is nil on a signal that does
 	// not come from a metric spec (a risk signal, a recommendation). GraphQL only,

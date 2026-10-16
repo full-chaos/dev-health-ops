@@ -981,6 +981,8 @@ type HomeSignal struct {
 	Attribution *SignalAttribution `json:"attribution,omitempty"`
 	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta.
 	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
+	// One sentence on where the signal's move appears largest ("Cycle Time appears to have moved most in A, B and C."), built from the display names of its top drivers with one hedge word. Null when the signal has no stated non-zero move, no driver has a name, or the signal is not a metric signal (risk, recommendation). Never a placeholder.
+	Driver *string `json:"driver,omitempty"`
 }
 
 type HomeTile struct {
@@ -1460,12 +1462,17 @@ type ReviewEdgesResult struct {
 }
 
 type ReworkThemeAllocation struct {
-	Theme         string  `json:"theme"`
-	Label         string  `json:"label"`
-	Allocation    float64 `json:"allocation"`
-	AllocationPct float64 `json:"allocationPct"`
-	PrsMerged     int     `json:"prsMerged"`
-	ChurnLoc      int     `json:"churnLoc"`
+	Theme            string          `json:"theme"`
+	Label            string          `json:"label"`
+	Allocation       float64         `json:"allocation"`
+	AllocationPct    float64         `json:"allocationPct"`
+	PrsMerged        int             `json:"prsMerged"`
+	ChurnLoc         int             `json:"churnLoc"`
+	Measure          SankeyValueUnit `json:"measure"`
+	Denominator      float64         `json:"denominator"`
+	SizingCoverage   *float64        `json:"sizingCoverage,omitempty"`
+	UnsizedUnitCount *int            `json:"unsizedUnitCount,omitempty"`
+	WorkUnitCount    *int            `json:"workUnitCount,omitempty"`
 }
 
 type SankeyRequestInput struct {

@@ -31,9 +31,16 @@ type ViaDeploymentLinks struct {
 // row that carries no repo_id ties its incident to the repository of its
 // deployment, but only when the incident has no direct tie (no active
 // service-to-repository mapping for its service) and the incident started in
-// [dayStart, dayEnd). A deployment_id that names more than one repository of
+// [dayStart, dayEnd); a link to an incident that started on another day ties
+// nothing on this day (see below). A deployment_id that names more than one repository of
 // the organization ties nothing; it is counted, logged and skipped, never
 // guessed. Only ties to repoIDs are returned.
+//
+// The links are read for every current incident, whatever its start day
+// (CHAOS-9019): a deployment of this day can be linked to an incident that
+// started on the day before or after. Such a link is returned without a tie
+// (IncidentOtherDay), so the deployment is counted failed on its own day while
+// the incident is counted once, on its start day.
 //
 // The daily work_graph_edges family always writes repo_id, so today these rows
 // come from other writers of the table; the tier is read from the table, not
@@ -62,12 +69,12 @@ func LoadViaDeploymentIncidentLinks(
 	}
 	currentIncidents := remaining.CurrentOperationalRowsSQL("operational_incidents", []string{
 		"is_deleted = 0",
-		"started_at >= {start:DateTime64(3, 'UTC')}",
-		"started_at < {end:DateTime64(3, 'UTC')}",
+		"started_at IS NOT NULL",
 	}, contract)
 	currentMappings := activeServiceRepositoryMappingsSQL(contract)
 	rows, err := conn.Query(ctx, `
-SELECT edge.incident_id, edge.deployment_id, edge.source, deployment.deployment_repo_id, deployment.repo_count
+SELECT edge.incident_id, edge.deployment_id, edge.source, deployment.deployment_repo_id, deployment.repo_count,
+    toUInt8(incident.started_at >= {start:DateTime64(3, 'UTC')} AND incident.started_at < {end:DateTime64(3, 'UTC')}) AS incident_in_day
 FROM (
     SELECT incident_id, deployment_id, source
     FROM work_graph_deployment_incident_edges FINAL
@@ -112,12 +119,15 @@ ORDER BY edge.incident_id, edge.deployment_id, edge.source`,
 			incidentID, deploymentID, source string
 			repoID                           uuid.UUID
 			repoCount                        uint64
+			incidentInDay                    uint8
 		)
-		if err := rows.Scan(&incidentID, &deploymentID, &source, &repoID, &repoCount); err != nil {
+		if err := rows.Scan(&incidentID, &deploymentID, &source, &repoID, &repoCount, &incidentInDay); err != nil {
 			return ViaDeploymentLinks{}, fmt.Errorf("scan via-deployment incident link: %w", err)
 		}
 		if repoCount != 1 {
-			out.Ambiguous++
+			if incidentInDay == 1 {
+				out.Ambiguous++
+			}
 			continue
 		}
 		if _, ok := wanted[repoID]; !ok {
@@ -125,8 +135,13 @@ ORDER BY edge.incident_id, edge.deployment_id, edge.source`,
 		}
 		incidentID = pythonparity.DecodeClickHouseStringValue(incidentID)
 		deploymentID = pythonparity.DecodeClickHouseStringValue(deploymentID)
-		out.Ties = append(out.Ties, changefailure.IncidentTie{RepoID: repoID, IncidentID: incidentID, ViaDeployment: true})
-		out.Links = append(out.Links, changefailure.Link{RepoID: repoID, DeploymentID: deploymentID, IncidentID: incidentID, Source: source})
+		if incidentInDay == 1 {
+			out.Ties = append(out.Ties, changefailure.IncidentTie{RepoID: repoID, IncidentID: incidentID, ViaDeployment: true})
+		}
+		out.Links = append(out.Links, changefailure.Link{
+			RepoID: repoID, DeploymentID: deploymentID, IncidentID: incidentID, Source: source,
+			IncidentOtherDay: incidentInDay != 1,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return ViaDeploymentLinks{}, fmt.Errorf("iterate via-deployment incident links: %w", err)

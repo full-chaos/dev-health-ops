@@ -11,7 +11,8 @@ import (
 )
 
 var oracleGitLabRepositoryGoOnlyFields = map[string]string{
-	"org_id": "carried from the tenant-scoped Go claim",
+	"org_id":           "carried from the tenant-scoped Go claim",
+	"provider_repo_id": "the GitLab numeric project id as the repository's stable identity (CHAOS-3383, migration 134); the frozen Python sink has no column for it",
 }
 
 func buildGitLabRepositoryRowForOracle(

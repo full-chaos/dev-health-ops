@@ -171,3 +171,19 @@ func TestFoldContributingPRSocialAndTestOpsPoliciesValidateSubsetsAndRejectCross
 		})
 	}
 }
+
+func TestFamilyMembersMatchesTheCanonicalKeyExactly(t *testing.T) {
+	t.Parallel()
+	for _, dataset := range []string{"work-items", "prs", "cicd"} {
+		if members, ok := FamilyMembers(dataset); !ok || len(members) < 2 {
+			t.Errorf("FamilyMembers(%q) = %v, %v, want the family", dataset, members, ok)
+		}
+	}
+	for _, dataset := range []string{
+		" Work-Items", "WORK-ITEMS", "Work-Items", "work-items ", " work-items", "\twork-items\n", "PRS", " prs", "CICD", "cicd ", "",
+	} {
+		if members, ok := FamilyMembers(dataset); ok || members != nil {
+			t.Errorf("FamilyMembers(%q) = %v, %v, want no family (Python is exact)", dataset, members, ok)
+		}
+	}
+}

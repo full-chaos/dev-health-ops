@@ -5,6 +5,8 @@ package synccoverage
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -20,14 +22,17 @@ type Projector interface {
 // failures are collected by the projector so one tenant cannot prevent the
 // other selected configurations from rebuilding; the aggregate attempt still
 // fails retryably so a partial sweep is never reported as success.
-type Handler struct{ projector Projector }
+type Handler struct {
+	projector Projector
+	logger    *slog.Logger
+}
 
 // NewHandler constructs the executable sync-coverage job owner.
-func NewHandler(projector Projector) (*Handler, error) {
-	if projector == nil {
-		return nil, errors.New("sync coverage projector is required")
+func NewHandler(projector Projector, logger *slog.Logger) (*Handler, error) {
+	if projector == nil || logger == nil {
+		return nil, errors.New("sync coverage projector and logger are required")
 	}
-	return &Handler{projector: projector}, nil
+	return &Handler{projector: projector, logger: logger}, nil
 }
 
 // Work rebuilds the selected cold, invalidated, and oldest projections.
@@ -35,7 +40,7 @@ func (handler *Handler) Work(
 	ctx context.Context,
 	execution *jobruntime.Execution[jobruntime.SyncCoverageRefreshArgs],
 ) error {
-	if handler == nil || handler.projector == nil || execution == nil {
+	if handler == nil || handler.projector == nil || handler.logger == nil || execution == nil {
 		return jobruntime.Permanent(errors.New("sync coverage handler is not configured"))
 	}
 	payload := execution.Args.Payload
@@ -48,7 +53,15 @@ func (handler *Handler) Work(
 		return jobruntime.Retryable(err)
 	}
 	if result.Failed > 0 || len(result.Failures) > 0 {
-		return jobruntime.Retryable(errors.New("one or more sync coverage projections failed"))
+		for _, failure := range result.Failures {
+			handler.logger.WarnContext(ctx, "sync_coverage_refresh.config_failed",
+				slog.String("org_id", failure.OrgID),
+				slog.String("config_id", failure.ConfigID.String()),
+				slog.String("cause_class", coverage.FailureClass(failure.Err)))
+		}
+		return jobruntime.Retryable(jobruntime.WithSafeCauseText(
+			errors.New("one or more sync coverage projections failed"),
+			fmt.Sprintf("sync coverage refresh: failed=%d refreshed=%d", max(result.Failed, len(result.Failures)), result.Refreshed)))
 	}
 	return nil
 }

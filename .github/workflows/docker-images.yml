@@ -2,7 +2,7 @@ name: Build Docker images
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   push:
     branches:
@@ -168,10 +168,11 @@ jobs:
     #
     # PRs keep the filter. Nothing here changes what a PR builds.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name != 'pull_request' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci:full')) &&
+      (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      needs.changes.outputs.code == 'true'
+      needs.changes.outputs.code == 'true')
     runs-on: ${{ matrix.runner }}
     # Every matrix leg checks out the SAME ref, so they all resolve the
     # same commit -- reusing the existing `commit` output is safe here
@@ -335,7 +336,7 @@ jobs:
   # a container, in isolation, before the real build leg risks a
   # registry write.
   dind-smoke-test:
-    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci:full')) && (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 5
     steps:
@@ -411,14 +412,15 @@ jobs:
     name: go-build-dho-arm64
     needs: [changes, dind-smoke-test]
     if: >-
-      always() &&
+      (github.event_name != 'pull_request' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci:full')) &&
+      (always() &&
       needs.changes.result == 'success' &&
       needs.dind-smoke-test.result != 'failure' &&
       needs.dind-smoke-test.result != 'cancelled' &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      needs.changes.outputs.code == 'true')
+      needs.changes.outputs.code == 'true'))
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     timeout-minutes: 25
     steps:
@@ -602,10 +604,11 @@ jobs:
     # above (CHAOS-4921 M2): the artefact for this commit must exist
     # whatever the paths filter says.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name != 'pull_request' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci:full')) &&
+      (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      needs.changes.outputs.code == 'true'
+      needs.changes.outputs.code == 'true')
     runs-on: ${{ matrix.runner }}
     outputs:
       sha: ${{ steps.versioning.outputs.commit }}

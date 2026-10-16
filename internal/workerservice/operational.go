@@ -219,7 +219,7 @@ func buildOperationalWorker(
 			if projectorErr != nil {
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}
-			handler, handlerErr := coveragejobs.NewHandler(projector)
+			handler, handlerErr := coveragejobs.NewHandler(projector, logger)
 			if handlerErr != nil {
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}

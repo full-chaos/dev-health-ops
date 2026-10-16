@@ -107,7 +107,7 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 	if err := batch.Send(); err != nil {
 		return err
 	}
-	tally.Log(ctx, githubTeamCatalogProvider, orgID)
+	logTeamProviderIdentity(ctx, tally, githubTeamCatalogProvider, orgID)
 	return nil
 }
 

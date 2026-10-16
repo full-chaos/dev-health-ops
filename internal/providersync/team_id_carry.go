@@ -83,7 +83,8 @@ var teamIDCarryCountQuery = `SELECT ` +
 	`(SELECT count() FROM team_provider_observations FINAL WHERE org_id = {org_id:String} AND provider != '' AND ` + teamIDCarryPrefixOnly("team_id") + `)`
 
 var teamIDCarryTeamsQuery = `SELECT id, team_uuid, name, description, manual_members, updated_at, last_synced, ` +
-	`org_id, provider, native_team_key, parent_team_id, project_keys, repo_patterns, is_active, source_id, created_at ` +
+	`org_id, provider, native_team_key, parent_team_id, project_keys, repo_patterns, is_active, source_id, created_at, ` +
+	`provider_team_id, provider_name, gone_at ` +
 	`FROM teams WHERE org_id = {org_id:String} AND ` + teamIDCarryBare("id") + ` ` +
 	`ORDER BY updated_at DESC, last_synced DESC LIMIT 1 BY provider, id`
 

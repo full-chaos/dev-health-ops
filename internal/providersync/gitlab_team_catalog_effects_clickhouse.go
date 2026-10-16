@@ -263,7 +263,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 	if err := batch.Send(); err != nil {
 		return err
 	}
-	tally.Log(ctx, gitlabTeamCatalogProvider, claim.OrgID)
+	logTeamProviderIdentity(ctx, tally, gitlabTeamCatalogProvider, claim.OrgID)
 	return nil
 }
 

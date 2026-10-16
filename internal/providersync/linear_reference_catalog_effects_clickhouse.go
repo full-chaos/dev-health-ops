@@ -335,7 +335,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 	if err := batch.Send(); err != nil {
 		return err
 	}
-	tally.Log(ctx, "linear", rows[0].OrgID)
+	logTeamProviderIdentity(ctx, tally, "linear", rows[0].OrgID)
 	return nil
 }
 

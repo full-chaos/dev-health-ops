@@ -15,7 +15,6 @@ package teamprovider
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"reflect"
 	"strings"
 	"time"
@@ -142,15 +141,4 @@ func (tally *Tally) Add(stored map[string]Stored, teamID, providerTeamID string)
 	default:
 		tally.Changed++
 	}
-}
-
-// Log writes the counts at Debug, and at Warn when a stored id changed.
-func (tally Tally) Log(ctx context.Context, provider, orgID string) {
-	level := slog.LevelDebug
-	if tally.Changed > 0 {
-		level = slog.LevelWarn
-	}
-	slog.Default().Log(ctx, level, "team_provider_identity_written",
-		"provider", provider, "org_id", orgID, "filled", tally.Filled,
-		"unchanged", tally.Unchanged, "changed", tally.Changed, "unread", tally.Unread)
 }

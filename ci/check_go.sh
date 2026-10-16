@@ -145,7 +145,8 @@ usage() {
          pull_request job runs, with a cost bounded by the packages a PR changes.
          A path that ci/venue_oracle_triggers.d/ declares for a test (code outside
          its package whose behaviour the test compares; CHAOS-9172) selects that
-         test too. No row selected is a loud no-op. With --list print the selected rows
+         test too, and so does a file directly in a package of the test binary's dependency
+         closure (ci/venue_oracle_closure.d/, CHAOS-9935). No row selected is a loud no-op. With --list print the selected rows
          (SELECT, package, test, tab-separated) and run nothing.
   venue-oracle-plan COUNT
          Print the cost-balanced plan of COUNT legs: every run row with its leg
@@ -719,6 +720,17 @@ venue_oracle_changed_selects() {
   if tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}/([^/]+|testdata/.+)$"; then
     return 0
   fi
+  # The dependency closure of the package's test binary (ci/venue_oracle_closure.d/, CHAOS-9935): a
+  # file directly in, or under testdata of, any package the test binary links selects every
+  # test of the package. Derived by a Go test from `go list -test`, so a missing hand row cannot
+  # hide a dependency. The directory is absent in a scratch tree that holds no Go module.
+  if [ -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
+    local closure_file="${ROOT}/ci/venue_oracle_closure.d/${1//\//__}.txt"
+    [ -r "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is missing; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+    if [ -n "${VENUE_CHANGED_DIRS:-}" ] && printf '%s\n' "${VENUE_CHANGED_DIRS}" | grep -qxFf "${closure_file}"; then
+      return 0
+    fi
+  fi
   [ -n "${2:-}" ] || return 1
   while IFS=$'\t' read -r pkg name path; do
     { [ "${pkg}" = "$1" ] && [ "${name}" = "$2" ]; } || continue
@@ -737,6 +749,9 @@ check_venue_oracles() {
     [ -z "${shard}${shard_count}" ] || die "venue-oracles --changed does not combine with SHARD COUNT"
   fi
   if [ -n "${changed}" ]; then
+    # The package directory of every changed path (a path under .../testdata belongs to the package
+    # above it), for the closure rule of venue_oracle_changed_selects.
+    VENUE_CHANGED_DIRS="$(tr '\0' '\n' < "${changed}" | awk 'NF { d = $0; sub(/\/[^\/]*$/, "", d); sub(/\/testdata(\/.*)?$/, "", d); print d }' | LC_ALL=C sort -u)"
     VENUE_TRIGGER_ROWS="$(venue_oracle_trigger_rows)" \
       || die "venue-oracles --changed: ci/venue_oracle_triggers.d/ could not be read (see above)"
   fi

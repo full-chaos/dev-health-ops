@@ -131,7 +131,9 @@ def test_a_change_of_a_teams_write_selects_the_protected_routes_test(
 
 
 def test_a_change_far_from_any_venue_test_still_selects_nothing(tmp_path: Path) -> None:
-    assert _real_selected(tmp_path, "internal/chmigrate/runner.go") == []
+    # internal/chmigrate is no longer "far": the venue servers link it, so the dependency closure
+    # (CHAOS-9935) selects for a change there; internal/scheduler/fixed is linked by no venue test.
+    assert _real_selected(tmp_path, "internal/scheduler/fixed/x.go") == []
     assert _real_selected(tmp_path, "docs/index.md") == []
 
 

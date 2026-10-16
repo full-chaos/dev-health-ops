@@ -177,3 +177,50 @@ func TestTheWorkflowRunsTheHeavyStepsOnlyWhenSomethingIsSelected(t *testing.T) {
 		t.Fatal("the job is informational (R430)")
 	}
 }
+
+// TestAChangeInAPackageTheVenueServerLinksSelectsTheTestsThatStartIt is the acceptance of CHAOS-9935:
+// internal/api/policy is linked by the production api server the browse oracles of internal/apiservice
+// start, and no hand-written trigger row names it for them (PR 4186 changed it and the pull request job
+// selected only TestVenueOracleBillingLedger; main went red after the merge). The dependency closure
+// selects them.
+func TestAChangeInAPackageTheVenueServerLinksSelectsTheTestsThatStartIt(t *testing.T) {
+	root := repoRoot(t)
+	rows, err, stderr := selected(t, root, "\x00", "internal/api/policy/clienterror.go")
+	if err != nil {
+		t.Fatalf("--list failed: %v\n%s", err, stderr)
+	}
+	have := map[string]bool{}
+	for _, row := range rows {
+		have[row] = true
+	}
+	for _, want := range []string{
+		"internal/apiservice\tTestVenueOracleCredentialGitHubRepos",
+		"internal/apiservice\tTestVenueOracleCredentialRepos",
+	} {
+		if !have[want] {
+			t.Errorf("a change in internal/api/policy did not select %q (selected %d row(s))", want, len(rows))
+		}
+	}
+	// A package with no hand-written row at all: internal/auth/signedtoken is linked by the auth flow
+	// oracle's server and the pull request job used to select nothing for it.
+	signed, err, stderr := selected(t, root, "\x00", "internal/auth/signedtoken/x.go")
+	if err != nil {
+		t.Fatalf("--list failed: %v\n%s", err, stderr)
+	}
+	foundAuthFlow := false
+	for _, row := range signed {
+		foundAuthFlow = foundAuthFlow || row == "internal/apiservice/authflowvenue\tTestAuthFlowVenueOracle"
+	}
+	if !foundAuthFlow {
+		t.Errorf("a change in internal/auth/signedtoken did not select TestAuthFlowVenueOracle (selected %d row(s))", len(signed))
+	}
+	// A golden under the testdata of a linked package selects as well; a package nothing links does not.
+	golden, err, stderr := selected(t, root, "\x00", "internal/api/policy/testdata/x.json")
+	if err != nil || len(golden) != len(rows) {
+		t.Errorf("a file under internal/api/policy/testdata selected %d row(s), a Go file there %d (err %v)\n%s", len(golden), len(rows), err, stderr)
+	}
+	none, err, stderr := selected(t, root, "\x00", "internal/api/not-linked-by-any-venue-test/x.go")
+	if err != nil || len(none) != 0 {
+		t.Errorf("a package no venue test links selected %v (err %v)\n%s", none, err, stderr)
+	}
+}

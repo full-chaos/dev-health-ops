@@ -85,6 +85,9 @@ func NewICFinalizeExecutor(conn driver.Conn) *ICFinalizeExecutor {
 	return &ICFinalizeExecutor{inner: inner}
 }
 
+// SetClock replaces the clock the family's computed_at is taken from.
+func (e *ICFinalizeExecutor) SetClock(now func() time.Time) { e.inner.SetClock(now) }
+
 // teamNamesOf gives a team's name from the membership facts the person's teams come
 // from: the name of the team's newest fact that has one. One read gives a person's
 // team id and its name (CHAOS-9134).

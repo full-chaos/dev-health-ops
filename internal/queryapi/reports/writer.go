@@ -169,11 +169,11 @@ func (w *Writer) Create(ctx context.Context, orgID string, in CreateInput) (*mod
 func (w *Writer) create(ctx context.Context, tx pgx.Tx, orgID string, in CreateInput) (*model.SavedReportType, error) {
 	plan, err := PythonDumpsObject(in.ReportPlan)
 	if err != nil {
-		return nil, fmt.Errorf("reportPlan: %w", err)
+		return nil, clientError(fmt.Errorf("reportPlan: %w", err))
 	}
 	parameters, err := PythonDumpsObject(in.Parameters)
 	if err != nil {
-		return nil, fmt.Errorf("parameters: %w", err)
+		return nil, clientError(fmt.Errorf("parameters: %w", err))
 	}
 	id := w.newID()
 	created := w.now()
@@ -279,18 +279,18 @@ func validateTimezone(tz string) error {
 	if tz == "" || pythonparity.ZoneInfoKeyValid(tz) {
 		return nil
 	}
-	return fmt.Errorf("Invalid timezone: %s", pythonparity.StrRepr(tz))
+	return clientError(fmt.Errorf("Invalid timezone: %s", pythonparity.StrRepr(tz)))
 }
 
 // validateCron is _validate_report_schedule_cron: exactly five
 // whitespace-separated fields, and an expression the cron dialect can evaluate.
 func validateCron(cron string, next CronEvaluator, now time.Time) error {
 	if len(pythonparity.SplitWhitespace(cron)) != 5 {
-		return fmt.Errorf("Invalid report schedule cron expression %s: expected exactly "+
-			"five fields (minute hour day-of-month month day-of-week)", pythonparity.StrRepr(cron))
+		return clientError(fmt.Errorf("Invalid report schedule cron expression %s: expected exactly "+
+			"five fields (minute hour day-of-month month day-of-week)", pythonparity.StrRepr(cron)))
 	}
 	if _, _, err := next(cron, now, "UTC"); err != nil {
-		return fmt.Errorf("Invalid report schedule cron expression %s: %v", pythonparity.StrRepr(cron), err)
+		return clientError(fmt.Errorf("Invalid report schedule cron expression %s: %v", pythonparity.StrRepr(cron), err))
 	}
 	return nil
 }
@@ -343,7 +343,7 @@ FROM saved_reports WHERE id = $1::uuid AND org_id = $2 FOR UPDATE`, id, orgID).
 	if !isNullJSON(in.ReportPlan) {
 		plan, err := PythonDumpsObject(in.ReportPlan)
 		if err != nil {
-			return nil, fmt.Errorf("reportPlan: %w", err)
+			return nil, clientError(fmt.Errorf("reportPlan: %w", err))
 		}
 		set("report_plan", "::json", plan)
 	}
@@ -353,7 +353,7 @@ FROM saved_reports WHERE id = $1::uuid AND org_id = $2 FOR UPDATE`, id, orgID).
 	if !isNullJSON(in.Parameters) {
 		parameters, err := PythonDumpsObject(in.Parameters)
 		if err != nil {
-			return nil, fmt.Errorf("parameters: %w", err)
+			return nil, clientError(fmt.Errorf("parameters: %w", err))
 		}
 		set("parameters", "::json", parameters)
 	}

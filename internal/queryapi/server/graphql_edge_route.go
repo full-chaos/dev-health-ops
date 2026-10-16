@@ -203,7 +203,7 @@ func correlationID(next http.Handler) http.Handler {
 			id = uuid.NewString()
 		}
 		w.Header().Add("X-Request-ID", id)
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(httpapi.WithRequestID(r.Context(), id)))
 	})
 }
 

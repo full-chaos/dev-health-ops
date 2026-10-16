@@ -316,17 +316,11 @@ func newMCPGraphQLServer(es graphql.ExecutableSchema, limits mcpLimits) *gqlhand
 	gql.AroundFields(graph.RefuseNullForNonNullArguments)
 	gql.Use(graph.OperationOrgGuard{})
 	gql.AroundResponses(recordErrorCount)
-	gql.SetErrorPresenter(func(ctx context.Context, err error) *gqlerror.Error {
+	gql.SetErrorPresenter(safeGraphQLErrorPresenter("mcp", func(ctx context.Context) {
 		if obs := mcpObservationFrom(ctx); obs != nil {
 			obs.fieldError()
 		}
-		chain := []string{err.Error()}
-		for unwrapped := errors.Unwrap(err); unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
-			chain = append(chain, unwrapped.Error())
-		}
-		log.Printf("query-api: mcp resolver error unwrap chain: %s", truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
-		return graphql.DefaultErrorPresenter(ctx, err)
-	})
+	}))
 	return gql
 }
 
@@ -376,6 +370,7 @@ type mcpRequest struct {
 }
 
 func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r = bindRequestID(w, r)
 	req := &mcpRequest{start: time.Now()}
 	defer req.emit(r)
 
@@ -579,7 +574,7 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // mcpProofAdmit and mcpIdentityHeadersPresent are the two reads of the internal
-// identity the proof variant (mcp_proof_route.go) needs. They live here, with the
+// identity the class-row gate (class_row_gate.go) needs. They live here, with the
 // other MCP reads, because TestOnlyInternalPathsReadTheInternalIdentity pins
 // exactly which files may touch that package.
 func mcpProofAdmit(ctx context.Context) bool { return internalidentity.OnInternalListener(ctx) }

@@ -16,6 +16,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 )
 
 // CHAOS-9094: the four work-item metrics (cycle_time, throughput,
@@ -359,22 +360,36 @@ WHERE org_id = {org_id:String} AND is_primary = 1
 	return out, rows.Err()
 }
 
+// basisQuery is the read of the basis: for each item, the best tier of its in-view links. The ranks are the ones of
+// linktier.Rank (one source for every table and reader), never spelled here: an unknown provenance ranks 0 and falls to
+// the heuristic bucket, as it did when it ranked with the heuristic tier.
+func basisQuery() string {
+	rank := fmt.Sprintf("multiIf(provenance = '%[1]s', %[4]d, provenance = '%[2]s', %[5]d, provenance = '%[3]s', %[6]d, 0)",
+		linktier.Native, linktier.ExplicitText, linktier.Heuristic,
+		linktier.Rank(linktier.Native), linktier.Rank(linktier.ExplicitText), linktier.Rank(linktier.Heuristic))
+	best := "maxIf(rank, repo_id IN {link_repo_ids:Array(UUID)})"
+	return fmt.Sprintf(`
+SELECT work_item_id,
+       multiIf(%[1]s = %[2]d, '%[3]s',
+               %[1]s = %[4]d, '%[5]s', '%[6]s') AS tier,
+       toUInt8(uniqExact(repo_id) > 1) AS multi
+FROM (
+  SELECT work_item_id, repo_id,
+         %[7]s AS rank
+  FROM work_graph_issue_pr FINAL
+  WHERE org_id = {org_id:String} AND work_item_id IN %[8]s
+)
+GROUP BY work_item_id`,
+		best, linktier.Rank(linktier.Native), linktier.Native,
+		linktier.Rank(linktier.ExplicitText), linktier.ExplicitText, linktier.Heuristic,
+		rank, linkedItemsSubquery)
+}
+
 // readBasis counts the items of the view by the best tier of the links that put
 // them there, and the items that are in more than one repository's view (linked
 // to pull requests of more than one repository, whichever repositories).
 func (loader *repoLinkedLoader) readBasis(ctx context.Context, budget string, view *repoLinkedView) error {
-	rows, err := loader.client.Query(ctx, `
-SELECT work_item_id,
-       multiIf(maxIf(rank, repo_id IN {link_repo_ids:Array(UUID)}) = 3, 'native',
-               maxIf(rank, repo_id IN {link_repo_ids:Array(UUID)}) = 2, 'explicit_text', 'heuristic') AS tier,
-       toUInt8(uniqExact(repo_id) > 1) AS multi
-FROM (
-  SELECT work_item_id, repo_id,
-         multiIf(provenance = 'native', 3, provenance = 'explicit_text', 2, 1) AS rank
-  FROM work_graph_issue_pr FINAL
-  WHERE org_id = {org_id:String} AND work_item_id IN `+linkedItemsSubquery+`
-)
-GROUP BY work_item_id`+budget, loader.bindings())
+	rows, err := loader.client.Query(ctx, basisQuery()+budget, loader.bindings())
 	if err != nil {
 		return fmt.Errorf("home: repo-linked basis: %w", err)
 	}
@@ -393,9 +408,9 @@ GROUP BY work_item_id`+budget, loader.bindings())
 			continue
 		}
 		switch tier {
-		case "native":
+		case linktier.Native:
 			view.basis.Native++
-		case "explicit_text":
+		case linktier.ExplicitText:
 			view.basis.ExplicitText++
 		default:
 			view.basis.Heuristic++

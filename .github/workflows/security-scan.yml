@@ -30,7 +30,40 @@ permissions:
   contents: read
 
 jobs:
+  # CHAOS-9919: a docs-only PR changes nothing pip-audit or Semgrep scan. Gitleaks stays
+  # unfiltered because a secret can sit in a doc. None of these three jobs is a required
+  # check, so a skipped job leaves no check "expected". Push and merge_group always scan (a PR touching this file runs both jobs).
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      deps: ${{ steps.filter.outputs.deps }}
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          predicate-quantifier: some-with-excludes
+          filters: |
+            deps:
+              - 'requirements.txt'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.pip-audit-ignore'
+              - '.github/workflows/security-scan.yml'
+            code:
+              - '**'
+              - '!docs/**'
+              - '!docs-data/**'
+              - '!**/*.md'
+              - '!.github/docs-legacy/**'
+
   pip-audit:
+    needs: [changes]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.deps == 'true'
     name: Dependency Vulnerability Scan (pip-audit)
     runs-on: ubuntu-latest
     permissions:
@@ -82,6 +115,8 @@ jobs:
           retention-days: 30
 
   semgrep:
+    needs: [changes]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.code == 'true'
     name: Semgrep SAST
     runs-on: ubuntu-latest
     continue-on-error: true

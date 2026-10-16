@@ -80,3 +80,10 @@ func TestWriteErrorLogsTheCauseAndKeepsItOutOfTheBody(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanGateKeepsTheSentenceTheWebMatches(t *testing.T) {
+	status, text, client := MapError(fmt.Errorf("outer: %w", PlanGate("Team plan or higher.", errors.New(providerText))))
+	if status != http.StatusForbidden || !client || text != "This feature requires the Team plan or higher." {
+		t.Fatalf("MapError = %d %q %v", status, text, client)
+	}
+}

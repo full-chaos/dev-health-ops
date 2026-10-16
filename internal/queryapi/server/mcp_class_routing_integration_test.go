@@ -10,12 +10,10 @@ package server
 
 import (
 	"context"
-	"crypto/ed25519"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -24,7 +22,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
@@ -99,87 +96,6 @@ func TestMCPClassRowServesOnlyAfterSeedAndEnable(t *testing.T) {
 	rec = mcpDo(listener, http.MethodPost, validMCPHeaders(), securityOverview)
 	if rec.Code != http.StatusNotFound || ch.calls.Load() != ch2 {
 		t.Fatalf("a root with no enabled row: status %d body %s, want 404 and no ClickHouse call", rec.Code, rec.Body.String())
-	}
-}
-
-func proofHandlers(t *testing.T, pool *pgxpool.Pool) (mcp, proof, bare http.Handler, token func(org string) string, ch *countingMCPClient) {
-	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verifier, err := principal.NewVerifier(writeTestJWKS(t, pub), itTestIssuer, itTestAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ch = &countingMCPClient{}
-	getenv := getenvFunc(func(string) string { return "" })
-	base := newMCPHandlerWithLimits(ch, nil, routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests()), getenv, mcpDefaultLimits())
-	proofSwitch := routeswitch.NewClassDecisionProofSwitch(pool, mcpRoutingDigests())
-	proofHandler := newMCPProofHandler(base, proofSwitch, verifier, newProofOrgAllowed(pool))
-	if proofHandler == nil {
-		t.Fatal("newMCPProofHandler returned nil")
-	}
-	token = func(org string) string {
-		return signDataHealthEnvelope(t, priv, principal.Claims{OrgID: org, Role: "admin"}, time.Now().Add(time.Hour))
-	}
-	return internalidentity.MCP(base), internalidentity.Internal(proofHandler), proofHandler, token, ch
-}
-
-// The proof route measures a shadow root through the SAME handler; the MCP
-// listener never serves that root. Both gates of the proof route (the
-// envelope, the proof-org allowlist) are executed.
-func TestMCPProofRouteServesAShadowRootThatTheMCPListenerRefuses(t *testing.T) {
-	pool := startTestRegistryPostgres(t)
-	hotspots := mcpclass.Operation("hotspots")
-	classSeed(t, pool, hotspots) // shadow
-	if err := goapiproof.AddProofOrg(t.Context(), pool, goapiproof.ProofOrgRequest{OrgID: mcpTestOrg, RecordedBy: "test", ReviewEvidence: "class proof"}); err != nil {
-		t.Fatal(err)
-	}
-	mcp, proof, bare, token, ch := proofHandlers(t, pool)
-
-	// The MCP listener cannot read a shadow root.
-	assertMCPRefused(t, classHotspots(t, mcp), ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
-
-	bearer := http.Header{}
-	bearer.Set("Content-Type", "application/json")
-	bearer.Set("Authorization", "Bearer "+token(mcpTestOrg))
-	rec := mcpDo(proof, http.MethodPost, bearer, mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables(mcpTestOrg)))
-	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), mcpReasonRootFieldNotEnabled) {
-		t.Fatalf("proof route, allowlisted org, shadow root: status %d body %s, want it served", rec.Code, rec.Body.String())
-	}
-
-	// Another org is not on the allowlist.
-	other := http.Header{}
-	other.Set("Content-Type", "application/json")
-	other.Set("Authorization", "Bearer "+token("org-not-allowed"))
-	calls := ch.calls.Load()
-	rec = mcpDo(proof, http.MethodPost, other, mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables("org-not-allowed")))
-	if rec.Code != http.StatusForbidden || ch.calls.Load() != calls {
-		t.Fatalf("a non-allowlisted org: status %d body %s, want 403 with no ClickHouse call", rec.Code, rec.Body.String())
-	}
-	if reason, _ := mcpReason(t, rec); reason != mcpReasonProofOrg {
-		t.Fatalf("reason = %q, want %q", reason, mcpReasonProofOrg)
-	}
-
-	// The internal identity headers are not a carrier here even beside a valid
-	// envelope, and no carrier at all is refused.
-	both := validMCPHeaders()
-	both.Set("Authorization", "Bearer "+token(mcpTestOrg))
-	if rec = mcpDo(proof, http.MethodPost, both, mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables(mcpTestOrg))); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("identity headers beside a valid envelope: status %d, want 401", rec.Code)
-	}
-	for name, header := range map[string]http.Header{"identity headers": validMCPHeaders(), "no carrier": {"Content-Type": {"application/json"}}} {
-		rec = mcpDo(proof, http.MethodPost, header, mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables(mcpTestOrg)))
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("%s: status %d, want 401", name, rec.Code)
-		}
-	}
-
-	// Off the internal listener the proof handler is not reachable at all.
-	rec = mcpDo(bare, http.MethodPost, bearer, mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables(mcpTestOrg)))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("proof handler off the internal listener: status %d, want 404", rec.Code)
 	}
 }
 

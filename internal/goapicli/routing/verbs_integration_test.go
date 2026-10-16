@@ -84,7 +84,7 @@ func startVerbPostgres(t *testing.T) (*pgxpool.Pool, string) {
 	}
 	// CHAOS-5505: every write verb now also writes an audit row in the
 	// SAME transaction, so a verb driven end to end here needs the audit
-	// table too -- not just the tables enable/disable/repoint's own
+	// table too -- not just the tables enable/disable's own
 	// preflights read.
 	if err := routingauditschema.Create(ctx, pool); err != nil {
 		t.Fatal(err)
@@ -177,18 +177,6 @@ func enableArgs(server *httptest.Server, dsn string, extra ...string) []string {
 	return append(argv, extra...)
 }
 
-func repointArgs(server *httptest.Server, dsn string, extra ...string) []string {
-	argv := []string{
-		"repoint",
-		"-registry-url", server.URL + "/registry",
-		"-buildinfo-url", server.URL + "/buildinfo",
-		"-postgres-uri", dsn,
-		"-recorded-by", "lane-routing-verbs",
-		"-review-evidence", "the end-to-end verb fixture",
-	}
-	return append(argv, extra...)
-}
-
 func queryAPIFor(t *testing.T) *httptest.Server {
 	t.Helper()
 	return startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: "9999999999999999999999999999999999999999999999999999999999999999"})
@@ -252,7 +240,7 @@ func TestEnableRefusesWhenThePlanesDisagreeOnTheSchemaDigest(t *testing.T) {
 func TestEnableDryRunNeverWritesADecision(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
 	t.Setenv(bearerEnvVar, verbTestBearer)
-	seedClassRoot(t, pool, nil)
+	seedClassRoot(t, pool)
 	server := queryAPIFor(t)
 
 	out, _, err := captureVerb(t, enableArgs(server, dsn, "-dry-run")...)
@@ -276,7 +264,6 @@ func TestEveryVerbRefusesACatalogOperationAndWritesNothing(t *testing.T) {
 	for name, argv := range map[string][]string{
 		"enable":  enableArgs(server, dsn, "-operations", verbTestOperation),
 		"disable": {"disable", "-postgres-uri", dsn, "-operations", verbTestOperation, "-mode", "python", "-apply", "-recorded-by", "w", "-review-evidence", "y"},
-		"repoint": repointArgs(server, dsn, "-operations", verbTestOperation),
 		"seed":    {"seed", "-registry-url", server.URL + "/registry", "-buildinfo-url", server.URL + "/buildinfo", "-postgres-uri", dsn, "-operations", verbTestOperation, "-recorded-by", "w", "-review-evidence", "y"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -455,26 +442,11 @@ func TestEnableExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
 	assertNoRows(t, dsn)
 }
 
-func TestRepointExpectBuildCrossCheckRefusesAMismatchAndAMatchPasses(t *testing.T) {
-	pool, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
-	insertClassDecision(t, pool, verbTestClassOperation, "canary", "0000000000000000000000000000000000000001")
-	server := queryAPIFor(t)
-
-	_, _, err := captureVerb(t, repointArgs(server, dsn, "-expect-build", "0000000000000000000000000000000000000000")...)
-	if err == nil || !strings.Contains(err.Error(), "does not match the running build") {
-		t.Fatalf("repoint = %v, want the -expect-build cross-check refusal", err)
-	}
-	if _, _, err := captureVerb(t, repointArgs(server, dsn, "-expect-build", verbTestBuild, "-dry-run")...); err != nil {
-		t.Fatalf("a MATCHING -expect-build must not be refused: %v", err)
-	}
-}
-
-func TestEnableAndRepointRefuseARegistryThatRegistersNothingAtAll(t *testing.T) {
+func TestEnableRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	t.Setenv(bearerEnvVar, verbTestBearer)
 	empty := startQueryAPI(t, localSchemaDigest(), map[string]string{})
-	for name, argv := range map[string][]string{"enable": enableArgs(empty, dsn), "repoint": repointArgs(empty, dsn)} {
+	for name, argv := range map[string][]string{"enable": enableArgs(empty, dsn)} {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := captureVerb(t, argv...)
 			if err == nil || !strings.Contains(err.Error(), "registers no operations") {
@@ -484,51 +456,11 @@ func TestEnableAndRepointRefuseARegistryThatRegistersNothingAtAll(t *testing.T) 
 	}
 }
 
-// extractRepointJSON reads repoint's -json line.
-func extractRepointJSON(t *testing.T, out string) repointResult {
-	t.Helper()
-	for _, line := range strings.Split(out, "\n") {
-		if rest, ok := strings.CutPrefix(line, repointJSONPrefix); ok {
-			var result repointResult
-			if err := json.Unmarshal([]byte(rest), &result); err != nil {
-				t.Fatalf("repoint -json line did not decode: %v\nline: %s", err, rest)
-			}
-			return result
-		}
-	}
-	t.Fatalf("no %q line found in repoint's stdout:\n%s", repointJSONPrefix, out)
-	return repointResult{}
-}
-
-func TestRepointJSONReasonIsRepointedOnSuccessAndRefusedOnARefusal(t *testing.T) {
-	pool, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
-	insertClassDecision(t, pool, verbTestClassOperation, "canary", "0000000000000000000000000000000000000001")
-	server := queryAPIFor(t)
-
-	out, _, err := captureVerb(t, repointArgs(server, dsn, "-json")...)
-	if err != nil {
-		t.Fatalf("repoint: %v\n%s", err, out)
-	}
-	if result := extractRepointJSON(t, out); result.Reason != "repointed" {
-		t.Fatalf("reason = %q, want \"repointed\" (out:\n%s)", result.Reason, out)
-	}
-
-	empty := startQueryAPI(t, localSchemaDigest(), map[string]string{})
-	out, _, err = captureVerb(t, repointArgs(empty, dsn, "-json")...)
-	if err == nil {
-		t.Fatal("expected a real refusal against a registry that registers nothing at all")
-	}
-	if result := extractRepointJSON(t, out); result.Reason != "refused" {
-		t.Fatalf("reason = %q, want \"refused\" (out:\n%s)", result.Reason, out)
-	}
-}
-
 // Both endpoints come from the environment alone, and one explicit flag mixed with the environment is refused.
 func TestEnableDerivesBothEndpointsFromTheEnvVarAloneNoFlags(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
 	t.Setenv(bearerEnvVar, verbTestBearer)
-	seedClassRoot(t, pool, nil)
+	seedClassRoot(t, pool)
 	server := queryAPIFor(t)
 	t.Setenv("GO_API_QUERY_API_URL", server.URL)
 
@@ -548,7 +480,7 @@ func TestEnableDerivesBothEndpointsFromTheEnvVarAloneNoFlags(t *testing.T) {
 }
 
 // A buildinfo refusal never prints the URL path (it can carry a credential-shaped segment).
-func TestEnableAndRepointBuildInfoRefusalNeverPrintsTheURLPath(t *testing.T) {
+func TestEnableBuildInfoRefusalNeverPrintsTheURLPath(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	t.Setenv(bearerEnvVar, verbTestBearer)
 	mux := http.NewServeMux()
@@ -561,8 +493,6 @@ func TestEnableAndRepointBuildInfoRefusalNeverPrintsTheURLPath(t *testing.T) {
 
 	for name, argv := range map[string][]string{
 		"enable": {"enable", "-operations", verbTestClassOperation, "-mode", "canary", "-registry-url", server.URL + "/registry", "-buildinfo-url", server.URL + "/secret-looking-segment/buildinfo",
-			"-postgres-uri", dsn, "-recorded-by", "w", "-review-evidence", "y"},
-		"repoint": {"repoint", "-registry-url", server.URL + "/registry", "-buildinfo-url", server.URL + "/secret-looking-segment/buildinfo",
 			"-postgres-uri", dsn, "-recorded-by", "w", "-review-evidence", "y"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -594,13 +524,13 @@ func TestDisableRefusesAnExplicitlyEmptyCandidateBuildGuard(t *testing.T) {
 
 // Each verb names its endpoints and prints one structured line per decision it wrote, with the before-state read under
 // the write's own lock.
-func TestEnableDisableAndRepointEmitStructuredLinesPerDecision(t *testing.T) {
+func TestEnableAndDisableEmitStructuredLinesPerDecision(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
 	t.Setenv(bearerEnvVar, verbTestBearer)
-	op := seedClassRootWithExcludedShape(t, pool)
+	op := seedClassRoot(t, pool)
 	server := queryAPIFor(t)
 
-	out, errOut, err := captureVerb(t, classEnableArgs(server, dsn, "-allow-excluded", allowExcludedOp)...)
+	out, errOut, err := captureVerb(t, classEnableArgs(server, dsn)...)
 	if err != nil {
 		t.Fatalf("enable: %v", err)
 	}

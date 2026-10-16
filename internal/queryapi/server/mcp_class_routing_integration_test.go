@@ -10,12 +10,10 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -40,25 +38,6 @@ func classSeed(t *testing.T, pool *pgxpool.Pool, operations ...string) {
 		DocumentDigest: mcpclass.Digests(), RecordedBy: "test", ReviewEvidence: "class routing", PrincipalID: "test-principal",
 	}); err != nil {
 		t.Fatalf("seed %v: %v", operations, err)
-	}
-}
-
-func classReceipt(t *testing.T, pool *pgxpool.Pool, operation, route, binding string) {
-	t.Helper()
-	// CHAOS-7512: `enable` reads the class receipt's provenance; a fully measured proof lists no excluded shape.
-	root, _ := mcpclass.Root(operation)
-	provenance, err := json.Marshal(goapiproof.ReceiptProvenance{MeasurementRoute: route, EdgeBuildBinding: binding,
-		MCPClass: &goapiproof.MCPClassProvenance{Root: root, Reference: "go_document_route", Executed: 1, Matched: 1}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := goapiproof.WriteAtomic(t.Context(), pool, goapiproof.Receipt{
-		SchemaDigest: classTestSchema, DocumentDigest: mcpclass.DocumentDigest(), SelectedOperation: operation,
-		CandidateBuild: classTestBuild, RequestIdentity: "req-" + operation, Stage: goapiproof.EnablementProofStage,
-		TerminalState: goapiproof.EnablementProofTerminalState, OrgID: "org-proof", RecordedBy: "test",
-		ObservedAt: time.Now().UTC(), MeasurementRoute: route, BuildBinding: binding, ReviewEvidence: string(provenance),
-	}); err != nil {
-		t.Fatalf("receipt %s: %v", operation, err)
 	}
 }
 
@@ -91,7 +70,7 @@ func classHotspots(t *testing.T, handler http.Handler) *httptest.ResponseRecorde
 // The state the system exists to reach: after seed, proof and enable, the
 // listener serves the root; a root with no enabled row, and a root whose row is
 // only seeded (shadow), answers root_field_not_enabled.
-func TestMCPClassRowServesOnlyAfterSeedProofAndEnable(t *testing.T) {
+func TestMCPClassRowServesOnlyAfterSeedAndEnable(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 	listener, ch := classListener(t, pool)
 	hotspots, overview := mcpclass.Operation("hotspots"), mcpclass.Operation("securityOverview")
@@ -103,49 +82,20 @@ func TestMCPClassRowServesOnlyAfterSeedProofAndEnable(t *testing.T) {
 	classSeed(t, pool, hotspots, overview)
 	assertMCPRefused(t, classHotspots(t, listener), ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
 
-	// Enable without a per-root receipt is refused, and nothing is served.
-	if _, err := classEnable(pool, hotspots); err == nil || !strings.Contains(err.Error(), "no deployed_executed/match proof run") {
-		t.Fatalf("enable without a receipt: err = %v, want the unproven refusal", err)
-	}
-	assertMCPRefused(t, classHotspots(t, listener), ch, http.StatusNotFound, mcpReasonRootFieldNotEnabled)
-
-	classReceipt(t, pool, hotspots, goapiproof.RouteProof, goapiproof.EdgeBuildPresent)
+	// Enable is the operator's recorded decision, with no receipt in front of it (D6024).
 	if _, err := classEnable(pool, hotspots); err != nil {
-		t.Fatalf("enable with a receipt: %v", err)
+		t.Fatalf("enable: %v", err)
 	}
 	rec := classHotspots(t, listener)
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), mcpReasonRootFieldNotEnabled) {
 		t.Fatalf("enabled root: status %d body %s, want it served", rec.Code, rec.Body.String())
 	}
-	// The sibling root is seeded but has no receipt and no enable: still dark.
+	// The sibling root is seeded but not enabled: still dark.
 	securityOverview := mcpBody(t, `query O($orgId: String!) { securityOverview(orgId: $orgId) { __typename } }`, map[string]any{"orgId": mcpTestOrg})
 	ch2 := ch.calls.Load()
 	rec = mcpDo(listener, http.MethodPost, validMCPHeaders(), securityOverview)
 	if rec.Code != http.StatusNotFound || ch.calls.Load() != ch2 {
 		t.Fatalf("a root with no enabled row: status %d body %s, want 404 and no ClickHouse call", rec.Code, rec.Body.String())
-	}
-}
-
-// Enable admits a class root by its class receipt in BOTH directions' terms: a
-// receipt on the wrong route, an unbound one, or one for another document digest
-// admits nothing.
-func TestClassEnableAdmitsOnlyAProofRouteBoundClassReceipt(t *testing.T) {
-	cases := map[string]struct {
-		route, binding string
-	}{
-		"edge route":    {goapiproof.RouteEdge, goapiproof.EdgeBuildPresent},
-		"unbound build": {goapiproof.RouteProof, goapiproof.EdgeBuildAbsent},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			pool := startTestRegistryPostgres(t)
-			op := mcpclass.Operation("hotspots")
-			classSeed(t, pool, op)
-			classReceipt(t, pool, op, tc.route, tc.binding)
-			if _, err := classEnable(pool, op); err == nil {
-				t.Fatalf("a class receipt on %s was admitted as enablement proof", name)
-			}
-		})
 	}
 }
 
@@ -156,7 +106,6 @@ func classEnabled(t *testing.T, pool *pgxpool.Pool, root string) {
 	t.Helper()
 	op := mcpclass.Operation(root)
 	classSeed(t, pool, op)
-	classReceipt(t, pool, op, goapiproof.RouteProof, goapiproof.EdgeBuildPresent)
 	if _, err := classEnable(pool, op); err != nil {
 		t.Fatalf("enable %s: %v", op, err)
 	}
@@ -204,39 +153,6 @@ func TestMCPClassDisableAndEnableWorkAfterASchemaMove(t *testing.T) {
 	}
 }
 
-// vet-2 repro: repoint is provenance only. It rewrites the build, keeps the mode and decided_at, and works after a
-// schema move (no row at the live digest is needed), so the bigboy prove can run.
-func TestMCPClassRepointIsProvenanceOnlyAndWorksAfterASchemaMove(t *testing.T) {
-	pool := startTestRegistryPostgres(t)
-	hotspots := mcpclass.Operation("hotspots")
-	classEnabled(t, pool, "hotspots")
-	var decidedBefore time.Time
-	if err := pool.QueryRow(t.Context(), `SELECT decided_at FROM go_api_class_decision WHERE operation = $1`, hotspots).Scan(&decidedBefore); err != nil {
-		t.Fatal(err)
-	}
-	const next = "7214bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	outcomes, err := goapiproof.Repoint(t.Context(), pool, goapiproof.RepointRequest{
-		SchemaDigest: movedSchemaDigest, RunningBuild: next, RecordedBy: "test", ReviewEvidence: "after the move", PrincipalID: "test-principal",
-	})
-	if err != nil {
-		t.Fatalf("repoint after a schema move: %v", err)
-	}
-	if len(outcomes) != 1 || !outcomes[0].Changed {
-		t.Fatalf("outcomes %+v, want the one class decision repointed", outcomes)
-	}
-	var mode, build string
-	var decidedAfter time.Time
-	if err := pool.QueryRow(t.Context(), `SELECT mode, current_candidate_build, decided_at FROM go_api_class_decision WHERE operation = $1`, hotspots).Scan(&mode, &build, &decidedAfter); err != nil {
-		t.Fatal(err)
-	}
-	if mode != "canary" || build != next || !decidedAfter.Equal(decidedBefore) {
-		t.Fatalf("after repoint: mode %q build %q decided_at %v (was %v); want canary, %s, unchanged", mode, build, decidedAfter, decidedBefore, next)
-	}
-	if !classServed(t, pool) {
-		t.Fatal("a repoint changed what is served")
-	}
-}
-
 // Disable by class name turns the root off at the listener.
 func TestMCPClassDisableTurnsTheRootOff(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
@@ -252,8 +168,8 @@ func TestMCPClassDisableTurnsTheRootOff(t *testing.T) {
 	}
 }
 
-// status names a dark root and the proof it rests on.
-func TestMCPClassStatusNamesDarkRootsAndProof(t *testing.T) {
+// status names a dark root and a live one.
+func TestMCPClassStatusNamesDarkRoots(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 	classEnabled(t, pool, "hotspots")
 	classSeed(t, pool, mcpclass.Operation("analytics")) // shadow: dark
@@ -272,11 +188,11 @@ func TestMCPClassStatusNamesDarkRootsAndProof(t *testing.T) {
 	if len(rows) != len(mcpclass.SortedRoots()) {
 		t.Fatalf("%d class roots reported, want one per allowlisted root (%d)", len(rows), len(mcpclass.SortedRoots()))
 	}
-	if h := by["hotspots"]; h.DigestState != goapiproof.DigestMatch || !h.Reachable || !h.Proven || h.Dark {
-		t.Fatalf("hotspots = %+v, want a reachable, proven live row", h)
+	if h := by["hotspots"]; h.DigestState != goapiproof.DigestMatch || !h.Reachable || h.Dark {
+		t.Fatalf("hotspots = %+v, want a reachable live row", h)
 	}
-	if a := by["analytics"]; a.DigestState != goapiproof.DigestMatch || a.Reachable || a.Proven || !a.Dark {
-		t.Fatalf("analytics (shadow, no receipt) = %+v, want dark and unproven", a)
+	if a := by["analytics"]; a.DigestState != goapiproof.DigestMatch || a.Reachable || !a.Dark {
+		t.Fatalf("analytics (shadow) = %+v, want dark", a)
 	}
 	if m := by["catalog"]; m.DigestState != goapiproof.DigestMissing || !m.Dark {
 		t.Fatalf("catalog (no row) = %+v, want MISSING and dark", m)
@@ -307,7 +223,6 @@ func TestDocumentRoutesAndMCPClassDecisionsAreDecidedApart(t *testing.T) {
 	// ...and an enabled class decision is what serves it.
 	hotspotsClass := mcpclass.Operation("hotspots")
 	classSeed(t, pool, hotspotsClass)
-	classReceipt(t, pool, hotspotsClass, goapiproof.RouteProof, goapiproof.EdgeBuildPresent)
 	if _, err := classEnable(pool, hotspotsClass); err != nil {
 		t.Fatalf("enable mcp:hotspots: %v", err)
 	}
@@ -318,7 +233,6 @@ func TestDocumentRoutesAndMCPClassDecisionsAreDecidedApart(t *testing.T) {
 	// 2. An enabled class decision for one root does not light another root.
 	overview := mcpclass.Operation("securityOverview")
 	classSeed(t, pool, overview)
-	classReceipt(t, pool, overview, goapiproof.RouteProof, goapiproof.EdgeBuildPresent)
 	if _, err := classEnable(pool, overview); err != nil {
 		t.Fatalf("enable the class decision: %v", err)
 	}

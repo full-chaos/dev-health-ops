@@ -3,6 +3,7 @@ package home
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/readers"
 	"log/slog"
 	"math"
 	"sort"
@@ -71,7 +72,7 @@ func fetchThemeAllocationIn(ctx context.Context, client QueryClient, f Filters, 
 	if err != nil {
 		return nil, fmt.Errorf("home: investment by theme: %w", err)
 	}
-	var sizing *investmentexplain.SizingCoverage
+	var sizing *readers.SizingCoverage
 	if measure == investmentexplain.MeasureIssueSize {
 		coverage, err := reader.FetchSizingCoverage(ctx, filters)
 		if err != nil {
@@ -93,7 +94,7 @@ func tileMeasureUnit(measure string) string {
 
 // themeAllocationFromEffort rolls the theme rows into the tile: the canonical themes only, the
 // largest value first (ties by theme), the share of the total in allocation_pct.
-func themeAllocationFromEffort(rows []investmentexplain.ThemeEffortRow, measure string, sizing *investmentexplain.SizingCoverage) []ReworkThemeAllocation {
+func themeAllocationFromEffort(rows []investmentexplain.ThemeEffortRow, measure string, sizing *readers.SizingCoverage) []ReworkThemeAllocation {
 	kept := make([]investmentexplain.ThemeEffortRow, 0, len(rows))
 	total := 0.0
 	for _, row := range rows {

@@ -169,24 +169,23 @@ func syntheticJWT(t *testing.T, claims map[string]string) string {
 	}, ".")
 }
 
-// CHAOS-5486: the four verbs. A first argument beginning with "-" is a
-// FLAG, so it means the flat pre-verb form -- the form JOB 5's step list
-// quotes verbatim -- and that form still means `repoint`. Breaking a
-// recipe an operator is holding is not an acceptable cost for a nicer
-// CLI.
-func TestSplitVerbKeepsTheFlatPreVerbFormWorkingAsRepoint(t *testing.T) {
+// The flat pre-verb form (no verb, flags first) meant `repoint`, which is retired (D6024): it is an unknown verb now,
+// and no flag of it is acted on. An empty argument list prints the usage.
+func TestSplitVerbRefusesTheRetiredFlatFormAsAnUnknownVerb(t *testing.T) {
 	for _, argv := range [][]string{
 		{"-recorded-by", "lane", "-review-evidence", "why"},
 		{"-dry-run"},
-		{},
 	} {
 		verb, rest := splitVerb(argv)
-		if verb != "repoint" {
-			t.Fatalf("splitVerb(%v) = %q, want repoint -- #2415's invocation must keep working", argv, verb)
+		if verb != argv[0] || len(rest) != len(argv)-1 {
+			t.Fatalf("splitVerb(%v) = %q, %v, want the first argument as the verb", argv, verb, rest)
 		}
-		if len(rest) != len(argv) {
-			t.Fatalf("splitVerb(%v) consumed an argument: rest=%v", argv, rest)
+		if err := run(argv); err == nil || !strings.Contains(err.Error(), "unknown verb") {
+			t.Fatalf("run(%v) = %v, want an unknown-verb refusal", argv, err)
 		}
+	}
+	if verb, _ := splitVerb(nil); verb != "help" {
+		t.Fatalf("splitVerb(nil) = %q, want help", verb)
 	}
 }
 
@@ -379,9 +378,6 @@ func TestEveryVerbRefusesItsOwnMissingPreconditions(t *testing.T) {
 		"disable with no -mode":           {[]string{"disable"}, "-mode is required"},
 		"disable with no postgres":        {[]string{"disable", "-mode", "python"}, "-postgres-uri"},
 		"disable applying with no reason": {[]string{"disable", "-mode", "python", "-postgres-uri", "postgres://x", "-apply"}, "-recorded-by"},
-		"repoint with no provenance":      {[]string{"repoint"}, "-recorded-by"},
-		"repoint with no postgres":        {[]string{"repoint", "-recorded-by", "w", "-review-evidence", "y"}, "-postgres-uri"},
-		"repoint with no credential":      {[]string{"repoint", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"}, bearerEnvVar},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := run(testCase.argv)
@@ -405,12 +401,11 @@ func TestEveryVerbRefusesItsOwnMissingPreconditions(t *testing.T) {
 // precondition checked (mode/provenance/postgres/credential all resolve
 // first, matching TestEveryVerbRefusesItsOwnMissingPreconditions's
 // ordering), so every other required flag is supplied here.
-func TestEnableAndRepointRefuseWithNoQueryAPIURLConfiguredAtAll(t *testing.T) {
+func TestEnableRefusesWithNoQueryAPIURLConfiguredAtAll(t *testing.T) {
 	t.Setenv(bearerEnvVar, "envelope-for-the-test")
 	t.Setenv("GO_API_QUERY_API_URL", "")
 	for name, argv := range map[string][]string{
-		"enable, no registry-url":  {"enable", "-operations", "mcp:hotspots", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"},
-		"repoint, no registry-url": {"repoint", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"},
+		"enable, no registry-url": {"enable", "-operations", "mcp:hotspots", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := run(argv)
@@ -568,7 +563,6 @@ func TestEveryRefusalCarriesTheWordRefused(t *testing.T) {
 		{"disable missing -mode", []string{"disable"}},
 		{"disable candidate-build passed empty", []string{"disable", "-candidate-build", ""}},
 		{"disable document passed empty", []string{"disable", "-document", ""}},
-		{"repoint missing -postgres-uri", []string{"repoint", "-recorded-by", "x", "-review-evidence", "y"}},
 		{"status non-positive -timeout", []string{"status", "-timeout", "0s"}},
 	}
 	for _, tc := range cases {
@@ -1258,7 +1252,6 @@ func TestTheTimeoutGuardIsWiredIntoEveryVerb(t *testing.T) {
 	for _, argv := range [][]string{
 		{"enable", "-mode", "canary", "-timeout", "0"},
 		{"disable", "-mode", "python", "-timeout", "0"},
-		{"repoint", "-timeout", "0"},
 		{"status", "-timeout", "0"},
 	} {
 		err := run(argv)
@@ -1318,8 +1311,6 @@ func TestEveryVerbRefusesAnUnconsumedArgument(t *testing.T) {
 			"-candidate-build", "0000000000000000000000000000000000000000"},
 		"enable loses -dry-run": {"enable", "-mode", "canary", "-recorded-by", "lane",
 			"-review-evidence", "why", "UNEXPECTED-OPERAND", "-dry-run"},
-		"repoint loses -expect-build": {"repoint", "-recorded-by", "lane", "-review-evidence", "why",
-			"UNEXPECTED-OPERAND", "-expect-build", "deadbeef"},
 		"status loses -json": {"status", "UNEXPECTED-OPERAND", "-json"},
 		// The boolean spelling an operator actually reaches for. `flag`
 		// wants -flag=false; -flag false makes `false` an OPERAND, so the
@@ -1512,5 +1503,17 @@ func TestConnectPostgresFloorsASubMillisecondTimeout(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// CHAOS-9802: the repoint verb is retired with the class proof (D6024); asking for it is an unknown verb, and the
+// usage no longer lists it.
+func TestRepointIsAnUnknownVerbAndTheUsageDoesNotListIt(t *testing.T) {
+	err := run([]string{"repoint", "-recorded-by", "w", "-review-evidence", "y"})
+	if err == nil || !strings.Contains(err.Error(), `unknown verb "repoint"`) {
+		t.Fatalf("run(repoint) = %v, want an unknown-verb refusal", err)
+	}
+	if strings.Contains(usage, "repoint") {
+		t.Fatalf("the usage still lists the retired verb:\n%s", usage)
 	}
 }

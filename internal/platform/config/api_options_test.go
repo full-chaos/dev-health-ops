@@ -90,3 +90,27 @@ func TestAPISettingsResolution(t *testing.T) {
 		})
 	}
 }
+
+func TestAPIJWTClaimSettings(t *testing.T) {
+	cases := []struct {
+		name             string
+		env              map[string]string
+		issuer, audience string
+	}{
+		{name: "absent uses defaults", env: map[string]string{}, issuer: "dev-health-ops", audience: "dev-health-api"},
+		{name: "present empty stays empty", env: map[string]string{"JWT_ISSUER": "", "JWT_AUDIENCE": ""}, issuer: "", audience: ""},
+		{name: "present blank stays blank", env: map[string]string{"JWT_ISSUER": "  ", "JWT_AUDIENCE": "\t"}, issuer: "  ", audience: "\t"},
+		{name: "set values kept", env: map[string]string{"JWT_ISSUER": "iss-x", "JWT_AUDIENCE": "aud-x"}, issuer: "iss-x", audience: "aud-x"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := Load(Spec{Service: APIServiceName, LookupEnv: lookupFrom(test.env)})
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.APIJWTIssuer != test.issuer || cfg.APIJWTAudience != test.audience {
+				t.Fatalf("got %q %q, want %q %q", cfg.APIJWTIssuer, cfg.APIJWTAudience, test.issuer, test.audience)
+			}
+		})
+	}
+}

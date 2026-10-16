@@ -27,6 +27,7 @@ name: Venue oracles (changed packages)
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'internal/**'
       - 'contracts/graphql/**'
@@ -46,6 +47,7 @@ concurrency:
 
 jobs:
   venue-oracles-changed:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     name: venue-oracles (changed packages)
     runs-on: ubuntu-latest
     timeout-minutes: 60

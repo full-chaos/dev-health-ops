@@ -139,9 +139,24 @@ def _inner_timeout_minutes(run_text: str) -> int:
     return int(match.group(1))
 
 
+_DRAFT_GATE_PREFIX = (
+    "(!(github.event_name == 'pull_request' && github.event.pull_request.draft && "
+    "!contains(github.event.pull_request.labels.*.name, 'ci:full'))) && ("
+)
+
+
+def _without_draft_gate(value: str) -> str:
+    """Strip the CHAOS-9949 draft gate; test_self_hosted_runner_allowlist pins it."""
+    if value.startswith(_DRAFT_GATE_PREFIX) and value.endswith(")"):
+        return value[len(_DRAFT_GATE_PREFIX) : -1]
+    return value
+
+
 def test_reproducibility_bundle_is_gated_on_complementary_conditions() -> None:
-    hosted_if = str(_job(_REPRO_HOSTED).get("if", ""))
-    self_hosted_if = str(_job(_REPRO_SELF_HOSTED).get("if", ""))
+    hosted_if = _without_draft_gate(str(_job(_REPRO_HOSTED).get("if", "")))
+    self_hosted_if = _without_draft_gate(
+        str(_job(_REPRO_SELF_HOSTED).get("if", ""))
+    )
     assert hosted_if == _HOSTED_CONDITION, (
         f"{WORKFLOW_PATH.name}: {_REPRO_HOSTED!r}'s `if:` ({hosted_if!r}) "
         f"does not match the expected hosted-fallback condition"

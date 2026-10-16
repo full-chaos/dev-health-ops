@@ -210,6 +210,7 @@ on:
       - 'Makefile'
       - '.github/workflows/go.yml'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: ['**']
     paths:
       - '**/*.go'
@@ -535,12 +536,13 @@ jobs:
   go-arm64-numeric-parity:
     name: go-arm64-numeric-parity
     if: >-
-      vars.SELF_HOSTED_RUNNERS == 'enabled' &&
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
       github.event_name == 'release' ||
-      github.event_name == 'schedule')
+      github.event_name == 'schedule'))
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 10
     env:
@@ -609,6 +611,7 @@ jobs:
           fi
 
   go-storage-integration-plan:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -685,7 +688,7 @@ jobs:
   # (16m44s, well under its own 25m cap) and are not matrix/concurrency-
   # sensitive the way six simultaneous shard legs are.
   dind-smoke-test:
-    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
     runs-on: [self-hosted, oci-arc-runners]
     # CHAOS-4906 (09-04): job-level `concurrency:` serialization was tried
     # here and on go-container-reproducibility-self-hosted, then REVERTED
@@ -819,6 +822,7 @@ jobs:
           echo "all deterministic Go integration shards passed"
 
   go-container-smoke:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     # Every Go image is smoked on both architectures it ships for. The arm64
     # leg runs on the same x64 host: the Dockerfile's build stage is
     # `--platform=$BUILDPLATFORM` (Go cross-compiles natively), and only the
@@ -850,6 +854,7 @@ jobs:
         run: bash ci/check_go_containers.sh smoke
 
   go-container-security:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -937,12 +942,13 @@ jobs:
   go-container-reproducibility:
     name: go-container-reproducibility
     if: >-
-      !(vars.SELF_HOSTED_RUNNERS == 'enabled' &&
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
       github.event_name == 'release' ||
-      github.event_name == 'schedule'))
+      github.event_name == 'schedule')))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -955,12 +961,13 @@ jobs:
     name: go-container-reproducibility
     needs: dind-smoke-test
     if: >-
-      vars.SELF_HOSTED_RUNNERS == 'enabled' &&
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
       github.event_name == 'release' ||
-      github.event_name == 'schedule')
+      github.event_name == 'schedule'))
     runs-on: [self-hosted, oci-arc-runners]
     # CHAOS-4906 (09-04): a job-level `concurrency:` group was added here
     # the same day to serialize pool access (two concurrent
@@ -1021,6 +1028,7 @@ jobs:
         run: timeout 51m bash ci/check_go_containers.sh reproducible
 
   graphql-wire-parity:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     # CHAOS-4696: query-api's registered-document consts must digest-match
     # what a real client actually sends. The wire form can ONLY be
     # computed correctly by the web repo's own pinned @urql/core/graphql

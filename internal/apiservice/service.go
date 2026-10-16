@@ -295,11 +295,15 @@ func configureChecked(
 	registry *health.Registry,
 	logger *slog.Logger,
 ) ([]lifecycle.Component, error) {
+	// The shell logs only the reason code of a dependency error, so the key
+	// name travels in the dependencyFailure log line.
 	if cfg.APIJWTIssuer == "" {
-		return nil, errors.New("JWT_ISSUER is set but empty: unset it to use the default, or give it a value")
+		return nil, dependencyFailure(ctx, logger, "api_jwt_claims", "api_jwt_issuer_empty",
+			errors.New("JWT_ISSUER is set but empty: unset it to use the default, or give it a value"))
 	}
 	if cfg.APIJWTAudience == "" {
-		return nil, errors.New("JWT_AUDIENCE is set but empty: unset it to use the default, or give it a value")
+		return nil, dependencyFailure(ctx, logger, "api_jwt_claims", "api_jwt_audience_empty",
+			errors.New("JWT_AUDIENCE is set but empty: unset it to use the default, or give it a value"))
 	}
 	return configure(ctx, cfg, registry, logger)
 }

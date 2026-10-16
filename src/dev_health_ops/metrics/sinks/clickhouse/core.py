@@ -43,6 +43,10 @@ from dev_health_ops.metrics.sinks.clickhouse._insert import (
 from dev_health_ops.metrics.sinks.clickhouse.connection import clickhouse_client_kwargs
 from dev_health_ops.metrics.sinks.factory import detect_backend
 from dev_health_ops.models.work_items import Sprint
+from dev_health_ops.storage.team_provider_identity import (
+    PROVIDER_IDENTITY_COLUMNS,
+    fetch_team_provider_identity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +183,7 @@ class ClickHouseCore(BaseMetricsSink):
             "provider",
             "native_team_key",
             "parent_team_id",
+            *PROVIDER_IDENTITY_COLUMNS,
         ]
         matrix = []
         for team in teams:
@@ -226,6 +231,16 @@ class ClickHouseCore(BaseMetricsSink):
                         getattr(team, "parent_team_id", None),
                     ]
                 )
+        # CHAOS-9432: this writer never knows the provider's id and name of a
+        # team nor when a run proved it gone; it carries them from the stored
+        # versions it replaces, as every other writer of teams does.
+        stored = await asyncio.to_thread(
+            fetch_team_provider_identity,
+            self.client,
+            [(str(row[9]), str(row[0])) for row in matrix],
+        )
+        for row in matrix:
+            row.extend(stored.get((str(row[9]), str(row[0])), ("", "", None)))
         await asyncio.to_thread(
             self.client.insert, "teams", matrix, column_names=column_names
         )

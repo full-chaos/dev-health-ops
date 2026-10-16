@@ -36,6 +36,7 @@ var rollbackRehearsals = []rollbackRehearsal{
 	{"130_work_unit_issue_size.down.sql", "work_unit_issue_size", "issue_size", "*", ""},
 	{"131_deployment_incident_edges_repo_key.down.sql", "work_graph_deployment_incident_edges", "version_rank", "*", ""},
 	{"132_pr_commit_native_wins.down.sql", "work_graph_pr_commit", "version_rank", "*", ""},
+	{"137_teams_provider_identity.down.sql", "teams", "provider_team_id", "*", ""},
 	{"134_repos_provider_repo_id.down.sql", "repos", "provider_repo_id", "*", ""},
 	{"135_work_item_metrics_nullable.down.sql", "issue_type_metrics_daily", "lead_p50_hours", "Nullable(Float64)", "Float64"},
 }

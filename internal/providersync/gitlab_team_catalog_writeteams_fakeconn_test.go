@@ -14,6 +14,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 	"github.com/google/uuid"
 )
 
@@ -38,6 +39,8 @@ func (f *fakeGitLabWriteTeamsConn) Query(_ context.Context, query string, _ ...a
 			return nil, f.createdErr
 		}
 		return &fakeGitLabCreatedRows{rows: f.created, index: -1}, nil
+	case query == teamprovider.Query:
+		return &fakeGitLabGuardMembershipRows{rows: nil, index: -1}, nil
 	case strings.Contains(query, "manual_members"):
 		return &fakeGitLabGuardMembershipRows{rows: nil, index: -1}, nil
 	default:
@@ -230,7 +233,7 @@ func TestGitLabWriteTeamsCarriesCreatedAt(t *testing.T) {
 	if err := sink.writeTeams(context.Background(), Claim{Unit: Unit{OrgID: "org-1", Provider: gitlabTeamCatalogProvider}}, rows); err != nil {
 		t.Fatal(err)
 	}
-	last := func(i int) time.Time { v := conn.batch.appended[i]; return v[len(v)-1].(time.Time) }
+	last := func(i int) time.Time { v := conn.batch.appended[i]; return v[len(v)-4].(time.Time) }
 	if !last(0).Equal(original) {
 		t.Fatalf("existing team created_at = %v, want %v", last(0), original)
 	}

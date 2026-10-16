@@ -43,6 +43,8 @@ var columnsAfterTheCapture = map[string]map[string]string{
 		"created_at": "113_teams_created_at.sql",
 		// The time of an admin delete: no team of a frozen world was deleted.
 		"deleted_at": "115_teams_deleted_at.sql",
+		// The time a run proved a team gone (CHAOS-9432): no frozen team is.
+		"gone_at": "137_teams_provider_identity.sql",
 	},
 	// The provider's own stable user id of a member (CHAOS-9144): the frozen
 	// worlds' membership rows were written before it and carry none.
@@ -131,6 +133,12 @@ var emptyColumnsAfterTheCapture = map[string]map[string]string{
 	// The provider's own stable id of a repository (CHAOS-3383): a captured
 	// repository row has none.
 	"repos": {"provider_repo_id": "134_repos_provider_repo_id.sql"},
+	// The provider's own id and name of a team (CHAOS-9432): the frozen worlds'
+	// team rows were written before them and carry none.
+	"teams": {
+		"provider_team_id": "137_teams_provider_identity.sql",
+		"provider_name":    "137_teams_provider_identity.sql",
+	},
 }
 
 // defaultedColumnsAfterTheCapture names the String columns a migration added

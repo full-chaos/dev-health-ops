@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/full-chaos/dev-health-go/llm"
+
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
 
@@ -18,10 +20,13 @@ type BatchJobStatus string
 const (
 	BatchJobSubmitted BatchJobStatus = "submitted"
 	BatchJobRunning   BatchJobStatus = "running"
-	BatchJobSucceeded BatchJobStatus = "succeeded"
-	BatchJobFailed    BatchJobStatus = "failed"
-	BatchJobCancelled BatchJobStatus = "cancelled"
-	BatchJobExpired   BatchJobStatus = "expired"
+	// BatchJobCancelling is a cancel the provider has not finished: results
+	// can still arrive, so it is not terminal.
+	BatchJobCancelling BatchJobStatus = "cancelling"
+	BatchJobSucceeded  BatchJobStatus = "succeeded"
+	BatchJobFailed     BatchJobStatus = "failed"
+	BatchJobCancelled  BatchJobStatus = "cancelled"
+	BatchJobExpired    BatchJobStatus = "expired"
 )
 
 // Terminal reports whether the provider will not change the job any more.
@@ -102,6 +107,13 @@ type BatchProvider interface {
 
 // AsBatchProvider returns the Batch API of provider, if it has one.
 func AsBatchProvider(provider Provider) (BatchProvider, bool) {
+	if shared, ok := provider.(*SharedProvider); ok {
+		batch, ok := llm.AsBatch(shared.inner)
+		if !ok {
+			return nil, false
+		}
+		return sharedBatchProvider{SharedProvider: shared, batch: batch}, true
+	}
 	batch, ok := provider.(BatchProvider)
 	return batch, ok
 }
@@ -154,33 +166,28 @@ func CategorizeCompletionText(
 }
 
 // BatchItemFailure is the error of one Batch API line that holds no
-// completion, classified as the same failure of a synchronous call would be:
-// the line's status code and error text go through the provider error
-// classifier.
+// completion, classified as the same failure of a synchronous call would be
+// (llm.BatchItemFailure: the line's status code, error code, error type and
+// message go through the shared provider error classifier).
 func BatchItemFailure(result BatchItemResult, provider, model string) error {
-	status := 0
-	if result.StatusCode != nil {
-		status = *result.StatusCode
-	}
-	cause := &httpStatusError{statusCode: status, body: result.ErrorCode + " " + result.ErrorMessage}
-	return classifyProviderError(cause, status, nil, provider, model)
+	return llm.BatchItemFailure(toLLMBatchResult(result), llm.Kind(provider), model)
 }
 
 // BatchMissingResultError is the error of a unit whose custom id is in no
 // line of a finished batch.
 func BatchMissingResultError(provider, model string) error {
-	return &llmError{kind: llmErrorOutput, message: "LLM provider batch returned no result for the request.", provider: provider, model: model}
+	return llm.BatchMissingResultError(llm.Kind(provider), model)
 }
 
 // BatchTimeoutError is the error of each unit of a batch that did not finish
 // within the timeout: a failed request, not deterministic, of class
 // batch_timeout.
 func BatchTimeoutError(provider, model string) error {
-	return &llmError{kind: llmErrorBatchTimeout, message: "LLM provider batch did not finish within the timeout.", provider: provider, model: model}
+	return llm.BatchTimeoutError(llm.Kind(provider), model)
 }
 
 // BatchEndedError is the error of each unit of a batch that ended failed,
 // expired or cancelled at the provider.
 func BatchEndedError(status BatchJobStatus, provider, model string) error {
-	return &llmError{kind: llmErrorServer, message: "LLM provider batch ended " + string(status) + ".", provider: provider, model: model}
+	return llm.BatchEndedError(llm.BatchJobStatus(status), llm.Kind(provider), model)
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 type productSink struct {
@@ -76,6 +77,9 @@ func (s *productSink) Query(_ context.Context, query string, args ...any) (drive
 			rows[index] = []any{id}
 		}
 		return &productRows{rows: rows}, nil
+	}
+	if query == teamprovider.Query {
+		return &productRows{}, nil // no stored provider identity
 	}
 	if query == teamcreated.Query {
 		s.createdCalls++

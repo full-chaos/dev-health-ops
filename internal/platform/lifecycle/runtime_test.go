@@ -85,8 +85,8 @@ type nonCooperativeComponent struct {
 
 type budgetedComponent struct {
 	*recordingComponent
-	budget    time.Duration
-	remaining time.Duration
+	budget   time.Duration
+	deadline time.Time
 }
 
 func (component *budgetedComponent) ShutdownBudget() time.Duration { return component.budget }
@@ -95,7 +95,7 @@ func (component *budgetedComponent) Shutdown(ctx context.Context) error {
 	if !ok {
 		return errors.New("shutdown deadline is missing")
 	}
-	component.remaining = time.Until(deadline)
+	component.deadline = deadline
 	return component.recordingComponent.Shutdown(ctx)
 }
 
@@ -338,10 +338,19 @@ func TestShutdownHonorsReviewedComponentBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The deadline the component was given is compared with clock readings taken before and after
+	// the whole shutdown, never with the time the component happened to start running (a loaded
+	// -race runner delays that start by tens of ms: CHAOS-9938). The attempt context is created
+	// after `before` and the shutdown deadline before `after`, so both bounds hold on any machine.
+	before := time.Now()
 	if err := runtime.shutdown(context.Background(), []Component{tail, reserved}); err != nil {
 		t.Fatal(err)
 	}
-	if reserved.remaining < 70*time.Millisecond {
-		t.Fatalf("reserved shutdown budget = %s, want approximately 80ms", reserved.remaining)
+	after := time.Now()
+	if got := reserved.deadline.Sub(before); got < 80*time.Millisecond {
+		t.Fatalf("reserved component was given a deadline %s after the shutdown began, want at least its 80ms budget (an equal share of 100ms over two components is 50ms)", got)
+	}
+	if got := reserved.deadline.Sub(after); got > 100*time.Millisecond {
+		t.Fatalf("reserved component deadline is %s after the shutdown ended, want within the 100ms global budget", got)
 	}
 }

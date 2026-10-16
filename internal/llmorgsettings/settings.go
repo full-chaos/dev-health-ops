@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -55,10 +56,21 @@ func (s Store) loadRawSettings(ctx context.Context, orgID string) (orgSettings, 
 	if s.Pool == nil {
 		return nil, fmt.Errorf("llmorgsettings: Store.Pool is nil")
 	}
+	return s.loadRawSettingsFrom(ctx, s.Pool, orgID)
+}
+
+// rowQuerier is the read half of a pool or a transaction.
+type rowQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// loadRawSettingsFrom is loadRawSettings over an explicit querier, so a caller
+// can read the rows and anything that must agree with them in one snapshot.
+func (s Store) loadRawSettingsFrom(ctx context.Context, q rowQuerier, orgID string) (orgSettings, error) {
 	if orgID == "" {
 		return map[string]string{}, nil
 	}
-	rows, err := s.Pool.Query(ctx, `
+	rows, err := q.Query(ctx, `
 SELECT key, value, is_encrypted FROM settings
 WHERE org_id = $1 AND category = $2`, orgID, settingsCategoryLLM)
 	if err != nil {

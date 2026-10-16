@@ -35,18 +35,34 @@ var ErrStoredSettingUnreadable = errors.New("llmorgsettings: stored org llm sett
 // collapses to an empty map exactly as for every other reader here). err is
 // the fail-closed gate-lookup failure or a database fault.
 func (s Store) OrgConfig(ctx context.Context, orgID string) (OrgConfig, bool, error) {
-	raw, err := s.loadRawSettings(ctx, orgID)
+	if s.Pool == nil {
+		return OrgConfig{}, false, fmt.Errorf("llmorgsettings: Store.Pool is nil")
+	}
+	// One snapshot for the rows and the version: a settings save landing
+	// between two reads must not pair the old values with the new version.
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return OrgConfig{}, false, fmt.Errorf("begin org llm settings snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	raw, err := s.loadRawSettingsFrom(ctx, tx, orgID)
 	if err != nil {
 		return OrgConfig{}, false, err
 	}
+	afterRowsRead()
 	var newest *time.Time
 	var stored []string
-	err = s.Pool.QueryRow(ctx, `
+	// Only the BYO keys count: the llm category also holds unrelated settings
+	// (platform certification profiles) that outlive a BYO delete.
+	err = tx.QueryRow(ctx, `
 SELECT max(updated_at), coalesce(array_agg(key) FILTER (WHERE value IS NOT NULL AND value <> ''), '{}')
-FROM settings WHERE org_id = $1 AND category = $2`,
-		orgID, settingsCategoryLLM).Scan(&newest, &stored)
+FROM settings WHERE org_id = $1 AND category = $2 AND key = ANY($3)`,
+		orgID, settingsCategoryLLM, byoKeys).Scan(&newest, &stored)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return OrgConfig{}, false, fmt.Errorf("query org llm settings version: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return OrgConfig{}, false, fmt.Errorf("end org llm settings snapshot: %w", err)
 	}
 	// loadRawSettings skips a row it cannot decrypt (wrong key, corrupt row).
 	// Every other reader tolerates that; this one serves the key itself, so a
@@ -54,26 +70,29 @@ FROM settings WHERE org_id = $1 AND category = $2`,
 	// config and never "not configured". A closed byo_llm gate still wins: the
 	// org then runs on the platform default whatever is stored.
 	for _, key := range stored {
-		switch key {
-		case keyProvider, keyModel, keyAPIKey, keyBaseURL:
-			if raw[key] != "" {
-				continue
-			}
-			parsed, perr := uuid.Parse(orgID)
-			if perr != nil {
-				return OrgConfig{}, false, fmt.Errorf("%w: setting %q (org id is not a UUID)", ErrStoredSettingUnreadable, key)
-			}
-			state, gerr := byoLLMFlagState(ctx, s.Pool, parsed, s.now())
-			if gerr != nil {
-				return OrgConfig{}, false, fmt.Errorf("llmorgsettings: byo_llm flag state for org %q: %w", orgID, gerr)
-			}
-			if state == flagStateDisabled {
-				return OrgConfig{}, false, nil
-			}
-			return OrgConfig{}, false, fmt.Errorf("%w: setting %q", ErrStoredSettingUnreadable, key)
+		if raw[key] != "" {
+			continue
+		}
+		parsed, perr := uuid.Parse(orgID)
+		if perr != nil {
+			return OrgConfig{}, false, fmt.Errorf("%w: setting %q (org id is not a UUID)", ErrStoredSettingUnreadable, key)
+		}
+		state, gerr := byoLLMFlagState(ctx, s.Pool, parsed, s.now())
+		if gerr != nil {
+			return OrgConfig{}, false, fmt.Errorf("llmorgsettings: byo_llm flag state for org %q: %w", orgID, gerr)
+		}
+		if state == flagStateDisabled {
+			return OrgConfig{}, false, nil
+		}
+		return OrgConfig{}, false, fmt.Errorf("%w: setting %q", ErrStoredSettingUnreadable, key)
+	}
+	byo := orgSettings{}
+	for _, key := range byoKeys {
+		if raw[key] != "" {
+			byo[key] = raw[key]
 		}
 	}
-	settings, err := s.applyGate(ctx, orgID, raw)
+	settings, err := s.applyGate(ctx, orgID, byo)
 	if err != nil {
 		return OrgConfig{}, false, err
 	}
@@ -92,3 +111,9 @@ FROM settings WHERE org_id = $1 AND category = $2`,
 		Version:  version,
 	}, true, nil
 }
+
+// afterRowsRead runs between the snapshot's row read and its version read; a
+// test seam that lets a concurrent save land exactly there.
+var afterRowsRead = func() {}
+
+var byoKeys = []string{keyProvider, keyModel, keyAPIKey, keyBaseURL}

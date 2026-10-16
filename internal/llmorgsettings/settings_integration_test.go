@@ -564,3 +564,71 @@ func TestOrgConfig_UnreadableStoredSettingMatrix(t *testing.T) {
 		})
 	}
 }
+
+// Settings and version come from one snapshot: a save landing between the row read and the version read
+// must not pair the old values with the new version.
+func TestOrgConfig_ValuesAndVersionShareOneSnapshot(t *testing.T) {
+	ctx := context.Background()
+	store, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", true)
+	orgID := seedOrg(ctx, t, pool, "enterprise")
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	insertSetting(ctx, t, pool, orgID, "model", "model-before")
+	before, ok, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil || !ok {
+		t.Fatalf("baseline ok=%v err=%v", ok, err)
+	}
+
+	afterRowsRead = func() {
+		if _, err := pool.Exec(ctx, `UPDATE settings SET value = 'model-after', updated_at = updated_at + interval '1 minute'
+			WHERE org_id = $1 AND category = 'llm' AND key = 'model'`, orgID.String()); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { afterRowsRead = func() {} })
+	interleaved, ok, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil || !ok {
+		t.Fatalf("interleaved ok=%v err=%v", ok, err)
+	}
+	afterRowsRead = func() {}
+	next, _, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Model != "model-after" || next.Version == before.Version {
+		t.Fatalf("after the save: model=%q version=%q (before %q)", next.Model, next.Version, before.Version)
+	}
+	if interleaved.Model != "model-before" || interleaved.Version != before.Version {
+		t.Fatalf("interleaved read mixed snapshots: model=%q version=%q, want model-before at version %q", interleaved.Model, interleaved.Version, before.Version)
+	}
+}
+
+// Settings of the llm category that are not BYO fields neither make an org "configured" nor move the version.
+func TestOrgConfig_OnlyByoKeysCountAsConfig(t *testing.T) {
+	ctx := context.Background()
+	store, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", true)
+	orgID := seedOrg(ctx, t, pool, "enterprise")
+	insertSetting(ctx, t, pool, orgID, "platform_ask_dev_role_certification_profile:legacy_agent", "{}")
+
+	if cfg, ok, err := store.OrgConfig(ctx, orgID.String()); err != nil || ok {
+		t.Fatalf("only a platform setting: ok=%v err=%v cfg=%+v, want ok=false", ok, err, cfg)
+	}
+
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	first, ok, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE settings SET updated_at = updated_at + interval '1 hour'
+		WHERE org_id = $1 AND category = 'llm' AND key LIKE 'platform_%'`, orgID.String()); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Version != first.Version {
+		t.Fatalf("a non-BYO setting moved the version: %q -> %q", first.Version, second.Version)
+	}
+}

@@ -25,10 +25,7 @@ def _tree(tmp_path: Path, *, skip: str = "") -> tuple[Path, Path, dict[str, str]
     (r / "ops").mkdir()
     (r / "_records").mkdir()
     (r / "ops/.env").write_text("")
-    for rel in (
-        ".remember/lanes/team-lead/reconciler-sweep-override.yml",
-        "compose/compose.bigboy.images.yml",
-    ):
+    for rel in ("_records/compose.bigboy.images.yml",):
         if rel != skip:
             (r / rel).write_text("services: {}\n")
     tools = tmp_path / "tools"
@@ -74,7 +71,7 @@ def test_unknown_verb_is_refused(tmp_path: Path) -> None:
 
 
 def test_missing_overlay_file_is_refused(tmp_path: Path) -> None:
-    _, tools, env = _tree(tmp_path, skip="compose/compose.bigboy.images.yml")
+    _, tools, env = _tree(tmp_path, skip="_records/compose.bigboy.images.yml")
     res = _run(tools, env, "ps")
     assert res.returncode == 2 and "overlay file missing" in res.stderr
     assert not Path(env["DOCKER_LOG"]).exists()
@@ -154,9 +151,8 @@ def test_operator_image_is_only_required_when_a_file_uses_it(tmp_path: Path) -> 
     res = _run(tools, {**env, "DHO_SMOKE_CATALOG_FILE": "x"}, "-s", "smoke", "ps")
     assert res.returncode == 0, res.stderr
     assert "--format" not in Path(env["DOCKER_LOG"]).read_text()
-    refused = _run(tools, env, "ps")
+    refused = _run(tools, env, "up", "go-worker")
     assert refused.returncode == 2 and "BIGBOY_OPERATOR_IMAGE" in refused.stderr
-    assert "--format" in Path(env["DOCKER_LOG"]).read_text()
 
 
 def test_inherited_compose_variables_are_dropped(tmp_path: Path) -> None:
@@ -234,21 +230,21 @@ _DHO = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "d" * 64
 def _real_tree(tmp_path: Path, *, env_file: str = "") -> tuple[Path, dict[str, str]]:
     """A tiny tree rendered by the REAL docker compose (config only, no daemon call): no stub on PATH."""
     r = tmp_path / "root"
-    (r / "compose").mkdir(parents=True)
+    (r / "_records").mkdir(parents=True)
     (r / "ops").mkdir()
     (r / "ops/.env").write_text(env_file)
     (r / "compose.yml").write_text(
         "name: dev-health\nnetworks:\n  dev-health: {}\nservices:\n"
         "  main:\n    image: busybox\n  extra:\n    image: busybox\n    profiles: [secret-profile]\n"
     )
-    (r / "compose/compose.bigboy.images.yml").write_text(
+    (r / "_records/compose.bigboy.images.yml").write_text(
         f"# pins\n# {_DHO}\nservices: {{}}\n"
     )
     tools = tmp_path / "tools"
     shutil.copytree(BIGBOY, tools)
     (tools / "stack.files").write_text(
         "stack project dev-health\nstack env-file ops/.env\nstack root compose.yml\n"
-        "stack root compose/compose.bigboy.images.yml\n"
+        "stack root _records/compose.bigboy.images.yml\n"
         "river-apply include stack\nriver-apply profile venue\nriver-apply tools compose.bigboy.river-apply.yml\n"
         "hook-check include stack\nhook-check profile venue\nhook-check tools compose.bigboy.hook-check.yml\n"
         "hook-check needs HOOK_OPERATOR_IMAGE\n"
@@ -304,13 +300,10 @@ def test_live_chain_renders_from_ops_files_plus_root_state_only(tmp_path: Path) 
     """The base and go-worker files come from ci/bigboy; the root holds only the pin file, the lane override and
     host state files (CHAOS-8693: no host compose.yml, no host compose/ static files)."""
     r = tmp_path / "root"
-    for d in ("compose", "ops", ".remember/lanes/team-lead", ".go-api-dev", "_records"):
+    for d in ("ops", ".go-api-dev", "_records"):
         (r / d).mkdir(parents=True)
     shutil.copy(
-        BIGBOY / "compose.bigboy.images.yml", r / "compose/compose.bigboy.images.yml"
-    )
-    (r / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
-        "services:\n  go-reconciler:\n    environment:\n      SYNC_UNRECLAIMABLE_SWEEP: active\n"
+        BIGBOY / "compose.bigboy.images.yml", r / "_records/compose.bigboy.images.yml"
     )
     (r / "ops/.env").write_text("")
     (r / ".go-api-dev/go-api.env").write_text("")
@@ -334,12 +327,13 @@ def test_live_chain_renders_from_ops_files_plus_root_state_only(tmp_path: Path) 
 def test_check_host_copies_flags_a_static_copy_that_differs(tmp_path: Path) -> None:
     r = tmp_path / "root"
     (r / "compose").mkdir(parents=True)
+    (r / "_records").mkdir()
     shutil.copy(BIGBOY / "compose.bigboy.base.yml", r / "compose.yml")
     shutil.copy(
         BIGBOY / "compose.bigboy.go-workers.yml", r / "compose/compose.go.workers.yml"
     )
     shutil.copy(
-        BIGBOY / "compose.bigboy.images.yml", r / "compose/compose.bigboy.images.yml"
+        BIGBOY / "compose.bigboy.images.yml", r / "_records/compose.bigboy.images.yml"
     )
     script = BIGBOY / "check-host-copies.sh"
     env = {**os.environ, "BIGBOY_ROOT": str(r)}
@@ -348,7 +342,7 @@ def test_check_host_copies_flags_a_static_copy_that_differs(tmp_path: Path) -> N
     (r / "compose.yml").write_text((r / "compose.yml").read_text() + "# drift\n")
     bad = subprocess.run([str(script)], env=env, capture_output=True, text=True)
     assert bad.returncode == 1 and "DIFF compose.bigboy.base.yml" in bad.stdout
-    (r / "compose/compose.bigboy.images.yml").write_text("services: {}\n")
+    (r / "_records/compose.bigboy.images.yml").write_text("services: {}\n")
     pin = subprocess.run(
         [str(script)],
         env={**env, "BIGBOY_ROOT": str(r)},
@@ -365,13 +359,10 @@ def test_relative_paths_of_the_tracked_base_resolve_against_the_bigboy_root(
     """The base file now lives in ci/bigboy, not at the root: without --project-directory its `./ops` build contexts
     and `./.go-api-dev` bind mounts would resolve against ci/bigboy."""
     r = tmp_path / "root"
-    for d in ("compose", "ops", ".remember/lanes/team-lead", ".go-api-dev", "_records"):
+    for d in ("ops", ".go-api-dev", "_records"):
         (r / d).mkdir(parents=True)
     shutil.copy(
-        BIGBOY / "compose.bigboy.images.yml", r / "compose/compose.bigboy.images.yml"
-    )
-    (r / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
-        "services: {}\n"
+        BIGBOY / "compose.bigboy.images.yml", r / "_records/compose.bigboy.images.yml"
     )
     (r / "ops/.env").write_text("")
     (r / ".go-api-dev/go-api.env").write_text("")
@@ -426,6 +417,10 @@ def test_relative_paths_of_the_tracked_base_resolve_against_the_bigboy_root(
     import json
 
     services = json.loads(out.stdout)["services"]
+    # the reconciler sweep is `active` from the tracked workers overlay alone (the lane override file is not in the chain)
+    assert (
+        services["go-reconciler"]["environment"]["SYNC_UNRECLAIMABLE_SWEEP"] == "active"
+    )
     paths = [s["build"]["context"] for s in services.values() if "build" in s]
     paths += [
         v["source"]
@@ -530,3 +525,271 @@ def test_smoke_set_activates_the_web_smoke_service_so_the_credential_gate_sees_i
         int(lengths["DHO_SMOKE_ADMIN_EMAIL"]) > 0
         and int(lengths["DHO_SMOKE_ADMIN_PASSWORD_FILE"]) > 0
     ), lengths
+
+
+def test_the_cut_steps_that_call_stack_sh_run_in_the_root_they_are_given(
+    tmp_path: Path,
+) -> None:
+    """A cut launched against BIGBOY_ROOT=<scratch> must not reach the real bigboy root through a step script that
+    hard-codes /home/ubuntu/devhealth: every compose call of these scripts runs with the scratch root as cwd."""
+    r = tmp_path / "root"
+    for d in ("ops", "_records/rec"):
+        (r / d).mkdir(parents=True)
+    (r / "ops/.env").write_text("")
+    (r / "_records/compose.bigboy.images.yml").write_text(f"image: {_DHO}\n")
+    (r / "_records/rec/sha.txt").write_text("1234567abcdef\n")
+    exp = tmp_path / "exp.txt"
+    exp.write_text("r t SELECT\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "cwd.log"
+    shim = bin_dir / "docker"
+    shim.write_text(
+        '#!/usr/bin/env bash\necho "$PWD :: $*" >> "$CWD_LOG"\n'
+        'case "$*" in *buildx*) echo \'{"digest":"sha256:'
+        + "e" * 64
+        + '"}\';; *" ps "*) echo ghcr.io/x/op@sha256:'
+        + "f" * 64
+        + ";; esac\nexit 0\n"
+    )
+    shim.chmod(0o755)
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "BIGBOY_"))
+    }
+    env |= {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "CWD_LOG": str(log),
+        "BIGBOY_ROOT": str(r),
+        "DHO_SMOKE_CATALOG_FILE": str(tmp_path / "catalog.json"),
+        "DHO_SMOKE_OPS_SHA": "0" * 40,
+    }
+    (tmp_path / "catalog.json").write_text("{}")
+    cases = {
+        "bigboy-river-apply.sh": [],
+        "bigboy-grants-check.sh": [str(r / "_records/rec")],
+        "pg-grants-check.sh": ["bigboy", str(exp)],
+        "bigboy-hook-check.sh": [str(r / "_records/rec")],
+        "web-path-smoke.sh": [],
+    }
+    for name, args in cases.items():
+        log.write_text("")
+        subprocess.run(
+            ["bash", str(BIGBOY / name), *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        calls = [
+            ln
+            for ln in log.read_text().splitlines()
+            if " compose " in f" {ln} " or ln.endswith(" compose")
+        ]
+        assert calls, name
+        outside = [ln for ln in calls if not ln.startswith(str(r.resolve()) + " ::")]
+        assert not outside, (name, outside[:2])
+
+
+def test_a_verb_that_starts_no_worker_needs_no_operator_image(tmp_path: Path) -> None:
+    """With BIGBOY_OPERATOR_IMAGE unset and no go-reconciler running (an isolated root, a first look), exec/config/ps
+    still work: the worker overlay's image only has to interpolate. Anything that would start a worker stays refused."""
+    _, tools, env = _tree(tmp_path)
+    env = {k: v for k, v in env.items() if k != "BIGBOY_OPERATOR_IMAGE"}
+    for args in (
+        ("exec", "clickhouse", "true"),
+        ("config", "--quiet"),
+        ("ps",),
+        ("run", "migrate"),
+    ):
+        res = _run(tools, env, *args)
+        assert res.returncode == 0, (args, res.stderr)
+    for args in (
+        ("up", "go-worker"),
+        ("exec", "go-reconciler", "true"),
+        ("run", "go-worker", "x"),
+        ("restart", "go-worker"),
+    ):
+        res = _run(tools, env, *args)
+        assert res.returncode == 2 and "BIGBOY_OPERATOR_IMAGE" in res.stderr, (
+            args,
+            res.stderr,
+        )
+
+
+@pytest.mark.skipif(not _REAL_COMPOSE, reason="needs docker compose")
+def test_every_set_renders_the_reconciler_with_the_sweep_active(tmp_path: Path) -> None:
+    """The compiled default of --unreclaimable-sweep is shadow, and the old lane override sat in the base of every set;
+    a set that renders go-reconciler without SYNC_UNRECLAIMABLE_SWEEP=active is the 'override dropped' regression."""
+    import json
+
+    r = tmp_path / "root"
+    for d in ("ops", ".go-api-dev", "_records"):
+        (r / d).mkdir(parents=True)
+    shutil.copy(
+        BIGBOY / "compose.bigboy.images.yml", r / "_records/compose.bigboy.images.yml"
+    )
+    (r / "ops/.env").write_text("")
+    (r / ".go-api-dev/go-api.env").write_text("")
+    (tmp_path / "pw").write_text("x")
+    (tmp_path / "catalog.json").write_text("{}")
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "BIGBOY_"))
+    }
+    env |= {
+        "BIGBOY_ROOT": str(r),
+        "BIGBOY_TOOLS_DIR": str(BIGBOY),
+        "BIGBOY_OPERATOR_IMAGE": _DHO,
+        "DHO_API_CH_USERS_XML": str(r / ".go-api-dev/dho_api_ch.xml"),
+        "HOOK_OPERATOR_IMAGE": _DHO,
+        "PROVE_ORG": "o",
+        "PROVE_ARTIFACT_DIR": str(tmp_path),
+        "DHO_SMOKE_ADMIN_EMAIL": "a@example.test",
+        "DHO_SMOKE_ADMIN_PASSWORD_FILE": str(tmp_path / "pw"),
+        "DHO_SMOKE_CATALOG_FILE": str(tmp_path / "catalog.json"),
+        "DHO_SMOKE_DIR": str(BIGBOY),
+    }
+    sets = [
+        ln.split()[0]
+        for ln in (BIGBOY / "stack.files").read_text().splitlines()
+        if ln.strip() and not ln.startswith("#") and ln.split()[1] == "project"
+    ]
+    assert {"stack", "smoke", "prove-base"} <= set(sets), sets
+    for name in sets:
+        files = subprocess.run(
+            [str(STACK_SH), "-s", name, "files"],
+            env=env,
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+        cmd = [
+            "docker",
+            "compose",
+            "-p",
+            "dev-health",
+            "--project-directory",
+            str(r),
+            "--env-file",
+            "ops/.env",
+        ]
+        for f in files:
+            cmd += ["-f", f]
+        out = subprocess.run(
+            [*cmd, "config", "--format", "json"],
+            env=env,
+            cwd=r,
+            capture_output=True,
+            text=True,
+        )
+        assert out.returncode == 0, (name, out.stderr[-300:])
+        reconciler = json.loads(out.stdout)["services"].get("go-reconciler")
+        assert reconciler is not None, name
+        assert reconciler["environment"].get("SYNC_UNRECLAIMABLE_SWEEP") == "active", (
+            name
+        )
+
+
+def test_up_of_a_non_worker_service_needs_no_operator_image(tmp_path: Path) -> None:
+    """query-api/go-api/web run the dho/web pins; only services whose image is BIGBOY_OPERATOR_IMAGE need it."""
+    _, tools, env = _tree(tmp_path)
+    env = {k: v for k, v in env.items() if k != "BIGBOY_OPERATOR_IMAGE"}
+    ok = _run(tools, env, "up", "query-api", "go-api", "web")
+    assert ok.returncode == 0, ok.stderr
+    for args in (
+        ("up", "go-worker"),
+        ("up", "web", "go-scheduler"),
+        ("restart", "go-reconciler"),
+    ):
+        res = _run(tools, env, *args)
+        assert res.returncode == 2 and "BIGBOY_OPERATOR_IMAGE" in res.stderr, (
+            args,
+            res.stderr,
+        )
+
+
+def test_a_worker_verb_requires_the_operator_image_explicitly_and_probes_nothing(
+    tmp_path: Path,
+) -> None:
+    """No autodetection: with BIGBOY_OPERATOR_IMAGE unset, starting an operator-image service fails closed with a
+    message that names the variable, and no compose call (no `ps` probe) is made. With it set, the verb runs."""
+    _, tools, env = _tree(tmp_path)
+    unset = {k: v for k, v in env.items() if k != "BIGBOY_OPERATOR_IMAGE"}
+    for args in (
+        ("up", "go-worker"),
+        ("restart", "go-reconciler"),
+        ("run", "go-worker", "x"),
+        ("exec", "go-scheduler", "true"),
+    ):
+        res = _run(tools, unset, *args)
+        assert res.returncode == 2 and "export BIGBOY_OPERATOR_IMAGE" in res.stderr, (
+            args,
+            res.stderr,
+        )
+    log = Path(env["DOCKER_LOG"])
+    assert not log.exists() or "ps --format" not in log.read_text(), log.read_text()
+    ok = _run(tools, env, "up", "go-worker")
+    assert ok.returncode == 0, ok.stderr
+
+
+def test_a_relative_bigboy_root_reaches_stack_sh_once_and_absolute(
+    tmp_path: Path,
+) -> None:
+    """The step scripts cd into the root, then hand it on: a relative BIGBOY_ROOT must not be resolved twice."""
+    r = tmp_path / "root"
+    for d in ("ops", "_records/rec"):
+        (r / d).mkdir(parents=True)
+    (r / "ops/.env").write_text("")
+    (r / "_records/compose.bigboy.images.yml").write_text(f"image: {_DHO}\n")
+    (r / "_records/rec/sha.txt").write_text("1234567abcdef\n")
+    exp = tmp_path / "exp.txt"
+    exp.write_text("r t SELECT\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "cwd.log"
+    shim = bin_dir / "docker"
+    shim.write_text(
+        '#!/usr/bin/env bash\necho "$PWD :: $*" >> "$CWD_LOG"\n'
+        'case "$*" in *buildx*) echo \'{"digest":"sha256:'
+        + "e" * 64
+        + '"}\';; *" ps "*) echo ghcr.io/x/op@sha256:'
+        + "f" * 64
+        + ";; esac\nexit 0\n"
+    )
+    shim.chmod(0o755)
+    (tmp_path / "catalog.json").write_text("{}")
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "BIGBOY_"))
+    }
+    env |= {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "CWD_LOG": str(log),
+        "BIGBOY_ROOT": "root",
+        "DHO_SMOKE_CATALOG_FILE": str(tmp_path / "catalog.json"),
+        "DHO_SMOKE_OPS_SHA": "0" * 40,
+    }
+    cases = {
+        "bigboy-river-apply.sh": [],
+        "bigboy-grants-check.sh": [str(r / "_records/rec")],
+        "bigboy-hook-check.sh": [str(r / "_records/rec")],
+        "web-path-smoke.sh": [],
+    }
+    for name, args in cases.items():
+        log.write_text("")
+        done = subprocess.run(
+            ["bash", str(BIGBOY / name), *args],
+            env=env,
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert "is not a directory" not in done.stdout + done.stderr, (
+            name,
+            done.stdout,
+            done.stderr,
+        )
+        calls = [ln for ln in log.read_text().splitlines() if " compose " in f" {ln} "]
+        assert calls, name
+        assert all(ln.startswith(str(r.resolve()) + " ::") for ln in calls), (
+            name,
+            calls[:2],
+        )

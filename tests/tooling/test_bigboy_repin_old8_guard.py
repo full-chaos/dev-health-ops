@@ -45,12 +45,11 @@ def test_old8_shape_is_checked_before_any_file_is_touched() -> None:
 
 def _build_root(tmp_path: Path) -> Path:
     """A minimal real-shaped bigboy tree (BIGBOY_ROOT, CHAOS-7022 D2895): just enough to pass
-    bigboy-repin.sh's own layout check (compose/compose.bigboy.images.yml + _records must
+    bigboy-repin.sh's own layout check (_records/compose.bigboy.images.yml + _records must
     exist) without needing anything the shape guard runs before ever reaches."""
     root = tmp_path / "root"
-    (root / "compose").mkdir(parents=True)
-    (root / "compose" / "compose.bigboy.images.yml").write_text("placeholder\n")
-    (root / "_records").mkdir()
+    (root / "_records").mkdir(parents=True)
+    (root / "_records" / "compose.bigboy.images.yml").write_text("placeholder\n")
     return root
 
 
@@ -64,7 +63,7 @@ def test_old8_shape_guard_actually_rejects_a_bad_old8_before_any_write(
     a text pin cannot see at all -- that neither compose.bigboy.images.yml nor any
     `_records/bigboy-<N8>` dir was actually touched."""
     root = _build_root(tmp_path)
-    ov_path = root / "compose" / "compose.bigboy.images.yml"
+    ov_path = root / "_records" / "compose.bigboy.images.yml"
     ov_before = ov_path.read_text()
     proc = subprocess.run(
         ["bash", str(REPIN), "bd25cd0a9", "b" * 40],
@@ -81,9 +80,9 @@ def test_old8_shape_guard_actually_rejects_a_bad_old8_before_any_write(
     assert ov_path.read_text() == ov_before, (
         "compose.bigboy.images.yml must not be touched"
     )
-    assert not any((root / "_records").iterdir()), (
-        "no _records/bigboy-<N8> dir must be created for a rejected OLD8"
-    )
+    assert not [
+        p for p in (root / "_records").iterdir() if p.name.startswith("bigboy-")
+    ], "no _records/bigboy-<N8> dir must be created for a rejected OLD8"
 
 
 def test_old8_shape_guard_rejects_nine_characters() -> None:
@@ -137,7 +136,7 @@ def test_old8_registry_lookup_uses_the_seven_character_image_tag(
     cross-check (which then refuses, because the pinned digest differs from the resolved one)
     instead of failing as an unresolvable image."""
     root = _build_root(tmp_path)
-    (root / "compose" / "compose.bigboy.images.yml").write_text(
+    (root / "_records" / "compose.bigboy.images.yml").write_text(
         "image: ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "c" * 64 + "\n"
     )
     bin_dir = tmp_path / "bin"

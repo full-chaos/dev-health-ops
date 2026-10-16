@@ -12,7 +12,7 @@ from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.internal_service_credential import InternalServiceCredential
 
 _SERVICE_SCOPES = {
-    "acr": frozenset({"entitlements:read"}),
+    "acr": frozenset({"entitlements:read", "llm_config:read"}),
     "worker-operator": frozenset({"workers:read", "workers:operate"}),
 }
 _SERVICE_CHOICES = tuple(sorted(_SERVICE_SCOPES))

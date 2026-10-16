@@ -64,6 +64,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -467,10 +468,14 @@ func configureWith(
 // NetworkPolicy, no Ingress) is the control.
 func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var store acr.EntitlementStore
+	var llmConfig acr.LLMConfigSource
+	var credentials acr.CredentialVerifier
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
+		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}
+		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
 	}
-	return internalRoutesFor(store, logger)
+	return internalRoutesWith(acr.Deps{Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials})
 }
 
 // internalRoutesFor is InternalRoutes over an explicit store. The routes are
@@ -479,7 +484,11 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 // route makes policy.WriteModel log a false wrong-writer violation on every
 // successful response.
 func internalRoutesFor(store acr.EntitlementStore, logger *slog.Logger) []httpapi.Route {
-	return markResponseModels(acr.Routes(acr.Deps{Store: store, Logger: logger}))
+	return internalRoutesWith(acr.Deps{Store: store, Logger: logger})
+}
+
+func internalRoutesWith(deps acr.Deps) []httpapi.Route {
+	return markResponseModels(acr.Routes(deps))
 }
 
 // NewInternalServer is the internal listener: the same transport bounds and

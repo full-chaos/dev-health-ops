@@ -1152,7 +1152,8 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		// comparison below, which then judges the difference through that
 		// shape's own admission rule (classifyBaselineDefects) -- see
 		// bodySizeGateDeferred's own doc comment.
-		if reason, detail := bodySizeDisagreement(baseline.BodyBytes, candidate.BodyBytes); reason != "" && !bodySizeGateDeferred(opts, baseline.Data, candidate.Data) {
+		baselineBytes, candidateBytes := sizeGateBytes(baseline, opts), sizeGateBytes(candidate, opts)
+		if reason, detail := bodySizeDisagreement(baselineBytes, candidateBytes); reason != "" && !bodySizeGateDeferred(opts, baseline.Data, candidate.Data) {
 			return Result{StructuralRefusal: reason, StructuralDetail: detail}
 		}
 	}
@@ -2595,4 +2596,58 @@ func compareListByKey(baseline, candidate []any, path string, decl OrderInsensit
 		}
 	}
 	return findings
+}
+
+// sizeGateBytes is the size the body-size ratio judges. With no declared volatile field it is the raw body length, as it always was.
+// With declared volatile fields those subtrees are not compared, so their bytes are no structural signal either (a drawn bin list
+// changes length between two draws): the size is then the COMPACT encoding of the decoded data minus the compact encoding of every
+// value at a volatile path. Both legs are measured the same way, so the whitespace and key order of the raw body play no part.
+func sizeGateBytes(snapshot Snapshot, opts Options) int {
+	if len(opts.VolatileFields) == 0 {
+		return snapshot.BodyBytes
+	}
+	encoded, err := json.Marshal(snapshot.Data)
+	if err != nil {
+		return snapshot.BodyBytes
+	}
+	return len(encoded) - volatileBytes(snapshot.Data, opts.VolatileFields)
+}
+
+// volatileBytes is the compact encoded size of every value a declared volatile path reaches in data (data-relative, index-free
+// paths as VolatileFields declares them).
+func volatileBytes(data any, volatile map[string]string) int {
+	total := 0
+	for path := range volatile {
+		segments := citedSegments(path)
+		if len(segments) == 0 {
+			continue
+		}
+		total += encodedSizeAt(data, segments)
+	}
+	return total
+}
+
+func encodedSizeAt(value any, segments []string) int {
+	switch typed := value.(type) {
+	case map[string]any:
+		child, present := typed[segments[0]]
+		if !present {
+			return 0
+		}
+		if len(segments) == 1 {
+			encoded, err := json.Marshal(child)
+			if err != nil {
+				return 0
+			}
+			return len(encoded)
+		}
+		return encodedSizeAt(child, segments[1:])
+	case []any:
+		total := 0
+		for _, element := range typed {
+			total += encodedSizeAt(element, segments)
+		}
+		return total
+	}
+	return 0
 }

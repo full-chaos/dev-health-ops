@@ -127,6 +127,8 @@ func measureFromInput(m model.MeasureInput) (Measure, error) {
 	switch m {
 	case model.MeasureInputCount:
 		return MeasureCount, nil
+	case model.MeasureInputIssueSize:
+		return MeasureIssueSize, nil
 	case model.MeasureInputChurnLoc:
 		return MeasureChurnLOC, nil
 	case model.MeasureInputPrReworkRatio:
@@ -373,6 +375,10 @@ func compileFlowMatrixInvestmentDimension(req FlowMatrixRequest, orgID string, t
 	var contextBindings []clickhouse.Binding
 	if useInvestment {
 		ictx := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
+		ictx, err = ictx.sizedFor(req.Measure)
+		if err != nil {
+			return compiledQuery{}, compiledQuery{}, err
+		}
 		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
 		contextBindings = ictx.Bindings
 		measureExpr, err = ictx.measure(req.Measure)
@@ -507,7 +513,10 @@ func compileFlowMatrixInvestmentTeamRepoDimension(req FlowMatrixRequest, orgID s
 		return compiledQuery{}, compiledQuery{}, err
 	}
 
-	nodeCtx := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
+	nodeCtx, err := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters)).sizedFor(req.Measure)
+	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
 	measureExpr, err := nodeCtx.measure(req.Measure)
 	if err != nil {
 		return compiledQuery{}, compiledQuery{}, err
@@ -546,7 +555,10 @@ LIMIT {limit_per_dim:UInt32}
 	nodesBindings = append(nodesBindings, nodeCtx.Bindings...)
 
 	edgeForceTeamJoin := req.Dimension == DimensionRepo
-	edgeCtx := investmentContextFor(orgID, []Dimension{req.Dimension}, edgeForceTeamJoin, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
+	edgeCtx, err := investmentContextFor(orgID, []Dimension{req.Dimension}, edgeForceTeamJoin, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters)).sizedFor(req.Measure)
+	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
 
 	var bridgeCol, bridgeNotEmpty string
 	switch req.Dimension {

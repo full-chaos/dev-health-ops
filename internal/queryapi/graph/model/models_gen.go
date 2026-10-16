@@ -2445,6 +2445,7 @@ type MeasureInput string
 
 const (
 	MeasureInputCount                MeasureInput = "COUNT"
+	MeasureInputIssueSize            MeasureInput = "ISSUE_SIZE"
 	MeasureInputChurnLoc             MeasureInput = "CHURN_LOC"
 	MeasureInputPrReworkRatio        MeasureInput = "PR_REWORK_RATIO"
 	MeasureInputCycleTimeHours       MeasureInput = "CYCLE_TIME_HOURS"
@@ -2469,6 +2470,7 @@ const (
 
 var AllMeasureInput = []MeasureInput{
 	MeasureInputCount,
+	MeasureInputIssueSize,
 	MeasureInputChurnLoc,
 	MeasureInputPrReworkRatio,
 	MeasureInputCycleTimeHours,
@@ -2493,7 +2495,7 @@ var AllMeasureInput = []MeasureInput{
 
 func (e MeasureInput) IsValid() bool {
 	switch e {
-	case MeasureInputCount, MeasureInputChurnLoc, MeasureInputPrReworkRatio, MeasureInputCycleTimeHours, MeasureInputThroughput, MeasureInputPipelineSuccessRate, MeasureInputPipelineFailureRate, MeasureInputPipelineDurationP95, MeasureInputPipelineQueueTime, MeasureInputPipelineRerunRate, MeasureInputTestPassRate, MeasureInputTestFailureRate, MeasureInputTestFlakeRate, MeasureInputTestSuiteDurationP95, MeasureInputCoverageLinePct, MeasureInputCoverageBranchPct, MeasureInputCoverageDeltaPct, MeasureInputFlagFrictionDelta, MeasureInputFlagErrorRateDelta, MeasureInputFlagCoverageRatio, MeasureInputFlagActivationRate:
+	case MeasureInputCount, MeasureInputIssueSize, MeasureInputChurnLoc, MeasureInputPrReworkRatio, MeasureInputCycleTimeHours, MeasureInputThroughput, MeasureInputPipelineSuccessRate, MeasureInputPipelineFailureRate, MeasureInputPipelineDurationP95, MeasureInputPipelineQueueTime, MeasureInputPipelineRerunRate, MeasureInputTestPassRate, MeasureInputTestFailureRate, MeasureInputTestFlakeRate, MeasureInputTestSuiteDurationP95, MeasureInputCoverageLinePct, MeasureInputCoverageBranchPct, MeasureInputCoverageDeltaPct, MeasureInputFlagFrictionDelta, MeasureInputFlagErrorRateDelta, MeasureInputFlagCoverageRatio, MeasureInputFlagActivationRate:
 		return true
 	}
 	return false
@@ -2567,15 +2569,17 @@ type SankeyValueUnit string
 
 const (
 	SankeyValueUnitWorkUnits SankeyValueUnit = "WORK_UNITS"
+	SankeyValueUnitIssueSize SankeyValueUnit = "ISSUE_SIZE"
 )
 
 var AllSankeyValueUnit = []SankeyValueUnit{
 	SankeyValueUnitWorkUnits,
+	SankeyValueUnitIssueSize,
 }
 
 func (e SankeyValueUnit) IsValid() bool {
 	switch e {
-	case SankeyValueUnitWorkUnits:
+	case SankeyValueUnitWorkUnits, SankeyValueUnitIssueSize:
 		return true
 	}
 	return false
@@ -3017,7 +3021,7 @@ func (e TimeGranularity) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 
-// Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE and COVERAGE_LINE_PCT carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
+// Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE, COVERAGE_LINE_PCT and TEST_FLAKE_RATE carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
 type TimeseriesScope string
 
 const (

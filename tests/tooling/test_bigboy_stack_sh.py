@@ -15,6 +15,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 BIGBOY = ROOT / "ci" / "bigboy"
+STACK_SH = BIGBOY / "stack.sh"
 
 
 def _tree(tmp_path: Path, *, skip: str = "") -> tuple[Path, Path, dict[str, str]]:
@@ -25,8 +26,6 @@ def _tree(tmp_path: Path, *, skip: str = "") -> tuple[Path, Path, dict[str, str]
     (r / "_records").mkdir()
     (r / "ops/.env").write_text("")
     for rel in (
-        "compose.yml",
-        "compose/compose.go.workers.yml",
         ".remember/lanes/team-lead/reconciler-sweep-override.yml",
         "compose/compose.bigboy.images.yml",
     ):
@@ -105,7 +104,7 @@ def test_restart_runs_the_stack_files_chain_and_logs_one_line(tmp_path: Path) ->
     ][0]
     listed = _run(tools, env, "files").stdout.split()
     expected = (
-        "compose -p dev-health --env-file ops/.env "
+        f"compose -p dev-health --project-directory {r} --env-file ops/.env "
         + " ".join(f"-f {f}" for f in listed)
         + " restart web"
     )
@@ -190,7 +189,7 @@ def test_relative_root_and_tools_paths_work(tmp_path: Path) -> None:
         text=True,
     )
     assert res.returncode == 0, res.stderr
-    assert f"-f {r}/compose.yml" in Path(env["DOCKER_LOG"]).read_text()
+    assert f"-f {tools}/compose.bigboy.base.yml" in Path(env["DOCKER_LOG"]).read_text()
 
 
 def test_service_name_with_a_newline_is_refused(tmp_path: Path) -> None:
@@ -298,3 +297,236 @@ def test_env_file_compose_profiles_cannot_add_a_profile_under_real_compose(
     res = _run(tools, env, "config", "--services")
     assert res.returncode == 0, res.stderr
     assert res.stdout.split() == ["main"]
+
+
+@pytest.mark.skipif(not _REAL_COMPOSE, reason="needs docker compose")
+def test_live_chain_renders_from_ops_files_plus_root_state_only(tmp_path: Path) -> None:
+    """The base and go-worker files come from ci/bigboy; the root holds only the pin file, the lane override and
+    host state files (CHAOS-8693: no host compose.yml, no host compose/ static files)."""
+    r = tmp_path / "root"
+    for d in ("compose", "ops", ".remember/lanes/team-lead", ".go-api-dev", "_records"):
+        (r / d).mkdir(parents=True)
+    shutil.copy(
+        BIGBOY / "compose.bigboy.images.yml", r / "compose/compose.bigboy.images.yml"
+    )
+    (r / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
+        "services:\n  go-reconciler:\n    environment:\n      SYNC_UNRECLAIMABLE_SWEEP: active\n"
+    )
+    (r / "ops/.env").write_text("")
+    (r / ".go-api-dev/go-api.env").write_text("")
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "BIGBOY_"))
+    }
+    env |= {
+        "BIGBOY_ROOT": str(r),
+        "BIGBOY_TOOLS_DIR": str(BIGBOY),
+        "BIGBOY_OPERATOR_IMAGE": _DHO,
+    }
+    res = subprocess.run(
+        [str(STACK_SH), "config", "--quiet"], env=env, capture_output=True, text=True
+    )
+    assert res.returncode == 0, res.stderr
+    assert (BIGBOY / "compose.bigboy.base.yml").is_file() and not (
+        r / "compose.yml"
+    ).exists()
+
+
+def test_check_host_copies_flags_a_static_copy_that_differs(tmp_path: Path) -> None:
+    r = tmp_path / "root"
+    (r / "compose").mkdir(parents=True)
+    shutil.copy(BIGBOY / "compose.bigboy.base.yml", r / "compose.yml")
+    shutil.copy(
+        BIGBOY / "compose.bigboy.go-workers.yml", r / "compose/compose.go.workers.yml"
+    )
+    shutil.copy(
+        BIGBOY / "compose.bigboy.images.yml", r / "compose/compose.bigboy.images.yml"
+    )
+    script = BIGBOY / "check-host-copies.sh"
+    env = {**os.environ, "BIGBOY_ROOT": str(r)}
+    ok = subprocess.run([str(script)], env=env, capture_output=True, text=True)
+    assert ok.returncode == 0 and ok.stdout.count("SAME") == 3, ok.stdout
+    (r / "compose.yml").write_text((r / "compose.yml").read_text() + "# drift\n")
+    bad = subprocess.run([str(script)], env=env, capture_output=True, text=True)
+    assert bad.returncode == 1 and "DIFF compose.bigboy.base.yml" in bad.stdout
+    (r / "compose/compose.bigboy.images.yml").write_text("services: {}\n")
+    pin = subprocess.run(
+        [str(script)],
+        env={**env, "BIGBOY_ROOT": str(r)},
+        capture_output=True,
+        text=True,
+    )
+    assert "INFO pin file differs" in pin.stdout
+
+
+@pytest.mark.skipif(not _REAL_COMPOSE, reason="needs docker compose")
+def test_relative_paths_of_the_tracked_base_resolve_against_the_bigboy_root(
+    tmp_path: Path,
+) -> None:
+    """The base file now lives in ci/bigboy, not at the root: without --project-directory its `./ops` build contexts
+    and `./.go-api-dev` bind mounts would resolve against ci/bigboy."""
+    r = tmp_path / "root"
+    for d in ("compose", "ops", ".remember/lanes/team-lead", ".go-api-dev", "_records"):
+        (r / d).mkdir(parents=True)
+    shutil.copy(
+        BIGBOY / "compose.bigboy.images.yml", r / "compose/compose.bigboy.images.yml"
+    )
+    (r / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
+        "services: {}\n"
+    )
+    (r / "ops/.env").write_text("")
+    (r / ".go-api-dev/go-api.env").write_text("")
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "BIGBOY_"))
+    }
+    env |= {
+        "BIGBOY_ROOT": str(r),
+        "BIGBOY_TOOLS_DIR": str(BIGBOY),
+        "BIGBOY_OPERATOR_IMAGE": _DHO,
+    }
+    env["DHO_API_CH_USERS_XML"] = str(r / ".go-api-dev/dho_api_ch.xml")
+    real = shutil.which("docker")
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    log = tmp_path / "shim.log"
+    (shim / "docker").write_text(
+        f'#!/usr/bin/env bash\necho "$*" >> {log}\nexec {real} "$@"\n'
+    )
+    (shim / "docker").chmod(0o755)
+    through = subprocess.run(
+        [str(STACK_SH), "config", "--quiet"],
+        env={**env, "PATH": f"{shim}:{env['PATH']}"},
+        capture_output=True,
+        text=True,
+    )
+    assert through.returncode == 0, through.stderr
+    assert f"--project-directory {r} " in log.read_text()
+    files = subprocess.run(
+        [str(STACK_SH), "files"], env=env, capture_output=True, text=True
+    ).stdout.split()
+    cmd = [
+        "docker",
+        "compose",
+        "-p",
+        "dev-health",
+        "--project-directory",
+        str(r),
+        "--env-file",
+        "ops/.env",
+    ]
+    for f in files:
+        cmd += ["-f", f]
+    out = subprocess.run(
+        [*cmd, "config", "--format", "json"],
+        env=env,
+        cwd=r,
+        capture_output=True,
+        text=True,
+    )
+    assert out.returncode == 0, out.stderr[-300:]
+    import json
+
+    services = json.loads(out.stdout)["services"]
+    paths = [s["build"]["context"] for s in services.values() if "build" in s]
+    paths += [
+        v["source"]
+        for s in services.values()
+        for v in s.get("volumes", [])
+        if v.get("type") == "bind"
+    ]
+    assert any(p.startswith(str(r)) for p in paths)
+    assert not [p for p in paths if p.startswith(str(BIGBOY))]
+
+
+def test_run_is_a_logged_one_off_with_rm_no_deps_and_no_tty(tmp_path: Path) -> None:
+    r, tools, env = _tree(tmp_path)
+    res = _run(
+        tools,
+        env,
+        "-s",
+        "river-apply",
+        "run",
+        "venue-river",
+        "migrate",
+        "river",
+        "--apply-and-check",
+    )
+    assert res.returncode == 0, res.stderr
+    cmd = [
+        ln for ln in Path(env["DOCKER_LOG"]).read_text().splitlines() if " run " in ln
+    ][0]
+    assert cmd.endswith(
+        "run --rm --no-deps -T venue-river migrate river --apply-and-check"
+    )
+    assert "--profile venue" in cmd
+    line = (r / "_records/stack-runs.log").read_text().splitlines()
+    assert len(line) == 1 and "verb=run" in line[0] and "service=venue-river" in line[0]
+
+
+def test_exec_passes_stdin_through_and_is_not_logged(tmp_path: Path) -> None:
+    r, tools, env = _tree(tmp_path)
+    res = subprocess.run(
+        [str(tools / "stack.sh"), "exec", "postgres", "psql", "-X"],
+        env=env,
+        input="select 1;\n",
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "exec -T postgres psql -X" in Path(env["DOCKER_LOG"]).read_text()
+    assert not (r / "_records/stack-runs.log").exists()
+
+
+def test_run_and_exec_refuse_a_missing_or_bad_service(tmp_path: Path) -> None:
+    _, tools, env = _tree(tmp_path)
+    for verb in ("run", "exec"):
+        assert _run(tools, env, verb).returncode == 2
+        assert _run(tools, env, verb, "--rm").returncode == 2
+        assert _run(tools, env, verb, "web\nx").returncode == 2
+
+
+@pytest.mark.skipif(not _REAL_COMPOSE, reason="needs docker compose")
+def test_smoke_set_activates_the_web_smoke_service_so_the_credential_gate_sees_its_variables(
+    tmp_path: Path,
+) -> None:
+    """web-path-smoke.sh decides from `stack.sh -s smoke config` (NAME=<length> lines) whether the admin email and the
+    password file resolve. web-smoke sits in the profile `smoke`: the set must activate it, or the rendered config
+    holds no DHO_SMOKE_ADMIN_* entry and the gate aborts with a misleading BLANK before the smoke runs."""
+    r = tmp_path / "root"
+    for d in ("ops", ".go-api-dev", "_records", "compose", ".remember/lanes/team-lead"):
+        (r / d).mkdir(parents=True)
+    for pin in (
+        "compose/compose.bigboy.images.yml",
+        "_records/compose.bigboy.images.yml",
+    ):
+        shutil.copy(BIGBOY / "compose.bigboy.images.yml", r / pin)
+    (r / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
+        "services: {}\n"
+    )
+    (r / "ops/.env").write_text("")
+    (r / ".go-api-dev/go-api.env").write_text("")
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "BIGBOY_"))
+    }
+    env |= {
+        "BIGBOY_ROOT": str(r),
+        "BIGBOY_TOOLS_DIR": str(BIGBOY),
+        "DHO_SMOKE_ADMIN_EMAIL": "admin@example.test",
+        "DHO_SMOKE_ADMIN_PASSWORD_FILE": str(tmp_path / "pw"),
+        "DHO_SMOKE_CATALOG_FILE": str(tmp_path / "catalog.json"),
+    }
+    (tmp_path / "pw").write_text("x")
+    (tmp_path / "catalog.json").write_text("{}")
+    res = subprocess.run(
+        [str(STACK_SH), "-s", "smoke", "config"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr[-300:]
+    lengths = dict(
+        line.split("=", 1) for line in res.stdout.splitlines() if "=" in line
+    )
+    assert (
+        int(lengths["DHO_SMOKE_ADMIN_EMAIL"]) > 0
+        and int(lengths["DHO_SMOKE_ADMIN_PASSWORD_FILE"]) > 0
+    ), lengths

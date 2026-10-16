@@ -13,6 +13,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
@@ -142,7 +143,7 @@ func TestEveryRegisteredTeamCatalogCollectorTakesItsTurnFirst(t *testing.T) {
 			t.Errorf("%s: %T is not behind the carry wrapper", provider, collector)
 			continue
 		}
-		if _, ok := carried.Serializer.(catalogLeaseTurn); !ok {
+		if _, ok := carried.Serializer.(jobruntime.TeamCatalogTurn); !ok {
 			t.Errorf("%s: serializer is %T, want the catalog lease turn (CHAOS-9140)", provider, carried.Serializer)
 		}
 	}

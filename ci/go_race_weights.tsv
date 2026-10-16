@@ -277,6 +277,7 @@ internal/queryapi/reports/writeproofcases	1
 internal/queryapi/reviewedges	1
 internal/queryapi/routeswitch	1
 internal/queryapi/sankey	1
+internal/queryapi/scancensus	1
 internal/queryapi/scopelabel	1
 internal/queryapi/security	1
 internal/queryapi/server	26

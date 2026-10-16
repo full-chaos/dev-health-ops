@@ -177,16 +177,20 @@ func resolvePRDisplayNames(ctx context.Context, client QueryClient, orgID string
 	}
 	titles := map[key]string{}
 	for rows.Next() {
-		var repoID, title string
+		var repoID string
+		var title *string
 		var number uint32
 		if scanErr := rows.Scan(&repoID, &number, &title); scanErr != nil {
 			warnDisplayNames(ctx, "pr", scanErr)
 			return
 		}
-		title = strings.TrimSpace(title)
+		if title == nil {
+			continue
+		}
+		trimmedTitle := strings.TrimSpace(*title)
 		repoID = strings.ToLower(repoID)
-		if repoID != "" && number != 0 && title != "" {
-			titles[key{repoID, int(number)}] = title
+		if repoID != "" && number != 0 && trimmedTitle != "" {
+			titles[key{repoID, int(number)}] = trimmedTitle
 		}
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
@@ -228,12 +232,16 @@ func resolveDeploymentDisplayNames(ctx context.Context, client QueryClient, orgI
 	defer rows.Close()
 
 	for rows.Next() {
-		var depID, env string
-		if scanErr := rows.Scan(&depID, &env); scanErr != nil {
+		var depID string
+		var rawEnv *string
+		if scanErr := rows.Scan(&depID, &rawEnv); scanErr != nil {
 			warnDisplayNames(ctx, "deployment", scanErr)
 			return
 		}
-		env = strings.TrimSpace(env)
+		if rawEnv == nil {
+			continue
+		}
+		env := strings.TrimSpace(*rawEnv)
 		// Only store a label when there is a meaningful environment string
 		// -- empty env omits from resolved so displayNameFor returns nil
 		// (Unresolved badge) rather than leaking the raw UUID (A8).
@@ -289,12 +297,16 @@ func resolveIncidentDisplayNames(ctx context.Context, client QueryClient, orgID 
 	defer rows.Close()
 
 	for rows.Next() {
-		var incID, status, title string
-		if scanErr := rows.Scan(&incID, &status, &title); scanErr != nil {
+		var incID, title string
+		var rawStatus *string
+		if scanErr := rows.Scan(&incID, &rawStatus, &title); scanErr != nil {
 			warnDisplayNames(ctx, "incident", scanErr)
 			return
 		}
-		status = strings.TrimSpace(status)
+		if rawStatus == nil {
+			continue
+		}
+		status := strings.TrimSpace(*rawStatus)
 		title = strings.TrimSpace(title)
 		if incID == "" || status == "" {
 			continue

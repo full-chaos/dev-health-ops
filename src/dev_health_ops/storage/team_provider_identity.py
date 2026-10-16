@@ -33,6 +33,7 @@ def fetch_team_provider_identity(
     """Return ``{(org_id, id): (provider_team_id, provider_name, gone_at)}``
     for the teams that already have a stored version; a team with none has no
     entry (callers write ``('', '', None)``)."""
+    pairs = list(pairs)
     org_ids = sorted({str(org_id) for org_id, _ in pairs})
     ids = sorted({str(team_id) for _, team_id in pairs})
     if not ids:

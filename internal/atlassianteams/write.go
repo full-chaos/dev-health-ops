@@ -620,7 +620,7 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 			keys = []string{}
 		}
 		nativeKey := team.NativeTeamKey
-		identity := teamprovider.Merge(stored, team.ID, team.NativeTeamKey, team.Name)
+		identity := teamprovider.Merge(stored, team.ID, providerTeamUUID(team.NativeTeamKey), team.Name)
 		if err := batch.Append(
 			team.ID, team.TeamUUID, team.Name, team.Description, manualMembers, keys, []string{},
 			team.IsActive, team.UpdatedAt, team.OrgID, team.Provider, &nativeKey, (*string)(nil),
@@ -781,4 +781,16 @@ func linkLookups(ctx context.Context, prover AbsenceProver) *providersync.Absenc
 		return providersync.NewOwnershipAbsenceLookups(ctx, nil)
 	}
 	return providersync.NewOwnershipAbsenceLookups(ctx, linkProver{prover})
+}
+
+// providerTeamUUID is the provider's immutable team id: the uuid of the team
+// ARI, lower-cased as teamID does. Anything that is not a team ARI is kept as
+// written so a writer never drops what the run read.
+func providerTeamUUID(ari string) string {
+	ari = strings.TrimSpace(ari)
+	i := strings.LastIndex(ari, teamARIPrefix)
+	if i < 0 || !strings.HasPrefix(ari, "ari:") {
+		return ari
+	}
+	return strings.ToLower(strings.TrimSpace(ari[i+len(teamARIPrefix):]))
 }

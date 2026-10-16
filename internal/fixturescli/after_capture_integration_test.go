@@ -44,7 +44,7 @@ var columnsAfterTheCapture = map[string]map[string]string{
 		// The time of an admin delete: no team of a frozen world was deleted.
 		"deleted_at": "115_teams_deleted_at.sql",
 		// The time a run proved a team gone (CHAOS-9432): no frozen team is.
-		"gone_at": "133_teams_provider_identity.sql",
+		"gone_at": "137_teams_provider_identity.sql",
 	},
 	// The provider's own stable user id of a member (CHAOS-9144): the frozen
 	// worlds' membership rows were written before it and carry none.
@@ -136,8 +136,8 @@ var emptyColumnsAfterTheCapture = map[string]map[string]string{
 	// The provider's own id and name of a team (CHAOS-9432): the frozen worlds'
 	// team rows were written before them and carry none.
 	"teams": {
-		"provider_team_id": "133_teams_provider_identity.sql",
-		"provider_name":    "133_teams_provider_identity.sql",
+		"provider_team_id": "137_teams_provider_identity.sql",
+		"provider_name":    "137_teams_provider_identity.sql",
 	},
 }
 

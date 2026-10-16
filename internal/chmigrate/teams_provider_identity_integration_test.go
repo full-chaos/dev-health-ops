@@ -13,9 +13,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// CHAOS-9432: migration 133 adds provider_team_id, provider_name and gone_at to
-// teams and rollback/133_*.down.sql drops them with the version row. The test
-// rehearses both on the pre-133 shape: a row written before the upgrade (and a
+// CHAOS-9432: migration 137 adds provider_team_id, provider_name and gone_at to
+// teams and rollback/137_*.down.sql drops them with the version row. The test
+// rehearses both on the pre-137 shape: a row written before the upgrade (and a
 // row an older writer inserts without the columns) reads ” / ” / NULL; values
 // written after the upgrade survive; the downgrade drops the columns and keeps
 // the rest of the row; the upgrade runs again (and twice).
@@ -75,9 +75,9 @@ func TestTeamsProviderIdentityMigrationUpgradesAndDowngrades(t *testing.T) {
 ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`)
 	exec(`INSERT INTO teams (id, name, org_id, provider, native_team_key, updated_at) VALUES ('gh:old', 'Old', 'o', 'github', 'old', now64(6))`)
 
-	const up = "sql/133_teams_provider_identity.sql"
-	const down = "rollback/133_teams_provider_identity.down.sql"
-	versionRows := useSchemaMigrations(t, ctx, conn, "133_teams_provider_identity.sql")
+	const up = "sql/137_teams_provider_identity.sql"
+	const down = "rollback/137_teams_provider_identity.down.sql"
+	versionRows := useSchemaMigrations(t, ctx, conn, "137_teams_provider_identity.sql")
 	columns := map[string]string{"provider_team_id": "String", "provider_name": "String", "gone_at": "Nullable(DateTime64(6))"}
 	run(up)
 	for column, want := range columns {

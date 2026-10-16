@@ -1,4 +1,4 @@
--- Rollback of 133_teams_provider_identity.sql (CHAOS-9432). It is NOT part of
+-- Rollback of 137_teams_provider_identity.sql (CHAOS-9432). It is NOT part of
 -- the chain (the migrator reads sql/ only); an operator runs it by hand after
 -- the writers are back on a build that does not name these columns in its INSERT.
 --
@@ -12,4 +12,4 @@
 ALTER TABLE teams DROP COLUMN IF EXISTS gone_at;
 ALTER TABLE teams DROP COLUMN IF EXISTS provider_name;
 ALTER TABLE teams DROP COLUMN IF EXISTS provider_team_id;
-ALTER TABLE schema_migrations DELETE WHERE version = '133_teams_provider_identity.sql' SETTINGS mutations_sync = 2;
+ALTER TABLE schema_migrations DELETE WHERE version = '137_teams_provider_identity.sql' SETTINGS mutations_sync = 2;

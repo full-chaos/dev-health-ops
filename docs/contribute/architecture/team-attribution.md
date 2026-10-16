@@ -1878,7 +1878,7 @@ Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderT
 
 #### 0.4i A team's provider identity (`teams.provider_team_id`, `provider_name`, `gone_at`; CHAOS-9432)
 
-Migration 133 adds three columns to `teams`. `provider_team_id` is the provider's immutable id of the team as text (the
+Migration 137 adds three columns to `teams`. `provider_team_id` is the provider's immutable id of the team as text (the
 GitHub team id, the GitLab group id, the Linear team uuid, the Atlassian team uuid), `provider_name` is the name the
 provider reports (the `name` column can be edited by an admin under the team's sync policy), and `gone_at` is the time
 a run proved the team gone at the provider; NULL = not gone. The row id is minted once from the first slug, path or key

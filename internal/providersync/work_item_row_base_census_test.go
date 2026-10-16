@@ -59,6 +59,21 @@ func scanWorkItemRowWrites(pkg *packages.Package, rowTypes []types.Type) ([]work
 			at := pkg.Fset.Position(node.Pos())
 			return filepath.Base(at.Filename) + ":" + itoaCensus(at.Line)
 		}
+		// report adds a finding for a row field selector, unless the field is
+		// one code outside the base may set.
+		report := func(selector *ast.SelectorExpr, what string) {
+			if selector == nil {
+				return
+			}
+			selection := pkg.TypesInfo.Selections[selector]
+			if selection == nil || selection.Kind() != types.FieldVal || !isRow(selection.Recv()) {
+				return
+			}
+			if _, ok := workItemRowCensusFieldWrites[selector.Sel.Name]; ok {
+				return
+			}
+			findings = append(findings, workItemRowCensusFinding{position(selector), what + selector.Sel.Name})
+		}
 		for _, declaration := range file.Decls {
 			allowedKey := ""
 			if function, ok := declaration.(*ast.FuncDecl); ok {
@@ -83,18 +98,20 @@ func scanWorkItemRowWrites(pkg *packages.Package, rowTypes []types.Type) ([]work
 						return true
 					}
 					for _, left := range typed.Lhs {
-						selector, ok := left.(*ast.SelectorExpr)
-						if !ok {
-							continue
-						}
-						selection := pkg.TypesInfo.Selections[selector]
-						if selection == nil || selection.Kind() != types.FieldVal || !isRow(selection.Recv()) {
-							continue
-						}
-						if _, ok := workItemRowCensusFieldWrites[selector.Sel.Name]; ok {
-							continue
-						}
-						findings = append(findings, workItemRowCensusFinding{position(selector), "write of row field " + selector.Sel.Name})
+						report(rowFieldTarget(left), "write of row field ")
+					}
+				case *ast.IncDecStmt:
+					if allowedKey == "" {
+						report(rowFieldTarget(typed.X), "write of row field ")
+					}
+				case *ast.UnaryExpr:
+					if typed.Op == token.AND && allowedKey == "" {
+						report(rowFieldTarget(typed.X), "address of row field ")
+					}
+				case *ast.RangeStmt:
+					if typed.Tok == token.ASSIGN && allowedKey == "" {
+						report(rowFieldTarget(typed.Key), "write of row field ")
+						report(rowFieldTarget(typed.Value), "write of row field ")
 					}
 				}
 				return true
@@ -102,6 +119,29 @@ func scanWorkItemRowWrites(pkg *packages.Package, rowTypes []types.Type) ([]work
 		}
 	}
 	return findings, allowedWithLiteral
+}
+
+// rowFieldTarget is the field selector an expression writes through: the
+// selector itself, or one reached through a dereference, an index, a slice
+// or parentheses (*row.ParentID, row.Labels[0], (row.Title)).
+func rowFieldTarget(expr ast.Expr) *ast.SelectorExpr {
+	for expr != nil {
+		switch typed := expr.(type) {
+		case *ast.SelectorExpr:
+			return typed
+		case *ast.StarExpr:
+			expr = typed.X
+		case *ast.IndexExpr:
+			expr = typed.X
+		case *ast.SliceExpr:
+			expr = typed.X
+		case *ast.ParenExpr:
+			expr = typed.X
+		default:
+			return nil
+		}
+	}
+	return nil
 }
 
 func itoaCensus(value int) string {
@@ -173,10 +213,13 @@ func TestWorkItemRowBaseCensusCatchesABypass(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"plant.go:17 row literal with fields",
-		"plant.go:22 write of row field ParentID",
-		"plant.go:23 write of row field EpicID",
-		"plant.go:28 row literal with fields",
+		"plant.go:19 row literal with fields",
+		"plant.go:24 write of row field ParentID",
+		"plant.go:25 write of row field EpicID",
+		"plant.go:30 row literal with fields",
+		"plant.go:35 write of row field ParentID",
+		"plant.go:36 write of row field Labels",
+		"plant.go:37 address of row field Title",
 		"work_item_row_base.go:12 row literal with fields",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -231,32 +274,46 @@ func TestWorkItemSourceOwnsEveryRowField(t *testing.T) {
 // every field yields a row with no zero field (DueAtAbsent excepted).
 func TestBuildWorkItemRowSetsEveryField(t *testing.T) {
 	claim := nativeTestClaim("jira", "work-items")
-	row, err := buildWorkItemRow(claim, fullWorkItemSource{}, fullWorkItemSourceNow)
+	source := fullWorkItemSource{}
+	row, err := buildWorkItemRow(claim, source, fullWorkItemSourceNow)
 	if err != nil {
 		t.Fatal(err)
 	}
+	expected := map[string]any{
+		"ParentID": stringPointer("jira:P-1"), "EpicID": stringPointer("jira:E-1"),
+		"OrgID": claim.OrgID, "LastSynced": fullWorkItemSourceNow, "DueAtAbsent": false,
+	}
+	sourceValue := reflect.ValueOf(source)
 	value := reflect.ValueOf(row)
 	for i := 0; i < value.NumField(); i++ {
 		name := value.Type().Field(i).Name
-		if name == "DueAtAbsent" {
-			continue
+		want, ok := expected[name]
+		if !ok {
+			method := sourceValue.MethodByName(name)
+			if !method.IsValid() {
+				t.Fatalf("row field %s has no source method", name)
+			}
+			want = method.Call(nil)[0].Interface()
 		}
-		if value.Field(i).IsZero() {
+		if name != "DueAtAbsent" && value.Field(i).IsZero() {
 			t.Errorf("buildWorkItemRow left %s zero", name)
 		}
+		if got := value.Field(i).Interface(); !reflect.DeepEqual(got, want) {
+			t.Errorf("row.%s = %#v, want %#v from the source", name, got, want)
+		}
 	}
-	if *row.ParentID != "jira:P-1" || *row.EpicID != "jira:E-1" {
-		t.Fatalf("hierarchy = %s, %s", *row.ParentID, *row.EpicID)
-	}
-	linear := linearWorkItemRowFromBase(row)
-	linearValue := reflect.ValueOf(linear)
-	for i := 0; i < linearValue.NumField(); i++ {
-		name := linearValue.Type().Field(i).Name
-		if name == "DueAtAbsent" || name == "RepoID" {
+	linear := reflect.ValueOf(linearWorkItemRowFromBase(row))
+	for i := 0; i < linear.NumField(); i++ {
+		name := linear.Type().Field(i).Name
+		got := linear.Field(i).Interface()
+		if name == "RepoID" {
+			if linear.Field(i).IsNil() == false {
+				t.Errorf("linear RepoID = %v, want nil", got)
+			}
 			continue
 		}
-		if linearValue.Field(i).IsZero() {
-			t.Errorf("linearWorkItemRowFromBase left %s zero", name)
+		if want := value.FieldByName(name).Interface(); !reflect.DeepEqual(got, want) {
+			t.Errorf("linear.%s = %#v, want the base row's %#v", name, got, want)
 		}
 	}
 }

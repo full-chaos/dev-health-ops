@@ -13,7 +13,10 @@ import (
 	"github.com/google/uuid"
 )
 
-var fullWorkItemSourceNow = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+var (
+	fullWorkItemSourceNow    = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	fullWorkItemSourceRepoID = uuid.MustParse("0b7e3d4e-1111-4222-8333-944455556666")
+)
 
 // fullWorkItemSource returns a non-zero value for every field.
 type fullWorkItemSource struct {
@@ -29,7 +32,7 @@ func (fullWorkItemSource) Type() string                         { return "story"
 func (fullWorkItemSource) Status() string                       { return "todo" }
 func (fullWorkItemSource) StatusRaw() *string                   { return stringPointer("To Do") }
 func (fullWorkItemSource) Description() *string                 { return stringPointer("body") }
-func (fullWorkItemSource) RepoID() *uuid.UUID                   { id := uuid.New(); return &id }
+func (fullWorkItemSource) RepoID() *uuid.UUID                   { return &fullWorkItemSourceRepoID }
 func (fullWorkItemSource) NativeTeamKey() *string               { return stringPointer("ENG") }
 func (fullWorkItemSource) ProjectKey() *string                  { return stringPointer("OPS") }
 func (fullWorkItemSource) ProjectID() *string                   { return stringPointer("10000") }

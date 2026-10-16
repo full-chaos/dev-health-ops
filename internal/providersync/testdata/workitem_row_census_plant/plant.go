@@ -4,6 +4,8 @@ package plant
 
 type githubWorkItemRow struct {
 	WorkItemID  string
+	Title       string
+	Labels      []string
 	ParentID    *string
 	EpicID      *string
 	DueAtAbsent bool
@@ -27,4 +29,10 @@ func bypassLinear() []linearWorkItemRow {
 	return []linearWorkItemRow{
 		{WorkItemID: "linear:ENG-1"},
 	}
+}
+
+func bypassIndirect(row *githubWorkItemRow, parent string) *string {
+	*row.ParentID = parent
+	row.Labels[0] = parent
+	return &row.Title
 }

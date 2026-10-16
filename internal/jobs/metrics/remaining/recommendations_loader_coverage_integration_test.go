@@ -52,7 +52,7 @@ SELECT '`+org+`', toDate('2026-08-20'), 'team', '`+team+`', `+score+`, '`+severi
 	start, end := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	read := func(team string) MetricsSnapshot {
 		t.Helper()
-		_, _, _, coverage, known, inputs, drivers, err := loader.loadCompoundingRiskPersisted(ctx, team, start, end)
+		_, _, _, coverage, known, inputs, drivers, _, err := loader.loadCompoundingRiskPersisted(ctx, team, start, end)
 		if err != nil {
 			t.Fatal(err)
 		}

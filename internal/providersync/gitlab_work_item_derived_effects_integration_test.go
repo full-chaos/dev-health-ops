@@ -60,7 +60,7 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 	issueType := gitlabIssueTypeMetricsDailyRow{
 		RepoID: &repoID, Day: day, Provider: "gitlab", TeamID: "payments",
 		IssueTypeNorm: "bug", CreatedCount: 1, CompletedCount: 2, ActiveCount: 3,
-		CycleP50Hours: 4, CycleP90Hours: 5, LeadP50Hours: 6, ComputedAt: now,
+		CycleP50Hours: 4, CycleP90Hours: 5, LeadP50Hours: floatPointer(6), ComputedAt: now,
 		OrgID: claim.OrgID,
 	}
 	cycle := gitlabWorkItemCycleTimePersistenceRow{

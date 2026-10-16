@@ -1054,7 +1054,9 @@ def test_an_isolated_package_key_matching_nothing_fails_loudly_and_workerservice
     (holder,) = [s for s, pkgs in by_shard.items() if "internal/workerservice" in pkgs]
     assert by_shard[holder] == ["internal/workerservice"]
     (server_holder,) = [s for s, pkgs in by_shard.items() if QAPISERVER_PACKAGE in pkgs]
-    assert by_shard[server_holder] == [QAPISERVER_PACKAGE], "queryapi/server shares a shard row with another package"
+    assert by_shard[server_holder] == [QAPISERVER_PACKAGE], (
+        "queryapi/server shares a shard row with another package"
+    )
     (remaining_holder,) = [
         s for s, pkgs in by_shard.items() if REMAINING_PACKAGE in pkgs
     ]

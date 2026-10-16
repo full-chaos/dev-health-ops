@@ -554,7 +554,7 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
 // column.
 func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 	ctx context.Context, teamID string, windowStart, windowEnd time.Time,
-) (score float64, scoreKnown bool, severity string, coverage float64, coverageKnown bool, inputs []string, drivers []string, err error) {
+) (score float64, scoreKnown bool, severity string, coverage float64, coverageKnown bool, inputs []string, drivers []string, asOfDay string, err error) {
 	// argMax over a TUPLE, so the score and the severity are taken from the
 	// SAME row. Two separate argMax calls could take them from different rows
 	// if their computed_at values ever tie, which would pair a score with
@@ -568,10 +568,11 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
                 tupleElement(latest_row, 1) AS score,
                 tupleElement(latest_row, 2) AS severity,
                 tupleElement(latest_row, 3), tupleElement(latest_row, 4), tupleElement(latest_row, 5), tupleElement(latest_row, 6),
-                tupleElement(latest_row, 7), tupleElement(latest_row, 8), tupleElement(latest_row, 9), tupleElement(latest_row, 10)
+                tupleElement(latest_row, 7), tupleElement(latest_row, 8), tupleElement(latest_row, 9), tupleElement(latest_row, 10),
+                toString(tupleElement(latest_row, 11))
             FROM (
                 SELECT argMax(tuple(compounding_risk, severity, churn_norm, complexity_norm, ownership_norm, review_norm,
-                                    w_churn, w_complexity, w_ownership, w_review), tuple(day, computed_at)) AS latest_row
+                                    w_churn, w_complexity, w_ownership, w_review, day), tuple(day, computed_at)) AS latest_row
                 FROM compounding_risk_daily
                 WHERE scope = 'team'
                   AND scope_id = {team_id:String}
@@ -581,7 +582,7 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 	rows, err := loader.conn.Query(ctx, query,
 		namedArguments(loader.windowArguments(teamID, windowStart, windowEnd))...)
 	if err != nil {
-		return 0, false, "", 0, false, nil, nil, fmt.Errorf("load compounding risk: %w", err)
+		return 0, false, "", 0, false, nil, nil, "", fmt.Errorf("load compounding risk: %w", err)
 	}
 	defer rows.Close()
 
@@ -590,9 +591,10 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 		var rawSeverity string
 		var churnNorm, complexityNorm, ownershipNorm, reviewNorm *float64
 		var wChurn, wComplexity, wOwnership, wReview float64
+		var rowDay string
 		if scanErr := rows.Scan(&rawScore, &rawSeverity, &churnNorm, &complexityNorm, &ownershipNorm, &reviewNorm,
-			&wChurn, &wComplexity, &wOwnership, &wReview); scanErr != nil {
-			return 0, false, "", 0, false, nil, nil, fmt.Errorf("scan compounding risk: %w", scanErr)
+			&wChurn, &wComplexity, &wOwnership, &wReview, &rowDay); scanErr != nil {
+			return 0, false, "", 0, false, nil, nil, "", fmt.Errorf("scan compounding risk: %w", scanErr)
 		}
 		score, scoreKnown = safeFloat(rawScore)
 		// The coverage of the score: the weights of the present component
@@ -625,9 +627,14 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 		// "", so both map to "" and no conversion is needed -- the identity is
 		// stated rather than written, because a reader checking parity against
 		// the Python `if severity else None` will look for it here.
-		return score, scoreKnown, rawSeverity, coverage, coverageKnown, inputs, drivers, rows.Err()
+		if scoreKnown {
+			asOfDay = rowDay
+			slog.Debug("recommendations.compounding_risk_basis",
+				"team_id", teamID, "as_of_day", asOfDay, "window_end", windowEnd.Format("2006-01-02"))
+		}
+		return score, scoreKnown, rawSeverity, coverage, coverageKnown, inputs, drivers, asOfDay, rows.Err()
 	}
-	return 0, false, "", 0, false, nil, nil, rows.Err()
+	return 0, false, "", 0, false, nil, nil, "", rows.Err()
 }
 
 // LoadTeamMetricsWindow ports load_team_metrics_window: every signal for one
@@ -679,7 +686,7 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
-	score, scoreKnown, severity, coverage, coverageKnown, inputs, drivers, err := scoped.loadCompoundingRiskPersisted(ctx, teamID, windowStart, windowEnd)
+	score, scoreKnown, severity, coverage, coverageKnown, inputs, drivers, asOfDay, err := scoped.loadCompoundingRiskPersisted(ctx, teamID, windowStart, windowEnd)
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
@@ -713,6 +720,7 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 		CompoundingRiskCoverageKnown: coverageKnown,
 		CompoundingRiskInputs:        inputs,
 		CompoundingRiskDrivers:       drivers,
+		CompoundingRiskAsOfDay:       asOfDay,
 	}, nil
 }
 

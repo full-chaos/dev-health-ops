@@ -165,7 +165,7 @@ func TestOwnWriterMarkersAreTheLiveKeyColumnsOfTheWriters(t *testing.T) {
 	for table, columns := range ownWriterMarkers {
 		var clauses []string
 		for _, column := range columns {
-			clauses = append(clauses, "argMax("+column+", computed_at) != 0")
+			clauses = append(clauses, NewestValue(column, "")+" != 0")
 		}
 		statement := "FROM " + table + "\n"
 		at := strings.Index(source, statement)

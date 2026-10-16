@@ -95,7 +95,7 @@ func TestComputeWorkItemCompletionDailyChurnIsTheSizeOfTheLinkedPullRequests(t *
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(rows) != 1 || rows[0].WorkItemsCompleted != 4 || rows[0].ChurnLOC != 170 {
+			if len(rows) != 1 || rows[0].WorkItemsCompleted != 4 || churnOf(rows[0]) != 170 {
 				t.Fatalf("rows = %+v, want one row with 4 completed items and churn_loc 170 (160 + 10)", rows)
 			}
 		})
@@ -118,12 +118,12 @@ func TestComputeWorkItemCompletionDailyChurnIsPerTeamRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 || rows[0].TeamID != "team-a" || rows[0].ChurnLOC != 11 || rows[1].TeamID != "team-b" || rows[1].ChurnLOC != 22 {
+	if len(rows) != 2 || rows[0].TeamID != "team-a" || churnOf(rows[0]) != 11 || rows[1].TeamID != "team-b" || churnOf(rows[1]) != 22 {
 		t.Fatalf("rows = %+v, want team-a 11 and team-b 22", rows)
 	}
 }
 
-func TestComputeWorkItemCompletionDailyChurnIsZeroWithNoLinkedPullRequest(t *testing.T) {
+func TestComputeWorkItemCompletionDailyChurnIsNullWithNoLinkedPullRequest(t *testing.T) {
 	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 	repo := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	items := []Item{{WorkItemID: "1", Provider: "github", RepoID: &repo,
@@ -132,8 +132,8 @@ func TestComputeWorkItemCompletionDailyChurnIsZeroWithNoLinkedPullRequest(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].WorkItemsCompleted != 1 || rows[0].ChurnLOC != 0 {
-		t.Fatalf("rows = %+v, want one row with 1 completed item and churn_loc 0", rows)
+	if len(rows) != 1 || rows[0].WorkItemsCompleted != 1 || rows[0].ChurnLOC != nil {
+		t.Fatalf("rows = %+v, want one row with 1 completed item and a NULL churn_loc (no data, CHAOS-9920)", rows)
 	}
 }
 
@@ -166,7 +166,38 @@ func TestComputeWorkItemCompletionDailyChurnCountsTheKnownPartOfAPartialSize(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].ChurnLOC != 19 {
+	if len(rows) != 1 || churnOf(rows[0]) != 19 {
 		t.Fatalf("rows = %+v, want churn_loc 19", rows)
+	}
+}
+
+// churnOf is the churn of a row, -1 for NULL (no data), so a comparison with a number never reads NULL as 0.
+func churnOf(row WorkItemCompletionDailyRow) int {
+	if row.ChurnLOC == nil {
+		return -1
+	}
+	return *row.ChurnLOC
+}
+
+func TestComputeWorkItemCompletionDailyChurnNullIsNoSizedPullRequestAndZeroIsData(t *testing.T) {
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	repo := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	completed := timePointer(day.Add(time.Hour))
+	for name, links := range map[string]struct {
+		prs  []LinkedPR
+		want int
+	}{
+		"a linked pull request with no size is no data":  {[]LinkedPR{linkedPR(repo, 1, LinkTierNative, nil, nil)}, -1},
+		"a sized pull request of 0 lines is a real zero": {[]LinkedPR{linkedPR(repo, 1, LinkTierNative, lines(0), lines(0))}, 0},
+	} {
+		items := []Item{{WorkItemID: "1", Provider: "github", RepoID: &repo,
+			CreatedAt: day.AddDate(0, 0, -1), CompletedAt: completed, LinkedPRs: links.prs}}
+		rows, err := ComputeWorkItemCompletionDaily(items, day, day.AddDate(0, 0, 1), teams(""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || churnOf(rows[0]) != links.want {
+			t.Errorf("%s: rows = %+v, churn %d, want %d (-1 is NULL)", name, rows, churnOf(rows[0]), links.want)
+		}
 	}
 }

@@ -774,3 +774,47 @@ func TestSustainabilityRiskSlopeIsPerCalendarDay(t *testing.T) {
 		t.Error("mismatched day list: want an error")
 	}
 }
+
+// The rationale names the day of the row the score was read from (CHAOS-9885).
+// The window end is exclusive, so a rule run for a window ending on day N
+// reads day N-1: the rationale must say so instead of letting the score read
+// as today's. The sentence comes AFTER the score sentence so a reader of the
+// score sentence alone is unaffected.
+func TestCompoundingRiskRationaleNamesTheDayOfTheScore(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	snapshot := MetricsSnapshot{
+		TeamID: "team-1", OrgID: "org-1", WindowStart: now.AddDate(0, 0, -14), WindowEnd: now,
+		CompoundingRiskScore: 0.7389, CompoundingRiskScoreKnown: true, CompoundingRiskSeverity: "high",
+		CompoundingRiskCoverage: 0.5, CompoundingRiskCoverageKnown: true,
+		CompoundingRiskInputs:  []string{"churn", "review latency"},
+		CompoundingRiskDrivers: []string{"churn"},
+		CompoundingRiskAsOfDay: "2026-10-14",
+	}
+	got, err := evaluateCompoundingRisk(snapshot, now)
+	if err != nil || got == nil {
+		t.Fatalf("as-of day: %v %v", got, err)
+	}
+	const want = "Compounding Risk score is 0.739 (severity: high), computed from 50% of its inputs (churn, review latency). Score as of 2026-10-14. Churn is compounding above its tuned threshold."
+	if got.Rationale != want {
+		t.Errorf("got %q\nwant %q", got.Rationale, want)
+	}
+
+	snapshot.CompoundingRiskDrivers = nil
+	snapshot.CompoundingRiskCoverage = 1
+	got, err = evaluateCompoundingRisk(snapshot, now)
+	if err != nil || got == nil {
+		t.Fatalf("as-of day, no drivers: %v %v", got, err)
+	}
+	if want := "Compounding Risk score is 0.739 (severity: high). Score as of 2026-10-14."; got.Rationale != want {
+		t.Errorf("got %q\nwant %q", got.Rationale, want)
+	}
+
+	snapshot.CompoundingRiskAsOfDay = ""
+	got, err = evaluateCompoundingRisk(snapshot, now)
+	if err != nil || got == nil {
+		t.Fatalf("unknown day: %v %v", got, err)
+	}
+	if want := "Compounding Risk score is 0.739 (severity: high)."; got.Rationale != want {
+		t.Errorf("an unknown day must stay unnamed: got %q want %q", got.Rationale, want)
+	}
+}

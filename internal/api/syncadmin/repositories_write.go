@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+
 	"math/big"
 	"net/http"
 	"sort"
@@ -20,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
@@ -606,7 +608,10 @@ func (h *handlers) resolveGitLabProjects(ctx context.Context, tx pgx.Tx, org str
 		if err != nil {
 			var clientErr *gitlabcode.Error
 			if len(named) > 0 && errors.As(err, &clientErr) {
-				return nil, "", refuse(http.StatusBadRequest, fmt.Sprintf("Failed to list GitLab projects for group '%s': %s", group, clientErr.Message))
+				h.logger.ErrorContext(ctx, "GitLab batch create: failed to list projects for group",
+					slog.String("group", group), slog.String("class", clientErr.Class),
+					slog.String("request_id", httpapi.RequestIDFrom(ctx)), slog.String("error", clientErr.Message))
+				return nil, "", refuse(http.StatusBadRequest, fmt.Sprintf("Failed to list GitLab projects for group '%s'", group))
 			}
 			if len(named) > 0 {
 				return nil, "", err

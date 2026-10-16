@@ -28,7 +28,7 @@ var webPathSmokeLegacyOperations = map[string][]string{
 	"home": {
 		registeredHomeV1Document, registeredHomeV2Document, registeredHomeV3Document, registeredHomeV4Document,
 		registeredHomeV5Document, registeredHomeV6Document, registeredHomeV7Document, registeredHomeV8Document,
-		registeredHomeV9Document, registeredHomeV10Document, registeredHomeV11Document, registeredHomeV12Document,
+		registeredHomeV9Document, registeredHomeV10Document, registeredHomeV11Document, registeredHomeV12Document, registeredHomeV13Document,
 	},
 }
 

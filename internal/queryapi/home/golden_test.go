@@ -158,6 +158,10 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 				{"ci", time.Date(2024, 1, 7, 9, 0, 0, 0, time.UTC)},
 			}}, nil
 
+		case strings.Contains(q, "AS sized_units"):
+			// The sizing of the tile's units (CHAOS-9624): 3 of 10 units carry an issue size.
+			return &fixtureRowScanner{rows: [][]any{{uint64(3), uint64(10)}}}, nil
+
 		case strings.Contains(q, "splitByChar('.', subcategory_kv.1)[1] AS theme"):
 			// The Home tile "Investment by theme" (CHAOS-9195): theme, effort, churn_loc, prs
 			// of the canonical categorization (allocation 100/50, prs 20/10, churn 500/300).
@@ -302,6 +306,20 @@ func assertResponseEqual(t *testing.T, got, want Response) {
 		}
 		got.Deltas[i].PriorValue = nil
 	}
+	// CHAOS-9624: the tile's measure fields are GraphQL only (json "-"): the golden cannot hold them. The
+	// tile is measured in WORK_UNITS by default, with the denominator its percentages divide by and no sizing.
+	got.ReworkThemeAllocation = append([]ReworkThemeAllocation{}, got.ReworkThemeAllocation...)
+	total := 0.0
+	for _, row := range got.ReworkThemeAllocation {
+		total += row.Allocation
+	}
+	for i := range got.ReworkThemeAllocation {
+		row := &got.ReworkThemeAllocation[i]
+		if row.Measure != "WORK_UNITS" || row.Denominator != total || row.SizingCoverage != nil || row.UnsizedUnitCount != nil || row.WorkUnitCount != nil {
+			t.Errorf("theme %s measure fields = %+v, want WORK_UNITS over denominator %v and no sizing", row.Theme, *row, total)
+		}
+		row.Measure, row.Denominator = "", 0
+	}
 	got.Signals = append([]Signal(nil), got.Signals...)
 	for i := range got.Signals {
 		got.Signals[i].ClaimSubject = ""
@@ -391,4 +409,33 @@ func TestChangeFailureEvidenceOfAWindowWithNothingStoredNamesTheReason(t *testin
 		return
 	}
 	t.Fatal("no change_failure_rate delta")
+}
+
+// CHAOS-9624: a caller that serves the sizing coverage asks for the tile in ISSUE_SIZE (Filters.TileMeasure): the
+// rows carry the measure and the sizing of the fixture (3 of 10 units sized); an unknown name is the default.
+func TestTileMeasureIssueSizeCarriesTheSizingOfTheUnits(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: orgGoldenHandler(t)}
+	now := time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC)
+	for measure, want := range map[string]string{"ISSUE_SIZE": "ISSUE_SIZE", "": "WORK_UNITS", "CHURN_LOC": "WORK_UNITS"} {
+		got, err := BuildResponse(context.Background(), client, nil, "org-1", Filters{
+			Time:        TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
+			Scope:       ScopeFilter{Level: "org"},
+			TileMeasure: measure,
+		}, now)
+		if err != nil {
+			t.Fatalf("BuildResponse(%q): %v", measure, err)
+		}
+		if len(got.ReworkThemeAllocation) == 0 {
+			t.Fatalf("%q: no theme rows", measure)
+		}
+		for _, row := range got.ReworkThemeAllocation {
+			if row.Measure != want {
+				t.Errorf("%q: theme %s measure = %s, want %s", measure, row.Theme, row.Measure, want)
+			}
+			sized := row.SizingCoverage != nil && *row.SizingCoverage == 0.3 && row.UnsizedUnitCount != nil && *row.UnsizedUnitCount == 7 && row.WorkUnitCount != nil && *row.WorkUnitCount == 10
+			if sized != (want == "ISSUE_SIZE") {
+				t.Errorf("%q: theme %s sizing = %v/%v/%v", measure, row.Theme, row.SizingCoverage, row.UnsizedUnitCount, row.WorkUnitCount)
+			}
+		}
+	}
 }

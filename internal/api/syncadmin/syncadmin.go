@@ -168,7 +168,8 @@ func orgID(r *http.Request) string { return policy.UserFrom(r.Context()).OrgID }
 // bare 500.
 func (h *handlers) fail(w http.ResponseWriter, r *http.Request, step string, err error) {
 	h.logger.ErrorContext(r.Context(), "sync admin: request failed",
-		slog.String("route", r.Pattern), slog.String("step", step), slog.String("error", err.Error()))
+		slog.String("route", r.Pattern), slog.String("step", step), slog.String("request_id", r.Header.Get("X-Request-Id")),
+		slog.String("error", err.Error()))
 	policy.WriteInternal(w)
 }
 

@@ -103,9 +103,8 @@ type GoServedEntry struct {
 	// EnableLimit names why the deployed-executed proof run can never be
 	// recorded for this operation at a production build (for example its
 	// route admits only an administrator, and the proof principal never is
-	// one). It may sit beside a two-plane sha. With UnprovenReason it is the
-	// only thing that lets `enable` write a row for an operation that has no
-	// store proof: see EnableLimitReason.
+	// one). It may sit beside a two-plane sha. `enable` no longer reads it:
+	// a class root is enabled without a proof run (D6024).
 	EnableLimit string `json:"enable_limit,omitempty"`
 	// BornInGo marks an operation that never had a Python counterpart (its
 	// resolver or document was written for the Go plane). The only comparison
@@ -213,25 +212,6 @@ func (l *GoServedLedger) Entry(operation string) (GoServedEntry, bool) {
 		}
 	}
 	return GoServedEntry{}, false
-}
-
-// EnableLimitReason is the written reason the ledger gives for enabling
-// operation without a store proof run, or "" and false when it gives none.
-// `enable` admits an unproven operation only through this: the ledger is
-// compiled into the binary, so the set cannot be widened by anything an
-// operator passes on a command line.
-func (l *GoServedLedger) EnableLimitReason(operation string) (string, bool) {
-	entry, ok := l.Entry(operation)
-	if !ok {
-		return "", false
-	}
-	switch {
-	case strings.TrimSpace(entry.EnableLimit) != "":
-		return entry.EnableLimit, true
-	case strings.TrimSpace(entry.UnprovenReason) != "":
-		return entry.UnprovenReason, true
-	}
-	return "", false
 }
 
 // BornInGo reports whether the ledger marks operation as never having had a

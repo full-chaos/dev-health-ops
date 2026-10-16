@@ -5,7 +5,7 @@ package routing
 // Nothing is typed but operation names. The schema digest comes from the running query-api's /registry (which must
 // agree with this binary's SDL), the build from /buildinfo. It needs Postgres, /registry (unauthenticated) and
 // /buildinfo (envelope minted in process) -- not the internal listener and not the proof allowlist. A shadow decision
-// alone routes no client anywhere; shadow->canary is still `enable`, behind its per-root receipt.
+// alone routes no client anywhere; shadow->canary is still `enable`.
 
 import (
 	"context"

@@ -1,20 +1,16 @@
 package goapiproof
 
-// The MCP class decision (CHAOS-8735, owner ruling D4797): whether `mcp:<root>` is served, held in shadow for
-// the proof route, or dark is ONE row per operation in go_api_class_decision, never a row keyed to a schema
-// digest. The class switch, the proof switch, `status`, `enable`, `disable`, `seed` and `repoint` all read and
-// write this table, so a schema change cannot change what any of them sees. `decided_at` is set by the
-// database when a verb changes the mode; `repoint` rewrites current_candidate_build and nothing else.
-//
-// What stays digest-keyed is the PROOF: a receipt is a fact about a build at a schema digest, and `enable`
-// still requires one at the live digest before it writes a decision.
+// The MCP class decision (CHAOS-8735, owner ruling D4797): whether `mcp:<root>` is served or dark is ONE row per
+// operation in go_api_class_decision, never a row keyed to a schema digest. The class switch, `status`, `enable`,
+// `disable` and `seed` all read and write this table, so a schema change cannot change what any of them sees.
+// `decided_at` is set by the database when a verb changes the mode. There is no proof in front of `enable` (D6024):
+// MCP and GraphQL parity is the CI step TestMCPClassParityVenueOracle.
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -54,15 +50,6 @@ UPDATE public.go_api_class_decision
        decided_at = now()
  WHERE operation = $1
    AND ($4::text IS NULL OR current_candidate_build = $4)`
-
-// classDecisionRepointSQL rewrites the build the decision names. It never touches mode or decided_at: a
-// provenance write is not a decision.
-const classDecisionRepointSQL = `
-UPDATE public.go_api_class_decision
-   SET current_candidate_build = $2,
-       review_evidence = $3,
-       recorded_by = $4
- WHERE operation = $1`
 
 // ClassDecision is one operation's decision.
 type ClassDecision struct {
@@ -224,91 +211,4 @@ ON CONFLICT (operation) DO NOTHING`,
 	}
 	outcome.Action = SeedActionCreated
 	return outcome, nil
-}
-
-// repointClassDecisions points every (or each named) class decision at the running build, provenance only.
-func repointClassDecisions(ctx context.Context, pool *pgxpool.Pool, request RepointRequest, named []string) ([]RepointOutcome, error) {
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("goapiproof: begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	rows, err := tx.Query(ctx, `
-		SELECT operation, mode, current_candidate_build
-		  FROM public.go_api_class_decision
-		 ORDER BY operation
-		   FOR UPDATE`)
-	if err != nil {
-		return nil, fmt.Errorf("goapiproof: read the MCP class decisions: %w", err)
-	}
-	wanted := map[string]bool{}
-	for _, operation := range named {
-		wanted[operation] = true
-	}
-	var outcomes []RepointOutcome
-	found := map[string]bool{}
-	for rows.Next() {
-		var operation, mode, build string
-		if err := rows.Scan(&operation, &mode, &build); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("goapiproof: scan an MCP class decision: %w", err)
-		}
-		if len(wanted) > 0 && !wanted[operation] {
-			continue
-		}
-		found[operation] = true
-		outcomes = append(outcomes, RepointOutcome{
-			Operation: operation, DocumentDigest: mcpclass.DocumentDigest(),
-			ModeBefore: mode, ModeAfter: mode, BuildFrom: build, BuildTo: request.RunningBuild, Changed: build != request.RunningBuild,
-		})
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("goapiproof: read the MCP class decisions: %w", err)
-	}
-	var missing []string
-	for operation := range wanted {
-		if !found[operation] {
-			missing = append(missing, operation)
-		}
-	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return nil, fmt.Errorf("%w: %s have no class decision", ErrRepointUnknownOperation, strings.Join(missing, ", "))
-	}
-	if request.DryRun {
-		return outcomes, nil
-	}
-	now := time.Now().UTC()
-	audit := RoutingAudit{
-		Action:          AuditActionRepoint,
-		CredentialClass: CredentialClassEnvelope,
-		PrincipalID:     request.PrincipalID,
-		RecordedBy:      request.RecordedBy,
-		ReviewEvidence:  request.ReviewEvidence,
-		SchemaDigest:    request.SchemaDigest,
-	}
-	for _, outcome := range outcomes {
-		if !outcome.Changed {
-			continue
-		}
-		if _, err := tx.Exec(ctx, classDecisionRepointSQL, outcome.Operation, request.RunningBuild, request.ReviewEvidence, request.RecordedBy); err != nil {
-			return nil, fmt.Errorf("goapiproof: repoint %s: %w", outcome.Operation, err)
-		}
-		before, mode := outcome.BuildFrom, outcome.ModeBefore
-		audit.Entries = append(audit.Entries, RoutingAuditEntry{
-			DocumentDigest: outcome.DocumentDigest, Operation: outcome.Operation,
-			CandidateBuildBefore: &before, CandidateBuildAfter: request.RunningBuild, ModeBefore: &mode, ModeAfter: mode,
-		})
-	}
-	if len(audit.Entries) > 0 {
-		if _, err := writeRoutingAudit(ctx, tx, audit, now); err != nil {
-			return nil, err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("goapiproof: commit: %w", err)
-	}
-	return outcomes, nil
 }

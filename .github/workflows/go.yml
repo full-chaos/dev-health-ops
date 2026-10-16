@@ -143,6 +143,8 @@ on:
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
       - 'ci/bigboy/compose.bigboy.*.yml'
+      - 'ci/bigboy/compose.bigboy.yml'
+      - 'ci/bigboy/images.env'
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
@@ -345,6 +347,8 @@ on:
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
       - 'ci/bigboy/compose.bigboy.*.yml'
+      - 'ci/bigboy/compose.bigboy.yml'
+      - 'ci/bigboy/images.env'
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.

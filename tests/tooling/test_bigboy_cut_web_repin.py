@@ -37,7 +37,7 @@ def test_web_repin_runs_after_repin_and_before_migrate_up() -> None:
     lines = _lines(CUT)
     repin_at = _first(lines, "bigboy-repin.sh")
     web_repin_at = _first(lines, "bigboy-repin-web.sh", start=repin_at)
-    migrate_at = _first(lines, 'stack.sh" run migrate', start=web_repin_at)
+    migrate_at = _first(lines, "run --rm --no-deps -T migrate", start=web_repin_at)
     assert repin_at < web_repin_at < migrate_at, (
         f"web repin (line {web_repin_at + 1}) must run after the ops image repin "
         f"(line {repin_at + 1}) and before migrate (line {migrate_at + 1})"
@@ -46,10 +46,8 @@ def test_web_repin_runs_after_repin_and_before_migrate_up() -> None:
 
 def test_up_recreates_web_alongside_the_other_pinned_images() -> None:
     lines = _lines(CUT)
-    up_at = _first(lines, 'stack.sh" up query-api go-api')
-    up_line = lines[
-        up_at
-    ]  # stack.sh up always passes --no-deps --no-build (tests/tooling/test_bigboy_stack_sh.py)
+    up_at = _first(lines, "up -d --no-deps --no-build query-api go-api")
+    up_line = lines[up_at]  # the cut's up always passes --no-deps --no-build
     tokens = up_line.split()
     assert "web" in tokens[tokens.index("go-api") : tokens.index("go-api") + 2], (
         f"`web` must be recreated in the same up invocation as query-api/go-api: {up_line!r}"
@@ -106,9 +104,9 @@ def _run_repin(
     tag of `image_for` and logs its call. Returns (completed process, overlay text, calls log text)."""
     root = tmp_path / "root"
     (root / "_records").mkdir(parents=True)
-    overlay = root / "_records" / "compose.bigboy.images.yml"
+    overlay = root / "_records" / "images.env"
     overlay.write_text(
-        f"services:\n  web:\n    image: ghcr.io/full-chaos/dev-health-web@{OLD_DIGEST}\n"
+        f"BIGBOY_WEB_IMAGE=ghcr.io/full-chaos/dev-health-web@{OLD_DIGEST}\n"
     )
     bindir = tmp_path / "bin"
     bindir.mkdir()

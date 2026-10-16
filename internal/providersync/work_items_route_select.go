@@ -71,7 +71,7 @@ func SelectWorkItemsRouteHandler(provider, dataset string, deps WorkItemsRouteDe
 		// only lower the ceiling (the route clamps it), never raise it.
 		return GitLabWorkItemsRouteHandler{
 			StatusMapping: deps.StatusMapping,
-			FetchEpics:    pythonEnvFlag(gitLabFetchEpicsEnv),
+			FetchEpics:    gitLabFetchEpicsFromEnv(),
 		}, true
 	case "jira":
 		return JiraAtlassianRouteHandler{StatusMapping: deps.StatusMapping}, true

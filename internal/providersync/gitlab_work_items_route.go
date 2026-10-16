@@ -119,11 +119,18 @@ func gitLabWorkItemsFlag(value *bool) bool { return value == nil || *value }
 // reads to link issues to epics (providers/gitlab/provider.py:114).
 const gitLabFetchEpicsEnv = "GITLAB_FETCH_EPICS"
 
-// pythonEnvFlag is Python's env_flag (providers/utils.py): 1/true/yes/on is
-// true, 0/false/no/off is false, trimmed and case-insensitive; unset or any
-// other value is nil, so the route keeps its default.
-func pythonEnvFlag(name string) *bool {
-	raw, ok := os.LookupEnv(name)
+// gitLabFetchEpicsFromEnv reads GITLAB_FETCH_EPICS from the worker
+// environment with Python's env_flag rule.
+func gitLabFetchEpicsFromEnv() *bool {
+	raw, ok := os.LookupEnv(gitLabFetchEpicsEnv)
+	return pythonEnvFlag(gitLabFetchEpicsEnv, raw, ok)
+}
+
+// pythonEnvFlag is Python's env_flag (providers/utils.py) on a value the
+// caller read: 1/true/yes/on is true, 0/false/no/off is false, trimmed and
+// case-insensitive; unset or any other value is nil, so the route keeps its
+// default.
+func pythonEnvFlag(name, raw string, ok bool) *bool {
 	if !ok {
 		return nil
 	}

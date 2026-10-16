@@ -15,7 +15,7 @@ same() { # <tracked> <host> <strict>
 }
 same "$HERE/compose.bigboy.base.yml" "$R/compose.yml" strict
 same "$HERE/compose.bigboy.go-workers.yml" "$R/compose/compose.go.workers.yml" strict
-host_pin="$R/compose/compose.bigboy.images.yml"
+host_pin="$R/_records/compose.bigboy.images.yml"
 if [ -f "$host_pin" ] && diff -q <(grep -vE '^[[:space:]]*#' "$HERE/compose.bigboy.images.yml") <(grep -vE '^[[:space:]]*#' "$host_pin") >/dev/null; then
   echo "SAME pin file (non-comment lines)"
 else

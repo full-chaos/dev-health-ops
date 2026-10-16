@@ -5,9 +5,11 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
@@ -72,5 +74,139 @@ func TestGitLabPullRequestCommitLinkEffectsWriteAndReadBackNativeRows(t *testing
 	githubSink := GitHubPullRequestSocialClickHouseEffects{Conn: conn, Lease: sink.Lease}
 	if err := githubSink.WriteEffect(ctx, github, effect); err == nil {
 		t.Fatal("a github unit wrote merge request commit links")
+	}
+}
+
+func TestGitLabPullRequestCommitLinkInspectionIgnoresALaterTextTierRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	claim := nativeTestClaim("gitlab", "prs")
+	repoID := "11111111-2222-4333-8444-555555555555"
+	effectAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	raw, err := json.Marshal(prCommitLinkRow{
+		RepoID: repoID, PRNumber: 7, CommitHash: "c0ffee01", Confidence: 1,
+		Provenance: "native", Evidence: "api_pr_commits", LastSynced: effectAt, OrgID: claim.OrgID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect, err := BuildEffectBatch("work_graph_pr_commit", EffectReadbackRequired, []json.RawMessage{raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO work_graph_pr_commit (repo_id, pr_number, commit_hash, confidence, provenance, evidence, last_synced, org_id)
+VALUES (?, 7, 'c0ffee01', 0.9, 'explicit_text', 'text', ?, ?)`,
+		repoID, effectAt.Add(time.Second), claim.OrgID); err != nil {
+		t.Fatal(err)
+	}
+	sink := GitLabPullRequestSocialClickHouseEffects{
+		Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	}
+	if inspection, err := sink.InspectEffect(ctx, claim, effect); err != nil || inspection != EffectAbsent {
+		t.Fatalf("text-tier row counted as the native effect: inspection=%s error=%v", inspection, err)
+	}
+}
+
+// The data step of migration 132 through the real native writer: a pair whose native row the old engine merged away
+// serves explicit_text after the migration, and the GitLab native effect (the write a re-sync makes) restores native.
+func TestGitLabNativeResyncRestoresALinkTheOldEngineLostToTheTextTier(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	claim := nativeTestClaim("gitlab", "prs")
+	repoID := "11111111-2222-4333-8444-555555555555"
+	run := func(path string) {
+		t.Helper()
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, statement := range chmigrate.SplitStatements(string(body)) {
+			if err := conn.Exec(ctx, statement); err != nil {
+				t.Fatalf("%s: %v", statement, err)
+			}
+		}
+	}
+	served := func() string {
+		t.Helper()
+		var provenance string
+		if err := conn.QueryRow(ctx, `SELECT any(provenance) FROM work_graph_pr_commit FINAL WHERE org_id = ? AND pr_number = 7 AND commit_hash = 'c0ffee01'`, claim.OrgID).Scan(&provenance); err != nil {
+			t.Fatal(err)
+		}
+		return provenance
+	}
+
+	run("../chmigrate/rollback/132_pr_commit_native_wins.down.sql")
+	for _, row := range [][3]string{{"native", "api_pr_commits", "2026-10-15 10:00:01"}, {"explicit_text", "commit_message", "2026-10-15 10:00:02"}} {
+		if err := conn.Exec(ctx, `INSERT INTO work_graph_pr_commit (repo_id, pr_number, commit_hash, confidence, provenance, evidence, last_synced, org_id) VALUES (?, 7, 'c0ffee01', 1, ?, ?, ?, ?)`,
+			repoID, row[0], row[1], row[2], claim.OrgID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := conn.Exec(ctx, `OPTIMIZE TABLE work_graph_pr_commit FINAL`); err != nil {
+		t.Fatal(err)
+	}
+	run("../chmigrate/sql/132_pr_commit_native_wins.sql")
+	if got := served(); got != "explicit_text" {
+		t.Fatalf("after the migration the lost pair serves %s, want explicit_text", got)
+	}
+
+	raw, err := json.Marshal(prCommitLinkRow{
+		RepoID: repoID, PRNumber: 7, CommitHash: "c0ffee01", Confidence: 1,
+		Provenance: "native", Evidence: "api_pr_commits", LastSynced: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC), OrgID: claim.OrgID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect, err := BuildEffectBatch("work_graph_pr_commit", EffectReadbackRequired, []json.RawMessage{raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := GitLabPullRequestSocialClickHouseEffects{
+		Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	}
+	if inspection, err := sink.InspectEffect(ctx, claim, effect); err != nil || inspection != EffectAbsent {
+		t.Fatalf("before the re-sync write: inspection=%s error=%v", inspection, err)
+	}
+	if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+		t.Fatal(err)
+	}
+	if got := served(); got != "native" {
+		t.Fatalf("after the native re-sync write the pair serves %s, want native", got)
+	}
+	if inspection, err := sink.InspectEffect(ctx, claim, effect); err != nil || inspection != EffectExact {
+		t.Fatalf("after the re-sync write: inspection=%s error=%v", inspection, err)
 	}
 }

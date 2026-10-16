@@ -1,7 +1,7 @@
 """CHAOS-8693: stack.files is the one list of the bigboy compose chain.
 
-Golden: every set in stack.files equals, file for file and in order, the chain its legacy script builds today.
-Guard: no new bigboy overlay file and no new raw `-f` / COMPOSE_FILE chain appears outside stack.files.
+Structure: the one-off sets are the stack chain plus their overlay; smoke and prove are prefixes of it; the only
+root-relative entry is the per-cut image pin file. Guard: no new bigboy overlay file and no new raw `-f` / COMPOSE_FILE chain appears outside stack.files.
 """
 
 from __future__ import annotations
@@ -13,17 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 BIGBOY = ROOT / "ci" / "bigboy"
 LIST = BIGBOY / "stack.files"
 
-# Legacy scripts that still build their own chain, with the number of raw-chain lines each has today. Switching one
-# to stack.sh lowers its number; no number may rise and no script may be added.
-LEGACY_CHAIN_LINES = {
-    "bigboy-cut.sh": 2,
-    "bigboy-graphql-prove.sh": 3,
-    "bigboy-hook-check.sh": 1,
-    "bigboy-river-apply.sh": 1,
-    "web-path-smoke.sh": 3,
-}
-# compose.bigboy.images.yml is the tracked copy of the host file compose/compose.bigboy.images.yml, which the
-# chain names under the bigboy root.
+# compose.bigboy.images.yml is the tracked copy of the per-cut pin file, which the
+# chain names under the bigboy root as _records/compose.bigboy.images.yml.
 UNLISTED_OVERLAYS = {"compose.bigboy.images.yml"}
 
 
@@ -74,75 +65,74 @@ def _resolved_lines(name: str) -> list[tuple[str, str]]:
     return lines + [(k, v) for k, v in raw[name] if k != "include"]
 
 
-# The legacy scripts still name the two static host files; stack.files names their tracked copies (content equality
-# with the host files is check-host-copies.sh's job: the host files are not in this repo).
-_TRACKED_COPY = {
-    "compose.yml": "$HERE/compose.bigboy.base.yml",
-    "compose/compose.go.workers.yml": "$HERE/compose.bigboy.go-workers.yml",
-}
-# What a root entry may still be: per-cut state and the lane override, never static configuration.
-ROOT_STATE_FILES = {
-    "compose/compose.bigboy.images.yml",
-    ".remember/lanes/team-lead/reconciler-sweep-override.yml",
-}
+# What a root entry may still be: per-cut state, never static configuration.
+ROOT_STATE_FILES = {"_records/compose.bigboy.images.yml"}
 
 
-def _tracked(files: list[str]) -> list[str]:
-    return [_TRACKED_COPY.get(f, f) for f in files]
-
-
-def _dash_f(text: str) -> list[str]:
-    return [m.strip('"') for m in re.findall(r"-f\s+(\"?[^\s\")]+\"?)", text)]
-
-
-def _block(script: str, start: str) -> str:
-    text = (BIGBOY / script).read_text()
-    i = text.index(start)
-    return text[i : text.index("\n\n", i) if "\n\n" in text[i:] else len(text)]
-
-
-def test_stack_set_equals_bigboy_cut_chain() -> None:
-    match = re.search(
-        r"^export COMPOSE_FILE=(\S+)$", (BIGBOY / "bigboy-cut.sh").read_text(), re.M
+def test_the_cut_and_the_checks_call_stack_sh_and_build_no_chain() -> None:
+    cut = (BIGBOY / "bigboy-cut.sh").read_text()
+    assert "COMPOSE_FILE" not in "\n".join(
+        ln for ln in cut.splitlines() if not ln.lstrip().startswith("#")
     )
-    assert match
-    assert _files("stack") == _tracked(match.group(1).split(":"))
-
-
-def test_smoke_set_equals_web_path_smoke_chain() -> None:
-    block = _block("web-path-smoke.sh", "BASE_COMPOSE_ARGS=(")
-    block = block[: block.index(")") + 1]
-    assert _files("smoke") == _tracked(_dash_f(block))
-
-
-def test_prove_set_equals_graphql_prove_chain() -> None:
-    text = (BIGBOY / "bigboy-graphql-prove.sh").read_text()
-    base = text[text.index("BASE=(") :]
-    base = base[: base.index(")\n") + 1]
-    run = [ln for ln in text.splitlines() if 'docker compose "${BASE[@]}" -f' in ln][0]
-    assert _files("prove") == _tracked(_dash_f(base) + _dash_f(run))
-    assert "--profile venue" in base and _sets()["prove"]["profile"] == ["venue"]
-
-
-def test_hook_check_and_river_apply_sets_equal_the_chain_they_run_in_the_cut() -> None:
-    cut = re.search(
-        r"^export COMPOSE_FILE=(\S+)$", (BIGBOY / "bigboy-cut.sh").read_text(), re.M
+    for verb in (
+        '"$HERE/stack.sh" run migrate',
+        '"$HERE/stack.sh" up query-api go-api web',
+        '"$HERE/stack.sh" config',
+    ):
+        assert verb in cut, verb
+    assert '"$HERE/stack.sh" up go-worker go-worker-heavy' in cut
+    assert (
+        'stack.sh" exec clickhouse clickhouse-client'
+        in (BIGBOY / "bigboy-grants-check.sh").read_text()
     )
-    assert cut
+    assert (
+        'stack.sh" exec postgres sh -c' in (BIGBOY / "pg-grants-check.sh").read_text()
+    )
+    assert (
+        'stack.sh" exec "$CH" clickhouse-client'
+        in (BIGBOY / "check-dho-api-ch-user.sh").read_text()
+    )
+
+
+def test_smoke_and_prove_scripts_call_stack_sh_for_their_sets() -> None:
+    smoke = (BIGBOY / "web-path-smoke.sh").read_text()
+    assert (
+        'STACK=("$HERE/stack.sh" -s smoke)' in smoke
+        and '"${STACK[@]}" run web-smoke' in smoke
+    )
+    assert '"${STACK[@]}" config' in smoke
+    prove = (BIGBOY / "bigboy-graphql-prove.sh").read_text()
+    assert '"$HERE/stack.sh" -s prove-base exec postgres psql' in prove
+    assert '"$HERE/stack.sh" -s prove run venue-prove' in prove
+
+
+def test_smoke_chain_is_the_stack_chain_minus_the_worker_overlays_plus_smoke() -> None:
+    # web-path-smoke ran: base, go-workers, images, router, smoke (no workers/clickhouse-users/billing-edge)
+    stack = _files("stack")
+    assert _files("smoke") == stack[:4] + [
+        "$HERE/compose.bigboy.router.yml",
+        "$HERE/compose.bigboy.smoke.yml",
+    ]
+
+
+def test_prove_base_is_the_first_four_stack_files_with_the_venue_profile() -> None:
+    # bigboy-graphql-prove's BASE chain (used for the psql exec) and prove = BASE + the prove overlay
+    assert _files("prove-base") == _files("stack")[:4]
+    assert _sets()["prove-base"]["profile"] == ["venue"]
+    assert _files("prove") == _files("prove-base") + ["$HERE/compose.bigboy.prove.yml"]
+
+
+def test_hook_check_and_river_apply_sets_are_the_cut_chain_plus_their_overlay() -> None:
+    """They run inside the cut, on its whole chain; the scripts now call stack.sh -s <set> (CHAOS-8693)."""
     for script, name, overlay in (
         ("bigboy-hook-check.sh", "hook-check", "compose.bigboy.hook-check.yml"),
         ("bigboy-river-apply.sh", "river-apply", "compose.bigboy.river-apply.yml"),
     ):
-        m = re.search(
-            r'^export COMPOSE_FILE="\$\{COMPOSE_FILE:-(\S+)\}:(\S+)"',
-            (BIGBOY / script).read_text(),
-            re.M,
-        )
-        assert m, script
-        assert m.group(2) == f"$HERE/{overlay}"
-        # the script appends its overlay to the COMPOSE_FILE the cut exported
-        assert _files(name) == _tracked(cut.group(1).split(":")) + [m.group(2)]
+        assert _files(name) == _files("stack") + [f"$HERE/{overlay}"]
         assert _sets()[name]["profile"] == ["venue"]
+        assert f'"$HERE/stack.sh" -s {name} run' in (
+            BIGBOY / script
+        ).read_text().replace("${HC[@]}", "")
 
 
 def test_needs_cover_every_required_variable_of_each_set() -> None:
@@ -167,7 +157,7 @@ def test_needs_cover_every_required_variable_of_each_set() -> None:
         )
 
 
-def test_root_entries_are_only_per_cut_state_and_the_lane_override() -> None:
+def test_root_entries_are_only_per_cut_state() -> None:
     for name in _raw():
         roots = {v for k, v in _resolved_lines(name) if k == "root"}
         assert roots <= ROOT_STATE_FILES, (name, sorted(roots - ROOT_STATE_FILES))
@@ -220,13 +210,9 @@ def _raw_chain_lines(directory: Path) -> dict[str, int]:
 
 def test_no_new_raw_chain_outside_stack_files() -> None:
     found = _raw_chain_lines(BIGBOY)
-    grown = {k: v for k, v in found.items() if v > LEGACY_CHAIN_LINES.get(k, 0)}
-    assert not grown, (
-        f"more raw compose -f / COMPOSE_FILE chain lines than today in {grown}: "
+    assert not found, (
+        f"raw compose -f / COMPOSE_FILE chain in {found}: "
         "add the files to ci/bigboy/stack.files and call ci/bigboy/stack.sh"
-    )
-    assert found == LEGACY_CHAIN_LINES, (
-        f"a legacy script changed its raw-chain line count: lower the number in LEGACY_CHAIN_LINES to {found}"
     )
 
 

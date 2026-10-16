@@ -16,6 +16,7 @@ func TestMigrationVersionRanksAreTheExportedRanks(t *testing.T) {
 	}
 	for path, args := range map[string][2]string{
 		"../../../chmigrate/sql/131_deployment_incident_edges_repo_key.sql": {"source", "computed_at"},
+		"../../../chmigrate/sql/132_pr_commit_native_wins.sql":              {"provenance", "last_synced"},
 		"../../../chmigrate/baseline/head.json":                             {"provenance", "last_synced"},
 	} {
 		body, err := os.ReadFile(path)

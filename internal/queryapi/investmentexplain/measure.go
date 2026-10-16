@@ -7,15 +7,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 )
 
-// InvestmentShareMeasure is THE measure the investment shares of the REST investment endpoint
-// (breakdown and sunburst), the Home tile "Investment by theme" and the Operating Review investment
-// section are read in (CHAOS-9622, D5999): the Investment page's COUNT. Lines of code are not a
-// measure of effort and Investment offers no lines-of-code option (CHAOS-9695, D6014), so a share is
-// never weighted by a unit's effort_value.
+// The measure each Investment surface reads its shares in: the ONE place that names them; no caller names a
+// measure of its own. Lines of code are not a measure of effort and Investment offers no lines-of-code option
+// (CHAOS-9695, D6014), so a share is never weighted by a unit's effort_value.
 //
-// It is the ONE place that names the measure. Sizing the work by issue size (CHAOS-9619) changes
-// this value and adds a case to MeasureValueSQL; no caller names a measure of its own.
-const InvestmentShareMeasure = MeasureCount
+// ISSUE_SIZE (D5999) weighs each unit by its issue size, 1 when unsized, and is served only by a surface that
+// carries its sizing coverage in the same answer (D6027): the REST investment response (sizing_coverage,
+// unsized_unit_count, sizing_note) and the explanation (on each finding). The surfaces that carry no coverage yet
+// stay on COUNT (each unit 1): the Home tile (CHAOS-9624 adds its coverage) and the sunburst and the Operating
+// Review (their own sub-issue).
+const (
+	RESTInvestmentMeasure     = MeasureIssueSize
+	ExplanationDefaultMeasure = MeasureIssueSize
+	HomeTileMeasure           = MeasureCount
+	SunburstMeasure           = MeasureCount
+	OperatingReviewMeasure    = MeasureCount
+)
 
 // ErrMeasureRequired is returned by a read whose BreakdownFilters name no measure, or one the read
 // does not know. There is no default: a read that fell back to a weight would fall back to the

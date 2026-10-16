@@ -51,6 +51,9 @@ func listTeamsInScope(ctx context.Context, client QueryClient, orgID string, sel
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("quadrant: list teams in scope rows: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("quadrant: list teams in scope close: %w", err)
+	}
 	return out, nil
 }
 

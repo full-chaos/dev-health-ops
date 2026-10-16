@@ -143,7 +143,7 @@ func TestAFailedTeamCatalogReadFailsTheRequest(t *testing.T) {
 
 func TestTheNoDataPointIsNullOnTheWireAndPlottedPointsKeepTheirBytes(t *testing.T) {
 	var calls teamCatalogCalls
-	client := idleFixture([][]any{{"team-b", "Beta"}}, &calls, nil)
+	client := idleFixture([][]any{{"team-a", "team-a"}, {"team-b", "Beta"}}, &calls, nil)
 	client.t = t
 	resp, err := BuildResponse(context.Background(), client, "org-1", idleParams("wip_throughput", "team"))
 	if err != nil {
@@ -161,7 +161,29 @@ func TestTheNoDataPointIsNullOnTheWireAndPlottedPointsKeepTheirBytes(t *testing.
 	if !strings.Contains(text, `"entity_id":"team-b","entity_label":"Beta","x":null,"y":null,`) || !strings.Contains(text, `"no_data":true`) {
 		t.Errorf("no-data point not null on the wire: %s", text)
 	}
+	if !strings.Contains(text, `"entity_id":"team-a","entity_label":"team-a","x":5.0,"y":5.0,`) {
+		t.Errorf("plotted point lost its value or key order: %s", text)
+	}
 	if strings.Count(text, "no_data") != 1 {
 		t.Errorf("no_data must appear on the idle point only: %s", text)
+	}
+}
+
+type closeFailScanner struct{ fixtureRowScanner }
+
+func (s *closeFailScanner) Close() error { return errors.New("close failed") }
+
+func TestAFailedCatalogScannerCloseFailsTheRequest(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "is_active = 1") && strings.Contains(query, "name AS team_name") {
+			return &closeFailScanner{fixtureRowScanner{rows: [][]any{{"team-b", "Beta"}}}}, nil
+		}
+		if strings.Contains(query, "SELECT toString(id) AS team_id") {
+			return &fixtureRowScanner{}, nil
+		}
+		return &fixtureRowScanner{rows: [][]any{{day(2024, 1, 1), "team-a", "team-a", 5.0}}}, nil
+	}}
+	if _, err := BuildResponse(context.Background(), client, "org-1", idleParams("wip_throughput", "team")); err == nil {
+		t.Fatal("BuildResponse succeeded after the catalog scanner reported a Close error")
 	}
 }

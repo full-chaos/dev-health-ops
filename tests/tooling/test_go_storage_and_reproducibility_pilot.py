@@ -279,11 +279,18 @@ def test_storage_integration_shard_is_hosted_only() -> None:
     unconditionally (no SELF_HOSTED_RUNNERS gate) and no self-hosted twin
     exists anywhere in go.yml."""
     job = _job(_SHARD_HOSTED)
-    assert "if" not in job, (
-        f"{WORKFLOW_PATH.name}: {_SHARD_HOSTED!r} still carries an `if:` "
-        f"({job.get('if')!r}) -- the revert to hosted-only means this job "
-        "always runs, no SELF_HOSTED_RUNNERS gate"
+    # CHAOS-9947: the only `if:` allowed is the plan's own "run these legs"
+    # gate; it must never mention the self-hosted switch.
+    expected = (
+        "needs.go-storage-integration-plan.result == 'success' && "
+        "needs.go-storage-integration-plan.outputs.legs != '0'"
     )
+    assert job.get("if", expected) == expected, (
+        f"{WORKFLOW_PATH.name}: {_SHARD_HOSTED!r} carries an unexpected `if:` "
+        f"({job.get('if')!r}) -- the revert to hosted-only means no "
+        "SELF_HOSTED_RUNNERS gate, only the plan's legs gate"
+    )
+    assert "SELF_HOSTED_RUNNERS" not in str(job.get("if", ""))
     assert job.get("runs-on") == "ubuntu-latest", (
         f"{WORKFLOW_PATH.name}: {_SHARD_HOSTED!r} must run on "
         f"ubuntu-latest, got {job.get('runs-on')!r}"

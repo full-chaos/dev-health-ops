@@ -728,3 +728,57 @@ func withTeam(record Record, team string) Record {
 	record.TeamID = &team
 	return record
 }
+
+// CHAOS-9915: one (team, repository, work type) group can hold a pull request
+// whose attribution row names the team (share 1) and one that the ownership
+// read gives to the same team at its lesser share. The repository's incidents
+// enter the group's AI rows at the share of each of the group's pull requests
+// (the mean of the facts' shares), in any input order.
+func TestComputeWeighsIncidentsByEveryFactShareOfAMixedGroup(t *testing.T) {
+	const share = 0.4
+	merged := timePtr(fixtureBase.Add(time.Hour))
+	pullRequest := strPtr("pull_request")
+	named := PullRequestRow{RepoID: fixtureRepo, Number: 1, CreatedAt: fixtureBase, MergedAt: merged}
+	resolved := PullRequestRow{RepoID: fixtureRepo, Number: 2, CreatedAt: fixtureBase, MergedAt: merged}
+	params := func(prs ...PullRequestRow) Params {
+		return Params{
+			Day: fixtureDay, OrgID: fixtureOrgID, PullRequests: prs,
+			Attributions: []AttributionRow{
+				{RepoID: fixtureRepo, Number: 1, Kind: strPtr("ai_assisted"), WorkType: pullRequest, TeamID: strPtr("team-t")},
+				{RepoID: fixtureRepo, Number: 2, Kind: strPtr("ai_assisted"), WorkType: pullRequest},
+			},
+			Incidents:     []IncidentRow{{RepoID: fixtureRepo, StartedAt: fixtureBase.Add(2 * time.Hour)}},
+			RepoNamesByID: map[uuid.UUID]string{fixtureRepo: "acme/alpha"},
+			TeamResolver:  func(uuid.UUID, string) []string { return []string{"team-t", "team-u"} },
+			OwnerShare: func(_ uuid.UUID, team string) float64 {
+				if team == "team-t" {
+					return share
+				}
+				return 1 - share
+			},
+		}
+	}
+	incidents := func(records []Record) float64 {
+		var rows int
+		var value float64
+		for _, record := range records {
+			if record.TeamID != nil && *record.TeamID == "team-t" && record.AttributionBucket == BucketAIAssisted {
+				rows++
+				value = record.IncidentsCount
+			}
+		}
+		if rows != 1 {
+			t.Fatalf("team-t ai_assisted rows = %d, want 1", rows)
+		}
+		return value
+	}
+	want := (1 + share) / 2
+	for name, prs := range map[string][]PullRequestRow{
+		"named first":    {named, resolved},
+		"resolved first": {resolved, named},
+	} {
+		if got := incidents(Compute(params(prs...))); math.Abs(got-want) > 1e-9 {
+			t.Errorf("%s: team-t incidents_count = %v, want %v (one incident at the mean of shares 1 and %v)", name, got, want, share)
+		}
+	}
+}

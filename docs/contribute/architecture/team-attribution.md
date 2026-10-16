@@ -1297,6 +1297,10 @@ controls: a link that is gone and an explicit empty list are closed).
 >   averages (cycle time, reviews per pull request) and the baselines are the repository's own and are never scaled,
 >   so a lesser owner reads the repository's rates and a fraction of its counts. The readers that add rows (the impact
 >   summary, the comparison, the risk breakdown, the review load) add the fractions and weight the averages by them.
+>   The repository's incidents are a count of the repository, not of a pull request: they enter a team's rows at the
+>   mean share of that team's pull requests in the repository and work type, because one such group can mix a pull
+>   request whose attribution row names the team (share 1) with one the ownership read gives to it at a lesser share
+>   (CHAOS-9915). A group whose pull requests all carry the same share takes the incidents at that share.
 > - **The share is the weight of a repository in a team's aggregate (D5998, CHAOS-9620).** `compounding_risk_daily`
 >   (team scope) gives every owner, main and lesser, a row. Its additive columns are the pooled review-window counts
 >   (`merged_prs_30d`, `reviewed_prs_30d`, Float64 since migration 124): the sum over the team's repositories of the

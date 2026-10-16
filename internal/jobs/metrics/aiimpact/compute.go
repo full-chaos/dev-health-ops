@@ -734,7 +734,9 @@ func buildRecords(
 
 		var aiCount, aiAssistedCount, agentCreatedCount, humanCount, unknownCount uint32
 		var weightedAI, weightedAIAssisted, weightedAgentCreated, weightedHuman, weightedUnknown float64
+		var groupWeight float64
 		for _, fact := range groupFacts {
+			groupWeight += fact.share
 			if isAIBucket(fact.bucket) {
 				aiCount++
 				weightedAI += fact.share
@@ -755,9 +757,11 @@ func buildRecords(
 			}
 		}
 		// The incidents of a repository are counted once per group; they enter
-		// the group's rows at the group's share (every pull request of one
-		// (team, repository) group carries the same share).
-		groupShare := groupFacts[0].share
+		// the group's rows at the mean share of the group's pull requests. One
+		// group can mix a pull request whose attribution row names the team
+		// (share 1) with one the ownership read gives to the team at its lesser
+		// share (CHAOS-9915), so no single fact's share stands for the group.
+		groupShare := groupWeight / float64(groupTotal)
 
 		var teamID *string
 		if key.hasTeam {

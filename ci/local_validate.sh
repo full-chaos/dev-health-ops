@@ -677,7 +677,7 @@ reclaim_stale_lock() {
   fi
 }
 
-# Attempts to create the lock symlink exactly once. Returns 0 on success, 1 on
+# Attempts to create the lock symlink (retried only while nothing exists at LOCK_DIR). Returns 0 on success, 1 on
 # genuine contention (LOCK_DIR is already a symlink — someone else's lock, or a
 # racing reclaimer's fresh one), and `die`s immediately for anything else. A
 # bare `ln -s` failure is ALSO what you get from a missing parent directory,
@@ -687,13 +687,22 @@ reclaim_stale_lock() {
 # LOCK_DIR into a full LOCK_WAIT_SECS hang with a diagnosis ("remove it by
 # hand") that is actively wrong (there is no PID, nothing to remove).
 try_acquire_once() {
-  local ln_err
-  if ln_err="$(ln -s "$(lock_owner_metadata)" "${LOCK_DIR}" 2>&1)"; then
-    return 0
-  fi
-  if [ -L "${LOCK_DIR}" ]; then
-    return 1
-  fi
+  local ln_err attempt
+  # `ln -s` can fail with EEXIST and the holder can release (or a reclaimer delete) before the
+  # check below, leaving nothing at LOCK_DIR (CHAOS-9923). The message is no judge: GNU and BSD
+  # ln word it differently. What is at LOCK_DIR after the failure is: a symlink is contention, a
+  # non-symlink is a wrong path, and nothing there means the holder just left, so try again. A
+  # structural error (missing parent, read-only filesystem, permissions) leaves nothing there
+  # every time and dies after the last attempt.
+  for attempt in 1 2 3 4 5; do
+    if ln_err="$(LC_ALL=C ln -s "$(lock_owner_metadata)" "${LOCK_DIR}" 2>&1)"; then
+      return 0
+    fi
+    if [ -L "${LOCK_DIR}" ]; then
+      return 1
+    fi
+    [ -e "${LOCK_DIR}" ] && break
+  done
   die "cannot create lock symlink at ${LOCK_DIR}: ${ln_err}. This is NOT lock contention (no symlink exists there) -- check that LOCK_DIR's parent directory exists and is writable."
 }
 

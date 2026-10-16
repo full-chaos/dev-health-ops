@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# bigboy-repin-web.sh (CHAOS-7019) -- repins _records/compose.bigboy.images.yml's `web` image to
+# bigboy-repin-web.sh (CHAOS-7019) -- repins _records/images.env's BIGBOY_WEB_IMAGE (the `web` image) to
 # the CI-built digest for dev-health-web's main branch HEAD. `web` is pinned by digest in the
-# bigboy overlay (image: + build: !reset null), same pattern as api/query-api/go-api/
+# bigboy pins file (compose.bigboy.yml: image from the pin, no build), same pattern as api/query-api/go-api/
 # go-api-tools -- no host build, ever. Run every cut, unconditionally: a web-only merge between
 # cuts must not silently leave a stale build serving pages the backend underneath has already
 # changed shape for (the CHAOS-6262 web-path proof's first attempt hit exactly this).
 set -euo pipefail
 # CHAOS-7022 D2895/D2886(2): same BIGBOY_ROOT root parameter as bigboy-cut.sh -- default is
 # byte-identical to the hardcoded path this script always used.
-R="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"; OV=$R/_records/compose.bigboy.images.yml
+R="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"; OV=$R/_records/images.env
 echo "repin-web start root=$R"
-[ -e "$R/_records/compose.bigboy.images.yml" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing _records/compose.bigboy.images.yml -- refusing to run against a root that is not a real bigboy tree" >&2; exit 4; }
+[ -e "$R/_records/images.env" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing _records/images.env -- refusing to run against a root that is not a real bigboy tree" >&2; exit 4; }
 
 # CHAOS-7901: which web build this cut takes, chosen by the caller and never inferred when it names one.
 #   WEB_REPIN unset or `head` : web main HEAD (the behaviour of every cut before this change);

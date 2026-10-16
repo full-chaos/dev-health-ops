@@ -96,8 +96,15 @@ type AttributionRow struct {
 }
 
 type IncidentRow struct {
+	ID        string
 	RepoID    uuid.UUID
 	StartedAt time.Time
+	// SourceTeamID is the team the incident source names (the owning team of
+	// its service); nil when it names none.
+	SourceTeamID *string
+	// Trigger is the pull request that triggered the incident; nil when none is
+	// linked.
+	Trigger *IncidentTrigger
 }
 
 // CommitStatRow carries the PR-commit linkage columns _is_test_path and
@@ -180,6 +187,13 @@ type Params struct {
 	// row itself named, is share 1.
 	OwnerShare    func(repoID uuid.UUID, teamID string) float64
 	RepoNamesByID map[uuid.UUID]string
+	// MainOwners lists the main owners of a repository: one, or every tied team
+	// of a full ownership tie (D5990). An incident counts for exactly one of
+	// them (D6040, D6041); see incidentTeam.
+	MainOwners func(repoID uuid.UUID) []string
+	// RepoMergedPRTeams lists the merged pull requests of a repository with
+	// their owning team. It is read only for a repository with tied main owners.
+	RepoMergedPRTeams map[uuid.UUID][]MergedPRTeam
 }
 
 // PRKey is the (repo_id, number) tuple Python uses as a dict key throughout.
@@ -440,15 +454,17 @@ func Compute(params Params) []Record {
 		}
 	}
 
-	incidentsByRepo := make(map[uuid.UUID]uint32)
+	anchored := make(map[anchorKey]uint32)
 	for _, incident := range params.Incidents {
 		startedAt := toUTC(incident.StartedAt)
 		if !startedAt.Before(start) && startedAt.Before(end) {
-			incidentsByRepo[incident.RepoID]++
+			incident.StartedAt = startedAt
+			anchor := anchorIncident(params, incident)
+			anchored[anchorKey{group: anchor.team, bucket: anchor.bucket}]++
 		}
 	}
 
-	return buildRecords(params, start, facts, incidentsByRepo)
+	return buildRecords(params, start, facts, anchored)
 }
 
 func derefUint32(value *uint32) uint32 {
@@ -698,7 +714,7 @@ type groupKey struct {
 // oracle asserts set equality keyed by the table's ORDER BY key plus a
 // separate order-invariance property, rather than pretending an order exists.
 func buildRecords(
-	params Params, day time.Time, facts []prFact, incidentsByRepo map[uuid.UUID]uint32,
+	params Params, day time.Time, facts []prFact, anchored map[anchorKey]uint32,
 ) []Record {
 	grouped := make(map[groupKey][]prFact)
 	var order []groupKey
@@ -711,6 +727,14 @@ func buildRecords(
 			order = append(order, key)
 		}
 		grouped[key] = append(grouped[key], fact)
+	}
+	// An incident sits on one row (D6040). Its group may hold no pull request of
+	// the day: the group is then created empty, so the incident still counts.
+	for anchor := range anchored {
+		if _, seen := grouped[anchor.group]; !seen {
+			grouped[anchor.group] = nil
+			order = append(order, anchor.group)
+		}
 	}
 	sort.SliceStable(order, func(i, j int) bool {
 		left, right := order[i], order[j]
@@ -729,7 +753,7 @@ func buildRecords(
 	var records []Record
 	for _, key := range order {
 		groupFacts := grouped[key]
-		baseline := aggregateFacts(filterBucket(groupFacts, BucketHuman), 0)
+		baseline := aggregateFacts(filterBucket(groupFacts, BucketHuman), anchored[anchorKey{group: key, bucket: BucketHuman}])
 		groupTotal := uint32(len(groupFacts))
 
 		var aiCount, aiAssistedCount, agentCreatedCount, humanCount, unknownCount uint32
@@ -754,8 +778,6 @@ func buildRecords(
 				weightedUnknown += fact.share
 			}
 		}
-		groupShare := incidentShare(params, key)
-
 		var teamID *string
 		if key.hasTeam {
 			team := key.teamID
@@ -765,12 +787,9 @@ func buildRecords(
 		for _, bucket := range bucketEmitOrder {
 			bucketFacts := filterBucket(groupFacts, bucket)
 			// The unknown bucket ALWAYS emits a row, even when empty (:419).
-			if len(bucketFacts) == 0 && bucket != BucketUnknown {
+			bucketIncidents := anchored[anchorKey{group: key, bucket: bucket}]
+			if len(bucketFacts) == 0 && bucket != BucketUnknown && bucketIncidents == 0 {
 				continue
-			}
-			var bucketIncidents uint32
-			if isAIBucket(bucket) {
-				bucketIncidents = incidentsByRepo[key.repoID]
 			}
 			agg := aggregateFacts(bucketFacts, bucketIncidents)
 
@@ -797,7 +816,7 @@ func buildRecords(
 				ReworkPRs:             agg.weightedRework, ReworkDragRate: agg.reworkRate,
 				FollowupCommitsCount: agg.weightedFollowup,
 				RevertPRs:            agg.weightedRevert, RevertRate: agg.revertRate,
-				IncidentsCount: float64(float64(agg.incidentsCount) * groupShare), IncidentDragRate: agg.incidentRate,
+				IncidentsCount: float64(agg.incidentsCount), IncidentDragRate: agg.incidentRate,
 				TestGapPRs: agg.weightedTestGaps, TestGapRate: agg.testGapRate,
 				LeveragePRsComponent: weightedAI,
 				LeverageCycleTime:    componentDelta(agg.cycleAvg, baseline.cycleAvg, true),
@@ -809,35 +828,6 @@ func buildRecords(
 		}
 	}
 	return records
-}
-
-// incidentShare is the weight of a repository's incidents in one group's rows
-// (D6037, CHAOS-9915). An incident is an event of the repository, not of a pull
-// request, so a team takes it at its ownership share of the repository, read
-// from the ownership resolver, never from the group's pull requests: one group
-// can mix a pull request whose attribution row names the team (share 1) with
-// one the ownership read gives to the team at a lesser share. A team that
-// holds no ownership of the repository (present only through attribution rows
-// that name it) takes 0, and the group without a team (a repository the
-// resolver gives to no team) takes the incidents whole, so the weights of one
-// repository's groups add up to its incident count.
-func incidentShare(params Params, key groupKey) float64 {
-	if !key.hasTeam {
-		return 1
-	}
-	if params.TeamResolver == nil {
-		return 0
-	}
-	for _, team := range params.TeamResolver(key.repoID, params.RepoNamesByID[key.repoID]) {
-		if team != key.teamID {
-			continue
-		}
-		if params.OwnerShare == nil {
-			return 1
-		}
-		return params.OwnerShare(key.repoID, team)
-	}
-	return 0
 }
 
 func filterBucket(facts []prFact, bucket AttributionBucket) []prFact {

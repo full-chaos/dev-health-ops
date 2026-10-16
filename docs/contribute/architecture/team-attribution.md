@@ -1309,17 +1309,38 @@ controls: a link that is gone and an explicit empty list are closed).
 >   `ai_impact_metrics_daily` does the same since migration 128 (CHAOS-9604, D5998): its twelve count columns are
 >   Float64 and the AI impact GraphQL count fields are `Float!`. A pull request that the ownership read gives to a
 >   team counts in that team's rows at the owner's share (`total`, `merged`, the bucket counts, rework, follow-up
->   commits, reverts, incidents, test-gap pull requests, and the leverage pull-request component); the ratios, the
+>   commits, reverts, test-gap pull requests, and the leverage pull-request component; incidents are not shares, see below); the ratios, the
 >   averages (cycle time, reviews per pull request) and the baselines are the repository's own and are never scaled,
 >   so a lesser owner reads the repository's rates and a fraction of its counts. The readers that add rows (the impact
 >   summary, the comparison, the risk breakdown, the review load) add the fractions and weight the averages by them.
->   An incident is an event of the repository, not of a pull request (D6037, CHAOS-9915): a team takes the
->   repository's incidents at its ownership share of the repository, read from the ownership resolver and never from
->   the shares of the team's pull requests (one group can mix a pull request whose attribution row names the team, share
->   1, with one the ownership read gives to the team at a lesser share). A team that holds no ownership of the
->   repository and is present only through attribution rows that name it takes no incidents, and a repository the
->   resolver gives to no team keeps its incidents whole in its no-team rows, so the teams' incidents add up to the
->   repository's incident count.
+>   An incident is not a pull request and is not split by ownership share (D6040, D6041, CHAOS-9915): it counts
+>   once, for one team, on one row, so `incidents_count` is always a whole number and, over every row of a
+>   repository and day, adds up to the incidents that started that day. The team is the first of:
+>   1. the team the incident source names: the owning team of the incident's service, a provider reference mapped
+>      through the team catalog (the active team of the organization with that provider and `native_team_key`). A
+>      reference that is not in the catalog, or names several teams, names none; it is never matched by equality with
+>      a team id;
+>   2. the team that owned the triggering pull request: the pull request of the deployment the incident is linked to
+>      (`work_graph_deployment_incident_edges` of the best tier, native > explicit_text > heuristic, then
+>      `deployments.pull_request_number`), owned by the primary team of the work item linked to it in
+>      `work_graph_issue_pr` (best tier only: a native link shadows a lower one, for the owner and for the pull request's
+>      AI bucket and work type alike, and the day's pull request facts read the same best-tier link, so an incident and its triggering pull request share one row; the work item's attribution row of the pull request's own repository wins, and
+>      rows of other repositories count only when they all name one team; a pull request whose best-tier links name no
+>      team or several has no owner);
+>   3. the main owner of the repository. Among tied main owners (D5990) the incident goes to the tied team that owned
+>      the most recently merged pull request of the repository before the incident started, else to the lowest team
+>      id. A repository no team owns keeps its incidents in its no-team rows.
+>      An incident whose service maps to several repositories is one incident: it sits on the repository of its
+>      triggering pull request when the service maps to it, else on the lowest repository id the service maps to, whichever
+>      partition computes the day, so it is counted once. `ai_impact` runs after `work_item_attribution` and
+>      `work_graph_edges`, whose rows it reads.
+>
+>   The row is the triggering pull request's own (team, repository, `work_type`, AI bucket). An incident without a
+>   triggering pull request has no AI evidence: it sits on the `human` bucket with `work_type` `incident` (a value of
+>   the work item type enum). Every other row of the repository and day carries 0 of it, a team that attribution rows
+>   name but that owns neither the triggering pull request nor the repository takes none, and a group with no pull
+>   request of the day gets an empty row so the incident still counts. `incident_drag_rate` is the row's incidents over
+>   the row's merged pull requests (it was the repository's incidents over the group's). The source's team reference is mapped only through the team catalog; no Postgres mapping bridges the two.
 > - **The share is the weight of a repository in a team's aggregate (D5998, CHAOS-9620).** `compounding_risk_daily`
 >   (team scope) gives every owner, main and lesser, a row. Its additive columns are the pooled review-window counts
 >   (`merged_prs_30d`, `reviewed_prs_30d`, Float64 since migration 124): the sum over the team's repositories of the

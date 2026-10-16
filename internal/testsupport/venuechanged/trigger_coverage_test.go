@@ -223,7 +223,7 @@ func testProducers(decls map[string]*declInfo, blank map[string]bool, test strin
 // (declared[package][test]). It returns the missing "package\ttest\tproducer" keys and the
 // number of producer imports that are declared. Selection on a pull request is per test, so
 // a row for one test of a package does not cover another test of it.
-func undeclaredProducers(t *testing.T, root string, tests map[string][]string, declared map[string]map[string][]string) (map[string]bool, int) {
+func undeclaredProducers(t *testing.T, root string, tests map[string][]string, declared map[string]map[string][]string, closures map[string]map[string]bool) (map[string]bool, int) {
 	t.Helper()
 	found := map[string]bool{}
 	covered := 0
@@ -235,7 +235,9 @@ func undeclaredProducers(t *testing.T, root string, tests map[string][]string, d
 				continue
 			}
 			for _, imp := range testProducers(decls, blank, test) {
-				ok := false
+				// The dependency closure of the package's test binary selects every test of the
+				// package for a change in any package it links (CHAOS-9935).
+				ok := closures[pkg][imp]
 				for _, p := range declared[pkg][test] {
 					if imp == p || strings.HasPrefix(imp, p+"/") {
 						ok = true
@@ -258,7 +260,9 @@ func undeclaredProducers(t *testing.T, root string, tests map[string][]string, d
 // nothing, because only the test's own package selects it. For every `run` test, each
 // producer that test reaches must be equal to or under a path declared FOR THAT TEST in
 // ci/venue_oracle_triggers.d/ (CHAOS-9614: the pull request job selects per test, so a row
-// for another test of the package does not count), or be listed in
+// for another test of the package does not count), or lie in the dependency closure of the
+// package's test binary (ci/venue_oracle_closure.d/, derived from `go list -test`, CHAOS-9935:
+// that selects every test of the package), or be listed in
 // ci/venue_oracle_trigger_gaps.tsv (the known gaps, a ratchet: a new gap fails, and a gap that
 // got covered must leave the file).
 func TestEveryProducerAVenueTestImportsIsDeclaredAsATrigger(t *testing.T) {
@@ -298,7 +302,11 @@ func TestEveryProducerAVenueTestImportsIsDeclaredAsATrigger(t *testing.T) {
 		known[strings.Join(row, "\t")] = true
 	}
 
-	found, covered := undeclaredProducers(t, root, tests, declared)
+	var venuePkgs []string
+	for pkg := range tests {
+		venuePkgs = append(venuePkgs, pkg)
+	}
+	found, covered := undeclaredProducers(t, root, tests, declared, committedClosures(t, root, venuePkgs))
 	for gap := range found {
 		if !known[gap] {
 			t.Errorf("a venue test uses a producer no trigger row declares for it, so a change there does not select that test on a pull request: %q (add a row to ci/venue_oracle_triggers.d/, see its README)", gap)
@@ -363,7 +371,7 @@ func helper() {}
 	rowForRefundOnly := map[string]map[string][]string{venue: {
 		"TestRefundCreate": {"internal/api/billing", "internal/api/licensing"},
 	}}
-	found, _ := undeclaredProducers(t, root, tests, rowForRefundOnly)
+	found, _ := undeclaredProducers(t, root, tests, rowForRefundOnly, nil)
 	want := venue + "\tTestLedger\tinternal/api/licensing"
 	if len(found) != 1 || !found[want] {
 		t.Fatalf("row for TestRefundCreate only: found %v, want exactly %q", found, want)
@@ -373,7 +381,7 @@ func helper() {}
 		"TestLedger":       {"internal/api/licensing"},
 		"TestRefundCreate": {"internal/api/billing"},
 	}}
-	if found, covered := undeclaredProducers(t, root, tests, rowsForBoth); len(found) != 0 || covered != 2 {
+	if found, covered := undeclaredProducers(t, root, tests, rowsForBoth, nil); len(found) != 0 || covered != 2 {
 		t.Fatalf("a row per test: found %v covered %d, want none and 2", found, covered)
 	}
 }
@@ -420,7 +428,7 @@ var fixture = clickhouse.New(sub.X)
 `,
 	})
 	tests := map[string][]string{venue: {"TestViaHelper", "TestViaMethod", "TestViaVariable", "TestPlain"}}
-	found, _ := undeclaredProducers(t, root, tests, nil)
+	found, _ := undeclaredProducers(t, root, tests, nil, nil)
 	var got []string
 	for key := range found {
 		got = append(got, key)
@@ -475,7 +483,7 @@ func unused() { _ = audit.Log }
 func TestOne(t *testing.T) {}
 `,
 	})
-	found, _ := undeclaredProducers(t, root, map[string][]string{venue: {"TestOne"}}, nil)
+	found, _ := undeclaredProducers(t, root, map[string][]string{venue: {"TestOne"}}, nil, nil)
 	var got []string
 	for key := range found {
 		got = append(got, key)

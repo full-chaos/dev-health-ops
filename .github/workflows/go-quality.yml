@@ -60,8 +60,6 @@ concurrency:
 jobs:
   go-quality-leg:
     name: go-quality-leg (${{ matrix.name }})
-    # CHAOS-9949: a draft PR runs the static and test legs only; the race legs (the heavy ones) run once the PR is ready for review or carries the ci:full label.
-    if: ${{ !matrix.heavy || (github.event_name != 'pull_request' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci:full')) }}
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
@@ -133,8 +131,16 @@ jobs:
           # is the all-zeros sentinel or no longer an ancestor of HEAD, which
           # routes into the fail-open branch below).
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          # CHAOS-9949: a heavy (race) leg of a draft PR without the ci:full label reports success without running, through the same
+          # relevant=false path as a change set with no Go-relevant paths. It runs once the PR is ready for review.
+          DRAFT_SKIP: ${{ matrix.heavy && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
         run: |
           set -euo pipefail
+          if [ "${DRAFT_SKIP}" = "true" ]; then
+            echo "draft PR without the ci:full label: heavy leg skipped until the PR is ready for review"
+            printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           bash ci/go_relevant_diff.sh > changed.txt || {
             # Fails OPEN, not closed: relevant=true runs the real gate rather
             # than silently skipping it. An unresolvable range (or the

@@ -1,4 +1,5 @@
 internal/queryapi/server	TestGraphQLEdgeFrozenVenueOracle	run
+internal/queryapi/server	TestMCPClassParityVenueOracle	run
 internal/queryapi/server	TestSavedReportMutationsCronDialectVenueOracle	run
 internal/queryapi/server	TestSavedReportMutationsVenueOracle	run
 internal/queryapi/server	TestSavedReportWriteProofBaselinesVenueOracle	run

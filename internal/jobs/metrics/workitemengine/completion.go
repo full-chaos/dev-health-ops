@@ -22,6 +22,11 @@ type WorkItemCompletionDailyRow struct {
 	CycleP50Hours      float64
 }
 
+type linkedPRKey struct {
+	repoID uuid.UUID
+	number uint32
+}
+
 type completionKey struct {
 	repoID nullableUUIDKey
 	teamID string
@@ -74,6 +79,23 @@ func ComputeWorkItemCompletionDaily(
 			return nil, ErrUnrepresentableDeliveryUnits
 		}
 		bucket.deliveryUnits += int(math.Trunc(points))
+		for _, pr := range item.LinkedPRs {
+			if bucket.prs == nil {
+				bucket.prs = make(map[linkedPRKey]struct{})
+			}
+			prKey := linkedPRKey{repoID: pr.RepoID, number: pr.Number}
+			if _, counted := bucket.prs[prKey]; counted {
+				continue
+			}
+			bucket.prs[prKey] = struct{}{}
+			// Each part counts on its own; a pull request with neither adds nothing.
+			if pr.Additions != nil {
+				bucket.churn += int(*pr.Additions)
+			}
+			if pr.Deletions != nil {
+				bucket.churn += int(*pr.Deletions)
+			}
+		}
 		if item.StartedAt != nil {
 			cycle := completed.Sub(item.StartedAt.UTC()).Hours()
 			if cycle >= 0 {
@@ -100,4 +122,39 @@ func ComputeWorkItemCompletionDaily(
 		})
 	}
 	return rows, nil
+}
+
+// ChurnStats describes the inputs of a day's churn_loc: it explains a churn of 0 on a day with completed items, which
+// means no linked pull request (or none with a size), not that no lines changed.
+type ChurnStats struct {
+	CompletedItems       int
+	ItemsWithoutLinkedPR int
+	LinksByTier          map[string]int
+	LinkedPRsWithoutSize int
+}
+
+// ChurnInputs counts, for the items completed in [dayUTC, end), the links by provenance tier and the linked pull
+// requests with no stored size. The caller logs it; this package holds no logger.
+func ChurnInputs(items []Item, dayUTC, end time.Time) ChurnStats {
+	stats := ChurnStats{LinksByTier: map[string]int{}}
+	for _, item := range items {
+		if item.CompletedAt == nil {
+			continue
+		}
+		done := item.CompletedAt.UTC()
+		if done.Before(dayUTC) || !done.Before(end) {
+			continue
+		}
+		stats.CompletedItems++
+		if len(item.LinkedPRs) == 0 {
+			stats.ItemsWithoutLinkedPR++
+		}
+		for _, pr := range item.LinkedPRs {
+			stats.LinksByTier[pr.Provenance]++
+			if pr.Additions == nil && pr.Deletions == nil {
+				stats.LinkedPRsWithoutSize++
+			}
+		}
+	}
+	return stats
 }

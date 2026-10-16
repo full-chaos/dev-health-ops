@@ -23,7 +23,7 @@ const defaultOrgID = "default"
 const (
 	repoInsert = `
 INSERT INTO repos (
-  id, org_id, repo, ref, created_at, settings, tags, provider, last_synced
+  id, org_id, repo, ref, created_at, settings, tags, provider, last_synced, provider_repo_id
 )`
 	commitInsert = `
 INSERT INTO git_commits (
@@ -56,8 +56,9 @@ func joinColumns(groups ...[]storedversion.Column) []storedversion.Column {
 	return out
 }
 
-// repositoryContract: a local repository has no default-branch field (ref is
-// R1, kept); every other column is stated.
+// repositoryContract: a local repository has no default-branch field and no
+// provider repository id (ref and provider_repo_id are R1, kept); every other
+// column is stated.
 var repositoryContract = storedversion.Contract{Writer: "local_sync", Table: "repos", Columns: joinColumns(
 	contractColumns(storedversion.Identity, "id"),
 	contractColumns(storedversion.Writer, "org_id"),
@@ -65,6 +66,7 @@ var repositoryContract = storedversion.Contract{Writer: "local_sync", Table: "re
 	[]storedversion.Column{{Name: "ref", Rule: storedversion.NoField}},
 	contractColumns(storedversion.Stated, "created_at", "settings", "tags"),
 	contractColumns(storedversion.Writer, "provider", "last_synced"),
+	[]storedversion.Column{{Name: "provider_repo_id", Rule: storedversion.NoField}},
 )}
 
 // commitContract: a commit is immutable and the read states every column.

@@ -1210,6 +1210,13 @@ _GO_DEFAULT_ONLY = [{"path": "/", "pathType": "Prefix", "service": "go-api"}]
 def _render_chart(chart_values: dict) -> list[dict]:
     helm = shutil.which("helm")
     assert helm is not None, "helm is required for the CHAOS-7536 differential test"
+    # helm v4 renders every template before --show-only filters, so web-deployment.yaml's required
+    # web.env.BACKEND_URL (CHAOS-8310) refuses the whole render although only ingress.yaml is read;
+    # helm v3 filtered first. The ingress never reads web.env, so a fixed value changes no assertion.
+    chart_values = {
+        **chart_values,
+        "web": {"env": {"BACKEND_URL": "http://backend.example"}},
+    }
     out = subprocess.run(
         [
             helm,

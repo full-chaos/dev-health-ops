@@ -1,2 +1,12 @@
+internal/apiservice	TestVenueOracleCredentialGitHubRepos	internal/api/credentials
+internal/apiservice	TestVenueOracleCredentialGitHubRepos	internal/api/githubcode
+internal/apiservice	TestVenueOracleCredentialGitHubRepos	internal/api/gitlabcode
+internal/apiservice	TestVenueOracleCredentialGitHubRepos	internal/api/policy
+internal/apiservice	TestVenueOracleCredentialGitHubRepos	internal/api/restcore
+internal/apiservice	TestVenueOracleCredentialRepos	internal/api/credentials
+internal/apiservice	TestVenueOracleCredentialRepos	internal/api/githubcode
+internal/apiservice	TestVenueOracleCredentialRepos	internal/api/gitlabcode
+internal/apiservice	TestVenueOracleCredentialRepos	internal/api/policy
+internal/apiservice	TestVenueOracleCredentialRepos	internal/api/restcore
 internal/apiservice	TestVenueOracleProtectedRoutes	internal/api/teamsidentity
 internal/apiservice	TestVenueOracleProtectedRoutes	internal/chmigrate/sql

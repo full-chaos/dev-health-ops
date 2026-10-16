@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "rendered_at": "2026-10-15T22:42:33Z",
-  "ops_sha": "af2229e88723aca19c9ceff1b8c69e26a12aa577",
-  "render_commit": "202d46ff6654551cca6772bb3ae2963c42096862",
-  "schema_digest": "sha256:30a5ca3a15ceadf5805c560623e6085691137ca7508a38334e0f102ee83d6e1c",
-  "fleet_read_at": "0001-01-01T00:00:00Z",
-  "fleet_source": "not read"
+  "rendered_at": "2026-10-16T00:59:15Z",
+  "ops_sha": "3a4b31df52b865226201263dc08aeff2db294d1e",
+  "render_commit": "a69220d7b68ba57e819e390d084a8fd6db6ee230",
+  "schema_digest": "sha256:34b0dabf6fd42b964ba7586fc1e14cfe30657be798b6982df7c5f7a0c125d2d5",
+  "fleet_read_at": "2026-10-15T21:07:21.874440782Z",
+  "fleet_source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1"
 }

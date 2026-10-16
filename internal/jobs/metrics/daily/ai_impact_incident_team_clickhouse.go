@@ -24,17 +24,13 @@ import (
 //   - for tied main owners, the repository's merged pull requests with their
 //     owning team (LoadAIImpactRepoMergedPRTeams).
 
-// aiImpactPullRequestOwnerSQL selects, for each pull request, the one team that
-// owned it: the primary team of the work item linked to it in
-// work_graph_issue_pr (the actual link row, never an issue key prefix). Only
-// the best provenance tier of a pull request's links counts (native >
-// explicit_text > heuristic): a pull request with a native link takes no team
-// from a lower-tier link. A pull request whose best-tier links name no team, or
-// name more than one, has no owner here. extraLinkFilter narrows the link read.
-func aiImpactPullRequestOwnerSQL(extraLinkFilter string) string {
+// aiImpactBestTierLinksSQL selects the links of work_graph_issue_pr that count
+// for a pull request: only the best provenance tier of the pull request's links
+// (native > explicit_text > heuristic). A pull request with a native link takes
+// nothing from a lower-tier link. extraLinkFilter narrows the read.
+func aiImpactBestTierLinksSQL(extraLinkFilter string) string {
 	return `(
-    SELECT link.repo_id AS repo_id, link.pr_number AS pr_number,
-           anyIf(attr.team_id, attr.team_id IS NOT NULL AND attr.team_id != '') AS team_id
+    SELECT repo_id, work_item_id, pr_number
     FROM (
         SELECT repo_id, work_item_id, pr_number, tier_rank,
                max(tier_rank) OVER (PARTITION BY repo_id, pr_number) AS best_rank
@@ -44,22 +40,55 @@ func aiImpactPullRequestOwnerSQL(extraLinkFilter string) string {
             FROM work_graph_issue_pr FINAL
             WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} ` + extraLinkFilter + `
         )
-    ) AS link
-    LEFT JOIN (
-        SELECT work_item_id, team_id
-        FROM work_item_team_attributions FINAL
-        WHERE org_id = {org_id:String}
-          AND is_primary = 1
-          AND (work_item_id, computed_at) IN (
-              SELECT work_item_id, max(computed_at)
-              FROM work_item_team_attributions
-              WHERE org_id = {org_id:String}
-              GROUP BY work_item_id
-          )
-    ) AS attr ON attr.work_item_id = link.work_item_id
-    WHERE link.tier_rank = link.best_rank
-    GROUP BY link.repo_id, link.pr_number
-    HAVING uniqExactIf(attr.team_id, attr.team_id IS NOT NULL AND attr.team_id != '') = 1
+    )
+    WHERE tier_rank = best_rank
+)`
+}
+
+// aiImpactPullRequestOwnerSQL selects, for each pull request, the one team that
+// owned it: the primary team of the work item linked to it in work_graph_issue_pr
+// (the actual link row, never an issue key prefix), over the best link tier only
+// (aiImpactBestTierLinksSQL). A work item's attribution row of the pull
+// request's own repository wins; without one, the work item's rows of other
+// repositories count only when they all name the same team. A pull request whose
+// links name no team, or more than one, has no owner here.
+func aiImpactPullRequestOwnerSQL(extraLinkFilter string) string {
+	return `(
+    SELECT repo_id, pr_number,
+           anyIf(link_team_id, link_team_id IS NOT NULL AND link_team_id != '') AS team_id
+    FROM (
+        SELECT link.repo_id AS repo_id, link.pr_number AS pr_number, link.work_item_id AS work_item_id,
+               coalesce(nullIf(by_repo.team_id, ''), nullIf(any_repo.only_team_id, '')) AS link_team_id
+        FROM ` + aiImpactBestTierLinksSQL(extraLinkFilter) + ` AS link
+        LEFT JOIN (
+            SELECT work_item_id, repo_id, team_id
+            FROM work_item_team_attributions FINAL
+            WHERE org_id = {org_id:String}
+              AND is_primary = 1
+              AND (work_item_id, repo_id, computed_at) IN (
+                  SELECT work_item_id, repo_id, max(computed_at)
+                  FROM work_item_team_attributions
+                  WHERE org_id = {org_id:String}
+                  GROUP BY work_item_id, repo_id
+              )
+        ) AS by_repo ON by_repo.work_item_id = link.work_item_id AND by_repo.repo_id = link.repo_id
+        LEFT JOIN (
+            SELECT work_item_id, anyIf(team_id, team_id IS NOT NULL AND team_id != '') AS only_team_id
+            FROM work_item_team_attributions FINAL
+            WHERE org_id = {org_id:String}
+              AND is_primary = 1
+              AND (work_item_id, repo_id, computed_at) IN (
+                  SELECT work_item_id, repo_id, max(computed_at)
+                  FROM work_item_team_attributions
+                  WHERE org_id = {org_id:String}
+                  GROUP BY work_item_id, repo_id
+              )
+            GROUP BY work_item_id
+            HAVING uniqExactIf(team_id, team_id IS NOT NULL AND team_id != '') = 1
+        ) AS any_repo ON any_repo.work_item_id = link.work_item_id
+    )
+    GROUP BY repo_id, pr_number
+    HAVING uniqExactIf(link_team_id, link_team_id IS NOT NULL AND link_team_id != '') = 1
 )`
 }
 
@@ -378,14 +407,14 @@ FROM (
     SELECT pr.repo_id AS repo_id, pr.number AS number, attr.kind AS kind,
            coalesce(nullIf(wi.type, ''), 'pull_request') AS work_type
     FROM git_pull_requests AS pr
-    INNER JOIN work_graph_issue_pr AS link
-        ON link.org_id = pr.org_id AND link.repo_id = pr.repo_id AND link.pr_number = pr.number
+    INNER JOIN `+aiImpactBestTierLinksSQL("AND pr_number IN {pr_numbers:Array(UInt32)}")+` AS link
+        ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
     INNER JOIN ai_attribution_resolved AS attr
         ON attr.subject_type = 'pull_request'
         AND attr.subject_id = link.work_item_id
         AND attr.kind IN ('ai_assisted', 'agent_created', 'ai_review')
     LEFT JOIN work_items AS wi FINAL
-        ON wi.org_id = link.org_id AND wi.repo_id = link.repo_id AND wi.work_item_id = link.work_item_id
+        ON wi.org_id = pr.org_id AND wi.repo_id = link.repo_id AND wi.work_item_id = link.work_item_id
     WHERE pr.repo_id IN {repo_ids:Array(UUID)} AND pr.number IN {pr_numbers:Array(UInt32)}
       AND pr.org_id = {org_id:String} AND toString(attr.org_id) = {org_id:String}
     UNION ALL
@@ -451,12 +480,14 @@ ORDER BY repo_id, number, work_type`,
 }
 
 // LoadAIImpactRepoMergedPRTeams returns, for each given repository, its merged
-// pull requests that a team owned (aiImpactPullRequestOwnerSQL), newest first,
-// merged before `before`. It is read only for a repository whose main owners
-// tie. At most mergedPRTeamsPerRepo rows are read for each repository.
+// pull requests that a team owned (aiImpactPullRequestOwnerSQL), merged before
+// dayEnd. The tie-break needs, for each incident of the day, the newest such
+// pull request before the incident started, so the read is exact and bounded:
+// for each (repository, team) the newest one merged before dayStart, and every
+// one merged inside [dayStart, dayEnd).
 func LoadAIImpactRepoMergedPRTeams(
 	ctx context.Context, conn repositoryRows, organizationID string,
-	repoIDs []uuid.UUID, before time.Time,
+	repoIDs []uuid.UUID, dayStart, dayEnd time.Time,
 ) (map[uuid.UUID][]aiimpact.MergedPRTeam, error) {
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return nil, ErrInvalidState
@@ -465,21 +496,30 @@ func LoadAIImpactRepoMergedPRTeams(
 	if len(repoIDs) == 0 {
 		return result, nil
 	}
+	merged := `
+    SELECT pr.repo_id AS repo_id, owner.team_id AS team_id, pr.merged_at AS merged_at
+    FROM (
+        SELECT repo_id, number, merged_at
+        FROM git_pull_requests FINAL
+        WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+          AND merged_at IS NOT NULL AND %s
+    ) AS pr
+    INNER JOIN owner ON owner.repo_id = pr.repo_id AND owner.pr_number = pr.number`
 	rows, err := conn.Query(ctx, `
-SELECT pr.repo_id, owner.team_id, pr.merged_at
-FROM (
-    SELECT repo_id, number, merged_at
-    FROM git_pull_requests FINAL
-    WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-      AND merged_at IS NOT NULL AND merged_at < {before:DateTime64(3, 'UTC')}
-) AS pr
-INNER JOIN `+aiImpactPullRequestOwnerSQL("")+` AS owner
-    ON owner.repo_id = pr.repo_id AND owner.pr_number = pr.number
-ORDER BY pr.repo_id, pr.merged_at DESC, owner.team_id
-LIMIT `+fmt.Sprint(mergedPRTeamsPerRepo)+` BY pr.repo_id`,
+WITH owner AS `+aiImpactPullRequestOwnerSQL("")+`
+SELECT repo_id, team_id, merged_at FROM (
+    SELECT * FROM (`+fmt.Sprintf(merged, "merged_at < {day_start:DateTime64(3, 'UTC')}")+`
+        ORDER BY merged_at DESC
+        LIMIT 1 BY pr.repo_id, owner.team_id
+    )
+    UNION ALL
+    `+fmt.Sprintf(merged, "merged_at >= {day_start:DateTime64(3, 'UTC')} AND merged_at < {day_end:DateTime64(3, 'UTC')}")+`
+)
+ORDER BY repo_id, merged_at DESC, team_id`,
 		clickhouse.Named("org_id", organizationID),
 		clickhouse.Named("repo_ids", repositoryUUIDStrings(repoIDs)),
-		clickhouse.Named("before", remaining.DateTime64Argument(before, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("day_start", remaining.DateTime64Argument(dayStart, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("day_end", remaining.DateTime64Argument(dayEnd, remaining.DateTime64MillisecondPrecision)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load ai impact repo merged pr teams: %w", err)
@@ -505,6 +545,80 @@ LIMIT `+fmt.Sprint(mergedPRTeamsPerRepo)+` BY pr.repo_id`,
 	return result, nil
 }
 
-// mergedPRTeamsPerRepo bounds the tie-break read: the newest team-owned merged
-// pull requests of a repository.
-const mergedPRTeamsPerRepo = 500
+// LoadAIImpactIncidentMappedRepos returns, by incident id, every repository the
+// incident's service maps to (the same active mapping LoadIncidentsStarted
+// joins), not only the partition's. An incident of a service mapped to several
+// repositories is one incident: the executor places it on one of them.
+func LoadAIImpactIncidentMappedRepos(
+	ctx context.Context, conn repositoryRows, organizationID string, incidentIDs []string, asOf time.Time,
+) (map[string][]uuid.UUID, error) {
+	if conn == nil || strings.TrimSpace(organizationID) == "" {
+		return nil, ErrInvalidState
+	}
+	result := make(map[string][]uuid.UUID)
+	if len(incidentIDs) == 0 {
+		return result, nil
+	}
+	contract, err := remaining.ConfiguredOperationalOrderingContract()
+	if err != nil {
+		return nil, fmt.Errorf("load ai impact incident repos: %w", err)
+	}
+	currentIncidents := remaining.CurrentOperationalRowsSQL("operational_incidents", []string{
+		"is_deleted = 0",
+		"id IN {incident_ids:Array(String)}",
+	}, contract)
+	rows, err := conn.Query(ctx, `
+SELECT DISTINCT incident.id AS incident_id, mapping.repo_id AS repo_id
+FROM `+currentIncidents+` AS incident
+INNER JOIN `+activeServiceRepositoryMappingsSQL(contract)+` AS mapping
+    ON incident.org_id = mapping.org_id AND incident.service_id = mapping.service_id
+INNER JOIN repos AS repo FINAL
+    ON mapping.org_id = repo.org_id AND mapping.repo_id = repo.id
+WHERE mapping.repo_id IS NOT NULL
+ORDER BY incident_id, repo_id`,
+		clickhouse.Named("org_id", organizationID),
+		clickhouse.Named("incident_ids", incidentIDs),
+		clickhouse.Named("as_of", remaining.DateTime64Argument(asOf, remaining.DateTime64MicrosecondPrecision)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load ai impact incident repos: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var incidentID string
+		var repoID uuid.UUID
+		if err := rows.Scan(&incidentID, &repoID); err != nil {
+			return nil, fmt.Errorf("scan ai impact incident repo: %w", err)
+		}
+		result[incidentID] = append(result[incidentID], repoID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate ai impact incident repos: %w", err)
+	}
+	return result, nil
+}
+
+// AIImpactIncidentRepo is the one repository an incident is placed on (D6040):
+// the repository of its triggering pull request when its service maps to that
+// repository, else the lowest repository id its service maps to. It does not
+// depend on the partition, so each incident is counted by exactly one
+// partition. mapped is empty only when the mapping read found nothing.
+func AIImpactIncidentRepo(trigger *aiimpact.IncidentTrigger, mapped []uuid.UUID) (uuid.UUID, bool) {
+	if len(mapped) == 0 {
+		return uuid.Nil, false
+	}
+	if trigger != nil {
+		for _, repoID := range mapped {
+			if repoID == trigger.RepoID {
+				return repoID, true
+			}
+		}
+	}
+	lowest := mapped[0]
+	for _, repoID := range mapped[1:] {
+		if repoID.String() < lowest.String() {
+			lowest = repoID
+		}
+	}
+	return lowest, true
+}

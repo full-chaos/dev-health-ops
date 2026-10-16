@@ -1314,11 +1314,17 @@ controls: a link that is gone and an explicit empty list are closed).
 >   2. the team that owned the triggering pull request: the pull request of the deployment the incident is linked to
 >      (`work_graph_deployment_incident_edges` of the best tier, native > explicit_text > heuristic, then
 >      `deployments.pull_request_number`), owned by the primary team of the work item linked to it in
->      `work_graph_issue_pr` (best tier only: a native link shadows a lower one; a pull request whose best-tier links
->      name no team or several has no owner);
+>      `work_graph_issue_pr` (best tier only: a native link shadows a lower one, for the owner and for the pull request's
+>      AI bucket and work type alike; the work item's attribution row of the pull request's own repository wins, and
+>      rows of other repositories count only when they all name one team; a pull request whose best-tier links name no
+>      team or several has no owner);
 >   3. the main owner of the repository. Among tied main owners (D5990) the incident goes to the tied team that owned
 >      the most recently merged pull request of the repository before the incident started, else to the lowest team
 >      id. A repository no team owns keeps its incidents in its no-team rows.
+>      An incident whose service maps to several repositories is one incident: it sits on the repository of its
+>      triggering pull request when the service maps to it, else on the lowest repository id the service maps to, whichever
+>      partition computes the day, so it is counted once. `ai_impact` runs after `work_item_attribution` and
+>      `work_graph_edges`, whose rows it reads.
 >
 >   The row is the triggering pull request's own (team, repository, `work_type`, AI bucket). An incident without a
 >   triggering pull request has no AI evidence: it sits on the `human` bucket with `work_type` `incident` (a value of

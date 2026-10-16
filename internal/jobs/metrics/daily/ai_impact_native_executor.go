@@ -223,7 +223,7 @@ func (executor *AIImpactExecutor) ComputeFamily(
 		return main
 	}
 	incidents, repoMergedPRTeams, err := executor.resolveIncidents(
-		ctx, run.OrganizationID, incidentRows, teams, mainOwners, dayEnd,
+		ctx, run.OrganizationID, incidentRows, teams, mainOwners, dayStart, dayEnd, computedAt,
 	)
 	if err != nil {
 		return 0, err
@@ -257,7 +257,7 @@ var _ NativeFamilyExecutor = (*AIImpactExecutor)(nil)
 // matched by raw equality with a team id.
 func (executor *AIImpactExecutor) resolveIncidents(
 	ctx context.Context, organizationID string, rows []IncidentRow, teams []aiimpact.Team,
-	mainOwners func(uuid.UUID) []string, before time.Time,
+	mainOwners func(uuid.UUID) []string, dayStart, dayEnd, asOf time.Time,
 ) ([]aiimpact.IncidentRow, map[uuid.UUID][]aiimpact.MergedPRTeam, error) {
 	if len(rows) == 0 {
 		return nil, nil, nil
@@ -285,10 +285,23 @@ func (executor *AIImpactExecutor) resolveIncidents(
 	if err != nil {
 		return nil, nil, err
 	}
+	mappedRepos, err := LoadAIImpactIncidentMappedRepos(ctx, executor.conn, organizationID, ids, asOf)
+	if err != nil {
+		return nil, nil, err
+	}
 	incidents := make([]aiimpact.IncidentRow, 0, len(rows))
 	tiedRepos := make(map[uuid.UUID]struct{})
 	var sourceNamed, sourceDropped, triggered int
+	var elsewhere int
 	for _, row := range rows {
+		var trigger *aiimpact.IncidentTrigger
+		if found, ok := triggers[row.IncidentID]; ok {
+			trigger = &found
+		}
+		if home, ok := AIImpactIncidentRepo(trigger, mappedRepos[row.IncidentID]); ok && home != row.RepoID {
+			elsewhere++
+			continue
+		}
 		incident := aiimpact.IncidentRow{ID: row.IncidentID, RepoID: row.RepoID, StartedAt: row.StartedAt}
 		if ref, ok := sourceTeams[row.IncidentID]; ok {
 			if team, mapped := MapAIImpactProviderTeam(ref, catalog, knownTeams); mapped {
@@ -298,13 +311,13 @@ func (executor *AIImpactExecutor) resolveIncidents(
 				sourceDropped++
 			}
 		}
-		if trigger, ok := triggers[row.IncidentID]; ok {
+		if trigger != nil {
 			if trigger.TeamID != nil {
 				if _, known := knownTeams[*trigger.TeamID]; !known {
 					trigger.TeamID = nil
 				}
 			}
-			incident.Trigger = &trigger
+			incident.Trigger = trigger
 			triggered++
 		}
 		incidents = append(incidents, incident)
@@ -319,7 +332,7 @@ func (executor *AIImpactExecutor) resolveIncidents(
 			repos = append(repos, repoID)
 		}
 		sort.Slice(repos, func(i, j int) bool { return repos[i].String() < repos[j].String() })
-		repoMergedPRTeams, err = LoadAIImpactRepoMergedPRTeams(ctx, executor.conn, organizationID, repos, before)
+		repoMergedPRTeams, err = LoadAIImpactRepoMergedPRTeams(ctx, executor.conn, organizationID, repos, dayStart, dayEnd)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -327,7 +340,7 @@ func (executor *AIImpactExecutor) resolveIncidents(
 	slog.Info("ai_impact incident team resolution",
 		"organization_id", organizationID, "incidents", len(rows),
 		"source_team_named", sourceNamed, "source_team_unmapped", sourceDropped,
-		"triggering_pull_request", triggered, "tied_main_owner_repos", len(tiedRepos))
+		"triggering_pull_request", triggered, "placed_on_another_repository", elsewhere, "tied_main_owner_repos", len(tiedRepos))
 	return incidents, repoMergedPRTeams, nil
 }
 

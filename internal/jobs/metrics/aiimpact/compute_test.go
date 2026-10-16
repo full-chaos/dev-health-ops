@@ -744,3 +744,25 @@ func withoutIncidentColumns(row pythonRecord) pythonRecord {
 	row.IncidentsCount, row.IncidentDragRate, row.LeverageIncident = 0, nil, nil
 	return row
 }
+
+// The frozen Python golden cannot carry incidents (D6040 counts them once, on
+// one row). The same fixture with its incidents is held here instead: the two
+// incidents of the day sit on the repository's human bucket, work type
+// "incident", once; the one of another day is not counted.
+func TestFixtureIncidentsCountOnceOnTheirOwnRow(t *testing.T) {
+	var sum float64
+	var rows int
+	for _, record := range Compute(fixtureParams()) {
+		sum += record.IncidentsCount
+		if record.IncidentsCount == 0 {
+			continue
+		}
+		rows++
+		if record.WorkType != IncidentWorkType || record.AttributionBucket != BucketHuman || record.IncidentsCount != 2 {
+			t.Errorf("incident row %s/%s incidents_count %v, want 2 on human/%s", record.WorkType, record.AttributionBucket, record.IncidentsCount, IncidentWorkType)
+		}
+	}
+	if sum != 2 || rows != 1 {
+		t.Errorf("incidents_count adds up to %v over %d rows, want 2 over 1", sum, rows)
+	}
+}

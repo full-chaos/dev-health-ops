@@ -1,6 +1,12 @@
 package daily
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
+)
 
 // The source's team reference is mapped through the team catalog (provider and
 // native_team_key). A reference that only equals a team id never attributes.
@@ -29,6 +35,30 @@ func TestMapAIImpactProviderTeam(t *testing.T) {
 		got, ok := MapAIImpactProviderTeam(tc.ref, catalog, active)
 		if got != tc.want || ok != (tc.want != "") {
 			t.Errorf("%s: got (%q, %v), want %q", name, got, ok, tc.want)
+		}
+	}
+}
+
+// An incident of a service mapped to several repositories is placed on one:
+// the triggering pull request's repository when it is mapped, else the lowest
+// repository id, whatever order the mapping arrives in.
+func TestAIImpactIncidentRepo(t *testing.T) {
+	low := uuid.MustParse("00000000-0000-4000-8000-000000000001")
+	mid := uuid.MustParse("00000000-0000-4000-8000-000000000002")
+	high := uuid.MustParse("00000000-0000-4000-8000-000000000003")
+	other := uuid.MustParse("00000000-0000-4000-8000-0000000000ff")
+	if _, ok := AIImpactIncidentRepo(nil, nil); ok {
+		t.Error("an incident with no mapped repository has a home")
+	}
+	for _, mapped := range [][]uuid.UUID{{high, low, mid}, {mid, high, low}, {low, mid, high}} {
+		if got, _ := AIImpactIncidentRepo(nil, mapped); got != low {
+			t.Errorf("no trigger: home %v, want the lowest %v", got, low)
+		}
+		if got, _ := AIImpactIncidentRepo(&aiimpact.IncidentTrigger{RepoID: high}, mapped); got != high {
+			t.Errorf("trigger in a mapped repository: home %v, want %v", got, high)
+		}
+		if got, _ := AIImpactIncidentRepo(&aiimpact.IncidentTrigger{RepoID: other}, mapped); got != low {
+			t.Errorf("trigger in an unmapped repository: home %v, want the lowest %v", got, low)
 		}
 	}
 }

@@ -201,3 +201,33 @@ func TestFamilyRunOrderSatisfiesEveryDeclaredEdge(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-9915: ai_impact places an incident on the team of its triggering pull
+// request, read from work_item_team_attributions (work_item_attribution) and
+// from the deployment-incident edges (work_graph_edges). Both must have written
+// their rows for the partition before ai_impact reads them.
+func TestFamilyRunOrderPutsAIImpactAfterTheFamiliesItReads(t *testing.T) {
+	registry, err := LoadRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, registered := range [][]string{
+		{"ai_impact", "work_graph_edges", "work_item_attribution"},
+		{"work_item_attribution", "work_graph_edges", "ai_impact"},
+		{"work_graph_edges", "ai_impact", "work_item_attribution"},
+	} {
+		ordered, err := FamilyRunOrder(registry, registered)
+		if err != nil {
+			t.Fatal(err)
+		}
+		position := map[string]int{}
+		for index, name := range ordered {
+			position[name] = index
+		}
+		for _, writer := range []string{"work_item_attribution", "work_graph_edges"} {
+			if position[writer] > position["ai_impact"] {
+				t.Errorf("ai_impact runs before %s, whose rows it reads: %v", writer, ordered)
+			}
+		}
+	}
+}

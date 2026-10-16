@@ -38,6 +38,21 @@ in `_records/bigboy-pins.env`, the one file a cut rewrites (`bigboy-repin*.sh`; 
 `docker compose ps` needs nothing exported). The tracked `ci/bigboy/bigboy-pins.env` is the last pin a PR recorded; copy it to
 `_records/` to start a bigboy root. `BIGBOY_OPERATOR_IMAGE` is absent from the tracked copy: the cut exports it, and repin writes it.
 
+**First use on a root that still has the old pin file** (read-only until the last line; GWC owns the switch window): the new file renders
+the live `stack` byte-identically (so no container is recreated by the switch itself), but the pins now come from an env file. Make
+`_records/bigboy-pins.env` from the digests the old `_records/compose.bigboy.images.yml` pins, with grep only (no value is a secret):
+
+```
+cd "$BIGBOY_ROOT"
+for pair in BIGBOY_DHO_IMAGE:dev-health-go-dho BIGBOY_API_TOOLS_IMAGE:dev-health-go-api-tools BIGBOY_WEB_IMAGE:dev-health-web BIGBOY_OPERATOR_IMAGE:dev-health-go-operator; do
+  var=${pair%%:*}; img=${pair##*:}
+  ref=$(grep -ohE "ghcr.io/full-chaos/$img@sha256:[0-9a-f]{64}" _records/compose.bigboy.images.yml | head -1) || true
+  [ -n "$ref" ] && echo "$var=$ref"
+done > _records/bigboy-pins.env
+```
+
+then compare the render (names only: `ci/bigboy/compose-config-redacted.sh` with the arguments above) before running any `up`.
+
 What `stack.sh` did and is gone: it refused any verb but a short list (now: type the command above), it refused to start a worker
 without `BIGBOY_OPERATOR_IMAGE` (now compose refuses: the variable is required), and it appended one line per mutating verb to
 `_records/stack-runs.log` (not kept: the cut's own `STEP` lines and `$REC/*.out` are the record).

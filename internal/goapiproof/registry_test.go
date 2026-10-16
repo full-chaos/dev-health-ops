@@ -258,19 +258,16 @@ func TestAStaleRoutingRowRefusesTheRun(t *testing.T) {
 	if strings.Contains(err.Error(), "featureFlags") {
 		t.Fatalf("an agreeing row must not be reported, got %v", err)
 	}
-	// The refusal has to tell the operator how to clear it, or it is a
-	// wall rather than a gate -- and it must name the MODE-PRESERVING
-	// verb. `routing enable --candidate-build` re-points a row, but its
-	// --mode is canary|primary only, so following that advice on a SHADOW
-	// row silently flips it to canary.
-	if !strings.Contains(err.Error(), "dho goapi routing repoint") {
-		t.Fatalf("the refusal must name the mode-preserving re-point verb, got %v", err)
+	// The refusal has to tell the operator how to clear it, or it is a wall rather than a gate: a class decision is
+	// moved to the running build by `enable` (the repoint verb is retired, D6024), and a document operation has no row.
+	if !strings.Contains(err.Error(), "dho goapi routing enable") {
+		t.Fatalf("the refusal must name the verb that moves a class decision, got %v", err)
+	}
+	if strings.Contains(err.Error(), "routing repoint") && !strings.Contains(err.Error(), "repoint verb is retired") {
+		t.Fatalf("the refusal names the retired repoint verb as advice, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "A document operation has no routing row to re-point") {
 		t.Fatalf("the refusal must say a document operation has no row to re-point, got %v", err)
-	}
-	if strings.Contains(err.Error(), "routing enable") {
-		t.Fatalf("the refusal names a verb that refuses catalog operations, got %v", err)
 	}
 }
 

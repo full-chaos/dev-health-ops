@@ -50,6 +50,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/readers"
 	"log/slog"
 	"strings"
 	"time"
@@ -318,9 +319,9 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		}
 		// CHAOS-9619 (D5999): the newest issue size of each unit; under ISSUE_SIZE every weighted column is weighed
 		// by it (1 when unsized) so the coverage cards read the same measure as the chart beside them.
-		joins = append(joins, fmt.Sprintf("LEFT JOIN %s AS unit_size ON unit_size.org_id = work_unit_investments.org_id AND unit_size.work_unit_id = work_unit_investments.work_unit_id", LatestWorkUnitIssueSizeSource()))
+		joins = append(joins, fmt.Sprintf("LEFT JOIN %s AS unit_size ON unit_size.org_id = work_unit_investments.org_id AND unit_size.work_unit_id = work_unit_investments.work_unit_id", readers.LatestWorkUnitIssueSizeSource()))
 		if req.Measure == MeasureIssueSize {
-			repoEffortCol = "(" + repoEffortCol + " * if(unit_size.issue_size > 0, unit_size.issue_size, 1.0))"
+			repoEffortCol = "(" + repoEffortCol + " * " + readers.UnitSizeWeightExpr("unit_size") + ")"
 		}
 		sizedUnitsExpr = "toNullable(toFloat64(uniqExactIf(work_unit_investments.work_unit_id, unit_size.issue_size > 0)))"
 		unitsExpr = "toNullable(toFloat64(uniqExact(work_unit_investments.work_unit_id)))"

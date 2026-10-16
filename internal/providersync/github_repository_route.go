@@ -69,6 +69,9 @@ type repositoryRow struct {
 	Tags       string    `json:"tags"`
 	Provider   string    `json:"provider"`
 	LastSynced time.Time `json:"last_synced"`
+	// ProviderRepoID is the provider's stable repository id; empty when the
+	// route has none, and then the held id is kept.
+	ProviderRepoID string `json:"provider_repo_id,omitempty"`
 }
 
 // repositorySettings defines the GitHub repository settings fields. The

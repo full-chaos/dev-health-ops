@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/readers"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"log/slog"
 	"math"
@@ -145,7 +146,7 @@ func (reader *Reader) fetchMixDistributions(ctx context.Context, opts ExplainInv
 }
 
 // fetchMixSizing is the sizing coverage of the mix read in ISSUE_SIZE (CHAOS-9619, D6027), nil for COUNT.
-func (reader *Reader) fetchMixSizing(ctx context.Context, opts ExplainInvestmentMixOptions) (*SizingCoverage, error) {
+func (reader *Reader) fetchMixSizing(ctx context.Context, opts ExplainInvestmentMixOptions) (*readers.SizingCoverage, error) {
 	measure := opts.effectiveMeasure()
 	slog.DebugContext(ctx, "investmentexplain: mix measure", "org_id", opts.OrgID, "measure", measure)
 	if measure != MeasureIssueSize {
@@ -159,7 +160,7 @@ func (reader *Reader) fetchMixSizing(ctx context.Context, opts ExplainInvestment
 }
 
 // applySizing puts the sizing coverage of the mix on every finding; nil (COUNT) leaves them without it.
-func applySizing(explanation *InvestmentMixExplanation, sizing *SizingCoverage) {
+func applySizing(explanation *InvestmentMixExplanation, sizing *readers.SizingCoverage) {
 	for i := range explanation.TopFindings {
 		evidence := &explanation.TopFindings[i].Evidence
 		evidence.SizingCoverage, evidence.UnsizedUnitCount, evidence.SizingNote = nil, nil, ""
@@ -510,7 +511,7 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 	// carry the resolved window and the shares of the data behind it, else an answer
 	// computed on an older day or older work units replays for the same filters.
 	var themeDistribution, subcategoryDistribution *orderedFloatMap
-	var sizing *SizingCoverage
+	var sizing *readers.SizingCoverage
 	cacheFilters := opts.FiltersForCacheKey
 	if opts.WindowErr == nil {
 		var fetchErr error

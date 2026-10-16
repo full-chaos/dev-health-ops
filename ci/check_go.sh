@@ -2552,6 +2552,8 @@ load_affected_selection() {
     [ -n "${line}" ] || continue
     [ -n "${INTEGRATION_SHARD_WEIGHTS[${line}]+set}" ] \
       || die "affected selection names '${line}', which is not a planned integration package"
+    [ -z "${AFFECTED_KEYS[${line}]+set}" ] \
+      || die "affected selection lists '${line}' more than once"
     AFFECTED_KEYS["${line}"]=1
     count=$((count + 1))
   done < <(tail -n +2 "${file}")

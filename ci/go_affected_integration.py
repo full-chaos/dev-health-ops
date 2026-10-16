@@ -49,9 +49,7 @@ def read_json_stream(path: Path) -> list[dict]:
 def read_changed(path: Path) -> list[str]:
     raw = path.read_bytes()
     sep = b"\0" if b"\0" in raw else b"\n"
-    return [
-        p.decode("utf-8", "surrogateescape") for p in raw.split(sep) if p.strip()
-    ]
+    return [p.decode("utf-8", "surrogateescape") for p in raw.split(sep) if p.strip()]
 
 
 def strip_variant(import_path: str) -> str:
@@ -143,9 +141,7 @@ def main(argv: list[str]) -> int:
 
     changed = read_changed(args.changed)
     keys = [k for k in args.keys.read_text(encoding="utf-8").split("\n") if k]
-    verdict, affected = select(
-        changed, read_json_stream(args.golist), keys, args.root
-    )
+    verdict, affected = select(changed, read_json_stream(args.golist), keys, args.root)
     if verdict == "AFFECTED":
         print(f"AFFECTED {len(affected)}")
         for key in affected:

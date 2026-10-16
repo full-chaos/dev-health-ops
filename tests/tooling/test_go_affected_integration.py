@@ -132,7 +132,10 @@ def test_embedded_markdown_is_placed_by_its_owner() -> None:
         _binary("internal/top", "internal/mid"),
     ]
     assert affected.select(
-        ["internal/mid/sql/README.md"], golist, ["internal/mid", "internal/top"], ROOT_DIR
+        ["internal/mid/sql/README.md"],
+        golist,
+        ["internal/mid", "internal/top"],
+        ROOT_DIR,
     ) == ("AFFECTED", ["internal/mid", "internal/top"])
 
 
@@ -204,7 +207,15 @@ def _real_selection(tmp_path: Path, changed: bytes) -> list[str]:
     )
     with (tmp_path / "golist.json").open("w", encoding="utf-8") as handle:
         subprocess.run(
-            ["go", "list", "-mod=readonly", "-tags=integration", "-test", "-json", "./..."],
+            [
+                "go",
+                "list",
+                "-mod=readonly",
+                "-tags=integration",
+                "-test",
+                "-json",
+                "./...",
+            ],
             cwd=ROOT,
             stdout=handle,
             check=True,
@@ -300,7 +311,12 @@ def test_planner_matrix_shrinks_with_a_selection_and_stays_full_without(
 @needs_go
 @pytest.mark.parametrize(
     "body",
-    ["AFFECTED 1\ninternal/not-a-package\n", "AFFECTED 2\ninternal/admincli\n", "oops\n"],
+    [
+        "AFFECTED 1\ninternal/not-a-package\n",
+        "AFFECTED 2\ninternal/admincli\n",
+        "AFFECTED 2\ninternal/admincli\ninternal/admincli\n",
+        "oops\n",
+    ],
 )
 def test_planner_rejects_a_malformed_selection(tmp_path: Path, body: str) -> None:
     bad = tmp_path / "bad.txt"
@@ -309,12 +325,16 @@ def test_planner_rejects_a_malformed_selection(tmp_path: Path, body: str) -> Non
     assert proc.returncode != 0
 
 
-def test_workflow_gates_shards_on_legs_and_aggregator_accepts_only_explicit_zero() -> None:
+def test_workflow_gates_shards_on_legs_and_aggregator_accepts_only_explicit_zero() -> (
+    None
+):
     jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
     plan = jobs["go-storage-integration-plan"]
     assert plan["outputs"]["legs"] == "${{ steps.plan.outputs.legs }}"
     step = next(
-        s for s in plan["steps"] if s.get("name", "").startswith("Select the integration")
+        s
+        for s in plan["steps"]
+        if s.get("name", "").startswith("Select the integration")
     )
     assert step["if"] == "github.event_name == 'pull_request'"
     run = jobs["go-storage-integration"]["steps"][0]["run"]

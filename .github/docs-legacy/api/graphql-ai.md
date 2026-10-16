@@ -51,7 +51,7 @@ the GraphQL `AIAttributionBucketInput` enum:
 | `ai_review`     | AI performed the review.                                   |
 | `human`         | Default: every pull request with no AI signal and no `[bot]` author. |
 | `bot`           | No AI signal and the author login ends in `[bot]` (dependabot and the like): neither human nor AI. Stored and returned as a string; not a `buckets` filter value. |
-| `unknown`       | Only a stored attribution kind that names no bucket (bad data). Never a default, and no empty row is written. |
+| `unknown`       | Only a stored attribution kind that names no bucket (bad data). Never a default; the per-group row is written empty (prs_total 0). |
 
 ## Query catalog
 

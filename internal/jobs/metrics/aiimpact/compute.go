@@ -810,11 +810,12 @@ func buildRecords(
 
 		for _, bucket := range bucketEmitOrder {
 			bucketFacts := filterBucket(groupFacts, bucket)
-			// An empty bucket emits no row. Python always emitted an empty
-			// unknown row (:419); unknown is no default bucket (chris, D6045),
-			// so that row is gone.
+			// The unknown bucket ALWAYS emits a row, even when empty (:419).
+			// Kept on purpose: the key has no computed_at, so the empty row is
+			// what supersedes a stale unknown row (prs_total > 0) from before
+			// the human default when a day is recomputed.
 			bucketIncidents := anchored[anchorKey{group: key, bucket: bucket}]
-			if len(bucketFacts) == 0 && bucketIncidents == 0 {
+			if len(bucketFacts) == 0 && bucket != BucketUnknown && bucketIncidents == 0 {
 				continue
 			}
 			agg := aggregateFacts(bucketFacts, bucketIncidents)

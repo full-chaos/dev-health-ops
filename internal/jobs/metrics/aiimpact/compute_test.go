@@ -324,19 +324,12 @@ func loadFrozenAIImpactGolden(t *testing.T) []pythonRecord {
 // what a naive sum or the wrong division order produces -- fails the test
 // rather than hiding inside a tolerance.
 func TestAIImpactMatchesFrozenPythonGolden(t *testing.T) {
-	// Two deliberate divergences from the frozen Python (chris, D6045 "by
+	// One deliberate divergence from the frozen Python (chris, D6045 "by
 	// default everything is human unless it's AI"): a pull request with no AI
-	// signal is human, not unknown, and an empty unknown row is no longer
-	// emitted. So the unattributed PR 8 is pinned to the explicit "unknown"
-	// kind (keeping the unknown-bucket arithmetic under comparison) and the
-	// frozen empty unknown row (prs_total 0) is dropped from the expectation.
-	var want []pythonRecord
-	for _, row := range loadFrozenAIImpactGolden(t) {
-		if row.AttributionBucket == string(BucketUnknown) && row.PRsTotal == 0 {
-			continue
-		}
-		want = append(want, row)
-	}
+	// signal is human, not unknown. So the unattributed PR 8 is pinned to the
+	// explicit "unknown" kind, keeping the unknown-bucket arithmetic under
+	// comparison.
+	want := loadFrozenAIImpactGolden(t)
 	params := fixtureParams()
 	params.Incidents = nil
 	params.Attributions = append(params.Attributions, AttributionRow{
@@ -808,7 +801,8 @@ func TestClassifyBucketDefaultsToHumanAndRoutesBots(t *testing.T) {
 
 // TestComputeWritesHumanAndBotRowsForUnsignalledPRs asserts the written rows,
 // not the classifier: unattributed human PRs land on a human row with
-// prs_total > 0, a bot PR on a bot row, and no unknown row exists.
+// prs_total > 0, a bot PR on a bot row, and no unknown row counts a PR (the
+// empty unknown row is still written, with prs_total 0).
 func TestComputeWritesHumanAndBotRowsForUnsignalledPRs(t *testing.T) {
 	params := fixtureParams()
 	params.Incidents = nil
@@ -822,8 +816,8 @@ func TestComputeWritesHumanAndBotRowsForUnsignalledPRs(t *testing.T) {
 	totals := map[AttributionBucket]float64{}
 	for _, record := range Compute(params) {
 		totals[record.AttributionBucket] += record.PRsTotal
-		if record.AttributionBucket == BucketUnknown {
-			t.Errorf("unknown row written: %+v", record)
+		if record.AttributionBucket == BucketUnknown && record.PRsTotal != 0 {
+			t.Errorf("unknown row counts PRs: %+v", record)
 		}
 	}
 	if totals[BucketHuman] <= 0 {

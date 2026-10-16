@@ -128,6 +128,9 @@ var emptyColumnsAfterTheCapture = map[string]map[string]string{
 	// The rule that matched a deployment's pull request link (CHAOS-9610): a
 	// captured deployment has no tier.
 	"deployments": {"pull_request_tier": "126_deployments_pull_request_tier.sql"},
+	// The provider's own stable id of a repository (CHAOS-3383): a captured
+	// repository row has none.
+	"repos": {"provider_repo_id": "134_repos_provider_repo_id.sql"},
 }
 
 // defaultedColumnsAfterTheCapture names the String columns a migration added

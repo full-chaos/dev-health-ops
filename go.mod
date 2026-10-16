@@ -13,7 +13,7 @@ require (
 	github.com/beevik/etree v1.7.0
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/crewjam/saml v0.5.1
-	github.com/full-chaos/dev-health-go v0.24.4
+	github.com/full-chaos/dev-health-go v0.24.5
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0

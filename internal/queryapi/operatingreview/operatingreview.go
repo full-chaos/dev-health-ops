@@ -899,7 +899,7 @@ func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, st
 	return out, rows.Err()
 }
 
-// investmentRow is one canonical theme of the week: its work (InvestmentShareMeasure) over the units that END in the
+// investmentRow is one canonical theme of the week: its work (OperatingReviewMeasure) over the units that END in the
 // week (the Jev categorization, work_unit_investments: the Investment page's own read; CHAOS-9199).
 type investmentRow struct {
 	theme string
@@ -927,7 +927,7 @@ func fetchInvestment(ctx context.Context, client QueryClient, orgID string, team
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: investment: %w", err)
 	}
-	filters := investmentexplain.BreakdownFilters{OrgID: orgID, StartTS: start, EndTS: end, DatedByEnd: true, Measure: investmentexplain.InvestmentShareMeasure}
+	filters := investmentexplain.BreakdownFilters{OrgID: orgID, StartTS: start, EndTS: end, DatedByEnd: true, Measure: investmentexplain.OperatingReviewMeasure}
 	if len(teams) > 0 {
 		filters.TeamScopeCondition, filters.TeamScopeBindings = teamscope.RepoCondition(orgID, "repo_id", []string(teams), ownershipAsOf(end))
 		filters.TeamIDs, filters.TeamAsOf = []string(teams), ownershipAsOf(end)
@@ -1984,7 +1984,7 @@ var investmentThemes = []struct{ key, label string }{
 	{"risk", "Risk / security"},
 }
 
-// investmentUnits is the work per canonical theme (InvestmentShareMeasure); a theme with no work is 0.
+// investmentUnits is the work per canonical theme (OperatingReviewMeasure); a theme with no work is 0.
 func investmentUnits(rows []investmentRow) map[string]float64 {
 	out := make(map[string]float64, len(investmentThemes))
 	for _, theme := range investmentThemes {
@@ -2199,8 +2199,8 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 }
 
 // investmentSection is the week's work per canonical theme (CHAOS-9199), in the measure
-// investmentexplain.InvestmentShareMeasure names (COUNT, CHAOS-9622, D5999: the share of the
-// units, never their lines of code). The metrics are named <theme>_work with the unit "work units"
+// investmentexplain.OperatingReviewMeasure names (COUNT until the section carries its sizing coverage, D6027;
+// never the units' lines of code). The metrics are named <theme>_work with the unit "work units"
 // (they were <theme>_effort and "effort" while the value was the unit's churn_loc effort_value). Feature delivery
 // reads higher-is-better and maintenance lower-is-better, as "new value" and "KTLO" did; the
 // other themes are neutral.

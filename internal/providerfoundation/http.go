@@ -145,19 +145,15 @@ func (c *HTTPClient) resolveTarget(path string) (*url.URL, error) {
 		joined.RawQuery, joined.Fragment, joined.RawFragment = ref.RawQuery, ref.Fragment, ref.RawFragment
 		target = &joined
 	}
-	if target.Host != c.BaseURL.Host || target.Scheme != c.BaseURL.Scheme {
+	if !sameOrigin(target, c.BaseURL) {
+		httpguard.RecordLeftOrigin(context.Background(), httpguard.ActionRefused, "provider.follow_url", c.BaseURL, target)
 		return nil, ErrCredentialInvalid
 	}
 	return target, nil
 }
 
-// sameOrigin reports whether u is on the scheme and host (with port) of base.
-func sameOrigin(u, base *url.URL) bool {
-	return u != nil && base != nil && u.Scheme == base.Scheme && u.Host == base.Host
-}
-
-// credentialHeaders are the request headers that carry a credential.
-var credentialHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "Private-Token", "X-Api-Key", "X-Auth-Token"}
+// sameOrigin is the one origin rule of internal/httpguard (scheme, host and port).
+func sameOrigin(u, base *url.URL) bool { return httpguard.SameOrigin(u, base) }
 
 // DropCredentialsOnHostChange is an http.Client CheckRedirect for a client that must follow redirects (it
 // also makes unauthenticated reads) but must never replay a credential to another host: it follows like
@@ -169,9 +165,8 @@ func DropCredentialsOnHostChange(req *http.Request, via []*http.Request) error {
 		return errors.New("stopped after 10 redirects")
 	}
 	if len(via) > 0 && !sameOrigin(req.URL, via[0].URL) {
-		for _, name := range credentialHeaders {
-			req.Header.Del(name)
-		}
+		httpguard.StripCredentials(req)
+		httpguard.RecordLeftOrigin(req.Context(), httpguard.ActionStripped, "provider.drop_on_host_change", via[0].URL, req.URL)
 	}
 	return nil
 }
@@ -218,15 +213,14 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 		if !known {
 			// A decorator dropped the request context, so the credential origin is lost: fail closed. The hop is followed (a
 			// redirect to presigned storage must keep working) with EVERY credential header removed.
-			for _, name := range credentialHeaders {
-				req.Header.Del(name)
-			}
+			httpguard.StripCredentials(req)
 			req.Header.Set(strippedMarker, "1")
 			slog.Warn("provider redirect without a credential origin in the request context: credential headers stripped")
 			return nil
 		}
 		// The hop would be followed: stop it where it leaves the credential origin and say so.
 		if !sameOrigin(req.URL, state.target) {
+			httpguard.RecordLeftOrigin(req.Context(), httpguard.ActionRefused, "provider.redirect", state.target, req.URL)
 			state.left.Store(true)
 			return http.ErrUseLastResponse
 		}
@@ -267,6 +261,7 @@ func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) 
 			return errors.New("stopped after 10 redirects")
 		}
 		if !sameOrigin(req.URL, target) {
+			httpguard.RecordLeftOrigin(req.Context(), httpguard.ActionRefused, "provider.redirect", target, req.URL)
 			left.Store(true)
 			return http.ErrUseLastResponse
 		}

@@ -179,6 +179,7 @@ internal/jobs/workgraph/edges	35
 internal/jobs/workgraph/issuecommitedges	1
 internal/jobs/workgraph/issuepredges	2
 internal/jobs/workgraph/issueprlinks	6
+internal/jobs/workgraph/linktier	1
 internal/jobs/workgraph/operationaledges	1
 internal/jobs/workgraph/prcommit	1
 internal/jobs/workgraph/textrefs	5

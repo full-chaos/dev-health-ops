@@ -80,7 +80,11 @@ func TestTheTeamReviewQuadrantGroupsByTheRepositoryOwner(t *testing.T) {
 		}
 		var points []string
 		for _, point := range resp.Points {
-			points = append(points, fmt.Sprintf("%s(%s) load=%.4f latency=%.4f", point.EntityID, point.EntityLabel, point.X, point.Y))
+			if point.NoData {
+				points = append(points, fmt.Sprintf("%s(%s) no data", point.EntityID, point.EntityLabel))
+				continue
+			}
+			points = append(points, fmt.Sprintf("%s(%s) load=%.4f latency=%.4f", point.EntityID, point.EntityLabel, *point.X, *point.Y))
 		}
 		sort.Strings(points)
 		return fmt.Sprint(points)
@@ -91,10 +95,10 @@ func TestTheTeamReviewQuadrantGroupsByTheRepositoryOwner(t *testing.T) {
 		teams []string
 		want  string
 	}{
-		{"every team", nil, "[team-co(Name of team-co) load=3.0000 latency=5.0000 team-own(Name of team-own) load=3.8000 latency=5.8000]"},
+		{"every team", nil, "[team-co(Name of team-co) load=3.0000 latency=5.0000 team-member(Name of team-member) no data team-own(Name of team-own) load=3.8000 latency=5.8000]"},
 		{"the owner selected", []string{"team-own"}, "[team-own(Name of team-own) load=3.8000 latency=5.8000]"},
 		{"a co-owner selected", []string{"team-co"}, "[team-co(Name of team-co) load=3.0000 latency=5.0000]"},
-		{"a membership-only team selected", []string{"team-member"}, "[]"},
+		{"a membership-only team selected", []string{"team-member"}, "[team-member(Name of team-member) no data]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := run(tc.teams); got != tc.want {

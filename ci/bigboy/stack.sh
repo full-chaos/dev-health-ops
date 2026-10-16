@@ -8,6 +8,8 @@
 #   logs [args]         compose logs (default --tail=200)
 #   up <service>...     compose up -d --no-deps --no-build <service>...  (at least one service; never the whole stack)
 #   restart <service>   compose restart <service>
+#   run <service> [cmd...]   compose run --rm --no-deps -T <service> [cmd...]  (a one-off container; logged)
+#   exec <service> [cmd...]  compose exec -T <service> [cmd...]  (stdin passes through; not logged)
 #   repin-web           bigboy-repin-web.sh (WEB_REPIN as there)
 # Before a mutating verb it prints the file list and the pinned image refs. After it, one line goes to
 # $BIGBOY_ROOT/_records/stack-runs.log: time, verb, service, tools sha, image digests, rc.
@@ -22,9 +24,9 @@ SET=stack
 die() { echo "stack.sh: $*" >&2; exit 2; }
 
 if [ "${1:-}" = "-s" ]; then SET=${2:?set name}; shift 2; fi
-VERB=${1:-}; [ -n "$VERB" ] || die "usage: stack.sh [-s set] <files|config|ps|logs|up|restart|repin-web> [args]"
+VERB=${1:-}; [ -n "$VERB" ] || die "usage: stack.sh [-s set] <files|config|ps|logs|up|restart|run|exec|repin-web> [args]"
 shift
-case $VERB in files|config|ps|logs|up|restart|repin-web) ;; *) die "unknown verb '$VERB'" ;; esac
+case $VERB in files|config|ps|logs|up|restart|run|exec|repin-web) ;; *) die "unknown verb '$VERB'" ;; esac
 
 [ -f "$LIST" ] || die "file list $LIST is missing"
 grep -qE "^${SET}[[:space:]]" "$LIST" || die "unknown set '$SET' in $LIST"
@@ -64,8 +66,18 @@ cd "$R"
 export BIGBOY_ROOT="$R" BIGBOY_TOOLS_DIR="$T"
 export DHO_API_CH_USERS_XML="${DHO_API_CH_USERS_XML:-$R/.go-api-dev/dho_api_ch.xml}"
 if [ -z "${BIGBOY_OPERATOR_IMAGE:-}" ] && grep -qs 'BIGBOY_OPERATOR_IMAGE' "${FILES[@]}"; then
-  BIGBOY_OPERATOR_IMAGE=$(docker compose -p "$PROJECT" ps --format '{{.Image}}' go-reconciler 2>/dev/null | head -1 || true)
-  [ -n "$BIGBOY_OPERATOR_IMAGE" ] || die "BIGBOY_OPERATOR_IMAGE is unset and no running go-reconciler names it; export it"
+  # the services of this set whose image IS the operator image: only starting one of them needs the real reference
+  OPERATOR_SERVICES=$(awk '/^  [A-Za-z0-9._-]+:/{svc=$1; sub(":","",svc)} /^    image:.*BIGBOY_OPERATOR_IMAGE/{print svc}' "${FILES[@]}" | sort -u)
+  starts_worker=0
+  case $VERB in
+    up) for a in "$@"; do grep -qxF -- "$a" <<<"$OPERATOR_SERVICES" && starts_worker=1; done ;;
+    restart|run|exec) [ $# -gt 0 ] && grep -qxF -- "$1" <<<"$OPERATOR_SERVICES" && starts_worker=1 ;;
+  esac
+  if [ "$starts_worker" = 1 ]; then
+    die "starting an operator-image service needs BIGBOY_OPERATOR_IMAGE: export BIGBOY_OPERATOR_IMAGE=<registry>/dev-health-go-operator@sha256:<digest> (the cut exports it)"
+  else
+    BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator:not-resolved   # nothing starts from it; it only has to interpolate
+  fi
 fi
 export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-}"
 if [ -z "${RIVER_DHO_IMAGE:-}" ]; then
@@ -80,7 +92,7 @@ COMPOSE_PROFILES=""; for p in "${PROFILES[@]}"; do COMPOSE_PROFILES+="${COMPOSE_
 
 valid_service() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "not a service name: refused"; }
 compose() { docker compose "${ARGS[@]}" "$@"; }
-MUTATING=0; case $VERB in up|restart|repin-web) MUTATING=1 ;; esac
+MUTATING=0; case $VERB in up|restart|run|repin-web) MUTATING=1 ;; esac
 if [ "$MUTATING" = 1 ]; then
   echo "stack.sh set=$SET project=$PROJECT root=$R" >&2
   printf 'stack.sh file %s\n' "${FILES[@]}" >&2
@@ -89,7 +101,7 @@ ERRF=$(mktemp); trap 'rm -f "$ERRF"' EXIT
 # compose's stderr can quote a resolved value, so only the NAME of a missing required variable is surfaced
 safe_config() {
   local rc=0
-  compose config "$@" 2>"$ERRF" || rc=$?
+  compose config "$@" 2>"$ERRF" </dev/null || rc=$?
   [ "$rc" -eq 0 ] || grep -oE 'required variable [A-Za-z_][A-Za-z0-9_]* is missing' "$ERRF" >&2 || true
   return "$rc"
 }
@@ -119,5 +131,7 @@ case $VERB in
   logs) [ $# -gt 0 ] || set -- --tail=200; compose logs "$@" ;;
   up) [ $# -gt 0 ] || die "up needs at least one service name"; for a in "$@"; do valid_service "$a"; done; run_logged "$*" compose up -d --no-deps --no-build "$@" ;;
   restart) [ $# -eq 1 ] || die "restart takes exactly one service name"; valid_service "$1"; run_logged "$1" compose restart "$1" ;;
+  run) [ $# -ge 1 ] || die "run needs a service name"; valid_service "$1"; run_logged "$1" compose run --rm --no-deps -T "$@" ;;
+  exec) [ $# -ge 1 ] || die "exec needs a service name"; valid_service "$1"; compose exec -T "$@" ;;
   repin-web) run_logged web "$HERE/bigboy-repin-web.sh" ;;
 esac

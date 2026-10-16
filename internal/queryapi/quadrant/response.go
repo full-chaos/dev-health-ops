@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
+	"log/slog"
+	"slices"
 	"sort"
 	"time"
 )
@@ -41,12 +43,19 @@ type PointTrajectory struct {
 type Point struct {
 	EntityID     string            `json:"entity_id"`
 	EntityLabel  string            `json:"entity_label"`
-	X            float64           `json:"x"`
-	Y            float64           `json:"y"`
+	X            *float64          `json:"x" pyjson:"nullable"`
+	Y            *float64          `json:"y" pyjson:"nullable"`
 	WindowStart  string            `json:"window_start"`
 	WindowEnd    string            `json:"window_end"`
 	EvidenceLink string            `json:"evidence_link"`
 	Trajectory   []PointTrajectory `json:"trajectory" pyjson:"nullable"`
+	// NoData is Go-only (CHAOS-9815; the Python reference never served it) and
+	// last, so the frozen key order is kept. It is true, and x and y are null,
+	// for a team in scope that has no point in the window: no work, or only one
+	// axis. The point says "no data in this window", never a zero. The key is
+	// absent on every plotted point, so a plotted point's bytes are the ones
+	// Python serves.
+	NoData bool `json:"no_data,omitempty"`
 }
 
 // Annotation is the wire shape of QuadrantAnnotation (schemas.py:536-540).
@@ -293,25 +302,38 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		return nil, err
 	}
 
-	fetch := func(spec MetricSpec) ([]metricRow, error) {
+	fetch := func(spec MetricSpec, bucket string) ([]metricRow, error) {
 		if definition.Type == "cycle_throughput" && scope == "team" && spec.UsePrimaryTeamAttribution {
-			return fetchWorkItemTeamQuadrantMetricIn(ctx, client, spec.Metric, startDay, endDay, params.Bucket, orgID, time.Now().UTC(), selected.attributedTeams)
+			return fetchWorkItemTeamQuadrantMetricIn(ctx, client, spec.Metric, startDay, endDay, bucket, orgID, time.Now().UTC(), selected.attributedTeams)
 		}
 		if scope == "team" && spec.OwnerTeam {
 			read, owners := ownerTeamRead(spec, orgID, selected.teams, time.Now().UTC())
-			return fetchQuadrantMetricIn(ctx, client, read, startDay, endDay, params.Bucket, orgID, "", owners)
+			return fetchQuadrantMetricIn(ctx, client, read, startDay, endDay, bucket, orgID, "", owners)
 		}
 		if scope == "person" {
-			return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, params.Bucket, orgID, "", personIdentityScope(spec, personIdentities))
+			return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, bucket, orgID, "", personIdentityScope(spec, personIdentities))
 		}
-		return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, params.Bucket, orgID, "", selected.scope)
+		return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, bucket, orgID, "", selected.scope)
 	}
 
-	xRows, err := fetch(xSpec)
+	// The trajectory is read per bucket. The point is read once over the whole
+	// window by the same reader (bucketWindow), so its value is the window's own
+	// aggregate: a sum stays a sum, a mean stays the mean over the window's rows
+	// and a median the median over the window's items. A mean of the buckets'
+	// values would weigh a thin bucket as much as a thick one.
+	xRows, err := fetch(xSpec, params.Bucket)
 	if err != nil {
 		return nil, err
 	}
-	yRows, err := fetch(ySpec)
+	yRows, err := fetch(ySpec, params.Bucket)
+	if err != nil {
+		return nil, err
+	}
+	xWindowRows, err := fetch(xSpec, bucketWindow)
+	if err != nil {
+		return nil, err
+	}
+	yWindowRows, err := fetch(ySpec, bucketWindow)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +342,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	if scope == "team" {
 		seen := map[string]bool{}
 		var ids []string
-		for _, row := range append(append([]metricRow{}, xRows...), yRows...) {
+		for _, row := range slices.Concat(xRows, yRows, xWindowRows, yWindowRows) {
 			id := row.EntityID
 			if id != "" && !seen[id] {
 				seen[id] = true
@@ -371,19 +393,63 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		})
 	}
 
-	points := make([]Point, 0, len(entityOrder))
-	for _, entityID := range entityOrder {
-		windows := pointsByEntity[entityID]
-		if len(windows) == 0 {
+	windowX := map[string]xEntry{}
+	for _, row := range xWindowRows {
+		entityID, label := rowEntity(row, scope, teamLabels)
+		if entityID == "" || (scope == "person" && entityID != params.ScopeID) {
 			continue
 		}
-		sort.SliceStable(windows, func(i, j int) bool {
-			return windows[i].WindowStart.Before(windows[j].WindowStart)
-		})
-		latest := windows[len(windows)-1]
+		windowX[entityID] = xEntry{Label: label, X: xSpec.Transform(row.Value)}
+	}
+	windowPoints := map[string]yWindow{}
+	var windowOrder []string
+	for _, row := range yWindowRows {
+		entityID, label := rowEntity(row, scope, teamLabels)
+		if entityID == "" || (scope == "person" && entityID != params.ScopeID) {
+			continue
+		}
+		xe, ok := windowX[entityID]
+		if !ok {
+			continue
+		}
+		if label == "" {
+			label = xe.Label
+		}
+		if _, seen := windowPoints[entityID]; !seen {
+			windowOrder = append(windowOrder, entityID)
+		}
+		windowPoints[entityID] = yWindow{Label: label, X: xe.X, Y: ySpec.Transform(row.Value), WindowStart: startDay, WindowEnd: endDay}
+	}
+
+	// Points keep the order the bucketed reads first met them in; a team that only
+	// the window read holds (its two axes fall in different buckets) follows,
+	// sorted by id.
+	ordered := make([]string, 0, len(windowPoints))
+	listed := map[string]bool{}
+	for _, entityID := range entityOrder {
+		if _, ok := windowPoints[entityID]; ok {
+			ordered = append(ordered, entityID)
+			listed[entityID] = true
+		}
+	}
+	var rest []string
+	for _, entityID := range windowOrder {
+		if !listed[entityID] {
+			rest = append(rest, entityID)
+		}
+	}
+	sort.Strings(rest)
+	ordered = append(ordered, rest...)
+
+	points := make([]Point, 0, len(ordered))
+	for _, entityID := range ordered {
+		window := windowPoints[entityID]
 
 		var trajectory []PointTrajectory
-		if len(windows) > 1 {
+		if windows := pointsByEntity[entityID]; len(windows) > 1 {
+			sort.SliceStable(windows, func(i, j int) bool {
+				return windows[i].WindowStart.Before(windows[j].WindowStart)
+			})
 			trajectory = make([]PointTrajectory, 0, len(windows))
 			for _, w := range windows {
 				trajectory = append(trajectory, PointTrajectory{
@@ -396,15 +462,24 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 
 		points = append(points, Point{
 			EntityID:     entityID,
-			EntityLabel:  latest.Label,
-			X:            latest.X,
-			Y:            latest.Y,
-			WindowStart:  latest.WindowStart.Format("2006-01-02"),
-			WindowEnd:    latest.WindowEnd.Format("2006-01-02"),
+			EntityLabel:  window.Label,
+			X:            &window.X,
+			Y:            &window.Y,
+			WindowStart:  window.WindowStart.Format("2006-01-02"),
+			WindowEnd:    window.WindowEnd.Format("2006-01-02"),
 			EvidenceLink: evidenceLink(definition.EvidenceMetric),
 			Trajectory:   trajectory,
 		})
 	}
+	if scope == "team" {
+		var err error
+		if points, err = withCatalogTeams(ctx, client, orgID, selected.teams, points, startDay, endDay, evidenceLink(definition.EvidenceMetric)); err != nil {
+			return nil, err
+		}
+	}
+	slog.Debug("quadrant: points aggregate the whole window",
+		"org_id", orgID, "type", definition.Type, "scope", scope, "bucket", params.Bucket,
+		"window_start", startDay, "window_end", endDay, "entities_bucketed", len(entityOrder), "points", len(points))
 
 	return &Response{
 		Axes: Axes{

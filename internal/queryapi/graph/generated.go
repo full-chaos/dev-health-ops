@@ -801,6 +801,7 @@ type ComplexityRoot struct {
 		CurrentValue      func(childComplexity int) int
 		Delta             func(childComplexity int) int
 		Direction         func(childComplexity int) int
+		Driver            func(childComplexity int) int
 		EvidenceCount     func(childComplexity int) int
 		EvidenceRef       func(childComplexity int) int
 		ID                func(childComplexity int) int
@@ -5226,6 +5227,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.HomeSignal.Direction(childComplexity), true
+
+	case "HomeSignal.driver":
+		if e.complexity.HomeSignal.Driver == nil {
+			break
+		}
+
+		return e.complexity.HomeSignal.Driver(childComplexity), true
 
 	case "HomeSignal.evidenceCount":
 		if e.complexity.HomeSignal.EvidenceCount == nil {
@@ -10585,6 +10593,8 @@ type HomeSignal {
   attribution: SignalAttribution
   "Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta."
   repoFilterApplied: Boolean
+  "One sentence on where the signal's move appears largest (\"Cycle Time appears to have moved most in A, B and C.\"), built from the display names of its top drivers with one hedge word. Null when the signal has no stated non-zero move, no driver has a name, or the signal is not a metric signal (risk, recommendation). Never a placeholder."
+  driver: String
 }
 
 """Source and confidence distribution for the work items behind one Home signal."""
@@ -11854,7 +11864,7 @@ input TimeseriesRequestInput {
 }
 
 """
-Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE and COVERAGE_LINE_PCT carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
+Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE, COVERAGE_LINE_PCT and TEST_FLAKE_RATE carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
 """
 enum TimeseriesScope {
   DIMENSION
@@ -37492,6 +37502,8 @@ func (ec *executionContext) fieldContext_HomeResult_signals(_ context.Context, f
 				return ec.fieldContext_HomeSignal_attribution(ctx, field)
 			case "repoFilterApplied":
 				return ec.fieldContext_HomeSignal_repoFilterApplied(ctx, field)
+			case "driver":
+				return ec.fieldContext_HomeSignal_driver(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type HomeSignal", field.Name)
 		},
@@ -38700,6 +38712,47 @@ func (ec *executionContext) fieldContext_HomeSignal_repoFilterApplied(_ context.
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeSignal_driver(ctx context.Context, field graphql.CollectedField, obj *model.HomeSignal) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeSignal_driver(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Driver, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeSignal_driver(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeSignal",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -73501,6 +73554,8 @@ func (ec *executionContext) _HomeSignal(ctx context.Context, sel ast.SelectionSe
 			out.Values[i] = ec._HomeSignal_attribution(ctx, field, obj)
 		case "repoFilterApplied":
 			out.Values[i] = ec._HomeSignal_repoFilterApplied(ctx, field, obj)
+		case "driver":
+			out.Values[i] = ec._HomeSignal_driver(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

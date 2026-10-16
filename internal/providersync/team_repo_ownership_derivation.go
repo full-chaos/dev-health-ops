@@ -461,6 +461,12 @@ type TeamRepoOwnershipTie struct {
 type teamRepoOwnershipDerivation struct {
 	Rows []DerivedTeamRepoOwnershipRow
 	Ties []TeamRepoOwnershipTie
+	// CoOwnersBelowShareFloor counts the co-owners the share floor gave no row.
+	CoOwnersBelowShareFloor int
+	// DroppedBelowShareFloor names those co-owners. The share is a measure
+	// over the whole history, so a dropped co-owner held no share on any day:
+	// the write side voids its rows instead of closing them at the run.
+	DroppedBelowShareFloor []teamRepoOwnershipClaimRef
 	// TextKeyCandidates counts the candidates a key parsed from pull request
 	// text gave (explicit_text tier); TextKeysSkippedForNative counts the pull
 	// requests whose text key was not used because they have a native link.
@@ -485,6 +491,17 @@ func changeRequestNumber(workItemID string) string {
 	return workItemID[index+1:]
 }
 
+// teamRepoOwnershipClaimRef names one team's claim on one repository.
+type teamRepoOwnershipClaimRef struct {
+	TeamID string
+	RepoID string
+}
+
+// teamRepoOwnershipCoOwnerShareFloor is the smallest linked share a co-owner
+// needs for a row (chris, 2026-10-15: "Drop them if they're < 1%"). A main
+// owner keeps its row whatever its share.
+const teamRepoOwnershipCoOwnerShareFloor = 0.01
+
 // deriveTeamRepoOwnership implements both signal paths plus PR inheritance
 // against ALREADY-LOADED rows for one org (loading is the caller's job --
 // this function does no I/O, so it is exhaustively unit-testable). Returns
@@ -503,7 +520,8 @@ func changeRequestNumber(workItemID string) string {
 // its share. When two or more teams tie for the top at every tier, the repo is
 // reported in Ties and the tied teams are marked Tied: the write side keeps
 // the tied team that is already the main owner, else the repo has no main
-// owner.
+// owner. A co-owner whose share is below teamRepoOwnershipCoOwnerShareFloor
+// gets no row; the shares of the other rows keep their denominator.
 func deriveTeamRepoOwnership(
 	// orgID is unused inside this function as of CHAOS-4537 (the last
 	// internal use, reconstructing the linear_team_key identity, is gone --
@@ -677,6 +695,10 @@ func deriveTeamRepoOwnership(
 			if leader[teamID] {
 				row.IsPrimary = teamRepoOwnershipMainOwner
 				row.EvidenceFrom = repoEarliest
+			} else if row.Share < teamRepoOwnershipCoOwnerShareFloor {
+				result.CoOwnersBelowShareFloor++
+				result.DroppedBelowShareFloor = append(result.DroppedBelowShareFloor, teamRepoOwnershipClaimRef{TeamID: teamID, RepoID: repoID})
+				continue
 			}
 			result.Rows = append(result.Rows, row)
 		}
@@ -688,6 +710,13 @@ func deriveTeamRepoOwnership(
 		return result.Rows[i].TeamID < result.Rows[j].TeamID
 	})
 	sort.Slice(result.Ties, func(i, j int) bool { return result.Ties[i].RepoID < result.Ties[j].RepoID })
+	sort.Slice(result.DroppedBelowShareFloor, func(i, j int) bool {
+		a, b := result.DroppedBelowShareFloor[i], result.DroppedBelowShareFloor[j]
+		if a.RepoID != b.RepoID {
+			return a.RepoID < b.RepoID
+		}
+		return a.TeamID < b.TeamID
+	})
 	return result
 }
 

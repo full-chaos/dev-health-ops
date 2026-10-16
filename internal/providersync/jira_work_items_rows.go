@@ -56,6 +56,9 @@ type jiraWorkItemFixtureInput struct {
 	// this route even though the legacy JSON compatibility path intentionally
 	// retains its historical getattr(dict, ...) behavior.
 	AtlassianShape bool
+	// PointsFields are the discovered story point field ids in preference
+	// order; empty when story_points_field is configured or none was found.
+	PointsFields []string
 }
 
 func normalizeJiraWorkItem(
@@ -117,41 +120,104 @@ func normalizeJiraWorkItem(
 	}
 	closedAt := jiraTime(jiraField(fields, "resolutiondate", issue.ObjectShape))
 	urlValue := stringPointerIfNonEmpty(raw["self"])
-	storyPoints := jiraFloat(jiraField(fields, jiraOptionString(claim, "story_points_field", ""), issue.ObjectShape))
+	storyPoints := jiraStoryPoints(claim, fields, issue.PointsFields, issue.ObjectShape)
 	sprintID, sprintName := jiraSprint(jiraField(fields, jiraOptionString(claim, "sprint_field", "customfield_10020"), issue.ObjectShape), issue.ObjectShape)
-	parentID := jiraParentID(jiraField(fields, "parent", issue.ObjectShape))
-	epicField := jiraOptionString(claim, "epic_link_field", "")
-	var epicID *string
-	if epicField != "" {
-		if value := stringFrom(jiraField(fields, epicField, issue.ObjectShape)); value != "" {
-			candidate := "jira:" + value
-			epicID = &candidate
-		}
-	}
 	serviceClass := jiraServiceClass(priorityRaw)
-	row := jiraWorkItemRow{
-		WorkItemID: "jira:" + key, Provider: "jira", Title: title, Type: typeName,
-		Status: status, StatusRaw: nullableString(statusRaw), Description: description,
-		RepoID: nil, NativeTeamKey: nil, ProjectKey: nullableString(projectKey),
-		ProjectID: nullableString(projectID), ProjectName: nullableString(projectName),
-		Assignees: assignees, Reporter: reporter, CreatedAt: createdAt.UTC(),
-		UpdatedAt: updatedAt.UTC(), ClosedAt: closedAt, Labels: labels,
-		StoryPoints: storyPoints, SprintID: nullableString(sprintID),
-		SprintName: nullableString(sprintName), ParentID: parentID, EpicID: epicID,
-		URL: urlValue, PriorityRaw: nullableString(priorityRaw), ServiceClass: &serviceClass,
-		DueAt: jiraTime(jiraField(fields, "duedate", issue.ObjectShape)), OrgID: claim.OrgID,
-		LastSynced: normalizedAt.UTC(),
-	}
 	changelog, _ := jiraMapValue(jiraField(raw, "changelog", issue.ObjectShape))
 	transitions := normalizeJiraTransitions(
 		claim, key, changelog, labels, *createdAt, statusMapping, resolveIdentity,
 		issue.ObjectShape, identityShape, normalizedAt,
 	)
-	row.StartedAt, row.CompletedAt = deriveJiraLifecycle(transitions, status, closedAt, *updatedAt)
-	if err := validateJiraWorkItem(row, claim); err != nil {
+	startedAt, completedAt := deriveJiraLifecycle(transitions, status, closedAt, *updatedAt)
+	row, err := buildWorkItemRow(claim, jiraIssueSource{
+		claim: claim, fields: fields, objectShape: issue.ObjectShape,
+		workItemID: "jira:" + key, title: title, typeName: typeName, status: status,
+		statusRaw: nullableString(statusRaw), description: description,
+		projectKey: nullableString(projectKey), projectID: nullableString(projectID),
+		projectName: nullableString(projectName), assignees: assignees, reporter: reporter,
+		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), startedAt: startedAt,
+		completedAt: completedAt, closedAt: closedAt, labels: labels, storyPoints: storyPoints,
+		sprintID: nullableString(sprintID), sprintName: nullableString(sprintName), url: urlValue,
+		priorityRaw: nullableString(priorityRaw), serviceClass: &serviceClass,
+		dueAt: jiraTime(jiraField(fields, "duedate", issue.ObjectShape)),
+	}, normalizedAt)
+	if err != nil {
 		return jiraWorkItemRow{}, nil, err
 	}
 	return row, transitions, nil
+}
+
+const jiraIssueSourceKind = "jira_issue"
+
+// jiraIssueSource is how a Jira issue fills the shared work-item row.
+type jiraIssueSource struct {
+	claim       Claim
+	fields      map[string]any
+	objectShape bool
+
+	workItemID, title, typeName, status                        string
+	statusRaw, description, projectKey, projectID, projectName *string
+	reporter, sprintID, sprintName, url, priorityRaw           *string
+	serviceClass                                               *string
+	assignees, labels                                          []string
+	createdAt, updatedAt                                       time.Time
+	startedAt, completedAt, closedAt, dueAt                    *time.Time
+	storyPoints                                                *float64
+}
+
+func (s jiraIssueSource) sourceKind() string { return jiraIssueSourceKind }
+func (s jiraIssueSource) validateRow(claim Claim, row workItemRow) error {
+	return validateJiraWorkItem(row, claim)
+}
+func (s jiraIssueSource) WorkItemID() string      { return s.workItemID }
+func (s jiraIssueSource) Provider() string        { return "jira" }
+func (s jiraIssueSource) Title() string           { return s.title }
+func (s jiraIssueSource) Type() string            { return s.typeName }
+func (s jiraIssueSource) Status() string          { return s.status }
+func (s jiraIssueSource) StatusRaw() *string      { return s.statusRaw }
+func (s jiraIssueSource) Description() *string    { return s.description }
+func (s jiraIssueSource) RepoID() *uuid.UUID      { return nil }
+func (s jiraIssueSource) NativeTeamKey() *string  { return nil }
+func (s jiraIssueSource) ProjectKey() *string     { return s.projectKey }
+func (s jiraIssueSource) ProjectID() *string      { return s.projectID }
+func (s jiraIssueSource) ProjectName() *string    { return s.projectName }
+func (s jiraIssueSource) Assignees() []string     { return s.assignees }
+func (s jiraIssueSource) Reporter() *string       { return s.reporter }
+func (s jiraIssueSource) CreatedAt() time.Time    { return s.createdAt }
+func (s jiraIssueSource) UpdatedAt() time.Time    { return s.updatedAt }
+func (s jiraIssueSource) StartedAt() *time.Time   { return s.startedAt }
+func (s jiraIssueSource) CompletedAt() *time.Time { return s.completedAt }
+func (s jiraIssueSource) ClosedAt() *time.Time    { return s.closedAt }
+func (s jiraIssueSource) Labels() []string        { return s.labels }
+func (s jiraIssueSource) StoryPoints() *float64   { return s.storyPoints }
+func (s jiraIssueSource) SprintID() *string       { return s.sprintID }
+func (s jiraIssueSource) SprintName() *string     { return s.sprintName }
+func (s jiraIssueSource) URL() *string            { return s.url }
+func (s jiraIssueSource) PriorityRaw() *string    { return s.priorityRaw }
+func (s jiraIssueSource) ServiceClass() *string   { return s.serviceClass }
+func (s jiraIssueSource) DueAt() *time.Time       { return s.dueAt }
+
+// ParentID reads fields.parent.key. Both the object and the JSON shapes carry
+// the key (CHAOS-9835).
+func (s jiraIssueSource) ParentID() workItemRef {
+	parent, ok := jiraMapValue(jiraField(s.fields, "parent", s.objectShape))
+	if !ok {
+		return workItemRefAbsent()
+	}
+	return workItemRefKey(stringFrom(parent["key"]))
+}
+
+// EpicID reads the site's Epic Link field when the dataset option names one.
+func (s jiraIssueSource) EpicID() workItemRef {
+	epicField := jiraOptionString(s.claim, "epic_link_field", "")
+	if epicField == "" {
+		return workItemRefAbsent()
+	}
+	value := stringFrom(jiraField(s.fields, epicField, s.objectShape))
+	if value == "" {
+		return workItemRefAbsent()
+	}
+	return workItemRefKey(value)
 }
 
 // jiraIssueProjectMoves is jiraProjectMoveItems' entry point for a raw issue
@@ -809,19 +875,6 @@ func jiraResolveMapUser(value any, resolver jiraIdentityResolver) string {
 		return "jira:" + strings.TrimSpace(accountID)
 	}
 	return strings.TrimSpace(displayName)
-}
-
-func jiraParentID(value any) *string {
-	mapped, ok := jiraMapValue(value)
-	if !ok {
-		return nil
-	}
-	key := strings.TrimSpace(stringFrom(mapped["key"]))
-	if key == "" {
-		return nil
-	}
-	result := "jira:" + key
-	return &result
 }
 
 func jiraSprint(value any, objectShape bool) (string, string) {

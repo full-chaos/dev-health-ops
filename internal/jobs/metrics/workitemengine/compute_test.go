@@ -116,15 +116,19 @@ func TestComputeIssueTypeMetricsDailyLeadTimeIsTheUpperMedianOfCompletedMinusCre
 				{WorkItemID: "3", Provider: provider, Type: "bug", CreatedAt: day.Add(-96 * time.Hour), CompletedAt: completedAt(10)},
 				// Completed on the day but created later: no lead time, left out of the p50 (not taken as 0).
 				{WorkItemID: "4", Provider: provider, Type: "bug", CreatedAt: day.Add(20 * time.Hour), CompletedAt: completedAt(10)},
-				// No creation time at all: left out as well.
+				// No creation time at all, and the Unix epoch the store holds for it: left out as well.
+				{WorkItemID: "5b", Provider: provider, Type: "bug", CreatedAt: time.Unix(0, 0).UTC(), CompletedAt: completedAt(10)},
 				{WorkItemID: "5", Provider: provider, Type: "bug", CompletedAt: completedAt(10)},
 				// Completed on another day: its lead time belongs to that day.
 				{WorkItemID: "6", Provider: provider, Type: "bug", CreatedAt: day.Add(-500 * time.Hour),
 					CompletedAt: timePointer(day.Add(-time.Hour))},
+				// Created and completed at the same instant: no lead time, so a stored 0 always means none.
+				{WorkItemID: "6b", Provider: provider, Type: "bug", CreatedAt: day.Add(3 * time.Hour), CompletedAt: completedAt(3)},
+				{WorkItemID: "6c", Provider: provider, Type: "bug", CreatedAt: day.Add(4 * time.Hour), CompletedAt: completedAt(4)},
 				// Open: no lead time.
 				{WorkItemID: "7", Provider: provider, Type: "bug", CreatedAt: day.Add(-300 * time.Hour)},
 			}
-			rows := ComputeIssueTypeMetricsDaily(items, day, end, teams("", "", "", "", "", "", ""), labelNormalizer{})
+			rows := ComputeIssueTypeMetricsDaily(items, day, end, teams("", "", "", "", "", "", "", "", "", ""), labelNormalizer{})
 			if len(rows) != 1 {
 				t.Fatalf("rows = %+v, want one", rows)
 			}
@@ -155,8 +159,10 @@ func TestLeadTimeInputsCountsCompletedAndExcludedItems(t *testing.T) {
 		{WorkItemID: "3", CreatedAt: day.Add(5 * time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
 		{WorkItemID: "4", CreatedAt: day.Add(-time.Hour)},
 		{WorkItemID: "5", CreatedAt: day.Add(-48 * time.Hour), CompletedAt: timePointer(day.Add(-time.Hour))},
+		{WorkItemID: "6", CreatedAt: time.Unix(0, 0).UTC(), CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "7", CreatedAt: day.Add(time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
 	}
-	if completed, excluded := LeadTimeInputs(items, day, day.AddDate(0, 0, 1)); completed != 3 || excluded != 2 {
-		t.Fatalf("completed=%d excluded=%d, want 3 and 2", completed, excluded)
+	if completed, excluded := LeadTimeInputs(items, day, day.AddDate(0, 0, 1)); completed != 5 || excluded != 4 {
+		t.Fatalf("completed=%d excluded=%d, want 5 and 4", completed, excluded)
 	}
 }

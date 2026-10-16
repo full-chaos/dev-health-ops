@@ -349,6 +349,10 @@ func jiraWorldAnswers() []providerAnswer {
 			"total": len(values), "isLast": true, "values": values}
 	}
 	answers = append(answers,
+		get(jiraHost, "/rest/api/3/field", "", []any{
+			map[string]any{"id": "summary", "name": "Summary", "custom": false, "schema": map[string]any{"type": "string"}},
+			map[string]any{"id": jiraStoryPointsField, "name": "Story point estimate", "custom": true, "schema": map[string]any{"type": "number"}},
+		}),
 		get(jiraHost, "/rest/api/3/project/search", "maxResults=100", search(projects)),
 		// No archived project.
 		get(jiraHost, "/rest/api/3/project/search", "maxResults=100&status=archived", search([]any{})),

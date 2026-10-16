@@ -83,7 +83,7 @@ func cutUpList(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("read bigboy-cut.sh: %v", err)
 	}
-	pattern := regexp.MustCompile(`up -d --no-deps --no-build ((?:go-[a-z-]+ ?)+)`)
+	pattern := regexp.MustCompile(`stack\.sh" up ((?:go-[a-z-]+ ?)+)`)
 	var found []string
 	for _, line := range strings.Split(string(raw), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") {
@@ -130,7 +130,7 @@ func TestEveryQueueServingBigboyServiceIsInTheCutUpList(t *testing.T) {
 	}
 	upList := cutUpList(t)
 	if len(upList) == 0 {
-		t.Fatalf("no worker `up -d --no-deps --no-build` line found in bigboy-cut.sh")
+		t.Fatalf("no worker `stack.sh up` line found in bigboy-cut.sh")
 	}
 	inList := map[string]bool{}
 	for _, name := range upList {
@@ -164,31 +164,27 @@ func bigboyCutLines(t *testing.T) []string {
 	return lines
 }
 
-// The test reads ci/bigboy/compose.bigboy.workers.yml, so the cut must run THAT file: the COMPOSE_FILE chain and
-// the redacted-config `-f` list name it through $HERE, and no entry still names the untracked host copy
-// (compose/compose.bigboy.workers.yml) that this change replaces.
+// The test reads ci/bigboy/compose.bigboy.workers.yml, so the cut must run THAT file: the `stack` set of
+// stack.files (which the cut runs through stack.sh) names it as a tools file, and the cut no longer names the
+// untracked host copy (compose/compose.bigboy.workers.yml) that this change replaced.
 func TestTheCutRunsTheTrackedWorkersOverlay(t *testing.T) {
-	const tracked = "$HERE/compose.bigboy.workers.yml"
 	const hostCopy = "compose/compose.bigboy.workers.yml"
-	var composeFile, redactedConfig string
 	for _, line := range bigboyCutLines(t) {
-		switch {
-		case strings.HasPrefix(strings.TrimSpace(line), "export COMPOSE_FILE="):
-			composeFile = line
-		case strings.Contains(line, "compose-config-redacted.sh") && strings.Contains(line, " -f "):
-			redactedConfig = line
-		}
 		if strings.Contains(line, hostCopy) {
 			t.Errorf("bigboy-cut.sh still names the untracked host copy %s: %s", hostCopy, line)
 		}
 	}
-	if composeFile == "" || redactedConfig == "" {
-		t.Fatalf("bigboy-cut.sh has no COMPOSE_FILE export (%v) or no redacted-config -f line (%v)", composeFile != "", redactedConfig != "")
-	}
-	for name, line := range map[string]string{"COMPOSE_FILE": composeFile, "redacted-config -f list": redactedConfig} {
-		if !strings.Contains(line, tracked) {
-			t.Errorf("%s does not name %s: %s", name, tracked, line)
+	named := false
+	for _, line := range strings.Split(read(t, filepath.Join(toolsDir(t), "stack.files")), "\n") {
+		if strings.TrimSpace(line) == "stack tools    compose.bigboy.workers.yml" {
+			named = true
 		}
+	}
+	if !named {
+		t.Errorf("the `stack` set of stack.files does not name compose.bigboy.workers.yml as a tools file")
+	}
+	if !strings.Contains(strings.Join(bigboyCutLines(t), "\n"), `"$HERE/stack.sh"`) {
+		t.Errorf("bigboy-cut.sh does not run through stack.sh")
 	}
 }
 

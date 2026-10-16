@@ -126,6 +126,11 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 		q := query
 
 		switch {
+		// first: the batch holds the text of every other case
+		case strings.Contains(q, "UNION ALL") && strings.Contains(q, "LIMIT {limit:UInt32} BY metric"):
+			// the batched driver read of the signal captions (CHAOS-8573): metric, id
+			return &fixtureRowScanner{rows: [][]any{{"churn", "repo-alpha"}}}, nil
+
 		case strings.Contains(q, "maxOrNull(computed_at) AS last_ingested_at"):
 			return &fixtureRowScanner{rows: [][]any{{time.Date(2024, 1, 8, 10, 0, 0, 0, time.UTC)}}}, nil
 
@@ -286,6 +291,7 @@ func TestGoldenOrgScopeDefault(t *testing.T) {
 // it here, and TestChangeFailureEvidenceIsServedWithTheRate holds it by value.
 func assertResponseEqual(t *testing.T, got, want Response) {
 	t.Helper()
+	walkServedProse(t, "built response", got)
 	got.Deltas = append([]MetricDelta(nil), got.Deltas...)
 	for i := range got.Deltas {
 		got.Deltas[i].ChangeFailureEvidence = nil
@@ -295,6 +301,12 @@ func assertResponseEqual(t *testing.T, got, want Response) {
 			t.Errorf("delta %s: hasPriorData %v but priorValue %v", got.Deltas[i].Metric, got.Deltas[i].HasPriorData, got.Deltas[i].PriorValue)
 		}
 		got.Deltas[i].PriorValue = nil
+	}
+	got.Signals = append([]Signal(nil), got.Signals...)
+	for i := range got.Signals {
+		got.Signals[i].ClaimSubject = ""
+		got.Signals[i].Why = nil
+		got.Signals[i].Driver = nil // GraphQL only (json "-"): the golden cannot hold it
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", got, want)

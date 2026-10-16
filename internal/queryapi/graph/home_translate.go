@@ -301,6 +301,7 @@ func homeSignalsFromResponse(signals []home.Signal) []model.HomeSignal {
 			ScopeEntity:       scopeEntity,
 			Coverage:          s.Coverage,
 			RepoFilterApplied: s.RepoFilterApplied,
+			Driver:            s.Driver,
 			Attribution:       homeSignalAttributionFromResponse(s.Attribution),
 		})
 	}

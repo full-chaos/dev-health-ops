@@ -122,11 +122,13 @@ func TestJiraParentIDOmitsParentWithoutKey(t *testing.T) {
 		"object empty key":    {map[string]any{"key": ""}, nil},
 		"json shape with key": {map[string]any{"key": "OPS-1"}, stringPointer("jira:OPS-1")},
 		"object with key":     {map[string]any{"key": "OPS-91"}, stringPointer("jira:OPS-91")},
+		"object blank key":    {map[string]any{"key": "  "}, nil},
+		"key with spaces":     {map[string]any{"key": " OPS-92 "}, stringPointer("jira:OPS-92")},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := jiraParentID(tc.value)
+			got := chaos9852JiraRow(t, tc.value).ParentID
 			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
-				t.Fatalf("jiraParentID = %v, want %v", got, tc.want)
+				t.Fatalf("parent_id = %v, want %v", valueOrNil(got), valueOrNil(tc.want))
 			}
 		})
 	}

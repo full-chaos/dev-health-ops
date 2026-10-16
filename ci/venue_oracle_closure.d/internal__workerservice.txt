@@ -131,6 +131,7 @@ internal/teamcreated
 internal/teamid
 internal/teamkeytables
 internal/teamownership
+internal/teamprovider
 internal/teamresolve
 internal/testsupport/chschema
 internal/testsupport/containers

@@ -104,6 +104,7 @@ internal/teamattribution
 internal/teamcreated
 internal/teamid
 internal/teamkeytables
+internal/teamprovider
 internal/testsupport/containers
 internal/testsupport/fakehttp
 internal/testsupport/goldenscan

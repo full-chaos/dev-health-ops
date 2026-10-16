@@ -112,6 +112,7 @@ internal/teamattribution
 internal/teamcreated
 internal/teamid
 internal/teamkeytables
+internal/teamprovider
 internal/testsupport/containers
 internal/testsupport/goldenscan
 internal/testsupport/moduleroot

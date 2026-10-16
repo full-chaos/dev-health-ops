@@ -2,6 +2,8 @@ package llmorgsettings
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -21,8 +23,9 @@ type OrgConfig struct {
 	Model    string
 	BaseURL  string
 	APIKey   secrets.Hidden
-	// Version changes whenever any of the org's llm settings rows is written:
-	// the newest updated_at, RFC 3339 with nanoseconds, UTC.
+	// Version is the hex sha256 over the org's BYO rows, sorted by key, each as
+	// (key, updated_at, sha256 of the stored value): any write, delete or
+	// value change moves it, including a delete of a row that was not the newest.
 	Version string
 }
 
@@ -50,16 +53,33 @@ func (s Store) OrgConfig(ctx context.Context, orgID string) (OrgConfig, bool, er
 		return OrgConfig{}, false, err
 	}
 	afterRowsRead()
-	var newest *time.Time
-	var stored []string
 	// Only the BYO keys count: the llm category also holds unrelated settings
 	// (platform certification profiles) that outlive a BYO delete.
-	err = tx.QueryRow(ctx, `
-SELECT max(updated_at), coalesce(array_agg(key) FILTER (WHERE value IS NOT NULL AND value <> ''), '{}')
-FROM settings WHERE org_id = $1 AND category = $2 AND key = ANY($3)`,
-		orgID, settingsCategoryLLM, byoKeys).Scan(&newest, &stored)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	versionRows, err := tx.Query(ctx, `
+SELECT key, updated_at, coalesce(value, '') FROM settings
+WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
+		orgID, settingsCategoryLLM, byoKeys)
+	if err != nil {
 		return OrgConfig{}, false, fmt.Errorf("query org llm settings version: %w", err)
+	}
+	digest := sha256.New()
+	var stored []string
+	for versionRows.Next() {
+		var key, value string
+		var updated time.Time
+		if err := versionRows.Scan(&key, &updated, &value); err != nil {
+			versionRows.Close()
+			return OrgConfig{}, false, fmt.Errorf("scan org llm settings version: %w", err)
+		}
+		valueHash := sha256.Sum256([]byte(value))
+		fmt.Fprintf(digest, "%s\x00%s\x00%x\n", key, updated.UTC().Format(time.RFC3339Nano), valueHash)
+		if value != "" {
+			stored = append(stored, key)
+		}
+	}
+	versionRows.Close()
+	if err := versionRows.Err(); err != nil {
+		return OrgConfig{}, false, fmt.Errorf("iterate org llm settings version: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return OrgConfig{}, false, fmt.Errorf("end org llm settings snapshot: %w", err)
@@ -99,12 +119,15 @@ FROM settings WHERE org_id = $1 AND category = $2 AND key = ANY($3)`,
 	if len(settings) == 0 {
 		return OrgConfig{}, false, nil
 	}
-	version := ""
-	if newest != nil {
-		version = newest.UTC().Format(time.RFC3339Nano)
+	// The provider the writer stores is already stripped and lower-cased; an
+	// empty, "auto", "mock" or "none" provider is "no BYO": the platform default.
+	provider := normalizeProvider(settings[keyProvider])
+	if provider == "auto" || provider == "mock" || provider == "none" {
+		return OrgConfig{}, false, nil
 	}
+	version := hex.EncodeToString(digest.Sum(nil))
 	return OrgConfig{
-		Provider: settings[keyProvider],
+		Provider: provider,
 		Model:    settings[keyModel],
 		BaseURL:  settings[keyBaseURL],
 		APIKey:   secrets.NewHidden(settings[keyAPIKey]),

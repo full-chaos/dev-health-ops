@@ -124,6 +124,12 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			return
 		}
 		cfg, found, err := source.OrgConfig(ctx, orgID)
+		if errors.Is(err, llmorgsettings.ErrStoredSettingUnreadable) {
+			logger.ErrorContext(ctx, "acr llm-config: stored config unreadable", slog.String("org_id", orgID))
+			countLLMConfig(ctx, "unreadable")
+			writeDetail(w, http.StatusConflict, "Stored config unreadable")
+			return
+		}
 		if err != nil {
 			logger.ErrorContext(ctx, "acr llm-config: store unavailable",
 				slog.String("org_id", orgID), slog.String("error_type", errorKind(err)))

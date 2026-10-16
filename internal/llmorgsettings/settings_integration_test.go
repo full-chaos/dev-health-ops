@@ -5,6 +5,7 @@ package llmorgsettings
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -631,4 +632,152 @@ func TestOrgConfig_OnlyByoKeysCountAsConfig(t *testing.T) {
 	if second.Version != first.Version {
 		t.Fatalf("a non-BYO setting moved the version: %q -> %q", first.Version, second.Version)
 	}
+}
+
+// TestOrgConfig_InputDomainMatrix is the closing guard for OrgConfig: row kind x readability x gate x
+// a concurrent save between the row read and the version read. Every cell asserts ok, error class,
+// the served provider/model/key, and the version/value pairing.
+func TestOrgConfig_InputDomainMatrix(t *testing.T) {
+	ctx := context.Background()
+	rightStore, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", true)
+	wrongDecryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("totally-wrong-key"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongStore := Store{Pool: pool, Decryptor: wrongDecryptor, Now: rightStore.Now}
+
+	type rowKind string
+	const (
+		none     rowKind = "no rows"
+		nonBYO   rowKind = "only a non-BYO llm row"
+		byoPlain rowKind = "BYO plain rows"
+		byoCiph  rowKind = "BYO model + encrypted api_key"
+		byoMixed rowKind = "BYO provider + model + encrypted api_key"
+		mockProv rowKind = "BYO provider mock"
+		noneProv rowKind = "BYO provider none"
+		blankKey rowKind = "BYO model only (no provider)"
+	)
+	seed := func(kind rowKind, orgID uuid.UUID) {
+		switch kind {
+		case nonBYO:
+			insertSetting(ctx, t, pool, orgID, "platform_ask_dev_role_certification_profile:legacy_agent", "{}")
+		case byoPlain:
+			insertSetting(ctx, t, pool, orgID, "provider", "  OpenAI ")
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+		case byoCiph:
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+			insertEncryptedSetting(ctx, t, rightStore, pool, orgID, "api_key", "sk-secret")
+		case byoMixed:
+			insertSetting(ctx, t, pool, orgID, "provider", "openai")
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+			insertEncryptedSetting(ctx, t, rightStore, pool, orgID, "api_key", "sk-secret")
+		case mockProv:
+			insertSetting(ctx, t, pool, orgID, "provider", "mock")
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+		case noneProv:
+			insertSetting(ctx, t, pool, orgID, "provider", "none")
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+		case blankKey:
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+		}
+	}
+	hasCipher := func(k rowKind) bool { return k == byoCiph || k == byoMixed }
+	hasModel := func(k rowKind) bool {
+		return k == byoPlain || k == byoCiph || k == byoMixed || k == mockProv || k == noneProv || k == blankKey
+	}
+
+	for _, kind := range []rowKind{none, nonBYO, byoPlain, byoCiph, byoMixed, mockProv, noneProv, blankKey} {
+		for _, gateOpen := range []bool{true, false} {
+			for _, rightKey := range []bool{true, false} {
+				for _, save := range []bool{false, true} {
+					name := fmt.Sprintf("%s/gate-open=%v/right-key=%v/save-between=%v", kind, gateOpen, rightKey, save)
+					t.Run(name, func(t *testing.T) {
+						tier := "enterprise"
+						if !gateOpen {
+							tier = "free"
+						}
+						orgID := seedOrg(ctx, t, pool, tier)
+						seed(kind, orgID)
+						store := wrongStore
+						if rightKey {
+							store = rightStore
+						}
+						var baseline OrgConfig
+						if save && hasModel(kind) {
+							b, _, err := rightStore.OrgConfig(ctx, orgID.String())
+							if err != nil {
+								t.Fatalf("baseline: %v", err)
+							}
+							baseline = b
+							afterRowsRead = func() {
+								if _, err := pool.Exec(ctx, `UPDATE settings SET value = 'm-after', updated_at = updated_at + interval '1 minute'
+									WHERE org_id = $1 AND category = 'llm' AND key = 'model'`, orgID.String()); err != nil {
+									t.Error(err)
+								}
+							}
+							t.Cleanup(func() { afterRowsRead = func() {} })
+						}
+						cfg, ok, err := store.OrgConfig(ctx, orgID.String())
+						afterRowsRead = func() {}
+
+						unreadable := hasCipher(kind) && !rightKey
+						wantErr := gateOpen && unreadable
+						// "served" means: BYO rows present, a real provider (byoPlain, byoMixed), gate open, readable.
+						served := gateOpen && !unreadable && (kind == byoPlain || kind == byoMixed)
+						if (err != nil) != wantErr {
+							t.Fatalf("err = %v, wantErr %v", err, wantErr)
+						}
+						if wantErr && !errors.Is(err, ErrStoredSettingUnreadable) {
+							t.Fatalf("err = %v, want ErrStoredSettingUnreadable", err)
+						}
+						if ok != served {
+							t.Fatalf("ok = %v, want %v (cfg %+v)", ok, served, cfg)
+						}
+						if !served {
+							return
+						}
+						if cfg.Provider != "openai" {
+							t.Fatalf("provider = %q, want canonical openai", cfg.Provider)
+						}
+						if cfg.Version == "" || len(cfg.Version) != 64 {
+							t.Fatalf("version = %q, want 64 hex chars", cfg.Version)
+						}
+						if hasCipher(kind) && cfg.APIKey.Reveal() != "sk-secret" {
+							t.Fatal("api_key not decrypted")
+						}
+						if save {
+							// The pre-save snapshot: old value, old version, never a mixed pair.
+							if cfg.Model != "m-before" || cfg.Version != baseline.Version {
+								t.Fatalf("mixed snapshot: model=%q version=%q, want m-before at %q", cfg.Model, cfg.Version, baseline.Version)
+							}
+							next, _, err := rightStore.OrgConfig(ctx, orgID.String())
+							if err != nil || next.Model != "m-after" || next.Version == cfg.Version {
+								t.Fatalf("after the save: model=%q version=%q err=%v", next.Model, next.Version, err)
+							}
+						}
+					})
+				}
+			}
+		}
+	}
+
+	// Deleting a row that is not the newest still moves the version.
+	t.Run("version moves when a non-newest row is deleted", func(t *testing.T) {
+		orgID := seedOrg(ctx, t, pool, "enterprise")
+		insertSetting(ctx, t, pool, orgID, "provider", "openai")
+		insertSetting(ctx, t, pool, orgID, "base_url", "https://api.openai.com/v1")
+		insertSetting(ctx, t, pool, orgID, "model", "m")
+		before, ok, err := rightStore.OrgConfig(ctx, orgID.String())
+		if err != nil || !ok {
+			t.Fatalf("ok=%v err=%v", ok, err)
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM settings WHERE org_id = $1 AND category = 'llm' AND key = 'base_url'`, orgID.String()); err != nil {
+			t.Fatal(err)
+		}
+		after, _, err := rightStore.OrgConfig(ctx, orgID.String())
+		if err != nil || after.Version == before.Version || after.BaseURL != "" {
+			t.Fatalf("version %q -> %q, base_url %q, err %v", before.Version, after.Version, after.BaseURL, err)
+		}
+	})
 }

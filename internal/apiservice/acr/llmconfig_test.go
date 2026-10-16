@@ -127,6 +127,7 @@ func TestLLMConfigRefusals(t *testing.T) {
 		{"malformed org", &fakeVerifier{}, configured(), "not-a-uuid", "Bearer " + testToken, 404},
 		{"no config or gate closed", &fakeVerifier{}, &fakeSource{}, testOrg, "Bearer " + testToken, 404},
 		{"store down", &fakeVerifier{}, &fakeSource{err: errors.New("db down")}, testOrg, "Bearer " + testToken, 503},
+		{"stored config unreadable", &fakeVerifier{}, &fakeSource{err: fmt.Errorf("%w: setting %q", llmorgsettings.ErrStoredSettingUnreadable, "api_key")}, testOrg, "Bearer " + testToken, 409},
 		{"no verifier wired", nil, configured(), testOrg, "Bearer " + testToken, 503},
 		{"no source wired", &fakeVerifier{}, nil, testOrg, "Bearer " + testToken, 503},
 	}

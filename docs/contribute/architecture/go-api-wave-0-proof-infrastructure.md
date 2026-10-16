@@ -217,10 +217,9 @@ go-served ledger does not name is refused, never proven by its candidate alone.
 An operation that was Go-only from its first day has no two-plane record: its ledger entry
 is the `unproven_reason` form, and it prints `GO_ONLY_UNPROVEN`. `TestEveryProofSpecOperationIsInTheLedgerOrAMutation`
 fails for a proof-spec operation that is in neither the ledger nor the mutation list.
-An unproven entry with `born_in_go: true` marks an operation that never had a Python counterpart. In the
-MCP class proof (doc-route mode) a MATCHED shape of such an operation is counted although no document
-receipt can exist, and the class receipt names it in `shapes_born_in_go`. A diverging shape still blocks,
-and `-allow-excluded` gives a born-in-Go shape nothing.
+An unproven entry with `born_in_go: true` marks an operation that never had a Python counterpart. MCP and GraphQL
+parity for such an operation, as for every MCP class root, is held by the CI step `TestMCPClassParityVenueOracle`
+(CHAOS-9802): the per-root class proof is retired (D6024).
 
 Go-edge mode refuses, each by its own name:
 
@@ -295,13 +294,13 @@ pin and the history table below work exactly as before.
 
 A schema change no longer un-routes anything (CHAOS-8702, CHAOS-8704, CHAOS-8735). query-api's `/query` and
 `/graphql` serve every registered operation and read no routing row. An MCP class root is decided by ONE row in
-`go_api_class_decision`, keyed by the operation alone (`mcp:<root>`), written by `seed`, `enable` (after a per-root
-class receipt at the live digest) and `disable`, and read by the class switch, the proof route and `status`: the digest
-cannot matter, and nothing has to move the row on a roll. `dho goapi routing carry`, the helm pre-upgrade carry hook and
+`go_api_class_decision`, keyed by the operation alone (`mcp:<root>`), written by `seed`, `enable` (the operator's recorded
+decision; the per-root class receipt that used to gate it is retired, D6024) and `disable`, and read by the class switch
+and `status`: the digest cannot matter, and nothing has to move the row on a roll. `dho goapi routing carry`, the helm pre-upgrade carry hook and
 the stale-rows alarm are gone.
 
-`repoint` rewrites the build a class decision names, and never its mode or `decided_at`; it works after a schema move.
-`dho goapi prove` of a document operation reads no routing row: it measures every registered operation through the edge
+The `repoint` verb is retired with the class proof (D6024): a class decision names the build `enable` read from
+`/buildinfo`, and nothing re-points it after a roll. `dho goapi prove` of a document operation reads no routing row: it measures every registered operation through the edge
 against the running build.
 
 ### After alembic 0129: every earlier proof reads UNPROVEN until re-proven
@@ -322,9 +321,9 @@ proofs.
 `cmd/go-api-routing` binary into the `dho` operator binary's `goapi
 routing` verb) is the Go implementation of the same contract, built
 because the cutover rule forbids new Python compute on the critical path
-of a rollout operation. The verbs `seed`, `enable`, `disable` and `repoint` take MCP class
+of a rollout operation. The verbs `seed`, `enable` and `disable` take MCP class
 operations only (`-operations mcp:<root>[,...]` or `all-mcp`) and refuse a catalog operation: query-api serves
-every registered operation, so there is nothing to seed, enable, disable or repoint for it. `status` lists both.
+every registered operation, so there is nothing to seed, enable or disable for it. `status` lists both.
 
 ```bash
 # A typed -postgres-uri flag value reaches /proc/<pid>/cmdline and shell
@@ -345,8 +344,8 @@ dho goapi routing status -registry-url http://query-api:8090/registry
 #    that can only FAIL a run, never the source of what is written. The
 #    credential is the effective-principal ENVELOPE in
 #    GO_API_ROUTING_BEARER -- an env var, not a flag, because a flag value
-#    reaches `ps` and shell history. The root needs a per-root receipt for
-#    the running build (dho goapi prove -mcp-roots ...).
+#    reaches `ps` and shell history. No proof run is needed
+#    first: MCP/GraphQL parity is the CI step TestMCPClassParityVenueOracle.
 GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
   -registry-url  http://query-api:8090/registry \
   -buildinfo-url http://query-api:8090/buildinfo \
@@ -364,10 +363,6 @@ dho goapi routing disable \
 dho goapi routing disable \
   -operations all-mcp -mode python -apply \
   -recorded-by <who> -review-evidence '<why>'
-
-# 4. Provenance only: point decisions at the running build without touching a
-#    single column that decides reachability.
-GO_API_ROUTING_BEARER=<envelope> dho goapi routing repoint ... -dry-run
 ```
 
 This is every point where the Go verbs deliberately behave differently
@@ -407,7 +402,7 @@ decision.
   same as this binary's own top-level `-h` and Python's argparse --  not a
   refusal (exit 2).
 * **A dead database exits 1, matching Python.** Python's
-  `disable`/`enable`/`repoint` against a dead database crash with an
+  `disable`/`enable` against a dead database crash with an
   unhandled `ConnectionRefusedError`, exit 1; `connectPostgres`'s
   dial-failure path classifies the same way. A malformed DSN (a
   parse-time failure, the operator's own typo) is unaffected and stays
@@ -445,7 +440,7 @@ the one number that says whether anything is enabled at all.
 The refusal exit code is 2 (a state the operator must resolve), on both
 planes, with one exception. `classifyWriteError` in `main.go`
 distinguishes a genuine, server-raised failure from a hand-authored
-refusal at the one place `enable`/`repoint`/`disable` reach the database
+refusal at the one place `enable`/`disable` reach the database
 write: a `*pgconn.PgError` -- a deadlock abort (SQLSTATE 40P01), a
 trigger's `RAISE EXCEPTION`, any other
 error the POSTGRES SERVER itself raised inside an already-open
@@ -476,7 +471,7 @@ unrelated things become impossible to aggregate separately later.
 | verb | `action` | `credential_class` | `principal_id` |
 |---|---|---|---|
 | `enable` | `enable` | `effective_principal_envelope` | the envelope's `sub` |
-| `repoint` | `repoint` | `effective_principal_envelope` | the envelope's `sub` |
+| `repoint` (retired, D6024; its rows stay as history) | `repoint` | `effective_principal_envelope` | the envelope's `sub` |
 | `disable` | `disable` | `operator_direct` | NULL |
 | `status` | — writes no row — | | |
 
@@ -504,12 +499,11 @@ Each row also carries the routing key (`schema_digest`, `document_digest`,
 `selected_operation`) and the **before and after** of both
 `candidate_build` and `mode`. That last pair is what turns two contracts
 into something a reader can check rather than take on trust: a `repoint`
-row shows the same mode on both sides (it never touches reachability), and
+row (a retired verb; old rows stay) shows the same mode on both sides, and
 a `disable` row shows the same candidate build on both sides (it changes
 mode only).
 
-Only rows that ACTUALLY moved are audited: a `repoint` that finds every row
-already naming the running build writes no audit rows, and a `disable`
+Only rows that ACTUALLY moved are audited: a `disable`
 naming a class root with no decision audits nothing for it. An entry for an
 unchanged row would record a change that did not happen, in a table nothing
 can later correct.
@@ -658,9 +652,7 @@ overrides `working_dir` to `/work` (a host-mounted scratch dir, always
 empty), so those relative defaults never resolve there -- `CARRY_ARGS`
 points `-catalog`/`-documents` at the same files by their absolute,
 image-baked path instead (still the tools image's own catalog/documents,
-never a separately fetched copy). `repoint` has no `-catalog`/`-documents`
-flags at all, so callers running under an overridden `working_dir` are
-unaffected for that verb. Either way, the image's own binary is what says
+never a separately fetched copy). Either way, the image's own binary is what says
 which documents the deployment it was built from will register.
 
 The runtime base is a small Debian, not distroless: this image doubles as

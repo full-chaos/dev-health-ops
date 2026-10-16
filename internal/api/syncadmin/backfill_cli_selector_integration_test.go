@@ -6,12 +6,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/backfillrun"
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
 // TestBackfillCLISelectorWritesTheTriggerRowTheWizardWrites: the admin Backfill
@@ -45,22 +46,18 @@ VALUES ($1, $2, $3, 'github', 'repo', $4, $4, $4, '{}'::json, true, now(), now()
 		t.Fatalf("the wizard route answered %d %s", status, body)
 	}
 
-	day := func(text string) *time.Time {
-		parsed, err := time.Parse("2006-01-02", text)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return &parsed
-	}
-	window, err := backfillrun.ResolveWindow(day("2026-09-01"), day("2026-09-04"), 1, *day("2026-09-10"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	clock := func() time.Time { return time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC) }
-	if _, err := backfillrun.Start(ctx, v.pool, one.config.String(), backfillrun.Params{
-		ConfigID: one.config.String(), Window: window, SourceIDs: scopedSources, DatasetKeys: scopedKeys,
-	}, clock); err != nil {
-		t.Fatalf("the verb: %v", err)
+	// The verb itself, from its argv: flag parsing and wiring are part of what
+	// is measured, not only backfillrun.Start.
+	connection := v.pool.Config().ConnString()
+	var stdout, stderr strings.Builder
+	code := backfillrun.Verb().Run(ctx, cli.Env{
+		Args: []string{"--config-id", one.config.String(), "--since", "2026-09-01", "--before", "2026-09-04", "--no-wait",
+			"--source-ids", scopedSources[0], "--source-ids", scopedSources[1], "--dataset-keys", scopedKeys[0] + "," + scopedKeys[1]},
+		Lookup: func(key string) (string, bool) { return connection, key == "COORDINATOR_DATABASE_URI" },
+		Stdout: &stdout, Stderr: &stderr,
+	})
+	if code != cli.ExitOK {
+		t.Fatalf("the verb exited %d: %s", code, stderr.String())
 	}
 
 	rows, err := v.pool.Query(ctx, `SELECT t.mode || '|' || t.since::text || '|' || t.before::text || '|' || coalesce(t.source_ids::text, 'NULL') || '|' ||

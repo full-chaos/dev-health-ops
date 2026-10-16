@@ -54,6 +54,10 @@ func scopeSources(config *Config, requested, enabled []string) ([]string, error)
 	}
 	if config.SourceID != nil {
 		pinned := *config.SourceID
+		if !slices.Contains(enabled, pinned) {
+			return nil, RefusedError{Message: fmt.Sprintf("backfill run: sync configuration %s is pinned to source %s, which is not an enabled source of integration %s, "+
+				"so --source-ids has nothing to run: nothing was started", config.ID, pinned, deref(config.IntegrationID))}
+		}
 		for id := range wanted {
 			if id != pinned {
 				return nil, RefusedError{Message: fmt.Sprintf("backfill run: --source-ids %s is not a source of sync configuration %s: "+
@@ -87,16 +91,22 @@ func scopeSources(config *Config, requested, enabled []string) ([]string, error)
 // have is unknown, and a known key the configuration does not already select is
 // refused, because a backfill never switches a dataset on (CHAOS-8816). The
 // result is in the provider's key order.
-func scopeDatasets(config *Config, provider string, requested, current []string) ([]string, error) {
+//
+// current is the key list Validate resolved. When it is empty (a configuration
+// pinned to one source with no sync_targets) the scheduler would run the
+// integration's enabled rows, so enabledRows, the keys of those rows, is the
+// allowed set: any other key would make the scheduler insert a row.
+func scopeDatasets(config *Config, provider string, requested, current, enabledRows []string) ([]string, error) {
 	if len(requested) == 0 {
 		return current, nil
 	}
 	supported := schedsync.SupportedDatasetKeys(provider)
-	allowed, why := current, "is not enabled for integration "+deref(config.IntegrationID)
+	allowed, why := current, "is not selected by the sync_targets of sync configuration "+config.ID
+	if rowsOwnSelection(config) || len(current) == 0 {
+		why = "is not enabled for integration " + deref(config.IntegrationID)
+	}
 	if len(current) == 0 {
-		allowed, why = supported, ""
-	} else if !rowsOwnSelection(config) {
-		why = "is not selected by the sync_targets of sync configuration " + config.ID
+		allowed = enabledRows
 	}
 	wanted := map[string]bool{}
 	for _, key := range requested {

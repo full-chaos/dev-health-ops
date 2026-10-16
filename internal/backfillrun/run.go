@@ -274,7 +274,13 @@ ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 	if err != nil {
 		return Validated{}, err
 	}
-	datasetKeys, err = scopeDatasets(config, provider, params.DatasetKeys, datasetKeys)
+	var enabledRows []string
+	if len(params.DatasetKeys) > 0 && len(datasetKeys) == 0 {
+		if enabledRows, err = enabledDatasetKeys(ctx, tx, config, provider); err != nil {
+			return Validated{}, err
+		}
+	}
+	datasetKeys, err = scopeDatasets(config, provider, params.DatasetKeys, datasetKeys, enabledRows)
 	if err != nil {
 		return Validated{}, err
 	}

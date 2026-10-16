@@ -58,7 +58,7 @@ func TestComputeIssueTypeMetricsDailyOpensABucketForEveryItem(t *testing.T) {
 	want := []IssueTypeMetricsDailyRow{
 		{RepoID: &repo, Provider: "github", TeamID: "unassigned", IssueTypeNorm: "github:bug",
 			CreatedCount: 1, CompletedCount: 1, ActiveCount: 2, CycleP50Hours: 26, CycleP90Hours: 26,
-			LeadP50Hours: 82},
+			LeadP50Hours: floatPointer(82)},
 		{RepoID: &repo, Provider: "github", TeamID: "unassigned", IssueTypeNorm: "github:task"},
 		{RepoID: nil, Provider: "linear", TeamID: "team-a", IssueTypeNorm: "linear:task"},
 	}
@@ -132,22 +132,22 @@ func TestComputeIssueTypeMetricsDailyLeadTimeIsTheUpperMedianOfCompletedMinusCre
 			if len(rows) != 1 {
 				t.Fatalf("rows = %+v, want one", rows)
 			}
-			if rows[0].LeadP50Hours != 34 {
+			if rows[0].LeadP50Hours == nil || *rows[0].LeadP50Hours != 34 {
 				t.Fatalf("lead_p50_hours = %v, want 34 (upper median of 10, 34, 106)", rows[0].LeadP50Hours)
 			}
 		})
 	}
 }
 
-func TestComputeIssueTypeMetricsDailyLeadTimeIsZeroWhenNothingCompletedHasOne(t *testing.T) {
+func TestComputeIssueTypeMetricsDailyLeadTimeIsNullWhenNothingCompletedHasOne(t *testing.T) {
 	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 	items := []Item{
 		{WorkItemID: "1", Provider: "github", Type: "bug", CreatedAt: day.Add(-time.Hour)},
 		{WorkItemID: "2", Provider: "github", Type: "bug", CreatedAt: day.Add(5 * time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
 	}
 	rows := ComputeIssueTypeMetricsDaily(items, day, day.AddDate(0, 0, 1), teams("", ""), labelNormalizer{})
-	if len(rows) != 1 || rows[0].CompletedCount != 1 || rows[0].LeadP50Hours != 0 {
-		t.Fatalf("rows = %+v, want one row that counts 1 completed item and has no lead time", rows)
+	if len(rows) != 1 || rows[0].CompletedCount != 1 || rows[0].LeadP50Hours != nil {
+		t.Fatalf("rows = %+v, want one row that counts 1 completed item and has a NULL lead time (no data, not 0)", rows)
 	}
 }
 
@@ -166,3 +166,5 @@ func TestLeadTimeInputsCountsCompletedAndExcludedItems(t *testing.T) {
 		t.Fatalf("completed=%d excluded=%d, want 5 and 4", completed, excluded)
 	}
 }
+
+func floatPointer(value float64) *float64 { return &value }

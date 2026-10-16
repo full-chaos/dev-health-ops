@@ -44,6 +44,21 @@ var ownWriterMarkers = map[string][]string{
 	"issue_type_metrics_daily":   {"created_count", "completed_count", "active_count"},
 }
 
+// nullableOwnWriterMarkers are the marker columns that are Nullable. argMax over a Nullable column skips the rows
+// where it is NULL, so the newest row of a key that holds NULL would read as the older row's value (a retraction row
+// would read as the measurement it retracts). Such a column is read through a one-element tuple, which is never
+// NULL, so the newest row's NULL stays NULL.
+var nullableOwnWriterMarkers = map[string]bool{"churn_loc": true}
+
+// NewestValue is the newest value of column by computed_at in a GROUP BY of a key: argMax, read through a tuple for a
+// Nullable column (see nullableOwnWriterMarkers).
+func NewestValue(column, prefix string) string {
+	if nullableOwnWriterMarkers[column] {
+		return "tupleElement(argMax(tuple(" + prefix + column + "), " + prefix + "computed_at), 1)"
+	}
+	return "argMax(" + prefix + column + ", " + prefix + "computed_at)"
+}
+
 // noRuleForReaders are the registry tables in which a MEASURED row can hold 0
 // or NULL in every measure, so a measured row and a retraction row are equal
 // and no reader can drop one and keep the other. A reader of such a table
@@ -114,7 +129,7 @@ func NewestPredicate(table, qualifier string) string {
 	if columns, own := ownWriterMarkers[table]; own {
 		parts := make([]string, len(columns))
 		for i, column := range columns {
-			parts[i] = "argMax(" + prefix + column + ", " + prefix + "computed_at) != 0"
+			parts[i] = NewestValue(column, prefix) + " != 0"
 		}
 		return "(" + strings.Join(parts, " OR ") + ")"
 	}

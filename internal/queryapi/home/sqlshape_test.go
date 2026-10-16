@@ -248,3 +248,37 @@ func TestResolveScopeLabelsReadsReposAndTeamsFinal(t *testing.T) {
 		t.Fatalf("expected both a repos FINAL and a teams FINAL read, got queries: %v", captured)
 	}
 }
+
+// A driver-delta read of a table with no natural key reads its own
+// organization's rows of each window only: both FROM sources carry org_id.
+func TestFetchMetricDriverDeltaScopesATableWithNoNaturalKey(t *testing.T) {
+	const table = "team_metrics_daily"
+	if _, dedup := dedupByComputedAt[table]; dedup {
+		t.Fatalf("%s has a natural key now: pick a table outside dedupByComputedAt", table)
+	}
+	var captured []string
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		captured = append(captured, query)
+		return &fixtureRowScanner{rows: nil}, nil
+	}}
+	if _, err := fetchMetricDriverDelta(context.Background(), client, table, "commits_count", "team_id",
+		day(2024, 1, 8), day(2024, 1, 15), day(2024, 1, 1), day(2024, 1, 8), "", nil, "org-1", 3); err != nil {
+		t.Fatalf("fetchMetricDriverDelta: %v", err)
+	}
+	if len(captured) != 1 {
+		t.Fatalf("expected one statement, got %d", len(captured))
+	}
+	query := captured[0]
+	marker := "FROM " + table
+	if got := strings.Count(query, marker); got != 2 {
+		t.Fatalf("expected the current and the comparison window to read %s, got %d reads:\n%s", table, got, query)
+	}
+	for at := strings.Index(query, marker); at >= 0; {
+		assertOrgIDSameDepthAsMarker(t, query[at:], marker)
+		next := strings.Index(query[at+len(marker):], marker)
+		if next < 0 {
+			break
+		}
+		at += len(marker) + next
+	}
+}

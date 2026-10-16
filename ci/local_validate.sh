@@ -688,12 +688,18 @@ reclaim_stale_lock() {
 # hand") that is actively wrong (there is no PID, nothing to remove).
 try_acquire_once() {
   local ln_err
-  if ln_err="$(ln -s "$(lock_owner_metadata)" "${LOCK_DIR}" 2>&1)"; then
+  if ln_err="$(LC_ALL=C ln -s "$(lock_owner_metadata)" "${LOCK_DIR}" 2>&1)"; then
     return 0
   fi
   if [ -L "${LOCK_DIR}" ]; then
     return 1
   fi
+  # EEXIST is contention even when the holder is already gone by now: the lock existed when
+  # `ln -s` ran and was released or reclaimed before the check above (CHAOS-9923). Treating
+  # that as "not contention" died on a lock that was merely handed over.
+  case "${ln_err}" in
+    *"File exists"*) return 1 ;;
+  esac
   die "cannot create lock symlink at ${LOCK_DIR}: ${ln_err}. This is NOT lock contention (no symlink exists there) -- check that LOCK_DIR's parent directory exists and is writable."
 }
 

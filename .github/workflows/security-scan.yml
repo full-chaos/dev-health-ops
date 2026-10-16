@@ -46,6 +46,7 @@ jobs:
         id: filter
         if: github.event_name == 'pull_request'
         with:
+          predicate-quantifier: some-with-excludes
           filters: |
             deps:
               - 'requirements.txt'

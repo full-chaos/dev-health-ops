@@ -34,6 +34,12 @@ func RequestIDFrom(ctx context.Context) string {
 	return value
 }
 
+// WithRequestID binds id as the correlation id of ctx, for a service that
+// generates its own id outside the RequestID middleware.
+func WithRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, id)
+}
+
 // acceptableRequestID reports whether a client-supplied id may be reused.
 //
 // The charset is deliberately narrow -- unreserved URL characters -- so the

@@ -17,6 +17,9 @@ const graphQLInternalMessage = "Internal Server Error"
 
 // generatedIntrospectionRefusal is the one plain error the generated executor
 // raises for a client-built document; it carries no internal text.
+// gqlgenPanicMessage is the text graphql.DefaultRecover gives a recovered resolver panic.
+const gqlgenPanicMessage = "internal system error"
+
 const generatedIntrospectionRefusal = "introspection disabled"
 
 // graphQLRequestID is the correlation id of the request that raised an error:
@@ -76,7 +79,9 @@ func safeGraphQLErrorPresenter(label string, observe func(context.Context)) grap
 func authoredGraphQLError(err error) bool {
 	for link := err; link != nil; link = errors.Unwrap(link) {
 		if typed, ok := link.(*gqlerror.Error); ok && typed.Err == nil {
-			return true
+			// gqlgen's panic recovery builds a cause-free error too; its text names no cause but is
+			// not written for a client.
+			return typed.Message != gqlgenPanicMessage
 		}
 		if link.Error() == generatedIntrospectionRefusal && errors.Unwrap(link) == nil {
 			return true

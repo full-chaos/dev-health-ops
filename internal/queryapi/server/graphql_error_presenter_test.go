@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/99designs/gqlgen/graphql"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -131,5 +132,52 @@ func TestSafeGraphQLErrorPresenterKeepsCodeAndReasonExtensions(t *testing.T) {
 	masked := present(context.Background(), errors.New(driverText))
 	if _, present := masked.Extensions["request_id"]; !present {
 		t.Fatalf("masked error lacks request_id: %v", masked.Extensions)
+	}
+}
+
+// gqlgen's panic recovery answers a cause-free gqlerror "internal system error"; the presenter
+// must mask it like any other unwritten error.
+func TestSafeGraphQLErrorPresenterMasksARecoveredPanic(t *testing.T) {
+	present := safeGraphQLErrorPresenter("test", nil)
+	got := present(context.Background(), graphql.DefaultRecover(context.Background(), "secret resolver panic"))
+	if got.Message != graphQLInternalMessage {
+		t.Fatalf("message = %q, want %q", got.Message, graphQLInternalMessage)
+	}
+}
+
+type panickingGraphQLStore struct{}
+
+func (panickingGraphQLStore) Query(context.Context, string, []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	panic("secret resolver panic")
+}
+
+// The edge generates a request id when the caller sent none and echoes it on the response header;
+// the GraphQL error must carry the same id.
+func TestGraphQLEdgeGeneratedRequestIDReachesTheErrorExtension(t *testing.T) {
+	gql := newGraphQLServer(&graph.Resolver{ClickHouse: failingGraphQLStore{}})
+	handler := correlationID(gql)
+	req := httptest.NewRequest(http.MethodPost, "/query",
+		strings.NewReader(`{"query":"{ securityOverview(orgId: \"org-1\") { __typename } }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	id := rec.Header().Get("X-Request-ID")
+	if id == "" || !strings.Contains(rec.Body.String(), `"request_id":"`+id+`"`) {
+		t.Fatalf("header id %q not in the error extension: %s", id, rec.Body.String())
+	}
+}
+
+func TestGraphQLResolverPanicIsMaskedEndToEnd(t *testing.T) {
+	gql := newGraphQLServer(&graph.Resolver{ClickHouse: panickingGraphQLStore{}})
+	req := httptest.NewRequest(http.MethodPost, "/query",
+		strings.NewReader(`{"query":"{ securityOverview(orgId: \"org-1\") { __typename } }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	gql.ServeHTTP(rec, req)
+	if strings.Contains(rec.Body.String(), "internal system error") || strings.Contains(rec.Body.String(), "secret") ||
+		!strings.Contains(rec.Body.String(), graphQLInternalMessage) {
+		t.Fatalf("response not masked: %s", rec.Body.String())
 	}
 }

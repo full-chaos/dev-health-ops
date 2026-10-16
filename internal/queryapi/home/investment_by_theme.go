@@ -14,7 +14,7 @@ import (
 
 // fetchInvestmentThemeAllocation is the Home tile "Investment by theme" (CHAOS-9195, D5933;
 // the wire field is still rework_theme_allocation): the work over the five canonical themes, in the
-// measure investmentexplain.InvestmentShareMeasure names (COUNT, CHAOS-9622, D5999: lines of code are
+// measure investmentexplain.HomeTileMeasure names (COUNT, CHAOS-9622, D5999: lines of code are
 // not a measure of effort), that the Jev categorization writes (work_unit_investments), NOT the legacy rule classifier's
 // investment_area keys (D5932: that classifier is removed; before this the tile showed two themes
 // covering 2.5% of the completed items on real data). It is the Investment page's own read
@@ -47,7 +47,7 @@ func fetchInvestmentThemeAllocation(ctx context.Context, client QueryClient, f F
 		RepoIDs:    repoIDs,
 		ReposNamed: len(refs) > 0,
 		DatedByEnd: true,
-		Measure:    investmentexplain.InvestmentShareMeasure,
+		Measure:    investmentexplain.HomeTileMeasure,
 	}
 	if f.Scope.Level == "team" && len(f.Scope.IDs) > 0 {
 		filters.TeamScopeCondition, filters.TeamScopeBindings = teamscope.RepoCondition(orgID, "repo_id", f.Scope.IDs, asOf)

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,11 @@ func (emptyRowScanner) Close() error      { return nil }
 
 type emptyRowsQueryClient struct{}
 
-func (emptyRowsQueryClient) Query(context.Context, string, []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+func (emptyRowsQueryClient) Query(_ context.Context, statement string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	if strings.Contains(statement, "AS sized_units") {
+		// An aggregate with no GROUP BY answers one row even over no input, as ClickHouse does; the counts read 0.
+		return &oneRow{row: []any{uint64(0), uint64(0)}}, nil
+	}
 	return emptyRowScanner{}, nil
 }
 

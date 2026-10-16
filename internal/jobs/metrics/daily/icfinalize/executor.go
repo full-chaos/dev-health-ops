@@ -3,6 +3,7 @@ package icfinalize
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -197,6 +198,50 @@ type LandscapeSuperseder func(
 // SetLandscapeSuperseder wires the stale-key rule of ic_landscape_rolling_30d.
 func (executor *Executor) SetLandscapeSuperseder(superseder LandscapeSuperseder) {
 	executor.landscapeSuperseder = superseder
+}
+
+// SetClock replaces the clock computed_at is taken from.
+func (executor *Executor) SetClock(now func() time.Time) { executor.now = now }
+
+// storedVersionUnit is the unit of computed_at in user_metrics_daily and ic_landscape_rolling_30d
+// (DateTime, whole seconds).
+const storedVersionUnit = time.Second
+
+// versionAfterStored is the computed_at this run writes with: the clock, or one unit after the newest
+// computed_at already stored for the organization and day when the clock is not later. Both tables
+// keep computed_at to the second and every reader takes the newest computed_at, so a rerun of a day in
+// the same second as the run it supersedes would tie with it and the older row (a person under the team
+// the membership just left) could win the read (CHAOS-9928).
+func (executor *Executor) versionAfterStored(ctx context.Context, orgID string, day, at time.Time) (time.Time, error) {
+	version := at.UTC()
+	for _, read := range []struct{ table, dayColumn string }{
+		{"user_metrics_daily", "day"},
+		{"ic_landscape_rolling_30d", "as_of_day"},
+	} {
+		rows, err := executor.conn.Query(ctx, "SELECT max(computed_at) FROM "+read.table+
+			" WHERE org_id = ? AND "+read.dayColumn+" = ?", orgID, day)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("icfinalize: read the newest %s version: %w", read.table, err)
+		}
+		var newest time.Time
+		for rows.Next() {
+			if err := rows.Scan(&newest); err != nil {
+				_ = rows.Close()
+				return time.Time{}, fmt.Errorf("icfinalize: scan the newest %s version: %w", read.table, err)
+			}
+		}
+		closeErr := rows.Err()
+		_ = rows.Close()
+		if closeErr != nil {
+			return time.Time{}, fmt.Errorf("icfinalize: read the newest %s version: %w", read.table, closeErr)
+		}
+		if floor := newest.UTC().Add(storedVersionUnit); floor.After(version) {
+			version = floor
+		}
+	}
+	slog.DebugContext(ctx, "ic_finalize version", "org_id", orgID, "day", day.Format("2006-01-02"),
+		"clock", at.UTC(), "computed_at", version, "raised", version.After(at.UTC()))
+	return version, nil
 }
 
 // LandscapeRowRepoID is the repo_id of every landscape row.
@@ -457,7 +502,10 @@ func (executor *Executor) computeForDay(
 			merged[index].PassThrough.TeamName = name
 		}
 	}
-	computedAt := executor.now()
+	computedAt, err := executor.versionAfterStored(ctx, orgID, day, executor.now())
+	if err != nil {
+		return 0, err
+	}
 	written, err := executor.writeUserMetrics(ctx, orgID, day, computedAt, merged)
 	if err != nil {
 		return 0, err

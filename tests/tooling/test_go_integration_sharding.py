@@ -53,6 +53,13 @@ SPLIT_PACKAGES = {
 CONTAINER_HARNESS = ROOT / "internal" / "testsupport" / "containers" / "harness.go"
 
 
+def _go_env_cache() -> str:
+    probe = subprocess.run(
+        ["go", "env", "GOCACHE"], capture_output=True, text=True, check=False
+    )
+    return probe.stdout.strip() if probe.returncode == 0 else ""
+
+
 def _test_go_cache() -> Path:
     """The Go build cache of the check_go.sh calls below.
 
@@ -62,14 +69,14 @@ def _test_go_cache() -> Path:
     exits. It used to be a fixed directory under the system temp directory that
     nothing removed (about 850 MB left behind per host).
     """
-    configured = os.environ.get("DEV_HEALTH_GO_CACHE") or os.environ.get("GOCACHE")
-    if not configured:
-        probe = subprocess.run(
-            ["go", "env", "GOCACHE"], capture_output=True, text=True, check=False
-        )
-        configured = probe.stdout.strip() if probe.returncode == 0 else ""
-    if configured:
-        return Path(configured)
+    # "off" is Go's sentinel for no cache, not a directory: check_go.sh would create ./off for it.
+    for configured in (
+        os.environ.get("DEV_HEALTH_GO_CACHE"),
+        os.environ.get("GOCACHE"),
+        _go_env_cache(),
+    ):
+        if configured and configured != "off":
+            return Path(configured)
     private = tempfile.mkdtemp(prefix="chaos3141-go-sharding-test-cache-")
     atexit.register(shutil.rmtree, private, ignore_errors=True)
     return Path(private)

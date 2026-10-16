@@ -247,6 +247,14 @@ to the query source text.
 
 # home wire-capture fixture
 
+Newest text (CHAOS-9624): `home_captured.graphql` is NOT a capture. It is
+`home_v13_captured.graphql` (the previous current text, byte-identical, kept as a
+legacy registration) plus the selections `measure denominator sizingCoverage
+unsizedUnitCount workUnitCount` in `reworkThemeAllocation`, right after `churnLoc`, in the
+form urql prints. The web change that selects them must put the fields at that place in
+`HOME_QUERY` and run `scripts/capture-graphql-wire-fixture.ts --operation home`; if the
+real capture differs, the capture wins and this file and `registeredHomeDocument` move to it.
+
 Newest text (CHAOS-8573): `home_captured.graphql` is NOT a capture. It is
 `home_v12_captured.graphql` (the previous current text, byte-identical, kept as a
 legacy registration) plus the selection `driver` in `signals`, right after

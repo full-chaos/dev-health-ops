@@ -145,6 +145,16 @@ type ReworkThemeAllocation struct {
 	AllocationPct float64 `json:"allocation_pct"`
 	PRsMerged     int64   `json:"prs_merged"`
 	ChurnLOC      int64   `json:"churn_loc"`
+
+	// Measure, Denominator and the sizing fields say what allocation is a share of (CHAOS-9624). GraphQL only
+	// (json "-": the REST body is frozen). Measure is WORK_UNITS (COUNT) or ISSUE_SIZE; Denominator is the total
+	// allocation_pct divides by. The three sizing fields are nil unless Measure is ISSUE_SIZE, and nil when the
+	// window holds no unit: nil is "not measured", never 0.
+	Measure          string   `json:"-"`
+	Denominator      float64  `json:"-"`
+	SizingCoverage   *float64 `json:"-"`
+	UnsizedUnitCount *int64   `json:"-"`
+	WorkUnitCount    *int64   `json:"-"`
 }
 
 // SummarySentence is the wire shape of SummarySentence (schemas.py:45-48).

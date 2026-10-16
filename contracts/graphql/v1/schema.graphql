@@ -1940,6 +1940,11 @@ type ReworkThemeAllocation {
   allocationPct: Float!
   prsMerged: Int!
   churnLoc: Int!
+  measure: SankeyValueUnit!
+  denominator: Float!
+  sizingCoverage: Float
+  unsizedUnitCount: Int
+  workUnitCount: Int
 }
 
 type SankeyCoverage {

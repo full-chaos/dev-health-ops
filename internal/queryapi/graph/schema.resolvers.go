@@ -288,6 +288,7 @@ func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.F
 
 	now := time.Now().UTC()
 	homeFilters := homeFiltersFromGraphQL(filters, window)
+	homeFilters.TileMeasure = homeTileMeasure(ctx)
 	resp, err := home.BuildResponse(ctx, r.ClickHouse, pgClient, authorizedOrgID, homeFilters, now)
 	if err != nil {
 		return nil, fmt.Errorf("home: %w", err)

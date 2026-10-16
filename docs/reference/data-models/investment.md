@@ -191,6 +191,12 @@ and are null where they are not measured (the non-investment path, or a window w
 `ISSUE_SIZE` names its unit `ISSUE_SIZE`; every other Investment Sankey names `WORK_UNITS`. Under `ISSUE_SIZE` every
 weighted coverage share (`teamCoverage`, `repoCoverage` and its split) is weighed the same way as the chart.
 
+The Home investment tile (`reworkThemeAllocation`) says what its share is a share of. Each row carries `measure`
+(`WORK_UNITS` for `COUNT`, `ISSUE_SIZE`) and `denominator`, the total that `allocationPct` divides by; `allocation` is
+the numerator. In `ISSUE_SIZE` a row also carries `sizingCoverage`, `unsizedUnitCount` and `workUnitCount` (the m of
+"n of m work units have an issue size"), counted over the same units as the themes. They are null in `WORK_UNITS` and
+null when the window holds no unit: null is "not measured", never 0. The REST Home body does not carry them.
+
 ## Team coverage: ownership, not the attribution vote
 
 `teamCoverage` is the share of effort whose work unit has a team, and a unit has a team when a team **owns** one of

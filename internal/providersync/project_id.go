@@ -21,15 +21,13 @@ import (
 //     key one project the same way.
 //   - LinearProjectID: the Linear project's own id, bare.
 //   - GitLabCatalogProjectID: `{org}:gitlab:{native id}`, the id of the
-//     GitLab catalog `projects` row.
+//     GitLab catalog `projects` row and of the GitLab ownership rows.
 //
-// Three forms are NAMED EXCEPTIONS. Each one exists because a stored
+// Two forms are NAMED EXCEPTIONS. Each one exists because a stored
 // `team_project_ownership` row has an id that is not the project's identity
 // form, and each is listed in projectIDNamedExceptions with its reason. A new
 // exception is a deliberate edit of that table and of its census.
 //
-//   - GitLabPathOwnershipProjectID: GitLab ownership rows use the project
-//     path as project_id (CHAOS-8883 moves them to the catalog form).
 //   - GitHubRepoProjectID: GitHub has no project object. A team owns a
 //     repository, and the repository full name stands in the project column.
 //   - LinearTeamKeyProjectID: the `{org}:linear:{team key}` row that
@@ -51,7 +49,6 @@ type projectIDNamedException struct {
 // is called from a file that is not named here, or when this list and the
 // constructors in this file differ.
 var projectIDNamedExceptions = []projectIDNamedException{
-	{"GitLabPathOwnershipProjectID", "GitLab ownership project_id is the project path until CHAOS-8883 moves it to the catalog form"},
 	{"GitHubRepoProjectID", "GitHub has no project; ownership names the repository full name (repo-as-project, ruling D5742)"},
 	{"LinearTeamKeyProjectID", "the {org}:linear:{team key} ownership row is read by team_repo_ownership_derivation (CHAOS-4458)"},
 }
@@ -84,14 +81,6 @@ func GitLabCatalogProjectID(orgID, nativeID string) (ProjectID, bool) {
 		return ProjectID{}, false
 	}
 	return ProjectID{orgID + ":gitlab:" + nativeID}, true
-}
-
-// GitLabPathOwnershipProjectID is a named exception: the project path.
-func GitLabPathOwnershipProjectID(projectPath string) (ProjectID, bool) {
-	if !nonBlank(projectPath) {
-		return ProjectID{}, false
-	}
-	return ProjectID{projectPath}, true
 }
 
 // GitHubRepoProjectID is a named exception: the repository full name.

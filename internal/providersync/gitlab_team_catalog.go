@@ -318,16 +318,19 @@ func normalizeGitLabTeamRow(
 	}
 }
 
+// normalizeGitLabOwnershipRow keys a group's project grant by the project's
+// catalog id (the projects.id of the same project), so a rename keeps the row;
+// the current path is its project_key.
 func normalizeGitLabOwnershipRow(
-	orgID, teamID, projectPath string,
+	orgID, teamID, nativeProjectID, projectPath string,
 	specificity uint16,
 	normalizedAt time.Time,
 ) (gitlabTeamCatalogOwnershipRow, bool) {
-	projectID, ok := GitLabPathOwnershipProjectID(projectPath)
-	if !ok {
+	projectKey := strings.TrimSpace(projectPath)
+	projectID, ok := GitLabCatalogProjectID(orgID, strings.TrimSpace(nativeProjectID))
+	if !ok || projectKey == "" {
 		return gitlabTeamCatalogOwnershipRow{}, false
 	}
-	projectKey := projectPath
 	return gitlabTeamCatalogOwnershipRow{
 		OrgID: orgID, Provider: gitlabTeamCatalogProvider, TeamID: teamID,
 		ProjectID: projectID, ProjectKey: &projectKey, Source: gitlabTeamCatalogSource,

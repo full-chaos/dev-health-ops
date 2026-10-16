@@ -126,6 +126,33 @@ func TestTheGitHubAnswerForOneGrant(t *testing.T) {
 	}
 }
 
+// A GitLab row keyed by the catalog id is asked for by its path (the row's
+// project_key): the search names the project, and an answer that holds the
+// path says the grant still holds. Asked by the id, GitLab finds nothing and a
+// whole empty answer would read as the project gone.
+func TestTheGitLabAnswerForACatalogKeyedRowAsksByThePath(t *testing.T) {
+	row := OwnershipSnapshotRow{TeamID: "gl:acme/platform", ProjectID: testPID("org:gitlab:4711"), ProjectKey: "acme/platform/api", Source: gitlabTeamCatalogSource}
+	var query string
+	client, err := providerfoundation.NewHTTPClient("gitlab", "https://gitlab.example",
+		fakehttp.Client(absenceAnswerDoer(func(request *http.Request) (*http.Response, error) {
+			query = request.URL.RawQuery
+			body := `[]`
+			if request.URL.Query().Get("search") == "api" {
+				body = `[{"id":4711,"path_with_namespace":"acme/platform/api"}]`
+			}
+			header := http.Header{"X-Next-Page": {""}, "Content-Type": {"application/json"}}
+			return &http.Response{StatusCode: 200, Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		})), func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: 1, MaxWait: 1},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := (gitlabGroupProjectAbsence{client: client}).OwnershipAbsence(context.Background(), row); got != SnapshotFactStillHeld {
+		t.Errorf("the answer is %d, want %d (still held); query %q", got, SnapshotFactStillHeld, query)
+	}
+}
+
 // The GitLab direct answer: a search answer that does not hold the project
 // proves the absence only when it is the WHOLE answer by the paginator's own
 // reading of GitLab's end signal. An answer that announces a next page in any

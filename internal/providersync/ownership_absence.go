@@ -88,7 +88,15 @@ type gitlabGroupProjectAbsence struct {
 
 func (prover gitlabGroupProjectAbsence) OwnershipAbsence(ctx context.Context, row OwnershipSnapshotRow) SnapshotAbsence {
 	groupPath, okTeam := strings.CutPrefix(row.TeamID, teamid.Prefix(gitlabTeamCatalogProvider))
-	projectPath := strings.TrimSpace(row.ProjectID.String())
+	// A row keyed by the catalog id carries the path as its key; a row of the
+	// older form is keyed by the path itself.
+	projectPath := strings.TrimSpace(row.ProjectKey)
+	if projectPath == "" {
+		projectPath = strings.TrimSpace(row.ProjectID.String())
+	}
+	if strings.Contains(projectPath, ":") {
+		return SnapshotAbsenceNotProven
+	}
 	if !okTeam || prover.client == nil || strings.TrimSpace(groupPath) == "" || projectPath == "" {
 		return SnapshotAbsenceNotProven
 	}

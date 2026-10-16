@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // team_repo_ownership_derivation_clickhouse.go loads the already-synced
@@ -1023,11 +1024,13 @@ SELECT
     o.project_id,
     o.team_id,
     argMax(o.is_primary, (o.version_at, o.valid_from)) AS is_primary,
-    argMax(o.specificity, (o.version_at, o.valid_from)) AS specificity
+    argMax(o.specificity, (o.version_at, o.valid_from)) AS specificity,
+    (argMax(tuple(o.project_key), (o.version_at, o.valid_from))).1 AS project_key
 FROM (
     SELECT
         v.provider, v.project_id, v.team_id, v.source, v.valid_from,
         (argMax(tuple(v.valid_to), v.updated_at)).1 AS valid_to,
+        (argMax(tuple(v.project_key), v.updated_at)).1 AS project_key,
         argMax(v.is_primary, v.updated_at) AS is_primary,
         argMax(v.specificity, v.updated_at) AS specificity,
         max(v.updated_at) AS version_at
@@ -1049,9 +1052,11 @@ GROUP BY o.provider, o.project_id, o.team_id`,
 	for rows.Next() {
 		var link TeamRepoOwnershipProjectLink
 		var isPrimary uint8
-		if err := rows.Scan(&link.Provider, &link.ProjectID, &link.TeamID, &isPrimary, &link.Specificity); err != nil {
+		var projectKey *string
+		if err := rows.Scan(&link.Provider, &link.ProjectID, &link.TeamID, &isPrimary, &link.Specificity, &projectKey); err != nil {
 			return nil, err
 		}
+		link.ProjectID = teamattribution.ProjectOwnershipJoinID(link.Provider, link.ProjectID, projectKey)
 		link.IsPrimary = isPrimary == 1
 		out = append(out, link)
 	}

@@ -17,7 +17,11 @@ import (
 type OwnershipSnapshotRow struct {
 	TeamID, Source string
 	ProjectID      ProjectID
-	ValidFrom      time.Time
+	// ProjectKey is the provider's own name of the project when the id is not
+	// it (a GitLab row keyed by the catalog id holds the path here); an
+	// absence question asks the provider by it. Not part of the fact's key.
+	ProjectKey string
+	ValidFrom  time.Time
 	// Shape is the digest of every column the row carries besides its key and
 	// its valid_from (ProjectOwnershipShape, RepoOwnershipShape). A fresh row
 	// whose open row has the same shape is a repeat of that row. An empty

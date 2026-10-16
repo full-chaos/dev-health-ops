@@ -25,16 +25,16 @@ var projectIDIdentityConstructors = []string{"GitLabCatalogProjectID", "JiraProj
 // projectIDExceptionCallers names, for each named exception, the only
 // production files that may call its constructor.
 var projectIDExceptionCallers = map[string][]string{
-	"GitLabPathOwnershipProjectID": {"internal/providersync/gitlab_team_catalog.go"},
-	"GitHubRepoProjectID":          {"internal/providersync/github_team_catalog_effects_clickhouse.go"},
-	"LinearTeamKeyProjectID":       {"internal/providersync/linear_reference_catalog_route.go"},
+	"GitHubRepoProjectID":    {"internal/providersync/github_team_catalog_effects_clickhouse.go"},
+	"LinearTeamKeyProjectID": {"internal/providersync/linear_reference_catalog_route.go"},
 }
 
 // projectIDMarkerLiterals are the literal pieces a hand-built project id is
 // made of. The files below may hold one for a reason other than building an
 // id: they recognize or retire a form no writer produces any more.
 var projectIDMarkerAllowed = map[string]string{
-	"internal/providersync/jira_team_catalog.go": "jiraKeyBuiltProjectIDPrefix: recognizes (to refuse and to retire) the key-built Jira form",
+	"internal/providersync/jira_team_catalog.go":         "jiraKeyBuiltProjectIDPrefix: recognizes (to refuse and to retire) the key-built Jira form",
+	"internal/teamattribution/project_ownership_join.go": "ProjectOwnershipJoinID: recognizes the GitLab catalog form to pick the path a GitLab work item joins on; builds no id",
 }
 
 // projectIDSinkFields are the row fields that persist a project id. Each one

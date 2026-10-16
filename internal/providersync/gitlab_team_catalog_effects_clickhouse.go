@@ -2,7 +2,9 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -332,6 +334,54 @@ func (sink GitLabTeamCatalogClickHouseEffects) SnapshotOwnership(
 	return rows, plan, nil
 }
 
+// gitlabOwnershipPathRowsToCarry finds the open rows a store wrote before
+// GitLab ownership was keyed by the catalog id: project_id is the project's
+// path (a path holds no ':', a catalog id always does). Such a row whose team,
+// source and path match a fresh row's team, source and project_key is that
+// fresh row's grant under its old key: it is taken out of the open rows the
+// snapshot rule reads and returned by the fresh row's index, so the fresh row
+// keeps its valid_from and the old row is replaced. A path row no fresh row
+// matches stays in the open rows and is handled by the snapshot rule as before.
+func gitlabOwnershipPathRowsToCarry(
+	fresh, open []gitlabTeamCatalogOwnershipRow,
+) ([]gitlabTeamCatalogOwnershipRow, map[int]gitlabTeamCatalogOwnershipRow) {
+	key := func(teamID, source, path string) string { return teamID + "\x00" + source + "\x00" + path }
+	freshByPath := map[string]int{}
+	for index, row := range fresh {
+		if row.ProjectKey != nil && strings.TrimSpace(*row.ProjectKey) != "" {
+			freshByPath[key(row.TeamID, row.Source, strings.TrimSpace(*row.ProjectKey))] = index
+		}
+	}
+	moved := map[int]gitlabTeamCatalogOwnershipRow{}
+	kept := make([]gitlabTeamCatalogOwnershipRow, 0, len(open))
+	for _, row := range open {
+		path := row.ProjectID.String()
+		index, match := freshByPath[key(row.TeamID, row.Source, path)]
+		if strings.Contains(path, ":") || !match {
+			kept = append(kept, row)
+			continue
+		}
+		if earlier, seen := moved[index]; seen && !row.ValidFrom.Before(earlier.ValidFrom) {
+			// A later duplicate of the same grant: closed by the snapshot rule.
+			kept = append(kept, row)
+			continue
+		} else if seen {
+			kept = append(kept, earlier)
+		}
+		moved[index] = row
+	}
+	return kept, moved
+}
+
+func sortedOwnershipCarryIndexes(moved map[int]gitlabTeamCatalogOwnershipRow) []int {
+	indexes := make([]int, 0, len(moved))
+	for index := range moved {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	return indexes
+}
+
 // gitlabOwnershipSnapshot applies the shared snapshot rule
 // (PlanOwnershipSnapshot) to one run. grants names the teams whose listing
 // reached a confirmed end; an open row of a team outside it is of no kind and
@@ -343,6 +393,9 @@ func gitlabOwnershipSnapshot(
 		out := make([]OwnershipSnapshotRow, len(rows))
 		for index, row := range rows {
 			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom}
+			if row.ProjectKey != nil {
+				out[index].ProjectKey = strings.TrimSpace(*row.ProjectKey)
+			}
 			if row.ValidTo == nil {
 				// A row with a close time in the future is not a repeat of a fresh row, which has none.
 				out[index].Shape = ProjectOwnershipShape(row.ProjectKey, row.IsPrimary, row.Specificity, row.Priority)
@@ -350,14 +403,32 @@ func gitlabOwnershipSnapshot(
 		}
 		return out
 	}
+	open, moved := gitlabOwnershipPathRowsToCarry(fresh, open)
 	plan := PlanOwnershipSnapshot(facts(fresh), facts(open), at, grants)
-	rows := make([]gitlabTeamCatalogOwnershipRow, 0, len(fresh)+len(plan.Retract))
+	rows := make([]gitlabTeamCatalogOwnershipRow, 0, len(fresh)+len(plan.Retract)+len(moved))
 	for index, row := range fresh {
-		if plan.Unchanged[index] {
+		pathRow, carried := moved[index]
+		if plan.Unchanged[index] && !carried {
 			continue
 		}
 		row.ValidFrom = plan.ValidFrom[index]
+		if carried && pathRow.ValidFrom.Before(row.ValidFrom) {
+			row.ValidFrom = pathRow.ValidFrom
+		}
 		rows = append(rows, row)
+	}
+	for _, index := range sortedOwnershipCarryIndexes(moved) {
+		// The path-keyed row is replaced, not closed at `at`: it ends where it
+		// began (the shortest interval a row may have), so no reader sees it
+		// beside the catalog-keyed row that now covers the same interval.
+		pathRow := moved[index]
+		end := intervalCloseAt(pathRow.ValidFrom, pathRow.ValidFrom)
+		pathRow.ValidTo = &end
+		pathRow.UpdatedAt = at
+		rows = append(rows, pathRow)
+	}
+	if len(moved) > 0 {
+		slog.Default().Info("providersync.gitlab_team_catalog.ownership_path_rows_carried", "rows", len(moved))
 	}
 	for _, retraction := range plan.Retract {
 		row := open[retraction.Open]

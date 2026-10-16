@@ -154,9 +154,7 @@ def _without_draft_gate(value: str) -> str:
 
 def test_reproducibility_bundle_is_gated_on_complementary_conditions() -> None:
     hosted_if = _without_draft_gate(str(_job(_REPRO_HOSTED).get("if", "")))
-    self_hosted_if = _without_draft_gate(
-        str(_job(_REPRO_SELF_HOSTED).get("if", ""))
-    )
+    self_hosted_if = _without_draft_gate(str(_job(_REPRO_SELF_HOSTED).get("if", "")))
     assert hosted_if == _HOSTED_CONDITION, (
         f"{WORKFLOW_PATH.name}: {_REPRO_HOSTED!r}'s `if:` ({hosted_if!r}) "
         f"does not match the expected hosted-fallback condition"

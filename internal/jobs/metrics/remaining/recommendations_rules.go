@@ -122,6 +122,11 @@ type MetricsSnapshot struct {
 	// is above zero, in the order of the four inputs. Only these are named
 	// as compounding; an input present at zero contribution is not.
 	CompoundingRiskDrivers []string
+	// CompoundingRiskAsOfDay is the calendar day (YYYY-MM-DD) of the row the
+	// score was read from. The loader window is [WindowStart, WindowEnd), so
+	// this is the last day before WindowEnd that has a row, not WindowEnd.
+	// Empty means the day is unknown and the rationale does not name one.
+	CompoundingRiskAsOfDay string
 }
 
 // EvidenceRef mirrors the reference's frozen EvidenceRef. Value is already
@@ -520,7 +525,11 @@ func compoundingRiskFromComposite(snapshot MetricsSnapshot, now time.Time) (*Rec
 			rationale = fmt.Sprintf("%s, computed from %.0f%% of its inputs (%s)",
 				rationale, percent, strings.Join(snapshot.CompoundingRiskInputs, ", "))
 		}
-		rationale += "." + compoundingRiskDriverSentence(snapshot.CompoundingRiskDrivers)
+		rationale += "."
+		if snapshot.CompoundingRiskAsOfDay != "" {
+			rationale += " Score as of " + snapshot.CompoundingRiskAsOfDay + "."
+		}
+		rationale += compoundingRiskDriverSentence(snapshot.CompoundingRiskDrivers)
 	}
 
 	recommendationSeverity := "warning"

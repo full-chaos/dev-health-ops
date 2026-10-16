@@ -48,6 +48,10 @@ SELECT '`+org+`', toDate('`+day+`'), 'team', '`+team+`', `+score+`, '`+severity+
 	// Within one day, computed_at still breaks the tie.
 	insert("team-retied", "2026-10-12", "0.1", "low", "2026-10-12 09:00:00")
 	insert("team-retied", "2026-10-12", "0.7", "high", "2026-10-12 10:00:00")
+	// CHAOS-9885: the window end (10-14) is exclusive, so the row ON the end
+	// day is not read and the as-of day is the day before it.
+	insert("team-endday", "2026-10-13", "0.5", "elevated", "2026-10-13 09:00:00")
+	insert("team-endday", "2026-10-14", "0.9", "high", "2026-10-14 09:00:00")
 
 	loader, err := NewRecommendationsLoader(conn, org)
 	if err != nil {
@@ -55,18 +59,28 @@ SELECT '`+org+`', toDate('`+day+`'), 'team', '`+team+`', `+score+`, '`+severity+
 	}
 	start, end := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
 
-	score, known, severity, _, _, _, _, err := loader.loadCompoundingRiskPersisted(ctx, "team-mobile", start, end)
+	score, known, severity, _, _, _, _, asOfDay, err := loader.loadCompoundingRiskPersisted(ctx, "team-mobile", start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !known || score != 0.246 || severity != "low" {
 		t.Errorf("team-mobile: score %v (known %v) severity %q, want 0.246 low from the latest day 2026-10-12", score, known, severity)
 	}
-	score, known, severity, _, _, _, _, err = loader.loadCompoundingRiskPersisted(ctx, "team-retied", start, end)
+	if asOfDay != "2026-10-12" {
+		t.Errorf("team-mobile: as-of day %q, want the day of the row read (2026-10-12)", asOfDay)
+	}
+	score, known, severity, _, _, _, _, _, err = loader.loadCompoundingRiskPersisted(ctx, "team-retied", start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !known || score != 0.7 || severity != "high" {
 		t.Errorf("team-retied: score %v (known %v) severity %q, want 0.7 high from the later computed_at within the day", score, known, severity)
+	}
+	score, known, severity, _, _, _, _, asOfDay, err = loader.loadCompoundingRiskPersisted(ctx, "team-endday", start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !known || score != 0.5 || severity != "elevated" || asOfDay != "2026-10-13" {
+		t.Errorf("team-endday: score %v (known %v) severity %q as-of %q, want 0.5 elevated 2026-10-13 (end day is exclusive)", score, known, severity, asOfDay)
 	}
 }

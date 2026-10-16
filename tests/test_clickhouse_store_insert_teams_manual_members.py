@@ -49,10 +49,28 @@ class _FakeClient:
         self.rows: dict[tuple[str, str], dict[str, Any]] = {}
         self.insert_calls: list[tuple[str, list[list[Any]], list[str]]] = []
         self.query_calls = 0
+        self.carry_calls = 0
 
     def query(self, sql: str, parameters: dict[str, Any] | None = None) -> _Result:
-        self.query_calls += 1
         params = parameters or {}
+        if "provider_team_id" in sql:
+            # _carry_team_provider_identity (CHAOS-9432): the stored versions.
+            self.carry_calls += 1
+            return _Result(
+                [
+                    (
+                        org_id,
+                        team_id,
+                        row.get("provider_team_id"),
+                        row.get("provider_name"),
+                        row.get("gone_at"),
+                    )
+                    for (org_id, team_id), row in self.rows.items()
+                    if org_id in set(params.get("org_ids") or [])
+                    and team_id in set(params.get("ids") or [])
+                ]
+            )
+        self.query_calls += 1
         assert "FROM teams FINAL" in sql
         org_ids = set(params.get("org_ids") or [])
         ids = set(params.get("ids") or [])
@@ -243,3 +261,41 @@ async def test_no_lookup_query_when_every_caller_supplies_manual_members() -> No
         "carol@example.com"
     ]
     assert client.query_calls == 0, "no preserve-lookup should fire here"
+
+
+@pytest.mark.asyncio
+async def test_insert_teams_carries_the_provider_identity_of_the_stored_version() -> (
+    None
+):
+    """CHAOS-9432: provider_team_id, provider_name and gone_at are written by
+    the catalog sync; this writer never knows them and must not reset them."""
+    store, client = _store()
+    gone_at = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    client.rows[(ORG_ID, "team-synced")] = {
+        "id": "team-synced",
+        "org_id": ORG_ID,
+        "manual_members": [],
+        "provider_team_id": "4711",
+        "provider_name": "Synced Team",
+        "gone_at": gone_at,
+    }
+
+    await store.insert_teams(
+        [{"id": "team-synced", "name": "Edited", "org_id": ORG_ID, "updated_at": NOW}]
+    )
+    await store.insert_teams(
+        [{"id": "team-new", "name": "New", "org_id": ORG_ID, "updated_at": NOW}]
+    )
+
+    synced = client.rows[(ORG_ID, "team-synced")]
+    assert synced["provider_team_id"] == "4711"
+    assert synced["provider_name"] == "Synced Team"
+    assert synced["gone_at"] == gone_at
+    new = client.rows[(ORG_ID, "team-new")]
+    assert (new["provider_team_id"], new["provider_name"], new["gone_at"]) == (
+        "",
+        "",
+        None,
+    )
+    for _table, _matrix, columns in client.insert_calls:
+        assert columns[-3:] == ["provider_team_id", "provider_name", "gone_at"]

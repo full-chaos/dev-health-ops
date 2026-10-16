@@ -8,9 +8,19 @@ import (
 	"time"
 )
 
-func TestInvestmentShareMeasureIsCount(t *testing.T) {
-	if InvestmentShareMeasure != MeasureCount {
-		t.Fatalf("InvestmentShareMeasure = %q, want %q (the Investment page's measure, D5999)", InvestmentShareMeasure, MeasureCount)
+// CHAOS-9809 (D5999, D6027): a surface reads ISSUE_SIZE only when it carries the sizing coverage in the same answer
+// (REST /investment, the explanation); the others stay on COUNT until they do.
+func TestSurfaceMeasuresServeIssueSizeOnlyWithCoverage(t *testing.T) {
+	for name, tc := range map[string]struct{ got, want string }{
+		"REST /investment":    {RESTInvestmentMeasure, MeasureIssueSize},
+		"explanation default": {ExplanationDefaultMeasure, MeasureIssueSize},
+		"Home tile":           {HomeTileMeasure, MeasureCount},
+		"sunburst":            {SunburstMeasure, MeasureCount},
+		"Operating Review":    {OperatingReviewMeasure, MeasureCount},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s measure = %q, want %q", name, tc.got, tc.want)
+		}
 	}
 }
 

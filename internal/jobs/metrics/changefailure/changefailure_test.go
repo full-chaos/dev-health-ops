@@ -279,29 +279,37 @@ func TestTableAndCountColumnsNameTheMigratedTable(t *testing.T) {
 	}
 }
 
-// A named limit (CHAOS-9019), pinned so that a change to it is a decision: a
-// link counts a failed deployment only on the day that holds both its
-// deployment and its incident. A deployment late on one day whose incident
-// starts early on the next is counted as a deployment on the first day and as
-// incident evidence on the second, and as a failed deployment on neither, so
-// the two-day window reads a measured 0. No producer writes such a link
-// today: the daily producer links an incident to the deployments of its own
-// day.
-func TestALinkAcrossTwoDaysCountsNoFailedDeployment(t *testing.T) {
+// CHAOS-9019: a native link can join a deployment late on one UTC day to an
+// incident that starts early on the next. The deployment is counted failed on
+// its own day through the link marked IncidentOtherDay, and the incident is
+// counted once, on its start day, so the two-day window reads a measured 1
+// with tier native. Without the mark a link whose incident is not among the
+// day's ties still counts nothing.
+func TestALinkAcrossTwoDaysCountsTheFailedDeploymentOnItsOwnDay(t *testing.T) {
 	deployment := Deployment{RepoID: repoA, DeploymentID: "late"}
-	incident := IncidentTie{RepoID: repoA, IncidentID: "early-next-day"}
+	incident := IncidentTie{RepoID: repoA, IncidentID: "early-next-day", ViaDeployment: true}
 	link := Link{RepoID: repoA, DeploymentID: "late", IncidentID: "early-next-day", Source: TierNative}
+	otherDay := link
+	otherDay.IncidentOtherDay = true
 
-	dayOne := CountDay([]Deployment{deployment}, nil, []Link{link})[repoA]
-	dayTwo := CountDay(nil, []IncidentTie{incident}, []Link{link})[repoA]
-	if dayOne != (Counts{Deployments: 1}) || dayTwo != (Counts{IncidentsDirect: 1}) {
-		t.Fatalf("day one %+v, day two %+v; want one deployment, then one direct incident", dayOne, dayTwo)
+	dayOne := CountDay([]Deployment{deployment}, nil, []Link{otherDay})[repoA]
+	dayTwo := CountDay(nil, []IncidentTie{incident}, []Link{otherDay})[repoA]
+	if dayOne != (Counts{Deployments: 1, FailedNative: 1}) || dayTwo != (Counts{IncidentsViaDeployment: 1}) {
+		t.Fatalf("day one %+v, day two %+v; want a native failed deployment, then one via-deployment incident", dayOne, dayTwo)
 	}
 	window := Rate(dayOne.Add(dayTwo))
-	if window.State != StateMeasured || window.Value == nil || *window.Value != 0 || window.LinkTier != "" {
-		t.Fatalf("two-day window = %+v, want a measured 0 with no tier", window)
+	if window.State != StateMeasured || window.Value == nil || *window.Value != 1 || window.LinkTier != TierNative {
+		t.Fatalf("two-day window = %+v, want a measured 1 with tier native", window)
 	}
-	// The same link inside one day counts.
+	// The mark never makes a deployment failed on a day it was not deployed.
+	if got := CountDay(nil, []IncidentTie{incident}, []Link{otherDay})[repoA]; got.Failed() != 0 {
+		t.Fatalf("incident day = %+v, want no failed deployment", got)
+	}
+	// Without the mark, a link whose incident is not among the day's ties counts nothing.
+	if got := CountDay([]Deployment{deployment}, nil, []Link{link})[repoA]; got != (Counts{Deployments: 1}) {
+		t.Fatalf("unmarked link without a tie = %+v, want one deployment and no failure", got)
+	}
+	// The same link inside one day counts, once.
 	sameDay := Rate(CountDay([]Deployment{deployment}, []IncidentTie{incident}, []Link{link})[repoA])
 	if sameDay.Value == nil || *sameDay.Value != 1 || sameDay.LinkTier != TierNative {
 		t.Fatalf("same-day control = %+v, want 1 with a native tier", sameDay)

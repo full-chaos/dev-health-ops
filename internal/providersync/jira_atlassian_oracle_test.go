@@ -178,6 +178,8 @@ func (doer *jiraAtlassianOracleDoer) Do(request *http.Request) (*http.Response, 
 		value = map[string]any{"values": []any{map[string]any{"id": 77, "name": "Operations"}}, "isLast": true}
 	case strings.HasSuffix(request.URL.Path, "/sprint"):
 		value = map[string]any{"values": doer.boardSprints, "isLast": true}
+	case request.URL.Path == "/rest/api/3/field":
+		value = []any{map[string]any{"id": "summary", "name": "Summary", "custom": false, "schema": map[string]any{"type": "string"}}}
 	default:
 		doer.t.Fatalf("unexpected Atlassian oracle request %s", request.URL.String())
 	}

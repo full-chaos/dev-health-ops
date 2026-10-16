@@ -24,9 +24,14 @@ REQUIRED = ROOT / "ci" / "bigboy" / "check-web-env-required.sh"
 
 
 def _chain() -> list[str]:
-    match = re.search(r"^export COMPOSE_FILE=(\S+)$", CUT.read_text(), re.MULTILINE)
-    assert match, "bigboy-cut.sh no longer exports COMPOSE_FILE"
-    return match.group(1).split(":")
+    """The `stack` set of ci/bigboy/stack.files (what the cut runs through stack.sh), tools files as $HERE/<name>."""
+    out = []
+    for line in (ROOT / "ci" / "bigboy" / "stack.files").read_text().splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] == "stack" and parts[1] in ("root", "tools"):
+            out.append(f"$HERE/{parts[2]}" if parts[1] == "tools" else parts[2])
+    assert out, "stack.files has no `stack` files"
+    return out
 
 
 def test_chain_includes_the_router_overlay_last() -> None:
@@ -55,6 +60,16 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
     # into the chain through $HERE. It requires BIGBOY_OPERATOR_IMAGE and resets services this stub base does
     # not define, so the test stages the same empty overlay the stubbed host path used to get.
     (tools / "compose.bigboy.workers.yml").write_text("services: {}\n")
+    (tools / "compose.bigboy.go-workers.yml").write_text("services: {}\n")
+    (tools / "compose.bigboy.sweep.yml").write_text("services: {}\n")
+    (tools / "compose.bigboy.base.yml").write_text(
+        "services:\n"
+        "  web:\n    image: web:test\n    environment:\n      BACKEND_URL: http://api:8000\n"
+        "  traefik:\n    image: traefik:test\n"
+        "  clickhouse:\n    image: clickhouse:test\n"
+        "  go-api:\n    image: go-api:test\n"
+        "  billing-edge:\n    image: billing-edge:test\n"
+    )
     users_file = tmp_path / "dho_api_ch.xml"
     users_file.write_text("<clickhouse/>")
     chain = [entry.replace("$HERE", str(tools)) for entry in _chain()]
@@ -63,17 +78,7 @@ def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -
             continue
         target = tmp_path / entry
         target.parent.mkdir(parents=True, exist_ok=True)
-        if entry == "compose.yml":
-            target.write_text(
-                "services:\n"
-                "  web:\n    image: web:test\n    environment:\n      BACKEND_URL: http://api:8000\n"
-                "  traefik:\n    image: traefik:test\n"
-                "  clickhouse:\n    image: clickhouse:test\n"
-                "  go-api:\n    image: go-api:test\n"
-                "  billing-edge:\n    image: billing-edge:test\n"
-            )
-        else:
-            target.write_text("services: {}\n")
+        target.write_text("services: {}\n")
     (tmp_path / ".traefik-dynamic").mkdir()
     proc = subprocess.run(
         ["docker", "compose", "config", "--format", "json"],
@@ -174,6 +179,8 @@ cat /dev/stdin > "$d/stdin.$n" 2>/dev/null < /dev/stdin || true
 case "$1" in
   buildx) echo '{"digest":"'"$FAKE_DIGEST"'"}'; exit 0 ;;
   compose)
+    if printf '%s\n' "$@" | grep -qx 'config'; then echo "ghcr.io/full-chaos/dev-health-go-dho@$FAKE_DIGEST"; exit 0; fi
+    if printf '%s\n' "$@" | grep -qx 'ps'; then [ -n "${FAKE_NO_RECONCILER:-}" ] && exit 0; echo "ghcr.io/full-chaos/dev-health-go-operator@$FAKE_DIGEST"; exit 0; fi
     if printf '%s\n' "$@" | grep -qx 'venue-hook'; then
       h=$(( $(cat "$d/hook-n" 2>/dev/null || echo 0) + 1 )); echo "$h" > "$d/hook-n"
       echo '{"msg":"migrate step ok","time":"t"}'; echo '{"state":"clean"}'
@@ -210,6 +217,9 @@ def _c_closed_bin(tmp: Path) -> Path:
         "date",
         "tr",
         "mktemp",
+        "sort",
+        "paste",
+        "git",
     ):
         p = shutil.which(tool)
         assert p, tool
@@ -227,8 +237,8 @@ def _c_stage(tmp: Path, name: str, text: str | None = None) -> Path:
     host = tmp / "host"
     (host / "ops").mkdir(parents=True, exist_ok=True)
     (host / "ops" / ".env").write_text("X=1\n")
-    (host / "compose").mkdir(exist_ok=True)
-    (host / "compose" / "compose.bigboy.images.yml").write_text(
+    (host / "_records").mkdir(exist_ok=True)
+    (host / "_records" / "compose.bigboy.images.yml").write_text(
         f"image: ghcr.io/full-chaos/dev-health-go-dho@sha256:{'cd' * 32}\n"
     )
     rec = host / "rec"
@@ -238,6 +248,12 @@ def _c_stage(tmp: Path, name: str, text: str | None = None) -> Path:
     ci.mkdir(exist_ok=True)
     for f in _c_BB.glob("compose.bigboy.*.yml"):
         shutil.copy(f, ci)
+    for f in ("stack.sh", "stack.files", "compose-config-redacted.sh"):
+        shutil.copy(_c_BB / f, ci)
+    (host / ".remember/lanes/team-lead").mkdir(parents=True, exist_ok=True)
+    (host / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
+        "services: {}\n"
+    )
     src = text if text is not None else (_c_BB / name).read_text()
     out = ci / name
     out.write_text(src.replace(_c_HOST_ROOT, str(host)))
@@ -364,18 +380,21 @@ def test_hook_check_obeys_every_class_rule(tmp_path: Path) -> None:
     assert p.returncode == 0, (p.stdout, p.stderr)
     calls = _c_calls(fake)
     assert _c_violations(calls) == []
-    runs = [c for c in calls if c["argv"][0] == "compose"]
-    assert len(runs) == 2 and all("venue-hook" in c["argv"] for c in runs)
+    runs = [c for c in calls if c["argv"][0] == "compose" and "venue-hook" in c["argv"]]
+    assert len(runs) == 2 and all("run" in c["argv"] for c in runs)
     assert runs[0]["argv"][-3:] == ["migrate", "upgrade", "--river=false"]
     assert runs[1]["argv"][-4:] == ["migrate", "clickhouse", "status", "--check"]
     for c in runs:
-        assert c["env"]["COMPOSE_FILE"].endswith("compose.bigboy.hook-check.yml")
+        assert (
+            "COMPOSE_FILE" not in c["env"]
+        )  # CHAOS-8693: the chain is stack.sh's, as -f arguments
+        assert any(a.endswith("/compose.bigboy.hook-check.yml") for a in c["argv"])
         assert c["env"]["HOOK_OPERATOR_IMAGE"].endswith(
             "@" + _c_DIGEST
         )  # positive control: derived, passed as an image ref
-        assert str(tmp_path / "host") not in " ".join(
+        assert str(tmp_path / "host" / "rec") not in " ".join(
             c["argv"]
-        )  # no host path in the one-off's argv
+        )  # no record path in the one-off's argv
     # no script-written env file is left or used
     assert not list(tmp_path.glob("tmp.*"))
     assert "hook_upgrade_rc=0" in p.stdout and "ch_status_check_rc=0" in p.stdout
@@ -402,32 +421,39 @@ def test_each_hook_check_gate_fails_the_script_on_its_own(tmp_path: Path) -> Non
         assert p.returncode == 1 and marker in p.stdout, (call, p.stdout)
 
 
-def test_compose_file_chain_is_kept_or_defaults_to_the_stack_file(
-    tmp_path: Path,
-) -> None:
-    """Called by hand with COMPOSE_FILE unset the overlay must still get compose.yml (it needs its network);
-    from the cut the exported chain stays first."""
+def test_an_inherited_compose_file_never_decides_the_chain(tmp_path: Path) -> None:
+    """CHAOS-8693: hook-check and river-apply run the stack.files chain whatever COMPOSE_FILE the caller exported."""
     for name, args in (
         ("bigboy-hook-check.sh", lambda t: [str(t / "host" / "rec")]),
         ("bigboy-river-apply.sh", lambda t: []),
     ):
-        for given in (None, "compose.yml:compose/x.yml"):
-            case = tmp_path / f"{name}-{given is None}"
-            case.mkdir()
-            script = _c_stage(case, name)
-            p, fake = _c_run(
-                case,
-                script,
-                *args(case),
-                extra_env={"COMPOSE_FILE": given} if given else {},
-            )
-            assert p.returncode == 0, (name, given, p.stdout, p.stderr)
-            cf = _c_calls(fake)[-1]["env"]["COMPOSE_FILE"]
-            assert cf.startswith(given or "compose.yml") and ":" in cf, (
-                name,
-                given,
-                cf,
-            )
+        case = tmp_path / name
+        case.mkdir()
+        script = _c_stage(case, name)
+        p, fake = _c_run(
+            case,
+            script,
+            *args(case),
+            extra_env={"COMPOSE_FILE": "compose.yml:compose/x.yml"},
+        )
+        assert p.returncode == 0, (name, p.stdout, p.stderr)
+        last = _c_calls(fake)[-1]
+        assert "COMPOSE_FILE" not in last["env"], name
+        files = [last["argv"][i + 1] for i, a in enumerate(last["argv"]) if a == "-f"]
+        assert files[0].endswith(
+            "/compose.bigboy.base.yml"
+        ) and "x.yml" not in " ".join(files), (name, files)
+        assert "--profile" in last["argv"] and "venue" in last["argv"], name
+
+
+def test_river_apply_by_hand_needs_no_running_reconciler(tmp_path: Path) -> None:
+    """Standalone (BIGBOY_OPERATOR_IMAGE unset, no go-reconciler running) the apply still runs: the one-off starts
+    no worker (--no-deps), so the worker overlay's image reference only has to interpolate."""
+    script = _c_stage(tmp_path, "bigboy-river-apply.sh")
+    p, fake = _c_run(tmp_path, script, extra_env={"FAKE_NO_RECONCILER": "1"})
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    assert [c for c in _c_calls(fake) if "venue-river" in c["argv"]]
+    assert "river_apply_rc=0" in p.stdout
 
 
 def test_river_apply_redacts_the_dsn_it_prints(tmp_path: Path) -> None:
@@ -446,10 +472,12 @@ def test_river_apply_obeys_every_class_rule(tmp_path: Path) -> None:
     assert p.returncode == 0, (p.stdout, p.stderr)
     calls = _c_calls(fake)
     assert _c_violations(calls) == []
-    assert len(calls) == 1 and "venue-river" in calls[0]["argv"]
-    assert calls[0]["argv"][-3:] == ["migrate", "river", "--apply-and-check"]
-    assert calls[0]["env"]["COMPOSE_FILE"].endswith("compose.bigboy.river-apply.yml")
-    assert calls[0]["env"]["RIVER_DHO_IMAGE"].endswith("@sha256:" + "cd" * 32)
+    runs = [c for c in calls if "venue-river" in c["argv"]]
+    assert len(runs) == 1
+    assert runs[0]["argv"][-3:] == ["migrate", "river", "--apply-and-check"]
+    assert "COMPOSE_FILE" not in runs[0]["env"]
+    assert any(a.endswith("/compose.bigboy.river-apply.yml") for a in runs[0]["argv"])
+    assert runs[0]["env"]["RIVER_DHO_IMAGE"].endswith("@sha256:" + "cd" * 32)
     assert "river_apply_rc=0" in p.stdout
 
 
@@ -473,12 +501,12 @@ def test_pg_grants_check_bigboy_uses_compose_exec_only(tmp_path: Path) -> None:
     )
     calls = _c_calls(fake)
     assert _c_violations(calls) == []
-    argv = calls[0]["argv"]
+    argv = [c for c in calls if "exec" in c["argv"]][0]["argv"]
     assert (
-        argv[:4] == ["compose", "--env-file", "ops/.env", "exec"]
-        and "-T" in argv
-        and "postgres" in argv
+        argv[:3] == ["compose", "-p", "dev-health"]
+        and argv[argv.index("--env-file") + 1] == "ops/.env"
     )
+    assert argv.index("exec") < argv.index("-T") < argv.index("postgres")
     # no password is set or expanded anywhere (D4344 pattern): psql runs with -w and no PGPASSWORD
     assert not any("PGPASSWORD" in a or "POSTGRES_PASSWORD" in a for a in argv)
     assert any("psql -w -U" in a for a in argv)
@@ -515,10 +543,14 @@ def test_grants_check_uses_compose_exec_only(tmp_path: Path) -> None:
     p, fake = _c_run(tmp_path, script, str(tmp_path / "host" / "rec"))
     calls = _c_calls(
         fake
-    )  # the later git/compare steps may fail in the sandbox; the first docker call is the subject
+    )  # the later git/compare steps may fail in the sandbox; the exec call is the subject
     assert calls and _c_violations(calls) == []
-    assert calls[0]["argv"][:4] == ["compose", "--env-file", "ops/.env", "exec"]
-    assert "clickhouse" in calls[0]["argv"] and "clickhouse-client" in calls[0]["argv"]
+    ex = [c for c in calls if "exec" in c["argv"]][0]["argv"]
+    assert (
+        ex[:3] == ["compose", "-p", "dev-health"]
+        and ex[ex.index("--env-file") + 1] == "ops/.env"
+    )
+    assert "clickhouse" in ex and "clickhouse-client" in ex and "-T" in ex
 
 
 def test_overlays_carry_no_literal_credential_and_use_compose_substitution() -> None:
@@ -613,13 +645,13 @@ def test_no_env_passing_flag_on_any_docker_line_and_no_password_expansion() -> N
 
 def test_graphql_prove_psql_line_is_a_compose_exec_on_the_stack_files() -> None:
     line = next(ln for ln in _c_code("bigboy-graphql-prove.sh") if "PROVE_ORG=$(" in ln)
-    assert 'docker compose "${BASE[@]}" exec -T postgres psql -U devhealth' in line, (
+    assert '"$HERE/stack.sh" -s prove-base exec postgres psql -U devhealth' in line, (
         line
     )
 
 
 def test_the_one_offs_keep_their_compose_shape(tmp_path: Path) -> None:
-    """--env-file ops/.env first, --profile venue, run --rm --no-deps -T on the one-off service: pinned for BOTH."""
+    """-p dev-health, --env-file ops/.env, --profile venue, run --rm --no-deps -T on the one-off service: pinned for BOTH."""
     for name, service, args in (
         ("bigboy-hook-check.sh", "venue-hook", True),
         ("bigboy-river-apply.sh", "venue-river", False),
@@ -629,11 +661,12 @@ def test_the_one_offs_keep_their_compose_shape(tmp_path: Path) -> None:
         script = _c_stage(case, name)
         p, fake = _c_run(case, script, *([str(case / "host" / "rec")] if args else []))
         assert p.returncode == 0, (name, p.stdout, p.stderr)
-        runs = [c for c in _c_calls(fake) if c["argv"][0] == "compose"]
+        runs = [c for c in _c_calls(fake) if service in c["argv"]]
         assert runs, name
         for c in runs:
             a = c["argv"]
-            assert a[:3] == ["compose", "--env-file", "ops/.env"], (name, a)
+            assert a[:3] == ["compose", "-p", "dev-health"], (name, a)
+            assert a[a.index("--env-file") + 1] == "ops/.env", (name, a)
             for needed in (
                 "--profile",
                 "venue",

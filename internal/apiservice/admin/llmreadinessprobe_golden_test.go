@@ -166,7 +166,7 @@ func TestReadinessProbeMatchesTheFrozenPythonProbe(t *testing.T) {
 		if scenario.model == "scripted-transient" {
 			atomic.StoreInt32(&transientRound1Attempts, 0)
 		}
-		prober := newOpenAICompatibleReadinessProber(nil)
+		prober := newOpenAICompatibleReadinessProber(newReadinessHTTPClient(&http.Transport{Proxy: nil}))
 		goOutcome, goSafeErrorCode := prober.probe(t.Context(), "openai", scenario.model, server.URL, "go-oracle-key")
 		outcomes[python.Outcome]++
 		if goOutcome != python.Outcome {

@@ -25,6 +25,7 @@ contracts/sync-dispatch/v1	1
 deploy/helm/dev-health	27
 internal/admincli	1
 internal/adminops	19
+internal/aftercommit	1
 internal/aicli	1
 internal/api/apimetrics	1
 internal/api/audit	1
@@ -276,6 +277,7 @@ internal/queryapi/reports/writeproofcases	1
 internal/queryapi/reviewedges	1
 internal/queryapi/routeswitch	1
 internal/queryapi/sankey	1
+internal/queryapi/scancensus	1
 internal/queryapi/scopelabel	1
 internal/queryapi/security	1
 internal/queryapi/server	26

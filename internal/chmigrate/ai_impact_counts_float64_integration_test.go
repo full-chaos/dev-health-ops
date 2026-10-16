@@ -90,6 +90,7 @@ VALUES ('o', 't', generateUUIDv4(), 'pull_request', '2026-08-01', 'human', 10, 8
 
 	const up = "sql/128_ai_impact_counts_float64.sql"
 	const down = "rollback/128_ai_impact_counts_float64.down.sql"
+	versionRows := useSchemaMigrations(t, ctx, conn, "128_ai_impact_counts_float64.sql")
 	run(up)
 	for _, column := range aiImpactCountColumns {
 		if got := columnType(column); got != "Float64" {
@@ -108,6 +109,9 @@ VALUES ('o', 'lesser', generateUUIDv4(), 'pull_request', '2026-08-01', 'human', 
 	}
 
 	run(down)
+	if n := versionRows(); n != 0 {
+		t.Errorf("after the rollback the version row is still recorded (%d rows)", n)
+	}
 	for _, column := range aiImpactCountColumns {
 		if got := columnType(column); got != "UInt32" {
 			t.Errorf("after the downgrade ai_impact_metrics_daily.%s is %s, want UInt32", column, got)

@@ -209,10 +209,16 @@ func WorkflowDrilldown(ctx context.Context, client QueryClient, orgID string, ro
 		}
 		next := map[nodeKey]bool{}
 		for _, e := range rows {
-			if e.EdgeID == "" || edgeSeen[e.EdgeID] {
+			// A deployment-incident edge id names (deployment, incident); two
+			// repositories that run one deployment id each hold their own row.
+			seenKey := e.EdgeID
+			if e.RepoID != nil {
+				seenKey += "\x00" + *e.RepoID
+			}
+			if e.EdgeID == "" || edgeSeen[seenKey] {
 				continue
 			}
-			edgeSeen[e.EdgeID] = true
+			edgeSeen[seenKey] = true
 			edges = append(edges, e)
 			addNode(e.SourceType, e.SourceID)
 			addNode(e.TargetType, e.TargetID)

@@ -578,7 +578,7 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 		filtersForCacheKey = investmentexplain.DefaultMetricFilterForCacheKey()
 	}
 
-	measure := investmentexplain.MeasureCount
+	measure := investmentexplain.ExplanationDefaultMeasure
 	if body.Measure != nil {
 		measure, _ = investmentexplain.NormalizeMeasure(*body.Measure)
 	}

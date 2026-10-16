@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 )
 
 func TestDeriveFastPathEdgesBuildsAnImplementsEdge(t *testing.T) {
@@ -104,7 +105,7 @@ func TestDeriveTextParseEdgesMatchesJiraReferenceAgainstLookup(t *testing.T) {
 	}}
 	workItems := []WorkItemRow{{RepoID: repoID, WorkItemID: "jira:ABC-123", Provider: "jira"}}
 
-	result := DeriveTextParseEdges(prs, workItems, buildTime)
+	result := DeriveTextParseEdges(prs, workItems, issueprlinks.NativeLinks{}, buildTime)
 	if result.JiraRefsFound != 1 {
 		t.Fatalf("JiraRefsFound = %d, want 1", result.JiraRefsFound)
 	}
@@ -143,7 +144,7 @@ func TestDeriveTextParseEdgesGitHubCloseKeywordImplementsEdge(t *testing.T) {
 	}}
 	workItems := []WorkItemRow{{RepoID: repoID, WorkItemID: "gh:owner/repo#55", Provider: "github"}}
 
-	result := DeriveTextParseEdges(prs, workItems, buildTime)
+	result := DeriveTextParseEdges(prs, workItems, issueprlinks.NativeLinks{}, buildTime)
 	if len(result.Edges) != 1 {
 		t.Fatalf("got %d edges, want 1", len(result.Edges))
 	}
@@ -157,7 +158,7 @@ func TestDeriveTextParseEdgesSkipsPRWithNoText(t *testing.T) {
 	prs := []PullRequestRow{{RepoID: repoID, Number: 1}}
 	workItems := []WorkItemRow{{RepoID: repoID, WorkItemID: "jira:ABC-1", Provider: "jira"}}
 
-	result := DeriveTextParseEdges(prs, workItems, time.Now())
+	result := DeriveTextParseEdges(prs, workItems, issueprlinks.NativeLinks{}, time.Now())
 	if len(result.Edges) != 0 || len(result.Links) != 0 {
 		t.Fatalf("a PR with no title/body/head_branch must be skipped, got edges=%d links=%d", len(result.Edges), len(result.Links))
 	}
@@ -198,7 +199,7 @@ func TestExplicitTextTierProviderMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			prs := []PullRequestRow{{RepoID: repoID, Number: 1, Title: tc.title}}
-			result := DeriveTextParseEdges(prs, tc.items, time.Now())
+			result := DeriveTextParseEdges(prs, tc.items, issueprlinks.NativeLinks{}, time.Now())
 			if tc.wantItem == "" {
 				if len(result.Links) != 0 || len(result.Edges) != 0 {
 					t.Fatalf("want no link, got links=%+v", result.Links)

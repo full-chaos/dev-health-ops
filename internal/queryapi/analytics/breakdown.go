@@ -108,6 +108,10 @@ func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSec
 	var contextBindings []clickhouse.Binding
 	if useInvestment {
 		ictx := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
+		ictx, err = ictx.sizedFor(req.Measure)
+		if err != nil {
+			return compiledQuery{}, err
+		}
 		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
 		contextBindings = ictx.Bindings
 		measureExpr, err = ictx.measure(req.Measure)
@@ -128,6 +132,9 @@ func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSec
 	// reviewedges.go:145 documents for UInt32. Coercing in SQL keeps ONE
 	// scan type for every measure. Python does the same coercion one
 	// layer later with `float(row["value"])`, so values are unchanged.
+	if measureExpr, err = exactSums(measureExpr); err != nil {
+		return compiledQuery{}, err
+	}
 	measureExpr = "toFloat64(" + measureExpr + ")"
 
 	keyFilter := ""

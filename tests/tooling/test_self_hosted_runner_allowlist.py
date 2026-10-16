@@ -148,6 +148,37 @@ def _iter_string_values(node, path=""):
     elif isinstance(node, str):
         yield path, node
 
+# CHAOS-9949: heavy jobs are ANDed with the draft gate, so a draft PR without the
+# `ci:full` label skips them. The gate is a prefix; the allow-list condition behind
+# it must stay EXACTLY as pinned below.
+DRAFT_GATE = (
+    "(!(github.event_name == 'pull_request' && github.event.pull_request.draft && "
+    "!contains(github.event.pull_request.labels.*.name, 'ci:full')))"
+)
+DRAFT_GATED_JOBS = {
+    ("go.yml", "dind-smoke-test"),
+    ("go.yml", "go-container-reproducibility"),
+    ("go.yml", "go-container-reproducibility-self-hosted"),
+    ("docker-images.yml", "dind-smoke-test"),
+    ("go.yml", "go-arm64-numeric-parity"),
+    ("docker-images.yml", "go-build-dho-arm64"),
+}
+
+
+def _ungated(value: str) -> str:
+    prefix = DRAFT_GATE + " && ("
+    if value.startswith(prefix) and value.endswith(")"):
+        return value[len(prefix) : -1]
+    return value
+
+
+def test_draft_gated_jobs_carry_the_draft_gate() -> None:
+    for fname, job_name in sorted(DRAFT_GATED_JOBS):
+        value = str(yaml.safe_load(_read(fname))["jobs"][job_name]["if"])
+        assert value.startswith(DRAFT_GATE + " && ("), (
+            f"{fname}:{job_name} lost the draft gate -- got {value!r}"
+        )
+
 
 def test_no_deny_list_fragment_survives_in_routed_workflows() -> None:
     offenders = []
@@ -235,6 +266,8 @@ def test_go_container_reproducibility_twin_is_a_literal_negation() -> None:
     jobs = yaml.safe_load(_read("go.yml"))["jobs"]
     hosted = str(jobs["go-container-reproducibility"]["if"])
     self_hosted = str(jobs["go-container-reproducibility-self-hosted"]["if"])
+    self_hosted = _ungated(self_hosted)
+    hosted = _ungated(hosted)
     assert self_hosted == ALLOWLIST_CONDITION, (
         f"go-container-reproducibility-self-hosted's if: does not EXACTLY "
         f"match the allow-list condition -- got {self_hosted!r}, want {ALLOWLIST_CONDITION!r}"
@@ -268,7 +301,7 @@ def test_dind_smoke_test_and_integration_use_the_allowlist_condition() -> None:
     for (fname, job_name), field in _REMAINING_IF_SITES.items():
         jobs = yaml.safe_load(_read(fname))["jobs"]
         assert job_name in jobs, f"{fname}: job {job_name!r} not found"
-        value = str(jobs[job_name].get(field, ""))
+        value = _ungated(str(jobs[job_name].get(field, "")))
         assert value == ALLOWLIST_CONDITION, (
             f"{fname}:{job_name} {field} does not EXACTLY match the "
             f"allow-list condition -- got {value!r}, want {ALLOWLIST_CONDITION!r}"

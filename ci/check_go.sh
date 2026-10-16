@@ -105,7 +105,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|ratchets|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -189,6 +189,10 @@ usage() {
          The base is RATCHET_BASE_SHA when set (CI sets it to the base commit of the pull request), else the merge
          base with origin/main (the parent when HEAD is origin/main). A base that cannot be read is a
          failure, never a pass.
+  race-weights-rows
+         Hold ci/go_race_weights.tsv to the package list without running a test: every package has a
+         row, no row names a package that is gone, rows are sorted and unique (CHAOS-4233). `fast`, `ci`
+         and the static leg run it, so the stale row is named before push.
   integration-images
          Print "<key>\t<image>" for every image declared by the Go test
          container harness. The single source of truth for the dependency set:
@@ -520,6 +524,31 @@ check_ratchets() {
   )
 }
 
+# check_race_weights_rows (CHAOS-4233): the census of ci/go_race_weights.tsv, run by `fast`, `ci` and the static leg so a
+# package added, removed or renamed names the stale row on the author's machine. tests/tooling/test_go_quality_legs.py
+# keeps the same three checks (the CI-side guard); this one removes the surprise, not that test.
+check_race_weights_rows() {
+  local modpath listed missing stale
+  [ -f "${GO_RACE_WEIGHTS}" ] || die "race weights file missing: ${GO_RACE_WEIGHTS}"
+  modpath="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed"
+  listed="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...)" || die "go list ./... failed"
+  missing="$(printf '%s\n' "${listed}" | awk -v mod="${modpath}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_missing_rows.awk")" \
+    || die "ci/go_race_missing_rows.awk failed"
+  [ -z "${missing}" ] \
+    || die "race package(s) with NO row in ci/go_race_weights.tsv (add each: its measured go test -race seconds, 1 if it has no test; CI-side guard tests/tooling/test_go_quality_legs.py::test_every_package_of_the_root_module_has_a_weights_row): $(printf '%s' "${missing}" | tr '\n' ' ')"
+  stale="$(grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_WEIGHTS}" | cut -f1 | LC_ALL=C sort -u \
+    | LC_ALL=C comm -23 - <(printf '%s\n' "${listed}" | awk -v mod="${modpath}" '{ if ($0 == mod) print "."; else if (index($0, mod "/") == 1) print substr($0, length(mod) + 2); else print $0 }' | LC_ALL=C sort))"
+  [ -z "${stale}" ] \
+    || die "ci/go_race_weights.tsv names package(s) that no longer exist (delete each row; CI-side guard tests/tooling/test_go_quality_legs.py::test_the_race_weights_table_is_clean): $(printf '%s' "${stale}" | tr '\n' ' ')"
+  local rows
+  rows="$(grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_WEIGHTS}" | cut -f1)"
+  printf '%s\n' "${rows}" | LC_ALL=C sort -c 2>/dev/null \
+    || die "ci/go_race_weights.tsv is not sorted (LC_ALL=C) or weighs a package twice (CI-side guard tests/tooling/test_go_quality_legs.py::test_the_race_weights_table_is_clean)"
+  [ -z "$(printf '%s\n' "${rows}" | LC_ALL=C sort | uniq -d)" ] \
+    || die "ci/go_race_weights.tsv weighs a package twice (CI-side guard tests/tooling/test_go_quality_legs.py::test_the_race_weights_table_is_clean)"
+  printf 'race-weights-rows: %d row(s) match the package list\n' "$(printf '%s\n' "${rows}" | wc -l)"
+}
+
 ci_leg_stage() {
   local name="$1" started
   shift
@@ -544,6 +573,7 @@ check_ci_leg() {
       ci_leg_stage build check_build
       ci_leg_stage contract check_contract
       ci_leg_stage ratchets check_ratchets
+      ci_leg_stage race-weights-rows check_race_weights_rows
       ci_leg_stage integration-vet check_integration_vet
       ci_leg_stage plan-integration-shards plan_integration_shards
       ci_leg_stage plan-providersync-shards plan_providersync_test_shards
@@ -2998,6 +3028,10 @@ case "${1:-all}" in
     [ "$#" -eq 1 ] || die "ratchets accepts no arguments"
     check_ratchets
     ;;
+  race-weights-rows)
+    [ "$#" -eq 1 ] || die "race-weights-rows accepts no arguments"
+    check_race_weights_rows
+    ;;
   race-excluded-ran)
     [ "$#" -eq 1 ] || die "race-excluded-ran accepts no arguments"
     check_race_excluded_ran
@@ -3018,6 +3052,7 @@ case "${1:-all}" in
     check_build
     check_contract
     check_ratchets
+    check_race_weights_rows
     check_integration_vet
     plan_integration_shards
     plan_providersync_test_shards
@@ -3040,6 +3075,7 @@ case "${1:-all}" in
     check_build
     check_contract
     check_ratchets
+    check_race_weights_rows
     check_integration_vet
     plan_integration_shards
     plan_providersync_test_shards
@@ -3053,6 +3089,7 @@ case "${1:-all}" in
     check_build
     check_contract
     check_ratchets
+    check_race_weights_rows
     check_integration_vet
     check_integration
     check_multi_replica_workers

@@ -208,9 +208,7 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 
 	// One row per table holds every metric of that table: the dedup source
 	// keeps the newest row per natural key, so two rows of one key would hide
-	// each other's values. Sample-count columns (see sampleCountColumns) are
-	// seeded to 1 when they are not metrics themselves, so a sampled average
-	// has a sample to average.
+	// each other's values.
 	seeded := map[string]float64{}
 	columns := map[string][]string{}
 	values := map[string][]string{}
@@ -266,13 +264,6 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 			if _, isMetric := seeded[definition.SourceTable+"."+column]; !isMetric {
 				seeded[definition.SourceTable+"."+column] = value
 				add(definition.SourceTable, column, value)
-			}
-		}
-	}
-	for table, counts := range sampleCountColumns {
-		for _, count := range counts {
-			if _, isMetric := seeded[table+"."+count]; !isMetric {
-				add(table, count, 1)
 			}
 		}
 	}
@@ -398,7 +389,7 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		if definition.SourceTable != "work_item_metrics_daily" || definition.Numerator != "" {
 			continue
 		}
-		if _, sampled := sampleCountColumns[definition.SourceTable][name]; sampled || strings.HasSuffix(name, "_count") || definition.Unit == "count" {
+		if strings.HasSuffix(name, "_count") || definition.Unit == "count" {
 			continue
 		}
 		var finalAverage float64

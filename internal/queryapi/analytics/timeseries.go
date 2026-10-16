@@ -25,13 +25,18 @@ import (
 // sum, but it is a row to a count (sankey coverage) and a bucket to a team, repository or category dimension. A key
 // with no measurement is not a bucket with a value of 0.
 var workItemCompletionDedupSource = workItemCompletionNewestRows(
-	"\n    HAVING " + liverow.NewestPredicate("work_item_completion_daily", ""))
+	"\n    HAVING "+liverow.NewestPredicate("work_item_completion_daily", ""),
+	liverow.NewestValue("churn_loc", ""))
 
 // workItemCompletionEveryNewestRow is the same source with the retraction rows kept: the text the frozen catalog
 // golden pins. Only the catalog reads it (catalog.go), and only to order the ACTIVE teams it lists by a row count.
-var workItemCompletionEveryNewestRow = workItemCompletionNewestRows("")
+//
+// The catalog counts rows per team and never reads churn_loc, so its source keeps the plain argMax text the golden pins.
+var workItemCompletionEveryNewestRow = workItemCompletionNewestRows("", "argMax(churn_loc, computed_at)")
 
-func workItemCompletionNewestRows(having string) string {
+// churnNewest is the expression of the newest churn_loc of a key: churn_loc is Nullable (CHAOS-9920) and argMax skips
+// a NULL newest row, so a reader of the value takes liverow.NewestValue.
+func workItemCompletionNewestRows(having, churnNewest string) string {
 	return `(
     SELECT
         org_id,
@@ -41,7 +46,7 @@ func workItemCompletionNewestRows(having string) string {
         argMax(delivery_units, computed_at) AS delivery_units,
         argMax(work_items_completed, computed_at) AS work_items_completed,
         argMax(prs_merged, computed_at) AS prs_merged,
-        argMax(churn_loc, computed_at) AS churn_loc,
+        ` + churnNewest + ` AS churn_loc,
         argMax(cycle_p50_hours, computed_at) AS cycle_p50_hours
     FROM work_item_completion_daily
     WHERE org_id = {org_id:String}

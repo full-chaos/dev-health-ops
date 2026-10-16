@@ -163,8 +163,23 @@ def _step_by_name(job: dict[str, object], name: str) -> dict[str, object]:
 # ---------------------------------------------------------------------------
 
 
+_DRAFT_GATE_PREFIX = (
+    "(!(github.event_name == 'pull_request' && github.event.pull_request.draft && "
+    "!contains(github.event.pull_request.labels.*.name, 'ci:full'))) && ("
+)
+
+
+def _without_draft_gate(value: str) -> str:
+    """Strip the CHAOS-9949 draft gate; test_self_hosted_runner_allowlist pins it."""
+    if value.startswith(_DRAFT_GATE_PREFIX) and value.endswith(")"):
+        return value[len(_DRAFT_GATE_PREFIX) : -1]
+    return value
+
+
 def test_arm64_parity_is_gated_on_the_self_hosted_condition() -> None:
-    job_if = str(_job(GO_WORKFLOW_PATH, _ARM64_PARITY_JOB).get("if", ""))
+    job_if = _without_draft_gate(
+        str(_job(GO_WORKFLOW_PATH, _ARM64_PARITY_JOB).get("if", ""))
+    )
     assert job_if == _SELF_HOSTED_CONDITION, (
         f"{GO_WORKFLOW_PATH.name}: {_ARM64_PARITY_JOB!r}'s `if:` ({job_if!r}) "
         f"does not match the expected self-hosted-eligible condition -- this "
@@ -247,7 +262,9 @@ def test_docker_build_is_gated_on_eligibility_not_runner_choice() -> None:
     # own eligibility condition, plus tolerating dind-smoke-test's `skipped`
     # result (it only runs when this leg lands on ARC) while still
     # rejecting a real dind failure/cancellation.
-    job_if = str(_job(DOCKER_WORKFLOW_PATH, _DOCKER_BUILD_JOB).get("if", ""))
+    job_if = _without_draft_gate(
+        str(_job(DOCKER_WORKFLOW_PATH, _DOCKER_BUILD_JOB).get("if", ""))
+    )
     expected = (
         "always() && "
         "needs.changes.result == 'success' && "

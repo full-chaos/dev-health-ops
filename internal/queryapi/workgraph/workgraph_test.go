@@ -57,9 +57,12 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 		// left as the zero value (nil pointer) rather than a failed type
 		// assertion, matching a real NULL scan.
 		case **string:
-			if row[i] == nil {
+			switch v := row[i].(type) {
+			case nil:
 				*ptr = nil
-			} else {
+			case string:
+				*ptr = &v
+			default:
 				*ptr = row[i].(*string)
 			}
 		case **time.Time:

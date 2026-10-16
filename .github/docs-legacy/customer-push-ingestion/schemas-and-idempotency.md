@@ -77,6 +77,8 @@ silently dropped data. Field names below are the wire (camelCase) names.
 | `review.v1` | `repositoryExternalId`, `pullRequestNumber`, `reviewId`, `reviewer`, `state`, `submittedAt` | — |
 | `commit.v1` | `repositoryExternalId`, `hash`, `authorWhen` | `message`, `authorName`, `authorEmail`, `committerName`, `committerEmail`, `committerWhen`, `parents` |
 
+`parentId`, `epicId` and `sprintId` (`work_item.v1`) are stored exactly as sent: the service does not prefix them with the source system and does not check that the work item they name exists, because it has no integration to check against. Send the value you intend to be read back, in the form your own work item keys use (see [external-ingest-sink-writes](../architecture/external-ingest-sink-writes.md)).
+
 `status` (`work_item.v1`) and `fromStatus`/`toStatus` (`work_item_transition.v1`) are one of:
 `backlog | todo | in_progress | in_review | blocked | done | canceled | unknown`.
 `review.v1`'s `state` is one of `APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED |

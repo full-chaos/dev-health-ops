@@ -25,6 +25,10 @@ import (
 // work_item_issue_type writes such a row of zeros for a key that lost its
 // last item, and the compute writes one for a key with open items only.
 //
+// A stored 0 in the metric itself is also "no value": lead_p50_hours is 0 for a
+// key whose completed items all lack a usable creation time, so such a key has a
+// completed item and still no lead time.
+//
 // Only metrics that buildChartQuery averages belong here: a sum is not moved
 // by a row of zeros.
 var sampleCountColumns = map[string]map[string]string{
@@ -84,7 +88,7 @@ func withChartRule(definition metricDefinition) metricDefinition {
 // executeChart drops as "no data point"; avgIf would return NaN.
 func averageExpression(table, metric string) string {
 	if count, ok := sampleCountColumns[table][metric]; ok {
-		return fmt.Sprintf("avg(if(%s > 0, %s, NULL))", count, metric)
+		return fmt.Sprintf("avg(if(%s > 0 AND %s > 0, %s, NULL))", count, metric, metric)
 	}
 	return fmt.Sprintf("avg(%s)", metric)
 }

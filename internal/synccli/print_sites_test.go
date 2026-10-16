@@ -39,13 +39,21 @@ import (
 //     (never a value), and the error class and Go type of a driver or decryptor
 //     error (logging.ErrorClass / ErrorType, never its text): no database login
 //     or password and no credential value.
+//   - teamscatalogturn.go (the team catalog turn, shared with the worker): two warnings that print the provider, the
+//     organization id, a fixed reason code and a constant sentence (no DSN: whether one is set is never its text), and
+//     the open-pool failure, which openPostgresPool already passed through pgstorage.Boundary. The wrapper's own Info lines
+//     ("waiting for", "taken") print the provider, the organization id and a wait in milliseconds.
+//   - teamscatalog.go also prints the turn_unavailable failure of a turn that could not be taken, through redact(), which
+//     now chains the PostgreSQL boundary of the --db / POSTGRES_URI value after the ClickHouse one; synccli.go prints the
+//     ResolveDSN error of POSTGRES_URI (redacted by the config package) in the same code.
 var classifiedPrintSites = map[string]int{
-	"batch.go":        3,
-	"dblookup.go":     2,
-	"local.go":        1,
-	"synccli.go":      17,
-	"target.go":       5,
-	"teamscatalog.go": 13,
+	"batch.go":            3,
+	"dblookup.go":         2,
+	"local.go":            1,
+	"synccli.go":          18,
+	"target.go":           5,
+	"teamscatalog.go":     14,
+	"teamscatalogturn.go": 3,
 }
 
 var printCalls = map[string]bool{"writeLine": true, "writeError": true}

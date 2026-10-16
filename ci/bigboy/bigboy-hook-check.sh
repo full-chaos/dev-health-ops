@@ -13,9 +13,10 @@ OP=ghcr.io/full-chaos/dev-health-go-operator@$(docker buildx imagetools inspect 
 [[ $OP == *@sha256:* ]] || { echo "no operator image for sha-${SHA:0:7}"; exit 3; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 cd "$R"   # compose project root (bigboy-cut.sh runs from here too)
-export COMPOSE_FILE="${COMPOSE_FILE:-compose.yml}:$HERE/compose.bigboy.hook-check.yml"   # by hand: the stack file supplies the network
+export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE   # CHAOS-8693: the chain, project, env file and profile come from ci/bigboy/stack.files
 export HOOK_OPERATOR_IMAGE=$OP   # an image reference, not a credential
-HC=(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-hook)
+export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-$OP}"
+HC=("$HERE/stack.sh" -s hook-check run venue-hook)
 RC=0
 OUT1=$("${HC[@]}" migrate upgrade --river=false 2>&1) || RC1=$?
 echo "$OUT1" | grep -E '"msg":"migrate step|"action"|"error"|step_failed' | sed -E 's/"time":"[^"]*",//' | cut -c1-200

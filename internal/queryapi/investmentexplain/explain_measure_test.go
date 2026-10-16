@@ -32,7 +32,8 @@ func TestExplainReadsTheMeasureOfTheRequest(t *testing.T) {
 	}{
 		{"COUNT", "sum(subcategory_kv.2 * 1.0 * 1.0)", "subcategory_kv.2 * effort_value"},
 		{"THROUGHPUT", "sum(subcategory_kv.2 * 1.0 * 1.0)", "subcategory_kv.2 * effort_value"},
-		{"", "sum(subcategory_kv.2 * 1.0 * 1.0)", "subcategory_kv.2 * effort_value"},
+		{"", "sum(subcategory_kv.2 * 1.0 * 1.0 * unit_size_weight)", "subcategory_kv.2 * effort_value"},
+		{"ISSUE_SIZE", "sum(subcategory_kv.2 * 1.0 * 1.0 * unit_size_weight)", "subcategory_kv.2 * effort_value"},
 	}
 	for _, tc := range cases {
 		t.Run("measure "+tc.measure, func(t *testing.T) {

@@ -80,6 +80,10 @@ var explainFixtureNow = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 func (explainFixtureClient) Query(_ context.Context, statement string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 	switch {
+	case strings.Contains(statement, "AS sized_units"):
+		// FetchSizingCoverage: no unit in the fixture window carries a size row, so the counts read 0
+		// (the fixture scanner leaves *uint64 at zero) and the answer carries unsized_unit_count 0 only.
+		return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0)}}}, nil
 	case strings.Contains(statement, "toString(max(computed_at))"):
 		// FetchInvestmentDataVersion -- no rows, as before the version read the quotes table too (it names that table, so it must
 		// be matched before the quotes case below).
@@ -345,10 +349,10 @@ func assertExplanationMatchesGolden(t *testing.T, golden explainGolden, got Inve
 	}
 }
 
-var goOnlyEvidencePattern = regexp.MustCompile(`, ?"(?:measure|numerator|denominator)": ?(?:"[^"]*"|[-0-9.eE+]+)`)
+var goOnlyEvidencePattern = regexp.MustCompile(`, ?"(?:measure|numerator|denominator|sizing_coverage|unsized_unit_count|sizing_note)": ?(?:"[^"]*"|[-0-9.eE+]+)`)
 
-// withoutGoOnlyEvidence removes the three evidence fields the Python reference does not have
-// (measure, numerator, denominator; CHAOS-9555) and the share noun, so the differential still compares the Python shape.
+// withoutGoOnlyEvidence removes the evidence fields the Python reference does not have (measure, numerator,
+// denominator, CHAOS-9555; sizing_coverage, unsized_unit_count, sizing_note, CHAOS-9809) and the share noun, so the differential still compares the Python shape.
 func withoutGoOnlyEvidence(body string) string {
 	body = goOnlyEvidencePattern.ReplaceAllString(body, "")
 	// The Python reference words the share as "of effort"; the Go answer names the measure it reads.

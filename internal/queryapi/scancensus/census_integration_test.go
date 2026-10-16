@@ -388,9 +388,9 @@ internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**flo
 internal/queryapi/home/queries_sync.go|FetchLatestSuccessfulSyncAt|**time.Time|9dfe899f0474|statement-not-static
 internal/queryapi/hotspots/hotspots.go|queryHotspotRows|*string,*string,*uint64,*uint32,*uint32,*float64,**float64,*float64|448efde8f6df|not-describable
 internal/queryapi/investment/sunburst.go|FetchInvestmentSunburst|*string,*string,*string,*float64|54b6486b78e7|spliced-select-list
-internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|2e6213660a1b|spliced-select-list
-internal/queryapi/investmentexplain/reader.go|FetchInvestmentThemeEffort|*string,*float64,*float64,*float64|2d78e2454964|spliced-select-list
-internal/queryapi/investmentexplain/reader.go|FetchSizingCoverage|*uint64,*uint64|6fc71db38725|not-describable
+internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|8fa24d14b228|spliced-select-list
+internal/queryapi/investmentexplain/reader.go|FetchInvestmentThemeEffort|*string,*float64,*float64,*float64|444d2e14edab|spliced-select-list
+internal/queryapi/investmentexplain/reader.go|FetchSizingCoverage|*uint64,*uint64|13df7c74def4|not-describable
 internal/queryapi/investmentexplain/workunitreader.go|FetchWorkUnitInvestments|*string,**string,**string,*time.Time,*time.Time,**string,**string,**string,**float64,*float64,*[]string,*[]float64,*[]string,*[]float64,**string,**float64,**string,**string,**string,**string,*time.Time|2fe6cf35c49b|spliced-select-list
 internal/queryapi/operatingreview/operatingreview.go|fetchChangeFailureAgg|[]any|fa0c9e3b063a|variadic-destinations
 internal/queryapi/people/metricqueries.go|fetchPersonBreakdown|*string,*float64|a120bde67c22|spliced-select-list
@@ -399,7 +399,7 @@ internal/queryapi/people/metricqueries.go|fetchPersonMetricValue|*uint64,*float6
 internal/queryapi/people/search.go|BuildSearchResponse|*string,*time.Time|d71e6f4a1e39|not-describable
 internal/queryapi/people/summary.go|fetchPersonCollaboration|*string,*string,*float64|d3c2e6e50c4f|not-describable
 internal/queryapi/producttelemetry/platform.go|LoadOrgNames|*string,*string,*string|64c4ca805d17|not-describable
-internal/queryapi/quadrant/quadrant.go|scanMetricRows|*time.Time,*string,*string,*float64|7f3cf34e2615|statement-not-static
+internal/queryapi/quadrant/quadrant.go|scanMetricRows|*time.Time,*string,*string,*float64|433c0a3205e2|statement-not-static
 internal/queryapi/reports/reports.go|scanCount|*int64|8d2d39db7d2b|not-describable
 internal/queryapi/reports/reports.go|scanReportRun|*string,*string,*string,**time.Time,**time.Time,**float64,**string,**string,**string,**string,*string,*time.Time|0121a67bb651|not-describable
 internal/queryapi/reports/reports.go|scanSavedReport|*string,*string,*string,**string,**string,*bool,**string,**string,**string,*bool,**time.Time,**string,*time.Time,*time.Time,**string|835998e4481b|not-describable

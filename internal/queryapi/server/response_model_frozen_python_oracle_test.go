@@ -162,6 +162,9 @@ type investmentPythonResponse struct {
 var investmentGoOnlyResponseFields = []struct{ name, goType, tag string }{
 	{"Measure", "string", `json:"measure,omitempty"`},
 	{"Denominator", "*float64", `json:"denominator,omitempty"`},
+	{"SizingCoverage", "*float64", `json:"sizing_coverage,omitempty"`},
+	{"UnsizedUnitCount", "*int", `json:"unsized_unit_count,omitempty"`},
+	{"SizingNote", "string", `json:"sizing_note,omitempty"`},
 }
 
 func TestInvestmentResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
@@ -1536,6 +1539,7 @@ var investmentMixGoOnlyEvidenceFields = []struct{ name, goType, tag string }{
 	{"Denominator", "*float64", `json:"denominator,omitempty"`},
 	{"SizingCoverage", "*float64", `json:"sizing_coverage,omitempty"`},
 	{"UnsizedUnitCount", "*int", `json:"unsized_unit_count,omitempty"`},
+	{"SizingNote", "string", `json:"sizing_note,omitempty"`},
 }
 
 func TestInvestmentMixEvidenceIsThePythonEvidencePlusTheDeclaredGoOnlyFields(t *testing.T) {

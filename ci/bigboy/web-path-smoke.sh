@@ -17,10 +17,8 @@ export DHO_SMOKE_DIR="$HERE"
 R=/home/ubuntu/devhealth
 cd "$R"
 
-BASE_COMPOSE_ARGS=(--env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml \
-  -f .remember/lanes/team-lead/reconciler-sweep-override.yml \
-  -f compose/compose.bigboy.images.yml \
-  -f "$HERE/compose.bigboy.router.yml" -f "$HERE/compose.bigboy.smoke.yml")
+export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE   # CHAOS-8693: the chain, project, env file and profiles come from ci/bigboy/stack.files
+STACK=("$HERE/stack.sh" -s smoke)
 
 st() { echo "STEP web-path-smoke rc=$1 $(date -u +%T)"; }
 
@@ -44,7 +42,7 @@ export DHO_SMOKE_CATALOG_FILE
 # which IS the fail-loud signal this gate needs; a set-but-blank value is caught
 # by the length check below.
 RED=$(mktemp); RED_ERR=$(mktemp)  # honours TMPDIR; never a fixed /tmp name
-if ! "$HERE/compose-config-redacted.sh" "${BASE_COMPOSE_ARGS[@]}" > "$RED" 2>"$RED_ERR"; then
+if ! "${STACK[@]}" config > "$RED" 2>"$RED_ERR"; then
   st 1
   cat "$RED_ERR" >&2  # compose-config-redacted.sh emits only `required variable NAME is missing` lines
   echo "FAIL: credential file missing -- set DHO_SMOKE_ADMIN_EMAIL and DHO_SMOKE_ADMIN_PASSWORD_FILE (0600) in ops/.env (CHAOS-6972 *_FILE convention). This STEP does not run against the real org until chris adds both." >&2
@@ -66,7 +64,7 @@ fi
 # The password file's bind mount (${DHO_SMOKE_ADMIN_PASSWORD_FILE}:${DHO_SMOKE_ADMIN_PASSWORD_FILE}:ro)
 # is already declared in compose.bigboy.smoke.yml itself -- compose's own --env-file
 # substitution resolves it, so this script never has to read or re-derive that path.
-docker compose "${BASE_COMPOSE_ARGS[@]}" run --rm --no-deps web-smoke
+"${STACK[@]}" run web-smoke
 rc=$?
 st "$rc"
 if [ $rc -eq 3 ]; then

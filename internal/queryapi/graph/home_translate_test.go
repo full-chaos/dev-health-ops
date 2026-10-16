@@ -716,3 +716,23 @@ func TestHomeResultCarriesTheMeasuredPriorValue(t *testing.T) {
 		t.Errorf("deploy_freq priorValue = %v, want null", *p)
 	}
 }
+
+// The driver caption is served as built, and a signal without one serves null
+// (CHAOS-8573).
+func TestHomeResultCarriesTheSignalDriver(t *testing.T) {
+	caption := "Code Churn appears to have moved most in alpha-service."
+	resp := &home.Response{Signals: []home.Signal{
+		{ID: "metric:churn", Driver: &caption},
+		{ID: "metric:throughput"},
+	}}
+	got := homeResultFromResponse(resp)
+	if len(got.Signals) != 2 {
+		t.Fatalf("Signals = %d, want 2", len(got.Signals))
+	}
+	if d := got.Signals[0].Driver; d == nil || *d != caption {
+		t.Errorf("churn driver = %v, want %q", d, caption)
+	}
+	if d := got.Signals[1].Driver; d != nil {
+		t.Errorf("throughput driver = %q, want null", *d)
+	}
+}

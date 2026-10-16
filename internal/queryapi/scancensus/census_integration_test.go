@@ -115,8 +115,14 @@ func scannable(ctx context.Context, conn driver.Conn, chType, dest string, null 
 	if !rows.Next() {
 		return fmt.Errorf("%s probe of %s returned no row", kind, chType)
 	}
-	if err := rows.Scan(reflect.New(rt.Elem()).Interface()); err != nil {
+	target := reflect.New(rt.Elem())
+	if err := rows.Scan(target.Interface()); err != nil {
 		return fmt.Errorf("%s probe of %s: %w", kind, chType, err)
+	}
+	// A pointer destination (**T) is NULL-safe only because the driver sets it to nil: check that
+	// it did, per type, instead of assuming it from the shape of the destination.
+	if null && target.Elem().Kind() == reflect.Pointer && !target.Elem().IsNil() {
+		return fmt.Errorf("NULL probe of %s: the driver left the %s destination non-nil", chType, dest)
 	}
 	return nil
 }
@@ -422,39 +428,47 @@ func TestScanTypeCensusProbesNullForANullableColumn(t *testing.T) {
 	if err := scannable(ctx, conn, "Nullable(Float64)", "*float64", true); err != nil {
 		t.Fatalf("the driver now refuses a NULL in a plain destination (%v): a plain-destination pin is no longer a silent NULL-to-zero, revisit nullableIntoPlainSites", err)
 	}
-	// A NULL leaves the destination untouched: the zero value for a fresh variable, but the
-	// PREVIOUS row's value for one a loop reuses.
-	for _, c := range []struct {
-		chType string
-		dest   any
-	}{
-		{"Nullable(Float64)", new(float64)},
-		{"LowCardinality(Nullable(String))", new(string)},
+	// A NULL leaves a plain destination untouched (the zero value for a fresh variable, the
+	// PREVIOUS row's value for one a loop reuses) and sets a pointer destination to nil, for
+	// every type a pinned or scanned column has.
+	sentinel := map[string]any{
+		"float64": 42.5, "string": "kept", "uint64": uint64(7), "int64": int64(7), "uint8": uint8(7),
+		"bool": true, "time.Time": time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC),
+	}
+	for _, c := range []struct{ chType, goType string }{
+		{"Nullable(Float64)", "float64"},
+		{"Nullable(String)", "string"},
+		{"LowCardinality(Nullable(String))", "string"},
+		{"Nullable(UInt64)", "uint64"},
+		{"Nullable(Int64)", "int64"},
+		{"Nullable(UInt8)", "uint8"},
+		{"Nullable(Bool)", "bool"},
+		{"Nullable(Date)", "time.Time"},
+		{"Nullable(DateTime64(3, 'UTC'))", "time.Time"},
 	} {
-		switch d := c.dest.(type) {
-		case *float64:
-			*d = 42.5
-		case *string:
-			*d = "kept"
-		}
 		expr, _ := nullProbeExpr(c.chType)
-		rows, err := conn.Query(ctx, "SELECT "+expr)
-		if err != nil || !rows.Next() {
-			t.Fatalf("NULL probe of %s: %v", c.chType, err)
-		}
-		if err := rows.Scan(c.dest); err != nil {
-			t.Fatalf("scan NULL of %s: %v", c.chType, err)
-		}
-		rows.Close()
-		switch d := c.dest.(type) {
-		case *float64:
-			if *d != 42.5 {
-				t.Fatalf("NULL of %s over a plain destination changed it to %v, want it untouched", c.chType, *d)
+		rt, _ := destType("*" + c.goType)
+		plain := reflect.New(rt.Elem())
+		plain.Elem().Set(reflect.ValueOf(sentinel[c.goType]))
+		ptr := reflect.New(reflect.PointerTo(rt.Elem()))
+		for _, dest := range []reflect.Value{plain, ptr} {
+			rows, err := conn.Query(ctx, "SELECT "+expr)
+			if err != nil || !rows.Next() {
+				t.Fatalf("NULL probe of %s: %v", c.chType, err)
 			}
-		case *string:
-			if *d != "kept" {
-				t.Fatalf("NULL of %s over a plain destination changed it to %q, want it untouched", c.chType, *d)
+			if err := rows.Scan(dest.Interface()); err != nil {
+				t.Fatalf("scan NULL of %s into %s: %v", c.chType, dest.Type(), err)
 			}
+			rows.Close()
+		}
+		if got := plain.Elem().Interface(); got != sentinel[c.goType] {
+			t.Errorf("NULL of %s over a plain %s changed it to %v, want it untouched", c.chType, c.goType, got)
+		}
+		if !ptr.Elem().IsNil() {
+			t.Errorf("NULL of %s into **%s left the pointer non-nil", c.chType, c.goType)
+		}
+		if err := scannable(ctx, conn, c.chType, "**"+c.goType, true); err != nil {
+			t.Errorf("the NULL probe of %s into **%s: %v", c.chType, c.goType, err)
 		}
 	}
 	if err := scannable(ctx, conn, "Float64", "*float64", true); err == nil {

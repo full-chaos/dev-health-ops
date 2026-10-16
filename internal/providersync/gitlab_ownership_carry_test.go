@@ -159,6 +159,30 @@ func TestGitLabOwnershipCarryTombstonesADuplicatePathRow(t *testing.T) {
 	}
 }
 
+// A path row of a taken-over path dated at or after the run (a clock ahead of
+// the sync) is not closed after the new project's row starts: it becomes an
+// empty-interval tombstone, so no instant has two valid rows at the path.
+func TestGitLabOwnershipCarryTombstonesAFutureDatedTakenOverPathRow(t *testing.T) {
+	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	future := at.Add(time.Hour)
+	fresh := mustGitLabOwnershipRow("org", "gl:org", "org/api", gitlabTeamCatalogBaseSpecificity, at)
+	legacy := mustGitLabOwnershipRow("org", "gl:org", "org/api", gitlabTeamCatalogBaseSpecificity, future)
+	legacy.ProjectID = testPID("org/api")
+	out, _ := gitlabOwnershipSnapshot([]gitlabTeamCatalogOwnershipRow{fresh}, []gitlabTeamCatalogOwnershipRow{legacy},
+		map[string][]string{"org/api": {"org:gitlab:1"}}, at, KindSnapshot[OwnershipSnapshotRow]{})
+	for _, instant := range []time.Time{at, future, future.Add(500 * time.Microsecond), future.Add(time.Hour)} {
+		valid := 0
+		for _, row := range out {
+			if validAt(row, instant) {
+				valid++
+			}
+		}
+		if valid != 1 {
+			t.Errorf("rows valid at %s = %d, want exactly 1: %+v", instant, valid, out)
+		}
+	}
+}
+
 // The catalog naming only the fresh project at the path is the same project:
 // the grant is carried.
 func TestGitLabOwnershipCarryKeepsTheHistoryWhenTheCatalogNamesTheSameProject(t *testing.T) {

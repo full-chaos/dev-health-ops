@@ -558,6 +558,9 @@ func gitlabOwnershipSnapshot(
 	}
 	for _, pathRow := range carry.ended {
 		end := intervalCloseAt(pathRow.ValidFrom, at)
+		if !pathRow.ValidFrom.Before(at) {
+			end = pathRow.ValidFrom // dated at or after the run: a tombstone, never beside the new project's row
+		}
 		pathRow.ValidTo = &end
 		pathRow.UpdatedAt = at
 		rows = append(rows, pathRow)

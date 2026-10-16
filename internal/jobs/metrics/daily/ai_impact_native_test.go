@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,9 +72,10 @@ func TestAIImpactComputeFamilyShortCircuitsOnAnEmptyRepoScope(t *testing.T) {
 }
 
 // TestAIImpactComputeFamilyStopsWhenNoPullRequestsAreInWindow pins the early
-// return after the first load. Beyond saving queries, it keeps the linkage
-// reader from being called with an EMPTY pr_numbers list, which would be an
-// `IN ()` against work_graph_pr_commit.
+// return after the pull-request and incident loads: a day with neither has no
+// facts. Beyond saving queries, it keeps the linkage reader from being called
+// with an EMPTY pr_numbers list, which would be an `IN ()` against
+// work_graph_pr_commit.
 func TestAIImpactComputeFamilyStopsWhenNoPullRequestsAreInWindow(t *testing.T) {
 	conn := &governanceQueryRecorder{}
 	executor := &AIImpactExecutor{conn: conn, nowUTC: func() time.Time { return time.Unix(0, 0).UTC() }}
@@ -87,13 +89,14 @@ func TestAIImpactComputeFamilyStopsWhenNoPullRequestsAreInWindow(t *testing.T) {
 	if written != 0 {
 		t.Fatalf("wrote %d rows with no in-window PRs, want 0", written)
 	}
-	// The pull-request load, then the live-key read of the stale-key rule: a
-	// day that lost its pull requests still holds the keys of the earlier
-	// compute.
-	if len(conn.queries) != 2 || isTeamRuleRead(conn.queries[0]) ||
-		conn.queries[1] != teamkeytables.AIImpactMetricsDaily.LiveKeyVersionsQuery() {
-		t.Fatalf("issued %d queries, want the pull-request load and the live-key read -- the executor must stop "+
-			"its own reads after the pull-request load returns nothing", len(conn.queries))
+	// The pull-request load, the incident load (an incident alone gives the
+	// day a row), then the live-key read of the stale-key rule: a day that lost
+	// its pull requests still holds the keys of the earlier compute.
+	if len(conn.queries) != 3 || isTeamRuleRead(conn.queries[0]) || isTeamRuleRead(conn.queries[1]) ||
+		!strings.Contains(conn.queries[1], "operational_incidents") ||
+		conn.queries[2] != teamkeytables.AIImpactMetricsDaily.LiveKeyVersionsQuery() {
+		t.Fatalf("issued %d queries, want the pull-request load, the incident load and the live-key read -- "+
+			"the executor must stop its own reads after those loads return nothing", len(conn.queries))
 	}
 }
 

@@ -378,8 +378,9 @@ internal/queryapi/explain/metrics.go|fetchMetricContributors|*string,**float64|9
 internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*uint8,*uint8,**float64|72bee1c1524c|not-describable
 internal/queryapi/explain/metrics.go|fetchMetricValue|**float64,*uint64|473951d9d13d|spliced-select-list
 internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|42ca92597595|not-describable
+internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|8e8c97ce9520|not-describable
 internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|55592e42870b|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|4dc1a6e702d3|not-describable
+internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|dd0172c85c4d|not-describable
 internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|42beaf116a09|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|fdde55eaa07b|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|6996634017b7|variadic-destinations

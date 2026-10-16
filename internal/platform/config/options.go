@@ -240,12 +240,12 @@ var coreOptions = []Option{
 	{
 		Flag: "jwt-issuer", Env: "JWT_ISSUER", Kind: KindString,
 		Default: defaultJWTIssuer, Services: []string{APIServiceName}, Group: GroupRuntime,
-		Usage: "access-token issuer the api accepts (same variable as the Python api)",
+		Usage: "access-token issuer the api accepts (same variable as the Python api; unset: default, set but empty: the api refuses to start; a blank flag counts as not supplied)",
 	},
 	{
 		Flag: "jwt-audience", Env: "JWT_AUDIENCE", Kind: KindString,
 		Default: defaultJWTAudience, Services: []string{APIServiceName}, Group: GroupRuntime,
-		Usage: "access-token audience the api accepts (same variable as the Python api)",
+		Usage: "access-token audience the api accepts (same variable as the Python api; unset: default, set but empty: the api refuses to start; a blank flag counts as not supplied)",
 	},
 
 	{

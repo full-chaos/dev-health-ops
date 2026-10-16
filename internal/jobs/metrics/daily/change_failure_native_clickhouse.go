@@ -31,7 +31,8 @@ type ViaDeploymentLinks struct {
 // row that carries no repo_id ties its incident to the repository of its
 // deployment, but only when the incident has no direct tie (no active
 // service-to-repository mapping for its service) and the incident started in
-// [dayStart, dayEnd). A deployment_id that names more than one repository of
+// [dayStart, dayEnd); a link to an incident that started on another day ties
+// nothing on this day (see below). A deployment_id that names more than one repository of
 // the organization ties nothing; it is counted, logged and skipped, never
 // guessed. Only ties to repoIDs are returned.
 //

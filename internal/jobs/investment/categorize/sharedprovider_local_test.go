@@ -13,8 +13,9 @@ import (
 // The local (OpenAI-compatible) kind now runs on the shared client. Each case
 // runs through the ops LocalProvider and the shared client against the same
 // scripted server: what callers rely on (text, model, usage, failure class,
-// deterministic, call count) must be equal. The request bodies differ only
-// where named below.
+// deterministic, call count) must be equal, and so must the request bodies
+// (since dev-health-go v0.24.4 a schema-free request to a local server names
+// no response_format, as the ops port did).
 func TestSharedLocalMatchesTheOpsLocalProviderForCallers(t *testing.T) {
 	chat := func(content string, usage string) string {
 		encoded, _ := json.Marshal(content)
@@ -70,15 +71,6 @@ func TestSharedLocalMatchesTheOpsLocalProviderForCallers(t *testing.T) {
 				var mine, theirs map[string]any
 				_ = json.Unmarshal([]byte(body), &mine)
 				_ = json.Unmarshal([]byte(oldSent()[index]), &theirs)
-				// Named difference: with no schema the shared client asks for a
-				// JSON object (and retries as text if a server rejects it); the
-				// ops port sent no response_format.
-				if c.request.JSONSchema == nil {
-					if format, _ := mine["response_format"].(map[string]any); format["type"] != "json_object" || theirs["response_format"] != nil {
-						t.Fatalf("no-schema format: shared %v, ops %v", mine["response_format"], theirs["response_format"])
-					}
-					delete(mine, "response_format")
-				}
 				mineRaw, _ := json.Marshal(mine)
 				theirsRaw, _ := json.Marshal(theirs)
 				if string(mineRaw) != string(theirsRaw) {

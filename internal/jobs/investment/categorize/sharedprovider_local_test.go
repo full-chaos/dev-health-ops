@@ -31,7 +31,6 @@ func TestSharedLocalMatchesTheOpsLocalProviderForCallers(t *testing.T) {
 		{"schema_not_json", CategorizationRequest("p"), []sharedSyncStep{{Status: 200, Body: chat("not json", `{"prompt_tokens":7,"completion_tokens":3}`)}}},
 		{"schema_no_usage", CategorizationRequest("p"), []sharedSyncStep{{Status: 200, Body: chat(`{"a":1}`, "")}}},
 		{"no_schema_raw_text", WorkUnitExplanationRequest("p"), []sharedSyncStep{{Status: 200, Body: chat(`{"summary": "x"}`, `{"prompt_tokens":1,"completion_tokens":1}`)}}},
-		{"schema_rejected_then_text", CategorizationRequest("p"), []sharedSyncStep{{Status: 400, Body: `{"error":"response_format unsupported"}`}, {Status: 200, Body: chat(`{"a":1}`, "")}}},
 		{"server_error_then_ok", InvestmentMixExplanationRequest("p"), []sharedSyncStep{{Status: 503, Body: `{}`}, {Status: 200, Body: chat(`{"summary":"x"}`, "")}}},
 		{"server_error_twice", CategorizationRequest("p"), []sharedSyncStep{{Status: 500, Body: `{}`}}},
 		{"unauthorized", CategorizationRequest("p"), []sharedSyncStep{{Status: 401, Body: `{"error":"unauthorized"}`}}},

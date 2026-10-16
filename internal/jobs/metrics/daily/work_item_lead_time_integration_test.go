@@ -111,3 +111,44 @@ GROUP BY provider, team_id, issue_type_norm, repo_id`, orgID, day, provider).Sca
 		}
 	}
 }
+
+// work_items.created_at is not nullable: a missing creation time is stored, and read back, as the Unix epoch. That
+// is not a lead time; the item is left out of the median.
+func TestIssueTypeFamilyLeavesAnEpochCreatedAtOutOfTheLeadTime(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	orgID := "org-lead-epoch-" + uuid.NewString()
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	repoID := uuid.New()
+	done := day.Add(10 * time.Hour)
+	seedWorkItemWithProvider(t, ctx, conn, orgID, repoID, "github", "epoch-1", time.Unix(0, 0).UTC(), &done)
+	seedWorkItemWithProvider(t, ctx, conn, orgID, repoID, "github", "real-1", day.Add(-14*time.Hour), &done)
+
+	issueType, err := NewWorkItemIssueTypeExecutor(conn, workItemEngineTestNormalizer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attribution, err := NewWorkItemAttributionExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition := Partition{ID: "p1", RunID: "r1", RepoIDs: []RepositoryID{RepositoryID(repoID.String())}}
+	run := Run{ID: uuid.NewString(), OrganizationID: orgID, TargetDay: day}
+	if _, err := attribution.ComputeFamily(ctx, run, partition); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := issueType.ComputeFamily(ctx, run, partition); err != nil {
+		t.Fatal(err)
+	}
+	var lead float64
+	var completed uint64
+	if err := conn.QueryRow(ctx, `
+SELECT argMax(lead_p50_hours, computed_at), toUInt64(argMax(completed_count, computed_at))
+FROM issue_type_metrics_daily WHERE org_id = ? AND day = ?
+GROUP BY provider, team_id, issue_type_norm, repo_id`, orgID, day).Scan(&lead, &completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed != 2 || lead != 24 {
+		t.Fatalf("completed=%d lead_p50_hours=%v, want 2 completed and 24 (only the item with a real created_at has a lead time)", completed, lead)
+	}
+}

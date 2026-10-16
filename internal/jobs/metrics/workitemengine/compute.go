@@ -174,7 +174,7 @@ func ComputeIssueTypeMetricsDaily(
 				// created_at (the zero time) or a creation after its
 				// completion has no lead time: it is left out of the p50 (see
 				// LeadTimeInputs), never taken as 0 hours.
-				if lead := completed.Sub(created).Hours(); !item.CreatedAt.IsZero() && lead >= 0 {
+				if lead := completed.Sub(created).Hours(); hasCreationTime(item.CreatedAt) && lead >= 0 {
 					bucket.leadHours = append(bucket.leadHours, lead)
 				}
 			}
@@ -219,6 +219,13 @@ type completionBucket struct {
 	cycleHours                      []float64
 }
 
+// hasCreationTime reports whether a creation time is a real one. The work_items.created_at column is not
+// nullable, so a missing creation time is stored and read back as the Unix epoch (and the Go zero time before it
+// is stored): neither is a date the item was created on.
+func hasCreationTime(created time.Time) bool {
+	return !created.IsZero() && created.UTC().After(time.Unix(0, 0))
+}
+
 // LeadTimeInputs counts the items completed in [dayUTC, end) and, of those, the ones left out of the lead-time p50
 // because they have no created_at or were created after they completed. The caller logs it; this package holds no
 // logger.
@@ -232,7 +239,7 @@ func LeadTimeInputs(items []Item, dayUTC, end time.Time) (completed, excluded in
 			continue
 		}
 		completed++
-		if item.CreatedAt.IsZero() || done.Sub(item.CreatedAt.UTC()) < 0 {
+		if !hasCreationTime(item.CreatedAt) || done.Sub(item.CreatedAt.UTC()) < 0 {
 			excluded++
 		}
 	}

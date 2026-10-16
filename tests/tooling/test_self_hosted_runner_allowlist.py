@@ -156,12 +156,24 @@ DRAFT_GATE = (
     "!contains(github.event.pull_request.labels.*.name, 'ci:full')))"
 )
 DRAFT_GATED_JOBS = {
+    ("codeql-analysis.yml", "analyze"),
+    ("docker-images.yml", "dind-smoke-test"),
+    ("docker-images.yml", "go-api-tools-build"),
+    ("docker-images.yml", "go-build"),
+    ("docker-images.yml", "go-build-dho-arm64"),
     ("go.yml", "dind-smoke-test"),
+    ("go.yml", "go-arm64-numeric-parity"),
     ("go.yml", "go-container-reproducibility"),
     ("go.yml", "go-container-reproducibility-self-hosted"),
-    ("docker-images.yml", "dind-smoke-test"),
-    ("go.yml", "go-arm64-numeric-parity"),
-    ("docker-images.yml", "go-build-dho-arm64"),
+    ("go.yml", "go-container-security"),
+    ("go.yml", "go-container-smoke"),
+    ("go.yml", "go-storage-integration-plan"),
+    ("go.yml", "graphql-wire-parity"),
+    ("live-e2e.yml", "live-e2e"),
+    ("live-e2e.yml", "metrics-executed-proof"),
+    ("security-scan.yml", "pip-audit"),
+    ("security-scan.yml", "semgrep"),
+    ("venue-oracles-changed.yml", "venue-oracles-changed"),
 }
 
 
@@ -175,9 +187,22 @@ def _ungated(value: str) -> str:
 def test_draft_gated_jobs_carry_the_draft_gate() -> None:
     for fname, job_name in sorted(DRAFT_GATED_JOBS):
         value = str(yaml.safe_load(_read(fname))["jobs"][job_name]["if"])
-        assert value.startswith(DRAFT_GATE + " && ("), (
+        assert value == DRAFT_GATE or value.startswith(DRAFT_GATE + " && ("), (
             f"{fname}:{job_name} lost the draft gate -- got {value!r}"
         )
+
+
+def test_every_draft_gated_job_is_pinned() -> None:
+    found = set()
+    for path in sorted(WORKFLOWS_DIR.glob("*.yml")):
+        jobs = yaml.safe_load(path.read_text(encoding="utf-8")).get("jobs") or {}
+        for job_name, job in jobs.items():
+            if "'ci:full'" in str(job.get("if", "")):
+                found.add((path.name, job_name))
+    assert found == DRAFT_GATED_JOBS, (
+        f"unpinned: {sorted(found - DRAFT_GATED_JOBS)}; "
+        f"pinned but not gated: {sorted(DRAFT_GATED_JOBS - found)}"
+    )
 
 
 def test_no_deny_list_fragment_survives_in_routed_workflows() -> None:

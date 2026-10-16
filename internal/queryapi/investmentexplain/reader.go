@@ -452,14 +452,25 @@ WHERE org_id = {org_id:String}
 		}
 		return "none", nil
 	}
-	var latest, rowCount, quotesLatest, quotesCount string
+	var latest, rowCount string
+	var quotesLatest, quotesCount *string
 	if err := rows.Scan(&latest, &rowCount, &quotesLatest, &quotesCount); err != nil {
 		return "", fmt.Errorf("scan investment data version: %w", err)
 	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("iterate investment data version: %w", err)
 	}
-	return latest + "/" + rowCount + "/" + quotesLatest + "/" + quotesCount, nil
+	return latest + "/" + rowCount + "/" + dataVersionPart(quotesLatest) + "/" + dataVersionPart(quotesCount), nil
+}
+
+// dataVersionPart renders one part of the data-version cache key. A NULL is
+// "null", which no toString() result can equal, so NULL never shares a key
+// with an empty string.
+func dataVersionPart(value *string) string {
+	if value == nil {
+		return "null"
+	}
+	return *value
 }
 
 func dedupeStrings(values []string) []string {

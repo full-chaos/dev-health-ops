@@ -277,6 +277,7 @@ func decodeEngineSnapshot(t *testing.T, encoded engineSnapshot) MetricsSnapshot 
 		AfterHoursRatio:             afterHours,
 		AfterHoursRatioKnown:        afterHoursKnown,
 		CycleTimeByDay:              parseList(t, encoded.CycleTimeByDay),
+		CycleTimeDays:               consecutiveDays(len(encoded.CycleTimeByDay)),
 		HotspotComplexityDelta:      complexity,
 		HotspotComplexityDeltaKnown: complexityKnown,
 		HotspotChurnOverlap:         overlap,

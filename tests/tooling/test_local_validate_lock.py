@@ -1049,15 +1049,20 @@ _VANISHING_LN_WRAPPER = """#!/bin/bash
 marker="${LN_FAIL_ONCE_MARKER}"
 if [ ! -e "$marker" ]; then
   : > "$marker"
-  echo "ln: failed to create symbolic link '${@: -1}': File exists" >&2
+  if [ "${LN_MESSAGE_STYLE}" = "bsd" ]; then
+    echo "ln: ${@: -1}: File exists" >&2
+  else
+    echo "ln: failed to create symbolic link '${@: -1}': File exists" >&2
+  fi
   exit 1
 fi
 exec /bin/ln "$@"
 """
 
 
+@pytest.mark.parametrize("style", ["gnu", "bsd"])
 def test_a_lock_released_between_ln_failure_and_the_check_is_contention_not_a_fatal(
-    tmp_path,
+    tmp_path, style
 ):
     """ln -s hits EEXIST, then the holder releases before try_acquire_once looks
     at LOCK_DIR. That is contention (retry), never "cannot create lock symlink".
@@ -1074,7 +1079,10 @@ def test_a_lock_released_between_ln_failure_and_the_check_is_contention_not_a_fa
         lock_dir,
         hold_secs=0.1,
         wait_secs=10,
-        extra_env={"LN_FAIL_ONCE_MARKER": str(tmp_path / "ln_failed_once")},
+        extra_env={
+            "LN_FAIL_ONCE_MARKER": str(tmp_path / "ln_failed_once"),
+            "LN_MESSAGE_STYLE": style,
+        },
         path=f"{wrapper_dir}:{_BASE_PATH}",
     )
     out = probe.communicate(timeout=_REAP_SECS)[0]

@@ -377,8 +377,37 @@ check_race_excluded_ran() {
   printf 'race-excluded-ran: %d test(s) ran and passed without -race\n' "${count}"
 }
 
+# SERIAL_HEAVY_TEST_PACKAGE (CHAOS-9867): internal/gqlgenguard runs ~8 whole-repository gqlgen generations one after
+# another (no t.Parallel: it moves the working directory), each a `go run` that type-checks every package. Beside the
+# other test binaries of one `go test ./...` it is starved of CPU: 545 s in the hosted test leg against 393 s in a race
+# leg and ~213 s alone, with the default 600 s go test timeout as the only margin, so one slow runner timed it out
+# (run 38786639144). It now runs alone, after the rest, so its time no longer depends on what else is scheduled.
+SERIAL_HEAVY_TEST_PACKAGE="github.com/full-chaos/dev-health-ops/internal/gqlgenguard"
+
 check_test() {
-  run_in_modules "go test" go test -mod=readonly -trimpath ./...
+  local module_dir all rest ran_heavy=0
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    printf 'go test: %s\n' "${module_dir}"
+    all="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./...)" \
+      || die "go list failed in ${module_dir}"
+    rest="$(printf '%s\n' "${all}" | grep -vx -- "${SERIAL_HEAVY_TEST_PACKAGE}" || true)"
+    (
+      cd "${ROOT}/${module_dir}"
+      if [ -n "${rest}" ]; then
+        # shellcheck disable=SC2086
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath ${rest}
+      fi
+    ) || return 1
+    if printf '%s\n' "${all}" | grep -qx -- "${SERIAL_HEAVY_TEST_PACKAGE}"; then
+      ran_heavy=1
+      printf 'go test (alone): %s\n' "${SERIAL_HEAVY_TEST_PACKAGE}"
+      (
+        cd "${ROOT}/${module_dir}"
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath "${SERIAL_HEAVY_TEST_PACKAGE}"
+      ) || return 1
+    fi
+  done
+  [ "${ran_heavy}" -eq 1 ] || die "check_test never ran ${SERIAL_HEAVY_TEST_PACKAGE}: it was split out of ./... and must run alone"
   check_race_excluded_ran
 }
 

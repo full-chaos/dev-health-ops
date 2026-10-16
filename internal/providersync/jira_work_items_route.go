@@ -141,15 +141,25 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		}
 		sprintCache[sprint.SprintID] = sprint
 	}
+	var pointsFields []string
+	if jiraStoryPointsDiscoveryNeeded(claim) {
+		discovered, discoverErr := discoverJiraStoryPointsFields(ctx, client)
+		if discoverErr != nil {
+			return CompleteRouteBatch{}, discoverErr
+		}
+		pointsFields = discovered
+	}
+	var pointsStats jiraStoryPointsStats
 	for _, issue := range issues {
 		item, transitions, normalizeErr := normalizeJiraWorkItem(
-			claim, jiraWorkItemFixtureInput{Raw: issue}, handler.StatusMapping,
+			claim, jiraWorkItemFixtureInput{Raw: issue, PointsFields: pointsFields}, handler.StatusMapping,
 			handler.Identity, normalizedAt,
 		)
 		if normalizeErr != nil {
 			return CompleteRouteBatch{}, normalizeErr
 		}
 		rows.WorkItems = append(rows.WorkItems, item)
+		pointsStats.observe(item)
 		rows.Transitions = append(rows.Transitions, transitions...)
 		dependencies := normalizeJiraDependencies(claim, item.WorkItemID, issue, normalizedAt)
 		rows.Dependencies = append(rows.Dependencies, dependencies...)
@@ -216,6 +226,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		}
 	}
 
+	pointsStats.log(ctx)
 	for sprintID := range sprintIDs {
 		if sprint, ok := sprintCache[sprintID]; ok {
 			rows.Sprints = append(rows.Sprints, sprint)

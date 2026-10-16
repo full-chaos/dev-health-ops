@@ -465,8 +465,15 @@ func Execute(
 // It is a no-op without a push. A flush that cannot reach the collector is
 // logged and bounded, never a shutdown failure: the process stopped cleanly.
 type metricsFlush struct {
-	source *apimetrics.Source
+	source metricsShutdowner
 	logger *slog.Logger
+}
+
+// metricsShutdowner is what metricsFlush needs of the metrics source: a push stop that is meant to honour
+// its context but is not trusted to (the SDK reader waits for its export loop before it looks at the
+// context).
+type metricsShutdowner interface {
+	Shutdown(context.Context) error
 }
 
 func (metricsFlush) Name() string { return "otlp-metrics" }
@@ -487,8 +494,20 @@ func (m metricsFlush) Shutdown(ctx context.Context) error {
 	}
 	flushCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	if err := m.source.Shutdown(flushCtx); err != nil {
-		m.logger.Warn("otlp metrics final flush failed", "error", err)
+	// The flush runs beside the wait: a source that does not return when flushCtx ends (the SDK
+	// reader blocks on its export loop first) would otherwise hold this component past its attempt
+	// budget, and lifecycle.Runtime then reports "shutdown component otlp-metrics: context deadline
+	// exceeded" and the process exits 1 for a collector that is merely unreachable (CHAOS-9934).
+	flushed := make(chan error, 1)
+	go func() { flushed <- m.source.Shutdown(flushCtx) }()
+	select {
+	case err := <-flushed:
+		if err != nil {
+			m.logger.Warn("otlp metrics final flush failed", "error", err)
+		}
+	case <-flushCtx.Done():
+		m.logger.Warn("otlp metrics final flush abandoned: the push stop did not return within its budget",
+			"budget", budget, "cause", context.Cause(flushCtx))
 	}
 	return nil
 }

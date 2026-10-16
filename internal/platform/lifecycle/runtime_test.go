@@ -85,8 +85,8 @@ type nonCooperativeComponent struct {
 
 type budgetedComponent struct {
 	*recordingComponent
-	budget    time.Duration
-	remaining time.Duration
+	budget   time.Duration
+	deadline time.Time
 }
 
 func (component *budgetedComponent) ShutdownBudget() time.Duration { return component.budget }
@@ -95,7 +95,7 @@ func (component *budgetedComponent) Shutdown(ctx context.Context) error {
 	if !ok {
 		return errors.New("shutdown deadline is missing")
 	}
-	component.remaining = time.Until(deadline)
+	component.deadline = deadline
 	return component.recordingComponent.Shutdown(ctx)
 }
 
@@ -333,15 +333,34 @@ func TestShutdownHonorsReviewedComponentBudget(t *testing.T) {
 		recordingComponent: &recordingComponent{name: "reserved", record: record},
 		budget:             80 * time.Millisecond,
 	}
-	tail := &recordingComponent{name: "tail", record: record}
+	// The tail component declares no budget of its own: it is the last attempt, so it receives what is
+	// left of the global shutdown deadline, which makes its deadline the global bound.
+	tail := &budgetedComponent{recordingComponent: &recordingComponent{name: "tail", record: record}}
 	runtime, err := New(Options{ShutdownTimeout: 100 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The deadline the component was given is compared with clock readings taken before and after
+	// the whole shutdown, never with the time the component happened to start running (a loaded
+	// -race runner delays that start by tens of ms: CHAOS-9938). The attempt context is created
+	// after `before` and the shutdown deadline before `after`, so both bounds hold on any machine.
+	before := time.Now()
 	if err := runtime.shutdown(context.Background(), []Component{tail, reserved}); err != nil {
 		t.Fatal(err)
 	}
-	if reserved.remaining < 70*time.Millisecond {
-		t.Fatalf("reserved shutdown budget = %s, want approximately 80ms", reserved.remaining)
+	after := time.Now()
+	if got := reserved.deadline.Sub(before); got < 80*time.Millisecond {
+		t.Fatalf("reserved component was given a deadline %s after the shutdown began, want at least its 80ms budget (an equal share of 100ms over two components is 50ms)", got)
+	}
+	// The global bound, both ways, on the tail's deadline (the shutdown deadline is set after `before`
+	// and before `after`): a global timeout longer or shorter than the 100ms the runtime was given fails.
+	if got := tail.deadline.Sub(before); got < 100*time.Millisecond {
+		t.Fatalf("the last component's deadline is %s after the shutdown began, want the full 100ms global budget", got)
+	}
+	if got := tail.deadline.Sub(after); got > 100*time.Millisecond {
+		t.Fatalf("the last component's deadline is %s after the shutdown ended, want within the 100ms global budget", got)
+	}
+	if reserved.deadline.After(tail.deadline) {
+		t.Fatalf("the reserved component's deadline %s is after the global deadline %s", reserved.deadline, tail.deadline)
 	}
 }

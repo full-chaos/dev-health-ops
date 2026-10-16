@@ -576,6 +576,7 @@ internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|6996634017b7|v
 internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64,**float64|cbaa044e10d6|not-describable
 internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**float64,*string,*time.Time,**float64|54de9ad8afd6|not-describable
 internal/queryapi/home/queries_sync.go|FetchLatestSuccessfulSyncAt|**time.Time|9dfe899f0474|statement-not-static
+internal/queryapi/home/repolinked.go|readBasis|*string,*string,*uint8|3e248e77f109|spliced-select-list
 internal/queryapi/hotspots/hotspots.go|queryHotspotRows|*string,*string,*uint64,*uint32,*uint32,*float64,**float64,*float64|448efde8f6df|not-describable
 internal/queryapi/investment/sunburst.go|FetchInvestmentSunburst|*string,*string,*string,*float64|54b6486b78e7|spliced-select-list
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|ec7d4a5c1502|spliced-select-list
@@ -594,7 +595,7 @@ internal/queryapi/reports/reports.go|scanReportRun|*string,*string,*string,**tim
 internal/queryapi/reports/reports.go|scanSavedReport|*string,*string,*string,**string,**string,*bool,**string,**string,**string,*bool,**time.Time,**string,*time.Time,*time.Time,**string|835998e4481b|not-describable
 internal/queryapi/reports/writer.go|clone|*string,**string,**string,**string,**string|bd5216bf923e|statement-not-static
 internal/queryapi/reports/writer.go|trigger|*bool|a8202561e27c|statement-not-static
-internal/queryapi/reports/writer.go|update|*string,*string,*string,**string,**time.Time,*time.Time|6c5898b14827|statement-not-static
+internal/queryapi/reports/writer.go|update|*string,*string,*string,**string,**time.Time,*time.Time|02fbaf29d245|statement-not-static
 internal/queryapi/routeswitch/class_decision_switch.go|Enabled|*string|7a40513e2fab|not-describable
 internal/queryapi/server/mcp_route.go|Scan|[]any|073743d6899c|variadic-destinations
 internal/queryapi/workgraph/edges.go|countMatchingEdges|*uint64|8d8175642fa2|not-describable

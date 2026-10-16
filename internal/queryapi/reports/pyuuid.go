@@ -23,11 +23,11 @@ func ParseReportID(text string) (string, error) {
 	h = strings.Trim(h, "{}")
 	h = strings.ReplaceAll(h, "-", "")
 	if utf8.RuneCountInString(h) != 32 {
-		return "", fmt.Errorf("badly formed hexadecimal UUID string")
+		return "", clientError(fmt.Errorf("badly formed hexadecimal UUID string"))
 	}
 	value, ok := pyIntBase16(h)
 	if !ok {
-		return "", fmt.Errorf("invalid literal for int() with base 16: %s", pythonparity.StrRepr(h))
+		return "", clientError(fmt.Errorf("invalid literal for int() with base 16: %s", pythonparity.StrRepr(h)))
 	}
 	// 32 characters hold at most 128 bits and the hyphen removal leaves no
 	// sign to read, so the value is always in the 128-bit range.

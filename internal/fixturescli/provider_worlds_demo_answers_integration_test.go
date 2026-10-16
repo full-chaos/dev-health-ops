@@ -41,17 +41,20 @@ type demoTeam struct {
 	// test file, so the team's churn does not fall on files touched again and again. Together they make
 	// a team's risk score low (Mobile); QuickReview alone makes it middling (Identity, Data).
 	QuickReview, OwnFiles bool
+	// AfterHoursShare is the percentage of the team's weekday commits made outside 09:00-17:00 UTC
+	// (early, 06 to 08, or late, 18 to 21); the others fall in the working day (demoCommitHour).
+	AfterHoursShare int
 }
 
 var demoTeams = []demoTeam{
-	{Name: "payments", Tracker: "jira", Key: "PAY", Project: demoJiraPAY, GitHub: []githubUser{dmPia, dmQuin, dmRaf}, Jira: []jiraUser{dmJPia, dmJQuin, dmJRaf}, Stories: demoPaymentsStories, EstimateShare: 60},
-	{Name: "checkout", Tracker: "linear", Key: "CHK", LinearPrj: demoLinearProjects[0].ID, GitHub: []githubUser{dmSol, dmTeo, dmUma}, Linear: []linearUser{dmLSol, dmLTeo, dmLUma}, Stories: demoCheckoutStories, EstimateShare: 75},
-	{Name: "support", Tracker: "jira", Key: "SUP", Project: demoJiraSUP, GitHub: []githubUser{dmVic, dmWen}, Jira: []jiraUser{dmJVic, dmJWen}, Stories: demoSupportStories, EstimateShare: 40},
-	{Name: "identity", Tracker: "github", Home: "identity-service", GitHub: []githubUser{dmXan, dmYara, dmZed}, Stories: demoIdentityStories, QuickReview: true},
-	{Name: "mobile", Tracker: "linear", Key: "MOB", LinearPrj: demoLinearProjects[1].ID, GitHub: []githubUser{dmAbe, dmBea}, Linear: []linearUser{dmLAbe, dmLBea}, Reviewer: dmMoLed, Stories: demoMobileStories, EstimateShare: 70, QuickReview: true, OwnFiles: true},
-	{Name: "delivery", Tracker: "gitlab", Home: "chaos-gl/deploy-pipeline", GitLab: []gitlabUser{dmDax, dmEva, dmFin}, Stories: demoDeliveryStories, EstimateShare: 50},
-	{Name: "data", Tracker: "gitlab", Home: "chaos-gl/data/warehouse-etl", GitLab: []gitlabUser{dmGia, dmHal, dmIda}, Stories: demoDataStories, EstimateShare: 80, QuickReview: true},
-	{Name: "web", Tracker: "none", Home: "chaos-gl/web/marketing-site", GitLab: []gitlabUser{dmJon, dmKit}, Stories: demoWebStories, EstimateShare: 30},
+	{Name: "payments", Tracker: "jira", Key: "PAY", Project: demoJiraPAY, GitHub: []githubUser{dmPia, dmQuin, dmRaf}, Jira: []jiraUser{dmJPia, dmJQuin, dmJRaf}, Stories: demoPaymentsStories, EstimateShare: 60, AfterHoursShare: 20},
+	{Name: "checkout", Tracker: "linear", Key: "CHK", LinearPrj: demoLinearProjects[0].ID, GitHub: []githubUser{dmSol, dmTeo, dmUma}, Linear: []linearUser{dmLSol, dmLTeo, dmLUma}, Stories: demoCheckoutStories, EstimateShare: 75, AfterHoursShare: 12},
+	{Name: "support", Tracker: "jira", Key: "SUP", Project: demoJiraSUP, GitHub: []githubUser{dmVic, dmWen}, Jira: []jiraUser{dmJVic, dmJWen}, Stories: demoSupportStories, EstimateShare: 40, AfterHoursShare: 8},
+	{Name: "identity", Tracker: "github", Home: "identity-service", GitHub: []githubUser{dmXan, dmYara, dmZed}, Stories: demoIdentityStories, QuickReview: true, AfterHoursShare: 35},
+	{Name: "mobile", Tracker: "linear", Key: "MOB", LinearPrj: demoLinearProjects[1].ID, GitHub: []githubUser{dmAbe, dmBea}, Linear: []linearUser{dmLAbe, dmLBea}, Reviewer: dmMoLed, Stories: demoMobileStories, EstimateShare: 70, QuickReview: true, OwnFiles: true, AfterHoursShare: 4},
+	{Name: "delivery", Tracker: "gitlab", Home: "chaos-gl/deploy-pipeline", GitLab: []gitlabUser{dmDax, dmEva, dmFin}, Stories: demoDeliveryStories, EstimateShare: 50, AfterHoursShare: 28},
+	{Name: "data", Tracker: "gitlab", Home: "chaos-gl/data/warehouse-etl", GitLab: []gitlabUser{dmGia, dmHal, dmIda}, Stories: demoDataStories, EstimateShare: 80, QuickReview: true, AfterHoursShare: 16},
+	{Name: "web", Tracker: "none", Home: "chaos-gl/web/marketing-site", GitLab: []gitlabUser{dmJon, dmKit}, Stories: demoWebStories, EstimateShare: 30, AfterHoursShare: 10},
 }
 
 // demoTeamNamed is the team of that name.
@@ -191,7 +194,7 @@ func demoTimesOf(team demoTeam, story demoStory, c demoChange) demoChangeTimes {
 	}
 	times.Merged = demoAt(c.MergedAgo, 13+int(seed[3])%5, int(seed[4])%60)
 	if c.MergedAgo == 0 {
-		// Merged on the as-of day itself: the morning after the commits (which are at 8 to 10 on their day), 11:00 to
+		// Merged on the as-of day itself: after the commits (which are before 11 on that day), 11:00 to
 		// 11:09, so it and the deployment (25 to 44 minutes later) are before the world's noon instant.
 		times.Merged = demoAt(0, 11, int(seed[4])%10)
 	}
@@ -215,7 +218,7 @@ func demoTimesOf(team demoTeam, story demoStory, c demoChange) demoChangeTimes {
 }
 
 // demoChangeCommits are a change's commits: one, plus one per failed CI run (at most two), plus zero to
-// two review follow-ups (seeded), in the mornings of the days the change is open. A team with OwnFiles
+// two review follow-ups (seeded), on the days the change is open, at the hours demoCommitHour picks. A team with OwnFiles
 // touches only the change's own file, and each follow-up its own test file.
 func demoChangeCommits(team demoTeam, c demoChange, key, title, author string) []demoCommit {
 	failed := min(c.CIFailed, 2)
@@ -231,6 +234,7 @@ func demoChangeCommits(team demoTeam, c demoChange, key, title, author string) [
 	default:
 		files = []string{"src/" + module + "/handler.go", "src/" + module + "/" + demoSlug(title) + ".go"}
 	}
+	merged := demoTimesOf(team, demoStory{Title: title}, c).Merged
 	var commits []demoCommit
 	for index := 0; index < count; index++ {
 		day := c.CreatedAgo - (c.CreatedAgo-end)*index/count
@@ -250,8 +254,49 @@ func demoChangeCommits(team demoTeam, c demoChange, key, title, author string) [
 		}
 		commits = append(commits, demoCommit{
 			SHA: demoSHA(c.Repo, key, title, c.CreatedAgo, c.MergedAgo, index), Message: message, Author: author,
-			At: demoAt(day, 8+index%3, int(seed[1+index])%60), Files: touched,
+			At: demoAt(day, demoCommitHour(team, c, title, index, day, merged), int(seed[1+index])%60), Files: touched,
 		})
+	}
+	return demoCommitsInOrder(commits)
+}
+
+// demoCommitHour is the UTC hour of a change's commit: outside 09:00-17:00 for AfterHoursShare percent of
+// the commits (seeded: early, 06 to 08, or late, 18 to 21), else in the working day, 09 to 16. A commit
+// on the day its change merges stays before the merge hour, and one on the as-of day before 11 (the
+// world's instant is noon, and a change merged that day merges at 11); a late after-hours commit there
+// moves to the early slot.
+func demoCommitHour(team demoTeam, c demoChange, title string, index, day int, merged string) int {
+	seed := demoSeed(c.Repo, title, c.CreatedAgo, c.MergedAgo, "commit-hours", index)
+	before := 24
+	if day == 0 {
+		before = 11
+	}
+	if merged != "" && day == c.MergedAgo {
+		at, err := time.Parse(time.RFC3339, merged)
+		if err != nil {
+			panic(err)
+		}
+		before = min(before, at.Hour())
+	}
+	if int(seed[0])%100 < team.AfterHoursShare {
+		if late := 18 + int(seed[1])%4; seed[2]%2 == 0 && late < before {
+			return late
+		}
+		return 6 + int(seed[1])%3
+	}
+	return 9 + int(seed[3])%max(min(8, before-9), 1)
+}
+
+// demoCommitsInOrder gives a change's commit times back in commit order: the times sorted ascending are
+// assigned to the commits in turn, so a later commit is never earlier than the one before it.
+func demoCommitsInOrder(commits []demoCommit) []demoCommit {
+	times := make([]string, len(commits))
+	for index, commit := range commits {
+		times[index] = commit.At
+	}
+	sort.Strings(times)
+	for index := range commits {
+		commits[index].At = times[index]
 	}
 	return commits
 }

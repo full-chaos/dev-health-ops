@@ -91,8 +91,8 @@ services:
       CORS_ALLOWED_ORIGINS: http://localhost:3000
       QUERY_API_INTERNAL_ADDR: ":8095"
       # CHAOS-7214 (lead-authorized): the MCP caller-class listener (container-only, never in `ports:`),
-      # its allowed-cidrs boundary (the same subnet as the internal listener), and the proof routes'
-      # gate (/query/proof-mcp, /query/proof-write; internal listener only, proof-org gated).
+      # its allowed-cidrs boundary (the same subnet as the internal listener), and the proof route's
+      # gate (/query/proof-write; internal listener only, proof-org gated; /query/proof-mcp is retired, D6024).
       QUERY_API_MCP_ADDR: ":8096"
       QUERY_API_MCP_BOUNDARY: allowed-cidrs
       QUERY_API_MCP_ALLOWED_CIDRS: 10.199.79.0/28

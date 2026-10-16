@@ -25,7 +25,7 @@ func FailureClass(err error) string {
 		return "deadline_exceeded"
 	case errors.Is(err, context.Canceled):
 		return "context_canceled"
-	case errors.As(err, &pgErr):
+	case errors.As(err, &pgErr) && pgErr != nil:
 		return "postgres_" + pgErr.Code
 	default:
 		return "other"

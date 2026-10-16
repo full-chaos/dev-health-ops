@@ -136,20 +136,22 @@ func TestHandlerNamesEachFailingConfigAndItsCauseClass(t *testing.T) {
 	}
 }
 
-func TestHandlerBoundsTheFailureLogLines(t *testing.T) {
+func TestHandlerNamesEveryFailingConfigAtTheJobLimit(t *testing.T) {
 	t.Parallel()
-	failures := make([]coverage.RefreshFailure, 0, 60)
-	for range 60 {
-		failures = append(failures, coverage.RefreshFailure{OrgID: "org", ConfigID: uuid.New(), Err: errors.New("x")})
+	failures := make([]coverage.RefreshFailure, 0, 1000)
+	ids := make([]string, 0, 1000)
+	for range 1000 {
+		id := uuid.New()
+		ids = append(ids, id.String())
+		failures = append(failures, coverage.RefreshFailure{OrgID: "org", ConfigID: id, Err: errors.New("x")})
 	}
-	logs, err := logRecords(t, &recordingProjector{result: coverage.RefreshResult{Failed: 60, Failures: failures}})
+	logs, err := logRecords(t, &recordingProjector{result: coverage.RefreshResult{Failed: 1000, Failures: failures}})
 	if err == nil {
 		t.Fatal("Work() = nil")
 	}
-	if got := strings.Count(logs, "sync_coverage_refresh.config_failed"); got != maxLoggedFailures {
-		t.Fatalf("config_failed lines = %d, want %d", got, maxLoggedFailures)
-	}
-	if !strings.Contains(logs, "omitted=10") {
-		t.Fatalf("log lacks omitted=10:\n%s", logs)
+	for _, id := range ids {
+		if !strings.Contains(logs, "config_id="+id) {
+			t.Fatalf("config %s is not named in the log", id)
+		}
 	}
 }

@@ -17,14 +17,15 @@ func TestFailureClassNamesTheCauseWithoutItsMessage(t *testing.T) {
 		err  error
 		want string
 	}{
-		"nil":       {nil, "none"},
-		"flags":     {fmt.Errorf("x: %w", ErrInvalidProcessorFlags), "invalid_processor_flags"},
-		"not found": {fmt.Errorf("x: %w", ErrConfigNotFound), "config_not_found"},
-		"pool":      {fmt.Errorf("x: %w", ErrPoolUnavailable), "pool_unavailable"},
-		"deadline":  {fmt.Errorf("x: %w", context.DeadlineExceeded), "deadline_exceeded"},
-		"canceled":  {fmt.Errorf("x: %w", context.Canceled), "context_canceled"},
-		"postgres":  {fmt.Errorf("x: %w", &pgconn.PgError{Code: "40001", Message: "secret-detail"}), "postgres_40001"},
-		"other":     {errors.New("secret-detail"), "other"},
+		"nil":          {nil, "none"},
+		"flags":        {fmt.Errorf("x: %w", ErrInvalidProcessorFlags), "invalid_processor_flags"},
+		"not found":    {fmt.Errorf("x: %w", ErrConfigNotFound), "config_not_found"},
+		"pool":         {fmt.Errorf("x: %w", ErrPoolUnavailable), "pool_unavailable"},
+		"deadline":     {fmt.Errorf("x: %w", context.DeadlineExceeded), "deadline_exceeded"},
+		"canceled":     {fmt.Errorf("x: %w", context.Canceled), "context_canceled"},
+		"postgres":     {fmt.Errorf("x: %w", &pgconn.PgError{Code: "40001", Message: "secret-detail"}), "postgres_40001"},
+		"other":        {errors.New("secret-detail"), "other"},
+		"typed nil pg": {fmt.Errorf("x: %w", (*pgconn.PgError)(nil)), "other"},
 	} {
 		if got := FailureClass(tc.err); got != tc.want || strings.Contains(got, "secret") {
 			t.Errorf("%s: FailureClass = %q, want %q", name, got, tc.want)

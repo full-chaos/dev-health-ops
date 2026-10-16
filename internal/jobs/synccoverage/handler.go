@@ -27,9 +27,6 @@ type Handler struct {
 	logger    *slog.Logger
 }
 
-// maxLoggedFailures bounds the per-sweep WARN lines; the limit cap is 1000.
-const maxLoggedFailures = 50
-
 // NewHandler constructs the executable sync-coverage job owner.
 func NewHandler(projector Projector, logger *slog.Logger) (*Handler, error) {
 	if projector == nil || logger == nil {
@@ -56,18 +53,11 @@ func (handler *Handler) Work(
 		return jobruntime.Retryable(err)
 	}
 	if result.Failed > 0 || len(result.Failures) > 0 {
-		for index, failure := range result.Failures {
-			if index == maxLoggedFailures {
-				break
-			}
+		for _, failure := range result.Failures {
 			handler.logger.WarnContext(ctx, "sync_coverage_refresh.config_failed",
 				slog.String("org_id", failure.OrgID),
 				slog.String("config_id", failure.ConfigID.String()),
 				slog.String("cause_class", coverage.FailureClass(failure.Err)))
-		}
-		if omitted := len(result.Failures) - maxLoggedFailures; omitted > 0 {
-			handler.logger.WarnContext(ctx, "sync_coverage_refresh.config_failures_omitted",
-				slog.Int("omitted", omitted))
 		}
 		return jobruntime.Retryable(jobruntime.WithSafeCauseText(
 			errors.New("one or more sync coverage projections failed"),

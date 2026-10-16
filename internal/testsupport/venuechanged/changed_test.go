@@ -6,6 +6,7 @@ package venuechanged
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -223,4 +224,27 @@ func TestAChangeInAPackageTheVenueServerLinksSelectsTheTestsThatStartIt(t *testi
 	if err != nil || len(none) != 0 {
 		t.Errorf("a package no venue test links selected %v (err %v)\n%s", none, err, stderr)
 	}
+}
+
+// TestAMatchIsNotLostOnALargeChangeSet holds that selection does not depend on the size of the change
+// set: a pipeline of `printf | grep -q` under pipefail (it needs more distinct directories than fit a 64 KB pipe, and the matching directory sorting before them) reports failure when grep stops reading at its
+// first match and the writer dies of SIGPIPE, so a large pull request selected nothing and the job read
+// a green no-op (round 1 of CHAOS-9935).
+func TestAMatchIsNotLostOnALargeChangeSet(t *testing.T) {
+	root := repoRoot(t)
+	paths := make([]string, 0, 20001)
+	for i := 0; i < 20000; i++ {
+		paths = append(paths, fmt.Sprintf("zdocs/generated-%05d/page.md", i))
+	}
+	paths = append([]string{"internal/api/policy/clienterror.go"}, paths...)
+	rows, err, stderr := selected(t, root, "\x00", paths...)
+	if err != nil {
+		t.Fatalf("--list failed: %v\n%s", err, stderr)
+	}
+	for _, row := range rows {
+		if row == "internal/apiservice\tTestVenueOracleCredentialRepos" {
+			return
+		}
+	}
+	t.Fatalf("a change in internal/api/policy among 20000 other paths selected %d row(s) and not TestVenueOracleCredentialRepos\n%s", len(rows), stderr)
 }

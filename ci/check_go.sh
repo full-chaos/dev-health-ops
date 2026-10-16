@@ -717,7 +717,9 @@ check_venue_oracle_plan() {
 venue_oracle_changed_selects() {
   local escaped pkg name path
   escaped="$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')"
-  if tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}/([^/]+|testdata/.+)$"; then
+  # grep -q stops at its first match: it reads a process substitution, never a pipe whose writer
+  # would die of SIGPIPE and fail the whole pipeline under pipefail on a large change set.
+  if grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
     return 0
   fi
   # The dependency closure of the package's test binary (ci/venue_oracle_closure.d/, CHAOS-9935): a
@@ -727,7 +729,7 @@ venue_oracle_changed_selects() {
   if [ -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
     local closure_file="${ROOT}/ci/venue_oracle_closure.d/${1//\//__}.txt"
     [ -r "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is missing; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
-    if [ -n "${VENUE_CHANGED_DIRS:-}" ] && printf '%s\n' "${VENUE_CHANGED_DIRS}" | grep -qxFf "${closure_file}"; then
+    if [ -n "${VENUE_CHANGED_DIRS:-}" ] && grep -qxFf "${closure_file}" < <(printf '%s\n' "${VENUE_CHANGED_DIRS}"); then
       return 0
     fi
   fi
@@ -735,7 +737,7 @@ venue_oracle_changed_selects() {
   while IFS=$'\t' read -r pkg name path; do
     { [ "${pkg}" = "$1" ] && [ "${name}" = "$2" ]; } || continue
     escaped="$(printf '%s' "${path}" | sed 's/[][\\.*^$/]/\\&/g')"
-    if tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}(/.*)?$"; then
+    if grep -qE "^${escaped}(/.*)?$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
       return 0
     fi
   done <<< "${VENUE_TRIGGER_ROWS:-}"

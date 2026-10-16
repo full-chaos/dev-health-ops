@@ -455,3 +455,61 @@ func TestLoadRawSettings_WrongEncryptionKeyEmitsTelemetryNotSilence(t *testing.T
 			"the FIRST decrypt attempt failing must flag the key itself", keyValidationFailures, orgID.String())
 	}
 }
+
+// OrgConfig serves the decrypted stored truth and a version that moves when a row is written.
+func TestOrgConfig_ServesDecryptedKeyAndMovingVersion(t *testing.T) {
+	ctx := context.Background()
+	store, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", true)
+	orgID := seedOrg(ctx, t, pool, "enterprise")
+
+	if _, ok, err := store.OrgConfig(ctx, orgID.String()); err != nil || ok {
+		t.Fatalf("org with no settings: ok=%v err=%v, want ok=false", ok, err)
+	}
+
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	insertSetting(ctx, t, pool, orgID, "model", "gpt-5-mini")
+	insertSetting(ctx, t, pool, orgID, "base_url", "https://api.openai.com/v1")
+	insertEncryptedSetting(ctx, t, store, pool, orgID, "api_key", "sk-org-secret")
+
+	first, ok, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil || !ok {
+		t.Fatalf("OrgConfig ok=%v err=%v", ok, err)
+	}
+	if first.Provider != "openai" || first.Model != "gpt-5-mini" || first.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("config = %+v", first)
+	}
+	if first.APIKey.Reveal() != "sk-org-secret" {
+		t.Fatal("api_key was not decrypted to the stored plaintext")
+	}
+	if first.Version == "" {
+		t.Fatal("version is empty")
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE settings SET value = 'gpt-5', updated_at = updated_at + interval '1 second'
+		WHERE org_id = $1 AND category = 'llm' AND key = 'model'`, orgID.String()); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Version == first.Version {
+		t.Fatalf("version did not move after a row write: %q", second.Version)
+	}
+}
+
+// A closed byo_llm gate reads as no config, never as the stored key.
+func TestOrgConfig_ClosedGateServesNothing(t *testing.T) {
+	ctx := context.Background()
+	store, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", false)
+	orgID := seedOrg(ctx, t, pool, "free")
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	insertEncryptedSetting(ctx, t, store, pool, orgID, "api_key", "sk-org-secret")
+
+	cfg, ok, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil || ok {
+		t.Fatalf("closed gate: ok=%v err=%v cfg=%+v, want ok=false", ok, err, cfg)
+	}
+}

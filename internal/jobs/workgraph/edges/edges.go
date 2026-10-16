@@ -42,6 +42,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"time"
 
@@ -106,9 +107,9 @@ const (
 	EdgeTypeEscalatesWith    = "escalates_with"
 	EdgeTypeRemediatedBy     = "remediated_by"
 
-	ProvenanceNative       = "native"
-	ProvenanceExplicitText = "explicit_text"
-	ProvenanceHeuristic    = "heuristic"
+	ProvenanceNative       = linktier.Native
+	ProvenanceExplicitText = linktier.ExplicitText
+	ProvenanceHeuristic    = linktier.Heuristic
 )
 
 // Row is one work_graph_edges row.

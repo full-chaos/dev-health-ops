@@ -148,6 +148,7 @@ def _iter_string_values(node, path=""):
     elif isinstance(node, str):
         yield path, node
 
+
 # CHAOS-9949: heavy jobs are ANDed with the draft gate, so a draft PR without the
 # `ci:full` label skips them. The gate is a prefix; the allow-list condition behind
 # it must stay EXACTLY as pinned below.

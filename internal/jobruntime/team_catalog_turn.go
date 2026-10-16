@@ -1,4 +1,4 @@
-package workerservice
+package jobruntime
 
 import (
 	"context"
@@ -6,17 +6,15 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
-// catalogBudget is the one method of the worker's durable concurrency lease the turn needs
-// (jobruntime.PostgresConcurrencyBudget): a test can stand in for it.
-type catalogBudget interface {
-	Acquire(ctx context.Context, request jobruntime.BudgetRequest) (jobruntime.BudgetLease, error)
+// teamCatalogBudget is the one method of the worker's durable concurrency lease the turn needs
+// (PostgresConcurrencyBudget): a test can stand in for it.
+type teamCatalogBudget interface {
+	Acquire(ctx context.Context, request BudgetRequest) (BudgetLease, error)
 }
 
-// catalogLeaseTurn gives one run of a (organization, provider) team catalog its turn
+// TeamCatalogTurn gives one run of a (organization, provider) team catalog its turn
 // (CHAOS-9140, D5917): a durable lease of the worker's own concurrency facility
 // (worker_concurrency_leases: expiry, token-fenced release, renewal while the run lives,
 // takeover after a crash). Two overlapping runs of one integration each read the open
@@ -30,24 +28,24 @@ type catalogBudget interface {
 // lease is a row and a renewal. So it works at a domain pool of one connection and costs
 // no pooler budget. A lease the run LOSES (renewal fails) cancels the run (round 117 P1:
 // an overlap is the defect this turn exists to prevent); the job retries.
-type catalogLeaseTurn struct {
-	budget catalogBudget
+type TeamCatalogTurn struct {
+	budget teamCatalogBudget
 }
 
-// newCatalogLeaseTurn builds the turn of a domain pool. A nil pool is a wiring error that
+// NewTeamCatalogTurn builds the turn of a domain pool. The worker and the operator CLI (`dho sync teams`) both take it, so they serialize on one key. A nil pool is a wiring error that
 // every run reports, not a silent run without the turn.
-func newCatalogLeaseTurn(pool *pgxpool.Pool) catalogLeaseTurn {
+func NewTeamCatalogTurn(pool *pgxpool.Pool) TeamCatalogTurn {
 	if pool == nil {
-		return catalogLeaseTurn{}
+		return TeamCatalogTurn{}
 	}
-	budget, err := jobruntime.NewPostgresConcurrencyBudget(pool, nil)
+	budget, err := NewPostgresConcurrencyBudget(pool, nil)
 	if err != nil {
-		return catalogLeaseTurn{}
+		return TeamCatalogTurn{}
 	}
-	return catalogLeaseTurn{budget: budget}
+	return TeamCatalogTurn{budget: budget}
 }
 
-func (turn catalogLeaseTurn) Serialize(ctx context.Context, orgID, provider string) (func(), error) {
+func (turn TeamCatalogTurn) Serialize(ctx context.Context, orgID, provider string) (func(), error) {
 	release, _, err := turn.SerializeWithLoss(ctx, orgID, provider)
 	return release, err
 }
@@ -58,11 +56,11 @@ type leaseLoss interface{ Lost() <-chan struct{} }
 // SerializeWithLoss is Serialize plus the loss signal of the lease: a run that LOSES its lease is
 // cancelled by the carry wrapper (providersync.ErrTeamCatalogTurnLost), never left to overlap the
 // next holder; the job retries. A budget that cannot lose its lease gives a nil signal.
-func (turn catalogLeaseTurn) SerializeWithLoss(ctx context.Context, orgID, provider string) (func(), <-chan struct{}, error) {
+func (turn TeamCatalogTurn) SerializeWithLoss(ctx context.Context, orgID, provider string) (func(), <-chan struct{}, error) {
 	if turn.budget == nil {
 		return nil, nil, errors.New("team catalog turn: no Postgres pool")
 	}
-	lease, err := turn.budget.Acquire(ctx, jobruntime.BudgetRequest{
+	lease, err := turn.budget.Acquire(ctx, BudgetRequest{
 		Kind:             "team_catalog." + provider,
 		OrganizationID:   &orgID,
 		ConcurrencyScope: "organization",

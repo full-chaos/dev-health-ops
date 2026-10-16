@@ -43,6 +43,7 @@ internal/auth/passwordhash
 internal/auth/passwordpolicy
 internal/auth/ratelimitvalkey
 internal/auth/signedtoken
+internal/backfillrun
 internal/chmigrate
 internal/cli
 internal/entitlements

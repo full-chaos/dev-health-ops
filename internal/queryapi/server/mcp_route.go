@@ -574,7 +574,7 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // mcpProofAdmit and mcpIdentityHeadersPresent are the two reads of the internal
-// identity the proof variant (mcp_proof_route.go) needs. They live here, with the
+// identity the class-row gate (class_row_gate.go) needs. They live here, with the
 // other MCP reads, because TestOnlyInternalPathsReadTheInternalIdentity pins
 // exactly which files may touch that package.
 func mcpProofAdmit(ctx context.Context) bool { return internalidentity.OnInternalListener(ctx) }

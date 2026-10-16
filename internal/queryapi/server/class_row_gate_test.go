@@ -384,8 +384,7 @@ func TestClassGateDecidesPerDocumentWhenAnOperationHasTwoDocuments(t *testing.T)
 }
 
 // Source guard: ONE constructor builds the class-row switch (newClassRowSwitch: canary and primary rows only), and buildQueryRoute and
-// newQueryHandler both use it. NewClassDecisionProofSwitch admits SHADOW decisions: it must stay on the measurement-only proof handler and nowhere near the switch the
-// MCP listener and this route serve through (a shadow root would be served on both ports).
+// newQueryHandler both use it. No switch admits SHADOW decisions any more (the measurement-only proof route is gone): a shadow root is dark on every port.
 func TestTheClassRowSwitchIsBuiltByOneConstructorThatDoesNotAdmitShadowRows(t *testing.T) {
 	raw, err := os.ReadFile("query_route.go")
 	if err != nil {
@@ -404,9 +403,6 @@ func TestTheClassRowSwitchIsBuiltByOneConstructorThatDoesNotAdmitShadowRows(t *t
 	if strings.Contains(text, "NewClassDecisionSwitch(pgPool, mcpRoutingDigests())") {
 		t.Fatal("query_route.go builds a class-row switch itself instead of through newClassRowSwitch")
 	}
-	if got := strings.Count(text, "NewClassDecisionProofSwitch(pgPool, mcpRoutingDigests())"); got != 1 {
-		t.Fatalf("NewClassDecisionProofSwitch appears %d times in query_route.go, want 1 (the MCP proof handler only)", got)
-	}
 	gate, err := os.ReadFile("class_row_gate.go")
 	if err != nil {
 		t.Fatal(err)
@@ -417,7 +413,7 @@ func TestTheClassRowSwitchIsBuiltByOneConstructorThatDoesNotAdmitShadowRows(t *t
 	}
 	body := string(gate)[start:]
 	body = body[:strings.Index(body, "\n}\n")]
-	if !strings.Contains(body, "return routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests())") || strings.Contains(body, "NewClassDecisionProofSwitch") {
+	if !strings.Contains(body, "return routeswitch.NewClassDecisionSwitch(pool, mcpRoutingDigests())") {
 		t.Fatal("newClassRowSwitch is not the canary/primary-only ClassDecisionSwitch")
 	}
 }

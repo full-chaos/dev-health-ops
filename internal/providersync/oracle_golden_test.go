@@ -28,18 +28,21 @@ import (
 // named in oraclePairLaterPythonBuilds was answered on that later build.
 const oraclePairPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
-// oraclePairGitLabDueDateBuild is the first build whose Python maps a GitLab
-// issue's due_date to due_at and holds the gitlab/work-items/sprint pair file.
-// It is the main commit that made that change (CHAOS-9537).
-const oraclePairGitLabDueDateBuild = "a4d97f56304ca50fe166cb370cd9f0e55803ecdb"
+// oraclePairGitLabEpicBuild is the first build that holds the
+// gitlab/work-items/issue-provider pair file, the GitLab provider batch's
+// issue row with its label priority and epic link (CHAOS-9854). The GitLab
+// issue and sprint pairs, answered before on the due_date build a4d97f56
+// (CHAOS-9537), key on every harness file, so they are answered on it too.
+const oraclePairGitLabEpicBuild = "BUILD_PENDING"
 
 // oraclePairLaterPythonBuilds names, by pair, a build later than
 // oraclePairPythonBuild that answered the pair: its answer needs Python that
 // oraclePairPythonBuild does not hold (a producer change, or a pair file added
 // after it). Such a pair is recorded from a checkout of the later build.
 var oraclePairLaterPythonBuilds = map[string]string{
-	"gitlab/work-items/issue":  oraclePairGitLabDueDateBuild,
-	"gitlab/work-items/sprint": oraclePairGitLabDueDateBuild,
+	"gitlab/work-items/issue":          oraclePairGitLabEpicBuild,
+	"gitlab/work-items/issue-provider": oraclePairGitLabEpicBuild,
+	"gitlab/work-items/sprint":         oraclePairGitLabEpicBuild,
 }
 
 // oracleHarnessFilesAfterBuild are the harness files added after
@@ -48,7 +51,8 @@ var oraclePairLaterPythonBuilds = map[string]string{
 // adding a pair file then changes no key of a pair answered there. A pair
 // answered on a later build keys on every harness file.
 var oracleHarnessFilesAfterBuild = map[string]string{
-	"testdata/oracle_pairs/gitlab_work-items_sprint.py": "gitlab/work-items/sprint",
+	"testdata/oracle_pairs/gitlab_work-items_sprint.py":         "gitlab/work-items/sprint",
+	"testdata/oracle_pairs/gitlab_work-items_issue-provider.py": "gitlab/work-items/issue-provider",
 }
 
 // oraclePairBuild is the build that answered pairID.

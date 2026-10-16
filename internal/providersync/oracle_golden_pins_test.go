@@ -85,6 +85,7 @@ var oraclePairGoldenPins = map[string]string{
 	"gitlab_tests_suite.TestGenericOracleMatchesFrozenPythonGitLabTestsRows.golden.json":                                                           "90ed15b2c7e56357152c33769add6cab463e107377f906c541eaeb7a9625630d",
 	"gitlab_work-items_ai-attribution.TestGitLabAIAttributionMatchesFrozenPythonProductionRows.golden.json":                                        "8c291300c73de549cabf8dad91834d0af392492712b8dbccc982b58bcc275c9e",
 	"gitlab_work-items_issue.TestGitLabFetchWorkItemMatchesFrozenPythonProducer.golden.json":                                                       "96e2d3d6c4ec9db2799b586046eb5737266916237cdcc7d1979d7d22c7af110b",
+	"gitlab_work-items_issue-provider.TestGitLabIssueMatchesFrozenPythonProvider.golden.json":                                                      "PIN:gitlab_work-items_issue-provider.TestGitLabIssueMatchesFrozenPythonProvider.golden",
 	"gitlab_work-items_sprint.TestGitLabSprintMatchesFrozenPythonProductionRow.golden.json":                                                        "9abbda1538160b8ba8b5e102e7f625eba729a1e130876e7586bd6d5492253505",
 	"gitlab_work-items_status-transition.TestGitLabFetchStatusTransitionMatchesFrozenPythonProducer.golden.json":                                   "c97920775bd80f27de0fb5f0d3076810e586eb0d37606a4107b5c47c02235e8e",
 	"identity-drift_review_change-id.TestIdentityDriftChangeIDMatchesFrozenPythonProducer.golden.json":                                             "286127b4b287464be9b64f938278d3bdfadd4ccb9eeac6f030a9f352e02f7dd4",

@@ -33,7 +33,7 @@ const oraclePairPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // issue row with its label priority and epic link (CHAOS-9854). The GitLab
 // issue and sprint pairs, answered before on the due_date build a4d97f56
 // (CHAOS-9537), key on every harness file, so they are answered on it too.
-const oraclePairGitLabEpicBuild = "BUILD_PENDING"
+const oraclePairGitLabEpicBuild = "4e51adc71d32c71ea2d84203fa38258a89f67761"
 
 // oraclePairLaterPythonBuilds names, by pair, a build later than
 // oraclePairPythonBuild that answered the pair: its answer needs Python that

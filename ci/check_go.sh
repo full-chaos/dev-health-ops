@@ -775,8 +775,9 @@ venue_oracle_changed_selects() {
   escaped="$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')"
   # grep -q stops at its first match: it reads a process substitution, never a pipe whose writer would die of SIGPIPE and
   # fail the whole pipeline under pipefail on a large change set (the match was lost and the run read as "nothing to run").
+  local own=1
   if vo_grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
-    return 0
+    own=0
   fi
   # The dependency closure of the package's test binary (ci/venue_oracle_closure.d/, CHAOS-9935): a
   # file directly in, or under testdata of, any package the test binary links selects every
@@ -790,6 +791,11 @@ venue_oracle_changed_selects() {
     if vo_grep -qvE '^(~[^[:cntrl:]]+|[^~[:cntrl:]][^[:cntrl:]]*)$' "${closure_file}"; then
       die "venue-oracles --changed: ${closure_file} has a line that is not a package directory or ~directory; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
     fi
+    # a path with an empty, "." or ".." segment, a leading slash or a trailing slash can never match a changed path
+    if vo_grep -qE '^~?/|//|/$|(^|[~/])\.\.?(/|$)' "${closure_file}"; then
+      die "venue-oracles --changed: ${closure_file} has a line that is not a clean relative directory (empty, dot or slash segment); regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+    fi
+    [ "${own}" -ne 0 ] || return 0
     if [ -n "${VENUE_CHANGED_DIRS:-}" ] && vo_grep -qxFf "${closure_file}" < <(printf '%s\n' "${VENUE_CHANGED_DIRS}"); then
       return 0
     fi
@@ -800,6 +806,7 @@ venue_oracle_changed_selects() {
       return 0
     fi
   fi
+  [ "${own}" -ne 0 ] || return 0
   [ -n "${2:-}" ] || return 1
   while IFS=$'\t' read -r pkg name path; do
     { [ "${pkg}" = "$1" ] && [ "${name}" = "$2" ]; } || continue
@@ -848,12 +855,14 @@ check_venue_oracles() {
         changed_slice+="${sel_dir}"$'\t'"${sel_name}"$'\n'
       fi
     done <<< "${sel_rows}"
+    local sel_count
+    sel_count="$(printf '%s' "${changed_slice}" | awk 'NF' | wc -l | tr -d ' ')"
     if [ -n "${changed_slice}" ]; then
       changed_slice="$(printf '%s' "${changed_slice}" | venue_oracle_assign_stdin "${shard}" "${shard_count}")" \
         || die "venue-oracles --changed: could not plan the legs (see above)"
     fi
     printf 'venue-oracles: leg %s/%s of the change set takes %d of %d selected row(s)\n' "${shard}" "${shard_count}" \
-      "$(printf '%s' "${changed_slice}" | awk 'NF' | wc -l)" "$(printf '%s' "${sel_rows}" | awk 'NF' | wc -l | tr -d ' ')" >&2
+      "$(printf '%s' "${changed_slice}" | awk 'NF' | wc -l | tr -d ' ')" "${sel_count}" >&2
   fi
   if [ -n "${changed}" ] && [ "${VENUE_CHANGED_LIST_ONLY:-}" = "--list" ]; then
     # CHAOS-7653: print the registry rows the changed paths select and run nothing (no

@@ -683,3 +683,65 @@ def test_the_changed_job_matrix_holds_the_whole_registry_within_its_timeout() ->
     assert len(seconds) == len(legs), proc.stdout[-400:]
     limit = job["timeout-minutes"] * 60 - 600
     assert max(seconds) <= limit, (max(seconds), limit)
+
+
+def test_a_change_inside_the_venue_package_still_validates_its_closure_file(
+    tmp_path: Path,
+) -> None:
+    """The package rule used to return before the closure file was read, so a missing or malformed file hid behind it."""
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    closure = tree / "ci" / "venue_oracle_closure.d"
+    closure.mkdir()
+    changed = tree / "changed.txt"
+    changed.write_text("internal/apiservice/x.go\n", encoding="utf-8")
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    assert (
+        proc.returncode != 0 and "internal__apiservice.txt is missing" in proc.stderr
+    ), (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+    (closure / "internal__apiservice.txt").write_text("internal/a\n", encoding="utf-8")
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    assert proc.returncode == 0 and "TestVenueOracleX" in proc.stdout, proc.stderr[
+        -300:
+    ]
+
+
+def test_a_closure_line_that_can_never_match_is_refused(tmp_path: Path) -> None:
+    """`~dir/` gets a second slash appended by the matcher and never matches; the generator never writes one."""
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    closure = tree / "ci" / "venue_oracle_closure.d"
+    closure.mkdir()
+    file = closure / "internal__apiservice.txt"
+    for body in (
+        "~internal/dep/data/\n",
+        "internal/dep/\n",
+        "~/abs\n",
+        "internal//dep\n",
+        "~internal/./dep\n",
+        "../up\n",
+    ):
+        file.write_text(body, encoding="utf-8")
+        proc = _list_rc(tree)
+        assert (
+            proc.returncode != 0 and "not a clean relative directory" in proc.stderr
+        ), (
+            body,
+            proc.returncode,
+            proc.stderr[-300:],
+        )
+
+
+def test_the_leg_receipt_counts_the_selected_rows_not_the_registry(
+    tmp_path: Path,
+) -> None:
+    tree = _scratch_tree(
+        tmp_path,
+        {"internal/a": ["TestVenueOracleA"], "internal/b": ["TestVenueOracleB"]},
+    )
+    changed = tree / "changed.txt"
+    changed.write_text("internal/a/x.go\n", encoding="utf-8")
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list", "1", "1")
+    assert proc.returncode == 0, proc.stderr
+    assert "takes 1 of 1 selected row(s)" in proc.stderr, proc.stderr

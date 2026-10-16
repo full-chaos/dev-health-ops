@@ -43,7 +43,7 @@ func scratchModule(t *testing.T) string {
 // green.
 func TestTheClosureOfARealModuleKeepsAwkwardDirectoryNames(t *testing.T) {
 	root := scratchModule(t)
-	cmd := exec.Command("go", "list", "-mod=mod", "-json", "-deps", "-test", "./internal/venue")
+	cmd := exec.Command("go", "list", "-buildvcs=false", "-mod=mod", "-json", "-deps", "-test", "./internal/venue")
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod", "GOPROXY=off")
 	out, err := cmd.Output()

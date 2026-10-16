@@ -153,7 +153,7 @@ func closuresFromListing(root string, pkgs []string, listing []listedPackage) (m
 // integration tag the venue tests are built under) and derives the closure lines from it.
 func computeClosures(t *testing.T, root string, pkgs []string) map[string][]string {
 	t.Helper()
-	args := []string{"list", "-mod=readonly", "-tags=integration", "-json", "-deps", "-test"}
+	args := []string{"list", "-buildvcs=false", "-mod=readonly", "-tags=integration", "-json", "-deps", "-test"}
 	for _, pkg := range pkgs {
 		args = append(args, "./"+pkg)
 	}

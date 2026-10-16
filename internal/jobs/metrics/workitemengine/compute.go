@@ -242,26 +242,6 @@ type completionBucket struct {
 	prs                             map[linkedPRKey]struct{}
 }
 
-// LeadTimeInputs counts the items completed in [dayUTC, end) and, of those, the ones left out of the lead-time p50
-// because they have no created_at or were created after they completed. The caller logs it; this package holds no
-// logger.
-func LeadTimeInputs(items []Item, dayUTC, end time.Time) (completed, excluded int) {
-	for _, item := range items {
-		if item.CompletedAt == nil {
-			continue
-		}
-		done := item.CompletedAt.UTC()
-		if done.Before(dayUTC) || !done.Before(end) {
-			continue
-		}
-		completed++
-		if item.CreatedAt.IsZero() || done.Sub(item.CreatedAt.UTC()) < 0 {
-			excluded++
-		}
-	}
-	return completed, excluded
-}
-
 // hasCreationTime reports whether a creation time is a real one. The work_items.created_at column is not
 // nullable, so a missing creation time is stored and read back as the Unix epoch (and the Go zero time before it
 // is stored): neither is a date the item was created on.

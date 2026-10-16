@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os/exec"
 	"sort"
 	"strings"
 	"testing"
@@ -69,6 +70,11 @@ var mcpParityGeneratedTables = []string{
 // allowlist, an identity rule): a shape the class refuses by policy while the document route serves it is not a
 // served shape, so it is excluded and named, never counted as a match.
 var mcpPolicyRefusalStatuses = map[int]bool{http.StatusBadRequest: true, http.StatusForbidden: true, http.StatusUnprocessableEntity: true}
+
+// mcpParityPolicyExcusals are the shapes the MCP listener refuses by its own policy while the document route serves
+// them, by label, each with the typed refusal reason and the ticket that owns the difference. A refusal that is not
+// declared here is a failure.
+var mcpParityPolicyExcusals = map[string]struct{ reason, ticket string }{}
 
 // mcpParityExcused is a corpus case the step does not measure, with the reason and the ticket that owns it. An
 // excused shape is listed in the output and never counts as measured.
@@ -133,6 +139,7 @@ VALUES ($1, 'primary', 'parity-oracle', $2, 'mcp-class-parity-oracle')`, mcpclas
 	now := time.Now().UTC()
 	loaded := mcpParityLoadWorld(ctx, t, conn, now)
 	generated := mcpParitySeedGeneratedTables(ctx, t, conn, now)
+	mcpParityThickenSecurityAlerts(ctx, t, conn)
 	t.Logf("world rows by table: %v", loaded)
 	t.Logf("generated rows by table: %v", generated)
 
@@ -159,7 +166,7 @@ VALUES ($1, 'primary', 'parity-oracle', $2, 'mcp-class-parity-oracle')`, mcpclas
 		class := mcpParityPost(t, client, mcpBase+"/query", mcpParityIdentityHeaders(),
 			mcpBody(t, shape.document, shape.variables))
 
-		if class.status != http.StatusOK && mcpPolicyRefusalStatuses[class.status] && reference.status == http.StatusOK {
+		if excusal, declared := mcpParityPolicyExcusals[shape.label()]; declared && class.status != http.StatusOK && mcpPolicyRefusalStatuses[class.status] && reference.status == http.StatusOK && strings.Contains(class.body, excusal.reason) {
 			tl.excluded++
 			tl.excludedWhy = append(tl.excludedWhy, fmt.Sprintf("%s=%d %s", shape.label(), class.status, mcpParityTrim(class.body)))
 			t.Logf("EXCUSED %-40s MCP policy refusal %d: %s", shape.label(), class.status, mcpParityTrim(class.body))
@@ -568,6 +575,31 @@ func mcpParityHoldsData(value any) bool {
 	return true
 }
 
+// mcpParityRegisteredDocuments is every document registrydump lists, current and legacy texts both: the edge oracle's
+// own selection keeps the oldest legacy text of an operation and drops the post-freeze and Go-born operations, and
+// this oracle measures the current text of every one.
+func mcpParityRegisteredDocuments(t *testing.T, root string) []registeredEdgeDocument {
+	t.Helper()
+	command := exec.Command("go", "run", "./cmd/registrydump", "-file", "internal/queryapi/server/query_route.go")
+	command.Dir = root
+	out, err := command.Output()
+	if err != nil {
+		t.Fatalf("registrydump: %v", err)
+	}
+	var docs []registeredEdgeDocument
+	if err := json.Unmarshal(out, &docs); err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("registrydump listed no registered documents: nothing would be measured")
+	}
+	return docs
+}
+
+// mcpParityNodeTypeInput is the WorkGraphNodeTypeInput enum (contracts/graphql/v1/schema.graphql): the variable of a
+// node-type filter holds an enum name, not the stored lower-case text.
+const mcpParityNodeTypeInput = "('ISSUE','PR','COMMIT','FILE','RELEASE','FEATURE_FLAG','AI_WORKFLOW_RUN','DIFF','REVIEW_OUTCOME','DEPLOYMENT','INCIDENT')"
+
 // mcpParityInstance finds, in the seeded data, the stored row a variant's kind of identifier names. A kind it cannot
 // resolve is an error, never a skipped shape.
 func mcpParityInstance(ctx context.Context, t *testing.T, conn driver.Conn, kind string) string {
@@ -585,9 +617,9 @@ func mcpParityInstance(ctx context.Context, t *testing.T, conn driver.Conn, kind
 	case strings.Contains(kind, "alert state"):
 		query = "SELECT lower(state) FROM security_alerts WHERE state IS NOT NULL GROUP BY state ORDER BY count() DESC LIMIT 1"
 	case strings.Contains(kind, "node type whose whole edge set as a source is below 200"):
-		query = "SELECT source_type FROM work_graph_edges GROUP BY source_type HAVING count() < 200 ORDER BY count() DESC LIMIT 1"
+		query = "SELECT upper(source_type) FROM work_graph_edges WHERE upper(source_type) IN " + mcpParityNodeTypeInput + " GROUP BY source_type HAVING count() < 200 ORDER BY count() DESC LIMIT 1"
 	case strings.Contains(kind, "node type that has edges as a source"):
-		query = "SELECT source_type FROM work_graph_edges GROUP BY source_type ORDER BY count() DESC LIMIT 1"
+		query = "SELECT upper(source_type) FROM work_graph_edges WHERE upper(source_type) IN " + mcpParityNodeTypeInput + " GROUP BY source_type ORDER BY count() DESC LIMIT 1"
 	case strings.Contains(kind, "node id that is the source or target of at least one edge and of fewer than 200"):
 		query = "SELECT source_id FROM work_graph_edges GROUP BY source_id HAVING count() < 200 ORDER BY count() DESC LIMIT 1"
 	case strings.Contains(kind, "node id that is the source or target of at least one edge"):
@@ -609,7 +641,7 @@ func mcpParityShapes(ctx context.Context, t *testing.T, conn driver.Conn, root s
 	t.Helper()
 	roots := mcpclass.AllowedRoots()
 	documents := map[string]string{}
-	for _, doc := range registeredEdgeDocuments(t, root) {
+	for _, doc := range mcpParityRegisteredDocuments(t, root) {
 		if doc.Legacy || doc.Kind != "query" {
 			continue
 		}
@@ -668,5 +700,20 @@ func mcpParityWindow(now time.Time) goapiproof.Window {
 	return goapiproof.Window{
 		SinceUTC: since.Format(time.RFC3339), UntilUTC: today.AddDate(0, 0, 1).Format(time.RFC3339),
 		SinceDate: since.Format("2006-01-02"), UntilDate: today.Format("2006-01-02"), WeekStart: weekStart.Format("2006-01-02"),
+	}
+}
+
+// mcpParityThickenSecurityAlerts adds open alerts created inside the corpus's fixed 2026-06-01..2026-08-31 range, of
+// the severities its filters name, to the repository the world's alerts belong to: the frozen world's alerts are all
+// dated to its own run.
+func mcpParityThickenSecurityAlerts(ctx context.Context, t *testing.T, conn driver.Conn) {
+	t.Helper()
+	statement := `INSERT INTO security_alerts (repo_id, alert_id, source, severity, state, package_name, cve_id, url, title, description, created_at, last_synced, org_id)
+SELECT repo_id, concat('parity-', toString(number)), 'dependabot', arrayElement(['critical', 'high', 'unknown'], number % 3 + 1), 'open',
+       concat('parity-package-', toString(number)), concat('CVE-2026-9', toString(number)), 'https://example.test/alert', concat('parity alert ', toString(number)),
+       'seeded for the MCP class parity oracle', toDateTime64('2026-07-10 12:00:00', 3, 'UTC') + toIntervalDay(number), now64(3), org_id
+FROM (SELECT repo_id, org_id FROM security_alerts LIMIT 1) ARRAY JOIN range(6) AS number`
+	if err := conn.Exec(ctx, statement); err != nil {
+		t.Fatalf("thicken security_alerts: %v", err)
 	}
 }

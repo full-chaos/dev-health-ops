@@ -2,6 +2,8 @@ package providersync
 
 import (
 	"encoding/json"
+	"errors"
+	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/google/uuid"
 )
 
@@ -87,6 +90,25 @@ type gitlabIssueWorkItemPayload struct {
 	Weight      *float64                     `json:"weight"`
 	Milestone   *gitlabIssueMilestonePayload `json:"milestone"`
 	DueDate     *string                      `json:"due_date"`
+	// Epic is the issue's epic (GitLab Premium/Ultimate); absent otherwise.
+	Epic *gitlabIssueEpicPayload `json:"epic"`
+}
+
+// withFetchEpics is the issue payload a route reads under Python's
+// GITLAB_FETCH_EPICS flag (default on): off, the issue is never linked to its
+// epic (providers/gitlab/provider.py:263).
+func (payload gitlabIssueWorkItemPayload) withFetchEpics(fetchEpics bool) gitlabIssueWorkItemPayload {
+	if !fetchEpics {
+		payload.Epic = nil
+	}
+	return payload
+}
+
+// gitlabIssueEpicPayload keeps the two epic keys raw, because Python formats
+// whatever scalar the API sent (build_epic_id_for_issue).
+type gitlabIssueEpicPayload struct {
+	IID     json.RawMessage `json:"iid"`
+	GroupID json.RawMessage `json:"group_id"`
 }
 
 type gitlabMergeRequestWorkItemPayload struct {
@@ -288,7 +310,7 @@ func normalizeGitLabIssueWorkItem(
 	// after gitlab_issue_to_work_item (providers/gitlab/provider.py:261).
 	priority, serviceClass := gitlabPriorityFromLabels(labels)
 	row, err := buildWorkItemRow(claim, gitlabWorkItemSource{
-		kind: gitlabIssueSourceKind, workItemID: workItemID,
+		kind: gitlabIssueSourceKind, workItemID: workItemID, fullName: fullName, epic: payload.Epic,
 		title: payload.Title, typeName: typeValue, status: status,
 		statusRaw: nullableString(payload.State), description: description, repoID: &repoID,
 		projectID: stringPointer(fullName), assignees: assignees, reporter: reporter,
@@ -954,7 +976,9 @@ const (
 // gitlabWorkItemSource is how a GitLab issue or merge request fills the shared
 // work-item row.
 type gitlabWorkItemSource struct {
-	kind string
+	kind     string
+	fullName string
+	epic     *gitlabIssueEpicPayload
 
 	workItemID, title, typeName, status              string
 	statusRaw, description, projectID, reporter, url *string
@@ -1000,6 +1024,59 @@ func (s gitlabWorkItemSource) DueAt() *time.Time       { return s.dueAt }
 func (s gitlabWorkItemSource) ParentID() workItemRef {
 	return declaredWorkItemException(s.kind, workItemFieldParentID)
 }
+
+// EpicID is Python's provider link from an issue to its epic
+// (providers/gitlab/provider.py:263-273 and build_epic_id_for_issue,
+// normalize.py:786-800): only for a project inside a group, the key
+// "<epic.group_id, else the project's group path>:epic:<epic.iid>".
 func (s gitlabWorkItemSource) EpicID() workItemRef {
-	return declaredWorkItemException(s.kind, workItemFieldEpicID)
+	if s.kind != gitlabIssueSourceKind {
+		return declaredWorkItemException(s.kind, workItemFieldEpicID)
+	}
+	parts := strings.Split(s.fullName, "/")
+	if s.epic == nil || len(parts) < 2 {
+		return workItemRefAbsent()
+	}
+	iid, present, _ := pythonJSONScalar(s.epic.IID)
+	if !present {
+		return workItemRefAbsent()
+	}
+	group, _, truthy := pythonJSONScalar(s.epic.GroupID)
+	if !truthy {
+		group = strings.Join(parts[:len(parts)-1], "/")
+	}
+	return workItemRefKey(group + ":epic:" + iid)
+}
+
+// pythonJSONScalar renders a JSON scalar the way Python's f-string renders
+// what json.loads made of it (an int stays exact, a number with a fraction or
+// an exponent is a float printed by repr), and reports whether it is present
+// (not null) and truthy.
+func pythonJSONScalar(raw json.RawMessage) (text string, present bool, truthy bool) {
+	trimmed := strings.TrimSpace(string(raw))
+	switch {
+	case trimmed == "" || trimmed == "null":
+		return "", false, false
+	case trimmed == "true":
+		return "True", true, true
+	case trimmed == "false":
+		return "False", true, false
+	case strings.HasPrefix(trimmed, `"`):
+		var value string
+		if json.Unmarshal(raw, &value) != nil {
+			return "", false, false
+		}
+		return value, true, value != ""
+	case strings.ContainsAny(trimmed, ".eE"):
+		value, err := strconv.ParseFloat(trimmed, 64)
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
+			return "", false, false
+		}
+		return pythonparity.Repr(value), true, value != 0
+	}
+	value, ok := new(big.Int).SetString(trimmed, 10)
+	if !ok {
+		return "", false, false
+	}
+	return value.String(), true, value.Sign() != 0
 }

@@ -3,9 +3,10 @@
 The producer is GitLabProvider._ingest_with_client itself: the issue loop
 normalizes the issue (gitlab_issue_to_work_item), enriches it with the label
 priority, and links it to its epic (build_epic_id_for_issue, only for a project
-inside a group). The fake client serves one issue and its label events; every
-other fetch is switched off by the provider's own environment flags, and the
-group lookup returns nothing, so no epic rows are added.
+inside a group, and only while GITLAB_FETCH_EPICS is on: the case's
+fetch_epics, default on). The fake client serves one issue and its label
+events; every other fetch is switched off by the provider's own environment
+flags, and the group lookup returns nothing, so no epic rows are added.
 """
 
 from __future__ import annotations
@@ -45,7 +46,6 @@ _PROVIDER_FLAGS = {
     "GITLAB_FETCH_NOTES": "false",
     "GITLAB_FETCH_LINKS": "false",
     "GITLAB_FETCH_MILESTONES": "false",
-    "GITLAB_FETCH_EPICS": "true",
 }
 
 
@@ -87,8 +87,10 @@ class _Client:
 def _build_row(case: dict[str, Any]) -> dict[str, Any]:
     issue = _object(case["raw_issue"])
     label_events = [_object(event) for event in case.get("label_events", [])]
-    saved = {key: os.environ.get(key) for key in _PROVIDER_FLAGS}
-    os.environ.update(_PROVIDER_FLAGS)
+    flags = dict(_PROVIDER_FLAGS)
+    flags["GITLAB_FETCH_EPICS"] = "true" if case.get("fetch_epics", True) else "false"
+    saved = {key: os.environ.get(key) for key in flags}
+    os.environ.update(flags)
     try:
         provider = GitLabProvider(
             status_mapping=load_status_mapping(), identity=load_identity_resolver()

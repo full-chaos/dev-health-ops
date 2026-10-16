@@ -2,6 +2,8 @@ package providersync
 
 import (
 	"encoding/json"
+	"errors"
+	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/google/uuid"
 )
 
@@ -89,6 +92,16 @@ type gitlabIssueWorkItemPayload struct {
 	DueDate     *string                      `json:"due_date"`
 	// Epic is the issue's epic (GitLab Premium/Ultimate); absent otherwise.
 	Epic *gitlabIssueEpicPayload `json:"epic"`
+}
+
+// withFetchEpics is the issue payload a route reads under Python's
+// GITLAB_FETCH_EPICS flag (default on): off, the issue is never linked to its
+// epic (providers/gitlab/provider.py:263).
+func (payload gitlabIssueWorkItemPayload) withFetchEpics(fetchEpics bool) gitlabIssueWorkItemPayload {
+	if !fetchEpics {
+		payload.Epic = nil
+	}
+	return payload
 }
 
 // gitlabIssueEpicPayload keeps the two epic keys raw, because Python formats
@@ -1035,8 +1048,10 @@ func (s gitlabWorkItemSource) EpicID() workItemRef {
 	return workItemRefKey(group + ":epic:" + iid)
 }
 
-// pythonJSONScalar renders a decoded JSON scalar the way Python's f-string
-// does, and reports whether it is present (not null) and truthy.
+// pythonJSONScalar renders a JSON scalar the way Python's f-string renders
+// what json.loads made of it (an int stays exact, a number with a fraction or
+// an exponent is a float printed by repr), and reports whether it is present
+// (not null) and truthy.
 func pythonJSONScalar(raw json.RawMessage) (text string, present bool, truthy bool) {
 	trimmed := strings.TrimSpace(string(raw))
 	switch {
@@ -1052,10 +1067,16 @@ func pythonJSONScalar(raw json.RawMessage) (text string, present bool, truthy bo
 			return "", false, false
 		}
 		return value, true, value != ""
+	case strings.ContainsAny(trimmed, ".eE"):
+		value, err := strconv.ParseFloat(trimmed, 64)
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
+			return "", false, false
+		}
+		return pythonparity.Repr(value), true, value != 0
 	}
-	number, err := strconv.ParseFloat(trimmed, 64)
-	if err != nil {
+	value, ok := new(big.Int).SetString(trimmed, 10)
+	if !ok {
 		return "", false, false
 	}
-	return trimmed, true, number != 0
+	return value.String(), true, value.Sign() != 0
 }

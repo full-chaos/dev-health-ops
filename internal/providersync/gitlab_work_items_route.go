@@ -107,6 +107,9 @@ type GitLabWorkItemsRouteHandler struct {
 	FetchLinks      *bool
 	FetchMilestones *bool
 	IncludeMRs      *bool
+	// FetchEpics is Python's GITLAB_FETCH_EPICS: off, no issue is linked to
+	// its epic. Default on, as in Python.
+	FetchEpics *bool
 }
 
 func gitLabWorkItemsFlag(value *bool) bool { return value == nil || *value }
@@ -208,6 +211,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	fetchLinks := gitLabWorkItemsFlag(handler.FetchLinks)
 	fetchMilestones := gitLabWorkItemsFlag(handler.FetchMilestones)
 	includeMRs := gitLabWorkItemsFlag(handler.IncludeMRs)
+	fetchEpics := gitLabWorkItemsFlag(handler.FetchEpics)
 	pages := 1 // the project binding request
 	closingSynced := 0
 	issueLinksUnsupported := 0
@@ -279,7 +283,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			pages += labelPages
 		}
 		item, transitions, normalizeErr := normalizeGitLabIssueWorkItem(
-			claim, fullName, repoID, payload, labelEvents, handler.StatusMapping,
+			claim, fullName, repoID, payload.withFetchEpics(fetchEpics), labelEvents, handler.StatusMapping,
 			handler.ResolveIdentity, normalizedAt,
 		)
 		if normalizeErr != nil {

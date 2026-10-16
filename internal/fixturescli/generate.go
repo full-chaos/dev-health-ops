@@ -63,10 +63,10 @@ var frozenWorldDigests = map[string]string{
 	// The provider worlds (producedWorlds).
 	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "6aabe9c46217b7c3f0b6f9dd96b8ef9bbdd82a0fc3a456ba988b41aa07facdcd",
 	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "b8fb71634fc3f10408650c3c7d771a022f8b1936cb0b185de81054ae60f62a79",
-	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "e1ba2bb44a7657c0eb9b59d1380f45f94ea5ad0d968143c8f623e871c5326cbb",
+	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "b1f6e5ca32d9f695379e744e38d3469e0b1ecb6d3baf9692265b9f54b83c78ab",
 	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "649e999e4eccf8822e9b452ebb1a37bb5dab494e582e84f9dc713f0b687803a0",
 	// The mixed-provider demo world (provider_worlds_demo_*).
-	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz": "1b98305a3e870b974115940e928ca9b1ea9a05a3da05ec4692a561b114d0e534",
+	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz": "5ef911bf562c4713d5ab68fd7f3526fe703b8afa8e9573b62902f681fba85b13",
 }
 
 // producedWorlds are the provider worlds (github of the real shape, gitlab, jira, linear): written by the

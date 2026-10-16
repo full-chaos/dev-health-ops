@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -113,6 +114,30 @@ type GitLabWorkItemsRouteHandler struct {
 }
 
 func gitLabWorkItemsFlag(value *bool) bool { return value == nil || *value }
+
+// gitLabFetchEpicsEnv is the worker environment flag Python's GitLab provider
+// reads to link issues to epics (providers/gitlab/provider.py:114).
+const gitLabFetchEpicsEnv = "GITLAB_FETCH_EPICS"
+
+// pythonEnvFlag is Python's env_flag (providers/utils.py): 1/true/yes/on is
+// true, 0/false/no/off is false, trimmed and case-insensitive; unset or any
+// other value is nil, so the route keeps its default.
+func pythonEnvFlag(name string) *bool {
+	raw, ok := os.LookupEnv(name)
+	if !ok {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		value := true
+		return &value
+	case "0", "false", "no", "off":
+		value := false
+		return &value
+	}
+	slog.Warn("providersync.env_flag_ignored", "name", name)
+	return nil
+}
 
 func (handler GitLabWorkItemsRouteHandler) limits() (int, int, int, error) {
 	perPage, maxPages, nestedMaxPages := handler.PerPage, handler.MaxPages, handler.NestedMaxPages

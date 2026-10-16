@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -183,6 +184,79 @@ func TestGitLabWorkItemsRouteLinksTheEpicUnderFetchEpics(t *testing.T) {
 			}
 			if !found {
 				t.Fatal("the route wrote no row for issue 42")
+			}
+		})
+	}
+}
+
+// TestGitLabWorkerRouteReadsFetchEpicsFromTheEnvironment runs the route the
+// worker selects (SelectWorkItemsRouteHandler) under each GITLAB_FETCH_EPICS
+// value, with Python's env_flag rule: unset or unknown keeps the default (on).
+func TestGitLabWorkerRouteReadsFetchEpicsFromTheEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		value *string
+		want  string
+	}{
+		{nil, "gitlab:12:epic:4"},
+		{stringPointer("false"), ""},
+		{stringPointer(" OFF "), ""},
+		{stringPointer("0"), ""},
+		{stringPointer("no"), ""},
+		{stringPointer("true"), "gitlab:12:epic:4"},
+		{stringPointer("Yes"), "gitlab:12:epic:4"},
+		{stringPointer("maybe"), "gitlab:12:epic:4"},
+		{stringPointer(""), "gitlab:12:epic:4"},
+	} {
+		name := "unset"
+		if tc.value != nil {
+			name = "value=" + *tc.value
+		}
+		t.Run(name, func(t *testing.T) {
+			if tc.value == nil {
+				t.Setenv(gitLabFetchEpicsEnv, "")
+				if err := os.Unsetenv(gitLabFetchEpicsEnv); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				t.Setenv(gitLabFetchEpicsEnv, *tc.value)
+			}
+			handler, ok := SelectWorkItemsRouteHandler("gitlab", "work-items", WorkItemsRouteDeps{StatusMapping: loadRealStatusMapping(t)})
+			if !ok {
+				t.Fatal("no gitlab work-items route")
+			}
+			responses := gitLabWorkItemResponses()
+			root := "/api/v4/projects/123"
+			issues := responses[root+"/issues?page=1"]
+			issues[0] = strings.Replace(issues[0], `"due_date":"2026-07-20"}`, `"due_date":"2026-07-20","epic":{"id":900,"iid":4,"group_id":12}}`, 1)
+			claim := nativeTestClaim("gitlab", "work-items")
+			client := gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: responses}))
+			batch, err := handler.(GitLabWorkItemsRouteHandler).Collect(
+				context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID}, client,
+				time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, found := "", false
+			for _, effect := range batch.Effects {
+				if effect.Destination != "work_items" {
+					continue
+				}
+				for _, raw := range effect.Rows {
+					var item gitlabWorkItemRow
+					if err := jsonUnmarshalEffect(raw, &item); err != nil {
+						t.Fatal(err)
+					}
+					if item.WorkItemID == "gitlab:acme/api#42" {
+						found = true
+						if item.EpicID != nil {
+							got = *item.EpicID
+						}
+					}
+				}
+			}
+			if !found || got != tc.want {
+				t.Fatalf("found=%v epic_id=%q, want %q", found, got, tc.want)
 			}
 		})
 	}

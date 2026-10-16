@@ -568,6 +568,36 @@ func mcpParityDescribe(result goapiproof.Result) string {
 	return strings.Join(parts, "; ")
 }
 
+// mcpParityWithoutAbsentFields drops the excusals and tolerances that name a field an older text does not select: an
+// operation's declarations describe its current text, and an excusal that reaches nothing fails the comparison
+// (unused exclusion). The older text still compares every field it does select, exactly.
+func mcpParityWithoutAbsentFields(options goapiproof.Options, document string) goapiproof.Options {
+	selects := func(path string) bool {
+		segments := strings.Split(strings.TrimPrefix(path, "data."), ".")
+		for _, segment := range segments[1:] {
+			if !strings.Contains(document, segment) {
+				return false
+			}
+		}
+		return true
+	}
+	volatile := map[string]string{}
+	for path, reason := range options.VolatileFields {
+		if selects(path) {
+			volatile[path] = reason
+		}
+	}
+	options.VolatileFields = volatile
+	tierB := map[string]string{}
+	for path, reason := range options.FloatTierB {
+		if selects(path) {
+			tierB[path] = reason
+		}
+	}
+	options.FloatTierB = tierB
+	return options
+}
+
 func mcpParityHasErrors(body string) bool {
 	var decoded struct {
 		Errors []json.RawMessage `json:"errors"`
@@ -707,7 +737,8 @@ func mcpParityShapes(ctx context.Context, t *testing.T, conn driver.Conn, root s
 			for _, old := range legacyTexts[operation] {
 				shapes = append(shapes, mcpParityShape{
 					legacy: true, operation: operation, variant: "legacy-" + strings.TrimPrefix(old.Digest, "sha256:")[:8], root: spec.ResponseRoot,
-					document: old.Document, variables: spec.Variables(mcpParityOrg, window), parity: mcpParityOptions(operation, "", spec.Parity),
+					document: old.Document, variables: spec.Variables(mcpParityOrg, window),
+					parity: mcpParityWithoutAbsentFields(mcpParityOptions(operation, "", spec.Parity), old.Document),
 				})
 			}
 		}

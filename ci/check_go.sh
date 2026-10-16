@@ -3089,6 +3089,7 @@ case "${1:-all}" in
     check_build
     check_contract
     check_ratchets
+    check_race_weights_rows
     check_integration_vet
     check_integration
     check_multi_replica_workers

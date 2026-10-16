@@ -437,9 +437,9 @@ def test_the_go_side_weights_census_accepts_the_table_and_names_each_defect(
     assert "test_the_race_weights_table_is_clean" in twice.stderr
 
 
-def test_fast_ci_and_the_static_leg_run_the_weights_census() -> None:
+def test_fast_ci_all_and_the_static_leg_run_the_weights_census() -> None:
     source = CHECK_GO.read_text(encoding="utf-8")
-    for verb in ("fast", "ci"):
+    for verb in ("fast", "ci", "all"):
         body = re.search(rf"(?ms)^  {verb}\)\n(.*?)^    ;;", source).group(1)
         assert "check_race_weights_rows" in body, verb
     static = re.search(r"(?ms)^    static\)\n(.*?)^      ;;", source).group(1)

@@ -43,8 +43,8 @@ fail=0
 mkdir -p "$OUT/proof/bodies"; chmod 0755 "$OUT" "$OUT/proof" "$OUT/proof/bodies"
 cd "$R"
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
-unset $(compgen -e | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
-DC=(docker compose -p dev-health --project-directory "$R" --env-file "$R/ops/.env" --env-file "$R/_records/bigboy-pins.env" -f "$HERE/compose.bigboy.yml")
+unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
+DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/bigboy-pins.env -f "$HERE/compose.bigboy.yml")
 
 # 1. prover build == candidate build
 want=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-go-api-tools:sha-$S7" --format '{{json .Manifest}}' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null)
@@ -60,6 +60,9 @@ SQL
 )
 if [ "$(printf '%s\n' "$PROVE_ORG" | grep -c .)" != 1 ]; then st local-org 1; echo "REFUSED: the local admin account must belong to exactly one org" >&2; exit 1; fi
 st local-org 0; export PROVE_ORG PROVE_ARTIFACT_DIR="$OUT/proof"
+# compose reads JWT_SECRET_KEY for venue-prove with an empty default (a `:?` would fail every other command: compose interpolates
+# inactive profiles too), so the script refuses here, by NAME only, when ops/.env carries no value for it
+grep -q '^JWT_SECRET_KEY=.' "$R/ops/.env" || { st jwt-secret 1; echo "REFUSED: JWT_SECRET_KEY has no value in ops/.env (the prover mints the edge access token with it)" >&2; exit 1; }
 
 U="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo"
 

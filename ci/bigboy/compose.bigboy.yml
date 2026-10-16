@@ -8,7 +8,9 @@
 # services of an inactive profile too, so a required variable would fail every other command. The script that starts a one-off
 # service checks its variables first (web-path-smoke.sh, bigboy-graphql-prove.sh, bigboy-hook-check.sh, bigboy-river-apply.sh).
 # BIGBOY_OPERATOR_IMAGE (the workers) and DHO_API_CH_USERS_XML (clickhouse) stay required: the live stack needs them.
-# The image pins are literal digests below; bigboy-repin*.sh rewrite them in this file (the roll is a PR, as in prod).
+# The image digests are NOT in this file: ${BIGBOY_DHO_IMAGE}, ${BIGBOY_API_TOOLS_IMAGE}, ${BIGBOY_WEB_IMAGE} and ${BIGBOY_OPERATOR_IMAGE}
+# come from the pins env file (_records/bigboy-pins.env, tracked copy ci/bigboy/bigboy-pins.env), which bigboy-repin*.sh rewrite at every cut.
+# The comment blocks below quote the retired files as they were: where one says the images overlay holds a digest, read the pins env file.
 #
 # The comments of the twelve retired files, one block each (the full text is in git history):
 #

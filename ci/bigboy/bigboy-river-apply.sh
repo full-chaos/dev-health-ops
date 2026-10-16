@@ -12,8 +12,8 @@ DHO=$(grep -oE 'ghcr.io/full-chaos/dev-health-go-dho@sha256:[0-9a-f]{64}' $R/_re
 HERE=$(cd "$(dirname "$0")" && pwd)
 cd "$R"   # compose project root (bigboy-cut.sh runs from here too)
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
-unset $(compgen -e | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
-DC=(docker compose -p dev-health --project-directory "$R" --env-file "$R/ops/.env" --env-file "$R/_records/bigboy-pins.env" -f "$HERE/compose.bigboy.yml")
+unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
+DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/bigboy-pins.env -f "$HERE/compose.bigboy.yml")
 export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-$DHO}"   # by hand: the worker overlay only has to interpolate; this one-off runs --no-deps and starts no worker
 "${DC[@]}" --profile venue run --rm --no-deps -T venue-river migrate river --apply-and-check 2>&1 | sed -E 's#(://[^:/@]*:)[^@/]*@#\1<redacted>@#g' | tail -8 | cut -c1-200
 rc=${PIPESTATUS[0]}

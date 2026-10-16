@@ -3,12 +3,12 @@
 
 Prod's web gets its env from deploy values.prod.yaml `ops.web.env` + `ops.web.extraEnv`.
 Bigboy's web is compose-defined; its bigboy-specific values live in
-ci/bigboy/compose.bigboy.router.yml. D2736 found AUTH_URL absent on bigboy (logout
+ci/bigboy/compose.bigboy.yml (web.environment). D2736 found AUTH_URL absent on bigboy (logout
 redirected to the Node bind address). Per the lead's ruling this stays hand-maintained
 (one name does not earn a generator), so this check makes the hand list LOUD:
 
   * every prod web name must be CLASSIFIED below -- a new prod name fails, named;
-  * every `overlay` name must be set in compose.bigboy.router.yml's web.environment;
+  * every `overlay` name must be set in compose.bigboy.yml's web.environment;
   * every classified name must still exist in prod -- a stale entry fails, named;
   * with --live-names FILE (output of container-env-names.sh for the web container),
     every prod web name must be present in the running container.
@@ -16,7 +16,7 @@ redirected to the Node bind address). Per the lead's ruling this stays hand-main
 Only NAMES are compared. Values are never read from the running stack. The two
 overlay values checked here are public URLs committed in the overlay file itself.
 
-Usage: check-web-env-parity.py <values.prod.yaml> <compose.bigboy.router.yml> [--live-names FILE]
+Usage: check-web-env-parity.py <values.prod.yaml> <compose.bigboy.yml> [--live-names FILE]
 Exit: 0 parity; 1 drift (each finding on stderr as `DRIFT: ...`); 2 usage/shape error.
 """
 
@@ -28,7 +28,7 @@ from typing import Any
 
 import yaml
 
-# name -> "overlay" (bigboy value set in compose.bigboy.router.yml) or "base: <reason>"
+# name -> "overlay" (bigboy value set in compose.bigboy.yml) or "base: <reason>"
 # (bigboy's own compose.yml sets a venue-local value on purpose).
 CLASSIFIED: dict[str, str] = {
     "BACKEND_URL": "overlay",
@@ -132,7 +132,7 @@ def check(
             )
         if cls == "overlay" and name not in overlay:
             findings.append(
-                f"overlay name {name} missing from compose.bigboy.router.yml web.environment"
+                f"overlay name {name} missing from compose.bigboy.yml web.environment"
             )
     for name, want in EXPECTED_OVERLAY_VALUES.items():
         if name in overlay and overlay[name] != want:

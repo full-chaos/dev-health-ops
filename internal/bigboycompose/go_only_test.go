@@ -2,7 +2,6 @@ package bigboycompose_test
 
 import (
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -11,35 +10,32 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// CHAOS-8361: the bigboy stack is Go-only. The base compose file of that stack is a host file, so the tracked
-// overlays and scripts are where the Python api can come back: an image line, a service in the cut's `up` list,
-// a side file in the chain, a one-off in the api container's network namespace, a script that names the api
-// container. goOnlyFindings reads the tracked files and returns one finding per defect.
-// TestBigboyStackIsGoOnly runs it on the checked-in files; TestBigboyGoOnlyCheckSeesEachDefect plants one
-// defect at a time in the text of a checked-in file and requires the finding that names it.
+// CHAOS-8361: the bigboy stack is Go-only. The Python api can come back through the one compose file
+// (ci/bigboy/compose.bigboy.yml, CHAOS-9962): an image line, a service in the cut's `up` list, a one-off in the api
+// container's network namespace, a pin that names the Python image, or a script that names the api container.
+// goOnlyFindings reads the tracked files and returns one finding per defect. TestBigboyStackIsGoOnly runs it on the
+// checked-in files; TestBigboyGoOnlyCheckSeesEachDefect plants one defect at a time in the checked-in files (the
+// compose file is changed as parsed data and written back) and requires the finding that names it.
 
 const (
 	pythonAPIImage      = "dev-hops-api"
 	pythonAPIContainer  = "dev-health-api-1"
 	retiredAPIProfile   = "retired-python-api"
 	dhoImageRepository  = "ghcr.io/full-chaos/dev-health-go-dho"
-	imagesOverlayName   = "compose.bigboy.images.yml"
-	smokeOverlayName    = "compose.bigboy.smoke.yml"
+	pinsName            = "bigboy-pins.env"
 	cutScriptName       = "bigboy-cut.sh"
 	proveScriptName     = "bigboy-graphql-prove.sh"
 	logChecksScriptName = "bigboy-log-checks.sh"
 	smokeScriptName     = "web-path-smoke.sh"
-	stackFilesName      = "stack.files"
 )
 
 // goOnlyFiles are the tracked files the check reads, by name.
-var goOnlyFiles = []string{imagesOverlayName, smokeOverlayName, cutScriptName, proveScriptName, logChecksScriptName, smokeScriptName, stackFilesName}
+var goOnlyFiles = []string{composeName, pinsName, cutScriptName, proveScriptName, logChecksScriptName, smokeScriptName}
 
 type bigboyService struct {
 	Image       string               `yaml:"image"`
 	Profiles    []string             `yaml:"profiles"`
 	NetworkMode string               `yaml:"network_mode"`
-	Networks    []string             `yaml:"networks"`
 	DependsOn   map[string]yaml.Node `yaml:"depends_on"`
 	Other       map[string]yaml.Node `yaml:",inline"`
 }
@@ -48,7 +44,6 @@ func bigboyServices(text string) (map[string]bigboyService, error) {
 	var doc struct {
 		Services map[string]bigboyService `yaml:"services"`
 	}
-	// compose's `!override` and `!reset` tags are read as the value they wrap.
 	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
 		return nil, err
 	}
@@ -69,65 +64,63 @@ func codeLines(text string) []string {
 	return lines
 }
 
-var planesUpLine = regexp.MustCompile(`stack\.sh" up ([a-z0-9 -]+?) > \$REC/up\.out`)
+var planesUpLine = regexp.MustCompile(`up -d --no-deps --no-build ([a-z0-9 -]+?) > \$REC/up\.out`)
 
 // goOnlyFindings returns what in the tracked bigboy files still needs the Python api, one finding per defect.
 func goOnlyFindings(files map[string]string) ([]string, error) {
 	var findings []string
 	found := func(format string, args ...any) { findings = append(findings, fmt.Sprintf(format, args...)) }
 
-	for _, overlay := range []string{imagesOverlayName, smokeOverlayName} {
-		services, err := bigboyServices(files[overlay])
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", overlay, err)
+	services, err := bigboyServices(files[composeName])
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", composeName, err)
+	}
+	names := make([]string, 0, len(services))
+	for name := range services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		service := services[name]
+		if strings.Contains(service.Image, pythonAPIImage) {
+			found("%s: %s runs the Python api image", composeName, name)
 		}
-		names := make([]string, 0, len(services))
-		for name := range services {
-			names = append(names, name)
+		if service.NetworkMode == "service:api" {
+			found("%s: %s shares the network namespace of the Python api", composeName, name)
 		}
-		sort.Strings(names)
-		for _, name := range names {
-			service := services[name]
-			if strings.Contains(service.Image, pythonAPIImage) {
-				found("%s: %s runs the Python api image", overlay, name)
-			}
-			if service.NetworkMode == "service:api" {
-				found("%s: %s shares the network namespace of the Python api", overlay, name)
-			}
-			if _, waits := service.DependsOn["api"]; waits {
-				found("%s: %s waits for the Python api", overlay, name)
-			}
+		if _, waits := service.DependsOn["api"]; waits && name != "api" {
+			found("%s: %s waits for the Python api", composeName, name)
 		}
-		if overlay != imagesOverlayName {
-			continue
+	}
+	api, ok := services["api"]
+	switch {
+	case !ok:
+		found("%s: the `api` service is gone: nothing says it is retired", composeName)
+	case len(api.Profiles) != 1 || api.Profiles[0] != retiredAPIProfile:
+		found("%s: `api` must be in the profile %s alone, so `up` never starts it", composeName, retiredAPIProfile)
+	}
+	if migrate := services["migrate"]; !strings.HasPrefix(migrate.Image, "${BIGBOY_DHO_IMAGE:") {
+		found("%s: migrate runs %q, want the dho image pin ${BIGBOY_DHO_IMAGE}", composeName, migrate.Image)
+	}
+	if web := services["web"]; len(web.DependsOn) == 0 {
+		found("%s: web states no depends_on, so the Python api wait could come back", composeName)
+	}
+	for _, line := range codeLines(files[pinsName]) {
+		if strings.Contains(line, pythonAPIImage) {
+			found("%s: a pin names the Python api image", pinsName)
 		}
-		api, ok := services["api"]
-		switch {
-		case !ok:
-			found("%s: the `api` service of the base file is not retired: the overlay does not name it", overlay)
-		case len(api.Profiles) != 1 || api.Profiles[0] != retiredAPIProfile || api.Image != "" || len(api.Other) != 0:
-			found("%s: `api` must be the profile %s and nothing else, so `up` never starts it", overlay, retiredAPIProfile)
-		}
-		if migrate := services["migrate"]; !strings.HasPrefix(migrate.Image, dhoImageRepository+"@sha256:") {
-			found("%s: migrate runs %q, want the dho image by digest", overlay, migrate.Image)
-		}
-		if web := services["web"]; len(web.DependsOn) == 0 {
-			found("%s: web states no depends_on, so the base file's wait for the Python api stays", overlay)
+		if strings.HasPrefix(line, "BIGBOY_DHO_IMAGE=") && !strings.HasPrefix(line, "BIGBOY_DHO_IMAGE="+dhoImageRepository+"@sha256:") {
+			found("%s: BIGBOY_DHO_IMAGE is not the dho image by digest", pinsName)
 		}
 	}
 
 	cut := files[cutScriptName]
 	up := planesUpLine.FindStringSubmatch(strings.Join(codeLines(cut), "\n"))
 	if up == nil {
-		return nil, fmt.Errorf("%s has no `stack.sh up <planes>` line: nothing was checked", cutScriptName)
+		return nil, fmt.Errorf("%s has no `up -d --no-deps --no-build <planes>` line: nothing was checked", cutScriptName)
 	}
 	if got := strings.Fields(up[1]); strings.Join(got, " ") != "query-api go-api web" {
 		found("%s: the planes `up` list is %v, want [query-api go-api web]: the Python api is not recreated", cutScriptName, got)
-	}
-	for _, line := range codeLines(files[stackFilesName]) {
-		if strings.Contains(line, "metrics-api") {
-			found("%s: a set names the metrics-api side file, a Python api service", stackFilesName)
-		}
 	}
 	for _, script := range []string{cutScriptName, proveScriptName, logChecksScriptName, smokeScriptName} {
 		for _, line := range codeLines(files[script]) {
@@ -154,7 +147,7 @@ func checkedInGoOnlyFiles(t *testing.T) map[string]string {
 	t.Helper()
 	files := map[string]string{}
 	for _, name := range goOnlyFiles {
-		files[name] = read(t, filepath.Join(toolsDir(t), name))
+		files[name] = read(t, toolsPath(t, name))
 	}
 	return files
 }
@@ -169,120 +162,74 @@ func TestBigboyStackIsGoOnly(t *testing.T) {
 	}
 }
 
+// plantCompose changes the parsed compose file and writes it back.
+func plantCompose(t *testing.T, text string, change func(services map[string]map[string]any)) string {
+	t.Helper()
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
+		t.Fatal(err)
+	}
+	services := map[string]map[string]any{}
+	for name, raw := range doc["services"].(map[string]any) {
+		services[name] = raw.(map[string]any)
+	}
+	change(services)
+	doc["services"] = services
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
 func TestBigboyGoOnlyCheckSeesEachDefect(t *testing.T) {
 	clean := checkedInGoOnlyFiles(t)
 	frozen := "ghcr.io/full-chaos/dev-hops-api@sha256:" + strings.Repeat("a", 64)
 	for _, plant := range []struct {
-		name, file, old, new, want string
+		name, file, want string
+		compose          func(services map[string]map[string]any)
+		old, new         string
 	}{
-		{
-			name: "the Python api image back on api",
-			file: imagesOverlayName,
-			old:  "  api:\n    profiles:\n      - retired-python-api\n",
-			new:  "  api:\n    image: " + frozen + "\n",
-			want: "api runs the Python api image",
-		},
-		{
-			name: "api retired and still given an entrypoint",
-			file: imagesOverlayName,
-			old:  "  api:\n    profiles:\n      - retired-python-api\n",
-			new:  "  api:\n    profiles:\n      - retired-python-api\n    entrypoint: [\"python\"]\n",
-			want: "`api` must be the profile retired-python-api and nothing else",
-		},
-		{
-			name: "api not named by the overlay",
-			file: imagesOverlayName,
-			old:  "  api:\n    profiles:\n      - retired-python-api\n",
-			new:  "",
-			want: "the `api` service of the base file is not retired",
-		},
-		{
-			name: "migrate from the Python api image",
-			file: imagesOverlayName,
-			old:  "  migrate:\n    image: " + dhoImageRepository,
-			new:  "  migrate:\n    image: ghcr.io/full-chaos/dev-hops-api",
-			want: "migrate runs the Python api image",
-		},
-		{
-			name: "venue-prove in the network namespace of the api",
-			file: imagesOverlayName,
-			old:  "    networks:\n      - dev-health\n      - dho-query-internal\n    environment:\n",
-			new:  "    network_mode: \"service:api\"\n    environment:\n",
-			want: "venue-prove shares the network namespace of the Python api",
-		},
-		{
-			name: "web waits for the api",
-			file: imagesOverlayName,
-			old:  "    depends_on: !override\n      valkey:\n",
-			new:  "    depends_on: !override\n      api:\n        condition: service_healthy\n      valkey:\n",
-			want: "web waits for the Python api",
-		},
-		{
-			name: "web keeps the base file's wait",
-			file: imagesOverlayName,
-			old:  "    depends_on: !override\n      valkey:\n        condition: service_healthy\n      bugsink:\n        condition: service_started\n",
-			new:  "",
-			want: "web states no depends_on",
-		},
-		{
-			name: "the smoke runner on the Python api image",
-			file: imagesOverlayName,
-			old:  "  web-smoke:\n    image: " + dhoImageRepository,
-			new:  "  web-smoke:\n    image: ghcr.io/full-chaos/dev-hops-api",
-			want: "web-smoke runs the Python api image",
-		},
-		{
-			name: "api back in the cut's up list",
-			file: cutScriptName,
-			old:  "stack.sh\" up query-api go-api web ",
-			new:  "stack.sh\" up api query-api go-api web ",
-			want: "the planes `up` list is [api query-api go-api web]",
-		},
-		{
-			name: "the metrics-api side file back in the stack set",
-			file: stackFilesName,
-			old:  "\nstack tools    compose.bigboy.router.yml\n",
-			new:  "\nstack root     compose/compose.metrics-api.local.yml\nstack tools    compose.bigboy.router.yml\n",
-			want: "stack.files: a set names the metrics-api side file",
-		},
-		{
-			name: "a two-plane leg back in the cut",
-			file: cutScriptName,
-			old:  "echo \"cut done $(date -u +%T)\"\n",
-			new:  "timeout 900 bash run-rest-bigboy.sh > out-rest.txt 2>&1; st rest $?\necho \"cut done $(date -u +%T)\"\n",
-			want: "bigboy-cut.sh: a line runs a two-plane leg",
-		},
-		{
-			name: "the Python edge back in the prove harness",
-			file: proveScriptName,
-			old:  "  \"\"|--go-edge) EDGE_ARGS=\"-go-edge -edge-url http://traefik:3000/graphql\"",
-			new:  "  \"\") EDGE_ARGS=\"-edge-url http://localhost:8000/graphql\"",
-			want: "bigboy-graphql-prove.sh: a line names the Python edge localhost:8000",
-		},
-		{
-			name: "the api container back in the log checks",
-			file: logChecksScriptName,
-			old:  "codes=$(for c in $NAMES;",
-			new:  "a=$(ip dev-health-api-1); [ -n \"$a\" ] && chk dev-health-api-1 $a:8000/ready\ncodes=$(for c in $NAMES;",
-			want: "bigboy-log-checks.sh: a line names the Python api container",
-		},
-		{
-			name: "the metrics-api side file back in the smoke set",
-			file: stackFilesName,
-			old:  "smoke root     _records/compose.bigboy.images.yml\n",
-			new:  "smoke root     compose/compose.metrics-api.local.yml\nsmoke root     _records/compose.bigboy.images.yml\n",
-			want: "stack.files: a set names the metrics-api side file",
-		},
+		{name: "the Python api image back on api", file: composeName, want: "api runs the Python api image",
+			compose: func(s map[string]map[string]any) { s["api"]["image"] = frozen }},
+		{name: "api no longer retired", file: composeName, want: "`api` must be in the profile retired-python-api alone",
+			compose: func(s map[string]map[string]any) { delete(s["api"], "profiles") }},
+		{name: "migrate from the Python api image", file: composeName, want: "migrate runs",
+			compose: func(s map[string]map[string]any) { s["migrate"]["image"] = frozen }},
+		{name: "venue-prove in the network namespace of the api", file: composeName, want: "venue-prove shares the network namespace of the Python api",
+			compose: func(s map[string]map[string]any) { s["venue-prove"]["network_mode"] = "service:api" }},
+		{name: "web waits for the api", file: composeName, want: "web waits for the Python api",
+			compose: func(s map[string]map[string]any) {
+				s["web"]["depends_on"] = map[string]any{"api": map[string]any{"condition": "service_healthy"}}
+			}},
+		{name: "web keeps no explicit wait", file: composeName, want: "web states no depends_on",
+			compose: func(s map[string]map[string]any) { delete(s["web"], "depends_on") }},
+		{name: "the smoke runner on the Python api image", file: composeName, want: "web-smoke runs the Python api image",
+			compose: func(s map[string]map[string]any) { s["web-smoke"]["image"] = frozen }},
+		{name: "the dho pin on the Python api image", file: pinsName, want: "BIGBOY_DHO_IMAGE is not the dho image by digest",
+			old: "BIGBOY_DHO_IMAGE=" + dhoImageRepository, new: "BIGBOY_DHO_IMAGE=ghcr.io/full-chaos/dev-hops-api"},
+		{name: "api back in the cut's up list", file: cutScriptName, want: "the planes `up` list is [api query-api go-api web]",
+			old: "--no-build query-api go-api web ", new: "--no-build api query-api go-api web "},
+		{name: "a two-plane leg back in the cut", file: cutScriptName, want: "bigboy-cut.sh: a line runs a two-plane leg",
+			old: "echo \"cut done $(date -u +%T)\"\n", new: "timeout 900 bash run-rest-bigboy.sh > out-rest.txt 2>&1; st rest $?\necho \"cut done $(date -u +%T)\"\n"},
+		{name: "the Python edge back in the prove harness", file: proveScriptName, want: "bigboy-graphql-prove.sh: a line names the Python edge localhost:8000",
+			old: "  \"\"|--go-edge) EDGE_ARGS=\"-go-edge -edge-url http://traefik:3000/graphql\"", new: "  \"\") EDGE_ARGS=\"-edge-url http://localhost:8000/graphql\""},
+		{name: "the api container back in the log checks", file: logChecksScriptName, want: "bigboy-log-checks.sh: a line names the Python api container",
+			old: "codes=$(for c in $NAMES;", new: "a=$(ip dev-health-api-1); [ -n \"$a\" ] && chk dev-health-api-1 $a:8000/ready\ncodes=$(for c in $NAMES;"},
 	} {
 		t.Run(plant.name, func(t *testing.T) {
-			if strings.Count(clean[plant.file], plant.old) != 1 {
-				t.Fatalf("the text to change is in %s %d times, want once: the plant is not valid", plant.file, strings.Count(clean[plant.file], plant.old))
-			}
 			planted := map[string]string{}
 			for name, text := range clean {
 				planted[name] = text
 			}
-			planted[plant.file] = strings.Replace(clean[plant.file], plant.old, plant.new, 1)
+			if plant.compose != nil {
+				planted[plant.file] = plantCompose(t, clean[plant.file], plant.compose)
+			} else {
+				if strings.Count(clean[plant.file], plant.old) != 1 {
+					t.Fatalf("the text to change is in %s %d times, want once: the plant is not valid", plant.file, strings.Count(clean[plant.file], plant.old))
+				}
+				planted[plant.file] = strings.Replace(clean[plant.file], plant.old, plant.new, 1)
+			}
 			findings, err := goOnlyFindings(planted)
 			if err != nil {
 				t.Fatalf("the planted files do not read: %v", err)

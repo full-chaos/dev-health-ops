@@ -83,7 +83,7 @@ func cutUpList(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("read bigboy-cut.sh: %v", err)
 	}
-	pattern := regexp.MustCompile(`stack\.sh" up ((?:go-[a-z-]+ ?)+)`)
+	pattern := regexp.MustCompile(`up -d --no-deps --no-build ((?:go-[a-z-]+ ?)+)`)
 	var found []string
 	for _, line := range strings.Split(string(raw), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") {
@@ -107,7 +107,7 @@ func TestEveryQueueOfTheBaseComposeHasAWorkerOnBigboy(t *testing.T) {
 	if len(baseQueues) == 0 {
 		t.Fatalf("no `--queues=` service found in ops/compose.yml: the derivation is empty, so it proves nothing")
 	}
-	override := queueServices(t, filepath.Join(toolsDir(t), "compose.bigboy.workers.yml"))
+	override := queueServices(t, filepath.Join(toolsDir(t), composeName))
 	served := map[string]bool{}
 	for _, queue := range union(override) {
 		served[queue] = true
@@ -119,18 +119,18 @@ func TestEveryQueueOfTheBaseComposeHasAWorkerOnBigboy(t *testing.T) {
 		}
 	}
 	if len(missing) != 0 {
-		t.Fatalf("queues of ops/compose.yml with no worker service in ci/bigboy/compose.bigboy.workers.yml: %v (base queues %v)", missing, baseQueues)
+		t.Fatalf("queues of ops/compose.yml with no worker service in ci/bigboy/compose.bigboy.yml: %v (base queues %v)", missing, baseQueues)
 	}
 }
 
 func TestEveryQueueServingBigboyServiceIsInTheCutUpList(t *testing.T) {
-	override := queueServices(t, filepath.Join(toolsDir(t), "compose.bigboy.workers.yml"))
+	override := queueServices(t, filepath.Join(toolsDir(t), composeName))
 	if len(override) == 0 {
-		t.Fatalf("no `--queues=` service in ci/bigboy/compose.bigboy.workers.yml: the derivation is empty")
+		t.Fatalf("no `--queues=` service in ci/bigboy/compose.bigboy.yml: the derivation is empty")
 	}
 	upList := cutUpList(t)
 	if len(upList) == 0 {
-		t.Fatalf("no worker `stack.sh up` line found in bigboy-cut.sh")
+		t.Fatalf("no worker `up -d --no-deps --no-build` line found in bigboy-cut.sh")
 	}
 	inList := map[string]bool{}
 	for _, name := range upList {
@@ -164,53 +164,49 @@ func bigboyCutLines(t *testing.T) []string {
 	return lines
 }
 
-// The test reads ci/bigboy/compose.bigboy.workers.yml, so the cut must run THAT file: the `stack` set of
-// stack.files (which the cut runs through stack.sh) names it as a tools file, and the cut no longer names the
-// untracked host copy (compose/compose.bigboy.workers.yml) that this change replaced.
-func TestTheCutRunsTheTrackedWorkersOverlay(t *testing.T) {
+// The cut runs the one tracked compose file and no longer names the untracked host copy
+// (compose/compose.bigboy.workers.yml) the tracked worker plane replaced.
+func TestTheCutRunsTheTrackedComposeFile(t *testing.T) {
 	const hostCopy = "compose/compose.bigboy.workers.yml"
 	for _, line := range bigboyCutLines(t) {
 		if strings.Contains(line, hostCopy) {
 			t.Errorf("bigboy-cut.sh still names the untracked host copy %s: %s", hostCopy, line)
 		}
 	}
-	named := false
-	for _, line := range strings.Split(read(t, filepath.Join(toolsDir(t), "stack.files")), "\n") {
-		if strings.TrimSpace(line) == "stack tools    compose.bigboy.workers.yml" {
-			named = true
-		}
-	}
-	if !named {
-		t.Errorf("the `stack` set of stack.files does not name compose.bigboy.workers.yml as a tools file")
-	}
-	if !strings.Contains(strings.Join(bigboyCutLines(t), "\n"), `"$HERE/stack.sh"`) {
-		t.Errorf("bigboy-cut.sh does not run through stack.sh")
+	if !strings.Contains(strings.Join(bigboyCutLines(t), "\n"), `-f "$HERE/compose.bigboy.yml"`) {
+		t.Errorf("bigboy-cut.sh does not run compose.bigboy.yml")
 	}
 }
 
 // Every override service runs the CI operator digest and never a local build: the cut recreates the plane from
 // CI digests (Trap #420), and one service on a local tag would be the 09-20 local build again.
 func TestEveryBigboyWorkerServiceRunsTheCIOperatorImage(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(toolsDir(t), "compose.bigboy.workers.yml"))
+	raw, err := os.ReadFile(filepath.Join(toolsDir(t), composeName))
 	if err != nil {
-		t.Fatalf("read the override: %v", err)
+		t.Fatalf("read the compose file: %v", err)
 	}
 	var doc struct {
 		Services map[string]map[string]yaml.Node `yaml:"services"`
 	}
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("parse the override: %v", err)
+		t.Fatalf("parse the compose file: %v", err)
 	}
-	if len(doc.Services) == 0 {
-		t.Fatalf("no service in the override: the check proves nothing")
+	upList := cutUpList(t)
+	if len(upList) == 0 {
+		t.Fatalf("the cut's worker up list is empty: the check proves nothing")
 	}
-	for name, service := range doc.Services {
-		image, ok := service["image"]
-		if !ok || image.Value != "${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}" {
+	for _, name := range upList {
+		service, ok := doc.Services[name]
+		if !ok {
+			t.Errorf("the cut starts %s, which compose.bigboy.yml does not define", name)
+			continue
+		}
+		image := service["image"]
+		if image.Value != "${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}" {
 			t.Errorf("service %s image = %q, want the required ${BIGBOY_OPERATOR_IMAGE}", name, image.Value)
 		}
-		if build, ok := service["build"]; !ok || build.Tag != "!reset" {
-			t.Errorf("service %s does not reset the base build (`build: !reset null`): a local build would replace the CI image", name)
+		if _, hasBuild := service["build"]; hasBuild {
+			t.Errorf("service %s has a build: a local build would replace the CI image", name)
 		}
 	}
 }
@@ -271,9 +267,9 @@ func TestTheBigboyHeavyWorkerKeepsTheBaseHeavyCommand(t *testing.T) {
 	if len(base) == 0 {
 		t.Fatalf("no base service with --worker-group=heavy in ops/compose.yml: the derivation is empty")
 	}
-	override := serviceByWorkerGroup(t, filepath.Join(toolsDir(t), "compose.bigboy.workers.yml"), "heavy")
+	override := serviceByWorkerGroup(t, filepath.Join(toolsDir(t), composeName), "heavy")
 	if len(override) == 0 {
-		t.Fatalf("no heavy worker in ci/bigboy/compose.bigboy.workers.yml")
+		t.Fatalf("no heavy worker in ci/bigboy/compose.bigboy.yml")
 	}
 	overrideByName := map[string]string{}
 	for _, argument := range override {
@@ -299,14 +295,14 @@ func TestTheBigboyHeavyWorkerKeepsTheBaseHeavyCommand(t *testing.T) {
 // investment.materialize) and on no other service, in the base file and in the bigboy overlay. Every worker
 // reads ops/.env, so the names must also stay out of the shared env files of the services.
 func TestTheShadowSwitchAndTheTypeSafeKeyReachOnlyTheHeavyWorker(t *testing.T) {
-	for _, path := range []string{filepath.Join(opsRoot(t), "compose.yml"), filepath.Join(toolsDir(t), "compose.bigboy.workers.yml")} {
+	for _, path := range []string{filepath.Join(opsRoot(t), "compose.yml"), filepath.Join(toolsDir(t), composeName)} {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		var doc struct {
 			Services map[string]struct {
-				Environment map[string]any `yaml:"environment"`
+				Environment environment `yaml:"environment"`
 			} `yaml:"services"`
 		}
 		if err := yaml.Unmarshal(raw, &doc); err != nil {

@@ -14,8 +14,8 @@ OP=ghcr.io/full-chaos/dev-health-go-operator@$(docker buildx imagetools inspect 
 HERE=$(cd "$(dirname "$0")" && pwd)
 cd "$R"   # compose project root (bigboy-cut.sh runs from here too)
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
-unset $(compgen -e | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
-DC=(docker compose -p dev-health --project-directory "$R" --env-file "$R/ops/.env" --env-file "$R/_records/bigboy-pins.env" -f "$HERE/compose.bigboy.yml")
+unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
+DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/bigboy-pins.env -f "$HERE/compose.bigboy.yml")
 export HOOK_OPERATOR_IMAGE=$OP   # an image reference, not a credential
 export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-$OP}"
 HC=("${DC[@]}" --profile venue run --rm --no-deps -T venue-hook)

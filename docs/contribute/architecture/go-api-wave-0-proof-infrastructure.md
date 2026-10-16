@@ -604,7 +604,7 @@ appear here.
 ### Where `bigboy-cut.sh` finds its tools and its tree (CHAOS-7135)
 
 `ci/bigboy/bigboy-cut.sh` separates the two: `BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the
-running tree the cut acts on (`_records/compose.bigboy.images.yml`, `_records/`, `ops/.env`), and the
+running tree the cut acts on (`_records/bigboy-pins.env`, `_records/`, `ops/.env`), and the
 tools (the sibling `bigboy-repin.sh`, `bigboy-repin-web.sh`, the check scripts) come from
 `BIGBOY_TOOLS_DIR`, which defaults to the directory the script itself runs from. A cut launched from
 a git worktree therefore needs no `ci/bigboy` symlink under the root; set `BIGBOY_TOOLS_DIR` only to
@@ -614,7 +614,7 @@ the cut refuses a tools directory that is not one (`is not a directory`, or no `
 ### go-api's ClickHouse login on bigboy (CHAOS-7162)
 
 `dho_api_ch` is declared to ClickHouse as a `users.d` file, not created inside the running container: the
-compose overlay `ci/bigboy/compose.bigboy.clickhouse-users.yml` mounts the host file `DHO_API_CH_USERS_XML`
+compose file `ci/bigboy/compose.bigboy.yml` mounts the host file `DHO_API_CH_USERS_XML`
 (default `$BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml`) read-only at
 `/etc/clickhouse-server/users.d/dho_api_ch.xml`, so recreating the ClickHouse container no longer loses the
 user (a recreate that did, after the login was `docker cp`ed in, is what made go-api fail every ClickHouse call

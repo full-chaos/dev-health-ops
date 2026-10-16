@@ -40,17 +40,24 @@ _MIGRATE_MARKER = "--no-deps migrate"  # the compose command line of the migrate
 
 
 def _build_bigboy_root(tmp_path: Path) -> Path:
-    """A minimal but real-shaped bigboy tree: the compose file repin.sh reads/rewrites, and an
+    """A minimal but real-shaped bigboy tree: the pins file repin.sh reads/rewrites, and an
     old cut's _records dir with the one file repin.sh's own sed lines name explicitly."""
     root = tmp_path / "bigboy-root"
     root.mkdir()
     compose_dir = root / "_records"
     compose_dir.mkdir()
+    var = {
+        "dev-health-go-dho": "BIGBOY_DHO_IMAGE",
+        "dev-health-go-api-tools": "BIGBOY_API_TOOLS_IMAGE",
+        "dev-health-go-operator": "BIGBOY_OPERATOR_IMAGE",
+    }
     lines = [
-        f"      image: ghcr.io/full-chaos/{name}@{_OLD_DIGEST}\n" for name in _IMAGES
+        f"{var[name]}=ghcr.io/full-chaos/{name}@{_OLD_DIGEST}\n" for name in _IMAGES
     ]
-    lines.append(f"      image: ghcr.io/full-chaos/dev-health-web@{_WEB_OLD_DIGEST}\n")
-    (compose_dir / "compose.bigboy.images.yml").write_text("".join(lines))
+    lines.append(
+        f"BIGBOY_WEB_IMAGE=ghcr.io/full-chaos/dev-health-web@{_WEB_OLD_DIGEST}\n"
+    )
+    (compose_dir / "bigboy-pins.env").write_text("".join(lines))
     (root / "ops").mkdir()
     (root / "ops" / ".env").write_text("")
     old_records = root / "_records" / f"bigboy-{_OLD8}"
@@ -208,7 +215,7 @@ def test_every_compose_file_the_cut_exports_resolves_without_ci_under_the_root(
     """CHAOS-7135: the cut runs docker compose from the root, so a relative COMPOSE_FILE entry is
     resolved against the root; an entry that names a tools file must therefore be absolute (from
     the tools directory), or a root with no ci/bigboy fails every compose call. The stub docker
-    records the -f chain stack.sh hands compose; every entry must exist, with the root holding the
+    records the -f the cut hands compose; every entry must exist, with the root holding the
     compose files a real root holds and nothing under ci/."""
     root = _build_bigboy_root(tmp_path)
     log = tmp_path / "compose-file.log"

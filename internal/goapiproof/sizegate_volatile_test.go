@@ -143,23 +143,6 @@ func runStochasticDocRoute(t *testing.T, candidate, reference string) ([]Outcome
 	return outcomes, err
 }
 
-// A declared volatile subtree is not compared, so a list inside it sharing no id between the legs is not a structural refusal.
-func TestStructuralAgreementSkipsDeclaredVolatileLists(t *testing.T) {
-	baseline, candidate := decodedPair(t,
-		`{"data":{"root":{"note":"same","drawn":[{"id":"b"},{"id":"c"}]}}}`, `{"data":{"root":{"note":"same","drawn":[{"id":"a"}]}}}`)
-	opts := Options{VolatileFields: map[string]string{"data.root.drawn": "drawn per request"}}
-	if result := Compare(baseline, candidate, opts); result.StructuralRefusal != "" {
-		t.Fatalf("disjoint ids inside a declared volatile list refused the pair: %q %s", result.StructuralRefusal, result.StructuralDetail)
-	}
-	if result := Compare(baseline, candidate, Options{}); result.StructuralRefusal != RefusalLegsDoNotOverlap {
-		t.Fatalf("without the declaration the disjoint ids must still refuse: %q", result.StructuralRefusal)
-	}
-	stable := Options{VolatileFields: map[string]string{"data.root.other": "x"}}
-	if result := Compare(baseline, candidate, stable); result.StructuralRefusal != RefusalLegsDoNotOverlap {
-		t.Fatalf("a volatile declaration elsewhere must not excuse the list: %q", result.StructuralRefusal)
-	}
-}
-
 // Declaring a subtree and a path inside it must not take the inner bytes out twice.
 func TestSizeGateCountsOverlappingVolatilePathsOnce(t *testing.T) {
 	drawn := `"drawn":{"n":"` + strings.Repeat("v", 300) + `"}`

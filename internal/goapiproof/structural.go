@@ -96,10 +96,6 @@ const (
 // whichever identity a list resolves, not a new, separate rule. A list
 // with no resolvable identity keeps today's exact positional walk.
 func structuralAgreementFailure(baseline, candidate any, path string, opts Options) (reason, detail string) {
-	// A declared volatile subtree is not compared, so which entities it holds on each leg is no structural signal either.
-	if _, volatile := opts.VolatileFields[tieredPath(path)]; volatile {
-		return "", ""
-	}
 	baselineMap, baselineIsMap := baseline.(map[string]any)
 	candidateMap, candidateIsMap := candidate.(map[string]any)
 	if baselineIsMap && candidateIsMap {

@@ -43,12 +43,19 @@ type PointTrajectory struct {
 type Point struct {
 	EntityID     string            `json:"entity_id"`
 	EntityLabel  string            `json:"entity_label"`
-	X            float64           `json:"x"`
-	Y            float64           `json:"y"`
+	X            *float64          `json:"x" pyjson:"nullable"`
+	Y            *float64          `json:"y" pyjson:"nullable"`
 	WindowStart  string            `json:"window_start"`
 	WindowEnd    string            `json:"window_end"`
 	EvidenceLink string            `json:"evidence_link"`
 	Trajectory   []PointTrajectory `json:"trajectory" pyjson:"nullable"`
+	// NoData is Go-only (CHAOS-9815; the Python reference never served it) and
+	// last, so the frozen key order is kept. It is true, and x and y are null,
+	// for a team in scope that has no point in the window: no work, or only one
+	// axis. The point says "no data in this window", never a zero. The key is
+	// absent on every plotted point, so a plotted point's bytes are the ones
+	// Python serves.
+	NoData bool `json:"no_data,omitempty"`
 }
 
 // Annotation is the wire shape of QuadrantAnnotation (schemas.py:536-540).
@@ -456,13 +463,19 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		points = append(points, Point{
 			EntityID:     entityID,
 			EntityLabel:  window.Label,
-			X:            window.X,
-			Y:            window.Y,
+			X:            &window.X,
+			Y:            &window.Y,
 			WindowStart:  window.WindowStart.Format("2006-01-02"),
 			WindowEnd:    window.WindowEnd.Format("2006-01-02"),
 			EvidenceLink: evidenceLink(definition.EvidenceMetric),
 			Trajectory:   trajectory,
 		})
+	}
+	if scope == "team" {
+		var err error
+		if points, err = withCatalogTeams(ctx, client, orgID, selected.teams, points, startDay, endDay, evidenceLink(definition.EvidenceMetric)); err != nil {
+			return nil, err
+		}
 	}
 	slog.Debug("quadrant: points aggregate the whole window",
 		"org_id", orgID, "type", definition.Type, "scope", scope, "bucket", params.Bucket,

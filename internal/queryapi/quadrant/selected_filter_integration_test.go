@@ -36,6 +36,8 @@ func seedSelectedFilterWorld(ctx context.Context, t *testing.T) (conn any, run f
 		org, selRepoOwned, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), synced)
 	// Team-grain rows for two teams.
 	for _, team := range []string{"team-alpha", "team-beta"} {
+		crossorg.Exec(ctx, t, admin, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider) VALUES (?, generateUUIDv4(), ?, [], [], [], 1, ?, ?, ?, 'github')`,
+			team, team, synced, synced, org)
 		crossorg.Exec(ctx, t, admin, `INSERT INTO user_metrics_daily (org_id, repo_id, day, author_email, identity_id, team_id, loc_touched, computed_at) VALUES (?, ?, ?, ?, ?, ?, 10, now())`,
 			org, selRepoOther, day, team+"@x", team+"@x", team)
 		crossorg.Exec(ctx, t, admin, `INSERT INTO work_item_metrics_daily (org_id, day, provider, work_scope_id, team_id, items_completed, wip_count_end_of_day, computed_at) VALUES (?, ?, 'github', 's', ?, 3, 2, now())`, org, day, team)

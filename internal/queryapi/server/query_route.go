@@ -5803,9 +5803,6 @@ type queryRouteHandlers struct {
 	// gqlgen server, ClickHouse client and routing rows. Mounted only on
 	// Plane.MCPHandler, which only the MCP listener serves.
 	MCP http.Handler
-	// MCPProof is the proof variant of MCP (CHAOS-7214): POST /query/proof-mcp,
-	// mounted only by mountProofMCPRoute and only on Plane.InternalHandler.
-	MCPProof http.Handler
 	// Probes are /query's live dependency checks, one per dependency class, in the
 	// order readinessCheck runs them. dho query-api registers each as its own
 	// required readiness check, so the operator /readyz names the failing class
@@ -5901,8 +5898,6 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: build the MCP caller-class ClickHouse client: %w", err)
 	}
 	mcpHandler := newMCPHandler(mcpClient, pgPool, classSwitch, getenv)
-	// CHAOS-7214: the proof variant over a switch that also admits shadow rows.
-	mcpProofHandler := newMCPProofHandler(mcpHandler, routeswitch.NewClassDecisionProofSwitch(pgPool, mcpRoutingDigests()), verifier, newProofOrgAllowed(pgPool))
 	handlers := queryRouteHandlers{
 		Query:      handler,
 		Proof:      proofHandler,
@@ -5910,7 +5905,6 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		Registry:   registryHandler,
 		BuildInfo:  newBuildInfoHandler(verifier),
 		MCP:        mcpHandler,
-		MCPProof:   mcpProofHandler,
 		Probes:     readinessProbes(chClient, pgPool, verifier, posture),
 	}
 	// The one registry pool, for Build's edge users check (CHAOS-6290). Set outside the

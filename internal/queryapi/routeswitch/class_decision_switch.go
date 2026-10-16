@@ -25,14 +25,6 @@ var reachableModes = map[string]bool{
 	"primary": true,
 }
 
-// proofReachableModes adds shadow for the measurement-only proof route, which a real request never reaches.
-// disabled and python stay dark there too: they are decisions, not "awaiting measurement".
-var proofReachableModes = map[string]bool{
-	"canary":  true,
-	"primary": true,
-	"shadow":  true,
-}
-
 type registryReader interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
@@ -58,11 +50,6 @@ func newClassDecisionSwitch(pool *pgxpool.Pool, operations map[string]string, re
 // NewClassDecisionSwitch serves canary and primary decisions.
 func NewClassDecisionSwitch(pool *pgxpool.Pool, operations map[string]string) *ClassDecisionSwitch {
 	return newClassDecisionSwitch(pool, operations, reachableModes)
-}
-
-// NewClassDecisionProofSwitch also serves shadow decisions: the measurement-only proof route.
-func NewClassDecisionProofSwitch(pool *pgxpool.Pool, operations map[string]string) *ClassDecisionSwitch {
-	return newClassDecisionSwitch(pool, operations, proofReachableModes)
 }
 
 const classDecisionModeSQL = `SELECT mode FROM go_api_class_decision WHERE operation = $1`

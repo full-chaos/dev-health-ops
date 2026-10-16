@@ -57,6 +57,10 @@ func TestAPISettingsResolution(t *testing.T) {
 		{name: "present blank origin list", env: map[string]string{"CORS_ALLOWED_ORIGINS": "   "}, address: ":8000", origins: []string{}},
 		{name: "blank address falls back to the default", env: map[string]string{"DEV_HEALTH_API_ADDR": "  "}, address: ":8000", origins: []string{"http://localhost:3000"}},
 		{name: "star kept verbatim", env: map[string]string{"CORS_ALLOWED_ORIGINS": "*"}, address: ":8000", origins: []string{"*"}},
+		{name: "jwt issuer present empty", env: map[string]string{"JWT_ISSUER": ""}, err: "JWT_ISSUER"},
+		{name: "jwt issuer present blank", env: map[string]string{"JWT_ISSUER": "  "}, err: "JWT_ISSUER"},
+		{name: "jwt audience present empty", env: map[string]string{"JWT_AUDIENCE": ""}, err: "JWT_AUDIENCE"},
+		{name: "jwt audience present blank", env: map[string]string{"JWT_AUDIENCE": "\t"}, err: "JWT_AUDIENCE"},
 		{name: "not host:port", env: map[string]string{"DEV_HEALTH_API_ADDR": "8000"}, err: "DEV_HEALTH_API_ADDR"},
 		{name: "same as operator listener", env: map[string]string{"DEV_HEALTH_API_ADDR": ":8080"}, err: "must differ"},
 		{name: "same explicit operator listener", env: map[string]string{"DEV_HEALTH_API_ADDR": "127.0.0.1:7000", "DEV_HEALTH_HTTP_ADDR": "127.0.0.1:7000"}, err: "must differ"},
@@ -86,6 +90,28 @@ func TestAPISettingsResolution(t *testing.T) {
 			}
 			if !found {
 				t.Fatal("SafeAttrs must report the api address")
+			}
+		})
+	}
+}
+
+func TestAPIJWTClaimSettings(t *testing.T) {
+	cases := []struct {
+		name             string
+		env              map[string]string
+		issuer, audience string
+	}{
+		{name: "absent uses defaults", env: map[string]string{}, issuer: "dev-health-ops", audience: "dev-health-api"},
+		{name: "set values kept", env: map[string]string{"JWT_ISSUER": "iss-x", "JWT_AUDIENCE": "aud-x"}, issuer: "iss-x", audience: "aud-x"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := Load(Spec{Service: APIServiceName, LookupEnv: lookupFrom(test.env)})
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.APIJWTIssuer != test.issuer || cfg.APIJWTAudience != test.audience {
+				t.Fatalf("got %q %q, want %q %q", cfg.APIJWTIssuer, cfg.APIJWTAudience, test.issuer, test.audience)
 			}
 		})
 	}

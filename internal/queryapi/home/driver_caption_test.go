@@ -136,3 +136,50 @@ func TestBuildResponseServesTheDriverCaptionFromOneBatchedRead(t *testing.T) {
 		t.Errorf("the churn signal was not in the response")
 	}
 }
+
+// The caption is a decoration of a signal that is right without it: a failed
+// batched read (or a failed scope read for it) leaves the captions out, logged,
+// and never fails the request (REST Home shares the builder and does not serve
+// the field).
+func TestBuildResponseSurvivesAFailedDriverCaptionRead(t *testing.T) {
+	base := orgGoldenHandler(t)
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, q string, b []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(q, "UNION ALL") && strings.Contains(q, "LIMIT {limit:UInt32} BY metric") {
+			return nil, fmt.Errorf("simulated driver-caption read outage")
+		}
+		return base(t, q, b)
+	}}
+	resp, err := BuildResponse(context.Background(), client, nil, "org-1", Filters{
+		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
+		Scope: ScopeFilter{Level: "org"},
+	}, time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("a failed caption read failed the request: %v", err)
+	}
+	if len(resp.Signals) == 0 {
+		t.Fatal("no signals")
+	}
+	for _, s := range resp.Signals {
+		if s.Driver != nil {
+			t.Errorf("signal %s carries the caption %q after a failed read", s.ID, *s.Driver)
+		}
+	}
+}
+
+// A stored display name can hold a line break or runs of spaces: the caption is
+// one line, so names are collapsed to single spaces and an empty one is dropped.
+func TestDriverNamesAreCollapsedToOneLine(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, q string, b []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		switch {
+		case strings.Contains(q, "FROM repos FINAL"):
+			return &fixtureRowScanner{rows: [][]any{{"r1", "Team A\nTeam  B"}, {"r2", " \n "}, {"r3", "Plain"}}}, nil
+		}
+		t.Fatalf("unexpected query:\n%s", q)
+		return nil, nil
+	}}
+	got := driverNamesByMetric(context.Background(), client, "org-1", map[string][]driverRow{"churn": {{ID: "r1"}, {ID: "r2"}, {ID: "r3"}}})
+	caption := driverCaption("Code Churn", got["churn"])
+	if caption == nil || *caption != "Code Churn appears to have moved most in Team A Team B and Plain." {
+		t.Errorf("caption = %v, names %q", caption, got["churn"])
+	}
+}

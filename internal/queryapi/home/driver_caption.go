@@ -142,7 +142,8 @@ func driverNamesByMetric(ctx context.Context, client QueryClient, orgID string, 
 		seen := map[string]bool{}
 		for _, row := range rows {
 			name, ok := nameByKind[kind][row.ID]
-			if !ok || seen[name] {
+			name = strings.Join(strings.Fields(name), " ")
+			if !ok || name == "" || seen[name] {
 				continue
 			}
 			seen[name] = true

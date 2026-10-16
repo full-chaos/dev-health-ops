@@ -361,3 +361,77 @@ func TestSharedProviderSpanCarriesTheOpsRole(t *testing.T) {
 		t.Fatalf("span attributes = %v", attrs)
 	}
 }
+
+// Named change: the shared client reads any 2xx answer; the ops port
+// refused every status but 200 (a 201 with a valid body was a failure).
+func TestSharedOpenAIReadsEvery2xxAnswer(t *testing.T) {
+	body := `{"output_text":"{\"ok\":true}","usage":{"input_tokens":3,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`
+	for _, status := range []int{http.StatusOK, http.StatusCreated, http.StatusAccepted} {
+		server, calls := statusOnce(t, status, body)
+		shared, err := NewSharedProvider(SharedProviderConfig{Kind: ProviderKindOpenAI, APIKey: secrets.NewHidden("test-key-value"), BaseURL: server.URL, Model: "gpt-5-nano"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := shared.Complete(context.Background(), CategorizationRequest("p"))
+		if err != nil || result.Text != `{"ok":true}` || *calls != 1 {
+			t.Fatalf("status %d: result %q err %v calls %d, want the answer read once", status, result.Text, err, *calls)
+		}
+
+		oldServer, _ := statusOnce(t, status, body)
+		old := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden("test-key-value"), BaseURL: oldServer.URL, Model: "gpt-5-nano"})
+		_, oldErr := old.Complete(context.Background(), CategorizationRequest("p"))
+		if (oldErr == nil) != (status == http.StatusOK) {
+			t.Fatalf("status %d: ops port err %v, recorded as failing every status but 200", status, oldErr)
+		}
+	}
+}
+
+// Named change: a truncated answer is retried with a cap that never drops
+// below the first attempt's. The ops port capped the retry at 8192 even when
+// the first attempt asked for more. No production builder sets a provider
+// floor above the request floors (2048 / 4096), so the first attempt is at
+// most 4096 and both retry at 8192 there.
+func TestSharedOpenAITruncationRetryNeverLowersTheCap(t *testing.T) {
+	truncated := sharedSyncStep{Status: 200, Body: `{"incomplete_details":{"reason":"max_output_tokens"}}`}
+	answered := sharedSyncStep{Status: 200, Body: `{"output_text":"{\"ok\":true}"}`}
+	caps := func(bodies []string) []int {
+		var out []int
+		for _, raw := range bodies {
+			var body struct {
+				MaxOutputTokens int `json:"max_output_tokens"`
+			}
+			_ = json.Unmarshal([]byte(raw), &body)
+			out = append(out, body.MaxOutputTokens)
+		}
+		return out
+	}
+	for _, c := range []struct {
+		floor           int
+		shared, opsPort [2]int
+	}{
+		{0, [2]int{2048, 4096}, [2]int{2048, 4096}},
+		{4096, [2]int{4096, 8192}, [2]int{4096, 8192}},
+		{10_000, [2]int{10_000, 10_000}, [2]int{10_000, 8192}},
+	} {
+		server, sent := scriptedSyncServer(t, []sharedSyncStep{truncated, answered})
+		shared, err := NewSharedProvider(SharedProviderConfig{Kind: ProviderKindOpenAI, APIKey: secrets.NewHidden("test-key-value"), BaseURL: server.URL, Model: "gpt-5-nano", MaxOutputTokens: c.floor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := shared.Complete(context.Background(), CategorizationRequest("p")); err != nil {
+			t.Fatal(err)
+		}
+		if got := caps(sent()); len(got) != 2 || got[0] != c.shared[0] || got[1] != c.shared[1] {
+			t.Fatalf("floor %d: shared caps %v, want %v", c.floor, got, c.shared)
+		}
+
+		oldServer, oldSent := scriptedSyncServer(t, []sharedSyncStep{truncated, answered})
+		old := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden("test-key-value"), BaseURL: oldServer.URL, Model: "gpt-5-nano", MaxOutputTokens: c.floor})
+		if _, err := old.Complete(context.Background(), CategorizationRequest("p")); err != nil {
+			t.Fatal(err)
+		}
+		if got := caps(oldSent()); len(got) != 2 || got[0] != c.opsPort[0] || got[1] != c.opsPort[1] {
+			t.Fatalf("floor %d: ops port caps %v, recorded as %v", c.floor, got, c.opsPort)
+		}
+	}
+}

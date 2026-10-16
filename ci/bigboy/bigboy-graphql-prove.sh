@@ -18,7 +18,7 @@
 #      for the local org -- read-only against the org's data; it writes proof receipts
 #      only. Both credentials are minted IN PROCESS by prove itself: the envelope key is
 #      loaded from the mounted key file into the process env inside the container, the
-#      edge-token key comes from compose substitution (compose.bigboy.prove.yml). No
+#      edge-token key comes from compose substitution (compose.bigboy.yml, venue-prove). No
 #      credential is printed, written to a file, or put on argv;
 #
 # The local org id is derived at run time from Postgres (the single org of the local
@@ -42,27 +42,32 @@ st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 fail=0
 mkdir -p "$OUT/proof/bodies"; chmod 0755 "$OUT" "$OUT/proof" "$OUT/proof/bodies"
 cd "$R"
-export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE   # CHAOS-8693: the chain, project, env file and profile come from ci/bigboy/stack.files
+export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
+unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
+DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
 
 # 1. prover build == candidate build
 want=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-go-api-tools:sha-$S7" --format '{{json .Manifest}}' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null)
-pinned=$(awk '/^  venue-prove:/{f=1} f&&/image:/{sub(/.*@/,""); print; exit}' _records/compose.bigboy.images.yml)
+pinned=$(grep -oE 'dev-health-go-api-tools@sha256:[0-9a-f]{64}' _records/images.env | head -1 | cut -d@ -f2)   # venue-prove runs ${BIGBOY_API_TOOLS_IMAGE}
 if [ -n "$want" ] && [ "$want" = "$pinned" ]; then st prover-image 0; else
   st prover-image 1; echo "REFUSED: venue-prove image ${pinned:-<none>} is not go-api-tools:sha-$S7 (${want:-unresolved}) -- re-pin before proving" >&2; exit 1; fi
 
 # 2. local org (read-only), exactly one
-PROVE_ORG=$("$HERE/stack.sh" -s prove-base exec postgres psql -U devhealth -d devhealth -X -q -tA -v ON_ERROR_STOP=1 \
+PROVE_ORG=$("${DC[@]}" --profile venue exec -T postgres psql -U devhealth -d devhealth -X -q -tA -v ON_ERROR_STOP=1 \
   -v email="$LOCAL_ADMIN_EMAIL" <<'SQL' 2>/dev/null
 SELECT DISTINCT m.org_id FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = :'email';
 SQL
 )
 if [ "$(printf '%s\n' "$PROVE_ORG" | grep -c .)" != 1 ]; then st local-org 1; echo "REFUSED: the local admin account must belong to exactly one org" >&2; exit 1; fi
 st local-org 0; export PROVE_ORG PROVE_ARTIFACT_DIR="$OUT/proof"
+# compose reads JWT_SECRET_KEY for venue-prove with an empty default (a `:?` would fail every other command: compose interpolates
+# inactive profiles too), so the script refuses here, by NAME only, when ops/.env carries no value for it
+grep -q '^JWT_SECRET_KEY=.' "$R/ops/.env" || { st jwt-secret 1; echo "REFUSED: JWT_SECRET_KEY has no value in ops/.env (the prover mints the edge access token with it)" >&2; exit 1; }
 
 U="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo"
 
 # 2. prove. The key file is loaded into THIS process's env inside the container only.
-"$HERE/stack.sh" -s prove run venue-prove \
+"${DC[@]}" --profile venue run --rm --no-deps -T venue-prove \
   "GO_API_ENVELOPE_PRIVATE_KEY=\"\$(cat /keys/envelope.pem)\" dho goapi prove $U $EDGE_ARGS \
    -documents /app/go-api/documents.json -org \"\$PROVE_ORG\" -artifact-dir /proof/bodies -key-id $KEY_ID -candidate-build $NEW \
    -recorded-by bigboy-graphql-prove \

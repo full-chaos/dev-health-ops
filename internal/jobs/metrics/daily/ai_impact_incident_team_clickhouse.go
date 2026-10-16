@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
 // The readers below give ai_impact the facts it needs to count an incident
@@ -150,7 +151,11 @@ ORDER BY provider, native_team_key, id`, organizationID)
 		return nil, fmt.Errorf("load ai impact teams by native key: %w", err)
 	}
 	defer rows.Close()
-	result := make(map[AIImpactProviderTeamRef][]string)
+	type catalogRow struct {
+		ref AIImpactProviderTeamRef
+		id  string
+	}
+	var catalogRows []catalogRow
 	for rows.Next() {
 		var provider, id string
 		var key *string
@@ -158,12 +163,19 @@ ORDER BY provider, native_team_key, id`, organizationID)
 			return nil, fmt.Errorf("scan ai impact team native key: %w", err)
 		}
 		if key != nil {
-			ref := AIImpactProviderTeamRef{Provider: provider, Ref: *key}
-			result[ref] = append(result[ref], id)
+			catalogRows = append(catalogRows, catalogRow{AIImpactProviderTeamRef{Provider: provider, Ref: *key}, id})
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate ai impact team native keys: %w", err)
+	}
+	inactive, err := teamactive.LoadInactive(ctx, conn, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("load ai impact teams by native key: %w", err)
+	}
+	result := make(map[AIImpactProviderTeamRef][]string)
+	for _, row := range teamactive.Keep(catalogRows, inactive, func(row catalogRow) string { return row.id }) {
+		result[row.ref] = append(result[row.ref], row.id)
 	}
 	return result, nil
 }

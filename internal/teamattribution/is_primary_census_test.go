@@ -191,7 +191,13 @@ var (
 // their query groups or filters by a team. Each must still be found.
 var teamGroupedReaderAllowlist = map[string]string{
 	"internal/queryapi/workgraph\x00resolveWorkUnitTeamAttributions": workUnitVoteReason,
+	"internal/jobs/metrics/daily\x00aiImpactPullRequestOwnerSQL":     incidentOwnerReason,
 }
+
+// incidentOwnerReason: an incident counts once, for one team (D6040); the team
+// that owned the triggering pull request is the primary team of its linked
+// issue, so a co-owner team is not a second owner of the incident.
+const incidentOwnerReason = "ai_impact incident attribution: one team per incident (D6040), the primary team of the triggering pull request's linked issue; a co-owner team does not take a share of the incident"
 
 // workUnitVoteReason: investment and work-unit views follow one team per work
 // unit (the vote over the items' primary rows) until the team-set rollup

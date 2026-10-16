@@ -113,6 +113,8 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 		"work_item_measure_capability": `INSERT INTO work_item_measure_capability (org_id, provider, measure, tracked, window_end, computed_at) VALUES (?, 'jira', 'story_points_completed', 1, today(), now64(3))`,
 		// The daily change-failure counts (CHAOS-8981, migration 112).
 		"repo_change_failure_daily": `INSERT INTO repo_change_failure_daily (org_id, repo_id, day, deployments_count, computed_at) VALUES (?, generateUUIDv4(), today(), 1, now64(3))`,
+		// The issue size of each work unit (CHAOS-9807, migration 130).
+		"work_unit_issue_size": `INSERT INTO work_unit_issue_size (org_id, work_unit_id, issue_size, sized_issue_count, issue_count, categorization_run_id, computed_at) VALUES (?, 'wu-1', 3, 1, 1, 'run-1', now64(3))`,
 	}
 	for _, org := range []uuid.UUID{targetOrgID, controlOrgID} {
 		for table, insert := range shadowTables {

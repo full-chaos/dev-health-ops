@@ -5,6 +5,7 @@ package externalurl
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -145,25 +146,73 @@ func pythonIPNotGlobalTarget(addr netip.Addr) bool {
 func GuardedTransport() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
-	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: refuseInternalAddress}
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: refuseInternalAddress, Resolver: dialResolver}
 	transport.DialContext = dialer.DialContext
 	return transport
 }
+
+// dialResolver is the resolver the guarded dialer uses; nil is the system
+// resolver. A test sets it to prove a name that resolved public at check time
+// is refused when it resolves internal at dial time (DNS rebinding).
+var dialResolver *net.Resolver
 
 // errInternalDial is what a refused connection reports; it is Validate's own
 // wording for a resolved internal address.
 var errInternalDial = errors.New("Connection to private/internal networks is not allowed")
 
 // refuseInternalAddress is net.Dialer.Control: it runs on the resolved
-// address of every connection attempt, before connect.
+// address of every connection attempt, before connect. A refusal logs the
+// blocked class only, never the host or the address (a customer-supplied URL
+// can carry a name or an internal address worth keeping out of logs).
 func refuseInternalAddress(_, address string, _ syscall.RawConn) error {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
+		logRefusedDial("invalid_address")
 		return errInternalDial
 	}
 	addr, err := netip.ParseAddr(host)
-	if err != nil || pythonIPNotGlobalTarget(addr) {
+	if err != nil {
+		logRefusedDial("invalid_address")
+		return errInternalDial
+	}
+	if class := blockedAddressClass(addr); class != "" {
+		logRefusedDial(class)
 		return errInternalDial
 	}
 	return nil
 }
+
+func logRefusedDial(class string) {
+	slog.Warn("externalurl: outbound connection refused", "class", class)
+}
+
+// blockedAddressClass names why a dialled address is refused, "" when it is
+// public. The Python-parity tables (pythonIPNotGlobalTarget) come first;
+// multicast and the unspecified address are refused here as well, which
+// Validate's own tables do not list.
+func blockedAddressClass(addr netip.Addr) string {
+	addr = addr.Unmap()
+	switch {
+	case addr.IsUnspecified():
+		return "unspecified"
+	case addr.IsMulticast():
+		return "multicast"
+	case addr.IsLoopback():
+		return "loopback"
+	case addr.IsLinkLocalUnicast():
+		if addr == metadataAddr {
+			return "metadata"
+		}
+		return "link_local"
+	case addr.IsPrivate():
+		if addr.Is6() {
+			return "unique_local"
+		}
+		return "private"
+	case pythonIPNotGlobalTarget(addr):
+		return "reserved"
+	}
+	return ""
+}
+
+var metadataAddr = netip.MustParseAddr("169.254.169.254")

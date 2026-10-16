@@ -75,7 +75,7 @@ func TestQueriesComposeFromTheSharedLatestWorkUnitInvestmentsSource(t *testing.T
 				}
 				if _, err := reader.FetchInvestmentSunburst(context.Background(), SunburstFilters{
 					OrgID: "org-1", StartTS: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), EndTS: time.Date(2024, 1, 8, 0, 0, 0, 0, time.UTC),
-					Measure: investmentexplain.InvestmentShareMeasure,
+					Measure: investmentexplain.RESTInvestmentMeasure,
 				}); err != nil {
 					t.Fatalf("FetchInvestmentSunburst: %v", err)
 				}
@@ -116,7 +116,7 @@ func TestSunburstRepoJoinReadsFinal(t *testing.T) {
 	}
 	if _, err := reader.FetchInvestmentSunburst(context.Background(), SunburstFilters{
 		OrgID: "org-1", StartTS: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), EndTS: time.Date(2024, 1, 8, 0, 0, 0, 0, time.UTC),
-		Measure: investmentexplain.InvestmentShareMeasure,
+		Measure: investmentexplain.RESTInvestmentMeasure,
 	}); err != nil {
 		t.Fatalf("FetchInvestmentSunburst: %v", err)
 	}

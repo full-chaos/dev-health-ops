@@ -1,0 +1,61 @@
+# stack.files (CHAOS-8693): the ONE list of what `stack.sh` hands to docker compose for the bigboy stack.
+# Line format: <set> <kind> <value>
+#   kind project   : the compose project name (-p)
+#   kind env-file  : an --env-file path, relative to the bigboy root
+#   kind profile   : a --profile name
+#   kind root      : a compose file, relative to the bigboy root (BIGBOY_ROOT, the running tree)
+#   kind tools     : a compose file, relative to this directory (BIGBOY_TOOLS_DIR, travels with the checkout)
+#   kind include   : another set, whose lines come first (project, env file, profiles, files)
+#   kind needs     : a variable the step script must export (stack.sh refuses without it, naming it); stack.sh itself
+#                    derives BIGBOY_OPERATOR_IMAGE, RIVER_DHO_IMAGE, DHO_SMOKE_DIR and DHO_API_CH_USERS_XML, and
+#                    compose reads the rest (JWT_SECRET_KEY, DHO_SMOKE_ADMIN_*) from the env file
+# `root`/`tools` lines are ordered: later files win. Add a file HERE, never as a `-f` in a script.
+# Sets: `stack` is the live chain bigboy-cut.sh runs; the others are the one-off chains of one step each.
+# Each set below equals, file for file, the chain its legacy script builds today
+# (tests/tooling/test_bigboy_stack_files.py reads both and fails on any difference).
+
+stack project  dev-health
+stack env-file ops/.env
+stack tools    compose.bigboy.base.yml
+stack tools    compose.bigboy.go-workers.yml
+stack root     .remember/lanes/team-lead/reconciler-sweep-override.yml
+stack root     compose/compose.bigboy.images.yml
+stack tools    compose.bigboy.workers.yml
+stack tools    compose.bigboy.clickhouse-users.yml
+stack tools    compose.bigboy.billing-edge.yml
+stack tools    compose.bigboy.router.yml
+
+smoke project  dev-health
+smoke env-file ops/.env
+smoke profile  smoke
+smoke tools    compose.bigboy.base.yml
+smoke tools    compose.bigboy.go-workers.yml
+smoke root     .remember/lanes/team-lead/reconciler-sweep-override.yml
+smoke root     compose/compose.bigboy.images.yml
+smoke tools    compose.bigboy.router.yml
+smoke tools    compose.bigboy.smoke.yml
+smoke needs    DHO_SMOKE_CATALOG_FILE
+
+prove-base project  dev-health
+prove-base env-file ops/.env
+prove-base profile  venue
+prove-base tools    compose.bigboy.base.yml
+prove-base tools    compose.bigboy.go-workers.yml
+prove-base root     .remember/lanes/team-lead/reconciler-sweep-override.yml
+prove-base root     compose/compose.bigboy.images.yml
+
+prove include prove-base
+prove tools    compose.bigboy.prove.yml
+
+prove needs    PROVE_ORG
+prove needs    PROVE_ARTIFACT_DIR
+
+# hook-check and river-apply run inside bigboy-cut.sh, on the whole `stack` chain plus one overlay each.
+hook-check include stack
+hook-check profile venue
+hook-check tools   compose.bigboy.hook-check.yml
+hook-check needs   HOOK_OPERATOR_IMAGE
+
+river-apply include stack
+river-apply profile venue
+river-apply tools   compose.bigboy.river-apply.yml

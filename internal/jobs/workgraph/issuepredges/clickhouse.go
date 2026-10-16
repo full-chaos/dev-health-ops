@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 )
 
 // ErrUnavailable reports a missing ClickHouse dependency.
@@ -420,4 +421,20 @@ func (loader *Loader) loadExplicitLinks(ctx context.Context, orgID string) ([]Ex
 		out = append(out, ExplicitLink{WorkItemID: workItemID, PRNumber: int(prNumber)})
 	}
 	return out, rows.Err()
+}
+
+// LoadNativeLinks reads every natively linked pull request and issue of the
+// organization, org-wide, so a fallback derivation can skip them.
+func (loader *Loader) LoadNativeLinks(ctx context.Context, orgID string) (issueprlinks.NativeLinks, error) {
+	if loader == nil || loader.conn == nil {
+		return issueprlinks.NativeLinks{}, ErrUnavailable
+	}
+	if orgID == "" {
+		return issueprlinks.NativeLinks{}, ErrScopeRequired
+	}
+	stored, err := issueprlinks.ReadStoredLinks(ctx, loader.conn, orgID)
+	if err != nil {
+		return issueprlinks.NativeLinks{}, err
+	}
+	return issueprlinks.NewNativeLinks(stored), nil
 }

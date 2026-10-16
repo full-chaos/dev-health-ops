@@ -1251,7 +1251,15 @@ controls: a link that is gone and an explicit empty list are closed).
 > share as the share they have."* The measure (lead D5988, from the D5432 ranking in section 1.1): a team's share of a
 > repository is its **linked share**, the link counts per tier (`native`, then `explicit_text`, then `heuristic`); the
 > team with the largest linked share is the main owner and keeps `is_primary` over the whole history, and every other
-> owning team gets a row with its own share. The writer stores the share (`team_repo_ownership.share`, section 1.1)
+> owning team gets a row with its own share. **Co-owner share floor (chris, 2026-10-15, verbatim): *"Drop them if
+> they're < 1%"*.** A co-owner whose linked share is below 0.01 gets no row (`teamRepoOwnershipCoOwnerShareFloor` in
+> `internal/providersync/team_repo_ownership_derivation.go`); a co-owner at exactly 0.01 keeps its row, and the main
+> owner (every tied main owner too) keeps its row whatever its share. The kept rows store their linked share over all
+> links of the repository, dropped teams included. An open row of a dropped co-owner, and an open row that no current
+> link supports, is retracted by the derivation's own diff (`diffTeamRepoOwnershipRetractions`: a replacement row
+> with `valid_to` set and a newer `updated_at`, never a delete), under the retraction guard (CHAOS-9045). The run logs
+> `team_repo_ownership_derivation.co_owner_below_share_floor` with the count (tests:
+> `team_repo_ownership_co_owner_floor_test.go`, every provider pair). The writer stores the share (`team_repo_ownership.share`, section 1.1)
 > and the investment and quadrant readers weigh a co-owned repository by it (CHAOS-9408, `teamscope.OwnerShares`,
 > next to "The team review quadrant" and "Every analytics team grouping on the investment path" below). Other text
 > below that says "same rank", "owners at the winner's rank" or "shared equally" about the attribution cascade
@@ -1270,7 +1278,7 @@ controls: a link that is gone and an explicit empty list are closed).
 > **The daily team tables read the owner shares too (CHAOS-9410).** `teamownership.OwnerSharesByRepo` is the one Go
 > reader of "who owns a repository": the main owner (every tied team of a full tie, D5990) first, then every lesser
 > owner, each with its own share (`team_repo_ownership.share`, the largest non-NULL share of the team's open rows,
-> divided by the sum over all owners; equal where any owner has no measure; no rounding, threshold or cap, D5991).
+> divided by the sum over all owners; equal where any owner has no measure; no rounding, threshold or cap in the reader, D5991; the writer's co-owner floor above decides which rows exist).
 > `AuthoritativeOwnersByRepo` is the same read cut to the main owners. A caller picks its rule by the kind of measure:
 > - **An additive measure** (a sum over repositories) takes each owner at its share. `team_cognitive_load_daily`
 >   does so: the pull-request interruption load, the review request load and the context-spread count are the sums
@@ -2900,7 +2908,16 @@ ClickHouse, every ordered pair of jira, gitlab, github and linear).
 The derivation counts each team's candidates on a repo per link tier. The tier of a `work_graph_issue_pr` candidate is that
 row's `provenance`; a pull request's / merge request's own `repo_id` (`work_items.type` `pr` or `merge_request`) and its
 `work_item_dependencies` donor edge are provider-recorded facts and count as `native` (the issue<->PR link builder stamps
-the same dependency row `native`). An issue's own `repo_id` is never a candidate (entity tree: Repository <> Pull request
+the same dependency row `native`). **A key parsed from the pull request's text is not (chris, 2026-10-15: text is a
+fallback only).** A donor reached only through an `extkey:KEY` target (`external_issue_key` or `relates_to`, from the
+pull request body, head branch or a comment) counts as `explicit_text`; a native donor edge of the same pull request is
+used first, whatever the order of the targets; and a pull request that has a `native` row in `work_graph_issue_pr`
+gets no candidate from its text key at all. The same holds for a `work_graph_issue_pr` row whose work item reaches a
+team only through a text key: it counts at `explicit_text` or its own lower tier. The run logs
+`team_repo_ownership_derivation.text_key_donors` (`explicit_text_candidates`, `skipped_for_native_link`); tests:
+`team_repo_ownership_text_key_tier_test.go` (GitHub pull requests and GitLab merge requests, Jira and Linear keys, an
+owner issue of each of jira, linear, github and gitlab). The prod case: deploy pull requests whose text named `WEB-5`
+made the Web team a co-owner of the deploy repository at the native tier. An issue's own `repo_id` is never a candidate (entity tree: Repository <> Pull request
 <> Issue <> Project): a GitHub or GitLab issue reaches a repo only through its linked pull request rows in
 `work_graph_issue_pr`, with that link's tier. A repo whose only evidence is an issue's own `repo_id` gets no inferred
 owner. **Every team with a link of any tier owns the repo** (all three tiers are links) and gets its own
@@ -3307,9 +3324,43 @@ cycle-time consumer, and DOES apply to Linear). Today:
 | Provider | PRIMARY (provider-attached PR mapping) | Go port (`internal/providersync`) | Path-B fallback (`work_graph/builder.py` text-parse) |
 |---|---|---|---|
 | Linear | `extract_linear_dependencies` (`providers/linear/normalize.py`) — issue attachments, sourceType + trusted-host gated | `normalizeLinearDependencies`/`linearAttachmentWorkItemID` (`linear_work_items_route.go`) — **ported with equivalent trust-gate semantics (sourceType + host allowlist), no loss.** One minor divergence: Python's PR/MR-number match requires digits (`\d+`, `normalize.py:77`); Go accepts any final path segment (`linear_work_items_route.go:890`) — functionally inert (a non-numeric segment can't match a real `git_pull_requests.number`), not literally byte-for-byte. | Excluded from THIS Path-B fallback by design (`builder.py:1112-1114` — Linear's links arrive as attachments via the dependency pass above, not via text parsing here). §2's Secondary/Tertiary above is Linear's own (Path A) fallback and is very much used. |
-| Jira | **Built, Go-only** (CHAOS-4757) — `fetchJiraDevStatusPullRequests`/`extractJiraDevStatusDependencies` (`internal/providersync/jira_dev_status.go`) call `GET /rest/dev-status/1.0/issue/detail` once per application type, `GitHub` then `GitLab` (CHAOS-8526; a GitLab merge-request URL becomes a `gitlab:<path>!<n>` source, a GitHub pull URL `ghpr:<owner>/<repo>#<n>`; both share the `dev_status_max_requests` budget; a failing type does not hide the links the other returned; each type's outcome — synced, empty, `dev_status_unavailable`, failed, `cap_skipped` — is logged per issue and counted as `dev_health_jira_dev_status_total{outcome="<type>_<outcome>"}`, so a wrong application-type value reads as a loud zero), gated behind a `fetch_dev_status` claim option (default false — an extra REST call per issue). A 400/404 (no app configured for this issue) is a ruled clean typed no-op (`dev_status_unavailable`, `dev_health_jira_dev_status_total` metric), never an error. `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) remains issue↔issue `issuelinks` only — no Python dev-status ingestion exists or is planned | **No Python producer** — per the standing sync-ownership rule, this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from. **Fixtures-only proof**: no local org has the GitHub-for-Jira app installed, so this has not been proven against real dev-status data; live proof awaits such an org | Still active alongside the new PRIMARY (not gated on its presence): `jira_key_lookup`'s text-parse continues to run unconditionally Hosts beyond public GitHub/GitLab.com are trusted through `JIRA_TRUSTED_SCM_HOSTS` (`host` or `host/root`; the root is the instance's relative URL root, stripped before the project path, case-sensitive). |
-| GitLab | **Built, Go-only** (CHAOS-8526) — per issue, `GET /projects/:id/issues/:iid/closed_by` (`collectGitLabClosingMergeRequests`, under the `fetch_links` option) → `normalizeGitLabClosingMergeRequests` (`internal/providersync/gitlab_work_items_rows.go`) emits MR-source / issue-target rows of raw kind `gitlab_closing_reference`; the `issueprlinks` admission for it accepts only a well-formed `gitlab:<path>#<n>` issue target. **State rule (same as GitHub's `closingIssuesReferences`):** every MR `closed_by` returns links, open, merged or closed-unmerged; the MR's state is not a filter. A failing `closed_by` fetch is logged with the issue, counted (`dev_health_gitlab_closing_mr_fetch_total`, `closing_reference_fetch_failed`), listed under `incomplete`; the batch goes on. **Transient** failures (5xx, timeout, 429, network) hold the watermark so the next run asks again; **terminal** ones, which repeat on every run for the same issue, advance it: 404/403 (`terminal_unavailable`), page cap exceeded (`terminal_page_cap`), answer does not decode (`terminal_undecodable`) (D4771). A cancelled run stops (no test yet) | **No Python producer.** Fixtures-only proof: no live GitLab org read yet | The text-parse fallback stays; an `extkey:` prefix is never a donor row |
-| GitHub Issues | **Built, Go-only** (CHAOS-4757) — `extractGitHubClosingIssueReferences` (`internal/providersync/github_work_items_rows.go`) parses `closingIssuesReferences` off the existing per-PR GraphQL social fetch (`gitHubWorkItemPRSocialFetcher`, `github_work_items_social_fetch.go`), requested unconditionally on the top-level (non-continuation) page and tolerated as absent rather than erroring — a deliberate leniency for a best-effort supplementary field, unlike the strict Comments/TimelineItems connections | **No Python producer** — per the standing sync-ownership rule (no Python sync changes for anything Go workers run), this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from | Still active alongside the new PRIMARY (not gated on its presence, matching the Linear-vs-Secondary/Tertiary pattern above): `gh_issue_lookup`'s text-parse continues to run unconditionally. The GitHub `work-items` native route's planner-level veto was lifted (CHAOS-4731), but this org had **zero** `work_items` rows for `provider = 'github'` as of the CHAOS-4752 investigation (2026-09-01) — an operator/sync-config fact for THIS org, not a code-level gate; a different org with that dataset enabled would have rows to look up against. |
+| Jira | **Built, Go-only** (CHAOS-4757) — `fetchJiraDevStatusPullRequests`/`extractJiraDevStatusDependencies` (`internal/providersync/jira_dev_status.go`) call `GET /rest/dev-status/1.0/issue/detail` once per application type, `GitHub` then `GitLab` (CHAOS-8526; a GitLab merge-request URL becomes a `gitlab:<path>!<n>` source, a GitHub pull URL `ghpr:<owner>/<repo>#<n>`; both share the `dev_status_max_requests` budget; a failing type does not hide the links the other returned; each type's outcome — synced, empty, `dev_status_unavailable`, failed, `cap_skipped` — is logged per issue and counted as `dev_health_jira_dev_status_total{outcome="<type>_<outcome>"}`, so a wrong application-type value reads as a loud zero), gated behind a `fetch_dev_status` claim option (default false — an extra REST call per issue). A 400/404 (no app configured for this issue) is a ruled clean typed no-op (`dev_status_unavailable`, `dev_health_jira_dev_status_total` metric), never an error. `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) remains issue↔issue `issuelinks` only — no Python dev-status ingestion exists or is planned | **No Python producer** — per the standing sync-ownership rule, this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from. **Fixtures-only proof**: no local org has the GitHub-for-Jira app installed, so this has not been proven against real dev-status data; live proof awaits such an org | A fallback only (chris, 2026-10-15): the text-parse links a key only when neither the pull request nor the issue has a native link; see the tier rule below the table. Hosts beyond public GitHub/GitLab.com are trusted through `JIRA_TRUSTED_SCM_HOSTS` (`host` or `host/root`; the root is the instance's relative URL root, stripped before the project path, case-sensitive). |
+| GitLab | **Built, Go-only** (CHAOS-8526) — per issue, `GET /projects/:id/issues/:iid/closed_by` (`collectGitLabClosingMergeRequests`, under the `fetch_links` option) → `normalizeGitLabClosingMergeRequests` (`internal/providersync/gitlab_work_items_rows.go`) emits MR-source / issue-target rows of raw kind `gitlab_closing_reference`; the `issueprlinks` admission for it accepts only a well-formed `gitlab:<path>#<n>` issue target. **State rule (same as GitHub's `closingIssuesReferences`):** every MR `closed_by` returns links, open, merged or closed-unmerged; the MR's state is not a filter. A failing `closed_by` fetch is logged with the issue, counted (`dev_health_gitlab_closing_mr_fetch_total`, `closing_reference_fetch_failed`), listed under `incomplete`; the batch goes on. **Transient** failures (5xx, timeout, 429, network) hold the watermark so the next run asks again; **terminal** ones, which repeat on every run for the same issue, advance it: 404/403 (`terminal_unavailable`), page cap exceeded (`terminal_page_cap`), answer does not decode (`terminal_undecodable`) (D4771). A cancelled run stops (no test yet) | **No Python producer.** Fixtures-only proof: no live GitLab org read yet | The text-parse fallback stays, gated by the tier rule below the table; an `extkey:` prefix is never a donor row |
+| GitHub Issues | **Built, Go-only** (CHAOS-4757) — `extractGitHubClosingIssueReferences` (`internal/providersync/github_work_items_rows.go`) parses `closingIssuesReferences` off the existing per-PR GraphQL social fetch (`gitHubWorkItemPRSocialFetcher`, `github_work_items_social_fetch.go`), requested unconditionally on the top-level (non-continuation) page and tolerated as absent rather than erroring — a deliberate leniency for a best-effort supplementary field, unlike the strict Comments/TimelineItems connections | **No Python producer** — per the standing sync-ownership rule (no Python sync changes for anything Go workers run), this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from | A fallback only (chris, 2026-10-15): the text-parse links an issue only when neither the pull request nor the issue has a native link; see the tier rule below the table. The GitHub `work-items` native route's planner-level veto was lifted (CHAOS-4731), but this org had **zero** `work_items` rows for `provider = 'github'` as of the CHAOS-4752 investigation (2026-09-01) — an operator/sync-config fact for THIS org, not a code-level gate; a different org with that dataset enabled would have rows to look up against. |
+
+**Tier rule: text and heuristic links are a fallback only (chris, 2026-10-15, verbatim):** *"Text inferred when
+there's a PR link should have never happened, that's a been a hardfast rule since the start. Inferred is 100% a
+fallback only."* In `work_graph_issue_pr` a pull request (`repo_id`, `pr_number`) that has a `native` link gets no
+`explicit_text` or `heuristic` link to any issue, and an issue (`work_item_id`) that has a `native` link gets no
+lower-tier link to any pull request. The rule is provider-agnostic: it reads the pull request and the issue by id,
+whatever tracker or code host minted them (tests: `TestTextParseGivesNoLinkToAPullRequestWithANativeLink`,
+`TestTextParseGivesNoLinkToAnIssueWithANativeLink`, `TestHeuristicGivesNoLinkToAPullRequestWithANativeLink`, each
+over Jira, Linear, GitHub and GitLab). Where it is held:
+
+- **Writers.** `issuepredges.DeriveTextParseEdges` and `issuepredges.DeriveHeuristicEdges` read the native links
+  org-wide (`Loader.LoadNativeLinks`) and skip a reference whose pull request or issue has one; the text-parse step
+  logs the count as `outranked_by_native`.
+- **Stored rows.** The work-graph build pre-step `issue_pr_fallback_retraction` (registered right after
+  `issue_pr_links`, before every step that reads `work_graph_issue_pr`) removes the lower-tier rows a native link
+  outranks from `work_graph_issue_pr` (one `ALTER TABLE ... DELETE` naming exactly those rows; the table has no
+  tombstone column) and tombstones their `work_graph_edges` rows. It runs for the whole organization on every build,
+  so a row written before the rule, or before its native link arrived, is gone after the next build. The one edge it
+  keeps is an `implements` edge between a natively linked pair, which the fast-path step rewrites as native. To clean
+  an organization without waiting for its next sync, enqueue one build: `dho workers workgraph trigger --org <org id>
+  --review-evidence "<why>"` (no window is needed; the retraction is org-wide). The step's ledger evidence and its log
+  line `issue-pr fallback retraction done` report `links_retracted` and `edges_retired`. Ownership rows that a
+  retracted link supported are re-derived by the next `sync.team_repo_ownership_derivation` run (§0.4d).
+- **A pull request is never the issue side.** A pull or merge request work item (`ghpr:<owner>/<repo>#<n>`,
+  `gitlab:<path>!<n>`, `issueprlinks.IsPullRequestWorkItem`) is no issue: the text matcher's issue lookup and the
+  heuristic's work items skip it, and `issue_pr_fallback_retraction` retracts a stored lower-tier row and edge whose
+  issue side is one (prod had `ghpr:...#120 -> 121` text rows and heuristic self-links). Tests:
+  `pr_never_issue_side_test.go`.
+- **Readers.** Every reader of the link table, `team_repo_ownership` derivation (§0.4d) included, sees only links the
+  rule allows once the build has run; no reader re-applies it.
+
+The prod case that showed the defect: acr pull requests whose bodies quoted test keys (`API-1->BILL-1`) had a native
+Linear link, and the text matcher still linked the real Jira issues `API-1`, `BILL-1` and `FC-1`, which made three
+Jira teams co-owners of the repository.
 
 A PR whose PM-provider integration was never configured for that issue (chris: *"if it's not
 setup to attach github ↔ project management that's the user's problem"*) legitimately falls
@@ -3567,7 +3618,9 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   (§0.4 CHAOS-2416 bullet) — it is not read by the team-attribution resolver at all. Both answer
   "which table carries the cross-provider link," for different readers.
   For the entity tree, `work_graph_issue_pr` is the issue <> pull request link of record; its
-  `provenance` tier ranks native > explicit_text > heuristic, and a consumer names the tier.
+  `provenance` tier ranks native > explicit_text > heuristic, and a consumer names the tier. The two
+  lower tiers are a fallback only: a pull request or an issue with a native link has no lower-tier
+  link (§2, "Tier rule").
 - **`git_pull_requests` is not a work item and carries no `work_item_id`.** It is the raw
   git-log-sourced PR fact table (`000_raw_tables.sql`, tenant-scoped by `org_id` since migration
   `027`) used for git-side PR metrics (review load, cycle time from the git side) — with no

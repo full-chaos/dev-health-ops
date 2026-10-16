@@ -308,6 +308,7 @@ A Jira **project** is not a team. The automatic team import that runs after a Ji
 - **`--provider github`** `--owner <github-org> [--auth <token>]` (the token else `GITHUB_TOKEN`; a GitHub Enterprise base URL from `GITHUB_URL` or `GITHUB_BASE_URL`) runs the provider's **team catalog**: the producer the worker's post-sync team autoimport runs. It writes the ClickHouse team dimensions the team-attribution contract prescribes (`teams` rows of `provider_access`, `team_memberships`, `team_repo_ownership`; see `architecture/team-attribution.md` §0). A missing owner, a missing token, or an empty result without `--allow-empty` exits 1; a provider or write failure exits 1 with nothing written. A `403` on one team's repositories fails the run with exit 1 and writes nothing. A team with a non-zero `sync_policy` in `team_sync_policies` is left untouched and reported as `teams_skipped_policy`, not as an empty catalog. A team row has `id` `gh:<slug>`, a trimmed `name`, the provider's `description`, `members` as provider-scoped identity facets (`github:<login>` plus the member's public email, lower-cased), a stable `team_uuid` (uuid5 of the team id), `provider` `github`, `native_team_key` (the slug), `repo_patterns` (the team's repositories as `owner/name`), and `manual_members` (an admin override survives). The catalog writes its tables in order and not in one transaction: a write that fails part way leaves the earlier tables written, and the next run finishes them.
 - **`--provider gitlab`** `--owner <group-path> [--auth <token>]` (the token else `GITLAB_TOKEN`; the instance URL from `GITLAB_URL`, default `https://gitlab.com`) runs the same team catalog seam for GitLab. The group and its direct subgroups become `teams` rows (`provider_access`, `id` `gl:<full_path>`, `native_team_key` the group's `full_path`, `project_keys` the group's own `path_with_namespace` values). The group's own projects populate `team_project_ownership`, members populate `team_memberships` (identity facets `gitlab:<username>` plus the member's email), and the group's full project tree, including subgroups, populates the native `projects` catalog (CHAOS-3380).
 - **`--provider linear`** `[--auth <token>]` (the token else `LINEAR_API_KEY`; `LINEAR_URL` points the verb at a fake API for testing only) needs no `--owner`: an API key scopes the whole Linear workspace, so every team is in scope. Teams become `teams` rows (`provider_access`, `id` `linear:<key>`, `native_team_key` the team's key). Members populate `team_memberships` and the shared `members` dimension (identity facets `linear:<email-or-id>`, lower-cased), and an inactive member is excluded. Linear's own projects populate the native `projects` catalog and `team_project_ownership` when `--projects` is selected. An org-archived Linear team is included, as the workspace returns it. No description is invented when the provider has none.
+- **Concurrency (`github`, `gitlab`, `linear`).** The catalog takes the same per-(organization, provider) turn the worker's team catalog takes (a durable lease in PostgreSQL, kind `team_catalog.<provider>`, one holder per organization), so a CLI run and a worker run, or two CLI runs, of one organization and provider take turns instead of stamping the same new membership twice. The turn is taken in the domain database: `--db`, else `POSTGRES_URI`. The run logs `waiting for the team catalog turn` and waits until the holder releases it or the lease expires; `Ctrl-C` ends the wait and nothing is written. A lease the run loses while it lives ends the run before it writes (exit 1). A DSN that cannot be used, or a lease that cannot be taken, exits 1 with `turn_unavailable`; the run never goes on without a turn it was asked to take. With no DSN, or an `--org` that is not a UUID, the run logs `team catalog turn not taken` (reason `no_postgres_dsn` or `org_not_uuid`) and runs without it: a concurrent worker or CLI run of that organization and provider is then not excluded.
 
 ---
 
@@ -1601,8 +1602,13 @@ an automatic post-sync run that is *anchored on a later day* with
 own anchor day and does not see the pending recompute, so both runs compute the
 overlapping day. Both append the same values with their own `computed_at` and
 readers take the newest, so the served number is the same; it is a duplicate
-computation, not a wrong value. Do not run it while a wide post-sync catch-up of
-the window is expected.
+computation, not a wrong value. The automatic start is not changed (it does not
+wait for the manual run and does not skip a day), but it is now visible: it logs
+`remaining metrics automatic start overlaps a manual run` at Info (family,
+organization_id, run_id, manual_run_id, manual_kind, overlap_from, overlap_to,
+overlap_days) and counts `dev_health_remaining_metrics_manual_overlap_total{family}`
+once per overlapped manual backfill or recompute run that is pending or running.
+Do not run it while a wide post-sync catch-up of the window is expected.
 
 **Where to run it:** from a worker pod that holds the coordinator DSN
 (`go-scheduler` or `go-reconciler` on prod), **not** `go-heavy`. Like every
@@ -1841,6 +1847,49 @@ kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-inter
 kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-intervals \
   --all-orgs
 kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-intervals \
+  --all-orgs --apply --workers-paused --reason <code> --correlation-id <id>
+```
+
+#### `providersync drain-removed-dependencies` (CHAOS-9706)
+
+A data step. A link removed at the provider leaves its `work_item_dependencies`
+row behind (the table is insert-only), and nothing removed it. This verb deletes
+the blocking rows (`blocks`, `blocked_by`, canonical semantics) that the end
+rule of the blocked intervals calls gone (an item that writes the relation has a
+later read that did not write it) and whose `last_synced` is older than
+`--retain-days` (default 90, floor 30). It keeps:
+
+- every current relation, and every relation the rule cannot decide (an end that
+  is no stored item, another semantics version);
+- every removed row inside the retention: it is the only record that the graph
+  projector can still retract the edge from, and the blocked-hours recompute
+  still reads it;
+- every row of another relationship type (blocking never drives team
+  attribution);
+- `work_item_dependency_first_seen` and `work_item_relations_read`.
+
+**It deletes rows, so it writes nothing unless `--apply` is given.** A dry run
+(the default) reads, plans, proves that the blocked intervals of every item,
+clipped to the retention window, are the same without the rows to delete, and
+reports. `--apply` needs `--workers-paused` (the statement that the sync workers
+that write `work_item_dependencies` are paused), `--reason` and
+`--correlation-id`, and is refused (`work_item_dependency_drain_writes_active`)
+while a part of `work_item_dependencies` or `work_items` was modified within
+`--quiet-seconds` (default 60). It copies the rows to
+`work_item_dependencies_drain_bak` under a run id, deletes exactly the versions
+it read (a row a sync wrote after the read has a newer `last_synced` and
+survives), and reads the relations back. `--restore-run <run_id>` puts the saved
+rows back, except a key a sync has written since with a newer `last_synced`
+(also dry by default). Output: counts only, under `drain_removed_dependencies`,
+per organization (numbered) and in total: `relations`, `current`, `undecided`,
+`removed`, `drainable`, `kept_in_retention`, `oldest_drainable_days`,
+`newest_drainable_days`, `differential_items`, `differential_mismatches`,
+`backup_rows`, `deleted`, `survived_the_delete`, `restored`, `elapsed_ms`.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers providersync drain-removed-dependencies \
+  --all-orgs
+kubectl exec -i <worker-pod> -- dho workers providersync drain-removed-dependencies \
   --all-orgs --apply --workers-paused --reason <code> --correlation-id <id>
 ```
 

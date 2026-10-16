@@ -1,3 +1,4 @@
+internal/queryapi/server	TestMCPClassParityVenueOracle	contracts/graphql/v1
 internal/queryapi/server	TestMCPClassParityVenueOracle	internal/chmigrate/sql
 internal/queryapi/server	TestMCPClassParityVenueOracle	internal/fixturescli
 internal/queryapi/server	TestMCPClassParityVenueOracle	internal/goapiproof

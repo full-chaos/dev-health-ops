@@ -11,7 +11,7 @@
 # updated tag is not a substitute for a commit-addressed CI image.
 #
 # One runtime target: every verb here is a read/write operator surface for
-# the SAME rollout (repoint/enable/disable/status, prove, rest-prove, the
+# the SAME rollout (enable/disable/status, prove, rest-prove, the
 # two mint helpers), always invoked from the same tools pod, so there is
 # no deploy unit that wants a subset.
 #

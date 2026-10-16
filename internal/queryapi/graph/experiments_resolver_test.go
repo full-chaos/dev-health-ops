@@ -85,7 +85,7 @@ type syncOrgCH struct {
 	org string
 }
 
-func (c *syncOrgCH) Query(_ context.Context, _ string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
+func (c *syncOrgCH) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, b := range bindings {
@@ -93,8 +93,25 @@ func (c *syncOrgCH) Query(_ context.Context, _ string, bindings []clickhouse.Bin
 			c.org, _ = b.Value.(string)
 		}
 	}
+	// An aggregate read without GROUP BY answers one row even over no unit (the tile's sizing coverage).
+	if strings.Contains(statement, "AS sized_units") {
+		return &singleZeroRow{}, nil
+	}
 	return emptyRows{}, nil
 }
+
+type singleZeroRow struct{ done bool }
+
+func (r *singleZeroRow) Next() bool {
+	if r.done {
+		return false
+	}
+	r.done = true
+	return true
+}
+func (*singleZeroRow) Scan(...any) error { return nil }
+func (*singleZeroRow) Err() error        { return nil }
+func (*singleZeroRow) Close() error      { return nil }
 
 func (c *syncOrgCH) seen() string {
 	c.mu.Lock()

@@ -40,7 +40,7 @@ func TestComputeIssueTypeMetricsDailyOpensABucketForEveryItem(t *testing.T) {
 	repo := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	nilRepo := uuid.Nil
 	items := []Item{
-		// Completed on the day, 26 hours after its start.
+		// Completed on the day, 26 hours after its start and 82 hours after its creation.
 		{WorkItemID: "1", Provider: "github", Type: "issue", Labels: []string{"bug"}, RepoID: &repo,
 			CreatedAt: day.AddDate(0, 0, -3), StartedAt: timePointer(day.Add(-16 * time.Hour)),
 			CompletedAt: timePointer(day.Add(10 * time.Hour))},
@@ -57,7 +57,8 @@ func TestComputeIssueTypeMetricsDailyOpensABucketForEveryItem(t *testing.T) {
 	got := ComputeIssueTypeMetricsDaily(items, day, end, teams("", "", "", " team-a "), labelNormalizer{})
 	want := []IssueTypeMetricsDailyRow{
 		{RepoID: &repo, Provider: "github", TeamID: "unassigned", IssueTypeNorm: "github:bug",
-			CreatedCount: 1, CompletedCount: 1, ActiveCount: 2, CycleP50Hours: 26, CycleP90Hours: 26},
+			CreatedCount: 1, CompletedCount: 1, ActiveCount: 2, CycleP50Hours: 26, CycleP90Hours: 26,
+			LeadP50Hours: 82},
 		{RepoID: &repo, Provider: "github", TeamID: "unassigned", IssueTypeNorm: "github:task"},
 		{RepoID: nil, Provider: "linear", TeamID: "team-a", IssueTypeNorm: "linear:task"},
 	}
@@ -96,5 +97,72 @@ func TestComputeWorkItemCompletionDailyCountsTheDaysCompletions(t *testing.T) {
 	}}
 	if !reflect.DeepEqual(rows, want) {
 		t.Fatalf("completion rows:\n got %+v\nwant %+v", rows, want)
+	}
+}
+
+// Lead time is completed_at minus created_at, over the items completed on the day: the upper median, like the cycle
+// p50. Python never computed it (it wrote 0.0), so there is no oracle: the expected values below are worked by hand
+// from the timestamps. The rule does not look at the provider, so every provider runs the same case.
+func TestComputeIssueTypeMetricsDailyLeadTimeIsTheUpperMedianOfCompletedMinusCreated(t *testing.T) {
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	end := day.AddDate(0, 0, 1)
+	for _, provider := range []string{"jira", "gitlab", "github", "linear"} {
+		t.Run(provider, func(t *testing.T) {
+			completedAt := func(hour int) *time.Time { return timePointer(day.Add(time.Duration(hour) * time.Hour)) }
+			items := []Item{
+				// 10h, 34h and 106h: the upper median of three is 34h.
+				{WorkItemID: "1", Provider: provider, Type: "bug", CreatedAt: day, CompletedAt: completedAt(10)},
+				{WorkItemID: "2", Provider: provider, Type: "bug", CreatedAt: day.Add(-24 * time.Hour), CompletedAt: completedAt(10)},
+				{WorkItemID: "3", Provider: provider, Type: "bug", CreatedAt: day.Add(-96 * time.Hour), CompletedAt: completedAt(10)},
+				// Completed on the day but created later: no lead time, left out of the p50 (not taken as 0).
+				{WorkItemID: "4", Provider: provider, Type: "bug", CreatedAt: day.Add(20 * time.Hour), CompletedAt: completedAt(10)},
+				// No creation time at all, and the Unix epoch the store holds for it: left out as well.
+				{WorkItemID: "5b", Provider: provider, Type: "bug", CreatedAt: time.Unix(0, 0).UTC(), CompletedAt: completedAt(10)},
+				{WorkItemID: "5", Provider: provider, Type: "bug", CompletedAt: completedAt(10)},
+				// Completed on another day: its lead time belongs to that day.
+				{WorkItemID: "6", Provider: provider, Type: "bug", CreatedAt: day.Add(-500 * time.Hour),
+					CompletedAt: timePointer(day.Add(-time.Hour))},
+				// Created and completed at the same instant: no lead time, so a stored 0 always means none.
+				{WorkItemID: "6b", Provider: provider, Type: "bug", CreatedAt: day.Add(3 * time.Hour), CompletedAt: completedAt(3)},
+				{WorkItemID: "6c", Provider: provider, Type: "bug", CreatedAt: day.Add(4 * time.Hour), CompletedAt: completedAt(4)},
+				// Open: no lead time.
+				{WorkItemID: "7", Provider: provider, Type: "bug", CreatedAt: day.Add(-300 * time.Hour)},
+			}
+			rows := ComputeIssueTypeMetricsDaily(items, day, end, teams("", "", "", "", "", "", "", "", "", ""), labelNormalizer{})
+			if len(rows) != 1 {
+				t.Fatalf("rows = %+v, want one", rows)
+			}
+			if rows[0].LeadP50Hours != 34 {
+				t.Fatalf("lead_p50_hours = %v, want 34 (upper median of 10, 34, 106)", rows[0].LeadP50Hours)
+			}
+		})
+	}
+}
+
+func TestComputeIssueTypeMetricsDailyLeadTimeIsZeroWhenNothingCompletedHasOne(t *testing.T) {
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	items := []Item{
+		{WorkItemID: "1", Provider: "github", Type: "bug", CreatedAt: day.Add(-time.Hour)},
+		{WorkItemID: "2", Provider: "github", Type: "bug", CreatedAt: day.Add(5 * time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
+	}
+	rows := ComputeIssueTypeMetricsDaily(items, day, day.AddDate(0, 0, 1), teams("", ""), labelNormalizer{})
+	if len(rows) != 1 || rows[0].CompletedCount != 1 || rows[0].LeadP50Hours != 0 {
+		t.Fatalf("rows = %+v, want one row that counts 1 completed item and has no lead time", rows)
+	}
+}
+
+func TestLeadTimeInputsCountsCompletedAndExcludedItems(t *testing.T) {
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	items := []Item{
+		{WorkItemID: "1", CreatedAt: day.Add(-time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "2", CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "3", CreatedAt: day.Add(5 * time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "4", CreatedAt: day.Add(-time.Hour)},
+		{WorkItemID: "5", CreatedAt: day.Add(-48 * time.Hour), CompletedAt: timePointer(day.Add(-time.Hour))},
+		{WorkItemID: "6", CreatedAt: time.Unix(0, 0).UTC(), CompletedAt: timePointer(day.Add(time.Hour))},
+		{WorkItemID: "7", CreatedAt: day.Add(time.Hour), CompletedAt: timePointer(day.Add(time.Hour))},
+	}
+	if completed, excluded := LeadTimeInputs(items, day, day.AddDate(0, 0, 1)); completed != 5 || excluded != 4 {
+		t.Fatalf("completed=%d excluded=%d, want 5 and 4", completed, excluded)
 	}
 }

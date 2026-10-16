@@ -226,11 +226,17 @@ type IncidentTie struct {
 // Link is one deployment-incident link. RepoID is the repository of the
 // deployment. Source is the link tier; any value other than TierNative counts
 // as heuristic, so an unexpected tier is never presented as native.
+//
+// IncidentOtherDay marks a link whose incident started on another UTC day than
+// the counted one (CHAOS-9019). That incident is not among the day's ties: it
+// is counted on its own start day. The link alone then names the deployment as
+// failed on the deployment's day.
 type Link struct {
-	RepoID       uuid.UUID
-	DeploymentID string
-	IncidentID   string
-	Source       string
+	RepoID           uuid.UUID
+	DeploymentID     string
+	IncidentID       string
+	Source           string
+	IncidentOtherDay bool
 }
 
 // Counts are the stored inputs of one repository and day, or their sum over
@@ -330,7 +336,9 @@ func LowestTier(c Counts) string {
 // direct tie to any repository is ignored. A link counts only when its
 // incident ties to some repository and its deployment is one of the day's
 // deployments of that repository, so a link can never make a deployment failed
-// on a day it was not deployed. A repository with nothing to count is absent
+// on a day it was not deployed. A link whose incident started on another day
+// (IncidentOtherDay) needs no tie of the day: the deployment is failed on its
+// own day and the incident is counted on its start day. A repository with nothing to count is absent
 // from the result.
 func CountDay(deployments []Deployment, ties []IncidentTie, links []Link) map[uuid.UUID]Counts {
 	type deploymentKey struct {
@@ -386,7 +394,7 @@ func CountDay(deployments []Deployment, ties []IncidentTie, links []Link) map[uu
 		if _, ok := deployed[key]; !ok {
 			continue
 		}
-		if _, ok := tied[link.IncidentID]; !ok {
+		if _, ok := tied[link.IncidentID]; !ok && !link.IncidentOtherDay {
 			continue
 		}
 		tier := TierHeuristic

@@ -261,12 +261,32 @@ func TestSyncConfigRepositoriesVenueOracle(t *testing.T) {
 		{Name: "gitlab after", Method: "GET", Path: "/api/v1/admin/sync-configs/" + ids.cfgGL.String() + "/repositories", Headers: a},
 	}
 	python := golden.Python(t, venue, requests)
+	listingFailures := 0
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		// The reduction below hides the provider suffix on both planes, so the raw Go body is
+		// asserted to hold the lead and no suffix: the reduction cannot mask a regression.
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			if request.Name != "gitlab missing group" && request.Name != "gitlab invalid token" {
+				return
+			}
+			listingFailures++
+			var answer struct {
+				Detail string `json:"detail"`
+			}
+			if err := json.Unmarshal([]byte(goResponse.Body), &answer); err != nil || goResponse.Status != 400 ||
+				!gitlabListingLeadOnly.MatchString(answer.Detail) {
+				t.Errorf("%s: go answered %d %s, want 400 with the fixed lead and no provider suffix", request.Name, goResponse.Status, goResponse.Body)
+			}
+		},
 		Normalize: func(_ venueoracle.Request, body string) string {
-			return fakeJiraAddress.ReplaceAllString(body, "127.0.0.1:<port>")
+			body = fakeJiraAddress.ReplaceAllString(body, "127.0.0.1:<port>")
+			return gitlabListingFailure.ReplaceAllString(body, `"$1"`)
 		},
 	})
+	if listingFailures != 2 {
+		t.Errorf("inspected %d GitLab listing failures, want 2", listingFailures)
+	}
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 
 	seeded := make([]string, 0, len(ids.seededSources))

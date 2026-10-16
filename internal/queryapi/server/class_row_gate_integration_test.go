@@ -19,7 +19,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
@@ -98,7 +97,6 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 	})
 
 	t.Run("class row lit: served", func(t *testing.T) {
-		classReceipt(t, pool, hotspots, goapiproof.RouteProof, goapiproof.EdgeBuildPresent)
 		if _, err := classEnable(pool, hotspots); err != nil {
 			t.Fatal(err)
 		}

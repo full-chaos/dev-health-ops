@@ -361,8 +361,8 @@ type driverRow struct {
 // internal/analytics/flowmatrix.go's own identical fix for the same
 // guard (see that file's flowMatrixTeamActivitySelect doc comment).
 func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
-	currentFrom := metricFromClause(table, column, scopeFilter, "start_day", "end_day")
-	previousFrom := metricFromClause(table, column, scopeFilter, "compare_start", "compare_end")
+	currentFrom := driverDeltaSource(table, column, scopeFilter, "start_day", "end_day")
+	previousFrom := driverDeltaSource(table, column, scopeFilter, "compare_start", "compare_end")
 	if isPRRework(table, column) {
 		return fetchRateDriverDelta(ctx, client, prrework.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
 	}

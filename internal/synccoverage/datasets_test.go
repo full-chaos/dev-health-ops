@@ -119,3 +119,23 @@ func TestEffectiveDatasetKeysReadsFlagsAsPythonDoes(t *testing.T) {
 		}
 	}
 }
+
+// Python's _effective_dataset_keys looks the dataset key up exactly, so a
+// legacy or hand-edited key with another case or padding is no family and
+// comes back unchanged. The expectations are the live Python answers for
+// flags {"family_dataset_work_item_labels": true}.
+func TestEffectiveDatasetKeysTreatsNonCanonicalKeysAsNoFamily(t *testing.T) {
+	t.Parallel()
+	flags := json.RawMessage(`{"family_dataset_work_item_labels": true}`)
+	for dataset, want := range map[string]string{
+		" Work-Items": " Work-Items",
+		"WORK-ITEMS":  "WORK-ITEMS",
+		"work-items ": "work-items ",
+		"work-items":  "work-item-labels",
+	} {
+		got, err := effectiveDatasetKeys(dataset, flags)
+		if err != nil || strings.Join(got, ",") != want {
+			t.Errorf("effectiveDatasetKeys(%q) = %q, %v, want %q", dataset, got, err, want)
+		}
+	}
+}

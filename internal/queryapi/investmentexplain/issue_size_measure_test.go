@@ -1,6 +1,7 @@
 package investmentexplain
 
 import (
+	"github.com/full-chaos/dev-health-go/readers"
 	"strings"
 	"testing"
 )
@@ -46,7 +47,7 @@ func TestSizingCoverageNoteIsOnlyBelowHalf(t *testing.T) {
 		{3, 5, ""},
 		{0, 0, ""},
 	} {
-		if got := (SizingCoverage{SizedUnits: tc.sized, Units: tc.units}).Note(); got != tc.want {
+		if got := (readers.SizingCoverage{SizedUnits: tc.sized, Units: tc.units}).Note(); got != tc.want {
 			t.Errorf("Note(%d of %d) = %q, want %q", tc.sized, tc.units, got, tc.want)
 		}
 	}

@@ -15,6 +15,7 @@ func TestSurfaceMeasuresServeIssueSizeOnlyWithCoverage(t *testing.T) {
 		"REST /investment":    {RESTInvestmentMeasure, MeasureIssueSize},
 		"explanation default": {ExplanationDefaultMeasure, MeasureIssueSize},
 		"Home tile":           {HomeTileMeasure, MeasureCount},
+		"Home tile (sized)":   {HomeTileSizedMeasure, MeasureIssueSize},
 		"sunburst":            {SunburstMeasure, MeasureCount},
 		"Operating Review":    {OperatingReviewMeasure, MeasureCount},
 	} {

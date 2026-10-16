@@ -42,15 +42,13 @@ var sinkTable = map[string]struct {
 	count     int
 	why       string
 }{
-	"main.go:printError:.Error() [redacted]":    {treatRedacted, 1, "the command's one error print"},
-	"main.go:redacted:.Error() [redacted]":      {treatRedacted, 1, "the builders' redaction of an error's text"},
-	"main.go:redacted:.Error()":                 {treatBuilder, 1, "the comparison in redacted() that decides whether the text changed"},
-	"main.go:refuse:fmt.Errorf":                 {treatBuilder, 1, "refuse redacts what it builds"},
-	"main.go:internal:fmt.Errorf":               {treatBuilder, 1, "internal redacts what it builds"},
-	"status.go:runStatus:.Error() [redacted]":   {treatRedacted, 2, "status's database errors (connect, MCP class rows)"},
-	"repoint.go:runRepoint:.Error() [redacted]": {treatRedacted, 1, "the -json result's Message field -- defense-in-depth redaction of the error text"},
-	"repoint.go:printRepointResult:.Error()":    {treatNotDatabase, 1, "a json.Marshal failure encoding repointResult's own string fields -- never a database error"},
-	"status.go:runStatus:.Error()":              {treatNotDatabase, 3, "the registry URL sanitizer, the catalog loader and the registry HTTP fetch: no database"},
+	"main.go:printError:.Error() [redacted]":  {treatRedacted, 1, "the command's one error print"},
+	"main.go:redacted:.Error() [redacted]":    {treatRedacted, 1, "the builders' redaction of an error's text"},
+	"main.go:redacted:.Error()":               {treatBuilder, 1, "the comparison in redacted() that decides whether the text changed"},
+	"main.go:refuse:fmt.Errorf":               {treatBuilder, 1, "refuse redacts what it builds"},
+	"main.go:internal:fmt.Errorf":             {treatBuilder, 1, "internal redacts what it builds"},
+	"status.go:runStatus:.Error() [redacted]": {treatRedacted, 2, "status's database errors (connect, MCP class rows)"},
+	"status.go:runStatus:.Error()":            {treatNotDatabase, 3, "the registry URL sanitizer, the catalog loader and the registry HTTP fetch: no database"},
 }
 
 type sinkSite struct {

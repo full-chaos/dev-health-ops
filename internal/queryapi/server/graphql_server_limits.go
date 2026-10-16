@@ -39,8 +39,11 @@ import (
 // actual measured set against these numbers, so a future document that
 // needs more fails loudly there, in CI, not silently at request time in
 // production.
+//
+// The complexity limit is 160: the registered Home document reaches 155 with the five measure fields of the investment
+// tile (measure, denominator, sizingCoverage, unsizedUnitCount, workUnitCount), and no other document is above 150.
 const (
-	graphQLComplexityLimit = 150
+	graphQLComplexityLimit = 160
 	graphQLDepthLimit      = 10
 )
 

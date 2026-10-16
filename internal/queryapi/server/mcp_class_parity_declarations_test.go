@@ -20,17 +20,19 @@ type mcpParityTolerance struct {
 	ticket    string
 }
 
-var mcpParityTolerances = []mcpParityTolerance{{
-	operation: "flowMatrix",
-	variants:  []string{"TEAM", "REPO", "THEME"},
-	floats:    []string{"data.analytics.flowMatrix.nodes.value", "data.analytics.flowMatrix.edges.value"},
-	lists: []goapiproof.OrderInsensitiveList{
-		{Path: "data.analytics.flowMatrix.nodes", KeyFields: []string{"id"}},
-		{Path: "data.analytics.flowMatrix.edges", KeyFields: []string{"source", "target"}},
-	},
-	reason: "CHAOS-5451 class: the sums are a parallel Float64 merge in no fixed order, so values differ in the last bits and near ties flip the row order; WORK_TYPE counts are integers and stay exact",
-	ticket: "CHAOS-9803",
-}}
+func mcpParityTolerances() []mcpParityTolerance {
+	return []mcpParityTolerance{{
+		operation: "flowMatrix",
+		variants:  []string{"TEAM", "REPO", "THEME"},
+		floats:    []string{"data.analytics.flowMatrix.nodes.value", "data.analytics.flowMatrix.edges.value"},
+		lists: []goapiproof.OrderInsensitiveList{
+			{Path: "data.analytics.flowMatrix.nodes", KeyFields: []string{"id"}},
+			{Path: "data.analytics.flowMatrix.edges", KeyFields: []string{"source", "target"}},
+		},
+		reason: "CHAOS-5451 class: the sums are a parallel Float64 merge in no fixed order, so values differ in the last bits and near ties flip the row order; WORK_TYPE counts are integers and stay exact",
+		ticket: "CHAOS-9803",
+	}}
+}
 
 // mcpParityExtraVariants adds the served shapes the proof corpus does not hold yet: flowMatrix over THEME.
 func mcpParityExtraVariants(operation string, variants []goapiproof.Variant) []goapiproof.Variant {
@@ -57,7 +59,7 @@ func mcpParityExtraVariants(operation string, variants []goapiproof.Variant) []g
 // to the variants it names.
 func mcpParityOptions(operation, variant string, declared goapiproof.Options) goapiproof.Options {
 	declared.BaselineDefects = nil
-	for _, tolerance := range mcpParityTolerances {
+	for _, tolerance := range mcpParityTolerances() {
 		if tolerance.operation != operation || !mcpParityContains(tolerance.variants, variant) {
 			continue
 		}
@@ -83,7 +85,7 @@ func mcpParityContains(list []string, value string) bool {
 }
 
 func TestMCPParityDeclarationsStillExist(t *testing.T) {
-	for _, tolerance := range mcpParityTolerances {
+	for _, tolerance := range mcpParityTolerances() {
 		if tolerance.reason == "" || !strings.HasPrefix(tolerance.ticket, "CHAOS-") {
 			t.Errorf("%s: a tolerance needs a reason and a ticket id", tolerance.operation)
 		}

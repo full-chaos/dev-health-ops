@@ -120,6 +120,15 @@ VALUES ($1, 'mcp-parity', 'MCP parity', 'community', 'stripe', true, now(), now(
 VALUES ($1, 'mcpparity@example.com', true, true, false, 0, now(), now())`, user.id)
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
 VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), mcpParityOrg, user.id)
+			// Two sources of the org, one that last synced and one that failed: sourceHealth reads them from here.
+			for i, source := range []struct {
+				provider string
+				success  bool
+			}{{"github", true}, {"jira", false}} {
+				exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, last_sync_at, last_sync_success, created_at, updated_at)
+VALUES ($1, $2, $3, $4, '[]'::json, '{}'::json, true, true, now() - ($5 * interval '1 hour'), $6, now(), now())`,
+					uuid.New(), mcpParityOrg, "parity-"+source.provider, source.provider, i+1, source.success)
+			}
 			// The class decision of every root: served. The decision is the listener's own gate; what it
 			// serves is what is compared here.
 			for _, rootField := range mcpclass.SortedRoots() {

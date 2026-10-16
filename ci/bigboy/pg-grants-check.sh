@@ -9,7 +9,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 MODE=${1:?bigboy|prod}; EXP=${2:?expect file}
 run_psql() {
-  if [ "$MODE" = bigboy ]; then (BIGBOY_ROOT=${BIGBOY_ROOT:-/home/ubuntu/devhealth} BIGBOY_TOOLS_DIR=$HERE "$HERE/stack.sh" exec postgres sh -c 'psql -w -U $POSTGRES_USER -d ${POSTGRES_DB:-devhealth} -X -A -t')
+  if [ "$MODE" = bigboy ]; then (R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd); unset $(compgen -e | grep '^COMPOSE_') 2>/dev/null; docker compose -p dev-health --project-directory "$R" --env-file "$R/ops/.env" --env-file "$R/_records/bigboy-pins.env" -f "$HERE/compose.bigboy.yml" exec -T postgres sh -c 'psql -w -U $POSTGRES_USER -d ${POSTGRES_DB:-devhealth} -X -A -t')
   else KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n dev-health exec -i dev-health-ops-postgresql-0 -- sh -c 'psql -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -A -t'; fi
 }
 SQL=""; N=0

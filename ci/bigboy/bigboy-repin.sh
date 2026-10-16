@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # bigboy re-pin (gwc-prod-ops): bigboy-repin.sh <old-full-sha-dir-suffix e.g. a97b97ed> <new-full-sha>
-# Rewrites _records/compose.bigboy.images.yml digests (backup .bak-<old>) and creates _records/bigboy-<new8>/ from
+# Rewrites _records/bigboy-pins.env digests (backup .bak-<old>) and creates _records/bigboy-<new8>/ from
 # _records/bigboy-<old>/ with the tools digest swapped. No compose up/recreate here (run separately, with the
-# declared COMPOSE_FILE set incl. the images overlay). No secrets touched.
+# one compose file and the pins env file). No secrets touched.
 set -euo pipefail
 OLD8=${1:?old8}; NEW=${2:?new full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
 # CHAOS-7022 D2895/D2886(2): same BIGBOY_ROOT root parameter as bigboy-cut.sh -- default is
 # byte-identical to the hardcoded path this script always used.
-R="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"; OV=$R/_records/compose.bigboy.images.yml
+R="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"; OV=$R/_records/bigboy-pins.env
 echo "repin start root=$R old8=$OLD8 new=$NEW"
-for need in _records/compose.bigboy.images.yml _records; do
+for need in _records/bigboy-pins.env _records; do
   [ -e "$R/$need" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing $need -- refusing to run against a root that is not a real bigboy tree" >&2; exit 4; }
 done
-# CHAOS-7674, CHAOS-8361: the Python api image is no longer built and the overlay names it nowhere (`api` is retired,
+# CHAOS-7674, CHAOS-8361: the Python api image is no longer built and the compose file names it nowhere (`api` is retired,
 # `migrate` runs the dho image). The Go query-api digest (dev-health-go-dho) is the OLD8 ground truth and is re-pinned
 # here, with the tools and the operator images.
 # CHAOS-7014 (D2801): a mistyped OLD8 (9 chars, "bd25cd0a9" instead of "bd25cd0a") once made the
@@ -20,8 +20,8 @@ done
 # below ever ran -- $OV was backed up but never actually repointed, and every downstream STEP in
 # bigboy-cut.sh (migrate/up/up-workers/rest/...) still reported rc=0 against the stale, pre-cut
 # images. A measurement that did not happen must FAIL, loudly: OLD8 is checked BEFORE any file is
-# touched, both for shape and against the ACTUALLY-running build -- the digest compose.bigboy.
-# images.yml currently pins (nothing else rewrites this file, so it is live ground truth) must be
+# touched, both for shape and against the ACTUALLY-running build -- the digest
+# # bigboy-pins.env currently pins (nothing else rewrites this file, so it is live ground truth) must be
 # the same digest the registry resolves for OLD8, never trusted as a bare caller-supplied string.
 case "$OLD8" in
   [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
@@ -66,4 +66,10 @@ printf "%s\n" "$NEW" > "$R"/_records/bigboy-"$N8"/sha.txt
 # a re-pin from a dir whose rest-commands still carry literals gets them templated:
 sed -i -E "s/^STEP=.*/STEP=\${STEP:?STEP not exported}/; s/^B=[0-9a-f]{40}\$/B=\${B:?B not exported}/; s/^B_DHO=[0-9a-f]{40}\$/B_DHO=\${B:?B not exported}/" "$R"/_records/bigboy-"$N8"/bigboy-rest-commands.sh
 echo "pin: $NEW" > "$R"/_records/bigboy-"$N8"/pin.md
+# CHAOS-9962: the operator pin is a line of the pins file too (plain `docker compose ps` then needs no exported variable)
+if grep -q '^BIGBOY_OPERATOR_IMAGE=' "$OV"; then
+  sed -i -E "s#^(BIGBOY_OPERATOR_IMAGE=.*dev-health-go-operator@sha256:)[0-9a-f]{64}#\1${N[dev-health-go-operator]#sha256:}#" "$OV"
+else
+  printf 'BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@%s\n' "${N[dev-health-go-operator]}" >> "$OV"
+fi
 grep -c "${N[dev-health-go-dho]#sha256:}" "$OV"

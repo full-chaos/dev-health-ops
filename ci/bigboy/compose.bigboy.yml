@@ -1,0 +1,1958 @@
+# ci/bigboy/compose.bigboy.yml (CHAOS-9962): the ONE compose file of the bigboy stack, with profiles for the optional services.
+# It is the compose merge of the twelve files stack.sh used to chain (base, go-workers, sweep, images, workers, clickhouse-users,
+# billing-edge, router and the one-off overlays smoke, prove, hook-check, river-apply); `docker compose config` of the old live chain
+# and of this file is byte-identical (tests/tooling/test_bigboy_one_compose_file.py). Start it with plain docker compose:
+#   docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env -f ci/bigboy/compose.bigboy.yml up -d --no-deps <service>
+# Profiles: smoke (web-smoke), venue (venue-prove, venue-tools, venue-hook, venue-river), retired-python-api, retired-billing-edge,
+# and the others of the base file. A one-off service reads its variables with a default, never `:?`: compose interpolates the
+# services of an inactive profile too, so a required variable would fail every other command. The script that starts a one-off
+# service checks its variables first (web-path-smoke.sh, bigboy-graphql-prove.sh, bigboy-hook-check.sh, bigboy-river-apply.sh).
+# BIGBOY_OPERATOR_IMAGE (the workers) and DHO_API_CH_USERS_XML (clickhouse) stay required: the live stack needs them.
+# The image pins are literal digests below; bigboy-repin*.sh rewrite them in this file (the roll is a PR, as in prod).
+#
+# The comments of the twelve retired files, one block each (the full text is in git history):
+#
+# ---- was compose.bigboy.base.yml ----
+#
+# ---- was compose.bigboy.go-workers.yml ----
+#
+# ---- was compose.bigboy.sweep.yml ----
+# CHAOS-8693: the bigboy reconciler runs the unreclaimable dispatch sweep ACTIVE. This was the untracked lane override
+# reconciler-sweep-override.yml. The compiled default of --unreclaimable-sweep is `shadow` (internal/platform/config/
+# options.go) and no other file of the chain sets it, so it is stated here, in every set that renders the base file.
+#
+# ---- was compose.bigboy.images.yml ----
+# gwc-venue-bigboy (2026-09-20, chris: "just go ahead and deploy bigboy images"). The ops image digests below are
+# re-pinned at every bigboy cut (bigboy-repin.sh, or a roll sheet that copies this file); the digests in this tracked
+# copy are the last ones a PR recorded, not the build bigboy runs now. The host copy (compose/compose.bigboy.images.yml)
+# is the running pin.
+# Self-contained: also carries compose.bigboy.overrides.yml content (query-api x2 + ports) so the
+# recreate does not drop the running project's overrides.
+# CHAOS-8361: the stack is Go-only. No service here runs the Python api image: the `api` service of the base
+# compose.yml is in a profile nothing enables, `migrate` runs the dho image, the smoke runner (`web-smoke` below,
+# CHAOS-8647) runs `dho smoke web-path` from the dho image, and venue-prove is on the stack's networks itself.
+#
+# ---- was compose.bigboy.workers.yml ----
+# CHAOS-7838: tracked copy of the bigboy worker plane (it was an untracked host file, which is how the heavy group, queues investment/metrics/reports/workgraph, went missing from the cut on 2026-09-20/21). The derived test internal/bigboycompose/worker_plane_test.go ties every queue of ops/compose.yml to a service here and to the cut's up list.
+# bigboy worker plane from the cut's CI OPERATOR digest (Trap #420: a cut pass must recreate every plane from CI digests; the workers had been a 09-20 local build).
+# Image = ${BIGBOY_OPERATOR_IMAGE} (set by bigboy-cut.sh from the cut sha). dho verbs as in the chart (deploy templates go-workers.yaml).
+#
+# ---- was compose.bigboy.clickhouse-users.yml ----
+# CHAOS-7162: bigboy declares the go-api's ClickHouse login (dho_api_ch) through a host file mounted into
+# ClickHouse's users.d, so it survives a container recreate. It used to be `docker cp`ed into the running
+# container's filesystem (bigboy-ch-login.sh); the 03:29Z CHAOS-7079 recreate rebuilt users.d from the
+# image and the user was lost, and go-api then failed every ClickHouse call with code 516.
+#
+# The file holds only <password_sha256_hex> and the grant statements (never a password), and MUST be
+# world-readable (0644): clickhouse-server runs as uid 101 inside the container and EXITS (code 91) when
+# a mounted users.d file it cannot read is 0600 and owned by the host user (executed against the pinned
+# image). ci/bigboy/check-dho-api-ch-user.sh refuses such a file (and any file that is not the canonical render) before anything is recreated, and
+# ci/bigboy/render-dho-api-ch-users.py writes it 0644.
+#
+# The host path is required, never defaulted here: a bind mount of a path that does not exist makes
+# Docker create a DIRECTORY there, and ClickHouse then fails to start. bigboy-cut.sh exports the default
+# ($BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml) and checks the file before it recreates go-api.
+#
+# ---- was compose.bigboy.billing-edge.yml ----
+# CHAOS-7055: bigboy serves the Stripe webhook host from the go-api billing-edge listener (:8010), as prod does
+# (CHAOS-6903, CHAOS-6925), and the Python `billing-edge` service is retired. Applies with the bigboy cut that
+# restarts go-api; never on its own while go-api is in use.
+#   * go-api gains `--api-billing-edge-addr=:8010` (the images overlay's command is just ["api"]; every other
+#     listener setting stays as it is) and a traefik router for the host the Python service answered
+#     (Host(`billing.localhost`), the same rule and entrypoint it carried), now to port 8010.
+#   * the three values the listener needs reach go-api BY NAME from the stack's env file (--env-file ops/.env):
+#     they are never written here. Unset, the listener's /health names the missing one (503), as the Python edge did.
+#   * `billing-edge` is moved to a profile nothing enables, so `up` never starts it and `ps` never lists it;
+#     the existing container is removed BEFORE the cut's `up` (`docker compose ... rm -sf billing-edge`, one approved
+#     line on the lead's GO): until it is gone two containers claim Host(`billing.localhost`). The go-api router is
+#     named `billing-go`, not `billing`, so the old container's router `billing` is never redefined while both exist.
+#
+# ---- was compose.bigboy.router.yml ----
+# CHAOS-6987 (D2724): bigboy plane-split router. Adds traefik's file provider (the routes it
+# loads are GENERATED by ci/bigboy/generate-plane-split-router.py from deploy/values.prod.yaml's
+# ingress.goApiPaths/queryApiPaths -- never hand-maintained) and points web's server-side
+# BACKEND_URL at the router instead of straight at the Python api, so both browser-origin
+# (commanderkeen.dev) and server-side traffic get the same plane split prod's own Ingress gives.
+# Touches ONLY traefik and web -- go-api and query-api are referenced by address in the dynamic
+# file (.traefik-dynamic/planes.yml) and are never recreated. CHAOS-8361: no rule of that file
+# names the Python api; a path with no plane rule reaches go-api (its native 404), as in prod.
+#
+# ---- was compose.bigboy.smoke.yml ----
+# CHAOS-6987/R460 (2026-09-27): the web-path smoke's own one-off runner. Kept OUT of
+# bigboy-cut.sh's shared -f chain (compose.bigboy.router.yml etc.) on purpose -- the
+# password-file bind mount below only resolves once DHO_SMOKE_ADMIN_PASSWORD_FILE is
+# confirmed non-blank (web-path-smoke.sh's own presence gate), and folding this file
+# into every other invocation would make an empty/unset var break unrelated STEPs.
+# Invoked ONLY by web-path-smoke.sh, after that gate passes.
+#
+# ---- was compose.bigboy.prove.yml ----
+# CHAOS-6993: the bigboy GraphQL prove harness's one-off additions to venue-prove.
+# Used ONLY by bigboy-graphql-prove.sh, never in bigboy-cut.sh's shared -f chain, so an
+# unset PROVE_* variable can never break an unrelated STEP.
+#
+# venue-prove is on the stack's networks (the edge is the routed /graphql on the router,
+# Go-edge mode: CHAOS-8361, there is no Python edge) and carries POSTGRES_URI,
+# GO_API_PROVE_VENUE_ACK and the GO_API_ENVELOPE_* identifiers, with the envelope key file
+# mounted at /keys/envelope.pem. `dho goapi prove` also mints the edge access token in
+# process, which needs JWT_SECRET_KEY: compose substitutes it from ops/.env (--env-file, D2728), so the value
+# never passes through a shell variable, argv or file of the operator.
+#
+# ---- was compose.bigboy.hook-check.yml ----
+# bigboy-hook-check.sh's one-off operator shell (CHAOS-8371, D4566 class rules). Never started by `up` (profile venue); the
+# script appends this file to COMPOSE_FILE for its own calls only. The image is the operator image the script derives from the
+# pinned sha (an image reference, passed as HOOK_OPERATOR_IMAGE: not a credential). The two DSNs are interpolated by COMPOSE from
+# ops/.env (`--env-file`) with the same defaults compose.yml gives the stack, so no script variable, argv, `-e` or script-written env
+# file ever carries a credential, and nothing is read out of the api container with printenv. The image's own entrypoint
+# is the dho operator, as in the prod migrate hook Job.
+#
+# ---- was compose.bigboy.river-apply.yml ----
+# bigboy-river-apply.sh's one-off dho shell (CHAOS-8371, D4566 class rules). Never started by `up` (profile venue); the script
+# appends this file to COMPOSE_FILE for its own calls only. The image is the overlay's pinned dho digest (RIVER_DHO_IMAGE: an image
+# reference, not a credential). The DSN password is interpolated by COMPOSE from ops/.env (`--env-file`) with the stack's own
+# default: no script variable, argv or `-e` carries it, and nothing is read out of the api container with printenv.
+name: dev-health
+networks:
+  dev-health:
+    driver: bridge
+  dho-clickhouse-readers:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+      - subnet: 10.199.80.0/28
+    name: dho-clickhouse-readers
+  dho-query-internal:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+      - subnet: 10.199.79.0/28
+    name: dho-query-internal
+services:
+  api:
+    build:
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/Dockerfile
+      target: api
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+      mailpit:
+        condition: service_healthy
+        required: true
+      postgres:
+        condition: service_healthy
+        required: true
+      valkey:
+        condition: service_healthy
+        required: true
+    entrypoint: 'sh -c ''export GO_API_ENVELOPE_PRIVATE_KEY="$(cat /secrets/go-api-envelope-private-key.pem)" && pip install -e . && python -m dev_health_ops.cli --log-level debug api --host 0.0.0.0 --port 8000 --reload''
+
+      '
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      AUTO_RUN_MIGRATIONS: 'false'
+      CELERY_BROKER_URL: redis://valkey:6379/0
+      CELERY_RESULT_BACKEND: redis://valkey:6379/0
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
+      DATABASE_URI: postgresql+asyncpg://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY: ${DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY:-1}
+      DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES: ${DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES:-671088640}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-smtp}
+      GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
+      GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
+      GO_API_ENVELOPE_KEY_ID: ${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08}
+      GO_API_PLANE_HEADER_ENABLED: ${GO_API_PLANE_HEADER_ENABLED:-true}
+      GO_API_QUERY_API_URL: ${GO_API_QUERY_API_URL:-http://query-api:8090}
+      GRAPHQL_QUERY_TIMEOUT: ${GRAPHQL_QUERY_TIMEOUT:-30}
+      HIDE_MIGRATED_CHILD_CONFIGS: 'true'
+      HOME: /tmp
+      LOG_LEVEL: DEBUG
+      PAGERDUTY_WEBHOOK_TRANSPORT: river
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      PROVIDER_SYNC_QUEUES_ENABLED: 'true'
+      REDIS_URL: redis://valkey:6379/1
+      SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      TRIAL_DAYS: ${TRIAL_DAYS:-14}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+    healthcheck:
+      interval: 15s
+      retries: 3
+      start_period: 30s
+      test:
+      - CMD
+      - wget
+      - --spider
+      - http://localhost:8000/ready
+      timeout: 10s
+    labels:
+      logging.service.name: dev-health-api
+      logging.service.namespace: dev-health
+      traefik.enable: 'true'
+      traefik.http.routers.api.entrypoints: web
+      traefik.http.routers.api.rule: Host(`api.localhost`)
+      traefik.http.services.api.loadbalancer.server.port: '8000'
+      traefik.scope: dev-health
+    networks:
+      dev-health: null
+    profiles:
+    - retired-python-api
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    user: 1001:1001
+    volumes:
+    - source: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      target: /app
+      type: bind
+      bind:
+        create_host_path: true
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: ./.go-api-dev/envelope-private-key.pem
+      target: /secrets/go-api-envelope-private-key.pem
+      type: bind
+    working_dir: /app/
+  billing-edge:
+    build:
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+      context: ./ops
+      dockerfile: docker/Dockerfile
+      target: api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      postgres:
+        condition: service_healthy
+        required: true
+    entrypoint:
+    - python
+    - -m
+    - uvicorn
+    - dev_health_ops.api.billing_edge:app
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8000'
+    - --reload
+    - --reload-dir
+    - /app/src/dev_health_ops/api
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      DATABASE_URI: postgresql+asyncpg://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql+asyncpg://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+    healthcheck:
+      interval: 15s
+      retries: 3
+      start_period: 30s
+      test:
+      - CMD
+      - wget
+      - --spider
+      - http://localhost:8000/health
+      timeout: 10s
+    labels:
+      logging.service.name: dev-health-billing-edge
+      logging.service.namespace: dev-health
+      traefik.enable: 'true'
+      traefik.http.routers.billing.entrypoints: web
+      traefik.http.routers.billing.rule: Host(`billing.localhost`)
+      traefik.http.services.billing.loadbalancer.server.port: '8000'
+      traefik.scope: dev-health
+    networks:
+      dev-health: null
+    profiles:
+    - retired-billing-edge
+    restart: unless-stopped
+    volumes:
+    - bind:
+        create_host_path: true
+      source: ./ops
+      target: /app
+      type: bind
+    working_dir: /app
+  bugsink:
+    container_name: bugsink
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: true
+    environment:
+      BASE_URL: ${BUGSINK_BASE_URL:-http://localhost:8800}
+      CREATE_SUPERUSER: ${BUGSINK_CREATE_SUPERUSER:-admin@dho.com:devhealth}
+      DATABASE_URL: postgresql://devhealth:devhealth@postgres:5432/bugsink
+      PORT: '8000'
+      SECRET_KEY: ${BUGSINK_SECRET_KEY:-8b3526db037025ac466df192f45da65de5111896f4b7a4e40757dbb4b82ce191}
+    image: bugsink/bugsink:latest
+    labels:
+      logging.service.name: bugsink
+      logging.service.namespace: dev-health
+      traefik.enable: 'true'
+      traefik.http.routers.bugsink.entrypoints: web
+      traefik.http.routers.bugsink.rule: Host(`bugs.localhost`)
+      traefik.http.services.bugsink.loadbalancer.server.port: '8000'
+      traefik.scope: dev-health
+    networks:
+      dev-health: null
+    restart: unless-stopped
+  clickhouse:
+    environment:
+    - CLICKHOUSE_DB=${CLICKHOUSE_DB:-default}
+    - CLICKHOUSE_LISTEN_HOST=0.0.0.0
+    - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-ch}
+    - CLICKHOUSE_USER=${CLICKHOUSE_USER:-ch}
+    - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    healthcheck:
+      interval: 10s
+      retries: 3
+      start_period: 30s
+      test:
+      - CMD
+      - wget
+      - --spider
+      - -q
+      - http://localhost:8123/ping
+      timeout: 5s
+    image: clickhouse/clickhouse-server:latest
+    networks:
+      dev-health: null
+      dho-clickhouse-readers: null
+    ports:
+    - ${CLICKHOUSE_HTTP_PORT:-8123}:8123
+    - ${CLICKHOUSE_NATIVE_PORT:-9000}:9000
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        hard: 262144
+        soft: 262144
+    volumes:
+    - source: clickhouse_data
+      target: /var/lib/clickhouse
+      type: volume
+      volume: {}
+    - read_only: true
+      source: ${DHO_API_CH_USERS_XML:?set DHO_API_CH_USERS_XML to the host path of dho_api_ch.xml}
+      target: /etc/clickhouse-server/users.d/dho_api_ch.xml
+      type: bind
+      bind:
+        create_host_path: true
+  go-api:
+    command:
+    - api
+    - --api-billing-edge-addr=:8010
+    entrypoint:
+    - /usr/local/bin/dho
+    env_file:
+    - path: ./.go-api-dev/go-api.env
+      required: true
+    environment:
+    - CORS_ALLOWED_ORIGINS=http://localhost:3000
+    - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY:-}
+    - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+    - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    labels:
+      traefik.enable: 'true'
+      traefik.http.routers.billing-go.entrypoints: web
+      traefik.http.routers.billing-go.rule: Host(`billing.localhost`)
+      traefik.http.routers.billing-go.service: billing-go
+      traefik.http.services.billing-go.loadbalancer.server.port: '8010'
+      traefik.scope: dev-health
+    networks:
+      dev-health: null
+    ports:
+    - host_ip: 127.0.0.1
+      mode: ingress
+      protocol: tcp
+      published: '8093'
+      target: 8000
+    restart: unless-stopped
+  go-contractcheck:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: contractcheck
+    cap_drop:
+    - ALL
+    command:
+    - validate
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+        required: true
+    network_mode: none
+    pull_policy: build
+    read_only: true
+    restart: 'no'
+    security_opt:
+    - no-new-privileges:true
+    user: 65532:65532
+  go-reconciler:
+    command:
+    - reconciler
+    - --shutdown-timeout=60s
+    - --http-addr=:8080
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+    entrypoint:
+    - /usr/local/bin/dho
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+    - COORDINATOR_DATABASE_MODE=session
+    - COORDINATOR_DATABASE_URI=postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+    - DEV_HEALTH_LOG_LEVEL=${LOG_LEVEL:-info}
+    - OPERATIONAL_ORDERING_CONTRACT=${OPERATIONAL_ORDERING_CONTRACT:-2}
+    - PGBOUNCER_TRANSACTION_MODE=true
+    - POSTGRES_URI=postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+    - RIVER_COORDINATOR_DATABASE_ROLE=${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+    - RIVER_DATABASE_SCHEMA=${RIVER_DATABASE_SCHEMA:-river}
+    - RIVER_DOMAIN_DATABASE_ROLE=${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+    - RIVER_QUEUE_DATABASE_ROLE=${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+    - WORKER_COORDINATOR_DATABASE_MAX_CONNS=${WORKER_COORDINATOR_DATABASE_MAX_CONNS:-2}
+    - WORKER_DATABASE_MAX_CONNS=${WORKER_DATABASE_MAX_CONNS:-2}
+    - WORKER_DATABASE_MODE=session
+    - WORKER_DATABASE_URI=postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+    - WORKER_DOMAIN_DATABASE_MAX_CONNS=${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+    - SYNC_UNRECLAIMABLE_SWEEP=active
+    - CLICKHOUSE_URI=
+    - DEV_HEALTH_CH_DB=${CLICKHOUSE_DB:-default}
+    - DEV_HEALTH_CH_HOST=clickhouse
+    - DEV_HEALTH_CH_PASSWORD=${CLICKHOUSE_PASSWORD:-ch}
+    - DEV_HEALTH_CH_PORT=9000
+    - DEV_HEALTH_CH_USER=${CLICKHOUSE_USER:-ch}
+    expose:
+    - '8080'
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    labels:
+      logging.service.name: dev-health-go-reconciler
+      logging.service.namespace: dev-health
+    networks:
+      dev-health: null
+    pull_policy: build
+    restart: unless-stopped
+  go-river-provision:
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: true
+    entrypoint:
+    - /bin/sh
+    - -ec
+    - "exec psql \\\n  --host=postgres \\\n  --username=\"${POSTGRES_USER:-devhealth}\" \\\n  --dbname=\"${POSTGRES_DB:-devhealth}\" \\\n  --set=ON_ERROR_STOP=1 \\\n  --set=domain_role=\"$$RIVER_DOMAIN_DATABASE_ROLE\" \\\n  --set=queue_role=\"$$RIVER_QUEUE_DATABASE_ROLE\" \\\n  --set=coordinator_role=\"$$RIVER_COORDINATOR_DATABASE_ROLE\" \\\n  --set=domain_password=\"$$RIVER_DOMAIN_DATABASE_PASSWORD\" \\\n  --set=queue_password=\"$$RIVER_QUEUE_DATABASE_PASSWORD\" \\\n  --set=coordinator_password=\"$$RIVER_COORDINATOR_DATABASE_PASSWORD\" \\\n  --file=/opt/dev-health/provision_river_roles.sql\n"
+    env_file:
+    - path: ./ops/.env
+      required: true
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+    image: postgres:18-alpine
+    networks:
+      dev-health: null
+    restart: 'no'
+    volumes:
+    - read_only: true
+      source: ${DEV_HEALTH_OPS_ROOT:-./ops}/scripts/worker/provision_river_roles.sql
+      target: /opt/dev-health/provision_river_roles.sql
+      type: bind
+      bind:
+        create_host_path: true
+  go-scheduler:
+    command:
+    - scheduler
+    - --shutdown-timeout=60s
+    - --http-addr=:8080
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+    entrypoint:
+    - /usr/local/bin/dho
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      COORDINATOR_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      DEV_HEALTH_HTTP_ADDR: :8080
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      WORKER_COORDINATOR_DATABASE_MAX_CONNS: ${WORKER_COORDINATOR_DATABASE_MAX_CONNS:-2}
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      WORKER_DATABASE_MODE: session
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+    expose:
+    - '8080'
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    labels:
+      logging.service.name: dev-health-go-scheduler
+      logging.service.namespace: dev-health
+    networks:
+      dev-health: null
+    pull_policy: build
+    restart: unless-stopped
+  go-stream-external:
+    command:
+    - stream-runner
+    - --profile=external
+    - --shutdown-timeout=60s
+    - --http-addr=:8080
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+      go-worker-migrate:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+      valkey:
+        condition: service_healthy
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          memory: 256M
+    entrypoint:
+    - /usr/local/bin/dho
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      COORDINATOR_DATABASE_MODE: ''
+      COORDINATOR_DATABASE_URI: ''
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      DEV_HEALTH_PROFILE: external
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
+      DEV_HEALTH_STREAM_REPLICAS: '1'
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      VALKEY_URI: redis://valkey:6379/1
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      WORKER_DATABASE_MODE: session
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: ${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+    expose:
+    - '8080'
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    labels:
+      logging.service.name: dev-health-go-stream-external
+      logging.service.namespace: dev-health
+    networks:
+      dev-health: null
+    pre_stop: []
+    pull_policy: build
+    restart: unless-stopped
+    stop_grace_period: 60s
+    volumes: []
+  go-stream-ingest:
+    command:
+    - stream-runner
+    - --profile=ingest
+    - --shutdown-timeout=60s
+    - --http-addr=:8080
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+      go-worker-migrate:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+      valkey:
+        condition: service_healthy
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          memory: 256M
+    entrypoint:
+    - /usr/local/bin/dho
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      COORDINATOR_DATABASE_MODE: ''
+      COORDINATOR_DATABASE_URI: ''
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      DEV_HEALTH_PROFILE: ingest
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
+      DEV_HEALTH_STREAM_REPLICAS: '1'
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      VALKEY_URI: redis://valkey:6379/1
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      WORKER_DATABASE_MODE: session
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: ${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+    expose:
+    - '8080'
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    labels:
+      logging.service.name: dev-health-go-stream-ingest
+      logging.service.namespace: dev-health
+    networks:
+      dev-health: null
+    pre_stop: []
+    pull_policy: build
+    restart: unless-stopped
+    stop_grace_period: 60s
+    volumes: []
+  go-stream-pagerduty:
+    command:
+    - stream-runner
+    - --profile=pagerduty
+    - --shutdown-timeout=60s
+    - --http-addr=:8080
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+      go-worker-migrate:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+      valkey:
+        condition: service_healthy
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          memory: 256M
+    entrypoint:
+    - /usr/local/bin/dho
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      COORDINATOR_DATABASE_MODE: ''
+      COORDINATOR_DATABASE_URI: ''
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      DEV_HEALTH_PROFILE: pagerduty
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
+      DEV_HEALTH_STREAM_REPLICAS: '1'
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      PAGERDUTY_WEBHOOK_TRANSPORT: river
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      VALKEY_URI: redis://valkey:6379/1
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      WORKER_DATABASE_MODE: session
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: ${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+    expose:
+    - '8080'
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    labels:
+      logging.service.name: dev-health-go-stream-pagerduty
+      logging.service.namespace: dev-health
+    networks:
+      dev-health: null
+    pre_stop: []
+    pull_policy: build
+    restart: unless-stopped
+    stop_grace_period: 60s
+    volumes: []
+  go-sync-dispatch-route-activate:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
+    cap_drop:
+    - ALL
+    command:
+    - routes
+    - apply
+    - --reason
+    - local_compose_start
+    - --correlation-id
+    - local-compose-dispatch-sync-run
+    - dispatch_sync_run
+    depends_on:
+      go-reconciler:
+        condition: service_started
+        required: true
+      go-worker:
+        condition: service_started
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      COORDINATOR_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      WORKER_DATABASE_MODE: session
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+    networks:
+      dev-health: null
+    pull_policy: build
+    read_only: true
+    restart: 'no'
+    security_opt:
+    - no-new-privileges:true
+    user: 65532:65532
+  go-sync-finalize-route-activate:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
+    cap_drop:
+    - ALL
+    command:
+    - routes
+    - apply
+    - --reason
+    - local_compose_start
+    - --correlation-id
+    - local-compose-finalize-sync-run
+    - finalize_sync_run
+    depends_on:
+      go-reconciler:
+        condition: service_started
+        required: true
+      go-sync-dispatch-route-activate:
+        condition: service_completed_successfully
+        required: true
+      go-worker:
+        condition: service_started
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      COORDINATOR_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      WORKER_DATABASE_MODE: session
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+    networks:
+      dev-health: null
+    pull_policy: build
+    read_only: true
+    restart: 'no'
+    security_opt:
+    - no-new-privileges:true
+    user: 65532:65532
+  go-sync-post-route-activate:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
+    cap_drop:
+    - ALL
+    command:
+    - routes
+    - apply
+    - --reason
+    - local_compose_start
+    - --correlation-id
+    - local-compose-post-sync
+    - post_sync
+    depends_on:
+      go-reconciler:
+        condition: service_started
+        required: true
+      go-sync-finalize-route-activate:
+        condition: service_completed_successfully
+        required: true
+      go-worker:
+        condition: service_started
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      COORDINATOR_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      WORKER_DATABASE_MODE: session
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+    networks:
+      dev-health: null
+    pull_policy: build
+    read_only: true
+    restart: 'no'
+    security_opt:
+    - no-new-privileges:true
+    user: 65532:65532
+  go-sync-reference-route-activate:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
+    cap_drop:
+    - ALL
+    command:
+    - routes
+    - apply
+    - --reason
+    - local_compose_start
+    - --correlation-id
+    - local-compose-reference-discovery
+    - reference_discovery
+    depends_on:
+      go-reconciler:
+        condition: service_started
+        required: true
+      go-sync-post-route-activate:
+        condition: service_completed_successfully
+        required: true
+      go-worker:
+        condition: service_started
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      COORDINATOR_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      WORKER_DATABASE_MODE: session
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+    networks:
+      dev-health: null
+    pull_policy: build
+    read_only: true
+    restart: 'no'
+    security_opt:
+    - no-new-privileges:true
+    user: 65532:65532
+  go-worker:
+    command:
+    - worker
+    - --queues=sync,sync_provider
+    - --queue-concurrency=sync=${BIGBOY_SYNC_SLOTS:-4},sync_provider=2
+    - --worker-group=sync
+    - --shutdown-timeout=960s
+    - --http-addr=:8080
+    - --health-check-timeout=10s
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+      go-contractcheck:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+      valkey:
+        condition: service_healthy
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          memory: 512M
+    entrypoint:
+    - /usr/local/bin/dho
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      COORDINATOR_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      VALKEY_URI: redis://valkey:6379/1
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      WORKER_DATABASE_MODE: session
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: ${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+    expose:
+    - '8080'
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    labels:
+      logging.service.name: dev-health-go-worker
+      logging.service.namespace: dev-health
+    networks:
+      dev-health: null
+    pull_policy: build
+    restart: unless-stopped
+    stop_grace_period: 960s
+  go-worker-consumers-ready:
+    depends_on:
+      go-worker:
+        condition: service_started
+        required: true
+      go-worker-heavy:
+        condition: service_started
+        required: true
+      go-worker-ops:
+        condition: service_started
+        required: true
+    entrypoint:
+    - /bin/sh
+    - -ec
+    - "for url in \\\n  http://go-worker:8080/readyz \\\n  http://go-worker-heavy:8080/readyz \\\n  http://go-worker-ops:8080/readyz; do\n  attempt=0\n  until wget -qO- \"$$url\" >/dev/null; do\n    attempt=$$((attempt + 1))\n    if [ \"$$attempt\" -ge 90 ]; then\n      echo \"timed out waiting for $$url\" >&2\n      exit 1\n    fi\n    sleep 2\n  done\ndone\n"
+    image: postgres:18-alpine
+    networks:
+      dev-health: null
+    restart: 'no'
+  go-worker-heavy:
+    command:
+    - worker
+    - --queues=investment,metrics,reports,workgraph
+    - --queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1
+    - --worker-group=heavy
+    - --shutdown-timeout=7260s
+    - --http-addr=:8080
+    - --river-schema=${RIVER_DATABASE_SCHEMA:-river}
+    - --domain-database-role=${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+    - --queue-database-role=${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+    - --queue-database-mode=${WORKER_DATABASE_MODE:-session}
+    - --coordinator-database-mode=${COORDINATOR_DATABASE_MODE:-session}
+    - --domain-transaction-pooler=${PGBOUNCER_TRANSACTION_MODE:-true}
+    - --log-level=${LOG_LEVEL:-info}
+    - --health-check-timeout=10s
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+      go-contractcheck:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+      valkey:
+        condition: service_healthy
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2.5G
+        reservations:
+          memory: 1G
+    entrypoint:
+    - /usr/local/bin/dho
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+    - CLICKHOUSE_URI=clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+    - COORDINATOR_DATABASE_MODE=session
+    - COORDINATOR_DATABASE_URI=postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+    - DEV_HEALTH_LOG_LEVEL=${LOG_LEVEL:-info}
+    - GO_PROVIDER_ROUTES=
+    - OPERATIONAL_ORDERING_CONTRACT=${OPERATIONAL_ORDERING_CONTRACT:-2}
+    - PGBOUNCER_TRANSACTION_MODE=true
+    - POSTGRES_URI=postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+    - RIVER_COORDINATOR_DATABASE_ROLE=${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+    - RIVER_DATABASE_SCHEMA=${RIVER_DATABASE_SCHEMA:-river}
+    - RIVER_DOMAIN_DATABASE_ROLE=${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+    - RIVER_QUEUE_DATABASE_ROLE=${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+    - VALKEY_URI=redis://valkey:6379/1
+    - WORKER_DATABASE_MAX_CONNS=${WORKER_DATABASE_MAX_CONNS:-2}
+    - WORKER_DATABASE_MODE=session
+    - WORKER_DATABASE_URI=postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+    - WORKER_DOMAIN_DATABASE_MAX_CONNS=${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+    - WORKER_METRIC_REPAIR_TOKEN=${WORKER_METRIC_REPAIR_TOKEN:-}
+    - WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}
+    - WORKER_OPERATIONAL_BRIDGE_TOKEN=${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+    - WORKER_OPERATIONAL_BRIDGE_URL=${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+    - INVESTMENT_SHADOW_CONCURRENCY=${INVESTMENT_SHADOW_CONCURRENCY:-}
+    - INVESTMENT_SHADOW_MAX_SECONDS=${INVESTMENT_SHADOW_MAX_SECONDS:-}
+    - INVESTMENT_SHADOW_MAX_USD_PER_RUN=${INVESTMENT_SHADOW_MAX_USD_PER_RUN:-}
+    - INVESTMENT_SHADOW_ORG_IDS=${INVESTMENT_SHADOW_ORG_IDS:-}
+    - INVESTMENT_SHADOW_PROVIDER=${INVESTMENT_SHADOW_PROVIDER:-}
+    - INVESTMENT_SHADOW_SAMPLE_PERCENT=${INVESTMENT_SHADOW_SAMPLE_PERCENT:-}
+    - TYPESAFE_API_KEY=${TYPESAFE_API_KEY:-}
+    - TYPESAFE_BASE_URL=${TYPESAFE_BASE_URL:-}
+    - TYPESAFE_MODEL=${TYPESAFE_MODEL:-}
+    expose:
+    - '8080'
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    labels:
+      logging.service.name: dev-health-go-worker-heavy
+      logging.service.namespace: dev-health
+    networks:
+      dev-health: null
+    pre_stop: []
+    pull_policy: build
+    restart: unless-stopped
+    stop_grace_period: 7260s
+    volumes: []
+  go-worker-migrate:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: migrate
+    depends_on:
+      go-river-provision:
+        condition: service_completed_successfully
+        required: true
+      migrate:
+        condition: service_completed_successfully
+        required: true
+    env_file:
+    - path: ./ops/.env
+      required: true
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MIGRATION_DATABASE_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+    labels:
+      logging.service.name: dev-health-go-worker-migrate
+      logging.service.namespace: dev-health
+    networks:
+      dev-health: null
+    pull_policy: build
+    restart: 'no'
+  go-worker-ops:
+    command:
+    - worker
+    - --queues=coverage,heartbeat,retention,webhooks
+    - --queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4
+    - --worker-group=ops
+    - --shutdown-timeout=960s
+    - --http-addr=:8080
+    - --health-check-timeout=10s
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+      go-contractcheck:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+      valkey:
+        condition: service_healthy
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          memory: 256M
+    entrypoint:
+    - /usr/local/bin/dho
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      COORDINATOR_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      GO_PROVIDER_ROUTES: ''
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      VALKEY_URI: redis://valkey:6379/1
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      WORKER_DATABASE_MODE: session
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: ${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+    expose:
+    - '8080'
+    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    labels:
+      logging.service.name: dev-health-go-worker-ops
+      logging.service.namespace: dev-health
+    networks:
+      dev-health: null
+    pre_stop: []
+    pull_policy: build
+    restart: unless-stopped
+    stop_grace_period: 960s
+    volumes: []
+  go-worker-ready:
+    depends_on:
+      go-reconciler:
+        condition: service_started
+        required: true
+      go-scheduler:
+        condition: service_started
+        required: true
+      go-stream-external:
+        condition: service_started
+        required: true
+      go-stream-ingest:
+        condition: service_started
+        required: true
+      go-stream-pagerduty:
+        condition: service_started
+        required: true
+      go-sync-dispatch-route-activate:
+        condition: service_completed_successfully
+        required: true
+      go-sync-finalize-route-activate:
+        condition: service_completed_successfully
+        required: true
+      go-sync-post-route-activate:
+        condition: service_completed_successfully
+        required: true
+      go-sync-reference-route-activate:
+        condition: service_completed_successfully
+        required: true
+      go-worker:
+        condition: service_started
+        required: true
+      go-worker-heavy:
+        condition: service_started
+        required: true
+      go-worker-ops:
+        condition: service_started
+        required: true
+    entrypoint:
+    - /bin/sh
+    - -ec
+    - "for url in \\\n  http://go-worker:8080/readyz \\\n  http://go-worker-heavy:8080/readyz \\\n  http://go-worker-ops:8080/readyz \\\n  http://go-stream-ingest:8080/readyz \\\n  http://go-stream-external:8080/readyz \\\n  http://go-stream-pagerduty:8080/readyz \\\n  http://go-reconciler:8080/readyz \\\n  http://go-scheduler:8080/readyz; do\n  attempt=0\n  until wget -qO- \"$$url\" >/dev/null; do\n    attempt=$$((attempt + 1))\n    if [ \"$$attempt\" -ge 90 ]; then\n      echo \"timed out waiting for $$url\" >&2\n      exit 1\n    fi\n    sleep 2\n  done\ndone\n"
+    image: postgres:18-alpine
+    networks:
+      dev-health: null
+    restart: 'no'
+  go-worker-route-activate:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
+    cap_drop:
+    - ALL
+    command:
+    - job-routes
+    - apply
+    - --reason
+    - local_compose_start
+    - --correlation-id
+    - local-compose-start
+    - sync.provider_unit
+    depends_on:
+      go-worker-consumers-ready:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+    env_file:
+    - path: ./ops/.env
+      required: false
+    environment:
+      COORDINATOR_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      PGBOUNCER_TRANSACTION_MODE: 'true'
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      WORKER_DATABASE_MODE: session
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_METRIC_REPAIR_TOKEN: ${WORKER_METRIC_REPAIR_TOKEN:-}
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+    networks:
+      dev-health: null
+    pull_policy: build
+    read_only: true
+    restart: 'no'
+    security_opt:
+    - no-new-privileges:true
+    user: 65532:65532
+  mailpit:
+    healthcheck:
+      interval: 10s
+      retries: 3
+      start_period: 5s
+      test:
+      - CMD
+      - wget
+      - --spider
+      - -q
+      - http://localhost:8025/livez
+      timeout: 5s
+    image: axllent/mailpit:latest
+    labels:
+      logging.service.name: mailpit
+      logging.service.namespace: dev-health
+      traefik.enable: 'true'
+      traefik.http.routers.mailpit.entrypoints: web
+      traefik.http.routers.mailpit.rule: Host(`mail.localhost`)
+      traefik.http.services.mailpit.loadbalancer.server.port: '8025'
+      traefik.scope: dev-health
+    networks:
+      dev-health: null
+    restart: unless-stopped
+  migrate:
+    cap_drop:
+    - ALL
+    command:
+    - migrate
+    - upgrade
+    - --river
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+      postgres:
+        condition: service_healthy
+        required: true
+    environment:
+    - CLICKHOUSE_URI=clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+    - DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=${DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER:-1}
+    - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    - MIGRATION_DATABASE_URI=${MIGRATION_DATABASE_URI:-}
+    - OPERATIONAL_ORDERING_CONTRACT=${OPERATIONAL_ORDERING_CONTRACT:-2}
+    - POSTGRES_URI=postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
+    - RIVER_DATABASE_SCHEMA=${RIVER_DATABASE_SCHEMA:-river}
+    - RIVER_DOMAIN_DATABASE_ROLE=${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+    - RIVER_QUEUE_DATABASE_ROLE=${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+    - DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST=${DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST:-}
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    labels:
+      logging.service.name: dev-health-migrate
+      logging.service.namespace: dev-health
+    networks:
+      dev-health: null
+    read_only: true
+    restart: 'no'
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp
+    user: 65532:65532
+  pgbouncer:
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: true
+    environment:
+      ADMIN_USERS: ${POSTGRES_USER:-devhealth}
+      AUTH_TYPE: scram-sha-256
+      DB_HOST: postgres
+      DB_NAME: ${POSTGRES_DB:-devhealth}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      DB_PORT: '5432'
+      DB_USER: ${POSTGRES_USER:-devhealth}
+      DEFAULT_POOL_SIZE: '20'
+      LISTEN_PORT: '6432'
+      MAX_CLIENT_CONN: '1000'
+      POOL_MODE: transaction
+    healthcheck:
+      interval: 10s
+      retries: 5
+      start_interval: 1s
+      start_period: 10s
+      test:
+      - CMD-SHELL
+      - PGPASSWORD=$$DB_PASSWORD pg_isready -h 127.0.0.1 -p 6432 -U $$DB_USER -d $$DB_NAME
+      timeout: 3s
+    image: edoburu/pgbouncer:latest
+    networks:
+      dev-health: null
+    restart: unless-stopped
+  pgbouncer-river-coordinator:
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: true
+    environment:
+      AUTH_TYPE: scram-sha-256
+      DB_HOST: postgres
+      DB_NAME: ${POSTGRES_DB:-devhealth}
+      DB_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      DB_PORT: '5432'
+      DB_USER: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      DEFAULT_POOL_SIZE: '10'
+      LISTEN_PORT: '6434'
+      MAX_CLIENT_CONN: '32'
+      POOL_MODE: session
+    healthcheck:
+      interval: 10s
+      retries: 5
+      start_interval: 1s
+      start_period: 10s
+      test:
+      - CMD-SHELL
+      - PGPASSWORD=$$DB_PASSWORD pg_isready -h 127.0.0.1 -p 6434 -U $$DB_USER -d $$DB_NAME
+      timeout: 3s
+    image: edoburu/pgbouncer:latest
+    networks:
+      dev-health: null
+    restart: unless-stopped
+  pgbouncer-river-queue:
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: true
+    environment:
+      AUTH_TYPE: scram-sha-256
+      DB_HOST: postgres
+      DB_NAME: ${POSTGRES_DB:-devhealth}
+      DB_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      DB_PORT: '5432'
+      DB_USER: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-40}
+      LISTEN_PORT: '6433'
+      MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_QUEUE_MAX_CLIENT_CONN:-128}
+      POOL_MODE: session
+    healthcheck:
+      interval: 10s
+      retries: 5
+      start_interval: 1s
+      start_period: 10s
+      test:
+      - CMD-SHELL
+      - PGPASSWORD=$$DB_PASSWORD pg_isready -h 127.0.0.1 -p 6433 -U $$DB_USER -d $$DB_NAME
+      timeout: 3s
+    image: edoburu/pgbouncer:latest
+    networks:
+      dev-health: null
+    restart: unless-stopped
+  postgres:
+    command:
+    - postgres
+    - -c
+    - max_connections=${POSTGRES_MAX_CONNECTIONS:-400}
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_DB: ${POSTGRES_DB:-devhealth}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      POSTGRES_USER: ${POSTGRES_USER:-devhealth}
+    healthcheck:
+      interval: 10s
+      retries: 5
+      start_period: 10s
+      test:
+      - CMD-SHELL
+      - pg_isready -U ${POSTGRES_USER:-devhealth} -d ${POSTGRES_DB:-devhealth}
+      timeout: 5s
+    image: postgres:18-alpine
+    networks:
+      dev-health: null
+    ports:
+    - ${POSTGRES_PORT:-5432}:5432
+    restart: unless-stopped
+    volumes:
+    - source: postgres_data
+      target: /var/lib/postgresql/data
+      type: volume
+      volume: {}
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: ./ops/docker/init-extra-dbs.sh
+      target: /docker-entrypoint-initdb.d/init-extra-dbs.sh
+      type: bind
+  query-api:
+    command:
+    - query-api
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+        required: true
+      migrate:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer:
+        condition: service_healthy
+        required: true
+    deploy:
+      replicas: 2
+    entrypoint:
+    - /usr/local/bin/dho
+    environment:
+    - CLICKHOUSE_URI=clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+    - GO_API_ENVELOPE_AUDIENCE=${GO_API_ENVELOPE_AUDIENCE:-query-api}
+    - GO_API_ENVELOPE_ISSUER=${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
+    - GO_API_ENVELOPE_JWKS_PATH=/secrets/envelope-jwks.json
+    - GO_API_REGISTRY_POSTGRES_URI=postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+    - QUERY_API_ADDR=:8090
+    - CORS_ALLOWED_ORIGINS=http://localhost:3000
+    - DEV_HEALTH_LOG_LEVEL=debug
+    - GO_API_DRILLDOWN_ISSUES_ENABLED=true
+    - GO_API_DRILLDOWN_PRS_ENABLED=true
+    - GO_API_EDGE_JWT_SECRET=${JWT_SECRET_KEY}
+    - GO_API_EXPLAIN_ENABLED=true
+    - GO_API_FILTER_OPTIONS_ENABLED=true
+    - GO_API_FLAME_AGGREGATED_ENABLED=true
+    - GO_API_FLAME_ENABLED=true
+    - GO_API_HEATMAP_ENABLED=true
+    - GO_API_HOME_ENABLED=true
+    - GO_API_INVESTMENT_ENABLED=true
+    - GO_API_INVESTMENT_EXPLAIN_ENABLED=true
+    - GO_API_INVESTMENT_FLOW_ENABLED=true
+    - GO_API_INVESTMENT_SUNBURST_ENABLED=true
+    - GO_API_META_ENABLED=true
+    - GO_API_OPPORTUNITIES_ENABLED=true
+    - GO_API_PEOPLE_DRILLDOWN_ISSUES_ENABLED=true
+    - GO_API_PEOPLE_DRILLDOWN_PRS_ENABLED=true
+    - GO_API_PEOPLE_METRIC_ENABLED=true
+    - GO_API_PEOPLE_SEARCH_ENABLED=true
+    - GO_API_PEOPLE_SUMMARY_ENABLED=true
+    - GO_API_PROOF_WRITE_ROUTE_ENABLED=true
+    - GO_API_QUADRANT_ENABLED=true
+    - GO_API_SANKEY_ENABLED=true
+    - GO_API_WORK_UNITS_ENABLED=true
+    - GO_API_WORK_UNIT_EXPLAIN_ENABLED=true
+    - LLM_MODEL=${LLM_MODEL}
+    - LLM_PROVIDER=${LLM_PROVIDER}
+    - OPENAI_API_KEY=${OPENAI_API_KEY}
+    - QUERY_API_INTERNAL_ADDR=:8095
+    - QUERY_API_INTERNAL_ALLOWED_CIDRS=10.199.79.0/28
+    - QUERY_API_MCP_ADDR=:8096
+    - QUERY_API_MCP_ALLOWED_CIDRS=10.199.79.0/28
+    - QUERY_API_MCP_BOUNDARY=allowed-cidrs
+    - SETTINGS_ENCRYPTION_KEY=${SETTINGS_ENCRYPTION_KEY}
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    labels:
+      logging.service.name: dev-health-query-api
+      logging.service.namespace: dev-health
+    mem_limit: 2g
+    networks:
+      dev-health: null
+      dho-query-internal: null
+    ports:
+    - host_ip: 127.0.0.1
+      mode: ingress
+      protocol: tcp
+      published: 8091-8092
+      target: 8090
+    restart: unless-stopped
+    volumes:
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: ./.go-api-dev/envelope-jwks.json
+      target: /secrets/envelope-jwks.json
+      type: bind
+  riverui:
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+        required: true
+      pgbouncer-river-queue:
+        condition: service_healthy
+        required: true
+    environment:
+      DATABASE_URL: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}?sslmode=disable
+      RIVER_LOG_LEVEL: ${RIVER_UI_LOG_LEVEL:-info}
+      RIVER_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+    healthcheck:
+      interval: 10s
+      retries: 5
+      start_period: 10s
+      test:
+      - CMD
+      - /bin/riverui
+      - -healthcheck=complete
+      timeout: 5s
+    image: ghcr.io/riverqueue/riverui:latest
+    labels:
+      logging.service.name: dev-health-riverui
+      logging.service.namespace: dev-health
+      traefik.enable: 'true'
+      traefik.http.routers.riverui.entrypoints: web
+      traefik.http.routers.riverui.rule: Host(`river.localhost`)
+      traefik.http.services.riverui.loadbalancer.server.port: '8080'
+      traefik.scope: dev-health
+    networks:
+      dev-health: null
+    restart: unless-stopped
+  traefik:
+    command:
+    - --providers.docker=true
+    - --providers.docker.exposedbydefault=false
+    - --providers.docker.network=dev-health_dev-health
+    - --providers.docker.constraints=Label(`traefik.scope`,`dev-health`)
+    - --providers.file.directory=/etc/traefik/dynamic
+    - --providers.file.watch=true
+    - --entrypoints.web.address=:3000
+    - --log.level=INFO
+    image: traefik:latest
+    labels:
+      logging.service.name: traefik
+      logging.service.namespace: fullchaos
+      traefik.enable: 'true'
+      traefik.http.middlewares.redirect-to-www.redirectregex.permanent: 'true'
+      traefik.http.middlewares.redirect-to-www.redirectregex.regex: ^https?://commanderkeen\.dev(.*)
+      traefik.http.middlewares.redirect-to-www.redirectregex.replacement: https://www.commanderkeen.dev$${1}
+      traefik.http.routers.bare-to-www.entrypoints: web
+      traefik.http.routers.bare-to-www.middlewares: redirect-to-www
+      traefik.http.routers.bare-to-www.rule: Host(`commanderkeen.dev`)
+      traefik.http.routers.bare-to-www.service: noop@internal
+      traefik.http.routers.traefik-dashboard.entrypoints: web
+      traefik.http.routers.traefik-dashboard.rule: Host(`traefik.commanderkeen.dev`)
+      traefik.http.routers.traefik-dashboard.service: api@internal
+    networks:
+      dev-health: null
+    ports:
+    - mode: ingress
+      protocol: tcp
+      published: '3000'
+      target: 3000
+    restart: unless-stopped
+    volumes:
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: /var/run/docker.sock
+      target: /var/run/docker.sock
+      type: bind
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: ./.traefik-dynamic
+      target: /etc/traefik/dynamic
+      type: bind
+  valkey:
+    command: 'valkey-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+      '
+    healthcheck:
+      interval: 10s
+      retries: 3
+      start_period: 5s
+      test:
+      - CMD
+      - valkey-cli
+      - ping
+      timeout: 5s
+    image: valkey/valkey:9-alpine
+    networks:
+      dev-health: null
+    ports:
+    - ${REDIS_PORT:-6379}:6379
+    restart: unless-stopped
+    volumes:
+    - source: valkey_data
+      target: /data
+      type: volume
+      volume: {}
+  venue-hook:
+    environment:
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/default
+      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: '1'
+      MIGRATION_DATABASE_URI: postgresql://devhealth:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/devhealth?sslmode=disable
+      OPERATIONAL_ORDERING_CONTRACT: '2'
+    image: ${HOOK_OPERATOR_IMAGE:-${BIGBOY_OPERATOR_IMAGE}}
+    networks:
+      dev-health: null
+    profiles:
+    - venue
+  venue-prove:
+    entrypoint:
+    - sh
+    - -c
+    environment:
+    - GO_API_ENVELOPE_AUDIENCE=query-api
+    - GO_API_ENVELOPE_ISSUER=dev-health-ops-edge
+    - GO_API_ENVELOPE_KEY_ID=local-dev-20260906
+    - GO_API_PROVE_VENUE_ACK=bigboy-compose
+    - GO_API_QUERY_API_URL=http://query-api:8090
+    - POSTGRES_URI=postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
+    - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
+    - PROVE_ORG=${PROVE_ORG:-}
+    image: '${BIGBOY_API_TOOLS_IMAGE:?BIGBOY_API_TOOLS_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    networks:
+      dev-health: null
+      dho-query-internal: null
+    profiles:
+    - venue
+    user: 1001:1001
+    volumes:
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: ./.go-api-dev/envelope-private-key.pem
+      target: /keys/envelope.pem
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /var/lib/oci-cache/lane-scratch/gwc-venue-bigboy
+      target: /work
+      type: bind
+    - source: ${PROVE_ARTIFACT_DIR:-}
+      target: /proof
+      type: bind
+      bind:
+        create_host_path: true
+    working_dir: /work
+  venue-river:
+    entrypoint:
+    - /usr/local/bin/dho
+    environment:
+      API_DATABASE_ROLE: devhealth_api
+      MIGRATION_DATABASE_URI: postgresql://devhealth:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/devhealth?sslmode=disable
+      RIVER_COORDINATOR_DATABASE_ROLE: devhealth_coordinator
+      RIVER_DATABASE_SCHEMA: river
+      RIVER_DOMAIN_DATABASE_ROLE: devhealth_domain
+      RIVER_QUEUE_DATABASE_ROLE: devhealth_queue
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    networks:
+      dev-health: null
+    profiles:
+    - venue
+  venue-tools:
+    entrypoint:
+    - sh
+    - -c
+    environment:
+      GO_API_ENVELOPE_AUDIENCE: query-api
+      GO_API_ENVELOPE_ISSUER: dev-health-ops-edge
+      GO_API_ENVELOPE_KEY_ID: local-dev-20260906
+      GO_API_ENVELOPE_PRIVATE_KEY: ${GO_API_ENVELOPE_PRIVATE_KEY:-}
+      GO_API_PROVE_VENUE_ACK: bigboy-compose
+      GO_API_QUERY_API_URL: http://query-api:8090
+      POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
+    image: '${BIGBOY_API_TOOLS_IMAGE:?BIGBOY_API_TOOLS_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    networks:
+      dev-health: null
+    profiles:
+    - venue
+    user: 1001:1001
+    volumes:
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: ./.go-api-dev/envelope-private-key.pem
+      target: /keys/envelope.pem
+      type: bind
+    - bind:
+        create_host_path: true
+      source: /var/lib/oci-cache/lane-scratch/gwc-venue-bigboy
+      target: /work
+      type: bind
+    working_dir: /work
+  web:
+    depends_on:
+      bugsink:
+        condition: service_started
+        required: true
+      valkey:
+        condition: service_healthy
+        required: true
+    env_file:
+    - path: ./web/.env
+      required: false
+    environment:
+    - ACR_API_ORIGIN=http://acr-api:8080
+    - ACR_WEB_ASSERTION_AUDIENCE=dev-health-acr
+    - ACR_WEB_ASSERTION_ISSUER=dev-health-web
+    - ACR_WEB_ASSERTION_KEY_FILE=/secrets/web-assertion.key
+    - ACR_WEB_ASSERTION_KID=acr-dev-web
+    - AUTH_SECRET=${AUTH_SECRET:-dev-secret-change-in-development}
+    - BACKEND_URL=http://traefik:3000
+    - HIDE_MIGRATED_CHILD_CONFIGS=true
+    - NEXT_PUBLIC_DEV_HEALTH_TEST_MODE=${NEXT_PUBLIC_DEV_HEALTH_TEST_MODE:-false}
+    - NEXT_PUBLIC_SENTRY_DSN=${NEXT_PUBLIC_SENTRY_DSN:-}
+    - NEXT_PUBLIC_USE_GRAPHQL_ANALYTICS=${NEXT_PUBLIC_USE_GRAPHQL_ANALYTICS:-true}
+    - NEXT_TELEMETRY_DISABLED=1
+    - NODE_ENV=production
+    - REDIS_URL=redis://valkey:6379/0
+    - SENTRY_DSN=${SENTRY_DSN:-http://2ef3e827508b4275b8c85bc8171906a7@bugsink:8000/1}
+    - AUTH_URL=https://www.commanderkeen.dev
+    - TRUSTED_PROXY_HOPS=1
+    - TRUST_PROXY=true
+    healthcheck:
+      interval: 15s
+      retries: 3
+      start_period: 30s
+      test:
+      - CMD
+      - wget
+      - --spider
+      - http://localhost:3000/health
+      timeout: 10s
+    image: '${BIGBOY_WEB_IMAGE:?BIGBOY_WEB_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    labels:
+      logging.service.name: dev-health-web
+      logging.service.namespace: dev-health
+      traefik.enable: 'true'
+      traefik.http.routers.web.entrypoints: web
+      traefik.http.routers.web.rule: Host(`www.commanderkeen.dev`) || Host(`commanderkeen.dev`) || Host(`${DOMAIN:-localhost}`)
+      traefik.http.services.web.loadbalancer.server.port: '3000'
+      traefik.scope: dev-health
+    networks:
+      dev-health: null
+    restart: unless-stopped
+    volumes:
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: ./.acr-dev/web-assertion.key
+      target: /secrets/web-assertion.key
+      type: bind
+  web-smoke:
+    command:
+    - smoke
+    - web-path
+    entrypoint:
+    - /usr/local/bin/dho
+    environment:
+      DHO_SMOKE_ADMIN_EMAIL: ${DHO_SMOKE_ADMIN_EMAIL:-}
+      DHO_SMOKE_ADMIN_PASSWORD_FILE: ${DHO_SMOKE_ADMIN_PASSWORD_FILE:-}
+      DHO_SMOKE_BASE_URL: http://traefik:3000
+      DHO_SMOKE_CATALOG: /catalog/catalog.json
+      DHO_SMOKE_PUBLIC_HOST: www.commanderkeen.dev
+      DHO_SMOKE_RECEIPT_PATH: ${DHO_SMOKE_RECEIPT_PATH:-/receipts/web-path-smoke-receipt.json}
+      DHO_SMOKE_ROUTING_OPS: /smoke/routing-ops.txt
+      DHO_SMOKE_WEB_SRC: /web-src
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/bigboy-pins.env}'
+    networks:
+      dev-health: null
+    profiles:
+    - smoke
+    user: 1001:1001
+    volumes:
+    - read_only: true
+      source: ${DHO_SMOKE_DIR:-}
+      target: /smoke
+      type: bind
+      bind:
+        create_host_path: true
+    - bind:
+        create_host_path: true
+      source: ./_records
+      target: /receipts
+      type: bind
+    - read_only: true
+      source: ${DHO_SMOKE_ADMIN_PASSWORD_FILE}
+      target: ${DHO_SMOKE_ADMIN_PASSWORD_FILE}
+      type: bind
+      bind:
+        create_host_path: true
+    - bind:
+        create_host_path: true
+      read_only: true
+      source: ./web/src
+      target: /web-src
+      type: bind
+    - read_only: true
+      source: ${DHO_SMOKE_CATALOG_FILE:-}
+      target: /catalog/catalog.json
+      type: bind
+      bind:
+        create_host_path: true
+    working_dir: /smoke
+volumes:
+  clickhouse_data:
+    driver: local
+  postgres_data:
+    driver: local
+  valkey_data:
+    driver: local
+x-acr-build:
+  context: ./acr
+  dockerfile: Dockerfile
+  target: acr-api

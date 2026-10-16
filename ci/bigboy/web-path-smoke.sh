@@ -17,8 +17,10 @@ export DHO_SMOKE_DIR="$HERE"
 R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd)
 cd "$R"
 
-export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE   # CHAOS-8693: the chain, project, env file and profiles come from ci/bigboy/stack.files
-STACK=("$HERE/stack.sh" -s smoke)
+export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
+unset $(compgen -e | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
+DC=(docker compose -p dev-health --project-directory "$R" --env-file "$R/ops/.env" --env-file "$R/_records/bigboy-pins.env" -f "$HERE/compose.bigboy.yml")
+STACK=("${DC[@]}" --profile smoke)
 
 st() { echo "STEP web-path-smoke rc=$1 $(date -u +%T)"; }
 
@@ -37,12 +39,11 @@ fi
 chmod 644 "$DHO_SMOKE_CATALOG_FILE"
 export DHO_SMOKE_CATALOG_FILE
 
-# The smoke compose file's web-smoke service requires both vars (:? in
-# compose.bigboy.smoke.yml) -- `config` fails outright while either is unset,
-# which IS the fail-loud signal this gate needs; a set-but-blank value is caught
-# by the length check below.
+# The web-smoke service reads both vars with an empty default (a `:?` would fail every
+# other command: compose interpolates inactive profiles too), so an unset or blank value
+# is caught by the length check below.
 RED=$(mktemp); RED_ERR=$(mktemp)  # honours TMPDIR; never a fixed /tmp name
-if ! "${STACK[@]}" config > "$RED" 2>"$RED_ERR"; then
+if ! "$HERE/compose-config-redacted.sh" "${STACK[@]:2}" > "$RED" 2>"$RED_ERR"; then
   st 1
   cat "$RED_ERR" >&2  # compose-config-redacted.sh emits only `required variable NAME is missing` lines
   echo "FAIL: credential file missing -- set DHO_SMOKE_ADMIN_EMAIL and DHO_SMOKE_ADMIN_PASSWORD_FILE (0600) in ops/.env (CHAOS-6972 *_FILE convention). This STEP does not run against the real org until chris adds both." >&2
@@ -62,9 +63,9 @@ fi
 
 
 # The password file's bind mount (${DHO_SMOKE_ADMIN_PASSWORD_FILE}:${DHO_SMOKE_ADMIN_PASSWORD_FILE}:ro)
-# is already declared in compose.bigboy.smoke.yml itself -- compose's own --env-file
+# is already declared in compose.bigboy.yml (web-smoke) itself -- compose's own --env-file
 # substitution resolves it, so this script never has to read or re-derive that path.
-"${STACK[@]}" run web-smoke
+"${STACK[@]}" run --rm --no-deps -T web-smoke
 rc=$?
 st "$rc"
 if [ $rc -eq 3 ]; then

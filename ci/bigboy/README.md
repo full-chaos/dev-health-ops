@@ -63,6 +63,36 @@ What `stack.sh` did and is gone: it refused any verb but a short list (now: type
 without `BIGBOY_OPERATOR_IMAGE` (now compose refuses: the variable is required), and it appended one line per mutating verb to
 `_records/stack-runs.log` (not kept: the cut's own `STEP` lines and `$REC/*.out` are the record).
 
+## The acr venue stack (CHAOS-10004)
+
+The acr pre-prod venue (acr-api, acr-projector, acr-mcp, its postgres and falkordb, the entitlement stand-in and the one-offs that
+prepare the database) is in the same file, in the same project, started with the same command and a profile:
+
+```
+cd "$BIGBOY_ROOT"
+docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env \
+  -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-deps --no-build <service>
+```
+
+- `--profile acr` holds every acr service. `--profile acr-venue` holds only what must exist before acr-api: `acr-postgres`, `acr-db-init`
+  (roles), `acr-migrate`, `acr-db-acl` (grants) and `acr-entitlement-standin`. Pass both when you want to name no service.
+  Services do not clash with the dev-health ones: the database and the graph are `acr-postgres` and `acr-falkordb`, answering to the
+  names `postgres` and `falkordb` on the acr network only.
+- Data does not move. The bind mounts are the old paths, `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data`; the one named
+  volume has the explicit name `dev-health-acr-entitlement-tmp`; the network is `dev-health-acr`. `container_name` is the old project's
+  (`dev-health-acr-mcp-<service>-1`). acr-api and acr-projector reach `dho-query-internal` and `dho-clickhouse-readers` as before; no acr
+  service is on the `dev-health` network. The data URLs use the alias `query-api`, never an address.
+- Secrets are files under `/var/lib/oci-cache/mcp-venue/secrets/`, mounted by compose as `/run/secrets/<name>`; the file holds the paths
+  (overridable by the `ACR_*_FILE` variables) and no value. Non-secret settings (`ACR_DB_NAME`, the role names, the projector org) default to
+  what the old `.env` held.
+- Images: postgres, nginx and falkordb are pinned by registry digest, acr-api and acr-mcp by LOCAL image id, all in the pins file
+  (`BIGBOY_ACR_*_IMAGE`; absent, a `:not-resolved` tag that fails at the start). The two acr images are built on this host from the acr
+  checkout with `--build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>`; without both args acr-api refuses the sidecar with a 426.
+- The one-time move from the old project `dev-health-acr-mcp` to this file is a recreate of the acr stack (new project label, same names
+  and data). Run it only in a window MCP opens: stop the old project's containers, then `--profile acr up -d` here, then `ps` and a venue
+  readback. Before it, render the acr services from the old `compose.yml` and from this file and diff them (names, images, environment,
+  volumes, networks): only the image reference, the project-prefixed secret/volume/network names and the services' network name may differ.
+
 ## Go-only stack (CHAOS-8361)
 
 The bigboy stack runs no Python api, as prod does. The base `compose.yml` of the stack is a host file

@@ -169,7 +169,7 @@ func LoadAIImpactTeamsByNativeKey(
 	rows, err := conn.Query(ctx, `
 SELECT provider, id, native_team_key
 FROM (
-    SELECT provider, id, tupleElement(argMax(tuple(native_team_key), updated_at), 1) AS native_team_key
+    SELECT provider, id, tupleElement(argMax(tuple(native_team_key), (updated_at, last_synced, ifNull(native_team_key, ''))), 1) AS native_team_key
     FROM teams
     WHERE org_id = ?
     GROUP BY org_id, provider, id

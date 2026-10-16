@@ -5,6 +5,7 @@ package daily
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -185,3 +186,50 @@ FROM ai_impact_metrics_daily FINAL WHERE org_id = ? AND day = '2026-10-03' AND i
 }
 
 func itoa(value int) string { return strconv.Itoa(value) }
+
+// Two rows of one team with the same updated_at: the newer last_synced carries
+// the current native key, as the team attribution reader decides it
+// (internal/teamattribution LoadTeams).
+func TestAIImpactTeamNativeKeyCatalogTakesTheNewestRowOnEqualUpdatedAt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	for _, statement := range aiImpactIncidentTeamSchema() {
+		if strings.HasPrefix(statement, "CREATE TABLE teams") {
+			if err := conn.Exec(ctx, statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	const orgID = "00000000-0000-4000-8000-0000000000e0"
+	// Two inserts, two parts: one insert block would be collapsed by the engine
+	// before the read (optimize_on_insert) and hide the tie.
+	for _, row := range []string{
+		"'NEW', toDateTime64('2026-10-02 00:00:00', 6), toDateTime64('2026-10-02 12:00:00', 6)",
+		"'OLD', toDateTime64('2026-10-02 00:00:00', 6), toDateTime64('2026-10-02 06:00:00', 6)",
+	} {
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, name, repo_patterns, is_active, provider, native_team_key, updated_at, last_synced, org_id) VALUES
+('team-x', 'X', [], 1, 'pagerduty', `+row+`, '`+orgID+`')`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog, err := LoadAIImpactTeamsByNativeKey(ctx, conn, orgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := catalog[AIImpactProviderTeamRef{Provider: "pagerduty", Ref: "NEW"}]; len(got) != 1 || got[0] != "team-x" {
+		t.Errorf("current key NEW maps to %v, want [team-x]; catalog %v", got, catalog)
+	}
+	if got := catalog[AIImpactProviderTeamRef{Provider: "pagerduty", Ref: "OLD"}]; len(got) != 0 {
+		t.Errorf("stale key OLD still maps to %v", got)
+	}
+}

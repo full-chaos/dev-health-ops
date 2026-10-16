@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -136,20 +138,20 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			writeDetail(w, http.StatusNotFound, "Not found")
 			return
 		}
-		payload, err := json.Marshal(llmConfigBody(orgID, cfg))
-		if err != nil {
-			logger.ErrorContext(ctx, "acr llm-config: encode failed", slog.String("org_id", orgID))
-			countLLMConfig(ctx, "encode_failed")
-			writeDetail(w, http.StatusInternalServerError, "Internal server error")
-			return
-		}
+		body := llmConfigBody(orgID, cfg)
 		logger.InfoContext(ctx, "acr llm-config: served",
 			slog.String("org_id", orgID), slog.String("credential_id", credentialID), slog.String("version", cfg.Version))
 		countLLMConfig(ctx, "served")
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(payload)
+		out := pyjson.NewObject()
+		out.Set("schema_version", body.SchemaVersion)
+		out.Set("org_id", body.OrgID)
+		out.Set("provider", body.Provider)
+		out.Set("model", body.Model)
+		out.Set("base_url", body.BaseURL)
+		out.Set("api_key", body.APIKey)
+		out.Set("version", body.Version)
+		// A Go-only route has no response model: the JSONResponse writer, not WriteModel.
+		policy.WriteJSON(w, http.StatusOK, out, http.Header{"X-Content-Type-Options": {"nosniff"}})
 	})
 }
 

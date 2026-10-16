@@ -101,6 +101,9 @@ func TestLLMConfigServesTheStoredConfigWithTheKey(t *testing.T) {
 	if source.got != testOrg {
 		t.Fatalf("source asked for %q", source.got)
 	}
+	if !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") || response.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("headers = %v", response.Header)
+	}
 	if response.Header.Get("Cache-Control") != "no-store" {
 		t.Fatal("the key response must be no-store")
 	}

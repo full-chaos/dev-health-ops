@@ -49,8 +49,9 @@ the GraphQL `AIAttributionBucketInput` enum:
 | `ai_assisted`   | Human authored with explicit AI assistance.                |
 | `agent_created` | Autonomous agent produced this artifact.                   |
 | `ai_review`     | AI performed the review.                                   |
-| `human`         | Human-only baseline (no detected AI involvement).          |
-| `unknown`       | Attribution unresolved — never guessed.                    |
+| `human`         | Default: every pull request with no AI signal and no `[bot]` author. |
+| `bot`           | No AI signal and the author login ends in `[bot]` (dependabot and the like): neither human nor AI. Stored and returned as a string; not a `buckets` filter value. |
+| `unknown`       | Only a stored attribution kind that names no bucket (bad data). Never a default, and no empty row is written. |
 
 ## Query catalog
 

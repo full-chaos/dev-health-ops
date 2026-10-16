@@ -495,6 +495,12 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (
 	if !cfg.APIJWTSecret.Configured() {
 		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
 	}
+	if cfg.APIJWTIssuer == "" {
+		return protection{}, errors.New("JWT_ISSUER is set but empty: unset it to use the default, or give it a value")
+	}
+	if cfg.APIJWTAudience == "" {
+		return protection{}, errors.New("JWT_AUDIENCE is set but empty: unset it to use the default, or give it a value")
+	}
 	verifier, err := edgetoken.New(cfg.APIJWTSecret.Reveal(), cfg.APIJWTIssuer, cfg.APIJWTAudience)
 	if err != nil {
 		return protection{}, fmt.Errorf("access-token verifier: %w", err)

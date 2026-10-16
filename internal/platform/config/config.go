@@ -995,12 +995,8 @@ func Load(spec Spec) (Config, error) {
 			cfg.APIExpectedWorkerGroups = &groups
 		}
 		cfg.APIBilling = loadBillingConfig(lookup)
-		if cfg.APIJWTIssuer, err = jwtClaimSetting(lookup, "JWT_ISSUER", defaultJWTIssuer); err != nil {
-			return Config{}, err
-		}
-		if cfg.APIJWTAudience, err = jwtClaimSetting(lookup, "JWT_AUDIENCE", defaultJWTAudience); err != nil {
-			return Config{}, err
-		}
+		cfg.APIJWTIssuer = presenceOrDefault(lookup, "JWT_ISSUER", defaultJWTIssuer)
+		cfg.APIJWTAudience = presenceOrDefault(lookup, "JWT_AUDIENCE", defaultJWTAudience)
 	}
 	if cfg.Service == QueryAPIServiceName {
 		cfg.QueryAPIAddress = envOrDefault(lookup, "QUERY_API_ADDR", defaultQueryAPIAddress)
@@ -1266,21 +1262,15 @@ func boundedIntEnv(
 	return value, nil
 }
 
-// jwtClaimSetting mirrors os.getenv("JWT_ISSUER", default): the default
-// applies only when the variable is absent. A present empty or blank value
-// is an operator error, refused here by key name. The Python api would sign
-// and check iss="" with it, which the Go verifier refuses to do (an empty
-// issuer or audience switches the claim check off), so silently substituting
-// the default would make the two planes reject each other's tokens.
-func jwtClaimSetting(lookup secrets.LookupEnv, key, fallback string) (string, error) {
-	value, present := lookup(key)
-	if !present {
-		return fallback, nil
+// presenceOrDefault mirrors os.getenv(key, default): the default applies only
+// when the variable is absent. A present empty or blank value is returned
+// verbatim, as the Python api reads JWT_ISSUER and JWT_AUDIENCE; the api
+// service refuses an empty one at startup.
+func presenceOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
+	if value, present := lookup(key); present {
+		return value
 	}
-	if strings.TrimSpace(value) == "" {
-		return "", fmt.Errorf("%s is set but empty: unset it to use %q, or give it a value", settingLabel(key), fallback)
-	}
-	return value, nil
+	return fallback
 }
 
 func envOrDefault(lookup secrets.LookupEnv, key, fallback string) string {

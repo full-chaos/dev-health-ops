@@ -127,7 +127,7 @@ var Spec = shell.Spec{
 	Service:                         config.APIServiceName,
 	Invocation:                      "dho api",
 	TraceServiceName:                config.APIServiceName,
-	ConfigureDependenciesWithLogger: configure,
+	ConfigureDependenciesWithLogger: configureChecked,
 }
 
 // Command is the `api` vertical of the dho binary.
@@ -279,6 +279,33 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Counters:  limits,
 	})...)
 	return markResponseModels(routes)
+}
+
+// configureChecked is the production entry: it stops startup on an empty
+// JWT_ISSUER or JWT_AUDIENCE, then runs configure. The config layer keeps a
+// present empty value (as the Python api does), but neither the access-token
+// verifier nor the GitHub install-state signer can run with an empty claim
+// (jwt.WithIssuer("") switches the check off). It runs whether or not a
+// database is configured, so the mistake is not hidden until one is. A
+// production Config always carries a non-empty default; tests that call
+// configure directly with a bare Config do not pass through this check.
+func configureChecked(
+	ctx context.Context,
+	cfg config.Config,
+	registry *health.Registry,
+	logger *slog.Logger,
+) ([]lifecycle.Component, error) {
+	// The shell logs only the reason code of a dependency error, so the key
+	// name travels in the dependencyFailure log line.
+	if cfg.APIJWTIssuer == "" {
+		return nil, dependencyFailure(ctx, logger, "api_jwt_claims", "api_jwt_issuer_empty",
+			errors.New("JWT_ISSUER is set but empty: unset it to use the default, or give it a value"))
+	}
+	if cfg.APIJWTAudience == "" {
+		return nil, dependencyFailure(ctx, logger, "api_jwt_claims", "api_jwt_audience_empty",
+			errors.New("JWT_AUDIENCE is set but empty: unset it to use the default, or give it a value"))
+	}
+	return configure(ctx, cfg, registry, logger)
 }
 
 func configure(

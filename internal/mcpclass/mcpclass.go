@@ -3,7 +3,7 @@
 //
 // The listener (internal/queryapi/server) reads a class decision per root field
 // from go_api_class_decision; the routing verbs (internal/goapicli/routing,
-// internal/goapiproof) write, repoint and prove them. Both sides
+// internal/goapiproof) write them. Both sides
 // import these definitions, so the key the verbs write is by construction
 // the key the listener reads.
 //

@@ -6,9 +6,9 @@ package goapiproof
 //  1. the running query-api must be reachable and must agree with this checkout on the SCHEMA digest. Checked by the
 //     CALLER, which is the half that owns HTTP; Enable then writes the digest the RUNNING process reported, so a
 //     caller that skipped the check still cannot record a digest no binary computes.
-//  2. the class root must have a per-root receipt for the exact candidate build (EnablementProofStage), and a
-//     receipt that lists an excluded shape is refused unless the operator names it and the go-served ledger holds an
-//     unproven named-limit entry for it (CHAOS-7512).
+//  2. nothing else: the per-root proof receipt that used to gate a class root is retired (D6024). MCP and GraphQL parity
+//     is held by the CI step TestMCPClassParityVenueOracle (CHAOS-9802), so enabling a root is the operator's
+//     decision, recorded with its evidence.
 //
 // A catalog operation has no routing state: query-api serves every registered operation, so Enable refuses one
 // (ErrDocumentOperationNotRouted).
@@ -20,8 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -31,14 +29,8 @@ import (
 )
 
 // EnableModes are the only modes `enable` may set. Both make a class root reachable to a real client, which is the
-// whole point of the verb; python/disabled/shadow do not, so they belong to `disable`. A shadow decision is re-pointed
-// by the `repoint` verb, never by widening this set.
+// whole point of the verb; python/disabled/shadow do not, so they belong to `disable`.
 var EnableModes = []string{"canary", "primary"}
-
-// ErrEnableUnproven reports that an MCP class operation has no per-root
-// receipt for this candidate build. A catalog operation is never refused
-// with it (CHAOS-8586).
-var ErrEnableUnproven = errors.New("goapiproof: no deployed_executed/match proof run recorded for this candidate build")
 
 // EnableRequest is one invocation.
 type EnableRequest struct {
@@ -56,13 +48,8 @@ type EnableRequest struct {
 	// document the deployed binary does not serve.
 	DocumentDigest map[string]string
 
-	// OperationKinds is each operation's registered document kind
-	// (OperationKindQuery / OperationKindMutation; CHAOS-6810, from the
-	// catalog). A mutation is admitted ONLY by a write_executed write receipt, a
-	// query only by a deployed_executed two-plane receipt. EVERY requested
-	// operation needs a known kind: a request naming one without is refused
-	// before anything is read or written, because defaulting an unknown kind to
-	// "query" would let a query receipt authorize a mutation.
+	// OperationKinds is each operation's kind: OperationKindMCPClass for a class root. A request naming an operation
+	// without a known kind is refused before anything is read or written.
 	OperationKinds map[string]string
 
 	Mode string
@@ -81,16 +68,6 @@ type EnableRequest struct {
 	// the operator typed about themselves and is verified by nothing.
 	PrincipalID string
 
-	// AllowExcluded names OPERATIONS whose excluded (unmeasured) shapes on an MCP class receipt the operator accepts (CHAOS-7512). Empty (the
-	// default) refuses any class receipt that lists an excluded shape. A name counts only if the go-served ledger also holds an UNPROVEN
-	// named-limit entry for that operation; a name with no such entry changes nothing.
-	AllowExcluded []string
-
-	// Ledger is the go-served ledger whose written limits admit an
-	// operation with no store proof. Nil means the ledger this binary was
-	// built with; only a test sets it.
-	Ledger *GoServedLedger
-
 	DryRun bool
 }
 
@@ -100,13 +77,6 @@ type EnableOutcome struct {
 	DocumentDigest string
 	Mode           string
 	CandidateBuild string
-	// Proven is false when this row was enabled from the ledger's written
-	// limit. It is reported even on success, because a proven enablement
-	// and a named-limit enablement must not print alike.
-	Proven bool
-	// NamedLimit is the ledger's written reason when the row was admitted
-	// from it instead of a store proof run; empty otherwise.
-	NamedLimit string
 	// ReviewEvidence is what was actually written, prefix included.
 	ReviewEvidence string
 	// ModeBefore/CandidateBuildBefore/HadRowBefore are
@@ -272,72 +242,14 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		wanted[operation] = request.DocumentDigest[operation]
 	}
 
-	// request.Mode IS the target mode: `enable --mode` accepts only
-	// canary|primary (EnableModes), the exact vocabulary
-	// OperationsWithEnablementProof's targetMode expects, so the value
-	// enable is about to WRITE is also the value that decides whether
-	// today's proof authorizes writing it.
-	proven, err := OperationsWithEnablementProofByKind(ctx, pool, request.SchemaDigest, request.RunningBuild, request.Mode, wanted, request.OperationKinds)
-	if err != nil {
-		return nil, err
-	}
-	var unproven []string
-	for _, operation := range request.Operations {
-		if !proven[operation] {
-			unproven = append(unproven, operation)
-		}
-	}
-	sort.Strings(unproven)
-	ledger := request.Ledger
-	if ledger == nil {
-		if ledger, err = DefaultGoServedLedger(); err != nil {
-			return nil, err
-		}
-	}
-	// CHAOS-7512: a class receipt admits the root on its measured shapes only. Refuse the WHOLE enable (nothing written) when the
-	// receipt lists a shape that was not measured, unless the operator named that shape's operation AND the ledger holds an unproven
-	// named-limit entry for it.
-	allowedExcluded, err := checkClassExclusions(ctx, pool, request, proven, ledger)
-	if err != nil {
-		return nil, err
-	}
-	namedLimit := make(map[string]string, len(unproven))
-	var refused []string
-	for _, operation := range unproven {
-		if reason, ok := ledger.EnableLimitReason(operation); ok {
-			namedLimit[operation] = reason
-			continue
-		}
-		refused = append(refused, operation)
-	}
-	if len(refused) > 0 {
-		// A class row is admitted by its per-root receipt and by nothing else: no
-		// go-served ledger limit can stand in for it, and the catalog rule never
-		// serves a class root.
-		return nil, fmt.Errorf("%w (%s=%s stage=%s terminal_state=%s route=%s document_digest=%s) for: %v\n"+
-			"  An MCP class root needs a per-root receipt for the exact candidate build. Record it with `dho goapi prove -mcp-roots <roots> -proof-url <internal listener>/query/proof-mcp` (the root's row must exist: `dho goapi routing seed -operations mcp:<root>`)",
-			ErrEnableUnproven, "candidate_build", request.RunningBuild,
-			EnablementProofStage, EnablementProofTerminalState, RouteProof, mcpclass.DocumentDigest(), refused)
-	}
-
 	outcomes := make([]EnableOutcome, 0, len(request.Operations))
 	for _, operation := range request.Operations {
-		evidence := request.ReviewEvidence
-		if names := allowedExcluded[operation]; len(names) > 0 {
-			evidence += " [allow-excluded: " + strings.Join(names, ",") + "]"
-		}
-		reason := namedLimit[operation]
-		if !proven[operation] {
-			evidence = NamedLimitEvidence(reason, evidence)
-		}
 		outcomes = append(outcomes, EnableOutcome{
 			Operation:      operation,
 			DocumentDigest: wanted[operation],
 			Mode:           request.Mode,
 			CandidateBuild: request.RunningBuild,
-			Proven:         proven[operation],
-			NamedLimit:     reason,
-			ReviewEvidence: evidence,
+			ReviewEvidence: request.ReviewEvidence,
 		})
 	}
 	if request.DryRun {
@@ -416,67 +328,4 @@ const EnforcedRolloutPercentage = 100
 // believe in a staged rollout that is not there.
 func ErrRolloutNotEnforced(percentage int) error {
 	return fmt.Errorf("goapiproof: rollout percentage %d is refused: neither plane enforces rollout_percentage or eligible_orgs, so a canary or primary row is on for EVERY authenticated org whatever it records, and these operations have no Python resolver for an org outside a cohort to fall back to; the only control is the mode (turn it off with `disable`)", percentage)
-}
-
-// checkClassExclusions applies the CHAOS-7512 rule to every PROVEN class operation of the request: read the provenance of the same newest
-// admissible class receipt `enable` just admitted and refuse when it is unreadable, or lists an excluded shape that is not allowed. It returns,
-// per class operation, the operation names that were allowed (for the durable evidence). Nothing is written here.
-func checkClassExclusions(ctx context.Context, db Querier, request EnableRequest, proven map[string]bool, ledger *GoServedLedger) (map[string][]string, error) {
-	allowed := map[string]bool{}
-	for _, name := range request.AllowExcluded {
-		allowed[strings.TrimSpace(name)] = true
-	}
-	used := map[string][]string{}
-	var problems []string
-	for _, operation := range request.Operations {
-		if !mcpclass.IsOperation(operation) || !proven[operation] {
-			continue
-		}
-		provenance, err := classReceiptProvenance(ctx, db, request.SchemaDigest, operation, request.RunningBuild)
-		if err != nil {
-			return nil, err
-		}
-		if provenance == nil {
-			problems = append(problems, operation+": the class receipt carries no readable provenance, so what it measured cannot be told (re-run `dho goapi prove -mcp-roots`)")
-			continue
-		}
-		// The provenance must describe THIS root: a receipt written for another root must not authorize this one.
-		if root, _ := mcpclass.Root(operation); provenance.Root != root {
-			problems = append(problems, operation+": the class receipt's provenance names root "+provenance.Root+", not "+root)
-			continue
-		}
-		seen := map[string]bool{}
-		for _, item := range provenance.Excluded {
-			name := item
-			if i := strings.IndexAny(item, ":="); i >= 0 {
-				name = item[:i]
-			}
-			if allowed[name] && ledgerHoldsUnprovenLimit(ledger, name) {
-				if !seen[name] {
-					seen[name] = true
-					used[operation] = append(used[operation], name)
-				}
-				continue
-			}
-			problems = append(problems, operation+": excluded (unmeasured) shape "+item)
-		}
-	}
-	if len(problems) > 0 {
-		sort.Strings(problems)
-		return nil, fmt.Errorf("%w: a class receipt lists shapes that were NOT measured and are not accepted: %s\n"+
-			"  Measure them (e.g. supply -instance-id to `dho goapi prove`) and re-prove; a shape is accepted only if -allow-excluded names its operation AND the go-served ledger holds an unproven named-limit entry for it",
-			ErrEnableRequestRefused, strings.Join(problems, "; "))
-	}
-	for operation := range used {
-		sort.Strings(used[operation])
-	}
-	return used, nil
-}
-
-// ledgerHoldsUnprovenLimit reports whether the ledger has an entry for operation with a written UnprovenReason (a named limit: no two-plane run
-// ever proved it). A born-in-Go operation is not one: it is counted by a real matched measurement or it blocks, and
-// -allow-excluded gives it nothing.
-func ledgerHoldsUnprovenLimit(ledger *GoServedLedger, operation string) bool {
-	entry, ok := ledger.Entry(operation)
-	return ok && !entry.BornInGo && strings.TrimSpace(entry.UnprovenReason) != ""
 }

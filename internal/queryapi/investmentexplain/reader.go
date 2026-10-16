@@ -29,6 +29,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/readers"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"log/slog"
 	"strings"
@@ -311,62 +312,24 @@ ORDER BY value DESC
 	return results, nil
 }
 
-// SizingCoverage is how many distinct work units of a read carry an issue size, and how many units it holds
-// (CHAOS-9619, D6027): a share in ISSUE_SIZE is read together with it, because with few sized units the mix is
-// mostly unsized units, each counted as 1 work unit.
-type SizingCoverage struct {
-	SizedUnits int
-	Units      int
-}
-
-// Share is the sized share of the units, nil when the read holds no unit (not measured, never 0).
-func (c SizingCoverage) Share() *float64 {
-	if c.Units <= 0 {
-		return nil
-	}
-	share := float64(c.SizedUnits) / float64(c.Units)
-	return &share
-}
-
-// Note is the "mostly unsized" sentence (D6031): when fewer than half of the units carry a size, the mix in ISSUE_SIZE
-// is mostly unsized units counted 1 each, and the answer says so. Empty otherwise, and for a read with no unit.
-func (c SizingCoverage) Note() string {
-	if 2*c.SizedUnits >= c.Units {
-		return ""
-	}
-	return fmt.Sprintf("Mostly unsized: %d of %d work units have an issue size. The other %d have no size, so each counts as 1 work unit.",
-		c.SizedUnits, c.Units, c.Units-c.SizedUnits)
-}
-
-// Unsized is the number of units without a size: 0 for a read with no unit, so an ISSUE_SIZE answer always carries
-// its coverage (D6027) while Share stays nil (no unit to take a share of).
-func (c SizingCoverage) Unsized() *int {
-	unsized := 0
-	if c.Units > 0 {
-		unsized = c.Units - c.SizedUnits
-	}
-	return &unsized
-}
-
 // FetchSizingCoverage counts the distinct units FetchInvestmentBreakdown reads for the same filters (same source,
 // window, scope and category clauses) and the ones among them that carry an issue size.
-func (reader *Reader) FetchSizingCoverage(ctx context.Context, filters BreakdownFilters) (SizingCoverage, error) {
+func (reader *Reader) FetchSizingCoverage(ctx context.Context, filters BreakdownFilters) (readers.SizingCoverage, error) {
 	if reader == nil || reader.client == nil {
-		return SizingCoverage{}, ErrUnavailable
+		return readers.SizingCoverage{}, ErrUnavailable
 	}
 	categorySQL, categoryBindings := filters.categoryClause()
 	scopeSQL, scopeBindings := filters.scopeClause()
 	source, err := MeasureSource(MeasureIssueSize, filters.unitSource(scopeSQL))
 	if err != nil {
-		return SizingCoverage{}, err
+		return readers.SizingCoverage{}, err
 	}
 	bindings := filters.baseBindings()
 	bindings = append(bindings, scopeBindings...)
 	bindings = append(bindings, categoryBindings...)
 	query := fmt.Sprintf(`
 SELECT
-    toUInt64(uniqExactIf(work_unit_investments.work_unit_id, %s > 0)) AS sized_units,
-    toUInt64(uniqExact(work_unit_investments.work_unit_id)) AS units
+%s
 FROM %s
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
 WHERE %s
@@ -374,26 +337,25 @@ WHERE %s
 %s
 %s
 %s
-`, analytics.UnitIssueSizeColumn, source, filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, readers.SizingCoverageSelectList("work_unit_investments.work_unit_id"), source, filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
-		return SizingCoverage{}, fmt.Errorf("query investment sizing coverage: %w", err)
+		return readers.SizingCoverage{}, fmt.Errorf("query investment sizing coverage: %w", err)
 	}
 	defer rows.Close()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return SizingCoverage{}, fmt.Errorf("iterate investment sizing coverage: %w", err)
+			return readers.SizingCoverage{}, fmt.Errorf("iterate investment sizing coverage: %w", err)
 		}
-		return SizingCoverage{}, fmt.Errorf("query investment sizing coverage: no row")
+		return readers.SizingCoverage{}, fmt.Errorf("query investment sizing coverage: no row")
 	}
-	var sized, units uint64
-	if err := rows.Scan(&sized, &units); err != nil {
-		return SizingCoverage{}, fmt.Errorf("scan investment sizing coverage: %w", err)
+	coverage, err := readers.ScanSizingCoverage(rows)
+	if err != nil {
+		return readers.SizingCoverage{}, err
 	}
 	if err := rows.Err(); err != nil {
-		return SizingCoverage{}, fmt.Errorf("iterate investment sizing coverage: %w", err)
+		return readers.SizingCoverage{}, fmt.Errorf("iterate investment sizing coverage: %w", err)
 	}
-	coverage := SizingCoverage{SizedUnits: int(sized), Units: int(units)}
 	slog.DebugContext(ctx, "investmentexplain: sizing coverage", "sized_units", coverage.SizedUnits, "units", coverage.Units, "scoped", filters.scoped(scopeSQL))
 	return coverage, nil
 }

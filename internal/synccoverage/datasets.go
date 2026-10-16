@@ -92,12 +92,12 @@ func effectiveDatasetKeys(dataset string, processorFlags json.RawMessage) ([]str
 	if len(processorFlags) > 0 {
 		value, err := pyjson.DecodeString(string(processorFlags))
 		if err != nil {
-			return nil, fmt.Errorf("decode processor_flags: %w", err)
+			return nil, fmt.Errorf("%w: decode: %w", ErrInvalidProcessorFlags, err)
 		}
 		if pyjson.Truthy(value) {
 			object, isObject := value.(*pyjson.Object)
 			if !isObject {
-				return nil, fmt.Errorf("processor_flags of %s is %s, not a dict", dataset, pyjson.Repr(value))
+				return nil, fmt.Errorf("%w: processor_flags of %s is %s, not a dict", ErrInvalidProcessorFlags, dataset, pyjson.Repr(value))
 			}
 			flags = object
 		}

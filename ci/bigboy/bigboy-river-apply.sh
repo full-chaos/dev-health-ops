@@ -15,7 +15,7 @@ export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
 unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
 DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
 export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-$DHO}"   # by hand: the worker overlay only has to interpolate; this one-off runs --no-deps and starts no worker
-"${DC[@]}" --profile venue-river run --rm --no-deps -T venue-river migrate river --apply-and-check 2>&1 | sed -E 's#(://[^:/@]*:)[^@/]*@#\1<redacted>@#g' | tail -8 | cut -c1-200
+"${DC[@]}" --profile venue --profile venue-river run --rm --no-deps -T venue-river migrate river --apply-and-check 2>&1 | sed -E 's#(://[^:/@]*:)[^@/]*@#\1<redacted>@#g' | tail -8 | cut -c1-200
 rc=${PIPESTATUS[0]}
 echo "river_apply_rc=$rc image=${DHO##*@}"
 exit "$rc"   # a failed apply must fail this step (was: the echo's status, always 0)

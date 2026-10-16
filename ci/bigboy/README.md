@@ -32,14 +32,16 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" \
 Do not export `COMPOSE_FILE`, `COMPOSE_PROFILES` or any other `COMPOSE_*` variable: the cut scripts unset them so nothing adds a file
 or a profile. `docker compose` interpolates every service of the file, also those of a profile that is not enabled, so a variable a
 one-off needs is read with an empty default (`${PROVE_ORG:-}`) and the script that starts the one-off checks it
-(web-path-smoke.sh, bigboy-graphql-prove.sh); only the variables the live stack needs are required (`:?`): the four image pins
-(`_records/images.env`) and `DHO_API_CH_USERS_XML` (the host file mounted into ClickHouse's users.d, default
-`$BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml`; bigboy-cut.sh exports it).
+(web-path-smoke.sh, bigboy-graphql-prove.sh); only the variables the live stack needs are required (`:?`): the three image pins
+and `DHO_API_CH_USERS_XML` (the host file mounted into ClickHouse's users.d), all four named in `_records/images.env`, which the
+command passes. `BIGBOY_OPERATOR_IMAGE` alone has a default, the placeholder tag `:not-resolved`, so a plain `ps` or `config`
+renders without it and a worker cannot start from it (the pull fails); the cut exports the real digest and repin writes it into
+`_records/images.env`.
 
 **Pins.** The digests of the four images (`BIGBOY_DHO_IMAGE`, `BIGBOY_API_TOOLS_IMAGE`, `BIGBOY_WEB_IMAGE`, `BIGBOY_OPERATOR_IMAGE`) live
 in `_records/images.env`, the one file a cut rewrites (`bigboy-repin*.sh`; they also write the operator pin, so a plain
 `docker compose ps` needs nothing exported). The tracked `ci/bigboy/images.env` is the last pin a PR recorded; copy it to
-`_records/` to start a bigboy root. `BIGBOY_OPERATOR_IMAGE` is absent from the tracked copy: the cut exports it, and repin writes it.
+`_records/` to start a bigboy root. `BIGBOY_OPERATOR_IMAGE` is absent from the tracked copy: the cut exports it, and repin writes it into `_records/images.env`.
 
 **First use on a root that still has the old pin file** (read-only until the last line; GWC owns the switch window): the new file renders
 the live `stack` byte-identically (so no container is recreated by the switch itself), but the pins now come from an env file. Make
@@ -52,6 +54,7 @@ for pair in BIGBOY_DHO_IMAGE:dev-health-go-dho BIGBOY_API_TOOLS_IMAGE:dev-health
   ref=$(grep -ohE "ghcr.io/full-chaos/$img@sha256:[0-9a-f]{64}" _records/compose.bigboy.images.yml | head -1) || true
   [ -n "$ref" ] && echo "$var=$ref"
 done > _records/images.env
+printf 'DHO_API_CH_USERS_XML=%s\n' "$BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml" >> _records/images.env
 ```
 
 then compare the render (names only: `ci/bigboy/compose-config-redacted.sh` with the arguments above) before running any `up`.

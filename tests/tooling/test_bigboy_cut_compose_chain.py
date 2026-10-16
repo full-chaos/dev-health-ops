@@ -388,8 +388,12 @@ def test_an_inherited_compose_file_never_decides_the_chain(tmp_path: Path) -> No
             name,
             files,
         )
-        assert "--profile" in last["argv"] and any(
-            profile in last["argv"] for profile in ("venue-hook", "venue-river")
+        assert (
+            "--profile" in last["argv"]
+            and "venue" in last["argv"]
+            and any(
+                profile in last["argv"] for profile in ("venue-hook", "venue-river")
+            )
         ), name
 
 
@@ -625,4 +629,5 @@ def test_the_one_offs_keep_their_compose_shape(tmp_path: Path) -> None:
                 service,
             ):
                 assert needed in a, (name, needed, a)
-            assert a.index("--profile") + 1 == a.index(service)
+            profiles = [a[i + 1] for i, x in enumerate(a) if x == "--profile"]
+            assert profiles == ["venue", service], (name, profiles)

@@ -155,6 +155,7 @@ def test_the_digests_are_in_the_pins_file_only(tmp_path) -> None:
         for line in PINS_FILE.read_text().splitlines()
         if line and not line.startswith("#")
     )
+    pins.pop("DHO_API_CH_USERS_XML")  # the host path of the users file, not an image
     assert sorted(pins) == [
         "BIGBOY_API_TOOLS_IMAGE",
         "BIGBOY_DHO_IMAGE",
@@ -193,7 +194,6 @@ def test_a_one_off_needs_none_of_its_own_variables_to_render(tmp_path) -> None:
     assert required == [
         "BIGBOY_API_TOOLS_IMAGE",
         "BIGBOY_DHO_IMAGE",
-        "BIGBOY_OPERATOR_IMAGE",
         "BIGBOY_WEB_IMAGE",
         "DHO_API_CH_USERS_XML",
     ], required
@@ -234,3 +234,66 @@ def test_each_old_set_renders_the_services_it_rendered(tmp_path) -> None:
     root = scratch_root(tmp_path)
     for name, (profiles, extra) in OLD_SETS.items():
         assert set(services(root, *profiles)) == set(STACK_SERVICES) | extra, name
+
+
+def test_a_fresh_root_renders_with_only_the_tracked_env_files(tmp_path) -> None:
+    """The documented plain command passes ops/.env and _records/images.env and exports nothing: no operator image (the cut and
+    repin supply it) and no users-file path (the env file names it). Round 1 of CHAOS-9962 found both required and unset."""
+    root = scratch_root(tmp_path)
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME": str(root),
+    }
+    for profile in ((), ("smoke", "venue", "venue-hook", "venue-river")):
+        proc = subprocess.run(
+            [*compose_argv(root, *profile), "config", "--services"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+            check=False,
+        )
+        assert proc.returncode == 0, (profile, proc.stderr[-400:])
+    images = subprocess.run(
+        [*compose_argv(root), "config", "--images"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        check=False,
+    ).stdout
+    # no worker starts from a digest the tracked copy does not carry: the placeholder tag cannot pull
+    assert (
+        "dev-health-go-operator:not-resolved" in images
+        and "go-operator@sha256" not in images
+    )
+
+
+def test_the_query_api_drift_check_reads_the_environment_of_the_compose_file() -> None:
+    """bigboy-cut.sh's LIVE_NAMES awk expected a mapping and read a KEY=VALUE list as nothing (false drift on every cut). Run the
+    exact program of the script against the real file."""
+    cut = (TOOLS / "bigboy-cut.sh").read_text()
+    start = cut.index("LIVE_NAMES=$(awk '") + len("LIVE_NAMES=$(awk '")
+    program = cut[start : cut.index('\' "$HERE/compose.bigboy.yml"', start)]
+    out = subprocess.run(
+        ["awk", program, str(COMPOSE_FILE)], capture_output=True, text=True, check=True
+    ).stdout.split()
+    names = set(out)
+    assert "GO_API_EDGE_JWT_SECRET" in names, sorted(names)[:10]
+    assert any(n.startswith("GO_API_") and n.endswith("_ENABLED") for n in names)
+    # only the environment of query-api: depends_on keys, volume fields and ports are not environment names
+    assert not names & {"clickhouse", "migrate", "source", "target", "type"}, sorted(
+        names
+    )
+
+
+def test_the_hook_and_river_scripts_select_the_old_venue_set() -> None:
+    """The old hook-check and river-apply chains enabled profile `venue` (venue-prove, venue-tools) and held their own one-off."""
+    for script, own in (
+        ("bigboy-hook-check.sh", "venue-hook"),
+        ("bigboy-river-apply.sh", "venue-river"),
+    ):
+        text = (TOOLS / script).read_text()
+        assert f"--profile venue --profile {own} run --rm --no-deps -T {own}" in text, (
+            script
+        )

@@ -8,7 +8,9 @@
 # and the others of the base file. A one-off service reads its variables with a default, never `:?`: compose interpolates the
 # services of an inactive profile too, so a required variable would fail every other command. The script that starts a one-off
 # service checks its variables first (web-path-smoke.sh, bigboy-graphql-prove.sh, bigboy-hook-check.sh, bigboy-river-apply.sh).
-# BIGBOY_OPERATOR_IMAGE (the workers) and DHO_API_CH_USERS_XML (clickhouse) stay required: the live stack needs them.
+# The three image pins and DHO_API_CH_USERS_XML are required (`:?`) and come from the env file _records/images.env. BIGBOY_OPERATOR_IMAGE
+# alone has a default, the placeholder tag :not-resolved (what stack.sh used for a verb that starts no worker): a plain `ps` or `config` renders
+# without it, and starting a worker without the real digest fails at the pull instead of running a wrong image.
 # The image digests are NOT in this file: ${BIGBOY_DHO_IMAGE}, ${BIGBOY_API_TOOLS_IMAGE}, ${BIGBOY_WEB_IMAGE} and ${BIGBOY_OPERATOR_IMAGE}
 # come from the pins env file (_records/images.env, tracked copy ci/bigboy/images.env), which bigboy-repin*.sh rewrite at every cut.
 # The comment blocks below quote the retired files as they were: where one says the images overlay holds a digest, read the pins env file.
@@ -455,7 +457,7 @@ services:
     - DEV_HEALTH_CH_USER=${CLICKHOUSE_USER:-ch}
     expose:
     - '8080'
-    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    image: ${BIGBOY_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:not-resolved}
     labels:
       logging.service.name: dev-health-go-reconciler
       logging.service.namespace: dev-health
@@ -536,7 +538,7 @@ services:
       WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
     expose:
     - '8080'
-    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    image: ${BIGBOY_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:not-resolved}
     labels:
       logging.service.name: dev-health-go-scheduler
       logging.service.namespace: dev-health
@@ -604,7 +606,7 @@ services:
       WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
     expose:
     - '8080'
-    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    image: ${BIGBOY_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:not-resolved}
     labels:
       logging.service.name: dev-health-go-stream-external
       logging.service.namespace: dev-health
@@ -675,7 +677,7 @@ services:
       WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
     expose:
     - '8080'
-    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    image: ${BIGBOY_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:not-resolved}
     labels:
       logging.service.name: dev-health-go-stream-ingest
       logging.service.namespace: dev-health
@@ -747,7 +749,7 @@ services:
       WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
     expose:
     - '8080'
-    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    image: ${BIGBOY_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:not-resolved}
     labels:
       logging.service.name: dev-health-go-stream-pagerduty
       logging.service.namespace: dev-health
@@ -1055,7 +1057,7 @@ services:
       WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
     expose:
     - '8080'
-    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    image: ${BIGBOY_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:not-resolved}
     labels:
       logging.service.name: dev-health-go-worker
       logging.service.namespace: dev-health
@@ -1160,7 +1162,7 @@ services:
     - TYPESAFE_MODEL=${TYPESAFE_MODEL:-}
     expose:
     - '8080'
-    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    image: ${BIGBOY_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:not-resolved}
     labels:
       logging.service.name: dev-health-go-worker-heavy
       logging.service.namespace: dev-health
@@ -1261,7 +1263,7 @@ services:
       WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
     expose:
     - '8080'
-    image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
+    image: ${BIGBOY_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:not-resolved}
     labels:
       logging.service.name: dev-health-go-worker-ops
       logging.service.namespace: dev-health
@@ -1748,7 +1750,7 @@ services:
       DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: '1'
       MIGRATION_DATABASE_URI: postgresql://devhealth:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/devhealth?sslmode=disable
       OPERATIONAL_ORDERING_CONTRACT: '2'
-    image: ${HOOK_OPERATOR_IMAGE:-${BIGBOY_OPERATOR_IMAGE}}
+    image: ${HOOK_OPERATOR_IMAGE:-${BIGBOY_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:not-resolved}}
     networks:
       dev-health: null
     profiles:

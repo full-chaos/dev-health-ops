@@ -289,6 +289,15 @@ def test_the_compose_file_mounts_the_host_file_into_users_d_and_requires_the_pat
     assert volume["read_only"] is True
     env = bb.compose_env(root)
     del env["DHO_API_CH_USERS_XML"]
+    # the env file names the path in a real root; without that line the variable is required, never defaulted
+    pins = root / "_records" / "images.env"
+    pins.write_text(
+        "".join(
+            line
+            for line in pins.read_text().splitlines(keepends=True)
+            if not line.startswith("DHO_API_CH_USERS_XML=")
+        )
+    )
     missing = subprocess.run(
         [*bb.compose_argv(root), "config"],
         capture_output=True,

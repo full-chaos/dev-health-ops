@@ -202,8 +202,8 @@ func TestEveryBigboyWorkerServiceRunsTheCIOperatorImage(t *testing.T) {
 			continue
 		}
 		image := service["image"]
-		if image.Value != "${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}" {
-			t.Errorf("service %s image = %q, want the required ${BIGBOY_OPERATOR_IMAGE}", name, image.Value)
+		if image.Value != "${BIGBOY_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:not-resolved}" {
+			t.Errorf("service %s image = %q, want ${BIGBOY_OPERATOR_IMAGE} with the not-resolved placeholder default", name, image.Value)
 		}
 		if _, hasBuild := service["build"]; hasBuild {
 			t.Errorf("service %s has a build: a local build would replace the CI image", name)

@@ -92,7 +92,7 @@ fi
 if [ -n "$VALUES" ]; then
   python3 "$HERE/generate-query-api-enabled-flags.py" "$VALUES" --out "$REC.query-api-enabled-flags.generated" 2>"$REC.query-api-enabled-flags.err"
   GEN_NAMES=$(awk -F: '{print $1}' "$REC.query-api-enabled-flags.generated" | tr -d ' ' | sort)
-  LIVE_NAMES=$(awk -F: '/^  query-api:$/{f=1;next} /^  [A-Za-z0-9_.-]+:$/{f=0} f&&/^      [A-Za-z_]+:/{print $1}' "$HERE/compose.bigboy.yml" | tr -d ' ' | sort -u)
+  LIVE_NAMES=$(awk '/^  query-api:$/{f=1;e=0;next} /^  [A-Za-z0-9_.-]+:$/{f=0;e=0} f&&/^    [a-z_]+:/{e=($0 ~ /^    environment:/)} e&&/^      [A-Za-z_]+:/{n=$1; sub(/:.*/,"",n); print n} e&&/^    - [A-Za-z_][A-Za-z0-9_]*=/{n=$2; sub(/=.*/,"",n); print n}' "$HERE/compose.bigboy.yml" | sort -u)   # the query-api environment, as a mapping or as a KEY=VALUE list
   MISSING=$(comm -23 <(echo "$GEN_NAMES") <(echo "$LIVE_NAMES"))
   if [ -z "$MISSING" ]; then
     st query-api-enabled-flags-current 0

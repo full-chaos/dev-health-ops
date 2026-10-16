@@ -64,6 +64,7 @@ func TestAIImpactComputeFamilyAgainstRealClickHouse(t *testing.T) {
     created_at DateTime64(3, 'UTC'), merged_at Nullable(DateTime64(3, 'UTC')),
     additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
     changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    author_name Nullable(String),
     last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE git_pull_request_reviews (
@@ -423,6 +424,7 @@ func TestAIImpactDedupIsTenantScoped(t *testing.T) {
     merged_at Nullable(DateTime64(3, 'UTC')),
     additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
     changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    author_name Nullable(String),
     last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE git_pull_request_reviews (
@@ -535,6 +537,7 @@ func TestAIImpactReviewVersionDedupWithinOneTenant(t *testing.T) {
     merged_at Nullable(DateTime64(3, 'UTC')),
     additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
     changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    author_name Nullable(String),
     last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE git_pull_request_reviews (
@@ -641,6 +644,7 @@ func TestAIImpactAttributionTenantIsolation(t *testing.T) {
     merged_at Nullable(DateTime64(3, 'UTC')),
     additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
     changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    author_name Nullable(String),
     last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE ai_attribution (
@@ -863,6 +867,7 @@ func TestAIImpactLinkageQueryFailureIsObservable(t *testing.T) {
     created_at DateTime64(3, 'UTC'), merged_at Nullable(DateTime64(3, 'UTC')),
     additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
     changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    author_name Nullable(String),
     last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE git_pull_request_reviews (
@@ -1034,6 +1039,7 @@ var aiImpactOwnershipSchema = []string{
     created_at DateTime64(3, 'UTC'), merged_at Nullable(DateTime64(3, 'UTC')),
     additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
     changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    author_name Nullable(String),
     last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
 	`CREATE TABLE git_pull_request_reviews (

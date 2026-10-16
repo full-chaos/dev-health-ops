@@ -69,3 +69,9 @@ internal/testsupport/pyoracle
 internal/testsupport/recordedfiles
 internal/testsupport/venueoracle
 internal/workitemcontract
+~internal/chmigrate/baseline
+~internal/chmigrate/sql
+~internal/pgmigrate/baseline
+~internal/pgmigrate/sql
+~internal/pgmigrate/sql/down
+~internal/scheduler/sync/testdata

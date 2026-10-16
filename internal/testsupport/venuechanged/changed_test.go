@@ -248,3 +248,27 @@ func TestAMatchIsNotLostOnALargeChangeSet(t *testing.T) {
 	}
 	t.Fatalf("a change in internal/api/policy among 20000 other paths selected %d row(s) and not TestVenueOracleCredentialRepos\n%s", len(rows), stderr)
 }
+
+// TestAChangeToAFileALinkedPackageEmbedsSelectsTheTestsThatLinkIt holds the embedded-resource half of the
+// closure (round 2 of CHAOS-9935): internal/auth/passwordpolicy embeds data/common_passwords.txt and the
+// admin venue server links it, but the file is in no package directory, so the package rule alone selected
+// nothing and the job read green.
+func TestAChangeToAFileALinkedPackageEmbedsSelectsTheTestsThatLinkIt(t *testing.T) {
+	root := repoRoot(t)
+	for _, changed := range []string{
+		"internal/auth/passwordpolicy/data/common_passwords.txt",
+		"internal/pgmigrate/sql/0139_refunds_write_first_idempotency_key.sql",
+	} {
+		rows, err, stderr := selected(t, root, "\x00", changed)
+		if err != nil {
+			t.Fatalf("--list failed: %v\n%s", err, stderr)
+		}
+		admin := false
+		for _, row := range rows {
+			admin = admin || strings.HasPrefix(row, "internal/apiservice/admin\t")
+		}
+		if !admin {
+			t.Errorf("a change to the embedded file %s did not select a test of internal/apiservice/admin (selected %d row(s))", changed, len(rows))
+		}
+	}
+}

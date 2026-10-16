@@ -115,3 +115,15 @@ internal/testsupport/sessionscenario
 internal/testsupport/smtpcapture
 internal/testsupport/venueoracle
 internal/workitemcontract
+~internal/api/externalingest/testdata
+~internal/api/recordvalidation/testdata
+~internal/apiservice/admin/testdata/llmreadinessoracle
+~internal/apiservice/customerpush/testdata
+~internal/auth/passwordpolicy/data
+~internal/chmigrate/baseline
+~internal/chmigrate/sql
+~internal/mail/templates
+~internal/pgmigrate/baseline
+~internal/pgmigrate/sql
+~internal/pgmigrate/sql/down
+~internal/scheduler/sync/testdata

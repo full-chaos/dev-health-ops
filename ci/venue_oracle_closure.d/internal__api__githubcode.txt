@@ -38,3 +38,8 @@ internal/testsupport/pyoracle
 internal/testsupport/recordedfiles
 internal/testsupport/redirectprobe
 internal/testsupport/venueoracle
+~internal/chmigrate/baseline
+~internal/chmigrate/sql
+~internal/pgmigrate/baseline
+~internal/pgmigrate/sql
+~internal/pgmigrate/sql/down

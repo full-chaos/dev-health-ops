@@ -171,3 +171,13 @@ internal/testsupport/pyoracle
 internal/testsupport/recordedfiles
 internal/testsupport/venueoracle
 internal/workitemcontract
+~internal/chmigrate/baseline
+~internal/chmigrate/sql
+~internal/fixturescli/testdata/generate
+~internal/fixturescli/testdata/synthetic
+~internal/pgmigrate/baseline
+~internal/pgmigrate/sql
+~internal/pgmigrate/sql/down
+~internal/queryapi/investmentexplain/prompts
+~internal/scheduler/sync/testdata
+~internal/testsupport/chschema/testdata

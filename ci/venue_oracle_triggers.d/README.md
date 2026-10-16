@@ -22,9 +22,9 @@ Every Go package the test binary links is covered without a row: `ci/venue_oracl
 binary links, and a changed file directly in one of them (or under its testdata) selects every
 test of the package. `TestClosureFilesMatchTheTestBinaryDependencies` fails when a file is stale
 and prints the regenerate command. A path that is in neither still selects nothing on a pull
-request; the full run on main is the check for it. Named limit: a file embedded from a
-sub-directory that is not a package (go:embed of `sql/*.sql`) lies outside every package
-directory and needs a row here.
+request; the full run on main is the check for it. A closure file also carries `~dir` lines: a directory below a linked package that holds a file the
+package (or its tests) embeds (`go:embed` of `sql/*.sql`, `templates/`, `data/`); a changed file anywhere
+under it selects the same tests.
 
 `internal/testsupport/venuechanged` (TestEveryProducerAVenueTestImportsIsDeclaredAsATrigger,
 CHAOS-9578, per test since CHAOS-9614) fails when a `run` test uses a producer package

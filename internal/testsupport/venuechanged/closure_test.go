@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -58,6 +59,7 @@ func computeClosures(t *testing.T, root string, pkgs []string) map[string][]stri
 		}
 		t.Fatalf("go list -test over %d venue package(s): %v\n%s", len(pkgs), err, detail)
 	}
+	embedDirs := embeddedDirs(t, root, pkgs)
 	closures := map[string][]string{}
 	for _, line := range strings.Split(string(out), "\n") {
 		importPath, deps, ok := strings.Cut(line, "\t")
@@ -84,7 +86,20 @@ func computeClosures(t *testing.T, root string, pkgs []string) map[string][]stri
 			list = append(list, dir)
 		}
 		sort.Strings(list)
-		closures[pkg] = list
+		// "~dir" lines: a directory below a linked package holding a file it embeds (go:embed of
+		// sql/*.sql, templates/, data/): a changed file anywhere under it changes the binary.
+		prefixes := map[string]bool{}
+		for _, dir := range append([]string{pkg}, list...) {
+			for _, under := range embedDirs[dir] {
+				prefixes["~"+under] = true
+			}
+		}
+		var embedded []string
+		for line := range prefixes {
+			embedded = append(embedded, line)
+		}
+		sort.Strings(embedded)
+		closures[pkg] = append(list, embedded...)
 	}
 	for _, pkg := range pkgs {
 		if _, ok := closures[pkg]; !ok {
@@ -92,6 +107,64 @@ func computeClosures(t *testing.T, root string, pkgs []string) map[string][]stri
 		}
 	}
 	return closures
+}
+
+// embeddedDirs maps a package directory to the directories below it that hold a file the package
+// (or its tests) embeds: `go list -deps -test` EmbedFiles, TestEmbedFiles and XTestEmbedFiles, which
+// are relative to the package directory. A file in the package directory itself needs no entry (the
+// package rule covers every file directly in it).
+func embeddedDirs(t *testing.T, root string, pkgs []string) map[string][]string {
+	t.Helper()
+	args := []string{"list", "-mod=readonly", "-tags=integration", "-test", "-deps", "-f",
+		`{{.ImportPath}}{{"|"}}{{join .EmbedFiles ","}}{{"|"}}{{join .TestEmbedFiles ","}}{{"|"}}{{join .XTestEmbedFiles ","}}`}
+	for _, pkg := range pkgs {
+		args = append(args, "./"+pkg)
+	}
+	cmd := exec.Command("go", args...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.Output()
+	if err != nil {
+		detail := ""
+		if exit, ok := err.(*exec.ExitError); ok {
+			detail = string(exit.Stderr)
+		}
+		t.Fatalf("go list -deps (embedded files): %v\n%s", err, detail)
+	}
+	sets := map[string]map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Split(line, "|")
+		if len(fields) != 4 {
+			continue
+		}
+		importPath, _, _ := strings.Cut(fields[0], " [")
+		rel, ok := strings.CutPrefix(importPath, modulePrefix)
+		if !ok {
+			continue
+		}
+		rel = strings.TrimSuffix(rel, ".test")
+		rel = strings.TrimSuffix(rel, "_test")
+		for _, group := range fields[1:] {
+			for _, file := range strings.Split(group, ",") {
+				dir := path.Dir(file)
+				if file == "" || dir == "." {
+					continue
+				}
+				if sets[rel] == nil {
+					sets[rel] = map[string]bool{}
+				}
+				sets[rel][rel+"/"+dir] = true
+			}
+		}
+	}
+	result := map[string][]string{}
+	for rel, set := range sets {
+		for dir := range set {
+			result[rel] = append(result[rel], dir)
+		}
+		sort.Strings(result[rel])
+	}
+	return result
 }
 
 // committedClosures reads ci/venue_oracle_closure.d/ (package dir -> dependency dirs).

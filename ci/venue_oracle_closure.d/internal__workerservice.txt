@@ -147,3 +147,13 @@ internal/testsupport/pyoracle
 internal/testsupport/recordedfiles
 internal/testsupport/venueoracle
 internal/workitemcontract
+~internal/api/recordvalidation/testdata
+~internal/chmigrate/baseline
+~internal/chmigrate/sql
+~internal/jobs/operational/templates
+~internal/mail/templates
+~internal/pgmigrate/baseline
+~internal/pgmigrate/sql
+~internal/pgmigrate/sql/down
+~internal/scheduler/sync/testdata
+~internal/testsupport/chschema/testdata

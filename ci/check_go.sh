@@ -732,6 +732,12 @@ venue_oracle_changed_selects() {
     if [ -n "${VENUE_CHANGED_DIRS:-}" ] && grep -qxFf "${closure_file}" < <(printf '%s\n' "${VENUE_CHANGED_DIRS}"); then
       return 0
     fi
+    # "~dir" lines: a changed file anywhere under a directory a linked package embeds files from.
+    if awk 'FNR == NR { if (substr($0, 1, 1) == "~") prefix[substr($0, 2) "/"] = 1; next }
+            { for (p in prefix) if (index($0, p) == 1) { found = 1; exit } }
+            END { exit !found }' "${closure_file}" <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+      return 0
+    fi
   fi
   [ -n "${2:-}" ] || return 1
   while IFS=$'\t' read -r pkg name path; do

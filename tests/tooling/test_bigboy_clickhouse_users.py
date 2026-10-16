@@ -78,7 +78,7 @@ _SCRATCHES: list[str] = []
 #: Every external command the check runs. Each gets a PATH shim that records argv and environment, and PATH holds
 #: nothing else: a command the check starts that is not listed fails the run (rc != 0), so the set cannot go stale.
 _CHECK_COMMANDS = (
-    "stat id sed tail tr wc cut awk cmp head dirname mktemp chmod rm sha256sum python3 cat"
+    "stat id sed tail tr wc cut awk cmp head dirname mktemp chmod rm sha256sum python3 cat env bash grep sort paste date mkdir git"
 ).split()
 
 
@@ -195,6 +195,16 @@ def _check(
     to a 0600 file (tmp_path/xtrace.log). The scratch dir used is returned in proc.scratch."""
     env = _docker(tmp_path, count=count, rc=rc, login_ok=login_ok)
     env.update(_var_trap(tmp_path))
+    # the check reaches ClickHouse through ci/bigboy/stack.sh (CHAOS-8693): a bigboy root with the pin file and the env file
+    root = tmp_path / "bigboy-root"
+    (root / "_records").mkdir(parents=True, exist_ok=True)
+    (root / "ops").mkdir(exist_ok=True)
+    (root / "_records" / "compose.bigboy.images.yml").write_text("services: {}\n")
+    (root / "ops" / ".env").write_text("")
+    env["BIGBOY_ROOT"] = str(root)
+    env["BIGBOY_OPERATOR_IMAGE"] = (
+        "ghcr.io/full-chaos/dev-health-go-operator@sha256:" + "a" * 64
+    )
     scratch = scratch or _scratch()
     env["TMPDIR"] = tmpdir if tmpdir is not None else str(scratch)
     creds = tmp_path / "go-api.creds"
@@ -296,16 +306,18 @@ def test_the_cut_checks_dho_api_ch_before_it_recreates_go_api() -> None:
         i for i, line in enumerate(lines) if "check-dho-api-ch-user.sh" in line
     )
     up = next(
-        i
-        for i, line in enumerate(lines)
-        if "up -d --no-deps --no-build query-api go-api web" in line
+        i for i, line in enumerate(lines) if 'stack.sh" up query-api go-api web' in line
     )
     assert check < up, "the dho_api_ch check must run before go-api is recreated"
     gate = "\n".join(lines[check : check + 3])
     assert "exit 1" in gate and "ABORTING before go-api" in gate, gate
-    chain = next(line for line in lines if line.startswith("export COMPOSE_FILE="))
-    assert "$HERE/compose.bigboy.clickhouse-users.yml" in chain
-    assert chain.rstrip().endswith("$HERE/compose.bigboy.router.yml"), chain
+    stack_tools = [
+        ln.split()[2]
+        for ln in (TOOLS / "stack.files").read_text().splitlines()
+        if ln.startswith("stack tools")
+    ]
+    assert "compose.bigboy.clickhouse-users.yml" in stack_tools
+    assert stack_tools[-1] == "compose.bigboy.router.yml", stack_tools
     assert any(line.startswith("export DHO_API_CH_USERS_XML=") for line in lines)
 
 
@@ -363,8 +375,11 @@ def test_the_api_credential_is_only_ever_on_dockers_stdin(tmp_path: Path) -> Non
     for line in (
         args.splitlines()
     ):  # compose verbs on the service, never a bare `docker exec` on a container name
-        assert line.startswith("compose --env-file "), line
-        assert " exec -T " in line and " clickhouse clickhouse-client " in line, line
+        assert line.startswith("compose -p dev-health "), line
+        if " exec " in f" {line} ":
+            assert " exec -T clickhouse clickhouse-client " in line, line
+        else:
+            assert " config --images" in line or " ps " in f" {line} ", line
 
 
 def test_the_scratch_is_made_under_the_callers_tmpdir_with_mode_0700(

@@ -439,6 +439,10 @@ type teamRepoOwnershipDerivation struct {
 	Ties []TeamRepoOwnershipTie
 	// CoOwnersBelowShareFloor counts the co-owners the share floor gave no row.
 	CoOwnersBelowShareFloor int
+	// DroppedBelowShareFloor names those co-owners. The share is a measure
+	// over the whole history, so a dropped co-owner held no share on any day:
+	// the write side voids its rows instead of closing them at the run.
+	DroppedBelowShareFloor []teamRepoOwnershipClaimRef
 	// TextKeyCandidates counts the candidates a key parsed from pull request
 	// text gave (explicit_text tier); TextKeysSkippedForNative counts the pull
 	// requests whose text key was not used because they have a native link.
@@ -461,6 +465,12 @@ func changeRequestNumber(workItemID string) string {
 		return ""
 	}
 	return workItemID[index+1:]
+}
+
+// teamRepoOwnershipClaimRef names one team's claim on one repository.
+type teamRepoOwnershipClaimRef struct {
+	TeamID string
+	RepoID string
 }
 
 // teamRepoOwnershipCoOwnerShareFloor is the smallest linked share a co-owner
@@ -663,6 +673,7 @@ func deriveTeamRepoOwnership(
 				row.EvidenceFrom = repoEarliest
 			} else if row.Share < teamRepoOwnershipCoOwnerShareFloor {
 				result.CoOwnersBelowShareFloor++
+				result.DroppedBelowShareFloor = append(result.DroppedBelowShareFloor, teamRepoOwnershipClaimRef{TeamID: teamID, RepoID: repoID})
 				continue
 			}
 			result.Rows = append(result.Rows, row)
@@ -675,6 +686,13 @@ func deriveTeamRepoOwnership(
 		return result.Rows[i].TeamID < result.Rows[j].TeamID
 	})
 	sort.Slice(result.Ties, func(i, j int) bool { return result.Ties[i].RepoID < result.Ties[j].RepoID })
+	sort.Slice(result.DroppedBelowShareFloor, func(i, j int) bool {
+		a, b := result.DroppedBelowShareFloor[i], result.DroppedBelowShareFloor[j]
+		if a.RepoID != b.RepoID {
+			return a.RepoID < b.RepoID
+		}
+		return a.TeamID < b.TeamID
+	})
 	return result
 }
 

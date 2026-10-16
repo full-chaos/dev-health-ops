@@ -307,15 +307,17 @@ that the newest row is the true one. A day with no data gets no row.
 
 `issue_type_metrics_daily.lead_p50_hours` is the upper median of `completed_at - created_at`, in hours, over the items
 completed on the day (the same bucketing as the cycle p50). An item with no `created_at`, or created after its
-completion, is left out of the median. A key with no such item holds 0, which then means "no lead time", the same
-as an empty cycle p50. Rows written before this rule hold 0 for every key until the day is recomputed.
+completion, is left out of the median. A key with no such item holds NULL (the column is `Nullable(Float64)`, migration
+135, CHAOS-9920): NULL is "no lead time", a stored 0 is a lead time of 0 hours. Readers average the column as it is;
+`avg()` leaves NULL out. Migration 135 only changes the type: a row written before it keeps its stored 0 until the day is recomputed.
 
 `work_item_completion_daily.churn_loc` is the sum of `additions + deletions` of the pull requests linked to the items
 completed on the day, once per pull request for each (repository, team) row. The link is a `work_graph_issue_pr` row
 of any tier (native, explicit_text, heuristic), found by the item's id and read at the pull request's own repository
 and number; an issue-key prefix or the item's own repository column is never the relation. Each stored part (additions,
-deletions) counts on its own; a pull request with neither adds 0. A churn of 0 on a day with completed items means "no linked pull request with a size", not "no
-lines changed". Rows written before this rule hold 0 until the day is recomputed.
+deletions) counts on its own; a pull request with neither adds 0. The column is `Nullable(UInt64)` (migration 135,
+CHAOS-9920): NULL means no pull request linked to the key's completed items has a size, a stored 0 means the sized
+pull requests changed 0 lines. A retraction row holds NULL. Migration 135 only changes the type: a row written before it keeps its stored 0 until the day is recomputed.
 
 **`work_item_completion_daily` replaces `investment_metrics_daily` as the daily completion source (CHAOS-9264).** The
 analytics measures that count or time completed work by team, repository or work type (count, throughput,

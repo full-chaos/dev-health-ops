@@ -108,7 +108,8 @@ type IssueTypeMetricsDailyRow struct {
 	ActiveCount    int
 	CycleP50Hours  float64
 	CycleP90Hours  float64
-	LeadP50Hours   float64
+	// LeadP50Hours is nil when no completed item of the key has a usable lead time: no data, never 0 (CHAOS-9920).
+	LeadP50Hours *float64
 }
 
 // normalizeTeamID mirrors normalize_team_id (providers/teams.py:36): None/blank
@@ -212,13 +213,15 @@ func ComputeIssueTypeMetricsDaily(
 		bucket := buckets[key]
 		sort.Float64s(bucket.cycleHours)
 		sort.Float64s(bucket.leadHours)
-		var p50, p90, leadP50 float64
+		var p50, p90 float64
+		var leadP50 *float64
 		if len(bucket.cycleHours) > 0 {
 			p50 = bucket.cycleHours[len(bucket.cycleHours)/2]
 			p90 = bucket.cycleHours[int(float64(len(bucket.cycleHours))*0.9)]
 		}
 		if len(bucket.leadHours) > 0 {
-			leadP50 = bucket.leadHours[len(bucket.leadHours)/2]
+			median := bucket.leadHours[len(bucket.leadHours)/2]
+			leadP50 = &median
 		}
 		result = append(result, IssueTypeMetricsDailyRow{
 			RepoID:         key.repoID.pointer(),
@@ -238,6 +241,7 @@ func ComputeIssueTypeMetricsDaily(
 
 type completionBucket struct {
 	deliveryUnits, completed, churn int
+	sized                           bool
 	cycleHours                      []float64
 	prs                             map[linkedPRKey]struct{}
 }

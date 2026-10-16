@@ -250,10 +250,17 @@ func compareGitHubIssueTypeMetricsVersion(
 		actual.ActiveCount != expected.ActiveCount ||
 		actual.CycleP50Hours != expected.CycleP50Hours ||
 		actual.CycleP90Hours != expected.CycleP90Hours ||
-		actual.LeadP50Hours != expected.LeadP50Hours {
+		!githubWorkItemEngineFloatPointerEqual(actual.LeadP50Hours, expected.LeadP50Hours) {
 		return EffectConflict
 	}
 	return EffectExact
+}
+
+func githubWorkItemEngineFloatPointerEqual(left, right *float64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func githubWorkItemEngineUUIDPointerEqual(left, right *uuid.UUID) bool {

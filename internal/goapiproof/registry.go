@@ -734,9 +734,9 @@ func VerifyCandidateBuild(running string, expected string, routing map[string]Ro
 		disagreeing = append(disagreeing, fmt.Sprintf("%s points at %s", operation, stale[operation]))
 	}
 	// Only an MCP class decision can name a build now: a document operation has no routing row (CHAOS-8702), so
-	// the advice names the class verb alone. `dho goapi routing repoint` preserves the mode and reads the running
-	// build from /buildinfo rather than taking it on trust from an operator.
-	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  Re-point an MCP class decision to the running build with `dho goapi routing repoint` (mode preserved). A document operation has no routing row to re-point. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
+	// the advice names the class verb alone. `enable` reads the running build from /buildinfo rather than taking it
+	// on trust from an operator.
+	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  An MCP class decision names the build its `enable` read from /buildinfo: run `dho goapi routing enable` again for that root to point it at the running build (the repoint verb is retired). A document operation has no routing row to re-point. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
 		running, strings.Join(disagreeing, "; "))
 }
 

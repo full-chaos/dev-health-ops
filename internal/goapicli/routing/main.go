@@ -4,8 +4,6 @@
 // The verbs, and the split between them is the same one
 // `dev-hops go-api routing` draws:
 //
-//	repoint  provenance only -- point rows at the build that is actually
-//	         running, touching no column that decides reachability.
 //	enable   turn operations ON. Refuses on any doubt at all.
 //	disable  turn operations OFF. Deliberately FEWER preflights: it must
 //	         work when the planes disagree and when query-api is down,
@@ -89,7 +87,6 @@ const bearerEnvVar = "GO_API_ROUTING_BEARER"
 const usage = `dho goapi routing <verb> [flags]
 
 verbs:
-  repoint   point every routing row at the build /buildinfo reports, modes untouched
   enable    turn operations ON (mode canary|primary), with every preflight
   disable   turn operations OFF (mode python|disabled|shadow); mode only, never the build
   seed      create the FIRST routing row (shadow only) for operations that have none
@@ -99,7 +96,7 @@ verbs:
 Run "dho goapi routing <verb> -h" for that verb's flags.`
 
 // Command is the `goapi routing` verb of the dho binary. It routes to
-// run(env.Args) unchanged -- routing's own verbs (repoint, enable, disable,
+// run(env.Args) unchanged -- routing's own verbs (enable, disable,
 // seed, status) stay a single flat dispatch inside run rather than a
 // second layer of cli.Command children, so this fold changes nothing about
 // how a request reaches a verb, only how the process itself is invoked.
@@ -107,7 +104,7 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "routing",
 		Kind:    cli.Verb,
-		Summary: "repoint/enable/disable/seed/status the Go-API routing registry",
+		Summary: "enable/disable/seed/status the Go-API routing registry",
 		Run: func(_ context.Context, env cli.Env) int {
 			stdout = env.Stdout
 			stderr = env.Stderr
@@ -284,8 +281,6 @@ func run(argv []string) error {
 	credentialBoundary = secrets.Boundary{}
 	verb, rest := splitVerb(argv)
 	switch verb {
-	case "repoint":
-		return helpAsSuccess(runRepoint(rest))
 	case "enable":
 		return helpAsSuccess(runEnable(rest))
 	case "disable":
@@ -320,24 +315,15 @@ func helpAsSuccess(err error) error {
 	return err
 }
 
-// splitVerb picks the verb off the front of the argument list.
-//
-// A first argument beginning with "-" is a FLAG, not a verb, so it means
-// the caller used the flat pre-verb form this command shipped with
-// (#2415, and the form JOB 5's step list quotes verbatim). That form
-// still works and still means `repoint` -- silently breaking a recipe an
-// operator is holding is not an acceptable cost for a nicer CLI -- but it
-// says so on stderr rather than defaulting quietly, because a verb that
-// guesses what you meant is the shape of every other defect on this
-// surface.
+// splitVerb picks the verb off the front of the argument list. A first argument beginning with "-" is a flag, not a
+// verb: the flat pre-verb form of this command meant `repoint`, which is retired (D6024), so it is refused as an
+// unknown verb rather than guessed at. "-h" and "--help" print the usage.
 func splitVerb(argv []string) (string, []string) {
-	if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
-		if len(argv) > 0 && (argv[0] == "-h" || argv[0] == "--help") {
-			return "help", nil
-		}
-		fmt.Fprintln(stderr,
-			`go-api-routing: no verb given; running "repoint" (the only verb this command had before CHAOS-5486). Pass "repoint" explicitly -- this compatibility path will not survive the next change to this command.`)
-		return "repoint", argv
+	if len(argv) == 0 {
+		return "help", nil
+	}
+	if argv[0] == "-h" || argv[0] == "--help" {
+		return "help", nil
 	}
 	return argv[0], argv[1:]
 }

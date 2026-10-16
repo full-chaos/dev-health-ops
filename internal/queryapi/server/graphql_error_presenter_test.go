@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/99designs/gqlgen/graphql"
@@ -14,6 +15,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 )
@@ -68,8 +70,15 @@ func TestGraphQLResolverStoreFailureKeepsDriverTextOutOfTheResponse(t *testing.T
 	if strings.Contains(body, "store-host") || strings.Contains(body, "secret_table") || strings.Contains(body, "securityOverview:") {
 		t.Fatalf("response carries the driver text: %s", body)
 	}
-	if !strings.Contains(body, graphQLInternalMessage) || !strings.Contains(body, "req-gql-1") {
-		t.Fatalf("response lacks the generic message or the request id: %s", body)
+	var decoded struct {
+		Errors []struct {
+			Message    string         `json:"message"`
+			Extensions map[string]any `json:"extensions"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil || len(decoded.Errors) != 1 ||
+		decoded.Errors[0].Message != graphQLInternalMessage || decoded.Errors[0].Extensions["request_id"] != "req-gql-1" {
+		t.Fatalf("errors[0] lacks the generic message or extensions.request_id: %s", body)
 	}
 }
 
@@ -179,5 +188,26 @@ func TestGraphQLResolverPanicIsMaskedEndToEnd(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "internal system error") || strings.Contains(rec.Body.String(), "secret") ||
 		!strings.Contains(rec.Body.String(), graphQLInternalMessage) {
 		t.Fatalf("response not masked: %s", rec.Body.String())
+	}
+}
+
+func TestBindRequestIDGeneratesAndEchoesAnIDForACallerWithoutOne(t *testing.T) {
+	for name, header := range map[string]string{"none": "", "reserved characters": "a b\tc", "too long": strings.Repeat("a", 129)} {
+		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		if header != "" {
+			req.Header["X-Request-Id"] = []string{header}
+		}
+		rec := httptest.NewRecorder()
+		bound := bindRequestID(rec, req)
+		id := rec.Header().Get("X-Request-Id")
+		if id == "" || id == header || httpapi.RequestIDFrom(bound.Context()) != id || bound.Header.Get("X-Request-Id") != id {
+			t.Fatalf("%s: response id %q, context id %q, request id %q", name, id, httpapi.RequestIDFrom(bound.Context()), bound.Header.Get("X-Request-Id"))
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("X-Request-Id", "caller-id-1")
+	rec := httptest.NewRecorder()
+	if bound := bindRequestID(rec, req); rec.Header().Get("X-Request-Id") != "caller-id-1" || httpapi.RequestIDFrom(bound.Context()) != "caller-id-1" {
+		t.Fatalf("an acceptable caller id was not kept: %q", rec.Header().Get("X-Request-Id"))
 	}
 }

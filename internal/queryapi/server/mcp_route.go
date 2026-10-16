@@ -370,6 +370,7 @@ type mcpRequest struct {
 }
 
 func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r = bindRequestID(w, r)
 	req := &mcpRequest{start: time.Now()}
 	defer req.emit(r)
 

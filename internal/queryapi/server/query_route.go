@@ -6521,6 +6521,9 @@ func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqler
 // run" must never read as "the check passed."
 func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, requireKind string, orgAllowed func(context.Context, string) bool, gates ...documentGate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !isGraphQLEdge(r.Context()) {
+			r = bindRequestID(w, r)
+		}
 		// /graphql (graphql_edge_route.go) runs this same pipeline. Its
 		// differences are keyed on a context value only that route sets:
 		// GET is a request for a registered query, the identity is checked

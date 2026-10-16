@@ -749,7 +749,7 @@ var (
 // billingStripeFailure is a 502 detail that names a Stripe failure. Python
 // appends Stripe's message; Go keeps it out of the body (a named divergence),
 // so both planes are reduced to the fixed lead text.
-var billingStripeFailure = regexp.MustCompile(`"(Failed to (?:void invoice|create refund|read the refund from Stripe|read the invoice payment))(?:: [^"]*)?"`)
+var billingStripeFailure = regexp.MustCompile(`"(Failed to (?:void invoice|create refund))(?:: [^"]*)?"`)
 
 // billingNormalizer blanks ids the planes generate (never a seeded one)
 // and clock times taken during the run; seeded times are kept. A pull

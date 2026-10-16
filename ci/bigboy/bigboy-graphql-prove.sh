@@ -34,7 +34,7 @@ case "${2:-}" in
 esac
 # BIGBOY_ROOT is the running tree (compose files, _records, ops/.env): the same root parameter
 # the bigboy-cut.sh family reads, with the same default.
-R=${BIGBOY_ROOT:-/home/ubuntu/devhealth}; HERE=$(cd "$(dirname "$0")" && pwd)
+R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd); HERE=$(cd "$(dirname "$0")" && pwd)
 TS=$(date -u +%Y%m%dT%H%M%SZ); OUT=$R/_records/bigboy-$N8/graphql-prove-$TS
 LOCAL_ADMIN_EMAIL=${LOCAL_ADMIN_EMAIL:-admin@test.com}
 KEY_ID=${PROVE_KEY_ID:-local-dev-20260906}  # D2726: the kid bigboy's query-api JWKS trusts

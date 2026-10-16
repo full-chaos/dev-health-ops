@@ -66,16 +66,19 @@ cd "$R"
 export BIGBOY_ROOT="$R" BIGBOY_TOOLS_DIR="$T"
 export DHO_API_CH_USERS_XML="${DHO_API_CH_USERS_XML:-$R/.go-api-dev/dho_api_ch.xml}"
 if [ -z "${BIGBOY_OPERATOR_IMAGE:-}" ] && grep -qs 'BIGBOY_OPERATOR_IMAGE' "${FILES[@]}"; then
-  BIGBOY_OPERATOR_IMAGE=$(docker compose -p "$PROJECT" ps --format '{{.Image}}' go-reconciler 2>/dev/null </dev/null | head -1 || true)
-  if [ -z "$BIGBOY_OPERATOR_IMAGE" ]; then
-    # only a verb that would start a worker needs the real image; anything else just has to interpolate
-    starts_worker=0
-    case $VERB in
-      up) starts_worker=1 ;;
-      restart|run|exec) case ${1:-} in go-*) starts_worker=1 ;; esac ;;
-    esac
-    [ "$starts_worker" = 0 ] || die "BIGBOY_OPERATOR_IMAGE is unset and no running go-reconciler names it; export it"
-    BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator:not-resolved
+  # the services of this set whose image IS the operator image: only starting one of them needs the real reference
+  OPERATOR_SERVICES=$(awk '/^  [A-Za-z0-9._-]+:/{svc=$1; sub(":","",svc)} /^    image:.*BIGBOY_OPERATOR_IMAGE/{print svc}' "${FILES[@]}" | sort -u)
+  starts_worker=0
+  case $VERB in
+    up) for a in "$@"; do grep -qxF -- "$a" <<<"$OPERATOR_SERVICES" && starts_worker=1; done ;;
+    restart|run|exec) [ $# -gt 0 ] && grep -qxF -- "$1" <<<"$OPERATOR_SERVICES" && starts_worker=1 ;;
+  esac
+  if [ "$starts_worker" = 1 ]; then
+    # the running reconciler, asked through the same chain (project directory, env file, every file of the set)
+    BIGBOY_OPERATOR_IMAGE=$(BIGBOY_OPERATOR_IMAGE=placeholder docker compose "${ARGS[@]}" ps --format '{{.Image}}' go-reconciler 2>/dev/null </dev/null | head -1 || true)
+    [ -n "$BIGBOY_OPERATOR_IMAGE" ] || die "BIGBOY_OPERATOR_IMAGE is unset and no running go-reconciler names it; export it"
+  else
+    BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator:not-resolved   # nothing starts from it; it only has to interpolate
   fi
 fi
 export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-}"

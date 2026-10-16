@@ -687,3 +687,106 @@ def test_every_set_renders_the_reconciler_with_the_sweep_active(tmp_path: Path) 
         assert reconciler["environment"].get("SYNC_UNRECLAIMABLE_SWEEP") == "active", (
             name
         )
+
+
+def test_up_of_a_non_worker_service_needs_no_operator_image(tmp_path: Path) -> None:
+    """query-api/go-api/web run the dho/web pins; only services whose image is BIGBOY_OPERATOR_IMAGE need it."""
+    _, tools, env = _tree(tmp_path)
+    env = {k: v for k, v in env.items() if k != "BIGBOY_OPERATOR_IMAGE"}
+    ok = _run(tools, env, "up", "query-api", "go-api", "web")
+    assert ok.returncode == 0, ok.stderr
+    for args in (
+        ("up", "go-worker"),
+        ("up", "web", "go-scheduler"),
+        ("restart", "go-reconciler"),
+    ):
+        res = _run(tools, env, *args)
+        assert res.returncode == 2 and "BIGBOY_OPERATOR_IMAGE" in res.stderr, (
+            args,
+            res.stderr,
+        )
+
+
+def test_the_operator_image_probe_goes_through_the_effective_chain(
+    tmp_path: Path,
+) -> None:
+    """The probe for the running reconciler must name the project directory, env file and every compose file of the
+    set, not rely on a compose file sitting in the root (which a root with only pin/state files does not have)."""
+    r, tools, env = _tree(tmp_path)
+    env = {k: v for k, v in env.items() if k != "BIGBOY_OPERATOR_IMAGE"}
+    _run(tools, env, "up", "go-worker")
+    probe = [
+        ln
+        for ln in Path(env["DOCKER_LOG"]).read_text().splitlines()
+        if " ps " in f" {ln} " and "go-reconciler" in ln
+    ]
+    assert probe, Path(env["DOCKER_LOG"]).read_text()
+    assert (
+        f"--project-directory {r}" in probe[0] and "--env-file ops/.env" in probe[0]
+    ), probe[0]
+    assert probe[0].count(" -f ") >= 4, probe[0]
+
+
+def test_a_relative_bigboy_root_reaches_stack_sh_once_and_absolute(
+    tmp_path: Path,
+) -> None:
+    """The step scripts cd into the root, then hand it on: a relative BIGBOY_ROOT must not be resolved twice."""
+    r = tmp_path / "root"
+    for d in ("ops", "_records/rec"):
+        (r / d).mkdir(parents=True)
+    (r / "ops/.env").write_text("")
+    (r / "_records/compose.bigboy.images.yml").write_text(f"image: {_DHO}\n")
+    (r / "_records/rec/sha.txt").write_text("1234567abcdef\n")
+    exp = tmp_path / "exp.txt"
+    exp.write_text("r t SELECT\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "cwd.log"
+    shim = bin_dir / "docker"
+    shim.write_text(
+        '#!/usr/bin/env bash\necho "$PWD :: $*" >> "$CWD_LOG"\n'
+        'case "$*" in *buildx*) echo \'{"digest":"sha256:'
+        + "e" * 64
+        + '"}\';; *" ps "*) echo ghcr.io/x/op@sha256:'
+        + "f" * 64
+        + ";; esac\nexit 0\n"
+    )
+    shim.chmod(0o755)
+    (tmp_path / "catalog.json").write_text("{}")
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "BIGBOY_"))
+    }
+    env |= {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "CWD_LOG": str(log),
+        "BIGBOY_ROOT": "root",
+        "DHO_SMOKE_CATALOG_FILE": str(tmp_path / "catalog.json"),
+        "DHO_SMOKE_OPS_SHA": "0" * 40,
+    }
+    cases = {
+        "bigboy-river-apply.sh": [],
+        "bigboy-grants-check.sh": [str(r / "_records/rec")],
+        "bigboy-hook-check.sh": [str(r / "_records/rec")],
+        "web-path-smoke.sh": [],
+    }
+    for name, args in cases.items():
+        log.write_text("")
+        done = subprocess.run(
+            ["bash", str(BIGBOY / name), *args],
+            env=env,
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert "is not a directory" not in done.stdout + done.stderr, (
+            name,
+            done.stdout,
+            done.stderr,
+        )
+        calls = [ln for ln in log.read_text().splitlines() if " compose " in f" {ln} "]
+        assert calls, name
+        assert all(ln.startswith(str(r.resolve()) + " ::") for ln in calls), (
+            name,
+            calls[:2],
+        )

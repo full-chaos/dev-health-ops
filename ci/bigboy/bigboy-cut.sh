@@ -18,7 +18,8 @@ OLD8=${1:?old8}; NEW=${2:?full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
 # three at an isolated tree gets a fully self-consistent sandbox. Exported so those sibling
 # scripts, invoked below via $HERE, see the SAME resolved value rather than each independently
 # falling back to the real default.
-export BIGBOY_ROOT="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"
+BIGBOY_ROOT=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" 2>/dev/null && pwd) || { echo "FAIL: BIGBOY_ROOT=${BIGBOY_ROOT:-} is not a directory" >&2; exit 1; }
+export BIGBOY_ROOT
 R=$BIGBOY_ROOT; REC=$R/_records/bigboy-$N8
 # CHAOS-7135: the tools (this family of scripts) come from BIGBOY_TOOLS_DIR, default this script's own
 # directory, so a cut run from a git worktree needs no ci/bigboy symlink under BIGBOY_ROOT. The root is

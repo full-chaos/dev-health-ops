@@ -6,7 +6,7 @@
 # (compose.bigboy.river-apply.yml); compose interpolates the DSN from ops/.env itself. No printenv out of the api container, no -e, no
 # bare `docker run`: compose verbs only.
 set -u
-R=${BIGBOY_ROOT:-/home/ubuntu/devhealth}
+R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd)
 DHO=$(grep -oE 'ghcr.io/full-chaos/dev-health-go-dho@sha256:[0-9a-f]{64}' $R/_records/compose.bigboy.images.yml | head -1)
 [[ -n $DHO ]] || { echo "no dho image in the overlay"; exit 3; }
 HERE=$(cd "$(dirname "$0")" && pwd)

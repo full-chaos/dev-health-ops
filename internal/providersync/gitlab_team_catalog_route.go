@@ -359,7 +359,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					// A listed project with no numeric id cannot be keyed: its grant is
 					// left out (and logged) instead of falling back to the path.
 					slog.WarnContext(ctx, "providersync.gitlab_team_catalog.ownership_project_without_id",
-						"org_id", ref.OrgID, "team_id", teamID)
+						"org_id", ref.OrgID)
 					continue
 				}
 				rows.Ownership = append(rows.Ownership, ownership)

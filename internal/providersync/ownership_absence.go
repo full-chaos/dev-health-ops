@@ -122,7 +122,16 @@ func (prover gitlabGroupProjectAbsence) OwnershipAbsence(ctx context.Context, ro
 	if json.Unmarshal(body, &projects) != nil || projects == nil {
 		return SnapshotAbsenceNotProven
 	}
+	// A catalog-keyed row is one project by its numeric id: only that id holds
+	// it. A row of the older form is a path, and any project at it holds it.
+	nativeID, _ := gitlabCatalogNativeID(row.ProjectID)
 	for _, project := range projects {
+		if nativeID != "" {
+			if strings.TrimSpace(project.ID.String()) == nativeID {
+				return SnapshotFactStillHeld
+			}
+			continue
+		}
 		if strings.TrimSpace(project.PathWithNamespace) == projectPath {
 			return SnapshotFactStillHeld
 		}

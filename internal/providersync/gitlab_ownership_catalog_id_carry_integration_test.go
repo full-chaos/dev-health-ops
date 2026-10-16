@@ -4,6 +4,7 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -12,9 +13,10 @@ import (
 
 // A GitLab grant a store wrote before ownership was keyed by the catalog id
 // holds the project's path as project_id. The next run keys the same grant by
-// the catalog id and keeps the first valid_from; the path row ends where it
-// began, so at every time exactly one row of the grant is valid. A path row of
-// a project the run does not list is not touched by the carry.
+// the catalog id: the path row keeps the grant's first instant and the
+// catalog-keyed row starts where it ends, so at every time exactly one row of
+// the grant is valid. A path row of a project the run does not list is not
+// touched by the carry.
 func TestGitLabOwnershipPathRowMovesToTheCatalogIDWithItsValidFrom(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	org, fake := "gl-catalog-carry", newGitLabSnapshotServer(t)
@@ -64,8 +66,8 @@ WHERE org_id = ? AND provider = 'gitlab' AND team_id = 'gl:org'`, org)
 	rows := read()
 	catalogID := org + ":gitlab:" + testGitLabNativeProjectID("org/api")
 	moved, ok := rows[catalogID]
-	if !ok || moved.key != "org/api" || !moved.validFrom.Equal(granted) || moved.validTo != nil {
-		t.Fatalf("catalog-keyed row = %+v (present %v), want project_key org/api, valid_from %s, open", moved, ok, granted)
+	if !ok || moved.key != "org/api" || !moved.validFrom.Equal(granted.Add(time.Millisecond)) || moved.validTo != nil {
+		t.Fatalf("catalog-keyed row = %+v (present %v), want project_key org/api, valid_from %s (where the path row ends), open", moved, ok, granted.Add(time.Millisecond))
 	}
 	path := rows["org/api"]
 	if path.validTo == nil || !path.validTo.Equal(granted.Add(time.Millisecond)) {
@@ -89,7 +91,70 @@ WHERE org_id = ? AND provider = 'gitlab' AND team_id = 'gl:org' AND ifNull(proje
 	if _, err := gitlabSnapshotRun(ctx, t, conn, org, fake, TeamCatalogSelections{Projects: true}, false, run.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if again := read()[catalogID]; !again.validFrom.Equal(granted) || again.validTo != nil {
+	if again := read()[catalogID]; !again.validFrom.Equal(granted.Add(time.Millisecond)) || again.validTo != nil {
 		t.Fatalf("after a second run the catalog-keyed row = %+v, want unchanged", again)
+	}
+}
+
+// A path the projects catalog names for another (deleted) project was taken
+// over by the listed project: the listed project's grant starts at the run, and
+// the old path row ends at the run. The projects read is the real one.
+func TestGitLabOwnershipPathRowOfATakenOverPathIsNotCarried(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	org, fake := "gl-catalog-takeover", newGitLabSnapshotServer(t)
+	fake.set("", "", nil, map[string][]string{"org": {"org/api"}})
+	sink := GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
+	granted := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	run := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+
+	deleted, ok := normalizeGitLabProjectCatalogRow(org, gitlabTeamCatalogProjectPayload{ID: json.Number("1"), PathWithNamespace: "org/api", Name: "api"}, granted)
+	if !ok {
+		t.Fatal("the catalog normalizer refused the old project")
+	}
+	claim := Claim{Unit: Unit{OrgID: org, Provider: gitlabTeamCatalogProvider}}
+	if err := sink.writeProjects(ctx, claim, []gitlabTeamCatalogProjectRow{deleted}); err != nil {
+		t.Fatal(err)
+	}
+	legacy := mustGitLabOwnershipRow(org, "gl:org", "org/api", gitlabTeamCatalogBaseSpecificity, granted)
+	legacy.ProjectID = testPID("org/api")
+	if err := sink.writeOwnership(ctx, []gitlabTeamCatalogOwnershipRow{legacy}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitlabSnapshotRun(ctx, t, conn, org, fake, TeamCatalogSelections{Projects: true}, false, run); err != nil {
+		t.Fatal(err)
+	}
+	result, err := conn.Query(ctx, `SELECT project_id, valid_from, valid_to FROM team_project_ownership FINAL
+WHERE org_id = ? AND provider = 'gitlab' AND team_id = 'gl:org'`, org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Close()
+	seen := 0
+	for result.Next() {
+		var projectID string
+		var validFrom time.Time
+		var validTo *time.Time
+		if err := result.Scan(&projectID, &validFrom, &validTo); err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		switch projectID {
+		case "org/api":
+			if validTo == nil || !validTo.Equal(run) {
+				t.Errorf("old path row valid_to = %v, want the run %s", validTo, run)
+			}
+		case org + ":gitlab:" + testGitLabNativeProjectID("org/api"):
+			if !validFrom.Equal(run) || validTo != nil {
+				t.Errorf("the new project's row = [%s, %v), want it to start at the run and stay open", validFrom, validTo)
+			}
+		default:
+			t.Errorf("unexpected row %s", projectID)
+		}
+	}
+	if err := result.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if seen != 2 {
+		t.Fatalf("rows = %d, want the ended path row and the new project's row", seen)
 	}
 }

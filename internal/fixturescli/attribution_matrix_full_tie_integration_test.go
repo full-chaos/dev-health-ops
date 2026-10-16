@@ -52,8 +52,13 @@ type fullTieLeg struct {
 	Project, ProjectKey, ProjectName string
 	NewProject                       bool
 	ProjectCatalogClone              string
-	Issue, IssueClone                string
-	NativeTeamKey                    string
+	// CatalogNativeID, for a GitLab leg, is the new project's numeric id: its
+	// ownership row is keyed by the catalog id {org}:gitlab:{id} with the path
+	// as project_key, and a catalog row is added, as the GitLab writer does.
+	// The issue keeps the path as its project_id.
+	CatalogNativeID   string
+	Issue, IssueClone string
+	NativeTeamKey     string
 }
 
 // fullTieSeed is the tie added to one provider world.
@@ -85,8 +90,8 @@ var fullTieSeeds = map[string]fullTieSeed{
 		IssuesInRepo:    true,
 		OwnershipSource: "provider_access", OwnershipPrimary: 0, OwnershipSpecificity: 110, OwnershipPriority: 300,
 		Legs: [2]fullTieLeg{
-			{Team: "gl:chaos-gl/checkout", Project: "chaos-gl/tie-checkout", NewProject: true, Issue: "gitlab:chaos-gl/tie-core#1", IssueClone: "gitlab:chaos-gl/billing-service#2"},
-			{Team: "gl:chaos-gl", Project: "chaos-gl/tie-group", NewProject: true, Issue: "gitlab:chaos-gl/tie-core#2", IssueClone: "gitlab:chaos-gl/billing-service#2"},
+			{Team: "gl:chaos-gl/checkout", Project: "chaos-gl/tie-checkout", NewProject: true, CatalogNativeID: "91001", Issue: "gitlab:chaos-gl/tie-core#1", IssueClone: "gitlab:chaos-gl/billing-service#2"},
+			{Team: "gl:chaos-gl", Project: "chaos-gl/tie-group", NewProject: true, CatalogNativeID: "91002", Issue: "gitlab:chaos-gl/tie-core#2", IssueClone: "gitlab:chaos-gl/billing-service#2"},
 		},
 	},
 	"jira": {
@@ -178,9 +183,17 @@ FROM (SELECT * FROM git_pull_requests FINAL WHERE org_id = %s AND state = 'merge
 	for index, leg := range seed.Legs {
 		tie.Teams = append(tie.Teams, leg.Team)
 		if leg.NewProject {
+			ownershipProjectID := leg.Project
+			if leg.CatalogNativeID != "" {
+				ownershipProjectID = org + ":gitlab:" + leg.CatalogNativeID
+				exec("catalog project", fmt.Sprintf(`INSERT INTO projects SELECT * REPLACE (%s AS id, %s AS project_key, %s AS name)
+FROM (SELECT * FROM projects FINAL WHERE org_id = %s AND provider = 'gitlab' LIMIT 1)`,
+					sqlQuote(ownershipProjectID), sqlQuote(leg.Project), sqlQuote(leg.Project), orgLit))
+				requireRows("catalog project", fmt.Sprintf(`SELECT count() FROM projects FINAL WHERE org_id = %s AND id = %s`, orgLit, sqlQuote(ownershipProjectID)))
+			}
 			exec("project ownership", fmt.Sprintf(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at)
 SELECT %s, %s, %s, %s, %s, %s, %d, %d, %d, %s, %s`,
-				orgLit, sqlQuote(provider), sqlQuote(leg.Team), sqlQuote(leg.Project), sqlQuote(firstNonEmpty(leg.ProjectKey, leg.Project)),
+				orgLit, sqlQuote(provider), sqlQuote(leg.Team), sqlQuote(ownershipProjectID), sqlQuote(firstNonEmpty(leg.ProjectKey, leg.Project)),
 				sqlQuote(seed.OwnershipSource), seed.OwnershipPrimary, seed.OwnershipSpecificity, seed.OwnershipPriority, sqlTime(ownedFrom, 3), sqlTime(ownedFrom, 3)))
 		}
 		if leg.ProjectCatalogClone != "" {

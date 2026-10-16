@@ -83,6 +83,16 @@ func GitLabCatalogProjectID(orgID, nativeID string) (ProjectID, bool) {
 	return ProjectID{orgID + ":gitlab:" + nativeID}, true
 }
 
+// gitlabCatalogNativeID is the numeric GitLab project id of a catalog id; ok
+// is false for any other form (a GitLab path holds no ':').
+func gitlabCatalogNativeID(id ProjectID) (string, bool) {
+	_, native, ok := strings.Cut(id.value, ":gitlab:")
+	if !ok || !nonBlank(native) || strings.Contains(native, ":") {
+		return "", false
+	}
+	return native, true
+}
+
 // GitHubRepoProjectID is a named exception: the repository full name.
 func GitHubRepoProjectID(repoFullName string) (ProjectID, bool) {
 	if !nonBlank(repoFullName) {

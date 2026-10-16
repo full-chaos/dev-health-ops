@@ -49,7 +49,12 @@ func newGitLabGrantServer(t *testing.T, projects []string) *gitlabGrantServer {
 	t.Helper()
 	fake := &gitlabGrantServer{projects: projects}
 	payload := func(name string) map[string]any {
-		return map[string]any{"id": 1000 + len(name), "path_with_namespace": "org/" + name, "name": name, "archived": false,
+		// One numeric id per project, as GitLab gives: ownership rows are keyed by it.
+		id, err := strconv.ParseUint(testGitLabNativeProjectID("org/"+name), 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string]any{"id": id, "path_with_namespace": "org/" + name, "name": name, "archived": false,
 			"web_url": "https://gitlab.example.com/org/" + name}
 	}
 	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

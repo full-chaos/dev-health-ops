@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
@@ -98,11 +99,21 @@ func loadMatrixContract(t *testing.T) matrixContract {
 
 type ownershipRow struct {
 	TeamID, Provider, RepoID, RepoName, ProjectID, Source string
-	ValidFrom                                             time.Time
-	ValidTo                                               *time.Time
+	// JoinID is the work-item project_id a project ownership row joins on
+	// (teamattribution.ProjectOwnershipJoinID); empty means ProjectID.
+	JoinID    string
+	ValidFrom time.Time
+	ValidTo   *time.Time
 	// IsPrimary, Specificity and Priority are the row's rank (repository and project ownership).
 	IsPrimary             uint8
 	Specificity, Priority int
+}
+
+func (row ownershipRow) joinID() string {
+	if row.JoinID != "" {
+		return row.JoinID
+	}
+	return row.ProjectID
 }
 
 func (row ownershipRow) validAt(at time.Time) bool {
@@ -206,14 +217,16 @@ FROM team_repo_ownership FINAL WHERE org_id = ?`, args, func(rows driver.Rows) e
 		facts.repoOwners = append(facts.repoOwners, row)
 		return nil
 	})
-	matrixQuery(ctx, t, conn, `SELECT team_id, provider, project_id, toString(source), valid_from, valid_to,
+	matrixQuery(ctx, t, conn, `SELECT team_id, provider, project_id, project_key, toString(source), valid_from, valid_to,
 	is_primary, toInt64(specificity), toInt64(priority)
 FROM team_project_ownership FINAL WHERE org_id = ?`, args, func(rows driver.Rows) error {
 		var row ownershipRow
 		var specificity, priority int64
-		if err := rows.Scan(&row.TeamID, &row.Provider, &row.ProjectID, &row.Source, &row.ValidFrom, &row.ValidTo, &row.IsPrimary, &specificity, &priority); err != nil {
+		var projectKey *string
+		if err := rows.Scan(&row.TeamID, &row.Provider, &row.ProjectID, &projectKey, &row.Source, &row.ValidFrom, &row.ValidTo, &row.IsPrimary, &specificity, &priority); err != nil {
 			return err
 		}
+		row.JoinID = teamattribution.ProjectOwnershipJoinID(row.Provider, row.ProjectID, projectKey)
 		row.Specificity, row.Priority = int(specificity), int(priority)
 		facts.projOwners = append(facts.projOwners, row)
 		return nil
@@ -344,8 +357,10 @@ func (facts matrixFacts) ownersAt(rows []ownershipRow, at time.Time) map[string]
 
 // isTeamKeyProject is the project a Linear team key stands for ("<org>:linear:<key>", the team-key
 // ownership kind): the team's own key, not a project of the projects catalog.
+// isTeamKeyProject is an ownership row keyed by a team key ({org}:linear:{key})
+// rather than a project; a GitLab catalog id ({org}:gitlab:{n}) is a project.
 func (facts matrixFacts) isTeamKeyProject(projectID string) bool {
-	return strings.HasPrefix(projectID, facts.org+":")
+	return strings.HasPrefix(projectID, facts.org+":") && !strings.HasPrefix(projectID, facts.org+":gitlab:")
 }
 
 func (facts matrixFacts) repoOwnerRows(repoID string) []ownershipRow {
@@ -362,7 +377,7 @@ func (facts matrixFacts) repoOwnerRows(repoID string) []ownershipRow {
 func (facts matrixFacts) projectOwnerRows(projectID string) []ownershipRow {
 	var out []ownershipRow
 	for _, row := range facts.projOwners {
-		if projectID != "" && row.ProjectID == projectID {
+		if projectID != "" && row.joinID() == projectID {
 			out = append(out, row)
 		}
 	}
@@ -1050,22 +1065,22 @@ var matrixChecks = map[string]matrixCheck{
 	"project_ownership_starts_at_its_evidence": {"projects", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
 		seen := map[string]bool{}
 		for _, row := range f.projOwners {
-			if row.Provider != p || seen[row.ProjectID] || f.isTeamKeyProject(row.ProjectID) {
+			if row.Provider != p || seen[row.joinID()] || f.isTeamKeyProject(row.ProjectID) {
 				continue
 			}
 			var first time.Time
 			for _, item := range f.items {
-				if item.ProjectID == row.ProjectID && (first.IsZero() || item.CreatedAt.Before(first)) {
+				if item.ProjectID == row.joinID() && (first.IsZero() || item.CreatedAt.Before(first)) {
 					first = item.CreatedAt
 				}
 			}
 			if first.IsZero() {
 				continue
 			}
-			seen[row.ProjectID] = true
+			seen[row.joinID()] = true
 			r.Subjects++
 			var earliest time.Time
-			for _, candidate := range f.projectOwnerRows(row.ProjectID) {
+			for _, candidate := range f.projectOwnerRows(row.joinID()) {
 				if earliest.IsZero() || candidate.ValidFrom.Before(earliest) {
 					earliest = candidate.ValidFrom
 				}
@@ -1386,7 +1401,7 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 			for index := range rows {
 				var first time.Time
 				for _, item := range f.items {
-					if item.ProjectID == rows[index].ProjectID && (first.IsZero() || item.CreatedAt.Before(first)) {
+					if item.ProjectID == rows[index].joinID() && (first.IsZero() || item.CreatedAt.Before(first)) {
 						first = item.CreatedAt
 					}
 				}

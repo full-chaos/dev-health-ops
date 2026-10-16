@@ -30,8 +30,9 @@ type gitlabOwnershipOpenRow struct {
 }
 
 // openGitLabOwnership reads what the readers see: the newest version of each
-// row key whose valid_to is empty or in the future. Project is the row's path
-// (project_key); a GitLab row's project_id must be a catalog id.
+// row key whose valid_to is empty or in the future. Project is the row's path:
+// project_key for a GitLab row keyed by the catalog id, else project_id (a
+// row a test seeds in the older path form, or a row of another provider).
 func openGitLabOwnership(ctx context.Context, t *testing.T, conn driver.Conn, orgID, provider string) []gitlabOwnershipOpenRow {
 	t.Helper()
 	result, err := conn.Query(ctx,
@@ -49,12 +50,10 @@ func openGitLabOwnership(ctx context.Context, t *testing.T, conn driver.Conn, or
 		if err := result.Scan(&row.TeamID, &projectID, &row.Project, &row.Source, &row.ValidFrom); err != nil {
 			t.Fatal(err)
 		}
-		if provider == gitlabTeamCatalogProvider {
-			if !strings.HasPrefix(projectID, orgID+":gitlab:") || row.Project == "" {
-				t.Errorf("open row %s/%s: project_id = %q, want a catalog id of org %s and the path as project_key", row.TeamID, row.Project, projectID, orgID)
-			}
-		} else {
+		if provider != gitlabTeamCatalogProvider || !strings.HasPrefix(projectID, orgID+":gitlab:") {
 			row.Project = projectID
+		} else if row.Project == "" {
+			t.Errorf("open row %s: catalog-keyed project_id %q has no path as project_key", row.TeamID, projectID)
 		}
 		out = append(out, row)
 	}

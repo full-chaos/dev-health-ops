@@ -153,6 +153,37 @@ func TestTheGitLabAnswerForACatalogKeyedRowAsksByThePath(t *testing.T) {
 	}
 }
 
+// A catalog-keyed row names one project by its numeric id. A project of
+// another id at the same path (a path taken over after the grant's project
+// was deleted or moved) does not hold the grant; the grant's own id does,
+// whatever path it has now.
+func TestTheGitLabAnswerForACatalogKeyedRowMatchesTheProjectID(t *testing.T) {
+	row := OwnershipSnapshotRow{TeamID: "gl:acme/platform", ProjectID: testPID("org:gitlab:4711"), ProjectKey: "acme/platform/api", Source: gitlabTeamCatalogSource}
+	for _, test := range []struct {
+		name, body string
+		want       SnapshotAbsence
+	}{
+		{"another project at the path", `[{"id":9999,"path_with_namespace":"acme/platform/api"}]`, SnapshotAbsenceProven},
+		{"the project itself", `[{"id":4711,"path_with_namespace":"acme/platform/api"}]`, SnapshotFactStillHeld},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, err := providerfoundation.NewHTTPClient("gitlab", "https://gitlab.example",
+				fakehttp.Client(absenceAnswerDoer(func(request *http.Request) (*http.Response, error) {
+					header := http.Header{"X-Next-Page": {""}, "Content-Type": {"application/json"}}
+					return &http.Response{StatusCode: 200, Header: header, Body: io.NopCloser(strings.NewReader(test.body)), Request: request}, nil
+				})), func(*http.Request) error { return nil },
+				providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: 1, MaxWait: 1},
+				providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := (gitlabGroupProjectAbsence{client: client}).OwnershipAbsence(context.Background(), row); got != test.want {
+				t.Errorf("the answer is %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 // The GitLab direct answer: a search answer that does not hold the project
 // proves the absence only when it is the WHOLE answer by the paginator's own
 // reading of GitLab's end signal. An answer that announces a next page in any

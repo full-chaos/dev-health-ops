@@ -56,13 +56,18 @@ CONTAINER_HARNESS = ROOT / "internal" / "testsupport" / "containers" / "harness.
 def _test_go_cache() -> Path:
     """The Go build cache of the check_go.sh calls below.
 
-    A configured cache (DEV_HEALTH_GO_CACHE, then GOCACHE) is used as is: it is
-    the runner's own and outlives the run on purpose. With none, the cache is a
-    private directory removed when the process exits. It used to be a fixed
-    directory under the system temp directory that nothing removed (about 850 MB
-    left behind per host).
+    A configured cache (DEV_HEALTH_GO_CACHE, then GOCACHE, then the one `go env`
+    reports) is used as is: it is the runner's own and outlives the run on
+    purpose. With none, the cache is a private directory removed when the process
+    exits. It used to be a fixed directory under the system temp directory that
+    nothing removed (about 850 MB left behind per host).
     """
     configured = os.environ.get("DEV_HEALTH_GO_CACHE") or os.environ.get("GOCACHE")
+    if not configured:
+        probe = subprocess.run(
+            ["go", "env", "GOCACHE"], capture_output=True, text=True, check=False
+        )
+        configured = probe.stdout.strip() if probe.returncode == 0 else ""
     if configured:
         return Path(configured)
     private = tempfile.mkdtemp(prefix="chaos3141-go-sharding-test-cache-")

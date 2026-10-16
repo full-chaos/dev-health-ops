@@ -4,7 +4,6 @@ package goapiproof
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -53,9 +52,9 @@ func TestSizeGateIgnoresTheDrawnBinsHoweverTheBodyIsFormatted(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			outcomes, _ := stochasticDocRouteRun(t, c.candidate, c.reference)
-			if o := outcomes[0]; !o.Executed || o.RefusalReason != "" || o.DifferencesOutsideBaselineDefect != 0 {
-				t.Fatalf("executed=%v refusal=%q %s outside=%d", o.Executed, o.RefusalReason, o.RefusalDetail, o.DifferencesOutsideBaselineDefect)
+			result := compareForecastBodies(t, c.candidate, c.reference)
+			if result.StructuralRefusal != "" || result.DifferencesOutsideBaselineDefect != 0 {
+				t.Fatalf("refusal=%q %s outside=%d", result.StructuralRefusal, result.StructuralDetail, result.DifferencesOutsideBaselineDefect)
 			}
 		})
 	}
@@ -64,10 +63,10 @@ func TestSizeGateIgnoresTheDrawnBinsHoweverTheBodyIsFormatted(t *testing.T) {
 // What is not declared volatile still counts: a gross size skew outside the bins is refused as before.
 func TestSizeGateStillRefusesAGrossSkewOutsideTheDeclaredVolatileFields(t *testing.T) {
 	skewed := map[string]any{"teamId": strings.Repeat("x", 4000)}
-	outcomes, _ := runStochasticDocRoute(t,
+	result := compareForecastBodies(t,
 		volatileBinsBody(t, "go", constantBins(2), skewed), volatileBinsBody(t, "go", constantBins(2), nil))
-	if o := outcomes[0]; o.Executed || o.RefusalReason != RefusalLegsDoNotOverlap {
-		t.Fatalf("a 4000-byte undeclared field was not refused on size: executed=%v refusal=%q", o.Executed, o.RefusalReason)
+	if result.StructuralRefusal != RefusalLegsDoNotOverlap {
+		t.Fatalf("a 4000-byte undeclared field was not refused on size: refusal=%q", result.StructuralRefusal)
 	}
 }
 
@@ -132,15 +131,15 @@ func TestSizeGateIsTheRawGateWithoutVolatileFields(t *testing.T) {
 	}
 }
 
-// runStochasticDocRoute is stochasticDocRouteRun without its Fatal on a run error: a refused run returns no outcome through Run's error.
-func runStochasticDocRoute(t *testing.T, candidate, reference string) ([]Outcome, error) {
+// compareForecastBodies compares two capacityForecast answers under the operation's own declared comparator options.
+func compareForecastBodies(t *testing.T, candidate, reference string) Result {
 	t.Helper()
-	runner := newDocRouteRunner(t, goLeg(candidate), goLeg(reference), nil)
-	runner.Documents = map[string]string{"capacityForecast": capacityForecastDocument(t)}
-	runner.Registry.DocumentDigest = map[string]string{"capacityForecast": "b4fb8f07"}
-	runner.Routing = map[string]RoutingRow{"capacityForecast": {Mode: "shadow", CandidateBuild: goEdgeBuild}}
-	outcomes, _, err := runner.Run(context.Background())
-	return outcomes, err
+	spec, err := SpecFor("capacityForecast")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineSnapshot, candidateSnapshot := decodedPair(t, reference, candidate)
+	return Compare(baselineSnapshot, candidateSnapshot, spec.Parity)
 }
 
 // Declaring a subtree and a path inside it must not take the inner bytes out twice.

@@ -16,7 +16,6 @@ func TestEveryWriteVerbRefusesAControlCharacterInRecordedBy(t *testing.T) {
 	for name, argv := range map[string][]string{
 		"seed":              {"seed", "-operations", "mcp:hotspots"},
 		"enable":            {"enable", "-mode", "canary"},
-		"repoint":           {"repoint"},
 		"disable -apply":    {"disable", "-mode", "python", "-apply", "-postgres-uri", "postgres://x"},
 		"proof-org add":     {"proof-org", "add", "-org", "00000000-0000-4000-8000-000000000001"},
 		"proof-org remove":  {"proof-org", "remove", "-org", "00000000-0000-4000-8000-000000000001"},

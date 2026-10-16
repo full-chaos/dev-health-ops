@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -34,12 +35,9 @@ var ErrStoredSettingUnreadable = errors.New("llmorgsettings: stored org llm sett
 // collapses to an empty map exactly as for every other reader here). err is
 // the fail-closed gate-lookup failure or a database fault.
 func (s Store) OrgConfig(ctx context.Context, orgID string) (OrgConfig, bool, error) {
-	settings, err := s.loadGatedSettings(ctx, orgID)
+	raw, err := s.loadRawSettings(ctx, orgID)
 	if err != nil {
 		return OrgConfig{}, false, err
-	}
-	if len(settings) == 0 {
-		return OrgConfig{}, false, nil
 	}
 	var newest *time.Time
 	var stored []string
@@ -52,14 +50,35 @@ FROM settings WHERE org_id = $1 AND category = $2`,
 	}
 	// loadRawSettings skips a row it cannot decrypt (wrong key, corrupt row).
 	// Every other reader tolerates that; this one serves the key itself, so a
-	// stored setting that did not come back is a failure, never a thinner config.
+	// stored setting that did not come back is a failure, never a thinner
+	// config and never "not configured". A closed byo_llm gate still wins: the
+	// org then runs on the platform default whatever is stored.
 	for _, key := range stored {
 		switch key {
 		case keyProvider, keyModel, keyAPIKey, keyBaseURL:
-			if settings[key] == "" {
-				return OrgConfig{}, false, fmt.Errorf("%w: setting %q", ErrStoredSettingUnreadable, key)
+			if raw[key] != "" {
+				continue
 			}
+			parsed, perr := uuid.Parse(orgID)
+			if perr != nil {
+				return OrgConfig{}, false, fmt.Errorf("%w: setting %q (org id is not a UUID)", ErrStoredSettingUnreadable, key)
+			}
+			state, gerr := byoLLMFlagState(ctx, s.Pool, parsed, s.now())
+			if gerr != nil {
+				return OrgConfig{}, false, fmt.Errorf("llmorgsettings: byo_llm flag state for org %q: %w", orgID, gerr)
+			}
+			if state == flagStateDisabled {
+				return OrgConfig{}, false, nil
+			}
+			return OrgConfig{}, false, fmt.Errorf("%w: setting %q", ErrStoredSettingUnreadable, key)
 		}
+	}
+	settings, err := s.applyGate(ctx, orgID, raw)
+	if err != nil {
+		return OrgConfig{}, false, err
+	}
+	if len(settings) == 0 {
+		return OrgConfig{}, false, nil
 	}
 	version := ""
 	if newest != nil {

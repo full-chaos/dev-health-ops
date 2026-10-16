@@ -516,29 +516,51 @@ func TestOrgConfig_ClosedGateServesNothing(t *testing.T) {
 	}
 }
 
-// A stored api_key that cannot be decrypted must fail OrgConfig, never serve a config with an empty key.
-func TestOrgConfig_UnreadableStoredKeyIsAnErrorNotAThinnerConfig(t *testing.T) {
+// A stored setting that cannot be decrypted must fail OrgConfig whenever the gate is open, whatever else
+// is or is not readable beside it; a closed gate and an empty org stay "not configured".
+func TestOrgConfig_UnreadableStoredSettingMatrix(t *testing.T) {
 	ctx := context.Background()
-	rightStore, pool := newTestStore(t)
-	seedByoLLMFeature(ctx, t, pool, "team", true)
-	orgID := seedOrg(ctx, t, pool, "enterprise")
-	insertSetting(ctx, t, pool, orgID, "provider", "openai")
-	insertEncryptedSetting(ctx, t, rightStore, pool, orgID, "api_key", "sk-real-secret")
-
 	wrongDecryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("totally-wrong-key"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrongStore := Store{Pool: pool, Decryptor: wrongDecryptor, Now: rightStore.Now}
-
-	cfg, ok, err := wrongStore.OrgConfig(ctx, orgID.String())
-	if !errors.Is(err, ErrStoredSettingUnreadable) || ok {
-		t.Fatalf("ok=%v err=%v cfg=%+v, want ErrStoredSettingUnreadable and ok=false", ok, err, cfg)
+	cases := []struct {
+		name       string
+		gateOpen   bool
+		plainRows  map[string]string
+		cipherRows map[string]string
+		wantOK     bool
+		wantErr    bool
+	}{
+		{"only an unreadable api_key, gate open", true, nil, map[string]string{"api_key": "sk-real-secret"}, false, true},
+		{"unreadable api_key beside a readable provider", true, map[string]string{"provider": "openai"}, map[string]string{"api_key": "sk-real-secret"}, false, true},
+		{"unreadable api_key, gate closed", false, nil, map[string]string{"api_key": "sk-real-secret"}, false, false},
+		{"no rows at all", true, nil, nil, false, false},
 	}
-	if strings.Contains(err.Error(), "sk-real-secret") {
-		t.Fatal("error text carries the key")
-	}
-	if _, ok, err := rightStore.OrgConfig(ctx, orgID.String()); err != nil || !ok {
-		t.Fatalf("right key: ok=%v err=%v", ok, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rightStore, pool := newTestStore(t)
+			seedByoLLMFeature(ctx, t, pool, "team", tc.gateOpen)
+			orgID := seedOrg(ctx, t, pool, "enterprise")
+			for k, v := range tc.plainRows {
+				insertSetting(ctx, t, pool, orgID, k, v)
+			}
+			for k, v := range tc.cipherRows {
+				insertEncryptedSetting(ctx, t, rightStore, pool, orgID, k, v)
+			}
+			wrongStore := Store{Pool: pool, Decryptor: wrongDecryptor, Now: rightStore.Now}
+			cfg, ok, err := wrongStore.OrgConfig(ctx, orgID.String())
+			if ok != tc.wantOK || (err != nil) != tc.wantErr {
+				t.Fatalf("ok=%v err=%v cfg=%+v, want ok=%v err=%v", ok, err, cfg, tc.wantOK, tc.wantErr)
+			}
+			if tc.wantErr {
+				if !errors.Is(err, ErrStoredSettingUnreadable) {
+					t.Fatalf("err = %v, want ErrStoredSettingUnreadable", err)
+				}
+				if strings.Contains(err.Error(), "sk-real-secret") {
+					t.Fatal("error text carries the key")
+				}
+			}
+		})
 	}
 }

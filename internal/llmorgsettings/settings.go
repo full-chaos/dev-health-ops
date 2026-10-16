@@ -117,6 +117,11 @@ func (s Store) loadGatedSettings(ctx context.Context, orgID string) (orgSettings
 	if err != nil {
 		return nil, err
 	}
+	return s.applyGate(ctx, orgID, settings)
+}
+
+// applyGate is the byo_llm gate half of loadGatedSettings over already-read settings.
+func (s Store) applyGate(ctx context.Context, orgID string, settings orgSettings) (orgSettings, error) {
 	if len(settings) == 0 {
 		return settings, nil
 	}

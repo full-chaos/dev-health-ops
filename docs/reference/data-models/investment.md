@@ -191,6 +191,12 @@ and are null where they are not measured (the non-investment path, or a window w
 `ISSUE_SIZE` names its unit `ISSUE_SIZE`; every other Investment Sankey names `WORK_UNITS`. Under `ISSUE_SIZE` every
 weighted coverage share (`teamCoverage`, `repoCoverage` and its split) is weighed the same way as the chart.
 
+The Home investment tile (`reworkThemeAllocation`) says what its share is a share of. Each row carries `measure`
+(`WORK_UNITS` for `COUNT`, `ISSUE_SIZE`) and `denominator`, the total that `allocationPct` divides by; `allocation` is
+the numerator. In `ISSUE_SIZE` a row also carries `sizingCoverage`, `unsizedUnitCount` and `workUnitCount` (the m of
+"n of m work units have an issue size"), counted over the same units as the themes. They are null in `WORK_UNITS` and
+null when the window holds no unit: null is "not measured", never 0. The REST Home body does not carry them.
+
 ## Team coverage: ownership, not the attribution vote
 
 `teamCoverage` is the share of effort whose work unit has a team, and a unit has a team when a team **owns** one of
@@ -298,6 +304,11 @@ Nothing is ever replaced in place, so a reader **must** take the newest
 `internal/queryapi` do) and must never sum the raw rows. When a completion leaves a key (the item
 was reopened, or its team or labels changed), the daily job writes a row of zeros for that key so
 that the newest row is the true one. A day with no data gets no row.
+
+`issue_type_metrics_daily.lead_p50_hours` is the upper median of `completed_at - created_at`, in hours, over the items
+completed on the day (the same bucketing as the cycle p50). An item with no `created_at`, or created after its
+completion, is left out of the median. A key with no such item holds 0, which then means "no lead time", the same
+as an empty cycle p50. Rows written before this rule hold 0 for every key until the day is recomputed.
 
 **`work_item_completion_daily` replaces `investment_metrics_daily` as the daily completion source (CHAOS-9264).** The
 analytics measures that count or time completed work by team, repository or work type (count, throughput,

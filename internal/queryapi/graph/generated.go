@@ -801,6 +801,7 @@ type ComplexityRoot struct {
 		CurrentValue      func(childComplexity int) int
 		Delta             func(childComplexity int) int
 		Direction         func(childComplexity int) int
+		Driver            func(childComplexity int) int
 		EvidenceCount     func(childComplexity int) int
 		EvidenceRef       func(childComplexity int) int
 		ID                func(childComplexity int) int
@@ -1261,12 +1262,17 @@ type ComplexityRoot struct {
 	}
 
 	ReworkThemeAllocation struct {
-		Allocation    func(childComplexity int) int
-		AllocationPct func(childComplexity int) int
-		ChurnLoc      func(childComplexity int) int
-		Label         func(childComplexity int) int
-		PrsMerged     func(childComplexity int) int
-		Theme         func(childComplexity int) int
+		Allocation       func(childComplexity int) int
+		AllocationPct    func(childComplexity int) int
+		ChurnLoc         func(childComplexity int) int
+		Denominator      func(childComplexity int) int
+		Label            func(childComplexity int) int
+		Measure          func(childComplexity int) int
+		PrsMerged        func(childComplexity int) int
+		SizingCoverage   func(childComplexity int) int
+		Theme            func(childComplexity int) int
+		UnsizedUnitCount func(childComplexity int) int
+		WorkUnitCount    func(childComplexity int) int
 	}
 
 	SankeyCoverage struct {
@@ -5227,6 +5233,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.HomeSignal.Direction(childComplexity), true
 
+	case "HomeSignal.driver":
+		if e.complexity.HomeSignal.Driver == nil {
+			break
+		}
+
+		return e.complexity.HomeSignal.Driver(childComplexity), true
+
 	case "HomeSignal.evidenceCount":
 		if e.complexity.HomeSignal.EvidenceCount == nil {
 			break
@@ -7757,12 +7770,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ReworkThemeAllocation.ChurnLoc(childComplexity), true
 
+	case "ReworkThemeAllocation.denominator":
+		if e.complexity.ReworkThemeAllocation.Denominator == nil {
+			break
+		}
+
+		return e.complexity.ReworkThemeAllocation.Denominator(childComplexity), true
+
 	case "ReworkThemeAllocation.label":
 		if e.complexity.ReworkThemeAllocation.Label == nil {
 			break
 		}
 
 		return e.complexity.ReworkThemeAllocation.Label(childComplexity), true
+
+	case "ReworkThemeAllocation.measure":
+		if e.complexity.ReworkThemeAllocation.Measure == nil {
+			break
+		}
+
+		return e.complexity.ReworkThemeAllocation.Measure(childComplexity), true
 
 	case "ReworkThemeAllocation.prsMerged":
 		if e.complexity.ReworkThemeAllocation.PrsMerged == nil {
@@ -7771,12 +7798,33 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ReworkThemeAllocation.PrsMerged(childComplexity), true
 
+	case "ReworkThemeAllocation.sizingCoverage":
+		if e.complexity.ReworkThemeAllocation.SizingCoverage == nil {
+			break
+		}
+
+		return e.complexity.ReworkThemeAllocation.SizingCoverage(childComplexity), true
+
 	case "ReworkThemeAllocation.theme":
 		if e.complexity.ReworkThemeAllocation.Theme == nil {
 			break
 		}
 
 		return e.complexity.ReworkThemeAllocation.Theme(childComplexity), true
+
+	case "ReworkThemeAllocation.unsizedUnitCount":
+		if e.complexity.ReworkThemeAllocation.UnsizedUnitCount == nil {
+			break
+		}
+
+		return e.complexity.ReworkThemeAllocation.UnsizedUnitCount(childComplexity), true
+
+	case "ReworkThemeAllocation.workUnitCount":
+		if e.complexity.ReworkThemeAllocation.WorkUnitCount == nil {
+			break
+		}
+
+		return e.complexity.ReworkThemeAllocation.WorkUnitCount(childComplexity), true
 
 	case "SankeyCoverage.directRepoCoverage":
 		if e.complexity.SankeyCoverage.DirectRepoCoverage == nil {
@@ -10585,6 +10633,8 @@ type HomeSignal {
   attribution: SignalAttribution
   "Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta."
   repoFilterApplied: Boolean
+  "One sentence on where the signal's move appears largest (\"Cycle Time appears to have moved most in A, B and C.\"), built from the display names of its top drivers with one hedge word. Null when the signal has no stated non-zero move, no driver has a name, or the signal is not a metric signal (risk, recommendation). Never a placeholder."
+  driver: String
 }
 
 """Source and confidence distribution for the work items behind one Home signal."""
@@ -11462,6 +11512,11 @@ type ReworkThemeAllocation {
   allocationPct: Float!
   prsMerged: Int!
   churnLoc: Int!
+  measure: SankeyValueUnit!
+  denominator: Float!
+  sizingCoverage: Float
+  unsizedUnitCount: Int
+  workUnitCount: Int
 }
 
 type SankeyCoverage {
@@ -37147,6 +37202,16 @@ func (ec *executionContext) fieldContext_HomeResult_reworkThemeAllocation(_ cont
 				return ec.fieldContext_ReworkThemeAllocation_prsMerged(ctx, field)
 			case "churnLoc":
 				return ec.fieldContext_ReworkThemeAllocation_churnLoc(ctx, field)
+			case "measure":
+				return ec.fieldContext_ReworkThemeAllocation_measure(ctx, field)
+			case "denominator":
+				return ec.fieldContext_ReworkThemeAllocation_denominator(ctx, field)
+			case "sizingCoverage":
+				return ec.fieldContext_ReworkThemeAllocation_sizingCoverage(ctx, field)
+			case "unsizedUnitCount":
+				return ec.fieldContext_ReworkThemeAllocation_unsizedUnitCount(ctx, field)
+			case "workUnitCount":
+				return ec.fieldContext_ReworkThemeAllocation_workUnitCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ReworkThemeAllocation", field.Name)
 		},
@@ -37492,6 +37557,8 @@ func (ec *executionContext) fieldContext_HomeResult_signals(_ context.Context, f
 				return ec.fieldContext_HomeSignal_attribution(ctx, field)
 			case "repoFilterApplied":
 				return ec.fieldContext_HomeSignal_repoFilterApplied(ctx, field)
+			case "driver":
+				return ec.fieldContext_HomeSignal_driver(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type HomeSignal", field.Name)
 		},
@@ -38700,6 +38767,47 @@ func (ec *executionContext) fieldContext_HomeSignal_repoFilterApplied(_ context.
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeSignal_driver(ctx context.Context, field graphql.CollectedField, obj *model.HomeSignal) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeSignal_driver(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Driver, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeSignal_driver(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeSignal",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -54461,6 +54569,217 @@ func (ec *executionContext) _ReworkThemeAllocation_churnLoc(ctx context.Context,
 }
 
 func (ec *executionContext) fieldContext_ReworkThemeAllocation_churnLoc(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReworkThemeAllocation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReworkThemeAllocation_measure(ctx context.Context, field graphql.CollectedField, obj *model.ReworkThemeAllocation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReworkThemeAllocation_measure(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Measure, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.SankeyValueUnit)
+	fc.Result = res
+	return ec.marshalNSankeyValueUnit2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSankeyValueUnit(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReworkThemeAllocation_measure(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReworkThemeAllocation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type SankeyValueUnit does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReworkThemeAllocation_denominator(ctx context.Context, field graphql.CollectedField, obj *model.ReworkThemeAllocation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReworkThemeAllocation_denominator(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Denominator, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReworkThemeAllocation_denominator(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReworkThemeAllocation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReworkThemeAllocation_sizingCoverage(ctx context.Context, field graphql.CollectedField, obj *model.ReworkThemeAllocation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReworkThemeAllocation_sizingCoverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SizingCoverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReworkThemeAllocation_sizingCoverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReworkThemeAllocation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReworkThemeAllocation_unsizedUnitCount(ctx context.Context, field graphql.CollectedField, obj *model.ReworkThemeAllocation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReworkThemeAllocation_unsizedUnitCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UnsizedUnitCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReworkThemeAllocation_unsizedUnitCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ReworkThemeAllocation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ReworkThemeAllocation_workUnitCount(ctx context.Context, field graphql.CollectedField, obj *model.ReworkThemeAllocation) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ReworkThemeAllocation_workUnitCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.WorkUnitCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ReworkThemeAllocation_workUnitCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ReworkThemeAllocation",
 		Field:      field,
@@ -73501,6 +73820,8 @@ func (ec *executionContext) _HomeSignal(ctx context.Context, sel ast.SelectionSe
 			out.Values[i] = ec._HomeSignal_attribution(ctx, field, obj)
 		case "repoFilterApplied":
 			out.Values[i] = ec._HomeSignal_repoFilterApplied(ctx, field, obj)
+		case "driver":
+			out.Values[i] = ec._HomeSignal_driver(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -77244,6 +77565,22 @@ func (ec *executionContext) _ReworkThemeAllocation(ctx context.Context, sel ast.
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "measure":
+			out.Values[i] = ec._ReworkThemeAllocation_measure(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "denominator":
+			out.Values[i] = ec._ReworkThemeAllocation_denominator(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sizingCoverage":
+			out.Values[i] = ec._ReworkThemeAllocation_sizingCoverage(ctx, field, obj)
+		case "unsizedUnitCount":
+			out.Values[i] = ec._ReworkThemeAllocation_unsizedUnitCount(ctx, field, obj)
+		case "workUnitCount":
+			out.Values[i] = ec._ReworkThemeAllocation_workUnitCount(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

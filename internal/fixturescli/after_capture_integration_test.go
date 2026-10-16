@@ -130,6 +130,9 @@ var emptyColumnsAfterTheCapture = map[string]map[string]string{
 	// The rule that matched a deployment's pull request link (CHAOS-9610): a
 	// captured deployment has no tier.
 	"deployments": {"pull_request_tier": "126_deployments_pull_request_tier.sql"},
+	// The provider's own stable id of a repository (CHAOS-3383): a captured
+	// repository row has none.
+	"repos": {"provider_repo_id": "134_repos_provider_repo_id.sql"},
 	// The provider's own id and name of a team (CHAOS-9432): the frozen worlds'
 	// team rows were written before them and carry none.
 	"teams": {
@@ -465,7 +468,7 @@ func TestAfterCaptureRulesReportEveryDefectByName(t *testing.T) {
 		t.Fatalf("a named column that is not nullable: %q", problems)
 	}
 	// A table with no added column is returned as it is.
-	other := FrozenTable{Name: "repos", Columns: columns, Rows: [][]any{{"a", "value", "x", "o"}}}
+	other := FrozenTable{Name: "git_commits", Columns: columns, Rows: [][]any{{"a", "value", "x", "o"}}}
 	if out, problems := withoutColumnsAfterTheCapture(other); len(problems) != 0 || len(out.Columns) != 4 {
 		t.Fatalf("a table that is not in the list: %+v %v", out, problems)
 	}

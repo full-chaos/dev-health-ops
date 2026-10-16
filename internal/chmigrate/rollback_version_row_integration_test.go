@@ -37,6 +37,7 @@ var rollbackRehearsals = []rollbackRehearsal{
 	{"131_deployment_incident_edges_repo_key.down.sql", "work_graph_deployment_incident_edges", "version_rank", "*", ""},
 	{"132_pr_commit_native_wins.down.sql", "work_graph_pr_commit", "version_rank", "*", ""},
 	{"133_teams_provider_identity.down.sql", "teams", "provider_team_id", "*", ""},
+	{"134_repos_provider_repo_id.down.sql", "repos", "provider_repo_id", "*", ""},
 }
 
 // Every operator rollback file is rehearsed through the production migrator: the

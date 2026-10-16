@@ -44,13 +44,15 @@ def _build_bigboy_root(tmp_path: Path) -> Path:
     old cut's _records dir with the one file repin.sh's own sed lines name explicitly."""
     root = tmp_path / "bigboy-root"
     root.mkdir()
-    compose_dir = root / "compose"
+    compose_dir = root / "_records"
     compose_dir.mkdir()
     lines = [
         f"      image: ghcr.io/full-chaos/{name}@{_OLD_DIGEST}\n" for name in _IMAGES
     ]
     lines.append(f"      image: ghcr.io/full-chaos/dev-health-web@{_WEB_OLD_DIGEST}\n")
     (compose_dir / "compose.bigboy.images.yml").write_text("".join(lines))
+    (root / "ops").mkdir()
+    (root / "ops" / ".env").write_text("")
     old_records = root / "_records" / f"bigboy-{_OLD8}"
     old_records.mkdir(parents=True)
     (old_records / "bigboy-rest-commands.sh").write_text(
@@ -79,7 +81,7 @@ def _docker_stub(stub_bin: Path, *, routing_response: str, routing_rc: int) -> N
     old_probe = f"dev-health-go-dho:sha-{_OLD8[:7]}"
     script = ["#!/usr/bin/env bash", "set -u", 'args="$*"']
     script.append(
-        '[ -z "${DOCKER_STUB_COMPOSE_LOG:-}" ] || printf "%s\\n" "${COMPOSE_FILE:-}" >> "$DOCKER_STUB_COMPOSE_LOG"'
+        '[ -z "${DOCKER_STUB_COMPOSE_LOG:-}" ] || printf "%s\\n" "$(printf \'%s\\n\' "$@" | awk \'p{print} $0=="-f"{p=1;next} {p=0}\' | paste -sd: -)" >> "$DOCKER_STUB_COMPOSE_LOG"'
     )
     script.append(
         '[ -z "${DOCKER_STUB_ARGS_LOG:-}" ] || printf "%s\\n" "$*" >> "$DOCKER_STUB_ARGS_LOG"'
@@ -206,22 +208,9 @@ def test_every_compose_file_the_cut_exports_resolves_without_ci_under_the_root(
     """CHAOS-7135: the cut runs docker compose from the root, so a relative COMPOSE_FILE entry is
     resolved against the root; an entry that names a tools file must therefore be absolute (from
     the tools directory), or a root with no ci/bigboy fails every compose call. The stub docker
-    records COMPOSE_FILE as the cut exports it; every entry must exist, with the root holding the
+    records the -f chain stack.sh hands compose; every entry must exist, with the root holding the
     compose files a real root holds and nothing under ci/."""
-    import re
-
     root = _build_bigboy_root(tmp_path)
-    chain_line = re.search(
-        r"^export COMPOSE_FILE=(\S+)$", CUT.read_text(), re.MULTILINE
-    )
-    assert chain_line, "bigboy-cut.sh no longer exports COMPOSE_FILE"
-    tools = str(CUT.parent)
-    for entry in chain_line.group(1).split(":"):
-        entry = entry.replace("$HERE", tools)
-        if not entry.startswith("/") and not entry.startswith("ci/"):
-            path = root / entry
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch()
     log = tmp_path / "compose-file.log"
     stub_bin = tmp_path / "stubbin"
     stub_bin.mkdir()
@@ -248,5 +237,5 @@ def test_every_compose_file_the_cut_exports_resolves_without_ci_under_the_root(
         for entry in chain.split(":"):
             resolved = Path(entry) if entry.startswith("/") else root / entry
             assert resolved.is_file(), (
-                f"COMPOSE_FILE entry {entry!r} does not resolve from the root: {resolved}"
+                f"-f entry {entry!r} does not resolve from the root: {resolved}"
             )

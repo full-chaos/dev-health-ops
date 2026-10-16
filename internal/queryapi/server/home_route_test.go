@@ -59,9 +59,37 @@ func TestHomeRouteUnreachableWhenSwitchDisabled(t *testing.T) {
 // quadrant_route_test.go's own emptyRowsQuadrantClient precedent.
 type emptyRowsHomeClient struct{}
 
-func (emptyRowsHomeClient) Query(context.Context, string, []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-	return emptyRowsHomeScanner{}, nil
+func (emptyRowsHomeClient) Query(_ context.Context, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	return emptyOrSizingRow(query), nil
 }
+
+// emptyOrSizingRow answers zero rows, except the tile's sizing coverage: an aggregate without GROUP BY always answers
+// one row, even over no unit (CHAOS-9624).
+func emptyOrSizingRow(query string) dhclickhouse.RowScanner {
+	if strings.Contains(query, "AS sized_units") {
+		return &sizingZeroScanner{}
+	}
+	return emptyRowsHomeScanner{}
+}
+
+type sizingZeroScanner struct{ done bool }
+
+func (s *sizingZeroScanner) Next() bool {
+	if s.done {
+		return false
+	}
+	s.done = true
+	return true
+}
+
+func (*sizingZeroScanner) Scan(dest ...any) error {
+	for _, d := range dest {
+		*d.(*uint64) = 0
+	}
+	return nil
+}
+func (*sizingZeroScanner) Err() error   { return nil }
+func (*sizingZeroScanner) Close() error { return nil }
 
 type emptyRowsHomeScanner struct{}
 
@@ -91,7 +119,7 @@ func (c homeCoverageRowsClient) Query(_ context.Context, query string, _ []dhcli
 	case strings.Contains(query, "countIf(cycle_time_hours IS NOT NULL)"):
 		return &homeCoverageRowsScanner{values: []float64{c.withCycle, c.cycleItems}}, nil
 	default:
-		return emptyRowsHomeScanner{}, nil
+		return emptyOrSizingRow(query), nil
 	}
 }
 

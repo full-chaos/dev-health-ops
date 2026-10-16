@@ -54,6 +54,9 @@ var (
 		unstated("settings", "settings"), unstated("tags", "tags"),
 		from("provider", storedversion.Stated, "sourceSystem"),
 		idLastSynced, idSource, idOrg,
+		// A pushed repository names no provider repository id; the held one is
+		// kept, and a new key starts with the column default.
+		{Name: "provider_repo_id", Rule: storedversion.NoField, Value: func(map[string]any) any { return "" }},
 	}}
 	externalIdentityContract = storedversion.Contract{Writer: "external_ingest", Table: "identities", Columns: []storedversion.Column{
 		idOrg, from("canonical_id", storedversion.Identity, "canonicalId"),

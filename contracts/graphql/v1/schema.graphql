@@ -1061,6 +1061,8 @@ type HomeSignal {
   attribution: SignalAttribution
   "Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta."
   repoFilterApplied: Boolean
+  "One sentence on where the signal's move appears largest (\"Cycle Time appears to have moved most in A, B and C.\"), built from the display names of its top drivers with one hedge word. Null when the signal has no stated non-zero move, no driver has a name, or the signal is not a metric signal (risk, recommendation). Never a placeholder."
+  driver: String
 }
 
 """Source and confidence distribution for the work items behind one Home signal."""
@@ -1938,6 +1940,11 @@ type ReworkThemeAllocation {
   allocationPct: Float!
   prsMerged: Int!
   churnLoc: Int!
+  measure: SankeyValueUnit!
+  denominator: Float!
+  sizingCoverage: Float
+  unsizedUnitCount: Int
+  workUnitCount: Int
 }
 
 type SankeyCoverage {

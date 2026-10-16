@@ -107,6 +107,7 @@ func (GitLabRepositoryRouteHandler) Collect(
 		ID: identity, OrgID: claim.OrgID, Repo: fullName,
 		CreatedAt: normalizedAt, Settings: string(settings), Tags: string(tags),
 		Provider: "gitlab", LastSynced: normalizedAt,
+		ProviderRepoID: strconv.FormatInt(parsedProjectID, 10),
 	}
 	if err := row.validate(claim); err != nil {
 		return CompleteRouteBatch{}, err

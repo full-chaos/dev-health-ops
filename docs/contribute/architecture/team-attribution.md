@@ -1259,7 +1259,14 @@ controls: a link that is gone and an explicit empty list are closed).
 > link supports, is retracted by the derivation's own diff (`diffTeamRepoOwnershipRetractions`: a replacement row
 > with `valid_to` set and a newer `updated_at`, never a delete), under the retraction guard (CHAOS-9045). The run logs
 > `team_repo_ownership_derivation.co_owner_below_share_floor` with the count (tests:
-> `team_repo_ownership_co_owner_floor_test.go`, every provider pair). The writer stores the share (`team_repo_ownership.share`, section 1.1)
+> `team_repo_ownership_co_owner_floor_test.go`, every provider pair). **A dropped co-owner holds no share on any day
+> (CHAOS-9913).** The share is a measure over the whole history (D5988), so a co-owner below the floor now was below it
+> on every day: its rows, the open one and every earlier closed one, are voided (`valid_to = valid_from`, the
+> supersede tombstone form), not closed at the run, and as-of readers (`teamownership.OwnerSharesByRepo`, filter
+> `valid_from <= asOf < valid_to`) give it nothing on any day, so a trailing recompute of a daily team table cannot write
+> its share back. Logged as `team_repo_ownership_derivation.co_owner_voided`, stat `CoOwnersVoided`; test
+> `TestADroppedCoOwnerHoldsNoShareOnAnyDay` (real ClickHouse, jira, linear, github and gitlab). Every other retraction
+> (no supporting link left, a reassigned project) still closes at the run and keeps the history. The writer stores the share (`team_repo_ownership.share`, section 1.1)
 > and the investment and quadrant readers weigh a co-owned repository by it (CHAOS-9408, `teamscope.OwnerShares`,
 > next to "The team review quadrant" and "Every analytics team grouping on the investment path" below). Other text
 > below that says "same rank", "owners at the winner's rank" or "shared equally" about the attribution cascade
@@ -1297,6 +1304,13 @@ controls: a link that is gone and an explicit empty list are closed).
 >   averages (cycle time, reviews per pull request) and the baselines are the repository's own and are never scaled,
 >   so a lesser owner reads the repository's rates and a fraction of its counts. The readers that add rows (the impact
 >   summary, the comparison, the risk breakdown, the review load) add the fractions and weight the averages by them.
+>   An incident is an event of the repository, not of a pull request (D6037, CHAOS-9915): a team takes the
+>   repository's incidents at its ownership share of the repository, read from the ownership resolver and never from
+>   the shares of the team's pull requests (one group can mix a pull request whose attribution row names the team, share
+>   1, with one the ownership read gives to the team at a lesser share). A team that holds no ownership of the
+>   repository and is present only through attribution rows that name it takes no incidents, and a repository the
+>   resolver gives to no team keeps its incidents whole in its no-team rows, so the teams' incidents add up to the
+>   repository's incident count.
 > - **The share is the weight of a repository in a team's aggregate (D5998, CHAOS-9620).** `compounding_risk_daily`
 >   (team scope) gives every owner, main and lesser, a row. Its additive columns are the pooled review-window counts
 >   (`merged_prs_30d`, `reviewed_prs_30d`, Float64 since migration 124): the sum over the team's repositories of the

@@ -117,10 +117,29 @@ def test_data_file_counts_only_as_testdata_or_embed() -> None:
     assert _select("src/dev_health_ops/x.py")[0].startswith("FULL non-Go")
 
 
-def test_docs_changes_select_nothing() -> None:
-    assert _select("docs/guide/a.png".replace(".png", ".md"), "README.md") == (
+def test_docs_and_markdown_are_not_ignored() -> None:
+    # A Go test may read any file at run time (docs, README), so an
+    # unplaceable Markdown file is the full suite, never "nothing".
+    assert _select("docs/guide/a.md")[0].startswith("FULL non-Go")
+    assert _select("README.md")[0].startswith("FULL non-Go")
+
+
+def test_embedded_markdown_is_placed_by_its_owner() -> None:
+    golist = [
+        _pkg("internal/mid", EmbedFiles=["sql/README.md"]),
+        _pkg("internal/top"),
+        _binary("internal/mid"),
+        _binary("internal/top", "internal/mid"),
+    ]
+    assert affected.select(
+        ["internal/mid/sql/README.md"], golist, ["internal/mid", "internal/top"], ROOT_DIR
+    ) == ("AFFECTED", ["internal/mid", "internal/top"])
+
+
+def test_go_file_under_testdata_is_a_fixture_of_its_package() -> None:
+    assert _select("internal/leaf/testdata/plant/plant.go") == (
         "AFFECTED",
-        [],
+        ["internal/mid", "internal/top"],
     )
 
 

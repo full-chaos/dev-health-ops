@@ -29,9 +29,6 @@ from pathlib import Path
 # A change under one of these is shared infrastructure: always the full suite.
 FULL_PREFIXES = ("ci/", ".github/", "internal/testsupport/")
 FULL_FILES = frozenset({"go.mod", "go.sum", "go.work", "go.work.sum"})
-# Files no Go test reads as an input.
-IGNORABLE_PREFIXES = ("docs/", "docs-data/")
-IGNORABLE_SUFFIXES = (".md",)
 
 
 def read_json_stream(path: Path) -> list[dict]:
@@ -94,14 +91,12 @@ def select(
         path = posixpath.normpath(raw_path)
         if path in FULL_FILES or path.startswith(FULL_PREFIXES):
             return f"FULL shared change: {path}", []
-        if path.endswith(".go"):
+        if path.endswith(".go") and "testdata" not in path.split("/")[:-1]:
             directory = posixpath.dirname(path) or "."
             owner = packages.get(directory)
             if owner is None:
                 return f"FULL Go file outside any listed package: {path}", []
             changed_packages.add(owner["ImportPath"])
-            continue
-        if path.startswith(IGNORABLE_PREFIXES) or path.endswith(IGNORABLE_SUFFIXES):
             continue
         owner_import = _owner_of_data_file(path, packages)
         if owner_import is None:

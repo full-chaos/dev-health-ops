@@ -126,6 +126,45 @@ func TestTheGitHubAnswerForOneGrant(t *testing.T) {
 	}
 }
 
+// A catalog-keyed row is asked for by its numeric id (GET /projects/:id), so
+// a rename does not hide it: the project still in the group holds the grant,
+// in another namespace or answered by GitLab's own 404 it does not, and any
+// other answer proves nothing.
+func TestTheGitLabAnswerForACatalogKeyedRowFollowsTheProjectID(t *testing.T) {
+	row := OwnershipSnapshotRow{TeamID: "gl:acme/platform", ProjectID: testPID("org:gitlab:4711"), Source: gitlabTeamCatalogSource}
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+		want   SnapshotAbsence
+	}{
+		{"renamed, still in the group", 200, `{"id":4711,"path_with_namespace":"acme/platform/new-name","namespace":{"full_path":"acme/platform"}}`, SnapshotFactStillHeld},
+		{"moved to another group", 200, `{"id":4711,"path_with_namespace":"other/new-name","namespace":{"full_path":"other"}}`, SnapshotAbsenceProven},
+		{"GitLab's own 404", 404, `{"message":"404 Project Not Found"}`, SnapshotAbsenceProven},
+		{"a 404 that is not GitLab's", 404, `<html>not found</html>`, SnapshotAbsenceNotProven},
+		{"another id in the answer", 200, `{"id":9999,"path_with_namespace":"acme/platform/new-name","namespace":{"full_path":"acme/platform"}}`, SnapshotAbsenceNotProven},
+		{"a server error", 500, `{}`, SnapshotAbsenceNotProven},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var path string
+			client, err := providerfoundation.NewHTTPClient("gitlab", "https://gitlab.example",
+				fakehttp.Client(absenceAnswerDoer(func(request *http.Request) (*http.Response, error) {
+					path = request.URL.Path
+					header := http.Header{"Content-Type": {"application/json"}}
+					return &http.Response{StatusCode: test.status, Header: header, Body: io.NopCloser(strings.NewReader(test.body)), Request: request}, nil
+				})), func(*http.Request) error { return nil },
+				providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: 1, MaxWait: 1},
+				providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := (gitlabGroupProjectAbsence{client: client}).OwnershipAbsence(context.Background(), row); got != test.want {
+				t.Errorf("the answer is %d, want %d (request %s)", got, test.want, path)
+			}
+		})
+	}
+}
+
 // The GitLab direct answer: a search answer that does not hold the project
 // proves the absence only when it is the WHOLE answer by the paginator's own
 // reading of GitLab's end signal. An answer that announces a next page in any

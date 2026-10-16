@@ -451,13 +451,14 @@ func NewGitHubWorkItemDerivationContext(
 		}
 	}
 	for _, fact := range facts.Projects {
+		joinID := ProjectOwnershipJoinID(fact.Provider, fact.ProjectID, fact.ProjectKey)
 		candidate := GithubWorkItemDerivationCandidateFromFact(
 			"project_ownership", fact.TeamID, fact.TeamName,
-			fmt.Sprintf("project_ownership=%s", GithubWorkItemDerivationFirstNonEmpty(fact.ProjectID, GithubWorkItemDerivationStringValue(fact.ProjectKey))),
+			fmt.Sprintf("project_ownership=%s", GithubWorkItemDerivationFirstNonEmpty(joinID, GithubWorkItemDerivationStringValue(fact.ProjectKey))),
 			fact.IsPrimary, fact.Specificity, fact.Priority, fact.UpdatedAt,
 		)
-		if fact.ProjectID != "" {
-			AppendDerivationCandidate(result.projectByID, AttributionMapKey(fact.Provider, fact.ProjectID), candidate)
+		if joinID != "" {
+			AppendDerivationCandidate(result.projectByID, AttributionMapKey(fact.Provider, joinID), candidate)
 		}
 		if fact.ProjectKey != nil && strings.TrimSpace(*fact.ProjectKey) != "" {
 			AppendDerivationCandidate(result.projectByKey, AttributionMapKey(fact.Provider, *fact.ProjectKey), candidate)

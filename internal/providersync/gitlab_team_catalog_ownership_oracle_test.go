@@ -88,12 +88,21 @@ func buildGitLabTeamCatalogOwnershipOracleRow(t *testing.T, input map[string]any
 	targetProjectPath := input["target_project_path"].(string)
 	teamID := gitlabTeamID(targetFullPath)
 	specificity := uint16(gitlabTeamCatalogBaseSpecificity + gitlabTeamDepth(teamID, parentByTeam)*gitlabTeamCatalogChildSpecificityStep)
-	row, ok := normalizeGitLabOwnershipRow(input["org_id"].(string), teamID, targetProjectPath, specificity, normalizedAt)
+	nativeProjectID := testGitLabNativeProjectID(targetProjectPath)
+	row, ok := normalizeGitLabOwnershipRow(input["org_id"].(string), teamID, nativeProjectID, targetProjectPath, specificity, normalizedAt)
 	if !ok {
 		t.Fatal("normalizeGitLabOwnershipRow rejected a valid oracle case")
 	}
+	// Named divergence from the frozen Python producer: it keyed the row by
+	// the path; Go keys it by the projects.id of the same project (CHAOS-8883)
+	// and keeps the path as project_key. The id is checked here, and the
+	// oracle compares the path the Python producer wrote as project_id.
+	catalogID, _ := GitLabCatalogProjectID(row.OrgID, nativeProjectID)
+	if row.ProjectID != catalogID || row.ProjectKey == nil || *row.ProjectKey != targetProjectPath {
+		t.Fatalf("ownership project_id = %q key=%v, want the catalog id %q and the path as project_key", row.ProjectID.String(), row.ProjectKey, catalogID.String())
+	}
 	return gitlabTeamCatalogOwnershipProducerRow{
-		OrgID: row.OrgID, Provider: row.Provider, TeamID: row.TeamID, ProjectID: row.ProjectID.String(),
+		OrgID: row.OrgID, Provider: row.Provider, TeamID: row.TeamID, ProjectID: *row.ProjectKey,
 		ProjectKey: row.ProjectKey, Source: row.Source, IsPrimary: int(row.IsPrimary),
 		Specificity: int(row.Specificity), Priority: int(row.Priority),
 		ValidFrom: row.ValidFrom, ValidTo: row.ValidTo, UpdatedAt: row.UpdatedAt,

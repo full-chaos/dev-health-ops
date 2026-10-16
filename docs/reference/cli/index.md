@@ -1993,7 +1993,7 @@ dho maintenance cleanup-all
 
 ## Service Credentials
 
-Internal service credentials are the bearer tokens the ACR entitlement lookup (`acr`) and the worker operator API (`worker-operator`) present to the API. The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read`; `worker-operator` holds `workers:read` and `workers:operate`.
+Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) and the worker operator API (`worker-operator`) present to the API. The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read` and `llm_config:read` (the org LLM config route); `worker-operator` holds `workers:read` and `workers:operate`.
 
 ```bash
 # Create a credential (the token is printed once)

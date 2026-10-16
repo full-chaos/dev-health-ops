@@ -1,6 +1,8 @@
 package providersync
 
 import (
+	"hash/fnv"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -23,10 +25,18 @@ func mustProjectID(t testing.TB) func(ProjectID, bool) ProjectID {
 	}
 }
 
+// testGitLabNativeProjectID is a stable numeric GitLab project id for a test
+// path: the same path always names the same project.
+func testGitLabNativeProjectID(projectPath string) string {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(projectPath))
+	return strconv.FormatUint(uint64(hash.Sum32()), 10)
+}
+
 // mustGitLabOwnershipRow is normalizeGitLabOwnershipRow for a test whose path
-// is a valid one.
+// is a valid one; the project's numeric id is testGitLabNativeProjectID(path).
 func mustGitLabOwnershipRow(orgID, teamID, projectPath string, specificity uint16, at time.Time) gitlabTeamCatalogOwnershipRow {
-	row, ok := normalizeGitLabOwnershipRow(orgID, teamID, projectPath, specificity, at)
+	row, ok := normalizeGitLabOwnershipRow(orgID, teamID, testGitLabNativeProjectID(projectPath), projectPath, specificity, at)
 	if !ok {
 		panic("mustGitLabOwnershipRow: blank project path")
 	}

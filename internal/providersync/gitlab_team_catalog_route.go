@@ -303,6 +303,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		// guard added for finding #4 above and discard otherwise valid
 		// member rows.
 		var projectKeys []string
+		nativeProjectIDs := map[string]string{}
 		projectListingProven, projectListingResponses := false, 0
 		if selections.Teams || selections.Projects {
 			projectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
@@ -328,6 +329,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					continue
 				}
 				projectKeys = append(projectKeys, path)
+				nativeProjectIDs[path] = strings.TrimSpace(project.ID.String())
 			}
 		}
 
@@ -352,9 +354,15 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					continue
 				}
 				seenOwnership[key] = true
-				if ownership, ok := normalizeGitLabOwnershipRow(ref.OrgID, teamID, path, specificity, normalizedAt); ok {
-					rows.Ownership = append(rows.Ownership, ownership)
+				ownership, ok := normalizeGitLabOwnershipRow(ref.OrgID, teamID, nativeProjectIDs[path], path, specificity, normalizedAt)
+				if !ok {
+					// A listed project with no numeric id cannot be keyed: its grant is
+					// left out (and logged) instead of falling back to the path.
+					slog.WarnContext(ctx, "providersync.gitlab_team_catalog.ownership_project_without_id",
+						"org_id", ref.OrgID)
+					continue
 				}
+				rows.Ownership = append(rows.Ownership, ownership)
 			}
 		}
 

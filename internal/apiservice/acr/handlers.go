@@ -40,6 +40,10 @@ import (
 type Deps struct {
 	Store  EntitlementStore
 	Logger *slog.Logger
+	// LLMConfig and Credentials serve the llm-config route. Either nil makes
+	// that route answer 503; it never serves unauthenticated.
+	LLMConfig   LLMConfigSource
+	Credentials CredentialVerifier
 }
 
 // Routes is the acr area's route set. Both paths are internal, reachable
@@ -57,6 +61,10 @@ func Routes(deps Deps) []httpapi.Route {
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/entitlements/{org_id}",
 			Handler: entitlementHandler(deps.Store, logger),
+		},
+		{
+			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/orgs/{org_id}/llm-config",
+			Handler: llmConfigHandler(deps.Credentials, deps.LLMConfig, logger),
 		},
 	}
 }

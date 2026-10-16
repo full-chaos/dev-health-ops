@@ -30,9 +30,12 @@ func TestNewProviderFromCredentialsOpenAIUsesExplicitValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	openAIProvider, ok := provider.(*OpenAIProvider)
-	if !ok {
-		t.Fatalf("provider = %T, want *OpenAIProvider", provider)
+	openAIProvider, ok := provider.(*SharedProvider)
+	if !ok || openAIProvider.cfg.Kind != ProviderKindOpenAI {
+		t.Fatalf("provider = %T, want the shared OpenAI provider", provider)
+	}
+	if openAIProvider.Model() != "gpt-5-mini" {
+		t.Errorf("Model() = %q, want the explicit model argument", openAIProvider.Model())
 	}
 	if openAIProvider.cfg.APIKey.Reveal() != "sk-org-secret" {
 		t.Error("APIKey not set from the explicit apiKey argument")
@@ -61,7 +64,7 @@ func TestNewProviderFromCredentialsIgnoresAmbientEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	openAIProvider := provider.(*OpenAIProvider)
+	openAIProvider := provider.(*SharedProvider)
 	if openAIProvider.cfg.APIKey.Reveal() != "sk-org-secret" {
 		t.Fatalf("APIKey = %q, an ambient env var leaked into an org-BYO construction", openAIProvider.cfg.APIKey.Reveal())
 	}

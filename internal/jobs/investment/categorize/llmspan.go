@@ -11,6 +11,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
+	"github.com/full-chaos/dev-health-go/llm"
+
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
@@ -72,7 +74,8 @@ type (
 
 // WithLLMRole marks the requests made under ctx as served or shadow.
 func WithLLMRole(ctx context.Context, role LLMRole) context.Context {
-	return context.WithValue(ctx, llmRoleKey{}, role)
+	// The shared llm package reads its own key for the same span attribute.
+	return llm.WithRole(context.WithValue(ctx, llmRoleKey{}, role), llm.Role(role))
 }
 
 // withLLMAttempt sets the 1-based attempt number of the request about to be sent.

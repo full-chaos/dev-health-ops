@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/full-chaos/dev-health-go/llm"
+
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
 
@@ -291,6 +293,12 @@ func FailureClass(err error) string {
 	}
 
 	if typed == nil {
+		// A shared-package error's message is a fixed classifier sentence
+		// (or sanitized provider text for the generic class), so its Error()
+		// is what the substring checks above read.
+		if class, ok := llm.ClassOf(err); ok {
+			return sharedFailureClass(class)
+		}
 		return "llm_error"
 	}
 	switch typed.kind {
@@ -311,6 +319,30 @@ func FailureClass(err error) string {
 	}
 }
 
+// sharedFailureClass is FailureClass's word for a shared llm package class;
+// the classes the ops port folded into llm_error (timeout, transport,
+// invalid_request, generic) stay there.
+func sharedFailureClass(class llm.ErrorClass) string {
+	switch class {
+	case llm.ClassAuth:
+		return "auth"
+	case llm.ClassRateLimit:
+		return "rate_limit"
+	case llm.ClassServer:
+		return "server_error"
+	case llm.ClassContextLength:
+		return "context_length"
+	case llm.ClassOutput:
+		return "output_error"
+	case llm.ClassBatchTimeout:
+		return "batch_timeout"
+	case llm.ClassModelNotFound:
+		return "model_not_found"
+	default:
+		return "llm_error"
+	}
+}
+
 // IsDeterministicFailure ports materialize.py:133-141
 // _is_deterministic_llm_failure.
 //
@@ -325,6 +357,9 @@ func IsDeterministicFailure(err error) bool {
 	}
 	var typed *llmError
 	if errors.As(err, &typed) && typed.kind == llmErrorAuth {
+		return true
+	}
+	if class, ok := llm.ClassOf(err); ok && class == llm.ClassAuth {
 		return true
 	}
 	switch FailureClass(err) {

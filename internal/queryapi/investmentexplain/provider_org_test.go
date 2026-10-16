@@ -782,9 +782,9 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 				plain := &http.Client{}
 				switch kind {
 				case categorize.ProviderKindOpenAI:
-					return categorize.NewOpenAIProvider(categorize.OpenAIProviderConfig{
-						APIKey: secrets.NewHidden(apiKey), BaseURL: baseURL, Model: model, HTTPClient: plain,
-					}), nil
+					return categorize.NewSharedProvider(categorize.SharedProviderConfig{
+						Kind: kind, APIKey: secrets.NewHidden(apiKey), BaseURL: baseURL, Model: model, HTTPClient: plain,
+					})
 				case categorize.ProviderKindLocal, categorize.ProviderKindOllama:
 					return categorize.NewLocalProvider(categorize.LocalProviderConfig{
 						APIKey: secrets.NewHidden(apiKey), BaseURL: baseURL, Model: model, HTTPClient: plain,

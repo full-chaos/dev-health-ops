@@ -1,6 +1,10 @@
 package categorize
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/full-chaos/dev-health-go/llm"
+)
 
 // LLMErrorClass names the only distinctions an HTTP caller draws between
 // this package's LLM failures. llmErrorKind (errors.go) stays unexported --
@@ -37,7 +41,20 @@ const (
 func ClassifyLLMError(err error) (class LLMErrorClass, ok bool) {
 	var typed *llmError
 	if !errors.As(err, &typed) {
-		return LLMErrorClassOther, false
+		shared, ok := llm.ClassOf(err)
+		if !ok {
+			return LLMErrorClassOther, false
+		}
+		switch shared {
+		case llm.ClassAuth:
+			return LLMErrorClassAuth, true
+		case llm.ClassRateLimit:
+			return LLMErrorClassRateLimit, true
+		case llm.ClassServer:
+			return LLMErrorClassServer, true
+		default:
+			return LLMErrorClassOther, true
+		}
 	}
 	switch typed.kind {
 	case llmErrorAuth:

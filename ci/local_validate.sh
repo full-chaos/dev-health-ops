@@ -697,8 +697,13 @@ try_acquire_once() {
   # EEXIST is contention even when the holder is already gone by now: the lock existed when
   # `ln -s` ran and was released or reclaimed before the check above (CHAOS-9923). Treating
   # that as "not contention" died on a lock that was merely handed over.
+  # The message ends in ": File exists" (the path comes before it, so a path that merely contains
+  # the words does not match). Something that is not a symlink at LOCK_DIR is a wrong path, never
+  # a holder that left.
   case "${ln_err}" in
-    *"File exists"*) return 1 ;;
+    *"': File exists")
+      [ -e "${LOCK_DIR}" ] || return 1
+      ;;
   esac
   die "cannot create lock symlink at ${LOCK_DIR}: ${ln_err}. This is NOT lock contention (no symlink exists there) -- check that LOCK_DIR's parent directory exists and is writable."
 }

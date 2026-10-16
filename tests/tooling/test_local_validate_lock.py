@@ -1086,7 +1086,8 @@ def test_a_lock_released_between_ln_failure_and_the_check_is_contention_not_a_fa
     )
 
 
-def test_ln_s_failure_from_missing_parent_dir_dies_immediately(tmp_path):
+@pytest.mark.parametrize("parent_name", ["parent", "File exists"])
+def test_ln_s_failure_from_missing_parent_dir_dies_immediately(tmp_path, parent_name):
     """A LOCK_DIR whose parent directory doesn't exist must fail FAST with
     the real reason -- not be treated as lock contention and polled out to
     the full LOCK_WAIT_SECS with a diagnostic naming a PID that doesn't exist.
@@ -1096,7 +1097,8 @@ def test_ln_s_failure_from_missing_parent_dir_dies_immediately(tmp_path):
     permissions error all looked identical to real contention, and none of
     them will ever resolve by polling.
     """
-    bad_lock_dir = tmp_path / "no" / "such" / "parent" / "lock.file"
+    # "File exists" in the PATH must not read as the EEXIST error (CHAOS-9923 round 1).
+    bad_lock_dir = tmp_path / "no" / "such" / parent_name / "lock.file"
     started_at = time.monotonic()
     result = subprocess.run(
         ["bash", str(SCRIPT), "--lock-probe", "0.1"],

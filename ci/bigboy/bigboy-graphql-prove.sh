@@ -42,8 +42,7 @@ st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 fail=0
 mkdir -p "$OUT/proof/bodies"; chmod 0755 "$OUT" "$OUT/proof" "$OUT/proof/bodies"
 cd "$R"
-BASE=(--env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml
-  -f .remember/lanes/team-lead/reconciler-sweep-override.yml -f compose/compose.bigboy.images.yml --profile venue)
+export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE   # CHAOS-8693: the chain, project, env file and profile come from ci/bigboy/stack.files
 
 # 1. prover build == candidate build
 want=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-go-api-tools:sha-$S7" --format '{{json .Manifest}}' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null)
@@ -52,7 +51,7 @@ if [ -n "$want" ] && [ "$want" = "$pinned" ]; then st prover-image 0; else
   st prover-image 1; echo "REFUSED: venue-prove image ${pinned:-<none>} is not go-api-tools:sha-$S7 (${want:-unresolved}) -- re-pin before proving" >&2; exit 1; fi
 
 # 2. local org (read-only), exactly one
-PROVE_ORG=$(docker compose "${BASE[@]}" exec -T postgres psql -U devhealth -d devhealth -X -q -tA -v ON_ERROR_STOP=1 \
+PROVE_ORG=$("$HERE/stack.sh" -s prove-base exec postgres psql -U devhealth -d devhealth -X -q -tA -v ON_ERROR_STOP=1 \
   -v email="$LOCAL_ADMIN_EMAIL" <<'SQL' 2>/dev/null
 SELECT DISTINCT m.org_id FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = :'email';
 SQL
@@ -63,7 +62,7 @@ st local-org 0; export PROVE_ORG PROVE_ARTIFACT_DIR="$OUT/proof"
 U="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo"
 
 # 2. prove. The key file is loaded into THIS process's env inside the container only.
-docker compose "${BASE[@]}" -f "$HERE/compose.bigboy.prove.yml" run --rm --no-deps -T venue-prove \
+"$HERE/stack.sh" -s prove run venue-prove \
   "GO_API_ENVELOPE_PRIVATE_KEY=\"\$(cat /keys/envelope.pem)\" dho goapi prove $U $EDGE_ARGS \
    -documents /app/go-api/documents.json -org \"\$PROVE_ORG\" -artifact-dir /proof/bodies -key-id $KEY_ID -candidate-build $NEW \
    -recorded-by bigboy-graphql-prove \

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -94,7 +95,7 @@ func TestCatalogLeaseTurnKeepsOneOpenRowOfANewFactAcrossOverlappingRuns(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(poolB.Close)
-	turns := []catalogLeaseTurn{newCatalogLeaseTurn(poolA), newCatalogLeaseTurn(poolB)}
+	turns := []jobruntime.TeamCatalogTurn{jobruntime.NewTeamCatalogTurn(poolA), jobruntime.NewTeamCatalogTurn(poolB)}
 
 	openRows := func(org string) uint64 {
 		t.Helper()

@@ -389,9 +389,9 @@ internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**flo
 internal/queryapi/home/queries_sync.go|FetchLatestSuccessfulSyncAt|**time.Time|9dfe899f0474|statement-not-static
 internal/queryapi/hotspots/hotspots.go|queryHotspotRows|*string,*string,*uint64,*uint32,*uint32,*float64,**float64,*float64|448efde8f6df|not-describable
 internal/queryapi/investment/sunburst.go|FetchInvestmentSunburst|*string,*string,*string,*float64|54b6486b78e7|spliced-select-list
-internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|2e6213660a1b|spliced-select-list
-internal/queryapi/investmentexplain/reader.go|FetchInvestmentThemeEffort|*string,*float64,*float64,*float64|2d78e2454964|spliced-select-list
-internal/queryapi/investmentexplain/reader.go|FetchSizingCoverage|*uint64,*uint64|6fc71db38725|not-describable
+internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|8fa24d14b228|spliced-select-list
+internal/queryapi/investmentexplain/reader.go|FetchInvestmentThemeEffort|*string,*float64,*float64,*float64|444d2e14edab|spliced-select-list
+internal/queryapi/investmentexplain/reader.go|FetchSizingCoverage|*uint64,*uint64|13df7c74def4|not-describable
 internal/queryapi/investmentexplain/workunitreader.go|FetchWorkUnitInvestments|*string,**string,**string,*time.Time,*time.Time,**string,**string,**string,**float64,*float64,*[]string,*[]float64,*[]string,*[]float64,**string,**float64,**string,**string,**string,**string,*time.Time|2fe6cf35c49b|spliced-select-list
 internal/queryapi/operatingreview/operatingreview.go|fetchChangeFailureAgg|[]any|fa0c9e3b063a|variadic-destinations
 internal/queryapi/people/metricqueries.go|fetchPersonBreakdown|*string,*float64|a120bde67c22|spliced-select-list

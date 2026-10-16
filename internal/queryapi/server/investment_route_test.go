@@ -62,6 +62,9 @@ func (tablePresentInvestmentClient) Query(_ context.Context, query string, _ []d
 			{"from_ts"}, {"to_ts"}, {"repo_id"}, {"effort_value"},
 			{"theme_distribution_json"}, {"subcategory_distribution_json"},
 		}}, nil
+	case strings.Contains(query, "AS sized_units"):
+		// FetchSizingCoverage: one aggregate row, no unit (the scanner leaves the counts at zero).
+		return &fixedRowsInvestmentScanner{rows: [][]any{{uint64(0), uint64(0)}}}, nil
 	default:
 		return emptyRowsInvestmentScanner{}, nil
 	}

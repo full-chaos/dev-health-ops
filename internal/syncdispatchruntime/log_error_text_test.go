@@ -103,7 +103,7 @@ const modulePrefix = "github.com/full-chaos/dev-health-ops/internal/"
 var legacyLogUsers = map[string]bool{
 	"jobruntime": true, "platform/health": true, "joboutbox": true, "platform/secrets": true, "platform/logging": true,
 	"providerfoundation": true, "storedversion": true, "providersync": true, "platform/tracing": true, "scheduler/sync": true,
-	"synccoverage": true,
+	"synccoverage": true, "httpguard": true,
 }
 
 // derivedDependencies loads the package with its dependencies and returns every first-party package it depends on, transitively,

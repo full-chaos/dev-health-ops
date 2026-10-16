@@ -7,13 +7,15 @@ import (
 	"strings"
 )
 
-// REST /investment reads the COUNT of the work units since CHAOS-9622 (D5999); the frozen Python answer weighs
-// every unit by effort_value. The two are different measures by ruling, so the VALUES of the two distributions
-// cannot agree, and the dict-order oracle compares what it exists to compare: the key order of the answer, with the
-// values of the two distributions zeroed on both sides. Go's own values are returned for the caller to assert against
-// the seeded COUNT, and the two Go-only keys (measure, denominator) are checked and removed.
+// REST /investment reads the issue size of the work units since CHAOS-9809 (D5999; 1 per unsized unit, so the seeded
+// fixture without sizes reads its COUNT); the frozen Python answer weighs every unit by effort_value. The two are
+// different measures by ruling, so the VALUES of the two distributions cannot agree, and the dict-order oracle
+// compares what it exists to compare: the key order of the answer, with the values of the two distributions zeroed
+// on both sides. Go's own values are returned for the caller to assert against the seeded COUNT, and the Go-only
+// keys (measure, denominator, and the sizing coverage of D6027: sizing_coverage, unsized_unit_count, sizing_note)
+// are checked and removed.
 var (
-	investmentGoOnlyTail    = regexp.MustCompile(`,"measure":"COUNT","denominator":([0-9eE.+-]+)\}$`)
+	investmentGoOnlyTail    = regexp.MustCompile(`,"measure":"ISSUE_SIZE","denominator":([0-9eE.+-]+)(?:,"sizing_coverage":[0-9eE.+-]+)?,"unsized_unit_count":[0-9]+(?:,"sizing_note":"[^"\\]*")?\}$`)
 	investmentDistributions = regexp.MustCompile(`"(theme_distribution|subcategory_distribution)"\s*:\s*\{([^{}]*)\}`)
 	investmentNumberAfter   = regexp.MustCompile(`"([^"]+)"\s*:\s*(-?[0-9][0-9eE.+-]*)`)
 )

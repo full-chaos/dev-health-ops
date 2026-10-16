@@ -200,12 +200,13 @@ func (sink GitHubPullRequestSocialClickHouseEffects) inspectPRCommitLinks(
 	return EffectConflict, nil
 }
 
-// inspectPRCommitLink reads the link's current version. A version written at
-// or after this effect's own instant (a later sync, or the text derivation of
-// the same pair) supersedes it, so the effect counts as applied.
+// inspectPRCommitLink reads the link's current version. A native version
+// written at or after this effect's own instant (a later sync) supersedes it,
+// so the effect counts as applied. A text-tier row never counts: it is not
+// this native effect.
 func inspectPRCommitLink(ctx context.Context, conn driver.Conn, expected prCommitLinkRow) (EffectInspection, error) {
 	rows, err := conn.Query(ctx, `
-SELECT last_synced
+SELECT provenance, last_synced
 FROM work_graph_pr_commit FINAL
 WHERE org_id = ? AND repo_id = ? AND pr_number = ? AND commit_hash = ?`,
 		expected.OrgID, expected.RepoID, uint32(expected.PRNumber), expected.CommitHash,
@@ -214,13 +215,14 @@ WHERE org_id = ? AND repo_id = ? AND pr_number = ? AND commit_hash = ?`,
 		return EffectConflict, err
 	}
 	defer rows.Close()
+	var provenance string
 	var lastSynced time.Time
 	found := false
 	for rows.Next() {
 		if found {
 			return EffectConflict, nil
 		}
-		if err := rows.Scan(&lastSynced); err != nil {
+		if err := rows.Scan(&provenance, &lastSynced); err != nil {
 			return EffectConflict, err
 		}
 		found = true
@@ -228,7 +230,7 @@ WHERE org_id = ? AND repo_id = ? AND pr_number = ? AND commit_hash = ?`,
 	if err := rows.Err(); err != nil {
 		return EffectConflict, err
 	}
-	if !found || lastSynced.UTC().Before(expected.LastSynced.UTC()) {
+	if !found || provenance != "native" || lastSynced.UTC().Before(expected.LastSynced.UTC()) {
 		return EffectAbsent, nil
 	}
 	return EffectExact, nil

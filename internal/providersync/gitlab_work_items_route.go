@@ -285,11 +285,6 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		if normalizeErr != nil {
 			return CompleteRouteBatch{}, normalizeErr
 		}
-		// fetch_gitlab_work_items is the live issue-normalization oracle and
-		// intentionally leaves priority unset. The canonical provider batch
-		// enriches its issue rows before persistence, so keep that provider-only
-		// augmentation at the route boundary rather than changing oracle truth.
-		item.PriorityRaw, item.ServiceClass = gitlabPriorityFromLabels(item.Labels)
 		rows.WorkItems = append(rows.WorkItems, item)
 		rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
 		if fetchHistory {

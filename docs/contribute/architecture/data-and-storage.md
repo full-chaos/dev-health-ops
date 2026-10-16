@@ -109,7 +109,9 @@ Change failure rate is the share of deployments that failed: named by an inciden
 
 - **Columns.** `deployments_count`; `failed_deployments_native` and `failed_deployments_heuristic` (deployments with at least one deployment-incident link, by the best tier of their links); `incidents_direct` and `incidents_via_deployment` (incidents that started on the day, by how they tie to the repository); `failed_deployments_status` (deployments whose own status is failed that no link names, so a failed deployment counts once: failed in total is native + heuristic + status) and `deployments_status_known` (deployments with a final status, succeeded or failed: the status evidence). `deployments_count` excludes cancelled deployments. The meaning of a status is `internal/jobs/metrics/deploymentstatus`, shared with deployment failure rate and the deploy metrics. The evidence basis (`incident`, `status`, `both`) is derived from the sums by `changefailure.Evaluate`, not stored.
 - **Writer.** The daily metrics job, family `repo_user_commit` (`internal/jobs/metrics/daily/change_failure_native_clickhouse.go`). It loads the day's deployments and the incidents that started on the day with the loaders of the `work_graph_edges` family, and derives the links with that family's own extraction function. It does not read `work_graph_deployment_incident_edges` for the same day, because `work_graph_edges` runs after `repo_user_commit`. Today the extraction is heuristic only: an incident links to every deployment of its repository on its day.
-- **Incident ties.** Direct: a current, active `operational_service_repository_mappings` row for the incident's service. Via deployment: only for an incident with no direct tie, a stored link row with no `repo_id` ties the incident to the repository of its deployment. A deployment id that names more than one repository of the organization ties nothing; the writer counts and logs it.
+- **Incident ties.** Direct: a current, active `operational_service_repository_mappings` row for the incident's service. Via deployment: only for an incident with no direct tie, a stored link row with no `repo_id` ties the incident to the repository of its deployment. A deployment id that names more than one repository of the organization ties nothing; the writer counts and logs it. A stored link whose incident started on another UTC day than its deployment makes the deployment failed (native or heuristic by the link's source) on the deployment's day only; the incident is counted once, on its own start day. An incident with no start time belongs to no day and its links are not read.
+- **Link table key.** `work_graph_deployment_incident_edges` (migration `131_deployment_incident_edges_repo_key.sql`) has one row for each `(org_id, repo_id, deployment_id, incident_id)`; `repo_id` stays nullable and a row without one keys on the zero uuid. The key has no `source`, so a native row and a heuristic row for one pair are one row, and `version_rank` keeps the higher tier whatever the time (ranks come from `internal/jobs/workgraph/edges.ProvenanceRank`, the same as `work_graph_issue_pr`). `edge_id` names `(deployment, incident)` and not the repository, so two repositories that run one deployment id share an edge id: a reader dedups by `(edge_id, repo_id)`. The standing rule is class-level: an end with a native link gets no lower-tier link. Today every written row is heuristic: the extraction kernel has a native branch (`workgraphedges`, an incident row that carries a `deployment_id`), but the only caller passes none. The incident-side fallback (a native link on an incident suppresses heuristic links to other deployments) applies once a caller feeds that branch.
+- **PR-to-commit link tier.** `work_graph_pr_commit` (migration `132_pr_commit_native_wins.sql`) is `ReplacingMergeTree(version_rank)` over the same key as before, `(org_id, repo_id, pr_number, commit_hash)`. `version_rank` is the `work_graph_issue_pr` expression over `provenance` and `last_synced`, so a native row stays served when the text tier stamps a later row for the same pair, and within a tier the newer row wins. The native effect inspector (`inspectPRCommitLink`) counts a pair as applied only when the served row is native.
 - **Missing is not zero.** A repository and day with no deployment and no incident gets no row. A repository with counts but no commit or pull-request activity gets a row here and none in `repo_metrics_daily`.
 - **Reader contract.** Keep the newest `computed_at` per `(org_id, repo_id, day)`, sum the counts over the view's window and repositories (a team is its owned repositories), then apply the rule. A reader that serves the rate reads the sums and the number of stored rows (`changefailure.ViewSumsSQL`) and calls `changefailure.Evaluate`, which returns the value, its state and the weakest contributing link tier together: no stored row is no state, no deployments is not applicable, no incident and no deployment with a final status is unknown, else failed / D with incident evidence and failed-by-status / K without it (`changefailure.ApplyRule`). The three unknown answers (not collected, no deployments in window, deployments without outcome) are `Outcome.UnknownReason`. `/explain` (`rate_state`, `link_tier`, `evidence_basis`), Home and the operating review (`rateState`) serve the state, so the three empty answers stay apart at the surface. A reader that only ranks or draws (contributors, drivers, the Home series, flow opportunities, report charts) uses `changefailure.WindowRateSQL`, which is `NULL` for every state that is not measured, and leaves such a group or bucket out. Never average daily rates.
 - **Retraction.** The table keeps the newest row per key and cannot drop one. A run therefore writes, for its partition and day, a row for every repository with something to count and a row of zeros for every repository that already has a stored row for the day and has nothing to count now (a deleted incident, a service mapping that moved, a deployment that is gone). Zeros read as not applicable, the same as no row. A repository that never had a row and has nothing to count gets none.
@@ -384,6 +386,7 @@ flowchart TB
     PROJ["Project<br/>projects"]
     TEAM["Team<br/>teams"]
     DEP["Deployment<br/>deployments"]
+    INC["Incident<br/>operational_incidents"]
 
     PR ==>|"BELONGS_TO_REPOSITORY<br/>the pull request's work_items.repo_id"| REPO
     PR ==>|"RELATES_TO<br/>work_graph_issue_pr link row"| ISSUE
@@ -391,6 +394,7 @@ flowchart TB
     REPO -.->|"OWNED_BY_TEAM<br/>team_repo_ownership"| TEAM
     PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership"| TEAM
     DEP -.->|"BELONGS_TO_REPOSITORY<br/>deployments.repo_id"| REPO
+    DEP -.->|"CORRELATED_WITH_INCIDENT<br/>work_graph_deployment_incident_edges"| INC
     REPO x-.-|"not the tree: the issue's<br/>own work_items.repo_id"| ISSUE
     ISSUE -.-x|"not ownership: OWNED_BY_TEAM<br/>work_item_team_attributions"| TEAM
 ```
@@ -402,7 +406,11 @@ specific to one provider.
   its pull requests; a project's repositories are reached through its issues'
   linked pull requests.
 - **Dotted edges** hang off the tree: a team owns a repository or a project,
-  and a deployment belongs to a repository.
+  a deployment belongs to a repository, and a deployment is correlated with an
+  incident (one row in `work_graph_deployment_incident_edges` for each
+  repository, deployment and incident; tier ranked **native > explicit_text >
+  heuristic** by `edges.ProvenanceRank`, `source` is the tier; two repositories
+  that run one deployment id each hold their own row).
 - **Crossed edges** exist but are never tree membership.
 
 Two rules hold for every read of the tree:
@@ -411,7 +419,18 @@ Two rules hold for every read of the tree:
    `work_graph_issue_pr`. Each row carries a `provenance` tier, ranked
    **native > explicit_text > heuristic**. All three tiers count as links.
    A consumer names the tier it read and never presents a lower tier as
-   native. The `explicit_text` tier is provider-agnostic: a pull request's
+   native. The two lower tiers are a **fallback only** (chris, 2026-10-15):
+   a pull request that has a native issue link gets no `explicit_text` or
+   `heuristic` link, and an issue that has a native pull request link gets
+   none either. The text and heuristic writers skip both sides, and every
+   work-graph build first retracts the lower-tier rows a native link outranks
+   (pre-step `issue_pr_fallback_retraction`, from `work_graph_issue_pr` and
+   from `work_graph_edges`), so a row written before the rule, or before its
+   native link arrived, is gone after the next build. A pull or merge request
+   work item (`ghpr:<owner>/<repo>#<n>`, `gitlab:<path>!<n>`) is never the
+   issue side of a row: the text matcher and the heuristic skip it, and the
+   same pre-step retracts a stored lower-tier row whose issue side is one.
+   The `explicit_text` tier is provider-agnostic: a pull request's
    title, body or head branch that names an issue resolves to a link only
    against an actual issue row of the org, through one shared matcher with a
    key grammar per provider family (Jira and Linear `KEY-n`; GitHub `#n` and
@@ -509,6 +528,21 @@ not know it would silently drop the group milestones). A group milestone that is
 the earliest open dated one supplies the target with source
 `gitlab.group_milestone.due_date` and a `target_ref` that names the group. It has
 a `sprints` row under the same key (the work-items unit lists the same ancestor milestones and writes a group milestone once, keyed by its group), so `target_ref` joins the sprint row.
+
+Several units write the same `sprints` row: every project unit of a GitLab group
+writes the group milestone row; every Jira project unit, and the Jira Atlassian
+route, writes the rows of the sprints its issues reference; the Linear reference
+catalog and the Linear work-items unit write the same `linear:cycle:<id>` row.
+These sprint writers declare their keys shared across units. When a unit
+recovers a crashed sprints write and reads back a newer row under the key, that
+row is a later write of another unit, and the effect counts as committed (a
+replay would only write older data). Equal content logs reason
+`rewritten_by_newer_sibling`, different content `superseded_by_newer_sibling`
+(log `sprint_effect_readback_newer_row`, counter
+`provider_sync_sprint_recovery_newer_row_total`). A GitHub milestone key
+(`ghms:<repository>:<id>`) has one writing unit, so a newer row with different
+content there stays a recovery conflict. The Linear reference catalog's own
+sprints readback applies the same rule to a newer work-items row.
 
 ## Migration rules
 

@@ -260,7 +260,7 @@ func TestNewGraphQLServerRefusesADocumentDeeperThanItsDepthLimitOverHTTP(t *test
 // is refused. The literals are deliberate -- the limit is sized from the real
 // registered-document set (graphql_server_limits.go), and raising it must fail
 // this test until it is changed here on purpose.
-func TestNewGraphQLServerComplexityLimitIsExactlyOneHundredFifty(t *testing.T) {
+func TestNewGraphQLServerComplexityLimitIsExactlyOneHundredSixty(t *testing.T) {
 	aliased := func(n int) string {
 		var b strings.Builder
 		for i := 0; i < n; i++ {
@@ -273,10 +273,10 @@ func TestNewGraphQLServerComplexityLimitIsExactlyOneHundredFifty(t *testing.T) {
 		return string(body)
 	}
 	gql := newGraphQLServer(&graph.Resolver{})
-	if rec := gqlPost(t, gql, aliased(150)); strings.Contains(strings.ToLower(rec.Body.String()), "complexity") {
-		t.Fatalf("150 complexity-1 fields were refused for complexity, want served: %s", rec.Body.String())
+	if rec := gqlPost(t, gql, aliased(160)); strings.Contains(strings.ToLower(rec.Body.String()), "complexity") {
+		t.Fatalf("160 complexity-1 fields were refused for complexity, want served: %s", rec.Body.String())
 	}
-	if rec := gqlPost(t, gql, aliased(151)); !strings.Contains(strings.ToLower(rec.Body.String()), "complexity") {
-		t.Fatalf("151 complexity-1 fields were not refused for complexity: %s", rec.Body.String())
+	if rec := gqlPost(t, gql, aliased(161)); !strings.Contains(strings.ToLower(rec.Body.String()), "complexity") {
+		t.Fatalf("161 complexity-1 fields were not refused for complexity: %s", rec.Body.String())
 	}
 }

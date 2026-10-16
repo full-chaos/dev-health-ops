@@ -28,6 +28,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -119,6 +120,9 @@ type deps struct {
 	// openPostgres opens the domain database the stored jira credential is
 	// resolved from; tests replace it (no live Postgres in unit tests).
 	openPostgres func(ctx context.Context, dsn string) (*pgxpool.Pool, error)
+	// catalogTurn builds the team catalog turn of a domain pool: the worker's own lease (jobruntime.TeamCatalogTurn);
+	// tests replace it.
+	catalogTurn func(pool *pgxpool.Pool) providersync.TeamCatalogSerializer
 	// decryptor decrypts the resolved credential's ciphertext
 	// (SETTINGS_ENCRYPTION_KEY); tests replace it.
 	decryptor func(env cli.Env) (providerfoundation.CredentialDecryptor, error)
@@ -155,6 +159,9 @@ func defaultDeps() deps {
 		now:          time.Now,
 		doer:         productionDoer(),
 		openPostgres: openPostgresPool,
+		catalogTurn: func(pool *pgxpool.Pool) providersync.TeamCatalogSerializer {
+			return jobruntime.NewTeamCatalogTurn(pool)
+		},
 		decryptor: func(env cli.Env) (providerfoundation.CredentialDecryptor, error) {
 			decryptor, err := settingsDecryptor(env)
 			if err != nil {
@@ -173,7 +180,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	owner := flags.String("owner", "", "the GitHub organization (github) or GitLab group path (gitlab); not used for linear")
 	auth := flags.String("auth", "", "the provider token (github/gitlab/linear; else GITHUB_TOKEN/GITLAB_TOKEN/LINEAR_API_KEY)")
 	org := flags.String("org", "", "the organization id the rows are written under")
-	db := flags.String("db", "", "the domain database DSN the stored jira credential is resolved from (jira; else "+PostgresURIKey+")")
+	db := flags.String("db", "", "the domain database DSN: the stored jira credential is resolved from it (jira), and the team catalog turn the worker takes is taken in it (github, gitlab, linear); else "+PostgresURIKey+")")
 	structure := flags.Bool("structure", false, "sync the teams")
 	members := flags.Bool("members", false, "sync team memberships")
 	projects := flags.Bool("projects", false, "sync the projects each team works on")
@@ -214,7 +221,17 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 			}
 			return writeError(env.Stderr, cli.ExitRefused, "configuration", detail)
 		}
-		return runCatalogTeams(ctx, env, d, catalogRequest{
+		pgDSN := strings.TrimSpace(*db)
+		if pgDSN == "" {
+			resolved, configured, err := platformconfig.ResolveDSN(env.Lookup, PostgresURIKey, platformconfig.DomainDatabaseSpec)
+			if err != nil {
+				return writeError(env.Stderr, cli.ExitFailure, "turn_unavailable", err.Error())
+			}
+			if configured {
+				pgDSN = resolved.Reveal()
+			}
+		}
+		return runCatalogTeams(ctx, env, d, catalogRequest{pgDSN: pgDSN,
 			provider: *provider, orgID: orgID, owner: *owner, auth: *auth, allowEmpty: *allowEmpty,
 			structure: selections.Structure, members: selections.Members, projects: selections.Projects, dsn: dsn.Reveal(),
 		})

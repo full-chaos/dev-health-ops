@@ -484,7 +484,17 @@ func (sink LinearReferenceCatalogClickHouseEffects) inspectSprints(ctx context.C
 		if found == 0 {
 			return EffectAbsent, nil
 		}
-		if found != 1 || !equalLinearReferenceSprint(row, actual) {
+		if found != 1 {
+			return EffectConflict, nil
+		}
+		// The Linear work-items unit writes the same linear:cycle:<id> key, so a
+		// newer row is that unit's later write.
+		if actual.LastSynced.After(row.LastSynced) {
+			sameContent := row
+			sameContent.LastSynced = actual.LastSynced
+			return sprintNewerRowVerdict(ctx, row, equalLinearReferenceSprint(sameContent, actual), true), nil
+		}
+		if !equalLinearReferenceSprint(row, actual) {
 			return EffectConflict, nil
 		}
 		return EffectExact, nil

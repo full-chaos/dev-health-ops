@@ -179,7 +179,7 @@
   },
   {
     "operation": "home",
-    "digest": "51ab11890b50e1548f98741203012c13581874a5c061231ce949323928112106"
+    "digest": "67b0b7e3c4cb0a88b1a842b384b4f62118971edbca8129cd83090733805ae0d9"
   },
   {
     "operation": "home",
@@ -232,6 +232,21 @@
     "legacy": true
   },
   {
+    "operation": "home",
+    "digest": "51ab11890b50e1548f98741203012c13581874a5c061231ce949323928112106",
+    "legacy": true
+  },
+  {
+    "operation": "home",
+    "digest": "bbd1b6f8cda95a999a72d56f46a7fe0b9fc35fcc705491cf4efdc851ce361341",
+    "legacy": true
+  },
+  {
+    "operation": "home",
+    "digest": "01202f46306c2c53b6be8e513edb3c586756509c864d428f0c92422194f1b631",
+    "legacy": true
+  },
+  {
     "operation": "hotspots",
     "digest": "e5a6ed356c1b4deca559bf5954509b5fb7a0bb9310d7c4bb7643cd95f752e59f"
   },
@@ -264,7 +279,12 @@
   },
   {
     "operation": "investmentFull",
-    "digest": "663e516c6152c81e28780d27809fcbe5aeae8c92b07d34b19978b7d59913cb3d"
+    "digest": "f8b95e4455abf87f4dc7a13a147cac27535367db174d8e136d672c77b9bcbaa1"
+  },
+  {
+    "operation": "investmentFull",
+    "digest": "663e516c6152c81e28780d27809fcbe5aeae8c92b07d34b19978b7d59913cb3d",
+    "legacy": true
   },
   {
     "operation": "mappingCoverageHealth",

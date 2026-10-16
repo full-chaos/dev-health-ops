@@ -104,7 +104,8 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 			},
 		},
 		ReworkThemeAllocation: []home.ReworkThemeAllocation{
-			{Theme: "feature_delivery", Label: "Feature Delivery", Allocation: 10, AllocationPct: 50, PRsMerged: 3, ChurnLOC: 100},
+			{Theme: "feature_delivery", Label: "Feature Delivery", Allocation: 10, AllocationPct: 50, PRsMerged: 3, ChurnLOC: 100,
+				Measure: "ISSUE_SIZE", Denominator: 20, SizingCoverage: floatPtr(0.25), UnsizedUnitCount: int64Ptr(6), WorkUnitCount: int64Ptr(8)},
 		},
 	}
 
@@ -143,6 +144,27 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 	a := got.ReworkThemeAllocation[0]
 	if a.Theme != "feature_delivery" || a.Label != "Feature Delivery" || a.Allocation != 10 || a.AllocationPct != 50 || a.PrsMerged != 3 || a.ChurnLoc != 100 {
 		t.Errorf("ReworkThemeAllocation[0] = %+v, want the mapped ReworkThemeAllocation", a)
+	}
+	if a.Measure != model.SankeyValueUnitIssueSize || a.Denominator != 20 || a.SizingCoverage == nil || *a.SizingCoverage != 0.25 ||
+		a.UnsizedUnitCount == nil || *a.UnsizedUnitCount != 6 || a.WorkUnitCount == nil || *a.WorkUnitCount != 8 {
+		t.Errorf("ReworkThemeAllocation[0] measure fields = %+v, want ISSUE_SIZE, denominator 20, coverage 0.25, 6 unsized of 8", a)
+	}
+}
+
+func int64Ptr(v int64) *int64 { return &v }
+
+// A tile measured in WORK_UNITS carries no sizing: nil stays nil on the wire, and a measured zero stays 0.
+func TestHomeResultFromResponse_SizingNilStaysNilAndZeroStaysZero(t *testing.T) {
+	got := homeResultFromResponse(&home.Response{ReworkThemeAllocation: []home.ReworkThemeAllocation{
+		{Theme: "risk", Measure: "WORK_UNITS", Denominator: 3},
+		{Theme: "quality", Measure: "ISSUE_SIZE", Denominator: 3, SizingCoverage: floatPtr(0), UnsizedUnitCount: int64Ptr(0), WorkUnitCount: int64Ptr(0)},
+	}})
+	a, b := got.ReworkThemeAllocation[0], got.ReworkThemeAllocation[1]
+	if a.Measure != model.SankeyValueUnitWorkUnits || a.SizingCoverage != nil || a.UnsizedUnitCount != nil || a.WorkUnitCount != nil {
+		t.Errorf("WORK_UNITS row = %+v, want no sizing fields", a)
+	}
+	if b.SizingCoverage == nil || *b.SizingCoverage != 0 || b.UnsizedUnitCount == nil || *b.UnsizedUnitCount != 0 || b.WorkUnitCount == nil || *b.WorkUnitCount != 0 {
+		t.Errorf("measured zero row = %+v, want 0 kept as 0", b)
 	}
 }
 
@@ -669,5 +691,48 @@ func TestHomeResultFromResponse_MapsTheChangeFailureEvidence(t *testing.T) {
 	if unknown == nil || unknown.Basis != nil || unknown.Deployments != 3 || unknown.DeploymentsWithStatus != 0 ||
 		unknown.Coverage == nil || *unknown.Coverage != 0 || unknown.UnknownReason == nil || *unknown.UnknownReason != "deployments_without_outcome" {
 		t.Errorf("unknown evidence = %+v, want no basis, D 3, K 0, coverage 0, deployments_without_outcome", unknown)
+	}
+}
+
+// A measured prior is served as it was stored, a measured 0 stays 0, and a
+// window without data stays null (CHAOS-9817).
+func TestHomeResultCarriesTheMeasuredPriorValue(t *testing.T) {
+	resp := &home.Response{Deltas: []home.MetricDelta{
+		{Metric: "churn", HasData: true, HasPriorData: true, PriorValue: pctp(120)},
+		{Metric: "throughput", HasData: true, HasPriorData: true, PriorValue: pctp(0)},
+		{Metric: "deploy_freq", HasData: true, HasPriorData: false},
+	}}
+	got := homeResultFromResponse(resp)
+	if len(got.Deltas) != 3 {
+		t.Fatalf("Deltas = %d, want 3", len(got.Deltas))
+	}
+	if p := got.Deltas[0].PriorValue; p == nil || *p != 120 {
+		t.Errorf("churn priorValue = %v, want 120", p)
+	}
+	if p := got.Deltas[1].PriorValue; p == nil || *p != 0 {
+		t.Errorf("throughput priorValue = %v, want a measured 0", p)
+	}
+	if p := got.Deltas[2].PriorValue; p != nil {
+		t.Errorf("deploy_freq priorValue = %v, want null", *p)
+	}
+}
+
+// The driver caption is served as built, and a signal without one serves null
+// (CHAOS-8573).
+func TestHomeResultCarriesTheSignalDriver(t *testing.T) {
+	caption := "Code Churn appears to have moved most in alpha-service."
+	resp := &home.Response{Signals: []home.Signal{
+		{ID: "metric:churn", Driver: &caption},
+		{ID: "metric:throughput"},
+	}}
+	got := homeResultFromResponse(resp)
+	if len(got.Signals) != 2 {
+		t.Fatalf("Signals = %d, want 2", len(got.Signals))
+	}
+	if d := got.Signals[0].Driver; d == nil || *d != caption {
+		t.Errorf("churn driver = %v, want %q", d, caption)
+	}
+	if d := got.Signals[1].Driver; d != nil {
+		t.Errorf("throughput driver = %q, want null", *d)
 	}
 }

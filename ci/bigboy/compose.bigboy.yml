@@ -369,6 +369,7 @@ services:
       required: true
     environment:
     - CORS_ALLOWED_ORIGINS=http://localhost:3000
+    - DEV_HEALTH_API_INTERNAL_ADDR=:8091
     - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY:-}
     - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
     - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
@@ -382,6 +383,7 @@ services:
       traefik.scope: dev-health
     networks:
       dev-health: null
+      dho-query-internal: null
     ports:
     - host_ip: 127.0.0.1
       mode: ingress

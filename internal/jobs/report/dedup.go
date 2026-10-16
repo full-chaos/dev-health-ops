@@ -26,8 +26,9 @@ import (
 // last item, and the compute writes one for a key with open items only.
 //
 // A stored 0 in the metric itself is also "no value": lead_p50_hours is 0 for a
-// key whose completed items all lack a usable creation time, so such a key has a
-// completed item and still no lead time.
+// key whose completed items all lack a usable lead time (no creation time, or
+// created at or after completion; the compute never stores a lead time of 0), so
+// such a key has a completed item and still no lead time.
 //
 // Only metrics that buildChartQuery averages belong here: a sum is not moved
 // by a row of zeros.

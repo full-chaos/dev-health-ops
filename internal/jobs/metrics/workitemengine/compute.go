@@ -172,9 +172,9 @@ func ComputeIssueTypeMetricsDaily(
 				}
 				// Lead time runs from creation to completion. An item with no
 				// created_at (the zero time) or a creation after its
-				// completion has no lead time: it is left out of the p50 (see
+				// completion, or at the same instant, has no lead time: it is left out of the p50, so a stored 0 always means no lead time (see
 				// LeadTimeInputs), never taken as 0 hours.
-				if lead := completed.Sub(created).Hours(); hasCreationTime(item.CreatedAt) && lead >= 0 {
+				if lead := completed.Sub(created).Hours(); hasCreationTime(item.CreatedAt) && lead > 0 {
 					bucket.leadHours = append(bucket.leadHours, lead)
 				}
 			}
@@ -239,7 +239,7 @@ func LeadTimeInputs(items []Item, dayUTC, end time.Time) (completed, excluded in
 			continue
 		}
 		completed++
-		if !hasCreationTime(item.CreatedAt) || done.Sub(item.CreatedAt.UTC()) < 0 {
+		if !hasCreationTime(item.CreatedAt) || done.Sub(item.CreatedAt.UTC()) <= 0 {
 			excluded++
 		}
 	}

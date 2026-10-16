@@ -594,7 +594,7 @@ internal/queryapi/reports/reports.go|scanReportRun|*string,*string,*string,**tim
 internal/queryapi/reports/reports.go|scanSavedReport|*string,*string,*string,**string,**string,*bool,**string,**string,**string,*bool,**time.Time,**string,*time.Time,*time.Time,**string|835998e4481b|not-describable
 internal/queryapi/reports/writer.go|clone|*string,**string,**string,**string,**string|bd5216bf923e|statement-not-static
 internal/queryapi/reports/writer.go|trigger|*bool|a8202561e27c|statement-not-static
-internal/queryapi/reports/writer.go|update|*string,*string,*string,**string,**time.Time,*time.Time|6c5898b14827|statement-not-static
+internal/queryapi/reports/writer.go|update|*string,*string,*string,**string,**time.Time,*time.Time|02fbaf29d245|statement-not-static
 internal/queryapi/routeswitch/class_decision_switch.go|Enabled|*string|7a40513e2fab|not-describable
 internal/queryapi/server/mcp_route.go|Scan|[]any|073743d6899c|variadic-destinations
 internal/queryapi/workgraph/edges.go|countMatchingEdges|*uint64|8d8175642fa2|not-describable

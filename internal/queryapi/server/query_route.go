@@ -6468,14 +6468,7 @@ func newGraphQLServerWithLimits(resolver *graph.Resolver, complexityLimit, depth
 	// it is a size bound, not a redaction guarantee -- this log line was
 	// already carrying backend-authored diagnostic text before this
 	// change and still does, just with a hard ceiling on how much.
-	gqlHandler.SetErrorPresenter(func(ctx context.Context, err error) *gqlerror.Error {
-		chain := []string{err.Error()}
-		for unwrapped := errors.Unwrap(err); unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
-			chain = append(chain, unwrapped.Error())
-		}
-		log.Printf("query-api: resolver error unwrap chain: %s", truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
-		return withMutationLocation(ctx, graphql.DefaultErrorPresenter(ctx, err))
-	})
+	gqlHandler.SetErrorPresenter(safeGraphQLErrorPresenter("query", nil))
 	return gqlHandler
 }
 
@@ -6528,6 +6521,9 @@ func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqler
 // run" must never read as "the check passed."
 func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, requireKind string, orgAllowed func(context.Context, string) bool, gates ...documentGate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !isGraphQLEdge(r.Context()) {
+			r = bindRequestID(w, r)
+		}
 		// /graphql (graphql_edge_route.go) runs this same pipeline. Its
 		// differences are keyed on a context value only that route sets:
 		// GET is a request for a registered query, the identity is checked

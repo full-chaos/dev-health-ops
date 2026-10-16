@@ -760,7 +760,7 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 			// swallow-everything contract (a real 2s asyncio.wait_for
 			// timeout belongs at the CALLER's goroutine/context boundary,
 			// not inside this synchronous aggregation function).
-			_ = writer.WriteLLMTokenUsage(ctx, record)
+			recordWriteFailure(ctx, writeTokenUsage, opts.OrgID, writer.WriteLLMTokenUsage(ctx, record))
 		}
 	}
 
@@ -814,14 +814,14 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 				llmModel = &opts.LLMModel
 			}
 			// Best-effort, same reasoning as the token-usage write above.
-			_ = writer.WriteInvestmentExplanation(ctx, InvestmentExplanationRecord{
+			recordWriteFailure(ctx, writeCache, opts.OrgID, writer.WriteInvestmentExplanation(ctx, InvestmentExplanationRecord{
 				CacheKey:        cacheKey,
 				ExplanationJSON: explanationJSON,
 				LLMProvider:     opts.LLMProvider,
 				LLMModel:        llmModel,
 				ComputedAt:      opts.Now,
 				OrgID:           opts.OrgID,
-			})
+			}))
 		}
 	}
 

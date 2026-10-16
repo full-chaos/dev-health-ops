@@ -29,7 +29,7 @@ Unlike the entitlement route, it checks a bearer token. The token is a `svc_acr_
 | 401 `{"detail":"Unauthorized"}` | Missing, unknown, revoked or expired bearer token. |
 | 403 `{"detail":"Forbidden"}` | Valid credential without the `llm_config:read` scope. |
 | 404 `{"detail":"Not found"}` | The org id is not a UUID, the org has no BYO settings, or the `byo_llm` gate is closed for it. acr falls back to the platform default, as every other reader of these settings does. |
-| 503 `{"detail":"Service unavailable"}` | The credential store, the settings store or the `byo_llm` gate lookup failed, or the route has no database. |
+| 503 `{"detail":"Service unavailable"}` | The credential store, the settings store or the `byo_llm` gate lookup failed, a stored setting could not be decrypted (wrong settings key or a corrupt row), or the route has no database. |
 
 The key is never logged, traced, or put in error text. Each served call writes one log line with the org id, the credential id and the version, and increments `devhealth_acr_llm_config_requests_total{outcome}`.
 

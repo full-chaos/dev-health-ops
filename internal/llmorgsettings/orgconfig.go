@@ -25,6 +25,10 @@ type OrgConfig struct {
 	Version string
 }
 
+// ErrStoredSettingUnreadable means a stored llm setting exists but could not
+// be read back (undecryptable). The message names the key, never a value.
+var ErrStoredSettingUnreadable = errors.New("llmorgsettings: stored org llm setting is unreadable")
+
 // OrgConfig returns the org's BYO config. ok=false means the org has no
 // readable BYO settings, or the byo_llm gate is closed for it (the gate
 // collapses to an empty map exactly as for every other reader here). err is
@@ -38,11 +42,24 @@ func (s Store) OrgConfig(ctx context.Context, orgID string) (OrgConfig, bool, er
 		return OrgConfig{}, false, nil
 	}
 	var newest *time.Time
+	var stored []string
 	err = s.Pool.QueryRow(ctx, `
-SELECT max(updated_at) FROM settings WHERE org_id = $1 AND category = $2`,
-		orgID, settingsCategoryLLM).Scan(&newest)
+SELECT max(updated_at), coalesce(array_agg(key) FILTER (WHERE value IS NOT NULL AND value <> ''), '{}')
+FROM settings WHERE org_id = $1 AND category = $2`,
+		orgID, settingsCategoryLLM).Scan(&newest, &stored)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return OrgConfig{}, false, fmt.Errorf("query org llm settings version: %w", err)
+	}
+	// loadRawSettings skips a row it cannot decrypt (wrong key, corrupt row).
+	// Every other reader tolerates that; this one serves the key itself, so a
+	// stored setting that did not come back is a failure, never a thinner config.
+	for _, key := range stored {
+		switch key {
+		case keyProvider, keyModel, keyAPIKey, keyBaseURL:
+			if settings[key] == "" {
+				return OrgConfig{}, false, fmt.Errorf("%w: setting %q", ErrStoredSettingUnreadable, key)
+			}
+		}
 	}
 	version := ""
 	if newest != nil {

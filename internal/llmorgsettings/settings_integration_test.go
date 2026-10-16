@@ -4,6 +4,8 @@ package llmorgsettings
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -511,5 +513,32 @@ func TestOrgConfig_ClosedGateServesNothing(t *testing.T) {
 	cfg, ok, err := store.OrgConfig(ctx, orgID.String())
 	if err != nil || ok {
 		t.Fatalf("closed gate: ok=%v err=%v cfg=%+v, want ok=false", ok, err, cfg)
+	}
+}
+
+// A stored api_key that cannot be decrypted must fail OrgConfig, never serve a config with an empty key.
+func TestOrgConfig_UnreadableStoredKeyIsAnErrorNotAThinnerConfig(t *testing.T) {
+	ctx := context.Background()
+	rightStore, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", true)
+	orgID := seedOrg(ctx, t, pool, "enterprise")
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	insertEncryptedSetting(ctx, t, rightStore, pool, orgID, "api_key", "sk-real-secret")
+
+	wrongDecryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("totally-wrong-key"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongStore := Store{Pool: pool, Decryptor: wrongDecryptor, Now: rightStore.Now}
+
+	cfg, ok, err := wrongStore.OrgConfig(ctx, orgID.String())
+	if !errors.Is(err, ErrStoredSettingUnreadable) || ok {
+		t.Fatalf("ok=%v err=%v cfg=%+v, want ErrStoredSettingUnreadable and ok=false", ok, err, cfg)
+	}
+	if strings.Contains(err.Error(), "sk-real-secret") {
+		t.Fatal("error text carries the key")
+	}
+	if _, ok, err := rightStore.OrgConfig(ctx, orgID.String()); err != nil || !ok {
+		t.Fatalf("right key: ok=%v err=%v", ok, err)
 	}
 }

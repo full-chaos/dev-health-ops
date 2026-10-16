@@ -386,7 +386,7 @@ func TestNewProviderFromEnvHostedKindsReadTheirEnv(t *testing.T) {
 			shared, ok := provider.(*SharedProvider)
 			if !ok || shared.cfg.Kind != c.kind || shared.cfg.APIKey.Reveal() != "provider-key-value" ||
 				shared.Model() != "configured-model" || effectiveBaseURL(t, shared) != "https://configured.example.com/v1" {
-				t.Fatalf("provider %T %+v, want the shared %s client with the configured values", provider, provider, c.kind)
+				t.Fatalf("provider %T (model %q), want the shared %s client with the configured key, base URL and model", provider, provider.Model(), c.kind)
 			}
 			if ResolveModelName(c.kind, "") != "configured-model" {
 				t.Fatalf("the stamp resolves %q, the provider sends configured-model", ResolveModelName(c.kind, ""))

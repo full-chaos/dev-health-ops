@@ -2,8 +2,14 @@ package categorize
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-go/llm"
 
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -29,7 +35,13 @@ func TestBudgetedHostedProvidersSettleAtTheListPrice(t *testing.T) {
 		{ProviderKindAnthropic, "claude-haiku-5-5", `{"content":[{"type":"text","text":"{\"ok\":true}"}],"stop_reason":"end_turn","usage":{"input_tokens":900,"cache_read_input_tokens":100,"output_tokens":200}}`, 191},
 	} {
 		t.Run(string(c.kind), func(t *testing.T) {
-			server, _ := statusOnce(t, http.StatusOK, c.body)
+			var bodyBytes int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				bodyBytes = int64(len(raw))
+				_, _ = w.Write([]byte(c.body))
+			}))
+			t.Cleanup(server.Close)
 			shared, err := NewSharedProvider(SharedProviderConfig{Kind: c.kind, APIKey: secrets.NewHidden("test-key-value"), BaseURL: server.URL, Model: c.model})
 			if err != nil {
 				t.Fatal(err)
@@ -49,8 +61,11 @@ func TestBudgetedHostedProvidersSettleAtTheListPrice(t *testing.T) {
 			if settle.Outcome != llmbudget.OutcomeSucceeded || settle.Cost == nil || *settle.Cost != c.wantCost {
 				t.Fatalf("settle %+v, want succeeded at %d micro-USD", settle, c.wantCost)
 			}
-			if *store.admits[0].MaxCost < c.wantCost {
-				t.Fatalf("reserved %d below the billed %d", *store.admits[0].MaxCost, c.wantCost)
+			// The reservation is the list price now of the whole request body
+			// as input and the provider's 4096-token output floor.
+			wantReserved, err := llmbudget.CostMicroUSDAt(string(c.kind), c.model, "", bodyBytes, 4096, 0, time.Now())
+			if err != nil || wantReserved == nil || *store.admits[0].MaxCost != *wantReserved || *wantReserved < c.wantCost {
+				t.Fatalf("reserved %d, want %v for %d body bytes and 4096 output tokens (billed %d)", *store.admits[0].MaxCost, wantReserved, bodyBytes, c.wantCost)
 			}
 		})
 	}
@@ -69,5 +84,23 @@ func TestBudgetedHostedProviderUnpricedIsRefusedUnderABudget(t *testing.T) {
 	_, err = guarded.Complete(context.Background(), CategorizationRequest("p"))
 	if err == nil || *calls != 0 || len(store.admits) != 1 || store.admits[0].MaxCost != nil {
 		t.Fatalf("err %v calls %d admits %+v, want an unpriced admission refused before any request", err, *calls, store.admits)
+	}
+}
+
+// OpenAI's Responses API reports cache reads; an answer without them stays
+// usage-unavailable for a budgeted org (the zero-cached settle is only for
+// the Chat Completions providers, which never report them).
+func TestBudgetedOpenAIWithoutCachedCountStaysUsageUnavailable(t *testing.T) {
+	server, _ := statusOnce(t, http.StatusOK, `{"output_text":"{\"ok\":true}","usage":{"input_tokens":10,"output_tokens":5}}`)
+	shared, err := NewSharedProvider(SharedProviderConfig{Kind: ProviderKindOpenAI, APIKey: secrets.NewHidden("test-key-value"), BaseURL: server.URL, Model: "gpt-5-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &recordingStore{}
+	guarded := WithBudget(shared, llmbudget.Guard{Store: store, OrgID: "org", Provider: "openai", Model: "gpt-5-mini"})
+	_, err = guarded.Complete(context.Background(), CategorizationRequest("p"))
+	var accounting *llmbudget.AccountingError
+	if !errors.As(err, &accounting) || !llm.IsBudgetRefusal(err) || len(store.settles) != 1 || store.settles[0].Cost != nil {
+		t.Fatalf("err %v settles %+v, want the usage-unavailable refusal with an unpriced settle", err, store.settles)
 	}
 }

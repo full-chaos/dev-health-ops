@@ -163,7 +163,7 @@ func TestNewProviderFromCredentialsHostedKindsUseTheSharedClient(t *testing.T) {
 		shared, ok := provider.(*SharedProvider)
 		if !ok || shared.cfg.Kind != kind || shared.Model() != "org-model" || shared.cfg.APIKey.Reveal() != "org-key" ||
 			effectiveBaseURL(t, shared) != "https://org-gateway.example.com/v1" || shared.cfg.HTTPClient == nil {
-			t.Fatalf("NewProviderFromCredentials(%q) = %T %+v, want the shared client with the org's values and the guarded client", kind, provider, provider)
+			t.Fatalf("NewProviderFromCredentials(%q) = %T (model %q), want the shared client with the org's key, base URL, model and the guarded client", kind, provider, provider.Model())
 		}
 		if _, err := NewProviderFromCredentials(kind, "", "", "org-model"); err == nil {
 			t.Fatalf("NewProviderFromCredentials(%q) with no api_key: want an error", kind)

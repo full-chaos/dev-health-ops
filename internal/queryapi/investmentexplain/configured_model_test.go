@@ -12,6 +12,30 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
+// With no model configured, a hosted kind uses the shared package's default,
+// on the wire and in the resolved model.
+func TestExplainHostedKindsDefaultToThePackageDefault(t *testing.T) {
+	srv := newModelCapturingServer(t)
+	for kind, llmKind := range map[categorize.ProviderKind]llm.Kind{
+		categorize.ProviderKindAnthropic: llm.KindAnthropic,
+		categorize.ProviderKindGemini:    llm.KindGemini,
+		categorize.ProviderKindQwen:      llm.KindQwen,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			srv.reset()
+			for _, name := range []string{"LLM_MODEL", "LLM_MODEL_ANTHROPIC", "LLM_MODEL_GEMINI", "GEMINI_MODEL", "LLM_MODEL_QWEN", "QWEN_MODEL"} {
+				t.Setenv(name, "")
+			}
+			t.Setenv("LLM_BASE_URL", srv.URL)
+			t.Setenv("LLM_API_KEY", "dummy-test-key")
+			_, _, model, _ := CompleteWorkUnitExplanationForOrg(context.Background(), string(kind), "", "org-1", nil, nil, "prompt text")
+			if want := llm.DefaultModel(llmKind); model != want || srv.lastModel() != want {
+				t.Fatalf("resolved %q, wire %q, want the package default %q", model, srv.lastModel(), want)
+			}
+		})
+	}
+}
+
 // The platform is set to gpt-5-nano and the shared llm package defaults OpenAI
 // to gpt-5-mini: both explain routes must send the configured nano, from the
 // platform env and from an org's stored BYO model.

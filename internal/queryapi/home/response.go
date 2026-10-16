@@ -225,6 +225,11 @@ type Signal struct {
 	// which adds its own hedge. Nil: the summary quotes WhyItMatters whole.
 	// Never served.
 	Why *WhyParts `json:"-"`
+	// Driver (CHAOS-8573) is the one-line caption of where the signal's move
+	// appears largest ("Cycle Time appears to have moved most in A, B and C."): a metric
+	// signal with a stated, non-zero move and at least one named driver. nil on
+	// every other signal. GraphQL only, like Coverage.
+	Driver *string `json:"-"`
 	// RepoFilterApplied (CHAOS-9093) is the field of the metric the signal is
 	// built from (MetricDelta.RepoFilterApplied). It is nil on a signal that does
 	// not come from a metric spec (a risk signal, a recommendation). GraphQL only,

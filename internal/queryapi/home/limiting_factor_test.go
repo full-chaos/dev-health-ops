@@ -63,6 +63,9 @@ func walkServedProse(t *testing.T, name string, r Response) {
 		prose[fmt.Sprintf("signals[%d].title", i)] = s.Title
 		prose[fmt.Sprintf("signals[%d].why", i)] = s.WhyItMatters
 		prose[fmt.Sprintf("signals[%d].action", i)] = s.RecommendedAction
+		if s.Driver != nil {
+			prose[fmt.Sprintf("signals[%d].driver", i)] = *s.Driver
+		}
 	}
 	for where, text := range prose {
 		assertHedgedOncePerSentence(t, name+" "+where, text)
@@ -81,7 +84,8 @@ func TestEveryServedHomeSentenceHedgesOnce(t *testing.T) {
 		for metricName := range metricReasons {
 			p := whyPartsForMetric(metricName, "Label", dir)
 			sig := Signal{Title: "Label appears " + dir, ClaimSubject: "Label", Severity: "low", AffectedScope: "org",
-				WhyItMatters: whyForMetric(metricName, "Label", dir), Why: &p}
+				WhyItMatters: whyForMetric(metricName, "Label", dir), Why: &p,
+				Driver: driverCaption("Label", []string{"Ops", "Web", "Payments"})}
 			walkServedProse(t, metricName+"/"+dir, Response{
 				HealthState:    BuildHealthState([]Signal{sig}, DataConfidence{Level: "high"}, nil),
 				LimitingFactor: BuildLimitingFactor([]Signal{sig}),

@@ -45,6 +45,9 @@ type Params struct {
 	ConfigID     string
 	RequestedOrg string
 	Window       Window
+	// SourceIDs and DatasetKeys scope the run to part of the configuration
+	// (--source-ids, --dataset-keys); empty is the whole configuration.
+	SourceIDs, DatasetKeys []string
 }
 
 // RefusedError is a refusal the operator can act on: the run is not started.
@@ -267,7 +270,15 @@ ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 		}
 		datasetKeys = keys
 	}
-	return Validated{DatasetKeys: datasetKeys, EnabledSources: len(enabled), SourceIDs: sourceIDsFor(config, enabled)}, nil
+	sourceIDs, err := scopeSources(config, params.SourceIDs, enabled)
+	if err != nil {
+		return Validated{}, err
+	}
+	datasetKeys, err = scopeDatasets(config, provider, params.DatasetKeys, datasetKeys)
+	if err != nil {
+		return Validated{}, err
+	}
+	return Validated{DatasetKeys: datasetKeys, EnabledSources: len(enabled), SourceIDs: sourceIDs}, nil
 }
 
 func pyRepr(text string) string {

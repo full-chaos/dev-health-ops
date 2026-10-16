@@ -153,7 +153,6 @@ def test_operator_image_is_only_required_when_a_file_uses_it(tmp_path: Path) -> 
     assert "--format" not in Path(env["DOCKER_LOG"]).read_text()
     refused = _run(tools, env, "up", "go-worker")
     assert refused.returncode == 2 and "BIGBOY_OPERATOR_IMAGE" in refused.stderr
-    assert "--format" in Path(env["DOCKER_LOG"]).read_text()
 
 
 def test_inherited_compose_variables_are_dropped(tmp_path: Path) -> None:
@@ -707,24 +706,28 @@ def test_up_of_a_non_worker_service_needs_no_operator_image(tmp_path: Path) -> N
         )
 
 
-def test_the_operator_image_probe_goes_through_the_effective_chain(
+def test_a_worker_verb_requires_the_operator_image_explicitly_and_probes_nothing(
     tmp_path: Path,
 ) -> None:
-    """The probe for the running reconciler must name the project directory, env file and every compose file of the
-    set, not rely on a compose file sitting in the root (which a root with only pin/state files does not have)."""
-    r, tools, env = _tree(tmp_path)
-    env = {k: v for k, v in env.items() if k != "BIGBOY_OPERATOR_IMAGE"}
-    _run(tools, env, "up", "go-worker")
-    probe = [
-        ln
-        for ln in Path(env["DOCKER_LOG"]).read_text().splitlines()
-        if " ps " in f" {ln} " and "go-reconciler" in ln
-    ]
-    assert probe, Path(env["DOCKER_LOG"]).read_text()
-    assert (
-        f"--project-directory {r}" in probe[0] and "--env-file ops/.env" in probe[0]
-    ), probe[0]
-    assert probe[0].count(" -f ") >= 4, probe[0]
+    """No autodetection: with BIGBOY_OPERATOR_IMAGE unset, starting an operator-image service fails closed with a
+    message that names the variable, and no compose call (no `ps` probe) is made. With it set, the verb runs."""
+    _, tools, env = _tree(tmp_path)
+    unset = {k: v for k, v in env.items() if k != "BIGBOY_OPERATOR_IMAGE"}
+    for args in (
+        ("up", "go-worker"),
+        ("restart", "go-reconciler"),
+        ("run", "go-worker", "x"),
+        ("exec", "go-scheduler", "true"),
+    ):
+        res = _run(tools, unset, *args)
+        assert res.returncode == 2 and "export BIGBOY_OPERATOR_IMAGE" in res.stderr, (
+            args,
+            res.stderr,
+        )
+    log = Path(env["DOCKER_LOG"])
+    assert not log.exists() or "ps --format" not in log.read_text(), log.read_text()
+    ok = _run(tools, env, "up", "go-worker")
+    assert ok.returncode == 0, ok.stderr
 
 
 def test_a_relative_bigboy_root_reaches_stack_sh_once_and_absolute(

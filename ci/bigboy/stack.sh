@@ -74,9 +74,7 @@ if [ -z "${BIGBOY_OPERATOR_IMAGE:-}" ] && grep -qs 'BIGBOY_OPERATOR_IMAGE' "${FI
     restart|run|exec) [ $# -gt 0 ] && grep -qxF -- "$1" <<<"$OPERATOR_SERVICES" && starts_worker=1 ;;
   esac
   if [ "$starts_worker" = 1 ]; then
-    # the running reconciler, asked through the same chain (project directory, env file, every file of the set)
-    BIGBOY_OPERATOR_IMAGE=$(BIGBOY_OPERATOR_IMAGE=placeholder docker compose "${ARGS[@]}" ps --format '{{.Image}}' go-reconciler 2>/dev/null </dev/null | head -1 || true)
-    [ -n "$BIGBOY_OPERATOR_IMAGE" ] || die "BIGBOY_OPERATOR_IMAGE is unset and no running go-reconciler names it; export it"
+    die "starting an operator-image service needs BIGBOY_OPERATOR_IMAGE: export BIGBOY_OPERATOR_IMAGE=<registry>/dev-health-go-operator@sha256:<digest> (the cut exports it)"
   else
     BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator:not-resolved   # nothing starts from it; it only has to interpolate
   fi

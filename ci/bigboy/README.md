@@ -35,12 +35,12 @@ exist). The one file a cut rewrites is the image pin file `$BIGBOY_ROOT/_records
 (`bigboy-repin*.sh` write it; a pin sheet copies it); the tracked `compose.bigboy.images.yml` is the last pin a PR recorded.
 
 ```
-export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@<digest>   # or leave unset: read from the running go-reconciler
+export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@<digest>   # required to start a worker service; the cut exports it
 ci/bigboy/stack.sh config --quiet
 ci/bigboy/stack.sh up query-api go-api web
 ```
 
-A set that needs a value only its step script knows lists it as `needs` in `stack.files`; `stack.sh` refuses and names it.
+Starting a service whose image is `${BIGBOY_OPERATOR_IMAGE}` (the workers) without that variable is refused; every other verb needs nothing. A set that needs a value only its step script knows lists it as `needs` in `stack.files`; `stack.sh` refuses and names it.
 
 ## Go-only stack (CHAOS-8361)
 

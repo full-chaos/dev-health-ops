@@ -40,7 +40,7 @@ const (
 )
 
 var serviceScopes = map[string][]string{
-	ServiceACR:            {"entitlements:read"},
+	ServiceACR:            {"entitlements:read", "llm_config:read"},
 	ServiceWorkerOperator: {"workers:read", "workers:operate"},
 }
 

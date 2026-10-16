@@ -4,6 +4,9 @@ package llmorgsettings
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -454,4 +457,327 @@ func TestLoadRawSettings_WrongEncryptionKeyEmitsTelemetryNotSilence(t *testing.T
 		t.Fatalf("checkKeyOnFirstDecrypt failing calls = %+v, want exactly [%s] -- "+
 			"the FIRST decrypt attempt failing must flag the key itself", keyValidationFailures, orgID.String())
 	}
+}
+
+// OrgConfig serves the decrypted stored truth and a version that moves when a row is written.
+func TestOrgConfig_ServesDecryptedKeyAndMovingVersion(t *testing.T) {
+	ctx := context.Background()
+	store, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", true)
+	orgID := seedOrg(ctx, t, pool, "enterprise")
+
+	if _, ok, err := store.OrgConfig(ctx, orgID.String()); err != nil || ok {
+		t.Fatalf("org with no settings: ok=%v err=%v, want ok=false", ok, err)
+	}
+
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	insertSetting(ctx, t, pool, orgID, "model", "gpt-5-mini")
+	insertSetting(ctx, t, pool, orgID, "base_url", "https://api.openai.com/v1")
+	insertEncryptedSetting(ctx, t, store, pool, orgID, "api_key", "sk-org-secret")
+
+	first, ok, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil || !ok {
+		t.Fatalf("OrgConfig ok=%v err=%v", ok, err)
+	}
+	if first.Provider != "openai" || first.Model != "gpt-5-mini" || first.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("config = %+v", first)
+	}
+	if first.APIKey.Reveal() != "sk-org-secret" {
+		t.Fatal("api_key was not decrypted to the stored plaintext")
+	}
+	if first.Version == "" {
+		t.Fatal("version is empty")
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE settings SET value = 'gpt-5', updated_at = updated_at + interval '1 second'
+		WHERE org_id = $1 AND category = 'llm' AND key = 'model'`, orgID.String()); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Version == first.Version {
+		t.Fatalf("version did not move after a row write: %q", second.Version)
+	}
+}
+
+// A closed byo_llm gate reads as no config, never as the stored key.
+func TestOrgConfig_ClosedGateServesNothing(t *testing.T) {
+	ctx := context.Background()
+	store, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", false)
+	orgID := seedOrg(ctx, t, pool, "free")
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	insertEncryptedSetting(ctx, t, store, pool, orgID, "api_key", "sk-org-secret")
+
+	cfg, ok, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil || ok {
+		t.Fatalf("closed gate: ok=%v err=%v cfg=%+v, want ok=false", ok, err, cfg)
+	}
+}
+
+// A stored setting that cannot be decrypted must fail OrgConfig whenever the gate is open, whatever else
+// is or is not readable beside it; a closed gate and an empty org stay "not configured".
+func TestOrgConfig_UnreadableStoredSettingMatrix(t *testing.T) {
+	ctx := context.Background()
+	wrongDecryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("totally-wrong-key"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name       string
+		gateOpen   bool
+		plainRows  map[string]string
+		cipherRows map[string]string
+		wantOK     bool
+		wantErr    bool
+	}{
+		{"only an unreadable api_key, gate open", true, nil, map[string]string{"api_key": "sk-real-secret"}, false, true},
+		{"unreadable api_key beside a readable provider", true, map[string]string{"provider": "openai"}, map[string]string{"api_key": "sk-real-secret"}, false, true},
+		{"unreadable api_key, gate closed", false, nil, map[string]string{"api_key": "sk-real-secret"}, false, false},
+		{"no rows at all", true, nil, nil, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rightStore, pool := newTestStore(t)
+			seedByoLLMFeature(ctx, t, pool, "team", tc.gateOpen)
+			orgID := seedOrg(ctx, t, pool, "enterprise")
+			for k, v := range tc.plainRows {
+				insertSetting(ctx, t, pool, orgID, k, v)
+			}
+			for k, v := range tc.cipherRows {
+				insertEncryptedSetting(ctx, t, rightStore, pool, orgID, k, v)
+			}
+			wrongStore := Store{Pool: pool, Decryptor: wrongDecryptor, Now: rightStore.Now}
+			cfg, ok, err := wrongStore.OrgConfig(ctx, orgID.String())
+			if ok != tc.wantOK || (err != nil) != tc.wantErr {
+				t.Fatalf("ok=%v err=%v cfg=%+v, want ok=%v err=%v", ok, err, cfg, tc.wantOK, tc.wantErr)
+			}
+			if tc.wantErr {
+				if !errors.Is(err, ErrStoredSettingUnreadable) {
+					t.Fatalf("err = %v, want ErrStoredSettingUnreadable", err)
+				}
+				if strings.Contains(err.Error(), "sk-real-secret") {
+					t.Fatal("error text carries the key")
+				}
+			}
+		})
+	}
+}
+
+// Settings and version come from one snapshot: a save landing between the row read and the version read
+// must not pair the old values with the new version.
+func TestOrgConfig_ValuesAndVersionShareOneSnapshot(t *testing.T) {
+	ctx := context.Background()
+	store, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", true)
+	orgID := seedOrg(ctx, t, pool, "enterprise")
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	insertSetting(ctx, t, pool, orgID, "model", "model-before")
+	before, ok, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil || !ok {
+		t.Fatalf("baseline ok=%v err=%v", ok, err)
+	}
+
+	afterRowsRead = func() {
+		if _, err := pool.Exec(ctx, `UPDATE settings SET value = 'model-after', updated_at = updated_at + interval '1 minute'
+			WHERE org_id = $1 AND category = 'llm' AND key = 'model'`, orgID.String()); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { afterRowsRead = func() {} })
+	interleaved, ok, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil || !ok {
+		t.Fatalf("interleaved ok=%v err=%v", ok, err)
+	}
+	afterRowsRead = func() {}
+	next, _, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Model != "model-after" || next.Version == before.Version {
+		t.Fatalf("after the save: model=%q version=%q (before %q)", next.Model, next.Version, before.Version)
+	}
+	if interleaved.Model != "model-before" || interleaved.Version != before.Version {
+		t.Fatalf("interleaved read mixed snapshots: model=%q version=%q, want model-before at version %q", interleaved.Model, interleaved.Version, before.Version)
+	}
+}
+
+// Settings of the llm category that are not BYO fields neither make an org "configured" nor move the version.
+func TestOrgConfig_OnlyByoKeysCountAsConfig(t *testing.T) {
+	ctx := context.Background()
+	store, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", true)
+	orgID := seedOrg(ctx, t, pool, "enterprise")
+	insertSetting(ctx, t, pool, orgID, "platform_ask_dev_role_certification_profile:legacy_agent", "{}")
+
+	if cfg, ok, err := store.OrgConfig(ctx, orgID.String()); err != nil || ok {
+		t.Fatalf("only a platform setting: ok=%v err=%v cfg=%+v, want ok=false", ok, err, cfg)
+	}
+
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	first, ok, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE settings SET updated_at = updated_at + interval '1 hour'
+		WHERE org_id = $1 AND category = 'llm' AND key LIKE 'platform_%'`, orgID.String()); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := store.OrgConfig(ctx, orgID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Version != first.Version {
+		t.Fatalf("a non-BYO setting moved the version: %q -> %q", first.Version, second.Version)
+	}
+}
+
+// TestOrgConfig_InputDomainMatrix is the closing guard for OrgConfig: row kind x readability x gate x
+// a concurrent save between the row read and the version read. Every cell asserts ok, error class,
+// the served provider/model/key, and the version/value pairing.
+func TestOrgConfig_InputDomainMatrix(t *testing.T) {
+	ctx := context.Background()
+	rightStore, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", true)
+	wrongDecryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("totally-wrong-key"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongStore := Store{Pool: pool, Decryptor: wrongDecryptor, Now: rightStore.Now}
+
+	type rowKind string
+	const (
+		none     rowKind = "no rows"
+		nonBYO   rowKind = "only a non-BYO llm row"
+		byoPlain rowKind = "BYO plain rows"
+		byoCiph  rowKind = "BYO model + encrypted api_key"
+		byoMixed rowKind = "BYO provider + model + encrypted api_key"
+		mockProv rowKind = "BYO provider mock"
+		noneProv rowKind = "BYO provider none"
+		blankKey rowKind = "BYO model only (no provider)"
+	)
+	seed := func(kind rowKind, orgID uuid.UUID) {
+		switch kind {
+		case nonBYO:
+			insertSetting(ctx, t, pool, orgID, "platform_ask_dev_role_certification_profile:legacy_agent", "{}")
+		case byoPlain:
+			insertSetting(ctx, t, pool, orgID, "provider", "  OpenAI ")
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+		case byoCiph:
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+			insertEncryptedSetting(ctx, t, rightStore, pool, orgID, "api_key", "sk-secret")
+		case byoMixed:
+			insertSetting(ctx, t, pool, orgID, "provider", "openai")
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+			insertEncryptedSetting(ctx, t, rightStore, pool, orgID, "api_key", "sk-secret")
+		case mockProv:
+			insertSetting(ctx, t, pool, orgID, "provider", "mock")
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+		case noneProv:
+			insertSetting(ctx, t, pool, orgID, "provider", "none")
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+		case blankKey:
+			insertSetting(ctx, t, pool, orgID, "model", "m-before")
+		}
+	}
+	hasCipher := func(k rowKind) bool { return k == byoCiph || k == byoMixed }
+	hasModel := func(k rowKind) bool {
+		return k == byoPlain || k == byoCiph || k == byoMixed || k == mockProv || k == noneProv || k == blankKey
+	}
+
+	for _, kind := range []rowKind{none, nonBYO, byoPlain, byoCiph, byoMixed, mockProv, noneProv, blankKey} {
+		for _, gateOpen := range []bool{true, false} {
+			for _, rightKey := range []bool{true, false} {
+				for _, save := range []bool{false, true} {
+					name := fmt.Sprintf("%s/gate-open=%v/right-key=%v/save-between=%v", kind, gateOpen, rightKey, save)
+					t.Run(name, func(t *testing.T) {
+						tier := "enterprise"
+						if !gateOpen {
+							tier = "free"
+						}
+						orgID := seedOrg(ctx, t, pool, tier)
+						seed(kind, orgID)
+						store := wrongStore
+						if rightKey {
+							store = rightStore
+						}
+						var baseline OrgConfig
+						if save && hasModel(kind) {
+							b, _, err := rightStore.OrgConfig(ctx, orgID.String())
+							if err != nil {
+								t.Fatalf("baseline: %v", err)
+							}
+							baseline = b
+							afterRowsRead = func() {
+								if _, err := pool.Exec(ctx, `UPDATE settings SET value = 'm-after', updated_at = updated_at + interval '1 minute'
+									WHERE org_id = $1 AND category = 'llm' AND key = 'model'`, orgID.String()); err != nil {
+									t.Error(err)
+								}
+							}
+							t.Cleanup(func() { afterRowsRead = func() {} })
+						}
+						cfg, ok, err := store.OrgConfig(ctx, orgID.String())
+						afterRowsRead = func() {}
+
+						unreadable := hasCipher(kind) && !rightKey
+						wantErr := gateOpen && unreadable
+						// "served" means: BYO rows present, a real provider (byoPlain, byoMixed), gate open, readable.
+						served := gateOpen && !unreadable && (kind == byoPlain || kind == byoMixed)
+						if (err != nil) != wantErr {
+							t.Fatalf("err = %v, wantErr %v", err, wantErr)
+						}
+						if wantErr && !errors.Is(err, ErrStoredSettingUnreadable) {
+							t.Fatalf("err = %v, want ErrStoredSettingUnreadable", err)
+						}
+						if ok != served {
+							t.Fatalf("ok = %v, want %v (cfg %+v)", ok, served, cfg)
+						}
+						if !served {
+							return
+						}
+						if cfg.Provider != "openai" {
+							t.Fatalf("provider = %q, want canonical openai", cfg.Provider)
+						}
+						if cfg.Version == "" || len(cfg.Version) != 64 {
+							t.Fatalf("version = %q, want 64 hex chars", cfg.Version)
+						}
+						if hasCipher(kind) && cfg.APIKey.Reveal() != "sk-secret" {
+							t.Fatal("api_key not decrypted")
+						}
+						if save {
+							// The pre-save snapshot: old value, old version, never a mixed pair.
+							if cfg.Model != "m-before" || cfg.Version != baseline.Version {
+								t.Fatalf("mixed snapshot: model=%q version=%q, want m-before at %q", cfg.Model, cfg.Version, baseline.Version)
+							}
+							next, _, err := rightStore.OrgConfig(ctx, orgID.String())
+							if err != nil || next.Model != "m-after" || next.Version == cfg.Version {
+								t.Fatalf("after the save: model=%q version=%q err=%v", next.Model, next.Version, err)
+							}
+						}
+					})
+				}
+			}
+		}
+	}
+
+	// Deleting a row that is not the newest still moves the version.
+	t.Run("version moves when a non-newest row is deleted", func(t *testing.T) {
+		orgID := seedOrg(ctx, t, pool, "enterprise")
+		insertSetting(ctx, t, pool, orgID, "provider", "openai")
+		insertSetting(ctx, t, pool, orgID, "base_url", "https://api.openai.com/v1")
+		insertSetting(ctx, t, pool, orgID, "model", "m")
+		before, ok, err := rightStore.OrgConfig(ctx, orgID.String())
+		if err != nil || !ok {
+			t.Fatalf("ok=%v err=%v", ok, err)
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM settings WHERE org_id = $1 AND category = 'llm' AND key = 'base_url'`, orgID.String()); err != nil {
+			t.Fatal(err)
+		}
+		after, _, err := rightStore.OrgConfig(ctx, orgID.String())
+		if err != nil || after.Version == before.Version || after.BaseURL != "" {
+			t.Fatalf("version %q -> %q, base_url %q, err %v", before.Version, after.Version, after.BaseURL, err)
+		}
+	})
 }

@@ -163,7 +163,7 @@ func TestTheWorkflowRunsTheHeavyStepsOnlyWhenSomethingIsSelected(t *testing.T) {
 	if !strings.Contains(text, "pull_request:") || strings.Contains(text, "push:") || strings.Contains(text, "workflow_dispatch:") {
 		t.Fatal("the changed-packages workflow must trigger on pull_request only (the full suite stays in venue-oracles.yml, main and by hand)")
 	}
-	if !strings.Contains(text, "ci/check_go.sh venue-oracles --changed changed.txt --list") || !strings.Contains(text, "ci/check_go.sh venue-oracles --changed changed.txt 2>&1") {
+	if !strings.Contains(text, `ci/check_go.sh venue-oracles --changed changed.txt --list "${VENUE_LEG}" "${VENUE_LEGS}"`) || !strings.Contains(text, `ci/check_go.sh venue-oracles --changed changed.txt "${VENUE_LEG}" "${VENUE_LEGS}" 2>&1`) {
 		t.Fatal("the workflow does not select and then run through the verb")
 	}
 	const condition = "if: steps.select.outputs.run == 'true'"

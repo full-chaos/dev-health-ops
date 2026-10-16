@@ -1,5 +1,13 @@
-// Package httpguard holds the one rule every Go client that attaches a credential to a request applies to the
-// *http.Client a caller supplies: it follows no redirect.
+// Package httpguard holds the rules every Go client that attaches a credential to a request applies to the
+// *http.Client a caller supplies.
+//
+// Redirects: NoRedirects follows none.
+//
+// Origins (origin.go): one definition of "another origin" (scheme, host, port) for every redirect and every
+// server-supplied URL (a Link rel="next", a cursor that is a URL). A client either refuses a hop that leaves the
+// credential's origin or follows it with StripCredentials; both call RecordLeftOrigin (warn log with origins only, and
+// the credential_origin_departures_total counter). providerfoundation (all provider clients, DropCredentialsOnHostChange)
+// and api/githubcode use it; a new rule for "same origin" belongs in origin.go, never in a client.
 package httpguard
 
 import (
@@ -7,7 +15,12 @@ import (
 	"time"
 )
 
-func refuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+func refuseRedirects(req *http.Request, via []*http.Request) error {
+	if len(via) > 0 && !SameOrigin(req.URL, via[0].URL) {
+		RecordLeftOrigin(req.Context(), ActionRefused, "httpguard.no_redirects", via[0].URL, req.URL)
+	}
+	return http.ErrUseLastResponse
+}
 
 // NoRedirects is the client with its redirect policy replaced by "answer the 3xx, follow nothing" (a nil client stays
 // nil). A followed redirect carries the credential to wherever the server sends it: Go drops only Authorization and

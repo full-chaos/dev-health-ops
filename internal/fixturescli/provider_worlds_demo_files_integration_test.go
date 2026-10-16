@@ -78,12 +78,27 @@ func demoGoSource(repo, path string, touches int) string {
 			}
 			fmt.Fprintf(&out, "\t\t%s value%%%d == %d && total < %d {\n\t\t\ttotal += value * %d\n", keyword, branch+2, branch%2, 1000*(branch+1), branch+1)
 		}
-		out.WriteString("\t\t} else {\n\t\t\ttotal--\n\t\t}\n\t}\n\treturn total\n}\n\n")
+		out.WriteString("\t\t} else {\n\t\t\ttotal--\n\t\t}\n\t}\n")
+		demoPadding(&out, sum, index, 34*branches+60)
+		out.WriteString("\treturn total\n}\n\n")
 	}
 	if pkg == "main" {
-		out.WriteString("func main() {\n\t_ = step0([]int{1, 2, 3})\n}\n")
+		out.WriteString("func main() {\n\t_ = step0([]int{1, 2, 3})\n")
+		demoPadding(&out, sum, 99, 70)
+		out.WriteString("}\n")
 	}
 	return out.String()
+}
+
+// demoPadding writes that many straight-line assignments with no branch, seeded by the file and the
+// function. A function gets about thirty-four per branch it has, so the measured cyclomatic complexity per
+// thousand lines of every file lands where real code does (about 30 to 60) and not at the 400 to 500 that
+// files of nothing but branches measure. The complexity job counts every line of a file, so the padding is
+// real statements and not comments.
+func demoPadding(out *strings.Builder, sum [32]byte, salt, statements int) {
+	for line := 0; line < statements; line++ {
+		fmt.Fprintf(out, "\ttotal += %d * (total %% %d)\n", 1+int(sum[(line+salt)%len(sum)])%9, 3+line%7)
+	}
 }
 
 // demoGoIdent is a Go package name for a directory name: its letters and digits, lower case.

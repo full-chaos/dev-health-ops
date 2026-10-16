@@ -95,7 +95,7 @@ QUALIFY ROW_NUMBER() OVER (
     PARTITION BY org_id, subject_type, repo_id, subject_id
     ORDER BY _source_priority ASC, confidence DESC) = 1`,
 		`CREATE TABLE work_graph_issue_pr (
-    repo_id UUID, pr_number UInt32, work_item_id String,
+    repo_id UUID, pr_number UInt32, work_item_id String, provenance String DEFAULT 'native',
     last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, pr_number, work_item_id)`,
 		`CREATE TABLE work_items (
@@ -668,7 +668,7 @@ QUALIFY ROW_NUMBER() OVER (
     PARTITION BY org_id, subject_type, repo_id, subject_id
     ORDER BY _source_priority ASC, confidence DESC) = 1`,
 		`CREATE TABLE work_graph_issue_pr (
-    repo_id UUID, pr_number UInt32, work_item_id String,
+    repo_id UUID, pr_number UInt32, work_item_id String, provenance String DEFAULT 'native',
     last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, pr_number, work_item_id)`,
 		`CREATE TABLE work_items (
@@ -894,7 +894,7 @@ QUALIFY ROW_NUMBER() OVER (
     PARTITION BY org_id, subject_type, repo_id, subject_id
     ORDER BY _source_priority ASC, confidence DESC) = 1`,
 		`CREATE TABLE work_graph_issue_pr (
-    repo_id UUID, pr_number UInt32, work_item_id String,
+    repo_id UUID, pr_number UInt32, work_item_id String, provenance String DEFAULT 'native',
     last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, pr_number, work_item_id)`,
 		`CREATE TABLE work_items (
@@ -1065,7 +1065,7 @@ QUALIFY ROW_NUMBER() OVER (
     PARTITION BY org_id, subject_type, repo_id, subject_id
     ORDER BY _source_priority ASC, confidence DESC) = 1`,
 	`CREATE TABLE work_graph_issue_pr (
-    repo_id UUID, pr_number UInt32, work_item_id String,
+    repo_id UUID, pr_number UInt32, work_item_id String, provenance String DEFAULT 'native',
     last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, pr_number, work_item_id)`,
 	`CREATE TABLE work_items (

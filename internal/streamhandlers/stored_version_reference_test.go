@@ -63,7 +63,7 @@ func loadStatementVariants(t *testing.T) statementVariants {
 // Python reference writer does not; the reference defines no value for them.
 var externalUnreferencedColumns = map[string][]string{
 	"repos":      {"provider_repo_id"},
-	"teams":      {"created_at"},
+	"teams":      {"created_at", "provider_team_id", "provider_name", "gone_at"},
 	"work_items": {"description", "due_at", "priority_raw", "service_class"},
 }
 

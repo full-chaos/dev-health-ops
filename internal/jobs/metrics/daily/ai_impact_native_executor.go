@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -103,21 +104,6 @@ func (executor *AIImpactExecutor) ComputeFamily(
 	if err != nil {
 		return 0, err
 	}
-	if len(pullRequests) == 0 {
-		// No PRs in the window means no facts, and compute would produce no
-		// rows. Returning early also keeps the linkage query from running with
-		// an empty pr_numbers list.
-		return supersede(0, nil)
-	}
-
-	reviews, err := LoadAIImpactReviews(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart, dayEnd)
-	if err != nil {
-		return 0, err
-	}
-	attributions, err := LoadAIImpactAttributions(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart, dayEnd)
-	if err != nil {
-		return 0, err
-	}
 
 	// REUSES the incident family's loader rather than re-implementing the
 	// mapping join -- the brief's "two implementations of one concept that
@@ -138,9 +124,20 @@ func (executor *AIImpactExecutor) ComputeFamily(
 	if err != nil {
 		return 0, err
 	}
-	incidents := make([]aiimpact.IncidentRow, 0, len(incidentRows))
-	for _, row := range incidentRows {
-		incidents = append(incidents, aiimpact.IncidentRow{RepoID: row.RepoID, StartedAt: row.StartedAt})
+
+	if len(pullRequests) == 0 && len(incidentRows) == 0 {
+		// No pull requests and no incidents in the window: no facts, and compute
+		// would produce no rows.
+		return supersede(0, nil)
+	}
+
+	reviews, err := LoadAIImpactReviews(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart, dayEnd)
+	if err != nil {
+		return 0, err
+	}
+	attributions, err := LoadAIImpactAttributions(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart, dayEnd)
+	if err != nil {
+		return 0, err
 	}
 
 	prNumbers := make([]uint32, 0, len(pullRequests))
@@ -216,12 +213,29 @@ func (executor *AIImpactExecutor) ComputeFamily(
 		return 1
 	}
 
+	mainOwners := func(repoID uuid.UUID) []string {
+		var main []string
+		for _, owner := range repoToTeam[repoID.String()] {
+			if owner.Main {
+				main = append(main, owner.TeamID)
+			}
+		}
+		return main
+	}
+	incidents, repoMergedPRTeams, err := executor.resolveIncidents(
+		ctx, run.OrganizationID, incidentRows, teams, mainOwners, dayStart, dayEnd, computedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+
 	records := aiimpact.Compute(aiimpact.Params{
 		Day: dayStart, OrgID: run.OrganizationID,
 		PullRequests: pullRequests, Reviews: reviews,
 		Attributions: attributions, Incidents: incidents,
 		PRCommitStats: linkage, HasCommitStats: hasLinkage,
 		TeamResolver: teamResolver, OwnerShare: ownerShare, RepoNamesByID: repoNames,
+		MainOwners: mainOwners, RepoMergedPRTeams: repoMergedPRTeams,
 	})
 	if len(records) == 0 {
 		return supersede(0, nil)
@@ -234,6 +248,101 @@ func (executor *AIImpactExecutor) ComputeFamily(
 }
 
 var _ NativeFamilyExecutor = (*AIImpactExecutor)(nil)
+
+// resolveIncidents gives each incident the facts that place it on one team
+// (D6040, D6041): the team its source names, its triggering pull request, and,
+// for a repository whose main owners tie, the repository's team-owned merged
+// pull requests. The source's team reference is mapped through the team catalog
+// (provider and native_team_key); an unmapped reference is dropped, never
+// matched by raw equality with a team id.
+func (executor *AIImpactExecutor) resolveIncidents(
+	ctx context.Context, organizationID string, rows []IncidentRow, teams []aiimpact.Team,
+	mainOwners func(uuid.UUID) []string, dayStart, dayEnd, asOf time.Time,
+) ([]aiimpact.IncidentRow, map[uuid.UUID][]aiimpact.MergedPRTeam, error) {
+	if len(rows) == 0 {
+		return nil, nil, nil
+	}
+	knownTeams := make(map[string]struct{}, len(teams))
+	for _, team := range teams {
+		knownTeams[team.ID] = struct{}{}
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.IncidentID)
+	}
+	sourceTeams, err := LoadAIImpactIncidentSourceTeams(ctx, executor.conn, organizationID, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	var catalog map[AIImpactProviderTeamRef][]string
+	if len(sourceTeams) > 0 {
+		catalog, err = LoadAIImpactTeamsByNativeKey(ctx, executor.conn, organizationID)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	triggers, err := LoadAIImpactIncidentTriggers(ctx, executor.conn, organizationID, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	mappedRepos, err := LoadAIImpactIncidentMappedRepos(ctx, executor.conn, organizationID, ids, asOf)
+	if err != nil {
+		return nil, nil, err
+	}
+	incidents := make([]aiimpact.IncidentRow, 0, len(rows))
+	tiedRepos := make(map[uuid.UUID]struct{})
+	var sourceNamed, sourceDropped, triggered int
+	var elsewhere int
+	for _, row := range rows {
+		var trigger *aiimpact.IncidentTrigger
+		if found, ok := triggers[row.IncidentID]; ok {
+			trigger = &found
+		}
+		if home, ok := AIImpactIncidentRepo(trigger, mappedRepos[row.IncidentID]); ok && home != row.RepoID {
+			elsewhere++
+			continue
+		}
+		incident := aiimpact.IncidentRow{ID: row.IncidentID, RepoID: row.RepoID, StartedAt: row.StartedAt}
+		if ref, ok := sourceTeams[row.IncidentID]; ok {
+			if team, mapped := MapAIImpactProviderTeam(ref, catalog, knownTeams); mapped {
+				incident.SourceTeamID = &team
+				sourceNamed++
+			} else {
+				sourceDropped++
+			}
+		}
+		if trigger != nil {
+			if trigger.TeamID != nil {
+				if _, known := knownTeams[*trigger.TeamID]; !known {
+					trigger.TeamID = nil
+				}
+			}
+			incident.Trigger = trigger
+			triggered++
+		}
+		incidents = append(incidents, incident)
+		if len(mainOwners(row.RepoID)) > 1 {
+			tiedRepos[row.RepoID] = struct{}{}
+		}
+	}
+	var repoMergedPRTeams map[uuid.UUID][]aiimpact.MergedPRTeam
+	if len(tiedRepos) > 0 {
+		repos := make([]uuid.UUID, 0, len(tiedRepos))
+		for repoID := range tiedRepos {
+			repos = append(repos, repoID)
+		}
+		sort.Slice(repos, func(i, j int) bool { return repos[i].String() < repos[j].String() })
+		repoMergedPRTeams, err = LoadAIImpactRepoMergedPRTeams(ctx, executor.conn, organizationID, repos, dayStart, dayEnd)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	slog.Info("ai_impact incident team resolution",
+		"organization_id", organizationID, "incidents", len(rows),
+		"source_team_named", sourceNamed, "source_team_unmapped", sourceDropped,
+		"triggering_pull_request", triggered, "placed_on_another_repository", elsewhere, "tied_main_owner_repos", len(tiedRepos))
+	return incidents, repoMergedPRTeams, nil
+}
 
 // resolveAIImpactRepoToTeam builds {repo_id_str: owners with their linked
 // shares} through teamownership.OwnerSharesByRepo (CHAOS-9604, D5988): the main

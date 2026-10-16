@@ -40,7 +40,10 @@ func createTeamsIdentitiesTables(t *testing.T, ctx context.Context, conn interfa
 			parent_team_id Nullable(String),
 			source_id Nullable(UUID) DEFAULT NULL,
 			created_at Nullable(DateTime64(6)),
-			deleted_at Nullable(DateTime64(6))
+			deleted_at Nullable(DateTime64(6)),
+			provider_team_id String DEFAULT '',
+			provider_name String DEFAULT '',
+			gone_at Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		ORDER BY (id)`,
 		`CREATE TABLE identities (

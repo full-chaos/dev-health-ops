@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // GitLabTeamCatalogClickHouseEffects is the concrete bridge from the
@@ -34,7 +35,7 @@ type GitLabTeamCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
+const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at, provider_team_id, provider_name, gone_at)`
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const gitlabTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
@@ -226,11 +227,16 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 	if err != nil {
 		return err
 	}
+	stored, err := teamprovider.Carry(ctx, sink.Conn, claim.OrgID, teamIDs)
+	if err != nil {
+		return err
+	}
 	batch, err := sink.Conn.PrepareBatch(ctx, gitlabTeamCatalogTeamsInsert)
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
+	var tally teamprovider.Tally
 	for _, row := range rows {
 		teamUUID, err := uuid.Parse(row.TeamUUID)
 		if err != nil {
@@ -240,10 +246,13 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 		if manualMembers == nil {
 			manualMembers = []string{}
 		}
+		tally.Add(stored, row.ID, row.ProviderTeamID)
+		identity := teamprovider.Merge(stored, row.ID, row.ProviderTeamID, row.ProviderName)
 		if err := batch.Append(
 			row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns,
 			row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
 			teamcreated.For(createdAt, row.ID, row.UpdatedAt),
+			identity.ProviderTeamID, identity.ProviderName, identity.GoneAt,
 		); err != nil {
 			return err
 		}
@@ -251,7 +260,11 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
-	return batch.Send()
+	if err := batch.Send(); err != nil {
+		return err
+	}
+	logTeamProviderIdentity(ctx, tally, gitlabTeamCatalogProvider, claim.OrgID)
+	return nil
 }
 
 // openProviderAccessOwnership reads the open provider_access rows of the

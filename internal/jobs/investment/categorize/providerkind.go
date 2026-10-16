@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/full-chaos/dev-health-go/llm"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 )
 
 // ProviderKind is llm/providers/__init__.py's provider name string, typed.
@@ -308,18 +308,16 @@ var modelEnvByKind = map[ProviderKind][]string{
 	ProviderKindOllama:    {"LLM_MODEL_OLLAMA", "OLLAMA_MODEL"},
 }
 
-// defaultModelByKind is the model used when none is configured: the shared
-// llm package's default for every kind it serves, so the stamp and the
-// provider cannot disagree (base.py's anthropic and gemini defaults name a
-// retired model and no model). Without it a stamp would record an EMPTY
-// model for a run that used the provider's built-in default.
-var defaultModelByKind = map[ProviderKind]string{
-	ProviderKindOpenAI:    llm.DefaultModel(llm.KindOpenAI),
-	ProviderKindAnthropic: llm.DefaultModel(llm.KindAnthropic),
-	ProviderKindGemini:    llm.DefaultModel(llm.KindGemini),
-	ProviderKindQwen:      llm.DefaultModel(llm.KindQwen),
-	ProviderKindLocal:     llm.DefaultModel(llm.KindLocal),
-	ProviderKindOllama:    "llama3.2",
+// defaultModelForKind is the model used when none is configured, for a kind
+// this package serves: the one resolver the runtime and the admin budget
+// status share (llmbudget.DefaultModel, ruling D6043), so the stamp, the
+// provider and the status cannot disagree. Without it a stamp would record
+// an EMPTY model for a run that used the provider's built-in default.
+func defaultModelForKind(kind ProviderKind) string {
+	if _, served := modelEnvByKind[kind]; !served {
+		return ""
+	}
+	return llmbudget.DefaultModel(string(kind), envsecrets.ProcessLookup)
 }
 
 // ResolveModelName returns the model that WILL ACTUALLY BE USED for kind, and
@@ -368,7 +366,7 @@ func ResolveModelName(kind ProviderKind, requested string) string {
 	if resolved := firstNonEmptyEnv(names...); resolved != "" {
 		return resolved
 	}
-	return defaultModelByKind[kind]
+	return defaultModelForKind(kind)
 }
 
 // NewProviderFromEnvWithModel is NewProviderFromEnv with an explicit model

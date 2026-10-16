@@ -8,9 +8,38 @@ import (
 	"github.com/full-chaos/dev-health-go/llm"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
+
+// Ruling D6043: an org whose BYO settings store no model runs the one shared
+// default (llmbudget.DefaultModel), and the admin budget status prices that
+// same model. On the platform's setting (LLM_PROVIDER=openai,
+// LLM_MODEL=gpt-5-nano) an OpenAI org runs nano; another provider's org is
+// not given OpenAI's model.
+func TestOrgWithNoStoredModelRunsTheSharedDefault(t *testing.T) {
+	for _, name := range []string{"LLM_MODEL_OPENAI", "LLM_MODEL_ANTHROPIC", "LLM_MODEL_GEMINI", "GEMINI_MODEL", "LLM_MODEL_QWEN", "QWEN_MODEL", "LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("LLM_MODEL", "gpt-5-nano")
+	want := map[categorize.ProviderKind]string{
+		categorize.ProviderKindOpenAI:    "gpt-5-nano",
+		categorize.ProviderKindAnthropic: "claude-haiku-5-5",
+		categorize.ProviderKindGemini:    "gemini-3.8-flash",
+		categorize.ProviderKindQwen:      "qwen-plus",
+		categorize.ProviderKindLocal:     "llama3.2",
+	}
+	for kind, model := range want {
+		resolver := &fakeOrgResolver{matches: true, model: ""}
+		got, found := ResolveModelNameForOrg(context.Background(), kind, "", "org-1", resolver)
+		status := llmbudget.DefaultModel(string(kind), secrets.ProcessLookup)
+		if !found || got != model || status != model {
+			t.Errorf("%s: runtime %q (found %v), status default %q, want both %q", kind, got, found, status, model)
+		}
+	}
+}
 
 // With no model configured, a hosted kind uses the shared package's default,
 // on the wire and in the resolved model.

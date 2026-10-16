@@ -95,28 +95,64 @@ func TestReliablePrice(t *testing.T) {
 	}
 }
 
-// DEFAULT_MODEL_BY_PROVIDER, every entry (llm/providers/base.py).
-func TestDefaultModelByProvider(t *testing.T) {
+// With nothing configured, each provider's default is the shared package's
+// (base.py's retired claude-3-haiku-20240307 and the non-model gemini-3 are
+// gone, ruling D6043), and every hosted default is a priced, current row on
+// its default endpoint.
+func TestDefaultModelWithNothingConfigured(t *testing.T) {
+	none := func(string) (string, bool) { return "", false }
 	want := map[string]string{
 		"openai":        "gpt-5-mini",
-		"anthropic":     "claude-3-haiku-20240307",
-		"gemini":        "gemini-3",
+		"anthropic":     "claude-haiku-5-5",
+		"gemini":        "gemini-3.8-flash",
+		"qwen":          "qwen-plus",
 		"local":         "llama3.2",
 		"ollama":        "llama3.2",
 		"lmstudio":      "local-model",
-		"qwen":          "qwen-plus",
 		"qwen-local":    "qwen2.5:7b",
 		"qwen-lmstudio": "local-model",
-	}
-	if len(DefaultModelByProvider) != len(want) {
-		t.Fatalf("DefaultModelByProvider has %d entries, want %d: %v", len(DefaultModelByProvider), len(want), DefaultModelByProvider)
+		"":              "",
+		"nope":          "",
 	}
 	for provider, model := range want {
-		if got := DefaultModelByProvider[provider]; got != model {
-			t.Errorf("DefaultModelByProvider[%q] = %q, want %q", provider, got, model)
+		if got := DefaultModel(provider, none); got != model {
+			t.Errorf("DefaultModel(%q) = %q, want %q", provider, got, model)
 		}
 	}
-	if got, present := DefaultModelByProvider[""]; present || got != "" {
-		t.Errorf("an empty provider has a default model %q", got)
+	for _, provider := range []string{"openai", "anthropic", "gemini", "qwen"} {
+		if price, err := PriceAt(provider, DefaultModel(provider, none), "", time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)); err != nil || price == nil {
+			t.Errorf("%s default %q is unpriced on its default endpoint (err %v): a default must be a priced, current row", provider, DefaultModel(provider, none), err)
+		}
+	}
+}
+
+// The ops platform setting wins over the package default: the provider's own
+// name first, then the generic LLM_MODEL only when LLM_PROVIDER names this
+// provider. The platform runs OpenAI on gpt-5-nano (chris 2026-10-16).
+func TestDefaultModelReadsThePlatformSetting(t *testing.T) {
+	env := func(values map[string]string) LookupEnv {
+		return func(name string) (string, bool) {
+			value, ok := values[name]
+			return value, ok
+		}
+	}
+	for _, c := range []struct {
+		name     string
+		provider string
+		values   map[string]string
+		want     string
+	}{
+		{"platform nano via LLM_MODEL", "openai", map[string]string{"LLM_PROVIDER": "openai", "LLM_MODEL": "gpt-5-nano"}, "gpt-5-nano"},
+		{"provider name case-insensitive", " OpenAI ", map[string]string{"LLM_PROVIDER": "OPENAI", "LLM_MODEL": " gpt-5-nano "}, "gpt-5-nano"},
+		{"provider-specific beats generic", "openai", map[string]string{"LLM_PROVIDER": "openai", "LLM_MODEL": "gpt-5-nano", "LLM_MODEL_OPENAI": "gpt-5-mini"}, "gpt-5-mini"},
+		{"generic is another provider's", "anthropic", map[string]string{"LLM_PROVIDER": "openai", "LLM_MODEL": "gpt-5-nano"}, "claude-haiku-5-5"},
+		{"generic with no platform provider", "openai", map[string]string{"LLM_MODEL": "gpt-5-nano"}, "gpt-5-mini"},
+		{"gemini alias", "gemini", map[string]string{"GEMINI_MODEL": "gemini-3.5-flash-lite"}, "gemini-3.5-flash-lite"},
+		{"qwen alias", "qwen", map[string]string{"QWEN_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8"}, "@cf/qwen/qwen3-30b-a3b-fp8"},
+		{"blank setting is unset", "anthropic", map[string]string{"LLM_MODEL_ANTHROPIC": "  "}, "claude-haiku-5-5"},
+	} {
+		if got := DefaultModel(c.provider, env(c.values)); got != c.want {
+			t.Errorf("%s: DefaultModel(%q) = %q, want %q", c.name, c.provider, got, c.want)
+		}
 	}
 }

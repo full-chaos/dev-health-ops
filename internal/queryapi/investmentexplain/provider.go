@@ -20,9 +20,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/full-chaos/dev-health-go/llm"
-
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // modelEnvByProvider ports llm/providers/__init__.py's
@@ -36,16 +36,17 @@ var modelEnvByProvider = map[categorize.ProviderKind][]string{
 	categorize.ProviderKindLocal:     {"LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"},
 }
 
-// defaultModelByProvider is the model a provider uses when none is
-// configured: the shared llm package's default for each kind it serves
-// (base.py's anthropic and gemini defaults name a retired model and no
-// model).
-var defaultModelByProvider = map[categorize.ProviderKind]string{
-	categorize.ProviderKindOpenAI:    llm.DefaultModel(llm.KindOpenAI),
-	categorize.ProviderKindAnthropic: llm.DefaultModel(llm.KindAnthropic),
-	categorize.ProviderKindGemini:    llm.DefaultModel(llm.KindGemini),
-	categorize.ProviderKindQwen:      llm.DefaultModel(llm.KindQwen),
-	categorize.ProviderKindLocal:     llm.DefaultModel(llm.KindLocal),
+// platformDefaultModel is the model a provider kind this package resolves
+// uses when nothing names one: the one resolver the runtime and the admin
+// budget status share (llmbudget.DefaultModel, ruling D6043), so the status
+// prices the model that would run. found is false for a kind outside
+// modelEnvByProvider, as before.
+func platformDefaultModel(kind categorize.ProviderKind) (string, bool) {
+	if _, resolved := modelEnvByProvider[kind]; !resolved {
+		return "", false
+	}
+	model := llmbudget.DefaultModel(string(kind), envsecrets.ProcessLookup)
+	return model, model != ""
 }
 
 // ResolveModelName ports resolve_model_name (llm/providers/__init__.py:
@@ -74,7 +75,7 @@ func ResolveModelName(kind categorize.ProviderKind, model string) (resolved stri
 	if value := os.Getenv("LLM_MODEL"); value != "" {
 		return value, true
 	}
-	if def, ok := defaultModelByProvider[kind]; ok {
+	if def, ok := platformDefaultModel(kind); ok {
 		return def, true
 	}
 	return "", false

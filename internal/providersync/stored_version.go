@@ -435,6 +435,7 @@ func writeWorkItemsKeepingHeldColumns(
 		contract.Log(ctx, orgID, storedVersionCarriedEvent, storedVersionRefusedEvent, outcomes)
 	}
 	logWorkItemDueDates(ctx, rows)
+	logWorkItemHierarchy(ctx, rows)
 	batch, err := conn.PrepareBatch(ctx, extended)
 	if err != nil {
 		return err

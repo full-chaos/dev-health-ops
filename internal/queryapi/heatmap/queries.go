@@ -79,9 +79,14 @@ func fetchReviewWaitDensity(ctx context.Context, client QueryClient, startTS, en
 	out := make([]reviewWaitDensityRow, 0)
 	for rows.Next() {
 		var row reviewWaitDensityRow
-		if err := rows.Scan(&row.Weekday, &row.Hour, &row.Value); err != nil {
+		var value *float64
+		if err := rows.Scan(&row.Weekday, &row.Hour, &value); err != nil {
 			return nil, fmt.Errorf("heatmap: scan review wait density row: %w", err)
 		}
+		if value == nil {
+			continue
+		}
+		row.Value = *value
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -132,9 +137,14 @@ func fetchReviewWaitEvidence(ctx context.Context, client QueryClient, startTS, e
 	out := make([]ReviewWaitEvidenceItem, 0)
 	for rows.Next() {
 		var item ReviewWaitEvidenceItem
-		if err := rows.Scan(&item.RepoID, &item.Number, &item.Title, &item.CreatedAt, &item.FirstReviewAt, &item.RepoName, &item.Source); err != nil {
+		var firstReviewAt *time.Time
+		if err := rows.Scan(&item.RepoID, &item.Number, &item.Title, &item.CreatedAt, &firstReviewAt, &item.RepoName, &item.Source); err != nil {
 			return nil, fmt.Errorf("heatmap: scan review wait evidence row: %w", err)
 		}
+		if firstReviewAt == nil {
+			continue
+		}
+		item.FirstReviewAt = *firstReviewAt
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {

@@ -97,7 +97,7 @@ func TestMajorityTeamForIssuesMatchesPythonGolden(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			teamMap := map[string]teamAssignment{}
 			for id, v := range tc.Input.TeamMap {
-				teamMap[id] = teamAssignment{TeamID: v.TeamID, TeamName: v.TeamName}
+				teamMap[id] = teamAssignment{TeamID: &v.TeamID, TeamName: &v.TeamName}
 			}
 			gotID, gotLabel := majorityTeamForIssues(tc.Input.IssueIDs, teamMap)
 			if gotID != tc.TeamID || gotLabel != tc.TeamName {

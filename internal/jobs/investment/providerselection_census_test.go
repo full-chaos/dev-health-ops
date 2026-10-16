@@ -163,10 +163,10 @@ func TestEveryReaderOfTheProviderSelectionIsKnown(t *testing.T) {
 		readers["compose.yml"] = true
 	}
 	wantReaders := map[string]bool{
-		"ci/bigboy/bigboy-cut.sh":             true, // a comment that names the Secret keys
-		"ci/bigboy/compose.bigboy.images.yml": true, // passes LLM_PROVIDER to query-api
-		"deploy/helm/dev-health/values.yaml":  true, // a comment on query-api envFrom
-		"compose.yml":                         true, // passes LLM_PROVIDER to query-api
+		"ci/bigboy/bigboy-cut.sh":            true, // a comment that names the Secret keys
+		"ci/bigboy/compose.bigboy.yml":       true, // passes LLM_PROVIDER to query-api
+		"deploy/helm/dev-health/values.yaml": true, // a comment on query-api envFrom
+		"compose.yml":                        true, // passes LLM_PROVIDER to query-api
 	}
 	if !reflect.DeepEqual(readers, wantReaders) {
 		t.Errorf("non-Go files that name LLM_PROVIDER: %v, the census lists %v", readers, wantReaders)

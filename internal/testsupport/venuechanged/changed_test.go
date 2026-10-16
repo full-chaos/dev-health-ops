@@ -6,6 +6,7 @@ package venuechanged
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -175,5 +176,30 @@ func TestTheWorkflowRunsTheHeavyStepsOnlyWhenSomethingIsSelected(t *testing.T) {
 	}
 	if strings.Contains(text, "required") && strings.Contains(strings.ToLower(text), "required check: yes") {
 		t.Fatal("the job is informational (R430)")
+	}
+}
+
+// TestAMatchIsNotLostOnALargeChangeSet holds that the selection does not depend on the size of the change set: a pipeline of
+// `tr | grep -q` under pipefail reports failure when grep stops reading at its first match and the writer dies of SIGPIPE, so
+// a large pull request selected nothing and the job read a green no-op. The matching path sorts first and 20000 distinct
+// directories follow, more than a 64 KB pipe holds.
+func TestAMatchIsNotLostOnALargeChangeSet(t *testing.T) {
+	root := repoRoot(t)
+	small, err, stderr := selected(t, root, "\x00", "internal/api/policy/clienterror.go")
+	if err != nil || len(small) == 0 {
+		t.Fatalf("the small change set selected %d row(s) (err %v)\n%s: the control proves nothing", len(small), err, stderr)
+	}
+	paths := []string{"internal/api/policy/clienterror.go"}
+	for i := 0; i < 20000; i++ {
+		paths = append(paths, fmt.Sprintf("zdocs/generated-%05d/page.md", i))
+	}
+	large, err, stderr := selected(t, root, "\x00", paths...)
+	if err != nil {
+		t.Fatalf("--list failed: %v\n%s", err, stderr)
+	}
+	sort.Strings(small)
+	sort.Strings(large)
+	if strings.Join(small, "|") != strings.Join(large, "|") {
+		t.Fatalf("a change in internal/api/policy among 20000 other paths selected %v, alone it selected %v\n%s", large, small, stderr)
 	}
 }

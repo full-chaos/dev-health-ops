@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-COMPOSE = ROOT / "ci" / "bigboy" / "compose.bigboy.images.yml"
+COMPOSE = ROOT / "ci" / "bigboy" / "compose.bigboy.yml"
 READERS_SQL = ROOT / "ci" / "bigboy" / "prepare-clickhouse-readonly-user.sql"
 
 
@@ -48,6 +48,8 @@ def test_readers_user_host_ip_is_the_readers_network_subnet() -> None:
 def test_clickhouse_enables_access_management_so_the_readers_sql_can_apply() -> None:
     """The image writes access_management=0 for the default user; CREATE USER needs 1."""
     env = _compose()["services"]["clickhouse"]["environment"]
+    if isinstance(env, list):
+        env = dict(item.split("=", 1) for item in env)
     assert env["CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT"] == "1"
 
 

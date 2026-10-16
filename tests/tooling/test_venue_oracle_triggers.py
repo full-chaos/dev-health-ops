@@ -16,6 +16,7 @@ ci/venue_oracle_triggers.d/ declares such paths. These tests hold:
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -440,3 +441,36 @@ def test_the_job_step_fails_on_a_trigger_file_it_cannot_read(tree: Path) -> None
         + proc.stdout
     )
     assert output == ""
+
+
+def _list_rc(tree: Path):
+    changed = tree / "changed.txt"
+    changed.write_text("internal/auth/signedtoken/x.go\n", encoding="utf-8")
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    return proc
+
+
+def test_the_selection_never_reads_an_unreadable_or_empty_registry_as_nothing_to_run(
+    tmp_path: Path,
+) -> None:
+    """The listing loop was fed by a process substitution, so a registry that could not be read printed an error and ended as
+    exit 0 and "nothing selected"."""
+    tree = _scratch_tree(
+        tmp_path / "missing", {"internal/apiservice": ["TestVenueOracleX"]}
+    )
+    shutil.rmtree(tree / "ci" / "venue_oracle_registry.d")
+    proc = _list_rc(tree)
+    assert proc.returncode != 0 and "could not be read" in proc.stderr, (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+    tree = _scratch_tree(
+        tmp_path / "local-only",
+        {"internal/apiservice": ["TestVenueOracleX"]},
+        local=("TestVenueOracleX",),
+    )
+    proc = _list_rc(tree)
+    assert proc.returncode != 0 and "holds no run row" in proc.stderr, (
+        proc.returncode,
+        proc.stderr[-300:],
+    )

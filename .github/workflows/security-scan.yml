@@ -12,6 +12,7 @@ on:
   # reason: match every base, not just main.
   pull_request:
     branches: ["**"]
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
 
 concurrency:
@@ -63,7 +64,7 @@ jobs:
 
   pip-audit:
     needs: [changes]
-    if: github.event_name != 'pull_request' || needs.changes.outputs.deps == 'true'
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (github.event_name != 'pull_request' || needs.changes.outputs.deps == 'true')
     name: Dependency Vulnerability Scan (pip-audit)
     runs-on: ubuntu-latest
     permissions:
@@ -116,7 +117,7 @@ jobs:
 
   semgrep:
     needs: [changes]
-    if: github.event_name != 'pull_request' || needs.changes.outputs.code == 'true'
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')
     name: Semgrep SAST
     runs-on: ubuntu-latest
     continue-on-error: true

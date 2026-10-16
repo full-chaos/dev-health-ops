@@ -37,9 +37,12 @@ func (s *fixtureRowScanner) Scan(dest ...any) error {
 		case *string:
 			*typed, _ = row[i].(string)
 		case **string:
-			if v, ok := row[i].(*string); ok {
+			switch v := row[i].(type) {
+			case *string:
 				*typed = v
-			} else {
+			case string:
+				*typed = &v
+			default:
 				*typed = nil
 			}
 		case *float64:

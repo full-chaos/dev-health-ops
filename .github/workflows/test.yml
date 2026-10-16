@@ -253,6 +253,10 @@ jobs:
           uv sync --frozen --all-extras --dev
           uv pip install --python .venv/bin/python -r requirements-docs.txt
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      # Drift in any Python file fails here, on every PR, instead of surfacing later in
+      # a local gate (ruff pinned by uv.lock).
+      - name: Check Python formatting
+        run: ruff format --check .
       - name: Run the tooling tests
         env:
           OTEL_ENABLED: "false"

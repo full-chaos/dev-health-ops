@@ -29,7 +29,7 @@ type githubIssueTypeMetricsDailyRow struct {
 	ActiveCount    int                      `json:"active_count"`
 	CycleP50Hours  float64                  `json:"cycle_p50_hours"`
 	CycleP90Hours  float64                  `json:"cycle_p90_hours"`
-	LeadP50Hours   float64                  `json:"lead_p50_hours"`
+	LeadP50Hours   *float64                 `json:"lead_p50_hours"`
 	ComputedAt     time.Time                `json:"computed_at"`
 	OrgID          string                   `json:"org_id"`
 }

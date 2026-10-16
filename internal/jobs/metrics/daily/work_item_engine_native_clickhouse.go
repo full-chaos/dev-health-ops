@@ -367,7 +367,7 @@ GROUP BY team
 HAVING argMax(delivery_units, computed_at) != 0
     OR argMax(work_items_completed, computed_at) != 0
     OR argMax(prs_merged, computed_at) != 0
-    OR argMax(churn_loc, computed_at) != 0
+    OR tupleElement(argMax(tuple(churn_loc), computed_at), 1) != 0
 ORDER BY team`,
 		organizationID, workitemmetrics.UTCDay(day), workItemEngineStoredRepoKey(repoID),
 	)
@@ -422,7 +422,7 @@ func WriteWorkItemCompletionDaily(
 	}
 	type checked struct {
 		counters []uint32
-		churn    uint64
+		churn    *uint64
 	}
 	prepared := make([]checked, 0, len(rows))
 	for _, row := range rows {
@@ -435,9 +435,13 @@ func WriteWorkItemCompletionDaily(
 		if err != nil {
 			return 0, err
 		}
-		churn, err := checkedcast.Uint64(row.ChurnLOC, "work_item_completion_daily", "churn_loc")
-		if err != nil {
-			return 0, fmt.Errorf("%w: %w for %s", ErrInvalidState, err, subject)
+		var churn *uint64
+		if row.ChurnLOC != nil {
+			value, err := checkedcast.Uint64(*row.ChurnLOC, "work_item_completion_daily", "churn_loc")
+			if err != nil {
+				return 0, fmt.Errorf("%w: %w for %s", ErrInvalidState, err, subject)
+			}
+			churn = &value
 		}
 		prepared = append(prepared, checked{counters: counters, churn: churn})
 	}

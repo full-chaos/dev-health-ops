@@ -29,7 +29,7 @@ func githubWorkItemEngineEffectIssueRow() githubIssueTypeMetricsDailyRow {
 		RepoID: githubWorkItemEngineEffectRepoID(), Day: "2026-08-04",
 		Provider: "github", TeamID: "payments", IssueTypeNorm: "bug",
 		CreatedCount: 1, CompletedCount: 2, ActiveCount: 3,
-		CycleP50Hours: 4, CycleP90Hours: 5, LeadP50Hours: 6,
+		CycleP50Hours: 4, CycleP90Hours: 5, LeadP50Hours: floatPointer(6),
 		ComputedAt: githubWorkItemEngineEffectAt, OrgID: "org-acme",
 	}
 }
@@ -74,7 +74,7 @@ func TestCompareGitHubIssueTypeMetricsVersionRequiresOneUnambiguousFullRow(
 			row.CycleP90Hours++
 		}, want: EffectConflict},
 		{name: "lead differs", distinct: 1, mutate: func(row *githubIssueTypeMetricsDailyRow) {
-			row.LeadP50Hours++
+			row.LeadP50Hours = floatPointer(*row.LeadP50Hours + 1)
 		}, want: EffectConflict},
 		{name: "tenant differs", distinct: 1, mutate: func(row *githubIssueTypeMetricsDailyRow) {
 			row.OrgID = "org-other"

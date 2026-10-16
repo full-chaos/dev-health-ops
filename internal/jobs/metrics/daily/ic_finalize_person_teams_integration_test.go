@@ -425,3 +425,83 @@ FROM user_metrics_daily WHERE org_id = ? AND day = ? AND author_email = ? ORDER 
 	}
 	return strings.Join(lines, "\n")
 }
+
+// TestARerunInTheSameSecondIsStoredStrictlyNewer holds that a run of a day writes its rows with a
+// computed_at strictly after every row an earlier run of the same day stored, whatever the clock says.
+// user_metrics_daily and ic_landscape_rolling_30d keep computed_at to the second and every reader takes
+// the newest computed_at, so a rerun inside the second of the run it supersedes used to tie with it and
+// the older row (still under the team the membership just left) could win the read: the flake of
+// TestAPersonWhoLeftATeamLeavesItsLandscape (CHAOS-9928; CI dumped three rows, all computed_at
+// 09:53:53, two under github:alpha and one unassigned).
+func TestARerunInTheSameSecondIsStoredStrictlyNewer(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	const org = "00000000-0000-4000-8000-00000009084c"
+	day := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
+	longBefore := day.AddDate(0, 0, -60)
+	exec := func(what, query string, args ...any) {
+		t.Helper()
+		if err := conn.Exec(ctx, query, args...); err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	exec("insert team", `INSERT INTO teams
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES ('github:alpha', ?, 'Team github:alpha', ?, ?, ?, ?, 'github', 1)`,
+		uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:github:alpha")), []string{}, longBefore, longBefore, org)
+	membership := func(validTo *time.Time, updatedAt time.Time) {
+		t.Helper()
+		exec("insert membership", `INSERT INTO team_memberships
+    (org_id, provider, team_id, member_id, raw_email, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, identity_facets)
+    VALUES (?, 'github', 'github:alpha', 'closed', 'closed@example.com', 'native', 1, 100, 10, ?, ?, ?, ?)`,
+			org, longBefore, validTo, updatedAt, []string{"closed@example.com"})
+	}
+	repoID := personRepo(org, "closed")
+	exec("insert repo", `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, 'acme/closed', ?, 'github', ?)`, repoID, org, longBefore)
+	exec("insert ownership", `INSERT INTO team_repo_ownership
+    (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, valid_from, valid_to, updated_at)
+    VALUES (?, 'github', 'github:alpha', ?, 'acme/closed', 'exact', 'native', 1, 10, ?, NULL, ?)`, org, repoID, longBefore, longBefore)
+	exec("insert user metrics", `INSERT INTO user_metrics_daily
+    (repo_id, day, author_email, identity_id, team_id, team_name, commits_count, loc_added, loc_deleted,
+     prs_authored, prs_merged, loc_touched, delivery_units, computed_at, org_id)
+    VALUES (?, ?, 'closed@example.com', 'closed@example.com', 'unassigned', 'Unassigned', 3, 40, 10, 1, 1, 50, 1, ?, ?)`,
+		repoID, day, day.Add(30*time.Hour), org)
+	membership(nil, longBefore)
+
+	executor := NewICFinalizeExecutor(conn)
+	frozen := time.Now().UTC().Truncate(time.Second).Add(250 * time.Millisecond)
+	executor.SetClock(func() time.Time { return frozen })
+	run := func() {
+		t.Helper()
+		if _, err := executor.ComputeFinalizeFamily(ctx, Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day}); err != nil {
+			t.Fatalf("ic_finalize: %v", err)
+		}
+	}
+	newest := func(table, dayColumn string) time.Time {
+		t.Helper()
+		var at time.Time
+		if err := conn.QueryRow(ctx, "SELECT max(computed_at) FROM "+table+" WHERE org_id = ? AND "+dayColumn+" = ?", org, day).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	run()
+	userFirst, landscapeFirst := newest("user_metrics_daily", "day"), newest("ic_landscape_rolling_30d", "as_of_day")
+	membership(&day, longBefore.Add(time.Hour))
+	run()
+	if got := newest("user_metrics_daily", "day"); !got.After(userFirst) {
+		t.Errorf("user_metrics_daily: the rerun was stored at %s, want strictly after the first run's %s", got, userFirst)
+	}
+	if got := newest("ic_landscape_rolling_30d", "as_of_day"); !got.After(landscapeFirst) {
+		t.Errorf("ic_landscape_rolling_30d: the rerun was stored at %s, want strictly after the first run's %s", got, landscapeFirst)
+	}
+	var team string
+	if err := conn.QueryRow(ctx, `SELECT concat(toString(team_id), ' / ', toString(team_name)) FROM (
+    SELECT * FROM user_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, author_email, day
+) WHERE org_id = ? AND day = ? AND author_email = 'closed@example.com'`, org, day).Scan(&team); err != nil {
+		t.Fatal(err)
+	}
+	if team != "unassigned / Unassigned" {
+		t.Errorf("the stored row after the membership ended = %q, want unassigned / Unassigned", team)
+	}
+}

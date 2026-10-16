@@ -32,6 +32,7 @@ on:
       - 'contracts/graphql/**'
       - 'ci/venue_oracle_registry.d/**'
       - 'ci/venue_oracle_triggers.d/**'
+      - 'ci/venue_oracle_closure.d/**'
       - 'ci/check_go.sh'
       - '.github/workflows/venue-oracles-changed.yml'
 

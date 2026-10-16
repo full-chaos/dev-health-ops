@@ -327,7 +327,7 @@ func mustLoadMetricRegistry() map[string]metricDefinition {
 // classifier's investment_metrics_daily is no longer written (CHAOS-9264), and
 // its counts are read from work_item_completion_daily. The registry's
 // investment_area and project_stream entries stay text and are refused as
-// charts; churn_loc is read from the new table (it holds 0 there, as it did).
+// charts; churn_loc is read from the new table (NULL there when no sized pull request is linked, CHAOS-9920).
 var registryTableToSchemaTable = map[string]string{
 	"ic_landscape_rolling":           "ic_landscape_rolling_30d",
 	"work_item_state_duration_daily": "work_item_state_durations_daily",
@@ -658,7 +658,7 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		definition.hasDimension("day") {
 		xExpression, xType, temporal = "toDate("+day+")", "Date", true
 	}
-	yExpression := averageExpression(definition.SourceTable, spec.Metric)
+	yExpression := fmt.Sprintf("avg(%s)", spec.Metric)
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
 		// sum() of an unsigned integer column is UInt64 in ClickHouse and the
 		// chart read scans y into a float64, which the driver refuses. Cast

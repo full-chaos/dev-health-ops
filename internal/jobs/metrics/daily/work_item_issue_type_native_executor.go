@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -122,6 +123,11 @@ func (executor *WorkItemIssueTypeExecutor) ComputeFamily(
 			workItemEngineTeamResolver(items, attributions), executor.normalizer,
 		)
 		rows = issueTypeMetricsRowsToWrite(rows, live, repoID)
+		if completed, excluded := workitemengine.LeadTimeInputs(items, scope.start, scope.end); completed > 0 {
+			slog.Default().DebugContext(ctx, "metrics daily: issue type lead time",
+				"day", scope.start.Format("2006-01-02"), "repo_id", repoID.String(),
+				"completed_items", completed, "lead_time_excluded_items", excluded)
+		}
 
 		written, err := WriteIssueTypeMetricsDaily(
 			ctx, executor.conn, run.OrganizationID, scope.day, rows, computedAt,

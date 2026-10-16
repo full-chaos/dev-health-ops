@@ -299,6 +299,11 @@ Nothing is ever replaced in place, so a reader **must** take the newest
 was reopened, or its team or labels changed), the daily job writes a row of zeros for that key so
 that the newest row is the true one. A day with no data gets no row.
 
+`issue_type_metrics_daily.lead_p50_hours` is the upper median of `completed_at - created_at`, in hours, over the items
+completed on the day (the same bucketing as the cycle p50). An item with no `created_at`, or created after its
+completion, is left out of the median. A key with no such item holds 0, which then means "no lead time", the same
+as an empty cycle p50. Rows written before this rule hold 0 for every key until the day is recomputed.
+
 **`work_item_completion_daily` replaces `investment_metrics_daily` as the daily completion source (CHAOS-9264).** The
 analytics measures that count or time completed work by team, repository or work type (count, throughput,
 cycle time) read `work_item_completion_daily`: one row per (organization, repository, team, day) with the delivery

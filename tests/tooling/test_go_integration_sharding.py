@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import atexit
 import collections
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -49,7 +51,26 @@ SPLIT_PACKAGES = {
     REMAINING_PACKAGE,
 }
 CONTAINER_HARNESS = ROOT / "internal" / "testsupport" / "containers" / "harness.go"
-TEST_GO_CACHE = Path(tempfile.gettempdir()) / "chaos3141-go-sharding-test-cache"
+
+
+def _test_go_cache() -> Path:
+    """The Go build cache of the check_go.sh calls below.
+
+    A configured cache (DEV_HEALTH_GO_CACHE, then GOCACHE) is used as is: it is
+    the runner's own and outlives the run on purpose. With none, the cache is a
+    private directory removed when the process exits. It used to be a fixed
+    directory under the system temp directory that nothing removed (about 850 MB
+    left behind per host).
+    """
+    configured = os.environ.get("DEV_HEALTH_GO_CACHE") or os.environ.get("GOCACHE")
+    if configured:
+        return Path(configured)
+    private = tempfile.mkdtemp(prefix="chaos3141-go-sharding-test-cache-")
+    atexit.register(shutil.rmtree, private, ignore_errors=True)
+    return Path(private)
+
+
+TEST_GO_CACHE = _test_go_cache()
 # Hosted job 93890967576 measured 49.596s for a cold planner invocation. This
 # test-process guard is deliberately above twice that observed completion; it
 # does not change the workflow job cap or the Go test timeout.

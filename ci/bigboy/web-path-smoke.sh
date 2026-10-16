@@ -14,7 +14,7 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 export DHO_SMOKE_DIR="$HERE"
-R=/home/ubuntu/devhealth
+R=${BIGBOY_ROOT:-/home/ubuntu/devhealth}
 cd "$R"
 
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE   # CHAOS-8693: the chain, project, env file and profiles come from ci/bigboy/stack.files

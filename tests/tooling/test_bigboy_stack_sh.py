@@ -526,3 +526,66 @@ def test_smoke_set_activates_the_web_smoke_service_so_the_credential_gate_sees_i
         int(lengths["DHO_SMOKE_ADMIN_EMAIL"]) > 0
         and int(lengths["DHO_SMOKE_ADMIN_PASSWORD_FILE"]) > 0
     ), lengths
+
+
+def test_the_cut_steps_that_call_stack_sh_run_in_the_root_they_are_given(
+    tmp_path: Path,
+) -> None:
+    """A cut launched against BIGBOY_ROOT=<scratch> must not reach the real bigboy root through a step script that
+    hard-codes /home/ubuntu/devhealth: every compose call of these scripts runs with the scratch root as cwd."""
+    r = tmp_path / "root"
+    for d in ("ops", "_records/rec"):
+        (r / d).mkdir(parents=True)
+    (r / "ops/.env").write_text("")
+    (r / "_records/compose.bigboy.images.yml").write_text(f"image: {_DHO}\n")
+    (r / "_records/rec/sha.txt").write_text("1234567abcdef\n")
+    exp = tmp_path / "exp.txt"
+    exp.write_text("r t SELECT\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "cwd.log"
+    shim = bin_dir / "docker"
+    shim.write_text(
+        '#!/usr/bin/env bash\necho "$PWD :: $*" >> "$CWD_LOG"\n'
+        'case "$*" in *buildx*) echo \'{"digest":"sha256:'
+        + "e" * 64
+        + '"}\';; *" ps "*) echo ghcr.io/x/op@sha256:'
+        + "f" * 64
+        + ";; esac\nexit 0\n"
+    )
+    shim.chmod(0o755)
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "BIGBOY_"))
+    }
+    env |= {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "CWD_LOG": str(log),
+        "BIGBOY_ROOT": str(r),
+        "DHO_SMOKE_CATALOG_FILE": str(tmp_path / "catalog.json"),
+        "DHO_SMOKE_OPS_SHA": "0" * 40,
+    }
+    (tmp_path / "catalog.json").write_text("{}")
+    cases = {
+        "bigboy-river-apply.sh": [],
+        "bigboy-grants-check.sh": [str(r / "_records/rec")],
+        "pg-grants-check.sh": ["bigboy", str(exp)],
+        "bigboy-hook-check.sh": [str(r / "_records/rec")],
+        "web-path-smoke.sh": [],
+    }
+    for name, args in cases.items():
+        log.write_text("")
+        subprocess.run(
+            ["bash", str(BIGBOY / name), *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        calls = [
+            ln
+            for ln in log.read_text().splitlines()
+            if " compose " in f" {ln} " or ln.endswith(" compose")
+        ]
+        assert calls, name
+        outside = [ln for ln in calls if not ln.startswith(str(r.resolve()) + " ::")]
+        assert not outside, (name, outside[:2])

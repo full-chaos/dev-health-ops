@@ -1259,7 +1259,14 @@ controls: a link that is gone and an explicit empty list are closed).
 > link supports, is retracted by the derivation's own diff (`diffTeamRepoOwnershipRetractions`: a replacement row
 > with `valid_to` set and a newer `updated_at`, never a delete), under the retraction guard (CHAOS-9045). The run logs
 > `team_repo_ownership_derivation.co_owner_below_share_floor` with the count (tests:
-> `team_repo_ownership_co_owner_floor_test.go`, every provider pair). The writer stores the share (`team_repo_ownership.share`, section 1.1)
+> `team_repo_ownership_co_owner_floor_test.go`, every provider pair). **A dropped co-owner holds no share on any day
+> (CHAOS-9913).** The share is a measure over the whole history (D5988), so a co-owner below the floor now was below it
+> on every day: its rows, the open one and every earlier closed one, are voided (`valid_to = valid_from`, the
+> supersede tombstone form), not closed at the run, and as-of readers (`teamownership.OwnerSharesByRepo`, filter
+> `valid_from <= asOf < valid_to`) give it nothing on any day, so a trailing recompute of a daily team table cannot write
+> its share back. Logged as `team_repo_ownership_derivation.co_owner_voided`, stat `CoOwnersVoided`; test
+> `TestADroppedCoOwnerHoldsNoShareOnAnyDay` (real ClickHouse, jira, linear, github and gitlab). Every other retraction
+> (no supporting link left, a reassigned project) still closes at the run and keeps the history. The writer stores the share (`team_repo_ownership.share`, section 1.1)
 > and the investment and quadrant readers weigh a co-owned repository by it (CHAOS-9408, `teamscope.OwnerShares`,
 > next to "The team review quadrant" and "Every analytics team grouping on the investment path" below). Other text
 > below that says "same rank", "owners at the winner's rank" or "shared equally" about the attribution cascade

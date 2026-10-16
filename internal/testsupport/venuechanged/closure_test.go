@@ -1,0 +1,301 @@
+package venuechanged
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// closureDir is where the dependency closure of every venue test package is committed.
+const closureDir = "ci/venue_oracle_closure.d"
+
+// venuePackages is the sorted set of package directories with a `run` row in the registry.
+func venuePackages(t *testing.T, root string) []string {
+	t.Helper()
+	seen := map[string]bool{}
+	files, _ := filepath.Glob(filepath.Join(root, "ci", "venue_oracle_registry.d", "*.tsv"))
+	for _, file := range files {
+		for _, row := range tsvRows(t, file) {
+			if len(row) == 3 && row[2] == "run" {
+				seen[row[0]] = true
+			}
+		}
+	}
+	var pkgs []string
+	for pkg := range seen {
+		pkgs = append(pkgs, pkg)
+	}
+	sort.Strings(pkgs)
+	return pkgs
+}
+
+func closureFile(root, pkg string) string {
+	return filepath.Join(root, filepath.FromSlash(closureDir), strings.ReplaceAll(pkg, "/", "__")+".txt")
+}
+
+// computeClosures asks the Go toolchain for the packages each test binary links: the in-module
+// directories of `go list -test` Deps of the package's `.test` binary (its own, in-package and
+// external test files included), minus the package's own directory (the package rule selects
+// that one).
+func computeClosures(t *testing.T, root string, pkgs []string) map[string][]string {
+	t.Helper()
+	args := []string{"list", "-mod=readonly", "-tags=integration", "-test", "-f", `{{.ImportPath}}{{"\t"}}{{join .Deps " "}}`}
+	for _, pkg := range pkgs {
+		args = append(args, "./"+pkg)
+	}
+	cmd := exec.Command("go", args...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.Output()
+	if err != nil {
+		detail := ""
+		if exit, ok := err.(*exec.ExitError); ok {
+			detail = string(exit.Stderr)
+		}
+		t.Fatalf("go list -test over %d venue package(s): %v\n%s", len(pkgs), err, detail)
+	}
+	embedDirs := embeddedDirs(t, root, pkgs)
+	closures := map[string][]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		importPath, deps, ok := strings.Cut(line, "\t")
+		if !ok || !strings.HasSuffix(importPath, ".test") {
+			continue
+		}
+		pkg := strings.TrimPrefix(strings.TrimSuffix(importPath, ".test"), modulePrefix)
+		set := map[string]bool{}
+		for _, dep := range strings.Fields(deps) {
+			rel, in := strings.CutPrefix(dep, modulePrefix)
+			if !in || rel == pkg {
+				continue
+			}
+			// "pkg [pkg.test]" style test variants are not in Deps; an external test package
+			// ("pkg_test") maps to its directory.
+			rel = strings.TrimSuffix(rel, "_test")
+			if rel == pkg {
+				continue
+			}
+			set[rel] = true
+		}
+		var list []string
+		for dir := range set {
+			list = append(list, dir)
+		}
+		sort.Strings(list)
+		// "~dir" lines: a directory below a linked package holding a file it embeds (go:embed of
+		// sql/*.sql, templates/, data/): a changed file anywhere under it changes the binary.
+		prefixes := map[string]bool{}
+		for _, dir := range append([]string{pkg}, list...) {
+			for _, under := range embedDirs[dir] {
+				prefixes["~"+under] = true
+			}
+		}
+		var embedded []string
+		for line := range prefixes {
+			embedded = append(embedded, line)
+		}
+		sort.Strings(embedded)
+		closures[pkg] = append(list, embedded...)
+	}
+	if err := validateClosures(pkgs, closures); err != nil {
+		t.Fatal(err)
+	}
+	return closures
+}
+
+// validateClosures refuses a derivation that came back empty or incomplete: a venue test binary always links in-module packages, and
+// the repository embeds files (migrations, templates), so a closure with no package, or a whole derivation with no `~dir` line, means
+// `go list` output was not read, not that nothing is linked. Silent zeros here would select nothing for every pull request.
+func validateClosures(pkgs []string, closures map[string][]string) error {
+	embedded := false
+	for _, pkg := range pkgs {
+		lines, ok := closures[pkg]
+		if !ok {
+			return fmt.Errorf("go list -test gave no test binary for the venue package %s", pkg)
+		}
+		dirs := 0
+		for _, line := range lines {
+			if strings.HasPrefix(line, "~") {
+				embedded = true
+			} else {
+				dirs++
+			}
+		}
+		if dirs == 0 {
+			return fmt.Errorf("the venue package %s links no in-module package according to go list: the derivation is empty, not the closure", pkg)
+		}
+	}
+	if !embedded {
+		return fmt.Errorf("no venue package has an embedded-file directory (~dir): the EmbedFiles fields of go list were not read")
+	}
+	return nil
+}
+
+// embeddedDirs maps a package directory to the directories below it that hold a file the package
+// (or its tests) embeds: `go list -deps -test` EmbedFiles, TestEmbedFiles and XTestEmbedFiles, which
+// are relative to the package directory. A file in the package directory itself needs no entry (the
+// package rule covers every file directly in it).
+func embeddedDirs(t *testing.T, root string, pkgs []string) map[string][]string {
+	t.Helper()
+	args := []string{"list", "-mod=readonly", "-tags=integration", "-test", "-deps", "-f",
+		`{{.ImportPath}}{{"|"}}{{join .EmbedFiles ","}}{{"|"}}{{join .TestEmbedFiles ","}}{{"|"}}{{join .XTestEmbedFiles ","}}`}
+	for _, pkg := range pkgs {
+		args = append(args, "./"+pkg)
+	}
+	cmd := exec.Command("go", args...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.Output()
+	if err != nil {
+		detail := ""
+		if exit, ok := err.(*exec.ExitError); ok {
+			detail = string(exit.Stderr)
+		}
+		t.Fatalf("go list -deps (embedded files): %v\n%s", err, detail)
+	}
+	sets := map[string]map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Split(line, "|")
+		if len(fields) != 4 {
+			continue
+		}
+		importPath, _, _ := strings.Cut(fields[0], " [")
+		rel, ok := strings.CutPrefix(importPath, modulePrefix)
+		if !ok {
+			continue
+		}
+		rel = strings.TrimSuffix(rel, ".test")
+		rel = strings.TrimSuffix(rel, "_test")
+		for _, group := range fields[1:] {
+			for _, file := range strings.Split(group, ",") {
+				dir := path.Dir(file)
+				if file == "" || dir == "." {
+					continue
+				}
+				if sets[rel] == nil {
+					sets[rel] = map[string]bool{}
+				}
+				sets[rel][rel+"/"+dir] = true
+			}
+		}
+	}
+	result := map[string][]string{}
+	for rel, set := range sets {
+		for dir := range set {
+			result[rel] = append(result[rel], dir)
+		}
+		sort.Strings(result[rel])
+	}
+	return result
+}
+
+// committedClosures reads ci/venue_oracle_closure.d/ (package dir -> dependency dirs).
+func committedClosures(t *testing.T, root string, pkgs []string) map[string]map[string]bool {
+	t.Helper()
+	closures := map[string]map[string]bool{}
+	for _, pkg := range pkgs {
+		data, err := os.ReadFile(closureFile(root, pkg))
+		if err != nil {
+			t.Fatalf("%s: no committed dependency closure (%v); regenerate with: %s", pkg, err, regenerate)
+		}
+		set := map[string]bool{}
+		for _, line := range strings.Split(string(data), "\n") {
+			if line != "" {
+				set[line] = true
+			}
+		}
+		closures[pkg] = set
+	}
+	return closures
+}
+
+const regenerate = "VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+
+// TestClosureFilesMatchTheTestBinaryDependencies holds the derived trigger set of the pull
+// request venue job (CHAOS-9935): for every venue test package, ci/venue_oracle_closure.d/ lists
+// the in-module packages its test binary links, and `venue-oracles --changed` selects the
+// package's tests when a changed file lies in one of them. The file is what the Go toolchain says
+// today, so a hand-written trigger row can no longer be the only thing between a dependency
+// change and a skipped oracle.
+func TestClosureFilesMatchTheTestBinaryDependencies(t *testing.T) {
+	root := repoRoot(t)
+	pkgs := venuePackages(t, root)
+	if len(pkgs) == 0 {
+		t.Fatal("no run rows found in ci/venue_oracle_registry.d/")
+	}
+	want := computeClosures(t, root, pkgs)
+	write := os.Getenv("VENUE_CLOSURE_WRITE") == "1"
+	if write {
+		if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(closureDir)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	known := map[string]bool{}
+	for _, pkg := range pkgs {
+		body := strings.Join(want[pkg], "\n") + "\n"
+		known[filepath.Base(closureFile(root, pkg))] = true
+		if write {
+			if err := os.WriteFile(closureFile(root, pkg), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		got, err := os.ReadFile(closureFile(root, pkg))
+		if err != nil {
+			t.Errorf("%s: no committed dependency closure (%v); regenerate with: %s", pkg, err, regenerate)
+			continue
+		}
+		if string(got) != body {
+			t.Errorf("%s: %s is stale against `go list -test`: %s\nregenerate with: %s", pkg, closureFile(root, pkg), diffLines(string(got), body), regenerate)
+		}
+	}
+	entries, _ := os.ReadDir(filepath.Join(root, filepath.FromSlash(closureDir)))
+	for _, entry := range entries {
+		if !known[entry.Name()] {
+			if write {
+				_ = os.Remove(filepath.Join(root, filepath.FromSlash(closureDir), entry.Name()))
+				continue
+			}
+			t.Errorf("%s/%s belongs to no registered venue test package: remove it (or regenerate with: %s)", closureDir, entry.Name(), regenerate)
+		}
+	}
+	t.Logf("%d venue package(s) with a committed dependency closure", len(pkgs))
+}
+
+// diffLines names the lines that differ between two newline lists, a few of each.
+func diffLines(got, want string) string {
+	in := func(text string) map[string]bool {
+		set := map[string]bool{}
+		for _, line := range strings.Split(text, "\n") {
+			if line != "" {
+				set[line] = true
+			}
+		}
+		return set
+	}
+	g, w := in(got), in(want)
+	var added, removed []string
+	for line := range w {
+		if !g[line] {
+			added = append(added, line)
+		}
+	}
+	for line := range g {
+		if !w[line] {
+			removed = append(removed, line)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(removed)
+	cut := func(list []string) string {
+		if len(list) > 5 {
+			return strings.Join(list[:5], ", ") + fmt.Sprintf(" (+%d more)", len(list)-5)
+		}
+		return strings.Join(list, ", ")
+	}
+	return fmt.Sprintf("now linked and not listed: [%s]; listed and no longer linked: [%s]", cut(added), cut(removed))
+}

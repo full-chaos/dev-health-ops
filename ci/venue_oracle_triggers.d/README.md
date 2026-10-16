@@ -15,9 +15,16 @@ Row (TAB separated): `<package dir>	<Test function>	<repo path>`
 
 `bash ci/check_venue_oracle_registry.sh` checks it (no Go toolchain needed).
 
-This list is declared by hand: it holds the paths a venue test is KNOWN to depend on.
-A path that is not declared still selects nothing on a pull request; the full run on
-main is the check for it. Add a row when a main run goes red after a green pull request.
+This list is declared by hand: it holds the paths a venue test is KNOWN to depend on that are
+not Go packages of its test binary (a ClickHouse migration, a fixture tree, a contract file).
+Every Go package the test binary links is covered without a row: `ci/venue_oracle_closure.d/`
+(CHAOS-9935) lists, per venue test package, the in-module packages `go list -test` says its test
+binary links, and a changed file directly in one of them (or under its testdata) selects every
+test of the package. `TestClosureFilesMatchTheTestBinaryDependencies` fails when a file is stale
+and prints the regenerate command. A path that is in neither still selects nothing on a pull
+request; the full run on main is the check for it. A closure file also carries `~dir` lines: a directory below a linked package that holds a file the
+package (or its tests) embeds (`go:embed` of `sql/*.sql`, `templates/`, `data/`); a changed file anywhere
+under it selects the same tests.
 
 `internal/testsupport/venuechanged` (TestEveryProducerAVenueTestImportsIsDeclaredAsATrigger,
 CHAOS-9578, per test since CHAOS-9614) fails when a `run` test uses a producer package
@@ -25,7 +32,6 @@ CHAOS-9578, per test since CHAOS-9614) fails when a `run` test uses a producer p
 row for one test of a package never covers another test of it. A test uses the producers
 named in its function, in every same-package test-file declaration it reaches through
 identifiers (helpers, fixtures, types, methods), and in the blank imports of the package.
-Known gaps are listed in `ci/venue_oracle_trigger_gaps.tsv`
-(`<package dir>	<Test function>	<producer package>`, sorted): a new gap fails the test, and a
-line whose gap got covered must be removed. Close a gap by declaring the producer here for
-that test and deleting its line there.
+`ci/venue_oracle_trigger_gaps.tsv` (`<package dir>	<Test function>	<producer package>`, sorted) is the
+ratchet of producers neither a row here nor the closure covers; it is empty since CHAOS-9935 (the
+closure covers every direct import) and a new line fails review.

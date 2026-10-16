@@ -145,7 +145,8 @@ usage() {
          pull_request job runs, with a cost bounded by the packages a PR changes.
          A path that ci/venue_oracle_triggers.d/ declares for a test (code outside
          its package whose behaviour the test compares; CHAOS-9172) selects that
-         test too. No row selected is a loud no-op. With --list print the selected rows
+         test too, and so does a file directly in a package of the dependency
+         closure (ci/venue_oracle_closure.d/, CHAOS-9935). No row selected is a loud no-op. With --list print the selected rows
          (SELECT, package, test, tab-separated) and run nothing.
   venue-oracle-plan COUNT
          Print the cost-balanced plan of COUNT legs: every run row with its leg
@@ -746,14 +747,38 @@ check_venue_oracle_plan() {
 venue_oracle_changed_selects() {
   local escaped pkg name path
   escaped="$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')"
-  if tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}/([^/]+|testdata/.+)$"; then
+  # grep -q stops at its first match: it reads a process substitution, never a pipe whose writer
+  # would die of SIGPIPE and fail the whole pipeline under pipefail on a large change set.
+  if grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
     return 0
+  fi
+  # The dependency closure of the package's test binary (ci/venue_oracle_closure.d/, CHAOS-9935): a
+  # file directly in, or under testdata of, any package the test binary links selects every
+  # test of the package. Derived by a Go test from `go list -test`, so a missing hand row cannot
+  # hide a dependency. The directory is absent in a scratch tree that holds no Go module.
+  if [ -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
+    local closure_file="${ROOT}/ci/venue_oracle_closure.d/${1//\//__}.txt"
+    [ -r "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is missing; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+    # a file that is empty, or holds a line that is not `<dir>` or `~<dir>`, was not written by the generator: refuse it
+    [ -s "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is empty; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+    if grep -qvE '^~?[A-Za-z0-9_][A-Za-z0-9_./-]*$' "${closure_file}"; then
+      die "venue-oracles --changed: ${closure_file} has a line that is not a package directory or ~directory; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+    fi
+    if [ -n "${VENUE_CHANGED_DIRS:-}" ] && grep -qxFf "${closure_file}" < <(printf '%s\n' "${VENUE_CHANGED_DIRS}"); then
+      return 0
+    fi
+    # "~dir" lines: a changed file anywhere under a directory a linked package embeds files from.
+    if awk 'FNR == NR { if (substr($0, 1, 1) == "~") prefix[substr($0, 2) "/"] = 1; next }
+            { for (p in prefix) if (index($0, p) == 1) { found = 1; exit } }
+            END { exit !found }' "${closure_file}" <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+      return 0
+    fi
   fi
   [ -n "${2:-}" ] || return 1
   while IFS=$'\t' read -r pkg name path; do
     { [ "${pkg}" = "$1" ] && [ "${name}" = "$2" ]; } || continue
     escaped="$(printf '%s' "${path}" | sed 's/[][\\.*^$/]/\\&/g')"
-    if tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}(/.*)?$"; then
+    if grep -qE "^${escaped}(/.*)?$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
       return 0
     fi
   done <<< "${VENUE_TRIGGER_ROWS:-}"
@@ -767,6 +792,15 @@ check_venue_oracles() {
     [ -z "${shard}${shard_count}" ] || die "venue-oracles --changed does not combine with SHARD COUNT"
   fi
   if [ -n "${changed}" ]; then
+    # CHAOS-9935: in the real tree (it holds the generator of the closure files) a missing closure directory is an
+    # error, never "no closure": the selection would silently drop every dependency rule and read as a green no-op.
+    # A scratch tree with no Go module has neither the generator nor the directory and keeps the package and row rules.
+    if [ -d "${ROOT}/internal/testsupport/venuechanged" ] && [ ! -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
+      die "venue-oracles --changed: ${ROOT}/ci/venue_oracle_closure.d is missing; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+    fi
+    # The package directory of every changed path (a path under .../testdata belongs to the package
+    # above it), for the closure rule of venue_oracle_changed_selects.
+    VENUE_CHANGED_DIRS="$(tr '\0' '\n' < "${changed}" | awk 'NF { d = $0; sub(/\/[^\/]*$/, "", d); sub(/\/testdata(\/.*)?$/, "", d); print d }' | LC_ALL=C sort -u)"
     VENUE_TRIGGER_ROWS="$(venue_oracle_trigger_rows)" \
       || die "venue-oracles --changed: ci/venue_oracle_triggers.d/ could not be read (see above)"
   fi
@@ -780,12 +814,18 @@ check_venue_oracles() {
     # CHAOS-7653: print the registry rows the changed paths select and run nothing (no
     # Go, jq, containers or Python needed). The registry-against-tree validation is the
     # run's own first step; the selection reads the registry rows alone, so it is fast.
-    local list_dir list_name list_kind
+    local list_dir list_name list_kind list_rows
+    # The rows are read first, so a registry that cannot be read (or holds no run row) is an error: a loop fed by
+    # a process substitution cannot see the failure of its producer and read it as "nothing selected" (CHAOS-9935).
+    list_rows="$(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2)" \
+      || die "venue-oracles --changed: the registry ci/venue_oracle_registry.d/ could not be read (see above)"
+    [ -n "$(printf '%s\n' "${list_rows}" | awk '$3 == "run"')" ] \
+      || die "venue-oracles --changed: ci/venue_oracle_registry.d/ holds no run row, so nothing could ever be selected"
     while read -r list_dir list_name list_kind; do
       if [ "${list_kind}" = run ] && venue_oracle_changed_selects "${list_dir}" "${list_name}"; then
         printf 'SELECT\t%s\t%s\n' "${list_dir}" "${list_name}"
       fi
-    done < <(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2)
+    done <<< "${list_rows}"
     return 0
   fi
   command -v jq >/dev/null 2>&1 \

@@ -6,6 +6,7 @@ package venuechanged
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -175,5 +176,99 @@ func TestTheWorkflowRunsTheHeavyStepsOnlyWhenSomethingIsSelected(t *testing.T) {
 	}
 	if strings.Contains(text, "required") && strings.Contains(strings.ToLower(text), "required check: yes") {
 		t.Fatal("the job is informational (R430)")
+	}
+}
+
+// TestAChangeInAPackageTheVenueServerLinksSelectsTheTestsThatStartIt is the acceptance of CHAOS-9935:
+// internal/api/policy is linked by the production api server the browse oracles of internal/apiservice
+// start, and no hand-written trigger row names it for them (PR 4186 changed it and the pull request job
+// selected only TestVenueOracleBillingLedger; main went red after the merge). The dependency closure
+// selects them.
+func TestAChangeInAPackageTheVenueServerLinksSelectsTheTestsThatStartIt(t *testing.T) {
+	root := repoRoot(t)
+	rows, err, stderr := selected(t, root, "\x00", "internal/api/policy/clienterror.go")
+	if err != nil {
+		t.Fatalf("--list failed: %v\n%s", err, stderr)
+	}
+	have := map[string]bool{}
+	for _, row := range rows {
+		have[row] = true
+	}
+	for _, want := range []string{
+		"internal/apiservice\tTestVenueOracleCredentialGitHubRepos",
+		"internal/apiservice\tTestVenueOracleCredentialRepos",
+	} {
+		if !have[want] {
+			t.Errorf("a change in internal/api/policy did not select %q (selected %d row(s))", want, len(rows))
+		}
+	}
+	// A package with no hand-written row at all: internal/auth/signedtoken is linked by the auth flow
+	// oracle's server and the pull request job used to select nothing for it.
+	signed, err, stderr := selected(t, root, "\x00", "internal/auth/signedtoken/x.go")
+	if err != nil {
+		t.Fatalf("--list failed: %v\n%s", err, stderr)
+	}
+	foundAuthFlow := false
+	for _, row := range signed {
+		foundAuthFlow = foundAuthFlow || row == "internal/apiservice/authflowvenue\tTestAuthFlowVenueOracle"
+	}
+	if !foundAuthFlow {
+		t.Errorf("a change in internal/auth/signedtoken did not select TestAuthFlowVenueOracle (selected %d row(s))", len(signed))
+	}
+	// A golden under the testdata of a linked package selects as well; a package nothing links does not.
+	golden, err, stderr := selected(t, root, "\x00", "internal/api/policy/testdata/x.json")
+	if err != nil || len(golden) != len(rows) {
+		t.Errorf("a file under internal/api/policy/testdata selected %d row(s), a Go file there %d (err %v)\n%s", len(golden), len(rows), err, stderr)
+	}
+	none, err, stderr := selected(t, root, "\x00", "internal/api/not-linked-by-any-venue-test/x.go")
+	if err != nil || len(none) != 0 {
+		t.Errorf("a package no venue test links selected %v (err %v)\n%s", none, err, stderr)
+	}
+}
+
+// TestAMatchIsNotLostOnALargeChangeSet holds that selection does not depend on the size of the change
+// set: a pipeline of `printf | grep -q` under pipefail (it needs more distinct directories than fit a 64 KB pipe, and the matching directory sorting before them) reports failure when grep stops reading at its
+// first match and the writer dies of SIGPIPE, so a large pull request selected nothing and the job read
+// a green no-op (round 1 of CHAOS-9935).
+func TestAMatchIsNotLostOnALargeChangeSet(t *testing.T) {
+	root := repoRoot(t)
+	paths := make([]string, 0, 20001)
+	for i := 0; i < 20000; i++ {
+		paths = append(paths, fmt.Sprintf("zdocs/generated-%05d/page.md", i))
+	}
+	paths = append([]string{"internal/api/policy/clienterror.go"}, paths...)
+	rows, err, stderr := selected(t, root, "\x00", paths...)
+	if err != nil {
+		t.Fatalf("--list failed: %v\n%s", err, stderr)
+	}
+	for _, row := range rows {
+		if row == "internal/apiservice\tTestVenueOracleCredentialRepos" {
+			return
+		}
+	}
+	t.Fatalf("a change in internal/api/policy among 20000 other paths selected %d row(s) and not TestVenueOracleCredentialRepos\n%s", len(rows), stderr)
+}
+
+// TestAChangeToAFileALinkedPackageEmbedsSelectsTheTestsThatLinkIt holds the embedded-resource half of the
+// closure (round 2 of CHAOS-9935): internal/auth/passwordpolicy embeds data/common_passwords.txt and the
+// admin venue server links it, but the file is in no package directory, so the package rule alone selected
+// nothing and the job read green.
+func TestAChangeToAFileALinkedPackageEmbedsSelectsTheTestsThatLinkIt(t *testing.T) {
+	root := repoRoot(t)
+	for _, changed := range []string{
+		"internal/auth/passwordpolicy/data/common_passwords.txt",
+		"internal/pgmigrate/sql/0139_refunds_write_first_idempotency_key.sql",
+	} {
+		rows, err, stderr := selected(t, root, "\x00", changed)
+		if err != nil {
+			t.Fatalf("--list failed: %v\n%s", err, stderr)
+		}
+		admin := false
+		for _, row := range rows {
+			admin = admin || strings.HasPrefix(row, "internal/apiservice/admin\t")
+		}
+		if !admin {
+			t.Errorf("a change to the embedded file %s did not select a test of internal/apiservice/admin (selected %d row(s))", changed, len(rows))
+		}
 	}
 }

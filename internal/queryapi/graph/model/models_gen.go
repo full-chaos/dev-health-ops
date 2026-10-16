@@ -981,6 +981,8 @@ type HomeSignal struct {
 	Attribution *SignalAttribution `json:"attribution,omitempty"`
 	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta.
 	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
+	// One sentence on where the signal's move appears largest ("Cycle Time appears to have moved most in A, B and C."), built from the display names of its top drivers with one hedge word. Null when the signal has no stated non-zero move, no driver has a name, or the signal is not a metric signal (risk, recommendation). Never a placeholder.
+	Driver *string `json:"driver,omitempty"`
 }
 
 type HomeTile struct {

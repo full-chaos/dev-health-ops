@@ -369,6 +369,11 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		}
 	}
 	metricSignals = AttachSignalAttribution(metricSignals, attribution)
+	// The caption (GraphQL only) is a decoration of a signal that is right without it: a failed read leaves
+	// the captions out, loudly, and never fails the request (REST Home shares this builder).
+	if err := attachDriverCaptions(ctx, chClient, f, orgID, now, startDay, endDay, compareStart, compareEnd, deltas, metricSignals); err != nil {
+		slog.Warn("home signal drivers: captions left out, the read failed", "err", err)
+	}
 
 	attachTeamNames(ctx, chClient, orgID, recommendationRows)
 	var recommendationSignals []Signal

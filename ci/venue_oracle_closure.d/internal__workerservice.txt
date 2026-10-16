@@ -147,6 +147,10 @@ internal/testsupport/pyoracle
 internal/testsupport/recordedfiles
 internal/testsupport/venueoracle
 internal/workitemcontract
+third_party/vendor/atlassian/atlassian
+third_party/vendor/atlassian/atlassian/graph
+third_party/vendor/atlassian/atlassian/graph/gen
+third_party/vendor/atlassian/atlassian/graph/mappers
 ~internal/api/recordvalidation/testdata
 ~internal/chmigrate/baseline
 ~internal/chmigrate/sql

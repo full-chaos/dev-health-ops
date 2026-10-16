@@ -407,6 +407,8 @@ def _run_select_step(tree: Path) -> tuple[subprocess.CompletedProcess[str], str]
             "BASE_SHA": base,
             "HEAD_SHA": head,
             "GITHUB_OUTPUT": str(output),
+            "VENUE_LEG": "1",
+            "VENUE_LEGS": "1",
         },
         capture_output=True,
         text=True,
@@ -514,7 +516,7 @@ def test_a_closure_file_that_is_empty_or_malformed_is_refused(tmp_path: Path) ->
     for body, message in (
         ("", "is empty"),
         ("\n", "has a line that is not a package directory"),
-        ("internal/a b\n", "has a line that is not a package directory"),
+        ("internal/a\x01b\n", "has a line that is not a package directory"),
         ("~\n", "has a line that is not a package directory"),
     ):
         file.write_text(body, encoding="utf-8")
@@ -533,3 +535,151 @@ def test_a_closure_file_that_is_empty_or_malformed_is_refused(tmp_path: Path) ->
         proc.returncode,
         proc.stderr[-300:],
     )
+
+
+def test_a_closure_line_with_a_space_or_a_comma_selects(tmp_path: Path) -> None:
+    """A directory the module owns may hold a space or a comma (an embed pattern allows both); the line is read whole."""
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    closure = tree / "ci" / "venue_oracle_closure.d"
+    closure.mkdir()
+    (closure / "internal__apiservice.txt").write_text(
+        "internal/dep_test\n~internal/dep_test/a,b\n~internal/dep_test/assets/a b\n",
+        encoding="utf-8",
+    )
+    for changed in (
+        "internal/dep_test/x.go",
+        "internal/dep_test/a,b/value.txt",
+        "internal/dep_test/assets/a b/value.txt",
+    ):
+        assert _selected(tree, changed) == [
+            ("internal/apiservice", "TestVenueOracleX")
+        ], changed
+    assert _selected(tree, "internal/dep_test/assets/ab/value.txt") == []
+
+
+def test_a_closure_path_that_is_a_directory_is_refused(tmp_path: Path) -> None:
+    """A closure file that is a directory (or unreadable) used to read as 'no closure' and select nothing."""
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    closure = tree / "ci" / "venue_oracle_closure.d"
+    (closure / "internal__apiservice.txt").mkdir(parents=True)
+    proc = _list_rc(tree)
+    assert proc.returncode != 0 and "not a readable regular file" in proc.stderr, (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+
+
+def _leg_rows(tree: Path, changed: Path, shard: int, count: int) -> list[str]:
+    proc, _ = _run_verb(
+        tree, "--changed", str(changed), "--list", str(shard), str(count)
+    )
+    assert proc.returncode == 0, proc.stderr
+    return [line for line in proc.stdout.splitlines() if line.startswith("SELECT\t")]
+
+
+def test_the_legs_of_a_change_set_partition_its_selection(tmp_path: Path) -> None:
+    """D6039a: `--changed FILE --list SHARD COUNT` hands each leg a slice of the selected rows; the slices are disjoint and
+    their union is the whole selection, whatever COUNT is (more legs than rows leaves some legs empty)."""
+    tree = _scratch_tree(
+        tmp_path,
+        {
+            "internal/a": ["TestVenueOracleA1", "TestVenueOracleA2"],
+            "internal/b": ["TestVenueOracleB"],
+            "internal/c": ["TestVenueOracleC"],
+            "internal/d": ["TestVenueOracleD"],
+        },
+    )
+    changed = tree / "changed.txt"
+    changed.write_text("internal/a/x.go\ninternal/b/x.go\ninternal/c/x.go\n")
+    whole = [
+        line
+        for line in _run_verb(tree, "--changed", str(changed), "--list")[
+            0
+        ].stdout.splitlines()
+        if line.startswith("SELECT\t")
+    ]
+    assert len(whole) == 4, whole
+    for count in (1, 2, 3, 7):
+        legs = [_leg_rows(tree, changed, shard, count) for shard in range(1, count + 1)]
+        flat = [row for leg in legs for row in leg]
+        assert sorted(flat) == sorted(whole), (count, legs)
+        assert len(flat) == len(set(flat)), (count, legs)
+    assert any(not _leg_rows(tree, changed, shard, 7) for shard in range(1, 8))
+
+
+def test_a_leg_with_an_empty_slice_is_a_green_no_op(tmp_path: Path) -> None:
+    tree = _scratch_tree(tmp_path, {"internal/a": ["TestVenueOracleA"]})
+    changed = tree / "changed.txt"
+    changed.write_text("internal/a/x.go\n")
+    empty = [s for s in (1, 2, 3) if not _leg_rows(tree, changed, s, 3)]
+    assert empty, "one row cannot fill three legs"
+    proc, _ = _run_verb(tree, "--changed", str(changed), str(empty[0]), "3")
+    assert proc.returncode == 0 and "nothing to run" in proc.stdout, (
+        proc.returncode,
+        proc.stdout[-300:],
+        proc.stderr[-300:],
+    )
+
+
+def test_a_leg_outside_one_to_count_is_refused_with_a_change_set(
+    tmp_path: Path,
+) -> None:
+    tree = _scratch_tree(tmp_path, {"internal/a": ["TestVenueOracleA"]})
+    changed = tree / "changed.txt"
+    changed.write_text("internal/a/x.go\n")
+    for args in (("0", "3"), ("4", "3"), ("x", "3")):
+        proc, _ = _run_verb(tree, "--changed", str(changed), "--list", *args)
+        assert proc.returncode != 0, args
+
+
+def test_the_run_of_a_leg_runs_only_its_slice(tmp_path: Path) -> None:
+    tree = _scratch_tree(
+        tmp_path,
+        {"internal/a": ["TestVenueOracleA"], "internal/b": ["TestVenueOracleB"]},
+    )
+    changed = tree / "changed.txt"
+    changed.write_text("internal/a/x.go\ninternal/b/x.go\n")
+    ran = []
+    for shard in (1, 2):
+        proc, _ = _run_verb(tree, "--changed", str(changed), str(shard), "2")
+        assert proc.returncode == 0, proc.stderr[-300:]
+        ran.append(
+            sorted(line for line in proc.stdout.splitlines() if "  RUN  " in line)
+        )
+    assert len(ran[0]) == 1 and len(ran[1]) == 1 and ran[0] != ran[1], ran
+
+
+def test_the_changed_job_matrix_holds_the_whole_registry_within_its_timeout() -> None:
+    """D6039a: a change that selects every row is the worst case. The legs of the matrix and the count each passes to the verb
+    agree, and the cost-balanced plan of the WHOLE registry over them fits the job timeout with room for setup."""
+    import yaml
+
+    job = yaml.safe_load(CHANGED_WORKFLOW.read_text(encoding="utf-8"))["jobs"][
+        "venue-oracles-changed"
+    ]
+    legs = job["strategy"]["matrix"]["shard"]
+    assert legs == list(range(1, len(legs) + 1)), legs
+    assert str(job["env"]["VENUE_LEGS"]) == str(len(legs))
+    assert job["env"]["VENUE_LEG"] == "${{ matrix.shard }}"
+    proc = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "ci" / "check_go.sh"),
+            "venue-oracle-plan",
+            str(len(legs)),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    seconds = [
+        float(line.split("\t")[3])
+        for line in proc.stdout.splitlines()
+        if line.startswith("#leg\t")
+    ]
+    assert len(seconds) == len(legs), proc.stdout[-400:]
+    limit = job["timeout-minutes"] * 60 - 600
+    assert max(seconds) <= limit, (max(seconds), limit)

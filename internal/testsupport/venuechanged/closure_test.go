@@ -1,7 +1,10 @@
 package venuechanged
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -38,13 +41,119 @@ func closureFile(root, pkg string) string {
 	return filepath.Join(root, filepath.FromSlash(closureDir), strings.ReplaceAll(pkg, "/", "__")+".txt")
 }
 
-// computeClosures asks the Go toolchain for the packages each test binary links: the in-module
-// directories of `go list -test` Deps of the package's `.test` binary (its own, in-package and
-// external test files included), minus the package's own directory (the package rule selects
-// that one).
+// listedPackage is the part of `go list -json` the derivation reads. Paths are taken from the JSON as they are: no field is
+// split on a delimiter a path may contain, and no directory is derived from an import path by editing its text.
+type listedPackage struct {
+	ImportPath      string
+	Dir             string
+	ForTest         string
+	Deps            []string
+	EmbedFiles      []string
+	TestEmbedFiles  []string
+	XTestEmbedFiles []string
+}
+
+func decodeGoList(r io.Reader) ([]listedPackage, error) {
+	var out []listedPackage
+	decoder := json.NewDecoder(r)
+	for {
+		var pkg listedPackage
+		if err := decoder.Decode(&pkg); err == io.EOF {
+			return out, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("read go list -json: %w", err)
+		}
+		out = append(out, pkg)
+	}
+}
+
+// closuresFromListing derives, for each venue package directory (relative to root), the closure lines of its test binary: the
+// directory of every package the `.test` binary links that lies under root (so a repo-local replacement module counts, a module
+// in the cache or the toolchain does not), minus the package's own directory, then `~dir` for every directory below a linked
+// package that holds a file the package or its tests embed. Directories come from the package's Dir, never from its import path.
+func closuresFromListing(root string, pkgs []string, listing []listedPackage) (map[string][]string, error) {
+	byImport := map[string]listedPackage{}
+	for _, pkg := range listing {
+		byImport[pkg.ImportPath] = pkg
+	}
+	rel := func(dir string) (string, bool) {
+		r, err := filepath.Rel(root, dir)
+		if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+			return "", false
+		}
+		return filepath.ToSlash(r), true
+	}
+	embedsOf := map[string]map[string]bool{}
+	for _, pkg := range listing {
+		dir, ok := rel(pkg.Dir)
+		if !ok {
+			continue
+		}
+		for _, files := range [][]string{pkg.EmbedFiles, pkg.TestEmbedFiles, pkg.XTestEmbedFiles} {
+			for _, file := range files {
+				under := path.Dir(filepath.ToSlash(file))
+				if under == "." {
+					continue
+				}
+				if embedsOf[dir] == nil {
+					embedsOf[dir] = map[string]bool{}
+				}
+				embedsOf[dir][dir+"/"+under] = true
+			}
+		}
+	}
+	closures := map[string][]string{}
+	for _, own := range pkgs {
+		var main *listedPackage
+		for i := range listing {
+			dir, ok := rel(listing[i].Dir)
+			if ok && dir == own && listing[i].ForTest == "" && strings.HasSuffix(listing[i].ImportPath, ".test") {
+				main = &listing[i]
+			}
+		}
+		if main == nil {
+			return nil, fmt.Errorf("go list -test gave no test binary for the venue package %s", own)
+		}
+		dirs := map[string]bool{}
+		embedded := map[string]bool{}
+		linked := []string{own}
+		for _, dep := range main.Deps {
+			pkg, ok := byImport[dep]
+			if !ok {
+				return nil, fmt.Errorf("the test binary of %s links %s, which go list -deps did not list", own, dep)
+			}
+			dir, ok := rel(pkg.Dir)
+			if !ok || dir == own {
+				continue
+			}
+			dirs[dir] = true
+			linked = append(linked, dir)
+		}
+		for _, dir := range linked {
+			for under := range embedsOf[dir] {
+				embedded["~"+under] = true
+			}
+		}
+		var lines []string
+		for dir := range dirs {
+			lines = append(lines, dir)
+		}
+		sort.Strings(lines)
+		var tail []string
+		for line := range embedded {
+			tail = append(tail, line)
+		}
+		sort.Strings(tail)
+		closures[own] = append(lines, tail...)
+	}
+	return closures, nil
+}
+
+// computeClosures asks the Go toolchain for the packages each test binary links (`go list -json -deps -test`, with the
+// integration tag the venue tests are built under) and derives the closure lines from it.
 func computeClosures(t *testing.T, root string, pkgs []string) map[string][]string {
 	t.Helper()
-	args := []string{"list", "-mod=readonly", "-tags=integration", "-test", "-f", `{{.ImportPath}}{{"\t"}}{{join .Deps " "}}`}
+	args := []string{"list", "-mod=readonly", "-tags=integration", "-json", "-deps", "-test"}
 	for _, pkg := range pkgs {
 		args = append(args, "./"+pkg)
 	}
@@ -57,49 +166,15 @@ func computeClosures(t *testing.T, root string, pkgs []string) map[string][]stri
 		if exit, ok := err.(*exec.ExitError); ok {
 			detail = string(exit.Stderr)
 		}
-		t.Fatalf("go list -test over %d venue package(s): %v\n%s", len(pkgs), err, detail)
+		t.Fatalf("go list -json -deps -test over %d venue package(s): %v\n%s", len(pkgs), err, detail)
 	}
-	embedDirs := embeddedDirs(t, root, pkgs)
-	closures := map[string][]string{}
-	for _, line := range strings.Split(string(out), "\n") {
-		importPath, deps, ok := strings.Cut(line, "\t")
-		if !ok || !strings.HasSuffix(importPath, ".test") {
-			continue
-		}
-		pkg := strings.TrimPrefix(strings.TrimSuffix(importPath, ".test"), modulePrefix)
-		set := map[string]bool{}
-		for _, dep := range strings.Fields(deps) {
-			rel, in := strings.CutPrefix(dep, modulePrefix)
-			if !in || rel == pkg {
-				continue
-			}
-			// "pkg [pkg.test]" style test variants are not in Deps; an external test package
-			// ("pkg_test") maps to its directory.
-			rel = strings.TrimSuffix(rel, "_test")
-			if rel == pkg {
-				continue
-			}
-			set[rel] = true
-		}
-		var list []string
-		for dir := range set {
-			list = append(list, dir)
-		}
-		sort.Strings(list)
-		// "~dir" lines: a directory below a linked package holding a file it embeds (go:embed of
-		// sql/*.sql, templates/, data/): a changed file anywhere under it changes the binary.
-		prefixes := map[string]bool{}
-		for _, dir := range append([]string{pkg}, list...) {
-			for _, under := range embedDirs[dir] {
-				prefixes["~"+under] = true
-			}
-		}
-		var embedded []string
-		for line := range prefixes {
-			embedded = append(embedded, line)
-		}
-		sort.Strings(embedded)
-		closures[pkg] = append(list, embedded...)
+	listing, err := decodeGoList(bytes.NewReader(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closures, err := closuresFromListing(root, pkgs, listing)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := validateClosures(pkgs, closures); err != nil {
 		t.Fatal(err)
@@ -133,64 +208,6 @@ func validateClosures(pkgs []string, closures map[string][]string) error {
 		return fmt.Errorf("no venue package has an embedded-file directory (~dir): the EmbedFiles fields of go list were not read")
 	}
 	return nil
-}
-
-// embeddedDirs maps a package directory to the directories below it that hold a file the package
-// (or its tests) embeds: `go list -deps -test` EmbedFiles, TestEmbedFiles and XTestEmbedFiles, which
-// are relative to the package directory. A file in the package directory itself needs no entry (the
-// package rule covers every file directly in it).
-func embeddedDirs(t *testing.T, root string, pkgs []string) map[string][]string {
-	t.Helper()
-	args := []string{"list", "-mod=readonly", "-tags=integration", "-test", "-deps", "-f",
-		`{{.ImportPath}}{{"|"}}{{join .EmbedFiles ","}}{{"|"}}{{join .TestEmbedFiles ","}}{{"|"}}{{join .XTestEmbedFiles ","}}`}
-	for _, pkg := range pkgs {
-		args = append(args, "./"+pkg)
-	}
-	cmd := exec.Command("go", args...)
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "GOWORK=off")
-	out, err := cmd.Output()
-	if err != nil {
-		detail := ""
-		if exit, ok := err.(*exec.ExitError); ok {
-			detail = string(exit.Stderr)
-		}
-		t.Fatalf("go list -deps (embedded files): %v\n%s", err, detail)
-	}
-	sets := map[string]map[string]bool{}
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Split(line, "|")
-		if len(fields) != 4 {
-			continue
-		}
-		importPath, _, _ := strings.Cut(fields[0], " [")
-		rel, ok := strings.CutPrefix(importPath, modulePrefix)
-		if !ok {
-			continue
-		}
-		rel = strings.TrimSuffix(rel, ".test")
-		rel = strings.TrimSuffix(rel, "_test")
-		for _, group := range fields[1:] {
-			for _, file := range strings.Split(group, ",") {
-				dir := path.Dir(file)
-				if file == "" || dir == "." {
-					continue
-				}
-				if sets[rel] == nil {
-					sets[rel] = map[string]bool{}
-				}
-				sets[rel][rel+"/"+dir] = true
-			}
-		}
-	}
-	result := map[string][]string{}
-	for rel, set := range sets {
-		for dir := range set {
-			result[rel] = append(result[rel], dir)
-		}
-		sort.Strings(result[rel])
-	}
-	return result
 }
 
 // committedClosures reads ci/venue_oracle_closure.d/ (package dir -> dependency dirs).

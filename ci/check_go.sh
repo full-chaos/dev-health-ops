@@ -139,7 +139,7 @@ usage() {
          A slice that selects zero rows fails; no arguments runs every row.
          Each leg logs its predicted and actual test seconds against
          VENUE_LEG_BUDGET_SECONDS (default 1800) and warns when over.
-  venue-oracles --changed FILE [--list]
+  venue-oracles --changed FILE [--list] [SHARD COUNT]
          (CHAOS-7653) Run only the registry rows of the packages that the paths in
          FILE (NUL- or newline-separated, repo-relative) lie in: the form the
          pull_request job runs, with a cost bounded by the packages a PR changes.
@@ -148,6 +148,11 @@ usage() {
          test too, and so does a file directly in a package of the dependency
          closure (ci/venue_oracle_closure.d/, CHAOS-9935). No row selected is a loud no-op. With --list print the selected rows
          (SELECT, package, test, tab-separated) and run nothing.
+         With SHARD COUNT (D6039a, CHAOS-9935) only the SHARD-th of COUNT
+         cost-balanced slices of the SELECTED rows (ci/venue_oracle_shard.awk,
+         weights ci/venue_oracle_weights.d/): the hosted job runs COUNT matrix
+         legs, each within its time limit however many rows a change selects. A
+         leg whose slice is empty is a plain no-op.
   venue-oracle-plan COUNT
          Print the cost-balanced plan of COUNT legs: every run row with its leg
          and weight, then one "#leg" line per leg (rows, predicted seconds).
@@ -691,8 +696,13 @@ venue_oracle_run_rows() {
 # venue_oracle_assign SHARD COUNT [plan]: the shard's rows ("<package dir>\t<test>"),
 # or with `plan` every row with its shard and weight plus one "#leg" line per shard.
 venue_oracle_assign() {
+  venue_oracle_run_rows | venue_oracle_assign_stdin "$@"
+}
+# venue_oracle_assign_stdin SHARD COUNT [plan]: the same assignment over the "<package dir>\t<test>" rows on stdin
+# (the rows a change set selected, for `--changed FILE SHARD COUNT`).
+venue_oracle_assign_stdin() {
   local shard="$1" count="$2" plan="${3:-}"
-  venue_oracle_run_rows | awk -v shard="${shard}" -v count="${count}" -v plan="${plan:+1}" \
+  awk -v shard="${shard}" -v count="${count}" -v plan="${plan:+1}" \
     -v weights=<(venue_oracle_weight_rows) -v defw="${VENUE_ORACLE_DEFAULT_WEIGHT}" -f "${ROOT}/ci/venue_oracle_shard.awk"
 }
 # venue_oracle_weight_rows prints every weight row (the concatenation of the weights
@@ -744,12 +754,25 @@ check_venue_oracle_plan() {
 # With NAME it also succeeds when a changed path is equal to, or under, a path that
 # ci/venue_oracle_triggers.d/ declares for the test NAME of DIR (CHAOS-9172): the code
 # outside its package whose behaviour that venue test compares.
+# vo_grep / vo_awk: a match test whose own failure (rc above 1: unreadable file, bad program) is an error, never "no match".
+vo_grep() {
+  local rc=0
+  grep "$@" || rc=$?
+  [ "${rc}" -le 1 ] || die "venue-oracles --changed: grep failed (rc ${rc}) reading the change set or a selection file"
+  return "${rc}"
+}
+vo_awk() {
+  local rc=0
+  awk "$@" || rc=$?
+  [ "${rc}" -le 1 ] || die "venue-oracles --changed: awk failed (rc ${rc}) reading the change set or a selection file"
+  return "${rc}"
+}
 venue_oracle_changed_selects() {
   local escaped pkg name path
   escaped="$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')"
   # grep -q stops at its first match: it reads a process substitution, never a pipe whose writer would die of SIGPIPE and
   # fail the whole pipeline under pipefail on a large change set (the match was lost and the run read as "nothing to run").
-  if grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+  if vo_grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
     return 0
   fi
   # The dependency closure of the package's test binary (ci/venue_oracle_closure.d/, CHAOS-9935): a
@@ -758,17 +781,17 @@ venue_oracle_changed_selects() {
   # hide a dependency. The directory is absent in a scratch tree that holds no Go module.
   if [ -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
     local closure_file="${ROOT}/ci/venue_oracle_closure.d/${1//\//__}.txt"
-    [ -r "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is missing; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+    [ -f "${closure_file}" ] && [ -r "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is missing or not a readable regular file; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
     # a file that is empty, or holds a line that is not `<dir>` or `~<dir>`, was not written by the generator: refuse it
     [ -s "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is empty; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
-    if grep -qvE '^~?[A-Za-z0-9_][A-Za-z0-9_./-]*$' "${closure_file}"; then
+    if vo_grep -qvE '^(~[^[:cntrl:]]+|[^~[:cntrl:]][^[:cntrl:]]*)$' "${closure_file}"; then
       die "venue-oracles --changed: ${closure_file} has a line that is not a package directory or ~directory; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
     fi
-    if [ -n "${VENUE_CHANGED_DIRS:-}" ] && grep -qxFf "${closure_file}" < <(printf '%s\n' "${VENUE_CHANGED_DIRS}"); then
+    if [ -n "${VENUE_CHANGED_DIRS:-}" ] && vo_grep -qxFf "${closure_file}" < <(printf '%s\n' "${VENUE_CHANGED_DIRS}"); then
       return 0
     fi
     # "~dir" lines: a changed file anywhere under a directory a linked package embeds files from.
-    if awk 'FNR == NR { if (substr($0, 1, 1) == "~") prefix[substr($0, 2) "/"] = 1; next }
+    if vo_awk 'FNR == NR { if (substr($0, 1, 1) == "~") prefix[substr($0, 2) "/"] = 1; next }
             { for (p in prefix) if (index($0, p) == 1) { found = 1; exit } }
             END { exit !found }' "${closure_file}" <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
       return 0
@@ -778,7 +801,7 @@ venue_oracle_changed_selects() {
   while IFS=$'\t' read -r pkg name path; do
     { [ "${pkg}" = "$1" ] && [ "${name}" = "$2" ]; } || continue
     escaped="$(printf '%s' "${path}" | sed 's/[][\\.*^$/]/\\&/g')"
-    if grep -qE "^${escaped}(/.*)?$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+    if vo_grep -qE "^${escaped}(/.*)?$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
       return 0
     fi
   done <<< "${VENUE_TRIGGER_ROWS:-}"
@@ -789,7 +812,6 @@ check_venue_oracles() {
   local shard="${1:-}" shard_count="${2:-}" changed="${VENUE_CHANGED_FILE:-}"
   if [ -n "${changed}" ]; then
     [ -r "${changed}" ] || die "venue-oracles --changed: ${changed} is missing or unreadable"
-    [ -z "${shard}${shard_count}" ] || die "venue-oracles --changed does not combine with SHARD COUNT"
   fi
   if [ -n "${changed}" ]; then
     # CHAOS-9935: in the real tree (it holds the generator of the closure files) a missing closure directory is an
@@ -810,6 +832,26 @@ check_venue_oracles() {
     { [ "${shard}" -ge 1 ] && [ "${shard_count}" -ge 1 ] && [ "${shard}" -le "${shard_count}" ]; } \
       || die "venue-oracles shard ${shard} is outside 1..${shard_count}"
   fi
+  # `--changed FILE SHARD COUNT`: this leg's slice of the rows the change set selects (CHAOS-9935). The legs read the same
+  # change set and registry, so each computes the same cost-balanced partition of the same selection; a leg whose slice is
+  # empty is a plain no-op (a small change set selects fewer rows than there are legs).
+  local changed_slice=""
+  if [ -n "${changed}" ] && [ -n "${shard}" ]; then
+    local sel_rows sel_dir sel_name
+    sel_rows="$(venue_oracle_run_rows)" || die "venue-oracles --changed: the registry ci/venue_oracle_registry.d/ could not be read (see above)"
+    while IFS=$'\t' read -r sel_dir sel_name; do
+      [ -n "${sel_dir}" ] || continue
+      if venue_oracle_changed_selects "${sel_dir}" "${sel_name}"; then
+        changed_slice+="${sel_dir}"$'\t'"${sel_name}"$'\n'
+      fi
+    done <<< "${sel_rows}"
+    if [ -n "${changed_slice}" ]; then
+      changed_slice="$(printf '%s' "${changed_slice}" | venue_oracle_assign_stdin "${shard}" "${shard_count}")" \
+        || die "venue-oracles --changed: could not plan the legs (see above)"
+    fi
+    printf 'venue-oracles: leg %s/%s of the change set takes %d of %d selected row(s)\n' "${shard}" "${shard_count}" \
+      "$(printf '%s' "${changed_slice}" | awk 'NF' | wc -l)" "$(printf '%s' "${sel_rows}" | awk 'NF' | wc -l | tr -d ' ')" >&2
+  fi
   if [ -n "${changed}" ] && [ "${VENUE_CHANGED_LIST_ONLY:-}" = "--list" ]; then
     # CHAOS-7653: print the registry rows the changed paths select and run nothing (no
     # Go, jq, containers or Python needed). The registry-against-tree validation is the
@@ -822,7 +864,8 @@ check_venue_oracles() {
     [ -n "$(printf '%s\n' "${list_rows}" | awk '$3 == "run"')" ] \
       || die "venue-oracles --changed: ci/venue_oracle_registry.d/ holds no run row, so nothing could ever be selected"
     while read -r list_dir list_name list_kind; do
-      if [ "${list_kind}" = run ] && venue_oracle_changed_selects "${list_dir}" "${list_name}"; then
+      if [ "${list_kind}" = run ] && venue_oracle_changed_selects "${list_dir}" "${list_name}" \
+          && { [ -z "${shard}" ] || grep -qxF -- "${list_dir}"$'\t'"${list_name}" <<< "${changed_slice}"; }; then
         printf 'SELECT\t%s\t%s\n' "${list_dir}" "${list_name}"
       fi
     done <<< "${list_rows}"
@@ -841,7 +884,10 @@ check_venue_oracles() {
   local -a vo_dirs=() vo_names=() local_only=()
   leg_started="$(date +%s)"
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-oracles.XXXXXX")"
-  if [ -n "${shard}" ]; then
+  if [ -n "${shard}" ] && [ -n "${changed}" ]; then
+    slice_file="${proof_dir}/slice.tsv"
+    printf '%s\n' "${changed_slice}" > "${slice_file}"
+  elif [ -n "${shard}" ]; then
     # This leg's rows, from the cost-balanced plan; and what the plan predicts for it.
     slice_file="${proof_dir}/slice.tsv"
     venue_oracle_assign "${shard}" "${shard_count}" > "${slice_file}" \
@@ -876,7 +922,8 @@ check_venue_oracles() {
         pkg_has_run=1
         registered_runs=$((registered_runs + 1))
         if [ -n "${changed}" ]; then
-          if venue_oracle_changed_selects "${dir}" "${name}"; then
+          if venue_oracle_changed_selects "${dir}" "${name}" \
+              && { [ -z "${shard}" ] || grep -qxF -- "${dir}"$'\t'"${name}" "${slice_file}"; }; then
             names="${names:+${names}|}${name}"
             total=$((total + 1))
           fi
@@ -3018,10 +3065,17 @@ case "${1:-all}" in
     ;;
   venue-oracles)
     if [ "${2:-}" = "--changed" ]; then
-      { [ "$#" -eq 3 ] || { [ "$#" -eq 4 ] && [ "$4" = "--list" ]; }; } || die "venue-oracles --changed accepts FILE [--list]"
+      local_usage="venue-oracles --changed accepts FILE [--list] [SHARD COUNT]"
+      [ "$#" -ge 3 ] || die "${local_usage}"
       VENUE_CHANGED_FILE="$3"
-      VENUE_CHANGED_LIST_ONLY="${4:-}"
-      check_venue_oracles
+      VENUE_CHANGED_LIST_ONLY=""
+      shift 3
+      if [ "${1:-}" = "--list" ]; then
+        VENUE_CHANGED_LIST_ONLY="--list"
+        shift
+      fi
+      { [ "$#" -eq 0 ] || [ "$#" -eq 2 ]; } || die "${local_usage}"
+      check_venue_oracles "${1:-}" "${2:-}"
     else
       { [ "$#" -eq 1 ] || [ "$#" -eq 3 ]; } || die "venue-oracles accepts no arguments, or SHARD COUNT (1-based shard of COUNT), or --changed FILE [--list]"
       check_venue_oracles "${2:-}" "${3:-}"

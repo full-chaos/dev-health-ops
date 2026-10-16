@@ -1315,7 +1315,7 @@ controls: a link that is gone and an explicit empty list are closed).
 >      (`work_graph_deployment_incident_edges` of the best tier, native > explicit_text > heuristic, then
 >      `deployments.pull_request_number`), owned by the primary team of the work item linked to it in
 >      `work_graph_issue_pr` (best tier only: a native link shadows a lower one, for the owner and for the pull request's
->      AI bucket and work type alike; the work item's attribution row of the pull request's own repository wins, and
+>      AI bucket and work type alike, and the day's pull request facts read the same best-tier link, so an incident and its triggering pull request share one row; the work item's attribution row of the pull request's own repository wins, and
 >      rows of other repositories count only when they all name one team; a pull request whose best-tier links name no
 >      team or several has no owner);
 >   3. the main owner of the repository. Among tied main owners (D5990) the incident goes to the tied team that owned

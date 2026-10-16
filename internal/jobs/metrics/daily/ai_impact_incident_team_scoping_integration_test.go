@@ -76,11 +76,12 @@ func TestAIImpactIncidentTeamScopingAgainstRealClickHouse(t *testing.T) {
 		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type,
     source, is_primary, specificity, priority, share, valid_from, valid_to, updated_at) VALUES
 ('` + orgID + `', 'github', 'team-t1', toUUID('` + r5 + `'), 'acme/r5', 'exact', 'inferred', 1, 10, 0, 0.5, ` + ts + `, NULL, ` + ts + `),
-('` + orgID + `', 'github', 'team-t2', toUUID('` + r5 + `'), 'acme/r5', 'exact', 'inferred', 1, 10, 0, 0.5, ` + ts + `, NULL, ` + ts + `)`,
+('` + orgID + `', 'github', 'team-t2', toUUID('` + r5 + `'), 'acme/r5', 'exact', 'inferred', 1, 10, 0, 0.5, ` + ts + `, NULL, ` + ts + `),
+('` + orgID + `', 'github', 'team-m', toUUID('` + r6 + `'), 'acme/r6', 'exact', 'inferred', 1, 10, 0, 1, ` + ts + `, NULL, ` + ts + `)`,
 		`INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, additions, deletions,
     changed_files, changes_requested_count, reviews_count, last_synced, org_id) VALUES ` +
 			pr(r1, 1, "2026-10-01 00:00:00") + `,` + pr(r2, 1, "2026-10-01 00:00:00") + `,` + pr(r4, 5, "2026-10-01 00:00:00") + `,` +
-			pr(r5, 900, "2026-10-03 00:30:00") + `,` + pr(r6, 60, "2026-10-01 00:00:00"),
+			pr(r5, 900, "2026-10-03 00:30:00") + `,` + pr(r6, 60, "2026-10-03 02:00:00"),
 		// 600 pull requests of team-t1 merged after the incident, the same day.
 		`INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, additions, deletions,
     changed_files, changes_requested_count, reviews_count, last_synced, org_id)
@@ -166,6 +167,21 @@ FROM ai_impact_metrics_daily FINAL WHERE org_id = ? AND day = '2026-10-03' AND i
 			t.Fatal(err)
 		}
 		got[key] += count
+	}
+	// The pull request that triggered the incident is a fact of the same day:
+	// its own row (bucket and work type of the best link tier) carries the
+	// incident's denominator, not the lower-tier link's classification.
+	var triggerPRs, lowerTierPRs float64
+	if err := conn.QueryRow(ctx, `
+SELECT sumIf(prs_total, work_type = 'story' AND attribution_bucket = 'ai_assisted'),
+       sumIf(prs_total, work_type = 'bug' OR attribution_bucket = 'agent_created')
+FROM ai_impact_metrics_daily FINAL
+WHERE org_id = ? AND day = '2026-10-03' AND team_id = 'team-m' AND repo_id = toUUID('`+r6+`')`, orgID).
+		Scan(&triggerPRs, &lowerTierPRs); err != nil {
+		t.Fatal(err)
+	}
+	if triggerPRs != 1 || lowerTierPRs != 0 {
+		t.Errorf("triggering PR facts: story/ai_assisted prs_total %v (want 1), lower-tier bug/agent_created prs_total %v (want 0)", triggerPRs, lowerTierPRs)
 	}
 	want := map[rowKey]float64{
 		{"team-a", r1, "pull_request", "unknown"}: 1,

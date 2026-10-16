@@ -379,6 +379,27 @@ func gitlabTeamsRules() map[string]gitlabTeamsRule {
 			}
 			return ""
 		}, why: "only the admin delete sets the time of a delete; a row a sync writes holds none, which is also what brings a deleted team back at its next sync"},
+		"provider_team_id": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			none := func(value string) bool { return value == "" || value == "<NULL>" }
+			if !none(py["provider_team_id"]) || gr["provider_team_id"] != fmt.Sprint(sc.group.ID) {
+				return fmt.Sprintf("provider_team_id: python %q (no such column), go %q (want the group's id %v)", py["provider_team_id"], gr["provider_team_id"], sc.group.ID)
+			}
+			return ""
+		}, why: "legacy rows carry no provider id; the catalog stores the group's own immutable id (CHAOS-9432)"},
+		"provider_name": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			none := func(value string) bool { return value == "" || value == "<NULL>" }
+			if !none(py["provider_name"]) || gr["provider_name"] != strings.TrimSpace(sc.group.Name) {
+				return fmt.Sprintf("provider_name: python %q (no such column), go %q (want the group's name %q)", py["provider_name"], gr["provider_name"], sc.group.Name)
+			}
+			return ""
+		}, why: "legacy rows carry no provider name; the catalog stores the name the provider reports (CHAOS-9432)"},
+		"gone_at": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			none := func(value string) bool { return value == "" || value == "<NULL>" }
+			if !none(py["gone_at"]) || !none(gr["gone_at"]) {
+				return fmt.Sprintf("gone_at: python %q (no such column), go %q (want no value: a listed team is not gone)", py["gone_at"], gr["gone_at"])
+			}
+			return ""
+		}, why: "only a run that proves a team gone sets it (CHAOS-9432); a team the sync lists holds none"},
 		"created_at": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
 			if py["created_at"] != "" && py["created_at"] != "<NULL>" || gr["created_at"] == "" || gr["created_at"] > gr["updated_at"] {
 				return fmt.Sprintf("created_at: python %q (no such column), go %q (want a time no later than its updated_at %q)", py["created_at"], gr["created_at"], gr["updated_at"])

@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -55,9 +56,11 @@ const (
 // GET /orgs/{org}/teams (and the per-team detail fetch is never needed: the
 // org-teams list endpoint already carries slug/name/description).
 type githubTeamPayload struct {
-	Slug        string  `json:"slug"`
-	Name        string  `json:"name"`
-	Description *string `json:"description"`
+	// ID is the team's immutable GitHub id: it survives a rename (a new slug).
+	ID          json.Number `json:"id"`
+	Slug        string      `json:"slug"`
+	Name        string      `json:"name"`
+	Description *string     `json:"description"`
 }
 
 // githubTeamRepoPayload is one element from
@@ -117,6 +120,10 @@ type githubTeamRow struct {
 	// behavior, not GitHub's API-native team hierarchy, is the byte-parity
 	// contract for this port.
 	ParentTeamID *string `json:"parent_team_id"`
+	// ProviderTeamID is the provider's immutable id of the team and ProviderName its own
+	// name (teams.provider_team_id, provider_name); empty when the run did not read them.
+	ProviderTeamID string `json:"provider_team_id,omitempty"`
+	ProviderName   string `json:"provider_name,omitempty"`
 }
 
 // githubMembershipRow mirrors TeamMembershipRecord exactly as
@@ -264,6 +271,7 @@ func normalizeGitHubTeam(
 		Members: []string{}, ProjectKeys: []string{}, RepoPatterns: patterns, IsActive: 1,
 		UpdatedAt: normalizedAt, OrgID: orgID, Provider: githubTeamCatalogProvider,
 		NativeTeamKey: &nativeTeamKey, ParentTeamID: nil,
+		ProviderTeamID: payload.ID.String(), ProviderName: strings.TrimSpace(payload.Name),
 	}, nil
 }
 

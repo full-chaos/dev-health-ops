@@ -85,9 +85,9 @@ func TestWriteTeamsCarriesCreatedAt(t *testing.T) {
 		t.Helper()
 		for _, row := range conn.batch.appended {
 			if row[0] == id {
-				created, ok := row[len(row)-1].(time.Time)
+				created, ok := row[len(row)-4].(time.Time)
 				if !ok {
-					t.Fatalf("%s: last value is %T, want created_at", id, row[len(row)-1])
+					t.Fatalf("%s: last value is %T, want created_at", id, row[len(row)-4])
 				}
 				return created
 			}

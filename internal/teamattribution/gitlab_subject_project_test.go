@@ -47,22 +47,57 @@ func TestAGitLabItemAtAReusedPathJoinsNothingOfTheNewOwner(t *testing.T) {
 	}
 }
 
-func TestAGitLabItemWithACatalogIdAnswersRepoNameJoinsByItsPath(t *testing.T) {
+func TestAGitLabItemAnswersNameJoinsByEveryPathOfItsRepo(t *testing.T) {
 	subject := gitlabSubject("org:gitlab:123", "acme/api")
-	if got := GitLabProjectName(subject); got != "acme/api" {
-		t.Fatalf("name = %q, want the project_key", got)
+	subject.GitLabPaths = []string{"platform/api-v2", "acme/api"}
+	got := GitLabProjectNames(subject)
+	if len(got) != 2 || got[0] != "platform/api-v2" || got[1] != "acme/api" {
+		t.Fatalf("names = %v, want the current and the minted path once each", got)
 	}
 	legacy := gitlabSubject("acme/api", "")
 	legacy.ProjectKey = nil
-	if got := GitLabProjectName(legacy); got != "acme/api" {
-		t.Fatalf("name of an item that holds the path in project_id = %q, want the path", got)
+	if got := GitLabProjectNames(legacy); len(got) != 1 || got[0] != "acme/api" {
+		t.Fatalf("names of an item that holds the path in project_id = %v, want the path", got)
 	}
 	other := subject
 	other.Provider = "github"
-	if got := GitLabProjectName(other); got != "org:gitlab:123" {
-		t.Fatalf("name of a non-GitLab item = %q, want its project_id", got)
+	if got := GitLabProjectNames(other); len(got) != 1 || got[0] != "org:gitlab:123" {
+		t.Fatalf("names of a non-GitLab item = %v, want its project_id only", got)
 	}
 }
+
+func manualRepoRuleTeam(provider, scope string, subject GithubWorkItemDerivationSubject) string {
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+		Teams:           []GithubWorkItemDerivationTeamFact{{Provider: provider, TeamID: "rule-team"}},
+		ManualFallbacks: []GithubWorkItemDerivationManualFallback{{Provider: provider, ScopeType: "repo", ScopeID: scope, TeamID: "rule-team", Priority: 1}},
+	})
+	for _, candidate := range derived.ManualCandidates(subject) {
+		return GithubWorkItemDerivationStringValue(candidate.TeamID)
+	}
+	return ""
+}
+
+// A manual repo rule written with the new path and one written with the old
+// path both match a renamed project; a GitHub repo of the same slug matches
+// neither.
+func TestAManualRepoRuleMatchesARenamedGitLabProjectByEitherPath(t *testing.T) {
+	renamed := gitlabSubject("org:gitlab:123", "acme/api")
+	renamed.GitLabPaths = []string{"platform/api-v2", "acme/api"}
+	for _, scope := range []string{"platform/api-v2", "acme/api"} {
+		if got := manualRepoRuleTeam("gitlab", scope, renamed); got != "rule-team" {
+			t.Errorf("rule on %q: team = %q, want rule-team", scope, got)
+		}
+	}
+	if got := manualRepoRuleTeam("gitlab", "acme/other", renamed); got != "" {
+		t.Errorf("rule on another path matched %q", got)
+	}
+	github := GithubWorkItemDerivationSubject{WorkItemID: "github:acme/api#1", Provider: "github", ProjectID: strPtrForTest("acme/api"), OrgID: "org"}
+	if got := manualRepoRuleTeam("gitlab", "acme/api", github); got != "" {
+		t.Errorf("a gitlab rule matched a GitHub repo of the same slug: %q", got)
+	}
+}
+
+func strPtrForTest(value string) *string { return &value }
 
 func TestAGitLabItemScopeIsItsPathNotItsCatalogId(t *testing.T) {
 	if got := WorkItemDerivationScope(gitlabSubject("org:gitlab:123", "acme/api")); got != "acme/api" {

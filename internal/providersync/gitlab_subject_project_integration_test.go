@@ -36,6 +36,9 @@ func TestAnchorGitLabSubjectProjectsOnARealStore(t *testing.T) {
 	if *stale.ProjectID != "org-acme:gitlab:123" || stale.ProjectKey == nil || *stale.ProjectKey != "acme/api" {
 		t.Fatalf("stale item = project_id %v, project_key %v; want org-acme:gitlab:123 and its old path", stale.ProjectID, stale.ProjectKey)
 	}
+	if want := []string{"platform/api-v2", "acme/api"}; len(stale.GitLabPaths) != 2 || stale.GitLabPaths[0] != want[0] || stale.GitLabPaths[1] != want[1] {
+		t.Fatalf("stale item paths = %v, want %v", stale.GitLabPaths, want)
+	}
 	if got := subjects["current"]; *got.ProjectID != "org-acme:gitlab:456" {
 		t.Fatalf("current item project_id = %s, want it untouched", *got.ProjectID)
 	}

@@ -1173,7 +1173,7 @@ func anchorGitLabOwnershipWorkItems(
 	for id := range repoSet {
 		repoIDs = append(repoIDs, id)
 	}
-	native, err := teamattribution.LoadGitLabNativeProjectIDsByRepo(ctx, conn, orgID, repoIDs)
+	native, err := teamattribution.LoadGitLabRepoRows(ctx, conn, orgID, repoIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -1182,8 +1182,8 @@ func anchorGitLabOwnershipWorkItems(
 		if item.Provider != "gitlab" || teamattribution.IsGitLabCatalogProjectID(item.ProjectID) {
 			continue
 		}
-		if id, ok := native[item.RepoID]; ok {
-			items[index].ProjectID = teamattribution.GitLabCatalogProjectIDString(orgID, id)
+		if row, ok := native[item.RepoID]; ok && row.NativeProjectID != "" {
+			items[index].ProjectID = teamattribution.GitLabCatalogProjectIDString(orgID, row.NativeProjectID)
 			anchored++
 		}
 	}

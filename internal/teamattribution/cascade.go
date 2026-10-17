@@ -112,6 +112,10 @@ type GithubWorkItemDerivationSubject struct {
 	// docs/contribute/architecture/team-attribution.md §0.
 	Reporter *string
 	OrgID    string
+	// GitLabPaths are the paths the item's GitLab repos row answers to: its
+	// current path (repos.repo) and its minted path (repos.identity_path). Set
+	// by AnchorGitLabSubjectProjects; empty for every other provider.
+	GitLabPaths []string
 }
 
 type GithubWorkItemDerivationTeamFact struct {
@@ -811,7 +815,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 	)
 	bySource["repo_ownership"] = append(
 		bySource["repo_ownership"],
-		derived.repoByName[AttributionMapKey(subject.Provider, GitLabProjectName(subject))]...,
+		derived.repoByNames(subject)...,
 	)
 	// CHAOS-4321 (chris's ruling, 2026-08-26, refined 08:30 PT): membership-
 	// based attribution -- assignee AND author alike -- is a TWO-LAYER
@@ -1287,13 +1291,14 @@ func (derived GithubWorkItemDerivationContext) ManualCandidates(
 			// semantics: empty candidates are dropped and an empty scope_id
 			// can never match.
 			matched = GithubWorkItemDerivationScopeMatch(scopeID,
-				GithubWorkItemDerivationStringValue(subject.RepoID),
-				GitLabProjectName(subject))
+				append([]string{GithubWorkItemDerivationStringValue(subject.RepoID)}, GitLabProjectNames(subject)...)...)
 		case "project":
 			matched = GithubWorkItemDerivationScopeMatch(scopeID,
-				GithubWorkItemDerivationStringValue(subject.ProjectID),
-				GithubWorkItemDerivationStringValue(subject.ProjectKey),
-				WorkItemDerivationScope(subject))
+				append([]string{
+					GithubWorkItemDerivationStringValue(subject.ProjectID),
+					GithubWorkItemDerivationStringValue(subject.ProjectKey),
+					WorkItemDerivationScope(subject),
+				}, subject.GitLabPaths...)...)
 		case "member":
 			for _, assignee := range subject.Assignees {
 				// Python's member_ids drops falsy assignees, so a blank
@@ -2535,7 +2540,7 @@ func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 	owners := append(
 		append([]GithubWorkItemDerivationCandidate(nil),
 			derived.repoByID[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.RepoID))]...),
-		derived.repoByName[AttributionMapKey(subject.Provider, GitLabProjectName(subject))]...,
+		derived.repoByNames(subject)...,
 	)
 	if len(owners) == 0 {
 		return MembershipOwnershipReasonUnknown, !ownershipUnknownBlocksMembership

@@ -2,6 +2,7 @@ package workerservice
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issuepredges"
@@ -42,28 +43,42 @@ func (step *issuePRFallbackRetractionPreStep) Run(ctx context.Context, claim wor
 // issuePRFallbackInvariantPreStep checks the native-first rule after the last
 // step that writes work_graph_issue_pr (issue_pr_edges_heuristic): no
 // explicit_text or heuristic link may sit beside a native one. A breach is
-// reported (WARN, gauge, outcome) and not repaired, and it does not fail the
-// build, so the later graph steps still run.
+// not repaired: the step reports FAILED (a workgraph.StepFailure, so the build
+// evidence names it under failed_steps) with the counts, the service logs a
+// WARN and sets the gauge, and the later graph steps still run.
 type issuePRFallbackInvariantPreStep struct {
-	service *issuepredges.Service
+	checker fallbackInvariantChecker
+}
+
+type fallbackInvariantChecker interface {
+	CheckFallbackInvariant(ctx context.Context, orgID string) (issuepredges.InvariantOutcome, error)
 }
 
 func newIssuePRFallbackInvariantPreStep(service *issuepredges.Service) (*issuePRFallbackInvariantPreStep, error) {
 	if service == nil {
 		return nil, errWorkerDependencyUnavailable
 	}
-	return &issuePRFallbackInvariantPreStep{service: service}, nil
+	return &issuePRFallbackInvariantPreStep{checker: service}, nil
 }
 
 func (step *issuePRFallbackInvariantPreStep) Name() string { return "issue_pr_fallback_invariant" }
 
 func (step *issuePRFallbackInvariantPreStep) Run(ctx context.Context, claim workgraph.Claim) (map[string]any, error) {
-	outcome, err := step.service.CheckFallbackInvariant(ctx, claim.Request.OrganizationID)
+	outcome, err := step.checker.CheckFallbackInvariant(ctx, claim.Request.OrganizationID)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
-		"links_read":             outcome.LinksRead,
-		"fallback_beside_native": outcome.Beside.Total,
-	}, nil
+	fragment := map[string]any{
+		"links_read":                 outcome.LinksRead,
+		"fallback_beside_native":     outcome.Beside.Total,
+		"beside_native_pull_request": outcome.Beside.ByPullRequest,
+		"beside_native_issue":        outcome.Beside.ByIssue,
+	}
+	if outcome.Beside.Total > 0 {
+		return nil, &workgraph.StepFailure{
+			Reason:   fmt.Sprintf("%d explicit_text or heuristic work_graph_issue_pr rows sit beside a native link", outcome.Beside.Total),
+			Evidence: fragment,
+		}
+	}
+	return fragment, nil
 }

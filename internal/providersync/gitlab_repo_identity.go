@@ -11,6 +11,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -154,9 +155,11 @@ func resolveGitLabRepoIdentity(
 	}
 	identity, kind, err := decideGitLabRepoIdentity(projectID, currentPath, rows)
 	if err != nil {
+		errorClass, errorType := logging.ErrorClass(err), logging.ErrorType(err) // never the error text (CHAOS-7933)
 		slog.Default().WarnContext(ctx, "gitlab_repo_identity_unresolved",
 			"org_id", claim.OrgID, "unit_id", claim.ID, "dataset", claim.Dataset,
-			"gitlab_project_id", projectID, "stored_rows", len(rows), "error", err)
+			"gitlab_project_id", projectID, "stored_rows", len(rows),
+			"error_class", errorClass, "error_type", errorType)
 		return GitLabRepoIdentity{}, err
 	}
 	slog.Default().DebugContext(ctx, "gitlab_repo_identity",

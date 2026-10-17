@@ -636,7 +636,7 @@ func investmentContextFor(orgID string, dimensions []Dimension, forceTeamJoin, r
 		// ClickHouse implicitly promotes a Date value to midnight UTC
 		// DateTime for this comparison, matching Python's own date (not
 		// datetime) request.start_date/end_date parameters.
-		DateFilter:        "work_unit_investments.from_ts < {end_date:Date} AND work_unit_investments.to_ts >= {start_date:Date}",
+		DateFilter:        InvestmentWindowClause(true),
 		ExtraClauses:      strings.Join(joins, "\n"),
 		UseInvestment:     true,
 		UseRepoAllocation: useRepoAllocation,

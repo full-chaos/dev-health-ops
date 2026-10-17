@@ -192,8 +192,8 @@ SELECT
     categorization_run_id,
     latest_computed_at AS computed_at
 FROM %s%s
-WHERE work_unit_investments.from_ts < {end_date:Date}
-  AND work_unit_investments.to_ts >= {start_date:Date}
+WHERE work_unit_investments.to_ts >= {start_date:Date}
+  AND work_unit_investments.to_ts < {end_date:Date}
   AND work_unit_investments.org_id = {org_id:String}
 %s
 %s

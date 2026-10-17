@@ -401,13 +401,13 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			}
 			continue
 		}
-		classification := ClassifyHTTP(c.Provider, response.StatusCode, response.Header)
+		classification := ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, "")
 		if classification == nil {
 			c.observe("")
 			return response, nil
 		}
 		message, _ := io.ReadAll(io.LimitReader(response.Body, maxProviderErrorBody))
-		classification = ClassifyHTTPWithMessage(c.Provider, response.StatusCode, response.Header, string(message))
+		classification = ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, string(message))
 		// CHAOS-4582: message was already being read off the response body
 		// (above) to let ClassifyHTTPWithMessage sniff GitHub/GitLab
 		// rate-limit bodies -- it was then discarded rather than attached to
@@ -419,6 +419,9 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		classification.Path = target.Path
 		classification.Route = routeTemplate(ctx)
 		classification.Body = string(message)
+		if dimension := budgetDimension(ctx); dimension != "" && classification.Class == ErrorRateLimited {
+			classification.Dimension = dimension
+		}
 		retryDelay := c.retryDelay(attempt, classification.RetryAfter, classification.Class)
 		if classification.Class == ErrorRateLimited && c.Gate != nil {
 			// The gate is shared cross-runtime (Celery workers read the same
@@ -523,7 +526,7 @@ func (c *HTTPClient) DoUnauthenticated(
 		c.observe(failure.Class)
 		return nil, failure
 	}
-	classification := ClassifyHTTP(c.Provider, response.StatusCode, response.Header)
+	classification := ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, "")
 	if classification == nil {
 		c.observe("")
 	} else {
@@ -763,4 +766,60 @@ func CollectPages[T any](ctx context.Context, maxPages int, fetch PageFunc[T]) (
 		cursor = next
 	}
 	return nil, errors.New("provider pagination budget exhausted")
+}
+
+type budgetDimensionKey struct{}
+
+// WithBudgetDimension names the dispatch budget dimension the requests made
+// with ctx are accounted to, for a route whose dimension is not the one its
+// request path implies: GitHub's file and blame blob reads go through GraphQL
+// but their budget estimates are contents_blob. A rate limit on such a request
+// carries this dimension, so the cooldown gate matches the units that budgeted
+// it.
+func WithBudgetDimension(ctx context.Context, dimension string) context.Context {
+	return context.WithValue(ctx, budgetDimensionKey{}, dimension)
+}
+
+func budgetDimension(ctx context.Context) string {
+	dimension, _ := ctx.Value(budgetDimensionKey{}).(string)
+	return dimension
+}
+
+// ClassifyHTTPForRequest is ClassifyHTTPWithMessage for a response whose
+// request path is known: a rate-limited classification also carries the
+// budget dimension of that request (RateLimitDimension). Every code that
+// classifies a provider response itself, rather than through HTTPClient.Do,
+// must use it, or its rate limits are recorded without a dimension.
+func ClassifyHTTPForRequest(provider, requestPath string, status int, headers http.Header, message string) *ProviderError {
+	classification := ClassifyHTTPWithMessage(provider, status, headers, message)
+	if classification != nil && classification.Class == ErrorRateLimited {
+		classification.Dimension = RateLimitDimension(provider, requestPath, message)
+	}
+	return classification
+}
+
+// RateLimitDimension names the budget dimension a rate-limited request drew
+// from, read from the request alone: a GitHub secondary or abuse limit is
+// secondary_abuse_risk, the search API is search (also under a GitHub
+// Enterprise Server /api/v3 prefix), a Jira JQL search under /rest/api/ is search,
+// a path ending in /graphql is graphql_cost,
+// anything else rest_core. These are the dimension names the dispatch budget
+// buckets and the cooldown gate use.
+func RateLimitDimension(provider, path, message string) string {
+	if provider == "github" {
+		lower := strings.ToLower(message)
+		if strings.Contains(lower, "secondary") || strings.Contains(lower, "abuse") {
+			return "secondary_abuse_risk"
+		}
+		if strings.HasPrefix(strings.TrimPrefix(path, "/api/v3"), "/search/") {
+			return "search"
+		}
+	}
+	if provider == "jira" && strings.Contains(path, "/rest/api/") && strings.Contains(path, "/search") {
+		return "search"
+	}
+	if strings.HasSuffix(path, "/graphql") {
+		return "graphql_cost"
+	}
+	return "rest_core"
 }

@@ -203,6 +203,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_effect_chunks TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.dev_conversation_tombstones TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.dev_conversations, public.external_ingest_batches, public.provider_rate_limit_observations TO " + runtimeAuthorizationDomainRole,
+		"GRANT INSERT ON TABLE public.provider_rate_limit_observations TO " + runtimeAuthorizationDomainRole,
 		// CHAOS-4209. sync_configurations gains UPDATE (stampCanonicalSyncConfig
 		// writes last_sync_*), the discovery ledger gains INSERT+UPDATE, and the
 		// post-dispatch and compute-checkpoint ledgers gain INSERT. Each set is

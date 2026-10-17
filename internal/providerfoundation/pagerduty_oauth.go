@@ -209,7 +209,7 @@ func (h PagerDutyOAuthHydrator) refreshTokens(
 		return Credential{}, PagerDutyOAuthTokenRotation{}, transportProviderError("pagerduty", err, 1)
 	}
 	defer response.Body.Close()
-	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {
+	if classification := ClassifyHTTPForRequest("pagerduty", request.URL.Path, response.StatusCode, response.Header, ""); classification != nil {
 		return Credential{}, PagerDutyOAuthTokenRotation{}, classification
 	}
 	var payload struct {

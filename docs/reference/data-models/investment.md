@@ -172,6 +172,12 @@ Investment measure. Two measures read the same rows:
 | `COUNT` (and `THROUGHPUT`, the same) | 1 work unit |
 | `ISSUE_SIZE` | The unit's newest issue size (`work_unit_issue_size`): the sum of the story points of its issues. A unit with no size weighs 1 work unit, so it is never dropped from the mix. |
 
+Windows are additive (CHAOS-9016, D6022). Every Investment read dates a work unit by its END day: the unit belongs to
+the window `[start, end)` that holds its `to_ts`, whole, in exactly one window. A unit that spans a boundary is not
+counted in both windows and is not split pro rata, so the breakdowns of adjacent windows add up to the breakdown of the
+whole period. The REST `/investment` body, the sunburst, the quality counts, the Home tile and the Operating Review
+share the one predicate (`analytics.InvestmentWindowClause`).
+
 `ISSUE_SIZE` is served only where its sizing coverage rides in the same answer (D6027). It is the default of the
 REST `/investment` response, which then carries `sizing_coverage`, `unsized_unit_count` and, when fewer than half of
 the units carry a size, `sizing_note`, and of the explanation, which carries the same three fields on each finding's

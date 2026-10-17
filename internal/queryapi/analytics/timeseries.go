@@ -184,14 +184,10 @@ func TimeseriesRequestFromInput(input model.TimeseriesRequestInput) (TimeseriesR
 }
 
 // firstDateFilterToken ports templates.py's `date_col =
-// date_filter.split(" ")[0]` (templates.py:41) exactly -- including
-// investment path's slightly odd consequence: its date_filter
-// (compiler.py:227) is "work_unit_investments.from_ts < ... AND
-// work_unit_investments.to_ts >= ...", so the timeseries bucket column
-// becomes `work_unit_investments.from_ts` (the work unit's START
-// timestamp), not a generic "day" column -- a real Python behavior this
-// port reproduces faithfully rather than "fixing" into something that
-// reads more sensibly.
+// date_filter.split(" ")[0]` (templates.py:41). The investment date filter
+// (InvestmentWindowClause, CHAOS-9016) starts with work_unit_investments.to_ts,
+// so the timeseries buckets a work unit by its END timestamp, the same stamp
+// that puts it in exactly one window.
 func firstDateFilterToken(dateFilter string) string {
 	fields := strings.Fields(dateFilter)
 	if len(fields) == 0 {

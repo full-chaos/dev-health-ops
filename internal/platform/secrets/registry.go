@@ -275,42 +275,43 @@ func warnShort(name, field string) {
 	}
 }
 
-var identifierField = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
+// declaredCredentialFields are the secret-bearing keys of a stored integration
+// credential that the platform reads (providers' Secret("...") reads and the
+// credential key map). A short-secret warning names a credential field only
+// when it is one of these, and then logs this canonical spelling, never the
+// text the credential carried: a key is caller-supplied and can hold anything.
+// TestDeclaredCredentialFieldsCoverTheKeysTheCodeReads keeps the list in step
+// with the code.
+var declaredCredentialFields = []string{
+	"access_token", "api_key", "api_token", "authorization", "bearer_token", "client_secret",
+	"email", "password", "passwd", "private_key", "private_key_path", "private_token",
+	"refresh_token", "secret", "signing_key", "token", "webhook_secret", "webhook_signing_secret",
+}
 
-// identifierLike reports whether a credential field name is safe to log verbatim:
-// word characters only, and no segment with three or more digits, which
-// reads as a value pasted into a key ("password-12345678").
-func identifierLike(field string) bool {
-	if !identifierField.MatchString(field) {
-		return false
-	}
-	for _, segment := range strings.FieldsFunc(field, func(r rune) bool { return r == '_' || r == '.' || r == '-' }) {
-		digits := 0
-		for _, r := range segment {
-			if r >= '0' && r <= '9' {
-				digits++
-			}
-		}
-		if digits >= 3 {
-			return false
+// declaredCredentialField returns the canonical declared spelling of field: the
+// match ignores case, underscores and hyphens, so apiKey and API-KEY are api_key.
+func declaredCredentialField(field string) (string, bool) {
+	normalized := normalizedField(field)
+	for _, declared := range declaredCredentialFields {
+		if normalizedField(declared) == normalized {
+			return declared, true
 		}
 	}
-	return true
+	return "", false
 }
 
 // warnAttrs names the setting, and the credential field when there is one. The
-// field is its own attribute: its key is not a protected word, and a bare field
-// name in the value survives the redactor.
+// field travels as its own attribute: its key is not a protected word and a
+// declared name survives the redactor. A name the platform does not declare is
+// reported by length only.
 func warnAttrs(name, field string) []any {
 	if field == "" {
 		return []any{"setting", name}
 	}
-	if !identifierLike(field) {
-		// A key with spaces or punctuation reads as prose to the log redactor, which
-		// would hide it or a neighbour; say that it is unusual and how long it is.
-		return []any{"setting", name, "field", "non_identifier_name", "field_length", len(field)}
+	if declared, ok := declaredCredentialField(field); ok {
+		return []any{"setting", name, "field", declared}
 	}
-	return []any{"setting", name, "field", field}
+	return []any{"setting", name, "field", "undeclared_name", "field_length", len(field)}
 }
 
 // RegisterLogin puts a login name into the registry: it is redacted only in the

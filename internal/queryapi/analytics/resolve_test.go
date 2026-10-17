@@ -135,7 +135,7 @@ func TestValidateSubRequestCount_OverLimit(t *testing.T) {
 // property Python's own try/except around it guarantees.
 func TestResolve_Investment_ResolvesEndToEnd(t *testing.T) {
 	client := &routingFakeClient{}
-	client.on("date_trunc('day', work_unit_investments.from_ts) AS bucket", &fakeRowScanner{
+	client.on("date_trunc('day', work_unit_investments.to_ts) AS bucket", &fakeRowScanner{
 		rows: [][]any{
 			{mustTime("2026-01-01"), "repo-a", 3.0},
 		},
@@ -887,7 +887,7 @@ func TestResolveFlowMatrix_ArgMaxGuard(t *testing.T) {
 // org-70d529e0 data these numbers were recorded from.
 func TestResolve_Investment_EvidenceQualityStats_PopulatedWhenUseInvestmentTrue(t *testing.T) {
 	client := &routingFakeClient{}
-	client.on("date_trunc('day', work_unit_investments.from_ts) AS bucket", &fakeRowScanner{
+	client.on("date_trunc('day', work_unit_investments.to_ts) AS bucket", &fakeRowScanner{
 		rows: [][]any{{mustTime("2026-01-01"), "repo-a", 3.0}},
 	})
 	// "quality_known_count" is a SELECT alias unique to

@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -219,8 +220,9 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
 		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
 		Themes: themes, Subcategories: subcategories,
-		Measure: investmentexplain.RESTInvestmentMeasure,
+		Measure: investmentexplain.RESTInvestmentMeasure, DatedByEnd: true,
 	}
+	slog.DebugContext(ctx, "investment: window rule", "rule", "end_day", "start", params.StartTS, "end", params.EndTS)
 	rows, err := reader.explainR.FetchInvestmentBreakdown(ctx, breakdownFilters)
 	if err != nil {
 		return nil, err
@@ -349,7 +351,7 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
 		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
-		Themes: themes, Subcategories: subcategories,
+		Themes: themes, Subcategories: subcategories, DatedByEnd: true,
 	}
 	mockCount, err := reader.explainR.FetchMockFixtureInvestmentRowCount(ctx, mockFilters)
 	if err != nil {

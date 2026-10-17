@@ -854,7 +854,7 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 		if readErr != nil {
 			return nil, logging.TransportFailure(readErr)
 		}
-		if classified := providerfoundation.ClassifyHTTPWithMessage("gitlab", response.StatusCode, response.Header, string(message)); classified != nil {
+		if classified := providerfoundation.ClassifyHTTPForRequest("gitlab", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
 			return nil, classified
 		}
 		return nil, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}
@@ -887,3 +887,12 @@ func gitLabTestsOptionalError(ctx context.Context, err error) error {
 }
 
 var _ CompleteRouteHandler = GitLabTestsRouteHandler{}
+
+// responsePath is the URL path of the request a response answers, empty when
+// the response carries none.
+func responsePath(response *http.Response) string {
+	if response == nil || response.Request == nil || response.Request.URL == nil {
+		return ""
+	}
+	return response.Request.URL.Path
+}

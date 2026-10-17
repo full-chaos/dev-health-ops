@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -204,6 +205,54 @@ func TestActiveCooldownsIsFailOpenOnAQueryError(t *testing.T) {
 		familyMap, dimensionMap := activeCooldowns(ctx, tx, nil, cooldownTestRun, []budgetUnit{candidateUnit(cooldownTestOrg, "github", cooldownTestInt)}, pgNow())
 		if len(familyMap) != 0 || len(dimensionMap) != 0 {
 			t.Fatalf("want two empty maps on a query error, got family=%+v dimension=%+v", familyMap, dimensionMap)
+		}
+	})
+}
+
+// TestAProviderRateLimitDeferralIsSeenByTheCooldownGate is the writer-to-reader
+// proof: a unit deferred through the REAL providersync repository leaves the
+// observation row the dispatch cooldown gate reads, and the gate holds exactly
+// that provider, integration and dimension.
+func TestAProviderRateLimitDeferralIsSeenByTheCooldownGate(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		const unitID = "00000000-0000-4000-8000-0000000011aa"
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github','commits',$4,'dispatching',now(),(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'medium','incremental',0,now())`,
+			unitID, discoveryTestOrg, discoveryTestRun, dispatchTestSource); err != nil {
+			t.Fatal(err)
+		}
+		claim := leaseUnitForCompletion(t, ctx, pool, unitID)
+		repository, err := providersync.NewPostgresRepository(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer repository.Close()
+
+		now := time.Now().UTC()
+		if err := repository.DeferForRateLimit(ctx, claim, now.Add(5*time.Minute), now,
+			providersync.RateLimitObservation{Dimension: "graphql_cost", RetryAfter: 5 * time.Minute}); err != nil {
+			t.Fatal(err)
+		}
+
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		candidate := []budgetUnit{candidateUnit(claim.OrgID, "github", claim.IntegrationID)}
+		family, dimension := activeCooldowns(ctx, tx, nil, claim.SyncRunID, candidate, now)
+		held := cooldownKey{orgID: claim.OrgID, provider: "github", integrationID: claim.IntegrationID, familyOrDimension: "graphql_cost"}
+		if expiry, ok := dimension[held]; !ok || !expiry.After(now.Add(4*time.Minute)) {
+			t.Fatalf("dimension cooldowns = %+v, want graphql_cost held for about 5 minutes", dimension)
+		}
+		if len(family) != 0 || len(dimension) != 1 {
+			t.Fatalf("family = %+v dimension = %+v, want exactly the one graphql_cost dimension cooldown", family, dimension)
+		}
+		other := candidateUnit(claim.OrgID, "gitlab", claim.IntegrationID)
+		if _, otherDimension := activeCooldowns(ctx, tx, nil, claim.SyncRunID, []budgetUnit{other}, now); len(otherDimension) != 0 {
+			t.Fatalf("another provider is held: %+v", otherDimension)
 		}
 	})
 }

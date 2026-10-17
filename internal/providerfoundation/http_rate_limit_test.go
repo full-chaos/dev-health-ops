@@ -151,6 +151,9 @@ func TestRateLimitedResponseCarriesTheBudgetDimension(t *testing.T) {
 		{"search", "github", "/search/issues", "429", `{"message":"rate limit"}`, "search"},
 		{"secondary", "github", "/repos/acme/api", "403", `{"message":"You have exceeded a secondary rate limit"}`, "secondary_abuse_risk"},
 		{"gitlab graphql", "gitlab", "/api/graphql", "429", `{"message":"rate limit"}`, "graphql_cost"},
+		{"github enterprise search", "github", "/api/v3/search/issues", "429", `{"message":"rate limit"}`, "search"},
+		{"github enterprise rest", "github", "/api/v3/repos/acme/api", "429", `{"message":"rate limit"}`, "rest_core"},
+		{"github enterprise graphql", "github", "/api/graphql", "429", `{"message":"rate limit"}`, "graphql_cost"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -186,5 +189,23 @@ func TestNonRateLimitedErrorsCarryNoDimension(t *testing.T) {
 	var providerErr *ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Dimension != "" {
 		t.Fatalf("err = %v, want a ProviderError with no Dimension", err)
+	}
+}
+
+// Code that classifies a provider response itself (the unauthenticated artifact
+// downloads) gets the same dimension as HTTPClient.Do.
+func TestClassifyHTTPForRequestCarriesTheDimension(t *testing.T) {
+	t.Parallel()
+	limited := ClassifyHTTPForRequest("gitlab", "/api/v4/projects/1/jobs/2/artifacts", http.StatusTooManyRequests,
+		http.Header{"Retry-After": {"60"}}, `{"message":"rate limit"}`)
+	if limited == nil || limited.Class != ErrorRateLimited || limited.Dimension != "rest_core" || limited.RetryAfter != time.Minute {
+		t.Fatalf("limited = %+v, want rate_limited, rest_core, 1m", limited)
+	}
+	notLimited := ClassifyHTTPForRequest("gitlab", "/x", http.StatusNotFound, http.Header{}, "")
+	if notLimited == nil || notLimited.Dimension != "" {
+		t.Fatalf("notLimited = %+v, want a classification with no Dimension", notLimited)
+	}
+	if ClassifyHTTPForRequest("gitlab", "/x", http.StatusOK, http.Header{}, "") != nil {
+		t.Fatal("a 200 was classified as an error")
 	}
 }

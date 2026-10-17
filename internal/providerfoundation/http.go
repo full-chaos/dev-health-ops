@@ -407,7 +407,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			return response, nil
 		}
 		message, _ := io.ReadAll(io.LimitReader(response.Body, maxProviderErrorBody))
-		classification = ClassifyHTTPWithMessage(c.Provider, response.StatusCode, response.Header, string(message))
+		classification = ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, string(message))
 		// CHAOS-4582: message was already being read off the response body
 		// (above) to let ClassifyHTTPWithMessage sniff GitHub/GitLab
 		// rate-limit bodies -- it was then discarded rather than attached to
@@ -419,9 +419,6 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		classification.Path = target.Path
 		classification.Route = routeTemplate(ctx)
 		classification.Body = string(message)
-		if classification.Class == ErrorRateLimited {
-			classification.Dimension = RateLimitDimension(c.Provider, target.Path, string(message))
-		}
 		retryDelay := c.retryDelay(attempt, classification.RetryAfter, classification.Class)
 		if classification.Class == ErrorRateLimited && c.Gate != nil {
 			// The gate is shared cross-runtime (Celery workers read the same
@@ -768,18 +765,32 @@ func CollectPages[T any](ctx context.Context, maxPages int, fetch PageFunc[T]) (
 	return nil, errors.New("provider pagination budget exhausted")
 }
 
+// ClassifyHTTPForRequest is ClassifyHTTPWithMessage for a response whose
+// request path is known: a rate-limited classification also carries the
+// budget dimension of that request (RateLimitDimension). Every code that
+// classifies a provider response itself, rather than through HTTPClient.Do,
+// must use it, or its rate limits are recorded without a dimension.
+func ClassifyHTTPForRequest(provider, requestPath string, status int, headers http.Header, message string) *ProviderError {
+	classification := ClassifyHTTPWithMessage(provider, status, headers, message)
+	if classification != nil && classification.Class == ErrorRateLimited {
+		classification.Dimension = RateLimitDimension(provider, requestPath, message)
+	}
+	return classification
+}
+
 // RateLimitDimension names the budget dimension a rate-limited request drew
 // from, read from the request alone: a GitHub secondary or abuse limit is
-// secondary_abuse_risk, the search API is search, a path ending in /graphql is
-// graphql_cost, anything else rest_core. These are the dimension names the
-// dispatch budget buckets and the cooldown gate use.
+// secondary_abuse_risk, the search API is search (also under a GitHub
+// Enterprise Server /api/v3 prefix), a path ending in /graphql is graphql_cost,
+// anything else rest_core. These are the dimension names the dispatch budget
+// buckets and the cooldown gate use.
 func RateLimitDimension(provider, path, message string) string {
 	if provider == "github" {
 		lower := strings.ToLower(message)
 		if strings.Contains(lower, "secondary") || strings.Contains(lower, "abuse") {
 			return "secondary_abuse_risk"
 		}
-		if strings.HasPrefix(path, "/search/") {
+		if strings.HasPrefix(strings.TrimPrefix(path, "/api/v3"), "/search/") {
 			return "search"
 		}
 	}

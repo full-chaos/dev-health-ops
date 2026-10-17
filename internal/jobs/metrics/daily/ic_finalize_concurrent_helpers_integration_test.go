@@ -6,11 +6,30 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func dayLockerForTest(*testing.T, context.Context) func(context.Context, string, time.Time) (func(), error) {
-	return nil
+func dayLockerForTest(t *testing.T, ctx context.Context) func(context.Context, string, time.Time) (func(), error) {
+	t.Helper()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store.LockICFinalizeDay
 }
 
-func setDayLockerForTest(*ICFinalizeExecutor, func(context.Context, string, time.Time) (func(), error)) {
+func setDayLockerForTest(executor *ICFinalizeExecutor, locker func(context.Context, string, time.Time) (func(), error)) {
+	executor.SetDayLocker(locker)
 }

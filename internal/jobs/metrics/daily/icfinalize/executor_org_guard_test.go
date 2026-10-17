@@ -157,3 +157,33 @@ func TestIcFinalizeReadsTheMembershipsAsOfTheDayItComputes(t *testing.T) {
 		t.Fatalf("the memberships were read as of %v, want one read as of the target day %v", asked, day)
 	}
 }
+
+// The day lock is taken before the first read and released when the compute
+// ends, whatever the outcome; a lock that cannot be taken fails the compute
+// before ClickHouse is touched (CHAOS-9945).
+func TestIcFinalizeHoldsTheDayLockAroundTheCompute(t *testing.T) {
+	day := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
+	conn := &touchedConn{}
+	executor := NewExecutor(conn)
+	var events []string
+	executor.SetDayLocker(func(_ context.Context, orgID string, lockedDay time.Time) (func(), error) {
+		if orgID != "org" || !lockedDay.Equal(day) || conn.calls != 0 {
+			t.Fatalf("lock for %q %s taken after %d ClickHouse calls", orgID, lockedDay, conn.calls)
+		}
+		events = append(events, "lock")
+		return func() { events = append(events, "release") }, nil
+	})
+	if _, err := executor.ComputeFinalizeFamily(context.Background(), RunScope{OrganizationID: "org", TargetDay: day}); err == nil {
+		t.Fatal("the touched connection must fail the compute")
+	}
+	if conn.calls == 0 || len(events) != 2 || events[0] != "lock" || events[1] != "release" {
+		t.Fatalf("events = %v after %d ClickHouse calls, want lock, reads, release", events, conn.calls)
+	}
+
+	refused := &touchedConn{}
+	failing := NewExecutor(refused)
+	failing.SetDayLocker(func(context.Context, string, time.Time) (func(), error) { return nil, errors.New("lock unavailable") })
+	if _, err := failing.ComputeFinalizeFamily(context.Background(), RunScope{OrganizationID: "org", TargetDay: day}); err == nil || refused.calls != 0 {
+		t.Fatalf("err = %v, ClickHouse calls = %d; want an error and no call when the lock is refused", err, refused.calls)
+	}
+}

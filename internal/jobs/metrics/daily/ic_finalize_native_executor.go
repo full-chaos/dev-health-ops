@@ -85,6 +85,10 @@ func NewICFinalizeExecutor(conn driver.Conn) *ICFinalizeExecutor {
 	return &ICFinalizeExecutor{inner: inner}
 }
 
+// SetDayLocker wires the lock that serializes the compute of one organization
+// and day across workers (CHAOS-9945).
+func (e *ICFinalizeExecutor) SetDayLocker(locker icfinalize.DayLocker) { e.inner.SetDayLocker(locker) }
+
 // SetClock replaces the clock the family's computed_at is taken from.
 func (e *ICFinalizeExecutor) SetClock(now func() time.Time) { e.inner.SetClock(now) }
 

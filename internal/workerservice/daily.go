@@ -1029,7 +1029,15 @@ func dailyNativeFamilyRegistrations(
 	// PARTITION rather than once per run.
 	finalize = map[string]daily.NativeFinalizeFamilyExecutor{}
 	if clickhouseConnection != nil {
-		finalize[daily.ICFinalizeFamilyName] = daily.NewICFinalizeExecutor(clickhouseConnection)
+		icFinalize := daily.NewICFinalizeExecutor(clickhouseConnection)
+		if locker, ok := store.(interface {
+			LockICFinalizeDay(context.Context, string, time.Time) (func(), error)
+		}); ok {
+			icFinalize.SetDayLocker(locker.LockICFinalizeDay)
+		} else {
+			logger.Warn("ic_finalize runs without the organization-day lock: the store has none")
+		}
+		finalize[daily.ICFinalizeFamilyName] = icFinalize
 	}
 	// CHAOS-5141: team_cognitive_load is a finalize-scope native family that
 	// reads user_metrics_daily, itself populated earlier in the SAME run by

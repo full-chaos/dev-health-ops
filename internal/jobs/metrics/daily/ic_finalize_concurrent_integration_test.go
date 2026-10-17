@@ -53,19 +53,20 @@ func TestConcurrentICFinalizeRunsOfOneDayWriteDistinctVersions(t *testing.T) {
 		}
 	}
 
-	rows, err := conn.Query(ctx, `SELECT count(), uniqExact(computed_at) FROM user_metrics_daily
-WHERE org_id = ? AND day = ? AND computed_at > ?`, org, day, seededAt)
+	// Serialized runs under one fixed clock take clock, clock+1s, ... clock+(runs-1)s; overlapping runs that
+	// tie reach a lower newest version. Rows of one key may be merged away, so the newest version is read.
+	rows, err := conn.Query(ctx, `SELECT max(computed_at) FROM user_metrics_daily WHERE org_id = ? AND day = ?`, org, day)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	var written, distinct uint64
+	var newest time.Time
 	for rows.Next() {
-		if err := rows.Scan(&written, &distinct); err != nil {
+		if err := rows.Scan(&newest); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if written != runs || distinct != runs {
-		t.Fatalf("%d concurrent runs wrote %d rows with %d distinct computed_at, want %d of each", runs, written, distinct, runs)
+	if want := clock.Add((runs - 1) * time.Second); !newest.UTC().Equal(want) {
+		t.Fatalf("%d concurrent runs: newest computed_at = %s, want %s (each run one second after the one before)", runs, newest.UTC(), want)
 	}
 }

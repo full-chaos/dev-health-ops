@@ -165,7 +165,18 @@ type Executor struct {
 	teamMapper            TeamMapper
 	landscapeSuperseder   LandscapeSuperseder
 	userMetricsSuperseder UserMetricsSuperseder
+	dayLocker             DayLocker
 }
+
+// DayLocker takes the lock that serializes every ic_finalize compute of one
+// organization and day, and returns its release. Two overlapping computes of a
+// day would both read the same newest computed_at in versionAfterStored and
+// write rows that tie (CHAOS-9945). The lock is held from before the first read
+// to after the last write; a wait ends with the context.
+type DayLocker func(ctx context.Context, orgID string, day time.Time) (release func(), err error)
+
+// SetDayLocker wires the per organization and day lock of the compute.
+func (executor *Executor) SetDayLocker(locker DayLocker) { executor.dayLocker = locker }
 
 // UserMetricsSuperseder runs after the user-metrics write of a day. It gets
 // every row the compute wrote (none for a day with no person) and writes a row
@@ -695,6 +706,18 @@ func ownershipAsOf(targetDay time.Time) time.Time {
 func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScope) (int, error) {
 	if err := requireOrganization(ctx, run.OrganizationID, run.TargetDay); err != nil {
 		return 0, err
+	}
+	if executor.dayLocker != nil {
+		started := executor.now()
+		release, err := executor.dayLocker(ctx, run.OrganizationID, run.TargetDay)
+		if err != nil {
+			slog.WarnContext(ctx, "ic_finalize day lock not taken", "org_id", run.OrganizationID,
+				"day", run.TargetDay.Format("2006-01-02"), "waited", executor.now().Sub(started))
+			return 0, fmt.Errorf("icfinalize: lock the organization day: %w", err)
+		}
+		defer release()
+		slog.DebugContext(ctx, "ic_finalize day lock taken", "org_id", run.OrganizationID,
+			"day", run.TargetDay.Format("2006-01-02"), "waited", executor.now().Sub(started))
 	}
 	var teamsOf PersonTeams
 	var namesOf TeamNames

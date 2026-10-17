@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"sort"
 	"strconv"
@@ -1762,4 +1763,34 @@ WHERE worker_kind = 'daily' AND operation = $3 AND run_id = $4::uuid AND partiti
   AND state = 'retry_authorized'`,
 		[]byte(compatibilityLedgerSettledEvidence), now, operation, runID, partitionID)
 	return err
+}
+
+// LockICFinalizeDay takes the session advisory lock that serializes every
+// ic_finalize compute of one (organization, day) across workers and returns its
+// release (CHAOS-9945). It holds one pool connection until released; the wait
+// ends with ctx. If the unlock fails the connection is closed, which frees the
+// lock with the session.
+func (store *PostgresStore) LockICFinalizeDay(ctx context.Context, organizationID string, day time.Time) (func(), error) {
+	if !store.valid() {
+		return nil, ErrUnavailable
+	}
+	conn, err := store.pool.Acquire(ctx)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	key := "ic_finalize_day:" + organizationID + ":" + day.UTC().Format("2006-01-02")
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(hashtextextended($1, 0))", key); err != nil {
+		conn.Release()
+		return nil, ErrUnavailable
+	}
+	return func() {
+		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if _, err := conn.Exec(unlockCtx, "SELECT pg_advisory_unlock(hashtextextended($1, 0))", key); err != nil {
+			slog.Error("ic_finalize day unlock failed; closing the connection", "organization_id", organizationID, "key", key)
+			_ = conn.Hijack().Close(unlockCtx)
+			return
+		}
+		conn.Release()
+	}, nil
 }

@@ -429,4 +429,11 @@ func TestFetchAIImpactHumanRowsDoNotEnterTheAIMeasures(t *testing.T) {
 	if ratio := aiAdoptionRatio(rows); math.Abs(ratio-2.0/6.0) > 1e-9 {
 		t.Errorf("AI adoption = %v, want 2/6", ratio)
 	}
+	// ai_opportunity_signals thresholds the same AI averages, so it reads them
+	// over AI rows too: amplification 2.0 >= 1.5 fires, where the diluted mean
+	// of 1.33 (human row at zero) did not; rework 0.3 >= 0.25 fires where the
+	// diluted 0.233 did not.
+	if signals := aiOpportunitySignals(rows, nil); signals != 2 {
+		t.Errorf("ai_opportunity_signals = %v, want 2 (amplification and rework over AI rows)", signals)
+	}
 }

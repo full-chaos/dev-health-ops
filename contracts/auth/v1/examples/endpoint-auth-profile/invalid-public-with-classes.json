@@ -1,0 +1,10 @@
+{
+  "accepted_credential_classes": [
+    "user_access_token"
+  ],
+  "classification": "public",
+  "method": "GET",
+  "public_rationale": "x",
+  "route": "/.well-known/jwks.json",
+  "schema_version": "endpoint-auth-profile.v1"
+}

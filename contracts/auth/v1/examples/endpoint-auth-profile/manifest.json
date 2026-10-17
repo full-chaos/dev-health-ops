@@ -1,0 +1,225 @@
+{
+  "description": "Golden corpus for endpoint-auth-profile.v1 (CHAOS-4931). Read by the Go runner, the Python runner and the ajv check; never duplicate this inventory into a runner.",
+  "accept": [
+    {
+      "file": "valid-protected-jwt-single-class.json",
+      "why": "TRD section 10's own example: one JWT class, exact issuer/audience/type/algorithm, current-state required, no cache, impersonation denied."
+    },
+    {
+      "file": "valid-protected-opaque-class-no-token.json",
+      "why": "An opaque domain credential has no issuer, audience or algorithm, so `token` is omitted. Positive control that `token` is genuinely optional."
+    },
+    {
+      "file": "valid-multi-class-with-disambiguator.json",
+      "why": "Two classes accepted, so the selector is declared. The positive half of the multi-class rule: without it the reject fixture would pass for the wrong reason."
+    },
+    {
+      "file": "valid-public-route-with-rationale.json",
+      "why": "A public route: no classes, a stated rationale, and none of the protected-route fields."
+    },
+    {
+      "file": "valid-assurance-aal2-not-found-disclosure.json",
+      "why": "Step-up assurance and the existence-hiding disclosure mode in one profile."
+    },
+    {
+      "file": "valid-entitlement-and-impersonation-allowed.json",
+      "why": "Entitlement input present and impersonation deliberately allowed."
+    },
+    {
+      "file": "valid-route-with-colon-suffix.json",
+      "why": "A custom-method route (/v1/authorize:batch). Boundary of the route character class."
+    },
+    {
+      "file": "valid-legacy-hs256-compat.json",
+      "why": "The legacy HS256 compatibility profile (TRD section 16) is expressible, so the enum is not accidentally EdDSA-only."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-unknown-credential-class.json",
+      "expect_instance_location": "/accepted_credential_classes/0",
+      "expect_keyword": "enum",
+      "why": "An unknown credential class is a validation error, not an extension point (CHAOS-3271 class)."
+    },
+    {
+      "file": "invalid-multi-class-without-disambiguator.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "Two classes and no selector: the undeclared multi-class path TRD section 10 says CI must fail. Only the then-branch of the multi-class rule rejects this."
+    },
+    {
+      "file": "invalid-missing-action.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "A protected route with no action. Only the protected else-branch rejects this."
+    },
+    {
+      "file": "invalid-bare-action-name.json",
+      "expect_instance_location": "/action",
+      "expect_keyword": "pattern",
+      "why": "A bare action (`admin`) is the is_admin-style check ACP-ADR-05 forbids; same syntax rule as principal.v1."
+    },
+    {
+      "file": "invalid-algorithm-none.json",
+      "expect_instance_location": "/token/algorithm",
+      "expect_keyword": "enum",
+      "why": "alg=none is unrepresentable."
+    },
+    {
+      "file": "invalid-algorithm-es256.json",
+      "expect_instance_location": "/token/algorithm",
+      "expect_keyword": "enum",
+      "why": "The algorithm set is closed; an algorithm nobody decided on does not slip in."
+    },
+    {
+      "file": "invalid-fanout-field.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "A field inviting validator fan-out is not in the contract; additionalProperties false is what makes that absence enforceable."
+    },
+    {
+      "file": "invalid-fanout-disambiguator-kind.json",
+      "expect_instance_location": "/class_disambiguator/kind",
+      "expect_keyword": "enum",
+      "why": "There is no 'try each' selector kind. Validator fan-out is the defect the profile exists to remove."
+    },
+    {
+      "file": "invalid-disambiguator-missing-name.json",
+      "expect_instance_location": "/class_disambiguator",
+      "expect_keyword": "required",
+      "why": "A selector kind with no name selects nothing."
+    },
+    {
+      "file": "invalid-protected-no-classes.json",
+      "expect_instance_location": "/accepted_credential_classes",
+      "expect_keyword": "minItems",
+      "why": "A protected route that accepts no class is unauthenticatable or silently open."
+    },
+    {
+      "file": "invalid-public-with-classes.json",
+      "expect_instance_location": "/accepted_credential_classes",
+      "expect_keyword": "maxItems",
+      "why": "A public route that lists classes contradicts itself."
+    },
+    {
+      "file": "invalid-public-without-rationale.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "A public route must say why."
+    },
+    {
+      "file": "invalid-cache-with-current-state.json",
+      "expect_instance_location": "/cache_class",
+      "expect_keyword": "const",
+      "why": "current_state_required true with a cache class other than none: a stale allow on a route that declared it needs current state."
+    },
+    {
+      "file": "invalid-unknown-resource-resolver.json",
+      "expect_instance_location": "/resource_resolver",
+      "expect_keyword": "enum",
+      "why": "Caller-supplied resolution is not a resolver: closed set."
+    },
+    {
+      "file": "invalid-unknown-tenant-requirement.json",
+      "expect_instance_location": "/tenant_requirement",
+      "expect_keyword": "enum",
+      "why": "Closed tenant requirement set."
+    },
+    {
+      "file": "invalid-unknown-cache-class.json",
+      "expect_instance_location": "/cache_class",
+      "expect_keyword": "enum",
+      "why": "Closed cache class set (TRD section 14)."
+    },
+    {
+      "file": "invalid-unknown-impersonation-mode.json",
+      "expect_instance_location": "/impersonation",
+      "expect_keyword": "enum",
+      "why": "Closed: denied or allowed."
+    },
+    {
+      "file": "invalid-unknown-denial-disclosure.json",
+      "expect_instance_location": "/denial_disclosure",
+      "expect_keyword": "enum",
+      "why": "Closed: forbidden or not_found. A route cannot invent its own disclosure."
+    },
+    {
+      "file": "invalid-unknown-assurance.json",
+      "expect_instance_location": "/minimum_assurance",
+      "expect_keyword": "enum",
+      "why": "Assurance comes from principal.v1's closed set by reference."
+    },
+    {
+      "file": "invalid-duplicate-class.json",
+      "expect_instance_location": "/accepted_credential_classes",
+      "expect_keyword": "uniqueItems",
+      "why": "A repeated class would make set-equality and the multi-class rule disagree about how many classes there are. A selector is declared so only uniqueItems fires."
+    },
+    {
+      "file": "invalid-schema-version-wrong.json",
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "why": "A relying party rejects an unrecognised version."
+    },
+    {
+      "file": "invalid-route-with-query.json",
+      "expect_instance_location": "/route",
+      "expect_keyword": "pattern",
+      "why": "A route is a path, not a URL: no query, host or whitespace."
+    },
+    {
+      "file": "invalid-route-non-ascii.json",
+      "expect_instance_location": "/route",
+      "expect_keyword": "pattern",
+      "why": "ASCII path characters only. Pins the explicit class against a Unicode-aware shorthand."
+    },
+    {
+      "file": "invalid-method-lowercase.json",
+      "expect_instance_location": "/method",
+      "expect_keyword": "enum",
+      "why": "Methods are upper case and closed."
+    },
+    {
+      "file": "invalid-classification-unknown.json",
+      "expect_instance_location": "/classification",
+      "expect_keyword": "enum",
+      "why": "Classification is referenced from the inventory schema; an unknown value fails through the reference, proving the reference is live."
+    },
+    {
+      "file": "invalid-missing-current-state-required.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "A protected route must state current_state_required; a missing boolean cannot be read as false."
+    },
+    {
+      "file": "invalid-missing-denial-disclosure.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "A protected route must choose how a denial is disclosed."
+    },
+    {
+      "file": "invalid-current-state-as-string.json",
+      "expect_instance_location": "/current_state_required",
+      "expect_keyword": "type",
+      "why": "The string \"true\" is not a boolean."
+    },
+    {
+      "file": "invalid-token-missing-algorithm.json",
+      "expect_instance_location": "/token",
+      "expect_keyword": "required",
+      "why": "Issuer, audience, type and algorithm are all or none."
+    },
+    {
+      "file": "invalid-token-empty-audience.json",
+      "expect_instance_location": "/token/audience",
+      "expect_keyword": "minLength",
+      "why": "An empty expected audience disables audience checking in widely used JWT libraries (G-13); the referenced principal.v1 definition forbids it."
+    },
+    {
+      "file": "invalid-entitlement-uppercase.json",
+      "expect_instance_location": "/entitlement",
+      "expect_keyword": "pattern",
+      "why": "Entitlement keys are lowercase tokens."
+    }
+  ]
+}

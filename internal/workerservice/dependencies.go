@@ -33,6 +33,7 @@ import (
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -1008,6 +1009,12 @@ func configureWorkerDependenciesWithSources(
 	// malformed scrape (duplicate HELP/TYPE for one metric name), not just a
 	// duplicate series. Registered here, once, unconditionally.
 	if err := registry.RegisterMetrics("sync_run_rollup_bumped", providerfoundation.SyncRunRollupBumpedMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-10013: dispatch wakes on a unit's terminal commit (providersync),
+	// process-wide for the same one-HELP/TYPE reason, registered once.
+	if err := registry.RegisterMetrics("sync_dispatch_woken", syncrunrollup.DispatchWakeMetricsSource()); err != nil {
 		dependencies.close()
 		return nil, err
 	}

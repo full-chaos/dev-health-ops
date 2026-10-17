@@ -63,6 +63,58 @@ What `stack.sh` did and is gone: it refused any verb but a short list (now: type
 without `BIGBOY_OPERATOR_IMAGE` (now compose refuses: the variable is required), and it appended one line per mutating verb to
 `_records/stack-runs.log` (not kept: the cut's own `STEP` lines and `$REC/*.out` are the record).
 
+## The acr venue stack (CHAOS-10004)
+
+The acr pre-prod venue (acr-api, acr-projector, acr-mcp, its postgres and falkordb, the entitlement stand-in and the one-offs that
+prepare the database) is in the same file, in the same project, started with the same command and a profile:
+
+```
+cd "$BIGBOY_ROOT"
+docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env \
+  -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-deps --no-build <service>
+```
+
+- `--profile acr` holds every acr service. `--profile acr-venue` holds only what must exist before acr-api: `acr-postgres`, `acr-db-init`
+  (roles), `acr-migrate`, `acr-db-acl` (grants) and `acr-entitlement-standin`. Pass both when you want to name no service.
+  Services do not clash with the dev-health ones: the database and the graph are `acr-postgres` and `acr-falkordb`, answering to the
+  names `postgres` and `falkordb` on the acr network only.
+- Data does not move. The bind mounts are the old paths, `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data`; the one named
+  volume has the explicit name `dev-health-acr-entitlement-tmp`; the network is `dev-health-acr`. `container_name` is the old project's
+  (`dev-health-acr-mcp-<service>-1`). acr-api and acr-projector reach `dho-query-internal` and `dho-clickhouse-readers` as before; no acr
+  service is on the `dev-health` network. The data URLs use the alias `query-api`, never an address.
+- Secrets are files under `/var/lib/oci-cache/mcp-venue/secrets/`, mounted by compose as `/run/secrets/<name>`; the file holds the paths
+  (overridable by the `ACR_*_FILE` variables) and no value. Non-secret settings (`ACR_DB_NAME`, the role names, the projector org) default to
+  what the old `.env` held.
+- Images: all pinned by registry digest in the pins file (`BIGBOY_ACR_*_IMAGE`, each REQUIRED: with one missing every compose command fails and names it, so a host's `_records/images.env` must hold the acr lines before its checkout holds this file). acr-api (which also
+  runs the projector and the migrations) and acr-mcp are the images of the acr release build, `ghcr.io/full-chaos/dev-health-acr/acr-api` and `.../acr-mcp`. A build
+  on this host needs `--build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>`; without both args acr-api refuses the sidecar with a 426.
+- acr-api talks to the real ops, as the venue does after its move off the stand-in: `ACR_DEV_HEALTH_ENTITLEMENT_URL` defaults to `http://go-api:8091` (the go-api internal listener, by alias, on `dho-query-internal`) and the bearer is the file-backed secret `acr_ops_svc_token` (the file `/var/lib/oci-cache/mcp-venue/secrets/ops_svc_acr_token`, or the path in `ACR_OPS_SVC_TOKEN_FILE`; no value is in the repository). BYO LLM config (CHAOS-9989): `ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE` is passed through and is EMPTY unless the environment of one `up` sets it; no env file on bigboy sets it (a persistent BYO setting would bill a key), and `ops` needs the scope `llm_config:read` on the token. The entitlement stand-in is no longer needed by acr-api; it stays defined (profile `acr-venue`) for a rollback: set `ACR_DEV_HEALTH_ENTITLEMENT_URL=http://acr-entitlement-standin:8088` and `ACR_OPS_SVC_TOKEN_FILE=/var/lib/oci-cache/mcp-venue/secrets/entitlement_token`, and start the stand-in.
+- The one-time move from the old project `dev-health-acr-mcp` to this file is a recreate of the acr stack (new project label, same container
+  names and data). Run it only in a window MCP opens. The new file fixes the old project's container names, so the old containers must be
+  REMOVED, not only stopped (a stopped container keeps its name and the new `up` fails with `Conflict. The container name ... is already in use`;
+  executed in a scratch project). The steps, in this order:
+  1. Before: render the acr services from the old `compose.yml` and from this file and diff them (names, images, environment, volumes, networks):
+     only the image reference, the project-prefixed secret/volume/network names and the services' network name may differ.
+  2. Save the graph first (MCP): `docker exec dev-health-acr-mcp-falkordb-1 redis-cli BGSAVE`, wait until `redis-cli LASTSAVE` changes, then copy the dump to a dated backup
+     path, `cp /var/lib/oci-cache/mcp-venue/falkordb-data/dump.rdb /var/lib/oci-cache/mcp-venue/falkordb-data.backup-$(date -u +%Y%m%dT%H%MZ).rdb` (outside the bind-mounted directory).
+     Note the repository count for step 5: `docker exec dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"`, the `<graph>` being
+     the one `redis-cli GRAPH.LIST` shows besides `_acr_health` (34 on 2026-10-17).
+  3. Remove the old project's containers and its own network, keeping the data: `cd /home/ubuntu/devhealth/dev-health-acr-mcp && docker compose -p dev-health-acr-mcp -f compose.yml down`
+     (NEVER `-v`, and never `--rmi`). The bind mounts `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data` are host paths and stay; the networks
+     `dho-query-internal` and `dho-clickhouse-readers` are external and stay.
+  4. Set the projector switch in bigboy's env BEFORE the `up`: `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true` must be a line of the host's `_records/images.env` (the tracked
+     `ci/bigboy/images.env` has it; the compose file defaults it to false, as the old file did, and the projector writes nothing without it). Then start ONLY the nine acr services,
+     by name (a bare `--profile acr up -d` also starts or recreates every default-profile dev-health service, 42 containers instead of 9, checked with a dry-run):
+     `cd "$BIGBOY_ROOT" && docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-build acr-postgres acr-db-init acr-migrate acr-db-acl acr-entitlement-standin acr-falkordb acr-api acr-projector acr-mcp`
+     (their `depends_on` stays inside the acr profiles, so a dry-run of exactly this command creates the nine acr containers and nothing else). Then `ps`, and confirm the images are the pinned digests: `docker inspect --format '{{.Image}}' dev-health-acr-mcp-acr-api-1 dev-health-acr-mcp-acr-mcp-1`
+     must print the ids in `BIGBOY_ACR_API_IMAGE` and `BIGBOY_ACR_MCP_IMAGE` of the host's `_records/images.env` (fb4c745e: `01cab48f...` and `38aeb351...`).
+  5. Readback: the venue answers, and the graph still holds the repository count noted in step 2 (34): run the same
+     `docker exec dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"` again and compare. Also check that the host's
+     `_records/images.env` carries `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true` (the file defaults it to false; the projector writes nothing without it).
+  6. After the readback, the old named volume `dev-health-acr-mcp_acr_entitlement_tmp` is left behind on purpose (it only held the stand-in's generated
+     nginx.conf; the new file uses `dev-health-acr-entitlement-tmp`): remove it with `docker volume rm dev-health-acr-mcp_acr_entitlement_tmp` when the
+     readback is good, or leave it.
+
 ## Go-only stack (CHAOS-8361)
 
 The bigboy stack runs no Python api, as prod does. The base `compose.yml` of the stack is a host file

@@ -22,7 +22,7 @@ Evidence Quality: 0.91 (high)
 // keeps this request identical to Python's on the wire: the per-work-unit
 // prompt carries no DEV_HEALTH_RESPONSE_FORMAT marker, so openai.py asks
 // for a bare `{"type": "json_object"}` and names no schema. A nil
-// JSONSchema is what puts OpenAIProvider and LocalProvider on that same
+// JSONSchema is what puts the shared llm client on that same
 // branch; a non-nil one here would send a structured-output schema Python
 // never sends, and would start putting ResponseFormatName on the wire.
 func TestWorkUnitExplanationRequestAsksForNoSchema(t *testing.T) {

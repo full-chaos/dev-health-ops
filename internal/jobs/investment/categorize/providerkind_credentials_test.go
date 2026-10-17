@@ -91,7 +91,7 @@ func TestNewProviderFromCredentialsLocalFallsBackWithEmptyBaseURL(t *testing.T) 
 }
 
 // TestNewProviderFromCredentialsOllamaUsesExplicitValues codex round 3
-// (#2234), P1 fix: org-BYO "ollama" now constructs *LocalProvider (the
+// (#2234), P1 fix: org-BYO "ollama" now constructs the shared local kind (the
 // OpenAI-compatible client Python's own OllamaProvider actually is), not
 // *OllamaProvider (the native /api/chat client) -- see the case's own
 // doc comment in providerkind.go for why NewProviderFromEnv's sibling
@@ -124,8 +124,8 @@ func TestNewProviderFromCredentialsOllamaUsesExplicitValues(t *testing.T) {
 // BaseURL+"/api/chat" (ollamaprovider.go:202) -- for the org's stored
 // "/v1" base_url (Python's own default shape, local.py:42) that is
 // ".../v1/api/chat", a path the OpenAI-compatible server behind it
-// doesn't serve. After the fix it constructs *LocalProvider, which
-// posts to BaseURL+"/chat/completions" (localprovider.go:195) --
+// doesn't serve. After the fix it constructs the shared local kind, which
+// posts to BaseURL+"/chat/completions" (dev-health-go llm/compatible.go) --
 // ".../v1/chat/completions", the correct OpenAI-compatible route.
 func TestReviewReproOrgBYOOllamaV1URLHitsChatCompletionsNotNativeAPIChat(t *testing.T) {
 	var gotPath string

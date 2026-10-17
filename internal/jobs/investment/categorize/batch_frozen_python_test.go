@@ -2,6 +2,7 @@ package categorize
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -207,6 +207,14 @@ var batchDivergences = map[string]bool{
 	"parse/divergence_error_without_message":  true,
 }
 
+// batchStatusDivergences are the provider statuses the production client maps
+// apart from Python, each to its named job status: a cancel in progress can
+// still deliver results, so the shared client keeps polling (Python folded it
+// into cancelled).
+var batchStatusDivergences = map[string]string{
+	"cancelling": string(BatchJobCancelling),
+}
+
 // batchMetadataFields maps every key _batch_payload_metadata sets to the
 // field of BatchItemResult that carries it. The test fails when Python's
 // set of keys and this table disagree.
@@ -320,7 +328,7 @@ func TestBatchProviderMatchesFrozenPython(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: no Python answer", name)
 		}
-		line, err := goBatchLine(lineCase)
+		line, err := goBatchLine(t, lineCase)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -341,7 +349,7 @@ func TestBatchProviderMatchesFrozenPython(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: no Python answer", name)
 		}
-		results, err := parseOpenAIBatchLines([]byte(parseCase.Text))
+		results, err := goBatchParse(t, parseCase.Text)
 		if python.Error || err != nil {
 			check(name, python.Error == (err != nil), fmt.Sprintf("python error=%v go error=%v", python.Error, err))
 			continue
@@ -371,7 +379,15 @@ func TestBatchProviderMatchesFrozenPython(t *testing.T) {
 		if !ok {
 			t.Fatalf("status %q: no Python answer", status)
 		}
-		if got := string(mapOpenAIBatchStatus(status)); got != want {
+		got := goBatchStatus(t, status)
+		if named, divergent := batchStatusDivergences[status]; divergent {
+			if got == want || got != named {
+				t.Errorf("status %q: Go maps %q, Python %q; the named divergence is %q", status, got, want, named)
+			}
+			found["status/"+status] = true
+			continue
+		}
+		if got != want {
 			t.Errorf("status %q: Go maps %q, Python %q", status, got, want)
 		}
 	}
@@ -381,12 +397,19 @@ func TestBatchProviderMatchesFrozenPython(t *testing.T) {
 			t.Errorf("%s: a named divergence has no case", name)
 		}
 	}
+	for status := range batchStatusDivergences {
+		if !found["status/"+status] {
+			t.Errorf("status %q: a named divergence has no case", status)
+		}
+	}
 }
 
-func goBatchLine(lineCase batchLineCase) ([]byte, error) {
-	provider := NewOpenAIProvider(OpenAIProviderConfig{
-		APIKey: secrets.NewHidden("oracle-placeholder"), Model: lineCase.Model, MaxOutputTokens: lineCase.MaxOutputTokens,
-	})
+// goBatchLine is the line the production batch client (the shared llm package
+// behind SharedProvider) uploads for one item, read off a scripted Batch API.
+func goBatchLine(t *testing.T, lineCase batchLineCase) ([]byte, error) {
+	t.Helper()
+	server := newBatchServer(t, "completed", "")
+	batch := sharedBatchFor(t, server.server.URL, lineCase.Model, lineCase.MaxOutputTokens)
 	var request CompletionRequest
 	switch lineCase.Kind {
 	case "categorization":
@@ -398,7 +421,36 @@ func goBatchLine(lineCase batchLineCase) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unknown kind %q", lineCase.Kind)
 	}
-	return provider.batchLine(BatchItem{CustomID: lineCase.CustomID, Request: request})
+	if _, err := batch.SubmitBatch(context.Background(), []BatchItem{{CustomID: lineCase.CustomID, Request: request}}); err != nil {
+		return nil, err
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	line := strings.TrimSuffix(server.upload, "\n")
+	if strings.Contains(line, "\n") {
+		return nil, fmt.Errorf("one item uploaded %d lines", strings.Count(server.upload, "\n")+1)
+	}
+	return []byte(line), nil
+}
+
+// goBatchParse is what the production batch client returns for a batch whose
+// output file is text.
+func goBatchParse(t *testing.T, text string) ([]BatchItemResult, error) {
+	t.Helper()
+	server := newBatchServer(t, "completed", text)
+	return sharedBatchFor(t, server.server.URL, "gpt-5-nano", 0).FetchBatchResults(context.Background(), "batch-1")
+}
+
+// goBatchStatus is the job status the production batch client maps a provider
+// status to.
+func goBatchStatus(t *testing.T, status string) string {
+	t.Helper()
+	server := newBatchServer(t, status, "")
+	state, err := sharedBatchFor(t, server.server.URL, "gpt-5-nano", 0).PollBatch(context.Background(), "batch-1")
+	if err != nil {
+		t.Fatalf("status %q: %v", status, err)
+	}
+	return string(state.Status)
 }
 
 // tagJSON tags every leaf of a JSON document with its type, the same way the

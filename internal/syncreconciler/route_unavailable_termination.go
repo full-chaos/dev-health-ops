@@ -250,6 +250,7 @@ func (sweep *UnreclaimableSweep) terminalizeRouteUnavailable(
 		return candidates[left].syncRunID < candidates[right].syncRunID
 	})
 
+	var wakeRuns []string
 	for _, candidate := range candidates {
 		affected, err := sweep.terminalizeOneRouteUnavailable(
 			ctx, tx, candidate, result.RouteUnavailableFault, now,
@@ -261,6 +262,9 @@ func (sweep *UnreclaimableSweep) terminalizeRouteUnavailable(
 			return sweepUnavailable(routeUnavailableStepRows, nil)
 		}
 		result.RouteUnavailableTerminalized += int(affected)
+		if affected == 1 {
+			wakeRuns = appendWakeRun(wakeRuns, candidate.syncRunID)
+		}
 	}
 
 	// The same fence the ordinary branch takes, and it carries the same
@@ -290,6 +294,7 @@ func (sweep *UnreclaimableSweep) terminalizeRouteUnavailable(
 	if commitErr != nil {
 		return sweepUnavailable(sweepStepCommit, commitErr)
 	}
+	wakeDispatchAfterCommit(ctx, sweep.wake, wakeRuns, now, syncrunrollup.DispatchWakePathRouteUnavailable)
 	return nil
 }
 

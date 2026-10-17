@@ -133,6 +133,9 @@ networks:
       config:
       - subnet: 10.199.79.0/28
     name: dho-query-internal
+  acr:
+    driver: bridge
+    name: dev-health-acr
 services:
   api:
     build:
@@ -1048,6 +1051,7 @@ services:
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      SYNC_DISPATCH_REDISPATCH_COUNTDOWN: ${SYNC_DISPATCH_REDISPATCH_COUNTDOWN:-10}
       VALKEY_URI: redis://valkey:6379/1
       WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
       WORKER_DATABASE_MODE: session
@@ -1952,6 +1956,358 @@ services:
       bind:
         create_host_path: true
     working_dir: /smoke
+  # ---- the acr venue stack (CHAOS-10004): was the compose project dev-health-acr-mcp on this host ----
+  # Profiles: `acr` starts everything; `acr-venue` starts only what must exist before acr-api (the database, its roles, the
+  # migrations, the grants, the entitlement stand-in). Start with plain docker compose:
+  #   docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env \
+  #     -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-deps --no-build <service>
+  # Every long-running service is in `acr` (a service whose dependency is in an inactive profile is an invalid project, so
+  # the dependencies carry both profiles). No secret VALUE is in this file: only the host paths of the secret files, which
+  # are mounted read-only by compose as /run/secrets/<name> and live in /var/lib/oci-cache/mcp-venue/secrets/.
+  # Data: the two bind mounts keep the host paths the old project used, so moving the stack here changes no data.
+  # Hostnames: container_name is the old project's name, and the aliases `postgres` and `falkordb` exist on the acr network
+  # only (the dev-health `postgres` stays unreachable from the acr services), so no acr setting changes.
+  # acr-api talks to the REAL ops (the venue moved off the stand-in, CHAOS-10004): ACR_DEV_HEALTH_ENTITLEMENT_URL defaults to the go-api
+  # internal listener by alias, http://go-api:8091 (acr-api is on dho-query-internal, where go-api listens), and the bearer is the
+  # file-backed secret acr_ops_svc_token (only its host path is here, ACR_OPS_SVC_TOKEN_FILE overrides it). CHAOS-9989:
+  # ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE is passed through, EMPTY unless the environment sets it (empty = acr's own behaviour);
+  # no tracked env file sets it, and none may on bigboy (chris: a persistent BYO setting bills his key). `ops` makes acr read an
+  # org's BYO LLM config from ops' internal route with that token (it needs the scope llm_config:read); set it for one run in the
+  # environment of the `docker compose up`, never in a file that stays. The entitlement stand-in is no longer
+  # needed by acr-api (no dependency, no URL): it stays defined, in profile acr-venue, so a rollback is
+  # two env values and a start of the stand-in: ACR_DEV_HEALTH_ENTITLEMENT_URL=http://acr-entitlement-standin:8088 and
+  # ACR_OPS_SVC_TOKEN_FILE=/var/lib/oci-cache/mcp-venue/secrets/entitlement_token.
+  # Every acr image is pinned by registry digest in the pins file _records/images.env (BIGBOY_ACR_API_IMAGE, BIGBOY_ACR_MCP_IMAGE, BIGBOY_ACR_POSTGRES_IMAGE,
+  # BIGBOY_ACR_FALKORDB_IMAGE, BIGBOY_ACR_NGINX_IMAGE); each is REQUIRED (`:?`): with a pin missing every compose command fails, naming it, instead of
+  # a default tag that could start a wrong image. So the acr lines must be in a host's _records/images.env BEFORE its checkout holds this file.
+  # acr-api and acr-mcp are the images of the acr release build; a build on this host needs --build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>
+  # (without both args acr-api refuses the sidecar with a 426).
+  acr-db-acl:
+    container_name: dev-health-acr-mcp-acr-db-acl-1
+    depends_on:
+      acr-migrate:
+        condition: service_completed_successfully
+      acr-postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: 0.5
+          memory: 256M
+        reservations:
+          cpus: 0.05
+          memory: 64M
+    entrypoint: [/usr/local/bin/acr-db-init]
+    command: [runtime-acl]
+    environment:
+      ACR_DB_NAME: ${ACR_DB_NAME:-acr}
+      ACR_ENABLE_EPISODE_WRITEBACK: 'false'
+      ACR_MIGRATION_DB_PASSWORD_FILE: /run/secrets/acr_migration_db_password
+      ACR_MIGRATION_DB_USER: ${ACR_MIGRATION_DB_USER:-acr_migration}
+      ACR_RUNTIME_DB_PASSWORD_FILE: /run/secrets/acr_runtime_db_password
+      ACR_RUNTIME_DB_USER: ${ACR_RUNTIME_DB_USER:-acr_runtime}
+      POSTGRES_HOST: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/acr_postgres_password
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${ACR_POSTGRES_ADMIN_USER:-acr_admin}
+    image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    networks:
+      acr: null
+    profiles: [acr, acr-venue]
+    restart: 'no'
+    secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
+    volumes:
+    - type: bind
+      source: ${ACR_VENUE_DIR:-/home/ubuntu/devhealth/dev-health-acr-mcp}/deploy/compose/acr-db-init.sh
+      target: /usr/local/bin/acr-db-init
+      read_only: true
+  acr-db-init:
+    container_name: dev-health-acr-mcp-acr-db-init-1
+    depends_on:
+      acr-postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: 0.5
+          memory: 256M
+        reservations:
+          cpus: 0.05
+          memory: 64M
+    entrypoint: [/usr/local/bin/acr-db-init]
+    command: [roles]
+    environment:
+      ACR_DB_NAME: ${ACR_DB_NAME:-acr}
+      ACR_MIGRATION_DB_PASSWORD_FILE: /run/secrets/acr_migration_db_password
+      ACR_MIGRATION_DB_USER: ${ACR_MIGRATION_DB_USER:-acr_migration}
+      ACR_RUNTIME_DB_PASSWORD_FILE: /run/secrets/acr_runtime_db_password
+      ACR_RUNTIME_DB_USER: ${ACR_RUNTIME_DB_USER:-acr_runtime}
+      POSTGRES_HOST: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/acr_postgres_password
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: ${ACR_POSTGRES_ADMIN_USER:-acr_admin}
+    image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    networks:
+      acr: null
+    profiles: [acr, acr-venue]
+    restart: 'no'
+    secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
+    volumes:
+    - type: bind
+      source: ${ACR_VENUE_DIR:-/home/ubuntu/devhealth/dev-health-acr-mcp}/deploy/compose/acr-db-init.sh
+      target: /usr/local/bin/acr-db-init
+      read_only: true
+  acr-migrate:
+    container_name: dev-health-acr-mcp-acr-migrate-1
+    depends_on:
+      acr-db-init:
+        condition: service_completed_successfully
+      acr-postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 512M
+        reservations:
+          cpus: 0.1
+          memory: 128M
+    entrypoint: [/usr/local/bin/acr-migrate]
+    command: [up]
+    environment:
+      ACR_ENVIRONMENT: development
+      ACR_POSTGRES_CONNECTION_KIND: direct
+      ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn
+    image: ${BIGBOY_ACR_API_IMAGE:?BIGBOY_ACR_API_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    networks:
+      acr: null
+    profiles: [acr, acr-venue]
+    restart: 'no'
+    secrets: [acr_migration_dsn]
+    user: 1001:1001
+  acr-postgres:
+    container_name: dev-health-acr-mcp-postgres-1
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 1G
+        reservations:
+          cpus: 0.25
+          memory: 256M
+    environment:
+      POSTGRES_DB: ${ACR_DB_NAME:-acr}
+      POSTGRES_PASSWORD_FILE: /run/secrets/acr_postgres_password
+      POSTGRES_USER: ${ACR_POSTGRES_ADMIN_USER:-acr_admin}
+    healthcheck:
+      interval: 10s
+      retries: 5
+      test: [CMD-SHELL, 'pg_isready -U $${POSTGRES_USER}']
+      timeout: 5s
+    image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    networks:
+      acr:
+        aliases: [postgres]
+    profiles: [acr, acr-venue]
+    secrets: [acr_postgres_password]
+    volumes:
+    - type: bind
+      source: /var/lib/oci-cache/mcp-venue/postgres-data
+      target: /var/lib/postgresql
+  acr-entitlement-standin:
+    container_name: dev-health-acr-mcp-acr-entitlement-standin-1
+    command:
+    - |
+      set -eu
+      T="$$(cat /run/secrets/acr_entitlement_token)"
+      sed "s|@TOKEN@|$$T|" /tpl/nginx.conf.tpl > /tmp/nginx.conf
+      exec nginx -c /tmp/nginx.conf -g 'daemon off;'
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          cpus: 0.01
+          memory: 16M
+    entrypoint: [/bin/sh, -c]
+    healthcheck:
+      interval: 10s
+      retries: 5
+      test: [CMD, wget, --spider, -q, 'http://127.0.0.1:8088/healthz']
+      timeout: 5s
+    image: ${BIGBOY_ACR_NGINX_IMAGE:?BIGBOY_ACR_NGINX_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    networks:
+      acr: null
+    profiles: [acr, acr-venue]
+    secrets: [acr_entitlement_token]
+    volumes:
+    - type: bind
+      source: ${ACR_VENUE_DIR:-/home/ubuntu/devhealth/dev-health-acr-mcp}/acr-entitlement-standin/nginx.conf.tpl
+      target: /tpl/nginx.conf.tpl
+      read_only: true
+    - type: volume
+      source: acr_entitlement_tmp
+      target: /tmp
+  acr-api:
+    container_name: dev-health-acr-mcp-acr-api-1
+    command: [serve]
+    depends_on:
+      acr-db-acl:
+        condition: service_completed_successfully
+      acr-postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 512M
+        reservations:
+          cpus: 0.1
+          memory: 128M
+    environment:
+      ACR_ADDR: :8080
+      ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
+      ACR_CONTEXT_FABRIC_FALKOR_ADDR: falkordb:6379
+      ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE: 'true'
+      ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX: acr-cf
+      ACR_CONTEXT_FABRIC_FALKOR_TLS: 'false'
+      ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED: 'true'
+      ACR_CONTEXT_FABRIC_MODEL: gpt-5.6-luna
+      ACR_CONTEXT_FABRIC_MODEL_API_KEY_FILE: /run/secrets/acr_openai_api_key
+      ACR_CONTEXT_FABRIC_MODEL_FALLBACK: gpt-5-nano
+      ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS: '1'
+      ACR_CONTEXT_FABRIC_MODEL_PROVIDER: openai
+      ACR_CONTEXT_FABRIC_MODEL_TIMEOUT: 100s
+      ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE: ${ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE:-}
+      ACR_DATA_GRAPHQL_URL: http://query-api:8096
+      ACR_DATA_QUERY_TIMEOUT: 30s
+      ACR_DATA_QUERY_URL: http://query-api:8095
+      ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_svc_token
+      ACR_DEV_HEALTH_ENTITLEMENT_URL: ${ACR_DEV_HEALTH_ENTITLEMENT_URL:-http://go-api:8091}
+      ACR_DEVICE_VERIFICATION_URL: http://127.0.0.1:8081/device
+      ACR_ENABLE_EPISODE_WRITEBACK: 'false'
+      ACR_ENVIRONMENT: development
+      ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
+      ACR_EVIDENCE_ID_KEYS_FILE: /run/secrets/acr_evidence_keys
+      ACR_LOG_LEVEL: info
+      ACR_POSTGRES_CONNECTION_KIND: direct
+      ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
+      ACR_REQUEST_TIMEOUT: 117s
+      ACR_REQUIRE_BACKING_STORES: 'true'
+      ACR_WRITE_TIMEOUT: 135s
+    image: ${BIGBOY_ACR_API_IMAGE:?BIGBOY_ACR_API_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    networks:
+      acr: null
+      dho-clickhouse-readers: null
+      dho-query-internal: null
+    profiles: [acr]
+    secrets:
+    - acr_runtime_dsn
+    - acr_clickhouse_dsn
+    - acr_evidence_active_kid
+    - acr_evidence_keys
+    - acr_ops_svc_token
+    - acr_openai_api_key
+    user: 1001:1001
+    working_dir: /tmp
+  acr-projector:
+    container_name: dev-health-acr-mcp-acr-projector-1
+    command: [serve]
+    depends_on:
+      acr-db-acl:
+        condition: service_completed_successfully
+      acr-postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 512M
+        reservations:
+          cpus: 0.1
+          memory: 128M
+    entrypoint: [/usr/local/bin/acr-projector]
+    environment:
+      ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
+      ACR_CONTEXT_FABRIC_FALKOR_ADDR: falkordb:6379
+      ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE: 'true'
+      ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX: acr-cf
+      ACR_CONTEXT_FABRIC_FALKOR_TLS: 'false'
+      ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED: 'true'
+      ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECTION_ENABLED:-false}
+      ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS: ${ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS:-70d529e0-3c06-4597-8480-794fd02328b6}
+      ACR_ENABLE_EPISODE_WRITEBACK: 'false'
+      ACR_ENVIRONMENT: development
+      ACR_POSTGRES_CONNECTION_KIND: direct
+      ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
+      ACR_PROJECTOR_ADDR: :8090
+      ACR_REQUIRE_BACKING_STORES: 'true'
+    image: ${BIGBOY_ACR_API_IMAGE:?BIGBOY_ACR_API_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    networks:
+      acr: null
+      dho-clickhouse-readers: null
+    profiles: [acr]
+    secrets: [acr_runtime_dsn, acr_clickhouse_dsn]
+    user: 1001:1001
+  acr-falkordb:
+    container_name: dev-health-acr-mcp-falkordb-1
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 3G
+        reservations:
+          cpus: 0.1
+          memory: 512M
+    healthcheck:
+      interval: 10s
+      retries: 5
+      start_period: 10s
+      test: [CMD, redis-cli, GRAPH.QUERY, _acr_health, RETURN 1]
+      timeout: 5s
+    image: ${BIGBOY_ACR_FALKORDB_IMAGE:?BIGBOY_ACR_FALKORDB_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    networks:
+      acr:
+        aliases: [falkordb]
+    profiles: [acr]
+    volumes:
+    - type: bind
+      source: /var/lib/oci-cache/mcp-venue/falkordb-data
+      target: /var/lib/falkordb/data
+  acr-mcp:
+    container_name: dev-health-acr-mcp-acr-mcp-1
+    command: [serve]
+    depends_on:
+      acr-api:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 256M
+        reservations:
+          cpus: 0.05
+          memory: 64M
+    environment:
+      ACR_API_ALLOW_INSECURE_INTERNAL_HTTP: 'true'
+      ACR_API_TIMEOUT: 120s
+      ACR_API_URL: http://acr-api:8080
+      ACR_MCP_AUTHORIZATION_SERVER: http://127.0.0.1:8081
+      ACR_MCP_HTTP_BASE_PATH: /mcp
+      ACR_MCP_HTTP_LISTEN: :8081
+      ACR_MCP_HTTP_WRITE_TIMEOUT: 140s
+      ACR_MCP_RESOURCE_URL: http://127.0.0.1:8081/mcp
+      ACR_MCP_TRANSPORT: http
+    image: ${BIGBOY_ACR_MCP_IMAGE:?BIGBOY_ACR_MCP_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    networks:
+      acr: null
+    ports:
+    - mode: ingress
+      host_ip: 127.0.0.1
+      target: 8081
+      published: '8081'
+      protocol: tcp
+    profiles: [acr]
 volumes:
   clickhouse_data:
     driver: local
@@ -1959,6 +2315,31 @@ volumes:
     driver: local
   valkey_data:
     driver: local
+  acr_entitlement_tmp:
+    name: dev-health-acr-entitlement-tmp
+secrets:
+  acr_postgres_password:
+    file: ${ACR_POSTGRES_ADMIN_PASSWORD_FILE:-/var/lib/oci-cache/mcp-venue/secrets/postgres_admin_password}
+  acr_runtime_db_password:
+    file: ${ACR_RUNTIME_DB_PASSWORD_FILE:-/var/lib/oci-cache/mcp-venue/secrets/runtime_db_password}
+  acr_migration_db_password:
+    file: ${ACR_MIGRATION_DB_PASSWORD_FILE:-/var/lib/oci-cache/mcp-venue/secrets/migration_db_password}
+  acr_runtime_dsn:
+    file: ${ACR_RUNTIME_DSN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/runtime_dsn}
+  acr_migration_dsn:
+    file: ${ACR_MIGRATION_DSN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/migration_dsn}
+  acr_clickhouse_dsn:
+    file: ${ACR_CLICKHOUSE_DSN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/clickhouse_dsn}
+  acr_evidence_active_kid:
+    file: ${ACR_EVIDENCE_ACTIVE_KID_FILE:-/var/lib/oci-cache/mcp-venue/secrets/evidence_active_kid}
+  acr_evidence_keys:
+    file: ${ACR_EVIDENCE_KEYS_FILE:-/var/lib/oci-cache/mcp-venue/secrets/evidence_keys}
+  acr_openai_api_key:
+    file: /var/lib/oci-cache/mcp-venue/secrets/openai_api_key
+  acr_entitlement_token:
+    file: ${ACR_ENTITLEMENT_TOKEN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/entitlement_token}
+  acr_ops_svc_token:
+    file: ${ACR_OPS_SVC_TOKEN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/ops_svc_acr_token}
 x-acr-build:
   context: ./acr
   dockerfile: Dockerfile

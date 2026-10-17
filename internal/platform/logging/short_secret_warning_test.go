@@ -85,3 +85,47 @@ func TestShortCredentialFieldWithProseInItsNameIsReportedAsUnusual(t *testing.T)
 		t.Errorf("the field name leaked: %s", out.String())
 	}
 }
+
+func shortFieldRecord(t *testing.T, field string) (map[string]any, string) {
+	t.Helper()
+	secrets.ResetRegistered()
+	t.Cleanup(secrets.ResetRegistered)
+	var out bytes.Buffer
+	restore := InstallDefault(NewJSON(&out, slog.LevelDebug))
+	t.Cleanup(restore)
+	secrets.RegisterCredentialJSON([]byte(`{"` + field + `":"abc"}`))
+	var record map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &record); err != nil {
+		t.Fatalf("%v: %s", err, out.String())
+	}
+	return record, out.String()
+}
+
+func TestShortCredentialFieldNameLongerThanSixtyFourIsStillNamed(t *testing.T) {
+	field := "client_secret_" + strings.Repeat("a", 60)
+	record, line := shortFieldRecord(t, field)
+	if record["field"] != field {
+		t.Errorf("long identifier-like field not named: %s", line)
+	}
+}
+
+func TestShortCredentialFieldNameCarryingADigitRunIsNotLoggedVerbatim(t *testing.T) {
+	for _, field := range []string{"password-12345678", "token_a1b2c3d4e5", "secret.9f8e7d6c5b"} {
+		record, line := shortFieldRecord(t, field)
+		if record["field"] != "non_identifier_name" {
+			t.Errorf("%q: field = %v, want non_identifier_name (%s)", field, record["field"], line)
+		}
+		if strings.Contains(line, field) {
+			t.Errorf("%q leaked: %s", field, line)
+		}
+	}
+}
+
+func TestShortCredentialFieldNamesWithHyphensAndDigitsInWordsStayNamed(t *testing.T) {
+	for _, field := range []string{"client-secret", "x-api-key", "oauth2_token", "api_key_v2"} {
+		record, line := shortFieldRecord(t, field)
+		if record["field"] != field {
+			t.Errorf("%q not named: %s", field, line)
+		}
+	}
+}

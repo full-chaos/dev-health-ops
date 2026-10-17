@@ -275,7 +275,28 @@ func warnShort(name, field string) {
 	}
 }
 
-var identifierField = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+var identifierField = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
+
+// identifierLike reports whether a credential field name is safe to log verbatim:
+// word characters only, and no segment with three or more digits, which
+// reads as a value pasted into a key ("password-12345678").
+func identifierLike(field string) bool {
+	if !identifierField.MatchString(field) {
+		return false
+	}
+	for _, segment := range strings.FieldsFunc(field, func(r rune) bool { return r == '_' || r == '.' || r == '-' }) {
+		digits := 0
+		for _, r := range segment {
+			if r >= '0' && r <= '9' {
+				digits++
+			}
+		}
+		if digits >= 3 {
+			return false
+		}
+	}
+	return true
+}
 
 // warnAttrs names the setting, and the credential field when there is one. The
 // field is its own attribute: its key is not a protected word, and a bare field
@@ -284,7 +305,7 @@ func warnAttrs(name, field string) []any {
 	if field == "" {
 		return []any{"setting", name}
 	}
-	if !identifierField.MatchString(field) {
+	if !identifierLike(field) {
 		// A key with spaces or punctuation reads as prose to the log redactor, which
 		// would hide it or a neighbour; say that it is unusual and how long it is.
 		return []any{"setting", name, "field", "non_identifier_name", "field_length", len(field)}

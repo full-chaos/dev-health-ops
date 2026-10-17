@@ -419,6 +419,9 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		classification.Path = target.Path
 		classification.Route = routeTemplate(ctx)
 		classification.Body = string(message)
+		if classification.Class == ErrorRateLimited {
+			classification.Dimension = RateLimitDimension(c.Provider, target.Path, string(message))
+		}
 		retryDelay := c.retryDelay(attempt, classification.RetryAfter, classification.Class)
 		if classification.Class == ErrorRateLimited && c.Gate != nil {
 			// The gate is shared cross-runtime (Celery workers read the same
@@ -763,4 +766,25 @@ func CollectPages[T any](ctx context.Context, maxPages int, fetch PageFunc[T]) (
 		cursor = next
 	}
 	return nil, errors.New("provider pagination budget exhausted")
+}
+
+// RateLimitDimension names the budget dimension a rate-limited request drew
+// from, read from the request alone: a GitHub secondary or abuse limit is
+// secondary_abuse_risk, the search API is search, a path ending in /graphql is
+// graphql_cost, anything else rest_core. These are the dimension names the
+// dispatch budget buckets and the cooldown gate use.
+func RateLimitDimension(provider, path, message string) string {
+	if provider == "github" {
+		lower := strings.ToLower(message)
+		if strings.Contains(lower, "secondary") || strings.Contains(lower, "abuse") {
+			return "secondary_abuse_risk"
+		}
+		if strings.HasPrefix(path, "/search/") {
+			return "search"
+		}
+	}
+	if strings.HasSuffix(path, "/graphql") {
+		return "graphql_cost"
+	}
+	return "rest_core"
 }

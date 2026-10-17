@@ -423,30 +423,95 @@ func (repository *PostgresRepository) RateLimitEpisode(
 	return episode, nil
 }
 
+// RateLimitObservation is the normalized, durable record of the rate limit that
+// deferred a unit (provider_rate_limit_observations): the budget dimension the
+// limited request drew from and the provider's own delay. The unit's route
+// family is not known at the moment of a 429 (dispatch does not keep its
+// estimates), so the row carries the ambiguous-dimension attribution the
+// dispatch cooldown gate reads: it gates on provider, integration and
+// dimension and never on a guessed family. Nothing here is raw provider text.
+type RateLimitObservation struct {
+	Dimension  string
+	RetryAfter time.Duration
+}
+
+// AmbiguousDimensionAttribution is the route_family_attribution value the
+// dispatch cooldown gate (internal/syncdispatchruntime) reads as "gate on
+// provider + integration + dimension, never on a guessed family".
+const AmbiguousDimensionAttribution = "ambiguous_dimension"
+
+// rateLimitObservationReason is the closed reason category stored with every
+// observation this repository writes.
+const rateLimitObservationReason = "provider_rate_limited"
+
 // DeferForRateLimit keeps a rate-limited unit claimable without consuming its
 // bounded failure budget, mirroring Python's treatment of a 429 as deferred
 // work rather than a failure. The attempt decrement matches
 // DeferForBudgetContention: River's snooze is already attempt-neutral, and the
-// authoritative sync-unit attempt must stay neutral with it.
+// authoritative sync-unit attempt must stay neutral with it. The observation
+// row is written in the same transaction as the RETRYING stamp, so the table
+// never holds a row for a deferral that did not happen, nor misses one that did.
 func (repository *PostgresRepository) DeferForRateLimit(
 	ctx context.Context,
 	claim Claim,
 	availableAt time.Time,
 	now time.Time,
+	observation RateLimitObservation,
 ) error {
 	if repository == nil || repository.Pool == nil || ctx == nil ||
 		claim.Validate() != nil || now.IsZero() || !availableAt.After(now) ||
 		availableAt.Sub(now) > rateLimitMaxTotalWait {
 		return ErrInvalidConfiguration
 	}
-	command, err := repository.Pool.Exec(
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return ErrLeaseLost
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	command, err := tx.Exec(
 		ctx, deferForRateLimitSQL,
 		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	// A row with no dimension gates nothing (the cooldown reader skips an
+	// ambiguous row without one), so a limit that carries none, such as a
+	// gate denial before any request went out, writes no row.
+	if observation.Dimension != "" {
+		attribution := AmbiguousDimensionAttribution
+		if _, err := tx.Exec(
+			ctx, insertRateLimitObservationSQL,
+			uuid.NewString(), claim.OrgID, claim.Provider, claim.IntegrationID, claim.SyncRunID, claim.ID,
+			attribution, observation.Dimension, observation.retryAfterSeconds(), rateLimitObservationReason, now.UTC(),
+		); err != nil {
+			return err
+		}
+	} else {
+		slog.DebugContext(ctx, "sync_rate_limit_observation_skipped", "unit_id", claim.ID, "provider", claim.Provider, "reason", "no_dimension")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrLeaseLost
+	}
+	if observation.Dimension != "" {
+		slog.DebugContext(ctx, "sync_rate_limit_observation_written",
+			"unit_id", claim.ID, "provider", claim.Provider, "dimension", observation.Dimension)
+	}
 	return nil
+}
+
+// retryAfterSeconds is the provider's delay, finite, never negative, capped at
+// the longest deferral this repository schedules.
+func (observation RateLimitObservation) retryAfterSeconds() *float64 {
+	if observation.RetryAfter <= 0 {
+		return nil
+	}
+	delay := observation.RetryAfter
+	if delay > rateLimitMaxTotalWait {
+		delay = rateLimitMaxTotalWait
+	}
+	seconds := delay.Seconds()
+	return &seconds
 }
 
 // rateLimitMaxTotalWait bounds a single deferral's not-before fence. It equals
@@ -1018,6 +1083,12 @@ WHERE unit.id = $1::uuid
   AND unit.lease_owner = $2
   AND unit.lease_expires_at IS NOT NULL
   AND unit.lease_expires_at > $3`
+
+const insertRateLimitObservationSQL = `
+INSERT INTO public.provider_rate_limit_observations (
+  id, org_id, provider, integration_id, sync_run_id, sync_run_unit_id,
+  route_family_attribution, dimension, retry_after_seconds, reason, observed_at
+) VALUES ($1::uuid, $2, $3, $4::uuid, $5::uuid, $6::uuid, $7, $8, $9, $10, $11)`
 
 const deferForChunkContinuationSQL = `
 UPDATE public.sync_run_units AS unit

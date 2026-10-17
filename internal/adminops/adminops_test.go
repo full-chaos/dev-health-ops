@@ -20,7 +20,7 @@ func TestTheAdminGroupHoldsEveryVerb(t *testing.T) {
 			paths = append(paths, group.Name+" "+child.Name)
 		}
 	}
-	want := "users create,users list,users update,orgs create,orgs list,orgs delete,llm-settings get,llm-settings set,llm-settings delete,llm-budget stale,llm-budget void-reservation,licenses keygen,licenses create,bundles create,bundles list,bundles assign-plan,bundles assign-org,org entitlements,billing seed,billing list,billing pull-stripe,billing sync-stripe,features seed"
+	want := "users create,users list,users update,users delete,orgs create,orgs list,orgs delete,llm-settings get,llm-settings set,llm-settings delete,llm-budget stale,llm-budget void-reservation,licenses keygen,licenses create,bundles create,bundles list,bundles assign-plan,bundles assign-org,org entitlements,billing seed,billing list,billing pull-stripe,billing sync-stripe,features seed"
 	if command.Name != "admin" || strings.Join(paths, ",") != want {
 		t.Fatalf("the verbs are %v, want %s", paths, want)
 	}

@@ -691,6 +691,7 @@ func TestProviderWorldsAreWhatTheProducersWrite(t *testing.T) {
 				right, _ := json.Marshal(table)
 				if !bytes.Equal(left, right) {
 					t.Errorf("%s: the producers write other rows than the committed world holds (rerun with -freeze-provider-worlds and review the diff)", name)
+					logWorldTableDifference(t, committedTable, table)
 				}
 			}
 		})
@@ -756,4 +757,43 @@ func worldCredential(step worldStep, id string) providerfoundation.Credential {
 		fields[key] = secrets.NewValue(value)
 	}
 	return providerfoundation.NewCredential(step.Provider, id, step.Config, fields)
+}
+
+// logWorldTableDifference prints the row counts and the first rows that exist
+// on one side only, so a failing comparison names the rows and not just the table.
+func logWorldTableDifference(t *testing.T, committed, produced WorldTable) {
+	t.Helper()
+	encode := func(rows [][]any) map[string]int {
+		out := map[string]int{}
+		for _, row := range rows {
+			raw, _ := json.Marshal(row)
+			out[string(raw)]++
+		}
+		return out
+	}
+	left, right := encode(committed.Rows), encode(produced.Rows)
+	columns := make([]string, 0, len(produced.Columns))
+	for _, column := range produced.Columns {
+		columns = append(columns, column.Name)
+	}
+	t.Logf("%s: committed %d rows, produced %d rows; columns %v", produced.Name, len(committed.Rows), len(produced.Rows), columns)
+	report := func(label string, from, other map[string]int) {
+		shown := 0
+		for row, count := range from {
+			if other[row] >= count {
+				continue
+			}
+			if shown == 3 {
+				break
+			}
+			shown++
+			missing := count - other[row]
+			if len(row) > 600 {
+				row = row[:600] + "..."
+			}
+			t.Logf("  %s (x%d): %s", label, missing, row)
+		}
+	}
+	report("only committed", left, right)
+	report("only produced", right, left)
 }

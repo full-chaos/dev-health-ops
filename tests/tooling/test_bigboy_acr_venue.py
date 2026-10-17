@@ -281,5 +281,48 @@ def test_the_switch_procedure_removes_the_old_containers_and_keeps_the_data() ->
     assert section.index("--profile acr up -d") < section.index(
         "docker inspect --format"
     )
-    assert "MATCH (r:Repository) RETURN count(r)" in section
+    counts = [
+        m.start()
+        for m in re.finditer(
+            r"GRAPH\.QUERY <graph> \"MATCH \(r:Repository\) RETURN count\(r\)\"",
+            section,
+        )
+    ]
+    assert (
+        len(counts) == 2
+        and counts[0]
+        < section.index(down)
+        < section.index("--profile acr up -d")
+        < counts[1]
+    ), counts
     assert "docker volume rm dev-health-acr-mcp_acr_entitlement_tmp" in section
+
+
+def test_the_acr_settings_keep_the_old_defaults_where_the_cutover_changes_the_env(
+    tmp_path,
+) -> None:
+    """After the switch compose reads the ops side's env files, not the old project's .env. The ops side sets POSTGRES_USER for its own
+    database, so the acr admin user is its own variable; and the projector switch defaults to false (as the old compose did) while the
+    tracked env file sets the live value true."""
+    root = scratch_root(tmp_path)
+    (root / "ops" / ".env").write_text("POSTGRES_USER=devhealth\n")
+    svc = services(root, "acr")
+    assert svc["acr-postgres"]["environment"]["POSTGRES_USER"] == "acr_admin"
+    assert svc["acr-db-init"]["environment"]["POSTGRES_USER"] == "acr_admin"
+    assert (
+        svc["acr-projector"]["environment"]["ACR_CONTEXT_FABRIC_PROJECTION_ENABLED"]
+        == "true"
+    )
+    # without the line in the env file the old file's own default applies
+    pins = [
+        line
+        for line in PINS_FILE.read_text().splitlines()
+        if not line.startswith("ACR_CONTEXT_FABRIC_PROJECTION_ENABLED")
+    ]
+    (root / "_records" / "images.env").write_text("\n".join(pins) + "\n")
+    assert (
+        services(root, "acr")["acr-projector"]["environment"][
+            "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED"
+        ]
+        == "false"
+    )

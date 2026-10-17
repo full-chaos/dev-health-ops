@@ -104,7 +104,9 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
      `dho-query-internal` and `dho-clickhouse-readers` are external and stay.
   4. Start here: `--profile acr up -d`, then `ps`, and confirm the images are the pinned digests: `docker inspect --format '{{.Image}}' dev-health-acr-mcp-acr-api-1 dev-health-acr-mcp-acr-mcp-1`
      must print the ids in `BIGBOY_ACR_API_IMAGE` and `BIGBOY_ACR_MCP_IMAGE` of the host's `_records/images.env` (fb4c745e: `01cab48f...` and `38aeb351...`).
-  5. Readback: the venue answers, and the graph still holds the repository count noted in step 2 (34).
+  5. Readback: the venue answers, and the graph still holds the repository count noted in step 2 (34): run the same
+     `docker exec dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"` again and compare. Also check that the host's
+     `_records/images.env` carries `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true` (the file defaults it to false; the projector writes nothing without it).
   6. After the readback, the old named volume `dev-health-acr-mcp_acr_entitlement_tmp` is left behind on purpose (it only held the stand-in's generated
      nginx.conf; the new file uses `dev-health-acr-entitlement-tmp`): remove it with `docker volume rm dev-health-acr-mcp_acr_entitlement_tmp` when the
      readback is good, or leave it.

@@ -156,6 +156,9 @@ def test_the_digests_are_in_the_pins_file_only(tmp_path) -> None:
         if line and not line.startswith("#")
     )
     pins.pop("DHO_API_CH_USERS_XML")  # the host path of the users file, not an image
+    pins.pop(
+        "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED"
+    )  # the acr projector switch (CHAOS-10004), a setting, not an image
     # the acr venue stack's pins (CHAOS-10004) are required (`:?`) like the three below: a default tag could start a wrong image
     acr_pins = {name: pins.pop(name) for name in sorted(pins) if "_ACR_" in name}
     assert sorted(acr_pins) == [

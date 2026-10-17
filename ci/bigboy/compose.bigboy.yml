@@ -1966,6 +1966,10 @@ services:
   # Data: the two bind mounts keep the host paths the old project used, so moving the stack here changes no data.
   # Hostnames: container_name is the old project's name, and the aliases `postgres` and `falkordb` exist on the acr network
   # only (the dev-health `postgres` stays unreachable from the acr services), so no acr setting changes.
+  # CHAOS-9989: acr-api passes ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE through, EMPTY unless the environment sets it (empty = acr's
+  # own behaviour, as before). `ops` makes acr read an org's BYO LLM config from ops' internal route over the entitlement URL and
+  # token below; turn it on only when the MCP lead says so (ops serves the route and the credential holds llm_config:read; the
+  # stand-in answers neither). It needs no new network or URL entry.
   # The images acr-api and acr-mcp are built on this host (docker build --build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>:
   # without both args acr-api refuses the sidecar with a 426); they are pinned by LOCAL IMAGE ID in _records/images.env
   # (BIGBOY_ACR_API_IMAGE, BIGBOY_ACR_MCP_IMAGE); the database, graph and stand-in images are pinned by registry digest there too (BIGBOY_ACR_POSTGRES_IMAGE, BIGBOY_ACR_FALKORDB_IMAGE, BIGBOY_ACR_NGINX_IMAGE). Each defaults to a :not-resolved tag that fails at start instead of running a wrong image.
@@ -2168,6 +2172,7 @@ services:
       ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES: '0'
       ACR_CONTEXT_FABRIC_MODEL_PROVIDER: openai
       ACR_CONTEXT_FABRIC_MODEL_TIMEOUT: 100s
+      ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE: ${ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE:-}
       ACR_DATA_GRAPHQL_URL: http://query-api:8096
       ACR_DATA_QUERY_TIMEOUT: 30s
       ACR_DATA_QUERY_URL: http://query-api:8095

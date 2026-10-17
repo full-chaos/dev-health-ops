@@ -88,6 +88,7 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
 - Images: postgres, nginx and falkordb are pinned by registry digest, acr-api and acr-mcp by LOCAL image id, all in the pins file
   (`BIGBOY_ACR_*_IMAGE`; absent, a `:not-resolved` tag that fails at the start). The two acr images are built on this host from the acr
   checkout with `--build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>`; without both args acr-api refuses the sidecar with a 426.
+- BYO LLM config (CHAOS-9989): acr-api passes `ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE` through, empty unless the environment sets it (empty is acr's behaviour before). `ops` makes acr read an org's config from ops' internal `llm-config` route with the entitlement credential, so it needs the real ops URL in `ACR_DEV_HEALTH_ENTITLEMENT_URL` (the stand-in does not serve the route) and a credential holding `llm_config:read`. Turn it on only when MCP says so.
 - The one-time move from the old project `dev-health-acr-mcp` to this file is a recreate of the acr stack (new project label, same names
   and data). Run it only in a window MCP opens: stop the old project's containers, then `--profile acr up -d` here, then `ps` and a venue
   readback. Before it, render the acr services from the old `compose.yml` and from this file and diff them (names, images, environment,

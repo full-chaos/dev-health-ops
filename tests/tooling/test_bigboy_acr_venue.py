@@ -206,3 +206,21 @@ def test_the_start_order_of_the_acr_stack_is_kept(tmp_path) -> None:
         "acr-db-acl": "service_completed_successfully",
     }
     assert cond["acr-mcp"] == {"acr-api": "service_started"}
+
+
+def test_the_org_llm_config_source_is_passed_through_and_empty_by_default(
+    tmp_path,
+) -> None:
+    root = scratch_root(tmp_path)
+    env = services(root, "acr")["acr-api"]["environment"]
+    assert env["ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"] == ""
+    on = services(root, "acr", ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE="ops")
+    assert (
+        on["acr-api"]["environment"]["ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"]
+        == "ops"
+    )
+    # only acr-api reads it
+    assert (
+        "ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"
+        not in services(root, "acr")["acr-projector"]["environment"]
+    )

@@ -176,8 +176,9 @@ SELECT
     multiIf(
         attr_map.kind IN ('ai_assisted', 'agent_created', 'ai_review'),
         attr_map.kind,
-        attr_map.kind = 'human', 'human',
-        'unknown'
+        ifNull(attr_map.kind, '') NOT IN ('', 'human'), 'unknown',
+        endsWith(lower(trim(BOTH ' ' FROM ifNull(pr.author_name, ''))), '[bot]'), 'bot',
+        'human'
     ) AS bucket,
     toDate(if(pr.merged_at IS NOT NULL, pr.merged_at, pr.created_at)) AS day,
     countIf(
@@ -240,7 +241,8 @@ func dedupedPRs(bindings *[]clickhouse.Binding, repoID string, repoIDs []string,
         argMax(pr.first_review_at, pr.last_synced) AS first_review_at,
         argMax(pr.comments_count, pr.last_synced) AS comments_count,
         argMax(pr.additions, pr.last_synced) AS additions,
-        argMax(pr.deletions, pr.last_synced) AS deletions
+        argMax(pr.deletions, pr.last_synced) AS deletions,
+        argMax(pr.author_name, pr.last_synced) AS author_name
     FROM git_pull_requests AS pr
     WHERE 1 = 1
       ` + sf + `

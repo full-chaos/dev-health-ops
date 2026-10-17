@@ -48,7 +48,10 @@ const (
 	BucketAgentCreated AttributionBucket = "agent_created"
 	BucketAIReview     AttributionBucket = "ai_review"
 	BucketHuman        AttributionBucket = "human"
-	BucketUnknown      AttributionBucket = "unknown"
+	// BucketBot is a pull request with no AI signal whose author login ends in
+	// "[bot]" (dependabot and the like): neither human nor AI (chris, D6045).
+	BucketBot     AttributionBucket = "bot"
+	BucketUnknown AttributionBucket = "unknown"
 )
 
 // isAIBucket mirrors AI_BUCKETS (ai_impact.py:40).
@@ -62,7 +65,7 @@ func isAIBucket(bucket AttributionBucket) bool {
 // put ai_assisted first. Row order within a group is observable, so this is
 // pinned as a literal rather than recomputed.
 var bucketEmitOrder = []AttributionBucket{
-	BucketAgentCreated, BucketAIAssisted, BucketAIReview, BucketHuman, BucketUnknown,
+	BucketAgentCreated, BucketAIAssisted, BucketAIReview, BucketHuman, BucketBot, BucketUnknown,
 }
 
 // PullRequestRow is the subset of PullRequestRow (metrics/schemas.py) this
@@ -78,6 +81,8 @@ type PullRequestRow struct {
 	Additions             *uint32
 	Deletions             *uint32
 	ChangedFiles          *uint32
+	// AuthorName is the pull request author login; nil when unknown.
+	AuthorName *string
 }
 
 type PullRequestReviewRow struct {
@@ -318,6 +323,29 @@ func safeBucket(kind *string) AttributionBucket {
 	return BucketUnknown
 }
 
+// ClassifyBucket is the bucket of one pull request. An AI attribution kind
+// decides first. A pull request with no AI signal is human by default (chris,
+// D6045: "by default everything is human unless it's AI"), or bot when the
+// author login ends in "[bot]". Only a non-empty kind that names no bucket is
+// unknown: that is bad data, never a default.
+func ClassifyBucket(kind, authorName *string) AttributionBucket {
+	if kind != nil && *kind != "" {
+		// A stored "human" kind is no AI signal: the author still decides
+		// between human and bot.
+		if bucket := safeBucket(kind); bucket != BucketHuman {
+			return bucket
+		}
+	}
+	if authorName != nil && isBotLogin(*authorName) {
+		return BucketBot
+	}
+	return BucketHuman
+}
+
+func isBotLogin(login string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(login)), "[bot]")
+}
+
 // isTestPath ports _is_test_path (:116). Same ASCII-containment argument as
 // safeBucket: every literal compared here is ASCII.
 func isTestPath(path *string) bool {
@@ -397,7 +425,7 @@ func Compute(params Params) []Record {
 			}
 			teamID = attribution.TeamID
 		}
-		bucket := safeBucket(kind)
+		bucket := ClassifyBucket(kind, pr.AuthorName)
 		teamIDs := []*string{teamID}
 		shares := []float64{1}
 		if teamID == nil && params.TeamResolver != nil {
@@ -787,6 +815,9 @@ func buildRecords(
 		for _, bucket := range bucketEmitOrder {
 			bucketFacts := filterBucket(groupFacts, bucket)
 			// The unknown bucket ALWAYS emits a row, even when empty (:419).
+			// Kept on purpose: the key has no computed_at, so the empty row is
+			// what supersedes a stale unknown row (prs_total > 0) from before
+			// the human default when a day is recomputed.
 			bucketIncidents := anchored[anchorKey{group: key, bucket: bucket}]
 			if len(bucketFacts) == 0 && bucket != BucketUnknown && bucketIncidents == 0 {
 				continue

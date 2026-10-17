@@ -51,6 +51,7 @@ from dev_health_ops.models.work_items import (
     WorkItemDependency,
     WorkItemStatusTransition,
 )
+from dev_health_ops.storage.repo_anchor import REPO_ANCHOR_COLUMNS, fetch_repo_anchor
 from dev_health_ops.storage.team_provider_identity import (
     fetch_team_provider_identity,
 )
@@ -364,6 +365,21 @@ class ClickHouseStore:
         """
         assert self.client is not None
         row = build_repository_insert_row(repo)
+        # CHAOS-3383: provider_repo_id and identity_path belong to the Go
+        # provider sync; this writer never knows them, so it carries them from
+        # the stored versions it replaces.
+        org_id = str(getattr(self, "org_id", None) or "default")
+        async with self._lock:
+            stored = await asyncio.to_thread(
+                fetch_repo_anchor, self.client, [(org_id, row["id"])]
+            )
+        row.update(
+            zip(
+                REPO_ANCHOR_COLUMNS,
+                stored.get((org_id, row["id"]), ("", "")),
+                strict=True,
+            )
+        )
         await self._insert_rows(
             "repos",
             [
@@ -376,6 +392,7 @@ class ClickHouseStore:
                 "provider",
                 "last_synced",
                 "source_id",
+                *REPO_ANCHOR_COLUMNS,
             ],
             [row],
         )

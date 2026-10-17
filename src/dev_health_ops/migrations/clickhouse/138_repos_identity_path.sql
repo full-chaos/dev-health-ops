@@ -1,0 +1,16 @@
+-- CHAOS-3383: the path a repository's id was minted from.
+--
+--   identity_path  repos.id is a one-way hash of a lower-cased path, so the
+--                  path it came from cannot be read back from it, and `repo`
+--                  is overwritten with the current path on every sync. This
+--                  column keeps the minting path, so that a later sync that
+--                  finds the repository again by its provider id
+--                  (provider_repo_id, migration 134) after a rename can keep
+--                  the same repo id and work-item ids. '' until a provider
+--                  sync that knows it writes it.
+--
+-- Additive, no data mutation, no backfill: the next GitLab repository sync
+-- writes it. Every writer of repos carries the held value forward when its row
+-- states none (stored-version contract; census
+-- TestEveryReposWriterCarriesTheRepositoryAnchor).
+ALTER TABLE repos ADD COLUMN IF NOT EXISTS identity_path String DEFAULT '';

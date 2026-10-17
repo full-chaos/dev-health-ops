@@ -45,7 +45,7 @@ def parse_discovery(raw: bytes | str, trusted_issuer: str) -> Discovery:
     """Validate a discovery document fetched for *trusted_issuer*."""
     try:
         document = json.loads(raw, object_pairs_hook=_refuse_duplicate_members)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ContractError(f"{SURFACE}: document is not valid JSON: {exc}") from exc
     validate(SURFACE, document)
 

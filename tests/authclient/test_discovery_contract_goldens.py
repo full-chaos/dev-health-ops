@@ -111,3 +111,14 @@ def test_a_duplicate_member_is_refused_before_validation() -> None:
     }"""
     with pytest.raises(ContractError, match="duplicate object member"):
         parse_discovery(raw, "https://auth.example.test")
+
+
+def test_malformed_utf8_is_a_contract_error_not_a_decode_error() -> None:
+    with pytest.raises(ContractError, match="not valid JSON"):
+        parse_discovery(b'{"issuer": "\xff"}', "https://auth.example.test")
+
+
+def test_the_client_is_exported_from_the_package() -> None:
+    from dev_health_ops import authclient
+
+    assert authclient.parse_discovery is parse_discovery

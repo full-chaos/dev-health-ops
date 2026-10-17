@@ -554,11 +554,6 @@ func classifyResponseWithBody(provider, requestPath string, response *http.Respo
 	if withBody == nil {
 		return classification
 	}
-	if withBody.Class != classification.Class {
-		slog.Debug("provider response reclassified from its body",
-			"provider", provider, "status", response.StatusCode,
-			"from_class", classification.Class, "to_class", withBody.Class, "dimension", withBody.Dimension)
-	}
 	return withBody
 }
 

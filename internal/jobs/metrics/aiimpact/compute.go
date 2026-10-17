@@ -330,7 +330,11 @@ func safeBucket(kind *string) AttributionBucket {
 // unknown: that is bad data, never a default.
 func ClassifyBucket(kind, authorName *string) AttributionBucket {
 	if kind != nil && *kind != "" {
-		return safeBucket(kind)
+		// A stored "human" kind is no AI signal: the author still decides
+		// between human and bot.
+		if bucket := safeBucket(kind); bucket != BucketHuman {
+			return bucket
+		}
 	}
 	if authorName != nil && isBotLogin(*authorName) {
 		return BucketBot

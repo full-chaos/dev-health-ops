@@ -783,15 +783,17 @@ func TestClassifyBucketDefaultsToHumanAndRoutesBots(t *testing.T) {
 		kind, author *string
 		want         AttributionBucket
 	}{
-		"no signal, no author":         {nil, nil, BucketHuman},
-		"no signal, empty kind":        {strPtr(""), strPtr("octocat"), BucketHuman},
-		"no signal, human author":      {nil, strPtr("octocat"), BucketHuman},
-		"bot author":                   {nil, strPtr("dependabot[bot]"), BucketBot},
-		"bot author, case and space":   {nil, strPtr("  Renovate[BOT] "), BucketBot},
-		"bot-like name without suffix": {nil, strPtr("botmaster"), BucketHuman},
-		"ai kind beats bot author":     {strPtr("agent_created"), strPtr("copilot[bot]"), BucketAgentCreated},
-		"ai kind, human author":        {strPtr("ai_assisted"), strPtr("octocat"), BucketAIAssisted},
-		"garbage kind stays unknown":   {strPtr("vibes"), strPtr("octocat"), BucketUnknown},
+		"no signal, no author":          {nil, nil, BucketHuman},
+		"no signal, empty kind":         {strPtr(""), strPtr("octocat"), BucketHuman},
+		"no signal, human author":       {nil, strPtr("octocat"), BucketHuman},
+		"bot author":                    {nil, strPtr("dependabot[bot]"), BucketBot},
+		"bot author, case and space":    {nil, strPtr("  Renovate[BOT] "), BucketBot},
+		"bot-like name without suffix":  {nil, strPtr("botmaster"), BucketHuman},
+		"ai kind beats bot author":      {strPtr("agent_created"), strPtr("copilot[bot]"), BucketAgentCreated},
+		"ai kind, human author":         {strPtr("ai_assisted"), strPtr("octocat"), BucketAIAssisted},
+		"stored human kind, bot author": {strPtr("human"), strPtr("dependabot[bot]"), BucketBot},
+		"stored human kind, human":      {strPtr("human"), strPtr("octocat"), BucketHuman},
+		"garbage kind stays unknown":    {strPtr("vibes"), strPtr("octocat"), BucketUnknown},
 	} {
 		if got := ClassifyBucket(tc.kind, tc.author); got != tc.want {
 			t.Errorf("%s: ClassifyBucket = %q, want %q", name, got, tc.want)

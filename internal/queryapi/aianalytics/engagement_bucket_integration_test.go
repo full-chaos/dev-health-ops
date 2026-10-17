@@ -21,7 +21,7 @@ func TestRealClickHouse_EngagementBucketsMatchTheRollupClassifier(t *testing.T) 
 	for _, bucket := range []string{"human", "bot", "unknown", "ai_assisted"} {
 		rollup(t, ctx, conn, org1, "", repo, "pull_request", "2026-08-01", bucket, 1, 1, 0, 0.1, "2026-08-02 00:00:00")
 	}
-	// number, author, first review after 2h (human), 4h (bot), 6h (garbage kind), 8h (AI).
+	// number, author, first review after 2h (human), 4h and 10h (bot, mean 7h), 6h (garbage kind), 8h (AI).
 	pr := func(number int, author string, reviewHours int, comments int) {
 		exec(t, ctx, conn, `INSERT INTO git_pull_requests (repo_id, number, title, author_name, created_at, merged_at, first_review_at,
             comments_count, additions, deletions, org_id, last_synced)
@@ -33,6 +33,7 @@ func TestRealClickHouse_EngagementBucketsMatchTheRollupClassifier(t *testing.T) 
 	pr(2, "dependabot[bot]", 4, 20)
 	pr(3, "octocat", 6, 40)
 	pr(4, "octocat", 8, 80)
+	pr(5, "dependabot[bot]", 10, 5)
 	attr := func(number int, kind string) {
 		exec(t, ctx, conn, `INSERT INTO ai_attribution (record_id, org_id, provider, subject_type, subject_id, repo_id, kind, source,
             confidence, evidence, observed_at, ingested_at)
@@ -40,6 +41,7 @@ func TestRealClickHouse_EngagementBucketsMatchTheRollupClassifier(t *testing.T) 
             toDateTime64('2026-08-01 12:00:00', 3, 'UTC'), now64(3)`, org1, number, repo, kind)
 	}
 	attr(3, "vibes")
+	attr(5, "human")
 	attr(4, "ai_assisted")
 
 	raw, err := loadEngagement(ctx, client, org1, day("2026-08-01").Time(), day("2026-08-03").Time(), repo, nil, false)
@@ -53,7 +55,7 @@ func TestRealClickHouse_EngagementBucketsMatchTheRollupClassifier(t *testing.T) 
 		}
 		pickup[row.Bucket] = *row.PickupLatency
 	}
-	want := map[string]float64{"human": 2, "bot": 4, "unknown": 6, "ai_assisted": 8}
+	want := map[string]float64{"human": 2, "bot": 7, "unknown": 6, "ai_assisted": 8}
 	if len(pickup) != len(want) {
 		t.Fatalf("engagement buckets = %v, want %v", pickup, want)
 	}

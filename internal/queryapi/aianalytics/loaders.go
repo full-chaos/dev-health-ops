@@ -176,8 +176,7 @@ SELECT
     multiIf(
         attr_map.kind IN ('ai_assisted', 'agent_created', 'ai_review'),
         attr_map.kind,
-        attr_map.kind = 'human', 'human',
-        ifNull(attr_map.kind, '') != '', 'unknown',
+        ifNull(attr_map.kind, '') NOT IN ('', 'human'), 'unknown',
         endsWith(lower(trim(BOTH ' ' FROM ifNull(pr.author_name, ''))), '[bot]'), 'bot',
         'human'
     ) AS bucket,

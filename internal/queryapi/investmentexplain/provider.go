@@ -18,11 +18,8 @@ package investmentexplain
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
-	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
-	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // modelEnvByProvider ports llm/providers/__init__.py's
@@ -45,7 +42,7 @@ func platformDefaultModel(kind categorize.ProviderKind) (string, bool) {
 	if _, resolved := modelEnvByProvider[kind]; !resolved {
 		return "", false
 	}
-	model := llmbudget.DefaultModel(string(kind), envsecrets.ProcessLookup)
+	model := categorize.PlatformDefaultModel(kind)
 	return model, model != ""
 }
 
@@ -66,14 +63,6 @@ func ResolveModelName(kind categorize.ProviderKind, model string) (resolved stri
 	}
 	if model != "" {
 		return model, true
-	}
-	for _, envName := range modelEnvByProvider[kind] {
-		if value := os.Getenv(envName); value != "" {
-			return value, true
-		}
-	}
-	if value := os.Getenv("LLM_MODEL"); value != "" {
-		return value, true
 	}
 	if def, ok := platformDefaultModel(kind); ok {
 		return def, true

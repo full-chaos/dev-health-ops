@@ -128,10 +128,18 @@ OLLAMA_API_KEY=optional-cloud-key
 supported. Omit the key for an unauthenticated local host. These environment
 bundles are platform configuration, never organization BYO settings.
 
-Hosted provider bundles. The generic `LLM_API_KEY`, `LLM_BASE_URL` and
-`LLM_MODEL` win over the provider-specific names, as above; an empty base URL is
-the provider's public endpoint and an empty model is the provider's default
-(`claude-haiku-5-5`, `gemini-3.8-flash`, `qwen-plus`):
+Hosted provider bundles. The model is resolved in one order for every route
+(categorize, both explain routes and the budget status): a model set on the
+request or in the organization's BYO settings, then `LLM_MODEL_<PROVIDER>` (or
+the provider's own name such as `GEMINI_MODEL`), then the generic `LLM_MODEL`
+for the platform provider only, then the provider's default. The platform
+provider is `LLM_PROVIDER`, or the provider the keys auto-detect when it is
+unset. The generic `LLM_MODEL` never names the model of another provider. An
+empty base URL is the provider's public endpoint and an empty model is the
+provider's default (`claude-haiku-5-5`, `gemini-3.8-flash`, `qwen-plus`). Set
+`<PROVIDER>_BASE_URL` without a trailing `/v1`: the client appends `/v1/messages`
+itself, so `https://api.anthropic.com/v1` posts to `/v1/v1/messages` and the
+call fails.
 
 ```dotenv
 # Anthropic

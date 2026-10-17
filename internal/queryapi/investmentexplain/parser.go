@@ -359,26 +359,6 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 		AntiClaims:      antiClaims,
 	}
 
-	narrative := make([]string, 0, 2+len(findings)*1+len(actions)*3+len(antiClaims))
-	narrative = append(narrative, output.Summary)
-	for _, finding := range findings {
-		narrative = append(narrative, finding.Finding)
-	}
-	for _, action := range actions {
-		narrative = append(narrative, action.Action, action.Why, action.Where)
-	}
-	narrative = append(narrative, antiClaims...)
-	joinedNarrative := strings.Join(narrative, " ")
-	if word, matched := firstForbiddenMatch(joinedNarrative); matched {
-		return ParseResult{
-			Status:        ParseStatusForbiddenLanguage,
-			Reason:        "narrative text contains forbidden hedge/certainty language",
-			ReasonRule:    "forbidden_language:" + word,
-			ReasonPath:    "narrative",
-			ReasonSnippet: snippetOf(joinedNarrative),
-		}
-	}
-
 	return ParseResult{Status: ParseStatusValid, Output: &output}
 }
 

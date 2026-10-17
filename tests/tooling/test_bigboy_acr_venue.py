@@ -37,6 +37,17 @@ ACR_VENUE = {
     "acr-migrate",
     "acr-postgres",
 }
+SWITCH_UP_ORDER = [
+    "acr-postgres",
+    "acr-db-init",
+    "acr-migrate",
+    "acr-db-acl",
+    "acr-entitlement-standin",
+    "acr-falkordb",
+    "acr-api",
+    "acr-projector",
+    "acr-mcp",
+]
 SECRETS_DIR = "/var/lib/oci-cache/mcp-venue/secrets/"
 
 
@@ -275,6 +286,15 @@ def test_the_switch_procedure_removes_the_old_containers_and_keeps_the_data() ->
     assert not [c for c in commands if re.search(r"\bstop\b|\bkill\b", c)], commands
     assert section.index(down) < section.index("--profile acr up -d")
     assert "REMOVED, not only stopped" in section
+    # the up names exactly the nine acr services (a bare profile up also recreates the dev-health stack), after the projection variable is named
+    up = [c for c in commands if "--profile acr up" in c]
+    assert len(up) == 1, commands
+    assert up[0].split(" up -d --no-build ")[1].split() == sorted(
+        ACR_ALL, key=lambda n: SWITCH_UP_ORDER.index(n)
+    ), up[0]
+    assert section.index("ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true") < section.index(
+        up[0]
+    )
     # MCP: the graph is saved before the down, the images are checked after the up, the repository count is read back
     assert section.index("BGSAVE") < section.index(down)
     assert "falkordb-data.backup-" in section

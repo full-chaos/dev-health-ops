@@ -102,7 +102,11 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
   3. Remove the old project's containers and its own network, keeping the data: `cd /home/ubuntu/devhealth/dev-health-acr-mcp && docker compose -p dev-health-acr-mcp -f compose.yml down`
      (NEVER `-v`, and never `--rmi`). The bind mounts `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data` are host paths and stay; the networks
      `dho-query-internal` and `dho-clickhouse-readers` are external and stay.
-  4. Start here: `--profile acr up -d`, then `ps`, and confirm the images are the pinned digests: `docker inspect --format '{{.Image}}' dev-health-acr-mcp-acr-api-1 dev-health-acr-mcp-acr-mcp-1`
+  4. Set the projector switch in bigboy's env BEFORE the `up`: `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true` must be a line of the host's `_records/images.env` (the tracked
+     `ci/bigboy/images.env` has it; the compose file defaults it to false, as the old file did, and the projector writes nothing without it). Then start ONLY the nine acr services,
+     by name (a bare `--profile acr up -d` also starts or recreates every default-profile dev-health service, 42 containers instead of 9, checked with a dry-run):
+     `cd "$BIGBOY_ROOT" && docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-build acr-postgres acr-db-init acr-migrate acr-db-acl acr-entitlement-standin acr-falkordb acr-api acr-projector acr-mcp`
+     (their `depends_on` stays inside the acr profiles, so a dry-run of exactly this command creates the nine acr containers and nothing else). Then `ps`, and confirm the images are the pinned digests: `docker inspect --format '{{.Image}}' dev-health-acr-mcp-acr-api-1 dev-health-acr-mcp-acr-mcp-1`
      must print the ids in `BIGBOY_ACR_API_IMAGE` and `BIGBOY_ACR_MCP_IMAGE` of the host's `_records/images.env` (fb4c745e: `01cab48f...` and `38aeb351...`).
   5. Readback: the venue answers, and the graph still holds the repository count noted in step 2 (34): run the same
      `docker exec dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"` again and compare. Also check that the host's

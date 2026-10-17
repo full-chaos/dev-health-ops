@@ -554,7 +554,17 @@ func classifyResponseWithBody(provider, requestPath string, response *http.Respo
 	if withBody == nil {
 		return classification
 	}
+	if withBody.Class != classification.Class {
+		logBodyReclassification(provider, response.StatusCode, classification.Class, withBody.Class, withBody.Dimension)
+	}
 	return withBody
+}
+
+// logBodyReclassification logs only closed-set values (provider, status,
+// class names, dimension name), never body or error text.
+func logBodyReclassification(provider string, status int, from, to ErrorClass, dimension string) {
+	slog.Debug("provider response reclassified from its body",
+		"provider", provider, "status", status, "from_class", string(from), "to_class", string(to), "dimension", dimension)
 }
 
 func (c *HTTPClient) retryDelay(attempt int, retryAfter time.Duration, class ErrorClass) time.Duration {

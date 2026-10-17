@@ -132,10 +132,16 @@ func seed(t *testing.T, uri string, configs []cfg) {
 VALUES ($1::uuid, $2, $3, $4, '{}'::json, $5, now(), now())`, uuidN(0x1a, integration), org, c.provider, fmt.Sprintf("integration-%d", integration), !c.inactive); err != nil {
 				t.Fatalf("seed integration: %v", err)
 			}
+			// The sources are selected for the integration's own configuration
+			// (CHAOS-10064: a trigger that names no sources plans the sources a
+			// scheduled run plans, the tagged ones). Python's verb ignores the
+			// tag, so the frozen rows stay its answer; unselected sources are
+			// covered by TestBackfillPlansTheScheduledSourceSet.
+			selectedFor := fmt.Sprintf(`{"planner_managed_sync_config_id": %q}`, uuidN(0xc0, integration))
 			for index, enabled := range []bool{!c.noEnabled, !c.noEnabled, false} {
 				if _, err := conn.Exec(ctx, `INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
-VALUES ($1::uuid, $2, $3::uuid, $4, 'repo', $5, $5, $5, '{}'::json, $6, now(), now())`,
-					uuidN(0x5a, integration*10+index), org, uuidN(0x1a, integration), c.provider, fmt.Sprintf("org/repo-%d-%d", integration, index), enabled); err != nil {
+VALUES ($1::uuid, $2, $3::uuid, $4, 'repo', $5, $5, $5, $7::json, $6, now(), now())`,
+					uuidN(0x5a, integration*10+index), org, uuidN(0x1a, integration), c.provider, fmt.Sprintf("org/repo-%d-%d", integration, index), enabled, selectedFor); err != nil {
 					t.Fatalf("seed source: %v", err)
 				}
 			}

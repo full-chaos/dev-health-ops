@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 )
 
@@ -41,10 +43,12 @@ func (h handlers) handoffPoll() time.Duration {
 }
 
 // handoffScope is what a trigger is handed to the scheduler under: the sync
-// configuration, and the integration's enabled sources and datasets.
+// configuration, the sources its scheduled runs plan (selected), the
+// integration's enabled sources and its enabled datasets.
 type handoffScope struct {
 	config   *synchandoff.Config
 	sources  []string
+	enabled  []string
 	datasets []string
 }
 
@@ -60,10 +64,14 @@ var errNoRunnableConfig = refuse(http.StatusConflict, "Integration has no sync c
 // refused here, with nothing written: it would otherwise be retried and
 // quarantined out of the caller's sight.
 //
-// It also returns the integration's enabled sources and enabled datasets: an
-// omitted selector means all of them in Python's planner, and the scheduler
-// would otherwise narrow the run to the configuration's tagged sources and
-// sync_targets, so the hand-off names them.
+// It also returns the sources and the enabled datasets the trigger names when
+// its request omits them. The sources are the ones a scheduled run of the
+// configuration plans (schedsync.ScheduledSourceIDs), so a manual run covers
+// the hourly run's scope (CHAOS-10064, chris 2026-10-17; Python's planner took
+// every enabled source of the integration, a named divergence). The datasets
+// are the integration's enabled ones: an omitted selector means all of them in
+// Python's planner, and the scheduler would otherwise narrow the run to the
+// configuration's sync_targets.
 func handoffTarget(ctx context.Context, tx pgx.Tx, orgID string, integrationID uuid.UUID, integrationActive bool) (handoffScope, error) {
 	var configID string
 	err := tx.QueryRow(ctx, `
@@ -84,11 +92,17 @@ ORDER BY created_at ASC, id ASC LIMIT 1`, orgID, integrationID).Scan(&configID)
 		return handoffScope{}, errNoRunnableConfig
 	}
 	scope := handoffScope{config: config}
-	if scope.sources, err = textColumn(ctx, tx, `
+	if scope.enabled, err = textColumn(ctx, tx, `
 SELECT id::text FROM public.integration_sources
 WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled
 ORDER BY full_name, id`, orgID, integrationID); err != nil {
 		return handoffScope{}, fmt.Errorf("list enabled sources: %w", err)
+	}
+	scope.sources = scope.enabled
+	if config.PlannerManaged && config.SourceID == nil {
+		if scope.sources, err = schedsync.ScheduledSourceIDs(ctx, tx, orgID, integrationID.String(), config.ID, nil, true); err != nil {
+			return handoffScope{}, fmt.Errorf("list the sources the configuration selects: %w", err)
+		}
 	}
 	if scope.datasets, err = textColumn(ctx, tx, `
 SELECT dataset_key FROM public.integration_datasets
@@ -149,6 +163,9 @@ func (h handlers) handOff(w http.ResponseWriter, r *http.Request, scope triggerS
 		if err != nil {
 			return err
 		}
+		if err := refuseUnselectedSources(target, scope); err != nil {
+			return err
+		}
 		input := synchandoff.MintInput{Mode: mode, TriggeredBy: triggeredBy, Since: since, Before: before,
 			SourceIDs: target.sources, DatasetKeys: target.datasets}
 		if scope.sourceIDsSet {
@@ -201,4 +218,25 @@ func (h handlers) handoffResponse(w http.ResponseWriter, r *http.Request, rawInt
 		body.Set("occurrence_id", trigger.OccurrenceID)
 	}
 	policy.WriteModel(w, http.StatusAccepted, body, nil)
+}
+
+// refuseUnselectedSources refuses a request that names an enabled source the
+// configuration does not select: the scheduler would plan it, outside the scope
+// of the configuration's scheduled runs (CHAOS-10064). A disabled or unknown
+// source is not planned by the scheduler and is left to it, as before.
+func refuseUnselectedSources(target handoffScope, scope triggerScope) error {
+	if !scope.sourceIDsSet || target.config.SourceID != nil || !target.config.PlannerManaged {
+		return nil
+	}
+	for _, raw := range scope.sourceIDs {
+		parsed, err := pythonparity.ParseUUID(raw)
+		if err != nil {
+			continue
+		}
+		id := parsed.String()
+		if slices.Contains(target.enabled, id) && !slices.Contains(target.sources, id) {
+			return refuse(http.StatusBadRequest, "source_id "+id+" is not selected for the integration's sync configuration")
+		}
+	}
+	return nil
 }

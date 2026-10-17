@@ -35,14 +35,15 @@ func (flag *listFlag) Set(text string) error {
 }
 
 // scopeSources is the source scope the trigger carries. With no --source-ids it
-// is the scope the verb always wrote (sourceIDsFor). With --source-ids each id
-// must be an enabled source of the configuration's integration (a configuration
-// pinned to one source accepts only that source and writes no list, as before).
-// The result keeps the enabled sources' order, so the written list does not
-// depend on how the operator spelled or ordered the flag.
-func scopeSources(config *Config, requested, enabled []string) ([]string, error) {
+// is the configuration's selected sources (sourceIDsFor). With --source-ids each
+// id must be an enabled source of the configuration's integration that the
+// configuration selects (a configuration pinned to one source accepts only that
+// source and writes no list, as before). The result keeps the enabled sources'
+// order, so the written list does not depend on how the operator spelled or
+// ordered the flag.
+func scopeSources(config *Config, requested, enabled, selected []string) ([]string, error) {
 	if len(requested) == 0 {
-		return sourceIDsFor(config, enabled), nil
+		return sourceIDsFor(config, selected), nil
 	}
 	wanted := map[string]bool{}
 	for _, text := range requested {
@@ -81,6 +82,16 @@ func scopeSources(config *Config, requested, enabled []string) ([]string, error)
 		slices.Sort(unknown)
 		return nil, RefusedError{Message: fmt.Sprintf("backfill run: --source-ids %s is not an enabled source of integration %s "+
 			"(sync configuration %s): nothing was started", strings.Join(unknown, ", "), *config.IntegrationID, config.ID)}
+	}
+	var unselected []string
+	for _, id := range scoped {
+		if !slices.Contains(selected, id) {
+			unselected = append(unselected, id)
+		}
+	}
+	if len(unselected) > 0 {
+		return nil, RefusedError{Message: fmt.Sprintf("backfill run: --source-ids %s is an enabled source of integration %s that sync configuration %s "+
+			"does not select, so its scheduled runs never plan it: nothing was started", strings.Join(unselected, ", "), *config.IntegrationID, config.ID)}
 	}
 	return scoped, nil
 }

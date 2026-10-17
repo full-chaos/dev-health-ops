@@ -44,11 +44,14 @@ type Config struct {
 
 // Trigger is what the verb wrote.
 type Trigger struct {
-	OccurrenceID    string
-	ScheduledFor    time.Time
-	JobID           string
-	DatasetKeys     []string
-	EnabledSources  int
+	OccurrenceID   string
+	ScheduledFor   time.Time
+	JobID          string
+	DatasetKeys    []string
+	EnabledSources int
+	// SelectedSources is how many sources the configuration's scheduled runs
+	// plan (the scope of a trigger that names no sources).
+	SelectedSources int
 	Provider        string
 	OrgID           string
 	SyncConfigID    string

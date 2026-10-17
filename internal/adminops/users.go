@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
@@ -436,7 +437,7 @@ func runUsersDelete(ctx context.Context, env cli.Env) int {
 			result.User.Email, result.User.ID, result.User.IsSuperuser, result.User.IsActive, result.Memberships)
 		return cli.ExitFailure
 	}
-	logger := slog.New(slog.NewTextHandler(env.Stderr, nil))
+	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
 	logger.InfoContext(ctx, "admin: user deleted by the operator CLI", "user_id", result.User.ID.String(),
 		"is_superuser", result.User.IsSuperuser, "is_active", result.User.IsActive, "memberships_removed", result.Memberships)
 	fmt.Fprintf(env.Stdout, "Deleted user: %s (id: %s)\n", result.User.Email, result.User.ID)

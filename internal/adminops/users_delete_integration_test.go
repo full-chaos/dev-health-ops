@@ -5,6 +5,7 @@ package adminops
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -87,9 +88,14 @@ func TestUsersDeleteGuardsThenDeletesAUserAndWhatBelongsToIt(t *testing.T) {
 	if db.count(t, `SELECT count(*) FROM users WHERE email = 'keep@example.com'`) != 1 || orgs() != seedOrgs+1 {
 		t.Fatal("a delete took something that is not the user's")
 	}
-	// the log line names the user by id, the facts of the delete, and carries no email, password or DSN
-	if !strings.Contains(logs, "admin: user deleted by the operator CLI") || !strings.Contains(logs, "user_id=") ||
-		!strings.Contains(logs, "memberships_removed=1") || strings.Contains(logs, "@example.com") || strings.Contains(logs, "password") {
+	// the log line is one JSON record naming the user by id and the facts of the delete; no email, password or DSN
+	var record map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(logs)), &record); err != nil {
+		t.Fatalf("the log is not one JSON record: %q", logs)
+	}
+	if record["msg"] != "admin: user deleted by the operator CLI" || record["memberships_removed"] != float64(1) ||
+		record["is_active"] != false || record["is_superuser"] != false || record["user_id"] == nil ||
+		strings.Contains(logs, "@example.com") || strings.Contains(logs, "password") {
 		t.Fatalf("the log line is %q", logs)
 	}
 

@@ -141,7 +141,7 @@ def test_no_secret_value_is_in_the_file_only_paths_of_secret_files(tmp_path) -> 
                 assert str(value).startswith("/run/secrets/"), (name, key)
 
 
-def test_the_acr_images_are_pinned_by_registry_digest_and_not_resolved_by_default(
+def test_the_acr_images_are_pinned_by_registry_digest_and_a_missing_pin_fails_the_render(
     tmp_path,
 ) -> None:
     root = scratch_root(tmp_path)
@@ -169,18 +169,26 @@ def test_the_acr_images_are_pinned_by_registry_digest_and_not_resolved_by_defaul
         assert re.search(r"@sha256:[0-9a-f]{64}$", pins[var]), var
         for name in names:
             assert svc[name]["image"] == pins[var], name
-    # without the pins file the images are :not-resolved tags, which fail at the start, never a guessed build
-    (root / "_records" / "images.env").write_text(
-        "\n".join(
-            line
-            for line in PINS_FILE.read_text().splitlines()
-            if "BIGBOY_ACR" not in line
+    # a missing pin FAILS THE RENDER, naming the variable, for each of the five: no default tag can start a wrong image
+    pinned = PINS_FILE.read_text().splitlines()
+    for var in (
+        "BIGBOY_ACR_API_IMAGE",
+        "BIGBOY_ACR_MCP_IMAGE",
+        "BIGBOY_ACR_POSTGRES_IMAGE",
+        "BIGBOY_ACR_NGINX_IMAGE",
+        "BIGBOY_ACR_FALKORDB_IMAGE",
+    ):
+        (root / "_records" / "images.env").write_text(
+            "\n".join(line for line in pinned if not line.startswith(var + "=")) + "\n"
         )
-        + "\n"
-    )
-    bare = services(root, "acr")
-    assert bare["acr-api"]["image"] == "acr-api:not-resolved"
-    assert bare["acr-mcp"]["image"] == "acr-mcp:not-resolved"
+        for profiles in ((), ("acr",)):
+            proc = config(root, *profiles)
+            assert proc.returncode != 0 and var in proc.stderr, (
+                var,
+                profiles,
+                proc.returncode,
+            )
+            assert "is required" in proc.stderr, proc.stderr[-300:]
 
 
 def test_the_start_order_of_the_acr_stack_is_kept(tmp_path) -> None:

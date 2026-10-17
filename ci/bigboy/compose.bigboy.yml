@@ -1977,7 +1977,8 @@ services:
   # two env values and a start of the stand-in: ACR_DEV_HEALTH_ENTITLEMENT_URL=http://acr-entitlement-standin:8088 and
   # ACR_OPS_SVC_TOKEN_FILE=/var/lib/oci-cache/mcp-venue/secrets/entitlement_token.
   # Every acr image is pinned by registry digest in the pins file _records/images.env (BIGBOY_ACR_API_IMAGE, BIGBOY_ACR_MCP_IMAGE, BIGBOY_ACR_POSTGRES_IMAGE,
-  # BIGBOY_ACR_FALKORDB_IMAGE, BIGBOY_ACR_NGINX_IMAGE); each defaults to a :not-resolved tag that fails at start instead of running a wrong image.
+  # BIGBOY_ACR_FALKORDB_IMAGE, BIGBOY_ACR_NGINX_IMAGE); each is REQUIRED (`:?`): with a pin missing every compose command fails, naming it, instead of
+  # a default tag that could start a wrong image. So the acr lines must be in a host's _records/images.env BEFORE its checkout holds this file.
   # acr-api and acr-mcp are the images of the acr release build; a build on this host needs --build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>
   # (without both args acr-api refuses the sidecar with a 426).
   acr-db-acl:
@@ -2008,7 +2009,7 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/acr_postgres_password
       POSTGRES_PORT: '5432'
       POSTGRES_USER: ${ACR_POSTGRES_ADMIN_USER:-acr_admin}
-    image: ${BIGBOY_ACR_POSTGRES_IMAGE:-postgres:not-resolved}
+    image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     networks:
       acr: null
     profiles: [acr, acr-venue]
@@ -2044,7 +2045,7 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/acr_postgres_password
       POSTGRES_PORT: '5432'
       POSTGRES_USER: ${ACR_POSTGRES_ADMIN_USER:-acr_admin}
-    image: ${BIGBOY_ACR_POSTGRES_IMAGE:-postgres:not-resolved}
+    image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     networks:
       acr: null
     profiles: [acr, acr-venue]
@@ -2076,7 +2077,7 @@ services:
       ACR_ENVIRONMENT: development
       ACR_POSTGRES_CONNECTION_KIND: direct
       ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn
-    image: ${BIGBOY_ACR_API_IMAGE:-acr-api:not-resolved}
+    image: ${BIGBOY_ACR_API_IMAGE:?BIGBOY_ACR_API_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     networks:
       acr: null
     profiles: [acr, acr-venue]
@@ -2102,7 +2103,7 @@ services:
       retries: 5
       test: [CMD-SHELL, 'pg_isready -U $${POSTGRES_USER}']
       timeout: 5s
-    image: ${BIGBOY_ACR_POSTGRES_IMAGE:-postgres:not-resolved}
+    image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     networks:
       acr:
         aliases: [postgres]
@@ -2133,7 +2134,7 @@ services:
       retries: 5
       test: [CMD, wget, --spider, -q, 'http://127.0.0.1:8088/healthz']
       timeout: 5s
-    image: ${BIGBOY_ACR_NGINX_IMAGE:-nginx:not-resolved}
+    image: ${BIGBOY_ACR_NGINX_IMAGE:?BIGBOY_ACR_NGINX_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     networks:
       acr: null
     profiles: [acr, acr-venue]
@@ -2193,7 +2194,7 @@ services:
       ACR_REQUEST_TIMEOUT: 117s
       ACR_REQUIRE_BACKING_STORES: 'true'
       ACR_WRITE_TIMEOUT: 135s
-    image: ${BIGBOY_ACR_API_IMAGE:-acr-api:not-resolved}
+    image: ${BIGBOY_ACR_API_IMAGE:?BIGBOY_ACR_API_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     networks:
       acr: null
       dho-clickhouse-readers: null
@@ -2240,7 +2241,7 @@ services:
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_PROJECTOR_ADDR: :8090
       ACR_REQUIRE_BACKING_STORES: 'true'
-    image: ${BIGBOY_ACR_API_IMAGE:-acr-api:not-resolved}
+    image: ${BIGBOY_ACR_API_IMAGE:?BIGBOY_ACR_API_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     networks:
       acr: null
       dho-clickhouse-readers: null
@@ -2263,7 +2264,7 @@ services:
       start_period: 10s
       test: [CMD, redis-cli, GRAPH.QUERY, _acr_health, RETURN 1]
       timeout: 5s
-    image: ${BIGBOY_ACR_FALKORDB_IMAGE:-falkordb/falkordb:not-resolved}
+    image: ${BIGBOY_ACR_FALKORDB_IMAGE:?BIGBOY_ACR_FALKORDB_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     networks:
       acr:
         aliases: [falkordb]
@@ -2296,7 +2297,7 @@ services:
       ACR_MCP_HTTP_WRITE_TIMEOUT: 140s
       ACR_MCP_RESOURCE_URL: http://127.0.0.1:8081/mcp
       ACR_MCP_TRANSPORT: http
-    image: ${BIGBOY_ACR_MCP_IMAGE:-acr-mcp:not-resolved}
+    image: ${BIGBOY_ACR_MCP_IMAGE:?BIGBOY_ACR_MCP_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     networks:
       acr: null
     ports:

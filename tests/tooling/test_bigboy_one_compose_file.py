@@ -156,8 +156,7 @@ def test_the_digests_are_in_the_pins_file_only(tmp_path) -> None:
         if line and not line.startswith("#")
     )
     pins.pop("DHO_API_CH_USERS_XML")  # the host path of the users file, not an image
-    # the acr venue stack's pins (CHAOS-10004) default to a :not-resolved tag, as BIGBOY_OPERATOR_IMAGE does: they belong to
-    # profiles, and a required variable would fail every command that does not start them
+    # the acr venue stack's pins (CHAOS-10004) are required (`:?`) like the three below: a default tag could start a wrong image
     acr_pins = {name: pins.pop(name) for name in sorted(pins) if "_ACR_" in name}
     assert sorted(acr_pins) == [
         "BIGBOY_ACR_API_IMAGE",
@@ -167,7 +166,7 @@ def test_the_digests_are_in_the_pins_file_only(tmp_path) -> None:
         "BIGBOY_ACR_POSTGRES_IMAGE",
     ]
     for name in acr_pins:
-        assert "${" + name + ":-" in compose, name
+        assert "${" + name + ":?" in compose, name
     assert sorted(pins) == [
         "BIGBOY_API_TOOLS_IMAGE",
         "BIGBOY_DHO_IMAGE",
@@ -189,7 +188,7 @@ def test_the_digests_are_in_the_pins_file_only(tmp_path) -> None:
 
 
 def test_a_one_off_needs_none_of_its_own_variables_to_render(tmp_path) -> None:
-    """Only the pins file, BIGBOY_OPERATOR_IMAGE and DHO_API_CH_USERS_XML: a `:?` inside a one-off service would break every
+    """Only the pins file (the acr pins included, CHAOS-10004), BIGBOY_OPERATOR_IMAGE and DHO_API_CH_USERS_XML: a `:?` inside a one-off service would break every
     other command (compose interpolates an inactive profile too)."""
     root = scratch_root(tmp_path)
     for profile in (
@@ -204,6 +203,11 @@ def test_a_one_off_needs_none_of_its_own_variables_to_render(tmp_path) -> None:
         assert proc.returncode == 0, (profile, proc.stderr[-400:])
     required = sorted(set(re.findall(r"\$\{([A-Za-z_]+):\?", COMPOSE_FILE.read_text())))
     assert required == [
+        "BIGBOY_ACR_API_IMAGE",
+        "BIGBOY_ACR_FALKORDB_IMAGE",
+        "BIGBOY_ACR_MCP_IMAGE",
+        "BIGBOY_ACR_NGINX_IMAGE",
+        "BIGBOY_ACR_POSTGRES_IMAGE",
         "BIGBOY_API_TOOLS_IMAGE",
         "BIGBOY_DHO_IMAGE",
         "BIGBOY_WEB_IMAGE",

@@ -1976,9 +1976,10 @@ services:
   # needed by acr-api (no dependency, no URL): it stays defined, in profile acr-venue, so a rollback is
   # two env values and a start of the stand-in: ACR_DEV_HEALTH_ENTITLEMENT_URL=http://acr-entitlement-standin:8088 and
   # ACR_OPS_SVC_TOKEN_FILE=/var/lib/oci-cache/mcp-venue/secrets/entitlement_token.
-  # The images acr-api and acr-mcp are built on this host (docker build --build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>:
-  # without both args acr-api refuses the sidecar with a 426); they are pinned by LOCAL IMAGE ID in _records/images.env
-  # (BIGBOY_ACR_API_IMAGE, BIGBOY_ACR_MCP_IMAGE); the database, graph and stand-in images are pinned by registry digest there too (BIGBOY_ACR_POSTGRES_IMAGE, BIGBOY_ACR_FALKORDB_IMAGE, BIGBOY_ACR_NGINX_IMAGE). Each defaults to a :not-resolved tag that fails at start instead of running a wrong image.
+  # Every acr image is pinned by registry digest in the pins file _records/images.env (BIGBOY_ACR_API_IMAGE, BIGBOY_ACR_MCP_IMAGE, BIGBOY_ACR_POSTGRES_IMAGE,
+  # BIGBOY_ACR_FALKORDB_IMAGE, BIGBOY_ACR_NGINX_IMAGE); each defaults to a :not-resolved tag that fails at start instead of running a wrong image.
+  # acr-api and acr-mcp are the images of the acr release build; a build on this host needs --build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>
+  # (without both args acr-api refuses the sidecar with a 426).
   acr-db-acl:
     container_name: dev-health-acr-mcp-acr-db-acl-1
     depends_on:

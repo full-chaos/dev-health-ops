@@ -141,7 +141,7 @@ def test_no_secret_value_is_in_the_file_only_paths_of_secret_files(tmp_path) -> 
                 assert str(value).startswith("/run/secrets/"), (name, key)
 
 
-def test_the_acr_images_are_pinned_by_digest_or_local_id_and_not_resolved_by_default(
+def test_the_acr_images_are_pinned_by_registry_digest_and_not_resolved_by_default(
     tmp_path,
 ) -> None:
     root = scratch_root(tmp_path)
@@ -155,7 +155,10 @@ def test_the_acr_images_are_pinned_by_digest_or_local_id_and_not_resolved_by_def
         ("BIGBOY_ACR_API_IMAGE", ("acr-api", "acr-migrate", "acr-projector")),
         ("BIGBOY_ACR_MCP_IMAGE", ("acr-mcp",)),
     ):
-        assert re.fullmatch(r"sha256:[0-9a-f]{64}", pins[var]), var
+        assert re.fullmatch(
+            r"ghcr\.io/full-chaos/dev-health-acr/acr-(api|mcp)@sha256:[0-9a-f]{64}",
+            pins[var],
+        ), var
         for name in names:
             assert svc[name]["image"] == pins[var], name
     for var, names in (

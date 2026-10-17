@@ -137,9 +137,12 @@ provider is `LLM_PROVIDER`, or the provider the keys auto-detect when it is
 unset. The generic `LLM_MODEL` never names the model of another provider. An
 empty base URL is the provider's public endpoint and an empty model is the
 provider's default (`claude-haiku-5-5`, `gemini-3.8-flash`, `qwen-plus`). Set
-`<PROVIDER>_BASE_URL` without a trailing `/v1`: the client appends `/v1/messages`
-itself, so `https://api.anthropic.com/v1` posts to `/v1/v1/messages` and the
-call fails.
+`ANTHROPIC_BASE_URL` without a trailing `/v1`: the Anthropic client appends
+`/v1/messages` itself, so `https://api.anthropic.com/v1` posts to
+`/v1/v1/messages` and the call fails. The OpenAI-compatible providers (OpenAI,
+Gemini, Qwen, local) append only `/chat/completions`, so their base URLs keep
+their `/v1` (or `/ai/v1`, `/compatible-mode/v1`) segment, as in the examples
+below.
 
 ```dotenv
 # Anthropic

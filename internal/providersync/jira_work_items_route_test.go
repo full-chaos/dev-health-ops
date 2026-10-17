@@ -368,11 +368,11 @@ func TestJiraWorkItemsJQLIsBoundedToTheWindowOnBothEnds(t *testing.T) {
 		want          string
 	}{
 		{"hourly window inside a day", time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 17, 10, 0, 0, 0, time.UTC),
-			"project = 'OPS' AND updated >= '2026-10-16' AND updated < '2026-10-19' ORDER BY updated DESC"},
+			"project = 'OPS' AND updated >= '2026-10-16' AND updated < '2026-10-18' ORDER BY updated DESC"},
 		{"window ending at midnight", time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC),
 			"project = 'OPS' AND updated >= '2026-10-15' AND updated < '2026-10-18' ORDER BY updated DESC"},
 		{"month boundary", time.Date(2026, 7, 31, 22, 0, 0, 0, time.UTC), time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC),
-			"project = 'OPS' AND updated >= '2026-07-30' AND updated < '2026-08-02' ORDER BY updated DESC"},
+			"project = 'OPS' AND updated >= '2026-07-31' AND updated < '2026-08-02' ORDER BY updated DESC"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -413,11 +413,13 @@ func TestJiraDateBoundsContainTheWindowInEveryUserTimeZone(t *testing.T) {
 				if lower.After(start) {
 					t.Fatalf("UTC%+d: lower bound %s is after the window start %s: an in-window update is dropped", offset, lower, start)
 				}
-				if !upper.After(end) {
-					t.Fatalf("UTC%+d: upper bound %s is not after the window end %s", offset, upper, end)
+				// The upper bound is exclusive and the window is half-open: a bound equal to the end is exact.
+				if upper.Before(end) {
+					t.Fatalf("UTC%+d: upper bound %s is before the window end %s", offset, upper, end)
 				}
-				if start.Sub(lower) > 3*24*time.Hour || upper.Sub(end) > 3*24*time.Hour {
-					t.Fatalf("UTC%+d: bounds [%s, %s) are more than 3 days wider than the window [%s, %s)", offset, lower, upper, start, end)
+				// The padding is the spread of the zones (26h) plus the date rounding: at most 50h on each side.
+				if start.Sub(lower) > 50*time.Hour || upper.Sub(end) > 50*time.Hour {
+					t.Fatalf("UTC%+d: bounds [%s, %s) are wider than 50h around the window [%s, %s)", offset, lower, upper, start, end)
 				}
 			}
 		}

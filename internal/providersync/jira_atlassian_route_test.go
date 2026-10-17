@@ -33,6 +33,8 @@ type jiraAtlassianDoer struct {
 	devStatus         int
 	devStatusStatuses []int
 	devStatusBody     string
+	// searchStatus, when set, is the status of every search request (a failing search).
+	searchStatus int
 }
 
 func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error) {
@@ -44,6 +46,9 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 	var body string
 	status := http.StatusOK
 	switch {
+	case request.URL.Path == "/rest/api/3/search/jql" && doer.searchStatus != 0:
+		status = doer.searchStatus
+		body = `{"errorMessages":["bad request"]}`
 	case request.URL.Path == "/rest/api/3/search/jql":
 		body = `{"issues":[{"id":"10060","key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":["support"],"priority":{"name":"Highest"},"assignee":{"accountId":"assignee-201","displayName":"Assignee"},"reporter":{"emailAddress":"reporter@example.com","accountId":"reporter-201","displayName":"Reporter"},"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z","resolutiondate":"2026-08-02T08:30:00Z","customfield_10020":[{"id":9001,"name":"August"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-202"}}]}}],"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
@@ -859,5 +864,28 @@ func TestJiraAtlassianRouteLogsItsFetchWindowAtInfo(t *testing.T) {
 	if !strings.Contains(line, "msg=jira_work_items_window") || !strings.Contains(line, "issues=1") ||
 		!strings.Contains(line, "updated >= '2026-06-30' AND updated < '2026-08-02'") || strings.Contains(line, "statusCategory") {
 		t.Fatalf("the active Jira route did not log its bounded window: %q", line)
+	}
+}
+
+// A failed search still emits the window line (search_failed=true, the error
+// class, never its text): a planned unit that read nothing is not silent at Info.
+func TestJiraAtlassianRouteLogsItsFetchWindowWhenTheSearchFails(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	claim := jiraAtlassianClaim()
+	doer := &jiraAtlassianDoer{t: t, searchStatus: http.StatusBadRequest}
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	if _, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	); err == nil {
+		t.Fatal("the failed search returned no error")
+	}
+	line := logged.String()
+	if !strings.Contains(line, "msg=jira_work_items_window") || !strings.Contains(line, "search_failed=true") || !strings.Contains(line, "issues=0") {
+		t.Fatalf("a failed search emitted no window line: %q", line)
 	}
 }

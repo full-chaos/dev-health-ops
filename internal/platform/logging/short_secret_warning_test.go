@@ -115,3 +115,30 @@ func TestShortCredentialFieldNameThatIsNotDeclaredIsReportedByLengthOnly(t *test
 		}
 	}
 }
+
+func TestTwoSpellingsOfOneDeclaredFieldWarnOnce(t *testing.T) {
+	for _, value := range []string{"abc", "password"} {
+		secrets.ResetRegistered()
+		var out bytes.Buffer
+		restore := InstallDefault(NewJSON(&out, slog.LevelDebug))
+		secrets.RegisterCredentialJSON([]byte(`{"client_secret":"` + value + `","clientSecret":"` + value + `","Client-Secret":"` + value + `"}`))
+		restore()
+		lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+		if len(lines) != 1 || !strings.Contains(lines[0], `"field":"client_secret"`) {
+			t.Errorf("value %q: want one warning for client_secret, got %d: %s", value, len(lines), out.String())
+		}
+	}
+	secrets.ResetRegistered()
+}
+
+func TestTwoDistinctUndeclaredFieldsWarnSeparately(t *testing.T) {
+	secrets.ResetRegistered()
+	t.Cleanup(secrets.ResetRegistered)
+	var out bytes.Buffer
+	restore := InstallDefault(NewJSON(&out, slog.LevelDebug))
+	t.Cleanup(restore)
+	secrets.RegisterCredentialJSON([]byte(`{"my-custom-token":"abc","my-other-token":"abc"}`))
+	if got := strings.Count(strings.TrimSpace(out.String()), "\n") + 1; got != 2 {
+		t.Errorf("want 2 warnings for two undeclared names, got %d: %s", got, out.String())
+	}
+}

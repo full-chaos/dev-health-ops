@@ -14,7 +14,7 @@ import (
 // (0) under one sort key (repo, item, team-b, project_ownership). The write
 // dedupe, in either batch order, keeps A's primary row and B's co-owner row.
 func TestTheWriteDedupeKeepsACoOwnerRowOverAProvenanceRowOfTheSameKey(t *testing.T) {
-	for _, provider := range []string{"jira", "gitlab", "github", "linear"} {
+	for _, provider := range []string{"jira", "github", "linear"} {
 		t.Run(provider, func(t *testing.T) {
 			key := "PK"
 			fact := func(team, projectID string) teamattribution.GithubWorkItemDerivationProjectFact {

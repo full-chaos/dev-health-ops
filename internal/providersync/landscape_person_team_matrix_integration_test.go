@@ -227,8 +227,8 @@ func TestTheLandscapeTeamIsTheOwnerOfTheRepositoryOfEachProvider(t *testing.T) {
 				if err := (GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}).writeOwnership(ctx, []gitlabTeamCatalogOwnershipRow{row}); err != nil {
 					t.Fatal(err)
 				}
-				// A GitLab work item names its project by the path (the grant's project_key).
-				seedWorkItemOfType(t, ctx, conn, org, "gitlab:acme/owned-gitlab!1", "gitlab", "merge_request", owned, *row.ProjectKey, grantedAt)
+				// A GitLab work item names its project by the catalog id, as the grant does.
+				seedWorkItemOfType(t, ctx, conn, org, "gitlab:acme/owned-gitlab!1", "gitlab", "merge_request", owned, row.ProjectID.String(), grantedAt)
 			case "jira", "linear":
 				teamID = provider + "-team-core"
 				seedTeamProjectOwnership(t, ctx, conn, org, provider, "proj-core", teamID, true, grantedAt)

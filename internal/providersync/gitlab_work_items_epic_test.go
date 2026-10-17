@@ -93,14 +93,14 @@ func buildGitLabIssueProviderOracleRow(t *testing.T, input map[string]any) gitla
 	claim := nativeTestClaim("gitlab", "work-items")
 	claim.OrgID = input["org_id"].(string)
 	row, _, err := normalizeGitLabIssueWorkItem(
-		claim, input["repo_full_name"].(string), input["repo_full_name"].(string), repoID,
+		claim, input["repo_full_name"].(string), input["repo_full_name"].(string), "org:gitlab:1", repoID,
 		gitlabIssueWorkItemPayloadFromOracle(t, input).withFetchEpics(gitlabIssueFetchEpics(input)),
 		gitlabLabelEventsFromOracle(t, input), loadRealStatusMapping(t), nil, gitlabWorkItemsOracleNormalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return row
+	return gitlabRowWithPythonProjectIdentity(t, row)
 }
 
 // TestGitLabIssueEpicIDFollowsPythonProvider is the Go side of each epic

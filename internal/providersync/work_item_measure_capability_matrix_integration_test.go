@@ -194,7 +194,7 @@ func capabilityGitLabRows(
 		if err := json.Unmarshal(capabilityJSON(t, issue), &payload); err != nil {
 			t.Fatal(err)
 		}
-		row, _, err := normalizeGitLabIssueWorkItem(claim, "acme/api", "acme/api", repoID, payload, nil, mapping, nil, normalizedAt)
+		row, _, err := normalizeGitLabIssueWorkItem(claim, "acme/api", "acme/api", "org:gitlab:1", repoID, payload, nil, mapping, nil, normalizedAt)
 		if err != nil {
 			t.Fatalf("gitlab issue %d: %v", item.number, err)
 		}

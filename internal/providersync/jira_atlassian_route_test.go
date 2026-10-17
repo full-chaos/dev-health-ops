@@ -1,11 +1,13 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -832,5 +834,30 @@ func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
 				t.Fatalf("by application type=%v", byType)
 			}
 		})
+	}
+}
+
+// CHAOS-8805, review round 1: the route the selector constructs for Jira (this
+// one) emits the window line, with the bounded JQL, so a regression in the bound
+// is visible at Info on the active route.
+func TestJiraAtlassianRouteLogsItsFetchWindowAtInfo(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	claim := jiraAtlassianClaim()
+	doer := &jiraAtlassianDoer{t: t}
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	if _, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	); err != nil {
+		t.Fatal(err)
+	}
+	line := logged.String()
+	if !strings.Contains(line, "msg=jira_work_items_window") || !strings.Contains(line, "issues=1") ||
+		!strings.Contains(line, "updated >= '2026-06-30' AND updated < '2026-08-02'") || strings.Contains(line, "statusCategory") {
+		t.Fatalf("the active Jira route did not log its bounded window: %q", line)
 	}
 }

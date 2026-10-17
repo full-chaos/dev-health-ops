@@ -233,6 +233,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	logJiraWorkItemsWindow(ctx, claim, projectKey, jql, len(issues), searchPages)
 
 	rows := jiraAtlassianRows{jiraWorkItemRows: jiraWorkItemRows{
 		WorkItems:          make([]jiraWorkItemRow, 0, len(issues)),

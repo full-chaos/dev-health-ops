@@ -106,9 +106,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		ctx, client, jql, maxPages, maxRows, perPage, true,
 	)
 	if err == nil {
-		slog.Default().InfoContext(ctx, "jira_work_items_window",
-			"org_id", claim.OrgID, "unit_id", claim.ID, "project_key", projectKey, "jql", jql, "fetch_all", fetchAll,
-			"jql_override", jiraOptionString(claim, "jql_override", "") != "", "issues", len(issues), "search_pages", searchPages)
+		logJiraWorkItemsWindow(ctx, claim, projectKey, jql, len(issues), searchPages)
 	}
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -315,23 +313,40 @@ func jiraWorkItemsJQL(claim Claim, projectKey string) string {
 	if jiraOptionBool(claim, "fetch_all", false) {
 		return fmt.Sprintf("project = '%s' ORDER BY updated DESC", projectKey)
 	}
-	updatedSince := claim.SinceAt.UTC().Format("2006-01-02")
 	return fmt.Sprintf("project = '%s' AND updated >= '%s' AND updated < '%s' ORDER BY updated DESC",
-		projectKey, updatedSince, jiraUpdatedBeforeDate(claim.BeforeAt.UTC()))
+		projectKey, jiraUpdatedSinceDate(claim.SinceAt.UTC()), jiraUpdatedBeforeDate(claim.BeforeAt.UTC()))
 }
 
-// jiraUpdatedBeforeDate is the exclusive date bound of a window's end: the day
-// after the end's day, itself rounded up to the next midnight. JQL compares a
-// date-only literal in the Jira user's time zone (up to 14 hours from UTC), so
-// the bound is a superset of the window by construction: it never drops an item
-// the window holds, and it drops every item updated after the day that follows
-// the window end (CHAOS-8805; a unit no longer carries the open backlog).
+// JQL compares a date-only literal at midnight in the Jira USER's time zone,
+// which is anywhere from UTC-12 to UTC+14. Both date bounds below are therefore
+// a SUPERSET of the window in every zone: the lower bound is the day before the
+// start's day, the upper bound the day after the end's day (the end rounded up
+// to midnight first). An item updated inside the window is never dropped; the
+// unit may also carry items updated up to about a day on either side of the
+// window, which the idempotent writes absorb (CHAOS-8805). The old lower bound
+// (the start's own day) already dropped in-window updates for a user west of UTC.
+func jiraUpdatedSinceDate(start time.Time) string {
+	return start.Truncate(24 * time.Hour).Add(-24 * time.Hour).Format("2006-01-02")
+}
+
+// jiraUpdatedBeforeDate is the exclusive date bound of a window's end: see above.
 func jiraUpdatedBeforeDate(end time.Time) string {
 	day := end.Truncate(24 * time.Hour)
 	if end.After(day) {
 		day = day.Add(24 * time.Hour)
 	}
 	return day.Add(24 * time.Hour).Format("2006-01-02")
+}
+
+// logJiraWorkItemsWindow is the one Info line of a Jira work-items unit, shared
+// by both routes that build the JQL (the canonical route and the Atlassian one
+// the selector constructs): the window bound, the issues it fetched.
+func logJiraWorkItemsWindow(ctx context.Context, claim Claim, projectKey, jql string, issues, searchPages int) {
+	slog.Default().InfoContext(ctx, "jira_work_items_window",
+		"org_id", claim.OrgID, "unit_id", claim.ID, "project_key", projectKey, "jql", jql,
+		"fetch_all", jiraOptionBool(claim, "fetch_all", false),
+		"jql_override", jiraOptionString(claim, "jql_override", "") != "",
+		"issues", issues, "search_pages", searchPages)
 }
 
 // collectJiraWorkItemIssues walks /rest/api/3/search/jql by cursor

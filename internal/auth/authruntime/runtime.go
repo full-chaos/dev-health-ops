@@ -61,6 +61,10 @@ type IO struct {
 // reviewable change rather than an archaeology exercise.
 //
 // A request to any path therefore receives this service's 404 envelope.
+// maxInFlightRequests caps concurrent requests on the auth API listener; at the
+// 1 MiB default body limit that bounds buffering near 64 MiB.
+const maxInFlightRequests = 64
+
 func Routes() []httpapi.Route { return nil }
 
 // Main runs the command and exits with its status.
@@ -282,6 +286,7 @@ func configure(
 		MaxBodyBytes:   cfg.MaxBodyBytes,
 		RateLimit:      cfg.RateLimit.PerSecond,
 		RateLimitBurst: cfg.RateLimit.Burst,
+		MaxInFlight:    maxInFlightRequests,
 	})
 	if err != nil {
 		closeStore()

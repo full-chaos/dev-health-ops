@@ -13,8 +13,8 @@ const (
 	// format from a prompt marker (_response_format_kind), and the
 	// per-work-unit explanation prompt carries none, so Python sends
 	// `{"type": "json_object"}` with no schema name at all. Its Go twin is
-	// WorkUnitExplanationRequest's nil JSONSchema, which puts both
-	// OpenAIProvider and LocalProvider on that same schema-free branch and
+	// WorkUnitExplanationRequest's nil JSONSchema, which puts the
+	// shared llm client on its schema-free branch and
 	// leaves ResponseFormatName unread. The name therefore exists for one
 	// reason: it is the discriminator MockProvider branches on, standing in
 	// for the prompt-content sniffing Python's own MockProvider does.
@@ -29,7 +29,7 @@ const (
 // payloads run larger than a categorization response (openai.py's own
 // comment: "Explanation payloads are large; start higher than 4096").
 // Combined with a provider's own configured floor via max(), never used
-// standalone -- see OpenAIProvider.Complete.
+// standalone -- see the shared llm client (dev-health-go llm.OpenAI).
 const (
 	categorizationMaxOutputTokensFloor = 2048
 	explanationMaxOutputTokensFloor    = 4096

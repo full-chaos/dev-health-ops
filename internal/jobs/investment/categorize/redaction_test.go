@@ -62,17 +62,10 @@ func assertNoKey(t *testing.T, name string, subject any) {
 }
 
 func TestProviderStructsRedactAPIKey(t *testing.T) {
-	openAI := OpenAIProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel), Model: "m"}
-	local := LocalProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel)}
 	ollama := OllamaProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel)}
 	subjects := map[string]any{
-		"OpenAIProviderConfig": openAI, "*OpenAIProviderConfig": &openAI,
-		"LocalProviderConfig": local, "*LocalProviderConfig": &local,
 		"OllamaProviderConfig": ollama, "*OllamaProviderConfig": &ollama,
-		"OpenAIProvider": NewOpenAIProvider(openAI), "LocalProvider": NewLocalProvider(local),
 		"OllamaProvider":        NewOllamaProvider(ollama),
-		"OpenAIProvider(value)": *NewOpenAIProvider(openAI),
-		"LocalProvider(value)":  *NewLocalProvider(local),
 		"OllamaProvider(value)": *NewOllamaProvider(ollama),
 	}
 	// A SharedProvider VALUE is left out until dev-health-go keeps llm.Secret
@@ -94,11 +87,12 @@ func TestProviderStructsRedactAPIKey(t *testing.T) {
 }
 
 func TestProviderConfigStillCarriesRealKey(t *testing.T) {
-	if got := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel)}).cfg.APIKey.Reveal(); got != llmKeySentinel {
-		t.Fatalf("OpenAI cfg.APIKey changed: %q", got)
+	shared, err := NewSharedProvider(SharedProviderConfig{Kind: ProviderKindOpenAI, APIKey: secrets.NewHidden(llmKeySentinel)})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := NewLocalProvider(LocalProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel)}).cfg.APIKey.Reveal(); got != llmKeySentinel {
-		t.Fatalf("Local cfg.APIKey changed: %q", got)
+	if got := shared.cfg.APIKey.Reveal(); got != llmKeySentinel {
+		t.Fatalf("Shared cfg.APIKey changed: %q", got)
 	}
 	if got := NewOllamaProvider(OllamaProviderConfig{APIKey: secrets.NewHidden(llmKeySentinel)}).cfg.APIKey.Reveal(); got != llmKeySentinel {
 		t.Fatalf("Ollama cfg.APIKey changed: %q", got)

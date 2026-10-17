@@ -26,9 +26,12 @@ func TestProviderErrorsCarryNoResponseContent(t *testing.T) {
 			w.WriteHeader(response.status)
 			_, _ = w.Write([]byte(response.body))
 		}))
-		provider := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden("unused"), BaseURL: server.URL, Model: "gpt-5-nano"})
-		_, err := provider.Complete(context.Background(), CompletionRequest{})
-		provider.Close()
+		provider, err := NewSharedProvider(SharedProviderConfig{Kind: ProviderKindOpenAI, APIKey: secrets.NewHidden("unused"), BaseURL: server.URL, Model: "gpt-5-nano"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = provider.Complete(context.Background(), CompletionRequest{})
+		_ = provider.Close()
 		server.Close()
 		if err == nil {
 			t.Fatalf("%s: Complete() = nil", name)

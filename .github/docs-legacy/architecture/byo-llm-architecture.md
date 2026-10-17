@@ -21,10 +21,8 @@ flowchart TD
     end
 
     subgraph Providers [LLM Providers]
-        OpenAI[OpenAIProvider]
-        Anthropic[AnthropicProvider]
-        Gemini[GeminiProvider]
-        Local[LocalProvider / Ollama / LMStudio]
+        Shared[SharedProvider: OpenAI, Anthropic, Gemini, Qwen, local]
+        Ollama[OllamaProvider: native Ollama]
         Mock[MockProvider]
         NoneP[NoneProvider]
     end
@@ -44,10 +42,8 @@ flowchart TD
     RP -.-> Postgres
     RM -.-> Postgres
 
-    GP --> OpenAI
-    GP --> Anthropic
-    GP --> Gemini
-    GP --> Local
+    GP --> Shared
+    GP --> Ollama
     GP --> Mock
     GP --> NoneP
 
@@ -69,10 +65,8 @@ The `get_provider` function acts as a central factory. It resolves the provider 
 
 ### 3. LLM Providers
 The platform supports multiple provider implementations:
-- **OpenAIProvider**: Connects to OpenAI APIs.
-- **AnthropicProvider**: Connects to Anthropic APIs.
-- **GeminiProvider**: Connects to Google Gemini APIs.
-- **LocalProvider / Ollama / LMStudio**: Connects to local or custom OpenAI-compatible endpoints.
+- **SharedProvider**: OpenAI, Anthropic, Gemini, Qwen and local (OpenAI-compatible) endpoints, through the shared dev-health-go `llm` package.
+- **OllamaProvider**: Ollama's native `/api/chat` endpoint.
 - **MockProvider**: Returns deterministic mock responses for testing.
 - **NoneProvider**: Represents an unconfigured state and fails closed for materialization.
 

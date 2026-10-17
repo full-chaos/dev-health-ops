@@ -304,6 +304,11 @@ func (source jiraDerivedFailingContextSource) Load(
 
 // Succeeds on purpose: this double exists to pin Load's fail-closed path, so
 // the stored-edge read must not be the thing that fails (CHAOS-3978).
+// AnchorGitLabSubjects is a no-op: this fake carries no GitLab repos rows.
+func (source jiraDerivedFailingContextSource) AnchorGitLabSubjects(context.Context, map[string]teamattribution.GithubWorkItemDerivationSubject) error {
+	return nil
+}
+
 func (source jiraDerivedFailingContextSource) LoadStoredInheritableEdges(
 	context.Context, Claim, []string,
 ) ([]githubWorkItemDependencyRow, error) {

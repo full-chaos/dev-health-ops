@@ -32,6 +32,15 @@ type githubWorkItemDerivationContextSource interface {
 		teamattribution.GithubWorkItemDerivationLoadRequest,
 	) (teamattribution.GithubWorkItemDerivationFacts, error)
 
+	// AnchorGitLabSubjects gives every GitLab subject of the map (the rows this run
+	// writes and the donors) the catalog id and the repos-row paths its name joins
+	// need. It is part of the contract, not optional: a source that skipped it would
+	// leave a renamed project's sync-time items unresolved.
+	AnchorGitLabSubjects(
+		context.Context,
+		map[string]teamattribution.GithubWorkItemDerivationSubject,
+	) error
+
 	// LoadStoredInheritableEdges returns the STORED inheritable dependency
 	// edges whose SOURCE is one of the given work items, for the claim's
 	// tenant. CHAOS-3978: without it this route sees only the edges its own
@@ -247,17 +256,15 @@ func loadWorkItemDerivationContextForProvider(
 	// A GitLab subject written by this run, and a GitLab donor, is anchored the way
 	// the attribution read anchors a stored one: its catalog id and the paths its
 	// repos row answers to, so a full-name join finds a renamed project's items.
-	if anchorer, ok := source.(githubWorkItemGitLabSubjectAnchorer); ok {
-		if err := anchorer.AnchorGitLabSubjects(ctx, subjects); err != nil {
-			return teamattribution.GithubWorkItemDerivationContext{}, err
-		}
-		for id, subject := range subjects {
-			if len(subject.GitLabPaths) > 0 {
-				if derived.GitLabPathsByWorkItem == nil {
-					derived.GitLabPathsByWorkItem = map[string][]string{}
-				}
-				derived.GitLabPathsByWorkItem[id] = subject.GitLabPaths
+	if err := source.AnchorGitLabSubjects(ctx, subjects); err != nil {
+		return teamattribution.GithubWorkItemDerivationContext{}, err
+	}
+	for id, subject := range subjects {
+		if len(subject.GitLabPaths) > 0 {
+			if derived.GitLabPathsByWorkItem == nil {
+				derived.GitLabPathsByWorkItem = map[string][]string{}
 			}
+			derived.GitLabPathsByWorkItem[id] = subject.GitLabPaths
 		}
 	}
 	// CHAOS-9460: a donor gives the team of its own row. An item this run
@@ -637,12 +644,6 @@ func logLegacyGitLabOwnershipRemap(ctx context.Context, remapped, ambiguousDropp
 	slog.Default().Log(ctx, level, "gitlab_legacy_ownership_remapped", "remapped", remapped, "ambiguous_dropped", ambiguousDropped)
 }
 
-// githubWorkItemGitLabSubjectAnchorer is implemented by the sources that can read
-// the repos rows GitLab subjects are anchored through (the ClickHouse source).
-type githubWorkItemGitLabSubjectAnchorer interface {
-	AnchorGitLabSubjects(ctx context.Context, subjects map[string]teamattribution.GithubWorkItemDerivationSubject) error
-}
-
 func (source githubWorkItemClickHouseDerivationContextSource) AnchorGitLabSubjects(
 	ctx context.Context, subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
 ) error {
@@ -660,5 +661,3 @@ func (source githubWorkItemClickHouseDerivationContextSource) AnchorGitLabSubjec
 	}
 	return nil
 }
-
-var _ githubWorkItemGitLabSubjectAnchorer = githubWorkItemClickHouseDerivationContextSource{}

@@ -13,11 +13,13 @@ import (
 type anchoringFakeSource struct {
 	*fakeGitHubWorkItemDerivationContextSource
 	anchored int
+	seen     []string
 }
 
 func (source *anchoringFakeSource) AnchorGitLabSubjects(_ context.Context, subjects map[string]teamattribution.GithubWorkItemDerivationSubject) error {
 	source.anchored++
 	for id, subject := range subjects {
+		source.seen = append(source.seen, id)
 		subject.GitLabPaths = []string{"platform/api-v2", "acme/api"}
 		subjects[id] = subject
 	}
@@ -35,10 +37,16 @@ func TestSyncTimeRenamedGitLabItemResolvesThroughAFullNameOwnershipGrant(t *test
 	repos, _, _ := teamattribution.RemapLegacyGitLabRepoFacts(claim.OrgID, []teamattribution.GithubWorkItemDerivationRepoFact{
 		{Provider: "gitlab", TeamID: "owner-team", TeamName: "Owner", RepoFullName: "platform/api-v2", IsPrimary: 1, Specificity: 100},
 	}, map[string]string{"platform/api-v2": "123"}, nil)
+	donorID := "gitlab:acme/other#9"
+	donorProject, donorKey := "org-acme:gitlab:123", "acme/api"
 	source := &anchoringFakeSource{fakeGitHubWorkItemDerivationContextSource: &fakeGitHubWorkItemDerivationContextSource{
 		facts: teamattribution.GithubWorkItemDerivationFacts{
 			Teams: []teamattribution.GithubWorkItemDerivationTeamFact{{Provider: "gitlab", TeamID: "owner-team"}},
 			Repos: repos,
+			// A GitLab donor of the same renamed project.
+			DonorItems: []teamattribution.GithubWorkItemDerivationSubject{{
+				WorkItemID: donorID, Provider: "gitlab", ProjectID: &donorProject, ProjectKey: &donorKey, OrgID: claim.OrgID,
+			}},
 		},
 	}}
 	row := githubWorkItemRow{WorkItemID: "gitlab:acme/api#1", Provider: "gitlab", ProjectID: &catalog, ProjectKey: &identity, OrgID: claim.OrgID}
@@ -49,6 +57,19 @@ func TestSyncTimeRenamedGitLabItemResolvesThroughAFullNameOwnershipGrant(t *test
 	}
 	if source.anchored != 1 {
 		t.Fatalf("anchoring hook called %d times, want 1", source.anchored)
+	}
+	donorSeen := false
+	for _, id := range source.seen {
+		donorSeen = donorSeen || id == donorID
+	}
+	if !donorSeen {
+		t.Fatalf("the anchoring hook did not receive the GitLab donor: saw %v", source.seen)
+	}
+	donorTeam, _, _ := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
+		WorkItemID: donorID, Provider: "gitlab", ProjectID: &donorProject, ProjectKey: &donorKey, OrgID: claim.OrgID,
+	})
+	if donorTeam == nil || *donorTeam != "owner-team" {
+		t.Fatalf("a renamed GitLab donor resolved to %v, want owner-team", donorTeam)
 	}
 	team, _, _ := derived.Resolve(githubWorkItemDerivationSubjectFromRow(row))
 	if team == nil || *team != "owner-team" {

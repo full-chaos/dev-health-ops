@@ -179,7 +179,7 @@ func buildGitLabFetchWorkItemOracleRow(t *testing.T, input map[string]any) gitla
 	}
 	labels := gitlabLabelEventsFromOracle(t, input)
 	row, _, err := normalizeGitLabIssueWorkItem(
-		claim, input["repo_full_name"].(string), repoID, payload, labels,
+		claim, input["repo_full_name"].(string), input["repo_full_name"].(string), repoID, payload, labels,
 		loadRealStatusMapping(t), nil, gitlabWorkItemsOracleNormalizedAt,
 	)
 	if err != nil {
@@ -201,7 +201,7 @@ func buildGitLabFetchStatusTransitionOracleRow(t *testing.T, input map[string]an
 		t.Fatal(err)
 	}
 	row, transitions, err := normalizeGitLabIssueWorkItem(
-		claim, input["repo_full_name"].(string), repoID, payload, gitlabLabelEventsFromOracle(t, input),
+		claim, input["repo_full_name"].(string), input["repo_full_name"].(string), repoID, payload, gitlabLabelEventsFromOracle(t, input),
 		loadRealStatusMapping(t), nil, gitlabWorkItemsOracleNormalizedAt,
 	)
 	if err != nil {

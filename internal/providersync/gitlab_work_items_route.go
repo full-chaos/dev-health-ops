@@ -97,6 +97,8 @@ type GitLabWorkItemsResult struct {
 // Activation happened; kept visible rather than deleted so the wrong model is
 // refuted rather than merely absent (CHAOS-4848).
 type GitLabWorkItemsRouteHandler struct {
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity    GitLabRepoIdentityReader
 	PerPage         int
 	MaxPages        int
 	NestedMaxPages  int
@@ -220,11 +222,11 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	if strings.TrimSpace(fullName) == "" {
 		fullName = strings.TrimSpace(claim.SourceName)
 	}
-	repoIDText, err := repositoryIdentity(fullName)
+	repoIdentity, err := resolveGitLabRepoIdentity(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	repoID, err := uuid.Parse(repoIDText)
+	repoID, err := uuid.Parse(repoIdentity.RepoID)
 	if err != nil || repoID == uuid.Nil {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
@@ -246,6 +248,8 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	fetchEpics := gitLabWorkItemsFlag(handler.FetchEpics)
 	pages := 1 // the project binding request
 	closingSynced := 0
+	// dependencyOwners[i] is the synced item rows.Dependencies[i] was read from.
+	dependencyOwners := make([]string, 0)
 	issueLinksUnsupported := 0
 	closingIncomplete := make([]string, 0)
 	closingTransient, closingTerminal := 0, 0
@@ -315,7 +319,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			pages += labelPages
 		}
 		item, transitions, normalizeErr := normalizeGitLabIssueWorkItem(
-			claim, fullName, repoID, payload.withFetchEpics(fetchEpics), labelEvents, handler.StatusMapping,
+			claim, fullName, repoIdentity.Path, repoID, payload.withFetchEpics(fetchEpics), labelEvents, handler.StatusMapping,
 			handler.ResolveIdentity, normalizedAt,
 		)
 		if normalizeErr != nil {
@@ -348,8 +352,9 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			if payload.Description != nil {
 				description = *payload.Description
 			}
-			rows.Dependencies = append(rows.Dependencies,
-				normalizeGitLabDependencies(claim, item.WorkItemID, fullName, description, links, normalizedAt)...)
+			dependencies := normalizeGitLabDependencies(claim, item.WorkItemID, fullName, description, links, normalizedAt)
+			rows.Dependencies = append(rows.Dependencies, dependencies...)
+			dependencyOwners = appendGitLabDependencyOwner(dependencyOwners, item.WorkItemID, len(dependencies))
 			unsupported := 0
 			for _, link := range links {
 				if _, ok := link.targetWorkItemID(); !ok {
@@ -392,6 +397,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 				closingRows := normalizeGitLabClosingMergeRequests(claim, item.WorkItemID, closing, normalizedAt)
 				closingSynced += len(closingRows)
 				rows.Dependencies = append(rows.Dependencies, closingRows...)
+				dependencyOwners = appendGitLabDependencyOwner(dependencyOwners, item.WorkItemID, len(closingRows))
 			}
 		}
 		if fetchComments {
@@ -434,7 +440,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 				pages += statePages
 			}
 			item, transitions, reopens, normalizeErr := normalizeGitLabMergeRequestWorkItem(
-				claim, fullName, repoID, payload, stateEvents, handler.ResolveIdentity, normalizedAt,
+				claim, fullName, repoIdentity.Path, repoID, payload, stateEvents, handler.ResolveIdentity, normalizedAt,
 			)
 			if normalizeErr != nil {
 				return CompleteRouteBatch{}, normalizeErr
@@ -458,6 +464,12 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			}
 		}
 	}
+	identityPaths, err := resolveGitLabIdentityPaths(ctx, handler.RepoIdentity, claim, fullName, repoIdentity,
+		gitLabDependencyPaths(rows.Dependencies, dependencyOwners))
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
+	rows.Dependencies = canonicalGitLabDependencies(rows.Dependencies, dependencyOwners, identityPaths)
 
 	effects, err := buildGitLabWorkItemEffectsFromRows(rows)
 	if err != nil {

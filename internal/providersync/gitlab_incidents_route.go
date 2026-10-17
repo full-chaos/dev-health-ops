@@ -112,9 +112,11 @@ type gitLabServiceRepositoryMappingRow struct {
 }
 
 type GitLabIncidentsRouteHandler struct {
-	MaxIssues int
-	MaxPages  int
-	PerPage   int
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
+	MaxIssues    int
+	MaxPages     int
+	PerPage      int
 }
 
 func (handler GitLabIncidentsRouteHandler) limits() (int, int, int, error) {
@@ -172,7 +174,7 @@ func (handler GitLabIncidentsRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	repoFullName := gitLabProjectFullName(project)
-	repoIDText, err := repositoryIdentity(repoFullName)
+	repoIDText, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, repoFullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

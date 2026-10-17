@@ -34,6 +34,7 @@
 package issueprlinks
 
 import (
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -329,9 +330,14 @@ type DependencyRow struct {
 
 // RepoRow is one `repos` row: the slug -> id resolution a PR source needs.
 type RepoRow struct {
-	OrgID string
-	ID    uuid.UUID
-	Repo  string
+	OrgID    string
+	ID       uuid.UUID
+	Repo     string
+	Provider string
+	// IdentityPath is the path a GitLab repository id was minted from
+	// (repos.identity_path, CHAOS-3383): a renamed project's merge-request ids
+	// keep it, so it names the repository too. Empty for GitHub rows.
+	IdentityPath string
 }
 
 // PullRequestRow is one `git_pull_requests` row inside the build's window. Its
@@ -449,6 +455,9 @@ type Result struct {
 	// in `not_admissible` alongside every unrelated relation row, and the
 	// decision to activate would have no evidence behind it.
 	ReservedSeenByRawKind map[string]int
+	// RepoSlugCollisions counts repository slugs that two rows with different
+	// ids hold for the same lookup (see repoSlugLookup).
+	RepoSlugCollisions int
 }
 
 // Written is the number of rows Derive produced.
@@ -546,23 +555,8 @@ func Derive(inputs Inputs) Result {
 	// lookup reads unconditionally otherwise -- so an org with dependencies but
 	// no repos still walks every row and rejects it. Same here: the lookups are
 	// built even when empty so the rejection accounting stays exact.
-	repoLookup := make(map[[2]string]uuid.UUID, len(inputs.Repos))
-	for _, repo := range inputs.Repos {
-		// Only the slug is checked, matching Python's `if not repo_slug or not
-		// repo_id` (builder.py:700) EXACTLY. An all-zero UUID must NOT be
-		// excluded here: `uuid.UUID` defines no `__bool__`, so Python treats a
-		// zero UUID as truthy and keeps the row -- only a missing (None)
-		// repo_id is skipped, and `repos.id` is a non-nullable `UUID` in the
-		// live schema, so None is unreachable from ClickHouse. A
-		// `repo.ID == uuid.Nil` exclusion would therefore be a gate Python does
-		// not have, turning a row Python maps into `unknown_repo`: a false
-		// negative, which an accounting assertion cannot catch because the row
-		// IS counted, just under the wrong outcome (codex round 6).
-		if repo.Repo == "" {
-			continue
-		}
-		repoLookup[[2]string{rowOrgID(repo.OrgID, inputs.OrgID), repo.Repo}] = repo.ID
-	}
+	repoLookup := newRepoSlugLookup(inputs)
+	result.RepoSlugCollisions = repoLookup.collisions
 
 	prLookup := make(map[prKey]struct{}, len(inputs.PullRequests))
 	for _, pull := range inputs.PullRequests {
@@ -613,7 +607,7 @@ func Derive(inputs Inputs) Result {
 			result.Rejected[ReasonUnknownWorkItem]++
 			continue
 		}
-		repoID, ok := repoLookup[[2]string{orgID, source.RepoSlug}]
+		repoID, ok := repoLookup.resolve(orgID, source.Provider, source.RepoSlug)
 		if !ok {
 			result.Rejected[ReasonUnknownRepo]++
 			continue
@@ -724,4 +718,78 @@ func normalizeLastSynced(value time.Time) time.Time {
 		return value
 	}
 	return value.UTC()
+}
+
+// repoSlugLookup resolves a PR source's repository slug to a repo id.
+//
+// byProvider holds every github and gitlab row under its own provider: its
+// repo, and for GitLab also its identity_path, the path its merge-request ids
+// carry (CHAOS-3383), which wins over another GitLab project's current path.
+// A source resolves under its own provider first, so a GitLab alias never
+// answers a GitHub slug and a GitHub repo never answers a GitLab one.
+//
+// anyProvider is Python's slug-only map over every row (builder.py:700, last
+// row wins). It answers only a slug no row of the source's provider holds.
+type repoSlugLookup struct {
+	byProvider  map[[3]string]uuid.UUID
+	anyProvider map[[2]string]uuid.UUID
+	collisions  int
+}
+
+func newRepoSlugLookup(inputs Inputs) repoSlugLookup {
+	lookup := repoSlugLookup{
+		byProvider:  make(map[[3]string]uuid.UUID, len(inputs.Repos)),
+		anyProvider: make(map[[2]string]uuid.UUID, len(inputs.Repos)),
+	}
+	put := func(key [3]string, id uuid.UUID) {
+		if held, ok := lookup.byProvider[key]; ok && held != id {
+			lookup.collide(key[0], key[1], key[2], held, id)
+		}
+		lookup.byProvider[key] = id
+	}
+	for _, repo := range inputs.Repos {
+		// Only the slug is checked, matching Python's `if not repo_slug or not
+		// repo_id` (builder.py:700) EXACTLY. An all-zero UUID must NOT be
+		// excluded here: `uuid.UUID` defines no `__bool__`, so Python treats a
+		// zero UUID as truthy and keeps the row -- only a missing (None)
+		// repo_id is skipped, and `repos.id` is a non-nullable `UUID` in the
+		// live schema, so None is unreachable from ClickHouse. A
+		// `repo.ID == uuid.Nil` exclusion would therefore be a gate Python does
+		// not have, turning a row Python maps into `unknown_repo`: a false
+		// negative, which an accounting assertion cannot catch because the row
+		// IS counted, just under the wrong outcome (codex round 6).
+		if repo.Repo == "" {
+			continue
+		}
+		orgID := rowOrgID(repo.OrgID, inputs.OrgID)
+		key := [2]string{orgID, repo.Repo}
+		if held, ok := lookup.anyProvider[key]; ok && held != repo.ID {
+			lookup.collide(orgID, "any", repo.Repo, held, repo.ID)
+		}
+		lookup.anyProvider[key] = repo.ID
+		if repo.Provider == ProviderGitHub || repo.Provider == ProviderGitLab {
+			put([3]string{orgID, repo.Provider, repo.Repo}, repo.ID)
+		}
+	}
+	for _, repo := range inputs.Repos {
+		if repo.Provider == ProviderGitLab && repo.IdentityPath != "" && repo.IdentityPath != repo.Repo {
+			put([3]string{rowOrgID(repo.OrgID, inputs.OrgID), ProviderGitLab, repo.IdentityPath}, repo.ID)
+		}
+	}
+	return lookup
+}
+
+func (lookup *repoSlugLookup) collide(orgID, provider, slug string, held, next uuid.UUID) {
+	lookup.collisions++
+	slog.Default().Debug("issue-pr links: repository slug held by two repos",
+		slog.String("organization_id", orgID), slog.String("provider", provider), slog.String("slug", slug),
+		slog.String("replaced_repo_id", held.String()), slog.String("repo_id", next.String()))
+}
+
+func (lookup repoSlugLookup) resolve(orgID, provider, slug string) (uuid.UUID, bool) {
+	if id, ok := lookup.byProvider[[3]string{orgID, provider, slug}]; ok {
+		return id, true
+	}
+	id, ok := lookup.anyProvider[[2]string{orgID, slug}]
+	return id, ok
 }

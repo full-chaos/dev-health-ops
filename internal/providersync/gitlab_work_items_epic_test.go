@@ -93,7 +93,7 @@ func buildGitLabIssueProviderOracleRow(t *testing.T, input map[string]any) gitla
 	claim := nativeTestClaim("gitlab", "work-items")
 	claim.OrgID = input["org_id"].(string)
 	row, _, err := normalizeGitLabIssueWorkItem(
-		claim, input["repo_full_name"].(string), repoID,
+		claim, input["repo_full_name"].(string), input["repo_full_name"].(string), repoID,
 		gitlabIssueWorkItemPayloadFromOracle(t, input).withFetchEpics(gitlabIssueFetchEpics(input)),
 		gitlabLabelEventsFromOracle(t, input), loadRealStatusMapping(t), nil, gitlabWorkItemsOracleNormalizedAt,
 	)
@@ -230,7 +230,10 @@ func TestGitLabWorkerRouteReadsFetchEpicsFromTheEnvironment(t *testing.T) {
 			issues[0] = strings.Replace(issues[0], `"due_date":"2026-07-20"}`, `"due_date":"2026-07-20","epic":{"id":900,"iid":4,"group_id":12}}`, 1)
 			claim := nativeTestClaim("gitlab", "work-items")
 			client := gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: responses}))
-			batch, err := handler.(GitLabWorkItemsRouteHandler).Collect(
+			// No store here: the selected route's repos reader is left out.
+			selected := handler.(GitLabWorkItemsRouteHandler)
+			selected.RepoIdentity = nil
+			batch, err := selected.Collect(
 				context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID}, client,
 				time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 			)

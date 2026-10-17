@@ -69,11 +69,13 @@ func (status *gitLabFilesContentStatus) addIncomplete(cause string, limit, obser
 // typed incompleteness, and leave the watermark nil; rate limits still
 // propagate (D16 policy is recorded on CHAOS-3188).
 type GitLabFilesRouteHandler struct {
-	PerPage   int
-	MaxPages  int
-	MaxFiles  int
-	MaxBytes  int
-	BatchSize int
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
+	PerPage      int
+	MaxPages     int
+	MaxFiles     int
+	MaxBytes     int
+	BatchSize    int
 }
 
 type gitLabFilesCountingDoer struct {
@@ -161,7 +163,7 @@ func (handler GitLabFilesRouteHandler) Collect(
 		return CompleteRouteBatch{}, gitLabFilesTraversalError(providerfoundation.ErrNormalizationInvalid)
 	}
 	fullName := gitLabProjectFullName(project)
-	repoID, err := repositoryIdentity(fullName)
+	repoID, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, gitLabFilesTraversalError(err)
 	}

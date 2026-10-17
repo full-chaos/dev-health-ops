@@ -402,24 +402,36 @@ WHERE org_id = ? AND provider = ? AND project_key IN ?`,
 	if err := result.Err(); err != nil {
 		return nil, err
 	}
-	repos, err := sink.Conn.Query(ctx, `
-SELECT repo, provider_repo_id FROM repos FINAL
-WHERE org_id = ? AND provider = ? AND provider_repo_id != '' AND repo IN ?`,
-		orgID, gitlabTeamCatalogProvider, paths)
+	// A repos row keeps its project's current path in repo and, since its id
+	// stays across renames (CHAOS-3383), the path it was minted at in
+	// identity_path: both are paths the store has seen the project at. The
+	// project is the one the identity resolver names the row by (heldBy:
+	// provider_repo_id, else settings.project_id for a row from before 134).
+	held, err := readGitLabStoredRepoIdentitiesAtPaths(ctx, sink.Conn, orgID, paths)
 	if err != nil {
 		return nil, err
 	}
-	defer repos.Close()
-	for repos.Next() {
-		var path, nativeID string
-		if err := repos.Scan(&path, &nativeID); err != nil {
-			return nil, err
+	requested := make(map[string][]string, len(paths))
+	for _, path := range paths {
+		key := strings.ToLower(strings.TrimSpace(path))
+		requested[key] = append(requested[key], path)
+	}
+	for _, row := range held {
+		id, ok := GitLabCatalogProjectID(orgID, row.heldBy())
+		if !ok {
+			continue
 		}
-		if id, ok := GitLabCatalogProjectID(orgID, nativeID); ok {
-			out[path] = append(out[path], id.String())
+		seenAt := []string{strings.ToLower(row.Repo)}
+		if identityPath := strings.ToLower(row.IdentityPath); identityPath != "" && identityPath != seenAt[0] {
+			seenAt = append(seenAt, identityPath)
+		}
+		for _, key := range seenAt {
+			for _, path := range requested[key] {
+				out[path] = append(out[path], id.String())
+			}
 		}
 	}
-	return out, repos.Err()
+	return out, nil
 }
 
 // gitlabOwnershipCarry is what a run does with the open path-form rows that

@@ -56,7 +56,7 @@ func TestChaos9852RedGitLabIssueEpic(t *testing.T) {
 	}
 	claim := nativeTestClaim("gitlab", "work-items")
 	row, _, err := normalizeGitLabIssueWorkItem(
-		claim, "acme/api", uuid.MustParse("0b7e3d4e-1111-4222-8333-944455556666"), payload, nil,
+		claim, "acme/api", "acme/api", uuid.MustParse("0b7e3d4e-1111-4222-8333-944455556666"), payload, nil,
 		loadRealStatusMapping(t), nil, time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {

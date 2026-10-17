@@ -122,7 +122,7 @@ WHERE org_id = {org_id:String}
 ORDER BY target_work_item_id, source_work_item_id, relationship_type_raw, last_synced`
 
 const repoQuery = `
-SELECT org_id, id, repo
+SELECT org_id, id, repo, provider, identity_path
 FROM repos FINAL
 WHERE org_id = {org_id:String}`
 
@@ -196,7 +196,7 @@ func (loader *Loader) loadRepos(ctx context.Context, orgID string) ([]RepoRow, e
 	var out []RepoRow
 	for rows.Next() {
 		var row RepoRow
-		if err := rows.Scan(&row.OrgID, &row.ID, &row.Repo); err != nil {
+		if err := rows.Scan(&row.OrgID, &row.ID, &row.Repo, &row.Provider, &row.IdentityPath); err != nil {
 			return nil, err
 		}
 		out = append(out, row)

@@ -72,6 +72,7 @@ func SelectWorkItemsRouteHandler(provider, dataset string, deps WorkItemsRouteDe
 		return GitLabWorkItemsRouteHandler{
 			StatusMapping: deps.StatusMapping,
 			FetchEpics:    gitLabFetchEpicsFromEnv(),
+			RepoIdentity:  GitLabRepoIdentityClickHouseReader{Conn: deps.Conn, Lease: deps.Lease},
 		}, true
 	case "jira":
 		return JiraAtlassianRouteHandler{StatusMapping: deps.StatusMapping}, true

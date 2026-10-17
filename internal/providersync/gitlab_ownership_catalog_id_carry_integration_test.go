@@ -131,6 +131,74 @@ WHERE org_id = ? AND provider = 'gitlab' AND team_id = 'gl:org' AND project_id =
 	}
 }
 
+// The same rename after CHAOS-3383: the project keeps one repos row, whose
+// repo is the new path and whose identity_path is the old path it was minted
+// at. That old path still names the project, so the grant is carried by id.
+func TestGitLabOwnershipPathRowOfAProjectRenamedUnderAStableRepoIDIsCarriedByID(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	org, fake := "gl-catalog-stable-rename", newGitLabSnapshotServer(t)
+	fake.set("", "", nil, map[string][]string{"org": {"org/new"}})
+	sink := GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
+	granted := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	run := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	nativeID := testGitLabNativeProjectID("org/new")
+	if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, identity_path, org_id, provider, provider_repo_id, created_at, last_synced) VALUES (generateUUIDv4(), 'org/new', 'org/old', ?, 'gitlab', ?, ?, ?)`,
+		org, nativeID, granted, granted); err != nil {
+		t.Fatal(err)
+	}
+	legacy := mustGitLabOwnershipRow(org, "gl:org", "org/old", gitlabTeamCatalogBaseSpecificity, granted)
+	legacy.ProjectID = testPID("org/old")
+	if err := sink.writeOwnership(ctx, []gitlabTeamCatalogOwnershipRow{legacy}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitlabSnapshotRun(ctx, t, conn, org, fake, TeamCatalogSelections{Projects: true}, false, run); err != nil {
+		t.Fatal(err)
+	}
+	var validFrom time.Time
+	var validTo *time.Time
+	if err := conn.QueryRow(ctx, `SELECT valid_from, valid_to FROM team_project_ownership FINAL
+WHERE org_id = ? AND provider = 'gitlab' AND team_id = 'gl:org' AND project_id = ?`, org, org+":gitlab:"+nativeID).Scan(&validFrom, &validTo); err != nil {
+		t.Fatal(err)
+	}
+	if !validFrom.Equal(granted) || validTo != nil {
+		t.Fatalf("renamed project's row = [%s, %v), want the grant's first instant (%s) and open", validFrom, validTo, granted)
+	}
+}
+
+// A repos row from before migration 134 names its project only in
+// settings.project_id. The carry names the row's project by the same rule as
+// the identity resolver, so a grant under that row's path is carried by id.
+func TestGitLabOwnershipPathRowOfALegacyReposRowIsCarriedBySettingsProjectID(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	org, fake := "gl-catalog-legacy-settings", newGitLabSnapshotServer(t)
+	fake.set("", "", nil, map[string][]string{"org": {"org/new"}})
+	sink := GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
+	granted := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	run := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	nativeID := testGitLabNativeProjectID("org/new")
+	if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, settings, created_at, last_synced) VALUES (generateUUIDv4(), 'org/old', ?, 'gitlab', ?, ?, ?)`,
+		org, `{"source":"gitlab","project_id":`+nativeID+`}`, granted, granted); err != nil {
+		t.Fatal(err)
+	}
+	legacy := mustGitLabOwnershipRow(org, "gl:org", "org/old", gitlabTeamCatalogBaseSpecificity, granted)
+	legacy.ProjectID = testPID("org/old")
+	if err := sink.writeOwnership(ctx, []gitlabTeamCatalogOwnershipRow{legacy}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitlabSnapshotRun(ctx, t, conn, org, fake, TeamCatalogSelections{Projects: true}, false, run); err != nil {
+		t.Fatal(err)
+	}
+	var validFrom time.Time
+	var validTo *time.Time
+	if err := conn.QueryRow(ctx, `SELECT valid_from, valid_to FROM team_project_ownership FINAL
+WHERE org_id = ? AND provider = 'gitlab' AND team_id = 'gl:org' AND project_id = ?`, org, org+":gitlab:"+nativeID).Scan(&validFrom, &validTo); err != nil {
+		t.Fatal(err)
+	}
+	if !validFrom.Equal(granted) || validTo != nil {
+		t.Fatalf("legacy project's row = [%s, %v), want the grant's first instant (%s) and open", validFrom, validTo, granted)
+	}
+}
+
 // A path the projects catalog names for another (deleted) project was taken
 // over by the listed project: the listed project's grant starts at the run, and
 // the old path row ends at the run. The projects read is the real one.

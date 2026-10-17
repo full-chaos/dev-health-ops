@@ -46,6 +46,24 @@ from dev_health_ops.sync.dispatch_outbox import (
 )
 from tests._helpers import sync_postgres_test_url
 
+# Seeding at a pinned far-past instant and claiming at that same instant makes
+# only the seeded row due, so tests stay correct against a database that already
+# holds pending outbox rows.
+_ISOLATED_CLAIM_AT = datetime(1970, 1, 2, tzinfo=timezone.utc)
+
+
+def _claim_only_seeded_row(session: Session):
+    claim = claim_due_outbox_rows(session, now=_ISOLATED_CLAIM_AT, limit=1)[0]
+    # The claim expiry is anchored to the pinned instant; publish paths compare
+    # it with the real clock, so move it to a live window.
+    session.execute(
+        update(SyncDispatchOutbox)
+        .where(SyncDispatchOutbox.id == claim.id)
+        .values(claim_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5))
+    )
+    return claim
+
+
 _POSTGRES_TEST_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 
 
@@ -1059,14 +1077,13 @@ def test_real_postgres_route_change_fences_claim_from_another_session():
             run = _seed_run(seed_session)
             run_id = run.id
             integration_id = run.integration_id
-            now = datetime.now(timezone.utc)
             upsert_outbox_wakeup(
                 seed_session,
                 sync_run_id=run.id,
                 kind=OUTBOX_KIND_DISPATCH,
-                available_at=now,
+                available_at=_ISOLATED_CLAIM_AT,
             )
-            claim = claim_due_outbox_rows(seed_session, now=now, limit=1)[0]
+            claim = _claim_only_seeded_row(seed_session)
             seed_session.commit()
 
         with Session(engine) as route_session:
@@ -1153,14 +1170,13 @@ def test_real_postgres_publish_lock_blocks_route_change_until_commit():
             run = _seed_run(seed_session)
             run_id = run.id
             integration_id = run.integration_id
-            now = datetime.now(timezone.utc)
             upsert_outbox_wakeup(
                 seed_session,
                 sync_run_id=run.id,
                 kind=OUTBOX_KIND_DISPATCH,
-                available_at=now,
+                available_at=_ISOLATED_CLAIM_AT,
             )
-            claim = claim_due_outbox_rows(seed_session, now=now, limit=1)[0]
+            claim = _claim_only_seeded_row(seed_session)
             seed_session.commit()
 
         def publish() -> None:

@@ -233,6 +233,15 @@ func Create(ctx context.Context, pool *pgxpool.Pool) error {
 		// test_integration_fixture_ddl_matches_snapshot_migrations fails if the two
 		// drift apart.
 		snapshotFixtureDDL,
+		// alembic 0031 (provider_rate_limit_observations): written by
+		// DeferForRateLimit, read by the dispatch cooldown gate.
+		`CREATE TABLE public.provider_rate_limit_observations (
+			id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, host text,
+			integration_id uuid NOT NULL, sync_run_id uuid NOT NULL, sync_run_unit_id uuid NOT NULL,
+			route_family text, route_family_attribution text, dimension text,
+			retry_after_seconds double precision, reset_at timestamptz, reason text, request_id text,
+			observed_at timestamptz NOT NULL
+		)`,
 		`CREATE TABLE public.sync_watermarks (
 			id uuid PRIMARY KEY, org_id text NOT NULL, repo_id text NOT NULL,
 			source_id text NOT NULL, target text NOT NULL, dataset_key text NOT NULL,

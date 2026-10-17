@@ -215,7 +215,7 @@ REGISTRY_SOURCES = (
     ),
     RegistrySource(
         metric_schemas.ICLandscapeRollingRecord,
-        "ic_landscape_rolling",
+        "ic_landscape_rolling_30d",
         ("repo", "team", "identity", "day"),
     ),
     RegistrySource(
@@ -244,7 +244,7 @@ REGISTRY_SOURCES = (
     ),
     RegistrySource(
         metric_schemas.WorkItemStateDurationDailyRecord,
-        "work_item_state_duration_daily",
+        "work_item_state_durations_daily",
         ("team", "status", "work_scope", "provider", "day"),
     ),
     RegistrySource(

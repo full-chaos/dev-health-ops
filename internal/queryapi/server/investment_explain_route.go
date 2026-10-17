@@ -224,7 +224,7 @@ func buildInvestmentExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (ha
 			decryptorErr,
 		)
 	}
-	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}
+	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}.ForPurpose(llmorgsettings.PurposeExplain)
 
 	routeMux := routeswitch.NewMux(investmentExplainSwitchFromEnv(getenv))
 	routeMux.Register(investmentExplainOperation, newInvestmentExplainWorkHandler(reader, cacheWriter, orgSettings, llmbudget.PgStore{Pool: orgSettingsPool}))

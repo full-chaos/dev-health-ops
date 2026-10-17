@@ -1,6 +1,7 @@
 package syncdispatchruntime
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"testing"
 	"time"
 )
@@ -75,3 +76,11 @@ func TestMatchingCooldownExpiry(t *testing.T) {
 }
 
 func floatPtr(value float64) *float64 { return &value }
+
+// The cooldown gate reads the attribution marker the provider-unit deferral
+// writes; the two constants must be one value.
+func TestCooldownGateReadsTheAttributionTheDeferralWrites(t *testing.T) {
+	if ambiguousRouteFamilyAttribution != providersync.AmbiguousDimensionAttribution {
+		t.Fatalf("gate reads %q, the deferral writes %q", ambiguousRouteFamilyAttribution, providersync.AmbiguousDimensionAttribution)
+	}
+}

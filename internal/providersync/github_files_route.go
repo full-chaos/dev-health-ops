@@ -371,7 +371,7 @@ func fetchGitHubFileContents(
 		if err != nil {
 			return nil, providerfoundation.ErrNormalizationInvalid
 		}
-		response, err := client.Do(ctx, "POST", gitHubGraphQLURL(client), bytes.NewReader(body))
+		response, err := client.Do(providerfoundation.WithBudgetDimension(ctx, BudgetContentsBlob), "POST", gitHubGraphQLURL(client), bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}

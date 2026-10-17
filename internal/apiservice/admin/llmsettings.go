@@ -248,6 +248,13 @@ func (h *handlers) llmSettingsResponse(ctx context.Context, db pgExecer, orgID s
 		}
 		out.Set("concurrency", pyjson.Int{Int: parsed})
 	}
+	purposes, err := h.llmPurposesObject(ctx, db, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if purposes != nil {
+		out.Set("purposes", purposes)
+	}
 	return out, nil
 }
 
@@ -256,6 +263,15 @@ func (h *handlers) getLLMSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	orgID, ok := adminOrgID(w, policy.UserFrom(ctx))
 	if !ok {
+		return
+	}
+	rawPurpose, hasPurpose := r.URL.Query()["purpose"]
+	if hasPurpose {
+		purpose, _, valid := purposeParam(w, rawPurpose[len(rawPurpose)-1], true)
+		if !valid {
+			return
+		}
+		h.getLLMPurpose(w, r, orgID, purpose)
 		return
 	}
 	if !h.requireBYOLLMAccess(ctx, w, orgID, false) {
@@ -289,6 +305,8 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		provider                   *string
 		model, apiKey, baseURL     *string
 		concurrency, budgetLimitMu *big.Int
+		purposeRaw                 *string
+		purposeModel               string
 	)
 	if ok {
 		if v, present := errs.RequiredString(object, "provider", 1, 0); present {
@@ -302,6 +320,14 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if v, present := errs.OptionalString(object, "base_url", 0, 0); present {
 			baseURL = &v
+		}
+		if v, present := errs.OptionalString(object, "purpose", 0, 0); present {
+			purposeRaw = &v
+			if v != "" {
+				if v, present := errs.RequiredString(object, "model", 1, 0); present {
+					purposeModel = v
+				}
+			}
 		}
 		if v, present := errs.OptionalBoundedInt(object, "concurrency", 1, 32); present {
 			concurrency = big.NewInt(v)
@@ -320,6 +346,48 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.requireBYOLLMAccess(ctx, w, orgID, false) {
+		return
+	}
+	if purposeRaw != nil {
+		purpose, _, valid := purposeParam(w, *purposeRaw, true)
+		if !valid {
+			return
+		}
+		if concurrency != nil || budgetLimitMu != nil {
+			llmDetail(http.StatusBadRequest, w,
+				"error", "purpose_override_unsupported_field",
+				"message", "concurrency and budget_limit_micro_usd apply to the default config only")
+			return
+		}
+		if apiKey == nil || *apiKey == "" {
+			need, err := h.purposeNeedsKey(ctx, orgID, purpose, *provider)
+			if err != nil {
+				h.internalError(ctx, w, "check llm purpose key", err)
+				return
+			}
+			if need {
+				writeValidation(w, pybody.Errors{pydanticValueError([]pyjson.Value{"body", "api_key"}, nil,
+					"api_key is required unless the provider matches the default row, which then supplies it")})
+				return
+			}
+		}
+		out, refusal, err := h.applyLLMPurpose(ctx, orgID, llmPurposeUpsert{
+			purpose: purpose, provider: *provider, model: purposeModel, apiKey: apiKey, baseURL: baseURL,
+		})
+		if err != nil {
+			var step *llmStepError
+			if errors.As(err, &step) {
+				h.internalError(ctx, w, step.step, step.err)
+			} else {
+				h.internalError(ctx, w, "write llm purpose override", err)
+			}
+			return
+		}
+		if refusal != nil {
+			refusal.write(w)
+			return
+		}
+		policy.WriteModel(w, http.StatusOK, out, nil)
 		return
 	}
 	if budgetLimitMu != nil && user.ImpersonatedBy != nil && *user.ImpersonatedBy != "" {
@@ -453,6 +521,14 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	orgID, ok := adminOrgID(w, policy.UserFrom(ctx))
 	if !ok {
+		return
+	}
+	if rawPurpose, hasPurpose := r.URL.Query()["purpose"]; hasPurpose {
+		purpose, _, valid := purposeParam(w, rawPurpose[len(rawPurpose)-1], true)
+		if !valid {
+			return
+		}
+		h.deleteLLMPurpose(w, r, orgID, purpose)
 		return
 	}
 	if !h.requireBYOLLMAccess(ctx, w, orgID, true) {

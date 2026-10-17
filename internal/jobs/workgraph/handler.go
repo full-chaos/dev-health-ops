@@ -390,7 +390,7 @@ func (h *buildHandler) work(ctx context.Context, requestID string, organizationI
 	}
 	return runClaimedWork(ctx, h.store, h.logger, requestID, KindBuild, organizationID, domain,
 		func(workCtx context.Context, claim Claim) ([]byte, error) {
-			fragments, preStepErr := runPreSteps(workCtx, h.preSteps, claim)
+			fragments, failedSteps, preStepErr := runPreSteps(workCtx, h.preSteps, claim)
 			if preStepErr != nil {
 				return nil, preStepErr
 			}
@@ -403,7 +403,17 @@ func (h *buildHandler) work(ctx context.Context, requestID string, organizationI
 			// that input is empty, which would silently drop every
 			// fragment. "{}" is a valid empty JSON object, so the merge
 			// proceeds and every fragment lands as a top-level key.
-			return mergePreStepEvidence([]byte("{}"), mergeStepFragments(fragments, postFragments)), nil
+			evidence := mergePreStepEvidence([]byte("{}"), mergeStepFragments(fragments, postFragments))
+			if len(failedSteps) > 0 {
+				failedEvidence := make(map[string]map[string]any, len(failedSteps))
+				for _, name := range failedSteps {
+					failedEvidence[name] = fragments[name]
+				}
+				h.logger.Error("workgraph build: steps reported FAILED; the build ran every step",
+					slog.String("request_id", requestID), slog.String("organization_id", *organizationID),
+					slog.Any("failed_steps", failedSteps), slog.Any("failed_step_evidence", failedEvidence))
+			}
+			return withFailedSteps(evidence, failedSteps), nil
 		},
 		func(_ context.Context, _ Claim, err error) error {
 			// Ambiguous exists to record a HALF-APPLIED Python write: the

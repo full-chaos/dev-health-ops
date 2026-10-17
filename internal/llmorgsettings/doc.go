@@ -11,6 +11,10 @@
 // SETTINGS_ENCRYPTION_KEY/SETTINGS_ENCRYPTION_SALT env vars (never a
 // hardcoded value -- see that package's own doc comment).
 //
+// Per-purpose overrides (CHAOS-10039, purpose.go) share the category under
+// "purpose:<purpose>:<field>"; Store.ForPurpose selects the purpose a reader
+// resolves for (override, else default row, else platform).
+//
 // Oracle: llm/credentials.py's resolve_usable_org_llm_provider,
 // org_byo_provider_matches, resolve_llm_org_settings_credentials,
 // resolve_llm_org_settings_model, _resolve_org_byo_credentials, and

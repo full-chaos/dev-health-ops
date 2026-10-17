@@ -3,7 +3,9 @@ package workgraph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 )
 
 // NativePreStep is native Go compute that runs INSIDE a work-graph build
@@ -123,23 +125,76 @@ func mergePreStepEvidence(evidence []byte, fragments map[string]map[string]any) 
 	return merged
 }
 
-// runPreSteps executes every registered step in order, collecting evidence.
-func runPreSteps(ctx context.Context, steps []NativePreStep, claim Claim) (map[string]map[string]any, error) {
+// StepFailure is a step's own FAILED verdict that must not stop the build: the
+// step ran to the end and found a breach of a rule it checks, and the later
+// steps still have to run. Any other error from a step aborts the build.
+type StepFailure struct {
+	Reason   string
+	Evidence map[string]any
+}
+
+func (failure *StepFailure) Error() string { return failure.Reason }
+
+const (
+	// StepStatusKey and StepStatusFailed mark a failed step's evidence fragment.
+	StepStatusKey    = "status"
+	StepStatusFailed = "failed"
+	// FailedStepsKey is the top-level build evidence key that names every
+	// step that reported a StepFailure, in run order.
+	FailedStepsKey = "failed_steps"
+)
+
+// runPreSteps executes every registered step in order, collecting evidence
+// and the names of the steps that reported a StepFailure.
+func runPreSteps(ctx context.Context, steps []NativePreStep, claim Claim) (map[string]map[string]any, []string, error) {
 	if len(steps) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	fragments := make(map[string]map[string]any, len(steps))
+	var failed []string
 	for _, step := range steps {
 		if step == nil {
 			continue
 		}
 		fragment, err := step.Run(ctx, claim)
-		if err != nil {
-			return nil, fmt.Errorf("work-graph pre-step %s: %w", step.Name(), err)
+		var failure *StepFailure
+		if errors.As(err, &failure) {
+			fragment = maps.Clone(failure.Evidence)
+			if fragment == nil {
+				fragment = map[string]any{}
+			}
+			fragment[StepStatusKey] = StepStatusFailed
+			fragment["failure_reason"] = failure.Reason
+			failed = append(failed, step.Name())
+		} else if err != nil {
+			return nil, nil, fmt.Errorf("work-graph pre-step %s: %w", step.Name(), err)
 		}
 		if fragment != nil {
 			fragments[step.Name()] = fragment
 		}
 	}
-	return fragments, nil
+	return fragments, failed, nil
+}
+
+// withFailedSteps adds FailedStepsKey to a JSON object evidence payload. A
+// payload that is not a JSON object is returned unchanged, as
+// mergePreStepEvidence does.
+func withFailedSteps(evidence []byte, failed []string) []byte {
+	if len(failed) == 0 {
+		return evidence
+	}
+	decoded, err := decodeJSONPreservingNumbers(evidence)
+	if err != nil {
+		return evidence
+	}
+	payload, isObject := decoded.(map[string]any)
+	if !isObject || payload == nil {
+		return evidence
+	}
+	payload[FailedStepsKey] = failed
+	merged, err := json.Marshal(payload)
+	if err != nil {
+		return evidence
+	}
+	return merged
 }

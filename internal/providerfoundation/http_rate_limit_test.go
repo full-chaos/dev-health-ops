@@ -2,6 +2,7 @@ package providerfoundation
 
 import (
 	"context"
+	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
 	"strconv"
@@ -135,4 +136,78 @@ func TestRateLimitGatePenaltyIsCappedAtTheHonouredCeiling(t *testing.T) {
 
 func epochSeconds(at time.Time) string {
 	return strconv.FormatInt(at.Unix(), 10)
+}
+
+// A rate-limited response carries the budget dimension of the request that was
+// limited: the cooldown gate keys on it.
+func TestRateLimitedResponseCarriesTheBudgetDimension(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, provider, path, status, body string
+		want                               string
+	}{
+		{"rest", "github", "/repos/acme/api/commits", "429", `{"message":"rate limit"}`, "rest_core"},
+		{"graphql", "github", "/graphql", "429", `{"message":"rate limit"}`, "graphql_cost"},
+		{"search", "github", "/search/issues", "429", `{"message":"rate limit"}`, "search"},
+		{"secondary", "github", "/repos/acme/api", "403", `{"message":"You have exceeded a secondary rate limit"}`, "secondary_abuse_risk"},
+		{"gitlab graphql", "gitlab", "/api/graphql", "429", `{"message":"rate limit"}`, "graphql_cost"},
+		{"jira jql search", "jira", "/rest/api/3/search/jql", "429", `{"message":"rate limit"}`, "search"},
+		{"jira rest", "jira", "/rest/api/3/issue/ABC-1", "429", `{"message":"rate limit"}`, "rest_core"},
+		{"github enterprise search", "github", "/api/v3/search/issues", "429", `{"message":"rate limit"}`, "search"},
+		{"github enterprise rest", "github", "/api/v3/repos/acme/api", "429", `{"message":"rate limit"}`, "rest_core"},
+		{"github enterprise graphql", "github", "/api/graphql", "429", `{"message":"rate limit"}`, "graphql_cost"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			status := http.StatusTooManyRequests
+			if tc.status == "403" {
+				status = http.StatusForbidden
+			}
+			policy := RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: 25 * time.Millisecond}
+			client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+				return testHTTPResponse(request, status, http.Header{"Retry-After": {"60"}}, tc.body), nil
+			})), policy)
+			client.Provider = tc.provider
+			_, err := client.Do(context.Background(), http.MethodGet, tc.path, nil)
+			var providerErr *ProviderError
+			if !errors.As(err, &providerErr) || providerErr.Class != ErrorRateLimited {
+				t.Fatalf("err = %v, want a rate-limited ProviderError", err)
+			}
+			if providerErr.Dimension != tc.want {
+				t.Fatalf("Dimension = %q, want %q", providerErr.Dimension, tc.want)
+			}
+		})
+	}
+}
+
+func TestNonRateLimitedErrorsCarryNoDimension(t *testing.T) {
+	t.Parallel()
+	policy := RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: 25 * time.Millisecond}
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		return testHTTPResponse(request, http.StatusNotFound, http.Header{}, `{}`), nil
+	})), policy)
+	_, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Dimension != "" {
+		t.Fatalf("err = %v, want a ProviderError with no Dimension", err)
+	}
+}
+
+// Code that classifies a provider response itself (the unauthenticated artifact
+// downloads) gets the same dimension as HTTPClient.Do.
+func TestClassifyHTTPForRequestCarriesTheDimension(t *testing.T) {
+	t.Parallel()
+	limited := ClassifyHTTPForRequest("gitlab", "/api/v4/projects/1/jobs/2/artifacts", http.StatusTooManyRequests,
+		http.Header{"Retry-After": {"60"}}, `{"message":"rate limit"}`)
+	if limited == nil || limited.Class != ErrorRateLimited || limited.Dimension != "rest_core" || limited.RetryAfter != time.Minute {
+		t.Fatalf("limited = %+v, want rate_limited, rest_core, 1m", limited)
+	}
+	notLimited := ClassifyHTTPForRequest("gitlab", "/x", http.StatusNotFound, http.Header{}, "")
+	if notLimited == nil || notLimited.Dimension != "" {
+		t.Fatalf("notLimited = %+v, want a classification with no Dimension", notLimited)
+	}
+	if ClassifyHTTPForRequest("gitlab", "/x", http.StatusOK, http.Header{}, "") != nil {
+		t.Fatal("a 200 was classified as an error")
+	}
 }

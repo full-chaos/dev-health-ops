@@ -472,7 +472,7 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var credentials acr.CredentialVerifier
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
-		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}
+		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeInvestigate)
 		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
 	}
 	return internalRoutesWith(acr.Deps{Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials})

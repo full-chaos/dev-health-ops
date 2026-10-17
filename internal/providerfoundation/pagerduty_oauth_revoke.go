@@ -104,7 +104,7 @@ func RevokePagerDutyOAuthToken(ctx context.Context, doer HTTPDoer, config PagerD
 		return transportProviderError("pagerduty", err, 1)
 	}
 	defer response.Body.Close()
-	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {
+	if classification := ClassifyHTTPForRequest("pagerduty", request.URL.Path, response.StatusCode, response.Header, ""); classification != nil {
 		return classification
 	}
 	// raise_for_status: anything but a 2xx is a failure, a redirect included

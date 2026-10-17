@@ -59,7 +59,7 @@ func (h *handlers) getLLMBudget(w http.ResponseWriter, r *http.Request) {
 	}
 	model := orEmpty(modelText)
 	if model == "" {
-		model = llmbudget.DefaultModelByProvider[provider]
+		model = llmbudget.DefaultModel(provider, lookupEnv)
 	}
 	baseURL, err := h.settingText(ctx, orgID, llmCategory, "base_url")
 	if err != nil {

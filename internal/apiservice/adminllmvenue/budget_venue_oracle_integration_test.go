@@ -75,8 +75,16 @@ func scenarios() []scenario {
 		{name: "kill switch is refused", tier: "team", killSwitch: true, provider: text("openai"), model: text("gpt-5-mini")},
 		// nothing configured / not priced
 		{name: "no settings at all", tier: "team"},
-		{name: "unpriced provider, limit set", tier: "team", provider: text("anthropic"), limit: text("1000")},
-		{name: "unpriced provider, no limit", tier: "team", provider: text("anthropic")},
+		// Divergence from base.py, ruling D6043: Python defaulted an anthropic
+		// org with no model to claude-3-haiku-20240307 (retired), so its
+		// status read unpriced; Go's default is the model the call would run
+		// (claude-haiku-5-5, priced). These two cases store base.py's default
+		// explicitly, which Python answered identically (it was the default),
+		// so they still pin the unpriced status; the Go default is pinned by
+		// llmbudget.TestDefaultModelWithNothingConfigured and
+		// investmentexplain.TestOrgWithNoStoredModelRunsTheSharedDefault.
+		{name: "unpriced provider, limit set", tier: "team", provider: text("anthropic"), model: text("claude-3-haiku-20240307"), limit: text("1000")},
+		{name: "unpriced provider, no limit", tier: "team", provider: text("anthropic"), model: text("claude-3-haiku-20240307")},
 		{name: "empty model falls back to the provider default", tier: "team", provider: text("openai"), model: text(""), limit: text("1000")},
 		{name: "unknown provider has no default model", tier: "team", provider: text("nope"), limit: text("1000")},
 		// priced, no reservations

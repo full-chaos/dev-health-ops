@@ -1033,7 +1033,7 @@ func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn, turn provi
 		// sync_options once TeamCatalogReference.SyncOptions lands (CHAOS-4431
 		// follow-up), tracked separately.
 		"gitlab": providersync.GitLabTeamCatalogCollector{
-			Handler: providersync.GitLabTeamCatalogRouteHandler{},
+			Handler: providersync.GitLabTeamCatalogRouteHandler{RepoIdentity: providersync.GitLabRepoIdentityClickHouseReader{Conn: clickhouseConnection, Lease: teamCatalogLease{}}},
 			Sink: providersync.GitLabTeamCatalogClickHouseEffects{
 				Conn: clickhouseConnection, Lease: teamCatalogLease{},
 			},

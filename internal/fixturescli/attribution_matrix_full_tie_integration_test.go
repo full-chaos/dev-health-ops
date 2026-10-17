@@ -55,7 +55,7 @@ type fullTieLeg struct {
 	// CatalogNativeID, for a GitLab leg, is the new project's numeric id: its
 	// ownership row is keyed by the catalog id {org}:gitlab:{id} with the path
 	// as project_key, and a catalog row is added, as the GitLab writer does.
-	// The issue keeps the path as its project_id.
+	// The issue's project_id is the catalog id and its project_key the path.
 	CatalogNativeID   string
 	Issue, IssueClone string
 	NativeTeamKey     string
@@ -215,7 +215,11 @@ FROM (SELECT * FROM projects FINAL WHERE org_id = %s AND id = %s LIMIT 1)`,
 			replace = append(replace, fmt.Sprintf("toUUID(%s) AS repo_id", sqlQuote(seed.RepoID)))
 		}
 		if leg.NewProject {
-			replace = append(replace, sqlQuote(leg.Project)+" AS project_id")
+			if leg.CatalogNativeID != "" {
+				replace = append(replace, sqlQuote(org+":gitlab:"+leg.CatalogNativeID)+" AS project_id", sqlQuote(leg.Project)+" AS project_key")
+			} else {
+				replace = append(replace, sqlQuote(leg.Project)+" AS project_id")
+			}
 			if leg.ProjectKey != "" {
 				replace = append(replace, sqlQuote(leg.ProjectKey)+" AS project_key", sqlQuote(leg.ProjectName)+" AS project_name")
 			}

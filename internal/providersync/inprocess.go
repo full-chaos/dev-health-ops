@@ -279,24 +279,21 @@ func (gate *InProcessBackoffGate) now() time.Time {
 	return time.Now()
 }
 
-// Wait sleeps out the penalty itself and then reports the gate clear (0): the
-// shared-gate contract is that a positive result is a wait still owed, which
-// HTTPClient sleeps in place, so a gate that has already slept must not report it.
+// Wait reports the penalty still owed, without sleeping, exactly as the Valkey
+// gate does: HTTPClient.awaitGate is the one place that sleeps it out, so the
+// bound, the context deadline, the lease re-assertion and the re-read of a
+// penalty a sibling extended meanwhile apply to this gate as to the shared one.
 func (gate *InProcessBackoffGate) Wait(ctx context.Context) (time.Duration, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	gate.mu.Lock()
 	wait := gate.until.Sub(gate.now())
 	gate.mu.Unlock()
 	if wait <= 0 {
 		return 0, nil
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return 0, nil
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	}
+	return wait, nil
 }
 
 func (gate *InProcessBackoffGate) Penalize(_ context.Context, delay time.Duration) error {

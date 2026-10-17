@@ -132,3 +132,90 @@ func TestAGateWaitLongerThanTheContextDeadlineEndsTheTryAtOnce(t *testing.T) {
 		t.Fatalf("slept %s towards a wait the deadline could not outlast", time.Since(started))
 	}
 }
+
+// reportingGate is a gate that, like InProcessBackoffGate and the Valkey gate,
+// reports the penalty owed without sleeping it and can be extended meanwhile.
+type reportingGate struct {
+	until atomic.Int64 // unix nanos
+}
+
+func (g *reportingGate) Wait(ctx context.Context) (time.Duration, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if wait := time.Until(time.Unix(0, g.until.Load())); wait > 0 {
+		return wait, nil
+	}
+	return 0, nil
+}
+
+func (g *reportingGate) Penalize(_ context.Context, delay time.Duration) error {
+	g.until.Store(time.Now().Add(delay).UnixNano())
+	return nil
+}
+
+// Every guarantee of the in-place wait holds for a gate that only reports: a
+// penalty a sibling extends while this request sleeps is read again, the bound
+// and the deadline decide before any sleep, and the lease is checked after it.
+func TestInPlaceGateWaitRereadsAnExtendedPenalty(t *testing.T) {
+	t.Parallel()
+	gate := &reportingGate{}
+	_ = gate.Penalize(context.Background(), 60*time.Millisecond)
+	var requests atomic.Int32
+	client := gateWaitClient(t, gate, &requests)
+	client.GateWaitMax = time.Second
+	time.AfterFunc(20*time.Millisecond, func() { _ = gate.Penalize(context.Background(), 150*time.Millisecond) })
+
+	started := time.Now()
+	response, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if elapsed := time.Since(started); elapsed < 150*time.Millisecond {
+		t.Fatalf("request went out after %s, before the extended penalty (>= 150ms from t=20ms) ended", elapsed)
+	}
+}
+
+func TestInPlaceGateWaitRespectsTheBoundAndTheDeadlineForAReportingGate(t *testing.T) {
+	t.Parallel()
+	gate := &reportingGate{}
+	_ = gate.Penalize(context.Background(), time.Hour)
+	var requests atomic.Int32
+	client := gateWaitClient(t, gate, &requests)
+	client.GateWaitMax = 100 * time.Millisecond
+	if _, err := client.Do(context.Background(), http.MethodGet, "/items", nil); err == nil || requests.Load() != 0 {
+		t.Fatalf("err = %v requests = %d, want rate_limited and no request past the bound", err, requests.Load())
+	}
+	client.GateWaitMax = time.Hour
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err := client.Do(ctx, http.MethodGet, "/items", nil)
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != ErrorRateLimited || requests.Load() != 0 {
+		t.Fatalf("err = %v requests = %d, want rate_limited (not a deadline error) and no request", err, requests.Load())
+	}
+}
+
+type flippingLease struct{ calls atomic.Int32 }
+
+func (l *flippingLease) Assert(context.Context) error {
+	if l.calls.Add(1) > 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+func TestDoUnauthenticatedReassertsTheLeaseAfterTheGateSleep(t *testing.T) {
+	t.Parallel()
+	gate := &reportingGate{}
+	_ = gate.Penalize(context.Background(), 40*time.Millisecond)
+	var requests atomic.Int32
+	client := gateWaitClient(t, gate, &requests)
+	client.GateWaitMax = time.Second
+	client.Lease = &flippingLease{}
+	_, err := client.DoUnauthenticated(context.Background(), http.MethodGet, "https://storage.example/blob")
+	if !errors.Is(err, ErrLeaseLost) || requests.Load() != 0 {
+		t.Fatalf("err = %v requests = %d, want lease loss and no request after the gate sleep", err, requests.Load())
+	}
+}

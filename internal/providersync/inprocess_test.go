@@ -76,14 +76,23 @@ func TestInProcessBackoffGateWaitsOutAPenaltyAndCapsIt(t *testing.T) {
 	if kept != 30*time.Millisecond {
 		t.Fatalf("a shorter penalty must not shorten the wait, got %v", kept)
 	}
-	// Waiting really waits, and a cancelled context ends the wait.
+	// Wait reports the penalty still owed and does not sleep it (HTTPClient.awaitGate
+	// sleeps), so a sibling's extension meanwhile is seen on the next read; a
+	// cancelled context is the context error.
 	live := &InProcessBackoffGate{}
-	if err := live.Penalize(context.Background(), 20*time.Millisecond); err != nil {
+	if err := live.Penalize(context.Background(), 200*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	if waited, err := live.Wait(context.Background()); err != nil || waited != 0 || time.Since(start) < 15*time.Millisecond {
-		t.Fatalf("a penalized gate must sleep the penalty out and report itself clear: waited %v after %v err %v", waited, time.Since(start), err)
+	waited, err := live.Wait(context.Background())
+	if err != nil || waited <= 0 || waited > 200*time.Millisecond || time.Since(start) > 100*time.Millisecond {
+		t.Fatalf("a penalized gate must report the owed wait without sleeping: waited %v after %v err %v", waited, time.Since(start), err)
+	}
+	if err := live.Penalize(context.Background(), 400*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := live.Wait(context.Background()); err != nil || again <= waited {
+		t.Fatalf("an extended penalty must be read as the longer wait: %v then %v err %v", waited, again, err)
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()

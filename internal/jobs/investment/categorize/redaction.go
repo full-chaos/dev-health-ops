@@ -33,27 +33,6 @@ func (p SharedProvider) Format(state fmt.State, verb rune) {
 }
 func (p SharedProvider) LogValue() slog.Value { return secrets.LogRedacted(p.redacted()) }
 
-func (c SharedProviderConfig) redacted() any {
-	type plain SharedProviderConfig
-	return plain(c)
-}
-
-func (c SharedProviderConfig) Format(state fmt.State, verb rune) {
-	secrets.FormatRedacted(state, verb, c.redacted())
-}
-func (c SharedProviderConfig) LogValue() slog.Value { return secrets.LogRedacted(c.redacted()) }
-
-// The shared llm client is left out: it holds the key as an llm.Secret, which
-// fmt reflects over when it is reached through an unexported field.
-func (p SharedProvider) redacted() any {
-	return struct{ Cfg SharedProviderConfig }{p.cfg}
-}
-
-func (p SharedProvider) Format(state fmt.State, verb rune) {
-	secrets.FormatRedacted(state, verb, p.redacted())
-}
-func (p SharedProvider) LogValue() slog.Value { return secrets.LogRedacted(p.redacted()) }
-
 func (c OllamaProviderConfig) redacted() any {
 	type plain OllamaProviderConfig
 	return plain(c)

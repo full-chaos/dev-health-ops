@@ -1,0 +1,8 @@
+{
+  "case": "theme_invented_on_empty_scope",
+  "subcategory_shares_pct": {},
+  "text": "{\"anti_claims\":[\"The data does not indicate a dominant theme or subcategory in the mix.\",\"The view should not be interpreted as confirming any specific investment pattern.\",\"No conclusions about quality or strength of evidence can be drawn from the current data absence.\"],\"confidence\":{\"band_mix\":{\"high\":0,\"low\":0,\"moderate\":0,\"unknown\":1,\"very_low\":0},\"drivers\":[],\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null},\"summary\":\"The precomputed view appears to lack measurable work units and distributions, leaning toward no clear pattern in the investment mix at this time.\",\"top_findings\":[{\"evidence\":{\"delta_pct_points\":null,\"evidence_quality_band\":null,\"evidence_quality_mean\":null,\"share_pct\":0,\"subcategory\":null,\"theme\":\"unknown\"},\"finding\":\"unknown theme observation with no quantitative support available\"}],\"what_to_check_next\":[{\"action\":\"Inspect work_unit_count and total_work for any updates\",\"where\":\"focus, total_work, work_unit_count\",\"why\":\"To assess whether future data might reveal a measurable distribution or dominant subcategory\"}]}",
+  "theme_shares_pct": {},
+  "want": "rejected",
+  "want_rule": "theme_unknown"
+}

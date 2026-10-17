@@ -603,3 +603,74 @@ WHERE id = $2::uuid`, now, runID); err != nil {
 		}
 	}
 }
+
+// CHAOS-4442: a run whose earlier finalize attempt failed (or whose lease
+// expired) may have a succeeded, ambiguous or stuck ledger identity under its
+// current generation, so the range redrive must publish it under a fresh
+// generation. A never-attempted (pending) run keeps its generation, and a dry
+// run changes nothing.
+func TestRedriveFinalizeForRangeGivesPriorAttemptRunsAFreshGeneration(t *testing.T) {
+	ctx := context.Background()
+	pool, store, publisher := newFinalizeRedriveTestStack(t)
+
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	const orgID = "00000000-0000-4000-8000-000000004421"
+	cases := []struct {
+		name, runID, partitionID string
+		day                      time.Time
+		setup                    string
+		wantFresh                bool
+	}{
+		{"failed finalize", "00000000-0000-4000-8000-000000004422", "00000000-0000-4000-9000-000000004422", time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC),
+			`finalization_status = 'failed'`, true},
+		{"expired finalize lease", "00000000-0000-4000-8000-000000004423", "00000000-0000-4000-9000-000000004423", time.Date(2026, 5, 6, 0, 0, 0, 0, time.UTC),
+			`finalization_status = 'running', finalization_claim_token = gen_random_uuid(), finalization_lease_expires_at = updated_at - interval '1 hour'`, true},
+		{"pending finalize", "00000000-0000-4000-8000-000000004424", "00000000-0000-4000-9000-000000004424", time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC),
+			`finalization_status = 'pending'`, false},
+	}
+	generation := func(runID string) string {
+		var g string
+		if err := pool.QueryRow(ctx, `SELECT generation FROM daily_metrics_runs WHERE id = $1::uuid`, runID).Scan(&g); err != nil {
+			t.Fatal(err)
+		}
+		return g
+	}
+	original := map[string]string{}
+	for _, tc := range cases {
+		insertFinalizeTestRun(t, ctx, pool, tc.runID, orgID, tc.day, now.Add(-2*time.Hour))
+		insertFinalizeTestPartition(t, ctx, pool, tc.partitionID, tc.runID, 0, "succeeded", now.Add(-2*time.Hour))
+		if _, err := pool.Exec(ctx, `UPDATE daily_metrics_runs SET `+tc.setup+` WHERE id = $1::uuid`, tc.runID); err != nil {
+			t.Fatal(err)
+		}
+		original[tc.runID] = generation(tc.runID)
+	}
+	from, to := cases[0].day, cases[len(cases)-1].day
+
+	if _, err := store.RedriveFinalizeForRange(ctx, publisher, orgID, from, to, "", false, "", true); err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	for _, tc := range cases {
+		if generation(tc.runID) != original[tc.runID] {
+			t.Fatalf("%s: a dry run changed the generation", tc.name)
+		}
+	}
+
+	outcome, err := store.RedriveFinalizeForRange(ctx, publisher, orgID, from, to, "range-nonce-4442", false, testFinalizeRedriveReason, false)
+	if err != nil {
+		t.Fatalf("RedriveFinalizeForRange: %v", err)
+	}
+	if len(outcome.Days) != len(cases) {
+		t.Fatalf("outcome = %#v, want %d days", outcome, len(cases))
+	}
+	for _, tc := range cases {
+		got := generation(tc.runID)
+		want := original[tc.runID]
+		if tc.wantFresh {
+			want = "redrive:range-nonce-4442"
+		}
+		if got != want {
+			t.Errorf("%s: generation = %q, want %q", tc.name, got, want)
+		}
+	}
+}

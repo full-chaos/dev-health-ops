@@ -187,12 +187,9 @@ func RecoverWith(logger *slog.Logger, pattern string, write ErrorWriter) func(ht
 // this package", which ignored that a rate bound composed with a residency
 // bound IS an occupancy bound (codex round 3).
 //
-// A REAL capacity control -- a LimitListener, or a semaphore around this
-// buffering step -- is tracked as CHAOS-4893 and must land before the first
-// route mounts. Nothing is exposed today: the service is dormant, no route is
-// mounted, and the only caller of this path is the test suite. It is not built
-// here because inventing a limiter for a service nothing calls would be
-// unreviewed machinery.
+// ServerOptions.MaxInFlight is the real capacity control (CHAOS-4893): a
+// semaphore around this buffering step and the handler behind it, so at most
+// MaxInFlight x limit bytes are buffered at once when it is set.
 //
 // A future route needing true streaming ingest wants its own middleware, not a
 // weakening of this one.
@@ -411,3 +408,25 @@ func (s *statusRecorder) Write(data []byte) (int, error) {
 }
 
 func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// inFlightLimit refuses, without queueing, a request that arrives while sem is
+// full. A nil sem is no limit.
+func inFlightLimit(sem chan struct{}, logger *slog.Logger, write ErrorWriter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if sem == nil {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			default:
+				logger.Info("request refused: in-flight cap reached", "cap", cap(sem), "method", r.Method)
+				w.Header().Set("Retry-After", "1")
+				write(w, r, CodeRateLimited)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}

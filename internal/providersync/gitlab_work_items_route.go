@@ -230,6 +230,11 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	if err != nil || repoID == uuid.Nil {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
+	catalogID, ok := GitLabCatalogProjectID(claim.OrgID, projectID)
+	if !ok {
+		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+	}
+	catalogProjectID := catalogID.String()
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	rows := gitlabWorkItemRows{
 		WorkItems:         make([]gitlabWorkItemRow, 0),
@@ -272,7 +277,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			}
 			// A group milestone is keyed by its group (the key the project target
 			// names), so every project of the group writes the same row.
-			owner := fullName
+			owner := repoIdentity.Path
 			if milestone.isGroupMilestone() {
 				owner = gitlabGroupMilestoneOwner(milestone)
 			}
@@ -319,7 +324,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			pages += labelPages
 		}
 		item, transitions, normalizeErr := normalizeGitLabIssueWorkItem(
-			claim, fullName, repoIdentity.Path, repoID, payload.withFetchEpics(fetchEpics), labelEvents, handler.StatusMapping,
+			claim, fullName, repoIdentity.Path, catalogProjectID, repoID, payload.withFetchEpics(fetchEpics), labelEvents, handler.StatusMapping,
 			handler.ResolveIdentity, normalizedAt,
 		)
 		if normalizeErr != nil {
@@ -440,7 +445,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 				pages += statePages
 			}
 			item, transitions, reopens, normalizeErr := normalizeGitLabMergeRequestWorkItem(
-				claim, fullName, repoIdentity.Path, repoID, payload, stateEvents, handler.ResolveIdentity, normalizedAt,
+				claim, fullName, repoIdentity.Path, catalogProjectID, repoID, payload, stateEvents, handler.ResolveIdentity, normalizedAt,
 			)
 			if normalizeErr != nil {
 				return CompleteRouteBatch{}, normalizeErr

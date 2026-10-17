@@ -38,6 +38,76 @@ type GitLabRepoIdentityReader interface {
 	StoredRepoIdentitiesAtPaths(ctx context.Context, claim Claim, paths []string) ([]GitLabStoredRepoIdentity, error)
 }
 
+// GitLabProjectPath is a GitLab project named by its numeric id and its
+// current path.
+type GitLabProjectPath struct {
+	ProjectID int64
+	Path      string
+}
+
+// GitLabRepoIdentityBatchReader reads, in one query, the stored rows that may
+// decide the identity of each of several projects: for every project the rows
+// StoredRepoIdentities returns for it.
+type GitLabRepoIdentityBatchReader interface {
+	StoredRepoIdentitiesForProjects(ctx context.Context, orgID string, projects []GitLabProjectPath) ([]GitLabStoredRepoIdentity, error)
+}
+
+// gitLabRefPathResolution is what resolveGitLabRepoIdentityPaths decided: the
+// minted path of each project it could prove, and the projects it could not
+// (ambiguous stored rows). An unprovable project is never given a path: the
+// work-items route refuses it too.
+type gitLabRefPathResolution struct {
+	Paths     map[int64]string
+	Ambiguous map[int64]struct{}
+}
+
+// resolveGitLabRepoIdentityPaths applies the identity rules of
+// resolveGitLabRepoIdentity to each project over one batched read. A project
+// the rules cannot decide lands in Ambiguous, never in Paths and never on its
+// current path.
+func resolveGitLabRepoIdentityPaths(
+	ctx context.Context, reader GitLabRepoIdentityBatchReader, orgID string, projects []GitLabProjectPath,
+) (gitLabRefPathResolution, error) {
+	out := gitLabRefPathResolution{Paths: make(map[int64]string, len(projects)), Ambiguous: map[int64]struct{}{}}
+	if reader == nil || len(projects) == 0 {
+		return out, nil
+	}
+	stored, err := reader.StoredRepoIdentitiesForProjects(ctx, orgID, projects)
+	if err != nil {
+		return gitLabRefPathResolution{}, err
+	}
+	for _, project := range projects {
+		minted, mintErr := repositoryIdentity(project.Path)
+		var identity GitLabRepoIdentity
+		var kind string
+		var decideErr error
+		relevant := make([]GitLabStoredRepoIdentity, 0, 2)
+		if mintErr != nil {
+			decideErr = mintErr
+		} else {
+			native := strconv.FormatInt(project.ProjectID, 10)
+			for _, row := range stored {
+				if row.heldBy() == native || row.ID == minted {
+					relevant = append(relevant, row)
+				}
+			}
+			identity, kind, decideErr = decideGitLabRepoIdentity(project.ProjectID, project.Path, relevant)
+		}
+		if decideErr != nil {
+			errorClass, errorType := logging.ErrorClass(decideErr), logging.ErrorType(decideErr) // never the error text (CHAOS-7933)
+			slog.Default().WarnContext(ctx, "gitlab_repo_identity_batch_unresolved",
+				"org_id", orgID, "gitlab_project_id", project.ProjectID, "stored_rows", len(relevant),
+				"error_class", errorClass, "error_type", errorType)
+			out.Ambiguous[project.ProjectID] = struct{}{}
+			continue
+		}
+		slog.Default().DebugContext(ctx, "gitlab_repo_identity_batch",
+			"org_id", orgID, "gitlab_project_id", project.ProjectID, "decision", kind)
+		out.Paths[project.ProjectID] = identity.Path
+	}
+	return out, nil
+}
+
 // GitLabStoredRepoIdentity is the part of one repos FINAL row the identity
 // rules read.
 type GitLabStoredRepoIdentity struct {
@@ -262,6 +332,35 @@ WHERE org_id = ? AND provider = 'gitlab'
 		claim.OrgID, native, projectID, minted)
 }
 
+func (reader GitLabRepoIdentityClickHouseReader) StoredRepoIdentitiesForProjects(
+	ctx context.Context, orgID string, projects []GitLabProjectPath,
+) ([]GitLabStoredRepoIdentity, error) {
+	if ctx == nil || reader.Conn == nil || reader.Lease == nil || orgID == "" {
+		return nil, ErrInvalidConfiguration
+	}
+	natives := make([]string, 0, len(projects))
+	ints := make([]int64, 0, len(projects))
+	minted := make([]string, 0, len(projects))
+	for _, project := range projects {
+		id, err := repositoryIdentity(project.Path)
+		if err != nil || project.ProjectID < 1 {
+			continue
+		}
+		natives = append(natives, strconv.FormatInt(project.ProjectID, 10))
+		ints = append(ints, project.ProjectID)
+		minted = append(minted, id)
+	}
+	if len(natives) == 0 {
+		return nil, nil
+	}
+	return reader.query(ctx, `
+SELECT `+gitLabStoredRepoIdentityColumns+`
+FROM repos FINAL
+WHERE org_id = ? AND provider = 'gitlab'
+  AND (provider_repo_id IN ? OR (provider_repo_id = '' AND JSONExtractInt(ifNull(settings, ''), 'project_id') IN ?) OR id IN (SELECT toUUID(arrayJoin(?))))`,
+		orgID, natives, ints, minted)
+}
+
 func (reader GitLabRepoIdentityClickHouseReader) StoredRepoIdentitiesAtPaths(
 	ctx context.Context, claim Claim, paths []string,
 ) ([]GitLabStoredRepoIdentity, error) {
@@ -327,3 +426,4 @@ func queryGitLabStoredRepoIdentities(ctx context.Context, conn driver.Conn, quer
 }
 
 var _ GitLabRepoIdentityReader = GitLabRepoIdentityClickHouseReader{}
+var _ GitLabRepoIdentityBatchReader = GitLabRepoIdentityClickHouseReader{}

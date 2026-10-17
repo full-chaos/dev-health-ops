@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +63,11 @@ const (
 // straight off ref.SyncOptions, the run's own canonical
 // sync_configurations.sync_options, the same source Python's
 // _gitlab_group falls back to.
-type GitLabTeamCatalogRouteHandler struct{}
+type GitLabTeamCatalogRouteHandler struct {
+	// RepoIdentity names the path each project's sprint refs are keyed by
+	// (the work-items route's minted path). Nil keys them by the current path.
+	RepoIdentity GitLabRepoIdentityBatchReader
+}
 
 type GitLabTeamCatalogEvidence struct {
 	Provider string `json:"provider"`
@@ -831,6 +836,11 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 	normalizedAt time.Time,
 ) error {
 	read, failed, incomplete, overBudget, archived, withTarget, noneDated, groupSeen, groupTarget := 0, 0, 0, 0, 0, 0, 0, 0, 0
+	ambiguous := 0
+	refPaths, err := handler.projectRefPaths(ctx, orgID, projects, nativeIDByProject)
+	if err != nil {
+		return err
+	}
 	for index := range projects {
 		row := &projects[index]
 		nativeID := nativeIDByProject[row.ID.String()]
@@ -840,6 +850,14 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 		}
 		if read+failed+incomplete >= gitlabTeamCatalogMilestoneProjectBudget {
 			overBudget++
+			continue
+		}
+		projectRefPath, provable := refPaths.pathOf(nativeID, *row.ProjectKey)
+		if !provable {
+			// The work-items route refuses this project's identity too: state no
+			// target for it (the write keeps what the key holds) rather than key a
+			// sprint ref by its current path.
+			ambiguous++
 			continue
 		}
 		pages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
@@ -883,7 +901,7 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 				date = *milestone.DueDate
 			}
 			candidate := projectTargetCandidate{
-				ID: id, Ref: gitlabMilestoneSprintID(*row.ProjectKey, id), Name: milestone.Title, Date: date,
+				ID: id, Ref: gitlabMilestoneSprintID(projectRefPath, id), Name: milestone.Title, Date: date,
 				Open: strings.EqualFold(strings.TrimSpace(milestone.State), "active"),
 			}
 			if milestone.isGroupMilestone() {
@@ -908,9 +926,71 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 			noneDated++
 		}
 	}
+	if ambiguous > 0 {
+		slog.Default().WarnContext(ctx, "gitlab_team_catalog_project_targets_identity_ambiguous",
+			"org_id", orgID, "projects_total", len(projects), "projects_skipped", ambiguous)
+	}
 	slog.Default().DebugContext(ctx, "gitlab_team_catalog_project_targets",
 		"org_id", orgID, "projects_total", len(projects), "projects_read", read, "read_failed", failed,
-		"read_incomplete", incomplete, "over_budget", overBudget, "archived_skipped", archived,
+		"read_incomplete", incomplete, "over_budget", overBudget, "archived_skipped", archived, "identity_ambiguous_skipped", ambiguous,
 		"with_target", withTarget, "none_dated", noneDated, "group_milestones_seen", groupSeen, "group_milestone_targets", groupTarget)
 	return nil
+}
+
+// gitlabProjectRefPaths holds, per numeric project id, the path its milestone
+// sprints are keyed by. keyed is false when the handler has no store reader: a
+// route without one mints every identity from the current path.
+type gitlabProjectRefPaths struct {
+	keyed     bool
+	paths     map[string]string
+	ambiguous map[string]struct{}
+}
+
+// pathOf is the ref path of a project and whether it is provable. A project the
+// store reader could not decide, or did not resolve, is not provable.
+func (paths gitlabProjectRefPaths) pathOf(nativeID, current string) (string, bool) {
+	if !paths.keyed {
+		return current, true
+	}
+	if _, bad := paths.ambiguous[nativeID]; bad {
+		return "", false
+	}
+	minted, ok := paths.paths[nativeID]
+	return minted, ok && minted != ""
+}
+
+// projectRefPaths is, per numeric project id, the path the work-items route
+// keys the project's milestone sprints by, read once for all listed projects.
+func (handler GitLabTeamCatalogRouteHandler) projectRefPaths(
+	ctx context.Context,
+	orgID string,
+	projects []gitlabTeamCatalogProjectRow,
+	nativeIDByProject map[string]string,
+) (gitlabProjectRefPaths, error) {
+	paths := gitlabProjectRefPaths{paths: map[string]string{}, ambiguous: map[string]struct{}{}}
+	if handler.RepoIdentity == nil {
+		return paths, nil
+	}
+	paths.keyed = true
+	listed := make([]GitLabProjectPath, 0, len(projects))
+	for _, row := range projects {
+		native, parseErr := strconv.ParseInt(nativeIDByProject[row.ID.String()], 10, 64)
+		if row.ProjectKey == nil || parseErr != nil || native < 1 {
+			continue
+		}
+		listed = append(listed, GitLabProjectPath{ProjectID: native, Path: *row.ProjectKey})
+	}
+	resolution, err := resolveGitLabRepoIdentityPaths(ctx, handler.RepoIdentity, orgID, listed)
+	if err != nil {
+		return gitlabProjectRefPaths{}, err
+	}
+	for native, path := range resolution.Paths {
+		paths.paths[strconv.FormatInt(native, 10)] = path
+	}
+	for native := range resolution.Ambiguous {
+		paths.ambiguous[strconv.FormatInt(native, 10)] = struct{}{}
+	}
+	slog.Default().DebugContext(ctx, "gitlab_team_catalog_ref_paths", "org_id", orgID, "projects", len(listed),
+		"resolved", len(resolution.Paths), "ambiguous", len(resolution.Ambiguous))
+	return paths, nil
 }

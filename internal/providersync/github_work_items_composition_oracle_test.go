@@ -44,6 +44,11 @@ func (source *githubMultiDayOracleSource) Load(
 // The oracle supplies every edge through the case input, so this source has no
 // stored edges to add (CHAOS-3978). It counts the calls anyway, so callers
 // that pin a once-per-window load can cover the stored-edge read too.
+// AnchorGitLabSubjects is a no-op: this fake carries no GitLab repos rows.
+func (source *githubMultiDayOracleSource) AnchorGitLabSubjects(context.Context, map[string]teamattribution.GithubWorkItemDerivationSubject) error {
+	return nil
+}
+
 func (source *githubMultiDayOracleSource) LoadStoredInheritableEdges(
 	context.Context, Claim, []string,
 ) ([]githubWorkItemDependencyRow, error) {

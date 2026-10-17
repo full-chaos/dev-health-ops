@@ -199,3 +199,37 @@ func unsetForTest(t *testing.T, key string) {
 		t.Fatal(err)
 	}
 }
+
+// A unit that lost the shared request-budget reservation reports those waits in
+// budget_deferrals, added to the dispatch guard's own episode counter.
+func TestRunUnitsBudgetDeferralsIncludeBudgetContentionWaits(t *testing.T) {
+	unsetForTest(t, "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS")
+	unsetForTest(t, "SYNC_WATERMARK_OVERLAP")
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	str := func(text string) *string { return &text }
+	source := uuid.MustParse("00000000-0000-0000-0000-00000000000a")
+	cases := []struct {
+		name   string
+		result string
+		column int64
+		want   string
+	}{
+		{"contention waits and a guard episode add", `{"provider_budget_contention_deferrals": 7}`, 2, `"budget_deferrals":9,`},
+		{"contention waits alone", `{"provider_budget_contention_deferrals": 5}`, 0, `"budget_deferrals":5,`},
+		{"no contention key keeps the column", `{"error_category": "budget_deferred"}`, 3, `"budget_deferrals":3,`},
+		{"a non-integer value counts as none", `{"provider_budget_contention_deferrals": "many"}`, 1, `"budget_deferrals":1,`},
+		{"a negative value counts as none", `{"provider_budget_contention_deferrals": -4}`, 1, `"budget_deferrals":1,`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			unit := runUnit{ID: uuid.New(), SyncRunID: faultRunID, SourceID: source, OrgID: "org", Provider: "github",
+				DatasetKey: "commits", CostClass: "medium", Mode: "incremental", Status: "dispatching",
+				BudgetDeferrals: tc.column, Result: str(tc.result), CreatedAt: now, UpdatedAt: now, HasSource: true,
+				SourceName: str("a"), SourceFullName: str("a"), SourceExternalID: str("a")}
+			_, status, body := serveUnits(t, &unitsReader{faultReader: &faultReader{}, units: []runUnit{unit}}, "", now)
+			if status != http.StatusOK || !strings.Contains(body, tc.want) {
+				t.Fatalf("status %d, want %s in:\n%s", status, tc.want, body)
+			}
+		})
+	}
+}

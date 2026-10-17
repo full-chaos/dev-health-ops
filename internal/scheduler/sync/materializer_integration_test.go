@@ -1700,12 +1700,12 @@ func TestNativeMaterializerPlansExplicitlyRequestedDatasetWithoutARow(t *testing
 
 	var labelUnits int
 	if err := fixture.pool.QueryRow(context.Background(),
-		`SELECT count(*) FROM sync_run_units WHERE dataset_key='work-item-labels'`,
+		`SELECT count(*) FROM sync_run_units WHERE processor_flags->>'family_dataset_work_item_labels' = 'true'`,
 	).Scan(&labelUnits); err != nil {
 		t.Fatal(err)
 	}
 	if labelUnits == 0 {
-		t.Fatal("no work-item-labels unit was planned for the explicit request")
+		t.Fatal("no unit carries the work-item-labels family flag: the explicit request was not planned")
 	}
 
 	var rowsAfter int

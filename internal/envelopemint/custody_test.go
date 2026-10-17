@@ -125,3 +125,15 @@ func TestLoadPrivateKeyFromEnvPrefersFileAndWarnsOnRaw(t *testing.T) {
 		t.Fatal("expected error for bad file")
 	}
 }
+
+// The compose go-api key file is written by GenerateKeyFiles (mode 0400); the
+// loader must accept exactly that shape.
+func TestLoadPrivateKeyFromFileAcceptsGeneratedKeyFile(t *testing.T) {
+	paths, err := GenerateKeyFiles(t.TempDir(), "test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPrivateKeyFromFile(paths.Private); err != nil {
+		t.Fatalf("generated key file refused: %v", err)
+	}
+}

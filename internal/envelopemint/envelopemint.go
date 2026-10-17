@@ -121,17 +121,15 @@ func LoadPrivateKey(pemBytes []byte) (ed25519.PrivateKey, error) {
 	return key, nil
 }
 
-// LoadPrivateKeyFromEnv reads PrivateKeyEnvVar and parses it with
-// LoadPrivateKey. Reading by env var name (never a CLI flag value) keeps
-// the key off argv and out of the process table, the same posture
-// go-api-prove's own -proof-bearer-secret-file doctrine already applies
-// to every other credential in this codebase.
+// LoadPrivateKeyFromEnv loads the key from PrivateKeyFileEnvVar (a path,
+// read under LoadPrivateKeyFromFile's custody contract) or, deprecated, from
+// the raw PrivateKeyEnvVar. The file wins when both are set. Only variable
+// names are ever read into a log line, never a value.
 func LoadPrivateKeyFromEnv() (ed25519.PrivateKey, error) {
+	path, hasFile := os.LookupEnv(PrivateKeyFileEnvVar)
+	hasFile = hasFile && path != ""
 	raw := envsecrets.GetenvSecret(PrivateKeyEnvVar)
-	if strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("%s is not set", PrivateKeyEnvVar)
-	}
-	return LoadPrivateKey([]byte(raw))
+	return loadPrivateKeyFromLookup(path, hasFile, raw)
 }
 
 // Principal is the identity a minted envelope claims. It never names a

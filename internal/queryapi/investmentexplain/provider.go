@@ -2,8 +2,8 @@
 // investment-mix-explanation LLM call, reusing
 // internal/jobs/investment/categorize's already-ported Provider
 // abstraction (Provider/CompletionRequest/CompletionResult,
-// InvestmentMixExplanationRequest, MockProvider/OpenAIProvider/
-// LocalProvider, ResolveProviderKind/NewProviderFromEnv) rather than a
+// InvestmentMixExplanationRequest, MockProvider/SharedProvider,
+// ResolveProviderKind/NewProviderFromEnv) rather than a
 // second, parallel port -- that package already anticipated this caller
 // (InvestmentMixExplanationRequest's own doc comment: "No Go caller
 // builds this prompt yet; this constructor exists so a Provider

@@ -423,7 +423,7 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 		// requested "local" kind (unlike auto-detection, which requires it
 		// to even select "local") -- local.py's own LocalProvider falls
 		// back to Ollama's default endpoint when base_url is empty, and
-		// NewLocalProvider below applies that same fallback.
+		// the shared client applies that same fallback.
 		return NewSharedProvider(SharedProviderConfig{
 			Kind:    ProviderKindLocal,
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "LOCAL_LLM_BASE_URL"),
@@ -549,7 +549,7 @@ func newProviderFromCredentialsWithTransport(
 		// "http://localhost:11434/v1" (local.py:42,:283-298) -- NOT the
 		// native /api/chat wire protocol NewOllamaProvider speaks. Routing
 		// org-BYO "ollama" through NewOllamaProvider would send a stored
-		// /v1-shaped base_url to the wrong path. NewLocalProvider (the
+		// /v1-shaped base_url to the wrong path. The shared local kind (the
 		// OpenAI-compatible client) is the correct match for what an
 		// org's stored ollama base_url actually is.
 		//

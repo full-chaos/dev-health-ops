@@ -48,6 +48,7 @@ var (
 	MsgDispatchSyncRunDeniedWithActiveUnits              = Msg{"dispatch_sync_run.denied_with_active_units"}
 	MsgDispatchSyncRunDenied                             = Msg{"dispatch_sync_run.denied"}
 	MsgFinalizeSyncRunZeroUnitFinalized                  = Msg{"finalize_sync_run.zero_unit_finalized"}
+	MsgFinalizeSyncRunDeliveryNotCurrent                 = Msg{"finalize_sync_run.delivery_not_current"}
 	MsgFinalizeSyncRunCoverageCacheInvalidationFailed    = Msg{"finalize_sync_run.coverage_cache_invalidation_failed"}
 	MsgFinalizeSyncRunCoverageCacheInvalidated           = Msg{"finalize_sync_run.coverage_cache_invalidated"}
 	MsgFinalizeSyncRunComputeCheckpointUnitFailed        = Msg{"finalize_sync_run.compute_checkpoint_unit_failed"}
@@ -88,6 +89,8 @@ var (
 	KeyDatasetKey                   = Key{"dataset_key"}
 	KeyCostClass                    = Key{"cost_class"}
 	KeyReason                       = Key{"reason"}
+	KeyDeliveryRouteGeneration      = Key{"delivery_route_generation"}
+	KeyCurrentRouteGeneration       = Key{"current_route_generation"}
 	KeyClaimDeferredOutsideSnapshot = Key{"claim.deferred_outside_snapshot"}
 	KeyClaimDeferredUnitIdSample    = Key{"claim.deferred_unit_id_sample"}
 	KeyAdmissionCapLight            = Key{"admission_cap_light"}

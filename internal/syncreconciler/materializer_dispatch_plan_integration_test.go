@@ -32,9 +32,9 @@ func seedDispatchPlanPopulation(t *testing.T, ctx context.Context, pool *pgxpool
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_runs (id, org_id, integration_id, mode, total_units, completed_units, failed_units, triggered_by, status, created_at)
 		SELECT gen_random_uuid(), 'org-materializer', $2::uuid, 'incremental', 0, 0, 0, 'manual',
-			CASE WHEN g <= $1 THEN 'success' ELSE 'running' END,
+			CASE WHEN g <= $1::int THEN 'success' ELSE 'running' END,
 			now() - (g || ' minutes')::interval
-		FROM generate_series(1, $1 + $3) AS g`,
+		FROM generate_series(1, $1::int + $3::int) AS g`,
 		dispatchPlanTerminalRuns, pgseed.DefaultSyncIntegrationID, dispatchPlanActiveRuns); err != nil {
 		t.Fatalf("seed sync_runs: %v", err)
 	}

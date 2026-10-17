@@ -57,7 +57,7 @@ func TestWorkItemsWindowHalvesAfterSizeOrTimeLimitFailures(t *testing.T) {
 		{"time_limit", 1, naturalSpan / 2},
 		{"time_limit", 8, providersync.WindowHalvingFloor},
 	} {
-		streak := providersync.FailureStreak{Count: tc.count, Class: tc.class, LastAt: now.Add(-time.Hour)}
+		streak := providersync.FailureStreak{Count: tc.count, ShrinkCount: tc.count, Class: tc.class, LastAt: now.Add(-time.Hour)}
 		if tc.count >= providersync.FailureStreakThreshold {
 			streak.LastAt = now.Add(-48 * time.Hour)
 		}
@@ -74,12 +74,38 @@ func TestWorkItemsWindowHalvesAfterSizeOrTimeLimitFailures(t *testing.T) {
 	}
 }
 
+func TestWorkItemsWindowHalvesOncePerFailureOfEitherShrinkingClass(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	watermark := now.Add(-80 * 24 * time.Hour)
+	base := workItemsUnit(t, backoffInput(now, watermark, providersync.FailureStreak{}))
+	naturalSpan := base.WindowEnd.Sub(*base.WindowStart)
+	// time_limit, result_too_large, time_limit in a row: two classes, three halvings.
+	streak := providersync.FailureStreakOf([]providersync.UnitOutcome{
+		{Failed: true, CauseClass: "time_limit", At: now.Add(-time.Hour)},
+		{Failed: true, CauseClass: "result_too_large", At: now.Add(-2 * time.Hour)},
+		{Failed: true, CauseClass: "time_limit", At: now.Add(-3 * time.Hour)},
+	})
+	if streak.ShrinkCount != 3 || streak.Count != 1 {
+		t.Fatalf("streak = %+v, want ShrinkCount 3 and Count 1 (three different-class failures are not equal failures)", streak)
+	}
+	unit := workItemsUnit(t, backoffInput(now, watermark, streak))
+	if unit == nil {
+		t.Fatal("no unit planned")
+	}
+	if got := unit.WindowEnd.Sub(*unit.WindowStart); got != naturalSpan/8 {
+		t.Fatalf("window = %s, want %s (halved three times)", got, naturalSpan/8)
+	}
+}
+
 func TestWorkItemsWindowIsNotHalvedForOtherClasses(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	watermark := now.Add(-80 * 24 * time.Hour)
 	base := workItemsUnit(t, backoffInput(now, watermark, providersync.FailureStreak{}))
 	for _, class := range []string{"provider_rate_limited", "provider_transient", "unclassified", "response_too_large"} {
-		streak := providersync.FailureStreak{Count: 2, Class: class, LastAt: now.Add(-time.Hour)}
+		streak := providersync.FailureStreakOf([]providersync.UnitOutcome{
+			{Failed: true, CauseClass: class, At: now.Add(-time.Hour)},
+			{Failed: true, CauseClass: class, At: now.Add(-2 * time.Hour)},
+		})
 		unit := workItemsUnit(t, backoffInput(now, watermark, streak))
 		if unit == nil || !unit.WindowEnd.Equal(*base.WindowEnd) {
 			t.Errorf("%s: window end = %v, want the natural end %v", class, unit, base.WindowEnd)
@@ -122,6 +148,8 @@ func TestFailureStreakOfStopsAtASuccessOrAnotherClass(t *testing.T) {
 		{"success first", []providersync.UnitOutcome{success, failed("time_limit", 6)}, 0, ""},
 		{"three equal", []providersync.UnitOutcome{failed("time_limit", 1), failed("time_limit", 2), failed("time_limit", 3)}, 3, "time_limit"},
 		{"class changes", []providersync.UnitOutcome{failed("time_limit", 1), failed("result_too_large", 2)}, 1, "time_limit"},
+		{"no stored class reads as unclassified", []providersync.UnitOutcome{failed("", 1), failed("", 2), failed("", 3)}, 3, "unclassified"},
+		{"invalid stored class reads as unclassified", []providersync.UnitOutcome{failed("Bad Class!", 1), failed("unclassified", 2)}, 2, "unclassified"},
 		{"success ends it", []providersync.UnitOutcome{failed("time_limit", 1), failed("time_limit", 2), success, failed("time_limit", 6)}, 2, "time_limit"},
 	} {
 		got := providersync.FailureStreakOf(tc.outcomes)

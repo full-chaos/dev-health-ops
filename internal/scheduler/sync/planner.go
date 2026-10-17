@@ -601,7 +601,7 @@ func buildWorkItemFamilyUnit(
 			slog.String("org_id", input.OrgID),
 			slog.String("source_id", source.ID),
 			slog.String("cause_class", streak.Class),
-			slog.Int("failures_in_a_row", streak.Count),
+			slog.Int("size_or_time_failures_in_a_row", streak.ShrinkCount),
 			slog.Duration("window_before", latest.Sub(*earliest)),
 			slog.Duration("window_after", halved.Sub(*earliest)))
 		latest = halved
@@ -1047,7 +1047,7 @@ func halveWindowAfterFailures(start *time.Time, end time.Time, streak providersy
 	}
 	span := end.Sub(*start)
 	halved := span
-	for i := 0; i < streak.Count && halved > providersync.WindowHalvingFloor; i++ {
+	for i := 0; i < streak.ShrinkCount && halved > providersync.WindowHalvingFloor; i++ {
 		halved /= 2
 	}
 	if halved < providersync.WindowHalvingFloor {

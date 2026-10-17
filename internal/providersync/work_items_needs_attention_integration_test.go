@@ -170,3 +170,64 @@ WHERE dataset_key = 'work-items' AND status = 'failed'`).Scan(&count, &lastClass
 	}
 	assertAll("after a success", "")
 }
+
+// Units that failed before the cause class was stored carry none. They read as
+// "unclassified", so the marker is a valid reason and the streak still counts.
+func TestPostgresWorkItemsNeedsAttentionReadsLegacyFailuresAsUnclassified(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeContext, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeContext); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options)
+VALUES ($1, 'org-acme', $2, 'work-items', '{}'::jsonb)`, uuid.NewString(), firstIntegrationID); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+	for i, result := range []string{`{"error_category":"provider_unit_exhausted"}`, `null`, `{"error_category":"x","cause_class":"Bad Class!"}`} {
+		if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_run_units (
+    id, org_id, sync_run_id, integration_id, source_id, provider,
+    dataset_key, cost_class, mode, status, result, updated_at
+) VALUES ($1, 'org-acme', $2, $3, $4, 'github', 'work-items', 'medium', 'incremental', 'failed', $5::json, $6)`,
+			uuid.NewString(), firstRunID, firstIntegrationID, firstSourceID, result, base.Add(time.Duration(i)*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claim := Claim{Unit: Unit{OrgID: "org-acme", IntegrationID: firstIntegrationID, SourceID: firstSourceID, Dataset: "work-items", Provider: "github"}}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	streak, err := sourceFailureStreak(ctx, tx, claim)
+	if err != nil || streak.Count != 3 || streak.Class != CauseClassUnclassified {
+		t.Fatalf("streak = %+v, %v, want 3 failures of class %q", streak, err, CauseClassUnclassified)
+	}
+	stampNeedsAttention(ctx, tx, claim)
+	var reason string
+	if err := tx.QueryRow(ctx, `
+SELECT COALESCE(unavailable_reason, '') FROM public.integration_datasets
+WHERE org_id = 'org-acme' AND integration_id = $1 AND dataset_key = 'work-items'`, firstIntegrationID).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "needs_attention:unclassified" {
+		t.Fatalf("unavailable_reason = %q, want needs_attention:unclassified", reason)
+	}
+}

@@ -34,32 +34,53 @@ type FailureStreak struct {
 	Count  int
 	Class  string
 	LastAt time.Time
+	// ShrinkCount counts the newest failures in a row whose class is cured by
+	// a smaller window (result too large or time limit), in any mix: each of
+	// them halves the next window.
+	ShrinkCount int
 }
 
 // FailureStreakOf reads the streak off terminal units given newest first. A
 // success, or a failure of another class, ends it.
 func FailureStreakOf(outcomes []UnitOutcome) FailureStreak {
 	var streak FailureStreak
+	sameClass, shrinking := true, true
 	for _, outcome := range outcomes {
 		if !outcome.Failed {
 			break
 		}
+		class := outcome.CauseClass
+		if !ValidCauseClass(class) {
+			class = CauseClassUnclassified
+		}
 		if streak.Count == 0 {
-			streak.Class, streak.LastAt = outcome.CauseClass, outcome.At
-		} else if outcome.CauseClass != streak.Class {
+			streak.Class, streak.LastAt = class, outcome.At
+		}
+		if sameClass && class == streak.Class {
+			streak.Count++
+		} else {
+			sameClass = false
+		}
+		if shrinking && shrinksWindow(class) {
+			streak.ShrinkCount++
+		} else {
+			shrinking = false
+		}
+		if !sameClass && !shrinking {
 			break
 		}
-		streak.Count++
 	}
 	return streak
 }
 
-// ShrinksWindow reports whether a failure of this class is cured by a smaller
+func shrinksWindow(class string) bool {
+	return class == causeClassResultTooLarge || class == causeClassTimeLimit
+}
+
+// ShrinksWindow reports whether the newest failures are cured by a smaller
 // window: the unit result was above the write bound, or the job time limit
 // ended the attempt.
-func (streak FailureStreak) ShrinksWindow() bool {
-	return streak.Count > 0 && (streak.Class == causeClassResultTooLarge || streak.Class == causeClassTimeLimit)
-}
+func (streak FailureStreak) ShrinksWindow() bool { return streak.ShrinkCount > 0 }
 
 // SlowedDownAt reports whether the source must not be planned at now: the
 // streak reached the threshold and its newest failure is younger than the

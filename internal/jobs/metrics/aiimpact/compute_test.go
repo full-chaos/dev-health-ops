@@ -324,9 +324,17 @@ func loadFrozenAIImpactGolden(t *testing.T) []pythonRecord {
 // what a naive sum or the wrong division order produces -- fails the test
 // rather than hiding inside a tolerance.
 func TestAIImpactMatchesFrozenPythonGolden(t *testing.T) {
+	// One deliberate divergence from the frozen Python (chris, D6045 "by
+	// default everything is human unless it's AI"): a pull request with no AI
+	// signal is human, not unknown. So the unattributed PR 8 is pinned to the
+	// explicit "unknown" kind, keeping the unknown-bucket arithmetic under
+	// comparison.
 	want := loadFrozenAIImpactGolden(t)
 	params := fixtureParams()
 	params.Incidents = nil
+	params.Attributions = append(params.Attributions, AttributionRow{
+		RepoID: fixtureRepo, Number: 8, Kind: strPtr("unknown"), WorkType: strPtr("pull_request"),
+	})
 	got := Compute(params)
 
 	if len(got) != len(want) {
@@ -764,5 +772,60 @@ func TestFixtureIncidentsCountOnceOnTheirOwnRow(t *testing.T) {
 	}
 	if sum != 2 || rows != 1 {
 		t.Errorf("incidents_count adds up to %v over %d rows, want 2 over 1", sum, rows)
+	}
+}
+
+// TestClassifyBucketDefaultsToHumanAndRoutesBots pins chris's ruling D6045: no
+// AI signal means human, a [bot] author means bot, AI kinds win over the
+// author, and unknown is never a default.
+func TestClassifyBucketDefaultsToHumanAndRoutesBots(t *testing.T) {
+	for name, tc := range map[string]struct {
+		kind, author *string
+		want         AttributionBucket
+	}{
+		"no signal, no author":          {nil, nil, BucketHuman},
+		"no signal, empty kind":         {strPtr(""), strPtr("octocat"), BucketHuman},
+		"no signal, human author":       {nil, strPtr("octocat"), BucketHuman},
+		"bot author":                    {nil, strPtr("dependabot[bot]"), BucketBot},
+		"bot author, case and space":    {nil, strPtr("  Renovate[BOT] "), BucketBot},
+		"bot-like name without suffix":  {nil, strPtr("botmaster"), BucketHuman},
+		"ai kind beats bot author":      {strPtr("agent_created"), strPtr("copilot[bot]"), BucketAgentCreated},
+		"ai kind, human author":         {strPtr("ai_assisted"), strPtr("octocat"), BucketAIAssisted},
+		"stored human kind, bot author": {strPtr("human"), strPtr("dependabot[bot]"), BucketBot},
+		"stored human kind, human":      {strPtr("human"), strPtr("octocat"), BucketHuman},
+		"garbage kind stays unknown":    {strPtr("vibes"), strPtr("octocat"), BucketUnknown},
+	} {
+		if got := ClassifyBucket(tc.kind, tc.author); got != tc.want {
+			t.Errorf("%s: ClassifyBucket = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// TestComputeWritesHumanAndBotRowsForUnsignalledPRs asserts the written rows,
+// not the classifier: unattributed human PRs land on a human row with
+// prs_total > 0, a bot PR on a bot row, and no unknown row counts a PR (the
+// empty unknown row is still written, with prs_total 0).
+func TestComputeWritesHumanAndBotRowsForUnsignalledPRs(t *testing.T) {
+	params := fixtureParams()
+	params.Incidents = nil
+	params.Attributions = nil
+	bot := "dependabot[bot]"
+	for index := range params.PullRequests {
+		if params.PullRequests[index].Number == 1 {
+			params.PullRequests[index].AuthorName = &bot
+		}
+	}
+	totals := map[AttributionBucket]float64{}
+	for _, record := range Compute(params) {
+		totals[record.AttributionBucket] += record.PRsTotal
+		if record.AttributionBucket == BucketUnknown && record.PRsTotal != 0 {
+			t.Errorf("unknown row counts PRs: %+v", record)
+		}
+	}
+	if totals[BucketHuman] <= 0 {
+		t.Errorf("human prs_total = %v, want > 0", totals[BucketHuman])
+	}
+	if totals[BucketBot] != 1 {
+		t.Errorf("bot prs_total = %v, want 1", totals[BucketBot])
 	}
 }

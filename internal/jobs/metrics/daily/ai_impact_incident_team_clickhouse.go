@@ -260,7 +260,7 @@ func aiImpactEdgeTierRank(source string) int {
 //
 // Each trigger carries the pull request's owning team (aiImpactPullRequestOwnerSQL)
 // and, as the pull request's own rows do, its AI bucket and work type: the AI
-// attribution when there is one, else BucketUnknown and "pull_request".
+// attribution when there is one, else human (bot for a [bot] author) and "pull_request".
 func LoadAIImpactIncidentTriggers(
 	ctx context.Context, conn repositoryRows, organizationID string, incidentIDs []string,
 ) (map[string]aiimpact.IncidentTrigger, error) {
@@ -459,17 +459,52 @@ ORDER BY repo_id, number, work_type`,
 		return nil, fmt.Errorf("iterate ai impact incident trigger attributions: %w", err)
 	}
 
+	authorRows, err := conn.Query(ctx, `
+SELECT repo_id, number, author_name
+FROM git_pull_requests FINAL
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND number IN {pr_numbers:Array(UInt32)}`,
+		clickhouse.Named("org_id", organizationID),
+		clickhouse.Named("repo_ids", repositoryUUIDStrings(repoIDs)),
+		clickhouse.Named("pr_numbers", numbers),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load ai impact incident trigger authors: %w", err)
+	}
+	defer authorRows.Close()
+	authors := make(map[prKey]string)
+	for authorRows.Next() {
+		var (
+			repoID uuid.UUID
+			number uint32
+			author *string
+		)
+		if err := authorRows.Scan(&repoID, &number, &author); err != nil {
+			return nil, fmt.Errorf("scan ai impact incident trigger author: %w", err)
+		}
+		if author != nil {
+			authors[prKey{repoID, number}] = *author
+		}
+	}
+	if err := authorRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate ai impact incident trigger authors: %w", err)
+	}
+
 	for incidentID, candidate := range chosen {
 		key := prKey{candidate.repoID, candidate.number}
 		trigger := aiimpact.IncidentTrigger{
-			RepoID: candidate.repoID, Number: int64(candidate.number),
-			Bucket: aiimpact.BucketUnknown, WorkType: "pull_request",
+			RepoID: candidate.repoID, Number: int64(candidate.number), WorkType: "pull_request",
+		}
+		var kind *string
+		var authorName *string
+		if author, ok := authors[key]; ok {
+			authorName = &author
 		}
 		if attribution, ok := attributions[key]; ok {
-			kind, workType := attribution.kind, attribution.workType
-			trigger.Bucket = aiimpact.SafeBucket(&kind)
-			trigger.WorkType = workType
+			attributedKind := attribution.kind
+			kind = &attributedKind
+			trigger.WorkType = attribution.workType
 		}
+		trigger.Bucket = aiimpact.PullRequestBucket(kind, authorName)
 		if team, ok := owners[key]; ok {
 			owner := team
 			trigger.TeamID = &owner

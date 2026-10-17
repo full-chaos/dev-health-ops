@@ -25,7 +25,7 @@ type IncidentTrigger struct {
 	// nil when no team owned it.
 	TeamID *string
 	// Bucket and WorkType are the pull request's own (an AI attribution, or
-	// BucketUnknown and "pull_request" for one without AI evidence).
+	// human/bot and "pull_request" for one without AI evidence).
 	Bucket   AttributionBucket
 	WorkType string
 }
@@ -114,6 +114,7 @@ func anchorIncident(params Params, incident IncidentRow) incidentAnchor {
 	return anchor
 }
 
-// SafeBucket is the bucket of an attribution kind: the AI kinds and human, else
-// BucketUnknown. A pull request without an attribution is BucketUnknown.
-func SafeBucket(kind *string) AttributionBucket { return safeBucket(kind) }
+// PullRequestBucket is the bucket of one pull request: see ClassifyBucket.
+func PullRequestBucket(kind, authorName *string) AttributionBucket {
+	return ClassifyBucket(kind, authorName)
+}

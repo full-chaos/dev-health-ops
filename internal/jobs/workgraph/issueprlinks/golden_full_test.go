@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,11 +149,23 @@ func (golden goldenDocument) inputs(t *testing.T) Inputs {
 			LastSynced:          golden.instant(t, row[4]),
 		})
 	}
+	// Declared pair excuse (CHAOS-10037): Python's repos read has no provider
+	// column, and Go resolves a PR source only under its own provider. Every
+	// PR-shaped source in this capture is `ghpr:` (no `gitlab:` source; asserted
+	// below), so its repos are the GitHub repositories they name, and each is
+	// fed as a GitHub row. A `gitlab:` source in a refreshed capture fails here
+	// instead of being labelled.
+	for _, row := range golden.Dependencies {
+		if strings.HasPrefix(golden.text(t, row[1]), "gitlab:") {
+			t.Fatalf("golden source %q: the GitHub labelling of the capture's repos no longer holds", golden.text(t, row[1]))
+		}
+	}
 	for _, row := range golden.Repos {
 		inputs.Repos = append(inputs.Repos, RepoRow{
-			OrgID: golden.text(t, row[0]),
-			ID:    golden.uuid(t, row[1]),
-			Repo:  golden.text(t, row[2]),
+			OrgID:    golden.text(t, row[0]),
+			ID:       golden.uuid(t, row[1]),
+			Repo:     golden.text(t, row[2]),
+			Provider: ProviderGitHub,
 		})
 	}
 	for _, row := range golden.PullRequests {

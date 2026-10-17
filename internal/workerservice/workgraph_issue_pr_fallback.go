@@ -69,6 +69,7 @@ func (step *issuePRFallbackInvariantPreStep) Run(ctx context.Context, claim work
 		return nil, err
 	}
 	fragment := map[string]any{
+		"organization_id":            claim.Request.OrganizationID,
 		"links_read":                 outcome.LinksRead,
 		"fallback_beside_native":     outcome.Beside.Total,
 		"beside_native_pull_request": outcome.Beside.ByPullRequest,

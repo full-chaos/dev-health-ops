@@ -18,8 +18,8 @@ const (
 	FallbackInvariantBreachedLog = "issue-pr fallback invariant breached"
 	// FallbackInvariantHeldLog is the Info line of a build that left none.
 	FallbackInvariantHeldLog = "issue-pr fallback invariant held"
-	// FallbackBesideNativeGauge is set on every check, 0 included, so an alert
-	// can watch for a value above 0 per organization.
+	// FallbackBesideNativeGauge is set on every check, 0 included, with the
+	// attribute organization_id, so an alert can watch for a value above 0.
 	FallbackBesideNativeGauge = "workgraph_issue_pr_fallback_beside_native_rows"
 )
 
@@ -65,7 +65,7 @@ func reportFallbackInvariant(ctx context.Context, logger *slog.Logger, outcome I
 		metric.WithUnit("{row}"),
 		metric.WithDescription("explicit_text and heuristic work_graph_issue_pr rows whose pull request or issue has a native link, per organization, after a work-graph build. Must be 0."))
 	if err == nil {
-		gauge.Record(ctx, int64(outcome.Beside.Total), metric.WithAttributes(attribute.String("org_id", outcome.OrganizationID)))
+		gauge.Record(ctx, int64(outcome.Beside.Total), metric.WithAttributes(attribute.String("organization_id", outcome.OrganizationID)))
 	} else {
 		logger.Error("issue-pr fallback invariant: gauge unavailable", slog.Any("error", err))
 	}

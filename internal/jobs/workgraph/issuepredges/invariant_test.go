@@ -32,7 +32,7 @@ func fallbackInvariantGauge(t *testing.T, reader *sdkmetric.ManualReader) map[st
 				t.Fatalf("%s is %T, want an int64 gauge", m.Name, m.Data)
 			}
 			for _, point := range gauge.DataPoints {
-				org, _ := point.Attributes.Value("org_id")
+				org, _ := point.Attributes.Value("organization_id")
 				out[org.AsString()] = point.Value
 			}
 		}

@@ -432,7 +432,7 @@ Two rules hold for every read of the tree:
    writer of the build, pre-step `issue_pr_fallback_invariant` counts the
    lower-tier rows that still sit beside a native one; the count must be 0.
    It repairs nothing: it sets the gauge
-   `workgraph_issue_pr_fallback_beside_native_rows` per `org_id` on every
+   `workgraph_issue_pr_fallback_beside_native_rows` per `organization_id` on every
    build, and when the count is above 0 it logs a WARN `issue-pr fallback
    invariant breached` with the counts and reports FAILED (step evidence
    `status: failed`, build evidence `failed_steps`); the later steps still run. A pull or merge request

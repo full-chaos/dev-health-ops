@@ -3445,10 +3445,10 @@ over Jira, Linear, GitHub and GitLab). Where it is held:
 - **Invariant check (CHAOS-10062).** The pre-step `issue_pr_fallback_invariant` runs after
   `issue_pr_edges_heuristic`, the last step that writes `work_graph_issue_pr`. It counts the lower-tier rows that
   still sit beside a native link (by pull request side, by issue side, total). The count must be 0. The step repairs
-  nothing. It sets the gauge `workgraph_issue_pr_fallback_beside_native_rows` per `org_id` on every build (0
+  nothing. It sets the gauge `workgraph_issue_pr_fallback_beside_native_rows` per `organization_id` on every build (0
   included). On a nonzero count it logs a WARN `issue-pr fallback invariant breached` with the organization and the
   counts (never row contents) and reports FAILED: it returns a `workgraph.StepFailure`, so its evidence fragment
-  carries `status: failed` with the counts, the build evidence names it under `failed_steps`, the build logs an ERROR
+  carries `status: failed` with `organization_id` and the counts, the build evidence names it under `failed_steps`, the build logs an ERROR
   naming it, and the later steps still run. The request still completes (`succeeded`): the request ledger has no
   partial state, and a `failed` build would hold the post-sync request that waits on its completion key. A nonzero
   value is a writer regression. Tests: `fallback_invariant_test.go`,

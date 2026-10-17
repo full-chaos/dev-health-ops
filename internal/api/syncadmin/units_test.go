@@ -219,6 +219,12 @@ func TestRunUnitsBudgetDeferralsIncludeBudgetContentionWaits(t *testing.T) {
 		{"no contention key keeps the column", `{"error_category": "budget_deferred"}`, 3, `"budget_deferrals":3,`},
 		{"a non-integer value counts as none", `{"provider_budget_contention_deferrals": "many"}`, 1, `"budget_deferrals":1,`},
 		{"a negative value counts as none", `{"provider_budget_contention_deferrals": -4}`, 1, `"budget_deferrals":1,`},
+		{"a numeric string counts as none", `{"provider_budget_contention_deferrals": "7"}`, 1, `"budget_deferrals":1,`},
+		{"a boolean counts as none", `{"provider_budget_contention_deferrals": true}`, 1, `"budget_deferrals":1,`},
+		{"an integral float counts as none", `{"provider_budget_contention_deferrals": 7.0}`, 1, `"budget_deferrals":1,`},
+		{"a null counts as none", `{"provider_budget_contention_deferrals": null}`, 1, `"budget_deferrals":1,`},
+		{"the largest int64 adds without wrapping", `{"provider_budget_contention_deferrals": 9223372036854775807}`, 1, `"budget_deferrals":9223372036854775808,`},
+		{"a count beyond int64 is kept exactly", `{"provider_budget_contention_deferrals": 18446744073709551616}`, 0, `"budget_deferrals":18446744073709551616,`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -764,7 +764,7 @@ project's work items by `(provider, project_id)`; no reader has to join on `proj
 | jira | native project id (`10001`) | the same id | the same id | one id |
 | linear | raw project UUID | the same UUID | the same UUID | one id |
 | github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`) | the same board id | one id |
-| gitlab | `{org_id}:gitlab:{native id}` | the same id (CHAOS-8883); the path is `project_key` | the project PATH (until CHAOS-3383 PR 3b2) | one id for catalog and ownership; a GitLab work item joins its ownership through `teamattribution.ProjectOwnershipJoinID` (the row's `project_key`) |
+| gitlab | `{org_id}:gitlab:{native id}` | the same id (CHAOS-8883); the path is `project_key` | the same id (CHAOS-3383 PR 3b2); `work_items.project_key` is the project's current path | one id for catalog, ownership and work items. A GitLab item written before 3b2 holds the path in `project_id`; the attribution reads map it, through its `repo_id` and `repos.provider_repo_id`, to the catalog id (`teamattribution.AnchorGitLabSubjectProjects`), and the old path is its project key. A path is never an ownership join key: a stale item at a reused path joins nothing of the path's new owner |
 
 GitLab ownership rows written before CHAOS-8883 hold the path as `project_id`. The next GitLab team-catalog sync
 moves an open one to the catalog id of the same project: the listed project at that path, or, when the store has seen

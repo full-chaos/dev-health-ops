@@ -1056,7 +1056,6 @@ GROUP BY o.provider, o.project_id, o.team_id`,
 		if err := rows.Scan(&link.Provider, &link.ProjectID, &link.TeamID, &isPrimary, &link.Specificity, &projectKey); err != nil {
 			return nil, err
 		}
-		link.ProjectID = teamattribution.ProjectOwnershipJoinID(link.Provider, link.ProjectID, projectKey)
 		link.IsPrimary = isPrimary == 1
 		out = append(out, link)
 	}
@@ -1147,7 +1146,49 @@ WHERE org_id = ?`,
 		}
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return anchorGitLabOwnershipWorkItems(ctx, conn, orgID, out)
+}
+
+// anchorGitLabOwnershipWorkItems gives a GitLab work item written before the
+// numeric-id anchoring (project_id holds the path) the catalog id of the
+// project its repo names, so it joins the same project ownership as an item
+// written after. An item whose repo names no project keeps its path and joins
+// nothing.
+func anchorGitLabOwnershipWorkItems(
+	ctx context.Context, conn driver.Conn, orgID string, items []TeamRepoOwnershipWorkItem,
+) ([]TeamRepoOwnershipWorkItem, error) {
+	repoSet := map[string]struct{}{}
+	for _, item := range items {
+		if item.Provider == "gitlab" && item.RepoID != "" && !teamattribution.IsGitLabCatalogProjectID(item.ProjectID) {
+			repoSet[item.RepoID] = struct{}{}
+		}
+	}
+	if len(repoSet) == 0 {
+		return items, nil
+	}
+	repoIDs := make([]string, 0, len(repoSet))
+	for id := range repoSet {
+		repoIDs = append(repoIDs, id)
+	}
+	native, err := teamattribution.LoadGitLabNativeProjectIDsByRepo(ctx, conn, orgID, repoIDs)
+	if err != nil {
+		return nil, err
+	}
+	anchored := 0
+	for index, item := range items {
+		if item.Provider != "gitlab" || teamattribution.IsGitLabCatalogProjectID(item.ProjectID) {
+			continue
+		}
+		if id, ok := native[item.RepoID]; ok {
+			items[index].ProjectID = teamattribution.GitLabCatalogProjectIDString(orgID, id)
+			anchored++
+		}
+	}
+	slog.Default().DebugContext(ctx, "team_repo_ownership_gitlab_items_anchored", "org_id", orgID, "repos", len(repoIDs), "anchored", anchored)
+	return items, nil
 }
 
 // loadTeamRepoOwnershipKnownTeams loads this org's CURRENT team catalog

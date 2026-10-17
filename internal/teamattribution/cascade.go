@@ -451,7 +451,7 @@ func NewGitHubWorkItemDerivationContext(
 		}
 	}
 	for _, fact := range facts.Projects {
-		joinID := ProjectOwnershipJoinID(fact.Provider, fact.ProjectID, fact.ProjectKey)
+		joinID := fact.ProjectID
 		candidate := GithubWorkItemDerivationCandidateFromFact(
 			"project_ownership", fact.TeamID, fact.TeamName,
 			fmt.Sprintf("project_ownership=%s", GithubWorkItemDerivationFirstNonEmpty(joinID, GithubWorkItemDerivationStringValue(fact.ProjectKey))),
@@ -460,7 +460,9 @@ func NewGitHubWorkItemDerivationContext(
 		if joinID != "" {
 			AppendDerivationCandidate(result.projectByID, AttributionMapKey(fact.Provider, joinID), candidate)
 		}
-		if fact.ProjectKey != nil && strings.TrimSpace(*fact.ProjectKey) != "" {
+		// A GitLab project is joined by its numeric-id catalog id only: a path
+		// key would hand a stale item at a reused path to the path's new owner.
+		if fact.Provider != "gitlab" && fact.ProjectKey != nil && strings.TrimSpace(*fact.ProjectKey) != "" {
 			AppendDerivationCandidate(result.projectByKey, AttributionMapKey(fact.Provider, *fact.ProjectKey), candidate)
 		}
 	}
@@ -809,7 +811,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 	)
 	bySource["repo_ownership"] = append(
 		bySource["repo_ownership"],
-		derived.repoByName[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.ProjectID))]...,
+		derived.repoByName[AttributionMapKey(subject.Provider, GitLabProjectName(subject))]...,
 	)
 	// CHAOS-4321 (chris's ruling, 2026-08-26, refined 08:30 PT): membership-
 	// based attribution -- assignee AND author alike -- is a TWO-LAYER
@@ -1253,6 +1255,9 @@ func WorkItemDerivationScope(subject GithubWorkItemDerivationSubject) string {
 	if subject.Provider == "jira" && subject.ProjectKey != nil {
 		return *subject.ProjectKey
 	}
+	if gitLabSubjectNamedByKey(subject) {
+		return *subject.ProjectKey
+	}
 	for _, value := range []*string{subject.ProjectID, subject.ProjectName, subject.NativeTeamKey, subject.ProjectKey} {
 		if value != nil && *value != "" {
 			return *value
@@ -1283,7 +1288,7 @@ func (derived GithubWorkItemDerivationContext) ManualCandidates(
 			// can never match.
 			matched = GithubWorkItemDerivationScopeMatch(scopeID,
 				GithubWorkItemDerivationStringValue(subject.RepoID),
-				GithubWorkItemDerivationStringValue(subject.ProjectID))
+				GitLabProjectName(subject))
 		case "project":
 			matched = GithubWorkItemDerivationScopeMatch(scopeID,
 				GithubWorkItemDerivationStringValue(subject.ProjectID),
@@ -2530,7 +2535,7 @@ func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 	owners := append(
 		append([]GithubWorkItemDerivationCandidate(nil),
 			derived.repoByID[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.RepoID))]...),
-		derived.repoByName[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.ProjectID))]...,
+		derived.repoByName[AttributionMapKey(subject.Provider, GitLabProjectName(subject))]...,
 	)
 	if len(owners) == 0 {
 		return MembershipOwnershipReasonUnknown, !ownershipUnknownBlocksMembership

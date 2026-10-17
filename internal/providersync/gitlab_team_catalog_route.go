@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +63,11 @@ const (
 // straight off ref.SyncOptions, the run's own canonical
 // sync_configurations.sync_options, the same source Python's
 // _gitlab_group falls back to.
-type GitLabTeamCatalogRouteHandler struct{}
+type GitLabTeamCatalogRouteHandler struct {
+	// RepoIdentity names the path each project's sprint refs are keyed by
+	// (the work-items route's minted path). Nil keys them by the current path.
+	RepoIdentity GitLabRepoIdentityBatchReader
+}
 
 type GitLabTeamCatalogEvidence struct {
 	Provider string `json:"provider"`
@@ -831,6 +836,10 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 	normalizedAt time.Time,
 ) error {
 	read, failed, incomplete, overBudget, archived, withTarget, noneDated, groupSeen, groupTarget := 0, 0, 0, 0, 0, 0, 0, 0, 0
+	refPaths, err := handler.projectRefPaths(ctx, orgID, projects, nativeIDByProject)
+	if err != nil {
+		return err
+	}
 	for index := range projects {
 		row := &projects[index]
 		nativeID := nativeIDByProject[row.ID.String()]
@@ -883,7 +892,7 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 				date = *milestone.DueDate
 			}
 			candidate := projectTargetCandidate{
-				ID: id, Ref: gitlabMilestoneSprintID(*row.ProjectKey, id), Name: milestone.Title, Date: date,
+				ID: id, Ref: gitlabMilestoneSprintID(refPaths.pathOf(nativeID, *row.ProjectKey), id), Name: milestone.Title, Date: date,
 				Open: strings.EqualFold(strings.TrimSpace(milestone.State), "active"),
 			}
 			if milestone.isGroupMilestone() {
@@ -913,4 +922,44 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 		"read_incomplete", incomplete, "over_budget", overBudget, "archived_skipped", archived,
 		"with_target", withTarget, "none_dated", noneDated, "group_milestones_seen", groupSeen, "group_milestone_targets", groupTarget)
 	return nil
+}
+
+type gitlabProjectRefPaths map[string]string
+
+func (paths gitlabProjectRefPaths) pathOf(nativeID, current string) string {
+	if minted := paths[nativeID]; minted != "" {
+		return minted
+	}
+	return current
+}
+
+// projectRefPaths is, per numeric project id, the path the work-items route
+// keys the project's milestone sprints by, read once for all listed projects.
+func (handler GitLabTeamCatalogRouteHandler) projectRefPaths(
+	ctx context.Context,
+	orgID string,
+	projects []gitlabTeamCatalogProjectRow,
+	nativeIDByProject map[string]string,
+) (gitlabProjectRefPaths, error) {
+	paths := gitlabProjectRefPaths{}
+	if handler.RepoIdentity == nil {
+		return paths, nil
+	}
+	listed := make([]GitLabProjectPath, 0, len(projects))
+	for _, row := range projects {
+		native, parseErr := strconv.ParseInt(nativeIDByProject[row.ID.String()], 10, 64)
+		if row.ProjectKey == nil || parseErr != nil || native < 1 {
+			continue
+		}
+		listed = append(listed, GitLabProjectPath{ProjectID: native, Path: *row.ProjectKey})
+	}
+	minted, err := resolveGitLabRepoIdentityPaths(ctx, handler.RepoIdentity, orgID, listed)
+	if err != nil {
+		return nil, err
+	}
+	for native, path := range minted {
+		paths[strconv.FormatInt(native, 10)] = path
+	}
+	slog.Default().DebugContext(ctx, "gitlab_team_catalog_ref_paths", "org_id", orgID, "projects", len(listed), "resolved", len(minted))
+	return paths, nil
 }

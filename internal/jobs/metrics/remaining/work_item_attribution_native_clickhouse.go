@@ -1031,7 +1031,13 @@ func querySubjectsInto(
 		}
 		result[subject.WorkItemID] = subject
 	}
-	return result, stepcause.Failure(stepcause.IterateWorkItems, rows.Err())
+	if err := rows.Err(); err != nil {
+		return result, stepcause.Failure(stepcause.IterateWorkItems, err)
+	}
+	if err := teamattribution.AnchorGitLabSubjectProjects(ctx, conn, result); err != nil {
+		return nil, stepcause.Failure(stepcause.QueryWorkItems, err)
+	}
+	return result, nil
 }
 
 // loadDependencyEdges loads work_item_dependencies rows whose SOURCE is one

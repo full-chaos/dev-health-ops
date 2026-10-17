@@ -108,7 +108,8 @@ func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *synclog
 	// countdown. The upsert's LEAST keeps the earlier of the two, which is the
 	// same earlier-wins rule dueNowRearmAt states for the pass's own
 	// arguments.
-	if !rearmedByOther {
+	_ = rearmedByOther
+	{
 		if _, err := tx.Exec(ctx, `
 UPDATE public.sync_dispatch_outbox
 SET available_at = $2, updated_at = $3

@@ -178,8 +178,9 @@ func TestUnitTerminalCommitDoesNotWakeDispatchWhenNothingWaits(t *testing.T) {
 // pending dispatch_sync_run row, at the earliest completion instant.
 //
 // RED CONTROL: give WakeDispatchSQL a plain INSERT with no ON CONFLICT tail
-// and the second completion fails the unique key; change the tail's LEAST to
-// the new value and the earliest instant is lost.
+// and the second completion fails the unique key; let the tail's
+// available_at take EXCLUDED.available_at instead of the LEAST and the row
+// ends at the newest completion, not the earliest.
 func TestBurstOfUnitCompletionsArmsOnePendingWakeupPerRun(t *testing.T) {
 	withDispatchWakeFixture(t, func(ctx context.Context, pool *pgxpool.Pool, repository *PostgresRepository) {
 		seedRunUnit(t, ctx, pool, "planned")
@@ -192,12 +193,11 @@ func TestBurstOfUnitCompletionsArmsOnePendingWakeupPerRun(t *testing.T) {
 		for _, unitID := range units {
 			claims = append(claims, claimFixtureUnit(t, ctx, repository, unitID, now))
 		}
+		// The earliest completion commits FIRST and nine later ones follow, so a
+		// merge that let the newest instant win would end at earliest+900ms.
 		earliest := now.Add(time.Second)
 		for index, claim := range claims {
-			completedAt := earliest.Add(time.Duration(9-index) * 100 * time.Millisecond)
-			if index == len(claims)-1 {
-				completedAt = earliest
-			}
+			completedAt := earliest.Add(time.Duration(index) * 100 * time.Millisecond)
 			if err := repository.Complete(ctx, claim, map[string]any{"records": 1}, nil, now, completedAt); err != nil {
 				t.Fatal(err)
 			}

@@ -269,21 +269,45 @@ func (reader GitLabRepoIdentityClickHouseReader) StoredRepoIdentitiesAtPaths(
 		claim.Provider != "gitlab" {
 		return nil, ErrInvalidConfiguration
 	}
-	if len(paths) == 0 {
-		return nil, nil
+	if err := reader.Lease.Assert(ctx); err != nil {
+		return nil, err
 	}
-	return reader.query(ctx, `
-SELECT `+gitLabStoredRepoIdentityColumns+`
-FROM repos FINAL
-WHERE org_id = ? AND provider = 'gitlab' AND lower(repo) IN ?`,
-		claim.OrgID, paths)
+	return readGitLabStoredRepoIdentitiesAtPaths(ctx, reader.Conn, claim.OrgID, paths)
 }
 
 func (reader GitLabRepoIdentityClickHouseReader) query(ctx context.Context, query string, args ...any) ([]GitLabStoredRepoIdentity, error) {
 	if err := reader.Lease.Assert(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := reader.Conn.Query(ctx, query, args...)
+	return queryGitLabStoredRepoIdentities(ctx, reader.Conn, query, args...)
+}
+
+// readGitLabStoredRepoIdentitiesAtPaths reads the org's GitLab repos rows
+// whose current path (repo) or minted path (identity_path) is one of paths,
+// case-insensitive. It is the one read of "which projects has the store seen
+// at a path": the reference rewrite and the ownership carry both use it, and
+// both name a row's project by heldBy.
+func readGitLabStoredRepoIdentitiesAtPaths(
+	ctx context.Context, conn driver.Conn, orgID string, paths []string,
+) ([]GitLabStoredRepoIdentity, error) {
+	lower := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if key := strings.ToLower(strings.TrimSpace(path)); key != "" {
+			lower = append(lower, key)
+		}
+	}
+	if len(lower) == 0 {
+		return nil, nil
+	}
+	return queryGitLabStoredRepoIdentities(ctx, conn, `
+SELECT `+gitLabStoredRepoIdentityColumns+`
+FROM repos FINAL
+WHERE org_id = ? AND provider = 'gitlab' AND (lower(repo) IN ? OR lower(identity_path) IN ?)`,
+		orgID, lower, lower)
+}
+
+func queryGitLabStoredRepoIdentities(ctx context.Context, conn driver.Conn, query string, args ...any) ([]GitLabStoredRepoIdentity, error) {
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

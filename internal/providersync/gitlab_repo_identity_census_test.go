@@ -2,13 +2,17 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
+	"net/http"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -76,6 +80,77 @@ func TestEveryProductionGitLabRouteResolvesTheStoredRepositoryIdentity(t *testin
 			}
 			return true
 		})
+	}
+}
+
+type refusingGitLabRepoIdentityReader struct{ calls *int }
+
+var errCensusRepoIdentityRead = errors.New("census: the route read the stored repository identity")
+
+func (reader refusingGitLabRepoIdentityReader) StoredRepoIdentities(context.Context, Claim, int64, string) ([]GitLabStoredRepoIdentity, error) {
+	*reader.calls++
+	return nil, errCensusRepoIdentityRead
+}
+
+func (reader refusingGitLabRepoIdentityReader) StoredRepoIdentitiesAtPaths(context.Context, Claim, []string) ([]GitLabStoredRepoIdentity, error) {
+	*reader.calls++
+	return nil, errCensusRepoIdentityRead
+}
+
+type censusProjectDoer struct{}
+
+func (censusProjectDoer) Do(request *http.Request) (*http.Response, error) {
+	body := `{"id":123,"path":"api","path_with_namespace":"acme/api","name":"api","default_branch":"main","web_url":"https://gitlab.example/acme/api"}`
+	status := http.StatusOK
+	if request.URL.Path != "/api/v4/projects/123" {
+		body, status = `[]`, http.StatusOK
+	}
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+}
+
+// The behaviour half of the census: every production-selected GitLab handler
+// that carries a reader consults it on Collect, before it writes anything. The
+// reader refuses, so a route that resolved its id another way would return a
+// batch instead of the refusal.
+func TestEveryProductionGitLabRouteConsultsItsReaderOnCollect(t *testing.T) {
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	checked := 0
+	for _, capability := range Capabilities("gitlab") {
+		var handler CompleteRouteHandler
+		if capability.Dataset == "work-items" {
+			route, ok := SelectWorkItemsRouteHandler("gitlab", "work-items", WorkItemsRouteDeps{
+				Conn: selectorConn{}, Lease: lease, StatusMapping: &StatusMapping{},
+			})
+			if !ok {
+				t.Fatal("no gitlab work-items route")
+			}
+			handler = route
+		} else if route, ok := SelectGitFamilyRoute("gitlab", capability.Dataset, GitFamilyDeps{Conn: selectorConn{}, Lease: lease}); ok {
+			handler = route.Handler
+		} else {
+			continue
+		}
+		value := reflect.New(reflect.TypeOf(handler)).Elem()
+		value.Set(reflect.ValueOf(handler))
+		field := value.FieldByName("RepoIdentity")
+		if !field.IsValid() {
+			continue
+		}
+		calls := 0
+		field.Set(reflect.ValueOf(refusingGitLabRepoIdentityReader{calls: &calls}))
+		claim := nativeTestClaim("gitlab", capability.Dataset)
+		batch, err := value.Interface().(CompleteRouteHandler).Collect(context.Background(), claim,
+			providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
+			gitLabWorkItemsClient(t, censusProjectDoer{}), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
+		if !errors.Is(err, errCensusRepoIdentityRead) || calls == 0 {
+			t.Errorf("gitlab %s: %T did not consult its reader (calls=%d, err=%v, effects=%d)",
+				capability.Dataset, handler, calls, err, len(batch.Effects))
+		}
+		checked++
+	}
+	if checked < 12 {
+		t.Fatalf("%d gitlab datasets checked, want at least 12", checked)
 	}
 }
 

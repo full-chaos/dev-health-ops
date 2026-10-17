@@ -764,16 +764,32 @@ project's work items by `(provider, project_id)`; no reader has to join on `proj
 | jira | native project id (`10001`) | the same id | the same id | one id |
 | linear | raw project UUID | the same UUID | the same UUID | one id |
 | github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`) | the same board id | one id |
-| gitlab | `{org_id}:gitlab:{native id}` | the same id (CHAOS-8883); the path is `project_key` | the project PATH (until CHAOS-3383 PR 3) | one id for catalog and ownership; a GitLab work item joins its ownership through `teamattribution.ProjectOwnershipJoinID` (the row's `project_key`) |
+| gitlab | `{org_id}:gitlab:{native id}` | the same id (CHAOS-8883); the path is `project_key` | the project PATH (until CHAOS-3383 PR 3b2) | one id for catalog and ownership; a GitLab work item joins its ownership through `teamattribution.ProjectOwnershipJoinID` (the row's `project_key`) |
 
 GitLab ownership rows written before CHAOS-8883 hold the path as `project_id`. The next GitLab team-catalog sync
 moves an open one to the catalog id of the same project: the listed project at that path, or, when the store has seen
-exactly one project id at the path (`projects.project_key`, or `repos.repo` with `repos.provider_repo_id`), that
-project wherever it is listed now (a rename before the sync). The catalog-keyed row takes the grant's first instant,
+exactly one project id at the path (`projects.project_key`, or a `repos` row whose `repo` or `identity_path` is the
+path, its project named as the repository identity resolver names it: `provider_repo_id`, else `settings.project_id`
+for a row from before migration 134), that project wherever it is listed now (a rename before the sync). The catalog-keyed row takes the grant's first instant,
 and the path row it replaces (and any duplicate of it) becomes an empty-interval tombstone (valid_to = valid_from, as
 the repository-ownership supersede writes), so at every instant exactly one row of the grant is valid. It does not move a row to the listed project at its path when the store has
 seen another project id at that path (a path a new project took over). That row is closed at the run, and the new
 project's grant starts at the run.
+
+GitLab repository identity (CHAOS-3383, chris's option A, 2026-10-15). A GitLab project's `repo_id` and work-item
+ids no longer follow its current path. Every GitLab route resolves the identity through `repos`
+(`internal/providersync/gitlab_repo_identity.go`):
+
+- A project the store holds (a `repos` row naming its numeric id) keeps that row's `repo_id` and the path the id was
+  minted from, `repos.identity_path`. A rename or transfer changes `repos.repo` (the current path) and nothing else.
+- A project the store does not hold mints from its current path.
+- A new project at a path another project's id was minted from mints from `{path}@{N}` (path reuse, delete and
+  recreate).
+- GitLab work-item ids are `gitlab:{identity_path}#{iid}` and `!{iid}`. A reference a payload makes by another
+  project's current path is stored under that project's identity path. Readers that turn a slug into a repository
+  (`issueprlinks`, `issuepredges`, investment explain) accept the identity path and the current path.
+- Not changed yet: `work_items.project_id` and sprint ids keep the current path. Until they move to the catalog id,
+  a project at a reused path shares `project_id` with the old project's items, and so its ownership join.
 
 Jira before this change: the three team-catalog writers (project-as-team, the legacy
 `jira_project_ops_team_links` carry-forward, Atlassian Teams) built the id from the project KEY

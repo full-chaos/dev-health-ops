@@ -86,13 +86,22 @@ Design docs (read the guardrails at minimum):
 | `org_invite_token` | active | human | |
 | `license_key` | active | infrastructure | |
 | `infrastructure_deployment_credentials` | active | infrastructure | |
+| `effective_principal_envelope` | active | human | |
 
-**30 classes.** 6 were not in CHAOS-3273's minimum list and were discovered
+**30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 6 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
 `internal_svc_worker_token`, `worker_operational_bridge_token`,
 `acr_workload_identity_exchange`, `org_invite_token`, `license_key`, and the
 distinction between `sso_saml_exchange`/`sso_oidc_exchange` as two classes
 rather than one.
+
+**`effective_principal_envelope` (CHAOS-4737).** query-api, a sixth deployed
+app, was outside the ops/web/acr inventories, and the signed envelope it
+verifies was a credential class the vocabulary did not name. It is now class 31
+and query-api's three surfaces have rows in
+`contracts/auth/v1/endpoint-profiles.query-api.json`. G-61 position: the class
+has exactly one issuer, the edge (`internal/envelopemint`); query-api only
+verifies, so no exception to one active issuer per token class is needed.
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 

@@ -208,7 +208,8 @@
             "dev-health-ops-billing-edge",
             "dev-health-web",
             "dev-health-acr-api",
-            "dev-health-acr-mcp"
+            "dev-health-acr-mcp",
+            "dev-health-query-api"
           ]
         },
         "source": {

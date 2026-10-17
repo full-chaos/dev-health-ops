@@ -401,7 +401,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			}
 			continue
 		}
-		classification := ClassifyHTTP(c.Provider, response.StatusCode, response.Header)
+		classification := ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, "")
 		if classification == nil {
 			c.observe("")
 			return response, nil
@@ -526,7 +526,7 @@ func (c *HTTPClient) DoUnauthenticated(
 		c.observe(failure.Class)
 		return nil, failure
 	}
-	classification := ClassifyHTTP(c.Provider, response.StatusCode, response.Header)
+	classification := ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, "")
 	if classification == nil {
 		c.observe("")
 	} else {

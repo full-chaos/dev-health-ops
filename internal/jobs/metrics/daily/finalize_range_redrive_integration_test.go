@@ -718,10 +718,93 @@ func TestRedriveFinalizeForRangeGivesPriorAttemptRunsAFreshGeneration(t *testing
 		got := generation(tc.runID)
 		want := original[tc.runID]
 		if tc.wantFresh {
-			want = "redrive:range-nonce-4442"
+			want = original[tc.runID] + "#finalize-redrive:range-nonce-4442"
 		}
 		if got != want {
 			t.Errorf("%s: generation = %q, want %q", tc.name, got, want)
 		}
+	}
+}
+
+// CHAOS-4442 codex round 1: the fresh generation is appended to the producer
+// classification, never a replacement. The nightly fan-out prefix keeps
+// matching the readers that find a day's authoritative run by it (partition
+// recompute, manual daily-start coverage), the redrive leaves a provenance
+// row, and the redriven finalize still claims and completes.
+func TestRedriveFinalizeForRangeKeepsFanoutClassificationAndWritesProvenance(t *testing.T) {
+	ctx := context.Background()
+	pool, store, publisher := newFinalizeRedriveTestStack(t)
+
+	const (
+		orgID       = "00000000-0000-4000-8000-000000004431"
+		runID       = "00000000-0000-4000-8000-000000004432"
+		partitionID = "00000000-0000-4000-9000-000000004432"
+		fanout      = "fixed-schedule:daily_metrics_fanout:2026-05-08T01:00:00Z"
+	)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	day := time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	insertFinalizeTestRun(t, ctx, pool, runID, orgID, day, now.Add(-2*time.Hour))
+	insertFinalizeTestPartition(t, ctx, pool, partitionID, runID, 0, "succeeded", now.Add(-2*time.Hour))
+	if _, err := pool.Exec(ctx, `UPDATE daily_metrics_runs SET generation = $2, finalization_status = 'failed' WHERE id = $1::uuid`, runID, fanout); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := store.RedriveFinalizeForRange(ctx, publisher, orgID, day, day, "fan-nonce-1", false, testFinalizeRedriveReason, false)
+	if err != nil || len(outcome.Days) != 1 || outcome.Days[0].Outcome != "redriven" {
+		t.Fatalf("redrive = %#v, %v, want one redriven day", outcome, err)
+	}
+
+	var generation string
+	if err := pool.QueryRow(ctx, `SELECT generation FROM daily_metrics_runs WHERE id = $1::uuid`, runID).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	if generation != fanout+"#finalize-redrive:fan-nonce-1" {
+		t.Fatalf("generation = %q, want the fan-out generation with the redrive marker appended", generation)
+	}
+	if baseGeneration(generation) != fanout {
+		t.Fatalf("baseGeneration(%q) = %q, want %q", generation, baseGeneration(generation), fanout)
+	}
+
+	var priorStatus, priorFinalization, reason, nonce, eventStatus string
+	if err := pool.QueryRow(ctx, `
+SELECT prior_status, prior_finalization_status, reason, nonce, status
+FROM daily_metrics_finalize_redrive_events WHERE run_id = $1::uuid`, runID).
+		Scan(&priorStatus, &priorFinalization, &reason, &nonce, &eventStatus); err != nil {
+		t.Fatalf("no provenance row for a prior-attempt redrive: %v", err)
+	}
+	if priorStatus != "running" || priorFinalization != "failed" || reason != testFinalizeRedriveReason || nonce != "fan-nonce-1" || eventStatus != "open" {
+		t.Fatalf("provenance = %s/%s %q %q %s", priorStatus, priorFinalization, reason, nonce, eventStatus)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	covering, err := store.coveringRunForDay(ctx, tx, orgID, "2026-05-08", "manual-daily:other")
+	_ = tx.Rollback(ctx)
+	if err != nil || covering != "" {
+		// the run is still running, so it does not cover the day yet
+		t.Fatalf("coveringRunForDay before completion = %q, %v, want none", covering, err)
+	}
+
+	processFinalizeJob(t, ctx, store, runID)
+	assertFinalizeTestRunStatus(t, ctx, pool, runID, "succeeded")
+	if err := pool.QueryRow(ctx, `SELECT status FROM daily_metrics_finalize_redrive_events WHERE run_id = $1::uuid`, runID).Scan(&eventStatus); err != nil || eventStatus != "closed_succeeded" {
+		t.Fatalf("provenance after the redriven finalize = %q, %v, want closed_succeeded", eventStatus, err)
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	covering, err = store.coveringRunForDay(ctx, tx, orgID, "2026-05-08", "manual-daily:other")
+	_ = tx.Rollback(ctx)
+	if err != nil || covering != runID {
+		t.Fatalf("coveringRunForDay after the redriven finalize = %q, %v, want %s (the fan-out prefix must keep matching)", covering, err, runID)
+	}
+	preview, err := store.RedrivePartitionsForRange(ctx, publisher, orgID, day, day, "", "repo_user_commit", "", true)
+	if err != nil || len(preview.Days) != 1 || preview.Days[0].Outcome == "skipped_ineligible" {
+		t.Fatalf("partition recompute preview = %#v, %v, want the redriven fan-out run to stay eligible", preview, err)
 	}
 }

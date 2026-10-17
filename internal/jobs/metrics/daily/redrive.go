@@ -16,6 +16,18 @@ import (
 
 const dailyTargetDayLayout = "2006-01-02"
 
+// finalizeRedriveGenerationMarker is APPENDED to a run's generation by the
+// range finalize redrive, never a replacement: the producer-classified prefix
+// ("fixed-schedule:daily_metrics_fanout:", "post-sync:", ...) is a contract
+// that partition recompute, the recommendations readiness gate and manual
+// daily-start coverage read with LIKE (CHAOS-4442, CHAOS-4459). A redrive of an
+// already redriven run replaces the previous marker.
+const finalizeRedriveGenerationMarker = "#finalize-redrive:"
+
+func finalizeRedriveGeneration(prior, nonce string) string {
+	return baseGeneration(prior) + finalizeRedriveGenerationMarker + nonce
+}
+
 // RunningRunIDs lists daily_metrics_runs still status='running' for orgID
 // with target_day in [fromDay, toDay] (inclusive, UTC calendar days). This is
 // the scope an operator names when requesting a redrive, resolved BEFORE
@@ -832,6 +844,17 @@ FOR UPDATE OF run`, runID).Scan(
 		return true, needsReset, nil
 	}
 
+	insertProvenance := func() error {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO public.daily_metrics_finalize_redrive_events
+    (id, run_id, org_id, target_day, prior_status, prior_finalization_status, actor, reason, nonce)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, 'finalize-redrive', $7, $8)`,
+			uuid.New(), runID, run.OrganizationID, targetDay, priorStatus, priorFinalizationStatus, reason, nonce,
+		); err != nil {
+			return ErrUnavailable
+		}
+		return nil
+	}
 	if needsReset {
 		// Provenance FIRST (approval condition (1)): a reset is a state
 		// write on a succeeded run and must be traceable, in the SAME
@@ -839,13 +862,8 @@ FOR UPDATE OF run`, runID).Scan(
 		// whole triple (provenance + reset + publish) lands, or none of it
 		// does. Written before the reset itself so the row this transaction
 		// is about to overwrite is captured exactly as it read.
-		if _, err := tx.Exec(ctx, `
-INSERT INTO public.daily_metrics_finalize_redrive_events
-    (id, run_id, org_id, target_day, prior_status, prior_finalization_status, actor, reason, nonce)
-VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, 'finalize-redrive', $7, $8)`,
-			uuid.New(), runID, run.OrganizationID, targetDay, priorStatus, priorFinalizationStatus, reason, nonce,
-		); err != nil {
-			return false, false, ErrUnavailable
+		if err := insertProvenance(); err != nil {
+			return false, false, err
 		}
 		// Reset the terminal state back to claimable in the SAME
 		// transaction as the provenance row above and the publish below --
@@ -866,15 +884,11 @@ VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, 'finalize-redrive', $7, 
 		// test_finalize_execution_is_skipped_not_reexecuted_for_the_same_identity_after_reclaim,
 		// CHAOS-4409's own contract test pinning exactly this). A fresh
 		// generation gives the redriven attempt a genuinely new identity,
-		// so run_daily_metrics_finalize actually executes again. Bounded
-		// to the column's 64-byte limit: "redrive:" (8) + a UUID nonce
-		// (36) = 44 bytes, well inside it, and independent of how long the
-		// run's ORIGINAL generation string was (e.g. a "post-sync:<uuid>"
-		// prefix) -- this run's partitions are all already 'succeeded' and
-		// will never be redispatched under any generation, so nothing else
-		// ever reads this run's stored generation value for partition
-		// identity again.
-		newGeneration := "redrive:" + nonce
+		// so run_daily_metrics_finalize actually executes again. The value
+		// APPENDS a marker to the original generation (finalizeRedriveGeneration)
+		// so its producer classification prefix still matches the readers
+		// that find a day's authoritative run by it; the column is text.
+		newGeneration := finalizeRedriveGeneration(run.Generation, nonce)
 		// One Postgres clock read in the reset itself is the 'reopened'
 		// marker's version. A marker that cannot be written refuses the reset
 		// (the tx rolls back).
@@ -903,7 +917,12 @@ RETURNING `+pgClockMillis,
 	}
 
 	if freshGeneration {
-		newGeneration := "redrive:" + nonce
+		// A generation change is a state write on the run: same provenance as
+		// the succeeded reset, in the same transaction.
+		if err := insertProvenance(); err != nil {
+			return false, false, err
+		}
+		newGeneration := finalizeRedriveGeneration(run.Generation, nonce)
 		tag, err := tx.Exec(ctx, `
 UPDATE public.daily_metrics_runs
 SET generation = $2, updated_at = $3
@@ -915,7 +934,7 @@ WHERE id = $1::uuid AND status = 'running'`, runID, newGeneration, now)
 			return false, false, nil
 		}
 		slog.InfoContext(ctx, "daily finalize range redrive: fresh generation for a prior finalize attempt",
-			"run_id", runID, "finalization_status", priorFinalizationStatus, "generation", newGeneration)
+			"run_id", runID, "finalization_status", priorFinalizationStatus, "generation", newGeneration, "reason", reason)
 		run.Generation = newGeneration
 	}
 

@@ -82,7 +82,10 @@ func recomputeNonce(generation string) (string, bool) {
 // genuinely the org-wide fan-out run underneath.
 func baseGeneration(generation string) string {
 	if base, _, found := strings.Cut(generation, recomputeGenerationMarker); found {
-		return base
+		generation = base
+	}
+	if base, _, found := strings.Cut(generation, finalizeRedriveGenerationMarker); found {
+		generation = base
 	}
 	return generation
 }
@@ -191,27 +194,11 @@ func (store *PostgresStore) RedrivePartitionsForRange(
 	// scope unambiguous and always org-wide; a day with no succeeded
 	// fan-out run is reported skipped_ineligible rather than guessed at.
 	//
-	// KNOWN GAP (codex review round 3, P1, code-argued, not attempted here):
-	// RedriveFinalizeForRange (CHAOS-4405) REPLACES a run's whole
-	// generation with "redrive:<nonce>" when it redrives an already-
-	// succeeded run's finalize step (redriveOneFinalizeForRange,
-	// redrive.go) -- destroying the "fixed-schedule:..." classification
-	// prefix this filter depends on, permanently. A day whose only
-	// succeeded run was EVER touched by finalize-redrive therefore becomes
-	// unrecomputable by this verb (reported skipped_ineligible), even if
-	// it was originally the org-wide fan-out run. Deliberately not
-	// "fixed" by also accepting a "redrive:"-prefixed generation here:
-	// redriveOneFinalizeForRange's own candidate scan accepts ANY
-	// succeeded run for a day (fan-out OR a narrow post-sync one), so a
-	// "redrive:"-prefixed generation does not reliably mean "was
-	// originally fan-out" -- accepting it here would risk reintroducing
-	// the exact narrow-scope-silently-redriven bug this file's own P1 fix
-	// (above) exists to prevent. The correct permanent fix is
-	// RedriveFinalizeForRange adopting this file's OWN append-not-replace
-	// pattern (baseGeneration/recomputeGenerationMarker below) instead of
-	// a bare replacement, so classification survives every redrive kind,
-	// not just this one; tracked as a CHAOS-4459 follow-up, since it means
-	// changing CHAOS-4405's already-shipped code, not this file's.
+	// RedriveFinalizeForRange (CHAOS-4405, CHAOS-4442) APPENDS
+	// "#finalize-redrive:<nonce>" to a run's generation instead of replacing
+	// it (finalizeRedriveGeneration), so the fan-out classification prefix
+	// this filter depends on survives every redrive kind; baseGeneration
+	// strips both markers.
 	// Tie-break order (codex review round 3, P2) matches
 	// _LATEST_DAILY_METRICS_RUN_SQL's own `ORDER BY run.created_at DESC,
 	// run.generation DESC` exactly (workers/recommendations_tasks.py) --

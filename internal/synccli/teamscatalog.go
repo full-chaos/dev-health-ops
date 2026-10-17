@@ -153,7 +153,7 @@ func buildProviderCatalogCollector(env cli.Env, d deps, request catalogRequest, 
 			return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitFailure, "client_invalid", clientBuildDetail("GitLab", err))
 		}
 		collector := providersync.GitLabTeamCatalogCollector{
-			Handler: providersync.GitLabTeamCatalogRouteHandler{},
+			Handler: providersync.GitLabTeamCatalogRouteHandler{RepoIdentity: providersync.GitLabRepoIdentityClickHouseReader{Conn: conn, Lease: teamCatalogLease{}}},
 			Sink:    providersync.GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: teamCatalogLease{}},
 		}
 		return collector, credential, client, 0

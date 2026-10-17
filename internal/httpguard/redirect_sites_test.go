@@ -100,9 +100,9 @@ var (
 var guardFunctions = map[string]bool{"NoRedirects": true, "NoRedirectsDoer": true, "NewClient": true}
 
 // pinnedOutOfScope: the production .go files that no linux/amd64 or linux/arm64 build contains, with the reason each holds no
-// client site: internal/auth/keystore/open_other.go is the non-Linux, non-Darwin keystore (no network); tools.go is
+// client site: internal/auth/keystore/open_other.go is the non-Linux, non-Darwin keystore (no network); internal/envelopemint/custody_other.go is the same for the envelope key file; tools.go is
 // `//go:build tools` (a list of tool imports).
-var pinnedOutOfScope = []string{"internal/auth/keystore/open_other.go", "tools.go"}
+var pinnedOutOfScope = []string{"internal/auth/keystore/open_other.go", "internal/envelopemint/custody_other.go", "tools.go"}
 
 // indexed is a function declaration with the type information of its own package.
 type indexed struct {

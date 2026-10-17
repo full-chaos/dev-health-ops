@@ -782,3 +782,7 @@ scaffold, and the comparator (CHAOS-4366 deliverable 5, CHAOS-4381 signed
 off 2026-08-27 19:44 PT). None of these is wired into a live request
 path yet — that is a later wave, per plan §6's Wave-0 scope ("no
 user-facing porting").
+
+## Envelope signing key custody
+
+One contract for signing-key files across the platform (web `readPrivateKey`, `internal/auth/keystore`, `internal/envelopemint`): opened `O_NOFOLLOW`, a regular file, 1 byte to a size bound (16 KiB here), no group or other permission bits (0600 or stricter), and it must parse as Ed25519 or the load fails. The envelope key is supplied as `GO_API_ENVELOPE_PRIVATE_KEY_FILE` (a path). The raw `GO_API_ENVELOPE_PRIVATE_KEY` value is deprecated: it still works, logs a warning that names only the variable, and loses to the file when both are set. `mint-envelope -key-file` follows the same contract. Mounted Secret files need `defaultMode: 0400`.

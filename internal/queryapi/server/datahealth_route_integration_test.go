@@ -98,7 +98,7 @@ func TestDataHealthRoute_OperatorGateThroughTheSignedEnvelope(t *testing.T) {
 		{"role admin", principal.Claims{OrgID: "org-1", Role: "admin"}, true},
 		{"role owner", principal.Claims{OrgID: "org-1", Role: "owner"}, true},
 		{"role ADMIN", principal.Claims{OrgID: "org-1", Role: "ADMIN"}, true},
-		{"superuser flag, member role", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true}, true},
+		{"superuser flag alone, member role", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true}, false},
 		{"superuser verified-only", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuserVerified: true}, false},
 		{"superuser verified and raw", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true, IsSuperuserVerified: true}, true},
 	} {

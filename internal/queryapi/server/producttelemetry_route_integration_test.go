@@ -67,9 +67,9 @@ func TestProductTelemetryRoute_GatesThroughTheSignedEnvelope(t *testing.T) {
 	}{
 		{"member", principal.Claims{OrgID: "org-1", Role: "owner"}, false},
 		{"verified-only flag", principal.Claims{OrgID: "org-1", IsSuperuserVerified: true}, false},
-		{"superuser", principal.Claims{OrgID: "org-1", IsSuperuser: true}, true},
-		{"superuser without org", principal.Claims{IsSuperuser: true}, true},
-		{"superuser impersonating", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true, ImpersonationActive: true, ImpersonatedBy: &impersonator}, false},
+		{"superuser", principal.Claims{OrgID: "org-1", IsSuperuser: true, IsSuperuserVerified: true}, true},
+		{"superuser without org", principal.Claims{IsSuperuser: true, IsSuperuserVerified: true}, true},
+		{"superuser impersonating", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true, IsSuperuserVerified: true, ImpersonationActive: true, ImpersonatedBy: &impersonator}, false},
 		{"impersonating flag alone", principal.Claims{OrgID: "org-1", ImpersonationActive: true}, false},
 	} {
 		t.Run("platform "+tc.name, func(t *testing.T) {
@@ -100,8 +100,8 @@ func TestProductTelemetryRoute_GatesThroughTheSignedEnvelope(t *testing.T) {
 		// As in Python's OrgIdAuthExtension: a verified, non-impersonating
 		// superuser may name another org (the operation then runs as it); an
 		// impersonating one may not.
-		{"superuser other org", principal.Claims{OrgID: "org-1", IsSuperuser: true}, "org-2", true},
-		{"superuser impersonating other org", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true, ImpersonationActive: true, ImpersonatedBy: &impersonator}, "org-2", false},
+		{"superuser other org", principal.Claims{OrgID: "org-1", IsSuperuser: true, IsSuperuserVerified: true}, "org-2", true},
+		{"superuser impersonating other org", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true, IsSuperuserVerified: true, ImpersonationActive: true, ImpersonatedBy: &impersonator}, "org-2", false},
 	} {
 		t.Run("org "+tc.name, func(t *testing.T) {
 			code, body := org(signDataHealthEnvelope(t, priv, tc.claims, valid), tc.orgArg)

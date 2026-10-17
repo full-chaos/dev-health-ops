@@ -26,7 +26,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"log"
 	"net/url"
-	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
@@ -167,14 +166,6 @@ func ResolveModelNameForOrg(
 				return "", false
 			}
 		}
-	}
-	for _, envName := range modelEnvByProvider[kind] {
-		if value := os.Getenv(envName); value != "" {
-			return value, true
-		}
-	}
-	if value := os.Getenv("LLM_MODEL"); value != "" {
-		return value, true
 	}
 	if def, ok := platformDefaultModel(kind); ok {
 		return def, true

@@ -20,8 +20,6 @@ import (
 // come from lookup.
 var knownDirectEnvironmentReads = []string{
 	"heatmap/identity.go: IDENTITY_MAPPING_PATH",
-	"investmentexplain/provider_org.go: LLM_MODEL",
-	"investmentexplain/provider_org.go: envName",
 	"people/identity.go: IDENTITY_MAPPING_PATH",
 	"quadrant/identity.go: IDENTITY_MAPPING_PATH",
 	"workgraph/displaynames.go: operationalOrderingContractEnv",

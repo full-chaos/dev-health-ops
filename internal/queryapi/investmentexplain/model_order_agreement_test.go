@@ -1,6 +1,7 @@
 package investmentexplain
 
 import (
+	"context"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
@@ -35,6 +36,11 @@ func TestCategorizeAndExplainResolveTheSameModel(t *testing.T) {
 			fromExplain, found := ResolveModelName(tc.kind, "")
 			if !found || fromCategorize != fromExplain || fromExplain != tc.want {
 				t.Fatalf("categorize = %q, explain = %q (found=%v), want both %q", fromCategorize, fromExplain, found, tc.want)
+			}
+			// The served routes resolve through the org-aware entry point.
+			fromOrg, foundOrg := ResolveModelNameForOrg(context.Background(), tc.kind, "", "org-1", nil)
+			if !foundOrg || fromOrg != tc.want {
+				t.Fatalf("explain for an org = %q (found=%v), want %q", fromOrg, foundOrg, tc.want)
 			}
 		})
 	}

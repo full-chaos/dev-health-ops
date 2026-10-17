@@ -328,8 +328,17 @@ func defaultModelForKind(kind ProviderKind) string {
 // CHAOS-4978 and D6043). Categorize, both explain routes and the budget
 // status read the model through it.
 func PlatformDefaultModel(kind ProviderKind) string {
-	lookup := func(name string) (string, bool) {
-		value, ok := envsecrets.ProcessLookup(name)
+	model := llmbudget.DefaultModel(string(kind), PlatformLookup(envsecrets.ProcessLookup))
+	slog.Debug("categorize: model resolved", "kind", kind, "model", model)
+	return model
+}
+
+// PlatformLookup wraps an environment lookup so that LLM_PROVIDER answers the
+// text provider a call runs by default (see PlatformDefaultModel). Every
+// reader of llmbudget.DefaultModel passes its lookup through it.
+func PlatformLookup(base func(string) (string, bool)) func(string) (string, bool) {
+	return func(name string) (string, bool) {
+		value, ok := base(name)
 		if name == "LLM_PROVIDER" {
 			if platform, err := ResolveTextProviderKind("auto"); err == nil {
 				return string(platform), true
@@ -337,9 +346,6 @@ func PlatformDefaultModel(kind ProviderKind) string {
 		}
 		return value, ok
 	}
-	model := llmbudget.DefaultModel(string(kind), lookup)
-	slog.Debug("categorize: model resolved", "kind", kind, "model", model)
-	return model
 }
 
 // ResolveModelName returns the model that WILL ACTUALLY BE USED for kind, and

@@ -3442,6 +3442,13 @@ over Jira, Linear, GitHub and GitLab). Where it is held:
   heuristic's work items skip it, and `issue_pr_fallback_retraction` retracts a stored lower-tier row and edge whose
   issue side is one (prod had `ghpr:...#120 -> 121` text rows and heuristic self-links). Tests:
   `pr_never_issue_side_test.go`.
+- **Invariant check (CHAOS-10062).** The pre-step `issue_pr_fallback_invariant` runs after
+  `issue_pr_edges_heuristic`, the last step that writes `work_graph_issue_pr`. It counts the lower-tier rows that
+  still sit beside a native link (by pull request side, by issue side, total). The count must be 0. The step repairs
+  nothing and does not fail the build: it sets the gauge `workgraph_issue_pr_fallback_beside_native_rows` per `org_id`
+  on every build (0 included) and logs a WARN `issue-pr fallback invariant breached` with the organization and the
+  counts, never row contents. A nonzero value is a writer regression. Tests: `fallback_invariant_test.go`,
+  `invariant_test.go`, `fallback_invariant_integration_test.go`.
 - **Readers.** Every reader of the link table, `team_repo_ownership` derivation (§0.4d) included, sees only links the
   rule allows once the build has run; no reader re-applies it.
 

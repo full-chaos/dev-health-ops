@@ -428,7 +428,13 @@ Two rules hold for every read of the tree:
    work-graph build first retracts the lower-tier rows a native link outranks
    (pre-step `issue_pr_fallback_retraction`, from `work_graph_issue_pr` and
    from `work_graph_edges`), so a row written before the rule, or before its
-   native link arrived, is gone after the next build. A pull or merge request
+   native link arrived, is gone after the next build. After the last link
+   writer of the build, pre-step `issue_pr_fallback_invariant` counts the
+   lower-tier rows that still sit beside a native one; the count must be 0.
+   It repairs nothing: it sets the gauge
+   `workgraph_issue_pr_fallback_beside_native_rows` per `org_id` on every
+   build and logs a WARN `issue-pr fallback invariant breached` with the
+   counts when the count is above 0. A pull or merge request
    work item (`ghpr:<owner>/<repo>#<n>`, `gitlab:<path>!<n>`) is never the
    issue side of a row: the text matcher and the heuristic skip it, and the
    same pre-step retracts a stored lower-tier row whose issue side is one.

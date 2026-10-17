@@ -38,3 +38,32 @@ func (step *issuePRFallbackRetractionPreStep) Run(ctx context.Context, claim wor
 		"edges_retired":   outcome.EdgesRetired,
 	}, nil
 }
+
+// issuePRFallbackInvariantPreStep checks the native-first rule after the last
+// step that writes work_graph_issue_pr (issue_pr_edges_heuristic): no
+// explicit_text or heuristic link may sit beside a native one. A breach is
+// reported (WARN, gauge, outcome) and not repaired, and it does not fail the
+// build, so the later graph steps still run.
+type issuePRFallbackInvariantPreStep struct {
+	service *issuepredges.Service
+}
+
+func newIssuePRFallbackInvariantPreStep(service *issuepredges.Service) (*issuePRFallbackInvariantPreStep, error) {
+	if service == nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	return &issuePRFallbackInvariantPreStep{service: service}, nil
+}
+
+func (step *issuePRFallbackInvariantPreStep) Name() string { return "issue_pr_fallback_invariant" }
+
+func (step *issuePRFallbackInvariantPreStep) Run(ctx context.Context, claim workgraph.Claim) (map[string]any, error) {
+	outcome, err := step.service.CheckFallbackInvariant(ctx, claim.Request.OrganizationID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"links_read":             outcome.LinksRead,
+		"fallback_beside_native": outcome.Beside.Total,
+	}, nil
+}

@@ -253,7 +253,6 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, since, until
 		total = len(out)
 	}
 	slog.DebugContext(ctx, "testopsjobfailures: resolved",
-		"org_id", orgID, "since", since.String(), "until", until.String(),
 		"groups", len(out), "total", total, "repo_scoped", len(scope.RepoIDs) > 0, "team_scoped", len(scope.TeamIDs) > 0)
 	return &model.TestOpsJobFailuresResult{Groups: out, TotalCount: total, Truncated: total > len(out)}, nil
 }

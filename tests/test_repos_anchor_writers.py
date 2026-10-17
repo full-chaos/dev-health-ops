@@ -6,6 +6,10 @@ wins, so ``provider_repo_id`` (migration 134) and ``identity_path`` (migration
 replaces. The Go writers do it under their stored-version contracts
 (internal/storedversion census); this module holds the Python writer to the
 same rule and scans ``src`` for another one.
+
+Limit of the scan: it finds an INSERT whose table name is the literal
+``repos``. A writer that builds the table name at run time, or that inserts
+through an indirect wrapper, is not detected.
 """
 
 from __future__ import annotations

@@ -233,29 +233,17 @@ def test_acr_api_talks_to_the_real_ops_and_the_stand_in_is_off_its_path(
     assert "dho-query-internal" in services(root)["go-api"]["networks"]
 
 
-def test_the_org_llm_config_source_is_passed_through_and_set_by_the_env_file(
+def test_the_org_llm_config_source_is_passed_through_and_no_file_sets_it(
     tmp_path,
 ) -> None:
+    """chris: a persistent BYO setting on bigboy bills his key. The compose file passes the variable through; the tracked env
+    file does not set it; an environment can turn it on for one run."""
     root = scratch_root(tmp_path)
-    pins = dict(
-        line.split("=", 1)
-        for line in PINS_FILE.read_text().splitlines()
-        if line and not line.startswith("#")
-    )
-    # the bigboy env file sets it; the compose file never hard-codes it
-    assert pins["ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"] == "ops"
-    assert "ORG_LLM_CONFIG_SOURCE: ops" not in COMPOSE_FILE.read_text()
     key = "ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"
-    assert services(root, "acr")["acr-api"]["environment"][key] == "ops"
-    # without it in the env file the value is empty, which acr reads as unset
-    (root / "_records" / "images.env").write_text(
-        "\n".join(
-            line
-            for line in PINS_FILE.read_text().splitlines()
-            if not line.startswith(key)
-        )
-        + "\n"
-    )
+    assert "ORG_LLM_CONFIG_SOURCE: ops" not in COMPOSE_FILE.read_text()
+    assert not any(line.startswith(key) for line in PINS_FILE.read_text().splitlines())
     assert services(root, "acr")["acr-api"]["environment"][key] == ""
+    on = services(root, "acr", **{key: "ops"})
+    assert on["acr-api"]["environment"][key] == "ops"
     # only acr-api reads it
     assert key not in services(root, "acr")["acr-projector"]["environment"]

@@ -1970,11 +1970,12 @@ services:
   # internal listener by alias, http://go-api:8091 (acr-api is on dho-query-internal, where go-api listens), and the bearer is the
   # file-backed secret acr_ops_svc_token (only its host path is here, ACR_OPS_SVC_TOKEN_FILE overrides it). CHAOS-9989:
   # ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE is passed through, EMPTY unless the environment sets it (empty = acr's own behaviour);
-  # the bigboy env file ci/bigboy/images.env (running copy _records/images.env) sets it to `ops`, which makes acr read an org's BYO LLM
-  # config from ops' internal route with that token (it needs the scope llm_config:read). The entitlement stand-in is no longer
+  # no tracked env file sets it, and none may on bigboy (chris: a persistent BYO setting bills his key). `ops` makes acr read an
+  # org's BYO LLM config from ops' internal route with that token (it needs the scope llm_config:read); set it for one run in the
+  # environment of the `docker compose up`, never in a file that stays. The entitlement stand-in is no longer
   # needed by acr-api (no dependency, no URL): it stays defined, in profile acr-venue, so a rollback is
-  # three env values and a start of the stand-in: ACR_DEV_HEALTH_ENTITLEMENT_URL=http://acr-entitlement-standin:8088,
-  # ACR_OPS_SVC_TOKEN_FILE=/var/lib/oci-cache/mcp-venue/secrets/entitlement_token, ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE=.
+  # two env values and a start of the stand-in: ACR_DEV_HEALTH_ENTITLEMENT_URL=http://acr-entitlement-standin:8088 and
+  # ACR_OPS_SVC_TOKEN_FILE=/var/lib/oci-cache/mcp-venue/secrets/entitlement_token.
   # The images acr-api and acr-mcp are built on this host (docker build --build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>:
   # without both args acr-api refuses the sidecar with a 426); they are pinned by LOCAL IMAGE ID in _records/images.env
   # (BIGBOY_ACR_API_IMAGE, BIGBOY_ACR_MCP_IMAGE); the database, graph and stand-in images are pinned by registry digest there too (BIGBOY_ACR_POSTGRES_IMAGE, BIGBOY_ACR_FALKORDB_IMAGE, BIGBOY_ACR_NGINX_IMAGE). Each defaults to a :not-resolved tag that fails at start instead of running a wrong image.

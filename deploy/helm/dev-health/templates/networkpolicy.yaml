@@ -35,7 +35,7 @@ spec:
     unlike go-api, get NO egress from this one: their database and DNS egress is the whole of it.
     */}}
     matchExpressions:
-      - {key: app.kubernetes.io/component, operator: NotIn, values: {{ toJson $excluded }}}
+      - {key: app.kubernetes.io/component, operator: NotIn, values: [{{ join ", " $excluded }}]}
     {{- end }}
   policyTypes:
     - Ingress

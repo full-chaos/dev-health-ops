@@ -802,6 +802,25 @@ func takeTimeTouchedDaysDrainStopCheckReadsAFanOutRunThatBeganBeforeThePreviousB
 	}
 }
 
+// updated_at is the worker's clock and created_at PostgreSQL's: a run created
+// after the cut is read even when the worker clock puts its last update before it.
+func takeTimeTouchedDaysDrainStopCheckReadsARunCreatedAfterTheCutWhenTheWorkerClockLags(t *testing.T, ctx context.Context, rig *drainRig) {
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	take := time.Now().UTC().Add(-4 * time.Hour).Truncate(time.Millisecond)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), uuid.NewString(), "touched", time.Now().UTC().Add(-5*time.Hour))
+	_, newest := drainBatches(t, ctx, rig, orgID, 0)
+	lagging := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), "succeeded", &take, time.Now().UTC().Add(-80*time.Minute))
+	if _, err := rig.touchedRig.pool.Exec(ctx, `UPDATE public.daily_metrics_runs SET updated_at = $2 WHERE id = $1::uuid`,
+		lagging, time.Now().UTC().Add(-3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
+	if got := rig.observer.count(drainEventChainStopped); got != 1 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 1: a run created after the cut was skipped because the worker clock lagged", got)
+	}
+}
+
 // More runs than the bound since the second batch is a real overflow: it warns.
 func takeTimeTouchedDaysDrainStopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
@@ -841,6 +860,7 @@ func TestTouchedDaysDrainTakeTime(t *testing.T) {
 		{"StopCheckStillSeesTheMissingMarkOfThePreviousBatch", takeTimeTouchedDaysDrainStopCheckStillSeesTheMissingMarkOfThePreviousBatch},
 		{"StopCheckKeepsFanOutRunsNewerThanThePreviousBatch", takeTimeTouchedDaysDrainStopCheckKeepsFanOutRunsNewerThanThePreviousBatch},
 		{"StopCheckReadsAFanOutRunThatBeganBeforeThePreviousBatchAndEndedAfterIt", takeTimeTouchedDaysDrainStopCheckReadsAFanOutRunThatBeganBeforeThePreviousBatchAndEndedAfterIt},
+		{"StopCheckReadsARunCreatedAfterTheCutWhenTheWorkerClockLags", takeTimeTouchedDaysDrainStopCheckReadsARunCreatedAfterTheCutWhenTheWorkerClockLags},
 		{"StopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow", takeTimeTouchedDaysDrainStopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow},
 		{"RunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound", takeTimeTouchedDaysDrainRunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound},
 		{"AFailedRunWithALostMarkStopsTheChain", takeTimeTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain},

@@ -344,9 +344,11 @@ WHERE org_id = $1::uuid AND generation = $2 AND touched_take_at IS NULL`,
 // the pass before it checked what came before its batch. Only the runs that
 // ENDED since the start of the second newest ended batch are read (the newest
 // batch is the previous pass's; the one before it is kept as a margin). The cut
-// is the end of a run, not its start: a fan-out run that began before that
-// batch and was still running when the earlier pass looked is read by the first
-// pass after it ended. With fewer than two ended batches the window alone bounds
+// is the later of a run's start and its last update, not its start alone: a
+// fan-out run that began before that batch and was still running when the
+// earlier pass looked is read by the first pass after it ended. created_at is
+// stamped by PostgreSQL and updated_at by the worker, so a worker clock that
+// lags cannot hide a run that started after the cut. With fewer than two ended batches the window alone bounds
 // the read.
 //
 // A run that is not ended is left out on purpose: the mark of a fan-out follows
@@ -383,7 +385,7 @@ func (store *PostgresStore) TouchedMarkingRunsToCheck(
   AND run.created_at >= clock_timestamp() - make_interval(secs => $5)
   AND (to_jsonb(run) ->> 'touched_take_at') IS NOT NULL
   AND ($4::uuid IS NULL OR run.id <> $4::uuid)
-  AND run.updated_at >= COALESCE((
+  AND GREATEST(run.created_at, run.updated_at) >= COALESCE((
         SELECT min(previous.created_at)
         FROM public.daily_metrics_runs AS previous
         WHERE previous.org_id = $1::uuid

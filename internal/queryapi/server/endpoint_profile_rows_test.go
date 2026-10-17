@@ -212,3 +212,77 @@ func dedupSorted(in []string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestEndpointProfileAnchorsStillPointAtTheirSymbols: every anchor of the
+// query-api rows and of the envelope credential class carries the text its
+// line must still hold, so a pinned file:line cannot drift silently. A row's
+// source line holds a registration of its route (the pattern, or the constant
+// it is written as).
+func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
+	lineOf := func(path string, line int) string {
+		raw, err := os.ReadFile(filepath.Join("../../..", path))
+		if err != nil {
+			t.Fatalf("anchor file %s: %v", path, err)
+		}
+		lines := strings.Split(string(raw), "\n")
+		if line < 1 || line > len(lines) {
+			t.Fatalf("anchor %s:%d is outside the file (%d lines)", path, line, len(lines))
+		}
+		return lines[line-1]
+	}
+	checked := 0
+	var walk func(node any, where string)
+	walk = func(node any, where string) {
+		switch value := node.(type) {
+		case map[string]any:
+			path, hasPath := value["path"].(string)
+			line, hasLine := value["line"].(float64)
+			if hasPath && hasLine && (value["repo"] == nil || value["repo"] == "ops") {
+				note, _ := value["note"].(string)
+				if note == "" {
+					t.Errorf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(line))
+				} else if !strings.Contains(lineOf(path, int(line)), note) {
+					t.Errorf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(lineOf(path, int(line))))
+				}
+				checked++
+			}
+			for key, child := range value {
+				walk(child, where+"/"+key)
+			}
+		case []any:
+			for index, child := range value {
+				walk(child, where+"["+strconv.Itoa(index)+"]")
+			}
+		}
+	}
+	for _, row := range loadQueryAPIRows(t) {
+		id, _ := row["id"].(string)
+		route, _ := row["route"].(string)
+		source := row["source"].(map[string]any)
+		file, line := source["file"].(string), int(source["line"].(float64))
+		text := lineOf(file, line)
+		if !strings.Contains(text, route) && !strings.Contains(text, "Handle") && !strings.Contains(text, "Pattern:") {
+			t.Errorf("row %q: %s:%d holds no registration of %s: %q", id, file, line, route, strings.TrimSpace(text))
+		}
+		walk(row["primary_validator"], id+"/primary_validator")
+		checked++
+	}
+	raw, err := os.ReadFile("../../../contracts/auth/v1/credential-classes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Classes []map[string]any `json:"classes"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, class := range document.Classes {
+		if class["class_id"] == "effective_principal_envelope" {
+			walk(class, "effective_principal_envelope")
+		}
+	}
+	if checked < 30 {
+		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
+	}
+}

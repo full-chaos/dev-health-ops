@@ -33,6 +33,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -68,6 +69,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -103,6 +105,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -138,6 +141,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -173,6 +177,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -208,6 +213,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -243,6 +249,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -278,6 +285,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -313,6 +321,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -348,6 +357,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -383,6 +393,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -418,6 +429,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -453,6 +465,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -488,6 +501,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -523,6 +537,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -558,6 +573,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -593,6 +609,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -628,6 +645,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -663,6 +681,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -698,6 +717,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -733,6 +753,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -768,6 +789,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -803,6 +825,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -838,6 +861,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -873,6 +897,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -908,6 +933,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -943,6 +969,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -978,6 +1005,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -1013,6 +1041,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -1048,6 +1077,7 @@
       "primary_validator": {
         "anchor": {
           "line": 248,
+          "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
         "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
@@ -1082,6 +1112,7 @@
       "primary_validator": {
         "anchor": {
           "line": 44,
+          "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
@@ -1111,11 +1142,47 @@
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
+      "id": "GET /graphql [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 252,
+          "note": "func authenticateGraphQLEdge",
+          "path": "internal/queryapi/server/graphql_edge_route.go"
+        },
+        "description": "authenticateGraphQLEdge: edge access token only (authenticateEdgeTokenOnly, live users row)."
+      },
+      "public_rationale": null,
+      "route": "/graphql",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/graphql_edge_route.go",
+        "line": 169
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "HS256",
+        "audience": null,
+        "issuer": null,
+        "token_type": "HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
       "id": "POST /graphql [dev-health-query-api @query,internal]",
       "method": "POST",
       "primary_validator": {
         "anchor": {
           "line": 252,
+          "note": "func authenticateGraphQLEdge",
           "path": "internal/queryapi/server/graphql_edge_route.go"
         },
         "description": "authenticateGraphQLEdge: edge access token only (authenticateEdgeTokenOnly, live users row)."
@@ -1141,8 +1208,8 @@
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
-      "id": "GET /healthz [dev-health-query-api @query,internal]",
-      "method": "GET",
+      "id": "api_route /healthz [dev-health-query-api @query,internal]",
+      "method": "api_route",
       "public_rationale": "Probe reached by the orchestrator; returns no tenant data.",
       "route": "/healthz",
       "service": "dev-health-query-api",
@@ -1200,6 +1267,7 @@
       "primary_validator": {
         "anchor": {
           "line": 44,
+          "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
@@ -1233,6 +1301,7 @@
       "primary_validator": {
         "anchor": {
           "line": 587,
+          "note": "func mcpAuthenticate",
           "path": "internal/queryapi/server/mcp_route.go"
         },
         "description": "mcpAuthenticate: internal identity headers only; any Authorization header is refused with 401."
@@ -1263,6 +1332,7 @@
       "primary_validator": {
         "anchor": {
           "line": 44,
+          "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
@@ -1299,6 +1369,7 @@
       "primary_validator": {
         "anchor": {
           "line": 44,
+          "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
@@ -1335,6 +1406,7 @@
       "primary_validator": {
         "anchor": {
           "line": 44,
+          "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
         "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
@@ -1360,8 +1432,8 @@
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
-      "id": "GET /readyz [dev-health-query-api @query,internal]",
-      "method": "GET",
+      "id": "api_route /readyz [dev-health-query-api @query,internal]",
+      "method": "api_route",
       "public_rationale": "Probe reached by the orchestrator; returns no tenant data.",
       "route": "/readyz",
       "service": "dev-health-query-api",
@@ -1405,5 +1477,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "69c55a77d9f17909ed097b523ae039a3cf258e7b"
+  "source_commit": "a99e8113113bd0dbcf279029893be5d7a9110206"
 }

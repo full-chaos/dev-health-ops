@@ -187,8 +187,8 @@ WHERE org_id = ? AND day = '2026-10-03' AND team_id = 'team-m' AND repo_id = toU
 		{"team-a", r1, "pull_request", "human"}: 1,
 		{"team-b", r2, "pull_request", "human"}: 1,
 		{"team-a", r4, "pull_request", "human"}: 1,
-		{"team-t2", r5, "incident", "human"}:      1,
-		{"team-m", r6, "story", "ai_assisted"}:    1,
+		{"team-t2", r5, "incident", "human"}:    1,
+		{"team-m", r6, "story", "ai_assisted"}:  1,
 	}
 	if len(got) != len(want) {
 		t.Errorf("incidents by row %v, want %v", got, want)

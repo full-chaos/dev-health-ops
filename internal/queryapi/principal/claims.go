@@ -42,6 +42,14 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+// G-14 position (CHAOS-4738): Permissions, Tier and LicensedFeatures stay on
+// the wire. The envelope lives 60 seconds and is minted per request, so stale
+// entitlement rides along for at most that long; it is an authorization input
+// the issuer computed, not a session credential. The superuser flags are the
+// exception that matters: Verify clears them unless both are present and no
+// impersonation is active (see enforceSuperuserDiscipline), so no consumer
+// reads an unproven grant.
+
 // UserID returns the envelope subject -- the authenticated user's id.
 // Exists so callers read "user id" as a named concept rather than
 // reaching into the embedded RegisteredClaims.Subject directly.

@@ -1031,7 +1031,22 @@ func querySubjectsInto(
 		}
 		result[subject.WorkItemID] = subject
 	}
-	return result, stepcause.Failure(stepcause.IterateWorkItems, rows.Err())
+	if err := rows.Err(); err != nil {
+		return result, stepcause.Failure(stepcause.IterateWorkItems, err)
+	}
+	anchor, err := teamattribution.AnchorGitLabSubjectProjects(ctx, conn, result)
+	if err != nil {
+		return nil, stepcause.Failure(stepcause.QueryWorkItems, err)
+	}
+	if anchor.IdentityPathWithheld > 0 {
+		slog.Default().InfoContext(ctx, "gitlab_subject_identity_path_withheld", "subjects", len(result),
+			"withheld", anchor.IdentityPathWithheld)
+	}
+	if anchor.Anchored+anchor.Unanchored > 0 {
+		slog.Default().DebugContext(ctx, "gitlab_subject_projects_anchored", "subjects", len(result),
+			"anchored", anchor.Anchored, "unanchored", anchor.Unanchored)
+	}
+	return result, nil
 }
 
 // loadDependencyEdges loads work_item_dependencies rows whose SOURCE is one
@@ -1351,7 +1366,7 @@ func (executor *WorkItemAttributionExecutor) loadFacts(
 func LoadWorkItemDerivationFacts(
 	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
 ) (teamattribution.GithubWorkItemDerivationFacts, error) {
-	loader := teamattribution.ClickHouseFactSource{Conn: conn}
+	loader := teamattribution.ClickHouseFactSource{Conn: conn, OnLegacyGitLabOwnership: logLegacyGitLabOwnership}
 	facts := teamattribution.GithubWorkItemDerivationFacts{}
 	var err error
 	if facts.Teams, err = loader.LoadTeams(ctx, orgID); err != nil {
@@ -1495,3 +1510,11 @@ func (executor *WorkItemAttributionExecutor) ComputePartition(
 
 // A compile-time pin that this executor IS the seam the handler drives.
 var _ PartitionExecutor = (*WorkItemAttributionExecutor)(nil)
+
+func logLegacyGitLabOwnership(ctx context.Context, remapped, ambiguousDropped int) {
+	level := slog.LevelDebug
+	if ambiguousDropped > 0 {
+		level = slog.LevelInfo
+	}
+	slog.Default().Log(ctx, level, "gitlab_legacy_ownership_remapped", "remapped", remapped, "ambiguous_dropped", ambiguousDropped)
+}

@@ -96,7 +96,7 @@ func TestAKeyHeldOnlyByOtherProvidersGivesNoKeyTierRow(t *testing.T) {
 			for _, other := range otherProviders(provider) {
 				teams = append(teams, GithubWorkItemDerivationTeamFact{Provider: other, TeamID: other + "-team", ProjectKeys: []string{key}})
 			}
-			subject := GithubWorkItemDerivationSubject{WorkItemID: provider + ":ONLY-1", Provider: provider, ProjectKey: &key, OrgID: "org"}
+			subject := GithubWorkItemDerivationSubject{WorkItemID: provider + ":ONLY-1", Provider: provider, ProjectKey: &key, ProjectID: &key, OrgID: "org"}
 			if tier == "native_team" {
 				subject.NativeTeamKey = &key
 			}
@@ -113,7 +113,7 @@ func TestAKeyHeldOnlyByOtherProvidersGivesNoKeyTierRow(t *testing.T) {
 					Teams: catalogOrder(append(append([]GithubWorkItemDerivationTeamFact{}, teams...),
 						GithubWorkItemDerivationTeamFact{Provider: provider, TeamID: "owner-team"})),
 					Projects: []GithubWorkItemDerivationProjectFact{
-						{Provider: provider, TeamID: "owner-team", TeamName: "Owner", ProjectKey: &key, IsPrimary: 1, Specificity: 110, Priority: 10},
+						{Provider: provider, TeamID: "owner-team", TeamName: "Owner", ProjectID: key, ProjectKey: &key, IsPrimary: 1, Specificity: 110, Priority: 10},
 					},
 				})
 				teamID, _, candidates := derived.Resolve(subject)

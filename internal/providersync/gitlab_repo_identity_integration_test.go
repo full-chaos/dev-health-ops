@@ -152,9 +152,9 @@ func TestGitLabRenameContinuesTheSameRepositoryAndWorkItem(t *testing.T) {
 	if beforeID != "gitlab:acme/api#42" {
 		t.Fatalf("work_item_id = %s, want the minted path gitlab:acme/api#42", beforeID)
 	}
-	// project_id stays the current path until 3b2.
-	if beforeProject != "acme/api" || afterProject != "platform/api-v2" || againProject != "platform/api-v2" {
-		t.Fatalf("project_id = %s, %s, %s; want the current path", beforeProject, afterProject, againProject)
+	// project_id is the catalog id of the numeric project, whatever its path.
+	if beforeProject != "org-acme:gitlab:123" || afterProject != beforeProject || againProject != beforeProject {
+		t.Fatalf("project_id = %s, %s, %s; want org-acme:gitlab:123 across the rename", beforeProject, afterProject, againProject)
 	}
 	want := map[string][3]string{beforeRepo: {"platform/api-v2", "acme/api", "123"}}
 	if got := store.reposRows(); len(got) != 1 || got[beforeRepo] != want[beforeRepo] {
@@ -168,7 +168,7 @@ func TestGitLabPathReuseMintsItsOwnIdentity(t *testing.T) {
 	store := startGitLabIdentityStore(t)
 	t0 := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
 	store.syncRepository("123", "acme/api", t0)
-	oldID, oldRepo, _ := store.workItem42("123", "acme/api")
+	oldID, oldRepo, oldProject := store.workItem42("123", "acme/api")
 	store.syncRepository("123", "platform/api-v2", t0.Add(time.Hour))
 
 	newID, newRepo, newProject := store.workItem42("456", "acme/api")
@@ -178,8 +178,10 @@ func TestGitLabPathReuseMintsItsOwnIdentity(t *testing.T) {
 	if newID != "gitlab:acme/api@456#42" || newRepo != mustRepositoryIdentity(t, "acme/api@456") {
 		t.Fatalf("project 456: (%s, %s), want the {path}@{N} identity", newRepo, newID)
 	}
-	if newProject != "acme/api" {
-		t.Fatalf("project_id = %s; it stays the current path until 3b2", newProject)
+	// LEAK (CHAOS-3383 3b2): the two projects must not share a project_id, or
+	// project ownership of one attributes the other's items.
+	if newProject == oldProject || newProject != "org-acme:gitlab:456" || oldProject != "org-acme:gitlab:123" {
+		t.Fatalf("project_id of project 123 = %s, of project 456 = %s; want org-acme:gitlab:123 and org-acme:gitlab:456", oldProject, newProject)
 	}
 	store.syncRepository("456", "acme/api", t0.Add(2*time.Hour))
 	again, againRepo, _ := store.workItem42("456", "acme/api")

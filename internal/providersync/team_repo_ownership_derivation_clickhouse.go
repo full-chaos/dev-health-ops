@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -1056,11 +1057,66 @@ GROUP BY o.provider, o.project_id, o.team_id`,
 		if err := rows.Scan(&link.Provider, &link.ProjectID, &link.TeamID, &isPrimary, &link.Specificity, &projectKey); err != nil {
 			return nil, err
 		}
-		link.ProjectID = teamattribution.ProjectOwnershipJoinID(link.Provider, link.ProjectID, projectKey)
 		link.IsPrimary = isPrimary == 1
 		out = append(out, link)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return remapLegacyGitLabProjectLinks(ctx, conn, orgID, out)
+}
+
+// remapLegacyGitLabProjectLinks moves a GitLab project ownership link written
+// before CHAOS-8883 (project_id holds the path) to the catalog id of the one
+// project its path names, so it joins the items anchored to that id. A link
+// whose path two projects have used is dropped; a link whose path no repos row
+// names stays as it is.
+func remapLegacyGitLabProjectLinks(
+	ctx context.Context, conn driver.Conn, orgID string, links []TeamRepoOwnershipProjectLink,
+) ([]TeamRepoOwnershipProjectLink, error) {
+	var paths []string
+	seen := map[string]struct{}{}
+	for _, link := range links {
+		if link.Provider != "gitlab" || link.ProjectID == "" || teamattribution.IsGitLabCatalogProjectID(link.ProjectID) {
+			continue
+		}
+		path := strings.ToLower(strings.TrimSpace(link.ProjectID))
+		if _, dup := seen[path]; !dup {
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return links, nil
+	}
+	natives, ambiguous, err := teamattribution.LoadGitLabProjectNativesByPath(ctx, conn, orgID, paths)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TeamRepoOwnershipProjectLink, 0, len(links))
+	remapped, dropped := 0, 0
+	for _, link := range links {
+		if link.Provider == "gitlab" && link.ProjectID != "" && !teamattribution.IsGitLabCatalogProjectID(link.ProjectID) {
+			path := strings.ToLower(strings.TrimSpace(link.ProjectID))
+			if _, bad := ambiguous[path]; bad {
+				dropped++
+				continue
+			}
+			if native, ok := natives[path]; ok {
+				link.ProjectID = teamattribution.GitLabCatalogProjectIDString(orgID, native)
+				remapped++
+			}
+		}
+		out = append(out, link)
+	}
+	if remapped+dropped > 0 {
+		level := slog.LevelDebug
+		if dropped > 0 {
+			level = slog.LevelInfo
+		}
+		slog.Default().Log(ctx, level, "gitlab_legacy_ownership_links_remapped", "org_id", orgID, "remapped", remapped, "ambiguous_dropped", dropped)
+	}
+	return out, nil
 }
 
 // loadTeamRepoOwnershipTeamLinkProviders reads every (provider, team) pair a
@@ -1147,7 +1203,49 @@ WHERE org_id = ?`,
 		}
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return anchorGitLabOwnershipWorkItems(ctx, conn, orgID, out)
+}
+
+// anchorGitLabOwnershipWorkItems gives a GitLab work item written before the
+// numeric-id anchoring (project_id holds the path) the catalog id of the
+// project its repo names, so it joins the same project ownership as an item
+// written after. An item whose repo names no project keeps its path and joins
+// nothing.
+func anchorGitLabOwnershipWorkItems(
+	ctx context.Context, conn driver.Conn, orgID string, items []TeamRepoOwnershipWorkItem,
+) ([]TeamRepoOwnershipWorkItem, error) {
+	repoSet := map[string]struct{}{}
+	for _, item := range items {
+		if item.Provider == "gitlab" && item.RepoID != "" && !teamattribution.IsGitLabCatalogProjectID(item.ProjectID) {
+			repoSet[item.RepoID] = struct{}{}
+		}
+	}
+	if len(repoSet) == 0 {
+		return items, nil
+	}
+	repoIDs := make([]string, 0, len(repoSet))
+	for id := range repoSet {
+		repoIDs = append(repoIDs, id)
+	}
+	native, err := teamattribution.LoadGitLabRepoRows(ctx, conn, orgID, repoIDs)
+	if err != nil {
+		return nil, err
+	}
+	anchored := 0
+	for index, item := range items {
+		if item.Provider != "gitlab" || teamattribution.IsGitLabCatalogProjectID(item.ProjectID) {
+			continue
+		}
+		if row, ok := native[item.RepoID]; ok && row.NativeProjectID != "" {
+			items[index].ProjectID = teamattribution.GitLabCatalogProjectIDString(orgID, row.NativeProjectID)
+			anchored++
+		}
+	}
+	slog.Default().DebugContext(ctx, "team_repo_ownership_gitlab_items_anchored", "org_id", orgID, "repos", len(repoIDs), "anchored", anchored)
+	return items, nil
 }
 
 // loadTeamRepoOwnershipKnownTeams loads this org's CURRENT team catalog

@@ -169,6 +169,13 @@ func (source jiraWorkItemClickHouseDerivationContextSource) Load(
 	return facts, nil
 }
 
+// AnchorGitLabSubjects delegates: a Jira run's donors may be GitLab items.
+func (source jiraWorkItemClickHouseDerivationContextSource) AnchorGitLabSubjects(
+	ctx context.Context, subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
+) error {
+	return source.delegate.AnchorGitLabSubjects(ctx, subjects)
+}
+
 // LoadStoredInheritableEdges keeps the Jira-local source on the same
 // stored-edge contract as the shared one (CHAOS-3978). It fences the claim to
 // Jira exactly as Load does, then delegates: the read itself is

@@ -244,7 +244,7 @@ func gitlabWorkItemLabels(labels []string) []string {
 
 func normalizeGitLabIssueWorkItem(
 	claim Claim,
-	fullName, identityPath string,
+	fullName, identityPath, catalogProjectID string,
 	repoID uuid.UUID,
 	payload gitlabIssueWorkItemPayload,
 	labelEvents []gitlabLabelEventPayload,
@@ -253,7 +253,7 @@ func normalizeGitLabIssueWorkItem(
 	normalizedAt time.Time,
 ) (gitlabWorkItemRow, []gitlabWorkItemTransitionRow, error) {
 	if claim.Validate() != nil || claim.Provider != "gitlab" || claim.Dataset != "work-items" ||
-		strings.TrimSpace(fullName) == "" || strings.TrimSpace(identityPath) == "" || repoID == uuid.Nil || payload.IID < 1 ||
+		strings.TrimSpace(fullName) == "" || strings.TrimSpace(identityPath) == "" || strings.TrimSpace(catalogProjectID) == "" || repoID == uuid.Nil || payload.IID < 1 ||
 		strings.TrimSpace(payload.Title) == "" || statusMapping == nil || normalizedAt.IsZero() {
 		return gitlabWorkItemRow{}, nil, ErrInvalidConfiguration
 	}
@@ -315,7 +315,7 @@ func normalizeGitLabIssueWorkItem(
 		kind: gitlabIssueSourceKind, workItemID: workItemID, fullName: fullName, epic: payload.Epic,
 		title: payload.Title, typeName: typeValue, status: status,
 		statusRaw: nullableString(payload.State), description: description, repoID: &repoID,
-		projectID: stringPointer(fullName), assignees: assignees, reporter: reporter,
+		projectID: stringPointer(catalogProjectID), projectKey: stringPointer(identityPath), assignees: assignees, reporter: reporter,
 		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), startedAt: startedAt,
 		completedAt: completedAt, closedAt: closedAt, labels: labels, storyPoints: payload.Weight,
 		sprintID: milestoneID, sprintName: milestoneName, url: urlValue,
@@ -381,7 +381,7 @@ func normalizeGitLabIssueLabelTransitions(
 
 func normalizeGitLabMergeRequestWorkItem(
 	claim Claim,
-	fullName, identityPath string,
+	fullName, identityPath, catalogProjectID string,
 	repoID uuid.UUID,
 	payload gitlabMergeRequestWorkItemPayload,
 	stateEvents []gitlabStateEventPayload,
@@ -389,7 +389,7 @@ func normalizeGitLabMergeRequestWorkItem(
 	normalizedAt time.Time,
 ) (gitlabWorkItemRow, []gitlabWorkItemTransitionRow, []gitlabWorkItemReopenRow, error) {
 	if claim.Validate() != nil || claim.Provider != "gitlab" || claim.Dataset != "work-items" ||
-		strings.TrimSpace(fullName) == "" || strings.TrimSpace(identityPath) == "" || repoID == uuid.Nil || payload.IID < 1 ||
+		strings.TrimSpace(fullName) == "" || strings.TrimSpace(identityPath) == "" || strings.TrimSpace(catalogProjectID) == "" || repoID == uuid.Nil || payload.IID < 1 ||
 		strings.TrimSpace(payload.Title) == "" || normalizedAt.IsZero() {
 		return gitlabWorkItemRow{}, nil, nil, ErrInvalidConfiguration
 	}
@@ -460,7 +460,7 @@ func normalizeGitLabMergeRequestWorkItem(
 		workItemID: "gitlab:" + identityPath + "!" + strconv.Itoa(payload.IID),
 		title:      payload.Title, typeName: "merge_request", status: status,
 		statusRaw: nullableString(statusRaw), description: description, repoID: &repoID,
-		projectID: stringPointer(fullName), assignees: assignees, reporter: reporter,
+		projectID: stringPointer(catalogProjectID), projectKey: stringPointer(identityPath), assignees: assignees, reporter: reporter,
 		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), startedAt: createdAt,
 		completedAt: completedAt, closedAt: closedValue, labels: labels,
 		storyPoints: payload.Weight, sprintID: milestoneID, sprintName: milestoneName,
@@ -982,14 +982,14 @@ type gitlabWorkItemSource struct {
 	fullName string
 	epic     *gitlabIssueEpicPayload
 
-	workItemID, title, typeName, status              string
-	statusRaw, description, projectID, reporter, url *string
-	sprintID, sprintName, priorityRaw, serviceClass  *string
-	repoID                                           *uuid.UUID
-	assignees, labels                                []string
-	createdAt, updatedAt                             time.Time
-	startedAt, completedAt, closedAt, dueAt          *time.Time
-	storyPoints                                      *float64
+	workItemID, title, typeName, status                          string
+	statusRaw, description, projectID, projectKey, reporter, url *string
+	sprintID, sprintName, priorityRaw, serviceClass              *string
+	repoID                                                       *uuid.UUID
+	assignees, labels                                            []string
+	createdAt, updatedAt                                         time.Time
+	startedAt, completedAt, closedAt, dueAt                      *time.Time
+	storyPoints                                                  *float64
 }
 
 func (s gitlabWorkItemSource) sourceKind() string { return s.kind }
@@ -1005,7 +1005,7 @@ func (s gitlabWorkItemSource) StatusRaw() *string      { return s.statusRaw }
 func (s gitlabWorkItemSource) Description() *string    { return s.description }
 func (s gitlabWorkItemSource) RepoID() *uuid.UUID      { return s.repoID }
 func (s gitlabWorkItemSource) NativeTeamKey() *string  { return nil }
-func (s gitlabWorkItemSource) ProjectKey() *string     { return nil }
+func (s gitlabWorkItemSource) ProjectKey() *string     { return s.projectKey }
 func (s gitlabWorkItemSource) ProjectID() *string      { return s.projectID }
 func (s gitlabWorkItemSource) ProjectName() *string    { return nil }
 func (s gitlabWorkItemSource) Assignees() []string     { return s.assignees }

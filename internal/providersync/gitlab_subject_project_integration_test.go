@@ -110,3 +110,26 @@ func TestLoadGitLabProjectNativesByPathOnARealStore(t *testing.T) {
 		t.Fatal("a reused path still maps to one project")
 	}
 }
+
+// The sync-time context source anchors a freshly written GitLab subject through
+// the real repos row: the renamed project's paths reach the subject.
+func TestSyncTimeContextSourceAnchorsAGitLabSubjectOnARealStore(t *testing.T) {
+	store := startGitLabIdentityStore(t)
+	t0 := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	store.syncRepository("123", "acme/api", t0)
+	store.syncRepository("123", "platform/api-v2", t0.Add(time.Hour))
+	repo := mustRepositoryIdentity(t, "acme/api")
+
+	source := githubWorkItemClickHouseDerivationContextSource{Conn: store.conn, Lease: store.lease}
+	subjects := map[string]teamattribution.GithubWorkItemDerivationSubject{
+		"gitlab:acme/api#1": {WorkItemID: "gitlab:acme/api#1", Provider: "gitlab", OrgID: "org-acme", RepoID: &repo,
+			ProjectID: strPtr("org-acme:gitlab:123"), ProjectKey: strPtr("acme/api")},
+	}
+	if err := source.AnchorGitLabSubjects(store.ctx, subjects); err != nil {
+		t.Fatal(err)
+	}
+	got := subjects["gitlab:acme/api#1"]
+	if len(got.GitLabPaths) != 2 || got.GitLabPaths[0] != "platform/api-v2" || got.GitLabPaths[1] != "acme/api" {
+		t.Fatalf("paths = %v, want [platform/api-v2 acme/api]", got.GitLabPaths)
+	}
+}

@@ -244,6 +244,22 @@ func loadWorkItemDerivationContextForProvider(
 		subjects[subject.WorkItemID] = subject
 		written[subject.WorkItemID] = struct{}{}
 	}
+	// A GitLab subject written by this run, and a GitLab donor, is anchored the way
+	// the attribution read anchors a stored one: its catalog id and the paths its
+	// repos row answers to, so a full-name join finds a renamed project's items.
+	if anchorer, ok := source.(githubWorkItemGitLabSubjectAnchorer); ok {
+		if err := anchorer.AnchorGitLabSubjects(ctx, subjects); err != nil {
+			return teamattribution.GithubWorkItemDerivationContext{}, err
+		}
+		for id, subject := range subjects {
+			if len(subject.GitLabPaths) > 0 {
+				if derived.GitLabPathsByWorkItem == nil {
+					derived.GitLabPathsByWorkItem = map[string][]string{}
+				}
+				derived.GitLabPathsByWorkItem[id] = subject.GitLabPaths
+			}
+		}
+	}
 	// CHAOS-9460: a donor gives the team of its own row. An item this run
 	// writes gives the row this run writes for it; any other donor gives its
 	// stored row, never a resolution of it in this run's context.
@@ -620,3 +636,29 @@ func logLegacyGitLabOwnershipRemap(ctx context.Context, remapped, ambiguousDropp
 	}
 	slog.Default().Log(ctx, level, "gitlab_legacy_ownership_remapped", "remapped", remapped, "ambiguous_dropped", ambiguousDropped)
 }
+
+// githubWorkItemGitLabSubjectAnchorer is implemented by the sources that can read
+// the repos rows GitLab subjects are anchored through (the ClickHouse source).
+type githubWorkItemGitLabSubjectAnchorer interface {
+	AnchorGitLabSubjects(ctx context.Context, subjects map[string]teamattribution.GithubWorkItemDerivationSubject) error
+}
+
+func (source githubWorkItemClickHouseDerivationContextSource) AnchorGitLabSubjects(
+	ctx context.Context, subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
+) error {
+	stats, err := teamattribution.AnchorGitLabSubjectProjects(ctx, source.Conn, subjects)
+	if err != nil {
+		return err
+	}
+	if stats.Anchored+stats.Unanchored+stats.IdentityPathWithheld > 0 {
+		level := slog.LevelDebug
+		if stats.IdentityPathWithheld > 0 {
+			level = slog.LevelInfo
+		}
+		slog.Default().Log(ctx, level, "gitlab_subject_projects_anchored", "stage", "sync_time", "subjects", len(subjects),
+			"anchored", stats.Anchored, "unanchored", stats.Unanchored, "identity_path_withheld", stats.IdentityPathWithheld)
+	}
+	return nil
+}
+
+var _ githubWorkItemGitLabSubjectAnchorer = githubWorkItemClickHouseDerivationContextSource{}

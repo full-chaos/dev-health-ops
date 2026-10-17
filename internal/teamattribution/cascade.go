@@ -301,6 +301,10 @@ type GithubWorkItemDerivationContext struct {
 	// "linked_issue=<item id>".
 	LinkedIssueEvidence map[string]string
 	StoredEdgeMerge     GithubWorkItemStoredEdgeMergeObservation
+	// GitLabPathsByWorkItem: item id -> the paths its GitLab repos row answers to
+	// (AnchorGitLabSubjectProjects), for a subject built from a freshly written
+	// row, which carries none. resolve fills them in when the subject has none.
+	GitLabPathsByWorkItem map[string][]string
 	// teamsWithOwnership and teamsKnownFromCatalog together answer CHAOS-
 	// 5649's (R179 rule 2, chris 2026-09-12) null-carrying-team question.
 	// teamsWithOwnership: every team_id that owns at least one repo
@@ -793,6 +797,11 @@ func (derived GithubWorkItemDerivationContext) ResolveWithMembershipRejections(
 func (derived GithubWorkItemDerivationContext) resolve(
 	subject GithubWorkItemDerivationSubject,
 ) (*string, *string, []GithubWorkItemDerivationCandidate, []GithubWorkItemDerivationRejectedMembership) {
+	if len(subject.GitLabPaths) == 0 {
+		if paths, ok := derived.GitLabPathsByWorkItem[subject.WorkItemID]; ok {
+			subject.GitLabPaths = paths
+		}
+	}
 	bySource := map[string][]GithubWorkItemDerivationCandidate{}
 	rejections := []GithubWorkItemDerivationRejectedMembership{}
 	if candidate := derived.NativeTeamCandidate(subject); candidate != nil {

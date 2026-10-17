@@ -151,6 +151,8 @@ func TestRateLimitedResponseCarriesTheBudgetDimension(t *testing.T) {
 		{"search", "github", "/search/issues", "429", `{"message":"rate limit"}`, "search"},
 		{"secondary", "github", "/repos/acme/api", "403", `{"message":"You have exceeded a secondary rate limit"}`, "secondary_abuse_risk"},
 		{"gitlab graphql", "gitlab", "/api/graphql", "429", `{"message":"rate limit"}`, "graphql_cost"},
+		{"jira jql search", "jira", "/rest/api/3/search/jql", "429", `{"message":"rate limit"}`, "search"},
+		{"jira rest", "jira", "/rest/api/3/issue/ABC-1", "429", `{"message":"rate limit"}`, "rest_core"},
 		{"github enterprise search", "github", "/api/v3/search/issues", "429", `{"message":"rate limit"}`, "search"},
 		{"github enterprise rest", "github", "/api/v3/repos/acme/api", "429", `{"message":"rate limit"}`, "rest_core"},
 		{"github enterprise graphql", "github", "/api/graphql", "429", `{"message":"rate limit"}`, "graphql_cost"},

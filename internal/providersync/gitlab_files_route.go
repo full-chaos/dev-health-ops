@@ -372,7 +372,7 @@ func fetchGitLabGraphQLBlobs(
 	if err != nil {
 		return nil, providerfoundation.ErrNormalizationInvalid
 	}
-	response, err := client.Do(ctx, http.MethodPost, gitLabGraphQLURL(client), bytes.NewReader(body))
+	response, err := client.Do(providerfoundation.WithBudgetDimension(ctx, BudgetRESTCore), http.MethodPost, gitLabGraphQLURL(client), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

@@ -777,22 +777,25 @@ func logWorldTableDifference(t *testing.T, committed, produced WorldTable) {
 		columns = append(columns, column.Name)
 	}
 	t.Logf("%s: committed %d rows, produced %d rows; columns %v", produced.Name, len(committed.Rows), len(produced.Rows), columns)
+	// Rows are listed by distinct content first: a row written once per window
+	// is a repeat, a row with other content or missing on a side is a difference.
 	report := func(label string, from, other map[string]int) {
-		shown := 0
-		for row, count := range from {
-			if other[row] >= count {
+		shown, distinct := 0, 0
+		for row := range from {
+			if other[row] > 0 {
 				continue
 			}
-			if shown == 3 {
-				break
+			distinct++
+			if shown == 12 {
+				continue
 			}
 			shown++
-			missing := count - other[row]
-			if len(row) > 600 {
-				row = row[:600] + "..."
+			if len(row) > 500 {
+				row = row[:500] + "..."
 			}
-			t.Logf("  %s (x%d): %s", label, missing, row)
+			t.Logf("  %s (content absent on the other side): %s", label, row)
 		}
+		t.Logf("  %s: %d distinct row contents absent on the other side", label, distinct)
 	}
 	report("only committed", left, right)
 	report("only produced", right, left)

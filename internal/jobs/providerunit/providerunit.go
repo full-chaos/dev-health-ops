@@ -405,7 +405,7 @@ const RateLimitCategory = "rate_limit"
 // ChunkContinuationRepository. Production's PostgresRepository implements it.
 type RateLimitDeferralRepository interface {
 	RateLimitEpisode(context.Context, providersync.Claim) (providersync.RateLimitEpisode, error)
-	DeferForRateLimit(context.Context, providersync.Claim, time.Time, time.Time) error
+	DeferForRateLimit(context.Context, providersync.Claim, time.Time, time.Time, providersync.RateLimitObservation) error
 }
 
 // ChunkContinuationRepository is optional so legacy repository test doubles
@@ -1040,7 +1040,7 @@ func (handler *Handler) Work(
 			plan, granted := planRateLimitDeferral(retryAfter, episode, session.Claim.ID, completedAt)
 			if granted {
 				if deferErr := deferrer.DeferForRateLimit(
-					context.WithoutCancel(ctx), session.Claim, plan.notBefore, completedAt,
+					context.WithoutCancel(ctx), session.Claim, plan.notBefore, completedAt, rateLimitObservation(err),
 				); deferErr != nil {
 					return jobruntime.Retryable(jobruntime.WithSafeCauseText(deferErr,
 						safeCause(retryCauseRateLimitDeferFailed, session.Claim, execution, deferErr)))
@@ -1159,6 +1159,18 @@ func (handler *Handler) Work(
 	// "dev-health job failed [retryable]" string.
 	return jobruntime.Retryable(jobruntime.WithSafeCauseText(err,
 		safeCause(retryCauseExecution, session.Claim, execution, err)))
+}
+
+// rateLimitObservation is the budget dimension and the provider's delay of the
+// rate limit that deferred the unit, for the durable observation row.
+func rateLimitObservation(err error) providersync.RateLimitObservation {
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) {
+		return providersync.RateLimitObservation{}
+	}
+	return providersync.RateLimitObservation{
+		Dimension: providerErr.Dimension, RetryAfter: providerErr.RetryAfter,
+	}
 }
 
 // providerRateLimitDelay reports whether the failure is a provider rate limit

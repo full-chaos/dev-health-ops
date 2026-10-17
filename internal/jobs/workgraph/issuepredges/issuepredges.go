@@ -75,6 +75,9 @@ type WorkItemRow struct {
 	RepoID     uuid.UUID
 	WorkItemID string
 	Provider   string
+	// CurrentPath is a renamed GitLab repository's current path, when it is not
+	// the path in WorkItemID (CHAOS-3383); empty otherwise.
+	CurrentPath string
 }
 
 // parseProvenance mirrors WorkGraphBuilder._parse_provenance (builder.py:242-253)
@@ -212,6 +215,18 @@ func buildProviderLookup(workItems []WorkItemRow) providerLookup {
 				num := wi.WorkItemID[idx+1:]
 				lookup.gitlab[[2]string{wi.RepoID.String(), num}] = wi.WorkItemID
 			}
+		}
+	}
+	// A renamed GitLab project's items keep the path their repository id was
+	// minted from, while a group/project#n in text names its current path.
+	// That path names this project now, also over another project's item that
+	// still carries it.
+	for _, wi := range workItems {
+		if wi.Provider != "gitlab" || wi.CurrentPath == "" || issueprlinks.IsPullRequestWorkItem(wi.WorkItemID) {
+			continue
+		}
+		if idx := strings.LastIndex(wi.WorkItemID, "#"); idx >= 0 {
+			lookup.byID[strings.ToLower("gitlab:"+wi.CurrentPath+wi.WorkItemID[idx:])] = wi.WorkItemID
 		}
 	}
 	return lookup

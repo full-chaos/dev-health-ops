@@ -80,6 +80,8 @@ type gitLabTestsCasePayload struct {
 // same fetch, normalization, and six-effect boundary; only request evidence
 // retains the claimed dataset identity.
 type GitLabTestsRouteHandler struct {
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
 	MaxPipelines int
 	MaxPages     int
 }
@@ -136,7 +138,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	fullName := gitLabProjectFullName(project)
-	repoID, err := repositoryIdentity(fullName)
+	repoID, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

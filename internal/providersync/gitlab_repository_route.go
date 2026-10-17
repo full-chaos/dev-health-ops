@@ -39,9 +39,12 @@ type gitLabRepositorySettings struct {
 // (gitlab, repo-metadata) route. It mirrors the Python dataset adapter's
 // unconditional project fetch and repository write while retaining Go's
 // authoritative lease/effect lifecycle.
-type GitLabRepositoryRouteHandler struct{}
+type GitLabRepositoryRouteHandler struct {
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
+}
 
-func (GitLabRepositoryRouteHandler) Collect(
+func (handler GitLabRepositoryRouteHandler) Collect(
 	ctx context.Context,
 	claim Claim,
 	_ providerfoundation.Credential,
@@ -71,7 +74,7 @@ func (GitLabRepositoryRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	fullName := gitLabProjectFullName(payload)
-	identity, err := repositoryIdentity(fullName)
+	identity, err := resolveGitLabRepoIdentity(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -104,12 +107,12 @@ func (GitLabRepositoryRouteHandler) Collect(
 	}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	row := repositoryRow{
-		ID: identity, OrgID: claim.OrgID, Repo: fullName,
+		ID: identity.RepoID, OrgID: claim.OrgID, Repo: fullName,
 		CreatedAt: normalizedAt, Settings: string(settings), Tags: string(tags),
 		Provider: "gitlab", LastSynced: normalizedAt,
 		ProviderRepoID: strconv.FormatInt(parsedProjectID, 10),
-		// The id above is minted from fullName: this is the path it came from.
-		IdentityPath: fullName,
+		// repo is the current path; identity_path is the path the id was minted from.
+		IdentityPath: identity.Path,
 	}
 	if err := row.validate(claim); err != nil {
 		return CompleteRouteBatch{}, err

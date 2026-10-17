@@ -123,7 +123,7 @@ func quietLogger() *slog.Logger {
 func stubResponsesForOneLink() [][][]any {
 	return [][][]any{
 		{{testOrg, testGHPRRef, testLinear, "linear_attachment", testSynced}}, // dependencies
-		{{testOrg, testRepoID, testSlug}},                                     // repos
+		{{testOrg, testRepoID, testSlug, ""}},                                 // repos
 		{{testOrg, testRepoID, uint32(12)}},                                   // pull requests
 		{{testOrg, testLinear}},                                               // work items
 	}

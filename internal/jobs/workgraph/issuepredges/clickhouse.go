@@ -255,6 +255,43 @@ func (loader *Loader) loadWorkItems(ctx context.Context, orgID string) ([]WorkIt
 		}
 		out = append(out, row)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	renamed, err := loader.loadRenamedGitLabRepos(ctx, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("load renamed gitlab repos: %w", err)
+	}
+	for index := range out {
+		if out[index].Provider == "gitlab" {
+			out[index].CurrentPath = renamed[out[index].RepoID]
+		}
+	}
+	return out, nil
+}
+
+// loadRenamedGitLabRepos maps the GitLab repositories whose current path is
+// not the path their id was minted from (CHAOS-3383) to that current path.
+func (loader *Loader) loadRenamedGitLabRepos(ctx context.Context, orgID string) (map[uuid.UUID]string, error) {
+	rows, err := loader.conn.Query(ctx, `
+SELECT id, repo FROM repos FINAL
+WHERE org_id = {org_id:String} AND provider = 'gitlab' AND identity_path != '' AND identity_path != repo`,
+		clickhouse.Named("org_id", orgID))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[uuid.UUID]string{}
+	for rows.Next() {
+		var (
+			id   uuid.UUID
+			repo string
+		)
+		if err := rows.Scan(&id, &repo); err != nil {
+			return nil, err
+		}
+		out[id] = repo
+	}
 	return out, rows.Err()
 }
 

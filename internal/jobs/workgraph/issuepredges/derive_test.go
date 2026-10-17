@@ -178,23 +178,30 @@ func TestExplicitTextTierProviderMatrix(t *testing.T) {
 		wantEdge  string
 		wantAmbig int
 	}{
-		{"jira row named", "Fix PAY-2 totals", []WorkItemRow{{repoID, "jira:PAY-2", "jira"}}, "jira:PAY-2", "references", 0},
-		{"jira key no row", "Fix PAY-2 totals", []WorkItemRow{{repoID, "jira:PAY-9", "jira"}}, "", "", 0},
-		{"linear row named", "MOB-1 checkout layout", []WorkItemRow{{repoID, "linear:MOB-1", "linear"}}, "linear:MOB-1", "references", 0},
-		{"linear key no row", "MOB-1 checkout layout", []WorkItemRow{{repoID, "linear:MOB-2", "linear"}}, "", "", 0},
+		{"jira row named", "Fix PAY-2 totals", []WorkItemRow{{repoID, "jira:PAY-2", "jira", ""}}, "jira:PAY-2", "references", 0},
+		{"jira key no row", "Fix PAY-2 totals", []WorkItemRow{{repoID, "jira:PAY-9", "jira", ""}}, "", "", 0},
+		{"linear row named", "MOB-1 checkout layout", []WorkItemRow{{repoID, "linear:MOB-1", "linear", ""}}, "linear:MOB-1", "references", 0},
+		{"linear key no row", "MOB-1 checkout layout", []WorkItemRow{{repoID, "linear:MOB-2", "linear", ""}}, "", "", 0},
 		{"jira-looking prefix, org has no rows of it", "ABC-77 thing", nil, "", "", 0},
-		{"same key in jira and linear is ambiguous", "ABC-1 thing", []WorkItemRow{{repoID, "jira:ABC-1", "jira"}, {repoID, "linear:ABC-1", "linear"}}, "", "", 1},
-		{"github same-repo #n", "Closes #5", []WorkItemRow{{repoID, "gh:o/r#5", "github"}}, "gh:o/r#5", "implements", 0},
-		{"github #n no row", "Closes #6", []WorkItemRow{{repoID, "gh:o/r#5", "github"}}, "", "", 0},
-		{"github owner/repo#n", "Relates to other/lib#12", []WorkItemRow{{uuid.New(), "gh:other/lib#12", "github"}}, "gh:other/lib#12", "references", 0},
-		{"github owner/repo#n no row", "Relates to other/lib#13", []WorkItemRow{{uuid.New(), "gh:other/lib#12", "github"}}, "", "", 0},
-		{"gitlab same-repo #n", "see #7", []WorkItemRow{{repoID, "gitlab:g/p#7", "gitlab"}}, "gitlab:g/p#7", "references", 0},
-		{"gitlab group/project#n", "see grp/sub/proj#8", []WorkItemRow{{uuid.New(), "gitlab:grp/sub/proj#8", "gitlab"}}, "gitlab:grp/sub/proj#8", "references", 0},
-		{"github repo name is case-insensitive", "Closes acme/api#5", []WorkItemRow{{uuid.New(), "gh:Acme/API#5", "github"}}, "gh:Acme/API#5", "implements", 0},
-		{"github glued suffix is no reference", "see o/r#5abc", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}}, "", "", 0},
-		{"unicode letter before owner is no reference", "see \u00e9o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}}, "", "", 0},
-		{"owner/repo#n held by github and gitlab is ambiguous", "see o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}, {uuid.New(), "gitlab:o/r#5", "gitlab"}}, "", "", 1},
-		{"gitlab !n is a merge request", "see g/p!9", []WorkItemRow{{repoID, "gitlab:g/p#9", "gitlab"}}, "", "", 0},
+		{"same key in jira and linear is ambiguous", "ABC-1 thing", []WorkItemRow{{repoID, "jira:ABC-1", "jira", ""}, {repoID, "linear:ABC-1", "linear", ""}}, "", "", 1},
+		{"github same-repo #n", "Closes #5", []WorkItemRow{{repoID, "gh:o/r#5", "github", ""}}, "gh:o/r#5", "implements", 0},
+		{"github #n no row", "Closes #6", []WorkItemRow{{repoID, "gh:o/r#5", "github", ""}}, "", "", 0},
+		{"github owner/repo#n", "Relates to other/lib#12", []WorkItemRow{{uuid.New(), "gh:other/lib#12", "github", ""}}, "gh:other/lib#12", "references", 0},
+		{"github owner/repo#n no row", "Relates to other/lib#13", []WorkItemRow{{uuid.New(), "gh:other/lib#12", "github", ""}}, "", "", 0},
+		{"gitlab same-repo #n", "see #7", []WorkItemRow{{repoID, "gitlab:g/p#7", "gitlab", ""}}, "gitlab:g/p#7", "references", 0},
+		{"gitlab group/project#n", "see grp/sub/proj#8", []WorkItemRow{{uuid.New(), "gitlab:grp/sub/proj#8", "gitlab", ""}}, "gitlab:grp/sub/proj#8", "references", 0},
+		{"github repo name is case-insensitive", "Closes acme/api#5", []WorkItemRow{{uuid.New(), "gh:Acme/API#5", "github", ""}}, "gh:Acme/API#5", "implements", 0},
+		{"github glued suffix is no reference", "see o/r#5abc", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github", ""}}, "", "", 0},
+		{"unicode letter before owner is no reference", "see \u00e9o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github", ""}}, "", "", 0},
+		{"owner/repo#n held by github and gitlab is ambiguous", "see o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github", ""}, {uuid.New(), "gitlab:o/r#5", "gitlab", ""}}, "", "", 1},
+		{"gitlab !n is a merge request", "see g/p!9", []WorkItemRow{{repoID, "gitlab:g/p#9", "gitlab", ""}}, "", "", 0},
+		// CHAOS-3383: a renamed project's items keep their minted path.
+		{"gitlab renamed project by its current path", "see team/web#3", []WorkItemRow{{uuid.New(), "gitlab:team/old-name#3", "gitlab", "team/web"}}, "gitlab:team/old-name#3", "references", 0},
+		{"gitlab renamed project by its minted path", "see team/old-name#3", []WorkItemRow{{uuid.New(), "gitlab:team/old-name#3", "gitlab", "team/web"}}, "gitlab:team/old-name#3", "references", 0},
+		{"gitlab current path names the project there now", "see acme/api#4", []WorkItemRow{
+			{uuid.New(), "gitlab:acme/api#4", "gitlab", "platform/api-v2"},
+			{uuid.New(), "gitlab:acme/api@456#4", "gitlab", "acme/api"},
+		}, "gitlab:acme/api@456#4", "references", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

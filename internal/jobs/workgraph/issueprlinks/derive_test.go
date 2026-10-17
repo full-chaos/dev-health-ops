@@ -450,3 +450,38 @@ func TestParseGithubIssueNumber(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-3383: a renamed GitLab project's merge-request ids keep the path its
+// repository id was minted from; a URL names its current path. Both resolve
+// to the repository, and the minted path wins over a project that took it.
+func TestDeriveResolvesAGitLabMergeRequestByTheMintedOrTheCurrentPath(t *testing.T) {
+	renamed, taker := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79"), uuid.MustParse("4b6f1e0a-0b1f-4c39-9a37-1d5e0c3f6a11")
+	for _, tc := range []struct {
+		name, source string
+		want         uuid.UUID
+	}{
+		{"minted path", "gitlab:acme/api!5", renamed},
+		{"current path", "gitlab:platform/api-v2!5", renamed},
+		{"the taker's own minted path", "gitlab:acme/api@456!5", taker},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := Inputs{
+				OrgID: testOrg,
+				Dependencies: []DependencyRow{{
+					OrgID: testOrg, SourceWorkItemID: tc.source, TargetWorkItemID: "gitlab:acme/api#9",
+					RelationshipTypeRaw: "gitlab_closing_reference", LastSynced: testSynced,
+				}},
+				Repos: []RepoRow{
+					{OrgID: testOrg, ID: renamed, Repo: "platform/api-v2", IdentityPath: "acme/api"},
+					{OrgID: testOrg, ID: taker, Repo: "acme/api", IdentityPath: "acme/api@456"},
+				},
+				PullRequests: []PullRequestRow{{OrgID: testOrg, RepoID: renamed, Number: 5}, {OrgID: testOrg, RepoID: taker, Number: 5}},
+				WorkItems:    []WorkItemRow{{OrgID: testOrg, WorkItemID: "gitlab:acme/api#9"}},
+			}
+			result := Derive(inputs)
+			if result.Written() != 1 || result.Links[0].RepoID != tc.want {
+				t.Fatalf("links %+v (rejections %v), want one on repo %s", result.Links, result.Rejected, tc.want)
+			}
+		})
+	}
+}

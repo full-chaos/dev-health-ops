@@ -31,7 +31,11 @@ const (
 // per-SHA MR enrichment are deliberately best effort, and a deployments-list
 // error produces Python's accepted empty successful batch rather than a
 // partial/fail-closed effect.
-type GitLabDeploymentsRouteHandler struct{ MaxDeployments int }
+type GitLabDeploymentsRouteHandler struct {
+	MaxDeployments int
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
+}
 
 type gitLabDeploymentCountingDoer struct {
 	delegate providerfoundation.HTTPDoer
@@ -79,7 +83,7 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	fullName := gitLabProjectFullName(project)
-	repoID, err := repositoryIdentity(fullName)
+	repoID, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

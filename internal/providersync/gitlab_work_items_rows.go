@@ -244,7 +244,7 @@ func gitlabWorkItemLabels(labels []string) []string {
 
 func normalizeGitLabIssueWorkItem(
 	claim Claim,
-	fullName string,
+	fullName, identityPath string,
 	repoID uuid.UUID,
 	payload gitlabIssueWorkItemPayload,
 	labelEvents []gitlabLabelEventPayload,
@@ -253,7 +253,7 @@ func normalizeGitLabIssueWorkItem(
 	normalizedAt time.Time,
 ) (gitlabWorkItemRow, []gitlabWorkItemTransitionRow, error) {
 	if claim.Validate() != nil || claim.Provider != "gitlab" || claim.Dataset != "work-items" ||
-		strings.TrimSpace(fullName) == "" || repoID == uuid.Nil || payload.IID < 1 ||
+		strings.TrimSpace(fullName) == "" || strings.TrimSpace(identityPath) == "" || repoID == uuid.Nil || payload.IID < 1 ||
 		strings.TrimSpace(payload.Title) == "" || statusMapping == nil || normalizedAt.IsZero() {
 		return gitlabWorkItemRow{}, nil, ErrInvalidConfiguration
 	}
@@ -301,7 +301,9 @@ func normalizeGitLabIssueWorkItem(
 		name := payload.Milestone.Title
 		milestoneName = &name
 	}
-	workItemID := "gitlab:" + fullName + "#" + strconv.Itoa(payload.IID)
+	// The id carries the path the repository identity was minted from, so a
+	// renamed project keeps it (CHAOS-3383); project_id stays the current path.
+	workItemID := "gitlab:" + identityPath + "#" + strconv.Itoa(payload.IID)
 	transitions := normalizeGitLabIssueLabelTransitions(
 		claim, workItemID, labelEvents, createdAt.UTC(), statusMapping, normalizedAt,
 	)
@@ -379,7 +381,7 @@ func normalizeGitLabIssueLabelTransitions(
 
 func normalizeGitLabMergeRequestWorkItem(
 	claim Claim,
-	fullName string,
+	fullName, identityPath string,
 	repoID uuid.UUID,
 	payload gitlabMergeRequestWorkItemPayload,
 	stateEvents []gitlabStateEventPayload,
@@ -387,7 +389,7 @@ func normalizeGitLabMergeRequestWorkItem(
 	normalizedAt time.Time,
 ) (gitlabWorkItemRow, []gitlabWorkItemTransitionRow, []gitlabWorkItemReopenRow, error) {
 	if claim.Validate() != nil || claim.Provider != "gitlab" || claim.Dataset != "work-items" ||
-		strings.TrimSpace(fullName) == "" || repoID == uuid.Nil || payload.IID < 1 ||
+		strings.TrimSpace(fullName) == "" || strings.TrimSpace(identityPath) == "" || repoID == uuid.Nil || payload.IID < 1 ||
 		strings.TrimSpace(payload.Title) == "" || normalizedAt.IsZero() {
 		return gitlabWorkItemRow{}, nil, nil, ErrInvalidConfiguration
 	}
@@ -455,7 +457,7 @@ func normalizeGitLabMergeRequestWorkItem(
 	}
 	row, err := buildWorkItemRow(claim, gitlabWorkItemSource{
 		kind:       gitlabMergeRequestSourceKind,
-		workItemID: "gitlab:" + fullName + "!" + strconv.Itoa(payload.IID),
+		workItemID: "gitlab:" + identityPath + "!" + strconv.Itoa(payload.IID),
 		title:      payload.Title, typeName: "merge_request", status: status,
 		statusRaw: nullableString(statusRaw), description: description, repoID: &repoID,
 		projectID: stringPointer(fullName), assignees: assignees, reporter: reporter,

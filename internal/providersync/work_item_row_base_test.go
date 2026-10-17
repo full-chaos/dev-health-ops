@@ -201,7 +201,7 @@ func workItemHierarchyProbes() map[string]workItemHierarchyProbe {
 				"created_at":"2026-10-01T00:00:00Z","labels":[],"epic":{"id":900,"iid":4,"group_id":12}}`), &payload); err != nil {
 				t.Fatal(err)
 			}
-			row, _, err := normalizeGitLabIssueWorkItem(nativeTestClaim("gitlab", "work-items"), "acme/api", repoID, payload, nil,
+			row, _, err := normalizeGitLabIssueWorkItem(nativeTestClaim("gitlab", "work-items"), "acme/api", "acme/api", repoID, payload, nil,
 				loadRealStatusMapping(t), nil, now)
 			if err != nil {
 				t.Fatal(err)
@@ -213,7 +213,7 @@ func workItemHierarchyProbes() map[string]workItemHierarchyProbe {
 			if err := json.Unmarshal([]byte(`{"iid":5,"title":"MR","state":"opened","created_at":"2026-10-01T00:00:00Z","labels":[]}`), &payload); err != nil {
 				t.Fatal(err)
 			}
-			row, _, _, err := normalizeGitLabMergeRequestWorkItem(nativeTestClaim("gitlab", "work-items"), "acme/api", repoID, payload, nil, nil, now)
+			row, _, _, err := normalizeGitLabMergeRequestWorkItem(nativeTestClaim("gitlab", "work-items"), "acme/api", "acme/api", repoID, payload, nil, nil, now)
 			if err != nil {
 				t.Fatal(err)
 			}

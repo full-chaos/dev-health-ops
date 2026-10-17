@@ -332,6 +332,10 @@ type RepoRow struct {
 	OrgID string
 	ID    uuid.UUID
 	Repo  string
+	// IdentityPath is the path a GitLab repository id was minted from
+	// (repos.identity_path, CHAOS-3383): a renamed project's merge-request ids
+	// keep it, so it names the repository too. Empty for GitHub rows.
+	IdentityPath string
 }
 
 // PullRequestRow is one `git_pull_requests` row inside the build's window. Its
@@ -562,6 +566,14 @@ func Derive(inputs Inputs) Result {
 			continue
 		}
 		repoLookup[[2]string{rowOrgID(repo.OrgID, inputs.OrgID), repo.Repo}] = repo.ID
+	}
+	// After the current paths: a project that took over a renamed project's
+	// old path holds that path as its repo, while the renamed project's own
+	// merge-request ids carry it as their identity path, and win.
+	for _, repo := range inputs.Repos {
+		if repo.IdentityPath != "" && repo.IdentityPath != repo.Repo {
+			repoLookup[[2]string{rowOrgID(repo.OrgID, inputs.OrgID), repo.IdentityPath}] = repo.ID
+		}
 	}
 
 	prLookup := make(map[prKey]struct{}, len(inputs.PullRequests))

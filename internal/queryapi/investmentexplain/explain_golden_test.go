@@ -126,7 +126,7 @@ func (explainFixtureClient) Query(_ context.Context, statement string, _ []dhcli
 			},
 		}}, nil
 
-	case strings.Contains(statement, "argMax(repo, last_synced)"):
+	case strings.Contains(statement, "identity_path"):
 		// FetchRepoIdentities -- empty in this fixture (no PR evidence)
 		return &fixtureRowScanner{}, nil
 

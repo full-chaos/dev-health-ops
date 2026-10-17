@@ -35,8 +35,10 @@ const (
 // atomic routing change so no one of the three aliases can become a second
 // writer for a ReplacingMergeTree row.
 type GitLabPullRequestRouteHandler struct {
-	PerPage  int
-	MaxPages int
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
+	PerPage      int
+	MaxPages     int
 }
 
 // gitLabMergeRequestPayload contains the fields consumed by the live Python
@@ -129,7 +131,7 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	fullName := gitLabProjectFullName(project)
-	repoID, err := repositoryIdentity(fullName)
+	repoID, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

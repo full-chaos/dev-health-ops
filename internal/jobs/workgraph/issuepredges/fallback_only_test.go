@@ -57,6 +57,9 @@ func (conn *routeConn) Query(_ context.Context, query string, _ ...any) (driver.
 		table, columns = conn.pullRequests, []string{"repo_id", "number", "title", "body", "head_branch", "created_at"}
 	case strings.Contains(query, "FROM work_items"):
 		table, columns = conn.workItems, []string{"repo_id", "work_item_id", "provider", "updated_at"}
+	case strings.Contains(query, "FROM repos"):
+		// No renamed GitLab repository in these stores.
+		return &routeRows{}, nil
 	default:
 		return nil, fmt.Errorf("routeConn: unrouted query %q", query)
 	}

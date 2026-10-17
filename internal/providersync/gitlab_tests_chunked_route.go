@@ -353,7 +353,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	}
 	fullName := gitLabProjectFullName(project)
 	cursor.Repo, cursor.ProjectID = fullName, parsedProjectID
-	repoID, err := repositoryIdentity(fullName)
+	repoID, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return err
 	}

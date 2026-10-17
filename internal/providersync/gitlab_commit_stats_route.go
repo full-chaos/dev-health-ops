@@ -45,9 +45,11 @@ type gitLabCommitStatsPayload struct {
 // one aggregate detail request. MaxStats is Python's COMMIT_STATS_MAX_COMMITS
 // hard ceiling; full-history runs retain Python's smaller 50-commit sample.
 type GitLabCommitStatsRouteHandler struct {
-	PerPage  int
-	MaxPages int
-	MaxStats int
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
+	PerPage      int
+	MaxPages     int
+	MaxStats     int
 }
 
 func (handler GitLabCommitStatsRouteHandler) Collect(
@@ -79,7 +81,7 @@ func (handler GitLabCommitStatsRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	fullName := gitLabProjectFullName(project)
-	repoID, err := repositoryIdentity(fullName)
+	repoID, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

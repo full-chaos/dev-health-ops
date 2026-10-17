@@ -40,10 +40,12 @@ type GitLabBlameCoverage interface {
 // separate cutover concern. MaxFiles is test-configurable below the Python
 // producer's ceiling, while page bounds mirror GitLabCodeClient.
 type GitLabBlameRouteHandler struct {
-	Coverage GitLabBlameCoverage
-	PerPage  int
-	MaxPages int
-	MaxFiles int
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
+	Coverage     GitLabBlameCoverage
+	PerPage      int
+	MaxPages     int
+	MaxFiles     int
 }
 
 // GitLabBlameResult is the concrete result contract for this provider pair.
@@ -125,7 +127,7 @@ func (handler GitLabBlameRouteHandler) Collect(
 	if handler.Coverage == nil {
 		return CompleteRouteBatch{}, ErrGitLabBlameCoverageUnavailable
 	}
-	return collectGitLabBlame(ctx, claim, client, normalizedAt, handler.Coverage,
+	return collectGitLabBlame(ctx, claim, client, normalizedAt, handler.Coverage, handler.RepoIdentity,
 		perPage, maxPages, maxFiles, false)
 }
 
@@ -138,7 +140,7 @@ func collectGitLabBlameFoundation(
 	client *providerfoundation.HTTPClient,
 	normalizedAt time.Time,
 ) (CompleteRouteBatch, error) {
-	return collectGitLabBlame(ctx, claim, client, normalizedAt, nil,
+	return collectGitLabBlame(ctx, claim, client, normalizedAt, nil, nil,
 		gitLabBlameDefaultPerPage, gitLabBlameDefaultMaxPage, gitLabBlameMaxFiles, true)
 }
 
@@ -148,6 +150,7 @@ func collectGitLabBlame(
 	client *providerfoundation.HTTPClient,
 	normalizedAt time.Time,
 	coverage GitLabBlameCoverage,
+	repoIdentity GitLabRepoIdentityReader,
 	perPage, maxPages, maxFiles int,
 	allowUnscopedCoverage bool,
 ) (CompleteRouteBatch, error) {
@@ -177,7 +180,7 @@ func collectGitLabBlame(
 		return CompleteRouteBatch{}, gitLabBlameTraversalError(providerfoundation.ErrNormalizationInvalid)
 	}
 	fullName := gitLabProjectFullName(project)
-	repoID, err := repositoryIdentity(fullName)
+	repoID, err := resolveGitLabRepoID(ctx, repoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, gitLabBlameTraversalError(err)
 	}

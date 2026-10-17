@@ -98,40 +98,39 @@ var ErrInvalidPrivateKeyPEM = errors.New("envelopemint: not a PKCS#8 Ed25519 pri
 // principal_envelope._load_private_key does on the Python side: exactly
 // one PEM block, labelled "PRIVATE KEY", PKCS#8-encoded, and Ed25519.
 // Anything else -- multiple blocks, a different label, a different key
-// type -- is refused rather than guessed at.
+// type -- is refused rather than guessed at. Errors carry a reason class only,
+// never any byte of the input (label, PEM, DER or parser text).
 func LoadPrivateKey(pemBytes []byte) (ed25519.PrivateKey, error) {
 	block, rest := pem.Decode(pemBytes)
 	if block == nil {
 		return nil, ErrInvalidPrivateKeyPEM
 	}
 	if block.Type != "PRIVATE KEY" {
-		return nil, fmt.Errorf("%w: PEM block is %q, want \"PRIVATE KEY\"", ErrInvalidPrivateKeyPEM, block.Type)
+		return nil, fmt.Errorf("%w: PEM block label is not PRIVATE KEY", ErrInvalidPrivateKeyPEM)
 	}
 	if len(bytes.TrimSpace(rest)) != 0 {
 		return nil, fmt.Errorf("%w: more than one PEM block", ErrInvalidPrivateKeyPEM)
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidPrivateKeyPEM, err)
+		return nil, fmt.Errorf("%w: not a PKCS#8 key", ErrInvalidPrivateKeyPEM)
 	}
 	key, ok := parsed.(ed25519.PrivateKey)
 	if !ok || len(key) != ed25519.PrivateKeySize {
-		return nil, fmt.Errorf("%w: parsed key is %T, want ed25519.PrivateKey", ErrInvalidPrivateKeyPEM, parsed)
+		return nil, fmt.Errorf("%w: key is not Ed25519", ErrInvalidPrivateKeyPEM)
 	}
 	return key, nil
 }
 
-// LoadPrivateKeyFromEnv reads PrivateKeyEnvVar and parses it with
-// LoadPrivateKey. Reading by env var name (never a CLI flag value) keeps
-// the key off argv and out of the process table, the same posture
-// go-api-prove's own -proof-bearer-secret-file doctrine already applies
-// to every other credential in this codebase.
+// LoadPrivateKeyFromEnv loads the key from PrivateKeyFileEnvVar (a path,
+// read under LoadPrivateKeyFromFile's custody contract) or, deprecated, from
+// the raw PrivateKeyEnvVar. The file wins when both are set. Only variable
+// names are ever read into a log line, never a value.
 func LoadPrivateKeyFromEnv() (ed25519.PrivateKey, error) {
+	path, hasFile := os.LookupEnv(PrivateKeyFileEnvVar)
+	hasFile = hasFile && path != ""
 	raw := envsecrets.GetenvSecret(PrivateKeyEnvVar)
-	if strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("%s is not set", PrivateKeyEnvVar)
-	}
-	return LoadPrivateKey([]byte(raw))
+	return loadPrivateKeyFromLookup(path, hasFile, raw)
 }
 
 // Principal is the identity a minted envelope claims. It never names a

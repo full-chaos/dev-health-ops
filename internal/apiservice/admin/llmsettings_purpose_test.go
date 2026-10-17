@@ -197,7 +197,7 @@ VALUES ($1, 'llmpurpose-admin@example.com', true, true, false, 0, now(), now())`
 	})
 
 	t.Run("the default delete leaves the overrides alone", func(t *testing.T) {
-		if status, _ := call("PUT", route, `{"purpose":"investigate","provider":"openai","model":"mid"}`); status != 200 {
+		if status, _ := call("PUT", route, fmt.Sprintf(`{"purpose":"investigate","provider":"openai","model":"mid","api_key":%q}`, explainCred)); status != 200 {
 			t.Fatalf("PUT investigate: %d", status)
 		}
 		if status, _ := call("DELETE", route, ""); status != 200 {

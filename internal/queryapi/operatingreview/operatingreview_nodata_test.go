@@ -107,7 +107,7 @@ func storedZeroWeekScanners() []*fakeRowScanner {
 		{rows: [][]any{{uint64(1), uint64(0), uint64(1)}}},                                                              // deployments
 		{rows: [][]any{{uint64(0), 0.0, uint64(1)}}},                                                                    // incidents
 		{rows: [][]any{{"feature_delivery", 0.0, 0.0, 0.0}}},                                                            // investment
-		{rows: [][]any{{"human", float64(5), float64(0), float64(0), float64(5), float64(0), 0.0, 0.0, 0.0, 0.0, 0.0}}}, // ai_impact
+		{rows: [][]any{{"ai_assisted", float64(5), float64(0), float64(0), float64(5), float64(0), 0.0, 0.0, 0.0, 0.0, 0.0}}}, // ai_impact
 		{rows: [][]any{{day("2026-08-24"), nil, nil, uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}},           // ai_governance
 		{rows: [][]any{{uint64(1), uint64(0), uint64(0), uint64(1), uint64(0), uint64(0), uint64(0), uint64(1)}}},       // change_failure
 	}

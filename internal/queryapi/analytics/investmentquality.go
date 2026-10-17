@@ -280,8 +280,8 @@ FROM (
         %s AS evidence_quality_group_key,
         work_unit_investments.evidence_quality AS evidence_quality
     FROM %s AS work_unit_investments%s
-    WHERE work_unit_investments.from_ts < {end_date:Date}
-      AND work_unit_investments.to_ts >= {start_date:Date}
+    WHERE work_unit_investments.to_ts >= {start_date:Date}
+      AND work_unit_investments.to_ts < {end_date:Date}
       AND work_unit_investments.org_id = {org_id:String}
 %s%s%s
 ) AS grouped_units
@@ -350,8 +350,8 @@ func executeEvidenceQualityByGroup(ctx context.Context, client QueryClient, q co
 // {start_date:Date}` expresses the same predicate as Python's
 // midnight-UTC start_ts/end_ts.
 func unitTeamWindowFilter(scopeFilter, categoryFilter string) string {
-	return fmt.Sprintf(`                WHERE work_unit_investments.from_ts < {end_date:Date}
-                  AND work_unit_investments.to_ts >= {start_date:Date}
+	return fmt.Sprintf(`                WHERE work_unit_investments.to_ts >= {start_date:Date}
+                  AND work_unit_investments.to_ts < {end_date:Date}
                   AND work_unit_investments.org_id = {org_id:String}
                 %s
                 %s`, scopeFilter, categoryFilter)
@@ -400,8 +400,8 @@ SELECT
     countIf(evidence_quality_band = 'very_low') AS very_low_count,
     countIf(evidence_quality IS NULL OR evidence_quality_band = '') AS unknown_count
 FROM %s AS work_unit_investments%s
-WHERE work_unit_investments.from_ts < {end_date:Date}
-  AND work_unit_investments.to_ts >= {start_date:Date}
+WHERE work_unit_investments.to_ts >= {start_date:Date}
+  AND work_unit_investments.to_ts < {end_date:Date}
   AND work_unit_investments.org_id = {org_id:String}
 %s%s%s
 %s

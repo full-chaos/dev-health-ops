@@ -266,7 +266,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 	if useInvestment {
 		baseTable = fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource())
 		// analytics.py:680-683.
-		dateFilter = "work_unit_investments.from_ts < {end_date:Date} AND work_unit_investments.to_ts >= {start_date:Date}"
+		dateFilter = InvestmentWindowClause(true)
 		// analytics.py:814-818 -- qualified only on the investment path,
 		// which joins other org_id-carrying tables.
 		orgFilter = "work_unit_investments.org_id = {org_id:String}"

@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 )
 
 // ErrDispatchSyncRunUnavailable ports the bare execution-failure class every
@@ -568,7 +569,19 @@ WHERE id = $1::uuid`,
 	if err := tx.Commit(ctx); err != nil {
 		return ErrDispatchSyncRunUnavailable
 	}
+	// CHAOS-10013: every unit this pass terminalized (budget exhaustion, an
+	// invalid or unroutable claim) was counted against its bucket when the
+	// capacity decision was made, so a sibling the cap held back is due a pass
+	// as soon as this one commits. Read from the pass's rollup tally -- the
+	// one record of every terminal write in this transaction -- so a new
+	// in-pass terminal path is covered without a second list. Deferred so it
+	// lands AFTER whichever countdown re-arm below this pass makes and merges
+	// into it by LEAST; the countdown stays the bound if the wake is lost.
+	slotsFreedInPass := pendingRollupBumps(ctx)
 	flushRollupBumpTally(ctx, service.metrics)
+	if slotsFreedInPass > 0 {
+		defer syncrunrollup.WakeDispatch(ctx, service.pool, run.id, service.nowUTC(), syncrunrollup.DispatchWakePathDispatchPass)
+	}
 
 	if riverQueued > 0 {
 		switch {

@@ -277,6 +277,7 @@ func (repository *PostgresRepository) Complete(
 		return ErrInvalidConfiguration
 	}
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
+	repository.wakeDispatch(ctx, claim, completedAt)
 	return nil
 }
 
@@ -360,6 +361,7 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 		return ErrInvalidConfiguration
 	}
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
+	repository.wakeDispatch(ctx, claim, completedAt)
 	return nil
 }
 
@@ -678,6 +680,7 @@ func (repository *PostgresRepository) failTx(
 		return ErrInvalidConfiguration
 	}
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "failed", rollupCompleted, rollupFailed, rollupTotal)
+	repository.wakeDispatch(ctx, claim, completedAt)
 	// CHAOS-4078: attribute the failure to whichever alias dataset(s) this
 	// claim actually represents, not just the persisted canonical identity
 	// -- see metricDatasetKeys.
@@ -1112,6 +1115,13 @@ func bumpSyncRunRollup(
 	ctx context.Context, tx pgx.Tx, syncRunID string,
 ) (completedUnits, failedUnits, totalUnits int, err error) {
 	return syncrunrollup.Bump(ctx, tx, syncRunID)
+}
+
+// wakeDispatch arms the run's next dispatch pass now that this unit has left
+// its concurrency slot (CHAOS-10013). It runs after the unit's commit, as its
+// own statement, and never fails the completion: see syncrunrollup.WakeDispatch.
+func (repository *PostgresRepository) wakeDispatch(ctx context.Context, claim Claim, completedAt time.Time) {
+	syncrunrollup.WakeDispatch(ctx, repository.Pool, claim.SyncRunID, completedAt, syncrunrollup.DispatchWakePathProviderUnit)
 }
 
 // recordSyncRunRollupBumpPath is the path label for every call in this

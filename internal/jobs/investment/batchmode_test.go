@@ -175,10 +175,14 @@ func (f *fakeOpenAI) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func fakeProvider(baseURL string) *categorize.OpenAIProvider {
-	return categorize.NewOpenAIProvider(categorize.OpenAIProviderConfig{
-		APIKey: secrets.NewHidden("batch-mode-test-placeholder"), BaseURL: baseURL, Model: "gpt-5-nano",
+func fakeProvider(baseURL string) categorize.Provider {
+	provider, err := categorize.NewSharedProvider(categorize.SharedProviderConfig{
+		Kind: categorize.ProviderKindOpenAI, APIKey: secrets.NewHidden("batch-mode-test-placeholder"), BaseURL: baseURL, Model: "gpt-5-nano",
 	})
+	if err != nil {
+		panic(err)
+	}
+	return provider
 }
 
 func batchTestConfig(mode string) Config {

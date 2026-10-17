@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,7 +37,10 @@ func budgetedOpenAI(t *testing.T, store llmbudget.Store, handler http.HandlerFun
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; handler(w, r) }))
 	t.Cleanup(server.Close)
-	provider := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden("test-key"), BaseURL: server.URL, Model: "gpt-5-mini"})
+	provider, err := NewSharedProvider(SharedProviderConfig{Kind: ProviderKindOpenAI, APIKey: secrets.NewHidden("test-key"), BaseURL: server.URL, Model: "gpt-5-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The guard prices the org's configured endpoint (the official one); the
 	// test server only stands in for the transport.
 	return WithBudget(provider, llmbudget.Guard{Store: store, OrgID: "org", Provider: "openai", Model: "gpt-5-mini"}), &calls
@@ -62,15 +66,13 @@ func TestBudgetedOpenAIProviderReservesAndSettlesEveryAttempt(t *testing.T) {
 	attempt := 0
 	provider, calls := budgetedOpenAI(t, store, func(w http.ResponseWriter, _ *http.Request) {
 		attempt++
-		in, out, cached := 100, 50, 0
-		response := openAIResponsesResponse{Usage: &openAIUsage{InputTokens: &in, OutputTokens: &out, InputTokensDetails: &openAITokenDetails{CachedTokens: &cached}}}
+		usage := `"usage":{"input_tokens":100,"output_tokens":50,"input_tokens_details":{"cached_tokens":0}}`
 		if attempt == 1 {
 			// An empty, truncated answer: the provider retries with more tokens.
-			response.IncompleteDetails = &openAIIncompleteDetails{Reason: "max_output_tokens"}
-		} else {
-			response.OutputText = `{"ok": true}`
+			_, _ = w.Write([]byte(`{"output_text":"","incomplete_details":{"reason":"max_output_tokens"},` + usage + `}`))
+			return
 		}
-		_ = json.NewEncoder(w).Encode(response)
+		_, _ = w.Write([]byte(`{"output_text":"{\"ok\": true}",` + usage + `}`))
 	})
 	if _, err := provider.Complete(context.Background(), CategorizationRequest("p")); err != nil {
 		t.Fatal(err)
@@ -129,21 +131,27 @@ func TestWithBudgetLeavesMockAndNoneAlone(t *testing.T) {
 // the structured-output schema, not only the prompt text.
 func TestBudgetedOpenAIReservationCoversTheWholeRequest(t *testing.T) {
 	store := &recordingStore{}
-	provider, _ := budgetedOpenAI(t, store, func(w http.ResponseWriter, _ *http.Request) {
-		in, out, cached := 10, 10, 0
-		_ = json.NewEncoder(w).Encode(openAIResponsesResponse{OutputText: `{"ok": true}`,
-			Usage: &openAIUsage{InputTokens: &in, OutputTokens: &out, InputTokensDetails: &openAITokenDetails{CachedTokens: &cached}}})
+	var encoded []byte
+	provider, _ := budgetedOpenAI(t, store, func(w http.ResponseWriter, r *http.Request) {
+		encoded, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"output_text":"{\"ok\": true}","usage":{"input_tokens":10,"output_tokens":10,"input_tokens_details":{"cached_tokens":0}}}`))
 	})
 	request := CategorizationRequest("p")
 	if _, err := provider.Complete(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	body := provider.(*OpenAIProvider).responsesBody(request, provider.(*OpenAIProvider).initialMaxOutputTokens(request))
-	encoded, _ := json.Marshal(body)
+	var body struct {
+		Input           string `json:"input"`
+		Instructions    string `json:"instructions"`
+		MaxOutputTokens int64  `json:"max_output_tokens"`
+	}
+	if err := json.Unmarshal(encoded, &body); err != nil {
+		t.Fatal(err)
+	}
 	if len(encoded) <= len(body.Input)+len(body.Instructions) {
 		t.Fatalf("the test request carries no schema beyond its text (%d bytes)", len(encoded))
 	}
-	want, _ := llmbudget.CostMicroUSD("openai", "gpt-5-mini", "", int64(len(encoded)), int64(body.MaxOutputTokens), 0)
+	want, _ := llmbudget.CostMicroUSD("openai", "gpt-5-mini", "", int64(len(encoded)), body.MaxOutputTokens, 0)
 	if got := store.admits[0].MaxCost; got == nil || *got != *want {
 		t.Fatalf("reserved %v, want the cost of the whole %d-byte request = %d", got, len(encoded), *want)
 	}
@@ -153,7 +161,7 @@ func TestBudgetedOpenAIReservationCoversTheWholeRequest(t *testing.T) {
 func TestBudgetedOpenAIBatchIsRefusedBeforeAnyUpload(t *testing.T) {
 	store := &recordingStore{admitErr: &llmbudget.AccountingError{Message: "BYO LLM batch pricing is unavailable for the configured budget."}}
 	provider, calls := budgetedOpenAI(t, store, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
-	batch, ok := provider.(BatchProvider)
+	batch, ok := AsBatchProvider(provider)
 	if !ok {
 		t.Fatal("the budgeted OpenAI provider no longer implements BatchProvider")
 	}

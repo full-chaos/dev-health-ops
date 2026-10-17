@@ -144,7 +144,7 @@ graph TD
 
     classDef note fill:#fff,stroke:#333,stroke-dasharray: 5 5;
     
-    N1[dispatch_sync_run outbox row:<br/>- Created in-txn by planner/trigger<br/>- Marked dispatched by relay<br/>- Re-armed by dispatch_sync_run if capped]:::note
+    N1[dispatch_sync_run outbox row:<br/>- Created in-txn by planner/trigger<br/>- Marked dispatched by relay<br/>- Re-armed by dispatch_sync_run if capped<br/>- Woken by a unit's terminal commit]:::note
     N2[finalize_sync_run outbox row:<br/>- Created in-txn by run_sync_unit<br/>- Marked dispatched by relay]:::note
     N3[post_sync outbox row:<br/>- Created in-txn by finalize_sync_run<br/>- Published before terminal mark<br/>- Re-armed after guarded publish failure]:::note
 
@@ -155,6 +155,21 @@ graph TD
     Finalize -.-> N3
     N3 -.-> Post
 ```
+
+---
+
+## Dispatch pacing: wake on unit completion
+
+`dispatch_sync_run` runs one pass per **run**. A pass claims units up to the cap of each `(org, provider, cost class)` bucket: the worker budget table sets light 4, medium 2, heavy 1 (`providerfoundation.CostClassBudgetLimit`), and `SYNC_UNIT_CONCURRENCY_PER_BUCKET` can only lower it. Units the cap holds back stay `PLANNED`. Two writers then arm the run's next pass on the same `dispatch_sync_run` outbox row:
+
+1. **Wake on unit completion (CHAOS-10013).** When a unit leaves its slot — `providersync`'s success or failure commit, one of the reconciler's terminal writers (expired-lease repair, the unreclaimable sweep, route-unavailable termination), or the dispatch pass itself when it terminalized units inside its own transaction (budget exhaustion, an invalid or unroutable claim; counted from the pass's rollup tally) — `syncrunrollup.WakeDispatch` arms the row at the completion instant. It runs as its own statement after the writer's transaction commits, never inside it, so it adds no lock to the unit commit. The statement has its own 5 s deadline (`DispatchWakeTimeout`) and never fails the writer: a failed wake is counted and logged, and the countdown covers it. It arms only while the run is open and has a unit `PLANNED` or `RETRYING`; the last units of a run arm nothing, because `finalize_sync_run` closes the run. The row's unique `(sync_run_id, kind)` key and the canonical upsert (`syncrunrollup.OutboxWakeupOnConflictSQL`, LEAST of the two instants) dedupe a burst of completions into one pending row.
+2. **Redispatch countdown (safety net).** A pass that held units back re-arms the row at `now + SYNC_DISPATCH_REDISPATCH_COUNTDOWN` (code default 60 s, chart default 10 s). It bounds the delay when a wake is lost (a failed wake statement, a crash between the commit and the wake). It overwrites the row's instant only when the row is the pass's own delivery (`dispatched`). When another writer re-armed the row to `pending` while the pass ran, the earlier instant is kept: overwriting it would idle the bucket for a whole countdown with a free slot.
+
+Before the wake, a medium bucket drained at two units per countdown however short the units were: measured 1.7–2.0 units/min on prod and bigboy with the 60 s countdown, so a 330-unit github run took 169 minutes and the single-flight guard skipped the hourly slots behind it. With the wake, a pass follows each unit completion; the pace is set by the units' own run time and the relay's poll interval (1 s).
+
+Telemetry: `dev_health_sync_dispatch_woken_total{path, outcome}` on the worker (`path="provider_unit"`) and the reconciler (`path` `lease_repair`, `unreclaimable_sweep`, `route_unavailable`; `dispatch_pass` on the worker), outcomes `armed`, `not_waiting` and `failed`, every series written on every scrape. One debug line `dispatch_sync_run.woken_by_unit_completion` per armed wake (`sync_run_id`, `path`, `available_at`); a failed wake logs `dispatch_sync_run.unit_completion_wake_failed` at warn. The redispatch line `dispatch_sync_run.redispatch_rearmed` carries `kept_earlier_wakeup=true` when the pass kept another writer's earlier wake.
+
+Note: the reconciler's runaway report (`syncreconciler.dispatch_wakeup_attempts_exceeded`, at 1,000 relay claims of one row) counts every delivery of the row, and a run now takes about one delivery per unit. A run of more than about 1,000 units can therefore cross it while it progresses normally. The report decides nothing; it is a log line.
 
 ---
 

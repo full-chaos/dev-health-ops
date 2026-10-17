@@ -519,7 +519,7 @@ internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*
 internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,*float64|1e00a81bdcc4|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|877e3ede0140|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|13edc415554e|not-describable
-internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|b5e9cb05f9a6|spliced-select-list
+internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|8ab0086629ab|spliced-select-list
 internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|*string,**float64|c64156aa3194|statement-not-static
 internal/queryapi/analytics/catalog.go|executeCatalogValues|*string,*uint64|b97cd2e421d3|statement-not-static
 internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,*string,*string,**float64|99296deaf547|statement-not-static

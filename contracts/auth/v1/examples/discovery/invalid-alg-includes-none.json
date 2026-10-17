@@ -4,6 +4,5 @@
   "id_token_signing_alg_values_supported": [
     "EdDSA",
     "none"
-  ],
-  "dev_health_key_use": "platform_token"
+  ]
 }

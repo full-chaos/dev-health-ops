@@ -12,18 +12,12 @@ const DiscoverySurface = "discovery.v1"
 // document is served (TRD section 15).
 const DiscoveryJWKSPath = "/.well-known/jwks.json"
 
-// PlatformTokenKeyUse is the dev_health_key_use of the platform access and
-// workload token issuer. TRD section 12 keeps ACR Web-assertion keys on a
-// separate issuer and key use.
-const PlatformTokenKeyUse = "platform_token"
-
 // Discovery is one discovery.v1 document, validated and bound to a trusted
 // issuer.
 type Discovery struct {
 	Issuer                           string   `json:"issuer"`
 	JWKSURI                          string   `json:"jwks_uri"`
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
-	KeyUse                           string   `json:"dev_health_key_use"`
 }
 
 // ParseDiscovery validates a discovery document fetched for trustedIssuer.
@@ -34,7 +28,10 @@ type Discovery struct {
 //
 //   - the document's issuer must equal trustedIssuer byte for byte (OpenID
 //     Connect Discovery section 4.3). A well-formed document from another
-//     issuer is the wrong-issuer attack, not a valid one.
+//     issuer is the wrong-issuer attack, not a valid one. The caller pins
+//     trustedIssuer per credential class (TRD section 12 keeps platform-token
+//     and ACR Web-assertion issuers apart); token-class confusion is settled
+//     by the token's own typ/aud/iss, never by discovery.
 //   - jwks_uri must equal issuer + DiscoveryJWKSPath. Equality, not a prefix or
 //     host test: a sibling path or another port on the same host is another
 //     tenant's key set.

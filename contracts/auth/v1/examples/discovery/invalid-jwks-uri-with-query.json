@@ -3,6 +3,5 @@
   "jwks_uri": "https://auth.example.test/.well-known/jwks.json?kid=a",
   "id_token_signing_alg_values_supported": [
     "EdDSA"
-  ],
-  "dev_health_key_use": "platform_token"
+  ]
 }

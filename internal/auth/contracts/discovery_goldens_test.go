@@ -37,6 +37,7 @@ var discoveryTrustedIssuers = map[string]string{
 	"client-rejected-jwks-uri-other-port.json":          "https://auth.example.test",
 	"client-rejected-jwks-uri-other-path-prefix.json":   "https://auth.example.test:8443/dev-health",
 	"client-rejected-jwks-uri-nested-under-issuer.json": "https://auth.example.test",
+	"client-rejected-issuer-not-pinned.json":            "https://auth.example.test",
 }
 
 func discoveryDir(t *testing.T) string {
@@ -148,8 +149,8 @@ func TestAcceptedDiscoveryFixturesValidateAndParse(t *testing.T) {
 			if err != nil {
 				t.Fatalf("accept fixture was refused by the client: %v", err)
 			}
-			if doc.KeyUse != PlatformTokenKeyUse {
-				t.Fatalf("key use = %q", doc.KeyUse)
+			if doc.Issuer != discoveryTrustedIssuers[entry.File] {
+				t.Fatalf("issuer = %q", doc.Issuer)
 			}
 		})
 	}
@@ -185,8 +186,9 @@ func TestClientEnforcedDiscoveryFixturesValidateButTheClientRefusesThem(t *testi
 			if err == nil {
 				t.Fatalf("the client accepted a document only it can refuse (%s)", entry.Why)
 			}
-			if !strings.Contains(err.Error(), "disagrees with its own endpoint URL") {
-				t.Fatalf("refused, but not for the endpoint disagreement: %v", err)
+			if !strings.Contains(err.Error(), "disagrees with its own endpoint URL") &&
+				!strings.Contains(err.Error(), "not the trusted issuer") {
+				t.Fatalf("refused, but not for an issuer rule: %v", err)
 			}
 		})
 	}
@@ -213,8 +215,7 @@ func TestADiscoveryDocumentWithADuplicateMemberIsRefused(t *testing.T) {
   "issuer": "https://auth.example.test",
   "jwks_uri": "https://evil.example.test/.well-known/jwks.json",
   "jwks_uri": "https://auth.example.test/.well-known/jwks.json",
-  "id_token_signing_alg_values_supported": ["EdDSA"],
-  "dev_health_key_use": "platform_token"
+  "id_token_signing_alg_values_supported": ["EdDSA"]
 }`)
 	_, err := ParseDiscovery(testRoot(t), raw, "https://auth.example.test")
 	if err == nil || !strings.Contains(err.Error(), "duplicate object member") {

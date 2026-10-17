@@ -4,8 +4,8 @@ Mirrors ``internal/auth/contracts/discovery.go``. The schema pins the shape of
 the document; the two rules it cannot express live here, and *trusted_issuer*
 is a required argument so a caller cannot skip them:
 
-* the document's ``issuer`` must equal the issuer the verifier is configured to
-  trust, byte for byte (OpenID Connect Discovery section 4.3);
+* the document's ``issuer`` must equal the issuer the verifier has pinned for
+  this credential class, byte for byte (OpenID Connect Discovery section 4.3);
 * ``jwks_uri`` must equal ``issuer`` + ``/.well-known/jwks.json``.
 """
 
@@ -19,7 +19,6 @@ from dev_health_ops.authclient.contracts import ContractError, validate
 
 SURFACE: Final = "discovery.v1"
 JWKS_PATH: Final = "/.well-known/jwks.json"
-PLATFORM_TOKEN_KEY_USE: Final = "platform_token"
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +26,6 @@ class Discovery:
     issuer: str
     jwks_uri: str
     id_token_signing_alg_values_supported: tuple[str, ...]
-    key_use: str
 
 
 def _refuse_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -70,5 +68,4 @@ def parse_discovery(raw: bytes | str, trusted_issuer: str) -> Discovery:
         id_token_signing_alg_values_supported=tuple(
             document["id_token_signing_alg_values_supported"]
         ),
-        key_use=document["dev_health_key_use"],
     )

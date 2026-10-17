@@ -207,12 +207,13 @@ what production writes.
   consumer that meets an unknown `kid` refreshes once, boundedly, then denies;
   a schema cannot express that, so it is a consumer rule (TRD §12).
 * **A JWKS has no issuer member.** The binding is made by discovery: a verifier
-  reaches the JWKS only through the `jwks_uri` of a discovery document whose
-  `issuer` it is configured to trust and whose `dev_health_key_use` is
-  `platform_token`. ACR Web-assertion keys are another issuer and key use
-  (TRD §12), so their document is refused by the `const`.
+  reaches the JWKS only through the `jwks_uri` of a discovery document from the
+  issuer it has pinned for that credential class. ACR Web-assertion keys are
+  another issuer (TRD §12); keeping them apart is the pin, and token-class
+  confusion is settled by the token's own `typ`/`aud`/`iss`, not by discovery.
+  No custom discovery member is used.
 * **Two rules are client rules:** `jwks_uri == issuer + "/.well-known/jwks.json"`
-  and `issuer == the configured trusted issuer`. They need a cross-member and a
+  and `issuer == the pinned issuer`. They need a cross-member and a
   configuration comparison JSON Schema cannot make. `ParseDiscovery` (Go) and
   `parse_discovery` (Python) take the trusted issuer as a required argument, and
   the `reject_by_client` fixtures are valid against the schema on purpose.

@@ -36,6 +36,7 @@ TRUSTED_ISSUER = {
         "https://auth.example.test:8443/dev-health"
     ),
     "client-rejected-jwks-uri-nested-under-issuer.json": "https://auth.example.test",
+    "client-rejected-issuer-not-pinned.json": "https://auth.example.test",
 }
 
 
@@ -69,7 +70,7 @@ def test_every_client_checked_fixture_has_a_trusted_issuer() -> None:
 def test_accept_fixtures_validate_and_parse(name: str) -> None:
     validate(SURFACE, _load(name))
     parsed = parse_discovery(_raw(name), TRUSTED_ISSUER[name])
-    assert parsed.key_use == "platform_token"
+    assert parsed.issuer == TRUSTED_ISSUER[name]
     assert parsed.id_token_signing_alg_values_supported == ("EdDSA",)
 
 
@@ -86,7 +87,10 @@ def test_client_enforced_fixtures_are_valid_but_the_client_refuses_them(
     name: str,
 ) -> None:
     validate(SURFACE, _load(name))
-    with pytest.raises(ContractError, match="disagrees with its own endpoint URL"):
+    with pytest.raises(
+        ContractError,
+        match="disagrees with its own endpoint URL|not the trusted issuer",
+    ):
         parse_discovery(_raw(name), TRUSTED_ISSUER[name])
 
 
@@ -103,8 +107,7 @@ def test_a_duplicate_member_is_refused_before_validation() -> None:
       "issuer": "https://auth.example.test",
       "jwks_uri": "https://evil.example.test/.well-known/jwks.json",
       "jwks_uri": "https://auth.example.test/.well-known/jwks.json",
-      "id_token_signing_alg_values_supported": ["EdDSA"],
-      "dev_health_key_use": "platform_token"
+      "id_token_signing_alg_values_supported": ["EdDSA"]
     }"""
     with pytest.raises(ContractError, match="duplicate object member"):
         parse_discovery(raw, "https://auth.example.test")

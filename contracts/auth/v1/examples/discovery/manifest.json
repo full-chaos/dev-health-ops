@@ -1,5 +1,5 @@
 {
-  "description": "The golden corpus for the discovery.v1 wire contract. This manifest is the SINGLE inventory: the Go and Python runners read THIS file over THESE fixtures (G-70). `reject_by_client` documents are valid against the schema and refused by ParseDiscovery / parse_discovery, because they need a comparison JSON Schema cannot make. A shared trusted-issuer mismatch (a valid document whose issuer is not the configured one) is asserted in both runners directly, since the trusted issuer is configuration, not a document.",
+  "description": "The golden corpus for the discovery.v1 wire contract. This manifest is the SINGLE inventory: the Go and Python runners read THIS file over THESE fixtures (G-70). `reject_by_client` documents are valid against the schema and refused by ParseDiscovery / parse_discovery, because they need a comparison JSON Schema cannot make.",
   "accept": [
     {
       "file": "valid-minimal.json",
@@ -22,12 +22,6 @@
       "expect_instance_location": "/",
       "expect_keyword": "required",
       "why": "No jwks_uri: a verifier would have no JWKS to read."
-    },
-    {
-      "file": "invalid-key-use-absent.json",
-      "expect_instance_location": "/",
-      "expect_keyword": "required",
-      "why": "No dev_health_key_use. A document that does not say which key use it describes cannot be told apart from another issuer's, so the member is required rather than defaulted."
     },
     {
       "file": "invalid-algs-absent.json",
@@ -84,12 +78,6 @@
       "why": "A symmetric algorithm advertised instead of EdDSA."
     },
     {
-      "file": "invalid-key-use-web-assertion.json",
-      "expect_instance_location": "/dev_health_key_use",
-      "expect_keyword": "const",
-      "why": "The ACR Web-assertion key use. TRD section 12: platform token keys and Web-assertion keys are separate issuers; this is a document from the wrong one, and it is refused rather than merely unlikely."
-    },
-    {
       "file": "invalid-unknown-member-token-endpoint.json",
       "expect_instance_location": "/",
       "expect_keyword": "additionalProperties",
@@ -112,6 +100,10 @@
     {
       "file": "client-rejected-jwks-uri-nested-under-issuer.json",
       "why": "The jwks_uri is under the issuer but not at the fixed path directly beneath it. A prefix test would pass this; equality refuses it."
+    },
+    {
+      "file": "client-rejected-issuer-not-pinned.json",
+      "why": "A valid, fully self-consistent document from an issuer the verifier is not configured to trust. The schema cannot know the pinned issuer (configuration, not document), so the client refuses it. This is the wrong-issuer rule: the client pins the expected issuer per credential class and rejects any other. Platform-token versus Web-assertion confusion is settled by the pin plus the token's own typ/aud/iss claims, not by a discovery member."
     }
   ]
 }

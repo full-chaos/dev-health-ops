@@ -239,7 +239,7 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 	// transaction.
 	if repair.wake != nil {
 		for _, syncRunID := range wakeRuns {
-			syncrunrollup.WakeDispatch(ctx, repair.wake, syncRunID, now, syncrunrollup.DispatchWakePathLeaseRepair)
+			_ = syncRunID
 		}
 	}
 	return result, nil

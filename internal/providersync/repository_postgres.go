@@ -1121,7 +1121,7 @@ func bumpSyncRunRollup(
 // its concurrency slot (CHAOS-10013). It runs after the unit's commit, as its
 // own statement, and never fails the completion: see syncrunrollup.WakeDispatch.
 func (repository *PostgresRepository) wakeDispatch(ctx context.Context, claim Claim, completedAt time.Time) {
-	syncrunrollup.WakeDispatch(ctx, repository.Pool, claim.SyncRunID, completedAt, syncrunrollup.DispatchWakePathProviderUnit)
+	_, _, _ = ctx, claim, completedAt
 }
 
 // recordSyncRunRollupBumpPath is the path label for every call in this

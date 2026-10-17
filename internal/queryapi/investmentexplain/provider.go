@@ -69,10 +69,8 @@ func ResolveModelName(kind categorize.ProviderKind, model string) (resolved stri
 	if model != "" {
 		return model, true
 	}
-	if _, resolved := modelEnvByProvider[kind]; resolved {
-		if value := platformExplainModel(); value != "" {
-			return value, true
-		}
+	if value := platformExplainModel(); value != "" {
+		return value, true
 	}
 	for _, envName := range modelEnvByProvider[kind] {
 		if value := os.Getenv(envName); value != "" {

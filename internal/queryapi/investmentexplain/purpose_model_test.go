@@ -34,6 +34,23 @@ func TestPlatformExplainModelOrder(t *testing.T) {
 			t.Fatalf("org path without BYO: %q", got)
 		}
 	})
+	t.Run("every platform provider kind reads it, Ollama included", func(t *testing.T) {
+		clear(t)
+		t.Setenv("LLM_MODEL", "generic")
+		t.Setenv("LLM_MODEL_EXPLAIN", "explain-model")
+		t.Setenv("LLM_MODEL_OLLAMA", "provider-model")
+		for _, k := range []categorize.ProviderKind{
+			categorize.ProviderKindOpenAI, categorize.ProviderKindAnthropic, categorize.ProviderKindGemini,
+			categorize.ProviderKindQwen, categorize.ProviderKindLocal, categorize.ProviderKindOllama,
+		} {
+			if got, _ := ResolveModelName(k, ""); got != "explain-model" {
+				t.Errorf("%s: platform path %q", k, got)
+			}
+			if got, _ := ResolveModelNameForOrg(context.Background(), k, "", "org-1", nil); got != "explain-model" {
+				t.Errorf("%s: org path %q", k, got)
+			}
+		}
+	})
 	t.Run("unset leaves the existing order", func(t *testing.T) {
 		clear(t)
 		t.Setenv("LLM_MODEL", "generic")

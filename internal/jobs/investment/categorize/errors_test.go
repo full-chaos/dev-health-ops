@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 func TestSanitizeMessageRedactsCredentials(t *testing.T) {
@@ -173,13 +175,19 @@ func TestClassifiedErrorCauseIsSanitizedAcrossProviders(t *testing.T) {
 		complete func() error
 	}{
 		{"local", func() error {
-			provider := NewLocalProvider(LocalProviderConfig{BaseURL: "http://provider.invalid", HTTPClient: client})
-			_, err := provider.Complete(context.Background(), CompletionRequest{Prompt: "prompt"})
+			provider, err := NewSharedProvider(SharedProviderConfig{Kind: ProviderKindLocal, BaseURL: "http://provider.invalid", HTTPClient: client})
+			if err != nil {
+				return err
+			}
+			_, err = provider.Complete(context.Background(), CompletionRequest{Prompt: "prompt"})
 			return err
 		}},
 		{"openai", func() error {
-			provider := NewOpenAIProvider(OpenAIProviderConfig{BaseURL: "http://provider.invalid", HTTPClient: client})
-			_, err := provider.Complete(context.Background(), CompletionRequest{Prompt: "prompt"})
+			provider, err := NewSharedProvider(SharedProviderConfig{Kind: ProviderKindOpenAI, APIKey: secrets.NewHidden("test-key"), BaseURL: "http://provider.invalid", HTTPClient: client})
+			if err != nil {
+				return err
+			}
+			_, err = provider.Complete(context.Background(), CompletionRequest{Prompt: "prompt"})
 			return err
 		}},
 		{"ollama", func() error {

@@ -221,8 +221,8 @@ func TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel(t *testing.T) {
 // NO stored model and no explicit request-level model must construct
 // with ResolveModelNameForOrg's own provider-default fallback
 // ("gpt-5-mini" for openai, defaultModelByProvider in provider.go) --
-// not categorize's OWN, DIFFERENT default (openaiprovider.go's
-// "gpt-5-nano"), which is what construction silently fell back to when
+// not categorize's OWN, DIFFERENT default (the since-deleted ops OpenAI
+// client's "gpt-5-nano"), which is what construction silently fell back to when
 // CompleteInvestmentMixExplanationForOrg passed the RAW (empty)
 // requestedModel into newProviderForOrg instead of the fully-resolved
 // value ResolveModelNameForOrg had already computed.

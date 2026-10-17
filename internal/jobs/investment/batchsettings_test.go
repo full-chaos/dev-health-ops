@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 func TestResolveBatchSettingsScopeWinsOverEnvWhichWinsOverDefault(t *testing.T) {
@@ -65,7 +66,10 @@ func TestResolveBatchSettingsScopeWinsOverEnvWhichWinsOverDefault(t *testing.T) 
 // Batch API and for the decision kind, and passes for a batch provider (the
 // window refusal after it proves the gate let it through).
 func TestExecuteBatchModeGate(t *testing.T) {
-	openAI := categorize.NewOpenAIProvider(categorize.OpenAIProviderConfig{})
+	openAI, err := categorize.NewSharedProvider(categorize.SharedProviderConfig{Kind: categorize.ProviderKindOpenAI, APIKey: secrets.NewHidden("batch-gate-test-placeholder")})
+	if err != nil {
+		t.Fatal(err)
+	}
 	provider := func(p categorize.Provider, kind categorize.ProviderKind) func(string, string) (categorize.Provider, categorize.ProviderKind, error) {
 		return func(string, string) (categorize.Provider, categorize.ProviderKind, error) { return p, kind, nil }
 	}

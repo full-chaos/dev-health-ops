@@ -13,8 +13,7 @@ import (
 // claims; a missing file or symbol fails, it is never skipped.
 var llmAPIKeyHolders = map[string][]string{
 	"internal/platform/secrets/hidden.go":                   {"type Hidden struct"},
-	"internal/jobs/investment/categorize/openaiprovider.go": {"APIKey secrets.Hidden"},
-	"internal/jobs/investment/categorize/localprovider.go":  {"APIKey          secrets.Hidden"},
+	"internal/jobs/investment/categorize/sharedprovider.go": {"APIKey secrets.Hidden"},
 	"internal/jobs/investment/categorize/ollamaprovider.go": {"APIKey          secrets.Hidden"},
 	"internal/jobs/investment/categorize/typesafeclient.go": {"APIKey secrets.Hidden"},
 	"internal/llmorgsettings/resolve.go":                    {"APIKey  secrets.Hidden"},

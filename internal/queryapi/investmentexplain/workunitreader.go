@@ -301,7 +301,7 @@ func (reader *Reader) FetchRepoIdentities(ctx context.Context, orgID string, rep
 	query := fmt.Sprintf(`
 SELECT
     toString(id) AS repo_id,
-    argMax(if(identity_path != '', identity_path, repos.repo), last_synced) AS repo_slug,
+    argMax(if(repos.provider = 'gitlab' AND identity_path != '', identity_path, repos.repo), last_synced) AS repo_slug,
     if(uniqExact(provider) = 1, argMax(provider, last_synced), '') AS provider
 FROM repos
 WHERE id IN {repo_ids:Array(String)}

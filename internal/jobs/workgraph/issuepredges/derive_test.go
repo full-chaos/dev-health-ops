@@ -226,6 +226,28 @@ func TestExplicitTextTierProviderMatrix(t *testing.T) {
 	}
 }
 
+// CHAOS-3383: a GitLab current-path key keeps the "gitlab:" prefix, so it never
+// replaces a GitHub item of the same owner/repo, and it is counted when it
+// replaces another GitLab project's item.
+func TestGitLabCurrentPathKeysStayUnderTheGitLabPrefix(t *testing.T) {
+	github := WorkItemRow{RepoID: uuid.New(), WorkItemID: "gh:org/api#4", Provider: "github"}
+	renamed := WorkItemRow{RepoID: uuid.New(), WorkItemID: "gitlab:org/old#4", Provider: "gitlab", CurrentPath: "org/api"}
+	lookup := buildProviderLookup([]WorkItemRow{github, renamed})
+	if lookup.byID["gh:org/api#4"] != "gh:org/api#4" || lookup.byID["gitlab:org/api#4"] != "gitlab:org/old#4" {
+		t.Fatalf("byID = %v", lookup.byID)
+	}
+	if lookup.renamedPathCollisions != 0 {
+		t.Fatalf("collisions = %d, want 0 (two providers are two key spaces)", lookup.renamedPathCollisions)
+	}
+	taken := WorkItemRow{RepoID: uuid.New(), WorkItemID: "gitlab:acme/api#4", Provider: "gitlab", CurrentPath: "platform/api-v2"}
+	taker := WorkItemRow{RepoID: uuid.New(), WorkItemID: "gitlab:acme/api@456#4", Provider: "gitlab", CurrentPath: "acme/api"}
+	result := DeriveTextParseEdges([]PullRequestRow{{RepoID: uuid.New(), Number: 1, Title: "see acme/api#4"}},
+		[]WorkItemRow{taken, taker}, issueprlinks.NativeLinks{}, time.Now())
+	if result.RenamedPathCollisions != 1 || len(result.Links) != 1 || result.Links[0].WorkItemID != taker.WorkItemID {
+		t.Fatalf("collisions=%d links=%+v, want 1 and one link to %s", result.RenamedPathCollisions, result.Links, taker.WorkItemID)
+	}
+}
+
 func TestExtractRepoNamedIssueRefsRejectsEmbeddedAndMergeRequests(t *testing.T) {
 	for _, text := range []string{"ghttps://x/o/r#1", "a/b!3", "https://host/o/r#4"} {
 		if refs := ExtractRepoNamedIssueRefs(text); len(refs) != 0 {

@@ -472,8 +472,8 @@ func TestDeriveResolvesAGitLabMergeRequestByTheMintedOrTheCurrentPath(t *testing
 					RelationshipTypeRaw: "gitlab_closing_reference", LastSynced: testSynced,
 				}},
 				Repos: []RepoRow{
-					{OrgID: testOrg, ID: renamed, Repo: "platform/api-v2", IdentityPath: "acme/api"},
-					{OrgID: testOrg, ID: taker, Repo: "acme/api", IdentityPath: "acme/api@456"},
+					{OrgID: testOrg, ID: renamed, Repo: "platform/api-v2", Provider: "gitlab", IdentityPath: "acme/api"},
+					{OrgID: testOrg, ID: taker, Repo: "acme/api", Provider: "gitlab", IdentityPath: "acme/api@456"},
 				},
 				PullRequests: []PullRequestRow{{OrgID: testOrg, RepoID: renamed, Number: 5}, {OrgID: testOrg, RepoID: taker, Number: 5}},
 				WorkItems:    []WorkItemRow{{OrgID: testOrg, WorkItemID: "gitlab:acme/api#9"}},
@@ -483,5 +483,54 @@ func TestDeriveResolvesAGitLabMergeRequestByTheMintedOrTheCurrentPath(t *testing
 				t.Fatalf("links %+v (rejections %v), want one on repo %s", result.Links, result.Rejected, tc.want)
 			}
 		})
+	}
+}
+
+// CHAOS-3383, review round 2: GitLab identity paths and GitHub repository
+// names share one slug space. Each source resolves under its own provider, in
+// both directions, and the slug held by two repos is counted.
+func TestDeriveResolvesARepositorySlugUnderTheSourcesProvider(t *testing.T) {
+	github, gitlab := uuid.MustParse("11111111-1111-4111-8111-111111111111"), uuid.MustParse("22222222-2222-4222-8222-222222222222")
+	repos := []RepoRow{
+		{OrgID: testOrg, ID: github, Repo: "org/api", Provider: "github"},
+		// A renamed GitLab project minted at org/api, now at org/new.
+		{OrgID: testOrg, ID: gitlab, Repo: "org/new", Provider: "gitlab", IdentityPath: "org/api"},
+	}
+	for _, tc := range []struct {
+		name, source, target, raw string
+		want                      uuid.UUID
+	}{
+		{"a GitLab alias never answers a GitHub slug", "ghpr:org/api#5", testLinear, "linear_attachment", github},
+		{"a GitHub repo never answers a GitLab slug", "gitlab:org/api!5", "gitlab:org/api#9", "gitlab_closing_reference", gitlab},
+	} {
+		for _, order := range [][]RepoRow{repos, {repos[1], repos[0]}} {
+			t.Run(tc.name, func(t *testing.T) {
+				result := Derive(Inputs{
+					OrgID: testOrg,
+					Dependencies: []DependencyRow{{
+						OrgID: testOrg, SourceWorkItemID: tc.source, TargetWorkItemID: tc.target,
+						RelationshipTypeRaw: tc.raw, LastSynced: testSynced,
+					}},
+					Repos:        order,
+					PullRequests: []PullRequestRow{{OrgID: testOrg, RepoID: github, Number: 5}, {OrgID: testOrg, RepoID: gitlab, Number: 5}},
+					WorkItems:    []WorkItemRow{{OrgID: testOrg, WorkItemID: tc.target}},
+				})
+				if result.Written() != 1 || result.Links[0].RepoID != tc.want {
+					t.Fatalf("links %+v (rejections %v), want one on repo %s", result.Links, result.Rejected, tc.want)
+				}
+			})
+		}
+	}
+	// A slug two rows of one provider hold is counted.
+	result := Derive(Inputs{
+		OrgID: testOrg,
+		Dependencies: []DependencyRow{{OrgID: testOrg, SourceWorkItemID: testGHPRRef, TargetWorkItemID: testLinear,
+			RelationshipTypeRaw: "linear_attachment", LastSynced: testSynced}},
+		Repos: []RepoRow{{OrgID: testOrg, ID: github, Repo: testSlug, Provider: "github"},
+			{OrgID: testOrg, ID: gitlab, Repo: testSlug, Provider: "github"}},
+		WorkItems: []WorkItemRow{{OrgID: testOrg, WorkItemID: testLinear}},
+	})
+	if result.RepoSlugCollisions != 2 {
+		t.Fatalf("RepoSlugCollisions = %d, want 2 (the slug-only map and the provider map)", result.RepoSlugCollisions)
 	}
 }

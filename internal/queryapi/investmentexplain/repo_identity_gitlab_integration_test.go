@@ -15,7 +15,8 @@ import (
 
 // CHAOS-3383: a renamed GitLab project's merge-request work items carry the
 // path its repository id was minted from (repos.identity_path), so a PR
-// evidence ref resolves to that id, not one built from the current path.
+// evidence ref resolves to that id, not one built from the current path. A
+// GitHub row's identity_path is never read (provider-scoped).
 func TestFetchRepoIdentitiesNamesARenamedGitLabRepositoryByItsMintedPath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -45,7 +46,7 @@ func TestFetchRepoIdentitiesNamesARenamedGitLabRepositoryByItsMintedPath(t *test
 	renamed, github := "c7198fbc-1945-3717-05d8-eb78866b4e79", "1ebaec64-a77c-6b80-bc85-38e95e16d90e"
 	if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider, provider_repo_id, identity_path) VALUES
     (?, 'platform/api-v2', now64(3), now64(3), ?, 'gitlab', '123', 'acme/api'),
-    (?, 'acme/web', now64(3), now64(3), ?, 'github', '', '')`, renamed, org, github, org); err != nil {
+    (?, 'acme/web', now64(3), now64(3), ?, 'github', '', 'never/read')`, renamed, org, github, org); err != nil {
 		t.Fatal(err)
 	}
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})

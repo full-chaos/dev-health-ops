@@ -559,7 +559,7 @@ internal/queryapi/hotspots/hotspots.go|queryHotspotRows|*string,*string,*uint64,
 internal/queryapi/investment/sunburst.go|FetchInvestmentSunburst|*string,*string,*string,*float64|54b6486b78e7|spliced-select-list
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|ec7d4a5c1502|spliced-select-list
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentThemeEffort|*string,*float64,*float64,*float64|1a7ac264d9b4|spliced-select-list
-internal/queryapi/investmentexplain/workunitreader.go|FetchWorkUnitInvestments|*string,**string,**string,*time.Time,*time.Time,**string,**string,**string,**float64,*float64,*[]string,*[]float64,*[]string,*[]float64,**string,**float64,**string,**string,**string,**string,*time.Time|87e7c1c8d101|spliced-select-list
+internal/queryapi/investmentexplain/workunitreader.go|FetchWorkUnitInvestments|*string,**string,**string,*time.Time,*time.Time,**string,**string,**string,**float64,*float64,*[]string,*[]float64,*[]string,*[]float64,**string,**float64,**string,**string,**string,**string,*time.Time|540ad84f85e3|spliced-select-list
 internal/queryapi/operatingreview/operatingreview.go|fetchChangeFailureAgg|[]any|fa0c9e3b063a|variadic-destinations
 internal/queryapi/people/metricqueries.go|fetchPersonBreakdown|*string,*float64|a120bde67c22|spliced-select-list
 internal/queryapi/people/metricqueries.go|fetchPersonMetricSeries|*time.Time,*float64|5b284baef0b7|spliced-select-list

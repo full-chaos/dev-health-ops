@@ -35,6 +35,7 @@
 package issuepredges
 
 import (
+	"log/slog"
 	"strings"
 	"time"
 
@@ -166,6 +167,9 @@ type TextParseResult struct {
 	// OutrankedByNative counts resolved references not linked because the pull
 	// request or the issue already has a native link.
 	OutrankedByNative int
+	// RenamedPathCollisions counts GitLab current paths that name, in text,
+	// another project than the one whose minted path they are (CHAOS-3383).
+	RenamedPathCollisions int
 }
 
 // providerLookup maps a provider's own issue-identifier shape to a
@@ -178,6 +182,9 @@ type providerLookup struct {
 	byID   map[string]string    // exact work_item_id -> provider, for repo-named references
 	github map[[2]string]string // (repo_id string, issue number string) -> work_item_id
 	gitlab map[[2]string]string // (repo_id string, issue number string) -> work_item_id
+	// renamedPathCollisions counts GitLab current-path keys that replaced
+	// another project's item carrying that path as its minted path.
+	renamedPathCollisions int
 }
 
 type keyedItem struct{ provider, workItemID string }
@@ -226,7 +233,15 @@ func buildProviderLookup(workItems []WorkItemRow) providerLookup {
 			continue
 		}
 		if idx := strings.LastIndex(wi.WorkItemID, "#"); idx >= 0 {
-			lookup.byID[strings.ToLower("gitlab:"+wi.CurrentPath+wi.WorkItemID[idx:])] = wi.WorkItemID
+			// The key keeps the "gitlab:" prefix, so it never answers a GitHub
+			// owner/repo#n: provider-scoped by construction.
+			key := strings.ToLower("gitlab:" + wi.CurrentPath + wi.WorkItemID[idx:])
+			if held, ok := lookup.byID[key]; ok && held != wi.WorkItemID {
+				lookup.renamedPathCollisions++
+				slog.Default().Debug("issue-pr text refs: a GitLab current path names another project's minted path",
+					slog.String("key", key), slog.String("replaced_work_item_id", held), slog.String("work_item_id", wi.WorkItemID))
+			}
+			lookup.byID[key] = wi.WorkItemID
 		}
 	}
 	return lookup
@@ -256,7 +271,7 @@ func edgeTypeFor(refType textrefs.RefType) string {
 // a native link gives no edge and no link (see issueprlinks.NativeLinks).
 func DeriveTextParseEdges(prs []PullRequestRow, workItems []WorkItemRow, native issueprlinks.NativeLinks, buildTime time.Time) TextParseResult {
 	lookup := buildProviderLookup(workItems)
-	var result TextParseResult
+	result := TextParseResult{RenamedPathCollisions: lookup.renamedPathCollisions}
 
 	for _, pr := range prs {
 		if pr.Title == "" && pr.Body == "" && pr.HeadBranch == "" {

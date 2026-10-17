@@ -35,7 +35,9 @@ type Outcome struct {
 	// in ReservedAdmissions -- the signal that activating one would now do
 	// something. See ReservedAdmissions for the sequencing this protects.
 	ReservedSeenByRawKind map[string]int
-	Duration              time.Duration
+	// RepoSlugCollisions counts repository slugs two repos hold (Result).
+	RepoSlugCollisions int
+	Duration           time.Duration
 	// Balanced is false when the read count does not equal written plus
 	// rejected -- an accounting bug in this package, not a data condition.
 	Balanced bool
@@ -135,6 +137,7 @@ func (service *Service) Produce(ctx context.Context, orgID string, window Window
 		Written:               result.Written(),
 		Rejected:              result.Rejected,
 		ReservedSeenByRawKind: result.ReservedSeenByRawKind,
+		RepoSlugCollisions:    result.RepoSlugCollisions,
 		Duration:              service.now().Sub(started),
 		Balanced:              result.Balanced(),
 	}
@@ -148,6 +151,7 @@ func (service *Service) observe(outcome Outcome) {
 		slog.Int("dependencies_read", outcome.DependenciesRead),
 		slog.Int("rows_written", outcome.Written),
 		slog.Bool("accounting_balanced", outcome.Balanced),
+		slog.Int("repo_slug_collisions", outcome.RepoSlugCollisions),
 		slog.Duration("duration", outcome.Duration),
 	}
 	// Fixed order, from AllRejectionReasons -- ranging a map here would make

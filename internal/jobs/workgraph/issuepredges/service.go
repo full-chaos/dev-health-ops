@@ -36,7 +36,9 @@ type TextParseOutcome struct {
 	// OutrankedByNative counts resolved references not linked because the pull
 	// request or the issue already has a native link.
 	OutrankedByNative int
-	Duration          time.Duration
+	// RenamedPathCollisions is TextParseResult.RenamedPathCollisions.
+	RenamedPathCollisions int
+	Duration              time.Duration
 }
 
 // Service orchestrates both issue<->PR edge sub-builders against ClickHouse.
@@ -171,17 +173,18 @@ func (service *Service) ProduceTextParseEdges(ctx context.Context, orgID string,
 	}
 
 	outcome := TextParseOutcome{
-		OrganizationID:    orgID,
-		PullRequestsRead:  len(prs),
-		EdgesWritten:      edgesWritten,
-		LinksWritten:      len(result.Links),
-		JiraRefsFound:     result.JiraRefsFound,
-		GitHubRefsFound:   result.GitHubRefsFound,
-		GitLabRefsFound:   result.GitLabRefsFound,
-		CrossRefsFound:    result.CrossRefsFound,
-		AmbiguousKeys:     result.AmbiguousKeys,
-		OutrankedByNative: result.OutrankedByNative,
-		Duration:          service.now().Sub(started),
+		OrganizationID:        orgID,
+		PullRequestsRead:      len(prs),
+		EdgesWritten:          edgesWritten,
+		LinksWritten:          len(result.Links),
+		JiraRefsFound:         result.JiraRefsFound,
+		GitHubRefsFound:       result.GitHubRefsFound,
+		GitLabRefsFound:       result.GitLabRefsFound,
+		CrossRefsFound:        result.CrossRefsFound,
+		AmbiguousKeys:         result.AmbiguousKeys,
+		OutrankedByNative:     result.OutrankedByNative,
+		RenamedPathCollisions: result.RenamedPathCollisions,
+		Duration:              service.now().Sub(started),
 	}
 	service.logger.Info("issue-pr text-parse edges produced",
 		slog.String("organization_id", outcome.OrganizationID),
@@ -191,6 +194,7 @@ func (service *Service) ProduceTextParseEdges(ctx context.Context, orgID string,
 		slog.Int("cross_refs_found", outcome.CrossRefsFound),
 		slog.Int("ambiguous_keys", outcome.AmbiguousKeys),
 		slog.Int("outranked_by_native", outcome.OutrankedByNative),
+		slog.Int("renamed_path_collisions", outcome.RenamedPathCollisions),
 		slog.Duration("duration", outcome.Duration),
 	)
 	return outcome, nil

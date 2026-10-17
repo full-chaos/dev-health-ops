@@ -787,7 +787,9 @@ ids no longer follow its current path. Every GitLab route resolves the identity 
   recreate).
 - GitLab work-item ids are `gitlab:{identity_path}#{iid}` and `!{iid}`. A reference a payload makes by another
   project's current path is stored under that project's identity path. Readers that turn a slug into a repository
-  (`issueprlinks`, `issuepredges`, investment explain) accept the identity path and the current path.
+  (`issueprlinks`, `issuepredges`, investment explain) accept the identity path and the current path, each under
+  its own provider: a GitLab identity path never answers a GitHub slug, and a GitHub repository never answers a
+  GitLab one.
 - Not changed yet: `work_items.project_id` and sprint ids keep the current path. Until they move to the catalog id,
   a project at a reused path shares `project_id` with the old project's items, and so its ownership join.
 

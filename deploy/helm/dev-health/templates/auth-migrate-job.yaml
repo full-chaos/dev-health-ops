@@ -1,0 +1,94 @@
+{{- /*
+The Auth Control Plane schema migration (CHAOS-4886): `auth-migrate` from the
+auth-migrate image (docker/go-worker.Dockerfile target `auth-migrate`), the ONLY
+thing that issues DDL against the auth schema (ACP-ADR-04). A Helm hook Job,
+never run by auth-service at startup. It connects as the MIGRATION login
+(authService.migrate.secretName) and grants the runtime login
+(authService.migrate.runtimeRole) its table privileges; it refuses to run as the
+runtime login. Defaults off with authService.enabled.
+*/ -}}
+{{- if and .Values.authService.enabled .Values.authService.migrate.enabled }}
+{{- $a := .Values.authService }}
+{{- $m := $a.migrate }}
+{{- if not $m.secretName }}{{- fail "authService.migrate.secretName is required: the Secret holding the migration login's DSN (key authService.migrate.secretKey), distinct from the runtime login's" }}{{- end }}
+{{- if eq $m.secretName $a.database.secretName }}
+{{- if eq $m.secretKey $a.database.secretKey }}{{- fail "authService.migrate and authService.database name the same Secret key: the migration login and the runtime login must be distinct (ACP-ADR-04)" }}{{- end }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-migrate
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-migrate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ join "," $m.hookEvents }}
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $m.backoffLimit }}
+  activeDeadlineSeconds: {{ $m.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-migrate" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: auth-migrate
+          image: {{ include "dev-health.authMigrateImage" . }}
+          imagePullPolicy: {{ $m.image.pullPolicy }}
+          env:
+            - name: AUTH_MIGRATION_DATABASE_URI
+              valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $m.secretKey | quote }}}}
+            - name: AUTH_DATABASE_SCHEMA
+              value: {{ $a.database.schema | quote }}
+            - name: AUTH_RUNTIME_DATABASE_ROLE
+              value: {{ $m.runtimeRole | quote }}
+          resources:
+            {{- toYaml $m.resources | nindent 12 }}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+{{- if .Values.networkPolicy.enabled }}
+---
+{{- /*
+The Job pod needs the database and DNS and accepts no connection. Excluded from
+the release-wide policy like the service (networkpolicy.yaml).
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-migrate
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-migrate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ join "," $m.hookEvents }}
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-migrate" "context" $) | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        {{- toYaml $a.networkPolicy.egress.database.to | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $a.networkPolicy.egress.database.port }}
+{{- end }}
+{{- end }}

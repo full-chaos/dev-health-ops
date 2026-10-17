@@ -1,0 +1,228 @@
+{{- /*
+The Auth Control Plane service (CHAOS-4886, Wave 1 of CHAOS-3274): `auth-service`
+from the auth-service image (docker/go-worker.Dockerfile target `auth-service`).
+DORMANT: the API listener mounts no route, no production token is issued, and
+nothing routes to it. Defaults off; removing it (authService.enabled=false) has
+no effect on the current auth authority.
+
+Two listeners, never one: the API listener (authService.port) carries requests,
+the operator listener (authService.operatorPort) carries /healthz, /readyz and
+/metrics. Probes target the operator port. /readyz fails CLOSED on the
+`postgres` and `signing_key` checks, re-run on every request.
+
+Secrets are referenced, never created here (see values.yaml). The runtime DSN
+reaches the container by secretKeyRef; the signing key reaches it only as a
+file (a direct-value AUTH_SIGNING_KEY is rejected by the service,
+ACP-ADR-02 §4). The key's custody contract (O_NOFOLLOW, regular file, no
+group/world mode bit) cannot be met by mounting the Secret straight into the
+container -- see authService.signingKey.stagingImage in values.yaml for why the
+stage-signing-key init container exists.
+*/ -}}
+{{- if .Values.authService.enabled }}
+{{- $a := .Values.authService }}
+{{- if not $a.database.secretName }}{{- fail "authService.database.secretName is required: the Secret holding the runtime login's DSN (key authService.database.secretKey)" }}{{- end }}
+{{- if not $a.signingKey.secretName }}{{- fail "authService.signingKey.secretName is required: the Secret holding the Ed25519 PKCS#8 PEM signing key (key authService.signingKey.secretKey)" }}{{- end }}
+{{- if not $a.signingKey.keyId }}{{- fail "authService.signingKey.keyId is required: every signing key carries a kid and a JWKS entry from day one (ACP-ADR-02 §5)" }}{{- end }}
+{{- if eq (int $a.port) (int $a.operatorPort) }}{{- fail "authService.port and authService.operatorPort must differ: the operator surface is never exposed on the API port" }}{{- end }}
+{{- if not (regexMatch "^[0-9]+s$" (toString $a.shutdownTimeout)) }}{{- fail "authService.shutdownTimeout must be whole seconds such as 20s" }}{{- end }}
+{{- if ge (int (trimSuffix "s" (toString $a.shutdownTimeout))) (int $a.terminationGracePeriodSeconds) }}{{- fail "authService.shutdownTimeout must be below authService.terminationGracePeriodSeconds: the kubelet kills the pod at the grace period, so a longer shutdown bound is never reached" }}{{- end }}
+{{- range $a.extraEnv }}
+{{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-service
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+spec:
+  replicas: {{ $a.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      {{- with $a.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ $a.terminationGracePeriodSeconds }}
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, fsGroupChangePolicy: OnRootMismatch, seccompProfile: {type: RuntimeDefault}}
+      initContainers:
+        - name: stage-signing-key
+          image: {{ $a.signingKey.stagingImage.repository }}:{{ $a.signingKey.stagingImage.tag }}
+          imagePullPolicy: {{ $a.signingKey.stagingImage.pullPolicy }}
+          command: ["install", "-m", "0400", "/in/signing-key.pem", "/out/signing-key.pem"]
+          volumeMounts:
+            - {name: signing-key-source, mountPath: /in, readOnly: true}
+            - {name: signing-key, mountPath: /out}
+          resources:
+            requests: {memory: "8Mi", cpu: "10m"}
+            limits: {memory: "32Mi", cpu: "100m"}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: auth-service
+          image: {{ include "dev-health.authServiceImage" . }}
+          imagePullPolicy: {{ $a.image.pullPolicy }}
+          args:
+            - {{ printf "--http-addr=:%v" $a.port | quote }}
+            - {{ printf "--operator-http-addr=:%v" $a.operatorPort | quote }}
+            - {{ printf "--shutdown-timeout=%s" $a.shutdownTimeout | quote }}
+            - {{ printf "--database-schema=%s" $a.database.schema | quote }}
+            - "--signing-key-file=/run/auth/signing/signing-key.pem"
+            - {{ printf "--signing-key-id=%s" $a.signingKey.keyId | quote }}
+            {{- range $a.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $a.port }}
+              protocol: TCP
+            - name: operator
+              containerPort: {{ $a.operatorPort }}
+              protocol: TCP
+          env:
+            - name: AUTH_DATABASE_URI
+              valueFrom: {secretKeyRef: {name: {{ $a.database.secretName | quote }}, key: {{ $a.database.secretKey | quote }}}}
+          {{- with $a.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - {name: signing-key, mountPath: /run/auth/signing, readOnly: true}
+          livenessProbe:
+            httpGet: {path: /healthz, port: operator}
+            {{- toYaml $a.livenessProbe | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /readyz, port: operator}
+            {{- toYaml $a.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml $a.resources | nindent 12 }}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+      volumes:
+        - name: signing-key-source
+          secret:
+            secretName: {{ $a.signingKey.secretName | quote }}
+            defaultMode: 0440
+            items:
+              - {key: {{ $a.signingKey.secretKey | quote }}, path: signing-key.pem}
+        - name: signing-key
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
+      {{- with $a.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $a.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $a.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-service
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $a.port }}
+      targetPort: http
+      protocol: TCP
+{{- if .Values.networkPolicy.enabled }}
+{{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required when networkPolicy.enabled: the auth pods are excluded from the release-wide policy, so an empty list would cut the service off from its database" }}{{- end }}
+{{- range (concat $a.networkPolicy.allowedFrom $a.networkPolicy.metricsFrom) }}
+{{- if not (or (and .matchLabels (gt (len .matchLabels) 0)) (and .matchExpressions (gt (len .matchExpressions) 0))) }}
+{{- fail "authService.networkPolicy.allowedFrom and metricsFrom entries need a non-empty matchLabels or matchExpressions: an empty podSelector admits every pod in the namespace" }}
+{{- end }}
+{{- end }}
+---
+{{- /*
+The auth pods' WHOLE network boundary. They are excluded from the release-wide
+policy (networkpolicy.yaml), which admits every pod of the namespace on every
+port and all HTTPS egress. Ingress: only the listed consumers on the API port
+and only the listed scrapers on the operator port; an empty list renders no rule
+for that port (a `from` that is empty or absent would admit every source).
+Egress: DNS, the database, and -- only when listed -- the key custody service.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-service
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  {{- if or $a.networkPolicy.allowedFrom $a.networkPolicy.metricsFrom }}
+  ingress:
+    {{- with $a.networkPolicy.allowedFrom }}
+    - from:
+        {{- range . }}
+        - podSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $a.port }}
+    {{- end }}
+    {{- with $a.networkPolicy.metricsFrom }}
+    - from:
+        {{- range . }}
+        - podSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $a.operatorPort }}
+    {{- end }}
+  {{- else }}
+  ingress: []
+  {{- end }}
+  egress:
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The auth database, and nothing else
+    - to:
+        {{- toYaml $a.networkPolicy.egress.database.to | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $a.networkPolicy.egress.database.port }}
+    {{- with $a.networkPolicy.egress.keyCustody.to }}
+    # Key custody service (KMS)
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $a.networkPolicy.egress.keyCustody.port }}
+    {{- end }}
+{{- end }}
+{{- end }}

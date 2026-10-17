@@ -92,6 +92,136 @@ goApi:
   podAnnotations: {}
 
 # =============================================================================
+# Auth Control Plane (CHAOS-4886, Wave 1 of CHAOS-3274) -- DORMANT
+# =============================================================================
+# `auth-service` and its separate `auth-migrate` Job. Defaults off. Enabling it
+# changes no request's destination: no route is mounted, no production token is
+# issued, nothing calls it, and rolling it back (enabled=false) removes it with
+# no effect on the current auth authority.
+#
+# Everything sensitive is referenced, never created: this chart renders no
+# Secret for it. The Secrets named below must exist in the release namespace:
+#   - database.secretName/key: the RUNTIME login's DSN (AUTH_DATABASE_URI). The
+#     login is unprivileged and owns no DDL; provision it before the migrate Job.
+#   - migrate.secretName/key: the MIGRATION login's DSN
+#     (AUTH_MIGRATION_DATABASE_URI), distinct from the runtime login. Only the
+#     Job sees it; the long-running Deployment never does.
+#   - signingKey.secretName/key: an Ed25519 PKCS#8 PEM private key. The service
+#     refuses any key file with a group or world mode bit (ACP-ADR-02 §3).
+authService:
+  enabled: false
+  replicas: 1
+  # -- The auth API listener. It mounts no route in Wave 1.
+  port: 8095
+  # -- The operator listener: /healthz, /readyz, /metrics. Probes use it, never
+  #    the API port.
+  operatorPort: 8096
+  image:
+    # -- docker/go-worker.Dockerfile target `auth-service`. Non-local profiles
+    #    pin `repository@sha256:<digest>` (immutable release artifact).
+    repository: ghcr.io/full-chaos/dev-health-go-auth-service
+    # -- Empty defaults to Chart.appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # -- Database settings of the runtime login.
+  database:
+    secretName: ""
+    secretKey: AUTH_DATABASE_URI
+    schema: auth
+  signingKey:
+    secretName: ""
+    secretKey: signing-key.pem
+    # -- The JWKS `kid` (letters, digits, '-', '_', '.', at most 64).
+    keyId: ""
+    # -- A Secret volume is root-owned, so a mode 0400 key is unreadable by uid
+    #    65532, and fsGroup makes it group-readable (0440), which the custody
+    #    check refuses. The Secret is therefore mounted 0440 for an
+    #    init container (fsGroup lets uid 65532 read it) that installs a copy at
+    #    mode 0400, owned by uid 65532, into a memory-backed emptyDir; only that
+    #    copy reaches the auth-service container. The init container needs `cp`
+    #    and `install`, so it uses the chart's PostgreSQL image, not the
+    #    distroless one.
+    stagingImage:
+      repository: postgres
+      tag: "18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+      pullPolicy: IfNotPresent
+  # -- Whole seconds ("20s"). Must stay below terminationGracePeriodSeconds: the whole
+  #    ordered shutdown (readiness gate, API, operator, database) is bounded
+  #    by it.
+  shutdownTimeout: 20s
+  terminationGracePeriodSeconds: 30
+  # -- Extra flags after the rendered ones. Credentials never go here.
+  extraArgs: []
+  extraEnv: []
+  livenessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 15
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 2
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  # -- The one-shot schema migration (cmd/auth-migrate). A Helm hook Job, never
+  #    run by the service at startup.
+  migrate:
+    enabled: true
+    image:
+      # -- docker/go-worker.Dockerfile target `auth-migrate`.
+      repository: ghcr.io/full-chaos/dev-health-go-auth-migrate
+      tag: ""
+      pullPolicy: IfNotPresent
+    secretName: ""
+    secretKey: AUTH_MIGRATION_DATABASE_URI
+    # -- The runtime login auth-migrate grants privileges to.
+    runtimeRole: devhealth_auth
+    hookEvents: [pre-install, pre-upgrade]
+    backoffLimit: 0
+    activeDeadlineSeconds: 600
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "20m"
+      limits:
+        memory: "128Mi"
+        cpu: "250m"
+  # -- Rendered only with networkPolicy.enabled. The auth pods are EXCLUDED from
+  #    the release-wide policy (which admits every pod of the namespace and all
+  #    HTTPS egress); this per-component policy is their whole boundary.
+  networkPolicy:
+    # -- Pod selectors (`{matchLabels: {...}}`) allowed to reach the API port. Empty
+    #    admits nobody (Wave 1: nothing consumes the service yet).
+    allowedFrom: []
+    # -- Pod selectors allowed to scrape the operator port (/metrics). Empty admits
+    #    nobody (kubelet probes are not subject to NetworkPolicy).
+    metricsFrom: []
+    egress:
+      # -- Peers the service may reach on database.port: a list of NetworkPolicy
+      #    `to` entries (podSelector, namespaceSelector, ipBlock). REQUIRED when
+      #    the policy renders: an empty list would silently cut the service off
+      #    from its database, so the render fails instead.
+      database:
+        to: []
+        port: 5432
+      # -- Peers of the key custody service (KMS), `to` entries plus port. File
+      #    custody (Wave 1) needs none, so the default grants no egress for it.
+      keyCustody:
+        to: []
+        port: 443
+
+# =============================================================================
 # Query API (Go query plane, CHAOS-5616)
 # =============================================================================
 # The Go half of the split query plane. The Python edge's dispatcher forwards

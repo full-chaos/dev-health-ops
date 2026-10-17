@@ -46,6 +46,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     set -eu; \
     for command in \
         dev-health-worker-migrate \
+        auth-service \
+        auth-migrate \
         dho; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
         -buildvcs=false \
@@ -67,6 +69,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/contractcheck/app/contracts/jobs \
       /runtime/contractcheck/app/deploy/go-workers \
       /runtime/migrate/usr/local/bin \
+      /runtime/auth-service/usr/local/bin \
+      /runtime/auth-migrate/usr/local/bin \
       /runtime/dho/usr/local/bin \
       /runtime/dho/app/contracts/jobs \
       /runtime/dho/app/contracts/sync-dispatch \
@@ -85,6 +89,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp -R /src/contracts/jobs/v1 /runtime/contractcheck/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/deployment.json /runtime/contractcheck/app/deploy/go-workers/deployment.json; \
     cp /out/dev-health-worker-migrate /runtime/migrate/usr/local/bin/dev-health-worker-migrate; \
+    cp /out/auth-service /runtime/auth-service/usr/local/bin/auth-service; \
+    cp /out/auth-migrate /runtime/auth-migrate/usr/local/bin/auth-migrate; \
     cp /out/dho /runtime/dho/usr/local/bin/dho; \
     cp -R /src/contracts/jobs/v1 /runtime/dho/app/contracts/jobs/v1; \
     cp -R /src/contracts/sync-dispatch/v1 /runtime/dho/app/contracts/sync-dispatch/v1; \
@@ -172,3 +178,20 @@ FROM runtime AS migrate
 COPY --from=build --chown=65532:65532 /runtime/migrate/ /
 ENTRYPOINT ["/usr/local/bin/dev-health-worker-migrate"]
 
+
+# auth-service is the dormant Auth Control Plane HTTP service (cmd/auth-service,
+# CHAOS-4881). Its operator listener (/healthz, /readyz, /metrics) defaults to
+# :8096 and the API listener to :8095; both are set by the deployment, not by
+# the image. It reads no staged file: configuration is AUTH_* environment plus
+# the signing-key file the deployment mounts. Like migrate it stages no /app
+# tree, so it must NOT declare WORKDIR (see the migrate caveat above).
+FROM runtime AS auth-service
+COPY --from=build --chown=65532:65532 /runtime/auth-service/ /
+ENTRYPOINT ["/usr/local/bin/auth-service"]
+
+# auth-migrate is the one-shot Auth Control Plane schema migration
+# (cmd/auth-migrate, CHAOS-4882). The only DDL path against the auth schema;
+# auth-service never migrates. Same no-/app, no-WORKDIR shape as migrate.
+FROM runtime AS auth-migrate
+COPY --from=build --chown=65532:65532 /runtime/auth-migrate/ /
+ENTRYPOINT ["/usr/local/bin/auth-migrate"]

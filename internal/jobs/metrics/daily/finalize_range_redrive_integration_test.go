@@ -679,6 +679,8 @@ func TestRedriveFinalizeForRangeGivesPriorAttemptRunsAFreshGeneration(t *testing
 			`finalization_status = 'running', finalization_claim_token = gen_random_uuid(), finalization_lease_expires_at = updated_at - interval '1 hour'`, true},
 		{"pending finalize", "00000000-0000-4000-8000-000000004424", "00000000-0000-4000-9000-000000004424", time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC),
 			`finalization_status = 'pending'`, false},
+		{"finalize lease expiring exactly now", "00000000-0000-4000-8000-000000004425", "00000000-0000-4000-9000-000000004425", time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC),
+			`finalization_status = 'running', finalization_claim_token = gen_random_uuid(), finalization_lease_expires_at = '2026-08-28T12:00:00Z'`, true},
 	}
 	generation := func(runID string) string {
 		var g string
@@ -722,6 +724,11 @@ func TestRedriveFinalizeForRangeGivesPriorAttemptRunsAFreshGeneration(t *testing
 		}
 		if got != want {
 			t.Errorf("%s: generation = %q, want %q", tc.name, got, want)
+		}
+		if tc.wantFresh {
+			// The redriven job still claims and completes under the new generation.
+			processFinalizeJob(t, ctx, store, tc.runID)
+			assertFinalizeTestRunStatus(t, ctx, pool, tc.runID, "succeeded")
 		}
 	}
 }

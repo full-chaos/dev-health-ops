@@ -524,7 +524,7 @@ FOR UPDATE OF run`, runID).Scan(
 		return false, nil
 	}
 	priorAttempt := finalizationStatus == "failed" ||
-		(finalizationStatus == "running" && (leaseExpiresAt == nil || leaseExpiresAt.Before(now)))
+		(finalizationStatus == "running" && (leaseExpiresAt == nil || !leaseExpiresAt.After(now)))
 	eligible := finalizationStatus == "pending" || (allowPriorAttempt && priorAttempt)
 	if !eligible {
 		return false, nil
@@ -817,7 +817,7 @@ FOR UPDATE OF run`, runID).Scan(
 		// legitimately in flight for another reason (a live finalize lease)
 		// must not be touched.
 		priorAttempt := finalizationStatus == "failed" ||
-			(finalizationStatus == "running" && (leaseExpiresAt == nil || leaseExpiresAt.Before(now)))
+			(finalizationStatus == "running" && (leaseExpiresAt == nil || !leaseExpiresAt.After(now)))
 		if finalizationStatus != "pending" && !priorAttempt {
 			return false, false, nil
 		}

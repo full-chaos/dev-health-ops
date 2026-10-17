@@ -235,7 +235,14 @@ func TestEndpointProfileRowsMatchServedBehaviour(t *testing.T) {
 			if len(forListener) == 0 {
 				t.Fatalf("%s is served with no row", token)
 			}
-			carriers := []string{"", "envelope", "edge", "headers"}
+			// Identity headers sent to the public listener are deleted there and
+			// counted, with a drop log the identity-header tests assert on
+			// (rate-limited to one a second): they are no carrier of that
+			// listener, so they are not sent to it.
+			carriers := []string{"", "envelope", "edge"}
+			if listener != "query" {
+				carriers = append(carriers, "headers")
+			}
 			methods := stack.servedMethods(listener, path, carriers)
 			if len(methods) == 0 {
 				t.Fatalf("%s answers 404/405 to every method: the harness does not reach it", token)

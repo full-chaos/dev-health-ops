@@ -266,11 +266,16 @@ func warnShort(name, field string) {
 	registry.warned[name+"/"+field] = struct{}{}
 	registry.Unlock()
 	if !seen {
+		detail := "the value is shorter than the minimum: redacted only in credential shapes (a password key with its value, or a user and password in front of the @ of a URL), not as a bare word"
+		if field == "" {
+			detail = "password for " + name + " is shorter than the minimum: redacted only in credential shapes (a password key with its value, or a user and password in front of the @ of a URL), not as a bare word"
+		}
 		warn("secret_shorter_than_minimum_not_redactable_by_value",
-			append(warnAttrs(name, field), "minimum_length", MinRegisteredLength,
-				"detail", "the value is shorter than the minimum: redacted only in credential shapes (a password key with its value, or a user and password in front of the @ of a URL), not as a bare word")...)
+			append(warnAttrs(name, field), "minimum_length", MinRegisteredLength, "detail", detail)...)
 	}
 }
+
+var identifierField = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 
 // warnAttrs names the setting, and the credential field when there is one. The
 // field is its own attribute: its key is not a protected word, and a bare field
@@ -278,6 +283,11 @@ func warnShort(name, field string) {
 func warnAttrs(name, field string) []any {
 	if field == "" {
 		return []any{"setting", name}
+	}
+	if !identifierField.MatchString(field) {
+		// A key with spaces or punctuation reads as prose to the log redactor, which
+		// would hide it or a neighbour; say that it is unusual and how long it is.
+		return []any{"setting", name, "field", "non_identifier_name", "field_length", len(field)}
 	}
 	return []any{"setting", name, "field", field}
 }

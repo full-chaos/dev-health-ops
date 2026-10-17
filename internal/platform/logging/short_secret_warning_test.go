@@ -40,3 +40,48 @@ func TestShortCredentialFieldWarningNamesTheField(t *testing.T) {
 		}
 	}
 }
+
+func TestShortEnvSettingWarningKeepsItsNamedDetail(t *testing.T) {
+	secrets.ResetRegistered()
+	t.Cleanup(secrets.ResetRegistered)
+	var out bytes.Buffer
+	restore := InstallDefault(NewJSON(&out, slog.LevelDebug))
+	t.Cleanup(restore)
+
+	secrets.Register("CLICKHOUSE_PASSWORD", "abc")
+
+	var record map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record["setting"] != "CLICKHOUSE_PASSWORD" {
+		t.Errorf("setting = %v", record["setting"])
+	}
+	if detail, _ := record["detail"].(string); !strings.Contains(detail, "CLICKHOUSE_PASSWORD") {
+		t.Errorf("detail lost the setting name: %v", record["detail"])
+	}
+	if _, has := record["field"]; has {
+		t.Errorf("an environment setting carries no field attribute: %s", out.String())
+	}
+}
+
+func TestShortCredentialFieldWithProseInItsNameIsReportedAsUnusual(t *testing.T) {
+	secrets.ResetRegistered()
+	t.Cleanup(secrets.ResetRegistered)
+	var out bytes.Buffer
+	restore := InstallDefault(NewJSON(&out, slog.LevelDebug))
+	t.Cleanup(restore)
+
+	secrets.RegisterCredentialJSON([]byte(`{"password token-12345678":"abc"}`))
+
+	var record map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record["field"] != "non_identifier_name" || record["field_length"] != float64(len("password token-12345678")) {
+		t.Errorf("unusual field name not reported as such: %s", out.String())
+	}
+	if strings.Contains(out.String(), "12345678") {
+		t.Errorf("the field name leaked: %s", out.String())
+	}
+}

@@ -1034,8 +1034,13 @@ func querySubjectsInto(
 	if err := rows.Err(); err != nil {
 		return result, stepcause.Failure(stepcause.IterateWorkItems, err)
 	}
-	if err := teamattribution.AnchorGitLabSubjectProjects(ctx, conn, result); err != nil {
+	anchor, err := teamattribution.AnchorGitLabSubjectProjects(ctx, conn, result)
+	if err != nil {
 		return nil, stepcause.Failure(stepcause.QueryWorkItems, err)
+	}
+	if anchor.Anchored+anchor.Unanchored > 0 {
+		slog.Default().DebugContext(ctx, "gitlab_subject_projects_anchored", "subjects", len(result),
+			"anchored", anchor.Anchored, "unanchored", anchor.Unanchored)
 	}
 	return result, nil
 }

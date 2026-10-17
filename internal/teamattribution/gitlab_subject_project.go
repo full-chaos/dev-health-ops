@@ -2,7 +2,6 @@ package teamattribution
 
 import (
 	"context"
-	"log/slog"
 	"strconv"
 	"strings"
 
@@ -117,6 +116,9 @@ WHERE org_id = ? AND provider = 'gitlab' AND id IN (SELECT toUUID(arrayJoin(?)))
 
 const gitLabNativeProjectChunk = 5000
 
+// GitLabAnchorStats counts what AnchorGitLabSubjectProjects did, for the caller's log.
+type GitLabAnchorStats struct{ Anchored, Unanchored int }
+
 // AnchorGitLabSubjectProjects reads each GitLab subject's repos row and sets
 // the paths it answers to (GitLabPaths). A subject written before the
 // numeric-id anchoring (project_id holds the path) also gets the project it
@@ -126,7 +128,7 @@ const gitLabNativeProjectChunk = 5000
 // ownership (fail-safe). A subject that already holds a catalog id keeps it.
 func AnchorGitLabSubjectProjects(
 	ctx context.Context, conn driver.Conn, subjects map[string]GithubWorkItemDerivationSubject,
-) error {
+) (GitLabAnchorStats, error) {
 	repoIDsByOrg := map[string]map[string]struct{}{}
 	for _, subject := range subjects {
 		if subject.Provider != "gitlab" || subject.RepoID == nil || subject.OrgID == "" {
@@ -145,7 +147,7 @@ func AnchorGitLabSubjectProjects(
 		}
 		rows, err := LoadGitLabRepoRows(ctx, conn, orgID, ids)
 		if err != nil {
-			return err
+			return GitLabAnchorStats{}, err
 		}
 		rowsByOrg[orgID] = rows
 	}
@@ -177,8 +179,5 @@ func AnchorGitLabSubjectProjects(
 		}
 		subjects[id] = subject
 	}
-	if anchored+unanchored > 0 {
-		slog.Default().DebugContext(ctx, "gitlab_subject_projects_anchored", "anchored", anchored, "unanchored", unanchored)
-	}
-	return nil
+	return GitLabAnchorStats{Anchored: anchored, Unanchored: unanchored}, nil
 }

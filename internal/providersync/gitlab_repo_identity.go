@@ -81,9 +81,10 @@ func resolveGitLabRepoIdentityPaths(
 		}
 		identity, kind, decideErr := decideGitLabRepoIdentity(project.ProjectID, project.Path, relevant)
 		if decideErr != nil {
+			errorClass, errorType := logging.ErrorClass(decideErr), logging.ErrorType(decideErr) // never the error text (CHAOS-7933)
 			slog.Default().WarnContext(ctx, "gitlab_repo_identity_batch_unresolved",
 				"org_id", orgID, "gitlab_project_id", project.ProjectID, "stored_rows", len(relevant),
-				"error_class", logging.ErrorClass(decideErr), "error_type", logging.ErrorType(decideErr))
+				"error_class", errorClass, "error_type", errorType)
 			continue
 		}
 		slog.Default().DebugContext(ctx, "gitlab_repo_identity_batch",

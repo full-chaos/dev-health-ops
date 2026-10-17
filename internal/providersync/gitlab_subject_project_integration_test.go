@@ -29,7 +29,7 @@ func TestAnchorGitLabSubjectProjectsOnARealStore(t *testing.T) {
 		"ghost":   {WorkItemID: "ghost", Provider: "gitlab", OrgID: "org-acme", RepoID: &unknownRepo, ProjectID: strPtr("ghost/none")},
 		"github":  {WorkItemID: "github", Provider: "github", OrgID: "org-acme", RepoID: &oldRepo, ProjectID: strPtr("acme/api")},
 	}
-	if err := teamattribution.AnchorGitLabSubjectProjects(store.ctx, store.conn, subjects); err != nil {
+	if _, err := teamattribution.AnchorGitLabSubjectProjects(store.ctx, store.conn, subjects); err != nil {
 		t.Fatal(err)
 	}
 	stale := subjects["stale"]

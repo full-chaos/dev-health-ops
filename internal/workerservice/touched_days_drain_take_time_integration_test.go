@@ -783,41 +783,52 @@ func takeTimeTouchedDaysDrainStopCheckKeepsFanOutRunsNewerThanThePreviousBatch(t
 	}
 }
 
-// A fan-out run that began before the second batch and ended after it started
-// is read: the cut is the end of a run, not its start.
-func takeTimeTouchedDaysDrainStopCheckReadsAFanOutRunThatBeganBeforeThePreviousBatchAndEndedAfterIt(t *testing.T, ctx context.Context, rig *drainRig) {
+// The documented bound: a fan-out run that began before the second batch and is
+// still running is read by no pass, and the pass says so (warning and counter).
+// A run that began after the cut is read whatever any worker clock says: only
+// created_at, the PostgreSQL clock, decides.
+func takeTimeTouchedDaysDrainStopCheckSaysWhenAStillRunningRunBeforeTheCutIsNotRead(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	take := time.Now().UTC().Add(-4 * time.Hour).Truncate(time.Millisecond)
-	touchedEvent(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), uuid.NewString(), "touched", time.Now().UTC().Add(-5*time.Hour))
 	_, newest := drainBatches(t, ctx, rig, orgID, 0)
-	slow := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), "succeeded", &take, time.Now().UTC().Add(-5*time.Hour))
-	if _, err := rig.touchedRig.pool.Exec(ctx, `UPDATE public.daily_metrics_runs SET updated_at = $2 WHERE id = $1::uuid`,
-		slow, time.Now().UTC().Add(-30*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
-	if got := rig.observer.count(drainEventChainStopped); got != 1 {
-		t.Fatalf("chain_stopped_mark_missing = %d, want 1: the missing mark of a slow fan-out run (began before the previous batch, ended after it) was skipped", got)
-	}
-}
-
-// updated_at is the worker's clock and created_at PostgreSQL's: a run created
-// after the cut is read even when the worker clock puts its last update before it.
-func takeTimeTouchedDaysDrainStopCheckReadsARunCreatedAfterTheCutWhenTheWorkerClockLags(t *testing.T, ctx context.Context, rig *drainRig) {
-	orgID := uuid.NewString()
-	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
-	take := time.Now().UTC().Add(-4 * time.Hour).Truncate(time.Millisecond)
-	touchedEvent(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), uuid.NewString(), "touched", time.Now().UTC().Add(-5*time.Hour))
-	_, newest := drainBatches(t, ctx, rig, orgID, 0)
-	lagging := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), "succeeded", &take, time.Now().UTC().Add(-80*time.Minute))
+	slow := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), "running", &take, time.Now().UTC().Add(-5*time.Hour))
+	lagging := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -8), "succeeded", &take, time.Now().UTC().Add(-80*time.Minute))
 	if _, err := rig.touchedRig.pool.Exec(ctx, `UPDATE public.daily_metrics_runs SET updated_at = $2 WHERE id = $1::uuid`,
 		lagging, time.Now().UTC().Add(-3*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	runs, _, err := rig.productionRuns().store.TouchedMarkingRunsToCheck(ctx, orgID, newest[0], 24*time.Hour, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, run := range runs {
+		seen[run.RunID] = true
+	}
+	if seen[slow] || !seen[lagging] {
+		t.Fatalf("slow (running, before the cut) read = %v, lagging-clock run (after the cut) read = %v; want false and true", seen[slow], seen[lagging])
+	}
 	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
-	if got := rig.observer.count(drainEventChainStopped); got != 1 {
-		t.Fatalf("chain_stopped_mark_missing = %d, want 1: a run created after the cut was skipped because the worker clock lagged", got)
+	if got := rig.observer.count(jobruntime.TouchedDaysDrainStopCheckSkippedUnended); got != 1 {
+		t.Fatalf("stop_check_skipped_unended = %d, want 1 for the still-running run before the cut", got)
+	}
+	found := false
+	for _, line := range rig.logLines("touched_days_drain.failed") {
+		found = found || strings.Contains(line, "stop_check_skipped_unended")
+	}
+	if !found {
+		t.Fatal("no stop_check_skipped_unended warning line")
+	}
+}
+
+// A steady organization (nothing running before the cut) does not warn.
+func takeTimeTouchedDaysDrainStopCheckDoesNotWarnOfSkippedRunsWhenNoneIsRunningBeforeTheCut(t *testing.T, ctx context.Context, rig *drainRig) {
+	orgID := uuid.NewString()
+	_, newest := drainBatches(t, ctx, rig, orgID, 250)
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
+	if got := rig.observer.count(jobruntime.TouchedDaysDrainStopCheckSkippedUnended); got != 0 {
+		t.Fatalf("stop_check_skipped_unended = %d, want 0", got)
 	}
 }
 
@@ -859,8 +870,8 @@ func TestTouchedDaysDrainTakeTime(t *testing.T) {
 		{"StopCheckReadsFromThePreviousBatchOnAndDoesNotTruncate", takeTimeTouchedDaysDrainStopCheckReadsFromThePreviousBatchOnAndDoesNotTruncate},
 		{"StopCheckStillSeesTheMissingMarkOfThePreviousBatch", takeTimeTouchedDaysDrainStopCheckStillSeesTheMissingMarkOfThePreviousBatch},
 		{"StopCheckKeepsFanOutRunsNewerThanThePreviousBatch", takeTimeTouchedDaysDrainStopCheckKeepsFanOutRunsNewerThanThePreviousBatch},
-		{"StopCheckReadsAFanOutRunThatBeganBeforeThePreviousBatchAndEndedAfterIt", takeTimeTouchedDaysDrainStopCheckReadsAFanOutRunThatBeganBeforeThePreviousBatchAndEndedAfterIt},
-		{"StopCheckReadsARunCreatedAfterTheCutWhenTheWorkerClockLags", takeTimeTouchedDaysDrainStopCheckReadsARunCreatedAfterTheCutWhenTheWorkerClockLags},
+		{"StopCheckSaysWhenAStillRunningRunBeforeTheCutIsNotRead", takeTimeTouchedDaysDrainStopCheckSaysWhenAStillRunningRunBeforeTheCutIsNotRead},
+		{"StopCheckDoesNotWarnOfSkippedRunsWhenNoneIsRunningBeforeTheCut", takeTimeTouchedDaysDrainStopCheckDoesNotWarnOfSkippedRunsWhenNoneIsRunningBeforeTheCut},
 		{"StopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow", takeTimeTouchedDaysDrainStopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow},
 		{"RunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound", takeTimeTouchedDaysDrainRunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound},
 		{"AFailedRunWithALostMarkStopsTheChain", takeTimeTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain},

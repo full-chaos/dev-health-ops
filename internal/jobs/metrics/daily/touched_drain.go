@@ -341,15 +341,17 @@ WHERE org_id = $1::uuid AND generation = $2 AND touched_take_at IS NULL`,
 // The others are bounded by the drain itself: a pass starts runs only when no
 // drain run is in flight, so every batch of the drain (the runs one pass
 // started, one generation) ended before the next pass reaches this check, and
-// the pass before it checked what came before its batch. Only the runs that
-// ENDED since the start of the second newest ended batch are read (the newest
-// batch is the previous pass's; the one before it is kept as a margin). The cut
-// is the later of a run's start and its last update, not its start alone: a
-// fan-out run that began before that batch and was still running when the
-// earlier pass looked is read by the first pass after it ended. created_at is
-// stamped by PostgreSQL and updated_at by the worker, so a worker clock that
-// lags cannot hide a run that started after the cut. With fewer than two ended batches the window alone bounds
-// the read.
+// the pass before it checked what came before its batch. Only the runs created
+// since the start of the second newest ended batch are read (the newest batch
+// is the previous pass's; the one before it is a margin). created_at is the
+// PostgreSQL clock, the only clock used. With fewer than two ended batches the
+// window alone bounds the read.
+//
+// KNOWN BOUND: a fan-out run that began before that batch and was still running
+// when the earlier pass looked is read by no later pass. It needs its mark to
+// fail AND the run to outlive a batch period; the nightly pass (the floor of the
+// drain) never stops, so the days stay pending and are started again. The count
+// of such runs is TouchedUnendedMarkingRunsBeforeCut.
 //
 // A run that is not ended is left out on purpose: the mark of a fan-out follows
 // its commit by a moment, and a pass in that moment must not read the missing
@@ -385,7 +387,17 @@ func (store *PostgresStore) TouchedMarkingRunsToCheck(
   AND run.created_at >= clock_timestamp() - make_interval(secs => $5)
   AND (to_jsonb(run) ->> 'touched_take_at') IS NOT NULL
   AND ($4::uuid IS NULL OR run.id <> $4::uuid)
-  AND GREATEST(run.created_at, run.updated_at) >= COALESCE((
+  AND run.created_at >= `+touchedStopCheckCutSQL, limit, org, ended, window.Seconds())
+	if err != nil {
+		return nil, false, err
+	}
+	return append(runs, newest...), truncated, nil
+}
+
+// touchedStopCheckCutSQL is the start of the second newest ended batch of the
+// drain of the organization ($1), or -infinity when fewer than two ended inside
+// the window ($5 seconds). $3 is the drain generation pattern.
+const touchedStopCheckCutSQL = `COALESCE((
         SELECT min(previous.created_at)
         FROM public.daily_metrics_runs AS previous
         WHERE previous.org_id = $1::uuid
@@ -399,11 +411,36 @@ func (store *PostgresStore) TouchedMarkingRunsToCheck(
               GROUP BY batch.generation
               ORDER BY max(batch.created_at) DESC
               OFFSET 1 LIMIT 1)
-      ), '-infinity'::timestamptz)`, limit, org, ended, window.Seconds())
-	if err != nil {
-		return nil, false, err
+      ), '-infinity'::timestamptz)`
+
+// TouchedUnendedMarkingRunsBeforeCut counts the marking runs that are not
+// ended, have a take time and began before the cut of the stop check: the runs
+// no later pass will read (see TouchedMarkingRunsToCheck).
+func (store *PostgresStore) TouchedUnendedMarkingRunsBeforeCut(
+	ctx context.Context, organizationID string, window time.Duration,
+) (int, error) {
+	if !store.valid() || !validUUID(organizationID) || window <= 0 {
+		return 0, ErrInvalidState
 	}
-	return append(runs, newest...), truncated, nil
+	var count int
+	err := store.pool.QueryRow(ctx, `
+SELECT count(*)
+FROM public.daily_metrics_runs AS run
+WHERE run.org_id = $1::uuid
+  AND `+fmt.Sprintf(touchedMarkingRunSQL, "run", 2, 3)+`
+  AND $4::uuid IS NULL
+  AND run.status IN ('pending', 'running')
+  AND run.created_at >= clock_timestamp() - make_interval(secs => $5)
+  AND (to_jsonb(run) ->> 'touched_take_at') IS NOT NULL
+  AND run.created_at < `+touchedStopCheckCutSQL,
+		uuid.MustParse(organizationID).String(),
+		escapeLikePrefix(postSyncGenerationPrefix)+"%",
+		escapeLikePrefix(TouchedDrainGenerationPrefix)+"%",
+		nil, window.Seconds()).Scan(&count)
+	if err != nil {
+		return 0, ErrUnavailable
+	}
+	return count, nil
 }
 
 // queryMarkingRuns reads the runs of the organization that mark keys and match

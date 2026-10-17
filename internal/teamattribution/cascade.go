@@ -1233,6 +1233,9 @@ func (derived GithubWorkItemDerivationContext) IssueProjectCandidates(
 	if subject.ProjectKey != nil && *subject.ProjectKey != keys[0] {
 		keys = append(keys, *subject.ProjectKey)
 	}
+	if subject.Provider == "gitlab" && len(subject.GitLabPaths) > 0 {
+		keys = gitLabIssueProjectKeys(subject)
+	}
 	for _, key := range keys {
 		// Python looks the key up STRIPPED (providers/teams.py:88,
 		// `work_scope_id.strip()`) but reports the RAW key in its evidence, so
@@ -1293,12 +1296,15 @@ func (derived GithubWorkItemDerivationContext) ManualCandidates(
 			matched = GithubWorkItemDerivationScopeMatch(scopeID,
 				append([]string{GithubWorkItemDerivationStringValue(subject.RepoID)}, GitLabProjectNames(subject)...)...)
 		case "project":
-			matched = GithubWorkItemDerivationScopeMatch(scopeID,
-				append([]string{
-					GithubWorkItemDerivationStringValue(subject.ProjectID),
-					GithubWorkItemDerivationStringValue(subject.ProjectKey),
-					WorkItemDerivationScope(subject),
-				}, subject.GitLabPaths...)...)
+			candidates := []string{
+				GithubWorkItemDerivationStringValue(subject.ProjectID),
+				GithubWorkItemDerivationStringValue(subject.ProjectKey),
+				WorkItemDerivationScope(subject),
+			}
+			if len(subject.GitLabPaths) > 0 {
+				candidates = append([]string{GithubWorkItemDerivationStringValue(subject.ProjectID)}, GitLabProjectNames(subject)...)
+			}
+			matched = GithubWorkItemDerivationScopeMatch(scopeID, candidates...)
 		case "member":
 			for _, assignee := range subject.Assignees {
 				// Python's member_ids drops falsy assignees, so a blank

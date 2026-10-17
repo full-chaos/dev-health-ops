@@ -1038,6 +1038,10 @@ func querySubjectsInto(
 	if err != nil {
 		return nil, stepcause.Failure(stepcause.QueryWorkItems, err)
 	}
+	if anchor.IdentityPathWithheld > 0 {
+		slog.Default().InfoContext(ctx, "gitlab_subject_identity_path_withheld", "subjects", len(result),
+			"withheld", anchor.IdentityPathWithheld)
+	}
 	if anchor.Anchored+anchor.Unanchored > 0 {
 		slog.Default().DebugContext(ctx, "gitlab_subject_projects_anchored", "subjects", len(result),
 			"anchored", anchor.Anchored, "unanchored", anchor.Unanchored)

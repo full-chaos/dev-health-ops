@@ -44,12 +44,36 @@ func GitLabProjectNames(subject GithubWorkItemDerivationSubject) []string {
 	for _, path := range subject.GitLabPaths {
 		add(path)
 	}
+	if len(out) > 0 {
+		return out
+	}
+	// No repos row was read: fall back to the paths the item itself carries.
 	if gitLabSubjectNamedByKey(subject) {
 		add(*subject.ProjectKey)
 	} else if subject.ProjectID != nil && !IsGitLabCatalogProjectID(*subject.ProjectID) {
 		add(*subject.ProjectID)
 	}
 	return out
+}
+
+// gitLabIssueProjectKeys are the team project keys a GitLab item is looked up
+// by: the paths its repos row answers to (never a path another row holds as its
+// current one), its work scope first when it is one of them.
+func gitLabIssueProjectKeys(subject GithubWorkItemDerivationSubject) []string {
+	names := GitLabProjectNames(subject)
+	scope := WorkItemDerivationScope(subject)
+	keys := make([]string, 0, len(names))
+	for _, name := range names {
+		if name == scope {
+			keys = append(keys, name)
+		}
+	}
+	for _, name := range names {
+		if name != scope {
+			keys = append(keys, name)
+		}
+	}
+	return keys
 }
 
 func (derived GithubWorkItemDerivationContext) repoByNames(subject GithubWorkItemDerivationSubject) []GithubWorkItemDerivationCandidate {
@@ -65,6 +89,26 @@ func (derived GithubWorkItemDerivationContext) repoByNames(subject GithubWorkIte
 func gitLabSubjectNamedByKey(subject GithubWorkItemDerivationSubject) bool {
 	return subject.Provider == "gitlab" && subject.ProjectID != nil && IsGitLabCatalogProjectID(*subject.ProjectID) &&
 		subject.ProjectKey != nil && strings.TrimSpace(*subject.ProjectKey) != ""
+}
+
+// GitLabRowPaths are the names a repos row answers to: its current path, and its
+// minted path unless another row holds that path as its current one (a reused
+// path belongs to the project that holds it now, never to the project the id
+// was first minted for).
+func GitLabRowPaths(row GitLabRepoRow, repoID string, currentPathHolders map[string][]string) []string {
+	var paths []string
+	if row.Repo != "" {
+		paths = append(paths, row.Repo)
+	}
+	if row.IdentityPath == "" || strings.EqualFold(row.IdentityPath, row.Repo) {
+		return paths
+	}
+	for _, holder := range currentPathHolders[strings.ToLower(row.IdentityPath)] {
+		if holder != repoID {
+			return paths
+		}
+	}
+	return append(paths, row.IdentityPath)
 }
 
 // GitLabRepoRow is the part of a GitLab repos row a work item joins through.
@@ -114,10 +158,43 @@ WHERE org_id = ? AND provider = 'gitlab' AND id IN (SELECT toUUID(arrayJoin(?)))
 	return out, nil
 }
 
+// LoadGitLabCurrentPathHolders maps each lower-cased path of paths to the ids of
+// the GitLab repos rows whose current path (repos.repo) it is.
+func LoadGitLabCurrentPathHolders(
+	ctx context.Context, conn driver.Conn, orgID string, paths []string,
+) (map[string][]string, error) {
+	out := make(map[string][]string, len(paths))
+	for start := 0; start < len(paths); start += gitLabNativeProjectChunk {
+		end := min(start+gitLabNativeProjectChunk, len(paths))
+		rows, err := conn.Query(ctx, `
+SELECT lower(repo), toString(id)
+FROM repos FINAL
+WHERE org_id = ? AND provider = 'gitlab' AND lower(repo) IN ?`,
+			orgID, paths[start:end])
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var path, id string
+			if err := rows.Scan(&path, &id); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			out[path] = append(out[path], id)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+	return out, nil
+}
+
 const gitLabNativeProjectChunk = 5000
 
 // GitLabAnchorStats counts what AnchorGitLabSubjectProjects did, for the caller's log.
-type GitLabAnchorStats struct{ Anchored, Unanchored int }
+type GitLabAnchorStats struct{ Anchored, Unanchored, IdentityPathWithheld int }
 
 // AnchorGitLabSubjectProjects reads each GitLab subject's repos row and sets
 // the paths it answers to (GitLabPaths). A subject written before the
@@ -140,6 +217,7 @@ func AnchorGitLabSubjectProjects(
 		repoIDsByOrg[subject.OrgID][*subject.RepoID] = struct{}{}
 	}
 	rowsByOrg := map[string]map[string]GitLabRepoRow{}
+	holdersByOrg := map[string]map[string][]string{}
 	for orgID, set := range repoIDsByOrg {
 		ids := make([]string, 0, len(set))
 		for id := range set {
@@ -150,8 +228,19 @@ func AnchorGitLabSubjectProjects(
 			return GitLabAnchorStats{}, err
 		}
 		rowsByOrg[orgID] = rows
+		identityPaths := make([]string, 0, len(rows))
+		for _, row := range rows {
+			if row.IdentityPath != "" && !strings.EqualFold(row.IdentityPath, row.Repo) {
+				identityPaths = append(identityPaths, strings.ToLower(row.IdentityPath))
+			}
+		}
+		holders, err := LoadGitLabCurrentPathHolders(ctx, conn, orgID, identityPaths)
+		if err != nil {
+			return GitLabAnchorStats{}, err
+		}
+		holdersByOrg[orgID] = holders
 	}
-	anchored, unanchored := 0, 0
+	anchored, unanchored, withheld := 0, 0, 0
 	for id, subject := range subjects {
 		if subject.Provider != "gitlab" || subject.RepoID == nil {
 			continue
@@ -161,11 +250,9 @@ func AnchorGitLabSubjectProjects(
 			unanchored++
 			continue
 		}
-		subject.GitLabPaths = nil
-		for _, path := range []string{row.Repo, row.IdentityPath} {
-			if path != "" {
-				subject.GitLabPaths = append(subject.GitLabPaths, path)
-			}
+		subject.GitLabPaths = GitLabRowPaths(row, *subject.RepoID, holdersByOrg[subject.OrgID])
+		if row.IdentityPath != "" && !strings.EqualFold(row.IdentityPath, row.Repo) && len(subject.GitLabPaths) < 2 {
+			withheld++
 		}
 		if (subject.ProjectID == nil || !IsGitLabCatalogProjectID(*subject.ProjectID)) && row.NativeProjectID != "" {
 			if subject.ProjectKey == nil || strings.TrimSpace(*subject.ProjectKey) == "" {
@@ -179,5 +266,5 @@ func AnchorGitLabSubjectProjects(
 		}
 		subjects[id] = subject
 	}
-	return GitLabAnchorStats{Anchored: anchored, Unanchored: unanchored}, nil
+	return GitLabAnchorStats{Anchored: anchored, Unanchored: unanchored, IdentityPathWithheld: withheld}, nil
 }

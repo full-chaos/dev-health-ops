@@ -104,3 +104,66 @@ func TestAGitLabItemScopeIsItsPathNotItsCatalogId(t *testing.T) {
 		t.Fatalf("scope = %q, want the path", got)
 	}
 }
+
+func TestGitLabRowPathsNeverOfferAPathAnotherRowHoldsNow(t *testing.T) {
+	renamed := GitLabRepoRow{Repo: "platform/api-v2", IdentityPath: "acme/api"}
+	holders := map[string][]string{"acme/api": {"repo-456"}}
+	if got := GitLabRowPaths(renamed, "repo-123", holders); len(got) != 1 || got[0] != "platform/api-v2" {
+		t.Fatalf("reused path: paths = %v, want only the current path", got)
+	}
+	if got := GitLabRowPaths(renamed, "repo-123", nil); len(got) != 2 || got[0] != "platform/api-v2" || got[1] != "acme/api" {
+		t.Fatalf("renamed, path free: paths = %v, want current and identity path", got)
+	}
+	reusing := GitLabRepoRow{Repo: "acme/api", IdentityPath: "acme/api@456"}
+	if got := GitLabRowPaths(reusing, "repo-456", holders); len(got) != 2 || got[0] != "acme/api" || got[1] != "acme/api@456" {
+		t.Fatalf("project at the reused path: paths = %v, want both", got)
+	}
+	same := GitLabRepoRow{Repo: "acme/api", IdentityPath: "ACME/api"}
+	if got := GitLabRowPaths(same, "repo-1", map[string][]string{"acme/api": {"repo-1"}}); len(got) != 1 {
+		t.Fatalf("never renamed: paths = %v, want one", got)
+	}
+}
+
+// Project 123 left acme/api (now platform/api-v2) and project 456 took it. The
+// repo-ownership-by-name rows name each project by its current path.
+func TestAReusedPathAttributesEachProjectsItemsToItsOwnOwner(t *testing.T) {
+	oldRepo, newRepo := "repo-123", "repo-456"
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+		Teams: []GithubWorkItemDerivationTeamFact{
+			{Provider: "gitlab", TeamID: "old-owner"}, {Provider: "gitlab", TeamID: "new-owner"},
+		},
+		Repos: []GithubWorkItemDerivationRepoFact{
+			{Provider: "gitlab", TeamID: "old-owner", TeamName: "Old", RepoFullName: "platform/api-v2", IsPrimary: 1, Specificity: 100},
+			{Provider: "gitlab", TeamID: "new-owner", TeamName: "New", RepoFullName: "acme/api", IsPrimary: 1, Specificity: 100},
+		},
+	})
+	holders := map[string][]string{"acme/api": {newRepo}}
+	stale := gitlabSubject("org:gitlab:123", "acme/api")
+	stale.RepoID = &oldRepo
+	stale.GitLabPaths = GitLabRowPaths(GitLabRepoRow{Repo: "platform/api-v2", IdentityPath: "acme/api"}, oldRepo, holders)
+	current := gitlabSubject("org:gitlab:456", "acme/api@456")
+	current.RepoID = &newRepo
+	current.GitLabPaths = GitLabRowPaths(GitLabRepoRow{Repo: "acme/api", IdentityPath: "acme/api@456"}, newRepo, holders)
+	if got := primaryTeam(derived, stale); got != "old-owner" {
+		t.Fatalf("items of project 123 went to %q, want old-owner", got)
+	}
+	if got := primaryTeam(derived, current); got != "new-owner" {
+		t.Fatalf("items of project 456 went to %q, want new-owner", got)
+	}
+}
+
+func TestAReusedPathIsNotAnIssueProjectKeyOfTheOldProject(t *testing.T) {
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: []GithubWorkItemDerivationTeamFact{
+		{Provider: "gitlab", TeamID: "new-team", ProjectKeys: []string{"acme/api"}},
+	}})
+	stale := gitlabSubject("org:gitlab:123", "acme/api")
+	stale.GitLabPaths = []string{"platform/api-v2"}
+	if got := derived.IssueProjectCandidates(stale); len(got) != 0 {
+		t.Fatalf("a stale item of project 123 matched the team that holds the reused path: %+v", got)
+	}
+	current := gitlabSubject("org:gitlab:456", "acme/api@456")
+	current.GitLabPaths = []string{"acme/api", "acme/api@456"}
+	if got := derived.IssueProjectCandidates(current); len(got) != 1 || GithubWorkItemDerivationStringValue(got[0].TeamID) != "new-team" {
+		t.Fatalf("project 456 candidates = %+v, want new-team", got)
+	}
+}

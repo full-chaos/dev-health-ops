@@ -424,7 +424,7 @@ func unitResponse(unit decodedUnit) (pyjson.Value, error) {
 	out.Set("attempts", pyjson.IntOf(unit.Attempts))
 	out.Set("available_at", pyTimeOrNone(unit.AvailableAt))
 	out.Set("rate_limit_deferrals", pyjson.IntOf(unit.RateLimitDeferrals))
-	out.Set("budget_deferrals", pyjson.IntOf(unit.BudgetDeferrals))
+	out.Set("budget_deferrals", pyjson.Int{Int: new(big.Int).Add(big.NewInt(unit.BudgetDeferrals), budgetContentionDeferrals(get("provider_budget_contention_deferrals")))})
 	out.Set("duration_seconds", intOrNone(unit.DurationSeconds))
 	out.Set("error", stringOrNone(unit.Error))
 	var err error
@@ -469,6 +469,21 @@ func optionalStr(value pyjson.Value) (pyjson.Value, error) {
 		return value, nil
 	}
 	return nil, fmt.Errorf("string_type, got %s", pyjson.Repr(value))
+}
+
+// budgetContentionDeferrals is the count of times the unit lost the shared
+// request-budget reservation (DeferForBudgetContention keeps it in the result
+// until the unit completes). The dispatch guard's own episode counter, the
+// budget_deferrals column, never sees these waits, so the field would read 0
+// for a unit that waited. Only a JSON integer that is not negative counts: a
+// string, a boolean, a float (even an integral one) or a negative integer is
+// none. The sum is arbitrary-precision, so a count beyond int64 cannot wrap.
+func budgetContentionDeferrals(value pyjson.Value) *big.Int {
+	number, isInt := value.(pyjson.Int)
+	if !isInt || number.Int == nil || number.Sign() < 0 {
+		return new(big.Int)
+	}
+	return number.Int
 }
 
 func optionalInt(value pyjson.Value) (pyjson.Value, error) {

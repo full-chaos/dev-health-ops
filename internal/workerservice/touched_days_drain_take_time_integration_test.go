@@ -535,12 +535,17 @@ VALUES ($1::uuid, $2::uuid, '2026-07-31'::date, $3, 'succeeded', 'succeeded', cl
 // the given time, with the status and take time the case needs (nil: none).
 func insertMarkingRun(t *testing.T, ctx context.Context, rig *touchedRig, orgID string, day time.Time, status string, take *time.Time, created time.Time) string {
 	t.Helper()
+	return insertMarkingRunOfGeneration(t, ctx, rig, orgID, day, status, take, created, "post-sync:"+uuid.NewString())
+}
+
+func insertMarkingRunOfGeneration(t *testing.T, ctx context.Context, rig *touchedRig, orgID string, day time.Time, status string, take *time.Time, created time.Time, generation string) string {
+	t.Helper()
 	runID := uuid.NewString()
 	if _, err := rig.pool.Exec(ctx, `
 INSERT INTO public.daily_metrics_runs
     (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, finalized_at, full_org, touched_take_at)
 VALUES ($1::uuid, $2::uuid, $3::date, $4, $5, $5, $7, $7, $7, true, $6)`,
-		runID, orgID, day.Format("2006-01-02"), "post-sync:"+uuid.NewString(), status, take, created); err != nil {
+		runID, orgID, day.Format("2006-01-02"), generation, status, take, created); err != nil {
 		t.Fatal(err)
 	}
 	return runID
@@ -696,6 +701,104 @@ func takeTimeTouchedDaysDrainTheTriggerRunTakesNoSlotAtTheBoundary(t *testing.T,
 	}
 }
 
+// drainBatches lays down the steady state of a busy organization: three ended
+// batches of the drain (one generation each) started 3 h, 90 min and 10 min ago,
+// and, older than the second batch, more fan-out runs than the bound.
+func drainBatches(t *testing.T, ctx context.Context, rig *drainRig, orgID string, older int) (second, newest []string) {
+	t.Helper()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	take := time.Now().UTC().Add(-4 * time.Hour).Truncate(time.Millisecond)
+	for i := 0; i < older; i++ {
+		insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -i), "succeeded", &take,
+			time.Now().UTC().Add(-6*time.Hour-time.Duration(i)*time.Second))
+	}
+	first := "touched-drain:" + uuid.NewString()
+	secondGeneration := "touched-drain:" + uuid.NewString()
+	newestGeneration := "touched-drain:" + uuid.NewString()
+	insertMarkingRunOfGeneration(t, ctx, rig.touchedRig, orgID, day, "succeeded", &take, time.Now().UTC().Add(-3*time.Hour), first)
+	for i := 0; i < 2; i++ {
+		second = append(second, insertMarkingRunOfGeneration(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -i), "succeeded", &take,
+			time.Now().UTC().Add(-90*time.Minute+time.Duration(i)*time.Second), secondGeneration))
+		newest = append(newest, insertMarkingRunOfGeneration(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -i), "succeeded", &take,
+			time.Now().UTC().Add(-10*time.Minute+time.Duration(i)*time.Second), newestGeneration))
+	}
+	return second, newest
+}
+
+// CHAOS-8881: an organization that ends far more marking runs a day than the
+// bound is the normal case, not an overflow: the check reads from the second
+// newest batch of the drain on, so it does not truncate.
+func takeTimeTouchedDaysDrainStopCheckReadsFromThePreviousBatchOnAndDoesNotTruncate(t *testing.T, ctx context.Context, rig *drainRig) {
+	orgID := uuid.NewString()
+	_, newest := drainBatches(t, ctx, rig, orgID, 250)
+	runs, truncated, err := rig.productionRuns().store.TouchedMarkingRunsToCheck(ctx, orgID, newest[0], 24*time.Hour, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Fatal("truncated = true with 250 old runs behind the second batch: the check still reads the whole day")
+	}
+	if len(runs) != 4 {
+		t.Fatalf("%d runs checked, want 4 (the trigger run, the rest of the newest batch and the second batch)", len(runs))
+	}
+}
+
+// The mark of a run of the previous batch is still checked.
+func takeTimeTouchedDaysDrainStopCheckStillSeesTheMissingMarkOfThePreviousBatch(t *testing.T, ctx context.Context, rig *drainRig) {
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -1), uuid.NewString(), "touched", time.Now().UTC().Add(-5*time.Hour))
+	second, newest := drainBatches(t, ctx, rig, orgID, 250)
+	_ = second
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
+	if got := rig.observer.count(drainEventChainStopped); got != 1 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 1: the lost mark of a run of the previous batch was not seen", got)
+	}
+	if got := rig.observer.count(jobruntime.TouchedDaysDrainStopCheckTruncated); got != 0 {
+		t.Fatalf("stop_check_truncated = %d, want 0", got)
+	}
+}
+
+// A fan-out run created after the second batch started is checked, however long
+// it ran; one older than that batch is not read.
+func takeTimeTouchedDaysDrainStopCheckKeepsFanOutRunsNewerThanThePreviousBatch(t *testing.T, ctx context.Context, rig *drainRig) {
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	_, newest := drainBatches(t, ctx, rig, orgID, 3)
+	inside := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), "succeeded", &take, time.Now().UTC().Add(-80*time.Minute))
+	runs, _, err := rig.productionRuns().store.TouchedMarkingRunsToCheck(ctx, orgID, newest[0], 24*time.Hour, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, run := range runs {
+		seen[run.RunID] = true
+	}
+	if !seen[inside] {
+		t.Fatalf("the fan-out run created after the second batch started was not checked: %v", runs)
+	}
+	if len(runs) != 5 {
+		t.Fatalf("%d runs checked, want 5 (trigger, rest of the newest batch, the second batch, the fan-out run); the 3 runs older than the second batch must not be read", len(runs))
+	}
+}
+
+// More runs than the bound since the second batch is a real overflow: it warns.
+func takeTimeTouchedDaysDrainStopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow(t *testing.T, ctx context.Context, rig *drainRig) {
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	_, newest := drainBatches(t, ctx, rig, orgID, 3)
+	for i := 0; i < 5; i++ {
+		insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -20-i), "succeeded", &take,
+			time.Now().UTC().Add(-time.Duration(i+1)*time.Minute))
+	}
+	runs, truncated, err := rig.productionRuns().store.TouchedMarkingRunsToCheck(ctx, orgID, newest[0], 24*time.Hour, 3)
+	if err != nil || !truncated || len(runs) != 4 {
+		t.Fatalf("limit 3: %d runs, truncated %v, err %v; want trigger + 3 and truncated", len(runs), truncated, err)
+	}
+}
+
 // The cases share one rig (and so one scratch database of each store): each
 // one works on organizations of its own and clears the observer first.
 func TestTouchedDaysDrainTakeTime(t *testing.T) {
@@ -715,6 +818,10 @@ func TestTouchedDaysDrainTakeTime(t *testing.T) {
 		{"ATouchAtTheTakeTimeOfARunOfEveryRepositoryIsNotAMissingMark", takeTimeTouchedDaysDrainATouchAtTheTakeTimeOfARunOfEveryRepositoryIsNotAMissingMark},
 		{"TheTakeTimeOfARunIsWrittenOnce", takeTimeTouchedDaysDrainTheTakeTimeOfARunIsWrittenOnce},
 		{"StopCheckUnderTheBoundChecksTheNewestRuns", takeTimeTouchedDaysDrainStopCheckUnderTheBoundChecksTheNewestRuns},
+		{"StopCheckReadsFromThePreviousBatchOnAndDoesNotTruncate", takeTimeTouchedDaysDrainStopCheckReadsFromThePreviousBatchOnAndDoesNotTruncate},
+		{"StopCheckStillSeesTheMissingMarkOfThePreviousBatch", takeTimeTouchedDaysDrainStopCheckStillSeesTheMissingMarkOfThePreviousBatch},
+		{"StopCheckKeepsFanOutRunsNewerThanThePreviousBatch", takeTimeTouchedDaysDrainStopCheckKeepsFanOutRunsNewerThanThePreviousBatch},
+		{"StopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow", takeTimeTouchedDaysDrainStopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow},
 		{"RunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound", takeTimeTouchedDaysDrainRunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound},
 		{"AFailedRunWithALostMarkStopsTheChain", takeTimeTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain},
 		{"TheTriggerRunIsCheckedWhateverNumberOfNewerRunsEnded", takeTimeTouchedDaysDrainTheTriggerRunIsCheckedWhateverNumberOfNewerRunsEnded},

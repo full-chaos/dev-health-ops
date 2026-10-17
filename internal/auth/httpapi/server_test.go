@@ -91,7 +91,10 @@ func TestUnmountedServiceAnswersEveryPathWithTheNotFoundEnvelope(t *testing.T) {
 // dot segments is answered with a 307 to the cleaned path and never reaches a
 // handler, so traversal cannot select a route -- but the response is a
 // redirect, not this package's 404 envelope, and a reader of the previous test
-// would otherwise reasonably expect the latter.
+// would otherwise reasonably expect the latter. Unlike a trailing-slash route
+// pattern, which NewServer rejects (TestATrailingSlashPatternIsRejectedAtConstruction),
+// this redirect cannot be configured away and only ever points at a cleaned
+// path that the same route table resolves.
 func TestDotSegmentsAreRedirectedNotServed(t *testing.T) {
 	handler := handlerFor(t, testOptions(Route{
 		Method:  http.MethodGet,
@@ -1065,35 +1068,40 @@ func TestExplicitHeadBesideALiteralSiblingOfAWildcard(t *testing.T) {
 	}
 }
 
-// TestATrailingSlashRouteRedirectsItsBarePath pins the 405 fallback's
-// lookup on a route table holding a trailing-slash pattern, with neither
-// StrictPaths nor RedirectSlashes: a bare-path request in a method no route
-// has gets net/http's own redirect to the trailing-slash path, as when the
-// fallback lived in the route mux, never that path's 405 nor a 404.
-func TestATrailingSlashRouteRedirectsItsBarePath(t *testing.T) {
-	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	server, err := NewServer(ServerOptions{
-		Address: "127.0.0.1:0", RequestTimeout: time.Second, MaxBodyBytes: 1024,
-		Routes: []Route{{Method: http.MethodPost, Pattern: "/f/", Handler: ok}},
-	})
-	if err != nil {
-		t.Fatal(err)
+// TestATrailingSlashPatternIsRejectedAtConstruction: a pattern ending in "/"
+// is a ServeMux subtree pattern whose bare path the mux itself redirects (307),
+// before any middleware or this package's error envelope runs. NewServer refuses
+// it at construction; an exact path and a "{$}" path are unaffected.
+func TestATrailingSlashPatternIsRejectedAtConstruction(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, pattern := range []string{"/v1/tokens/", "/f/", "/"} {
+		_, err := NewServer(testOptions(Route{Method: http.MethodPost, Pattern: pattern, Handler: ok}))
+		if err == nil || !strings.Contains(err.Error(), "must not end in") {
+			t.Errorf("pattern %q: err = %v, want a trailing-slash rejection", pattern, err)
+		}
 	}
+	t.Logf("NewServer error: %v", func() error {
+		_, err := NewServer(testOptions(Route{Method: http.MethodPost, Pattern: "/v1/tokens/", Handler: ok}))
+		return err
+	}())
+
+	handler := handlerFor(t, testOptions(
+		Route{Method: http.MethodPost, Pattern: "/v1/tokens", Handler: ok},
+		Route{Method: http.MethodGet, Pattern: "/a/b/c", Handler: ok},
+		Route{Method: http.MethodGet, Pattern: "/dir/{$}", Handler: ok},
+	))
 	for _, c := range []struct {
-		method, path    string
-		status          int
-		allow, location string
+		method, path string
+		status       int
 	}{
-		{http.MethodGet, "/f", 307, "", "/f/"},
-		{http.MethodGet, "/f/", 405, "POST", ""},
-		{http.MethodPost, "/f/", 200, "", ""},
-		{http.MethodGet, "/g", 404, "", ""},
+		{http.MethodPost, "/v1/tokens", 204},
+		{http.MethodGet, "/a/b/c", 204},
+		{http.MethodGet, "/dir/", 204},
 	} {
 		recorder := httptest.NewRecorder()
-		server.Handler().ServeHTTP(recorder, httptest.NewRequest(c.method, c.path, nil))
-		if recorder.Code != c.status || recorder.Header().Get("Allow") != c.allow || recorder.Header().Get("Location") != c.location {
-			t.Errorf("%s %s: %d Allow=%q Location=%q, want %d %q %q", c.method, c.path, recorder.Code,
-				recorder.Header().Get("Allow"), recorder.Header().Get("Location"), c.status, c.allow, c.location)
+		handler.ServeHTTP(recorder, httptest.NewRequest(c.method, c.path, nil))
+		if recorder.Code != c.status || recorder.Header().Get("Location") != "" {
+			t.Errorf("%s %s: %d Location=%q, want %d and no redirect", c.method, c.path, recorder.Code, recorder.Header().Get("Location"), c.status)
 		}
 	}
 }

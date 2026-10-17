@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
@@ -252,8 +253,15 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, since, until
 	if total < len(out) {
 		total = len(out)
 	}
-	slog.DebugContext(ctx, "testopsjobfailures: resolved",
-		"groups", len(out), "total", total, "repo_scoped", len(scope.RepoIDs) > 0, "team_scoped", len(scope.TeamIDs) > 0)
+	// Parsed values only: a raw request string in a log line is a log-injection sink.
+	attrs := []any{
+		"since", since.Time(), "until", until.Time(),
+		"groups", len(out), "total", total, "repo_scoped", len(scope.RepoIDs) > 0, "team_scoped", len(scope.TeamIDs) > 0,
+	}
+	if parsedOrg, parseErr := uuid.Parse(orgID); parseErr == nil {
+		attrs = append(attrs, "organization_id", parsedOrg)
+	}
+	slog.DebugContext(ctx, "testopsjobfailures: resolved", attrs...)
 	return &model.TestOpsJobFailuresResult{Groups: out, TotalCount: total, Truncated: total > len(out)}, nil
 }
 

@@ -8,8 +8,13 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
 // `dho admin users delete` on a real PostgreSQL with the full migration chain, driven through the command tree the binary
@@ -131,4 +136,41 @@ func TestUsersDeleteGuardsThenDeletesAUserAndWhatBelongsToIt(t *testing.T) {
 	if users() != seedUsers+1 {
 		t.Fatal("a refused delete changed the database")
 	}
+
+	// a user a RESTRICT foreign key points at (here an impersonation session; also audit and refund history) is not deleted: the
+	// transaction rolls back, the user stays with its memberships, and the error names the constraint (the API's delete_user
+	// refuses the same user the same way)
+	var keepID string
+	if err := db.conn.QueryRow(context.Background(), `SELECT id::text FROM users WHERE email = 'keep@example.com'`).Scan(&keepID); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := goVerb(t, db, []string{"users", "create", "--email", "pinned@example.com", "--password", "password1", "--username", "pinned"}); code != 0 {
+		t.Fatalf("setup pinned: exit %d %s", code, out)
+	}
+	var pinnedID, orgID string
+	if err := db.conn.QueryRow(context.Background(), `SELECT id::text FROM users WHERE email = 'pinned@example.com'`).Scan(&pinnedID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.conn.QueryRow(context.Background(), `SELECT id::text FROM organizations LIMIT 1`).Scan(&orgID); err != nil {
+		t.Fatal(err)
+	}
+	pgseed.ImpersonationSession(context.Background(), t, db.pool(t), uuid.NewString(), keepID, pinnedID, orgID, "member", time.Now().Add(time.Hour), nil)
+	code, out, logs = executeAdmin(t, db, "users", "delete", "--email", "pinned@example.com", "--yes")
+	if code == 0 || !strings.Contains(out+logs, "impersonation_sessions_target_user_id_fkey") {
+		t.Fatalf("delete of a user an impersonation session points at: exit %d, stdout %q, stderr %q", code, out, logs)
+	}
+	if db.count(t, `SELECT count(*) FROM users WHERE email = 'pinned@example.com'`) != 1 {
+		t.Fatal("the refused delete removed the user")
+	}
+}
+
+// pool opens a pgx pool on the test database for helpers that take one.
+func (db *database) pool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), db.uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
 }

@@ -526,13 +526,40 @@ func (c *HTTPClient) DoUnauthenticated(
 		c.observe(failure.Class)
 		return nil, failure
 	}
-	classification := ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, "")
-	if classification == nil {
+	if classification := classifyResponseWithBody(c.Provider, target.Path, response); classification == nil {
 		c.observe("")
 	} else {
 		c.observe(classification.Class)
 	}
 	return response, nil
+}
+
+type restoredBody struct {
+	io.Reader
+	io.Closer
+}
+
+// classifyResponseWithBody classifies a response from status, headers and a
+// bounded peek of the body, so a limit whose only signal is the body message
+// (a GitHub secondary or abuse limit on a 403) is rate_limited with its
+// dimension. The peeked bytes are put back: the caller still reads the full body.
+func classifyResponseWithBody(provider, requestPath string, response *http.Response) *ProviderError {
+	classification := ClassifyHTTPForRequest(provider, requestPath, response.StatusCode, response.Header, "")
+	if classification == nil || response.Body == nil {
+		return classification
+	}
+	peeked, _ := io.ReadAll(io.LimitReader(response.Body, maxProviderErrorBody))
+	response.Body = restoredBody{Reader: io.MultiReader(bytes.NewReader(peeked), response.Body), Closer: response.Body}
+	withBody := ClassifyHTTPForRequest(provider, requestPath, response.StatusCode, response.Header, string(peeked))
+	if withBody == nil {
+		return classification
+	}
+	if withBody.Class != classification.Class {
+		slog.Debug("provider response reclassified from its body",
+			"provider", provider, "status", response.StatusCode,
+			"from_class", classification.Class, "to_class", withBody.Class, "dimension", withBody.Dimension)
+	}
+	return withBody
 }
 
 func (c *HTTPClient) retryDelay(attempt int, retryAfter time.Duration, class ErrorClass) time.Duration {

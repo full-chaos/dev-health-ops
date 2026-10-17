@@ -183,6 +183,7 @@ func mixBreakdownFilters(opts ExplainInvestmentMixOptions) BreakdownFilters {
 		Themes:        themeFilters,
 		Subcategories: subcategoryFilters,
 		Measure:       opts.effectiveMeasure(),
+		DatedByEnd:    true,
 	}
 	// RepoIDs is applied to the BREAKDOWN query for a team or repo scope, as the
 	// reference does (investment.py:175: `if filters.scope.level in {"team",

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -55,26 +56,32 @@ func (s Store) OrgConfig(ctx context.Context, orgID string) (OrgConfig, bool, er
 	afterRowsRead()
 	// Only the BYO keys count: the llm category also holds unrelated settings
 	// (platform certification profiles) that outlive a BYO delete.
+	candidateKeys := append([]string{}, byoKeys...)
+	if s.purpose != "" {
+		candidateKeys = append(candidateKeys, PurposeKeys(s.purpose)...)
+	}
 	versionRows, err := tx.Query(ctx, `
 SELECT key, updated_at, coalesce(value, '') FROM settings
 WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
-		orgID, settingsCategoryLLM, byoKeys)
+		orgID, settingsCategoryLLM, candidateKeys)
 	if err != nil {
 		return OrgConfig{}, false, fmt.Errorf("query org llm settings version: %w", err)
 	}
-	digest := sha256.New()
-	var stored []string
+	type versionRow struct {
+		key, value string
+		updated    time.Time
+	}
+	var versioned []versionRow
+	storedKeys := map[string]bool{}
 	for versionRows.Next() {
-		var key, value string
-		var updated time.Time
-		if err := versionRows.Scan(&key, &updated, &value); err != nil {
+		var row versionRow
+		if err := versionRows.Scan(&row.key, &row.updated, &row.value); err != nil {
 			versionRows.Close()
 			return OrgConfig{}, false, fmt.Errorf("scan org llm settings version: %w", err)
 		}
-		valueHash := sha256.Sum256([]byte(value))
-		fmt.Fprintf(digest, "%s\x00%s\x00%x\n", key, updated.UTC().Format(time.RFC3339Nano), valueHash)
-		if value != "" {
-			stored = append(stored, key)
+		versioned = append(versioned, row)
+		if row.value != "" {
+			storedKeys[row.key] = true
 		}
 	}
 	versionRows.Close()
@@ -83,6 +90,24 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return OrgConfig{}, false, fmt.Errorf("end org llm settings snapshot: %w", err)
+	}
+	// The effective source is the purpose override when one is stored, else the
+	// default row; the version covers that source only, so a write to the
+	// other one does not move it. The choice rests on the STORED rows, not the
+	// decrypted ones: an override whose key cannot be read must fail, never
+	// fall back to the default.
+	source := sourceKeys(func(key string) bool { return storedKeys[key] }, func(key string) string { return raw[key] }, s.purpose)
+	digest := sha256.New()
+	var stored []string
+	for _, row := range versioned {
+		if !slices.Contains(source, row.key) {
+			continue
+		}
+		valueHash := sha256.Sum256([]byte(row.value))
+		fmt.Fprintf(digest, "%s\x00%s\x00%x\n", row.key, row.updated.UTC().Format(time.RFC3339Nano), valueHash)
+		if row.value != "" {
+			stored = append(stored, row.key)
+		}
 	}
 	// loadRawSettings skips a row it cannot decrypt (wrong key, corrupt row).
 	// Every other reader tolerates that; this one serves the key itself, so a
@@ -107,7 +132,7 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 		return OrgConfig{}, false, fmt.Errorf("%w: setting %q", ErrStoredSettingUnreadable, key)
 	}
 	byo := orgSettings{}
-	for _, key := range byoKeys {
+	for _, key := range source {
 		if raw[key] != "" {
 			byo[key] = raw[key]
 		}
@@ -119,6 +144,7 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 	if len(settings) == 0 {
 		return OrgConfig{}, false, nil
 	}
+	settings = project(settings, s.purpose)
 	// The provider the writer stores is already stripped and lower-cased; an
 	// empty, "auto", "mock" or "none" provider is "no BYO": the platform default.
 	provider := normalizeProvider(settings[keyProvider])

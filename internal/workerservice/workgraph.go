@@ -188,6 +188,11 @@ func workgraphBuildPreSteps(
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 
+	issuePRFallbackInvariantStep, issuePRFallbackInvariantStepErr := newIssuePRFallbackInvariantPreStep(issuePREdgesService)
+	if issuePRFallbackInvariantStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+
 	issueCommitLoader, issueCommitLoaderErr := issuecommitedges.NewLoader(connection)
 	if issueCommitLoaderErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
@@ -258,6 +263,7 @@ func workgraphBuildPreSteps(
 	steps := []workgraph.NativePreStep{
 		staleDependencyCleanupStep,
 		step, issuePRFallbackRetractionStep, issuePREdgesFastPathStep, issuePREdgesTextParseStep, issueCommitStep, issuePREdgesHeuristicStep,
+		issuePRFallbackInvariantStep,
 		prCommitLinksStep, prCommitEdgesStep, commitFileEdgesStep, flagGuardsStep, operationalIncidentStep, edgeStep,
 	}
 
@@ -329,8 +335,10 @@ func buildPostStepOrder() []string {
 // work_graph_issue_pr fresh (see issuepredges.ExplicitLink's doc comment for
 // why: it needs to see every row the native issue_pr_links step AND the two
 // steps ahead of it here have already committed), so it must register after
-// all three of those. "pr_commit_edges" (CHAOS-5264) is the realized case the
-// ordering invariant was written for: it READS work_graph_pr_commit, which
+// all three of those. "issue_pr_fallback_invariant" (CHAOS-10062) READS
+// work_graph_issue_pr after every step that WRITES it, so it registers right
+// after "issue_pr_edges_heuristic", the last of them. "pr_commit_edges"
+// (CHAOS-5264) is the realized case the ordering invariant was written for: it READS work_graph_pr_commit, which
 // "pr_commit_links" WRITES, so it must register strictly after it -- unlike
 // issue_pr_links' still-Python fast-path half, both halves of the PR<->commit
 // straddle are native here, registered back to back. "flag_guards_edges" and
@@ -359,6 +367,7 @@ func buildPreStepOrder() []string {
 		"issue_pr_links",
 		"issue_pr_fallback_retraction",
 		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_commit_edges", "issue_pr_edges_heuristic",
+		"issue_pr_fallback_invariant",
 		"pr_commit_links", "pr_commit_edges", "commit_file_edges",
 		"flag_guards_edges", "operational_incident_edges", "issue_issue_edges",
 	}

@@ -127,6 +127,47 @@ func PlanOutrankedFallbacks(stored []Link) []Link {
 	return outranked
 }
 
+// FallbacksBesideNative counts the stored lower-tier rows the native-first
+// rule forbids, the same rows PlanOutrankedFallbacks retracts:
+// ByPullRequest when the row's pull request has a native link, ByIssue when
+// its issue has one, PullRequestIssueSide when its issue side is a pull
+// request work item, and Total with each row once. Every count must be 0
+// after a build's link writers ran.
+type FallbacksBesideNative struct {
+	ByPullRequest        int
+	ByIssue              int
+	PullRequestIssueSide int
+	Total                int
+}
+
+// CountFallbacksBesideNative applies the native-first rule to stored, the
+// current (deduplicated) content of work_graph_issue_pr for one organization.
+func CountFallbacksBesideNative(stored []Link) FallbacksBesideNative {
+	native := NewNativeLinks(stored)
+	var counts FallbacksBesideNative
+	for _, link := range stored {
+		if link.Provenance != edges.ProvenanceExplicitText && link.Provenance != edges.ProvenanceHeuristic {
+			continue
+		}
+		byPR := native.HasPullRequest(link.RepoID, link.PRNumber)
+		byIssue := native.HasIssue(link.WorkItemID)
+		prIssueSide := IsPullRequestWorkItem(link.WorkItemID)
+		if byPR {
+			counts.ByPullRequest++
+		}
+		if byIssue {
+			counts.ByIssue++
+		}
+		if prIssueSide {
+			counts.PullRequestIssueSide++
+		}
+		if byPR || byIssue || prIssueSide {
+			counts.Total++
+		}
+	}
+	return counts
+}
+
 // retractionKey is one stored row's identity as the retraction statement
 // matches it: the table's sorting key minus org_id, plus the tier.
 func retractionKey(link Link) string {

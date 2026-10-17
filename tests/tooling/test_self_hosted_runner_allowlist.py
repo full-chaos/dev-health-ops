@@ -163,6 +163,7 @@ DRAFT_GATED_JOBS = {
     ("docker-images.yml", "go-build"),
     ("docker-images.yml", "go-build-dho-arm64"),
     ("go.yml", "dind-smoke-test"),
+    ("go.yml", "go-auth-compose-proof"),
     ("go.yml", "go-arm64-numeric-parity"),
     ("go.yml", "go-container-reproducibility"),
     ("go.yml", "go-container-reproducibility-self-hosted"),

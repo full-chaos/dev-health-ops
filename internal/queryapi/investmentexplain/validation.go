@@ -349,7 +349,7 @@ func parseFinding(raw any, opts parseFindingOptions) (Finding, validationRejecti
 	if !themeOK {
 		return Finding{}, validationRejection{Rule: "theme_not_string", Path: "evidence.theme", Snippet: snippetOf(evidence["theme"])}, false
 	}
-	themeShare, themeKnown := opts.themeSharesPct[theme]
+	theme, themeShare, themeKnown := resolveCanonicalKey(theme, opts.themeSharesPct, themeLabel)
 	if !themeKnown {
 		return Finding{}, validationRejection{Rule: "theme_unknown", Path: "evidence.theme", Snippet: snippetOf(theme)}, false
 	}
@@ -360,7 +360,7 @@ func parseFinding(raw any, opts parseFindingOptions) (Finding, validationRejecti
 		// subcategory is None -- allowed, matches Python's `subcategory
 		// is not None` guard being false.
 	case string:
-		subcategoryShare, subcategoryKnown := opts.subcategorySharesPct[rawSubcategory]
+		rawSubcategory, subcategoryShare, subcategoryKnown := resolveCanonicalKey(rawSubcategory, opts.subcategorySharesPct, subcategoryLabel)
 		if !subcategoryKnown {
 			return Finding{}, validationRejection{Rule: "subcategory_unknown", Path: "evidence.subcategory", Snippet: snippetOf(rawSubcategory)}, false
 		}
@@ -415,6 +415,55 @@ func parseFinding(raw any, opts parseFindingOptions) (Finding, validationRejecti
 			EvidenceQualityBand: opts.qualityBand,
 		},
 	}, validationRejection{}, true
+}
+
+// normalizeKeyForm lowercases s and collapses every run of non-alphanumeric
+// characters to one space, so "Quality / Reliability", "quality-reliability"
+// and "quality_reliability" share one form.
+func normalizeKeyForm(s string) string {
+	var b strings.Builder
+	pendingSpace := false
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			if pendingSpace && b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			pendingSpace = false
+			b.WriteRune(r)
+			continue
+		}
+		pendingSpace = true
+	}
+	return b.String()
+}
+
+// resolveCanonicalKey maps raw to one of the canonical keys in shares. An
+// exact key wins. Otherwise raw is matched, in normalized form, against each
+// key and its display label; a form shared by two keys is ambiguous and stays
+// unresolved. A raw value that names no key in shares stays unknown, so the
+// caller still rejects it.
+func resolveCanonicalKey(raw string, shares map[string]float64, label func(string) string) (string, float64, bool) {
+	if share, ok := shares[raw]; ok {
+		return raw, share, true
+	}
+	want := normalizeKeyForm(raw)
+	if want == "" {
+		return raw, 0, false
+	}
+	match := ""
+	for key := range shares {
+		if normalizeKeyForm(key) != want && normalizeKeyForm(label(key)) != want {
+			continue
+		}
+		if match != "" {
+			return raw, 0, false
+		}
+		match = key
+	}
+	if match == "" {
+		return raw, 0, false
+	}
+	return match, shares[match], true
 }
 
 // validConfidence ports investment_mix_validation.py's valid_confidence

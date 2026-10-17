@@ -540,6 +540,11 @@ func (source *countingGitHubWorkItemDerivationContextSource) Load(
 	return teamattribution.GithubWorkItemDerivationFacts{}, nil
 }
 
+// AnchorGitLabSubjects is a no-op: this fake carries no GitLab repos rows.
+func (source *countingGitHubWorkItemDerivationContextSource) AnchorGitLabSubjects(context.Context, map[string]teamattribution.GithubWorkItemDerivationSubject) error {
+	return nil
+}
+
 func (source *countingGitHubWorkItemDerivationContextSource) LoadStoredInheritableEdges(
 	context.Context, Claim, []string,
 ) ([]githubWorkItemDependencyRow, error) {

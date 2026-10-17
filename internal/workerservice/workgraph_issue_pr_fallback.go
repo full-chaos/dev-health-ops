@@ -74,10 +74,11 @@ func (step *issuePRFallbackInvariantPreStep) Run(ctx context.Context, claim work
 		"fallback_beside_native":     outcome.Beside.Total,
 		"beside_native_pull_request": outcome.Beside.ByPullRequest,
 		"beside_native_issue":        outcome.Beside.ByIssue,
+		"pull_request_issue_side":    outcome.Beside.PullRequestIssueSide,
 	}
 	if outcome.Beside.Total > 0 {
 		return nil, &workgraph.StepFailure{
-			Reason:   fmt.Sprintf("%d explicit_text or heuristic work_graph_issue_pr rows sit beside a native link", outcome.Beside.Total),
+			Reason:   fmt.Sprintf("%d explicit_text or heuristic work_graph_issue_pr rows break the native-first rule (beside a native link, or a pull request as the issue side)", outcome.Beside.Total),
 			Evidence: fragment,
 		}
 	}

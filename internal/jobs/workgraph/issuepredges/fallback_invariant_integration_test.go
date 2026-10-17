@@ -20,7 +20,8 @@ import (
 )
 
 // TestFallbackInvariantOnRealClickHouse plants lower-tier links beside native
-// ones in one org (a writer regression) and none in a control org, and runs
+// ones, and one with a pull request as the issue side, in one org (a writer
+// regression) and none in a control org, and runs
 // the check against the real schema (FINAL over the version_rank table). The
 // breached org is reported with its counts and a WARN; the check repairs
 // nothing; after the retraction step the same org reports 0.
@@ -51,10 +52,11 @@ func TestFallbackInvariantOnRealClickHouse(t *testing.T) {
 	}
 	if err := writer.Write(ctx, []issueprlinks.Link{
 		link(breached, 704, "linear:CHAOS-1", "native"),
-		link(breached, 704, "linear:CHAOS-1", "explicit_text"), // same key: FINAL keeps the native row
-		link(breached, 704, "jira:API-1", "explicit_text"),     // beside the native pull request
-		link(breached, 705, "linear:CHAOS-1", "heuristic"),     // beside the native issue
-		link(breached, 706, "jira:BILL-1", "explicit_text"),    // no native on either side
+		link(breached, 704, "linear:CHAOS-1", "explicit_text"),        // same key: FINAL keeps the native row
+		link(breached, 704, "jira:API-1", "explicit_text"),            // beside the native pull request
+		link(breached, 705, "linear:CHAOS-1", "heuristic"),            // beside the native issue
+		link(breached, 706, "jira:BILL-1", "explicit_text"),           // no native on either side
+		link(breached, 707, "ghpr:full-chaos/acr#5", "explicit_text"), // a pull request as the issue side
 		link(control, 704, "linear:CHAOS-1", "native"),
 		link(control, 705, "jira:API-1", "explicit_text"),
 		link(control, 706, "jira:BILL-1", "heuristic"),
@@ -77,9 +79,9 @@ func TestFallbackInvariantOnRealClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckFallbackInvariant(breached): %v", err)
 	}
-	want := issueprlinks.FallbacksBesideNative{ByPullRequest: 1, ByIssue: 1, Total: 2}
-	if got.Beside != want || got.LinksRead != 4 {
-		t.Fatalf("breached org = %+v, want %+v over 4 stored links", got, want)
+	want := issueprlinks.FallbacksBesideNative{ByPullRequest: 1, ByIssue: 1, PullRequestIssueSide: 1, Total: 3}
+	if got.Beside != want || got.LinksRead != 5 {
+		t.Fatalf("breached org = %+v, want %+v over 5 stored links", got, want)
 	}
 	if !strings.Contains(logs.String(), `"level":"WARN","msg":"`+issuepredges.FallbackInvariantBreachedLog+`"`) {
 		t.Fatalf("no WARN line for the breached org:\n%s", logs.String())

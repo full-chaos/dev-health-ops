@@ -67,3 +67,17 @@ func TestCountFallbacksBesideNativeAgreesWithTheRetractionPlan(t *testing.T) {
 		}
 	}
 }
+
+// A lower-tier row whose issue side is a pull request work item breaks the
+// same rule the retraction enforces, with or without a native link.
+func TestCountFallbacksBesideNativeCountsAPullRequestIssueSide(t *testing.T) {
+	stored := []Link{
+		link(fallbackRepoA, 704, "ghpr:full-chaos/acr#5", edges.ProvenanceExplicitText),
+		link(fallbackRepoA, 705, "gitlab:full-chaos/acr!9", edges.ProvenanceHeuristic),
+		link(fallbackRepoA, 706, "jira:API-1", edges.ProvenanceExplicitText), // control
+	}
+	got := CountFallbacksBesideNative(stored)
+	if got.PullRequestIssueSide != 2 || got.Total != 2 || got.Total != len(PlanOutrankedFallbacks(stored)) {
+		t.Fatalf("CountFallbacksBesideNative = %+v, retraction plan %d; want 2 pull-request issue sides, total 2", got, len(PlanOutrankedFallbacks(stored)))
+	}
+}

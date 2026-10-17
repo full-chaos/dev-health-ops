@@ -3444,7 +3444,8 @@ over Jira, Linear, GitHub and GitLab). Where it is held:
   `pr_never_issue_side_test.go`.
 - **Invariant check (CHAOS-10062).** The pre-step `issue_pr_fallback_invariant` runs after
   `issue_pr_edges_heuristic`, the last step that writes `work_graph_issue_pr`. It counts the lower-tier rows that
-  still sit beside a native link (by pull request side, by issue side, total). The count must be 0. The step repairs
+  still break the rule: beside a native link (by pull request side, by issue side) or with a pull request work item as the
+  issue side, and the total (each row once; the same rows `issue_pr_fallback_retraction` removes). The count must be 0. The step repairs
   nothing. It sets the gauge `workgraph_issue_pr_fallback_beside_native_rows` per `organization_id` on every build (0
   included). On a nonzero count it logs a WARN `issue-pr fallback invariant breached` with the organization and the
   counts (never row contents) and reports FAILED: it returns a `workgraph.StepFailure`, so its evidence fragment

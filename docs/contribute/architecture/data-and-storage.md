@@ -430,7 +430,9 @@ Two rules hold for every read of the tree:
    from `work_graph_edges`), so a row written before the rule, or before its
    native link arrived, is gone after the next build. After the last link
    writer of the build, pre-step `issue_pr_fallback_invariant` counts the
-   lower-tier rows that still sit beside a native one; the count must be 0.
+   lower-tier rows the rule forbids (beside a native link, or with a pull
+   request as the issue side: the rows the retraction removes); the count
+   must be 0.
    It repairs nothing: it sets the gauge
    `workgraph_issue_pr_fallback_beside_native_rows` per `organization_id` on every
    build, and when the count is above 0 it logs a WARN `issue-pr fallback

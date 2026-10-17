@@ -1,10 +1,12 @@
 package workgraph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -169,6 +171,37 @@ func TestStepFailureMarksTheStepFailedAndTheLaterStepsStillRun(t *testing.T) {
 	}
 	if _, has := evidence["writer"].(map[string]any)[StepStatusKey]; has {
 		t.Fatalf("a passing step carries a status: %v", evidence["writer"])
+	}
+}
+
+// The build's ERROR line for a failed step carries that step's own evidence
+// (its counts), so the log alone says how large the breach is.
+func TestStepFailureErrorLineCarriesTheFailedStepsEvidence(t *testing.T) {
+	var sequence []string
+	var logs bytes.Buffer
+	store := &fakeStore{claim: testClaim(time.Minute)}
+	handler, err := NewBuildHandler(store, []NativePreStep{
+		&recordingPreStep{name: "invariant", sequence: &sequence, err: &StepFailure{
+			Reason: "2 rows break the rule", Evidence: map[string]any{"organization_id": "org-1", "links_read": 4, "fallback_beside_native": 2},
+		}},
+	}, nil, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), buildExecution()); err != nil {
+		t.Fatal(err)
+	}
+	var line map[string]any
+	for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var candidate map[string]any
+		if json.Unmarshal([]byte(raw), &candidate) == nil && candidate["level"] == "ERROR" {
+			line = candidate
+		}
+	}
+	evidence, _ := line["failed_step_evidence"].(map[string]any)
+	step, _ := evidence["invariant"].(map[string]any)
+	if step["fallback_beside_native"] != float64(2) || step["links_read"] != float64(4) || step[StepStatusKey] != StepStatusFailed {
+		t.Fatalf("ERROR line = %v, want the failed step's evidence with its counts", line)
 	}
 }
 

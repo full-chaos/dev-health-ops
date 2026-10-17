@@ -63,7 +63,7 @@ func reportFallbackInvariant(ctx context.Context, logger *slog.Logger, outcome I
 	gauge, err := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issuepredges").Int64Gauge(
 		FallbackBesideNativeGauge,
 		metric.WithUnit("{row}"),
-		metric.WithDescription("explicit_text and heuristic work_graph_issue_pr rows whose pull request or issue has a native link, per organization, after a work-graph build. Must be 0."))
+		metric.WithDescription("explicit_text and heuristic work_graph_issue_pr rows the native-first rule forbids (their pull request or issue has a native link, or their issue side is a pull request), per organization, after a work-graph build. Must be 0."))
 	if err == nil {
 		gauge.Record(ctx, int64(outcome.Beside.Total), metric.WithAttributes(attribute.String("organization_id", outcome.OrganizationID)))
 	} else {
@@ -74,6 +74,7 @@ func reportFallbackInvariant(ctx context.Context, logger *slog.Logger, outcome I
 		slog.Int("links_read", outcome.LinksRead),
 		slog.Int("beside_native_pull_request", outcome.Beside.ByPullRequest),
 		slog.Int("beside_native_issue", outcome.Beside.ByIssue),
+		slog.Int("pull_request_issue_side", outcome.Beside.PullRequestIssueSide),
 		slog.Int("beside_native_total", outcome.Beside.Total),
 		slog.Duration("duration", outcome.Duration),
 	}

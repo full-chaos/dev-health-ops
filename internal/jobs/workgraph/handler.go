@@ -405,9 +405,13 @@ func (h *buildHandler) work(ctx context.Context, requestID string, organizationI
 			// proceeds and every fragment lands as a top-level key.
 			evidence := mergePreStepEvidence([]byte("{}"), mergeStepFragments(fragments, postFragments))
 			if len(failedSteps) > 0 {
+				failedEvidence := make(map[string]map[string]any, len(failedSteps))
+				for _, name := range failedSteps {
+					failedEvidence[name] = fragments[name]
+				}
 				h.logger.Error("workgraph build: steps reported FAILED; the build ran every step",
 					slog.String("request_id", requestID), slog.String("organization_id", *organizationID),
-					slog.Any("failed_steps", failedSteps))
+					slog.Any("failed_steps", failedSteps), slog.Any("failed_step_evidence", failedEvidence))
 			}
 			return withFailedSteps(evidence, failedSteps), nil
 		},

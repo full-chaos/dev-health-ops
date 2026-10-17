@@ -213,7 +213,7 @@ func ResolveModelNameForOrg(
 // not the FULLY RESOLVED model -- so when an org had BYO credentials but
 // NO stored model, this function's own orgSettings.Model call returned ""
 // too, and construction fell through to categorize's OWN per-provider
-// default (e.g. openaiprovider.go's "gpt-5-nano") instead of
+// default (e.g. the since-deleted ops OpenAI client's "gpt-5-nano") instead of
 // ResolveModelNameForOrg's already-computed default (llmbudget.DefaultModel)
 // -- two DIFFERENT
 // hardcoded defaults disagreeing on which model a BYO request with no

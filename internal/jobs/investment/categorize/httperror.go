@@ -44,7 +44,7 @@ func (e *httpTransportError) Error() string { return e.cause.Error() }
 func (e *httpTransportError) Unwrap() error { return e.cause }
 
 // statusCodeOf and headerOf extract classification inputs from an error
-// produced by executeResponsesRequest/executeChatCompletionRequest -- 0 and
+// produced by the ops HTTP clients (Ollama, TypeSafe) -- 0 and
 // nil respectively for a transport-level failure, matching
 // classify_provider_error's own status_code=None case.
 func statusCodeOf(err error) int {

@@ -103,10 +103,4 @@ func TestSharedChatCompletionsFormat400IsFinal(t *testing.T) {
 			}
 		})
 	}
-
-	oldServer, oldSent := scriptedSyncServer(t, refused)
-	old := NewLocalProvider(LocalProviderConfig{APIKey: secrets.NewHidden("test-key-value"), BaseURL: oldServer.URL, Model: "gemma3:4b"})
-	if _, err := old.Complete(context.Background(), CategorizationRequest("p")); err != nil || len(oldSent()) != 2 {
-		t.Fatalf("ops LocalProvider: err %v calls %d, recorded as retrying the 400 as text (2 calls, no error)", err, len(oldSent()))
-	}
 }

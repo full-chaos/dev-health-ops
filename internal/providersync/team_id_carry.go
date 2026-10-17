@@ -551,7 +551,9 @@ const teamIDCarryKeyedQuery = `SELECT id, is_active, deleted_at IS NOT NULL AS d
 // not active (chris D6023: custom = admin = push API, and it carries as the
 // ACTIVE team): over an inactive row it is folded in and the kept row is
 // written again active; over a deleted row, which is no team, it is written
-// as a new team past the delete. Nothing is ever folded into a deleted row.
+// as a new team past the delete (the admin store's rule: a write under the id
+// of a deleted team is a new team, api/teamsidentity/store.go
+// CreateOrUpdateTeam). Nothing is ever folded into a deleted row.
 func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 	var newIDs []string
 	for _, row := range *rows {
@@ -585,6 +587,8 @@ func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 		if held.u8("deleted") == 1 {
 			if custom {
 				run.outcome.DeletedKeyedTeams++
+				slog.Default().InfoContext(run.ctx, "team_id_carry_deleted_keyed_team_written_new",
+					"deleted_keyed_teams", run.outcome.DeletedKeyedTeams, "dry_run", run.outcome.DryRun)
 				kept = append(kept, row.with("updated_at", teamIDCarryBump(row.time("updated_at"), held.time("updated_at"), time.Microsecond)))
 				continue
 			}
@@ -595,6 +599,8 @@ func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 		if custom && held.u8("is_active") != 1 && !activate[id] {
 			activate[id] = true
 			run.outcome.KeyedTeamsActivated++
+			slog.Default().InfoContext(run.ctx, "team_id_carry_inactive_keyed_team_activated",
+				"keyed_teams_activated", run.outcome.KeyedTeamsActivated, "dry_run", run.outcome.DryRun)
 		}
 		if _, seen := folded[id]; !seen {
 			foldIDs = append(foldIDs, id)

@@ -4,6 +4,7 @@ package testopsjobfailures
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -61,8 +62,12 @@ func TestRealClickHouse_JobFailuresByWorkflowAndJobName(t *testing.T) {
 		exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, r.id, r.name, r.provider, org, synced, synced)
 	}
 	pipeline := func(o, repo, run, name, provider string) {
+		started := inWindow
+		if run == "h1" && o == org {
+			started = inWindow.AddDate(0, -2, 0)
+		}
 		exec(`INSERT INTO ci_pipeline_runs (org_id, repo_id, run_id, pipeline_name, provider, status, started_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			o, repo, run, name, provider, "completed", inWindow, synced)
+			o, repo, run, name, provider, "completed", started, synced)
 	}
 	job := func(o, repo, run, id, name, status string, started, lastSynced time.Time) {
 		exec(`INSERT INTO ci_job_runs (org_id, repo_id, run_id, job_id, job_name, status, started_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -72,6 +77,16 @@ func TestRealClickHouse_JobFailuresByWorkflowAndJobName(t *testing.T) {
 	pipeline(org, hubRepo, "h2", "CI", "github")
 	pipeline(org, labRepo, "g1", "pipeline", "gitlab")
 	pipeline(other, hubRepo, "h1", "Other CI", "github")
+	// CHAOS-8593: pipelines whose jobs all started outside the window must not
+	// change any group. Pipeline h1 started long before the window but has jobs
+	// inside it, and keeps its name.
+	for i := 0; i < 20; i++ {
+		run := fmt.Sprintf("old-%d", i)
+		exec(`INSERT INTO ci_pipeline_runs (org_id, repo_id, run_id, pipeline_name, provider, status, started_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			org, hubRepo, run, "Old CI", "github", "completed", inWindow.AddDate(0, -6, 0), synced)
+		exec(`INSERT INTO ci_job_runs (org_id, repo_id, run_id, job_id, job_name, status, started_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			org, hubRepo, run, "oj", "old-build", "failure", inWindow.AddDate(0, -6, 0), synced)
+	}
 
 	// GitHub Actions: build fails once and succeeds once; lint only succeeds; one job is skipped.
 	job(org, hubRepo, "h1", "j1", "build", "success", inWindow, synced.Add(-time.Hour)) // the older version of j1

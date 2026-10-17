@@ -9,6 +9,7 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-go/readers"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
@@ -307,23 +308,49 @@ type SunburstParams struct {
 	WhatRepos    []string
 	WorkCategory []string
 	Limit        int
+	// IssueSize reads the slices in ISSUE_SIZE (a unit weighs its issue size, an unsized unit counts 1) and returns the
+	// sizing coverage of the window's units with them (CHAOS-9873, D6027, D6032). False is the COUNT of the ported route.
+	IssueSize bool
+}
+
+// SunburstSizing is the sizing coverage that travels with an ISSUE_SIZE sunburst: the share of the window's work
+// units that carry an issue size and the units without one (each counts 1). It covers every unit of the window and
+// scope, not only the slices kept by Limit. The fields are nil when the window holds no unit (not measured, never 0).
+type SunburstSizing struct {
+	Measure          string
+	SizingCoverage   *float64
+	UnsizedUnitCount *int
+	WorkUnitCount    *int
+}
+
+// SunburstResult is the sunburst and, for an ISSUE_SIZE read, its sizing.
+type SunburstResult struct {
+	Slices []SunburstSlice
+	Sizing *SunburstSizing
 }
 
 // BuildSunburstResponse ports build_investment_sunburst
 // (api/services/investment.py:249-321).
 func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, params SunburstParams) ([]SunburstSlice, error) {
+	result, err := BuildSunburst(ctx, reader, orgID, params)
+	return result.Slices, err
+}
+
+// BuildSunburst is BuildSunburstResponse plus, for params.IssueSize, the sizing coverage of the same units.
+func BuildSunburst(ctx context.Context, reader *Reader, orgID string, params SunburstParams) (SunburstResult, error) {
+	params.IssueSize = false // RED-FIRST STUB: removed by the fix commit
 	if reader == nil || reader.client == nil {
-		return nil, ErrUnavailable
+		return SunburstResult{}, ErrUnavailable
 	}
 
 	analytics.RecordStaleInvestmentMembershipScope(ctx, reader.client, orgID, queryTimeoutSecs)
 	analytics.RecordArgMaxNullTransitionGuard(ctx, reader.client, orgID, queryTimeoutSecs)
 
 	if !tableExists(ctx, reader.client, "work_unit_investments") {
-		return []SunburstSlice{}, nil
+		return emptySunburst(params), nil
 	}
 	if !columnsExist(ctx, reader.client, "work_unit_investments", requiredInvestmentColumns) {
-		return []SunburstSlice{}, nil
+		return emptySunburst(params), nil
 	}
 
 	themes, subcategories := splitCategoryFilters(params.WorkCategory)
@@ -335,7 +362,7 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 		var err error
 		repoIDs, err = reader.ResolveRepoFilterIDs(ctx, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
 		if err != nil {
-			return nil, err
+			return SunburstResult{}, err
 		}
 	}
 	var teamCondition string
@@ -355,20 +382,38 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 	}
 	mockCount, err := reader.explainR.FetchMockFixtureInvestmentRowCount(ctx, mockFilters)
 	if err != nil {
-		return nil, err
+		return SunburstResult{}, err
 	}
 	warnMockFixtureRows(orgID, "investment_sunburst", mockCount)
 
+	measure := investmentexplain.SunburstMeasure
+	if params.IssueSize {
+		measure = investmentexplain.SunburstSizedMeasure
+	}
 	rows, err := reader.FetchInvestmentSunburst(ctx, SunburstFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
 		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
 		Themes: themes, Subcategories: subcategories, Limit: params.Limit,
-		Measure: investmentexplain.SunburstMeasure,
+		Measure: measure,
 	})
 	if err != nil {
-		return nil, err
+		return SunburstResult{}, err
 	}
+
+	// ISSUE_SIZE is never served without the coverage that labels it (D6027): the coverage is read over the same
+	// window, scope and category filters as the slices, and a failed read fails the request.
+	var sizing *SunburstSizing
+	if params.IssueSize {
+		coverageFilters := mockFilters
+		coverageFilters.Measure = measure
+		coverage, err := reader.explainR.FetchSizingCoverage(ctx, coverageFilters)
+		if err != nil {
+			return SunburstResult{}, err
+		}
+		sizing = sunburstSizing(coverage)
+	}
+	slog.DebugContext(ctx, "investment: sunburst read", "measure", measure, "slices", len(rows), "sized_read", sizing != nil)
 
 	slices := make([]SunburstSlice, 0, len(rows))
 	for _, row := range rows {
@@ -386,7 +431,27 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 		}
 		slices = append(slices, SunburstSlice{Theme: theme, Subcategory: subcategory, Scope: scope, Value: row.Value})
 	}
-	return slices, nil
+	return SunburstResult{Slices: slices, Sizing: sizing}, nil
+}
+
+func emptySunburst(params SunburstParams) SunburstResult {
+	result := SunburstResult{Slices: []SunburstSlice{}}
+	if params.IssueSize {
+		result.Sizing = &SunburstSizing{Measure: investmentexplain.MeasureIssueSize}
+	}
+	return result
+}
+
+func sunburstSizing(coverage readers.SizingCoverage) *SunburstSizing {
+	out := &SunburstSizing{Measure: investmentexplain.MeasureIssueSize}
+	if coverage.Units <= 0 {
+		return out
+	}
+	units := coverage.Units
+	out.SizingCoverage = coverage.Share()
+	out.UnsizedUnitCount = coverage.Unsized()
+	out.WorkUnitCount = &units
+	return out
 }
 
 // computeQualityStats ports _compute_quality_stats

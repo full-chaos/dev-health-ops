@@ -17,7 +17,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-var dbFailureText = regexp.MustCompile(`"error":"[^"]*sentinel retention delete failure[^"]*"`)
+var runFailureText = regexp.MustCompile(`"error":"Retention run failed\. Reference: [0-9a-f-]{36}"`)
+
+var pythonDriverText = regexp.MustCompile(`"error":"[^"]*sentinel retention delete failure[^"]*"`)
 
 // TestRetentionRoutesVenueOracle is the venue-oracle proof for the retention
 // policy admin routes, including the execute route that deletes audit_logs
@@ -324,8 +326,10 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		Inspect: func(request venueoracle.Request, response venueoracle.Response) {
-			if request.Name == "execute database failure on delete" && !strings.Contains(response.Body, "sentinel retention delete failure") {
-				t.Errorf("%s: the error text does not carry the database failure: %s", request.Name, response.Body)
+			if request.Name == "execute database failure on delete" {
+				if strings.Contains(response.Body, "sentinel") || !runFailureText.MatchString(response.Body) {
+					t.Errorf("%s: the error text must be the authored sentence and a reference, never the driver message: %s", request.Name, response.Body)
+				}
 			}
 			if request.Method != "POST" || !strings.HasSuffix(request.Path, "/retention-policies") || response.Status != 201 {
 				return
@@ -350,9 +354,11 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		},
 		Normalize: func(request venueoracle.Request, body string) string {
 			if request.Name == "execute database failure on delete" {
-				// The error text is each driver's own message; the sentinel
-				// the trigger raised must be in it (checked in Inspect).
-				body = dbFailureText.ReplaceAllString(body, `"error":"<database error>"`)
+				// Python answers the driver's own message; Go answers an
+				// authored sentence and a reference (CHAOS-8439), checked in
+				// Inspect. Both are replaced so the pair compares equal.
+				body = runFailureText.ReplaceAllString(body, `"error":"<database error>"`)
+				body = pythonDriverText.ReplaceAllString(body, `"error":"<database error>"`)
 			}
 			if strings.HasPrefix(request.Name, "W ") {
 				body = redactVolatileText(body, "id", "created_at", "updated_at", "last_run_at", "next_run_at")

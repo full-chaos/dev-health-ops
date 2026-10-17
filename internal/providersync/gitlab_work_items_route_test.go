@@ -240,7 +240,8 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJ
 	for _, request := range doer.requests {
 		if strings.HasSuffix(request.URL.Path, "/issues") || strings.HasSuffix(request.URL.Path, "/merge_requests") {
 			query := request.URL.Query()
-			if query.Get("updated_after") == "" || query.Get("updated_before") != "" || query.Get("state") != "all" {
+			// CHAOS-8805: the fetch carries both ends of the window.
+			if query.Get("updated_after") != "2026-07-01T00:00:00Z" || query.Get("updated_before") != "2026-07-31T23:59:59Z" || query.Get("state") != "all" {
 				t.Fatalf("window query=%s", request.URL.String())
 			}
 		}

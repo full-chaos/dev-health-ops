@@ -310,8 +310,22 @@ func jiraWorkItemsJQL(claim Claim, projectKey string) string {
 		return fmt.Sprintf("project = '%s' ORDER BY updated DESC", projectKey)
 	}
 	updatedSince := claim.SinceAt.UTC().Format("2006-01-02")
-	activeUntil := claim.BeforeAt.UTC().Format("2006-01-02")
-	return fmt.Sprintf("project = '%s' AND (updated >= '%s' OR (statusCategory != Done AND created <= '%s')) ORDER BY updated DESC", projectKey, updatedSince, activeUntil)
+	return fmt.Sprintf("project = '%s' AND updated >= '%s' AND updated < '%s' ORDER BY updated DESC",
+		projectKey, updatedSince, jiraUpdatedBeforeDate(claim.BeforeAt.UTC()))
+}
+
+// jiraUpdatedBeforeDate is the exclusive date bound of a window's end: the day
+// after the end's day, itself rounded up to the next midnight. JQL compares a
+// date-only literal in the Jira user's time zone (up to 14 hours from UTC), so
+// the bound is a superset of the window by construction: it never drops an item
+// the window holds, and it drops every item updated after the day that follows
+// the window end (CHAOS-8805; a unit no longer carries the open backlog).
+func jiraUpdatedBeforeDate(end time.Time) string {
+	day := end.Truncate(24 * time.Hour)
+	if end.After(day) {
+		day = day.Add(24 * time.Hour)
+	}
+	return day.Add(24 * time.Hour).Format("2006-01-02")
 }
 
 // collectJiraWorkItemIssues walks /rest/api/3/search/jql by cursor

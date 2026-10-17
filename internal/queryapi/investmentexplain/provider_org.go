@@ -171,7 +171,7 @@ func ResolveModelNameForOrg(
 		}
 	}
 	if _, resolved := modelEnvByProvider[kind]; resolved {
-		if value := llmbudget.PlatformPurposeModel(explainPurpose, envsecrets.ProcessLookup); value != "" {
+		if value := platformExplainModel(); value != "" {
 			return value, true
 		}
 	}

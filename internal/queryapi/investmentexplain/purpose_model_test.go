@@ -1,7 +1,10 @@
 package investmentexplain
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
@@ -71,4 +74,27 @@ func TestPlatformExplainModelOrder(t *testing.T) {
 			t.Fatalf("categorize resolved %q", got)
 		}
 	})
+}
+
+// The setting taking effect is visible at Info, with the setting name and the model.
+func TestPlatformExplainModelIsLoggedWhenItDecides(t *testing.T) {
+	var buf bytes.Buffer
+	saved := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(saved)
+	t.Setenv("LLM_MODEL_EXPLAIN", "explain-model")
+	if got, _ := ResolveModelName(categorize.ProviderKindOpenAI, ""); got != "explain-model" {
+		t.Fatalf("got %q", got)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "LLM_MODEL_EXPLAIN") || !strings.Contains(out, "explain-model") || !strings.Contains(out, "level=INFO") {
+		t.Fatalf("no Info line naming the setting and model: %q", out)
+	}
+	buf.Reset()
+	t.Setenv("LLM_MODEL_EXPLAIN", "")
+	t.Setenv("LLM_MODEL", "generic")
+	ResolveModelName(categorize.ProviderKindOpenAI, "")
+	if strings.Contains(buf.String(), "LLM_MODEL_EXPLAIN") {
+		t.Fatalf("logged the setting while unset: %q", buf.String())
+	}
 }

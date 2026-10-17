@@ -3,6 +3,8 @@ package envelopemint
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"log/slog"
@@ -19,6 +21,19 @@ func testKeyPEM(t *testing.T) string {
 		t.Fatal(err)
 	}
 	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+}
+
+func rsaKeyPEM(t *testing.T) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +65,7 @@ func TestLoadPrivateKeyFromFileRefusals(t *testing.T) {
 	if err := os.Symlink(okPath, link); err != nil {
 		t.Fatal(err)
 	}
-	rsa := "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VuBCIEIA==\n-----END PRIVATE KEY-----\n"
+	rsa := rsaKeyPEM(t)
 	cases := map[string]string{
 		"symlink":    link,
 		"world":      mk("w.pem", good, 0o644),
@@ -135,5 +150,67 @@ func TestLoadPrivateKeyFromFileAcceptsGeneratedKeyFile(t *testing.T) {
 	}
 	if _, err := LoadPrivateKeyFromFile(paths.Private); err != nil {
 		t.Fatalf("generated key file refused: %v", err)
+	}
+}
+
+// secretShape is key-looking material placed where the loader would echo it if
+// it ever formatted input into an error: the PEM label, the PEM body, the DER
+// body, and a prefix of a real key.
+func TestNoLoadPathEchoesKeyInput(t *testing.T) {
+	const secret = "ZmFrZS1zZWNyZXQtbWF0ZXJpYWwtMDEyMzQ1Njc4OWFiY2RlZg"
+	good := testKeyPEM(t)
+	realBody := strings.Split(good, "\n")[1]
+	cases := map[string]string{
+		"label":        "-----BEGIN " + secret + "-----\nAAAA\n-----END " + secret + "-----\n",
+		"bad-pem":      secret + "\n-----BEGIN PRIVATE KEY-----\n",
+		"bad-der":      string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte(secret)})),
+		"two-blocks":   good + good,
+		"rsa":          rsaKeyPEM(t),
+		"real-prefix":  "-----BEGIN " + realBody + "-----\nAAAA\n-----END " + realBody + "-----\n",
+		"not-pem-real": realBody,
+	}
+	dir := t.TempDir()
+	for name, input := range cases {
+		t.Run(name, func(t *testing.T) {
+			needles := []string{secret, realBody}
+			if name == "rsa" {
+				needles = []string{strings.Split(input, "\n")[1]}
+			}
+			check := func(path string, err error, logs *bytes.Buffer) {
+				t.Helper()
+				if err == nil {
+					t.Fatalf("%s: expected an error", path)
+				}
+				all := err.Error() + logs.String()
+				for _, n := range needles {
+					if strings.Contains(all, n) {
+						t.Fatalf("%s: key input echoed: %s", path, all)
+					}
+				}
+			}
+			logs := captureLogs(t)
+			_, err := LoadPrivateKey([]byte(input))
+			check("LoadPrivateKey", err, logs)
+
+			logs = captureLogs(t)
+			p := filepath.Join(dir, name+".pem")
+			if werr := os.WriteFile(p, []byte(input), 0o600); werr != nil {
+				t.Fatal(werr)
+			}
+			_, err = LoadPrivateKeyFromFile(p)
+			check("LoadPrivateKeyFromFile", err, logs)
+
+			logs = captureLogs(t)
+			t.Setenv(PrivateKeyFileEnvVar, "")
+			t.Setenv(PrivateKeyEnvVar, input)
+			_, err = LoadPrivateKeyFromEnv()
+			check("LoadPrivateKeyFromEnv raw", err, logs)
+
+			logs = captureLogs(t)
+			t.Setenv(PrivateKeyFileEnvVar, p)
+			t.Setenv(PrivateKeyEnvVar, input)
+			_, err = LoadPrivateKeyFromEnv()
+			check("LoadPrivateKeyFromEnv file", err, logs)
+		})
 	}
 }

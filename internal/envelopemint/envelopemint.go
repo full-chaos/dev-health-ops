@@ -98,25 +98,26 @@ var ErrInvalidPrivateKeyPEM = errors.New("envelopemint: not a PKCS#8 Ed25519 pri
 // principal_envelope._load_private_key does on the Python side: exactly
 // one PEM block, labelled "PRIVATE KEY", PKCS#8-encoded, and Ed25519.
 // Anything else -- multiple blocks, a different label, a different key
-// type -- is refused rather than guessed at.
+// type -- is refused rather than guessed at. Errors carry a reason class only,
+// never any byte of the input (label, PEM, DER or parser text).
 func LoadPrivateKey(pemBytes []byte) (ed25519.PrivateKey, error) {
 	block, rest := pem.Decode(pemBytes)
 	if block == nil {
 		return nil, ErrInvalidPrivateKeyPEM
 	}
 	if block.Type != "PRIVATE KEY" {
-		return nil, fmt.Errorf("%w: PEM block is %q, want \"PRIVATE KEY\"", ErrInvalidPrivateKeyPEM, block.Type)
+		return nil, fmt.Errorf("%w: PEM block label is not PRIVATE KEY", ErrInvalidPrivateKeyPEM)
 	}
 	if len(bytes.TrimSpace(rest)) != 0 {
 		return nil, fmt.Errorf("%w: more than one PEM block", ErrInvalidPrivateKeyPEM)
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidPrivateKeyPEM, err)
+		return nil, fmt.Errorf("%w: not a PKCS#8 key", ErrInvalidPrivateKeyPEM)
 	}
 	key, ok := parsed.(ed25519.PrivateKey)
 	if !ok || len(key) != ed25519.PrivateKeySize {
-		return nil, fmt.Errorf("%w: parsed key is %T, want ed25519.PrivateKey", ErrInvalidPrivateKeyPEM, parsed)
+		return nil, fmt.Errorf("%w: key is not Ed25519", ErrInvalidPrivateKeyPEM)
 	}
 	return key, nil
 }

@@ -783,7 +783,7 @@ func TestWorkUnitsSeededRealClickHouse_MembershipScopeEnabledFiltersNonMembers(t
 	lagging, err := reader.BuildWorkUnitInvestments(analytics.WithInvestmentMembershipScopeRequest(ctx), investmentexplain.BuildWorkUnitInvestmentsOptions{
 		OrgID:   workUnitsSeededOrgID,
 		StartTS: fromTS,
-		EndTS:   toTS,
+		EndTS:   toTS.AddDate(0, 0, 1),
 		Limit:   200,
 	})
 	if err != nil {

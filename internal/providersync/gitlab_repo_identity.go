@@ -52,44 +52,58 @@ type GitLabRepoIdentityBatchReader interface {
 	StoredRepoIdentitiesForProjects(ctx context.Context, orgID string, projects []GitLabProjectPath) ([]GitLabStoredRepoIdentity, error)
 }
 
+// gitLabRefPathResolution is what resolveGitLabRepoIdentityPaths decided: the
+// minted path of each project it could prove, and the projects it could not
+// (ambiguous stored rows). An unprovable project is never given a path: the
+// work-items route refuses it too.
+type gitLabRefPathResolution struct {
+	Paths     map[int64]string
+	Ambiguous map[int64]struct{}
+}
+
 // resolveGitLabRepoIdentityPaths applies the identity rules of
-// resolveGitLabRepoIdentity to each project over one batched read, and maps
-// each project's numeric id to its minted path. A project it cannot decide is
-// left out, and the caller keeps its current path.
+// resolveGitLabRepoIdentity to each project over one batched read. A project
+// the rules cannot decide lands in Ambiguous, never in Paths and never on its
+// current path.
 func resolveGitLabRepoIdentityPaths(
 	ctx context.Context, reader GitLabRepoIdentityBatchReader, orgID string, projects []GitLabProjectPath,
-) (map[int64]string, error) {
-	out := make(map[int64]string, len(projects))
+) (gitLabRefPathResolution, error) {
+	out := gitLabRefPathResolution{Paths: make(map[int64]string, len(projects)), Ambiguous: map[int64]struct{}{}}
 	if reader == nil || len(projects) == 0 {
 		return out, nil
 	}
 	stored, err := reader.StoredRepoIdentitiesForProjects(ctx, orgID, projects)
 	if err != nil {
-		return nil, err
+		return gitLabRefPathResolution{}, err
 	}
 	for _, project := range projects {
 		minted, mintErr := repositoryIdentity(project.Path)
-		if mintErr != nil {
-			continue
-		}
-		native := strconv.FormatInt(project.ProjectID, 10)
+		var identity GitLabRepoIdentity
+		var kind string
+		var decideErr error
 		relevant := make([]GitLabStoredRepoIdentity, 0, 2)
-		for _, row := range stored {
-			if row.heldBy() == native || row.ID == minted {
-				relevant = append(relevant, row)
+		if mintErr != nil {
+			decideErr = mintErr
+		} else {
+			native := strconv.FormatInt(project.ProjectID, 10)
+			for _, row := range stored {
+				if row.heldBy() == native || row.ID == minted {
+					relevant = append(relevant, row)
+				}
 			}
+			identity, kind, decideErr = decideGitLabRepoIdentity(project.ProjectID, project.Path, relevant)
 		}
-		identity, kind, decideErr := decideGitLabRepoIdentity(project.ProjectID, project.Path, relevant)
 		if decideErr != nil {
 			errorClass, errorType := logging.ErrorClass(decideErr), logging.ErrorType(decideErr) // never the error text (CHAOS-7933)
 			slog.Default().WarnContext(ctx, "gitlab_repo_identity_batch_unresolved",
 				"org_id", orgID, "gitlab_project_id", project.ProjectID, "stored_rows", len(relevant),
 				"error_class", errorClass, "error_type", errorType)
+			out.Ambiguous[project.ProjectID] = struct{}{}
 			continue
 		}
 		slog.Default().DebugContext(ctx, "gitlab_repo_identity_batch",
 			"org_id", orgID, "gitlab_project_id", project.ProjectID, "decision", kind)
-		out[project.ProjectID] = identity.Path
+		out.Paths[project.ProjectID] = identity.Path
 	}
 	return out, nil
 }

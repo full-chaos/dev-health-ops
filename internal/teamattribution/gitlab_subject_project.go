@@ -47,10 +47,10 @@ func GitLabProjectNames(subject GithubWorkItemDerivationSubject) []string {
 	if len(out) > 0 {
 		return out
 	}
-	// No repos row was read: fall back to the paths the item itself carries.
-	if gitLabSubjectNamedByKey(subject) {
-		add(*subject.ProjectKey)
-	} else if subject.ProjectID != nil && !IsGitLabCatalogProjectID(*subject.ProjectID) {
+	// No repos row was read. An item anchored to a catalog id has no path that is
+	// provably its own; a legacy item (the path in project_id) keeps the path it
+	// was written under, as before the anchoring.
+	if subject.ProjectID != nil && !IsGitLabCatalogProjectID(*subject.ProjectID) {
 		add(*subject.ProjectID)
 	}
 	return out
@@ -267,4 +267,132 @@ func AnchorGitLabSubjectProjects(
 		subjects[id] = subject
 	}
 	return GitLabAnchorStats{Anchored: anchored, Unanchored: unanchored, IdentityPathWithheld: withheld}, nil
+}
+
+// LoadGitLabProjectNativesByPath maps each lower-cased path of paths to the one
+// numeric GitLab project id the org's repos rows name at it (as the current path
+// or the minted one). A path two projects have used is ambiguous and absent from
+// natives; a path no row names is absent from both maps.
+func LoadGitLabProjectNativesByPath(
+	ctx context.Context, conn driver.Conn, orgID string, paths []string,
+) (natives map[string]string, ambiguous map[string]struct{}, err error) {
+	seen := make(map[string]map[string]struct{}, len(paths))
+	wanted := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		wanted[path] = struct{}{}
+	}
+	for start := 0; start < len(paths); start += gitLabNativeProjectChunk {
+		end := min(start+gitLabNativeProjectChunk, len(paths))
+		rows, queryErr := conn.Query(ctx, `
+SELECT lower(repo), lower(identity_path), provider_repo_id, JSONExtractInt(ifNull(settings, ''), 'project_id')
+FROM repos FINAL
+WHERE org_id = ? AND provider = 'gitlab' AND (lower(repo) IN ? OR lower(identity_path) IN ?)`,
+			orgID, paths[start:end], paths[start:end])
+		if queryErr != nil {
+			return nil, nil, queryErr
+		}
+		for rows.Next() {
+			var repo, identityPath, providerRepoID string
+			var settingsProjectID int64
+			if scanErr := rows.Scan(&repo, &identityPath, &providerRepoID, &settingsProjectID); scanErr != nil {
+				_ = rows.Close()
+				return nil, nil, scanErr
+			}
+			native := providerRepoID
+			if native == "" && settingsProjectID > 0 {
+				native = strconv.FormatInt(settingsProjectID, 10)
+			}
+			if native == "" {
+				continue
+			}
+			for _, path := range []string{repo, identityPath} {
+				if _, ok := wanted[path]; !ok {
+					continue
+				}
+				if seen[path] == nil {
+					seen[path] = map[string]struct{}{}
+				}
+				seen[path][native] = struct{}{}
+			}
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			_ = rows.Close()
+			return nil, nil, rowsErr
+		}
+		_ = rows.Close()
+	}
+	natives, ambiguous = map[string]string{}, map[string]struct{}{}
+	for path, set := range seen {
+		if len(set) != 1 {
+			ambiguous[path] = struct{}{}
+			continue
+		}
+		for native := range set {
+			natives[path] = native
+		}
+	}
+	return natives, ambiguous, nil
+}
+
+// remapLegacyGitLabProjectFacts moves a GitLab ownership row written before
+// CHAOS-8883 (project_id holds the path) to the catalog id of the one project
+// its path names, so it lands on the same key as an item anchored to that id. A
+// row whose path two projects have used is dropped (a reused path is not a
+// grant); a row whose path no repos row names stays as it is.
+func (source ClickHouseFactSource) remapLegacyGitLabProjectFacts(
+	ctx context.Context, orgID string, facts []GithubWorkItemDerivationProjectFact,
+) (out []GithubWorkItemDerivationProjectFact, remapped, dropped int, err error) {
+	var paths []string
+	seen := map[string]struct{}{}
+	for _, fact := range facts {
+		if !isLegacyGitLabOwnershipFact(fact) {
+			continue
+		}
+		path := strings.ToLower(strings.TrimSpace(fact.ProjectID))
+		if _, dup := seen[path]; !dup {
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return facts, 0, 0, nil
+	}
+	natives, ambiguous, err := LoadGitLabProjectNativesByPath(ctx, source.Conn, orgID, paths)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	out, remapped, dropped = RemapLegacyGitLabProjectFacts(orgID, facts, natives, ambiguous)
+	return out, remapped, dropped, nil
+}
+
+func isLegacyGitLabOwnershipFact(fact GithubWorkItemDerivationProjectFact) bool {
+	return fact.Provider == "gitlab" && strings.TrimSpace(fact.ProjectID) != "" && !IsGitLabCatalogProjectID(fact.ProjectID)
+}
+
+// RemapLegacyGitLabProjectFacts is the pure part of remapLegacyGitLabProjectFacts.
+func RemapLegacyGitLabProjectFacts(
+	orgID string, facts []GithubWorkItemDerivationProjectFact, natives map[string]string, ambiguous map[string]struct{},
+) (out []GithubWorkItemDerivationProjectFact, remapped, dropped int) {
+	out = make([]GithubWorkItemDerivationProjectFact, 0, len(facts))
+	for _, fact := range facts {
+		if !isLegacyGitLabOwnershipFact(fact) {
+			out = append(out, fact)
+			continue
+		}
+		path := strings.ToLower(strings.TrimSpace(fact.ProjectID))
+		if _, bad := ambiguous[path]; bad {
+			dropped++
+			continue
+		}
+		if native, ok := natives[path]; ok {
+			if fact.ProjectKey == nil || strings.TrimSpace(*fact.ProjectKey) == "" {
+				key := fact.ProjectID
+				fact.ProjectKey = &key
+			}
+			fact.ProjectID = GitLabCatalogProjectIDString(orgID, native)
+			remapped++
+		}
+		out = append(out, fact)
+	}
+	return out, remapped, dropped
 }

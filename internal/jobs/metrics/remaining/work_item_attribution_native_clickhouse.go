@@ -1366,7 +1366,7 @@ func (executor *WorkItemAttributionExecutor) loadFacts(
 func LoadWorkItemDerivationFacts(
 	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
 ) (teamattribution.GithubWorkItemDerivationFacts, error) {
-	loader := teamattribution.ClickHouseFactSource{Conn: conn}
+	loader := teamattribution.ClickHouseFactSource{Conn: conn, OnLegacyGitLabOwnership: logLegacyGitLabOwnership}
 	facts := teamattribution.GithubWorkItemDerivationFacts{}
 	var err error
 	if facts.Teams, err = loader.LoadTeams(ctx, orgID); err != nil {
@@ -1510,3 +1510,11 @@ func (executor *WorkItemAttributionExecutor) ComputePartition(
 
 // A compile-time pin that this executor IS the seam the handler drives.
 var _ PartitionExecutor = (*WorkItemAttributionExecutor)(nil)
+
+func logLegacyGitLabOwnership(ctx context.Context, remapped, ambiguousDropped int) {
+	level := slog.LevelDebug
+	if ambiguousDropped > 0 {
+		level = slog.LevelInfo
+	}
+	slog.Default().Log(ctx, level, "gitlab_legacy_ownership_remapped", "remapped", remapped, "ambiguous_dropped", ambiguousDropped)
+}

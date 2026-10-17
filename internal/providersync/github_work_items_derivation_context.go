@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -97,7 +98,7 @@ func (source githubWorkItemClickHouseDerivationContextSource) Load(
 	if err := source.Lease.Assert(ctx); err != nil {
 		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
-	loader := teamattribution.ClickHouseFactSource{Conn: source.Conn, Lease: source.Lease}
+	loader := teamattribution.ClickHouseFactSource{Conn: source.Conn, Lease: source.Lease, OnLegacyGitLabOwnership: logLegacyGitLabOwnershipRemap}
 	facts := teamattribution.GithubWorkItemDerivationFacts{}
 	var err error
 	if facts.Teams, err = loader.LoadTeams(ctx, claim.OrgID); err != nil {
@@ -611,3 +612,11 @@ LIMIT ?`, orgID, request.DonorWorkItemIDs, request.DonorIssueKeys, maximum+1)
 }
 
 var _ githubWorkItemDerivationContextSource = githubWorkItemClickHouseDerivationContextSource{}
+
+func logLegacyGitLabOwnershipRemap(ctx context.Context, remapped, ambiguousDropped int) {
+	level := slog.LevelDebug
+	if ambiguousDropped > 0 {
+		level = slog.LevelInfo
+	}
+	slog.Default().Log(ctx, level, "gitlab_legacy_ownership_remapped", "remapped", remapped, "ambiguous_dropped", ambiguousDropped)
+}

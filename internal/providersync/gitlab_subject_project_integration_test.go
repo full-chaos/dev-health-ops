@@ -72,8 +72,8 @@ func TestResolveGitLabRepoIdentityPathsOnARealStore(t *testing.T) {
 	}
 	want := map[int64]string{123: "acme/api", 456: "acme/api@456", 789: "fresh/project"}
 	for id, path := range want {
-		if got[id] != path {
-			t.Errorf("project %d: ref path = %q, want %q", id, got[id], path)
+		if got.Paths[id] != path {
+			t.Errorf("project %d: ref path = %q, want %q", id, got.Paths[id], path)
 		}
 	}
 }

@@ -257,6 +257,10 @@ type GithubWorkItemStoredEdgeMergeObservation struct {
 type ClickHouseFactSource struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
+	// OnLegacyGitLabOwnership, when set, is told how many path-keyed GitLab
+	// ownership rows LoadProjects moved to their catalog id and how many it
+	// dropped because their path names more than one project.
+	OnLegacyGitLabOwnership func(ctx context.Context, remapped, ambiguousDropped int)
 }
 
 type GithubWorkItemDerivationContext struct {
@@ -1233,7 +1237,7 @@ func (derived GithubWorkItemDerivationContext) IssueProjectCandidates(
 	if subject.ProjectKey != nil && *subject.ProjectKey != keys[0] {
 		keys = append(keys, *subject.ProjectKey)
 	}
-	if subject.Provider == "gitlab" && len(subject.GitLabPaths) > 0 {
+	if subject.Provider == "gitlab" && (len(subject.GitLabPaths) > 0 || gitLabSubjectNamedByKey(subject)) {
 		keys = gitLabIssueProjectKeys(subject)
 	}
 	for _, key := range keys {
@@ -1833,7 +1837,17 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 			return nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(result)}
 		}
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	result, remapped, dropped, err := source.remapLegacyGitLabProjectFacts(ctx, orgID, result)
+	if err != nil {
+		return nil, err
+	}
+	if source.OnLegacyGitLabOwnership != nil && remapped+dropped > 0 {
+		source.OnLegacyGitLabOwnership(ctx, remapped, dropped)
+	}
+	return result, nil
 }
 
 // team_repo_ownership.repo_id is Nullable(UUID); tuple-wrapped below so

@@ -37,6 +37,34 @@ func TestTeamRepoOwnershipDerivationAnchorsALegacyGitLabItem(t *testing.T) {
 	seedWorkItemOfType(t, ctx, conn, orgID, "gitlab:acme/api!1", "gitlab", "merge_request", anchored, "acme/api", now)
 	seedWorkItemOfType(t, ctx, conn, orgID, "gitlab:acme/loose!1", "gitlab", "merge_request", loose, "acme/loose", now)
 
+	// Ownership written before the catalog id: the project_id holds the path.
+	pathOwned, dupA, dupB := uuid.New(), uuid.New(), uuid.New()
+	batch, err = conn.PrepareBatch(ctx, `INSERT INTO repos (id, repo, identity_path, org_id, provider, provider_repo_id, last_synced)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []struct {
+		id                       uuid.UUID
+		repo, identity, provider string
+	}{
+		{pathOwned, "legacy/owned", "legacy/owned", "88"},
+		// Two projects have used x/dup: project 1 minted it and left, project 2 holds it now.
+		{dupA, "elsewhere/moved", "x/dup", "1"},
+		{dupB, "x/dup", "x/dup@2", "2"},
+	} {
+		if err := batch.Append(row.id, row.repo, row.identity, orgID, "gitlab", row.provider, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatal(err)
+	}
+	seedTeamProjectOwnership(t, ctx, conn, orgID, "gitlab", "legacy/owned", "team-path", false, now)
+	seedTeamProjectOwnership(t, ctx, conn, orgID, "gitlab", "x/dup", "team-dup", false, now)
+	seedWorkItemOfType(t, ctx, conn, orgID, "gitlab:legacy/owned!1", "gitlab", "merge_request", pathOwned, "legacy/owned", now)
+	seedWorkItemOfType(t, ctx, conn, orgID, "gitlab:x/dup!1", "gitlab", "merge_request", dupA, "x/dup", now)
+	seedWorkItemOfType(t, ctx, conn, orgID, "gitlab:x/dup@2!1", "gitlab", "merge_request", dupB, "x/dup", now)
+
 	if _, _, _, _, err := (TeamRepoOwnershipDerivationService{Conn: conn}).Derive(ctx, orgID); err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -46,5 +74,15 @@ func TestTeamRepoOwnershipDerivationAnchorsALegacyGitLabItem(t *testing.T) {
 	}
 	if row, ok := got["acme/loose"]; ok {
 		t.Fatalf("a repo that names no project resolved to %+v, want no ownership", row)
+	}
+	// A path-keyed ownership row joins the item anchored to the project it names.
+	if row, ok := got["legacy/owned"]; !ok || row.teamID != "team-path" {
+		t.Fatalf("path-keyed ownership of project 88 resolved to %+v, want team-path; all rows %+v", got["legacy/owned"], got)
+	}
+	// A path two projects have used is not a grant for either.
+	for _, repo := range []string{"elsewhere/moved", "x/dup"} {
+		if row, ok := got[repo]; ok {
+			t.Fatalf("ownership of the reused path x/dup reached %s: %+v", repo, row)
+		}
 	}
 }

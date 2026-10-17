@@ -167,3 +167,52 @@ func TestAReusedPathIsNotAnIssueProjectKeyOfTheOldProject(t *testing.T) {
 		t.Fatalf("project 456 candidates = %+v, want new-team", got)
 	}
 }
+
+// A GitLab ownership row written before CHAOS-8883 holds the path. After the
+// remap it lands on the catalog id, so an anchored item gets the owner the
+// legacy item got.
+func TestLegacyGitLabOwnershipJoinsAnAnchoredItem(t *testing.T) {
+	path := "acme/api"
+	legacy := []GithubWorkItemDerivationProjectFact{{
+		Provider: "gitlab", TeamID: "owner-team", TeamName: "Owner", ProjectID: path, IsPrimary: 1, Specificity: 110, Priority: 10,
+	}}
+	teams := []GithubWorkItemDerivationTeamFact{{Provider: "gitlab", TeamID: "owner-team"}}
+	before := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: teams, Projects: legacy})
+	oldItem := GithubWorkItemDerivationSubject{WorkItemID: "gitlab:acme/api#1", Provider: "gitlab", ProjectID: &path, OrgID: "org"}
+	if got := primaryTeam(before, oldItem); got != "owner-team" {
+		t.Fatalf("setup: the legacy item got %q", got)
+	}
+	anchored := gitlabSubject("org:gitlab:123", "acme/api")
+	if got := primaryTeam(before, anchored); got != "" {
+		t.Fatalf("setup: without the remap the anchored item got %q (the reviewed defect)", got)
+	}
+	facts, remapped, dropped := RemapLegacyGitLabProjectFacts("org", legacy, map[string]string{"acme/api": "123"}, nil)
+	if remapped != 1 || dropped != 0 || facts[0].ProjectID != "org:gitlab:123" {
+		t.Fatalf("remap = %+v remapped=%d dropped=%d", facts, remapped, dropped)
+	}
+	after := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: teams, Projects: facts})
+	if got := primaryTeam(after, anchored); got != "owner-team" {
+		t.Fatalf("anchored item got %q after the remap, want owner-team", got)
+	}
+}
+
+func TestLegacyGitLabOwnershipRemapKeepsWhatItCannotProve(t *testing.T) {
+	facts := []GithubWorkItemDerivationProjectFact{
+		{Provider: "gitlab", TeamID: "a", ProjectID: "x/dup"},
+		{Provider: "gitlab", TeamID: "b", ProjectID: "x/unseen"},
+		{Provider: "gitlab", TeamID: "c", ProjectID: "org:gitlab:7"},
+		{Provider: "jira", TeamID: "d", ProjectID: "x/dup"},
+	}
+	out, remapped, dropped := RemapLegacyGitLabProjectFacts("org", facts, map[string]string{}, map[string]struct{}{"x/dup": {}})
+	if remapped != 0 || dropped != 1 || len(out) != 3 {
+		t.Fatalf("remapped=%d dropped=%d out=%+v", remapped, dropped, out)
+	}
+	for _, fact := range out {
+		if fact.TeamID == "a" {
+			t.Fatal("a path two projects have used stayed a grant")
+		}
+	}
+	if out[0].ProjectID != "x/unseen" || out[1].ProjectID != "org:gitlab:7" || out[2].Provider != "jira" || out[2].ProjectID != "x/dup" {
+		t.Fatalf("unprovable or foreign rows changed: %+v", out)
+	}
+}

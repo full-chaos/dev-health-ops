@@ -44,6 +44,7 @@ func generateKeyPEM(t *testing.T) (string, ed25519.PublicKey) {
 
 func TestRunRequiresOrg(t *testing.T) {
 	t.Setenv(envelopemint.PrivateKeyEnvVar, "")
+	t.Setenv(envelopemint.PrivateKeyFileEnvVar, "")
 	if err := run([]string{}, &bytes.Buffer{}, io.Discard); err == nil {
 		t.Fatal("expected -org to be required")
 	}
@@ -51,6 +52,7 @@ func TestRunRequiresOrg(t *testing.T) {
 
 func TestRunRequiresAKey(t *testing.T) {
 	t.Setenv(envelopemint.PrivateKeyEnvVar, "")
+	t.Setenv(envelopemint.PrivateKeyFileEnvVar, "")
 	if err := run([]string{"-org", "70d529e0"}, &bytes.Buffer{}, io.Discard); err == nil {
 		t.Fatal("expected a missing key to be refused")
 	}
@@ -59,6 +61,7 @@ func TestRunRequiresAKey(t *testing.T) {
 func TestRunFromEnvMintsAnEnvelope(t *testing.T) {
 	pemText, pub := generateKeyPEM(t)
 	t.Setenv(envelopemint.PrivateKeyEnvVar, pemText)
+	t.Setenv(envelopemint.PrivateKeyFileEnvVar, "")
 
 	var stdout bytes.Buffer
 	if err := run([]string{"-org", "70d529e0"}, &stdout, io.Discard); err != nil {
@@ -84,6 +87,7 @@ func TestRunFromEnvMintsAnEnvelope(t *testing.T) {
 func TestRunFromKeyFile(t *testing.T) {
 	pemText, pub := generateKeyPEM(t)
 	t.Setenv(envelopemint.PrivateKeyEnvVar, "") // must NOT fall back to env
+	t.Setenv(envelopemint.PrivateKeyFileEnvVar, "")
 	keyPath := t.TempDir() + "/key.pem"
 	if err := os.WriteFile(keyPath, []byte(pemText), 0o600); err != nil {
 		t.Fatalf("write key file: %v", err)
@@ -101,6 +105,7 @@ func TestRunFromKeyFile(t *testing.T) {
 
 func TestRunNeverPrintsTheKeyOnError(t *testing.T) {
 	t.Setenv(envelopemint.PrivateKeyEnvVar, "not-a-valid-pem-at-all")
+	t.Setenv(envelopemint.PrivateKeyFileEnvVar, "")
 	var stdout bytes.Buffer
 	err := run([]string{"-org", "70d529e0"}, &stdout, io.Discard)
 	if err == nil {

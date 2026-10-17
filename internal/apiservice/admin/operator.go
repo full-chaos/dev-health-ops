@@ -222,6 +222,86 @@ func pyUUID(text string) (uuid.UUID, error) {
 	return uuid.Parse(digits[0:8] + "-" + digits[8:12] + "-" + digits[12:16] + "-" + digits[16:20] + "-" + digits[20:])
 }
 
+// findUser is the lookup of the user verbs: by id, else email, else username (the first one given and
+// non-empty). No identifier, a malformed id and an unknown user are refusals.
+func findUser(ctx context.Context, store pgStore, id, email, username *string) (*fullUser, error) {
+	var user *fullUser
+	var err error
+	switch {
+	case id != nil && *id != "":
+		parsed, parseErr := pyUUID(*id)
+		if parseErr != nil {
+			return nil, refuse("%s", parseErr.Error())
+		}
+		user, err = store.fullUserByID(ctx, parsed)
+	case email != nil && *email != "":
+		user, err = store.userByEmail(ctx, *email)
+	case username != nil && *username != "":
+		user, err = store.userByUsername(ctx, *username)
+	default:
+		return nil, refuse("Identify the user with --id, --email, or --username.")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, refuse("User not found.")
+	}
+	return user, nil
+}
+
+// DeleteUserInput is `admin users delete`: the identifiers as for update, and Confirm, which is the
+// operator's --yes. Without it nothing is deleted.
+type DeleteUserInput struct {
+	ID, Email, Username *string
+	Confirm             bool
+}
+
+// DeleteUserResult is what a delete did, or with Deleted false what it would delete.
+type DeleteUserResult struct {
+	User        User
+	Memberships int
+	Deleted     bool
+}
+
+// DeleteUser is the API's delete_user (DELETE FROM users, the rows that reference the user cascade) run by the operator,
+// who stands where a superuser caller stands: the API's refusal of a non-superuser caller has no counterpart here. The user
+// row is locked before the delete, as the API's superuser-guarded write locks it, and the delete runs in one transaction.
+// Without Confirm the user and the memberships that would go with it are reported and nothing is written.
+func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUserResult, error) {
+	var result *DeleteUserResult
+	err := o.inTransaction(ctx, func(store pgStore) error {
+		user, err := findUser(ctx, store, in.ID, in.Email, in.Username)
+		if err != nil {
+			return err
+		}
+		var memberships int
+		if err := store.Pool.QueryRow(ctx, `SELECT count(*) FROM memberships WHERE user_id = $1`, user.ID).Scan(&memberships); err != nil {
+			return err
+		}
+		result = &DeleteUserResult{User: *userView(user), Memberships: memberships}
+		if !in.Confirm {
+			return nil
+		}
+		if _, err := store.Pool.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, user.ID); err != nil {
+			return err
+		}
+		deleted, err := store.deleteUser(ctx, user.ID)
+		if err != nil {
+			return err
+		}
+		if !deleted {
+			return refuse("User not found.")
+		}
+		result.Deleted = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // UpdateUser is the `admin users update` session: the user is found, the profile
 // fields, the password and the memberships change in one transaction, and any
 // refusal rolls the whole update back.
@@ -236,27 +316,9 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 	}
 	var result *UpdateUserResult
 	err := o.inTransaction(ctx, func(store pgStore) error {
-		var user *fullUser
-		var err error
-		switch {
-		case in.ID != nil && *in.ID != "":
-			id, parseErr := pyUUID(*in.ID)
-			if parseErr != nil {
-				return refuse("%s", parseErr.Error())
-			}
-			user, err = store.fullUserByID(ctx, id)
-		case in.Email != nil && *in.Email != "":
-			user, err = store.userByEmail(ctx, *in.Email)
-		case in.Username != nil && *in.Username != "":
-			user, err = store.userByUsername(ctx, *in.Username)
-		default:
-			return refuse("Identify the user with --id, --email, or --username.")
-		}
+		user, err := findUser(ctx, store, in.ID, in.Email, in.Username)
 		if err != nil {
 			return err
-		}
-		if user == nil {
-			return refuse("User not found.")
 		}
 		changes := []string{}
 		shownEmail := user.Email

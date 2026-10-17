@@ -68,9 +68,6 @@ func TestProviderStructsRedactAPIKey(t *testing.T) {
 		"OllamaProvider":        NewOllamaProvider(ollama),
 		"OllamaProvider(value)": *NewOllamaProvider(ollama),
 	}
-	// A SharedProvider VALUE is left out until dev-health-go keeps llm.Secret
-	// behind a pointer (CHAOS-10016): held in a caller's unexported field, it
-	// reaches the shared client's Secret by reflection.
 	for _, kind := range []ProviderKind{ProviderKindOpenAI, ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen, ProviderKindLocal} {
 		cfg := SharedProviderConfig{Kind: kind, APIKey: secrets.NewHidden(llmKeySentinel), BaseURL: "https://provider.example/v1", Model: "m"}
 		shared, err := NewSharedProvider(cfg)
@@ -80,6 +77,7 @@ func TestProviderStructsRedactAPIKey(t *testing.T) {
 		subjects["SharedProviderConfig/"+string(kind)] = cfg
 		subjects["*SharedProviderConfig/"+string(kind)] = &cfg
 		subjects["SharedProvider/"+string(kind)] = shared
+		subjects["SharedProvider(value)/"+string(kind)] = *shared
 	}
 	for name, subject := range subjects {
 		assertNoKey(t, name, subject)

@@ -305,6 +305,9 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	if claim.BeforeAt != nil {
 		query.Set("updated_before", claim.BeforeAt.UTC().Format(time.RFC3339Nano))
 	}
+	slog.Default().InfoContext(ctx, "gitlab_work_items_window",
+		"org_id", claim.OrgID, "unit_id", claim.ID, "updated_after", query.Get("updated_after"),
+		"updated_before", query.Get("updated_before"))
 	issuePayloads, issuePages, issueErr := collectGitLabPayloads(
 		ctx, &counted, gitlabIssuesRoute, root+"/issues", query, perPage, maxPages,
 	)

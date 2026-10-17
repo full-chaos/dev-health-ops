@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -104,6 +105,11 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 	issues, searchPages, err := collectJiraWorkItemIssues(
 		ctx, client, jql, maxPages, maxRows, perPage, true,
 	)
+	if err == nil {
+		slog.Default().InfoContext(ctx, "jira_work_items_window",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "project_key", projectKey, "jql", jql, "fetch_all", fetchAll,
+			"jql_override", jiraOptionString(claim, "jql_override", "") != "", "issues", len(issues), "search_pages", searchPages)
+	}
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

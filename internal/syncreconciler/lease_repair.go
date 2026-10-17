@@ -63,6 +63,12 @@ func (config LeaseRepairConfig) valid() bool {
 type LeaseRepair struct {
 	begin  leaseRepairBeginFunc
 	config LeaseRepairConfig
+	// wake arms each repaired unit's run for its next dispatch pass after the
+	// repair commits (CHAOS-10013): the expired lease held a concurrency slot,
+	// and nothing else tells dispatch it is free before the redispatch
+	// countdown. The production constructor always sets it; only the
+	// begin-func constructor the unit tests use leaves it nil.
+	wake syncrunrollup.Execer
 }
 
 func NewLeaseRepair(pool *pgxpool.Pool) (*LeaseRepair, error) {
@@ -73,7 +79,12 @@ func NewLeaseRepairWithConfig(pool *pgxpool.Pool, config LeaseRepairConfig) (*Le
 	if pool == nil {
 		return nil, ErrInvalidConfiguration
 	}
-	return newLeaseRepairWithConfig(pool.Begin, config)
+	repair, err := newLeaseRepairWithConfig(pool.Begin, config)
+	if err != nil {
+		return nil, err
+	}
+	repair.wake = pool
+	return repair, nil
 }
 
 func newLeaseRepair(begin leaseRepairBeginFunc) (*LeaseRepair, error) {
@@ -165,6 +176,7 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 		return candidates[left].syncRunID < candidates[right].syncRunID
 	})
 	result := LeaseRepairResult{Selected: len(candidates)}
+	wakeRuns := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
 		decision := decideExpiredLeaseRepair(candidate, repair.config)
 		var affected int64
@@ -214,9 +226,21 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 		if affected < 0 || affected > 1 {
 			return LeaseRepairResult{}, ErrUnavailable
 		}
+		if affected == 1 && (len(wakeRuns) == 0 || wakeRuns[len(wakeRuns)-1] != candidate.syncRunID) {
+			wakeRuns = append(wakeRuns, candidate.syncRunID)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return LeaseRepairResult{}, ErrUnavailable
+	}
+	// After the commit, in the ascending run order the candidates were already
+	// sorted into (so the dedupe above is by adjacency), one statement per run:
+	// see syncrunrollup.WakeDispatch for why never inside the repair's own
+	// transaction.
+	if repair.wake != nil {
+		for _, syncRunID := range wakeRuns {
+			syncrunrollup.WakeDispatch(ctx, repair.wake, syncRunID, now, syncrunrollup.DispatchWakePathLeaseRepair)
+		}
 	}
 	return result, nil
 }

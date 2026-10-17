@@ -2,9 +2,11 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -77,28 +79,67 @@ func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *synclog
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	rearmedByOther, err := dispatchWakeupAlreadyPending(ctx, tx, syncRunID)
+	if err != nil {
+		fail(err)
+		return
+	}
 	if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindDispatchSyncRun, redispatchAt); err != nil {
 		fail(err)
 		return
 	}
-	// The second, unconditional-overwrite write Python's own
-	// _schedule_redispatch does on top of the LEAST-semantics upsert above:
-	// a still-pending, not-yet-claimed row for THIS kind gets its
-	// available_at pushed to the newly-computed redispatchAt regardless of
-	// which is earlier. Ported as its own explicit statement, not merged
-	// into the upsert, to keep the same two-write shape Python has --
-	// simplifying to one write would be an improvement, not a port.
-	if _, err := tx.Exec(ctx, `
+	// The second write Python's own _schedule_redispatch does on top of the
+	// LEAST-semantics upsert above: a still-pending, not-yet-claimed row for
+	// THIS kind gets its available_at set to the newly-computed redispatchAt
+	// even when that is later. It exists for the pass's OWN row: the relay
+	// left it 'dispatched' with the available_at it was armed for, which is
+	// in the past, so the upsert's LEAST would keep that past instant and wake
+	// the run again on the very next relay tick instead of after the
+	// countdown.
+	//
+	// CHAOS-10013: it is skipped when the row was ALREADY 'pending' before
+	// this pass re-armed it. The pass's own delivery is 'dispatched' (the
+	// transport fence at the top of Dispatch refuses any other state), so a
+	// pending row here was re-armed by another writer while this pass ran --
+	// a unit leaving its slot (syncrunrollup.WakeDispatch), reference
+	// discovery succeeding, or the materializer. Its instant is a real due
+	// time, and overwriting it with now + countdown is how a unit that
+	// finished mid-pass lost its wake and the bucket sat idle for the whole
+	// countdown. The upsert's LEAST keeps the earlier of the two, which is the
+	// same earlier-wins rule dueNowRearmAt states for the pass's own
+	// arguments.
+	if !rearmedByOther {
+		if _, err := tx.Exec(ctx, `
 UPDATE public.sync_dispatch_outbox
 SET available_at = $2, updated_at = $3
 WHERE sync_run_id = $1::uuid AND kind = $4 AND status = 'pending' AND claim_token IS NULL`,
-		syncRunID, redispatchAt, now, outboxKindDispatchSyncRun); err != nil {
-		fail(err)
-		return
+			syncRunID, redispatchAt, now, outboxKindDispatchSyncRun); err != nil {
+			fail(err)
+			return
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		fail(err)
 		return
 	}
-	logger.Info(ctx, synclog.MsgDispatchSyncRunRedispatchRearmed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Count(synclog.KeyCountdown, int(countdown.Seconds())), synclog.Instant(synclog.KeyAvailableAt, redispatchAt))
+	logger.Info(ctx, synclog.MsgDispatchSyncRunRedispatchRearmed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Count(synclog.KeyCountdown, int(countdown.Seconds())), synclog.Instant(synclog.KeyAvailableAt, redispatchAt), synclog.Flag(synclog.KeyKeptEarlierWakeup, rearmedByOther))
+}
+
+// dispatchWakeupAlreadyPending locks the run's dispatch_sync_run outbox row
+// and reports whether it is already 'pending'. The lock holds the row until
+// scheduleRedispatch commits, so a concurrent writer cannot slip a wake in
+// between this read and the overwrite it decides on. No row is not pending.
+func dispatchWakeupAlreadyPending(ctx context.Context, tx pgx.Tx, syncRunID string) (bool, error) {
+	var status string
+	err := tx.QueryRow(ctx, `
+SELECT status FROM public.sync_dispatch_outbox
+WHERE sync_run_id = $1::uuid AND kind = $2
+FOR UPDATE`, syncRunID, outboxKindDispatchSyncRun).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return status == "pending", nil
 }

@@ -3,6 +3,8 @@ package workitemmetrics
 import (
 	"sort"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // StoredItem is one stored work item row as the work_item family reads it, with the
@@ -40,12 +42,17 @@ type PrimaryAttribution struct {
 
 // WorkScopeID ports WorkItem.work_scope_id
 // (src/dev_health_ops/models/work_items.py:88-119) byte-for-byte: jira uses
-// project_key when present; every other provider prefers project_id, then
+// project_key when present; a gitlab item whose project_id is the numeric-id
+// catalog id uses its project_key too (the path the scope has always been named
+// by; CHAOS-3383); every other provider prefers project_id, then
 // project_name, then native_team_key (a team-only Linear issue keeps a non-empty
 // scope key), then falls back to project_key too (covers a non-jira item whose
 // project_key is set but the three fields above are all empty). May return "".
 func WorkScopeID(provider, projectKey, projectID, nativeTeamKey, projectName string) string {
 	if provider == "jira" && projectKey != "" {
+		return projectKey
+	}
+	if provider == "gitlab" && projectKey != "" && teamattribution.IsGitLabCatalogProjectID(projectID) {
 		return projectKey
 	}
 	if projectID != "" {

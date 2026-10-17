@@ -45,6 +45,11 @@ func (source linearFamilyDerivationSource) Load(
 // Succeeds on purpose: the fail-closed case this double serves is about Load,
 // and a stored-edge read that failed too would let the test pass for the wrong
 // reason (CHAOS-3978 has its own fail-closed case).
+// AnchorGitLabSubjects is a no-op: this fake carries no GitLab repos rows.
+func (source linearFamilyDerivationSource) AnchorGitLabSubjects(context.Context, map[string]teamattribution.GithubWorkItemDerivationSubject) error {
+	return nil
+}
+
 func (source linearFamilyDerivationSource) LoadStoredInheritableEdges(
 	context.Context, Claim, []string,
 ) ([]githubWorkItemDependencyRow, error) {

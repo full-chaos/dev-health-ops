@@ -98,23 +98,14 @@ func loadMatrixContract(t *testing.T) matrixContract {
 
 type ownershipRow struct {
 	TeamID, Provider, RepoID, RepoName, ProjectID, Source string
-	// JoinID is the work-item project_id a project ownership row joins on,
-	// derived by the oracle from the projects catalog (gitlabOwnershipJoinIDs),
-	// not by the code under test; empty means ProjectID.
-	JoinID    string
-	ValidFrom time.Time
-	ValidTo   *time.Time
+	ValidFrom                                             time.Time
+	ValidTo                                               *time.Time
 	// IsPrimary, Specificity and Priority are the row's rank (repository and project ownership).
 	IsPrimary             uint8
 	Specificity, Priority int
 }
 
-func (row ownershipRow) joinID() string {
-	if row.JoinID != "" {
-		return row.JoinID
-	}
-	return row.ProjectID
-}
+func (row ownershipRow) joinID() string { return row.ProjectID }
 
 func (row ownershipRow) validAt(at time.Time) bool {
 	return !row.ValidFrom.After(at) && (row.ValidTo == nil || row.ValidTo.After(at))
@@ -146,7 +137,6 @@ type matrixFacts struct {
 	memberships []ownershipRow // RepoName holds the member id
 	repos       map[string]matrixRepo
 	projects    map[string]string // id -> provider
-	projectKeys map[string]string // id -> project_key of the projects catalog row
 	items       map[string]matrixItem
 	prs         map[string]matrixPR // "<repo_id>#<number>"
 	links       []matrixLink
@@ -192,7 +182,7 @@ func matrixQuery(ctx context.Context, t *testing.T, conn driver.Conn, query stri
 func loadMatrixFacts(ctx context.Context, t *testing.T, conn driver.Conn, org string, now time.Time) matrixFacts {
 	t.Helper()
 	facts := matrixFacts{
-		org: org, now: now, teams: map[string]matrixTeam{}, repos: map[string]matrixRepo{}, projects: map[string]string{}, projectKeys: map[string]string{},
+		org: org, now: now, teams: map[string]matrixTeam{}, repos: map[string]matrixRepo{}, projects: map[string]string{},
 		items: map[string]matrixItem{}, prs: map[string]matrixPR{}, deps: map[string][]string{}, attribution: map[string][]attributionRow{},
 		authors: map[string]string{},
 	}
@@ -248,13 +238,12 @@ FROM team_memberships FINAL WHERE org_id = ?`, args, func(rows driver.Rows) erro
 		facts.repos[id] = repo
 		return nil
 	})
-	matrixQuery(ctx, t, conn, `SELECT id, provider, ifNull(project_key, '') FROM projects FINAL WHERE org_id = ?`, args, func(rows driver.Rows) error {
-		var id, provider, key string
-		if err := rows.Scan(&id, &provider, &key); err != nil {
+	matrixQuery(ctx, t, conn, `SELECT id, provider FROM projects FINAL WHERE org_id = ?`, args, func(rows driver.Rows) error {
+		var id, provider string
+		if err := rows.Scan(&id, &provider); err != nil {
 			return err
 		}
 		facts.projects[id] = provider
-		facts.projectKeys[id] = key
 		return nil
 	})
 	matrixQuery(ctx, t, conn, `SELECT work_item_id, provider, type, status, project_id, toString(repo_id), native_team_key, reporter, assignees, created_at, completed_at
@@ -317,24 +306,7 @@ WHERE w.org_id = ?`, []any{org, org}, func(rows driver.Rows) error {
 		facts.attribution[item] = append(facts.attribution[item], row)
 		return nil
 	})
-	gitlabOwnershipJoinIDs(&facts)
 	return facts
-}
-
-// gitlabOwnershipJoinIDs gives each GitLab project ownership row the path its
-// work items carry. The oracle reads it from the projects catalog row the
-// ownership id names, not from the ownership row or from the reader under
-// test: a GitLab work item names its project by the path, the ownership row by
-// the catalog id. A row whose id the catalog does not hold joins on its id.
-func gitlabOwnershipJoinIDs(facts *matrixFacts) {
-	for index, row := range facts.projOwners {
-		if row.Provider != "gitlab" || facts.projects[row.ProjectID] != "gitlab" {
-			continue
-		}
-		if key := facts.projectKeys[row.ProjectID]; key != "" {
-			facts.projOwners[index].JoinID = key
-		}
-	}
 }
 
 // ---- the contract's ownership rule, written once, independent of every reader ----

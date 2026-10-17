@@ -184,9 +184,9 @@ WHERE org_id = ? AND day = '2026-10-03' AND team_id = 'team-m' AND repo_id = toU
 		t.Errorf("triggering PR facts: story/ai_assisted prs_total %v (want 1), lower-tier bug/agent_created prs_total %v (want 0)", triggerPRs, lowerTierPRs)
 	}
 	want := map[rowKey]float64{
-		{"team-a", r1, "pull_request", "unknown"}: 1,
-		{"team-b", r2, "pull_request", "unknown"}: 1,
-		{"team-a", r4, "pull_request", "unknown"}: 1,
+		{"team-a", r1, "pull_request", "human"}: 1,
+		{"team-b", r2, "pull_request", "human"}: 1,
+		{"team-a", r4, "pull_request", "human"}: 1,
 		{"team-t2", r5, "incident", "human"}:      1,
 		{"team-m", r6, "story", "ai_assisted"}:    1,
 	}

@@ -338,6 +338,15 @@ WHERE org_id = $1::uuid AND generation = $2 AND touched_take_at IS NULL`,
 // newer runs exist; the others are the newest limit, newest first, and the flag
 // says that more of them exist.
 //
+// The others are bounded by the drain itself: a pass starts runs only when no
+// drain run is in flight, so every batch of the drain (the runs one pass
+// started, one generation) ended before the next pass reaches this check, and
+// the pass before it checked what came before its batch. Only the runs created
+// since the start of the second newest ended batch are read (the newest batch is
+// the previous pass's; the one before it is kept as a margin, and fan-out runs
+// that were in flight at that pass are newer than it). With fewer than two ended
+// batches the window alone bounds the read.
+//
 // A run that is not ended is left out on purpose: the mark of a fan-out follows
 // its commit by a moment, and a pass in that moment must not read the missing
 // mark as lost. A run of any other generation never marks keys and is not
@@ -371,7 +380,22 @@ func (store *PostgresStore) TouchedMarkingRunsToCheck(
   AND run.status NOT IN ('pending', 'running')
   AND run.created_at >= clock_timestamp() - make_interval(secs => $5)
   AND (to_jsonb(run) ->> 'touched_take_at') IS NOT NULL
-  AND ($4::uuid IS NULL OR run.id <> $4::uuid)`, limit, org, ended, window.Seconds())
+  AND ($4::uuid IS NULL OR run.id <> $4::uuid)
+  AND run.created_at >= COALESCE((
+        SELECT min(previous.created_at)
+        FROM public.daily_metrics_runs AS previous
+        WHERE previous.org_id = $1::uuid
+          AND previous.generation = (
+              SELECT batch.generation
+              FROM public.daily_metrics_runs AS batch
+              WHERE batch.org_id = $1::uuid
+                AND batch.generation LIKE $3
+                AND batch.status NOT IN ('pending', 'running')
+                AND batch.created_at >= clock_timestamp() - make_interval(secs => $5)
+              GROUP BY batch.generation
+              ORDER BY max(batch.created_at) DESC
+              OFFSET 1 LIMIT 1)
+      ), '-infinity'::timestamptz)`, limit, org, ended, window.Seconds())
 	if err != nil {
 		return nil, false, err
 	}

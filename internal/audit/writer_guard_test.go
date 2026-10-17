@@ -41,7 +41,8 @@ func guardPattern(table string) *regexp.Regexp {
 			regexp.QuoteMeta(table))
 }
 
-// TestNothingOutsideThisPackageWritesTheGuardedTables scans RAW SOURCE rather
+// TestNothingOutsideThisPackageWritesTheGuardedTables is a LINT, not the
+// guard: the guard is migration 0006's trigger. It scans RAW SOURCE rather
 // than the Go AST.
 //
 // IT COVERS INSERT ONLY, and that is a deliberate boundary rather than an
@@ -111,6 +112,12 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
+		}
+		// Lint: only audit.Commit and the schema that defines the setting (its
+		// migration and test helpers) may name the commit-guard setting.
+		if strings.Contains(string(body), commitGuardSetting) &&
+			!strings.HasPrefix(rel, filepath.Join("internal", "storage", "postgres", "authschema")+string(filepath.Separator)) {
+			offenders = append(offenders, rel+" names "+commitGuardSetting)
 		}
 		for table, pattern := range patterns {
 			if !pattern.Match(body) {

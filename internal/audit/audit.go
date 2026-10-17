@@ -4,12 +4,12 @@
 // WHAT THIS GUARANTEES, stated at the strength three review rounds measured
 // rather than the strength it is tempting to claim:
 //
-//	It makes breaking atomicity BY ACCIDENT impossible. It DETECTS several
-//	deliberate breaks. It CANNOT prevent a caller who reaches around it, and
-//	no in-process API can.
+//	Atomicity for the guarded tables is enforced by PostgreSQL (migration
+//	0006), not by this package's callers. For an unguarded table it is a
+//	convention the caller keeps.
 //
-// The last clause is not modesty. A caller in this process has ambient
-// authority: the pool passed to Commit is in scope for any closure they write,
+// The pre-0006 history below is why the control moved into the database. A
+// caller in this process has ambient authority: the pool passed to Commit is in scope for any closure they write,
 // and a second connection from it commits state the helper's transaction knows
 // nothing about. Three rounds each closed a mechanism and found the next one --
 // an interface type-asserted back to Commit, a status check that detected a
@@ -37,18 +37,22 @@
 // the others. A caller cannot forget the outbox event because a caller cannot
 // reach it.
 //
-// ALSO NOT CLAIMED, each reproduced by review round 1 and kept as stated bounds:
+// WHERE THE GUARANTEE IS HELD. Migration 0006 puts a BEFORE INSERT/UPDATE/
+// DELETE trigger on the audit and outbox tables and on the security-state
+// tables (authschema's commit_guard_integration_test.go lists and classifies
+// every table). Commit sets a transaction-local setting to the current
+// transaction id; the trigger refuses a write made under any other id. So a
+// second connection from the pool, SQL assembled at run time, or a write
+// from another package is refused by PostgreSQL. The Go-side checks (TxOps,
+// first-token refusal, the TxStatus check) remain as early, legible refusals;
+// the source scan in writer_guard_test.go is a lint, not a control.
 //
-//   - Apply is opaque. Commit cannot know whether the callback changed any
-//     state, so a callback that returns nil having written nothing still gets
-//     its outbox event and audit row. Whether "nothing changed" is an event is
-//     the caller's decision (return an error or skip Commit).
-//   - A connection taken from the pool inside the callback commits outside the
-//     helper's transaction (see the package doc); the rollback log line speaks
-//     only of the helper's own transaction.
-//   - The closed-world source guard reads Go source text. SQL assembled from
-//     concatenated fragments outside this package is invisible to it; review
-//     and the runtime role's grants are the other controls.
+// WHAT STAYS OUTSIDE IT. The tables classified unguarded (sessions, refresh
+// credentials, users, principals and the read-only vocabulary). A callback that
+// forges the setting, or ends the transaction with SQL the lexer cannot read
+// (Commit's TxStatus check then reports it but the state is already durable),
+// is deliberate misuse inside the transaction Commit owns: reviewable code, not
+// an accident, and no database trigger can tell it from the caller's own SQL.
 //
 // The bound this does NOT claim: within this package the inserts are callable
 // directly, exactly as ValidatedIdentifier is constructible within its own.
@@ -69,8 +73,17 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
+// commitGuardSetting is the transaction-local setting migration 0006's trigger
+// compares with pg_current_xact_id(). Only this package may name it.
+const commitGuardSetting = "dev_health.audit_txid"
+
 // ErrMutationFailed wraps any failure that leaves the database unchanged.
 var ErrMutationFailed = errors.New("audit: security mutation failed")
+
+// ErrNoStateChange is returned, wrapping ErrMutationFailed, when Apply reports
+// that it changed nothing. An outbox event and audit row for a mutation that
+// did not happen would tell every consumer something false.
+var ErrNoStateChange = fmt.Errorf("%w: the mutation changed no state", ErrMutationFailed)
 
 // Outcome is the closed vocabulary security_audit_events.outcome permits. The
 // column carries a CHECK constraint, so a value outside this set is refused by
@@ -287,9 +300,11 @@ func (e errRow) Scan(...any) error { return e.err }
 // Mutation is the state change and the two records that must accompany it.
 //
 // Apply runs inside the transaction and receives it. Anything it writes commits
-// with the outbox event and the audit row, or none of them do.
+// with the outbox event and the audit row, or none of them do. It returns the
+// number of state rows it changed (the sum of the CommandTag RowsAffected of its
+// writes); zero or less rolls everything back with ErrNoStateChange.
 type Mutation struct {
-	Apply func(ctx context.Context, tx TxOps) error
+	Apply func(ctx context.Context, tx TxOps) (changed int64, err error)
 	Audit AuditEvent
 	Event OutboxEvent
 }
@@ -344,8 +359,19 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 	// successful commit, so this is correct rather than merely defensive.
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := m.Apply(ctx, TxOps{tx: tx}); err != nil {
-		return fmt.Errorf("%w: applying the state mutation: %w", ErrMutationFailed, err)
+	// Migration 0006's triggers refuse a write to a guarded table unless this
+	// setting equals the current transaction id, so the guarantee is held by
+	// PostgreSQL rather than by this package's callers. It is transaction-local.
+	if _, err := tx.Exec(ctx, `SELECT set_config('`+commitGuardSetting+`', pg_current_xact_id()::text, true)`); err != nil {
+		return fmt.Errorf("%w: arming the commit guard: %w", ErrMutationFailed, err)
+	}
+
+	changed, applyErr := m.Apply(ctx, TxOps{tx: tx})
+	if applyErr != nil {
+		return fmt.Errorf("%w: applying the state mutation: %w", ErrMutationFailed, applyErr)
+	}
+	if changed <= 0 {
+		return ErrNoStateChange
 	}
 	// The callback could have ended the transaction with raw SQL -- Exec must
 	// exist, so Exec(ctx, "COMMIT") and Exec(ctx, "ROLLBACK") reach the server

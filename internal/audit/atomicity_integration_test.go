@@ -48,7 +48,7 @@ func TestCommitIsAllThreeOrNone(t *testing.T) {
 		return c
 	}
 
-	mutation := func(key string, apply func(context.Context, TxOps) error) Mutation {
+	mutation := func(key string, apply func(context.Context, TxOps) (int64, error)) Mutation {
 		return Mutation{
 			Apply: apply,
 			Audit: AuditEvent{EventType: "organization.created", Outcome: OutcomeAllowed},
@@ -58,12 +58,12 @@ func TestCommitIsAllThreeOrNone(t *testing.T) {
 			},
 		}
 	}
-	insertOrg := func(name string) func(context.Context, TxOps) error {
-		return func(ctx context.Context, tx TxOps) error {
-			_, err := tx.Exec(ctx,
+	insertOrg := func(name string) func(context.Context, TxOps) (int64, error) {
+		return func(ctx context.Context, tx TxOps) (int64, error) {
+			tag, err := tx.Exec(ctx,
 				`INSERT INTO auth.organizations (id, name, slug) VALUES (gen_random_uuid(), $1, $2)`,
 				name, name)
-			return err
+			return tag.RowsAffected(), err
 		}
 	}
 
@@ -84,7 +84,7 @@ func TestCommitIsAllThreeOrNone(t *testing.T) {
 	t.Run("state mutation fails: nothing is written", func(t *testing.T) {
 		boom := errors.New("the mutation refused")
 		err := Commit(ctx, env.pool, env.schema, mutation("key-apply-fails",
-			func(ctx context.Context, tx TxOps) error { return boom }))
+			func(ctx context.Context, tx TxOps) (int64, error) { return 0, boom }))
 		if !errors.Is(err, ErrMutationFailed) {
 			t.Fatalf("Commit err = %v, want ErrMutationFailed", err)
 		}
@@ -205,12 +205,12 @@ func TestMultiStatementIsRefusedByTheProtocol(t *testing.T) {
 	before := [3]int{count("organizations"), count("auth_outbox_events"), count("security_audit_events")}
 
 	err := Commit(ctx, env.pool, env.schema, Mutation{
-		Apply: func(ctx context.Context, tx TxOps) error {
+		Apply: func(ctx context.Context, tx TxOps) (int64, error) {
 			// One string, two commands. The first token is INSERT, so the
 			// lexer passes it; the protocol is what refuses.
-			_, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug)
+			tag, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug)
 				VALUES (gen_random_uuid(), 'multi', 'multi'); COMMIT;`)
-			return err
+			return tag.RowsAffected(), err
 		},
 		Audit: AuditEvent{EventType: "multi.statement", Outcome: OutcomeAllowed},
 		Event: OutboxEvent{
@@ -250,9 +250,9 @@ func TestRetainedTxOpsIsUnusableAfterCommit(t *testing.T) {
 	var retained TxOps
 	var ran bool
 	err := Commit(ctx, env.pool, env.schema, Mutation{
-		Apply: func(ctx context.Context, tx TxOps) error {
+		Apply: func(ctx context.Context, tx TxOps) (int64, error) {
 			retained, ran = tx, true // the caller error this test exists to characterise
-			return nil
+			return 1, nil
 		},
 		Audit: AuditEvent{EventType: "retention.probe", Outcome: OutcomeAllowed},
 		Event: OutboxEvent{
@@ -323,13 +323,13 @@ func TestCallbackEndingTheTransactionIsRefused(t *testing.T) {
 	for _, verb := range []string{"ROLLBACK", "COMMIT"} {
 		t.Run("callback runs raw "+verb, func(t *testing.T) {
 			err := Commit(ctx, env.pool, env.schema, Mutation{
-				Apply: func(ctx context.Context, tx TxOps) error {
+				Apply: func(ctx context.Context, tx TxOps) (int64, error) {
 					if _, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug)
 						VALUES (gen_random_uuid(), $1, $1)`, "raw-"+verb); err != nil {
-						return err
+						return 0, err
 					}
 					_, err := tx.Exec(ctx, verb)
-					return err // nil on success: the callback reports everything is fine
+					return 1, err // nil on success: the callback reports everything is fine
 				},
 				Audit: AuditEvent{EventType: "raw." + verb, Outcome: OutcomeAllowed},
 				Event: OutboxEvent{
@@ -350,5 +350,81 @@ func TestCallbackEndingTheTransactionIsRefused(t *testing.T) {
 				t.Errorf("rows survived a refused mutation: before=%v after=%v", before, after)
 			}
 		})
+	}
+}
+
+// A callback that writes nothing must not leave an event and audit row behind:
+// they would announce a mutation that never happened.
+func TestCommitRefusesAMutationThatChangedNothing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+
+	count := func(table string) int {
+		var n int
+		if err := env.pool.QueryRow(ctx, `SELECT count(*) FROM auth.`+table).Scan(&n); err != nil {
+			t.Fatalf("counting %s: %v", table, err)
+		}
+		return n
+	}
+	before := [2]int{count("auth_outbox_events"), count("security_audit_events")}
+
+	err := Commit(ctx, env.pool, env.schema, Mutation{
+		Apply: func(ctx context.Context, tx TxOps) (int64, error) { return 0, nil },
+		Audit: AuditEvent{EventType: "noop.probe", Outcome: OutcomeAllowed},
+		Event: OutboxEvent{AggregateType: "probe", AggregateID: "noop", EventType: "noop.probe", IdempotencyKey: "noop-1"},
+	})
+	if !errors.Is(err, ErrNoStateChange) {
+		t.Fatalf("Commit err = %v, want ErrNoStateChange", err)
+	}
+	after := [2]int{count("auth_outbox_events"), count("security_audit_events")}
+	if after != before {
+		t.Fatalf("a no-op mutation left rows: before=%v after=%v", before, after)
+	}
+}
+
+// The database, not a source scan, refuses a write that does not run under
+// Commit's transaction: a second connection taken from the pool inside the
+// callback, and SQL whose table name is assembled at run time.
+func TestGuardedTablesRefuseWritesOutsideCommit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+
+	countOrgs := func() int {
+		var n int
+		if err := env.pool.QueryRow(ctx, `SELECT count(*) FROM auth.organizations`).Scan(&n); err != nil {
+			t.Fatalf("counting: %v", err)
+		}
+		return n
+	}
+	before := countOrgs()
+
+	var escapeErr error
+	err := Commit(ctx, env.pool, env.schema, Mutation{
+		Apply: func(ctx context.Context, tx TxOps) (int64, error) {
+			// A second connection from the same pool commits on its own.
+			_, escapeErr = env.pool.Exec(ctx,
+				`INSERT INTO auth.organizations (id, name, slug) VALUES (gen_random_uuid(), 'escape', 'escape')`)
+			return 0, errors.New("force the helper to fail after the escape attempt")
+		},
+		Audit: AuditEvent{EventType: "escape.probe", Outcome: OutcomeAllowed},
+		Event: OutboxEvent{AggregateType: "probe", AggregateID: "escape", EventType: "escape.probe", IdempotencyKey: "escape-1"},
+	})
+	if err == nil {
+		t.Fatal("Commit succeeded")
+	}
+	if escapeErr == nil {
+		t.Error("a write on another pool connection was accepted")
+	}
+	if got := countOrgs(); got != before {
+		t.Errorf("state survived the failed helper: before=%d after=%d", before, got)
+	}
+
+	table := "auth_outbox_" + "events"
+	if _, err := env.pool.Exec(ctx,
+		`INSERT INTO auth.`+table+` (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
+		 VALUES ('a', 'b', 'c', '{}', 'dynamic-1')`); err == nil {
+		t.Error("a concatenated-table insert outside Commit was accepted")
 	}
 }

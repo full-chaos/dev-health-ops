@@ -1,0 +1,14 @@
+{
+  "case": "subcategory_not_listed",
+  "subcategory_shares_pct": {
+    "feature_delivery.enablement": 0.13299056991158575,
+    "feature_delivery.roadmap": 0.8603419944631008
+  },
+  "text": "{\"anti_claims\":[\"The data does not say that Roadmap is the sole focus or that other subcategories have no impact.\",\"The data does not claim any causal relationship between subcategories and outcomes.\",\"The data does not assert absolute prominence beyond the provided distributions.\"],\"confidence\":{\"band_mix\":{\"high\":0,\"low\":0,\"moderate\":34,\"unknown\":0,\"very_low\":6},\"drivers\":[],\"level\":\"moderate\",\"quality_mean\":0.6285062933768204,\"quality_stddev\":0.14902584516445683},\"summary\":\"The investment mix appears to lean toward Feature Delivery, with Roadmap-underpinned work dominating the pattern, followed by enablement efforts and occasional maintenance/upgrade items, suggesting a prioritized focus on delivery roadmaps over other themes.\",\"top_findings\":[{\"evidence\":{\"delta_pct_points\":null,\"evidence_quality_band\":\"moderate\",\"evidence_quality_mean\":0.6285062933768204,\"share_pct\":0.8603419944631008,\"subcategory\":\"feature_delivery.roadmap\",\"theme\":\"feature_delivery\"},\"finding\":\"Feature Delivery \u00b7 Roadmap\"},{\"evidence\":{\"delta_pct_points\":null,\"evidence_quality_band\":\"moderate\",\"evidence_quality_mean\":0.6285062933768204,\"share_pct\":0.13299056991158575,\"subcategory\":\"feature_delivery.enablement\",\"theme\":\"feature_delivery\"},\"finding\":\"Feature Delivery \u00b7 Enablement\"},{\"evidence\":{\"delta_pct_points\":null,\"evidence_quality_band\":\"moderate\",\"evidence_quality_mean\":0.6285062933768204,\"share_pct\":0.0066674356253134896,\"subcategory\":\"maintenance.upgrade\",\"theme\":\"feature_delivery\"},\"finding\":\"Maintenance / Tech Debt \u00b7 Upgrade\"}],\"what_to_check_next\":[{\"action\":\"Review subcategory shares by theme\",\"where\":\"theme_distribution_top and subcategory_distribution_top\",\"why\":\"To assess whether Roadmap remains the dominant driver across different views and whether enablement or maintenance items show stronger relative presence elsewhere\"},{\"action\":\"Examine evidence_quality_band counts\",\"where\":\"evidence_quality_band_counts and evidence_quality_mean\",\"why\":\"To understand how the overall evidence strength supports the observed mix and if moderate signals consistently drive the interpretation\"},{\"action\":\"Inspect top findings delta_points\",\"where\":\"evidence fields for delta_pct_points\",\"why\":\"To determine if any marginal shifts exist between subcategories that might inform pattern stability\"}]}",
+  "theme_shares_pct": {
+    "feature_delivery": 0.99,
+    "maintenance": 0.0066674356253134896
+  },
+  "want": "rejected",
+  "want_rule": "subcategory_unknown"
+}

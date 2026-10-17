@@ -212,14 +212,3 @@ func dedupSorted(in []string) []string {
 	sort.Strings(out)
 	return out
 }
-
-func TestDumpServedRoutesForRowGeneration(t *testing.T) {
-	if os.Getenv("DUMP_SERVED_ROUTES") == "" {
-		t.Skip("generator hook")
-	}
-	out := map[string]any{"served": servedRoutes(t), "rest": RESTRoutes()}
-	raw, _ := json.Marshal(out)
-	if err := os.WriteFile(os.Getenv("DUMP_SERVED_ROUTES"), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}

@@ -189,6 +189,10 @@ FOR UPDATE SKIP LOCKED`, now).Scan(&request.deliveryID, &request.orgID, &request
 		if _, err := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT webhook_sync_request_mint`); err != nil {
 			return true, fmt.Errorf("webhook sync request rollback: %w", err)
 		}
+		var unselected synchandoff.UnselectedSourcesError
+		if errors.As(mintErr, &unselected) {
+			return true, minter.refuse(ctx, tx, request, now, "a requested source is not selected for the sync configuration")
+		}
 		return true, minter.fail(ctx, tx, request, now, "mint", mintErr)
 	}
 	if _, err := tx.Exec(ctx, `

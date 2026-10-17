@@ -111,11 +111,12 @@ func TestScopeSources(t *testing.T) {
 			t.Fatalf("got %#v, %v; want an empty, non-nil list", got, err)
 		}
 	})
-	t.Run("an enabled source the configuration does not select is named and refused", func(t *testing.T) {
-		_, err := scopeSources(plannerManaged(), []string{sourceA, sourceC}, enabled, selected)
-		message := refusal(t, err)
-		if !strings.Contains(message, sourceC) || strings.Contains(message, sourceA) || !strings.Contains(message, "does not select") || !strings.Contains(message, "nothing was started") {
-			t.Fatalf("message %q", message)
+	t.Run("an enabled source the configuration does not select is left to the trigger write", func(t *testing.T) {
+		// synchandoff.Mint, the one scope guard of every trigger writer, refuses it
+		// (TestBackfillPlansTheScheduledSourceSet).
+		got, err := scopeSources(plannerManaged(), []string{sourceA, sourceC}, enabled, selected)
+		if err != nil || !reflect.DeepEqual(got, []string{sourceA, sourceC}) {
+			t.Fatalf("got %v, %v", got, err)
 		}
 	})
 	t.Run("absent flag on a pinned configuration writes no list", func(t *testing.T) {

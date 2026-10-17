@@ -36,9 +36,10 @@ func (flag *listFlag) Set(text string) error {
 
 // scopeSources is the source scope the trigger carries. With no --source-ids it
 // is the configuration's selected sources (sourceIDsFor). With --source-ids each
-// id must be an enabled source of the configuration's integration that the
-// configuration selects (a configuration pinned to one source accepts only that
-// source and writes no list, as before). The result keeps the enabled sources'
+// id must be an enabled source of the configuration's integration (a
+// configuration pinned to one source accepts only that source and writes no
+// list, as before); one the configuration does not select is refused when the
+// trigger is written (synchandoff.Mint, the one scope guard). The result keeps the enabled sources'
 // order, so the written list does not depend on how the operator spelled or
 // ordered the flag.
 func scopeSources(config *Config, requested, enabled, selected []string) ([]string, error) {
@@ -82,16 +83,6 @@ func scopeSources(config *Config, requested, enabled, selected []string) ([]stri
 		slices.Sort(unknown)
 		return nil, RefusedError{Message: fmt.Sprintf("backfill run: --source-ids %s is not an enabled source of integration %s "+
 			"(sync configuration %s): nothing was started", strings.Join(unknown, ", "), *config.IntegrationID, config.ID)}
-	}
-	var unselected []string
-	for _, id := range scoped {
-		if !slices.Contains(selected, id) {
-			unselected = append(unselected, id)
-		}
-	}
-	if len(unselected) > 0 {
-		return nil, RefusedError{Message: fmt.Sprintf("backfill run: --source-ids %s is an enabled source of integration %s that sync configuration %s "+
-			"does not select, so its scheduled runs never plan it: nothing was started", strings.Join(unselected, ", "), *config.IntegrationID, config.ID)}
 	}
 	return scoped, nil
 }

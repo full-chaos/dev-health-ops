@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -163,9 +163,6 @@ func (h handlers) handOff(w http.ResponseWriter, r *http.Request, scope triggerS
 		if err != nil {
 			return err
 		}
-		if err := refuseUnselectedSources(target, scope); err != nil {
-			return err
-		}
 		input := synchandoff.MintInput{Mode: mode, TriggeredBy: triggeredBy, Since: since, Before: before,
 			SourceIDs: target.sources, DatasetKeys: target.datasets}
 		if scope.sourceIDsSet {
@@ -175,6 +172,10 @@ func (h handlers) handOff(w http.ResponseWriter, r *http.Request, scope triggerS
 			input.DatasetKeys = append([]string{}, scope.datasetKeys...)
 		}
 		trigger, err = synchandoff.Mint(r.Context(), tx, target.config, input, h.Now())
+		var unselected synchandoff.UnselectedSourcesError
+		if errors.As(err, &unselected) {
+			return refuse(http.StatusBadRequest, "source_id "+strings.Join(unselected.SourceIDs, ", ")+" is not selected for the integration's sync configuration")
+		}
 		return err
 	})
 	if err != nil {
@@ -218,25 +219,4 @@ func (h handlers) handoffResponse(w http.ResponseWriter, r *http.Request, rawInt
 		body.Set("occurrence_id", trigger.OccurrenceID)
 	}
 	policy.WriteModel(w, http.StatusAccepted, body, nil)
-}
-
-// refuseUnselectedSources refuses a request that names an enabled source the
-// configuration does not select: the scheduler would plan it, outside the scope
-// of the configuration's scheduled runs (CHAOS-10064). A disabled or unknown
-// source is not planned by the scheduler and is left to it, as before.
-func refuseUnselectedSources(target handoffScope, scope triggerScope) error {
-	if !scope.sourceIDsSet || target.config.SourceID != nil || !target.config.PlannerManaged {
-		return nil
-	}
-	for _, raw := range scope.sourceIDs {
-		parsed, err := pythonparity.ParseUUID(raw)
-		if err != nil {
-			continue
-		}
-		id := parsed.String()
-		if slices.Contains(target.enabled, id) && !slices.Contains(target.sources, id) {
-			return refuse(http.StatusBadRequest, "source_id "+id+" is not selected for the integration's sync configuration")
-		}
-	}
-	return nil
 }

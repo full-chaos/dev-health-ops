@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -92,15 +94,62 @@ VALUES ($1::uuid, $2, $3::uuid, 'github', 'repository', $4, $4, $4, $5::json, $6
 		t.Fatalf("selected %d enabled %d, want 2 and 4", validated.SelectedSources, validated.EnabledSources)
 	}
 
+	// An explicit unselected source is refused when the trigger is written
+	// (synchandoff.Mint, the one scope guard), and nothing is written.
+	window := Window{Since: mustDay(t, "2026-09-01"), Before: mustDay(t, "2026-09-02")}
 	for _, name := range []string{"acme/c-untagged", "acme/e-other-config"} {
-		_, err := Validate(ctx, tx, cfg, Params{ConfigID: config, SourceIDs: []string{ids["acme/a-selected"], ids[name]}})
+		params := Params{ConfigID: config, Window: window, SourceIDs: []string{ids["acme/a-selected"], ids[name]}}
+		explicit, err := Validate(ctx, tx, cfg, params)
+		if err != nil {
+			t.Fatalf("Validate explicit %s: %v", name, err)
+		}
+		_, err = Mint(ctx, tx, cfg, params, explicit, mustDay(t, "2026-10-17"))
 		var refused RefusedError
 		if !errors.As(err, &refused) || !strings.Contains(refused.Message, ids[name]) || !strings.Contains(refused.Message, "does not select") {
 			t.Fatalf("explicit %s: err %v, want a refusal naming it", name, err)
 		}
 	}
-	explicit, err := Validate(ctx, tx, cfg, Params{ConfigID: config, SourceIDs: []string{ids["acme/b-selected"]}})
+	// The trigger write's guard accepts exactly the scheduled set: each enabled
+	// source alone is written iff a scheduled run plans it.
+	for index, source := range sources {
+		if !source.enabled {
+			continue
+		}
+		params := Params{ConfigID: config, Window: window, SourceIDs: []string{ids[source.name]}}
+		one, err := Validate(ctx, tx, cfg, params)
+		if err != nil {
+			t.Fatalf("Validate %s: %v", source.name, err)
+		}
+		if _, err := tx.Exec(ctx, `SAVEPOINT parity`); err != nil {
+			t.Fatal(err)
+		}
+		_, mintErr := Mint(ctx, tx, cfg, params, one, mustDay(t, "2026-10-17").Add(time.Duration(index+1)*time.Hour))
+		if _, err := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT parity`); err != nil {
+			t.Fatal(err)
+		}
+		if accepted, planned := mintErr == nil, slices.Contains(scheduled, ids[source.name]); accepted != planned {
+			t.Fatalf("%s: written %v (err %v), planned by a scheduled run %v: they must agree", source.name, accepted, mintErr, planned)
+		}
+	}
+	var written int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM sync_manual_triggers`).Scan(&written); err != nil || written != 0 {
+		t.Fatalf("a refused trigger wrote %d rows (err %v)", written, err)
+	}
+	params := Params{ConfigID: config, Window: window, SourceIDs: []string{ids["acme/b-selected"]}}
+	explicit, err := Validate(ctx, tx, cfg, params)
 	if err != nil || !reflect.DeepEqual(explicit.SourceIDs, []string{ids["acme/b-selected"]}) {
 		t.Fatalf("explicit selected source: %v, %v", explicit.SourceIDs, err)
 	}
+	if _, err := Mint(ctx, tx, cfg, params, explicit, mustDay(t, "2026-10-17")); err != nil {
+		t.Fatalf("Mint an explicit selected source: %v", err)
+	}
+}
+
+func mustDay(t *testing.T, day string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }

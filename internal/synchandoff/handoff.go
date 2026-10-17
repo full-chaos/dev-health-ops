@@ -131,10 +131,18 @@ type MintInput struct {
 
 // Mint writes the occurrence and its manual trigger in the transaction.
 //
+// It is the only writer of sync_manual_triggers, and so the one place the scope
+// rule is enforced: a source list that names an enabled source the
+// configuration does not select is refused with UnselectedSourcesError before
+// anything is written (checkSelectedSources).
+//
 // The occurrence is written once per identity: when an occurrence with this
 // identity already exists (a replayed webhook request), neither it nor its
 // trigger is written again, and the returned Trigger reports Existing.
 func Mint(ctx context.Context, tx pgx.Tx, config *Config, input MintInput, now time.Time) (Trigger, error) {
+	if err := checkSelectedSources(ctx, tx, config, input.SourceIDs); err != nil {
+		return Trigger{}, err
+	}
 	scheduledFor := now.UTC().Truncate(time.Microsecond)
 	if input.ScheduledFor != nil {
 		scheduledFor = input.ScheduledFor.UTC().Truncate(time.Microsecond)

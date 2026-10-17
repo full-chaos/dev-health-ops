@@ -2,6 +2,9 @@ package backfillrun
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -48,8 +51,14 @@ func Mint(ctx context.Context, tx pgx.Tx, config *Config, params Params, validat
 	if len(validated.DatasetKeys) > 0 {
 		datasetKeys = validated.DatasetKeys
 	}
-	return synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{
+	trigger, err := synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{
 		Mode: "backfill", Since: &since, Before: &before,
 		SourceIDs: validated.SourceIDs, DatasetKeys: datasetKeys, TriggeredBy: "backfill",
 	}, now)
+	var unselected synchandoff.UnselectedSourcesError
+	if errors.As(err, &unselected) {
+		return Trigger{}, RefusedError{Message: fmt.Sprintf("backfill run: --source-ids %s is an enabled source that sync configuration %s "+
+			"does not select, so its scheduled runs never plan it: nothing was started", strings.Join(unselected.SourceIDs, ", "), config.ID)}
+	}
+	return trigger, err
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -344,8 +345,41 @@ func (v *Verifier) Verify(ctx context.Context, tokenString string) (*Claims, err
 		)
 	}
 
+	enforceSuperuserDiscipline(ctx, claims, meta)
 	recordVerifyOutcome("verified")
 	return claims, nil
+}
+
+// enforceSuperuserDiscipline makes the verifier, not any consumer, decide
+// whether a verified envelope may carry superuser (CHAOS-4738, G-50). Python
+// treats is_superuser as a hint and requires is_superuser_verified as well
+// (graphql/extensions.py OrgIdAuthExtension), and refuses superuser while
+// impersonating. Here an envelope that asserts is_superuser without
+// is_superuser_verified, or while impersonation is active (or names an
+// impersonator), has BOTH superuser claims cleared before Verify returns, so a
+// resolver that reads claims.IsSuperuser directly cannot obtain a bypass.
+func enforceSuperuserDiscipline(ctx context.Context, claims *Claims, meta requestMeta) {
+	if !claims.IsSuperuser && !claims.IsSuperuserVerified {
+		return
+	}
+	impersonating := claims.ImpersonationActive || (claims.ImpersonatedBy != nil && *claims.ImpersonatedBy != "")
+	reason := ""
+	switch {
+	case impersonating:
+		reason = "superuser_while_impersonating"
+	case claims.IsSuperuser && !claims.IsSuperuserVerified:
+		reason = "superuser_unverified"
+	default:
+		return
+	}
+	claims.IsSuperuser = false
+	claims.IsSuperuserVerified = false
+	slog.InfoContext(ctx, "query_api.envelope.superuser_stripped",
+		"reason", reason,
+		"iss", claims.Issuer,
+		"remote_addr", meta.remoteAddr,
+		"request_id", meta.requestID,
+	)
 }
 
 // classifyRejectionReason maps a jwt.ParseWithClaims error to one of

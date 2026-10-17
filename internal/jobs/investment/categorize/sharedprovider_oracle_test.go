@@ -204,26 +204,15 @@ func TestSharedOpenAIReplaysTheOpsPortSyncOracle(t *testing.T) {
 				}
 			}
 
-			// The same case through the ops port still in this package: the
-			// ops-side failure vocabulary every caller switches on is unchanged.
-			oldServer, _ := scriptedSyncServer(t, oc.Steps)
-			old := NewOpenAIProvider(OpenAIProviderConfig{
-				APIKey: secrets.NewHidden(oracleAPIKey), BaseURL: oldServer.URL, Model: oc.Model, MaxOutputTokens: oc.ConfigFloor,
-			})
-			oldResult, oldErr := old.Complete(context.Background(), request)
-			if got, want := FailureClass(err), FailureClass(oldErr); got != want {
-				t.Errorf("FailureClass = %q, ops port %q", got, want)
-			}
-			if got, want := IsDeterministicFailure(err), IsDeterministicFailure(oldErr); got != want {
-				t.Errorf("IsDeterministicFailure = %v, ops port %v", got, want)
+			// The ops-side failure vocabulary every caller switches on is the
+			// ops port's, recorded at b430ad3a (the last tree that held it).
+			want, recorded := opsPortVocabulary[oc.Name]
+			if !recorded {
+				t.Fatalf("case %q has no recorded ops port vocabulary", oc.Name)
 			}
 			gotClass, gotLLM := ClassifyLLMError(err)
-			wantClass, wantLLM := ClassifyLLMError(oldErr)
-			if gotClass != wantClass || gotLLM != wantLLM {
-				t.Errorf("ClassifyLLMError = %v/%v, ops port %v/%v", gotClass, gotLLM, wantClass, wantLLM)
-			}
-			if oldErr == nil && (oldResult.Text != result.Text || oldResult.Model != result.Model) {
-				t.Errorf("result %q/%q, live ops port %q/%q", result.Text, result.Model, oldResult.Text, oldResult.Model)
+			if got := (opsVocabulary{FailureClass(err), IsDeterministicFailure(err), gotClass, gotLLM}); got != want {
+				t.Errorf("vocabulary %+v, ops port %+v", got, want)
 			}
 			compared++
 		})
@@ -424,4 +413,40 @@ func TestSharedOpenAIReplaysTheOpsPortBatchOracle(t *testing.T) {
 	if !strings.Contains(oracle.Header["producer"], "ops Go port") {
 		t.Fatalf("producer %q is not the ops port", oracle.Header["producer"])
 	}
+}
+
+// opsVocabulary is what callers read from a provider failure: FailureClass,
+// IsDeterministicFailure and ClassifyLLMError.
+type opsVocabulary struct {
+	failureClass  string
+	deterministic bool
+	class         LLMErrorClass
+	llm           bool
+}
+
+// opsPortVocabulary is the ops OpenAIProvider's answer to each sync oracle
+// case, run at b430ad3a (the last tree that held it, where the shared client
+// matched it live).
+var opsPortVocabulary = map[string]opsVocabulary{
+	"categorization_floor_2048":                          {"", false, LLMErrorClassOther, false},
+	"categorization_config_floor_6000":                   {"", false, LLMErrorClassOther, false},
+	"categorization_config_floor_3000_raised_by_request": {"", false, LLMErrorClassOther, false},
+	"investment_mix_floor_4096":                          {"", false, LLMErrorClassOther, false},
+	"work_unit_json_object":                              {"", false, LLMErrorClassOther, false},
+	"doubling_on_max_output_tokens":                      {"", false, LLMErrorClassOther, false},
+	"doubling_from_4096":                                 {"", false, LLMErrorClassOther, false},
+	"doubling_capped_at_8192":                            {"", false, LLMErrorClassOther, false},
+	"cut_twice_is_empty":                                 {"", false, LLMErrorClassOther, false},
+	"invalid_json_is_empty":                              {"", false, LLMErrorClassOther, false},
+	"unauthorized_is_final":                              {"missing_key", true, LLMErrorClassAuth, true},
+	"bad_request_is_final":                               {"llm_error", false, LLMErrorClassOther, true},
+	"quota_is_auth":                                      {"quota_exceeded", true, LLMErrorClassAuth, true},
+	"rate_limit_retried_once":                            {"rate_limit", false, LLMErrorClassRateLimit, true},
+	"rate_limit_retry_after_capped":                      {"", false, LLMErrorClassOther, false},
+	"server_error_then_success":                          {"", false, LLMErrorClassOther, false},
+	"server_error_twice":                                 {"server_error", false, LLMErrorClassServer, true},
+	"overloaded_529":                                     {"server_error", false, LLMErrorClassServer, true},
+	"not_found_404":                                      {"model_not_found", true, LLMErrorClassOther, true},
+	"context_length":                                     {"context_length", false, LLMErrorClassOther, true},
+	"garbage_200_is_generic":                             {"llm_error", false, LLMErrorClassOther, true},
 }

@@ -17,9 +17,14 @@ const materializerKeySentinel = "sentinel-value-8716-not-a-key"
 func TestMaterializerPrintsNoProviderAPIKey(t *testing.T) {
 	key := secrets.NewHidden(materializerKeySentinel)
 	providers := map[string]categorize.Provider{
-		"openai": categorize.NewOpenAIProvider(categorize.OpenAIProviderConfig{APIKey: key}),
-		"local":  categorize.NewLocalProvider(categorize.LocalProviderConfig{APIKey: key}),
 		"ollama": categorize.NewOllamaProvider(categorize.OllamaProviderConfig{APIKey: key}),
+	}
+	for _, kind := range []categorize.ProviderKind{categorize.ProviderKindOpenAI, categorize.ProviderKindAnthropic, categorize.ProviderKindGemini, categorize.ProviderKindQwen, categorize.ProviderKindLocal} {
+		shared, err := categorize.NewSharedProvider(categorize.SharedProviderConfig{Kind: kind, APIKey: key})
+		if err != nil {
+			t.Fatal(err)
+		}
+		providers[string(kind)] = shared
 	}
 	for name, provider := range providers {
 		m := &Materializer{provider: provider}

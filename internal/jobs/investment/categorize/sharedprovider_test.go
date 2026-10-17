@@ -142,22 +142,21 @@ func statusOnce(t *testing.T, status int, body string) (*httptest.Server, *int) 
 
 // Named behaviour changes of the shared classifier against the ops port: the
 // status code alone now decides these classes, where the ops port needed
-// matching provider text and otherwise answered a generic failure.
+// matching provider text and otherwise answered a generic failure (recorded at
+// b430ad3a: llm_error, not deterministic, for all five).
 func TestSharedOpenAIStatusOnlyFailuresAreClassifiedByStatus(t *testing.T) {
 	cases := []struct {
-		status           int
-		class            llm.ErrorClass
-		failureClass     string
-		deterministic    bool
-		calls            int
-		opsFailureClass  string
-		opsDeterministic bool
+		status        int
+		class         llm.ErrorClass
+		failureClass  string
+		deterministic bool
+		calls         int
 	}{
-		{http.StatusPaymentRequired, llm.ClassAuth, "auth", true, 1, "llm_error", false},
-		{http.StatusForbidden, llm.ClassAuth, "auth", true, 1, "llm_error", false},
-		{http.StatusNotFound, llm.ClassModelNotFound, "model_not_found", true, 1, "llm_error", false},
-		{http.StatusRequestTimeout, llm.ClassTimeout, "llm_error", false, 2, "llm_error", false},
-		{http.StatusRequestEntityTooLarge, llm.ClassInvalidRequest, "llm_error", false, 1, "llm_error", false},
+		{http.StatusPaymentRequired, llm.ClassAuth, "auth", true, 1},
+		{http.StatusForbidden, llm.ClassAuth, "auth", true, 1},
+		{http.StatusNotFound, llm.ClassModelNotFound, "model_not_found", true, 1},
+		{http.StatusRequestTimeout, llm.ClassTimeout, "llm_error", false, 2},
+		{http.StatusRequestEntityTooLarge, llm.ClassInvalidRequest, "llm_error", false, 1},
 	}
 	for _, tc := range cases {
 		t.Run(http.StatusText(tc.status), func(t *testing.T) {
@@ -173,14 +172,6 @@ func TestSharedOpenAIStatusOnlyFailuresAreClassifiedByStatus(t *testing.T) {
 			if FailureClass(err) != tc.failureClass || IsDeterministicFailure(err) != tc.deterministic || *calls != tc.calls {
 				t.Fatalf("FailureClass %q deterministic %v calls %d, want %q %v %d",
 					FailureClass(err), IsDeterministicFailure(err), *calls, tc.failureClass, tc.deterministic, tc.calls)
-			}
-
-			oldServer, _ := statusOnce(t, tc.status, `{}`)
-			old := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden("test-key-value"), BaseURL: oldServer.URL, Model: "gpt-5-nano"})
-			_, oldErr := old.Complete(context.Background(), CategorizationRequest("p"))
-			if FailureClass(oldErr) != tc.opsFailureClass || IsDeterministicFailure(oldErr) != tc.opsDeterministic {
-				t.Fatalf("ops port FailureClass %q deterministic %v, recorded as %q %v",
-					FailureClass(oldErr), IsDeterministicFailure(oldErr), tc.opsFailureClass, tc.opsDeterministic)
 			}
 		})
 	}
@@ -376,13 +367,6 @@ func TestSharedOpenAIReadsEvery2xxAnswer(t *testing.T) {
 		if err != nil || result.Text != `{"ok":true}` || *calls != 1 {
 			t.Fatalf("status %d: result %q err %v calls %d, want the answer read once", status, result.Text, err, *calls)
 		}
-
-		oldServer, _ := statusOnce(t, status, body)
-		old := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden("test-key-value"), BaseURL: oldServer.URL, Model: "gpt-5-nano"})
-		_, oldErr := old.Complete(context.Background(), CategorizationRequest("p"))
-		if (oldErr == nil) != (status == http.StatusOK) {
-			t.Fatalf("status %d: ops port err %v, recorded as failing every status but 200", status, oldErr)
-		}
 	}
 }
 
@@ -406,12 +390,12 @@ func TestSharedOpenAITruncationRetryNeverLowersTheCap(t *testing.T) {
 		return out
 	}
 	for _, c := range []struct {
-		floor           int
-		shared, opsPort [2]int
+		floor  int
+		shared [2]int
 	}{
-		{0, [2]int{2048, 4096}, [2]int{2048, 4096}},
-		{4096, [2]int{4096, 8192}, [2]int{4096, 8192}},
-		{10_000, [2]int{10_000, 10_000}, [2]int{10_000, 8192}},
+		{0, [2]int{2048, 4096}},
+		{4096, [2]int{4096, 8192}},
+		{10_000, [2]int{10_000, 10_000}},
 	} {
 		server, sent := scriptedSyncServer(t, []sharedSyncStep{truncated, answered})
 		shared, err := NewSharedProvider(SharedProviderConfig{Kind: ProviderKindOpenAI, APIKey: secrets.NewHidden("test-key-value"), BaseURL: server.URL, Model: "gpt-5-nano", MaxOutputTokens: c.floor})
@@ -423,15 +407,6 @@ func TestSharedOpenAITruncationRetryNeverLowersTheCap(t *testing.T) {
 		}
 		if got := caps(sent()); len(got) != 2 || got[0] != c.shared[0] || got[1] != c.shared[1] {
 			t.Fatalf("floor %d: shared caps %v, want %v", c.floor, got, c.shared)
-		}
-
-		oldServer, oldSent := scriptedSyncServer(t, []sharedSyncStep{truncated, answered})
-		old := NewOpenAIProvider(OpenAIProviderConfig{APIKey: secrets.NewHidden("test-key-value"), BaseURL: oldServer.URL, Model: "gpt-5-nano", MaxOutputTokens: c.floor})
-		if _, err := old.Complete(context.Background(), CategorizationRequest("p")); err != nil {
-			t.Fatal(err)
-		}
-		if got := caps(oldSent()); len(got) != 2 || got[0] != c.opsPort[0] || got[1] != c.opsPort[1] {
-			t.Fatalf("floor %d: ops port caps %v, recorded as %v", c.floor, got, c.opsPort)
 		}
 	}
 }

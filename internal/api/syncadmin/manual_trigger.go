@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -306,6 +307,9 @@ func (h *handlers) handOffManual(ctx context.Context, org string, configID uuid.
 				// A structured selector replaces the request's own scope.
 				input.SourceIDs, input.DatasetKeys = nil, nil
 				if window.SourceIDsSet {
+					if err := refuseUnselectedSources(ctx, tx, config, sourceIDs, window.SourceIDs); err != nil {
+						return err
+					}
 					input.SourceIDs = append([]string{}, window.SourceIDs...)
 				}
 				if window.DatasetKeysSet {
@@ -360,6 +364,47 @@ ORDER BY full_name, id`, config.OrgID, *config.IntegrationID, plannerTagKey, con
 		}
 	}
 	return sourceIDs, nil, nil
+}
+
+// refuseUnselectedSources refuses a selector that names an enabled source the
+// planner-managed configuration does not select (tagged is plannerScope's
+// list): the scheduler would plan it, outside the scope of the configuration's
+// scheduled runs (CHAOS-10064). A disabled or unknown source is not planned by
+// the scheduler and is left to it, as before; a configuration pinned to one
+// source, not planner-managed, or PagerDuty (account-scoped) is not checked.
+func refuseUnselectedSources(ctx context.Context, tx pgx.Tx, config *synchandoff.Config, tagged, requested []string) error {
+	if config.SourceID != nil || !config.PlannerManaged || pythonparity.Lower(config.Provider) == "pagerduty" || len(requested) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `
+SELECT id::text FROM public.integration_sources
+WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled`, config.OrgID, *config.IntegrationID)
+	if err != nil {
+		return fmt.Errorf("list the enabled sources: %w", err)
+	}
+	defer rows.Close()
+	enabled := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		enabled[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, raw := range requested {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			continue
+		}
+		id := parsed.String()
+		if enabled[id] && !slices.Contains(tagged, id) {
+			return refuse(http.StatusBadRequest, "source_id "+id+" is not selected for this sync configuration")
+		}
+	}
+	return nil
 }
 
 // manualOutcome waits for the scheduler's plan of the occurrence and answers the

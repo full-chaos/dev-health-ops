@@ -13,7 +13,7 @@ from threading import Event
 import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import create_engine, event, text, update
+from sqlalchemy import create_engine, event, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -46,16 +46,36 @@ from dev_health_ops.sync.dispatch_outbox import (
 )
 from tests._helpers import sync_postgres_test_url
 
-# Seeding at a pinned far-past instant and claiming at that same instant makes
-# only the seeded row due, so tests stay correct against a database that already
-# holds pending outbox rows.
-_ISOLATED_CLAIM_AT = datetime(1970, 1, 2, tzinfo=timezone.utc)
+
+def _instant_before_every_outbox_row(session: Session) -> datetime:
+    """Return an instant earlier than every existing outbox row's available_at.
+
+    A wakeup seeded at this instant and claimed at this instant is the only due
+    row, so the tests stay correct against a database that already holds
+    pending outbox rows of any age.
+    """
+    earliest = session.execute(
+        select(func.min(SyncDispatchOutbox.available_at))
+    ).scalar()
+    now = datetime.now(timezone.utc)
+    if earliest is not None:
+        if earliest.tzinfo is None:
+            earliest = earliest.replace(tzinfo=timezone.utc)
+        now = min(now, earliest)
+    return now - timedelta(days=1)
 
 
-def _claim_only_seeded_row(session: Session):
-    claim = claim_due_outbox_rows(session, now=_ISOLATED_CLAIM_AT, limit=1)[0]
-    # The claim expiry is anchored to the pinned instant; publish paths compare
-    # it with the real clock, so move it to a live window.
+def _claim_only_seeded_row(session: Session, *, run_id, claim_at: datetime):
+    claim = claim_due_outbox_rows(session, now=claim_at, limit=1)[0]
+    seeded_id = session.execute(
+        select(SyncDispatchOutbox.id).where(
+            SyncDispatchOutbox.sync_run_id == run_id,
+            SyncDispatchOutbox.kind == OUTBOX_KIND_DISPATCH,
+        )
+    ).scalar_one()
+    assert claim.id == seeded_id, "claimed a row this test did not seed"
+    # The claim expiry is anchored to the past instant; publish paths compare it
+    # with the real clock, so move it to a live window.
     session.execute(
         update(SyncDispatchOutbox)
         .where(SyncDispatchOutbox.id == claim.id)
@@ -1077,13 +1097,16 @@ def test_real_postgres_route_change_fences_claim_from_another_session():
             run = _seed_run(seed_session)
             run_id = run.id
             integration_id = run.integration_id
+            claim_at = _instant_before_every_outbox_row(seed_session)
             upsert_outbox_wakeup(
                 seed_session,
                 sync_run_id=run.id,
                 kind=OUTBOX_KIND_DISPATCH,
-                available_at=_ISOLATED_CLAIM_AT,
+                available_at=claim_at,
             )
-            claim = _claim_only_seeded_row(seed_session)
+            claim = _claim_only_seeded_row(
+                seed_session, run_id=run.id, claim_at=claim_at
+            )
             seed_session.commit()
 
         with Session(engine) as route_session:
@@ -1170,13 +1193,16 @@ def test_real_postgres_publish_lock_blocks_route_change_until_commit():
             run = _seed_run(seed_session)
             run_id = run.id
             integration_id = run.integration_id
+            claim_at = _instant_before_every_outbox_row(seed_session)
             upsert_outbox_wakeup(
                 seed_session,
                 sync_run_id=run.id,
                 kind=OUTBOX_KIND_DISPATCH,
-                available_at=_ISOLATED_CLAIM_AT,
+                available_at=claim_at,
             )
-            claim = _claim_only_seeded_row(seed_session)
+            claim = _claim_only_seeded_row(
+                seed_session, run_id=run.id, claim_at=claim_at
+            )
             seed_session.commit()
 
         def publish() -> None:

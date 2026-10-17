@@ -96,16 +96,25 @@ type loginRule struct {
 // its value). A value shorter than MinRegisteredLength is not registered and is
 // reported once.
 func Register(name, value string) {
+	registerField(name, "", value)
+}
+
+// registerField is Register for a secret that lives in a named field of a
+// credential: setting is the credential class, field the key inside it. The
+// two travel as separate log attributes because the log redactor reads
+// "integration credential client_secret" as the key "credential" with the
+// value "client_secret" and hides the field name.
+func registerField(setting, field, value string) {
 	if value == "" {
 		return
 	}
 	if len(value) < MinRegisteredLength {
-		warnShort(name)
+		warnShort(setting, field)
 		registerShaped(value)
 		return
 	}
 	if commonWords[strings.ToLower(value)] {
-		warnCommonWord(name)
+		warnCommonWord(setting, field)
 		registerShaped(value)
 		return
 	}
@@ -235,32 +244,42 @@ var commonWords = map[string]bool{
 	"database": true, "disabled": true, "enabled": true, "standard": true, "external": true,
 }
 
-func warnCommonWord(name string) {
+func warnCommonWord(name, field string) {
 	if name == "" {
 		return
 	}
 	registry.Lock()
-	_, seen := registry.warned["common:"+name]
-	registry.warned["common:"+name] = struct{}{}
+	_, seen := registry.warned["common:"+name+"/"+field]
+	registry.warned["common:"+name+"/"+field] = struct{}{}
 	registry.Unlock()
 	if !seen {
-		warn("secret_is_a_common_word_redacted_only_in_credential_shapes", "setting", name)
+		warn("secret_is_a_common_word_redacted_only_in_credential_shapes", warnAttrs(name, field)...)
 	}
 }
 
-func warnShort(name string) {
+func warnShort(name, field string) {
 	if name == "" {
 		return
 	}
 	registry.Lock()
-	_, seen := registry.warned[name]
-	registry.warned[name] = struct{}{}
+	_, seen := registry.warned[name+"/"+field]
+	registry.warned[name+"/"+field] = struct{}{}
 	registry.Unlock()
 	if !seen {
 		warn("secret_shorter_than_minimum_not_redactable_by_value",
-			"setting", name, "minimum_length", MinRegisteredLength,
-			"detail", "password for "+name+" is shorter than the minimum: redacted only in credential shapes (a password key with its value, or a user and password in front of the @ of a URL), not as a bare word")
+			append(warnAttrs(name, field), "minimum_length", MinRegisteredLength,
+				"detail", "the value is shorter than the minimum: redacted only in credential shapes (a password key with its value, or a user and password in front of the @ of a URL), not as a bare word")...)
 	}
+}
+
+// warnAttrs names the setting, and the credential field when there is one. The
+// field is its own attribute: its key is not a protected word, and a bare field
+// name in the value survives the redactor.
+func warnAttrs(name, field string) []any {
+	if field == "" {
+		return []any{"setting", name}
+	}
+	return []any{"setting", name, "field", field}
 }
 
 // RegisterLogin puts a login name into the registry: it is redacted only in the
@@ -430,7 +449,7 @@ func registerCredentialFields(fields map[string]any) {
 		switch typed := value.(type) {
 		case string:
 			if isSecretField(name) {
-				Register("integration credential "+name, typed)
+				registerField("integration credential", name, typed)
 			}
 		case map[string]any:
 			registerCredentialFields(typed)

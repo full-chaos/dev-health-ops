@@ -20,8 +20,7 @@ type trialFixture struct {
 // The fixtures are raw model outputs from a 20-scope trial against the
 // production prompt. The accepted case failed on main because the model wrote
 // display names into evidence.theme and evidence.subcategory. The rejected
-// cases must stay rejected: the wording validator and the key-membership
-// check are the contract.
+// cases must stay rejected: the key-membership check is the contract.
 func TestParseInvestmentMixResponseTrialOutputs(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("testdata", "explain_trial__*.json"))
 	if err != nil || len(files) == 0 {
@@ -111,17 +110,21 @@ func TestResolveCanonicalKeyVariants(t *testing.T) {
 	}
 }
 
-func TestExplainPromptStatesAllowedKeysAndBannedWords(t *testing.T) {
+func TestExplainPromptStatesAllowedKeys(t *testing.T) {
 	prompt := LoadPrompt()
 	for _, want := range []string{
 		"feature_delivery, operational, maintenance, quality, risk",
 		"quality.bugfix", "risk.vulnerability", "maintenance.upgrade",
 		"If those lists are empty, return \"top_findings\": []",
 		"Example row:",
-		`Banned words in every string of the output, including anti_claims, why, and where: "is", "was", "should", "determined", "detected", "definitely", "certainly", "undoubtedly", "without question"`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt lacks %q", want)
+		}
+	}
+	for _, gone := range []string{"Banned words", "appears, leans, suggests"} {
+		if strings.Contains(prompt, gone) {
+			t.Errorf("prompt still carries the dropped wording rule %q", gone)
 		}
 	}
 }

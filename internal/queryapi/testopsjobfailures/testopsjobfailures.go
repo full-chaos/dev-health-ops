@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -253,16 +254,21 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, since, until
 	if total < len(out) {
 		total = len(out)
 	}
-	// Parsed values only: a raw request string in a log line is a log-injection sink.
+	// Parsed values, with line breaks removed, so no request text reaches the log line.
 	attrs := []any{
-		"since", since.Time(), "until", until.Time(),
+		"since", logSafe(since.Time().Format("2006-01-02")), "until", logSafe(until.Time().Format("2006-01-02")),
 		"groups", len(out), "total", total, "repo_scoped", len(scope.RepoIDs) > 0, "team_scoped", len(scope.TeamIDs) > 0,
 	}
 	if parsedOrg, parseErr := uuid.Parse(orgID); parseErr == nil {
-		attrs = append(attrs, "organization_id", parsedOrg)
+		attrs = append(attrs, "organization_id", logSafe(parsedOrg.String()))
 	}
 	slog.DebugContext(ctx, "testopsjobfailures: resolved", attrs...)
 	return &model.TestOpsJobFailuresResult{Groups: out, TotalCount: total, Truncated: total > len(out)}, nil
+}
+
+// logSafe removes line breaks from a value that is logged.
+func logSafe(value string) string {
+	return strings.NewReplacer("\n", "", "\r", "").Replace(value)
 }
 
 func countGroups(ctx context.Context, client QueryClient, groups string, bindings []clickhouse.Binding) (int, error) {

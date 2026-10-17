@@ -3,6 +3,7 @@ package synchandoff
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -34,7 +35,8 @@ func (err UnselectedSourcesError) Error() string {
 // (account-scoped) are not checked. A disabled, unknown or malformed id passes
 // to the scheduler, which plans nothing for it or quarantines the occurrence,
 // as before.
-func checkSelectedSources(ctx context.Context, tx pgx.Tx, config *Config, sourceIDs []string) error {
+func checkSelectedSources(ctx context.Context, tx pgx.Tx, config *Config, input MintInput) error {
+	sourceIDs := input.SourceIDs
 	if sourceIDs == nil || config.SourceID != nil || !config.PlannerManaged || config.IntegrationID == nil ||
 		strings.EqualFold(strings.TrimSpace(config.Provider), "pagerduty") {
 		return nil
@@ -70,6 +72,10 @@ WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled
 	}
 	if len(unselected) > 0 {
 		sort.Strings(unselected)
+		slog.WarnContext(ctx, "sync trigger refused: a source is not selected for the configuration",
+			slog.String("sync_config_id", config.ID), slog.String("caller", input.Caller),
+			slog.String("triggered_by", input.TriggeredBy), slog.String("mode", input.Mode),
+			slog.Int("refused_source_count", len(unselected)), slog.Int("requested_source_count", len(sourceIDs)))
 		return UnselectedSourcesError{ConfigID: config.ID, SourceIDs: unselected}
 	}
 	return nil

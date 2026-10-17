@@ -123,6 +123,9 @@ type MintInput struct {
 	SourceIDs, DatasetKeys []string
 	// TriggeredBy is "manual" or "backfill" (the table's CHECK constraint).
 	TriggeredBy string
+	// Caller names the trigger path for the scope guard's log line (for example
+	// "dho-backfill-run" or "syncadmin-wizard").
+	Caller string
 	// ScheduledFor fixes the occurrence's scheduled_for, and so its identity
 	// (nil: now). A webhook request passes its delivery's created_at, so a
 	// replayed request mints the same occurrence rather than a second one.
@@ -140,7 +143,7 @@ type MintInput struct {
 // identity already exists (a replayed webhook request), neither it nor its
 // trigger is written again, and the returned Trigger reports Existing.
 func Mint(ctx context.Context, tx pgx.Tx, config *Config, input MintInput, now time.Time) (Trigger, error) {
-	if err := checkSelectedSources(ctx, tx, config, input.SourceIDs); err != nil {
+	if err := checkSelectedSources(ctx, tx, config, input); err != nil {
 		return Trigger{}, err
 	}
 	scheduledFor := now.UTC().Truncate(time.Microsecond)

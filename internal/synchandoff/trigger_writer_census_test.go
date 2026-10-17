@@ -29,6 +29,7 @@ var mintCallers = map[string]string{
 var (
 	triggerTableWrite = regexp.MustCompile(`(?is)\binsert\s+into\s+(public\.)?sync_manual_triggers\b|\bupdate\s+(public\.)?sync_manual_triggers\s+set\b`)
 	mintCall          = regexp.MustCompile(`\bsynchandoff\.Mint\(`)
+	namedCaller       = regexp.MustCompile(`\bCaller:\s*"`)
 )
 
 // TestEveryTriggerWriteGoesThroughTheScopeGuard fails when production code
@@ -65,6 +66,9 @@ func TestEveryTriggerWriteGoesThroughTheScopeGuard(t *testing.T) {
 			}
 			if mintCall.Match(source) {
 				callers = append(callers, relative)
+				if !namedCaller.Match(source) {
+					t.Errorf("%s calls Mint without naming its Caller (the scope guard's log line names the path)", relative)
+				}
 			}
 			return nil
 		})

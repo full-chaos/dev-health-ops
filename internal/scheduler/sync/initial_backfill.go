@@ -298,7 +298,7 @@ func (enqueuer *initialBackfillEnqueuer) enqueueOne(ctx context.Context, now tim
 	scheduledFor := candidate.completedAt.UTC().Truncate(time.Microsecond)
 	trigger, err := synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{
 		Mode: initialBackfillMode, Since: &since, Before: &before,
-		TriggeredBy: initialBackfillTriggeredBy, ScheduledFor: &scheduledFor,
+		TriggeredBy: initialBackfillTriggeredBy, ScheduledFor: &scheduledFor, Caller: "initial-backfill",
 	}, now)
 	if err != nil {
 		return fmt.Errorf("mint the backfill occurrence: %w", err)

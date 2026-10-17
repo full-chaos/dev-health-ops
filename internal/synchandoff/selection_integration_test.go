@@ -3,9 +3,11 @@
 package synchandoff
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,10 @@ import (
 func TestMintRefusesAnEnabledSourceTheConfigurationDoesNotSelect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
 	pool, config := startHandoffDatabase(ctx, t, 4)
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	selected, untagged, otherConfig, disabled := uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -49,7 +55,7 @@ VALUES ($1, $2, $3::uuid, 'github', 'repository', $4, $4, $4, $5::json, $6, now(
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		trigger, err := Mint(ctx, tx, &c, MintInput{Mode: "backfill", SourceIDs: ids, TriggeredBy: "backfill"}, now.Add(time.Duration(offset)*time.Second))
+		trigger, err := Mint(ctx, tx, &c, MintInput{Mode: "backfill", SourceIDs: ids, TriggeredBy: "backfill", Caller: "guard-test"}, now.Add(time.Duration(offset)*time.Second))
 		if err == nil {
 			var written int
 			if scanErr := tx.QueryRow(ctx, `SELECT count(*) FROM sync_manual_triggers WHERE occurrence_id = $1`, trigger.OccurrenceID).Scan(&written); scanErr != nil || written != 1 {
@@ -70,6 +76,11 @@ VALUES ($1, $2, $3::uuid, 'github', 'repository', $4, $4, $4, $5::json, $6, now(
 		if !errors.As(err, &unselected) || unselected.ConfigID != config.ID || len(unselected.SourceIDs) != 1 {
 			t.Errorf("%s: err %v, want an UnselectedSourcesError naming one source", index, err)
 		}
+	}
+	warned := strings.Count(logs.String(), `"msg":"sync trigger refused: a source is not selected for the configuration"`)
+	if warned != 4 || !strings.Contains(logs.String(), `"caller":"guard-test"`) || !strings.Contains(logs.String(), `"refused_source_count":1`) ||
+		!strings.Contains(logs.String(), `"sync_config_id":"`+config.ID+`"`) || !strings.Contains(logs.String(), `"level":"WARN"`) {
+		t.Fatalf("refusal log lines = %d, want 4 WARN lines naming the configuration, the caller and the count:\n%s", warned, logs.String())
 	}
 	var refusedWrites int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_manual_triggers`).Scan(&refusedWrites); err != nil || refusedWrites != 0 {

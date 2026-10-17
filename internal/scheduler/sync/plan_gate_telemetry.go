@@ -25,6 +25,10 @@ const (
 	// unit is planned for that dataset. Recorded once per left-out dataset,
 	// under the dataset's own key; the other datasets of the plan still run.
 	planGateOutcomeFeatureDisabled = "feature_disabled"
+	// planGateOutcomeSlowedDown (CHAOS-8802): a source failed its work-items
+	// unit the same way several times in a row and is tried once a day, so no
+	// unit is planned for it on this tick. Recorded under "work-items".
+	planGateOutcomeSlowedDown = "slowed_down"
 )
 
 // planGateKey identifies one (provider, dataset, outcome) series.

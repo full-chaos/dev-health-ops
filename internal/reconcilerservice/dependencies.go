@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -744,6 +745,11 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	// saturation is a metric plus a loud log line, never a readiness input.
 	// The sampler is a component: it logs saturation on its own ticker, so the
 	// warning does not depend on a metrics scrape.
+	// CHAOS-10013: dispatch wakes after an expired-lease repair (LeaseRepair).
+	if err := registry.RegisterMetrics("sync_dispatch_woken", syncrunrollup.DispatchWakeMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
 	saturation := poolstat.New("reconciler_database_pool_saturation_ratio", dependencies.database.DomainPool(), logger)
 	if err := registry.RegisterMetrics("reconciler_domain_pool", saturation); err != nil {
 		dependencies.close()

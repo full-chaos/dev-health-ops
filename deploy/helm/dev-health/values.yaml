@@ -960,7 +960,10 @@ config:
   LINEAR_BACKFILL_MAX_WINDOW_DAYS: "14"
   SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES: "1"
   SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS: "60"
-  SYNC_DISPATCH_REDISPATCH_COUNTDOWN: "60"
+  # Safety-net delay (seconds) before a sync run's next dispatch pass when the
+  # pass left units waiting for a concurrency slot. A unit's terminal commit
+  # wakes the pass sooner (CHAOS-10013); this only bounds a lost wake.
+  SYNC_DISPATCH_REDISPATCH_COUNTDOWN: "10"
   SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS: "300"
   # CHAOS-3092 made this unconditionally true: no Celery consumer serves
   # provider units in any deployment, because that compute is deleted. The

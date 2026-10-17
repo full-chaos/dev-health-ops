@@ -52,13 +52,17 @@ func TestScheduleRedispatchUsesTheExplicitAvailableAtWhenGiven(t *testing.T) {
 	})
 }
 
-// TestScheduleRedispatchOverwritesAPendingUnclaimedRowsAvailableAt pins
-// the second, unconditional-overwrite write: an EXISTING pending,
-// unclaimed row's available_at moves to the newly-computed value even
-// when that value is LATER than what is already there -- distinct from
-// the upsert's own LEAST-semantics merge, which would otherwise keep the
-// earlier of the two.
-func TestScheduleRedispatchOverwritesAPendingUnclaimedRowsAvailableAt(t *testing.T) {
+// TestScheduleRedispatchKeepsAnEarlierWakeupAnotherWriterArmed pins
+// CHAOS-10013: a row that is ALREADY pending when the pass re-arms was armed by
+// another writer while the pass ran (a unit leaving its slot, reference
+// discovery, the materializer), so the re-arm merges by LEAST and keeps that
+// earlier wakeup instead of pushing it out to the pass's own, later instant.
+// The overwrite still applies to the pass's own delivered row: see
+// TestScheduleRedispatchStillCountsDownFromItsOwnDeliveredRow.
+//
+// RED CONTROL: before CHAOS-10013 the second write overwrote this row
+// unconditionally and available_at moved to the later value.
+func TestScheduleRedispatchKeepsAnEarlierWakeupAnotherWriterArmed(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := pgNow()
 		earlier := now.Add(5 * time.Minute)
@@ -73,8 +77,8 @@ VALUES ($1,$2,$3,$4,'pending',$5,0,now(),now())`,
 		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, &later, now)
 
 		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
-		if !got.Equal(later) {
-			t.Fatalf("available_at=%s want=%s -- the explicit re-arm must overwrite even a LATER-than-earlier value, not merge via LEAST", got, later)
+		if !got.Equal(earlier) {
+			t.Fatalf("available_at=%s want=%s -- a wakeup another writer armed must survive the pass's later re-arm (LEAST), not be overwritten", got, earlier)
 		}
 	})
 }

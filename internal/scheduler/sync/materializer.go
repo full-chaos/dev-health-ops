@@ -1951,7 +1951,7 @@ func loadFailureStreaks(
 		slog.Default().Warn("sync.materializer.failure_streaks_unavailable",
 			slog.String("provider", provider), slog.String("org_id", orgID),
 			slog.String("integration_id", integrationID),
-			slog.String("error_category", "streak_query_failed"))
+			slog.String("failure", "streak_query_failed"))
 		return nil
 	}
 	bySource := make(map[string][]providersync.UnitOutcome)

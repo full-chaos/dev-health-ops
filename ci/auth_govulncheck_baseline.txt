@@ -1,0 +1,21 @@
+# Reachable vulnerabilities govulncheck reports for the auth packages on main
+# when the gate was added (CHAOS-4887, govulncheck v1.9.0). These are repo-wide
+# dependency and toolchain findings (the auth binaries pull them in through
+# internal/platform), not auth code. A NEW id fails the gate; delete an entry as
+# soon as the fix lands (the gate prints stale entries).
+#   stdlib go1.27.0 -> go1.27.2 (GO_TOOLCHAIN in ci/check_go.sh, go.mod)
+GO-2026-6599
+GO-2026-6600
+GO-2026-6607
+GO-2026-6608
+GO-2026-6611
+GO-2026-6613
+#   golang.org/x/net v0.58.0 -> v0.60.0
+GO-2026-6603
+GO-2026-6612
+GO-2026-6617
+#   google.golang.org/grpc v1.81.1 -> v1.83.1
+GO-2026-6061
+GO-2026-6348
+#   go.opentelemetry.io/otel/sdk v1.44.0 -> v1.45.0
+GO-2026-6505

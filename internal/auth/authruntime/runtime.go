@@ -278,16 +278,7 @@ func configure(
 		return nil, err
 	}
 
-	apiHTTP, err := httpapi.NewServer(httpapi.ServerOptions{
-		Address:        cfg.APIAddress,
-		Logger:         logger,
-		Routes:         Routes(),
-		RequestTimeout: cfg.RequestTimeout,
-		MaxBodyBytes:   cfg.MaxBodyBytes,
-		RateLimit:      cfg.RateLimit.PerSecond,
-		RateLimitBurst: cfg.RateLimit.Burst,
-		MaxInFlight:    maxInFlightRequests,
-	})
+	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, Routes()))
 	if err != nil {
 		closeStore()
 		return nil, err
@@ -421,4 +412,22 @@ func writeConfigurationError(w io.Writer, err error) {
 
 func writeArgumentError(w io.Writer, err error) {
 	fmt.Fprintf(w, "argument error: %s\n", logging.RedactText(err.Error()))
+}
+
+// apiServerOptions is the ONE place the API listener's middleware stack is
+// configured from the resolved configuration. configure builds the production
+// server from it and the production-stack integration test (CHAOS-4887, G-69)
+// builds its server from it with a probe route, so the test exercises the
+// configuration the service really runs, not a hand-assembled router.
+func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpapi.Route) httpapi.ServerOptions {
+	return httpapi.ServerOptions{
+		Address:        cfg.APIAddress,
+		Logger:         logger,
+		Routes:         routes,
+		RequestTimeout: cfg.RequestTimeout,
+		MaxBodyBytes:   cfg.MaxBodyBytes,
+		RateLimit:      cfg.RateLimit.PerSecond,
+		RateLimitBurst: cfg.RateLimit.Burst,
+		MaxInFlight:    maxInFlightRequests,
+	}
 }

@@ -1,9 +1,12 @@
 package workgraph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +118,128 @@ func TestPreStepFailureFailsTheBuildPermanently(t *testing.T) {
 	}
 	if store.ambiguous != 0 {
 		t.Fatalf("ambiguous=%d, want 0 -- Build never has a half-applied bridge write to repair", store.ambiguous)
+	}
+}
+
+// TestStepFailureMarksTheStepFailedAndTheLaterStepsStillRun: a step that
+// reports a StepFailure (a rule it checks is breached) does not stop the build.
+// Every later step runs, the step's evidence says FAILED with its counts and
+// reason, the build evidence names it under failed_steps, and the request
+// completes, so the post-sync request waiting on its completion is not held.
+func TestStepFailureMarksTheStepFailedAndTheLaterStepsStillRun(t *testing.T) {
+	var sequence []string
+	store := &fakeStore{claim: testClaim(time.Minute)}
+	handler, err := NewBuildHandler(
+		store,
+		[]NativePreStep{
+			&recordingPreStep{name: "writer", sequence: &sequence, fragment: map[string]any{"links_written": 3}},
+			&recordingPreStep{name: "invariant", sequence: &sequence, err: &StepFailure{
+				Reason: "2 rows sit beside a native link", Evidence: map[string]any{"fallback_beside_native": 2},
+			}},
+			&recordingPreStep{name: "later", sequence: &sequence, fragment: map[string]any{"edges_written": 5}},
+		},
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), buildExecution()); err != nil {
+		t.Fatalf("Work = %v, want nil: a StepFailure must not abort the build", err)
+	}
+	if got := strings.Join(sequence, ","); got != "prestep:writer,prestep:invariant,prestep:later" {
+		t.Fatalf("sequence = %s, want every step to run", got)
+	}
+	if store.completions != 1 || store.ambiguous != 0 {
+		t.Fatalf("completions=%d ambiguous=%d, want 1 and 0", store.completions, store.ambiguous)
+	}
+	var evidence map[string]any
+	if err := json.Unmarshal(store.lastEvidence, &evidence); err != nil {
+		t.Fatalf("evidence %s: %v", store.lastEvidence, err)
+	}
+	failed, _ := evidence[FailedStepsKey].([]any)
+	if len(failed) != 1 || failed[0] != "invariant" {
+		t.Fatalf("%s = %v, want [invariant]; evidence %s", FailedStepsKey, evidence[FailedStepsKey], store.lastEvidence)
+	}
+	step, _ := evidence["invariant"].(map[string]any)
+	if step[StepStatusKey] != StepStatusFailed || step["fallback_beside_native"] != float64(2) ||
+		step["failure_reason"] != "2 rows sit beside a native link" {
+		t.Fatalf("invariant fragment = %v", step)
+	}
+	if later, _ := evidence["later"].(map[string]any); later["edges_written"] != float64(5) {
+		t.Fatalf("later fragment = %v, want the step that ran after the failure recorded", evidence["later"])
+	}
+	if _, has := evidence["writer"].(map[string]any)[StepStatusKey]; has {
+		t.Fatalf("a passing step carries a status: %v", evidence["writer"])
+	}
+}
+
+// The build's ERROR line for a failed step carries that step's own evidence
+// (its counts), so the log alone says how large the breach is.
+func TestStepFailureErrorLineCarriesTheFailedStepsEvidence(t *testing.T) {
+	var sequence []string
+	var logs bytes.Buffer
+	store := &fakeStore{claim: testClaim(time.Minute)}
+	handler, err := NewBuildHandler(store, []NativePreStep{
+		&recordingPreStep{name: "invariant", sequence: &sequence, err: &StepFailure{
+			Reason: "2 rows break the rule", Evidence: map[string]any{"organization_id": "org-1", "links_read": 4, "fallback_beside_native": 2},
+		}},
+	}, nil, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), buildExecution()); err != nil {
+		t.Fatal(err)
+	}
+	var line map[string]any
+	for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var candidate map[string]any
+		if json.Unmarshal([]byte(raw), &candidate) == nil && candidate["level"] == "ERROR" {
+			line = candidate
+		}
+	}
+	evidence, _ := line["failed_step_evidence"].(map[string]any)
+	step, _ := evidence["invariant"].(map[string]any)
+	if step["fallback_beside_native"] != float64(2) || step["links_read"] != float64(4) || step[StepStatusKey] != StepStatusFailed {
+		t.Fatalf("ERROR line = %v, want the failed step's evidence with its counts", line)
+	}
+}
+
+// A build where no step fails carries no failed_steps key at all.
+func TestNoStepFailureLeavesNoFailedStepsKey(t *testing.T) {
+	var sequence []string
+	store := &fakeStore{claim: testClaim(time.Minute)}
+	handler, err := NewBuildHandler(store, []NativePreStep{
+		&recordingPreStep{name: "writer", sequence: &sequence, fragment: map[string]any{"links_written": 3}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), buildExecution()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(store.lastEvidence), FailedStepsKey) {
+		t.Fatalf("evidence = %s, want no %s", store.lastEvidence, FailedStepsKey)
+	}
+}
+
+// Any error that is not a StepFailure still aborts the build before the later
+// steps, as before: only a step's own verdict on a checked rule continues.
+func TestAnOrdinaryStepErrorStillStopsTheLaterSteps(t *testing.T) {
+	var sequence []string
+	store := &fakeStore{claim: testClaim(time.Minute)}
+	handler, err := NewBuildHandler(store, []NativePreStep{
+		&recordingPreStep{name: "invariant", sequence: &sequence, err: fmt.Errorf("load: %w", errors.New("clickhouse down"))},
+		&recordingPreStep{name: "later", sequence: &sequence},
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), buildExecution()); err == nil {
+		t.Fatal("Work = nil, want the build to stop")
+	}
+	if got := strings.Join(sequence, ","); got != "prestep:invariant" || store.completions != 0 {
+		t.Fatalf("sequence = %s completions = %d, want only the failing step and no completion", got, store.completions)
 	}
 }
 

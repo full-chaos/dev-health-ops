@@ -1242,7 +1242,7 @@ func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) {
 		if err != nil {
 			slog.Default().Warn("providersync.needs_attention_streak_unavailable",
 				slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
-				slog.String("error_category", "streak_query_failed"))
+				slog.String("failure", "streak_query_failed"))
 		}
 		return
 	}
@@ -1254,7 +1254,7 @@ func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) {
 		_ = savepoint.Rollback(ctx)
 		slog.Default().Warn("providersync.needs_attention_stamp_failed",
 			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
-			slog.String("error_category", "stamp_failed"))
+			slog.String("failure", "stamp_failed"))
 		return
 	}
 	if err := savepoint.Commit(ctx); err != nil {

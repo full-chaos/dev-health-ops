@@ -234,7 +234,6 @@ def main() -> int:
         default_limit=1_000_000,
     )
 
-
     # Every candidate key shape of _limit_for_bucket alone, then each shape against the next one (the order is the contract).
     shapes = [
         f"github:{org_a}:api.github.com:fp-1:rest_core:core",

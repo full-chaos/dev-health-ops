@@ -107,6 +107,9 @@ func TestGitLabRepositoryRouteEmitsCompleteReposEffect(t *testing.T) {
 	if row.Settings != `{"default_branch":"main","gitlab_instance_url":"https://gitlab.example","project_id":123,"source":"gitlab","url":"https://gitlab.example/Acme/API"}` {
 		t.Fatalf("settings=%s", row.Settings)
 	}
+	if row.ProviderRepoID != "123" || row.IdentityPath != "Acme/API" {
+		t.Fatalf("anchor provider_repo_id=%q identity_path=%q, want the numeric id 123 and the minting path Acme/API", row.ProviderRepoID, row.IdentityPath)
+	}
 	if row.Tags != `["gitlab"]` {
 		t.Fatalf("tags=%s", row.Tags)
 	}

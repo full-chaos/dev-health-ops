@@ -72,6 +72,9 @@ type repositoryRow struct {
 	// ProviderRepoID is the provider's stable repository id; empty when the
 	// route has none, and then the held id is kept.
 	ProviderRepoID string `json:"provider_repo_id,omitempty"`
+	// IdentityPath is the path ID was minted from; empty when the route does
+	// not state it, and then the held path is kept.
+	IdentityPath string `json:"identity_path,omitempty"`
 }
 
 // repositorySettings defines the GitHub repository settings fields. The

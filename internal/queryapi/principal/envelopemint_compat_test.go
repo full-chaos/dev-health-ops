@@ -99,3 +99,39 @@ func TestEnvelopemintLoadPrivateKeyRoundTripsAKeyThisPackageCanUse(t *testing.T)
 		t.Fatal("LoadPrivateKey returned a different key than was encoded")
 	}
 }
+
+// TestEnvelopemintMintedSuperuserSurvivesOnlyWithProof drives the real mint
+// code (envelopemint.Mint, the only envelope issuer in this tree) for a
+// superuser who is not impersonating: the issuer's verified flag keeps the
+// grant through Verify, and a principal minted with the hint alone loses it.
+func TestEnvelopemintMintedSuperuserSurvivesOnlyWithProof(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	v := mustVerifier(t, writeJWKS(t, pub, testKID), testIssuer, testAudience)
+	opts := envelopemint.Options{Issuer: testIssuer, Audience: testAudience, KeyID: testKID}
+	for _, tc := range []struct {
+		name          string
+		principal     envelopemint.Principal
+		wantSuperuser bool
+	}{
+		{"superuser, db-verified", envelopemint.Principal{Subject: "u1", OrgID: "o1", Role: "owner", IsSuperuser: true, IsSuperuserVerified: true}, true},
+		{"superuser hint only", envelopemint.Principal{Subject: "u1", OrgID: "o1", Role: "owner", IsSuperuser: true}, false},
+		{"not a superuser", envelopemint.Principal{Subject: "u1", OrgID: "o1", Role: "owner"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token, err := envelopemint.Mint(priv, tc.principal, opts)
+			if err != nil {
+				t.Fatalf("Mint: %v", err)
+			}
+			claims, err := v.Verify(context.Background(), token)
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			if claims.IsSuperuser != tc.wantSuperuser {
+				t.Errorf("IsSuperuser = %v, want %v", claims.IsSuperuser, tc.wantSuperuser)
+			}
+		})
+	}
+}

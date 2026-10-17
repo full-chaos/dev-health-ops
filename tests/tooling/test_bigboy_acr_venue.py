@@ -275,4 +275,11 @@ def test_the_switch_procedure_removes_the_old_containers_and_keeps_the_data() ->
     assert not [c for c in commands if re.search(r"\bstop\b|\bkill\b", c)], commands
     assert section.index(down) < section.index("--profile acr up -d")
     assert "REMOVED, not only stopped" in section
+    # MCP: the graph is saved before the down, the images are checked after the up, the repository count is read back
+    assert section.index("BGSAVE") < section.index(down)
+    assert "falkordb-data.backup-" in section
+    assert section.index("--profile acr up -d") < section.index(
+        "docker inspect --format"
+    )
+    assert "MATCH (r:Repository) RETURN count(r)" in section
     assert "docker volume rm dev-health-acr-mcp_acr_entitlement_tmp" in section

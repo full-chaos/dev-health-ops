@@ -95,11 +95,17 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
   executed in a scratch project). The steps, in this order:
   1. Before: render the acr services from the old `compose.yml` and from this file and diff them (names, images, environment, volumes, networks):
      only the image reference, the project-prefixed secret/volume/network names and the services' network name may differ.
-  2. Remove the old project's containers and its own network, keeping the data: `cd /home/ubuntu/devhealth/dev-health-acr-mcp && docker compose -p dev-health-acr-mcp -f compose.yml down`
+  2. Save the graph first (MCP): `docker exec dev-health-acr-mcp-falkordb-1 redis-cli BGSAVE`, wait until `redis-cli LASTSAVE` changes, then copy the dump to a dated backup
+     path, `cp /var/lib/oci-cache/mcp-venue/falkordb-data/dump.rdb /var/lib/oci-cache/mcp-venue/falkordb-data.backup-$(date -u +%Y%m%dT%H%MZ).rdb` (outside the bind-mounted directory).
+     Note the repository count for step 5: `docker exec dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"`, the `<graph>` being
+     the one `redis-cli GRAPH.LIST` shows besides `_acr_health` (34 on 2026-10-17).
+  3. Remove the old project's containers and its own network, keeping the data: `cd /home/ubuntu/devhealth/dev-health-acr-mcp && docker compose -p dev-health-acr-mcp -f compose.yml down`
      (NEVER `-v`, and never `--rmi`). The bind mounts `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data` are host paths and stay; the networks
      `dho-query-internal` and `dho-clickhouse-readers` are external and stay.
-  3. Start here: `--profile acr up -d`, then `ps` and a venue readback.
-  4. After the readback, the old named volume `dev-health-acr-mcp_acr_entitlement_tmp` is left behind on purpose (it only held the stand-in's generated
+  4. Start here: `--profile acr up -d`, then `ps`, and confirm the images are the pinned digests: `docker inspect --format '{{.Image}}' dev-health-acr-mcp-acr-api-1 dev-health-acr-mcp-acr-mcp-1`
+     must print the ids in `BIGBOY_ACR_API_IMAGE` and `BIGBOY_ACR_MCP_IMAGE` of the host's `_records/images.env` (fb4c745e: `01cab48f...` and `38aeb351...`).
+  5. Readback: the venue answers, and the graph still holds the repository count noted in step 2 (34).
+  6. After the readback, the old named volume `dev-health-acr-mcp_acr_entitlement_tmp` is left behind on purpose (it only held the stand-in's generated
      nginx.conf; the new file uses `dev-health-acr-entitlement-tmp`): remove it with `docker volume rm dev-health-acr-mcp_acr_entitlement_tmp` when the
      readback is good, or leave it.
 

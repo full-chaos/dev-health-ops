@@ -42,6 +42,11 @@ command -v curl >/dev/null 2>&1 || die "curl is required"
 # starts; any non-empty value satisfies it.
 export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-auth-compose-proof}"
 export AUTH_SERVICE_OPERATOR_HOST_PORT="${PORT}"
+# Passwords with every URI-reserved character the DSNs must survive: the DSNs
+# are keyword-form, so none of these may break a connection (a URI form failed
+# on a trailing '#').
+export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-su#per@pw/1:2?3%4&5=6}"
+export AUTH_RUNTIME_DATABASE_PASSWORD="${AUTH_RUNTIME_DATABASE_PASSWORD:-au#th@pw/1:2?3%4&5=6 x}"
 export COMMIT="${COMMIT:-0000000000000000000000000000000000000000}"
 
 compose() {

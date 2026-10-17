@@ -1310,6 +1310,10 @@ services:
   # approved table privileges. The password default equals the role name:
   # local development only, like every other login in this file. A production
   # login is provisioned by the database provider before auth-migrate runs.
+  # The DSNs of auth-migrate and auth-service use the libpq keyword form with the
+  # password in single quotes (a URI would need every reserved character in the
+  # password percent-encoded, which Compose cannot do): any password works except
+  # one containing a single quote or a backslash.
   auth-provision:
     image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     profiles: [auth]
@@ -1361,7 +1365,7 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     environment:
-      AUTH_MIGRATION_DATABASE_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}?sslmode=disable
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
     depends_on:
@@ -1397,7 +1401,7 @@ services:
       AUTH_SERVICE_OPERATOR_HTTP_ADDR: ":8096"
       # Below the container stop grace period (compose default 10 s).
       AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s
-      AUTH_DATABASE_URI: postgres://${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}:${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}@postgres:5432/${POSTGRES_DB:-postgres}?sslmode=disable
+      AUTH_DATABASE_URI: host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
       AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
       AUTH_SIGNING_KEY_ID: ${AUTH_SIGNING_KEY_ID:-auth-signing-local}

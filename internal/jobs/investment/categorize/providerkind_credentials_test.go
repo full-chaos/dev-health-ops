@@ -91,7 +91,7 @@ func TestNewProviderFromCredentialsLocalFallsBackWithEmptyBaseURL(t *testing.T) 
 }
 
 // TestNewProviderFromCredentialsOllamaUsesExplicitValues codex round 3
-// (#2234), P1 fix: org-BYO "ollama" now constructs *LocalProvider (the
+// (#2234), P1 fix: org-BYO "ollama" now constructs the shared local kind (the
 // OpenAI-compatible client Python's own OllamaProvider actually is), not
 // *OllamaProvider (the native /api/chat client) -- see the case's own
 // doc comment in providerkind.go for why NewProviderFromEnv's sibling

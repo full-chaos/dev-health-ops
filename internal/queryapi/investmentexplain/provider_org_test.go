@@ -635,7 +635,7 @@ func TestLogOrgBaseURLSSRFFallback_NoFireWhenLookupErrors(t *testing.T) {
 // modelCapturingServer runs a real HTTP server and records the "model"
 // field of the last request body it received -- every wire protocol this
 // package's providers speak (OpenAI's Responses API, the OpenAI-compatible
-// Chat Completions API LocalProvider/org-BYO-ollama use, Ollama's native
+// Chat Completions API the shared local kind and org-BYO-ollama use, Ollama's native
 // /api/chat) puts the model on a top-level "model" JSON field, so one
 // generic handler captures all three. The response status/body do not
 // matter: resolvedModel is read back from the constructed Provider BEFORE

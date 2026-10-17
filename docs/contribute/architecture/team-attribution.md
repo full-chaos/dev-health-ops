@@ -1935,13 +1935,20 @@ the sync saw and is never changed: a rename at the provider changes `native_team
 what tells the sync it is the same team (the rename change builds on it). `is_active` is not touched by `gone_at`: a
 gone team keeps its past reads and attribution (chris ruling, CHAOS-9432: never deactivate a gone team).
 
-- **Carry.** Every Go writer of `teams` calls `internal/teamprovider.Carry` before its INSERT, as it does for
-  `created_at` (section 0.4h): `provider_team_id` and `provider_name` are the newest NON-EMPTY values over every stored
-  version (a writer that does not know the provider's id never erases it), `gone_at` is the value of the newest version
-  (a catalog write of a listed team sets it NULL; every other writer keeps it). The Python `insert_teams` carries the
-  same values. The writers are the same as in section 0.4h; a census test (`internal/teamprovider`) fails when an
-  `INSERT INTO teams` drops one of the three columns or a writer does not call `Carry`, and the team id carry's column
-  list is checked too.
+- **Carry, inside the write (CHAOS-9999).** Every Go writer of `teams` writes through `internal/teamprovider.Insert`:
+  one `INSERT ... SELECT` that reads the stored values of the three columns in the same statement. `provider_team_id`
+  and `provider_name` are the run's own value when it has one, else the newest NON-EMPTY value over every stored
+  version (a writer that does not know the provider's id never erases it); `gone_at` is NULL for a catalog write of a
+  listed team, the moved team's own value for the team id carry's new row, else the newest version's value. A read
+  before a separate insert is not allowed: a catalog write that commits between the two is overwritten by the newer
+  version, and after a merge (ReplacingMergeTree keeps one row per id) no read can find it again. Residual window: the
+  SELECT reads a snapshot taken when the statement starts, so a write that commits while that one statement runs is
+  still overwritten (ClickHouse has no transaction); `provider_team_id` and `provider_name` are written again by the
+  next catalog sync that lists the team, `gone_at` is not. The fix stays inside `teams` (chris ruling on CHAOS-9999: no
+  second table, no duplicated columns). The Python `insert_teams` writers (not run by any deployed workload: the
+  chart runs only the `dho` image) still read before they insert. A census test (`internal/teamprovider`) fails when a
+  Go writer of `teams` does not write through `Insert` (or an `INSERT ... SELECT` that selects the three columns), and
+  `Carry` is left for the catalog writers' Tally only.
 - **Fill.** The GitHub, GitLab and Linear catalog writers store the provider's id and name of each listed team on every
   run, so an existing row gets its provider id on the first sync that lists the team (no backfill job). A team listed
   under a key whose stored provider id differs is logged at Warn with counts (`team_provider_identity_written`).

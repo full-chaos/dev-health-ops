@@ -398,6 +398,11 @@ func (c *failingCarryConn) Query(ctx context.Context, query string, args ...any)
 	return c.Conn.Query(ctx, query, args...)
 }
 
+func (c *failingCarryConn) Exec(ctx context.Context, query string, args ...any) error {
+	c.writes++
+	return c.Conn.Exec(ctx, query, args...)
+}
+
 func (c *failingCarryConn) PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error) {
 	c.writes++
 	return c.Conn.PrepareBatch(ctx, query, opts...)

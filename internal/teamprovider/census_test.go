@@ -13,34 +13,54 @@ import (
 
 var teamsInsert = regexp.MustCompile(`(?i)INSERT\s+INTO\s+teams\b`)
 
-// Every Go statement that inserts into teams writes provider_team_id,
-// provider_name and gone_at, and the writer either calls Carry in the function
-// that uses the statement or copies the columns in the same statement
-// (INSERT..SELECT). A new writer that drops them starts the next version of
-// every team it touches with an empty provider id and no gone time.
-func TestEveryGoTeamsInsertCarriesTheProviderIdentity(t *testing.T) {
+// The writers of teams that write through Insert (CHAOS-9999), on 2026-10-17.
+var insertWriters = []string{
+	"internal/providersync/github_team_catalog_effects_clickhouse.go",
+	"internal/providersync/gitlab_team_catalog_effects_clickhouse.go",
+	"internal/providersync/jira_team_catalog_effects_clickhouse.go",
+	"internal/providersync/linear_reference_catalog_effects_clickhouse.go",
+	"internal/providersync/team_id_carry.go",
+	"internal/atlassianteams/write.go",
+	"internal/api/teamsidentity/store.go",
+	"internal/streamhandlers/external_clickhouse.go",
+}
+
+// Every Go writer of teams takes provider_team_id, provider_name and gone_at
+// from the stored versions INSIDE the statement that writes: it calls Insert,
+// or its own statement is an INSERT..SELECT that selects the three columns. A
+// statement held as text (not an INSERT..SELECT) is only a column list that an
+// Insert caller reads. A read before a separate insert erases a value another
+// writer stored between the two, so no other shape passes; Carry is read for
+// a tally only.
+func TestEveryGoTeamsWriteCarriesTheProviderIdentityInItsStatement(t *testing.T) {
 	root, err := moduleroot.Root()
 	if err != nil {
 		t.Fatal(err)
 	}
 	columnNames := []string{ColumnProviderTeamID, ColumnProviderName, ColumnGoneAt}
-	found := 0
+	callers := map[string]bool{}
 	for _, top := range []string{"internal", "cmd"} {
 		walkErr := filepath.WalkDir(filepath.Join(root, top), func(path string, entry fs.DirEntry, err error) error {
 			if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return err
 			}
+			rel, _ := filepath.Rel(root, path)
+			rel = filepath.ToSlash(rel)
+			if strings.HasPrefix(rel, "internal/testsupport/") || strings.HasPrefix(rel, "internal/teamprovider/") {
+				return nil // test seeds, and the one shared statement builder
+			}
 			raw, err := os.ReadFile(path)
 			if err != nil {
 				return err
 			}
-			rel, _ := filepath.Rel(root, path)
-			if strings.HasPrefix(filepath.ToSlash(rel), "internal/testsupport/") {
-				return nil // test seeds, not a writer of production rows
-			}
 			source := string(raw)
+			if strings.Contains(source, "teamprovider.Insert(") {
+				callers[rel] = true
+			}
+			if strings.Contains(source, "teamprovider.Carry(") && !strings.Contains(source, "tally.Add(stored,") {
+				t.Errorf("%s: calls teamprovider.Carry outside a tally: a read before a separate insert", rel)
+			}
 			for _, at := range teamsInsert.FindAllStringIndex(source, -1) {
-				found++
 				statement := source[at[0]:min(at[0]+900, len(source))]
 				columns := statement[:strings.IndexByte(statement, ')')+1]
 				for _, column := range columnNames {
@@ -58,13 +78,9 @@ func TestEveryGoTeamsInsertCarriesTheProviderIdentity(t *testing.T) {
 					continue
 				}
 				for _, user := range statementUsers(source, at[0]) {
-					if !strings.Contains(user, "teamprovider.Carry(") {
-						t.Errorf("%s: a function that uses an INSERT INTO teams does not call teamprovider.Carry:\n%.200s", rel, user)
+					if !strings.Contains(user, "teamprovider.Insert(") {
+						t.Errorf("%s: a function that holds an INSERT INTO teams does not write it through teamprovider.Insert:\n%.200s", rel, user)
 					}
-				}
-				if !strings.Contains(source, "teamprovider.Merge(") && !strings.Contains(source, "teamprovider.Keep(") &&
-					!strings.Contains(source, "stored[") {
-					t.Errorf("%s: INSERT INTO teams lists the provider identity but the file never applies the carried values", rel)
 				}
 			}
 			return nil
@@ -73,37 +89,13 @@ func TestEveryGoTeamsInsertCarriesTheProviderIdentity(t *testing.T) {
 			t.Fatal(walkErr)
 		}
 	}
-	// A scan that finds nothing is not a pass: the writers known on 2026-10-15.
-	if found < 8 {
-		t.Fatalf("found %d INSERT INTO teams statements, want at least 8 (github, gitlab, jira, linear, atlassian, retire, push, admin store)", found)
-	}
-}
-
-// The team id carry (providersync/team_id_carry.go) rewrites teams rows under a
-// new id through a column list, not an INSERT INTO teams statement: its list
-// holds the three columns too.
-func TestTeamIDCarryRewritesTheProviderIdentity(t *testing.T) {
-	root, err := moduleroot.Root()
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(filepath.Join(root, "internal", "providersync", "team_id_carry.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	line := ""
-	for _, candidate := range strings.Split(string(raw), "\n") {
-		if strings.Contains(candidate, "teamIDCarryTeamsColumns") && strings.Contains(candidate, "= \"") {
-			line = candidate
+	for _, writer := range insertWriters {
+		if !callers[writer] {
+			t.Errorf("%s does not call teamprovider.Insert", writer)
 		}
 	}
-	if line == "" {
-		t.Fatal("teamIDCarryTeamsColumns not found")
-	}
-	for _, column := range []string{ColumnProviderTeamID, ColumnProviderName, ColumnGoneAt} {
-		if !strings.Contains(line, column) {
-			t.Errorf("teamIDCarryTeamsColumns does not list %s", column)
-		}
+	if len(callers) < len(insertWriters) {
+		t.Fatalf("found %d callers of teamprovider.Insert, want at least %d", len(callers), len(insertWriters))
 	}
 }
 

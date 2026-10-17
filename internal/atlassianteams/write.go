@@ -23,7 +23,6 @@ import (
 // (providersync/jira_team_catalog_effects_clickhouse.go), so both writers fill
 // the same physical tables the same way.
 const (
-	teamsInsert       = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at, provider_team_id, provider_name, gone_at)`
 	membershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
 	// ownershipInsert names its columns and omits last_synced on purpose: the server stamps it at insert time.
 	// last_synced = server insert time, not commit order across concurrent inserts. A reader must re-read a
@@ -570,6 +569,10 @@ func planOwnership(
 // writeTeams writes the catalog rows. keepProjectKeys keeps every team's
 // stored project keys (the links were not selected); keepKeysOf names the
 // teams that keep their stored keys next to the ones this run read.
+// teamsColumns is the teams columns writeTeams states; teamprovider.Insert
+// adds the provider identity in the same statement.
+var teamsColumns = []string{"id", "team_uuid", "name", "description", "manual_members", "project_keys", "repo_patterns", "is_active", "updated_at", "org_id", "provider", "native_team_key", "parent_team_id", "created_at"}
+
 func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []TeamRow, deactivate []inactiveTeam, now time.Time, keepProjectKeys bool, keepKeysOf map[string]bool) error {
 	ids := make([]string, len(teams))
 	for i, team := range teams {
@@ -593,15 +596,7 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 	if err != nil {
 		return err
 	}
-	stored, err := teamprovider.Carry(ctx, conn, orgID, carryIDs)
-	if err != nil {
-		return err
-	}
-	batch, err := conn.PrepareBatch(ctx, teamsInsert)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = batch.Abort() }()
+	writes := make([]teamprovider.Write, 0, len(teams)+len(deactivate))
 	for _, team := range teams {
 		manualMembers := manual[team.ID]
 		if manualMembers == nil {
@@ -620,27 +615,23 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 			keys = []string{}
 		}
 		nativeKey := team.NativeTeamKey
-		identity := teamprovider.Merge(stored, team.ID, providerTeamUUID(team.NativeTeamKey), team.Name)
-		if err := batch.Append(
-			team.ID, team.TeamUUID, team.Name, team.Description, manualMembers, keys, []string{},
-			team.IsActive, team.UpdatedAt, team.OrgID, team.Provider, &nativeKey, (*string)(nil),
-			teamcreated.For(createdAt, team.ID, team.UpdatedAt),
-			identity.ProviderTeamID, identity.ProviderName, identity.GoneAt,
-		); err != nil {
-			return err
-		}
+		writes = append(writes, teamprovider.Write{
+			Values: []any{
+				team.ID, team.TeamUUID, team.Name, team.Description, manualMembers, keys, []string{},
+				team.IsActive, team.UpdatedAt, team.OrgID, team.Provider, &nativeKey, (*string)(nil),
+				teamcreated.For(createdAt, team.ID, team.UpdatedAt),
+			},
+			ProviderTeamID: providerTeamUUID(team.NativeTeamKey), ProviderName: team.Name, Gone: teamprovider.GoneCleared,
+		})
 	}
 	for _, team := range deactivate {
-		if err := batch.Append(
+		writes = append(writes, teamprovider.Write{Values: []any{
 			team.id, team.teamUUID, team.name, team.description, team.manualMembers, team.projectKeys, team.repoPatterns,
 			uint8(0), now, orgID, Provider, team.nativeTeamKey, team.parentTeamID,
 			teamcreated.For(createdAt, team.id, now),
-			stored[team.id].ProviderTeamID, stored[team.id].ProviderName, stored[team.id].GoneAt,
-		); err != nil {
-			return err
-		}
+		}, Gone: teamprovider.GoneKept})
 	}
-	return batch.Send()
+	return teamprovider.Insert(ctx, conn, orgID, teamsColumns, writes)
 }
 
 func readProjectKeys(ctx context.Context, conn driver.Conn, orgID string, ids []string) (map[string][]string, error) {

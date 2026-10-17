@@ -227,9 +227,10 @@ func TestRealClickHouse_AIRollups(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Unattributed pull requests are human by default (chris, D6045).
 		unknownComments := func(rows []engagementRow) int64 {
 			for _, r := range rows {
-				if r.Bucket == "unknown" {
+				if r.Bucket == "human" {
 					return r.CommentsTotal
 				}
 			}
@@ -242,7 +243,7 @@ func TestRealClickHouse_AIRollups(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(byRepo) != 1 || byRepo[0].Bucket != "unknown" || byRepo[0].CommentsTotal != 777 {
+		if len(byRepo) != 1 || byRepo[0].Bucket != "human" || byRepo[0].CommentsTotal != 777 {
 			t.Fatalf("repo scope: %+v", byRepo)
 		}
 	})

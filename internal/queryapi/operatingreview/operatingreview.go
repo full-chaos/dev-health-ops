@@ -1029,6 +1029,12 @@ func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams 
 		if scanErr := rows.Scan(&bucket, &prsTotal, &aiAssistedPrs, &agentCreatedPrs, &humanPrs, &unknownPrs, &aiCycleTimeDelta, &aiReviewAmp, &reworkDrag, &testGap, &incidentDrag); scanErr != nil {
 			return nil, fmt.Errorf("operatingreview: ai_impact scan: %w", scanErr)
 		}
+		switch bucket {
+		case "bot":
+			// Neither AI nor human (chris, D6045): a bot pull request is still
+			// a pull request in the counts, but it is no AI measurement.
+			aiCycleTimeDelta, aiReviewAmp, reworkDrag, testGap, incidentDrag = nil, nil, nil, nil, nil
+		}
 		out = append(out, aiImpactRow{
 			prsTotal:              prsTotal,
 			aiAssistedPrs:         aiAssistedPrs,

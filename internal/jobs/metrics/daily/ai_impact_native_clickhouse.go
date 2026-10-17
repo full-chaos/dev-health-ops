@@ -96,7 +96,7 @@ func LoadAIImpactPullRequests(
 
 	rows, err := conn.Query(ctx, `
 SELECT repo_id, number, created_at, merged_at, reviews_count,
-       changes_requested_count, additions, deletions, changed_files
+       changes_requested_count, additions, deletions, changed_files, author_name
 FROM git_pull_requests FINAL
 WHERE org_id = ? AND repo_id IN ?
   AND ((created_at >= ? AND created_at < ?)
@@ -122,9 +122,10 @@ ORDER BY repo_id, number`,
 			additions             *uint32
 			deletions             *uint32
 			changedFiles          *uint32
+			authorName            *string
 		)
 		if err := rows.Scan(&repoID, &number, &createdAt, &mergedAt, &reviewsCount,
-			&changesRequestedCount, &additions, &deletions, &changedFiles); err != nil {
+			&changesRequestedCount, &additions, &deletions, &changedFiles, &authorName); err != nil {
 			return nil, fmt.Errorf("scan ai impact pull request row: %w", err)
 		}
 		// reviews_count / changes_requested_count are non-nullable UInt32 with
@@ -138,6 +139,7 @@ ORDER BY repo_id, number`,
 			RepoID: repoID, Number: int64(number), CreatedAt: createdAt, MergedAt: mergedAt,
 			ReviewsCount: &reviews, ChangesRequestedCount: &changesRequested,
 			Additions: additions, Deletions: deletions, ChangedFiles: changedFiles,
+			AuthorName: authorName,
 		})
 	}
 	if err := rows.Err(); err != nil {

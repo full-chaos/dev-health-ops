@@ -340,3 +340,51 @@ func TestFetchAIImpactAdoptionCountsEachBucketOnceNotTheRepeatedGroupCounts(t *t
 		t.Errorf("the pre-fix sum over the stored group-wide columns reads %v / %v, want 6 / 3 = 2: the planted overcount no longer reproduces", legacyAI, legacyTotal)
 	}
 }
+
+// The bot bucket is neither AI nor human: a bot pull request counts as a pull
+// request but must not enter the AI delta, amplification or risk-rate averages.
+// Adding one non-AI bot pull request to a day with one AI and one human row
+// used to move both deltas (executed by the codex round on this change:
+// 1.0 -> 6.67 and 0.5 -> 16.67).
+func TestFetchAIImpactBotRowsDoNotEnterTheAIMeasures(t *testing.T) {
+	ctx, admin, client := startOperatingReviewSchema(t)
+
+	repoID := "99999999-9999-4999-8999-999999999997"
+	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	insert := `INSERT INTO ai_impact_metrics_daily
+		(org_id, team_id, repo_id, work_type, day, attribution_bucket, prs_total,
+		 ai_cycle_time_delta_hours, ai_review_amplification, rework_drag_rate, computed_at)
+		VALUES ('org-9994', 'team-a', ?, 'feature', ?, ?, 1, ?, ?, ?, ?)`
+	add := func(bucket string, delta, amplification, rate float64) {
+		t.Helper()
+		if err := admin.Exec(ctx, insert, repoID, day, bucket, delta, amplification, rate, day.Add(time.Hour)); err != nil {
+			t.Fatalf("insert %s row: %v", bucket, err)
+		}
+	}
+	measures := func() (delta, amplification, rework, prs float64) {
+		t.Helper()
+		rows, err := fetchAIImpact(ctx, client, "org-9994", nil, day, day.AddDate(0, 0, 1))
+		if err != nil {
+			t.Fatalf("fetchAIImpact: %v", err)
+		}
+		return avgF(pluck(rows, func(r aiImpactRow) *float64 { return r.aiCycleTimeDeltaHours })),
+			avgF(pluck(rows, func(r aiImpactRow) *float64 { return r.aiReviewAmplification })),
+			avgF(pluck(rows, func(r aiImpactRow) *float64 { return r.reworkDragRate })),
+			sumF(pluck(rows, func(r aiImpactRow) *float64 { return f(r.prsTotal) }))
+	}
+	add("ai_assisted", 1, 0.5, 0.1)
+	add("human", 0, 0, 0.3)
+	delta, amplification, rework, prs := measures()
+	if prs != 2 {
+		t.Fatalf("setup: prs_total = %v, want 2", prs)
+	}
+	add("bot", 6.666667, 16.666667, 0.9)
+	botDelta, botAmplification, botRework, botPRs := measures()
+	if math.Abs(botDelta-delta) > 1e-9 || math.Abs(botAmplification-amplification) > 1e-9 || math.Abs(botRework-rework) > 1e-9 {
+		t.Errorf("a bot row moved the AI measures: delta %v -> %v, amplification %v -> %v, rework %v -> %v",
+			delta, botDelta, amplification, botAmplification, rework, botRework)
+	}
+	if botPRs != 3 {
+		t.Errorf("prs_total over all rows = %v, want 3: a bot pull request is still a pull request", botPRs)
+	}
+}

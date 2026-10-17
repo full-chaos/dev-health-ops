@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/discovery.v1.schema.json",
+  "title": "Auth Control Plane OpenID discovery metadata (v1 wire format)",
+  "description": "The document served at GET /.well-known/openid-configuration (TRD section 15): a deliberately small SUBSET of OpenID Connect Discovery 1.0 section 3 metadata. It exists so a resource service can find the issuer's JWKS (jwks.v1) from one configured issuer URL. The Auth Control Plane is not an OpenID Provider and publishes no authorization, token or userinfo endpoint here, so none is declared; `additionalProperties: false` makes adding one a v2 decision rather than an accident.\n\nTHREE THINGS A SCHEMA CAN SAY, and one it cannot.\n\n1. `issuer` and `jwks_uri` are https URLs with a fixed shape (no userinfo, query or fragment, lowercase ASCII host, no trailing slash on the issuer), written with explicit character ranges so Go RE2, Python and ECMA-262 agree.\n2. `id_token_signing_alg_values_supported` is exactly [\"EdDSA\"] (TRD section 11). No symmetric algorithm and no `none` can be advertised.\n3. `dev_health_key_use` is the platform's separation of key uses. TRD section 12 says platform access/workload-token keys and ACR Web-assertion keys are separate issuers and separate key uses. OpenID Connect Discovery permits additional metadata members, and this one is how a document from the wrong issuer becomes DETECTABLE rather than merely unlikely: a verifier of platform tokens refuses any document whose value is not `platform_token`, so an ACR Web-assertion issuer's discovery document (which would carry a different value) cannot be mistaken for the platform one even if the URLs were confused.\n\nTHE ONE THING IT CANNOT SAY: `jwks_uri` must be `issuer` + `/.well-known/jwks.json`, and the `issuer` must be the one the verifier was configured to trust. JSON Schema cannot compare two members of one instance, let alone an instance against configuration. Both checks are CLIENT rules (internal/auth/contracts ParseDiscovery, authclient.discovery.parse_discovery), pinned by the manifest's `reject_by_client` fixtures, which are valid against this schema on purpose. OpenID Connect Discovery section 4.3 requires the same comparison of a fetched `issuer` with the URL it was fetched from.\n\nPlain http is not part of this wire format. A loopback or Compose deployment that serves http is a local-development configuration (TRD section 6) and does not publish a conforming v1 document.",
+  "type": "object",
+  "required": [
+    "issuer",
+    "jwks_uri",
+    "id_token_signing_alg_values_supported",
+    "dev_health_key_use"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "issuer": {
+      "type": "string",
+      "pattern": "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$",
+      "description": "The issuer identifier: an https origin with an optional path prefix. No trailing slash, query, fragment or userinfo (OpenID Connect Discovery section 3). It equals the `iss` of every token this issuer signs."
+    },
+    "jwks_uri": {
+      "type": "string",
+      "pattern": "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}/[.]well-known/jwks[.]json$",
+      "description": "Where the issuer's jwks.v1 document is served. Must equal `issuer` + `/.well-known/jwks.json`; the schema pins only the shape, the equality is a client rule (see the schema description)."
+    },
+    "id_token_signing_alg_values_supported": {
+      "type": "array",
+      "const": [
+        "EdDSA"
+      ],
+      "description": "Exactly EdDSA, TRD section 11. A const rather than an enum-in-items so that an added algorithm, `none` and symmetric algorithms included, fails as a whole."
+    },
+    "dev_health_key_use": {
+      "const": "platform_token",
+      "description": "The key use of the keys behind `jwks_uri`: platform access/workload tokens. Any other value, including the ACR Web-assertion use, is not a platform token issuer."
+    }
+  }
+}

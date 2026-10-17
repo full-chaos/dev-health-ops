@@ -157,7 +157,7 @@ func TestLoadPrivateKeyFromFileAcceptsGeneratedKeyFile(t *testing.T) {
 // it ever formatted input into an error: the PEM label, the PEM body, the DER
 // body, and a prefix of a real key.
 func TestNoLoadPathEchoesKeyInput(t *testing.T) {
-	const secret = "ZmFrZS1zZWNyZXQtbWF0ZXJpYWwtMDEyMzQ1Njc4OWFiY2RlZg"
+	secret := strings.Repeat("needle", 6)
 	good := testKeyPEM(t)
 	realBody := strings.Split(good, "\n")[1]
 	cases := map[string]string{

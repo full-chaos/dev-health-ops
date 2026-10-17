@@ -322,16 +322,13 @@ func mustLoadMetricRegistry() map[string]metricDefinition {
 // and applied to each entry at load (applyGoDeclarations).
 //
 // registryTableToSchemaTable maps a source table the registry names to the
-// table the migrations create. The Python registry names two tables that no
-// migration builds, and one it still names that the Go writers retired: the rule
-// classifier's investment_metrics_daily is no longer written (CHAOS-9264), and
-// its counts are read from work_item_completion_daily. The registry's
+// table the migrations create. The registry names one table that the Go writers
+// retired: the rule classifier's investment_metrics_daily is no longer written
+// (CHAOS-9264), and its counts are read from work_item_completion_daily. The registry's
 // investment_area and project_stream entries stay text and are refused as
 // charts; churn_loc is read from the new table (NULL there when no sized pull request is linked, CHAOS-9920).
 var registryTableToSchemaTable = map[string]string{
-	"ic_landscape_rolling":           "ic_landscape_rolling_30d",
-	"work_item_state_duration_daily": "work_item_state_durations_daily",
-	"investment_metrics_daily":       "work_item_completion_daily",
+	"investment_metrics_daily": "work_item_completion_daily",
 }
 
 // nonNumericMetrics names the registry entries whose column is not a number:

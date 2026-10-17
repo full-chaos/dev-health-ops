@@ -55,6 +55,7 @@ internal/identityalias
 internal/jobcontract
 internal/joboutbox
 internal/jobruntime
+internal/jobs/investment/categorize
 internal/jobs/metrics/querybound
 internal/jobs/metrics/workitemblockers
 internal/jobs/metrics/workitemengine

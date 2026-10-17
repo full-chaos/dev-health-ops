@@ -30,7 +30,7 @@ Allowed values for top_findings[].evidence.theme and .subcategory (copy the key 
 - theme must be one of these five keys: feature_delivery, operational, maintenance, quality, risk.
   Labels for prose: feature_delivery = Feature Delivery; operational = Operational / Support; maintenance = Maintenance / Tech Debt; quality = Quality / Reliability; risk = Risk / Security.
 - subcategory must be null or one of these keys that also appears in the "subcategory" fields of subcategory_distribution_top: feature_delivery.customer, feature_delivery.enablement, feature_delivery.roadmap, maintenance.debt, maintenance.refactor, maintenance.upgrade, operational.incident_response, operational.on_call, operational.support, quality.bugfix, quality.reliability, quality.testing, risk.compliance, risk.security, risk.vulnerability. Its theme prefix must equal the theme of the same finding.
-- Use only keys that appear in theme_distribution_top and subcategory_distribution_top. If those lists are empty, return "top_findings": [].
+- Use only keys that appear in theme_distribution_top and subcategory_distribution_top. subcategory_distribution_top already lists only the subcategories of focus.theme when focus.theme is set, so never name a subcategory of another theme; use null when no listed subcategory fits. If those lists are empty, return "top_findings": [].
 - Example row: {"finding": "Quality / Reliability appears to lead the mix, with Bugfix work leaning highest.", "evidence": {"theme": "quality", "subcategory": "quality.bugfix", "share_pct": 0.0, "delta_pct_points": null, "evidence_quality_mean": null, "evidence_quality_band": null}}
 
 Rules:

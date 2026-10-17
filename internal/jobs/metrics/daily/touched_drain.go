@@ -341,11 +341,13 @@ WHERE org_id = $1::uuid AND generation = $2 AND touched_take_at IS NULL`,
 // The others are bounded by the drain itself: a pass starts runs only when no
 // drain run is in flight, so every batch of the drain (the runs one pass
 // started, one generation) ended before the next pass reaches this check, and
-// the pass before it checked what came before its batch. Only the runs created
-// since the start of the second newest ended batch are read (the newest batch is
-// the previous pass's; the one before it is kept as a margin, and fan-out runs
-// that were in flight at that pass are newer than it). With fewer than two ended
-// batches the window alone bounds the read.
+// the pass before it checked what came before its batch. Only the runs that
+// ENDED since the start of the second newest ended batch are read (the newest
+// batch is the previous pass's; the one before it is kept as a margin). The cut
+// is the end of a run, not its start: a fan-out run that began before that
+// batch and was still running when the earlier pass looked is read by the first
+// pass after it ended. With fewer than two ended batches the window alone bounds
+// the read.
 //
 // A run that is not ended is left out on purpose: the mark of a fan-out follows
 // its commit by a moment, and a pass in that moment must not read the missing
@@ -381,7 +383,7 @@ func (store *PostgresStore) TouchedMarkingRunsToCheck(
   AND run.created_at >= clock_timestamp() - make_interval(secs => $5)
   AND (to_jsonb(run) ->> 'touched_take_at') IS NOT NULL
   AND ($4::uuid IS NULL OR run.id <> $4::uuid)
-  AND run.created_at >= COALESCE((
+  AND run.updated_at >= COALESCE((
         SELECT min(previous.created_at)
         FROM public.daily_metrics_runs AS previous
         WHERE previous.org_id = $1::uuid

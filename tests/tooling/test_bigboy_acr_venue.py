@@ -11,6 +11,7 @@ import json
 import re
 
 from tests.tooling.test_bigboy_one_compose_file import (
+    COMPOSE_FILE,
     PINS_FILE,
     STACK_SERVICES,
     config,
@@ -199,7 +200,6 @@ def test_the_start_order_of_the_acr_stack_is_kept(tmp_path) -> None:
     assert cond["acr-api"] == {
         "acr-postgres": "service_healthy",
         "acr-db-acl": "service_completed_successfully",
-        "acr-entitlement-standin": "service_healthy",
     }
     assert cond["acr-projector"] == {
         "acr-postgres": "service_healthy",
@@ -208,19 +208,54 @@ def test_the_start_order_of_the_acr_stack_is_kept(tmp_path) -> None:
     assert cond["acr-mcp"] == {"acr-api": "service_started"}
 
 
-def test_the_org_llm_config_source_is_passed_through_and_empty_by_default(
+def test_acr_api_talks_to_the_real_ops_and_the_stand_in_is_off_its_path(
     tmp_path,
 ) -> None:
     root = scratch_root(tmp_path)
-    env = services(root, "acr")["acr-api"]["environment"]
-    assert env["ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"] == ""
-    on = services(root, "acr", ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE="ops")
+    svc = services(root, "acr")
+    env = svc["acr-api"]["environment"]
+    # the go-api internal listener by alias, never an address; the bearer is a file-backed secret named acr_ops_svc_token
+    assert env["ACR_DEV_HEALTH_ENTITLEMENT_URL"] == "http://go-api:8091"
     assert (
-        on["acr-api"]["environment"]["ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"]
-        == "ops"
+        env["ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE"] == "/run/secrets/acr_ops_svc_token"
     )
+    assert "acr_ops_svc_token" in svc["acr-api"]["secrets"] or any(
+        s["source"] == "acr_ops_svc_token" for s in svc["acr-api"]["secrets"]
+    )
+    assert "acr-entitlement-standin" not in svc["acr-api"].get("depends_on", {})
+    # the removed setting stays removed
+    assert "ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES" not in env
+    proc = config(root, "acr")
+    secret = json.loads(proc.stdout)["secrets"]["acr_ops_svc_token"]
+    assert secret["file"] == "/var/lib/oci-cache/mcp-venue/secrets/ops_svc_acr_token"
+    # acr-api reaches go-api on a network go-api is on
+    assert "dho-query-internal" in svc["acr-api"]["networks"]
+    assert "dho-query-internal" in services(root)["go-api"]["networks"]
+
+
+def test_the_org_llm_config_source_is_passed_through_and_set_by_the_env_file(
+    tmp_path,
+) -> None:
+    root = scratch_root(tmp_path)
+    pins = dict(
+        line.split("=", 1)
+        for line in PINS_FILE.read_text().splitlines()
+        if line and not line.startswith("#")
+    )
+    # the bigboy env file sets it; the compose file never hard-codes it
+    assert pins["ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"] == "ops"
+    assert "ORG_LLM_CONFIG_SOURCE: ops" not in COMPOSE_FILE.read_text()
+    key = "ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"
+    assert services(root, "acr")["acr-api"]["environment"][key] == "ops"
+    # without it in the env file the value is empty, which acr reads as unset
+    (root / "_records" / "images.env").write_text(
+        "\n".join(
+            line
+            for line in PINS_FILE.read_text().splitlines()
+            if not line.startswith(key)
+        )
+        + "\n"
+    )
+    assert services(root, "acr")["acr-api"]["environment"][key] == ""
     # only acr-api reads it
-    assert (
-        "ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"
-        not in services(root, "acr")["acr-projector"]["environment"]
-    )
+    assert key not in services(root, "acr")["acr-projector"]["environment"]

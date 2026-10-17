@@ -161,11 +161,18 @@ func ResolveModelNameForOrg(
 				if orgModel != "" {
 					return orgModel, true
 				}
+				// The organization's own provider: the platform purpose
+				// model is not tied to it, so it does not apply here.
 				if def, ok := platformDefaultModel(kind); ok {
 					return def, true
 				}
 				return "", false
 			}
+		}
+	}
+	if _, resolved := modelEnvByProvider[kind]; resolved {
+		if value := llmbudget.PlatformPurposeModel(explainPurpose, envsecrets.ProcessLookup); value != "" {
+			return value, true
 		}
 	}
 	for _, envName := range modelEnvByProvider[kind] {

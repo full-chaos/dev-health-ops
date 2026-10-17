@@ -147,6 +147,22 @@ func packageDefaultModel(provider string) string {
 	return ""
 }
 
+// PlatformPurposeModel is the ops platform setting that names the model of
+// one purpose (LLM_MODEL_EXPLAIN, LLM_MODEL_INVESTIGATE, LLM_MODEL_CATEGORIZE),
+// "" when unset. It is not tied to a provider, so a caller applies it only on
+// the platform path (never to an organization's own provider), between the
+// organization's configured model and the provider-level settings (D6071).
+func PlatformPurposeModel(purpose string, lookup LookupEnv) string {
+	if lookup == nil {
+		return ""
+	}
+	value, ok := lookup("LLM_MODEL_" + strings.ToUpper(purpose))
+	if !ok {
+		return ""
+	}
+	return pythonparity.Strip(value)
+}
+
 // DefaultModel is the model a provider's call uses when neither the request
 // nor the organization's settings name one: the ops platform setting for
 // that provider (its own LLM_MODEL_<PROVIDER> name, or the generic LLM_MODEL

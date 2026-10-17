@@ -67,6 +67,11 @@ func ResolveModelName(kind categorize.ProviderKind, model string) (resolved stri
 	if model != "" {
 		return model, true
 	}
+	if _, resolved := modelEnvByProvider[kind]; resolved {
+		if value := llmbudget.PlatformPurposeModel(explainPurpose, envsecrets.ProcessLookup); value != "" {
+			return value, true
+		}
+	}
 	for _, envName := range modelEnvByProvider[kind] {
 		if value := os.Getenv(envName); value != "" {
 			return value, true
@@ -80,6 +85,10 @@ func ResolveModelName(kind categorize.ProviderKind, model string) (resolved stri
 	}
 	return "", false
 }
+
+// explainPurpose names this package's purpose in the platform purpose model
+// setting (LLM_MODEL_EXPLAIN).
+const explainPurpose = "explain"
 
 // IsLLMAvailable ports is_llm_available (llm/providers/__init__.py:
 // 224-229), narrowed to categorize.ResolveProviderKind's own platform-

@@ -132,6 +132,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -1030,10 +1031,14 @@ func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams 
 			return nil, fmt.Errorf("operatingreview: ai_impact scan: %w", scanErr)
 		}
 		switch bucket {
-		case "bot":
-			// Neither AI nor human (chris, D6045): a bot pull request is still
-			// a pull request in the counts, but it is no AI measurement.
+		case "ai_assisted", "agent_created", "ai_review":
+		default:
+			// Only AI buckets measure AI impact. Human rows are the baseline
+			// the deltas are taken against (CHAOS-10020) and bot rows are
+			// neither AI nor human (chris, D6045); both still count as pull
+			// requests, but neither is a term in an AI average.
 			aiCycleTimeDelta, aiReviewAmp, reworkDrag, testGap, incidentDrag = nil, nil, nil, nil, nil
+			slog.DebugContext(ctx, "operatingreview: non-AI bucket excluded from AI measures", "bucket", bucket)
 		}
 		out = append(out, aiImpactRow{
 			prsTotal:              prsTotal,

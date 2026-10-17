@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -117,17 +118,65 @@ func MonthWindow(now time.Time) (start, reset time.Time) {
 	return start, start.AddDate(0, 1, 0)
 }
 
-// DefaultModelByProvider is llm/providers/base.py's DEFAULT_MODEL_BY_PROVIDER.
-var DefaultModelByProvider = map[string]string{
-	"openai":        "gpt-5-mini",
-	"anthropic":     "claude-3-haiku-20240307",
-	"gemini":        "gemini-3",
-	"local":         "llama3.2",
-	"ollama":        "llama3.2",
-	"lmstudio":      "local-model",
-	"qwen":          "qwen-plus",
-	"qwen-local":    "qwen2.5:7b",
-	"qwen-lmstudio": "local-model",
+// providerModelEnv is the ops platform setting that names a provider's model
+// (credentials.py's _MODEL_ENV_BY_PROVIDER), in priority order.
+var providerModelEnv = map[string][]string{
+	"openai":    {"LLM_MODEL_OPENAI"},
+	"anthropic": {"LLM_MODEL_ANTHROPIC"},
+	"gemini":    {"LLM_MODEL_GEMINI", "GEMINI_MODEL"},
+	"qwen":      {"LLM_MODEL_QWEN", "QWEN_MODEL"},
+	"local":     {"LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"},
+	"ollama":    {"LLM_MODEL_OLLAMA", "OLLAMA_MODEL"},
+}
+
+// packageDefaultModel is the model a provider kind uses when nothing names
+// one: the shared llm package's default for every kind it serves (each a
+// current, listed model); base.py's values for the names no Go client
+// serves.
+func packageDefaultModel(provider string) string {
+	switch provider {
+	case "openai", "anthropic", "gemini", "qwen", "local":
+		return llm.DefaultModel(llm.Kind(provider))
+	case "ollama":
+		return "llama3.2"
+	case "lmstudio", "qwen-lmstudio":
+		return "local-model"
+	case "qwen-local":
+		return "qwen2.5:7b"
+	}
+	return ""
+}
+
+// DefaultModel is the model a provider's call uses when neither the request
+// nor the organization's settings name one: the ops platform setting for
+// that provider (its own LLM_MODEL_<PROVIDER> name, or the generic LLM_MODEL
+// when LLM_PROVIDER names this provider), else the shared package's default.
+// The explain routes, the categorize worker and the admin budget status all
+// read this one resolver, so the status prices the model that would run
+// (ruling D6043). "" for a provider with no default.
+func DefaultModel(provider string, lookup LookupEnv) string {
+	normalized := pythonparity.Lower(pythonparity.Strip(provider))
+	set := func(name string) string {
+		if lookup == nil {
+			return ""
+		}
+		value, ok := lookup(name)
+		if !ok {
+			return ""
+		}
+		return pythonparity.Strip(value)
+	}
+	for _, name := range providerModelEnv[normalized] {
+		if value := set(name); value != "" {
+			return value
+		}
+	}
+	if platform := pythonparity.Lower(set("LLM_PROVIDER")); platform != "" && platform == normalized {
+		if value := set("LLM_MODEL"); value != "" {
+			return value
+		}
+	}
+	return packageDefaultModel(normalized)
 }
 
 // Reason is BudgetReason.
@@ -198,12 +247,12 @@ func Compute(ctx context.Context, db DB, lookup LookupEnv, orgID string, in Inpu
 	if in.BaseURL != nil {
 		baseURL = *in.BaseURL
 	}
-	priced, err := ReliablePrice(in.Provider, in.Model, baseURL)
+	price, err := PriceAt(in.Provider, in.Model, baseURL, now)
 	if err != nil {
 		return Status{}, err
 	}
 	base := Status{Window: Window, ResetAt: resetAt, MaximumLimit: maximum}
-	if !priced {
+	if price == nil {
 		base.Limit = limit
 		base.EnforcementAvail = false
 		base.Reason = ReasonPricingUnavailable
@@ -212,7 +261,7 @@ func Compute(ctx context.Context, db DB, lookup LookupEnv, orgID string, in Inpu
 		}
 		return base, nil
 	}
-	version := PricingVersion
+	version := price.Version
 	base.PricingVersion = &version
 
 	used := new(big.Int)
@@ -359,8 +408,17 @@ func canonicalPricedModel(model string) (string, bool) {
 // prices this provider, model and endpoint. An absent pair is unavailable,
 // never zero.
 func ReliablePrice(provider, model, baseURL string) (bool, error) {
-	rates, err := PriceRates(provider, model, baseURL)
-	return rates != nil, err
+	price, err := PriceAt(provider, model, baseURL, time.Now())
+	return price != nil, err
+}
+
+// pricingVersionOf is the version stored with a reservation: the version of
+// the list that priced it.
+func pricingVersionOf(status Status) string {
+	if status.PricingVersion != nil {
+		return *status.PricingVersion
+	}
+	return PricingVersion
 }
 
 // PriceRates is reliable_price: the rates of this provider, model and

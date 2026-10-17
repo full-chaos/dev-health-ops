@@ -1,0 +1,70 @@
+{
+  "id": "chatcmpl-2bb156e6-a09f-42dd-8709-3ee85c33c403",
+  "object": "chat.completion",
+  "created": 1792172162,
+  "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"evidence_quotes\":[{\"id\":\"E1\",\"quote\":\"The nightly export worker times out for workspaces over 10k items\",\"source\":\"issue\"}],\"subcategories\":{\"feature_delivery.customer\":0.0,\"feature_delivery.enablement\":0.0,\"feature_delivery.roadmap\":0.0,\"maintenance.debt\":0.0,\"maintenance.refactor\":0.0,\"maintenance.upgrade\":0.0,\"operational.incident_response\":0.0,\"operational.on_call\":0.0,\"operational.support\":0.0,\"quality.bugfix\":0.0,\"quality.reliability\":0.8,\"quality.testing\":0.0,\"risk.compliance\":0.0,\"risk.security\":0.0,\"risk.vulnerability\":0.0},\"uncertainty\":\"Uncertainty about the exact impact of the timeout on system reliability.\"}",
+        "refusal": null,
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "reasoning": "\nOkay, let's tackle this. The user wants me to categorize the given evidence into the canonical subcategories. The source text is an issue report about an export job timing out for large workspaces. The key points here are that it's a bug (since the type is Bug) and the solution involves a streamed writer with retries.\n\nFirst, I need to check all 15 subcategories. The main issue here is a timeout in the export job, which is a problem with the system's reliability. So quality.reliability might be a candidate. But also, since it's a bug, quality.bugfix could be relevant. However, the problem is about the system's ability to handle large workspaces, which might relate to reliability. \n\nLooking at the subcategories again: quality.reliability deals with system stability and performance under load. The timeout suggests that the system isn't reliable under heavy conditions. On the other hand, quality.bugfix is for fixing specific bugs. The issue here is more about system reliability than a specific bug. \n\nMaintenance categories like maintenance.debt or refactor don't seem to fit. Operational categories like incident response or support aren't directly related. Risk categories like security or compliance aren't mentioned. Feature delivery subcategories also don't apply here. \n\nSo the primary category would be quality.reliability. But the type is Bug, so maybe quality.bugfix? Wait, the problem is a bug that's causing reliability issues. However, the categorization is about the type of work. Since the fix involves a streamed writer with retries, which is more about improving reliability, I think quality.reliability is the right choice. \n\nBut I need to make sure. The evidence quote is \"The nightly export worker times out for workspaces over 10k items and needs a streamed writer with retries.\" This points to a reliability issue under load. So quality.reliability gets a higher weight. However, since it's a bug, maybe quality.bugfix also gets some weight. But according to the rules, I should use the exact subcategories. \n\nThe user's example might have similar cases. Let me check the rules again. The weights should reflect how strongly the evidence supports each subcategory. The evidence here is about a system failure under load, which is reliability. So I'll assign a higher weight to quality.reliability. The other subcategories should be zero. \n\nThe evidence quote needs to be a 5-18 word substring. The exact quote from the source is \"The nightly export worker times out for workspaces over 10k items and needs a streamed writer with retries.\" That's more than 18 words. Let me count: \"The nightly export worker times out for workspaces over 10k items and needs a streamed writer with retries.\" That's 20 words. So I need to shorten it. Maybe take \"The nightly export worker times out for workspaces over 10k items\" which is 12 words. Or \"needs a streamed writer with retries\" which is 6 words. But the user said to copy 5-18 consecutive words. So I can take a part of the quote. Let me check the exact source text again. The source is: \"Export job times out for large workspaces The nightly export worker times out for workspaces over 10k items and needs a streamed writer with retries. Type: Bug\". So the actual text is \"The nightly export worker times out for workspaces over 10k items and needs a streamed writer with retries.\" So I can take \"The nightly export worker times out for workspaces over 10k items\" as the quote. That's 12 words. The source is \"issue\" and the id is \"E1\". \n\nUncertainty: The uncertainty might be about the exact impact or if there are other factors. So a short string like \"Uncertainty about the exact impact of the timeout on system reliability.\"\n",
+        "reasoning_content": "\nOkay, let's tackle this. The user wants me to categorize the given evidence into the canonical subcategories. The source text is an issue report about an export job timing out for large workspaces. The key points here are that it's a bug (since the type is Bug) and the solution involves a streamed writer with retries.\n\nFirst, I need to check all 15 subcategories. The main issue here is a timeout in the export job, which is a problem with the system's reliability. So quality.reliability might be a candidate. But also, since it's a bug, quality.bugfix could be relevant. However, the problem is about the system's ability to handle large workspaces, which might relate to reliability. \n\nLooking at the subcategories again: quality.reliability deals with system stability and performance under load. The timeout suggests that the system isn't reliable under heavy conditions. On the other hand, quality.bugfix is for fixing specific bugs. The issue here is more about system reliability than a specific bug. \n\nMaintenance categories like maintenance.debt or refactor don't seem to fit. Operational categories like incident response or support aren't directly related. Risk categories like security or compliance aren't mentioned. Feature delivery subcategories also don't apply here. \n\nSo the primary category would be quality.reliability. But the type is Bug, so maybe quality.bugfix? Wait, the problem is a bug that's causing reliability issues. However, the categorization is about the type of work. Since the fix involves a streamed writer with retries, which is more about improving reliability, I think quality.reliability is the right choice. \n\nBut I need to make sure. The evidence quote is \"The nightly export worker times out for workspaces over 10k items and needs a streamed writer with retries.\" This points to a reliability issue under load. So quality.reliability gets a higher weight. However, since it's a bug, maybe quality.bugfix also gets some weight. But according to the rules, I should use the exact subcategories. \n\nThe user's example might have similar cases. Let me check the rules again. The weights should reflect how strongly the evidence supports each subcategory. The evidence here is about a system failure under load, which is reliability. So I'll assign a higher weight to quality.reliability. The other subcategories should be zero. \n\nThe evidence quote needs to be a 5-18 word substring. The exact quote from the source is \"The nightly export worker times out for workspaces over 10k items and needs a streamed writer with retries.\" That's more than 18 words. Let me count: \"The nightly export worker times out for workspaces over 10k items and needs a streamed writer with retries.\" That's 20 words. So I need to shorten it. Maybe take \"The nightly export worker times out for workspaces over 10k items\" which is 12 words. Or \"needs a streamed writer with retries\" which is 6 words. But the user said to copy 5-18 consecutive words. So I can take a part of the quote. Let me check the exact source text again. The source is: \"Export job times out for large workspaces The nightly export worker times out for workspaces over 10k items and needs a streamed writer with retries. Type: Bug\". So the actual text is \"The nightly export worker times out for workspaces over 10k items and needs a streamed writer with retries.\" So I can take \"The nightly export worker times out for workspaces over 10k items\" as the quote. That's 12 words. The source is \"issue\" and the id is \"E1\". \n\nUncertainty: The uncertainty might be about the exact impact or if there are other factors. So a short string like \"Uncertainty about the exact impact of the timeout on system reliability.\"\n"
+      },
+      "logprobs": null,
+      "finish_reason": "stop",
+      "stop_reason": null,
+      "token_ids": null,
+      "routed_experts": null
+    }
+  ],
+  "service_tier": null,
+  "usage": {
+    "prompt_tokens": 684,
+    "completion_tokens": 1001,
+    "total_tokens": 1685,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "neurons": 33.66845703125
+  },
+  "prompt_logprobs": null,
+  "prompt_token_ids": null,
+  "prompt_text": null,
+  "kv_transfer_params": null,
+  "ec_transfer_params": null,
+  "metrics": null,
+  "response": {
+    "evidence_quotes": [
+      {
+        "id": "E1",
+        "quote": "The nightly export worker times out for workspaces over 10k items",
+        "source": "issue"
+      }
+    ],
+    "subcategories": {
+      "feature_delivery.customer": 0,
+      "feature_delivery.enablement": 0,
+      "feature_delivery.roadmap": 0,
+      "maintenance.debt": 0,
+      "maintenance.refactor": 0,
+      "maintenance.upgrade": 0,
+      "operational.incident_response": 0,
+      "operational.on_call": 0,
+      "operational.support": 0,
+      "quality.bugfix": 0,
+      "quality.reliability": 0.8,
+      "quality.testing": 0,
+      "risk.compliance": 0,
+      "risk.security": 0,
+      "risk.vulnerability": 0
+    },
+    "uncertainty": "Uncertainty about the exact impact of the timeout on system reliability."
+  },
+  "tool_calls": []
+}

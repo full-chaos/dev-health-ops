@@ -152,13 +152,20 @@ type Call struct {
 // CostMicroUSD is cost_micro_usd: ceil of the priced token counts, nil when the
 // call is unpriced or the counts are inconsistent.
 func CostMicroUSD(provider, model, baseURL string, input, output, cached int64) (*int64, error) {
-	rates, err := PriceRates(provider, model, baseURL)
-	if err != nil || rates == nil {
+	return CostMicroUSDAt(provider, model, baseURL, input, output, cached, time.Now())
+}
+
+// CostMicroUSDAt is CostMicroUSD for a call made at the moment at, at the
+// rates in effect then.
+func CostMicroUSDAt(provider, model, baseURL string, input, output, cached int64, at time.Time) (*int64, error) {
+	price, err := PriceAt(provider, model, baseURL, at)
+	if err != nil || price == nil {
 		return nil, err
 	}
 	if input < 0 || output < 0 || cached < 0 || cached > input {
 		return nil, nil
 	}
+	rates := price.Rates
 	numerator := new(big.Int).Mul(big.NewInt(input-cached), big.NewInt(rates.Input))
 	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(cached), big.NewInt(rates.CachedInput)))
 	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(output), big.NewInt(rates.Output)))
@@ -194,13 +201,14 @@ func (g Guard) RefuseUnderBudget(ctx context.Context) error {
 // Run reserves, invokes and settles one call. invoke runs with no transaction
 // open and returns the usage the provider reported.
 func (g Guard) Run(ctx context.Context, call Call, invoke func(context.Context) (Usage, error)) error {
-	maxCost, err := CostMicroUSD(g.Provider, g.Model, g.BaseURL, max(call.MaxInputTokens, 0), max(call.MaxOutputTokens, 0), 0)
+	now := g.now()
+	maxCost, err := CostMicroUSDAt(g.Provider, g.Model, g.BaseURL, max(call.MaxInputTokens, 0), max(call.MaxOutputTokens, 0), 0, now)
 	if err != nil {
 		return accounting("BYO LLM budget reservation is temporarily unavailable.", err)
 	}
 	admission, err := g.Store.Admit(ctx, AdmitRequest{
 		OrgID: g.OrgID, Provider: g.Provider, Model: g.Model, BaseURL: g.BaseURL,
-		IdempotencyKey: call.IdempotencyKey, MaxCost: maxCost, Now: g.now(), Lookup: g.Lookup,
+		IdempotencyKey: call.IdempotencyKey, MaxCost: maxCost, Now: now, Lookup: g.Lookup,
 	})
 	if err != nil {
 		return err
@@ -227,12 +235,12 @@ func (g Guard) Run(ctx context.Context, call Call, invoke func(context.Context) 
 				reported = reporter.ReportedUsage()
 			}
 		}
-		if settleErr := g.settle(ctx, admission.ID, outcome, reported); settleErr != nil {
+		if settleErr := g.settle(ctx, admission.ID, outcome, reported, now); settleErr != nil {
 			return errors.Join(accounting("BYO LLM budget accounting is temporarily unavailable.", settleErr), invokeErr)
 		}
 		return invokeErr
 	}
-	billed, settleErr := g.settleWithBilled(ctx, admission.ID, OutcomeSucceeded, usage)
+	billed, settleErr := g.settleWithBilled(ctx, admission.ID, OutcomeSucceeded, usage, now)
 	if settleErr != nil {
 		return accounting("BYO LLM budget accounting is temporarily unavailable.", settleErr)
 	}
@@ -242,12 +250,15 @@ func (g Guard) Run(ctx context.Context, call Call, invoke func(context.Context) 
 	return nil
 }
 
-func (g Guard) settle(ctx context.Context, id string, outcome Outcome, usage Usage) error {
-	_, err := g.settleWithBilled(ctx, id, outcome, usage)
+func (g Guard) settle(ctx context.Context, id string, outcome Outcome, usage Usage, pricedAt time.Time) error {
+	_, err := g.settleWithBilled(ctx, id, outcome, usage, pricedAt)
 	return err
 }
 
-func (g Guard) settleWithBilled(ctx context.Context, id string, outcome Outcome, usage Usage) (*int64, error) {
+// settleWithBilled prices the usage at pricedAt, the moment the call was
+// admitted: a call is priced once, so a dated price change between its
+// reservation and its settlement never reprices it.
+func (g Guard) settleWithBilled(ctx context.Context, id string, outcome Outcome, usage Usage, pricedAt time.Time) (*int64, error) {
 	timeout := g.SettleTimeout
 	if timeout <= 0 {
 		timeout = 15 * time.Second
@@ -258,7 +269,7 @@ func (g Guard) settleWithBilled(ctx context.Context, id string, outcome Outcome,
 	defer cancel()
 	request := SettleRequest{ID: id, Outcome: outcome, Usage: usage, Now: g.now()}
 	if outcome != OutcomeVoided && usage.InputTokens != nil && usage.OutputTokens != nil && usage.CachedInputTokens != nil {
-		cost, err := CostMicroUSD(g.Provider, g.Model, g.BaseURL, *usage.InputTokens, *usage.OutputTokens, *usage.CachedInputTokens)
+		cost, err := CostMicroUSDAt(g.Provider, g.Model, g.BaseURL, *usage.InputTokens, *usage.OutputTokens, *usage.CachedInputTokens, pricedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -353,7 +364,7 @@ func (s PgStore) Admit(ctx context.Context, request AdmitRequest) (Admission, er
 	if err := tx.QueryRow(ctx, `INSERT INTO byo_llm_budget_reservations
 (id, org_id, window_start, idempotency_key, provider, model, reserved_micro_usd, status, pricing_version, created_at)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'reserved', $7, $8) RETURNING id::text`,
-		org, windowStart, digest, request.Provider, request.Model, *request.MaxCost, PricingVersion, request.Now.UTC()).Scan(&id); err != nil {
+		org, windowStart, digest, request.Provider, request.Model, *request.MaxCost, pricingVersionOf(status), request.Now.UTC()).Scan(&id); err != nil {
 		return Admission{}, unavailable(err)
 	}
 	if err := tx.Commit(ctx); err != nil {

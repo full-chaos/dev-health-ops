@@ -226,22 +226,14 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 		if affected < 0 || affected > 1 {
 			return LeaseRepairResult{}, ErrUnavailable
 		}
-		if affected == 1 && (len(wakeRuns) == 0 || wakeRuns[len(wakeRuns)-1] != candidate.syncRunID) {
-			wakeRuns = append(wakeRuns, candidate.syncRunID)
+		if affected == 1 {
+			wakeRuns = appendWakeRun(wakeRuns, candidate.syncRunID)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return LeaseRepairResult{}, ErrUnavailable
 	}
-	// After the commit, in the ascending run order the candidates were already
-	// sorted into (so the dedupe above is by adjacency), one statement per run:
-	// see syncrunrollup.WakeDispatch for why never inside the repair's own
-	// transaction.
-	if repair.wake != nil {
-		for _, syncRunID := range wakeRuns {
-			syncrunrollup.WakeDispatch(ctx, repair.wake, syncRunID, now, syncrunrollup.DispatchWakePathLeaseRepair)
-		}
-	}
+	wakeDispatchAfterCommit(ctx, repair.wake, wakeRuns, now, syncrunrollup.DispatchWakePathLeaseRepair)
 	return result, nil
 }
 

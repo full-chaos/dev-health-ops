@@ -164,9 +164,17 @@ type Execer interface {
 
 // Wake paths: which writer freed the slot.
 const (
-	DispatchWakePathProviderUnit = "provider_unit"
-	DispatchWakePathLeaseRepair  = "lease_repair"
+	DispatchWakePathProviderUnit       = "provider_unit"
+	DispatchWakePathLeaseRepair        = "lease_repair"
+	DispatchWakePathUnreclaimableSweep = "unreclaimable_sweep"
+	DispatchWakePathRouteUnavailable   = "route_unavailable"
 )
+
+// DispatchWakeTimeout bounds one wake statement. The wake is best effort and
+// runs on the caller's goroutine after its commit, so a slow or saturated
+// outbox (the reconciler's materializer has met ctx deadlines on this table)
+// must cost the caller at most this long; the countdown covers the miss.
+const DispatchWakeTimeout = 5 * time.Second
 
 // Wake outcomes.
 const (
@@ -187,7 +195,9 @@ const (
 // countdown already covers. For the same reason it returns no error: a failed
 // wake is logged and counted, and the caller's commit stands.
 func WakeDispatch(ctx context.Context, db Execer, syncRunID string, now time.Time, path string) bool {
-	command, err := db.Exec(ctx, WakeDispatchSQL, uuid.New(), syncRunID, now.UTC())
+	wakeCtx, cancel := context.WithTimeout(ctx, DispatchWakeTimeout)
+	defer cancel()
+	command, err := db.Exec(wakeCtx, WakeDispatchSQL, uuid.New(), syncRunID, now.UTC())
 	if err != nil {
 		dispatchWakeCounts.record(path, DispatchWakeOutcomeFailed)
 		synclog.Default().Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed,
@@ -211,7 +221,10 @@ func WakeDispatch(ctx context.Context, db Execer, syncRunID string, now time.Tim
 }
 
 var (
-	dispatchWakePaths    = []string{DispatchWakePathLeaseRepair, DispatchWakePathProviderUnit}
+	dispatchWakePaths = []string{
+		DispatchWakePathLeaseRepair, DispatchWakePathProviderUnit,
+		DispatchWakePathRouteUnavailable, DispatchWakePathUnreclaimableSweep,
+	}
 	dispatchWakeOutcomes = []string{DispatchWakeOutcomeArmed, DispatchWakeOutcomeFailed, DispatchWakeOutcomeNotWaiting}
 )
 

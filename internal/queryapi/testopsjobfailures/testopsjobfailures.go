@@ -21,9 +21,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
@@ -122,7 +124,12 @@ func optional(value string) *string {
 // run; it counts once) and filtered to the org, the window (the day the job
 // started, UTC) and the scope before the join. A job run that never started has
 // no day and is not counted. The pipeline row gives the workflow name and the
-// provider; a job run with no pipeline row keeps both as NULL.
+// provider; a job run with no pipeline row keeps both as NULL. The pipeline side
+// is limited to the runs that have a job row in the same window and scope (the
+// key has no day, and a pipeline can start before the window while its job
+// starts inside it), so the join never reads the org's whole pipeline history
+// (CHAOS-8593). The bound only needs the keys, so it reads ci_job_runs without
+// FINAL: an older version of a job row has the same key.
 func groupsStatement(scopeFilter string) string {
 	return `SELECT
                 nullIf(trimBoth(ifNull(p.pipeline_name, '')), '') AS workflow_name,
@@ -141,6 +148,13 @@ func groupsStatement(scopeFilter string) string {
                 SELECT repo_id, run_id, pipeline_name, provider
                 FROM ci_pipeline_runs FINAL
                 WHERE org_id = {org_id:String}` + scopeFilter + `
+                  AND (repo_id, run_id) IN (
+                      SELECT repo_id, run_id
+                      FROM ci_job_runs
+                      WHERE org_id = {org_id:String}
+                        AND toDate(started_at) >= {since_date:Date}
+                        AND toDate(started_at) <= {until_date:Date}` + scopeFilter + `
+                  )
             ) AS p ON p.repo_id = j.repo_id AND p.run_id = j.run_id
             WHERE j.status IN {terminal_statuses:Array(String)}
             GROUP BY workflow_name, job_name, provider
@@ -239,6 +253,15 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, since, until
 	if total < len(out) {
 		total = len(out)
 	}
+	// Parsed values only: a raw request string in a log line is a log-injection sink.
+	attrs := []any{
+		"since", since.Time(), "until", until.Time(),
+		"groups", len(out), "total", total, "repo_scoped", len(scope.RepoIDs) > 0, "team_scoped", len(scope.TeamIDs) > 0,
+	}
+	if parsedOrg, parseErr := uuid.Parse(orgID); parseErr == nil {
+		attrs = append(attrs, "organization_id", parsedOrg)
+	}
+	slog.DebugContext(ctx, "testopsjobfailures: resolved", attrs...)
 	return &model.TestOpsJobFailuresResult{Groups: out, TotalCount: total, Truncated: total > len(out)}, nil
 }
 

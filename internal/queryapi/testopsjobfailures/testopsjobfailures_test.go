@@ -196,8 +196,15 @@ func TestResolve_TheListAndTheCountShareOneFilterText(t *testing.T) {
 			t.Errorf("the groups text lacks %q", text)
 		}
 	}
-	if got := strings.Count(groups, "org_id = {org_id:String}"); got != 2 {
-		t.Errorf("%d org predicates, want one per table (2)", got)
+	if got := strings.Count(groups, "org_id = {org_id:String}"); got != 3 {
+		t.Errorf("%d org predicates, want one per read (job rows, pipeline rows, the pipeline bound = 3)", got)
+	}
+	// CHAOS-8593: the pipeline side is bounded to the runs of the window's job rows.
+	pipelineSide := groups[strings.Index(groups, "FROM ci_pipeline_runs FINAL"):]
+	for _, text := range []string{"AND (repo_id, run_id) IN (", "FROM ci_job_runs\n", "toDate(started_at) >= {since_date:Date}", "toDate(started_at) <= {until_date:Date}"} {
+		if !strings.Contains(pipelineSide, text) {
+			t.Errorf("the pipeline side lacks the window bound %q:\n%s", text, pipelineSide)
+		}
 	}
 	if !strings.Contains(client.listStatement, "ORDER BY failed_runs DESC, job_name, ifNull(workflow_name, ''), ifNull(provider, '')") {
 		t.Errorf("the list is not in the stated order:\n%s", client.listStatement)
@@ -280,13 +287,13 @@ func TestResolve_ScopeFilters(t *testing.T) {
 		for which, statement := range map[string]string{"list": client.listStatement, "count": client.countStatementText} {
 			wantRepo, wantTeam := 0, 0
 			if tc.repo {
-				wantRepo = 2
+				wantRepo = 3
 			}
 			if tc.team {
-				wantTeam = 2
+				wantTeam = 3
 			}
 			if got := strings.Count(statement, "SELECT id FROM repos"); got != wantRepo {
-				t.Errorf("%s, %s statement: %d repository filter(s), want %d (job rows and pipeline rows)", name, which, got, wantRepo)
+				t.Errorf("%s, %s statement: %d repository filter(s), want %d (job rows, pipeline rows, pipeline bound)", name, which, got, wantRepo)
 			}
 			if got := strings.Count(statement, teamCondition); got != wantTeam {
 				t.Errorf("%s, %s statement: %d team ownership condition(s), want %d", name, which, got, wantTeam)

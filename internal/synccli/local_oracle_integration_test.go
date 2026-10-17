@@ -42,7 +42,7 @@ var localSyncOracleProgram string
 // differ between the two runs): for repos, created_at = last_synced is compared
 // instead, and every last_synced must be inside the run's window. repos'
 // provider_repo_id is newer than the golden: it is held empty, then left out
-// (localReposColumnAfterTheGolden).
+// (localReposColumnsAfterTheGolden).
 var localTables = []string{"repos", "git_commits", "git_commit_stats", "git_pull_requests", "git_files", "git_blame"}
 
 // fixture builds one repository with fixed dates, so both planes read the same
@@ -656,20 +656,21 @@ func localScenarios() []localScenario {
 	return scenarios
 }
 
-// localReposColumnAfterTheGolden was added to repos (migration 134) after the
-// Python answers were frozen, so the golden has no value for it. A local
-// repository has no provider id: every row must hold the empty default, and
+// localReposColumnsAfterTheGolden were added to repos after the Python answers
+// were frozen (provider_repo_id: migration 134; identity_path: migration 138),
+// so the golden has no value for them. A local repository has no provider id
+// and no provider minting path: every row must hold the empty default, and
 // only then is the column left out of the comparison.
-const localReposColumnAfterTheGolden = "provider_repo_id"
+var localReposColumnsAfterTheGolden = map[string]bool{"provider_repo_id": true, "identity_path": true}
 
-func requireEmptyProviderRepoID(ctx context.Context, t *testing.T, conn driver.Conn, database string) {
+func requireEmptyLocalReposColumn(ctx context.Context, t *testing.T, conn driver.Conn, database, column string) {
 	t.Helper()
 	var written uint64
-	if err := conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM %s.repos WHERE %s != ''", database, localReposColumnAfterTheGolden)).Scan(&written); err != nil {
+	if err := conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM %s.repos WHERE %s != ''", database, column)).Scan(&written); err != nil {
 		t.Fatal(err)
 	}
 	if written != 0 {
-		t.Errorf("%s: %d local repos rows hold a provider_repo_id; a local repository has none", database, written)
+		t.Errorf("%s: %d local repos rows hold a %s; a local repository has none", database, written, column)
 	}
 }
 
@@ -692,8 +693,8 @@ func tablesSnapshot(ctx context.Context, t *testing.T, conn driver.Conn, databas
 			if name == "last_synced" || (table == "repos" && name == "created_at") {
 				continue
 			}
-			if table == "repos" && name == localReposColumnAfterTheGolden {
-				requireEmptyProviderRepoID(ctx, t, conn, database)
+			if table == "repos" && localReposColumnsAfterTheGolden[name] {
+				requireEmptyLocalReposColumn(ctx, t, conn, database, name)
 				continue
 			}
 			names = append(names, name)

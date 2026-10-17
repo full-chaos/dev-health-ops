@@ -108,6 +108,8 @@ func (GitLabRepositoryRouteHandler) Collect(
 		CreatedAt: normalizedAt, Settings: string(settings), Tags: string(tags),
 		Provider: "gitlab", LastSynced: normalizedAt,
 		ProviderRepoID: strconv.FormatInt(parsedProjectID, 10),
+		// The id above is minted from fullName: this is the path it came from.
+		IdentityPath: fullName,
 	}
 	if err := row.validate(claim); err != nil {
 		return CompleteRouteBatch{}, err

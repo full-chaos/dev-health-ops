@@ -585,6 +585,26 @@ dho admin users update \
 | `--role` | Membership role with `--org`: `owner`, `admin`, `member`, `viewer` |
 | `--remove-from-org` | Org slug or ID: remove the user's membership |
 
+### `admin users delete`
+
+Delete a user (identified by `--id`, `--email`, or `--username`). The user's org memberships and sessions go with it. The API's `delete_user` does the same; this verb is for the operator who has no API token, for example to remove a throwaway superuser after a test.
+
+```bash
+# Report what would be deleted (exit 1, nothing deleted)
+dho admin users delete --email user@example.com
+
+# Delete
+dho admin users delete --email user@example.com --yes
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--id` / `--email` / `--username` | Identify the user to delete |
+| `--yes` | Confirm the deletion. Without it the user and the memberships that would go with it are printed and nothing is deleted (exit 1) |
+
+On success the verb prints `Deleted user: <email> (id: <id>)` and logs one line on stderr (`admin: user deleted by the operator CLI`, the user id, whether it was a superuser, the memberships removed). An unknown user, a missing identifier and a malformed id print `Error: ...` and exit 1.
+
 ### `admin orgs delete`
 
 Delete an organization and all of its scoped data.

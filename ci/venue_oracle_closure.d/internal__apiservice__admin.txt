@@ -109,6 +109,7 @@ internal/testsupport/containers
 internal/testsupport/fakehttp
 internal/testsupport/goldenscan
 internal/testsupport/moduleroot
+internal/testsupport/pgseed
 internal/testsupport/pydanticecho
 internal/testsupport/pyoracle
 internal/testsupport/recordedfiles

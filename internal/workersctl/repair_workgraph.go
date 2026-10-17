@@ -23,7 +23,7 @@ import (
 // lease_expires_at both NULL) forward; without it the row sits there until
 // repaired by hand against the database. It runs the repair as one Postgres
 // transaction on the coordinator role (internal/jobs/repair), after the
-// operator credential is authorized for `workers:operate`. Mirrors
+// operator principal is authorized (joboperator.OperatorAuthorizer). Mirrors
 // `metrics daily-redrive`'s CLI/auth/JSON-result conventions (main.go's
 // dispatchMetrics).
 func dispatchWorkgraph(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {

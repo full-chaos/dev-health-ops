@@ -24,7 +24,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -78,7 +77,7 @@ func run(args []string, stdout, flagErrOutput io.Writer) error {
 	fs := flag.NewFlagSet("mint-envelope", flag.ContinueOnError)
 	fs.SetOutput(flagErrOutput)
 	org := fs.String("org", "", "org id to mint the envelope for")
-	keyFile := fs.String("key-file", "", "path to a PEM file holding the Ed25519 private key (PKCS#8, \"PRIVATE KEY\" block); defaults to reading it from the "+envelopemint.PrivateKeyEnvVar+" environment variable, which is how the tools pod receives it via secretKeyRef")
+	keyFile := fs.String("key-file", "", "path to a PEM file holding the Ed25519 private key (PKCS#8, \"PRIVATE KEY\" block); defaults to the file named by "+envelopemint.PrivateKeyFileEnvVar+", else (deprecated) the raw "+envelopemint.PrivateKeyEnvVar+" environment variable; the file must be mode 0600 or stricter, not a symlink, at most 16 KiB")
 	if err := fs.Parse(args); err != nil {
 		return cli.WrapFlagParseError(err)
 	}
@@ -108,9 +107,5 @@ func loadKey(keyFile string) (ed25519.PrivateKey, error) {
 	if strings.TrimSpace(keyFile) == "" {
 		return envelopemint.LoadPrivateKeyFromEnv()
 	}
-	pemBytes, err := os.ReadFile(keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("-key-file %s: %w", keyFile, err)
-	}
-	return envelopemint.LoadPrivateKey(pemBytes)
+	return envelopemint.LoadPrivateKeyFromFile(keyFile)
 }

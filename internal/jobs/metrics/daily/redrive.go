@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -628,14 +629,15 @@ func (store *PostgresStore) RedriveFinalizeForRange(
 	to := toDay.UTC().Truncate(24 * time.Hour)
 	now := store.now().UTC()
 
-	// One candidate run per calendar day: whichever run for that day has
-	// every partition succeeded, preferring the most recently updated when
-	// more than one generation qualifies (team-scope aggregation re-reads
-	// ClickHouse for the whole org/day, not a specific run's own partition
-	// rows, so any one qualifying run for that day is equally valid to
-	// redrive through).
+	// Every run per calendar day that has all partitions succeeded, newest
+	// first (team-scope aggregation re-reads ClickHouse for the whole
+	// org/day, not a specific run's own partition rows, so any one
+	// qualifying run for that day is equally valid to redrive through).
+	// Which one is eligible (status, lease, includeSucceeded) is decided
+	// per candidate under its row lock, so a newer ineligible run cannot
+	// hide an older eligible one (CHAOS-4443).
 	rows, err := store.pool.Query(ctx, `
-SELECT DISTINCT ON (run.target_day) run.target_day::text, run.id::text
+SELECT run.target_day::text, run.id::text
 FROM public.daily_metrics_runs AS run
 WHERE run.org_id = $1::uuid AND run.target_day BETWEEN $2 AND $3
   AND EXISTS (
@@ -650,14 +652,14 @@ ORDER BY run.target_day, run.updated_at DESC`, orgID, from, to)
 	if err != nil {
 		return outcome, ErrUnavailable
 	}
-	candidateRunByDay := make(map[string]string)
+	candidateRunsByDay := make(map[string][]string)
 	for rows.Next() {
 		var day, runID string
 		if err := rows.Scan(&day, &runID); err != nil {
 			rows.Close()
 			return outcome, ErrUnavailable
 		}
-		candidateRunByDay[day] = runID
+		candidateRunsByDay[day] = append(candidateRunsByDay[day], runID)
 	}
 	rowsErr := rows.Err()
 	rows.Close()
@@ -672,17 +674,30 @@ ORDER BY run.target_day, run.updated_at DESC`, orgID, from, to)
 	var redrivenDays, redrivenFromSucceededDays, skippedDays int
 	for day := from; !day.After(to); day = day.AddDate(0, 0, 1) {
 		dayKey := day.Format(dailyTargetDayLayout)
-		runID, ok := candidateRunByDay[dayKey]
+		candidates, ok := candidateRunsByDay[dayKey]
 		if !ok {
 			outcome.Days = append(outcome.Days, FinalizeRangeRedriveDay{Day: day, Outcome: skippedOutcome})
 			skippedDays++
 			continue
 		}
-		matched, resetFromSucceeded, err := store.redriveOneFinalizeForRange(
-			ctx, publisher, runID, nonce, now, includeSucceeded, reason, dryRun,
-		)
-		if err != nil {
-			return outcome, err
+		runID := candidates[0]
+		var matched, resetFromSucceeded bool
+		for tried, candidate := range candidates {
+			var err error
+			matched, resetFromSucceeded, err = store.redriveOneFinalizeForRange(
+				ctx, publisher, candidate, nonce, now, includeSucceeded, reason, dryRun,
+			)
+			if err != nil {
+				return outcome, err
+			}
+			if matched {
+				runID = candidate
+				if tried > 0 {
+					slog.InfoContext(ctx, "daily finalize range redrive: older run chosen after newer ineligible runs",
+						"org_id", orgID, "day", dayKey, "run_id", candidate, "skipped_newer_runs", tried, "dry_run", dryRun)
+				}
+				break
+			}
 		}
 		if matched {
 			dayOutcome := redrivenPrefix

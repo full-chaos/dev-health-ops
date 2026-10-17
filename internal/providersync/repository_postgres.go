@@ -728,6 +728,9 @@ func (repository *PostgresRepository) failTx(
 			return ErrInvalidConfiguration
 		}
 	}
+	if claim.Dataset == workItemsCanonicalDataset {
+		stampNeedsAttention(ctx, tx, claim)
+	}
 	// Unlike a prepared recovery snapshot, a chunk checkpoint is only ever
 	// resumable by a RUNNING unit of the same generation. Terminalizing the
 	// unit makes its sidecars unreachable, so keeping them would retain
@@ -1291,3 +1294,72 @@ SET last_synced_at = CASE
     updated_at = EXCLUDED.updated_at`
 
 var _ LeaseRepository = (*PostgresRepository)(nil)
+
+const workItemsCanonicalDataset = "work-items"
+
+// stampNeedsAttention marks the work-items dataset of the claim's integration
+// once the source has failed FailureStreakThreshold times in a row with one
+// cause class (CHAOS-8802). The next terminal success clears the marker
+// (clearDatasetUnavailableSQL). It runs in a savepoint and never fails the
+// terminalization: a lost stamp only delays the owner-facing hint.
+func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) {
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		return
+	}
+	streak, err := sourceFailureStreak(ctx, savepoint, claim)
+	if err != nil || streak.Count < FailureStreakThreshold {
+		_ = savepoint.Rollback(ctx)
+		if err != nil {
+			slog.Default().Warn("providersync.needs_attention_streak_unavailable",
+				slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+				slog.String("failure", "streak_query_failed"))
+		}
+		return
+	}
+	// Only the canonical row: the generic Complete clears exactly claim.Dataset,
+	// so a stamp on an alias row would never clear after a success.
+	if _, err := savepoint.Exec(ctx, markDatasetUnavailableSQL,
+		claim.OrgID, claim.IntegrationID, claim.Dataset, streak.NeedsAttentionReason(), streak.LastAt.UTC(),
+	); err != nil {
+		_ = savepoint.Rollback(ctx)
+		slog.Default().Warn("providersync.needs_attention_stamp_failed",
+			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+			slog.String("failure", "stamp_failed"))
+		return
+	}
+	if err := savepoint.Commit(ctx); err != nil {
+		return
+	}
+	slog.Default().Info("providersync.needs_attention_stamped",
+		slog.String("org_id", claim.OrgID),
+		slog.String("integration_id", claim.IntegrationID),
+		slog.String("source_id", claim.SourceID),
+		slog.String("provider", claim.Provider),
+		slog.String("cause_class", streak.Class),
+		slog.Int("failures_in_a_row", streak.Count),
+		slog.Duration("retry_interval", FailureStreakRetryInterval))
+}
+
+// sourceFailureStreak reads the streak of one source from its newest terminal
+// work-items units, the unit being terminalized included.
+func sourceFailureStreak(ctx context.Context, tx pgx.Tx, claim Claim) (FailureStreak, error) {
+	rows, err := tx.Query(ctx, RecentTerminalUnitsSQL,
+		claim.OrgID, claim.IntegrationID, workItemsCanonicalDataset, RecentTerminalUnitsLimit)
+	if err != nil {
+		return FailureStreak{}, err
+	}
+	defer rows.Close()
+	var outcomes []UnitOutcome
+	for rows.Next() {
+		var sourceID string
+		var outcome UnitOutcome
+		if err := rows.Scan(&sourceID, &outcome.Failed, &outcome.CauseClass, &outcome.At); err != nil {
+			return FailureStreak{}, err
+		}
+		if sourceID == claim.SourceID {
+			outcomes = append(outcomes, outcome)
+		}
+	}
+	return FailureStreakOf(outcomes), rows.Err()
+}

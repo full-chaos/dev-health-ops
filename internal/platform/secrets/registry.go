@@ -249,8 +249,9 @@ func warnCommonWord(name, field string) {
 		return
 	}
 	registry.Lock()
-	_, seen := registry.warned["common:"+name+"/"+field]
-	registry.warned["common:"+name+"/"+field] = struct{}{}
+	key := "common:" + name + "/" + warnedField(field)
+	_, seen := registry.warned[key]
+	registry.warned[key] = struct{}{}
 	registry.Unlock()
 	if !seen {
 		warn("secret_is_a_common_word_redacted_only_in_credential_shapes", warnAttrs(name, field)...)
@@ -262,8 +263,9 @@ func warnShort(name, field string) {
 		return
 	}
 	registry.Lock()
-	_, seen := registry.warned[name+"/"+field]
-	registry.warned[name+"/"+field] = struct{}{}
+	key := name + "/" + warnedField(field)
+	_, seen := registry.warned[key]
+	registry.warned[key] = struct{}{}
 	registry.Unlock()
 	if !seen {
 		detail := "the value is shorter than the minimum: redacted only in credential shapes (a password key with its value, or a user and password in front of the @ of a URL), not as a bare word"
@@ -298,6 +300,16 @@ func declaredCredentialField(field string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// warnedField is the field's identity for the once-only warning: every spelling of
+// a declared field is one field. An undeclared name keeps its own text (the text
+// stays in memory, never in a log line).
+func warnedField(field string) string {
+	if declared, ok := declaredCredentialField(field); ok {
+		return declared
+	}
+	return "undeclared:" + field
 }
 
 // warnAttrs names the setting, and the credential field when there is one. The

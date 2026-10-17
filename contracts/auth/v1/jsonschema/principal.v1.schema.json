@@ -79,6 +79,7 @@
             "acr_web_assertion",
             "acr_workload_identity_exchange",
             "auth_js_browser_session",
+            "effective_principal_envelope",
             "email_verification_token",
             "external_push_ingest_token",
             "github_app_installation_token",

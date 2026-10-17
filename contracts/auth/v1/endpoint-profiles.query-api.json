@@ -1,0 +1,76 @@
+{
+  "credential_class_source": "contracts/auth/v1/credential-classes.json",
+  "generated_at": "2026-10-17T00:00:00Z",
+  "rows": [
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /healthz [dev-health-query-api]",
+      "method": "GET",
+      "public_rationale": "Liveness probe on the operator listener; returns no tenant data and is reached only by the orchestrator.",
+      "route": "/healthz",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/operator_compat.go",
+        "line": 36
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /readyz [dev-health-query-api]",
+      "method": "GET",
+      "public_rationale": "Readiness probe on the operator listener; reports dependency state only and is reached only by the orchestrator.",
+      "route": "/readyz",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/operator_compat.go",
+        "line": 40
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity); the closed credential vocabulary has no class for them, so they are named here, not classified.",
+        "Per-resolver authorization (CHAOS-4732: no auth chokepoint) is not profiled; this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /query [dev-health-query-api]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 44,
+          "path": "internal/queryapi/server/internal_auth.go"
+        },
+        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify."
+      },
+      "public_rationale": null,
+      "route": "/query",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/server.go",
+        "line": 223
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    }
+  ],
+  "schema_version": "endpoint-profile.v1",
+  "source_commit": "aacb6f96087d85359dae8f980c8886b5b04ec261"
+}

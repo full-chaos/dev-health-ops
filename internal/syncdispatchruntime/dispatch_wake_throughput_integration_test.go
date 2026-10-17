@@ -258,3 +258,50 @@ func TestScheduleRedispatchStillCountsDownFromItsOwnDeliveredRow(t *testing.T) {
 		}
 	})
 }
+
+// TestDispatchPassThatTerminalizesClaimedUnitsWakesTheNextPass pins Codex round
+// 401 r2's P1: two units of a medium bucket (cap 2) are claimed and then
+// terminalized as unroutable inside the pass, so their slots are free again
+// while a valid sibling the cap held back waits. The pass's own countdown
+// re-arm must not be the next pass: the pass wakes the run at once.
+//
+// RED CONTROL: drop the deferred WakeDispatch in Dispatch and the wakeup sits at
+// now + 60 s with the sibling still planned.
+func TestDispatchPassThatTerminalizesClaimedUnitsWakesTheNextPass(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60")
+		for _, unit := range []struct{ id, dataset string }{
+			{"00000000-0000-4000-8000-000000001200", "unroutable-dataset"},
+			{"00000000-0000-4000-8000-000000001201", "unroutable-dataset"},
+			{"00000000-0000-4000-8000-000000001202", "commits"},
+		} {
+			if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github',$4,$5,'planned',now(),(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'medium','incremental',0,now())`,
+				unit.id, discoveryTestOrg, discoveryTestRun, unit.dataset, dispatchTestSource); err != nil {
+				t.Fatal(err)
+			}
+		}
+		armedBefore := syncrunrollup.DispatchWakeCount(syncrunrollup.DispatchWakePathDispatchPass, syncrunrollup.DispatchWakeOutcomeArmed)
+		service := newTestDispatchService(t, pool)
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		afterPass := pgNow()
+		if failed := unitIDsInStatus(t, ctx, pool, "failed"); len(failed) != 2 {
+			t.Fatalf("precondition: %d units terminalized in the pass, want the 2 unroutable ones (%v)", len(failed), failed)
+		}
+		if planned := unitIDsInStatus(t, ctx, pool, "planned"); len(planned) != 1 {
+			t.Fatalf("precondition: %d planned units, want the 1 sibling the cap held back (%v)", len(planned), planned)
+		}
+		if got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun); got.After(afterPass) {
+			t.Fatalf("dispatch wake available_at=%s is %s after the pass: the freed slots wait for the countdown instead of waking the held-back sibling",
+				got, got.Sub(afterPass).Round(time.Second))
+		}
+		if moved := syncrunrollup.DispatchWakeCount(syncrunrollup.DispatchWakePathDispatchPass, syncrunrollup.DispatchWakeOutcomeArmed) - armedBefore; moved != 1 {
+			t.Fatalf("dispatch_pass armed counter moved %d, want 1", moved)
+		}
+	})
+}

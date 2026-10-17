@@ -168,6 +168,7 @@ const (
 	DispatchWakePathLeaseRepair        = "lease_repair"
 	DispatchWakePathUnreclaimableSweep = "unreclaimable_sweep"
 	DispatchWakePathRouteUnavailable   = "route_unavailable"
+	DispatchWakePathDispatchPass       = "dispatch_pass"
 )
 
 // DispatchWakeTimeout bounds one wake statement. The wake is best effort and
@@ -222,7 +223,7 @@ func WakeDispatch(ctx context.Context, db Execer, syncRunID string, now time.Tim
 
 var (
 	dispatchWakePaths = []string{
-		DispatchWakePathLeaseRepair, DispatchWakePathProviderUnit,
+		DispatchWakePathDispatchPass, DispatchWakePathLeaseRepair, DispatchWakePathProviderUnit,
 		DispatchWakePathRouteUnavailable, DispatchWakePathUnreclaimableSweep,
 	}
 	dispatchWakeOutcomes = []string{DispatchWakeOutcomeArmed, DispatchWakeOutcomeFailed, DispatchWakeOutcomeNotWaiting}

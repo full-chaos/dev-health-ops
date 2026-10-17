@@ -792,7 +792,7 @@ func takeTimeTouchedDaysDrainStopCheckSaysWhenAStillRunningRunBeforeTheCutIsNotR
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	take := time.Now().UTC().Add(-4 * time.Hour).Truncate(time.Millisecond)
 	_, newest := drainBatches(t, ctx, rig, orgID, 0)
-	slow := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), "running", &take, time.Now().UTC().Add(-5*time.Hour))
+	slow := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), "pending", &take, time.Now().UTC().Add(-5*time.Hour))
 	lagging := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -8), "succeeded", &take, time.Now().UTC().Add(-80*time.Minute))
 	if _, err := rig.touchedRig.pool.Exec(ctx, `UPDATE public.daily_metrics_runs SET updated_at = $2 WHERE id = $1::uuid`,
 		lagging, time.Now().UTC().Add(-3*time.Hour)); err != nil {
@@ -807,7 +807,7 @@ func takeTimeTouchedDaysDrainStopCheckSaysWhenAStillRunningRunBeforeTheCutIsNotR
 		seen[run.RunID] = true
 	}
 	if seen[slow] || !seen[lagging] {
-		t.Fatalf("slow (running, before the cut) read = %v, lagging-clock run (after the cut) read = %v; want false and true", seen[slow], seen[lagging])
+		t.Fatalf("slow (pending, before the cut) read = %v, lagging-clock run (after the cut) read = %v; want false and true", seen[slow], seen[lagging])
 	}
 	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
 	if got := rig.observer.count(jobruntime.TouchedDaysDrainStopCheckSkippedUnended); got != 1 {

@@ -250,3 +250,22 @@ func TestDiscoveryIssuerAndJWKSURIPatternsAreInTheCrossLanguageDialect(t *testin
 		}
 	}
 }
+
+func TestADiscoveryDocumentWithTrailingContentIsRefused(t *testing.T) {
+	// Raw bytes: a second JSON value after a valid document must not be
+	// silently ignored the way a streaming decoder ignores it.
+	valid := loadDiscoveryFixture(t, "valid-minimal.json")
+	for name, trailing := range map[string]string{
+		"null":         "\nnull",
+		"second-doc":   "\n{\"issuer\":\"https://evil.example.test\"}",
+		"garbage-byte": "x",
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw := append(append([]byte{}, valid...), trailing...)
+			_, err := ParseDiscovery(testRoot(t), raw, "https://auth.example.test")
+			if err == nil || !strings.Contains(err.Error(), "trailing content") {
+				t.Fatalf("err = %v, want a trailing-content refusal", err)
+			}
+		})
+	}
+}

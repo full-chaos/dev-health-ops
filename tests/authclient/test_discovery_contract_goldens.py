@@ -122,3 +122,12 @@ def test_the_client_is_exported_from_the_package() -> None:
     from dev_health_ops import authclient
 
     assert authclient.parse_discovery is parse_discovery
+
+
+@pytest.mark.parametrize(
+    "trailing", ["\nnull", '\n{"issuer": "https://evil.example.test"}', "x"]
+)
+def test_trailing_content_after_the_document_is_refused(trailing: str) -> None:
+    raw = _raw("valid-minimal.json").decode("utf-8") + trailing
+    with pytest.raises(ContractError, match="not valid JSON"):
+        parse_discovery(raw, "https://auth.example.test")

@@ -77,3 +77,36 @@ func TestResolveGitLabRepoIdentityPathsOnARealStore(t *testing.T) {
 		}
 	}
 }
+
+// A path maps to the one project the repos rows name at it, current or minted;
+// a path two projects have used is ambiguous; an unseen path is in neither map.
+func TestLoadGitLabProjectNativesByPathOnARealStore(t *testing.T) {
+	store := startGitLabIdentityStore(t)
+	t0 := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	store.syncRepository("123", "acme/api", t0)
+	store.syncRepository("123", "platform/api-v2", t0.Add(time.Hour))
+	store.syncRepository("777", "solo/repo", t0)
+
+	natives, ambiguous, err := teamattribution.LoadGitLabProjectNativesByPath(store.ctx, store.conn, "org-acme",
+		[]string{"acme/api", "platform/api-v2", "solo/repo", "fresh/none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if natives["acme/api"] != "123" || natives["platform/api-v2"] != "123" || natives["solo/repo"] != "777" || len(ambiguous) != 0 {
+		t.Fatalf("natives = %v ambiguous = %v before the reuse", natives, ambiguous)
+	}
+	if _, ok := natives["fresh/none"]; ok {
+		t.Fatal("an unseen path got a project")
+	}
+	store.syncRepository("456", "acme/api", t0.Add(2*time.Hour))
+	natives, ambiguous, err = teamattribution.LoadGitLabProjectNativesByPath(store.ctx, store.conn, "org-acme", []string{"acme/api", "platform/api-v2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, bad := ambiguous["acme/api"]; !bad || natives["platform/api-v2"] != "123" {
+		t.Fatalf("after the reuse: natives = %v ambiguous = %v", natives, ambiguous)
+	}
+	if _, ok := natives["acme/api"]; ok {
+		t.Fatal("a reused path still maps to one project")
+	}
+}

@@ -145,6 +145,9 @@ type GithubWorkItemDerivationProjectFact struct {
 	Specificity int
 	Priority    int
 	UpdatedAt   time.Time
+	// Unjoinable marks a GitLab grant keyed by a path two projects have used: it
+	// still counts as the team's ownership but joins no item.
+	Unjoinable bool
 }
 
 type GithubWorkItemDerivationRepoFact struct {
@@ -157,6 +160,12 @@ type GithubWorkItemDerivationRepoFact struct {
 	Specificity  int
 	Priority     int
 	UpdatedAt    time.Time
+	// NameKey, when set, is the key a name-keyed GitLab grant joins items by
+	// (the catalog id of the one project its path names) instead of RepoFullName.
+	NameKey string
+	// Unjoinable marks a name-keyed GitLab grant whose path two projects have
+	// used: it still counts as the team's ownership but joins no item by name.
+	Unjoinable bool
 }
 
 type GithubWorkItemDerivationMemberFact struct {
@@ -459,6 +468,9 @@ func NewGitHubWorkItemDerivationContext(
 		}
 	}
 	for _, fact := range facts.Projects {
+		if fact.Unjoinable {
+			continue
+		}
 		joinID := fact.ProjectID
 		candidate := GithubWorkItemDerivationCandidateFromFact(
 			"project_ownership", fact.TeamID, fact.TeamName,
@@ -483,8 +495,8 @@ func NewGitHubWorkItemDerivationContext(
 		if fact.RepoID != nil && strings.TrimSpace(*fact.RepoID) != "" {
 			AppendDerivationCandidate(result.repoByID, AttributionMapKey(fact.Provider, *fact.RepoID), candidate)
 		}
-		if fact.RepoFullName != "" {
-			AppendDerivationCandidate(result.repoByName, AttributionMapKey(fact.Provider, fact.RepoFullName), candidate)
+		if nameKey := GithubWorkItemDerivationFirstNonEmpty(fact.NameKey, fact.RepoFullName); nameKey != "" && !fact.Unjoinable {
+			AppendDerivationCandidate(result.repoByName, AttributionMapKey(fact.Provider, nameKey), candidate)
 		}
 	}
 	// CHAOS-4321: team_name for a membership candidate is now resolved from
@@ -1932,7 +1944,17 @@ LIMIT {row_limit:UInt64}`,
 			return nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(result)}
 		}
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	result, remapped, ambiguous, err := source.remapLegacyGitLabRepoFacts(ctx, orgID, result)
+	if err != nil {
+		return nil, err
+	}
+	if source.OnLegacyGitLabOwnership != nil && remapped+ambiguous > 0 {
+		source.OnLegacyGitLabOwnership(ctx, remapped, ambiguous)
+	}
+	return result, nil
 }
 
 // GithubWorkItemDerivationAdminIdentity is one row of the ClickHouse

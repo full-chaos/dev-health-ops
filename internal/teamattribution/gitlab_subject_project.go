@@ -45,6 +45,10 @@ func GitLabProjectNames(subject GithubWorkItemDerivationSubject) []string {
 		add(path)
 	}
 	if len(out) > 0 {
+		// The catalog id is the name a remapped name-keyed grant joins by.
+		if subject.ProjectID != nil && IsGitLabCatalogProjectID(*subject.ProjectID) {
+			add(*subject.ProjectID)
+		}
 		return out
 	}
 	// No repos row was read. An item anchored to a catalog id has no path that is
@@ -337,8 +341,9 @@ WHERE org_id = ? AND provider = 'gitlab' AND (lower(repo) IN ? OR lower(identity
 // remapLegacyGitLabProjectFacts moves a GitLab ownership row written before
 // CHAOS-8883 (project_id holds the path) to the catalog id of the one project
 // its path names, so it lands on the same key as an item anchored to that id. A
-// row whose path two projects have used is dropped (a reused path is not a
-// grant); a row whose path no repos row names stays as it is.
+// row whose path two projects have used is marked unjoinable (a reused path is
+// not a grant for either project, but the team still has the ownership); a row
+// whose path no repos row names stays as it is.
 func (source ClickHouseFactSource) remapLegacyGitLabProjectFacts(
 	ctx context.Context, orgID string, facts []GithubWorkItemDerivationProjectFact,
 ) (out []GithubWorkItemDerivationProjectFact, remapped, dropped int, err error) {
@@ -381,7 +386,9 @@ func RemapLegacyGitLabProjectFacts(
 		}
 		path := strings.ToLower(strings.TrimSpace(fact.ProjectID))
 		if _, bad := ambiguous[path]; bad {
+			fact.Unjoinable = true
 			dropped++
+			out = append(out, fact)
 			continue
 		}
 		if native, ok := natives[path]; ok {
@@ -395,4 +402,60 @@ func RemapLegacyGitLabProjectFacts(
 		out = append(out, fact)
 	}
 	return out, remapped, dropped
+}
+
+func isLegacyGitLabRepoFact(fact GithubWorkItemDerivationRepoFact) bool {
+	return fact.Provider == "gitlab" && strings.TrimSpace(fact.RepoFullName) != ""
+}
+
+// remapLegacyGitLabRepoFacts gives a GitLab repo-ownership row keyed by full
+// name the same one-project rule as a path-keyed project ownership row: its name
+// joins by the catalog id of the one project the path names, a path two
+// projects have used joins no item by name (the row's repo_id join, if any,
+// stays), and a path no repos row names stays name-keyed.
+func (source ClickHouseFactSource) remapLegacyGitLabRepoFacts(
+	ctx context.Context, orgID string, facts []GithubWorkItemDerivationRepoFact,
+) (out []GithubWorkItemDerivationRepoFact, remapped, ambiguousMarked int, err error) {
+	var paths []string
+	seen := map[string]struct{}{}
+	for _, fact := range facts {
+		if !isLegacyGitLabRepoFact(fact) {
+			continue
+		}
+		path := strings.ToLower(strings.TrimSpace(fact.RepoFullName))
+		if _, dup := seen[path]; !dup {
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return facts, 0, 0, nil
+	}
+	natives, ambiguous, err := LoadGitLabProjectNativesByPath(ctx, source.Conn, orgID, paths)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	out, remapped, ambiguousMarked = RemapLegacyGitLabRepoFacts(orgID, facts, natives, ambiguous)
+	return out, remapped, ambiguousMarked, nil
+}
+
+// RemapLegacyGitLabRepoFacts is the pure part of remapLegacyGitLabRepoFacts.
+func RemapLegacyGitLabRepoFacts(
+	orgID string, facts []GithubWorkItemDerivationRepoFact, natives map[string]string, ambiguous map[string]struct{},
+) (out []GithubWorkItemDerivationRepoFact, remapped, ambiguousMarked int) {
+	out = make([]GithubWorkItemDerivationRepoFact, 0, len(facts))
+	for _, fact := range facts {
+		if isLegacyGitLabRepoFact(fact) {
+			path := strings.ToLower(strings.TrimSpace(fact.RepoFullName))
+			if _, bad := ambiguous[path]; bad {
+				fact.Unjoinable = true
+				ambiguousMarked++
+			} else if native, ok := natives[path]; ok {
+				fact.NameKey = GitLabCatalogProjectIDString(orgID, native)
+				remapped++
+			}
+		}
+		out = append(out, fact)
+	}
+	return out, remapped, ambiguousMarked
 }

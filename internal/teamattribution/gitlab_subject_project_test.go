@@ -51,8 +51,8 @@ func TestAGitLabItemAnswersNameJoinsByEveryPathOfItsRepo(t *testing.T) {
 	subject := gitlabSubject("org:gitlab:123", "acme/api")
 	subject.GitLabPaths = []string{"platform/api-v2", "acme/api"}
 	got := GitLabProjectNames(subject)
-	if len(got) != 2 || got[0] != "platform/api-v2" || got[1] != "acme/api" {
-		t.Fatalf("names = %v, want the current and the minted path once each", got)
+	if len(got) != 3 || got[0] != "platform/api-v2" || got[1] != "acme/api" || got[2] != "org:gitlab:123" {
+		t.Fatalf("names = %v, want the current path, the minted path and the catalog id once each", got)
 	}
 	legacy := gitlabSubject("acme/api", "")
 	legacy.ProjectKey = nil
@@ -204,15 +204,73 @@ func TestLegacyGitLabOwnershipRemapKeepsWhatItCannotProve(t *testing.T) {
 		{Provider: "jira", TeamID: "d", ProjectID: "x/dup"},
 	}
 	out, remapped, dropped := RemapLegacyGitLabProjectFacts("org", facts, map[string]string{}, map[string]struct{}{"x/dup": {}})
-	if remapped != 0 || dropped != 1 || len(out) != 3 {
+	if remapped != 0 || dropped != 1 || len(out) != 4 {
 		t.Fatalf("remapped=%d dropped=%d out=%+v", remapped, dropped, out)
 	}
-	for _, fact := range out {
-		if fact.TeamID == "a" {
-			t.Fatal("a path two projects have used stayed a grant")
-		}
+	if !out[0].Unjoinable || out[0].TeamID != "a" {
+		t.Fatalf("a path two projects have used stayed joinable: %+v", out[0])
 	}
+	out = out[1:]
 	if out[0].ProjectID != "x/unseen" || out[1].ProjectID != "org:gitlab:7" || out[2].Provider != "jira" || out[2].ProjectID != "x/dup" {
 		t.Fatalf("unprovable or foreign rows changed: %+v", out)
+	}
+}
+
+// A repo-ownership row keyed by full name (no repo id) joins the item anchored
+// to the one project its path names; a path two projects have used joins no item
+// by name, and the team still holds the ownership.
+func TestNameKeyedGitLabRepoOwnershipFollowsTheOneProjectRule(t *testing.T) {
+	teams := []GithubWorkItemDerivationTeamFact{{Provider: "gitlab", TeamID: "owner-team"}}
+	repoFact := func(name string) []GithubWorkItemDerivationRepoFact {
+		return []GithubWorkItemDerivationRepoFact{{Provider: "gitlab", TeamID: "owner-team", TeamName: "Owner", RepoFullName: name, IsPrimary: 1, Specificity: 100}}
+	}
+	item := gitlabSubject("org:gitlab:123", "acme/api")
+	repoID := "repo-123"
+	item.RepoID = &repoID
+	item.GitLabPaths = []string{"acme/api"}
+
+	unique, remapped, marked := RemapLegacyGitLabRepoFacts("org", repoFact("acme/api"), map[string]string{"acme/api": "123"}, nil)
+	if remapped != 1 || marked != 0 || unique[0].NameKey != "org:gitlab:123" || unique[0].RepoFullName != "acme/api" {
+		t.Fatalf("unique path: %+v remapped=%d marked=%d", unique, remapped, marked)
+	}
+	if got := primaryTeam(NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: teams, Repos: unique}), item); got != "owner-team" {
+		t.Fatalf("the one project's item got %q, want owner-team", got)
+	}
+
+	// The same grant keyed by a path project 456 holds: project 123's item must not take it.
+	other := gitlabSubject("org:gitlab:456", "acme/api@456")
+	other.GitLabPaths = []string{"acme/api", "acme/api@456"}
+	ownedBy456, _, _ := RemapLegacyGitLabRepoFacts("org", repoFact("acme/api"), map[string]string{"acme/api": "456"}, nil)
+	if got := primaryTeam(NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: teams, Repos: ownedBy456}), item); got != "" {
+		t.Fatalf("project 123's item took the name-keyed grant of project 456: %q", got)
+	}
+
+	dup, remapped, marked := RemapLegacyGitLabRepoFacts("org", repoFact("acme/api"), map[string]string{}, map[string]struct{}{"acme/api": {}})
+	if remapped != 0 || marked != 1 || !dup[0].Unjoinable {
+		t.Fatalf("ambiguous path: %+v", dup)
+	}
+	ambiguousCtx := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: teams, Repos: dup})
+	if got := primaryTeam(ambiguousCtx, item); got != "" {
+		t.Fatalf("a reused path's name-keyed grant joined %q", got)
+	}
+	if got := primaryTeam(ambiguousCtx, other); got != "" {
+		t.Fatalf("a reused path's name-keyed grant joined project 456's item: %q", got)
+	}
+
+	// The repo_id join of an ambiguous-name grant stays.
+	withID := repoFact("acme/api")
+	withID[0].RepoID = &repoID
+	marked2, _, _ := RemapLegacyGitLabRepoFacts("org", withID, map[string]string{}, map[string]struct{}{"acme/api": {}})
+	if got := primaryTeam(NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: teams, Repos: marked2}), item); got != "owner-team" {
+		t.Fatalf("the repo_id join of an ambiguous-name grant was lost: %q", got)
+	}
+
+	unseen, remapped, marked := RemapLegacyGitLabRepoFacts("org", repoFact("x/unseen"), map[string]string{}, nil)
+	if remapped != 0 || marked != 0 || unseen[0].NameKey != "" || unseen[0].Unjoinable {
+		t.Fatalf("unseen path changed: %+v", unseen)
+	}
+	foreign := []GithubWorkItemDerivationRepoFact{{Provider: "github", TeamID: "g", RepoFullName: "acme/api"}}
+	if out, r, m := RemapLegacyGitLabRepoFacts("org", foreign, map[string]string{"acme/api": "1"}, nil); r != 0 || m != 0 || out[0].NameKey != "" {
+		t.Fatalf("a GitHub row was remapped: %+v", out)
 	}
 }

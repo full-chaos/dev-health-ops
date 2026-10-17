@@ -151,6 +151,12 @@ type PlannerInput struct {
 	Sources              []PlanSource
 	Datasets             []PlanDataset
 	Watermarks           map[WatermarkKey]time.Time
+	// FailureStreaks is, per PlanSource.ID, the run of equal failures that
+	// ended the source's newest work-items units (CHAOS-8802). A cause class
+	// of "result too large" or "time limit" halves the next window; the
+	// threshold slows the source down to one try a day. Nil or a missing key
+	// plans exactly as before.
+	FailureStreaks map[string]providersync.FailureStreak
 	// ExecutedProof is the CHAOS-4060 durable, tri-state evidence snapshot:
 	// which provider/dataset pairs have at least one live sync_run_units row
 	// that completed with persisted-row evidence (proven), have been
@@ -544,6 +550,19 @@ func buildWorkItemFamilyUnit(
 	// which exists because the pre-fix index-aligned merge raised on a
 	// mismatched window count and took down a merely partially-caught-up
 	// plan.
+	streak := input.FailureStreaks[source.ID]
+	if streak.SlowedDownAt(now) {
+		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeSlowedDown)
+		slog.Default().Info("sync.plan.work_items_slowed_down",
+			slog.String("provider", provider),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID),
+			slog.String("cause_class", streak.Class),
+			slog.Int("failures_in_a_row", streak.Count),
+			slog.Time("last_failure_at", streak.LastAt),
+			slog.Duration("retry_interval", providersync.FailureStreakRetryInterval))
+		return PlannedUnit{}, false
+	}
 	var earliest *time.Time
 	var latest time.Time
 	contributing := make([]PlanDataset, 0, len(family))
@@ -575,6 +594,17 @@ func buildWorkItemFamilyUnit(
 	}
 	if openStart {
 		earliest = nil
+	}
+	if halved, ok := halveWindowAfterFailures(earliest, latest, streak); ok {
+		slog.Default().Info("sync.plan.work_items_window_halved",
+			slog.String("provider", provider),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID),
+			slog.String("cause_class", streak.Class),
+			slog.Int("failures_in_a_row", streak.Count),
+			slog.Duration("window_before", latest.Sub(*earliest)),
+			slog.Duration("window_after", halved.Sub(*earliest)))
+		latest = halved
 	}
 	flags := cloneFlags(canonical.ProcessorFlags)
 	// CHAOS-3606: the native work-item route has one indivisible all-five
@@ -1004,4 +1034,27 @@ func setOf(values ...string) map[string]struct{} {
 		result[value] = struct{}{}
 	}
 	return result
+}
+
+// halveWindowAfterFailures shortens the end of a work-items window to
+// span / 2^failures after a run of size or time-limit failures (CHAOS-8802),
+// never below providersync.WindowHalvingFloor and never past the natural end.
+// An open start has no span to halve. The watermark stamps at the new end, so
+// the following runs continue from there.
+func halveWindowAfterFailures(start *time.Time, end time.Time, streak providersync.FailureStreak) (time.Time, bool) {
+	if start == nil || !streak.ShrinksWindow() {
+		return end, false
+	}
+	span := end.Sub(*start)
+	halved := span
+	for i := 0; i < streak.Count && halved > providersync.WindowHalvingFloor; i++ {
+		halved /= 2
+	}
+	if halved < providersync.WindowHalvingFloor {
+		halved = providersync.WindowHalvingFloor
+	}
+	if halved >= span {
+		return end, false
+	}
+	return start.Add(halved), true
 }

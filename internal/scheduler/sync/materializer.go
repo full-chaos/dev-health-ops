@@ -810,6 +810,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 	if err != nil {
 		return loadedMaterializationPlan{}, err
 	}
+	failureStreaks := loadFailureStreaks(ctx, tx, orgID, integrationID, provider, datasets)
 	tierCap, totalUnitCap, err := loadPlanLimits(ctx, tx, orgID, defaultUnitCap)
 	if err != nil {
 		return loadedMaterializationPlan{}, err
@@ -834,6 +835,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			Now: occurrence.ScheduledFor.UTC(), Before: before, Since: since,
 			IntegrationDepthDays: depth, TierBackfillDaysCap: tierCap,
 			WatermarkOverlap: watermarkOverlap, Sources: sources, Datasets: datasets, Watermarks: watermarks,
+			FailureStreaks:        failureStreaks,
 			PlannerManagedParent:  scheduledParent,
 			LastWorkItemSuccessAt: lastWorkItemSuccessAt,
 			WorkItemClockAt:       workItemClockAt,
@@ -1919,6 +1921,66 @@ ON CONFLICT (org_id,integration_id,dataset_key) DO NOTHING`,
 	}
 	committed = true
 	return nil
+}
+
+// loadFailureStreaks reads, per source, how many work-items units in a row
+// failed with one cause class (CHAOS-8802). It runs only for a plan that has a
+// work-item family dataset, in a savepoint so a failed read never fails the
+// plan: an unknown streak plans exactly as before.
+func loadFailureStreaks(
+	ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, datasets []PlanDataset,
+) map[string]providersync.FailureStreak {
+	hasFamily := false
+	for _, dataset := range datasets {
+		if workitemcontract.IsFamilyDataset(dataset.Key) {
+			hasFamily = true
+			break
+		}
+	}
+	if !hasFamily {
+		return nil
+	}
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		return nil
+	}
+	rows, err := savepoint.Query(ctx, providersync.RecentTerminalUnitsSQL,
+		orgID, integrationID, canonicalWorkItemsDataset, providersync.RecentTerminalUnitsLimit)
+	if err != nil {
+		_ = savepoint.Rollback(ctx)
+		slog.Default().Warn("sync.materializer.failure_streaks_unavailable",
+			slog.String("provider", provider), slog.String("org_id", orgID),
+			slog.String("integration_id", integrationID),
+			slog.String("error_category", "streak_query_failed"))
+		return nil
+	}
+	bySource := make(map[string][]providersync.UnitOutcome)
+	for rows.Next() {
+		var sourceID string
+		var outcome providersync.UnitOutcome
+		if scanErr := rows.Scan(&sourceID, &outcome.Failed, &outcome.CauseClass, &outcome.At); scanErr != nil {
+			rows.Close()
+			_ = savepoint.Rollback(ctx)
+			return nil
+		}
+		outcome.At = outcome.At.UTC()
+		bySource[sourceID] = append(bySource[sourceID], outcome)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		_ = savepoint.Rollback(ctx)
+		return nil
+	}
+	if err := savepoint.Commit(ctx); err != nil {
+		return nil
+	}
+	streaks := make(map[string]providersync.FailureStreak)
+	for sourceID, outcomes := range bySource {
+		if streak := providersync.FailureStreakOf(outcomes); streak.Count > 0 {
+			streaks[sourceID] = streak
+		}
+	}
+	return streaks
 }
 
 func loadPlanWatermarks(ctx context.Context, tx pgx.Tx, orgID string, sources []PlanSource, datasets []PlanDataset) (map[WatermarkKey]time.Time, error) {

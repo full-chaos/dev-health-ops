@@ -453,7 +453,7 @@ func runHealthcheck(parent context.Context, cfg authconfig.Config, streams IO) i
 		fmt.Fprintln(streams.Stderr, "healthcheck: could not build the request")
 		return 1
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := (&http.Client{Timeout: cfg.HealthCheckTimeout + healthcheckSlack}).Do(request)
 	if err != nil {
 		fmt.Fprintln(streams.Stderr, "healthcheck: operator listener unreachable")
 		return 1

@@ -258,3 +258,21 @@ def test_the_org_llm_config_source_is_passed_through_and_no_file_sets_it(
     assert on["acr-api"]["environment"][key] == "ops"
     # only acr-api reads it
     assert key not in services(root, "acr")["acr-projector"]["environment"]
+
+
+def test_the_switch_procedure_removes_the_old_containers_and_keeps_the_data() -> None:
+    """The new file fixes the old project's container names, so a stopped old container makes the new `up` fail with a name conflict
+    (executed in a scratch project): the documented step is `down` of the old project, before the new `up`, never `-v`, never `--rmi`."""
+    readme = (COMPOSE_FILE.parent / "README.md").read_text()
+    section = readme[readme.index("The one-time move from the old project") :]
+    section = section[: section.index("\n## ")]
+    commands = re.findall(r"`([^`]*docker [^`]+)`", section)
+    downs = [c for c in commands if re.search(r"\bdown\b", c)]
+    assert len(downs) == 1, commands
+    (down,) = downs
+    assert "-p dev-health-acr-mcp " in down and "-f compose.yml" in down, down
+    assert not re.search(r"\s-v\b|--volumes|--rmi", down), down
+    assert not [c for c in commands if re.search(r"\bstop\b|\bkill\b", c)], commands
+    assert section.index(down) < section.index("--profile acr up -d")
+    assert "REMOVED, not only stopped" in section
+    assert "docker volume rm dev-health-acr-mcp_acr_entitlement_tmp" in section

@@ -89,10 +89,19 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
   runs the projector and the migrations) and acr-mcp are the images of the acr release build, `ghcr.io/full-chaos/dev-health-acr/acr-api` and `.../acr-mcp`. A build
   on this host needs `--build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>`; without both args acr-api refuses the sidecar with a 426.
 - acr-api talks to the real ops, as the venue does after its move off the stand-in: `ACR_DEV_HEALTH_ENTITLEMENT_URL` defaults to `http://go-api:8091` (the go-api internal listener, by alias, on `dho-query-internal`) and the bearer is the file-backed secret `acr_ops_svc_token` (the file `/var/lib/oci-cache/mcp-venue/secrets/ops_svc_acr_token`, or the path in `ACR_OPS_SVC_TOKEN_FILE`; no value is in the repository). BYO LLM config (CHAOS-9989): `ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE` is passed through and is EMPTY unless the environment of one `up` sets it; no env file on bigboy sets it (a persistent BYO setting would bill a key), and `ops` needs the scope `llm_config:read` on the token. The entitlement stand-in is no longer needed by acr-api; it stays defined (profile `acr-venue`) for a rollback: set `ACR_DEV_HEALTH_ENTITLEMENT_URL=http://acr-entitlement-standin:8088` and `ACR_OPS_SVC_TOKEN_FILE=/var/lib/oci-cache/mcp-venue/secrets/entitlement_token`, and start the stand-in.
-- The one-time move from the old project `dev-health-acr-mcp` to this file is a recreate of the acr stack (new project label, same names
-  and data). Run it only in a window MCP opens: stop the old project's containers, then `--profile acr up -d` here, then `ps` and a venue
-  readback. Before it, render the acr services from the old `compose.yml` and from this file and diff them (names, images, environment,
-  volumes, networks): only the image reference, the project-prefixed secret/volume/network names and the services' network name may differ.
+- The one-time move from the old project `dev-health-acr-mcp` to this file is a recreate of the acr stack (new project label, same container
+  names and data). Run it only in a window MCP opens. The new file fixes the old project's container names, so the old containers must be
+  REMOVED, not only stopped (a stopped container keeps its name and the new `up` fails with `Conflict. The container name ... is already in use`;
+  executed in a scratch project). The steps, in this order:
+  1. Before: render the acr services from the old `compose.yml` and from this file and diff them (names, images, environment, volumes, networks):
+     only the image reference, the project-prefixed secret/volume/network names and the services' network name may differ.
+  2. Remove the old project's containers and its own network, keeping the data: `cd /home/ubuntu/devhealth/dev-health-acr-mcp && docker compose -p dev-health-acr-mcp -f compose.yml down`
+     (NEVER `-v`, and never `--rmi`). The bind mounts `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data` are host paths and stay; the networks
+     `dho-query-internal` and `dho-clickhouse-readers` are external and stay.
+  3. Start here: `--profile acr up -d`, then `ps` and a venue readback.
+  4. After the readback, the old named volume `dev-health-acr-mcp_acr_entitlement_tmp` is left behind on purpose (it only held the stand-in's generated
+     nginx.conf; the new file uses `dev-health-acr-entitlement-tmp`): remove it with `docker volume rm dev-health-acr-mcp_acr_entitlement_tmp` when the
+     readback is good, or leave it.
 
 ## Go-only stack (CHAOS-8361)
 

@@ -279,6 +279,9 @@ func (gate *InProcessBackoffGate) now() time.Time {
 	return time.Now()
 }
 
+// Wait sleeps out the penalty itself and then reports the gate clear (0): the
+// shared-gate contract is that a positive result is a wait still owed, which
+// HTTPClient sleeps in place, so a gate that has already slept must not report it.
 func (gate *InProcessBackoffGate) Wait(ctx context.Context) (time.Duration, error) {
 	gate.mu.Lock()
 	wait := gate.until.Sub(gate.now())
@@ -290,7 +293,7 @@ func (gate *InProcessBackoffGate) Wait(ctx context.Context) (time.Duration, erro
 	defer timer.Stop()
 	select {
 	case <-timer.C:
-		return wait, nil
+		return 0, nil
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}

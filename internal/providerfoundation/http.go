@@ -58,17 +58,23 @@ func TokenAuth(header, prefix string, token secrets.Value) Auth {
 }
 
 type HTTPClient struct {
-	Provider  string
-	BaseURL   *url.URL
-	Doer      HTTPDoer
-	Auth      Auth
-	Retry     RetryPolicy
-	Lease     LeaseGuard
-	Gate      BackoffGate
-	Budget    BudgetStore
-	BudgetKey BudgetKey
-	Metrics   *Metrics
-	entropy   io.Reader
+	// GateWaitMax bounds how long, in total, one request sleeps in place at
+	// the shared backoff gate before the try ends with the wait that remains
+	// (CHAOS-8830; Python slept at most 300 s). Zero sleeps not at all, which
+	// is the old behaviour: any gate wait ends the try. NewHTTPClient sets it
+	// to RateLimitMaxHonoredDelay.
+	GateWaitMax time.Duration
+	Provider    string
+	BaseURL     *url.URL
+	Doer        HTTPDoer
+	Auth        Auth
+	Retry       RetryPolicy
+	Lease       LeaseGuard
+	Gate        BackoffGate
+	Budget      BudgetStore
+	BudgetKey   BudgetKey
+	Metrics     *Metrics
+	entropy     io.Reader
 
 	// ReservationReleaseTimeout bounds cleanup independently from a cancelled
 	// request. Zero uses defaultReservationReleaseTimeout.
@@ -95,7 +101,7 @@ func NewHTTPClient(provider, base string, doer HTTPDoer, auth Auth, retry RetryP
 	if err := admitDoer(doer); err != nil {
 		return nil, err
 	}
-	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: originGuardedAtConstruction(doer), Auth: auth, Retry: retry, Lease: lease, entropy: rand.Reader}, nil
+	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: originGuardedAtConstruction(doer), Auth: auth, Retry: retry, Lease: lease, GateWaitMax: RateLimitMaxHonoredDelay, entropy: rand.Reader}, nil
 }
 
 // admitDoer is the ONE admission every constructor that sends a credential through a doer calls (NewHTTPClient, NewGitHubAppAuth,
@@ -312,12 +318,8 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 	if err := c.Lease.Assert(ctx); err != nil {
 		return nil, err
 	}
-	if c.Gate != nil {
-		if wait, err := c.Gate.Wait(ctx); err != nil {
-			return nil, err
-		} else if wait > 0 {
-			return nil, &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
-		}
+	if err := c.awaitGate(ctx); err != nil {
+		return nil, err
 	}
 	var requestBody []byte
 	if body != nil {
@@ -477,12 +479,8 @@ func (c *HTTPClient) DoUnauthenticated(
 	if err := c.Lease.Assert(ctx); err != nil {
 		return nil, err
 	}
-	if c.Gate != nil {
-		if wait, err := c.Gate.Wait(ctx); err != nil {
-			return nil, err
-		} else if wait > 0 {
-			return nil, &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
-		}
+	if err := c.awaitGate(ctx); err != nil {
+		return nil, err
 	}
 	var reservation Reservation
 	if c.Budget != nil {
@@ -580,6 +578,46 @@ func retryJitter(entropy io.Reader, limit time.Duration) time.Duration {
 		return 0
 	}
 	return time.Duration(jitter.Int64())
+}
+
+// awaitGate sleeps out the shared backoff gate in place, as Python's gate_call
+// did, so a unit that another unit's rate limit paused continues its fetch
+// instead of ending the try and restarting from zero. It sleeps only while the
+// total stays within GateWaitMax and the context outlasts the wait; otherwise
+// the try ends with ErrorRateLimited carrying the wait that remains, which the
+// provider-unit handler turns into a persisted deferral.
+func (c *HTTPClient) awaitGate(ctx context.Context) error {
+	if c.Gate == nil {
+		return nil
+	}
+	var slept time.Duration
+	for {
+		wait, err := c.Gate.Wait(ctx)
+		if err != nil {
+			return err
+		}
+		if wait <= 0 {
+			if slept > 0 {
+				slog.InfoContext(ctx, "provider_gate_wait_slept", "provider", c.Provider, "slept_ms", slept.Milliseconds())
+			}
+			return nil
+		}
+		if slept+wait > c.GateWaitMax {
+			slog.InfoContext(ctx, "provider_gate_wait_deferred", "provider", c.Provider, "wait_ms", wait.Milliseconds(), "slept_ms", slept.Milliseconds(), "bound_ms", c.GateWaitMax.Milliseconds())
+			return &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
+			slog.InfoContext(ctx, "provider_gate_wait_deferred", "provider", c.Provider, "wait_ms", wait.Milliseconds(), "slept_ms", slept.Milliseconds(), "reason", "deadline")
+			return &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
+		}
+		if err := c.wait(ctx, wait); err != nil {
+			return err
+		}
+		slept += wait
+		if err := c.Lease.Assert(ctx); err != nil {
+			return err
+		}
+	}
 }
 
 func (c *HTTPClient) wait(ctx context.Context, wait time.Duration) error {

@@ -82,8 +82,8 @@ func TestInProcessBackoffGateWaitsOutAPenaltyAndCapsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	if waited, err := live.Wait(context.Background()); err != nil || waited <= 0 || time.Since(start) < 15*time.Millisecond {
-		t.Fatalf("a penalized gate must wait: waited %v after %v err %v", waited, time.Since(start), err)
+	if waited, err := live.Wait(context.Background()); err != nil || waited != 0 || time.Since(start) < 15*time.Millisecond {
+		t.Fatalf("a penalized gate must sleep the penalty out and report itself clear: waited %v after %v err %v", waited, time.Since(start), err)
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()

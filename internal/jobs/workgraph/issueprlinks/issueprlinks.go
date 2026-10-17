@@ -458,6 +458,9 @@ type Result struct {
 	// RepoSlugCollisions counts repository slugs that two rows with different
 	// ids hold for the same lookup (see repoSlugLookup).
 	RepoSlugCollisions int
+	// RepoSlugOtherProviderOnly counts unknown_repo rejections whose slug a
+	// row of another provider (or of none) holds (see repoSlugLookup).
+	RepoSlugOtherProviderOnly int
 }
 
 // Written is the number of rows Derive produced.
@@ -607,8 +610,13 @@ func Derive(inputs Inputs) Result {
 			result.Rejected[ReasonUnknownWorkItem]++
 			continue
 		}
-		repoID, ok := repoLookup.resolve(orgID, source.Provider, source.RepoSlug)
+		repoID, ok, otherProviderOnly := repoLookup.resolve(orgID, source.Provider, source.RepoSlug)
 		if !ok {
+			if otherProviderOnly {
+				result.RepoSlugOtherProviderOnly++
+				slog.Default().Debug("issue-pr links: PR source slug held only under another provider",
+					slog.String("organization_id", orgID), slog.String("provider", source.Provider), slog.String("slug", source.RepoSlug))
+			}
 			result.Rejected[ReasonUnknownRepo]++
 			continue
 		}
@@ -725,21 +733,29 @@ func normalizeLastSynced(value time.Time) time.Time {
 // byProvider holds every github and gitlab row under its own provider: its
 // repo, and for GitLab also its identity_path, the path its merge-request ids
 // carry (CHAOS-3383), which wins over another GitLab project's current path.
-// A source resolves under its own provider first, so a GitLab alias never
-// answers a GitHub slug and a GitHub repo never answers a GitLab one.
+// A source resolves only under its own provider: a `ghpr:` slug only to a
+// GitHub row, a `gitlab:` slug only to a GitLab row.
 //
-// anyProvider is Python's slug-only map over every row (builder.py:700, last
-// row wins). It answers only a slug no row of the source's provider holds.
+// # Documented divergence from Python: no slug-only match
+//
+// Python's map is (org, slug) over every row (builder.py:700), so a `ghpr:`
+// source could link a GitLab repo or a local/custom/unknown one that holds the
+// same slug. chris ruled it removed (CHAOS-10037, 2026-10-17, on CHAOS-3383
+// comment 09ed545d). A source whose slug only another provider's row holds is
+// rejected as unknown_repo and counted in otherProviderOnly. On prod at the
+// ruling no link depended on it (0 of 8313).
 type repoSlugLookup struct {
-	byProvider  map[[3]string]uuid.UUID
-	anyProvider map[[2]string]uuid.UUID
-	collisions  int
+	byProvider map[[3]string]uuid.UUID
+	// otherProvider holds every (org, slug) any row holds, only to count the
+	// sources the provider scoping rejects; it never resolves one.
+	otherProvider map[[2]string]bool
+	collisions    int
 }
 
 func newRepoSlugLookup(inputs Inputs) repoSlugLookup {
 	lookup := repoSlugLookup{
-		byProvider:  make(map[[3]string]uuid.UUID, len(inputs.Repos)),
-		anyProvider: make(map[[2]string]uuid.UUID, len(inputs.Repos)),
+		byProvider:    make(map[[3]string]uuid.UUID, len(inputs.Repos)),
+		otherProvider: make(map[[2]string]bool, len(inputs.Repos)),
 	}
 	put := func(key [3]string, id uuid.UUID) {
 		if held, ok := lookup.byProvider[key]; ok && held != id {
@@ -762,18 +778,16 @@ func newRepoSlugLookup(inputs Inputs) repoSlugLookup {
 			continue
 		}
 		orgID := rowOrgID(repo.OrgID, inputs.OrgID)
-		key := [2]string{orgID, repo.Repo}
-		if held, ok := lookup.anyProvider[key]; ok && held != repo.ID {
-			lookup.collide(orgID, "any", repo.Repo, held, repo.ID)
-		}
-		lookup.anyProvider[key] = repo.ID
+		lookup.otherProvider[[2]string{orgID, repo.Repo}] = true
 		if repo.Provider == ProviderGitHub || repo.Provider == ProviderGitLab {
 			put([3]string{orgID, repo.Provider, repo.Repo}, repo.ID)
 		}
 	}
 	for _, repo := range inputs.Repos {
 		if repo.Provider == ProviderGitLab && repo.IdentityPath != "" && repo.IdentityPath != repo.Repo {
-			put([3]string{rowOrgID(repo.OrgID, inputs.OrgID), ProviderGitLab, repo.IdentityPath}, repo.ID)
+			orgID := rowOrgID(repo.OrgID, inputs.OrgID)
+			lookup.otherProvider[[2]string{orgID, repo.IdentityPath}] = true
+			put([3]string{orgID, ProviderGitLab, repo.IdentityPath}, repo.ID)
 		}
 	}
 	return lookup
@@ -786,10 +800,12 @@ func (lookup *repoSlugLookup) collide(orgID, provider, slug string, held, next u
 		slog.String("replaced_repo_id", held.String()), slog.String("repo_id", next.String()))
 }
 
-func (lookup repoSlugLookup) resolve(orgID, provider, slug string) (uuid.UUID, bool) {
+// resolve returns the repo id of slug under provider. otherProviderOnly is
+// true when no row of provider holds the slug but a row of another provider
+// (or one with no provider) does.
+func (lookup repoSlugLookup) resolve(orgID, provider, slug string) (id uuid.UUID, ok bool, otherProviderOnly bool) {
 	if id, ok := lookup.byProvider[[3]string{orgID, provider, slug}]; ok {
-		return id, true
+		return id, true, false
 	}
-	id, ok := lookup.anyProvider[[2]string{orgID, slug}]
-	return id, ok
+	return uuid.UUID{}, false, lookup.otherProvider[[2]string{orgID, slug}]
 }

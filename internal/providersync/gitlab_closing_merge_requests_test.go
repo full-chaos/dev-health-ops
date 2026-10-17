@@ -72,7 +72,7 @@ func TestGitLabClosingReferenceRowsBecomeNativeLinks(t *testing.T) {
 	apiRepo, forkRepo := uuid.MustParse("44444444-4444-4444-8444-444444444444"), uuid.MustParse("55555555-5555-4555-8555-555555555555")
 	inputs := issueprlinks.Inputs{
 		OrgID:        claim.OrgID,
-		Repos:        []issueprlinks.RepoRow{{OrgID: claim.OrgID, ID: apiRepo, Repo: "acme/api"}, {OrgID: claim.OrgID, ID: forkRepo, Repo: "other/fork"}},
+		Repos:        []issueprlinks.RepoRow{{OrgID: claim.OrgID, ID: apiRepo, Repo: "acme/api", Provider: issueprlinks.ProviderGitLab}, {OrgID: claim.OrgID, ID: forkRepo, Repo: "other/fork", Provider: issueprlinks.ProviderGitLab}},
 		PullRequests: []issueprlinks.PullRequestRow{{OrgID: claim.OrgID, RepoID: apiRepo, Number: 9}, {OrgID: claim.OrgID, RepoID: forkRepo, Number: 3}},
 		WorkItems:    []issueprlinks.WorkItemRow{{OrgID: claim.OrgID, WorkItemID: issue}},
 	}

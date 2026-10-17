@@ -101,7 +101,7 @@ func baseInputs() Inputs {
 			RelationshipTypeRaw: "linear_attachment",
 			LastSynced:          testSynced,
 		}},
-		Repos:        []RepoRow{{OrgID: testOrg, ID: testRepoID, Repo: testSlug}},
+		Repos:        []RepoRow{{OrgID: testOrg, ID: testRepoID, Repo: testSlug, Provider: ProviderGitHub}},
 		PullRequests: []PullRequestRow{{OrgID: testOrg, RepoID: testRepoID, Number: 12}},
 		WorkItems:    []WorkItemRow{{OrgID: testOrg, WorkItemID: testLinear}},
 	}
@@ -211,7 +211,7 @@ func TestDeriveIsFirstWinsOnDuplicateIdentity(t *testing.T) {
 	inputs.Dependencies = append(inputs.Dependencies, later)
 	// The GitLab source resolves to the same repo and PR number, so both rows
 	// land on one identity.
-	inputs.Repos = append(inputs.Repos, RepoRow{OrgID: testOrg, ID: testRepoID, Repo: testSlug})
+	inputs.Repos = append(inputs.Repos, RepoRow{OrgID: testOrg, ID: testRepoID, Repo: testSlug, Provider: ProviderGitLab})
 
 	result := Derive(inputs)
 	if result.Written() != 1 {
@@ -255,7 +255,7 @@ func TestDeriveStampsTheBuildOrgOnEveryRow(t *testing.T) {
 // read of this table.
 func TestDeriveIgnoresRowsFromAnotherOrg(t *testing.T) {
 	inputs := baseInputs()
-	inputs.Repos = []RepoRow{{OrgID: "other-org", ID: testRepoID, Repo: testSlug}}
+	inputs.Repos = []RepoRow{{OrgID: "other-org", ID: testRepoID, Repo: testSlug, Provider: ProviderGitHub}}
 	assertSingleRejection(t, Derive(inputs), ReasonUnknownRepo)
 }
 
@@ -355,7 +355,7 @@ func TestAdmittedCounterCountsRowsThatPassedAdmission(t *testing.T) {
 // assertion. The frozen golden cannot catch it — it contains no zero UUID.
 func TestDeriveKeepsAnAllZeroRepoUUID(t *testing.T) {
 	inputs := baseInputs()
-	inputs.Repos = []RepoRow{{OrgID: testOrg, ID: uuid.Nil, Repo: testSlug}}
+	inputs.Repos = []RepoRow{{OrgID: testOrg, ID: uuid.Nil, Repo: testSlug, Provider: ProviderGitHub}}
 	inputs.PullRequests = []PullRequestRow{{OrgID: testOrg, RepoID: uuid.Nil, Number: 12}}
 
 	result := Derive(inputs)
@@ -530,7 +530,51 @@ func TestDeriveResolvesARepositorySlugUnderTheSourcesProvider(t *testing.T) {
 			{OrgID: testOrg, ID: gitlab, Repo: testSlug, Provider: "github"}},
 		WorkItems: []WorkItemRow{{OrgID: testOrg, WorkItemID: testLinear}},
 	})
-	if result.RepoSlugCollisions != 2 {
-		t.Fatalf("RepoSlugCollisions = %d, want 2 (the slug-only map and the provider map)", result.RepoSlugCollisions)
+	if result.RepoSlugCollisions != 1 {
+		t.Fatalf("RepoSlugCollisions = %d, want 1", result.RepoSlugCollisions)
+	}
+}
+
+// CHAOS-10037 (chris 2026-10-17): a PR source resolves only under its own
+// provider. A slug held only by another provider's row, or by a local, custom
+// or unknown row, links nothing: the row is rejected as unknown_repo and
+// counted as other-provider-only.
+func TestDeriveRejectsASlugHeldOnlyUnderAnotherProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, target, raw, provider string
+	}{
+		{"github source, gitlab repo", "ghpr:org/api#5", testLinear, "linear_attachment", ProviderGitLab},
+		{"gitlab source, github repo", "gitlab:org/api!5", "gitlab:org/api#9", "gitlab_closing_reference", ProviderGitHub},
+		{"github source, local repo", "ghpr:org/api#5", testLinear, "linear_attachment", "local"},
+		{"github source, custom repo", "ghpr:org/api#5", testLinear, "linear_attachment", "custom"},
+		{"github source, unknown repo", "ghpr:org/api#5", testLinear, "linear_attachment", "unknown"},
+		{"gitlab source, provider-less repo", "gitlab:org/api!5", "gitlab:org/api#9", "gitlab_closing_reference", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repoID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+			result := Derive(Inputs{
+				OrgID: testOrg,
+				Dependencies: []DependencyRow{{OrgID: testOrg, SourceWorkItemID: tc.source, TargetWorkItemID: tc.target,
+					RelationshipTypeRaw: tc.raw, LastSynced: testSynced}},
+				Repos:        []RepoRow{{OrgID: testOrg, ID: repoID, Repo: "org/api", Provider: tc.provider}},
+				PullRequests: []PullRequestRow{{OrgID: testOrg, RepoID: repoID, Number: 5}},
+				WorkItems:    []WorkItemRow{{OrgID: testOrg, WorkItemID: tc.target}},
+			})
+			assertSingleRejection(t, result, ReasonUnknownRepo)
+			if result.RepoSlugOtherProviderOnly != 1 {
+				t.Fatalf("RepoSlugOtherProviderOnly = %d, want 1", result.RepoSlugOtherProviderOnly)
+			}
+		})
+	}
+	// A slug no row holds at all is unknown_repo too, but not other-provider-only.
+	result := Derive(Inputs{
+		OrgID: testOrg,
+		Dependencies: []DependencyRow{{OrgID: testOrg, SourceWorkItemID: "ghpr:org/none#5", TargetWorkItemID: testLinear,
+			RelationshipTypeRaw: "linear_attachment", LastSynced: testSynced}},
+		WorkItems: []WorkItemRow{{OrgID: testOrg, WorkItemID: testLinear}},
+	})
+	assertSingleRejection(t, result, ReasonUnknownRepo)
+	if result.RepoSlugOtherProviderOnly != 0 {
+		t.Fatalf("RepoSlugOtherProviderOnly = %d, want 0", result.RepoSlugOtherProviderOnly)
 	}
 }

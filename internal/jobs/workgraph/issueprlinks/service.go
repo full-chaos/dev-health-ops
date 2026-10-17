@@ -37,7 +37,9 @@ type Outcome struct {
 	ReservedSeenByRawKind map[string]int
 	// RepoSlugCollisions counts repository slugs two repos hold (Result).
 	RepoSlugCollisions int
-	Duration           time.Duration
+	// RepoSlugOtherProviderOnly is Result.RepoSlugOtherProviderOnly.
+	RepoSlugOtherProviderOnly int
+	Duration                  time.Duration
 	// Balanced is false when the read count does not equal written plus
 	// rejected -- an accounting bug in this package, not a data condition.
 	Balanced bool
@@ -131,15 +133,16 @@ func (service *Service) Produce(ctx context.Context, orgID string, window Window
 	}
 
 	outcome := Outcome{
-		OrganizationID:        orgID,
-		DependenciesRead:      result.DependenciesRead,
-		AdmittedByRawKind:     result.AdmittedByRawKind,
-		Written:               result.Written(),
-		Rejected:              result.Rejected,
-		ReservedSeenByRawKind: result.ReservedSeenByRawKind,
-		RepoSlugCollisions:    result.RepoSlugCollisions,
-		Duration:              service.now().Sub(started),
-		Balanced:              result.Balanced(),
+		OrganizationID:            orgID,
+		DependenciesRead:          result.DependenciesRead,
+		AdmittedByRawKind:         result.AdmittedByRawKind,
+		Written:                   result.Written(),
+		Rejected:                  result.Rejected,
+		ReservedSeenByRawKind:     result.ReservedSeenByRawKind,
+		RepoSlugCollisions:        result.RepoSlugCollisions,
+		RepoSlugOtherProviderOnly: result.RepoSlugOtherProviderOnly,
+		Duration:                  service.now().Sub(started),
+		Balanced:                  result.Balanced(),
 	}
 	service.observe(outcome)
 	return outcome, nil
@@ -152,6 +155,7 @@ func (service *Service) observe(outcome Outcome) {
 		slog.Int("rows_written", outcome.Written),
 		slog.Bool("accounting_balanced", outcome.Balanced),
 		slog.Int("repo_slug_collisions", outcome.RepoSlugCollisions),
+		slog.Int("rejected_unknown_repo_other_provider_only", outcome.RepoSlugOtherProviderOnly),
 		slog.Duration("duration", outcome.Duration),
 	}
 	// Fixed order, from AllRejectionReasons -- ranging a map here would make

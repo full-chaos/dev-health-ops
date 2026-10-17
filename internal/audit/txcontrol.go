@@ -47,6 +47,10 @@ func refuseTransactionControl(sql string) error {
 			"the state it wrote", ErrMutationFailed, token)
 }
 
+// PostgreSQL ends a -- comment at \n OR \r and counts \f and \v as whitespace
+// (scan.l); a scanner that knows only \n and space reads `\fCOMMIT` as a
+// non-token and `-- c\rCOMMIT` as one comment (found by review, executed).
+
 // firstToken returns the first SQL keyword, upper-cased, skipping leading
 // whitespace, -- line comments and /* */ block comments.
 //
@@ -57,10 +61,10 @@ func firstToken(sql string) string {
 	i := 0
 	for i < len(sql) {
 		switch {
-		case sql[i] == ' ' || sql[i] == '\t' || sql[i] == '\n' || sql[i] == '\r':
+		case sql[i] == ' ' || sql[i] == '\t' || sql[i] == '\n' || sql[i] == '\r' || sql[i] == '\f' || sql[i] == '\v':
 			i++
 		case strings.HasPrefix(sql[i:], "--"):
-			end := strings.IndexByte(sql[i:], '\n')
+			end := strings.IndexAny(sql[i:], "\n\r")
 			if end < 0 {
 				return ""
 			}
@@ -113,7 +117,7 @@ func refuseMultipleStatements(sql string) error {
 	for i < len(sql) {
 		switch {
 		case strings.HasPrefix(sql[i:], "--"):
-			end := strings.IndexByte(sql[i:], '\n')
+			end := strings.IndexAny(sql[i:], "\n\r")
 			if end < 0 {
 				return nil
 			}

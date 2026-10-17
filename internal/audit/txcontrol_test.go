@@ -28,6 +28,10 @@ func TestTransactionControlIsRefusedBeforeItIsSent(t *testing.T) {
 		{"DISCARD ALL", `DISCARD ALL`, true},
 		{"line comment then COMMIT", "-- harmless\nCOMMIT", true},
 		{"nested block comments then COMMIT", `/* a /* b */ c */ COMMIT`, true},
+		{"form feed then COMMIT", "\fCOMMIT", true},
+		{"vertical tab then COMMIT", "\vCOMMIT", true},
+		{"CR-only line comment then COMMIT", "-- c\rCOMMIT", true},
+		{"two statements, CR ends the comment", "SELECT 1 -- c\r; COMMIT", true},
 
 		// Accepting rows. A mutation must still be able to do its job.
 		{"plain INSERT", `INSERT INTO auth.organizations (id) VALUES (1)`, false},

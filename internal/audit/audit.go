@@ -37,6 +37,19 @@
 // the others. A caller cannot forget the outbox event because a caller cannot
 // reach it.
 //
+// ALSO NOT CLAIMED, each reproduced by review round 1 and kept as stated bounds:
+//
+//   - Apply is opaque. Commit cannot know whether the callback changed any
+//     state, so a callback that returns nil having written nothing still gets
+//     its outbox event and audit row. Whether "nothing changed" is an event is
+//     the caller's decision (return an error or skip Commit).
+//   - A connection taken from the pool inside the callback commits outside the
+//     helper's transaction (see the package doc); the rollback log line speaks
+//     only of the helper's own transaction.
+//   - The closed-world source guard reads Go source text. SQL assembled from
+//     concatenated fragments outside this package is invisible to it; review
+//     and the runtime role's grants are the other controls.
+//
 // The bound this does NOT claim: within this package the inserts are callable
 // directly, exactly as ValidatedIdentifier is constructible within its own.
 // The guarantee is over the package boundary; inside it, review is the control.
@@ -311,7 +324,7 @@ func (m Mutation) validate() error {
 func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, m Mutation) (err error) {
 	defer func() {
 		if err != nil {
-			slog.ErrorContext(ctx, "audit: security mutation rolled back",
+			slog.ErrorContext(ctx, "audit: Commit failed; its own transaction rolled back",
 				"audit_event_type", m.Audit.EventType, "outbox_event_type", m.Event.EventType,
 				"aggregate_type", m.Event.AggregateType, "error", err)
 		}

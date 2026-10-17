@@ -12,11 +12,11 @@ import (
 )
 
 // The credential keys the code reads are found in the source tree itself: every
-// string literal passed to a Secret(...) call and every value of a
+// string literal passed to a Secret(...) call anywhere under internal/ and every value of a
 // credentialKeyMap composite literal. Each one that names a secret must be a
 // declared credential field, or the short-secret warning would report it as undeclared.
 func TestDeclaredCredentialFieldsCoverTheKeysTheCodeReads(t *testing.T) {
-	roots := []string{"../../providerfoundation", "../../api"}
+	roots := []string{"../.."}
 	fset := token.NewFileSet()
 	read := map[string]string{}
 	for _, root := range roots {
@@ -72,8 +72,8 @@ func TestDeclaredCredentialFieldsCoverTheKeysTheCodeReads(t *testing.T) {
 		t.Fatalf("found only %d credential keys in the source tree (%v): the walk no longer sees the code that reads them", len(read), read)
 	}
 	for key, path := range read {
-		if key == strings.ToUpper(key) || !isSecretField(key) {
-			continue // an environment variable name, or a key that holds no secret
+		if !isSecretField(key) {
+			continue // a key that holds no secret
 		}
 		if _, declared := declaredCredentialField(key); !declared {
 			t.Errorf("%s reads the secret credential key %q, which is not in declaredCredentialFields", path, key)

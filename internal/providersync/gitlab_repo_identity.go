@@ -111,8 +111,16 @@ func decideGitLabRepoIdentity(projectID int64, currentPath string, rows []GitLab
 		}
 	}
 	if len(held) > 0 {
-		identity, err := newestGitLabStoredRepoIdentity(held).identity()
-		return identity, gitLabRepoIdentityHeld, err
+		newest := newestGitLabStoredRepoIdentity(held)
+		identity, err := newest.identity()
+		kind := gitLabRepoIdentityHeld + "_by_provider_repo_id"
+		if newest.ProviderRepoID == "" {
+			kind = gitLabRepoIdentityHeld + "_by_settings_project_id"
+		}
+		if newest.IdentityPath == "" {
+			kind += "_path_from_repo"
+		}
+		return identity, kind, err
 	}
 	minted, err := repositoryIdentity(currentPath)
 	if err != nil {

@@ -402,21 +402,35 @@ WHERE org_id = ? AND provider = ? AND project_key IN ?`,
 	if err := result.Err(); err != nil {
 		return nil, err
 	}
+	// A repos row keeps its project's current path in repo and, since its id
+	// stays across renames (CHAOS-3383), the path it was minted at in
+	// identity_path: both are paths the store has seen the project at.
 	repos, err := sink.Conn.Query(ctx, `
-SELECT repo, provider_repo_id FROM repos FINAL
-WHERE org_id = ? AND provider = ? AND provider_repo_id != '' AND repo IN ?`,
-		orgID, gitlabTeamCatalogProvider, paths)
+SELECT repo, identity_path, provider_repo_id FROM repos FINAL
+WHERE org_id = ? AND provider = ? AND provider_repo_id != '' AND (repo IN ? OR identity_path IN ?)`,
+		orgID, gitlabTeamCatalogProvider, paths, paths)
 	if err != nil {
 		return nil, err
 	}
 	defer repos.Close()
+	wanted := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		wanted[path] = true
+	}
 	for repos.Next() {
-		var path, nativeID string
-		if err := repos.Scan(&path, &nativeID); err != nil {
+		var path, identityPath, nativeID string
+		if err := repos.Scan(&path, &identityPath, &nativeID); err != nil {
 			return nil, err
 		}
-		if id, ok := GitLabCatalogProjectID(orgID, nativeID); ok {
+		id, ok := GitLabCatalogProjectID(orgID, nativeID)
+		if !ok {
+			continue
+		}
+		if wanted[path] {
 			out[path] = append(out[path], id.String())
+		}
+		if identityPath != path && wanted[identityPath] {
+			out[identityPath] = append(out[identityPath], id.String())
 		}
 	}
 	return out, repos.Err()

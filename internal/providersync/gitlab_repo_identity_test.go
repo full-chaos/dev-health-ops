@@ -36,17 +36,17 @@ func TestDecideGitLabRepoIdentityKeepsAHeldProjectAndMintsANewOne(t *testing.T) 
 		{
 			name: "a renamed project keeps its id and minted path", projectID: 123, currentPath: "platform/api-v2",
 			rows: []GitLabStoredRepoIdentity{{ID: acme, Repo: "acme/api", IdentityPath: "acme/api", ProviderRepoID: "123", LastSynced: t0}},
-			want: GitLabRepoIdentity{RepoID: acme, Path: "acme/api"}, decision: gitLabRepoIdentityHeld,
+			want: GitLabRepoIdentity{RepoID: acme, Path: "acme/api"}, decision: gitLabRepoIdentityHeld + "_by_provider_repo_id",
 		},
 		{
 			name: "a row from before identity_path proves its path by its id", projectID: 123, currentPath: "platform/api-v2",
 			rows: []GitLabStoredRepoIdentity{{ID: acme, Repo: "acme/api", ProviderRepoID: "123", LastSynced: t0}},
-			want: GitLabRepoIdentity{RepoID: acme, Path: "acme/api"}, decision: gitLabRepoIdentityHeld,
+			want: GitLabRepoIdentity{RepoID: acme, Path: "acme/api"}, decision: gitLabRepoIdentityHeld + "_by_provider_repo_id_path_from_repo",
 		},
 		{
 			name: "a row from before provider_repo_id is held by its settings project_id", projectID: 123, currentPath: "platform/api-v2",
 			rows: []GitLabStoredRepoIdentity{{ID: acme, Repo: "acme/api", SettingsProjectID: 123, LastSynced: t0}},
-			want: GitLabRepoIdentity{RepoID: acme, Path: "acme/api"}, decision: gitLabRepoIdentityHeld,
+			want: GitLabRepoIdentity{RepoID: acme, Path: "acme/api"}, decision: gitLabRepoIdentityHeld + "_by_settings_project_id_path_from_repo",
 		},
 		{
 			name: "provider_repo_id wins over a stale settings project_id", projectID: 123, currentPath: "acme/api",
@@ -59,7 +59,7 @@ func TestDecideGitLabRepoIdentityKeepsAHeldProjectAndMintsANewOne(t *testing.T) 
 				{ID: acme, Repo: "acme/api", ProviderRepoID: "123", LastSynced: t0},
 				{ID: platform, Repo: "platform/api-v2", ProviderRepoID: "123", LastSynced: t0.Add(time.Hour)},
 			},
-			want: GitLabRepoIdentity{RepoID: platform, Path: "platform/api-v2"}, decision: gitLabRepoIdentityHeld,
+			want: GitLabRepoIdentity{RepoID: platform, Path: "platform/api-v2"}, decision: gitLabRepoIdentityHeld + "_by_provider_repo_id_path_from_repo",
 		},
 		{
 			name: "a path another project holds mints {path}@{N}", projectID: 456, currentPath: "acme/api",

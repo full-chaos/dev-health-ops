@@ -108,11 +108,10 @@ func WorkUnitExplanationRequest(prompt string) CompletionRequest {
 // Protocol -- the narrow capability any LLM-backed caller in this package
 // needs from a backend, deliberately small enough that any of Python's six
 // providers (openai/anthropic/gemini/qwen/local/mock) could implement it.
-// Day-one implementations: MockProvider (dev/test), OpenAIProvider
-// (openaiprovider.go, GPT-5 family via the Responses API), and
-// LocalProvider (localprovider.go, an OpenAI-compatible endpoint such as
-// LM Studio/Ollama). Anthropic/gemini/qwen have no Go port yet -- add one
-// by implementing this same interface, not by widening it.
+// Implementations: SharedProvider (sharedprovider.go: openai, anthropic,
+// gemini, qwen and local through the shared dev-health-go llm package),
+// OllamaProvider (native /api/chat), MockProvider and NoneProvider. A new
+// backend goes into the shared package, not a widening of this interface.
 //
 // Model is the one exception to that "don't widen it" rule: it is the
 // SINGLE source of truth for the model this Provider was constructed to

@@ -161,7 +161,7 @@ func ResolveModelNameForOrg(
 				if orgModel != "" {
 					return orgModel, true
 				}
-				if def, ok := defaultModelByProvider[kind]; ok {
+				if def, ok := platformDefaultModel(kind); ok {
 					return def, true
 				}
 				return "", false
@@ -176,7 +176,7 @@ func ResolveModelNameForOrg(
 	if value := os.Getenv("LLM_MODEL"); value != "" {
 		return value, true
 	}
-	if def, ok := defaultModelByProvider[kind]; ok {
+	if def, ok := platformDefaultModel(kind); ok {
 		return def, true
 	}
 	return "", false
@@ -214,8 +214,8 @@ func ResolveModelNameForOrg(
 // NO stored model, this function's own orgSettings.Model call returned ""
 // too, and construction fell through to categorize's OWN per-provider
 // default (e.g. openaiprovider.go's "gpt-5-nano") instead of
-// ResolveModelNameForOrg's already-computed default (e.g.
-// defaultModelByProvider[openai] == "gpt-5-mini") -- two DIFFERENT
+// ResolveModelNameForOrg's already-computed default (llmbudget.DefaultModel)
+// -- two DIFFERENT
 // hardcoded defaults disagreeing on which model a BYO request with no
 // explicit/stored model actually gets. Passing the ALREADY-RESOLVED value
 // straight through eliminates the second, independent derivation

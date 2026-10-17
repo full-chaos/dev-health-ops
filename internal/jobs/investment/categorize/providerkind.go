@@ -8,12 +8,14 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 )
 
 // ProviderKind is llm/providers/__init__.py's provider name string, typed.
 // It names the BYO LLM backends Python supports (plus the "none" kill-switch
-// and the "mock" test double) even though only four have a Go implementation
-// today -- see NewProviderFromEnv. There is no ProviderKindLMStudio: see the
+// and the "mock" test double); see NewProviderFromEnv for the ones with a Go
+// client. There is no ProviderKindLMStudio: see the
 // comment on the const block below.
 type ProviderKind string
 
@@ -254,15 +256,17 @@ func ResolveTextProviderKind(requested string) (ProviderKind, error) {
 // goImplementedProviderKinds are the kinds NewProviderFromEnv can actually
 // construct a working client for, as opposed to an explicit-refusal stub.
 var goImplementedProviderKinds = map[ProviderKind]struct{}{
-	ProviderKindOpenAI: {},
-	ProviderKindLocal:  {},
-	ProviderKindOllama: {},
-	ProviderKindMock:   {},
-	ProviderKindNone:   {},
+	ProviderKindOpenAI:    {},
+	ProviderKindAnthropic: {},
+	ProviderKindGemini:    {},
+	ProviderKindQwen:      {},
+	ProviderKindLocal:     {},
+	ProviderKindOllama:    {},
+	ProviderKindMock:      {},
+	ProviderKindNone:      {},
 }
 
-// IsProviderKindImplemented reports whether kind has a real Go client
-// (openai, local, ollama, mock, none) as opposed to a BYO stub.
+// IsProviderKindImplemented reports whether kind has a real Go client.
 func IsProviderKindImplemented(kind ProviderKind) bool {
 	_, ok := goImplementedProviderKinds[kind]
 	return ok
@@ -283,32 +287,6 @@ func ImplementedProviderKinds() []ProviderKind {
 	return kinds
 }
 
-// unimplementedProvider satisfies Provider for a kind Python supports that
-// this port does not yet -- so a caller resolving "any of the six" always
-// gets a Provider value back, with the refusal happening explicitly at the
-// first real call rather than the factory failing before a Provider even
-// exists. This is the shape a future Anthropic/Gemini/Qwen port fills in:
-// implement Provider, register it in NewProviderFromEnv, delete the
-// corresponding entry below.
-type unimplementedProvider struct {
-	kind ProviderKind
-}
-
-func (p unimplementedProvider) Complete(_ context.Context, _ CompletionRequest) (CompletionResult, error) {
-	return CompletionResult{}, fmt.Errorf(
-		"LLM provider kind %q is not yet implemented in Go -- implemented kinds: openai, local, ollama, mock, none",
-		p.kind,
-	)
-}
-
-func (p unimplementedProvider) Close() error { return nil }
-
-// Model is always empty: this stub never resolves or holds a real model --
-// Complete refuses outright before any model would matter.
-func (p unimplementedProvider) Model() string { return "" }
-
-var _ Provider = unimplementedProvider{}
-
 // NewProviderFromEnv constructs a Provider for kind, reading configuration
 // from environment variable NAMES only -- mirroring
 // llm/credentials.py's _API_KEY_ENV_BY_PROVIDER/_BASE_URL_ENV_BY_PROVIDER
@@ -322,19 +300,24 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 // modelEnvByKind ports _MODEL_ENV_BY_PROVIDER (llm/providers/__init__.py:25-31),
 // narrowed to the kinds this port can construct.
 var modelEnvByKind = map[ProviderKind][]string{
-	ProviderKindOpenAI: {"LLM_MODEL_OPENAI"},
-	ProviderKindLocal:  {"LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"},
-	ProviderKindOllama: {"LLM_MODEL_OLLAMA", "OLLAMA_MODEL"},
+	ProviderKindOpenAI:    {"LLM_MODEL_OPENAI"},
+	ProviderKindAnthropic: {"LLM_MODEL_ANTHROPIC"},
+	ProviderKindGemini:    {"LLM_MODEL_GEMINI", "GEMINI_MODEL"},
+	ProviderKindQwen:      {"LLM_MODEL_QWEN", "QWEN_MODEL"},
+	ProviderKindLocal:     {"LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"},
+	ProviderKindOllama:    {"LLM_MODEL_OLLAMA", "OLLAMA_MODEL"},
 }
 
-// defaultModelByKind ports DEFAULT_MODEL_BY_PROVIDER (llm/providers/base.py:36-46),
-// narrowed the same way. Python falls back to this when no env var is set;
-// without it a stamp would record an EMPTY model for a run that used the
-// provider's built-in default.
-var defaultModelByKind = map[ProviderKind]string{
-	ProviderKindOpenAI: "gpt-5-mini",
-	ProviderKindLocal:  "llama3.2",
-	ProviderKindOllama: "llama3.2",
+// defaultModelForKind is the model used when none is configured, for a kind
+// this package serves: the one resolver the runtime and the admin budget
+// status share (llmbudget.DefaultModel, ruling D6043), so the stamp, the
+// provider and the status cannot disagree. Without it a stamp would record
+// an EMPTY model for a run that used the provider's built-in default.
+func defaultModelForKind(kind ProviderKind) string {
+	if _, served := modelEnvByKind[kind]; !served {
+		return ""
+	}
+	return llmbudget.DefaultModel(string(kind), envsecrets.ProcessLookup)
 }
 
 // ResolveModelName returns the model that WILL ACTUALLY BE USED for kind, and
@@ -383,7 +366,7 @@ func ResolveModelName(kind ProviderKind, requested string) string {
 	if resolved := firstNonEmptyEnv(names...); resolved != "" {
 		return resolved
 	}
-	return defaultModelByKind[kind]
+	return defaultModelForKind(kind)
 }
 
 // NewProviderFromEnvWithModel is NewProviderFromEnv with an explicit model
@@ -441,12 +424,13 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 		// to even select "local") -- local.py's own LocalProvider falls
 		// back to Ollama's default endpoint when base_url is empty, and
 		// NewLocalProvider below applies that same fallback.
-		return NewLocalProvider(LocalProviderConfig{
+		return NewSharedProvider(SharedProviderConfig{
+			Kind:    ProviderKindLocal,
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "LOCAL_LLM_BASE_URL"),
 			// Generic-first, same ruling as openai above.
 			Model:  resolved,
 			APIKey: envsecrets.NewHidden(firstNonEmptyEnv("LLM_API_KEY", "LOCAL_LLM_API_KEY")),
-		}), nil
+		})
 
 	case ProviderKindOllama:
 		// Native /api/chat client (ollamaprovider.go) -- distinct from
@@ -462,10 +446,18 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 			APIKey:  envsecrets.NewHidden(firstNonEmptyEnv("LLM_API_KEY", "OLLAMA_API_KEY", "LOCAL_LLM_API_KEY")),
 		}), nil
 
-	// BYO LLM stubs: Python has a real client for each of these; this port
-	// does not yet.
 	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
-		return unimplementedProvider{kind: kind}, nil
+		env := hostedProviderEnv[kind]
+		apiKey := firstNonEmptyEnv(env.apiKeys...)
+		if apiKey == "" {
+			return nil, fmt.Errorf("LLM provider %q is not configured: set %s", kind, strings.Join(env.apiKeys[1:], " or "))
+		}
+		return NewSharedProvider(SharedProviderConfig{
+			Kind:    kind,
+			APIKey:  envsecrets.NewHidden(apiKey),
+			BaseURL: firstNonEmptyEnv(env.baseURLs...),
+			Model:   resolved,
+		})
 
 	case ProviderKindTypeSafe:
 		return nil, errTypeSafeIsNotAProvider
@@ -473,6 +465,17 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 	default:
 		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)
 	}
+}
+
+// hostedProviderEnv is credentials.py's _API_KEY_ENV_BY_PROVIDER and
+// _BASE_URL_ENV_BY_PROVIDER for the hosted providers the shared llm package
+// serves, generic names first. QWEN_BASE_URL is new: a Qwen endpoint that is
+// not DashScope (Cloudflare Workers AI's OpenAI-compatible route) is named
+// without the DashScope name.
+var hostedProviderEnv = map[ProviderKind]struct{ apiKeys, baseURLs []string }{
+	ProviderKindAnthropic: {[]string{"LLM_API_KEY", "ANTHROPIC_API_KEY"}, []string{"LLM_BASE_URL", "ANTHROPIC_BASE_URL"}},
+	ProviderKindGemini:    {[]string{"LLM_API_KEY", "GEMINI_API_KEY"}, []string{"LLM_BASE_URL", "GEMINI_BASE_URL"}},
+	ProviderKindQwen:      {[]string{"LLM_API_KEY", "QWEN_API_KEY", "DASHSCOPE_API_KEY"}, []string{"LLM_BASE_URL", "QWEN_BASE_URL", "DASHSCOPE_BASE_URL"}},
 }
 
 // NewProviderFromCredentials is NewProviderFromEnv's org-BYO sibling
@@ -528,15 +531,16 @@ func newProviderFromCredentialsWithTransport(
 
 	case ProviderKindLocal:
 		// Same as NewProviderFromEnv's own comment: an empty base_url is
-		// not an error for "local" -- NewLocalProvider applies Ollama's
+		// not an error for "local" -- the shared client applies Ollama's
 		// default endpoint fallback regardless of where the (empty)
 		// value came from.
-		return NewLocalProvider(LocalProviderConfig{
+		return NewSharedProvider(SharedProviderConfig{
+			Kind:       ProviderKindLocal,
 			BaseURL:    baseURL,
 			Model:      model,
 			APIKey:     envsecrets.NewHidden(apiKey),
 			HTTPClient: orgHTTPClient(baseURL, transport),
-		}), nil
+		})
 
 	case ProviderKindOllama:
 		// An org's stored "ollama" base_url follows Python's own contract
@@ -558,16 +562,25 @@ func newProviderFromCredentialsWithTransport(
 		// clients (native here vs. OpenAI-compatible for org-BYO) by
 		// design -- that wire-protocol split is unaffected by the URL
 		// normalization.
-		return NewLocalProvider(LocalProviderConfig{
+		return NewSharedProvider(SharedProviderConfig{
+			Kind:       ProviderKindLocal,
 			BaseURL:    baseURL,
 			Model:      model,
 			APIKey:     envsecrets.NewHidden(apiKey),
 			HTTPClient: orgHTTPClient(baseURL, transport),
-		}), nil
+		})
 
-	// BYO LLM stubs: same narrowing as NewProviderFromEnv.
 	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
-		return unimplementedProvider{kind: kind}, nil
+		if apiKey == "" {
+			return nil, fmt.Errorf("LLM provider %q is not configured: missing an api_key", kind)
+		}
+		return NewSharedProvider(SharedProviderConfig{
+			Kind:       kind,
+			APIKey:     envsecrets.NewHidden(apiKey),
+			BaseURL:    baseURL,
+			Model:      model,
+			HTTPClient: orgHTTPClient(baseURL, transport),
+		})
 
 	case ProviderKindTypeSafe:
 		return nil, errTypeSafeIsNotAProvider

@@ -187,12 +187,12 @@ func TestNewProviderFromEnvLocalFallsBackToDefaultWithNoBaseURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: local must fall back to a default endpoint, not require LOCAL_LLM_BASE_URL: %v", err)
 	}
-	localProvider, ok := provider.(*LocalProvider)
-	if !ok {
-		t.Fatalf("provider = %T, want *LocalProvider", provider)
+	localProvider, ok := provider.(*SharedProvider)
+	if !ok || localProvider.cfg.Kind != ProviderKindLocal {
+		t.Fatalf("provider = %T, want the shared local provider", provider)
 	}
-	if localProvider.cfg.BaseURL != defaultLocalBaseURL {
-		t.Errorf("BaseURL = %q, want the package default %q", localProvider.cfg.BaseURL, defaultLocalBaseURL)
+	if got := effectiveBaseURL(t, localProvider); got != "http://localhost:11434/v1" {
+		t.Errorf("BaseURL = %q, want the package default http://localhost:11434/v1", got)
 	}
 }
 
@@ -205,12 +205,12 @@ func TestNewProviderFromEnvLocalReadsEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	localProvider := provider.(*LocalProvider)
+	localProvider := provider.(*SharedProvider)
 	if localProvider.cfg.BaseURL != "http://127.0.0.1:1234/v1" {
 		t.Errorf("BaseURL = %q, want value from LOCAL_LLM_BASE_URL", localProvider.cfg.BaseURL)
 	}
-	if localProvider.cfg.Model != "gemma-3-4b" {
-		t.Errorf("Model = %q, want value from LOCAL_LLM_MODEL", localProvider.cfg.Model)
+	if localProvider.Model() != "gemma-3-4b" {
+		t.Errorf("Model = %q, want value from LOCAL_LLM_MODEL", localProvider.Model())
 	}
 }
 
@@ -270,7 +270,7 @@ func TestNewProviderFromEnvGenericModelOverridesAnyProvider(t *testing.T) {
 		},
 		{
 			"local", ProviderKindLocal, "LOCAL_LLM_MODEL", "gemma-3-4b",
-			func(p Provider) string { return p.(*LocalProvider).cfg.Model },
+			func(p Provider) string { return p.(*SharedProvider).Model() },
 		},
 		{
 			"ollama", ProviderKindOllama, "OLLAMA_MODEL", "gemma3:4b",
@@ -339,27 +339,57 @@ func TestNewProviderFromEnvGenericBaseURLAndAPIKeyOverrideAnyProvider(t *testing
 	}
 }
 
-func TestNewProviderFromEnvUnimplementedKindsRefuseExplicitly(t *testing.T) {
-	for _, kind := range []ProviderKind{
-		ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen,
+// The hosted kinds read credentials.py's env names, generic first; with no
+// key they fail at construction and name the provider's own variable.
+func TestNewProviderFromEnvHostedKindsReadTheirEnv(t *testing.T) {
+	for _, c := range []struct {
+		kind                        ProviderKind
+		keyEnv, baseEnv, modelEnv   string
+		wantDefaultModel, wantError string
+	}{
+		{ProviderKindAnthropic, "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "LLM_MODEL_ANTHROPIC", "claude-haiku-5-5", "ANTHROPIC_API_KEY"},
+		{ProviderKindGemini, "GEMINI_API_KEY", "GEMINI_BASE_URL", "GEMINI_MODEL", "gemini-3.8-flash", "GEMINI_API_KEY"},
+		{ProviderKindQwen, "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "QWEN_MODEL", "qwen-plus", "QWEN_API_KEY or DASHSCOPE_API_KEY"},
+		{ProviderKindQwen, "QWEN_API_KEY", "QWEN_BASE_URL", "LLM_MODEL_QWEN", "qwen-plus", "QWEN_API_KEY or DASHSCOPE_API_KEY"},
 	} {
-		t.Run(string(kind), func(t *testing.T) {
-			provider, err := NewProviderFromEnv(kind)
+		t.Run(string(c.kind)+"/"+c.keyEnv, func(t *testing.T) {
+			if !IsProviderKindImplemented(c.kind) {
+				t.Fatalf("%q is not reported as implemented", c.kind)
+			}
+			clearProviderEnv(t)
+			t.Setenv("QWEN_BASE_URL", "")
+			t.Setenv("QWEN_MODEL", "")
+			t.Setenv("GEMINI_BASE_URL", "")
+			t.Setenv("GEMINI_MODEL", "")
+			t.Setenv("ANTHROPIC_BASE_URL", "")
+			t.Setenv("DASHSCOPE_BASE_URL", "")
+			t.Setenv("LLM_MODEL_ANTHROPIC", "")
+			t.Setenv("LLM_MODEL_GEMINI", "")
+			t.Setenv("LLM_MODEL_QWEN", "")
+			if _, err := NewProviderFromEnv(c.kind); err == nil || !strings.Contains(err.Error(), c.wantError) {
+				t.Fatalf("no key: err = %v, want it to name %s", err, c.wantError)
+			}
+			t.Setenv(c.keyEnv, "provider-key-value")
+			provider, err := NewProviderFromEnv(c.kind)
 			if err != nil {
-				t.Fatalf("NewProviderFromEnv(%q) returned an error, want a stub Provider: %v", kind, err)
+				t.Fatal(err)
 			}
-			if IsProviderKindImplemented(kind) {
-				t.Fatalf("%q reported as implemented, but has no real client", kind)
+			if provider.Model() != c.wantDefaultModel {
+				t.Fatalf("default model %q, want the shared package default %q", provider.Model(), c.wantDefaultModel)
 			}
-			_, completeErr := provider.Complete(context.Background(), CategorizationRequest("prompt"))
-			if completeErr == nil {
-				t.Fatalf("%q's stub Complete() must refuse, got a nil error", kind)
+			t.Setenv(c.baseEnv, "https://configured.example.com/v1")
+			t.Setenv(c.modelEnv, "configured-model")
+			provider, err = NewProviderFromEnv(c.kind)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if !strings.Contains(completeErr.Error(), string(kind)) {
-				t.Errorf("refusal error %q does not name the kind %q", completeErr, kind)
+			shared, ok := provider.(*SharedProvider)
+			if !ok || shared.cfg.Kind != c.kind || shared.cfg.APIKey.Reveal() != "provider-key-value" ||
+				shared.Model() != "configured-model" || effectiveBaseURL(t, shared) != "https://configured.example.com/v1" {
+				t.Fatalf("provider %T (model %q), want the shared %s client with the configured key, base URL and model", provider, provider.Model(), c.kind)
 			}
-			if closeErr := provider.Close(); closeErr != nil {
-				t.Errorf("stub Close() returned an error: %v", closeErr)
+			if ResolveModelName(c.kind, "") != "configured-model" {
+				t.Fatalf("the stamp resolves %q, the provider sends configured-model", ResolveModelName(c.kind, ""))
 			}
 		})
 	}

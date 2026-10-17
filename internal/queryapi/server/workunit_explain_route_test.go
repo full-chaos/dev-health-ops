@@ -278,7 +278,7 @@ func clearLLMProviderEnv(t *testing.T) {
 // exception's provider/model suffix as well as its message, and the
 // message names environment VARIABLES, never a value of one.
 //
-// Only "auto" and a provider kind this plane implements get here. A kind
+// Only "auto" and the provider kinds this plane implements get here. A kind
 // the reference knows but this plane has no client for answers 501 first
 // -- see TestWorkUnitExplainGoUnsupportedProviderAnswers501 below, and
 // TestMissingLLMProviderDetailMatchesPythonForEveryEnvHint for the proof
@@ -292,9 +292,12 @@ func TestWorkUnitExplainUnconfiguredProviderBodiesMatchPython(t *testing.T) {
 		// resolve_provider_name's own failure: nothing configured, so
 		// "auto" resolves to nothing at all.
 		{"auto resolves to nothing", "", "testdata/work_unit_explain/provider_unconfigured_auto.json"},
-		// get_provider's _provider_has_required_config branch, for the one
+		// get_provider's _provider_has_required_config branch, for every
 		// named kind this plane both implements and can check.
 		{"openai", "llm_provider=openai", "testdata/work_unit_explain/provider_unconfigured_openai.json"},
+		{"anthropic", "llm_provider=anthropic", "testdata/work_unit_explain/provider_unconfigured_anthropic.json"},
+		{"gemini", "llm_provider=gemini", "testdata/work_unit_explain/provider_unconfigured_gemini.json"},
+		{"qwen", "llm_provider=qwen", "testdata/work_unit_explain/provider_unconfigured_qwen.json"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -321,20 +324,14 @@ func TestWorkUnitExplainUnconfiguredProviderBodiesMatchPython(t *testing.T) {
 // TestWorkUnitExplainGoUnsupportedProviderAnswers501 pins the one place
 // this route deliberately answers a status the reference never does.
 //
-// anthropic, gemini and qwen are providers the reference genuinely serves
-// and this plane has no client for at all -- it cannot even check their
+// lmstudio, qwen-local and qwen-lmstudio are provider names the reference
+// serves and this plane has no client for -- it cannot check their
 // credentials, so it cannot tell a configured one from an unconfigured
-// one. Answering the unconfigured 422 would therefore be a guess that is
-// WRONG whenever the credential is present, which is the silent-wrong-
-// answer class the sibling explain route's own guard exists to prevent. So
-// the guard runs first and answers 501 for all three.
-//
-// The cost, pinned here so it is not rediscovered: where the credential is
-// genuinely absent, the reference answers the 422 body
-// provider_unconfigured_<kind>.json carries and this route answers 501.
-// Same outcome for a caller -- no explanation -- by a different status.
+// one, and the guard answers 501 first. anthropic, gemini and qwen have a
+// client (the shared llm package) and answer the reference's own 422 when
+// unconfigured (TestWorkUnitExplainUnconfiguredProviderBodiesMatchPython).
 func TestWorkUnitExplainGoUnsupportedProviderAnswers501(t *testing.T) {
-	for _, provider := range []string{"anthropic", "gemini", "qwen"} {
+	for _, provider := range []string{"lmstudio", "qwen-local", "qwen-lmstudio"} {
 		t.Run(provider, func(t *testing.T) {
 			clearLLMProviderEnv(t)
 

@@ -332,6 +332,14 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		if !strings.HasPrefix(route.Pattern, "/") {
 			return nil, fmt.Errorf("route pattern %q must be rooted", route.Pattern)
 		}
+		if strings.HasSuffix(route.Pattern, "/") {
+			// A trailing slash makes a ServeMux subtree pattern: the bare path
+			// is answered by the mux's own redirect before any middleware or
+			// this package's error envelope runs. Use an exact path, or
+			// "{$}" for a path that must end in a slash.
+			logger.Info("route pattern rejected", "reason", "trailing_slash", "method", route.Method, "pattern", route.Pattern)
+			return nil, fmt.Errorf("route pattern %q must not end in \"/\" (use an exact path, or \"{$}\" for a trailing-slash path)", route.Pattern)
+		}
 		key := route.Method + " " + route.Pattern
 		if _, exists := methodsByPattern[route.Pattern]; !exists && route.Allow != "" {
 			allowByPattern[route.Pattern] = route.Allow

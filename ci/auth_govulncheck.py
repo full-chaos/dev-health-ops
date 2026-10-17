@@ -51,19 +51,31 @@ def main() -> int:
         trace = finding.get("trace") or []
         if trace and trace[0].get("function"):
             module = trace[0].get("module", "?")
-            reachable[finding["osv"]] = f"{module}@{trace[0].get('version', '?')} fixed in {finding.get('fixed_version', '?')}"
+            reachable[finding["osv"]] = (
+                f"{module}@{trace[0].get('version', '?')} fixed in {finding.get('fixed_version', '?')}"
+            )
     if not saw_config:
-        print("auth govulncheck: no scan configuration in the output; the scan did not run", file=sys.stderr)
+        print(
+            "auth govulncheck: no scan configuration in the output; the scan did not run",
+            file=sys.stderr,
+        )
         return 1
     new = sorted(set(reachable) - known)
     stale = sorted(known - set(reachable))
     for osv in sorted(set(reachable) & known):
         print(f"auth govulncheck: known (baseline) {osv} {reachable[osv]}")
     for osv in stale:
-        print(f"auth govulncheck: baseline entry {osv} is no longer reachable; delete it from the baseline")
+        print(
+            f"auth govulncheck: baseline entry {osv} is no longer reachable; delete it from the baseline"
+        )
     for osv in new:
-        print(f"auth govulncheck: NEW reachable vulnerability {osv} {reachable[osv]}", file=sys.stderr)
-    print(f"auth govulncheck: {len(reachable)} reachable, {len(new)} new, {len(stale)} stale baseline entries")
+        print(
+            f"auth govulncheck: NEW reachable vulnerability {osv} {reachable[osv]}",
+            file=sys.stderr,
+        )
+    print(
+        f"auth govulncheck: {len(reachable)} reachable, {len(new)} new, {len(stale)} stale baseline entries"
+    )
     return 1 if new else 0
 
 

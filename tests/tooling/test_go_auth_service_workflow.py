@@ -45,7 +45,9 @@ def test_the_trigger_has_no_path_filter() -> None:
     # would leave a required-style check unreported on an unrelated change.
     triggers = _workflow()[True]
     for event, config in triggers.items():
-        assert not (isinstance(config, dict) and ("paths" in config or "paths-ignore" in config)), event
+        assert not (
+            isinstance(config, dict) and ("paths" in config or "paths-ignore" in config)
+        ), event
 
 
 def test_fuzz_matrix_equals_the_registry() -> None:
@@ -63,7 +65,12 @@ def test_gate_jobs_run_only_on_a_relevant_change_and_the_gate_fans_in() -> None:
         assert "relevant == 'true'" in jobs[key]["if"], key
     gate = jobs["auth-gate"]
     assert gate["if"] == "always()"
-    assert set(gate["needs"]) == {"auth-changes", "auth-go-quality", "auth-test", "auth-fuzz"}
+    assert set(gate["needs"]) == {
+        "auth-changes",
+        "auth-go-quality",
+        "auth-test",
+        "auth-fuzz",
+    }
     script = gate["steps"][0]["run"]
     # A relevant change whose gate job did not succeed (failed, cancelled OR skipped) fails.
     assert '[ "${pair#*=}" = "success" ]' in script
@@ -73,6 +80,16 @@ def test_every_stage_the_workflow_calls_exists_in_the_verb() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     verb = CHECK_GO.read_text(encoding="utf-8")
     stages = set(re.findall(r"run: bash ci/check_go\.sh auth ([a-z-]+)", text))
-    assert stages >= {"fmt", "vet", "test", "race", "fuzz", "vuln", "middleware", "fuzz-registry", "paths-selftest"}
+    assert stages >= {
+        "fmt",
+        "vet",
+        "test",
+        "race",
+        "fuzz",
+        "vuln",
+        "middleware",
+        "fuzz-registry",
+        "paths-selftest",
+    }
     for stage in stages:
         assert re.search(rf"^    {re.escape(stage)}\) ", verb, re.MULTILINE), stage

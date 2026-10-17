@@ -274,3 +274,35 @@ func TestNameKeyedGitLabRepoOwnershipFollowsTheOneProjectRule(t *testing.T) {
 		t.Fatalf("a GitHub row was remapped: %+v", out)
 	}
 }
+
+func manualProjectRuleTeam(scope string, subject GithubWorkItemDerivationSubject) string {
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+		Teams:           []GithubWorkItemDerivationTeamFact{{Provider: "gitlab", TeamID: "rule-team"}},
+		ManualFallbacks: []GithubWorkItemDerivationManualFallback{{Provider: "gitlab", ScopeType: "project", ScopeID: scope, TeamID: "rule-team", Priority: 1}},
+	})
+	for _, candidate := range derived.ManualCandidates(subject) {
+		return GithubWorkItemDerivationStringValue(candidate.TeamID)
+	}
+	return ""
+}
+
+// A catalog-keyed item with no repos row read has no path that is provably its
+// own, so a manual project rule written with the path does not claim it.
+func TestAManualProjectRuleByPathDoesNotClaimACatalogKeyedGitLabItemWithNoReposRow(t *testing.T) {
+	subject := gitlabSubject("org:gitlab:123", "acme/api")
+	if got := manualProjectRuleTeam("acme/api", subject); got != "" {
+		t.Fatalf("path rule claimed an item with no repos row: %q", got)
+	}
+	if got := manualProjectRuleTeam("org:gitlab:123", subject); got != "rule-team" {
+		t.Fatalf("catalog-id rule: team = %q, want rule-team", got)
+	}
+	subject.GitLabPaths = []string{"acme/api"}
+	if got := manualProjectRuleTeam("acme/api", subject); got != "rule-team" {
+		t.Fatalf("path rule with a repos row: team = %q, want rule-team", got)
+	}
+	legacy := gitlabSubject("acme/api", "")
+	legacy.ProjectKey = nil
+	if got := manualProjectRuleTeam("acme/api", legacy); got != "rule-team" {
+		t.Fatalf("legacy path-in-project_id item: team = %q, want rule-team", got)
+	}
+}

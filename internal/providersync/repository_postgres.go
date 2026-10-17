@@ -494,7 +494,7 @@ func (repository *PostgresRepository) DeferForRateLimit(
 		return ErrLeaseLost
 	}
 	if observation.Dimension != "" {
-		slog.DebugContext(ctx, "sync_rate_limit_observation_written",
+		slog.InfoContext(ctx, "sync_rate_limit_observation_written",
 			"unit_id", claim.ID, "provider", claim.Provider, "dimension", observation.Dimension)
 	}
 	return nil

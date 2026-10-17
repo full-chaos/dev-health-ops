@@ -346,9 +346,9 @@ func executeEvidenceQualityByGroup(ctx context.Context, client QueryClient, q co
 // of reusing the proven convention would only reopen that same defect
 // class one file later, for no semantic gain -- ClickHouse implicitly
 // promotes a bound Date value to midnight UTC when compared against a
-// DateTime64 column, so `from_ts < {end_date:Date}` / `to_ts >=
-// {start_date:Date}` expresses the same predicate as Python's
-// midnight-UTC start_ts/end_ts.
+// DateTime64 column, so `to_ts >= {start_date:Date}` / `to_ts <
+// {end_date:Date}` expresses the same predicate on the end stamp (CHAOS-9016,
+// D6022) as midnight-UTC start_ts/end_ts would.
 func unitTeamWindowFilter(scopeFilter, categoryFilter string) string {
 	return fmt.Sprintf(`                WHERE work_unit_investments.to_ts >= {start_date:Date}
                   AND work_unit_investments.to_ts < {end_date:Date}

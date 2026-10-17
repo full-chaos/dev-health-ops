@@ -44,6 +44,8 @@ type Deps struct {
 	// that route answer 503; it never serves unauthenticated.
 	LLMConfig   LLMConfigSource
 	Credentials CredentialVerifier
+	Auth        CredentialStore
+	Limiter     *httpapi.KeyedLimiter
 }
 
 // Routes is the acr area's route set. Both paths are internal, reachable

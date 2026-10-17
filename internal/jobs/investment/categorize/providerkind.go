@@ -37,7 +37,7 @@ const (
 	// worker serves from the decision adapter instead of a Provider
 	// (CHAOS-8874); every text path resolves through ResolveTextProviderKind*
 	// and never gets it. It is built by NewTypeSafeClientFromEnv.
-	ProviderKindTypeSafe ProviderKind = "typesafe"
+	ProviderKindTypeSafe ProviderKind = llmbudget.DecisionProviderTypeSafe
 
 	// There is deliberately no ProviderKindLMStudio: chris's ruling
 	// (CHAOS-4978, 2026-09-03 13:14) dropped the native LM Studio provider
@@ -88,21 +88,8 @@ func firstNonEmptyEnv(names ...string) string {
 // _configured_provider: presence-only auto-detection over a fixed priority
 // order of env KEY NAMES (never their values beyond a non-empty check).
 func detectConfiguredProviderKind() (ProviderKind, bool) {
-	switch {
-	case envsecrets.GetenvNamed("OPENAI_API_KEY") != "":
-		return ProviderKindOpenAI, true
-	case envsecrets.GetenvNamed("ANTHROPIC_API_KEY") != "":
-		return ProviderKindAnthropic, true
-	case envsecrets.GetenvNamed("GEMINI_API_KEY") != "":
-		return ProviderKindGemini, true
-	case envsecrets.GetenvNamed("LOCAL_LLM_BASE_URL") != "":
-		return ProviderKindLocal, true
-	case envsecrets.GetenvNamed("DASHSCOPE_API_KEY") != "" || envsecrets.GetenvNamed("QWEN_API_KEY") != "":
-		return ProviderKindQwen, true
-	case envsecrets.GetenvNamed("OLLAMA_MODEL") != "" || envsecrets.GetenvNamed("OLLAMA_BASE_URL") != "":
-		return ProviderKindOllama, true
-	}
-	return "", false
+	detected, ok := llmbudget.DetectProvider(envsecrets.ProcessLookup)
+	return ProviderKind(detected), ok
 }
 
 // OrgProviderResolver resolves an org's usable BYO provider kind as a raw
@@ -328,24 +315,9 @@ func defaultModelForKind(kind ProviderKind) string {
 // CHAOS-4978 and D6043). Categorize, both explain routes and the budget
 // status read the model through it.
 func PlatformDefaultModel(kind ProviderKind) string {
-	model := llmbudget.DefaultModel(string(kind), PlatformLookup(envsecrets.ProcessLookup))
+	model := llmbudget.DefaultModel(string(kind), llmbudget.PlatformLookup(envsecrets.ProcessLookup))
 	slog.Debug("categorize: model resolved", "kind", kind, "model", model)
 	return model
-}
-
-// PlatformLookup wraps an environment lookup so that LLM_PROVIDER answers the
-// text provider a call runs by default (see PlatformDefaultModel). Every
-// reader of llmbudget.DefaultModel passes its lookup through it.
-func PlatformLookup(base func(string) (string, bool)) func(string) (string, bool) {
-	return func(name string) (string, bool) {
-		value, ok := base(name)
-		if name == "LLM_PROVIDER" {
-			if platform, err := ResolveTextProviderKind("auto"); err == nil {
-				return string(platform), true
-			}
-		}
-		return value, ok
-	}
 }
 
 // ResolveModelName returns the model that WILL ACTUALLY BE USED for kind, and

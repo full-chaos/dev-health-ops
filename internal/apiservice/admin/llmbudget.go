@@ -7,7 +7,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 )
 
@@ -95,5 +94,5 @@ func (h *handlers) getLLMBudget(w http.ResponseWriter, r *http.Request) {
 // no stored model: the one resolver the categorize worker and both explain
 // routes read, with the platform provider filled in (CHAOS-10011).
 func budgetStatusDefaultModel(provider string) string {
-	return llmbudget.DefaultModel(provider, categorize.PlatformLookup(lookupEnv))
+	return llmbudget.DefaultModel(provider, llmbudget.PlatformLookup(lookupEnv))
 }

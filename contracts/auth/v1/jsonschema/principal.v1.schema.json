@@ -72,7 +72,7 @@
       "additionalProperties": false,
       "properties": {
         "class": {
-          "description": "Credential class, from the closed vocabulary. The first 30 values are the Wave 0 frozen set in contracts/auth/v1/credential-classes.json; the remaining three are the new platform credentials TRD section 11 defines and which therefore cannot appear in a Wave 0 freeze of what exists today (`user_access_token`, `refresh_credential`, `workload_token`). Unknown denies (ACP-ADR-05 decision 1 / G-26). This enum is a DECLARATION, not a second source of truth: a guard test asserts it equals the ids in credential-classes.json plus exactly that documented addition list, so the two cannot drift and a new class cannot be smuggled in here alone.",
+          "description": "Credential class, from the closed vocabulary. The first 31 values are the frozen set in contracts/auth/v1/credential-classes.json (the 30 Wave 0 classes plus `effective_principal_envelope`, added by the query-api inventory); the remaining three are the new platform credentials TRD section 11 defines and which therefore cannot appear in a Wave 0 freeze of what exists today (`user_access_token`, `refresh_credential`, `workload_token`). Unknown denies (ACP-ADR-05 decision 1 / G-26). This enum is a DECLARATION, not a second source of truth: a guard test asserts it equals the ids in credential-classes.json plus exactly that documented addition list, so the two cannot drift and a new class cannot be smuggled in here alone.",
           "enum": [
             "acr_client_credential",
             "acr_device_flow_code",

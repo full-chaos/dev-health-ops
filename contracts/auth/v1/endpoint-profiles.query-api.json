@@ -7,9 +7,1143 @@
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
-      "id": "GET /healthz [dev-health-query-api]",
+      "id": "api_route /api/v1/ [dev-health-query-api @query,internal]",
+      "method": "api_route",
+      "public_rationale": "Catch-all for an /api/v1 path no REST route claims: answers the REST 404 body and serves no data.",
+      "route": "/api/v1/",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/server.go",
+        "line": 475
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/drilldown/issues [dev-health-query-api @query,internal]",
       "method": "GET",
-      "public_rationale": "Liveness probe on the operator listener; returns no tenant data and is reached only by the orchestrator.",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/drilldown/issues",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 319
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/drilldown/issues [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/drilldown/issues",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 319
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/drilldown/prs [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/drilldown/prs",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 254
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/drilldown/prs [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/drilldown/prs",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 254
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/explain [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/explain",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 460
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/explain [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/explain",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 460
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/filters/options [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/filters/options",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 195
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/flame [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/flame",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 480
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/flame/aggregated [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/flame/aggregated",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 500
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/heatmap [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/heatmap",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 114
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/home [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/home",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 154
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/home [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/home",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 154
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/investment [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/investment",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 215
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/investment [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/investment",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 215
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/investment/explain [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/investment/explain",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 76
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/investment/sunburst [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/investment/sunburst",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 234
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/meta [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/meta",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 440
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/opportunities [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/opportunities",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 175
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/opportunities [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/opportunities",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 175
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/people [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/people",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 338
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/people/{person_id}/drilldown/issues [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/people/{person_id}/drilldown/issues",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 418
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/people/{person_id}/drilldown/prs [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/people/{person_id}/drilldown/prs",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 397
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/people/{person_id}/metric [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/people/{person_id}/metric",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 377
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/people/{person_id}/summary [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/people/{person_id}/summary",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 358
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/quadrant [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/quadrant",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 95
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/sankey [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/sankey",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 134
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/sankey [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/sankey",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 134
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/work-units [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/work-units",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 274
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/work-units [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/work-units",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 274
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/work-units/{work_unit_id}/explain [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 248,
+          "path": "internal/queryapi/server/rest_error_response.go"
+        },
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/work-units/{work_unit_id}/explain",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/rest_routes.go",
+        "line": 297
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified. /buildinfo does not accept the edge access token."
+      ],
+      "graphql_field_name": null,
+      "id": "GET /buildinfo [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 44,
+          "path": "internal/queryapi/server/internal_auth.go"
+        },
+        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
+      },
+      "public_rationale": null,
+      "route": "/buildinfo",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/server.go",
+        "line": 301
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /graphql [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 252,
+          "path": "internal/queryapi/server/graphql_edge_route.go"
+        },
+        "description": "authenticateGraphQLEdge: edge access token only (authenticateEdgeTokenOnly, live users row)."
+      },
+      "public_rationale": null,
+      "route": "/graphql",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/graphql_edge_route.go",
+        "line": 169
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "HS256",
+        "audience": null,
+        "issuer": null,
+        "token_type": "HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /healthz [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "public_rationale": "Probe reached by the orchestrator; returns no tenant data.",
       "route": "/healthz",
       "service": "dev-health-query-api",
       "source": {
@@ -23,14 +1157,30 @@
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
-      "id": "GET /readyz [dev-health-query-api]",
+      "id": "GET /healthz [dev-health-query-api @operator]",
       "method": "GET",
-      "public_rationale": "Readiness probe on the operator listener; reports dependency state only and is reached only by the orchestrator.",
-      "route": "/readyz",
+      "public_rationale": "Probe reached by the orchestrator; returns no tenant data.",
+      "route": "/healthz",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 117
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /metrics [dev-health-query-api @internal,operator]",
+      "method": "GET",
+      "public_rationale": "Scrape endpoint on the operator and internal listeners only (never the public one); process metrics, no tenant data.",
+      "route": "/metrics",
       "service": "dev-health-query-api",
       "source": {
         "file": "internal/queryapi/server/operator_compat.go",
-        "line": 40
+        "line": 71
       },
       "surface_kind": "rest"
     },
@@ -41,18 +1191,18 @@
       ],
       "classification": "protected",
       "gaps": [
-        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity); the closed credential vocabulary has no class for them, so they are named here, not classified.",
-        "Per-resolver authorization (CHAOS-4732: no auth chokepoint) is not profiled; this row states what the surface accepts, not what each resolver enforces."
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
-      "id": "POST /query [dev-health-query-api]",
+      "id": "POST /query [dev-health-query-api @query,internal]",
       "method": "POST",
       "primary_validator": {
         "anchor": {
           "line": 44,
           "path": "internal/queryapi/server/internal_auth.go"
         },
-        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify."
+        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
       },
       "public_rationale": null,
       "route": "/query",
@@ -69,8 +1219,191 @@
         "issuer": "dev-health-ops-edge",
         "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
       }
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "protected",
+      "gaps": [
+        "The MCP caller-class listener accepts only the internal identity headers (no bearer of any class); the closed credential vocabulary has no class for them, so accepted_credential_classes is empty by declaration, not omission.",
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /query [dev-health-query-api @mcp]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 587,
+          "path": "internal/queryapi/server/mcp_route.go"
+        },
+        "description": "mcpAuthenticate: internal identity headers only; any Authorization header is refused with 401."
+      },
+      "public_rationale": null,
+      "route": "/query",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/server.go",
+        "line": 223
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted only when the deployment posture permits (mountProofRoute).",
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /query/proof [dev-health-query-api @query,internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 44,
+          "path": "internal/queryapi/server/internal_auth.go"
+        },
+        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
+      },
+      "public_rationale": null,
+      "route": "/query/proof",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/buildinfo_route.go",
+        "line": 245
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /query/proof-write [dev-health-query-api @internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 44,
+          "path": "internal/queryapi/server/internal_auth.go"
+        },
+        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
+      },
+      "public_rationale": null,
+      "route": "/query/proof-write",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/buildinfo_route.go",
+        "line": 273
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "effective_principal_envelope",
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "gaps": [
+        "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified."
+      ],
+      "graphql_field_name": null,
+      "id": "POST /query/run-operation [dev-health-query-api @internal]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 44,
+          "path": "internal/queryapi/server/internal_auth.go"
+        },
+        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
+      },
+      "public_rationale": null,
+      "route": "/query/run-operation",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/class_row_gate.go",
+        "line": 60
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "query-api",
+        "issuer": "dev-health-ops-edge",
+        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+      }
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /readyz [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "public_rationale": "Probe reached by the orchestrator; returns no tenant data.",
+      "route": "/readyz",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/operator_compat.go",
+        "line": 40
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /readyz [dev-health-query-api @operator]",
+      "method": "GET",
+      "public_rationale": "Probe reached by the orchestrator; returns no tenant data.",
+      "route": "/readyz",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 118
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /registry [dev-health-query-api @query,internal]",
+      "method": "GET",
+      "public_rationale": "Unauthenticated by design: returns the schema digest and operation map of this build, no tenant data (registry_route.go).",
+      "route": "/registry",
+      "service": "dev-health-query-api",
+      "source": {
+        "file": "internal/queryapi/server/server.go",
+        "line": 291
+      },
+      "surface_kind": "rest"
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "aacb6f96087d85359dae8f980c8886b5b04ec261"
+  "source_commit": "69c55a77d9f17909ed097b523ae039a3cf258e7b"
 }

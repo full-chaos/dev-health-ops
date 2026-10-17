@@ -4,89 +4,36 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
+	"strings"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
-// queryAPISurfaces is the closed list of query-api's HTTP surfaces that carry an
-// endpoint-profile row (CHAOS-4737). The enum value and its rows ship together:
-// the service enum names query-api only because these rows exist.
-var queryAPISurfaces = []string{"GET /healthz", "GET /readyz", "POST /query"}
+// preQueryAPIServices are the services the closed enum held before query-api
+// joined it. Any other enum value must come with rows in a rows file here.
+var preQueryAPIServices = map[string]bool{
+	"dev-health-ops-api": true, "dev-health-ops-billing-edge": true, "dev-health-web": true,
+	"dev-health-acr-api": true, "dev-health-acr-mcp": true,
+}
 
-func TestQueryAPIEndpointProfilesValidateAndUseTheClosedVocabularies(t *testing.T) {
-	dir := ContractsDir(testRoot(t))
-	schemaRaw, err := os.ReadFile(filepath.Join(dir, "endpoint-profile.schema.json"))
+func resolveEndpointProfileSchema(t *testing.T) (*jsonschema.Resolved, struct {
+	Services []string
+}) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(ContractsDir(testRoot(t)), "endpoint-profile.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var schema jsonschema.Schema
-	if err := json.Unmarshal(schemaRaw, &schema); err != nil {
+	if err := json.Unmarshal(raw, &schema); err != nil {
 		t.Fatal(err)
 	}
 	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rowsRaw, err := os.ReadFile(filepath.Join(dir, "endpoint-profiles.query-api.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document map[string]any
-	if err := json.Unmarshal(rowsRaw, &document); err != nil {
-		t.Fatal(err)
-	}
-	if err := resolved.Validate(document); err != nil {
-		t.Fatalf("query-api profile rows do not satisfy endpoint-profile.schema.json: %v", err)
-	}
-
-	frozen := frozenCredentialClassIDs(t)
-	var got []string
-	for _, item := range document["rows"].([]any) {
-		row := item.(map[string]any)
-		if row["service"] != "dev-health-query-api" {
-			t.Errorf("row %v has service %v, want dev-health-query-api", row["id"], row["service"])
-		}
-		got = append(got, row["method"].(string)+" "+row["route"].(string))
-		classes, _ := row["accepted_credential_classes"].([]any)
-		if row["classification"] == "protected" && len(classes) == 0 {
-			t.Errorf("protected row %v accepts no credential class", row["id"])
-		}
-		if row["classification"] == "public" && row["public_rationale"] == nil {
-			t.Errorf("public row %v has no public_rationale", row["id"])
-		}
-		for _, class := range classes {
-			if !frozen[class.(string)] {
-				t.Errorf("row %v accepts %v, which is not in credential-classes.json", row["id"], class)
-			}
-		}
-	}
-	sort.Strings(got)
-	want := append([]string(nil), queryAPISurfaces...)
-	sort.Strings(want)
-	if len(got) != len(want) {
-		t.Fatalf("rows = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("rows = %v, want %v", got, want)
-		}
-	}
-
-	if !frozen["effective_principal_envelope"] {
-		t.Error("the effective_principal_envelope class is missing from credential-classes.json")
-	}
-}
-
-// TestServiceEnumNamesQueryAPIOnlyWithItsRows pins that the enum value cannot
-// be dropped or added alone: a row naming an unknown service must fail.
-func TestServiceEnumNamesQueryAPIOnlyWithItsRows(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(ContractsDir(testRoot(t)), "endpoint-profile.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var schema struct {
+	var enum struct {
 		Defs struct {
 			Profile struct {
 				Properties struct {
@@ -97,14 +44,96 @@ func TestServiceEnumNamesQueryAPIOnlyWithItsRows(t *testing.T) {
 			} `json:"endpointProfile"`
 		} `json:"$defs"`
 	}
-	if err := json.Unmarshal(raw, &schema); err != nil {
+	if err := json.Unmarshal(raw, &enum); err != nil {
 		t.Fatal(err)
 	}
-	found := false
-	for _, service := range schema.Defs.Profile.Properties.Service.Enum {
-		found = found || service == "dev-health-query-api"
+	return resolved, struct{ Services []string }{enum.Defs.Profile.Properties.Service.Enum}
+}
+
+func loadQueryAPIDocument(t *testing.T) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(ContractsDir(testRoot(t)), "endpoint-profiles.query-api.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !found {
-		t.Fatal("dev-health-query-api is missing from the service enum")
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document
+}
+
+// The rows' completeness against the routes the binary serves is policed in
+// internal/queryapi/server (TestEveryServedRouteHasAnEndpointProfileRow...);
+// this test owns the contract side: schema validity and the closed vocabularies.
+func TestQueryAPIEndpointProfilesValidateAndUseTheClosedVocabularies(t *testing.T) {
+	resolved, _ := resolveEndpointProfileSchema(t)
+	document := loadQueryAPIDocument(t)
+	if err := resolved.Validate(document); err != nil {
+		t.Fatalf("query-api profile rows do not satisfy endpoint-profile.schema.json: %v", err)
+	}
+
+	frozen := frozenCredentialClassIDs(t)
+	ids := map[string]bool{}
+	for _, item := range document["rows"].([]any) {
+		row := item.(map[string]any)
+		id := row["id"].(string)
+		if ids[id] {
+			t.Errorf("duplicate row id %q", id)
+		}
+		ids[id] = true
+		if row["service"] != "dev-health-query-api" {
+			t.Errorf("row %v has service %v, want dev-health-query-api", id, row["service"])
+		}
+		classes, _ := row["accepted_credential_classes"].([]any)
+		gaps, _ := row["gaps"].([]any)
+		if row["classification"] == "protected" && len(classes) == 0 && len(gaps) == 0 {
+			t.Errorf("protected row %v accepts no credential class and declares no gap saying why", id)
+		}
+		if row["classification"] == "public" && row["public_rationale"] == nil {
+			t.Errorf("public row %v has no public_rationale", id)
+		}
+		for _, class := range classes {
+			if !frozen[class.(string)] {
+				t.Errorf("row %v accepts %v, which is not in credential-classes.json", id, class)
+			}
+		}
+	}
+	if !frozen["effective_principal_envelope"] {
+		t.Error("the effective_principal_envelope class is missing from credential-classes.json")
+	}
+}
+
+// TestAnUnknownServiceFailsAndTheEnumHoldsNoServiceWithoutRows: a row naming a
+// service outside the closed enum is refused by the schema, and every enum
+// value beyond the original five has rows in this file.
+func TestAnUnknownServiceFailsAndTheEnumHoldsNoServiceWithoutRows(t *testing.T) {
+	resolved, enum := resolveEndpointProfileSchema(t)
+
+	document := loadQueryAPIDocument(t)
+	rows := document["rows"].([]any)
+	rows[0].(map[string]any)["service"] = "dev-health-not-registered"
+	err := resolved.Validate(document)
+	if err == nil || !strings.Contains(err.Error(), "enum") {
+		t.Fatalf("a row with an unknown service validated (err = %v)", err)
+	}
+
+	withRows := map[string]bool{}
+	for _, item := range loadQueryAPIDocument(t)["rows"].([]any) {
+		withRows[item.(map[string]any)["service"].(string)] = true
+	}
+	for _, service := range enum.Services {
+		if !preQueryAPIServices[service] && !withRows[service] {
+			t.Errorf("service %q is in the enum but has no rows in endpoint-profiles.query-api.json", service)
+		}
+	}
+	for service := range withRows {
+		found := false
+		for _, candidate := range enum.Services {
+			found = found || candidate == service
+		}
+		if !found {
+			t.Errorf("rows name service %q, which is not in the enum", service)
+		}
 	}
 }

@@ -17,9 +17,9 @@ import (
 // OllamaProviderConfig configures OllamaProvider.
 type OllamaProviderConfig struct {
 	// BaseURL defaults to Ollama's local endpoint WITHOUT the /v1 suffix
-	// LocalProvider uses -- the native /api/chat route lives at the server
+	// the local kind uses -- the native /api/chat route lives at the server
 	// root, not under the OpenAI-compatibility /v1 prefix Ollama also
-	// exposes (that path is what LocalProvider speaks when pointed at
+	// exposes (that path is what the local kind speaks when pointed at
 	// Ollama via LOCAL_LLM_BASE_URL).
 	BaseURL string
 	// Model defaults to "llama3.2" -- mirrors base.py's
@@ -33,8 +33,8 @@ type OllamaProviderConfig struct {
 	// Ollama itself has no native auth concept).
 	APIKey          secrets.Hidden `json:"-"`
 	MaxOutputTokens int
-	// Temperature is a pointer for the same reason LocalProviderConfig's is:
-	// an explicit 0.0 must be distinguishable from "unset".
+	// Temperature is a pointer: an explicit 0.0 must be distinguishable from
+	// "unset".
 	Temperature *float64
 	HTTPClient  *http.Client
 }
@@ -48,7 +48,7 @@ const (
 )
 
 // OllamaProvider speaks Ollama's NATIVE /api/chat wire protocol -- as
-// opposed to LocalProvider, which speaks the OpenAI-compatible Chat
+// opposed to the local kind (the shared client), which speaks the OpenAI-compatible Chat
 // Completions shape Ollama also exposes under /v1. Python has no equivalent
 // of this: llm/providers/local.py's OllamaProvider is a thin LocalProvider
 // subclass over the OpenAI-compatible endpoint, so Python is not the oracle
@@ -145,7 +145,7 @@ type ollamaChatResponse struct {
 }
 
 // Complete ports the same retry/schema-fallback/error-classification shape
-// LocalProvider.Complete uses, adapted to Ollama's native request/response
+// the since-deleted ops LocalProvider.Complete used, adapted to Ollama's native request/response
 // fields.
 func (p *OllamaProvider) Complete(ctx context.Context, request CompletionRequest) (CompletionResult, error) {
 	var format json.RawMessage
@@ -280,7 +280,7 @@ func (p *OllamaProvider) executeChatRequest(ctx context.Context, body ollamaChat
 	return decoded.Message.Content, decoded.PromptEvalCount, decoded.EvalCount, nil
 }
 
-// Close ports LocalProvider.Close's CloseIdleConnections cleanup.
+// Close releases idle connections (CloseIdleConnections).
 func (p *OllamaProvider) Close() error {
 	p.client.CloseIdleConnections()
 	return nil

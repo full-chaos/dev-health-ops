@@ -54,7 +54,12 @@ func TestEnvConfiguredLocalProviderIsNotGuarded(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{}"}}],"usage":{}}`))
 	}))
 	defer server.Close()
-	provider := NewLocalProvider(LocalProviderConfig{BaseURL: server.URL + "/v1", Model: "m"})
+	t.Setenv("LLM_BASE_URL", "")
+	t.Setenv("LOCAL_LLM_BASE_URL", server.URL+"/v1")
+	provider, err := NewProviderFromEnvWithModel(ProviderKindLocal, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := provider.Complete(context.Background(), CompletionRequest{Prompt: "p", SystemMessage: "s"}); err != nil {
 		t.Fatalf("the env-configured local provider must reach its own server: %v", err)
 	}

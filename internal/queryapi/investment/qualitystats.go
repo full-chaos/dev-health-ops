@@ -91,13 +91,12 @@ SELECT
     countIf(evidence_quality_band = 'very_low') AS very_low_count,
     countIf(evidence_quality IS NULL OR evidence_quality_band = '') AS unknown_count
 FROM %s AS work_unit_investments
-WHERE work_unit_investments.from_ts < {end_date:Date}
-  AND work_unit_investments.to_ts >= {start_date:Date}
+WHERE %s
   AND work_unit_investments.org_id = {org_id:String}
 %s
 %s
 %s
-`, analytics.LatestWorkUnitInvestmentsSource(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, analytics.LatestWorkUnitInvestmentsSource(), analytics.InvestmentWindowClause(true), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_date", Value: dateBindingValue(filters.StartTS)},

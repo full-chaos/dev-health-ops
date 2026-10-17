@@ -15,7 +15,7 @@ lifecycle: active
 
 ## Contract
 
-For each latest materialized work-unit row that overlaps the selected period, the Investment breakdown expands the subcategory distribution and aggregates:
+For each latest materialized work-unit row whose end falls in the selected period, the Investment breakdown expands the subcategory distribution and aggregates:
 
 ```text
 subcategory contribution = Σ(subcategory probability × effort value)
@@ -31,11 +31,13 @@ Team count numbers (commits, after-hours and weekend commits, and the other team
 
 ## Time and scope
 
-A row is included when its interval overlaps the selected window:
+A work unit is dated by its END day (CHAOS-9016, D6022). It is included when its end falls in the selected window:
 
 ```text
-from_ts < selected_end AND to_ts >= selected_start
+selected_start <= to_ts AND to_ts < selected_end
 ```
+
+Each unit therefore sits in exactly one window: windows are additive, so the breakdowns of adjacent windows add up to the breakdown of the whole period. A unit that spans a window boundary counts whole in the window it ends in, never pro rata, never in both. The Investment page breakdown, sunburst and quality counts, the Home tile and the Operating Review all use this one rule (`analytics.InvestmentWindowClause`).
 
 Organization isolation is applied before aggregation. Repository or team scope adds the resolved repository filter for the selected context.
 

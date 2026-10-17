@@ -116,6 +116,8 @@ internal/teamprovider
 internal/testsupport/containers
 internal/testsupport/goldenscan
 internal/testsupport/moduleroot
+internal/testsupport/pgschema
+internal/testsupport/pgseed
 internal/testsupport/pydanticecho
 internal/testsupport/pyoracle
 internal/testsupport/recordedfiles

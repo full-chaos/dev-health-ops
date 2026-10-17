@@ -540,7 +540,7 @@ func TestWorkUnitsSeededRealClickHouse_TeamScopeFiltersByOwnedRepoID(t *testing.
 	investments, err := reader.BuildWorkUnitInvestments(ctx, investmentexplain.BuildWorkUnitInvestmentsOptions{
 		OrgID:              workUnitsSeededOrgID,
 		StartTS:            fromTS,
-		EndTS:              toTS,
+		EndTS:              toTS.AddDate(0, 0, 1),
 		RepoIDs:            repoIDs,
 		TeamScopeCondition: teamCondition,
 		TeamScopeBindings:  teamBindings,
@@ -614,7 +614,7 @@ func TestWorkUnitsSeededRealClickHouse_RepoScopeFiltersByRepoID(t *testing.T) {
 	investments, err := reader.BuildWorkUnitInvestments(ctx, investmentexplain.BuildWorkUnitInvestmentsOptions{
 		OrgID:   workUnitsSeededOrgID,
 		StartTS: fromTS,
-		EndTS:   toTS,
+		EndTS:   toTS.AddDate(0, 0, 1),
 		RepoIDs: repoIDs,
 		Limit:   200,
 	})
@@ -680,7 +680,7 @@ func TestWorkUnitsSeededRealClickHouse_WorkCategoryFilterNarrowsRealRows(t *test
 	investments, err := reader.BuildWorkUnitInvestments(ctx, investmentexplain.BuildWorkUnitInvestmentsOptions{
 		OrgID:              workUnitsSeededOrgID,
 		StartTS:            fromTS,
-		EndTS:              toTS,
+		EndTS:              toTS.AddDate(0, 0, 1),
 		Limit:              200,
 		ThemeFilters:       themeFilters,
 		SubcategoryFilters: subcategoryFilters,
@@ -754,7 +754,7 @@ func TestWorkUnitsSeededRealClickHouse_MembershipScopeEnabledFiltersNonMembers(t
 	investments, err := reader.BuildWorkUnitInvestments(ctx, investmentexplain.BuildWorkUnitInvestmentsOptions{
 		OrgID:   workUnitsSeededOrgID,
 		StartTS: fromTS,
-		EndTS:   toTS,
+		EndTS:   toTS.AddDate(0, 0, 1),
 		Limit:   200,
 	})
 	if err != nil {
@@ -783,7 +783,7 @@ func TestWorkUnitsSeededRealClickHouse_MembershipScopeEnabledFiltersNonMembers(t
 	lagging, err := reader.BuildWorkUnitInvestments(analytics.WithInvestmentMembershipScopeRequest(ctx), investmentexplain.BuildWorkUnitInvestmentsOptions{
 		OrgID:   workUnitsSeededOrgID,
 		StartTS: fromTS,
-		EndTS:   toTS,
+		EndTS:   toTS.AddDate(0, 0, 1),
 		Limit:   200,
 	})
 	if err != nil {

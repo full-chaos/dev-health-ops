@@ -3240,7 +3240,7 @@ check_auth_vuln() {
   local report
   report="$(mktemp)"
   printf 'auth govulncheck %s\n' "${AUTH_GOVULNCHECK_VERSION}"
-  if ! (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go run "golang.org/x/vuln/cmd/govulncheck@${AUTH_GOVULNCHECK_VERSION}" \
+  if ! (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly -trimpath "golang.org/x/vuln/cmd/govulncheck@${AUTH_GOVULNCHECK_VERSION}" \
     -format json "${AUTH_PACKAGES[@]}") >"${report}" 2>"${report}.err"; then
     # govulncheck -format json exits 0 even with findings; a non-zero exit is a tool failure.
     cat "${report}.err" >&2

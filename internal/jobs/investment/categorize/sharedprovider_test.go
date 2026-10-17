@@ -16,6 +16,23 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
+// effectiveBaseURL is the endpoint the shared client sends to: its printed
+// form (llm's provider view) carries the base URL with the default applied.
+func effectiveBaseURL(t *testing.T, p *SharedProvider) string {
+	t.Helper()
+	raw, err := json.Marshal(p.inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var view struct {
+		BaseURL string `json:"base_url"`
+	}
+	if err := json.Unmarshal(raw, &view); err != nil {
+		t.Fatal(err)
+	}
+	return view.BaseURL
+}
+
 // wireModels serves a JSON answer and records the "model" of every request.
 type wireModels struct {
 	mu     sync.Mutex

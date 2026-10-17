@@ -128,6 +128,42 @@ OLLAMA_API_KEY=optional-cloud-key
 supported. Omit the key for an unauthenticated local host. These environment
 bundles are platform configuration, never organization BYO settings.
 
+Hosted provider bundles. The generic `LLM_API_KEY`, `LLM_BASE_URL` and
+`LLM_MODEL` win over the provider-specific names, as above; an empty base URL is
+the provider's public endpoint and an empty model is the provider's default
+(`claude-haiku-5-5`, `gemini-3.8-flash`, `qwen-plus`):
+
+```dotenv
+# Anthropic
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your-key
+LLM_MODEL_ANTHROPIC=claude-haiku-5-5   # optional; ANTHROPIC_BASE_URL optional
+
+# Google Gemini
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your-key
+GEMINI_MODEL=gemini-3.8-flash          # optional; LLM_MODEL_GEMINI also works; GEMINI_BASE_URL optional
+
+# Qwen on DashScope
+LLM_PROVIDER=qwen
+DASHSCOPE_API_KEY=your-key             # or QWEN_API_KEY
+QWEN_MODEL=qwen-plus                   # optional; LLM_MODEL_QWEN also works
+DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1   # optional; default is the Beijing endpoint
+
+# Qwen on Cloudflare Workers AI (OpenAI-compatible route)
+LLM_PROVIDER=qwen
+QWEN_API_KEY=your-workers-ai-token
+QWEN_BASE_URL=https://api.cloudflare.com/client/v4/accounts/<account-id>/ai/v1
+QWEN_MODEL=@cf/qwen/qwen3-30b-a3b-fp8
+```
+
+An organization's BYO settings take the same provider names, with its key,
+base URL and model stored in the settings, and its base URL passes the same
+public-HTTPS and SSRF validation. A BYO monetary budget prices a call only on
+the provider's public endpoint at its published list price; a gateway, a
+self-hosted server or an unlisted model is unpriced and is refused while a
+budget is configured.
+
 ### TypeSafe decision backend
 
 The `typesafe` kind is a decision backend (TypeSafe System One, model family

@@ -32,40 +32,43 @@ func allSpecs(t *testing.T) map[string][]storedversion.Spec {
 }
 
 // repos.provider_repo_id is the provider's stable repository id, the anchor a
-// rename is resolved by. Every writer of repos inserts it, so its version
-// carries the held id: a writer that left it out would write empty over it. Only
-// the provider sync states it, and only when its row has one (a provider sync
-// row without it, a local repository and a pushed repository keep the held id).
-func TestEveryReposWriterCarriesTheProviderRepoID(t *testing.T) {
+// rename is resolved by, and repos.identity_path is the path repos.id was minted
+// from (the id is a one-way hash of it). Every writer of repos inserts both, so
+// its version carries the held values: a writer that left one out would write
+// empty over it. Only the provider sync states them, and only when its row has
+// them (a provider sync row without them, a local repository and a pushed
+// repository keep the held values).
+func TestEveryReposWriterCarriesTheRepositoryAnchor(t *testing.T) {
 	writers := allSpecs(t)["repos"]
 	if len(writers) < 3 {
 		t.Fatalf("found %d repos writers, want at least 3 (provider sync, local sync, external ingest)", len(writers))
 	}
-	for _, writer := range writers {
-		positions, err := storedversion.Positions(writer.Insert)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := positions["provider_repo_id"]; !ok {
-			t.Errorf("%s: its insert does not name provider_repo_id", writer.Name)
-		}
-		var rule storedversion.Rule
-		for _, column := range writer.Contract.Columns {
-			if column.Name == "provider_repo_id" {
-				rule = column.Rule
+	for _, column := range []string{"provider_repo_id", "identity_path"} {
+		for _, writer := range writers {
+			positions, err := storedversion.Positions(writer.Insert)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		switch {
-		case rule == 0:
-			t.Errorf("%s: its contract does not name provider_repo_id", writer.Name)
-		case writer.Contract.Writer == "provider_sync" && rule != storedversion.Unstated:
-			t.Errorf("%s: provider_repo_id rule %d, want Unstated (kept when the row states none)", writer.Name, rule)
-		case writer.Contract.Writer != "provider_sync" && rule != storedversion.NoField:
-			t.Errorf("%s: provider_repo_id rule %d, want NoField (the writer has no provider id)", writer.Name, rule)
-		}
-		carry := writer.Carry(map[string]any{})
-		if !carry["provider_repo_id"] {
-			t.Errorf("%s: a row that states no provider_repo_id does not keep the held one", writer.Name)
+			if _, ok := positions[column]; !ok {
+				t.Errorf("%s: its insert does not name %s", writer.Name, column)
+			}
+			var rule storedversion.Rule
+			for _, contractColumn := range writer.Contract.Columns {
+				if contractColumn.Name == column {
+					rule = contractColumn.Rule
+				}
+			}
+			switch {
+			case rule == 0:
+				t.Errorf("%s: its contract does not name %s", writer.Name, column)
+			case writer.Contract.Writer == "provider_sync" && rule != storedversion.Unstated:
+				t.Errorf("%s: %s rule %d, want Unstated (kept when the row states none)", writer.Name, column, rule)
+			case writer.Contract.Writer != "provider_sync" && rule != storedversion.NoField:
+				t.Errorf("%s: %s rule %d, want NoField (the writer has no provider anchor)", writer.Name, column, rule)
+			}
+			if carry := writer.Carry(map[string]any{}); !carry[column] {
+				t.Errorf("%s: a row that states no %s does not keep the held one", writer.Name, column)
+			}
 		}
 	}
 }

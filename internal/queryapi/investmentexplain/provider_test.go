@@ -70,10 +70,7 @@ func TestCompleteInvestmentMixExplanationMockProviderEndToEnd(t *testing.T) {
 // the silent llm_unavailable regression #5's fix was meant to close
 // entirely.
 func TestResolveUnsupportedProviderKindCoversFullPythonKnownSet(t *testing.T) {
-	for _, requested := range []string{
-		"anthropic", "gemini", "qwen", "lmstudio",
-		"qwen-local", "qwen-lmstudio",
-	} {
+	for _, requested := range []string{"lmstudio", "qwen-local", "qwen-lmstudio"} {
 		t.Run(requested, func(t *testing.T) {
 			_, unsupported := ResolveUnsupportedProviderKind(requested)
 			if !unsupported {
@@ -87,7 +84,7 @@ func TestResolveUnsupportedProviderKindCoversFullPythonKnownSet(t *testing.T) {
 	// list above once #2189 (native Go Ollama support) landed in this
 	// branch's base (merged to main as ce0d58d03) -- categorize.
 	// ProviderKindOllama is now in goImplementedProviderKinds.
-	for _, requested := range []string{"openai", "local", "ollama", "mock", "none"} {
+	for _, requested := range []string{"openai", "anthropic", "gemini", "qwen", "local", "ollama", "mock", "none"} {
 		t.Run(requested, func(t *testing.T) {
 			_, unsupported := ResolveUnsupportedProviderKind(requested)
 			if unsupported {
@@ -170,9 +167,25 @@ func TestProviderHasRequiredConfigCoversFullPythonKnownSet(t *testing.T) {
 		}
 	})
 
-	for _, requested := range []string{
-		"anthropic", "gemini", "qwen", "lmstudio", "qwen-local", "qwen-lmstudio",
+	for _, hosted := range []struct{ requested, keyEnv string }{
+		{"anthropic", "ANTHROPIC_API_KEY"}, {"gemini", "GEMINI_API_KEY"}, {"qwen", "QWEN_API_KEY"}, {"qwen", "DASHSCOPE_API_KEY"},
 	} {
+		t.Run(hosted.requested+"/"+hosted.keyEnv, func(t *testing.T) {
+			clearEnv(t)
+			for _, name := range []string{"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "QWEN_API_KEY", "DASHSCOPE_API_KEY"} {
+				t.Setenv(name, "")
+			}
+			if IsLLMAvailable(hosted.requested, "") {
+				t.Fatalf("IsLLMAvailable(%q) = true with no key, want false", hosted.requested)
+			}
+			t.Setenv(hosted.keyEnv, "provider-key-value")
+			if !IsLLMAvailable(hosted.requested, "") {
+				t.Fatalf("IsLLMAvailable(%q) = false with %s set, want true", hosted.requested, hosted.keyEnv)
+			}
+		})
+	}
+
+	for _, requested := range []string{"lmstudio", "qwen-local", "qwen-lmstudio"} {
 		requested := requested
 		t.Run(requested, func(t *testing.T) {
 			clearEnv(t)

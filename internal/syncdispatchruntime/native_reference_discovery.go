@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -680,90 +681,7 @@ INSERT INTO public.sync_dispatch_outbox (
     id, org_id, sync_run_id, kind, status, available_at, attempts,
     created_at, updated_at
 ) VALUES ($5::uuid, $1, $2::uuid, $4, 'pending', $3, 0, $3, $3)
-ON CONFLICT (sync_run_id, kind) DO UPDATE
-SET status = CASE
-        WHEN public.sync_dispatch_outbox.status = 'dispatched'
-         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
-        THEN public.sync_dispatch_outbox.status
-        ELSE 'pending'
-    END,
-    available_at = CASE
-        WHEN public.sync_dispatch_outbox.status = 'dispatched'
-         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
-        THEN public.sync_dispatch_outbox.available_at
-        ELSE LEAST(public.sync_dispatch_outbox.available_at, EXCLUDED.available_at)
-    END,
-    dispatched_at = CASE
-        WHEN public.sync_dispatch_outbox.status = 'dispatched'
-         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
-        THEN public.sync_dispatch_outbox.dispatched_at
-        ELSE NULL
-    END,
-    last_error = CASE
-        WHEN public.sync_dispatch_outbox.status = 'dispatched'
-         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
-        THEN public.sync_dispatch_outbox.last_error
-        ELSE NULL
-    END,
-    claim_token = CASE
-        WHEN NOT (
-            public.sync_dispatch_outbox.status = 'dispatched'
-            AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
-        )
-         AND public.sync_dispatch_outbox.claim_expires_at IS NOT NULL
-         AND public.sync_dispatch_outbox.claim_expires_at > EXCLUDED.updated_at
-        THEN public.sync_dispatch_outbox.claim_token
-        ELSE NULL
-    END,
-    claim_expires_at = CASE
-        WHEN NOT (
-            public.sync_dispatch_outbox.status = 'dispatched'
-            AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
-        )
-         AND public.sync_dispatch_outbox.claim_expires_at IS NOT NULL
-         AND public.sync_dispatch_outbox.claim_expires_at > EXCLUDED.updated_at
-        THEN public.sync_dispatch_outbox.claim_expires_at
-        ELSE NULL
-    END,
-    claim_transport = CASE
-        WHEN NOT (
-            public.sync_dispatch_outbox.status = 'dispatched'
-            AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
-        )
-         AND public.sync_dispatch_outbox.claim_expires_at IS NOT NULL
-         AND public.sync_dispatch_outbox.claim_expires_at > EXCLUDED.updated_at
-        THEN public.sync_dispatch_outbox.claim_transport
-        ELSE NULL
-    END,
-    claim_route_generation = CASE
-        WHEN NOT (
-            public.sync_dispatch_outbox.status = 'dispatched'
-            AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
-        )
-         AND public.sync_dispatch_outbox.claim_expires_at IS NOT NULL
-         AND public.sync_dispatch_outbox.claim_expires_at > EXCLUDED.updated_at
-        THEN public.sync_dispatch_outbox.claim_route_generation
-        ELSE NULL
-    END,
-    dispatched_transport = CASE
-        WHEN public.sync_dispatch_outbox.status = 'dispatched'
-         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
-        THEN public.sync_dispatch_outbox.dispatched_transport
-        ELSE NULL
-    END,
-    dispatched_route_generation = CASE
-        WHEN public.sync_dispatch_outbox.status = 'dispatched'
-         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
-        THEN public.sync_dispatch_outbox.dispatched_route_generation
-        ELSE NULL
-    END,
-    transport_job_id = CASE
-        WHEN public.sync_dispatch_outbox.status = 'dispatched'
-         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
-        THEN public.sync_dispatch_outbox.transport_job_id
-        ELSE NULL
-    END,
-    updated_at = EXCLUDED.updated_at`,
+`+syncrunrollup.OutboxWakeupOnConflictSQL,
 		orgID, runID, availableAt, kind, uuid.New().String())
 	if err != nil {
 		return ErrReferenceDiscoveryUnavailable

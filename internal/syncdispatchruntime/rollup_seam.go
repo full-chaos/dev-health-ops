@@ -94,6 +94,23 @@ func recordRollupBump(ctx context.Context, path string) {
 	tally.counts[path]++
 }
 
+// pendingRollupBumps is the number of terminal unit writes ctx's tally holds
+// and has not flushed yet: every unit the owning transaction terminalized.
+// Zero for an untallied ctx. Read it before flushRollupBumpTally clears it.
+func pendingRollupBumps(ctx context.Context) int {
+	tally, ok := ctx.Value(rollupBumpTallyKey{}).(*rollupBumpTally)
+	if !ok || tally == nil {
+		return 0
+	}
+	tally.mu.Lock()
+	defer tally.mu.Unlock()
+	total := 0
+	for _, n := range tally.counts {
+		total += n
+	}
+	return total
+}
+
 // flushRollupBumpTally emits RecordSyncRunRollupBumped once per accumulated
 // path (outcome is always "failed" -- every mechanism in this package only
 // ever writes a failed stamp) and logs a debug line per path, matching

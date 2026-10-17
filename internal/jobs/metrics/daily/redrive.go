@@ -798,6 +798,7 @@ FOR UPDATE OF run`, runID).Scan(
 	priorStatus, priorFinalizationStatus := status, finalizationStatus
 
 	needsReset := false
+	freshGeneration := false
 	switch status {
 	case "running":
 		// Same eligibility RedriveStrandedFinalize uses -- a run still
@@ -808,6 +809,12 @@ FOR UPDATE OF run`, runID).Scan(
 		if finalizationStatus != "pending" && !priorAttempt {
 			return false, false, nil
 		}
+		// CHAOS-4442: a prior failed or expired attempt may have left its
+		// execution-ledger identity succeeded, ambiguous or stuck
+		// executing; republishing under the same generation would be
+		// skipped or refused by the bridge. A fresh generation is a fresh
+		// identity, as in the succeeded reset below.
+		freshGeneration = priorAttempt
 	case "succeeded":
 		if !includeSucceeded {
 			return false, false, nil
@@ -892,6 +899,23 @@ RETURNING `+pgClockMillis,
 			return false, false, err
 		}
 		run.Status = "running"
+		run.Generation = newGeneration
+	}
+
+	if freshGeneration {
+		newGeneration := "redrive:" + nonce
+		tag, err := tx.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET generation = $2, updated_at = $3
+WHERE id = $1::uuid AND status = 'running'`, runID, newGeneration, now)
+		if err != nil {
+			return false, false, ErrUnavailable
+		}
+		if tag.RowsAffected() != 1 {
+			return false, false, nil
+		}
+		slog.InfoContext(ctx, "daily finalize range redrive: fresh generation for a prior finalize attempt",
+			"run_id", runID, "finalization_status", priorFinalizationStatus, "generation", newGeneration)
 		run.Generation = newGeneration
 	}
 

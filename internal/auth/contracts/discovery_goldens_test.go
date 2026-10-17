@@ -26,7 +26,12 @@ type discoveryManifest struct {
 	} `json:"reject_by_client"`
 }
 
-const discoveryFixtureDir = "contracts/auth/v1/examples/discovery"
+const (
+	discoveryFixtureDir          = "contracts/auth/v1/examples/discovery"
+	discoveryFixtureManifestPath = "contracts/auth/v1/examples/discovery/manifest.json"
+)
+
+var discoveryManifestBasename = filepath.Base(discoveryFixtureManifestPath)
 
 // discoveryTrustedIssuer is the issuer the accept fixtures describe, as a
 // verifier's configuration would hold it.
@@ -47,7 +52,7 @@ func discoveryDir(t *testing.T) string {
 
 func loadDiscoveryManifest(t *testing.T) discoveryManifest {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(discoveryDir(t), "manifest.json"))
+	raw, err := os.ReadFile(filepath.Join(testRoot(t), discoveryFixtureManifestPath))
 	if err != nil {
 		t.Fatalf("reading discovery manifest: %v", err)
 	}
@@ -102,7 +107,7 @@ func TestEveryDiscoveryFixtureOnDiskIsClaimedByTheManifest(t *testing.T) {
 	var unclaimed, missing []string
 	onDisk := map[string]bool{}
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() == "manifest.json" || !strings.HasSuffix(entry.Name(), ".json") {
+		if entry.IsDir() || entry.Name() == discoveryManifestBasename || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
 		onDisk[entry.Name()] = true

@@ -7,7 +7,8 @@ TypeScript types are implementations of them, never the other way round.
 
 Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 (CHAOS-4884), `error.v1` (CHAOS-4929), `jwks.v1` and `discovery.v1`
-(CHAOS-4930). The remaining are CHAOS-4931–4934.
+(CHAOS-4930), `provisioning-event.v1` and `audit-event.v1` (CHAOS-4933),
+`endpoint-auth-profile.v1` (CHAOS-4931). The remaining are CHAOS-4932 and 4934.
 
 Distinct from `credential-classes.json` and `endpoint-profiles.ops.json`, which
 are the Wave-0 **inventory** contract describing what authentication exists
@@ -82,15 +83,16 @@ attributed all of them to one Go test, which was false for two.
 | `\d` `\w` `\s` `\b` are Unicode in Python `re`, ASCII in RE2 and ECMA-262 | no shorthand classes | same test |
 | `(?i)` is valid in RE2 and Python, a SyntaxError in ECMA-262 | no inline flag groups | same test |
 | a trailing `$` matches before a final newline in Python only | the Python client rewrites it to `\Z`, failing closed on shapes it cannot rewrite | **the client, not a schema guard** — `authclient/contracts.py` `strictly_anchored` |
-| ajv strict mode refuses `required` in a subschema that does not define the property | an ajv lint, not a spec rule; declare the property in the subschema | **review only — there is no ajv runner in this repository** |
+| ajv strict mode refuses `required` in a subschema that does not define the property | an ajv lint, not a spec rule; declare the property in the subschema | **the ajv runner** — `ci/auth-contracts-ajv/run.mjs` (strict mode; `--self-test` proves it is on), run by the `Auth Contracts ajv` workflow |
 | `maxLength` counts CODE POINTS; Go's `len()` counts BYTES | to mirror a Go byte bound, restrict the alphabet to one-byte characters so the two counts coincide | the `jwks.v1` corpus — `invalid-kid-non-ascii.json` plus `TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` |
 
-That last row is a real gap, not a formality. **No committed code or CI job runs
-ajv against these contracts**, so the ECMA-262 leg of every "three languages
-agree" claim rests on a runner the author supplied locally. A schema edit that
-breaks ECMA compatibility passes everything in this repo. Treat the ECMA column
-of any proof table as unreproducible until that changes. **CHAOS-4941 tracks
-committing a runner and wiring it into CI.**
+The ECMA-262 leg is committed: `ci/auth-contracts-ajv/run.mjs` validates every
+`examples/*/manifest.json` corpus with ajv 2020-12 in **strict mode** (ajv is
+pinned by `package-lock.json`, because `strictRequired` is a lint and can move
+between releases) and runs in CI on any change under `contracts/auth/v1/**`.
+It reads the same manifests as the Go and Python runners and enumerates nothing
+itself. Exit codes: 1 = a fixture disagrees, 2 = a schema failed to compile.
+Run it locally: `cd ci/auth-contracts-ajv && npm ci && node run.mjs`.
 
 **Redundant keywords are not free.** A `maxLength` beside a pattern that already
 bounds the same range makes Go report `maxLength` (first violation only) and
@@ -193,6 +195,51 @@ repository yet. When the Go auth-service publishes `/.well-known/jwks.json`, its
 real output must be validated by a test beside the Go runner, or the schema can
 describe an idealised document, pass its own corpus forever, and never touch
 what production writes.
+
+### Provisioning and audit events: the consumer is the deliverable (CHAOS-4933)
+
+`provisioning-event.v1` is one `auth_outbox_events` row as a consumer receives
+it; `audit-event.v1` is one `security_audit_events` row crossing a service
+boundary (TRD §9, §13).
+
+* **The envelope is the producer's row, derived not hand-picked.**
+  `provisioning-event.v1`'s members are exactly the `auth_outbox_events` columns
+  that cross a service boundary (`aggregate_type`, `aggregate_id`, `event_type`,
+  `idempotency_key`, `created_at`, `payload`); `audit-event.v1`'s are the
+  `security_audit_events` columns. `TestWireEnvelopesMatchTheirProducersColumnsInBothDirections`
+  parses the 0005 migration and fails if a column is neither a member nor
+  excluded with a reason, or a member has no column. Excluded: surrogate ids,
+  delivery bookkeeping (`available_at`, `published_at`, `attempts`,
+  `last_error`) and `client_ip`.
+* **The idempotency key is `(aggregate_type, aggregate_id, payload.revision)`,
+  and `revision` is per aggregate.** Nothing implies an ordering across
+  aggregates, so a consumer that sorts the whole stream is wrong. The
+  `idempotency_key` column (UNIQUE) must equal
+  `aggregate_type:aggregate_id:revision`; a pattern cannot compare two members,
+  so the clients enforce it (`reject_by_client`).
+* **Consumer rule, with golden vectors** (`consumer_vectors` in the
+  provisioning manifest, replayed by Go and Python): apply when the revision is
+  last+1 (1 for an aggregate never seen); ignore a revision at or below the last
+  applied one; a larger one is a gap, which is not applied and means resync.
+* **`payload.revision` is 1..2^53-1** and guarded on the raw token like every wire
+  integer (above): `1.0`, `1e0` and `9007199254740990.1` are `reject_by_client`;
+  2^53 and past are refused by the schema.
+* **`change` and audit `attributes` are allowlists.** A schema cannot assert
+  "no secrets", so the members that would carry one are unrepresentable: the
+  provisioning `change` object names, per aggregate type, exactly the members it
+  may carry (`propertyNames` in a per-aggregate conditional; a `user` event
+  carries none), and audit `attributes` is a closed object. Emails, provider
+  subjects, display names and client addresses have no member. An arbitrary key
+  fails, and a test fails if an aggregate type lacks its conditional branch.
+* **Each aggregate type pins its id prefix and event vocabulary**, so an
+  `organization` event with a `prn_` id disagrees in shape and fails. `idn_`,
+  `mbr_`, `pra_`, `grt_` and `rol_` are introduced here; `prn_` and `org_` are
+  `principal.v1`'s. A grant event carries `expires_at` (TRD §9; Q2 default keep).
+* **Scope, decided:** entitlement snapshots are a consumed projection, not a
+  provisioning event (ACP-ADR-07); ACR and External Push lifecycle are
+  metadata projections owned by the credential surface and are not in this
+  stream in v1 (ACP-ADR-08, ACP-ADR-09); mutation request bodies are caller
+  hints, never authority, and belong with each route when it is mounted.
 
 ### JWKS and discovery: one issuer, one key use (CHAOS-4930)
 
@@ -320,8 +367,7 @@ shape instead. This is correct behaviour and has caught two authors.
 ## Proof obligation
 
 Every surface ships an executed cross-language run on one tip — Go, Python and
-ajv-2020 validating the same corpus, output pasted, not described (G-70) — with
-the standing caveat above that **the ajv leg is run from a local runner and is
-not reproducible from this repository** — and
-a mutation table showing the corpus can fail: delete each guard, confirm exactly
+ajv-2020 validating the same corpus, output pasted, not described (G-70) — the
+ajv leg is `ci/auth-contracts-ajv/run.mjs`, so the pasted run is reproducible —
+and a mutation table showing the corpus can fail: delete each guard, confirm exactly
 the predicted fixtures go red, restore.

@@ -1,0 +1,20 @@
+{
+  "schema_version": "provisioning-event.v1",
+  "aggregate_type": "resource_grant",
+  "aggregate_id": "grt_EXAMPLE0000000000000002",
+  "event_type": "resource_grant.created",
+  "idempotency_key": "resource_grant:grt_EXAMPLE0000000000000002:1",
+  "created_at": "2026-09-03T10:00:00Z",
+  "payload": {
+    "revision": 1,
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "change": {
+      "resource_type": "organization",
+      "resource_key": "*",
+      "action_set": [
+        "members.invite"
+      ],
+      "effect": "allow"
+    }
+  }
+}

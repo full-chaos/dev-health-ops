@@ -121,8 +121,6 @@ func (s pgStore) softDeleteUser(ctx context.Context, logger *slog.Logger, id uui
 	logger.DebugContext(ctx, "admin: user delete (soft): tokens ended", "user_id", id.String(), "was_active", wasActive,
 		"refresh_tokens_revoked", revoked.RowsAffected(), "password_reset_tokens_deleted", reset.RowsAffected(),
 		"email_verification_tokens_deleted", verification.RowsAffected())
-	logger.InfoContext(ctx, "admin: user soft-deleted", "user_id", id.String(), "mode", string(DeleteSoft),
-		"was_active", wasActive, "already_done", result.AlreadyDone)
 	return result, nil
 }
 
@@ -184,11 +182,21 @@ func (s pgStore) forceDeleteUser(ctx context.Context, logger *slog.Logger, id uu
 	if tag.RowsAffected() == 0 {
 		return false, nil, nil
 	}
+	return true, refs, nil
+}
+
+// logSoftDeleted and logForceDeleted write the Info outcome line. They run AFTER the transaction commits (a failed commit
+// rolls the delete back, and must leave no success line).
+func logSoftDeleted(ctx context.Context, logger *slog.Logger, id uuid.UUID, result softDeleteResult) {
+	logger.InfoContext(ctx, "admin: user soft-deleted", "user_id", id.String(), "mode", string(DeleteSoft),
+		"was_active", result.WasActive, "already_done", result.AlreadyDone)
+}
+
+func logForceDeleted(ctx context.Context, logger *slog.Logger, id uuid.UUID, refs []userRefDecision) {
 	var kept int64
 	for _, ref := range refs {
 		kept += ref.Rows
 	}
 	logger.InfoContext(ctx, "admin: user permanently deleted", "user_id", id.String(), "mode", string(DeleteForce),
 		"references_checked", len(refs), "rows_kept_with_null_user", kept)
-	return true, refs, nil
 }

@@ -290,6 +290,8 @@ func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUs
 		mode = DeleteForce
 	}
 	var result *DeleteUserResult
+	var forceRefs []userRefDecision
+	var softResult softDeleteResult
 	err := o.inTransaction(ctx, func(store pgStore) error {
 		user, err := findUser(ctx, store, in.ID, in.Email, in.Username)
 		if err != nil {
@@ -309,6 +311,7 @@ func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUs
 		logger := o.logger()
 		if mode == DeleteForce {
 			found, refs, err := store.forceDeleteUser(ctx, logger, user.ID)
+			forceRefs = refs
 			if err != nil {
 				return err
 			}
@@ -329,6 +332,7 @@ func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUs
 			if !soft.Found {
 				return refuse("User not found.")
 			}
+			softResult = soft
 			result.AlreadyInactive = soft.AlreadyDone
 		}
 		result.Deleted = true
@@ -336,6 +340,13 @@ func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUs
 	})
 	if err != nil {
 		return nil, err
+	}
+	if result.Deleted {
+		if mode == DeleteForce {
+			logForceDeleted(ctx, o.logger(), result.User.ID, forceRefs)
+		} else {
+			logSoftDeleted(ctx, o.logger(), result.User.ID, softResult)
+		}
 	}
 	return result, nil
 }

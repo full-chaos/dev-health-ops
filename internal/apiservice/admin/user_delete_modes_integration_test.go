@@ -36,12 +36,12 @@ func TestDeleteUserIsSoftByDefaultAndPermanentWithForce(t *testing.T) {
 	exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, 'del-org', 'del-org', 'community', 'stripe', true, now(), now())`, orgID)
 	users := map[string]uuid.UUID{}
-	for name, superuser := range map[string]bool{"root": true, "plain": false, "impersonated": false, "stuck": false} {
+	for name, superuser := range map[string]bool{"root": true, "plain": false, "impersonated": false, "stuck": false, "doomed": false, "doomedsoft": false, "repeated": false} {
 		users[name] = uuid.New()
 		exec(`INSERT INTO users (id, email, password_hash, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, 'x', true, true, $3, 0, now(), now())`, users[name], "del-"+name+"@example.com", superuser)
 	}
-	for _, name := range []string{"plain", "impersonated", "stuck"} {
+	for _, name := range []string{"plain", "impersonated", "stuck", "doomed", "doomedsoft", "repeated"} {
 		exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
 VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, users[name])
 	}
@@ -119,6 +119,12 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, users[na
 	if got := remove("plain", "?force=maybe"); got != http.StatusUnprocessableEntity || !present("plain") {
 		t.Fatalf("delete with a bad force value: status %d, present %v; want 422 and present", got, present("plain"))
 	}
+	if got := remove("repeated", "?force=true&force=not-a-bool"); got != http.StatusUnprocessableEntity || !present("repeated") {
+		t.Fatalf("delete with a repeated force parameter, one malformed: status %d, present %v; want 422 and present", got, present("repeated"))
+	}
+	if got := remove("repeated", "?force=not-a-bool&force=true"); got != http.StatusUnprocessableEntity || !present("repeated") {
+		t.Fatalf("delete with a repeated force parameter, first malformed: status %d, present %v; want 422 and present", got, present("repeated"))
+	}
 	if got := remove("impersonated", "?force=true"); got != http.StatusOK || present("impersonated") {
 		t.Fatalf("force delete of a user an impersonation session points at: status %d, present %v; want 200 and gone", got, present("impersonated"))
 	}
@@ -136,6 +142,21 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, users[na
 	}
 	if !strings.Contains(logs.String(), "admin: user permanently deleted") || !strings.Contains(logs.String(), "admin: user soft-deleted") {
 		t.Fatalf("the log does not carry the outcome lines: %s", logs.String())
+	}
+	// a commit that fails rolls the delete back and leaves no success line (the outcome line is written after the commit)
+	exec(`CREATE FUNCTION zz_fail_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+  IF COALESCE(OLD.id, NEW.id) IN ('` + users["doomed"].String() + `', '` + users["doomedsoft"].String() + `') THEN RAISE EXCEPTION 'zz commit refused'; END IF;
+  RETURN NULL; END $$`)
+	exec(`CREATE CONSTRAINT TRIGGER zz_fail_commit AFTER UPDATE OR DELETE ON users DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION zz_fail_commit()`)
+	permanent, soft := strings.Count(logs.String(), "admin: user permanently deleted"), strings.Count(logs.String(), "admin: user soft-deleted")
+	if got := remove("doomed", "?force=true"); got != http.StatusInternalServerError || !present("doomed") {
+		t.Fatalf("force delete whose commit fails: status %d, present %v; want 500 and present", got, present("doomed"))
+	}
+	if got := remove("doomedsoft", ""); got != http.StatusInternalServerError || !active("doomedsoft") {
+		t.Fatalf("soft delete whose commit fails: status %d, active %v; want 500 and active", got, active("doomedsoft"))
+	}
+	if strings.Count(logs.String(), "admin: user permanently deleted") != permanent || strings.Count(logs.String(), "admin: user soft-deleted") != soft {
+		t.Fatalf("a failed commit left a success line in the log: %s", logs.String())
 	}
 	var memberships int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM memberships WHERE user_id = $1`, users["stuck"]).Scan(&memberships); err != nil || memberships != 1 {

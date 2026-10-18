@@ -636,8 +636,9 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mode := DeleteSoft
-	if values, present := r.URL.Query()["force"]; present {
-		force, err := strconv.ParseBool(values[0])
+	// every force value must be a boolean: a repeated parameter with one malformed value is refused, never read as its first value
+	for _, raw := range r.URL.Query()["force"] {
+		force, err := strconv.ParseBool(raw)
 		if err != nil {
 			policy.WriteDetail(w, http.StatusUnprocessableEntity, "force must be true or false", nil)
 			return
@@ -670,16 +671,22 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 		}
 		var deleted bool
 		var err error
+		var forceRefs []userRefDecision
+		var softResult softDeleteResult
 		if mode == DeleteForce {
-			deleted, _, err = g.store.forceDeleteUser(ctx, h.logger, targetID)
+			deleted, forceRefs, err = g.store.forceDeleteUser(ctx, h.logger, targetID)
 		} else {
 			var soft softDeleteResult
 			soft, err = g.store.softDeleteUser(ctx, h.logger, targetID)
 			deleted = soft.Found
 			if err == nil && soft.AlreadyDone {
 				// already soft-deleted: gone from the API's view, as a deleted user was (404); the credential cleanup still commits
-				return func() { policy.WriteDetail(w, http.StatusNotFound, "User not found", nil) }
+				return func() {
+					logSoftDeleted(ctx, h.logger, targetID, soft)
+					policy.WriteDetail(w, http.StatusNotFound, "User not found", nil)
+				}
 			}
+			softResult = soft
 		}
 		if err != nil {
 			h.logger.ErrorContext(ctx, "admin: delete user failed", "mode", string(mode), "error", err)
@@ -691,6 +698,11 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		return func() {
+			if mode == DeleteForce {
+				logForceDeleted(ctx, h.logger, targetID, forceRefs)
+			} else {
+				logSoftDeleted(ctx, h.logger, targetID, softResult)
+			}
 			out := pyjson.NewObject()
 			out.Set("deleted", true)
 			policy.WriteModel(w, http.StatusOK, out, nil)

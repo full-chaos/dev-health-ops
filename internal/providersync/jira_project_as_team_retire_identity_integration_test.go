@@ -34,8 +34,8 @@ func TestRetireJiraProjectAsTeamRowsKeepsTheStoredProviderIdentity(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome.TeamsRetired != 1 {
-		t.Fatalf("teams retired = %d, want 1", outcome.TeamsRetired)
+	if outcome.TeamsRetired != 1 || outcome.TeamsWithoutProviderIdentity != 0 {
+		t.Fatalf("outcome = %+v, want 1 team retired, 0 without a stored provider identity", outcome)
 	}
 	if active := countRows(t, ctx, conn, `SELECT count() FROM teams FINAL WHERE org_id = ? AND id = 'OPS' AND is_active = 1`, orgID); active != 0 {
 		t.Fatalf("the retired team is still active")

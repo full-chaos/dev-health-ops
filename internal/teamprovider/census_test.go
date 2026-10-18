@@ -27,7 +27,9 @@ var insertWriters = []string{
 
 // Every Go writer of teams takes provider_team_id, provider_name and gone_at
 // from the stored versions INSIDE the statement that writes: it calls Insert,
-// or its own statement is an INSERT..SELECT that selects the three columns. A
+// or its own statement is an INSERT..SELECT that joins
+// StoredIdentityOfOrganization (the rule Insert reads with) and selects the
+// three columns. A
 // statement held as text (not an INSERT..SELECT) is only a column list that an
 // Insert caller reads. A read before a separate insert erases a value another
 // writer stored between the two, so no other shape passes; Carry is read for
@@ -69,11 +71,15 @@ func TestEveryGoTeamsWriteCarriesTheProviderIdentityInItsStatement(t *testing.T)
 					}
 				}
 				if strings.Contains(statement, "SELECT") {
-					selected := statement[strings.Index(statement, "SELECT"):]
-					for _, column := range columnNames {
+					declaration := declarationAt(source, at[0])
+					selected := declaration[strings.Index(declaration, "SELECT"):]
+					for _, column := range []string{"stored_team_id", "stored_name", "stored_gone"} {
 						if !strings.Contains(selected, column) {
-							t.Errorf("%s: INSERT..SELECT INTO teams lists %s but does not select it", rel, column)
+							t.Errorf("%s: INSERT..SELECT INTO teams does not select %s of the stored identity", rel, column)
 						}
+					}
+					if !joinsStoredIdentity(source, declaration) {
+						t.Errorf("%s: INSERT..SELECT INTO teams does not join teamprovider.StoredIdentityOfOrganization: a copy of the newest version erases an older stored identity", rel)
 					}
 					continue
 				}
@@ -97,6 +103,32 @@ func TestEveryGoTeamsWriteCarriesTheProviderIdentityInItsStatement(t *testing.T)
 	if len(callers) < len(insertWriters) {
 		t.Fatalf("found %d callers of teamprovider.Insert, want at least %d", len(callers), len(insertWriters))
 	}
+}
+
+// declarationAt is the source from offset to the first blank line: the whole
+// declaration that holds a statement.
+func declarationAt(source string, offset int) string {
+	declaration := source[offset:]
+	if end := strings.Index(declaration, "\n\n"); end >= 0 {
+		declaration = declaration[:end]
+	}
+	return declaration
+}
+
+var storedIdentityConst = regexp.MustCompile(`(?m)^(?:const )?\s*(\w+)\s*=\s*[^\n]*teamprovider\.StoredIdentityOfOrganization`)
+
+// joinsStoredIdentity says the declaration joins the shared stored-identity
+// subquery, directly or through a const of the same file that names it.
+func joinsStoredIdentity(source, declaration string) bool {
+	if strings.Contains(declaration, "teamprovider.StoredIdentityOfOrganization") {
+		return true
+	}
+	for _, m := range storedIdentityConst.FindAllStringSubmatch(source, -1) {
+		if regexp.MustCompile(`\b` + m[1] + `\b`).MatchString(declaration) {
+			return true
+		}
+	}
+	return false
 }
 
 var constName = regexp.MustCompile(`(\w+)\s*=\s*[\x60"]\s*INSERT`)

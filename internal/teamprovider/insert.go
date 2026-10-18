@@ -227,12 +227,21 @@ func insertStatement(columns []string) (query string, idIndex, orgIndex int, err
 	return query, idIndex, orgIndex, nil
 }
 
-// storedIdentityQuery is Query's rule with the names Insert joins on.
-const storedIdentityQuery = "SELECT id AS stored_id, " +
+// storedIdentitySelect is Query's rule with the names a writer joins on:
+// stored_id, stored_team_id, stored_name and stored_gone.
+const storedIdentitySelect = "SELECT id AS stored_id, " +
 	"argMaxIf(provider_team_id, (updated_at, last_synced), provider_team_id != '') AS stored_team_id, " +
 	"argMaxIf(provider_name, (updated_at, last_synced), provider_name != '') AS stored_name, " +
 	"nullIf(argMax(ifNull(gone_at, toDateTime64(0, 6)), (updated_at, last_synced)), toDateTime64(0, 6)) AS stored_gone " +
-	"FROM teams WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)} GROUP BY id"
+	"FROM teams WHERE org_id = {org_id:String}"
+
+const storedIdentityQuery = storedIdentitySelect + " AND id IN {team_ids:Array(String)} GROUP BY id"
+
+// StoredIdentityOfOrganization is the stored identity of every team of the
+// organization {org_id:String} by Query's rule. An INSERT..SELECT INTO teams
+// outside Insert joins it (ON stored_id = id) and selects
+// stored_team_id, stored_name and stored_gone: it is a writer of teams too.
+const StoredIdentityOfOrganization = storedIdentitySelect + " GROUP BY id"
 
 // paramValue makes a value safe for a query parameter array of the column's
 // type: a time is sent as UTC text (the parameter type names UTC, so no

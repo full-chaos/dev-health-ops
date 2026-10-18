@@ -2003,7 +2003,7 @@ usage error (exit 2). The verb prints no organization id on stdout, stderr or
 in its own log lines; the audit row holds it. It prints counts only, under
 `retire_jira_project_as_team`: found (`teams`, `teams_with_manual_members`,
 `teams_with_sync_policy`, `ownership_rows`, `membership_rows`,
-`repo_ownership_rows`) and written (`teams_retired`, `ownership_closed`,
+`repo_ownership_rows`, `teams_without_provider_identity`) and written (`teams_retired`, `ownership_closed`,
 `memberships_closed`, `repo_ownership_closed`; 0 with `--dry-run`). A second
 run reports zero.
 

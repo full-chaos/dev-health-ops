@@ -84,7 +84,10 @@ func TestAGitHubMembersOnlyRunWritesNoMembershipOfAnUnimportedTeam(t *testing.T)
 	ctx, conn := newWorkItemEffectsConn(t)
 	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
 	seedImportedTeam(f, "github", "gh:platform")
-	githubDroppedRun(ctx, t, conn, f.orgID, newDroppedGitHubOrg(), TeamCatalogSelections{Members: true}, carryAt, staticScopeCensus{})
+	result := githubDroppedRun(ctx, t, conn, f.orgID, newDroppedGitHubOrg(), TeamCatalogSelections{Members: true}, carryAt, staticScopeCensus{})
+	if result.MembershipsWritten != 1 {
+		t.Errorf("MembershipsWritten = %d, want 1 (gh:platform's only; the unimported team's member is not written)", result.MembershipsWritten)
+	}
 	if got := openMembershipTeamIDs(f, "github"); !equalTeamLists(got, []string{"gh:platform"}) {
 		t.Errorf("teams with open memberships = %v, want only the imported gh:platform", got)
 	}
@@ -100,10 +103,14 @@ func TestAGitLabRunWithTeamsOffWritesNoLinkOfAnUnimportedTeam(t *testing.T) {
 	collector := GitLabTeamCatalogCollector{Sink: GitLabTeamCatalogClickHouseEffects{
 		Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	}, ScopeCensus: staticScopeCensus{}}
-	if _, err := collector.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: f.orgID, SyncRunID: "run", IntegrationID: "integration-a"},
+	result, err := collector.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: f.orgID, SyncRunID: "run", IntegrationID: "integration-a"},
 		providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}},
-		gitlabTeamCatalogTestClient(t, fake.URL), TeamCatalogSelections{Projects: true}, carryAt); err != nil {
+		gitlabTeamCatalogTestClient(t, fake.URL), TeamCatalogSelections{Projects: true}, carryAt)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if written := len(openGitLabOwnership(ctx, t, conn, f.orgID, "gitlab")); result.OwnershipWritten != written {
+		t.Errorf("OwnershipWritten = %d, want the %d rows written", result.OwnershipWritten, written)
 	}
 	if got := openProjectOwnershipTeams(f, "gitlab"); !equalTeamLists(got, []string{"gl:org"}) {
 		t.Errorf("teams with open project ownership = %v, want only the imported gl:org", got)
@@ -134,10 +141,14 @@ func TestALinearRunWithTeamsOffWritesNoLinkOfAnUnimportedTeam(t *testing.T) {
 	ref := teamCatalogRefFromClaim(claim)
 	ref.Strict = true
 	ref.IntegrationID = "integration-a"
-	if _, err := collector.CollectTeamCatalog(ctx, ref, providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+	result, err := collector.CollectTeamCatalog(ctx, ref, providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
 		linearWorkItemsClient(t, fakehttp.Client(&linearWorkItemsDoer{responses: append([]string{teams}, rest...)})),
-		TeamCatalogSelections{Members: true, Projects: true}, carryAt); err != nil {
+		TeamCatalogSelections{Members: true, Projects: true}, carryAt)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if result.MembershipsWritten != 1 {
+		t.Errorf("MembershipsWritten = %d, want 1 (linear:ENG's only)", result.MembershipsWritten)
 	}
 	if got := openMembershipTeamIDs(f, "linear"); !equalTeamLists(got, []string{"linear:ENG"}) {
 		t.Errorf("teams with open memberships = %v, want only the imported linear:ENG", got)

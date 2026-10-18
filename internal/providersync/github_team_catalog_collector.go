@@ -265,7 +265,8 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		ReportSnapshotPlan(ctx, githubTeamCatalogProvider, ref.OrgID, membershipOutcome.Plan)
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.MembershipsClosed = membershipOutcome.Closed
-		membershipRows, err = KeepLinksOfImportedTeams(ctx, adapter.Sink.Conn, ref.OrgID, githubTeamCatalogProvider, "team_memberships", membershipRows,
+		var dropped LinkDrop
+		membershipRows, dropped, err = KeepLinksOfImportedTeams(ctx, adapter.Sink.Conn, ref.OrgID, githubTeamCatalogProvider, "team_memberships", membershipRows,
 			func(r githubMembershipRow) string { return r.OrgID }, func(r githubMembershipRow) string { return r.TeamID }, func(r githubMembershipRow) bool { return r.ValidTo == nil })
 		if err != nil {
 			return result, err
@@ -274,7 +275,8 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 			if err := adapter.Sink.WriteMemberships(ctx, ref.OrgID, membershipRows); err != nil {
 				return result, err
 			}
-			result.MembershipsWritten = len(keptMemberships)
+			result.MembershipsWritten = len(KeptLinks(dropped, keptMemberships,
+				func(r githubMembershipRow) string { return r.TeamID }, func(r githubMembershipRow) bool { return r.ValidTo == nil }))
 			// MembersWritten stays 0 (codex round 2, P2): Linear's collector
 			// sets it to its own `members` table row count
 			// (linear_team_catalog_collector.go: batch.Result.Members ==

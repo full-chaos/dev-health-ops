@@ -28,7 +28,7 @@ func TestKeepLinksOfImportedTeamsRefusesARowOfAnotherOrganization(t *testing.T) 
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	conn := &unreadLinkTeams{}
 	rows := []link{{"org-1", "gh:a"}, {"org-2", "gh:b"}}
-	_, err := KeepLinksOfImportedTeams(context.Background(), conn, "org-1", "github", "team_memberships", rows,
+	_, _, err := KeepLinksOfImportedTeams(context.Background(), conn, "org-1", "github", "team_memberships", rows,
 		func(r link) string { return r.org }, func(r link) string { return r.team }, func(link) bool { return true })
 	if !errors.Is(err, ErrLinkRowsOfAnotherOrganization) || !strings.Contains(err.Error(), "1 team_memberships rows") {
 		t.Fatalf("err = %v, want the row of another organization refused", err)

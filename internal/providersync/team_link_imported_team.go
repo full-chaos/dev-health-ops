@@ -40,9 +40,9 @@ type LinkTeamQuerier interface {
 func KeepLinksOfImportedTeams[R any](
 	ctx context.Context, conn LinkTeamQuerier, orgID, provider, dataset string, rows []R,
 	orgOf, teamID func(R) string, open func(R) bool,
-) ([]R, error) {
+) ([]R, LinkDrop, error) {
 	if conn == nil || strings.TrimSpace(orgID) == "" {
-		return nil, ErrInvalidConfiguration
+		return nil, LinkDrop{}, ErrInvalidConfiguration
 	}
 	// A row of another organization is refused, loudly: its team cannot be
 	// looked up in this organization, and dropping it would hide the caller's
@@ -56,7 +56,7 @@ func KeepLinksOfImportedTeams[R any](
 	if foreign > 0 {
 		slog.Default().WarnContext(ctx, "team_links_of_another_organization_refused",
 			"provider", provider, "dataset", dataset, "rows", foreign)
-		return nil, fmt.Errorf("%w: %d %s rows of another organization", ErrLinkRowsOfAnotherOrganization, foreign, dataset)
+		return nil, LinkDrop{}, fmt.Errorf("%w: %d %s rows of another organization", ErrLinkRowsOfAnotherOrganization, foreign, dataset)
 	}
 	seen := map[string]bool{}
 	var ids []string
@@ -67,23 +67,23 @@ func KeepLinksOfImportedTeams[R any](
 		}
 	}
 	if len(ids) == 0 {
-		return rows, nil
+		return rows, LinkDrop{}, nil
 	}
 	result, err := conn.Query(ctx, importedTeamIDsQuery, clickhouse.Named("org_id", orgID), clickhouse.Named("ids", ids))
 	if err != nil {
-		return nil, fmt.Errorf("providersync: read the imported teams of %s links: %w", dataset, err)
+		return nil, LinkDrop{}, fmt.Errorf("providersync: read the imported teams of %s links: %w", dataset, err)
 	}
 	defer result.Close()
 	imported := map[string]bool{}
 	for result.Next() {
 		var id string
 		if err := result.Scan(&id); err != nil {
-			return nil, err
+			return nil, LinkDrop{}, err
 		}
 		imported[id] = true
 	}
 	if err := result.Err(); err != nil {
-		return nil, err
+		return nil, LinkDrop{}, err
 	}
 	kept := make([]R, 0, len(rows))
 	droppedTeams := map[string]bool{}
@@ -100,5 +100,29 @@ func KeepLinksOfImportedTeams[R any](
 		slog.Default().InfoContext(ctx, "team_links_of_unimported_teams_not_written",
 			"provider", provider, "dataset", dataset, "rows", dropped, "teams", len(droppedTeams))
 	}
-	return kept, nil
+	return kept, LinkDrop{teams: droppedTeams}, nil
+}
+
+// LinkDrop names the teams whose open links KeepLinksOfImportedTeams left
+// out. A caller counts what it wrote with it: a run's written counts must not
+// hold the links that were not written.
+type LinkDrop struct{ teams map[string]bool }
+
+// Keeps reports whether an open (or closed) link row of teamID is written.
+func (drop LinkDrop) Keeps(teamID string, open bool) bool {
+	return !open || !drop.teams[teamID]
+}
+
+// KeptLinks returns the rows the drop keeps, for the run's written counts.
+func KeptLinks[R any](drop LinkDrop, rows []R, teamID func(R) string, open func(R) bool) []R {
+	if len(drop.teams) == 0 {
+		return rows
+	}
+	kept := make([]R, 0, len(rows))
+	for _, row := range rows {
+		if drop.Keeps(teamID(row), open(row)) {
+			kept = append(kept, row)
+		}
+	}
+	return kept
 }

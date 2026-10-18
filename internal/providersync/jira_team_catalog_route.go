@@ -823,7 +823,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		if reuseErr != nil {
 			return result, reuseErr
 		}
-		keptMemberships, reuseErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_memberships", keptMemberships,
+		keptMemberships, _, reuseErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_memberships", keptMemberships,
 			func(r jiraTeamCatalogMembershipRow) string { return r.OrgID }, func(r jiraTeamCatalogMembershipRow) string { return r.TeamID }, func(r jiraTeamCatalogMembershipRow) bool { return r.ValidTo == nil })
 		if reuseErr != nil {
 			return result, reuseErr
@@ -923,6 +923,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		var retracted []jiraTeamCatalogOwnershipRow
 		var plan SnapshotPlan
 		freshOwnership := len(ownership)
+		freshRows := ownership
 		ownership, retracted, plan = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond), snapshot)
 		result.OwnershipSnapshotIncomplete = judgeJiraOwnershipSnapshot(ctx, ref.OrgID, plan, len(open)+len(held))
 		result.DegradedLegs = append(result.DegradedLegs, SnapshotAbsenceLegs(plan)...)
@@ -935,12 +936,13 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		slog.Default().InfoContext(ctx, "jira_team_catalog_ownership_unchanged",
 			"org_id", ref.OrgID, "fresh", freshOwnership, "unchanged", result.OwnershipUnchanged, "written", len(ownership))
 		ownership = append(ownership, retracted...)
-		// A jira_legacy row is exempt: it names an Atlassian ops team of
+		// A jira_legacy row is not filtered: it names an Atlassian ops team of
 		// jira_project_ops_team_links as jira:<ops team id> (team-attribution.md,
 		// "Team ids": the ops-team links row), and no writer of teams holds that
-		// id by design (the retired Python jira-ops sync stored its ops teams as
-		// ops:<id>), so its team is never an imported teams row.
-		ownership, openErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_project_ownership", ownership,
+		// id (the retired Python jira-ops sync stored its ops teams as ops:<id>),
+		// so its team is never a teams row.
+		var droppedOwnership LinkDrop
+		ownership, droppedOwnership, openErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_project_ownership", ownership,
 			func(r jiraTeamCatalogOwnershipRow) string { return r.OrgID }, func(r jiraTeamCatalogOwnershipRow) string { return r.TeamID },
 			func(r jiraTeamCatalogOwnershipRow) bool {
 				return r.ValidTo == nil && r.Source != jiraTeamCatalogLegacySource
@@ -956,7 +958,11 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, ownershipEffect); err != nil {
 			return result, err
 		}
-		result.OwnershipWritten = freshOwnership
+		result.OwnershipWritten = len(KeptLinks(droppedOwnership, freshRows,
+			func(r jiraTeamCatalogOwnershipRow) string { return r.TeamID },
+			func(r jiraTeamCatalogOwnershipRow) bool {
+				return r.ValidTo == nil && r.Source != jiraTeamCatalogLegacySource
+			}))
 		// The archived read is the later one: a project the first live read
 		// also named is written once, as archived. Rows.Projects itself is
 		// left as it is, because the ownership write reads it as what still

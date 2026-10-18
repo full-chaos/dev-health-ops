@@ -10,6 +10,7 @@ on:
       - 'scripts/validate_docs_inventory_review.py'
       - '.github/workflows/docs-inventory-review.yml'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - main
     paths:
@@ -36,6 +37,7 @@ permissions:
 
 jobs:
   inventory-archive:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -486,7 +486,13 @@ def test_the_fan_in_keeps_the_required_context_and_fails_on_a_missing_leg() -> N
     jobs = _jobs()
     fan_in = jobs["go-quality"]
     assert fan_in["name"] == "go-quality", "the required context name changed"
-    assert str(fan_in["if"]).replace(" ", "") == "always()", (
+    assert str(fan_in["if"]) in (
+        "always()",
+        "always() && "
+        "(!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && "
+        "github.event.pull_request.draft && "
+        "!contains(github.event.pull_request.labels.*.name, 'ci:full')))",
+    ), (
         "the fan-in must be always(): under any condition that lets it skip, a "
         "cancelled run leaves the REQUIRED check skipped"
     )

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: ["**"]
   merge_group:
   workflow_dispatch:
@@ -25,6 +26,7 @@ permissions:
 
 jobs:
   changes:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is
     # stalled (org plan change, 2026-09-04; chris ruling 16:54 PDT). Flip the
     # repo variable SELF_HOSTED_RUNNERS back to 'disabled' to restore the
@@ -299,7 +301,7 @@ jobs:
     # which moves the silent pass one level up instead of closing it.
     # Cancellation has to be reported by a job that actually ran, so this job
     # runs unconditionally and the script fails the gate on `cancelled`.
-    if: always()
+    if: always() && (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     needs: [changes, docs-tests, tooling-tests]
     # Same ARC routing as `changes` above.
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}

@@ -2,6 +2,7 @@ name: Documentation Cloudflare delivery
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
@@ -57,7 +58,7 @@ permissions:
 
 jobs:
   preview-or-build:
-    if: github.event_name == 'pull_request' || inputs.action == 'build'
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (github.event_name == 'pull_request' || inputs.action == 'build')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -59,6 +59,7 @@ concurrency:
 
 jobs:
   go-quality-leg:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     name: go-quality-leg (${{ matrix.name }})
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
@@ -340,7 +341,7 @@ jobs:
     # Must remain `always()`: under any condition that lets this job itself
     # skip, a cancelled run leaves the REQUIRED check skipped, and branch
     # protection counts a skipped required check as satisfied.
-    if: always()
+    if: always() && (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     needs: [go-quality-leg]
     # Same ARC routing as the legs above.
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}

@@ -15,6 +15,7 @@ on:
       - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: ['**']
     paths:
       - 'docs/**'
@@ -47,6 +48,7 @@ permissions:
 
 jobs:
   docs-guards:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     name: docs-guards
     runs-on: ubuntu-latest
     steps:

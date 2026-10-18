@@ -37,6 +37,7 @@ on:
       - .github/workflows/arc-runner-image.yml
       - go.mod
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - docker/arc-runner/Dockerfile
       - .github/workflows/arc-runner-image.yml
@@ -59,6 +60,7 @@ permissions:
 
 jobs:
   build:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     name: Build and publish
     # ubuntu-26.04-arm is not a real enterprise hosted label (chris
     # 2026-09-04 16:59) -- routed to the ARC pool instead. Fork PRs and the

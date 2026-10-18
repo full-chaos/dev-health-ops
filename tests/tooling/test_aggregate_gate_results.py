@@ -867,6 +867,15 @@ def _steps_of(path: Path, name: str) -> list[object]:
     return steps
 
 
+# The only clause an always() aggregator may add: a draft PR skips the whole
+# workflow while the CI_SKIP_DRAFT_PRS repository variable is 'true'.
+DRAFT_SKIP_GATE = (
+    "(!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && "
+    "github.event.pull_request.draft && "
+    "!contains(github.event.pull_request.labels.*.name, 'ci:full')))"
+)
+
+
 def _normalize(expression: object) -> str:
     assert isinstance(expression, str)
     return " ".join(expression.split())
@@ -937,7 +946,7 @@ def test_gate_job_consumes_changes_and_calls_the_shared_script(
 
     # It runs unconditionally: under `!cancelled()` a cancelled run leaves the
     # REQUIRED check skipped, which branch protection counts as satisfied.
-    assert _normalize(job["if"]) == "always()"
+    assert _normalize(job["if"]) in ("always()", "always() && " + DRAFT_SKIP_GATE)
 
     step = next(
         candidate

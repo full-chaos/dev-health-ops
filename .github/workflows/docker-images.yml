@@ -103,6 +103,7 @@ permissions:
 
 jobs:
   changes:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}

@@ -35,6 +35,7 @@ jobs:
   # unfiltered because a secret can sit in a doc. None of these three jobs is a required
   # check, so a skipped job leaves no check "expected". Push and merge_group always scan (a PR touching this file runs both jobs).
   changes:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -178,6 +179,7 @@ jobs:
           sarif_file: semgrep.sarif
 
   gitleaks:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     name: Gitleaks Secret Scan
     runs-on: ubuntu-latest
     # CHAOS-8294: the pinned scanner binary runs directly (the release tarball, sha256-verified), not through gitleaks/gitleaks-action.

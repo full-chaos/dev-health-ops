@@ -76,6 +76,7 @@ on:
       - .github/workflows/live-e2e.yml
       - .github/workflows/mirror-test-images.yml
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - internal/testsupport/containers/harness.go
       - ci/check_go.sh
@@ -193,6 +194,7 @@ jobs:
   # (the MediaType/index-vs-platform-manifest confusion that misjudged
   # valkey and postgres as amd64-only), filed 2026-09-02.
   precheck:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

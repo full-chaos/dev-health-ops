@@ -27,6 +27,7 @@ permissions:
 
 jobs:
   changes:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is
     # stalled (org plan change, 2026-09-04; chris ruling 16:54 PDT). Flip the
     # repo variable SELF_HOSTED_RUNNERS back to 'disabled' to restore the

@@ -378,7 +378,7 @@ func TestSymlinkCopyPolicyInputDomain(t *testing.T) {
 // byte for byte identical.
 func TestModuleFilesAreNeverCopiedBack(t *testing.T) {
 	f := guardFixture(t)
-	f.write("go.mod", "module example.com/fixture\n\ngo 1.27.0\n\nrequire example.com/kept v1.0.0\n")
+	f.write("go.mod", "module example.com/fixture\n\ngo 1.27.2\n\nrequire example.com/kept v1.0.0\n")
 	f.write("go.sum", "example.com/kept v1.0.0 h1:abc=\n")
 
 	beforeMod := f.read("go.mod")
@@ -390,7 +390,7 @@ func TestModuleFilesAreNeverCopiedBack(t *testing.T) {
 			return err
 		}
 		// Exactly what a tidy does in a reduced module: drop the requires.
-		if err := writeIn(workDir, "go.mod", "module example.com/fixture\n\ngo 1.27.0\n"); err != nil {
+		if err := writeIn(workDir, "go.mod", "module example.com/fixture\n\ngo 1.27.2\n"); err != nil {
 			return err
 		}
 		return writeIn(workDir, "go.sum", "")

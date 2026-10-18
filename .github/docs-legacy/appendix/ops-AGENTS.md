@@ -136,6 +136,7 @@ Language constraints:
 
 * Allowed: *appears, leans, suggests*
 * Forbidden: *is, was, detected, determined*
+* Exception for the investment explain prose: it may state the supplied shares as facts (D6070, 2026-10-17). The AI-generated label on the output stays.
 
 Explanation format:
 

@@ -1516,6 +1516,7 @@ services:
       <<: *settings-encryption-key
       LLM_PROVIDER: ${LLM_PROVIDER:-}
       LLM_MODEL: ${LLM_MODEL:-}
+      LLM_MODEL_EXPLAIN: ${LLM_MODEL_EXPLAIN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # Observability: OpenTelemetry, as on go-api. Off by default.
       OTEL_ENABLED: ${OTEL_ENABLED:-false}

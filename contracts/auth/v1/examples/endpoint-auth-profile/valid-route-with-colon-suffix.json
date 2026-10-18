@@ -15,7 +15,7 @@
   "tenant_requirement": "none",
   "token": {
     "algorithm": "EdDSA",
-    "audience": "dev-health-api",
+    "audience": "dev-health-auth",
     "issuer": "https://auth.fullchaos.dev",
     "token_type": "at+jwt"
   }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 )
@@ -97,6 +98,7 @@ func TestProfileCredentialClassVocabularyEqualsTheFrozenSetBothWays(t *testing.T
 	accepts := func(class string) bool {
 		document := loadEndpointAuthProfileFixture(t, "valid-protected-opaque-class-no-token.json").(map[string]any)
 		document["accepted_credential_classes"] = []any{class}
+		document["token"] = loadEndpointAuthProfileFixture(t, "valid-protected-jwt-single-class.json").(map[string]any)["token"]
 		return Validate(root, EndpointAuthProfileSurface, document) == nil
 	}
 
@@ -160,5 +162,71 @@ func TestTheLoaderRefusesAReferenceOutsideTheContractsNamespace(t *testing.T) {
 	uri, _ := url.Parse("https://fullchaos.dev/contracts/auth/v1/jsonschema/error.v1.schema.json")
 	if _, err := load(uri); err != nil {
 		t.Errorf("loader refused an in-namespace schema: %v", err)
+	}
+}
+
+func TestTheLoaderRefusesASymlinkThatEscapesTheContractsDirectory(t *testing.T) {
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "foreign.schema.json"), []byte(`{"required":["outsideMarker"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	schemas := filepath.Join(ContractsDir(root), "jsonschema")
+	if err := os.MkdirAll(schemas, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "foreign.schema.json"), filepath.Join(schemas, "foreign.schema.json")); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	uri, _ := url.Parse("https://fullchaos.dev/contracts/auth/v1/jsonschema/foreign.schema.json")
+	if _, err := localLoader(root)(uri); err == nil {
+		t.Fatal("loader followed a symlink out of the contracts directory")
+	}
+	real := filepath.Join(schemas, "real.schema.json")
+	if err := os.WriteFile(real, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uri, _ = url.Parse("https://fullchaos.dev/contracts/auth/v1/jsonschema/real.schema.json")
+	if _, err := localLoader(root)(uri); err != nil {
+		t.Fatalf("loader refused an ordinary in-tree file: %v", err)
+	}
+}
+
+func TestEveryTokenPinnedClassIsInTheClassVocabulary(t *testing.T) {
+	var document struct {
+		AllOf []struct {
+			If struct {
+				Properties struct {
+					Classes struct {
+						Contains struct {
+							Enum []string `json:"enum"`
+						} `json:"contains"`
+					} `json:"accepted_credential_classes"`
+				} `json:"properties"`
+			} `json:"if"`
+		} `json:"allOf"`
+	}
+	raw, err := os.ReadFile(SchemaPath(testRoot(t), EndpointAuthProfileSurface))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	var pinned []string
+	for _, rule := range document.AllOf {
+		pinned = append(pinned, rule.If.Properties.Classes.Contains.Enum...)
+	}
+	if len(pinned) == 0 {
+		t.Fatal("found no token-pinned class list; the rule or this test's path into it is gone")
+	}
+	vocabulary := map[string]bool{}
+	for _, id := range principalCredentialClassEnum(t) {
+		vocabulary[id] = true
+	}
+	for _, id := range pinned {
+		if !vocabulary[id] {
+			t.Errorf("token-pinned class %q is not in the credential class vocabulary", id)
+		}
 	}
 }

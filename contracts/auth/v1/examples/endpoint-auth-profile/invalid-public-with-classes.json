@@ -1,6 +1,6 @@
 {
   "accepted_credential_classes": [
-    "user_access_token"
+    "acr_client_credential"
   ],
   "classification": "public",
   "method": "GET",

@@ -103,7 +103,7 @@
           "description": "Exact expected signing algorithm. EdDSA for platform tokens (TRD section 11); HS256 only for compatibility-enabled legacy profiles (TRD section 16). `none` and every other value are unrepresentable."
         }
       },
-      "description": "Issuer, audience, type and algorithm a signed token must carry, all four together or none. Issuer and audience are the exact pinned values (G-13); principal.v1 owns their definition. Omit for opaque and signature classes, which have no issuer or algorithm."
+      "description": "Issuer, audience, type and algorithm a signed token must carry, all four together or none. Issuer and audience are the exact pinned values (G-13); principal.v1 owns their definition. REQUIRED when any accepted class is a signed token whose pins this schema can express (user_access_token, workload_token, ops_access_token_hs256, effective_principal_envelope: the first-branch rule below); a route accepting one of them with no pins would accept any token of that class from any issuer, audience or algorithm. Omit for opaque and signature classes, which have no issuer or algorithm. A signed class outside that list (for example the Auth.js encrypted session, whose algorithm is not in the enum) is not yet expressible; adding it means widening `algorithm` and this list together, a deliberate amendment."
     },
     "minimum_assurance": {
       "$ref": "principal.v1.schema.json#/properties/authentication/properties/assurance",
@@ -202,6 +202,30 @@
             "minItems": 1
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "contains": {
+              "enum": [
+                "user_access_token",
+                "workload_token",
+                "ops_access_token_hs256",
+                "effective_principal_envelope"
+              ]
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "required": [
+          "token"
+        ]
       }
     },
     {

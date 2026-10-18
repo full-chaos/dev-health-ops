@@ -15,6 +15,7 @@ import pytest
 from referencing.exceptions import Unresolvable
 
 from dev_health_ops.authclient.contracts import (
+    ContractError,
     contracts_dir,
     validate,
     violations,
@@ -115,10 +116,41 @@ def test_python_accepts_exactly_the_frozen_class_set_both_ways() -> None:
     candidates = (
         frozen | wave_one | enum | {"bearer_any", "jwt", "", "USER_ACCESS_TOKEN"}
     )
-    base = _load("valid-protected-opaque-class-no-token.json")
+    base = {
+        **_load("valid-protected-opaque-class-no-token.json"),
+        "token": _load("valid-protected-jwt-single-class.json")["token"],
+    }
     accepted = {
         c
         for c in candidates
         if not violations(SURFACE, {**base, "accepted_credential_classes": [c]})
     }
     assert accepted == frozen | wave_one
+
+
+def test_a_symlink_out_of_the_contracts_directory_is_refused(tmp_path: Path) -> None:
+    """A schema file that is a link to somewhere else must not become a $ref target."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "foreign.schema.json").write_text(
+        json.dumps(
+            {
+                "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/foreign.schema.json"
+            }
+        ),
+        encoding="utf-8",
+    )
+    schemas = tmp_path / "root" / "contracts" / "auth" / "v1" / "jsonschema"
+    schemas.mkdir(parents=True)
+    (schemas / "foreign.schema.json").symlink_to(outside / "foreign.schema.json")
+    (schemas / "x.v1.schema.json").write_text(
+        json.dumps(
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/x.v1.schema.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ContractError, match="outside"):
+        violations("x.v1", {}, root=tmp_path / "root")

@@ -222,7 +222,13 @@ def _contract_registry(contracts_root_str: str) -> Registry:
     registry: Registry = Registry()
     paths = sorted((root / "jsonschema").glob("*.schema.json"))
     paths += sorted(root.glob("*.schema.json"))
+    real_root = root.resolve()
     for path in paths:
+        if not path.resolve().is_relative_to(real_root):
+            raise ContractError(
+                f"{path} resolves to {path.resolve()}, outside {real_root}; "
+                "a contract schema must live inside the contracts directory"
+            )
         document = load_json(path)
         schema_id = document.get("$id")
         if not isinstance(schema_id, str):

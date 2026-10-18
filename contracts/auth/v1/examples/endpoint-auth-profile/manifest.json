@@ -36,6 +36,18 @@
   ],
   "reject": [
     {
+      "file": "invalid-jwt-class-without-token-pins.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "A route accepting a signed-token class with no issuer/audience/type/algorithm would accept any token of that class. Only the token then-branch rejects this."
+    },
+    {
+      "file": "invalid-workload-token-without-pins.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "The same rule for a second class, so it is not specific to one name."
+    },
+    {
       "file": "invalid-unknown-credential-class.json",
       "expect_instance_location": "/accepted_credential_classes/0",
       "expect_keyword": "enum",

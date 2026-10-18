@@ -127,6 +127,9 @@ func localLoader(root string) jsonschema.Loader {
 			return nil, fmt.Errorf("refusing $ref %q: only %s... is loadable", full, wireIDPrefix)
 		}
 		path := filepath.Join(ContractsDir(root), filepath.FromSlash(rel))
+		if err := requireInsideContracts(root, path); err != nil {
+			return nil, err
+		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("reading referenced schema %s: %w", path, err)
@@ -137,6 +140,24 @@ func localLoader(root string) jsonschema.Loader {
 		}
 		return &schema, nil
 	}
+}
+
+// requireInsideContracts refuses a path whose real location, after following
+// symlinks, is outside the contracts directory. The textual namespace check
+// cannot see that an in-tree file is a link to somewhere else.
+func requireInsideContracts(root, path string) error {
+	base, err := filepath.EvalSymlinks(ContractsDir(root))
+	if err != nil {
+		return fmt.Errorf("resolving contracts directory: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolving referenced schema %s: %w", path, err)
+	}
+	if real != base && !strings.HasPrefix(real, base+string(filepath.Separator)) {
+		return fmt.Errorf("refusing referenced schema %s: it resolves to %s, outside %s", path, real, base)
+	}
+	return nil
 }
 
 // Validator returns the resolved Draft 2020-12 validator for one wire surface.

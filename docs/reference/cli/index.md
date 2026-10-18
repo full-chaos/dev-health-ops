@@ -1345,6 +1345,30 @@ process). `redriven_failed` is different: it is observed by
 `'closed_failed'` — this one IS live, scraped from the worker process that
 actually processes the redriven job, not from this CLI.
 
+#### `metrics generation-repair` (CHAOS-10072)
+
+Before CHAOS-4442 the range finalize redrive replaced a run's whole generation
+with `redrive:<nonce>`, which dropped the producer prefix
+(`fixed-schedule:daily_metrics_fanout:`) that partition recompute, manual
+`daily-start` coverage and the recommendations readiness gate match. The
+original value was stored nowhere, but a run id is
+`uuid5(org|target_day|generation)`, so a candidate generation is proven by
+hashing to the run's own id.
+
+```bash
+dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-10-31 --dry-run
+dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-10-31 \
+  --reason generation_repair --correlation-id CHAOS-10072
+```
+
+Output: `examined`, `repaired`, `would_repair`, `not_provable` (created under
+another generation, for example `post-sync:`), `not_settled` (still
+redriving: not `succeeded`/`succeeded`, or an open redrive event), `raced`,
+`full_org_flipped`, and one entry per row. Every row is logged at Warn with the
+old and new generation. The write is a compare-and-set on the old generation,
+so a second pass repairs nothing. Audited under the `metrics.finalize_redrive`
+action.
+
 #### `metrics partition-recompute` (CHAOS-4459)
 
 Historical recompute: reset an already-`'succeeded'` daily-metrics run's

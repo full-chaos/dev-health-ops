@@ -97,3 +97,25 @@ func TestUserMetricsDailyRowOfAPersonInTwoTeamsSumsAndIsLabelledByTheTeamWithThe
 		}
 	}
 }
+
+// One team id may carry two names across the person's items (the attribution
+// sources spell a team differently): the row takes the smallest name, so the
+// order of the items does not change it.
+func TestUserMetricsDailyLabelNameDoesNotDependOnTheOrderOfTheItems(t *testing.T) {
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	person := "ana@example.test"
+	begin := day.Add(-48 * time.Hour)
+	items := []Item{
+		personItem(0, "A-1", &person, begin, day.Add(2*time.Hour)),
+		personItem(1, "A-2", &person, begin, day.Add(4*time.Hour)),
+	}
+	names := []string{"Team A old", "Team A new"}
+	for _, order := range [][]int{{0, 1}, {1, 0}} {
+		result := ComputeDailyTriplet(day, items, nil, func(index int) Attribution {
+			return Attribution{WorkScopeID: "PAY", TeamID: "team-a", TeamName: names[order[index]]}
+		})
+		if len(result.UserMetricsDaily) != 1 || result.UserMetricsDaily[0].TeamName != "Team A new" {
+			t.Errorf("order %v: rows %+v, want one row named %q", order, result.UserMetricsDaily, "Team A new")
+		}
+	}
+}

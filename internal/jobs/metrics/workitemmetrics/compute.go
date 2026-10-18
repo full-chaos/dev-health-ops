@@ -331,7 +331,9 @@ func ComputeDailyTriplet(
 			users[uKey] = uBucket
 		}
 		uBucket.teamItems[attribution.TeamID]++
-		if _, named := uBucket.teamNames[attribution.TeamID]; !named {
+		// The name of a team is its smallest name among the person's items, so the row
+		// does not depend on the order of the items when one team id carries two names.
+		if name, named := uBucket.teamNames[attribution.TeamID]; !named || attribution.TeamName < name {
 			uBucket.teamNames[attribution.TeamID] = attribution.TeamName
 		}
 

@@ -16,6 +16,8 @@ import (
 // is that row for each frozen case that holds such a person; a case that holds
 // two rows for a person and has no entry here fails the comparison.
 type declaredMergedUserRow struct {
+	// sourceRows is the number of frozen Python rows of the person the declaration merges.
+	sourceRows       int
 	teamID, teamName string
 	p50, p90         string
 	reason           string
@@ -23,11 +25,11 @@ type declaredMergedUserRow struct {
 
 var declaredMergedUserRows = map[string]declaredMergedUserRow{
 	"linked_donor_splits_the_group_by_team": {
-		"team-linear", "Linear Team", "2.5", "2.9000000000000004",
+		2, "team-linear", "Linear Team", "2.5", "2.9000000000000004",
 		"one item each for team-linear and unassigned: a tie, so the lowest team id labels the row; cycle hours [2, 3] give p50 2.5 and p90 2.9 (2.9000000000000004 in float64, the interpolation the compute uses for every percentile)",
 	},
 	"one_user_two_teams_stays_two_compute_rows": {
-		"team-a", "Team A", "3.0", "3.8",
+		2, "team-a", "Team A", "3.0", "3.8",
 		"one item each for team-a and team-b: a tie, so the lowest team id labels the row; cycle hours [2, 4] give p50 3.0 and p90 3.8",
 	},
 }
@@ -66,6 +68,16 @@ func withDeclaredMergedUserRows(
 		declared, ok := declaredMergedUserRows[strings.TrimPrefix(caseID, provider+"_")]
 		if !ok {
 			t.Fatalf("frozen case %q of %s holds several rows for one person and declaredMergedUserRows has no entry for it", caseID, snapshotName)
+		}
+		teams := columnValues(t, caseID, row, "team_id")
+		if len(users) != declared.sourceRows {
+			t.Fatalf("frozen case %q of %s holds %d rows, the declaration merges %d", caseID, snapshotName, len(users), declared.sourceRows)
+		}
+		if !containsString(teams, declared.teamID) {
+			t.Fatalf("frozen case %q of %s: the declared label %q is not one of the frozen teams %v", caseID, snapshotName, declared.teamID, teams)
+		}
+		if declared.reason == "" {
+			t.Fatalf("declaredMergedUserRows[%q] needs a written reason", caseID)
 		}
 		if len(distinct) != 1 {
 			t.Fatalf("frozen case %q of %s: the declared merge is for one person, the case has %d", caseID, snapshotName, len(distinct))

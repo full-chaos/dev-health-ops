@@ -580,6 +580,43 @@ FROM work_item_cycle_times WHERE org_id = ?`, orgA,
 	// golden_test.go), which compares against its OWN frozen golden, not
 	// this shared one.
 
+	t.Run("work_item_user_metrics_daily holds one row for the person that spans two teams", func(t *testing.T) {
+		// The golden holds (github, "", unassigned) under team-jira (one item created,
+		// no measure) and under unassigned (one started, in progress): the persisted
+		// row is the sums, labelled by the lowest team id on the tie (golden_test.go
+		// declaredMergedUserRows).
+		rows, err := conn.Query(ctx, `
+SELECT work_scope_id, team_id, team_name, items_started, items_completed, wip_count_end_of_day
+FROM work_item_user_metrics_daily FINAL
+WHERE org_id = ? AND provider = 'github' AND user_identity = 'unassigned'`, orgA)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		count := 0
+		for rows.Next() {
+			var (
+				scope, teamID, teamName string
+				started, completed, wip uint32
+			)
+			if err := rows.Scan(&scope, &teamID, &teamName, &started, &completed, &wip); err != nil {
+				t.Fatal(err)
+			}
+			count++
+			if scope != "" || teamID != "team-jira" || teamName != "Jira Team" ||
+				started != 1 || completed != 0 || wip != 1 {
+				t.Errorf("persisted row = (%q,%q,%q, started %d, completed %d, wip %d), want (\"\",\"team-jira\",\"Jira Team\", 1, 0, 1)",
+					scope, teamID, teamName, started, completed, wip)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("work_item_user_metrics_daily holds %d rows for the person, want 1", count)
+		}
+	})
+
 	t.Run("org B's rows are untouched", func(t *testing.T) {
 		var count uint64
 		if err := conn.QueryRow(ctx,

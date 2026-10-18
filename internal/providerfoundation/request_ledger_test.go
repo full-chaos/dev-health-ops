@@ -332,3 +332,68 @@ func TestAFamilyLabelKeepsTheDimensionAnOuterAccountSet(t *testing.T) {
 		t.Fatalf("ledger = %v, want issues/contents_blob", got)
 	}
 }
+
+func plainCtxLedgerClient(t *testing.T) *HTTPClient {
+	t.Helper()
+	return newTestHTTPClient(t, HTTPDoerFunc(func(r *http.Request) (*http.Response, error) {
+		return testHTTPResponse(r, http.StatusOK, http.Header{}, `{}`), nil
+	}), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+}
+
+func doOnce(t *testing.T, client *HTTPClient, ctx context.Context) {
+	t.Helper()
+	response, err := client.Do(ctx, http.MethodGet, "/repos/acme/api/pulls", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+}
+
+// A unit's execution carries its ledger in the context: every client without a
+// ledger of its own, a second client of a route included, counts into it.
+func TestTheUnitLedgerInTheContextCountsEveryClientWithoutItsOwn(t *testing.T) {
+	t.Parallel()
+	unit := NewRequestLedger()
+	ctx := WithRequestAccount(WithUnitLedger(context.Background(), unit), "prs", "")
+	doOnce(t, plainCtxLedgerClient(t), ctx)
+	doOnce(t, plainCtxLedgerClient(t), ctx)
+	if got := entriesOf(unit); got[LedgerKey{"prs", "rest_core"}] != 2 || len(got) != 1 {
+		t.Fatalf("unit ledger = %v, want 2 requests of two clients under prs/rest_core", got)
+	}
+}
+
+func TestAClientsOwnLedgerWinsOverTheUnitLedgerSoNothingCountsTwice(t *testing.T) {
+	t.Parallel()
+	unit, own := NewRequestLedger(), NewRequestLedger()
+	client := plainCtxLedgerClient(t)
+	client.Ledger = own
+	doOnce(t, client, WithUnitLedger(context.Background(), unit))
+	if got := entriesOf(own); got[LedgerKey{LedgerUnclassified, "rest_core"}] != 1 || len(got) != 1 {
+		t.Fatalf("own ledger = %v, want 1 request", got)
+	}
+	if got := entriesOf(unit); len(got) != 0 {
+		t.Fatalf("unit ledger = %v, want nothing: the client's own ledger counted the request", got)
+	}
+}
+
+func TestARedirectHopIsCountedIntoTheUnitLedger(t *testing.T) {
+	t.Parallel()
+	hits := 0
+	hc := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		hits++
+		if r.URL.Path == "/old" {
+			return testHTTPResponse(r, http.StatusFound, http.Header{"Location": {"https://api.github.test/next"}}, ``), nil
+		}
+		return testHTTPResponse(r, http.StatusOK, http.Header{}, `{}`), nil
+	})}
+	client := newTestHTTPClient(t, hc, RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	unit := NewRequestLedger()
+	response, err := client.Do(WithUnitLedger(context.Background(), unit), http.MethodGet, "/old", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if got := entriesOf(unit); hits != 2 || got[LedgerKey{LedgerUnclassified, "rest_core"}] != 2 || len(got) != 1 {
+		t.Fatalf("wire requests = %d, unit ledger = %v, want both counted", hits, got)
+	}
+}

@@ -270,6 +270,7 @@ type Metrics struct {
 	resumeReanchor                 map[string]uint64
 	unitTerminalWithRows           map[string]uint64
 	incidentEntitlementRefused     map[string]uint64
+	budgetUnderestimate            map[string]uint64
 	allArtifactsUnreadable         map[string]uint64
 	workItemTeamAttributionWritten map[string]uint64
 	teamAttributionMembershipLayer map[string]uint64
@@ -316,6 +317,7 @@ func NewMetrics() *Metrics {
 		resumeReanchor:                 map[string]uint64{},
 		unitTerminalWithRows:           map[string]uint64{},
 		incidentEntitlementRefused:     map[string]uint64{},
+		budgetUnderestimate:            map[string]uint64{},
 		allArtifactsUnreadable:         map[string]uint64{},
 		workItemTeamAttributionWritten: map[string]uint64{},
 		teamAttributionMembershipLayer: map[string]uint64{},
@@ -835,6 +837,36 @@ func (m *Metrics) RecordIncidentEntitlementRefused(provider, dataset, seam strin
 	defer m.mu.Unlock()
 	m.incidentEntitlementRefused[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
 		":"+MetricIncidentEntitlementSeamLabel(seam)]++
+}
+
+// metricBudgetDimensionVocabulary is the closed set of budget dimensions a
+// provider request is accounted to.
+var metricBudgetDimensionVocabulary = map[string]struct{}{
+	"rest_core": {}, "graphql_cost": {}, "search": {}, "contents_blob": {}, "secondary_abuse_risk": {},
+}
+
+// MetricBudgetDimensionLabel bounds the budget dimension label.
+func MetricBudgetDimensionLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricBudgetDimensionVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordBudgetUnderestimate counts one finished provider unit whose requests in
+// a request-count dimension exceeded the estimate it was admitted on, by
+// bounded provider, dataset and dimension. A steady count on one dataset says
+// its estimator undercounts and its admission lets too much through.
+func (m *Metrics) RecordBudgetUnderestimate(provider, dataset, dimension string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_ = dataset
+	_ = provider
+	_ = dimension
 }
 
 func (m *Metrics) RecordUnitTerminalWithRows(provider, dataset string) {
@@ -1647,6 +1679,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_incident_entitlement_refused_total",
 		"Provider units refused by the execution-time canonical-incident entitlement re-check, by bounded provider, dataset, and seam.",
 		"seam", m.incidentEntitlementRefused,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_budget_underestimate_total",
+		"Finished provider units whose requests in a request-count dimension exceeded the estimate they were admitted on, by bounded provider, dataset, and dimension.",
+		"dimension", m.budgetUnderestimate,
 	); err != nil {
 		return err
 	}

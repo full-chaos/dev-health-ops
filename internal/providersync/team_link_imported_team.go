@@ -27,8 +27,10 @@ type LinkTeamQuerier interface {
 // provider's teams but writes no teams row, so a link of a team that was
 // never imported would name a team id that no teams row holds (chris
 // 2026-10-14 on CHAOS-9123: the switches stay independent, and such link rows
-// are not written). A closed row (open false) is always kept: it closes a row
-// the store already holds. written names the teams the same run writes after
+// are not written). open says which rows the rule applies to: an open row of
+// a link kind that names a catalog team. A closed row is always kept (it
+// closes a row the store already holds), and so is a row of a kind whose team
+// is by design no teams row (the caller's open returns false for it). written names the teams the same run writes after
 // its links (they are imported too); a caller that writes its teams first
 // passes nil. A failed read is an error, before any write.
 func KeepLinksOfImportedTeams[R any](

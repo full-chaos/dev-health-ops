@@ -935,8 +935,16 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		slog.Default().InfoContext(ctx, "jira_team_catalog_ownership_unchanged",
 			"org_id", ref.OrgID, "fresh", freshOwnership, "unchanged", result.OwnershipUnchanged, "written", len(ownership))
 		ownership = append(ownership, retracted...)
+		// A jira_legacy row is exempt: it names an Atlassian ops team of
+		// jira_project_ops_team_links as jira:<ops team id> (team-attribution.md,
+		// "Team ids": the ops-team links row), and no writer of teams holds that
+		// id by design (the retired Python jira-ops sync stored its ops teams as
+		// ops:<id>), so its team is never an imported teams row.
 		ownership, openErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_project_ownership", ownership,
-			func(r jiraTeamCatalogOwnershipRow) string { return r.TeamID }, func(r jiraTeamCatalogOwnershipRow) bool { return r.ValidTo == nil }, nil)
+			func(r jiraTeamCatalogOwnershipRow) string { return r.TeamID },
+			func(r jiraTeamCatalogOwnershipRow) bool {
+				return r.ValidTo == nil && r.Source != jiraTeamCatalogLegacySource
+			}, nil)
 		if openErr != nil {
 			return result, openErr
 		}

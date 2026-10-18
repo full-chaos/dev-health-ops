@@ -2510,7 +2510,8 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > imported are not written; a closed row is always written, because it closes a row the store holds. One
 > shared helper decides it for every catalog (`providersync.KeepLinksOfImportedTeams`: GitHub, GitLab,
 > Linear and Jira catalogs, and the Atlassian teams write), and it logs `team_links_of_unimported_teams_not_written`
-> with counts.
+> with counts. The `jira_legacy` ops-team ownership rows are exempt: they name `jira:<ops team id>` (the ops-team
+> links row of "Team ids"), an id no writer of `teams` holds by design.
 >
 > **A fourth, architecturally SEPARATE `team_repo_ownership` producer (CHAOS-4365 item 1b,
 > implemented): the sync-derived `inferred` row, never routed through `team_autoimport_<provider>.populate()`

@@ -99,7 +99,10 @@ func (repair *TerminalDeliveryRepair) ReconcileOtherGenerations(
 	}
 
 	if kind == "finalize_sync_run" {
-		for pass := 0; pass < 50; pass++ {
+		// Each pass re-arms rows that then leave the candidate set, so the loop ends when a pass re-arms none or
+		// sees fewer candidates than a batch; there is no pass ceiling (a ceiling stranded eligible rows). A cancelled
+		// context fails the next pass.
+		for {
 			outcome, err := repair.reconcileFinalizePass(ctx, now)
 			if err != nil {
 				return report, err
@@ -120,6 +123,8 @@ func (repair *TerminalDeliveryRepair) ReconcileOtherGenerations(
 		report.SkippedOtherRepair = otherRepair
 		record(kind, "rearmed", report.Rearmed)
 		record(kind, "skipped_live_job", report.SkippedLiveJob)
+		record(kind, "skipped_not_ready", report.SkippedNotReady)
+		record(kind, "skipped_locked_job", report.SkippedLockedJob)
 		record(kind, "skipped_other_repair", report.SkippedOtherRepair)
 		slog.InfoContext(ctx, "syncreconciler.generation_reconcile",
 			"kind", kind, "rearmed", report.Rearmed, "skipped_not_ready", report.SkippedNotReady,

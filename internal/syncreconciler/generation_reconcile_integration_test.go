@@ -4,8 +4,12 @@ package syncreconciler
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
 func (h *finalizeBackstopHarness) bumpFinalizeRoute(t *testing.T, ctx context.Context) {
@@ -133,4 +137,52 @@ func TestRouteCommandReconcilesFinalizeDeliveriesLeftAtAnotherGeneration(t *test
 			t.Fatalf("report = %+v post_sync status=%s, want post_sync counted once and still dispatched", report, status)
 		}
 	})
+}
+
+// Round 455 finding: the reconcile stopped after a fixed number of batches and reported success with eligible rows
+// left. It must re-arm every eligible delivery, however many there are.
+func TestRouteCommandReconcileHasNoBatchCeiling(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	h := startFinalizeBackstopHarness(t, ctx)
+	now := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
+	resetMaterializerIntegrationTables(t, ctx, h.admin)
+	generation := backstopRoutes(t, ctx, h.admin)
+	const rowCount = 5001
+	if _, err := h.admin.Exec(ctx, `
+		INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status,
+			total_units, completed_units, failed_units, created_at)
+		SELECT format('00000000-0000-4000-9000-%012s', i)::uuid, 'org-materializer', $1::uuid,
+			'manual', 'incremental', 'dispatching', 1, 1, 0, $3
+		FROM generate_series(0, $4::int - 1) AS s(i);
+		INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key,
+			cost_class, mode, attempts, created_at, status, available_at, updated_at)
+		SELECT format('00000000-0000-4000-9002-%012s', i)::uuid, 'org-materializer',
+			format('00000000-0000-4000-9000-%012s', i)::uuid, $1::uuid, $2::uuid, 'github', 'commits',
+			'rest_core', 'incremental', 0, $3, 'success', NULL, $3
+		FROM generate_series(0, $4::int - 1) AS s(i);
+		INSERT INTO public.sync_dispatch_outbox
+			(id, org_id, sync_run_id, kind, status, available_at, attempts, dispatched_at,
+			dispatched_transport, dispatched_route_generation, transport_job_id, created_at, updated_at)
+		SELECT format('00000000-0000-4000-9001-%012s', i)::uuid, 'org-materializer',
+			format('00000000-0000-4000-9000-%012s', i)::uuid, 'finalize_sync_run', 'dispatched', $3,
+			1, $3, 'river', $5, '999999', $3, $3
+		FROM generate_series(0, $4::int - 1) AS s(i)`,
+		pgseed.DefaultSyncIntegrationID, pgseed.DefaultSyncSourceID, now, rowCount, generation+1); err != nil {
+		t.Fatal(err)
+	}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer slog.SetDefault(previous)
+	report, err := h.repair.ReconcileOtherGenerations(ctx, now, "finalize_sync_run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dispatched int
+	if err := h.admin.QueryRow(ctx, `SELECT count(*) FROM public.sync_dispatch_outbox WHERE status='dispatched'`).Scan(&dispatched); err != nil {
+		t.Fatal(err)
+	}
+	if report.Rearmed != rowCount || dispatched != 0 {
+		t.Fatalf("reconcile report=%+v dispatched=%d; want all %d rows re-armed", report, dispatched, rowCount)
+	}
 }

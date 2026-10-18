@@ -427,10 +427,10 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	terminalDeliveryPublishes := 0
 	var unroutableUnits []budgetUnit
 	var invalidClaimUnits []invalidClaimUnit
-	// routedUnits are the claimed units that go on to run: only they keep the
-	// estimates they were admitted on, for the comparison at their finish. A unit
-	// terminalized below (invalid claim, unroutable pair) never runs, and its
-	// terminal result replaces the whole result.
+	// routedUnits are the claimed units whose delivery was published: only they
+	// keep the estimates they were admitted on, for the comparison at their
+	// finish. A unit terminalized below, or one whose publish hit a terminal
+	// delivery, keeps the result it has.
 	var routedUnits []budgetUnit
 	for _, unit := range claimedUnits {
 		// Atomic provider families are admitted before transport selection,
@@ -477,7 +477,6 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		// two registries this check alone would catch.
 		descriptor, ok := providersync.Descriptor(unit.provider, unit.datasetKey)
 		if ok && descriptor.RouteReady && descriptor.Plannable {
-			routedUnits = append(routedUnits, unit)
 			organizationID := unit.orgID
 			envelope := jobcontract.Envelope{
 				ContractVersion: jobcontract.ContractVersionV1,
@@ -516,6 +515,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 				}
 				return err
 			}
+			routedUnits = append(routedUnits, unit)
 			riverQueued++
 			continue
 		}

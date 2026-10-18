@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 )
 
@@ -38,7 +39,7 @@ func (err UnselectedSourcesError) Error() string {
 // no sources.
 func SelectionApplies(config *Config) bool {
 	return config.SourceID == nil && config.PlannerManaged && config.IntegrationID != nil &&
-		!strings.EqualFold(strings.TrimSpace(config.Provider), "pagerduty")
+		pythonparity.Lower(config.Provider) != "pagerduty"
 }
 
 // checkSelectedSources is the one scope guard of every trigger write. A nil

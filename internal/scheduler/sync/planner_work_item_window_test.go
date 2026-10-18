@@ -274,3 +274,39 @@ func TestWorkItemFamilyCatchUpIsReportedFromTheRatchetScope(t *testing.T) {
 		}
 	}
 }
+
+// A work-items dataset whose own query the window does not bound (Jira fetch_all, a JQL override) runs that
+// full query in every unit; it is planned as ONE window for the whole family, and the decision is counted.
+func TestWorkItemFamilyOfAFullQueryDatasetIsOneWindow(t *testing.T) {
+	plan := func(fullQuery bool) PlannedUnit {
+		datasets := workItemFamilyPlanDatasets()
+		for index := range datasets {
+			if datasets[index].Key == canonicalWorkItemsDataset {
+				datasets[index].FullQuery = fullQuery
+			}
+		}
+		depth := 90
+		units, err := BuildScheduledPlan(PlannerInput{
+			OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: workItemWindowNow,
+			IntegrationDepthDays: &depth,
+			Sources:              []PlanSource{{ID: "source", ExternalID: "external", Provider: "jira"}},
+			Datasets:             datasets,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return onlyWorkItemsUnit(t, "jira", units)
+	}
+	before := globalPlanGateTelemetry.snapshotForTest("jira", canonicalWorkItemsDataset, planGateOutcomeFullQueryWindow)
+	full := plan(true)
+	if want := workItemWindowNow.AddDate(0, 0, -90); !full.WindowStart.Equal(want) || !full.WindowEnd.Equal(workItemWindowNow) {
+		t.Fatalf("full-query window = [%s, %s], want the whole depth [%s, %s]", full.WindowStart, full.WindowEnd, want, workItemWindowNow)
+	}
+	if got := globalPlanGateTelemetry.snapshotForTest("jira", canonicalWorkItemsDataset, planGateOutcomeFullQueryWindow); got != before+1 {
+		t.Fatalf("full_query_window outcome moved %d -> %d, want +1", before, got)
+	}
+	bounded := plan(false)
+	if span := bounded.WindowEnd.Sub(*bounded.WindowStart); span != 7*24*time.Hour {
+		t.Fatalf("bounded window span = %s, want 7 days", span)
+	}
+}

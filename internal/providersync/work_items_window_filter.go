@@ -100,12 +100,25 @@ func jiraWorkItemWindowView(issue map[string]any) workItemWindowView {
 	return view
 }
 
+// WorkItemsFetchIsUnbounded reports whether a work-items dataset's own query is not bounded by the unit
+// window: a Jira dataset with fetch_all, or with a JQL override, runs the same full query in every unit.
+// Planned as bounded windows it would repeat that query once per window, so the planner plans it as ONE
+// window, and the route does not window-filter what it returns. The planner and the route share this
+// predicate so they cannot drift.
+func WorkItemsFetchIsUnbounded(provider string, options map[string]any) bool {
+	if provider != "jira" {
+		return false
+	}
+	claim := Claim{Unit: Unit{DatasetOptions: options}}
+	return jiraOptionString(claim, "jql_override", "") != "" || jiraOptionBool(claim, "fetch_all", false)
+}
+
 // dropJiraIssuesOutsideWindow applies the window to a Jira search result. A fetch_all or jql_override
 // search has no window to hold and is left as it is.
 func dropJiraIssuesOutsideWindow(
 	ctx context.Context, metrics *providerfoundation.Metrics, claim Claim, issues []map[string]any,
 ) []map[string]any {
-	if jiraOptionString(claim, "jql_override", "") != "" || jiraOptionBool(claim, "fetch_all", false) {
+	if WorkItemsFetchIsUnbounded(claim.Provider, claim.DatasetOptions) {
 		return issues
 	}
 	return dropOutsideWorkItemWindow(ctx, metrics, claim, issues, jiraWorkItemWindowView)

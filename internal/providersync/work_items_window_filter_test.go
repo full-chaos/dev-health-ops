@@ -208,3 +208,26 @@ func TestDropOutsideWorkItemWindowCountsEachDroppedItemAndLogsOneInfoLine(t *tes
 		t.Fatalf("a call that dropped nothing logged: %s", quiet.String())
 	}
 }
+
+// The planner and the Jira route share one predicate for a query the window does not bound.
+func TestWorkItemsFetchIsUnbounded(t *testing.T) {
+	for name, tc := range map[string]struct {
+		provider string
+		options  map[string]any
+		want     bool
+	}{
+		"jira fetch_all":                  {"jira", map[string]any{"fetch_all": true}, true},
+		"jira fetch_all as text":          {"jira", map[string]any{"fetch_all": "true"}, true},
+		"jira fetch_all false":            {"jira", map[string]any{"fetch_all": false}, false},
+		"jira jql override":               {"jira", map[string]any{"jql_override": "project = X"}, true},
+		"jira empty jql override":         {"jira", map[string]any{"jql_override": ""}, false},
+		"jira no options":                 {"jira", nil, false},
+		"jira unrelated option":           {"jira", map[string]any{"fetch_comments": true}, false},
+		"github ignores the jira options": {"github", map[string]any{"fetch_all": true}, false},
+		"gitlab":                          {"gitlab", map[string]any{"jql_override": "x"}, false},
+	} {
+		if got := WorkItemsFetchIsUnbounded(tc.provider, tc.options); got != tc.want {
+			t.Errorf("%s: WorkItemsFetchIsUnbounded = %v, want %v", name, got, tc.want)
+		}
+	}
+}

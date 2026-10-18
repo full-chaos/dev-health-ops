@@ -125,6 +125,10 @@ type PlanSource struct {
 type PlanDataset struct {
 	Key              string
 	InitialDepthDays *int
+	// FullQuery is true when the dataset's own query is not bounded by the unit window (a Jira dataset with
+	// fetch_all or a JQL override): it runs the same full query in every unit, so the planner plans it as
+	// one window instead of repeating that query once per window.
+	FullQuery bool
 }
 
 // WatermarkKey is the canonical incremental-watermark identity.
@@ -496,6 +500,21 @@ func buildWorkItemFamilyUnit(
 	if len(family) == 0 {
 		return PlannedUnit{}, false
 	}
+	// A family whose canonical dataset runs a query the window does not bound (Jira fetch_all, a JQL
+	// override) is planned as one window for every member: bounded windows would repeat that full query once
+	// per window.
+	fullQuery := false
+	for _, member := range family {
+		fullQuery = fullQuery || member.FullQuery
+	}
+	if fullQuery {
+		members := make([]PlanDataset, len(family))
+		for index, member := range family {
+			member.FullQuery = true
+			members[index] = member
+		}
+		family = members
+	}
 	if provider == "jira" && source.NonProjectJiraSource {
 		// CHAOS-4582 defense-in-depth, ported verbatim (CHAOS-4602 team-lead
 		// ruling): Jira's work-items route requires a real per-project
@@ -603,10 +622,17 @@ func buildWorkItemFamilyUnit(
 	// covered by a later tick, and the monotonic watermark write keeps its
 	// watermark where it is.
 	uncapped := latest
-	latest = applyHeavyWindowRatchet(
-		input.Mode, WindowRatchetClass(provider, canonicalWorkItemsDataset, canonical.CostClass),
-		earliest, latest, input.WatermarkOverlap,
-	)
+	mergedClass := WindowRatchetClass(provider, canonicalWorkItemsDataset, canonical.CostClass)
+	if fullQuery {
+		mergedClass = canonical.CostClass
+		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeFullQueryWindow)
+		slog.Default().Info("sync.plan.work_items_full_query_window",
+			slog.String("provider", provider),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID),
+			slog.String("reason", "the dataset query is not bounded by the window (fetch_all or a JQL override)"))
+	}
+	latest = applyHeavyWindowRatchet(input.Mode, mergedClass, earliest, latest, input.WatermarkOverlap)
 	if latest.Before(uncapped) && earliest != nil {
 		slog.Default().Debug("sync.plan.work_items_window_capped",
 			slog.String("provider", provider),
@@ -776,9 +802,11 @@ func resolveWindow(
 	now, before time.Time,
 ) (*time.Time, time.Time, bool) {
 	start := resolveWindowStart(input, source, dataset, spec, now)
-	end := applyHeavyWindowRatchet(
-		input.Mode, WindowRatchetClass(source.Provider, dataset.Key, spec.CostClass), start, before, input.WatermarkOverlap,
-	)
+	class := WindowRatchetClass(source.Provider, dataset.Key, spec.CostClass)
+	if dataset.FullQuery {
+		class = spec.CostClass
+	}
+	end := applyHeavyWindowRatchet(input.Mode, class, start, before, input.WatermarkOverlap)
 	return normalizeStampingWindow(start, end, now, input.WatermarkOverlap)
 }
 

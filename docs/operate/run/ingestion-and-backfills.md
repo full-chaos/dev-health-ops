@@ -63,7 +63,11 @@ and a call that dropped any logs one Info line
 `providersync.work_items.dropped_outside_window` (provider, window, `dropped`,
 `kept`); the item itself is a Debug line. Dropping is the expected case on every
 sync, so the counter is a rate to read, not an alert. `fetch_all` and a JQL
-override are not windowed and drop nothing.
+override are not windowed and drop nothing; because such a Jira dataset runs the
+same full query in every unit, the planner plans it as ONE window (the whole
+depth) instead of repeating that query per window. It logs
+`sync.plan.work_items_full_query_window` and counts
+`sync_plan_gate_total{outcome="full_query_window"}` for it.
 
 Consequences to expect when reading run state:
 

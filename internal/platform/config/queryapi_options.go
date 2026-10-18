@@ -211,6 +211,7 @@ var queryAPIOptions = func() []Option {
 	for _, env := range []struct{ name, usage string }{
 		{"IDENTITY_MAPPING_PATH", "identity mapping file the heatmap, people and quadrant routes read"},
 		{"LLM_MODEL", "model the investment explain route asks its provider for, when no provider-specific one is set"},
+		{"LLM_MODEL_EXPLAIN", "model the investment and work unit explain routes ask the platform provider for; wins over LLM_MODEL and the provider-specific names, never over an organization's own model"},
 		{"LLM_MODEL_OPENAI", "model the investment explain route asks the OpenAI provider for"},
 		{"LLM_MODEL_ANTHROPIC", "model the investment explain route asks the Anthropic provider for"},
 		{"LLM_MODEL_GEMINI", "model the investment explain route asks the Gemini provider for"},

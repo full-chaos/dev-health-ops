@@ -17,6 +17,11 @@ import (
 
 func fallbackInvariantGauge(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
 	t.Helper()
+	return fallbackInvariantGaugeNamed(t, reader, FallbackBesideNativeGauge)
+}
+
+func fallbackInvariantGaugeNamed(t *testing.T, reader *sdkmetric.ManualReader, name string) map[string]int64 {
+	t.Helper()
 	var resource metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &resource); err != nil {
 		t.Fatal(err)
@@ -24,7 +29,7 @@ func fallbackInvariantGauge(t *testing.T, reader *sdkmetric.ManualReader) map[st
 	out := map[string]int64{}
 	for _, scope := range resource.ScopeMetrics {
 		for _, m := range scope.Metrics {
-			if m.Name != FallbackBesideNativeGauge {
+			if m.Name != name {
 				continue
 			}
 			gauge, ok := m.Data.(metricdata.Gauge[int64])
@@ -82,6 +87,15 @@ func TestReportFallbackInvariantWarnsAndSetsTheGaugeOnABreach(t *testing.T) {
 	if got := fallbackInvariantGauge(t, reader); got["org-breach"] != 2 || got["org-clean"] != 0 || len(got) != 2 {
 		t.Fatalf("gauge = %v, want org-breach 2 and org-clean 0", got)
 	}
+	for name, want := range map[string]map[string]int64{
+		FallbackBesideNativePullRequestGauge: {"org-breach": 1, "org-clean": 0},
+		FallbackBesideNativeIssueGauge:       {"org-breach": 1, "org-clean": 0},
+		FallbackPullRequestIssueSideGauge:    {"org-breach": 0, "org-clean": 0},
+	} {
+		if got := fallbackInvariantGaugeNamed(t, reader, name); len(got) != 2 || got["org-breach"] != want["org-breach"] || got["org-clean"] != want["org-clean"] {
+			t.Fatalf("%s = %v, want %v", name, got, want)
+		}
+	}
 	lines := logLines(t, &buffer)
 	if len(lines) != 2 {
 		t.Fatalf("log lines = %v, want 2", lines)
@@ -113,5 +127,29 @@ func TestCheckFallbackInvariantRefusesWithoutAConnectionOrAnOrg(t *testing.T) {
 	}
 	if _, err := (&Service{}).CheckFallbackInvariant(context.Background(), "org"); err != ErrUnavailable {
 		t.Fatalf("no connection err = %v, want ErrUnavailable", err)
+	}
+}
+
+// Each side has its own gauge, so an alert from metrics alone names the side
+// (CHAOS-10070); the total keeps its own series.
+func TestReportFallbackInvariantSetsOneGaugePerSide(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	t.Cleanup(func() { otel.SetMeterProvider(previous) })
+
+	reportFallbackInvariant(context.Background(), slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)), InvariantOutcome{
+		OrganizationID: "org-sides",
+		Beside:         issueprlinks.FallbacksBesideNative{Total: 11, ByPullRequest: 3, ByIssue: 5, PullRequestIssueSide: 7},
+	})
+	for name, want := range map[string]int64{
+		FallbackBesideNativeGauge:            11,
+		FallbackBesideNativePullRequestGauge: 3,
+		FallbackBesideNativeIssueGauge:       5,
+		FallbackPullRequestIssueSideGauge:    7,
+	} {
+		if got := fallbackInvariantGaugeNamed(t, reader, name); len(got) != 1 || got["org-sides"] != want {
+			t.Errorf("%s = %v, want org-sides %d", name, got, want)
+		}
 	}
 }

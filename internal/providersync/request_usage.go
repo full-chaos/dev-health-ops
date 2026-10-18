@@ -850,6 +850,6 @@ func (executor CompleteRouteExecutor) Execute(
 	}
 	result, err := executor.executeRoute(ctx, session, descriptor)
 	result.RequestUsage = ledger.Totals()
-	_ = unitLedger
+	result.RequestLedger.Entries, result.RequestLedger.Dropped = unitLedger.Snapshot()
 	return result, err
 }

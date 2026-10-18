@@ -1437,6 +1437,24 @@ topology](#queue-topology)):**
   worker refuses to construct any PagerDuty executor without the entitlement
   (`internal/workerservice/provider_sync.go`, `errWorkerDependencyUnavailable`),
   the same fail-closed posture Jira incidents already had.
+- **Estimate against actual (CHAOS-8831).** The dispatch pass writes the estimates a
+  unit is admitted on to `result.observations.budget_estimate`. The execution of a
+  complete route counts every wire request of every client the unit uses in a
+  `providerfoundation.RequestLedger` carried in its context, per (route family,
+  dimension); a route labels its requests only where one dimension carries several
+  families of the unit's estimate (`budgetAccount`). The success finish puts the
+  estimates back on the result it stores (that write replaces the unit's result) and
+  adds `observations.budget_comparison` with the rows Python's calibration join
+  reported: unlabelled requests take the one estimated family of their dimension
+  that has no labelled requests, several open families become one joined `a+b` row
+  with `family_resolved=false`, requests no estimate covers are `unbudgeted_actual`,
+  and only `rest_core` and `search` are request-count comparable. The actuals cover
+  the finishing attempt (`budget_comparison_attempt_scope`), like Python's one run of
+  a unit; the rows are `incomplete` when earlier attempts or chunks exist or when the
+  ledger dropped requests past its 50 keys. The finish logs
+  `sync_provider_unit.budget_comparison` at Info, and for each underestimated row
+  `sync_provider_unit.budget_underestimated` at Warn and
+  `dev_health_provider_budget_underestimate_total{provider,dataset,dimension}`.
 - **The finalize → cache hop (CHAOS-4226, closed).** Before CHAOS-4226 the
   native finalize's only invalidation was the Postgres one
   (`invalidateSyncCoverageForIntegration`, `native_finalize_sync_run.go`),

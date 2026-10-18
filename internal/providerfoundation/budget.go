@@ -864,9 +864,8 @@ func (m *Metrics) RecordBudgetUnderestimate(provider, dataset, dimension string)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_ = dataset
-	_ = provider
-	_ = dimension
+	m.budgetUnderestimate[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricBudgetDimensionLabel(dimension)]++
 }
 
 func (m *Metrics) RecordUnitTerminalWithRows(provider, dataset string) {

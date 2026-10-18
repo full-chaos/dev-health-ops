@@ -184,7 +184,7 @@ type unitLedgerKey struct{}
 // execution of a unit counts all of its clients, whichever route built them. A
 // client's own Ledger wins, so a request is never counted twice.
 func WithUnitLedger(ctx context.Context, ledger *RequestLedger) context.Context {
-	return ctx
+	return context.WithValue(ctx, unitLedgerKey{}, ledger)
 }
 
 // ledgerFor is the ledger a request of this client with ctx is counted into.
@@ -192,5 +192,6 @@ func (c *HTTPClient) ledgerFor(ctx context.Context) *RequestLedger {
 	if c.Ledger != nil {
 		return c.Ledger
 	}
-	return nil
+	ledger, _ := ctx.Value(unitLedgerKey{}).(*RequestLedger)
+	return ledger
 }

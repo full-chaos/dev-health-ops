@@ -1,0 +1,10 @@
+{
+  "action": "acr.context.read",
+  "principal_reference": "prf_EXAMPLE0000000000000001",
+  "resource": {
+    "key": "full-chaos/dev-health-ops",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "type": "repository"
+  },
+  "schema_version": "authorization_request.v1"
+}

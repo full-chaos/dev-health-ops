@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/authorization_request.v1.schema.json",
+  "title": "Auth Control Plane authorization request (v1 wire format)",
+  "description": "One question put to the policy decision point: may this principal perform this action on this resource (TRD section 8, section 14: POST /v1/authorize). The caller is a policy-enforcement point (api, web, acr-api) asking; the answer is authorization_decision.v1.\n\nA REQUEST CARRIES NO AUTHORITY. The principal is named by an opaque reference the decision point resolves server-side, never by roles, permissions, scopes or an organization the caller asserts (TRD section 2 principle 3: caller-supplied organization, resource, role, scope and actor values are requests or hints, never authority). So there is no `roles`, `permissions`, `scopes` or `is_superuser` member and `additionalProperties: false` is what makes that absence enforceable: a caller cannot add a claim the decision point might honour.\n\nEVERY VOCABULARY IS CLOSED (ACP-ADR-05 decision 1, G-26: unknown action, resource, role, grant type, condition or entitlement key denies): the action uses principal.v1's action syntax by reference (a bare `admin` is invalid, G-27), `resource.type` is a closed set, and `context.client_service` is the inventory's closed service set by reference. The resource-type set below is the initial list; widening it is a deliberate schema amendment, and whether an action is REGISTERED and valid for a resource type is a decision-point check this schema cannot make.\n\nResource keys are canonical lowercase. A repository key is `owner/repo` or the explicit organization-wide `*` (TRD section 9); no other type may use `*`. `request_id` is the error.v1 shape by reference and, as everywhere in v1, is minted by the CALLER's own service for correlation and appears in the decision point's audit row, never echoed into a response.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "principal_reference",
+    "action",
+    "resource",
+    "context"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "authorization_request.v1",
+      "description": "Identifies this document's contract. A relying party MUST reject an unrecognised value (G-26)."
+    },
+    "principal_reference": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._~-]{16,1000}$",
+      "description": "Opaque signed-or-internal reference the decision point resolves to a principal (TRD section 8). URL-safe characters only and bounded by the pattern alone (no redundant length keywords, which make validators report different keywords). A reference, never a credential value and never an identity claim: the decision point derives the principal."
+    },
+    "action": {
+      "$ref": "principal.v1.schema.json#/properties/actor_chain/items/properties/permitted_actions/items",
+      "description": "The registered action asked about, e.g. acr.context.read. Same syntax as principal.v1 actions."
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "key"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "organization",
+            "repository",
+            "membership",
+            "service_account",
+            "grant",
+            "credential",
+            "session",
+            "signing_key",
+            "subscription",
+            "platform"
+          ],
+          "description": "Resource kind, closed. Unknown denies."
+        },
+        "organization_id": {
+          "$ref": "principal.v1.schema.json#/properties/organization_id",
+          "type": "string",
+          "description": "Organization the resource belongs to, when it has one. Absent for platform-level resources. A hint for resolution, never authority: the decision point verifies it against the principal's memberships."
+        },
+        "key": {
+          "type": "string",
+          "description": "Canonical lowercase resource key. Its pattern depends on `type` (see the if/else below): `owner/repo` or `*` for a repository, a lowercase token for every other type."
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "client_service"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "error.v1.schema.json#/properties/request_id"
+        },
+        "client_service": {
+          "$ref": "../endpoint-profile.schema.json#/$defs/endpointProfile/properties/service",
+          "description": "The calling service, from the inventory's closed service set so the two cannot disagree on which services exist. The caller's identity is also established by its workload credential; this field is for metrics and audit labels (TRD section 19) and confers nothing."
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "resource": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "repository"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      }
+    },
+    "required": [
+      "resource"
+    ]
+  },
+  "then": {
+    "properties": {
+      "resource": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\\*)$"
+          }
+        }
+      }
+    }
+  },
+  "else": {
+    "properties": {
+      "resource": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._:-]{0,255}$"
+          }
+        }
+      }
+    }
+  }
+}

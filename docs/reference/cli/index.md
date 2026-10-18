@@ -1696,8 +1696,8 @@ route change (if any) is committed. For `finalize_sync_run` it re-arms every del
 and whose run is ready to finalize (so the real Finalize runs at the current generation); a delivery with a live job, a run that
 is already terminal and a run with an open unit are left as they are. For the other kinds the command only counts such
 deliveries and warns, it does not re-arm them. The output adds `generation_reconcile` (`rearmed`, `skipped_live_job`,
-`skipped_not_ready`, `skipped_locked_job`, `other_kinds`) beside the route state; a failed reconcile prints
-`generation_reconcile_error` and exits 1 (the route change stays). `skipped_live_job` counts the deliveries at another generation whose River job is there and not completed. Each re-armed row logs the Warn
+`skipped_other_repair`, `skipped_not_ready`, `skipped_locked_job`, `other_kinds`) beside the route state; a failed reconcile prints
+`generation_reconcile_error` and exits 1 (the route change stays). `skipped_live_job` counts the deliveries at another generation whose River job is available, pending, retryable, running or scheduled; `skipped_other_repair` counts those whose job is discarded or cancelled, which the River-terminal branches of the terminal-delivery repair own (exhausted budget, rescue-only cancel). Each re-armed row logs the Warn
 `syncreconciler.finalize_delivery_other_generation_rearmed`; the counter is `sync_route_generation_stranded_total{kind,action}`.
 A paused route re-arms nothing. The scheduled repair keeps its generation fence.
 

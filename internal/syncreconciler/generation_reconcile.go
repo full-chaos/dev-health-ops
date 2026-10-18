@@ -21,12 +21,13 @@ type StrandedKindCount struct {
 
 // GenerationReconcileReport is what a route command prints about the deliveries its generation change left behind.
 type GenerationReconcileReport struct {
-	Kind             string              `json:"kind"`
-	Rearmed          int                 `json:"rearmed"`
-	SkippedNotReady  int                 `json:"skipped_not_ready"`
-	SkippedLiveJob   int                 `json:"skipped_live_job"`
-	SkippedLockedJob int                 `json:"skipped_locked_job"`
-	OtherKinds       []StrandedKindCount `json:"other_kinds"`
+	Kind               string              `json:"kind"`
+	Rearmed            int                 `json:"rearmed"`
+	SkippedNotReady    int                 `json:"skipped_not_ready"`
+	SkippedLiveJob     int                 `json:"skipped_live_job"`
+	SkippedOtherRepair int                 `json:"skipped_other_repair"`
+	SkippedLockedJob   int                 `json:"skipped_locked_job"`
+	OtherKinds         []StrandedKindCount `json:"other_kinds"`
 }
 
 // GenerationReconcileCounter counts what a route command did to deliveries at another generation, by kind and action
@@ -54,10 +55,13 @@ GROUP BY outbox.kind
 ORDER BY outbox.kind`
 
 // countOtherGenerationLiveFinalizeSQL counts the finalize deliveries at another generation that the reconcile must
-// not touch because their River job is there and not completed (available, running, retryable, scheduled, or ended
-// in a state another repair owns). They are candidates of no re-arm, so without this count an operator could not see them.
+// not touch because their River job is there and not completed: live (available, pending, retryable, running,
+// scheduled) or ended in discarded/cancelled, which the River-terminal branches of this repair own
+// (repairTerminalRiverDeliverySQL: CHAOS-3951 exhaustion, CHAOS-4097 rescue-only cancel). They are candidates of no re-arm,
+// so without these counts an operator could not see them.
 const countOtherGenerationLiveFinalizeSQL = `
-SELECT count(*)
+SELECT count(*) FILTER (WHERE job.state IN ('available','pending','retryable','running','scheduled')),
+    count(*) FILTER (WHERE job.state IN ('discarded','cancelled'))
 FROM public.sync_dispatch_outbox AS outbox
 JOIN public.sync_runs AS run ON run.id=outbox.sync_run_id
 JOIN public.sync_dispatch_transport_routes AS route ON route.kind=outbox.kind
@@ -108,16 +112,18 @@ func (repair *TerminalDeliveryRepair) ReconcileOtherGenerations(
 				break
 			}
 		}
-		live, err := repair.countOtherGenerationLive(ctx)
+		live, otherRepair, err := repair.countOtherGenerationLive(ctx)
 		if err != nil {
 			return report, err
 		}
 		report.SkippedLiveJob += live
+		report.SkippedOtherRepair = otherRepair
 		record(kind, "rearmed", report.Rearmed)
 		record(kind, "skipped_live_job", report.SkippedLiveJob)
+		record(kind, "skipped_other_repair", report.SkippedOtherRepair)
 		slog.InfoContext(ctx, "syncreconciler.generation_reconcile",
 			"kind", kind, "rearmed", report.Rearmed, "skipped_not_ready", report.SkippedNotReady,
-			"skipped_live_job", report.SkippedLiveJob, "skipped_locked_job", report.SkippedLockedJob)
+			"skipped_live_job", report.SkippedLiveJob, "skipped_other_repair", report.SkippedOtherRepair, "skipped_locked_job", report.SkippedLockedJob)
 	}
 
 	tx, err := repair.begin(ctx)
@@ -169,18 +175,17 @@ func (repair *TerminalDeliveryRepair) reconcileFinalizePass(ctx context.Context,
 	return outcome, nil
 }
 
-func (repair *TerminalDeliveryRepair) countOtherGenerationLive(ctx context.Context) (int, error) {
+func (repair *TerminalDeliveryRepair) countOtherGenerationLive(ctx context.Context) (live, otherRepair int, err error) {
 	tx, err := repair.begin(ctx)
 	if err != nil || tx == nil {
-		return 0, ErrUnavailable
+		return 0, 0, ErrUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var count int
-	if err := tx.QueryRow(ctx, repair.otherGenerationLiveQuery).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count live finalize deliveries at another generation: %w", ErrUnavailable)
+	if err := tx.QueryRow(ctx, repair.otherGenerationLiveQuery).Scan(&live, &otherRepair); err != nil {
+		return 0, 0, fmt.Errorf("count finalize deliveries at another generation with a job: %w", ErrUnavailable)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, ErrUnavailable
+		return 0, 0, ErrUnavailable
 	}
-	return count, nil
+	return live, otherRepair, nil
 }

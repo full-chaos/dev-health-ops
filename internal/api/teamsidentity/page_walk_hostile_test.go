@@ -561,3 +561,15 @@ func TestTheWalkFailureCounterIsDevHealthPrefixed(t *testing.T) {
 		t.Fatalf("counter name = %q, every failure counter is dev_health_-prefixed", pageWalkFailureCounterName)
 	}
 }
+
+func TestAHostileOwnerNameCannotForgeALogLine(t *testing.T) {
+	logs := captureWarns(t)
+	doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+		return linkNext(r.URL.Scheme + "://" + r.URL.Host + r.URL.Path + "?per_page=100&page=1"), `[{"slug":"a","name":"A"}]`
+	}}
+	_, _ = githubListAllPages(context.Background(), hostileClient(t, "github", doer), "org teams", "o\nlevel=ERROR msg=forged\r", "/orgs/{org}/teams", "/orgs/o/teams?per_page=100&page=1",
+		func(entry githubTeamListEntry) string { return entry.Slug })
+	if strings.Count(logs.String(), "\n") != 1 || strings.Contains(logs.String(), `\n`) || strings.Contains(logs.String(), `\r`) {
+		t.Fatalf("the owner name reached the log line with a line break:\n%q", logs.String())
+	}
+}

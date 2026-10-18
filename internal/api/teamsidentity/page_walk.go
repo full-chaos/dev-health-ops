@@ -85,6 +85,12 @@ func (walk *pageWalk) advance(continuation string, advertised bool, items int) (
 	return continuation, true, nil
 }
 
+// logValue is a request-supplied name (an org, team, group or project) made safe for a log line: no line break can start a forged entry.
+func logValue(value string) string {
+	value = strings.ReplaceAll(value, "\n", "")
+	return strings.ReplaceAll(value, "\r", "")
+}
+
 // pageError is the error of a page request. The first page's error is the caller's own; the error of a later page is a walk that
 // ended early (a continuation the client refuses, a provider that failed mid-walk): it writes the Warn line and the counter with the
 // error's class, and its text names the provider, the walk and the owner. The cause stays reachable through Unwrap.
@@ -93,7 +99,7 @@ func (walk *pageWalk) pageError(err error) error {
 		return err
 	}
 	slog.Default().WarnContext(walk.ctx, "teams_identity_page_walk_failed",
-		slog.String("provider", walk.provider), slog.String("walk", walk.walk), slog.String("owner", walk.owner),
+		slog.String("provider", walk.provider), slog.String("walk", walk.walk), slog.String("owner", logValue(walk.owner)),
 		slog.String("cause", walkCausePageRequest), slog.Int("pages", walk.pages), slog.Int("max_pages", pageWalkMaxPages),
 		slog.String("error_class", logging.ErrorClass(err)))
 	pageWalkFailures.Add(walk.ctx, 1, metric.WithAttributes(
@@ -105,7 +111,7 @@ func (walk *pageWalk) pageError(err error) error {
 // fail records the failure and returns the error: provider, walk, owner and counts only, no payload text.
 func (walk *pageWalk) fail(cause string) error {
 	slog.Default().WarnContext(walk.ctx, "teams_identity_page_walk_failed",
-		slog.String("provider", walk.provider), slog.String("walk", walk.walk), slog.String("owner", walk.owner),
+		slog.String("provider", walk.provider), slog.String("walk", walk.walk), slog.String("owner", logValue(walk.owner)),
 		slog.String("cause", cause), slog.Int("pages", walk.pages), slog.Int("max_pages", pageWalkMaxPages))
 	pageWalkFailures.Add(walk.ctx, 1, metric.WithAttributes(
 		attribute.String("provider", walk.provider), attribute.String("walk", walk.walk), attribute.String("cause", cause)))

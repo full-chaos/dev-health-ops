@@ -3,11 +3,13 @@
 package providersync
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
@@ -168,5 +170,64 @@ func TestCarryTeamIDsKeepsAnInactiveKeyedRowUnderAProviderTeam(t *testing.T) {
 	}
 	if got := f.str(carryTeamsState); got != "ENG|linear||0|live;linear:ENG|linear||0|live" {
 		t.Errorf("teams = %q", got)
+	}
+}
+
+// afterKeyedRead runs another writer's commit before the first statement the
+// carry sends after its read of the kept rows: the window between that read
+// and anything the carry does next.
+type afterKeyedRead struct {
+	driver.Conn
+	other       func()
+	read, fired bool
+}
+
+func (c *afterKeyedRead) before() {
+	if c.read && !c.fired {
+		c.fired = true
+		c.other()
+	}
+}
+
+func (c *afterKeyedRead) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+	c.before()
+	if strings.Contains(query, "deleted_at IS NOT NULL AS deleted") {
+		c.read = true
+	}
+	return c.Conn.Query(ctx, query, args...)
+}
+
+func (c *afterKeyedRead) PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error) {
+	c.before()
+	return c.Conn.PrepareBatch(ctx, query, opts...)
+}
+
+func (c *afterKeyedRead) Exec(ctx context.Context, query string, args ...any) error {
+	c.before()
+	return c.Conn.Exec(ctx, query, args...)
+}
+
+// An admin delete of the kept row that commits after the carry read it as
+// inactive is the newer word: the team stays deleted, and the deleted row's
+// content is never written again as a live team.
+func TestCarryTeamIDsLeavesAKeptRowDeletedWhileItRunsDeleted(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("", "eng", nil, nil, 1, carryOld.Add(time.Minute), []string{"admin@example.com"}, nil)
+	f.team("", "custom:eng", carryPtr("eng"), nil, 0, carryOld, []string{"kept@example.com"}, nil)
+	deletedAt := carryOld.Add(time.Hour)
+	wrapped := &afterKeyedRead{Conn: conn, other: func() {
+		f.exec(`INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, deleted_at) VALUES ('custom:eng', ?, 'deleted eng', ['deleted@example.com'], [], [], 0, ?, ?, ?, '', 'eng', ?)`,
+			uuid.New(), deletedAt, deletedAt, f.orgID, deletedAt)
+	}}
+
+	if _, err := CarryTeamIDs(ctx, wrapped, f.orgID, carryAt, false); err != nil {
+		t.Fatal(err)
+	}
+	if !wrapped.fired {
+		t.Fatal("the carry sent nothing after its read of the kept rows: the delete was not interleaved")
+	}
+	if got := f.str(carryTeamsState); got != "custom:eng||deleted@example.com|0|deleted;eng||admin@example.com|0|live" {
+		t.Errorf("teams = %q, want custom:eng still deleted", got)
 	}
 }

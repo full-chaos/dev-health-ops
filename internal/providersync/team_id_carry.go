@@ -541,8 +541,10 @@ func teamIDCarryJiraProjectAsTeam(row chRow) bool {
 }
 
 // teamIDCarryKeyedQuery is the current version of each new id that already
-// has a row: whether it is active, and whether an admin deleted it.
-const teamIDCarryKeyedQuery = `SELECT id, is_active, deleted_at IS NOT NULL AS deleted, updated_at FROM teams FINAL ` +
+// has a row, and whether an admin deleted it. It is the ONE read of the kept
+// rows: the fold writes from it, so a delete that commits after it is a
+// newer version than the fold's and wins.
+var teamIDCarryKeyedQuery = `SELECT ` + teamIDCarryTeamsColumns + `, deleted_at IS NOT NULL AS deleted FROM teams FINAL ` +
 	`WHERE org_id = {org_id:String} AND id IN {ids:Array(String)}`
 
 // dropKeyedTeams keeps a team row that a prefixed writer already wrote: the
@@ -608,7 +610,7 @@ func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 		folded[id] = append(folded[id], row.strs("manual_members")...)
 	}
 	*rows = kept
-	return run.foldManualMembers(rows, foldIDs, folded, activate)
+	return run.foldManualMembers(rows, foldIDs, folded, activate, existing)
 }
 
 // foldManualMembers writes a new version of each kept row that takes the
@@ -655,14 +657,16 @@ func (run *teamIDCarryRun) withOldestCreatedAt(rows []chRow) ([]chRow, error) {
 	return out, nil
 }
 
-func (run *teamIDCarryRun) foldManualMembers(rows *[]chRow, ids []string, members map[string][]string, activate map[string]bool) error {
+func (run *teamIDCarryRun) foldManualMembers(rows *[]chRow, ids []string, members map[string][]string, activate map[string]bool, held map[string]chRow) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	current, err := run.read(`SELECT `+teamIDCarryTeamsColumns+` FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {ids:Array(String)}`, run.org, clickhouse.Named("ids", ids))
-	if err != nil {
-		return fmt.Errorf("team id carry: read kept teams: %w", err)
+	columns := strings.Split(teamIDCarryTeamsColumns, ", ")
+	current := make([]chRow, 0, len(ids))
+	for _, id := range ids {
+		current = append(current, held[id].only(columns))
 	}
+	var err error
 	if current, err = run.withOldestCreatedAt(current); err != nil {
 		return fmt.Errorf("team id carry: read kept created_at: %w", err)
 	}
@@ -1196,6 +1200,17 @@ func (row chRow) timePtr(column string) *time.Time {
 func (row chRow) u8(column string) uint8 {
 	value, _ := row.value(column).(uint8)
 	return value
+}
+
+// only returns the row with just these columns, in this order.
+func (row chRow) only(columns []string) chRow {
+	index := make(map[string]int, len(columns))
+	values := make([]any, len(columns))
+	for i, column := range columns {
+		index[column] = i
+		values[i] = row.value(column)
+	}
+	return chRow{index: index, vals: values}
 }
 
 // with returns a copy of the row with one column set.

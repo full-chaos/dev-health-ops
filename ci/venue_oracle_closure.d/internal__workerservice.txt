@@ -76,8 +76,10 @@ internal/jobs/workgraph/prcommit
 internal/jobs/workgraph/textrefs
 internal/jobs/workgraph/units
 internal/llmbudget
+internal/llmorgsettings
 internal/mail
 internal/operationalordering
+internal/orgllmconfig
 internal/pgmigrate
 internal/platform/config
 internal/platform/dbphase

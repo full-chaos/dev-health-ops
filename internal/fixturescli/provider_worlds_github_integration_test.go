@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // githubIssue is one GitHub issue or pull request of a fixture repository.
@@ -181,8 +183,15 @@ func githubRepoAnswers(repo string, items []githubIssue) []providerAnswer {
 			answers = append(answers, get(githubHost, root+"/pulls/"+strconv.Itoa(item.Number), "", item.restPull(repo, true)))
 		}
 	}
+	// GitHub lists pull requests newest-updated first (the route asks for sort=updated&direction=desc
+	// and stops reading at the first one older than its window start), so the answer is in that order.
+	sort.SliceStable(pulls, func(i, j int) bool {
+		left, _ := pulls[i]["updated_at"].(string)
+		right, _ := pulls[j]["updated_at"].(string)
+		return left > right
+	})
 	answers = append(answers,
-		get(githubHost, root+"/issues", "*", issues),
+		githubIssuesAnswer(root, issues),
 		get(githubHost, root+"/pulls", "*", pulls),
 		get(githubHost, root+"/milestones", "*", []any{}),
 	)
@@ -196,6 +205,34 @@ func githubRepoAnswers(repo string, items []githubIssue) []providerAnswer {
 		)
 	}
 	return answers
+}
+
+// githubIssuesAnswer answers the repository issue list the way GitHub does: `since` keeps only the
+// issues updated at or after it. A route that plans several windows reads the list once per window,
+// and an answer that ignored `since` would hand every issue back in every window.
+func githubIssuesAnswer(root string, issues []map[string]any) providerAnswer {
+	return providerAnswer{
+		Method: "GET", Host: githubHost, Path: root + "/issues", Query: "*", Status: 200,
+		Respond: func(request replayRequest) (any, bool) {
+			raw := request.Query.Get("since")
+			if raw == "" {
+				return issues, true
+			}
+			since, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				return nil, false
+			}
+			kept := []map[string]any{}
+			for _, issue := range issues {
+				updated, _ := issue["updated_at"].(string)
+				at, err := time.Parse(time.RFC3339, updated)
+				if err != nil || !at.Before(since) {
+					kept = append(kept, issue)
+				}
+			}
+			return kept, true
+		},
+	}
 }
 
 var graphQLAlias = regexp.MustCompile(`pr(\d+): pullRequest\(number: (\d+)\)`)

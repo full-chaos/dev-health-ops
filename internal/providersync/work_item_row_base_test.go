@@ -208,6 +208,18 @@ func workItemHierarchyProbes() map[string]workItemHierarchyProbe {
 			}
 			return row
 		},
+		gitlabEpicSourceKind: func(t *testing.T) workItemRow {
+			var payload gitlabEpicPayload
+			if err := json.Unmarshal([]byte(`{"iid":5,"title":"Child epic","state":"opened","created_at":"2026-10-01T00:00:00Z","labels":[],"parent_id":4}`), &payload); err != nil {
+				t.Fatal(err)
+			}
+			row, _, _, err := normalizeGitLabEpicWorkItem(nativeTestClaim("gitlab", "work-items"), "acme", payload, nil,
+				loadRealStatusMapping(t), nil, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return row
+		},
 		gitlabMergeRequestSourceKind: func(t *testing.T) workItemRow {
 			var payload gitlabMergeRequestWorkItemPayload
 			if err := json.Unmarshal([]byte(`{"iid":5,"title":"MR","state":"opened","created_at":"2026-10-01T00:00:00Z","labels":[]}`), &payload); err != nil {

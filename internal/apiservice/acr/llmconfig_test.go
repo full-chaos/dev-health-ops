@@ -15,8 +15,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"go.opentelemetry.io/otel"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
@@ -194,27 +192,72 @@ func TestLLMConfigResponseMarshalsTheKey(t *testing.T) {
 }
 
 func TestLLMConfigCountsEachOutcome(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	outcomes := func(t *testing.T) map[string]int64 {
+		return counterByAttribute(t, "devhealth_acr_llm_config_requests_total", func(p metricdata.DataPoint[int64]) (string, bool) {
+			value, _ := p.Attributes.Value("outcome")
+			return value.AsString(), true
+		})
+	}
+	acrMetricReader()
+	before := outcomes(t)
 	call(t, &fakeVerifier{}, configured(), io.Discard, testOrg, "Bearer "+testToken)
 	call(t, &fakeVerifier{}, configured(), io.Discard, testOrg, "")
-	var collected metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &collected); err != nil {
-		t.Fatal(err)
+	counts := outcomes(t)
+	if counts["served"]-before["served"] != 1 || counts["unauthorized_missing"]-before["unauthorized_missing"] != 1 {
+		t.Fatalf("counts = %v, before = %v", counts, before)
 	}
-	counts := map[string]int64{}
-	for _, scope := range collected.ScopeMetrics {
-		for _, m := range scope.Metrics {
-			if m.Name != "devhealth_acr_llm_config_requests_total" {
-				continue
-			}
-			for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
-				value, _ := point.Attributes.Value("outcome")
-				counts[value.AsString()] += point.Value
-			}
-		}
+}
+
+// The worker route serves the categorize source behind the worker verifier,
+// never the investigate source or the acr verifier.
+func TestWorkerCategorizeRouteUsesItsOwnSourceAndVerifier(t *testing.T) {
+	acrVerifier, workerVerifier := &fakeVerifier{err: ErrCredentialInvalid}, &fakeVerifier{}
+	investigate, categorize := configured(), configured()
+	categorize.cfg.Model = "categorize-model"
+	mux := http.NewServeMux()
+	for _, route := range Routes(Deps{
+		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		LLMConfig: investigate, Credentials: acrVerifier,
+		CategorizeLLMConfig: categorize, WorkerCredentials: workerVerifier,
+	}) {
+		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
-	if counts["served"] != 1 || counts["unauthorized_missing"] != 1 {
-		t.Fatalf("counts = %v", counts)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/workers/orgs/"+testOrg+"/llm-config/categorize", nil)
+	request.Header.Set("Authorization", "Bearer "+testToken)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "categorize-model") {
+		t.Fatalf("status %d body %s", recorder.Code, recorder.Body.String())
+	}
+	if investigate.got != "" || acrVerifier.gotToken != "" {
+		t.Fatal("the worker route reached the investigate source or the acr verifier")
+	}
+	if workerVerifier.gotScope != LLMConfigScope {
+		t.Fatalf("worker verifier scope = %q", workerVerifier.gotScope)
+	}
+
+	// With no worker source or verifier the route answers 503 and never serves.
+	bare := http.NewServeMux()
+	for _, route := range Routes(Deps{Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)), LLMConfig: investigate, Credentials: acrVerifier}) {
+		bare.Handle(route.Method+" "+route.Pattern, route.Handler)
+	}
+	recorder = httptest.NewRecorder()
+	bare.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unconfigured worker route answered %d", recorder.Code)
+	}
+}
+
+// The no-config 404 carries the marker a worker needs to tell it from a missing
+// route; a bad org id's 404 does not.
+func TestNoConfigNotFoundIsMarked(t *testing.T) {
+	source := &fakeSource{found: false}
+	response, _ := call(t, &fakeVerifier{}, source, io.Discard, testOrg, "Bearer "+testToken)
+	if response.StatusCode != http.StatusNotFound || response.Header.Get(NoConfigHeader) != NoConfigValue {
+		t.Fatalf("no config: status %d header %q", response.StatusCode, response.Header.Get(NoConfigHeader))
+	}
+	response, _ = call(t, &fakeVerifier{}, source, io.Discard, "not-a-uuid", "Bearer "+testToken)
+	if response.StatusCode != http.StatusNotFound || response.Header.Get(NoConfigHeader) != "" {
+		t.Fatalf("bad org: status %d header %q", response.StatusCode, response.Header.Get(NoConfigHeader))
 	}
 }

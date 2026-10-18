@@ -51,6 +51,11 @@ type Deps struct {
 	// rate limit.
 	Auth    CredentialStore
 	Limiter *httpapi.KeyedLimiter
+	// CategorizeLLMConfig and WorkerCredentials serve the worker llm-config
+	// route: the org's resolved categorize config for the heavy worker, which
+	// does not hold the settings encryption key. Either nil makes it answer 503.
+	CategorizeLLMConfig LLMConfigSource
+	WorkerCredentials   CredentialVerifier
 }
 
 // Routes is the acr area's route set. Every path is internal and checks its
@@ -61,6 +66,7 @@ func Routes(deps Deps) []httpapi.Route {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	deps.Limiter.Declare()
 	return []httpapi.Route{
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/health",
@@ -75,6 +81,10 @@ func Routes(deps Deps) []httpapi.Route {
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/orgs/{org_id}/llm-config",
 			Handler: llmConfigHandler(deps.Credentials, deps.LLMConfig, logger),
+		},
+		{
+			Method: http.MethodGet, Pattern: "/api/v1/internal/workers/orgs/{org_id}/llm-config/categorize",
+			Handler: llmConfigHandler(deps.WorkerCredentials, deps.CategorizeLLMConfig, logger),
 		},
 	}
 }
@@ -109,11 +119,13 @@ func healthHandler(store EntitlementStore, auth routeAuth, logger *slog.Logger) 
 		}
 		if store == nil {
 			logger.ErrorContext(r.Context(), "acr health: no entitlement store configured")
+			countInternal(r.Context(), routeHealth, "unconfigured")
 			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
 			return
 		}
 		if err := store.Ready(r.Context()); err != nil {
 			logger.ErrorContext(r.Context(), "acr health: entitlement store unreachable", slog.Any("error", err))
+			countInternal(r.Context(), routeHealth, "store_unavailable")
 			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
 			return
 		}

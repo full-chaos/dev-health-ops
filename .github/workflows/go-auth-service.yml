@@ -84,6 +84,8 @@ jobs:
           cache-dependency-path: '**/go.sum'
       - name: Path filter outcomes (fixed closure)
         run: bash ci/check_go.sh auth paths-selftest
+      - name: Gate scope covers every auth-looking package
+        run: bash ci/check_go.sh auth scope-selftest
       - name: gofmt
         run: bash ci/check_go.sh auth fmt
       - name: go vet
@@ -100,6 +102,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -108,6 +112,8 @@ jobs:
         run: bash ci/check_go.sh auth test
       - name: go test -race (auth packages)
         run: bash ci/check_go.sh auth race
+      - name: Endpoint-profile source_commit resolves and anchors read the same there (CHAOS-4765)
+        run: bash ci/check_go.sh auth history
       - name: Production middleware stack is mounted and driven (G-69)
         run: bash ci/check_go.sh auth middleware
 

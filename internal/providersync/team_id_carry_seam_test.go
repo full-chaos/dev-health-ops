@@ -32,6 +32,11 @@ func (conn *carrySeamConn) PrepareBatch(context.Context, string, ...driver.Prepa
 	return nil, errors.New("no batch")
 }
 
+func (conn *carrySeamConn) Exec(context.Context, string, ...any) error {
+	conn.batches++
+	return errors.New("no write")
+}
+
 type carrySeamCollector struct{ ran *bool }
 
 func (collector carrySeamCollector) CollectTeamCatalog(context.Context, TeamCatalogReference, providerfoundation.Credential,

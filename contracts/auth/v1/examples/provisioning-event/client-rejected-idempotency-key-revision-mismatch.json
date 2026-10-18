@@ -1,0 +1,14 @@
+{
+  "schema_version": "provisioning-event.v1",
+  "aggregate_type": "principal",
+  "aggregate_id": "prn_EXAMPLE0000000000000001",
+  "event_type": "principal.disabled",
+  "idempotency_key": "principal:prn_EXAMPLE0000000000000001:1",
+  "created_at": "2026-09-03T10:00:00Z",
+  "payload": {
+    "revision": 2,
+    "change": {
+      "status": "disabled"
+    }
+  }
+}

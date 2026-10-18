@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // A provider team id carries its provider's prefix (internal/teamid). The
@@ -145,6 +146,14 @@ type TeamIDCarryOutcome struct {
 	// manual members of the old row that it did not hold yet, so an admin's
 	// members are not lost (one team).
 	ManualMembersFolded uint64 `json:"manual_members_folded"`
+	// KeyedTeamsActivated is the part of TeamsAlreadyKeyed whose kept row was
+	// inactive and that a custom team moved onto: the kept row is written
+	// again active (chris D6023).
+	KeyedTeamsActivated uint64 `json:"keyed_teams_activated"`
+	// DeletedKeyedTeams is the new ids whose row an admin deleted and that a
+	// custom team moved onto: a deleted team is no team, so the custom team is
+	// written under the id as a new team.
+	DeletedKeyedTeams uint64 `json:"deleted_keyed_teams"`
 	// The open link rows moved, and the ones whose prefixed twin was already
 	// open (the old row is closed, no second open row is written).
 	Memberships          uint64 `json:"memberships"`
@@ -211,18 +220,36 @@ func CarryTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, at ti
 		return TeamIDCarryOutcome{}, err
 	}
 	if dryRun {
+		logKeyedTeamOutcome(ctx, outcome)
 		return outcome, nil
 	}
 	if err := carry.write(); err != nil {
 		return outcome, err
 	}
+	logKeyedTeamOutcome(ctx, outcome)
 	return outcome, nil
+}
+
+// logKeyedTeamOutcome logs, at Info and with counts only, the kept rows a
+// custom team carried as the active team and the deleted ones it was written
+// over as a new team: after the write (or, for a dry run, as what it would
+// write), never at planning, so a failed carry logs none.
+func logKeyedTeamOutcome(ctx context.Context, outcome TeamIDCarryOutcome) {
+	if outcome.KeyedTeamsActivated > 0 {
+		slog.Default().InfoContext(ctx, "team_id_carry_inactive_keyed_team_activated",
+			"keyed_teams_activated", outcome.KeyedTeamsActivated, "dry_run", outcome.DryRun)
+	}
+	if outcome.DeletedKeyedTeams > 0 {
+		slog.Default().InfoContext(ctx, "team_id_carry_deleted_keyed_team_written_new",
+			"deleted_keyed_teams", outcome.DeletedKeyedTeams, "dry_run", outcome.DryRun)
+	}
 }
 
 // TeamIDCarryConn is the part of a ClickHouse connection the carry uses.
 type TeamIDCarryConn interface {
 	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
 	PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error)
+	Exec(ctx context.Context, query string, args ...any) error
 }
 
 // teamIDCarryCount reads the count query; a missing row is a failed read.
@@ -266,6 +293,10 @@ type teamIDCarryRun struct {
 	target  map[string]map[string]string
 	groups  map[string]map[string]bool
 	primary map[string]string
+	// moved: the new ids whose team row this run writes from a moved row; that
+	// row states the moved team's provider identity. Every other teams row the
+	// run writes keeps the stored identity.
+	moved map[string]bool
 
 	// writes run in this order; teams and observations are last.
 	writes []teamIDCarryWrite
@@ -468,7 +499,9 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 	}
 
 	rows := make([]chRow, 0, len(created)+len(retired))
+	run.moved = make(map[string]bool, len(created))
 	for _, team := range created {
+		run.moved[team.id] = true
 		// A custom team, pushed or the admin's, is stored with no provider
 		// (teamid.StoredProvider).
 		row := run.newTeamRow(team.content, team.content.str("id"), team.id)
@@ -532,8 +565,22 @@ func teamIDCarryJiraProjectAsTeam(row chRow) bool {
 	return row.str("provider") == jiraTeamCatalogProvider && native == row.str("id") && !strings.HasPrefix(native, jiraAtlassianTeamARIPrefix)
 }
 
+// teamIDCarryKeyedQuery is the current version of each new id that already
+// has a row, and whether an admin deleted it. It is the ONE read of the kept
+// rows: the fold writes from it, so a delete that commits after it is a
+// newer version than the fold's and wins.
+var teamIDCarryKeyedQuery = `SELECT ` + teamIDCarryTeamsColumns + `, deleted_at IS NOT NULL AS deleted FROM teams FINAL ` +
+	`WHERE org_id = {org_id:String} AND id IN {ids:Array(String)}`
+
 // dropKeyedTeams keeps a team row that a prefixed writer already wrote: the
-// new row of such an id is not written.
+// new row of such an id is not written. A custom team (an admin's or a
+// pushed one, stored with no provider) is the exception when the kept row is
+// not active (chris D6023: custom = admin = push API, and it carries as the
+// ACTIVE team): over an inactive row it is folded in and the kept row is
+// written again active; over a deleted row, which is no team, it is written
+// as a new team past the delete (the admin store's rule: a write under the id
+// of a deleted team is a new team, api/teamsidentity/store.go
+// CreateOrUpdateTeam). Nothing is ever folded into a deleted row.
 func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 	var newIDs []string
 	for _, row := range *rows {
@@ -544,29 +591,49 @@ func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 	if len(newIDs) == 0 {
 		return nil
 	}
-	existing, err := run.readSet(`SELECT DISTINCT id FROM teams WHERE org_id = {org_id:String} AND id IN {ids:Array(String)}`, newIDs)
+	current, err := run.read(teamIDCarryKeyedQuery, run.org, clickhouse.Named("ids", newIDs))
 	if err != nil {
 		return fmt.Errorf("team id carry: read prefixed teams: %w", err)
 	}
+	existing := make(map[string]chRow, len(current))
+	for _, row := range current {
+		existing[row.str("id")] = row
+	}
 	kept := (*rows)[:0]
 	folded := map[string][]string{}
+	activate := map[string]bool{}
 	var foldIDs []string
 	for _, row := range *rows {
-		if row.u8("is_active") == 1 && existing[row.str("id")] {
-			run.outcome.TeamsAlreadyKeyed++
-			if members := row.strs("manual_members"); len(members) > 0 {
-				id := row.str("id")
-				if _, seen := folded[id]; !seen {
-					foldIDs = append(foldIDs, id)
-				}
-				folded[id] = append(folded[id], members...)
-			}
+		id := row.str("id")
+		held, found := existing[id]
+		if row.u8("is_active") != 1 || !found {
+			kept = append(kept, row)
 			continue
 		}
-		kept = append(kept, row)
+		custom := row.str("provider") == ""
+		if held.u8("deleted") == 1 {
+			if custom {
+				run.outcome.DeletedKeyedTeams++
+				kept = append(kept, row.with("updated_at", teamIDCarryBump(row.time("updated_at"), held.time("updated_at"), time.Microsecond)))
+				continue
+			}
+			run.outcome.TeamsAlreadyKeyed++
+			delete(run.moved, id)
+			continue
+		}
+		run.outcome.TeamsAlreadyKeyed++
+		delete(run.moved, id)
+		if custom && held.u8("is_active") != 1 && !activate[id] {
+			activate[id] = true
+			run.outcome.KeyedTeamsActivated++
+		}
+		if _, seen := folded[id]; !seen {
+			foldIDs = append(foldIDs, id)
+		}
+		folded[id] = append(folded[id], row.strs("manual_members")...)
 	}
 	*rows = kept
-	return run.foldManualMembers(rows, foldIDs, folded)
+	return run.foldManualMembers(rows, foldIDs, folded, activate, existing)
 }
 
 // foldManualMembers writes a new version of each kept row that takes the
@@ -613,14 +680,16 @@ func (run *teamIDCarryRun) withOldestCreatedAt(rows []chRow) ([]chRow, error) {
 	return out, nil
 }
 
-func (run *teamIDCarryRun) foldManualMembers(rows *[]chRow, ids []string, members map[string][]string) error {
+func (run *teamIDCarryRun) foldManualMembers(rows *[]chRow, ids []string, members map[string][]string, activate map[string]bool, held map[string]chRow) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	current, err := run.read(`SELECT `+teamIDCarryTeamsColumns+` FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {ids:Array(String)}`, run.org, clickhouse.Named("ids", ids))
-	if err != nil {
-		return fmt.Errorf("team id carry: read kept teams: %w", err)
+	columns := strings.Split(teamIDCarryTeamsColumns, ", ")
+	current := make([]chRow, 0, len(ids))
+	for _, id := range ids {
+		current = append(current, held[id].only(columns))
 	}
+	var err error
 	if current, err = run.withOldestCreatedAt(current); err != nil {
 		return fmt.Errorf("team id carry: read kept created_at: %w", err)
 	}
@@ -636,16 +705,23 @@ func (run *teamIDCarryRun) foldManualMembers(rows *[]chRow, ids []string, member
 				merged = append(merged, member)
 			}
 		}
-		if len(merged) == len(row.strs("manual_members")) {
+		grew := len(merged) > len(row.strs("manual_members"))
+		if !grew && !activate[row.str("id")] {
 			continue
 		}
-		run.outcome.ManualMembersFolded++
+		if grew {
+			run.outcome.ManualMembersFolded++
+		}
+		version := row.with("manual_members", merged)
+		if activate[row.str("id")] {
+			version = version.with("is_active", uint8(1))
+		}
 		// At the stored version, not past it and not at the carry's time: the
 		// row keeps its writer's clock, the newer insert wins an equal version
 		// (ReplacingMergeTree keeps the last inserted row), and a later write of
 		// that writer stamped at or after that version (a push stamped by its
 		// source) still wins.
-		*rows = append(*rows, row.with("manual_members", merged))
+		*rows = append(*rows, version)
 	}
 	return nil
 }
@@ -1031,6 +1107,13 @@ func (run *teamIDCarryRun) write() error {
 		if len(write.rows) == 0 {
 			continue
 		}
+		if write.table == "teams" {
+			if err := run.writeTeams(ctx, write); err != nil {
+				return fmt.Errorf("team id carry: write teams: %w", err)
+			}
+			run.outcome.RowsWritten += uint64(len(write.rows))
+			continue
+		}
 		batch, err := run.conn.PrepareBatch(ctx, "INSERT INTO "+write.table+" ("+write.columns+")")
 		if err != nil {
 			return fmt.Errorf("team id carry: write %s: %w", write.table, err)
@@ -1047,6 +1130,37 @@ func (run *teamIDCarryRun) write() error {
 		run.outcome.RowsWritten += uint64(len(write.rows))
 	}
 	return nil
+}
+
+// writeTeams writes the team rows through teamprovider.Insert: a moved team's
+// new row states the moved row's provider identity (gone_at included), and
+// every other row (an old row going inactive, a kept row taking members)
+// keeps the stored identity, read inside the same statement.
+func (run *teamIDCarryRun) writeTeams(ctx context.Context, write teamIDCarryWrite) error {
+	all := strings.Split(write.columns, ", ")
+	identity := map[string]bool{teamprovider.ColumnProviderTeamID: true, teamprovider.ColumnProviderName: true, teamprovider.ColumnGoneAt: true}
+	var columns []string
+	for _, column := range all {
+		if !identity[column] {
+			columns = append(columns, column)
+		}
+	}
+	writes := make([]teamprovider.Write, 0, len(write.rows))
+	for _, row := range write.rows {
+		values := make([]any, 0, len(columns))
+		for _, column := range columns {
+			values = append(values, row.value(column))
+		}
+		version := teamprovider.Write{Values: values, Gone: teamprovider.GoneKept}
+		if run.moved[row.str("id")] {
+			version = teamprovider.Write{
+				Values: values, ProviderTeamID: row.str(teamprovider.ColumnProviderTeamID), ProviderName: row.str(teamprovider.ColumnProviderName),
+				Gone: teamprovider.GoneStated, GoneAt: row.timePtr(teamprovider.ColumnGoneAt),
+			}
+		}
+		writes = append(writes, version)
+	}
+	return teamprovider.Insert(ctx, run.conn, run.orgID, columns, writes)
 }
 
 // teamIDCarryBump is a version stamp past the stored one: `at`, or the
@@ -1149,6 +1263,17 @@ func (row chRow) u8(column string) uint8 {
 	return value
 }
 
+// only returns the row with just these columns, in this order.
+func (row chRow) only(columns []string) chRow {
+	index := make(map[string]int, len(columns))
+	values := make([]any, len(columns))
+	for i, column := range columns {
+		index[column] = i
+		values[i] = row.value(column)
+	}
+	return chRow{index: index, vals: values}
+}
+
 // with returns a copy of the row with one column set.
 func (row chRow) with(column string, value any) chRow {
 	values := append([]any(nil), row.vals...)
@@ -1172,6 +1297,7 @@ func CarryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, w
 		slog.Default().InfoContext(ctx, "team_ids_carried", "writer", writer,
 			"teams", outcome.Teams, "admin_teams", outcome.AdminTeams, "admin_teams_to_custom", outcome.AdminTeamsToCustom, "admin_teams_not_carried", outcome.AdminTeamsNotCarried,
 			"ambiguous_teams", outcome.AmbiguousTeams, "teams_already_keyed", outcome.TeamsAlreadyKeyed, "manual_members_folded", outcome.ManualMembersFolded,
+			"keyed_teams_activated", outcome.KeyedTeamsActivated, "deleted_keyed_teams", outcome.DeletedKeyedTeams,
 			"memberships", outcome.Memberships, "project_ownership", outcome.ProjectOwnership, "repo_ownership", outcome.RepoOwnership,
 			"link_rows_already_keyed", outcome.LinkRowsAlreadyKeyed, "observations", outcome.Observations,
 			"sync_policies", outcome.SyncPolicies, "drift_changes", outcome.DriftChanges, "identity_drift_changes", outcome.IdentityDriftChanges, "identities", outcome.Identities,

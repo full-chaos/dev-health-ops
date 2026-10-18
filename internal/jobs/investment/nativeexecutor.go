@@ -28,6 +28,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
+	"github.com/full-chaos/dev-health-ops/internal/orgllmconfig"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -54,6 +56,10 @@ type NativeExecutor struct {
 	// model_ref must reach the PROVIDER, not merely the model-version string
 	// (codex r1 P1-b).
 	newProvider func(requested, model string) (categorize.Provider, categorize.ProviderKind, error)
+	// orgConfig and orgBudget make the provider org-aware (CHAOS-10041); nil
+	// keeps the platform environment as the only source.
+	orgConfig orgConfigFetcher
+	orgBudget llmbudget.Store
 	// observer receives CHAOS-5458's per-run repo-attribution partition. Nil
 	// is tolerated everywhere it is read, same discipline as
 	// remaining.MembershipExecutor.SetObserver.
@@ -265,8 +271,16 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	if scope.LLMProvider != nil && *scope.LLMProvider != "" {
 		requestedProvider = *scope.LLMProvider
 	}
-	provider, kind, err := executor.newProvider(requestedProvider, claim.Request.ModelRef)
+	orgID := claim.Request.OrganizationID
+	provider, kind, stampModel, err := executor.providerForRun(ctx, orgID, requestedProvider, claim.Request.ModelRef)
 	if err != nil {
+		var det *workgraph.DeterministicError
+		if errors.As(err, &det) {
+			return nil, err
+		}
+		if errors.Is(err, orgllmconfig.ErrUnavailable) {
+			return nil, err
+		}
 		return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
 			fmt.Errorf("resolve llm provider: %w", err))
 	}
@@ -280,7 +294,6 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		}
 	}
 
-	orgID := claim.Request.OrganizationID
 	allowUnscoped := scope.AllowUnscoped != nil && *scope.AllowUnscoped
 
 	// materialize.py:1196-1202. The `none` provider produces empty completions,
@@ -386,7 +399,7 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		LLMConcurrency: claim.Request.LLMConcurrency,
 		ProviderName:   string(kind),
 		// model_ref is the same story: the row's column, not a scope key.
-		Model: claim.Request.ModelRef,
+		Model: stampModel,
 		// work_graph_tasks.py:243 hardcodes persist_evidence_snippets=True on
 		// the worker path -- it is not a scope key and not configurable here.
 		PersistEvidenceSnippets: true,

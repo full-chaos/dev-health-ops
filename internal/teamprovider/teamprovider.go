@@ -2,8 +2,10 @@
 // teams.gone_at from the versions of a team that a write replaces. teams is a
 // ReplacingMergeTree(updated_at): the newest version wins, so these columns
 // survive only if every writer copies them onto the version it inserts. Every Go
-// writer of the teams table goes through this package, or copies the columns
-// itself in an INSERT..SELECT (see the census test).
+// writer of the teams table writes through Insert, which reads the stored
+// values inside its own INSERT..SELECT, or copies the columns itself in an
+// INSERT..SELECT (see the census test). A read before a separate insert would
+// erase a value another writer stored between the two (CHAOS-9999).
 //
 //   - provider_team_id and provider_name are the newest NON-EMPTY values over
 //     every stored version: a writer that does not know the provider's id (an
@@ -60,9 +62,8 @@ type Querier interface {
 }
 
 // Carry returns the stored values for each team that already has a row. A team
-// with no row has no entry (the zero Stored: no id, no name, not gone). A query
-// failure returns an error and the caller MUST abort its write before it
-// prepares any INSERT.
+// with no row has no entry (the zero Stored: no id, no name, not gone). It is a
+// read for telemetry (Tally): a write takes the values inside Insert.
 func Carry(ctx context.Context, conn Querier, orgID string, teamIDs []string) (map[string]Stored, error) {
 	if isNil(conn) || strings.TrimSpace(orgID) == "" {
 		return nil, ErrInvalidArguments
@@ -86,27 +87,6 @@ func Carry(ctx context.Context, conn Querier, orgID string, teamIDs []string) (m
 		stored[id] = value
 	}
 	return stored, rows.Err()
-}
-
-// Merge is the value a catalog writer appends for a team it lists: the
-// provider's own id and name when the run read them, else the stored ones; a
-// listed team is never gone, so GoneAt is nil.
-func Merge(stored map[string]Stored, teamID, providerTeamID, providerName string) Stored {
-	value := stored[teamID]
-	if strings.TrimSpace(providerTeamID) != "" {
-		value.ProviderTeamID = strings.TrimSpace(providerTeamID)
-	}
-	if strings.TrimSpace(providerName) != "" {
-		value.ProviderName = strings.TrimSpace(providerName)
-	}
-	value.GoneAt = nil
-	return value
-}
-
-// Keep is the value a writer that does not list the team appends: everything
-// the stored versions say, unchanged.
-func Keep(stored map[string]Stored, teamID string) Stored {
-	return stored[teamID]
 }
 
 func isNil(conn Querier) bool {

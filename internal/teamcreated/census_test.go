@@ -15,8 +15,10 @@ var teamsInsert = regexp.MustCompile(`(?i)INSERT\s+INTO\s+teams\b`)
 
 // Every Go statement that inserts into teams writes created_at, and the writer
 // either calls this package or copies the column in the same statement
-// (INSERT..SELECT). A new writer that drops the column starts the next version
-// of every team it touches with a NULL creation time.
+// (INSERT..SELECT). A writer through teamprovider.Insert states created_at in
+// its column list and takes it from this package (the team id carry from its
+// own oldest-version read). A new writer that drops the column starts the next
+// version of every team it touches with a NULL creation time.
 func TestEveryGoTeamsInsertWritesCreatedAt(t *testing.T) {
 	root, err := moduleroot.Root()
 	if err != nil {
@@ -32,13 +34,22 @@ func TestEveryGoTeamsInsertWritesCreatedAt(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if rel, _ := filepath.Rel(root, path); strings.HasPrefix(filepath.ToSlash(rel), "internal/testsupport/") {
-				return nil // test seeds, not a writer of production rows
+			rel, _ := filepath.Rel(root, path)
+			if strings.HasPrefix(filepath.ToSlash(rel), "internal/testsupport/") || strings.HasPrefix(filepath.ToSlash(rel), "internal/teamprovider/") {
+				return nil // test seeds, and the shared statement builder (it writes the columns it is given)
 			}
 			source := string(raw)
+			if strings.Contains(source, "teamprovider.Insert(") && !teamsInsert.MatchString(source) {
+				found++
+				if !strings.Contains(source, `"created_at"`) {
+					t.Errorf("%s: writes teams through teamprovider.Insert with no created_at column", rel)
+				}
+				if !strings.Contains(source, "teamcreated.For(") && !strings.Contains(source, "teamIDCarryOldestCreatedQuery") {
+					t.Errorf("%s: writes teams through teamprovider.Insert and never carries created_at", rel)
+				}
+			}
 			for _, at := range teamsInsert.FindAllStringIndex(source, -1) {
 				found++
-				rel, _ := filepath.Rel(root, path)
 				statement := source[at[0]:min(at[0]+700, len(source))]
 				columns := statement[:strings.IndexByte(statement, ')')+1]
 				if !strings.Contains(columns, Column) {

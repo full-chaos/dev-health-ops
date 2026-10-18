@@ -199,6 +199,7 @@ internal/mintcli/envelope	1
 internal/mintcli/envelopekeys	2
 internal/operationalbackfill	2
 internal/operationalordering	35
+internal/orgllmconfig	2
 internal/pgmigrate	6
 internal/platform/buildstamp	1
 internal/platform/config	12
@@ -330,6 +331,7 @@ internal/teamid	1
 internal/teamkeytables	1
 internal/teamownership	1
 internal/teamprovider	20
+internal/teamprovider/teamprovidertest	1
 internal/teamresolve	1
 internal/testsupport/chlogin	1
 internal/testsupport/chquery	1

@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
-GO_TOOLCHAIN="go1.27.0"
+GO_TOOLCHAIN="go1.27.2"
 export GOTOOLCHAIN="${GO_TOOLCHAIN}"
 # CHAOS-5224 / CHAOS-5268: precedence is an explicit DEV_HEALTH_GO_CACHE first,
 # then an already-inherited GOCACHE, then a GOCACHE CONFIGURED on the machine
@@ -105,8 +105,12 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
+  auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
+         -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
+         registered parser (each its own proof marker), govulncheck pinned and strict. STAGE is
+         fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|all.
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
   test   Run go test ./... in every Go module.
@@ -3120,10 +3124,253 @@ check_integration_vet() {
   run_in_modules "go vet -tags=integration" go vet -mod=readonly -trimpath -tags=integration ./...
 }
 
+# --- Auth Control Plane gates (CHAOS-4887) -----------------------------------
+# `check_go.sh auth [STAGE]` runs the Go quality and release gates for the
+# auth-service tree ALONE, so an auth-only change does not need the fleet-wide
+# suite and an unrelated change does not need these. The packages are the real
+# tree (cmd/auth-service, cmd/auth-migrate, internal/auth/..., the auth schema
+# adapter); a new auth package under those roots is covered automatically.
+AUTH_PACKAGES=(
+  ./cmd/auth-service/...
+  ./cmd/auth-migrate/...
+  ./internal/auth/...
+  ./internal/storage/postgres/authschema/...
+)
+# One fuzz target per parser, each its own corpus (the target's f.Add seeds plus
+# any testdata/fuzz/<Target> entries) and its own proof marker. Format:
+# "<package> <FuzzTarget>". check_auth_fuzz_registry fails when a Fuzz function
+# exists in the tree without a row here, or a row names a function that does not.
+AUTH_FUZZ_TARGETS=(
+  "./internal/auth/contracts FuzzParseErrorEnvelope"
+  "./internal/auth/contracts FuzzRevisionUnmarshal"
+  "./internal/auth/contracts FuzzTimestampUnmarshal"
+  "./internal/auth/edgetoken FuzzVerifyToken"
+  "./internal/auth/signedtoken FuzzValidSignedToken"
+  "./internal/auth/httpapi FuzzParseLimit"
+  "./internal/auth/httpapi FuzzParseForwardedTrust"
+  "./internal/auth/keystore FuzzParseEd25519Key"
+  "./internal/auth/authconfig FuzzConfigLoad"
+)
+AUTH_FUZZTIME="${AUTH_FUZZTIME:-20s}"
+AUTH_GOVULNCHECK_VERSION="v1.9.0"
+# Marker the production-stack test logs once it has mounted and driven the real
+# middleware stack (internal/auth/authruntime/production_stack_test.go).
+AUTH_STACK_MARKER="AUTH_PRODUCTION_STACK_EXECUTED"
+
+auth_go() {
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go "$@")
+}
+
+check_auth_fmt() {
+  local output
+  output="$(cd "${ROOT}" && git ls-files --cached --others --exclude-standard -z -- \
+    'cmd/auth-service/*.go' 'cmd/auth-migrate/*.go' 'internal/auth/*.go' 'internal/storage/postgres/authschema/*.go' \
+    | xargs -0 -r "${GOFMT}" -l)"
+  if [ -n "${output}" ]; then
+    printf 'auth gofmt: these files need formatting:\n%s\n' "${output}" >&2
+    return 1
+  fi
+  printf 'auth gofmt: clean\n'
+}
+
+check_auth_vet() {
+  printf 'auth go vet\n'
+  auth_go vet -mod=readonly -trimpath "${AUTH_PACKAGES[@]}"
+}
+
+check_auth_test() {
+  printf 'auth go test\n'
+  auth_go test -mod=readonly -trimpath -count=1 "${AUTH_PACKAGES[@]}"
+}
+
+check_auth_race() {
+  printf 'auth go test -race\n'
+  auth_go test -mod=readonly -trimpath -count=1 -race "${AUTH_PACKAGES[@]}"
+}
+
+check_auth_fuzz_registry() {
+  local listed registered
+  listed="$(cd "${ROOT}" && grep -rhoE '^func Fuzz[A-Za-z0-9_]+' \
+    cmd/auth-service cmd/auth-migrate internal/auth internal/storage/postgres/authschema --include='*_test.go' \
+    | sed 's/^func //' | LC_ALL=C sort)"
+  registered="$(printf '%s\n' "${AUTH_FUZZ_TARGETS[@]}" | awk '{print $2}' | LC_ALL=C sort)"
+  [ -n "${registered}" ] || die "auth fuzz registry is empty: the gate would measure nothing"
+  [ "${listed}" = "${registered}" ] \
+    || die "auth fuzz registry and the Fuzz functions of the auth tree differ: registry=[$(printf '%s' "${registered}" | tr '\n' ' ')] tree=[$(printf '%s' "${listed}" | tr '\n' ' ')]"
+  printf 'auth fuzz registry: %s targets match the tree\n' "$(printf '%s\n' "${registered}" | wc -l | tr -d ' ')"
+}
+
+# check_auth_fuzz [TARGET]: run every registered target (or only TARGET) with the
+# fuzz engine for AUTH_FUZZTIME, each in its own invocation. The proof marker is
+# per target and is printed only when the engine really ran ("fuzz: elapsed"
+# line) and the run passed: a target satisfied by the seed corpus alone, or by
+# a neighbour, prints nothing and fails.
+check_auth_fuzz() {
+  local only="${1:-}" entry package target output execs ran=0
+  check_auth_fuzz_registry
+  # A budget below the engine's baseline-coverage pass runs zero fuzz iterations and
+  # would still print PASS: refuse it, and refuse a run that reports none below.
+  [[ "${AUTH_FUZZTIME}" =~ ^[0-9]+s$ ]] || die "AUTH_FUZZTIME=${AUTH_FUZZTIME} must be whole seconds such as 20s"
+  [ "${AUTH_FUZZTIME%s}" -ge 5 ] || die "AUTH_FUZZTIME=${AUTH_FUZZTIME} is below the 5s floor: the fuzz engine would run no iteration"
+  for entry in "${AUTH_FUZZ_TARGETS[@]}"; do
+    package="${entry% *}"
+    target="${entry##* }"
+    if [ -n "${only}" ] && [ "${only}" != "${target}" ]; then continue; fi
+    output="$(mktemp)"
+    if ! (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -run '^$' \
+      -fuzz "^${target}\$" -fuzztime "${AUTH_FUZZTIME}" "${package}") >"${output}" 2>&1; then
+      cat "${output}" >&2
+      rm -f "${output}"
+      die "fuzz target ${target} failed"
+    fi
+    execs="$(grep -oE '^fuzz: elapsed: [^,]*, execs: [0-9]+' "${output}" | tail -n 1 | grep -oE '[0-9]+$' || true)"
+    if ! grep -q '^fuzz: elapsed:' "${output}" || ! grep -q '^PASS$' "${output}" || [ "${execs:-0}" -le 0 ]; then
+      cat "${output}" >&2
+      rm -f "${output}"
+      die "fuzz target ${target} did not run the fuzz engine to a pass"
+    fi
+    tail -n 3 "${output}"
+    rm -f "${output}"
+    printf 'auth-fuzz-proof: %s %s ran for %s (%s executions)\n' "${package}" "${target}" "${AUTH_FUZZTIME}" "${execs}"
+    ran=$((ran + 1))
+  done
+  [ "${ran}" -gt 0 ] || die "auth fuzz: no target ran (TARGET=${only:-all})"
+}
+
+# check_auth_vuln: govulncheck over the auth packages only, pinned. ANY
+# reachable finding fails the gate: there is no ignore list, so a pull request
+# cannot whitelist a vulnerability.
+check_auth_vuln() {
+  local report
+  report="$(mktemp)"
+  printf 'auth govulncheck %s\n' "${AUTH_GOVULNCHECK_VERSION}"
+  if ! (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly -trimpath "golang.org/x/vuln/cmd/govulncheck@${AUTH_GOVULNCHECK_VERSION}" \
+    -format json "${AUTH_PACKAGES[@]}") >"${report}" 2>"${report}.err"; then
+    # govulncheck -format json exits 0 even with findings; a non-zero exit is a tool failure.
+    cat "${report}.err" >&2
+    rm -f "${report}" "${report}.err"
+    die "govulncheck failed to run"
+  fi
+  rm -f "${report}.err"
+  python3 "${ROOT}/ci/auth_govulncheck.py" <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
+  rm -f "${report}"
+}
+
+# check_auth_middleware: G-69. Runs the production-stack test verbosely and
+# fails unless it logged its marker: the test mounted the real middleware stack
+# (built from the service's own apiServerOptions) and drove it. A green test
+# name without the marker is not evidence.
+check_auth_middleware() {
+  local output
+  output="$(mktemp)"
+  if ! (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -count=1 -v \
+    -run '^TestProductionMiddlewareStackIsMountedAndDriven$' ./internal/auth/authruntime) >"${output}" 2>&1; then
+    cat "${output}" >&2
+    rm -f "${output}"
+    die "the production middleware stack test failed"
+  fi
+  if ! grep -q "${AUTH_STACK_MARKER}" "${output}"; then
+    cat "${output}" >&2
+    rm -f "${output}"
+    die "the production middleware stack test passed without logging ${AUTH_STACK_MARKER}: it did not drive the stack"
+  fi
+  grep "${AUTH_STACK_MARKER}" "${output}"
+  rm -f "${output}"
+}
+
+# auth_relevant BASE HEAD: print relevant=true|false. A change is relevant when
+# it touches a file of the auth packages' own import closure inside this module
+# (computed with go list, so a change to internal/platform/secrets, which the
+# service imports, counts and a change to an unrelated package does not), the
+# auth contracts, the module files, or the gate's own files.
+auth_relevant() {
+  local base="$1" head="$2" closure changed file relevant=false
+  closure="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -deps \
+    -test -f '{{if not .Standard}}{{.Dir}}{{end}}' "${AUTH_PACKAGES[@]}" | sed "s|^${ROOT}/||" | LC_ALL=C sort -u)"
+  [ -n "${closure}" ] || die "auth relevance: go list returned an empty closure"
+  # --no-renames: a file moved OUT of the auth tree must report its old path too.
+  changed="$(git -C "${ROOT}" diff --name-only --no-renames "${base}" "${head}")"
+  while IFS= read -r file; do
+    [ -n "${file}" ] || continue
+    if auth_path_relevant "${file}" "${closure}"; then
+      printf 'auth relevance: %s\n' "${file}" >&2
+      relevant=true
+      break
+    fi
+  done <<<"${changed}"
+  printf 'relevant=%s\n' "${relevant}"
+}
+
+auth_path_relevant() {
+  local file="$1" closure="$2" dir
+  case "${file}" in
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|.github/workflows/go-auth-service.yml)
+      return 0
+      ;;
+  esac
+  # Any file (Go, testdata, golden, embedded asset) under a directory of the
+  # import closure can change what the auth packages do or test.
+  while IFS= read -r dir; do
+    [ -n "${dir}" ] && [ "${dir}" != "." ] || continue
+    case "${file}" in "${dir}"/*) return 0 ;; esac
+  done <<<"${closure}"
+  return 1
+}
+
+# check_auth_paths_selftest: the path filter's two outcomes, executed on a
+# fixed closure: files inside the auth tree select, files outside do not.
+check_auth_paths_selftest() {
+  local closure inside outside file
+  closure="$(printf 'internal/auth/authruntime\ninternal/platform/secrets\n')"
+  inside=(internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh)
+  outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go internal/platform/secretsx/y.go src/dev_health_ops/cli.py)
+  for file in "${inside[@]}"; do
+    auth_path_relevant "${file}" "${closure}" || die "auth path filter: ${file} must select the auth gates and does not"
+    printf 'auth path filter: %s -> relevant\n' "${file}"
+  done
+  for file in "${outside[@]}"; do
+    if auth_path_relevant "${file}" "${closure}"; then die "auth path filter: ${file} must NOT select the auth gates and does"; fi
+    printf 'auth path filter: %s -> not relevant\n' "${file}"
+  done
+}
+
+check_auth() {
+  case "${1:-all}" in
+    fmt) check_auth_fmt ;;
+    vet) check_auth_vet ;;
+    test) check_auth_test ;;
+    race) check_auth_race ;;
+    fuzz) check_auth_fuzz "${2:-}" ;;
+    fuzz-registry) check_auth_fuzz_registry ;;
+    vuln) check_auth_vuln ;;
+    middleware) check_auth_middleware ;;
+    relevant)
+      [ "$#" -eq 3 ] || die "auth relevant accepts BASE HEAD"
+      auth_relevant "$2" "$3"
+      ;;
+    paths-selftest) check_auth_paths_selftest ;;
+    all)
+      check_auth_paths_selftest
+      check_auth_fmt
+      check_auth_vet
+      check_auth_test
+      check_auth_race
+      check_auth_middleware
+      check_auth_fuzz
+      check_auth_vuln
+      ;;
+    *) die "auth accepts fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|all" ;;
+  esac
+}
+
 discover_modules
 print_modules
 
 case "${1:-all}" in
+  auth)
+    shift
+    check_auth "$@"
+    ;;
   fmt)
     check_format
     ;;

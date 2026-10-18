@@ -99,6 +99,12 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 			t.Fatalf("stand-in %s: %v", table.TableName, err)
 		}
 	}
+	// a column-scoped privilege needs its column: the stand-in table has only id
+	for _, column := range apiPosture().ColumnScoped {
+		if _, err := admin.Exec(ctx, "ALTER TABLE "+column.TableName+" ADD COLUMN IF NOT EXISTS "+column.ColumnName+" uuid"); err != nil {
+			t.Fatalf("stand-in column %s.%s: %v", column.TableName, column.ColumnName, err)
+		}
+	}
 	for _, table := range apiPosture().RequiredTables {
 		privileges := "SELECT"
 		if table.AllowInsert {
@@ -112,6 +118,11 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 		}
 		if _, err := admin.Exec(ctx, "GRANT "+privileges+" ON "+table.TableName+" TO "+role); err != nil {
 			t.Fatalf("grant on %s: %v", table.TableName, err)
+		}
+	}
+	for _, column := range apiPosture().ColumnScoped {
+		if _, err := admin.Exec(ctx, "GRANT "+column.Privilege+" ("+column.ColumnName+") ON "+column.TableName+" TO "+role); err != nil {
+			t.Fatalf("grant on %s.%s: %v", column.TableName, column.ColumnName, err)
 		}
 	}
 }

@@ -32,6 +32,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 )
 
 const (
@@ -276,10 +277,14 @@ ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 		datasetKeys = keys
 	}
 	var selected []string
-	if config.PlannerManaged && config.SourceID == nil {
+	switch {
+	case synchandoff.SelectionApplies(config):
 		if selected, err = schedsync.ScheduledSourceIDs(ctx, tx, config.OrgID, *config.IntegrationID, config.ID, nil, true); err != nil {
 			return Validated{}, fmt.Errorf("list the sources the configuration selects: %w", err)
 		}
+	case config.PlannerManaged && config.SourceID == nil:
+		// PagerDuty is account-scoped: its trigger names every enabled source, as before.
+		selected = enabled
 	}
 	sourceIDs, err := scopeSources(config, params.SourceIDs, enabled, selected)
 	if err != nil {

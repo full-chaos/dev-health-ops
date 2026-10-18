@@ -99,7 +99,7 @@ ORDER BY full_name, id`, orgID, integrationID); err != nil {
 		return handoffScope{}, fmt.Errorf("list enabled sources: %w", err)
 	}
 	scope.sources = scope.enabled
-	if config.PlannerManaged && config.SourceID == nil {
+	if synchandoff.SelectionApplies(config) {
 		if scope.sources, err = schedsync.ScheduledSourceIDs(ctx, tx, orgID, integrationID.String(), config.ID, nil, true); err != nil {
 			return handoffScope{}, fmt.Errorf("list the sources the configuration selects: %w", err)
 		}

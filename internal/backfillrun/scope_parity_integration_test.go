@@ -153,3 +153,62 @@ func mustDay(t *testing.T, day string) time.Time {
 	}
 	return parsed
 }
+
+// TestPagerDutyBackfillKeepsEveryEnabledSource: PagerDuty is account-scoped and
+// its sources carry no selection tag, so a backfill that names no sources keeps
+// naming every enabled source (not an empty list, which would plan nothing),
+// and the trigger write's guard does not refuse it.
+func TestPagerDutyBackfillKeepsEveryEnabledSource(t *testing.T) {
+	instance, admin := startDatabase(t)
+	uri := freshDatabase(t, instance, admin)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	integration, config := uuidN(0x1a, 910), uuidN(0xc0, 910)
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, query, args...); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+	}
+	exec(`INSERT INTO integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
+VALUES ($1::uuid, $2, 'pagerduty', 'pd', '{}'::json, true, now(), now())`, integration, testOrg)
+	exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, integration_id, created_at, updated_at)
+VALUES ($1::uuid, $2, 'pd', 'pagerduty', '["operational"]'::json, '{}'::json, true, true, $3::uuid, now(), now())`, config, testOrg, integration)
+	var enabled []string
+	for index, name := range []string{"pd/account-a", "pd/account-b"} {
+		id := uuidN(0x5a, 9100+index)
+		enabled = append(enabled, id)
+		exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
+VALUES ($1::uuid, $2, $3::uuid, 'pagerduty', 'account', $4, $4, $4, '{}'::json, true, now(), now())`, id, testOrg, integration, name)
+	}
+	seedDatasetRows(t, ctx, conn, cfg{n: 910, org: testOrg, provider: "pagerduty", targets: []string{"operational"}}, 910)
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	loaded, err := LoadConfig(ctx, tx, config)
+	if err != nil || loaded == nil {
+		t.Fatalf("load config: %v", err)
+	}
+	params := Params{ConfigID: config, Window: Window{Since: mustDay(t, "2026-09-01"), Before: mustDay(t, "2026-09-02")}}
+	validated, err := Validate(ctx, tx, loaded, params)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if !reflect.DeepEqual(validated.SourceIDs, enabled) {
+		t.Fatalf("PagerDuty backfill source set = %#v, want every enabled source %v", validated.SourceIDs, enabled)
+	}
+	if _, err := Mint(ctx, tx, loaded, params, validated, mustDay(t, "2026-10-18")); err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	var written string
+	if err := tx.QueryRow(ctx, `SELECT coalesce(array_to_string(source_ids, ','), 'NULL') FROM sync_manual_triggers`).Scan(&written); err != nil || written != strings.Join(enabled, ",") {
+		t.Fatalf("written source_ids = %q (err %v), want %q", written, err, strings.Join(enabled, ","))
+	}
+}

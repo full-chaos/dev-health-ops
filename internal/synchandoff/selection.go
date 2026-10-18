@@ -30,6 +30,17 @@ func (err UnselectedSourcesError) Error() string {
 	return fmt.Sprintf("source %s is not selected for sync configuration %s", strings.Join(err.SourceIDs, ", "), err.ConfigID)
 }
 
+// SelectionApplies reports whether the configuration's source selection scopes
+// its triggers: a planner-managed parent configuration with an integration,
+// other than PagerDuty (account-scoped). Pinned and non-planner-managed
+// configurations are scoped by their own source or not at all. It is the one
+// rule for both the scope guard and the set a trigger names when it is given
+// no sources.
+func SelectionApplies(config *Config) bool {
+	return config.SourceID == nil && config.PlannerManaged && config.IntegrationID != nil &&
+		!strings.EqualFold(strings.TrimSpace(config.Provider), "pagerduty")
+}
+
 // checkSelectedSources is the one scope guard of every trigger write. A nil
 // list is the scheduler's own selection and passes. A configuration pinned to
 // one source, a configuration that is not planner-managed, and PagerDuty
@@ -38,8 +49,7 @@ func (err UnselectedSourcesError) Error() string {
 // as before.
 func checkSelectedSources(ctx context.Context, tx pgx.Tx, config *Config, input MintInput) error {
 	sourceIDs := input.SourceIDs
-	if sourceIDs == nil || config.SourceID != nil || !config.PlannerManaged || config.IntegrationID == nil ||
-		strings.EqualFold(strings.TrimSpace(config.Provider), "pagerduty") {
+	if sourceIDs == nil || !SelectionApplies(config) {
 		return nil
 	}
 	canonical := make([]string, 0, len(sourceIDs))

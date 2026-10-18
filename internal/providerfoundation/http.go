@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -766,7 +767,8 @@ func (c *HTTPClient) authFailure(ctx context.Context, err error, attempt int) er
 
 func (c *HTTPClient) gatePenalizeFailed(ctx context.Context, path string, penalty time.Duration, err error) {
 	c.Metrics.RecordGatePenalizeError(c.Provider, path)
-	slog.WarnContext(ctx, "provider_gate_penalize_failed", "provider", c.Provider, "path", path, "penalty_ms", penalty.Milliseconds(), "error", err)
+	args := append([]any{"provider", c.Provider, "path", path, "penalty_ms", penalty.Milliseconds()}, logging.ErrorArgs(err)...)
+	slog.WarnContext(ctx, "provider_gate_penalize_failed", args...)
 }
 
 func (c *HTTPClient) observe(class ErrorClass) {

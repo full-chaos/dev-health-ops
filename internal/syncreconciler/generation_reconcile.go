@@ -53,6 +53,24 @@ WHERE outbox.kind <> 'finalize_sync_run'
 GROUP BY outbox.kind
 ORDER BY outbox.kind`
 
+// countOtherGenerationLiveFinalizeSQL counts the finalize deliveries at another generation that the reconcile must
+// not touch because their River job is there and not completed (available, running, retryable, scheduled, or ended
+// in a state another repair owns). They are candidates of no re-arm, so without this count an operator could not see them.
+const countOtherGenerationLiveFinalizeSQL = `
+SELECT count(*)
+FROM public.sync_dispatch_outbox AS outbox
+JOIN public.sync_runs AS run ON run.id=outbox.sync_run_id
+JOIN public.sync_dispatch_transport_routes AS route ON route.kind=outbox.kind
+JOIN %s AS job ON job.id=CASE
+    WHEN outbox.transport_job_id ~ '^[1-9][0-9]{0,17}$' THEN outbox.transport_job_id::bigint END
+WHERE outbox.kind='finalize_sync_run'
+    AND outbox.status='dispatched'
+    AND outbox.dispatched_transport='river'
+    AND outbox.dispatched_route_generation IS DISTINCT FROM route.generation
+    AND route.transport='river' AND NOT route.paused
+    AND ` + nonterminalSyncRunStatusPredicate + `
+    AND job.state <> 'completed'`
+
 // ReconcileOtherGenerations is run by the route commands (apply, pause, resume) after they changed a route's
 // generation, so the command does not leave deliveries of the old generation behind (chris, CHAOS-9964: "A command
 // shouldn't leave garbage around."). For finalize_sync_run it re-arms every delivery dispatched at another generation
@@ -84,13 +102,19 @@ func (repair *TerminalDeliveryRepair) ReconcileOtherGenerations(
 			}
 			report.Rearmed += outcome.Recovered
 			report.SkippedNotReady = outcome.SkippedNotReady
-			report.SkippedLiveJob = outcome.SkippedLiveJob
+			report.SkippedLiveJob += outcome.SkippedLiveJob
 			report.SkippedLockedJob = outcome.SkippedLockedJob
 			if outcome.Candidates < maximumStepLimit || outcome.Recovered == 0 {
 				break
 			}
 		}
+		live, err := repair.countOtherGenerationLive(ctx)
+		if err != nil {
+			return report, err
+		}
+		report.SkippedLiveJob += live
 		record(kind, "rearmed", report.Rearmed)
+		record(kind, "skipped_live_job", report.SkippedLiveJob)
 		slog.InfoContext(ctx, "syncreconciler.generation_reconcile",
 			"kind", kind, "rearmed", report.Rearmed, "skipped_not_ready", report.SkippedNotReady,
 			"skipped_live_job", report.SkippedLiveJob, "skipped_locked_job", report.SkippedLockedJob)
@@ -143,4 +167,20 @@ func (repair *TerminalDeliveryRepair) reconcileFinalizePass(ctx context.Context,
 		return readyFinalizeOutcome{}, ErrUnavailable
 	}
 	return outcome, nil
+}
+
+func (repair *TerminalDeliveryRepair) countOtherGenerationLive(ctx context.Context) (int, error) {
+	tx, err := repair.begin(ctx)
+	if err != nil || tx == nil {
+		return 0, ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var count int
+	if err := tx.QueryRow(ctx, repair.otherGenerationLiveQuery).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count live finalize deliveries at another generation: %w", ErrUnavailable)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, ErrUnavailable
+	}
+	return count, nil
 }

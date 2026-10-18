@@ -78,12 +78,12 @@ func TestRouteCommandReconcilesFinalizeDeliveriesLeftAtAnotherGeneration(t *test
 	})
 
 	for _, tc := range []struct {
-		name, state, sql string
-		wantNotReady     int
+		name, state, sql       string
+		wantNotReady, wantLive int
 	}{
-		{name: "available job", state: "available"},
-		{name: "running job", state: "running"},
-		{name: "retryable job", state: "retryable"},
+		{name: "available job", state: "available", wantLive: 1},
+		{name: "running job", state: "running", wantLive: 1},
+		{name: "retryable job", state: "retryable", wantLive: 1},
 		{name: "terminal run", state: "missing", sql: `UPDATE sync_runs SET status='success'`},
 		{name: "unfinished unit", state: "missing", sql: `UPDATE sync_run_units SET status='running'`, wantNotReady: 1},
 		{name: "paused route", state: "missing", sql: `UPDATE sync_dispatch_transport_routes SET paused=true,paused_at=now(),generation=generation+1 WHERE kind='finalize_sync_run'`},
@@ -102,8 +102,8 @@ func TestRouteCommandReconcilesFinalizeDeliveriesLeftAtAnotherGeneration(t *test
 				t.Fatal(err)
 			}
 			if status, _ := h.outboxState(t, ctx); report.Rearmed != 0 || status != "dispatched" ||
-				report.SkippedNotReady != tc.wantNotReady {
-				t.Fatalf("reconcile = %+v status=%s, want nothing re-armed, notReady=%d", report, status, tc.wantNotReady)
+				report.SkippedNotReady != tc.wantNotReady || report.SkippedLiveJob != tc.wantLive {
+				t.Fatalf("reconcile = %+v status=%s, want nothing re-armed, notReady=%d live=%d", report, status, tc.wantNotReady, tc.wantLive)
 			}
 		})
 	}

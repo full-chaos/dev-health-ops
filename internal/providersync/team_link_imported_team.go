@@ -29,13 +29,12 @@ type LinkTeamQuerier interface {
 // 2026-10-14 on CHAOS-9123: the switches stay independent, and such link rows
 // are not written). open says which rows the rule applies to: an open row of
 // a link kind that names a catalog team. A closed row is always kept (it
-// closes a row the store already holds), and so is a row of a kind whose team
-// is by design no teams row (the caller's open returns false for it). written names the teams the same run writes after
-// its links (they are imported too); a caller that writes its teams first
-// passes nil. A failed read is an error, before any write.
+// closes a row the store holds), and so is a row of a kind whose team id is
+// never a teams row (the caller's open returns false for it). A caller writes
+// its teams first: a team the same run imports is then a stored team. A failed read is an error, before any write.
 func KeepLinksOfImportedTeams[R any](
 	ctx context.Context, conn LinkTeamQuerier, orgID, provider, dataset string, rows []R,
-	teamID func(R) string, open func(R) bool, written []string,
+	teamID func(R) string, open func(R) bool,
 ) ([]R, error) {
 	if conn == nil || strings.TrimSpace(orgID) == "" {
 		return nil, ErrInvalidConfiguration
@@ -57,9 +56,6 @@ func KeepLinksOfImportedTeams[R any](
 	}
 	defer result.Close()
 	imported := map[string]bool{}
-	for _, id := range written {
-		imported[id] = true
-	}
 	for result.Next() {
 		var id string
 		if err := result.Scan(&id); err != nil {

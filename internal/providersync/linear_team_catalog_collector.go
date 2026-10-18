@@ -192,7 +192,7 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.MembershipsClosed = membershipOutcome.Closed
 		membershipRows, err = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, "linear", "team_memberships", membershipRows,
-			func(r linearReferenceMembershipRow) string { return r.TeamID }, func(r linearReferenceMembershipRow) bool { return r.ValidTo == nil }, nil)
+			func(r linearReferenceMembershipRow) string { return r.TeamID }, func(r linearReferenceMembershipRow) bool { return r.ValidTo == nil })
 		if err != nil {
 			return result, err
 		}
@@ -253,7 +253,7 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 				"org_id", ref.OrgID, "rows", retracted)
 		}
 		ownershipRows, err = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, "linear", "team_project_ownership", ownershipRows,
-			func(r linearReferenceOwnershipRow) string { return r.TeamID }, func(r linearReferenceOwnershipRow) bool { return r.ValidTo == nil }, nil)
+			func(r linearReferenceOwnershipRow) string { return r.TeamID }, func(r linearReferenceOwnershipRow) bool { return r.ValidTo == nil })
 		if err != nil {
 			return result, err
 		}

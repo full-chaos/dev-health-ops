@@ -253,10 +253,10 @@ func TestARunRetractsWhatTheSnapshotNoLongerHas(t *testing.T) {
 	}
 }
 
-// r1 finding: a failed write left an earlier table committed. The catalog row
-// is written last, so a failure leaves no listed team without its members, and
-// the error names what was committed.
-func TestAFailedWriteLeavesNoTeamWithoutItsMembers(t *testing.T) {
+// A failed write leaves an earlier table committed; the error names what was
+// committed. The catalog rows are written first, so a failure never leaves a
+// link of a team that has no teams row (CHAOS-9123); a re-run writes the links.
+func TestAFailedWriteLeavesNoLinkWithoutItsTeam(t *testing.T) {
 	conn := openClickHouse(t)
 	ctx := context.Background()
 	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
@@ -272,11 +272,15 @@ func TestAFailedWriteLeavesNoTeamWithoutItsMembers(t *testing.T) {
 	// write time, after memberships were committed.
 	exec(t, conn, `ALTER TABLE team_project_ownership ADD CONSTRAINT never_writable CHECK 1 = 0`)
 	_, err = Write(ctx, conn, "org-1", rows, everything, soleScope(), everyAbsentFactIsGone{})
-	if err == nil || !strings.Contains(err.Error(), "write team project ownership") || !strings.Contains(err.Error(), "already written: team memberships") {
-		t.Fatalf("err = %v, want the failing stage and the committed one named", err)
+	if err == nil || !strings.Contains(err.Error(), "write team project ownership") || !strings.Contains(err.Error(), "already written: teams, team memberships") {
+		t.Fatalf("err = %v, want the failing stage and the committed ones named", err)
 	}
-	if got := lines(t, conn, `SELECT toString(count()) FROM teams WHERE org_id = 'org-1' AND provider = 'jira'`); got[0] != "0" {
-		t.Fatalf("%s teams committed although a later table failed", got[0])
+	if got := lines(t, conn, `SELECT toString(count()) FROM teams WHERE org_id = 'org-1' AND provider = 'jira'`); got[0] == "0" {
+		t.Fatal("no teams row committed before the links")
+	}
+	if got := lines(t, conn, `SELECT toString(count()) FROM team_memberships FINAL WHERE org_id = 'org-1' AND valid_to IS NULL
+		AND team_id NOT IN (SELECT id FROM teams WHERE org_id = 'org-1')`); got[0] != "0" {
+		t.Fatalf("%s open memberships name a team with no teams row", got[0])
 	}
 }
 

@@ -99,10 +99,12 @@ const (
 // Write stores the rows of one collection and retracts what the snapshot no
 // longer has.
 //
-// The team catalog row is written LAST: ClickHouse has no transaction across
-// tables, so a failure part way leaves memberships and project links without
-// their catalog row (a re-run repairs it) rather than a listed team without
-// its members. The error names the stages already committed.
+// The team catalog rows are written FIRST: ClickHouse has no transaction
+// across tables, and a link row is written only for a team that has a teams
+// row (providersync.KeepLinksOfImportedTeams, CHAOS-9123), so a failure part
+// way leaves a listed team without some of its links (a re-run writes them),
+// never a link of a team with no teams row. The error names the stages
+// already committed.
 //
 // Retraction: the members and project links an Atlassian team held before and
 // the snapshot omits (a person who left, a project it stopped working on, an
@@ -246,40 +248,10 @@ func Write(
 		}
 		return result, fmt.Errorf("%s: %w", stage, err)
 	}
-	// The links are written before the teams: the teams this run writes are
-	// imported teams for them.
-	var teamsWritten []string
-	if selections.Structure {
-		for _, team := range teamsToWrite {
-			teamsWritten = append(teamsWritten, team.ID)
-		}
-	}
-	if selections.Members && (len(memberships) > 0 || len(expiredMemberships) > 0) {
-		if err := writeMemberships(ctx, conn, orgID, memberships, expiredMemberships, now, teamsWritten); err != nil {
-			return fail("write team memberships", err)
-		}
-		result.MembershipsWritten = len(memberships)
-		result.MembersWritten = distinctAtlassianMembers(memberships)
-		result.ExpiredMemberships = len(expiredMemberships)
-		done = append(done, "team memberships")
-	}
-	if selections.Projects && (len(ownership) > 0 || len(expiredOwnership) > 0) {
-		if err := writeOwnership(ctx, conn, orgID, ownership, expiredOwnership, now, teamsWritten); err != nil {
-			return fail("write team project ownership", err)
-		}
-		result.ExpiredOwnership = len(expiredOwnership)
-		done = append(done, "team project ownership")
-	}
-	if selections.Projects {
-		// Set after the write: a failed write returns above with nothing counted. The rows the run found are
-		// counted whether or not any was written; the unchanged ones were not written again.
-		result.OwnershipWritten = len(rows.Ownership)
-		result.OwnershipUnchanged = ownershipUnchanged
-		if ownershipUnchanged > 0 {
-			slog.Default().InfoContext(ctx, "atlassian_teams_ownership_unchanged",
-				"org_id", orgID, "fresh", len(rows.Ownership), "unchanged", ownershipUnchanged, "written", len(ownership))
-		}
-	}
+	// The teams are written before their links: a link row is written only
+	// for a team that has a teams row (KeepLinksOfImportedTeams), so a run
+	// that fails between the two leaves no link of a team it did not import;
+	// a re-run writes the links.
 	if selections.Structure && (len(teamsToWrite) > 0 || len(deactivate) > 0) {
 		// The catalog row's project keys follow the links: a run that closes
 		// no link of a team (the snapshot is not complete, or a link of the
@@ -303,6 +275,33 @@ func Write(
 			result.TeamKeys = append(result.TeamKeys, team.NativeTeamKey)
 		}
 		result.DeactivatedTeams = len(deactivate)
+		done = append(done, "teams")
+	}
+	if selections.Members && (len(memberships) > 0 || len(expiredMemberships) > 0) {
+		if err := writeMemberships(ctx, conn, orgID, memberships, expiredMemberships, now); err != nil {
+			return fail("write team memberships", err)
+		}
+		result.MembershipsWritten = len(memberships)
+		result.MembersWritten = distinctAtlassianMembers(memberships)
+		result.ExpiredMemberships = len(expiredMemberships)
+		done = append(done, "team memberships")
+	}
+	if selections.Projects && (len(ownership) > 0 || len(expiredOwnership) > 0) {
+		if err := writeOwnership(ctx, conn, orgID, ownership, expiredOwnership, now); err != nil {
+			return fail("write team project ownership", err)
+		}
+		result.ExpiredOwnership = len(expiredOwnership)
+		done = append(done, "team project ownership")
+	}
+	if selections.Projects {
+		// Set after the write: a failed write returns above with nothing counted. The rows the run found are
+		// counted whether or not any was written; the unchanged ones were not written again.
+		result.OwnershipWritten = len(rows.Ownership)
+		result.OwnershipUnchanged = ownershipUnchanged
+		if ownershipUnchanged > 0 {
+			slog.Default().InfoContext(ctx, "atlassian_teams_ownership_unchanged",
+				"org_id", orgID, "fresh", len(rows.Ownership), "unchanged", ownershipUnchanged, "written", len(ownership))
+		}
 	}
 	return result, nil
 }
@@ -670,9 +669,9 @@ func readProjectKeys(ctx context.Context, conn driver.Conn, orgID string, ids []
 	return keys, result.Err()
 }
 
-func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows []MembershipRow, expired []openMembership, now time.Time, teamsWritten []string) error {
+func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows []MembershipRow, expired []openMembership, now time.Time) error {
 	rows, err := providersync.KeepLinksOfImportedTeams(ctx, conn, orgID, Provider, "team_memberships", rows,
-		func(r MembershipRow) string { return r.TeamID }, func(MembershipRow) bool { return true }, teamsWritten)
+		func(r MembershipRow) string { return r.TeamID }, func(MembershipRow) bool { return true })
 	if err != nil {
 		return err
 	}
@@ -712,9 +711,9 @@ func optionalText(value string) *string {
 	return nil
 }
 
-func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []OwnershipRow, expired []openOwnership, now time.Time, teamsWritten []string) error {
+func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []OwnershipRow, expired []openOwnership, now time.Time) error {
 	rows, err := providersync.KeepLinksOfImportedTeams(ctx, conn, orgID, Provider, "team_project_ownership", rows,
-		func(r OwnershipRow) string { return r.TeamID }, func(OwnershipRow) bool { return true }, teamsWritten)
+		func(r OwnershipRow) string { return r.TeamID }, func(OwnershipRow) bool { return true })
 	if err != nil {
 		return err
 	}

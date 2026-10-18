@@ -824,7 +824,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 			return result, reuseErr
 		}
 		keptMemberships, reuseErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_memberships", keptMemberships,
-			func(r jiraTeamCatalogMembershipRow) string { return r.TeamID }, func(r jiraTeamCatalogMembershipRow) bool { return r.ValidTo == nil }, nil)
+			func(r jiraTeamCatalogMembershipRow) string { return r.TeamID }, func(r jiraTeamCatalogMembershipRow) bool { return r.ValidTo == nil })
 		if reuseErr != nil {
 			return result, reuseErr
 		}
@@ -944,7 +944,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 			func(r jiraTeamCatalogOwnershipRow) string { return r.TeamID },
 			func(r jiraTeamCatalogOwnershipRow) bool {
 				return r.ValidTo == nil && r.Source != jiraTeamCatalogLegacySource
-			}, nil)
+			})
 		if openErr != nil {
 			return result, openErr
 		}

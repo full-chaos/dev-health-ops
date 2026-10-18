@@ -230,6 +230,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 
 	jql := jiraWorkItemsJQL(claim, projectKey)
 	issues, searchPages, err := collectJiraAtlassianIssues(ctx, client, jql, maxPages, maxRows, perPage)
+	logJiraWorkItemsWindow(ctx, claim, projectKey, jql, len(issues), searchPages, err)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

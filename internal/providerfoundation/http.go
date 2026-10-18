@@ -555,6 +555,9 @@ func (b *peekedBody) Read(p []byte) (int, error) {
 	if b.offset < len(b.peeked) {
 		n := copy(p, b.peeked[b.offset:])
 		b.offset += n
+		if b.offset == len(b.peeked) && b.err != nil {
+			return n, b.err // the original body returned its data and error together
+		}
 		return n, nil
 	}
 	if b.err != nil {

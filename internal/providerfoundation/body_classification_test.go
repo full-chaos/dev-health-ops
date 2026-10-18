@@ -179,3 +179,27 @@ func TestDoUnauthenticatedLeavesBodiesOfOtherFailuresUnread(t *testing.T) {
 		}
 	}
 }
+
+type dataAndError struct{ done bool }
+
+func (d *dataAndError) Read(p []byte) (int, error) {
+	if d.done {
+		return 0, io.EOF
+	}
+	d.done = true
+	return copy(p, "body"), io.ErrUnexpectedEOF
+}
+
+// A body that returns its data and its error in one Read keeps doing so.
+func TestDoUnauthenticatedKeepsDataAndErrorOfOneRead(t *testing.T) {
+	t.Parallel()
+	response, err := unauthenticatedWithBody(t, http.StatusForbidden, io.NopCloser(&dataAndError{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 16)
+	n, readErr := response.Body.Read(buffer)
+	if n != 4 || string(buffer[:n]) != "body" || !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		t.Fatalf("Read() = %d, %v, %q; want 4, io.ErrUnexpectedEOF, body", n, readErr, buffer[:n])
+	}
+}

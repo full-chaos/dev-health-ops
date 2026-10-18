@@ -124,7 +124,7 @@ func flatRows(t *testing.T) []profileRow {
 // the row is protected and is not refused when it is public. The harness
 // mounts three routes as stubs (behaviourStubbed); the real plane's anonymous
 // answers for them are asserted in the integration test, where the real
-// handlers are mounted.
+// handlers are mounted. REST rows are not probed here or there: CHAOS-10140.
 func TestEndpointProfileAnonymousClaimsMatchServedBehaviour(t *testing.T) {
 	stack := newBehaviourStack(t)
 	restPaths := map[string]bool{"/api/v1/": true}

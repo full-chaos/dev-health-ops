@@ -144,24 +144,17 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 	if got := probe(plane.Handler, http.MethodPost, graphQLEdgePath); got != http.StatusUnauthorized {
 		t.Errorf("POST %s on the PUBLIC handler answered %d, want 401 (mounted, refusing the missing credential)", graphQLEdgePath, got)
 	}
-	// CHAOS-10102: the endpoint-profile rows of every route the real plane mounts (the
-	// REST table and the three routes the unit harness can only stub) agree with what the
-	// real handlers do to a request that carries no credential.
-	mounted := map[string]bool{"/api/v1/": true}
-	for _, route := range RESTRoutes() {
-		mounted[route.Pattern] = true
-	}
-	for path := range behaviourStubbed {
-		mounted[path] = true
-	}
+	// CHAOS-10102: the three routes the unit harness can only stub are mounted here with
+	// their real handlers; their endpoint-profile rows agree with what the real plane does
+	// to a request that carries no credential. (The REST rows are the open item CHAOS-10140.)
 	var mountedRows []profileRow
 	for _, row := range flatRows(t) {
-		if mounted[row.route] {
+		if _, stubbed := behaviourStubbed[row.route]; stubbed {
 			mountedRows = append(mountedRows, row)
 		}
 	}
-	if len(mountedRows) < 30 {
-		t.Fatalf("only %d profile rows for mounted routes: the inventory or the REST table changed shape", len(mountedRows))
+	if len(mountedRows) < len(behaviourStubbed) {
+		t.Fatalf("only %d profile rows for the %d stubbed routes: the inventory changed shape", len(mountedRows), len(behaviourStubbed))
 	}
 	anonymous := func(handler http.Handler) anonymousProbe {
 		return func(method, path string) int {

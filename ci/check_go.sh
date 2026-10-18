@@ -110,7 +110,7 @@ usage() {
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
          registered parser (each its own proof marker), govulncheck pinned and strict. STAGE is
-         fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all.
+         fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|closure|relevant BASE HEAD|paths-selftest|scope-selftest|all.
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
   test   Run go test ./... in every Go module.
@@ -3257,6 +3257,28 @@ check_auth_vuln() {
   rm -f "${report}"
 }
 
+# check_auth_closure: CHAOS-10131. Every module in the `go list -deps` closure of
+# the two auth binaries must be a row of ci/auth_closure_allow.tsv. A ClickHouse
+# driver or any other new module entering the closure fails here, not at review.
+check_auth_closure() {
+  local actual allowed extra stale
+  actual="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -deps \
+    -f '{{if .Module}}{{.Module.Path}}{{end}}' ./cmd/auth-service ./cmd/auth-migrate | LC_ALL=C sort -u | sed '/^$/d')"
+  [ -n "${actual}" ] || die "auth closure: go list returned no modules"
+  allowed="$(awk -F'\t' '$1 !~ /^#/ && $1 != "" { print $1 }' "${ROOT}/ci/auth_closure_allow.tsv" | LC_ALL=C sort -u)"
+  extra="$(LC_ALL=C comm -23 <(printf '%s\n' "${actual}") <(printf '%s\n' "${allowed}"))"
+  stale="$(LC_ALL=C comm -13 <(printf '%s\n' "${actual}") <(printf '%s\n' "${allowed}"))"
+  if [ -n "${stale}" ]; then
+    printf 'auth closure: ci/auth_closure_allow.tsv lists modules the binaries no longer link (remove the rows):\n%s\n' "${stale}" >&2
+    return 1
+  fi
+  if [ -n "${extra}" ]; then
+    printf 'auth closure: the auth binaries link modules outside ci/auth_closure_allow.tsv:\n%s\n' "${extra}" >&2
+    return 1
+  fi
+  printf 'auth closure: %s modules, all allowed\n' "$(printf '%s\n' "${actual}" | wc -l | tr -d ' ')"
+}
+
 # check_auth_middleware: G-69. Runs the production-stack test verbosely and
 # fails unless it logged its marker: the test mounted the real middleware stack
 # (built from the service's own apiServerOptions) and drove it. A green test
@@ -3311,7 +3333,7 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|ci/auth_gate_scope_exempt.txt|ci/auth_scope_candidates.py|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_scope_candidates.py|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac
@@ -3420,6 +3442,7 @@ check_auth() {
     fuzz-registry) check_auth_fuzz_registry ;;
     vuln) check_auth_vuln ;;
     middleware) check_auth_middleware ;;
+    closure) check_auth_closure ;;
     relevant)
       [ "$#" -eq 3 ] || die "auth relevant accepts BASE HEAD"
       auth_relevant "$2" "$3"
@@ -3434,6 +3457,7 @@ check_auth() {
       check_auth_test
       check_auth_race
       check_auth_middleware
+      check_auth_closure
       check_auth_fuzz
       check_auth_vuln
       ;;

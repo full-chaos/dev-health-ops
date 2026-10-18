@@ -110,6 +110,8 @@ jobs:
         run: bash ci/check_go.sh auth test
       - name: go test -race (auth packages)
         run: bash ci/check_go.sh auth race
+      - name: Dependency closure of the auth binaries (CHAOS-10131)
+        run: bash ci/check_go.sh auth closure
       - name: Production middleware stack is mounted and driven (G-69)
         run: bash ci/check_go.sh auth middleware
 

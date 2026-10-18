@@ -16,12 +16,18 @@ const (
 )
 
 // AuthorizationObligations are the enforceable obligations of an allow.
+//
+// Every member is a pointer so ABSENT and EMPTY/FALSE stay different on the way
+// back out: repository_allowlist [] means none while an absent member means
+// unrestricted within the tenant, and a value-typed slice with omitempty drops
+// both. A consumer that re-marshals parsed obligations must send what it was
+// sent.
 type AuthorizationObligations struct {
-	TenantScope         string   `json:"tenant_scope,omitempty"`
-	RepositoryAllowlist []string `json:"repository_allowlist,omitempty"`
-	Redaction           []string `json:"redaction,omitempty"`
-	MinimumAssurance    string   `json:"minimum_assurance,omitempty"`
-	StepUp              bool     `json:"step_up,omitempty"`
+	TenantScope         *string   `json:"tenant_scope,omitempty"`
+	RepositoryAllowlist *[]string `json:"repository_allowlist,omitempty"`
+	Redaction           *[]string `json:"redaction,omitempty"`
+	MinimumAssurance    *string   `json:"minimum_assurance,omitempty"`
+	StepUp              *bool     `json:"step_up,omitempty"`
 }
 
 // AuthorizationDecision is one authorization_decision.v1, validated and parsed.

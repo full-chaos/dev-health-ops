@@ -294,7 +294,7 @@ func TestADisagreeingBatchKeepsEachDecisionBoundToItsOwnRequest(t *testing.T) {
 func TestADecisionParsesToItsVerdictAndObligations(t *testing.T) {
 	root := testRoot(t)
 	allow, err := ParseAuthorizationDecision(root, authorizationBytes(t, AuthorizationDecisionSurface, "decision-valid-allow-with-obligations.json"), authorizationNow)
-	if err != nil || !allow.Allowed || allow.Obligations == nil || allow.Obligations.MinimumAssurance != "aal2" {
+	if err != nil || !allow.Allowed || allow.Obligations == nil || allow.Obligations.MinimumAssurance == nil || *allow.Obligations.MinimumAssurance != "aal2" {
 		t.Fatalf("allow parsed wrong: %+v, %v", allow, err)
 	}
 	if allow.PolicyRevision != 42 {
@@ -357,5 +357,65 @@ func TestADecisionIsUsableOnlyStrictlyBeforeItsExpiry(t *testing.T) {
 	}
 	if _, err := ParseAuthorizationBatchResponse(root, request, response, expiry); err == nil {
 		t.Error("an expired batch item escaped")
+	}
+}
+
+func TestParsedObligationsMarshalBackToWhatWasSent(t *testing.T) {
+	// Absent versus empty versus false must survive a parse and re-marshal, for
+	// every decision the corpus accepts: an empty allowlist means none, an
+	// absent one means unrestricted within the tenant.
+	root := testRoot(t)
+	checked := 0
+	for _, entry := range loadAuthorizationManifest(t).Accept {
+		if entry.Surface != AuthorizationDecisionSurface {
+			continue
+		}
+		t.Run(entry.File, func(t *testing.T) {
+			raw := authorizationBytes(t, AuthorizationDecisionSurface, entry.File)
+			decision, err := ParseAuthorizationDecision(root, raw, authorizationNow)
+			if err != nil {
+				t.Fatalf("accept fixture was refused: %v", err)
+			}
+			var sent struct {
+				Obligations map[string]any `json:"obligations"`
+			}
+			if err := json.Unmarshal(raw, &sent); err != nil {
+				t.Fatal(err)
+			}
+			var back map[string]any
+			if decision.Obligations != nil {
+				out, err := json.Marshal(decision.Obligations)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(out, &back); err != nil {
+					t.Fatal(err)
+				}
+			}
+			a, _ := json.Marshal(sent.Obligations)
+			b, _ := json.Marshal(back)
+			if string(a) != string(b) {
+				t.Fatalf("obligations changed on the way out:\n sent %s\n back %s", a, b)
+			}
+			checked++
+		})
+	}
+	if checked == 0 {
+		t.Fatal("checked no decision fixture")
+	}
+}
+
+func TestTheTypedParserRefusesAnImpossibleCalendarDate(t *testing.T) {
+	// The timestamp pattern checks shape only, and google/jsonschema-go ignores
+	// `format`, so Validate alone accepts 2026-02-30 (Python and ajv reject it by
+	// format). The typed parser must refuse it regardless of which validator ran.
+	root := testRoot(t)
+	raw := strings.Replace(string(authorizationBytes(t, AuthorizationDecisionSurface, "decision-valid-deny.json")),
+		"2026-09-03T05:00:30Z", "2026-02-30T05:00:30Z", 1)
+	if !strings.Contains(raw, "2026-02-30") {
+		t.Fatal("fixture no longer carries the expected expiry; the probe would be vacuous")
+	}
+	if decision, err := ParseAuthorizationDecision(root, []byte(raw), authorizationNow); err == nil {
+		t.Fatalf("an impossible expiry date parsed: %+v", decision)
 	}
 }

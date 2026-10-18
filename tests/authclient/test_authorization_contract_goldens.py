@@ -237,3 +237,12 @@ def test_a_naive_now_is_refused() -> None:
     raw = _bytes(DECISION_SURFACE, "decision-valid-deny.json")
     with pytest.raises(ContractError, match="timezone"):
         parse_decision_bytes(raw, now=datetime(2026, 9, 3, 5, 0, 0))
+
+
+def test_the_typed_parser_refuses_an_impossible_calendar_date() -> None:
+    raw = _bytes(DECISION_SURFACE, "decision-valid-deny.json").replace(
+        b"2026-09-03T05:00:30Z", b"2026-02-30T05:00:30Z"
+    )
+    assert b"2026-02-30" in raw
+    with pytest.raises(ContractError):
+        parse_decision_bytes(raw, now=NOW)

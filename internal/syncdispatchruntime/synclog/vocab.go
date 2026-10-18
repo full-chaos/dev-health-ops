@@ -28,6 +28,7 @@ var (
 	MsgDispatchSyncRunBudgetSurplusWithdrawn             = Msg{"dispatch_sync_run.budget_surplus_withdrawn"}
 	MsgDispatchSyncRunClaimDeferredOutsideGuardSnapshot  = Msg{"dispatch_sync_run.claim_deferred_outside_guard_snapshot"}
 	MsgSyncDispatchAdmissionCaps                         = Msg{"sync_dispatch_admission_caps"}
+	MsgTeamsInsertCarriesProviderIdentity                = Msg{"teams_insert.carries_provider_identity"}
 	MsgDispatchGuardBucketDecision                       = Msg{"dispatch_guard.bucket_decision"}
 	MsgDispatchSyncRunBudgetEstimateUnitFailed           = Msg{"dispatch_sync_run.budget_estimate_unit_failed"}
 	MsgDispatchSyncRunLockBusyRequeued                   = Msg{"dispatch_sync_run.lock_busy_requeued"}
@@ -109,6 +110,10 @@ var (
 	KeyLockWaitBudget               = Key{"lock_wait_budget"}
 	KeyInvalidClaimUnits            = Key{"invalid_claim_units"}
 	KeyCappedCount                  = Key{"capped_count"}
+	KeyTeamRows                     = Key{"rows"}
+	KeyGoneKept                     = Key{"gone_kept"}
+	KeyGoneCleared                  = Key{"gone_cleared"}
+	KeyGoneStated                   = Key{"gone_stated"}
 	KeyUnroutableUnits              = Key{"unroutable_units"}
 	KeyTerminalDeliveryPublishes    = Key{"terminal_delivery_publishes"}
 	KeyQueuedUnits                  = Key{"queued_units"}

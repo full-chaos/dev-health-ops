@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 )
 
 // Gone says what a version does with gone_at.
@@ -140,6 +142,13 @@ func Insert(ctx context.Context, conn Execer, orgID string, columns []string, ro
 		}
 		ordinals[r] = uint32(r)
 	}
+	var rules [3]int
+	for _, row := range rows {
+		rules[row.Gone]++
+	}
+	synclog.Default().Debug(ctx, synclog.MsgTeamsInsertCarriesProviderIdentity,
+		synclog.Count(synclog.KeyTeamRows, len(rows)), synclog.Count(synclog.KeyGoneKept, rules[GoneKept]),
+		synclog.Count(synclog.KeyGoneCleared, rules[GoneCleared]), synclog.Count(synclog.KeyGoneStated, rules[GoneStated]))
 	args := make([]any, 0, len(columns)+8)
 	for c := range columns {
 		args = append(args, clickhouse.Named(fmt.Sprintf("v%d", c), params[c]))

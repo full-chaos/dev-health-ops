@@ -36,15 +36,6 @@ var probeMethods = []string{
 	http.MethodPatch, http.MethodDelete, http.MethodOptions,
 }
 
-// behaviourStubbed are routes the harness mounts with a stub handler because
-// the real one needs a database: the probe cannot speak for them, so their
-// rows are checked for presence and listener only.
-var behaviourStubbed = map[string]string{
-	"/query/proof":         "mounted with a stub: the real handler is the /query pipeline over a database",
-	"/query/proof-write":   "mounted with a stub: the real handler is the /query pipeline over a database",
-	"/query/run-operation": "mounted with a stub: the real handler is the /query pipeline over a database",
-}
-
 type behaviourStack struct {
 	handlers map[string]http.Handler
 	envelope string
@@ -57,7 +48,7 @@ func newBehaviourStack(t *testing.T) *behaviourStack {
 		switch name {
 		case deploymentEnvEnv:
 			return "development"
-		case proofRouteEnabledEnv:
+		case proofRouteEnabledEnv, proofWriteRouteEnabledEnv:
 			return "true"
 		}
 		return ""
@@ -75,16 +66,15 @@ func newBehaviourStack(t *testing.T) *behaviourStack {
 		w.WriteHeader(http.StatusOK)
 	}))
 	query := newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil)
-	stub := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 
 	publicMux, internalMux, mcpMux := http.NewServeMux(), http.NewServeMux(), http.NewServeMux()
 	mountQueryRouteSets(getenv, publicMux, internalMux, mcpMux, queryRouteHandlers{
 		Query:        query,
 		Registry:     newRegistryHandler("digest", map[string]string{"probe": digestHex(iaDocument)}),
 		BuildInfo:    newBuildInfoHandler(verifier),
-		Proof:        stub,
-		ProofWrite:   stub,
-		RunOperation: stub,
+		Proof:        query,
+		ProofWrite:   query,
+		RunOperation: query,
 		MCP:          newMCPHandlerWithLimits(&countingMCPClient{}, nil, allMCPRootsEnabled(), getenv, mcpDefaultLimits()),
 	}, graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes})
 	handler := markResponseModelRoutes(publicMux)
@@ -119,7 +109,7 @@ func (s *behaviourStack) do(listener, method, path, carrier string) int {
 	switch {
 	case path == "/graphql" && (method == http.MethodGet || method == http.MethodHead):
 		request = httptest.NewRequest(method, "/graphql?org_id="+ecOrg.String()+"&query="+url.QueryEscape(iaDocument), nil)
-	case path == "/query" || path == "/graphql":
+	case path == "/query" || path == "/graphql" || strings.HasPrefix(path, "/query/"):
 		request = httptest.NewRequest(method, path, strings.NewReader(`{"query":`+jsonQuoteString(iaDocument)+`}`))
 		request.Header.Set("Content-Type", "application/json")
 	default:
@@ -222,12 +212,6 @@ func TestEndpointProfileRowsMatchServedBehaviour(t *testing.T) {
 		at := strings.LastIndex(token, "@")
 		path, listener := token[:at], token[at+1:]
 		if restPaths[path] || path == "/api/v1/" {
-			continue
-		}
-		if reason, stubbed := behaviourStubbed[path]; stubbed {
-			if len(rowFor(rows[path], listener)) == 0 {
-				t.Errorf("%s: stubbed in the harness (%s) and has no row", token, reason)
-			}
 			continue
 		}
 		t.Run(token, func(t *testing.T) {

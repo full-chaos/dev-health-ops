@@ -295,10 +295,11 @@ printf 'step 8b: the Service reaches the pod (DNS name, endpoints, both ports)\n
 ep="$(K get endpoints "${RELEASE}-dev-health-auth-service" -o jsonpath='{.subsets[0].addresses[0].ip}')"
 printf 'Service endpoint: %s (pod %s)\n' "${ep}" "${POD_IP}"
 [ "${ep}" = "${POD_IP}" ] || die "the Service does not select the pod"
-via_svc="$(fetch consumer2 role=auth-consumer "http://${RELEASE}-dev-health-auth-service:8095/anything")"
+SVC_HOST="${RELEASE}-dev-health-auth-service"
+via_svc="$(fetch consumer2 role=auth-consumer "http://${SVC_HOST}:8095/anything")"
 printf 'consumer -> Service API port: %s\n' "${via_svc}"
 grep -q 'HTTP/1.1 404' <<<"${via_svc}" || die "the Service does not route to the API port"
-ops_svc="$(fetch scraper2 role=auth-scraper "http://${RELEASE}-dev-health-auth-service:8096/readyz")"
+ops_svc="$(fetch scraper2 role=auth-scraper "http://${SVC_HOST}:8096/readyz")"
 printf 'scraper -> Service operator port: %s\n' "${ops_svc}"
 grep -q 'rc=0' <<<"${ops_svc}" || die "the Service does not publish the operator port to listed scrapers"
 

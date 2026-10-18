@@ -962,8 +962,16 @@ type ComplexityRoot struct {
 		Improved func(childComplexity int) int
 		Key      func(childComplexity int) int
 		Metrics  func(childComplexity int) int
+		Sizing   func(childComplexity int) int
 		Title    func(childComplexity int) int
 		Worsened func(childComplexity int) int
+	}
+
+	OperatingReviewSizing struct {
+		Measure          func(childComplexity int) int
+		SizingCoverage   func(childComplexity int) int
+		UnsizedUnitCount func(childComplexity int) int
+		WorkUnitCount    func(childComplexity int) int
 	}
 
 	PageInfo struct {
@@ -6028,6 +6036,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.OperatingReviewSection.Metrics(childComplexity), true
 
+	case "OperatingReviewSection.sizing":
+		if e.complexity.OperatingReviewSection.Sizing == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewSection.Sizing(childComplexity), true
+
 	case "OperatingReviewSection.title":
 		if e.complexity.OperatingReviewSection.Title == nil {
 			break
@@ -6041,6 +6056,34 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.OperatingReviewSection.Worsened(childComplexity), true
+
+	case "OperatingReviewSizing.measure":
+		if e.complexity.OperatingReviewSizing.Measure == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewSizing.Measure(childComplexity), true
+
+	case "OperatingReviewSizing.sizingCoverage":
+		if e.complexity.OperatingReviewSizing.SizingCoverage == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewSizing.SizingCoverage(childComplexity), true
+
+	case "OperatingReviewSizing.unsizedUnitCount":
+		if e.complexity.OperatingReviewSizing.UnsizedUnitCount == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewSizing.UnsizedUnitCount(childComplexity), true
+
+	case "OperatingReviewSizing.workUnitCount":
+		if e.complexity.OperatingReviewSizing.WorkUnitCount == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewSizing.WorkUnitCount(childComplexity), true
 
 	case "PageInfo.endCursor":
 		if e.complexity.PageInfo.EndCursor == nil {
@@ -11041,6 +11084,16 @@ enum OperatingReviewMetricScope {
   ORGANIZATION
 }
 
+"""
+What the Investment section's work is measured in and how much of it is sized (CHAOS-9873, D6027, D6032). ISSUE_SIZE weighs each work unit by its issue size, an unsized unit counts 1; WORK_UNITS counts each unit 1. The sizing fields are read over the week's units, the ones the section's current-week values come from. They are null unless ` + "`" + `` + "`" + `measure` + "`" + `` + "`" + ` is ISSUE_SIZE, and null when the week holds no unit: null is "not measured", never 0.
+"""
+type OperatingReviewSizing {
+  measure: SankeyValueUnit!
+  sizingCoverage: Float
+  unsizedUnitCount: Int
+  workUnitCount: Int
+}
+
 type OperatingReviewSection {
   key: String!
   title: String!
@@ -11048,6 +11101,10 @@ type OperatingReviewSection {
   changed: [String!]!
   improved: [String!]!
   worsened: [String!]!
+  """
+  The measure and the sizing coverage of the section (CHAOS-9873). Null for every section but investment. The investment section is read in ISSUE_SIZE only for a document that selects measure, sizingCoverage, unsizedUnitCount and workUnitCount here, so a client never receives issue-size values it cannot label (D6027); any other document reads WORK_UNITS and gets measure WORK_UNITS with the sizing fields null.
+  """
+  sizing: OperatingReviewSizing
 }
 
 type PageInfo {
@@ -42483,6 +42540,8 @@ func (ec *executionContext) fieldContext_OperatingReview_sections(_ context.Cont
 				return ec.fieldContext_OperatingReviewSection_improved(ctx, field)
 			case "worsened":
 				return ec.fieldContext_OperatingReviewSection_worsened(ctx, field)
+			case "sizing":
+				return ec.fieldContext_OperatingReviewSection_sizing(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type OperatingReviewSection", field.Name)
 		},
@@ -43534,6 +43593,224 @@ func (ec *executionContext) fieldContext_OperatingReviewSection_worsened(_ conte
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _OperatingReviewSection_sizing(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewSection) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewSection_sizing(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Sizing, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.OperatingReviewSizing)
+	fc.Result = res
+	return ec.marshalOOperatingReviewSizing2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐOperatingReviewSizing(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewSection_sizing(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewSection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "measure":
+				return ec.fieldContext_OperatingReviewSizing_measure(ctx, field)
+			case "sizingCoverage":
+				return ec.fieldContext_OperatingReviewSizing_sizingCoverage(ctx, field)
+			case "unsizedUnitCount":
+				return ec.fieldContext_OperatingReviewSizing_unsizedUnitCount(ctx, field)
+			case "workUnitCount":
+				return ec.fieldContext_OperatingReviewSizing_workUnitCount(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type OperatingReviewSizing", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _OperatingReviewSizing_measure(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewSizing) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewSizing_measure(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Measure, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.SankeyValueUnit)
+	fc.Result = res
+	return ec.marshalNSankeyValueUnit2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSankeyValueUnit(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewSizing_measure(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewSizing",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type SankeyValueUnit does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _OperatingReviewSizing_sizingCoverage(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewSizing) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewSizing_sizingCoverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SizingCoverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewSizing_sizingCoverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewSizing",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _OperatingReviewSizing_unsizedUnitCount(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewSizing) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewSizing_unsizedUnitCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UnsizedUnitCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewSizing_unsizedUnitCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewSizing",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _OperatingReviewSizing_workUnitCount(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewSizing) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewSizing_workUnitCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.WorkUnitCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewSizing_workUnitCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewSizing",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -74855,6 +75132,53 @@ func (ec *executionContext) _OperatingReviewSection(ctx context.Context, sel ast
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "sizing":
+			out.Values[i] = ec._OperatingReviewSection_sizing(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var operatingReviewSizingImplementors = []string{"OperatingReviewSizing"}
+
+func (ec *executionContext) _OperatingReviewSizing(ctx context.Context, sel ast.SelectionSet, obj *model.OperatingReviewSizing) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, operatingReviewSizingImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("OperatingReviewSizing")
+		case "measure":
+			out.Values[i] = ec._OperatingReviewSizing_measure(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sizingCoverage":
+			out.Values[i] = ec._OperatingReviewSizing_sizingCoverage(ctx, field, obj)
+		case "unsizedUnitCount":
+			out.Values[i] = ec._OperatingReviewSizing_unsizedUnitCount(ctx, field, obj)
+		case "workUnitCount":
+			out.Values[i] = ec._OperatingReviewSizing_workUnitCount(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -86782,6 +87106,13 @@ func (ec *executionContext) marshalOMetricLineage2ᚖgithubᚗcomᚋfullᚑchaos
 		return graphql.Null
 	}
 	return ec._MetricLineage(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOOperatingReviewSizing2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐOperatingReviewSizing(ctx context.Context, sel ast.SelectionSet, v *model.OperatingReviewSizing) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._OperatingReviewSizing(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOPullRequestDetail2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐPullRequestDetail(ctx context.Context, sel ast.SelectionSet, v *model.PullRequestDetail) graphql.Marshaler {

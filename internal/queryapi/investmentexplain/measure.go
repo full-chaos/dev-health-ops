@@ -13,7 +13,8 @@ import (
 // ISSUE_SIZE (D5999) weighs each unit by its issue size, 1 when unsized, and is served only by a surface that
 // carries its sizing coverage in the same answer (D6027): the REST investment response (sizing_coverage,
 // unsized_unit_count, sizing_note) and the explanation (on each finding). The surfaces that carry no coverage yet
-// stay on COUNT (each unit 1): the sunburst and the Operating Review (their own sub-issue). The Home tile is on COUNT
+// stay on COUNT (each unit 1) unless asked: the sunburst (REST, by ?measure=ISSUE_SIZE, which then carries its coverage in
+// response headers) and the Operating Review (a GraphQL document that selects the section's sizing fields, CHAOS-9873). The Home tile is on COUNT
 // (HomeTileMeasure: the REST Home body and a GraphQL Home document that does not ask for the tile's measure and
 // coverage) and on ISSUE_SIZE (HomeTileSizedMeasure) only for a GraphQL Home document that selects measure,
 // sizingCoverage, unsizedUnitCount and workUnitCount on reworkThemeAllocation (CHAOS-9624).
@@ -24,6 +25,10 @@ const (
 	HomeTileSizedMeasure      = MeasureIssueSize
 	SunburstMeasure           = MeasureCount
 	OperatingReviewMeasure    = MeasureCount
+	// SunburstSizedMeasure and OperatingReviewSizedMeasure are the opt-in measures of the two surfaces (CHAOS-9873, D6032):
+	// each is served only together with the sizing coverage that labels it (D6027).
+	SunburstSizedMeasure        = MeasureIssueSize
+	OperatingReviewSizedMeasure = MeasureIssueSize
 )
 
 // ErrMeasureRequired is returned by a read whose BreakdownFilters name no measure, or one the read

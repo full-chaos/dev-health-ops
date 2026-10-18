@@ -9,6 +9,9 @@
   "paths": {},
   "components": {
     "schemas": {
+      "AuditEvent": {
+        "$ref": "../jsonschema/audit-event.v1.schema.json"
+      },
       "Discovery": {
         "$ref": "../jsonschema/discovery.v1.schema.json"
       },
@@ -20,6 +23,9 @@
       },
       "Principal": {
         "$ref": "../jsonschema/principal.v1.schema.json"
+      },
+      "ProvisioningEvent": {
+        "$ref": "../jsonschema/provisioning-event.v1.schema.json"
       }
     }
   }

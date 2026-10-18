@@ -90,6 +90,7 @@ def test_every_stage_the_workflow_calls_exists_in_the_verb() -> None:
         "middleware",
         "fuzz-registry",
         "paths-selftest",
+        "scope-selftest",
     }
     for stage in stages:
         assert re.search(rf"^    {re.escape(stage)}\) ", verb, re.MULTILINE), stage

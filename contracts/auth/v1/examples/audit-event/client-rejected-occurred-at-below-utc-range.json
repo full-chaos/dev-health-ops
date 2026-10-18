@@ -1,0 +1,7 @@
+{
+  "schema_version": "audit-event.v1",
+  "event_type": "membership.invited",
+  "occurred_at": "0001-01-01T00:00:00+23:59",
+  "outcome": "allowed",
+  "attributes": {}
+}

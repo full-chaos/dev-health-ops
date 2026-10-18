@@ -322,14 +322,14 @@ func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUs
 				}
 			}
 		} else {
-			found, wasActive, err := store.softDeleteUser(ctx, logger, user.ID)
+			soft, err := store.softDeleteUser(ctx, logger, user.ID)
 			if err != nil {
 				return err
 			}
-			if !found {
+			if !soft.Found {
 				return refuse("User not found.")
 			}
-			result.AlreadyInactive = !wasActive
+			result.AlreadyInactive = soft.AlreadyDone
 		}
 		result.Deleted = true
 		return nil

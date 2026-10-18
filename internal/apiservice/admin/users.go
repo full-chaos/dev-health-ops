@@ -636,8 +636,8 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mode := DeleteSoft
-	if raw := r.URL.Query().Get("force"); raw != "" {
-		force, err := strconv.ParseBool(raw)
+	if values, present := r.URL.Query()["force"]; present {
+		force, err := strconv.ParseBool(values[0])
 		if err != nil {
 			policy.WriteDetail(w, http.StatusUnprocessableEntity, "force must be true or false", nil)
 			return
@@ -673,10 +673,13 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 		if mode == DeleteForce {
 			deleted, _, err = g.store.forceDeleteUser(ctx, h.logger, targetID)
 		} else {
-			var wasActive bool
-			deleted, wasActive, err = g.store.softDeleteUser(ctx, h.logger, targetID)
-			// a user that is already soft-deleted is gone from the API's view, as a deleted user was (404)
-			deleted = deleted && wasActive
+			var soft softDeleteResult
+			soft, err = g.store.softDeleteUser(ctx, h.logger, targetID)
+			deleted = soft.Found
+			if err == nil && soft.AlreadyDone {
+				// already soft-deleted: gone from the API's view, as a deleted user was (404); the credential cleanup still commits
+				return func() { policy.WriteDetail(w, http.StatusNotFound, "User not found", nil) }
+			}
 		}
 		if err != nil {
 			h.logger.ErrorContext(ctx, "admin: delete user failed", "mode", string(mode), "error", err)

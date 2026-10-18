@@ -168,3 +168,55 @@ func TestUsersDeleteForceFailsLoudlyOnAReferenceThatCannotBeKept(t *testing.T) {
 		t.Fatalf("soft delete over the same reference: exit %d, stdout %q, stderr %q", code, out, logs)
 	}
 }
+
+func TestUsersDeleteSoftOfADeactivatedUserStillEndsItsCredentials(t *testing.T) {
+	db := startDatabase(t)
+	userID := createUser(t, db, "deactivated@example.com", "deactivated")
+	db.seedRefreshToken(t, "deactivated@example.com")
+	db.exec(t, `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at) VALUES ($1, $2, 'h1', now() + interval '1 hour', now())`, uuid.New(), userID)
+	if code, out := goVerb(t, db, []string{"users", "update", "--email", "deactivated@example.com", "--no-active"}); code != 0 {
+		t.Fatalf("deactivate: exit %d %s", code, out)
+	}
+	var versionBefore int
+	if err := db.conn.QueryRow(context.Background(), `SELECT token_version FROM users WHERE id = $1`, userID).Scan(&versionBefore); err != nil {
+		t.Fatal(err)
+	}
+	code, out, logs := executeAdmin(t, db, "users", "delete", "--email", "deactivated@example.com", "--yes")
+	if code != 0 || !strings.HasPrefix(out, "Soft-deleted user: deactivated@example.com") {
+		t.Fatalf("soft delete of a deactivated user: exit %d, stdout %q, stderr %q", code, out, logs)
+	}
+	var versionAfter int
+	if err := db.conn.QueryRow(context.Background(), `SELECT token_version FROM users WHERE id = $1`, userID).Scan(&versionAfter); err != nil {
+		t.Fatal(err)
+	}
+	if versionAfter != versionBefore+1 {
+		t.Fatalf("token_version %d -> %d; want +1", versionBefore, versionAfter)
+	}
+	if n := db.count(t, `SELECT count(*) FROM refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL`, userID) +
+		db.count(t, `SELECT count(*) FROM password_reset_tokens WHERE user_id = $1`, userID); n != 0 {
+		t.Fatalf("%d live credentials left on a deactivated user after delete", n)
+	}
+	// a repeat has nothing left to end and says so
+	code, out, _ = executeAdmin(t, db, "users", "delete", "--email", "deactivated@example.com", "--yes")
+	if code != 0 || !strings.HasPrefix(out, "User already soft-deleted: deactivated@example.com") {
+		t.Fatalf("repeat soft delete: exit %d, stdout %q", code, out)
+	}
+}
+
+func TestUsersDeleteForceCountsRowsTheDatabaseNullsWithTheUser(t *testing.T) {
+	db := startDatabase(t)
+	userID := createUser(t, db, "setnull@example.com", "setnull")
+	db.exec(t, `CREATE TABLE zz_setnull_records (id uuid PRIMARY KEY, user_id uuid REFERENCES users(id) ON DELETE SET NULL)`)
+	db.exec(t, `INSERT INTO zz_setnull_records (id, user_id) VALUES ($1, $2)`, uuid.New(), userID)
+
+	code, out, logs := executeAdmin(t, db, "users", "delete", "--email", "setnull@example.com", "--force", "--yes")
+	if code != 0 || !strings.Contains(out, "kept 1 row(s) in zz_setnull_records.user_id") {
+		t.Fatalf("force delete: exit %d, stdout %q, stderr %q", code, out, logs)
+	}
+	if !strings.Contains(logs, `"rows_kept_with_null_user":1`) {
+		t.Fatalf("the Info line does not count the SET NULL row: %q", logs)
+	}
+	if n := db.count(t, `SELECT count(*) FROM zz_setnull_records WHERE user_id IS NULL`); n != 1 {
+		t.Fatalf("the SET NULL row was not kept with a null user: %d", n)
+	}
+}

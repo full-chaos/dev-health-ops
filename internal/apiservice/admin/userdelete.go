@@ -59,8 +59,10 @@ ORDER BY n.nspname, cl.relname, c.conname`)
 			ref.Name = schema + "." + table
 		}
 		switch {
-		case onDelete == "c" || onDelete == "n":
-			ref.Action = "database"
+		case onDelete == "c":
+			ref.Action = "database-cascade"
+		case onDelete == "n":
+			ref.Action = "database-set-null"
 		case width != 1:
 			return nil, refuse("Cannot anonymize %s: foreign key %s has %d columns. Nothing was deleted.", ref.Name, constraint, width)
 		case onDelete != "a" && onDelete != "r":
@@ -75,42 +77,48 @@ ORDER BY n.nspname, cl.relname, c.conname`)
 	return refs, rows.Err()
 }
 
+// softDeleteResult is what a soft delete found and did. AlreadyDone is true when the user was inactive and held no live token,
+// so the call changed nothing a person could notice (the token version still goes up, which only ends access tokens).
+type softDeleteResult struct {
+	Found, WasActive, AlreadyDone bool
+}
+
 // softDeleteUser turns the login off and keeps the row: is_active false, the access tokens fail on token_version, and the
-// refresh and one-time tokens are revoked or removed. found is false when no user has the id; wasActive is false when the user
-// was already soft-deleted (the call is then a no-op that still reports success).
-func (s pgStore) softDeleteUser(ctx context.Context, logger *slog.Logger, id uuid.UUID) (found, wasActive bool, err error) {
+// refresh and one-time tokens are revoked or removed. It does all of this for an inactive user too (a user an operator
+// deactivated first must not keep credentials that work again on reactivation).
+func (s pgStore) softDeleteUser(ctx context.Context, logger *slog.Logger, id uuid.UUID) (softDeleteResult, error) {
 	now := s.now().UTC()
-	err = s.Pool.QueryRow(ctx, `SELECT COALESCE(is_active, false) FROM users WHERE id = $1 FOR UPDATE`, id).Scan(&wasActive)
+	var wasActive bool
+	err := s.Pool.QueryRow(ctx, `SELECT COALESCE(is_active, false) FROM users WHERE id = $1 FOR UPDATE`, id).Scan(&wasActive)
 	if err == pgx.ErrNoRows {
-		return false, false, nil
+		return softDeleteResult{}, nil
 	}
 	if err != nil {
-		return false, false, err
+		return softDeleteResult{}, err
 	}
-	if !wasActive {
-		logger.InfoContext(ctx, "admin: user delete (soft): user was already inactive", "user_id", id.String(), "mode", string(DeleteSoft))
-		return true, false, nil
-	}
+	result := softDeleteResult{Found: true, WasActive: wasActive}
 	if _, err = s.Pool.Exec(ctx, `UPDATE users SET is_active = false, token_version = token_version + 1, updated_at = $2 WHERE id = $1`, id, now); err != nil {
-		return true, true, err
+		return result, err
 	}
 	revoked, err := s.Pool.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL`, id, now)
 	if err != nil {
-		return true, true, err
+		return result, err
 	}
 	reset, err := s.Pool.Exec(ctx, `DELETE FROM password_reset_tokens WHERE user_id = $1`, id)
 	if err != nil {
-		return true, true, err
+		return result, err
 	}
 	verification, err := s.Pool.Exec(ctx, `DELETE FROM email_verification_tokens WHERE user_id = $1`, id)
 	if err != nil {
-		return true, true, err
+		return result, err
 	}
-	logger.DebugContext(ctx, "admin: user delete (soft): tokens ended", "user_id", id.String(),
+	result.AlreadyDone = !wasActive && revoked.RowsAffected()+reset.RowsAffected()+verification.RowsAffected() == 0
+	logger.DebugContext(ctx, "admin: user delete (soft): tokens ended", "user_id", id.String(), "was_active", wasActive,
 		"refresh_tokens_revoked", revoked.RowsAffected(), "password_reset_tokens_deleted", reset.RowsAffected(),
 		"email_verification_tokens_deleted", verification.RowsAffected())
-	logger.InfoContext(ctx, "admin: user soft-deleted", "user_id", id.String(), "mode", string(DeleteSoft))
-	return true, true, nil
+	logger.InfoContext(ctx, "admin: user soft-deleted", "user_id", id.String(), "mode", string(DeleteSoft),
+		"was_active", wasActive, "already_done", result.AlreadyDone)
+	return result, nil
 }
 
 // forceDeleteUser removes the user row. Every foreign key that references the user is decided from the catalog: CASCADE and
@@ -125,6 +133,14 @@ func (s pgStore) forceDeleteUser(ctx context.Context, logger *slog.Logger, id uu
 	}
 	for i := range refs {
 		ref := &refs[i]
+		if ref.Action == "database-set-null" {
+			// the database nulls these rows when the user goes; count them first so the outcome names every kept record
+			if err := s.Pool.QueryRow(ctx, fmt.Sprintf(`SELECT count(*) FROM %s WHERE %s = $1`, ref.Table, pgx.Identifier{ref.Column}.Sanitize()), id).Scan(&ref.Rows); err != nil {
+				logger.ErrorContext(ctx, "admin: user delete (force) could not count a reference", "user_id", id.String(),
+					"table", ref.Name, "column", ref.Column, "error", err)
+				return false, nil, fmt.Errorf("count %s.%s: %w", ref.Name, ref.Column, err)
+			}
+		}
 		if ref.Action == "null" {
 			tag, err := s.Pool.Exec(ctx, fmt.Sprintf(`UPDATE %s SET %s = NULL WHERE %s = $1`, ref.Table, pgx.Identifier{ref.Column}.Sanitize(), pgx.Identifier{ref.Column}.Sanitize()), id)
 			if err != nil {

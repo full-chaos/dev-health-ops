@@ -494,3 +494,9 @@ A Linear work-items unit names every project it saw by an ensure row in `project
 - `written`: the row was written.
 - `skipped`: the stored row already decides the newest value.
 - `read_error`: the stored rows could not be read. The whole batch was written and a Warn line `linear_project_catalog_ensure_read_failed` was logged. The unit does not fail.
+
+## Work-item person rows: persons in more than one team
+
+`work_item_user_metrics_daily` keeps one row for each person, work scope and day: its key has no team. A person whose work items of one day belong to more than one team gets one row that sums all the person's items and takes its cycle percentiles over all of them. The team columns of that row name the team with the most of the person's items that day (the lowest team id on a tie).
+
+The counter `dev_health_work_item_user_rows_spanning_teams_total{provider}` counts, for each computed partition, the persons whose row is labelled this way. A rise says that people work across teams in that provider; it is not a fault. The Debug line `work_item_user_metrics_rows` carries the same count with the number of user rows of the partition.

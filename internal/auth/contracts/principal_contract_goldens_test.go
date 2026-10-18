@@ -421,22 +421,20 @@ func TestTheDelegationBoundIsTheADRValueNotALiteral(t *testing.T) {
 	}
 }
 
-// TestRevisionAcceptsAnIntegralDecimalAndRejectsAFractionalOne pins the
-// cross-language agreement codex round 1 found missing.
-//
-// Draft 2020-12 defines "type": "integer" as any number with a zero fractional
-// part, so 1.0 IS a valid integer and both languages must land on the same
-// value. Before the fix Python produced a float and Go refused to decode.
-func TestRevisionAcceptsAnIntegralDecimalAndRejectsAFractionalOne(t *testing.T) {
+// TestRevisionDecodesIntegerTokensAndRefusesDecimalForm: the token text decides.
+// An integral decimal (1.0, 42.000) is refused like a fractional one; the
+// withdrawn normalisation is documented on Revision.UnmarshalJSON. The
+// exhaustive token table lives in wire_int_guard_test.go.
+func TestRevisionDecodesIntegerTokensAndRefusesDecimalForm(t *testing.T) {
 	for _, testCase := range []struct {
 		raw     string
 		want    Revision
 		wantErr bool
 	}{
 		{raw: "1", want: 1},
-		{raw: "1.0", want: 1},
 		{raw: "0", want: 0},
-		{raw: "42.000", want: 42},
+		{raw: "1.0", wantErr: true},
+		{raw: "42.000", wantErr: true},
 		{raw: "1.5", wantErr: true},
 		{raw: "-1.5", wantErr: true},
 	} {
@@ -445,66 +443,42 @@ func TestRevisionAcceptsAnIntegralDecimalAndRejectsAFractionalOne(t *testing.T) 
 			err := json.Unmarshal([]byte(testCase.raw), &got)
 			if testCase.wantErr {
 				if err == nil {
-					t.Fatalf("%s decoded to %d; a fractional revision must be refused, never "+
-						"truncated -- two wire documents collapsing to one revision breaks the "+
-						"G-31 cache key", testCase.raw, got)
+					t.Fatalf("%s decoded to %d; a decimal-form revision must be refused", testCase.raw, got)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("%s: %v", testCase.raw, err)
-			}
-			if got != testCase.want {
-				t.Errorf("%s decoded to %d, want %d", testCase.raw, got, testCase.want)
+			if err != nil || got != testCase.want {
+				t.Fatalf("%s: %v %d, want %d", testCase.raw, err, got, testCase.want)
 			}
 		})
 	}
 }
 
-// TestPrincipalDecodesAnIntegralDecimalRevision tests the WIRING, not the type.
-//
-// TestRevisionAcceptsAnIntegralDecimalAndRejectsAFractionalOne unmarshals into
-// a bare Revision and so proves only that the TYPE behaves. It says nothing
-// about whether Principal's fields actually USE that type -- and they very
-// nearly did not: the edit that introduced Revision changed the type
-// declaration but silently failed to change the four struct fields, because
-// gofmt had realigned them and an exact-match replacement no-opped. The build
-// stayed green, the type test stayed green, and only decoding a whole document
-// showed Go still rejecting 1.0.
-//
-// So this decodes a real fixture with a decimal revision through
-// PrincipalFromWire, which is the path production takes. Reverting any of the
-// four fields to int64 turns it red.
-func TestPrincipalDecodesAnIntegralDecimalRevision(t *testing.T) {
+// TestPrincipalRefusesADecimalFormRevisionInEveryField tests the WIRING, not
+// the type: it decodes a real fixture with a decimal-form revision through
+// PrincipalFromWire, the path production takes, so reverting any of the four
+// fields to a plain int64 (which would accept 7.0 as 7) turns it red.
+func TestPrincipalRefusesADecimalFormRevisionInEveryField(t *testing.T) {
 	root := testRoot(t)
 	for _, field := range []string{
 		"membership_revision", "policy_revision", "grant_revision", "entitlement_revision",
 	} {
-		t.Run(field, func(t *testing.T) {
-			var document map[string]any
-			if err := json.Unmarshal(loadFixture(t, "valid-human-minimal.json"), &document); err != nil {
-				t.Fatalf("fixture is not valid JSON: %v", err)
-			}
-			document[field] = json.RawMessage("7.0")
-			raw, err := json.Marshal(document)
-			if err != nil {
-				t.Fatalf("re-marshalling: %v", err)
-			}
-			principal, err := PrincipalFromWire(root, raw)
-			if err != nil {
-				t.Fatalf("PrincipalFromWire refused an integral decimal, which draft 2020-12 "+
-					"defines as a valid integer and the Python client accepts: %v", err)
-			}
-			got := map[string]Revision{
-				"membership_revision":  principal.MembershipRevision,
-				"policy_revision":      principal.PolicyRevision,
-				"grant_revision":       principal.GrantRevision,
-				"entitlement_revision": principal.EntitlementRevision,
-			}[field]
-			if got != 7 {
-				t.Errorf("%s = %d, want 7", field, got)
-			}
-		})
+		for _, token := range []string{"7.0", "7e0", "1.0000000000000000001"} {
+			t.Run(field+"/"+token, func(t *testing.T) {
+				var document map[string]any
+				if err := json.Unmarshal(loadFixture(t, "valid-human-minimal.json"), &document); err != nil {
+					t.Fatalf("fixture is not valid JSON: %v", err)
+				}
+				document[field] = json.RawMessage(token)
+				raw, err := json.Marshal(document)
+				if err != nil {
+					t.Fatalf("re-marshalling: %v", err)
+				}
+				if _, err := PrincipalFromWire(root, raw); err == nil {
+					t.Fatalf("PrincipalFromWire accepted %s in %s", token, field)
+				}
+			})
+		}
 	}
 }
 
@@ -542,7 +516,7 @@ func TestRevisionRangeBoundary(t *testing.T) {
 		{raw: "9223372036854775808", wantErr: true},             // 2^63, silently clamped before the fix
 		{raw: "1e19", wantErr: true},                            // integral but far past the range
 		// 1e18 is inside int64 and OUTSIDE float64's exact-integer range, and
-		// it arrives in decimal form, so it is refused by the 2^53 guard. That
+		// it arrives in decimal form, so it is refused as decimal-form. That
 		// expectation changed when the guard landed: this row previously
 		// asserted acceptance, and updating it is the point rather than an
 		// inconvenience -- an in-range value the parser has already rounded is
@@ -551,7 +525,7 @@ func TestRevisionRangeBoundary(t *testing.T) {
 		{raw: "1e18", wantErr: true},
 		{raw: "1000000000000000000", want: 1000000000000000000}, // integer token, exact
 		{raw: "9007199254740991", want: 9007199254740991},       // 2^53-1, integer token
-		{raw: "9007199254740991.0", want: 9007199254740991},     // decimal, just under the bound
+		{raw: "9007199254740991.0", wantErr: true},              // decimal form: refused whatever the value
 		{raw: "9007199254740992.0", wantErr: true},              // decimal AT 2^53: cannot be
 		//                                                          distinguished from 2^53+1
 		{raw: "9007199254740993.0", wantErr: true}, // decimal that ROUNDS to 2^53

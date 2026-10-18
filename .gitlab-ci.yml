@@ -78,7 +78,7 @@ variables:
   PYTHONDONTWRITEBYTECODE: "1"
   PYTHONUNBUFFERED: "1"
   GIT_DEPTH: "0"
-  GO_IMAGE: "golang:1.27.0-bookworm"
+  GO_IMAGE: "golang:1.27.2-bookworm"
   DOCKER_CLI_VERSION: "27.5.1"
   DOCKER_IMAGE: "docker:27"
   DIND_IMAGE: "docker:27-dind"

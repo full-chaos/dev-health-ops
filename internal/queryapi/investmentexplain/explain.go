@@ -293,8 +293,14 @@ func mixCacheFilters(opts ExplainInvestmentMixOptions, themes, subcategories *or
 		"window_end":   opts.EndTS.UTC().Format("2006-01-02"),
 		"mix_sha256":   hex.EncodeToString(digest.Sum(nil)),
 		"measure":      opts.effectiveMeasure(),
+		"parser":       explainParserVersion,
 	}
 }
+
+// explainParserVersion names the rules that turn a model answer into a served explanation. A cached explanation
+// is served without parsing, so a change to those rules moves the cache key: bump it with the rules, else an
+// answer parsed by the old rules keeps being served.
+const explainParserVersion = "finding-share-subject-1"
 
 // cachedSharesMatchMix reports whether a cached explanation still agrees with the
 // mix it is served against: every finding share must equal the current share to the
@@ -539,11 +545,12 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 		return InvestmentMixExplanation{}, err
 	}
 
-	if !opts.ForceRefresh && opts.LLMProvider != "mock" {
+	// A window the report cannot hold has no mix and so no versioned key: its raw-filter key would bypass the parser version.
+	if !opts.ForceRefresh && opts.LLMProvider != "mock" && opts.WindowErr == nil {
 		cached, err := reader.ReadInvestmentExplanation(ctx, cacheKey, opts.OrgID)
 		if err == nil && cached != nil {
 			if explanation, decodeErr := DecodeInvestmentMixExplanation(cached.ExplanationJSON); decodeErr == nil {
-				if opts.WindowErr != nil || cachedSharesMatchMix(explanation, themeDistribution, subcategoryDistribution) {
+				if cachedSharesMatchMix(explanation, themeDistribution, subcategoryDistribution) {
 					// The sizing coverage is the live read's, never the cached one's.
 					applySizing(&explanation, sizing)
 					return explanation, nil
@@ -796,6 +803,15 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 		return fallback, nil
 	}
 
+	if parseResult.RepairedFindings > 0 {
+		slog.WarnContext(ctx, "query_api.investment_mix_explain.finding_share_subject_repaired",
+			"org_id", opts.OrgID,
+			"repaired_findings", parseResult.RepairedFindings,
+			"findings", len(parseResult.Output.TopFindings),
+			"provider", resolvedProvider,
+			"model", resolvedModel,
+		)
+	}
 	result := explainOutputToExplanation(*parseResult.Output)
 	annotateFindings(&result, opts.effectiveMeasure(), themeDistribution, subcategoryDistribution)
 	applySizing(&result, sizing)

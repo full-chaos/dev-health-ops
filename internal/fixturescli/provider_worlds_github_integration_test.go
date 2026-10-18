@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -182,6 +183,13 @@ func githubRepoAnswers(repo string, items []githubIssue) []providerAnswer {
 			answers = append(answers, get(githubHost, root+"/pulls/"+strconv.Itoa(item.Number), "", item.restPull(repo, true)))
 		}
 	}
+	// GitHub lists pull requests newest-updated first (the route asks for sort=updated&direction=desc
+	// and stops reading at the first one older than its window start), so the answer is in that order.
+	sort.SliceStable(pulls, func(i, j int) bool {
+		left, _ := pulls[i]["updated_at"].(string)
+		right, _ := pulls[j]["updated_at"].(string)
+		return left > right
+	})
 	answers = append(answers,
 		githubIssuesAnswer(root, issues),
 		get(githubHost, root+"/pulls", "*", pulls),

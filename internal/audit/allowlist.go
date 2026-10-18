@@ -33,7 +33,28 @@ var allowedAttributeKeys = map[string]struct{}{
 
 // maxAttributeValueLen bounds a string value. Long values are where pasted
 // bodies and tokens live.
-const maxAttributeValueLen = 256
+const maxAttributeValueLen = 128
+
+// valueToken is the CLOSED value grammar: an identifier-shaped token with no
+// whitespace, no "=", no quotes, no "@". Audit text is a code, an id or a name
+// from a vocabulary, never free text, so "password=...", an email, a JSON body
+// or a sentence cannot be stored whatever key carries it. (A pattern list of
+// bad shapes can only ever be as complete as its author's imagination; this
+// admits a shape instead of excluding some.)
+var valueToken = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]*$`)
+
+// ValidateToken reports whether v may be stored in an audit row's text field.
+func ValidateToken(v string) error {
+	if v == "" || len(v) > maxAttributeValueLen || !valueToken.MatchString(v) {
+		return fmt.Errorf("%w: a text value must be a token of 1..%d characters from [A-Za-z0-9_.:/-] starting alphanumeric", ErrAttributeNotAllowed, maxAttributeValueLen)
+	}
+	for _, shape := range secretShapes {
+		if shape.MatchString(v) {
+			return fmt.Errorf("%w: a text value is shaped like a credential", ErrAttributeNotAllowed)
+		}
+	}
+	return nil
+}
 
 // secretShapes are value shapes that must never appear in an audit row even
 // under an allowed key: a JWT, an Authorization header value, a PEM block, or
@@ -80,13 +101,8 @@ func ValidateAttributes(attributes map[string]any) error {
 }
 
 func stringProblem(key, v string) string {
-	if len(v) > maxAttributeValueLen {
-		return fmt.Sprintf("%q is longer than %d bytes", key, maxAttributeValueLen)
-	}
-	for _, shape := range secretShapes {
-		if shape.MatchString(v) {
-			return fmt.Sprintf("%q holds a value shaped like a credential", key)
-		}
+	if err := ValidateToken(v); err != nil {
+		return fmt.Sprintf("%q: %s", key, strings.TrimPrefix(err.Error(), ErrAttributeNotAllowed.Error()+": "))
 	}
 	return ""
 }

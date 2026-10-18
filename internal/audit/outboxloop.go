@@ -75,14 +75,47 @@ type stepper interface {
 	Step(ctx context.Context, now time.Time) error
 }
 
-// outboxStepper is the production stepper: publish due events, then reap.
+// lagTracker holds the age of the oldest due, unpublished event as of the last
+// step. It belongs to the loop, not the publisher, so the backlog is observable
+// when publishing is disabled (no sink), which is exactly when it grows.
+type lagTracker struct {
+	pool   *pgxpool.Pool
+	schema authschema.ValidatedIdentifier
+	logger *slog.Logger
+	age    atomic.Int64
+}
+
+func (l *lagTracker) observe(ctx context.Context, now time.Time) {
+	if l == nil {
+		return
+	}
+	var age int64
+	err := l.pool.QueryRow(ctx, `
+		SELECT coalesce(extract(epoch FROM ($1::timestamptz - min(created_at)))::bigint, 0)
+		FROM `+authschema.Quote(l.schema)+`.auth_outbox_events
+		WHERE published_at IS NULL AND available_at <= $1`, now.UTC()).Scan(&age)
+	if err != nil {
+		// A gauge that silently stops moving reads as a healthy outbox.
+		l.logger.WarnContext(ctx, "outbox lag read failed", "error", err)
+		return
+	}
+	if age < 0 {
+		age = 0
+	}
+	l.age.Store(age)
+}
+
+// outboxStepper is the production stepper: record lag, publish due events,
+// then reap.
 type outboxStepper struct {
 	pool      *pgxpool.Pool
 	publisher *Publisher // nil: publishing disabled, reaping continues
 	config    LoopConfig
+	lag       *lagTracker
 }
 
 func (s outboxStepper) Step(ctx context.Context, now time.Time) error {
+	s.lag.observe(ctx, now)
 	var errs []error
 	if s.publisher != nil {
 		if _, err := s.publisher.Step(ctx, now, s.config.PublishLimit); err != nil {
@@ -125,10 +158,15 @@ func NewOutboxLoop(pool *pgxpool.Pool, publisher *Publisher, config LoopConfig) 
 	if pool == nil {
 		return nil, ErrInvalidLoopConfig
 	}
-	return newOutboxLoop(outboxStepper{pool: pool, publisher: publisher, config: config}, config, publisher != nil)
+	logger := config.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	lag := &lagTracker{pool: pool, schema: config.Schema, logger: logger}
+	return newOutboxLoop(outboxStepper{pool: pool, publisher: publisher, config: config, lag: lag}, config, publisher != nil, lag)
 }
 
-func newOutboxLoop(s stepper, config LoopConfig, publishing bool) (*OutboxLoop, error) {
+func newOutboxLoop(s stepper, config LoopConfig, publishing bool, lag *lagTracker) (*OutboxLoop, error) {
 	if s == nil || config.validate() != nil {
 		return nil, ErrInvalidLoopConfig
 	}
@@ -165,6 +203,17 @@ func newOutboxLoop(s stepper, config LoopConfig, publishing bool) (*OutboxLoop, 
 			return nil
 		})); err != nil {
 		return nil, fmt.Errorf("register publisher-enabled gauge: %w", err)
+	}
+	if lag != nil {
+		if _, err := meter.Int64ObservableGauge(
+			"devhealth_auth_outbox_oldest_pending_age_seconds",
+			metric.WithDescription("Age of the oldest due unpublished outbox event at the last step; 0 when none. Exported with or without a sink."),
+			metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+				o.Observe(lag.age.Load())
+				return nil
+			})); err != nil {
+			return nil, fmt.Errorf("register pending-age gauge: %w", err)
+		}
 	}
 	if !publishing {
 		logger.Info("auth outbox delivery disabled: no sink configured; the reaper still runs")

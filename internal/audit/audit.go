@@ -335,6 +335,10 @@ func (m Mutation) validate() error {
 		return fmt.Errorf("%w: outbox event_type is empty", ErrMutationFailed)
 	case ValidateAttributes(m.Audit.Attributes) != nil:
 		return ValidateAttributes(m.Audit.Attributes)
+	case ValidateToken(m.Audit.EventType) != nil:
+		return fmt.Errorf("%w: audit event_type: %w", ErrMutationFailed, ValidateToken(m.Audit.EventType))
+	case m.Audit.RequestID != nil && ValidateToken(*m.Audit.RequestID) != nil:
+		return fmt.Errorf("%w: audit request_id: %w", ErrMutationFailed, ValidateToken(*m.Audit.RequestID))
 	case m.Event.IdempotencyKey == "":
 		// An empty key is worse than a duplicate one: the unique index would
 		// accept exactly one such row ever, and every later mutation would

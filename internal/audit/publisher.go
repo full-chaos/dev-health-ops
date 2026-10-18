@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"sync/atomic"
 	"time"
 
@@ -56,24 +55,36 @@ func AllFailureReasons() []string {
 	return []string{"delivery_failed", "delivery_timeout", "consumer_unavailable", "consumer_rejected"}
 }
 
-var reasonPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
-
 func failureReason(err error) string {
 	var r interface{ DeliveryReason() string }
 	if errors.As(err, &r) {
-		if reason := r.DeliveryReason(); reasonPattern.MatchString(reason) {
-			return reason
+		reason := r.DeliveryReason()
+		for _, known := range AllFailureReasons() {
+			if reason == known {
+				return known
+			}
 		}
 	}
 	return "delivery_failed"
 }
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string          { return "audit: sink delivery timed out" }
+func (timeoutError) DeliveryReason() string { return "delivery_timeout" }
+
+// maxAbandonedDeliveries caps the Deliver calls that outlived DeliverTimeout
+// and have not returned. Go cannot stop a goroutine, so a sink that ignores its
+// context leaks one per timeout; at the cap the publisher stops starting new
+// calls and the step reports the wedge instead of leaking without bound.
+const maxAbandonedDeliveries = 8
 
 // PublisherConfig bounds one publisher.
 type PublisherConfig struct {
 	Schema         authschema.ValidatedIdentifier
 	BaseBackoff    time.Duration // first retry delay; doubles per attempt
 	MaxBackoff     time.Duration
-	DeliverTimeout time.Duration // bound on one Sink.Deliver call
+	DeliverTimeout time.Duration // bound on one Sink.Deliver call, enforced even if the sink ignores its context
 	Logger         *slog.Logger
 	// Meter registers the publisher's instruments; nil uses the process meter.
 	Meter metric.Meter
@@ -93,9 +104,9 @@ type Publisher struct {
 	sink   Sink
 	config PublisherConfig
 
-	oldestPendingAgeSeconds atomic.Int64
-	delivered               metric.Int64Counter
-	failed                  metric.Int64Counter
+	abandoned atomic.Int64
+	delivered metric.Int64Counter
+	failed    metric.Int64Counter
 }
 
 // NewPublisher validates its inputs. A nil sink is refused: a publisher with
@@ -130,14 +141,6 @@ func NewPublisher(pool *pgxpool.Pool, sink Sink, config PublisherConfig) (*Publi
 		metric.WithDescription("Outbox delivery attempts that failed, by reason.")); err != nil {
 		return nil, fmt.Errorf("%w: failure counter: %w", ErrPublishFailed, err)
 	}
-	if _, err = meter.Int64ObservableGauge("devhealth_auth_outbox_oldest_pending_age_seconds",
-		metric.WithDescription("Age of the oldest due unpublished outbox event at the last step; 0 when none."),
-		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
-			o.Observe(p.oldestPendingAgeSeconds.Load())
-			return nil
-		})); err != nil {
-		return nil, fmt.Errorf("%w: lag gauge: %w", ErrPublishFailed, err)
-	}
 	return p, nil
 }
 
@@ -168,7 +171,6 @@ func (p *Publisher) Step(ctx context.Context, now time.Time, limit int) (Publish
 	if limit <= 0 || limit > maxStepLimit {
 		return result, fmt.Errorf("%w: limit %d is outside 1..%d", ErrPublishFailed, limit, maxStepLimit)
 	}
-	p.observeLag(ctx, now)
 	for i := 0; i < limit; i++ {
 		if ctx.Err() != nil {
 			return result, ctx.Err()
@@ -199,7 +201,42 @@ const (
 
 func (p *Publisher) table() string { return authschema.Quote(p.config.Schema) + ".auth_outbox_events" }
 
+// deliver calls the sink with a timeout it cannot ignore: the call runs in its
+// own goroutine and is abandoned (counted, capped) when DeliverTimeout passes,
+// so a sink that never returns cannot hold the row lock, the step or shutdown.
+func (p *Publisher) deliver(ctx context.Context, e Event) error {
+	deliverCtx, cancel := context.WithTimeout(ctx, p.config.DeliverTimeout)
+	result := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				result <- errors.New("audit: sink panicked")
+			}
+		}()
+		result <- p.sink.Deliver(deliverCtx, e)
+	}()
+	select {
+	case err := <-result:
+		cancel()
+		return err
+	case <-deliverCtx.Done():
+		p.abandoned.Add(1)
+		go func() {
+			defer cancel()
+			<-result
+			p.abandoned.Add(-1)
+		}()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return timeoutError{}
+	}
+}
+
 func (p *Publisher) deliverOne(ctx context.Context, now time.Time) (outcome, error) {
+	if n := p.abandoned.Load(); n >= maxAbandonedDeliveries {
+		return outcomeNone, fmt.Errorf("%w: %d sink deliveries are still running past their timeout; not starting another", ErrPublishFailed, n)
+	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return outcomeNone, fmt.Errorf("%w: beginning: %w", ErrPublishFailed, err)
@@ -227,9 +264,10 @@ func (p *Publisher) deliverOne(ctx context.Context, now time.Time) (outcome, err
 	}
 	e.Payload = payload
 
-	deliverCtx, cancel := context.WithTimeout(ctx, p.config.DeliverTimeout)
-	deliverErr := p.sink.Deliver(deliverCtx, e)
-	cancel()
+	deliverErr := p.deliver(ctx, e)
+	if deliverErr != nil && ctx.Err() != nil {
+		return outcomeNone, ctx.Err() // shutting down: leave the row untouched
+	}
 
 	if deliverErr == nil {
 		// The mark uses the database clock so published_at is comparable with
@@ -264,23 +302,4 @@ func (p *Publisher) deliverOne(ctx context.Context, now time.Time) (outcome, err
 		"event_id", e.ID, "event_type", e.EventType, "attempts", e.Attempts+1, "reason", reason,
 		"retry_at", retryAt)
 	return outcomeFailed, nil
-}
-
-// observeLag records the age of the oldest due unpublished event. A failed
-// read leaves the previous value, and is logged: a gauge that silently stops
-// moving would read as a healthy outbox.
-func (p *Publisher) observeLag(ctx context.Context, now time.Time) {
-	var age int64
-	err := p.pool.QueryRow(ctx, `
-		SELECT coalesce(extract(epoch FROM ($1::timestamptz - min(created_at)))::bigint, 0)
-		FROM `+p.table()+`
-		WHERE published_at IS NULL AND available_at <= $1`, now.UTC()).Scan(&age)
-	if err != nil {
-		p.config.Logger.WarnContext(ctx, "outbox lag read failed", "error", err)
-		return
-	}
-	if age < 0 {
-		age = 0
-	}
-	p.oldestPendingAgeSeconds.Store(age)
 }

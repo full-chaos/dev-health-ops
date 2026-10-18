@@ -35,7 +35,7 @@ func testLoop(t *testing.T, s stepper) (*OutboxLoop, chan time.Time, chan struct
 		t.Fatal(err)
 	}
 	cfg := DefaultLoopConfig(schema, health.NewRegistry(time.Second))
-	loop, err := newOutboxLoop(s, cfg, true)
+	loop, err := newOutboxLoop(s, cfg, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestLoopConfigRejectsUnusableValues(t *testing.T) {
 		c := good
 		c.Registry = health.NewRegistry(time.Second)
 		mutate(&c)
-		if _, err := newOutboxLoop(&scriptedStepper{}, c, true); !errors.Is(err, ErrInvalidLoopConfig) {
+		if _, err := newOutboxLoop(&scriptedStepper{}, c, true, nil); !errors.Is(err, ErrInvalidLoopConfig) {
 			t.Errorf("%s: err = %v, want ErrInvalidLoopConfig", name, err)
 		}
 	}

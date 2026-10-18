@@ -19,6 +19,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 type failureCountObserver struct {
@@ -248,3 +251,45 @@ type cyclicStageError struct{}
 
 func (err *cyclicStageError) Error() string { return "cycle" }
 func (err *cyclicStageError) Unwrap() error { return err }
+
+func TestJoinedWriterErrorKeepsItsSQLStateInTheJobErrorAndWarnsOnAPanickingBranch(t *testing.T) {
+	pgErr := &pgconn.PgError{Code: "42703", Message: "column secret does not exist"}
+	joined := stagedFailure(stageWorkGraph, errors.Join(pgErr, errors.New("second")))
+	want := "coordinator job failed: *errors.joinError stage=workgraph class=postgres code=42703"
+	if got := (&coordinatorWorkError{cause: joined}).Error(); got != want {
+		t.Fatalf("River job error = %q, want %q", got, want)
+	}
+	var nilBranch *nilUnwrapStageError
+	broken := stagedFailure(stageDaily, errors.Join(errors.New("a"), error(nilBranch)))
+	if got := chainDefect(broken); got != chainDefectUnwrap {
+		t.Fatalf("chainDefect of a joined error with a panicking Unwrap branch = %q, want %q", got, chainDefectUnwrap)
+	}
+}
+
+type nilUnwrapStageError struct{ inner error }
+
+func (err *nilUnwrapStageError) Error() string { return "branch" }
+func (err *nilUnwrapStageError) Unwrap() error { return err.inner }
+
+func TestChainDefectCounterIsIncremented(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	recordChainDefect(context.Background(), chainDefectBound)
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range collected.ScopeMetrics {
+		for _, found := range scope.Metrics {
+			if found.Name != "post_sync_error_chain_defect_total" {
+				continue
+			}
+			sum, ok := found.Data.(metricdata.Sum[int64])
+			if !ok || len(sum.DataPoints) != 1 || sum.DataPoints[0].Value != 1 {
+				t.Fatalf("counter data = %#v", found.Data)
+			}
+			return
+		}
+	}
+	t.Fatal("post_sync_error_chain_defect_total was not recorded")
+}

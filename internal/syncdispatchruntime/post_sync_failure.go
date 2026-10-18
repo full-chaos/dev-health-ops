@@ -2,7 +2,6 @@ package syncdispatchruntime
 
 import (
 	"context"
-	"errors"
 	"regexp"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -92,22 +91,56 @@ func stagedFailure(stage postSyncStage, cause error) error {
 	return &postSyncUnavailableError{stage: stage, cause: cause}
 }
 
-// maxChainDepth bounds a walk down an error chain: a cyclic Unwrap, or a chain far deeper than any real one, must not stall it.
-const maxChainDepth = 64
+// maxChainNodes bounds a walk over an error tree: a cyclic Unwrap, or a tree far larger than any real one, must not stall it.
+const maxChainNodes = 64
 
-// boundedChain is err and what it unwraps to, at most maxChainDepth long. An Unwrap that panics (a typed nil receiver) ends the walk.
-func boundedChain(err error) (chain []error) {
-	defer func() { _ = recover() }()
-	for depth := 0; err != nil && depth < maxChainDepth; depth++ {
-		chain = append(chain, err)
-		err = errors.Unwrap(err)
+// errorTree is err and every error under it (Unwrap() error and Unwrap() []error, as errors.Join builds), breadth first, at most
+// maxChainNodes of them. truncated is true when the bound cut the walk short, panicked when an Unwrap panicked (a typed nil receiver):
+// what was read up to there is returned.
+func errorTree(err error) (nodes []error, truncated, panicked bool) {
+	queue := []error{err}
+	for len(queue) > 0 {
+		next := queue[0]
+		queue = queue[1:]
+		if next == nil {
+			continue
+		}
+		if len(nodes) >= maxChainNodes {
+			return nodes, true, panicked
+		}
+		nodes = append(nodes, next)
+		children, ok := unwrapChildren(next)
+		if !ok {
+			panicked = true
+			continue
+		}
+		queue = append(queue, children...)
 	}
-	return chain
+	return nodes, false, panicked
+}
+
+// unwrapChildren is the errors err wraps; ok is false when its Unwrap panicked.
+func unwrapChildren(err error) (children []error, ok bool) {
+	defer func() {
+		if recover() != nil {
+			children, ok = nil, false
+		}
+	}()
+	switch wrapper := err.(type) {
+	case interface{ Unwrap() []error }:
+		return wrapper.Unwrap(), true
+	case interface{ Unwrap() error }:
+		if inner := wrapper.Unwrap(); inner != nil {
+			return []error{inner}, true
+		}
+	}
+	return nil, true
 }
 
 // postSyncStageOf is the stage of err, or "" when no error of its chain is a postSyncUnavailableError.
 func postSyncStageOf(err error) postSyncStage {
-	for _, link := range boundedChain(err) {
+	nodes, _, _ := errorTree(err)
+	for _, link := range nodes {
 		if typed, ok := link.(*postSyncUnavailableError); ok && typed != nil {
 			return typed.stage
 		}
@@ -127,7 +160,8 @@ func failureDetail(err error) (text string) {
 		text += " stage=" + string(stage)
 	}
 	text += " class=" + logging.ErrorClass(err)
-	for _, link := range boundedChain(err) {
+	nodes, _, _ := errorTree(err)
+	for _, link := range nodes {
 		if pgErr, ok := link.(*pgconn.PgError); ok && pgErr != nil && sqlStatePattern.MatchString(pgErr.Code) {
 			text += " code=" + pgErr.Code
 			break
@@ -156,14 +190,14 @@ var chainDefects = func() metric.Int64Counter {
 // chainDefect names what is wrong with the error chain of a failed fan-out, or "" when nothing is: the stage and class read from a
 // chain that is cut short, or whose Unwrap or Error panics, are partial, and the operator is told so.
 func chainDefect(err error) (defect string) {
-	chain := boundedChain(err)
+	nodes, truncated, panicked := errorTree(err)
 	switch {
-	case len(chain) >= maxChainDepth:
+	case truncated:
 		return chainDefectBound
-	case len(chain) > 0 && unwrapPanics(chain[len(chain)-1]):
+	case panicked:
 		return chainDefectUnwrap
 	}
-	for _, link := range chain {
+	for _, link := range nodes {
 		if errorTextPanics(link) {
 			return chainDefectErrorText
 		}
@@ -174,12 +208,6 @@ func chainDefect(err error) (defect string) {
 func errorTextPanics(err error) (panics bool) {
 	defer func() { panics = recover() != nil }()
 	_ = err.Error()
-	return false
-}
-
-func unwrapPanics(err error) (panics bool) {
-	defer func() { panics = recover() != nil }()
-	_ = errors.Unwrap(err)
 	return false
 }
 

@@ -61,7 +61,7 @@ func discoverGitLab(ctx context.Context, credential providerfoundation.Credentia
 	if err != nil {
 		return nil, false, nil, err
 	}
-	subgroups, subTruncated, err := gitlabListGroupPages(ctx, client, "/groups/{group}/subgroups", "/api/v4/groups/"+url.PathEscape(groupPath)+"/subgroups", maxGitLabDiscoverySubgroups)
+	subgroups, subTruncated, err := gitlabListGroupPages(ctx, client, groupPath, "/groups/{group}/subgroups", "/api/v4/groups/"+url.PathEscape(groupPath)+"/subgroups", maxGitLabDiscoverySubgroups)
 	if err != nil {
 		return nil, false, nil, err
 	}
@@ -71,7 +71,7 @@ func discoverGitLab(ctx context.Context, credential providerfoundation.Credentia
 
 	groups := append([]gitlabGroupEntry{rootGroup}, subgroups...)
 	for _, group := range groups {
-		projects, groupTruncated, err := gitlabListProjectPages(ctx, client, "/groups/{group}/projects", "/api/v4/groups/"+strconv.FormatInt(group.ID, 10)+"/projects", maxGitLabDiscoveryProjects, false)
+		projects, groupTruncated, err := gitlabListProjectPages(ctx, client, group.FullPath, "/groups/{group}/projects", "/api/v4/groups/"+strconv.FormatInt(group.ID, 10)+"/projects", maxGitLabDiscoveryProjects, false)
 		if err != nil {
 			return nil, false, nil, err
 		}
@@ -97,7 +97,7 @@ func discoverGitLab(ctx context.Context, credential providerfoundation.Credentia
 	// The flat, include_subgroups=true walk against the root group: its
 	// items are never surfaced by this route (see the doc comment above),
 	// only its truncation status.
-	_, allTruncated, err := gitlabListProjectPages(ctx, client, "/groups/{group}/projects", "/api/v4/groups/"+strconv.FormatInt(rootGroup.ID, 10)+"/projects", maxGitLabDiscoveryAllProjects, true)
+	_, allTruncated, err := gitlabListProjectPages(ctx, client, groupPath, "/groups/{group}/projects", "/api/v4/groups/"+strconv.FormatInt(rootGroup.ID, 10)+"/projects", maxGitLabDiscoveryAllProjects, true)
 	if err != nil {
 		return nil, false, nil, err
 	}
@@ -129,39 +129,40 @@ func gitlabGetGroup(ctx context.Context, client *providerfoundation.HTTPClient, 
 	return group, nil
 }
 
-// gitlabListGroupPages walks GitLab's offset pagination (X-Next-Page
-// response header) up to limit items, matching python-gitlab's own
-// `iterator=True` page walk plus team_discovery.py's own
-// `itertools.islice(..., limit + 1)` truncation check (_bounded_list,
-// team_discovery.py:42-66): truncated is true when MORE than limit items
-// were available, never merely when exactly limit were returned.
-func gitlabListGroupPages(ctx context.Context, client *providerfoundation.HTTPClient, route, path string, limit int) ([]gitlabGroupEntry, bool, error) {
-	var out []gitlabGroupEntry
+// gitlabListPages walks GitLab's offset pagination (X-Next-Page response header) up to limit items, matching python-gitlab's own
+// `iterator=True` page walk plus team_discovery.py's own `itertools.islice(..., limit + 1)` truncation check (_bounded_list,
+// team_discovery.py:42-66): truncated is true when MORE than limit items were available, never merely when exactly limit were
+// returned. The walk is also bounded by pages and fails closed on a continuation that does not progress (pageWalk, CHAOS-8786);
+// an item that two pages both carry is listed once.
+func gitlabListPages[T any](ctx context.Context, client *providerfoundation.HTTPClient, walkName, owner, route, path, extraQuery string, limit int, key func(T) string, decodeLabel string) ([]T, bool, error) {
+	var out []T
+	seenItems := map[string]struct{}{}
 	page := 1
+	walk := newPageWalk(ctx, "gitlab", walkName, owner, "1")
 	for {
-		response, err := client.DoRoute(ctx, "GET", route, fmt.Sprintf("%s?per_page=100&page=%d", path, page), nil)
+		response, err := client.DoRoute(ctx, "GET", route, fmt.Sprintf("%s?per_page=100&page=%d%s", path, page, extraQuery), nil)
 		if err != nil {
-			return nil, false, err
+			return nil, false, walk.pageError(err)
 		}
 		raw, readErr := io.ReadAll(response.Body)
 		nextPage := response.Header.Get("X-Next-Page")
 		response.Body.Close()
 		if readErr != nil {
-			return nil, false, readErr
+			return nil, false, walk.pageError(readErr)
 		}
-		var entries []gitlabGroupEntry
+		var entries []T
 		if err := json.Unmarshal(raw, &entries); err != nil {
-			return nil, false, fmt.Errorf("decode gitlab group list page: %w", err)
+			return nil, false, walk.pageError(fmt.Errorf("decode %s: %w", decodeLabel, err))
 		}
-		out = append(out, entries...)
+		out = appendNew(out, seenItems, entries, key)
+		next, more, err := walk.gitlabNextPage(nextPage, page, len(entries))
+		if err != nil {
+			return nil, false, err
+		}
 		if len(out) > limit {
 			return out[:limit], true, nil
 		}
-		if nextPage == "" {
-			break
-		}
-		next, err := strconv.Atoi(nextPage)
-		if err != nil {
+		if !more {
 			break
 		}
 		page = next
@@ -169,40 +170,16 @@ func gitlabListGroupPages(ctx context.Context, client *providerfoundation.HTTPCl
 	return out, false, nil
 }
 
-func gitlabListProjectPages(ctx context.Context, client *providerfoundation.HTTPClient, route, path string, limit int, includeSubgroups bool) ([]gitlabProjectEntry, bool, error) {
-	var out []gitlabProjectEntry
-	page := 1
-	for {
-		query := fmt.Sprintf("%s?per_page=100&page=%d", path, page)
-		if includeSubgroups {
-			query += "&include_subgroups=true"
-		}
-		response, err := client.DoRoute(ctx, "GET", route, query, nil)
-		if err != nil {
-			return nil, false, err
-		}
-		raw, readErr := io.ReadAll(response.Body)
-		nextPage := response.Header.Get("X-Next-Page")
-		response.Body.Close()
-		if readErr != nil {
-			return nil, false, readErr
-		}
-		var entries []gitlabProjectEntry
-		if err := json.Unmarshal(raw, &entries); err != nil {
-			return nil, false, fmt.Errorf("decode gitlab project list page: %w", err)
-		}
-		out = append(out, entries...)
-		if len(out) > limit {
-			return out[:limit], true, nil
-		}
-		if nextPage == "" {
-			break
-		}
-		next, err := strconv.Atoi(nextPage)
-		if err != nil {
-			break
-		}
-		page = next
+func gitlabListGroupPages(ctx context.Context, client *providerfoundation.HTTPClient, owner, route, path string, limit int) ([]gitlabGroupEntry, bool, error) {
+	return gitlabListPages(ctx, client, "subgroups", owner, route, path, "", limit,
+		func(entry gitlabGroupEntry) string { return strconv.FormatInt(entry.ID, 10) }, "gitlab group list page")
+}
+
+func gitlabListProjectPages(ctx context.Context, client *providerfoundation.HTTPClient, owner, route, path string, limit int, includeSubgroups bool) ([]gitlabProjectEntry, bool, error) {
+	extra := ""
+	if includeSubgroups {
+		extra = "&include_subgroups=true"
 	}
-	return out, false, nil
+	return gitlabListPages(ctx, client, "projects", owner, route, path, extra, limit,
+		func(entry gitlabProjectEntry) string { return strconv.FormatInt(entry.ID, 10) }, "gitlab project list page")
 }

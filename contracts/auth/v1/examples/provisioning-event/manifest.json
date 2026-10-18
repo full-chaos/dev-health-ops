@@ -1,0 +1,421 @@
+{
+  "description": "Golden corpus for provisioning-event.v1; the single inventory read by the Go, Python and ajv runners (G-70). reject_by_client documents are schema-valid and refused by ParseProvisioningEvent / parse_provisioning_event on the raw token. consumer_vectors is replayed by Go and Python.",
+  "accept": [
+    {
+      "file": "valid-principal-created.json",
+      "why": "The fullest shape: every optional envelope member present."
+    },
+    {
+      "file": "valid-minimal.json",
+      "why": "The minimal event: no optional members and an empty change. A user event carries no change members at all."
+    },
+    {
+      "file": "valid-external-identity-linked.json",
+      "why": "An identity link names the provider's short name, never the provider's subject or issuer."
+    },
+    {
+      "file": "valid-organization-created.json",
+      "why": "org_ prefix and slug."
+    },
+    {
+      "file": "valid-membership-role-changed.json",
+      "why": "A later revision of an aggregate."
+    },
+    {
+      "file": "valid-platform-role-granted.json",
+      "why": "Platform role assignment."
+    },
+    {
+      "file": "valid-service-account-owner-changed.json",
+      "why": "Service account ownership change."
+    },
+    {
+      "file": "valid-workload-audiences-changed.json",
+      "why": "Workload audiences are exact strings, bounded in count."
+    },
+    {
+      "file": "valid-resource-grant-with-expiry.json",
+      "why": "A grant carries its expiry (TRD section 9; Q2 default keep)."
+    },
+    {
+      "file": "valid-resource-grant-organization-wide.json",
+      "why": "The explicit organization-wide key `*`."
+    },
+    {
+      "file": "valid-revision-at-maximum.json",
+      "why": "Revision 2^53-1, the largest value a float64 producer represents exactly."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-revision-absent.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "required",
+      "why": "No revision: nothing to deduplicate on."
+    },
+    {
+      "file": "invalid-idempotency-key-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No idempotency_key: the outbox column is NOT NULL and UNIQUE."
+    },
+    {
+      "file": "invalid-payload-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No payload."
+    },
+    {
+      "file": "invalid-aggregate-id-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No aggregate id."
+    },
+    {
+      "file": "invalid-change-absent.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "required",
+      "why": "`change` is required (it may be empty): an event that does not say what changed is not distinguishable from a malformed one."
+    },
+    {
+      "file": "invalid-revision-zero.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "minimum",
+      "why": "Revisions start at 1."
+    },
+    {
+      "file": "invalid-revision-negative.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "minimum",
+      "why": "Negative."
+    },
+    {
+      "file": "invalid-revision-string.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "type",
+      "why": "A string revision."
+    },
+    {
+      "file": "invalid-revision-2pow53.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "maximum",
+      "why": "Exactly 2^53 as an integer token, written as RAW TEXT. A float64 producer cannot tell it from 2^53+1."
+    },
+    {
+      "file": "invalid-revision-past-2pow53.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "maximum",
+      "why": "2^53+1 as an integer token, RAW TEXT (a JSON writer rounds it). Refused by the schema at its upper bound."
+    },
+    {
+      "file": "invalid-aggregate-type-unknown.json",
+      "expect_instance_location": "/aggregate_type",
+      "expect_keyword": "enum",
+      "why": "An aggregate type outside the closed set. Unknown denies."
+    },
+    {
+      "file": "invalid-aggregate-id-shape-organization-with-principal-id.json",
+      "expect_instance_location": "/aggregate_id",
+      "expect_keyword": "pattern",
+      "why": "aggregate_type and aggregate_id disagree in shape: an organization event carrying a prn_ id."
+    },
+    {
+      "file": "invalid-aggregate-id-shape-grant-with-organization-id.json",
+      "expect_instance_location": "/aggregate_id",
+      "expect_keyword": "pattern",
+      "why": "A grant event carrying an org_ id."
+    },
+    {
+      "file": "invalid-event-type-of-another-aggregate.json",
+      "expect_instance_location": "/event_type",
+      "expect_keyword": "enum",
+      "why": "An event_type from another aggregate's vocabulary."
+    },
+    {
+      "file": "invalid-event-type-unknown-verb.json",
+      "expect_instance_location": "/event_type",
+      "expect_keyword": "enum",
+      "why": "A verb outside the aggregate's closed vocabulary."
+    },
+    {
+      "file": "invalid-idempotency-key-shape.json",
+      "expect_instance_location": "/idempotency_key",
+      "expect_keyword": "pattern",
+      "why": "The key's shape is pinned: lowercase type, id, decimal revision."
+    },
+    {
+      "file": "invalid-payload-unknown-member.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "additionalProperties",
+      "why": "An email beside the allowlisted payload members: payload is closed."
+    },
+    {
+      "file": "invalid-top-level-unknown-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "An entitlement-shaped member: entitlement is never a provisioning claim (ACP-ADR-07). A top-level member that is not an outbox column is refused."
+    },
+    {
+      "file": "invalid-change-arbitrary-key.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "enum",
+      "why": "An arbitrary key in the change object. The change is an allowlist, not a free-form map."
+    },
+    {
+      "file": "invalid-change-email.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "enum",
+      "why": "An email is a high-cardinality identity and has no member."
+    },
+    {
+      "file": "invalid-change-member-of-another-aggregate.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "enum",
+      "why": "A grant member on a membership: every member exists in the schema, but each aggregate may carry only its own."
+    },
+    {
+      "file": "invalid-change-secret-on-user.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "maxProperties",
+      "why": "A user event carries no change members, so a credential change cannot smuggle the new hash (or anything else)."
+    },
+    {
+      "file": "invalid-change-status-unknown.json",
+      "expect_instance_location": "/payload/change/status",
+      "expect_keyword": "enum",
+      "why": "A status outside the closed vocabulary."
+    },
+    {
+      "file": "invalid-change-resource-key-uppercase.json",
+      "expect_instance_location": "/payload/change/resource_key",
+      "expect_keyword": "pattern",
+      "why": "Repository keys are canonical lowercase owner/repo (TRD section 9)."
+    },
+    {
+      "file": "invalid-change-action-set-empty.json",
+      "expect_instance_location": "/payload/change/action_set",
+      "expect_keyword": "minItems",
+      "why": "An empty action set grants nothing; it is a malformed event, not a harmless one."
+    },
+    {
+      "file": "invalid-occurred-at-hour-24.json",
+      "expect_instance_location": "/created_at",
+      "expect_keyword": "pattern",
+      "why": "Hour 24: Go and Python disagree about it, so the shared timestamp pattern refuses it."
+    },
+    {
+      "file": "invalid-request-id-wrong-length.json",
+      "expect_instance_location": "/payload/request_id",
+      "expect_keyword": "pattern",
+      "why": "request_id is fixed length and server-minted."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-revision-decimal-form.json",
+      "why": "Revision `1.0`: integral, schema-valid, and refused by every client on the raw token (README, wire integers)."
+    },
+    {
+      "file": "client-rejected-revision-exponent-form.json",
+      "why": "Revision `1e0`."
+    },
+    {
+      "file": "client-rejected-revision-fraction-rounds-to-integer.json",
+      "why": "`9007199254740990.1` reads as 9007199254740990 in a float64 reader and passes the schema; only the raw token shows it is not an integer."
+    },
+    {
+      "file": "client-rejected-idempotency-key-revision-mismatch.json",
+      "why": "idempotency_key says revision 1 while the payload says 2. Schema-valid (a pattern cannot compare members), refused by the clients: a mismatched key would let two different revisions collide in the UNIQUE index, or one revision appear twice."
+    },
+    {
+      "file": "client-rejected-idempotency-key-other-aggregate.json",
+      "why": "idempotency_key names a different aggregate id."
+    }
+  ],
+  "consumer_vectors": {
+    "description": "Consumer vectors: the rule a consumer applies per (aggregate_type, aggregate_id). apply = revision is last+1 (or 1 for an aggregate never seen) and the cursor advances; ignore = revision at or below the last applied one (duplicate or stale delivery), cursor unchanged; gap = revision beyond last+1, not applied, the consumer must resynchronise, cursor unchanged. Revisions are per aggregate: interleaving aggregates never changes another aggregate's verdict. Every runner replays every case from an empty cursor.",
+    "dedupe_key_examples": [
+      {
+        "aggregate_type": "membership",
+        "aggregate_id": "mbr_EXAMPLE0000000000000001",
+        "revision": 4,
+        "key": "membership:mbr_EXAMPLE0000000000000001:4"
+      }
+    ],
+    "cases": [
+      {
+        "name": "in order",
+        "steps": [
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            1,
+            "apply"
+          ],
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            2,
+            "apply"
+          ],
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            3,
+            "apply"
+          ]
+        ]
+      },
+      {
+        "name": "duplicate delivery",
+        "steps": [
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            1,
+            "apply"
+          ],
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            1,
+            "ignore"
+          ]
+        ]
+      },
+      {
+        "name": "stale delivery after a later one",
+        "steps": [
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            1,
+            "apply"
+          ],
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            2,
+            "apply"
+          ],
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            1,
+            "ignore"
+          ]
+        ]
+      },
+      {
+        "name": "gap is not applied and does not advance",
+        "steps": [
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            1,
+            "apply"
+          ],
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            3,
+            "gap"
+          ],
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            3,
+            "gap"
+          ],
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            2,
+            "apply"
+          ],
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            3,
+            "apply"
+          ]
+        ]
+      },
+      {
+        "name": "first sight above 1 is a gap",
+        "steps": [
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            5,
+            "gap"
+          ]
+        ]
+      },
+      {
+        "name": "revisions are per aggregate, not global",
+        "steps": [
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            1,
+            "apply"
+          ],
+          [
+            "organization",
+            "org_EXAMPLE0000000000000001",
+            1,
+            "apply"
+          ],
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            2,
+            "apply"
+          ],
+          [
+            "organization",
+            "org_EXAMPLE0000000000000001",
+            2,
+            "apply"
+          ],
+          [
+            "organization",
+            "org_EXAMPLE0000000000000001",
+            1,
+            "ignore"
+          ]
+        ]
+      },
+      {
+        "name": "same id in two aggregate types is two aggregates",
+        "steps": [
+          [
+            "principal",
+            "prn_EXAMPLE0000000000000001",
+            1,
+            "apply"
+          ],
+          [
+            "user",
+            "prn_EXAMPLE0000000000000001",
+            1,
+            "apply"
+          ],
+          [
+            "service_account",
+            "prn_EXAMPLE0000000000000001",
+            1,
+            "apply"
+          ],
+          [
+            "user",
+            "prn_EXAMPLE0000000000000001",
+            2,
+            "apply"
+          ]
+        ]
+      }
+    ]
+  }
+}

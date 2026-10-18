@@ -25,7 +25,12 @@ type endpointAuthProfileManifest struct {
 	} `json:"reject"`
 }
 
-const endpointAuthProfileDir = "contracts/auth/v1/examples/endpoint-auth-profile"
+const (
+	endpointAuthProfileDir          = "contracts/auth/v1/examples/endpoint-auth-profile"
+	endpointAuthProfileManifestPath = "contracts/auth/v1/examples/endpoint-auth-profile/manifest.json"
+)
+
+var endpointAuthProfileManifestBasename = filepath.Base(endpointAuthProfileManifestPath)
 
 // goProfileKeywordTokens extends goMessageForKeyword with the keywords this
 // corpus asserts. Each token was read off google/jsonschema-go by validating
@@ -46,7 +51,7 @@ func profileTokenFor(keyword string) (string, bool) {
 
 func loadEndpointAuthProfileManifest(t *testing.T) endpointAuthProfileManifest {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(testRoot(t), endpointAuthProfileDir, "manifest.json"))
+	raw, err := os.ReadFile(filepath.Join(testRoot(t), endpointAuthProfileManifestPath))
 	if err != nil {
 		t.Fatalf("reading manifest: %v", err)
 	}
@@ -88,7 +93,7 @@ func TestEveryEndpointAuthProfileFixtureOnDiskIsClaimedByTheManifest(t *testing.
 	}
 	onDisk := map[string]bool{}
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() == "manifest.json" || !strings.HasSuffix(entry.Name(), ".json") {
+		if entry.IsDir() || entry.Name() == endpointAuthProfileManifestBasename || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
 		onDisk[entry.Name()] = true

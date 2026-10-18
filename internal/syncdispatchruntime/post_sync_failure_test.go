@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -156,5 +158,65 @@ func TestFanoutPanicLogsTheFailedLineCountsItAndPanicsOn(t *testing.T) {
 	}
 	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomeError {
 		t.Fatalf("counter outcomes = %v, want one error", observer.outcomes)
+	}
+}
+
+type nilMessageStageError struct{ message *string }
+
+func (err *nilMessageStageError) Error() string { return *err.message }
+
+type selfUnwrapStageError struct{}
+
+func (err *selfUnwrapStageError) Error() string { return "cycle" }
+func (err *selfUnwrapStageError) Unwrap() error { return err }
+
+func TestStageAndJobErrorTextSurviveATypedNilAndACyclicWriterError(t *testing.T) {
+	var nilCause *nilMessageStageError
+	staged := stagedFailure(stageDaily, error(nilCause))
+	if staged.Error() == "" || postSyncStageOf(staged) != stageDaily {
+		t.Fatalf("typed nil: text %q stage %q", staged.Error(), postSyncStageOf(staged))
+	}
+	if text := (&coordinatorWorkError{cause: staged}).Error(); !strings.Contains(text, "stage=daily") {
+		t.Fatalf("job error text = %q", text)
+	}
+	done := make(chan postSyncStage, 1)
+	go func() { done <- postSyncStageOf(stagedFailure(stageDora, &selfUnwrapStageError{})) }()
+	select {
+	case stage := <-done:
+		if stage != stageDora {
+			t.Fatalf("cyclic stage = %q", stage)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stage walk hung on an Unwrap that returns itself")
+	}
+}
+
+// A panic(nil) under GODEBUG=panicnil=1 is invisible to recover: Fanout must still let it reach River. GODEBUG is read at process
+// start, so the scenario runs in a child process of this test binary.
+func TestFanoutPanicNilIsNotSwallowed(t *testing.T) {
+	if os.Getenv("FANOUT_PANICNIL_CHILD") == "1" {
+		service := &NativePostSyncService{
+			pool: &pgxpool.Pool{}, logger: synclog.New(slog.New(slog.NewJSONHandler(io.Discard, nil))),
+			now: func() time.Time { panic(nil) },
+		}
+		args := PostSyncArgs{TransportArgs{
+			Version: ContractVersionV1, OrgID: "00000000-0000-4000-8000-000000000001", RunID: "00000000-0000-4000-8000-000000000002",
+			DispatchOutbox: "00000000-0000-4000-8000-000000000003", RouteGeneration: 1,
+		}}
+		returned := false
+		func() {
+			defer func() { _ = recover() }()
+			_ = service.Fanout(context.Background(), args)
+			returned = true
+		}()
+		if returned {
+			os.Exit(3)
+		}
+		return
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestFanoutPanicNilIsNotSwallowed$")
+	command.Env = append(os.Environ(), "FANOUT_PANICNIL_CHILD=1", "GODEBUG=panicnil=1")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("Fanout swallowed a panic(nil): %v\n%s", err, output)
 	}
 }

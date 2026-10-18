@@ -56,11 +56,18 @@ type postSyncUnavailableError struct {
 	sentinel bool
 }
 
-func (err *postSyncUnavailableError) Error() string {
-	if !err.sentinel && err.cause != nil {
-		return err.cause.Error()
+func (err *postSyncUnavailableError) Error() (text string) {
+	text = ErrPostSyncUnavailable.Error()
+	if err.sentinel || err.cause == nil {
+		return text
 	}
-	return ErrPostSyncUnavailable.Error()
+	// the cause is a writer's own error: a typed nil receiver there must not panic the job error text
+	defer func() {
+		if recover() != nil {
+			text = ErrPostSyncUnavailable.Error()
+		}
+	}()
+	return err.cause.Error()
 }
 func (err *postSyncUnavailableError) Unwrap() error { return err.cause }
 func (err *postSyncUnavailableError) Is(target error) bool {
@@ -81,11 +88,25 @@ func stagedFailure(stage postSyncStage, cause error) error {
 	return &postSyncUnavailableError{stage: stage, cause: cause}
 }
 
-// postSyncStageOf is the stage of err, or "" when err is not a postSyncUnavailableError.
+// maxChainDepth bounds a walk down an error chain: a cyclic Unwrap, or a chain far deeper than any real one, must not stall it.
+const maxChainDepth = 64
+
+// boundedChain is err and what it unwraps to, at most maxChainDepth long. An Unwrap that panics (a typed nil receiver) ends the walk.
+func boundedChain(err error) (chain []error) {
+	defer func() { _ = recover() }()
+	for depth := 0; err != nil && depth < maxChainDepth; depth++ {
+		chain = append(chain, err)
+		err = errors.Unwrap(err)
+	}
+	return chain
+}
+
+// postSyncStageOf is the stage of err, or "" when no error of its chain is a postSyncUnavailableError.
 func postSyncStageOf(err error) postSyncStage {
-	var typed *postSyncUnavailableError
-	if errors.As(err, &typed) {
-		return typed.stage
+	for _, link := range boundedChain(err) {
+		if typed, ok := link.(*postSyncUnavailableError); ok && typed != nil {
+			return typed.stage
+		}
 	}
 	return ""
 }
@@ -102,9 +123,11 @@ func failureDetail(err error) (text string) {
 		text += " stage=" + string(stage)
 	}
 	text += " class=" + logging.ErrorClass(err)
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && sqlStatePattern.MatchString(pgErr.Code) {
-		text += " code=" + pgErr.Code
+	for _, link := range boundedChain(err) {
+		if pgErr, ok := link.(*pgconn.PgError); ok && pgErr != nil && sqlStatePattern.MatchString(pgErr.Code) {
+			text += " code=" + pgErr.Code
+			break
+		}
 	}
 	return text
 }

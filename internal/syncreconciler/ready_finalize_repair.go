@@ -65,6 +65,9 @@ type readyFinalizeOutcome struct {
 	SkippedLockedJob   int
 	RemainingBudget    int
 	CoordinatorReadSec float64
+	// LastDispatchedAt and LastID are the position of the last candidate of the page (route-command reconcile only).
+	LastDispatchedAt time.Time
+	LastID           string
 }
 
 // repairReadyFinalizers complements the materializer's deliberate refusal to
@@ -85,7 +88,7 @@ type readyFinalizeOutcome struct {
 func (repair *TerminalDeliveryRepair) repairReadyFinalizers(
 	ctx context.Context, tx pgx.Tx, now time.Time, limit int,
 ) (readyFinalizeOutcome, error) {
-	return repair.repairReadyFinalizersWith(ctx, tx, now, limit, repair.readyFinalizeQuery, now.Add(-repair.finalizeStaleAge), false)
+	return repair.repairReadyFinalizersWith(ctx, tx, now, limit, repair.readyFinalizeQuery, repair.lockFinalizeJobSQL, now.Add(-repair.finalizeStaleAge), nil, false)
 }
 
 // repairReadyFinalizersWith is repairReadyFinalizers with its candidate query and stale bound given. The
@@ -93,7 +96,8 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizers(
 // route, not paused, no live claim, run finalize-ready, river job missing or completed) is the same text and the same
 // code below. warnEach adds one Warn per re-armed row.
 func (repair *TerminalDeliveryRepair) repairReadyFinalizersWith(
-	ctx context.Context, tx pgx.Tx, now time.Time, limit int, query string, staleBefore time.Time, warnEach bool,
+	ctx context.Context, tx pgx.Tx, now time.Time, limit int, query, lockJobSQL string, staleBefore time.Time,
+	cursor *finalizeCursor, warnEach bool,
 ) (readyFinalizeOutcome, error) {
 	outcome := readyFinalizeOutcome{RemainingBudget: limit}
 	if limit == 0 {
@@ -103,7 +107,11 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizersWith(
 		// the transaction commits, never here. See logReadyFinalizeOutcome.
 		return outcome, nil
 	}
-	rows, err := tx.Query(ctx, query, now, staleBefore, limit)
+	args := []any{now, staleBefore, limit}
+	if cursor != nil {
+		args = append(args, cursor.at, cursor.id)
+	}
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return outcome, repair.readyFinalizeError(ctx, "candidates", err)
 	}
@@ -113,11 +121,16 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizersWith(
 		present   bool
 		delivered *int64
 		current   int64
+		at        time.Time
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.id, &c.runID, &c.jobID, &c.present, &c.delivered, &c.current); err != nil {
+		scanTargets := []any{&c.id, &c.runID, &c.jobID, &c.present, &c.delivered, &c.current}
+		if cursor != nil {
+			scanTargets = append(scanTargets, &c.at)
+		}
+		if err := rows.Scan(scanTargets...); err != nil {
 			rows.Close()
 			return outcome, repair.readyFinalizeError(ctx, "candidate_scan", err)
 		}
@@ -140,6 +153,10 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizersWith(
 		return outcome, fmt.Errorf("ready-finalizer candidate count: %w", ErrUnavailable)
 	}
 	outcome.Candidates = len(candidates)
+	if cursor != nil && len(candidates) > 0 {
+		last := candidates[len(candidates)-1]
+		outcome.LastDispatchedAt, outcome.LastID = last.at, last.id
+	}
 
 	// CHAOS-6956: one SET-based coordinator round trip for every candidate's readiness, instead of
 	// one round trip PER candidate. The per-candidate loop below used to call readyFinalizeDomainSQL
@@ -176,7 +193,7 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizersWith(
 		evidence := readyFinalizeMissingEvidence
 		if c.present {
 			var completed bool
-			err := tx.QueryRow(ctx, repair.lockFinalizeJobSQL, c.jobID).Scan(&completed)
+			err := tx.QueryRow(ctx, lockJobSQL, c.jobID).Scan(&completed)
 			if errors.Is(err, pgx.ErrNoRows) {
 				// SKIP LOCKED yielded nothing: another replica holds this
 				// job's row, so its liveness cannot be read here.
@@ -326,8 +343,35 @@ LIMIT $3`
 // selectOtherGenerationFinalizeSQL is selectReadyFinalizeSQL for a delivery dispatched at a generation other than
 // the route's current one. Only the route-command reconcile uses it (generation_reconcile.go); the scheduled repair
 // keeps the equality fence of CHAOS-5462. The init check fails the build of the process if the text it rewrites moves.
-var selectOtherGenerationFinalizeSQL = strings.Replace(selectReadyFinalizeSQL,
-	"outbox.dispatched_route_generation=route.generation", "outbox.dispatched_route_generation IS DISTINCT FROM route.generation", 1)
+var selectOtherGenerationFinalizeSQL = replaceOnce(replaceOnce(replaceOnce(replaceOnce(selectReadyFinalizeSQL,
+	"outbox.dispatched_route_generation=route.generation", "outbox.dispatched_route_generation IS DISTINCT FROM route.generation"),
+	readyFinalizeJobLivenessPredicate, readyFinalizeJobTerminalPredicate),
+	"outbox.dispatched_route_generation, route.generation\nFROM", "outbox.dispatched_route_generation, route.generation, outbox.dispatched_at\nFROM"),
+	"ORDER BY outbox.dispatched_at,outbox.id", "AND (outbox.dispatched_at, outbox.id) > ($4::timestamptz, $5::uuid)\nORDER BY outbox.dispatched_at,outbox.id")
+
+// lockOtherGenerationJobSQL is lockReadyFinalizeJobSQL for the route-command reconcile: the job is re-read under the same
+// terminal states the candidate query selects.
+var lockOtherGenerationJobSQL = replaceOnce(lockReadyFinalizeJobSQL, readyFinalizeJobLivenessPredicate, readyFinalizeJobTerminalPredicate)
+
+// readyFinalizeJobTerminalPredicate is "River ended this finalize delivery" for the route-command reconcile: completed,
+// discarded or cancelled. The scheduled repair keeps the completed-only rule (readyFinalizeJobLivenessPredicate) and its
+// River-terminal branches; a delivery at another generation has no other repair owner, so the command re-arms it.
+const readyFinalizeJobTerminalPredicate = `job.kind='finalize_sync_run' AND job.state IN ('completed','discarded','cancelled') AND job.finalized_at IS NOT NULL`
+
+// replaceOnce replaces the single occurrence of old and panics at process start if the text moved.
+func replaceOnce(text, old, replacement string) string {
+	if strings.Count(text, old) != 1 {
+		panic("syncreconciler: expected exactly one occurrence of " + old)
+	}
+	return strings.Replace(text, old, replacement, 1)
+}
+
+// finalizeCursor is the keyset position of the route-command reconcile: it walks the deliveries in (dispatched_at, id)
+// order, so a page of deliveries it skips never hides the ones behind it.
+type finalizeCursor struct {
+	at time.Time
+	id string
+}
 
 func init() {
 	if selectOtherGenerationFinalizeSQL == selectReadyFinalizeSQL {

@@ -21,13 +21,12 @@ type StrandedKindCount struct {
 
 // GenerationReconcileReport is what a route command prints about the deliveries its generation change left behind.
 type GenerationReconcileReport struct {
-	Kind               string              `json:"kind"`
-	Rearmed            int                 `json:"rearmed"`
-	SkippedNotReady    int                 `json:"skipped_not_ready"`
-	SkippedLiveJob     int                 `json:"skipped_live_job"`
-	SkippedOtherRepair int                 `json:"skipped_other_repair"`
-	SkippedLockedJob   int                 `json:"skipped_locked_job"`
-	OtherKinds         []StrandedKindCount `json:"other_kinds"`
+	Kind             string              `json:"kind"`
+	Rearmed          int                 `json:"rearmed"`
+	SkippedNotReady  int                 `json:"skipped_not_ready"`
+	SkippedLiveJob   int                 `json:"skipped_live_job"`
+	SkippedLockedJob int                 `json:"skipped_locked_job"`
+	OtherKinds       []StrandedKindCount `json:"other_kinds"`
 }
 
 // GenerationReconcileCounter counts what a route command did to deliveries at another generation, by kind and action
@@ -55,13 +54,10 @@ GROUP BY outbox.kind
 ORDER BY outbox.kind`
 
 // countOtherGenerationLiveFinalizeSQL counts the finalize deliveries at another generation that the reconcile must
-// not touch because their River job is there and not completed: live (available, pending, retryable, running,
-// scheduled) or ended in discarded/cancelled, which the River-terminal branches of this repair own
-// (repairTerminalRiverDeliverySQL: CHAOS-3951 exhaustion, CHAOS-4097 rescue-only cancel). They are candidates of no re-arm,
-// so without these counts an operator could not see them.
+// not touch because their River job is live (available, pending, retryable, running, scheduled). They are candidates of
+// no re-arm, so without this count an operator could not see them.
 const countOtherGenerationLiveFinalizeSQL = `
-SELECT count(*) FILTER (WHERE job.state IN ('available','pending','retryable','running','scheduled')),
-    count(*) FILTER (WHERE job.state IN ('discarded','cancelled'))
+SELECT count(*)
 FROM public.sync_dispatch_outbox AS outbox
 JOIN public.sync_runs AS run ON run.id=outbox.sync_run_id
 JOIN public.sync_dispatch_transport_routes AS route ON route.kind=outbox.kind
@@ -73,7 +69,7 @@ WHERE outbox.kind='finalize_sync_run'
     AND outbox.dispatched_route_generation IS DISTINCT FROM route.generation
     AND route.transport='river' AND NOT route.paused
     AND ` + nonterminalSyncRunStatusPredicate + `
-    AND job.state <> 'completed'`
+    AND job.state NOT IN ('completed','discarded','cancelled')`
 
 // ReconcileOtherGenerations is run by the route commands (apply, pause, resume) after they changed a route's
 // generation, so the command does not leave deliveries of the old generation behind (chris, CHAOS-9964: "A command
@@ -99,36 +95,36 @@ func (repair *TerminalDeliveryRepair) ReconcileOtherGenerations(
 	}
 
 	if kind == "finalize_sync_run" {
-		// Each pass re-arms rows that then leave the candidate set, so the loop ends when a pass re-arms none or
-		// sees fewer candidates than a batch; there is no pass ceiling (a ceiling stranded eligible rows). A cancelled
-		// context fails the next pass.
+		// The walk is by keyset (dispatched_at, id): a page of deliveries it skips never hides the ones behind it, and
+		// every delivery is seen once, so the skip counts add up. There is no pass ceiling. A cancelled context fails the
+		// next pass.
+		cursor := &finalizeCursor{at: time.Unix(0, 0).UTC(), id: "00000000-0000-0000-0000-000000000000"}
 		for {
-			outcome, err := repair.reconcileFinalizePass(ctx, now)
+			outcome, err := repair.reconcileFinalizePass(ctx, now, cursor)
 			if err != nil {
 				return report, err
 			}
 			report.Rearmed += outcome.Recovered
-			report.SkippedNotReady = outcome.SkippedNotReady
+			report.SkippedNotReady += outcome.SkippedNotReady
 			report.SkippedLiveJob += outcome.SkippedLiveJob
-			report.SkippedLockedJob = outcome.SkippedLockedJob
-			if outcome.Candidates < maximumStepLimit || outcome.Recovered == 0 {
+			report.SkippedLockedJob += outcome.SkippedLockedJob
+			if outcome.Candidates < maximumStepLimit {
 				break
 			}
+			cursor = &finalizeCursor{at: outcome.LastDispatchedAt, id: outcome.LastID}
 		}
-		live, otherRepair, err := repair.countOtherGenerationLive(ctx)
+		live, err := repair.countOtherGenerationLive(ctx)
 		if err != nil {
 			return report, err
 		}
 		report.SkippedLiveJob += live
-		report.SkippedOtherRepair = otherRepair
 		record(kind, "rearmed", report.Rearmed)
 		record(kind, "skipped_live_job", report.SkippedLiveJob)
 		record(kind, "skipped_not_ready", report.SkippedNotReady)
 		record(kind, "skipped_locked_job", report.SkippedLockedJob)
-		record(kind, "skipped_other_repair", report.SkippedOtherRepair)
 		slog.InfoContext(ctx, "syncreconciler.generation_reconcile",
 			"kind", kind, "rearmed", report.Rearmed, "skipped_not_ready", report.SkippedNotReady,
-			"skipped_live_job", report.SkippedLiveJob, "skipped_other_repair", report.SkippedOtherRepair, "skipped_locked_job", report.SkippedLockedJob)
+			"skipped_live_job", report.SkippedLiveJob, "skipped_locked_job", report.SkippedLockedJob)
 	}
 
 	tx, err := repair.begin(ctx)
@@ -164,13 +160,13 @@ func (repair *TerminalDeliveryRepair) ReconcileOtherGenerations(
 	return report, nil
 }
 
-func (repair *TerminalDeliveryRepair) reconcileFinalizePass(ctx context.Context, now time.Time) (readyFinalizeOutcome, error) {
+func (repair *TerminalDeliveryRepair) reconcileFinalizePass(ctx context.Context, now time.Time, cursor *finalizeCursor) (readyFinalizeOutcome, error) {
 	tx, err := repair.begin(ctx)
 	if err != nil || tx == nil {
 		return readyFinalizeOutcome{}, ErrUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	outcome, err := repair.repairReadyFinalizersWith(ctx, tx, now.UTC(), maximumStepLimit, repair.otherGenerationQuery, now.UTC(), true)
+	outcome, err := repair.repairReadyFinalizersWith(ctx, tx, now.UTC(), maximumStepLimit, repair.otherGenerationQuery, repair.otherGenerationLockSQL, now.UTC(), cursor, true)
 	if err != nil {
 		return readyFinalizeOutcome{}, err
 	}
@@ -180,17 +176,18 @@ func (repair *TerminalDeliveryRepair) reconcileFinalizePass(ctx context.Context,
 	return outcome, nil
 }
 
-func (repair *TerminalDeliveryRepair) countOtherGenerationLive(ctx context.Context) (live, otherRepair int, err error) {
+func (repair *TerminalDeliveryRepair) countOtherGenerationLive(ctx context.Context) (int, error) {
 	tx, err := repair.begin(ctx)
 	if err != nil || tx == nil {
-		return 0, 0, ErrUnavailable
+		return 0, ErrUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := tx.QueryRow(ctx, repair.otherGenerationLiveQuery).Scan(&live, &otherRepair); err != nil {
-		return 0, 0, fmt.Errorf("count finalize deliveries at another generation with a job: %w", ErrUnavailable)
+	var live int
+	if err := tx.QueryRow(ctx, repair.otherGenerationLiveQuery).Scan(&live); err != nil {
+		return 0, fmt.Errorf("count finalize deliveries at another generation with a live job: %w", ErrUnavailable)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, ErrUnavailable
+		return 0, ErrUnavailable
 	}
-	return live, otherRepair, nil
+	return live, nil
 }

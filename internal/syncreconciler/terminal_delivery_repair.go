@@ -150,6 +150,7 @@ type TerminalDeliveryRepair struct {
 	otherGenerationQuery      string
 	otherGenerationCountQuery string
 	otherGenerationLiveQuery  string
+	otherGenerationLockSQL    string
 	lockFinalizeJobSQL        string
 	finalizeStaleAge          time.Duration
 }
@@ -171,6 +172,7 @@ func NewTerminalDeliveryRepair(
 		otherGenerationQuery:      fmt.Sprintf(selectOtherGenerationFinalizeSQL, jobTable),
 		otherGenerationCountQuery: fmt.Sprintf(countOtherGenerationStrandedSQL, jobTable),
 		otherGenerationLiveQuery:  fmt.Sprintf(countOtherGenerationLiveFinalizeSQL, jobTable),
+		otherGenerationLockSQL:    fmt.Sprintf(lockOtherGenerationJobSQL, jobTable),
 		lockFinalizeJobSQL:        fmt.Sprintf(lockReadyFinalizeJobSQL, jobTable),
 		finalizeStaleAge:          syncdispatchcontract.DispatchStaleAge(),
 	}, nil

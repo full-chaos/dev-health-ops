@@ -39,7 +39,7 @@ func TestRouteCommandReconcilesFinalizeDeliveriesLeftAtAnotherGeneration(t *test
 	h := startFinalizeBackstopHarness(t, ctx)
 	now := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
 
-	for _, state := range []string{"missing", "completed"} {
+	for _, state := range []string{"missing", "completed", "discarded", "cancelled"} {
 		t.Run("rearmed when the job is "+state, func(t *testing.T) {
 			h.seed(t, ctx, now, state)
 			h.bumpFinalizeRoute(t, ctx)
@@ -84,13 +84,12 @@ func TestRouteCommandReconcilesFinalizeDeliveriesLeftAtAnotherGeneration(t *test
 	})
 
 	for _, tc := range []struct {
-		name, state, sql                        string
-		wantNotReady, wantLive, wantOtherRepair int
+		name, state, sql       string
+		wantNotReady, wantLive int
 	}{
 		{name: "available job", state: "available", wantLive: 1},
 		{name: "running job", state: "running", wantLive: 1},
 		{name: "retryable job", state: "retryable", wantLive: 1},
-		{name: "cancelled job (owned by the River-terminal repair)", state: "cancelled", wantOtherRepair: 1},
 		{name: "terminal run", state: "missing", sql: `UPDATE sync_runs SET status='success'`},
 		{name: "unfinished unit", state: "missing", sql: `UPDATE sync_run_units SET status='running'`, wantNotReady: 1},
 		{name: "paused route", state: "missing", sql: `UPDATE sync_dispatch_transport_routes SET paused=true,paused_at=now(),generation=generation+1 WHERE kind='finalize_sync_run'`},
@@ -109,8 +108,8 @@ func TestRouteCommandReconcilesFinalizeDeliveriesLeftAtAnotherGeneration(t *test
 				t.Fatal(err)
 			}
 			if status, _ := h.outboxState(t, ctx); report.Rearmed != 0 || status != "dispatched" ||
-				report.SkippedNotReady != tc.wantNotReady || report.SkippedLiveJob != tc.wantLive || report.SkippedOtherRepair != tc.wantOtherRepair {
-				t.Fatalf("reconcile = %+v status=%s, want nothing re-armed, notReady=%d live=%d otherRepair=%d", report, status, tc.wantNotReady, tc.wantLive, tc.wantOtherRepair)
+				report.SkippedNotReady != tc.wantNotReady || report.SkippedLiveJob != tc.wantLive {
+				t.Fatalf("reconcile = %+v status=%s, want nothing re-armed, notReady=%d live=%d", report, status, tc.wantNotReady, tc.wantLive)
 			}
 		})
 	}
@@ -194,5 +193,68 @@ func TestRouteCommandReconcileHasNoBatchCeiling(t *testing.T) {
 	}
 	if report.Rearmed != rowCount || dispatched != 0 {
 		t.Fatalf("reconcile report=%+v dispatched=%d; want all %d rows re-armed", report, dispatched, rowCount)
+	}
+}
+
+// seedStaleFinalizeBatch inserts count finalize deliveries dispatched at a generation ahead of the route, with a river
+// job that is gone, on runs whose one unit has the given status (success = ready to finalize, running = not ready).
+// Their ids and dispatch times sort by (first, index): a smaller first sorts earlier.
+func seedStaleFinalizeBatch(t *testing.T, ctx context.Context, h *finalizeBackstopHarness, first, count int, unitStatus string, dispatchedAt time.Time, generation int64) {
+	t.Helper()
+	statements := []string{`
+		INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status,
+			total_units, completed_units, failed_units, created_at)
+		SELECT ('00000000-0000-4000-9000-' || lpad(i::text, 12, '0'))::uuid, 'org-materializer', '` + pgseed.DefaultSyncIntegrationID + `'::uuid,
+			'manual', 'incremental', 'dispatching', 1, 0, 0, '` + dispatchedAt.Format(time.RFC3339) + `'::timestamptz
+		FROM generate_series(` + strconv.Itoa(first) + `, ` + strconv.Itoa(first+count-1) + `) AS s(i)`, `
+		INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key,
+			cost_class, mode, attempts, created_at, status, available_at, updated_at)
+		SELECT ('00000000-0000-4000-9002-' || lpad(i::text, 12, '0'))::uuid, 'org-materializer',
+			('00000000-0000-4000-9000-' || lpad(i::text, 12, '0'))::uuid, '` + pgseed.DefaultSyncIntegrationID + `'::uuid, '` + pgseed.DefaultSyncSourceID + `'::uuid,
+			'github', 'commits', 'rest_core', 'incremental', 0, '` + dispatchedAt.Format(time.RFC3339) + `'::timestamptz, '` + unitStatus + `', NULL, '` + dispatchedAt.Format(time.RFC3339) + `'::timestamptz
+		FROM generate_series(` + strconv.Itoa(first) + `, ` + strconv.Itoa(first+count-1) + `) AS s(i)`, `
+		INSERT INTO public.sync_dispatch_outbox
+			(id, org_id, sync_run_id, kind, status, available_at, attempts, dispatched_at,
+			dispatched_transport, dispatched_route_generation, transport_job_id, created_at, updated_at)
+		SELECT ('00000000-0000-4000-9001-' || lpad(i::text, 12, '0'))::uuid, 'org-materializer',
+			('00000000-0000-4000-9000-' || lpad(i::text, 12, '0'))::uuid, 'finalize_sync_run', 'dispatched', '` + dispatchedAt.Format(time.RFC3339) + `'::timestamptz,
+			1, '` + dispatchedAt.Format(time.RFC3339) + `'::timestamptz, 'river', ` + strconv.FormatInt(generation, 10) + `, '999999', '` + dispatchedAt.Format(time.RFC3339) + `'::timestamptz, '` + dispatchedAt.Format(time.RFC3339) + `'::timestamptz
+		FROM generate_series(` + strconv.Itoa(first) + `, ` + strconv.Itoa(first+count-1) + `) AS s(i)`,
+	}
+	for _, statement := range statements {
+		if _, err := h.admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A full page of deliveries the reconcile skips must not hide the eligible ones behind it, and the skip counts add up
+// across pages.
+func TestRouteCommandReconcileWalksPastFullPagesOfNotReadyDeliveries(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	h := startFinalizeBackstopHarness(t, ctx)
+	now := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
+	for _, notReady := range []int{100, 200} {
+		t.Run(strconv.Itoa(notReady)+" not-ready deliveries before one ready", func(t *testing.T) {
+			resetMaterializerIntegrationTables(t, ctx, h.admin)
+			generation := backstopRoutes(t, ctx, h.admin) + 1
+			seedStaleFinalizeBatch(t, ctx, h, 0, notReady, "running", now.Add(-48*time.Hour), generation)
+			seedStaleFinalizeBatch(t, ctx, h, 100000, 1, "success", now.Add(-24*time.Hour), generation)
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+			defer slog.SetDefault(previous)
+			report, err := h.repair.ReconcileOtherGenerations(ctx, now, "finalize_sync_run")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var pending, dispatched int
+			if err := h.admin.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status='pending'), count(*) FILTER (WHERE status='dispatched') FROM public.sync_dispatch_outbox`).Scan(&pending, &dispatched); err != nil {
+				t.Fatal(err)
+			}
+			if report.Rearmed != 1 || report.SkippedNotReady != notReady || pending != 1 || dispatched != notReady {
+				t.Fatalf("report=%+v pending=%d dispatched=%d; want 1 re-armed behind %d not-ready rows, all %d counted", report, pending, dispatched, notReady, notReady)
+			}
+		})
 	}
 }

@@ -42,6 +42,13 @@ const sweepExpand = (v) =>
   v && typeof v === "object" && !Array.isArray(v) && "$repeat" in v
     ? (v.prefix ?? "") + v.$repeat[0].repeat(v.$repeat[1]) + (v.suffix ?? "")
     : v;
+// A sweep path or rename may never name a prototype member, and a step into the
+// document must name a member the document owns.
+const PROTOTYPE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+function sweepAssertPlainKey(node, key, mayCreate = false) {
+  if (PROTOTYPE_KEYS.has(key)) throw new Error(`sweep path names a prototype member: ${key}`);
+  if (!mayCreate && !Object.prototype.hasOwnProperty.call(node, key)) throw new Error(`sweep path step ${key} is not a member of the document`);
+}
 // Applies a sweep row's ops to a copy of the base document.
 function sweepBuild(base, ops) {
   let doc = structuredClone(base);
@@ -51,8 +58,13 @@ function sweepBuild(base, ops) {
       continue;
     }
     let parent = doc;
-    for (const step of op.path.slice(0, -1)) parent = parent[step];
+    for (const step of op.path.slice(0, -1)) {
+      sweepAssertPlainKey(parent, step);
+      parent = parent[step];
+    }
     const last = op.path[op.path.length - 1];
+    if (!op.rename) sweepAssertPlainKey(parent, last, true);
+    if (op.rename) sweepAssertPlainKey(parent, op.rename, true);
     if ("rename" in op) {
       parent[op.rename] = parent[last];
       delete parent[last];
@@ -393,7 +405,10 @@ for (const surface of surfaces) {
         }
       }
       const strict = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+      const byteIds = new Set();
       for (const row of sweep.byte_layer_rows ?? []) {
+        if (byteIds.has(row.id)) fail(`${surface}: byte-layer row ${row.id} appears twice`);
+        byteIds.add(row.id);
         checked += 1;
         const bytes = row.raw !== undefined ? Buffer.from(row.raw, "utf8") : Buffer.from(row.raw_hex, "hex");
         let got;

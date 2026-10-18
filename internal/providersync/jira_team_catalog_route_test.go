@@ -441,9 +441,10 @@ func TestJiraTeamCatalogProjectSearchIsCompleteOnlyOnAnEndOfDataSignal(t *testin
 		"total reached is the end": {map[string]jiraTeamCatalogFixtureResponse{
 			jiraTeamCatalogProjectSearchURI: {body: jiraProjectSearchPage(0, 2, `,"total":2`)},
 		}, true, 1, 2},
-		"a short page with no signal is the end": {map[string]jiraTeamCatalogFixtureResponse{
-			jiraTeamCatalogProjectSearchURI: {body: jiraProjectSearchPage(0, 2, ``)},
-		}, true, 1, 2},
+		"a short page with no signal is not the end; the empty page after it stops the walk": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI:                       {body: jiraProjectSearchPage(0, 2, ``)},
+			"/rest/api/3/project/search?maxResults=100&startAt=2": {body: `{"values":[]}`},
+		}, false, 2, 2},
 		"an empty object as the first page is not the end": {map[string]jiraTeamCatalogFixtureResponse{
 			jiraTeamCatalogProjectSearchURI: {body: `{}`},
 		}, false, 1, 0},

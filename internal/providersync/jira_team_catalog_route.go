@@ -823,6 +823,11 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		if reuseErr != nil {
 			return result, reuseErr
 		}
+		keptMemberships, reuseErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_memberships", keptMemberships,
+			func(r jiraTeamCatalogMembershipRow) string { return r.TeamID }, func(r jiraTeamCatalogMembershipRow) bool { return r.ValidTo == nil }, nil)
+		if reuseErr != nil {
+			return result, reuseErr
+		}
 		membershipsEffect, effectErr := effectBatchFromValues(jiraTeamCatalogMembershipsDestination, EffectReadbackRequired, keptMemberships)
 		if effectErr != nil {
 			return result, effectErr
@@ -930,6 +935,11 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		slog.Default().InfoContext(ctx, "jira_team_catalog_ownership_unchanged",
 			"org_id", ref.OrgID, "fresh", freshOwnership, "unchanged", result.OwnershipUnchanged, "written", len(ownership))
 		ownership = append(ownership, retracted...)
+		ownership, openErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_project_ownership", ownership,
+			func(r jiraTeamCatalogOwnershipRow) string { return r.TeamID }, func(r jiraTeamCatalogOwnershipRow) bool { return r.ValidTo == nil }, nil)
+		if openErr != nil {
+			return result, openErr
+		}
 
 		ownershipEffect, effectErr := effectBatchFromValues(jiraTeamCatalogOwnershipDestination, EffectReadbackRequired, ownership)
 		if effectErr != nil {

@@ -246,8 +246,16 @@ func Write(
 		}
 		return result, fmt.Errorf("%s: %w", stage, err)
 	}
+	// The links are written before the teams: the teams this run writes are
+	// imported teams for them.
+	var teamsWritten []string
+	if selections.Structure {
+		for _, team := range teamsToWrite {
+			teamsWritten = append(teamsWritten, team.ID)
+		}
+	}
 	if selections.Members && (len(memberships) > 0 || len(expiredMemberships) > 0) {
-		if err := writeMemberships(ctx, conn, orgID, memberships, expiredMemberships, now); err != nil {
+		if err := writeMemberships(ctx, conn, orgID, memberships, expiredMemberships, now, teamsWritten); err != nil {
 			return fail("write team memberships", err)
 		}
 		result.MembershipsWritten = len(memberships)
@@ -256,7 +264,7 @@ func Write(
 		done = append(done, "team memberships")
 	}
 	if selections.Projects && (len(ownership) > 0 || len(expiredOwnership) > 0) {
-		if err := writeOwnership(ctx, conn, orgID, ownership, expiredOwnership, now); err != nil {
+		if err := writeOwnership(ctx, conn, orgID, ownership, expiredOwnership, now, teamsWritten); err != nil {
 			return fail("write team project ownership", err)
 		}
 		result.ExpiredOwnership = len(expiredOwnership)
@@ -662,7 +670,12 @@ func readProjectKeys(ctx context.Context, conn driver.Conn, orgID string, ids []
 	return keys, result.Err()
 }
 
-func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows []MembershipRow, expired []openMembership, now time.Time) error {
+func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows []MembershipRow, expired []openMembership, now time.Time, teamsWritten []string) error {
+	rows, err := providersync.KeepLinksOfImportedTeams(ctx, conn, orgID, Provider, "team_memberships", rows,
+		func(r MembershipRow) string { return r.TeamID }, func(MembershipRow) bool { return true }, teamsWritten)
+	if err != nil {
+		return err
+	}
 	batch, err := conn.PrepareBatch(ctx, membershipsInsert)
 	if err != nil {
 		return err
@@ -699,7 +712,12 @@ func optionalText(value string) *string {
 	return nil
 }
 
-func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []OwnershipRow, expired []openOwnership, now time.Time) error {
+func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []OwnershipRow, expired []openOwnership, now time.Time, teamsWritten []string) error {
+	rows, err := providersync.KeepLinksOfImportedTeams(ctx, conn, orgID, Provider, "team_project_ownership", rows,
+		func(r OwnershipRow) string { return r.TeamID }, func(OwnershipRow) bool { return true }, teamsWritten)
+	if err != nil {
+		return err
+	}
 	batch, err := conn.PrepareBatch(ctx, ownershipInsert)
 	if err != nil {
 		return err

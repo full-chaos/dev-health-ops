@@ -739,6 +739,11 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, membershipOutcome.Plan)
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.MembershipsClosed = membershipOutcome.Closed
+		membershipRows, reuseErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, "team_memberships", membershipRows,
+			func(r gitlabTeamCatalogMembershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogMembershipRow) bool { return r.ValidTo == nil }, nil)
+		if reuseErr != nil {
+			return result, reuseErr
+		}
 		membershipsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogMembershipsDestination, EffectReadbackRequired, membershipRows)
 		if effectErr != nil {
 			return result, effectErr
@@ -772,6 +777,11 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			}
 			closed := len(plan.Retract)
 			ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, plan)
+			ownershipRows, snapshotErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, "team_project_ownership", ownershipRows,
+				func(r gitlabTeamCatalogOwnershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogOwnershipRow) bool { return r.ValidTo == nil }, nil)
+			if snapshotErr != nil {
+				return result, snapshotErr
+			}
 			ownershipEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogOwnershipDestination, EffectReadbackRequired, ownershipRows)
 			if effectErr != nil {
 				return result, effectErr

@@ -265,6 +265,11 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		ReportSnapshotPlan(ctx, githubTeamCatalogProvider, ref.OrgID, membershipOutcome.Plan)
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.MembershipsClosed = membershipOutcome.Closed
+		membershipRows, err = KeepLinksOfImportedTeams(ctx, adapter.Sink.Conn, ref.OrgID, githubTeamCatalogProvider, "team_memberships", membershipRows,
+			func(r githubMembershipRow) string { return r.TeamID }, func(r githubMembershipRow) bool { return r.ValidTo == nil }, nil)
+		if err != nil {
+			return result, err
+		}
 		if len(membershipRows) > 0 {
 			if err := adapter.Sink.WriteMemberships(ctx, ref.OrgID, membershipRows); err != nil {
 				return result, err

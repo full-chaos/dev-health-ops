@@ -20,7 +20,7 @@ var authorizationSurfaces = []string{
 // without its version, because the strict ajv runner pairs examples/<name>/
 // with <name>.v1.schema.json.
 // authorizationManifestPaths name each manifest by full repo path: a bare
-// "manifest.json" literal is ambiguous to the Go path-filter gate.
+// file name is ambiguous to the Go path-filter gate.
 var authorizationManifestPaths = map[string]string{
 	AuthorizationRequestSurface:       "contracts/auth/v1/examples/authorization_request/manifest.json",
 	AuthorizationDecisionSurface:      "contracts/auth/v1/examples/authorization_decision/manifest.json",

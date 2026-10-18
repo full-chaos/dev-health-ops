@@ -57,6 +57,11 @@ PROBE = textwrap.dedent(
         "parse_provisioning_event": lambda: client.parse_provisioning_event(
             raw("provisioning-event", "valid-minimal.json")),
         "parse_audit_event": lambda: client.parse_audit_event(raw("audit-event", "valid-minimal.json")),
+        "parse_decision_bytes": lambda: client.parse_decision_bytes(
+            raw("authorization_decision", "decision-valid-deny.json")),
+        "parse_batch_response_bytes": lambda: client.parse_batch_response_bytes(
+            raw("authorization_batch_request", "batch-request-valid-two-items.json"),
+            raw("authorization_batch_response", "batch-response-valid-items-disagree.json")),
         "parse_rfc3339": lambda: client.parse_rfc3339("2026-09-03T10:00:00Z", "probe.v1", "at"),
     }
     exported = sorted(n for n in client.__all__ if n.startswith("parse_"))
@@ -73,6 +78,12 @@ PROBE = textwrap.dedent(
     out["Principal.from_wire"] = "ok"
     client.validate("jwks.v1", json.loads(raw("jwks", "valid-single-signing-key.json")))
     out["validate(jwks.v1)"] = "ok"
+    # A schema that $refs another file must resolve from the installed tree too.
+    client.validate(
+        "endpoint-auth-profile.v1",
+        json.loads(raw("endpoint-auth-profile", "valid-protected-jwt-single-class.json")),
+    )
+    out["validate(endpoint-auth-profile.v1)"] = "ok"
     print(json.dumps({"ran": out, "schemas_dir": str(client.contracts_dir() / "jsonschema")}))
     """
 )

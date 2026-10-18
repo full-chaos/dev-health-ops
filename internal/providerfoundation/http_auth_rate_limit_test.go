@@ -58,3 +58,58 @@ func TestHTTPClientAppTokenExchangeRateLimitObservedAndPenalizesGate(t *testing.
 		t.Fatalf("no rate_limited request sample:\n%s", output.String())
 	}
 }
+
+type failingPenalizeGate struct{ err error }
+
+func (failingPenalizeGate) Wait(context.Context) (time.Duration, error) { return 0, nil }
+func (g failingPenalizeGate) Penalize(context.Context, time.Duration) error {
+	return g.err
+}
+
+func TestHTTPClientAuthRateLimitGateFailureIsReturnedAndCounted(t *testing.T) {
+	t.Parallel()
+	gateErr := errors.New("gate store down")
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		t.Error("provider request sent despite a failed auth step")
+		return testHTTPResponse(request, http.StatusOK, nil, `{}`), nil
+	})), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	client.Auth = func(*http.Request) error {
+		return &ProviderError{Class: ErrorRateLimited, StatusCode: http.StatusForbidden}
+	}
+	client.Gate = failingPenalizeGate{err: gateErr}
+	client.Metrics = NewMetrics()
+
+	_, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
+	if !errors.Is(err, gateErr) {
+		t.Fatalf("err=%v, want the gate error as the response path returns it", err)
+	}
+	var output bytes.Buffer
+	if err := client.Metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `dev_health_provider_gate_penalize_errors_total{provider="github",path="auth"} 1`) {
+		t.Fatalf("no gate failure sample:\n%s", output.String())
+	}
+}
+
+func TestHTTPClientResponseRateLimitGateFailureIsReturnedAndCounted(t *testing.T) {
+	t.Parallel()
+	gateErr := errors.New("gate store down")
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		return testHTTPResponse(request, http.StatusTooManyRequests, nil, `{}`), nil
+	})), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	client.Gate = failingPenalizeGate{err: gateErr}
+	client.Metrics = NewMetrics()
+
+	_, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
+	if !errors.Is(err, gateErr) {
+		t.Fatalf("err=%v, want the raw gate error", err)
+	}
+	var output bytes.Buffer
+	if err := client.Metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `dev_health_provider_gate_penalize_errors_total{provider="github",path="response"} 1`) {
+		t.Fatalf("no gate failure sample:\n%s", output.String())
+	}
+}

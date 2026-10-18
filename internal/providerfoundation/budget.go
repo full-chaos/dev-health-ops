@@ -262,6 +262,7 @@ type Metrics struct {
 	requests                       map[string]uint64
 	budgetDenied                   map[string]uint64
 	budgetReleaseErrors            map[string]uint64
+	gatePenalizeErrors             map[string]uint64
 	inventoryPageCap               map[string]uint64
 	perRunTruncation               map[string]uint64
 	artifactSkipped                map[string]uint64
@@ -308,6 +309,7 @@ func NewMetrics() *Metrics {
 		requests:                       map[string]uint64{},
 		budgetDenied:                   map[string]uint64{},
 		budgetReleaseErrors:            map[string]uint64{},
+		gatePenalizeErrors:             map[string]uint64{},
 		inventoryPageCap:               map[string]uint64{},
 		perRunTruncation:               map[string]uint64{},
 		artifactSkipped:                map[string]uint64{},
@@ -400,6 +402,20 @@ func (m *Metrics) RecordBudgetReleaseError(provider string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.budgetReleaseErrors[metricProvider(provider)]++
+}
+
+// RecordGatePenalizeError counts a cooldown gate write that failed after a
+// rate-limited auth step (path "auth") or response (path "response").
+func (m *Metrics) RecordGatePenalizeError(provider, path string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if path != "auth" {
+		path = "response"
+	}
+	m.gatePenalizeErrors[metricProvider(provider)+":"+path]++
 }
 
 // RecordInventoryPageCap counts one inventory phase that stopped at its
@@ -1570,6 +1586,22 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	for _, provider := range providers {
 		value := m.budgetReleaseErrors[provider]
 		if _, err := fmt.Fprintf(writer, "dev_health_provider_budget_release_errors_total{provider=%q} %d\n", provider, value); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(writer,
+		"# HELP dev_health_provider_gate_penalize_errors_total Cooldown gate writes that failed after a rate-limited provider auth step or response, by bounded provider and path.\n"+
+			"# TYPE dev_health_provider_gate_penalize_errors_total counter\n"); err != nil {
+		return err
+	}
+	gateKeys := make([]string, 0, len(m.gatePenalizeErrors))
+	for key := range m.gatePenalizeErrors {
+		gateKeys = append(gateKeys, key)
+	}
+	sort.Strings(gateKeys)
+	for _, key := range gateKeys {
+		parts := strings.SplitN(key, ":", 2)
+		if _, err := fmt.Fprintf(writer, "dev_health_provider_gate_penalize_errors_total{provider=%q,path=%q} %d\n", parts[0], parts[1], m.gatePenalizeErrors[key]); err != nil {
 			return err
 		}
 	}

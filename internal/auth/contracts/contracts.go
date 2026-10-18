@@ -179,6 +179,12 @@ const MaxExactFloatInteger = 9007199254740992.0
 // fire on the value it was written for. An integer-form token expresses the
 // same number exactly and never reaches this check.
 //
+// KNOWN LIMIT, not a regression: this is a MAGNITUDE bound only. A fractional
+// decimal token within half a float64 step of an integer (1.0000000000000001,
+// 9007199254740990.1) rounds to that integer before asFloat exists and is
+// accepted; closing it needs a lexical check of the raw token (tracked as
+// 10090).
+//
 // Wire-integer TYPE (is this a JSON integer literal, not 403.0?) needs no
 // helper here: decoding into an integer-typed field with encoding/json already
 // refuses a zero-fraction decimal, which is how ErrorEnvelope.Status and

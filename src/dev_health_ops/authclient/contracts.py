@@ -302,6 +302,12 @@ def refuse_inexact_decimal(raw: float, surface: str, field: str) -> None:
     float cannot say which of the two arrived, and a guard using ``>`` does not
     fire on the value it was written for. Integer-form tokens are unaffected
     and stay exact.
+
+    KNOWN LIMIT, not a regression: this is a MAGNITUDE bound only. A fractional
+    decimal token within half a float64 step of an integer (``1.0000000000000001``,
+    ``9007199254740990.1``) is rounded by ``json`` before this runs and is
+    indistinguishable from the integer; closing that needs the raw token, which
+    the dict-taking entry points no longer have (tracked as 10090).
     """
     if abs(raw) >= MAX_EXACT_FLOAT_INTEGER:
         raise ContractError(

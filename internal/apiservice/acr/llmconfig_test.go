@@ -15,8 +15,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"go.opentelemetry.io/otel"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
@@ -194,28 +192,19 @@ func TestLLMConfigResponseMarshalsTheKey(t *testing.T) {
 }
 
 func TestLLMConfigCountsEachOutcome(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	outcomes := func(t *testing.T) map[string]int64 {
+		return counterByAttribute(t, "devhealth_acr_llm_config_requests_total", func(p metricdata.DataPoint[int64]) (string, bool) {
+			value, _ := p.Attributes.Value("outcome")
+			return value.AsString(), true
+		})
+	}
+	acrMetricReader()
+	before := outcomes(t)
 	call(t, &fakeVerifier{}, configured(), io.Discard, testOrg, "Bearer "+testToken)
 	call(t, &fakeVerifier{}, configured(), io.Discard, testOrg, "")
-	var collected metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &collected); err != nil {
-		t.Fatal(err)
-	}
-	counts := map[string]int64{}
-	for _, scope := range collected.ScopeMetrics {
-		for _, m := range scope.Metrics {
-			if m.Name != "devhealth_acr_llm_config_requests_total" {
-				continue
-			}
-			for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
-				value, _ := point.Attributes.Value("outcome")
-				counts[value.AsString()] += point.Value
-			}
-		}
-	}
-	if counts["served"] != 1 || counts["unauthorized_missing"] != 1 {
-		t.Fatalf("counts = %v", counts)
+	counts := outcomes(t)
+	if counts["served"]-before["served"] != 1 || counts["unauthorized_missing"]-before["unauthorized_missing"] != 1 {
+		t.Fatalf("counts = %v, before = %v", counts, before)
 	}
 }
 

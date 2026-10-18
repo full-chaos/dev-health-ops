@@ -75,9 +75,8 @@ func TestEveryProductionGitHubRouteResolvesTheStoredRepositoryIdentity(t *testin
 		t.Fatalf("%d github datasets resolve the identity, want at least 13", selected)
 	}
 
-	// The remaining name-derived ids are named here, each owed to the follow-up
-	// on CHAOS-9879: Projects v2 membership subjects and project work items
-	// name another repository by its current name only.
+	// These mint from the name they are given: Projects v2 items arrive with the
+	// repository already named by its stored identity (itemsByRepositoryIdentity).
 	allowed := map[string]bool{
 		"github_repository_route.go":                 true, // the definition
 		"github_repo_identity.go":                    true, // nil-reader mint

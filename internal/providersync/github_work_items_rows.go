@@ -108,6 +108,10 @@ type githubWorkItemDependencyRow struct {
 	// CHAOS-8578). nil: not stored, the reader derives it from the row.
 	// Omitted from the effect when nil.
 	RelationWriter *string `json:"relation_writer,omitempty"`
+	// foreignID is the id of this row that names ANOTHER repository by the name
+	// the payload states (CHAOS-9879); canonicalGitHubForeignRefs rewrites it to
+	// the identity that repository's own items carry. Not stored.
+	foreignID string
 }
 
 type githubWorkItemReopenRow struct {
@@ -824,7 +828,8 @@ func extractGitHubClosingIssueReferences(
 		if node.Number < 1 || repoFullName == "" {
 			continue
 		}
-		if strings.EqualFold(repoFullName, names.Current) {
+		foreign := !strings.EqualFold(repoFullName, names.Current)
+		if !foreign {
 			repoFullName = names.Identity
 		}
 		target := "gh:" + repoFullName + "#" + strconv.Itoa(node.Number)
@@ -840,6 +845,9 @@ func extractGitHubClosingIssueReferences(
 			RelationshipType: "relates_to", RelationshipTypeRaw: "github_closing_reference",
 			RelationshipSemanticsVersion: "canonical-blocks.v2",
 			LastSynced:                   normalizedAt.UTC(), OrgID: claim.OrgID,
+		}
+		if foreign {
+			row.foreignID = target
 		}
 		if err := row.validate(claim); err != nil {
 			return nil, err
@@ -896,6 +904,9 @@ func extractGitHubWorkItemDependencies(
 		}
 		if err := appendRow(source, target, relationship, strings.ToLower(strings.TrimSpace(match[0]))); err != nil {
 			return nil, err
+		}
+		if match[2] == "" {
+			rows[len(rows)-1].foreignID = targetID
 		}
 	}
 	seenExternal := map[string]struct{}{}

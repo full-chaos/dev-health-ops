@@ -60,7 +60,7 @@ func SelectWorkItemsRouteHandler(provider, dataset string, deps WorkItemsRouteDe
 	case "github":
 		return GitHubWorkItemsRouteHandler{
 			REST:     GitHubWorkItemsRESTCollector{RepoIdentity: GitLabRepoIdentityClickHouseReader{Conn: deps.Conn, Lease: deps.Lease, Provider: "github"}},
-			Projects: GitHubProjectV2Fetcher{},
+			Projects: GitHubProjectV2Fetcher{RepoIdentity: GitLabRepoIdentityClickHouseReader{Conn: deps.Conn, Lease: deps.Lease, Provider: "github"}},
 			ProjectMembershipSnapshotDiff: GitHubProjectV2SnapshotDiffClickHouseReader{
 				Conn: deps.Conn,
 			},

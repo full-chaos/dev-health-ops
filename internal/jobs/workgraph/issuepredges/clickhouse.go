@@ -262,9 +262,19 @@ func (loader *Loader) loadWorkItems(ctx context.Context, orgID string) ([]WorkIt
 	if err != nil {
 		return nil, fmt.Errorf("load renamed repos: %w", err)
 	}
+	withItems := make(map[uuid.UUID]bool, len(renamed))
 	for index := range out {
 		if out[index].Provider == "gitlab" || out[index].Provider == "github" {
-			out[index].CurrentPath = renamed[out[index].RepoID]
+			out[index].CurrentPath = renamed[out[index].RepoID].path
+			withItems[out[index].RepoID] = true
+		}
+	}
+	// A repository with no work item still holds its current path: the lookup
+	// must not resolve a text reference to that path to the item of another
+	// repository that was minted from it (CHAOS-9879).
+	for id, repo := range renamed {
+		if !withItems[id] {
+			out = append(out, WorkItemRow{RepoID: id, Provider: repo.provider, CurrentPath: repo.path})
 		}
 	}
 	return out, nil
@@ -273,25 +283,28 @@ func (loader *Loader) loadWorkItems(ctx context.Context, orgID string) ([]WorkIt
 // loadRenamedRepos maps the GitLab and GitHub repositories whose current path
 // is not the path their id was minted from (CHAOS-3383, CHAOS-9879) to that
 // current path.
-func (loader *Loader) loadRenamedRepos(ctx context.Context, orgID string) (map[uuid.UUID]string, error) {
+type renamedRepo struct{ provider, path string }
+
+func (loader *Loader) loadRenamedRepos(ctx context.Context, orgID string) (map[uuid.UUID]renamedRepo, error) {
 	rows, err := loader.conn.Query(ctx, `
-SELECT id, repo FROM repos FINAL
+SELECT id, repo, provider FROM repos FINAL
 WHERE org_id = {org_id:String} AND provider IN ('gitlab', 'github') AND identity_path != '' AND identity_path != repo`,
 		clickhouse.Named("org_id", orgID))
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	out := map[uuid.UUID]string{}
+	out := map[uuid.UUID]renamedRepo{}
 	for rows.Next() {
 		var (
-			id   uuid.UUID
-			repo string
+			id       uuid.UUID
+			repo     string
+			provider string
 		)
-		if err := rows.Scan(&id, &repo); err != nil {
+		if err := rows.Scan(&id, &repo, &provider); err != nil {
 			return nil, err
 		}
-		out[id] = repo
+		out[id] = renamedRepo{provider: provider, path: repo}
 	}
 	return out, rows.Err()
 }

@@ -201,6 +201,16 @@ func TestExplicitTextTierProviderMatrix(t *testing.T) {
 		// CHAOS-9879: the same for a renamed GitHub repository.
 		{"github renamed repository by its current name", "see platform/api-v2#3", []WorkItemRow{{uuid.New(), "gh:acme/api#3", "github", "platform/api-v2"}}, "gh:acme/api#3", "references", 0},
 		{"github renamed repository by its minted name", "see acme/api#3", []WorkItemRow{{uuid.New(), "gh:acme/api#3", "github", "platform/api-v2"}}, "gh:acme/api#3", "references", 0},
+		// CHAOS-9879: a repository that holds a name owns it even with no work
+		// item: the old repository's item minted from that name is not linked.
+		{"github current name held by a repository with no work item", "see acme/api#42", []WorkItemRow{
+			{uuid.New(), "gh:acme/api#42", "github", "platform/api-v2"},
+			{uuid.New(), "", "github", "acme/api"},
+		}, "", "", 0},
+		{"gitlab current path held by a project with no work item", "see acme/api#42", []WorkItemRow{
+			{uuid.New(), "gitlab:acme/api#42", "gitlab", "platform/api-v2"},
+			{uuid.New(), "", "gitlab", "acme/api"},
+		}, "", "", 0},
 		{"github current name names the repository there now", "see acme/api#4", []WorkItemRow{
 			{uuid.New(), "gh:acme/api#4", "github", "platform/api-v2"},
 			{uuid.New(), "gh:acme/api@456#4", "github", "acme/api"},

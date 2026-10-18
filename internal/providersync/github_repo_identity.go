@@ -36,3 +36,79 @@ func resolveGitHubRepoID(
 	identity, err := resolveGitHubRepoIdentity(ctx, reader, claim, repo)
 	return identity.RepoID, err
 }
+
+// githubWorkItemRepoOfID is the repository name of a "gh:<name>#<n>" or
+// "ghpr:<name>#<n>" work-item id, and the rest ("#<n>").
+func githubWorkItemRepoOfID(id string) (prefix, name, rest string, ok bool) {
+	for _, candidate := range [2]string{"ghpr:", "gh:"} {
+		if body, found := strings.CutPrefix(id, candidate); found {
+			index := strings.LastIndex(body, "#")
+			if index < 1 || index == len(body)-1 {
+				return "", "", "", false
+			}
+			return candidate, body[:index], body[index:], true
+		}
+	}
+	return "", "", "", false
+}
+
+// canonicalGitHubForeignRefs rewrites the ids of rows that name another
+// repository by the name a payload states (a closing reference, an
+// owner/repo#n in text) to the identity that repository's own items carry
+// (CHAOS-9879). The syncing repository's own current name maps to its identity
+// even before its repos row is stored. A row that then links an item to itself
+// is dropped, and a row the rewrite made equal to an earlier one keeps the
+// earlier.
+func canonicalGitHubForeignRefs(
+	ctx context.Context, reader GitLabRepoIdentityReader, claim Claim, names githubRepoNames,
+	rows []githubWorkItemDependencyRow,
+) ([]githubWorkItemDependencyRow, error) {
+	foreign := make([]string, 0)
+	for _, row := range rows {
+		if _, name, _, ok := githubWorkItemRepoOfID(row.foreignID); ok {
+			foreign = append(foreign, name)
+		}
+	}
+	if len(foreign) == 0 {
+		return rows, nil
+	}
+	identityNames, err := resolveGitLabIdentityPaths(ctx, reader, claim, names.Current,
+		GitLabRepoIdentity{Path: names.Identity}, foreign)
+	if err != nil {
+		return nil, err
+	}
+	canonical := func(id string) string {
+		prefix, name, rest, ok := githubWorkItemRepoOfID(id)
+		if !ok {
+			return id
+		}
+		if identity := identityNames[strings.ToLower(name)]; identity != "" {
+			return prefix + identity + rest
+		}
+		return id
+	}
+	type key struct{ source, target, relationship, raw string }
+	seen := make(map[key]bool, len(rows))
+	out := make([]githubWorkItemDependencyRow, 0, len(rows))
+	for _, row := range rows {
+		if row.foreignID != "" {
+			if row.SourceWorkItemID == row.foreignID {
+				row.SourceWorkItemID = canonical(row.foreignID)
+			}
+			if row.TargetWorkItemID == row.foreignID {
+				row.TargetWorkItemID = canonical(row.foreignID)
+			}
+			row.foreignID = ""
+		}
+		if row.SourceWorkItemID == row.TargetWorkItemID {
+			continue
+		}
+		k := key{row.SourceWorkItemID, row.TargetWorkItemID, row.RelationshipType, row.RelationshipTypeRaw}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, row)
+	}
+	return out, nil
+}

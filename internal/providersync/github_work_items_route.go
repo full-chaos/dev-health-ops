@@ -385,6 +385,12 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		}
 	}
 
+	canonicalDependencies, err := canonicalGitHubForeignRefs(ctx, handler.REST.RepoIdentity, claim, restResult.names(), rows.Dependencies)
+	if err != nil {
+		return CompleteRouteBatch{}, usage.wrap(err)
+	}
+	rows.Dependencies = canonicalDependencies
+
 	// "disabled" means this claim's integration configured no durable targets —
 	// the only remaining reason Projects v2 contributes nothing. It is NOT the
 	// state an operator lands in by setting GITHUB_PROJECTS_V2 in the process

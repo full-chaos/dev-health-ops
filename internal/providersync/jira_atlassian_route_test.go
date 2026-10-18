@@ -1,7 +1,6 @@
 package providersync
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -846,7 +845,7 @@ func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
 // one) emits the window line, with the bounded JQL, so a regression in the bound
 // is visible at Info on the active route.
 func TestJiraAtlassianRouteLogsItsFetchWindowAtInfo(t *testing.T) {
-	var logged bytes.Buffer
+	var logged lockedLogBuffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
@@ -870,7 +869,7 @@ func TestJiraAtlassianRouteLogsItsFetchWindowAtInfo(t *testing.T) {
 // A failed search still emits the window line (search_failed=true, the error
 // class, never its text): a planned unit that read nothing is not silent at Info.
 func TestJiraAtlassianRouteLogsItsFetchWindowWhenTheSearchFails(t *testing.T) {
-	var logged bytes.Buffer
+	var logged lockedLogBuffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(previous) })

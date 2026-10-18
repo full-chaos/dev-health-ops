@@ -1,7 +1,6 @@
 package providersync
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -422,7 +421,7 @@ func TestGitLabWorkItemsRouteWritesGroupMilestoneSprintRows(t *testing.T) {
 // A unit that fails binding its project (here: the project endpoint is missing)
 // still names its window at Info: the line is not behind the project lookup.
 func TestGitLabWorkItemsRouteLogsItsWindowEvenWhenTheProjectLookupFails(t *testing.T) {
-	var logged bytes.Buffer
+	var logged lockedLogBuffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(previous) })

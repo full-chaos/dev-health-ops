@@ -286,3 +286,68 @@ func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
 	}
 }
+
+// TestEnvelopeClassConsumersNameEveryRouteThatAcceptsIt keeps the credential
+// class registry honest about WHERE the effective-principal envelope is accepted
+// (CHAOS-5522). The routes come from the query-api profile rows
+// (accepted_credential_classes), the claim from the class's consumers in
+// credential-classes.json; a route that takes the envelope but is missing from
+// the class's consumers fails here. The /api/v1/ REST read routes are covered by
+// the single token "/api/v1/*".
+func TestEnvelopeClassConsumersNameEveryRouteThatAcceptsIt(t *testing.T) {
+	const class = "effective_principal_envelope"
+	raw, err := os.ReadFile("../../../contracts/auth/v1/credential-classes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registry struct {
+		Classes []struct {
+			ClassID   string `json:"class_id"`
+			Consumers []struct {
+				Description string `json:"description"`
+			} `json:"consumers"`
+		} `json:"classes"`
+	}
+	if err := json.Unmarshal(raw, &registry); err != nil {
+		t.Fatal(err)
+	}
+	described := ""
+	found := false
+	for _, entry := range registry.Classes {
+		if entry.ClassID != class {
+			continue
+		}
+		found = true
+		for _, consumer := range entry.Consumers {
+			described += " " + consumer.Description + " "
+		}
+	}
+	if !found {
+		t.Fatalf("class %s is not registered", class)
+	}
+	accepting := 0
+	for _, row := range loadQueryAPIRows(t) {
+		classes, _ := row["accepted_credential_classes"].([]any)
+		takes := false
+		for _, c := range classes {
+			if c == class {
+				takes = true
+			}
+		}
+		if !takes {
+			continue
+		}
+		accepting++
+		route, _ := row["route"].(string)
+		token := route
+		if strings.HasPrefix(route, "/api/v1/") {
+			token = "/api/v1/*"
+		}
+		if !strings.Contains(described, " "+token+" ") && !strings.Contains(described, " "+token+",") && !strings.Contains(described, " "+token+".") {
+			t.Errorf("route %s accepts %s but the class's consumers do not name it (token %q) in: %s", route, class, token, strings.TrimSpace(described))
+		}
+	}
+	if accepting == 0 {
+		t.Fatal("no profile row accepts the envelope class: the test measured nothing")
+	}
+}

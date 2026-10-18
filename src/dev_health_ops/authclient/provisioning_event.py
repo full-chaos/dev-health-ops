@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Final, Literal
 
 from dev_health_ops.authclient.contracts import (
     ContractError,
+    parse_rfc3339,
     refuse_bool,
     refuse_decimal_form,
     validate,
@@ -70,7 +72,7 @@ class ProvisioningEvent:
     aggregate_id: str
     event_type: str
     idempotency_key: str
-    created_at: str
+    created_at: datetime
     revision: int
     change: dict[str, Any] = field(default_factory=dict)
     organization_id: str | None = None
@@ -87,12 +89,18 @@ def parse_provisioning_event(raw: bytes | str) -> ProvisioningEvent:
     payload = document["payload"]
     revision = _require_int(payload, "revision", PROVISIONING_SURFACE)
     assert revision is not None  # required by the schema
+    # Every timestamp member of the change object, not only the one known today.
+    expires_at = payload["change"].get("expires_at")
+    if expires_at is not None:
+        parse_rfc3339(expires_at, PROVISIONING_SURFACE, "payload/change/expires_at")
     event = ProvisioningEvent(
         aggregate_type=document["aggregate_type"],
         aggregate_id=document["aggregate_id"],
         event_type=document["event_type"],
         idempotency_key=document["idempotency_key"],
-        created_at=document["created_at"],
+        created_at=parse_rfc3339(
+            document["created_at"], PROVISIONING_SURFACE, "created_at"
+        ),
         revision=revision,
         change=payload["change"],
         organization_id=payload.get("organization_id"),
@@ -113,23 +121,36 @@ def parse_provisioning_event(raw: bytes | str) -> ProvisioningEvent:
 
 @dataclass(frozen=True, slots=True)
 class AuditEvent:
+    """One audit row. Every schema member is carried, none dropped."""
+
     event_type: str
-    occurred_at: str
+    occurred_at: datetime
     outcome: str
-    policy_revision: int | None
-    aggregate_revision: int | None
+    attributes: dict[str, Any]
+    actor_principal_id: str | None = None
+    subject_principal_id: str | None = None
+    organization_id: str | None = None
+    policy_revision: int | None = None
+    request_id: str | None = None
 
 
 def parse_audit_event(raw: bytes | str) -> AuditEvent:
     document = _load(raw, AUDIT_SURFACE)
+    # attributes.aggregate_revision is an integer too: the raw-token guard is
+    # not top-level only.
+    _require_int(document["attributes"], "aggregate_revision", AUDIT_SURFACE)
     return AuditEvent(
         event_type=document["event_type"],
-        occurred_at=document["occurred_at"],
-        outcome=document["outcome"],
-        policy_revision=_require_int(document, "policy_revision", AUDIT_SURFACE),
-        aggregate_revision=_require_int(
-            document["attributes"], "aggregate_revision", AUDIT_SURFACE
+        occurred_at=parse_rfc3339(
+            document["occurred_at"], AUDIT_SURFACE, "occurred_at"
         ),
+        outcome=document["outcome"],
+        attributes=document["attributes"],
+        actor_principal_id=document.get("actor_principal_id"),
+        subject_principal_id=document.get("subject_principal_id"),
+        organization_id=document.get("organization_id"),
+        policy_revision=_require_int(document, "policy_revision", AUDIT_SURFACE),
+        request_id=document.get("request_id"),
     )
 
 

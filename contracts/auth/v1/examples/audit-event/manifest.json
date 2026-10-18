@@ -108,6 +108,10 @@
       "why": "policy_revision `1.0`: schema-valid, refused by the clients on the raw token."
     },
     {
+      "file": "client-rejected-occurred-at-impossible-date.json",
+      "why": "`2026-02-30`: schema-valid, refused by the clients."
+    },
+    {
       "file": "client-rejected-aggregate-revision-exponent-form.json",
       "why": "A decimal-form token inside attributes: the guard is not top-level only."
     }

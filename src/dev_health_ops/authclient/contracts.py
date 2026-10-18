@@ -28,6 +28,7 @@ import json
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -331,3 +332,24 @@ def require_wire_int(document: dict[str, Any], field: str, surface: str) -> int 
     if isinstance(raw, int):
         return raw
     raise ContractError(f"{surface}: /{field} = {raw!r} is not an integer")
+
+
+def parse_rfc3339(raw: str, surface: str, field: str) -> datetime:
+    """Parse a timestamp the schema pattern has accepted, refusing what it cannot see.
+
+    The pattern bounds each component but not the calendar: ``2026-02-30``,
+    ``2026-04-31`` and ``2027-02-29`` are lexically valid and name no day. Go's
+    ``time.Parse`` refuses them, so a client that did not parse would accept
+    what its Go counterpart rejects. The instant is also normalised to UTC, so
+    an offset that carries it outside 0001..9999 is refused rather than raising
+    ``OverflowError`` later.
+    """
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("no timezone")
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError, OSError) as exc:
+        raise ContractError(
+            f"{surface}: /{field} = {raw!r} is not a valid RFC 3339 instant ({exc})"
+        ) from exc

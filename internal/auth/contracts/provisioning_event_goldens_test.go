@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -210,7 +211,8 @@ func TestClientEnforcedProvisioningFixturesValidateButTheClientRefusesThem(t *te
 					t.Fatalf("the client accepted a document only it can refuse (%s)", entry.Why)
 				}
 				if !strings.Contains(err.Error(), "decimal or exponent form") &&
-					!strings.Contains(err.Error(), "does not equal") {
+					!strings.Contains(err.Error(), "does not equal") &&
+					!strings.Contains(err.Error(), "is not RFC 3339") {
 					t.Fatalf("refused, but not by a client rule: %v", err)
 				}
 			})
@@ -320,5 +322,85 @@ func TestConsumerVectorsReplayToTheDeclaredDispositions(t *testing.T) {
 		if got != ex.Key {
 			t.Errorf("DedupeKey = %q, want %q", got, ex.Key)
 		}
+	}
+}
+
+func jsonTags(typ reflect.Type) []string {
+	var tags []string
+	for i := 0; i < typ.NumField(); i++ {
+		name := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
+		if name != "" && name != "-" {
+			tags = append(tags, name)
+		}
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+func schemaPropertyNames(t *testing.T, surface string, path ...string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(SchemaPath(testRoot(t), surface))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var node map[string]any
+	if err := json.Unmarshal(raw, &node); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range path {
+		props, _ := node["properties"].(map[string]any)
+		next, ok := props[step].(map[string]any)
+		if !ok {
+			t.Fatalf("%s has no %v", surface, path)
+		}
+		node = next
+	}
+	props, _ := node["properties"].(map[string]any)
+	var names []string
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func TestParsedTypesCarryEverySchemaMember(t *testing.T) {
+	// A parser that validates a document and then drops a member the schema
+	// admits loses data without a sound. Each Go type must name exactly the
+	// members of the schema object it parses, in both directions.
+	for _, tc := range []struct {
+		name    string
+		typ     reflect.Type
+		surface string
+		path    []string
+	}{
+		{"ProvisioningEvent", reflect.TypeOf(ProvisioningEvent{}), ProvisioningEventSurface, nil},
+		{"ProvisioningPayload", reflect.TypeOf(ProvisioningPayload{}), ProvisioningEventSurface, []string{"payload"}},
+		{"AuditEvent", reflect.TypeOf(AuditEvent{}), AuditEventSurface, nil},
+		{"AuditAttributes", reflect.TypeOf(AuditAttributes{}), AuditEventSurface, []string{"attributes"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := jsonTags(tc.typ)
+			want := schemaPropertyNames(t, tc.surface, tc.path...)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("%s members = %v, schema members = %v", tc.name, got, want)
+			}
+		})
+	}
+}
+
+func TestTheAuditParserReturnsWhatTheDocumentCarried(t *testing.T) {
+	event, err := ParseAuditEvent(testRoot(t), readCorpusFile(t, provisioningSurfaces[1], "valid-full.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.ActorPrincipalID == "" || event.SubjectPrincipalID == "" || event.OrganizationID == "" || event.RequestID == "" {
+		t.Fatalf("identities dropped: %+v", event)
+	}
+	if event.PolicyRevision == nil || *event.PolicyRevision != 42 {
+		t.Fatalf("policy revision = %v", event.PolicyRevision)
+	}
+	if event.Attributes.Action != "acr.context.read" || event.Attributes.AggregateRevision == nil || *event.Attributes.AggregateRevision != 4 {
+		t.Fatalf("attributes dropped: %+v", event.Attributes)
 	}
 }

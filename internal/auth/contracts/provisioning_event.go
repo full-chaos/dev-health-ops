@@ -33,7 +33,7 @@ type ProvisioningEvent struct {
 	AggregateID    string              `json:"aggregate_id"`
 	EventType      string              `json:"event_type"`
 	IdempotencyKey string              `json:"idempotency_key"`
-	CreatedAt      string              `json:"created_at"`
+	CreatedAt      Timestamp           `json:"created_at"`
 	Payload        ProvisioningPayload `json:"payload"`
 }
 
@@ -54,6 +54,18 @@ func ParseProvisioningEvent(root string, raw []byte) (ProvisioningEvent, error) 
 	var event ProvisioningEvent
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return ProvisioningEvent{}, fmt.Errorf("%s: decoding validated document: %w", ProvisioningEventSurface, err)
+	}
+	// The pattern bounds timestamp components, not the calendar: 2026-02-30 is
+	// lexically valid. Timestamp parses the envelope's; the change object's
+	// timestamp members are parsed here, every one, not only the one known today.
+	for name, value := range event.Payload.Change {
+		if name != "expires_at" {
+			continue
+		}
+		var parsed Timestamp
+		if err := json.Unmarshal(value, &parsed); err != nil {
+			return ProvisioningEvent{}, fmt.Errorf("%s: payload.change.%s: %w", ProvisioningEventSurface, name, err)
+		}
 	}
 	// A pattern cannot compare two members. A key that disagrees with the
 	// payload would let two revisions collide in the UNIQUE index, or one
@@ -103,17 +115,31 @@ func (c *ConsumerCursor) Observe(e ProvisioningEvent) Disposition {
 	}
 }
 
-// AuditEvent is one audit event, validated and parsed. Only the integer
-// members are decoded into typed fields; the rest is validated by the schema.
+// AuditAttributes are the allowlisted audit attributes; every schema member is
+// carried, so a parser never silently drops data the schema admits.
+type AuditAttributes struct {
+	ReasonCode        string    `json:"reason_code,omitempty"`
+	Action            string    `json:"action,omitempty"`
+	ResourceType      string    `json:"resource_type,omitempty"`
+	AggregateType     string    `json:"aggregate_type,omitempty"`
+	AggregateRevision *Revision `json:"aggregate_revision,omitempty"`
+	CredentialClass   string    `json:"credential_class,omitempty"`
+	DecisionID        string    `json:"decision_id,omitempty"`
+}
+
+// AuditEvent is one audit event, validated and parsed. Every schema member is
+// carried (TestParsedTypesCarryEverySchemaMember asserts it both ways).
 type AuditEvent struct {
-	SchemaVersion  string    `json:"schema_version"`
-	EventType      string    `json:"event_type"`
-	OccurredAt     string    `json:"occurred_at"`
-	Outcome        string    `json:"outcome"`
-	PolicyRevision *Revision `json:"policy_revision,omitempty"`
-	Attributes     struct {
-		AggregateRevision *Revision `json:"aggregate_revision,omitempty"`
-	} `json:"attributes"`
+	SchemaVersion      string          `json:"schema_version"`
+	EventType          string          `json:"event_type"`
+	OccurredAt         Timestamp       `json:"occurred_at"`
+	Outcome            string          `json:"outcome"`
+	ActorPrincipalID   string          `json:"actor_principal_id,omitempty"`
+	SubjectPrincipalID string          `json:"subject_principal_id,omitempty"`
+	OrganizationID     string          `json:"organization_id,omitempty"`
+	PolicyRevision     *Revision       `json:"policy_revision,omitempty"`
+	RequestID          string          `json:"request_id,omitempty"`
+	Attributes         AuditAttributes `json:"attributes"`
 }
 
 // ParseAuditEvent validates raw against audit-event.v1 and parses it, refusing

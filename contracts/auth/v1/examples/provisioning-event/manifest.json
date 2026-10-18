@@ -224,6 +224,18 @@
       "why": "`9007199254740990.1` reads as 9007199254740990 in a float64 reader and passes the schema; only the raw token shows it is not an integer."
     },
     {
+      "file": "client-rejected-created-at-impossible-date.json",
+      "why": "`2026-02-30`: lexically valid, no such day. The pattern bounds components, not the calendar; every client refuses it."
+    },
+    {
+      "file": "client-rejected-created-at-non-leap-february-29.json",
+      "why": "February 29 in a non-leap year."
+    },
+    {
+      "file": "client-rejected-expires-at-impossible-date.json",
+      "why": "`2026-04-31` inside the change object: the calendar check covers every timestamp member, not only the envelope's."
+    },
+    {
       "file": "client-rejected-idempotency-key-revision-mismatch.json",
       "why": "idempotency_key says revision 1 while the payload says 2. Schema-valid (a pattern cannot compare members), refused by the clients: a mismatched key would let two different revisions collide in the UNIQUE index, or one revision appear twice."
     },

@@ -6,7 +6,9 @@ file read the SAME manifests over the SAME fixtures (G-70).
 
 from __future__ import annotations
 
+import dataclasses
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -19,6 +21,7 @@ from dev_health_ops.authclient.contracts import (
     violations,
 )
 from dev_health_ops.authclient.provisioning_event import (
+    AuditEvent,
     ConsumerCursor,
     ProvisioningEvent,
     parse_audit_event,
@@ -97,7 +100,9 @@ def test_client_enforced_fixtures_are_valid_but_the_client_refuses_them(
     surface: str, directory: str, parse: Any, entry: dict[str, Any]
 ) -> None:
     validate(surface, json.loads(_raw(directory, entry["file"])))
-    with pytest.raises(ContractError, match="decimal or exponent form|does not equal"):
+    with pytest.raises(
+        ContractError, match="decimal or exponent form|does not equal|RFC 3339"
+    ):
         parse(_raw(directory, entry["file"]))
 
 
@@ -154,6 +159,44 @@ def test_consumer_vectors_replay_to_the_declared_dispositions() -> None:
             revision=example["revision"],
             event_type="x",
             idempotency_key="x",
-            created_at="x",
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         )
         assert event.dedupe_key() == example["key"]
+
+
+def _schema_members(surface: str) -> dict[str, Any]:
+    schema = validator_for(surface).schema
+    assert isinstance(schema, dict)
+    return schema["properties"]
+
+
+def test_parsed_types_carry_every_schema_member() -> None:
+    """A parser that validates a document and then drops a member is a silent loss."""
+    audit = set(_schema_members("audit-event.v1")) - {"schema_version"}
+    got = {f.name for f in dataclasses.fields(AuditEvent)}
+    assert got == audit, (
+        f"AuditEvent drops {sorted(audit - got)} / invents {sorted(got - audit)}"
+    )
+
+    provisioning = _schema_members("provisioning-event.v1")
+    payload = provisioning["payload"]["properties"]
+    expected = (
+        (set(provisioning) - {"schema_version", "payload"})
+        | (set(payload) - {"revision"})
+        | {"revision"}
+    )
+    got = {f.name for f in dataclasses.fields(ProvisioningEvent)}
+    assert got == expected, (
+        f"ProvisioningEvent drops {sorted(expected - got)} / invents {sorted(got - expected)}"
+    )
+
+
+def test_the_audit_parser_returns_what_the_document_carried() -> None:
+    event = parse_audit_event(_raw("audit-event", "valid-full.json"))
+    assert event.actor_principal_id == "prn_EXAMPLE0000000000000001"
+    assert event.subject_principal_id == "prn_EXAMPLE0000000000000002"
+    assert event.organization_id == "org_EXAMPLE0000000000000001"
+    assert event.request_id and event.request_id.startswith("req_")
+    assert event.policy_revision == 42
+    assert event.attributes["aggregate_revision"] == 4
+    assert event.attributes["action"] == "acr.context.read"

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
@@ -208,5 +209,67 @@ func TestAZeroValueLedgerCounts(t *testing.T) {
 	ledger.Record(LedgerKey{"prs", "rest_core"})
 	if got := entriesOf(ledger); got[LedgerKey{"prs", "rest_core"}] != 2 {
 		t.Fatalf("ledger = %v, want 2", got)
+	}
+}
+
+// contextDroppingDoer sends each request on a context that carries none of the
+// caller's values, as a decorator that rebuilds the request would.
+type contextDroppingDoer struct{ inner HTTPDoer }
+
+func (d contextDroppingDoer) Do(r *http.Request) (*http.Response, error) {
+	return d.inner.Do(r.WithContext(context.Background()))
+}
+func (d contextDroppingDoer) Unwrap() interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	return d.inner
+}
+func (d contextDroppingDoer) Rewrap(inner interface {
+	Do(*http.Request) (*http.Response, error)
+}) interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	return contextDroppingDoer{inner: inner}
+}
+
+func TestAFollowedRedirectHopIsCountedWhateverTheDecoratorsDoWithTheContext(t *testing.T) {
+	t.Parallel()
+	hits := 0
+	hc := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		hits++
+		if r.URL.Path == "/old" {
+			return testHTTPResponse(r, http.StatusFound, http.Header{"Location": {"https://api.github.test/next"}}, ``), nil
+		}
+		return testHTTPResponse(r, http.StatusOK, http.Header{}, `{}`), nil
+	})}
+	build := func(doer HTTPDoer) *HTTPClient {
+		client, err := NewHTTPClient("github", "https://api.github.test", doer,
+			TokenAuth("Authorization", "Bearer ", secrets.NewValue("token")),
+			RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
+			LeaseGuardFunc(func(context.Context) error { return nil }))
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.Ledger = NewRequestLedger()
+		return client
+	}
+	ctx := WithRequestAccount(context.Background(), "prs", "")
+	for name, client := range map[string]*HTTPClient{
+		"a decorator that drops the context": build(contextDroppingDoer{inner: hc}),
+		"a client built without NewHTTPClient": func() *HTTPClient {
+			client := build(hc)
+			client.Doer = hc
+			return client
+		}(),
+	} {
+		hits = 0
+		response, err := client.Do(ctx, http.MethodGet, "/old", nil)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		_ = response.Body.Close()
+		if got := entriesOf(client.Ledger); hits != 2 || got[LedgerKey{"prs", "rest_core"}] != 2 || len(got) != 1 {
+			t.Fatalf("%s: wire requests = %d, ledger = %v, want both requests under prs/rest_core", name, hits, got)
+		}
 	}
 }

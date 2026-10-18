@@ -25,7 +25,9 @@ from dev_health_ops.authclient.contracts import (
 
 SURFACE = "jwks.v1"
 SWEEP = json.loads(
-    (contracts_dir() / "sweeps" / "jwks.property-sweep.json").read_text(encoding="utf-8")
+    (contracts_dir() / "sweeps" / "jwks.property-sweep.json").read_text(
+        encoding="utf-8"
+    )
 )
 ROWS = SWEEP["rows"]
 
@@ -77,7 +79,9 @@ def test_the_sweep_is_not_empty_and_ids_are_unique() -> None:
 
 
 @pytest.mark.parametrize("row", ROWS, ids=lambda r: r["id"])
-def test_every_row_has_the_schema_verdict_its_literal_names(row: dict[str, Any]) -> None:
+def test_every_row_has_the_schema_verdict_its_literal_names(
+    row: dict[str, Any],
+) -> None:
     assert row["class"] == _class_of(row["consumer"], row["schema"])
     assert verdict(build(row["ops"])) == row["schema"]
 
@@ -101,7 +105,9 @@ def test_every_printable_ascii_character_is_an_accepted_kid() -> None:
         assert verdict(doc) == "accept", chr(code)
 
 
-def test_python_dollar_would_accept_a_trailing_newline_and_the_loader_does_not() -> None:
+def test_python_dollar_would_accept_a_trailing_newline_and_the_loader_does_not() -> (
+    None
+):
     """P11. Bare ``re`` matches ``$`` before a final newline; the schema loader
     must not. Both halves are asserted so the guard cannot be removed unseen."""
     for pattern, text in (
@@ -131,7 +137,9 @@ def test_every_narrowing_is_in_a_declared_class_the_schema_names() -> None:
         assert row.get("declared_as") in classes, row["id"]
         classes[row["declared_as"]] += 1
     schema = json.loads(
-        (contracts_dir() / "jsonschema" / "jwks.v1.schema.json").read_text(encoding="utf-8")
+        (contracts_dir() / "jsonschema" / "jwks.v1.schema.json").read_text(
+            encoding="utf-8"
+        )
     )
     for class_id, rows in classes.items():
         assert rows, f"class {class_id} has no row"

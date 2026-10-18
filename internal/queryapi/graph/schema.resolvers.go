@@ -996,6 +996,9 @@ func (r *queryResolver) OperatingReview(ctx context.Context, orgID string, input
 		}
 	}
 
+	if operatingReviewSized(ctx) {
+		spanCtx = operatingreview.WithSizedInvestment(spanCtx)
+	}
 	result, err := operatingreview.ResolveInput(spanCtx, r.ClickHouse, claims.OrgID, input.TeamID, input.TeamIds, input.WeekStart)
 	if err != nil {
 		finish("error")

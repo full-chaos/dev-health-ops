@@ -296,7 +296,7 @@
   },
   {
     "operation": "operatingReview",
-    "digest": "0ba2df77565f6c9c91564108fb182f72928b6d3a3a6f850659c7d8216eecabd6"
+    "digest": "986a912f2997f08d2f83197e2ce866ca2b14be1a99522ca2c2a1f4ce2f2020e4"
   },
   {
     "operation": "operatingReview",
@@ -316,6 +316,11 @@
   {
     "operation": "operatingReview",
     "digest": "54a442197685a26436f6287e8377a26b6451de33e251e857afa30abe32df9ac9",
+    "legacy": true
+  },
+  {
+    "operation": "operatingReview",
+    "digest": "0ba2df77565f6c9c91564108fb182f72928b6d3a3a6f850659c7d8216eecabd6",
     "legacy": true
   },
   {

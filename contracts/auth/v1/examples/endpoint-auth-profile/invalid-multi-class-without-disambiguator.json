@@ -1,0 +1,23 @@
+{
+  "accepted_credential_classes": [
+    "user_access_token",
+    "workload_token"
+  ],
+  "action": "members.invite",
+  "cache_class": "none",
+  "classification": "protected",
+  "current_state_required": true,
+  "denial_disclosure": "forbidden",
+  "impersonation": "denied",
+  "method": "POST",
+  "resource_resolver": "organization_from_path_or_session",
+  "route": "/v1/memberships/invite",
+  "schema_version": "endpoint-auth-profile.v1",
+  "tenant_requirement": "active_membership",
+  "token": {
+    "algorithm": "EdDSA",
+    "audience": "dev-health-api",
+    "issuer": "https://auth.fullchaos.dev",
+    "token_type": "at+jwt"
+  }
+}

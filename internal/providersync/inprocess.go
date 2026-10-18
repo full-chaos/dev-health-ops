@@ -264,36 +264,32 @@ func (store *InProcessBudgetStore) Acquire(ctx context.Context, key providerfoun
 	}
 }
 
-// InProcessBackoffGate delays requests after a provider rate-limit signal.
+// InProcessBackoffGate delays requests after a provider rate-limit signal. It
+// measures a penalty in real time and takes no injected clock: the run clock of
+// an in-process run stamps recorded times and may be frozen, while a penalty is
+// pacing that must elapse on the wall clock or HTTPClient.awaitGate, which
+// sleeps real time and re-reads the gate, would never see it clear.
 type InProcessBackoffGate struct {
 	mu         sync.Mutex
 	until      time.Time
 	MaxBackoff time.Duration
-	Now        func() time.Time
 }
 
-func (gate *InProcessBackoffGate) now() time.Time {
-	if gate.Now != nil {
-		return gate.Now()
-	}
-	return time.Now()
-}
-
+// Wait reports the penalty still owed, without sleeping, exactly as the Valkey
+// gate does: HTTPClient.awaitGate is the one place that sleeps it out, so the
+// bound, the context deadline, the lease re-assertion and the re-read of a
+// penalty a sibling extended meanwhile apply to this gate as to the shared one.
 func (gate *InProcessBackoffGate) Wait(ctx context.Context) (time.Duration, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	gate.mu.Lock()
-	wait := gate.until.Sub(gate.now())
+	wait := time.Until(gate.until)
 	gate.mu.Unlock()
 	if wait <= 0 {
 		return 0, nil
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return wait, nil
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	}
+	return wait, nil
 }
 
 func (gate *InProcessBackoffGate) Penalize(_ context.Context, delay time.Duration) error {
@@ -305,7 +301,7 @@ func (gate *InProcessBackoffGate) Penalize(_ context.Context, delay time.Duratio
 	}
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
-	if until := gate.now().Add(delay); until.After(gate.until) {
+	if until := time.Now().Add(delay); until.After(gate.until) {
 		gate.until = until
 	}
 	return nil
@@ -479,7 +475,7 @@ func RunRouteInProcess(ctx context.Context, run InProcessRun, selectRoute InProc
 		Doer: doer, Retry: retry, Budget: budget, BudgetLimits: inProcessBudgetLimits,
 		BudgetTTL: 15 * time.Minute,
 		Gate: func(Claim, *providerfoundation.HTTPClient) providerfoundation.BackoffGate {
-			return &InProcessBackoffGate{MaxBackoff: 5 * time.Minute, Now: now}
+			return &InProcessBackoffGate{MaxBackoff: 5 * time.Minute}
 		},
 		Metrics: providerfoundation.NewMetrics(),
 		Handler: route.Handler, Comparator: ProductionContractComparator{},

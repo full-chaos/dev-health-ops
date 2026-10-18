@@ -77,9 +77,10 @@ func canonicalGitHubForeignRefs(
 	identityNames, err := resolveGitLabIdentityPaths(ctx, reader, claim, names.Current,
 		GitLabRepoIdentity{Path: names.Identity}, foreign)
 	if err != nil {
+		errorClass, errorType := logging.ErrorClass(err), logging.ErrorType(err) // never the error text (CHAOS-7933)
 		slog.Default().WarnContext(ctx, "github_foreign_refs_unresolved",
 			"org_id", claim.OrgID, "unit_id", claim.ID, "dataset", claim.Dataset, "refs", len(foreign),
-			"error_class", logging.ErrorClass(err), "error_type", logging.ErrorType(err))
+			"error_class", errorClass, "error_type", errorType)
 		return nil, err
 	}
 	rewritten, unchanged := 0, 0

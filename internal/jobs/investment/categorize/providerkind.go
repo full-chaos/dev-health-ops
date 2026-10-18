@@ -5,6 +5,7 @@ import (
 	"fmt"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -36,7 +37,7 @@ const (
 	// worker serves from the decision adapter instead of a Provider
 	// (CHAOS-8874); every text path resolves through ResolveTextProviderKind*
 	// and never gets it. It is built by NewTypeSafeClientFromEnv.
-	ProviderKindTypeSafe ProviderKind = "typesafe"
+	ProviderKindTypeSafe ProviderKind = llmbudget.DecisionProviderTypeSafe
 
 	// There is deliberately no ProviderKindLMStudio: chris's ruling
 	// (CHAOS-4978, 2026-09-03 13:14) dropped the native LM Studio provider
@@ -87,21 +88,8 @@ func firstNonEmptyEnv(names ...string) string {
 // _configured_provider: presence-only auto-detection over a fixed priority
 // order of env KEY NAMES (never their values beyond a non-empty check).
 func detectConfiguredProviderKind() (ProviderKind, bool) {
-	switch {
-	case envsecrets.GetenvNamed("OPENAI_API_KEY") != "":
-		return ProviderKindOpenAI, true
-	case envsecrets.GetenvNamed("ANTHROPIC_API_KEY") != "":
-		return ProviderKindAnthropic, true
-	case envsecrets.GetenvNamed("GEMINI_API_KEY") != "":
-		return ProviderKindGemini, true
-	case envsecrets.GetenvNamed("LOCAL_LLM_BASE_URL") != "":
-		return ProviderKindLocal, true
-	case envsecrets.GetenvNamed("DASHSCOPE_API_KEY") != "" || envsecrets.GetenvNamed("QWEN_API_KEY") != "":
-		return ProviderKindQwen, true
-	case envsecrets.GetenvNamed("OLLAMA_MODEL") != "" || envsecrets.GetenvNamed("OLLAMA_BASE_URL") != "":
-		return ProviderKindOllama, true
-	}
-	return "", false
+	detected, ok := llmbudget.DetectProvider(envsecrets.ProcessLookup)
+	return ProviderKind(detected), ok
 }
 
 // OrgProviderResolver resolves an org's usable BYO provider kind as a raw
@@ -317,7 +305,19 @@ func defaultModelForKind(kind ProviderKind) string {
 	if _, served := modelEnvByKind[kind]; !served {
 		return ""
 	}
-	return llmbudget.DefaultModel(string(kind), envsecrets.ProcessLookup)
+	return PlatformDefaultModel(kind)
+}
+
+// PlatformDefaultModel is llmbudget.DefaultModel with the platform provider
+// filled in: the kind a text call runs by default (LLM_PROVIDER, or the
+// key auto-detection when it is unset or names the decision default), so the
+// generic LLM_MODEL reaches that provider and no other (CHAOS-10011, with
+// CHAOS-4978 and D6043). Categorize, both explain routes and the budget
+// status read the model through it.
+func PlatformDefaultModel(kind ProviderKind) string {
+	model := llmbudget.DefaultModel(string(kind), llmbudget.PlatformLookup(envsecrets.ProcessLookup))
+	slog.Debug("categorize: model resolved", "kind", logSafe(string(kind)), "model", logSafe(model))
+	return model
 }
 
 // ResolveModelName returns the model that WILL ACTUALLY BE USED for kind, and
@@ -334,19 +334,15 @@ func defaultModelForKind(kind ProviderKind) string {
 // computing "the model" independently is what produced that defect; a single
 // function makes agreement structural rather than a thing to remember.
 //
-// # PRECEDENCE DIVERGES FROM PYTHON, AND THAT IS A RULING, NOT AN ACCIDENT
+// # ONE ORDER FOR EVERY ROUTE (CHAOS-10011)
 //
-// Python checks the provider-specific env FIRST, then generic LLM_MODEL
-// (llm/providers/__init__.py:204-208). This checks generic LLM_MODEL FIRST, per
-// chris's CHAOS-4978 ruling (2026-09-03 13:14): the generic override must be
-// able to force a model on ANY provider without touching each provider-specific
-// var. The two orders differ ONLY when both are set to different values.
-//
-// Following Python's order here instead would re-open the very defect this
-// fixes: the provider path is already ruled generic-first, so a stamp using
-// Python's order would again record a model the run did not use. Matching what
-// RUNS is the invariant that matters; matching Python's precedence is not
-// available while CHAOS-4978 stands.
+// The order is llmbudget.DefaultModel's (ruling D6043 with chris's CHAOS-4978
+// word): the requested model, then LLM_MODEL_<PROVIDER>, then the generic
+// LLM_MODEL only when the kind IS the platform provider (LLM_PROVIDER) -- the
+// generic LLM_MODEL / LLM_API_KEY / LLM_BASE_URL trio describes ONE endpoint,
+// the platform provider's -- then the package default. Categorize, both
+// explain routes and the admin budget status all call it, so no route can
+// send a model another route would not.
 //
 // The org-BYO branch (org_byo_provider_matches / resolve_llm_org_settings_model)
 // is omitted -- no Go caller threads an org_id through this package yet
@@ -360,11 +356,6 @@ func ResolveModelName(kind ProviderKind, requested string) string {
 	}
 	if requested != "" {
 		return requested
-	}
-	// Generic first (CHAOS-4978), then the per-kind chain, then the default.
-	names := append([]string{"LLM_MODEL"}, modelEnvByKind[kind]...)
-	if resolved := firstNonEmptyEnv(names...); resolved != "" {
-		return resolved
 	}
 	return defaultModelForKind(kind)
 }
@@ -409,13 +400,7 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 			Kind:    ProviderKindOpenAI,
 			APIKey:  envsecrets.NewHidden(apiKey),
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OPENAI_BASE_URL"),
-			// Generic LLM_MODEL checked BEFORE the provider-specific
-			// LLM_MODEL_OPENAI (chris's ruling, CHAOS-4978, 2026-09-03
-			// 13:14): the generic override must be able to force a model
-			// on ANY provider -- e.g. pointing everything at one
-			// OpenAI-compatible endpoint/model without touching each
-			// provider-specific var individually.
-			Model: resolved,
+			Model:   resolved,
 		})
 
 	case ProviderKindLocal:
@@ -588,4 +573,10 @@ func newProviderFromCredentialsWithTransport(
 	default:
 		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)
 	}
+}
+
+// logSafe strips line breaks from an environment-derived value before it is
+// logged, so a value cannot forge a log line.
+func logSafe(value string) string {
+	return strings.NewReplacer("\n", "", "\r", "").Replace(value)
 }

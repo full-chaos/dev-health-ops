@@ -250,13 +250,12 @@ func TestNewProviderFromEnvOllamaFallsBackToDefaultWithNoEnv(t *testing.T) {
 	}
 }
 
-// TestNewProviderFromEnvGenericModelOverridesAnyProvider proves chris's
-// ruling (CHAOS-4978, 2026-09-03 13:14): the generic LLM_MODEL env must win
-// over EVERY provider-specific model var, for every Go-implemented
-// provider -- so an operator can force one model choice (e.g. swapping a
-// frontier provider's model, or repointing everything at one
-// OpenAI-compatible endpoint) without touching each provider's own var.
-func TestNewProviderFromEnvGenericModelOverridesAnyProvider(t *testing.T) {
+// TestNewProviderFromEnvSpecificModelBeatsGenericOnThePlatformProvider pins the
+// one model order (CHAOS-10011; chris's CHAOS-4978 word with ruling D6043):
+// LLM_MODEL_<PROVIDER> first, then the generic LLM_MODEL for the platform
+// provider (LLM_PROVIDER) only. The categorize worker and both explain routes
+// resolve through it.
+func TestNewProviderFromEnvSpecificModelBeatsGenericOnThePlatformProvider(t *testing.T) {
 	cases := []struct {
 		name          string
 		kind          ProviderKind
@@ -283,6 +282,7 @@ func TestNewProviderFromEnvGenericModelOverridesAnyProvider(t *testing.T) {
 			if tc.kind == ProviderKindOpenAI {
 				t.Setenv("OPENAI_API_KEY", "sk-test-key")
 			}
+			t.Setenv("LLM_PROVIDER", string(tc.kind))
 			t.Setenv(tc.specificEnv, tc.specificValue)
 			t.Setenv("LLM_MODEL", "generic-override-model")
 
@@ -290,9 +290,9 @@ func TestNewProviderFromEnvGenericModelOverridesAnyProvider(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got := tc.wantModel(provider); got != "generic-override-model" {
-				t.Fatalf("Model = %q, want generic LLM_MODEL (%q) to win over %s=%q",
-					got, "generic-override-model", tc.specificEnv, tc.specificValue)
+			if got := tc.wantModel(provider); got != tc.specificValue {
+				t.Fatalf("Model = %q, want %s=%q to win over the generic LLM_MODEL",
+					got, tc.specificEnv, tc.specificValue)
 			}
 		})
 	}

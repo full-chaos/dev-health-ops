@@ -141,6 +141,7 @@ func TestExecuteRefusesAProviderKindWithNoNativeClient(t *testing.T) {
 // The live post-sync producer sets NO ModelRef (sync_dispatch.go:298-308), so
 // an empty model_ref is the PRODUCTION path, not an edge case.
 func TestStampedModelIsTheModelThatRunsNotTheProviderName(t *testing.T) {
+	t.Setenv("LLM_PROVIDER", "openai")
 	t.Setenv("LLM_MODEL", "gpt-env-default")
 	got := resolvedModelName(Config{ProviderName: "openai", Model: ""})
 	if got == "openai" {
@@ -158,10 +159,11 @@ func TestStampedModelCannotDriftFromTheProviderModel(t *testing.T) {
 	for name, env := range map[string]map[string]string{
 		"generic_only":             {"LLM_MODEL": "gpt-generic"},
 		"provider_specific_only":   {"LLM_MODEL_OPENAI": "gpt-specific"},
-		"both_generic_wins":        {"LLM_MODEL": "gpt-generic", "LLM_MODEL_OPENAI": "gpt-specific"},
+		"both_specific_wins":       {"LLM_MODEL": "gpt-generic", "LLM_MODEL_OPENAI": "gpt-specific"},
 		"neither_platform_default": {},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Setenv("LLM_PROVIDER", "openai")
 			t.Setenv("LLM_MODEL", "")
 			t.Setenv("LLM_MODEL_OPENAI", "")
 			for k, v := range env {
@@ -191,15 +193,20 @@ func TestRequestedModelWinsOverTheEnvironment(t *testing.T) {
 	}
 }
 
-// TestGenericEnvBeatsProviderSpecific pins chris's CHAOS-4978 precedence, which
-// INVERTS Python's order. Following Python here would re-open r2's P1: the
-// provider path is ruled generic-first, so a stamp on Python's order would
-// again record a model the run did not use.
-func TestGenericEnvBeatsProviderSpecific(t *testing.T) {
+// TestProviderSpecificEnvBeatsGenericOnThePlatformProvider pins the one order
+// (chris's CHAOS-4978 word with ruling D6043, CHAOS-10011): LLM_MODEL_<P> first,
+// then the generic LLM_MODEL for the platform provider only. A stamp on any
+// other order would record a model the run did not use.
+func TestProviderSpecificEnvBeatsGenericOnThePlatformProvider(t *testing.T) {
+	t.Setenv("LLM_PROVIDER", "openai")
 	t.Setenv("LLM_MODEL", "gpt-generic")
 	t.Setenv("LLM_MODEL_OPENAI", "gpt-specific")
+	if got := categorize.ResolveModelName(categorize.ProviderKindOpenAI, ""); got != "gpt-specific" {
+		t.Fatalf("model = %q, want the provider-specific %q", got, "gpt-specific")
+	}
+	t.Setenv("LLM_MODEL_OPENAI", "")
 	if got := categorize.ResolveModelName(categorize.ProviderKindOpenAI, ""); got != "gpt-generic" {
-		t.Fatalf("model = %q, want the GENERIC override %q (CHAOS-4978)", got, "gpt-generic")
+		t.Fatalf("model = %q, want the generic %q for the platform provider", got, "gpt-generic")
 	}
 }
 

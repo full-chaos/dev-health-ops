@@ -128,6 +128,13 @@ OLLAMA_API_KEY=optional-cloud-key
 supported. Omit the key for an unauthenticated local host. These environment
 bundles are platform configuration, never organization BYO settings.
 
+Per-purpose platform model. `LLM_MODEL_EXPLAIN` names the model the investment
+and work unit explanations ask the platform provider for. It wins over
+`LLM_MODEL` and the provider-specific names, and never over an explicit request
+model or an organization's own BYO model; an organization's own provider is
+never given it. Categorization does not read it and keeps using `LLM_MODEL`.
+Set it to a model the platform provider serves.
+
 Hosted provider bundles. The generic `LLM_API_KEY`, `LLM_BASE_URL` and
 `LLM_MODEL` win over the provider-specific names, as above; an empty base URL is
 the provider's public endpoint and an empty model is the provider's default

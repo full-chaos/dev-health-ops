@@ -245,8 +245,7 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 	if err != nil {
 		return err
 	}
-	_, _ = before, after
-	if lost := []GrantRecord(nil); len(lost) > 0 {
+	if lost := narrowedGrants(before, after); len(lost) > 0 {
 		digest := narrowingDigest(lost)
 		if options.AcknowledgeNarrowing != digest {
 			logger.ErrorContext(

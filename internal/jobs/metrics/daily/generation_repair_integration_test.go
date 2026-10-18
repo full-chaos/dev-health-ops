@@ -4,6 +4,9 @@ package daily
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -117,5 +120,84 @@ VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3, 'succeeded', 'succeeded', 'fi
 	}
 	if again.Repaired != 0 || again.WouldRepair != 0 || again.Examined != 3 {
 		t.Fatalf("second pass = %+v, want nothing repaired and the 3 unrepairable rows only", again)
+	}
+}
+
+type cancelAfterRowsHandler struct {
+	slog.Handler
+	cancel context.CancelFunc
+	after  int
+	seen   *int
+}
+
+func (h cancelAfterRowsHandler) Handle(ctx context.Context, record slog.Record) error {
+	if record.Message == "daily metrics legacy redrive generation" {
+		*h.seen++
+		if *h.seen == h.after {
+			h.cancel()
+		}
+	}
+	return h.Handler.Handle(ctx, record)
+}
+
+// CHAOS-10139: a pass whose budget ends mid-range is a resumable partial
+// result, not an error; a rerun from resume_from finishes the range.
+func TestRepairLegacyRedriveGenerationsPartialOnBudgetResumes(t *testing.T) {
+	pool, store, _ := newFinalizeRedriveTestStack(t)
+	day := func(d int) time.Time { return time.Date(2026, 10, d, 0, 0, 0, 0, time.UTC) }
+	for d := 1; d <= 6; d++ {
+		generation := ScheduledFanoutGenerationPrefix + time.Date(2026, 10, d, 1, 0, 0, 0, time.UTC).Format(time.RFC3339)
+		run := newRun(repairTestOrg, day(d), generation)
+		if _, err := pool.Exec(context.Background(), `
+INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at,full_org)
+VALUES ($1::uuid,$2::uuid,$3,$4,'succeeded','succeeded',$5,$5,false)`,
+			run.ID, repairTestOrg, day(d), "redrive:n"+strconv.Itoa(d), time.Date(2026, 10, d, 1, 0, 4, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	asMap := func(outcome GenerationRepairOutcome) map[string]any {
+		raw, err := json.Marshal(outcome)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields := map[string]any{}
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+		return fields
+	}
+
+	budget, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	seen := 0
+	previous := slog.Default()
+	slog.SetDefault(slog.New(cancelAfterRowsHandler{Handler: previous.Handler(), cancel: cancel, after: 2, seen: &seen}))
+	first, err := store.RepairLegacyRedriveGenerations(budget, repairTestOrg, day(1), day(31), false, "CHAOS-10139 test")
+	slog.SetDefault(previous)
+	if err != nil {
+		t.Fatalf("a budget that ends mid-range returned %v, want a partial outcome", err)
+	}
+	fields := asMap(first)
+	if fields["partial"] != true || fields["resume_from"] != "2026-10-03" || first.Repaired != 2 {
+		t.Fatalf("first pass = %+v, want partial=true, resume_from 2026-10-03, repaired 2", fields)
+	}
+
+	resume, err := time.Parse("2006-01-02", fields["resume_from"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.RepairLegacyRedriveGenerations(context.Background(), repairTestOrg, resume, day(31), false, "CHAOS-10139 test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asMap(second)["partial"] == true || second.Repaired != 4 {
+		t.Fatalf("resumed pass = %+v, want complete with 4 repaired", asMap(second))
+	}
+	check, err := store.RepairLegacyRedriveGenerations(context.Background(), repairTestOrg, day(1), day(31), true, "check")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check.WouldRepair != 0 || check.Examined != 0 {
+		t.Fatalf("check after resume = %+v, want nothing left", check)
 	}
 }

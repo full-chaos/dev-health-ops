@@ -225,3 +225,65 @@ func TestDoUnauthenticatedReassertsTheLeaseAfterTheGateSleep(t *testing.T) {
 		t.Fatalf("err = %v requests = %d, want lease loss and no request after the gate sleep", err, requests.Load())
 	}
 }
+
+// A retry is a wire attempt like the first: a sibling that extends the shared
+// gate while this request sits in a retry wait must be seen before the retry is
+// sent, not after (the gate used to be read once, before the retry loop).
+func TestARetryRechecksTheGateBeforeItIsSent(t *testing.T) {
+	t.Parallel()
+	gate := &reportingGate{}
+	var calls atomic.Int32
+	var secondSentAt atomic.Int64
+	policy := RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: time.Millisecond}
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if calls.Add(1) == 1 {
+			// A sibling's rate limit extends the shared gate while this request retries.
+			_ = gate.Penalize(context.Background(), 200*time.Millisecond)
+			return testHTTPResponse(request, http.StatusServiceUnavailable, http.Header{}, `{}`), nil
+		}
+		secondSentAt.Store(time.Now().UnixNano())
+		return testHTTPResponse(request, http.StatusOK, http.Header{}, `{}`), nil
+	})), policy)
+	client.Gate = gate
+	client.GateWaitMax = time.Second
+
+	started := time.Now()
+	response, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want the failed attempt and the retry", calls.Load())
+	}
+	if sent := time.Unix(0, secondSentAt.Load()).Sub(started); sent < 180*time.Millisecond {
+		t.Fatalf("the retry went out after %s while the shared gate still owed about 200ms", sent)
+	}
+}
+
+// After this client's own 429 the gate is armed with the same delay the retry
+// then waits, so the recheck finds it clear: no second sleep.
+func TestARetryAfterOwn429DoesNotSleepTheGateTwice(t *testing.T) {
+	t.Parallel()
+	gate := &reportingGate{}
+	var calls atomic.Int32
+	policy := RetryPolicy{MaxAttempts: 2, InitialWait: 60 * time.Millisecond, MaxWait: 60 * time.Millisecond}
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if calls.Add(1) == 1 {
+			return testHTTPResponse(request, http.StatusTooManyRequests, http.Header{"Retry-After": {"1"}}, `{"message":"rate limit"}`), nil
+		}
+		return testHTTPResponse(request, http.StatusOK, http.Header{}, `{}`), nil
+	})), policy)
+	client.Gate = gate
+	client.GateWaitMax = 3 * time.Second
+
+	started := time.Now()
+	response, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if elapsed := time.Since(started); elapsed > 1800*time.Millisecond {
+		t.Fatalf("took %s: the retry slept the 1s Retry-After and then the gate it had armed for the same second", elapsed)
+	}
+}

@@ -99,7 +99,8 @@ func (walk *pageWalk) gitlabNextPage(header string, items int) (int, bool, error
 		walk.pages++
 		return 0, false, walk.fail(walkCauseBadContinuation)
 	}
-	next, more, err := walk.advance(header, true, items)
+	// "01" and "1" are the same page: the continuation is compared in its canonical form
+	next, more, err := walk.advance(strconv.Itoa(number), true, items)
 	if err != nil || !more {
 		return 0, false, err
 	}

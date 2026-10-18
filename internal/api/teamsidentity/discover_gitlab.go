@@ -155,12 +155,12 @@ func gitlabListPages[T any](ctx context.Context, client *providerfoundation.HTTP
 			return nil, false, fmt.Errorf("decode %s: %w", decodeLabel, err)
 		}
 		out = appendNew(out, seenItems, entries, key)
-		if len(out) > limit {
-			return out[:limit], true, nil
-		}
 		next, more, err := walk.gitlabNextPage(nextPage, len(entries))
 		if err != nil {
 			return nil, false, err
+		}
+		if len(out) > limit {
+			return out[:limit], true, nil
 		}
 		if !more {
 			break

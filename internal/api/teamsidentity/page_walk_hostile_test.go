@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -95,20 +96,20 @@ func linkNext(url string) http.Header { return header("Link", fmt.Sprintf(`<%s>;
 func githubHostile() []hostileCase {
 	return []hostileCase{
 		{"repeated rel=next", func(r *http.Request, n int) (http.Header, string) {
-			return linkNext(r.URL.Scheme + "://" + r.URL.Host + r.URL.Path + "?per_page=100&page=2"), fmt.Sprintf(`[{"slug":"s%d","name":"n%d","login":"u%d"}]`, n, n, n)
+			return linkNext(r.URL.Scheme + "://" + r.URL.Host + r.URL.Path + "?per_page=100&page=2"), fmt.Sprintf(`[{"slug":"s%d","name":"SECRETMARK-n%d","login":"u%d"}]`, n, n, n)
 		}, walkCauseRepeated, 3},
 		{"empty page advertising next", func(r *http.Request, n int) (http.Header, string) {
 			return linkNext(fmt.Sprintf("%s://%s%s?per_page=100&page=%d", r.URL.Scheme, r.URL.Host, r.URL.Path, n+1)), `[]`
 		}, walkCauseEmptyPageToNext, 1},
 		{"unbounded fresh rel=next", func(r *http.Request, n int) (http.Header, string) {
-			return linkNext(fmt.Sprintf("%s://%s%s?per_page=100&page=%d", r.URL.Scheme, r.URL.Host, r.URL.Path, n+1)), fmt.Sprintf(`[{"slug":"s%d","name":"n%d","login":"u%d"}]`, n, n, n)
+			return linkNext(fmt.Sprintf("%s://%s%s?per_page=100&page=%d", r.URL.Scheme, r.URL.Host, r.URL.Path, n+1)), fmt.Sprintf(`[{"slug":"s%d","name":"SECRETMARK-n%d","login":"u%d"}]`, n, n, n)
 		}, walkCauseMaxPages, pageWalkMaxPages},
 	}
 }
 
 func gitlabHostile() []hostileCase {
 	body := func(n int) string {
-		return fmt.Sprintf(`[{"id":%d,"full_path":"g%d","username":"u%d","path_with_namespace":"p%d"}]`, n, n, n, n)
+		return fmt.Sprintf(`[{"id":%d,"full_path":"SECRETMARK-g%d","username":"u%d","path_with_namespace":"p%d"}]`, n, n, n, n)
 	}
 	return []hostileCase{
 		{"X-Next-Page equal to the current page", func(r *http.Request, n int) (http.Header, string) {
@@ -126,6 +127,14 @@ func gitlabHostile() []hostileCase {
 		{"X-Next-Page not a number", func(r *http.Request, n int) (http.Header, string) {
 			return header("X-Next-Page", "soon"), body(n)
 		}, walkCauseBadContinuation, 1},
+	}
+}
+
+// assertNoPartial fails when a walk that errored still handed back data.
+func assertNoPartial(t *testing.T, name string, got any) {
+	t.Helper()
+	if value := reflect.ValueOf(got); value.Kind() == reflect.Slice && value.Len() != 0 {
+		t.Fatalf("%s: the walk failed but returned %d items", name, value.Len())
 	}
 }
 
@@ -147,8 +156,8 @@ func assertFailedClosed(t *testing.T, err error, doer *funcDoer, logs *bytes.Buf
 	if got := strings.Count(logs.String(), `"msg":"teams_identity_page_walk_failed"`); got != 1 {
 		t.Fatalf("%s: %d Warn lines, want 1:\n%s", tc.name, got, logs.String())
 	}
-	if strings.Contains(logs.String(), "token") && strings.Contains(logs.String(), "secret") {
-		t.Fatalf("%s: the Warn line carries credential text:\n%s", tc.name, logs.String())
+	if strings.Contains(logs.String(), "SECRETMARK") || strings.Contains(err.Error(), "SECRETMARK") {
+		t.Fatalf("%s: payload text reached the Warn line or the error:\n%s\n%v", tc.name, logs.String(), err)
 	}
 	var collected metricdata.ResourceMetrics
 	if err := walkReader.Collect(context.Background(), &collected); err != nil {
@@ -182,8 +191,9 @@ func TestGitHubWalksFailClosedOnAHostileContinuation(t *testing.T) {
 			logs := captureWarns(t)
 			doer := &funcDoer{answer: tc.answer}
 			client := hostileClient(t, "github", doer)
-			_, err := githubListAllPages(context.Background(), client, "org teams", "o", "/orgs/{org}/teams", "/orgs/o/teams?per_page=100",
+			got, err := githubListAllPages(context.Background(), client, "org teams", "o", "/orgs/{org}/teams", "/orgs/o/teams?per_page=100",
 				func(entry githubTeamListEntry) string { return entry.Slug })
+			assertNoPartial(t, tc.name, got)
 			assertFailedClosed(t, err, doer, logs, "github", tc)
 		})
 	}
@@ -194,13 +204,15 @@ func TestGitLabListWalksFailClosedOnAHostileContinuation(t *testing.T) {
 		t.Run("subgroups/"+tc.name, func(t *testing.T) {
 			logs := captureWarns(t)
 			doer := &funcDoer{answer: tc.answer}
-			_, _, err := gitlabListGroupPages(context.Background(), hostileClient(t, "gitlab", doer), "g", "/groups/{group}/subgroups", "/api/v4/groups/1/subgroups", 100000)
+			got, _, err := gitlabListGroupPages(context.Background(), hostileClient(t, "gitlab", doer), "g", "/groups/{group}/subgroups", "/api/v4/groups/1/subgroups", 100000)
+			assertNoPartial(t, tc.name, got)
 			assertFailedClosed(t, err, doer, logs, "gitlab", tc)
 		})
 		t.Run("projects/"+tc.name, func(t *testing.T) {
 			logs := captureWarns(t)
 			doer := &funcDoer{answer: tc.answer}
-			_, _, err := gitlabListProjectPages(context.Background(), hostileClient(t, "gitlab", doer), "g", "/groups/{group}/projects", "/api/v4/groups/1/projects", 100000, false)
+			got, _, err := gitlabListProjectPages(context.Background(), hostileClient(t, "gitlab", doer), "g", "/groups/{group}/projects", "/api/v4/groups/1/projects", 100000, false)
+			assertNoPartial(t, tc.name, got)
 			assertFailedClosed(t, err, doer, logs, "gitlab", tc)
 		})
 	}
@@ -225,10 +237,11 @@ func TestMemberWalksFailClosedOnAHostileContinuation(t *testing.T) {
 				return nil, `{"url":"https://api.example.test/orgs/o/teams/t"}`
 			}}
 			withDiscoveryDoer(t, doer)
-			_, err := discoverMembersGitHub(context.Background(), token, "o", "t")
+			got, err := discoverMembersGitHub(context.Background(), token, "o", "t")
 			// the detail request is request 1, so the member walk gets one request fewer than its cap plus one
 			capped := tc
 			capped.maxRequests++
+			assertNoPartial(t, tc.name, got)
 			assertFailedClosed(t, err, doer, logs, "github", capped)
 		})
 	}
@@ -242,9 +255,10 @@ func TestMemberWalksFailClosedOnAHostileContinuation(t *testing.T) {
 				return nil, `{"id":7,"full_path":"g","name":"G"}`
 			}}
 			withDiscoveryDoer(t, doer)
-			_, err := discoverMembersGitLab(context.Background(), token, "", "g")
+			got, err := discoverMembersGitLab(context.Background(), token, "", "g")
 			capped := tc
 			capped.maxRequests++
+			assertNoPartial(t, tc.name, got)
 			assertFailedClosed(t, err, doer, logs, "gitlab", capped)
 		})
 	}
@@ -252,7 +266,7 @@ func TestMemberWalksFailClosedOnAHostileContinuation(t *testing.T) {
 
 func TestJiraIssueSearchFailsClosedOnAHostileContinuation(t *testing.T) {
 	issues := func(n int) string {
-		return fmt.Sprintf(`{"issues":[{"key":"P-%d","fields":{}}],`, n)
+		return fmt.Sprintf(`{"issues":[{"key":"P-%d","fields":{"summary":"SECRETMARK"}}],`, n)
 	}
 	cases := []hostileCase{
 		{"repeated nextPageToken", func(r *http.Request, n int) (http.Header, string) {
@@ -267,7 +281,8 @@ func TestJiraIssueSearchFailsClosedOnAHostileContinuation(t *testing.T) {
 			logs := captureWarns(t)
 			doer := &funcDoer{answer: tc.answer}
 			// 500 issues would end the walk first at 1 issue per page only after 500 pages: the page bound must come first
-			_, err := jiraSearchIssues(context.Background(), hostileClient(t, "jira", doer), "P", "project = 'P'")
+			got, err := jiraSearchIssues(context.Background(), hostileClient(t, "jira", doer), "P", "project = 'P'")
+			assertNoPartial(t, tc.name, got)
 			assertFailedClosed(t, err, doer, logs, "jira", tc)
 		})
 	}
@@ -307,5 +322,41 @@ func TestAnEmptyNextLinkAndAnEmptyJiraPageWithATokenFailClosed(t *testing.T) {
 		}}
 		_, err := jiraSearchIssues(context.Background(), hostileClient(t, "jira", doer), "P", "project = 'P'")
 		assertFailedClosed(t, err, doer, logs, "jira", hostileCase{name: "empty page with token", cause: walkCauseEmptyPageToNext, maxRequests: 2})
+	})
+}
+
+func TestReproducedRound2WalkHoles(t *testing.T) {
+	t.Run("jira empty page with isLast false", func(t *testing.T) {
+		logs := captureWarns(t)
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+			if n == 1 {
+				return nil, `{"issues":[{"key":"P-1","fields":{}}],"isLast":false}`
+			}
+			return nil, `{"issues":[],"isLast":false}`
+		}}
+		got, err := jiraSearchIssues(context.Background(), hostileClient(t, "jira", doer), "P", "project = 'P'")
+		assertNoPartial(t, "jira isLast false", got)
+		assertFailedClosed(t, err, doer, logs, "jira", hostileCase{name: "empty page isLast false", cause: walkCauseEmptyPageToNext, maxRequests: 2})
+	})
+	t.Run("gitlab malformed X-Next-Page after the item limit", func(t *testing.T) {
+		logs := captureWarns(t)
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+			return header("X-Next-Page", "soon"), `[{"id":1,"path_with_namespace":"g/a"},{"id":2,"path_with_namespace":"g/b"}]`
+		}}
+		got, truncated, err := gitlabListProjectPages(context.Background(), hostileClient(t, "gitlab", doer), "g", "/groups/{group}/projects", "/api/v4/groups/1/projects", 1, false)
+		assertNoPartial(t, "gitlab limit", got)
+		if truncated {
+			t.Fatal("a walk that failed reported a truncated success")
+		}
+		assertFailedClosed(t, err, doer, logs, "gitlab", hostileCase{name: "malformed after limit", cause: walkCauseBadContinuation, maxRequests: 1})
+	})
+	t.Run("gitlab leading zero X-Next-Page repeats the page", func(t *testing.T) {
+		logs := captureWarns(t)
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+			return header("X-Next-Page", "01"), fmt.Sprintf(`[{"id":%d,"path_with_namespace":"g/%d"}]`, n, n)
+		}}
+		got, _, err := gitlabListProjectPages(context.Background(), hostileClient(t, "gitlab", doer), "g", "/groups/{group}/projects", "/api/v4/groups/1/projects", 100000, false)
+		assertNoPartial(t, "gitlab 01", got)
+		assertFailedClosed(t, err, doer, logs, "gitlab", hostileCase{name: "leading zero", cause: walkCauseRepeated, maxRequests: 1})
 	})
 }

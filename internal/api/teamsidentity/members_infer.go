@@ -191,8 +191,14 @@ func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient
 		list := listAt(page, "issues")
 		if len(list) == 0 {
 			// an empty page that advertises a continuation is an unreliable answer, not the end of the list
-			if next, _ := page.Get("nextPageToken"); truthy(next) {
+			next, _ := page.Get("nextPageToken")
+			last, present := page.Get("isLast")
+			if truthy(next) {
 				_, _, err := walk.advance("token:"+pythonStr(next), true, 0)
+				return nil, err
+			}
+			if present && last == false {
+				_, _, err := walk.advance(fmt.Sprintf("startAt:%d", startAt+len(list)), true, 0)
 				return nil, err
 			}
 			return issues, nil

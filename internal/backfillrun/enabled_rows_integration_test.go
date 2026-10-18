@@ -208,3 +208,100 @@ VALUES ($1::uuid, $2, $3, 'pagerduty', $4::json, '{}'::json, true, true, $5::uui
 		}
 	}
 }
+
+// TestBackfillRunAllowsADatasetKeyWithNoRow: --dataset-keys may name a
+// supported key the integration has no dataset row for (CHAOS-10088; the
+// planner runs it once and writes no row, decision C6 of CHAOS-8795). A key
+// whose row exists and is off stays refused, an unsupported key stays refused,
+// and the verb writes no dataset row.
+func TestBackfillRunAllowsADatasetKeyWithNoRow(t *testing.T) {
+	instance, admin := startDatabase(t)
+	uri := freshDatabase(t, instance, admin)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, sql)
+		}
+	}
+	for _, s := range []struct {
+		n       int
+		on, off []string
+	}{
+		{n: 301, on: []string{"work-items"}, off: []string{"work-item-comments"}},
+		{n: 302},
+	} {
+		integration, config := uuidN(0x1a, s.n), uuidN(0xc0, s.n)
+		exec(`INSERT INTO integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
+VALUES ($1::uuid, $2, 'jira', $3, '{}'::json, true, now(), now())`, integration, testOrg, fmt.Sprintf("integration-%d", s.n))
+		exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
+VALUES ($1::uuid, $2, $3::uuid, 'jira', 'repo', $4, $4, $4, '{}'::json, true, now(), now())`,
+			uuidN(0x5a, s.n*10), testOrg, integration, fmt.Sprintf("org/repo-%d", s.n))
+		exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, integration_id, created_at, updated_at)
+VALUES ($1::uuid, $2, $3, 'jira', '["work-items"]'::json, '{}'::json, true, true, $4::uuid, now(), now())`,
+			config, testOrg, fmt.Sprintf("rows-%d", s.n), integration)
+		for _, key := range s.on {
+			exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES (gen_random_uuid(), $1, $2::uuid, $3, true, '{}'::json)`, testOrg, integration, key)
+		}
+		for _, key := range s.off {
+			exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES (gen_random_uuid(), $1, $2::uuid, $3, false, '{}'::json)`, testOrg, integration, key)
+		}
+	}
+	datasetRows := func() string {
+		t.Helper()
+		result, err := conn.Query(ctx, `SELECT integration_id::text || ' ' || dataset_key || '=' || is_enabled::text FROM integration_datasets ORDER BY 1`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines, err := pgx.CollectRows(result, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(lines, "\n")
+	}
+	before := datasetRows()
+	for _, c := range []struct {
+		name    string
+		n       int
+		keys    string
+		want    []string // nil = refused
+		message string
+	}{
+		{name: "no row, other rows enabled", n: 301, keys: "work-item-labels", want: []string{"work-item-labels"}},
+		{name: "enabled row and no row together, provider order", n: 301, keys: "work-item-labels,work-items", want: []string{"work-items", "work-item-labels"}},
+		{name: "no row at all on the integration", n: 302, keys: "work-items", want: []string{"work-items"}},
+		{name: "a disabled row stays refused", n: 301, keys: "work-item-comments", message: "does not switch a dataset on"},
+		{name: "an unsupported key stays refused", n: 301, keys: "no-such-dataset", message: "is not a dataset key of provider"},
+		{name: "a refused key refuses the whole run", n: 301, keys: "work-item-labels,work-item-comments", message: "does not switch a dataset on"},
+	} {
+		run := scenario{name: c.name, id: uuidN(0xc0, c.n), args: []string{"--backfill", "1", "--before", "2026-03-10", "--dataset-keys", c.keys}}
+		reset(t, uri, run)
+		code, _, stderr := goRun(t, uri, run)
+		if c.want == nil {
+			if code != cli.ExitRefused || !strings.Contains(stderr, c.message) {
+				t.Errorf("%s: exit %d, want the refusal (%d) with %q; stderr:\n%s", c.name, code, cli.ExitRefused, c.message, stderr)
+			}
+			for table, lines := range rows(t, uri) {
+				if len(lines) != 0 {
+					t.Errorf("%s: the refused run left %d rows in %s", c.name, len(lines), table)
+				}
+			}
+			continue
+		}
+		if code != cli.ExitOK {
+			t.Errorf("%s: exit %d, want a started run; stderr:\n%s", c.name, code, stderr)
+			continue
+		}
+		if named := triggerDatasetKeys(t, uri); len(named) != 1 || fmt.Sprint(named[0]) != fmt.Sprint(c.want) {
+			t.Errorf("%s: the run names %v, want %v", c.name, named, c.want)
+		}
+	}
+	if after := datasetRows(); after != before {
+		t.Errorf("the verb changed dataset rows\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}

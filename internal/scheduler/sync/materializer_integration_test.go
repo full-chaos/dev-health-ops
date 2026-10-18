@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -1716,6 +1717,18 @@ func TestNativeMaterializerPlansExplicitlyRequestedDatasetWithoutARow(t *testing
 	}
 	if rowsAfter != rowsBefore {
 		t.Fatalf("integration_datasets rows %d -> %d: an explicit request must not write a dataset row", rowsBefore, rowsAfter)
+	}
+
+	// CHAOS-10088: planning a key with no row is the expected path (an Info
+	// log, no Warn) and moves a counter, so an operator can see one-off runs
+	// of datasets the schedule does not carry.
+	var metrics bytes.Buffer
+	if err := materializer.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	counter := regexp.MustCompile(`(?m)^dev_health_scheduler_explicit_datasets_without_row_total ([0-9]+)$`).FindStringSubmatch(metrics.String())
+	if counter == nil || counter[1] == "0" {
+		t.Fatalf("dev_health_scheduler_explicit_datasets_without_row_total did not move after a key with no row was planned:\n%s", metrics.String())
 	}
 }
 

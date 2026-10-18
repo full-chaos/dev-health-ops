@@ -370,6 +370,14 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		if err := c.Lease.Assert(ctx); err != nil {
 			return nil, err
 		}
+		// The first attempt passed the gate above. A retry is a wire attempt too:
+		// a sibling may have armed or extended the shared gate while this request
+		// waited to retry.
+		if attempt > 1 {
+			if err := c.awaitGate(ctx); err != nil {
+				return nil, err
+			}
+		}
 		callLeft := new(atomic.Bool)
 		request, err := http.NewRequestWithContext(context.WithValue(ctx, originKey{}, &originState{target: target, left: callLeft}), method, target.String(), bytes.NewReader(requestBody))
 		if err != nil {

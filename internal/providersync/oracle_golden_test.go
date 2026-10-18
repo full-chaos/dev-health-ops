@@ -35,14 +35,21 @@ const oraclePairPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // (CHAOS-9537), key on every harness file, so they are answered on it too.
 const oraclePairGitLabEpicBuild = "efb85285578233689bf30c09e3fadf157db56f97"
 
+// oraclePairGitLabEpicRowsBuild is the first build that holds the
+// gitlab/work-items/epic and epic-transition pair files, the GitLab provider
+// batch's group-epic work item and its transitions (CHAOS-9857).
+const oraclePairGitLabEpicRowsBuild = "9c3493ae5dd6b817562c36096e3c1cd1f3552ef9"
+
 // oraclePairLaterPythonBuilds names, by pair, a build later than
 // oraclePairPythonBuild that answered the pair: its answer needs Python that
 // oraclePairPythonBuild does not hold (a producer change, or a pair file added
 // after it). Such a pair is recorded from a checkout of the later build.
 var oraclePairLaterPythonBuilds = map[string]string{
-	"gitlab/work-items/issue":          oraclePairGitLabEpicBuild,
-	"gitlab/work-items/issue-provider": oraclePairGitLabEpicBuild,
-	"gitlab/work-items/sprint":         oraclePairGitLabEpicBuild,
+	"gitlab/work-items/issue":           oraclePairGitLabEpicBuild,
+	"gitlab/work-items/issue-provider":  oraclePairGitLabEpicBuild,
+	"gitlab/work-items/sprint":          oraclePairGitLabEpicBuild,
+	"gitlab/work-items/epic":            oraclePairGitLabEpicRowsBuild,
+	"gitlab/work-items/epic-transition": oraclePairGitLabEpicRowsBuild,
 }
 
 // oracleHarnessFilesAfterBuild are the harness files added after
@@ -53,6 +60,17 @@ var oraclePairLaterPythonBuilds = map[string]string{
 var oracleHarnessFilesAfterBuild = map[string]string{
 	"testdata/oracle_pairs/gitlab_work-items_sprint.py":         "gitlab/work-items/sprint",
 	"testdata/oracle_pairs/gitlab_work-items_issue-provider.py": "gitlab/work-items/issue-provider",
+}
+
+// oracleHarnessFilesAfterGitLabEpicBuild are the harness files added after
+// oraclePairGitLabEpicBuild, by the group-epic pairs (CHAOS-9857). The GitLab
+// issue, issue-provider and sprint pairs were answered on that build, which
+// never held these files, so their manifests leave them out; a pair answered on
+// oraclePairGitLabEpicRowsBuild or later keys on every harness file.
+var oracleHarnessFilesAfterGitLabEpicBuild = map[string]string{
+	"testdata/oracle_pairs/_gitlab_epic_common.py":               "gitlab/work-items/epic",
+	"testdata/oracle_pairs/gitlab_work-items_epic.py":            "gitlab/work-items/epic",
+	"testdata/oracle_pairs/gitlab_work-items_epic-transition.py": "gitlab/work-items/epic-transition",
 }
 
 // oraclePairBuild is the build that answered pairID.
@@ -229,6 +247,10 @@ func oracleHarnessManifest(t *testing.T, packageDir, build string) string {
 			return walkErr
 		}
 		if _, added := oracleHarnessFilesAfterBuild[path]; added && build == oraclePairPythonBuild {
+			return nil
+		}
+		if _, added := oracleHarnessFilesAfterGitLabEpicBuild[path]; added &&
+			(build == oraclePairPythonBuild || build == oraclePairGitLabEpicBuild) {
 			return nil
 		}
 		raw, err := fs.ReadFile(embeddedOracleSources, path)

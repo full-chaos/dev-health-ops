@@ -140,14 +140,14 @@ func errorTypeName(err error) (name string) {
 // maxUnwrapDepth bounds the walk down an error chain: far deeper than any real chain.
 const maxUnwrapDepth = 64
 
-// coordinatorWorkError is what a coordinator Work returns to River: the text is fixed ("coordinator job failed: <Go type>")
+// coordinatorWorkError is what a coordinator Work returns to River: the text is fixed ("coordinator job failed: <Go type> [stage=..] class=.. [code=..]", every part from a closed vocabulary)
 // and the original error stays reachable through Unwrap, so River's cancel and snooze handling and every errors.Is / errors.As
 // of the retry logic work as before. River's otelriver middleware and the job queue's error column copy err.Error(): that text
 // must not carry a URL, an id or a response body (CHAOS-7896 r1).
 type coordinatorWorkError struct{ cause error }
 
 func (err *coordinatorWorkError) Error() string {
-	return "coordinator job failed: " + errorTypeName(err.cause)
+	return "coordinator job failed: " + errorTypeName(err.cause) + failureDetail(err.cause)
 }
 func (err *coordinatorWorkError) Unwrap() error { return err.cause }
 

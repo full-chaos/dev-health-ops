@@ -69,7 +69,7 @@ func goHistory(t *testing.T) string {
 
 // historyPythonBuild is the build whose Python CLI (Alembic) answered the scenarios: a build that still
 // carried it.
-const historyPythonBuild = "055816fd2325f6c0dda555e46ac3ff2d0a81a796"
+const historyPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 
 // TestHistoryMatchesTheFrozenAlembicOutput compares dho's `history` text with what the REAL `dev-hops migrate
 // postgres history` printed in each scenario, and the one verb dho refuses (`downgrade`) with what Alembic did

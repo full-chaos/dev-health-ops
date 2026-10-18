@@ -3147,12 +3147,12 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/edgetoken FuzzVerifyToken"
   "./internal/auth/signedtoken FuzzValidSignedToken"
   "./internal/auth/httpapi FuzzParseLimit"
+  "./internal/auth/httpapi FuzzParseForwardedTrust"
   "./internal/auth/keystore FuzzParseEd25519Key"
   "./internal/auth/authconfig FuzzConfigLoad"
 )
 AUTH_FUZZTIME="${AUTH_FUZZTIME:-20s}"
 AUTH_GOVULNCHECK_VERSION="v1.9.0"
-AUTH_VULN_BASELINE="${AUTH_VULN_BASELINE:-${ROOT}/ci/auth_govulncheck_baseline.txt}"
 # Marker the production-stack test logs once it has mounted and driven the real
 # middleware stack (internal/auth/authruntime/production_stack_test.go).
 AUTH_STACK_MARKER="AUTH_PRODUCTION_STACK_EXECUTED"
@@ -3232,10 +3232,9 @@ check_auth_fuzz() {
   [ "${ran}" -gt 0 ] || die "auth fuzz: no target ran (TARGET=${only:-all})"
 }
 
-# check_auth_vuln: govulncheck over the auth packages only, pinned. Reachable
-# findings not in ci/auth_govulncheck_baseline.txt fail the gate (a NEW
-# vulnerability blocks merge); baseline entries are the already-known ones and
-# are listed so they shrink, not hide.
+# check_auth_vuln: govulncheck over the auth packages only, pinned. ANY
+# reachable finding fails the gate: there is no ignore list, so a pull request
+# cannot whitelist a vulnerability.
 check_auth_vuln() {
   local report
   report="$(mktemp)"
@@ -3248,7 +3247,7 @@ check_auth_vuln() {
     die "govulncheck failed to run"
   fi
   rm -f "${report}.err"
-  python3 "${ROOT}/ci/auth_govulncheck.py" "${AUTH_VULN_BASELINE}" <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
+  python3 "${ROOT}/ci/auth_govulncheck.py" <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
   rm -f "${report}"
 }
 
@@ -3282,9 +3281,10 @@ check_auth_middleware() {
 auth_relevant() {
   local base="$1" head="$2" closure changed file relevant=false
   closure="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -deps \
-    -f '{{if not .Standard}}{{.Dir}}{{end}}' "${AUTH_PACKAGES[@]}" | sed "s|^${ROOT}/||" | LC_ALL=C sort -u)"
+    -test -f '{{if not .Standard}}{{.Dir}}{{end}}' "${AUTH_PACKAGES[@]}" | sed "s|^${ROOT}/||" | LC_ALL=C sort -u)"
   [ -n "${closure}" ] || die "auth relevance: go list returned an empty closure"
-  changed="$(git -C "${ROOT}" diff --name-only "${base}" "${head}")"
+  # --no-renames: a file moved OUT of the auth tree must report its old path too.
+  changed="$(git -C "${ROOT}" diff --name-only --no-renames "${base}" "${head}")"
   while IFS= read -r file; do
     [ -n "${file}" ] || continue
     if auth_path_relevant "${file}" "${closure}"; then
@@ -3299,14 +3299,16 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|ci/auth_govulncheck_baseline.txt|.github/workflows/go-auth-service.yml)
+    contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|.github/workflows/go-auth-service.yml)
       return 0
       ;;
-    *.go)
-      dir="$(dirname "${file}")"
-      printf '%s\n' "${closure}" | grep -qx -- "${dir}" && return 0
-      ;;
   esac
+  # Any file (Go, testdata, golden, embedded asset) under a directory of the
+  # import closure can change what the auth packages do or test.
+  while IFS= read -r dir; do
+    [ -n "${dir}" ] && [ "${dir}" != "." ] || continue
+    case "${file}" in "${dir}"/*) return 0 ;; esac
+  done <<<"${closure}"
   return 1
 }
 
@@ -3315,8 +3317,8 @@ auth_path_relevant() {
 check_auth_paths_selftest() {
   local closure inside outside file
   closure="$(printf 'internal/auth/authruntime\ninternal/platform/secrets\n')"
-  inside=(internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go contracts/auth/v1/README.md go.mod ci/check_go.sh)
-  outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go src/dev_health_ops/cli.py)
+  inside=(internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh)
+  outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go internal/platform/secretsx/y.go src/dev_health_ops/cli.py)
   for file in "${inside[@]}"; do
     auth_path_relevant "${file}" "${closure}" || die "auth path filter: ${file} must select the auth gates and does not"
     printf 'auth path filter: %s -> relevant\n' "${file}"

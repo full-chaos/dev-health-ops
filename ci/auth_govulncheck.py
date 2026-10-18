@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Gate for `govulncheck -format json` over the auth packages (CHAOS-4887).
 
-Reads the JSON message stream on stdin and the baseline file named by argv[1]
-(one OSV id per line, `#` comments). Exit 1 when a REACHABLE finding (one whose
-trace names a function, i.e. the code calls into the vulnerable symbol) is not in
-the baseline: a new vulnerability blocks merge. A baseline entry that is no
-longer reachable is reported as stale so the list shrinks; it does not fail.
-An empty stream or one with no `config` message fails too: a scan that did not
+Reads the JSON message stream on stdin. Exit 1 on ANY REACHABLE finding (one
+whose trace names a function, i.e. the code calls into the vulnerable symbol).
+There is no ignore list: a pull request cannot whitelist a vulnerability. An
+empty stream or one with no `config` message fails too: a scan that did not
 happen must not read green.
 """
 
@@ -28,18 +26,7 @@ def messages(text: str):
         yield message
 
 
-def baseline(path: str) -> set[str]:
-    ids: set[str] = set()
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            entry = line.split("#", 1)[0].strip()
-            if entry:
-                ids.add(entry)
-    return ids
-
-
 def main() -> int:
-    known = baseline(sys.argv[1])
     saw_config = False
     reachable: dict[str, str] = {}
     for message in messages(sys.stdin.read()):
@@ -60,23 +47,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    new = sorted(set(reachable) - known)
-    stale = sorted(known - set(reachable))
-    for osv in sorted(set(reachable) & known):
-        print(f"auth govulncheck: known (baseline) {osv} {reachable[osv]}")
-    for osv in stale:
-        print(
-            f"auth govulncheck: baseline entry {osv} is no longer reachable; delete it from the baseline"
-        )
-    for osv in new:
-        print(
-            f"auth govulncheck: NEW reachable vulnerability {osv} {reachable[osv]}",
-            file=sys.stderr,
-        )
-    print(
-        f"auth govulncheck: {len(reachable)} reachable, {len(new)} new, {len(stale)} stale baseline entries"
-    )
-    return 1 if new else 0
+    for osv in sorted(reachable):
+        print(f"auth govulncheck: reachable {osv} {reachable[osv]}", file=sys.stderr)
+    print(f"auth govulncheck: {len(reachable)} reachable")
+    return 1 if reachable else 0
 
 
 if __name__ == "__main__":

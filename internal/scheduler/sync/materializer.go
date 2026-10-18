@@ -1895,19 +1895,22 @@ func loadFailureStreaks(
 	if !hasFamily {
 		return nil
 	}
+	unavailable := func(failure string) map[string]providersync.FailureStreak {
+		slog.Default().Warn("sync.materializer.failure_streaks_unavailable",
+			slog.String("provider", provider), slog.String("org_id", orgID),
+			slog.String("integration_id", integrationID),
+			slog.String("failure", failure))
+		return nil
+	}
 	savepoint, err := tx.Begin(ctx)
 	if err != nil {
-		return nil
+		return unavailable("savepoint_begin_failed")
 	}
 	rows, err := savepoint.Query(ctx, providersync.RecentTerminalUnitsSQL,
 		orgID, integrationID, canonicalWorkItemsDataset, providersync.RecentTerminalUnitsLimit)
 	if err != nil {
 		_ = savepoint.Rollback(ctx)
-		slog.Default().Warn("sync.materializer.failure_streaks_unavailable",
-			slog.String("provider", provider), slog.String("org_id", orgID),
-			slog.String("integration_id", integrationID),
-			slog.String("failure", "streak_query_failed"))
-		return nil
+		return unavailable("streak_query_failed")
 	}
 	bySource := make(map[string][]providersync.UnitOutcome)
 	for rows.Next() {
@@ -1916,7 +1919,7 @@ func loadFailureStreaks(
 		if scanErr := rows.Scan(&sourceID, &outcome.Failed, &outcome.CauseClass, &outcome.At); scanErr != nil {
 			rows.Close()
 			_ = savepoint.Rollback(ctx)
-			return nil
+			return unavailable("row_scan_failed")
 		}
 		outcome.At = outcome.At.UTC()
 		bySource[sourceID] = append(bySource[sourceID], outcome)
@@ -1924,10 +1927,10 @@ func loadFailureStreaks(
 	rows.Close()
 	if rows.Err() != nil {
 		_ = savepoint.Rollback(ctx)
-		return nil
+		return unavailable("row_iteration_failed")
 	}
 	if err := savepoint.Commit(ctx); err != nil {
-		return nil
+		return unavailable("savepoint_commit_failed")
 	}
 	streaks := make(map[string]providersync.FailureStreak)
 	for sourceID, outcomes := range bySource {

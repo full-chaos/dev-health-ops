@@ -16,8 +16,8 @@ readonly SOURCE_DATE_EPOCH="0"
 # target: they are `dho worker`, `dho scheduler`, `dho reconciler` and `dho
 # stream-runner`, smoked on the dho image (the chart default) and on the
 # operator image (what prod pins for them).
-readonly RUNTIME_TARGETS=(worker worker-operator scheduler scheduler-operator reconciler reconciler-operator stream-runner stream-runner-operator)
-readonly ALL_TARGETS=(operator contractcheck migrate dho)
+readonly RUNTIME_TARGETS=(worker worker-operator scheduler scheduler-operator reconciler reconciler-operator stream-runner stream-runner-operator auth-service)
+readonly ALL_TARGETS=(operator contractcheck migrate dho auth-service auth-migrate)
 readonly CONTAINER_SECURITY_ARGS=(
   --read-only
   --cap-drop ALL
@@ -231,6 +231,22 @@ smoke_target() {
   startup_env=()
   startup_args=()
   case "${target}" in
+    auth-service)
+      # auth-service refuses to start without a DSN and a key id (syntactic
+      # configuration faults) but starts and fails /readyz CLOSED when the
+      # database or the key file is unusable (dependency faults). The DSN
+      # points at a closed local port and the key file does not exist, so the
+      # smoke proves both: live, not ready, naming both checks. The operator
+      # listener is moved to :8080 (the port this smoke publishes); the short
+      # check timeout keeps the refused dial inside wait_for_status's 1 s curl.
+      startup_env=(
+        --env "AUTH_DATABASE_URI=postgres://smoke:smoke@127.0.0.1:1/smoke?sslmode=disable"
+        --env "AUTH_SIGNING_KEY_FILE=/nonexistent/signing-key.pem"
+        --env "AUTH_SIGNING_KEY_ID=container-smoke"
+        --env "AUTH_SERVICE_OPERATOR_HTTP_ADDR=:8080"
+        --env "AUTH_SERVICE_HEALTH_CHECK_TIMEOUT=200ms"
+      )
+      ;;
     worker | worker-operator)
       startup_env=(
         --env "DEV_HEALTH_QUEUE_CONCURRENCY=sync=4,sync_provider=2"
@@ -280,6 +296,9 @@ smoke_target() {
         ;;
       stream-runner | stream-runner-operator)
         dependencies="clickhouse domain_postgres stream_consumer valkey"
+        ;;
+      auth-service)
+        dependencies="postgres signing_key"
         ;;
       *)
         die "no readiness contract declared for ${target}"
@@ -378,6 +397,27 @@ smoke() {
   printf '%s' "${migrate_stderr}" \
     | jq -e '.error.code == "configuration_error" and (.error.detail | contains("MIGRATION_DATABASE_URI"))' >/dev/null \
     || die "migrate did not report the missing MIGRATION_DATABASE_URI diagnostic"
+
+  # auth-migrate (cmd/auth-migrate, CHAOS-4882) is a one-shot job like
+  # migrate: --version needs no database, and running with no configuration
+  # must fail closed naming the missing DSN setting (exit 1, not a panic and
+  # not an unknown-flag exit 2).
+  printf 'container smoke: auth-migrate\n'
+  build_target auth-migrate "${IMAGE_PREFIX}-auth-migrate:ci"
+  [ "$(docker image inspect --format '{{.Config.User}}' "${IMAGE_PREFIX}-auth-migrate:ci")" = "65532:65532" ] \
+    || die "auth-migrate image is not configured for numeric non-root execution"
+  docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${IMAGE_PREFIX}-auth-migrate:ci" --version \
+    | grep -F '"version":"phase1-ci"' >/dev/null \
+    || die "auth-migrate did not report injected version metadata"
+  local auth_migrate_stderr auth_migrate_code
+  set +e
+  auth_migrate_stderr="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${IMAGE_PREFIX}-auth-migrate:ci" 2>&1 >/dev/null)"
+  auth_migrate_code=$?
+  set -e
+  [ "${auth_migrate_code}" = "1" ] \
+    || die "auth-migrate exited ${auth_migrate_code} without configuration, want 1: ${auth_migrate_stderr}"
+  grep -F 'AUTH_MIGRATION_DATABASE_URI' <<<"${auth_migrate_stderr}" >/dev/null \
+    || die "auth-migrate did not report the missing AUTH_MIGRATION_DATABASE_URI diagnostic: ${auth_migrate_stderr}"
 
   smoke_dho
 }

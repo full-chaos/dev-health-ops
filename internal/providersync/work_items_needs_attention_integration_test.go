@@ -3,7 +3,10 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -229,5 +232,73 @@ WHERE org_id = 'org-acme' AND integration_id = $1 AND dataset_key = 'work-items'
 	}
 	if reason != "needs_attention:unclassified" {
 		t.Fatalf("unavailable_reason = %q, want needs_attention:unclassified", reason)
+	}
+}
+
+// CHAOS-10074: the third equal failure of a source with no work-items dataset
+// row changes no row; the stamp must not be logged as written.
+func TestPostgresWorkItemsNeedsAttentionStampOfAMissingDatasetRowIsNotLoggedAsStamped(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeContext, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeContext); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+	repository, err := NewPostgresRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	base := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+	for hour := 1; hour <= 3; hour++ {
+		at := base.Add(time.Duration(hour) * time.Hour)
+		unitID := uuid.NewString()
+		if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_run_units (
+    id, org_id, sync_run_id, integration_id, source_id, provider,
+    dataset_key, cost_class, mode, since_at, before_at, status,
+    processor_flags, updated_at
+) VALUES (
+    $1, 'org-acme', $2, $3, $4, 'github', 'work-items', 'medium',
+    'incremental', '2026-07-22T12:00:00Z', '2026-07-23T12:00:00Z',
+    'dispatching', '{"sync_prs":true}'::jsonb, NOW()
+)`, unitID, firstRunID, firstIntegrationID, firstSourceID); err != nil {
+			t.Fatal(err)
+		}
+		claim, err := repository.Claim(ctx, ClaimRequest{
+			UnitID: unitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: at,
+			LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := repository.FailWithCauseClass(ctx, claim, "time_limit", "time_limit", nil, at, at.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := logs.String()
+	if strings.Contains(out, "providersync.needs_attention_stamped") {
+		t.Fatalf("a stamp that changed no row was logged as stamped:\n%s", out)
+	}
+	if !strings.Contains(out, "providersync.needs_attention_stamp_no_dataset_row") {
+		t.Fatalf("no warning for the missing dataset row:\n%s", out)
 	}
 }

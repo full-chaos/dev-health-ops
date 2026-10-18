@@ -103,7 +103,7 @@ func TestStepFailureReasonStaysOutOfTheBuildLog(t *testing.T) {
 	const marker = "SECRET-MARKER-https://tenant.example/token=abc123"
 	var logs bytes.Buffer
 	store := &fakeStore{claim: testClaim(time.Second)}
-	step := failingPreStep{err: &StepFailure{Reason: marker, Evidence: map[string]any{"links_read": 4, "detail": marker, "nested": map[string]any{"note": marker, "rows": 2}}}}
+	step := failingPreStep{err: &StepFailure{Reason: marker, Evidence: map[string]any{"links_read": 4, "detail": marker, "nested": map[string]any{"note": marker, "status": marker, "rows": 2}, "counts": map[string]int{marker: 1}}}}
 	handler, err := NewBuildHandler(store, []NativePreStep{step}, nil, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)

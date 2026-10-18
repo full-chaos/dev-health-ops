@@ -206,6 +206,23 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		return CompleteRouteBatch{}, err
 	}
 
+	query := url.Values{"state": {"all"}}
+	// CHAOS-8805: the fetch honours the window end. The frozen Python producer
+	// passes updated_after only (its until value is not part of the API call);
+	// chris's ruling (CHAOS-8805, 2026-10-06 D2/D4980: a unit holds the window it
+	// was given, as GitHub and Linear do) adds updated_before. The API treats the
+	// bound as inclusive, so an item updated exactly at the end is in two adjacent
+	// windows; the writes are idempotent.
+	if claim.SinceAt != nil {
+		query.Set("updated_after", claim.SinceAt.UTC().Format(time.RFC3339Nano))
+	}
+	if claim.BeforeAt != nil {
+		query.Set("updated_before", claim.BeforeAt.UTC().Format(time.RFC3339Nano))
+	}
+	// Logged before the project lookup, so a unit that fails binding its project still names its window.
+	slog.Default().InfoContext(ctx, "gitlab_work_items_window",
+		"org_id", claim.OrgID, "unit_id", claim.ID, "updated_after", query.Get("updated_after"),
+		"updated_before", query.Get("updated_before"))
 	requests := 0
 	counted := *client
 	counted.Doer = gitLabWorkItemsCountingDoer{delegate: client.Doer, requests: &requests}
@@ -292,13 +309,6 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			"group_milestones", countGroupMilestones(milestones))
 	}
 
-	query := url.Values{"state": {"all"}}
-	// This intentionally has no updated_before parameter. The actual
-	// fetch_gitlab_work_items producer passes updated_after only to
-	// python-gitlab; its until value is not part of that API call.
-	if claim.SinceAt != nil {
-		query.Set("updated_after", claim.SinceAt.UTC().Format(time.RFC3339Nano))
-	}
 	issuePayloads, issuePages, issueErr := collectGitLabPayloads(
 		ctx, &counted, gitlabIssuesRoute, root+"/issues", query, perPage, maxPages,
 	)

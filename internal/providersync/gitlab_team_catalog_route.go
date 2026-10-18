@@ -739,6 +739,12 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, membershipOutcome.Plan)
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.MembershipsClosed = membershipOutcome.Closed
+		var droppedMembers LinkDrop
+		membershipRows, droppedMembers, reuseErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, "team_memberships", membershipRows,
+			func(r gitlabTeamCatalogMembershipRow) string { return r.OrgID }, func(r gitlabTeamCatalogMembershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogMembershipRow) bool { return r.ValidTo == nil })
+		if reuseErr != nil {
+			return result, reuseErr
+		}
 		membershipsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogMembershipsDestination, EffectReadbackRequired, membershipRows)
 		if effectErr != nil {
 			return result, effectErr
@@ -746,8 +752,10 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, membershipsEffect); err != nil {
 			return result, err
 		}
-		result.MembershipsWritten = len(keptMemberships)
-		result.MembersWritten = len(distinctGitLabMembershipMembers(keptMemberships))
+		writtenMemberships := KeptLinks(droppedMembers, keptMemberships,
+			func(r gitlabTeamCatalogMembershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogMembershipRow) bool { return r.ValidTo == nil })
+		result.MembershipsWritten = len(writtenMemberships)
+		result.MembersWritten = len(distinctGitLabMembershipMembers(writtenMemberships))
 	}
 	if selections.Projects {
 		if batch.Effects.Ownership != nil {
@@ -772,6 +780,12 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			}
 			closed := len(plan.Retract)
 			ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, plan)
+			var droppedOwnership LinkDrop
+			ownershipRows, droppedOwnership, snapshotErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, "team_project_ownership", ownershipRows,
+				func(r gitlabTeamCatalogOwnershipRow) string { return r.OrgID }, func(r gitlabTeamCatalogOwnershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogOwnershipRow) bool { return r.ValidTo == nil })
+			if snapshotErr != nil {
+				return result, snapshotErr
+			}
 			ownershipEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogOwnershipDestination, EffectReadbackRequired, ownershipRows)
 			if effectErr != nil {
 				return result, effectErr
@@ -784,7 +798,8 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			slog.Default().InfoContext(ctx, "gitlab_team_catalog_ownership_snapshot",
 				"org_id", ref.OrgID, "teams_listed", len(batch.Rows.OwnershipListedTeamIDs), "teams_dropped_gone", len(decision.gone),
 				"teams_closable", len(decision.closable), "grants_written", len(batch.Rows.Ownership), "grants_unchanged", plan.UnchangedCount(), "rows_closed", closed)
-			result.OwnershipWritten = batch.Result.TeamProjectOwnershipImported
+			result.OwnershipWritten = len(KeptLinks(droppedOwnership, batch.Rows.Ownership,
+				func(r gitlabTeamCatalogOwnershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogOwnershipRow) bool { return r.ValidTo == nil }))
 			result.OwnershipUnchanged = plan.UnchangedCount()
 		}
 		if batch.Effects.Projects != nil {

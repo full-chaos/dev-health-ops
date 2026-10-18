@@ -24,6 +24,10 @@ func (zeroCountCarryConn) PrepareBatch(context.Context, string, ...driver.Prepar
 	return nil, errors.New("no batch")
 }
 
+func (zeroCountCarryConn) Exec(context.Context, string, ...any) error {
+	return errors.New("no write")
+}
+
 type zeroCountCarryRows struct {
 	driver.Rows
 	read bool

@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/pgconfig"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -76,7 +77,7 @@ type postgresSchedulerDatabase struct {
 // budgeted 2, with no change to the connection footprint the deployment
 // contract already accounts for.
 func openSchedulerDatabase(ctx context.Context, cfg config.Config) (schedulerDatabase, error) {
-	runtimeConfig := postgres.RuntimeConfigFromPlatform(cfg).WithCoordinator()
+	runtimeConfig := pgconfig.RuntimeConfig(cfg).WithCoordinator()
 	pools, err := postgres.NewRuntimePools(ctx, runtimeConfig)
 	if err != nil {
 		return nil, err

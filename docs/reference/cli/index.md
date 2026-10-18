@@ -587,7 +587,7 @@ dho admin users update \
 
 ### `admin users delete`
 
-Delete a user (identified by `--id`, `--email`, or `--username`). The default is a **soft delete**: the user row and its profile stay, `is_active` becomes false (no login), access tokens stop working (`token_version` goes up), refresh tokens are revoked and password-reset and email-verification tokens are removed. `--force` is a **permanent delete**: the user row and every personal field are removed, together with the rows that belong to the user (memberships, tokens, Ask Dev conversations). The billing-audit log, the refund history, the impersonation sessions and the audit log are **kept**, with the user reference set to null (financial and security records that a legal or accounting duty keeps; GDPR Art. 17(3)(b), CCPA). Free text inside a kept row (for example an email in a description) is not rewritten.
+Delete a user (identified by `--id`, `--email`, or `--username`). The default is a **soft delete**: the user row and its profile stay, `is_active` becomes false (no login), access tokens stop working (`token_version` goes up), refresh tokens are revoked and password-reset and email-verification tokens are removed. `--force` is a **permanent delete**: the user row and every personal field are removed, together with the rows that belong to the user (memberships, tokens, Ask Dev conversations). The billing-audit log, the refund history, the impersonation sessions and the audit log are **kept**, with the user reference set to null (financial and security records that a legal or accounting duty keeps; GDPR Art. 17(3)(b), CCPA). The audit, impersonation, billing-audit and refund records keep their stored text verbatim after a delete (an enterprise audit feature); only the user reference is nulled, and rows that merely describe the deleted user (an admin's audit entry about them) are left as they are.
 
 If a row that references the user cannot be kept with a null reference (its column is NOT NULL), `--force` fails with an error that names the table and column, nothing is changed, and the user stays. The API's `DELETE /api/v1/admin/users/{user_id}` does the same: soft by default, `?force=true` for the permanent delete (`{"deleted": true}` in both cases).
 
@@ -2021,7 +2021,7 @@ usage error (exit 2). The verb prints no organization id on stdout, stderr or
 in its own log lines; the audit row holds it. It prints counts only, under
 `retire_jira_project_as_team`: found (`teams`, `teams_with_manual_members`,
 `teams_with_sync_policy`, `ownership_rows`, `membership_rows`,
-`repo_ownership_rows`) and written (`teams_retired`, `ownership_closed`,
+`repo_ownership_rows`, `teams_without_provider_identity`) and written (`teams_retired`, `ownership_closed`,
 `memberships_closed`, `repo_ownership_closed`; 0 with `--dry-run`). A second
 run reports zero.
 

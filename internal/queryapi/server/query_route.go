@@ -6600,6 +6600,24 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// Identity first: /query authenticates before it reads or parses any
+		// part of the body, so an anonymous caller gets 401 for every body and
+		// learns nothing about body validity (CHAOS-10149). /graphql does the
+		// same, below, through its own carrier check.
+		var claims authctx.Claims
+		if !edge {
+			// Authenticate BEFORE the document lookup too, so every carrier
+			// outcome (ambiguous, none, malformed, invalid, accepted) is decided
+			// before the unregistered-document 404 can answer (CHAOS-6757 r1).
+			// Python parity: the edge's GraphQLRouter resolves get_context (401
+			// "Authentication required") before it picks an operation.
+			authenticated, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
+			if !ok {
+				return
+			}
+			claims = authenticated
+		}
+
 		var bodyBytes []byte
 		if !viaGET {
 			// Same body-size contract the Python edge's
@@ -6627,10 +6645,8 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			bodyBytes = read
 		}
 
-		// /graphql checks the identity before it parses the body (the Python
-		// app resolved its GraphQL context first); /query keeps its order,
-		// below.
-		var claims authctx.Claims
+		// /graphql checks the identity after its own body-size read (its limit
+		// ran earlier, in graphQLEdgeLimits) and before it parses the body.
 		if edge {
 			authenticated, ok := authenticateGraphQLEdge(w, r)
 			if !ok {
@@ -6674,23 +6690,6 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 				return
 			}
 			query = parsed.Query
-
-			// Authenticate BEFORE the document lookup, so every carrier outcome
-			// (ambiguous, none, malformed, invalid, accepted) is decided before the
-			// unregistered-document 404 can answer (CHAOS-6757 r1: an ambiguous or
-			// unauthenticated request for an unregistered document got 404).
-			// Python parity: the edge's GraphQLRouter resolves get_context (401
-			// "Authentication required") before it picks an operation. The body
-			// refusals above stay where they were: the size 413 and the 4300-digit
-			// 500 are documented above as Python-edge behaviour that precedes this
-			// route; the malformed-JSON 400 keeps its old position and is NOT
-			// verified against Python's order. (/graphql authenticated earlier,
-			// before any parse.)
-			authenticated, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
-			if !ok {
-				return
-			}
-			claims = authenticated
 		}
 
 		operation, ok := operationForDocument(query, operationByDigest)

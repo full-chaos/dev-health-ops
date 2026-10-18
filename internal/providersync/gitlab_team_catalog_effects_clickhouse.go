@@ -37,7 +37,9 @@ type GitLabTeamCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at, provider_team_id, provider_name, gone_at)`
+// gitlabTeamCatalogTeamsColumns is the teams columns this writer states;
+// teamprovider.Insert adds the provider identity in the same statement.
+var gitlabTeamCatalogTeamsColumns = []string{"id", "team_uuid", "name", "description", "manual_members", "project_keys", "repo_patterns", "is_active", "updated_at", "org_id", "provider", "native_team_key", "parent_team_id", "created_at"}
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const gitlabTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
@@ -229,15 +231,12 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 	if err != nil {
 		return err
 	}
+	// Read for the tally only: the written identity is read inside the insert.
 	stored, err := teamprovider.Carry(ctx, sink.Conn, claim.OrgID, teamIDs)
 	if err != nil {
 		return err
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, gitlabTeamCatalogTeamsInsert)
-	if err != nil {
-		return err
-	}
-	defer batch.Abort()
+	writes := make([]teamprovider.Write, 0, len(rows))
 	var tally teamprovider.Tally
 	for _, row := range rows {
 		teamUUID, err := uuid.Parse(row.TeamUUID)
@@ -249,20 +248,19 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 			manualMembers = []string{}
 		}
 		tally.Add(stored, row.ID, row.ProviderTeamID)
-		identity := teamprovider.Merge(stored, row.ID, row.ProviderTeamID, row.ProviderName)
-		if err := batch.Append(
-			row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns,
-			row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
-			teamcreated.For(createdAt, row.ID, row.UpdatedAt),
-			identity.ProviderTeamID, identity.ProviderName, identity.GoneAt,
-		); err != nil {
-			return err
-		}
+		writes = append(writes, teamprovider.Write{
+			Values: []any{
+				row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns,
+				row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
+				teamcreated.For(createdAt, row.ID, row.UpdatedAt),
+			},
+			ProviderTeamID: row.ProviderTeamID, ProviderName: row.ProviderName, Gone: teamprovider.GoneCleared,
+		})
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
-	if err := batch.Send(); err != nil {
+	if err := teamprovider.Insert(ctx, sink.Conn, claim.OrgID, gitlabTeamCatalogTeamsColumns, writes); err != nil {
 		return err
 	}
 	logTeamProviderIdentity(ctx, tally, gitlabTeamCatalogProvider, claim.OrgID)

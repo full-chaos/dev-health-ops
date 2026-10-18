@@ -60,9 +60,9 @@ func insertFixtures(ids map[string]string) []struct {
 // statements FAIL on a table the manifest grants read-only.
 func probeStatements(table, column string) map[string]string {
 	return map[string]string{
-		"SELECT": fmt.Sprintf(`SELECT count(*) FROM auth.%s`, table),
-		"UPDATE": fmt.Sprintf(`UPDATE auth.%s SET %s = %s WHERE false`, table, column, column),
-		"DELETE": fmt.Sprintf(`DELETE FROM auth.%s WHERE false`, table),
+		"SELECT": fmt.Sprintf(`SELECT count(*) FROM auth.%s`, Quote(mustValidatedIdentifier(table))),
+		"UPDATE": fmt.Sprintf(`UPDATE auth.%s SET %s = %s WHERE false`, Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(column)), Quote(mustValidatedIdentifier(column))),
+		"DELETE": fmt.Sprintf(`DELETE FROM auth.%s WHERE false`, Quote(mustValidatedIdentifier(table))),
 	}
 }
 

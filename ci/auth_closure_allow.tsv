@@ -1,0 +1,45 @@
+# Modules the auth binaries (cmd/auth-service, cmd/auth-migrate) may link.
+# `ci/check_go.sh auth closure` fails when `go list -deps` of those two commands
+# reaches a module not listed here (CHAOS-10131). Columns: module<TAB>reason.
+# ACP-ADR-01 (docs/contribute/architecture/auth-control-plane-adrs.md) records
+# standard library first and pgx/v5 for PostgreSQL (item 5); it carries no
+# machine-readable list, so this file is the list. ClickHouse (clickhouse-go,
+# ch-go) is never allowed: the auth service holds signing keys and uses no
+# analytics store. Add a row only with a named reason.
+github.com/full-chaos/dev-health-ops	this module
+github.com/jackc/pgx/v5	ACP-ADR-01 item 5: PostgreSQL driver
+github.com/jackc/pgpassfile	pgx/v5 dependency
+github.com/jackc/pgservicefile	pgx/v5 dependency
+github.com/jackc/puddle/v2	pgx/v5 pool
+golang.org/x/sync	pgx/v5 and otel dependency
+golang.org/x/text	pgx/v5 and x/net dependency
+golang.org/x/sys	otel and prometheus dependency
+github.com/google/uuid	otel and internal use
+golang.org/x/net	OTLP gRPC exporter transport
+github.com/go-logr/logr	otel dependency
+github.com/go-logr/stdr	otel dependency
+go.opentelemetry.io/otel	OTLP metrics export (internal/platform/otlpmetrics via api/apimetrics); CHAOS-10131 keeps the exporter
+go.opentelemetry.io/otel/metric	otel
+go.opentelemetry.io/otel/trace	otel
+go.opentelemetry.io/otel/sdk	otel
+go.opentelemetry.io/otel/sdk/metric	otel
+go.opentelemetry.io/auto/sdk	otel
+go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc	OTLP gRPC exporter: the named reason for gRPC below
+go.opentelemetry.io/otel/exporters/prometheus	otel to Prometheus bridge
+go.opentelemetry.io/contrib/bridges/prometheus	Prometheus to otel bridge
+go.opentelemetry.io/proto/otlp	OTLP exporter wire types
+github.com/cenkalti/backoff/v5	OTLP exporter retry
+google.golang.org/grpc	named reason: transport of the OTLP gRPC exporter (otlpmetricgrpc)
+google.golang.org/protobuf	OTLP exporter wire types
+google.golang.org/genproto/googleapis/api	grpc-gateway and OTLP exporter
+google.golang.org/genproto/googleapis/rpc	grpc status
+github.com/grpc-ecosystem/grpc-gateway/v2	OTLP exporter wire types
+github.com/prometheus/client_golang	/metrics registry (api/apimetrics)
+github.com/prometheus/client_model	Prometheus client
+github.com/prometheus/common	Prometheus client
+github.com/prometheus/procfs	Prometheus client
+github.com/prometheus/otlptranslator	Prometheus bridge
+github.com/beorn7/perks	Prometheus client
+github.com/cespare/xxhash/v2	Prometheus client
+github.com/munnerz/goautoneg	Prometheus client
+go.yaml.in/yaml/v2	Prometheus common

@@ -97,6 +97,9 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 	counted := *client
 	counted.Doer = jiraWorkItemsCountingDoer{delegate: client.Doer, attempts: &requests}
 	client = &counted
+	// The requests of this route draw on the estimate's jira_issue_enrichment
+	// family unless they say otherwise (the JQL search, the comments).
+	ctx = budgetAccount(ctx, "jira_issue_enrichment")
 
 	jql := jiraWorkItemsJQL(claim, projectKey)
 	fetchAll := jiraOptionBool(claim, "fetch_all", false)
@@ -214,7 +217,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 
 		if fetchComments {
 			comments, _, commentErr := collectJiraIssueComments(
-				ctx, client, item.WorkItemID, maxPages, perPage, commentsLimit,
+				budgetAccount(ctx, jiraCommentsFamily(claim)), client, item.WorkItemID, maxPages, perPage, commentsLimit,
 			)
 			if commentErr != nil {
 				optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
@@ -397,7 +400,7 @@ func collectJiraWorkItemIssues(
 			IsLast        *bool             `json:"isLast"`
 			NextPageToken string            `json:"nextPageToken"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/search/jql?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(budgetAccount(ctx, "jira_jql"), client, http.MethodGet, "/rest/api/3/search/jql?"+query.Encode(), nil, &page); err != nil {
 			client.Metrics.RecordJiraSearchPage("request_failed")
 			return nil, pages + 1, err
 		}
@@ -661,4 +664,14 @@ func jiraOptionInt(claim Claim, key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+// jiraCommentsFamily is the route family a comments request is accounted to:
+// the work-item-comments estimate names jira_comments as its own family; the
+// other work-item datasets carry the comment reads in the enrichment family.
+func jiraCommentsFamily(claim Claim) string {
+	if claim.Dataset == "work-item-comments" {
+		return "jira_comments"
+	}
+	return "jira_issue_enrichment"
 }

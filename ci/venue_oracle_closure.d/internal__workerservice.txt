@@ -91,6 +91,7 @@ internal/platform/lifecycle
 internal/platform/logging
 internal/platform/otlpmetrics
 internal/platform/postureguard
+internal/platform/queuecontrol
 internal/platform/secrets
 internal/platform/selfprobe
 internal/platform/shell
@@ -112,6 +113,7 @@ internal/storage/clickhouse
 internal/storage/clickhouse/latestrow
 internal/storage/clickhouse/liverow
 internal/storage/postgres
+internal/storage/postgres/pgconfig
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey

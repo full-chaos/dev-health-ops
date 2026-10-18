@@ -1,0 +1,37 @@
+{
+  "decisions": [
+    {
+      "decision": {
+        "allowed": true,
+        "decision_id": "dec_EXAMPLE0000000000000000001",
+        "expires_at": "2026-09-03T05:00:30Z",
+        "obligations": {
+          "repository_allowlist": [
+            "full-chaos/dev-health-ops"
+          ],
+          "tenant_scope": "org_EXAMPLE0000000000000001"
+        },
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "policy_revision": 42,
+        "principal_id": "prn_EXAMPLE0000000000000001",
+        "reason_code": "allowed_by_repository_grant",
+        "schema_version": "authorization_decision.v1"
+      },
+      "index": 0
+    },
+    {
+      "decision": {
+        "allowed": false,
+        "decision_id": "dec_EXAMPLE0000000000000000002",
+        "expires_at": "2026-09-03T05:00:30Z",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "policy_revision": 42,
+        "principal_id": "prn_EXAMPLE0000000000000001",
+        "reason_code": "repository_not_granted",
+        "schema_version": "authorization_decision.v1"
+      },
+      "index": 2
+    }
+  ],
+  "schema_version": "authorization_batch_response.v1"
+}

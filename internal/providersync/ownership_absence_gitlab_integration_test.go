@@ -170,6 +170,7 @@ func gitlabGrantRun(
 ) (result TeamCatalogResult, searches int, warnings []map[string]any) {
 	t.Helper()
 	fake.set(func(fake *gitlabGrantServer) { fake.searches = 0 })
+	seedCatalogTeams(ctx, t, conn, orgID, "gitlab", "gl:org")
 	var logged bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))

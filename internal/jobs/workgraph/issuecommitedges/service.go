@@ -8,6 +8,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
 )
 
@@ -63,7 +64,7 @@ func (service *Service) Produce(ctx context.Context, orgID string, window Window
 	inputs, err := service.loader.Load(ctx, orgID, window)
 	if err != nil {
 		service.logger.Error("issue-commit edges: load failed",
-			slog.String("organization_id", orgID), slog.Any("error", err))
+			slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 		return Outcome{OrganizationID: orgID}, err
 	}
 
@@ -75,7 +76,7 @@ func (service *Service) Produce(ctx context.Context, orgID string, window Window
 		service.logger.Error("issue-commit edges: write failed",
 			slog.String("organization_id", orgID),
 			slog.Int("commits_scanned", len(inputs.Commits)),
-			slog.Any("error", err))
+			workgraph.ErrorAttr(err))
 		return Outcome{OrganizationID: orgID}, fmt.Errorf("write issue-commit edges: %w", err)
 	}
 

@@ -589,3 +589,10 @@ func (h *MaterializeHandler) Work(ctx context.Context, execution *jobruntime.Exe
 	}
 	return h.work(ctx, execution.Args.Payload.RequestID, execution.OrganizationID, execution.Envelope.Domain)
 }
+
+// ErrorAttr is the loggable description of err for a log call: error_class, the
+// root Go type, and a ClickHouse code or SQLSTATE when present. It never holds
+// the error text, which can carry a row value, a URL or provider output.
+func ErrorAttr(err error) slog.Attr {
+	return slog.Group("", errorLogAttrs(err)...)
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,9 +18,52 @@ import (
 
 const buildPermanentCancelMetric = "dev_health_workgraph_build_permanent_cancels_total"
 
+var (
+	counterReaderOnce sync.Once
+	counterReader     *sdkmetric.ManualReader
+)
+
+// The global meter provider binds package-level instruments once, so the
+// reader is installed once per process and the test reads a delta.
+func sharedCounterReader() *sdkmetric.ManualReader {
+	counterReaderOnce.Do(func() {
+		counterReader = sdkmetric.NewManualReader()
+		otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(counterReader)))
+	})
+	return counterReader
+}
+
+func buildCancelCount(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != buildPermanentCancelMetric {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("metric data %T, want Sum[int64]", m.Data)
+			}
+			for _, point := range sum.DataPoints {
+				class, _ := point.Attributes.Value("error_class")
+				if class.AsString() != "unclassified" {
+					t.Fatalf("error_class label = %q", class.AsString())
+				}
+				total += point.Value
+			}
+		}
+	}
+	return total
+}
+
 func TestBuildPermanentCancelLogsNoErrorTextAndCounts(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	reader := sharedCounterReader()
+	before := buildCancelCount(t, reader)
 
 	const marker = "SECRET-MARKER-https://tenant.example/token=abc123"
 	store := &fakeStore{claim: testClaim(time.Second)}
@@ -49,30 +93,7 @@ func TestBuildPermanentCancelLogsNoErrorTextAndCounts(t *testing.T) {
 		}
 	}
 
-	var collected metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &collected); err != nil {
-		t.Fatal(err)
-	}
-	var total int64
-	for _, scope := range collected.ScopeMetrics {
-		for _, m := range scope.Metrics {
-			if m.Name != buildPermanentCancelMetric {
-				continue
-			}
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			if !ok {
-				t.Fatalf("metric data %T, want Sum[int64]", m.Data)
-			}
-			for _, point := range sum.DataPoints {
-				class, _ := point.Attributes.Value("error_class")
-				if class.AsString() != "unclassified" {
-					t.Fatalf("error_class label = %q", class.AsString())
-				}
-				total += point.Value
-			}
-		}
-	}
-	if total != 1 {
-		t.Fatalf("%s = %d, want 1", buildPermanentCancelMetric, total)
+	if got := buildCancelCount(t, reader) - before; got != 1 {
+		t.Fatalf("%s delta = %d, want 1", buildPermanentCancelMetric, got)
 	}
 }

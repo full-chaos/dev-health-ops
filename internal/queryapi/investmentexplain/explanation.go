@@ -134,11 +134,8 @@ type InvestmentMixActionItem struct {
 // InvestmentMixExplanation ports api/models/schemas.py's
 // InvestmentMixExplanation -- the type actually returned to the caller
 // and cached (write_investment_explanation). Status covers every real
-// outcome (valid/invalid_json/invalid_llm_output/llm_unavailable --
-// forbidden_language reuses the invalid_llm_output fallback construction
-// in explain_investment_mix, so it never appears here as its own
-// literal, matching Python), unlike types.go's narrower ParseStatus (the
-// strict parser's own four outcomes only).
+// outcome (valid/invalid_json/invalid_llm_output/llm_unavailable), unlike types.go's narrower ParseStatus (the
+// strict parser's own three outcomes only).
 type InvestmentMixExplanation struct {
 	Summary         string                    `json:"summary"`
 	TopFindings     []InvestmentMixFinding    `json:"top_findings"`

@@ -143,11 +143,14 @@ func TestGitHubProjectsV2EnvironmentWarningCensusIsStartupOnly(t *testing.T) {
 // still sets it keeps starting, and the setting is not a silent no-op.
 func TestDeprecatedInvestmentConfigPathIsIgnoredAndWarnedOnce(t *testing.T) {
 	t.Setenv("STATUS_MAPPING_PATH", "")
-	var logged bytes.Buffer
+	// The default logger is process-wide: another goroutine (the role posture check) can log into it while this
+	// test holds it, so the buffer is locked and the assertions look at the warning line only.
+	logged := &lockedBuffer{}
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	slog.SetDefault(slog.New(slog.NewTextHandler(logged, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	investmentConfigPathIgnoredWarning = sync.Once{}
+	const warning = "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH is set and ignored"
 
 	cfg := validGitHubWorkItemsRuntimeConfig(t)
 	cfg.WorkerGithubWorkItemsInvestmentConfigPath = filepath.Join(t.TempDir(), "no-such-file.yaml")
@@ -156,16 +159,40 @@ func TestDeprecatedInvestmentConfigPathIsIgnoredAndWarnedOnce(t *testing.T) {
 			t.Fatalf("a set (and missing) investment path must not refuse the runtime config: %v", err)
 		}
 	}
-	if got := strings.Count(logged.String(), "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH is set and ignored"); got != 1 {
+	if got := strings.Count(logged.String(), warning); got != 1 {
 		t.Fatalf("warning lines = %d, want exactly 1\n%s", got, logged.String())
 	}
 	investmentConfigPathIgnoredWarning = sync.Once{}
 	logged.Reset()
 	cfg.WorkerGithubWorkItemsInvestmentConfigPath = ""
+	slog.Info("role posture check", "role", "queued_contract_versions") // the stray line another goroutine can log
 	if _, err := githubWorkItemsRuntimeConfigFrom(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if logged.Len() != 0 {
-		t.Fatalf("an unset path logged: %s", logged.String())
+	if strings.Contains(logged.String(), warning) {
+		t.Fatalf("an unset path logged the warning: %s", logged.String())
 	}
+}
+
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+func (b *lockedBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buffer.Reset()
 }

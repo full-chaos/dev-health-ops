@@ -1,0 +1,69 @@
+package writerinventory
+
+// Entry is one allowed writer. The key is File+Func+Table+Verb, all four exact. Entries under internal/testsupport are test-support writers.
+type Entry struct {
+	File, Func, Table, Verb string
+}
+
+func (e Entry) Key() string {
+	return Writer{File: e.File, Func: e.Func, Table: e.Table, Verb: e.Verb}.Key()
+}
+
+var Allowlist = []Entry{
+	{File: "internal/api/session/changepassword.go", Func: "handlers.changePassword", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/api/session/invites.go", Func: "handlers.acceptInvite", Table: "public.org_invites", Verb: "UPDATE"},
+	{File: "internal/api/session/linktokens.go", Func: "pkgdecl:linkTokenSQL", Table: "public.email_verification_tokens", Verb: "DELETE"},
+	{File: "internal/api/session/linktokens.go", Func: "pkgdecl:linkTokenSQL", Table: "public.email_verification_tokens", Verb: "INSERT"},
+	{File: "internal/api/session/linktokens.go", Func: "pkgdecl:linkTokenSQL", Table: "public.password_reset_tokens", Verb: "DELETE"},
+	{File: "internal/api/session/linktokens.go", Func: "pkgdecl:linkTokenSQL", Table: "public.password_reset_tokens", Verb: "INSERT"},
+	{File: "internal/api/session/lockout.go", Func: "clearAttempts", Table: "public.login_attempts", Verb: "DELETE"},
+	{File: "internal/api/session/lockout.go", Func: "handlers.recordFailedAttempt", Table: "public.login_attempts", Verb: "INSERT"},
+	{File: "internal/api/session/register.go", Func: "handlers.register", Table: "public.users", Verb: "INSERT"},
+	{File: "internal/api/session/register.go", Func: "insertMembership", Table: "public.memberships", Verb: "INSERT"},
+	{File: "internal/api/session/social.go", Func: "handlers.createSocialUser", Table: "public.users", Verb: "INSERT"},
+	{File: "internal/api/session/social.go", Func: "handlers.socialLogin", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/api/session/store.go", Func: "insertRefresh", Table: "public.refresh_tokens", Verb: "INSERT"},
+	{File: "internal/api/session/store.go", Func: "markRotated", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	{File: "internal/api/session/store.go", Func: "revokeFamily", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	{File: "internal/api/session/store.go", Func: "revokeToken", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	{File: "internal/api/session/store.go", Func: "touchLastLogin", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/api/session/store.go", Func: "updateAttempt", Table: "public.login_attempts", Verb: "UPDATE"},
+	{File: "internal/api/session/verify.go", Func: "handlers.resetPassword", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/api/session/verify.go", Func: "handlers.verify", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/api/session/verify.go", Func: "revokeAllForUser", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	{File: "internal/api/sso/login.go", Func: "handlers.finishSSOLogin", Table: "public.refresh_tokens", Verb: "INSERT"},
+	{File: "internal/api/sso/login.go", Func: "handlers.finishSSOLogin", Table: "public.sso_providers", Verb: "UPDATE"},
+	{File: "internal/api/sso/login.go", Func: "handlers.recordSSOFailure", Table: "public.sso_providers", Verb: "UPDATE"},
+	{File: "internal/api/sso/oauth.go", Func: "handlers.oauthProvisionUser", Table: "public.users", Verb: "INSERT"},
+	{File: "internal/api/sso/oauth.go", Func: "handlers.oauthProvisionUser", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/api/sso/providers.go", Func: "handlers.setStatus", Table: "public.sso_providers", Verb: "UPDATE"},
+	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "INSERT"},
+	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/invites.go", Func: "handlers.createInvite", Table: "public.org_invites", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertMembershipTx", Table: "public.memberships", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.removeMembership", Table: "public.memberships", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.transferOwnership", Table: "public.memberships", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.updateMembershipRole", Table: "public.memberships", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/store.go", Func: "pgStore.endActiveImpersonationSessions", Table: "public.impersonation_sessions", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/store.go", Func: "pgStore.endImpersonationSession", Table: "public.impersonation_sessions", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/store.go", Func: "pgStore.insertImpersonationSession", Table: "public.impersonation_sessions", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/userdelete.go", Func: "pgStore.forceDeleteUser", Table: "public.users", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/userdelete.go", Func: "pgStore.softDeleteUser", Table: "public.email_verification_tokens", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/userdelete.go", Func: "pgStore.softDeleteUser", Table: "public.password_reset_tokens", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/userdelete.go", Func: "pgStore.softDeleteUser", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/userdelete.go", Func: "pgStore.softDeleteUser", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/userstore.go", Func: "pgStore.insertUser", Table: "public.users", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/userstore.go", Func: "pgStore.revokeAllRefreshTokens", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/userstore.go", Func: "pgStore.setUserPassword", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/userstore.go", Func: "pgStore.updateUser", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/maintenancecli/maintenance.go", Func: "CleanupExpiredTokens", Table: "public.refresh_tokens", Verb: "DELETE"},
+	{File: "internal/testsupport/pgseed/pgseed.go", Func: "ImpersonationSession", Table: "public.impersonation_sessions", Verb: "INSERT"},
+	{File: "internal/testsupport/pgseed/pgseed.go", Func: "Membership", Table: "public.memberships", Verb: "INSERT"},
+	{File: "internal/testsupport/pgseed/pgseed.go", Func: "SetUserState", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/testsupport/pgseed/pgseed.go", Func: "User", Table: "public.users", Verb: "INSERT"},
+	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Run", Table: "public.login_attempts", Verb: "UPDATE"},
+	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Run", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Run", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.memberships", Verb: "INSERT"},
+	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.users", Verb: "INSERT"},
+}

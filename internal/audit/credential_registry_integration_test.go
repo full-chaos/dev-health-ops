@@ -235,6 +235,28 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 			`UPDATE auth.credential_registry SET revoked_reason = 'owner_request' WHERE id = $1`, credRevoked), "monotonic")
 	})
 
+	t.Run("a revocation reason is a reason code, never prose or an address", func(t *testing.T) {
+		const id = "00000000-0000-4000-8000-0000000000f3"
+		if err := insertCredential(ctx, env, id, credPrincipal, ``, ``); err != nil {
+			t.Fatal(err)
+		}
+		for name, reason := range map[string]string{
+			"prose":         "Revoked because bob left the company",
+			"an address":    "leaked-by-bob@example.test",
+			"uppercase":     "Compromised",
+			"too short":     "ab",
+			"leading digit": "1compromised",
+		} {
+			mustFail(t, "reason as "+name, commitCredential(ctx, env,
+				`UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = $2 WHERE id = $1`, id, reason),
+				"credential_registry_revoked_reason_code")
+		}
+		if err := commitCredential(ctx, env,
+			`UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = 'owner_request' WHERE id = $1`, id); err != nil {
+			t.Fatalf("a reason code was refused: %v", err)
+		}
+	})
+
 	t.Run("a legacy row without a fingerprint can still be revoked", func(t *testing.T) {
 		// Rows that predate 0007 have no fingerprint; requiring one on UPDATE
 		// would make them impossible to revoke. Simulate one by clearing the

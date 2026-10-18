@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
@@ -47,7 +46,7 @@ func platformDefaultModel(kind categorize.ProviderKind) (string, bool) {
 	if _, resolved := modelEnvByProvider[kind]; !resolved {
 		return "", false
 	}
-	model := llmbudget.DefaultModel(string(kind), envsecrets.ProcessLookup)
+	model := categorize.PlatformDefaultModel(kind)
 	return model, model != ""
 }
 
@@ -70,14 +69,6 @@ func ResolveModelName(kind categorize.ProviderKind, model string) (resolved stri
 		return model, true
 	}
 	if value := platformExplainModel(); value != "" {
-		return value, true
-	}
-	for _, envName := range modelEnvByProvider[kind] {
-		if value := os.Getenv(envName); value != "" {
-			return value, true
-		}
-	}
-	if value := os.Getenv("LLM_MODEL"); value != "" {
 		return value, true
 	}
 	if def, ok := platformDefaultModel(kind); ok {

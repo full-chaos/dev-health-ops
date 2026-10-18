@@ -1326,7 +1326,7 @@ func (derived GithubWorkItemDerivationContext) ManualCandidates(
 				GithubWorkItemDerivationStringValue(subject.ProjectKey),
 				WorkItemDerivationScope(subject),
 			}
-			if len(subject.GitLabPaths) > 0 {
+			if len(subject.GitLabPaths) > 0 || gitLabSubjectNamedByCatalogID(subject) {
 				candidates = append([]string{GithubWorkItemDerivationStringValue(subject.ProjectID)}, GitLabProjectNames(subject)...)
 			}
 			matched = GithubWorkItemDerivationScopeMatch(scopeID, candidates...)

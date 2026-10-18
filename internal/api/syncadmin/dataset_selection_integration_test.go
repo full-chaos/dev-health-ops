@@ -267,10 +267,9 @@ func (v *selectionVenue) datasetEndpoint(org string, integration uuid.UUID, key 
 	}
 }
 
-// explicitRequestInsert is the row an explicitly requested dataset key gets
-// at plan time when it has none (the scheduler's
-// ensureExplicitlyRequestedDataset): enabled, and nothing when a row exists.
-// The statement is the scheduler's own; the writer census pins that function.
+// explicitRequestInsert seeds an enabled row for a key that has none, the
+// shape a backfill left on rows written before CHAOS-8819 (the planner no
+// longer writes one); nothing when a row exists.
 func (v *selectionVenue) explicitRequestInsert(org string, integration uuid.UUID, key string) {
 	v.t.Helper()
 	v.exec(`
@@ -431,8 +430,8 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 		}
 	})
 
-	// A row a side path switched on (the dataset endpoint; an explicit
-	// dataset request at plan time) survives every kind of save, for the four
+	// A row a side path switched on (the dataset endpoint; a row an
+	// older explicit request inserted) survives every kind of save, for the four
 	// work-tracking and code providers.
 	t.Run("a row a side path enabled survives a save", func(t *testing.T) {
 		v.t = t
@@ -441,7 +440,7 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 			on, off         []string
 			stored          string
 			endpointKey     string // switched on through the dataset endpoint
-			explicitKey     string // inserted enabled as an explicit request does
+			explicitKey     string // seeded enabled as an older explicit request did
 			mustStayOff     string // a present-and-off row of the same family
 			wantShownToHold []string
 		}{

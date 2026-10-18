@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
-GO_TOOLCHAIN="go1.27.0"
+GO_TOOLCHAIN="go1.27.2"
 export GOTOOLCHAIN="${GO_TOOLCHAIN}"
 # CHAOS-5224 / CHAOS-5268: precedence is an explicit DEV_HEALTH_GO_CACHE first,
 # then an already-inherited GOCACHE, then a GOCACHE CONFIGURED on the machine

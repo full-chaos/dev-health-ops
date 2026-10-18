@@ -59,6 +59,24 @@ func TestRouteCommandReconcilesFinalizeDeliveriesLeftAtAnotherGeneration(t *test
 		})
 	}
 
+	t.Run("rows ahead of an unchanged route (the bigboy shape): one apply with no generation change re-arms", func(t *testing.T) {
+		h.seed(t, ctx, now, "missing")
+		if _, err := h.admin.Exec(ctx, `UPDATE public.sync_dispatch_outbox SET dispatched_route_generation=4 WHERE id=$1`, backstopOutboxID); err != nil {
+			t.Fatal(err)
+		}
+		var routeGeneration int64
+		if err := h.admin.QueryRow(ctx, `SELECT generation FROM public.sync_dispatch_transport_routes WHERE kind='finalize_sync_run'`).Scan(&routeGeneration); err != nil || routeGeneration != 3 {
+			t.Fatalf("route generation = %d err=%v, want 3 and unchanged", routeGeneration, err)
+		}
+		report, err := h.repair.ReconcileOtherGenerations(ctx, now, "finalize_sync_run")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status, generation := h.outboxState(t, ctx); report.Rearmed != 1 || status != "pending" || generation != nil {
+			t.Fatalf("reconcile = %+v status=%s generation=%v; want 1 re-armed under a route that did not change", report, status, generation)
+		}
+	})
+
 	for _, tc := range []struct {
 		name, state, sql       string
 		wantLive, wantNotReady int

@@ -750,14 +750,11 @@ func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}
-	if args[0] == "drain" {
-		return writeResult(stdout, stderr, state)
-	}
 	if runtime.routeReconciler == nil {
 		return writeResult(stdout, stderr, state)
 	}
-	// The route's generation changed: a command shouldn't leave garbage around (CHAOS-9964), so the deliveries it
-	// left at the old generation are reconciled before the command ends. The route change is already committed.
+	// A command shouldn't leave garbage around (CHAOS-9964): every routes verb, an apply that changed nothing included,
+	// reconciles the kind's deliveries left at another generation before it ends. A route change is already committed.
 	report, reconcileErr := runtime.routeReconciler.ReconcileOtherGenerations(ctx, time.Now().UTC(), kind)
 	result := routeMutationResult{RouteState: state, Reconcile: &report}
 	if reconcileErr != nil {

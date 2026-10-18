@@ -2153,3 +2153,22 @@ func TestDispatchRoutesReconcilesOtherGenerationsAfterAGenerationChange(t *testi
 		t.Fatalf("resume with a failing reconcile: code=%d stdout=%q", code, stdout.String())
 	}
 }
+
+// Every routes verb reconciles the kind, an apply that changes nothing and a drain included, so one apply repairs
+// deliveries left at another generation without pause/resume churn (CHAOS-9964).
+func TestDispatchRoutesApplyAndDrainReconcileToo(t *testing.T) {
+	for _, verb := range []string{"apply", "drain"} {
+		t.Run(verb, func(t *testing.T) {
+			runtime := commandRuntime(t, commandAuthorizer{})
+			fake := &fakeRouteReconciler{}
+			runtime.routeReconciler = fake
+			var stdout, stderr bytes.Buffer
+			code := dispatch(context.Background(), runtime, []string{
+				"routes", verb, "--reason", "maintenance", "--correlation-id", "route-cli-v-" + verb, "post_sync",
+			}, &stdout, &stderr)
+			if code != 0 || len(fake.kinds) != 1 || fake.kinds[0] != "post_sync" || !strings.Contains(stdout.String(), `"generation_reconcile"`) {
+				t.Fatalf("routes %s: code=%d reconciled=%v stdout=%q stderr=%q", verb, code, fake.kinds, stdout.String(), stderr.String())
+			}
+		})
+	}
+}

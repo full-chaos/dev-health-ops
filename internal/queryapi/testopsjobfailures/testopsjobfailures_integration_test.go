@@ -188,17 +188,18 @@ func TestRealClickHouse_JobFailuresByWorkflowAndJobName(t *testing.T) {
 	}
 }
 
-// taggedClient puts a unique comment in front of every statement so the test
-// can find exactly those statements in system.query_log.
-type taggedClient struct {
+// countingClient counts the statements Resolve issues. The ClickHouse client
+// refuses a statement that starts with a comment, so the statements cannot be
+// tagged; the test finds them in system.query_log by their table text instead
+// (the container is this test's own, so no other statement reads that table).
+type countingClient struct {
 	inner QueryClient
-	tag   string
 	calls int
 }
 
-func (c *taggedClient) Query(ctx context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+func (c *countingClient) Query(ctx context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 	c.calls++
-	return c.inner.Query(ctx, "/* "+c.tag+" */ "+statement, bindings)
+	return c.inner.Query(ctx, statement, bindings)
 }
 
 // CHAOS-10056: a result-only check cannot see the CHAOS-8593 bound on the
@@ -256,7 +257,7 @@ FROM numbers(%d)`, org, repo, seeded))
 		t.Fatalf("seeded pipeline rows = %d (err %v), want %d", stored, err, seeded)
 	}
 
-	tagged := &taggedClient{inner: client, tag: fmt.Sprintf("chaos10056-%d", time.Now().UnixNano())}
+	tagged := &countingClient{inner: client}
 	since := graphqldate.New(time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
 	until := graphqldate.New(time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC))
 	got, err := Resolve(ctx, tagged, org, since, until, Scope{}, 20)
@@ -272,7 +273,7 @@ FROM numbers(%d)`, org, repo, seeded))
 		t.Fatalf("flush logs: %v", err)
 	}
 	rows, err := admin.Query(ctx, `SELECT read_rows FROM system.query_log
-WHERE type = 'QueryFinish' AND query_kind = 'Select' AND position(query, ?) > 0 AND position(query, 'system.query_log') = 0`, tagged.tag)
+WHERE type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'FROM ci_pipeline_runs FINAL') > 0 AND position(query, 'system.query_log') = 0`)
 	if err != nil {
 		t.Fatal(err)
 	}

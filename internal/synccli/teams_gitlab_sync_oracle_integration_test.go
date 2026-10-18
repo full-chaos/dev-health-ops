@@ -645,6 +645,12 @@ func TestMembersOnlyGitLabRunIsNotReportedEmpty(t *testing.T) {
 
 	fake := newFakeGitLab(t)
 	fake.set("tok", fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, nil, map[string]string{"alice": "alice@example.com"})
+	// An earlier --structure run imported the group: a run without it writes
+	// memberships only for imported teams (CHAOS-9123).
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, org_id, provider, native_team_key, is_active, updated_at)
+		VALUES ('gl:acme', generateUUIDv4(), 'Acme', 'org-1', 'gitlab', 'acme', 1, '2026-09-01 00:00:00.000000')`); err != nil {
+		t.Fatal(err)
+	}
 
 	var stdout, stderr strings.Builder
 	d := defaultDeps()
@@ -683,7 +689,7 @@ func TestMembersOnlyGitLabRunIsNotReportedEmpty(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if teamCount != 0 {
-		t.Fatalf("--structure was not selected: expected 0 teams rows, got %d", teamCount)
+	if teamCount != 1 {
+		t.Fatalf("--structure was not selected: expected only the seeded teams row, got %d", teamCount)
 	}
 }

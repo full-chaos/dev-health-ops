@@ -56,7 +56,7 @@ func KeepLinksOfImportedTeams[R any](
 		return nil, fmt.Errorf("providersync: read the imported teams of %s links: %w", dataset, err)
 	}
 	defer result.Close()
-	imported := make(map[string]bool, len(ids)+len(written))
+	imported := map[string]bool{}
 	for _, id := range written {
 		imported[id] = true
 	}

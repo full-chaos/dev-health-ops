@@ -182,7 +182,9 @@
           "public_rationale"
         ],
         "properties": {
+          "public_rationale": {},
           "accepted_credential_classes": {
+            "type": "array",
             "maxItems": 0
           }
         }
@@ -198,7 +200,15 @@
           "denial_disclosure"
         ],
         "properties": {
+          "action": {},
+          "resource_resolver": {},
+          "tenant_requirement": {},
+          "current_state_required": {},
+          "cache_class": {},
+          "impersonation": {},
+          "denial_disclosure": {},
           "accepted_credential_classes": {
+            "type": "array",
             "minItems": 1
           }
         }
@@ -208,6 +218,7 @@
       "if": {
         "properties": {
           "accepted_credential_classes": {
+            "type": "array",
             "contains": {
               "enum": [
                 "user_access_token",
@@ -225,13 +236,17 @@
       "then": {
         "required": [
           "token"
-        ]
+        ],
+        "properties": {
+          "token": {}
+        }
       }
     },
     {
       "if": {
         "properties": {
           "accepted_credential_classes": {
+            "type": "array",
             "minItems": 2
           }
         },
@@ -242,7 +257,10 @@
       "then": {
         "required": [
           "class_disambiguator"
-        ]
+        ],
+        "properties": {
+          "class_disambiguator": {}
+        }
       }
     },
     {

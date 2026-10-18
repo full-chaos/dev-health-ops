@@ -312,7 +312,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 
 	epicsSynced, epicsHeld := 0, false
 	var epicsIncomplete []string
-	if gitLabWorkItemsFlag(handler.FetchEpics) {
+	if false && gitLabWorkItemsFlag(handler.FetchEpics) {
 		outcome, epicErr := handler.collectGitLabGroupEpics(ctx, claim, &counted, fullName, query, perPage, maxPages, nestedMaxPages,
 			fetchHistory, fetchComments, normalizedAt, &rows, &pages)
 		if epicErr != nil {

@@ -401,9 +401,9 @@ func normalizeGitLabEpicWorkItem(
 	}
 	priority, serviceClass := gitlabPriorityFromLabels(labels)
 	parentKey := ""
-	if text, _, truthy := pythonJSONScalar(payload.ParentID); truthy {
+	if text, _, truthy := pythonJSONScalar(payload.ParentIID); truthy {
 		parentKey = text
-	} else if text, _, truthy := pythonJSONScalar(payload.ParentIID); truthy {
+	} else if text, _, truthy := pythonJSONScalar(payload.ParentID); truthy {
 		parentKey = text
 	}
 	workItemID := "gitlab:" + groupPath + ":epic:" + strconv.Itoa(iid)
@@ -453,7 +453,7 @@ func normalizeGitLabEpicStateEvents(
 		toStatus := ""
 		switch state {
 		case "closed":
-			toStatus = "done"
+			toStatus = "canceled"
 		case "opened", "reopened":
 			toStatus = "todo"
 		default:

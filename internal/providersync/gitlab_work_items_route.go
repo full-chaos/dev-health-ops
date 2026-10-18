@@ -825,6 +825,7 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 	pages *int,
 ) (gitLabEpicOutcome, error) {
 	var outcome gitLabEpicOutcome
+	ctx = budgetAccount(ctx, "epics")
 	parts := strings.Split(fullName, "/")
 	if len(parts) < 2 {
 		slog.Default().InfoContext(ctx, "gitlab_work_items_epics",

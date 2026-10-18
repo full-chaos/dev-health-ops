@@ -130,7 +130,7 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJ
 		}
 		t.Fatalf("err=%v requests=%s", err, strings.Join(paths, "\n"))
 	}
-	assertRouteRequestsAreLabelled(t, "gitlab", "work-items", client.Ledger, "project", "milestones", "issues", "notes", "merge_requests")
+	assertRouteRequestsAreLabelled(t, "gitlab", "work-items", client.Ledger, "project", "milestones", "issues", "notes", "merge_requests", "epics")
 	byDestination := map[string]EffectBatch{}
 	for _, effect := range batch.Effects {
 		byDestination[effect.Destination] = effect

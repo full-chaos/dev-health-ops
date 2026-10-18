@@ -7,10 +7,9 @@ import json
 import pytest
 
 from dev_health_ops.authclient.contracts import (
-    MAX_EXACT_FLOAT_INTEGER,
     ContractError,
     refuse_bool,
-    refuse_inexact_decimal,
+    refuse_decimal_form,
     require_wire_int,
 )
 
@@ -28,7 +27,7 @@ def test_require_wire_int_refuses_a_decimal_token_json_hands_back_as_float(
     raw: str,
 ) -> None:
     document = json.loads(f'{{"n": {raw}}}')
-    with pytest.raises(ContractError, match="decimal, not an integer"):
+    with pytest.raises(ContractError, match="decimal or exponent form"):
         require_wire_int(document, "n", S)
 
 
@@ -47,24 +46,47 @@ def test_refuse_bool_names_the_noun_it_was_given(value: bool) -> None:
     refuse_bool(1.5, S, "n", "a revision")
 
 
-def test_the_exact_float_bound_is_two_to_the_fifty_third() -> None:
-    assert MAX_EXACT_FLOAT_INTEGER == 9007199254740992
+DECIMAL_FORM_TOKENS = [
+    "1.0",
+    "1e0",
+    "1E0",
+    "1.0e0",
+    "403.0",
+    "9007199254740992.0",
+    "9007199254740993.0",
+    "1e300",
+    "1.0000000000000000001",
+    "9007199254740990.1",
+    "9007199254740990.5",
+    "1.0000000000000001",
+    "1.5",
+    "-1.0",
+    "-0.0",
+]
 
 
-@pytest.mark.parametrize(
-    "raw",
-    ["9007199254740992.0", "9007199254740993.0", "-9007199254740992.0", "1e300"],
-)
-def test_refuse_inexact_decimal_fires_at_and_past_the_bound(raw: str) -> None:
-    # The first value is exactly 2**53: the comparison is >=, because 2**53 + 1
-    # parses to the same double and a float cannot say which one arrived.
-    with pytest.raises(ContractError, match="past 2\\*\\*53"):
-        refuse_inexact_decimal(float(raw), S, "n")
+@pytest.mark.parametrize("token", DECIMAL_FORM_TOKENS)
+def test_refuse_decimal_form_refuses_every_decimal_or_exponent_token(
+    token: str,
+) -> None:
+    # json hands back a float for exactly the tokens with '.', 'e' or 'E'.
+    with pytest.raises(ContractError, match="decimal or exponent form"):
+        refuse_decimal_form(json.loads(token), S, "n")
 
 
-@pytest.mark.parametrize("raw", ["9007199254740991.0", "0.0", "-9007199254740991.0"])
-def test_refuse_inexact_decimal_passes_below_the_bound(raw: str) -> None:
-    refuse_inexact_decimal(float(raw), S, "n")
+@pytest.mark.parametrize("token", ["0", "1", "-1", "9007199254740993"])
+def test_refuse_decimal_form_passes_integer_tokens(token: str) -> None:
+    refuse_decimal_form(json.loads(token), S, "n")
+
+
+@pytest.mark.parametrize("token", DECIMAL_FORM_TOKENS)
+def test_principal_revision_parsing_refuses_every_decimal_form_token(
+    token: str,
+) -> None:
+    from dev_health_ops.authclient.principal import _parse_revision
+
+    with pytest.raises(ContractError, match="decimal or exponent form"):
+        _parse_revision(json.loads(token), "membership_revision")
 
 
 def test_principal_revision_parsing_composes_the_shared_guards() -> None:
@@ -75,6 +97,5 @@ def test_principal_revision_parsing_composes_the_shared_guards() -> None:
 
     with pytest.raises(ContractError, match="boolean, not a revision"):
         _parse_revision(True, "membership_revision")
-    with pytest.raises(ContractError, match="past 2\\*\\*53"):
-        _parse_revision(9007199254740992.0, "membership_revision")
-    assert _parse_revision(7.0, "membership_revision") == 7
+    # 2**53 + 1 as an integer token stays exact: the only accepted form.
+    assert _parse_revision(json.loads("9007199254740993"), "n") == 9007199254740993

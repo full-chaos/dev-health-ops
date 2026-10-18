@@ -2,8 +2,9 @@ package contracts
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"math"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -43,52 +44,33 @@ const PrincipalSchemaVersion = "principal.v1"
 // languages land on the same integer.
 type Revision int64
 
-// UnmarshalJSON accepts an integer or an integral decimal and rejects a
-// genuinely fractional value.
+// UnmarshalJSON accepts an integer TOKEN and nothing else.
 //
-// A fractional revision is refused rather than truncated: silently turning
-// 1.5 into 1 would make two different wire documents produce one in-memory
-// principal, and a revision is a cache-invalidation key (G-31) where two
-// inputs collapsing to one value is precisely the failure mode.
+// The guard decides on the raw token text, never on the value a float64 parse
+// produced: a token containing '.', 'e' or 'E' is refused even when its value
+// is integral (1.0, 1e0). A decimal-form token has already been rounded by any
+// float64 reader, so 9007199254740990.1 and 1.0000000000000000001 are
+// indistinguishable from the integers they round to, and a revision is a
+// cache-invalidation key (G-31) where two wire values collapsing to one is the
+// failure mode. An earlier version normalised integral decimals (1.0 -> 1);
+// that is withdrawn (CHAOS-4940), and error.v1's integers were already strict.
+//
+// A value outside int64 is refused rather than clamped.
 func (r *Revision) UnmarshalJSON(data []byte) error {
-	number := json.Number(strings.TrimSpace(string(data)))
-	if integer, err := number.Int64(); err == nil {
-		*r = Revision(integer)
-		return nil
-	}
-	asFloat, err := number.Float64()
-	if err != nil {
-		return fmt.Errorf("revision %s is not a number: %w", number, err)
-	}
-	if asFloat != math.Trunc(asFloat) {
-		return fmt.Errorf("revision %s has a fractional part; a revision is a whole counter", number)
-	}
-	// Compare against the exact powers of two, NOT against math.MaxInt64.
-	//
-	// float64(math.MaxInt64) rounds UP to 2^63, so `asFloat > math.MaxInt64`
-	// is FALSE for asFloat == 2^63 and the conversion below then SILENTLY
-	// CLAMPS to MaxInt64. Measured: input 9223372036854775808 decoded to
-	// 9223372036854775807, so 2^63 and 2^63-1 -- two different wire
-	// documents -- produced the SAME revision. That is precisely the
-	// collapse the fractional check above exists to prevent, reintroduced by
-	// a lossy comparison in the guard meant to prevent it (codex round 2 P2,
-	// sharpened by the lane's own re-execution: the round reported a
-	// rejection, the real behaviour was a silent clamp).
-	//
-	// 2^63 and -2^63 are both exactly representable as float64, so these
-	// comparisons are exact.
-	if err := RefuseInexactDecimal(string(number), asFloat); err != nil {
+	token := strings.TrimSpace(string(data))
+	if err := RefuseDecimalForm(token); err != nil {
 		return fmt.Errorf("revision %w", err)
 	}
-	const maxInt64AsFloat = 9223372036854775808.0  // 2^63, one past MaxInt64
-	const minInt64AsFloat = -9223372036854775808.0 // -2^63, exactly MinInt64
-	if asFloat >= maxInt64AsFloat || asFloat < minInt64AsFloat {
-		return fmt.Errorf(
-			"revision %s is outside the int64 range this contract can represent "+
+	integer, err := strconv.ParseInt(token, 10, 64)
+	if err != nil {
+		if errors.Is(err, strconv.ErrRange) {
+			return fmt.Errorf("revision %s is outside the int64 range this contract can represent "+
 				"in both languages; refused rather than clamped, because two wire "+
-				"values collapsing to one revision breaks the G-31 cache key", number)
+				"values collapsing to one revision breaks the G-31 cache key", token)
+		}
+		return fmt.Errorf("revision %s is not an integer: %w", token, err)
 	}
-	*r = Revision(int64(asFloat))
+	*r = Revision(integer)
 	return nil
 }
 

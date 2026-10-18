@@ -59,6 +59,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -164,39 +165,28 @@ func Validate(root, surface string, document any) error {
 	return nil
 }
 
-// MaxExactFloatInteger is 2^53. float64 represents every integer up to it
-// exactly and only every second one above, so a decimal-form integer at or past
-// this magnitude has already been rounded by the time any client holds it. The
-// Python twin is authclient.contracts.MAX_EXACT_FLOAT_INTEGER.
-const MaxExactFloatInteger = 9007199254740992.0
-
-// RefuseInexactDecimal fails closed on a decimal-form JSON number whose float64
-// value is at or past +/-2^53. number is the raw token, used only to word the
-// error; asFloat is its float64 parse.
+// RefuseDecimalForm refuses a raw JSON number token written in decimal or
+// exponent form: any token containing '.', 'e' or 'E', even when its value is
+// integral (1.0, 1e0).
 //
-// The comparison is >=, not >: 2^53+1 ROUNDS DOWN to 2^53, so by the time a
-// float64 is held the two are indistinguishable, and a guard using > does not
-// fire on the value it was written for. An integer-form token expresses the
-// same number exactly and never reaches this check.
+// It decides on the TOKEN TEXT, never on a float64 parse. By the time a float64
+// exists the token has been rounded: 9007199254740990.1 and
+// 1.0000000000000000001 are indistinguishable from the integers they round to,
+// so no magnitude bound can be sound. An integer token is exact and never
+// reaches this refusal. The Python twin is
+// authclient.contracts.refuse_decimal_form.
 //
-// KNOWN LIMIT, not a regression: this is a MAGNITUDE bound only. A fractional
-// decimal token within half a float64 step of an integer (1.0000000000000001,
-// 9007199254740990.1) rounds to that integer before asFloat exists and is
-// accepted; closing it needs a lexical check of the raw token (tracked as
-// 10090).
-//
-// Wire-integer TYPE (is this a JSON integer literal, not 403.0?) needs no
-// helper here: decoding into an integer-typed field with encoding/json already
-// refuses a zero-fraction decimal, which is how ErrorEnvelope.Status and
-// RetryAfterSeconds are guarded. Python has no such decoder, so its twin of
-// that rule is authclient.contracts.require_wire_int.
-func RefuseInexactDecimal(number string, asFloat float64) error {
-	if asFloat >= MaxExactFloatInteger || asFloat <= -MaxExactFloatInteger {
+// Wire-integer TYPE for a field decoded by encoding/json into an
+// integer-typed Go field needs no helper: the decoder already refuses 403.0,
+// which is how ErrorEnvelope.Status and RetryAfterSeconds are guarded. This is
+// for custom unmarshalers that hold the raw token (Revision).
+func RefuseDecimalForm(token string) error {
+	if strings.ContainsAny(token, ".eE") {
 		return fmt.Errorf(
-			"%s arrived in decimal form with a magnitude past 2^53, where float64 "+
-				"cannot represent every integer; refused rather than silently rounded, "+
-				"because a rounded revision breaks the G-31 cache key. Send it as an "+
-				"integer token instead, which stays exact", number)
+			"%s is in decimal or exponent form; refused because a float64 reader has "+
+				"already rounded such a token (9007199254740990.1 reads as 9007199254740990), "+
+				"so it is indistinguishable from the integer it rounds to. "+
+				"Send an integer token, which stays exact", token)
 	}
 	return nil
 }

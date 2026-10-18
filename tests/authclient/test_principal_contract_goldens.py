@@ -365,7 +365,8 @@ def test_strict_pattern_anchoring_fails_closed_on_a_shape_it_cannot_rewrite() ->
         (2**63, "refused"),
         (10**19, "refused"),
         (10**18, 10**18),
-        (1.0, 1),
+        (1.0, "refused"),
+        (9007199254740990.0, "refused"),
     ],
 )
 def test_revision_range_agrees_with_go(value: object, expected: object) -> None:

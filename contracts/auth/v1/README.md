@@ -48,22 +48,27 @@ Every integer field needs an explicit client-side check, and the fixtures for it
 belong in `reject_by_client`, not `reject`: the schema genuinely accepts these
 documents, and filing them as `reject` would assert a check that does not exist.
 
-`principal.v1` also carries a `2**53` bound for revision fields, where the
-concern is exact float representability rather than type.
+**The guard decides on the raw number TOKEN, never on a parsed value.** A token
+containing `.`, `e` or `E` is refused even when its value is integral (`1.0`,
+`1e0`): a float64 reader has already rounded `9007199254740990.1` and
+`1.0000000000000000001` to integers, so no value-based or magnitude-based check
+can tell them from the integers they round to. Integer tokens are exact and are
+the only accepted form (CHAOS-4940 withdrew the earlier normalisation of
+integral decimals such as `1.0`). Python's `json` returns a `float` for exactly
+the decimal-form tokens, so a `float` at the guard is a decimal-form token; Go's
+custom unmarshalers hold the token text.
 
 **Reuse these; do not re-derive them** (CHAOS-4940 extracted them, after the
 class bit `error.v1` once because no shared guard existed):
 
 | concern | Go | Python |
 | --- | --- | --- |
-| wire-integer TYPE: is this an integer literal, not `403.0`? | decode into an integer-typed field; `encoding/json` refuses a zero-fraction decimal (pinned by `TestDecodingIntoAnIntegerFieldRefusesAZeroFractionDecimal`) | `authclient.contracts.require_wire_int` (refuses decimals, and `bool` before `int` — order matters, `bool` subclasses `int`) |
-| a boolean where a number is required | the decoder refuses it | `authclient.contracts.refuse_bool` |
-| exact representability: is a decimal-form number at or past 2^53? | `contracts.RefuseInexactDecimal` / `MaxExactFloatInteger` | `authclient.contracts.refuse_inexact_decimal` / `MAX_EXACT_FLOAT_INTEGER` |
+| wire-integer TYPE: is this an integer token, not `403.0` or `1e0`? | an ordinary field: decode into an integer-typed field (`encoding/json` refuses `403.0`, pinned by `TestDecodingIntoAnIntegerFieldRefusesAZeroFractionDecimal`); a custom unmarshaler: `contracts.RefuseDecimalForm(token)` | `authclient.contracts.require_wire_int`, or `refuse_decimal_form` for a field with its own range rule |
+| a boolean where a number is required | the decoder refuses it | `authclient.contracts.refuse_bool` (before any `int` check: `bool` subclasses `int`) |
 
-`error.v1`'s `status` and `retry_after_seconds` need the first row only;
-`principal.v1`'s revisions need all three (and accept a whole-valued decimal
-such as `1.0`, which `require_wire_int` deliberately does not). Fixtures for
-these rules belong in `reject_by_client`.
+`error.v1`'s `status` and `retry_after_seconds` and `principal.v1`'s revisions
+use the same rule; revisions add the int64 range. Fixtures for these rules
+belong in `reject_by_client`.
 
 ### Constraints live in the cross-language dialect intersection
 

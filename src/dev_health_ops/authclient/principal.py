@@ -29,7 +29,7 @@ from typing import Any
 from dev_health_ops.authclient.contracts import (
     ContractError,
     refuse_bool,
-    refuse_inexact_decimal,
+    refuse_decimal_form,
     validate,
 )
 
@@ -86,40 +86,22 @@ def _parse_timestamp(raw: str, field: str) -> datetime:
 
 
 def _parse_revision(raw: object, field: str) -> int:
-    """Normalise a revision the way the CONTRACT permits, not the way Python parses.
+    """Accept a revision only as an integer TOKEN, within int64.
 
-    JSON Schema draft 2020-12 defines ``"type": "integer"`` as any number with
-    a zero fractional part, so ``1.0`` IS a valid integer by the specification
-    and the schema is right to accept it. ``json.load`` gives that back as a
-    Python ``float``, and Go's ``encoding/json`` refuses it outright against an
-    ``int64``.
-
-    That produced a real cross-language split, found by codex round 1 and
-    re-executed before fixing: ``{"membership_revision": 1.0}`` validated in
-    BOTH planes, then Python built a principal carrying ``1.0`` as a float and
-    Go failed to decode the same bytes. The disagreement lives DOWNSTREAM of a
-    validation both passed, which is why the golden corpus could not see it --
-    every fixture assertion stops at "does it validate".
-
-    A fractional value is refused rather than truncated: silently turning 1.5
-    into 1 would let two different wire documents produce one in-memory
-    principal, and a revision is a cache-invalidation key (G-31) where two
-    inputs collapsing to one value is exactly the failure mode.
+    JSON Schema's ``"type": "integer"`` admits ``1.0``, so the schema validates
+    it; Go's client and Python then disagreed about it downstream of a
+    validation both passed (found by codex round 1 of CHAOS-4884). A decimal- or
+    exponent-form token is now refused outright (``refuse_decimal_form``): by the
+    time ``json`` has produced a float the token is indistinguishable from the
+    integer it rounds to, and a revision is a cache-invalidation key (G-31)
+    where two wire values collapsing to one is the failure mode. An earlier
+    version normalised integral decimals (``1.0`` -> ``1``); that is withdrawn.
     """
     refuse_bool(raw, SURFACE, field, "a revision")
+    refuse_decimal_form(raw, SURFACE, field)
     if isinstance(raw, int):
         _require_int64_range(raw, field)
         return raw
-    if isinstance(raw, float):
-        refuse_inexact_decimal(raw, SURFACE, field)
-        if raw != int(raw):
-            raise ContractError(
-                f"{SURFACE}: /{field} = {raw!r} has a fractional part; "
-                "a revision is a whole counter"
-            )
-        coerced = int(raw)
-        _require_int64_range(coerced, field)
-        return coerced
     raise ContractError(f"{SURFACE}: /{field} = {raw!r} is not a number")
 
 

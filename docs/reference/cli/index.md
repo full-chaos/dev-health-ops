@@ -587,23 +587,29 @@ dho admin users update \
 
 ### `admin users delete`
 
-Delete a user (identified by `--id`, `--email`, or `--username`). The user's org memberships and sessions go with it. The API's `delete_user` does the same; this verb is for the operator who has no API token, for example to remove a throwaway superuser after a test.
+Delete a user (identified by `--id`, `--email`, or `--username`). The default is a **soft delete**: the user row and its profile stay, `is_active` becomes false (no login), access tokens stop working (`token_version` goes up), refresh tokens are revoked and password-reset and email-verification tokens are removed. `--force` is a **permanent delete**: the user row and every personal field are removed, together with the rows that belong to the user (memberships, tokens, Ask Dev conversations). The billing-audit log, the refund history, the impersonation sessions and the audit log are **kept**, with the user reference set to null (financial and security records that a legal or accounting duty keeps; GDPR Art. 17(3)(b), CCPA). Free text inside a kept row (for example an email in a description) is not rewritten.
+
+If a row that references the user cannot be kept with a null reference (its column is NOT NULL), `--force` fails with an error that names the table and column, nothing is changed, and the user stays. The API's `DELETE /api/v1/admin/users/{user_id}` does the same: soft by default, `?force=true` for the permanent delete (`{"deleted": true}` in both cases).
 
 ```bash
-# Report what would be deleted (exit 1, nothing deleted)
+# Report what would happen (exit 1, nothing changed)
 dho admin users delete --email user@example.com
 
-# Delete
+# Soft delete
 dho admin users delete --email user@example.com --yes
+
+# Permanent delete
+dho admin users delete --email user@example.com --force --yes
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
 | `--id` / `--email` / `--username` | Identify the user to delete |
-| `--yes` | Confirm the deletion. Without it the user and the memberships that would go with it are printed and nothing is deleted (exit 1) |
+| `--force` | Delete the user permanently instead of the default soft delete |
+| `--yes` | Confirm. Without it the user and the memberships are printed with what would happen, and nothing is changed (exit 1) |
 
-On success the verb prints `Deleted user: <email> (id: <id>)` and logs one line on stderr (`admin: user deleted by the operator CLI`, the user id, whether it was a superuser, the memberships removed). An unknown user, a missing identifier and a malformed id print `Error: ...` and exit 1.
+On success the verb prints `Soft-deleted user: <email> (id: <id>)...` or `Permanently deleted user: <email> (id: <id>)` (followed by one line per table whose rows were kept with a null user). It logs on stderr: `admin: user soft-deleted` or `admin: user permanently deleted` (user id, mode, rows kept) and `admin: user delete by the operator CLI`. An unknown user, a missing identifier and a malformed id print `Error: ...` and exit 1.
 
 ### `admin orgs delete`
 

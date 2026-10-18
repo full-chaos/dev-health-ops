@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -32,7 +33,7 @@ func usersGroup() cli.Command {
 			{Name: "create", Summary: "create a new user", Kind: cli.Verb, Run: runUsersCreate},
 			{Name: "list", Summary: "list users", Kind: cli.Verb, Run: runUsersList},
 			{Name: "update", Summary: "update an existing user", Kind: cli.Verb, Run: runUsersUpdate},
-			{Name: "delete", Summary: "delete a user (needs --yes)", Kind: cli.Verb, Run: runUsersDelete},
+			{Name: "delete", Summary: "delete a user: soft by default, --force for a permanent delete (needs --yes)", Kind: cli.Verb, Run: runUsersDelete},
 		},
 	}
 }
@@ -412,7 +413,9 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 }
 
 // runUsersDelete is `dho admin users delete`. There is no Python verb to port: the API's delete_user is the model.
-// Without --yes it reports what it would delete and exits 1 (nothing was deleted, and a script must not read it as done).
+// By default the user is soft-deleted (the row stays, no login); --force deletes the row and every personal field for good and
+// keeps the billing-audit, refund and impersonation rows with a null user (CHAOS-10019, D6051).
+// Without --yes it reports what it would do and exits 1 (nothing was changed, and a script must not read it as done).
 func runUsersDelete(ctx context.Context, env cli.Env) int {
 	flags := newAccountFlags(env, "dho admin users delete")
 	var id, email, username optString
@@ -420,6 +423,7 @@ func runUsersDelete(ctx context.Context, env cli.Env) int {
 	flags.Var(&email, "email", "email of the user to delete (identifier)")
 	flags.Var(&username, "username", "username of the user to delete (identifier)")
 	yes := flags.Bool("yes", false, "confirm the deletion (without it the user is only reported)")
+	force := flags.Bool("force", false, "delete the user permanently (the default is a soft delete: the row stays and the login is off)")
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
 	}
@@ -428,20 +432,45 @@ func runUsersDelete(ctx context.Context, env cli.Env) int {
 	if code != 0 {
 		return code
 	}
-	result, err := op.DeleteUser(ctx, admin.DeleteUserInput{ID: id.ptr(), Email: email.ptr(), Username: username.ptr(), Confirm: *yes})
+	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
+	op.Logger = logger
+	result, err := op.DeleteUser(ctx, admin.DeleteUserInput{ID: id.ptr(), Email: email.ptr(), Username: username.ptr(), Confirm: *yes, Force: *force})
 	if err != nil {
 		return report(env, accountRedactor(env), err)
 	}
 	if !result.Deleted {
-		fmt.Fprintf(env.Stdout, "Would delete user: %s (id: %s, superuser: %t, active: %t, memberships: %d). Nothing was deleted; add --yes to delete.\n",
-			result.User.Email, result.User.ID, result.User.IsSuperuser, result.User.IsActive, result.Memberships)
+		verb := "deactivate (soft delete)"
+		if result.Mode == admin.DeleteForce {
+			verb = "PERMANENTLY delete"
+		}
+		fmt.Fprintf(env.Stdout, "Would %s user: %s (id: %s, superuser: %t, active: %t, memberships: %d). Nothing was changed; add --yes to run it.\n",
+			verb, result.User.Email, result.User.ID, result.User.IsSuperuser, result.User.IsActive, result.Memberships)
 		return cli.ExitFailure
 	}
-	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
-	logger.InfoContext(ctx, "admin: user deleted by the operator CLI", "user_id", result.User.ID.String(),
-		"is_superuser", result.User.IsSuperuser, "is_active", result.User.IsActive, "memberships_removed", result.Memberships)
-	fmt.Fprintf(env.Stdout, "Deleted user: %s (id: %s)\n", result.User.Email, result.User.ID)
+	logger.InfoContext(ctx, "admin: user delete by the operator CLI", "user_id", result.User.ID.String(), "mode", string(result.Mode),
+		"is_superuser", result.User.IsSuperuser, "was_active", result.User.IsActive, "memberships", result.Memberships)
+	if result.Mode == admin.DeleteForce {
+		fmt.Fprintf(env.Stdout, "Permanently deleted user: %s (id: %s)\n", result.User.Email, result.User.ID)
+		for _, key := range sortedKeys(result.KeptReferences) {
+			fmt.Fprintf(env.Stdout, "  kept %d row(s) in %s with the user reference set to null\n", result.KeptReferences[key], key)
+		}
+		return cli.ExitOK
+	}
+	if result.AlreadyInactive {
+		fmt.Fprintf(env.Stdout, "User already soft-deleted: %s (id: %s). Use --force to delete it permanently.\n", result.User.Email, result.User.ID)
+		return cli.ExitOK
+	}
+	fmt.Fprintf(env.Stdout, "Soft-deleted user: %s (id: %s). The row is kept and the login is off; use --force to delete it permanently.\n", result.User.Email, result.User.ID)
 	return cli.ExitOK
+}
+
+func sortedKeys(m map[string]int64) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func runOrgsCreate(ctx context.Context, env cli.Env) int {

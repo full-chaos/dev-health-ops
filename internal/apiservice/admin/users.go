@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -619,7 +620,9 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// deleteUser is users.py's delete_user.
+// deleteUser is users.py's delete_user, with the two modes of CHAOS-10019 (D6051): by default the user is soft-deleted (the row
+// stays, is_active false); ?force=true deletes the row for good and keeps the audit, billing-audit and refund rows with a null
+// user. The answer is {"deleted": true} in both modes.
 func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
@@ -631,6 +634,17 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 	if parseErr != nil {
 		policy.WriteInternal(w)
 		return
+	}
+	mode := DeleteSoft
+	if raw := r.URL.Query().Get("force"); raw != "" {
+		force, err := strconv.ParseBool(raw)
+		if err != nil {
+			policy.WriteDetail(w, http.StatusUnprocessableEntity, "force must be true or false", nil)
+			return
+		}
+		if force {
+			mode = DeleteForce
+		}
 	}
 	existing, err := h.store.fullUserByID(ctx, targetID)
 	if err != nil {
@@ -654,9 +668,15 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 		if g.refuse(targetID) {
 			return nil
 		}
-		deleted, err := g.store.deleteUser(ctx, targetID)
+		var deleted bool
+		var err error
+		if mode == DeleteForce {
+			deleted, _, err = g.store.forceDeleteUser(ctx, h.logger, targetID)
+		} else {
+			deleted, _, err = g.store.softDeleteUser(ctx, h.logger, targetID)
+		}
 		if err != nil {
-			h.logger.ErrorContext(ctx, "admin: delete user failed", "error", err)
+			h.logger.ErrorContext(ctx, "admin: delete user failed", "mode", string(mode), "error", err)
 			policy.WriteInternal(w)
 			return nil
 		}

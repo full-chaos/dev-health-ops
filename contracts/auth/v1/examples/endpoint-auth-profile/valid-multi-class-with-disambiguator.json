@@ -1,7 +1,7 @@
 {
   "accepted_credential_classes": [
     "acr_client_credential",
-    "acr_web_assertion"
+    "external_push_ingest_token"
   ],
   "action": "acr.context.read",
   "cache_class": "decision_bound",

@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 )
 
@@ -71,13 +70,68 @@ func TestSharedProfileFieldsAreReferencesNotCopies(t *testing.T) {
 	}
 }
 
+// profileClassLists reads the two class lists the schema carries beside the
+// $ref'd vocabulary: the classes whose token pins are required (the first
+// allOf branch's contains.enum) and the signed classes the profile cannot yet
+// describe (items.not.enum). Both come from the schema, never restated here.
+func profileClassLists(t *testing.T) (pinned, unexpressible []string) {
+	t.Helper()
+	var document struct {
+		AllOf []struct {
+			If struct {
+				Properties struct {
+					Classes struct {
+						Contains struct {
+							Enum []string `json:"enum"`
+						} `json:"contains"`
+					} `json:"accepted_credential_classes"`
+				} `json:"properties"`
+			} `json:"if"`
+		} `json:"allOf"`
+		Properties struct {
+			Classes struct {
+				Items struct {
+					Not struct {
+						Enum []string `json:"enum"`
+					} `json:"not"`
+				} `json:"items"`
+			} `json:"accepted_credential_classes"`
+		} `json:"properties"`
+	}
+	raw, err := os.ReadFile(SchemaPath(testRoot(t), EndpointAuthProfileSurface))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range document.AllOf {
+		pinned = append(pinned, rule.If.Properties.Classes.Contains.Enum...)
+	}
+	unexpressible = document.Properties.Classes.Items.Not.Enum
+	if len(pinned) == 0 || len(unexpressible) == 0 {
+		t.Fatalf("found pinned=%v unexpressible=%v; the schema lost a list or this test's path into it is stale", pinned, unexpressible)
+	}
+	return pinned, unexpressible
+}
+
 // Set-equality in BOTH directions between what the profile accepts as a
 // credential class and credential-classes.json (plus the documented Wave 1
-// platform classes). A one-directional check passes while the two drift: a
-// class added to the frozen file and not reachable here would pass an
-// "everything accepted is frozen" test.
+// platform classes), less the signed classes the profile refuses by name. A
+// one-directional check passes while the two drift. Each probe carries token
+// pins exactly when the class is a pinned one, so a rejection is the class
+// vocabulary's and not the token rule's.
 func TestProfileCredentialClassVocabularyEqualsTheFrozenSetBothWays(t *testing.T) {
 	root := testRoot(t)
+	pinned, unexpressible := profileClassLists(t)
+	isPinned := map[string]bool{}
+	for _, id := range pinned {
+		isPinned[id] = true
+	}
+	refused := map[string]bool{}
+	for _, id := range unexpressible {
+		refused[id] = true
+	}
 	frozen := frozenCredentialClassIDs(t)
 	want := map[string]bool{}
 	for id := range frozen {
@@ -86,9 +140,26 @@ func TestProfileCredentialClassVocabularyEqualsTheFrozenSetBothWays(t *testing.T
 	for id := range waveOnePlatformCredentialClasses {
 		want[id] = true
 	}
+	for id := range refused {
+		if !want[id] {
+			t.Errorf("refused class %q is not in the vocabulary", id)
+		}
+		if isPinned[id] {
+			t.Errorf("class %q is both pinned and refused", id)
+		}
+		delete(want, id)
+	}
+	for id := range isPinned {
+		if !frozen[id] && waveOnePlatformCredentialClasses[id] == "" {
+			t.Errorf("pinned class %q is not in the vocabulary", id)
+		}
+	}
 
 	candidates := map[string]bool{"bearer_any": true, "jwt": true, "": true, "USER_ACCESS_TOKEN": true}
-	for id := range want {
+	for id := range frozen {
+		candidates[id] = true
+	}
+	for id := range waveOnePlatformCredentialClasses {
 		candidates[id] = true
 	}
 	for _, id := range principalCredentialClassEnum(t) {
@@ -98,30 +169,25 @@ func TestProfileCredentialClassVocabularyEqualsTheFrozenSetBothWays(t *testing.T
 	accepts := func(class string) bool {
 		document := loadEndpointAuthProfileFixture(t, "valid-protected-opaque-class-no-token.json").(map[string]any)
 		document["accepted_credential_classes"] = []any{class}
-		document["token"] = loadEndpointAuthProfileFixture(t, "valid-protected-jwt-single-class.json").(map[string]any)["token"]
+		if isPinned[class] {
+			document["token"] = loadEndpointAuthProfileFixture(t, "valid-protected-jwt-single-class.json").(map[string]any)["token"]
+		}
 		return Validate(root, EndpointAuthProfileSurface, document) == nil
 	}
-
-	var accepted []string
+	got := map[string]bool{}
 	for id := range candidates {
 		if accepts(id) {
-			accepted = append(accepted, id)
+			got[id] = true
 		}
-	}
-	sort.Strings(accepted)
-
-	got := map[string]bool{}
-	for _, id := range accepted {
-		got[id] = true
 	}
 	for id := range want {
 		if !got[id] {
-			t.Errorf("class %q is in credential-classes.json or the Wave 1 list but the profile rejects it", id)
+			t.Errorf("class %q is in the vocabulary and not refused by name, but the profile rejects it", id)
 		}
 	}
 	for id := range got {
 		if !want[id] {
-			t.Errorf("profile accepts class %q which is in neither credential-classes.json nor the Wave 1 list", id)
+			t.Errorf("profile accepts class %q which is outside the vocabulary or refused by name", id)
 		}
 	}
 	if len(got) == 0 {
@@ -192,41 +258,40 @@ func TestTheLoaderRefusesASymlinkThatEscapesTheContractsDirectory(t *testing.T) 
 	}
 }
 
-func TestEveryTokenPinnedClassIsInTheClassVocabulary(t *testing.T) {
-	var document struct {
-		AllOf []struct {
-			If struct {
-				Properties struct {
-					Classes struct {
-						Contains struct {
-							Enum []string `json:"enum"`
-						} `json:"contains"`
-					} `json:"accepted_credential_classes"`
-				} `json:"properties"`
-			} `json:"if"`
-		} `json:"allOf"`
-	}
-	raw, err := os.ReadFile(SchemaPath(testRoot(t), EndpointAuthProfileSurface))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(raw, &document); err != nil {
-		t.Fatal(err)
-	}
-	var pinned []string
-	for _, rule := range document.AllOf {
-		pinned = append(pinned, rule.If.Properties.Classes.Contains.Enum...)
-	}
-	if len(pinned) == 0 {
-		t.Fatal("found no token-pinned class list; the rule or this test's path into it is gone")
-	}
-	vocabulary := map[string]bool{}
-	for _, id := range principalCredentialClassEnum(t) {
-		vocabulary[id] = true
-	}
+func TestTheTokenRuleCoversEveryAcceptedClassInBothDirections(t *testing.T) {
+	// A pinned class must carry pins and an unpinned one must not. Probe every
+	// accepted class both ways: pins on an unpinned class and no pins on a
+	// pinned one are both rejected.
+	root := testRoot(t)
+	pinned, unexpressible := profileClassLists(t)
+	isPinned := map[string]bool{}
 	for _, id := range pinned {
-		if !vocabulary[id] {
-			t.Errorf("token-pinned class %q is not in the credential class vocabulary", id)
+		isPinned[id] = true
+	}
+	refused := map[string]bool{}
+	for _, id := range unexpressible {
+		refused[id] = true
+	}
+	pins := loadEndpointAuthProfileFixture(t, "valid-protected-jwt-single-class.json").(map[string]any)["token"]
+	checked := 0
+	for id := range frozenCredentialClassIDs(t) {
+		if refused[id] {
+			continue
 		}
+		for _, withPins := range []bool{true, false} {
+			document := loadEndpointAuthProfileFixture(t, "valid-protected-opaque-class-no-token.json").(map[string]any)
+			document["accepted_credential_classes"] = []any{id}
+			if withPins {
+				document["token"] = pins
+			}
+			err := Validate(root, EndpointAuthProfileSurface, document)
+			if wantOK := withPins == isPinned[id]; (err == nil) != wantOK {
+				t.Errorf("class %q withPins=%v: accepted=%v, want %v (%v)", id, withPins, err == nil, wantOK, err)
+			}
+			checked++
+		}
+	}
+	if checked == 0 {
+		t.Fatal("probed nothing")
 	}
 }

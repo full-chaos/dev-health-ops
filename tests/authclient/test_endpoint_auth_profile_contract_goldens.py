@@ -94,9 +94,30 @@ def test_the_class_vocabulary_is_referenced_not_copied() -> None:
     )
     items = schema["properties"]["accepted_credential_classes"]["items"]
     assert items["$ref"].startswith("principal.v1.schema.json#")
-    assert set(items) <= {"$ref", "description"}, (
+    assert set(items) <= {"$ref", "description", "not"}, (
         "a sibling keyword restates the vocabulary"
     )
+
+
+def _class_lists() -> tuple[set[str], set[str]]:
+    schema = json.loads(
+        (contracts_dir() / "jsonschema" / f"{SURFACE}.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    pinned = {
+        c
+        for rule in schema["allOf"]
+        for c in rule["if"]["properties"]
+        .get("accepted_credential_classes", {})
+        .get("contains", {})
+        .get("enum", [])
+    }
+    refused = set(
+        schema["properties"]["accepted_credential_classes"]["items"]["not"]["enum"]
+    )
+    assert pinned and refused, "the schema lost a class list"
+    return pinned, refused
 
 
 def test_python_accepts_exactly_the_frozen_class_set_both_ways() -> None:
@@ -113,19 +134,47 @@ def test_python_accepts_exactly_the_frozen_class_set_both_ways() -> None:
         )
     )
     enum = set(principal["properties"]["credential"]["properties"]["class"]["enum"])
+    pinned, refused = _class_lists()
+    assert refused <= frozen | wave_one and pinned <= frozen | wave_one
+    assert not pinned & refused
+    pins = _load("valid-protected-jwt-single-class.json")["token"]
+    base = _load("valid-protected-opaque-class-no-token.json")
     candidates = (
         frozen | wave_one | enum | {"bearer_any", "jwt", "", "USER_ACCESS_TOKEN"}
     )
-    base = {
-        **_load("valid-protected-opaque-class-no-token.json"),
-        "token": _load("valid-protected-jwt-single-class.json")["token"],
-    }
     accepted = {
         c
         for c in candidates
-        if not violations(SURFACE, {**base, "accepted_credential_classes": [c]})
+        if not violations(
+            SURFACE,
+            {
+                **base,
+                "accepted_credential_classes": [c],
+                **({"token": pins} if c in pinned else {}),
+            },
+        )
     }
-    assert accepted == frozen | wave_one
+    assert accepted == (frozen | wave_one) - refused
+
+
+def test_the_token_rule_holds_in_both_directions_for_every_class() -> None:
+    pinned, refused = _class_lists()
+    pins = _load("valid-protected-jwt-single-class.json")["token"]
+    base = _load("valid-protected-opaque-class-no-token.json")
+    frozen = {
+        c["class_id"]
+        for c in json.loads(
+            (contracts_dir() / "credential-classes.json").read_text(encoding="utf-8")
+        )["classes"]
+    } - refused
+    assert frozen
+    for cls in sorted(frozen):
+        for with_pins in (True, False):
+            doc = {**base, "accepted_credential_classes": [cls]}
+            if with_pins:
+                doc["token"] = pins
+            ok = not violations(SURFACE, doc)
+            assert ok == (with_pins == (cls in pinned)), (cls, with_pins)
 
 
 def test_a_symlink_out_of_the_contracts_directory_is_refused(tmp_path: Path) -> None:

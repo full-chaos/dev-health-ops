@@ -38,6 +38,7 @@ var endpointAuthProfileManifestBasename = filepath.Base(endpointAuthProfileManif
 var goProfileKeywordTokens = map[string]string{
 	"maxItems": "maxItems:",
 	"minItems": "minItems:",
+	"not":      "not:",
 	"type":     "type:",
 }
 

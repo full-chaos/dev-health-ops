@@ -48,6 +48,24 @@
       "why": "The same rule for a second class, so it is not specific to one name."
     },
     {
+      "file": "invalid-opaque-class-with-token-pins.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "why": "An opaque credential with signed-token pins: the pins describe a token that does not exist, and a verifier built from them would look for one. The forbid direction of the token rule."
+    },
+    {
+      "file": "invalid-signed-class-the-profile-cannot-describe.json",
+      "expect_instance_location": "/accepted_credential_classes/0",
+      "expect_keyword": "not",
+      "why": "auth_js_browser_session is an encrypted JWT the algorithm enum cannot name; refused instead of accepted without pins."
+    },
+    {
+      "file": "invalid-acr-web-assertion-without-pins.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "A second signed class in the pinned list: the rule is a class list, not one name."
+    },
+    {
       "file": "invalid-unknown-credential-class.json",
       "expect_instance_location": "/accepted_credential_classes/0",
       "expect_keyword": "enum",

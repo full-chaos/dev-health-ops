@@ -92,9 +92,13 @@ func migrate(t *testing.T, ctx context.Context, admin *pgxpool.Pool, roles map[s
 		grants = append(grants, riverstore.TableGrant{TableName: table.TableName,
 			AllowInsert: table.AllowInsert, AllowUpdate: table.AllowUpdate, AllowDelete: table.AllowDelete})
 	}
+	columns := make([]riverstore.ColumnGrant, 0, len(posture.ColumnScoped))
+	for _, column := range posture.ColumnScoped {
+		columns = append(columns, riverstore.ColumnGrant{TableName: column.TableName, ColumnName: column.ColumnName, Privilege: column.Privilege})
+	}
 	options := riverstore.MigrationOptions{
 		Schema: "river", DomainRole: roles["domain"], QueueRole: roles["queue"],
-		APIRole: roles["api"], APIGrants: grants,
+		APIRole: roles["api"], APIGrants: grants, APIColumnGrants: columns,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, options); err != nil {
@@ -166,6 +170,13 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 	for _, table := range postgres.APIPosture().RequiredTables {
 		if _, err := admin.Exec(ctx, "CREATE TABLE IF NOT EXISTS public."+table.TableName+" (id uuid PRIMARY KEY)"); err != nil {
 			t.Fatalf("stand-in %s: %v", table.TableName, err)
+		}
+	}
+
+	// a column-scoped grant needs its column on the stand-in table
+	for _, column := range postgres.APIPosture().ColumnScoped {
+		if _, err := admin.Exec(ctx, "ALTER TABLE public."+column.TableName+" ADD COLUMN IF NOT EXISTS "+column.ColumnName+" uuid"); err != nil {
+			t.Fatalf("stand-in column %s.%s: %v", column.TableName, column.ColumnName, err)
 		}
 	}
 

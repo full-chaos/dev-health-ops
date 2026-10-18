@@ -100,7 +100,6 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		// function has never wrapped its per-kind writes in one transaction.)
 		var existingManualMembers map[string][]string
 		var createdAt map[string]time.Time
-		var storedProvider map[string]teamprovider.Stored
 		if kind == "team.v1" {
 			teamIDs := make([]string, 0, len(grouped[kind]))
 			for _, record := range grouped[kind] {
@@ -116,12 +115,6 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 			if err != nil {
 				return fmt.Errorf("carry existing team.v1 created_at: %w", err)
 			}
-			// provider_team_id, provider_name and gone_at are carried the same way:
-			// a push never knows them, and must not erase what a sync wrote.
-			storedProvider, err = teamprovider.Carry(ctx, s.conn, source.Pointer.OrgID, teamIDs)
-			if err != nil {
-				return fmt.Errorf("carry existing team.v1 provider identity: %w", err)
-			}
 		}
 		rows := make([]storedversion.Row, 0, len(grouped[kind]))
 		for _, record := range grouped[kind] {
@@ -132,9 +125,26 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 			if kind == "team.v1" {
 				// created_at is the last column of the team.v1 statement; a
 				// new team's creation time is its own first updated_at (values[9]).
-				values = withTeamProviderIdentity(withTeamCreatedAt(values, createdAt), storedProvider)
+				values = withTeamCreatedAt(values, createdAt)
 			}
 			rows = append(rows, storedversion.Row{Values: values})
+		}
+		if kind == "team.v1" {
+			// A push never knows provider_team_id, provider_name or gone_at:
+			// Insert keeps what a sync wrote, read inside the same statement.
+			writes := make([]teamprovider.Write, len(rows))
+			for i, row := range rows {
+				writes[i] = teamprovider.Write{Values: row.Values, Gone: teamprovider.GoneKept}
+			}
+			columns, err := teamprovider.StatedColumns(query)
+			if err != nil {
+				return err
+			}
+			if err := teamprovider.Insert(ctx, s.conn, source.Pointer.OrgID, columns, writes); err != nil {
+				return fmt.Errorf("persist external %s: %w", kind, err)
+			}
+			scope.RecordKinds = append(scope.RecordKinds, kind)
+			return nil
 		}
 		if contract, ok := externalContract(kind, source.Pointer.SourceSystem); ok && contract.Reads() {
 			extended, appended, err := withContractColumns(query, contract)
@@ -395,15 +405,6 @@ func withTeamCreatedAt(values []any, carried map[string]time.Time) []any {
 	teamID, _ := values[0].(string)
 	firstWrite, _ := values[9].(time.Time)
 	return append(values, teamcreated.For(carried, teamID, firstWrite))
-}
-
-// withTeamProviderIdentity appends provider_team_id, provider_name and gone_at,
-// the three columns after created_at in the team.v1 statement, as the stored
-// versions of the team hold them.
-func withTeamProviderIdentity(values []any, stored map[string]teamprovider.Stored) []any {
-	teamID, _ := values[0].(string)
-	value := teamprovider.Keep(stored, teamID)
-	return append(values, value.ProviderTeamID, value.ProviderName, value.GoneAt)
 }
 
 func externalRecordValues(

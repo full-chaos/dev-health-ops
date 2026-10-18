@@ -382,6 +382,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		}
 		var requestErr error
 		guarded, leftOrigin := originGuardedDoer(c.Doer, target)
+		c.recordWireRequest(ctx, target.Path)
 		response, requestErr = guarded.Do(request)
 		if callLeft.Load() || leftOrigin.Load() || (requestErr == nil && responseLeftOrigin(response, target) && !strippedOfCredentials(response.Request)) {
 			// A redirect took the authenticated request off the credential's
@@ -520,6 +521,7 @@ func (c *HTTPClient) DoUnauthenticated(
 	if requestErr != nil {
 		return nil, ErrCredentialInvalid
 	}
+	c.recordWireRequest(ctx, target.Path)
 	response, err = c.Doer.Do(request)
 	if err != nil {
 		failure := c.transportFailure(ctx, err, 1)

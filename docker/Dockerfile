@@ -1,4 +1,4 @@
-ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc"
+ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d"
 # CHAOS-4922: the Python base comes from our ghcr mirror, not Docker Hub.
 #
 # CI never authenticates to Docker Hub, so an unauthenticated Hub pull is rate

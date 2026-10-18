@@ -19,7 +19,10 @@ import (
 // clickhouse.go), reusing its exact column lists for the shared "teams" and
 // "team_memberships" tables so both writers stay byte-compatible with every
 // other provider's rows in the same ReplacingMergeTree.
-const githubTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at, provider_team_id, provider_name, gone_at)`
+// githubTeamCatalogTeamsColumns is the teams columns this writer states;
+// teamprovider.Insert adds the provider identity in the same statement.
+var githubTeamCatalogTeamsColumns = []string{"id", "team_uuid", "name", "description", "manual_members", "project_keys", "repo_patterns", "is_active", "updated_at", "org_id", "provider", "native_team_key", "parent_team_id", "created_at"}
+
 const githubTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
 
 // githubTeamCatalogRepoOwnershipInsert matches team_repo_ownership's exact
@@ -71,15 +74,12 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 	if err != nil {
 		return ErrEffectRecoveryUnsafe
 	}
+	// Read for the tally only: the written identity is read inside the insert.
 	stored, err := teamprovider.Carry(ctx, sink.Conn, orgID, teamIDs)
 	if err != nil {
 		return ErrEffectRecoveryUnsafe
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, githubTeamCatalogTeamsInsert)
-	if err != nil {
-		return err
-	}
-	defer batch.Abort()
+	writes := make([]teamprovider.Write, 0, len(rows))
 	var tally teamprovider.Tally
 	for _, row := range rows {
 		if !sink.validRow(orgID, row) {
@@ -94,17 +94,16 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 			manualMembers = []string{}
 		}
 		tally.Add(stored, row.ID, row.ProviderTeamID)
-		identity := teamprovider.Merge(stored, row.ID, row.ProviderTeamID, row.ProviderName)
-		if err := batch.Append(
-			row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys,
-			row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider,
-			row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt),
-			identity.ProviderTeamID, identity.ProviderName, identity.GoneAt,
-		); err != nil {
-			return err
-		}
+		writes = append(writes, teamprovider.Write{
+			Values: []any{
+				row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys,
+				row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider,
+				row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt),
+			},
+			ProviderTeamID: row.ProviderTeamID, ProviderName: row.ProviderName, Gone: teamprovider.GoneCleared,
+		})
 	}
-	if err := batch.Send(); err != nil {
+	if err := teamprovider.Insert(ctx, sink.Conn, orgID, githubTeamCatalogTeamsColumns, writes); err != nil {
 		return err
 	}
 	logTeamProviderIdentity(ctx, tally, githubTeamCatalogProvider, orgID)

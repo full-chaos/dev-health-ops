@@ -1,13 +1,13 @@
 {
   "accepted_credential_classes": [
     "acr_client_credential",
-    "external_push_ingest_token"
+    "legacy_ingest_api_key"
   ],
   "action": "acr.context.read",
   "cache_class": "decision_bound",
   "class_disambiguator": {
     "kind": "dedicated_header",
-    "name": "X-Web-Assertion"
+    "name": "X-API-Key"
   },
   "classification": "protected",
   "current_state_required": false,

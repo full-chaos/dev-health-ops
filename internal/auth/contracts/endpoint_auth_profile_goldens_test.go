@@ -141,7 +141,7 @@ func TestAcceptedEndpointAuthProfileFixturesValidate(t *testing.T) {
 	for _, entry := range loadEndpointAuthProfileManifest(t).Accept {
 		t.Run(entry.File, func(t *testing.T) {
 			document := loadEndpointAuthProfileFixture(t, entry.File)
-			if err := Validate(root, EndpointAuthProfileSurface, document); err != nil {
+			if err := ValidateEndpointAuthProfile(root, document); err != nil {
 				t.Fatalf("accept fixture was rejected: %v", err)
 			}
 		})

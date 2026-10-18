@@ -40,7 +40,104 @@ const newAjv = () => {
   addFormats(ajv);
   return ajv;
 };
-const readJSON = (p) => JSON.parse(readFileSync(p, "utf8"));
+// JSON.parse keeps the LAST of two equal member names, so a fixture whose bytes
+// carry a hidden first value would be judged on the survivor. Go and Python
+// refuse duplicates before validation; this runner must judge the same bytes.
+function assertNoDuplicateMembers(text, label) {
+  let i = 0;
+  const fail = (message) => {
+    throw new Error(`${label}: ${message} at offset ${i}`);
+  };
+  const skipSpace = () => {
+    while (i < text.length && " \t\n\r".includes(text[i])) i += 1;
+  };
+  const readString = () => {
+    const start = i;
+    i += 1; // opening quote
+    while (i < text.length && text[i] !== '"') i += text[i] === "\\" ? 2 : 1;
+    if (i >= text.length) fail("unterminated string");
+    i += 1;
+    return JSON.parse(text.slice(start, i));
+  };
+  const readValue = () => {
+    skipSpace();
+    const ch = text[i];
+    if (ch === "{") {
+      i += 1;
+      const seen = new Set();
+      skipSpace();
+      if (text[i] === "}") {
+        i += 1;
+        return;
+      }
+      for (;;) {
+        skipSpace();
+        if (text[i] !== '"') fail("expected a member name");
+        const name = readString();
+        if (seen.has(name)) fail(`duplicate object member ${JSON.stringify(name)}`);
+        seen.add(name);
+        skipSpace();
+        if (text[i] !== ":") fail("expected ':'");
+        i += 1;
+        readValue();
+        skipSpace();
+        if (text[i] === ",") {
+          i += 1;
+          continue;
+        }
+        if (text[i] === "}") {
+          i += 1;
+          return;
+        }
+        fail("expected ',' or '}'");
+      }
+    } else if (ch === "[") {
+      i += 1;
+      skipSpace();
+      if (text[i] === "]") {
+        i += 1;
+        return;
+      }
+      for (;;) {
+        readValue();
+        skipSpace();
+        if (text[i] === ",") {
+          i += 1;
+          continue;
+        }
+        if (text[i] === "]") {
+          i += 1;
+          return;
+        }
+        fail("expected ',' or ']'");
+      }
+    } else if (ch === '"') {
+      readString();
+    } else {
+      while (i < text.length && !" \t\n\r,]}".includes(text[i])) i += 1;
+    }
+  };
+  readValue();
+}
+function readJSON(p) {
+  const text = readFileSync(p, "utf8");
+  assertNoDuplicateMembers(text, p);
+  return JSON.parse(text);
+}
+// A fixture may carry a duplicate member only when the manifest files it under
+// reject_by_client: the schema legitimately sees the survivor, and the clients
+// are the ones that must refuse the bytes. Anywhere else a duplicate is a
+// corpus defect (the verdict would be about a value the bytes do not show).
+function readFixture(p) {
+  const text = readFileSync(p, "utf8");
+  let duplicate = null;
+  try {
+    assertNoDuplicateMembers(text, p);
+  } catch (error) {
+    duplicate = error.message;
+  }
+  return { document: JSON.parse(text), duplicate };
+}
 
 if (selfTest) {
   // A schema that ordinary validators accept and strict ajv refuses at compile
@@ -133,7 +230,12 @@ for (const surface of surfaces) {
       }
       claimed.add(name);
       checked += 1;
-      const ok = validate(readJSON(path.join(dir, name)));
+      const fixture = readFixture(path.join(dir, name));
+      if (fixture.duplicate && group !== "reject_by_client") {
+        fail(`${surface}/${name} [${group}]: ${fixture.duplicate}; only reject_by_client may carry a duplicate member`);
+        continue;
+      }
+      const ok = validate(fixture.document);
       if (ok !== mustValidate) {
         const why = validate.errors
           ? validate.errors.map((e) => `${e.instancePath || "/"} ${e.keyword}`).join("; ")

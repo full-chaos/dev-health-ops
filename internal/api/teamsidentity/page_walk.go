@@ -31,7 +31,7 @@ const (
 )
 
 // pageWalkFailureCounterName is the instrument of every failed walk.
-const pageWalkFailureCounterName = "teams_identity_page_walk_failed_total"
+const pageWalkFailureCounterName = "dev_health_teams_identity_page_walk_failed_total"
 
 var pageWalkFailures = func() metric.Int64Counter {
 	const name = pageWalkFailureCounterName
@@ -172,8 +172,9 @@ func (walk *pageWalk) jiraAdvance(page *pyjson.Object, startAt, items int) (toke
 		last = flag
 	}
 	if rawToken != nil {
+		// an empty string is no token, as Python's `if next_token:` reads it; any other non-string is a malformed signal
 		text, isString := rawToken.(string)
-		if !isString || text == "" {
+		if !isString {
 			walk.pages++
 			return "", 0, false, walk.fail(walkCauseBadContinuation)
 		}

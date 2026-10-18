@@ -200,7 +200,7 @@ func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient
 		for _, item := range list {
 			issue, ok := item.(*pyjson.Object)
 			if !ok {
-				return nil, fmt.Errorf("jira issue is not an object")
+				return nil, walk.pageError(fmt.Errorf("jira issue is not an object"))
 			}
 			issues = append(issues, issue)
 			if len(issues) >= jiraInferIssueLimit {

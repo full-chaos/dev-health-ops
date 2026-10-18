@@ -19,7 +19,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
@@ -273,7 +272,13 @@ func (err *nilUnwrapStageError) Unwrap() error { return err.inner }
 
 func TestChainDefectCounterIsIncremented(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	counter, err := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test").Int64Counter("post_sync_error_chain_defect_total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := chainDefects
+	chainDefects = counter
+	t.Cleanup(func() { chainDefects = previous })
 	recordChainDefect(context.Background(), chainDefectBound)
 	var collected metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &collected); err != nil {

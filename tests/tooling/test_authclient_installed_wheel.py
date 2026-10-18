@@ -22,8 +22,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLES = REPO / "contracts" / "auth" / "v1" / "examples"
 SCHEMAS = REPO / "contracts" / "auth" / "v1" / "jsonschema"
@@ -175,4 +173,4 @@ def _an_error_fixture() -> str:
         document = json.loads((EXAMPLES / "error" / entry["file"]).read_text("utf-8"))
         if document.get("status") == 403:
             return entry["file"]
-    pytest.fail("no accept fixture in the error corpus carries status 403")
+    raise AssertionError("no accept fixture in the error corpus carries status 403")

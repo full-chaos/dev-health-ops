@@ -48,27 +48,27 @@ Every integer field needs an explicit client-side check, and the fixtures for it
 belong in `reject_by_client`, not `reject`: the schema genuinely accepts these
 documents, and filing them as `reject` would assert a check that does not exist.
 
-`principal.v1` also carries a `2**53` bound for revision fields, where the
-concern is exact float representability rather than type.
+**The guard decides on the raw number TOKEN, never on a parsed value.** A token
+containing `.`, `e` or `E` is refused even when its value is integral (`1.0`,
+`1e0`): a float64 reader has already rounded `9007199254740990.1` and
+`1.0000000000000000001` to integers, so no value-based or magnitude-based check
+can tell them from the integers they round to. Integer tokens are exact and are
+the only accepted form (CHAOS-4940 withdrew the earlier normalisation of
+integral decimals such as `1.0`). Python's `json` returns a `float` for exactly
+the decimal-form tokens, so a `float` at the guard is a decimal-form token; Go's
+custom unmarshalers hold the token text.
 
-**There is no shared guard yet, and an earlier version of this file told you to
-reuse one.** That instruction was unactionable and worse than silence: a remedy
-that does not exist looks like the problem is solved, so the next author
-searches, finds nothing, re-derives, and does not know they re-derived. That is
-not hypothetical — it is what produced `error.v1`'s integral-decimal P1, in a
-surface written by the author of the note telling them to reuse it.
+**Reuse these; do not re-derive them** (CHAOS-4940 extracted them, after the
+class bit `error.v1` once because no shared guard existed):
 
-What actually exists today, to copy from:
-
-| | where | covers |
+| concern | Go | Python |
 | --- | --- | --- |
-| Go | `principal.go` — a function-local `const` inside `Revision.UnmarshalJSON` | 2^53 only, and not callable from outside that method |
-| Python | `error_envelope.py` `_require_wire_int` | zero-fraction decimals, and `bool` before `int` (order matters — `bool` subclasses `int`) |
-| Python | `principal.py` `_parse_revision` | a separate copy, plus the 2^53 bound |
+| wire-integer TYPE: is this an integer token, not `403.0` or `1e0`? | an ordinary field: decode into an integer-typed field (`encoding/json` refuses `403.0`, pinned by `TestDecodingIntoAnIntegerFieldRefusesAZeroFractionDecimal`); a custom unmarshaler: `contracts.RefuseDecimalForm(token)` | `authclient.contracts.require_wire_int`, or `refuse_decimal_form` for a field with its own range rule |
+| a boolean where a number is required | the decoder refuses it | `authclient.contracts.refuse_bool` (before any `int` check: `bool` subclasses `int`) |
 
-`contracts.py`, the shared module every surface already imports, contains
-neither. **CHAOS-4940 tracks extracting one guard per language**; until it
-lands, copy from the table above and expect to delete your copy afterwards.
+`error.v1`'s `status` and `retry_after_seconds` and `principal.v1`'s revisions
+use the same rule; revisions add the int64 range. Fixtures for these rules
+belong in `reject_by_client`.
 
 ### Constraints live in the cross-language dialect intersection
 

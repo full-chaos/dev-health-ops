@@ -116,8 +116,8 @@ jq empty \
 # repo's live toolchain/dependency pins -- that is why .versions.river below
 # is "v0.40.0" while go.mod currently requires v0.44.0, and why .versions.go
 # is "go1.25.9" even after ci/check_go.sh's GO_TOOLCHAIN and go.mod moved to
-# go1.27.0 (CHAOS-4606). record.sh's OUTPUT writes this exact file, and its
-# own GOTOOLCHAIN now tracks go1.27.0 too -- so the NEXT time someone runs
+# go1.27.2 (CHAOS-4606). record.sh's OUTPUT writes this exact file, and its
+# own GOTOOLCHAIN now tracks go1.27.2 too -- so the NEXT time someone runs
 # record.sh to refresh this evidence for an unrelated reason, every
 # .versions.* value below (go included) must be re-pinned here to match the
 # newly recorded snapshot, the same way the providersync test-count and

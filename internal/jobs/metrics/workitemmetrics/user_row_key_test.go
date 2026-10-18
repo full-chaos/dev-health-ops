@@ -84,6 +84,9 @@ func TestUserMetricsDailyRowOfAPersonInTwoTeamsSumsAndIsLabelledByTheTeamWithThe
 		if len(result.UserMetricsDaily) != 1 {
 			t.Fatalf("%s: %d rows, want 1: %+v", tc.name, len(result.UserMetricsDaily), result.UserMetricsDaily)
 		}
+		if result.UserRowsSpanningTeams != 1 || result.SpanningTeamsByProvider["jira"] != 1 {
+			t.Errorf("%s: spanning persons = %d (%v), want 1 for jira", tc.name, result.UserRowsSpanningTeams, result.SpanningTeamsByProvider)
+		}
 		row := result.UserMetricsDaily[0]
 		if row.TeamID != tc.wantID || row.TeamName != tc.wantName || row.ItemsCompleted != 3 || row.ItemsStarted != 0 {
 			t.Errorf("%s: row = team %q (%q), completed %d, started %d; want team %q (%q), completed 3, started 0",

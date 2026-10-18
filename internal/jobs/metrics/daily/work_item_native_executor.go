@@ -97,6 +97,7 @@ func (executor *WorkItemExecutor) ComputeFamily(
 	slog.Default().DebugContext(ctx, "work_item_user_metrics_rows",
 		"org_id", run.OrganizationID, "day", scope.day.Format("2006-01-02"),
 		"user_rows", len(triplet.UserMetricsDaily), "persons_spanning_teams", triplet.UserRowsSpanningTeams)
+	recordUserRowsSpanningTeams(ctx, triplet.SpanningTeamsByProvider)
 
 	// Each Write* call reports its true row count on an ambiguous Send error,
 	// so the count is added before the error check.

@@ -193,7 +193,9 @@ type Triplet struct {
 	// UserRowsSpanningTeams counts the persons of the day whose items belong to more
 	// than one team: their one row is labelled by one of the teams.
 	UserRowsSpanningTeams int
-	CycleTimes            []CycleTimeRecord
+	// SpanningTeamsByProvider is UserRowsSpanningTeams for each provider.
+	SpanningTeamsByProvider map[string]int
+	CycleTimes              []CycleTimeRecord
 }
 
 // EstimateCoverageRow mirrors EstimateCoverageMetricsDailyRecord.
@@ -467,6 +469,10 @@ func ComputeDailyTriplet(
 		bucket := users[key]
 		if len(bucket.teamItems) > 1 {
 			result.UserRowsSpanningTeams++
+			if result.SpanningTeamsByProvider == nil {
+				result.SpanningTeamsByProvider = map[string]int{}
+			}
+			result.SpanningTeamsByProvider[key.provider]++
 		}
 		teamID, teamName := bucket.label()
 		result.UserMetricsDaily = append(result.UserMetricsDaily, UserMetricsDailyRow{

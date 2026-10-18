@@ -97,5 +97,16 @@ func markerMatches(marker ClassMarker, kind, name string) bool {
 // ValidateEndpointAuthProfile is the one entry for judging a profile: the wire
 // schema first, then the selector gate over the credential-class registry.
 func ValidateEndpointAuthProfile(root string, document any) error {
-	return Validate(root, EndpointAuthProfileSurface, document)
+	if err := Validate(root, EndpointAuthProfileSurface, document); err != nil {
+		return err
+	}
+	profile, ok := document.(map[string]any)
+	if !ok {
+		return fmt.Errorf("profile is %T, not an object", document)
+	}
+	registry, err := LoadRegistryClasses(root)
+	if err != nil {
+		return err
+	}
+	return CheckClassSelector(profile, registry)
 }

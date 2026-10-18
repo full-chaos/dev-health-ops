@@ -34,7 +34,9 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-migrate" "context" $) | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
-      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      # No serviceAccountName: this Job is a pre-install hook and the release's
+      # ServiceAccount is a normal resource, not yet created on a fresh install.
+      # The namespace default account is enough: the pod mounts no token.
       automountServiceAccountToken: false
       restartPolicy: Never
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}

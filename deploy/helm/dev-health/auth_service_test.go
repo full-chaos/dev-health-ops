@@ -218,6 +218,9 @@ func TestAuthMigrateIsASeparateHookJob(t *testing.T) {
 	}
 	// The Deployment must not run the migration at startup: its container has no
 	// migration setting at all (asserted above) and the Job is the only DDL path.
+	if at(job, "spec", "template", "spec", "serviceAccountName") != nil {
+		t.Error("a pre-install hook Job names the release ServiceAccount, which does not exist yet on a fresh install")
+	}
 	if at(job, "spec", "template", "spec", "restartPolicy") != "Never" {
 		t.Error("the Job restarts on failure instead of failing the release")
 	}
@@ -284,6 +287,10 @@ func TestAuthNetworkPolicyIsTheWholeBoundary(t *testing.T) {
 		"--set", "authService.networkPolicy.metricsFrom[0].matchLabels.app=scraper")...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)
+	}
+	service := authDoc(docs, "Service", "a-dev-health-auth-service")
+	if at(service, "spec", "ports", 1, "port") != 8096 {
+		t.Errorf("listed scrapers cannot reach the operator port through the Service: %v", at(service, "spec", "ports"))
 	}
 	policy = authDoc(docs, "NetworkPolicy", "a-dev-health-auth-service")
 	ingress := at(policy, "spec", "ingress").([]any)

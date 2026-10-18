@@ -146,6 +146,14 @@ spec:
       port: {{ $a.port }}
       targetPort: http
       protocol: TCP
+    {{- if $a.networkPolicy.metricsFrom }}
+    # Published only when scrapers are listed: the NetworkPolicy admits exactly those
+    # pod selectors to this port and nobody else.
+    - name: operator
+      port: {{ $a.operatorPort }}
+      targetPort: operator
+      protocol: TCP
+    {{- end }}
 {{- if $a.networkPolicy.enabled }}
 {{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required while authService.networkPolicy.enabled (the default; set it false only when another layer enforces the boundary): the auth pods are excluded from the release-wide policy, so an empty list would cut the service off from its database" }}{{- end }}
 {{- range (concat $a.networkPolicy.allowedFrom $a.networkPolicy.metricsFrom) }}

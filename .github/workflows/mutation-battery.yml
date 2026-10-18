@@ -83,7 +83,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GO_VERSION: '1.27.0'
+  GO_VERSION: '1.27.2'
 
 jobs:
   # Resolve the dispatch inputs in ONE place. The other jobs read only these

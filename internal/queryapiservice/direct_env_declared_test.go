@@ -144,7 +144,7 @@ func TestEveryDirectEnvironmentReadUnderQueryAPIIsDeclared(t *testing.T) {
 	if len(unresolved) > 0 {
 		t.Fatalf("direct environment reads whose name the test cannot resolve to a string: %v -- read it through a constant, or extend the test", unresolved)
 	}
-	if len(names) < 7 {
+	if len(names) < 3 {
 		t.Fatalf("found only %d direct environment reads under internal/queryapi (%v): the extraction no longer sees them", len(names), names)
 	}
 

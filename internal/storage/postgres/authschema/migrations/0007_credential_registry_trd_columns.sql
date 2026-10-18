@@ -8,6 +8,23 @@
 -- contract for credential metadata is derived from this table, so the producer
 -- gets the columns first.
 --
+-- WHERE EACH COLUMN AND RULE COMES FROM. TRD = "TRD - Go-native Dev Health Auth
+-- Control Plane" (CHAOS-3270).
+--     rotation_parent_id, audiences, scopes, domain_owner, external_reference,
+--     fingerprint: named by the TRD section 9 credential_registry entity. The
+--         TRD names the columns but gives no types or bounds; the types here
+--         (uuid self-reference, array of token names, closed owner text, opaque
+--         id text, 16 hex) and the cardinality caps (16 audiences, 64 scopes)
+--         are this migration's choices, made tight because a cap can be raised
+--         additively and cannot be lowered.
+--     domain_owner values: TRD section 16 and ACP-ADR-08/09 (ACR and External
+--         Push keep their validators; the registry projects metadata only).
+--     "rotation preserves or narrows privilege", "revocation is idempotent and
+--         monotonic", "secret values are returned once": TRD section 12. The
+--         registry stores no secret (secret_hash from 0003 is a hash).
+--     `status` derived, not stored: TRD section 9 lists a status; deriving it is
+--         this migration's choice so it cannot disagree with the timestamps.
+--
 -- `status` is deliberately NOT a column: it is DERIVED, so it can never
 -- disagree with the timestamps that define it.
 --     revoked_at IS NOT NULL      -> 'revoked'

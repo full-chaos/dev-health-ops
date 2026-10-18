@@ -54,6 +54,19 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 	env := newAuthFixture(t, ctx)
 	seedCredentialPrincipals(t, ctx, env)
 
+	t.Run("the runtime search_path does not name the auth schema (the control for every write below)", func(t *testing.T) {
+		// Migration SQL runs with search_path set to the schema; the runtime role
+		// does not. A function body naming a table unqualified passes under the
+		// migration and fails here, which is how round 1 found it.
+		var path string
+		if err := env.runtime.QueryRow(ctx, `SHOW search_path`).Scan(&path); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(path, "auth") {
+			t.Fatalf("runtime search_path %q names the auth schema: the writes below would not exercise the trigger bodies' name resolution", path)
+		}
+	})
+
 	t.Run("defaults keep the 0003 insert valid", func(t *testing.T) {
 		if err := insertCredential(ctx, env, credParent, credPrincipal, `, scopes, audiences`, `, ARRAY['read','write']::auth.credential_token_name[], ARRAY['api','acr']::auth.credential_token_name[]`); err != nil {
 			t.Fatalf("parent: %v", err)
@@ -73,6 +86,13 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 		if err := insertCredential(ctx, env, credChild, credPrincipal, `, rotation_parent_id, scopes, audiences`,
 			`, $3::uuid, ARRAY['read']::auth.credential_token_name[], ARRAY['api']::auth.credential_token_name[]`, credParent); err != nil {
 			t.Fatalf("narrowing rotation refused: %v", err)
+		}
+	})
+
+	t.Run("rotation may keep scopes and audiences equal", func(t *testing.T) {
+		if err := insertCredential(ctx, env, "00000000-0000-4000-8000-0000000000e1", credPrincipal, `, rotation_parent_id, scopes, audiences`,
+			`, $3::uuid, ARRAY['read','write']::auth.credential_token_name[], ARRAY['api','acr']::auth.credential_token_name[]`, credParent); err != nil {
+			t.Fatalf("an equal-privilege rotation was refused: %v", err)
 		}
 	})
 
@@ -122,6 +142,19 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 		}
 		mustFail(t, "widen in place", guardedExec(ctx, env.runtime,
 			`UPDATE auth.credential_registry SET scopes = ARRAY['read','write']::auth.credential_token_name[] WHERE id = $1`, credParent), "never widened")
+		mustFail(t, "widen audiences in place", guardedExec(ctx, env.runtime,
+			`UPDATE auth.credential_registry SET audiences = ARRAY['api','acr','billing']::auth.credential_token_name[] WHERE id = $1`, credParent), "never widened")
+		for name, set := range map[string]string{
+			"id":             `id = '00000000-0000-4000-8000-0000000000ee'`,
+			"secret_hash":    `secret_hash = '\x0102'::bytea`,
+			"hash_algorithm": `hash_algorithm = 'md5'`,
+			"display_prefix": `display_prefix = 'other_'`,
+			"fingerprint":    `fingerprint = 'fedcba9876543210'`,
+			"created_at":     `created_at = now() + interval '1 day'`,
+		} {
+			mustFail(t, "replace "+name+" in place", guardedExec(ctx, env.runtime,
+				`UPDATE auth.credential_registry SET `+set+` WHERE id = $1`, credChild), "immutable")
+		}
 		mustFail(t, "change principal", guardedExec(ctx, env.runtime,
 			`UPDATE auth.credential_registry SET principal_id = $2 WHERE id = $1`, credParent, credOther), "immutable")
 		mustFail(t, "re-parent", guardedExec(ctx, env.runtime,

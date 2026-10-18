@@ -77,17 +77,27 @@ CREATE INDEX credential_registry_rotation_parent_idx
 -- name a live parent of the same principal, class and domain owner, and may
 -- carry only scopes and audiences its parent carries. Widening is a NEW
 -- credential issued under its own authorization, not a rotation.
+--
+-- NO UNQUALIFIED TABLE NAME APPEARS IN A FUNCTION BODY. The migration runs with
+-- search_path set to the auth schema; the runtime role does not, so a body that
+-- said `FROM credential_registry` or declared `credential_registry%ROWTYPE`
+-- failed with "relation does not exist" on every credential write (codex round 1,
+-- executed). The parent row is read by dynamic SQL against TG_TABLE_SCHEMA and
+-- TG_TABLE_NAME, which name the table the trigger fired on, whatever the schema
+-- is called.
 CREATE FUNCTION credential_registry_rotation_narrows() RETURNS trigger
     LANGUAGE plpgsql
 AS $$
 DECLARE
-    parent credential_registry%ROWTYPE;
+    parent record;
 BEGIN
     IF NEW.rotation_parent_id IS NULL THEN
         RETURN NEW;
     END IF;
-    SELECT * INTO parent FROM credential_registry WHERE id = NEW.rotation_parent_id FOR SHARE;
-    IF NOT FOUND THEN
+    EXECUTE format('SELECT principal_id, credential_class, domain_owner, revoked_at, scopes, audiences FROM %I.%I WHERE id = $1 FOR SHARE',
+                   TG_TABLE_SCHEMA, TG_TABLE_NAME)
+        INTO parent USING NEW.rotation_parent_id;
+    IF parent IS NULL THEN
         RAISE EXCEPTION 'rotation parent % does not exist', NEW.rotation_parent_id USING ERRCODE = '23503';
     END IF;
     IF parent.principal_id <> NEW.principal_id
@@ -113,8 +123,12 @@ CREATE TRIGGER credential_registry_rotation_narrows
 
 -- Revocation is idempotent and monotonic (TRD section 12): re-writing the same
 -- revoked_at and revoked_reason is a no-op, and a revoked row can never change
--- them or return to active. Privilege never widens in place, and identity and
--- lineage columns never change after insert.
+-- them or return to active. Privilege never widens in place. Identity, lineage
+-- and verifier material never change after insert: replacing secret_hash,
+-- hash_algorithm, display_prefix or fingerprint under the same id would swap the
+-- credential without the rotation record TRD section 12 requires (codex round 1,
+-- executed). Expiry stays mutable: shortening it is an ordinary revocation-like
+-- act and the TRD does not forbid extending it.
 CREATE FUNCTION credential_registry_lifecycle_is_monotonic() RETURNS trigger
     LANGUAGE plpgsql
 AS $$
@@ -124,12 +138,19 @@ BEGIN
             OR NEW.revoked_reason IS DISTINCT FROM OLD.revoked_reason) THEN
         RAISE EXCEPTION 'credential % is revoked; revocation is monotonic', OLD.id USING ERRCODE = '23514';
     END IF;
-    IF NEW.principal_id <> OLD.principal_id
+    IF NEW.id <> OLD.id
+       OR NEW.principal_id <> OLD.principal_id
        OR NEW.credential_class <> OLD.credential_class
        OR NEW.domain_owner <> OLD.domain_owner
        OR NEW.external_reference IS DISTINCT FROM OLD.external_reference
-       OR NEW.rotation_parent_id IS DISTINCT FROM OLD.rotation_parent_id THEN
-        RAISE EXCEPTION 'credential % identity and lineage are immutable', OLD.id USING ERRCODE = '23514';
+       OR NEW.rotation_parent_id IS DISTINCT FROM OLD.rotation_parent_id
+       OR NEW.secret_hash <> OLD.secret_hash
+       OR NEW.hash_algorithm <> OLD.hash_algorithm
+       OR NEW.display_prefix <> OLD.display_prefix
+       OR NEW.fingerprint IS DISTINCT FROM OLD.fingerprint
+       OR NEW.created_by IS DISTINCT FROM OLD.created_by
+       OR NEW.created_at <> OLD.created_at THEN
+        RAISE EXCEPTION 'credential % identity, lineage and verifier material are immutable', OLD.id USING ERRCODE = '23514';
     END IF;
     IF NOT (NEW.scopes <@ OLD.scopes AND NEW.audiences <@ OLD.audiences) THEN
         RAISE EXCEPTION 'credential % scopes and audiences may be narrowed in place, never widened', OLD.id

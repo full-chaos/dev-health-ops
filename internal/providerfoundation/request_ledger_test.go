@@ -138,3 +138,75 @@ func TestANilLedgerCountsNothingAndTheLedgerIsConcurrencySafe(t *testing.T) {
 		t.Fatalf("counted %d, want 800", got)
 	}
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// redirectingClient follows redirects like a stock http.Client: /old answers a
+// 302 to location, any other path answers 200. hits counts the requests that
+// reached the wire.
+func redirectingClient(t *testing.T, ledger *RequestLedger, location string, hits *int) *HTTPClient {
+	t.Helper()
+	hc := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		*hits++
+		if r.URL.Path == "/old" {
+			return testHTTPResponse(r, http.StatusFound, http.Header{"Location": {location}}, ``), nil
+		}
+		return testHTTPResponse(r, http.StatusOK, http.Header{}, `{}`), nil
+	})}
+	client := newTestHTTPClient(t, hc, RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	client.Ledger = ledger
+	return client
+}
+
+func TestAFollowedRedirectHopIsCountedAsAWireRequest(t *testing.T) {
+	t.Parallel()
+	ctx := WithRequestAccount(context.Background(), "prs", "")
+	for name, call := range map[string]func(*HTTPClient) (*http.Response, error){
+		"authenticated": func(c *HTTPClient) (*http.Response, error) { return c.Do(ctx, http.MethodGet, "/old", nil) },
+		"unauthenticated": func(c *HTTPClient) (*http.Response, error) {
+			return c.DoUnauthenticated(ctx, http.MethodGet, "https://api.github.test/old")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ledger, hits := NewRequestLedger(), 0
+			client := redirectingClient(t, ledger, "https://api.github.test/next", &hits)
+			response, err := call(client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = response.Body.Close()
+			got := entriesOf(ledger)
+			if hits != 2 || got[LedgerKey{"prs", "rest_core"}] != 2 || len(got) != 1 {
+				t.Fatalf("wire requests = %d, ledger = %v, want both requests of the redirect under prs/rest_core", hits, got)
+			}
+		})
+	}
+}
+
+func TestARefusedRedirectHopIsNotCounted(t *testing.T) {
+	t.Parallel()
+	ledger, hits := NewRequestLedger(), 0
+	client := redirectingClient(t, ledger, "https://elsewhere.test/x", &hits)
+	ctx := WithRequestAccount(context.Background(), "prs", "")
+	if response, err := client.Do(ctx, http.MethodGet, "/old", nil); err == nil {
+		_ = response.Body.Close()
+		t.Fatal("a redirect off the credential origin was followed")
+	}
+	got := entriesOf(ledger)
+	if hits != 1 || got[LedgerKey{"prs", "rest_core"}] != 1 || len(got) != 1 {
+		t.Fatalf("wire requests = %d, ledger = %v, want the one request that was sent", hits, got)
+	}
+}
+
+func TestAZeroValueLedgerCounts(t *testing.T) {
+	t.Parallel()
+	ledger := &RequestLedger{}
+	ledger.Record(LedgerKey{"prs", "rest_core"})
+	ledger.Record(LedgerKey{"prs", "rest_core"})
+	if got := entriesOf(ledger); got[LedgerKey{"prs", "rest_core"}] != 2 {
+		t.Fatalf("ledger = %v, want 2", got)
+	}
+}

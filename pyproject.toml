@@ -173,6 +173,12 @@ include-package-data = true
 ]
 
 [tool.setuptools.data-files]
+# contracts/auth/v1/jsonschema ships for the same reason: the authclient parsers
+# load their schemas at RUNTIME (authclient.contracts.repo_root falls back to the
+# data prefix). A wheel without them fails every parser outside a checkout
+# (codex round 3 of CHAOS-4933, executed); tests/tooling/test_authclient_installed_wheel.py
+# builds the wheel and runs every public parser from an isolated environment.
+"contracts/auth/v1/jsonschema" = ["contracts/auth/v1/jsonschema/*.json"]
 "contracts/jobs/v1" = [
   "contracts/jobs/v1/*.json",
   "contracts/jobs/v1/*.md",

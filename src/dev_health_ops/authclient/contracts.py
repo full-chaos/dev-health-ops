@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import re
+import sysconfig
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -49,18 +50,28 @@ class ContractError(RuntimeError):
 
 
 def repo_root() -> Path:
-    """Return the ops repo root that owns the contracts directory.
+    """Return the directory that owns ``contracts/auth/v1/jsonschema``.
 
-    Walks up from this module until a directory containing
-    ``contracts/auth/v1/jsonschema`` is found. Raises rather than guessing:
-    a wrong root would validate against a contract that is not this tree's.
+    In a checkout that is the ops repo root, found by walking up from this
+    module. In an INSTALLED package there is no checkout: the schemas ship as
+    wheel data files (``[tool.setuptools.data-files]`` in pyproject.toml, the
+    same mechanism ``contracts/jobs`` uses) and land under the interpreter's
+    data prefix, so that prefix is the fallback. Packaging and resolution are one
+    contract: dropping either half makes every parser fail outside a checkout,
+    which ``tests/tooling/test_authclient_installed_wheel.py`` proves by
+    installing the built wheel in an isolated environment.
+
+    Raises rather than guessing: a wrong root would validate against a contract
+    that is not this tree's.
     """
-    for candidate in (Path(__file__).resolve(), *Path(__file__).resolve().parents):
+    candidates = [*Path(__file__).resolve().parents, Path(sysconfig.get_path("data"))]
+    for candidate in candidates:
         if (candidate / _CONTRACTS_SUBPATH / "jsonschema").is_dir():
             return candidate
     raise ContractError(
-        "could not locate the ops repo root above "
-        f"{Path(__file__).resolve()} -- no ancestor contains "
+        "could not locate the contracts directory above "
+        f"{Path(__file__).resolve()} or under the data prefix "
+        f"{sysconfig.get_path('data')} -- none contains "
         f"{_CONTRACTS_SUBPATH / 'jsonschema'}. Refusing to guess a root, "
         "because validating against the wrong contracts directory reports "
         "success while checking a different contract."

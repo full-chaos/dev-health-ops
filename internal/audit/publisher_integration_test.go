@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -402,7 +403,7 @@ func TestCommitRefusesASecretAttributeAndWritesNothing(t *testing.T) {
 			_, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug) VALUES (gen_random_uuid(), 'leak', 'leak')`)
 			return err
 		},
-		Audit: AuditEvent{EventType: "leak.probe", Outcome: OutcomeAllowed, Attributes: map[string]any{"refresh_token": "rt_0123456789abcdef0123"}},
+		Audit: AuditEvent{EventType: "leak.probe", Outcome: OutcomeAllowed, Attributes: map[string]any{"refresh_token": "rt_" + strings.Repeat("ab12", 5)}},
 		Event: OutboxEvent{AggregateType: "a", AggregateID: "leak", EventType: "leak.probe", IdempotencyKey: "leak-1"},
 	})
 	if !errors.Is(err, ErrAttributeNotAllowed) {

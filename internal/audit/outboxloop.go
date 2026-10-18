@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -87,6 +89,9 @@ func (s outboxStepper) Step(ctx context.Context, now time.Time) error {
 	}
 	// The reaper runs whether or not the publisher did: it deletes only rows
 	// already marked published, and a failed publish must not stop it.
+	if _, err := Reap(ctx, s.pool, s.config.Schema, now.Add(-s.config.PublishedRetention), s.config.ReapLimit); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -141,6 +146,19 @@ func newOutboxLoop(s stepper, config LoopConfig, publishing bool) (*OutboxLoop, 
 	}
 	if err := config.Registry.RegisterRequired(CheckOutboxLoop, l.readiness); err != nil {
 		return nil, fmt.Errorf("register outbox loop readiness: %w", err)
+	}
+	enabled := int64(0)
+	if publishing {
+		enabled = 1
+	}
+	if _, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/audit").Int64ObservableGauge(
+		"devhealth_auth_outbox_publisher_enabled",
+		metric.WithDescription("1 when an outbox sink is configured and events are delivered; 0 when publishing is disabled (no sink), so zero deliveries is not read as healthy."),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			o.Observe(enabled)
+			return nil
+		})); err != nil {
+		return nil, fmt.Errorf("register publisher-enabled gauge: %w", err)
 	}
 	if !publishing {
 		logger.Info("auth outbox delivery disabled: no sink configured; the reaper still runs")

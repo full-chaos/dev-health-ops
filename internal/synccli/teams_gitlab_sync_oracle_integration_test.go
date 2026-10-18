@@ -645,6 +645,12 @@ func TestMembersOnlyGitLabRunIsNotReportedEmpty(t *testing.T) {
 
 	fake := newFakeGitLab(t)
 	fake.set("tok", fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, nil, map[string]string{"alice": "alice@example.com"})
+	// An earlier --structure run imported the group: a run without it writes
+	// memberships only for imported teams (CHAOS-9123).
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, org_id, provider, native_team_key, is_active, updated_at)
+		VALUES ('gl:acme', generateUUIDv4(), 'Acme', 'org-1', 'gitlab', 'acme', 1, '2026-09-01 00:00:00.000000')`); err != nil {
+		t.Fatal(err)
+	}
 
 	var stdout, stderr strings.Builder
 	d := defaultDeps()
@@ -683,7 +689,52 @@ func TestMembersOnlyGitLabRunIsNotReportedEmpty(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if teamCount != 0 {
-		t.Fatalf("--structure was not selected: expected 0 teams rows, got %d", teamCount)
+	if teamCount != 1 {
+		t.Fatalf("--structure was not selected: expected only the seeded teams row, got %d", teamCount)
+	}
+}
+
+// A --members run whose teams were never imported writes no membership
+// (CHAOS-9123), and its result counts what it wrote: zero, so the run is the
+// empty result, never a success that reports memberships it did not write.
+func TestMembersOnlyGitLabRunOfUnimportedTeamsCountsNoMembership(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	fake := newFakeGitLab(t)
+	fake.set("tok", fakeGitLabGroup{ID: 1, FullPath: "acme", Name: "Acme", Members: []string{"alice"}}, nil, map[string]string{"alice": "alice@example.com"})
+
+	var stdout, stderr strings.Builder
+	d := defaultDeps()
+	d.now = func() time.Time { return time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC) }
+	d.doer = http.DefaultClient
+	d.openStore = func(context.Context, string) (driver.Conn, error) { return &keepOpen{conn}, nil }
+	args := []string{"--provider", "gitlab", "--org", "org-1", "--owner", "acme", "--auth", "tok", "--members"}
+	env := map[string]string{"CLICKHOUSE_URI": instance.URI, "GITLAB_URL": fake.base()}
+	lookup := func(key string) (string, bool) { v, ok := env[key]; return v, ok }
+	code := runTeams(ctx, cli.Env{Args: args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr}, d)
+	if code == cli.ExitOK {
+		t.Fatalf("--members over a team that was never imported exited 0: stdout %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "empty_result") {
+		t.Fatalf("exit %d, stderr %q, want the empty_result refusal", code, stderr.String())
+	}
+	var memberships uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM team_memberships FINAL WHERE org_id = ?", "org-1").Scan(&memberships); err != nil {
+		t.Fatal(err)
+	}
+	if memberships != 0 {
+		t.Fatalf("%d memberships written for a team that was never imported", memberships)
 	}
 }

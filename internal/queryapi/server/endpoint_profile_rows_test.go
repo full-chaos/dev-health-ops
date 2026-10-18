@@ -286,3 +286,61 @@ func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
 	}
 }
+
+// TestClassConsumersNameEveryQueryAPIRouteThatAcceptsThem keeps the credential
+// class registry honest about WHERE each class is accepted (CHAOS-5522). For
+// EVERY class, every query-api profile row that lists the class in
+// accepted_credential_classes must have its route named in the class's
+// consumers in credential-classes.json. The /api/v1/ REST read routes are
+// covered by the single token "/api/v1/*". The class is the defect, not one
+// class: the first instance was the effective-principal envelope.
+func TestClassConsumersNameEveryQueryAPIRouteThatAcceptsThem(t *testing.T) {
+	raw, err := os.ReadFile("../../../contracts/auth/v1/credential-classes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registry struct {
+		Classes []struct {
+			ClassID   string `json:"class_id"`
+			Consumers []struct {
+				Description string `json:"description"`
+			} `json:"consumers"`
+		} `json:"classes"`
+	}
+	if err := json.Unmarshal(raw, &registry); err != nil {
+		t.Fatal(err)
+	}
+	described := map[string]string{}
+	for _, entry := range registry.Classes {
+		for _, consumer := range entry.Consumers {
+			described[entry.ClassID] += " " + consumer.Description + " "
+		}
+		if _, ok := described[entry.ClassID]; !ok {
+			described[entry.ClassID] = " "
+		}
+	}
+	checked := 0
+	for _, row := range loadQueryAPIRows(t) {
+		route, _ := row["route"].(string)
+		token := route
+		if strings.HasPrefix(route, "/api/v1/") {
+			token = "/api/v1/*"
+		}
+		classes, _ := row["accepted_credential_classes"].([]any)
+		for _, c := range classes {
+			class, _ := c.(string)
+			text, registered := described[class]
+			if !registered {
+				t.Errorf("route %s lists class %q, which the registry does not define", route, class)
+				continue
+			}
+			checked++
+			if !strings.Contains(text, " "+token+" ") && !strings.Contains(text, " "+token+",") && !strings.Contains(text, " "+token+".") {
+				t.Errorf("route %s accepts %s but that class's consumers do not name it (token %q) in: %s", route, class, token, strings.TrimSpace(text))
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no (route, class) pair was checked: the test measured nothing")
+	}
+}

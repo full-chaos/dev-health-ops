@@ -205,6 +205,12 @@ func gitlabSnapshotRunAs(
 	selections TeamCatalogSelections, strict bool, at time.Time, integrationID string, census OwnershipScopeCensus,
 ) (TeamCatalogResult, error) {
 	t.Helper()
+	// The groups were imported by an earlier teams run: a run with teams off
+	// writes links only for imported teams.
+	fake.mu.Lock()
+	groups := append([]string{"gl:org"}, prefixed("gl:", fake.subgroups)...)
+	fake.mu.Unlock()
+	seedCatalogTeams(ctx, t, conn, orgID, "gitlab", groups...)
 	collector := GitLabTeamCatalogCollector{Sink: GitLabTeamCatalogClickHouseEffects{
 		Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	}, ScopeCensus: census}
@@ -615,4 +621,12 @@ func (conn openOwnershipReadFailingConn) Query(ctx context.Context, query string
 		return nil, errors.New("injected team_project_ownership read failure")
 	}
 	return conn.Conn.Query(ctx, query, args...)
+}
+
+func prefixed(prefix string, values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, prefix+value)
+	}
+	return out
 }

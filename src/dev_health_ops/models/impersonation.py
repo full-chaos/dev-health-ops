@@ -20,18 +20,18 @@ class ImpersonationSession(Base):
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
 
     # Admin initiating the impersonation
-    admin_user_id: Mapped[uuid.UUID] = mapped_column(
+    admin_user_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
 
     # Target user being impersonated
-    target_user_id: Mapped[uuid.UUID] = mapped_column(
+    target_user_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
 

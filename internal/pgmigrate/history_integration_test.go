@@ -69,7 +69,7 @@ func goHistory(t *testing.T) string {
 
 // historyPythonBuild is the build whose Python CLI (Alembic) answered the scenarios: a build that still
 // carried it.
-const historyPythonBuild = "cf5e0591401c9c72e117a41c8d3bfe084ba85fba"
+const historyPythonBuild = "055816fd2325f6c0dda555e46ac3ff2d0a81a796"
 
 // TestHistoryMatchesTheFrozenAlembicOutput compares dho's `history` text with what the REAL `dev-hops migrate
 // postgres history` printed in each scenario, and the one verb dho refuses (`downgrade`) with what Alembic did
@@ -84,7 +84,7 @@ func TestHistoryMatchesTheFrozenAlembicOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/history.json",
 		PythonBuild: historyPythonBuild,
-		SHA256:      "1e280344b46abdf43e5fb2a6e7479bc87665c34ca6bc13aeffa052b8dfca29ca",
+		SHA256:      "b05ccff79ec7f4697df39d1a51cf5a4029129161c0b45faa9f92b99fc6c83f8b",
 		Recipe: "git worktree add --detach $DIR " + historyPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestHistoryMatchesTheFrozenAlembicOutput$' -python-root $DIR",
 	})
@@ -234,7 +234,7 @@ func recordedVersions(t *testing.T, uri string) []string {
 }
 
 // historyWalkSHA256 pins testdata/golden/history_walk.json (the record verb rewrites it).
-const historyWalkSHA256 = "bf1497f2acaa2953058d59c0c6626c3b0680eab6a165a1f1f39afb8e90143eff"
+const historyWalkSHA256 = "6bf5f0c52748c237fa8531b9df4870597a4f400f2e97aa9f252eef3eab8349a9"
 
 // historyWalkSettings are the variables that shape the walk program's answer: the producer's environment AND
 // part of the golden's request key.

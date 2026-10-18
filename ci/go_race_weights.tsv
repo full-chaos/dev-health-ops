@@ -83,6 +83,7 @@ internal/apiservice/metricsvenue	1
 internal/apiservice/ownershipvenue	1
 internal/apiservice/ssovenue	1
 internal/atlassianteams	18
+internal/audit	96
 internal/auth/authconfig	1
 internal/auth/authruntime	5
 internal/auth/authstore	1

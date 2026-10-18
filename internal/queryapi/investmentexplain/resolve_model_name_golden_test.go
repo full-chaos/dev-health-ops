@@ -19,6 +19,9 @@ type resolveModelNameGolden struct {
 	Result *string `json:"result"`
 }
 
+// Go diverges from Python on one point: the generic LLM_MODEL applies to the
+// platform provider (LLM_PROVIDER) only, not to every provider (chris
+// CHAOS-4978 + ruling D6043; CHAOS-10011). The generic-model case sets LLM_PROVIDER.
 func TestResolveModelNameMatchesPythonGolden(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("testdata", "resolve_model_name__*.json"))
 	if err != nil {
@@ -33,7 +36,7 @@ func TestResolveModelNameMatchesPythonGolden(t *testing.T) {
 	// restores per-test, but subtests share the parent's process-wide env
 	// until their own cleanup runs, so an explicit clear keeps cases
 	// order-independent rather than relying on subtest isolation timing).
-	for _, name := range []string{"LLM_MODEL", "LLM_MODEL_OPENAI", "LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"} {
+	for _, name := range []string{"LLM_PROVIDER", "LLM_MODEL", "LLM_MODEL_OPENAI", "LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"} {
 		t.Setenv(name, "")
 		_ = os.Unsetenv(name)
 	}
@@ -50,7 +53,7 @@ func TestResolveModelNameMatchesPythonGolden(t *testing.T) {
 				t.Fatalf("decode golden: %v", err)
 			}
 
-			for _, name := range []string{"LLM_MODEL", "LLM_MODEL_OPENAI", "LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"} {
+			for _, name := range []string{"LLM_PROVIDER", "LLM_MODEL", "LLM_MODEL_OPENAI", "LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"} {
 				t.Setenv(name, "")
 				_ = os.Unsetenv(name)
 			}

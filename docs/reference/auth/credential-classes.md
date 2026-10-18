@@ -246,8 +246,10 @@ fields; it cannot write.
 
 ## Go api: the internal listener (CHAOS-7181)
 
-The Go api serves `/api/v1/internal/acr/*` with **no credential check**: the
-network is the control, not a token. Those routes are mounted only on the
+The Go api serves `/api/v1/internal/acr/*` behind two controls: the network,
+and a `svc_acr_` bearer check on every route (CHAOS-9993; health and
+entitlements port `api/internal/acr.py`, llm-config adds its own scope). Those
+routes are mounted only on the
 internal listener (`--api-internal-addr` / `DEV_HEALTH_API_INTERNAL_ADDR`,
 chart `goApi.internal.port`, default 8091), never on the public api listener,
 which answers them 404. No Ingress may route to the internal Service

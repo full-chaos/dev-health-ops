@@ -413,6 +413,10 @@ type ProviderError struct {
 	// Reason is a closed-set transport failure reason (TransportReason*),
 	// set only when no HTTP response arrived. Never raw cause text.
 	Reason string
+	// Dimension is the request budget dimension a rate-limited response
+	// belongs to (see RateLimitDimension), empty on every other class and when
+	// no request went out (a gate denial).
+	Dimension string
 }
 
 const maxProviderErrorBodyInMessage = 500

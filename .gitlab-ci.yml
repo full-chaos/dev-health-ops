@@ -78,7 +78,7 @@ variables:
   PYTHONDONTWRITEBYTECODE: "1"
   PYTHONUNBUFFERED: "1"
   GIT_DEPTH: "0"
-  GO_IMAGE: "golang:1.27.0-bookworm"
+  GO_IMAGE: "golang:1.27.2-bookworm"
   DOCKER_CLI_VERSION: "27.5.1"
   DOCKER_IMAGE: "docker:27"
   DIND_IMAGE: "docker:27-dind"
@@ -866,7 +866,7 @@ security:go-image-build:
   rules: *code_rules
   parallel:
     matrix:
-      - TARGET: ["operator", "contractcheck", "migrate", "dho"]
+      - TARGET: ["operator", "contractcheck", "migrate", "dho", "auth-service", "auth-migrate"]
   script:
     - |
       docker build \
@@ -960,7 +960,7 @@ build:go-images:
   parallel:
     matrix:
       - DOCKER_FILE: ["docker/go-worker.Dockerfile"]
-        IMAGE: ["operator", "contractcheck", "migrate", "dho"]
+        IMAGE: ["operator", "contractcheck", "migrate", "dho", "auth-service", "auth-migrate"]
         PLATFORM: ["linux/amd64", "linux/arm64"]
       - DOCKER_FILE: ["docker/go-api-tools.Dockerfile"]
         IMAGE: ["api-tools"]
@@ -1007,7 +1007,7 @@ build:go-images-manifest:
     - if: $CI_COMMIT_TAG && $CI_REGISTRY_USER
   parallel:
     matrix:
-      - IMAGE: ["operator", "contractcheck", "migrate", "dho", "api-tools"]
+      - IMAGE: ["operator", "contractcheck", "migrate", "dho", "auth-service", "auth-migrate", "api-tools"]
   script:
     - |
       set -eu

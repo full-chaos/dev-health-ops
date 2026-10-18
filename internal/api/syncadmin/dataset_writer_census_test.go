@@ -23,13 +23,12 @@ import (
 // is a design change: it is added here on purpose, with its reason, or not
 // at all. Options-only UPDATEs do not set the column and are not writers.
 var datasetStateWriters = map[string]string{
-	"internal/api/syncadmin.applySelectionChange":              "the config save: the rows of the targets the user checked or unchecked",
-	"internal/api/syncadmin.createPlannerManagedConfig":        "the config create: the rows of the new integration's selected targets",
-	"internal/api/syncadmin.repairPagerDutyDatasets":           "the config create for PagerDuty: the operational set on, every other row off",
-	"internal/api/integrationsadmin.applyDataset":              "the integration dataset endpoint: one row created or switched",
-	"internal/scheduler/sync.ensureExplicitlyRequestedDataset": "plan time: an explicitly requested key that has no row gets an enabled row",
-	"internal/scheduler/sync.applyDomainPlanMutations":         "plan time: the automatic security row (insert only) and the PagerDuty repair",
-	"internal/fixturescli.Seed":                                "the fixtures verb: an enabled row for the synthetic dataset when missing",
+	"internal/api/syncadmin.applySelectionChange":       "the config save: the rows of the targets the user checked or unchecked",
+	"internal/api/syncadmin.createPlannerManagedConfig": "the config create: the rows of the new integration's selected targets",
+	"internal/api/syncadmin.repairPagerDutyDatasets":    "the config create for PagerDuty: the operational set on, every other row off",
+	"internal/api/integrationsadmin.applyDataset":       "the integration dataset endpoint: one row created or switched",
+	"internal/scheduler/sync.applyDomainPlanMutations":  "plan time: the automatic security row (insert only) and the PagerDuty repair",
+	"internal/fixturescli.Seed":                         "the fixtures verb: an enabled row for the synthetic dataset when missing",
 }
 
 var datasetStateWrite = regexp.MustCompile(`(?is)\binsert\s+into\s+(public\.)?integration_datasets\b|\bupdate\s+(public\.)?integration_datasets\s+set\b[^;]*\bis_enabled\b`)

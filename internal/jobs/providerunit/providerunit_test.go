@@ -747,6 +747,7 @@ type memoryUnitRepository struct {
 	releaseCalls               int
 	contentionDeferrals        int
 	rateLimitDeferrals         int
+	rateLimitObservations      []providersync.RateLimitObservation
 	rateLimitFirstSeen         *time.Time
 	availableAt                time.Time
 	chunkContinuationDeferrals int
@@ -878,12 +879,14 @@ func (repository *memoryUnitRepository) DeferForRateLimit(
 	claim providersync.Claim,
 	availableAt time.Time,
 	now time.Time,
+	observation providersync.RateLimitObservation,
 ) error {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	if repository.status != "running" || repository.lastClaim.Owner != claim.Owner {
 		return providersync.ErrLeaseLost
 	}
+	repository.rateLimitObservations = append(repository.rateLimitObservations, observation)
 	repository.rateLimitDeferrals++
 	if repository.rateLimitFirstSeen == nil {
 		stamped := now

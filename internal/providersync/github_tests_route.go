@@ -920,6 +920,16 @@ func downloadGitHubTestsArtifact(
 		return nil, requests, true, nil
 	}
 	if response.StatusCode >= 400 {
+		message, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		if readErr != nil {
+			return nil, requests, false, logging.TransportFailure(readErr)
+		}
+		// Classified like the GitLab artifact route: a rate limit of the
+		// artifact store defers the unit with its dimension; every other
+		// failure keeps the class ClassifyHTTPForRequest gives it.
+		if classified := providerfoundation.ClassifyHTTPForRequest("github", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
+			return nil, requests, false, classified
+		}
 		return nil, requests, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))

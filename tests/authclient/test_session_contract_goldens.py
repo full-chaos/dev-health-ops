@@ -77,10 +77,7 @@ def test_client_rejected_fixtures_pass_the_schema_but_are_refused(
 ) -> None:
     surface, parse = SURFACES[directory]
     raw = (_dir(directory) / entry["file"]).read_bytes()
-    try:
-        document = json.loads(raw)
-    except json.JSONDecodeError:  # pragma: no cover
-        pytest.fail("fixture is not JSON")
+    document = json.loads(raw)
     assert not violations(surface, document), (
         "client-rejected fixture must pass the schema"
     )

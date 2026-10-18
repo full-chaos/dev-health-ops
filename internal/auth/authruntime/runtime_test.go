@@ -771,6 +771,6 @@ func TestHealthcheckMirrorsReadiness(t *testing.T) {
 		t.Fatalf("healthcheck against a not-ready service = %d %q, want 1 and a 503 diagnostic", code, stderr)
 	}
 	if code := stop(); code != 0 {
-		t.Fatalf("Execute exited %d after a clean shutdown, want 0", code)
+		t.Fatalf("Execute exited %d after a clean shutdown, want 0; logs:\n%s", code, logs.String())
 	}
 }

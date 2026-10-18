@@ -453,7 +453,14 @@ func runHealthcheck(parent context.Context, cfg authconfig.Config, streams IO) i
 		fmt.Fprintln(streams.Stderr, "healthcheck: could not build the request")
 		return 1
 	}
-	response, err := (&http.Client{Timeout: cfg.HealthCheckTimeout + healthcheckSlack}).Do(request)
+	// No keep-alive: a probe that leaves a pooled or pre-dialled connection behind
+	// holds the operator listener's graceful shutdown open for the idle timeout
+	// when this runs in-process (the tests), and buys nothing for a one-shot probe.
+	client := &http.Client{
+		Timeout:   cfg.HealthCheckTimeout + healthcheckSlack,
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		fmt.Fprintln(streams.Stderr, "healthcheck: operator listener unreachable")
 		return 1

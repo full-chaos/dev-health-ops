@@ -92,7 +92,12 @@ def test_every_fixture_file_on_disk_is_claimed_by_the_manifest() -> None:
         for path in _fixture_dir().glob("*.json")
         if path.name != "manifest.json"
     }
-    claimed = set(ACCEPT) | {name for name, _, _ in REJECT} | set(REJECT_BY_CLIENT)
+    claimed = (
+        set(ACCEPT)
+        | {name for name, _, _ in REJECT}
+        | set(REJECT_BY_CLIENT)
+        | set(RAW_DUPLICATES)
+    )
     assert on_disk == claimed, (
         f"unclaimed on disk: {sorted(on_disk - claimed)}; "
         f"claimed but absent: {sorted(claimed - on_disk)}"
@@ -276,19 +281,19 @@ def test_format_assertion_is_actually_enabled_not_merely_requested() -> None:
     ``rfc3339-validator`` is importable -- so a suite can pass a
     ``format_checker`` and still assert nothing. This drives a value that is
     well-formed under the schema's ``pattern`` but is NOT a real RFC 3339
-    instant (month 13), so only ``format`` can reject it. If the assertion
+    instant (Feb 30), so only ``format`` can reject it. If the assertion
     is off, this test goes red instead of the corpus silently weakening.
     """
     document = _load("valid-human-minimal.json")
-    document["expires_at"] = "2026-13-02T23:25:00Z"
+    document["expires_at"] = "2026-02-30T23:25:00Z"
     found = violations(SURFACE, document)
     keywords = {v.keyword for v in found}
     assert "pattern" not in keywords, (
-        "the control is wrong: month 13 should satisfy the shape pattern, so that "
+        "the control is wrong: Feb 30 should satisfy the shape pattern, so that "
         "this test isolates `format`. Got: " + "; ".join(str(v) for v in found)
     )
     assert "format" in keywords, (
-        "month 13 was accepted, so `format: date-time` is annotation-only here. "
+        "Feb 30 was accepted, so `format: date-time` is annotation-only here. "
         "Install rfc3339-validator (declared in pyproject.toml) -- without it the "
         "format check silently checks nothing while the suite stays green. Got: "
         + ("; ".join(str(v) for v in found) or "no violations at all")

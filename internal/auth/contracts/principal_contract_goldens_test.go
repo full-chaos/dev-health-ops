@@ -290,7 +290,10 @@ func TestAcceptedFixturesRoundTripThroughTheClient(t *testing.T) {
 			if principal.Authentication.Assurance == "" {
 				t.Error("authentication.assurance decoded empty -- check the JSON tag")
 			}
-			if principal.Authentication.AuthenticatedAt.IsZero() {
+			// The range-limit fixtures ARE the zero time (0001-01-01T00:00:00Z),
+			// so IsZero cannot tell "decoded" from "not decoded" for them.
+			if principal.Authentication.AuthenticatedAt.IsZero() &&
+				!strings.HasPrefix(entry.File, "valid-authenticated-at-e") {
 				t.Error("authentication.authenticated_at decoded to the zero time")
 			}
 			if len(principal.Authentication.Methods) == 0 {

@@ -158,6 +158,9 @@ func TestFanoutPanicLogsTheFailedLineCountsItAndPanicsOn(t *testing.T) {
 	if got := strings.Count(logs.String(), `"msg":"post_sync_fanout.failed"`); got != 1 || !strings.Contains(logs.String(), `"reason":"panic"`) {
 		t.Fatalf("failed lines = %d:\n%s", got, logs.String())
 	}
+	if !strings.Contains(logs.String(), `"step":"args"`) {
+		t.Fatalf("the panic line must carry the stage the fan-out had reached (args):\n%s", logs.String())
+	}
 	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomeError {
 		t.Fatalf("counter outcomes = %v, want one error", observer.outcomes)
 	}

@@ -42,7 +42,7 @@ investigation. The purposes are a fixed list:
 | --- | --- |
 | `investigate` | Ask Dev interpretation and synthesis (served to Context Fabric by the internal `llm-config` route) |
 | `explain` | Investment and work unit explanations |
-| `categorize` | Investment categorization |
+| `categorize` | Investment categorization (the `heavy` worker reads the resolved config through the api; the operator enables it with `ORG_LLM_CONFIG_URL`/`ORG_LLM_CONFIG_TOKEN`, see the environment reference) |
 
 For each purpose the model is the override when one is stored, otherwise the
 default row, otherwise the platform model. An override never

@@ -1,0 +1,10 @@
+{
+  "accepted_credential_classes": [
+    "acr_client_credential"
+  ],
+  "classification": "public",
+  "method": "GET",
+  "public_rationale": "x",
+  "route": "/.well-known/jwks.json",
+  "schema_version": "endpoint-auth-profile.v1"
+}

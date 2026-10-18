@@ -76,6 +76,15 @@ def test_gate_jobs_run_only_on_a_relevant_change_and_the_gate_fans_in() -> None:
     assert '[ "${pair#*=}" = "success" ]' in script
 
 
+def test_source_commit_history_check_runs_only_where_history_is_fetched() -> None:
+    jobs = _workflow()["jobs"]
+    test_job = jobs["auth-test"]
+    assert test_job["steps"][0]["with"]["fetch-depth"] == 0
+    assert any(step.get("run") == "bash ci/check_go.sh auth history" for step in test_job["steps"])
+    for key in ("auth-go-quality", "auth-fuzz"):
+        assert all("auth history" not in step.get("run", "") for step in jobs[key]["steps"]), key
+
+
 def test_every_stage_the_workflow_calls_exists_in_the_verb() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     verb = CHECK_GO.read_text(encoding="utf-8")
@@ -86,6 +95,7 @@ def test_every_stage_the_workflow_calls_exists_in_the_verb() -> None:
         "test",
         "race",
         "fuzz",
+        "history",
         "vuln",
         "middleware",
         "fuzz-registry",

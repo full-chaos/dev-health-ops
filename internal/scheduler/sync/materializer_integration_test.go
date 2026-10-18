@@ -1664,33 +1664,26 @@ func TestNativeMaterializerRecordsPlanTelemetryOnlyAfterCommit(t *testing.T) {
 	}
 }
 
-// TestNativeMaterializerCreatesExplicitlyRequestedDatasetThatDoesNotYetExist
-// proves a codex review finding: Python's _reconcile_explicit_requested_datasets
-// (planner.py:858-904) enables any explicitly requested dataset that has no
-// integration_datasets row yet -- "every dataset ... is opt-in and
-// reconciled uniformly here: a caller (operator, backfill, or scheduled
-// trigger) must name a dataset in request.dataset_keys for it to be
-// created/enabled." Go's loadPlanDatasets used to only FILTER existing
-// rows; a manual/backfill selector naming a dataset the config had never
-// enabled before silently planned a ZERO-unit run instead of creating the
-// requested work.
-func TestNativeMaterializerCreatesExplicitlyRequestedDatasetThatDoesNotYetExist(t *testing.T) {
+// TestNativeMaterializerPlansExplicitlyRequestedDatasetWithoutARow covers
+// CHAOS-8819 (decision C6): a manual/backfill selector naming a dataset that
+// has no integration_datasets row plans the work once and writes no row, so
+// the schedule keeps following the boxes. Python's
+// _reconcile_explicit_requested_datasets enabled the row; chris ruled
+// otherwise (comment 0c7f185c on CHAOS-8795).
+func TestNativeMaterializerPlansExplicitlyRequestedDatasetWithoutARow(t *testing.T) {
 	fixture := startMaterializerPostgres(t)
 	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC) // single chunk
 	// "work-item-labels" is explicitly requested but NO integration_datasets
-	// row for it exists yet -- only "work-items" does (startBackfillTriggerFixture's
-	// own fixture row). The fix must create+enable one before planning.
+	// row for it exists -- only "work-items" does (startBackfillTriggerFixture's
+	// own fixture row).
 	occurrence := startBackfillTriggerFixture(t, fixture, since, before, "work-item-labels")
 
-	var existingCount int
+	var rowsBefore int
 	if err := fixture.pool.QueryRow(context.Background(),
-		`SELECT count(*) FROM integration_datasets WHERE dataset_key='work-item-labels'`,
-	).Scan(&existingCount); err != nil {
+		`SELECT count(*) FROM integration_datasets`,
+	).Scan(&rowsBefore); err != nil {
 		t.Fatal(err)
-	}
-	if existingCount != 0 {
-		t.Fatalf("test setup bug: work-item-labels already has %d rows, want 0 before Materialize", existingCount)
 	}
 
 	materializer, err := NewNativeMaterializer(fixture.pool)
@@ -1702,17 +1695,27 @@ func TestNativeMaterializerCreatesExplicitlyRequestedDatasetThatDoesNotYetExist(
 		t.Fatal(err)
 	}
 	if plan.PlannedUnits == 0 {
-		t.Fatalf("plan.PlannedUnits = 0, want > 0 -- the explicitly requested dataset was never created/enabled: %+v", plan)
+		t.Fatalf("plan.PlannedUnits = 0, want > 0 -- the explicitly requested dataset was not planned: %+v", plan)
 	}
 
-	var isEnabled bool
+	var labelUnits int
 	if err := fixture.pool.QueryRow(context.Background(),
-		`SELECT is_enabled FROM integration_datasets WHERE dataset_key='work-item-labels'`,
-	).Scan(&isEnabled); err != nil {
+		`SELECT count(*) FROM sync_run_units WHERE processor_flags->>'family_dataset_work_item_labels' = 'true'`,
+	).Scan(&labelUnits); err != nil {
 		t.Fatal(err)
 	}
-	if !isEnabled {
-		t.Fatal("integration_datasets row for work-item-labels exists but is not enabled")
+	if labelUnits == 0 {
+		t.Fatal("no unit carries the work-item-labels family flag: the explicit request was not planned")
+	}
+
+	var rowsAfter int
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM integration_datasets`,
+	).Scan(&rowsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if rowsAfter != rowsBefore {
+		t.Fatalf("integration_datasets rows %d -> %d: an explicit request must not write a dataset row", rowsBefore, rowsAfter)
 	}
 }
 

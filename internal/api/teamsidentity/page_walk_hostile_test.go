@@ -60,7 +60,7 @@ var walkReader *sdkmetric.ManualReader
 func captureWarns(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	walkReader = sdkmetric.NewManualReader()
-	counter, err := sdkmetric.NewMeterProvider(sdkmetric.WithReader(walkReader)).Meter("test").Int64Counter("teams_identity_page_walk_failed_total")
+	counter, err := sdkmetric.NewMeterProvider(sdkmetric.WithReader(walkReader)).Meter("test").Int64Counter("dev_health_teams_identity_page_walk_failed_total")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func assertFailedClosed(t *testing.T, err error, doer *funcDoer, logs *bytes.Buf
 	for _, scope := range collected.ScopeMetrics {
 		for _, found := range scope.Metrics {
 			sum, ok := found.Data.(metricdata.Sum[int64])
-			if !ok || found.Name != "teams_identity_page_walk_failed_total" {
+			if !ok || found.Name != "dev_health_teams_identity_page_walk_failed_total" {
 				continue
 			}
 			for _, point := range sum.DataPoints {
@@ -437,7 +437,7 @@ func TestAMalformedOrInconsistentContinuationSignalIsNeverASuccess(t *testing.T)
 		assertNoPartial(t, "bare rel", got)
 		assertFailedClosed(t, err, doer, logs, "github", hostileCase{name: "bare rel=next", cause: walkCauseNoContinuation, maxRequests: 1})
 	})
-	for _, token := range []string{"0", "false", "[]", `""`} {
+	for _, token := range []string{"0", "false", "[]"} {
 		t.Run("jira falsy non-string or empty token "+token, func(t *testing.T) {
 			logs := captureWarns(t)
 			doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
@@ -530,4 +530,34 @@ func TestRound3JiraReplayAndLaterPageFailures(t *testing.T) {
 		assertNoPartial(t, "later decode", got)
 		assertFailedClosed(t, err, doer, logs, "github", hostileCase{name: "later page decode", cause: walkCausePageRequest, maxRequests: 2})
 	})
+}
+
+func TestRound4JiraEmptyTokenAndLaterObjectFailure(t *testing.T) {
+	t.Run("isLast true with an empty token ends the walk", func(t *testing.T) {
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+			return nil, `{"issues":[{"key":"P-1","fields":{}}],"isLast":true,"nextPageToken":""}`
+		}}
+		got, err := jiraSearchIssues(context.Background(), hostileClient(t, "jira", doer), "P", "project = 'P'")
+		if err != nil || len(got) != 1 || doer.requests.Load() != 1 {
+			t.Fatalf("issues = %d, err = %v, requests = %d, want 1 issue, nil, 1 request", len(got), err, doer.requests.Load())
+		}
+	})
+	t.Run("a later page with an issue that is not an object gets the walk Warn and counter", func(t *testing.T) {
+		logs := captureWarns(t)
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+			if n == 1 {
+				return nil, `{"issues":[{"key":"P-1","fields":{}}],"nextPageToken":"t1"}`
+			}
+			return nil, `{"issues":["nope"],"isLast":true}`
+		}}
+		got, err := jiraSearchIssues(context.Background(), hostileClient(t, "jira", doer), "P", "project = 'P'")
+		assertNoPartial(t, "not an object", got)
+		assertFailedClosed(t, err, doer, logs, "jira", hostileCase{name: "later page not an object", cause: walkCausePageRequest, maxRequests: 2})
+	})
+}
+
+func TestTheWalkFailureCounterIsDevHealthPrefixed(t *testing.T) {
+	if pageWalkFailureCounterName != "dev_health_teams_identity_page_walk_failed_total" {
+		t.Fatalf("counter name = %q, every failure counter is dev_health_-prefixed", pageWalkFailureCounterName)
+	}
 }

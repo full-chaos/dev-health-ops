@@ -30,8 +30,11 @@ const (
 	walkCausePageRequest     = "page_request_failed"
 )
 
+// pageWalkFailureCounterName is the instrument of every failed walk.
+const pageWalkFailureCounterName = "teams_identity_page_walk_failed_total"
+
 var pageWalkFailures = func() metric.Int64Counter {
-	const name = "teams_identity_page_walk_failed_total"
+	const name = pageWalkFailureCounterName
 	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/api/teamsidentity").Int64Counter(
 		name, metric.WithDescription("Teams-identity discovery and member walks that failed closed, by provider, walk and cause."))
 	if err != nil {

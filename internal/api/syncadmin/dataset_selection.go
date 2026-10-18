@@ -297,10 +297,10 @@ func applySelectionChange(ctx context.Context, tx pgx.Tx, orgID string, integrat
 	keys := append([]string{}, change.enableKeys...)
 	sort.Strings(keys)
 	for _, key := range keys {
-		tag, err := tx.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
-VALUES ($1, $2, $3, $4, true, '{}')
-ON CONFLICT (org_id, integration_id, dataset_key) DO UPDATE SET is_enabled = true
-WHERE integration_datasets.is_enabled IS NOT true`, uuid.New(), orgID, integrationID, key)
+		tag, err := tx.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options, state_changed_at, state_changed_by)
+VALUES ($1, $2, $3, $4, true, '{}', now(), $5)
+ON CONFLICT (org_id, integration_id, dataset_key) DO UPDATE SET is_enabled = true, state_changed_at = now(), state_changed_by = $5
+WHERE integration_datasets.is_enabled IS NOT true`, uuid.New(), orgID, integrationID, key, providersync.DatasetWriterConfigSave)
 		if err != nil {
 			return nil, nil, fmt.Errorf("enable dataset %s: %w", key, err)
 		}
@@ -311,8 +311,8 @@ WHERE integration_datasets.is_enabled IS NOT true`, uuid.New(), orgID, integrati
 	keys = append([]string{}, change.disableKeys...)
 	sort.Strings(keys)
 	for _, key := range keys {
-		tag, err := tx.Exec(ctx, `UPDATE integration_datasets SET is_enabled = false
-WHERE org_id = $1 AND integration_id = $2 AND dataset_key = $3 AND is_enabled IS true`, orgID, integrationID, key)
+		tag, err := tx.Exec(ctx, `UPDATE integration_datasets SET is_enabled = false, state_changed_at = now(), state_changed_by = $4
+WHERE org_id = $1 AND integration_id = $2 AND dataset_key = $3 AND is_enabled IS true`, orgID, integrationID, key, providersync.DatasetWriterConfigSave)
 		if err != nil {
 			return nil, nil, fmt.Errorf("disable dataset %s: %w", key, err)
 		}

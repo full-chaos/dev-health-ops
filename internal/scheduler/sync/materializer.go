@@ -377,6 +377,15 @@ func (materializer *NativeMaterializer) WritePrometheus(output io.Writer) error 
 			"devhealth_scheduler_materialized_occurrences_total %d\n",
 		materialized,
 	)
+	fmt.Fprintf(&text,
+		"# HELP dev_health_scheduler_explicit_datasets_without_row_total Dataset keys a "+
+			"manual or backfill trigger named that have no integration_datasets row, planned "+
+			"once with no row written (CHAOS-8795 decision C6). The expected path for a one-off "+
+			"run of a dataset the schedule does not carry; it is not a fault.\n"+
+			"# TYPE dev_health_scheduler_explicit_datasets_without_row_total counter\n"+
+			"dev_health_scheduler_explicit_datasets_without_row_total %d\n",
+		explicitDatasetsWithoutRowTotal.Load(),
+	)
 	if _, err := io.WriteString(output, text.String()); err != nil {
 		return err
 	}
@@ -1882,6 +1891,7 @@ ORDER BY dataset_key`, orgID, integrationID)
 			result = append(result, PlanDataset{Key: key})
 		}
 		if len(unrowed) > 0 {
+			recordExplicitDatasetsWithoutRow(len(unrowed))
 			slog.Default().Info("sync.materializer.explicit_dataset_without_row",
 				slog.String("provider", provider), slog.String("org_id", orgID),
 				slog.String("integration_id", integrationID), slog.Int("datasets", len(unrowed)))
@@ -1892,6 +1902,15 @@ ORDER BY dataset_key`, orgID, integrationID)
 		result = append(result, PlanDataset{Key: "security"})
 	}
 	return result, ensureSecurity, nil
+}
+
+// explicitDatasetsWithoutRowTotal counts the dataset keys planned once with no
+// integration_datasets row (CHAOS-8819, CHAOS-10088). loadPlanDatasets is a free
+// function, so the counter is process-wide like globalPlanGateTelemetry.
+var explicitDatasetsWithoutRowTotal atomic.Uint64
+
+func recordExplicitDatasetsWithoutRow(count int) {
+	explicitDatasetsWithoutRowTotal.Add(uint64(count))
 }
 
 // loadFailureStreaks reads, per source, how many work-items units in a row

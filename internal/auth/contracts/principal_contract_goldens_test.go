@@ -249,6 +249,39 @@ func TestAcceptedFixturesValidate(t *testing.T) {
 	}
 }
 
+// zeroInstantFixtures are the accept fixtures whose authenticated_at IS Go's
+// zero time, so IsZero cannot tell "decoded" from "not decoded" for them.
+// Exact names, and TestZeroInstantFixturesAreAcceptedAndExist fails if one is
+// renamed or removed, so the exemption cannot outlive its fixture.
+var zeroInstantFixtures = map[string]bool{
+	"valid-authenticated-at-earliest-instant.json":  true,
+	"valid-authenticated-at-exact-lower-limit.json": true,
+}
+
+func TestZeroInstantFixturesAreAcceptedAndExist(t *testing.T) {
+	accepted := map[string]bool{}
+	for _, entry := range loadManifest(t).Accept {
+		accepted[entry.File] = true
+	}
+	for name := range zeroInstantFixtures {
+		if !accepted[name] {
+			t.Errorf("%s is exempt from the IsZero check but is not an accept fixture", name)
+		}
+		var document struct {
+			Authentication struct {
+				AuthenticatedAt string `json:"authenticated_at"`
+			} `json:"authentication"`
+		}
+		if err := json.Unmarshal(loadFixture(t, name), &document); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		parsed, err := time.Parse(time.RFC3339, document.Authentication.AuthenticatedAt)
+		if err != nil || !parsed.IsZero() {
+			t.Errorf("%s authenticated_at %q is not the zero instant; the exemption is unneeded", name, document.Authentication.AuthenticatedAt)
+		}
+	}
+}
+
 func TestAcceptedFixturesRoundTripThroughTheClient(t *testing.T) {
 	// Validation alone does not prove the Go type can read the document: a
 	// struct field with the wrong JSON tag validates fine and decodes to a
@@ -290,10 +323,8 @@ func TestAcceptedFixturesRoundTripThroughTheClient(t *testing.T) {
 			if principal.Authentication.Assurance == "" {
 				t.Error("authentication.assurance decoded empty -- check the JSON tag")
 			}
-			// The range-limit fixtures ARE the zero time (0001-01-01T00:00:00Z),
-			// so IsZero cannot tell "decoded" from "not decoded" for them.
 			if principal.Authentication.AuthenticatedAt.IsZero() &&
-				!strings.HasPrefix(entry.File, "valid-authenticated-at-e") {
+				!zeroInstantFixtures[entry.File] {
 				t.Error("authentication.authenticated_at decoded to the zero time")
 			}
 			if len(principal.Authentication.Methods) == 0 {

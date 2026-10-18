@@ -33,6 +33,7 @@ from dev_health_ops.authclient.contracts import strictly_anchored
 from dev_health_ops.authclient.principal import MAX_DELEGATION_DURATION
 
 SURFACE = "principal.v1"
+RAW_DUPLICATE_PREFIX = "client-rejected-duplicate-"
 FIXTURE_DIRNAME = "principal"
 
 
@@ -54,7 +55,16 @@ REJECT = [
     (entry["file"], entry["expect_instance_location"], entry["expect_keyword"])
     for entry in MANIFEST["reject"]
 ]
-REJECT_BY_CLIENT = [entry["file"] for entry in MANIFEST["reject_by_client"]]
+REJECT_BY_CLIENT = [
+    entry["file"]
+    for entry in MANIFEST["reject_by_client"]
+    if not entry["file"].startswith(RAW_DUPLICATE_PREFIX)
+]
+RAW_DUPLICATES = [
+    entry["file"]
+    for entry in MANIFEST["reject_by_client"]
+    if entry["file"].startswith(RAW_DUPLICATE_PREFIX)
+]
 
 
 def test_the_corpus_is_not_empty_in_either_direction() -> None:
@@ -386,3 +396,42 @@ def test_revision_range_agrees_with_go(value: object, expected: object) -> None:
             Principal.from_wire(document)
         return
     assert Principal.from_wire(document).membership_revision == expected
+
+
+@pytest.mark.parametrize("name", RAW_DUPLICATES)
+def test_raw_duplicate_member_fixture_is_refused_before_decode(name: str) -> None:
+    """The decoded document is VALID and the bytes are not.
+
+    json.loads collapses the duplicate to its last value, so the validator
+    sees a clean document. Only the raw-bytes entry point can refuse it, and
+    it must name the rule, so a different failure cannot satisfy this test.
+    """
+    path = _fixture_dir() / name
+    assert violations(SURFACE, json.loads(path.read_text(encoding="utf-8"))) == []
+    with pytest.raises(ContractError, match="duplicate object member"):
+        Principal.from_wire_bytes(path.read_bytes())
+
+
+def test_raw_duplicates_cover_the_top_level_an_object_and_an_array_element() -> None:
+    assert sorted(RAW_DUPLICATES) == [
+        "client-rejected-duplicate-actor-chain-reason.json",
+        "client-rejected-duplicate-credential-audience.json",
+        "client-rejected-duplicate-principal-id.json",
+    ]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "client-rejected-utc-range-underflow.json",
+        "client-rejected-utc-range-just-below-lower-limit.json",
+        "client-rejected-utc-range-overflow.json",
+    ],
+)
+def test_utc_range_fixtures_are_refused_by_the_range_rule(name: str) -> None:
+    with pytest.raises(ContractError, match=r"outside 0001-01-01\.\.9999-12-31"):
+        Principal.from_wire(_load(name))
+
+
+def test_the_exact_utc_lower_limit_is_inclusive() -> None:
+    Principal.from_wire(_load("valid-authenticated-at-exact-lower-limit.json"))

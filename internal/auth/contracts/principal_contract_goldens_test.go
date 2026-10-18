@@ -626,3 +626,39 @@ func TestSubMicrosecondPrecisionIsTruncatedOnTheWire(t *testing.T) {
 		t.Fatalf("truncated output still fails the schema: %v", err)
 	}
 }
+
+// TestClientRefusalsNameTheRuleThatRefused asserts WHICH rule fired, not just
+// that something did. Two rules can both be capable of refusing a value, and a
+// test that only asserts refusal cannot tell them apart.
+func TestClientRefusalsNameTheRuleThatRefused(t *testing.T) {
+	root := testRoot(t)
+	for file, want := range map[string]string{
+		"client-rejected-utc-range-underflow.json":              "outside 0001-01-01..9999-12-31",
+		"client-rejected-utc-range-just-below-lower-limit.json": "outside 0001-01-01..9999-12-31",
+		"client-rejected-utc-range-overflow.json":               "outside 0001-01-01..9999-12-31",
+		"client-rejected-duplicate-principal-id.json":           "duplicate object member",
+		"client-rejected-duplicate-credential-audience.json":    "duplicate object member",
+		"client-rejected-duplicate-actor-chain-reason.json":     "duplicate object member",
+	} {
+		t.Run(file, func(t *testing.T) {
+			_, err := PrincipalFromWire(root, loadFixture(t, file))
+			if err == nil {
+				t.Fatalf("PrincipalFromWire accepted %s", file)
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("refused by the wrong rule: %v, want text %q", err, want)
+			}
+		})
+	}
+}
+
+// TestTheExactUTCLowerLimitIsInclusive: the pair is one second wide.
+func TestTheExactUTCLowerLimitIsInclusive(t *testing.T) {
+	root := testRoot(t)
+	if _, err := PrincipalFromWire(root, loadFixture(t, "valid-authenticated-at-exact-lower-limit.json")); err != nil {
+		t.Fatalf("0001-01-01T00:00:00Z exactly must be accepted: %v", err)
+	}
+	if _, err := PrincipalFromWire(root, loadFixture(t, "client-rejected-utc-range-just-below-lower-limit.json")); err == nil {
+		t.Fatal("one second below the limit must be refused")
+	}
+}

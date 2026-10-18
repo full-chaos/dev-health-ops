@@ -252,7 +252,9 @@ func TestRetainedTxOpsIsUnusableAfterCommit(t *testing.T) {
 	err := Commit(ctx, env.pool, env.schema, Mutation{
 		Apply: func(ctx context.Context, tx TxOps) error {
 			retained, ran = tx, true // the caller error this test exists to characterise
-			return nil
+			_, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug)
+				VALUES (gen_random_uuid(), 'retained-first', 'retained-first')`)
+			return err
 		},
 		Audit: AuditEvent{EventType: "retention.probe", Outcome: OutcomeAllowed},
 		Event: OutboxEvent{

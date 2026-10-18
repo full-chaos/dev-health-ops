@@ -28,6 +28,10 @@ PROD: dict[str, Any] = {
                 {"name": "ACR_WEB_ASSERTION_AUDIENCE", "value": "x"},
                 {"name": "ACR_WEB_ASSERTION_KID", "value": "x"},
                 {"name": "ACR_WEB_ASSERTION_KEY_FILE", "value": "x"},
+                {"name": "AUTH_GITHUB_ID", "value": "x"},
+                {"name": "AUTH_GITHUB_SECRET", "value": "x"},
+                {"name": "AUTH_GOOGLE_ID", "value": "x"},
+                {"name": "AUTH_GOOGLE_SECRET", "value": "x"},
             ],
         }
     }
@@ -149,3 +153,22 @@ def test_unclassified_trust_proxy_name_is_the_drift_cut_e_saw(tmp_path: Path) ->
     prod["ops"]["web"]["extraEnv"].append({"name": "TRUST_PROXY_NEW", "value": "1"})
     findings = _mod().check(_write(tmp_path, "v.yaml", prod), str(OVERLAY), None)
     assert any("TRUST_PROXY_NEW" in f and "not classified" in f for f in findings)
+
+
+def test_social_sign_in_names_are_classified(tmp_path: Path) -> None:
+    """CHAOS-10137 item 4: deploy #537/#538 added these four prod web names (CHAOS-9847)."""
+    prod_names = {e["name"] for e in PROD["ops"]["web"]["extraEnv"]}
+    social = {"AUTH_GITHUB_ID", "AUTH_GITHUB_SECRET", "AUTH_GOOGLE_ID", "AUTH_GOOGLE_SECRET"}
+    assert social <= prod_names
+    mod = _mod()
+    for name in social:
+        assert name in mod.CLASSIFIED, name
+    assert mod.check(_write(tmp_path, "v.yaml", PROD), str(OVERLAY), None) == []
+
+
+def test_query_api_carries_llm_model_explain() -> None:
+    """CHAOS-10137 item 5: prod values.prod.yaml has LLM_MODEL_EXPLAIN (deploy PIN 83); the empty default keeps the LLM_MODEL fallback."""
+    doc = _mod().load_compose_yaml(OVERLAY.read_text(encoding="utf-8"))
+    env = doc["services"]["query-api"]["environment"]
+    items = env if isinstance(env, list) else [f"{k}={v}" for k, v in env.items()]
+    assert "LLM_MODEL_EXPLAIN=${LLM_MODEL_EXPLAIN:-}" in items

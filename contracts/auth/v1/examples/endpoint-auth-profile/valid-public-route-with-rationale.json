@@ -1,0 +1,8 @@
+{
+  "accepted_credential_classes": [],
+  "classification": "public",
+  "method": "GET",
+  "public_rationale": "Public key discovery: serves public keys only.",
+  "route": "/.well-known/jwks.json",
+  "schema_version": "endpoint-auth-profile.v1"
+}

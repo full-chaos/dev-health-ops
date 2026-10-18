@@ -36,6 +36,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/workerservice"
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
 // The provider worlds of `fixtures generate` (gitlab, jira, linear, and github of the real shape) are not
@@ -382,36 +383,72 @@ func runWorldSync(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 	if len(units) == 0 {
 		t.Fatalf("plan %s: no unit planned", step.Provider)
 	}
-	for _, unit := range units {
-		if unit.WindowEnd == nil {
-			t.Fatalf("plan %s/%s: a unit without a window end", unit.Provider, unit.Dataset)
-		}
-		external := sourceNames[unit.SourceID]
-		run := providersync.InProcessRun{
-			OrgID: world.OrgID, Provider: unit.Provider, Dataset: unit.Dataset,
-			SourceExternalID: external, SourceName: external,
-			SinceAt: unit.WindowStart, BeforeAt: *unit.WindowEnd, ProcessorFlags: unit.ProcessorFlags, DatasetOptions: step.DatasetOptions,
-			Credential: step.Credential, Config: step.Config, Conn: conn, Doer: fakehttp.Client(doer),
-			Retry: providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
-			Now:   func() time.Time { return world.FrozenAt }, IDs: ids.id,
-		}
-		selector := func(session *providersync.LeaseSession) (providersync.GitFamilyRoute, bool, error) {
-			if route, ok := providersync.SelectGitFamilyRoute(unit.Provider, unit.Dataset, providersync.GitFamilyDeps{Conn: conn, Lease: session}); ok {
-				return route, true, nil
+	runUnits := func(units []syncplan.PlannedUnit) {
+		for _, unit := range units {
+			if unit.WindowEnd == nil {
+				t.Fatalf("plan %s/%s: a unit without a window end", unit.Provider, unit.Dataset)
 			}
-			return providersync.SelectWorkItemsRoute(unit.Provider, unit.Dataset, providersync.WorkItemsRouteDeps{
-				Conn: conn, Lease: session, Metrics: providerfoundation.NewMetrics(), StatusMapping: mapping,
-			})
-		}
-		result, err := providersync.RunRouteInProcess(ctx, run, selector)
-		if err != nil {
-			t.Fatalf("%s/%s %s: %v (unmatched requests: %v; last requests: %v)", unit.Provider, unit.Dataset, external, err, doer.unmatched, doer.lastSeen(6))
-		}
-		t.Logf("%s/%s %s: %+v", unit.Provider, unit.Dataset, external, result)
-		if len(doer.unmatched) > 0 {
-			t.Fatalf("%s/%s %s: requests no answer names:\n  %s", unit.Provider, unit.Dataset, external, strings.Join(doer.unmatched, "\n  "))
+			external := sourceNames[unit.SourceID]
+			run := providersync.InProcessRun{
+				OrgID: world.OrgID, Provider: unit.Provider, Dataset: unit.Dataset,
+				SourceExternalID: external, SourceName: external,
+				SinceAt: unit.WindowStart, BeforeAt: *unit.WindowEnd, ProcessorFlags: unit.ProcessorFlags, DatasetOptions: step.DatasetOptions,
+				Credential: step.Credential, Config: step.Config, Conn: conn, Doer: fakehttp.Client(doer),
+				Retry: providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+				Now:   func() time.Time { return world.FrozenAt }, IDs: ids.id,
+			}
+			selector := func(session *providersync.LeaseSession) (providersync.GitFamilyRoute, bool, error) {
+				if route, ok := providersync.SelectGitFamilyRoute(unit.Provider, unit.Dataset, providersync.GitFamilyDeps{Conn: conn, Lease: session}); ok {
+					return route, true, nil
+				}
+				return providersync.SelectWorkItemsRoute(unit.Provider, unit.Dataset, providersync.WorkItemsRouteDeps{
+					Conn: conn, Lease: session, Metrics: providerfoundation.NewMetrics(), StatusMapping: mapping,
+				})
+			}
+			result, err := providersync.RunRouteInProcess(ctx, run, selector)
+			if err != nil {
+				t.Fatalf("%s/%s %s: %v (unmatched requests: %v; last requests: %v)", unit.Provider, unit.Dataset, external, err, doer.unmatched, doer.lastSeen(6))
+			}
+			t.Logf("%s/%s %s: %+v", unit.Provider, unit.Dataset, external, result)
+			if len(doer.unmatched) > 0 {
+				t.Fatalf("%s/%s %s: requests no answer names:\n  %s", unit.Provider, unit.Dataset, external, strings.Join(doer.unmatched, "\n  "))
+			}
 		}
 	}
+	runUnits(units)
+	// The planner bounds a work-items window (one window per scheduled run,
+	// oldest first), so the first sync of a world takes several runs: advance the
+	// work-item watermarks to each window's end and plan again until the family
+	// reaches the frozen instant, as the scheduled runs would.
+	input.Watermarks = map[syncplan.WatermarkKey]time.Time{}
+	for run := 0; run < 100; run++ {
+		var pending []syncplan.PlannedUnit
+		for _, unit := range units {
+			if unit.Dataset == "work-items" && unit.WindowEnd != nil && unit.WindowEnd.Before(world.FrozenAt) {
+				pending = append(pending, unit)
+			}
+		}
+		if len(pending) == 0 {
+			return
+		}
+		for _, unit := range pending {
+			for _, dataset := range workitemcontract.FamilyDatasets() {
+				input.Watermarks[syncplan.WatermarkKey{SourceID: sourceNames[unit.SourceID], Dataset: dataset}] = *unit.WindowEnd
+			}
+		}
+		next, err := syncplan.BuildScheduledPlan(input)
+		if err != nil {
+			t.Fatalf("plan %s window %d: %v", step.Provider, run+2, err)
+		}
+		units = units[:0:0]
+		for _, unit := range next {
+			if unit.Dataset == "work-items" {
+				units = append(units, unit)
+			}
+		}
+		runUnits(units)
+	}
+	t.Fatalf("plan %s: work-items windows did not reach the frozen instant in 100 runs", step.Provider)
 }
 
 // runWorkGraphLinks runs the issue <-> pull request link producers in the order the work-graph build
@@ -587,6 +624,43 @@ func encodeWorld(t *testing.T, world FrozenWorld) []byte {
 }
 
 // sameWorldRows: the same organization, instant, tables and rows (the producer stamp aside).
+// worldTableRepeatedPerWindow is the one table whose rows repeat once per work-items window: the Linear
+// work-items route writes its team and project reference rows in every unit, so a first sync planned as
+// several bounded windows holds the same rows several times where the committed world, frozen from one
+// sync, holds them once. The rows are identical; the readers (ReplacingMergeTree, newest per key) see
+// one. Only this table is compared by its distinct rows, and only by an exact match of the distinct set,
+// so a changed, added or missing row still fails.
+const worldTableRepeatedPerWindow = "projects"
+
+func sameDistinctWorldRows(committed, produced WorldTable) bool {
+	if len(committed.Columns) != len(produced.Columns) {
+		return false
+	}
+	for index := range committed.Columns {
+		if committed.Columns[index] != produced.Columns[index] {
+			return false
+		}
+	}
+	distinct := func(rows [][]any) map[string]struct{} {
+		out := map[string]struct{}{}
+		for _, row := range rows {
+			raw, _ := json.Marshal(row)
+			out[string(raw)] = struct{}{}
+		}
+		return out
+	}
+	left, right := distinct(committed.Rows), distinct(produced.Rows)
+	if len(left) != len(right) {
+		return false
+	}
+	for row := range left {
+		if _, ok := right[row]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func sameWorldRows(committed, produced FrozenWorld) bool {
 	if committed.OrgID != produced.OrgID || committed.FrozenAt != produced.FrozenAt || len(committed.Tables) != len(produced.Tables) {
 		return false
@@ -652,8 +726,12 @@ func TestProviderWorldsAreWhatTheProducersWrite(t *testing.T) {
 				}
 				left, _ := json.Marshal(committedTable)
 				right, _ := json.Marshal(table)
+				if name == worldTableRepeatedPerWindow && sameDistinctWorldRows(committedTable, table) {
+					continue
+				}
 				if !bytes.Equal(left, right) {
 					t.Errorf("%s: the producers write other rows than the committed world holds (rerun with -freeze-provider-worlds and review the diff)", name)
+					logWorldTableDifference(t, committedTable, table)
 				}
 			}
 		})
@@ -719,4 +797,69 @@ func worldCredential(step worldStep, id string) providerfoundation.Credential {
 		fields[key] = secrets.NewValue(value)
 	}
 	return providerfoundation.NewCredential(step.Provider, id, step.Config, fields)
+}
+
+// logWorldTableDifference prints the row counts and the first rows that exist
+// on one side only, so a failing comparison names the rows and not just the table.
+func logWorldTableDifference(t *testing.T, committed, produced WorldTable) {
+	t.Helper()
+	encode := func(rows [][]any) map[string]int {
+		out := map[string]int{}
+		for _, row := range rows {
+			raw, _ := json.Marshal(row)
+			out[string(raw)]++
+		}
+		return out
+	}
+	left, right := encode(committed.Rows), encode(produced.Rows)
+	columns := make([]string, 0, len(produced.Columns))
+	for _, column := range produced.Columns {
+		columns = append(columns, column.Name)
+	}
+	t.Logf("%s: committed %d rows, produced %d rows; columns %v", produced.Name, len(committed.Rows), len(produced.Rows), columns)
+	// Rows are listed by distinct content first: a row written once per window
+	// is a repeat, a row with other content or missing on a side is a difference.
+	report := func(label string, from, other map[string]int) {
+		shown, distinct := 0, 0
+		for row := range from {
+			if other[row] > 0 {
+				continue
+			}
+			distinct++
+			if shown == 12 {
+				continue
+			}
+			shown++
+			if len(row) > 500 {
+				row = row[:500] + "..."
+			}
+			t.Logf("  %s (content absent on the other side): %s", label, row)
+		}
+		t.Logf("  %s: %d distinct row contents absent on the other side", label, distinct)
+	}
+	report("only committed", left, right)
+	report("only produced", right, left)
+}
+
+func TestSameDistinctWorldRowsAcceptsRepeatsAndNothingElse(t *testing.T) {
+	columns := []FrozenColumn{{Name: "id", Type: "String"}, {Name: "name", Type: "String"}}
+	table := func(rows ...[]any) WorldTable {
+		return WorldTable{FrozenTable: FrozenTable{Name: "projects", Columns: columns, Rows: rows}}
+	}
+	a, b := []any{"1", "alpha"}, []any{"2", "beta"}
+	for name, tc := range map[string]struct {
+		produced WorldTable
+		want     bool
+	}{
+		"identical":       {table(a, b), true},
+		"repeats":         {table(a, a, b, a, b), true},
+		"a row is absent": {table(a, a), false},
+		"a row changed":   {table(a, []any{"2", "gamma"}), false},
+		"a row is added":  {table(a, b, []any{"3", "delta"}), false},
+		"columns differ":  {WorldTable{FrozenTable: FrozenTable{Name: "projects", Columns: columns[:1], Rows: [][]any{{"1"}}}}, false},
+	} {
+		if got := sameDistinctWorldRows(table(a, b), tc.produced); got != tc.want {
+			t.Errorf("%s: sameDistinctWorldRows = %v, want %v", name, got, tc.want)
+		}
+	}
 }

@@ -11,6 +11,7 @@ from dev_health_ops.authclient.contracts import (
     ContractError,
     Violation,
     contracts_dir,
+    parse_rfc3339,
     repo_root,
     validate,
     validator_for,
@@ -20,6 +21,7 @@ from dev_health_ops.authclient.discovery import Discovery, parse_discovery
 from dev_health_ops.authclient.error_envelope import (
     ErrorEnvelope,
     parse_bytes,
+    parse_decoded,
 )
 from dev_health_ops.authclient.principal import (
     SCHEMA_VERSION,
@@ -28,8 +30,20 @@ from dev_health_ops.authclient.principal import (
     Delegation,
     Principal,
 )
+from dev_health_ops.authclient.provisioning_event import (
+    AuditEvent,
+    ConsumerCursor,
+    ProvisioningEvent,
+    parse_audit_event,
+    parse_provisioning_event,
+)
 
 __all__ = [
+    "AuditEvent",
+    "ConsumerCursor",
+    "ProvisioningEvent",
+    "parse_audit_event",
+    "parse_provisioning_event",
     "ErrorEnvelope",
     "SCHEMA_VERSION",
     "Authentication",
@@ -41,6 +55,8 @@ __all__ = [
     "Violation",
     "contracts_dir",
     "parse_bytes",
+    "parse_decoded",
+    "parse_rfc3339",
     "parse_discovery",
     "repo_root",
     "validate",

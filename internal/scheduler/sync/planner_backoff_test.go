@@ -92,8 +92,12 @@ func TestWorkItemsWindowHalvesOncePerFailureOfEitherShrinkingClass(t *testing.T)
 	if unit == nil {
 		t.Fatal("no unit planned")
 	}
-	if got := unit.WindowEnd.Sub(*unit.WindowStart); got != naturalSpan/8 {
-		t.Fatalf("window = %s, want %s (halved three times)", got, naturalSpan/8)
+	want := naturalSpan / 8
+	if want < providersync.WindowHalvingFloor {
+		want = providersync.WindowHalvingFloor
+	}
+	if got := unit.WindowEnd.Sub(*unit.WindowStart); got != want {
+		t.Fatalf("window = %s, want %s (halved three times, floor one day)", got, want)
 	}
 }
 

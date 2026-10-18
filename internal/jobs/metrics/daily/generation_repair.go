@@ -117,37 +117,37 @@ func (store *PostgresStore) loadGenerationRepairSources(ctx context.Context, org
 	var sources generationRepairSources
 	syncRows, err := store.pool.Query(ctx, `SELECT id::text, created_at FROM public.sync_runs WHERE org_id = $1::uuid`, orgID)
 	if err != nil {
-		return sources, ErrUnavailable
+		return sources, repairUnavailable(ctx, "step1", err)
 	}
 	for syncRows.Next() {
 		var syncRun repairSyncRun
 		if err := syncRows.Scan(&syncRun.id, &syncRun.createdAt); err != nil {
 			syncRows.Close()
-			return sources, ErrUnavailable
+			return sources, repairUnavailable(ctx, "step2", err)
 		}
 		sources.syncRuns = append(sources.syncRuns, syncRun)
 	}
 	syncErr := syncRows.Err()
 	syncRows.Close()
 	if syncErr != nil {
-		return sources, ErrUnavailable
+		return sources, repairUnavailable(ctx, "step3", syncErr)
 	}
 	idRows, err := store.pool.Query(ctx, `SELECT id::text FROM public.daily_metrics_runs WHERE org_id = $1::uuid`, orgID)
 	if err != nil {
-		return sources, ErrUnavailable
+		return sources, repairUnavailable(ctx, "step4", err)
 	}
 	for idRows.Next() {
 		var id string
 		if err := idRows.Scan(&id); err != nil {
 			idRows.Close()
-			return sources, ErrUnavailable
+			return sources, repairUnavailable(ctx, "step5", err)
 		}
 		sources.dailyIDs = append(sources.dailyIDs, id)
 	}
 	idErr := idRows.Err()
 	idRows.Close()
 	if idErr != nil {
-		return sources, ErrUnavailable
+		return sources, repairUnavailable(ctx, "step6", idErr)
 	}
 	return sources, nil
 }
@@ -189,21 +189,21 @@ WHERE run.org_id = $1::uuid AND run.target_day BETWEEN $2 AND $3
   AND starts_with(run.generation, $4)
 ORDER BY run.target_day, run.id`, orgID, from, to, legacyRedriveGenerationPrefix)
 	if err != nil {
-		return outcome, ErrUnavailable
+		return outcome, repairUnavailable(ctx, "step8", err)
 	}
 	var runs []legacyRedriveRun
 	for rows.Next() {
 		var run legacyRedriveRun
 		if err := rows.Scan(&run.id, &run.day, &run.generation, &run.createdAt, &run.fullOrg, &run.settled); err != nil {
 			rows.Close()
-			return outcome, ErrUnavailable
+			return outcome, repairUnavailable(ctx, "step9", err)
 		}
 		runs = append(runs, run)
 	}
 	rowsErr := rows.Err()
 	rows.Close()
 	if rowsErr != nil {
-		return outcome, ErrUnavailable
+		return outcome, repairUnavailable(ctx, "step10", rowsErr)
 	}
 
 	var sources generationRepairSources
@@ -283,7 +283,7 @@ func (store *PostgresStore) rewriteLegacyRedriveGeneration(
 ) (bool, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return false, ErrUnavailable
+		return false, repairUnavailable(ctx, "step11", err)
 	}
 	defer func() {
 		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -300,13 +300,20 @@ WHERE run.id = $1::uuid AND run.org_id = $2::uuid AND run.generation = $3
       WHERE event.run_id = run.id AND event.status = 'open')`,
 		runID, orgID, oldGeneration, newGeneration, setFullOrg)
 	if err != nil {
-		return false, ErrUnavailable
+		return false, repairUnavailable(ctx, "step12", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return false, nil
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, ErrUnavailable
+		return false, repairUnavailable(ctx, "step13", err)
 	}
 	return true, nil
+}
+
+// repairUnavailable keeps the cause of a store failure in the log; the caller
+// only gets ErrUnavailable.
+func repairUnavailable(ctx context.Context, step string, cause error) error {
+	slog.ErrorContext(ctx, "daily metrics legacy redrive generation repair failed", "step", step, "error", cause)
+	return ErrUnavailable
 }

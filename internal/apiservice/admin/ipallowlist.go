@@ -216,15 +216,11 @@ func (h *handlers) createIPAllowlistEntry(w http.ResponseWriter, r *http.Request
 		ID: uuid.New(), OrgID: org, IPRange: ipRange, Description: description, IsActive: true,
 		CreatedByID: createdBy, CreatedAt: now, UpdatedAt: now, Expires: expires,
 	}
-	persisted := createdBy               // MUTANT-10151b
-	if r.Header.Get("X-User-Id") == "" { // MUTANT-10151b
-		persisted = nil // MUTANT-10151b
-	} // MUTANT-10151b
 	if _, err := h.store.Pool.Exec(ctx, `
 INSERT INTO org_ip_allowlist
 	(id, org_id, ip_range, description, is_active, created_by_id, created_at, updated_at, expires_at)
 VALUES ($1, $2, $3, $4, true, $5, $6, $6, $7)`,
-		entry.ID, org, ipRange, description, persisted, now, instantOf(expires)); err != nil {
+		entry.ID, org, ipRange, description, createdBy, now, instantOf(expires)); err != nil {
 		h.internalError(ctx, w, "insert ip allowlist entry", err)
 		return
 	}

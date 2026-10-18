@@ -255,15 +255,11 @@ func (h *handlers) createRetentionPolicy(w http.ResponseWriter, r *http.Request)
 		ID: uuid.New(), OrgID: org, ResourceType: resourceType, RetentionDays: int32(days.Int64()), Description: description,
 		IsActive: true, CreatedByID: createdBy, CreatedAt: now, UpdatedAt: now,
 	}
-	persisted := createdBy               // MUTANT-10151b
-	if r.Header.Get("X-User-Id") == "" { // MUTANT-10151b
-		persisted = nil // MUTANT-10151b
-	} // MUTANT-10151b
 	if _, err := h.store.Pool.Exec(ctx, `
 INSERT INTO org_retention_policies
 	(id, org_id, resource_type, retention_days, description, is_active, created_by_id, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, true, $6, $7, $7)`,
-		created.ID, org, resourceType, created.RetentionDays, description, persisted, now); err != nil {
+		created.ID, org, resourceType, created.RetentionDays, description, createdBy, now); err != nil {
 		h.internalError(ctx, w, "insert retention policy", err)
 		return
 	}

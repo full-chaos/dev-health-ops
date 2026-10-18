@@ -66,18 +66,23 @@ type jiraTeamCatalogProjectSearchPayload struct {
 
 // endOfData says this page is the last one. received is the number of
 // entries read so far, this page included. The provider's own signal decides:
-// isLast when the page carries it, else total. A page with neither is the
-// last one only when it HAS entries and is shorter than the page size that
-// was asked for. A page with no entries and no signal is not an answer about
-// the end: an error body or an empty object under HTTP 200 reads that way.
-func (page jiraTeamCatalogProjectSearchPayload) endOfData(received, pageSize int) bool {
+// isLast when the page carries it, else total. A page with neither marker is
+// never the end, whatever its size: Jira Cloud serves pages shorter than the
+// size asked for, so a short page proves nothing, and a catalog taken as
+// complete on it would close the ownership of every project it did not list.
+func (page jiraTeamCatalogProjectSearchPayload) endOfData(received int) bool {
 	if page.IsLast != nil {
 		return *page.IsLast
 	}
 	if page.Total != nil {
 		return received >= *page.Total
 	}
-	return len(page.Values) > 0 && len(page.Values) < pageSize
+	return false
+}
+
+// hasEndMarker says the page carries one of the provider's end-of-data signals.
+func (page jiraTeamCatalogProjectSearchPayload) hasEndMarker() bool {
+	return page.IsLast != nil || page.Total != nil
 }
 
 type jiraTeamCatalogProjectSearchEntry struct {

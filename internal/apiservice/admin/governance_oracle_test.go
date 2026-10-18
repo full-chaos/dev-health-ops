@@ -427,7 +427,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 	goBase, goPool := startGoServer(t, ctx, venue, jwtKey)
 
 	// CHAOS-10082: see xuserid_divergence_test.go.
-	compared, pythonCompared, pythonDivergent := splitXUserIDDivergent(requests, python)
+	compared, pythonCompared, pythonDivergent := splitXUserIDRequests(t, ipPath, requests, python)
 	golden.Consumed(t, pythonDivergent...)
 	for _, answer := range pythonDivergent {
 		if answer.Status == 201 {

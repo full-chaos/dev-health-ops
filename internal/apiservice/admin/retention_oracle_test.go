@@ -303,7 +303,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 
 	// CHAOS-10082: see xuserid_divergence_test.go.
 	requestsAll, pythonAll := requests, python
-	requests, python, pythonDivergent := splitXUserIDDivergent(requestsAll, pythonAll)
+	requests, python, pythonDivergent := splitXUserIDRequests(t, retentionPath, requestsAll, pythonAll)
 	golden.Consumed(t, pythonDivergent...)
 	for _, answer := range pythonDivergent {
 		if answer.Status == 201 {

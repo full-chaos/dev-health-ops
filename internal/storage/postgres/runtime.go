@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/queuecontrol"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -84,8 +84,8 @@ type RuntimeConfig struct {
 	QueueRole               string
 	CoordinatorRole         string
 	RiverSchema             string
-	QueueControlMode        config.QueueControlMode
-	CoordinatorMode         config.QueueControlMode
+	QueueControlMode        queuecontrol.Mode
+	CoordinatorMode         queuecontrol.Mode
 	DomainTransactionPooler bool
 	DomainMaxConns          int32
 	QueueMaxConns           int32
@@ -104,28 +104,10 @@ func DefaultRuntimeConfig(domainURI, queueControlURI, domainRole, queueRole stri
 		DomainRole:       domainRole,
 		QueueRole:        queueRole,
 		RiverSchema:      "river",
-		QueueControlMode: config.QueueControlDirect,
-		CoordinatorMode:  config.QueueControlDirect,
+		QueueControlMode: queuecontrol.Direct,
+		CoordinatorMode:  queuecontrol.Direct,
 		DomainMaxConns:   4,
 		QueueMaxConns:    2,
-	}
-}
-
-func RuntimeConfigFromPlatform(configValue config.Config) RuntimeConfig {
-	return RuntimeConfig{
-		DomainURI:               configValue.DomainDatabaseURI.Reveal(),
-		QueueControlURI:         configValue.QueueDatabaseURI.Reveal(),
-		CoordinatorURI:          configValue.CoordinatorDatabaseURI.Reveal(),
-		DomainRole:              configValue.DomainDatabaseRole,
-		QueueRole:               configValue.QueueDatabaseRole,
-		CoordinatorRole:         configValue.CoordinatorDatabaseRole,
-		RiverSchema:             configValue.RiverDatabaseSchema,
-		QueueControlMode:        configValue.QueueDatabaseMode,
-		CoordinatorMode:         configValue.CoordinatorDatabaseMode,
-		DomainTransactionPooler: configValue.DomainTransactionPooler,
-		DomainMaxConns:          configValue.DomainDatabaseMaxConns,
-		QueueMaxConns:           configValue.QueueDatabaseMaxConns,
-		CoordinatorMaxConns:     configValue.CoordinatorDatabaseMaxConns,
 	}
 }
 
@@ -167,8 +149,8 @@ func (c RuntimeConfig) Validate() error {
 		}
 	}
 	switch c.QueueControlMode {
-	case config.QueueControlDirect, config.QueueControlSession:
-	case config.QueueControlTransaction:
+	case queuecontrol.Direct, queuecontrol.Session:
+	case queuecontrol.Transaction:
 		return ErrQueueControlTransactionMode
 	default:
 		return ErrInvalidConfig
@@ -185,8 +167,8 @@ func (c RuntimeConfig) Validate() error {
 	}
 	if c.RequireCoordinator {
 		switch c.CoordinatorMode {
-		case config.QueueControlDirect, config.QueueControlSession:
-		case config.QueueControlTransaction:
+		case queuecontrol.Direct, queuecontrol.Session:
+		case queuecontrol.Transaction:
 			return ErrCoordinatorTransactionMode
 		default:
 			return ErrInvalidConfig

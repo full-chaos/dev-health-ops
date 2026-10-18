@@ -484,3 +484,13 @@ written its `reopened`. A reopen whose transaction rolled back after writing
 its marker leaves the day unknown until the next sync, which heals it because
 Postgres still says succeeded. A run that was created but not yet claimed does
 not hide an older `succeeded` (it has not started computing); the claim does.
+
+## Linear project ensure rows
+
+A Linear work-items unit names every project it saw by an ensure row in `projects`. The row carries an epoch version, so a catalog row always replaces it. The unit writes an ensure row only when it can change the newest stored row. A stored row of a newer version, or of the same version with the same content, is left alone. A missing, older or changed row is written.
+
+`dev_health_linear_project_catalog_ensure_total{outcome}` counts the rows:
+
+- `written`: the row was written.
+- `skipped`: the stored row already decides the newest value.
+- `read_error`: the stored rows could not be read. The whole batch was written and a Warn line `linear_project_catalog_ensure_read_failed` was logged. The unit does not fail.

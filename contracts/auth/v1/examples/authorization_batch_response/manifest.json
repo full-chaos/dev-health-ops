@@ -1,0 +1,106 @@
+{
+  "description": "Golden corpus for authorization_batch_response.v1 (CHAOS-4932). reject_by_client documents VALIDATE and every client MUST refuse them when checked against `request`, the batch request they answer (two items); the valid fixtures answer the same request.",
+  "accept": [
+    {
+      "file": "batch-response-valid-items-disagree.json",
+      "why": "The case the surface exists for: item 0 allowed, item 1 denied, each bound by index to its own request."
+    }
+  ],
+  "reject": [
+    {
+      "file": "batch-response-invalid-empty.json",
+      "expect_instance_location": "/decisions",
+      "expect_keyword": "minItems",
+      "why": "Empty response."
+    },
+    {
+      "file": "batch-response-invalid-index-negative.json",
+      "expect_instance_location": "/decisions/0/index",
+      "expect_keyword": "minimum",
+      "why": "Indices start at 0."
+    },
+    {
+      "file": "batch-response-invalid-index-over-bound.json",
+      "expect_instance_location": "/decisions/0/index",
+      "expect_keyword": "maximum",
+      "why": "Index 100 is outside the 100-item bound."
+    },
+    {
+      "file": "batch-response-invalid-item-missing-index.json",
+      "expect_instance_location": "/decisions/0",
+      "expect_keyword": "required",
+      "why": "An item with no index is unbound."
+    },
+    {
+      "file": "batch-response-invalid-item-missing-allowed.json",
+      "expect_instance_location": "/decisions/1/decision",
+      "expect_keyword": "required",
+      "why": "The fail-closed rule holds inside a batch: item 1 has no verdict."
+    },
+    {
+      "file": "batch-response-invalid-item-extra-member.json",
+      "expect_instance_location": "/decisions/0",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed item."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "batch-response-client-fewer-decisions.json",
+      "why": "One decision for a two-item request: the surviving item would line up and be used while the other is silently lost. Valid for the schema; the client must refuse the whole response."
+    },
+    {
+      "file": "batch-response-client-more-decisions.json",
+      "why": "Three decisions for a two-item request."
+    },
+    {
+      "file": "batch-response-client-swapped-index.json",
+      "why": "Indices 1,0: the allow would be read against the other item's resource."
+    },
+    {
+      "file": "batch-response-client-duplicate-index.json",
+      "why": "Indices 0,0: two answers for one request, none for the other."
+    },
+    {
+      "file": "batch-response-client-skipped-index.json",
+      "why": "Indices 0,2: a gap."
+    },
+    {
+      "file": "batch-response-client-decimal-form-index.json",
+      "why": "index 1.0 is a valid schema integer; the clients refuse a decimal-form token."
+    }
+  ],
+  "request": {
+    "schema_version": "authorization_batch_request.v1",
+    "requests": [
+      {
+        "schema_version": "authorization_request.v1",
+        "principal_reference": "prf_EXAMPLE0000000000000001",
+        "action": "acr.context.read",
+        "resource": {
+          "type": "repository",
+          "organization_id": "org_EXAMPLE0000000000000001",
+          "key": "full-chaos/dev-health-ops"
+        },
+        "context": {
+          "request_id": "req_EXAMPLE0000000000000000001",
+          "client_service": "dev-health-web"
+        }
+      },
+      {
+        "schema_version": "authorization_request.v1",
+        "principal_reference": "prf_EXAMPLE0000000000000001",
+        "action": "acr.context.read",
+        "resource": {
+          "type": "repository",
+          "organization_id": "org_EXAMPLE0000000000000001",
+          "key": "full-chaos/dev-health-web"
+        },
+        "context": {
+          "request_id": "req_EXAMPLE0000000000000000001",
+          "client_service": "dev-health-web"
+        }
+      }
+    ]
+  }
+}

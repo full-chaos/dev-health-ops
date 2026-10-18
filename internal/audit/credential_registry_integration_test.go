@@ -9,6 +9,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // Migration 0007 adds the TRD section 9/12 columns to credential_registry and
@@ -28,13 +32,25 @@ const (
 	fp            = "0123456789abcdef"
 )
 
+// credEnv separates the two pools on purpose. admin is the fixture's
+// superuser connection, used only to seed unguarded rows and to read catalog
+// state. writer is the pool every credential write goes through, and it MUST be
+// the runtime role: that role's grants, search_path and lack of bypass are what
+// the production caller has, so a rule that only holds for a superuser cannot
+// pass.
+type credEnv struct {
+	admin  *pgxpool.Pool
+	writer *pgxpool.Pool
+	schema authschema.ValidatedIdentifier
+}
+
 var commitSeq atomic.Int64
 
 // commitCredential runs one statement against credential_registry through
 // audit.Commit.
-func commitCredential(ctx context.Context, env *auditFixture, sql string, args ...any) error {
+func commitCredential(ctx context.Context, env *credEnv, sql string, args ...any) error {
 	n := commitSeq.Add(1)
-	return Commit(ctx, env.pool, env.schema, Mutation{
+	return Commit(ctx, env.writer, env.schema, Mutation{
 		Apply: func(ctx context.Context, tx TxOps) error {
 			_, err := tx.Exec(ctx, sql, args...)
 			return err
@@ -47,7 +63,7 @@ func commitCredential(ctx context.Context, env *auditFixture, sql string, args .
 	})
 }
 
-func insertCredential(ctx context.Context, env *auditFixture, id, principal, extraColumns, extraValues string, args ...any) error {
+func insertCredential(ctx context.Context, env *credEnv, id, principal, extraColumns, extraValues string, args ...any) error {
 	sql := `INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint` +
 		extraColumns + `) VALUES ($1, $2, 'cred-class', decode(md5(random()::text || clock_timestamp()::text), 'hex'), 'sha256', '` + fp + `'` + extraValues + `)`
 	return commitCredential(ctx, env, sql, append([]any{id, principal}, args...)...)
@@ -66,10 +82,11 @@ func mustFail(t *testing.T, name string, err error, want string) {
 func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuditFixture(t, ctx)
+	fx := newAuditFixture(t, ctx)
+	env := &credEnv{admin: fx.pool, writer: fx.pool, schema: fx.schema}
 	// principals is an unguarded table; seed it directly.
 	for _, id := range []string{credPrincipal, credOther} {
-		if _, err := env.pool.Exec(ctx,
+		if _, err := env.admin.Exec(ctx,
 			`INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'cred')`, id); err != nil {
 			t.Fatalf("seed principal: %v", err)
 		}
@@ -80,12 +97,27 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 		audiences = `ARRAY['api','acr']::auth.credential_token_name[]`
 	)
 
+	t.Run("every write below runs as the runtime role, not a superuser (the control)", func(t *testing.T) {
+		var user string
+		var super bool
+		if err := env.writer.QueryRow(ctx,
+			`SELECT current_user::text, (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user)`).Scan(&user, &super); err != nil {
+			t.Fatal(err)
+		}
+		if super {
+			t.Fatalf("the write pool connects as %q, a superuser or BYPASSRLS role: the rules below would be tested with privileges the runtime role does not have", user)
+		}
+		if !strings.Contains(user, "runtime") {
+			t.Fatalf("the write pool connects as %q, not the runtime role", user)
+		}
+	})
+
 	t.Run("the pool's search_path does not name the auth schema (the control for every write below)", func(t *testing.T) {
 		// Migration SQL runs with search_path set to the schema; a runtime
 		// session does not. A function body naming a table unqualified passes
 		// under the migration and fails here, which is how round 1 found it.
 		var path string
-		if err := env.pool.QueryRow(ctx, `SHOW search_path`).Scan(&path); err != nil {
+		if err := env.writer.QueryRow(ctx, `SHOW search_path`).Scan(&path); err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(path, "auth") {
@@ -100,7 +132,7 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 		}
 		var owner string
 		var parent *string
-		if err := env.pool.QueryRow(ctx,
+		if err := env.admin.QueryRow(ctx,
 			`SELECT domain_owner, rotation_parent_id::text FROM auth.credential_registry WHERE id = $1`, credParent).Scan(&owner, &parent); err != nil {
 			t.Fatal(err)
 		}
@@ -184,13 +216,13 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 		if err := insertCredential(ctx, env, id, credPrincipal, ``, ``); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := env.pool.Exec(ctx, `ALTER TABLE auth.credential_registry DISABLE TRIGGER USER`); err != nil {
+		if _, err := env.admin.Exec(ctx, `ALTER TABLE auth.credential_registry DISABLE TRIGGER USER`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := env.pool.Exec(ctx, `UPDATE auth.credential_registry SET fingerprint = NULL WHERE id = $1`, id); err != nil {
+		if _, err := env.admin.Exec(ctx, `UPDATE auth.credential_registry SET fingerprint = NULL WHERE id = $1`, id); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := env.pool.Exec(ctx, `ALTER TABLE auth.credential_registry ENABLE TRIGGER USER`); err != nil {
+		if _, err := env.admin.Exec(ctx, `ALTER TABLE auth.credential_registry ENABLE TRIGGER USER`); err != nil {
 			t.Fatal(err)
 		}
 		if err := commitCredential(ctx, env,

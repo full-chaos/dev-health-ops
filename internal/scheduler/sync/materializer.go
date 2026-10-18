@@ -1489,6 +1489,22 @@ func canonicalIncidentDecision(ctx context.Context, tx rowQuerier, orgID string,
 	return canonicalIncidentDecisionForUpdateViaLicensing(ctx, tx, orgID, now)
 }
 
+// ScheduledSourceIDs is the source set a scheduled run of the configuration
+// plans: loadPlanSources with no explicit selector, in its order. A trigger
+// that names no sources plans exactly this set, so a backfill or a manual run
+// covers the scope of the hourly run for its window (CHAOS-10064).
+func ScheduledSourceIDs(ctx context.Context, tx pgx.Tx, orgID, integrationID, configID string, sourceID *string, plannerManaged bool) ([]string, error) {
+	sources, err := loadPlanSources(ctx, tx, orgID, integrationID, configID, sourceID, nil, plannerManaged)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(sources))
+	for _, source := range sources {
+		ids = append(ids, source.ID)
+	}
+	return ids, nil
+}
+
 // loadPlanSources loads the enabled sources a plan runs against.
 // explicitSourceIDs is CHAOS-4602's manual/backfill selector
 // (sync_manual_triggers.source_ids, mirroring Python's

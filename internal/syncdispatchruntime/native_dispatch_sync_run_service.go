@@ -416,7 +416,6 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		return err
 	}
 	emitClaimSnapshotDeferral(ctx, service.logger, run.id, deferredOutsideSnapshot)
-
 	riverQueued := 0
 	// terminalDeliveryPublishes counts units whose publish landed on an
 	// already-terminal outbox row (joboutbox.ErrDeliveryAlreadyTerminal).
@@ -428,6 +427,11 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	terminalDeliveryPublishes := 0
 	var unroutableUnits []budgetUnit
 	var invalidClaimUnits []invalidClaimUnit
+	// routedUnits are the claimed units whose delivery was published: only they
+	// keep the estimates they were admitted on, for the comparison at their
+	// finish. A unit terminalized below, or one whose publish hit a terminal
+	// delivery, keeps the result it has.
+	var routedUnits []budgetUnit
 	for _, unit := range claimedUnits {
 		// Atomic provider families are admitted before transport selection,
 		// so a malformed claim can reach neither River nor a stranded state.
@@ -511,6 +515,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 				}
 				return err
 			}
+			routedUnits = append(routedUnits, unit)
 			riverQueued++
 			continue
 		}
@@ -518,6 +523,12 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		// runtime to publish it to. Terminalize instead of leaving it
 		// wedged (CHAOS-3990).
 		unroutableUnits = append(unroutableUnits, unit)
+	}
+
+	if persisted, err := persistBudgetEstimates(ctx, tx, routedUnits, budgetResult.estimatesByUnit); err != nil {
+		return err
+	} else if persisted > 0 {
+		service.logger.Debug(ctx, synclog.MsgDispatchSyncRunBudgetEstimatesPersisted, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCount, persisted))
 	}
 
 	if len(invalidClaimUnits) > 0 {

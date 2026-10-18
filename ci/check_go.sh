@@ -3184,6 +3184,22 @@ check_auth_test() {
   auth_go test -mod=readonly -trimpath -count=1 "${AUTH_PACKAGES[@]}"
 }
 
+# check_auth_history (CHAOS-4765): the endpoint-profile inventories' source_commit must resolve, be an
+# ancestor of HEAD, and every anchor line must read the same there as in the tree. It needs full git history,
+# so it is built only under -tags authhistory and run only here (auth-test job, fetch-depth: 0). A shallow
+# checkout, or a run that never printed the per-inventory proof marker, FAILS: it never skips.
+check_auth_history() {
+  local out
+  printf 'auth source_commit history check\n'
+  [ "$(cd "${ROOT}" && git rev-parse --is-shallow-repository)" = "false" ] \
+    || die "auth history: shallow checkout; this check needs full history (actions/checkout fetch-depth: 0)"
+  out="$(auth_go test -mod=readonly -trimpath -count=1 -v -tags authhistory -run '^TestEveryEndpointProfileInventoryDeclaresAVerifiableSourceCommit$' ./internal/auth/contracts 2>&1)" \
+    || { printf '%s\n' "${out}" >&2; die "auth history: an inventory source_commit does not verify"; }
+  printf '%s\n' "${out}"
+  printf '%s\n' "${out}" | grep -q 'AUTH_SOURCE_COMMIT_VERIFIED ' \
+    || die "auth history: no inventory was verified (the proof marker never printed)"
+}
+
 check_auth_race() {
   printf 'auth go test -race\n'
   auth_go test -mod=readonly -trimpath -count=1 -race "${AUTH_PACKAGES[@]}"
@@ -3416,6 +3432,7 @@ check_auth() {
     vet) check_auth_vet ;;
     test) check_auth_test ;;
     race) check_auth_race ;;
+    history) check_auth_history ;;
     fuzz) check_auth_fuzz "${2:-}" ;;
     fuzz-registry) check_auth_fuzz_registry ;;
     vuln) check_auth_vuln ;;
@@ -3433,11 +3450,12 @@ check_auth() {
       check_auth_vet
       check_auth_test
       check_auth_race
+      check_auth_history
       check_auth_middleware
       check_auth_fuzz
       check_auth_vuln
       ;;
-    *) die "auth accepts fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all" ;;
+    *) die "auth accepts fmt|vet|test|race|history|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all" ;;
   esac
 }
 

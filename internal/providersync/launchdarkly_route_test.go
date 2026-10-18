@@ -81,6 +81,7 @@ func TestLaunchDarklyRouteFetchesCompleteUnitAndUsesEventReadbackPolicy(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.Ledger = providerfoundation.NewRequestLedger()
 	claim := nativeTestClaim("launchdarkly", "feature-flags")
 	claim.DatasetOptions = map[string]any{
 		"project_key": "payments", "environment": "production",
@@ -100,6 +101,7 @@ func TestLaunchDarklyRouteFetchesCompleteUnitAndUsesEventReadbackPolicy(t *testi
 	if err != nil {
 		t.Fatalf("collect error=%v requests=%v", err, requestURLs(doer.requests))
 	}
+	assertRouteRequestsAreLabelled(t, "launchdarkly", "feature-flags", client.Ledger, "flags", "audit_log", "code_refs")
 	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 	if err := batch.validate(descriptor); err != nil {
 		t.Fatal(err)

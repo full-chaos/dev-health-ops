@@ -229,7 +229,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	counted.Doer = gitLabWorkItemsCountingDoer{delegate: client.Doer, requests: &requests}
 	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
+	if err := fetchObjectRoute(budgetAccount(ctx, "project"), &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -279,7 +279,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 
 	if fetchMilestones {
 		milestones, milestonePages, milestoneErr := collectGitLabMilestones(
-			ctx, &counted, gitlabMilestonesRoute, root+"/milestones", perPage, nestedMaxPages,
+			budgetAccount(ctx, "milestones"), &counted, gitlabMilestonesRoute, root+"/milestones", perPage, nestedMaxPages,
 		)
 		if milestoneErr != nil {
 			return CompleteRouteBatch{}, milestoneErr
@@ -321,7 +321,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		epicsSynced, epicsSkipped, epicsHeld, epicsIncomplete = outcome.synced, outcome.skipped, outcome.held, outcome.incomplete
 	}
 	issuePayloads, issuePages, issueErr := collectGitLabPayloads(
-		ctx, &counted, gitlabIssuesRoute, root+"/issues", query, perPage, maxPages,
+		budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute, root+"/issues", query, perPage, maxPages,
 	)
 	if issueErr != nil {
 		return CompleteRouteBatch{}, issueErr
@@ -336,7 +336,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		if fetchLabels {
 			var labelPages int
 			labelEvents, labelPages, err = collectGitLabLabelEvents(
-				ctx, &counted, gitlabIssuesRoute+"/{iid}/resource_label_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_label_events",
+				budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute+"/{iid}/resource_label_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_label_events",
 				perPage, nestedMaxPages,
 			)
 			if err != nil {
@@ -355,7 +355,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
 		if fetchHistory {
 			events, eventPages, eventErr := collectGitLabStateEvents(
-				ctx, &counted, gitlabIssuesRoute+"/{iid}/resource_state_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_state_events",
+				budgetAccount(ctx, "notes"), &counted, gitlabIssuesRoute+"/{iid}/resource_state_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_state_events",
 				perPage, nestedMaxPages,
 			)
 			if eventErr != nil {
@@ -367,7 +367,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		}
 		if fetchLinks {
 			links, linkPages, linkErr := collectGitLabIssueLinks(
-				ctx, &counted, gitlabIssuesRoute+"/{iid}/links", root+"/issues/"+strconv.Itoa(payload.IID)+"/links",
+				budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute+"/{iid}/links", root+"/issues/"+strconv.Itoa(payload.IID)+"/links",
 				perPage, nestedMaxPages,
 			)
 			if linkErr != nil {
@@ -393,7 +393,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "count", unsupported)
 			}
 			closing, closingPages, closingErr := collectGitLabClosingMergeRequests(
-				ctx, &counted, gitlabIssuesRoute+"/{iid}/closed_by", root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
+				budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute+"/{iid}/closed_by", root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
 				perPage, nestedMaxPages,
 			)
 			pages += closingPages
@@ -428,7 +428,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		}
 		if fetchComments {
 			notes, notePages, noteErr := collectGitLabNotes(
-				ctx, &counted, gitlabIssuesRoute+"/{iid}/notes", root+"/issues/"+strconv.Itoa(payload.IID)+"/notes",
+				budgetAccount(ctx, "notes"), &counted, gitlabIssuesRoute+"/{iid}/notes", root+"/issues/"+strconv.Itoa(payload.IID)+"/notes",
 				perPage, nestedMaxPages,
 			)
 			if noteErr != nil {
@@ -442,7 +442,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 
 	if includeMRs {
 		mergeRequests, mergeRequestPages, mergeRequestErr := collectGitLabPayloads(
-			ctx, &counted, gitlabMergeRequestsRoute, root+"/merge_requests", query, perPage, maxPages,
+			budgetAccount(ctx, "merge_requests"), &counted, gitlabMergeRequestsRoute, root+"/merge_requests", query, perPage, maxPages,
 		)
 		if mergeRequestErr != nil {
 			return CompleteRouteBatch{}, mergeRequestErr
@@ -457,7 +457,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			if fetchHistory {
 				var statePages int
 				stateEvents, statePages, err = collectGitLabStateEvents(
-					ctx, &counted, gitlabMergeRequestsRoute+"/{iid}/resource_state_events", root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/resource_state_events",
+					budgetAccount(ctx, "notes"), &counted, gitlabMergeRequestsRoute+"/{iid}/resource_state_events", root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/resource_state_events",
 					perPage, nestedMaxPages,
 				)
 				if err != nil {
@@ -478,7 +478,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			// writer per ai_attribution key); this route emits none.
 			if fetchComments {
 				notes, notePages, noteErr := collectGitLabNotes(
-					ctx, &counted, gitlabMergeRequestsRoute+"/{iid}/notes", root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/notes",
+					budgetAccount(ctx, "notes"), &counted, gitlabMergeRequestsRoute+"/{iid}/notes", root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/notes",
 					perPage, nestedMaxPages,
 				)
 				if noteErr != nil {
@@ -825,6 +825,7 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 	pages *int,
 ) (gitLabEpicOutcome, error) {
 	var outcome gitLabEpicOutcome
+	ctx = budgetAccount(ctx, "epics")
 	parts := strings.Split(fullName, "/")
 	if len(parts) < 2 {
 		slog.Default().InfoContext(ctx, "gitlab_work_items_epics",

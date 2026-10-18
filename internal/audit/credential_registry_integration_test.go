@@ -4,7 +4,10 @@ package audit
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -297,6 +300,43 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 		mustFail(t, "prefix with a space", insert("workload_token", "bad prefix"), "credential_registry_display_prefix_shape")
 		if err := insert("workload_token", "exmpl_ab12"); err != nil {
 			t.Fatalf("a wire-shaped class and prefix were refused: %v", err)
+		}
+
+		// The live constraint is compared with principal.v1's vocabulary by
+		// execution, not by reading the SQL text: every wire class is stored,
+		// and near misses are refused.
+		raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "auth", "v1", "jsonschema", "principal.v1.schema.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema struct {
+			Properties struct {
+				Credential struct {
+					Properties struct {
+						Class struct {
+							Enum []string `json:"enum"`
+						} `json:"class"`
+					} `json:"properties"`
+				} `json:"credential"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		classes := schema.Properties.Credential.Properties.Class.Enum
+		if len(classes) == 0 {
+			t.Fatal("principal.v1 declares no credential classes; the execution check would be vacuous")
+		}
+		for i, class := range classes {
+			if err := commitCredential(ctx, env,
+				`INSERT INTO auth.credential_registry (id, principal_id, credential_class, display_prefix, secret_hash, hash_algorithm, fingerprint)
+				 VALUES ($1, $2, $3, 'exmpl_ab12', decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef')`,
+				fmt.Sprintf("00000000-0000-4000-8000-%012x", 0xe000+i), credPrincipal, class); err != nil {
+				t.Errorf("principal.v1 class %q was refused by the table: %v", class, err)
+			}
+		}
+		for _, bad := range []string{"rogue", "WORKLOAD_TOKEN", classes[0] + "_x", classes[0] + " ", ""} {
+			mustFail(t, "class "+bad, insert(bad, "ok_"), "credential_registry_credential_class_closed")
 		}
 	})
 

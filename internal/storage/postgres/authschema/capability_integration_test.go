@@ -141,7 +141,7 @@ func TestRuntimeCanExerciseEveryDeclaredPrivilege(t *testing.T) {
 		if !declared || !entry.Insert {
 			continue
 		}
-		if _, err := env.runtime.Exec(ctx, fixture.SQL, fixture.Args...); err != nil {
+		if err := guardedExec(ctx, env.runtime, fixture.SQL, fixture.Args...); err != nil {
 			t.Errorf("INSERT on auth.%s was refused or invalid: %v", fixture.Table, err)
 			continue
 		}

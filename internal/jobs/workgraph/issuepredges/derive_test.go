@@ -198,6 +198,13 @@ func TestExplicitTextTierProviderMatrix(t *testing.T) {
 		// CHAOS-3383: a renamed project's items keep their minted path.
 		{"gitlab renamed project by its current path", "see team/web#3", []WorkItemRow{{uuid.New(), "gitlab:team/old-name#3", "gitlab", "team/web"}}, "gitlab:team/old-name#3", "references", 0},
 		{"gitlab renamed project by its minted path", "see team/old-name#3", []WorkItemRow{{uuid.New(), "gitlab:team/old-name#3", "gitlab", "team/web"}}, "gitlab:team/old-name#3", "references", 0},
+		// CHAOS-9879: the same for a renamed GitHub repository.
+		{"github renamed repository by its current name", "see platform/api-v2#3", []WorkItemRow{{uuid.New(), "gh:acme/api#3", "github", "platform/api-v2"}}, "gh:acme/api#3", "references", 0},
+		{"github renamed repository by its minted name", "see acme/api#3", []WorkItemRow{{uuid.New(), "gh:acme/api#3", "github", "platform/api-v2"}}, "gh:acme/api#3", "references", 0},
+		{"github current name names the repository there now", "see acme/api#4", []WorkItemRow{
+			{uuid.New(), "gh:acme/api#4", "github", "platform/api-v2"},
+			{uuid.New(), "gh:acme/api@456#4", "github", "acme/api"},
+		}, "gh:acme/api@456#4", "references", 0},
 		{"gitlab current path names the project there now", "see acme/api#4", []WorkItemRow{
 			{uuid.New(), "gitlab:acme/api#4", "gitlab", "platform/api-v2"},
 			{uuid.New(), "gitlab:acme/api@456#4", "gitlab", "acme/api"},

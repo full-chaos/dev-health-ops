@@ -352,7 +352,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			// comment -> row step is ever added, this needs the same
 			// continue-and-record treatment as the issue path.
 			bundle, normalizeErr := normalizeGitHubPullRequestBundle(
-				claim, restResult.RepoFullName, restResult.RepoID, pull.Payload,
+				claim, restResult.names(), restResult.RepoID, pull.Payload,
 				adapted.Events, adapted.Comments, adapted.ClosingIssueRefs,
 				handler.ResolveIdentity, normalizedAt,
 			)

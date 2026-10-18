@@ -245,15 +245,33 @@ type githubMilestonePayload struct {
 
 type githubIdentityResolver func(githubWorkItemUserPayload) string
 
+// githubRepoNames names one repository twice (CHAOS-9879): Current is its
+// name now (work_items.project_id), Identity is the name its repo_id was
+// minted from, which every work-item, sprint and same-repository reference id
+// carries so a rename or transfer continues them. They are equal for a
+// repository that was never renamed.
+type githubRepoNames struct {
+	Current  string
+	Identity string
+}
+
+func sameGitHubRepoNames(name string) githubRepoNames {
+	return githubRepoNames{Current: name, Identity: name}
+}
+
+func (names githubRepoNames) valid() bool {
+	return strings.TrimSpace(names.Current) != "" && strings.TrimSpace(names.Identity) != ""
+}
+
 func normalizeGitHubIssueWorkItem(
 	claim Claim,
-	repoFullName string,
+	names githubRepoNames,
 	repoID uuid.UUID,
 	raw json.RawMessage,
 	resolveIdentity githubIdentityResolver,
 	normalizedAt time.Time,
 ) (githubWorkItemRow, error) {
-	source, err := githubIssueWorkItemSource(claim, repoFullName, repoID, raw, resolveIdentity, normalizedAt)
+	source, err := githubIssueWorkItemSource(claim, names, repoID, raw, resolveIdentity, normalizedAt)
 	if err != nil {
 		return githubWorkItemRow{}, err
 	}
@@ -263,14 +281,14 @@ func normalizeGitHubIssueWorkItem(
 // githubIssueWorkItemSource reads a REST issue payload into the GitHub adapter.
 func githubIssueWorkItemSource(
 	claim Claim,
-	repoFullName string,
+	names githubRepoNames,
 	repoID uuid.UUID,
 	raw json.RawMessage,
 	resolveIdentity githubIdentityResolver,
 	normalizedAt time.Time,
 ) (githubWorkItemSource, error) {
 	if claim.Validate() != nil || claim.Provider != "github" ||
-		!isWorkItemFamilyDataset(claim.Dataset) || strings.TrimSpace(repoFullName) == "" ||
+		!isWorkItemFamilyDataset(claim.Dataset) || !names.valid() ||
 		repoID == uuid.Nil || normalizedAt.IsZero() {
 		return githubWorkItemSource{}, ErrInvalidConfiguration
 	}
@@ -323,7 +341,7 @@ func githubIssueWorkItemSource(
 	if description != nil && *description == "" {
 		description = nil
 	}
-	projectID := repoFullName
+	projectID := names.Current
 	priority, serviceClass := githubPriorityFromLabels(labels)
 	var completedAt *time.Time
 	if closedAt != nil {
@@ -332,7 +350,7 @@ func githubIssueWorkItemSource(
 	}
 	return githubWorkItemSource{
 		kind: githubIssueSourceKind, validate: githubWorkItemRow.validate,
-		workItemID: "gh:" + repoFullName + "#" + strconv.Itoa(issue.Number),
+		workItemID: "gh:" + names.Identity + "#" + strconv.Itoa(issue.Number),
 		title:      issue.Title, typeName: itemType, status: status,
 		statusRaw: nullableString(state), description: description, repoID: &repoID,
 		projectID: &projectID, assignees: assignees, reporter: reporter,
@@ -343,12 +361,12 @@ func githubIssueWorkItemSource(
 
 func normalizeGitHubSprint(
 	claim Claim,
-	repoFullName string,
+	identityName string,
 	raw json.RawMessage,
 	normalizedAt time.Time,
 ) (githubSprintRow, error) {
 	if claim.Validate() != nil || claim.Provider != "github" ||
-		!isWorkItemFamilyDataset(claim.Dataset) || strings.TrimSpace(repoFullName) == "" ||
+		!isWorkItemFamilyDataset(claim.Dataset) || strings.TrimSpace(identityName) == "" ||
 		normalizedAt.IsZero() {
 		return githubSprintRow{}, ErrInvalidConfiguration
 	}
@@ -380,7 +398,7 @@ func normalizeGitHubSprint(
 		name = *milestone.Title
 	}
 	row := githubSprintRow{
-		Provider: "github", SprintID: "ghms:" + repoFullName + ":" + id,
+		Provider: "github", SprintID: "ghms:" + identityName + ":" + id,
 		Name: &name, State: &state, StartedAt: createdAt, EndedAt: dueOn,
 		LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID,
 	}
@@ -395,7 +413,7 @@ func normalizeGitHubSprint(
 
 func normalizeGitHubIssueBundle(
 	claim Claim,
-	repoFullName string,
+	names githubRepoNames,
 	repoID uuid.UUID,
 	raw json.RawMessage,
 	events []json.RawMessage,
@@ -404,7 +422,7 @@ func normalizeGitHubIssueBundle(
 	normalizedAt time.Time,
 ) (githubWorkItemRows, error) {
 	source, err := githubIssueWorkItemSource(
-		claim, repoFullName, repoID, raw, resolveIdentity, normalizedAt,
+		claim, names, repoID, raw, resolveIdentity, normalizedAt,
 	)
 	if err != nil {
 		return githubWorkItemRows{}, err
@@ -442,7 +460,7 @@ func normalizeGitHubIssueBundle(
 		body = *issue.Body
 	}
 	dependencies, err := extractGitHubWorkItemDependencies(
-		claim, item.WorkItemID, repoFullName, body, "", comments, normalizedAt,
+		claim, item.WorkItemID, names.Identity, body, "", comments, normalizedAt,
 	)
 	if err != nil {
 		return githubWorkItemRows{}, err
@@ -456,7 +474,7 @@ func normalizeGitHubIssueBundle(
 
 func normalizeGitHubPullRequestBundle(
 	claim Claim,
-	repoFullName string,
+	names githubRepoNames,
 	repoID uuid.UUID,
 	raw json.RawMessage,
 	events []json.RawMessage,
@@ -466,7 +484,7 @@ func normalizeGitHubPullRequestBundle(
 	normalizedAt time.Time,
 ) (githubWorkItemRows, error) {
 	if claim.Validate() != nil || claim.Provider != "github" ||
-		!isWorkItemFamilyDataset(claim.Dataset) || strings.TrimSpace(repoFullName) == "" ||
+		!isWorkItemFamilyDataset(claim.Dataset) || !names.valid() ||
 		repoID == uuid.Nil || normalizedAt.IsZero() {
 		return githubWorkItemRows{}, ErrInvalidConfiguration
 	}
@@ -530,7 +548,7 @@ func normalizeGitHubPullRequestBundle(
 	if urlValue == nil || *urlValue == "" {
 		urlValue = pull.URL
 	}
-	projectID := repoFullName
+	projectID := names.Current
 	priority, serviceClass := githubPriorityFromLabels(labels)
 	startedAt := createdAt.UTC()
 	var completedAt *time.Time
@@ -543,7 +561,7 @@ func normalizeGitHubPullRequestBundle(
 	}
 	item, err := buildWorkItemRow(claim, githubWorkItemSource{
 		kind: githubPullRequestSourceKind, validate: githubWorkItemRow.validate,
-		workItemID: "ghpr:" + repoFullName + "#" + strconv.Itoa(pull.Number),
+		workItemID: "ghpr:" + names.Identity + "#" + strconv.Itoa(pull.Number),
 		title:      pull.Title, typeName: "pr", status: status,
 		statusRaw: nullableString(statusRaw), description: description, repoID: &repoID,
 		projectID: &projectID, assignees: assignees, reporter: reporter,
@@ -572,13 +590,13 @@ func normalizeGitHubPullRequestBundle(
 		body = *pull.Body
 	}
 	dependencies, err := extractGitHubWorkItemDependencies(
-		claim, item.WorkItemID, repoFullName, body, pull.Head.Ref, comments, normalizedAt,
+		claim, item.WorkItemID, names.Identity, body, pull.Head.Ref, comments, normalizedAt,
 	)
 	if err != nil {
 		return githubWorkItemRows{}, err
 	}
 	closingRefDependencies, err := extractGitHubClosingIssueReferences(
-		claim, item.WorkItemID, closingIssueRefs, normalizedAt,
+		claim, names, item.WorkItemID, closingIssueRefs, normalizedAt,
 	)
 	if err != nil {
 		return githubWorkItemRows{}, err
@@ -790,6 +808,7 @@ type githubClosingIssueReferenceNode struct {
 // Python sync changes for anything Go workers run).
 func extractGitHubClosingIssueReferences(
 	claim Claim,
+	names githubRepoNames,
 	workItemID string,
 	rawRefs []json.RawMessage,
 	normalizedAt time.Time,
@@ -804,6 +823,9 @@ func extractGitHubClosingIssueReferences(
 		repoFullName := strings.TrimSpace(node.Repository.NameWithOwner)
 		if node.Number < 1 || repoFullName == "" {
 			continue
+		}
+		if strings.EqualFold(repoFullName, names.Current) {
+			repoFullName = names.Identity
 		}
 		target := "gh:" + repoFullName + "#" + strconv.Itoa(node.Number)
 		if target == workItemID {

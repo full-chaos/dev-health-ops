@@ -287,8 +287,8 @@ WHERE id IN {repo_ids:Array(String)}
 }
 
 // FetchRepoIdentities ports fetch_repo_identities
-// (work_unit_investments.py:111-172). A GitLab slug is repos.identity_path,
-// the path its merge-request ids carry (CHAOS-3383); only GitLab rows hold one.
+// (work_unit_investments.py:111-172). A GitLab or GitHub slug is repos.identity_path,
+// the name its pull-request ids carry (CHAOS-3383, CHAOS-9879); a row with none uses its repo.
 func (reader *Reader) FetchRepoIdentities(ctx context.Context, orgID string, repoIDs []string) (map[string]repoIdentity, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
@@ -301,7 +301,7 @@ func (reader *Reader) FetchRepoIdentities(ctx context.Context, orgID string, rep
 	query := fmt.Sprintf(`
 SELECT
     toString(id) AS repo_id,
-    argMax(if(repos.provider = 'gitlab' AND identity_path != '', identity_path, repos.repo), last_synced) AS repo_slug,
+    argMax(if(repos.provider IN ('gitlab', 'github') AND identity_path != '', identity_path, repos.repo), last_synced) AS repo_slug,
     if(uniqExact(provider) = 1, argMax(provider, last_synced), '') AS provider
 FROM repos
 WHERE id IN {repo_ids:Array(String)}

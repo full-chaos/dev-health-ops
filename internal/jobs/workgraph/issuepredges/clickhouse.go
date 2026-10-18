@@ -258,24 +258,25 @@ func (loader *Loader) loadWorkItems(ctx context.Context, orgID string) ([]WorkIt
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	renamed, err := loader.loadRenamedGitLabRepos(ctx, orgID)
+	renamed, err := loader.loadRenamedRepos(ctx, orgID)
 	if err != nil {
-		return nil, fmt.Errorf("load renamed gitlab repos: %w", err)
+		return nil, fmt.Errorf("load renamed repos: %w", err)
 	}
 	for index := range out {
-		if out[index].Provider == "gitlab" {
+		if out[index].Provider == "gitlab" || out[index].Provider == "github" {
 			out[index].CurrentPath = renamed[out[index].RepoID]
 		}
 	}
 	return out, nil
 }
 
-// loadRenamedGitLabRepos maps the GitLab repositories whose current path is
-// not the path their id was minted from (CHAOS-3383) to that current path.
-func (loader *Loader) loadRenamedGitLabRepos(ctx context.Context, orgID string) (map[uuid.UUID]string, error) {
+// loadRenamedRepos maps the GitLab and GitHub repositories whose current path
+// is not the path their id was minted from (CHAOS-3383, CHAOS-9879) to that
+// current path.
+func (loader *Loader) loadRenamedRepos(ctx context.Context, orgID string) (map[uuid.UUID]string, error) {
 	rows, err := loader.conn.Query(ctx, `
 SELECT id, repo FROM repos FINAL
-WHERE org_id = {org_id:String} AND provider = 'gitlab' AND identity_path != '' AND identity_path != repo`,
+WHERE org_id = {org_id:String} AND provider IN ('gitlab', 'github') AND identity_path != '' AND identity_path != repo`,
 		clickhouse.Named("org_id", orgID))
 	if err != nil {
 		return nil, err

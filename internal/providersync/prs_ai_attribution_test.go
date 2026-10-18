@@ -114,7 +114,7 @@ func prAttributionWorkItemsRows(t *testing.T) []githubAIAttributionRow {
 	var rows []githubAIAttributionRow
 	for _, pull := range result.PullRequests {
 		bundle, err := normalizeGitHubPullRequestBundle(
-			claim, result.RepoFullName, result.RepoID, pull.Payload,
+			claim, sameGitHubRepoNames(result.RepoFullName), result.RepoID, pull.Payload,
 			nil, nil, nil, nil, prAttributionNormalizedAt(),
 		)
 		if err != nil {

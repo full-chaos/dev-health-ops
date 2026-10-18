@@ -76,8 +76,9 @@ type WorkItemRow struct {
 	RepoID     uuid.UUID
 	WorkItemID string
 	Provider   string
-	// CurrentPath is a renamed GitLab repository's current path, when it is not
-	// the path in WorkItemID (CHAOS-3383); empty otherwise.
+	// CurrentPath is a renamed GitLab or GitHub repository's current path,
+	// when it is not the path in WorkItemID (CHAOS-3383, CHAOS-9879); empty
+	// otherwise.
 	CurrentPath string
 }
 
@@ -224,21 +225,24 @@ func buildProviderLookup(workItems []WorkItemRow) providerLookup {
 			}
 		}
 	}
-	// A renamed GitLab project's items keep the path their repository id was
-	// minted from, while a group/project#n in text names its current path.
-	// That path names this project now, also over another project's item that
-	// still carries it.
+	// A renamed GitLab project's or GitHub repository's items keep the path
+	// their repository id was minted from, while a group/project#n or
+	// owner/repo#n in text names its current path. That path names this
+	// repository now, also over another repository's item that still carries
+	// it.
 	for _, wi := range workItems {
-		if wi.Provider != "gitlab" || wi.CurrentPath == "" || issueprlinks.IsPullRequestWorkItem(wi.WorkItemID) {
+		prefix := map[string]string{"gitlab": "gitlab:", "github": "gh:"}[wi.Provider]
+		if prefix == "" || wi.CurrentPath == "" || issueprlinks.IsPullRequestWorkItem(wi.WorkItemID) {
 			continue
 		}
 		if idx := strings.LastIndex(wi.WorkItemID, "#"); idx >= 0 {
-			// The key keeps the "gitlab:" prefix, so it never answers a GitHub
-			// owner/repo#n: provider-scoped by construction.
-			key := strings.ToLower("gitlab:" + wi.CurrentPath + wi.WorkItemID[idx:])
+			// The key keeps the provider prefix, so a GitLab path never
+			// answers a GitHub owner/repo#n and the reverse: provider-scoped
+			// by construction.
+			key := strings.ToLower(prefix + wi.CurrentPath + wi.WorkItemID[idx:])
 			if held, ok := lookup.byID[key]; ok && held != wi.WorkItemID {
 				lookup.renamedPathCollisions++
-				slog.Default().Debug("issue-pr text refs: a GitLab current path names another project's minted path",
+				slog.Default().Debug("issue-pr text refs: a current path names another repository's minted path",
 					slog.String("key", key), slog.String("replaced_work_item_id", held), slog.String("work_item_id", wi.WorkItemID))
 			}
 			lookup.byID[key] = wi.WorkItemID

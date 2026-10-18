@@ -167,7 +167,8 @@ type GitHubBlameGenerationProgressProbe interface {
 }
 
 type GitHubBlameRouteHandler struct {
-	Coverage GitHubBlameCoverage
+	RepoIdentity GitLabRepoIdentityReader
+	Coverage     GitHubBlameCoverage
 	// MaxFiles is test-configurable below the production ceiling. Zero uses
 	// gitHubBlameMaxFiles; values above that ceiling fail closed.
 	MaxFiles int
@@ -203,7 +204,7 @@ func (handler GitHubBlameRouteHandler) Collect(
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	return collectGitHubBlame(
-		ctx, claim, client, normalizedAt, handler.Coverage, maxFiles, false, "",
+		ctx, claim, client, normalizedAt, handler.Coverage, handler.RepoIdentity, maxFiles, false, "",
 		handler.resolvedLimits(),
 	)
 }
@@ -228,7 +229,7 @@ func (handler GitHubBlameRouteHandler) CollectRecovery(
 		maxFiles = gitHubBlameMaxFiles
 	}
 	return collectGitHubBlame(
-		ctx, claim, client, normalizedAt, handler.Coverage, maxFiles, false,
+		ctx, claim, client, normalizedAt, handler.Coverage, handler.RepoIdentity, maxFiles, false,
 		state.Generation, handler.resolvedLimits(),
 	)
 }
@@ -267,7 +268,7 @@ func collectGitHubBlameFoundation(
 	normalizedAt time.Time,
 ) (CompleteRouteBatch, error) {
 	return collectGitHubBlame(
-		ctx, claim, client, normalizedAt, nil, gitHubBlameMaxFiles, true, "",
+		ctx, claim, client, normalizedAt, nil, nil, gitHubBlameMaxFiles, true, "",
 		defaultGitHubBlameLimits(),
 	)
 }
@@ -278,6 +279,7 @@ func collectGitHubBlame(
 	client *providerfoundation.HTTPClient,
 	normalizedAt time.Time,
 	coverage GitHubBlameCoverage,
+	identity GitLabRepoIdentityReader,
 	maxFiles int,
 	requireCompleteInventory bool,
 	recoveryGeneration string,
@@ -301,7 +303,7 @@ func collectGitHubBlame(
 	if err := fetchObject(ctx, client, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, fmt.Errorf("%w: %w", ErrGitHubBlameTraversalFailed, err)
 	}
-	repoID, err := repositoryIdentity(repoPayload.FullName)
+	repoID, err := resolveGitHubRepoID(ctx, identity, claim, repoPayload)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

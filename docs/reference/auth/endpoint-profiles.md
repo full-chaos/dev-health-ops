@@ -277,6 +277,25 @@ route-table `Pattern:` field sits on its own line.
 `MULTIPLE REGISTRATIONS ON ONE LINE` and names both routes. The schema has no
 column field; this rule is the chosen alternative.
 
+## `source_commit`: what is verified and what is not (CHAOS-4765)
+
+Every `contracts/auth/v1/endpoint-profiles.*.json` carries a top-level
+`source_commit`, the commit its `file:line` anchors were derived against. The
+`auth-test` job (`ci/check_go.sh auth history`, full git history) enforces:
+
+- **Reachable.** `source_commit` is a 40-hex id that resolves in the repo and is
+  an ancestor of `HEAD`. A shallow checkout fails the check and says so; it is
+  the one benign cause.
+- **Not stale.** Every anchor line in this repo (a `path`/`line` anchor or a
+  row's `source` `file`/`line`) reads the same at `source_commit` as in the
+  tree under test. An ancestor check alone would pass a stale base, so this
+  half is what catches an inventory whose anchors moved after it was derived.
+
+Not verified: that the anchored line is the right symbol (the rows gate in
+`internal/queryapi/server` owns that), and anchors that name another repo.
+When you move an anchor, bump `source_commit` to a commit on `main` at which
+every anchor line holds.
+
 ## Contributor guide: registering a new route or credential class
 
 1. **New route, existing credential class.** Add a row to

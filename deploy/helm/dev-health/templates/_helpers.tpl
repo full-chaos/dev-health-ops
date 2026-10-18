@@ -101,6 +101,25 @@ dho (operator binary) image: the Go api Deployment runs `dho api` from it
 {{- end }}
 
 {{/*
+Auth Control Plane images (docker/go-worker.Dockerfile targets auth-service and auth-migrate)
+*/}}
+{{- define "dev-health.authServiceImage" -}}
+{{- if contains "@" .Values.authService.image.repository -}}
+{{- .Values.authService.image.repository }}
+{{- else -}}
+{{- printf "%s:%s" .Values.authService.image.repository (default .Chart.AppVersion .Values.authService.image.tag) }}
+{{- end -}}
+{{- end }}
+
+{{- define "dev-health.authMigrateImage" -}}
+{{- if contains "@" .Values.authService.migrate.image.repository -}}
+{{- .Values.authService.migrate.image.repository }}
+{{- else -}}
+{{- printf "%s:%s" .Values.authService.migrate.image.repository (default .Chart.AppVersion .Values.authService.migrate.image.tag) }}
+{{- end -}}
+{{- end }}
+
+{{/*
 Secret name — either the one we create or an external one
 */}}
 {{- define "dev-health.secretName" -}}

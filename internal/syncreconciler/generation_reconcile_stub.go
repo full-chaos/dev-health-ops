@@ -11,12 +11,13 @@ type StrandedKindCount struct {
 }
 
 type GenerationReconcileReport struct {
-	Kind             string
-	Rearmed          int
-	SkippedNotReady  int
-	SkippedLiveJob   int
-	SkippedLockedJob int
-	OtherKinds       []StrandedKindCount
+	Kind               string
+	Rearmed            int
+	SkippedNotReady    int
+	SkippedLiveJob     int
+	SkippedOtherRepair int
+	SkippedLockedJob   int
+	OtherKinds         []StrandedKindCount
 }
 
 // RED proof only: no reconcile exists on main.

@@ -179,6 +179,14 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 func configure(
 	ctx context.Context, cfg authconfig.Config, logger *slog.Logger,
 ) ([]lifecycle.Component, error) {
+	return configureWithRoutes(ctx, cfg, logger, Routes())
+}
+
+// configureWithRoutes is configure with the API route table supplied, so the
+// production-stack test drives the handler configure really builds.
+func configureWithRoutes(
+	ctx context.Context, cfg authconfig.Config, logger *slog.Logger, routes []httpapi.Route,
+) ([]lifecycle.Component, error) {
 	store, err := authstore.Open(ctx, authstore.Config{
 		URI:            cfg.DatabaseURI.Reveal(),
 		Schema:         cfg.DatabaseSchema,
@@ -284,7 +292,8 @@ func configure(
 		return nil, err
 	}
 
-	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, Routes()))
+	// MUTATION (CHAOS-10084 red commit): drops the limits and body bound.
+	apiHTTP, err := httpapi.NewServer(httpapi.ServerOptions{Address: cfg.APIAddress, Logger: logger, Routes: routes, RequestTimeout: cfg.RequestTimeout, MaxInFlight: maxInFlightRequests})
 	if err != nil {
 		closeStore()
 		return nil, err

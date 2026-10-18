@@ -196,7 +196,7 @@ func TestRuntimeRolePostureAgainstLivePostgres(t *testing.T) {
 		// The audit insert exercises the SEQUENCE grant as well as the table
 		// grant: without USAGE on security_audit_events_id_seq this fails on
 		// nextval even though the INSERT privilege is present.
-		if _, err := runtimePool.Exec(ctx, `
+		if err := guardedExec(ctx, runtimePool, `
 			INSERT INTO auth.security_audit_events (event_type, outcome)
 			VALUES ('posture.control', 'allowed')`,
 		); err != nil {
@@ -514,4 +514,57 @@ func pgMessage(err error) string {
 		return pgErr.Message
 	}
 	return err.Error()
+}
+
+// A guarded table refuses a write made outside a transaction that carries the
+// commit guard's setting, whatever connection or SQL text produced it.
+func TestGuardedTablesRefuseWritesOutsideACommitTransaction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+
+	for _, statement := range []string{
+		`INSERT INTO auth.organizations (id, slug, name) VALUES (gen_random_uuid(), 'direct', 'Direct')`,
+		// The table name is assembled at run time, as a text scan cannot see.
+		`DO $$ BEGIN EXECUTE 'INSERT INTO auth.' || 'auth_outbox_' || 'events (aggregate_type, aggregate_id, event_type, payload, idempotency_key) VALUES (''a'', ''b'', ''c'', ''{}'', ''direct-1'')'; END $$`,
+		`INSERT INTO auth.security_audit_events (event_type, outcome) VALUES ('direct', 'allowed')`,
+	} {
+		_, err := env.runtime.Exec(ctx, statement)
+		if err == nil {
+			t.Errorf("direct write was accepted: %s", statement)
+			continue
+		}
+		if !strings.Contains(err.Error(), "audit.Commit") {
+			t.Errorf("write refused for another reason (%v): %s", err, statement)
+		}
+	}
+
+	// UPDATE and DELETE are guarded too, not only INSERT. Seed a row the proper
+	// way, then try to change it from outside a Commit-style transaction.
+	if err := guardedExec(ctx, env.runtime, `INSERT INTO auth.organizations (id, slug, name) VALUES (gen_random_uuid(), 'victim', 'Victim')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	for _, statement := range []string{
+		`UPDATE auth.organizations SET name = 'changed' WHERE slug = 'victim'`,
+		`DELETE FROM auth.organizations WHERE slug = 'victim'`,
+	} {
+		if _, err := env.admin.Exec(ctx, statement); err == nil {
+			t.Errorf("unguarded %s was accepted", statement)
+		} else if !strings.Contains(err.Error(), "audit.Commit") {
+			t.Errorf("refused for another reason (%v): %s", err, statement)
+		}
+	}
+
+	// A wrong value is refused as well as an absent one.
+	tx, err := env.runtime.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', '1', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, slug, name) VALUES (gen_random_uuid(), 'wrong', 'Wrong')`); err == nil {
+		t.Error("a write under a forged transaction id was accepted")
+	}
 }

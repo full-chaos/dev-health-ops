@@ -26,6 +26,12 @@ const LLMConfigScope = "llm_config:read"
 
 const llmConfigSchemaVersion = "acr_llm_config.v1"
 
+// NoConfigHeader marks the 404 that means "the org has no BYO config".
+const (
+	NoConfigHeader = "X-Org-Llm-Config"
+	NoConfigValue  = "none"
+)
+
 // ErrCredentialInvalid is a missing, unknown, revoked or expired credential.
 var ErrCredentialInvalid = errors.New("service credential invalid")
 
@@ -136,6 +142,10 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			logger.InfoContext(ctx, "acr llm-config: none configured",
 				slog.String("org_id", orgID), slog.String("credential_id", credentialID))
 			countLLMConfig(ctx, "not_found")
+			// A machine-readable marker: a client that must tell "this org has
+			// no config" from a missing route (an old replica, a wrong target)
+			// reads this header, never the bare 404.
+			w.Header().Set(NoConfigHeader, NoConfigValue)
 			writeDetail(w, http.StatusNotFound, "Not found")
 			return
 		}
@@ -185,12 +195,30 @@ func errorKind(err error) string {
 type PostgresCredentialVerifier struct {
 	Pool *pgxpool.Pool
 	Now  func() time.Time
+	// Service and TokenPrefix name the credential family this verifier accepts;
+	// empty means acr (svc_acr_). The worker llm-config route sets
+	// worker-llm-config and svc_wllm_.
+	Service     string
+	TokenPrefix string
 }
 
-const acrTokenPrefix = "svc_acr_"
+const (
+	acrTokenPrefix          = "svc_acr_"
+	workerLLMConfigService  = "worker-llm-config"
+	workerLLMConfigTokenPre = "svc_wllm_"
+)
+
+// WorkerCredentialVerifier verifies svc_wllm_ tokens of the worker-llm-config service.
+func WorkerCredentialVerifier(pool *pgxpool.Pool) PostgresCredentialVerifier {
+	return PostgresCredentialVerifier{Pool: pool, Service: workerLLMConfigService, TokenPrefix: workerLLMConfigTokenPre}
+}
 
 func (v PostgresCredentialVerifier) Verify(ctx context.Context, token, scope string) (string, error) {
-	if !strings.HasPrefix(token, acrTokenPrefix) {
+	service, prefix := v.Service, v.TokenPrefix
+	if service == "" {
+		service, prefix = "acr", acrTokenPrefix
+	}
+	if !strings.HasPrefix(token, prefix) {
 		return "", ErrCredentialInvalid
 	}
 	now := time.Now().UTC()
@@ -201,7 +229,7 @@ func (v PostgresCredentialVerifier) Verify(ctx context.Context, token, scope str
 	if err != nil {
 		return "", err
 	}
-	if !found || cred.ServiceName != "acr" || !cred.Valid(now) {
+	if !found || cred.ServiceName != service || !cred.Valid(now) {
 		return "", ErrCredentialInvalid
 	}
 	if !cred.Has(scope) {

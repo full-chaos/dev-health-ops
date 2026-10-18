@@ -55,6 +55,7 @@ func directWriteVerbs() map[string]directWriteVerb {
 		"metrics daily-redrive":                              {argv: []string{"metrics", "daily-redrive", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01", "--review-evidence", "testing"}},
 		"metrics daily-finalize":                             {argv: []string{"metrics", "daily-finalize", "--run", id, "--review-evidence", "testing"}},
 		"metrics finalize-redrive":                           {argv: []string{"metrics", "finalize-redrive", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01", "--review-evidence", "testing"}, dryRun: true},
+		"metrics generation-repair":                          {argv: []string{"metrics", "generation-repair", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01"}, dryRun: true},
 		"metrics partition-recompute":                        {argv: []string{"metrics", "partition-recompute", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01", "--family", "repo_user_commit", "--review-evidence", "testing"}, dryRun: true},
 		"metrics remaining start":                            {argv: []string{"metrics", "remaining", "start", "--family", "dora", "--org", org, "--day", "2026-01-01", "--review-evidence", "testing"}},
 		"metrics remaining start --recompute":                {argv: []string{"metrics", "remaining", "start", "--recompute", "--basis", "cfr-125", "--family", "dora", "--org", org, "--day", "2026-01-01", "--to", "2026-01-02", "--review-evidence", "testing"}, dryRun: true},

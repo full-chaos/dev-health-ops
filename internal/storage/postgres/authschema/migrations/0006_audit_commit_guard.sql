@@ -20,6 +20,15 @@ BEGIN
             TG_TABLE_NAME
             USING ERRCODE = '42501';
     END IF;
+    -- Count the state rows this transaction writes, so audit.Commit learns
+    -- from the database, not from the callback, whether any state changed. The
+    -- audit and outbox rows are the companions, not the state.
+    IF TG_TABLE_NAME NOT IN ('auth_outbox_events', 'security_audit_events') THEN
+        PERFORM set_config(
+            'dev_health.audit_changed',
+            (coalesce(nullif(current_setting('dev_health.audit_changed', true), ''), '0')::bigint + 1)::text,
+            true);
+    END IF;
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
     END IF;

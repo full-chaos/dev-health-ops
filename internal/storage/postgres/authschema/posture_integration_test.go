@@ -539,6 +539,22 @@ func TestGuardedTablesRefuseWritesOutsideACommitTransaction(t *testing.T) {
 		}
 	}
 
+	// UPDATE and DELETE are guarded too, not only INSERT. Seed a row the proper
+	// way, then try to change it from outside a Commit-style transaction.
+	if err := guardedExec(ctx, env.runtime, `INSERT INTO auth.organizations (id, slug, name) VALUES (gen_random_uuid(), 'victim', 'Victim')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	for _, statement := range []string{
+		`UPDATE auth.organizations SET name = 'changed' WHERE slug = 'victim'`,
+		`DELETE FROM auth.organizations WHERE slug = 'victim'`,
+	} {
+		if _, err := env.admin.Exec(ctx, statement); err == nil {
+			t.Errorf("unguarded %s was accepted", statement)
+		} else if !strings.Contains(err.Error(), "audit.Commit") {
+			t.Errorf("refused for another reason (%v): %s", err, statement)
+		}
+	}
+
 	// A wrong value is refused as well as an absent one.
 	tx, err := env.runtime.Begin(ctx)
 	if err != nil {

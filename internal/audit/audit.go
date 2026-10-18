@@ -77,6 +77,10 @@ import (
 // compares with pg_current_xact_id(). Only this package may name it.
 const commitGuardSetting = "dev_health.audit_txid"
 
+// changedSetting is the transaction-local counter the guard trigger advances
+// for every row written to a guarded state table inside Commit's transaction.
+const changedSetting = "dev_health.audit_changed"
+
 // ErrMutationFailed wraps any failure that leaves the database unchanged.
 var ErrMutationFailed = errors.New("audit: security mutation failed")
 
@@ -301,10 +305,12 @@ func (e errRow) Scan(...any) error { return e.err }
 //
 // Apply runs inside the transaction and receives it. Anything it writes commits
 // with the outbox event and the audit row, or none of them do. It returns the
-// number of state rows it changed (the sum of the CommandTag RowsAffected of its
-// writes); zero or less rolls everything back with ErrNoStateChange.
+// error. The number of state rows it changed is counted by the database (the
+// guard trigger of migration 0006 counts every row written to a guarded table
+// other than the audit and outbox tables), not reported by the callback; zero
+// rolls everything back with ErrNoStateChange.
 type Mutation struct {
-	Apply func(ctx context.Context, tx TxOps) (changed int64, err error)
+	Apply func(ctx context.Context, tx TxOps) error
 	Audit AuditEvent
 	Event OutboxEvent
 }
@@ -366,9 +372,13 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 		return fmt.Errorf("%w: arming the commit guard: %w", ErrMutationFailed, err)
 	}
 
-	changed, applyErr := m.Apply(ctx, TxOps{tx: tx})
-	if applyErr != nil {
+	if applyErr := m.Apply(ctx, TxOps{tx: tx}); applyErr != nil {
 		return fmt.Errorf("%w: applying the state mutation: %w", ErrMutationFailed, applyErr)
+	}
+	var changed int64
+	if err := tx.QueryRow(ctx,
+		`SELECT coalesce(nullif(current_setting('`+changedSetting+`', true), ''), '0')::bigint`).Scan(&changed); err != nil {
+		return fmt.Errorf("%w: reading the changed-row count: %w", ErrMutationFailed, err)
 	}
 	if changed <= 0 {
 		return ErrNoStateChange

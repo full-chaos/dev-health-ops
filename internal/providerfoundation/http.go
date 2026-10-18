@@ -58,6 +58,8 @@ func TokenAuth(header, prefix string, token secrets.Value) Auth {
 }
 
 type HTTPClient struct {
+	// Ledger, when set, counts every wire request per (route family, dimension).
+	Ledger *RequestLedger
 	// GateWaitMax bounds how long, in total, one request sleeps in place at
 	// the shared backoff gate before the try ends with the wait that remains
 	// (CHAOS-8830; Python slept at most 300 s). Zero sleeps not at all, which

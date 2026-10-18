@@ -3360,12 +3360,30 @@ check_auth_paths_selftest() {
 # filter, so a package the selftest would demand a decision for also selects the
 # auth gates (a new such package must not be able to skip the very check that
 # would reject it).
+# auth_scope_tags: every build tag NAMED in a //go:build line of the module (minus
+# the toolchain's own GOOS/GOARCH/unix/ignore constraints), derived from the repo
+# so a new tag cannot hide a package from the scope check.
+auth_scope_tags() {
+  (cd "${ROOT}" && git ls-files -z -- '*.go' | xargs -0 -r grep -hE '^//go:build ' \
+    | sed 's#^//go:build ##' | tr -c 'A-Za-z0-9_.\n' ' ' | tr ' ' '\n' \
+    | grep -vxE '|unix|ignore|cgo|linux|darwin|windows|freebsd|openbsd|netbsd|js|wasip1|amd64|arm64|arm|386|wasm|go[0-9.]+' \
+    | LC_ALL=C sort -u)
+}
+
+# auth_scope_candidates: discovery runs once with no tag, once with every derived
+# tag, and once per tag (a `!tag` file is visible only without it; an `a && b`
+# file only with both), and unions the results.
 auth_scope_candidates() {
-  local module
+  local module tag tags all=""
   module="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)"
-  # -tags=integration: a package that exists only under the integration tag must
-  # be seen. The JSON stream is parsed by a helper, not by text munging.
-  auth_go list -mod=readonly -tags=integration -e -json ./... | python3 "${ROOT}/ci/auth_scope_candidates.py" "${module}"
+  tags="$(auth_scope_tags)"
+  [ -n "${tags}" ] || die "auth scope: no build tag found in the module; derivation is broken"
+  for tag in ${tags}; do all+="${all:+,}${tag}"; done
+  {
+    for set in "" "${all}" ${tags}; do
+      auth_go list -mod=readonly -tags="${set}" -e -json ./... | python3 "${ROOT}/ci/auth_scope_candidates.py" "${module}"
+    done
+  } | LC_ALL=C sort -u
 }
 
 check_auth_scope_selftest() {

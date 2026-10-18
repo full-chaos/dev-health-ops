@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,8 +36,21 @@ func sameLineRegistrations(t *testing.T, dir string) []string {
 			t.Fatal(err)
 		}
 		perLine := map[int][]string{}
+		directCallees := map[*ast.SelectorExpr]bool{}
+		ast.Inspect(file, func(node ast.Node) bool {
+			if call, ok := node.(*ast.CallExpr); ok {
+				if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
+					directCallees[selector] = true
+				}
+			}
+			return true
+		})
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
+			case *ast.SelectorExpr:
+				if (n.Sel.Name == "Handle" || n.Sel.Name == "HandleFunc") && !directCallees[n] {
+					found = append(found, fmt.Sprintf("%s:%d: Handle/HandleFunc used as a value (alias): register each route by a direct call", name, fset.Position(n.Pos()).Line))
+				}
 			case *ast.CallExpr:
 				selector, ok := n.Fun.(*ast.SelectorExpr)
 				if ok && (selector.Sel.Name == "Handle" || selector.Sel.Name == "HandleFunc") && len(n.Args) > 0 {
@@ -63,13 +77,7 @@ func sameLineRegistrations(t *testing.T, dir string) []string {
 }
 
 func routeArg(expr ast.Expr) string {
-	switch v := expr.(type) {
-	case *ast.BasicLit:
-		return v.Value
-	case *ast.Ident:
-		return v.Name
-	}
-	return "<non-literal>"
+	return types.ExprString(expr)
 }
 
 // TestNoTwoRouteRegistrationsShareALine: a profile row addresses its surface
@@ -94,8 +102,10 @@ func TestSameLineRegistrationIsDetectedAndNamesBothRoutes(t *testing.T) {
 		t.Fatalf("control flagged: %v", found)
 	}
 	write("bad.go", "package x\nfunc f(mux M) {\n\tmux.Handle(\"/a\", h); mux.HandleFunc(\"/b\", h)\n\tr := []R{{Pattern: \"/c\"}, {Pattern: \"/d\"}}\n}\n")
+	write("alias.go", "package x\nfunc f(mux M) {\n\tregister := mux.HandleFunc\n\tregister(\"/e\", h)\n}\n")
+	write("expr.go", "package x\nfunc f(mux M) {\n\tmux.Handle(routePath, h); mux.Handle(prefix+\"/g\", h)\n}\n")
 	found := strings.Join(sameLineRegistrations(t, dir), "\n")
-	for _, want := range []string{"bad.go:3", `"/a" AND "/b"`, "bad.go:4", `"/c" AND "/d"`, "MULTIPLE REGISTRATIONS ON ONE LINE"} {
+	for _, want := range []string{"bad.go:3", `"/a" AND "/b"`, "bad.go:4", `"/c" AND "/d"`, "MULTIPLE REGISTRATIONS ON ONE LINE", "alias.go:3: Handle/HandleFunc used as a value", `expr.go:3: MULTIPLE REGISTRATIONS ON ONE LINE: prefix + "/g" AND routePath`} {
 		if !strings.Contains(found, want) {
 			t.Errorf("missing %q in:\n%s", want, found)
 		}

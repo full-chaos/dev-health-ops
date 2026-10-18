@@ -275,7 +275,9 @@ and `internal/platform/health`, every `Handle`/`HandleFunc` call and every
 route-table `Pattern:` field sits on its own line.
 `TestNoTwoRouteRegistrationsShareALine` fails closed with
 `MULTIPLE REGISTRATIONS ON ONE LINE` and names both routes. The schema has no
-column field; this rule is the chosen alternative.
+column field; this rule is the chosen alternative. Register each route by a
+direct `Handle`/`HandleFunc` call: using either method as a value (an alias)
+is refused too, because a call through the alias would escape the scan.
 
 ## `source_commit`: what is verified and what is not (CHAOS-4765)
 

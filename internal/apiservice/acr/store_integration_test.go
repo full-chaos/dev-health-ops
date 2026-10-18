@@ -218,7 +218,7 @@ func TestPostgresEntitlementStoreLookupMapsADecisionReadFailureToUnavailable(t *
 	}
 	server := newTestServer(store)
 	defer server.Close()
-	response, err := http.Get(server.URL + "/api/v1/internal/acr/entitlements/" + org)
+	response, err := getAuthed(server.URL + "/api/v1/internal/acr/entitlements/" + org)
 	if err != nil {
 		t.Fatal(err)
 	}

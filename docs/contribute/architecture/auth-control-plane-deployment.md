@@ -111,17 +111,22 @@ no service-account token, probes on the **operator** port), a `Service` on the
 API port, an `auth-migrate` `Job` as a `pre-install,pre-upgrade` Helm hook that
 the service never starts, and `NetworkPolicy` objects.
 
-**The signing-key handling is deliberate.** A Kubernetes Secret volume is
-root-owned, so a mode `0400` key is unreadable by uid 65532, and setting
-`fsGroup` raises the file to `0440`, which the key custody check rejects. The
+**The signing-key handling is deliberate.** A Kubernetes Secret cannot be
+mounted for the service directly, for three reasons, each executed in CI
+(`ci/check_auth_k8s.sh`, job `auth-k8s-proof`): every file in a Secret volume is
+a **symlink** and the key custody check refuses symlinks (`O_NOFOLLOW`), whatever
+the mode; as a regular file (a `subPath` mount) a `0400` key is root-owned and
+unreadable by uid 65532; and setting `fsGroup` raises it to `0440`, which the
+check rejects. The
 chart therefore mounts the Secret `0440` for an init container
 (`stage-signing-key`, uid 65532, all capabilities dropped, read-only root) that
 installs a copy at `0400`, owned by 65532, into a memory-backed `emptyDir`; only
 that copy reaches the service container, read-only. The key therefore exists in
 two places in the pod (the Secret volume and the tmpfs copy). This is accepted:
 a Secret mount cannot be given the owner and mode the custody check requires,
-and the copy never reaches disk. Live Kubernetes proof of this design is tracked
-in CHAOS-10079; it is covered by render tests today.
+and the copy never reaches disk. The design is proven on a real cluster by `auth-k8s-proof`
+(kind): the staged file is mode `400`, uid 65532, and the three direct mounts fail
+closed with the reasons above.
 
 **The network boundary.** A `NetworkPolicy` is enforced only by a cluster network plugin that implements it; the objects below do nothing on a cluster without one. `authService.networkPolicy` renders whenever the
 service is enabled, independent of the release-wide `networkPolicy.enabled`

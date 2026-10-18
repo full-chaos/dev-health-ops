@@ -15,6 +15,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 // funcDoer answers every request with the function's response and counts the requests.
@@ -51,8 +53,19 @@ func hostileClient(t *testing.T, provider string, doer *funcDoer) *providerfound
 	return client
 }
 
+// walkReader reads the failure counter of the test that called captureWarns last.
+var walkReader *sdkmetric.ManualReader
+
 func captureWarns(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	walkReader = sdkmetric.NewManualReader()
+	counter, err := sdkmetric.NewMeterProvider(sdkmetric.WithReader(walkReader)).Meter("test").Int64Counter("teams_identity_page_walk_failed_total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousCounter := pageWalkFailures
+	pageWalkFailures = counter
+	t.Cleanup(func() { pageWalkFailures = previousCounter })
 	var logs bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -118,6 +131,7 @@ func gitlabHostile() []hostileCase {
 
 func assertFailedClosed(t *testing.T, err error, doer *funcDoer, logs *bytes.Buffer, provider string, tc hostileCase) {
 	t.Helper()
+	providerName := provider
 	if err == nil {
 		t.Fatalf("%s: walk returned success on a hostile answer", tc.name)
 	}
@@ -129,6 +143,36 @@ func assertFailedClosed(t *testing.T, err error, doer *funcDoer, logs *bytes.Buf
 	}
 	if !strings.Contains(logs.String(), `"msg":"teams_identity_page_walk_failed"`) || !strings.Contains(logs.String(), `"cause":"`+tc.cause+`"`) {
 		t.Fatalf("%s: no Warn line with the cause:\n%s", tc.name, logs.String())
+	}
+	if got := strings.Count(logs.String(), `"msg":"teams_identity_page_walk_failed"`); got != 1 {
+		t.Fatalf("%s: %d Warn lines, want 1:\n%s", tc.name, got, logs.String())
+	}
+	if strings.Contains(logs.String(), "token") && strings.Contains(logs.String(), "secret") {
+		t.Fatalf("%s: the Warn line carries credential text:\n%s", tc.name, logs.String())
+	}
+	var collected metricdata.ResourceMetrics
+	if err := walkReader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	total, matched := int64(0), false
+	for _, scope := range collected.ScopeMetrics {
+		for _, found := range scope.Metrics {
+			sum, ok := found.Data.(metricdata.Sum[int64])
+			if !ok || found.Name != "teams_identity_page_walk_failed_total" {
+				continue
+			}
+			for _, point := range sum.DataPoints {
+				total += point.Value
+				if value, present := point.Attributes.Value("cause"); present && value.AsString() == tc.cause {
+					if provider, _ := point.Attributes.Value("provider"); provider.AsString() == providerName {
+						matched = true
+					}
+				}
+			}
+		}
+	}
+	if total != 1 || !matched {
+		t.Fatalf("%s: failure counter total=%d matched(provider=%s, cause=%s)=%v, want 1 and true", tc.name, total, providerName, tc.cause, matched)
 	}
 }
 
@@ -241,4 +285,27 @@ func TestAnItemOnTwoPagesIsListedOnce(t *testing.T) {
 	if err != nil || len(got) != 3 || got[0].Slug != "a" || got[1].Slug != "b" || got[2].Slug != "c" {
 		t.Fatalf("teams = %+v, err = %v, want a,b,c once each", got, err)
 	}
+}
+
+func TestAnEmptyNextLinkAndAnEmptyJiraPageWithATokenFailClosed(t *testing.T) {
+	t.Run("github empty rel=next URL", func(t *testing.T) {
+		logs := captureWarns(t)
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+			return header("Link", `<>; rel="next"`), `[{"slug":"a","name":"A"}]`
+		}}
+		_, err := githubListAllPages(context.Background(), hostileClient(t, "github", doer), "org teams", "o", "/orgs/{org}/teams", "/orgs/o/teams?per_page=100",
+			func(entry githubTeamListEntry) string { return entry.Slug })
+		assertFailedClosed(t, err, doer, logs, "github", hostileCase{name: "empty rel=next URL", cause: walkCauseNoContinuation, maxRequests: 1})
+	})
+	t.Run("jira empty page with a nextPageToken", func(t *testing.T) {
+		logs := captureWarns(t)
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+			if n == 1 {
+				return nil, `{"issues":[{"key":"P-1","fields":{}}],"nextPageToken":"t1"}`
+			}
+			return nil, `{"issues":[],"nextPageToken":"t2"}`
+		}}
+		_, err := jiraSearchIssues(context.Background(), hostileClient(t, "jira", doer), "P", "project = 'P'")
+		assertFailedClosed(t, err, doer, logs, "jira", hostileCase{name: "empty page with token", cause: walkCauseEmptyPageToNext, maxRequests: 2})
+	})
 }

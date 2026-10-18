@@ -135,9 +135,9 @@ func githubListAllPages[T any](ctx context.Context, client *providerfoundation.H
 			return nil, fmt.Errorf("decode github list page: %w", err)
 		}
 		out = appendNew(out, seenItems, page, key)
-		link := githubNextLink(response.Header.Get("Link"))
+		link, advertised := githubNextLinkPresent(response.Header.Get("Link"))
 		var more bool
-		if next, more, err = walk.advance(link, link != "", len(page)); err != nil {
+		if next, more, err = walk.advance(link, advertised, len(page)); err != nil {
 			return nil, err
 		} else if !more {
 			next = ""
@@ -150,6 +150,13 @@ func githubListAllPages[T any](ctx context.Context, client *providerfoundation.H
 // header (RFC 8288: `<url>; rel="next", <url>; rel="last"`), returning ""
 // when there is no next page.
 func githubNextLink(header string) string {
+	next, _ := githubNextLinkPresent(header)
+	return next
+}
+
+// githubNextLinkPresent is githubNextLink plus whether a rel="next" entry exists at all: `<>; rel="next"` advertises a next page
+// with no URL, which a walk must fail on instead of reading as the end.
+func githubNextLinkPresent(header string) (string, bool) {
 	for _, part := range strings.Split(header, ",") {
 		segments := strings.Split(part, ";")
 		if len(segments) < 2 {
@@ -158,15 +165,11 @@ func githubNextLink(header string) string {
 		url := strings.TrimSpace(segments[0])
 		url = strings.TrimPrefix(url, "<")
 		url = strings.TrimSuffix(url, ">")
-		isNext := false
 		for _, param := range segments[1:] {
 			if strings.TrimSpace(param) == `rel="next"` {
-				isNext = true
+				return url, true
 			}
 		}
-		if isNext {
-			return url
-		}
 	}
-	return ""
+	return "", false
 }

@@ -181,9 +181,9 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 			return nil, err
 		}
 		entries = appendNew(entries, seenMembers, page, memberObjectKey("login"))
-		linkNext := githubNextLink(link)
+		linkNext, advertised := githubNextLinkPresent(link)
 		var more bool
-		if next, more, err = walk.advance(linkNext, linkNext != "", len(page)); err != nil {
+		if next, more, err = walk.advance(linkNext, advertised, len(page)); err != nil {
 			return nil, err
 		} else if !more {
 			next = ""
@@ -261,9 +261,9 @@ func discoverMembersGitLab(ctx context.Context, token secrets.Value, baseURL, gr
 			return nil, err
 		}
 		entries = appendNew(entries, seenMembers, items, memberObjectKey("id", "username"))
-		linkNext := githubNextLink(link)
+		linkNext, advertised := githubNextLinkPresent(link)
 		var more bool
-		if next, more, err = walk.advance(linkNext, linkNext != "", len(items)); err != nil {
+		if next, more, err = walk.advance(linkNext, advertised, len(items)); err != nil {
 			return nil, err
 		} else if !more {
 			next = ""

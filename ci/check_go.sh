@@ -110,7 +110,7 @@ usage() {
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
          registered parser (each its own proof marker), govulncheck pinned and strict. STAGE is
-         fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all.
+         fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|closure|relevant BASE HEAD|paths-selftest|scope-selftest|all.
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
   test   Run go test ./... in every Go module.
@@ -3184,6 +3184,22 @@ check_auth_test() {
   auth_go test -mod=readonly -trimpath -count=1 "${AUTH_PACKAGES[@]}"
 }
 
+# check_auth_history (CHAOS-4765): the endpoint-profile inventories' source_commit must resolve, be an
+# ancestor of HEAD, and every anchor line must read the same there as in the tree. It needs full git history,
+# so it is built only under -tags authhistory and run only here (auth-test job, fetch-depth: 0). A shallow
+# checkout, or a run that never printed the per-inventory proof marker, FAILS: it never skips.
+check_auth_history() {
+  local out
+  printf 'auth source_commit history check\n'
+  [ "$(cd "${ROOT}" && git rev-parse --is-shallow-repository)" = "false" ] \
+    || die "auth history: shallow checkout; this check needs full history (actions/checkout fetch-depth: 0)"
+  out="$(auth_go test -mod=readonly -trimpath -count=1 -v -tags authhistory -run '^TestEveryEndpointProfileInventoryDeclaresAVerifiableSourceCommit$' ./internal/auth/contracts 2>&1)" \
+    || { printf '%s\n' "${out}" >&2; die "auth history: an inventory source_commit does not verify"; }
+  printf '%s\n' "${out}"
+  printf '%s\n' "${out}" | grep -q 'AUTH_SOURCE_COMMIT_VERIFIED ' \
+    || die "auth history: no inventory was verified (the proof marker never printed)"
+}
+
 check_auth_race() {
   printf 'auth go test -race\n'
   auth_go test -mod=readonly -trimpath -count=1 -race "${AUTH_PACKAGES[@]}"
@@ -3257,6 +3273,39 @@ check_auth_vuln() {
   rm -f "${report}"
 }
 
+# check_auth_closure: CHAOS-10131. Every module in the `go list -deps` closure of
+# the two auth binaries must be a row of ci/auth_closure_allow.tsv. A ClickHouse
+# driver or any other new module entering the closure fails here, not at review.
+# The closure is the UNION over the shipped build configurations: the Docker
+# image builds with CGO_ENABLED=0 for linux/amd64 and linux/arm64
+# (docker/go-worker.Dockerfile), the CI runner with cgo on, and a `!cgo` or
+# per-GOARCH file can import a module only one of them links.
+# AUTH_CLOSURE_ALLOW names another allow-list (the selftest uses it).
+check_auth_closure() {
+  local actual="" allowed extra stale cgo arch part allow_file="${AUTH_CLOSURE_ALLOW:-${ROOT}/ci/auth_closure_allow.tsv}"
+  for cgo in 0 1; do
+    for arch in amd64 arm64; do
+      part="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off CGO_ENABLED="${cgo}" GOOS=linux GOARCH="${arch}" go list -mod=readonly -deps \
+        -f '{{if .Module}}{{.Module.Path}}{{end}}' ./cmd/auth-service ./cmd/auth-migrate)" || die "auth closure: go list failed (CGO_ENABLED=${cgo} linux/${arch})"
+      actual+="${part}"$'\n'
+    done
+  done
+  actual="$(printf '%s' "${actual}" | LC_ALL=C sort -u | sed '/^$/d')"
+  [ -n "${actual}" ] || die "auth closure: go list returned no modules"
+  allowed="$(awk -F'\t' '$1 !~ /^#/ && $1 != "" { print $1 }' "${allow_file}" | LC_ALL=C sort -u)"
+  extra="$(LC_ALL=C comm -23 <(printf '%s\n' "${actual}") <(printf '%s\n' "${allowed}"))"
+  stale="$(LC_ALL=C comm -13 <(printf '%s\n' "${actual}") <(printf '%s\n' "${allowed}"))"
+  if [ -n "${stale}" ]; then
+    printf 'auth closure: ci/auth_closure_allow.tsv lists modules the binaries no longer link (remove the rows):\n%s\n' "${stale}" >&2
+    return 1
+  fi
+  if [ -n "${extra}" ]; then
+    printf 'auth closure: the auth binaries link modules outside ci/auth_closure_allow.tsv:\n%s\n' "${extra}" >&2
+    return 1
+  fi
+  printf 'auth closure: %s modules, all allowed\n' "$(printf '%s\n' "${actual}" | wc -l | tr -d ' ')"
+}
+
 # check_auth_middleware: G-69. Runs the production-stack test verbosely and
 # fails unless it logged its marker: the test mounted the real middleware stack
 # (built from the service's own apiServerOptions) and drove it. A green test
@@ -3311,7 +3360,7 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|ci/auth_gate_scope_exempt.txt|ci/auth_scope_candidates.py|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_scope_candidates.py|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac
@@ -3416,10 +3465,12 @@ check_auth() {
     vet) check_auth_vet ;;
     test) check_auth_test ;;
     race) check_auth_race ;;
+    history) check_auth_history ;;
     fuzz) check_auth_fuzz "${2:-}" ;;
     fuzz-registry) check_auth_fuzz_registry ;;
     vuln) check_auth_vuln ;;
     middleware) check_auth_middleware ;;
+    closure) check_auth_closure ;;
     relevant)
       [ "$#" -eq 3 ] || die "auth relevant accepts BASE HEAD"
       auth_relevant "$2" "$3"
@@ -3433,11 +3484,13 @@ check_auth() {
       check_auth_vet
       check_auth_test
       check_auth_race
+      check_auth_history
       check_auth_middleware
+      check_auth_closure
       check_auth_fuzz
       check_auth_vuln
       ;;
-    *) die "auth accepts fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all" ;;
+    *) die "auth accepts fmt|vet|test|race|history|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all" ;;
   esac
 }
 

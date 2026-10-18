@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"net"
 	"regexp"
 	"strconv"
@@ -417,13 +416,9 @@ func (h *buildHandler) work(ctx context.Context, requestID string, organizationI
 			// proceeds and every fragment lands as a top-level key.
 			evidence := mergePreStepEvidence([]byte("{}"), mergeStepFragments(fragments, postFragments))
 			if len(failedSteps) > 0 {
-				// failure_reason is step-authored free text, so the log
-				// copy omits it; it stays in the ledger evidence.
 				failedEvidence := make(map[string]map[string]any, len(failedSteps))
 				for _, name := range failedSteps {
-					logged := maps.Clone(fragments[name])
-					delete(logged, "failure_reason")
-					failedEvidence[name] = logged
+					failedEvidence[name] = loggableEvidence(fragments[name])
 				}
 				h.logger.Error("workgraph build: steps reported FAILED; the build ran every step",
 					slog.String("request_id", requestID), slog.String("organization_id", *organizationID),
@@ -608,4 +603,26 @@ func (h *MaterializeHandler) Work(ctx context.Context, execution *jobruntime.Exe
 // the error text, which can carry a row value, a URL or provider output.
 func ErrorAttr(err error) slog.Attr {
 	return slog.Group("", errorLogAttrs(err)...)
+}
+
+// loggableEvidence keeps the numbers, booleans and the step status of a
+// step's evidence for the log. Every other string is step-authored text that
+// can carry error text, so it stays in the ledger evidence and out of the log.
+func loggableEvidence(evidence map[string]any) map[string]any {
+	logged := make(map[string]any, len(evidence))
+	for key, value := range evidence {
+		switch typed := value.(type) {
+		case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+			logged[key] = typed
+		case string:
+			if key == StepStatusKey {
+				logged[key] = typed
+			}
+		case map[string]any:
+			logged[key] = loggableEvidence(typed)
+		case map[string]int:
+			logged[key] = typed
+		}
+	}
+	return logged
 }

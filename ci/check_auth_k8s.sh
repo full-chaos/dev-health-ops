@@ -27,6 +27,10 @@ ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 
 readonly KIND_VERSION="v0.33.0"
 readonly KIND_SHA256_AMD64="aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d"
+readonly HELM_VERSION="v3.21.4"
+readonly HELM_SHA256_AMD64="61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
+readonly KUBECTL_VERSION="v1.37.0"
+readonly KUBECTL_SHA256_AMD64="6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f"
 readonly NODE_IMAGE="kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5"
 # One pinned image serves PostgreSQL and every helper pod (its busybox has
 # wget, stat, ls and sh), and is the chart's own staging-image default.
@@ -47,7 +51,7 @@ die() {
   exit 1
 }
 
-for tool in docker kubectl helm openssl curl sha256sum envsubst; do
+for tool in docker openssl curl sha256sum envsubst jq tar; do
   command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"
 done
 
@@ -88,9 +92,25 @@ printf '%s  %s\n' "${KIND_SHA256_AMD64}" "${WORK}/kind" | sha256sum --check --st
   || die "kind ${KIND_VERSION} does not match its pinned sha256"
 chmod +x "${WORK}/kind"
 
+# helm and kubectl are pinned the same way: the runner image's versions are not a contract.
+mkdir -p "${WORK}/bin"
+curl --fail --silent --show-error --location --output "${WORK}/helm.tgz" \
+  "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+printf '%s  %s\n' "${HELM_SHA256_AMD64}" "${WORK}/helm.tgz" | sha256sum --check --status \
+  || die "helm ${HELM_VERSION} does not match its pinned sha256"
+tar -xzf "${WORK}/helm.tgz" -C "${WORK}" linux-amd64/helm
+mv "${WORK}/linux-amd64/helm" "${WORK}/bin/helm"
+curl --fail --silent --show-error --location --output "${WORK}/bin/kubectl" \
+  "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+printf '%s  %s\n' "${KUBECTL_SHA256_AMD64}" "${WORK}/bin/kubectl" | sha256sum --check --status \
+  || die "kubectl ${KUBECTL_VERSION} does not match its pinned sha256"
+chmod +x "${WORK}/bin/helm" "${WORK}/bin/kubectl"
+export PATH="${WORK}/bin:${PATH}"
+printf 'tools: kind %s, %s, kubectl %s\n' "${KIND_VERSION}" "$(helm version --short)" "$(kubectl version --client -o yaml | grep gitVersion)"
+
 printf 'step 1: build the images from this tree and create the cluster\n'
 build() {
-  docker build --provenance=false --sbom=false --file "${ROOT}/docker/go-worker.Dockerfile" --target "$1" \
+  BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker build --file "${ROOT}/docker/go-worker.Dockerfile" --target "$1" \
     --build-arg VERSION=k8s-proof --build-arg COMMIT=0000000000000000000000000000000000000000 \
     --build-arg BUILD_TIME=1970-01-01T00:00:00Z --build-arg SOURCE_DATE_EPOCH=0 \
     --tag "$2" "${ROOT}"
@@ -122,43 +142,38 @@ K create secret generic auth-migrate-db \
 openssl genpkey -algorithm ed25519 -out "${WORK}/signing-key.pem"
 K create secret generic auth-key --from-file=signing-key.pem="${WORK}/signing-key.pem"
 
-# --- render the chart's auth manifests, exactly as a release would -----------------
-printf 'step 3: render the authService manifests with helm template\n'
-render() {
-  helm template "${RELEASE}" "${ROOT}/deploy/helm/dev-health" --namespace "${NS}" \
-    --set web.env.BACKEND_URL=http://backend.invalid \
-    --set authService.enabled=true \
-    --set authService.image.repository=auth-proof/auth-service \
-    --set authService.image.tag=ci \
-    --set authService.image.pullPolicy=Never \
-    --set authService.migrate.image.repository=auth-proof/auth-migrate \
-    --set authService.migrate.image.tag=ci \
-    --set authService.migrate.image.pullPolicy=Never \
-    --set authService.database.secretName=auth-db \
-    --set authService.migrate.secretName=auth-migrate-db \
-    --set authService.signingKey.secretName=auth-key \
-    --set authService.signingKey.keyId=k8s-proof \
-    --set-json 'authService.networkPolicy.egress.database.to=[{"podSelector":{"matchLabels":{"app":"auth-postgres"}}}]' \
-    --set-json 'authService.networkPolicy.allowedFrom=[{"matchLabels":{"role":"auth-consumer"}}]' \
-    --set-json 'authService.networkPolicy.metricsFrom=[{"matchLabels":{"role":"auth-scraper"}}]' \
-    "$@"
-}
-render --show-only templates/serviceaccount.yaml >"${WORK}/sa.yaml"
-render --show-only templates/auth-migrate-job.yaml >"${WORK}/migrate.yaml"
-render --show-only templates/auth-service.yaml >"${WORK}/service.yaml"
-grep -q 'helm.sh/hook: pre-install,pre-upgrade' "${WORK}/migrate.yaml" \
+# --- the release: a real helm install, so hook ordering and uninstall are exercised ---------
+printf 'step 3: helm upgrade --install the authService section (only it: everything else is off)\n'
+HELM_ARGS=(
+  "${RELEASE}" "${ROOT}/deploy/helm/dev-health" --namespace "${NS}"
+  --set web.enabled=false --set goWorkers.enabled=false --set valkey.enabled=false
+  --set clickhouse.enabled=false --set migrations.hook.enabled=false --set secrets.create=false
+  --set authService.enabled=true
+  --set authService.image.repository=auth-proof/auth-service --set authService.image.tag=ci
+  --set authService.image.pullPolicy=Never
+  --set authService.migrate.image.repository=auth-proof/auth-migrate --set authService.migrate.image.tag=ci
+  --set authService.migrate.image.pullPolicy=Never
+  --set authService.database.secretName=auth-db
+  --set authService.migrate.secretName=auth-migrate-db
+  --set authService.signingKey.secretName=auth-key --set authService.signingKey.keyId=k8s-proof
+  --set-json 'authService.networkPolicy.egress.database.to=[{"podSelector":{"matchLabels":{"app":"auth-postgres"}}}]'
+  --set-json 'authService.networkPolicy.allowedFrom=[{"matchLabels":{"role":"auth-consumer"}}]'
+  --set-json 'authService.networkPolicy.metricsFrom=[{"matchLabels":{"role":"auth-scraper"}}]'
+)
+helm template "${HELM_ARGS[@]}" --show-only templates/auth-migrate-job.yaml | grep -q 'helm.sh/hook: pre-install,pre-upgrade' \
   || die "the migration Job is not a pre-install,pre-upgrade hook"
 printf 'migration Job carries helm.sh/hook: pre-install,pre-upgrade\n'
-for f in sa migrate service; do
-  printf '%s.yaml: %s documents\n' "${f}" "$(grep -c '^kind:' "${WORK}/${f}.yaml")"
-done
+kinds="$(helm template "${HELM_ARGS[@]}" | grep -c '^kind:')"
+printf 'the render holds %s objects\n' "${kinds}"
+helm upgrade --install "${HELM_ARGS[@]}" --wait --timeout 8m
 
-# --- 1. the migration Job (a pre-install hook in a release) -------------------------
-printf 'step 4: migration hook Job completes\n'
-K apply -f "${WORK}/sa.yaml"
-K apply -f "${WORK}/migrate.yaml"
-K wait --for=condition=complete job/"${RELEASE}-dev-health-auth-migrate" --timeout=240s
-K logs job/"${RELEASE}-dev-health-auth-migrate"
+# --- 1. the migration Job ran as a real pre-install hook -----------------------------
+printf 'step 4: the pre-install hook ran, left the schema at its head and was garbage-collected\n'
+helm status "${RELEASE}" -n "${NS}" | grep -E '^(STATUS|REVISION)'
+[ "$(helm status "${RELEASE}" -n "${NS}" -o json | jq -r .info.status)" = deployed ] || die "the release is not deployed"
+if K get job "${RELEASE}-dev-health-auth-migrate" >/dev/null 2>&1; then
+  die "the hook Job survived its hook-succeeded delete policy"
+fi
 version="$(K exec deploy/auth-postgres -- psql -U postgres -At -c 'SELECT max(version) FROM auth.schema_migrations')"
 printf 'auth.schema_migrations max version: %s\n' "${version}"
 head="$(find "${ROOT}/internal/storage/postgres/authschema/migrations" -name '[0-9][0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort | tail -n 1 | cut -c1-4 | sed 's/^0*//')"
@@ -166,11 +181,17 @@ printf 'embedded lineage head: %s\n' "${head}"
 [[ "${version}" =~ ^[0-9]+$ && "${head}" =~ ^[0-9]+$ ]] || die "could not read the schema version or the embedded head"
 [ "${version}" -eq "${head}" ] || die "the auth schema is at ${version}, the embedded head is ${head}"
 
-# --- 2. the Deployment -----------------------------------------------------------------
-printf 'step 5: Deployment Ready, /readyz 200\n'
-K apply -f "${WORK}/service.yaml"
+# --- 2. helm upgrade runs the pre-upgrade hook and rolls the Deployment ----------------------
+printf 'step 5: helm upgrade (pre-upgrade hook) succeeds and the Deployment is Ready\n'
+helm upgrade "${HELM_ARGS[@]}" --set authService.podAnnotations.proof=upgrade --wait --timeout 8m
+rev="$(helm status "${RELEASE}" -n "${NS}" -o json | jq -r .version)"
+printf 'release revision after upgrade: %s\n' "${rev}"
+[ "${rev}" = 2 ] || die "the release is at revision ${rev}, want 2"
+completions="$(K get events --field-selector "involvedObject.name=${RELEASE}-dev-health-auth-migrate,reason=Completed" -o json | jq '[.items[].count // 1] | add')"
+printf 'migration Job Completed events across install and upgrade: %s\n' "${completions}"
+[ "${completions:-0}" -ge 2 ] || die "the migration hook did not run on both install and upgrade (${completions:-0})"
 K rollout status deploy/"${RELEASE}-dev-health-auth-service" --timeout=240s
-POD="$(K get pod -l app.kubernetes.io/component=auth-service -o jsonpath='{.items[0].metadata.name}')"
+POD="$(K get pod -l app.kubernetes.io/component=auth-service --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')"
 POD_IP="$(K get pod "${POD}" -o jsonpath='{.status.podIP}')"
 printf 'pod %s ip %s\n' "${POD}" "${POD_IP}"
 
@@ -269,14 +290,42 @@ if grep -q 'HTTP/1.1\|"status"' <<<"${blocked_ops}"; then
   die "an unlisted pod reached the operator port"
 fi
 
+# The Service routes to the pod, by name, on both published ports.
+printf 'step 8b: the Service reaches the pod (DNS name, endpoints, both ports)\n'
+ep="$(K get endpoints "${RELEASE}-dev-health-auth-service" -o jsonpath='{.subsets[0].addresses[0].ip}')"
+printf 'Service endpoint: %s (pod %s)\n' "${ep}" "${POD_IP}"
+[ "${ep}" = "${POD_IP}" ] || die "the Service does not select the pod"
+via_svc="$(fetch consumer2 role=auth-consumer "http://${RELEASE}-dev-health-auth-service:8095/anything")"
+printf 'consumer -> Service API port: %s\n' "${via_svc}"
+grep -q 'HTTP/1.1 404' <<<"${via_svc}" || die "the Service does not route to the API port"
+ops_svc="$(fetch scraper2 role=auth-scraper "http://${RELEASE}-dev-health-auth-service:8096/readyz")"
+printf 'scraper -> Service operator port: %s\n' "${ops_svc}"
+grep -q 'rc=0' <<<"${ops_svc}" || die "the Service does not publish the operator port to listed scrapers"
+
+# Egress is bounded too: a pod the policy selects reaches PostgreSQL and nothing else.
+printf 'step 8c: egress is bounded (database reachable, API server not)\n'
+egress_probe() { # name labels command-string
+  helper "$1" "$2" sh -c "$3"
+  K wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$1" --timeout=60s >/dev/null 2>&1 || true
+  K logs "$1"
+}
+SVC_LABELS="app.kubernetes.io/name=dev-health,app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=auth-service"
+db_out="$(egress_probe egress-db "${SVC_LABELS}" "nc -z -w 3 auth-postgres 5432; echo rc=\$?")"
+printf 'selected pod -> PostgreSQL:5432: %s\n' "${db_out}"
+grep -q 'rc=0' <<<"${db_out}" || die "the policy blocks the database"
+api_out="$(egress_probe egress-api "${SVC_LABELS}" "nc -z -w 3 kubernetes.default.svc 443; echo rc=\$?")"
+printf 'selected pod -> API server:443: %s\n' "${api_out}"
+grep -q 'rc=0' <<<"${api_out}" && die "the policy lets a selected pod reach the Kubernetes API server"
+grep -q 'rc=' <<<"${api_out}" || die "the egress probe produced no result"
+
 # --- 6. rollback ---------------------------------------------------------------------------------
-printf 'step 9: rollback leaves no auth object behind\n'
-K delete -f "${WORK}/service.yaml" -f "${WORK}/migrate.yaml" -f "${WORK}/sa.yaml" --wait=true
+printf 'step 9: helm uninstall leaves no object of the release behind\n'
 K delete pod trap-direct-0400 trap-direct-0440-fsgroup trap-subpath-0400 trap-subpath-0400-fsgroup --ignore-not-found --wait=true >/dev/null
-left="$(K get deploy,svc,job,networkpolicy,serviceaccount -o name | grep -E 'auth-service|auth-migrate|serviceaccount/'"${RELEASE}"'-dev-health' || true)"
-printf 'auth objects left: [%s]\n' "${left}"
-[ -z "${left}" ] || die "auth objects remain after rollback: ${left}"
-K get deploy/auth-postgres >/dev/null || die "rollback disturbed postgres"
-printf 'postgres untouched by the rollback\n'
+helm uninstall "${RELEASE}" -n "${NS}" --wait
+left="$(K get deploy,svc,job,networkpolicy,serviceaccount,configmap,endpoints -l "app.kubernetes.io/instance=${RELEASE}" -o name || true)"
+printf 'objects labelled app.kubernetes.io/instance=%s left: [%s]\n' "${RELEASE}" "${left}"
+[ -z "${left}" ] || die "objects of the release remain after uninstall: ${left}"
+K get deploy/auth-postgres >/dev/null || die "uninstall disturbed postgres"
+printf 'postgres untouched by the uninstall\n'
 
 printf 'AUTH K8S PROOF PASSED\n'

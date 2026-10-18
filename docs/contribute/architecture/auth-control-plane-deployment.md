@@ -109,7 +109,9 @@ first and reference them by name:
 What the chart renders: a `Deployment` (non-root, read-only root filesystem,
 no service-account token, probes on the **operator** port), a `Service` on the
 API port, an `auth-migrate` `Job` as a `pre-install,pre-upgrade` Helm hook that
-the service never starts, and `NetworkPolicy` objects.
+the service never starts, and `NetworkPolicy` objects. Only the Job is a hook; the
+policies are ordinary release resources, so `helm uninstall` removes them (a hook
+object would be leaked or deleted before the Job it protects).
 
 **The signing-key handling is deliberate.** A Kubernetes Secret cannot be
 mounted for the service directly, for three reasons, each executed in CI
@@ -125,8 +127,9 @@ that copy reaches the service container, read-only. The key therefore exists in
 two places in the pod (the Secret volume and the tmpfs copy). This is accepted:
 a Secret mount cannot be given the owner and mode the custody check requires,
 and the copy never reaches disk. The design is proven on a real cluster by `auth-k8s-proof`
-(kind): the staged file is mode `400`, uid 65532, and the three direct mounts fail
-closed with the reasons above.
+(kind): the staged file is mode `400`, uid 65532, and four direct-mount variants (two
+Secret-volume symlinks, two regular-file `subPath` mounts) fail closed with the reasons
+above.
 
 **The network boundary.** A `NetworkPolicy` is enforced only by a cluster network plugin that implements it; the objects below do nothing on a cluster without one. `authService.networkPolicy` renders whenever the
 service is enabled, independent of the release-wide `networkPolicy.enabled`

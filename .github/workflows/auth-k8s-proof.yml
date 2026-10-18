@@ -1,32 +1,21 @@
-# Executed Kubernetes proof for the dormant Auth Control Plane (CHAOS-10079): the
-# chart's authService manifests applied to a real kind cluster, from images built
-# from this tree, with the checks the render tests can only reason about (the
-# migration Job completes, the Deployment is Ready, the staged signing key is
-# 0400/65532, the directly mounted Secret cannot work, the NetworkPolicy is
-# enforced, rollback is clean). The logic is ci/check_auth_k8s.sh.
+# Executed Kubernetes proof for the dormant Auth Control Plane (CHAOS-10079): a real
+# `helm upgrade --install` of the chart's authService section into a kind cluster, from
+# images built from this tree, with the checks the render tests can only reason about (the
+# pre-install and pre-upgrade hooks run, the Deployment is Ready, the Service routes, the
+# staged signing key is 0400/65532, the directly mounted Secret cannot work, the
+# NetworkPolicy bounds ingress and egress, `helm uninstall` is clean). The logic is
+# ci/check_auth_k8s.sh.
 #
-# This job is a PROOF, deliberately NOT a required check: it takes minutes and
-# needs docker, so it runs on pull requests that touch what it proves, and on
-# demand. Its name is distinct from every required context.
+# A PROOF, deliberately NOT a required check: it takes minutes and needs docker. It runs on
+# every pull request and decides RELEVANCE INSIDE (like go-auth-service.yml): the auth
+# packages' import closure (`check_go.sh auth relevant`), the chart, the Dockerfile, and
+# this proof's own files. An irrelevant change reports a green job that says so. Its name is
+# distinct from every required context.
 name: Auth Kubernetes proof
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - 'deploy/helm/dev-health/**'
-      - 'docker/go-worker.Dockerfile'
-      - 'cmd/auth-service/**'
-      - 'cmd/auth-migrate/**'
-      - 'internal/auth/**'
-      - 'internal/audit/**'
-      - 'internal/platform/**'
-      - 'internal/storage/postgres/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'ci/check_auth_k8s.sh'
-      - 'ci/auth_k8s/**'
-      - '.github/workflows/auth-k8s-proof.yml'
   workflow_dispatch:
 
 permissions:
@@ -43,6 +32,42 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
-      - name: Apply the auth manifests to a kind cluster and prove them
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Does the change touch what this proof proves?
+        id: relevance
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT}" != "pull_request" ]; then
+            echo "relevant=true" >> "${GITHUB_OUTPUT}"
+            echo "proof runs: ${EVENT} is not a pull request"
+            exit 0
+          fi
+          mb="$(git merge-base "${BASE_SHA}" "${HEAD_SHA}")"
+          relevant=false
+          if git diff --name-only --no-renames "${mb}" "${HEAD_SHA}" \
+            | grep -E '^(deploy/helm/dev-health/|docker/go-worker\.Dockerfile$|ci/check_auth_k8s\.sh$|ci/auth_k8s/|\.github/workflows/auth-k8s-proof\.yml$)'; then
+            relevant=true
+          elif bash ci/check_go.sh auth relevant "${mb}" "${HEAD_SHA}" | tee relevance.txt | grep -qx 'relevant=true'; then
+            relevant=true
+          fi
+          echo "relevant=${relevant}" >> "${GITHUB_OUTPUT}"
+          echo "relevant=${relevant}"
+
+      - name: Install the chart into a kind cluster and prove it
+        if: steps.relevance.outputs.relevant == 'true'
         run: bash ci/check_auth_k8s.sh
+
+      - name: Not relevant
+        if: steps.relevance.outputs.relevant != 'true'
+        run: echo "the change touches nothing this proof proves; it did not run"

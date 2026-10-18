@@ -24,6 +24,7 @@ const (
 	walkCauseRepeated        = "continuation_repeated"
 	walkCauseEmptyPageToNext = "empty_page_advertises_next"
 	walkCauseBadContinuation = "continuation_unreadable"
+	walkCauseInconsistent    = "continuation_inconsistent"
 )
 
 var pageWalkFailures = func() metric.Int64Counter {
@@ -106,6 +107,49 @@ func (walk *pageWalk) gitlabNextPage(header string, items int) (int, bool, error
 	}
 	number, _ = strconv.Atoi(next)
 	return number, true, nil
+}
+
+// jiraAdvance reads the continuation signal of one Jira search page (nextPageToken, isLast and the page's item count) and decides
+// whether another page is asked for. It is the only check of the Jira walk: a signal that is malformed (an isLast that is not a
+// boolean, a token that is not a non-empty string) or inconsistent (isLast true together with a token) fails the walk, and so does
+// an empty page that advertises another one. An empty page without a continuation, and isLast true, end the list.
+func (walk *pageWalk) jiraAdvance(page *pyjson.Object, startAt, items int) (token string, nextStartAt int, more bool, err error) {
+	rawToken, _ := page.Get("nextPageToken")
+	rawLast, hasLast := page.Get("isLast")
+	last := false
+	if hasLast {
+		flag, isBool := rawLast.(bool)
+		if !isBool {
+			walk.pages++
+			return "", 0, false, walk.fail(walkCauseBadContinuation)
+		}
+		last = flag
+	}
+	if truthy(rawToken) {
+		text, isString := rawToken.(string)
+		if !isString || text == "" {
+			walk.pages++
+			return "", 0, false, walk.fail(walkCauseBadContinuation)
+		}
+		token = text
+	}
+	if last && token != "" {
+		walk.pages++
+		return "", 0, false, walk.fail(walkCauseInconsistent)
+	}
+	advertised := !last
+	if items == 0 {
+		advertised = token != "" || (hasLast && !last)
+	}
+	nextStartAt = startAt + items
+	continuation := fmt.Sprintf("startAt:%d", nextStartAt)
+	if token != "" {
+		continuation = "token:" + token
+	}
+	if _, more, err = walk.advance(continuation, advertised, items); err != nil || !more {
+		return "", 0, false, err
+	}
+	return token, nextStartAt, true, nil
 }
 
 // appendNew appends the items whose key was not seen yet: a page walk that joins pages lists an item once (CHAOS-8786 class note).

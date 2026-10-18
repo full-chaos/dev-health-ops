@@ -360,3 +360,72 @@ func TestReproducedRound2WalkHoles(t *testing.T) {
 		assertFailedClosed(t, err, doer, logs, "gitlab", hostileCase{name: "leading zero", cause: walkCauseRepeated, maxRequests: 1})
 	})
 }
+
+// A malformed or inconsistent continuation signal is never a success, whichever early return the walk would have taken.
+func TestAMalformedOrInconsistentContinuationSignalIsNeverASuccess(t *testing.T) {
+	issues := func(count, from int) string {
+		parts := make([]string, count)
+		for index := range parts {
+			parts[index] = fmt.Sprintf(`{"key":"P-%d","fields":{}}`, from+index)
+		}
+		return strings.Join(parts, ",")
+	}
+	jiraCases := []struct {
+		name   string
+		answer func(r *http.Request, n int) (http.Header, string)
+		cause  string
+		max    int
+	}{
+		{"isLast true with a token", func(r *http.Request, n int) (http.Header, string) {
+			return nil, `{"issues":[{"key":"P-1","fields":{}}],"nextPageToken":"t","isLast":true}`
+		}, walkCauseInconsistent, 1},
+		{"isLast not a boolean", func(r *http.Request, n int) (http.Header, string) {
+			return nil, `{"issues":[{"key":"P-1","fields":{}}],"isLast":"false"}`
+		}, walkCauseBadContinuation, 1},
+		{"token not a string", func(r *http.Request, n int) (http.Header, string) {
+			return nil, `{"issues":[{"key":"P-1","fields":{}}],"nextPageToken":5}`
+		}, walkCauseBadContinuation, 1},
+		{"repeated token on the page that reaches the item limit", func(r *http.Request, n int) (http.Header, string) {
+			if n == 1 {
+				return nil, `{"issues":[` + issues(100, 0) + `],"nextPageToken":"t1"}`
+			}
+			return nil, `{"issues":[` + issues(400, 1000) + `],"nextPageToken":"t1"}`
+		}, walkCauseRepeated, 2},
+	}
+	for _, tc := range jiraCases {
+		t.Run("jira/"+tc.name, func(t *testing.T) {
+			logs := captureWarns(t)
+			doer := &funcDoer{answer: tc.answer}
+			got, err := jiraSearchIssues(context.Background(), hostileClient(t, "jira", doer), "P", "project = 'P'")
+			assertNoPartial(t, tc.name, got)
+			assertFailedClosed(t, err, doer, logs, "jira", hostileCase{name: tc.name, cause: tc.cause, maxRequests: tc.max})
+		})
+	}
+	for _, value := range []string{"0", "-1", "1.5", "2 ", " 2", "two"} {
+		for _, limit := range []int{1, 100000} {
+			t.Run(fmt.Sprintf("gitlab/X-Next-Page %q limit %d", value, limit), func(t *testing.T) {
+				logs := captureWarns(t)
+				doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+					return header("X-Next-Page", value), `[{"id":1,"path_with_namespace":"g/a"},{"id":2,"path_with_namespace":"g/b"}]`
+				}}
+				got, truncated, err := gitlabListProjectPages(context.Background(), hostileClient(t, "gitlab", doer), "g", "/groups/{group}/projects", "/api/v4/groups/1/projects", limit, false)
+				assertNoPartial(t, value, got)
+				if truncated {
+					t.Fatal("a walk that failed reported a truncated success")
+				}
+				assertFailedClosed(t, err, doer, logs, "gitlab", hostileCase{name: value, cause: walkCauseBadContinuation, maxRequests: 1})
+			})
+		}
+	}
+	t.Run("github rel=next to another host", func(t *testing.T) {
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+			return linkNext("https://evil.example.test/orgs/o/teams?page=2"), `[{"slug":"a","name":"A"}]`
+		}}
+		got, err := githubListAllPages(context.Background(), hostileClient(t, "github", doer), "org teams", "o", "/orgs/{org}/teams", "/orgs/o/teams?per_page=100",
+			func(entry githubTeamListEntry) string { return entry.Slug })
+		assertNoPartial(t, "other host", got)
+		if err == nil || doer.requests.Load() != 1 {
+			t.Fatalf("a rel=next to another host: err=%v requests=%d, want an error after 1 request", err, doer.requests.Load())
+		}
+	})
+}

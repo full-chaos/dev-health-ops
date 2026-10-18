@@ -189,19 +189,10 @@ func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient
 			return nil, err
 		}
 		list := listAt(page, "issues")
-		if len(list) == 0 {
-			// an empty page that advertises a continuation is an unreliable answer, not the end of the list
-			next, _ := page.Get("nextPageToken")
-			last, present := page.Get("isLast")
-			if truthy(next) {
-				_, _, err := walk.advance("token:"+pythonStr(next), true, 0)
-				return nil, err
-			}
-			if present && last == false {
-				_, _, err := walk.advance(fmt.Sprintf("startAt:%d", startAt+len(list)), true, 0)
-				return nil, err
-			}
-			return issues, nil
+		// the one continuation check of the walk: every return below runs after it, the item limit included
+		nextToken, nextStartAt, more, err := walk.jiraAdvance(page, startAt, len(list))
+		if err != nil {
+			return nil, err
 		}
 		for _, item := range list {
 			issue, ok := item.(*pyjson.Object)
@@ -213,22 +204,10 @@ func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient
 				return issues, nil
 			}
 		}
-		continuation := ""
-		if next, _ := page.Get("nextPageToken"); truthy(next) {
-			token = pythonStr(next)
-			continuation = "token:" + token
-		} else {
-			token = ""
-			startAt += len(list)
-			continuation = fmt.Sprintf("startAt:%d", startAt)
-		}
-		last, present := page.Get("isLast")
-		if _, _, err := walk.advance(continuation, !(present && last == true), len(list)); err != nil {
-			return nil, err
-		}
-		if present && last == true {
+		if !more {
 			return issues, nil
 		}
+		token, startAt = nextToken, nextStartAt
 	}
 }
 

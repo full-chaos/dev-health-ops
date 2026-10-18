@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata: {name: ${name}, labels: {role: trap}}
+spec:
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    ${fsgroup}
+  containers:
+    - name: auth-service
+      image: ${LOCAL_SVC}
+      imagePullPolicy: Never
+      args:
+        - --signing-key-file=/mnt/key/signing-key.pem
+        - --signing-key-id=trap
+        - --health-check-timeout=2s
+      env:
+        - name: AUTH_DATABASE_URI
+          valueFrom: {secretKeyRef: {name: auth-db, key: AUTH_DATABASE_URI}}
+      volumeMounts: [${mount}]
+  volumes:
+    - name: key
+      secret: {secretName: auth-key, defaultMode: ${mode}}

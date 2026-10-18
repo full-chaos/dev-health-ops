@@ -24,6 +24,7 @@ on:
       - 'cmd/auth-service/**'
       - 'cmd/auth-migrate/**'
       - 'ci/check_auth_k8s.sh'
+      - 'ci/auth_k8s/**'
       - '.github/workflows/auth-k8s-proof.yml'
   workflow_dispatch:
 

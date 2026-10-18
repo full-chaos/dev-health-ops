@@ -45,7 +45,7 @@ die() {
   exit 1
 }
 
-for tool in docker kubectl helm openssl curl sha256sum; do
+for tool in docker kubectl helm openssl curl sha256sum envsubst; do
   command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"
 done
 
@@ -64,6 +64,12 @@ cleanup() {
 trap cleanup EXIT
 
 K() { kubectl --context "kind-${CLUSTER}" -n "${NS}" "$@"; }
+# Manifests live in files under ci/auth_k8s/ and are filled from the environment: a large
+# here-document in a script can hang bash (tests/tooling/test_local_validate_heredocs.py).
+K_RENDER() {
+  # shellcheck disable=SC2016
+  envsubst '${LOCAL_PG} ${PG_PASSWORD} ${LOCAL_SVC} ${name} ${mode} ${fsgroup} ${mount}' <"$1"
+}
 
 # --- tooling: kind by checksum, not by whatever the runner ships ---------------
 printf 'step 0: kind %s (sha256 pinned) and the pinned node image\n' "${KIND_VERSION}"
@@ -94,35 +100,9 @@ kubectl --context "kind-${CLUSTER}" create namespace "${NS}"
 # --- PostgreSQL and the Secrets the chart only references ------------------------
 printf 'step 2: PostgreSQL, the migration and runtime logins, the Secrets\n'
 PG_PASSWORD="$(openssl rand -hex 12)"
+export LOCAL_PG LOCAL_SVC PG_PASSWORD
 RUNTIME_PASSWORD="$(openssl rand -hex 12)#"
-K apply -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata: {name: auth-postgres}
-spec:
-  replicas: 1
-  selector: {matchLabels: {app: auth-postgres}}
-  template:
-    metadata: {labels: {app: auth-postgres}}
-    spec:
-      containers:
-        - name: postgres
-          image: ${LOCAL_PG}
-          imagePullPolicy: Never
-          env:
-            - {name: POSTGRES_PASSWORD, value: "${PG_PASSWORD}"}
-            - {name: PGDATA, value: /var/lib/postgresql/pgdata}
-          readinessProbe:
-            exec: {command: [pg_isready, -U, postgres]}
-            periodSeconds: 2
----
-apiVersion: v1
-kind: Service
-metadata: {name: auth-postgres}
-spec:
-  selector: {app: auth-postgres}
-  ports: [{port: 5432, targetPort: 5432}]
-EOF
+K_RENDER "${SCRIPT_DIR}/auth_k8s/postgres.yaml" | K apply -f -
 K rollout status deploy/auth-postgres --timeout=180s
 K exec deploy/auth-postgres -- psql -U postgres -v ON_ERROR_STOP=1 \
   -c "CREATE ROLE devhealth_auth LOGIN PASSWORD '${RUNTIME_PASSWORD}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
@@ -229,33 +209,8 @@ trap_pod() { # name defaultMode fsGroup-line expected-reason subPath(yes|no)
     mount="{name: key, mountPath: /mnt/key/signing-key.pem, subPath: signing-key.pem, readOnly: true}"
   fi
   K delete pod "${name}" --ignore-not-found --wait=true >/dev/null
-  K apply -f - <<EOF
-apiVersion: v1
-kind: Pod
-metadata: {name: ${name}, labels: {role: trap}}
-spec:
-  automountServiceAccountToken: false
-  securityContext:
-    runAsNonRoot: true
-    runAsUser: 65532
-    runAsGroup: 65532
-    ${fsgroup}
-  containers:
-    - name: auth-service
-      image: ${LOCAL_SVC}
-      imagePullPolicy: Never
-      args:
-        - --signing-key-file=/mnt/key/signing-key.pem
-        - --signing-key-id=trap
-        - --health-check-timeout=2s
-      env:
-        - name: AUTH_DATABASE_URI
-          valueFrom: {secretKeyRef: {name: auth-db, key: AUTH_DATABASE_URI}}
-      volumeMounts: [${mount}]
-  volumes:
-    - name: key
-      secret: {secretName: auth-key, defaultMode: ${mode}}
-EOF
+  export name mode fsgroup mount
+  K_RENDER "${SCRIPT_DIR}/auth_k8s/trap-pod.yaml" | K apply -f -
   local ip out
   for _ in $(seq 1 30); do
     ip="$(K get pod "${name}" -o jsonpath='{.status.podIP}')"

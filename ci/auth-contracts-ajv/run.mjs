@@ -163,9 +163,13 @@ for (const surface of surfaces) {
       }
     }
   }
-  for (const file of readdirSync(dir)) {
-    if (file.endsWith(".json") && file !== "manifest.json" && !claimed.has(file)) {
-      fail(`${surface}/${file} is on disk but not claimed by the manifest`);
+  // The whole surface tree, not just its top level: a fixture dropped into a
+  // subdirectory would otherwise sit unclaimed and unchecked.
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      fail(`${surface}/${entry.name}/ is a subdirectory; fixtures live directly in the surface directory`);
+    } else if (entry.name.endsWith(".json") && entry.name !== "manifest.json" && !claimed.has(entry.name)) {
+      fail(`${surface}/${entry.name} is on disk but not claimed by the manifest`);
     }
   }
   for (const name of claimed) {

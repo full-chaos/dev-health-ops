@@ -48,11 +48,14 @@ func sameLineRegistrations(t *testing.T, dir string) []string {
 		}
 		directCallees := map[ast.Node]bool{}
 		declared := map[*ast.Ident]bool{}
-		routeLits := map[*ast.CompositeLit]bool{}
-		routeType := func(e ast.Expr) bool {
-			id, ok := e.(*ast.Ident)
-			return ok && (id.Name == "restMount" || id.Name == "RESTRoute")
+		routeLits := map[*ast.CompositeLit]string{}
+		routeType := func(e ast.Expr) string {
+			if id, ok := e.(*ast.Ident); ok && (id.Name == "restMount" || id.Name == "RESTRoute") {
+				return id.Name
+			}
+			return ""
 		}
+		patternIndex := map[string]int{"restMount": 0, "RESTRoute": 1}
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.CallExpr:
@@ -66,13 +69,13 @@ func sameLineRegistrations(t *testing.T, dir string) []string {
 					declared[id] = true
 				}
 			case *ast.CompositeLit:
-				if routeType(n.Type) {
-					routeLits[n] = true
+				if typeName := routeType(n.Type); typeName != "" {
+					routeLits[n] = typeName
 				}
-				if arr, ok := n.Type.(*ast.ArrayType); ok && routeType(arr.Elt) {
+				if arr, ok := n.Type.(*ast.ArrayType); ok && routeType(arr.Elt) != "" {
 					for _, elt := range n.Elts {
 						if lit, ok := elt.(*ast.CompositeLit); ok {
-							routeLits[lit] = true
+							routeLits[lit] = routeType(arr.Elt)
 						}
 					}
 				}
@@ -102,15 +105,21 @@ func sameLineRegistrations(t *testing.T, dir string) []string {
 					perLine[line] = append(perLine[line], routeArg(route))
 				}
 			case *ast.CompositeLit:
-				if !routeLits[n] {
+				typeName := routeLits[n]
+				if typeName == "" {
 					return true
 				}
-				for _, elt := range n.Elts {
+				for index, elt := range n.Elts {
 					if kv, ok := elt.(*ast.KeyValueExpr); ok {
 						if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Pattern" {
 							line := fset.Position(kv.Pos()).Line
 							perLine[line] = append(perLine[line], routeArg(kv.Value))
 						}
+						continue
+					}
+					if index == patternIndex[typeName] {
+						line := fset.Position(elt.Pos()).Line
+						perLine[line] = append(perLine[line], routeArg(elt))
 					}
 				}
 			}
@@ -161,8 +170,9 @@ func TestSameLineRegistrationIsDetectedAndNamesBothRoutes(t *testing.T) {
 	write("expr.go", "package x\nfunc f(mux M) {\n\tmux.Handle(routePath, h); mux.Handle(prefix+\"/g\", h)\n}\n")
 	write("dot.go", "package x\nfunc f() {\n\tHandleFunc(\"/h\", h); HandleFunc(\"/i\", h)\n\treg := HandleFunc\n}\n")
 	write("methodexpr.go", "package x\nfunc f(mux *M) {\n\t(*M).Handle(mux, \"/j\", h); (*M).Handle(mux, \"/k\", h)\n}\n")
+	write("positional.go", "package x\nvar t = []restMount{{\"/p\", nil}, {\"/q\", nil}}\nvar u = []RESTRoute{{\"GET\", \"/r\"}, {\"GET\", \"/s\"}}\n")
 	found := strings.Join(sameLineRegistrations(t, dir), "\n")
-	for _, want := range []string{"bad.go:3", `"/a" AND "/b"`, "bad.go:4", `"/c" AND "/d"`, "MULTIPLE REGISTRATIONS ON ONE LINE", `dot.go:3: MULTIPLE REGISTRATIONS ON ONE LINE: "/h" AND "/i"`, "dot.go:4: Handle/HandleFunc used as a value", `methodexpr.go:3: MULTIPLE REGISTRATIONS ON ONE LINE: "/j" AND "/k"`, "alias.go:3: Handle/HandleFunc used as a value", `expr.go:3: MULTIPLE REGISTRATIONS ON ONE LINE: prefix + "/g" AND routePath`} {
+	for _, want := range []string{"bad.go:3", `"/a" AND "/b"`, "bad.go:4", `"/c" AND "/d"`, "MULTIPLE REGISTRATIONS ON ONE LINE", `dot.go:3: MULTIPLE REGISTRATIONS ON ONE LINE: "/h" AND "/i"`, "dot.go:4: Handle/HandleFunc used as a value", `methodexpr.go:3: MULTIPLE REGISTRATIONS ON ONE LINE: "/j" AND "/k"`, "alias.go:3: Handle/HandleFunc used as a value", `positional.go:2: MULTIPLE REGISTRATIONS ON ONE LINE: "/p" AND "/q"`, `positional.go:3: MULTIPLE REGISTRATIONS ON ONE LINE: "/r" AND "/s"`, `expr.go:3: MULTIPLE REGISTRATIONS ON ONE LINE: prefix + "/g" AND routePath`} {
 		if !strings.Contains(found, want) {
 			t.Errorf("missing %q in:\n%s", want, found)
 		}

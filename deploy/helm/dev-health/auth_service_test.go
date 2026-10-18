@@ -365,3 +365,32 @@ func contains(list []string, want string) bool {
 	}
 	return false
 }
+
+// A hook object that is not a Job or Pod is created at hook time and never garbage-collected
+// by `helm uninstall` unless a delete policy removes it, and `hook-succeeded` would remove a
+// NetworkPolicy before the Job it protects starts (found by the cluster proof). So only the
+// migration Job may be a hook; everything else the auth section renders is a release resource.
+func TestOnlyTheMigrationJobIsAHook(t *testing.T) {
+	docs, out, err := renderAuth(t, authBase...)
+	if err != nil {
+		t.Fatalf("render failed: %v\n%.600s", err, out)
+	}
+	hooks := 0
+	for _, doc := range docs {
+		meta, _ := doc["metadata"].(map[string]any)
+		name, _ := meta["name"].(string)
+		if !strings.Contains(name, "auth-") {
+			continue
+		}
+		if at(doc, "metadata", "annotations", "helm.sh/hook") == nil {
+			continue
+		}
+		hooks++
+		if doc["kind"] != "Job" {
+			t.Errorf("%v %s is a Helm hook; only the migration Job may be, or uninstall leaks it", doc["kind"], name)
+		}
+	}
+	if hooks != 1 {
+		t.Errorf("want exactly one auth hook (the migration Job), found %d", hooks)
+	}
+}

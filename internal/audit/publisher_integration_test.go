@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -580,5 +581,83 @@ func TestBackoffIsMeasuredFromTheFailureNotTheStepStart(t *testing.T) {
 	r := readRow(t, ctx, env, k)
 	if got := r.available.Sub(failedAt); got < 1500*time.Millisecond {
 		t.Fatalf("available_at is only %v after the failure was recorded; a 2s backoff was measured from the step start", got)
+	}
+}
+
+// A delivery abandoned at DeliverTimeout may still be running; no publisher in
+// this process may start the same event again meanwhile.
+func TestTimedOutDeliveryIsNotRetriedConcurrently(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+	k := commitEvent(t, ctx, env, "org-a", 1)
+
+	var mu sync.Mutex
+	inFlight, maxInFlight, calls := 0, 0, 0
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	track := func(block bool) Sink {
+		return sinkFunc(func(context.Context, Event) error {
+			mu.Lock()
+			inFlight++
+			calls++
+			if inFlight > maxInFlight {
+				maxInFlight = inFlight
+			}
+			mu.Unlock()
+			if block {
+				<-release
+			}
+			mu.Lock()
+			inFlight--
+			mu.Unlock()
+			return nil
+		})
+	}
+	cfg := PublisherConfig{Schema: env.schema, BaseBackoff: time.Second, MaxBackoff: time.Minute, DeliverTimeout: 200 * time.Millisecond}
+	p1, err := NewPublisher(env.pool, track(true), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := NewPublisher(env.pool, track(false), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := p1.Step(ctx, time.Now().Add(time.Second), 10); err != nil || res.Failed != 1 {
+		t.Fatalf("p1 Step = %+v, %v", res, err)
+	}
+	// The retry is due by any clock (an hour on), the first call is still running.
+	if _, err := p2.Step(ctx, time.Now().Add(time.Hour), 10); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if maxInFlight > 1 || calls != 1 {
+		t.Fatalf("the same event was delivered concurrently: calls=%d max in flight=%d (event %s)", calls, maxInFlight, k)
+	}
+}
+
+// The oldest-pending lag covers every unpublished event, including one waiting
+// out a retry backoff: it is still pending.
+func TestLagCountsAnEventWaitingOutItsBackoff(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+	k := commitEvent(t, ctx, env, "org-a", 1)
+
+	consumer := newConsumer()
+	consumer.failOnce[k] = true
+	p := newTestPublisher(t, env, consumer)
+	now := time.Now().Add(time.Second)
+	if res, err := p.Step(ctx, now, 10); err != nil || res.Failed != 1 {
+		t.Fatalf("Step = %+v, %v", res, err)
+	}
+	if r := readRow(t, ctx, env, k); r.published || !r.available.After(now) {
+		t.Fatalf("setup: the event is not waiting out a backoff: %+v", r)
+	}
+	lag := &lagTracker{pool: env.pool, schema: env.schema, logger: slog.New(slog.DiscardHandler)}
+	lag.observe(ctx, time.Now().Add(5*time.Second))
+	if got := lag.age.Load(); got < 4 {
+		t.Fatalf("lag = %d s for a pending event about 5 s old: an event in backoff was reported as no lag", got)
 	}
 }

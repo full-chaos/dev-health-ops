@@ -44,6 +44,33 @@ type credEnv struct {
 	schema authschema.ValidatedIdentifier
 }
 
+// runtimeRolePool returns a pool that connects AS the fixture's runtime role.
+// newAuditFixture creates that role (NOLOGIN, with the runtime grants) but hands
+// back the superuser's pool, so the role is given a login here and the pool is
+// built from the superuser pool's own connection settings with only the user
+// and password replaced.
+func runtimeRolePool(t *testing.T, ctx context.Context, admin *pgxpool.Pool) *pgxpool.Pool {
+	t.Helper()
+	var role string
+	if err := admin.QueryRow(ctx,
+		`SELECT rolname::text FROM pg_roles WHERE rolname LIKE 'audit\_runtime\_%' ORDER BY rolname LIMIT 1`).Scan(&role); err != nil {
+		t.Fatalf("finding the runtime role: %v", err)
+	}
+	const password = "credential-lifecycle-test-only"
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`ALTER ROLE %q LOGIN PASSWORD '%s'`, role, password)); err != nil {
+		t.Fatalf("giving the runtime role a login: %v", err)
+	}
+	cfg := admin.Config().Copy()
+	cfg.ConnConfig.User = role
+	cfg.ConnConfig.Password = password
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("runtime-role pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
 var commitSeq atomic.Int64
 
 // commitCredential runs one statement against credential_registry through
@@ -83,7 +110,7 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	fx := newAuditFixture(t, ctx)
-	env := &credEnv{admin: fx.pool, writer: fx.pool, schema: fx.schema}
+	env := &credEnv{admin: fx.pool, writer: runtimeRolePool(t, ctx, fx.pool), schema: fx.schema}
 	// principals is an unguarded table; seed it directly.
 	for _, id := range []string{credPrincipal, credOther} {
 		if _, err := env.admin.Exec(ctx,

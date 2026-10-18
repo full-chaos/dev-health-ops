@@ -168,33 +168,38 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 // logged as reason "unknown" and never changes the outcome.
 func (service *NativeFinalizeSyncRunService) reportDeliveryNotCurrent(ctx context.Context, tx pgx.Tx, args FinalizeSyncRunArgs) {
 	reason, routeGeneration := "unknown", int64(-1)
-	var (
-		outboxStatus, outboxTransport, routeTransport *string
-		outboxGeneration, routeGenerationRead         *int64
-		routePaused                                   *bool
-	)
-	err := tx.QueryRow(ctx, `
-SELECT outbox.status, outbox.dispatched_transport, outbox.dispatched_route_generation,
-       route.transport, route.generation, route.paused
-FROM public.sync_dispatch_outbox AS outbox
-LEFT JOIN public.sync_dispatch_transport_routes AS route ON route.kind = outbox.kind
-WHERE outbox.id = $1::uuid AND outbox.sync_run_id = $2::uuid AND outbox.org_id = $3 AND outbox.kind = $4`,
-		args.OutboxID(), args.SyncRunID(), args.OrganizationID(), outboxKindFinalizeSyncRun,
-	).Scan(&outboxStatus, &outboxTransport, &outboxGeneration, &routeTransport, &routeGenerationRead, &routePaused)
-	if routeGenerationRead != nil {
-		routeGeneration = *routeGenerationRead
+	// The route and the outbox row are read apart: a missing outbox row must still report the route's generation.
+	var routeTransport string
+	var routePaused bool
+	routeErr := tx.QueryRow(ctx, `
+SELECT transport, generation, paused FROM public.sync_dispatch_transport_routes WHERE kind = $1`,
+		outboxKindFinalizeSyncRun).Scan(&routeTransport, &routeGeneration, &routePaused)
+	routeKnown := routeErr == nil
+	if errors.Is(routeErr, pgx.ErrNoRows) {
+		routeGeneration = -1
 	}
+	var outboxStatus, outboxTransport *string
+	var outboxGeneration *int64
+	outboxErr := tx.QueryRow(ctx, `
+SELECT status, dispatched_transport, dispatched_route_generation
+FROM public.sync_dispatch_outbox
+WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4`,
+		args.OutboxID(), args.SyncRunID(), args.OrganizationID(), outboxKindFinalizeSyncRun,
+	).Scan(&outboxStatus, &outboxTransport, &outboxGeneration)
 	switch {
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(outboxErr, pgx.ErrNoRows):
 		reason = "outbox_row_missing"
-	case err != nil:
+	case outboxErr != nil:
 	case outboxStatus == nil || *outboxStatus != "dispatched":
 		reason = "outbox_not_dispatched"
 	case outboxTransport == nil || *outboxTransport != "river":
 		reason = "outbox_other_transport"
-	case routeTransport == nil || *routeTransport != "river":
+	case errors.Is(routeErr, pgx.ErrNoRows):
+		reason = "route_row_missing"
+	case !routeKnown:
+	case routeTransport != "river":
 		reason = "route_other_transport"
-	case routePaused != nil && *routePaused:
+	case routePaused:
 		reason = "route_paused"
 	case outboxGeneration == nil || *outboxGeneration != routeGeneration || args.RouteGeneration() != routeGeneration:
 		reason = "route_generation_mismatch"

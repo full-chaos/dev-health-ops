@@ -101,3 +101,39 @@ func TestNativeFinalizeSyncRunLogsAndCountsADeliveryThatIsNotCurrent(t *testing.
 		t.Fatalf("%s{reason=route_generation_mismatch} = %d, want 1", FinalizeDeliveryNotCurrentCounter, counted)
 	}
 }
+
+// Round 463 finding: a delivery whose outbox row is gone must still report the route's current generation.
+func TestNativeFinalizeSyncRunReportsTheRouteGenerationWhenTheOutboxRowIsMissing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createFinalizeTables(t, ctx, pool)
+	seedFinalizeRoute(t, ctx, pool)
+	insertFinalizeRun(t, ctx, pool, 1, "", "")
+	if _, err := pool.Exec(ctx, `DELETE FROM sync_dispatch_outbox WHERE id = $1`, finalizeTestOutbox); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	service, err := NewNativeFinalizeSyncRunService(pool, synclog.New(slog.New(slog.NewTextHandler(&logs, nil))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Finalize(ctx, newFinalizeArgs()); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	out := logs.String()
+	for _, want := range []string{"reason=outbox_row_missing", "current_route_generation=3"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log lacks %q:\n%s", want, out)
+		}
+	}
+}

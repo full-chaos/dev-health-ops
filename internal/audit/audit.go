@@ -82,6 +82,11 @@ const commitGuardSetting = "dev_health.audit_txid"
 // Commit's transaction; a value tagged with another transaction id reads as 0.
 const changedSetting = "dev_health.audit_changed"
 
+// ErrAttributeNotAllowed reports an audit attribute outside the G-65 allowlist.
+// It wraps ErrMutationFailed: the mutation is refused before anything is
+// written.
+var ErrAttributeNotAllowed = fmt.Errorf("%w: audit attributes", ErrMutationFailed)
+
 // ErrMutationFailed wraps any failure that leaves the database unchanged.
 var ErrMutationFailed = errors.New("audit: security mutation failed")
 
@@ -328,6 +333,12 @@ func (m Mutation) validate() error {
 		return fmt.Errorf("%w: outbox event names no aggregate", ErrMutationFailed)
 	case m.Event.EventType == "":
 		return fmt.Errorf("%w: outbox event_type is empty", ErrMutationFailed)
+	case ValidateAttributes(m.Audit.Attributes) != nil:
+		return ValidateAttributes(m.Audit.Attributes)
+	case validateEventType(m.Audit.EventType) != nil:
+		return validateEventType(m.Audit.EventType)
+	case m.Audit.RequestID != nil && validateRequestID(*m.Audit.RequestID) != nil:
+		return validateRequestID(*m.Audit.RequestID)
 	case m.Event.IdempotencyKey == "":
 		// An empty key is worse than a duplicate one: the unique index would
 		// accept exactly one such row ever, and every later mutation would

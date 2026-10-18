@@ -54,6 +54,14 @@ const (
 // by the hand-off (nothing written); a plan the scheduler has not made within
 // the wait answers 202 "pending" with the occurrence id. The last two kinds
 // are asserted below, not compared.
+//
+// Named divergence (CHAOS-10064, chris 2026-10-17: a trigger that names no
+// sources plans the sources a scheduled run of the configuration plans): on
+// the incremental integration, which also has an enabled source no
+// configuration tagged, Python planned that source too (6 units), the hand-off
+// plans the tagged ones (4). Its answer's total_units and that source's unit
+// rows and run counts are asserted against the Python answer minus that
+// source, not compared as equal.
 func TestIntegrationSyncVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("integration-sync-venue-oracle", t.Name(), "c26ea95ab447e12f6bd230ee7651ed9ed5515e75c07f529ec8c2763293decd38"))
 	ctx := context.Background()
@@ -134,7 +142,17 @@ func TestIntegrationSyncVenueOracle(t *testing.T) {
 
 	same := sameRequests(venue, v)
 	python := golden.Python(t, venue, same)
-	receipt := venueoracle.Diff(t, base, same, python, venueoracle.DiffOptions{Golden: golden, Normalize: normalize})
+	for index, request := range same {
+		if request.Name == untaggedRequest && !strings.Contains(python[index].Body, `"total_units":6`) {
+			t.Errorf("%s: python %s (the divergence assumes Python planned 6 units)", request.Name, python[index].Body)
+		}
+	}
+	receipt := venueoracle.Diff(t, base, same, python, venueoracle.DiffOptions{Golden: golden, Normalize: normalizeRuled,
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			if request.Name == untaggedRequest && !strings.Contains(goResponse.Body, `"total_units":4`) {
+				t.Errorf("%s: go %d %s, want 4 units (the two tagged enabled sources, two datasets each)", request.Name, goResponse.Status, goResponse.Body)
+			}
+		}})
 	t.Logf("receipt (%d requests):\n%s", len(same), receipt)
 
 	// The rows each plane planned, columns that are ids or a ruled difference
@@ -153,11 +171,18 @@ ORDER BY integration_id::text, mode`, 6},
 u.status, u.attempts, u.processor_flags::text FROM sync_run_units u WHERE u.integration_id NOT IN (` + refused + `)
 ORDER BY u.integration_id::text, u.source_id::text, u.dataset_key`, 14},
 	}
+	var untaggedSource string
+	if err := schedulerPool.QueryRow(ctx, `SELECT id::text FROM integration_sources WHERE external_id = 'acme/incremental-untagged'`).Scan(&untaggedSource); err != nil {
+		t.Fatalf("the untagged source: %v", err)
+	}
 	for _, table := range compare {
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		pythonRows := golden.CompareRows(t, table.name, func() string {
+		pythonRows := golden.InspectRows(t, table.name, func() string {
 			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
-		}, goRows)
+		})
+		if want := withoutUntaggedSource(t, table.name, pythonRows, v.incremental.id.String(), untaggedSource); goRows != want {
+			t.Errorf("%s differs after the requests (python minus the untagged source):\n python: %s\n go:     %s", table.name, want, goRows)
+		}
 		if strings.Count(pythonRows, " | ") < table.minSeparators {
 			t.Errorf("%s: too few rows compared:\n%s", table.name, pythonRows)
 		}
@@ -274,5 +299,50 @@ func repoRoot(t *testing.T) string {
 			t.Fatalf("no src/dev_health_ops above %s", file)
 		}
 		directory = parent
+	}
+}
+
+// untaggedRequest is the request whose answer is the CHAOS-10064 divergence.
+const untaggedRequest = "clock: incremental, every enabled source"
+
+var totalUnits = regexp.MustCompile(`"total_units":\d+`)
+
+// normalizeRuled is normalize, with the untagged request's total_units left
+// out of the comparison (Inspect and the Python check pin both values).
+func normalizeRuled(request venueoracle.Request, body string) string {
+	body = normalize(request, body)
+	if request.Name == untaggedRequest {
+		body = totalUnits.ReplaceAllString(body, `"total_units":"<ruled CHAOS-10064>"`)
+	}
+	return body
+}
+
+// withoutUntaggedSource is the Python plane's rows as the hand-off writes them
+// under CHAOS-10064: the untagged source's two units are not planned, and its
+// run counts two units fewer (6 to 4). Every other row is unchanged.
+func withoutUntaggedSource(t *testing.T, table, pythonRows, integration, source string) string {
+	t.Helper()
+	lines := strings.Split(pythonRows, " | ")
+	switch table {
+	case "sync_run_units":
+		kept := make([]string, 0, len(lines))
+		for _, line := range lines {
+			if !strings.Contains(line, integration+source) {
+				kept = append(kept, line)
+			}
+		}
+		if len(lines)-len(kept) != 2 {
+			t.Fatalf("sync_run_units: the untagged source has %d python units, want 2", len(lines)-len(kept))
+		}
+		return strings.Join(kept, " | ")
+	case "sync_runs":
+		from, to := integration+"incrementalplanned6 0 0", integration+"incrementalplanned4 0 0"
+		if strings.Count(pythonRows, from) != 1 {
+			t.Fatalf("sync_runs: python has %d runs of the incremental integration with 6 planned units, want 1", strings.Count(pythonRows, from))
+		}
+		return strings.Replace(pythonRows, from, to, 1)
+	default:
+		t.Fatalf("no CHAOS-10064 rule for %s", table)
+		return ""
 	}
 }

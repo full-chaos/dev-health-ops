@@ -7,6 +7,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // The Jira team catalog used to make one team out of every Jira project (a
@@ -96,6 +98,12 @@ const jiraProjectAsTeamRepoOwnershipPredicate = `org_id = {org_id:String} AND so
 
 const jiraProjectAsTeamActivePredicate = `org_id = {org_id:String} AND is_active = 1 AND ` + jiraProjectAsTeamRowPredicate
 
+// jiraProjectAsTeamStoredIdentity is the stored provider identity of each team
+// of the organization, by the rule every writer of teams keeps it with: the
+// retire is a writer, and a copy of the newest version would write a blank
+// identity again over an older version that still holds it.
+const jiraProjectAsTeamStoredIdentity = `(` + teamprovider.StoredIdentityOfOrganization + `)`
+
 const jiraProjectAsTeamCountQuery = `SELECT ` +
 	`(SELECT count() FROM teams FINAL WHERE ` + jiraProjectAsTeamActivePredicate + `), ` +
 	`(SELECT count() FROM teams FINAL WHERE ` + jiraProjectAsTeamActivePredicate + ` AND notEmpty(manual_members)), ` +
@@ -103,7 +111,9 @@ const jiraProjectAsTeamCountQuery = `SELECT ` +
 	` AND id IN (SELECT team_id FROM team_sync_policies FINAL WHERE org_id = {org_id:String})), ` +
 	`(SELECT count() FROM team_project_ownership FINAL WHERE ` + jiraProjectAsTeamOwnershipPredicate + `), ` +
 	`(SELECT count() FROM team_memberships FINAL WHERE ` + jiraProjectAsTeamMembershipPredicate + `), ` +
-	`(SELECT count() FROM team_repo_ownership FINAL WHERE ` + jiraProjectAsTeamRepoOwnershipPredicate + `)`
+	`(SELECT count() FROM team_repo_ownership FINAL WHERE ` + jiraProjectAsTeamRepoOwnershipPredicate + `), ` +
+	`(SELECT count() FROM teams FINAL LEFT JOIN ` + jiraProjectAsTeamStoredIdentity + ` AS s ON s.stored_id = id ` +
+	`WHERE ` + jiraProjectAsTeamActivePredicate + ` AND ifNull(s.stored_team_id, '') = '')`
 
 // A retraction keeps every value of the row it closes and its sort key; only
 // valid_to and updated_at change. valid_to is never before valid_from, and
@@ -134,8 +144,10 @@ const jiraProjectAsTeamOldestCreated = `(SELECT org_id AS m_org, id AS m_id, min
 const jiraProjectAsTeamDeactivateTeams = `INSERT INTO teams ` +
 	`(id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, source_id, created_at, provider_team_id, provider_name, gone_at) ` +
 	`SELECT id, team_uuid, name, description, manual_members, project_keys, repo_patterns, 0, ` +
-	`greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)), org_id, provider, native_team_key, parent_team_id, source_id, m_created, provider_team_id, provider_name, gone_at ` +
+	`greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)), org_id, provider, native_team_key, parent_team_id, source_id, m_created, ` +
+	`ifNull(s.stored_team_id, ''), ifNull(s.stored_name, ''), s.stored_gone ` +
 	`FROM teams FINAL LEFT JOIN ` + jiraProjectAsTeamOldestCreated + ` AS m ON org_id = m.m_org AND id = m.m_id ` +
+	`LEFT JOIN ` + jiraProjectAsTeamStoredIdentity + ` AS s ON s.stored_id = id ` +
 	`WHERE ` + jiraProjectAsTeamActivePredicate
 
 // JiraProjectAsTeamRetireOutcome is counts only: no id, key or name of a team,
@@ -153,6 +165,9 @@ type JiraProjectAsTeamRetireOutcome struct {
 	MembershipRows uint64 `json:"membership_rows"`
 	// RepoOwnershipRows is the open derived repository rows found.
 	RepoOwnershipRows uint64 `json:"repo_ownership_rows"`
+	// TeamsWithoutProviderIdentity counts the found rows that no stored
+	// version gives a provider team id: the retire has none to keep.
+	TeamsWithoutProviderIdentity uint64 `json:"teams_without_provider_identity"`
 	// The four below are what a real run wrote; 0 in a dry run.
 	TeamsRetired        uint64 `json:"teams_retired"`
 	OwnershipClosed     uint64 `json:"ownership_closed"`
@@ -192,6 +207,7 @@ func RetireJiraProjectAsTeamRows(
 	if err := conn.QueryRow(ctx, jiraProjectAsTeamCountQuery, org).Scan(
 		&outcome.Teams, &outcome.TeamsWithManualMembers, &outcome.TeamsWithSyncPolicy,
 		&outcome.OwnershipRows, &outcome.MembershipRows, &outcome.RepoOwnershipRows,
+		&outcome.TeamsWithoutProviderIdentity,
 	); err != nil {
 		return JiraProjectAsTeamRetireOutcome{}, err
 	}

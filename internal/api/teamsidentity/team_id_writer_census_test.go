@@ -20,18 +20,23 @@ var teamIDWriters = map[string]struct {
 	count int
 	route string
 }{
-	"internal/api/teamsidentity/store.go":                                  {2, "admin: write seam (keyTeamIDs) at the handler; insertTeamRow refuses a bare id"},
+	"internal/api/teamsidentity/store.go":                                  {1, "admin: write seam (keyTeamIDs) at the handler; insertTeamRow refuses a bare id"},
 	"internal/api/teamsidentity/drift.go":                                  {2, "admin import: write seam over teamid.Of(provider, id)"},
 	"internal/api/teamsidentity/drift_apply.go":                            {2, "admin drift decision: write seam on the path id; an open row with a bare id is refused"},
 	"internal/streamhandlers/external_clickhouse.go":                       {2, "team.v1 / identity.v1: teamid.Of(system, id) and teamid.CheckPushed, behind the batch carry"},
-	"internal/atlassianteams/write.go":                                     {3, "native: teamid.Of on the Atlassian team id, behind the carry (synccli)"},
-	"internal/providersync/github_team_catalog_effects_clickhouse.go":      {3, "native catalog: teamid.Of, behind CarryFirstTeamCatalogCollector"},
-	"internal/providersync/gitlab_team_catalog_effects_clickhouse.go":      {3, "native catalog: teamid.Of, behind CarryFirstTeamCatalogCollector"},
-	"internal/providersync/jira_team_catalog_effects_clickhouse.go":        {3, "native catalog: teamid.Of, behind CarryFirstTeamCatalogCollector"},
-	"internal/providersync/linear_reference_catalog_effects_clickhouse.go": {3, "native catalog: teamid.Of, behind CarryFirstTeamCatalogCollector"},
-	"internal/providersync/team_drift_review.go":                           {2, "native catalog drift staging: the collector's keyed ids"},
-	"internal/providersync/jira_project_as_team_retire.go":                 {3, "retire: closes and deactivates stored rows, no new id"},
-	"internal/providersync/team_repo_ownership_derivation_clickhouse.go":   {2, "derivation: ids of stored active team rows (the plain insert and the insert with the share)"},
+	"internal/atlassianteams/write.go":                                     {2, "native: teamid.Of on the Atlassian team id, behind the carry (synccli)"},
+	"internal/providersync/github_team_catalog_effects_clickhouse.go":      {2, "native catalog: teamid.Of, behind CarryFirstTeamCatalogCollector"},
+	"internal/providersync/gitlab_team_catalog_effects_clickhouse.go":      {2, "native catalog: teamid.Of, behind CarryFirstTeamCatalogCollector"},
+	"internal/providersync/jira_team_catalog_effects_clickhouse.go":        {2, "native catalog: teamid.Of, behind CarryFirstTeamCatalogCollector"},
+	"internal/providersync/linear_reference_catalog_effects_clickhouse.go": {2, "native catalog: teamid.Of, behind CarryFirstTeamCatalogCollector"},
+	// The one teams statement builder (CHAOS-9999): it writes the ids its
+	// callers give it; every caller is listed here with its route.
+	"internal/teamprovider/insert.go": {1, "teamprovider.Insert: the ids of its callers above"},
+	// Exception: a test helper that reads that statement back; it writes nothing.
+	"internal/teamprovider/teamprovidertest/decode.go":                   {1, "exception: test helper, reads a teamprovider.Insert statement"},
+	"internal/providersync/team_drift_review.go":                         {2, "native catalog drift staging: the collector's keyed ids"},
+	"internal/providersync/jira_project_as_team_retire.go":               {3, "retire: closes and deactivates stored rows, no new id"},
+	"internal/providersync/team_repo_ownership_derivation_clickhouse.go": {2, "derivation: ids of stored active team rows (the plain insert and the insert with the share)"},
 	// Exception: a test seed. It stores a retired (inactive) bare id beside
 	// its keyed id on purpose, the state the reader tests of the retraction
 	// rows need. No production binary imports the package.
@@ -178,8 +183,11 @@ func guardedBeforeBatch(t *testing.T, source, decl string) {
 			continue
 		}
 		guard, batch := strings.Index(fn.body, "checkKeyedTeamID("), strings.Index(fn.body, "PrepareBatch(")
+		if batch < 0 {
+			batch = strings.Index(fn.body, "teamprovider.Insert(")
+		}
 		if guard < 0 || batch < 0 || guard > batch {
-			t.Errorf("%s: checkKeyedTeamID does not run before PrepareBatch", decl)
+			t.Errorf("%s: checkKeyedTeamID does not run before its write", decl)
 		}
 		return
 	}

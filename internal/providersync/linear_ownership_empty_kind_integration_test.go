@@ -60,6 +60,9 @@ func TestLinearCollectorEmptyAnswerOfAKindClosesNoRowOfThatKind(t *testing.T) {
 			if err := sink.writeOwnership(ctx, []linearReferenceOwnershipRow{projectRow, teamKeyRow}); err != nil {
 				t.Fatal(err)
 			}
+			// QA was imported by an earlier run; a run whose team answer is empty
+			// still writes the links of an imported team.
+			seedCatalogTeams(ctx, t, conn, org, "linear", "linear:QA")
 			claim := nativeTestClaim("linear", "work-items")
 			claim.OrgID = org
 			ref := teamCatalogRefFromClaim(claim)

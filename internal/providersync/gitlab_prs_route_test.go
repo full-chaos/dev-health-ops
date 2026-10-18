@@ -88,12 +88,19 @@ func TestGitLabPullRequestRouteMirrorsPythonFamilyAndEarlyStop(t *testing.T) {
 		dataset := dataset
 		t.Run(dataset, func(t *testing.T) {
 			doer := &gitLabPullRequestDoer{t: t, responses: gitLabPullRequestFixtureResponses()}
+			client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
+			client.Ledger = providerfoundation.NewRequestLedger()
 			batch, err := (GitLabPullRequestRouteHandler{PerPage: 2}).Collect(
 				context.Background(), nativeTestClaim("gitlab", dataset),
-				providerfoundation.Credential{}, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"), normalizedAt,
+				providerfoundation.Credential{}, client, normalizedAt,
 			)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if dataset == "pr-comments" {
+				assertRouteRequestsAreLabelled(t, "gitlab", dataset, client.Ledger, "merge_requests", "notes")
+			} else {
+				assertRouteRequestsAreLabelled(t, "gitlab", dataset, client.Ledger, "merge_requests")
 			}
 			if len(batch.Effects) != 4 || batch.Effects[0].Destination != "git_pull_requests" ||
 				batch.Effects[1].Destination != "git_pull_request_reviews" ||

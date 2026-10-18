@@ -1,0 +1,95 @@
+{
+  "description": "Golden corpus for authorization_request.v1 (CHAOS-4932).",
+  "accept": [
+    {
+      "file": "request-valid-repository-read.json",
+      "why": "TRD section 8's own request example shape."
+    },
+    {
+      "file": "request-valid-organization-wide-star.json",
+      "why": "The explicit organization-wide repository key `*` is legal for a repository."
+    },
+    {
+      "file": "request-valid-platform-resource-no-org.json",
+      "why": "A platform-level resource has no organization_id; the member is optional, not nullable."
+    },
+    {
+      "file": "request-valid-non-repository-key.json",
+      "why": "A non-repository key takes the lowercase token pattern."
+    }
+  ],
+  "reject": [
+    {
+      "file": "request-invalid-missing-action.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No action: nothing to decide."
+    },
+    {
+      "file": "request-invalid-missing-principal-reference.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No subject."
+    },
+    {
+      "file": "request-invalid-missing-context.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "The context is required so every decision carries a request id into audit."
+    },
+    {
+      "file": "request-invalid-bare-action.json",
+      "expect_instance_location": "/action",
+      "expect_keyword": "pattern",
+      "why": "A bare action (`admin`) is the is_admin-style check ACP-ADR-05 forbids."
+    },
+    {
+      "file": "request-invalid-unknown-resource-type.json",
+      "expect_instance_location": "/resource/type",
+      "expect_keyword": "enum",
+      "why": "Unknown resource kinds deny (G-26)."
+    },
+    {
+      "file": "request-invalid-repository-key-uppercase.json",
+      "expect_instance_location": "/resource/key",
+      "expect_keyword": "pattern",
+      "why": "Repository keys are canonical lowercase owner/repo."
+    },
+    {
+      "file": "request-invalid-star-on-non-repository.json",
+      "expect_instance_location": "/resource/key",
+      "expect_keyword": "pattern",
+      "why": "`*` is an organization-wide REPOSITORY key only; it must not widen any other type."
+    },
+    {
+      "file": "request-invalid-unknown-client-service.json",
+      "expect_instance_location": "/context/client_service",
+      "expect_keyword": "enum",
+      "why": "Referenced from the inventory's closed service set."
+    },
+    {
+      "file": "request-invalid-principal-reference-with-space.json",
+      "expect_instance_location": "/principal_reference",
+      "expect_keyword": "pattern",
+      "why": "A reference is URL-safe tokens only."
+    },
+    {
+      "file": "request-invalid-caller-asserted-roles.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "A request carries no authority: a caller-supplied `roles` member is not in the contract (TRD section 2 principle 3)."
+    },
+    {
+      "file": "request-invalid-extra-context-member.json",
+      "expect_instance_location": "/context",
+      "expect_keyword": "additionalProperties",
+      "why": "Context is closed."
+    },
+    {
+      "file": "request-invalid-schema-version.json",
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "why": "Reject an unrecognised version."
+    }
+  ]
+}

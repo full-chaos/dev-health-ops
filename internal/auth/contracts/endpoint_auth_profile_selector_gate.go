@@ -83,12 +83,12 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 }
 
 // Header and scheme names are case-insensitive on the wire; a credential
-// prefix is part of the secret and is compared exactly.
+// prefix and a JWT header alg are compared exactly.
 func markerMatches(marker ClassMarker, kind, name string) bool {
 	if marker.Kind != kind {
 		return false
 	}
-	if kind == "credential_prefix" {
+	if kind == "credential_prefix" || kind == "jwt_header_alg" {
 		return marker.Name == name
 	}
 	return strings.EqualFold(marker.Name, name)

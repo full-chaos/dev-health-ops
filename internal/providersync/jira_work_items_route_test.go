@@ -391,7 +391,7 @@ func TestJiraWorkItemsJQLIsBoundedToTheWindowOnBothEnds(t *testing.T) {
 
 // The date bounds are a superset of the window for a Jira user in ANY time zone
 // (review round 1: the lower bound used to be the start's own UTC day, which
-// drops an in-window update for a user west of UTC), and stay within about a day
+// drops an in-window update for a user west of UTC), and stay within 50h
 // of the window on either side.
 func TestJiraDateBoundsContainTheWindowInEveryUserTimeZone(t *testing.T) {
 	starts := []time.Time{

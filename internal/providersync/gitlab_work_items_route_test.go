@@ -1,11 +1,13 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -414,5 +416,27 @@ func TestGitLabWorkItemsRouteWritesGroupMilestoneSprintRows(t *testing.T) {
 				t.Fatalf("milestone read %s lacks the ancestor parameters", request.URL.String())
 			}
 		}
+	}
+}
+
+// A unit that fails binding its project (here: the project endpoint is missing)
+// still names its window at Info: the line is not behind the project lookup.
+func TestGitLabWorkItemsRouteLogsItsWindowEvenWhenTheProjectLookupFails(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	claim := nativeTestClaim("gitlab", "work-items")
+	client := gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: map[string][]string{}}))
+	handler := GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10}
+	if _, err := handler.Collect(context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
+		client, time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatal("the failed project lookup returned no error")
+	}
+	line := logged.String()
+	if !strings.Contains(line, "msg=gitlab_work_items_window") || !strings.Contains(line, "updated_after=2026-07-01T00:00:00Z") ||
+		!strings.Contains(line, "updated_before=2026-07-31T23:59:59Z") {
+		t.Fatalf("a unit failing at the project lookup named no window: %q", line)
 	}
 }

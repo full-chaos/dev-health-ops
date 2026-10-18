@@ -190,6 +190,16 @@ func apply(ctx context.Context, pool migrationPool, options Options) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
+	if err := options.Validate(migrationRole); err != nil {
+		return Result{}, err
+	}
+	// One construction, carried onward. Everything downstream that interpolates
+	// the schema name takes ValidatedIdentifier, so this is the only place the
+	// raw string can become an identifier.
+	schemaID, err := NewValidatedIdentifier(options.Schema)
+	if err != nil {
+		return Result{}, err
+	}
 
 	logger := options.Logger
 	if logger == nil {
@@ -214,13 +224,6 @@ func apply(ctx context.Context, pool migrationPool, options Options) (Result, er
 	}()
 
 	if err := ensureSchemaAndVersionTable(ctx, conn, options); err != nil {
-		return Result{}, err
-	}
-	if err := options.Validate(migrationRole); err != nil {
-		return Result{}, err
-	}
-	schemaID, err := NewValidatedIdentifier(options.Schema)
-	if err != nil {
 		return Result{}, err
 	}
 	applied, err := appliedVersions(ctx, conn, schemaID)

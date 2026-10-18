@@ -32,7 +32,11 @@ func currentUser(ctx context.Context, pool migrationPool) (string, error) {
 // migration role, which makes the migration role their OWNER -- that ownership
 // is what keeps DDL out of the runtime role's reach without needing a REVOKE.
 func ensureSchemaAndVersionTable(ctx context.Context, conn querier, options Options) error {
-	schema := quoteIdentifier(ValidatedIdentifier{name: options.Schema})
+	schemaID, err := NewValidatedIdentifier(options.Schema)
+	if err != nil {
+		return err
+	}
+	schema := quoteIdentifier(schemaID)
 	// PostgreSQL cannot bind an IDENTIFIER, so a schema/table name must reach the
 	// statement as text. What makes that safe is no longer an ordering a reader
 	// has to verify: quoteIdentifier accepts ONLY ValidatedIdentifier, and the

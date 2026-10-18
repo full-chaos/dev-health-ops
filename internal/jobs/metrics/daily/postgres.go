@@ -1786,12 +1786,15 @@ func recordICFinalizeLockWait(ctx context.Context, started time.Time, outcome st
 	}
 }
 
-// LockICFinalizeDay takes the session advisory lock that serializes every ic_finalize compute of one
-// (organization, day) across workers and returns its release (CHAOS-9945). Only the holder keeps a pool connection
-// (the session owns the lock). A waiter does not: it tries the lock on a pooled connection, gives the connection back
-// when the lock is taken, and retries after icFinalizeLockPoll, so waiters of one key cannot exhaust a small pool and
-// starve other organizations or the lease renewals. The wait ends with ctx. If the unlock fails the connection is
-// closed, which frees the lock with the session.
+// LockICFinalizeDay takes the advisory lock that serializes every ic_finalize compute of one (organization, day)
+// across workers and returns its release (CHAOS-9945). The lock is TRANSACTION-scoped and the holder keeps that
+// transaction open until release: the domain pool may sit behind a transaction-mode PgBouncer
+// (PGBOUNCER_TRANSACTION_MODE, docs/operate/install/production.md), where a session lock is not tied to the client
+// and two holders can both "have" it, while an open transaction pins one server connection for its whole length.
+// Only the holder keeps a pool connection. A waiter tries the lock in a short transaction of its own, rolls it back
+// when the lock is taken by another, and retries after icFinalizeLockPoll, so waiters of one key cannot exhaust a small
+// pool. The wait ends with ctx. Releasing rolls the holder's transaction back, which frees the lock; a connection that
+// dies frees it as well.
 func (store *PostgresStore) LockICFinalizeDay(ctx context.Context, organizationID string, day time.Time) (func(), error) {
 	if !store.valid() {
 		return nil, ErrUnavailable
@@ -1800,14 +1803,14 @@ func (store *PostgresStore) LockICFinalizeDay(ctx context.Context, organizationI
 	started := time.Now()
 	warned := false
 	for {
-		conn, err := store.pool.Acquire(ctx)
+		tx, err := store.pool.Begin(ctx)
 		if err != nil {
 			recordICFinalizeLockWait(ctx, started, "error")
 			return nil, ErrUnavailable
 		}
 		var taken bool
-		if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key).Scan(&taken); err != nil {
-			conn.Release()
+		if err := tx.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))", key).Scan(&taken); err != nil {
+			_ = tx.Rollback(context.WithoutCancel(ctx))
 			recordICFinalizeLockWait(ctx, started, "error")
 			return nil, ErrUnavailable
 		}
@@ -1816,15 +1819,12 @@ func (store *PostgresStore) LockICFinalizeDay(ctx context.Context, organizationI
 			return func() {
 				unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 				defer cancel()
-				if _, err := conn.Exec(unlockCtx, "SELECT pg_advisory_unlock(hashtextextended($1, 0))", key); err != nil {
-					slog.Error("ic_finalize day unlock failed; closing the connection", "organization_id", organizationID, "key", key)
-					_ = conn.Hijack().Close(unlockCtx)
-					return
+				if err := tx.Rollback(unlockCtx); err != nil {
+					slog.Error("ic_finalize day lock release failed; the connection ends the lock", "organization_id", organizationID, "key", key)
 				}
-				conn.Release()
 			}, nil
 		}
-		conn.Release()
+		_ = tx.Rollback(context.WithoutCancel(ctx))
 		if waited := time.Since(started); !warned && waited >= icFinalizeLockWarnAfter {
 			warned = true
 			slog.WarnContext(ctx, "ic_finalize day lock still waiting", "organization_id", organizationID,

@@ -50,6 +50,18 @@ func TestICFinalizeDayLockWaitersDoNotExhaustASmallPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The lock must be held by an open TRANSACTION, not a session: that is what keeps it correct behind a
+	// transaction-mode PgBouncer (round finding). A session lock would leave its backend idle with no transaction.
+	var holderInTransaction bool
+	if err := pool.QueryRow(ctx, `
+SELECT COALESCE(bool_or(a.state = 'idle in transaction' AND a.xact_start IS NOT NULL), false)
+FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+WHERE l.locktype = 'advisory' AND l.granted AND a.pid <> pg_backend_pid()`).Scan(&holderInTransaction); err != nil {
+		t.Fatal(err)
+	}
+	if !holderInTransaction {
+		t.Fatal("the day lock is not held by an open transaction (a session lock is not safe behind a transaction-mode pooler)")
+	}
 	waiterCtx, stopWaiter := context.WithCancel(ctx)
 	waiterDone := make(chan error, 1)
 	go func() {

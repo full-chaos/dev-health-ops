@@ -44,7 +44,7 @@ func TestNarrowingErrorNamesTheGrantsAndTheAcknowledgement(t *testing.T) {
 	if !errors.Is(err, ErrRuntimeGrantsNarrowed) || !errors.Is(err, ErrMigrationFailed) {
 		t.Fatalf("error does not unwrap to the sentinels: %v", err)
 	}
-	for _, want := range []string{"relation sessions DELETE", "-ack-grant-narrowing=" + narrowingDigest(lost)} {
+	for _, want := range []string{`relation "sessions" DELETE`, "-ack-grant-narrowing=" + narrowingDigest(lost)} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q lacks %q", err.Error(), want)
 		}
@@ -54,9 +54,6 @@ func TestNarrowingErrorNamesTheGrantsAndTheAcknowledgement(t *testing.T) {
 func TestNarrowingDigestIsInjectiveOverDottedIdentifiers(t *testing.T) {
 	a := GrantRecord{Kind: "column", Object: "a", Column: "b.c", Privilege: "SELECT"}
 	b := GrantRecord{Kind: "column", Object: "a.b", Column: "c", Privilege: "SELECT"}
-	if a.String() != b.String() {
-		t.Fatal("precondition: the display forms must collide for this test to mean anything")
-	}
 	if narrowingDigest([]GrantRecord{a}) == narrowingDigest([]GrantRecord{b}) {
 		t.Fatal("two different lost grants share a digest, so one acknowledgement would cover the other")
 	}
@@ -70,5 +67,20 @@ func TestLosingTheGrantOptionIsANarrowing(t *testing.T) {
 	}
 	if lost := narrowedGrants([]GrantRecord{without}, []GrantRecord{with}); len(lost) != 0 {
 		t.Fatalf("gaining the option is not a loss: %v", lost)
+	}
+}
+
+func TestNarrowingErrorKeepsOneLinePerGrantWhateverTheIdentifier(t *testing.T) {
+	lost := []GrantRecord{
+		{Kind: "relation", Object: "t\nx", Privilege: "SELECT"},
+		{Kind: "column", Object: "a", Column: "b\r\nc", Privilege: "UPDATE"},
+	}
+	err := &NarrowingError{Schema: "auth", Role: "rt", Lost: lost, Digest: narrowingDigest(lost)}
+	lines := strings.Split(err.Error(), "\n")
+	if got, want := len(lines), 1+len(lost); got != want {
+		t.Fatalf("refusal has %d lines, want %d (head plus one per lost grant):\n%q", got, want, err.Error())
+	}
+	if strings.ContainsRune(err.Error(), '\r') {
+		t.Fatalf("a control character reached the operator message: %q", err.Error())
 	}
 }

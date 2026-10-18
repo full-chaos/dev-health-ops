@@ -50,3 +50,25 @@ func TestNarrowingErrorNamesTheGrantsAndTheAcknowledgement(t *testing.T) {
 		}
 	}
 }
+
+func TestNarrowingDigestIsInjectiveOverDottedIdentifiers(t *testing.T) {
+	a := GrantRecord{Kind: "column", Object: "a", Column: "b.c", Privilege: "SELECT"}
+	b := GrantRecord{Kind: "column", Object: "a.b", Column: "c", Privilege: "SELECT"}
+	if a.String() != b.String() {
+		t.Fatal("precondition: the display forms must collide for this test to mean anything")
+	}
+	if narrowingDigest([]GrantRecord{a}) == narrowingDigest([]GrantRecord{b}) {
+		t.Fatal("two different lost grants share a digest, so one acknowledgement would cover the other")
+	}
+}
+
+func TestLosingTheGrantOptionIsANarrowing(t *testing.T) {
+	with := GrantRecord{Kind: "relation", Object: "sessions", Privilege: "SELECT", Grantable: true}
+	without := GrantRecord{Kind: "relation", Object: "sessions", Privilege: "SELECT"}
+	if lost := narrowedGrants([]GrantRecord{with}, []GrantRecord{without}); len(lost) != 1 || lost[0] != with {
+		t.Fatalf("lost = %v, want the grant option", lost)
+	}
+	if lost := narrowedGrants([]GrantRecord{without}, []GrantRecord{with}); len(lost) != 0 {
+		t.Fatalf("gaining the option is not a loss: %v", lost)
+	}
+}

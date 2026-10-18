@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -25,13 +26,38 @@ type GrantRecord struct {
 	Object    string
 	Column    string
 	Privilege string
+	// Grantable is WITH GRANT OPTION. Losing the option is a narrowing even
+	// when the privilege itself survives.
+	Grantable bool
 }
 
+// String is for humans only. It is NOT injective (a quoted identifier may
+// contain a dot or a space), so identity and the digest never use it.
 func (g GrantRecord) String() string {
-	if g.Column != "" {
-		return fmt.Sprintf("%s %s.%s %s", g.Kind, g.Object, g.Column, g.Privilege)
+	option := ""
+	if g.Grantable {
+		option = " WITH GRANT OPTION"
 	}
-	return fmt.Sprintf("%s %s %s", g.Kind, g.Object, g.Privilege)
+	if g.Column != "" {
+		return fmt.Sprintf("%s %s.%s %s%s", g.Kind, g.Object, g.Column, g.Privilege, option)
+	}
+	return fmt.Sprintf("%s %s %s%s", g.Kind, g.Object, g.Privilege, option)
+}
+
+func (g GrantRecord) less(o GrantRecord) bool {
+	if g.Kind != o.Kind {
+		return g.Kind < o.Kind
+	}
+	if g.Object != o.Object {
+		return g.Object < o.Object
+	}
+	if g.Column != o.Column {
+		return g.Column < o.Column
+	}
+	if g.Privilege != o.Privilege {
+		return g.Privilege < o.Privilege
+	}
+	return !g.Grantable && o.Grantable
 }
 
 // NarrowingError is the typed form of ErrRuntimeGrantsNarrowed. Digest is the
@@ -73,7 +99,7 @@ type rowQuerier interface {
 // role's grants.
 func snapshotDirectGrants(ctx context.Context, q rowQuerier, schema, role string) ([]GrantRecord, error) {
 	rows, err := q.Query(ctx, `
-		SELECT 'relation'::text, c.relname::text, ''::text, a.privilege_type::text
+		SELECT 'relation'::text, c.relname::text, ''::text, a.privilege_type::text, a.is_grantable
 		FROM pg_class c
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		CROSS JOIN LATERAL aclexplode(c.relacl) a
@@ -81,7 +107,7 @@ func snapshotDirectGrants(ctx context.Context, q rowQuerier, schema, role string
 		  AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = $2)
 		  AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
 		UNION ALL
-		SELECT 'column', c.relname::text, att.attname::text, a.privilege_type::text
+		SELECT 'column', c.relname::text, att.attname::text, a.privilege_type::text, a.is_grantable
 		FROM pg_attribute att
 		JOIN pg_class c ON c.oid = att.attrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -90,7 +116,7 @@ func snapshotDirectGrants(ctx context.Context, q rowQuerier, schema, role string
 		  AND NOT att.attisdropped
 		  AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = $2)
 		UNION ALL
-		SELECT 'schema', n.nspname::text, '', a.privilege_type::text
+		SELECT 'schema', n.nspname::text, '', a.privilege_type::text, a.is_grantable
 		FROM pg_namespace n
 		CROSS JOIN LATERAL aclexplode(n.nspacl) a
 		WHERE n.nspname = $1
@@ -105,7 +131,7 @@ func snapshotDirectGrants(ctx context.Context, q rowQuerier, schema, role string
 	var grants []GrantRecord
 	for rows.Next() {
 		var g GrantRecord
-		if err := rows.Scan(&g.Kind, &g.Object, &g.Column, &g.Privilege); err != nil {
+		if err := rows.Scan(&g.Kind, &g.Object, &g.Column, &g.Privilege, &g.Grantable); err != nil {
 			return nil, fmt.Errorf("%w: reading a direct grant", ErrMigrationFailed)
 		}
 		grants = append(grants, g)
@@ -116,11 +142,16 @@ func snapshotDirectGrants(ctx context.Context, q rowQuerier, schema, role string
 	return grants, nil
 }
 
-// narrowedGrants returns what was held before and is absent after, sorted.
+// narrowedGrants returns what was held before and is absent after, sorted. A
+// privilege held WITH GRANT OPTION is lost when only the plain privilege
+// remains; the reverse is a widening, not a loss.
 func narrowedGrants(before, after []GrantRecord) []GrantRecord {
-	kept := make(map[GrantRecord]struct{}, len(after))
+	// held maps a privilege (ignoring the option) to whether the option is held.
+	held := make(map[GrantRecord]bool, len(after))
 	for _, g := range after {
-		kept[g] = struct{}{}
+		option := g.Grantable
+		g.Grantable = false
+		held[g] = held[g] || option
 	}
 	var lost []GrantRecord
 	seen := make(map[GrantRecord]struct{}, len(before))
@@ -129,28 +160,33 @@ func narrowedGrants(before, after []GrantRecord) []GrantRecord {
 			continue
 		}
 		seen[g] = struct{}{}
-		if _, ok := kept[g]; ok {
+		plain := g
+		plain.Grantable = false
+		if option, ok := held[plain]; ok && (option || !g.Grantable) {
 			continue
 		}
 		// A table-level privilege covers every column, so a column grant that
 		// the manifest now holds at table level has not been lost.
 		if g.Kind == "column" {
-			if _, covered := kept[GrantRecord{Kind: "relation", Object: g.Object, Privilege: g.Privilege}]; covered {
+			table := GrantRecord{Kind: "relation", Object: g.Object, Privilege: g.Privilege}
+			if option, ok := held[table]; ok && (option || !g.Grantable) {
 				continue
 			}
 		}
 		lost = append(lost, g)
 	}
-	sort.Slice(lost, func(i, j int) bool { return lost[i].String() < lost[j].String() })
+	sort.Slice(lost, func(i, j int) bool { return lost[i].less(lost[j]) })
 	return lost
 }
 
 // narrowingDigest binds an acknowledgement to one exact set of lost grants.
 func narrowingDigest(lost []GrantRecord) string {
-	sum := sha256.New()
-	for _, g := range lost {
-		sum.Write([]byte(g.String()))
-		sum.Write([]byte{'\n'})
+	// JSON of the struct fields is injective: strings are quoted and escaped,
+	// so no identifier can shift a boundary between fields or records.
+	encoded, err := json.Marshal(lost)
+	if err != nil {
+		panic(fmt.Sprintf("authschema: encoding grant records: %v", err))
 	}
-	return hex.EncodeToString(sum.Sum(nil))[:16]
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])[:16]
 }

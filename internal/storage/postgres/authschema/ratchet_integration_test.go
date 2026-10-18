@@ -113,3 +113,65 @@ func TestRatchetIgnoresInheritedGrantsAndFirstRuns(t *testing.T) {
 		t.Fatalf("a role that does not exist holds nothing: %v %v", empty, err)
 	}
 }
+
+func TestRatchetSeesALostGrantOption(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+	conn, err := env.migration.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	options := Options{Schema: env.schema, RuntimeRole: env.runtimeRole}
+
+	if _, err := env.admin.Exec(ctx, fmt.Sprintf(
+		`GRANT SELECT ON %s.sessions TO %s WITH GRANT OPTION`,
+		Quote(mustValidatedIdentifier(env.schema)), Quote(mustValidatedIdentifier(env.runtimeRole)),
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options); !errors.Is(err, ErrRuntimeGrantsNarrowed) {
+		t.Fatalf("losing WITH GRANT OPTION must refuse; got %v", err)
+	}
+}
+
+// Two different lost grants whose display forms are identical must not share an
+// acknowledgement.
+func TestRatchetDigestDoesNotCoverADifferentDottedIdentifierGrant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+	conn, err := env.migration.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	options := Options{Schema: env.schema, RuntimeRole: env.runtimeRole}
+	schema := Quote(mustValidatedIdentifier(env.schema))
+	role := Quote(mustValidatedIdentifier(env.runtimeRole))
+
+	for _, statement := range []string{
+		fmt.Sprintf(`CREATE TABLE %s."a" ("b.c" int, c int)`, schema),
+		fmt.Sprintf(`CREATE TABLE %s."a.b" ("c" int)`, schema),
+		fmt.Sprintf(`GRANT SELECT ("b.c") ON %s."a" TO %s`, schema, role),
+	} {
+		if _, err := env.migration.Exec(ctx, statement); err != nil {
+			t.Fatalf("setup %q: %v", statement, err)
+		}
+	}
+	var first *NarrowingError
+	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options); !errors.As(err, &first) {
+		t.Fatalf("first loss must refuse; got %v", err)
+	}
+	if _, err := env.migration.Exec(ctx, fmt.Sprintf(`REVOKE SELECT ("b.c") ON %s."a" FROM %s`, schema, role)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.migration.Exec(ctx, fmt.Sprintf(`GRANT SELECT ("c") ON %s."a.b" TO %s`, schema, role)); err != nil {
+		t.Fatal(err)
+	}
+	options.AcknowledgeNarrowing = first.Digest
+	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options); !errors.Is(err, ErrRuntimeGrantsNarrowed) {
+		t.Fatalf("an acknowledgement for a.\"b.c\" must not cover \"a.b\".c; got %v", err)
+	}
+}

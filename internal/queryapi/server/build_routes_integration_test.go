@@ -10,7 +10,6 @@ import (
 	"os"
 	"regexp"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -143,32 +142,6 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 	// credential-less POST is the edge's 401, never the mux's 404.
 	if got := probe(plane.Handler, http.MethodPost, graphQLEdgePath); got != http.StatusUnauthorized {
 		t.Errorf("POST %s on the PUBLIC handler answered %d, want 401 (mounted, refusing the missing credential)", graphQLEdgePath, got)
-	}
-	// CHAOS-10102: the three routes the unit harness can only stub are mounted here with
-	// their real handlers; their endpoint-profile rows agree with what the real plane does
-	// to a request that carries no credential. (The REST rows are the open item CHAOS-10140.)
-	var mountedRows []profileRow
-	for _, row := range flatRows(t) {
-		if _, stubbed := behaviourStubbed[row.route]; stubbed {
-			mountedRows = append(mountedRows, row)
-		}
-	}
-	if len(mountedRows) < len(behaviourStubbed) {
-		t.Fatalf("only %d profile rows for the %d stubbed routes: the inventory changed shape", len(mountedRows), len(behaviourStubbed))
-	}
-	anonymous := func(handler http.Handler) anonymousProbe {
-		return func(method, path string) int {
-			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, httptest.NewRequest(method, path, nil))
-			return recorder.Code
-		}
-	}
-	probes := map[string]anonymousProbe{"query": anonymous(plane.Handler), "internal": anonymous(plane.InternalHandler)}
-	if plane.MCPHandler != nil {
-		probes["mcp"] = anonymous(plane.MCPHandler)
-	}
-	if violations := anonymousClaimViolations(mountedRows, probes, nil); len(violations) > 0 {
-		t.Errorf("profile rows disagree with the real plane for an anonymous caller:\n%s", strings.Join(violations, "\n"))
 	}
 }
 

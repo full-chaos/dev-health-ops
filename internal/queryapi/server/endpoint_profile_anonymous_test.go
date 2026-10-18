@@ -91,24 +91,6 @@ func TestAnonymousClaimViolationsHonoursSkipAndUnreachableListeners(t *testing.T
 	}
 }
 
-// TestStubbedRoutesAreStillServed: every harness stub names a route the binary
-// serves; an entry for a route nothing serves is stale and fails here, so the
-// exclusion cannot outlive its route.
-func TestStubbedRoutesAreStillServed(t *testing.T) {
-	served := servedRoutes(t)
-	for path := range behaviourStubbed {
-		found := false
-		for token := range served {
-			if strings.HasPrefix(token, path+"@") {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("behaviourStubbed names %s but no listener serves it: delete the entry", path)
-		}
-	}
-}
-
 // flatRows is every row of the query-api inventory.
 func flatRows(t *testing.T) []profileRow {
 	t.Helper()
@@ -120,11 +102,10 @@ func flatRows(t *testing.T) []profileRow {
 }
 
 // TestEndpointProfileAnonymousClaimsMatchServedBehaviour: for every non-REST
-// row on a listener the harness reaches, an anonymous request is refused when
-// the row is protected and is not refused when it is public. The harness
-// mounts three routes as stubs (behaviourStubbed); the real plane's anonymous
-// answers for them are asserted in the integration test, where the real
-// handlers are mounted. REST rows are not probed here or there: CHAOS-10140.
+// row on a listener the harness reaches (the proof and run-operation routes
+// included: they are mounted with the real /query handler), an anonymous
+// request is refused when the row is protected and is not refused when it is
+// public. REST rows are not probed here: CHAOS-10140.
 func TestEndpointProfileAnonymousClaimsMatchServedBehaviour(t *testing.T) {
 	stack := newBehaviourStack(t)
 	restPaths := map[string]bool{"/api/v1/": true}
@@ -145,11 +126,7 @@ func TestEndpointProfileAnonymousClaimsMatchServedBehaviour(t *testing.T) {
 		listener := listener
 		probes[listener] = func(method, path string) int { return stack.do(listener, method, path, "") }
 	}
-	skip := map[string]bool{}
-	for path := range behaviourStubbed {
-		skip[path] = true
-	}
-	if violations := anonymousClaimViolations(rows, probes, skip); len(violations) > 0 {
+	if violations := anonymousClaimViolations(rows, probes, nil); len(violations) > 0 {
 		t.Errorf("rows disagree with the anonymous behaviour of the served handlers:\n%s", strings.Join(violations, "\n"))
 	}
 }

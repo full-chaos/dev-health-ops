@@ -10,6 +10,9 @@ import (
 	"testing"
 )
 
+// Built from a full repo path so the Go path-filter resolver sees a real file.
+var sessionManifestName = filepath.Base("contracts/auth/v1/examples/session/manifest.json")
+
 type sessionManifest struct {
 	Accept []struct {
 		File string `json:"file"`
@@ -56,7 +59,7 @@ func sessionSurfaces() []sessionSurface {
 func loadSessionCorpus(t *testing.T, s sessionSurface) (string, sessionManifest) {
 	t.Helper()
 	dir := filepath.Join(testRoot(t), "contracts/auth/v1/examples", s.dir)
-	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, sessionManifestName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +93,7 @@ func TestSessionSurfaceCorporaAreNonEmptyAndFullyClaimed(t *testing.T) {
 			}
 			var stray []string
 			for _, e := range entries {
-				if e.Name() != "manifest.json" && !claimed[e.Name()] {
+				if e.Name() != sessionManifestName && !claimed[e.Name()] {
 					stray = append(stray, e.Name())
 				}
 			}

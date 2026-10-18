@@ -222,6 +222,8 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	counted := *client
 	counted.Doer = jiraAtlassianCountingDoer{delegate: client.Doer, attempts: &requests}
 	client = &counted
+	// As in the legacy JQL route: enrichment unless a request says otherwise.
+	ctx = budgetAccount(ctx, "jira_issue_enrichment")
 	if handler.GraphQLClient != nil {
 		countedGraphQL := *handler.GraphQLClient
 		countedGraphQL.Doer = jiraAtlassianCountingDoer{delegate: handler.GraphQLClient.Doer, attempts: &requests}
@@ -525,7 +527,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 					commentCtx, cancelComments = context.WithDeadline(ctx, commentsStopAt)
 				}
 				comments, _, commentErr := collectJiraIssueComments(
-					commentCtx, client, item.WorkItemID, maxPages, perPage, issueLimit,
+					budgetAccount(commentCtx, jiraCommentsFamily(claim)), client, item.WorkItemID, maxPages, perPage, issueLimit,
 				)
 				innerDeadline := commentsHaveDeadline && ctx.Err() == nil &&
 					errors.Is(commentCtx.Err(), context.DeadlineExceeded)
@@ -912,7 +914,7 @@ func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *pr
 	graphqlRequests := 0
 	if graphql && strings.TrimSpace(cloudID) != "" {
 		observation.GraphQLAttempted = true
-		if values, requests, err := collectJiraGraphQLWorklogs(ctx, graphqlClient, issueKey, maxPages, cloudID); err == nil {
+		if values, requests, err := collectJiraGraphQLWorklogs(budgetAccount(ctx, "jira_gql_enrichment"), graphqlClient, issueKey, maxPages, cloudID); err == nil {
 			observation.GraphQLRequests = requests
 			observation.GraphQLSucceeded = true
 			return values, requests, observation, nil
@@ -938,7 +940,7 @@ func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *pr
 			Worklogs []json.RawMessage `json:"worklogs"`
 			Total    *int              `json:"total"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/worklog?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(budgetAccount(ctx, "jira_worklogs"), client, http.MethodGet, "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/worklog?"+query.Encode(), nil, &page); err != nil {
 			observation.RESTRequests = requests + 1
 			return nil, graphqlRequests + requests + 1, observation, err
 		}

@@ -888,3 +888,20 @@ func TestJiraAtlassianRouteLogsItsFetchWindowWhenTheSearchFails(t *testing.T) {
 		t.Fatalf("a failed search emitted no window line: %q", line)
 	}
 }
+
+// The Atlassian route accounts its search, changelog, board and sprint reads to
+// jira_jql / jira_issue_enrichment and the worklog reads to jira_worklogs, the
+// families the dispatch estimate names; none is left unlabelled.
+func TestJiraAtlassianRouteLabelsEveryRequestWithTheEstimatesFamilies(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	doer := &jiraAtlassianDoer{t: t}
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client.Ledger = providerfoundation.NewRequestLedger()
+	if _, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertRouteRequestsAreLabelled(t, "jira", claim.Dataset, client.Ledger, "jira_jql", "jira_issue_enrichment", "jira_worklogs")
+}

@@ -273,3 +273,62 @@ func TestAFollowedRedirectHopIsCountedWhateverTheDecoratorsDoWithTheContext(t *t
 		}
 	}
 }
+
+// opaqueCountingDoer is a route's counting decorator: it wraps the constructed
+// client's Doer and is not an httpguard.Wrapper, so the per-call guard cannot
+// reach through it.
+type opaqueCountingDoer struct {
+	delegate HTTPDoer
+	attempts *int
+}
+
+func (d opaqueCountingDoer) Do(r *http.Request) (*http.Response, error) {
+	*d.attempts++
+	return d.delegate.Do(r)
+}
+
+func TestAFollowedRedirectHopIsCountedOnceBehindAnOpaqueRouteDecorator(t *testing.T) {
+	t.Parallel()
+	hits := 0
+	hc := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		hits++
+		if r.URL.Path == "/old" {
+			return testHTTPResponse(r, http.StatusFound, http.Header{"Location": {"https://api.github.test/next"}}, ``), nil
+		}
+		return testHTTPResponse(r, http.StatusOK, http.Header{}, `{}`), nil
+	})}
+	client, err := NewHTTPClient("github", "https://api.github.test", hc,
+		TokenAuth("Authorization", "Bearer ", secrets.NewValue("token")),
+		RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
+		LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Ledger = NewRequestLedger()
+	attempts := 0
+	counted := *client
+	counted.Doer = opaqueCountingDoer{delegate: client.Doer, attempts: &attempts}
+	response, err := counted.Do(WithRequestAccount(context.Background(), "merge_requests", ""), http.MethodGet, "/old", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if got := entriesOf(client.Ledger); hits != 2 || got[LedgerKey{"merge_requests", "rest_core"}] != 2 || len(got) != 1 {
+		t.Fatalf("wire requests = %d, ledger = %v, want both requests counted once under merge_requests/rest_core", hits, got)
+	}
+}
+
+func TestAFamilyLabelKeepsTheDimensionAnOuterAccountSet(t *testing.T) {
+	t.Parallel()
+	ledger := NewRequestLedger()
+	client := ledgerClient(t, ledger)
+	ctx := WithRequestFamily(WithRequestAccount(context.Background(), "files", "contents_blob"), "issues")
+	response, err := client.Do(ctx, http.MethodPost, "/graphql", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if got := entriesOf(ledger); got[LedgerKey{"issues", "contents_blob"}] != 1 || len(got) != 1 {
+		t.Fatalf("ledger = %v, want issues/contents_blob", got)
+	}
+}

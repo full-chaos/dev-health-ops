@@ -12,5 +12,5 @@ import (
 // request ledger can be compared with the estimate per family; elsewhere the
 // family is resolved from the unit's own estimates.
 func budgetAccount(ctx context.Context, routeFamily string) context.Context {
-	return providerfoundation.WithRequestAccount(ctx, routeFamily, "")
+	return providerfoundation.WithRequestFamily(ctx, routeFamily)
 }

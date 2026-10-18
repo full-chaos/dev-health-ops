@@ -142,3 +142,9 @@ func recordRedirectHop(request *http.Request) {
 		recorder.ledger.Record(recorder.key)
 	}
 }
+
+// WithRequestFamily labels the requests made with ctx with a route family and
+// leaves the dimension an outer account set.
+func WithRequestFamily(ctx context.Context, routeFamily string) context.Context {
+	return WithRequestAccount(ctx, routeFamily, "")
+}

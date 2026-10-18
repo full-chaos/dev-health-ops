@@ -1,0 +1,49 @@
+name: Auth Contracts ajv
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/auth/v1/**'
+      - 'ci/auth-contracts-ajv/**'
+      - '.github/workflows/auth-contracts-ajv.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - 'contracts/auth/v1/**'
+      - 'ci/auth-contracts-ajv/**'
+      - '.github/workflows/auth-contracts-ajv.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+
+permissions:
+  contents: read
+
+jobs:
+  auth-contracts-ajv:
+    name: auth-contracts-ajv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+
+      # The lockfile pins ajv: strictRequired is an ajv lint rather than a spec
+      # rule, so an unpinned upgrade could change what the contract enforces.
+      - name: Install pinned ajv
+        working-directory: ci/auth-contracts-ajv
+        run: npm ci --ignore-scripts
+
+      - name: Prove strict mode is on
+        working-directory: ci/auth-contracts-ajv
+        run: node run.mjs --self-test
+
+      - name: Validate every contracts/auth/v1 manifest corpus with ajv 2020-12 strict
+        working-directory: ci/auth-contracts-ajv
+        run: node run.mjs

@@ -82,15 +82,16 @@ attributed all of them to one Go test, which was false for two.
 | `\d` `\w` `\s` `\b` are Unicode in Python `re`, ASCII in RE2 and ECMA-262 | no shorthand classes | same test |
 | `(?i)` is valid in RE2 and Python, a SyntaxError in ECMA-262 | no inline flag groups | same test |
 | a trailing `$` matches before a final newline in Python only | the Python client rewrites it to `\Z`, failing closed on shapes it cannot rewrite | **the client, not a schema guard** — `authclient/contracts.py` `strictly_anchored` |
-| ajv strict mode refuses `required` in a subschema that does not define the property | an ajv lint, not a spec rule; declare the property in the subschema | **review only — there is no ajv runner in this repository** |
+| ajv strict mode refuses `required` in a subschema that does not define the property | an ajv lint, not a spec rule; declare the property in the subschema | **the ajv runner** — `ci/auth-contracts-ajv/run.mjs` (strict mode; `--self-test` proves it is on), run by the `Auth Contracts ajv` workflow |
 | `maxLength` counts CODE POINTS; Go's `len()` counts BYTES | to mirror a Go byte bound, restrict the alphabet to one-byte characters so the two counts coincide | the `jwks.v1` corpus — `invalid-kid-non-ascii.json` plus `TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` |
 
-That last row is a real gap, not a formality. **No committed code or CI job runs
-ajv against these contracts**, so the ECMA-262 leg of every "three languages
-agree" claim rests on a runner the author supplied locally. A schema edit that
-breaks ECMA compatibility passes everything in this repo. Treat the ECMA column
-of any proof table as unreproducible until that changes. **CHAOS-4941 tracks
-committing a runner and wiring it into CI.**
+The ECMA-262 leg is committed: `ci/auth-contracts-ajv/run.mjs` validates every
+`examples/*/manifest.json` corpus with ajv 2020-12 in **strict mode** (ajv is
+pinned by `package-lock.json`, because `strictRequired` is a lint and can move
+between releases) and runs in CI on any change under `contracts/auth/v1/**`.
+It reads the same manifests as the Go and Python runners and enumerates nothing
+itself. Exit codes: 1 = a fixture disagrees, 2 = a schema failed to compile.
+Run it locally: `cd ci/auth-contracts-ajv && npm ci && node run.mjs`.
 
 **Redundant keywords are not free.** A `maxLength` beside a pattern that already
 bounds the same range makes Go report `maxLength` (first violation only) and
@@ -320,8 +321,7 @@ shape instead. This is correct behaviour and has caught two authors.
 ## Proof obligation
 
 Every surface ships an executed cross-language run on one tip — Go, Python and
-ajv-2020 validating the same corpus, output pasted, not described (G-70) — with
-the standing caveat above that **the ajv leg is run from a local runner and is
-not reproducible from this repository** — and
-a mutation table showing the corpus can fail: delete each guard, confirm exactly
+ajv-2020 validating the same corpus, output pasted, not described (G-70) — the
+ajv leg is `ci/auth-contracts-ajv/run.mjs`, so the pasted run is reproducible —
+and a mutation table showing the corpus can fail: delete each guard, confirm exactly
 the predicted fixtures go red, restore.

@@ -54,15 +54,10 @@ comes from the framework and the location still comes from real source.
     at. Enumerating the served objects changed the count by nine, and every
     one of the nine was a defect the old count concealed:
 
-    - **+8 REST.** `/openapi.json`, `/docs`, `/docs/oauth2-redirect` and
-      `/redoc` (registered by the `FastAPI()` constructor's `docs_url`/
-      `openapi_url` arguments), `/metrics` (registered by
-      `Instrumentator().expose()`), and `GET`/`POST`/`WEBSOCKET /graphql`
-      (registered by mounting strawberry's router). All are served by the
-      main app; none is written in ops source, so no source-text pattern
-      could ever have matched them. Each now has a row anchored at the
-      ops-source line that REGISTERS it, with a `gaps` entry naming the
-      providing package — the gate rejects such a row without one.
+    - **+8 REST.** Eight surfaces that no source-text pattern could match,
+      because the framework registered them rather than ops source. They were
+      served only by the Python api; that api was removed (ops #3761), so the
+      eight surfaces no longer exist and are not listed here.
     - **+3 GraphQL.** The three `@strawberry.subscription` resolvers in
       `api/graphql/subscriptions.py` (`:60`, `:97`, `:134`). They were always
       authenticated — all three go through the same connect-time

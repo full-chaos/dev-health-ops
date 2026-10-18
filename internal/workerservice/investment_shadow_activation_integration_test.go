@@ -207,7 +207,7 @@ func TestTheWorkersInvestmentExecutorReachesAShadowSendWithOnlyItsOwnSwitch(t *t
 				t.Fatal(err)
 			}
 			logs := &bytes.Buffer{}
-			built, err := buildNativeInvestmentExecutor(cfg, specs, collector, slog.New(slog.NewTextHandler(logs, nil)))
+			built, err := buildNativeInvestmentExecutor(cfg, specs, collector, slog.New(slog.NewTextHandler(logs, nil)), nil)
 			if err != nil || built == nil {
 				t.Fatalf("buildNativeInvestmentExecutor: %v %v", built, err)
 			}

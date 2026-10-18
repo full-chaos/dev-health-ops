@@ -62,6 +62,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 )
@@ -237,6 +238,34 @@ func RefuseDecimalForm(token string) error {
 				"already rounded such a token (9007199254740990.1 reads as 9007199254740990), "+
 				"so it is indistinguishable from the integer it rounds to. "+
 				"Send an integer token, which stays exact", token)
+	}
+	return nil
+}
+
+// ParseWireTimestamp is the ONE timestamp rule for every timestamp member of
+// the event surfaces (envelope created_at, payload.change.expires_at, audit
+// occurred_at). A value passes when it names a real calendar day (the pattern
+// bounds components, not the calendar: 2026-02-30 is lexically valid) and its
+// UTC instant lies in 0001-01-01..9999-12-31 (the pattern bounds the LOCAL
+// fields, and an offset can carry the instant out of range: 0001-01-01T00:00:00+23:59
+// is UTC year 0000). Python's twin is authclient.contracts.parse_rfc3339; both
+// replay the same timestamp_vectors from the provisioning manifest.
+func ParseWireTimestamp(surface, field, raw string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s: /%s = %q is not a valid RFC 3339 instant: %w", surface, field, raw, err)
+	}
+	if err := checkInstantInRange(surface, field, parsed); err != nil {
+		return time.Time{}, err
+	}
+	return parsed, nil
+}
+
+func checkInstantInRange(surface, field string, moment time.Time) error {
+	if year := moment.UTC().Year(); year < 1 || year > 9999 {
+		return fmt.Errorf("%s: /%s = %s normalises to UTC year %d, outside 0001-01-01..9999-12-31 "+
+			"(not a valid RFC 3339 instant for this contract): the pattern bounds the local fields, "+
+			"the offset carries the instant past the bound", surface, field, moment.Format(time.RFC3339Nano), year)
 	}
 	return nil
 }

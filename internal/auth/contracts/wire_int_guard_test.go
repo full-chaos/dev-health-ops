@@ -34,8 +34,15 @@ func TestRefuseDecimalFormPassesIntegerTokens(t *testing.T) {
 func TestRevisionRefusesEveryDecimalFormTokenAndKeepsIntegerTokensExact(t *testing.T) {
 	for _, token := range decimalFormTokens {
 		var r Revision
-		if err := json.Unmarshal([]byte(token), &r); err == nil {
+		err := json.Unmarshal([]byte(token), &r)
+		if err == nil {
 			t.Errorf("Revision accepted %s as %d", token, r)
+			continue
+		}
+		// strconv would refuse most of these on its own; the message proves the
+		// shared guard is what decided, so removing the call cannot go unseen.
+		if !strings.Contains(err.Error(), "decimal or exponent form") {
+			t.Errorf("%s refused by something other than RefuseDecimalForm: %v", token, err)
 		}
 	}
 	// 2^53+1 as an INTEGER token stays exact: the reason integer tokens are

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -18,7 +17,7 @@ import (
 // connection can be redirected by a service file or PGUSER. The distinctness
 // check in Options.Validate is only meaningful against the role that will
 // really own the created objects, so it has to come from here.
-func currentUser(ctx context.Context, pool *pgxpool.Pool) (string, error) {
+func currentUser(ctx context.Context, pool migrationPool) (string, error) {
 	var role string
 	if err := pool.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
 		return "", fmt.Errorf("%w: reading current_user", ErrMigrationFailed)
@@ -32,12 +31,8 @@ func currentUser(ctx context.Context, pool *pgxpool.Pool) (string, error) {
 // Both are IF NOT EXISTS so a re-run is a no-op, and both are created by the
 // migration role, which makes the migration role their OWNER -- that ownership
 // is what keeps DDL out of the runtime role's reach without needing a REVOKE.
-func ensureSchemaAndVersionTable(ctx context.Context, conn *pgx.Conn, options Options) error {
-	schemaID, err := NewValidatedIdentifier(options.Schema)
-	if err != nil {
-		return err
-	}
-	schema := quoteIdentifier(schemaID)
+func ensureSchemaAndVersionTable(ctx context.Context, conn querier, options Options) error {
+	schema := quoteIdentifier(ValidatedIdentifier{name: options.Schema})
 	// PostgreSQL cannot bind an IDENTIFIER, so a schema/table name must reach the
 	// statement as text. What makes that safe is no longer an ordering a reader
 	// has to verify: quoteIdentifier accepts ONLY ValidatedIdentifier, and the
@@ -106,7 +101,7 @@ func ensureSchemaAndVersionTable(ctx context.Context, conn *pgx.Conn, options Op
 }
 
 // appliedVersions reads the lineage positions this database already holds.
-func appliedVersions(ctx context.Context, conn *pgx.Conn, schema ValidatedIdentifier) (map[int]struct{}, error) {
+func appliedVersions(ctx context.Context, conn querier, schema ValidatedIdentifier) (map[int]struct{}, error) {
 	// PostgreSQL cannot bind an IDENTIFIER, so a schema/table name must reach the
 	// statement as text. What makes that safe is no longer an ordering a reader
 	// has to verify: quoteIdentifier accepts ONLY ValidatedIdentifier, and the

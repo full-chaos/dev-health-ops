@@ -299,6 +299,8 @@ type Metrics struct {
 	// githubIssueListStops counts the GitHub work-items issue lists that stopped
 	// reading at the window end, by reason (always window_end).
 	githubIssueListStops map[string]uint64
+	// githubIssueListCaps counts the issue lists that ran out of their request cap (never truncated).
+	githubIssueListCaps map[string]uint64
 	// preparedRetiredEffectsSkipped counts the effects of a prepared
 	// work-items manifest that a recovering unit did not write because the
 	// daily job now owns their table, by provider -- see
@@ -337,6 +339,7 @@ func NewMetrics() *Metrics {
 		gitlabClosingMR:                map[string]uint64{},
 		workItemDerivedLeftToDaily:     map[string]uint64{},
 		githubIssueListStops:           map[string]uint64{},
+		githubIssueListCaps:            map[string]uint64{},
 		preparedRetiredEffectsSkipped:  map[string]uint64{},
 	}
 }
@@ -1280,6 +1283,18 @@ func (m *Metrics) RecordGitHubIssueListStopped() {
 	m.githubIssueListStops["window_end"]++
 }
 
+// RecordGitHubIssueListCapExceeded counts one GitHub work-items issue list that
+// ran out of its request cap before the end of the window. The unit fails
+// closed (pagination cap), never with a truncated list.
+func (m *Metrics) RecordGitHubIssueListCapExceeded() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.githubIssueListCaps["page_cap"]++
+}
+
 // RecordPreparedRetiredWorkItemEffectsSkipped counts the effects of one
 // prepared work-items manifest that a recovering unit completed without
 // writing (CHAOS-8811). The manifest was stored by a binary whose sync unit
@@ -1782,6 +1797,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_github_work_items_issue_list_stopped_total",
 		"GitHub work-items issue lists that stopped reading at the first issue updated at or after the window end (CHAOS-10112), by reason. The stop is the expected case of a bounded window.",
 		"reason", m.githubIssueListStops,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_work_items_issue_list_cap_exceeded_total",
+		"GitHub work-items issue lists that ran out of their request cap before the end of the window (CHAOS-10112), by reason. The unit fails closed; the list is never truncated.",
+		"reason", m.githubIssueListCaps,
 	); err != nil {
 		return err
 	}

@@ -2,8 +2,10 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
@@ -110,7 +113,8 @@ func writtenIssueNumbers(result GitHubWorkItemsRESTResult) map[string]int {
 // An issue edited while the list is being read moves to the end of an update-ordered list and shifts every
 // later issue up by one place. Reading by page number then skips the issue that shifted across the page
 // boundary, and the window never writes it. 200 in-window issues, issue 50 edited after the first request
-// (its new update is past the window end): every other in-window issue must still be written exactly once.
+// (its new update is past the window end): every other in-window issue must still be written exactly once, and
+// issue 50 at most once.
 func TestGitHubWorkItemsIssueListSkipsNothingWhenAnIssueMovesWhileItIsRead(t *testing.T) {
 	t.Parallel()
 	updated := map[int]time.Time{}
@@ -134,8 +138,9 @@ func TestGitHubWorkItemsIssueListSkipsNothingWhenAnIssueMovesWhileItIsRead(t *te
 			t.Fatalf("issue %d written %d times, want once (rows=%d)", number, written[fmt.Sprintf("gh:Acme/API#%d", number)], len(result.Rows.WorkItems))
 		}
 	}
-	if written["gh:Acme/API#50"] != 0 {
-		t.Fatalf("issue 50 moved past the window end and must not be written by this window")
+	// Issue 50 was read inside the window before it moved; its later update belongs to the next window.
+	if written["gh:Acme/API#50"] > 1 {
+		t.Fatalf("issue 50 written %d times, want at most once", written["gh:Acme/API#50"])
 	}
 }
 
@@ -159,5 +164,42 @@ func TestGitHubWorkItemsIssueListReadsATieGroupLargerThanOnePage(t *testing.T) {
 		if id := fmt.Sprintf("gh:Acme/API#%d", number); written[id] != 1 {
 			t.Fatalf("issue %d written %d times, want once", number, written[id])
 		}
+	}
+}
+
+// Running out of the request cap inside a tie group fails closed: a Warn and a counter, an error, never a
+// truncated list.
+func TestGitHubWorkItemsIssueListTieGroupBeyondTheRequestCapFailsClosedWithAWarn(t *testing.T) {
+	var logged lockedLogBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	updated := map[int]time.Time{}
+	at := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	for number := 1; number <= 450; number++ {
+		updated[number] = at
+	}
+	sim := &issueListSimulator{t: t, updated: updated}
+	client := gitHubPullRequestClient(t, fakehttp.Client(sim), "https://api.github.com")
+	client.Metrics = providerfoundation.NewMetrics()
+	result, err := (GitHubWorkItemsRESTCollector{MaxPages: 3}).Collect(
+		context.Background(), issueListClaim(), client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+	if !errors.Is(err, ErrPaginationCapExceeded) || !result.Evidence.CapReached || len(result.Rows.WorkItems) != 0 {
+		t.Fatalf("err = %v, cap reached = %v, rows = %d: want the pagination cap, no rows", err, result.Evidence.CapReached, len(result.Rows.WorkItems))
+	}
+	if got := len(sim.listRequests); got != 3 {
+		t.Fatalf("%d list requests, want 3 (the cap)", got)
+	}
+	output := logged.String()
+	if !strings.Contains(output, "level=WARN msg=github_work_items_issue_list_cap_exceeded") {
+		t.Errorf("no Warn for the exhausted cap: %s", output)
+	}
+	var rendered strings.Builder
+	if err := client.Metrics.WritePrometheus(&rendered); err != nil {
+		t.Fatal(err)
+	}
+	if want := `dev_health_github_work_items_issue_list_cap_exceeded_total{reason="page_cap"} 1`; !strings.Contains(rendered.String(), want) {
+		t.Errorf("metrics lack %q", want)
 	}
 }

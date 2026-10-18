@@ -12,6 +12,7 @@ import (
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // The api posture declares billing_audit_log as a MIXED relation: table-wide INSERT and DELETE plus a column-scoped UPDATE of
@@ -46,19 +47,17 @@ func TestAPIPostureBillingAuditActorGrantIsAppliedAndReadyThroughTheMigrator(t *
 	defer containers.DropRole(adminPool, apiRole, t.Logf)
 	createRuntimeRoles(t, ctx, adminPool, domainRole, queueRole)
 	const apiPassword = "api_posture_test_password"
-	for _, statement := range []string{
-		"CREATE ROLE " + apiRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + apiPassword + "'",
-		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
-		`CREATE TABLE public.billing_audit_log (id uuid PRIMARY KEY, org_id uuid NOT NULL, actor_id uuid, action text NOT NULL,
-description text NOT NULL, local_state json, reconciliation_status text)`,
-	} {
-		if _, err := adminPool.Exec(ctx, statement); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
+	if _, err := adminPool.Exec(ctx, "CREATE ROLE "+apiRole+" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '"+apiPassword+"'"); err != nil {
+		t.Fatal(err)
 	}
-	rowID := uuid.New()
-	if _, err := adminPool.Exec(ctx, `INSERT INTO public.billing_audit_log (id, org_id, actor_id, action, description) VALUES ($1, $2, $3, 'a', 'd')`,
-		rowID, uuid.New(), uuid.New()); err != nil {
+	pgschema.Apply(ctx, t, adminPool)
+	rowID, orgID := uuid.New(), uuid.New()
+	if _, err := adminPool.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+VALUES ($1, 'api-grant-org', 'api-grant-org', 'community', 'stripe', true, now(), now())`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adminPool.Exec(ctx, `INSERT INTO billing_audit_log (id, org_id, actor_id, action, resource_type, resource_id, description, created_at)
+VALUES ($1, $2, NULL, 'a', 'checkout', $2, 'd', now())`, rowID, orgID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -82,24 +81,15 @@ description text NOT NULL, local_state json, reconciliation_status text)`,
 		t.Fatalf("ApplyPinnedMigrations with the declared api posture: %v", err)
 	}
 
-	// readiness over the one relation this fixture holds: the same declaration, filtered to billing_audit_log
-	ready := postgresstore.RolePosture{}
-	for _, table := range posture.RequiredTables {
-		if table.TableName == "billing_audit_log" {
-			ready.RequiredTables = append(ready.RequiredTables, table)
-		}
-	}
-	for _, column := range posture.ColumnScoped {
-		if column.TableName == "billing_audit_log" {
-			ready.ColumnScoped = append(ready.ColumnScoped, column)
-		}
-	}
-	gaps, err := postgresstore.DiagnoseRolePosture(ctx, adminPool, apiRole, ready)
+	// the readiness mechanism over the full declared posture: nothing may be missing or in excess on billing_audit_log
+	gaps, err := postgresstore.DiagnoseRolePosture(ctx, adminPool, apiRole, posture)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(gaps) != 0 {
-		t.Fatalf("the readiness check disagrees with what the migrator granted: %+v", gaps)
+	for _, gap := range gaps {
+		if gap.TableName == "billing_audit_log" {
+			t.Errorf("the readiness check disagrees with what the migrator granted on billing_audit_log: %+v", gap)
+		}
 	}
 
 	apiPool := openPool(t, ctx, roleURI(t, instance.URI, apiRole, apiPassword, mustDatabaseName(t, instance.URI)))

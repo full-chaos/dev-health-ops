@@ -14,11 +14,20 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// knownRESTDisagreements names REST routes where the row and the real plane
-// disagree on main. They are findings reported in their own ticket, not
-// patched inside this test; remove an entry when its ticket lands.
-var knownRESTDisagreements = map[string]bool{
-	"/api/v1/meta": true, // CHAOS-10167: row says protected, the route is public by design (Python parity)
+// knownRESTDisagreement is one (method, path, listener) where the row and the
+// real plane disagree on main. It is a finding reported in its own ticket, not
+// patched inside this test. The test fails when the entry is stale: the
+// disagreement is gone (row reclassified, route changed or removed).
+type knownRESTDisagreement struct{ method, path, listener, ticket string }
+
+var knownRESTDisagreements = []knownRESTDisagreement{
+	// Row says protected; the route is public by design (Python parity).
+	{http.MethodGet, "/api/v1/meta", "query", "CHAOS-10167"},
+	{http.MethodGet, "/api/v1/meta", "internal", "CHAOS-10167"},
+}
+
+func (k knownRESTDisagreement) matches(violation string) bool {
+	return strings.HasPrefix(violation, k.method+" "+k.path+" [") && strings.Contains(violation, " on "+k.listener+": ")
 }
 
 // TestEndpointProfileRESTAnonymousClaimsMatchRealPlane probes every REST row
@@ -104,7 +113,23 @@ func TestEndpointProfileRESTAnonymousClaimsMatchRealPlane(t *testing.T) {
 	if plane.InternalHandler != nil {
 		probes["internal"] = serve(plane.InternalHandler)
 	}
-	if violations := anonymousClaimViolations(rows, probes, knownRESTDisagreements); len(violations) > 0 {
+	violations := anonymousClaimViolations(rows, probes, nil)
+	for _, known := range knownRESTDisagreements {
+		seen := false
+		kept := violations[:0:0]
+		for _, violation := range violations {
+			if known.matches(violation) {
+				seen = true
+				continue
+			}
+			kept = append(kept, violation)
+		}
+		if !seen {
+			t.Errorf("stale known disagreement %s %s on %s (%s): the real plane no longer disagrees with the row; remove the entry", known.method, known.path, known.listener, known.ticket)
+		}
+		violations = kept
+	}
+	if len(violations) > 0 {
 		t.Errorf("REST rows disagree with the anonymous behaviour of the real plane:\n%s", strings.Join(violations, "\n"))
 	}
 }

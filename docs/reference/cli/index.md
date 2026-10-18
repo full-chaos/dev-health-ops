@@ -1774,6 +1774,9 @@ hold) moves to `custom:<id>` (`admin_teams_to_custom`): an admin team and a
 pushed `custom` team are one kind of team, in one namespace; when a pushed
 team already holds `custom:<id>`, that row stays, takes the admin row's
 manual members (`manual_members_folded`), and the admin row goes inactive.
+A custom team carries as the active team: an inactive kept row is written
+again active (`keyed_teams_activated`), and over a row an admin deleted the
+custom team is written as a new team (`deleted_keyed_teams`).
 A custom team is written with provider `""`.
 
 Not moved: ids that already hold a provider key, an
@@ -1787,7 +1790,7 @@ is no `--org`, with the stdin rules of
 [`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
 organization id. It prints counts only, under `carry_team_ids`: `teams`,
 `admin_teams`, `admin_teams_to_custom`, `admin_teams_not_carried`, `ambiguous_teams`,
-`teams_already_keyed`, `manual_members_folded`, `memberships`, `project_ownership`, `repo_ownership`,
+`teams_already_keyed`, `manual_members_folded`, `keyed_teams_activated`, `deleted_keyed_teams`, `memberships`, `project_ownership`, `repo_ownership`,
 `link_rows_already_keyed`, `observations`, `sync_policies`, `drift_changes`, `identity_drift_changes`,
 `identities`, `fallbacks`, `malformed_team_ids`, and `rows_written` (0 with `--dry-run`). A second
 run reports zero.

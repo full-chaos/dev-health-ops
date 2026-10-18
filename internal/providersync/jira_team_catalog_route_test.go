@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
@@ -34,6 +35,26 @@ type jiraTeamCatalogFixtureDoer struct {
 type jiraTeamCatalogFixtureResponse struct {
 	status int
 	body   string
+	// unmarked keeps a project search page without isLast and total as it is.
+	// Without it the doer adds isLast: true to such a page: the provider always
+	// states the end, and a fixture that leaves it out would be an unfinished walk.
+	unmarked bool
+}
+
+// markedProjectSearchBody adds isLast: true to a project search page that
+// carries neither end marker.
+func markedProjectSearchBody(body string) string {
+	var page map[string]json.RawMessage
+	if json.Unmarshal([]byte(body), &page) != nil {
+		return body
+	}
+	_, values := page["values"]
+	_, last := page["isLast"]
+	_, total := page["total"]
+	if !values || last || total || len(page["values"]) <= 2 {
+		return body
+	}
+	return strings.TrimSuffix(strings.TrimSpace(body), "}") + `,"isLast":true}`
 }
 
 func (doer *jiraTeamCatalogFixtureDoer) Do(request *http.Request) (*http.Response, error) {
@@ -52,10 +73,14 @@ func (doer *jiraTeamCatalogFixtureDoer) Do(request *http.Request) (*http.Respons
 	if status == 0 {
 		status = http.StatusOK
 	}
+	body := fixture.body
+	if !fixture.unmarked && request.URL.Path == "/rest/api/3/project/search" {
+		body = markedProjectSearchBody(body)
+	}
 	return &http.Response{
 		StatusCode: status,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(fixture.body)),
+		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    request,
 	}, nil
 }
@@ -101,7 +126,7 @@ func TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 			if searchAttempts == 1 {
 				return nil, errors.New("simulated transient transport failure")
 			}
-			body := `{"values":[{"id":"10001","key":"OPS","name":"Ops Project"}]}`
+			body := `{"values":[{"id":"10001","key":"OPS","name":"Ops Project"}],"isLast":true}`
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 		case jiraTeamCatalogArchivedProjectSearchURI:
 			body := `{"values":[],"isLast":true}`
@@ -427,7 +452,7 @@ func TestJiraTeamCatalogProjectSearchIsCompleteOnlyOnAnEndOfDataSignal(t *testin
 			jiraTeamCatalogProjectSearchPage2URI: {status: http.StatusForbidden, body: `{}`},
 		}, false, 1, 100},
 		"a full page with no signal is not the end; an empty page stops the walk": {map[string]jiraTeamCatalogFixtureResponse{
-			jiraTeamCatalogProjectSearchURI:      {body: jiraProjectSearchPage(0, 100, ``)},
+			jiraTeamCatalogProjectSearchURI:      {body: jiraProjectSearchPage(0, 100, ``), unmarked: true},
 			jiraTeamCatalogProjectSearchPage2URI: {body: `{"values":[],"isLast":false}`},
 		}, false, 2, 100},
 		"isLast false on a short page is not the end": {map[string]jiraTeamCatalogFixtureResponse{
@@ -442,8 +467,8 @@ func TestJiraTeamCatalogProjectSearchIsCompleteOnlyOnAnEndOfDataSignal(t *testin
 			jiraTeamCatalogProjectSearchURI: {body: jiraProjectSearchPage(0, 2, `,"total":2`)},
 		}, true, 1, 2},
 		"a short page with no signal is not the end; the empty page after it stops the walk": {map[string]jiraTeamCatalogFixtureResponse{
-			jiraTeamCatalogProjectSearchURI:                       {body: jiraProjectSearchPage(0, 2, ``)},
-			"/rest/api/3/project/search?maxResults=100&startAt=2": {body: `{"values":[]}`},
+			jiraTeamCatalogProjectSearchURI:                       {body: jiraProjectSearchPage(0, 2, ``), unmarked: true},
+			"/rest/api/3/project/search?maxResults=100&startAt=2": {body: `{"values":[]}`, unmarked: true},
 		}, false, 2, 2},
 		"an empty object as the first page is not the end": {map[string]jiraTeamCatalogFixtureResponse{
 			jiraTeamCatalogProjectSearchURI: {body: `{}`},
@@ -452,7 +477,7 @@ func TestJiraTeamCatalogProjectSearchIsCompleteOnlyOnAnEndOfDataSignal(t *testin
 			jiraTeamCatalogProjectSearchURI: {body: `{"errorMessages":["no"],"errors":{}}`},
 		}, false, 1, 0},
 		"an empty object after a full page is not the end": {map[string]jiraTeamCatalogFixtureResponse{
-			jiraTeamCatalogProjectSearchURI:      {body: jiraProjectSearchPage(0, 100, ``)},
+			jiraTeamCatalogProjectSearchURI:      {body: jiraProjectSearchPage(0, 100, ``), unmarked: true},
 			jiraTeamCatalogProjectSearchPage2URI: {body: `{}`},
 		}, false, 2, 100},
 		"no entries with total zero is the end": {map[string]jiraTeamCatalogFixtureResponse{

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -17,8 +19,32 @@ type anonymousProbe func(method, path string) int
 // behaviour agreeing (CHAOS-4780). skip names routes the caller cannot reach
 // through its harness; the caller owns proving them elsewhere.
 func anonymousClaimViolations(rows []profileRow, probes map[string]anonymousProbe, skip map[string]bool) []string {
-	_, _, _ = rows, probes, skip
-	return nil
+	var violations []string
+	for _, row := range rows {
+		if skip[row.route] {
+			continue
+		}
+		method := row.method
+		if method == "api_route" {
+			method = http.MethodGet
+		}
+		path := pathParameter.ReplaceAllString(row.route, "x")
+		for _, listener := range row.listeners {
+			probe, ok := probes[listener]
+			if !ok {
+				continue
+			}
+			code := probe(method, path)
+			switch {
+			case row.public && code == http.StatusUnauthorized:
+				violations = append(violations, fmt.Sprintf("%s on %s: row is public but an anonymous %s %s is refused with 401", row.id, listener, method, path))
+			case !row.public && code != http.StatusUnauthorized:
+				violations = append(violations, fmt.Sprintf("%s on %s: row is protected but an anonymous %s %s answers %d, not 401", row.id, listener, method, path, code))
+			}
+		}
+	}
+	sort.Strings(violations)
+	return violations
 }
 
 func seededRows() []profileRow {
@@ -80,5 +106,50 @@ func TestStubbedRoutesAreStillServed(t *testing.T) {
 		if !found {
 			t.Errorf("behaviourStubbed names %s but no listener serves it: delete the entry", path)
 		}
+	}
+}
+
+// flatRows is every row of the query-api inventory.
+func flatRows(t *testing.T) []profileRow {
+	t.Helper()
+	var rows []profileRow
+	for _, perRoute := range queryAPIRowsByRoute(t) {
+		rows = append(rows, perRoute...)
+	}
+	return rows
+}
+
+// TestEndpointProfileAnonymousClaimsMatchServedBehaviour: for every non-REST
+// row on a listener the harness reaches, an anonymous request is refused when
+// the row is protected and is not refused when it is public. The harness
+// mounts three routes as stubs (behaviourStubbed); the real plane's anonymous
+// answers for them are asserted in the integration test, where the real
+// handlers are mounted.
+func TestEndpointProfileAnonymousClaimsMatchServedBehaviour(t *testing.T) {
+	stack := newBehaviourStack(t)
+	restPaths := map[string]bool{"/api/v1/": true}
+	for _, route := range RESTRoutes() {
+		restPaths[route.Pattern] = true
+	}
+	var rows []profileRow
+	for _, row := range flatRows(t) {
+		if !restPaths[row.route] {
+			rows = append(rows, row)
+		}
+	}
+	if len(rows) < 8 {
+		t.Fatalf("only %d non-REST rows: the inventory or the REST table changed shape", len(rows))
+	}
+	probes := map[string]anonymousProbe{}
+	for _, listener := range []string{"query", "internal", "mcp", "operator"} {
+		listener := listener
+		probes[listener] = func(method, path string) int { return stack.do(listener, method, path, "") }
+	}
+	skip := map[string]bool{}
+	for path := range behaviourStubbed {
+		skip[path] = true
+	}
+	if violations := anonymousClaimViolations(rows, probes, skip); len(violations) > 0 {
+		t.Errorf("rows disagree with the anonymous behaviour of the served handlers:\n%s", strings.Join(violations, "\n"))
 	}
 }

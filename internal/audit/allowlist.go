@@ -31,45 +31,11 @@ var allowedAttributeKeys = map[string]struct{}{
 	"display_prefix":      {},
 }
 
-// maxAttributeValueLen bounds a string value. Long values are where pasted
-// bodies and tokens live.
-const maxAttributeValueLen = 128
-
-// valueToken is the CLOSED value grammar: an identifier-shaped token with no
-// whitespace, no "=", no quotes, no "@". Audit text is a code, an id or a name
-// from a vocabulary, never free text, so "password=...", an email, a JSON body
-// or a sentence cannot be stored whatever key carries it. (A pattern list of
-// bad shapes can only ever be as complete as its author's imagination; this
-// admits a shape instead of excluding some.)
-var valueToken = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]*$`)
-
-// ValidateToken reports whether v may be stored in an audit row's text field.
-func ValidateToken(v string) error {
-	if v == "" || len(v) > maxAttributeValueLen || !valueToken.MatchString(v) {
-		return fmt.Errorf("%w: a text value must be a token of 1..%d characters from [A-Za-z0-9_.:/-] starting alphanumeric", ErrAttributeNotAllowed, maxAttributeValueLen)
-	}
-	for _, shape := range secretShapes {
-		if shape.MatchString(v) {
-			return fmt.Errorf("%w: a text value is shaped like a credential", ErrAttributeNotAllowed)
-		}
-	}
-	return nil
-}
-
-// secretShapes are value shapes that must never appear in an audit row even
-// under an allowed key: a JWT, an Authorization header value, a PEM block, or
-// a platform credential with its secret part (a display prefix is short).
-var secretShapes = []*regexp.Regexp{
-	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*`),
-	regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(`-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----`),
-	regexp.MustCompile(`\b(fcacr|fcpush|svc|rt)_[A-Za-z0-9_-]{16,}`),
-}
-
 // ValidateAttributes refuses an audit attribute map that has a key outside the
-// allowlist, a non-scalar value, an over-long string, or a value shaped like a
-// secret. It reports every violation, keyed by attribute name only: the value
-// that tripped a rule is never echoed.
+// allowlist or a value outside that key's closed rule: a member of the key's
+// vocabulary, an id of the key's shape, or a whole number. Free text has no
+// slot, so nothing a caller can type is stored. Violations are reported by key
+// only; a refused value is never echoed.
 func ValidateAttributes(attributes map[string]any) error {
 	var problems []string
 	for key, value := range attributes {
@@ -77,20 +43,8 @@ func ValidateAttributes(attributes map[string]any) error {
 			problems = append(problems, fmt.Sprintf("%q is not an allowed audit attribute", key))
 			continue
 		}
-		switch v := value.(type) {
-		case nil, bool, int, int32, int64, float64:
-		case string:
-			if p := stringProblem(key, v); p != "" {
-				problems = append(problems, p)
-			}
-		case []string:
-			for _, item := range v {
-				if p := stringProblem(key, item); p != "" {
-					problems = append(problems, p)
-				}
-			}
-		default:
-			problems = append(problems, fmt.Sprintf("%q has a value of type %T; only scalars and string lists are allowed", key, value))
+		if !valueAllowed(key, value) {
+			problems = append(problems, fmt.Sprintf("%q has a value outside its closed rule", key))
 		}
 	}
 	if len(problems) == 0 {
@@ -100,11 +54,63 @@ func ValidateAttributes(attributes map[string]any) error {
 	return fmt.Errorf("%w: %s", ErrAttributeNotAllowed, strings.Join(problems, "; "))
 }
 
-func stringProblem(key, v string) string {
-	if err := ValidateToken(v); err != nil {
-		return fmt.Sprintf("%q: %s", key, strings.TrimPrefix(err.Error(), ErrAttributeNotAllowed.Error()+": "))
+func valueAllowed(key string, value any) bool {
+	if vocab, ok := attributeVocabulary[key]; ok {
+		switch v := value.(type) {
+		case string:
+			return inVocabulary(vocab, v)
+		case []string:
+			if len(v) == 0 {
+				return false
+			}
+			for _, item := range v {
+				if !inVocabulary(vocab, item) {
+					return false
+				}
+			}
+			return true
+		}
+		return false
 	}
-	return ""
+	if rule, ok := attributeIDRules[key]; ok {
+		v, isString := value.(string)
+		return isString && rule.MatchString(v)
+	}
+	if _, ok := attributeNumberKeys[key]; ok {
+		switch value.(type) {
+		case int, int32, int64:
+			return true
+		}
+	}
+	return false
+}
+
+func inVocabulary(vocab []string, v string) bool {
+	for _, member := range vocab {
+		if member == v {
+			return true
+		}
+	}
+	return false
+}
+
+// eventTypePattern is the shape of an audit event_type: lowercase dotted
+// words ("organization.created").
+var eventTypePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+
+func validateEventType(v string) error {
+	if !eventTypePattern.MatchString(v) {
+		return fmt.Errorf("%w: audit event_type must be lowercase dotted words", ErrAttributeNotAllowed)
+	}
+	return nil
+}
+
+// validateRequestID: a request id is a UUID the service generated, never text.
+func validateRequestID(v string) error {
+	if !uuidPattern.MatchString(v) {
+		return fmt.Errorf("%w: audit request_id must be a UUID", ErrAttributeNotAllowed)
+	}
+	return nil
 }
 
 // attributeVocabulary is the closed value set of each enumerated attribute

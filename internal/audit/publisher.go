@@ -288,7 +288,9 @@ func (p *Publisher) deliverOne(ctx context.Context, now time.Time) (outcome, err
 	}
 
 	reason := failureReason(deliverErr)
-	retryAt := now.UTC().Add(p.backoff(e.Attempts + 1))
+	// Measured from the failure, not from the step's start: a slow sink must not
+	// turn the backoff into "due now".
+	retryAt := time.Now().UTC().Add(p.backoff(e.Attempts + 1))
 	if _, err := tx.Exec(ctx, `UPDATE `+p.table()+`
 		SET attempts = attempts + 1, last_error = $2, available_at = $3
 		WHERE id = $1`, e.ID, reason, retryAt); err != nil {

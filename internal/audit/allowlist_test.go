@@ -49,7 +49,7 @@ func TestValidateAttributesRefusesSecretsAndNeverEchoesThem(t *testing.T) {
 		"push":        "fcpush_0123456789abcdef0123",
 		"service":     "svc_worker_0123456789abcdef",
 		"refresh":     "rt_0123456789abcdef0123",
-		"overlong":    strings.Repeat("a", maxAttributeValueLen+1),
+		"overlong":    strings.Repeat("a", 300),
 		"in-the-list": "x",
 	} {
 		attrs := map[string]any{"reason_code": value}
@@ -74,46 +74,11 @@ func TestValidateAttributesRefusesSecretsAndNeverEchoesThem(t *testing.T) {
 func TestMutationValidateAppliesTheAllowlist(t *testing.T) {
 	m := Mutation{
 		Apply: func(_ context.Context, _ TxOps) error { return nil },
-		Audit: AuditEvent{EventType: "x", Outcome: OutcomeAllowed, Attributes: map[string]any{"password": "p"}},
+		Audit: AuditEvent{EventType: "member.updated", Outcome: OutcomeAllowed, Attributes: map[string]any{"password": "p"}},
 		Event: OutboxEvent{AggregateType: "a", AggregateID: "b", EventType: "c", IdempotencyKey: "k"},
 	}
 	if err := m.validate(); !errors.Is(err, ErrAttributeNotAllowed) {
 		t.Fatalf("validate = %v, want ErrAttributeNotAllowed", err)
-	}
-}
-
-// The allowlist is a closed set of keys AND a closed value grammar: a value is
-// a short identifier-shaped token, never free text.
-func TestAuditTextIsAClosedGrammarNotAPatternList(t *testing.T) {
-	for _, v := range []string{
-		"pass" + "word" + "=" + "correct-horse-battery-staple", "authorization" + "_code" + "=" + "abc123", "has spaces", "a@b.example",
-		`{"k":"v"}`, "line\nbreak", "sec" + "ret: hunter2", "ünïcode", "",
-	} {
-		if err := ValidateAttributes(map[string]any{"reason_code": v}); err == nil {
-			t.Errorf("free text %q was accepted as an attribute value", v)
-		}
-		m := Mutation{
-			Apply: func(context.Context, TxOps) error { return nil },
-			Audit: AuditEvent{EventType: "x", Outcome: OutcomeAllowed, RequestID: &v},
-			Event: OutboxEvent{AggregateType: "a", AggregateID: "b", EventType: "c", IdempotencyKey: "k"},
-		}
-		if err := m.validate(); err == nil {
-			t.Errorf("free text %q was accepted as request_id", v)
-		}
-	}
-	for _, v := range []string{"role_granted", "11111111-1111-4111-8111-111111111111", "org:acme/repo.v1", "fcacr_ab12"} {
-		if err := ValidateAttributes(map[string]any{"reason_code": v}); err != nil {
-			t.Errorf("token %q refused: %v", v, err)
-		}
-		rid := v
-		m := Mutation{
-			Apply: func(context.Context, TxOps) error { return nil },
-			Audit: AuditEvent{EventType: "x", Outcome: OutcomeAllowed, RequestID: &rid},
-			Event: OutboxEvent{AggregateType: "a", AggregateID: "b", EventType: "c", IdempotencyKey: "k"},
-		}
-		if err := m.validate(); err != nil {
-			t.Errorf("request_id %q refused: %v", v, err)
-		}
 	}
 }
 

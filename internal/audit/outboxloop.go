@@ -261,11 +261,13 @@ func (l *OutboxLoop) run(ctx context.Context, ticks <-chan time.Time, stop func(
 		select {
 		case <-ctx.Done():
 			return
-		case now, open := <-ticks:
+		case _, open := <-ticks:
 			if !open {
 				return
 			}
-			l.stepOnce(ctx, now)
+			// The tick's own timestamp is when the ticker fired, which a long
+			// step or a full channel makes stale; the step runs at the clock.
+			l.stepOnce(ctx, time.Now())
 		}
 	}
 }

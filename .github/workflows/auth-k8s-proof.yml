@@ -1,0 +1,46 @@
+# Executed Kubernetes proof for the dormant Auth Control Plane (CHAOS-10079): the
+# chart's authService manifests applied to a real kind cluster, from images built
+# from this tree, with the checks the render tests can only reason about (the
+# migration Job completes, the Deployment is Ready, the staged signing key is
+# 0400/65532, the directly mounted Secret cannot work, the NetworkPolicy is
+# enforced, rollback is clean). The logic is ci/check_auth_k8s.sh.
+#
+# This job is a PROOF, deliberately NOT a required check: it takes minutes and
+# needs docker, so it runs on pull requests that touch what it proves, and on
+# demand. Its name is distinct from every required context.
+name: Auth Kubernetes proof
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'deploy/helm/dev-health/templates/auth-*.yaml'
+      - 'deploy/helm/dev-health/templates/serviceaccount.yaml'
+      - 'deploy/helm/dev-health/templates/_helpers.tpl'
+      - 'deploy/helm/dev-health/values.yaml'
+      - 'docker/go-worker.Dockerfile'
+      - 'internal/auth/**'
+      - 'internal/storage/postgres/authschema/**'
+      - 'cmd/auth-service/**'
+      - 'cmd/auth-migrate/**'
+      - 'ci/check_auth_k8s.sh'
+      - '.github/workflows/auth-k8s-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  auth-k8s-proof:
+    name: auth-k8s-proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Apply the auth manifests to a kind cluster and prove them
+        run: bash ci/check_auth_k8s.sh

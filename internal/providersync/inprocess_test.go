@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -51,8 +52,7 @@ func TestInProcessBudgetStoreBoundsConcurrencyPerKey(t *testing.T) {
 }
 
 func TestInProcessBackoffGateWaitsOutAPenaltyAndCapsIt(t *testing.T) {
-	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
-	gate := &InProcessBackoffGate{MaxBackoff: 30 * time.Millisecond, Now: func() time.Time { return now }}
+	gate := &InProcessBackoffGate{MaxBackoff: 300 * time.Millisecond}
 	if waited, err := gate.Wait(context.Background()); err != nil || waited != 0 {
 		t.Fatalf("an unpenalized gate must not wait: %v %v", waited, err)
 	}
@@ -61,9 +61,9 @@ func TestInProcessBackoffGateWaitsOutAPenaltyAndCapsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	gate.mu.Lock()
-	capped := gate.until.Sub(now)
+	capped := time.Until(gate.until)
 	gate.mu.Unlock()
-	if capped != 30*time.Millisecond {
+	if capped <= 0 || capped > 300*time.Millisecond {
 		t.Fatalf("a penalty beyond MaxBackoff must be capped to it, got %v", capped)
 	}
 	// A shorter later penalty never shortens an existing one.
@@ -71,9 +71,9 @@ func TestInProcessBackoffGateWaitsOutAPenaltyAndCapsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	gate.mu.Lock()
-	kept := gate.until.Sub(now)
+	kept := time.Until(gate.until)
 	gate.mu.Unlock()
-	if kept != 30*time.Millisecond {
+	if kept < capped-50*time.Millisecond {
 		t.Fatalf("a shorter penalty must not shorten the wait, got %v", kept)
 	}
 	// Wait reports the penalty still owed and does not sleep it (HTTPClient.awaitGate
@@ -225,3 +225,34 @@ func TestInProcessEffectLedgerTransitionsAreGuarded(t *testing.T) {
 		t.Fatalf("a refused reset must not touch the ledger: %+v %v", kept, err)
 	}
 }
+
+// An in-process run's clock may be frozen (it stamps recorded times); the gate's
+// penalty must still clear on the wall clock, so a request behind it goes out
+// after the wait instead of being deferred forever.
+func TestInProcessGatePenaltyClearsOnTheWallClockAndTheRequestGoesOut(t *testing.T) {
+	gate := &InProcessBackoffGate{MaxBackoff: time.Second}
+	if err := gate.Penalize(context.Background(), 40*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	var sent int
+	client := gitHubRepositoryClient(t, doerFunc(func(request *http.Request) (*http.Response, error) {
+		sent++
+		return &http.Response{StatusCode: http.StatusOK, Request: request, Header: http.Header{}, Body: http.NoBody}, nil
+	}), "https://api.github.com")
+	client.Gate = gate
+	client.GateWaitMax = time.Second
+
+	started := time.Now()
+	response, err := client.Do(context.Background(), http.MethodGet, "/rate_limit", nil)
+	if err != nil {
+		t.Fatalf("a penalty inside the bound deferred the request: %v", err)
+	}
+	_ = response.Body.Close()
+	if sent != 1 || time.Since(started) < 30*time.Millisecond {
+		t.Fatalf("sent %d after %s, want one request after the 40ms penalty", sent, time.Since(started))
+	}
+}
+
+type doerFunc func(*http.Request) (*http.Response, error)
+
+func (f doerFunc) Do(request *http.Request) (*http.Response, error) { return f(request) }

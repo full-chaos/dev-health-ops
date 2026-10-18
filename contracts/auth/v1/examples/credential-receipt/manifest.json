@@ -1,0 +1,79 @@
+{
+  "description": "Golden corpus for credential-receipt.v1; the secrets here are synthetic (EXAMPLE filler) and the scanner is extended to prove it (G-73).",
+  "accept": [
+    {
+      "file": "valid-issue.json",
+      "why": "An issue receipt: the credential's metadata and the one-time secret."
+    },
+    {
+      "file": "valid-rotate.json",
+      "why": "A rotate receipt names its parent and narrows."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-secret-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "A receipt without its secret is the one thing it exists to deliver."
+    },
+    {
+      "file": "invalid-kind-unknown.json",
+      "expect_instance_location": "/kind",
+      "expect_keyword": "enum",
+      "why": "Revoke returns an entry, not a receipt."
+    },
+    {
+      "file": "invalid-rotate-without-parent.json",
+      "expect_instance_location": "/credential",
+      "expect_keyword": "required",
+      "why": "kind=rotate requires lineage."
+    },
+    {
+      "file": "invalid-issue-with-parent.json",
+      "expect_instance_location": "/credential",
+      "expect_keyword": "not",
+      "why": "kind=issue forbids a parent."
+    },
+    {
+      "file": "invalid-credential-revoked.json",
+      "expect_instance_location": "/credential/status",
+      "expect_keyword": "const",
+      "why": "A receipt describes a credential just issued: active."
+    },
+    {
+      "file": "invalid-credential-without-fingerprint.json",
+      "expect_instance_location": "/credential",
+      "expect_keyword": "required",
+      "why": "A new credential carries its fingerprint."
+    },
+    {
+      "file": "invalid-credential-with-revoked-at.json",
+      "expect_instance_location": "/credential",
+      "expect_keyword": "additionalProperties",
+      "why": "No revocation members at issue time."
+    },
+    {
+      "file": "invalid-secret-shape.json",
+      "expect_instance_location": "/secret",
+      "expect_keyword": "pattern",
+      "why": "A secret is prefix_ plus 32..128 URL-safe characters."
+    },
+    {
+      "file": "invalid-secret-in-credential.json",
+      "expect_instance_location": "/credential",
+      "expect_keyword": "additionalProperties",
+      "why": "The secret belongs beside the credential, never inside its metadata."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-secret-does-not-start-with-prefix.json",
+      "why": "display_prefix is the first characters of the secret: a receipt whose secret does not begin with it is internally inconsistent."
+    },
+    {
+      "file": "client-rejected-credential-impossible-date.json",
+      "why": "The shared timestamp rule."
+    }
+  ]
+}

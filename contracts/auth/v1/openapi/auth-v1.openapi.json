@@ -12,6 +12,15 @@
       "AuditEvent": {
         "$ref": "../jsonschema/audit-event.v1.schema.json"
       },
+      "CredentialEntry": {
+        "$ref": "../jsonschema/credential-entry.v1.schema.json"
+      },
+      "CredentialList": {
+        "$ref": "../jsonschema/credential-list.v1.schema.json"
+      },
+      "CredentialReceipt": {
+        "$ref": "../jsonschema/credential-receipt.v1.schema.json"
+      },
       "Discovery": {
         "$ref": "../jsonschema/discovery.v1.schema.json"
       },

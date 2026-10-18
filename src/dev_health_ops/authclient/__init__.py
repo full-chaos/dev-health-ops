@@ -17,6 +17,16 @@ from dev_health_ops.authclient.contracts import (
     validator_for,
     violations,
 )
+from dev_health_ops.authclient.credential import (
+    CredentialBody,
+    CredentialEntry,
+    CredentialList,
+    CredentialReceipt,
+    check_credential_transition,
+    parse_credential_entry,
+    parse_credential_list,
+    parse_credential_receipt,
+)
 from dev_health_ops.authclient.discovery import Discovery, parse_discovery
 from dev_health_ops.authclient.error_envelope import (
     ErrorEnvelope,
@@ -39,6 +49,14 @@ from dev_health_ops.authclient.provisioning_event import (
 )
 
 __all__ = [
+    "CredentialBody",
+    "CredentialEntry",
+    "CredentialList",
+    "CredentialReceipt",
+    "check_credential_transition",
+    "parse_credential_entry",
+    "parse_credential_list",
+    "parse_credential_receipt",
     "AuditEvent",
     "ConsumerCursor",
     "ProvisioningEvent",

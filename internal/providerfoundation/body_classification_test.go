@@ -75,3 +75,87 @@ func TestDoUnauthenticatedMetricReadsBodyForSecondaryLimit(t *testing.T) {
 		t.Fatalf("body-only limit still recorded as authentication:\n%s", rendered.String())
 	}
 }
+
+func unauthenticatedWithBody(t *testing.T, status int, body io.ReadCloser) (*http.Response, error) {
+	t.Helper()
+	client := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: status, Header: http.Header{}, Body: body, Request: request}, nil
+	}), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	client.Metrics = NewMetrics()
+	return client.DoUnauthenticated(context.Background(), http.MethodGet, "https://objects.example.test/artifact")
+}
+
+// A 403 body that never reaches EOF must not hold DoUnauthenticated: it returns
+// with the header classification, and the caller still gets every byte after.
+func TestDoUnauthenticatedDoesNotWaitForAStalledErrorBody(t *testing.T) {
+	t.Parallel()
+	reader, writer := io.Pipe()
+	returned := make(chan struct{})
+	var response *http.Response
+	var err error
+	go func() {
+		response, err = unauthenticatedWithBody(t, http.StatusForbidden, reader)
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("DoUnauthenticated waited for the body to end")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_, _ = writer.Write([]byte("late body"))
+		_ = writer.Close()
+	}()
+	got, readErr := io.ReadAll(response.Body)
+	if readErr != nil || string(got) != "late body" {
+		t.Fatalf("body = %q err = %v, want late body", got, readErr)
+	}
+}
+
+// A read error on the body reaches the caller as before the peek.
+func TestDoUnauthenticatedKeepsTheBodyReadError(t *testing.T) {
+	t.Parallel()
+	response, err := unauthenticatedWithBody(t, http.StatusForbidden,
+		io.NopCloser(io.MultiReader(strings.NewReader("body"), &failOnce{err: io.ErrUnexpectedEOF})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := io.ReadAll(response.Body)
+	if string(got) != "body" || !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		t.Fatalf("body = %q err = %v, want body and io.ErrUnexpectedEOF", got, readErr)
+	}
+}
+
+type failOnce struct {
+	err  error
+	done bool
+}
+
+func (f *failOnce) Read([]byte) (int, error) {
+	if f.done {
+		return 0, io.EOF
+	}
+	f.done = true
+	return 0, f.err
+}
+
+type untouchedBody struct{ t *testing.T }
+
+func (b untouchedBody) Read([]byte) (int, error) {
+	b.t.Error("the body of a status that never consults it was read at classification")
+	return 0, io.EOF
+}
+func (untouchedBody) Close() error { return nil }
+
+// Only a GitHub 403 consults the body; every other failure leaves it unread.
+func TestDoUnauthenticatedLeavesBodiesOfOtherFailuresUnread(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusUnauthorized, http.StatusNotFound, http.StatusTooManyRequests, http.StatusBadGateway} {
+		if _, err := unauthenticatedWithBody(t, status, untouchedBody{t}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -333,6 +333,8 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		}
 	}
 
+	var createdLedger createdByLedger
+	users := map[string]uuid.UUID{"ent": adminEnt, "comm": adminComm, "ovr": adminOvr, "tier": adminTier, "bogus": adminBogus, "fail": adminFail}
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		Inspect: func(request venueoracle.Request, response venueoracle.Response) {
@@ -361,8 +363,12 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 			if err := goPool.QueryRow(ctx, "SELECT count(*) FROM org_retention_policies WHERE id = $1", parsed).Scan(&rows); err != nil || rows != 1 {
 				t.Errorf("%s: created id %s names %d rows (err %v), want 1", request.Name, id, rows, err)
 			}
+			createdBy, _ := object.Get("created_by_id")
+			want, known := principalOf(request, venue.Tokens, users)
+			createdLedger.note(t, request, parsed, createdBy, want, known)
 		},
 		Normalize: func(request venueoracle.Request, body string) string {
+			body = blankCreatedBy(body)
 			if request.Name == "execute database failure on delete" {
 				// Python answers the driver's own message; Go answers an
 				// authored sentence and a reference (CHAOS-8439), checked in
@@ -377,6 +383,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		},
 	})
 	t.Log(receipt)
+	createdLedger.reset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_retention_policies")
 
 	compare := func(name, query string) {
 		t.Helper()

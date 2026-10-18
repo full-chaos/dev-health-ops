@@ -3,8 +3,14 @@
 package admin_test
 
 import (
+	"context"
+	"regexp"
 	"sort"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -85,4 +91,68 @@ func splitXUserIDRequests(t *testing.T, path string, requests []venueoracle.Requ
 		t.Errorf("the X-User-Id exemption lists %q, which is no longer among the requests (CHAOS-10082)", name)
 	}
 	return compared, comparedAnswers, divergentAnswers
+}
+
+// The same ruling changes a second thing the frozen Python answers record:
+// Python stored NULL in created_by_id for every create that carried no
+// X-User-Id (the web client never sends one) and Go now stores the creating
+// admin. Response bodies are compared with created_by_id blanked on both
+// planes; each Go create is checked to carry its own caller (checkCreatedBy);
+// and before the row comparison the Go rows created by the run are set back to
+// NULL (resetCreatedBy) so every OTHER column of those rows is still compared
+// against the frozen Python rows. A create whose header named the token's own
+// user (xUserIDParityEqual) stored that id on both planes and is left alone.
+var createdByJSON = regexp.MustCompile(`"created_by_id":"[0-9a-fA-F-]{36}"`)
+
+func blankCreatedBy(body string) string {
+	return createdByJSON.ReplaceAllString(body, `"created_by_id":null`)
+}
+
+// createdByLedger records, per Go create, who the response says created it.
+type createdByLedger struct {
+	ids []uuid.UUID
+}
+
+// principalOf names the user id behind a request's bearer token.
+func principalOf(request venueoracle.Request, tokens map[string]string, users map[string]uuid.UUID) (uuid.UUID, bool) {
+	bearer := strings.TrimPrefix(request.Headers["Authorization"], "Bearer ")
+	for name, token := range tokens {
+		if token == bearer {
+			id, ok := users[name]
+			return id, ok
+		}
+	}
+	return uuid.Nil, false
+}
+
+// note records a created row; check reports whether created_by_id is the caller.
+func (l *createdByLedger) note(t *testing.T, request venueoracle.Request, createdID uuid.UUID, gotCreatedBy any, want uuid.UUID, known bool) {
+	t.Helper()
+	if !known {
+		t.Errorf("%s: cannot tell which user the bearer token belongs to", request.Name)
+		return
+	}
+	if got, _ := gotCreatedBy.(string); got != want.String() {
+		t.Errorf("%s: created_by_id = %v, want the verified caller %s", request.Name, gotCreatedBy, want)
+	}
+	if !xUserIDParityEqual[idOf(request)] {
+		l.ids = append(l.ids, createdID)
+	}
+}
+
+// reset sets created_by_id back to NULL on the Go rows the run created, the
+// value the frozen Python rows hold for them.
+func (l *createdByLedger) reset(t *testing.T, ctx context.Context, adminURI, table string) {
+	t.Helper()
+	pool, err := pgxpool.New(ctx, adminURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if len(l.ids) == 0 {
+		t.Fatalf("%s: the run recorded no created rows; the created_by_id check proves nothing", table)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE "+table+" SET created_by_id = NULL WHERE id = ANY($1)", l.ids); err != nil {
+		t.Fatalf("%s: resetting created_by_id: %v", table, err)
+	}
 }

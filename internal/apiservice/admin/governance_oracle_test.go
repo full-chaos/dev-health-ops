@@ -435,6 +435,8 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		}
 	}
 
+	var createdLedger createdByLedger
+	users := map[string]uuid.UUID{"ent": adminEnt, "comm": adminComm, "ovr": adminOvr, "tier": adminTier, "bogus": adminBogus, "none": adminNoLicense}
 	receipt := venueoracle.Diff(t, goBase, compared, pythonCompared, venueoracle.DiffOptions{
 		Golden: golden,
 		// Ids are redacted from the comparison, so a created row's id is
@@ -468,8 +470,14 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 			if err := goPool.QueryRow(ctx, "SELECT count(*) FROM "+table+" WHERE id = $1", parsed).Scan(&rows); err != nil || rows != 1 {
 				t.Errorf("%s: created id %s names %d rows in %s (err %v), want 1", request.Name, id, rows, table, err)
 			}
+			if table == "org_ip_allowlist" {
+				createdBy, _ := object.Get("created_by_id")
+				want, known := principalOf(request, venue.Tokens, users)
+				createdLedger.note(t, request, parsed, createdBy, want, known)
+			}
 		},
 		Normalize: func(request venueoracle.Request, body string) string {
+			body = blankCreatedBy(body)
 			body = normalizeAuditLogDisplayNames(t, request, body)
 			if strings.HasPrefix(request.Name, "W ") {
 				body = redactVolatileText(body, "id", "created_at", "updated_at")
@@ -478,6 +486,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		},
 	})
 	t.Log(receipt)
+	createdLedger.reset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_ip_allowlist")
 
 	compare := func(name, query string) {
 		t.Helper()

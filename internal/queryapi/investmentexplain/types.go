@@ -51,14 +51,13 @@ type ActionItem struct {
 // field in Python but is NEVER a value parse_investment_mix_response
 // returns (explain_investment_mix sets it directly, bypassing the parser
 // entirely, when there is no LLM provider to call at all) -- omitted here
-// since this file only ports the parser's four real outcomes.
+// since this file only ports the parser's three real outcomes.
 type ParseStatus string
 
 const (
-	ParseStatusValid             ParseStatus = "valid"
-	ParseStatusInvalidJSON       ParseStatus = "invalid_json"
-	ParseStatusInvalidLLMOutput  ParseStatus = "invalid_llm_output"
-	ParseStatusForbiddenLanguage ParseStatus = "forbidden_language"
+	ParseStatusValid            ParseStatus = "valid"
+	ParseStatusInvalidJSON      ParseStatus = "invalid_json"
+	ParseStatusInvalidLLMOutput ParseStatus = "invalid_llm_output"
 )
 
 // InvestmentMixExplainOutput ports investment_mix_types.py's
@@ -92,7 +91,7 @@ type InvestmentMixExplainOutput struct {
 // way to tell WHICH of the several content rules a given item failed.
 //
 //   - ReasonRule is a short slug naming the specific rule that fired (e.g.
-//     "theme_unknown", "finding_digit", "forbidden_language:is").
+//     "theme_unknown", "finding_digit").
 //   - ReasonPath locates the offending field within the rejected item
 //     (e.g. "top_findings[2].evidence.theme", "confidence.band_mix.high").
 //   - ReasonSnippet is the REDACTED head (first ~80 runes, via snippetOf)

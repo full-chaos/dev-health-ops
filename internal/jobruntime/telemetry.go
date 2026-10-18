@@ -260,6 +260,10 @@ const (
 	// marks of the newest runs only because more runs than the bound ended in
 	// the last day.
 	TouchedDaysDrainStopCheckTruncated TouchedDaysDrainEvent = "stop_check_truncated"
+	// TouchedDaysDrainStopCheckSkippedUnended counts the passes that left out of
+	// the stop check marking runs that are still running and began before the
+	// check's cut: no later pass reads them (the nightly pass never stops).
+	TouchedDaysDrainStopCheckSkippedUnended TouchedDaysDrainEvent = "stop_check_skipped_unended"
 )
 
 func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
@@ -270,6 +274,7 @@ func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
 		TouchedDaysDrainMarkFailed, TouchedDaysDrainReadTruncated,
 		TouchedDaysDrainDaysRetried, TouchedDaysDrainChainStopped, TouchedDaysDrainReturnReadTruncated,
 		TouchedDaysDrainTakeTimeAbsent, TouchedDaysDrainTakeTimeUnwritten, TouchedDaysDrainStopCheckTruncated,
+		TouchedDaysDrainStopCheckSkippedUnended,
 	}
 }
 

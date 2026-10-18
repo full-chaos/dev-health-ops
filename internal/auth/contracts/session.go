@@ -1,7 +1,7 @@
 package contracts
 
 import (
-	"errors"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -81,22 +81,94 @@ type AuthOutcome struct {
 	SessionID     string    `json:"session_id,omitempty"`
 }
 
-// Parsers are not implemented yet.
+// decodeWire runs the shared order: duplicate members, schema, then decode.
+// Validation sees the decoded JSON value, not dest, so a field dest does not
+// declare still reaches additionalProperties:false.
+func decodeWire(root, surface string, raw []byte, dest any) error {
+	if err := refuseDuplicateMembersIn(surface, raw); err != nil {
+		return err
+	}
+	var document any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return fmt.Errorf("%s: document is not valid JSON: %w", surface, err)
+	}
+	if err := Validate(root, surface, document); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw, dest); err != nil {
+		return fmt.Errorf("%s: decoding validated document: %w", surface, err)
+	}
+	return nil
+}
+
+func inRange(surface, field string, t Timestamp) error {
+	return checkInstantInRange(surface, field, t.Time)
+}
+
+// ParseSession validates and parses a session.v1 document.
+//
+// Beyond the schema it refuses what a schema cannot say: an instant outside
+// 0001..9999 UTC, expires_at not after created_at, auth_time after created_at,
+// and revoked_at before created_at.
 func ParseSession(root string, raw []byte) (*Session, error) {
-	return nil, errors.New("not implemented")
+	var s Session
+	if err := decodeWire(root, SessionSurface, raw, &s); err != nil {
+		return nil, err
+	}
+	for field, t := range map[string]Timestamp{"auth_time": s.AuthTime, "created_at": s.CreatedAt, "expires_at": s.ExpiresAt} {
+		if err := inRange(SessionSurface, field, t); err != nil {
+			return nil, err
+		}
+	}
+	if s.RevokedAt != nil {
+		if err := inRange(SessionSurface, "revoked_at", *s.RevokedAt); err != nil {
+			return nil, err
+		}
+		if s.RevokedAt.Before(s.CreatedAt.Time) {
+			return nil, fmt.Errorf("%s: revoked_at precedes created_at", SessionSurface)
+		}
+	}
+	if !s.ExpiresAt.After(s.CreatedAt.Time) {
+		return nil, fmt.Errorf("%s: expires_at is not after created_at", SessionSurface)
+	}
+	if s.AuthTime.After(s.CreatedAt.Time) {
+		return nil, fmt.Errorf("%s: auth_time is after created_at", SessionSurface)
+	}
+	return &s, nil
 }
 
-// Live is not implemented yet.
-func (s *Session) Live(now time.Time) bool { return false }
+// Live reports whether the session is neither revoked nor expired at now.
+func (s *Session) Live(now time.Time) bool {
+	return s.RevokedAt == nil && now.Before(s.ExpiresAt.Time)
+}
 
+// ParseRefreshRequest validates and parses a refresh-request.v1 document.
 func ParseRefreshRequest(root string, raw []byte) (*RefreshRequest, error) {
-	return nil, errors.New("not implemented")
+	var r RefreshRequest
+	if err := decodeWire(root, RefreshRequestSurface, raw, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
+// ParseRefreshResponse validates and parses a refresh-response.v1 document.
+// expires_in and refresh_expires_in decode into int, which refuses 3600.0.
 func ParseRefreshResponse(root string, raw []byte) (*RefreshResponse, error) {
-	return nil, errors.New("not implemented")
+	var r RefreshResponse
+	if err := decodeWire(root, RefreshResponseSurface, raw, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
+// ParseAuthOutcome validates and parses an auth-outcome.v1 document.
 func ParseAuthOutcome(root string, raw []byte) (*AuthOutcome, error) {
-	return nil, errors.New("not implemented")
+	var o AuthOutcome
+	if err := decodeWire(root, AuthOutcomeSurface, raw, &o); err != nil {
+		return nil, err
+	}
+	if err := inRange(AuthOutcomeSurface, "occurred_at", o.OccurredAt); err != nil {
+		return nil, err
+	}
+	return &o, nil
 }

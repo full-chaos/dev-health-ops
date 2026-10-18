@@ -9,9 +9,17 @@ cross-field time order). The Go twin is ``internal/auth/contracts/session.go``.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
+
+from dev_health_ops.authclient.contracts import (
+    ContractError,
+    parse_rfc3339,
+    require_wire_int,
+    validate,
+)
 
 SESSION: Final = "session.v1"
 REFRESH_REQUEST: Final = "refresh-request.v1"
@@ -34,6 +42,30 @@ AUTH_OUTCOME_REASON_CODES: Final = frozenset(
 )  # fmt: skip
 
 
+def _refuse_duplicates_for(surface: str):
+    def hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        seen: set[str] = set()
+        for key, _ in pairs:
+            if key in seen:
+                raise ContractError(
+                    f"{surface}: duplicate object member {key!r}. Parsers keep the "
+                    "last value, so an earlier one would never reach validation"
+                )
+            seen.add(key)
+        return dict(pairs)
+
+    return hook
+
+
+def _load(surface: str, raw: bytes | str) -> dict[str, Any]:
+    try:
+        document = json.loads(raw, object_pairs_hook=_refuse_duplicates_for(surface))
+    except json.JSONDecodeError as exc:
+        raise ContractError(f"{surface}: document is not valid JSON: {exc}") from exc
+    validate(surface, document)
+    return document
+
+
 @dataclass(frozen=True, slots=True)
 class Session:
     session_id: str
@@ -50,7 +82,34 @@ class Session:
 
 
 def parse_session(raw: bytes | str) -> Session:
-    raise NotImplementedError
+    document = _load(SESSION, raw)
+    revision = require_wire_int(document, "revision", SESSION)
+    assert revision is not None  # required by the schema
+    auth_time = parse_rfc3339(document["auth_time"], SESSION, "auth_time")
+    created_at = parse_rfc3339(document["created_at"], SESSION, "created_at")
+    expires_at = parse_rfc3339(document["expires_at"], SESSION, "expires_at")
+    revoked_raw = document["revoked_at"]
+    revoked_at = (
+        None
+        if revoked_raw is None
+        else parse_rfc3339(revoked_raw, SESSION, "revoked_at")
+    )
+    if revoked_at is not None and revoked_at < created_at:
+        raise ContractError(f"{SESSION}: revoked_at precedes created_at")
+    if expires_at <= created_at:
+        raise ContractError(f"{SESSION}: expires_at is not after created_at")
+    if auth_time > created_at:
+        raise ContractError(f"{SESSION}: auth_time is after created_at")
+    return Session(
+        session_id=document["session_id"],
+        principal_id=document["principal_id"],
+        revision=revision,
+        auth_time=auth_time,
+        amr=tuple(document["amr"]),
+        created_at=created_at,
+        expires_at=expires_at,
+        revoked_at=revoked_at,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +118,8 @@ class RefreshRequest:
 
 
 def parse_refresh_request(raw: bytes | str) -> RefreshRequest:
-    raise NotImplementedError
+    document = _load(REFRESH_REQUEST, raw)
+    return RefreshRequest(refresh_credential=document["refresh_credential"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +133,20 @@ class RefreshResponse:
 
 
 def parse_refresh_response(raw: bytes | str) -> RefreshResponse:
-    raise NotImplementedError
+    document = _load(REFRESH_RESPONSE, raw)
+    expires_in = require_wire_int(document, "expires_in", REFRESH_RESPONSE)
+    refresh_expires_in = require_wire_int(
+        document, "refresh_expires_in", REFRESH_RESPONSE
+    )
+    assert expires_in is not None and refresh_expires_in is not None
+    return RefreshResponse(
+        access_token=document["access_token"],
+        token_type=document["token_type"],
+        expires_in=expires_in,
+        refresh_credential=document["refresh_credential"],
+        refresh_expires_in=refresh_expires_in,
+        session_id=document["session_id"],
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,4 +160,12 @@ class AuthOutcome:
 
 
 def parse_auth_outcome(raw: bytes | str) -> AuthOutcome:
-    raise NotImplementedError
+    document = _load(AUTH_OUTCOME, raw)
+    return AuthOutcome(
+        operation=document["operation"],
+        result=document["result"],
+        reason_code=document["reason_code"],
+        request_id=document["request_id"],
+        occurred_at=parse_rfc3339(document["occurred_at"], AUTH_OUTCOME, "occurred_at"),
+        session_id=document.get("session_id"),
+    )

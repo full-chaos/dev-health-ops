@@ -43,12 +43,30 @@ from dev_health_ops.authclient.provisioning_event import (
     parse_audit_event,
     parse_provisioning_event,
 )
+from dev_health_ops.authclient.session_contracts import (
+    AuthOutcome,
+    RefreshRequest,
+    RefreshResponse,
+    Session,
+    parse_auth_outcome,
+    parse_refresh_request,
+    parse_refresh_response,
+    parse_session,
+)
 
 __all__ = [
     "AuthorizationDecision",
     "AuthorizationObligations",
     "parse_batch_response_bytes",
     "parse_decision_bytes",
+    "AuthOutcome",
+    "RefreshRequest",
+    "RefreshResponse",
+    "Session",
+    "parse_auth_outcome",
+    "parse_refresh_request",
+    "parse_refresh_response",
+    "parse_session",
     "AuditEvent",
     "ConsumerCursor",
     "ProvisioningEvent",

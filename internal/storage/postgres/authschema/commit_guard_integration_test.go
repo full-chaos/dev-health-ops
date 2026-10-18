@@ -106,3 +106,49 @@ func TestEveryAuthTableIsClassified(t *testing.T) {
 		}
 	}
 }
+
+// TestOnlyTheRuntimeAndMigrationRolesCanWriteGuardedTables bounds the guard's
+// threat model. The commit guard is a transaction-local setting, so any role
+// that can write a guarded table can also set it; the guard is therefore
+// exactly as strong as the table privileges. This asserts that no role other
+// than the auth runtime role and the migration/owner role (PUBLIC included,
+// so an ops application role on the shared instance cannot hold a grant)
+// has INSERT, UPDATE or DELETE on any guarded table.
+func TestOnlyTheRuntimeAndMigrationRolesCanWriteGuardedTables(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+
+	rows, err := env.admin.Query(ctx, `
+		SELECT c.relname, CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END, a.privilege_type
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		CROSS JOIN LATERAL aclexplode(c.relacl) a
+		WHERE n.nspname = $1 AND c.relname = ANY($2)
+		  AND a.privilege_type IN ('INSERT', 'UPDATE', 'DELETE')`, env.schema, guardedTables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	sawRuntime := false
+	for rows.Next() {
+		var table, grantee, privilege string
+		if err := rows.Scan(&table, &grantee, &privilege); err != nil {
+			t.Fatal(err)
+		}
+		switch grantee {
+		case env.runtimeRole:
+			sawRuntime = true
+		case env.migrationRole:
+		default:
+			t.Errorf("role %s holds %s on guarded table %s; only %s and %s may write it",
+				grantee, privilege, table, env.runtimeRole, env.migrationRole)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !sawRuntime {
+		t.Fatal("the runtime role holds no write grant on any guarded table; the control read nothing")
+	}
+}

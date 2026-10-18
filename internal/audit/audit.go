@@ -51,7 +51,7 @@
 // credentials, users, principals and the read-only vocabulary). A callback that
 // forges the setting, or ends the transaction with SQL the lexer cannot read
 // (Commit's TxStatus check then reports it but the state is already durable),
-// is deliberate misuse inside the transaction Commit owns: reviewable code, not
+// is deliberate misuse by code already holding the runtime role's write privilege (the bound is exactly that: authschema's TestOnlyTheRuntimeAndMigrationRolesCanWriteGuardedTables asserts no other role, PUBLIC included, can write a guarded table), inside the transaction Commit owns: reviewable code, not
 // an accident, and no database trigger can tell it from the caller's own SQL.
 //
 // The bound this does NOT claim: within this package the inserts are callable

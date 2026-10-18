@@ -222,25 +222,14 @@ func (h *handlers) createRetentionPolicy(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	// The uuid.UUID(...) arguments sit inside the route's try/except
-	// ValueError, so a malformed org claim or X-User-Id is a 400 carrying
-	// the exception text; the service's own checks follow.
 	org, err := pythonparity.ParseUUID(orgID)
 	if err != nil {
 		detail, _ := pythonparity.UUIDValidationDetail(orgID)
 		policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
 		return
 	}
-	var createdBy *uuid.UUID
-	if header := firstHeader(r, "X-User-Id"); header != "" {
-		id, err := pythonparity.ParseUUID(header)
-		if err != nil {
-			detail, _ := pythonparity.UUIDValidationDetail(header)
-			policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
-			return
-		}
-		createdBy = &id
-	}
+	// CHAOS-10082, a named divergence from Python: see createIPAllowlistEntry.
+	createdBy := verifiedActorID(ctx)
 	if !containsString(retentionResourceTypes, resourceType) {
 		policy.WriteDetail(w, http.StatusBadRequest, "Invalid resource type: "+resourceType, nil)
 		return

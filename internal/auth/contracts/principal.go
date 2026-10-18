@@ -126,6 +126,55 @@ func (t *Timestamp) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// principalInstantInRange refuses a timestamp whose UTC-normalised instant is
+// outside 0001-01-01..9999-12-31.
+//
+// ONLY AGREEMENT NEEDS THIS. time.Time represents UTC year 0 and year 10000
+// without complaint, so Go itself has no use for the bound; it exists so this
+// client and the Python one accept the same documents. Python's datetime
+// cannot hold those instants and raised an uncaught OverflowError on the first
+// astimezone() of an accepted value. Do not remove it as dead code.
+//
+// The schema pattern bounds the LOCAL fields; the instant is fields x offset,
+// and 0001-01-01T00:00:00+23:59 is UTC year 0000. A regex cannot see that.
+// principal.v1 has no clock-skew check, so there is no ordering to preserve.
+func principalInstantInRange(field string, moment time.Time) error {
+	if year := moment.UTC().Year(); year < 1 || year > 9999 {
+		return fmt.Errorf(
+			"%s: /%s %s normalises to UTC year %d, outside 0001-01-01..9999-12-31",
+			PrincipalSurface, field, moment.Format(time.RFC3339), year)
+	}
+	return nil
+}
+
+// checkTimestampRange applies principalInstantInRange to every timestamp the
+// document carries. It lives here and not in Timestamp.UnmarshalJSON because
+// Timestamp is shared with provisioning-event.v1 and audit-event.v1, which
+// report the same rule under their own surface.
+func checkTimestampRange(p *Principal) error {
+	for _, field := range []struct {
+		name   string
+		moment time.Time
+	}{
+		{"authentication/authenticated_at", p.Authentication.AuthenticatedAt.Time},
+		{"issued_at", p.IssuedAt.Time},
+		{"expires_at", p.ExpiresAt.Time},
+	} {
+		if err := principalInstantInRange(field.name, field.moment); err != nil {
+			return err
+		}
+	}
+	for index, hop := range p.ActorChain {
+		if err := principalInstantInRange(fmt.Sprintf("actor_chain/%d/started_at", index), hop.StartedAt.Time); err != nil {
+			return err
+		}
+		if err := principalInstantInRange(fmt.Sprintf("actor_chain/%d/expires_at", index), hop.ExpiresAt.Time); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Credential is the credential that authenticated a principal.
 //
 // Present because TRD section 2 principle 1 makes credential class part of
@@ -336,6 +385,9 @@ func checkDelegationBounds(chain []Delegation) error {
 // first would silently drop any field the struct does not declare, which is
 // exactly the divergence additionalProperties:false exists to catch.
 func PrincipalFromWire(root string, raw []byte) (*Principal, error) {
+	if err := refuseDuplicateMembers(raw); err != nil {
+		return nil, err
+	}
 	var document any
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return nil, fmt.Errorf("%s: not valid JSON: %w", PrincipalSurface, err)
@@ -346,6 +398,9 @@ func PrincipalFromWire(root string, raw []byte) (*Principal, error) {
 	var principal Principal
 	if err := json.Unmarshal(raw, &principal); err != nil {
 		return nil, fmt.Errorf("%s: decoding validated document: %w", PrincipalSurface, err)
+	}
+	if err := checkTimestampRange(&principal); err != nil {
+		return nil, err
 	}
 	if err := checkDelegationBounds(principal.ActorChain); err != nil {
 		return nil, err

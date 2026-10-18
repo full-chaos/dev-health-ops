@@ -222,6 +222,10 @@
   {
    "id": "C1",
    "summary": "a repeated kid: the schema cannot see it, the consumer refuses it"
+  },
+  {
+   "id": "C2",
+   "summary": "a repeated member name inside one JSON object: parsers keep the last value so the schema sees one, the consumer refuses the bytes"
   }
  ],
  "rows": [
@@ -3818,5 +3822,212 @@
    ],
    "why": "one bad key refuses the whole document"
   }
- ]
+ ],
+ "byte_layer_rows": [
+  {
+   "id": "BL-control-valid",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "why": "a plain valid document",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}"
+  },
+  {
+   "id": "BL-whitespace-around",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "why": "JSON whitespace around the document",
+   "raw": " \n\t{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}\r\n "
+  },
+  {
+   "id": "BL-trailing-null",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "a second JSON value after the document",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]} null"
+  },
+  {
+   "id": "BL-trailing-second-document",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "two whole documents in one file",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}"
+  },
+  {
+   "id": "BL-trailing-garbage",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "bytes after the document",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}x"
+  },
+  {
+   "id": "BL-duplicate-kid-member",
+   "property": "BL",
+   "class": "client_enforced",
+   "consumer": "refuse",
+   "schema": "accept",
+   "why": "a repeated member inside one key: parsers keep the last, the consumer refuses",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"a\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}",
+   "declared_as": "C2"
+  },
+  {
+   "id": "BL-duplicate-keys-member",
+   "property": "BL",
+   "class": "client_enforced",
+   "consumer": "refuse",
+   "schema": "accept",
+   "why": "a repeated top-level member",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"a\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}],\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"b\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}",
+   "declared_as": "C2"
+  },
+  {
+   "id": "BL-duplicate-member-by-fold",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "kid and KID in one key: the consumer folds names; the schema sees KID as undeclared",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"a\",\"KID\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}"
+  },
+  {
+   "id": "BL-byte-order-mark",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "UTF-8 BOM before the document",
+   "raw_hex": "efbbbf7b226b657973223a5b7b226b7479223a224f4b50222c22637276223a2245643235353139222c22616c67223a224564445341222c226b6964223a226b222c2278223a224578616d706c655075626c69634b6579466f72436f6e747261637446697874757265734f6e6c7941414141227d5d7d"
+  },
+  {
+   "id": "BL-invalid-utf8-in-kid",
+   "property": "BL",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "why": "a raw 0xFF byte inside the kid string: the consumer's decoder substitutes U+FFFD",
+   "raw_hex": "7b226b657973223a5b7b226b7479223a224f4b50222c22637276223a2245643235353139222c22616c67223a224564445341222c226b6964223a2261ff62222c2278223a224578616d706c655075626c69634b6579466f72436f6e747261637446697874757265734f6e6c7941414141227d5d7d",
+   "declared_as": "N4"
+  },
+  {
+   "id": "BL-escaped-ascii-kid",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "why": "kid spelled with a \\u escape of an ASCII letter: same value after decoding",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"\\u006b\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}"
+  },
+  {
+   "id": "BL-lone-surrogate-escape-kid",
+   "property": "BL",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "why": "kid holding an unpaired surrogate escape: Go substitutes U+FFFD, others keep the surrogate",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"a\\ud800b\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}",
+   "declared_as": "N4"
+  },
+  {
+   "id": "BL-line-comment",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "a // comment after the document",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]} // c"
+  },
+  {
+   "id": "BL-block-comment",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "a /* */ comment inside the document",
+   "raw": "{/* c */\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}"
+  },
+  {
+   "id": "BL-trailing-comma",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "a trailing comma in the keys array",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"},]}"
+  },
+  {
+   "id": "BL-single-quotes",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "single-quoted names and strings",
+   "raw": "{'keys':[]}"
+  },
+  {
+   "id": "BL-empty-file",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "zero bytes",
+   "raw": ""
+  },
+  {
+   "id": "BL-whitespace-only-file",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "only whitespace",
+   "raw": "  \n"
+  },
+  {
+   "id": "BL-bare-number",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "a JSON number as the document",
+   "raw": "1"
+  }
+ ],
+ "byte_layer_parse_rule": "schema verdict for a byte row: decode the bytes as strict UTF-8 (Go: json.Unmarshal, which substitutes U+FFFD), parse with the language's ordinary JSON parser (last duplicate member wins, trailing content is an error), then validate. A parse failure is refuse. The consumer verdict is Keys() on the file.",
+ "alphabets": {
+  "x_characters": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+  "kid_range": [
+   "U+0021",
+   "U+007E"
+  ],
+  "claim": "a 43-character x whose 43rd character is c is accepted by the consumer and by the schema exactly when c is in x_characters; a one-character kid c is accepted by the schema exactly when c is in kid_range. Checked for every code point (schema) and for every ASCII character and every Unicode category sample (consumer)."
+ },
+ "inventory": {
+  "rows": 185,
+  "by_property": {
+   "P1": 17,
+   "P10": 13,
+   "P2": 9,
+   "P3": 13,
+   "P4": 52,
+   "P5": 15,
+   "P6": 6,
+   "P7": 22,
+   "P8": 27,
+   "P9": 11
+  },
+  "unicode_categories": 29,
+  "unicode_categories_excluded": [
+   "Cs",
+   "LC"
+  ],
+  "byte_layer_rows": 19
+ }
 }

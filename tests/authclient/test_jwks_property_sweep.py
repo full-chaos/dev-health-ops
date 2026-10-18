@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -130,7 +131,7 @@ def test_the_sweep_file_is_where_the_go_test_reads_it() -> None:
 def test_every_narrowing_is_in_a_declared_class_the_schema_names() -> None:
     classes = {c["id"]: 0 for c in SWEEP.get("declared_classes", [])}
     assert classes, "the sweep declares no narrowing classes"
-    for row in ROWS:
+    for row in ROWS + BYTE_ROWS:
         if row["class"] == "agreement":
             assert "declared_as" not in row, row["id"]
             continue
@@ -144,3 +145,67 @@ def test_every_narrowing_is_in_a_declared_class_the_schema_names() -> None:
     for class_id, rows in classes.items():
         assert rows, f"class {class_id} has no row"
         assert f"[{class_id}]" in schema["description"], class_id
+
+
+BYTE_ROWS = SWEEP["byte_layer_rows"]
+
+
+def test_the_inventory_is_closed() -> None:
+    inventory = SWEEP["inventory"]
+    assert len(ROWS) == inventory["rows"]
+    counts: dict[str, int] = {}
+    for row in ROWS:
+        counts[row["property"]] = counts.get(row["property"], 0) + 1
+    assert counts == inventory["by_property"]
+    assert len(SWEEP["unicode_categories"]) == inventory["unicode_categories"]
+    assert len(BYTE_ROWS) == inventory["byte_layer_rows"]
+    assert sorted(SWEEP["unicode_categories_excluded"]) == ["Cs", "LC"]
+    assert inventory["unicode_categories_excluded"] == ["Cs", "LC"]
+
+
+def test_every_unicode_category_python_knows_has_an_entry_or_is_cs() -> None:
+    """Derived from unicodedata, independent of the sweep file's own list."""
+    known = {
+        unicodedata.category(chr(c))
+        for c in range(0x110000)
+        if not 0xD800 <= c <= 0xDFFF
+    }
+    listed = {e["category"] for e in SWEEP["unicode_categories"]}
+    assert known <= listed, sorted(known - listed)
+
+
+def test_every_code_point_as_x_and_as_kid_matches_the_literal_alphabets() -> None:
+    alphabet = set(SWEEP["alphabets"]["x_characters"])
+    assert len(alphabet) == 64
+    lo, hi = (int(v.removeprefix("U+"), 16) for v in SWEEP["alphabets"]["kid_range"])
+    prefix = SWEEP["base_document"]["keys"][0]["x"][:42]
+    for code in range(0x110000):
+        if 0xD800 <= code <= 0xDFFF:
+            continue
+        # dense through the first 0x3000, then a stride; Go covers all of the BMP
+        if (code >= 0x3000 and code % 7) or (code > 0xFFFF and code % 61):
+            continue
+        char = chr(code)
+        doc = copy.deepcopy(SWEEP["base_document"])
+        doc["keys"][0]["x"] = prefix + char
+        assert verdict(doc) == ("accept" if char in alphabet else "refuse"), hex(code)
+        doc = copy.deepcopy(SWEEP["base_document"])
+        doc["keys"][0]["kid"] = char
+        assert verdict(doc) == ("accept" if lo <= code <= hi else "refuse"), hex(code)
+
+
+def _parse(raw: bytes) -> Any:
+    return json.loads(raw.decode("utf-8"))
+
+
+@pytest.mark.parametrize("row", BYTE_ROWS, ids=lambda r: r["id"])
+def test_every_byte_layer_row_has_the_schema_path_verdict_its_literal_names(
+    row: dict[str, Any],
+) -> None:
+    assert row["class"] == _class_of(row["consumer"], row["schema"])
+    raw = row["raw"].encode("utf-8") if "raw" in row else bytes.fromhex(row["raw_hex"])
+    try:
+        got = verdict(_parse(raw))
+    except ValueError:
+        got = "refuse"
+    assert got == row["schema"]

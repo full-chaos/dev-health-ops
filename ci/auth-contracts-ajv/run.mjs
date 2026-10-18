@@ -325,7 +325,7 @@ for (const surface of surfaces) {
     if (!Array.isArray(sweep.rows) || sweep.rows.length < 100) fail(`${surface}: property sweep has too few rows`);
     const classIds = new Map((sweep.declared_classes ?? []).map((c) => [c.id, 0]));
     if (classIds.size === 0) fail(`${surface}: the sweep declares no narrowing classes`);
-    for (const row of sweep.rows ?? []) {
+    for (const row of [...(sweep.rows ?? []), ...(sweep.byte_layer_rows ?? [])]) {
       if (row.class === "agreement") {
         if (row.declared_as !== undefined) fail(`${surface}/${row.id}: an agreement row names a class`);
       } else if (!classIds.has(row.declared_as)) {
@@ -356,6 +356,56 @@ for (const surface of surfaces) {
       doc.keys[0].kid = `a${String.fromCodePoint(parseInt(entry.rune.slice(2), 16))}b`;
       const got = verdict(doc);
       if (got !== entry.schema) fail(`${surface}/category ${entry.category}: ajv ${got}s, the entry says ${entry.schema}`);
+    }
+    if (surface === "jwks") {
+      const inv = sweep.inventory ?? {};
+      if (sweep.rows.length !== inv.rows) fail(`${surface}: ${sweep.rows.length} sweep rows, inventory says ${inv.rows}`);
+      const perProperty = {};
+      for (const row of sweep.rows) perProperty[row.property] = (perProperty[row.property] ?? 0) + 1;
+      if (JSON.stringify(Object.entries(perProperty).sort()) !== JSON.stringify(Object.entries(inv.by_property ?? {}).sort())) {
+        fail(`${surface}: rows per property ${JSON.stringify(perProperty)} differ from the inventory`);
+      }
+      if ((sweep.unicode_categories ?? []).length !== inv.unicode_categories) fail(`${surface}: unicode category count differs from the inventory`);
+      if ((sweep.byte_layer_rows ?? []).length !== inv.byte_layer_rows) fail(`${surface}: byte-layer row count differs from the inventory`);
+      if (JSON.stringify(Object.keys(sweep.unicode_categories_excluded ?? {}).sort()) !== '["Cs","LC"]') {
+        fail(`${surface}: excluded Unicode categories must be exactly Cs and LC`);
+      }
+      const alphabet = new Set(sweep.alphabets.x_characters);
+      if (alphabet.size !== 64) fail(`${surface}: the x alphabet must hold 64 characters`);
+      const [lo, hi] = sweep.alphabets.kid_range.map((v) => parseInt(v.slice(2), 16));
+      const xPrefix = sweep.base_document.keys[0].x.slice(0, 42);
+      for (let code = 0; code <= 0x10ffff; code += 1) {
+        if (code >= 0xd800 && code <= 0xdfff) continue;
+        if (code > 0xffff && code % 61 !== 0) continue;
+        const ch = String.fromCodePoint(code);
+        const xDoc = structuredClone(sweep.base_document);
+        xDoc.keys[0].x = xPrefix + ch;
+        checked += 1;
+        if (verdict(xDoc) !== (alphabet.has(ch) ? "accept" : "refuse")) {
+          fail(`${surface}: x ending in U+${code.toString(16)} has the wrong verdict`);
+          break;
+        }
+        const kDoc = structuredClone(sweep.base_document);
+        kDoc.keys[0].kid = ch;
+        if (verdict(kDoc) !== (code >= lo && code <= hi ? "accept" : "refuse")) {
+          fail(`${surface}: kid U+${code.toString(16)} has the wrong verdict`);
+          break;
+        }
+      }
+      const strict = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+      for (const row of sweep.byte_layer_rows ?? []) {
+        checked += 1;
+        const bytes = row.raw !== undefined ? Buffer.from(row.raw, "utf8") : Buffer.from(row.raw_hex, "hex");
+        let got;
+        try {
+          got = verdict(JSON.parse(strict.decode(bytes)));
+        } catch {
+          got = "refuse";
+        }
+        if (got !== row.schema) fail(`${surface}/${row.id}: ajv path ${got}s, the row says ${row.schema}`);
+        const want = row.consumer === row.schema ? "agreement" : row.consumer === "accept" ? "narrowing" : "client_enforced";
+        if (row.class !== want) fail(`${surface}/${row.id}: class ${row.class} does not follow from the pair`);
+      }
     }
     if (surface === "jwks") {
       for (let code = 0x21; code < 0x7f; code += 1) {

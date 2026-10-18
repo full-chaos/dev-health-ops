@@ -1,7 +1,9 @@
 package contracts
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,6 +40,16 @@ type sweepRow struct {
 	Ops        []sweepOp `json:"ops"`
 }
 
+type sweepByteRow struct {
+	ID         string  `json:"id"`
+	Class      string  `json:"class"`
+	DeclaredAs string  `json:"declared_as"`
+	Consumer   string  `json:"consumer"`
+	Schema     string  `json:"schema"`
+	Raw        *string `json:"raw"`
+	RawHex     string  `json:"raw_hex"`
+}
+
 type sweepCategory struct {
 	Category string `json:"category"`
 	Rune     string `json:"rune"`
@@ -50,7 +62,19 @@ type sweepFile struct {
 	Excluded   map[string]string `json:"unicode_categories_excluded"`
 	Categories []sweepCategory   `json:"unicode_categories"`
 	Rows       []sweepRow        `json:"rows"`
-	Classes    []struct {
+	ByteRows   []sweepByteRow    `json:"byte_layer_rows"`
+	Alphabets  struct {
+		XCharacters string   `json:"x_characters"`
+		KidRange    []string `json:"kid_range"`
+	} `json:"alphabets"`
+	Inventory struct {
+		Rows              int            `json:"rows"`
+		ByProperty        map[string]int `json:"by_property"`
+		UnicodeCategories int            `json:"unicode_categories"`
+		Excluded          []string       `json:"unicode_categories_excluded"`
+		ByteLayerRows     int            `json:"byte_layer_rows"`
+	} `json:"inventory"`
+	Classes []struct {
 		ID string `json:"id"`
 	} `json:"declared_classes"`
 }
@@ -402,6 +426,16 @@ func TestEverySweepNarrowingIsInADeclaredClassTheSchemaNames(t *testing.T) {
 		}
 		classes[row.DeclaredAs]++
 	}
+	for _, row := range sweep.ByteRows {
+		if row.Class == "agreement" {
+			continue
+		}
+		if _, ok := classes[row.DeclaredAs]; !ok {
+			t.Errorf("%s: %s row declared_as %q is not a declared class", row.ID, row.Class, row.DeclaredAs)
+			continue
+		}
+		classes[row.DeclaredAs]++
+	}
 	raw, err := os.ReadFile(filepath.Join(testRoot(t), "contracts/auth/v1/jsonschema/jwks.v1.schema.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -418,6 +452,186 @@ func TestEverySweepNarrowingIsInADeclaredClassTheSchemaNames(t *testing.T) {
 		}
 		if !strings.Contains(schema.Description, "["+id+"]") {
 			t.Errorf("class %s is not named as [%s] in the schema description", id, id)
+		}
+	}
+}
+
+// The inventory is a literal count the sweep file carries: removing a row, a
+// category or a byte-layer row without editing the count (a visible, reviewed
+// act) fails. The exclusions are pinned HERE as well, because moving a category
+// into the exclusion list would otherwise silently drop it from the sweep.
+func TestTheSweepInventoryIsClosed(t *testing.T) {
+	sweep := loadSweep(t)
+	if len(sweep.Rows) != sweep.Inventory.Rows {
+		t.Errorf("rows: %d present, inventory says %d", len(sweep.Rows), sweep.Inventory.Rows)
+	}
+	byProperty := map[string]int{}
+	for _, row := range sweep.Rows {
+		byProperty[row.Property]++
+	}
+	for property, want := range sweep.Inventory.ByProperty {
+		if byProperty[property] != want {
+			t.Errorf("property %s: %d rows, inventory says %d", property, byProperty[property], want)
+		}
+	}
+	if len(byProperty) != len(sweep.Inventory.ByProperty) {
+		t.Errorf("properties present %v differ from the inventory %v", byProperty, sweep.Inventory.ByProperty)
+	}
+	if len(sweep.Categories) != sweep.Inventory.UnicodeCategories {
+		t.Errorf("categories: %d present, inventory says %d", len(sweep.Categories), sweep.Inventory.UnicodeCategories)
+	}
+	if len(sweep.ByteRows) != sweep.Inventory.ByteLayerRows {
+		t.Errorf("byte-layer rows: %d present, inventory says %d", len(sweep.ByteRows), sweep.Inventory.ByteLayerRows)
+	}
+	// Cs cannot be carried in a JSON string; LC is the union of Lu, Ll and Lt.
+	if got := fmt.Sprint(sortedKeys(sweep.Excluded)); got != "[Cs LC]" {
+		t.Errorf("excluded categories are %s, want exactly [Cs LC]", got)
+	}
+	if fmt.Sprint(sweep.Inventory.Excluded) != "[Cs LC]" {
+		t.Errorf("inventory excluded %v, want exactly [Cs LC]", sweep.Inventory.Excluded)
+	}
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func xDoc(t *testing.T, base map[string]any, x string) any {
+	t.Helper()
+	doc := deepCopy(t, base).(map[string]any)
+	doc["keys"].([]any)[0].(map[string]any)["x"] = x
+	return doc
+}
+
+// Every BMP code point and a stride of the rest, as the last character of a 43-character x and as a
+// one-character kid, against the schema; the expectation is the literal
+// alphabet and range in the sweep file, never derived from the pattern.
+func TestEveryCodePointAsXAndAsKidMatchesTheLiteralAlphabets(t *testing.T) {
+	sweep := loadSweep(t)
+	alphabet := map[rune]bool{}
+	for _, r := range sweep.Alphabets.XCharacters {
+		alphabet[r] = true
+	}
+	if len(alphabet) != 64 {
+		t.Fatalf("x alphabet has %d characters, want 64", len(alphabet))
+	}
+	lo, hi := parseRune(t, sweep.Alphabets.KidRange[0]), parseRune(t, sweep.Alphabets.KidRange[1])
+	prefix := sweep.Base["keys"].([]any)[0].(map[string]any)["x"].(string)
+	prefix = prefix[:42]
+	checked := 0
+	// Every code point of the BMP, then every 61st above it (the astral planes
+	// hold no ASCII, and a stride keeps the race build inside its time).
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if r >= 0xd800 && r <= 0xdfff {
+			continue
+		}
+		if r > 0xffff && r%61 != 0 {
+			continue
+		}
+		wantX := "refuse"
+		if alphabet[r] {
+			wantX = "accept"
+		}
+		if got := schemaVerdict(t, xDoc(t, sweep.Base, prefix+string(r))); got != wantX {
+			t.Fatalf("x ending in U+%04X: the schema %ss, the alphabet says %s", r, got, wantX)
+		}
+		wantKid := "refuse"
+		if r >= lo && r <= hi {
+			wantKid = "accept"
+		}
+		if got := schemaVerdict(t, kidDoc(t, sweep.Base, string(r))); got != wantKid {
+			t.Fatalf("kid U+%04X: the schema %ss, the range says %s", r, got, wantKid)
+		}
+		checked++
+	}
+	if checked < 0x10000 {
+		t.Fatalf("only %d code points checked", checked)
+	}
+}
+
+// The consumer side of the same claim: every ASCII character and every
+// category sample, as the last character of x.
+func TestTheRealConsumerAcceptsExactlyTheLiteralXAlphabetAtTheLastCharacter(t *testing.T) {
+	sweep := loadSweep(t)
+	alphabet := map[rune]bool{}
+	for _, r := range sweep.Alphabets.XCharacters {
+		alphabet[r] = true
+	}
+	prefix := sweep.Base["keys"].([]any)[0].(map[string]any)["x"].(string)[:42]
+	var runes []rune
+	for r := rune(0); r < 0x180; r++ {
+		runes = append(runes, r)
+	}
+	for _, c := range sweep.Categories {
+		runes = append(runes, parseRune(t, c.Rune))
+		if table, ok := unicode.Categories[c.Category]; ok {
+			runes = append(runes, sampleRunes(table)...)
+		}
+	}
+	for _, r := range runes {
+		if r >= 0xd800 && r <= 0xdfff {
+			continue
+		}
+		want := "refuse"
+		if alphabet[r] {
+			want = "accept"
+		}
+		doc := xDoc(t, sweep.Base, prefix+string(r))
+		if got := sweepConsumerVerdict(t, doc); got != want {
+			t.Errorf("x ending in U+%04X: the real consumer %ss, the alphabet says %s", r, got, want)
+		}
+	}
+}
+
+func decodeRaw(t *testing.T, row sweepByteRow) []byte {
+	t.Helper()
+	if row.Raw != nil {
+		return []byte(*row.Raw)
+	}
+	b, err := hex.DecodeString(row.RawHex)
+	if err != nil {
+		t.Fatalf("%s: %v", row.ID, err)
+	}
+	return b
+}
+
+// The byte layer: documents written as raw bytes, so duplicate members,
+// trailing content, a BOM and invalid UTF-8 reach the consumer as bytes.
+func TestEveryByteLayerRowMatchesItsLiteralVerdicts(t *testing.T) {
+	sweep := loadSweep(t)
+	seen := map[string]bool{}
+	for _, row := range sweep.ByteRows {
+		if seen[row.ID] {
+			t.Fatalf("byte row %s appears twice", row.ID)
+		}
+		seen[row.ID] = true
+		if row.Class != classOf(row.Consumer, row.Schema) {
+			t.Errorf("%s: class %q does not follow from the pair", row.ID, row.Class)
+		}
+		raw := decodeRaw(t, row)
+		path := filepath.Join(t.TempDir(), "jwks.json")
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got := "accept"
+		if _, err := authverify.NewEd25519JWKSVerifier(path).Keys(); err != nil {
+			got = "refuse"
+		}
+		if got != row.Consumer {
+			t.Errorf("%s: the real consumer %ss, the row says %s", row.ID, got, row.Consumer)
+		}
+		var decoded any
+		schema := "refuse"
+		if json.Unmarshal(raw, &decoded) == nil && Validate(testRoot(t), JWKSSurface, decoded) == nil {
+			schema = "accept"
+		}
+		if schema != row.Schema {
+			t.Errorf("%s: the schema path %ss, the row says %s", row.ID, schema, row.Schema)
 		}
 	}
 }

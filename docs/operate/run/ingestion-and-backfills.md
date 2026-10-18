@@ -52,6 +52,17 @@ planner widens the cap to exceed the overlap and records a warning naming both
 values. Treat that warning as a configuration defect to correct, not as a healthy
 steady state — the widened window is more expensive than the one requested.
 
+A GitHub work-items unit lists issues in updated order, oldest first
+(`sort=updated&direction=asc` with `since`), and stops at the first issue
+updated at or after the window end, so a bounded window completes however many
+newer issues the repository holds; an issue updated exactly at the end belongs
+to the next window. This changes the order of the request compared with the
+frozen Python provider, which read GitHub's default order (created, newest first)
+and skipped the newer items without stopping; the issues written per window are
+the same. The stop is the expected case: the unit logs one Info line
+`github_work_items_issue_list` (window, pages, `stopped_at_window_end`) and
+counts `dev_health_github_work_items_issue_list_stopped_total{reason="window_end"}`.
+
 Consequences to expect when reading run state:
 
 - A capped run is a healthy partial run, not a failure. Its window end is behind

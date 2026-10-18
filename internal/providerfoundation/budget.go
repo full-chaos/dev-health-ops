@@ -296,6 +296,9 @@ type Metrics struct {
 	// raw rows and left every derived table to the daily job, by provider --
 	// see RecordWorkItemDerivedTablesLeftToDailyJob.
 	workItemDerivedLeftToDaily map[string]uint64
+	// githubIssueListStops counts the GitHub work-items issue lists that stopped
+	// reading at the window end, by reason (always window_end).
+	githubIssueListStops map[string]uint64
 	// preparedRetiredEffectsSkipped counts the effects of a prepared
 	// work-items manifest that a recovering unit did not write because the
 	// daily job now owns their table, by provider -- see
@@ -333,6 +336,7 @@ func NewMetrics() *Metrics {
 		jiraDevStatus:                  map[string]uint64{},
 		gitlabClosingMR:                map[string]uint64{},
 		workItemDerivedLeftToDaily:     map[string]uint64{},
+		githubIssueListStops:           map[string]uint64{},
 		preparedRetiredEffectsSkipped:  map[string]uint64{},
 	}
 }
@@ -1263,6 +1267,19 @@ func (m *Metrics) RecordWorkItemDerivedTablesLeftToDailyJob(provider string) {
 	m.workItemDerivedLeftToDaily[label]++
 }
 
+// RecordGitHubIssueListStopped counts one GitHub work-items issue list that
+// stopped reading at the first issue updated at or after the window end. The
+// list is ordered by update, oldest first, so every later issue is newer; the
+// stop is the expected case of a bounded window.
+func (m *Metrics) RecordGitHubIssueListStopped() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.githubIssueListStops["window_end"]++
+}
+
 // RecordPreparedRetiredWorkItemEffectsSkipped counts the effects of one
 // prepared work-items manifest that a recovering unit completed without
 // writing (CHAOS-8811). The manifest was stored by a binary whose sync unit
@@ -1758,6 +1775,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_work_item_derived_tables_left_to_daily_job_total",
 		"Work-items sync units that stored raw rows and left every table computed from them (the three work-item metric tables, estimate coverage, team attribution, state durations, issue types, the two investment tables) to the daily job, by provider (CHAOS-8811).",
 		"provider", m.workItemDerivedLeftToDaily,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_work_items_issue_list_stopped_total",
+		"GitHub work-items issue lists that stopped reading at the first issue updated at or after the window end (CHAOS-10112), by reason. The stop is the expected case of a bounded window.",
+		"reason", m.githubIssueListStops,
 	); err != nil {
 		return err
 	}

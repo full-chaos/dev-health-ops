@@ -3,10 +3,12 @@ package providersync
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
@@ -142,5 +144,40 @@ func TestGitHubWorkItemsIssueListReadsEveryPageWhenNothingIsNewerThanTheWindow(t
 	}
 	if len(result.Rows.WorkItems) != 2 || len(issueListRequests(doer)) != 2 {
 		t.Fatalf("work items = %d, list requests = %d, want 2 and 2", len(result.Rows.WorkItems), len(issueListRequests(doer)))
+	}
+}
+
+// The stop at the window end is the expected case, so it is an Info field and a counter, never a Warn.
+func TestGitHubWorkItemsIssueListStopIsCountedAndLoggedAtInfo(t *testing.T) {
+	var logged lockedLogBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	replies := map[string][]githubWorkItemsRESTReply{"/repos/acme/api/issues": {{body: issueListPage(
+		issueListIssue(42, "2026-07-15T00:00:00Z"), issueListIssue(43, "2026-08-05T00:00:00Z"))}}}
+	replies["/repos/acme/api"] = []githubWorkItemsRESTReply{{body: `{"id":4567,"full_name":"Acme/API"}`}}
+	replies["/repos/acme/api/issues/42/events"] = []githubWorkItemsRESTReply{{body: `[]`}}
+	doer := &githubWorkItemsRESTDoer{t: t, replies: replies}
+	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
+	client.Metrics = providerfoundation.NewMetrics()
+	if _, err := (GitHubWorkItemsRESTCollector{}).Collect(context.Background(), issueListClaim(), client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	output := logged.String()
+	for _, want := range []string{"level=INFO msg=github_work_items_issue_list", "stopped_at_window_end=true", "pages=1"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("log lacks %q: %s", want, output)
+		}
+	}
+	if strings.Contains(output, "level=WARN") {
+		t.Errorf("the stop must not warn: %s", output)
+	}
+	var rendered strings.Builder
+	if err := client.Metrics.WritePrometheus(&rendered); err != nil {
+		t.Fatal(err)
+	}
+	if want := `dev_health_github_work_items_issue_list_stopped_total{reason="window_end"} 1`; !strings.Contains(rendered.String(), want) {
+		t.Errorf("metrics lack %q", want)
 	}
 }

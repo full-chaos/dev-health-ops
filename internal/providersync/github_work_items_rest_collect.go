@@ -285,16 +285,36 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 	normalizedAt time.Time,
 	result *GitHubWorkItemsRESTResult,
 ) error {
-	query := url.Values{"state": {"all"}, "per_page": {"100"}}
+	// The list is ordered by update, oldest first, and `since` is its only server-side bound, so the reader
+	// stops at the first issue updated at or after the window end: every later one is newer and belongs to a
+	// later window. In GitHub's default order (created, newest first) the end could not be found without
+	// paging every issue updated since the window start, which trips the page cap on a large repository
+	// (CHAOS-10112). Python read the default order and skipped; this is a declared request-order divergence.
+	query := url.Values{"state": {"all"}, "per_page": {"100"}, "sort": {"updated"}, "direction": {"asc"}}
 	if claim.SinceAt != nil {
 		query.Set("since", claim.SinceAt.UTC().Format(time.RFC3339))
 	}
+	stoppedAtWindowEnd := false
 	page, err := providerfoundation.CollectGitHubLinkPages(
 		ctx, client, providerfoundation.GitHubPageOptions{
 			Path: root + "/issues", Route: githubIssuesRoute, Query: query, MaxPages: collector.maxPages(),
+			StopAt: func(raw json.RawMessage) bool {
+				if issueListCrossedWindowEnd(raw, claim) {
+					stoppedAtWindowEnd = true
+					return true
+				}
+				return false
+			},
 		},
 	)
 	result.addPageEvidence(page)
+	slog.Default().InfoContext(ctx, "github_work_items_issue_list",
+		"org_id", claim.OrgID, "unit_id", claim.ID, "source_id", claim.SourceID,
+		"window_since", issueListBound(claim.SinceAt), "window_before", issueListBound(claim.BeforeAt),
+		"pages", page.Pages, "stopped_at_window_end", stoppedAtWindowEnd)
+	if stoppedAtWindowEnd {
+		client.Metrics.RecordGitHubIssueListStopped()
+	}
 	if err != nil {
 		return err
 	}
@@ -535,7 +555,18 @@ func githubWorkItemsRESTUpdatedAfterBefore(value *string, before *time.Time) boo
 		return false
 	}
 	updatedAt := parseGitHubWorkItemTime(value)
-	return updatedAt != nil && updatedAt.After(before.UTC())
+	// Half-open window [since, before): an issue updated exactly at the end belongs to the next window.
+	return updatedAt != nil && !updatedAt.Before(before.UTC())
+}
+
+// issueListCrossedWindowEnd is the StopAt predicate of the issue list: the first item updated at or after
+// the window end ends the read (the list is ordered by update, oldest first).
+func issueListCrossedWindowEnd(raw json.RawMessage, claim Claim) bool {
+	var listed githubWorkItemsRESTListIssue
+	if json.Unmarshal(raw, &listed) != nil {
+		return false
+	}
+	return githubWorkItemsRESTUpdatedAfterBefore(listed.UpdatedAt, claim.BeforeAt)
 }
 
 func githubWorkItemsRESTOptionalFailure(
@@ -615,4 +646,11 @@ func githubWorkItemCommentLookahead(limit int) int {
 		return limit
 	}
 	return limit + 1
+}
+
+func issueListBound(bound *time.Time) string {
+	if bound == nil {
+		return ""
+	}
+	return bound.UTC().Format(time.RFC3339Nano)
 }

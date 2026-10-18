@@ -37,7 +37,7 @@ type sqlOperandExemption struct {
 // fails the test, so a fixed or deleted call site cannot leave a silent hole.
 var sqlOperandExemptions = []sqlOperandExemption{
 	{
-		file: "grants.go", fn: "ApplyRuntimeGrants", operand: `strings.Join(granted, ", ")`,
+		file: "grants.go", fn: "applyRuntimeGrants", operand: `strings.Join(granted, ", ")`,
 		reason: "privilege keywords from the closed RuntimePosture manifest (TablePrivilege.privileges), not an identifier",
 	},
 	{

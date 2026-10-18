@@ -17,6 +17,7 @@ suite that only asserts rejections.
 from __future__ import annotations
 
 import json
+import re
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -406,6 +407,51 @@ def test_revision_range_agrees_with_go(value: object, expected: object) -> None:
             Principal.from_wire(document)
         return
     assert Principal.from_wire(document).membership_revision == expected
+
+
+REVISION_FIELDS = (
+    "membership_revision",
+    "policy_revision",
+    "grant_revision",
+    "entitlement_revision",
+)
+
+
+def _bytes_with_revision_token(field: str, token: str) -> bytes:
+    """Splice a raw number TOKEN into the fixture text, which json.dumps cannot do."""
+    text = (_fixture_dir() / "valid-human-minimal.json").read_text(encoding="utf-8")
+    spliced, count = re.subn(rf'("{field}":\s*)\d+', rf"\g<1>{token}", text)
+    assert count == 1, f"{field} not found exactly once in the fixture"
+    return spliced.encode("utf-8")
+
+
+@pytest.mark.parametrize("field", REVISION_FIELDS)
+@pytest.mark.parametrize("token", ["9007199254740993", str(2**63 - 1)])
+def test_integer_token_above_2_53_stays_exact_through_from_wire_bytes(
+    field: str, token: str
+) -> None:
+    """CHAOS-4910 pin, not red-first: the behaviour already held.
+
+    The ticket feared ``json`` rounds a revision above 2**53. It does so only
+    for a DECIMAL-form token; an integer token is a Python ``int`` and exact.
+    """
+    principal = Principal.from_wire_bytes(_bytes_with_revision_token(field, token))
+    assert getattr(principal, field) == int(token)
+
+
+@pytest.mark.parametrize("field", REVISION_FIELDS)
+@pytest.mark.parametrize(
+    "token", ["9007199254740993.0", "9007199254740992.0", "1e18", "7.0"]
+)
+def test_decimal_form_token_is_refused_through_from_wire_bytes(
+    field: str, token: str
+) -> None:
+    """CHAOS-4910 pin: decimal form is refused whatever its value (superseded
+    by ``refuse_decimal_form``; ``parse_float=Decimal`` is deliberately not used,
+    because Go refuses the same tokens and the two clients must agree)."""
+    with pytest.raises(ContractError, match="decimal or exponent form") as raised:
+        Principal.from_wire_bytes(_bytes_with_revision_token(field, token))
+    assert f"/{field}" in str(raised.value)
 
 
 @pytest.mark.parametrize("name", RAW_DUPLICATES)

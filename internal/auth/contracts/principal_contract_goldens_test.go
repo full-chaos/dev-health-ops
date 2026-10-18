@@ -1,7 +1,9 @@
 package contracts
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -521,6 +523,64 @@ func TestPrincipalRefusesADecimalFormRevisionInEveryField(t *testing.T) {
 				}
 				if _, err := PrincipalFromWire(root, raw); err == nil {
 					t.Fatalf("PrincipalFromWire accepted %s in %s", token, field)
+				}
+			})
+		}
+	}
+}
+
+// TestPrincipalWireKeepsIntegerRevisionsAboveTwoToThe53Exact is the Go twin of
+// the Python from_wire_bytes pins (CHAOS-4910). A pin, not red-first: the
+// behaviour already held. It runs through PrincipalFromWire, so a revision
+// field that went through float64 would turn it red.
+func TestPrincipalWireKeepsIntegerRevisionsAboveTwoToThe53Exact(t *testing.T) {
+	root := testRoot(t)
+	for _, field := range []string{
+		"membership_revision", "policy_revision", "grant_revision", "entitlement_revision",
+	} {
+		for _, token := range []string{"9007199254740993", "9223372036854775807"} {
+			t.Run(field+"/"+token, func(t *testing.T) {
+				var document map[string]any
+				if err := json.Unmarshal(loadFixture(t, "valid-human-minimal.json"), &document); err != nil {
+					t.Fatalf("fixture is not valid JSON: %v", err)
+				}
+				document[field] = json.RawMessage(token)
+				raw, err := json.Marshal(document)
+				if err != nil {
+					t.Fatalf("re-marshalling: %v", err)
+				}
+				principal, err := PrincipalFromWire(root, raw)
+				if err != nil {
+					t.Fatalf("PrincipalFromWire refused integer token %s in %s: %v", token, field, err)
+				}
+				var round map[string]any
+				out, err := json.Marshal(principal)
+				if err != nil {
+					t.Fatalf("marshal: %v", err)
+				}
+				dec := json.NewDecoder(bytes.NewReader(out))
+				dec.UseNumber()
+				if err := dec.Decode(&round); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				if got := fmt.Sprint(round[field]); got != token {
+					t.Fatalf("%s = %s after PrincipalFromWire, want %s", field, got, token)
+				}
+			})
+		}
+		for _, token := range []string{"9007199254740993.0", "9007199254740992.0"} {
+			t.Run(field+"/"+token, func(t *testing.T) {
+				var document map[string]any
+				if err := json.Unmarshal(loadFixture(t, "valid-human-minimal.json"), &document); err != nil {
+					t.Fatalf("fixture is not valid JSON: %v", err)
+				}
+				document[field] = json.RawMessage(token)
+				raw, err := json.Marshal(document)
+				if err != nil {
+					t.Fatalf("re-marshalling: %v", err)
+				}
+				if _, err := PrincipalFromWire(root, raw); err == nil {
+					t.Fatalf("PrincipalFromWire accepted decimal-form %s in %s", token, field)
 				}
 			})
 		}

@@ -383,7 +383,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		},
 	})
 	t.Log(receipt)
-	createdLedger.reset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_retention_policies")
+	createdLedger.verifyThenReset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_retention_policies")
 
 	compare := func(name, query string) {
 		t.Helper()

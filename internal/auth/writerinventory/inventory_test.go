@@ -124,6 +124,35 @@ func Cte(db interface{ Exec(string, ...any) }) {
 	db.Exec("WITH x AS (UPDATE auth.principals SET status = 'x' RETURNING id) SELECT 1 FROM x")
 }
 
+func Hint(db interface{ Exec(string, ...any) }) {
+	db.Exec("INSERT /* hint */ INTO -- note\n users (id) VALUES ($1)")
+}
+
+func Trunc(db interface{ Exec(string, ...any) }) {
+	db.Exec("TRUNCATE TABLE users, refresh_tokens CASCADE")
+}
+
+const (
+	firstSQL = "INSERT INTO login_attempts (id) VALUES ($1)"
+	secondSQL
+)
+
+func UsesSecond(db interface{ Exec(string, ...any) }) {
+	db.Exec(secondSQL)
+}
+
+var linkSQL = map[string]struct{ del, ins string }{
+	"a": {del: "DELETE FROM password_reset_tokens WHERE user_id = $1", ins: "INSERT INTO password_reset_tokens (id) VALUES ($1)"},
+}
+
+func Replace(db interface{ Exec(string, ...any) }, k string) {
+	db.Exec(linkSQL[k].del)
+}
+
+func Other(db interface{ Exec(string, ...any) }, k string) {
+	db.Exec(linkSQL[k].ins)
+}
+
 var tableSQL = map[string]string{
 	"a": "TRUNCATE TABLE auth.sessions",
 }
@@ -155,8 +184,15 @@ func TestPlantedWritersAreRedAndStaleEntriesFail(t *testing.T) {
 		"p/planted.go|Concat|auth.sessions|DELETE",
 		"p/planted.go|Cte|auth.principals|UPDATE",
 		"p/planted.go|Direct|public.refresh_tokens|UPDATE",
+		"p/planted.go|Hint|public.users|INSERT",
+		"p/planted.go|Other|public.password_reset_tokens|INSERT",
+		"p/planted.go|Replace|public.password_reset_tokens|DELETE",
+		"p/planted.go|Trunc|public.refresh_tokens|TRUNCATE",
+		"p/planted.go|Trunc|public.users|TRUNCATE",
 		"p/planted.go|Upsert|public.memberships|UPSERT",
+		"p/planted.go|UsesSecond|public.login_attempts|INSERT",
 		"p/planted.go|ViaConst|public.users|INSERT",
+		"p/planted.go|pkgdecl:firstSQL|public.login_attempts|INSERT",
 		"p/planted.go|pkgdecl:tableSQL|auth.sessions|TRUNCATE",
 	}
 	var got []string
@@ -187,5 +223,26 @@ func TestPlantedWritersAreRedAndStaleEntriesFail(t *testing.T) {
 	wrongVerb[0].Table = "public.users"
 	if u, s := compare(found, wrongVerb); len(u) != 1 || len(s) != 1 {
 		t.Fatalf("a key differing in one part must be both unlisted and stale: u=%v s=%v", u, s)
+	}
+}
+
+func TestWatchedReadsQuotedAndQualifiedMigrationTables(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal", "storage", "postgres", "authschema", "migrations")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sql := "CREATE TABLE \"new_table\" (id int);\nCREATE TABLE IF NOT EXISTS auth.other (id int);\nCREATE UNLOGGED TABLE plain (id int);\n"
+	if err := os.WriteFile(filepath.Join(dir, "0001.sql"), []byte(sql), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, err := Watched(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"auth.new_table", "auth.other", "auth.plain"} {
+		if !w[want] {
+			t.Errorf("%s missing from the watched set: %v", want, w)
+		}
 	}
 }

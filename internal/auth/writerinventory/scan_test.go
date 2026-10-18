@@ -44,9 +44,10 @@ var (
 	reInsert   = regexp.MustCompile(`(?i)\binsert\s+into\s+(?:only\s+)?([a-z0-9_."]+)`)
 	reUpdate   = regexp.MustCompile(`(?i)\bupdate\s+(?:only\s+)?([a-z0-9_."]+)\s+(?:(?:as\s+)?[a-z0-9_]+\s+)?set\b`)
 	reDelete   = regexp.MustCompile(`(?i)\bdelete\s+from\s+(?:only\s+)?([a-z0-9_."]+)`)
-	reTruncate = regexp.MustCompile(`(?i)\btruncate\s+(?:table\s+)?(?:only\s+)?([a-z0-9_."]+)`)
+	reTruncate = regexp.MustCompile(`(?i)\btruncate\s+(?:table\s+)?(?:only\s+)?([a-z0-9_."]+(?:\s*,\s*(?:only\s+)?[a-z0-9_."]+)*)`)
 	reUpsert   = regexp.MustCompile(`(?i)\bon\s+conflict\b.*?\bdo\s+update\b`)
-	reCreate   = regexp.MustCompile(`(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?([a-z0-9_]+)`)
+	reCreate   = regexp.MustCompile(`(?i)create\s+(?:unlogged\s+)?table\s+(?:if\s+not\s+exists\s+)?(?:"?auth"?\s*\.\s*)?"?([a-z0-9_]+)"?`)
+	reComment  = regexp.MustCompile(`(?s)/\*.*?\*/|--[^\n]*`)
 	reSpace    = regexp.MustCompile(`\s+`)
 )
 
@@ -101,14 +102,10 @@ func normTable(raw string) string {
 
 // sqlWriters returns the (table, verb) pairs one SQL string writes, watched tables only.
 func sqlWriters(sql string, watched map[string]bool) [][2]string {
-	sql = reSpace.ReplaceAllString(sql, " ")
+	sql = reSpace.ReplaceAllString(reComment.ReplaceAllString(sql, " "), " ")
 	var out [][2]string
 	add := func(re *regexp.Regexp, verb string) {
 		for _, m := range re.FindAllStringSubmatchIndex(sql, -1) {
-			t := normTable(sql[m[2]:m[3]])
-			if !watched[t] {
-				continue
-			}
 			v := verb
 			if verb == "INSERT" {
 				// an ON CONFLICT ... DO UPDATE in the rest of this statement makes it an upsert
@@ -120,7 +117,13 @@ func sqlWriters(sql string, watched map[string]bool) [][2]string {
 					v = "UPSERT"
 				}
 			}
-			out = append(out, [2]string{t, v})
+			for _, raw := range strings.Split(sql[m[2]:m[3]], ",") {
+				raw = strings.TrimSpace(raw)
+				raw = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(raw), "only "))
+				if t := normTable(raw); watched[t] {
+					out = append(out, [2]string{t, v})
+				}
+			}
 		}
 	}
 	add(reInsert, "INSERT")
@@ -174,18 +177,35 @@ func (e *evaluator) eval(x ast.Expr) string {
 	return unresolved
 }
 
-func collectDecls(gd *ast.GenDecl, into map[string]ast.Expr) {
+// specPairs yields (name, value) for each spec of a const or var block; a const spec with no values repeats the previous values.
+func specPairs(gd *ast.GenDecl) (names []string, values []ast.Expr) {
 	if gd.Tok != token.CONST && gd.Tok != token.VAR {
-		return
+		return nil, nil
 	}
+	var prev []ast.Expr
 	for _, sp := range gd.Specs {
 		vs := sp.(*ast.ValueSpec)
-		if len(vs.Names) != len(vs.Values) {
+		vals := vs.Values
+		if len(vals) == 0 && gd.Tok == token.CONST {
+			vals = prev
+		} else {
+			prev = vals
+		}
+		if len(vs.Names) != len(vals) {
 			continue
 		}
 		for i, nm := range vs.Names {
-			into[nm.Name] = vs.Values[i]
+			names = append(names, nm.Name)
+			values = append(values, vals[i])
 		}
+	}
+	return names, values
+}
+
+func collectDecls(gd *ast.GenDecl, into map[string]ast.Expr) {
+	names, values := specPairs(gd)
+	for i, n := range names {
+		into[n] = values[i]
 	}
 }
 
@@ -239,6 +259,44 @@ func walkStrings(root ast.Node, ev *evaluator, fn func(string)) {
 				fn(ev.eval(x))
 				return false
 			}
+		case *ast.SelectorExpr:
+			// X[key].field on a package-level map or struct: only the keyed field values are this function's SQL
+			base := x.X
+			for {
+				if ix, ok := base.(*ast.IndexExpr); ok {
+					base = ix.X
+				} else if pe, ok := base.(*ast.ParenExpr); ok {
+					base = pe.X
+				} else {
+					break
+				}
+			}
+			id, ok := base.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			v, ok := ev.pkg.vals[id.Name]
+			if !ok || isStringExpr(v) || ev.local[id.Name] != nil {
+				return true
+			}
+			var found bool
+			ast.Inspect(v, func(m ast.Node) bool {
+				if kv, ok := m.(*ast.KeyValueExpr); ok {
+					if k, ok := kv.Key.(*ast.Ident); ok && k.Name == x.Sel.Name {
+						found = true
+						walkStrings(kv.Value, ev, fn)
+						return false
+					}
+				}
+				return true
+			})
+			if !found {
+				return true
+			}
+			if ev.inFunc {
+				ev.pkg.used[id.Name] = true
+			}
+			return false
 		case *ast.Ident:
 			if v, ok := ev.local[x.Name]; ok {
 				if !ev.visiting[x.Name] {
@@ -246,7 +304,7 @@ func walkStrings(root ast.Node, ev *evaluator, fn func(string)) {
 					walkStrings(v, ev, fn)
 					delete(ev.visiting, x.Name)
 				}
-			} else if v, ok := ev.pkg.vals[x.Name]; ok && isStringExpr(v) && !ev.visiting[x.Name] {
+			} else if v, ok := ev.pkg.vals[x.Name]; ok && !ev.visiting[x.Name] {
 				if ev.inFunc {
 					ev.pkg.used[x.Name] = true
 				}
@@ -331,21 +389,16 @@ func Scan(root string, watched map[string]bool) ([]Writer, error) {
 			rel = filepath.ToSlash(rel)
 			for _, d := range parsed[f].Decls {
 				gd, ok := d.(*ast.GenDecl)
-				if !ok || (gd.Tok != token.CONST && gd.Tok != token.VAR) {
+				if !ok {
 					continue
 				}
-				for _, sp := range gd.Specs {
-					vs := sp.(*ast.ValueSpec)
-					if len(vs.Names) != len(vs.Values) {
+				names, values := specPairs(gd)
+				for i, name := range names {
+					if pkg.used[name] {
 						continue
 					}
-					for i, nm := range vs.Names {
-						if pkg.used[nm.Name] {
-							continue
-						}
-						ev := &evaluator{pkg: pkg, visiting: map[string]bool{nm.Name: true}}
-						walkStrings(vs.Values[i], ev, func(s string) { record(rel, "pkgdecl:"+nm.Name, s) })
-					}
+					ev := &evaluator{pkg: pkg, visiting: map[string]bool{name: true}}
+					walkStrings(values[i], ev, func(s string) { record(rel, "pkgdecl:"+name, s) })
 				}
 			}
 		}

@@ -15,6 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/authruntime"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -52,6 +53,8 @@ var verbServices = map[string]string{
 	"go-river-migrate":                 "`dho migrate river`: opens the database at once; only the DSN groups are checked",
 	"go-contractcheck":                 "`dho contracts validate`: reads contract files, no DSN; only the DSN groups are checked",
 	"envelope-keys-init":               "`dho mint envelope-keys`: writes key files; only the DSN groups are checked",
+	"auth-keys-init":                   "`dho mint envelope-keys`: writes the auth signing key files; only the DSN groups are checked",
+	"auth-migrate":                     "`auth-migrate`: a standalone one-shot binary that opens the database at once; its own DSN and role settings are not measured here",
 	"go-sync-dispatch-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-finalize-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-post-route-activate":      "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
@@ -269,6 +272,37 @@ func startFindings(service composeGoService) []string {
 	return findings
 }
 
+// authServiceFindings runs auth-service's production start path (the same
+// authruntime.Execute cmd/auth-service calls) on the environment and command
+// compose gives it, with an already-cancelled context so no dependency is
+// opened. It is a standalone binary, not a dho verb, so startFindings cannot
+// run it. A configuration or argument error, or a start that printed nothing
+// (it never got past the configuration), is a finding.
+func authServiceFindings(service composeGoService) []string {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() {
+		done <- authruntime.Execute(ctx, service.command, lookupOf(service.env), authruntime.IO{
+			Stdout: &stdout, Stderr: &stderr,
+		})
+	}()
+	select {
+	case code := <-done:
+		out := stderr.String()
+		if strings.Contains(out, "configuration error") || strings.Contains(out, "argument error") || code == 2 {
+			return []string{fmt.Sprintf("%s: exit %d: %s", service.name, code, strings.TrimSpace(out))}
+		}
+		if stdout.Len() == 0 {
+			return []string{fmt.Sprintf("%s: exit %d without getting past the configuration: the guard measured nothing; stderr=%.300s", service.name, code, out)}
+		}
+	case <-time.After(60 * time.Second):
+		return []string{service.name + ": the start path did not return in 60s; the guard measured nothing"}
+	}
+	return nil
+}
+
 func guardFindings(t *testing.T, text []byte) []string {
 	t.Helper()
 	services := goServicesOf(t, text)
@@ -277,11 +311,22 @@ func guardFindings(t *testing.T, text []byte) []string {
 	}
 	var findings []string
 	for _, service := range services {
-		if len(service.command) == 0 {
-			findings = append(findings, service.name+": a Go image with no command: classify it")
+		if service.name == "auth-service" {
+			findings = append(findings, authServiceFindings(service)...)
 			continue
 		}
-		if _, verb := verbServices[service.name]; !verb && !shellServices[service.command[0]] {
+		_, verb := verbServices[service.name]
+		if len(service.command) == 0 {
+			// A standalone one-shot binary (auth-migrate) takes its image's
+			// entrypoint and no verb; it must still be classified.
+			if !verb {
+				findings = append(findings, service.name+": a Go image with no command: classify it")
+				continue
+			}
+			findings = append(findings, startFindings(service)...)
+			continue
+		}
+		if !verb && !shellServices[service.command[0]] {
 			findings = append(findings, fmt.Sprintf("%s: command %q is neither a shell service nor in verbServices: classify it", service.name, service.command[0]))
 			continue
 		}

@@ -293,6 +293,32 @@ budget well below the worker's stop grace period. Apply ClickHouse migrations
 109 and 110 before a worker runs with the phase on; with a table missing the
 phase stops and says so.
 
+### Investment categorization with an organization's own model
+
+An organization that stores a BYO LLM configuration (a `categorize` override,
+else its default row; see the BYO LLM per purpose section of the workspace
+settings page) can have its investment categorization run on its own provider,
+model and key. The `heavy` worker group does not hold `SETTINGS_ENCRYPTION_KEY`
+and must not, so it asks the api for the resolved configuration over the
+internal listener instead of reading the stored key.
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `ORG_LLM_CONFIG_URL` | Origin of the api internal listener, for example `http://api-internal:8080`. | empty (feature off) |
+| `ORG_LLM_CONFIG_TOKEN` | A `worker-llm-config` service credential (`svc_wllm_...`) holding the `llm_config:read` scope. Secret; give it to the `heavy` group only. | empty (feature off) |
+
+Both empty keeps categorization on the platform environment for every
+organization. Only one of the two set refuses the materialize family at start.
+With both set: an organization with no stored configuration, or an explicit
+request for another provider, uses the platform provider as before. An
+organization whose configuration exists but cannot be read (the api is down or
+refuses the credential), is unusable (unknown provider, hosted provider without
+a key, a base URL the SSRF guard rejects) or has no native client fails the
+run: it is never moved to the platform provider. An organization's own spend is
+admitted through its BYO LLM budget like the explain routes. The stamped
+`categorization_model_version` is the model that ran. Create the credential with
+`dho service-credentials create --service worker-llm-config --scope llm_config:read`.
+
 ### Investment provider batch mode
 
 The worker group that runs `investment.materialize` can send the categorization

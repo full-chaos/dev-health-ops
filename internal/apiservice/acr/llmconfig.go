@@ -191,12 +191,30 @@ func errorKind(err error) string {
 type PostgresCredentialVerifier struct {
 	Pool *pgxpool.Pool
 	Now  func() time.Time
+	// Service and TokenPrefix name the credential family this verifier accepts;
+	// empty means acr (svc_acr_). The worker llm-config route sets
+	// worker-llm-config and svc_wllm_.
+	Service     string
+	TokenPrefix string
 }
 
-const acrTokenPrefix = "svc_acr_"
+const (
+	acrTokenPrefix          = "svc_acr_"
+	workerLLMConfigService  = "worker-llm-config"
+	workerLLMConfigTokenPre = "svc_wllm_"
+)
+
+// WorkerCredentialVerifier verifies svc_wllm_ tokens of the worker-llm-config service.
+func WorkerCredentialVerifier(pool *pgxpool.Pool) PostgresCredentialVerifier {
+	return PostgresCredentialVerifier{Pool: pool, Service: workerLLMConfigService, TokenPrefix: workerLLMConfigTokenPre}
+}
 
 func (v PostgresCredentialVerifier) Verify(ctx context.Context, token, scope string) (string, error) {
-	if !strings.HasPrefix(token, acrTokenPrefix) || len(token) < 16 {
+	service, prefix := v.Service, v.TokenPrefix
+	if service == "" {
+		service, prefix = "acr", acrTokenPrefix
+	}
+	if !strings.HasPrefix(token, prefix) || len(token) < 16 {
 		return "", ErrCredentialInvalid
 	}
 	now := time.Now().UTC()
@@ -206,7 +224,7 @@ func (v PostgresCredentialVerifier) Verify(ctx context.Context, token, scope str
 	sum := sha256.Sum256([]byte(token))
 	presented := hex.EncodeToString(sum[:])
 	rows, err := v.Pool.Query(ctx, `SELECT id::text, token_hash, scopes::text, expires_at, revoked_at
-		FROM internal_service_credentials WHERE service_name = 'acr' AND token_prefix = $1`, token[:16])
+		FROM internal_service_credentials WHERE service_name = $1 AND token_prefix = $2`, service, token[:16])
 	if err != nil {
 		return "", err
 	}

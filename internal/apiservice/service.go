@@ -470,12 +470,19 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var store acr.EntitlementStore
 	var llmConfig acr.LLMConfigSource
 	var credentials acr.CredentialVerifier
+	var categorizeConfig acr.LLMConfigSource
+	var workerCredentials acr.CredentialVerifier
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
 		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeInvestigate)
 		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
+		categorizeConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeCategorize)
+		workerCredentials = acr.WorkerCredentialVerifier(deps.Pool)
 	}
-	return internalRoutesWith(acr.Deps{Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials})
+	return internalRoutesWith(acr.Deps{
+		Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials,
+		CategorizeLLMConfig: categorizeConfig, WorkerCredentials: workerCredentials,
+	})
 }
 
 // internalRoutesFor is InternalRoutes over an explicit store. The routes are

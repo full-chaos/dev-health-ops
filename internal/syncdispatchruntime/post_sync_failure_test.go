@@ -17,11 +17,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-type recordingFanoutObserver struct {
+type failureCountObserver struct {
 	outcomes []jobruntime.PostSyncFanoutOutcome
 }
 
-func (observer *recordingFanoutObserver) ObservePostSyncFanout(outcome jobruntime.PostSyncFanoutOutcome) error {
+func (observer *failureCountObserver) ObservePostSyncFanout(outcome jobruntime.PostSyncFanoutOutcome) error {
 	observer.outcomes = append(observer.outcomes, outcome)
 	return nil
 }
@@ -84,7 +84,7 @@ func TestCoordinatorWorkErrorNamesStageClassAndSQLStateNotTheText(t *testing.T) 
 
 func TestFanoutFailureLogsOneErrorLineWithRunStageAndClassAndCountsIt(t *testing.T) {
 	var logs bytes.Buffer
-	observer := &recordingFanoutObserver{}
+	observer := &failureCountObserver{}
 	service := &NativePostSyncService{
 		logger:         synclog.New(slog.New(slog.NewJSONHandler(&logs, nil))),
 		fanoutObserver: observer,

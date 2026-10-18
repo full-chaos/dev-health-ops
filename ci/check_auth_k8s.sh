@@ -11,8 +11,9 @@
 #   3. the key the service reads is mode 0400 and owned by uid 65532 (read
 #      through an ephemeral debug container: the image has no shell);
 #   4. the design the staging init container exists for is the only one that
-#      works: the Secret mounted straight at defaultMode 0400 is unreadable by
-#      uid 65532, and at 0440 with fsGroup the custody check rejects it;
+#      works: a Secret mounted straight in is a symlink the custody check refuses;
+#      as a regular file (subPath) at 0400 it is root-owned and unreadable by uid
+#      65532, and with fsGroup it becomes 0440, which the check rejects;
 #   5. the NetworkPolicy is ENFORCED: a labelled consumer reaches the API port, an
 #      unlabelled pod does not. If the cluster does not enforce policy this step
 #      FAILS; it is never skipped;
@@ -221,8 +222,12 @@ esac
 
 # --- 4. the trap: why the staging exists ----------------------------------------------------
 printf 'step 7: mounting the Secret directly cannot satisfy the custody check\n'
-trap_pod() { # name defaultMode fsGroup-line expected-reason
-  local name="$1" mode="$2" fsgroup="$3" reason="$4"
+trap_pod() { # name defaultMode fsGroup-line expected-reason subPath(yes|no)
+  local name="$1" mode="$2" fsgroup="$3" reason="$4" subpath="${5:-no}" mount
+  mount="{name: key, mountPath: /mnt/key, readOnly: true}"
+  if [ "${subpath}" = yes ]; then
+    mount="{name: key, mountPath: /mnt/key/signing-key.pem, subPath: signing-key.pem, readOnly: true}"
+  fi
   K delete pod "${name}" --ignore-not-found --wait=true >/dev/null
   K apply -f - <<EOF
 apiVersion: v1
@@ -246,7 +251,7 @@ spec:
       env:
         - name: AUTH_DATABASE_URI
           valueFrom: {secretKeyRef: {name: auth-db, key: AUTH_DATABASE_URI}}
-      volumeMounts: [{name: key, mountPath: /mnt/key, readOnly: true}]
+      volumeMounts: [${mount}]
   volumes:
     - name: key
       secret: {secretName: auth-key, defaultMode: ${mode}}
@@ -270,8 +275,14 @@ EOF
   }
   printf '%s: signing_key fails closed with %s\n' "${name}" "${reason}"
 }
-trap_pod trap-0400 256 "" key_file_unreadable
-trap_pod trap-0440-fsgroup 288 "fsGroup: 65532" key_file_mode_too_permissive
+# A Secret volume exposes every file as a SYMLINK into ..data, and the custody check
+# opens with O_NOFOLLOW: a plain mount is refused whatever its mode.
+trap_pod trap-direct-0400 256 "" key_file_unreadable
+trap_pod trap-direct-0440-fsgroup 288 "fsGroup: 65532" key_file_unreadable
+# A subPath mount is a regular file, which isolates the owner and mode reasons: root-owned
+# 0400 is unreadable by uid 65532, and fsGroup raises the file to 0440, which is refused.
+trap_pod trap-subpath-0400 256 "" key_file_unreadable yes
+trap_pod trap-subpath-0400-fsgroup 256 "fsGroup: 65532" key_file_mode_too_permissive yes
 
 # --- 5. NetworkPolicy is enforced ------------------------------------------------------------
 printf 'step 8: the NetworkPolicy is enforced, not merely present\n'
@@ -296,7 +307,7 @@ fi
 # --- 6. rollback ---------------------------------------------------------------------------------
 printf 'step 9: rollback leaves no auth object behind\n'
 K delete -f "${WORK}/service.yaml" -f "${WORK}/migrate.yaml" --wait=true
-K delete pod trap-0400 trap-0440-fsgroup --ignore-not-found --wait=true >/dev/null
+K delete pod trap-direct-0400 trap-direct-0440-fsgroup trap-subpath-0400 trap-subpath-0400-fsgroup --ignore-not-found --wait=true >/dev/null
 left="$(K get deploy,svc,job,networkpolicy -o name | grep -E 'auth-service|auth-migrate' || true)"
 printf 'auth objects left: [%s]\n' "${left}"
 [ -z "${left}" ] || die "auth objects remain after rollback: ${left}"

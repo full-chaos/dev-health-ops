@@ -135,7 +135,7 @@ func NewNativePostSyncService(
 	logger *synclog.Logger,
 ) (*NativePostSyncService, error) {
 	if pool == nil || daily == nil || remaining == nil || workGraph == nil || teamImport == nil || teamRepoOwnership == nil {
-		return nil, ErrPostSyncUnavailable
+		return nil, unavailable(stageConstruct, nil)
 	}
 	return &NativePostSyncService{
 		pool: pool, daily: daily, remaining: remaining, workGraph: workGraph,
@@ -147,8 +147,14 @@ func NewNativePostSyncService(
 // Fanout validates the exact River transport generation, reconstructs scope
 // from authoritative SyncRun state, and stages every child in one transaction.
 func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncArgs) (err error) {
+	observed := false
+	defer func() {
+		if err != nil {
+			service.observeFanoutFailure(ctx, args, err, observed)
+		}
+	}()
 	if service == nil || service.pool == nil || ctx == nil || args.valid() != nil {
-		return ErrPostSyncUnavailable
+		return unavailable(stageArgs, nil)
 	}
 	now := service.now().UTC()
 	// The touched-day record is read and written before the transaction, so
@@ -168,7 +174,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 	}
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
-		return ErrPostSyncUnavailable
+		return unavailable(stageBegin, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	// Writers that stage a signal inside this transaction (the dora overlap
@@ -215,6 +221,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		if !observe {
 			return
 		}
+		observed = true
 		if !committed {
 			service.observeFanout(jobruntime.PostSyncFanoutOutcomeError, args, "")
 			return
@@ -296,7 +303,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		return err
 	}
 	if commitErr := tx.Commit(ctx); commitErr != nil {
-		err = ErrPostSyncUnavailable
+		err = unavailable(stageCommit, commitErr)
 		return err
 	}
 	committed = true
@@ -305,6 +312,29 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		service.finishTouchedDays(ctx, args, touchedTake, touchedResult)
 	}
 	return nil
+}
+
+// observeFanoutFailure is the one ERROR line per failed fan-out attempt (CHAOS-8784): the run id, the stage and the error's class,
+// Go type and SQLSTATE (never its text). A failure before the plan is loaded is not part of the CHAOS-4263 outcome counter's
+// "did the daily fanout publish" question, so that counter is not fed twice: when the deferred outcome call has not run, the error
+// outcome is counted here, so a fan-out that fails before its plan no longer leaves no trace in the counter either.
+func (service *NativePostSyncService) observeFanoutFailure(ctx context.Context, args PostSyncArgs, err error, outcomeObserved bool) {
+	if service == nil {
+		return
+	}
+	stage := postSyncStageOf(err)
+	if stage == "" {
+		stage = "writer"
+	}
+	service.logger.Error(ctx, synclog.MsgPostSyncFanoutFailed,
+		synclog.Org(synclog.ParseID(args.OrganizationID())),
+		synclog.Run(synclog.ParseID(args.SyncRunID())),
+		synclog.Text(synclog.KeyReason, synclog.ParseLabel(string(stage))),
+		synclog.Failure(err),
+	)
+	if !outcomeObserved && service.fanoutObserver != nil {
+		_ = service.fanoutObserver.ObservePostSyncFanout(jobruntime.PostSyncFanoutOutcomeError)
+	}
 }
 
 // observeFanout logs the CHAOS-4263 fanout-outcome line (codex adversarial-
@@ -508,7 +538,7 @@ SELECT EXISTS (
       AND route.paused = false
 )`, args.OutboxID(), args.SyncRunID(), args.OrganizationID(), args.RouteGeneration()).Scan(&current)
 	if err != nil {
-		return false, ErrPostSyncUnavailable
+		return false, unavailable(stageReference, err)
 	}
 	return current, nil
 }
@@ -530,7 +560,7 @@ FOR SHARE`, args.SyncRunID(), args.OrganizationID()).Scan(&orgID, &integrationID
 		return nil, nil
 	}
 	if err != nil {
-		return nil, ErrPostSyncUnavailable
+		return nil, unavailable(stagePlanRun, err)
 	}
 
 	rows, err := tx.Query(ctx, `
@@ -539,7 +569,7 @@ FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid AND status = 'success'
 ORDER BY id`, args.SyncRunID())
 	if err != nil {
-		return nil, ErrPostSyncUnavailable
+		return nil, unavailable(stagePlanUnits, err)
 	}
 	defer rows.Close()
 	var (
@@ -555,7 +585,7 @@ ORDER BY id`, args.SyncRunID())
 		var provider, dataset string
 		var since, before *time.Time
 		if err := rows.Scan(&provider, &dataset, &since, &before); err != nil {
-			return nil, ErrPostSyncUnavailable
+			return nil, unavailable(stagePlanUnitScan, err)
 		}
 		capability, ok := providersync.Capability(provider, dataset)
 		if !ok {
@@ -582,7 +612,7 @@ ORDER BY id`, args.SyncRunID())
 		}
 	}
 	if rows.Err() != nil {
-		return nil, ErrPostSyncUnavailable
+		return nil, unavailable(stagePlanUnitsRows, rows.Err())
 	}
 	if !successfulUnit || len(targets) == 0 {
 		return nil, nil
@@ -611,7 +641,7 @@ FROM public.sync_configurations
 WHERE org_id = $1 AND integration_id = $2::uuid AND parent_id IS NULL
 ORDER BY created_at, id
 LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrPostSyncUnavailable
+		return nil, unavailable(stagePlanAutoImport, err)
 	}
 
 	_, hasWorkItems := targets["work-items"]

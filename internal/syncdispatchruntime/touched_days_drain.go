@@ -151,7 +151,7 @@ func NewTouchedDaysDrain(
 	pool *pgxpool.Pool, store TouchedDaysDrainStore, runs TouchedDaysDrainRuns, logger *synclog.Logger,
 ) (*TouchedDaysDrain, error) {
 	if pool == nil || store == nil || runs == nil || runs.RepositoryLimit() < 1 {
-		return nil, ErrPostSyncUnavailable
+		return nil, unavailable(stageDrainConstruct, nil)
 	}
 	if logger == nil {
 		logger = synclog.Default()
@@ -261,7 +261,7 @@ func (drain *TouchedDaysDrain) DrainTouchedDays(ctx context.Context, organizatio
 func (drain *TouchedDaysDrain) inFlight(ctx context.Context, organizationID string) (int, string, error) {
 	tx, err := drain.pool.Begin(ctx)
 	if err != nil {
-		return 0, "", ErrPostSyncUnavailable
+		return 0, "", unavailable(stageDrainInFlightBeg, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	runsState, err := drain.runs.RunsStateTx(ctx, tx, organizationID)
@@ -497,12 +497,12 @@ const touchedDrainLockNamespace = 8846
 func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass) error {
 	tx, err := drain.pool.Begin(ctx)
 	if err != nil {
-		return ErrPostSyncUnavailable
+		return unavailable(stageDrainStartBegin, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
 		touchedDrainLockNamespace, pass.organizationID); err != nil {
-		return ErrPostSyncUnavailable
+		return unavailable(stageDrainStartLock, err)
 	}
 	inFlight, err := drain.runs.InFlightTx(
 		ctx, tx, pass.organizationID, drain.now().UTC().Add(-touchedDrainInFlightWindow))
@@ -546,7 +546,7 @@ func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return ErrPostSyncUnavailable
+		return unavailable(stageDrainStartCommit, err)
 	}
 	pass.started, pass.alreadyStarted = started, alreadyStarted
 	if takeUnwritten {

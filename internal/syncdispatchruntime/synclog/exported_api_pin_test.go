@@ -203,6 +203,7 @@ var exportedAPI = []string{
 	"var synclog.MsgFinalizeSyncRunCoverageCacheInvalidationFailed synclog.Msg",
 	"var synclog.MsgFinalizeSyncRunZeroUnitFinalized synclog.Msg",
 	"var synclog.MsgPostSyncFanout synclog.Msg",
+	"var synclog.MsgPostSyncFanoutFailed synclog.Msg",
 	"var synclog.MsgPostSyncTouchedDays synclog.Msg",
 	"var synclog.MsgPostSyncTouchedDaysFailed synclog.Msg",
 	"var synclog.MsgTouchedDaysDrainPass synclog.Msg",

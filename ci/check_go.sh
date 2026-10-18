@@ -110,7 +110,7 @@ usage() {
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
          registered parser (each its own proof marker), govulncheck pinned and strict. STAGE is
-         fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|all.
+         fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all.
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
   test   Run go test ./... in every Go module.
@@ -3134,6 +3134,7 @@ AUTH_PACKAGES=(
   ./cmd/auth-service/...
   ./cmd/auth-migrate/...
   ./internal/auth/...
+  ./internal/audit/...
   ./internal/storage/postgres/authschema/...
 )
 # One fuzz target per parser, each its own corpus (the target's f.Add seeds plus
@@ -3164,7 +3165,7 @@ auth_go() {
 check_auth_fmt() {
   local output
   output="$(cd "${ROOT}" && git ls-files --cached --others --exclude-standard -z -- \
-    'cmd/auth-service/*.go' 'cmd/auth-migrate/*.go' 'internal/auth/*.go' 'internal/storage/postgres/authschema/*.go' \
+    'cmd/auth-service/*.go' 'cmd/auth-migrate/*.go' 'internal/auth/*.go' 'internal/audit/*.go' 'internal/storage/postgres/authschema/*.go' \
     | xargs -0 -r "${GOFMT}" -l)"
   if [ -n "${output}" ]; then
     printf 'auth gofmt: these files need formatting:\n%s\n' "${output}" >&2
@@ -3191,7 +3192,7 @@ check_auth_race() {
 check_auth_fuzz_registry() {
   local listed registered
   listed="$(cd "${ROOT}" && grep -rhoE '^func Fuzz[A-Za-z0-9_]+' \
-    cmd/auth-service cmd/auth-migrate internal/auth internal/storage/postgres/authschema --include='*_test.go' \
+    cmd/auth-service cmd/auth-migrate internal/auth internal/audit internal/storage/postgres/authschema --include='*_test.go' \
     | sed 's/^func //' | LC_ALL=C sort)"
   registered="$(printf '%s\n' "${AUTH_FUZZ_TARGETS[@]}" | awk '{print $2}' | LC_ALL=C sort)"
   [ -n "${registered}" ] || die "auth fuzz registry is empty: the gate would measure nothing"
@@ -3304,7 +3305,7 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|ci/auth_gate_scope_exempt.txt|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac
@@ -3322,7 +3323,7 @@ auth_path_relevant() {
 check_auth_paths_selftest() {
   local closure inside outside file
   closure="$(printf 'internal/auth/authruntime\ninternal/platform/secrets\n')"
-  inside=(internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh)
+  inside=(internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh)
   outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go internal/platform/secretsx/y.go src/dev_health_ops/cli.py)
   for file in "${inside[@]}"; do
     auth_path_relevant "${file}" "${closure}" || die "auth path filter: ${file} must select the auth gates and does not"
@@ -3332,6 +3333,40 @@ check_auth_paths_selftest() {
     if auth_path_relevant "${file}" "${closure}"; then die "auth path filter: ${file} must NOT select the auth gates and does"; fi
     printf 'auth path filter: %s -> not relevant\n' "${file}"
   done
+}
+
+# check_auth_scope_selftest (CHAOS-10103): the auth package set is not a hand list
+# a new package can miss. Every Go package of the module that LOOKS like auth (any
+# path segment starting with auth or audit) or imports the auth schema adapter
+# must be inside the gate (AUTH_PACKAGES) or named, with a reason, in
+# ci/auth_gate_scope_exempt.txt (package<TAB>reason). An exemption that is
+# gated, or that names no package, is stale and fails.
+check_auth_scope_selftest() {
+  local exempt="${ROOT}/ci/auth_gate_scope_exempt.txt" module gated candidates missing stale pkg
+  module="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)"
+  gated="$(auth_go list -mod=readonly "${AUTH_PACKAGES[@]}" | LC_ALL=C sort -u)"
+  [ -n "${gated}" ] || die "auth scope: the gate selects no package"
+  candidates="$( {
+    auth_go list -mod=readonly ./... | awk -F/ -v m="${module}" '{ rest=substr($0, length(m)+2); n=split(rest, seg, "/"); for (i=1;i<=n;i++) if (seg[i] ~ /^(auth|audit)/) { print $0; break } }'
+    auth_go list -mod=readonly -test -f '{{.ImportPath}} {{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}' ./... \
+      | awk -v m="${module}" '{ p=$1; sub(/ \[.*$/, "", p); sub(/\.test$/, "", p); sub(/_test$/, "", p); for (i=2;i<=NF;i++) if ($i == m "/internal/storage/postgres/authschema") { print p; break } }'
+  } | LC_ALL=C sort -u)"
+  [ -n "${candidates}" ] || die "auth scope: no candidate package found; the selftest would measure nothing"
+  missing=""
+  while IFS= read -r pkg; do
+    [ -n "${pkg}" ] || continue
+    printf '%s\n' "${gated}" | grep -qx -- "${pkg}" && continue
+    grep -qE "^${pkg//\//\\/}	" "${exempt}" 2>/dev/null && continue
+    missing+="${pkg} "
+  done <<<"${candidates}"
+  [ -z "${missing}" ] || die "auth scope: package(s) look like auth or import the auth schema but are neither in the gate nor exempt with a reason in ci/auth_gate_scope_exempt.txt: ${missing}"
+  stale=""
+  while IFS=$'\t' read -r pkg _; do
+    case "${pkg}" in ''|'#'*) continue ;; esac
+    if printf '%s\n' "${gated}" | grep -qx -- "${pkg}" || ! printf '%s\n' "${candidates}" | grep -qx -- "${pkg}"; then stale+="${pkg} "; fi
+  done <"${exempt}"
+  [ -z "${stale}" ] || die "auth scope: stale exemption(s) (gated, or no longer a candidate): ${stale}"
+  printf 'auth scope: %s candidate packages, all gated or exempt\n' "$(printf '%s\n' "${candidates}" | wc -l | tr -d ' ')"
 }
 
 check_auth() {
@@ -3349,8 +3384,10 @@ check_auth() {
       auth_relevant "$2" "$3"
       ;;
     paths-selftest) check_auth_paths_selftest ;;
+    scope-selftest) check_auth_scope_selftest ;;
     all)
       check_auth_paths_selftest
+      check_auth_scope_selftest
       check_auth_fmt
       check_auth_vet
       check_auth_test
@@ -3359,7 +3396,7 @@ check_auth() {
       check_auth_fuzz
       check_auth_vuln
       ;;
-    *) die "auth accepts fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|all" ;;
+    *) die "auth accepts fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all" ;;
   esac
 }
 

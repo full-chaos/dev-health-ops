@@ -82,6 +82,8 @@ func (store *gitLabIdentityStore) workItem42(nativeID, path string) (string, str
 		}
 		responses[key] = values
 	}
+	// The project's group lists no epics.
+	responses["/api/v4/groups/"+path[:strings.LastIndex(path, "/")]+"/epics?page=1"] = []string{`[]`}
 	responses["/api/v4/projects/"+nativeID] = []string{
 		`{"id":` + nativeID + `,"path":"x","path_with_namespace":"` + path + `","name":"x"}`,
 	}

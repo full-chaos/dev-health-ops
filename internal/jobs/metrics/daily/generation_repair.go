@@ -115,7 +115,7 @@ func proveGeneration(
 
 func (store *PostgresStore) loadGenerationRepairSources(ctx context.Context, orgID string) (generationRepairSources, error) {
 	var sources generationRepairSources
-	syncRows, err := store.pool.Query(ctx, `SELECT id::text, created_at FROM public.sync_runs WHERE org_id = $1::uuid`, orgID)
+	syncRows, err := store.pool.Query(ctx, `SELECT id::text, created_at FROM public.sync_runs WHERE org_id = $1::text`, orgID)
 	if err != nil {
 		return sources, repairUnavailable(ctx, "step1", err)
 	}

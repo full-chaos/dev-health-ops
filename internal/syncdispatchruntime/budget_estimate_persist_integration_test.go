@@ -132,3 +132,52 @@ VALUES ($1,$2,$3,'github',$5,$4,'planned',now(),(SELECT integration_id FROM sync
 		}
 	})
 }
+
+// A unit whose publish lands on an already-terminal outbox row gets no new
+// delivery in that pass, so it keeps the result it had: the estimates are
+// written only for units that are published.
+func TestDispatchWritesNoEstimateForAUnitWhosePublishHitATerminalDelivery(t *testing.T) {
+	t.Setenv("SYNC_BUDGET_BUCKET_LIMITS", "")
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		const unitID = "00000000-0000-4000-8000-0000000012c1"
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at,result)
+VALUES ($1,$2,$3,'github','commits',$4,'planned',now(),(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'medium','incremental',0,now(),'{"keep":"me"}'::json)`,
+			unitID, discoveryTestOrg, discoveryTestRun, dispatchTestSource); err != nil {
+			t.Fatal(err)
+		}
+		registry := &fakeJobRegistry{descriptors: map[string]jobruntime.Descriptor{jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river")}}
+		producer, err := joboutbox.NewProducer(pool, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		estimator := &fakeBudgetEstimator{estimates: map[string][]budgetEstimate{unitID: estimateFor(7, "github", "rest_core", "commits")}}
+		service, err := NewNativeDispatchSyncRunService(pool, nil, estimator, producer, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("first Dispatch: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE worker_job_outbox SET status='delivered', river_job_id=127714, delivered_at=now() WHERE dedupe_key=$1`,
+			"sync.provider_unit:"+unitID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE sync_run_units SET status='planned', updated_at=now(), result='{"keep":"me"}'::json WHERE id=$1::uuid`, unitID); err != nil {
+			t.Fatal(err)
+		}
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("second Dispatch: %v", err)
+		}
+		var raw string
+		var hasEstimate bool
+		if err := pool.QueryRow(ctx, `SELECT result::text, (result::jsonb -> 'observations' -> 'budget_estimate') IS NOT NULL FROM sync_run_units WHERE id = $1::uuid`, unitID).Scan(&raw, &hasEstimate); err != nil {
+			t.Fatal(err)
+		}
+		if hasEstimate {
+			t.Fatalf("a unit whose publish hit a terminal delivery got an estimate although no delivery was published: %s", raw)
+		}
+	})
+}

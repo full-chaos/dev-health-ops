@@ -251,7 +251,7 @@ spec:
     - name: key
       secret: {secretName: auth-key, defaultMode: ${mode}}
 EOF
-  local ip i out
+  local ip out
   for _ in $(seq 1 30); do
     ip="$(K get pod "${name}" -o jsonpath='{.status.podIP}')"
     [ -n "${ip}" ] && break

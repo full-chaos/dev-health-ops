@@ -569,7 +569,8 @@ func (b *peekedBody) Close() error { return b.rest.Close() }
 // bounded, time-bounded peek of the body, so a limit whose only signal is the
 // body message (a GitHub secondary or abuse limit on a 403) is rate_limited
 // with its dimension. Only that case consults the body (ClassifyHTTPWithMessage).
-// The caller still reads the full body, with any read error it would have got.
+// The caller still reads the full body, with any read error it would have got,
+// except after a peek timeout, which closes the body so no reader goroutine leaks.
 func classifyResponseWithBody(provider, requestPath string, response *http.Response) *ProviderError {
 	classification := ClassifyHTTPForRequest(provider, requestPath, response.StatusCode, response.Header, "")
 	if classification == nil || response.Body == nil || classification.Class == ErrorRateLimited ||
@@ -587,6 +588,8 @@ func classifyResponseWithBody(provider, requestPath string, response *http.Respo
 	select {
 	case <-body.done:
 	case <-timer.C:
+		_ = body.rest.Close() // ends the reader goroutine; the caller's later read fails
+		logBodyPeekTimeout(provider, response.StatusCode, classification.Class)
 		return classification
 	}
 	withBody := ClassifyHTTPForRequest(provider, requestPath, response.StatusCode, response.Header, string(body.peeked))
@@ -597,6 +600,11 @@ func classifyResponseWithBody(provider, requestPath string, response *http.Respo
 		logBodyReclassification(provider, response.StatusCode, classification.Class, withBody.Class, withBody.Dimension)
 	}
 	return withBody
+}
+
+func logBodyPeekTimeout(provider string, status int, class ErrorClass) {
+	slog.Warn("provider error body not read in time, classified from status and headers; body closed",
+		"provider", provider, "status", status, "class", string(class), "timeout_ms", bodyPeekTimeout.Milliseconds())
 }
 
 // logBodyReclassification logs only closed-set values (provider, status,

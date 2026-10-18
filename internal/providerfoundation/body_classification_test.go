@@ -85,33 +85,53 @@ func unauthenticatedWithBody(t *testing.T, status int, body io.ReadCloser) (*htt
 	return client.DoUnauthenticated(context.Background(), http.MethodGet, "https://objects.example.test/artifact")
 }
 
-// A 403 body that never reaches EOF must not hold DoUnauthenticated: it returns
-// with the header classification, and the caller still gets every byte after.
-func TestDoUnauthenticatedDoesNotWaitForAStalledErrorBody(t *testing.T) {
-	t.Parallel()
-	reader, writer := io.Pipe()
-	returned := make(chan struct{})
-	var response *http.Response
-	var err error
-	go func() {
-		response, err = unauthenticatedWithBody(t, http.StatusForbidden, reader)
-		close(returned)
-	}()
+// blockingBody blocks Read until Close, and reports both events.
+type blockingBody struct {
+	closed    chan struct{}
+	readEnded chan struct{}
+}
+
+func (b *blockingBody) Read([]byte) (int, error) {
+	<-b.closed
+	close(b.readEnded)
+	return 0, io.ErrClosedPipe
+}
+
+func (b *blockingBody) Close() error {
 	select {
-	case <-returned:
-	case <-time.After(10 * time.Second):
-		t.Fatal("DoUnauthenticated waited for the body to end")
+	case <-b.closed:
+	default:
+		close(b.closed)
 	}
+	return nil
+}
+
+// A 403 body that never reaches EOF must not hold DoUnauthenticated: it returns
+// within the peek bound with the header classification, the body is closed and
+// the reader goroutine has ended.
+func TestDoUnauthenticatedStalledErrorBodyReturnsWithinBoundAndIsClosed(t *testing.T) {
+	t.Parallel()
+	body := &blockingBody{closed: make(chan struct{}), readEnded: make(chan struct{})}
+	started := time.Now()
+	response, err := unauthenticatedWithBody(t, http.StatusForbidden, body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() {
-		_, _ = writer.Write([]byte("late body"))
-		_ = writer.Close()
-	}()
-	got, readErr := io.ReadAll(response.Body)
-	if readErr != nil || string(got) != "late body" {
-		t.Fatalf("body = %q err = %v, want late body", got, readErr)
+	if elapsed := time.Since(started); elapsed > bodyPeekTimeout+2*time.Second {
+		t.Fatalf("DoUnauthenticated took %s, bound is %s", elapsed, bodyPeekTimeout)
+	}
+	select {
+	case <-body.closed:
+	case <-time.After(time.Second):
+		t.Fatal("the stalled body was not closed")
+	}
+	select {
+	case <-body.readEnded:
+	case <-time.After(time.Second):
+		t.Fatal("the reader goroutine did not end")
+	}
+	if _, readErr := io.ReadAll(response.Body); readErr == nil {
+		t.Fatal("a read of the closed body returned no error")
 	}
 }
 

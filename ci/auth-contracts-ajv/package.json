@@ -1,0 +1,16 @@
+{
+  "name": "auth-contracts-ajv",
+  "private": true,
+  "type": "module",
+  "description": "ajv 2020-12 strict-mode runner for contracts/auth/v1 (the ECMA-262 leg of the cross-language proof)",
+  "scripts": {
+    "check": "node run.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
+  }
+}

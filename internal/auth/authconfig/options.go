@@ -173,7 +173,7 @@ func HelpText() string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "%s -- Auth Control Plane service (dormant: no route is mounted in this wave)\n\n", Service)
 	fmt.Fprintf(&out, "Usage:\n  %s [options]\n\n", Service)
-	fmt.Fprint(&out, "Options:\n  --version\n        print build metadata as JSON and exit\n  --help\n        print this message and exit\n")
+	fmt.Fprint(&out, "Options:\n  --version\n        print build metadata as JSON and exit\n  --healthcheck\n        probe this deployment's own operator /readyz over loopback; exit 0 only on 200\n  --help\n        print this message and exit\n")
 
 	byGroup := make(map[string][]Option, len(groupOrder))
 	for _, option := range optionRegistry {

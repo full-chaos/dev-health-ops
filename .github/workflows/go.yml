@@ -173,6 +173,7 @@ on:
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
+      - 'ci/check_auth_compose.sh'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
       # contracts, so editing the page or either contract must run the gate
@@ -377,6 +378,7 @@ on:
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
+      - 'ci/check_auth_compose.sh'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
       # contracts, so editing the page or either contract must run the gate
@@ -864,7 +866,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [operator, contractcheck, migrate, dho]
+        target: [operator, contractcheck, migrate, dho, auth-service, auth-migrate]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1030,6 +1032,22 @@ jobs:
         # per the contract -- fails loud on a genuine hang instead of an
         # ambiguous job-level cancellation.
         run: timeout 51m bash ci/check_go_containers.sh reproducible
+
+  # CHAOS-4886: the executed proof that the dormant Auth Control Plane starts
+  # from images built from this tree through the Compose `auth` profile, that
+  # its runtime login is unprivileged, and that removing it leaves the rest of
+  # the stack alone. Both binaries' images are also built, scanned (Trivy,
+  # SBOM) and rebuilt for reproducibility by the matrix jobs above; this job
+  # is the part that RUNS them together.
+  go-auth-compose-proof:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compose up the auth profile, probe it, roll it back
+        run: bash ci/check_auth_compose.sh
 
   graphql-wire-parity:
     if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))

@@ -3,16 +3,8 @@ name: Auth Contracts ajv
 on:
   push:
     branches: [main]
-    paths:
-      - 'contracts/auth/v1/**'
-      - 'ci/auth-contracts-ajv/**'
-      - '.github/workflows/auth-contracts-ajv.yml'
   pull_request:
     branches: ['**']
-    paths:
-      - 'contracts/auth/v1/**'
-      - 'ci/auth-contracts-ajv/**'
-      - '.github/workflows/auth-contracts-ajv.yml'
   merge_group:
   workflow_dispatch:
 
@@ -29,21 +21,48 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # No `paths:` trigger: a path-filtered workflow reports nothing on a PR
+      # that touches no matching file, and a check that is absent is not a
+      # check that passed. The job always runs and always concludes; only the
+      # work below is conditional.
+      - name: Decide whether the contracts changed
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run=true
+          if [ "$EVENT" = "pull_request" ]; then
+            changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+            if ! printf '%s\n' "$changed" | grep -Eq '^(contracts/auth/v1/|ci/auth-contracts-ajv/|\.github/workflows/auth-contracts-ajv\.yml$)'; then
+              run=false
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "ajv corpus check required: $run"
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        if: steps.scope.outputs.run == 'true'
         with:
-          node-version: 22
+          node-version: 22.12.0
 
       # The lockfile pins ajv: strictRequired is an ajv lint rather than a spec
       # rule, so an unpinned upgrade could change what the contract enforces.
       - name: Install pinned ajv
+        if: steps.scope.outputs.run == 'true'
         working-directory: ci/auth-contracts-ajv
         run: npm ci --ignore-scripts
 
       - name: Prove strict mode is on
+        if: steps.scope.outputs.run == 'true'
         working-directory: ci/auth-contracts-ajv
         run: node run.mjs --self-test
 
       - name: Validate every contracts/auth/v1 manifest corpus with ajv 2020-12 strict
+        if: steps.scope.outputs.run == 'true'
         working-directory: ci/auth-contracts-ajv
         run: node run.mjs

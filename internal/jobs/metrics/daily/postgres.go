@@ -16,6 +16,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 const defaultLease = 10 * time.Minute
@@ -1768,6 +1771,21 @@ WHERE worker_kind = 'daily' AND operation = $3 AND run_id = $4::uuid AND partiti
 // icFinalizeLockPoll is how long a waiter sleeps between attempts to take an ic_finalize day lock.
 const icFinalizeLockPoll = 250 * time.Millisecond
 
+// icFinalizeLockWarnAfter is how long a waiter waits before one Warn says so: a stuck lock is never silent at Info.
+const icFinalizeLockWarnAfter = 30 * time.Second
+
+// ICFinalizeLockWaitHistogram records, per taken or abandoned lock, how long the waiter waited (attribute outcome).
+const ICFinalizeLockWaitHistogram = "ic_finalize_day_lock_wait_seconds"
+
+func recordICFinalizeLockWait(ctx context.Context, started time.Time, outcome string) {
+	histogram, err := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily").Float64Histogram(
+		ICFinalizeLockWaitHistogram, metric.WithUnit("s"),
+		metric.WithDescription("seconds an ic_finalize compute waited for the organization-day lock, by outcome (taken, abandoned, error)"))
+	if err == nil {
+		histogram.Record(context.WithoutCancel(ctx), time.Since(started).Seconds(), metric.WithAttributes(attribute.String("outcome", outcome)))
+	}
+}
+
 // LockICFinalizeDay takes the session advisory lock that serializes every ic_finalize compute of one
 // (organization, day) across workers and returns its release (CHAOS-9945). Only the holder keeps a pool connection
 // (the session owns the lock). A waiter does not: it tries the lock on a pooled connection, gives the connection back
@@ -1779,17 +1797,22 @@ func (store *PostgresStore) LockICFinalizeDay(ctx context.Context, organizationI
 		return nil, ErrUnavailable
 	}
 	key := "ic_finalize_day:" + organizationID + ":" + day.UTC().Format("2006-01-02")
+	started := time.Now()
+	warned := false
 	for {
 		conn, err := store.pool.Acquire(ctx)
 		if err != nil {
+			recordICFinalizeLockWait(ctx, started, "error")
 			return nil, ErrUnavailable
 		}
 		var taken bool
 		if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key).Scan(&taken); err != nil {
 			conn.Release()
+			recordICFinalizeLockWait(ctx, started, "error")
 			return nil, ErrUnavailable
 		}
 		if taken {
+			recordICFinalizeLockWait(ctx, started, "taken")
 			return func() {
 				unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 				defer cancel()
@@ -1802,8 +1825,14 @@ func (store *PostgresStore) LockICFinalizeDay(ctx context.Context, organizationI
 			}, nil
 		}
 		conn.Release()
+		if waited := time.Since(started); !warned && waited >= icFinalizeLockWarnAfter {
+			warned = true
+			slog.WarnContext(ctx, "ic_finalize day lock still waiting", "organization_id", organizationID,
+				"day", day.UTC().Format("2006-01-02"), "waited", waited.Round(time.Second))
+		}
 		select {
 		case <-ctx.Done():
+			recordICFinalizeLockWait(ctx, started, "abandoned")
 			return nil, ErrUnavailable
 		case <-time.After(icFinalizeLockPoll):
 		}

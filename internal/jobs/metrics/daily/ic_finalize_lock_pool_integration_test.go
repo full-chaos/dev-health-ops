@@ -9,6 +9,9 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 // Round 456 finding: a waiter for one organization and day must not hold a pool connection while it waits. With a
@@ -22,6 +25,10 @@ func TestICFinalizeDayLockWaitersDoNotExhaustASmallPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close(context.Background())
+	reader := sdkmetric.NewManualReader()
+	previousProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	t.Cleanup(func() { otel.SetMeterProvider(previousProvider) })
 	config, err := pgxpool.ParseConfig(instance.URI)
 	if err != nil {
 		t.Fatal(err)
@@ -72,4 +79,24 @@ func TestICFinalizeDayLockWaitersDoNotExhaustASmallPool(t *testing.T) {
 		t.Fatalf("the lock was not released: %v", err)
 	}
 	again()
+
+	var resource metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &resource); err != nil {
+		t.Fatal(err)
+	}
+	outcomes := map[string]uint64{}
+	for _, scope := range resource.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != ICFinalizeLockWaitHistogram {
+				continue
+			}
+			for _, point := range m.Data.(metricdata.Histogram[float64]).DataPoints {
+				outcome, _ := point.Attributes.Value("outcome")
+				outcomes[outcome.AsString()] += point.Count
+			}
+		}
+	}
+	if outcomes["taken"] < 3 || outcomes["abandoned"] != 1 {
+		t.Fatalf("wait histogram outcomes = %v, want taken>=3 and abandoned=1", outcomes)
+	}
 }

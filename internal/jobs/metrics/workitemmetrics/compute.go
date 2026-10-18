@@ -190,7 +190,10 @@ type CycleTimeRecord struct {
 type Triplet struct {
 	MetricsDaily     []MetricsDailyRow
 	UserMetricsDaily []UserMetricsDailyRow
-	CycleTimes       []CycleTimeRecord
+	// UserRowsSpanningTeams counts the persons of the day whose items belong to more
+	// than one team: their one row is labelled by one of the teams.
+	UserRowsSpanningTeams int
+	CycleTimes            []CycleTimeRecord
 }
 
 // EstimateCoverageRow mirrors EstimateCoverageMetricsDailyRecord.
@@ -216,8 +219,13 @@ type groupKey struct {
 	provider, workScopeID, teamID string
 }
 
+// userKey is the key the table stores a person under: work_item_user_metrics_daily is
+// ordered by (org_id, provider, work_scope_id, user_identity, day), so the team of a
+// person is a value of the row, not part of its key. One person in two teams on one
+// scope and day is one row. Python grouped by team as well and the table key then
+// collapsed the rows, leaving an arbitrary one and losing the items of the other team.
 type userKey struct {
-	provider, workScopeID, user, teamID string
+	provider, workScopeID, user string
 }
 
 type groupBucket struct {
@@ -231,10 +239,25 @@ type groupBucket struct {
 }
 
 type userBucket struct {
-	teamName                     string
 	itemsStarted, itemsCompleted int
 	wipCount                     int
 	cycleHours                   []float64
+	// teamItems counts the items of the person for each team that day; teamNames
+	// holds the name of each. The row is labelled by the team with the most items.
+	teamItems map[string]int
+	teamNames map[string]string
+}
+
+// label is the team the row of the person carries: the team with the most of the
+// person's items that day, the lowest team id on a tie.
+func (bucket *userBucket) label() (teamID, teamName string) {
+	best := -1
+	for id, count := range bucket.teamItems {
+		if count > best || count == best && id < teamID {
+			teamID, best = id, count
+		}
+	}
+	return teamID, bucket.teamNames[teamID]
 }
 
 // UTCDay truncates an instant to the UTC midnight its day starts at, the way
@@ -299,11 +322,15 @@ func ComputeDailyTriplet(
 		if assignee != nil && *assignee != "" {
 			userIdentity = *assignee
 		}
-		uKey := userKey{item.Provider, attribution.WorkScopeID, userIdentity, attribution.TeamID}
+		uKey := userKey{item.Provider, attribution.WorkScopeID, userIdentity}
 		uBucket := users[uKey]
 		if uBucket == nil {
-			uBucket = &userBucket{teamName: attribution.TeamName}
+			uBucket = &userBucket{teamItems: map[string]int{}, teamNames: map[string]string{}}
 			users[uKey] = uBucket
+		}
+		uBucket.teamItems[attribution.TeamID]++
+		if _, named := uBucket.teamNames[attribution.TeamID]; !named {
+			uBucket.teamNames[attribution.TeamID] = attribution.TeamName
 		}
 
 		if createdToday {
@@ -434,13 +461,17 @@ func ComputeDailyTriplet(
 		left, right := userKeys[i], userKeys[j]
 		return left.provider < right.provider || left.provider == right.provider &&
 			(left.workScopeID < right.workScopeID || left.workScopeID == right.workScopeID &&
-				(left.user < right.user || left.user == right.user && left.teamID < right.teamID))
+				left.user < right.user)
 	})
 	for _, key := range userKeys {
 		bucket := users[key]
+		if len(bucket.teamItems) > 1 {
+			result.UserRowsSpanningTeams++
+		}
+		teamID, teamName := bucket.label()
 		result.UserMetricsDaily = append(result.UserMetricsDaily, UserMetricsDailyRow{
 			Day: dayUTC, Provider: key.provider, WorkScopeID: key.workScopeID,
-			UserIdentity: key.user, TeamID: key.teamID, TeamName: bucket.teamName,
+			UserIdentity: key.user, TeamID: teamID, TeamName: teamName,
 			ItemsStarted: bucket.itemsStarted, ItemsCompleted: bucket.itemsCompleted,
 			WIPCountEndOfDay:  bucket.wipCount,
 			CycleTimeP50Hours: Percentile(bucket.cycleHours, 50),

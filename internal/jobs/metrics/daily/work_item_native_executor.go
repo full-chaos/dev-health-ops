@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -93,6 +94,9 @@ func (executor *WorkItemExecutor) ComputeFamily(
 	if len(read.Items) == 0 {
 		return 0, nil
 	}
+	slog.Default().DebugContext(ctx, "work_item_user_metrics_rows",
+		"org_id", run.OrganizationID, "day", scope.day.Format("2006-01-02"),
+		"user_rows", len(triplet.UserMetricsDaily), "persons_spanning_teams", triplet.UserRowsSpanningTeams)
 
 	// Each Write* call reports its true row count on an ambiguous Send error,
 	// so the count is added before the error check.

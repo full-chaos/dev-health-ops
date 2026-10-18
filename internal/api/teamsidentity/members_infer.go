@@ -161,10 +161,11 @@ func confidenceForCount(count int) string {
 // jiraSearchIssues is JiraClient.iter_issues(jql, fields, expand_changelog=
 // False, limit=500): pages of 100 by startAt, or by nextPageToken when the
 // page carries one, stopping at an empty page, isLast, or 500 issues.
-func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient, jql string) ([]*pyjson.Object, error) {
+func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient, owner, jql string) ([]*pyjson.Object, error) {
 	var issues []*pyjson.Object
 	startAt := 0
 	token := ""
+	walk := newPageWalk(ctx, "jira", "issue search", owner, "startAt:0")
 	for {
 		values := url.Values{}
 		values.Set("jql", jql)
@@ -177,39 +178,39 @@ func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient
 		values.Set("fields", "assignee,reporter,creator,comment")
 		response, err := client.Do(ctx, "GET", "/rest/api/3/search/jql?"+values.Encode(), nil)
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		raw, err := readBody(response)
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		page, err := decodeObject(raw, "jira search page")
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		list := listAt(page, "issues")
-		if len(list) == 0 {
-			return issues, nil
+		if err := walk.replay(jiraPageFingerprint(list)); err != nil {
+			return nil, err
+		}
+		// the one continuation check of the walk: every return below runs after it, the item limit included
+		nextToken, nextStartAt, more, err := walk.jiraAdvance(page, startAt, len(list))
+		if err != nil {
+			return nil, err
 		}
 		for _, item := range list {
 			issue, ok := item.(*pyjson.Object)
 			if !ok {
-				return nil, fmt.Errorf("jira issue is not an object")
+				return nil, walk.pageError(fmt.Errorf("jira issue is not an object"))
 			}
 			issues = append(issues, issue)
 			if len(issues) >= jiraInferIssueLimit {
 				return issues, nil
 			}
 		}
-		if next, _ := page.Get("nextPageToken"); truthy(next) {
-			token = pythonStr(next)
-		} else {
-			token = ""
-			startAt += len(list)
-		}
-		if last, present := page.Get("isLast"); present && last == true {
+		if !more {
 			return issues, nil
 		}
+		token, startAt = nextToken, nextStartAt
 	}
 }
 
@@ -220,7 +221,7 @@ func inferJiraMembers(ctx context.Context, credential providerfoundation.Credent
 		return nil, err
 	}
 	jql := fmt.Sprintf("project = '%s' AND updated >= '-%dd'", projectKey, windowDays)
-	issues, err := jiraSearchIssues(ctx, client, jql)
+	issues, err := jiraSearchIssues(ctx, client, projectKey, jql)
 	if err != nil {
 		return nil, err
 	}

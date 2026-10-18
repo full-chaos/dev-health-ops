@@ -426,7 +426,18 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 	python := golden.Python(t, venue, requests)
 	goBase, goPool := startGoServer(t, ctx, venue, jwtKey)
 
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+	// CHAOS-10082: see xuserid_divergence_test.go.
+	compared, pythonCompared, pythonDivergent := splitXUserIDRequests(t, ipPath, requests, python)
+	golden.Consumed(t, pythonDivergent...)
+	for _, answer := range pythonDivergent {
+		if answer.Status == 201 {
+			t.Errorf("python created a row for a request the divergence names as rejected: %d %s", answer.Status, answer.Body)
+		}
+	}
+
+	var createdLedger createdByLedger
+	users := map[string]uuid.UUID{"ent": adminEnt, "comm": adminComm, "ovr": adminOvr, "tier": adminTier, "bogus": adminBogus, "none": adminNoLicense}
+	receipt := venueoracle.Diff(t, goBase, compared, pythonCompared, venueoracle.DiffOptions{
 		Golden: golden,
 		// Ids are redacted from the comparison, so a created row's id is
 		// checked here instead: the Go response must carry a valid UUID that
@@ -459,8 +470,14 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 			if err := goPool.QueryRow(ctx, "SELECT count(*) FROM "+table+" WHERE id = $1", parsed).Scan(&rows); err != nil || rows != 1 {
 				t.Errorf("%s: created id %s names %d rows in %s (err %v), want 1", request.Name, id, rows, table, err)
 			}
+			if table == "org_ip_allowlist" {
+				createdBy, _ := object.Get("created_by_id")
+				want, known := principalOf(request, venue.Tokens, users)
+				createdLedger.note(t, request, parsed, createdBy, want, known)
+			}
 		},
 		Normalize: func(request venueoracle.Request, body string) string {
+			body = blankCreatedBy(body)
 			body = normalizeAuditLogDisplayNames(t, request, body)
 			if strings.HasPrefix(request.Name, "W ") {
 				body = redactVolatileText(body, "id", "created_at", "updated_at")
@@ -469,6 +486,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		},
 	})
 	t.Log(receipt)
+	createdLedger.verifyThenReset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_ip_allowlist")
 
 	compare := func(name, query string) {
 		t.Helper()
@@ -485,5 +503,26 @@ FROM org_ip_allowlist ORDER BY ip_range`)
 	compare("org_feature_overrides rows", `SELECT feature_id::text, is_enabled, expires_at::text, config::text, reason, created_by::text, updated_by::text
 FROM org_feature_overrides ORDER BY feature_id::text, org_id::text`)
 	compare("feature_flags rows", `SELECT key, is_enabled, is_beta, is_deprecated, (updated_at > '2020-01-02')::text FROM feature_flags ORDER BY key`)
+
+	// CHAOS-10082: created_by_id is the verified principal (adminEnt, the
+	// "ent" token's user), whatever X-User-Id says.
+	createdBy := func(ipRange string) string {
+		t.Helper()
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB),
+			`SELECT created_by_id::text FROM org_ip_allowlist WHERE ip_range = '`+ipRange+`'`)
+	}
+	for i, header := range []string{"not-a-uuid", strings.Repeat("a", 31), strings.Repeat("z", 32), nextID().String(), memberEnt.String()} {
+		ipRange := fmt.Sprintf("100.64.1.%d", i+1)
+		response := venueoracle.Do(t, goBase, venueoracle.Request{
+			Name: "go-only X-User-Id " + header, Method: "POST", Path: admin + "/ip-allowlist",
+			Headers: jsonAuthWithUser("ent", header), Body: venueoracle.B64(`{"ip_range":"` + ipRange + `"}`)})
+		if response.Status != 201 {
+			t.Errorf("X-User-Id %q: Go answered %d %s, want 201 (the header is ignored)", header, response.Status, response.Body)
+			continue
+		}
+		if got := createdBy(ipRange); got != adminEnt.String() {
+			t.Errorf("X-User-Id %q: created_by_id = %q, want the principal %s", header, got, adminEnt)
+		}
+	}
 	golden.Finish(t)
 }

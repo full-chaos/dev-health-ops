@@ -28,13 +28,15 @@ func TestGitLabIncidentsRouteEmitsCompleteCanonicalBatch(t *testing.T) {
 		]`},
 	}}
 	claim := nativeTestClaim("gitlab", "incidents")
+	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://GITLAB.example:443")
+	client.Ledger = providerfoundation.NewRequestLedger()
 	batch, err := (GitLabIncidentsRouteHandler{PerPage: 5, MaxIssues: 10}).Collect(
-		context.Background(), claim, providerfoundation.Credential{},
-		gitLabRepositoryClient(t, fakehttp.Client(doer), "https://GITLAB.example:443"), normalizedAt,
+		context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertRouteRequestsAreLabelled(t, "gitlab", "incidents", client.Ledger, "project", "issues")
 	if len(doer.requests) != 2 {
 		t.Fatalf("requests=%d", len(doer.requests))
 	}

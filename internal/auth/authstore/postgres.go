@@ -127,6 +127,15 @@ func Open(ctx context.Context, cfg Config) (*Postgres, error) {
 	return &Postgres{pool: pool, schema: cfg.Schema}, nil
 }
 
+// Pool returns the bounded pool for the auth runtime's own background writers
+// (the outbox loop). It is nil on a nil receiver.
+func (p *Postgres) Pool() *pgxpool.Pool {
+	if p == nil {
+		return nil
+	}
+	return p.pool
+}
+
 // Name identifies the component to the lifecycle runtime.
 func (*Postgres) Name() string { return "auth-postgres" }
 

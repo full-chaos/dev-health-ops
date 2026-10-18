@@ -166,7 +166,7 @@ func (handler GitLabIncidentsRouteHandler) Collect(
 	counted.Doer = gitLabIncidentCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(client, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, &counted, root, &project); err != nil {
+	if err := fetchObject(budgetAccount(ctx, "project"), &counted, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -194,7 +194,7 @@ func (handler GitLabIncidentsRouteHandler) Collect(
 		"updated_before": {claim.BeforeAt.UTC().Format(time.RFC3339Nano)},
 	}
 	items, pages, err := collectGitLabIncidentPages(
-		ctx, &counted, root+"/issues", query, maxIssues, maxPages, perPage,
+		budgetAccount(ctx, "issues"), &counted, root+"/issues", query, maxIssues, maxPages, perPage,
 	)
 	if err != nil {
 		return CompleteRouteBatch{}, err

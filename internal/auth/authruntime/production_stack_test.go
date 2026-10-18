@@ -1,6 +1,7 @@
 package authruntime
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -21,9 +22,8 @@ import (
 // tests are insufficient).
 const productionStackMarker = "AUTH_PRODUCTION_STACK_EXECUTED"
 
-// TestProductionMiddlewareStackIsMountedAndDriven builds the API server from the
-// SAME options function the running service uses (apiServerOptions, from a
-// loaded Config) with one probe route, and drives real HTTP requests through
+// TestProductionMiddlewareStackIsMountedAndDriven builds the API server through
+// configure (configureWithRoutes, from a loaded Config) with one probe route, and drives real HTTP requests through
 // the resulting handler. It asserts, on the real stack, every behaviour the
 // service claims: correlation id on every response (routed or not), the
 // 404 and 405 envelopes, per-route rate limiting, the body
@@ -61,11 +61,27 @@ func TestProductionMiddlewareStackIsMountedAndDriven(t *testing.T) {
 			panic("secret-panic-detail")
 		})},
 	}
-	server, err := httpapi.NewServer(apiServerOptions(cfg, logger, routes))
+	components, err := configureWithRoutes(context.Background(), cfg, logger, routes)
 	if err != nil {
-		t.Fatalf("build the production server: %v", err)
+		t.Fatalf("configure the production components: %v", err)
 	}
-	front := httptest.NewServer(server.Handler())
+	t.Cleanup(func() {
+		for _, component := range components {
+			_ = component.Shutdown(context.Background())
+		}
+	})
+	var apiHandler http.Handler
+	for _, component := range components {
+		if announced, ok := component.(announcedListener); ok {
+			if server, ok := announced.listener.(*httpapi.Server); ok {
+				apiHandler = server.Handler()
+			}
+		}
+	}
+	if apiHandler == nil {
+		t.Fatal("configure built no API listener")
+	}
+	front := httptest.NewServer(apiHandler)
 	defer front.Close()
 	client := &http.Client{Timeout: 5 * time.Second}
 

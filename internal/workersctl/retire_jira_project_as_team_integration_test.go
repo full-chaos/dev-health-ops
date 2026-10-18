@@ -119,7 +119,7 @@ func TestRetireJiraProjectAsTeamVerbDryRunThenRetireThenZero(t *testing.T) {
 		t.Fatalf("seeded state = %v", before)
 	}
 	dry := run("--dry-run")
-	want := providersync.JiraProjectAsTeamRetireOutcome{DryRun: true, Teams: 1, TeamsWithManualMembers: 1, TeamsWithSyncPolicy: 1, OwnershipRows: 1, MembershipRows: 1}
+	want := providersync.JiraProjectAsTeamRetireOutcome{DryRun: true, Teams: 1, TeamsWithManualMembers: 1, TeamsWithSyncPolicy: 1, OwnershipRows: 1, MembershipRows: 1, TeamsWithoutProviderIdentity: 1}
 	if dry != want {
 		t.Fatalf("dry run = %+v, want %+v", dry, want)
 	}
@@ -129,7 +129,7 @@ func TestRetireJiraProjectAsTeamVerbDryRunThenRetireThenZero(t *testing.T) {
 
 	retired := run(auditFlags()...)
 	want = providersync.JiraProjectAsTeamRetireOutcome{Teams: 1, TeamsWithManualMembers: 1, TeamsWithSyncPolicy: 1, OwnershipRows: 1, MembershipRows: 1,
-		TeamsRetired: 1, OwnershipClosed: 1, MembershipClosed: 1}
+		TeamsWithoutProviderIdentity: 1, TeamsRetired: 1, OwnershipClosed: 1, MembershipClosed: 1}
 	if retired != want {
 		t.Fatalf("real run = %+v, want %+v", retired, want)
 	}

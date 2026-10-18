@@ -436,12 +436,18 @@ ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`,
 	run := Run{OrganizationID: orgA, TargetDay: day}
 	partition := Partition{ID: "partition-work-item", RepoIDs: []RepositoryID{RepositoryID(repo)}}
 
+	spanning := useManualMeterProvider(t)
 	workItemExecutor, err := NewWorkItemExecutor(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := workItemExecutor.ComputeFamily(ctx, run, partition); err != nil {
 		t.Fatalf("work_item ComputeFamily: %v", err)
+	}
+	// The frozen golden holds one person (github, unassigned) under two teams: the
+	// executor counts that person once, through the production call in ComputeFamily.
+	if got := spanningCounterByProvider(t, spanning); got["github"] != 1 || len(got) != 1 {
+		t.Fatalf("%s = %v, want github 1 for the person of the golden that spans two teams", WorkItemUserRowsSpanningTeamsCounter, got)
 	}
 	estimateExecutor, err := NewWorkItemEstimateExecutor(conn)
 	if err != nil {

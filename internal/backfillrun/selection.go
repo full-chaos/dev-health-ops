@@ -35,14 +35,16 @@ func (flag *listFlag) Set(text string) error {
 }
 
 // scopeSources is the source scope the trigger carries. With no --source-ids it
-// is the scope the verb always wrote (sourceIDsFor). With --source-ids each id
-// must be an enabled source of the configuration's integration (a configuration
-// pinned to one source accepts only that source and writes no list, as before).
-// The result keeps the enabled sources' order, so the written list does not
-// depend on how the operator spelled or ordered the flag.
-func scopeSources(config *Config, requested, enabled []string) ([]string, error) {
+// is the configuration's selected sources (sourceIDsFor). With --source-ids each
+// id must be an enabled source of the configuration's integration (a
+// configuration pinned to one source accepts only that source and writes no
+// list, as before); one the configuration does not select is refused when the
+// trigger is written (synchandoff.Mint, the one scope guard). The result keeps the enabled sources'
+// order, so the written list does not depend on how the operator spelled or
+// ordered the flag.
+func scopeSources(config *Config, requested, enabled, selected []string) ([]string, error) {
 	if len(requested) == 0 {
-		return sourceIDsFor(config, enabled), nil
+		return sourceIDsFor(config, selected), nil
 	}
 	wanted := map[string]bool{}
 	for _, text := range requested {

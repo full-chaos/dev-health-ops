@@ -117,6 +117,7 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJ
 	client := gitLabWorkItemsClient(t, fakehttp.Client(doer))
 	leftToDaily := providerfoundation.NewMetrics()
 	client.Metrics = leftToDaily
+	client.Ledger = providerfoundation.NewRequestLedger()
 	batch, err := (GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
@@ -129,6 +130,7 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJ
 		}
 		t.Fatalf("err=%v requests=%s", err, strings.Join(paths, "\n"))
 	}
+	assertRouteRequestsAreLabelled(t, "gitlab", "work-items", client.Ledger, "project", "milestones", "issues", "notes", "merge_requests", "epics")
 	byDestination := map[string]EffectBatch{}
 	for _, effect := range batch.Effects {
 		byDestination[effect.Destination] = effect

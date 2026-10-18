@@ -425,3 +425,28 @@ func TestJiraDateBoundsContainTheWindowInEveryUserTimeZone(t *testing.T) {
 		}
 	}
 }
+
+// The JQL search, the per-issue enrichment and the comments are accounted to the
+// families the dispatch estimate names for them (jira_jql, jira_issue_enrichment,
+// jira_comments); every request of the route is labelled.
+func TestJiraWorkItemsRouteLabelsEveryRequestWithTheEstimatesFamilies(t *testing.T) {
+	for dataset, wantFamilies := range map[string][]string{
+		"work-items":         {"jira_jql", "jira_issue_enrichment"},
+		"work-item-comments": {"jira_jql", "jira_issue_enrichment", "jira_comments"},
+	} {
+		t.Run(dataset, func(t *testing.T) {
+			claim := nativeTestClaim("jira", dataset)
+			claim.SourceExternalID = "OPS"
+			claim.DatasetOptions = map[string]any{"fetch_comments": true, "comments_limit": 10, "sprint_field": "customfield_10020"}
+			doer := &jiraWorkItemsDoer{t: t}
+			client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+			client.Ledger = providerfoundation.NewRequestLedger()
+			if _, err := (JiraWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity}).Collect(
+				context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+			); err != nil {
+				t.Fatal(err)
+			}
+			assertRouteRequestsAreLabelled(t, "jira", dataset, client.Ledger, wantFamilies...)
+		})
+	}
+}

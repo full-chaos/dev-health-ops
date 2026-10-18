@@ -1,0 +1,14 @@
+{
+  "action": "members.invite",
+  "context": {
+    "client_service": "dev-health-web",
+    "request_id": "req_EXAMPLE0000000000000000001"
+  },
+  "principal_reference": "prf_EXAMPLE0000000000000001",
+  "resource": {
+    "key": "org-example-1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "type": "organization"
+  },
+  "schema_version": "authorization_request.v1"
+}

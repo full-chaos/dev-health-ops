@@ -20,6 +20,72 @@ import (
 // capability. It used to also carry compute_estimate_coverage_metrics_
 // daily's rows until CHAOS-5323/CHAOS-3092 deleted that function -- see
 // estimateCoverageGoldenFixture below for where those 14 cases live now.
+type goldenUserRow struct {
+	Day               string   `json:"day"`
+	Provider          string   `json:"provider"`
+	WorkScopeID       string   `json:"work_scope_id"`
+	UserIdentity      string   `json:"user_identity"`
+	TeamID            string   `json:"team_id"`
+	TeamName          string   `json:"team_name"`
+	ItemsStarted      int      `json:"items_started"`
+	ItemsCompleted    int      `json:"items_completed"`
+	WIPCountEndOfDay  int      `json:"wip_count_end_of_day"`
+	CycleTimeP50Hours *float64 `json:"cycle_time_p50_hours"`
+	CycleTimeP90Hours *float64 `json:"cycle_time_p90_hours"`
+}
+
+// declaredMergedUserRows is the row the Go compute makes for a person that the
+// frozen Python output holds under more than one team (CHAOS-8859). The measures
+// are the sums over the Python rows; the team is the one with the most of the
+// person's items that day, the lowest team id on a tie. Every entry names its
+// reason: a person with two Python rows has none declared here only if the
+// golden changes.
+var declaredMergedUserRows = map[[3]string]struct {
+	teamID, teamName                          string
+	itemsStarted, itemsCompleted, wipEndOfDay int
+	reason                                    string
+}{
+	{"github", "", "unassigned"}: {
+		"team-jira", "Jira Team", 1, 0, 1,
+		"one unassigned item created that day under team-jira (all measures 0) and one started and in progress under unassigned: one item each, so the lowest team id labels the row",
+	},
+}
+
+// goldenUserRowsOneForEachPerson returns the golden user rows with each person
+// that has several rows replaced by its declared merged row; a person that has
+// several rows and no declaration fails the test.
+func goldenUserRowsOneForEachPerson(t *testing.T, rows []goldenUserRow) []goldenUserRow {
+	t.Helper()
+	counts := map[[3]string]int{}
+	for _, row := range rows {
+		counts[[3]string{row.Provider, row.WorkScopeID, row.UserIdentity}]++
+	}
+	var out []goldenUserRow
+	emitted := map[[3]string]bool{}
+	for _, row := range rows {
+		key := [3]string{row.Provider, row.WorkScopeID, row.UserIdentity}
+		if counts[key] == 1 {
+			out = append(out, row)
+			continue
+		}
+		if emitted[key] {
+			continue
+		}
+		emitted[key] = true
+		declared, ok := declaredMergedUserRows[key]
+		if !ok {
+			t.Fatalf("the golden holds %d rows for %v and the test declares no merged row for it", counts[key], key)
+		}
+		merged := goldenUserRow{
+			Day: row.Day, Provider: row.Provider, WorkScopeID: row.WorkScopeID, UserIdentity: row.UserIdentity,
+			TeamID: declared.teamID, TeamName: declared.teamName,
+			ItemsStarted: declared.itemsStarted, ItemsCompleted: declared.itemsCompleted, WIPCountEndOfDay: declared.wipEndOfDay,
+		}
+		out = append(out, merged)
+	}
+	return out
+}
+
 type goldenFixture struct {
 	Day        string `json:"day"`
 	ComputedAt string `json:"computed_at"`
@@ -73,20 +139,8 @@ type goldenFixture struct {
 		WIPCongestionRatio       float64  `json:"wip_congestion_ratio"`
 		PredictabilityScore      float64  `json:"predictability_score"`
 	} `json:"work_item_metrics_daily"`
-	UserMetricsDaily []struct {
-		Day               string   `json:"day"`
-		Provider          string   `json:"provider"`
-		WorkScopeID       string   `json:"work_scope_id"`
-		UserIdentity      string   `json:"user_identity"`
-		TeamID            string   `json:"team_id"`
-		TeamName          string   `json:"team_name"`
-		ItemsStarted      int      `json:"items_started"`
-		ItemsCompleted    int      `json:"items_completed"`
-		WIPCountEndOfDay  int      `json:"wip_count_end_of_day"`
-		CycleTimeP50Hours *float64 `json:"cycle_time_p50_hours"`
-		CycleTimeP90Hours *float64 `json:"cycle_time_p90_hours"`
-	} `json:"work_item_user_metrics_daily"`
-	CycleTimes []struct {
+	UserMetricsDaily []goldenUserRow `json:"work_item_user_metrics_daily"`
+	CycleTimes       []struct {
 		WorkItemID      string   `json:"work_item_id"`
 		Provider        string   `json:"provider"`
 		Day             string   `json:"day"`
@@ -323,11 +377,19 @@ func TestComputeDailyTripletMatchesPythonGolden(t *testing.T) {
 		checkFloat(t, label, "predictability_score", got.PredictabilityScore, want.PredictabilityScore)
 	}
 
-	if len(triplet.UserMetricsDaily) != len(fixture.UserMetricsDaily) {
-		t.Fatalf("work_item_user_metrics_daily row count: got %d, python produced %d",
-			len(triplet.UserMetricsDaily), len(fixture.UserMetricsDaily))
+	// work_item_user_metrics_daily stores one row for each (provider, scope, person, day):
+	// the team is a value of the row. Python grouped by team too and the table key
+	// collapsed the rows, so a person in two teams has two rows in the frozen output. The
+	// Go compute makes the one row (CHAOS-8859, chris: "It's a user metric, why would it
+	// key on team?"): the sums over the teams, labelled by the team with the most items,
+	// the lowest team id on a tie. A person with two golden rows is checked against the
+	// declared merged row below, every other person against the golden row.
+	wantUsers := goldenUserRowsOneForEachPerson(t, fixture.UserMetricsDaily)
+	if len(triplet.UserMetricsDaily) != len(wantUsers) {
+		t.Fatalf("work_item_user_metrics_daily row count: got %d, want %d (python produced %d)",
+			len(triplet.UserMetricsDaily), len(wantUsers), len(fixture.UserMetricsDaily))
 	}
-	for index, want := range fixture.UserMetricsDaily {
+	for index, want := range wantUsers {
 		got := triplet.UserMetricsDaily[index]
 		label := want.WorkScopeID + "/" + want.UserIdentity + "/" + want.TeamID
 		if got.Day.Format("2006-01-02") != want.Day || got.Provider != want.Provider ||

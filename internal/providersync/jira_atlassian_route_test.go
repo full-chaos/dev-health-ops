@@ -888,3 +888,62 @@ func TestJiraAtlassianRouteLogsItsFetchWindowWhenTheSearchFails(t *testing.T) {
 		t.Fatalf("a failed search emitted no window line: %q", line)
 	}
 }
+
+// The Atlassian route accounts its search, changelog, board and sprint reads to
+// jira_jql / jira_issue_enrichment and the worklog reads to jira_worklogs, the
+// families the dispatch estimate names; none is left unlabelled.
+func TestJiraAtlassianRouteLabelsEveryRequestWithTheEstimatesFamilies(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	doer := &jiraAtlassianDoer{t: t}
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client.Ledger = providerfoundation.NewRequestLedger()
+	if _, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertRouteRequestsAreLabelled(t, "jira", claim.Dataset, client.Ledger, "jira_jql", "jira_issue_enrichment", "jira_worklogs")
+}
+
+// The GraphQL client of the route is a second client; its wire requests are
+// part of the unit and are counted in the unit's ledger with the REST ones.
+func TestJiraAtlassianRouteCountsTheGraphQLClientsRequestsInTheUnitLedger(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	claim.DatasetOptions["atlassian_gql_enabled"] = true
+	rest := &jiraAtlassianDoer{t: t}
+	restHits, graphqlHits := 0, 0
+	restCounting := jiraAtlassianDoerFunc(func(request *http.Request) (*http.Response, error) {
+		restHits++
+		return rest.Do(request)
+	})
+	graphql := jiraAtlassianDoerFunc(func(request *http.Request) (*http.Response, error) {
+		graphqlHits++
+		body := `{"data":{"issue":{"worklogs":{"pageInfo":{"hasNextPage":false,"endCursor":""},"edges":[]}}}}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)), Request: request,
+		}, nil
+	})
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(restCounting), lease)
+	client.Ledger = providerfoundation.NewRequestLedger()
+	handler := jiraAtlassianCompleteHandler(t)
+	handler.CloudID, handler.GraphQLClient = "cloud-301", jiraWorkItemsTestClient(t, fakehttp.Client(graphql), lease)
+	if _, err := handler.Collect(context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if graphqlHits == 0 {
+		t.Fatal("the route sent no GraphQL request, so nothing below tests anything")
+	}
+	entries, dropped := client.Ledger.Snapshot()
+	counted := 0
+	for _, entry := range entries {
+		counted += entry.Requests
+	}
+	if counted != restHits+graphqlHits || dropped != 0 {
+		t.Fatalf("ledger counted %d (dropped %d), want %d REST + %d GraphQL wire requests: %v", counted, dropped, restHits, graphqlHits, entries)
+	}
+}

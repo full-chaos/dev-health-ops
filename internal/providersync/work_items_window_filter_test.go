@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -141,5 +142,69 @@ func TestJiraAtlassianRouteDoesNotWriteAnIssueOutsideTheWindow(t *testing.T) {
 		if effect.Destination == "work_items" && len(effect.Rows) != 0 {
 			t.Fatalf("work_items rows = %d for an issue updated outside the window, want 0", len(effect.Rows))
 		}
+	}
+}
+
+// jiraFixtureWindow widens the end of nativeTestClaim's July window to the end of August 2026, which holds
+// the updated times of the Jira route fixtures: a work-items unit now keeps only the items updated inside
+// its window, and these tests are about what the route does with the items it keeps.
+func jiraFixtureWindow(claim Claim) Claim {
+	before := time.Date(2026, 8, 31, 23, 59, 59, 0, time.UTC)
+	claim.BeforeAt = &before
+	return claim
+}
+
+// Every dropped item is counted by provider; one Info line per call names the provider, the window and the
+// count (and only when something was dropped); each item is a Debug line, never a Warn. A kept item and an
+// item with no updated time are neither dropped nor counted.
+func TestDropOutsideWorkItemWindowCountsEachDroppedItemAndLogsOneInfoLine(t *testing.T) {
+	var logged lockedLogBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	claim := nativeTestClaim("gitlab", "work-items")
+	metrics := providerfoundation.NewMetrics()
+	type item struct {
+		id      string
+		updated string
+	}
+	view := func(i item) workItemWindowView {
+		at, err := time.Parse(time.RFC3339, i.updated)
+		return workItemWindowView{ID: i.id, UpdatedAt: at, Known: err == nil}
+	}
+	items := []item{{"1", "2026-06-30T23:59:59Z"}, {"2", "2026-07-01T00:00:00Z"}, {"3", "2026-07-31T23:59:59Z"}, {"4", "2026-08-01T00:00:00Z"}, {"5", ""}}
+	kept := dropOutsideWorkItemWindow(context.Background(), metrics, claim, items, view)
+	if len(kept) != 2 || kept[0].id != "2" || kept[1].id != "5" {
+		t.Fatalf("kept = %+v, want items 2 (at the start) and 5 (no updated time)", kept)
+	}
+	var rendered strings.Builder
+	if err := metrics.WritePrometheus(&rendered); err != nil {
+		t.Fatal(err)
+	}
+	if want := `dev_health_work_items_outside_window_dropped_total{provider="gitlab"} 3`; !strings.Contains(rendered.String(), want) {
+		t.Fatalf("metrics lack %q", want)
+	}
+	output := logged.String()
+	if got := strings.Count(output, "msg=providersync.work_items.dropped_outside_window "); got != 1 {
+		t.Fatalf("%d summary lines, want exactly 1: %s", got, output)
+	}
+	for _, want := range []string{"level=INFO msg=providersync.work_items.dropped_outside_window ", "provider=gitlab", "dropped=3", "kept=2", "reason=outside_window"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("summary line lacks %q: %s", want, output)
+		}
+	}
+	if got := strings.Count(output, "level=DEBUG msg=providersync.work_items.dropped_outside_window_item"); got != 3 {
+		t.Fatalf("%d Debug item lines, want 3: %s", got, output)
+	}
+	if strings.Contains(output, "level=WARN") {
+		t.Fatalf("a dropped item must not warn: %s", output)
+	}
+
+	var quiet lockedLogBuffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&quiet, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	dropOutsideWorkItemWindow(context.Background(), metrics, claim, items[1:2], view)
+	if strings.Contains(quiet.String(), "dropped_outside_window") {
+		t.Fatalf("a call that dropped nothing logged: %s", quiet.String())
 	}
 }

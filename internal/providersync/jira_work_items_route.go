@@ -110,6 +110,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	issues = dropJiraIssuesOutsideWindow(ctx, client.Metrics, claim, issues)
 
 	rows := jiraWorkItemRows{
 		WorkItems:          make([]jiraWorkItemRow, 0, len(issues)),

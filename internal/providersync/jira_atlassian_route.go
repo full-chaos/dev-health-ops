@@ -234,6 +234,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	issues = dropJiraIssuesOutsideWindow(ctx, client.Metrics, claim, issues)
 
 	rows := jiraAtlassianRows{jiraWorkItemRows: jiraWorkItemRows{
 		WorkItems:          make([]jiraWorkItemRow, 0, len(issues)),

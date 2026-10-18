@@ -811,16 +811,10 @@ func WindowRatchetClass(provider, dataset, costClass string) string {
 // workItemWindowBoundedProviders are the providers whose work-items route
 // leaves out every item updated after the window END, so a capped window is a
 // smaller unit: GitHub skips those issues and pull requests after the list
-// call, and Linear filters updatedAt on both ends.
-//
-// GitLab and Jira are absent because their routes bound the window START
-// only: GitLab sends updated_after and no updated_before, and the Jira query
-// has no upper bound on `updated` and always includes every open issue. For
-// them a capped window would fetch the whole remaining depth in every window
-// -- the same largest unit as today, repeated once per window -- so the cap
-// would add cost and bound nothing. They join this set when their route
-// honours the window end.
-var workItemWindowBoundedProviders = setOf("github", "linear")
+// call, Linear filters updatedAt on both ends, GitLab sends updated_before on
+// the issues and merge-requests lists, and Jira's JQL has an upper date bound
+// (CHAOS-8805, and no open-issue clause). All four providers of the family.
+var workItemWindowBoundedProviders = setOf("github", "linear", "gitlab", "jira")
 
 func resolveWindowStart(input PlannerInput, source PlanSource, dataset PlanDataset, spec datasetSpec, now time.Time) *time.Time {
 	if input.Mode == SyncModeIncremental {

@@ -82,7 +82,7 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 }
 
 func jiraAtlassianClaim() Claim {
-	claim := nativeTestClaim("jira", "work-items")
+	claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
 		"fetch_worklogs":      true,
@@ -504,7 +504,7 @@ func TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues(t *testing.T) {
 			return nil, nil
 		}
 	})
-	claim := nativeTestClaim("jira", "work-items")
+	claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
 		"fetch_dev_status": true, "dev_status_max_requests": 2, "fetch_comments": false,
@@ -569,7 +569,7 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 			return nil, nil
 		}
 	})
-	claim := nativeTestClaim("jira", "work-items")
+	claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
 		"fetch_dev_status": true, "dev_status_max_requests": 3, "fetch_comments": false,
@@ -799,7 +799,7 @@ func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
 					return nil, nil
 				}
 			})
-			claim := nativeTestClaim("jira", "work-items")
+			claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 			claim.SourceExternalID = "OPS"
 			claim.DatasetOptions = map[string]any{"fetch_dev_status": true, "fetch_comments": false}
 			client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
@@ -861,7 +861,7 @@ func TestJiraAtlassianRouteLogsItsFetchWindowAtInfo(t *testing.T) {
 	}
 	line := logged.String()
 	if !strings.Contains(line, "msg=jira_work_items_window") || !strings.Contains(line, "issues=1") ||
-		!strings.Contains(line, "updated >= '2026-06-30' AND updated < '2026-08-02'") || strings.Contains(line, "statusCategory") {
+		!strings.Contains(line, "updated >= '2026-06-30' AND updated < '2026-09-02'") || strings.Contains(line, "statusCategory") {
 		t.Fatalf("the active Jira route did not log its bounded window: %q", line)
 	}
 }

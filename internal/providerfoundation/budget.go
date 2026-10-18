@@ -296,6 +296,10 @@ type Metrics struct {
 	// raw rows and left every derived table to the daily job, by provider --
 	// see RecordWorkItemDerivedTablesLeftToDailyJob.
 	workItemDerivedLeftToDaily map[string]uint64
+	// workItemsOutsideWindow counts the items a GitLab or Jira work-items unit
+	// dropped because their updated time is outside its half-open window, by
+	// provider (reason: outside_window).
+	workItemsOutsideWindow map[string]uint64
 	// preparedRetiredEffectsSkipped counts the effects of a prepared
 	// work-items manifest that a recovering unit did not write because the
 	// daily job now owns their table, by provider -- see
@@ -333,6 +337,7 @@ func NewMetrics() *Metrics {
 		jiraDevStatus:                  map[string]uint64{},
 		gitlabClosingMR:                map[string]uint64{},
 		workItemDerivedLeftToDaily:     map[string]uint64{},
+		workItemsOutsideWindow:         map[string]uint64{},
 		preparedRetiredEffectsSkipped:  map[string]uint64{},
 	}
 }
@@ -1263,6 +1268,24 @@ func (m *Metrics) RecordWorkItemDerivedTablesLeftToDailyJob(provider string) {
 	m.workItemDerivedLeftToDaily[label]++
 }
 
+// RecordWorkItemOutsideWindow counts one item a work-items unit dropped because
+// its updated time is outside the unit's half-open window [since, before): the
+// fetch bound of the provider is wider than the window (GitLab's inclusive
+// updated_before, Jira's date-only JQL bounds), and the adjacent window holds
+// the item.
+func (m *Metrics) RecordWorkItemOutsideWindow(provider string) {
+	if m == nil {
+		return
+	}
+	label := strings.ToLower(strings.TrimSpace(provider))
+	if _, known := metricWorkItemProviderVocabulary[label]; !known {
+		label = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workItemsOutsideWindow[label]++
+}
+
 // RecordPreparedRetiredWorkItemEffectsSkipped counts the effects of one
 // prepared work-items manifest that a recovering unit completed without
 // writing (CHAOS-8811). The manifest was stored by a binary whose sync unit
@@ -1758,6 +1781,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_work_item_derived_tables_left_to_daily_job_total",
 		"Work-items sync units that stored raw rows and left every table computed from them (the three work-item metric tables, estimate coverage, team attribution, state durations, issue types, the two investment tables) to the daily job, by provider (CHAOS-8811).",
 		"provider", m.workItemDerivedLeftToDaily,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_work_items_outside_window_dropped_total",
+		"Work-items sync items dropped because their updated time is outside the unit's half-open window, by provider (reason outside_window).",
+		"provider", m.workItemsOutsideWindow,
 	); err != nil {
 		return err
 	}

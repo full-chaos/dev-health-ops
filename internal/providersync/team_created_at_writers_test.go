@@ -47,9 +47,9 @@ func TestCatalogTeamWritersCarryCreatedAt(t *testing.T) {
 			t.Fatalf("no row reached the batch: %#v", conn.batch)
 		}
 		row := conn.batch.appended[0]
-		created, ok := row[len(row)-4].(time.Time)
+		created, ok := row[len(row)-1].(time.Time)
 		if !ok {
-			t.Fatalf("the last value is %T, want created_at", row[len(row)-4])
+			t.Fatalf("the last value is %T, want created_at", row[len(row)-1])
 		}
 		return created
 	}

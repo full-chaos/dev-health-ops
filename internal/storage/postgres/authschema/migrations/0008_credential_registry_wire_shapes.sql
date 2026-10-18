@@ -23,6 +23,13 @@
 --   display_prefix     at most 16 characters of [A-Za-z0-9_]: the only fragment of
 --                      a secret that may appear outside the one-time receipt.
 --   revoked_reason     a reason CODE, never prose.
+--   revoked_at and revoked_reason are ALL-OR-NONE: the wire entry requires both
+--                      when status is revoked and forbids both otherwise, and
+--                      status is derived from revoked_at alone, so a row holding
+--                      one without the other has no valid projection. Every
+--                      conditional the entry schema states over columns has a
+--                      producer constraint (TestEveryEntryConditionalHasAProducerCheck,
+--                      in the credential contract's PR, sweeps the schema for them).
 ALTER TABLE credential_registry
     ADD CONSTRAINT credential_registry_credential_class_closed
     CHECK (credential_class IN (
@@ -64,4 +71,6 @@ ALTER TABLE credential_registry
     ADD CONSTRAINT credential_registry_display_prefix_shape
     CHECK (display_prefix ~ '^[A-Za-z0-9_]{0,16}$'),
     ADD CONSTRAINT credential_registry_revoked_reason_code
-    CHECK (revoked_reason IS NULL OR revoked_reason ~ '^[a-z][a-z0-9_]{2,63}$');
+    CHECK (revoked_reason IS NULL OR revoked_reason ~ '^[a-z][a-z0-9_]{2,63}$'),
+    ADD CONSTRAINT credential_registry_revoked_pair
+    CHECK ((revoked_at IS NULL) = (revoked_reason IS NULL));

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // A provider team id carries its provider's prefix (internal/teamid). The
@@ -248,6 +249,7 @@ func logKeyedTeamOutcome(ctx context.Context, outcome TeamIDCarryOutcome) {
 type TeamIDCarryConn interface {
 	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
 	PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error)
+	Exec(ctx context.Context, query string, args ...any) error
 }
 
 // teamIDCarryCount reads the count query; a missing row is a failed read.
@@ -291,6 +293,10 @@ type teamIDCarryRun struct {
 	target  map[string]map[string]string
 	groups  map[string]map[string]bool
 	primary map[string]string
+	// moved: the new ids whose team row this run writes from a moved row; that
+	// row states the moved team's provider identity. Every other teams row the
+	// run writes keeps the stored identity.
+	moved map[string]bool
 
 	// writes run in this order; teams and observations are last.
 	writes []teamIDCarryWrite
@@ -493,7 +499,9 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 	}
 
 	rows := make([]chRow, 0, len(created)+len(retired))
+	run.moved = make(map[string]bool, len(created))
 	for _, team := range created {
+		run.moved[team.id] = true
 		// A custom team, pushed or the admin's, is stored with no provider
 		// (teamid.StoredProvider).
 		row := run.newTeamRow(team.content, team.content.str("id"), team.id)
@@ -610,9 +618,11 @@ func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 				continue
 			}
 			run.outcome.TeamsAlreadyKeyed++
+			delete(run.moved, id)
 			continue
 		}
 		run.outcome.TeamsAlreadyKeyed++
+		delete(run.moved, id)
 		if custom && held.u8("is_active") != 1 && !activate[id] {
 			activate[id] = true
 			run.outcome.KeyedTeamsActivated++
@@ -1097,6 +1107,13 @@ func (run *teamIDCarryRun) write() error {
 		if len(write.rows) == 0 {
 			continue
 		}
+		if write.table == "teams" {
+			if err := run.writeTeams(ctx, write); err != nil {
+				return fmt.Errorf("team id carry: write teams: %w", err)
+			}
+			run.outcome.RowsWritten += uint64(len(write.rows))
+			continue
+		}
 		batch, err := run.conn.PrepareBatch(ctx, "INSERT INTO "+write.table+" ("+write.columns+")")
 		if err != nil {
 			return fmt.Errorf("team id carry: write %s: %w", write.table, err)
@@ -1113,6 +1130,37 @@ func (run *teamIDCarryRun) write() error {
 		run.outcome.RowsWritten += uint64(len(write.rows))
 	}
 	return nil
+}
+
+// writeTeams writes the team rows through teamprovider.Insert: a moved team's
+// new row states the moved row's provider identity (gone_at included), and
+// every other row (an old row going inactive, a kept row taking members)
+// keeps the stored identity, read inside the same statement.
+func (run *teamIDCarryRun) writeTeams(ctx context.Context, write teamIDCarryWrite) error {
+	all := strings.Split(write.columns, ", ")
+	identity := map[string]bool{teamprovider.ColumnProviderTeamID: true, teamprovider.ColumnProviderName: true, teamprovider.ColumnGoneAt: true}
+	var columns []string
+	for _, column := range all {
+		if !identity[column] {
+			columns = append(columns, column)
+		}
+	}
+	writes := make([]teamprovider.Write, 0, len(write.rows))
+	for _, row := range write.rows {
+		values := make([]any, 0, len(columns))
+		for _, column := range columns {
+			values = append(values, row.value(column))
+		}
+		version := teamprovider.Write{Values: values, Gone: teamprovider.GoneKept}
+		if run.moved[row.str("id")] {
+			version = teamprovider.Write{
+				Values: values, ProviderTeamID: row.str(teamprovider.ColumnProviderTeamID), ProviderName: row.str(teamprovider.ColumnProviderName),
+				Gone: teamprovider.GoneStated, GoneAt: row.timePtr(teamprovider.ColumnGoneAt),
+			}
+		}
+		writes = append(writes, version)
+	}
+	return teamprovider.Insert(ctx, run.conn, run.orgID, columns, writes)
 }
 
 // teamIDCarryBump is a version stamp past the stored one: `at`, or the

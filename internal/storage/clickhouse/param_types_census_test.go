@@ -31,6 +31,9 @@ var (
 	provenNamedTypes = map[string]bool{
 		"string": true, "[]string": true, "[]github.com/google/uuid.UUID": true,
 		"[]uint32": true, "uint32": true, "uint64": true,
+		// teamprovider.Insert sends each teams column as one array of its
+		// rows' values; the element shapes it sends are proven one by one.
+		"[]any": true,
 	}
 	// The dev-health-go query client encodes these itself and refuses others.
 	provenBindingTypes = map[string]bool{

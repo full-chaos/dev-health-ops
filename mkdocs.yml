@@ -208,6 +208,8 @@ nav:
           - Errors, pagination, and limits: reference/api/errors-pagination-rate-limits.md
       - Auth: reference/auth/credential-classes.md
       - Auth endpoint profiles: reference/auth/endpoint-profiles.md
+      - Auth service configuration: reference/auth/configuration.md
+      - Auth service readiness and SLO: reference/auth/readiness-and-slo.md
       - GraphQL:
           - reference/graphql/index.md
           - Schema and fields: reference/graphql/schema.md
@@ -264,6 +266,13 @@ nav:
           - Auth Control Plane threat model: contribute/architecture/auth-control-plane-threat-model.md
           - Auth Control Plane ADRs: contribute/architecture/auth-control-plane-adrs.md
           - Auth Control Plane decision sheet: contribute/architecture/auth-control-plane-decision-sheet.md
+          - Auth Control Plane architecture: contribute/architecture/auth-control-plane-architecture.md
+          - Auth Control Plane dependencies and cryptography: contribute/architecture/auth-control-plane-dependencies.md
+          - Auth Control Plane deployment: contribute/architecture/auth-control-plane-deployment.md
+          - Auth Control Plane database and migrations: contribute/architecture/auth-control-plane-database.md
+          - Auth Control Plane contracts and SDK: contribute/architecture/auth-control-plane-contracts.md
+          - Auth Control Plane audit and outbox: contribute/architecture/auth-control-plane-audit-outbox.md
+          - Auth Control Plane Go gates: contribute/architecture/auth-control-plane-go-gates.md
       - Develop and test:
           - contribute/development/index.md
           - Commands: contribute/development/commands.md

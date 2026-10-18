@@ -287,15 +287,14 @@ func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 	}
 }
 
-// TestEnvelopeClassConsumersNameEveryRouteThatAcceptsIt keeps the credential
-// class registry honest about WHERE the effective-principal envelope is accepted
-// (CHAOS-5522). The routes come from the query-api profile rows
-// (accepted_credential_classes), the claim from the class's consumers in
-// credential-classes.json; a route that takes the envelope but is missing from
-// the class's consumers fails here. The /api/v1/ REST read routes are covered by
-// the single token "/api/v1/*".
-func TestEnvelopeClassConsumersNameEveryRouteThatAcceptsIt(t *testing.T) {
-	const class = "effective_principal_envelope"
+// TestClassConsumersNameEveryQueryAPIRouteThatAcceptsThem keeps the credential
+// class registry honest about WHERE each class is accepted (CHAOS-5522). For
+// EVERY class, every query-api profile row that lists the class in
+// accepted_credential_classes must have its route named in the class's
+// consumers in credential-classes.json. The /api/v1/ REST read routes are
+// covered by the single token "/api/v1/*". The class is the defect, not one
+// class: the first instance was the effective-principal envelope.
+func TestClassConsumersNameEveryQueryAPIRouteThatAcceptsThem(t *testing.T) {
 	raw, err := os.ReadFile("../../../contracts/auth/v1/credential-classes.json")
 	if err != nil {
 		t.Fatal(err)
@@ -311,43 +310,37 @@ func TestEnvelopeClassConsumersNameEveryRouteThatAcceptsIt(t *testing.T) {
 	if err := json.Unmarshal(raw, &registry); err != nil {
 		t.Fatal(err)
 	}
-	described := ""
-	found := false
+	described := map[string]string{}
 	for _, entry := range registry.Classes {
-		if entry.ClassID != class {
-			continue
-		}
-		found = true
 		for _, consumer := range entry.Consumers {
-			described += " " + consumer.Description + " "
+			described[entry.ClassID] += " " + consumer.Description + " "
+		}
+		if _, ok := described[entry.ClassID]; !ok {
+			described[entry.ClassID] = " "
 		}
 	}
-	if !found {
-		t.Fatalf("class %s is not registered", class)
-	}
-	accepting := 0
+	checked := 0
 	for _, row := range loadQueryAPIRows(t) {
-		classes, _ := row["accepted_credential_classes"].([]any)
-		takes := false
-		for _, c := range classes {
-			if c == class {
-				takes = true
-			}
-		}
-		if !takes {
-			continue
-		}
-		accepting++
 		route, _ := row["route"].(string)
 		token := route
 		if strings.HasPrefix(route, "/api/v1/") {
 			token = "/api/v1/*"
 		}
-		if !strings.Contains(described, " "+token+" ") && !strings.Contains(described, " "+token+",") && !strings.Contains(described, " "+token+".") {
-			t.Errorf("route %s accepts %s but the class's consumers do not name it (token %q) in: %s", route, class, token, strings.TrimSpace(described))
+		classes, _ := row["accepted_credential_classes"].([]any)
+		for _, c := range classes {
+			class, _ := c.(string)
+			text, registered := described[class]
+			if !registered {
+				t.Errorf("route %s lists class %q, which the registry does not define", route, class)
+				continue
+			}
+			checked++
+			if !strings.Contains(text, " "+token+" ") && !strings.Contains(text, " "+token+",") && !strings.Contains(text, " "+token+".") {
+				t.Errorf("route %s accepts %s but that class's consumers do not name it (token %q) in: %s", route, class, token, strings.TrimSpace(text))
+			}
 		}
 	}
-	if accepting == 0 {
-		t.Fatal("no profile row accepts the envelope class: the test measured nothing")
+	if checked == 0 {
+		t.Fatal("no (route, class) pair was checked: the test measured nothing")
 	}
 }

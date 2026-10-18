@@ -38,11 +38,28 @@
 CREATE DOMAIN credential_token_name AS text
     CONSTRAINT credential_token_name_shape CHECK (VALUE ~ '^[a-z][a-z0-9._:-]{0,63}$');
 
+-- credential_scope is the SAME shape principal.v1 gives a scope
+-- (contracts/auth/v1/jsonschema/principal.v1.schema.json, credential.scopes
+-- items.pattern: colon-separated, e.g. api:access), bounded to 64 characters.
+-- TestCredentialScopeShapeMatchesThePrincipalContract fails if the two drift,
+-- because a registry that stores `read` would project a scope no principal
+-- document may carry.
+CREATE DOMAIN credential_scope AS text
+    CONSTRAINT credential_scope_shape
+    CHECK (VALUE ~ '^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*)+$' AND char_length(VALUE) <= 64);
+
+-- A scope or audience list is a SET (principal.v1 scopes are uniqueItems).
+-- IMMUTABLE and free of any table reference, so it is safe in a CHECK and
+-- resolves under any search_path.
+CREATE FUNCTION credential_array_is_set(anyarray) RETURNS boolean
+    LANGUAGE sql IMMUTABLE
+AS $$ SELECT cardinality($1) = cardinality(ARRAY(SELECT DISTINCT e FROM unnest($1) AS e)) $$;
+
 ALTER TABLE credential_registry
     -- Rotation lineage (TRD section 12). NULL for a first-issue credential.
     ADD COLUMN rotation_parent_id uuid REFERENCES credential_registry (id),
     ADD COLUMN audiences credential_token_name[] NOT NULL DEFAULT '{}',
-    ADD COLUMN scopes    credential_token_name[] NOT NULL DEFAULT '{}',
+    ADD COLUMN scopes    credential_scope[] NOT NULL DEFAULT '{}',
     -- Which validator owns the credential. ACP-ADR-08/09: ACR and External Push
     -- keep their domain validators; this column is metadata, never a second
     -- validator.
@@ -54,9 +71,11 @@ ALTER TABLE credential_registry
     -- length, distinct from display_prefix.
     ADD COLUMN fingerprint text,
     ADD CONSTRAINT credential_registry_audiences_bounded
-        CHECK (cardinality(audiences) <= 16 AND array_position(audiences, NULL) IS NULL),
+        CHECK (cardinality(audiences) <= 16 AND array_position(audiences, NULL) IS NULL
+               AND credential_array_is_set(audiences)),
     ADD CONSTRAINT credential_registry_scopes_bounded
-        CHECK (cardinality(scopes) <= 64 AND array_position(scopes, NULL) IS NULL),
+        CHECK (cardinality(scopes) <= 64 AND array_position(scopes, NULL) IS NULL
+               AND credential_array_is_set(scopes)),
     ADD CONSTRAINT credential_registry_domain_owner_closed
         CHECK (domain_owner IN ('platform', 'acr', 'external_push')),
     ADD CONSTRAINT credential_registry_external_reference_shape
@@ -73,7 +92,10 @@ ALTER TABLE credential_registry
 CREATE INDEX credential_registry_rotation_parent_idx
     ON credential_registry (rotation_parent_id) WHERE rotation_parent_id IS NOT NULL;
 
--- Rotation preserves or narrows privilege (TRD section 12). A rotated row must
+-- Rules enforced at insert. A NEW credential must carry its non-secret fingerprint
+-- (a CHECK would also reject updates to any pre-existing row that has none, such
+-- as a revocation, so the requirement is placed on INSERT only). Rotation
+-- preserves or narrows privilege (TRD section 12). A rotated row must
 -- name a live parent of the same principal, class and domain owner, and may
 -- carry only scopes and audiences its parent carries. Widening is a NEW
 -- credential issued under its own authorization, not a rotation.
@@ -85,12 +107,15 @@ CREATE INDEX credential_registry_rotation_parent_idx
 -- executed). The parent row is read by dynamic SQL against TG_TABLE_SCHEMA and
 -- TG_TABLE_NAME, which name the table the trigger fired on, whatever the schema
 -- is called.
-CREATE FUNCTION credential_registry_rotation_narrows() RETURNS trigger
+CREATE FUNCTION credential_registry_insert_rules() RETURNS trigger
     LANGUAGE plpgsql
 AS $$
 DECLARE
     parent record;
 BEGIN
+    IF NEW.fingerprint IS NULL THEN
+        RAISE EXCEPTION 'a new credential must carry its fingerprint' USING ERRCODE = '23502';
+    END IF;
     IF NEW.rotation_parent_id IS NULL THEN
         RETURN NEW;
     END IF;
@@ -117,9 +142,9 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER credential_registry_rotation_narrows
+CREATE TRIGGER credential_registry_insert_rules
     BEFORE INSERT ON credential_registry
-    FOR EACH ROW EXECUTE FUNCTION credential_registry_rotation_narrows();
+    FOR EACH ROW EXECUTE FUNCTION credential_registry_insert_rules();
 
 -- Revocation is idempotent and monotonic (TRD section 12): re-writing the same
 -- revoked_at and revoked_reason is a no-op, and a revoked row can never change

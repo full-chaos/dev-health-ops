@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -64,8 +65,9 @@ func linearProjectEnsureKeep(
 	}
 	stored, err := readLinearStoredProjects(ctx, conn, orgID, ids)
 	if err != nil {
+		errorClass, errorType := logging.ErrorClass(err), logging.ErrorType(err) // never the error text (CHAOS-7933)
 		slog.Default().WarnContext(ctx, "linear_project_catalog_ensure_read_failed",
-			"org_id", orgID, "rows", len(rows), "error", err.Error())
+			"org_id", orgID, "rows", len(rows), "error_class", errorClass, "error_type", errorType)
 		recordLinearProjectEnsure(ctx, "read_error", len(rows))
 		return keep
 	}

@@ -357,7 +357,7 @@ func TestReproducedRound2WalkHoles(t *testing.T) {
 		}}
 		got, _, err := gitlabListProjectPages(context.Background(), hostileClient(t, "gitlab", doer), "g", "/groups/{group}/projects", "/api/v4/groups/1/projects", 100000, false)
 		assertNoPartial(t, "gitlab 01", got)
-		assertFailedClosed(t, err, doer, logs, "gitlab", hostileCase{name: "leading zero", cause: walkCauseRepeated, maxRequests: 1})
+		assertFailedClosed(t, err, doer, logs, "gitlab", hostileCase{name: "leading zero", cause: walkCauseBadContinuation, maxRequests: 1})
 	})
 }
 
@@ -418,14 +418,70 @@ func TestAMalformedOrInconsistentContinuationSignalIsNeverASuccess(t *testing.T)
 		}
 	}
 	t.Run("github rel=next to another host", func(t *testing.T) {
+		logs := captureWarns(t)
 		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
 			return linkNext("https://evil.example.test/orgs/o/teams?page=2"), `[{"slug":"a","name":"A"}]`
 		}}
 		got, err := githubListAllPages(context.Background(), hostileClient(t, "github", doer), "org teams", "o", "/orgs/{org}/teams", "/orgs/o/teams?per_page=100",
 			func(entry githubTeamListEntry) string { return entry.Slug })
 		assertNoPartial(t, "other host", got)
-		if err == nil || doer.requests.Load() != 1 {
-			t.Fatalf("a rel=next to another host: err=%v requests=%d, want an error after 1 request", err, doer.requests.Load())
-		}
+		assertFailedClosed(t, err, doer, logs, "github", hostileCase{name: "other host", cause: walkCausePageRequest, maxRequests: 1})
 	})
+	t.Run("github bare rel=next", func(t *testing.T) {
+		logs := captureWarns(t)
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+			return header("Link", `rel="next"`), `[{"slug":"a","name":"A"}]`
+		}}
+		got, err := githubListAllPages(context.Background(), hostileClient(t, "github", doer), "org teams", "o", "/orgs/{org}/teams", "/orgs/o/teams?per_page=100",
+			func(entry githubTeamListEntry) string { return entry.Slug })
+		assertNoPartial(t, "bare rel", got)
+		assertFailedClosed(t, err, doer, logs, "github", hostileCase{name: "bare rel=next", cause: walkCauseNoContinuation, maxRequests: 1})
+	})
+	for _, token := range []string{"0", "false", "[]", `""`} {
+		t.Run("jira falsy non-string or empty token "+token, func(t *testing.T) {
+			logs := captureWarns(t)
+			doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+				return nil, `{"issues":[{"key":"P-1","fields":{}}],"nextPageToken":` + token + `}`
+			}}
+			got, err := jiraSearchIssues(context.Background(), hostileClient(t, "jira", doer), "P", "project = 'P'")
+			assertNoPartial(t, token, got)
+			assertFailedClosed(t, err, doer, logs, "jira", hostileCase{name: token, cause: walkCauseBadContinuation, maxRequests: 1})
+		})
+	}
+	for _, value := range []string{"02", "+2", "007"} {
+		t.Run("gitlab zero-padded or signed forward cursor "+value, func(t *testing.T) {
+			logs := captureWarns(t)
+			doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+				return header("X-Next-Page", value), `[{"id":1,"path_with_namespace":"g/a"}]`
+			}}
+			got, _, err := gitlabListProjectPages(context.Background(), hostileClient(t, "gitlab", doer), "g", "/groups/{group}/projects", "/api/v4/groups/1/projects", 100000, false)
+			assertNoPartial(t, value, got)
+			assertFailedClosed(t, err, doer, logs, "gitlab", hostileCase{name: value, cause: walkCauseBadContinuation, maxRequests: 1})
+		})
+	}
+}
+
+// The GitLab member walk follows python-gitlab: the first request carries per_page only (the member-route venue oracle pins it) and
+// every later request is the Link header's own URL.
+func TestGitLabMembersFirstRequestIsThePinnedOne(t *testing.T) {
+	var first, second atomic.Value
+	doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/members") && n == 2:
+			first.Store(r.URL.RequestURI())
+			return linkNext(r.URL.Scheme + "://" + r.URL.Host + r.URL.Path + "?page=2&per_page=100"), `[{"id":1,"username":"a","name":"A"}]`
+		case strings.HasSuffix(r.URL.Path, "/members"):
+			second.Store(r.URL.RequestURI())
+			return nil, `[{"id":2,"username":"b","name":"B"}]`
+		}
+		return nil, `{"id":7,"full_path":"g","name":"G"}`
+	}}
+	withDiscoveryDoer(t, doer)
+	members, err := discoverMembersGitLab(context.Background(), secrets.NewValue("token"), "", "g")
+	if err != nil || len(members) != 2 {
+		t.Fatalf("members = %d, err = %v", len(members), err)
+	}
+	if first.Load() != "/api/v4/groups/7/members?per_page=100" || second.Load() != "/api/v4/groups/7/members?page=2&per_page=100" {
+		t.Fatalf("requests = %v then %v", first.Load(), second.Load())
+	}
 }

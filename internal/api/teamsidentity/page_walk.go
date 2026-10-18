@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -25,6 +26,7 @@ const (
 	walkCauseEmptyPageToNext = "empty_page_advertises_next"
 	walkCauseBadContinuation = "continuation_unreadable"
 	walkCauseInconsistent    = "continuation_inconsistent"
+	walkCausePageRequest     = "page_request_failed"
 )
 
 var pageWalkFailures = func() metric.Int64Counter {
@@ -77,6 +79,23 @@ func (walk *pageWalk) advance(continuation string, advertised bool, items int) (
 	return continuation, true, nil
 }
 
+// pageError is the error of a page request. The first page's error is the caller's own; the error of a later page is a walk that
+// ended early (a continuation the client refuses, a provider that failed mid-walk): it writes the Warn line and the counter with the
+// error's class, and its text names the provider, the walk and the owner. The cause stays reachable through Unwrap.
+func (walk *pageWalk) pageError(err error) error {
+	if err == nil || walk.pages == 0 {
+		return err
+	}
+	slog.Default().WarnContext(walk.ctx, "teams_identity_page_walk_failed",
+		slog.String("provider", walk.provider), slog.String("walk", walk.walk), slog.String("owner", walk.owner),
+		slog.String("cause", walkCausePageRequest), slog.Int("pages", walk.pages), slog.Int("max_pages", pageWalkMaxPages),
+		slog.String("error_class", logging.ErrorClass(err)))
+	pageWalkFailures.Add(walk.ctx, 1, metric.WithAttributes(
+		attribute.String("provider", walk.provider), attribute.String("walk", walk.walk), attribute.String("cause", walkCausePageRequest)))
+	return fmt.Errorf("%s %s walk of %s failed closed: %s after %d pages: %w",
+		walk.provider, walk.walk, walk.owner, walkCausePageRequest, walk.pages, err)
+}
+
 // fail records the failure and returns the error: provider, walk, owner and counts only, no payload text.
 func (walk *pageWalk) fail(cause string) error {
 	slog.Default().WarnContext(walk.ctx, "teams_identity_page_walk_failed",
@@ -96,7 +115,8 @@ func (walk *pageWalk) gitlabNextPage(header string, items int) (int, bool, error
 		return 0, false, err
 	}
 	number, parseErr := strconv.Atoi(header)
-	if parseErr != nil || number < 1 {
+	// only the canonical decimal form is a page number: "02" and "+2" name a page the walk cannot compare with the ones it sent
+	if parseErr != nil || number < 1 || strconv.Itoa(number) != header {
 		walk.pages++
 		return 0, false, walk.fail(walkCauseBadContinuation)
 	}
@@ -125,7 +145,7 @@ func (walk *pageWalk) jiraAdvance(page *pyjson.Object, startAt, items int) (toke
 		}
 		last = flag
 	}
-	if truthy(rawToken) {
+	if rawToken != nil {
 		text, isString := rawToken.(string)
 		if !isString || text == "" {
 			walk.pages++

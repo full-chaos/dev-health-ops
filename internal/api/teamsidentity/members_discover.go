@@ -169,7 +169,7 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 	for next != "" {
 		response, err := client.DoRoute(ctx, "GET", "/orgs/{org}/teams/{slug}/members", next, nil)
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		link := response.Header.Get("Link")
 		raw, err := readBody(response)
@@ -249,7 +249,7 @@ func discoverMembersGitLab(ctx context.Context, token secrets.Value, baseURL, gr
 	for next != "" {
 		response, err := client.DoRoute(ctx, "GET", "/groups/{group}/members", next, nil)
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		link := response.Header.Get("Link")
 		raw, err := readBody(response)

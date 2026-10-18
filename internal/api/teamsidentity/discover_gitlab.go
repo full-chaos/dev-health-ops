@@ -142,7 +142,7 @@ func gitlabListPages[T any](ctx context.Context, client *providerfoundation.HTTP
 	for {
 		response, err := client.DoRoute(ctx, "GET", route, fmt.Sprintf("%s?per_page=100&page=%d%s", path, page, extraQuery), nil)
 		if err != nil {
-			return nil, false, err
+			return nil, false, walk.pageError(err)
 		}
 		raw, readErr := io.ReadAll(response.Body)
 		nextPage := response.Header.Get("X-Next-Page")

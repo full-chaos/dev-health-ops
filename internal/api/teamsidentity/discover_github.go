@@ -123,7 +123,7 @@ func githubListAllPages[T any](ctx context.Context, client *providerfoundation.H
 	for next != "" {
 		response, err := client.DoRoute(ctx, "GET", route, next, nil)
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		raw, readErr := io.ReadAll(response.Body)
 		response.Body.Close()
@@ -159,16 +159,18 @@ func githubNextLink(header string) string {
 func githubNextLinkPresent(header string) (string, bool) {
 	for _, part := range strings.Split(header, ",") {
 		segments := strings.Split(part, ";")
-		if len(segments) < 2 {
-			continue
-		}
-		url := strings.TrimSpace(segments[0])
-		url = strings.TrimPrefix(url, "<")
-		url = strings.TrimSuffix(url, ">")
-		for _, param := range segments[1:] {
-			if strings.TrimSpace(param) == `rel="next"` {
-				return url, true
+		for index, param := range segments {
+			if rel := strings.TrimSpace(param); rel != `rel="next"` && rel != `rel=next` {
+				continue
 			}
+			// a bare rel="next" (no <url> segment before it) still advertises a next page, with no URL
+			if index == 0 {
+				return "", true
+			}
+			url := strings.TrimSpace(segments[0])
+			url = strings.TrimPrefix(url, "<")
+			url = strings.TrimSuffix(url, ">")
+			return url, true
 		}
 	}
 	return "", false

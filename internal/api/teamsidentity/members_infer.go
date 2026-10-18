@@ -178,7 +178,7 @@ func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient
 		values.Set("fields", "assignee,reporter,creator,comment")
 		response, err := client.Do(ctx, "GET", "/rest/api/3/search/jql?"+values.Encode(), nil)
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		raw, err := readBody(response)
 		if err != nil {

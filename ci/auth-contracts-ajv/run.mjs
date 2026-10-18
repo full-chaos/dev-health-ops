@@ -27,6 +27,14 @@ const v1 = path.join(root, "contracts", "auth", "v1");
 const MUST_VALIDATE = { accept: true, reject_by_client: true };
 const MUST_REJECT = { reject: true, narrower_than_consumer: true };
 
+// Categories every surface's manifest must declare and populate. A surface may
+// add more (jwks.v1 has narrower_than_consumer); a surface listed here may not
+// lose one, and any list group a manifest does carry must be non-empty.
+const REQUIRED_GROUPS = {
+  jwks: ["accept", "reject", "reject_by_client", "narrower_than_consumer"],
+};
+const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
+
 const newAjv = () => {
   const ajv = new Ajv2020({ strict: true, allErrors: true });
   addFormats(ajv);
@@ -96,7 +104,7 @@ for (const surface of surfaces) {
   const claimed = new Set();
   const counts = {};
   // An emptied category would make every loop below vacuous and exit 0.
-  for (const required of ["accept", "reject", "reject_by_client"]) {
+  for (const required of REQUIRED_GROUPS[surface] ?? DEFAULT_REQUIRED_GROUPS) {
     if (!Array.isArray(manifest[required]) || manifest[required].length === 0) {
       fail(`${surface}: manifest group "${required}" is missing or empty`);
     }
@@ -109,8 +117,20 @@ for (const surface of surfaces) {
       continue;
     }
     counts[group] = entries.length;
+    if (entries.length === 0) fail(`${surface}: manifest group "${group}" is empty`);
     for (const entry of entries) {
       const name = typeof entry === "string" ? entry : entry.file;
+      // A fixture is a plain file name inside its own surface directory: a path
+      // into another directory would validate a file that is not this
+      // surface's corpus while the real fixture goes missing unnoticed.
+      if (typeof name !== "string" || name !== path.basename(name) || name === "manifest.json") {
+        fail(`${surface}: manifest entry ${JSON.stringify(name)} is not a plain fixture file name`);
+        continue;
+      }
+      if (claimed.has(name)) {
+        fail(`${surface}/${name}: claimed by the manifest more than once`);
+        continue;
+      }
       claimed.add(name);
       checked += 1;
       const ok = validate(readJSON(path.join(dir, name)));

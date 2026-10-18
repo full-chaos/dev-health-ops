@@ -125,3 +125,54 @@ func TestInsertWritesTheValuesAndCarriesTheIdentityOnARealClickHouse(t *testing.
 		t.Errorf("created_at = %s, want the stated time to the microsecond", created)
 	}
 }
+
+// Restate writes a stored team again from its newest version, at that
+// version: the members it gains are added once, it goes active, created_at is
+// the oldest over every version and the identity is the newest non-empty one.
+// A deleted team and an id with no row are not written, and the written count
+// the server reports says so.
+func TestRestateWritesTheStoredRowAgainOnARealClickHouse(t *testing.T) {
+	ctx, conn := migratedTeams(t)
+	const org = "teamprovider-restate-org"
+	first := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	newest := first.Add(time.Hour)
+	insert := `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, created_at, deleted_at, provider_team_id, provider_name) ` +
+		`VALUES (?, ?, ?, ?, ['ENG'], [], ?, ?, ?, ?, '', 'eng', ?, ?, ?, ?)`
+	exec := func(args ...any) {
+		t.Helper()
+		if err := conn.Exec(ctx, insert, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	teamUUID := uuid.New()
+	exec("custom:eng", teamUUID, "Eng", []string{"kept@example.com"}, uint8(0), first, first, org, first, nil, "id-1", "Eng")
+	exec("custom:eng", teamUUID, "Eng renamed", []string{"kept@example.com"}, uint8(0), newest, newest, org, nil, nil, "", "")
+	exec("custom:gone", uuid.New(), "Gone", []string{}, uint8(0), newest, newest, org, nil, newest, "", "")
+
+	written, err := teamprovider.Restate(ctx, conn, org, []teamprovider.Restatement{
+		{ID: "custom:eng", AddMembers: []string{"admin@example.com", "kept@example.com", "admin@example.com"}, Activate: true},
+		{ID: "custom:gone", Activate: true},
+		{ID: "custom:none", Activate: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written != 1 {
+		t.Errorf("written = %d, want 1 (the deleted team and the id with no row are not written)", written)
+	}
+	var got string
+	if err := conn.QueryRow(ctx, `SELECT concat(name, '|', arrayStringConcat(manual_members, ','), '|', toString(is_active), '|', toString(updated_at), '|', toString(created_at), '|', provider_team_id, '|', provider_name, '|', arrayStringConcat(project_keys, ','), '|', toString(team_uuid)) FROM teams FINAL WHERE org_id = ? AND id = 'custom:eng'`, org).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	want := "Eng renamed|kept@example.com,admin@example.com|1|2026-09-01 01:00:00.000000|2026-09-01 00:00:00.000000|id-1|Eng|ENG|" + teamUUID.String()
+	if got != want {
+		t.Errorf("custom:eng = %q, want %q", got, want)
+	}
+	var gone, none uint64
+	if err := conn.QueryRow(ctx, `SELECT countIf(id = 'custom:gone' AND deleted_at IS NOT NULL AND is_active = 0), countIf(id = 'custom:none') FROM teams FINAL WHERE org_id = ?`, org).Scan(&gone, &none); err != nil {
+		t.Fatal(err)
+	}
+	if gone != 1 || none != 0 {
+		t.Errorf("deleted team kept deleted = %d (want 1), rows of an id with no row = %d (want 0)", gone, none)
+	}
+}

@@ -31,7 +31,7 @@ var teamIDWriters = map[string]struct {
 	"internal/providersync/linear_reference_catalog_effects_clickhouse.go": {2, "native catalog: teamid.Of, behind CarryFirstTeamCatalogCollector"},
 	// The one teams statement builder (CHAOS-9999): it writes the ids its
 	// callers give it; every caller is listed here with its route.
-	"internal/teamprovider/insert.go": {1, "teamprovider.Insert: the ids of its callers above"},
+	"internal/teamprovider/insert.go": {2, "teamprovider.Insert: the ids of its callers above; teamprovider.Restate: ids it selects from stored rows (no new id)"},
 	// Exception: a test helper that reads that statement back; it writes nothing.
 	"internal/teamprovider/teamprovidertest/decode.go":                   {1, "exception: test helper, reads a teamprovider.Insert statement"},
 	"internal/providersync/team_drift_review.go":                         {2, "native catalog drift staging: the collector's keyed ids"},

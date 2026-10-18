@@ -61,13 +61,13 @@ func discoverGitHub(ctx context.Context, credential providerfoundation.Credentia
 	if err != nil {
 		return nil, err
 	}
-	entries, err := githubListAllPages[githubTeamListEntry](ctx, client, "/orgs/{org}/teams", "/orgs/"+orgName+"/teams?per_page=100")
+	entries, err := githubListAllPages(ctx, client, "org teams", orgName, "/orgs/{org}/teams", "/orgs/"+orgName+"/teams?per_page=100", func(entry githubTeamListEntry) string { return entry.Slug })
 	if err != nil {
 		return nil, err
 	}
 	teams := make([]discoveredTeam, 0, len(entries))
 	for _, entry := range entries {
-		repoEntries, err := githubListAllPages[githubRepoListEntry](ctx, client, "/orgs/{org}/teams/{slug}/repos", "/orgs/"+orgName+"/teams/"+entry.Slug+"/repos?per_page=100")
+		repoEntries, err := githubListAllPages(ctx, client, "team repos", orgName+"/"+entry.Slug, "/orgs/{org}/teams/{slug}/repos", "/orgs/"+orgName+"/teams/"+entry.Slug+"/repos?per_page=100", func(repo githubRepoListEntry) string { return repo.Name })
 		if err != nil {
 			return nil, err
 		}
@@ -115,8 +115,10 @@ func githubTeamDetailFor(ctx context.Context, client *providerfoundation.HTTPCli
 // for any GET endpoint returning a bare JSON array, matching PyGithub's
 // own PaginatedList behavior of walking every page with no upper bound
 // for org.get_teams()/team.get_repos().
-func githubListAllPages[T any](ctx context.Context, client *providerfoundation.HTTPClient, route, path string) ([]T, error) {
+func githubListAllPages[T any](ctx context.Context, client *providerfoundation.HTTPClient, walkName, owner, route, path string, key func(T) string) ([]T, error) {
 	var out []T
+	seenItems := map[string]struct{}{}
+	walk := newPageWalk(ctx, "github", walkName, owner, path)
 	next := path
 	for next != "" {
 		response, err := client.DoRoute(ctx, "GET", route, next, nil)
@@ -132,8 +134,14 @@ func githubListAllPages[T any](ctx context.Context, client *providerfoundation.H
 		if err := json.Unmarshal(raw, &page); err != nil {
 			return nil, fmt.Errorf("decode github list page: %w", err)
 		}
-		out = append(out, page...)
-		next = githubNextLink(response.Header.Get("Link"))
+		out = appendNew(out, seenItems, page, key)
+		link := githubNextLink(response.Header.Get("Link"))
+		var more bool
+		if next, more, err = walk.advance(link, link != "", len(page)); err != nil {
+			return nil, err
+		} else if !more {
+			next = ""
+		}
 	}
 	return out, nil
 }

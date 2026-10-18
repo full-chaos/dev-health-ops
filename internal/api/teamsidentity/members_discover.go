@@ -163,7 +163,9 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 		}
 	}
 	var entries []*pyjson.Object
+	seenMembers := map[string]struct{}{}
 	next := teamPath + "/members?per_page=100"
+	walk := newPageWalk(ctx, "github", "team members", orgName+"/"+teamSlug, next)
 	for next != "" {
 		response, err := client.DoRoute(ctx, "GET", "/orgs/{org}/teams/{slug}/members", next, nil)
 		if err != nil {
@@ -178,8 +180,14 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 		if err != nil {
 			return nil, err
 		}
-		entries = append(entries, page...)
-		next = githubNextLink(link)
+		entries = appendNew(entries, seenMembers, page, memberObjectKey("login"))
+		linkNext := githubNextLink(link)
+		var more bool
+		if next, more, err = walk.advance(linkNext, linkNext != "", len(page)); err != nil {
+			return nil, err
+		} else if !more {
+			next = ""
+		}
 	}
 	members := make([]discoveredMember, 0, len(entries))
 	for _, entry := range entries {
@@ -235,23 +243,32 @@ func discoverMembersGitLab(ctx context.Context, token secrets.Value, baseURL, gr
 		return nil, err
 	}
 	var entries []*pyjson.Object
-	next := "/api/v4/groups/" + strconv.FormatInt(group.ID, 10) + "/members?per_page=100"
-	for next != "" {
-		response, err := client.DoRoute(ctx, "GET", "/groups/{group}/members", next, nil)
+	seenMembers := map[string]struct{}{}
+	membersPath := "/api/v4/groups/" + strconv.FormatInt(group.ID, 10) + "/members"
+	walk := newPageWalk(ctx, "gitlab", "group members", groupPath, "1")
+	for page := 1; page > 0; {
+		response, err := client.DoRoute(ctx, "GET", "/groups/{group}/members", fmt.Sprintf("%s?per_page=100&page=%d", membersPath, page), nil)
 		if err != nil {
 			return nil, err
 		}
-		link := response.Header.Get("Link")
+		nextPage := response.Header.Get("X-Next-Page")
 		raw, err := readBody(response)
 		if err != nil {
 			return nil, err
 		}
-		page, err := decodeObjectList(raw, "gitlab group members page")
+		items, err := decodeObjectList(raw, "gitlab group members page")
 		if err != nil {
 			return nil, err
 		}
-		entries = append(entries, page...)
-		next = githubNextLink(link)
+		entries = appendNew(entries, seenMembers, items, memberObjectKey("id", "username"))
+		next, more, err := walk.gitlabNextPage(nextPage, len(items))
+		if err != nil {
+			return nil, err
+		}
+		if !more {
+			next = 0
+		}
+		page = next
 	}
 	members := make([]discoveredMember, 0, len(entries))
 	for _, entry := range entries {

@@ -161,10 +161,12 @@ func confidenceForCount(count int) string {
 // jiraSearchIssues is JiraClient.iter_issues(jql, fields, expand_changelog=
 // False, limit=500): pages of 100 by startAt, or by nextPageToken when the
 // page carries one, stopping at an empty page, isLast, or 500 issues.
-func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient, jql string) ([]*pyjson.Object, error) {
+func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient, owner, jql string) ([]*pyjson.Object, error) {
 	var issues []*pyjson.Object
+	seenIssues := map[string]struct{}{}
 	startAt := 0
 	token := ""
+	walk := newPageWalk(ctx, "jira", "issue search", owner, "startAt:0")
 	for {
 		values := url.Values{}
 		values.Set("jql", jql)
@@ -196,18 +198,31 @@ func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient
 			if !ok {
 				return nil, fmt.Errorf("jira issue is not an object")
 			}
+			if id := memberObjectKey("key", "id")(issue); !strings.HasPrefix(id, "anon:") {
+				if _, dup := seenIssues[id]; dup {
+					continue
+				}
+				seenIssues[id] = struct{}{}
+			}
 			issues = append(issues, issue)
 			if len(issues) >= jiraInferIssueLimit {
 				return issues, nil
 			}
 		}
+		continuation := ""
 		if next, _ := page.Get("nextPageToken"); truthy(next) {
 			token = pythonStr(next)
+			continuation = "token:" + token
 		} else {
 			token = ""
 			startAt += len(list)
+			continuation = fmt.Sprintf("startAt:%d", startAt)
 		}
-		if last, present := page.Get("isLast"); present && last == true {
+		last, present := page.Get("isLast")
+		if _, _, err := walk.advance(continuation, !(present && last == true), len(list)); err != nil {
+			return nil, err
+		}
+		if present && last == true {
 			return issues, nil
 		}
 	}
@@ -220,7 +235,7 @@ func inferJiraMembers(ctx context.Context, credential providerfoundation.Credent
 		return nil, err
 	}
 	jql := fmt.Sprintf("project = '%s' AND updated >= '-%dd'", projectKey, windowDays)
-	issues, err := jiraSearchIssues(ctx, client, jql)
+	issues, err := jiraSearchIssues(ctx, client, projectKey, jql)
 	if err != nil {
 		return nil, err
 	}

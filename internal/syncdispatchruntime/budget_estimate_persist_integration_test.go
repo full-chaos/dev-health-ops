@@ -84,3 +84,51 @@ VALUES ($1,$2,$3,'github','commits',$4,'planned',now(),(SELECT integration_id FR
 		}
 	})
 }
+
+// A claimed unit that is terminalized instead of run (its pair is not routable)
+// has its terminal result written whole; it never reaches a finish, so it keeps
+// no estimates, while a routed unit of the same pass keeps its own.
+func TestDispatchPersistsEstimatesOnlyForTheUnitsThatRun(t *testing.T) {
+	t.Setenv("SYNC_BUDGET_BUCKET_LIMITS", "")
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		const routed, unroutable = "00000000-0000-4000-8000-0000000012b1", "00000000-0000-4000-8000-0000000012b2"
+		for _, unit := range []struct{ id, dataset string }{{routed, "commits"}, {unroutable, "unroutable-dataset"}} {
+			if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github',$5,$4,'planned',now(),(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'medium','incremental',0,now())`,
+				unit.id, discoveryTestOrg, discoveryTestRun, dispatchTestSource, unit.dataset); err != nil {
+				t.Fatal(err)
+			}
+		}
+		registry := &fakeJobRegistry{descriptors: map[string]jobruntime.Descriptor{jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river")}}
+		producer, err := joboutbox.NewProducer(pool, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		estimator := &fakeBudgetEstimator{estimates: map[string][]budgetEstimate{
+			routed:     estimateFor(7, "github", "rest_core", "git"),
+			unroutable: estimateFor(9, "github", "rest_core", "git"),
+		}}
+		service, err := NewNativeDispatchSyncRunService(pool, nil, estimator, producer, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		read := func(id string) (status, raw string, hasEstimate bool) {
+			if err := pool.QueryRow(ctx, `SELECT status, result::text, (result::jsonb -> 'observations' -> 'budget_estimate') IS NOT NULL FROM sync_run_units WHERE id = $1::uuid`, id).Scan(&status, &raw, &hasEstimate); err != nil {
+				t.Fatal(err)
+			}
+			return status, raw, hasEstimate
+		}
+		if status, raw, has := read(routed); status != "dispatching" || !has {
+			t.Fatalf("routed unit: status %q estimate %v result %s, want dispatching with its estimate", status, has, raw)
+		}
+		if status, raw, has := read(unroutable); status != "failed" || has {
+			t.Fatalf("unroutable unit: status %q estimate %v result %s, want failed with its terminal result alone", status, has, raw)
+		}
+	})
+}

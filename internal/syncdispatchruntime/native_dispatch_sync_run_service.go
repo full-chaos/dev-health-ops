@@ -416,12 +416,6 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		return err
 	}
 	emitClaimSnapshotDeferral(ctx, service.logger, run.id, deferredOutsideSnapshot)
-	if persisted, err := persistBudgetEstimates(ctx, tx, claimedUnits, budgetResult.estimatesByUnit); err != nil {
-		return err
-	} else if persisted > 0 {
-		service.logger.Debug(ctx, synclog.MsgDispatchSyncRunBudgetEstimatesPersisted, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCount, persisted))
-	}
-
 	riverQueued := 0
 	// terminalDeliveryPublishes counts units whose publish landed on an
 	// already-terminal outbox row (joboutbox.ErrDeliveryAlreadyTerminal).
@@ -433,6 +427,11 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	terminalDeliveryPublishes := 0
 	var unroutableUnits []budgetUnit
 	var invalidClaimUnits []invalidClaimUnit
+	// routedUnits are the claimed units that go on to run: only they keep the
+	// estimates they were admitted on, for the comparison at their finish. A unit
+	// terminalized below (invalid claim, unroutable pair) never runs, and its
+	// terminal result replaces the whole result.
+	var routedUnits []budgetUnit
 	for _, unit := range claimedUnits {
 		// Atomic provider families are admitted before transport selection,
 		// so a malformed claim can reach neither River nor a stranded state.
@@ -478,6 +477,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		// two registries this check alone would catch.
 		descriptor, ok := providersync.Descriptor(unit.provider, unit.datasetKey)
 		if ok && descriptor.RouteReady && descriptor.Plannable {
+			routedUnits = append(routedUnits, unit)
 			organizationID := unit.orgID
 			envelope := jobcontract.Envelope{
 				ContractVersion: jobcontract.ContractVersionV1,
@@ -523,6 +523,12 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		// runtime to publish it to. Terminalize instead of leaving it
 		// wedged (CHAOS-3990).
 		unroutableUnits = append(unroutableUnits, unit)
+	}
+
+	if persisted, err := persistBudgetEstimates(ctx, tx, routedUnits, budgetResult.estimatesByUnit); err != nil {
+		return err
+	} else if persisted > 0 {
+		service.logger.Debug(ctx, synclog.MsgDispatchSyncRunBudgetEstimatesPersisted, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCount, persisted))
 	}
 
 	if len(invalidClaimUnits) > 0 {

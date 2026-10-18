@@ -5,6 +5,7 @@ package fixturescli
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -271,9 +272,37 @@ func (issue jiraIssue) changelog() map[string]any {
 	return map[string]any{"startAt": 0, "maxResults": 100, "total": len(histories), "isLast": true, "values": histories}
 }
 
+var jiraJQLWindow = regexp.MustCompile(`updated >= '(\d{4}-\d{2}-\d{2})' AND updated < '(\d{4}-\d{2}-\d{2})'`)
+
+// jiraIssuesInJQLWindow answers the date bounds of a window's JQL the way Jira does for a user in UTC: a
+// date-only literal is midnight, the lower bound is inclusive and the upper bound exclusive. A JQL without
+// the bounds (fetch_all, an override) gets every issue.
+func jiraIssuesInJQLWindow(issues []map[string]any, jql string) []map[string]any {
+	match := jiraJQLWindow.FindStringSubmatch(jql)
+	if match == nil {
+		return issues
+	}
+	lower, errLower := time.Parse("2006-01-02", match[1])
+	upper, errUpper := time.Parse("2006-01-02", match[2])
+	if errLower != nil || errUpper != nil {
+		return issues
+	}
+	kept := []map[string]any{}
+	for _, issue := range issues {
+		fields, _ := issue["fields"].(map[string]any)
+		updated, _ := fields["updated"].(string)
+		at, err := time.Parse("2006-01-02T15:04:05.000-0700", updated)
+		if err == nil && (at.Before(lower) || !at.Before(upper)) {
+			continue
+		}
+		kept = append(kept, issue)
+	}
+	return kept
+}
+
 func jiraIssueAnswers(issues []jiraIssue) []providerAnswer {
 	var answers []providerAnswer
-	byProject := map[string][]any{}
+	byProject := map[string][]map[string]any{}
 	for _, issue := range issues {
 		byProject[issue.Project.Key] = append(byProject[issue.Project.Key], issue.payload())
 		answers = append(answers,
@@ -305,7 +334,7 @@ func jiraIssueAnswers(issues []jiraIssue) []providerAnswer {
 			jql := request.Query.Get("jql")
 			for key, values := range byProject {
 				if strings.HasPrefix(jql, "project = '"+key+"'") && request.Query.Get("nextPageToken") == "" {
-					return map[string]any{"issues": values, "isLast": true}, true
+					return map[string]any{"issues": jiraIssuesInJQLWindow(values, jql), "isLast": true}, true
 				}
 			}
 			return nil, false

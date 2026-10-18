@@ -5,6 +5,7 @@ package fixturescli
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -107,6 +108,37 @@ func glList[T any](path, query string, items []T) providerAnswer {
 		"X-Total": {strconv.Itoa(len(items))}, "X-Total-Pages": {"1"},
 	}
 	return answer
+}
+
+// glWindowedList is a GitLab issues or merge-requests list answer: updated_after and updated_before
+// keep the items updated within them, both ends inclusive, as the API does. A route that plans several
+// windows reads the list once per window; an answer that ignored the bounds would hand every item back
+// in every window.
+func glWindowedList(path string, items []map[string]any) providerAnswer {
+	answer := glList(path, "*", items)
+	answer.Respond = func(request replayRequest) (any, bool) {
+		return gitlabInWindow(items, request.Query), true
+	}
+	return answer
+}
+
+func gitlabInWindow(items []map[string]any, query url.Values) []map[string]any {
+	bound := func(name string) (time.Time, bool) {
+		at, err := time.Parse(time.RFC3339Nano, query.Get(name))
+		return at, err == nil
+	}
+	after, hasAfter := bound("updated_after")
+	before, hasBefore := bound("updated_before")
+	kept := []map[string]any{}
+	for _, item := range items {
+		updated, _ := item["updated_at"].(string)
+		at, err := time.Parse(time.RFC3339Nano, updated)
+		if err == nil && ((hasAfter && at.Before(after)) || (hasBefore && at.After(before))) {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
 }
 
 func gitlabGroupPath(fullPath string) string {
@@ -363,8 +395,8 @@ func gitlabProjectAnswers(path string, items []gitlabItem) []providerAnswer {
 	}
 	answers = append(answers,
 		glList(root+"/milestones", "*", []any{}),
-		glList(root+"/issues", "*", issues),
-		glList(root+"/merge_requests", "*", mrs),
+		glWindowedList(root+"/issues", issues),
+		glWindowedList(root+"/merge_requests", mrs),
 	)
 	return answers
 }

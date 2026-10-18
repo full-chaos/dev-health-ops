@@ -4,6 +4,7 @@ package fixturescli
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -1042,7 +1043,9 @@ func demoGitLabIssuesAnswer(answer providerAnswer, project *demoGitLabProject, m
 			}
 			return incidents, true
 		}
-		return issues, true
+		all := []map[string]any{}
+		_ = json.Unmarshal(issues, &all)
+		return gitlabInWindow(all, request.Query), true
 	}
 	return answer
 }

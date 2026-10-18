@@ -1,11 +1,15 @@
 package syncdispatchruntime
 
 import (
+	"context"
 	"errors"
 	"regexp"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/jackc/pgx/v5/pgconn"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 var sqlStatePattern = regexp.MustCompile(`^[0-9A-Z]{5}$`)
@@ -130,4 +134,55 @@ func failureDetail(err error) (text string) {
 		}
 	}
 	return text
+}
+
+// Closed vocabulary of the defects chainDefect finds in the error chain of a failed fan-out.
+const (
+	chainDefectBound     = "chain_bound"
+	chainDefectUnwrap    = "chain_unwrap_panic"
+	chainDefectErrorText = "error_text_panic"
+)
+
+var chainDefects = func() metric.Int64Counter {
+	const name = "post_sync_error_chain_defect_total"
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime").Int64Counter(
+		name, metric.WithDescription("Failed post-sync fan-outs whose error chain was too deep, panicked in Unwrap or panicked in Error."))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)
+	}
+	return counter
+}()
+
+// chainDefect names what is wrong with the error chain of a failed fan-out, or "" when nothing is: the stage and class read from a
+// chain that is cut short, or whose Unwrap or Error panics, are partial, and the operator is told so.
+func chainDefect(err error) (defect string) {
+	chain := boundedChain(err)
+	switch {
+	case len(chain) >= maxChainDepth:
+		return chainDefectBound
+	case len(chain) > 0 && unwrapPanics(chain[len(chain)-1]):
+		return chainDefectUnwrap
+	}
+	for _, link := range chain {
+		if errorTextPanics(link) {
+			return chainDefectErrorText
+		}
+	}
+	return ""
+}
+
+func errorTextPanics(err error) (panics bool) {
+	defer func() { panics = recover() != nil }()
+	_ = err.Error()
+	return false
+}
+
+func unwrapPanics(err error) (panics bool) {
+	defer func() { panics = recover() != nil }()
+	_ = errors.Unwrap(err)
+	return false
+}
+
+func recordChainDefect(ctx context.Context, defect string) {
+	chainDefects.Add(ctx, 1, metric.WithAttributes(attribute.String("defect", defect)))
 }

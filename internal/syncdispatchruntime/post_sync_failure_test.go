@@ -220,3 +220,31 @@ func TestFanoutPanicNilIsNotSwallowed(t *testing.T) {
 		t.Fatalf("Fanout swallowed a panic(nil): %v\n%s", err, output)
 	}
 }
+
+func TestChainDefectIsNamedForADeepChainATypedNilAndAPanickingUnwrap(t *testing.T) {
+	var nilCause *nilMessageStageError
+	deep := error(&cyclicStageError{})
+	cases := map[string]error{
+		chainDefectBound:     deep,
+		chainDefectErrorText: stagedFailure(stageDaily, error(nilCause)),
+	}
+	for want, err := range cases {
+		if got := chainDefect(err); got != want {
+			t.Errorf("chainDefect = %q, want %q", got, want)
+		}
+	}
+	if got := chainDefect(unavailable(stageCommit, errors.New("x"))); got != "" {
+		t.Errorf("a plain chain has defect %q", got)
+	}
+	var logs bytes.Buffer
+	service := &NativePostSyncService{logger: synclog.New(slog.New(slog.NewJSONHandler(&logs, nil)))}
+	service.observeFanoutFailure(context.Background(), PostSyncArgs{TransportArgs{OrgID: "00000000-0000-4000-8000-000000000001", RunID: "00000000-0000-4000-8000-000000000002"}}, deep, true)
+	if !strings.Contains(logs.String(), `"msg":"post_sync_fanout.chain_defect"`) || !strings.Contains(logs.String(), `"level":"WARN"`) || !strings.Contains(logs.String(), `"reason":"chain_bound"`) {
+		t.Fatalf("no chain-defect Warn line:\n%s", logs.String())
+	}
+}
+
+type cyclicStageError struct{}
+
+func (err *cyclicStageError) Error() string { return "cycle" }
+func (err *cyclicStageError) Unwrap() error { return err }

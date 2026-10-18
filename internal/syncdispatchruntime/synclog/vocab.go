@@ -53,6 +53,7 @@ var (
 	MsgFinalizeSyncRunComputeCheckpointUnitFailed        = Msg{"finalize_sync_run.compute_checkpoint_unit_failed"}
 	MsgPostSyncFanout                                    = Msg{"post_sync_fanout"}
 	MsgPostSyncFanoutFailed                              = Msg{"post_sync_fanout.failed"}
+	MsgPostSyncFanoutChainDefect                         = Msg{"post_sync_fanout.chain_defect"}
 	MsgPostSyncTouchedDays                               = Msg{"post_sync_fanout.touched_days"}
 	MsgPostSyncTouchedDaysFailed                         = Msg{"post_sync_fanout.touched_days_failed"}
 	MsgTouchedDaysDrainPass                              = Msg{"touched_days_drain.pass"}

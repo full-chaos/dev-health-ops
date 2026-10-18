@@ -365,6 +365,14 @@ func (service *NativePostSyncService) observeFanoutFailure(ctx context.Context, 
 		synclog.Text(synclog.KeyReason, synclog.ParseLabel(string(stage))),
 		synclog.Failure(err),
 	)
+	if defect := chainDefect(err); defect != "" {
+		service.logger.Warn(ctx, synclog.MsgPostSyncFanoutChainDefect,
+			synclog.Org(synclog.ParseID(args.OrganizationID())),
+			synclog.Run(synclog.ParseID(args.SyncRunID())),
+			synclog.Text(synclog.KeyReason, synclog.ParseLabel(defect)),
+		)
+		recordChainDefect(ctx, defect)
+	}
 	if !outcomeObserved && service.fanoutObserver != nil {
 		_ = service.fanoutObserver.ObservePostSyncFanout(jobruntime.PostSyncFanoutOutcomeError)
 	}

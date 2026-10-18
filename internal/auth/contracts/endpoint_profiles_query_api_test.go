@@ -93,6 +93,9 @@ func TestQueryAPIEndpointProfilesValidateAndUseTheClosedVocabularies(t *testing.
 		if row["classification"] == "public" && row["public_rationale"] == nil {
 			t.Errorf("public row %v has no public_rationale", id)
 		}
+		for _, violation := range advisoryNullViolations(row) {
+			t.Error(violation)
+		}
 		for _, class := range classes {
 			if !frozen[class.(string)] {
 				t.Errorf("row %v accepts %v, which is not in credential-classes.json", id, class)
@@ -134,6 +137,80 @@ func TestAnUnknownServiceFailsAndTheEnumHoldsNoServiceWithoutRows(t *testing.T) 
 		}
 		if !found {
 			t.Errorf("rows name service %q, which is not in the enum", service)
+		}
+	}
+}
+
+// advisoryFields: absent means not applicable, null means undetermined and must
+// be paired with a gaps entry naming the field (CHAOS-4744, decision sheet B10
+// shape b).
+var advisoryFields = []string{
+	"action", "resource_resolver", "current_state_cache_behavior",
+	"entitlement_requirement", "disclosure_behavior", "token_shape",
+}
+
+func advisoryNullViolations(row map[string]any) []string {
+	gaps, _ := row["gaps"].([]any)
+	var out []string
+	for _, field := range advisoryFields {
+		value, present := row[field]
+		if !present || value != nil {
+			continue
+		}
+		named := false
+		for _, gap := range gaps {
+			if text, ok := gap.(string); ok && strings.Contains(text, field) {
+				named = true
+			}
+		}
+		if !named {
+			out = append(out, "row "+row["id"].(string)+" has "+field+"=null (undetermined) with no gaps entry naming "+field)
+		}
+	}
+	return out
+}
+
+func TestAdvisoryNullGateNegativeControls(t *testing.T) {
+	cases := []struct {
+		name string
+		row  map[string]any
+		want int
+	}{
+		{"null without a gap is red", map[string]any{"id": "r", "action": nil, "gaps": []any{}}, 1},
+		{"absent is green", map[string]any{"id": "r", "gaps": []any{}}, 0},
+		{"null with a naming gap is green", map[string]any{"id": "r", "action": nil, "gaps": []any{"action: not traced"}}, 0},
+		{"an unrelated gap does not excuse the null", map[string]any{"id": "r", "token_shape": nil, "gaps": []any{"exposure: unknown"}}, 1},
+		{"every advisory field is policed", map[string]any{"id": "r", "action": nil, "resource_resolver": nil, "current_state_cache_behavior": nil,
+			"entitlement_requirement": nil, "disclosure_behavior": nil, "token_shape": nil, "gaps": []any{}}, 6},
+	}
+	for _, c := range cases {
+		if got := len(advisoryNullViolations(c.row)); got != c.want {
+			t.Errorf("%s: %d violations, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+func TestSchemaStatesAbsentVersusNullOnEveryAdvisoryField(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(ContractsDir(testRoot(t)), "endpoint-profile.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Defs struct {
+			Profile struct {
+				Properties map[string]struct {
+					Description string `json:"description"`
+				} `json:"properties"`
+			} `json:"endpointProfile"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range advisoryFields {
+		description := doc.Defs.Profile.Properties[field].Description
+		if !strings.Contains(description, "ABSENT") || !strings.Contains(description, "gaps entry naming") {
+			t.Errorf("%s description does not state absent = not applicable and null = undetermined with a naming gaps entry", field)
 		}
 	}
 }

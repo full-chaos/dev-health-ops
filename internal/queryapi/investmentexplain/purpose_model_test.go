@@ -86,6 +86,7 @@ func TestPlatformExplainModelOrder(t *testing.T) {
 	t.Run("the other purposes do not read it", func(t *testing.T) {
 		clear(t)
 		t.Setenv("LLM_MODEL_EXPLAIN", "explain-model")
+		t.Setenv("LLM_PROVIDER", "openai")
 		t.Setenv("LLM_MODEL", "generic")
 		if got := categorize.ResolveModelName(kind, ""); got != "generic" {
 			t.Fatalf("categorize resolved %q", got)

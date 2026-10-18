@@ -2,7 +2,8 @@
   "case": "openai_generic_llm_model_env",
   "input": {
     "env": {
-      "LLM_MODEL": "generic-model-from-env"
+      "LLM_MODEL": "generic-model-from-env",
+      "LLM_PROVIDER": "openai"
     },
     "model": null,
     "provider": "openai"

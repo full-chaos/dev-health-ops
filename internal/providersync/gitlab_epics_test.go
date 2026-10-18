@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -191,5 +192,27 @@ func TestGitLabWorkItemsRouteCollectsNoEpicsWhenFetchEpicsIsOff(t *testing.T) {
 		if strings.Contains(request.URL.Path, "/groups/") {
 			t.Fatalf("a group request was made with FetchEpics off: %s", request.URL)
 		}
+	}
+}
+
+// Every epic outcome names itself at Info, so a free-tier group (no epics), a
+// project outside a group and a collected group are told apart in the logs.
+func TestGitLabWorkItemsRouteLogsTheEpicOutcomeAtInfo(t *testing.T) {
+	var logged lockedLogBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	if _, err := collectGitLabEpicUnit(t, &gitLabWorkItemsDoer{responses: gitLabEpicResponses()}); err != nil {
+		t.Fatal(err)
+	}
+	responses := gitLabWorkItemResponses()
+	delete(responses, "/api/v4/groups/acme/epics?page=1")
+	if _, err := collectGitLabEpicUnit(t, &gitLabWorkItemsDoer{responses: responses, statusByPath: map[string]int{"/api/v4/groups/acme/epics": http.StatusForbidden}}); err != nil {
+		t.Fatal(err)
+	}
+	line := logged.String()
+	if !strings.Contains(line, "outcome=ok") || !strings.Contains(line, "epics_written=2") || !strings.Contains(line, "outcome=unavailable") {
+		t.Fatalf("epic outcomes not told apart at Info: %q", line)
 	}
 }

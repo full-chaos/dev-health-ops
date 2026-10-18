@@ -825,7 +825,7 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 	var outcome gitLabEpicOutcome
 	parts := strings.Split(fullName, "/")
 	if len(parts) < 2 {
-		slog.Default().DebugContext(ctx, "gitlab_work_items_epics",
+		slog.Default().InfoContext(ctx, "gitlab_work_items_epics",
 			"org_id", claim.OrgID, "unit_id", claim.ID, "outcome", "no_group", "epics_written", 0)
 		return outcome, nil
 	}
@@ -864,7 +864,7 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 	*pages += listPages
 	if err != nil {
 		if unavailable(err) {
-			slog.Default().DebugContext(ctx, "gitlab_work_items_epics",
+			slog.Default().InfoContext(ctx, "gitlab_work_items_epics",
 				"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "outcome", "unavailable", "epics_written", 0)
 			return outcome, nil
 		}

@@ -18,6 +18,7 @@ var (
 	MsgDispatchSyncRunBudgetGuardEnforceFailed           = Msg{"dispatch_sync_run.budget_guard_enforce_failed"}
 	MsgDispatchSyncRunBudgetGuardDeferred                = Msg{"dispatch_sync_run.budget_guard_deferred"}
 	MsgDispatchSyncRunBudgetGuardAllowed                 = Msg{"dispatch_sync_run.budget_guard_allowed"}
+	MsgDispatchSyncRunBudgetEstimatesPersisted           = Msg{"dispatch_sync_run.budget_estimates_persisted"}
 	MsgDispatchSyncRunBudgetGuardDryRunFailed            = Msg{"dispatch_sync_run.budget_guard_dry_run_failed"}
 	MsgDispatchSyncRunBudgetGuardDryRun                  = Msg{"dispatch_sync_run.budget_guard_dry_run"}
 	MsgDispatchSyncRunRateLimitCooldownReconfirmed       = Msg{"dispatch_sync_run.rate_limit_cooldown_reconfirmed"}
@@ -28,6 +29,7 @@ var (
 	MsgDispatchSyncRunBudgetSurplusWithdrawn             = Msg{"dispatch_sync_run.budget_surplus_withdrawn"}
 	MsgDispatchSyncRunClaimDeferredOutsideGuardSnapshot  = Msg{"dispatch_sync_run.claim_deferred_outside_guard_snapshot"}
 	MsgSyncDispatchAdmissionCaps                         = Msg{"sync_dispatch_admission_caps"}
+	MsgSyncTriggerRefusedUnselectedSource                = Msg{"sync_trigger.refused_unselected_source"}
 	MsgDispatchGuardBucketDecision                       = Msg{"dispatch_guard.bucket_decision"}
 	MsgDispatchSyncRunBudgetEstimateUnitFailed           = Msg{"dispatch_sync_run.budget_estimate_unit_failed"}
 	MsgDispatchSyncRunLockBusyRequeued                   = Msg{"dispatch_sync_run.lock_busy_requeued"}
@@ -114,6 +116,11 @@ var (
 	KeyLockWaitBudget               = Key{"lock_wait_budget"}
 	KeyInvalidClaimUnits            = Key{"invalid_claim_units"}
 	KeyCappedCount                  = Key{"capped_count"}
+	KeyTriggerCaller                = Key{"caller"}
+	KeyTriggeredBy                  = Key{"triggered_by"}
+	KeyTriggerMode                  = Key{"mode"}
+	KeyRefusedSourceCount           = Key{"refused_source_count"}
+	KeyRequestedSourceCount         = Key{"requested_source_count"}
 	KeyUnroutableUnits              = Key{"unroutable_units"}
 	KeyTerminalDeliveryPublishes    = Key{"terminal_delivery_publishes"}
 	KeyQueuedUnits                  = Key{"queued_units"}

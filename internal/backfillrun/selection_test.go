@@ -98,56 +98,71 @@ func refusal(t *testing.T, err error) string {
 
 func TestScopeSources(t *testing.T) {
 	enabled := []string{sourceA, sourceB, sourceC}
-	t.Run("absent flag keeps the whole enabled list", func(t *testing.T) {
-		got, err := scopeSources(plannerManaged(), nil, enabled)
-		if err != nil || !reflect.DeepEqual(got, enabled) {
+	selected := []string{sourceA, sourceB}
+	t.Run("absent flag names the selected sources, not every enabled one", func(t *testing.T) {
+		got, err := scopeSources(plannerManaged(), nil, enabled, selected)
+		if err != nil || !reflect.DeepEqual(got, selected) {
+			t.Fatalf("got %v, %v; want the selected %v", got, err, selected)
+		}
+	})
+	t.Run("absent flag with no selected source names an empty list", func(t *testing.T) {
+		got, err := scopeSources(plannerManaged(), nil, enabled, []string{})
+		if err != nil || got == nil || len(got) != 0 {
+			t.Fatalf("got %#v, %v; want an empty, non-nil list", got, err)
+		}
+	})
+	t.Run("an enabled source the configuration does not select is left to the trigger write", func(t *testing.T) {
+		// synchandoff.Mint, the one scope guard of every trigger writer, refuses it
+		// (TestBackfillPlansTheScheduledSourceSet).
+		got, err := scopeSources(plannerManaged(), []string{sourceA, sourceC}, enabled, selected)
+		if err != nil || !reflect.DeepEqual(got, []string{sourceA, sourceC}) {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
 	t.Run("absent flag on a pinned configuration writes no list", func(t *testing.T) {
-		got, err := scopeSources(pinned(sourceB), nil, enabled)
+		got, err := scopeSources(pinned(sourceB), nil, enabled, nil)
 		if err != nil || got != nil {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
 	t.Run("a subset keeps the enabled order, whatever the flag order or spelling", func(t *testing.T) {
-		got, err := scopeSources(plannerManaged(), []string{strings.ToUpper(sourceC), strings.ReplaceAll(sourceA, "-", ""), sourceC}, enabled)
+		got, err := scopeSources(plannerManaged(), []string{strings.ToUpper(sourceC), strings.ReplaceAll(sourceA, "-", ""), sourceC}, enabled, enabled)
 		if err != nil || !reflect.DeepEqual(got, []string{sourceA, sourceC}) {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
 	t.Run("an unknown source is named and refused", func(t *testing.T) {
-		_, err := scopeSources(plannerManaged(), []string{sourceA, sourceX}, enabled)
+		_, err := scopeSources(plannerManaged(), []string{sourceA, sourceX}, enabled, enabled)
 		message := refusal(t, err)
 		if !strings.Contains(message, sourceX) || strings.Contains(message, sourceB) || !strings.Contains(message, "nothing was started") {
 			t.Fatalf("message %q", message)
 		}
 	})
 	t.Run("a disabled source is the same as an unknown one", func(t *testing.T) {
-		if _, err := scopeSources(plannerManaged(), []string{sourceC}, []string{sourceA, sourceB}); err == nil {
+		if _, err := scopeSources(plannerManaged(), []string{sourceC}, []string{sourceA, sourceB}, []string{sourceA, sourceB}); err == nil {
 			t.Fatal("a source that is not enabled was accepted")
 		}
 	})
 	t.Run("a text that is not a uuid is named and refused", func(t *testing.T) {
-		_, err := scopeSources(plannerManaged(), []string{"acme/widgets"}, enabled)
+		_, err := scopeSources(plannerManaged(), []string{"acme/widgets"}, enabled, enabled)
 		if message := refusal(t, err); !strings.Contains(message, `"acme/widgets"`) {
 			t.Fatalf("message %q", message)
 		}
 	})
 	t.Run("a pinned configuration accepts its own source and writes no list", func(t *testing.T) {
-		got, err := scopeSources(pinned(sourceB), []string{sourceB}, enabled)
+		got, err := scopeSources(pinned(sourceB), []string{sourceB}, enabled, nil)
 		if err != nil || got != nil {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
 	t.Run("a pinned configuration whose source is not enabled is refused", func(t *testing.T) {
-		_, err := scopeSources(pinned(sourceB), []string{sourceB}, []string{sourceA, sourceC})
+		_, err := scopeSources(pinned(sourceB), []string{sourceB}, []string{sourceA, sourceC}, nil)
 		if message := refusal(t, err); !strings.Contains(message, sourceB) || !strings.Contains(message, "not an enabled source") {
 			t.Fatalf("message %q", message)
 		}
 	})
 	t.Run("a pinned configuration refuses another source", func(t *testing.T) {
-		_, err := scopeSources(pinned(sourceB), []string{sourceA}, enabled)
+		_, err := scopeSources(pinned(sourceB), []string{sourceA}, enabled, nil)
 		if message := refusal(t, err); !strings.Contains(message, sourceA) || !strings.Contains(message, sourceB) {
 			t.Fatalf("message %q", message)
 		}

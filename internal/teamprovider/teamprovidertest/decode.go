@@ -38,8 +38,13 @@ func Decode(query string, args []any) ([]string, []teamprovider.Write, error) {
 		if !ok {
 			return nil, nil, fmt.Errorf("teamprovidertest: argument %T is not named", arg)
 		}
-		if list, ok := value.Value.([]any); ok {
+		switch list := value.Value.(type) {
+		case []any:
 			named[value.Name] = list
+		case []string:
+			named[value.Name] = toAny(list)
+		case []uint32:
+			named[value.Name] = toAny(list)
 		}
 	}
 	types := teamprovider.ColumnTypes()
@@ -60,7 +65,7 @@ func Decode(query string, args []any) ([]string, []teamprovider.Write, error) {
 		}
 		writes[r].ProviderTeamID, _ = named["identity_id"][r].(string)
 		writes[r].ProviderName, _ = named["identity_name"][r].(string)
-		rule, _ := named["gone_rule"][r].(uint8)
+		rule, _ := named["gone_rule"][r].(uint32)
 		writes[r].Gone = teamprovider.Gone(rule)
 		if text, ok := named["gone_in"][r].(string); ok {
 			parsed, err := time.Parse("2006-01-02 15:04:05.000000", text)
@@ -72,4 +77,12 @@ func Decode(query string, args []any) ([]string, []teamprovider.Write, error) {
 		}
 	}
 	return columns, writes, nil
+}
+
+func toAny[T any](list []T) []any {
+	out := make([]any, len(list))
+	for i, value := range list {
+		out[i] = value
+	}
+	return out
 }

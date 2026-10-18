@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"strings"
 	"time"
@@ -104,11 +103,11 @@ func Insert(ctx context.Context, conn Execer, orgID string, columns []string, ro
 		params[i] = make([]any, len(rows))
 	}
 	ids := make([]string, len(rows))
-	providerIDs := make([]any, len(rows))
-	providerNames := make([]any, len(rows))
-	goneRules := make([]any, len(rows))
+	providerIDs := make([]string, len(rows))
+	providerNames := make([]string, len(rows))
+	goneRules := make([]uint32, len(rows))
 	goneValues := make([]any, len(rows))
-	ordinals := make([]any, len(rows))
+	ordinals := make([]uint32, len(rows))
 	for r, row := range rows {
 		if len(row.Values) != len(columns) {
 			return fmt.Errorf("%w: row %d has %d values for %d columns", ErrInvalidWrite, r, len(row.Values), len(columns))
@@ -134,19 +133,13 @@ func Insert(ctx context.Context, conn Execer, orgID string, columns []string, ro
 		}
 		providerIDs[r] = strings.TrimSpace(row.ProviderTeamID)
 		providerNames[r] = strings.TrimSpace(row.ProviderName)
-		goneRules[r] = uint8(row.Gone)
+		goneRules[r] = uint32(row.Gone)
 		goneValues[r] = nil
 		if row.Gone == GoneStated && row.GoneAt != nil {
 			goneValues[r] = utcText(*row.GoneAt)
 		}
 		ordinals[r] = uint32(r)
 	}
-	var rules [3]int
-	for _, row := range rows {
-		rules[row.Gone]++
-	}
-	slog.Default().DebugContext(ctx, "teams_insert_carries_provider_identity",
-		"rows", len(rows), "gone_kept", rules[GoneKept], "gone_cleared", rules[GoneCleared], "gone_stated", rules[GoneStated])
 	args := make([]any, 0, len(columns)+8)
 	for c := range columns {
 		args = append(args, clickhouse.Named(fmt.Sprintf("v%d", c), params[c]))
@@ -209,7 +202,7 @@ func insertStatement(columns []string) (query string, idIndex, orgIndex int, err
 	}
 	n := len(columns)
 	arrays = append(arrays, "{identity_id:Array(String)}", "{identity_name:Array(String)}",
-		"{gone_rule:Array(UInt8)}", "{gone_in:Array(Nullable(DateTime64(6, 'UTC')))}", "{ordinal:Array(UInt32)}")
+		"{gone_rule:Array(UInt32)}", "{gone_in:Array(Nullable(DateTime64(6, 'UTC')))}", "{ordinal:Array(UInt32)}")
 	fields = append(fields,
 		fmt.Sprintf("incoming_row.%d AS identity_id", n+1), fmt.Sprintf("incoming_row.%d AS identity_name", n+2),
 		fmt.Sprintf("incoming_row.%d AS gone_rule", n+3), fmt.Sprintf("incoming_row.%d AS gone_in", n+4), fmt.Sprintf("incoming_row.%d AS ordinal", n+5))

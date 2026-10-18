@@ -39,3 +39,22 @@ func TestCheckQuirksRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckQuirksNamesAreExact(t *testing.T) {
+	answers := []GoldenAnswer{{"a: boom", 500, `{}`}, {"a: boom, new", 500, `{}`}}
+	table := []Quirk{{ID: "q1", Class: Accidental, Reason: "r", Names: []string{"a: boom"}}}
+	if len(CheckQuirks(table, answers)) == 0 {
+		t.Error("a new 5xx step whose name extends a classed step's name was silently accepted")
+	}
+}
+
+func TestValidationEchoWithoutLocIsDetected(t *testing.T) {
+	answers := []GoldenAnswer{{"a: echo", 422, `{"detail":[{"type":"value_error","msg":"bad","input":"secret"}]}`}}
+	if len(CheckQuirks(nil, answers)) == 0 {
+		t.Error("a validation echo with no loc member was silently accepted")
+	}
+	ctx := []GoldenAnswer{{"a: ctx", 422, `{"detail":[{"type":"json_invalid","ctx":{"error":"x"}}]}`}}
+	if len(CheckQuirks(nil, ctx)) == 0 {
+		t.Error("a validation ctx echo with no loc member was silently accepted")
+	}
+}

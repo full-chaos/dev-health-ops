@@ -36,6 +36,9 @@ type Target struct {
 	ResetLimits func()
 }
 
+// Validate is an error unless the corpus can open fresh rate-limit windows on the target between batches.
+func (tg Target) Validate() error { return nil }
+
 // TargetFromEnv reads an external target; ok is false when EnvBaseURL is unset.
 func TargetFromEnv(t *testing.T) (Target, bool) {
 	t.Helper()

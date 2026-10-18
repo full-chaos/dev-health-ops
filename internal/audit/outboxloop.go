@@ -75,7 +75,8 @@ type stepper interface {
 	Step(ctx context.Context, now time.Time) error
 }
 
-// lagTracker holds the age of the oldest due, unpublished event as of the last
+// lagTracker holds the age of the oldest unpublished event (due or waiting out a
+// retry backoff: both are still pending) as of the last
 // step. It belongs to the loop, not the publisher, so the backlog is observable
 // when publishing is disabled (no sink), which is exactly when it grows.
 type lagTracker struct {
@@ -93,7 +94,7 @@ func (l *lagTracker) observe(ctx context.Context, now time.Time) {
 	err := l.pool.QueryRow(ctx, `
 		SELECT coalesce(extract(epoch FROM ($1::timestamptz - min(created_at)))::bigint, 0)
 		FROM `+authschema.Quote(l.schema)+`.auth_outbox_events
-		WHERE published_at IS NULL AND available_at <= $1`, now.UTC()).Scan(&age)
+		WHERE published_at IS NULL`, now.UTC()).Scan(&age)
 	if err != nil {
 		// A gauge that silently stops moving reads as a healthy outbox.
 		l.logger.WarnContext(ctx, "outbox lag read failed", "error", err)
@@ -207,7 +208,7 @@ func newOutboxLoop(s stepper, config LoopConfig, publishing bool, lag *lagTracke
 	if lag != nil {
 		if _, err := meter.Int64ObservableGauge(
 			"devhealth_auth_outbox_oldest_pending_age_seconds",
-			metric.WithDescription("Age of the oldest due unpublished outbox event at the last step; 0 when none. Exported with or without a sink."),
+			metric.WithDescription("Age of the oldest unpublished outbox event, including one waiting out a retry backoff, at the last step; 0 when none. Exported with or without a sink."),
 			metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
 				o.Observe(lag.age.Load())
 				return nil

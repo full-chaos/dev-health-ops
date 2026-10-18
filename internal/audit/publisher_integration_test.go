@@ -645,6 +645,7 @@ func TestLagCountsAnEventWaitingOutItsBackoff(t *testing.T) {
 	env := newAuditFixture(t, ctx)
 	k := commitEvent(t, ctx, env, "org-a", 1)
 
+	armedExec(t, ctx, env, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '1 hour' WHERE idempotency_key = $1`, k)
 	consumer := newConsumer()
 	consumer.failOnce[k] = true
 	p := newTestPublisher(t, env, consumer)
@@ -652,12 +653,12 @@ func TestLagCountsAnEventWaitingOutItsBackoff(t *testing.T) {
 	if res, err := p.Step(ctx, now, 10); err != nil || res.Failed != 1 {
 		t.Fatalf("Step = %+v, %v", res, err)
 	}
-	if r := readRow(t, ctx, env, k); r.published || !r.available.After(now) {
+	if r := readRow(t, ctx, env, k); r.published || !r.available.After(time.Now()) {
 		t.Fatalf("setup: the event is not waiting out a backoff: %+v", r)
 	}
 	lag := &lagTracker{pool: env.pool, schema: env.schema, logger: slog.New(slog.DiscardHandler)}
-	lag.observe(ctx, time.Now().Add(5*time.Second))
-	if got := lag.age.Load(); got < 4 {
-		t.Fatalf("lag = %d s for a pending event about 5 s old: an event in backoff was reported as no lag", got)
+	lag.observe(ctx, time.Now()) // the event is not yet due again, and it is an hour old
+	if got := lag.age.Load(); got < 3500 {
+		t.Fatalf("lag = %d s for a pending event an hour old: an event waiting out its backoff was reported as no lag", got)
 	}
 }

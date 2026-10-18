@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -40,6 +43,11 @@ type Event struct {
 // IdempotencyKey, and must apply per-aggregate revisions so a delayed or
 // out-of-order event cannot revert newer state (G-54). Deliver must return nil
 // only once the consumer has durably accepted the event.
+//
+// A call that outlives DeliverTimeout is abandoned, not stopped: this process
+// does not start the same event again while it runs, and the retry waits at
+// least four timeouts, but another process cannot see it, so a consumer must
+// also be correct when two deliveries of one event overlap.
 //
 // An error is retried with backoff. If it implements DeliveryReason() string,
 // that short [a-z_] token is stored in last_error; any other error is stored as
@@ -78,6 +86,30 @@ func (timeoutError) DeliveryReason() string { return "delivery_timeout" }
 // context leaks one per timeout; at the cap the publisher stops starting new
 // calls and the step reports the wedge instead of leaking without bound.
 const maxAbandonedDeliveries = 8
+
+// abandonedEvents holds the ids of events whose Deliver call outlived its
+// timeout and has not returned, shared by every Publisher in the process. The
+// claim skips them, so no publisher here starts a second concurrent delivery of
+// the same event.
+var abandonedEvents sync.Map // "<schema>/<id>" -> struct{}
+
+func abandonedKey(schema authschema.ValidatedIdentifier, id int64) string {
+	return authschema.Quote(schema) + "/" + strconv.FormatInt(id, 10)
+}
+
+func (p *Publisher) abandonedIDs() []int64 {
+	prefix := authschema.Quote(p.config.Schema) + "/"
+	ids := []int64{}
+	abandonedEvents.Range(func(k, _ any) bool {
+		if key := k.(string); strings.HasPrefix(key, prefix) {
+			if id, err := strconv.ParseInt(key[len(prefix):], 10, 64); err == nil {
+				ids = append(ids, id)
+			}
+		}
+		return true
+	})
+	return ids
+}
 
 // PublisherConfig bounds one publisher.
 type PublisherConfig struct {
@@ -221,9 +253,12 @@ func (p *Publisher) deliver(ctx context.Context, e Event) error {
 		return err
 	case <-deliverCtx.Done():
 		p.abandoned.Add(1)
+		key := abandonedKey(p.config.Schema, e.ID)
+		abandonedEvents.Store(key, struct{}{})
 		go func() {
 			defer cancel()
 			<-result
+			abandonedEvents.Delete(key)
 			p.abandoned.Add(-1)
 		}()
 		if ctx.Err() != nil {
@@ -251,10 +286,10 @@ func (p *Publisher) deliverOne(ctx context.Context, now time.Time) (outcome, err
 	err = tx.QueryRow(ctx, `
 		SELECT id, aggregate_type, aggregate_id, event_type, payload, idempotency_key, attempts, created_at
 		FROM `+p.table()+`
-		WHERE published_at IS NULL AND available_at <= $1
+		WHERE published_at IS NULL AND available_at <= $1 AND id <> ALL($2::bigint[])
 		ORDER BY available_at, id
 		FOR UPDATE SKIP LOCKED
-		LIMIT 1`, now.UTC()).Scan(
+		LIMIT 1`, now.UTC(), p.abandonedIDs()).Scan(
 		&e.ID, &e.AggregateType, &e.AggregateID, &e.EventType, &payload, &e.IdempotencyKey, &e.Attempts, &e.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return outcomeNone, nil
@@ -290,7 +325,13 @@ func (p *Publisher) deliverOne(ctx context.Context, now time.Time) (outcome, err
 	reason := failureReason(deliverErr)
 	// Measured from the failure, not from the step's start: a slow sink must not
 	// turn the backoff into "due now".
-	retryAt := time.Now().UTC().Add(p.backoff(e.Attempts + 1))
+	delay := p.backoff(e.Attempts + 1)
+	if reason == "delivery_timeout" && delay < 4*p.config.DeliverTimeout {
+		// The abandoned call may still be running; give it time to finish
+		// before another process starts the event again.
+		delay = 4 * p.config.DeliverTimeout
+	}
+	retryAt := time.Now().UTC().Add(delay)
 	if _, err := tx.Exec(ctx, `UPDATE `+p.table()+`
 		SET attempts = attempts + 1, last_error = $2, available_at = $3
 		WHERE id = $1`, e.ID, reason, retryAt); err != nil {

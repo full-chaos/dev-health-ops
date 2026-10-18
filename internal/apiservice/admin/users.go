@@ -621,7 +621,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 // deleteUser is users.py's delete_user, with the two modes of CHAOS-10019 (D6051): by default the user is soft-deleted (the row
-// stays, is_active false); ?force=true deletes the row for good and keeps the audit, billing-audit and refund rows with a null
+// stays, is_active false; a repeat answers 404 like a deleted user); ?force=true deletes the row for good and keeps the audit, billing-audit and refund rows with a null
 // user. The answer is {"deleted": true} in both modes.
 func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
@@ -673,7 +673,10 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 		if mode == DeleteForce {
 			deleted, _, err = g.store.forceDeleteUser(ctx, h.logger, targetID)
 		} else {
-			deleted, _, err = g.store.softDeleteUser(ctx, h.logger, targetID)
+			var wasActive bool
+			deleted, wasActive, err = g.store.softDeleteUser(ctx, h.logger, targetID)
+			// a user that is already soft-deleted is gone from the API's view, as a deleted user was (404)
+			deleted = deleted && wasActive
 		}
 		if err != nil {
 			h.logger.ErrorContext(ctx, "admin: delete user failed", "mode", string(mode), "error", err)

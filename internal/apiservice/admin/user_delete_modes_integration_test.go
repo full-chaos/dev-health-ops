@@ -110,6 +110,9 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, users[na
 	if got := remove("plain", ""); got != http.StatusOK || !present("plain") || active("plain") {
 		t.Fatalf("default delete: status %d, present %v, active %v; want 200, present, inactive", got, present("plain"), active("plain"))
 	}
+	if got := remove("plain", ""); got != http.StatusNotFound || !present("plain") {
+		t.Fatalf("second default delete: status %d, present %v; want 404 and present", got, present("plain"))
+	}
 	if got := remove("plain", "?force=maybe"); got != http.StatusUnprocessableEntity || !present("plain") {
 		t.Fatalf("delete with a bad force value: status %d, present %v; want 422 and present", got, present("plain"))
 	}

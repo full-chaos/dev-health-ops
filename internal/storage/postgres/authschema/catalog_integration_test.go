@@ -170,9 +170,7 @@ func TestDefaultPrivilegesAreRefused(t *testing.T) {
 	// A rule that grants NOTHING today: the auth schema already has all its
 	// tables, so this changes only what a FUTURE table would carry.
 	if _, err := env.migration.Exec(ctx, fmt.Sprintf(
-		`ALTER DEFAULT PRIVILEGES FOR ROLE %q IN SCHEMA %s GRANT SELECT ON TABLES TO %q`,
-		env.migrationRole, env.schema, env.runtimeRole,
-	)); err != nil {
+		`ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s GRANT SELECT ON TABLES TO %s`, Quote(mustValidatedIdentifier(env.migrationRole)), Quote(mustValidatedIdentifier(env.schema)), Quote(mustValidatedIdentifier(env.runtimeRole)))); err != nil {
 		t.Fatalf("set default privileges: %v", err)
 	}
 
@@ -222,7 +220,7 @@ func TestSystemRoleDetectionIsCatalogDerivedNotAHandList(t *testing.T) {
 
 	// Roles absent from the retired hand list.
 	for _, role := range []string{"pg_monitor", "pg_signal_backend"} {
-		if _, err := env.admin.Exec(ctx, fmt.Sprintf("GRANT %s TO %q", role, env.runtimeRole)); err != nil {
+		if _, err := env.admin.Exec(ctx, fmt.Sprintf("GRANT %s TO %s", Quote(mustValidatedIdentifier(role)), Quote(mustValidatedIdentifier(env.runtimeRole)))); err != nil {
 			t.Fatalf("grant %s: %v", role, err)
 		}
 	}
@@ -252,7 +250,7 @@ func TestSystemRoleDetectionIsCatalogDerivedNotAHandList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive role: %v", err)
 	}
-	if _, err := env.admin.Exec(ctx, fmt.Sprintf("CREATE ROLE %q", ordinary)); err != nil {
+	if _, err := env.admin.Exec(ctx, fmt.Sprintf("CREATE ROLE %s", Quote(mustValidatedIdentifier(ordinary)))); err != nil {
 		t.Fatalf("create ordinary role: %v", err)
 	}
 	t.Cleanup(func() { containers.DropRole(env.admin, ordinary, t.Logf) })
@@ -293,7 +291,7 @@ func TestSecurityDefinerFunctionOutsideTheAuthSchemaIsReported(t *testing.T) {
 	// bounds how alarming the finding is — and because assuming otherwise is
 	// what made the reviewer's first attempt fail.
 	if _, err := env.admin.Exec(ctx, fmt.Sprintf(
-		`GRANT CREATE ON SCHEMA public TO %q`, env.migrationRole)); err != nil {
+		`GRANT CREATE ON SCHEMA public TO %s`, Quote(mustValidatedIdentifier(env.migrationRole)))); err != nil {
 		t.Fatalf("grant CREATE on public: %v", err)
 	}
 	if _, err := env.migration.Exec(ctx,
@@ -322,7 +320,7 @@ func TestSecurityDefinerFunctionOutsideTheAuthSchemaIsReported(t *testing.T) {
 
 	// The route outlives the grant that enabled it.
 	if _, err := env.admin.Exec(ctx, fmt.Sprintf(
-		`REVOKE CREATE ON SCHEMA public FROM %q`, env.migrationRole)); err != nil {
+		`REVOKE CREATE ON SCHEMA public FROM %s`, Quote(mustValidatedIdentifier(env.migrationRole)))); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
@@ -383,7 +381,7 @@ func TestPrivilegedPredefinedRoleMembershipIsReported(t *testing.T) {
 	}
 
 	if _, err := env.admin.Exec(ctx, fmt.Sprintf(
-		`GRANT pg_execute_server_program TO %q`, env.runtimeRole)); err != nil {
+		`GRANT pg_execute_server_program TO %s`, Quote(mustValidatedIdentifier(env.runtimeRole)))); err != nil {
 		t.Fatalf("grant predefined role: %v", err)
 	}
 
@@ -480,7 +478,7 @@ func TestPredefinedRoleReachableThroughAnIntermediaryIsDetected(t *testing.T) {
 			t.Fatalf("acquire runtime: %v", err)
 		}
 		defer runtimeConn.Release()
-		_, err = runtimeConn.Exec(ctx, fmt.Sprintf("SET ROLE %q", intermediary))
+		_, err = runtimeConn.Exec(ctx, fmt.Sprintf("SET ROLE %s", Quote(mustValidatedIdentifier(intermediary))))
 		if err != nil {
 			t.Logf("SET ROLE %s refused: %v", intermediary, err)
 			return false
@@ -543,26 +541,26 @@ func TestPredefinedRoleReachableThroughAnIntermediaryIsDetected(t *testing.T) {
 				// Before the GRANT, deliberately: PostgreSQL 16 reads the
 				// member's rolinherit at grant time to set the membership's
 				// INHERIT option, so applying it afterwards would test nothing.
-				if _, err := env.admin.Exec(ctx, fmt.Sprintf("ALTER ROLE %q %s", env.runtimeRole, testCase.roleAttribute)); err != nil {
+				if _, err := env.admin.Exec(ctx, fmt.Sprintf("ALTER ROLE %s %s", Quote(mustValidatedIdentifier(env.runtimeRole)), testCase.roleAttribute)); err != nil {
 					t.Fatalf("apply role attribute: %v", err)
 				}
 				t.Cleanup(func() {
-					if _, err := env.admin.Exec(ctx, fmt.Sprintf("ALTER ROLE %q INHERIT", env.runtimeRole)); err != nil {
+					if _, err := env.admin.Exec(ctx, fmt.Sprintf("ALTER ROLE %s INHERIT", Quote(mustValidatedIdentifier(env.runtimeRole)))); err != nil {
 						t.Errorf("restore INHERIT: %v", err)
 					}
 				})
 			}
 			for _, statement := range []string{
-				fmt.Sprintf("CREATE ROLE %q", intermediary),
-				fmt.Sprintf("GRANT %s TO %q", predefined, intermediary),
-				fmt.Sprintf("GRANT %q TO %q%s", intermediary, env.runtimeRole, testCase.grantOptions),
+				fmt.Sprintf("CREATE ROLE %s", Quote(mustValidatedIdentifier(intermediary))),
+				fmt.Sprintf("GRANT %s TO %s", predefined, Quote(mustValidatedIdentifier(intermediary))),
+				fmt.Sprintf("GRANT %s TO %s%s", Quote(mustValidatedIdentifier(intermediary)), Quote(mustValidatedIdentifier(env.runtimeRole)), testCase.grantOptions),
 			} {
 				if _, err := env.admin.Exec(ctx, statement); err != nil {
 					t.Fatalf("setup %q: %v", statement, err)
 				}
 			}
 			t.Cleanup(func() {
-				if _, err := env.admin.Exec(ctx, fmt.Sprintf("REVOKE %q FROM %q", intermediary, env.runtimeRole)); err != nil {
+				if _, err := env.admin.Exec(ctx, fmt.Sprintf("REVOKE %s FROM %s", Quote(mustValidatedIdentifier(intermediary)), Quote(mustValidatedIdentifier(env.runtimeRole)))); err != nil {
 					t.Errorf("revoke intermediary: %v", err)
 				}
 				containers.DropRole(env.admin, intermediary, t.Logf)
@@ -605,7 +603,7 @@ func TestSuperuserRuntimeRoleIsReportedAsSuperuserNotAsFifteenMemberships(t *tes
 	defer conn.Release()
 	options := Options{Schema: env.schema, RuntimeRole: env.runtimeRole}
 
-	if _, err := env.admin.Exec(ctx, fmt.Sprintf("ALTER ROLE %q SUPERUSER", env.runtimeRole)); err != nil {
+	if _, err := env.admin.Exec(ctx, fmt.Sprintf("ALTER ROLE %s SUPERUSER", Quote(mustValidatedIdentifier(env.runtimeRole)))); err != nil {
 		t.Fatalf("grant superuser: %v", err)
 	}
 	t.Cleanup(func() {
@@ -613,7 +611,7 @@ func TestSuperuserRuntimeRoleIsReportedAsSuperuserNotAsFifteenMemberships(t *tes
 		// cleanups run, which turned this into a spurious "context canceled".
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancelCleanup()
-		if _, err := env.admin.Exec(cleanupCtx, fmt.Sprintf("ALTER ROLE %q NOSUPERUSER", env.runtimeRole)); err != nil {
+		if _, err := env.admin.Exec(cleanupCtx, fmt.Sprintf("ALTER ROLE %s NOSUPERUSER", Quote(mustValidatedIdentifier(env.runtimeRole)))); err != nil {
 			t.Errorf("revoke superuser: %v", err)
 		}
 	})

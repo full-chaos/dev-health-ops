@@ -15,6 +15,9 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/jackc/pgx/v5/pgconn"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -415,7 +418,7 @@ func (h *buildHandler) work(ctx context.Context, requestID string, organizationI
 			}
 			return withFailedSteps(evidence, failedSteps), nil
 		},
-		func(_ context.Context, _ Claim, err error) error {
+		func(ctx context.Context, _ Claim, err error) error {
 			// Ambiguous exists to record a HALF-APPLIED Python write: the
 			// bridge may have succeeded before a later step failed, leaving
 			// rows that carry Python's values behind. Build has no bridge,
@@ -426,18 +429,32 @@ func (h *buildHandler) work(ctx context.Context, requestID string, organizationI
 			if isTransientStepError(err) {
 				return jobruntime.Retryable(err)
 			}
-			// Loud, not just returned: a permanent-cancel needs the
-			// underlying cause (e.g. a pre-step's ClickHouse bind failure)
-			// visible without correlating a ledger detail string back to it
-			// -- same reasoning the bridge-era permanent-cancel log carried,
-			// now without an ambiguous ledger row to also record it on.
-			h.logger.Error("workgraph build handler: permanent cancel after step failure",
-				slog.String("request_id", requestID), slog.String("organization_id", *organizationID),
-				slog.Any("error", err),
-			)
+			// Loud, not just returned: a permanent-cancel is logged with
+			// its class and root Go type, never the error text (it can
+			// hold a URL, an id or a response body). The error itself
+			// still travels in the returned Permanent error.
+			buildPermanentCancelCounter.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("error_class", retryableClass(err))))
+			h.logger.Warn("workgraph build handler: permanent cancel after step failure",
+				withErrorAttrs([]any{slog.String("request_id", requestID),
+					slog.String("organization_id", *organizationID)}, err)...)
 			return jobruntime.Permanent(err)
 		},
 	)
+}
+
+var buildPermanentCancelCounter = mustBuildCounter(
+	"dev_health_workgraph_build_permanent_cancels_total",
+	"workgraph.build requests permanently cancelled after a step failure, by error_class",
+)
+
+func mustBuildCounter(name, description string) metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/workgraph").
+		Int64Counter(name, metric.WithDescription(description))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)
+	}
+	return counter
 }
 
 // materializeHandler runs investment.materialize through its NativeExecutor.

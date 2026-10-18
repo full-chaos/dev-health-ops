@@ -484,3 +484,12 @@ written its `reopened`. A reopen whose transaction rolled back after writing
 its marker leaves the day unknown until the next sync, which heals it because
 Postgres still says succeeded. A run that was created but not yet claimed does
 not hide an older `succeeded` (it has not started computing); the claim does.
+
+## Workgraph build permanent cancels
+
+`dev_health_workgraph_build_permanent_cancels_total` counts `workgraph.build`
+requests that the build handler cancelled permanently after a step failure.
+Label `error_class` is one of `context_canceled`, `deadline_exceeded`,
+`dependency_unavailable` or `unclassified`. A transient step failure retries
+and is not counted. The matching Warn log line carries the same class and the
+root Go type, never the error text.

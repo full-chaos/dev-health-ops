@@ -58,11 +58,11 @@ type censusFile struct {
 }
 
 // census is the parsed production tree: every file, and every package-level
-// string const by directory.
+// const and variable by directory, with each value written for it.
 type census struct {
 	fset   *token.FileSet
 	files  []*censusFile
-	consts map[string]map[string]ast.Expr
+	consts map[string]map[string][]ast.Expr
 	// resolving guards a const cycle.
 	resolving map[string]bool
 }
@@ -71,20 +71,23 @@ type census struct {
 // and returns every way they write sync_manual_triggers outside Mint or reach
 // Mint outside mintCallers, and the number of files it read.
 //
-// It reads Go syntax, not text. A string expression is folded to its value
-// (literals, "+" chains, package-level and function-level string consts, and
-// fmt.Sprintf over folded arguments); the strings of one function are also
-// read in source order as one text, so a statement split across variables is
-// seen. A Mint call is found through any import name, and Mint used as a value
-// fails.
+// It reads Go syntax, not text. A string expression is folded to every value
+// Go source gives it: literals, "+" chains, consts and package-level
+// variables of any package, the function's own local names (every value
+// assigned or appended to them, regardless of order), fmt.Sprintf, and
+// strings.Join over a literal slice. The strings of one function are also read
+// in source order as one text, joined with "" and with " ". A Mint call is
+// found through any import name, and Mint used as a value fails.
 //
-// Known limit: the census sees Go source only. SQL built at run time from
-// values it cannot fold (a non-const variable passed between functions, data
-// read from a file or the database, a format with a non-literal argument) is
-// not seen. Mint's own refusal of an unnamed Caller (ErrUnnamedCaller) holds
-// at run time whatever the census misses.
+// Limit: a static census cannot be complete. It does not see a value that
+// crosses a function boundary (a parameter, a return value, a struct field,
+// a map or slice element) or is built from run-time data (a file, the
+// database, the environment). Mint's refusal of an unnamed Caller
+// (ErrUnnamedCaller) holds at run time for every Mint call; a direct writer
+// that the census misses is held only by the database grants, which is
+// CHAOS-10161.
 func triggerCensus(fsys fs.FS) (failures []string, files int) {
-	c := &census{fset: token.NewFileSet(), consts: map[string]map[string]ast.Expr{}, resolving: map[string]bool{}}
+	c := &census{fset: token.NewFileSet(), consts: map[string]map[string][]ast.Expr{}, resolving: map[string]bool{}}
 	for _, dir := range []string{"internal", "cmd"} {
 		err := fs.WalkDir(fsys, dir, func(name string, entry fs.DirEntry, err error) error {
 			if err != nil {
@@ -147,108 +150,287 @@ func (c *census) add(name string, syntax *ast.File) {
 			local = spec.Name.Name
 		}
 		switch {
-		case importPath == "fmt":
-			file.imports[local] = "fmt"
+		case importPath == "fmt", importPath == "strings":
+			file.imports[local] = importPath
 		case strings.HasPrefix(importPath, modulePath):
 			file.imports[local] = strings.TrimPrefix(importPath, modulePath)
 		}
 	}
 	consts := c.consts[file.dir]
 	if consts == nil {
-		consts = map[string]ast.Expr{}
+		consts = map[string][]ast.Expr{}
 		c.consts[file.dir] = consts
 	}
 	for _, decl := range syntax.Decls {
-		if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.CONST {
-			addConsts(consts, gen)
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || (gen.Tok != token.CONST && gen.Tok != token.VAR) {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value := spec.(*ast.ValueSpec)
+			for i, name := range value.Names {
+				if i < len(value.Values) {
+					consts[name.Name] = append(consts[name.Name], value.Values[i])
+				}
+			}
 		}
 	}
 	c.files = append(c.files, file)
 }
 
-func addConsts(consts map[string]ast.Expr, gen *ast.GenDecl) {
-	for _, spec := range gen.Specs {
-		value := spec.(*ast.ValueSpec)
-		for i, name := range value.Names {
-			if i < len(value.Values) {
-				consts[name.Name] = value.Values[i]
+// maxValues caps the candidate values of one expression.
+const maxValues = 64
+
+// scope is where a name is looked up: the file, and the string names local to
+// the function being read, each with every value the function assigns to it.
+type scope struct {
+	file      *censusFile
+	locals    map[string]*localName
+	memo      map[string][]string
+	resolving map[string]bool
+}
+
+// localName is every assignment to one name in a function, read without
+// regard to order or control flow: assigned values (":=", "=", var, const)
+// and appended ones ("+=", and "x = x + e").
+type localName struct {
+	assigned, appended []ast.Expr
+}
+
+func newScope(file *censusFile) scope {
+	return scope{file: file, locals: map[string]*localName{}, memo: map[string][]string{}, resolving: map[string]bool{}}
+}
+
+func (s scope) name(name string) *localName {
+	l := s.locals[name]
+	if l == nil {
+		l = &localName{}
+		s.locals[name] = l
+	}
+	return l
+}
+
+// collectLocals records every assignment to a plain identifier in node.
+func collectLocals(s scope, node ast.Node) {
+	ast.Inspect(node, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.AssignStmt:
+			if len(n.Lhs) != len(n.Rhs) {
+				return true
+			}
+			for i, lhs := range n.Lhs {
+				name, ok := lhs.(*ast.Ident)
+				if !ok || name.Name == "_" {
+					continue
+				}
+				rhs := n.Rhs[i]
+				switch n.Tok {
+				case token.ADD_ASSIGN:
+					s.name(name.Name).appended = append(s.name(name.Name).appended, rhs)
+				case token.DEFINE, token.ASSIGN:
+					if sum, ok := rhs.(*ast.BinaryExpr); ok && sum.Op == token.ADD {
+						if self, ok := sum.X.(*ast.Ident); ok && self.Name == name.Name {
+							s.name(name.Name).appended = append(s.name(name.Name).appended, sum.Y)
+							continue
+						}
+					}
+					s.name(name.Name).assigned = append(s.name(name.Name).assigned, rhs)
+				}
+			}
+		case *ast.ValueSpec:
+			for i, name := range n.Names {
+				if i < len(n.Values) {
+					s.name(name.Name).assigned = append(s.name(name.Name).assigned, n.Values[i])
+				} else {
+					s.name(name.Name)
+				}
 			}
 		}
-	}
+		return true
+	})
 }
 
-// scope is where a name is looked up: the file, and the consts of the
-// function being read.
-type scope struct {
-	file   *censusFile
-	locals map[string]ast.Expr
-}
-
-// fold returns the string value of expr when the census can compute it.
+// fold returns the first value of expr when the census can compute one.
 func (c *census) fold(s scope, expr ast.Expr) (string, bool) {
+	values := c.values(s, expr)
+	if len(values) == 0 {
+		return "", false
+	}
+	return values[0], true
+}
+
+// values returns the string values expr can take, as far as Go source shows
+// them: literals, "+", consts and package-level variables (of this or an
+// imported package), the function's local names, fmt.Sprintf, and
+// strings.Join over a literal slice. Nil means unknown.
+func (c *census) values(s scope, expr ast.Expr) []string {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
 		if e.Kind != token.STRING {
-			return "", false
+			return nil
 		}
 		value, err := strconv.Unquote(e.Value)
-		return value, err == nil
+		if err != nil {
+			return nil
+		}
+		return []string{value}
 	case *ast.ParenExpr:
-		return c.fold(s, e.X)
+		return c.values(s, e.X)
 	case *ast.BinaryExpr:
 		if e.Op != token.ADD {
-			return "", false
+			return nil
 		}
-		left, ok := c.fold(s, e.X)
-		if !ok {
-			return "", false
-		}
-		right, ok := c.fold(s, e.Y)
-		return left + right, ok
+		return concat(c.values(s, e.X), c.values(s, e.Y))
 	case *ast.Ident:
-		if value, ok := s.locals[e.Name]; ok {
-			return c.fold(scope{file: s.file}, value)
+		if local, ok := s.locals[e.Name]; ok {
+			return c.localValues(s, e.Name, local)
 		}
 		return c.constant(s.file, s.file.dir, e.Name)
 	case *ast.SelectorExpr:
 		if pkg, ok := e.X.(*ast.Ident); ok {
-			if dir, ok := s.file.imports[pkg.Name]; ok && dir != "fmt" {
+			if dir, ok := s.file.imports[pkg.Name]; ok && dir != "fmt" && dir != "strings" {
 				return c.constant(s.file, dir, e.Sel.Name)
 			}
 		}
 	case *ast.CallExpr:
-		if format, ok := c.sprintfFormat(s, e); ok {
-			args := e.Args[1:]
-			return printfVerbs.ReplaceAllStringFunc(format, func(string) string {
-				if len(args) == 0 {
-					return ""
-				}
-				value, _ := c.fold(s, args[0])
-				args = args[1:]
-				return value
-			}), true
+		switch c.stdlibCall(s, e) {
+		case "fmt.Sprintf":
+			return c.sprintf(s, e.Args)
+		case "strings.Join":
+			return c.join(s, e.Args)
 		}
 	}
-	return "", false
+	return nil
 }
 
-func (c *census) sprintfFormat(s scope, call *ast.CallExpr) (string, bool) {
+func (c *census) stdlibCall(s scope, call *ast.CallExpr) string {
 	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != "Sprintf" || len(call.Args) == 0 {
-		return "", false
+	if !ok {
+		return ""
 	}
 	pkg, ok := selector.X.(*ast.Ident)
-	if !ok || s.file.imports[pkg.Name] != "fmt" {
-		return "", false
+	if !ok {
+		return ""
 	}
-	return c.fold(s, call.Args[0])
+	switch dir := s.file.imports[pkg.Name]; {
+	case dir == "fmt" && selector.Sel.Name == "Sprintf" && len(call.Args) > 0:
+		return "fmt.Sprintf"
+	case dir == "strings" && selector.Sel.Name == "Join" && len(call.Args) == 2:
+		return "strings.Join"
+	}
+	return ""
 }
 
-func (c *census) constant(from *censusFile, dir, name string) (string, bool) {
-	value, ok := c.consts[dir][name]
+// sprintf substitutes each verb of the format with the next argument's
+// values (an argument the census cannot compute reads as "").
+func (c *census) sprintf(s scope, args []ast.Expr) []string {
+	formats := c.values(s, args[0])
+	var out []string
+	for _, format := range formats {
+		pieces := printfVerbs.Split(format, -1)
+		result := []string{pieces[0]}
+		for i, piece := range pieces[1:] {
+			argument := []string{""}
+			if i+1 < len(args) {
+				if values := c.values(s, args[i+1]); len(values) > 0 {
+					argument = values
+				}
+			}
+			result = concat(concat(result, argument), []string{piece})
+		}
+		out = append(out, result...)
+	}
+	return capped(out)
+}
+
+func (c *census) join(s scope, args []ast.Expr) []string {
+	elements, ok := args[0].(*ast.CompositeLit)
+	if !ok {
+		return nil
+	}
+	separators := c.values(s, args[1])
+	if len(separators) == 0 {
+		return nil
+	}
+	var out []string
+	for _, separator := range separators {
+		result := []string{""}
+		for i, element := range elements.Elts {
+			values := c.values(s, element)
+			if len(values) == 0 {
+				return nil
+			}
+			if i > 0 {
+				result = concat(result, []string{separator})
+			}
+			result = concat(result, values)
+		}
+		out = append(out, result...)
+	}
+	return capped(out)
+}
+
+// localValues is every value of a local name: each assigned value alone,
+// followed by each appended value, and followed by all of them in source order.
+func (c *census) localValues(s scope, name string, local *localName) []string {
+	if values, ok := s.memo[name]; ok {
+		return values
+	}
+	if s.resolving[name] {
+		return nil
+	}
+	s.resolving[name] = true
+	defer delete(s.resolving, name)
+	var bases []string
+	for _, expr := range local.assigned {
+		bases = append(bases, c.values(s, expr)...)
+	}
+	if len(local.assigned) == 0 {
+		bases = []string{""}
+	}
+	values := append([]string(nil), bases...)
+	all := bases
+	for _, expr := range local.appended {
+		appended := c.values(s, expr)
+		values = append(values, concat(bases, appended)...)
+		all = concat(all, appended)
+	}
+	if len(local.appended) > 1 {
+		values = append(values, all...)
+	}
+	values = capped(values)
+	s.memo[name] = values
+	return values
+}
+
+func concat(left, right []string) []string {
+	if len(left) == 0 || len(right) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(left)*len(right))
+	for _, l := range left {
+		for _, r := range right {
+			out = append(out, l+r)
+			if len(out) == maxValues {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+func capped(values []string) []string {
+	if len(values) > maxValues {
+		return values[:maxValues]
+	}
+	return values
+}
+
+func (c *census) constant(from *censusFile, dir, name string) []string {
+	exprs, ok := c.consts[dir][name]
 	key := dir + "." + name
 	if !ok || c.resolving[key] {
-		return "", false
+		return nil
 	}
 	c.resolving[key] = true
 	defer delete(c.resolving, key)
@@ -262,7 +444,11 @@ func (c *census) constant(from *censusFile, dir, name string) (string, bool) {
 			}
 		}
 	}
-	return c.fold(scope{file: owner}, value)
+	var values []string
+	for _, expr := range exprs {
+		values = append(values, c.values(newScope(owner), expr)...)
+	}
+	return capped(values)
 }
 
 // writers returns the units of file that write sync_manual_triggers: a
@@ -299,20 +485,15 @@ func receiverName(expr ast.Expr) string {
 	return "?"
 }
 
-// writes reports whether one declaration holds a write of the table: in one
-// folded string expression, or in its strings read in source order as one
-// text.
+// writes reports whether one declaration holds a write of the table: in any
+// value of one string expression, or in its strings read in source order as
+// one text, joined with "" and with " ".
 func (c *census) writes(file *censusFile, decl ast.Decl) bool {
-	s := scope{file: file, locals: map[string]ast.Expr{}}
-	ast.Inspect(decl, func(node ast.Node) bool {
-		if gen, ok := node.(*ast.GenDecl); ok && gen.Tok == token.CONST {
-			if _, isFunc := decl.(*ast.FuncDecl); isFunc {
-				addConsts(s.locals, gen)
-			}
-		}
-		return true
-	})
-	var text strings.Builder
+	s := newScope(file)
+	if fn, ok := decl.(*ast.FuncDecl); ok {
+		collectLocals(s, fn)
+	}
+	var pieces []string
 	found := false
 	ast.Inspect(decl, func(node ast.Node) bool {
 		if found {
@@ -322,28 +503,27 @@ func (c *census) writes(file *censusFile, decl ast.Decl) bool {
 		if !ok {
 			return true
 		}
-		if value, ok := c.fold(s, expr); ok && triggerTableWrite.MatchString(value) {
-			found = true
-			return false
-		}
-		switch e := expr.(type) {
-		case *ast.BasicLit:
-			if value, ok := c.fold(s, e); ok {
-				text.WriteString(value)
+		values := c.values(s, expr)
+		for _, value := range values {
+			if triggerTableWrite.MatchString(value) {
+				found = true
+				return false
 			}
-		case *ast.Ident:
-			if value, ok := c.fold(s, e); ok {
-				text.WriteString(value)
+		}
+		switch expr.(type) {
+		case *ast.BasicLit, *ast.Ident:
+			if len(values) > 0 {
+				pieces = append(pieces, values[0])
 			}
 		case *ast.SelectorExpr:
-			if value, ok := c.fold(s, e); ok {
-				text.WriteString(value)
+			if len(values) > 0 {
+				pieces = append(pieces, values[0])
 				return false
 			}
 		}
 		return true
 	})
-	return found || triggerTableWrite.MatchString(text.String())
+	return found || triggerTableWrite.MatchString(strings.Join(pieces, "")) || triggerTableWrite.MatchString(strings.Join(pieces, " "))
 }
 
 // mintCalls counts the Mint calls of file and returns a problem for Mint used
@@ -436,7 +616,7 @@ func (c *census) namedCaller(file *censusFile, fn *ast.FuncDecl, call *ast.CallE
 	if len(call.Args) != 5 {
 		return "calls Mint without its five arguments"
 	}
-	s := scope{file: file}
+	s := newScope(file)
 	literal := func(expr ast.Expr) string {
 		composite, ok := expr.(*ast.CompositeLit)
 		if !ok {
@@ -607,6 +787,64 @@ func sneak(ctx context.Context, tx pgx.Tx) error {
 	verb := "UPDATE public.sync_manual"
 	statement := verb + "_triggers SET mode = $1"
 	_, err := tx.Exec(ctx, statement, "x")
+	return err
+}
+`,
+		},
+		"a local table name concatenated after it is assigned": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	table := "sync_manual_triggers"
+	statement := "INSERT INTO public." + table + " (occurrence_id) VALUES ($1)"
+	_, err := tx.Exec(ctx, statement, 1)
+	return err
+}
+`,
+		},
+		"a statement built with +=": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	statement := "INSERT INTO public."
+	statement += "sync_manual_triggers"
+	statement += " (occurrence_id) VALUES ($1)"
+	_, err := tx.Exec(ctx, statement, 1)
+	return err
+}
+`,
+		},
+		"a reassigned variable": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	table := "scheduled_jobs"
+	if ctx != nil {
+		table = "sync_manual_triggers"
+	}
+	_, err := tx.Exec(ctx, "UPDATE public."+table+" SET mode = $1", "x")
+	return err
+}
+`,
+		},
+		"a statement joined by strings.Join": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+import "strings"
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, strings.Join([]string{"INSERT INTO", "public.sync_manual_triggers", "(occurrence_id) VALUES ($1)"}, " "), 1)
+	return err
+}
+`,
+		},
+		"a package-level variable table name": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+var triggerTable = "sync_manual_triggers"
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, "INSERT INTO public." + triggerTable + " (occurrence_id) VALUES ($1)", 1)
 	return err
 }
 `,

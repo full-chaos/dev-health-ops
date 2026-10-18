@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/audit-event.v1.schema.json",
+  "title": "Auth Control Plane security audit event (v1 wire format)",
+  "description": "One row of security_audit_events (TRD sections 9 and 13) as it crosses a service boundary. The audit trail is append-only and its metadata is ALLOWLISTED and secret-free: never plaintext secrets, raw codes, provider tokens, untrusted bodies or high-cardinality identities. A schema cannot assert \"no secrets\"; it can make the fields that would carry them unrepresentable, so `attributes` is a closed object of typed members and an arbitrary key fails. The table's client_ip and free-text request detail are deliberately NOT carried: an address is a high-cardinality identity, and the database column stays in the database.\n\n`outcome` is closed (allowed, denied, error) so the trail can be aggregated and alerted on. `policy_revision` names which policy produced a decision (ACP-ADR-05) and is an integer token in 0..2^53-1 (refused on the raw token when written in decimal form), like every wire integer (see provisioning-event.v1).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_type",
+    "occurred_at",
+    "outcome",
+    "attributes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "audit-event.v1"
+    },
+    "event_type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$",
+      "description": "What happened, from the producer's closed vocabulary (text in the database so adding one is not a migration)."
+    },
+    "occurred_at": {
+      "type": "string",
+      "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$"
+    },
+    "outcome": {
+      "enum": [
+        "allowed",
+        "denied",
+        "error"
+      ]
+    },
+    "actor_principal_id": {
+      "type": "string",
+      "pattern": "^prn_[A-Za-z0-9_-]{1,64}$",
+      "description": "Who did it. Absent for events with no actor (a failed login for an unknown identity)."
+    },
+    "subject_principal_id": {
+      "type": "string",
+      "pattern": "^prn_[A-Za-z0-9_-]{1,64}$",
+      "description": "Who it was done to. Differs from the actor for administrative actions; collapsing them loses what an investigation needs."
+    },
+    "organization_id": {
+      "type": "string",
+      "pattern": "^org_[A-Za-z0-9_-]{1,64}$"
+    },
+    "policy_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^req_[A-Za-z0-9_-]{26}$"
+    },
+    "attributes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reason_code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,63}$"
+        },
+        "action": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$"
+        },
+        "resource_type": {
+          "enum": [
+            "organization",
+            "repository"
+          ],
+          "description": "An unknown resource type is a denial (TRD section 14), so the vocabulary is closed."
+        },
+        "aggregate_type": {
+          "enum": [
+            "principal",
+            "user",
+            "external_identity",
+            "organization",
+            "membership",
+            "platform_role_assignment",
+            "service_account",
+            "workload",
+            "resource_grant"
+          ]
+        },
+        "aggregate_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "credential_class": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,63}$"
+        },
+        "decision_id": {
+          "type": "string",
+          "pattern": "^dec_[A-Za-z0-9_-]{26}$"
+        }
+      },
+      "description": "The allowlist. Adding a member is a contract change reviewed as one."
+    }
+  }
+}

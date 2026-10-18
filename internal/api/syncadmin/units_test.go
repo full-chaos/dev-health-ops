@@ -239,3 +239,33 @@ func TestRunUnitsBudgetDeferralsIncludeBudgetContentionWaits(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-8801: "catching up" follows the planner's window ratchet, which covers
+// the work-items family of GitHub and Linear, while the reported cost_class
+// stays the registry's. GitLab and Jira are not ratcheted yet, so they never
+// read as catching up.
+func TestRunUnitsCatchingUpFollowsTheWorkItemWindowRatchet(t *testing.T) {
+	unsetForTest(t, "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS")
+	unsetForTest(t, "SYNC_WATERMARK_OVERLAP")
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	name, full, external := "repo", "org/repo", "org/repo"
+	at := now.Add(-30 * 24 * time.Hour)
+	for provider, wantCatchingUp := range map[string]bool{"github": true, "linear": true, "gitlab": false, "jira": false} {
+		unit := runUnit{ID: uuid.New(), SyncRunID: faultRunID, SourceID: uuid.New(), OrgID: "org", Provider: provider,
+			DatasetKey: "work-items", CostClass: "medium", Mode: "incremental", Status: "success",
+			CreatedAt: now, UpdatedAt: now, HasSource: true, SourceName: &name, SourceFullName: &full, SourceExternalID: &external}
+		reader := &unitsReader{faultReader: &faultReader{}, units: []runUnit{unit},
+			watermarks: []schedsync.WatermarkRow{{SourceID: "org/repo", DatasetKey: "work-items", RepoID: "r", Target: "t", LastSyncedAt: &at}}}
+		_, status, body := serveUnits(t, reader, "", now)
+		if status != http.StatusOK {
+			t.Fatalf("%s: %d %s", provider, status, body)
+		}
+		want := `"dataset_key":"work-items","cost_class":"medium"`
+		if !strings.Contains(body, want) {
+			t.Errorf("%s: reported cost class changed:\n%s", provider, body)
+		}
+		if got := strings.Contains(body, `"catching_up":true`); got != wantCatchingUp {
+			t.Errorf("%s: catching_up = %v, want %v:\n%s", provider, got, wantCatchingUp, body)
+		}
+	}
+}

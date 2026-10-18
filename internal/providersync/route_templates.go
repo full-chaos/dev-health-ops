@@ -23,7 +23,8 @@ const (
 	githubRunJobsRoute      = githubRepoRoute + "/actions/runs/{run}/jobs"
 	githubRunArtifactsRoute = githubRepoRoute + "/actions/runs/{run}/artifacts"
 
-	gitlabProjectRoute = "/projects/{project}"
+	gitlabProjectRoute    = "/projects/{project}"
+	gitlabGroupEpicsRoute = "/groups/{group}/epics"
 
 	gitlabCommitsRoute       = gitlabProjectRoute + "/repository/commits"
 	gitlabMergeRequestsRoute = gitlabProjectRoute + "/merge_requests"

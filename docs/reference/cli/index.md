@@ -1353,7 +1353,11 @@ with `redrive:<nonce>`, which dropped the producer prefix
 `daily-start` coverage and the recommendations readiness gate match. The
 original value was stored nowhere, but a run id is
 `uuid5(org|target_day|generation)`, so a candidate generation is proven by
-hashing to the run's own id.
+hashing to the run's own id. Every family the runner mints is tried:
+`fixed-schedule:` (occurrence second near `created_at`), `post-sync:<sync run
+id>` (the organization's `sync_runs`, created up to 14 days before the run),
+`touched-drain:<n|e>:<daily run id>` and `manual-daily:` (without a repository
+list or rerun tag).
 
 ```bash
 dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-10-31 --dry-run
@@ -1364,7 +1368,7 @@ dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-1
 Output: `examined`, `repaired`, `would_repair`, `not_provable` (created under
 another generation, for example `post-sync:`), `not_settled` (still
 redriving: not `succeeded`/`succeeded`, or an open redrive event), `raced`,
-`full_org_flipped`, and one entry per row. Every row is logged at Warn with the
+`full_org_flipped` (fan-out rows only), `by_family` (proven rows per family), and one entry per row. Every row is logged at Warn with the
 old and new generation. The write is a compare-and-set on the old generation,
 so a second pass repairs nothing. Audited under the `metrics.finalize_redrive`
 action.

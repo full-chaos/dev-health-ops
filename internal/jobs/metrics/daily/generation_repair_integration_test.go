@@ -38,6 +38,7 @@ VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$7,false)`,
 	inFlight := insert(repairTestOrg, 3, fanout(3), "redrive:n3", "running", "pending", created(3))
 	openEvent := insert(repairTestOrg, 4, fanout(4), "redrive:n4", "succeeded", "succeeded", created(4))
 	healthy := insert(repairTestOrg, 5, fanout(5), fanout(5), "succeeded", "succeeded", created(5))
+	drained := insert(repairTestOrg, 6, TouchedDrainGenerationPrefix+"e:"+healthy, "redrive:n6", "succeeded", "succeeded", created(6))
 	otherOrgRun := insert(otherOrg, 1, fanout(1), "redrive:n5", "succeeded", "succeeded", created(1))
 	if _, err := pool.Exec(ctx, `
 INSERT INTO daily_metrics_finalize_redrive_events (id, run_id, org_id, target_day, prior_status, prior_finalization_status, actor, reason, nonce)
@@ -75,8 +76,8 @@ VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3, 'succeeded', 'succeeded', 'fi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dry.Examined != 4 || dry.WouldRepair != 1 || dry.NotProvable != 1 || dry.NotSettled != 2 || dry.Repaired != 0 || dry.FullOrgFlipped != 1 {
-		t.Fatalf("dry run = %+v, want examined 4, would_repair 1, not_provable 1, not_settled 2, full_org_flipped 1", dry)
+	if dry.Examined != 5 || dry.WouldRepair != 2 || dry.NotProvable != 1 || dry.NotSettled != 2 || dry.Repaired != 0 || dry.FullOrgFlipped != 1 {
+		t.Fatalf("dry run = %+v, want examined 5, would_repair 2, not_provable 1, not_settled 2, full_org_flipped 1", dry)
 	}
 	if generation, _ := state(damaged); generation != "redrive:n1" {
 		t.Fatalf("a dry run changed the generation to %q", generation)
@@ -86,8 +87,8 @@ VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3, 'succeeded', 'succeeded', 'fi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome.Examined != 4 || outcome.Repaired != 1 || outcome.NotProvable != 1 || outcome.NotSettled != 2 || outcome.Raced != 0 || outcome.FullOrgFlipped != 1 {
-		t.Fatalf("repair = %+v, want examined 4, repaired 1, not_provable 1, not_settled 2, full_org_flipped 1", outcome)
+	if outcome.Examined != 5 || outcome.Repaired != 2 || outcome.NotProvable != 1 || outcome.NotSettled != 2 || outcome.Raced != 0 || outcome.FullOrgFlipped != 1 {
+		t.Fatalf("repair = %+v, want examined 5, repaired 2, not_provable 1, not_settled 2, full_org_flipped 1", outcome)
 	}
 	if generation, fullOrg := state(damaged); generation != fanout(1) || !fullOrg {
 		t.Fatalf("repaired run = %q full_org=%v, want %q true", generation, fullOrg, fanout(1))
@@ -96,6 +97,12 @@ VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3, 'succeeded', 'succeeded', 'fi
 		if generation, fullOrg := state(id); len(generation) < 8 || generation[:8] != "redrive:" || fullOrg {
 			t.Errorf("%s run was touched: generation %q full_org=%v", name, generation, fullOrg)
 		}
+	}
+	if generation, fullOrg := state(drained); generation != TouchedDrainGenerationPrefix+"e:"+healthy || fullOrg {
+		t.Errorf("touched-drain run = %q full_org=%v, want its generation back and full_org untouched", generation, fullOrg)
+	}
+	if outcome.ByFamily["fixed-schedule"] != 1 || outcome.ByFamily["touched-drain"] != 1 {
+		t.Errorf("by_family = %v, want one fixed-schedule and one touched-drain", outcome.ByFamily)
 	}
 	if generation, _ := state(healthy); generation != fanout(5) {
 		t.Errorf("a healthy run changed to %q", generation)

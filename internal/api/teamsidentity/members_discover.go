@@ -174,11 +174,11 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 		link := response.Header.Get("Link")
 		raw, err := readBody(response)
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		page, err := decodeObjectList(raw, "github team members page")
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		entries = appendNew(entries, seenMembers, page, memberObjectKey("login"))
 		linkNext, advertised := githubNextLinkPresent(link)
@@ -254,11 +254,11 @@ func discoverMembersGitLab(ctx context.Context, token secrets.Value, baseURL, gr
 		link := response.Header.Get("Link")
 		raw, err := readBody(response)
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		items, err := decodeObjectList(raw, "gitlab group members page")
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		entries = appendNew(entries, seenMembers, items, memberObjectKey("id", "username"))
 		linkNext, advertised := githubNextLinkPresent(link)

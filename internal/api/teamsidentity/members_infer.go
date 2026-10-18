@@ -182,13 +182,16 @@ func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient
 		}
 		raw, err := readBody(response)
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		page, err := decodeObject(raw, "jira search page")
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		list := listAt(page, "issues")
+		if err := walk.replay(jiraPageFingerprint(list)); err != nil {
+			return nil, err
+		}
 		// the one continuation check of the walk: every return below runs after it, the item limit included
 		nextToken, nextStartAt, more, err := walk.jiraAdvance(page, startAt, len(list))
 		if err != nil {

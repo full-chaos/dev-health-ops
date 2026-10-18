@@ -148,14 +148,14 @@ func gitlabListPages[T any](ctx context.Context, client *providerfoundation.HTTP
 		nextPage := response.Header.Get("X-Next-Page")
 		response.Body.Close()
 		if readErr != nil {
-			return nil, false, readErr
+			return nil, false, walk.pageError(readErr)
 		}
 		var entries []T
 		if err := json.Unmarshal(raw, &entries); err != nil {
-			return nil, false, fmt.Errorf("decode %s: %w", decodeLabel, err)
+			return nil, false, walk.pageError(fmt.Errorf("decode %s: %w", decodeLabel, err))
 		}
 		out = appendNew(out, seenItems, entries, key)
-		next, more, err := walk.gitlabNextPage(nextPage, len(entries))
+		next, more, err := walk.gitlabNextPage(nextPage, page, len(entries))
 		if err != nil {
 			return nil, false, err
 		}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 
@@ -50,6 +51,8 @@ type pageWalk struct {
 	owner    string // the org, team, group or project the walk reads
 	pages    int
 	seen     map[string]struct{}
+	// pagePrints are the fingerprints of the pages read so far (replay)
+	pagePrints map[string]struct{}
 }
 
 // newPageWalk starts a walk whose first request is identified by firstKey (the URL, page number or token it was sent with).
@@ -107,9 +110,9 @@ func (walk *pageWalk) fail(cause string) error {
 		walk.provider, walk.walk, walk.owner, cause, walk.pages, pageWalkMaxPages)
 }
 
-// gitlabNextPage reads X-Next-Page: "" is the end; a value that is not a positive integer fails the walk (it used to end it, and
-// the list was returned as complete).
-func (walk *pageWalk) gitlabNextPage(header string, items int) (int, bool, error) {
+// gitlabNextPage reads X-Next-Page of the page just read (number current): "" is the end. GitLab's offset pagination always names the
+// next page as current+1, so any other value, a non-canonical one or one that is not a positive integer fails the walk.
+func (walk *pageWalk) gitlabNextPage(header string, current, items int) (int, bool, error) {
 	if header == "" {
 		_, _, err := walk.advance("", false, items)
 		return 0, false, err
@@ -120,13 +123,33 @@ func (walk *pageWalk) gitlabNextPage(header string, items int) (int, bool, error
 		walk.pages++
 		return 0, false, walk.fail(walkCauseBadContinuation)
 	}
-	// "01" and "1" are the same page: the continuation is compared in its canonical form
-	next, more, err := walk.advance(strconv.Itoa(number), true, items)
+	if number != current+1 {
+		walk.pages++
+		return 0, false, walk.fail(walkCauseInconsistent)
+	}
+	next, more, err := walk.advance(header, true, items)
 	if err != nil || !more {
 		return 0, false, err
 	}
 	number, _ = strconv.Atoi(next)
 	return number, true, nil
+}
+
+// replay fails the walk when a page of items is the same page as an earlier one (same fingerprint): a provider that ignores the
+// continuation the walk sends answers with the first page again, and a fresh-looking continuation key cannot show that.
+func (walk *pageWalk) replay(fingerprint string) error {
+	if fingerprint == "" {
+		return nil
+	}
+	if walk.pagePrints == nil {
+		walk.pagePrints = map[string]struct{}{}
+	}
+	if _, again := walk.pagePrints[fingerprint]; again {
+		walk.pages++
+		return walk.fail(walkCauseRepeated)
+	}
+	walk.pagePrints[fingerprint] = struct{}{}
+	return nil
 }
 
 // jiraAdvance reads the continuation signal of one Jira search page (nextPageToken, isLast and the page's item count) and decides
@@ -156,6 +179,13 @@ func (walk *pageWalk) jiraAdvance(page *pyjson.Object, startAt, items int) (toke
 	if last && token != "" {
 		walk.pages++
 		return "", 0, false, walk.fail(walkCauseInconsistent)
+	}
+	// /rest/api/3/search/jql continues by nextPageToken only and ignores startAt: a non-empty page that says isLast false and gives
+	// no token cannot be continued. An absent isLast keeps the startAt continuation (the pinned Python iter_issues behaviour; the
+	// replay check catches an endpoint that ignores it).
+	if items > 0 && hasLast && !last && token == "" {
+		walk.pages++
+		return "", 0, false, walk.fail(walkCauseNoContinuation)
 	}
 	advertised := !last
 	if items == 0 {
@@ -196,4 +226,20 @@ func memberObjectKey(fields ...string) func(*pyjson.Object) string {
 		}
 		return fmt.Sprintf("anon:%p", entry)
 	}
+}
+
+// jiraPageFingerprint identifies a page of Jira issues by the keys (or ids) of its issues in order; "" for an empty page.
+func jiraPageFingerprint(list []pyjson.Value) string {
+	if len(list) == 0 {
+		return ""
+	}
+	parts := make([]string, len(list))
+	for index, item := range list {
+		if issue, ok := item.(*pyjson.Object); ok {
+			parts[index] = memberObjectKey("key", "id")(issue)
+		} else {
+			parts[index] = fmt.Sprintf("anon:%d", index)
+		}
+	}
+	return strings.Join(parts, "|")
 }

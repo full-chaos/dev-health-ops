@@ -128,11 +128,11 @@ func githubListAllPages[T any](ctx context.Context, client *providerfoundation.H
 		raw, readErr := io.ReadAll(response.Body)
 		response.Body.Close()
 		if readErr != nil {
-			return nil, readErr
+			return nil, walk.pageError(readErr)
 		}
 		var page []T
 		if err := json.Unmarshal(raw, &page); err != nil {
-			return nil, fmt.Errorf("decode github list page: %w", err)
+			return nil, walk.pageError(fmt.Errorf("decode github list page: %w", err))
 		}
 		out = appendNew(out, seenItems, page, key)
 		link, advertised := githubNextLinkPresent(response.Header.Get("Link"))

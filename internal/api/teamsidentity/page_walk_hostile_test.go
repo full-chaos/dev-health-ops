@@ -114,10 +114,10 @@ func gitlabHostile() []hostileCase {
 	return []hostileCase{
 		{"X-Next-Page equal to the current page", func(r *http.Request, n int) (http.Header, string) {
 			return header("X-Next-Page", "1"), body(n)
-		}, walkCauseRepeated, 1},
+		}, walkCauseInconsistent, 1},
 		{"X-Next-Page repeated after progress", func(r *http.Request, n int) (http.Header, string) {
 			return header("X-Next-Page", "2"), body(n)
-		}, walkCauseRepeated, 2},
+		}, walkCauseInconsistent, 2},
 		{"empty page advertising next", func(r *http.Request, n int) (http.Header, string) {
 			return header("X-Next-Page", fmt.Sprint(n+1)), `[]`
 		}, walkCauseEmptyPageToNext, 1},
@@ -330,7 +330,7 @@ func TestReproducedRound2WalkHoles(t *testing.T) {
 		logs := captureWarns(t)
 		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
 			if n == 1 {
-				return nil, `{"issues":[{"key":"P-1","fields":{}}],"isLast":false}`
+				return nil, `{"issues":[{"key":"P-1","fields":{}}],"nextPageToken":"t1"}`
 			}
 			return nil, `{"issues":[],"isLast":false}`
 		}}
@@ -484,4 +484,50 @@ func TestGitLabMembersFirstRequestIsThePinnedOne(t *testing.T) {
 	if first.Load() != "/api/v4/groups/7/members?per_page=100" || second.Load() != "/api/v4/groups/7/members?page=2&per_page=100" {
 		t.Fatalf("requests = %v then %v", first.Load(), second.Load())
 	}
+}
+
+func TestRound3JiraReplayAndLaterPageFailures(t *testing.T) {
+	page := func(from, count int, tail string) string {
+		parts := make([]string, count)
+		for index := range parts {
+			parts[index] = fmt.Sprintf(`{"key":"P-%d","fields":{}}`, from+index)
+		}
+		return `{"issues":[` + strings.Join(parts, ",") + `]` + tail + `}`
+	}
+	t.Run("jira isLast false without a token on a full page (startAt is ignored by /search/jql)", func(t *testing.T) {
+		logs := captureWarns(t)
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) { return nil, page(1, 100, `,"isLast":false`) }}
+		got, err := jiraSearchIssues(context.Background(), hostileClient(t, "jira", doer), "P", "project = 'P'")
+		assertNoPartial(t, "no token", got)
+		assertFailedClosed(t, err, doer, logs, "jira", hostileCase{name: "isLast false no token", cause: walkCauseNoContinuation, maxRequests: 1})
+	})
+	t.Run("jira endpoint that ignores startAt replays the first page", func(t *testing.T) {
+		logs := captureWarns(t)
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) { return nil, page(1, 100, ``) }}
+		got, err := jiraSearchIssues(context.Background(), hostileClient(t, "jira", doer), "P", "project = 'P'")
+		assertNoPartial(t, "replay", got)
+		assertFailedClosed(t, err, doer, logs, "jira", hostileCase{name: "replayed page", cause: walkCauseRepeated, maxRequests: 2})
+	})
+	t.Run("gitlab X-Next-Page that skips a page", func(t *testing.T) {
+		logs := captureWarns(t)
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+			return header("X-Next-Page", "3"), `[{"id":1,"path_with_namespace":"g/a"}]`
+		}}
+		got, _, err := gitlabListProjectPages(context.Background(), hostileClient(t, "gitlab", doer), "g", "/groups/{group}/projects", "/api/v4/groups/1/projects", 100000, false)
+		assertNoPartial(t, "skip", got)
+		assertFailedClosed(t, err, doer, logs, "gitlab", hostileCase{name: "skip", cause: walkCauseInconsistent, maxRequests: 1})
+	})
+	t.Run("github later page that is not JSON gets the walk Warn and counter", func(t *testing.T) {
+		logs := captureWarns(t)
+		doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+			if n == 1 {
+				return linkNext(r.URL.Scheme + "://" + r.URL.Host + r.URL.Path + "?per_page=100&page=2"), `[{"slug":"a","name":"A"}]`
+			}
+			return nil, `not json`
+		}}
+		got, err := githubListAllPages(context.Background(), hostileClient(t, "github", doer), "org teams", "o", "/orgs/{org}/teams", "/orgs/o/teams?per_page=100",
+			func(entry githubTeamListEntry) string { return entry.Slug })
+		assertNoPartial(t, "later decode", got)
+		assertFailedClosed(t, err, doer, logs, "github", hostileCase{name: "later page decode", cause: walkCausePageRequest, maxRequests: 2})
+	})
 }

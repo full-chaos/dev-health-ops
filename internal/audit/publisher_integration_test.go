@@ -553,3 +553,32 @@ func TestFailureMetricAttributesAreAClosedSet(t *testing.T) {
 		}
 	}
 }
+
+// The retry time is measured from when the failure happened, not from when the
+// step started: a slow sink must not turn a one-second backoff into "due now".
+func TestBackoffIsMeasuredFromTheFailureNotTheStepStart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+	k := commitEvent(t, ctx, env, "org-a", 1)
+
+	slow := sinkFunc(func(context.Context, Event) error {
+		time.Sleep(1500 * time.Millisecond)
+		return reasonErr{"consumer_unavailable"}
+	})
+	p, err := NewPublisher(env.pool, slow, PublisherConfig{
+		Schema: env.schema, BaseBackoff: 2 * time.Second, MaxBackoff: time.Minute, DeliverTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stepStart := time.Now().Add(time.Second) // due, and the step's notion of "now"
+	if _, err := p.Step(ctx, stepStart, 10); err != nil {
+		t.Fatal(err)
+	}
+	failedAt := time.Now()
+	r := readRow(t, ctx, env, k)
+	if got := r.available.Sub(failedAt); got < time.Second {
+		t.Fatalf("available_at is only %v after the failure was recorded; a 2s backoff was measured from the step start", got)
+	}
+}

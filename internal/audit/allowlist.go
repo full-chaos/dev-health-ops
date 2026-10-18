@@ -106,3 +106,54 @@ func stringProblem(key, v string) string {
 	}
 	return ""
 }
+
+// attributeVocabulary is the closed value set of each enumerated attribute
+// key. Free text has no slot: a value is one of these strings, or (for the
+// id keys in attributeIDKeys) a UUID/registry id, or a number.
+var attributeVocabulary = map[string][]string{
+	"reason_code": {
+		"role_granted", "role_revoked", "membership_added", "membership_removed", "membership_status_changed",
+		"grant_created", "grant_revoked", "credential_issued", "credential_rotated", "credential_revoked",
+		"session_revoked", "organization_created", "organization_updated", "principal_disabled",
+		"principal_enabled", "identity_linked", "identity_unlinked", "policy_revision_activated",
+		"entitlement_snapshot_applied", "denied_no_membership", "denied_no_grant", "denied_policy",
+	},
+	"target_kind": {
+		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",
+		"session", "external_identity", "service_account", "workload", "policy_revision", "entitlement_snapshot",
+	},
+	"resource_kind":    {"organization", "repository", "project", "team"},
+	"previous_status":  {"active", "disabled", "revoked", "pending", "expired", "suspended"},
+	"new_status":       {"active", "disabled", "revoked", "pending", "expired", "suspended"},
+	"provider":         {"local", "github", "gitlab", "jira", "linear", "google", "microsoft", "saml", "oidc"},
+	"client_service":   {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},
+	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key"},
+	"changed_fields": {
+		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email_verified_at",
+		"scopes", "audiences", "organization_id",
+	},
+}
+
+// AttributeVocabulary returns a copy of the enumerated attribute vocabularies.
+func AttributeVocabulary() map[string][]string {
+	out := make(map[string][]string, len(attributeVocabulary))
+	for k, v := range attributeVocabulary {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
+}
+
+// attributeIDRules are the id-valued keys and the rule each value must satisfy.
+var attributeIDRules = map[string]*regexp.Regexp{
+	"target_id":      uuidPattern,
+	"credential_id":  uuidPattern,
+	"resource_id":    regexp.MustCompile(`^(\*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*)$`),
+	"role_key":       regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$`),
+	"action_key":     regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$`),
+	"display_prefix": regexp.MustCompile(`^(fcacr|fcpush|svc|rt)_[A-Za-z0-9]{2,8}$`),
+}
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// attributeNumberKeys take a whole number.
+var attributeNumberKeys = map[string]struct{}{"membership_revision": {}, "policy_revision": {}}

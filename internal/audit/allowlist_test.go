@@ -137,3 +137,67 @@ func TestEveryFailureReasonIsInTheClosedEnum(t *testing.T) {
 		}
 	}
 }
+
+// Every allowlisted key has exactly one value rule: an enumerated vocabulary,
+// an id rule, or a number. A reason that merely LOOKS like a code is refused.
+func TestEveryAttributeKeyHasAClosedValueRule(t *testing.T) {
+	vocab := AttributeVocabulary()
+	for key := range allowedAttributeKeys {
+		_, enumerated := vocab[key]
+		_, isID := attributeIDRules[key]
+		_, isNumber := attributeNumberKeys[key]
+		if n := b2i(enumerated) + b2i(isID) + b2i(isNumber); n != 1 {
+			t.Errorf("attribute key %q has %d value rules, want exactly 1", key, n)
+		}
+	}
+	for key := range vocab {
+		if _, ok := allowedAttributeKeys[key]; !ok {
+			t.Errorf("vocabulary key %q is not an allowed attribute", key)
+		}
+	}
+	for key, values := range vocab {
+		if len(values) == 0 {
+			t.Errorf("vocabulary %q is empty", key)
+		}
+		for _, v := range values {
+			attr := any(v)
+			if key == "changed_fields" {
+				attr = []string{v}
+			}
+			if err := ValidateAttributes(map[string]any{key: attr}); err != nil {
+				t.Errorf("%s=%q refused: %v", key, v, err)
+			}
+		}
+		for _, bad := range []string{"password123", "hunter2", "correct-horse", "role_granted_extra", strings.ToUpper(values[0])} {
+			attr := any(bad)
+			if key == "changed_fields" {
+				attr = []string{bad}
+			}
+			if err := ValidateAttributes(map[string]any{key: attr}); err == nil {
+				t.Errorf("%s=%q was accepted although it is outside the vocabulary", key, bad)
+			}
+		}
+	}
+	if err := ValidateAttributes(map[string]any{"target_id": "password123"}); err == nil {
+		t.Error("target_id accepted a non-id")
+	}
+	if err := ValidateAttributes(map[string]any{"target_id": "11111111-1111-4111-8111-111111111111", "membership_revision": int64(3)}); err != nil {
+		t.Errorf("a UUID id and a number were refused: %v", err)
+	}
+	rid := "password123"
+	m := Mutation{
+		Apply: func(context.Context, TxOps) error { return nil },
+		Audit: AuditEvent{EventType: "member.updated", Outcome: OutcomeAllowed, RequestID: &rid},
+		Event: OutboxEvent{AggregateType: "a", AggregateID: "b", EventType: "c", IdempotencyKey: "k"},
+	}
+	if err := m.validate(); err == nil {
+		t.Error("request_id accepted a non-UUID")
+	}
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}

@@ -14,11 +14,13 @@ import (
 type scriptedStepper struct {
 	mu    sync.Mutex
 	calls int
+	nows  []time.Time
 	err   func(call int) error
 }
 
-func (s *scriptedStepper) Step(ctx context.Context, _ time.Time) error {
+func (s *scriptedStepper) Step(ctx context.Context, now time.Time) error {
 	s.mu.Lock()
+	s.nows = append(s.nows, now)
 	s.calls++
 	n := s.calls
 	s.mu.Unlock()
@@ -154,5 +156,27 @@ func TestFailureReasonStoresNoErrorText(t *testing.T) {
 	}
 	if got := failureReason(reasonErr{"Has Spaces & Secrets"}); got != "delivery_failed" {
 		t.Errorf("an unsafe reason was stored: %q", got)
+	}
+}
+
+// A ticker value is the time of the tick, not of the step: a step that ran long
+// would otherwise compute retry times from the past. The loop hands its stepper
+// the clock at the START OF THE STEP.
+func TestLoopHandsTheStepperTheCurrentTimeNotTheTickTimestamp(t *testing.T) {
+	s := &scriptedStepper{}
+	loop, ticks, stepped := testLoop(t, s)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = loop.Shutdown(context.Background()) })
+	awaitStep(t, stepped)
+	ticks <- time.Now().Add(-time.Hour) // a tick the ticker queued long ago
+	awaitStep(t, stepped)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, n := range s.nows {
+		if d := time.Since(n); d < -time.Second || d > 5*time.Second {
+			t.Errorf("step %d received time %v (%v from now)", i, n, d)
+		}
 	}
 }

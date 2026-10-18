@@ -457,7 +457,7 @@ func runUsersDelete(ctx context.Context, env cli.Env) int {
 		return cli.ExitOK
 	}
 	if result.AlreadyInactive {
-		fmt.Fprintf(env.Stdout, "User already soft-deleted: %s (id: %s). Use --force to delete it permanently.\n", result.User.Email, result.User.ID)
+		fmt.Fprintf(env.Stdout, "User already inactive: %s (id: %s). Credentials ended again (token version advanced). Use --force to delete it permanently.\n", result.User.Email, result.User.ID)
 		return cli.ExitOK
 	}
 	fmt.Fprintf(env.Stdout, "Soft-deleted user: %s (id: %s). The row is kept and the login is off; use --force to delete it permanently.\n", result.User.Email, result.User.ID)

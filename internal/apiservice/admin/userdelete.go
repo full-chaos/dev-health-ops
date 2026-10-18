@@ -81,16 +81,15 @@ ORDER BY n.nspname, cl.relname, c.conname`)
 	return refs, rows.Err()
 }
 
-// softDeleteResult is what a soft delete found and did. AlreadyDone is true when the user was inactive and held no live token:
-// the call wrote nothing.
+// softDeleteResult is what a soft delete found and did. AlreadyDone is true when the user was inactive and held no live token
+// (the call still advanced the token version).
 type softDeleteResult struct {
 	Found, WasActive, AlreadyDone bool
 }
 
 // softDeleteUser turns the login off and keeps the row: is_active false, the access tokens fail on token_version, and the
-// refresh and one-time tokens are revoked or removed. It does all of this for an inactive user that still holds a live
-// token (a user an operator deactivated first must not keep credentials that work again on reactivation); an inactive
-// user with none is left untouched.
+// refresh and one-time tokens are revoked or removed. It does all of this on every call, for an inactive user too (a user
+// an operator deactivated first must not keep credentials that work again on reactivation), so it is idempotent.
 func (s pgStore) softDeleteUser(ctx context.Context, logger *slog.Logger, id uuid.UUID) (softDeleteResult, error) {
 	now := s.now().UTC()
 	var wasActive bool
@@ -114,13 +113,11 @@ func (s pgStore) softDeleteUser(ctx context.Context, logger *slog.Logger, id uui
 	if err != nil {
 		return result, err
 	}
-	// an inactive user with no live token has nothing to end: a repeat writes nothing (no version bump, no updated_at)
-	result.AlreadyDone = !wasActive && revoked.RowsAffected()+reset.RowsAffected()+verification.RowsAffected() == 0
-	if !result.AlreadyDone {
-		if _, err = s.Pool.Exec(ctx, `UPDATE users SET is_active = false, token_version = token_version + 1, updated_at = $2 WHERE id = $1`, id, now); err != nil {
-			return result, err
-		}
+	if _, err = s.Pool.Exec(ctx, `UPDATE users SET is_active = false, token_version = token_version + 1, updated_at = $2 WHERE id = $1`, id, now); err != nil {
+		return result, err
 	}
+	// AlreadyDone only describes the answer: the user was inactive and no token was left to end. The credentials are ended on every call.
+	result.AlreadyDone = !wasActive && revoked.RowsAffected()+reset.RowsAffected()+verification.RowsAffected() == 0
 	logger.DebugContext(ctx, "admin: user delete (soft): tokens ended", "user_id", id.String(), "was_active", wasActive,
 		"refresh_tokens_revoked", revoked.RowsAffected(), "password_reset_tokens_deleted", reset.RowsAffected(),
 		"email_verification_tokens_deleted", verification.RowsAffected())

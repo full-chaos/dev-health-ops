@@ -609,7 +609,7 @@ dho admin users delete --email user@example.com --force --yes
 | `--force` | Delete the user permanently instead of the default soft delete |
 | `--yes` | Confirm. Without it the user and the memberships are printed with what would happen, and nothing is changed (exit 1) |
 
-On success the verb prints `Soft-deleted user: <email> (id: <id>)...` or `Permanently deleted user: <email> (id: <id>)` (followed by one line per table whose rows were kept with a null user). It logs on stderr: `admin: user soft-deleted` or `admin: user permanently deleted` (user id, mode, rows kept) and `admin: user delete by the operator CLI`. An unknown user, a missing identifier and a malformed id print `Error: ...` and exit 1.
+A soft delete ends every credential (access tokens through `token_version`, refresh tokens, password-reset and email-verification tokens) on every call, so it can be repeated; for a user that is already inactive with no token left it prints `User already inactive: ...` and the API answers 404. On success the verb prints `Soft-deleted user: <email> (id: <id>)...` or `Permanently deleted user: <email> (id: <id>)` (followed by one line per table whose rows were kept with a null user). It logs on stderr: `admin: user soft-deleted` or `admin: user permanently deleted` (user id, mode, rows kept) and `admin: user delete by the operator CLI`. An unknown user, a missing identifier and a malformed id print `Error: ...` and exit 1.
 
 ### `admin orgs delete`
 

@@ -3,14 +3,38 @@
 package daily
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
+
+type gateLogBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *gateLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *gateLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
 
 // Two runs of one organization and day must not hold a finalize lease at the same time: the finalize families of a day
 // write the same keys, and overlapping computes tie on computed_at (CHAOS-9945). The refused claim is a snooze
@@ -54,6 +78,15 @@ VALUES ($1,$2,$3,$4,'running','pending',$5,$5)`, run.id, run.org, run.day, run.g
 	}
 	store.now = func() time.Time { return now }
 
+	reader := sdkmetric.NewManualReader()
+	previousProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	t.Cleanup(func() { otel.SetMeterProvider(previousProvider) })
+	logs := &gateLogBuffer{}
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
 	first, err := store.ClaimFinalize(ctx, sameA1)
 	if err != nil || first == nil {
 		t.Fatalf("first claim = %#v, %v", first, err)
@@ -65,6 +98,32 @@ VALUES ($1,$2,$3,$4,'running','pending',$5,$5)`, run.id, run.org, run.day, run.g
 	}
 	if active.RetryAfter <= 0 || active.RetryAfter > store.lease {
 		t.Fatalf("retry after = %s, want a positive wait no longer than the lease", active.RetryAfter)
+	}
+	var resource metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &resource); err != nil {
+		t.Fatal(err)
+	}
+	var deferred int64
+	var waited uint64
+	for _, scope := range resource.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			switch m.Name {
+			case FinalizeOrgDayDeferredCounter:
+				for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
+					deferred += point.Value
+				}
+			case FinalizeOrgDayDeferHistogram:
+				for _, point := range m.Data.(metricdata.Histogram[float64]).DataPoints {
+					waited += point.Count
+				}
+			}
+		}
+	}
+	if deferred != 1 || waited != 1 {
+		t.Fatalf("deferred counter = %d, defer histogram count = %d; want 1 and 1", deferred, waited)
+	}
+	if out := logs.String(); !strings.Contains(out, "daily finalize deferred") || !strings.Contains(out, "holder_run_id="+sameA1) {
+		t.Fatalf("the deferral is not logged with the holder run: %q", out)
 	}
 	for name, runID := range map[string]string{"another day": nextA, "another organization": otherB} {
 		if claim, err := store.ClaimFinalize(ctx, runID); err != nil || claim == nil {

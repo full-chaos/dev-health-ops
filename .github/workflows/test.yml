@@ -115,11 +115,6 @@ jobs:
               - 'scripts/**'
               - 'alerts/**'
               - 'compose.yml'
-              # docker/Dockerfile is one of scripts/acceptance's
-              # RUNTIME_DEPENDENCY_PATHS: the acceptance suite hashes it and
-              # asserts on it, so a change here can turn the suite red -- but
-              # the filter did not select on it, so such a PR skipped every
-              # test job and the gate went green (CHAOS-3482 Codex round 4).
               - 'docker/**'
               - 'deploy/**'
               # CHAOS-3948: this filter had no Go paths at all, so a Go-only

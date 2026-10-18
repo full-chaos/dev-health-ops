@@ -30,6 +30,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/pgconfig"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
@@ -215,7 +216,7 @@ func databaseConfigurationRejected(err error) bool {
 }
 
 func openWorkerDatabase(ctx context.Context, cfg config.Config) (workerDatabase, error) {
-	runtimeConfig := postgres.RuntimeConfigFromPlatform(cfg)
+	runtimeConfig := pgconfig.RuntimeConfig(cfg)
 	pools, err := postgres.NewRuntimePools(ctx, runtimeConfig)
 	if err != nil {
 		return nil, err

@@ -3289,6 +3289,9 @@ auth_relevant() {
   closure="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -deps \
     -test -f '{{if not .Standard}}{{.Dir}}{{end}}' "${AUTH_PACKAGES[@]}" | sed "s|^${ROOT}/||" | LC_ALL=C sort -u)"
   [ -n "${closure}" ] || die "auth relevance: go list returned an empty closure"
+  # Packages the scope selftest governs (auth-looking names, importers of the
+  # schema adapter) select the gates too, as directories relative to the root.
+  closure+=$'\n'"$(auth_scope_candidates | sed "s|^$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)/||")"
   # --no-renames: a file moved OUT of the auth tree must report its old path too.
   changed="$(git -C "${ROOT}" diff --name-only --no-renames "${base}" "${head}")"
   while IFS= read -r file; do
@@ -3309,6 +3312,13 @@ auth_path_relevant() {
       return 0
       ;;
   esac
+  # A Go-package area path with an auth* or audit* directory segment: a package
+  # that is new, deleted or moved is not in the head-tree candidate list.
+  case "${file}" in
+    cmd/*|internal/*|tools/*)
+      [[ "${file%/*}" =~ (^|/)(auth|audit)[^/]*(/|$) ]] && return 0
+      ;;
+  esac
   # Any file (Go, testdata, golden, embedded asset) under a directory of the
   # import closure can change what the auth packages do or test.
   while IFS= read -r dir; do
@@ -3323,7 +3333,7 @@ auth_path_relevant() {
 check_auth_paths_selftest() {
   local closure inside outside file
   closure="$(printf 'internal/auth/authruntime\ninternal/platform/secrets\n')"
-  inside=(internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh)
+  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh)
   outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go internal/platform/secretsx/y.go src/dev_health_ops/cli.py)
   for file in "${inside[@]}"; do
     auth_path_relevant "${file}" "${closure}" || die "auth path filter: ${file} must select the auth gates and does not"
@@ -3341,16 +3351,27 @@ check_auth_paths_selftest() {
 # must be inside the gate (AUTH_PACKAGES) or named, with a reason, in
 # ci/auth_gate_scope_exempt.txt (package<TAB>reason). An exemption that is
 # gated, or that names no package, is stale and fails.
-check_auth_scope_selftest() {
-  local exempt="${ROOT}/ci/auth_gate_scope_exempt.txt" module gated candidates missing stale pkg
+# auth_scope_candidates: the import path of every Go package of the module that
+# LOOKS like auth (a path segment starting with auth or audit) or imports the
+# auth schema adapter. One definition for the scope selftest AND the relevance
+# filter, so a package the selftest would demand a decision for also selects the
+# auth gates (a new such package must not be able to skip the very check that
+# would reject it).
+auth_scope_candidates() {
+  local module
   module="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)"
-  gated="$(auth_go list -mod=readonly "${AUTH_PACKAGES[@]}" | LC_ALL=C sort -u)"
-  [ -n "${gated}" ] || die "auth scope: the gate selects no package"
-  candidates="$( {
+  {
     auth_go list -mod=readonly ./... | awk -F/ -v m="${module}" '{ rest=substr($0, length(m)+2); n=split(rest, seg, "/"); for (i=1;i<=n;i++) if (seg[i] ~ /^(auth|audit)/) { print $0; break } }'
     auth_go list -mod=readonly -test -f '{{.ImportPath}} {{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}' ./... \
       | awk -v m="${module}" '{ p=$1; sub(/ \[.*$/, "", p); sub(/\.test$/, "", p); sub(/_test$/, "", p); for (i=2;i<=NF;i++) if ($i == m "/internal/storage/postgres/authschema") { print p; break } }'
-  } | LC_ALL=C sort -u)"
+  } | LC_ALL=C sort -u
+}
+
+check_auth_scope_selftest() {
+  local exempt="${ROOT}/ci/auth_gate_scope_exempt.txt" gated candidates missing stale pkg reason
+  gated="$(auth_go list -mod=readonly "${AUTH_PACKAGES[@]}" | LC_ALL=C sort -u)"
+  [ -n "${gated}" ] || die "auth scope: the gate selects no package"
+  candidates="$(auth_scope_candidates)"
   [ -n "${candidates}" ] || die "auth scope: no candidate package found; the selftest would measure nothing"
   missing=""
   while IFS= read -r pkg; do
@@ -3361,11 +3382,12 @@ check_auth_scope_selftest() {
   done <<<"${candidates}"
   [ -z "${missing}" ] || die "auth scope: package(s) look like auth or import the auth schema but are neither in the gate nor exempt with a reason in ci/auth_gate_scope_exempt.txt: ${missing}"
   stale=""
-  while IFS=$'\t' read -r pkg _; do
+  while IFS=$'\t' read -r pkg reason; do
     case "${pkg}" in ''|'#'*) continue ;; esac
+    [[ "${reason}" =~ [^[:space:]] ]] || stale+="${pkg}(no reason) "
     if printf '%s\n' "${gated}" | grep -qx -- "${pkg}" || ! printf '%s\n' "${candidates}" | grep -qx -- "${pkg}"; then stale+="${pkg} "; fi
   done <"${exempt}"
-  [ -z "${stale}" ] || die "auth scope: stale exemption(s) (gated, or no longer a candidate): ${stale}"
+  [ -z "${stale}" ] || die "auth scope: stale or reasonless exemption(s) (gated, no longer a candidate, or no reason): ${stale}"
   printf 'auth scope: %s candidate packages, all gated or exempt\n' "$(printf '%s\n' "${candidates}" | wc -l | tr -d ' ')"
 }
 

@@ -3,8 +3,11 @@
 package atlassianteams
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -271,7 +274,24 @@ func TestAFailedWriteLeavesNoLinkWithoutItsTeam(t *testing.T) {
 	// The table stays readable but refuses every insert: the failure happens at
 	// write time, after memberships were committed.
 	exec(t, conn, `ALTER TABLE team_project_ownership ADD CONSTRAINT never_writable CHECK 1 = 0`)
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
 	_, err = Write(ctx, conn, "org-1", rows, everything, soleScope(), everyAbsentFactIsGone{})
+	slog.SetDefault(previous)
+	warned := 0
+	for _, line := range strings.Split(logged.String(), "\n") {
+		var entry map[string]any
+		if json.Unmarshal([]byte(line), &entry) == nil && entry["msg"] == "atlassian_teams_links_not_written_after_teams" {
+			warned++
+			if entry["level"] != "WARN" || entry["stage"] != "write team project ownership" || entry["teams_written"].(float64) <= 0 {
+				t.Errorf("the partial-write line = %v, want WARN, the failing stage and the teams written", entry)
+			}
+		}
+	}
+	if warned != 1 {
+		t.Errorf("%d partial-write Warn lines, want 1:\n%s", warned, logged.String())
+	}
 	if err == nil || !strings.Contains(err.Error(), "write team project ownership") || !strings.Contains(err.Error(), "already written: teams, team memberships") {
 		t.Fatalf("err = %v, want the failing stage and the committed ones named", err)
 	}

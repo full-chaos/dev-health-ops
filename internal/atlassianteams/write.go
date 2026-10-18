@@ -243,6 +243,13 @@ func Write(
 	}
 	var done []string
 	fail := func(stage string, err error) (Result, error) {
+		if len(done) > 0 && done[0] == "teams" {
+			// The teams rows are committed and a link stage failed: the teams
+			// are listed without (some of) their links until a re-run.
+			slog.Default().WarnContext(ctx, "atlassian_teams_links_not_written_after_teams",
+				"org_id", orgID, "stage", stage, "teams_written", result.TeamsWritten,
+				"deactivated_teams", result.DeactivatedTeams, "stages_written", len(done))
+		}
 		if len(done) > 0 {
 			return result, fmt.Errorf("%s: %w (already written: %s; a re-run completes the rest)", stage, err, strings.Join(done, ", "))
 		}

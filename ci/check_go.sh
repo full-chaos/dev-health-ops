@@ -3276,12 +3276,23 @@ check_auth_vuln() {
 # check_auth_closure: CHAOS-10131. Every module in the `go list -deps` closure of
 # the two auth binaries must be a row of ci/auth_closure_allow.tsv. A ClickHouse
 # driver or any other new module entering the closure fails here, not at review.
+# The closure is the UNION over the shipped build configurations: the Docker
+# image builds with CGO_ENABLED=0 for linux/amd64 and linux/arm64
+# (docker/go-worker.Dockerfile), the CI runner with cgo on, and a `!cgo` or
+# per-GOARCH file can import a module only one of them links.
+# AUTH_CLOSURE_ALLOW names another allow-list (the selftest uses it).
 check_auth_closure() {
-  local actual allowed extra stale
-  actual="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -deps \
-    -f '{{if .Module}}{{.Module.Path}}{{end}}' ./cmd/auth-service ./cmd/auth-migrate | LC_ALL=C sort -u | sed '/^$/d')"
+  local actual="" allowed extra stale cgo arch part allow_file="${AUTH_CLOSURE_ALLOW:-${ROOT}/ci/auth_closure_allow.tsv}"
+  for cgo in 0 1; do
+    for arch in amd64 arm64; do
+      part="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off CGO_ENABLED="${cgo}" GOOS=linux GOARCH="${arch}" go list -mod=readonly -deps \
+        -f '{{if .Module}}{{.Module.Path}}{{end}}' ./cmd/auth-service ./cmd/auth-migrate)" || die "auth closure: go list failed (CGO_ENABLED=${cgo} linux/${arch})"
+      actual+="${part}"$'\n'
+    done
+  done
+  actual="$(printf '%s' "${actual}" | LC_ALL=C sort -u | sed '/^$/d')"
   [ -n "${actual}" ] || die "auth closure: go list returned no modules"
-  allowed="$(awk -F'\t' '$1 !~ /^#/ && $1 != "" { print $1 }' "${ROOT}/ci/auth_closure_allow.tsv" | LC_ALL=C sort -u)"
+  allowed="$(awk -F'\t' '$1 !~ /^#/ && $1 != "" { print $1 }' "${allow_file}" | LC_ALL=C sort -u)"
   extra="$(LC_ALL=C comm -23 <(printf '%s\n' "${actual}") <(printf '%s\n' "${allowed}"))"
   stale="$(LC_ALL=C comm -13 <(printf '%s\n' "${actual}") <(printf '%s\n' "${allowed}"))"
   if [ -n "${stale}" ]; then

@@ -587,23 +587,29 @@ dho admin users update \
 
 ### `admin users delete`
 
-Delete a user (identified by `--id`, `--email`, or `--username`). The user's org memberships and sessions go with it. The API's `delete_user` does the same; this verb is for the operator who has no API token, for example to remove a throwaway superuser after a test.
+Delete a user (identified by `--id`, `--email`, or `--username`). The default is a **soft delete**: the user row and its profile stay, `is_active` becomes false (no login), access tokens stop working (`token_version` goes up), refresh tokens are revoked and password-reset and email-verification tokens are removed. `--force` is a **permanent delete**: the user row and every personal field are removed, together with the rows that belong to the user (memberships, tokens, Ask Dev conversations). The billing-audit log, the refund history, the impersonation sessions and the audit log are **kept**, with the user reference set to null (financial and security records that a legal or accounting duty keeps; GDPR Art. 17(3)(b), CCPA). Free text inside a kept row (for example an email in a description) is not rewritten.
+
+If a row that references the user cannot be kept with a null reference (its column is NOT NULL), `--force` fails with an error that names the table and column, nothing is changed, and the user stays. The API's `DELETE /api/v1/admin/users/{user_id}` does the same: soft by default, `?force=true` for the permanent delete (`{"deleted": true}` in both cases).
 
 ```bash
-# Report what would be deleted (exit 1, nothing deleted)
+# Report what would happen (exit 1, nothing changed)
 dho admin users delete --email user@example.com
 
-# Delete
+# Soft delete
 dho admin users delete --email user@example.com --yes
+
+# Permanent delete
+dho admin users delete --email user@example.com --force --yes
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
 | `--id` / `--email` / `--username` | Identify the user to delete |
-| `--yes` | Confirm the deletion. Without it the user and the memberships that would go with it are printed and nothing is deleted (exit 1) |
+| `--force` | Delete the user permanently instead of the default soft delete |
+| `--yes` | Confirm. Without it the user and the memberships are printed with what would happen, and nothing is changed (exit 1) |
 
-On success the verb prints `Deleted user: <email> (id: <id>)` and logs one line on stderr (`admin: user deleted by the operator CLI`, the user id, whether it was a superuser, the memberships removed). An unknown user, a missing identifier and a malformed id print `Error: ...` and exit 1.
+A soft delete ends every credential (access tokens through `token_version`, refresh tokens, password-reset and email-verification tokens) on every call, so it can be repeated; for a user that is already inactive with no token left it prints `User already inactive: ...` and the API answers 404. On success the verb prints `Soft-deleted user: <email> (id: <id>)...` or `Permanently deleted user: <email> (id: <id>)` (followed by one line per table whose rows were kept with a null user). It logs on stderr: `admin: user soft-deleted` or `admin: user permanently deleted` (user id, mode, rows kept) and `admin: user delete by the operator CLI`. An unknown user, a missing identifier and a malformed id print `Error: ...` and exit 1.
 
 ### `admin orgs delete`
 
@@ -1345,6 +1351,34 @@ process). `redriven_failed` is different: it is observed by
 `'closed_failed'` — this one IS live, scraped from the worker process that
 actually processes the redriven job, not from this CLI.
 
+#### `metrics generation-repair` (CHAOS-10072)
+
+Before CHAOS-4442 the range finalize redrive replaced a run's whole generation
+with `redrive:<nonce>`, which dropped the producer prefix
+(`fixed-schedule:daily_metrics_fanout:`) that partition recompute, manual
+`daily-start` coverage and the recommendations readiness gate match. The
+original value was stored nowhere, but a run id is
+`uuid5(org|target_day|generation)`, so a candidate generation is proven by
+hashing to the run's own id. Every family the runner mints is tried:
+`fixed-schedule:` (occurrence second near `created_at`), `post-sync:<sync run
+id>` (the organization's `sync_runs` created before the run),
+`touched-drain:<n|e>:<daily run id>` and `manual-daily:` (without a repository
+list or rerun tag).
+
+```bash
+dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-10-31 --dry-run
+dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-10-31 \
+  --reason generation_repair --correlation-id CHAOS-10072
+```
+
+Output: `examined`, `repaired`, `would_repair`, `not_provable` (created under
+another generation, for example `post-sync:`), `not_settled` (still
+redriving: not `succeeded`/`succeeded`, or an open redrive event), `raced`,
+`full_org_flipped` (fan-out rows only), `by_family` (proven rows per family), and one entry per row. Every row is logged at Warn with the
+old and new generation. The write is a compare-and-set on the old generation,
+so a second pass repairs nothing. Audited under the `metrics.finalize_redrive`
+action.
+
 #### `metrics partition-recompute` (CHAOS-4459)
 
 Historical recompute: reset an already-`'succeeded'` daily-metrics run's
@@ -1690,6 +1724,18 @@ The fixed kinds are `dispatch_sync_run`, `finalize_sync_run`, `post_sync`, and
 are serialized per semantic database, persist audit intent before changing
 state, and may return `outcome_unknown`; inspect the route before retrying.
 
+**A route command leaves no delivery behind (CHAOS-9964).** Every `routes apply|pause|drain|resume` call, an `apply` that changed
+nothing included, reconciles the deliveries of its kind that sit at a route generation other than the route's, after the
+route change (if any) is committed. For `finalize_sync_run` it re-arms every such delivery whose River job is missing, completed,
+discarded or cancelled and whose run is ready to finalize (so the real Finalize runs at the current generation), walking all of
+them in (dispatched_at, id) order; a delivery with a live job (available, pending, retryable, running, scheduled), a run that is
+already terminal and a run with an open unit are left as they are. For the other kinds the command only counts such
+deliveries and warns, it does not re-arm them. The output adds `generation_reconcile` (`rearmed`, `skipped_live_job`,
+`skipped_not_ready`, `skipped_locked_job`, `other_kinds`; the skip counts cover every delivery seen) beside the route state; a
+failed reconcile prints `generation_reconcile_error` and exits 1 (the route change stays). Each re-armed row logs the Warn
+`syncreconciler.finalize_delivery_other_generation_rearmed`; the counter is `sync_route_generation_stranded_total{kind,action}`.
+A paused route re-arms nothing. The scheduled repair keeps its generation fence.
+
 The checked-in transport for all four sync-dispatch kinds is River, and no
 rollback transport is recorded against them (`rollback_route: none`). `routes apply`
 converges one unpaused legacy-transport route to its checked-in River transport after proving the
@@ -1746,6 +1792,9 @@ hold) moves to `custom:<id>` (`admin_teams_to_custom`): an admin team and a
 pushed `custom` team are one kind of team, in one namespace; when a pushed
 team already holds `custom:<id>`, that row stays, takes the admin row's
 manual members (`manual_members_folded`), and the admin row goes inactive.
+A custom team carries as the active team: an inactive kept row is written
+again active (`keyed_teams_activated`), and over a row an admin deleted the
+custom team is written as a new team (`deleted_keyed_teams`).
 A custom team is written with provider `""`.
 
 Not moved: ids that already hold a provider key, an
@@ -1759,7 +1808,7 @@ is no `--org`, with the stdin rules of
 [`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
 organization id. It prints counts only, under `carry_team_ids`: `teams`,
 `admin_teams`, `admin_teams_to_custom`, `admin_teams_not_carried`, `ambiguous_teams`,
-`teams_already_keyed`, `manual_members_folded`, `memberships`, `project_ownership`, `repo_ownership`,
+`teams_already_keyed`, `manual_members_folded`, `keyed_teams_activated`, `deleted_keyed_teams`, `memberships`, `project_ownership`, `repo_ownership`,
 `link_rows_already_keyed`, `observations`, `sync_policies`, `drift_changes`, `identity_drift_changes`,
 `identities`, `fallbacks`, `malformed_team_ids`, and `rows_written` (0 with `--dry-run`). A second
 run reports zero.
@@ -2012,7 +2061,7 @@ dho maintenance cleanup-all
 
 ## Service Credentials
 
-Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) present to the API. The `worker-operator` service is retired: nothing validates a `svc_worker_*` token, so its credentials authorize nothing (`dho workers` carries no token since CHAOS-6289). The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read` and `llm_config:read` (the org LLM config route). `worker-operator` still accepts `workers:read` and `workers:operate` at creation, but they authorize nothing; do not create new ones.
+Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) present to the API. The `worker-operator` service is retired: nothing validates a `svc_worker_*` token, so its credentials authorize nothing (`dho workers` carries no token since CHAOS-6289). The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read` and `llm_config:read` (the org LLM config route). `worker-operator` still accepts `workers:read` and `workers:operate` at creation, but they authorize nothing; do not create new ones. `worker-llm-config` (token prefix `svc_wllm_`) holds only `llm_config:read`: it is the investment worker's credential for the resolved categorize config route (`ORG_LLM_CONFIG_TOKEN`).
 
 ```bash
 # Create a credential (the token is printed once)

@@ -86,6 +86,23 @@ test("an unclaimed fixture at the top level fails", () => {
   assert.equal(result.status, 1, result.stdout);
 });
 
+test("a fixture with a duplicate member fails", () => {
+  const result = withCopy((e) => {
+    const file = path.join(e, "discovery", "valid-minimal.json");
+    const text = readFileSync(file, "utf8");
+    writeFileSync(file, text.replace('"issuer"', '"issuer": "https://hidden.example.test", "issuer"'));
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+});
+
+test("a manifest with a duplicate member fails", () => {
+  const result = withCopy((e) => {
+    const file = manifestOf(e, "principal");
+    writeFileSync(file, readFileSync(file, "utf8").replace('"accept"', '"accept": [], "accept"'));
+  });
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+});
+
 test("a strictRequired schema edit exits 2 (compile failure, not a fixture failure)", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "ajv-runner-"));
   try {

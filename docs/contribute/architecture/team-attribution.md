@@ -1815,6 +1815,15 @@ write, and on a store write that does not refuse a bare id before its batch.
     (`manual_members_folded`), written at the stored version (ReplacingMergeTree keeps the last inserted row
     of an equal version), so a later write of its own writer stamped at or after that version still wins. Manual members are an admin's statement that no other writer restores; the kept row and
     the moved team are one team.
+    A custom team (an admin's own or a pushed one, stored with provider `""`) carries as the ACTIVE team
+    (chris D6023, CHAOS-9003: custom = admin = push API): when the kept row's current version is inactive, the
+    same new version of the kept row is written with `is_active = 1` (`keyed_teams_activated`), also when it
+    holds every member already, so one active team holds the admin team and its members. When an admin
+    deleted the kept row, that id has no team (a write under the id of a deleted team is a new team, as in the
+    admin store): the custom team is written under the id as a new team, with its own values and a version
+    past the delete (`deleted_keyed_teams`). Nothing is folded into a deleted row: a new version of it would
+    not carry `deleted_at`. A provider's own team that moves onto an inactive or deleted row of its id leaves
+    that row as it is (the provider's newer word).
   - An admin edit of a provider team (the same id, provider `""`) moves with that team; the newer of the two
     rows gives the new row's values, and the team's origin (provider, native key, parent, source) stays the
     provider row's (chris D5682). An admin edit of an id that two providers' teams hold is neither team: it
@@ -1830,7 +1839,8 @@ write, and on a store write that does not refuse a bare id before its batch.
   - An id that already holds a key is never rewritten (chris D5427). When the new id already has a row (a
     prefixed writer wrote it), that row is kept and the old row goes inactive; the kept row only takes the old
     row's manual members it does not hold yet (lead D5698, see `manual_members_folded` above), so an admin's
-    members are not lost.
+    members are not lost, and a custom team makes an inactive kept row active (chris D6023, see
+    `keyed_teams_activated` above).
   - An id that is only a provider prefix (`gh:`, `linear: `, `atlassian:`) is no team of any provider:
     `teamid.Of` would give it a second prefix (`linear:gh:`). The carry leaves it, counts it as
     `malformed_team_ids` (the team rows and observations of such an id) and logs `team_ids_malformed_skipped`

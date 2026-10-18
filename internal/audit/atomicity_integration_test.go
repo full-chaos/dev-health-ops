@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -333,10 +334,10 @@ func TestCallbackEndingTheTransactionIsRefused(t *testing.T) {
 					_, err := tx.Exec(ctx, verb)
 					return err // nil on success: the callback reports everything is fine
 				},
-				Audit: AuditEvent{EventType: "raw." + verb, Outcome: OutcomeAllowed},
+				Audit: AuditEvent{EventType: "raw." + strings.ToLower(verb), Outcome: OutcomeAllowed},
 				Event: OutboxEvent{
 					AggregateType: "probe", AggregateID: verb,
-					EventType: "raw." + verb, IdempotencyKey: "raw-" + verb,
+					EventType: "raw." + strings.ToLower(verb), IdempotencyKey: "raw-" + verb,
 				},
 			})
 			if err == nil {

@@ -8,11 +8,17 @@
   "doc": "Move the checked-in worker job kinds to the River transport."
  },
  {
-  "revision": "0149",
-  "down": "0148",
+  "revision": "0150",
+  "down": "0149",
   "labels": "application_schema",
   "realHead": true,
   "head": true,
+  "doc": "Let ``impersonation_sessions`` keep its row when a user is permanently deleted."
+ },
+ {
+  "revision": "0149",
+  "down": "0148",
+  "labels": "application_schema",
   "doc": "Add ``daily_metrics_runs.touched_take_at`` -- the take time of the touched days a run was started for."
  },
  {

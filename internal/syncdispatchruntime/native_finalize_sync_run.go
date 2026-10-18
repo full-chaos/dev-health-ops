@@ -17,6 +17,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 var ErrFinalizeSyncRunUnavailable = errors.New("native finalize_sync_run is unavailable")
@@ -149,9 +152,74 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 		return ErrFinalizeSyncRunUnavailable
 	}
 	return service.finalize(ctx, args.OrganizationID(), args.SyncRunID(), func(ctx context.Context, tx pgx.Tx) (bool, error) {
-		return currentTransportReference(ctx, tx, args, outboxKindFinalizeSyncRun)
+		current, err := currentTransportReference(ctx, tx, args, outboxKindFinalizeSyncRun)
+		if err == nil && !current {
+			service.reportDeliveryNotCurrent(ctx, tx, args)
+		}
+		return current, err
 	})
 }
+
+// reportDeliveryNotCurrent makes the committed no-op of a delivery that is not
+// the current one loud: a delivery that is refused here leaves the run
+// untouched, and with no signal a run whose only delivery is refused every time
+// stays 'dispatching' for weeks (CHAOS-9964). The reason names the first clause
+// of currentTransportReference that fails. Read-only; a failed diagnosis is
+// logged as reason "unknown" and never changes the outcome.
+func (service *NativeFinalizeSyncRunService) reportDeliveryNotCurrent(ctx context.Context, tx pgx.Tx, args FinalizeSyncRunArgs) {
+	reason, routeGeneration := "unknown", int64(-1)
+	// The route and the outbox row are read apart: a missing outbox row must still report the route's generation.
+	var routeTransport string
+	var routePaused bool
+	routeErr := tx.QueryRow(ctx, `
+SELECT transport, generation, paused FROM public.sync_dispatch_transport_routes WHERE kind = $1`,
+		outboxKindFinalizeSyncRun).Scan(&routeTransport, &routeGeneration, &routePaused)
+	routeKnown := routeErr == nil
+	if errors.Is(routeErr, pgx.ErrNoRows) {
+		routeGeneration = -1
+	}
+	var outboxStatus, outboxTransport *string
+	var outboxGeneration *int64
+	outboxErr := tx.QueryRow(ctx, `
+SELECT status, dispatched_transport, dispatched_route_generation
+FROM public.sync_dispatch_outbox
+WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4`,
+		args.OutboxID(), args.SyncRunID(), args.OrganizationID(), outboxKindFinalizeSyncRun,
+	).Scan(&outboxStatus, &outboxTransport, &outboxGeneration)
+	switch {
+	case errors.Is(outboxErr, pgx.ErrNoRows):
+		reason = "outbox_row_missing"
+	case outboxErr != nil:
+	case outboxStatus == nil || *outboxStatus != "dispatched":
+		reason = "outbox_not_dispatched"
+	case outboxTransport == nil || *outboxTransport != "river":
+		reason = "outbox_other_transport"
+	case errors.Is(routeErr, pgx.ErrNoRows):
+		reason = "route_row_missing"
+	case !routeKnown:
+	case routeTransport != "river":
+		reason = "route_other_transport"
+	case routePaused:
+		reason = "route_paused"
+	case outboxGeneration == nil || *outboxGeneration != routeGeneration || args.RouteGeneration() != routeGeneration:
+		reason = "route_generation_mismatch"
+	}
+	if counter, counterErr := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime").Int64Counter(
+		FinalizeDeliveryNotCurrentCounter,
+		metric.WithUnit("{delivery}"),
+		metric.WithDescription("finalize_sync_run deliveries refused because they were not the current one (the run is left unchanged), by reason")); counterErr == nil {
+		counter.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", reason)))
+	}
+	service.logger.Warn(ctx, synclog.MsgFinalizeSyncRunDeliveryNotCurrent,
+		synclog.Run(synclog.ParseID(args.SyncRunID())),
+		synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)),
+		synclog.Count(synclog.KeyDeliveryRouteGeneration, args.RouteGeneration()),
+		synclog.Count(synclog.KeyCurrentRouteGeneration, routeGeneration))
+}
+
+// FinalizeDeliveryNotCurrentCounter counts finalize deliveries refused as not
+// current, with the attribute reason.
+const FinalizeDeliveryNotCurrentCounter = "sync_finalize_delivery_not_current_total"
 
 // FinalizeRun finalizes one run by id, as the Python finalize_sync_run(run_id)
 // call does: no dispatch outbox reference is checked, because the caller is

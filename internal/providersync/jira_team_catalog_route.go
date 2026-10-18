@@ -433,6 +433,7 @@ func jiraTeamCatalogSearchProjects(
 	ctx context.Context, client *providerfoundation.HTTPClient, status string,
 ) (search jiraTeamCatalogProjectSearchPayload, complete bool, pages int, stop string, err error) {
 	stop = "page_bound"
+	lastPageHadNoMarker := false
 	for pages < jiraTeamCatalogProjectSearchMaxPages {
 		query := url.Values{"maxResults": {strconv.Itoa(jiraTeamCatalogProjectSearchMaxResults)}}
 		if len(search.Values) > 0 {
@@ -455,12 +456,18 @@ func jiraTeamCatalogSearchProjects(
 			return search, false, pages, "error_body", nil
 		}
 		search.Values = append(search.Values, page.Values...)
-		if page.endOfData(len(search.Values), jiraTeamCatalogProjectSearchMaxResults) {
+		if page.endOfData(len(search.Values)) {
 			return search, true, pages, "", nil
 		}
 		if len(page.Values) == 0 {
+			if lastPageHadNoMarker {
+				// The page before carried neither isLast nor total: the end was
+				// never stated, so the search is not complete.
+				return search, false, pages, "no_end_marker", nil
+			}
 			return search, false, pages, "empty_page", nil
 		}
+		lastPageHadNoMarker = !page.hasEndMarker()
 	}
 	return search, false, pages, stop, nil
 }

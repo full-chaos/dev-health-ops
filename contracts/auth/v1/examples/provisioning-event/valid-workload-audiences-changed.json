@@ -1,0 +1,17 @@
+{
+  "schema_version": "provisioning-event.v1",
+  "aggregate_type": "workload",
+  "aggregate_id": "prn_EXAMPLE0000000000000001",
+  "event_type": "workload.audiences_changed",
+  "idempotency_key": "workload:prn_EXAMPLE0000000000000001:3",
+  "created_at": "2026-09-03T10:00:00Z",
+  "payload": {
+    "revision": 3,
+    "change": {
+      "audiences": [
+        "dev-health-api",
+        "acr-api"
+      ]
+    }
+  }
+}

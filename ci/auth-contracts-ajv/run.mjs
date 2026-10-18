@@ -37,6 +37,34 @@ const REQUIRED_GROUPS = {
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
+const REQUIRED_SWEEPS = ["jwks"];
+const sweepExpand = (v) =>
+  v && typeof v === "object" && !Array.isArray(v) && "$repeat" in v
+    ? (v.prefix ?? "") + v.$repeat[0].repeat(v.$repeat[1]) + (v.suffix ?? "")
+    : v;
+// Applies a sweep row's ops to a copy of the base document.
+function sweepBuild(base, ops) {
+  let doc = structuredClone(base);
+  for (const op of ops) {
+    if (op.path.length === 0) {
+      doc = sweepExpand(op.set);
+      continue;
+    }
+    let parent = doc;
+    for (const step of op.path.slice(0, -1)) parent = parent[step];
+    const last = op.path[op.path.length - 1];
+    if ("rename" in op) {
+      parent[op.rename] = parent[last];
+      delete parent[last];
+    } else if (op.delete) {
+      delete parent[last];
+    } else {
+      parent[last] = sweepExpand(op.set);
+    }
+  }
+  return doc;
+}
+
 const newAjv = () => {
   const ajv = new Ajv2020({ strict: true, allErrors: true });
   addFormats(ajv);
@@ -287,6 +315,56 @@ for (const surface of surfaces) {
   }
   for (const name of claimed) {
     if (!existsSync(path.join(dir, name))) fail(`${surface}/${name} is claimed but absent`);
+  }
+  const sweepPath = path.join(v1, "sweeps", `${surface}.property-sweep.json`);
+  if (REQUIRED_SWEEPS.includes(surface) && !existsSync(sweepPath)) {
+    fail(`${surface}: property sweep ${path.relative(root, sweepPath)} is missing`);
+  }
+  if (existsSync(sweepPath)) {
+    const sweep = readJSON(sweepPath);
+    if (!Array.isArray(sweep.rows) || sweep.rows.length < 100) fail(`${surface}: property sweep has too few rows`);
+    const classIds = new Map((sweep.declared_classes ?? []).map((c) => [c.id, 0]));
+    if (classIds.size === 0) fail(`${surface}: the sweep declares no narrowing classes`);
+    for (const row of sweep.rows ?? []) {
+      if (row.class === "agreement") {
+        if (row.declared_as !== undefined) fail(`${surface}/${row.id}: an agreement row names a class`);
+      } else if (!classIds.has(row.declared_as)) {
+        fail(`${surface}/${row.id}: ${row.class} row declared_as ${JSON.stringify(row.declared_as)} is not a declared class`);
+      } else {
+        classIds.set(row.declared_as, classIds.get(row.declared_as) + 1);
+      }
+    }
+    const schemaDescription = readJSON(schemaPath).description ?? "";
+    for (const [id, rows] of classIds) {
+      if (rows === 0) fail(`${surface}: class ${id} has no row`);
+      if (!schemaDescription.includes(`[${id}]`)) fail(`${surface}: class ${id} is not named as [${id}] in the schema description`);
+    }
+    const verdict = (doc) => (validate(doc) ? "accept" : "refuse");
+    const ids = new Set();
+    for (const row of sweep.rows ?? []) {
+      if (ids.has(row.id)) fail(`${surface}: sweep row ${row.id} appears twice`);
+      ids.add(row.id);
+      checked += 1;
+      const want = row.consumer === row.schema ? "agreement" : row.consumer === "accept" ? "narrowing" : "client_enforced";
+      if (row.class !== want) fail(`${surface}/${row.id}: class ${row.class} does not follow from the pair`);
+      const got = verdict(sweepBuild(sweep.base_document, row.ops));
+      if (got !== row.schema) fail(`${surface}/${row.id}: ajv ${got}s, the row says ${row.schema}`);
+    }
+    for (const entry of sweep.unicode_categories ?? []) {
+      checked += 1;
+      const doc = structuredClone(sweep.base_document);
+      doc.keys[0].kid = `a${String.fromCodePoint(parseInt(entry.rune.slice(2), 16))}b`;
+      const got = verdict(doc);
+      if (got !== entry.schema) fail(`${surface}/category ${entry.category}: ajv ${got}s, the entry says ${entry.schema}`);
+    }
+    if (surface === "jwks") {
+      for (let code = 0x21; code < 0x7f; code += 1) {
+        const doc = structuredClone(sweep.base_document);
+        doc.keys[0].kid = String.fromCharCode(code);
+        checked += 1;
+        if (verdict(doc) !== "accept") fail(`${surface}: printable ASCII ${JSON.stringify(doc.keys[0].kid)} refused as a kid`);
+      }
+    }
   }
   console.log(`${surface}.v1: ${JSON.stringify(counts)}`);
 }

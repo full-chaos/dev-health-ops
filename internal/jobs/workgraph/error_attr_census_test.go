@@ -10,9 +10,34 @@ import (
 	"testing"
 )
 
-// rawErrorAttr matches a log attribute that carries an error value or its
-// text under the key "error".
-var rawErrorAttr = regexp.MustCompile(`slog\.Any\(\s*"error"|"error",\s*[A-Za-z_][A-Za-z0-9_.]*(\.Error\(\))?[,)}]`)
+// rawErrorAttr matches a log attribute under any key whose value is an error
+// or its text: slog.Any with an err-named value, or an "error"/"err" key
+// followed by a value. \s spans newlines, so a wrapped call is matched too.
+var rawErrorAttr = regexp.MustCompile(`slog\.Any\(\s*"[^"]*"\s*,\s*[^)"]*[eE]rr|"(error|err)"\s*,\s*[^"\s]`)
+
+func TestRawErrorAttrPatternMatchesTheShapesItGuards(t *testing.T) {
+	for _, shape := range []string{
+		`slog.Any("error", err)`,
+		`slog.Any("err", errors.New("x"))`,
+		"slog.Any(\n\t\"cause\",\n\terr,\n)",
+		`append([]any{"org_id", orgID, "error", err}, attrs...)`,
+		`"error", err.Error()`,
+	} {
+		if !rawErrorAttr.MatchString(shape) {
+			t.Fatalf("pattern misses %q", shape)
+		}
+	}
+	for _, safe := range []string{
+		`slog.Any("window_from", window.From)`,
+		`workgraph.ErrorAttr(err)`,
+		`slog.String("error_class", retryableClass(err))`,
+		`slog.Any("failed_steps", failedSteps)`,
+	} {
+		if rawErrorAttr.MatchString(safe) {
+			t.Fatalf("pattern flags %q", safe)
+		}
+	}
+}
 
 func TestNoWorkgraphLogCallCarriesARawError(t *testing.T) {
 	var offenders []string
@@ -23,14 +48,14 @@ func TestNoWorkgraphLogCallCarriesARawError(t *testing.T) {
 		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		source, err := os.ReadFile(path)
+		raw, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		for index, line := range strings.Split(string(source), "\n") {
-			if rawErrorAttr.MatchString(line) {
-				offenders = append(offenders, fmt.Sprintf("%s:%d: %s", path, index+1, strings.TrimSpace(line)))
-			}
+		source := string(raw)
+		for _, span := range rawErrorAttr.FindAllStringIndex(source, -1) {
+			line := strings.Count(source[:span[0]], "\n") + 1
+			offenders = append(offenders, fmt.Sprintf("%s:%d: %s", path, line, strings.TrimSpace(source[span[0]:span[1]])))
 		}
 		return nil
 	})

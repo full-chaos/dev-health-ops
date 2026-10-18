@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"regexp"
 	"strconv"
@@ -224,6 +225,14 @@ func errorLogAttrs(err error) []any {
 	root := err
 	for {
 		next := errors.Unwrap(root)
+		if multi, ok := root.(interface{ Unwrap() []error }); ok && next == nil {
+			for _, candidate := range multi.Unwrap() {
+				if candidate != nil {
+					next = candidate
+					break
+				}
+			}
+		}
 		if next == nil {
 			break
 		}
@@ -408,9 +417,13 @@ func (h *buildHandler) work(ctx context.Context, requestID string, organizationI
 			// proceeds and every fragment lands as a top-level key.
 			evidence := mergePreStepEvidence([]byte("{}"), mergeStepFragments(fragments, postFragments))
 			if len(failedSteps) > 0 {
+				// failure_reason is step-authored free text, so the log
+				// copy omits it; it stays in the ledger evidence.
 				failedEvidence := make(map[string]map[string]any, len(failedSteps))
 				for _, name := range failedSteps {
-					failedEvidence[name] = fragments[name]
+					logged := maps.Clone(fragments[name])
+					delete(logged, "failure_reason")
+					failedEvidence[name] = logged
 				}
 				h.logger.Error("workgraph build: steps reported FAILED; the build ran every step",
 					slog.String("request_id", requestID), slog.String("organization_id", *organizationID),

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -95,5 +96,42 @@ func TestBuildPermanentCancelLogsNoErrorTextAndCounts(t *testing.T) {
 
 	if got := buildCancelCount(t, reader) - before; got != 1 {
 		t.Fatalf("%s delta = %d, want 1", buildPermanentCancelMetric, got)
+	}
+}
+
+func TestStepFailureReasonStaysOutOfTheBuildLog(t *testing.T) {
+	const marker = "SECRET-MARKER-https://tenant.example/token=abc123"
+	var logs bytes.Buffer
+	store := &fakeStore{claim: testClaim(time.Second)}
+	step := failingPreStep{err: &StepFailure{Reason: marker, Evidence: map[string]any{"links_read": 4}}}
+	handler, err := NewBuildHandler(store, []NativePreStep{step}, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), buildExecution()); err != nil {
+		t.Fatal(err)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "steps reported FAILED") || !strings.Contains(out, "links_read") {
+		t.Fatalf("failed-step line or its counts missing: %s", out)
+	}
+	if strings.Contains(out, "SECRET-MARKER") || strings.Contains(out, "abc123") {
+		t.Fatalf("step failure reason reached the log: %s", out)
+	}
+	if !strings.Contains(string(store.lastEvidence), "SECRET-MARKER") {
+		t.Fatalf("the ledger evidence lost failure_reason: %s", store.lastEvidence)
+	}
+}
+
+func TestErrorAttrNamesTheRootTypeThroughAJoin(t *testing.T) {
+	joined := errors.Join(&pgconn.PgError{Code: "40001", Message: "SECRET-MARKER"})
+	var logs bytes.Buffer
+	slog.New(slog.NewTextHandler(&logs, nil)).Error("probe", ErrorAttr(joined))
+	out := logs.String()
+	if !strings.Contains(out, "error_type=*pgconn.PgError") || !strings.Contains(out, "sqlstate=40001") {
+		t.Fatalf("join root not resolved: %s", out)
+	}
+	if strings.Contains(out, "SECRET-MARKER") {
+		t.Fatalf("error text reached the log: %s", out)
 	}
 }

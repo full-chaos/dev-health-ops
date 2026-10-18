@@ -46,6 +46,8 @@ type LoopConfig struct {
 	ReapLimit int
 	Registry  *health.Registry
 	Logger    *slog.Logger
+	// Meter registers the loop's instruments; nil uses the process meter.
+	Meter metric.Meter
 }
 
 // DefaultLoopConfig returns the production cadence.
@@ -151,7 +153,11 @@ func newOutboxLoop(s stepper, config LoopConfig, publishing bool) (*OutboxLoop, 
 	if publishing {
 		enabled = 1
 	}
-	if _, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/audit").Int64ObservableGauge(
+	meter := config.Meter
+	if meter == nil {
+		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/audit")
+	}
+	if _, err := meter.Int64ObservableGauge(
 		"devhealth_auth_outbox_publisher_enabled",
 		metric.WithDescription("1 when an outbox sink is configured and events are delivered; 0 when publishing is disabled (no sink), so zero deliveries is not read as healthy."),
 		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {

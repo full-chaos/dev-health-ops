@@ -12,6 +12,12 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
 // revisionConsumer is the reference idempotent consumer the Sink contract
@@ -415,5 +421,135 @@ func TestCommitRefusesASecretAttributeAndWritesNothing(t *testing.T) {
 	}
 	if orgs != 0 || audits != 0 {
 		t.Errorf("rows survived a refused attribute: orgs=%d audits=%d", orgs, audits)
+	}
+}
+
+func newMeterReader(t *testing.T) (metric.Meter, *sdkmetric.ManualReader) {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	return provider.Meter("test"), reader
+}
+
+func collected(t *testing.T, reader *sdkmetric.ManualReader) map[string]metricdata.Metrics {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]metricdata.Metrics{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			out[m.Name] = m
+		}
+	}
+	return out
+}
+
+// With no sink (the deployed mode) the pending-age gauge must still be
+// exported, or a growing backlog is invisible.
+func TestNilSinkLoopStillExportsPendingLag(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+	commitEvent(t, ctx, env, "org-a", 1)
+
+	meter, reader := newMeterReader(t)
+	cfg := DefaultLoopConfig(env.schema, health.NewRegistry(time.Second))
+	cfg.Meter = meter
+	loop, err := NewOutboxLoop(env.pool, nil, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.stepper.Step(ctx, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Step: %v", err)
+	}
+	m, ok := collected(t, reader)["devhealth_auth_outbox_oldest_pending_age_seconds"]
+	if !ok {
+		t.Fatal("the pending-age gauge is absent in nil-sink mode")
+	}
+	g := m.Data.(metricdata.Gauge[int64])
+	if len(g.DataPoints) != 1 || g.DataPoints[0].Value < 3600 {
+		t.Fatalf("gauge = %+v, want >= 3600 s for a pending event an hour old", g.DataPoints)
+	}
+}
+
+// A sink that ignores its context must not hold the row lock, the step, or
+// shutdown past DeliverTimeout.
+func TestDeliverTimeoutBoundsASinkThatIgnoresItsContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+	k := commitEvent(t, ctx, env, "org-a", 1)
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	blocked := sinkFunc(func(context.Context, Event) error { <-release; return nil })
+	p, err := NewPublisher(env.pool, blocked, PublisherConfig{
+		Schema: env.schema, BaseBackoff: time.Second, MaxBackoff: time.Minute, DeliverTimeout: 200 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := p.Step(ctx, time.Now().Add(time.Second), 10); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Step: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Step stayed blocked past DeliverTimeout on a sink that ignores its context")
+	}
+	r := readRow(t, ctx, env, k)
+	if r.published || r.lastError == nil || *r.lastError != "delivery_timeout" || r.attempts != 1 {
+		t.Fatalf("row after a timed-out delivery = %+v (last_error=%v)", r, r.lastError)
+	}
+}
+
+// Every metric attribute value comes from a closed set.
+func TestFailureMetricAttributesAreAClosedSet(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+	const n = 30
+	for i := 0; i < n; i++ {
+		commitEvent(t, ctx, env, fmt.Sprintf("org-%d", i), 1)
+	}
+	meter, reader := newMeterReader(t)
+	var mu sync.Mutex
+	call := 0
+	sink := sinkFunc(func(context.Context, Event) error {
+		mu.Lock()
+		call++
+		c := call
+		mu.Unlock()
+		return reasonErr{fmt.Sprintf("distinct_reason_%d", c)}
+	})
+	p, err := NewPublisher(env.pool, sink, PublisherConfig{Schema: env.schema, Meter: meter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Step(ctx, time.Now().Add(time.Second), 100); err != nil {
+		t.Fatal(err)
+	}
+	m, ok := collected(t, reader)["devhealth_auth_outbox_delivery_failures_total"]
+	if !ok {
+		t.Fatal("no failure series was exported; this control proves nothing")
+	}
+	enum := map[string]bool{}
+	for _, r := range AllFailureReasons() {
+		enum[r] = true
+	}
+	sum := m.Data.(metricdata.Sum[int64])
+	if len(sum.DataPoints) == 0 {
+		t.Fatal("no failure data points")
+	}
+	for _, dp := range sum.DataPoints {
+		v, _ := dp.Attributes.Value("reason")
+		if !enum[v.AsString()] {
+			t.Errorf("reason attribute %q is outside the closed enum (%d series)", v.AsString(), len(sum.DataPoints))
+		}
 	}
 }

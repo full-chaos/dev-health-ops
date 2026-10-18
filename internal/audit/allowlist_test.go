@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -78,5 +79,61 @@ func TestMutationValidateAppliesTheAllowlist(t *testing.T) {
 	}
 	if err := m.validate(); !errors.Is(err, ErrAttributeNotAllowed) {
 		t.Fatalf("validate = %v, want ErrAttributeNotAllowed", err)
+	}
+}
+
+// The allowlist is a closed set of keys AND a closed value grammar: a value is
+// a short identifier-shaped token, never free text.
+func TestAuditTextIsAClosedGrammarNotAPatternList(t *testing.T) {
+	for _, v := range []string{
+		"pass" + "word" + "=" + "correct-horse-battery-staple", "authorization" + "_code" + "=" + "abc123", "has spaces", "a@b.example",
+		`{"k":"v"}`, "line\nbreak", "sec" + "ret: hunter2", "ünïcode", "",
+	} {
+		if err := ValidateAttributes(map[string]any{"reason_code": v}); err == nil {
+			t.Errorf("free text %q was accepted as an attribute value", v)
+		}
+		m := Mutation{
+			Apply: func(context.Context, TxOps) error { return nil },
+			Audit: AuditEvent{EventType: "x", Outcome: OutcomeAllowed, RequestID: &v},
+			Event: OutboxEvent{AggregateType: "a", AggregateID: "b", EventType: "c", IdempotencyKey: "k"},
+		}
+		if err := m.validate(); err == nil {
+			t.Errorf("free text %q was accepted as request_id", v)
+		}
+	}
+	for _, v := range []string{"role_granted", "11111111-1111-4111-8111-111111111111", "org:acme/repo.v1", "fcacr_ab12"} {
+		if err := ValidateAttributes(map[string]any{"reason_code": v}); err != nil {
+			t.Errorf("token %q refused: %v", v, err)
+		}
+		rid := v
+		m := Mutation{
+			Apply: func(context.Context, TxOps) error { return nil },
+			Audit: AuditEvent{EventType: "x", Outcome: OutcomeAllowed, RequestID: &rid},
+			Event: OutboxEvent{AggregateType: "a", AggregateID: "b", EventType: "c", IdempotencyKey: "k"},
+		}
+		if err := m.validate(); err != nil {
+			t.Errorf("request_id %q refused: %v", v, err)
+		}
+	}
+}
+
+func TestEveryFailureReasonIsInTheClosedEnum(t *testing.T) {
+	enum := map[string]bool{}
+	for _, r := range AllFailureReasons() {
+		enum[r] = true
+	}
+	seen := map[string]bool{}
+	for i := 0; i < 10000; i++ {
+		seen[failureReason(reasonErr{fmt.Sprintf("r%d", i)})] = true
+	}
+	for r := range seen {
+		if !enum[r] {
+			t.Fatalf("failureReason produced %q outside the closed enum (%d distinct values)", r, len(seen))
+		}
+	}
+	for _, r := range AllFailureReasons() {
+		if got := failureReason(reasonErr{r}); got != r {
+			t.Errorf("enum member %q mapped to %q", r, got)
+		}
 	}
 }

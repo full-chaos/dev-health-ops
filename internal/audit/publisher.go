@@ -50,6 +50,12 @@ type Sink interface {
 	Deliver(ctx context.Context, event Event) error
 }
 
+// AllFailureReasons is the closed vocabulary of delivery-failure reasons: the
+// only values stored in last_error and used as a metric attribute.
+func AllFailureReasons() []string {
+	return []string{"delivery_failed", "delivery_timeout", "consumer_unavailable", "consumer_rejected"}
+}
+
 var reasonPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 func failureReason(err error) string {
@@ -69,6 +75,8 @@ type PublisherConfig struct {
 	MaxBackoff     time.Duration
 	DeliverTimeout time.Duration // bound on one Sink.Deliver call
 	Logger         *slog.Logger
+	// Meter registers the publisher's instruments; nil uses the process meter.
+	Meter metric.Meter
 }
 
 const (
@@ -109,7 +117,10 @@ func NewPublisher(pool *pgxpool.Pool, sink Sink, config PublisherConfig) (*Publi
 		config.Logger = slog.New(slog.DiscardHandler)
 	}
 	p := &Publisher{pool: pool, sink: sink, config: config}
-	meter := otel.Meter("github.com/full-chaos/dev-health-ops/internal/audit")
+	meter := config.Meter
+	if meter == nil {
+		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/audit")
+	}
 	var err error
 	if p.delivered, err = meter.Int64Counter("devhealth_auth_outbox_delivered_total",
 		metric.WithDescription("Outbox events delivered to the sink and marked published.")); err != nil {

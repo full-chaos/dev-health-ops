@@ -50,10 +50,11 @@ That runs four services in order:
 
 Things that are easy to get wrong:
 
-- **Network.** All three auth services (and `auth-provision`) join only the
-  `auth_plane` network, which `postgres` also joins. They cannot reach any other
-  stack service. The only effect on the default stack is that `postgres` has two
-  networks instead of one.
+- **Network.** `auth-provision`, `auth-migrate` and `auth-service` join only
+  the `auth_plane` network, which `postgres` also joins; `auth-keys-init` needs
+  no network at all (`network_mode: none`, it only writes a file into its
+  volume). None of them can reach any other stack service. The only effect on the
+  default stack is that `postgres` has two networks instead of one.
 - **DSNs are keyword form** (`host=postgres port=5432 user=... password='...'`).
   A URI would need every reserved character of the password percent-encoded,
   which Compose cannot do. Any password works except one containing a single
@@ -87,8 +88,7 @@ docker volume rm dev-health-ops_auth_signing_keys    # drops the key too
 `go-auth-compose-proof`): it asserts the container is healthy, `/readyz` is 200,
 `/metrics` reports ready, the schema is current, the runtime login has no
 elevated attribute and owns nothing, a deliberately elevated login is
-de-escalated by re-provisioning, the key is `400 65532`, the service is on
-`auth_plane` only, and the rollback leaves postgres healthy.
+de-escalated by re-provisioning, the key is `400 65532`, the all four auth services are on `auth_plane` only (or `network_mode: none`), and the rollback leaves postgres healthy.
 
 ## Kubernetes (Helm)
 

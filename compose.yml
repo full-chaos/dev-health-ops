@@ -1299,6 +1299,9 @@ services:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     profiles: [auth]
+    # Writes a file into its volume and needs no network at all: not on `default`, not on
+    # `auth_plane`.
+    network_mode: none
     restart: "no"
     read_only: true
     user: "65532:65532"

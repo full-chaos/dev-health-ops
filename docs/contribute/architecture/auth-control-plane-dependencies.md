@@ -24,10 +24,16 @@ reviewed and pinned in `go.mod`.
 
 ## What the two binaries link today
 
-`go list -deps ./cmd/auth-service ./cmd/auth-migrate` shows the Wave 1 binaries
-depend on the standard library, `github.com/jackc/pgx/v5` (PostgreSQL) and
-OpenTelemetry. Everything else in the auth tree is library code that later
-waves compose:
+The code the Auth Control Plane itself imports is the standard library,
+`github.com/jackc/pgx/v5` (PostgreSQL) and OpenTelemetry. The **linked**
+footprint is wider than that, because the binaries import shared platform
+packages: `go list -deps ./cmd/auth-service ./cmd/auth-migrate` also shows the
+Prometheus client, gRPC and protobuf (OTLP export), and the ClickHouse driver
+(through `internal/storage/postgres`, which imports `internal/platform/config`).
+None of these is used by the service's behaviour, but all are in the image and in
+the reach of the vulnerability gate, which is why that gate scans the real
+import closure (`go list -deps`) and not a hand list. Everything else in the auth
+tree is library code that later waves compose:
 
 | Module | Used by | Role |
 | --- | --- | --- |
@@ -80,6 +86,6 @@ link them.
 ## Verified against
 
 - `go.mod`: the modules named above are direct requirements.
-- `go list -deps ./cmd/auth-service ./cmd/auth-migrate`: pgx, otel and standard library only (run on the commit that merged this page).
+- `go list -deps ./cmd/auth-service ./cmd/auth-migrate`: the direct imports and the wider linked footprint described above (run on the commit that merged this page).
 - `internal/auth/authconfig/config.go` (`signingKey`, `validateKeyID`): the direct-value rejection and the `kid` rule.
 - `internal/auth/keystore/keystore.go` (`MaxKeyFileBytes`, `parseEd25519Public`): size bound, single block, Ed25519 only.

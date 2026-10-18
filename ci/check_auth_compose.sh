@@ -123,6 +123,22 @@ members="$(docker network inspect "${PROJECT}_auth_plane" --format '{{range .Con
 printf 'auth_plane members: %s\n' "${members}"
 [ "${members}" = "$(compose --profile auth ps -q auth-service | xargs docker inspect --format '{{.Name}}' | tr -d '/') postgres " ] || die "auth_plane has members other than auth-service and postgres: ${members}"
 
+printf 'step 4d: no auth service is on the default network\n'
+compose --profile auth config --format json | python3 -c '
+import json, sys
+services = json.load(sys.stdin)["services"]
+bad = []
+for name in ("auth-keys-init", "auth-provision", "auth-migrate", "auth-service"):
+    service = services[name]
+    nets = sorted((service.get("networks") or {}).keys())
+    mode = service.get("network_mode")
+    print(f"{name}: networks={nets} network_mode={mode}")
+    if mode != "none" and nets != ["auth_plane"]:
+        bad.append(name)
+if bad:
+    sys.exit("auth services outside auth_plane (or network_mode none): " + ", ".join(bad))
+' || die "an auth service is attached to a network other than auth_plane"
+
 printf 'step 5: signing key custody\n'
 key_stat="$(docker run --rm --entrypoint stat -v "${PROJECT}_auth_signing_keys:/k:ro" \
   postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15 \

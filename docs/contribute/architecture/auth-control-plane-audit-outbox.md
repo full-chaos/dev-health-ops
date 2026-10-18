@@ -93,7 +93,8 @@ unreachable (then `postgres` fails too) or the runtime login lost a privilege on
 `auth-migrate`, which re-grants exactly the manifest.
 
 **Pending age keeps growing in Wave 1.** Expected: there is no sink. It is a
-problem only if `publisher_enabled` is `1`. With a sink, find the stuck row:
+problem only if `publisher_enabled` is `1`. With a sink, find the stuck row (replace `auth` with the
+configured `AUTH_DATABASE_SCHEMA` if it is not the default):
 
 ```sql
 SELECT id, event_type, attempts, last_error, available_at, created_at

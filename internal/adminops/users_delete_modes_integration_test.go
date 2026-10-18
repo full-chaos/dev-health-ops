@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -196,10 +197,22 @@ func TestUsersDeleteSoftOfADeactivatedUserStillEndsItsCredentials(t *testing.T) 
 		db.count(t, `SELECT count(*) FROM password_reset_tokens WHERE user_id = $1`, userID); n != 0 {
 		t.Fatalf("%d live credentials left on a deactivated user after delete", n)
 	}
-	// a repeat has nothing left to end and says so
+	// a repeat has nothing left to end, says so and writes nothing
+	var updatedBefore time.Time
+	if err := db.conn.QueryRow(context.Background(), `SELECT updated_at FROM users WHERE id = $1`, userID).Scan(&updatedBefore); err != nil {
+		t.Fatal(err)
+	}
 	code, out, _ = executeAdmin(t, db, "users", "delete", "--email", "deactivated@example.com", "--yes")
 	if code != 0 || !strings.HasPrefix(out, "User already soft-deleted: deactivated@example.com") {
 		t.Fatalf("repeat soft delete: exit %d, stdout %q", code, out)
+	}
+	var versionRepeat int
+	var updatedAfter time.Time
+	if err := db.conn.QueryRow(context.Background(), `SELECT token_version, updated_at FROM users WHERE id = $1`, userID).Scan(&versionRepeat, &updatedAfter); err != nil {
+		t.Fatal(err)
+	}
+	if versionRepeat != versionAfter || !updatedAfter.Equal(updatedBefore) {
+		t.Fatalf("a repeat soft delete wrote: token_version %d -> %d, updated_at %v -> %v", versionAfter, versionRepeat, updatedBefore, updatedAfter)
 	}
 }
 
@@ -218,5 +231,26 @@ func TestUsersDeleteForceCountsRowsTheDatabaseNullsWithTheUser(t *testing.T) {
 	}
 	if n := db.count(t, `SELECT count(*) FROM zz_setnull_records WHERE user_id IS NULL`); n != 1 {
 		t.Fatalf("the SET NULL row was not kept with a null user: %d", n)
+	}
+}
+
+func TestUsersDeleteForceIgnoresANotNullTableThatDoesNotReferenceTheUser(t *testing.T) {
+	db := startDatabase(t)
+	gone := createUser(t, db, "unreferenced@example.com", "unreferenced")
+	other := createUser(t, db, "holder@example.com", "holder")
+	db.exec(t, `CREATE TABLE zz_pinning_records (id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT)`)
+	db.exec(t, `INSERT INTO zz_pinning_records (id, user_id) VALUES ($1, $2)`, uuid.New(), other)
+
+	code, out, logs := executeAdmin(t, db, "users", "delete", "--email", "unreferenced@example.com", "--force", "--yes")
+	if code != 0 || !strings.HasPrefix(out, "Permanently deleted user: unreferenced@example.com") {
+		t.Fatalf("force delete of a user no NOT NULL row references: exit %d, stdout %q, stderr %q", code, out, logs)
+	}
+	if n := db.count(t, `SELECT count(*) FROM users WHERE id = $1`, gone); n != 0 {
+		t.Fatal("the user is still there")
+	}
+	// the holder's own delete is still refused, and names the count
+	code, out, _ = executeAdmin(t, db, "users", "delete", "--email", "holder@example.com", "--force", "--yes")
+	if code == 0 || !strings.Contains(out, "zz_pinning_records.user_id") || !strings.Contains(out, "1 row(s)") {
+		t.Fatalf("force delete of the referenced user: exit %d, stdout %q", code, out)
 	}
 }

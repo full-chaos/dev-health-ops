@@ -28,6 +28,8 @@ type userRefDecision struct {
 	OnDelete string
 	Rows     int64
 	Action   string
+	// Blocked is why a row that references the user could not be kept; it only matters when such a row exists.
+	Blocked string
 }
 
 // userRefs reads every single-column foreign key that references users(id) from the catalog, so a foreign key added later is
@@ -66,9 +68,11 @@ ORDER BY n.nspname, cl.relname, c.conname`)
 		case width != 1:
 			return nil, refuse("Cannot anonymize %s: foreign key %s has %d columns. Nothing was deleted.", ref.Name, constraint, width)
 		case onDelete != "a" && onDelete != "r":
-			return nil, refuse("Cannot anonymize %s.%s: foreign key %s has the delete action %q. Nothing was deleted.", ref.Name, column, constraint, onDelete)
+			ref.Action = "blocked"
+			ref.Blocked = fmt.Sprintf("foreign key %s has the delete action %q", constraint, onDelete)
 		case notNull:
-			return nil, refuse("Cannot anonymize %s.%s: the column is NOT NULL, so a row that references the user cannot be kept. Nothing was deleted.", ref.Name, column)
+			ref.Action = "blocked"
+			ref.Blocked = "the column is NOT NULL"
 		default:
 			ref.Action = "null"
 		}
@@ -77,15 +81,16 @@ ORDER BY n.nspname, cl.relname, c.conname`)
 	return refs, rows.Err()
 }
 
-// softDeleteResult is what a soft delete found and did. AlreadyDone is true when the user was inactive and held no live token,
-// so the call changed nothing a person could notice (the token version still goes up, which only ends access tokens).
+// softDeleteResult is what a soft delete found and did. AlreadyDone is true when the user was inactive and held no live token:
+// the call wrote nothing.
 type softDeleteResult struct {
 	Found, WasActive, AlreadyDone bool
 }
 
 // softDeleteUser turns the login off and keeps the row: is_active false, the access tokens fail on token_version, and the
-// refresh and one-time tokens are revoked or removed. It does all of this for an inactive user too (a user an operator
-// deactivated first must not keep credentials that work again on reactivation).
+// refresh and one-time tokens are revoked or removed. It does all of this for an inactive user that still holds a live
+// token (a user an operator deactivated first must not keep credentials that work again on reactivation); an inactive
+// user with none is left untouched.
 func (s pgStore) softDeleteUser(ctx context.Context, logger *slog.Logger, id uuid.UUID) (softDeleteResult, error) {
 	now := s.now().UTC()
 	var wasActive bool
@@ -97,9 +102,6 @@ func (s pgStore) softDeleteUser(ctx context.Context, logger *slog.Logger, id uui
 		return softDeleteResult{}, err
 	}
 	result := softDeleteResult{Found: true, WasActive: wasActive}
-	if _, err = s.Pool.Exec(ctx, `UPDATE users SET is_active = false, token_version = token_version + 1, updated_at = $2 WHERE id = $1`, id, now); err != nil {
-		return result, err
-	}
 	revoked, err := s.Pool.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL`, id, now)
 	if err != nil {
 		return result, err
@@ -112,7 +114,13 @@ func (s pgStore) softDeleteUser(ctx context.Context, logger *slog.Logger, id uui
 	if err != nil {
 		return result, err
 	}
+	// an inactive user with no live token has nothing to end: a repeat writes nothing (no version bump, no updated_at)
 	result.AlreadyDone = !wasActive && revoked.RowsAffected()+reset.RowsAffected()+verification.RowsAffected() == 0
+	if !result.AlreadyDone {
+		if _, err = s.Pool.Exec(ctx, `UPDATE users SET is_active = false, token_version = token_version + 1, updated_at = $2 WHERE id = $1`, id, now); err != nil {
+			return result, err
+		}
+	}
 	logger.DebugContext(ctx, "admin: user delete (soft): tokens ended", "user_id", id.String(), "was_active", wasActive,
 		"refresh_tokens_revoked", revoked.RowsAffected(), "password_reset_tokens_deleted", reset.RowsAffected(),
 		"email_verification_tokens_deleted", verification.RowsAffected())
@@ -140,6 +148,24 @@ func (s pgStore) forceDeleteUser(ctx context.Context, logger *slog.Logger, id uu
 					"table", ref.Name, "column", ref.Column, "error", err)
 				return false, nil, fmt.Errorf("count %s.%s: %w", ref.Name, ref.Column, err)
 			}
+		}
+		if ref.Action == "blocked" {
+			// only a row that references this user is a problem: a NOT NULL table nobody in it points at this user is left alone
+			var referencing int64
+			if err := s.Pool.QueryRow(ctx, fmt.Sprintf(`SELECT count(*) FROM %s WHERE %s = $1`, ref.Table, pgx.Identifier{ref.Column}.Sanitize()), id).Scan(&referencing); err != nil {
+				logger.ErrorContext(ctx, "admin: user delete (force) could not count a reference", "user_id", id.String(),
+					"table", ref.Name, "column", ref.Column, "error", err)
+				return false, nil, fmt.Errorf("count %s.%s: %w", ref.Name, ref.Column, err)
+			}
+			logger.DebugContext(ctx, "admin: user delete (force): reference that cannot be nulled", "user_id", id.String(),
+				"table", ref.Name, "column", ref.Column, "reason", ref.Blocked, "referencing_rows", referencing)
+			if referencing > 0 {
+				err := refuse("Cannot anonymize %s.%s: %s, so %d row(s) that reference the user cannot be kept. Nothing was deleted.", ref.Name, ref.Column, ref.Blocked, referencing)
+				logger.ErrorContext(ctx, "admin: user delete (force) refused", "user_id", id.String(), "mode", string(DeleteForce),
+					"table", ref.Name, "column", ref.Column, "reason", ref.Blocked, "referencing_rows", referencing)
+				return false, nil, err
+			}
+			continue
 		}
 		if ref.Action == "null" {
 			tag, err := s.Pool.Exec(ctx, fmt.Sprintf(`UPDATE %s SET %s = NULL WHERE %s = $1`, ref.Table, pgx.Identifier{ref.Column}.Sanitize(), pgx.Identifier{ref.Column}.Sanitize()), id)

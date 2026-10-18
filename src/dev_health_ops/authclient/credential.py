@@ -119,7 +119,15 @@ def _check_status_at(body: CredentialBody, surface: str, now: datetime) -> None:
 
 
 def _now(now: datetime | None) -> datetime:
-    return now if now is not None else datetime.now(timezone.utc)
+    if now is None:
+        return datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        # A naive clock cannot be compared with the timezone-aware timestamps
+        # the parsers produce; refuse it as a contract error, not a TypeError.
+        raise ContractError(
+            "the clock passed to the credential parsers must be timezone-aware"
+        )
+    return now
 
 
 @dataclass(frozen=True, slots=True)

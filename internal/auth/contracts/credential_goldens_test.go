@@ -480,3 +480,49 @@ func TestEverySecretInTheReceiptCorpusIsMarkedSynthetic(t *testing.T) {
 		t.Fatal("no receipt fixtures checked")
 	}
 }
+
+// prefixShapes are display_prefix values the ENTRY schema admits: every accepted
+// fixture's, the empty prefix, the 16-character maximum, and the alphabet's
+// corners. The receipt must accept a secret that begins with each of them.
+func prefixShapes(t *testing.T) []string {
+	t.Helper()
+	shapes := []string{"", "a", strings.Repeat("a", 16), "Ab_9Ab_9Ab_9Ab_9", "_", strings.Repeat("_", 16), "ABCDEFGH_ijklm_9", "exmpl_abcd"}
+	s := credentialSurfaces[0]
+	for _, a := range s.corpus(t).Accept {
+		var entry struct {
+			DisplayPrefix string `json:"display_prefix"`
+		}
+		if err := json.Unmarshal(s.read(t, a.File), &entry); err != nil {
+			t.Fatal(err)
+		}
+		shapes = append(shapes, entry.DisplayPrefix)
+	}
+	return shapes
+}
+
+func TestEveryDisplayPrefixTheEntryAllowsCanBeginAValidReceiptSecret(t *testing.T) {
+	// The contract's allowed states must be closed under issue and rotate:
+	// an entry that validates describes a credential whose receipt can
+	// validate. Round 1 found a 10-character prefix the receipt's secret
+	// pattern could not begin with.
+	r := credentialSurfaces[2]
+	raw := r.read(t, "valid-issue.json")
+	root := testRoot(t)
+	now := clockOf(t, r.corpus(t))
+	for _, prefix := range prefixShapes(t) {
+		var document map[string]any
+		if err := json.Unmarshal(raw, &document); err != nil {
+			t.Fatal(err)
+		}
+		document["credential"].(map[string]any)["display_prefix"] = prefix
+		document["secret"] = prefix + strings.Repeat("EXAMPLE", 6)
+		if err := Validate(root, CredentialReceiptSurface, document); err != nil {
+			t.Errorf("a secret beginning with the allowed prefix %q is refused by the schema: %v", prefix, err)
+			continue
+		}
+		encoded, _ := json.Marshal(document)
+		if _, err := ParseCredentialReceipt(root, encoded, now); err != nil {
+			t.Errorf("a secret beginning with the allowed prefix %q is refused by the client: %v", prefix, err)
+		}
+	}
+}

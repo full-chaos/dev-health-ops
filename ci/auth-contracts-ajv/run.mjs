@@ -231,8 +231,18 @@ for (const surface of surfaces) {
       claimed.add(name);
       checked += 1;
       const fixture = readFixture(path.join(dir, name));
-      if (fixture.duplicate && group !== "reject_by_client") {
-        fail(`${surface}/${name} [${group}]: ${fixture.duplicate}; only reject_by_client may carry a duplicate member`);
+      // A duplicate member is legitimate only in a reject_by_client fixture that
+      // DECLARES it (`"duplicate_member": true`), and a declaration must be true.
+      // Undeclared, a clients-refuse fixture could be refused for an accidental
+      // duplicate instead of the rule it exists to pin, and the ajv leg (which
+      // runs no client parser) would never see the difference.
+      const declared = group === "reject_by_client" && entry.duplicate_member === true;
+      if (fixture.duplicate && !declared) {
+        fail(`${surface}/${name} [${group}]: ${fixture.duplicate}; only a reject_by_client entry declaring "duplicate_member": true may carry one`);
+        continue;
+      }
+      if (declared && !fixture.duplicate) {
+        fail(`${surface}/${name}: declares "duplicate_member": true but carries no duplicate member`);
         continue;
       }
       const ok = validate(fixture.document);

@@ -291,3 +291,47 @@ def test_the_entry_matches_the_registry_columns_in_both_directions() -> None:
         f"entry-only {sorted(members - derived - set(columns))}; "
         f"column-only {sorted(set(columns) - excluded - members)}"
     )
+
+
+def test_every_display_prefix_the_entry_allows_can_begin_a_valid_receipt_secret() -> (
+    None
+):
+    """The allowed states are closed under issue/rotate.
+
+    An entry that validates describes a credential whose receipt can validate:
+    round 1 found a 10-character prefix the receipt's secret pattern could not
+    begin with.
+    """
+    shapes = [
+        "",
+        "a",
+        "a" * 16,
+        "Ab_9" * 4,
+        "_",
+        "_" * 16,
+        "ABCDEFGH_ijklm_9",
+        "exmpl_abcd",
+    ]
+    for entry in _manifest("credential-entry")["accept"]:
+        shapes.append(
+            json.loads(_raw("credential-entry", entry["file"]))["display_prefix"]
+        )
+    template = json.loads(_raw("credential-receipt", "valid-issue.json"))
+    now = _clock("credential-receipt")
+    for prefix in shapes:
+        document = json.loads(json.dumps(template))
+        document["credential"]["display_prefix"] = prefix
+        document["secret"] = prefix + "EXAMPLE" * 6
+        validate("credential-receipt.v1", document)
+        parse_credential_receipt(json.dumps(document), now)
+
+
+def test_a_naive_clock_is_a_contract_error_not_a_type_error() -> None:
+    naive = datetime(2026, 10, 18)
+    for directory, parse, name in (
+        ("credential-entry", parse_credential_entry, "valid-active.json"),
+        ("credential-list", parse_credential_list, "valid-two-items.json"),
+        ("credential-receipt", parse_credential_receipt, "valid-issue.json"),
+    ):
+        with pytest.raises(ContractError, match="timezone-aware"):
+            parse(_raw(directory, name), naive)

@@ -3206,8 +3206,12 @@ check_auth_fuzz_registry() {
 # line) and the run passed: a target satisfied by the seed corpus alone, or by
 # a neighbour, prints nothing and fails.
 check_auth_fuzz() {
-  local only="${1:-}" entry package target output ran=0
+  local only="${1:-}" entry package target output execs ran=0
   check_auth_fuzz_registry
+  # A budget below the engine's baseline-coverage pass runs zero fuzz iterations and
+  # would still print PASS: refuse it, and refuse a run that reports none below.
+  [[ "${AUTH_FUZZTIME}" =~ ^[0-9]+s$ ]] || die "AUTH_FUZZTIME=${AUTH_FUZZTIME} must be whole seconds such as 20s"
+  [ "${AUTH_FUZZTIME%s}" -ge 5 ] || die "AUTH_FUZZTIME=${AUTH_FUZZTIME} is below the 5s floor: the fuzz engine would run no iteration"
   for entry in "${AUTH_FUZZ_TARGETS[@]}"; do
     package="${entry% *}"
     target="${entry##* }"
@@ -3219,14 +3223,15 @@ check_auth_fuzz() {
       rm -f "${output}"
       die "fuzz target ${target} failed"
     fi
-    if ! grep -q '^fuzz: elapsed:' "${output}" || ! grep -q '^PASS$' "${output}"; then
+    execs="$(grep -oE '^fuzz: elapsed: [^,]*, execs: [0-9]+' "${output}" | tail -n 1 | grep -oE '[0-9]+$' || true)"
+    if ! grep -q '^fuzz: elapsed:' "${output}" || ! grep -q '^PASS$' "${output}" || [ "${execs:-0}" -le 0 ]; then
       cat "${output}" >&2
       rm -f "${output}"
       die "fuzz target ${target} did not run the fuzz engine to a pass"
     fi
     tail -n 3 "${output}"
     rm -f "${output}"
-    printf 'auth-fuzz-proof: %s %s ran for %s\n' "${package}" "${target}" "${AUTH_FUZZTIME}"
+    printf 'auth-fuzz-proof: %s %s ran for %s (%s executions)\n' "${package}" "${target}" "${AUTH_FUZZTIME}" "${execs}"
     ran=$((ran + 1))
   done
   [ "${ran}" -gt 0 ] || die "auth fuzz: no target ran (TARGET=${only:-all})"

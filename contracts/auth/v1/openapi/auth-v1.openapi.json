@@ -15,6 +15,9 @@
       "Discovery": {
         "$ref": "../jsonschema/discovery.v1.schema.json"
       },
+      "EndpointAuthProfile": {
+        "$ref": "../jsonschema/endpoint-auth-profile.v1.schema.json"
+      },
       "Error": {
         "$ref": "../jsonschema/error.v1.schema.json"
       },

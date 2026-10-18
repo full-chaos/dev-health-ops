@@ -32,6 +32,8 @@ const MUST_REJECT = { reject: true, narrower_than_consumer: true };
 // lose one, and any list group a manifest does carry must be non-empty.
 const REQUIRED_GROUPS = {
   jwks: ["accept", "reject", "reject_by_client", "narrower_than_consumer"],
+  // No client-only rule on this surface: it has no integer fields and no cross-document check, so there is nothing for reject_by_client to hold.
+  "endpoint-auth-profile": ["accept", "reject"],
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
@@ -191,7 +193,16 @@ for (const surface of surfaces) {
   }
   let validate;
   try {
-    validate = newAjv().compile(readJSON(schemaPath));
+    // A schema may $ref another contract schema (the REFERENCE ruling): every
+    // sibling and the Wave-0 inventory schema are registered by $id from files in
+    // this tree, so a $ref resolves locally and never over the network.
+    const ajv = newAjv();
+    const siblings = readdirSync(schemaDir)
+      .filter((f) => f.endsWith(".schema.json") && path.join(schemaDir, f) !== schemaPath)
+      .map((f) => path.join(schemaDir, f));
+    siblings.push(path.join(v1, "endpoint-profile.schema.json"));
+    for (const sibling of siblings) ajv.addSchema(readJSON(sibling));
+    validate = ajv.compile(readJSON(schemaPath));
   } catch (error) {
     console.error(`SCHEMA FAILED TO COMPILE: ${surface}.v1: ${error.message}`);
     process.exit(2);

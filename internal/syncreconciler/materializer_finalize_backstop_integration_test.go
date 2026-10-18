@@ -158,7 +158,7 @@ func (h *finalizeBackstopHarness) seed(t *testing.T, ctx context.Context, now ti
 		if _, err := h.admin.Exec(ctx, `DELETE FROM river.river_job WHERE id=$1`, jobID); err != nil {
 			t.Fatal(err)
 		}
-	} else if state == "completed" || state == "cancelled" {
+	} else if state == "completed" || state == "cancelled" || state == "discarded" {
 		if _, err := h.admin.Exec(ctx, `UPDATE river.river_job SET state=$2,finalized_at=$3 WHERE id=$1`, jobID, state, now.Add(-30*time.Hour)); err != nil {
 			t.Fatal(err)
 		}

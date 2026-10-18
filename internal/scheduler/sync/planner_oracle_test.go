@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -146,8 +147,11 @@ func TestBuildScheduledPlanMatchesFrozenPythonPlanner(t *testing.T) {
 		// HEAVY cold-start is capped at window_start + cap, NOT at now.
 		{id: "ratchet_heavy_cold_start_is_capped", dataset: "commit-stats"},
 		{id: "ratchet_heavy_cold_start_is_capped_for_every_heavy_key", dataset: "files"},
-		// The cap is scoped to CostClass.HEAVY only.
+		// Outside the work-item family the cap is scoped to CostClass.HEAVY only.
 		{id: "ratchet_medium_cold_start_is_uncapped", dataset: "commits"},
+		// A LIGHT work-item family dataset: the frozen planner left it
+		// uncapped; Go caps the family (workItemFamilyWindowDivergence). The id
+		// is part of the frozen input and stays as recorded.
 		{id: "ratchet_light_cold_start_is_uncapped", dataset: "work-item-labels"},
 		{id: "ratchet_medium_behind_watermark_is_uncapped", dataset: "commits", watermark: ptr("2026-03-01T12:00:00Z")},
 		// The cap applies to the behind-watermark case too.
@@ -321,6 +325,7 @@ func TestBuildScheduledPlanMatchesFrozenPythonPlanner(t *testing.T) {
 	}
 
 	want := frozenPlannerOracle(t, "planner-scheduled.golden.json", cases)
+	applyWorkItemFamilyWindowRule(t, cases, want)
 	for _, test := range cases {
 		now, err := time.Parse(time.RFC3339, test.Now)
 		if err != nil {
@@ -384,6 +389,77 @@ func TestBuildScheduledPlanMatchesFrozenPythonPlanner(t *testing.T) {
 		if strings.HasPrefix(test.ID, "provider_matrix_") && len(normalized) == 0 {
 			t.Fatalf("%s produced no units; provider matrix parity did not execute", test.ID)
 		}
+	}
+}
+
+// workItemFamilyWindowDivergence names every scheduled oracle case whose Go
+// plan differs from the frozen Python answer on purpose, and it is the whole
+// difference: the window END of the canonical work-items unit.
+//
+// The frozen planner capped the incremental window of HEAVY datasets only, so
+// it planned a work-item family first sync or catch-up as one window of the
+// full depth. Go ratchets the family as well for GitHub and Linear
+// (WindowRatchetClass). The golden
+// cannot be recorded again -- the planner it was recorded from is deleted --
+// so the expectation for these units is the frozen answer with that one rule
+// applied by applyWorkItemFamilyWindowRule, computed here from the case
+// inputs and never by calling the planner's own ratchet. Every other field of
+// these units, and every other unit of these cases, still has to equal the
+// frozen answer exactly.
+//
+// The list is closed: a case that starts or stops diverging fails the test.
+var workItemFamilyWindowDivergence = []string{
+	"github_incremental_family",
+	"provider_matrix_github",
+	"provider_matrix_linear",
+	"ratchet_light_cold_start_is_uncapped",
+	"work_item_family_canonical_claim_is_planned",
+}
+
+// applyWorkItemFamilyWindowRule rewrites the frozen answer in place: an
+// incremental GitHub or Linear work-items unit with a resolved start ends no later than its
+// start plus the cap (seven days, or one day more than the watermark overlap
+// in whole days when that is larger).
+func applyWorkItemFamilyWindowRule(t *testing.T, cases []plannerOracleCase, want map[string][]map[string]any) {
+	t.Helper()
+	changed := []string{}
+	for _, test := range cases {
+		capDays := int64(7)
+		if overlapDays := int64(test.WatermarkOverlapSeconds)/86400 + 1; test.WatermarkOverlapSeconds > 0 && overlapDays > capDays {
+			capDays = overlapDays
+		}
+		caseChanged := false
+		for _, unit := range want[test.ID] {
+			if unit["dataset_key"] != "work-items" || unit["mode"] != SyncModeIncremental ||
+				(unit["provider"] != "github" && unit["provider"] != "linear") {
+				continue
+			}
+			startText, hasStart := unit["window_start"].(string)
+			endText, hasEnd := unit["window_end"].(string)
+			if !hasStart || !hasEnd {
+				continue
+			}
+			start, err := time.Parse(time.RFC3339Nano, startText)
+			if err != nil {
+				t.Fatalf("%s: frozen window_start %q: %v", test.ID, startText, err)
+			}
+			end, err := time.Parse(time.RFC3339Nano, endText)
+			if err != nil {
+				t.Fatalf("%s: frozen window_end %q: %v", test.ID, endText, err)
+			}
+			capped := start.Add(time.Duration(capDays) * 24 * time.Hour)
+			if capped.Before(end) {
+				unit["window_end"] = capped.UTC().Format(time.RFC3339Nano)
+				caseChanged = true
+			}
+		}
+		if caseChanged {
+			changed = append(changed, test.ID)
+		}
+	}
+	slices.Sort(changed)
+	if !slices.Equal(changed, workItemFamilyWindowDivergence) {
+		t.Fatalf("cases whose frozen work-items window is wider than the cap:\n got  %v\n want %v", changed, workItemFamilyWindowDivergence)
 	}
 }
 

@@ -98,10 +98,12 @@ const (
 // Write stores the rows of one collection and retracts what the snapshot no
 // longer has.
 //
-// The team catalog row is written LAST: ClickHouse has no transaction across
-// tables, so a failure part way leaves memberships and project links without
-// their catalog row (a re-run repairs it) rather than a listed team without
-// its members. The error names the stages already committed.
+// The team catalog rows are written FIRST: ClickHouse has no transaction
+// across tables, and a link row is written only for a team that has a teams
+// row (providersync.KeepLinksOfImportedTeams, CHAOS-9123), so a failure part
+// way leaves a listed team without some of its links (a re-run writes them),
+// never a link of a team with no teams row. The error names the stages
+// already committed.
 //
 // Retraction: the members and project links an Atlassian team held before and
 // the snapshot omits (a person who left, a project it stopped working on, an
@@ -140,6 +142,9 @@ func Write(
 		return result, ErrConfiguration
 	}
 	if err := checkTeamIDs(rows); err != nil {
+		return result, err
+	}
+	if err := checkOrganization(ctx, orgID, rows); err != nil {
 		return result, err
 	}
 	teams, missing, catalog, err := teamsInScope(ctx, conn, orgID, rows, scope, prover)
@@ -240,37 +245,22 @@ func Write(
 	}
 	var done []string
 	fail := func(stage string, err error) (Result, error) {
+		if len(done) > 0 && done[0] == "teams" {
+			// The teams rows are committed and a link stage failed: the teams
+			// are listed without (some of) their links until a re-run.
+			slog.Default().WarnContext(ctx, "atlassian_teams_links_not_written_after_teams",
+				"org_id", orgID, "stage", stage, "teams_written", result.TeamsWritten,
+				"deactivated_teams", result.DeactivatedTeams, "stages_written", len(done))
+		}
 		if len(done) > 0 {
 			return result, fmt.Errorf("%s: %w (already written: %s; a re-run completes the rest)", stage, err, strings.Join(done, ", "))
 		}
 		return result, fmt.Errorf("%s: %w", stage, err)
 	}
-	if selections.Members && (len(memberships) > 0 || len(expiredMemberships) > 0) {
-		if err := writeMemberships(ctx, conn, orgID, memberships, expiredMemberships, now); err != nil {
-			return fail("write team memberships", err)
-		}
-		result.MembershipsWritten = len(memberships)
-		result.MembersWritten = distinctAtlassianMembers(memberships)
-		result.ExpiredMemberships = len(expiredMemberships)
-		done = append(done, "team memberships")
-	}
-	if selections.Projects && (len(ownership) > 0 || len(expiredOwnership) > 0) {
-		if err := writeOwnership(ctx, conn, orgID, ownership, expiredOwnership, now); err != nil {
-			return fail("write team project ownership", err)
-		}
-		result.ExpiredOwnership = len(expiredOwnership)
-		done = append(done, "team project ownership")
-	}
-	if selections.Projects {
-		// Set after the write: a failed write returns above with nothing counted. The rows the run found are
-		// counted whether or not any was written; the unchanged ones were not written again.
-		result.OwnershipWritten = len(rows.Ownership)
-		result.OwnershipUnchanged = ownershipUnchanged
-		if ownershipUnchanged > 0 {
-			slog.Default().InfoContext(ctx, "atlassian_teams_ownership_unchanged",
-				"org_id", orgID, "fresh", len(rows.Ownership), "unchanged", ownershipUnchanged, "written", len(ownership))
-		}
-	}
+	// The teams are written before their links: a link row is written only
+	// for a team that has a teams row (KeepLinksOfImportedTeams), so a run
+	// that fails between the two leaves no link of a team it did not import;
+	// a re-run writes the links.
 	if selections.Structure && (len(teamsToWrite) > 0 || len(deactivate) > 0) {
 		// The catalog row's project keys follow the links: a run that closes
 		// no link of a team (the snapshot is not complete, or a link of the
@@ -294,6 +284,38 @@ func Write(
 			result.TeamKeys = append(result.TeamKeys, team.NativeTeamKey)
 		}
 		result.DeactivatedTeams = len(deactivate)
+		done = append(done, "teams")
+	}
+	if selections.Members && (len(memberships) > 0 || len(expiredMemberships) > 0) {
+		drop, err := writeMemberships(ctx, conn, orgID, memberships, expiredMemberships, now)
+		if err != nil {
+			return fail("write team memberships", err)
+		}
+		written := providersync.KeptLinks(drop, memberships, func(r MembershipRow) string { return r.TeamID }, func(MembershipRow) bool { return true })
+		result.MembershipsWritten = len(written)
+		result.MembersWritten = distinctAtlassianMembers(written)
+		result.ExpiredMemberships = len(expiredMemberships)
+		done = append(done, "team memberships")
+	}
+	var ownershipDrop providersync.LinkDrop
+	if selections.Projects && (len(ownership) > 0 || len(expiredOwnership) > 0) {
+		drop, err := writeOwnership(ctx, conn, orgID, ownership, expiredOwnership, now)
+		if err != nil {
+			return fail("write team project ownership", err)
+		}
+		ownershipDrop = drop
+		result.ExpiredOwnership = len(expiredOwnership)
+		done = append(done, "team project ownership")
+	}
+	if selections.Projects {
+		// Set after the write: a failed write returns above with nothing counted. The rows the run found are
+		// counted whether or not any was written; the unchanged ones were not written again.
+		result.OwnershipWritten = len(providersync.KeptLinks(ownershipDrop, rows.Ownership, func(r OwnershipRow) string { return r.TeamID }, func(OwnershipRow) bool { return true }))
+		result.OwnershipUnchanged = ownershipUnchanged
+		if ownershipUnchanged > 0 {
+			slog.Default().InfoContext(ctx, "atlassian_teams_ownership_unchanged",
+				"org_id", orgID, "fresh", len(rows.Ownership), "unchanged", ownershipUnchanged, "written", len(ownership))
+		}
 	}
 	return result, nil
 }
@@ -653,10 +675,15 @@ func readProjectKeys(ctx context.Context, conn driver.Conn, orgID string, ids []
 	return keys, result.Err()
 }
 
-func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows []MembershipRow, expired []openMembership, now time.Time) error {
+func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows []MembershipRow, expired []openMembership, now time.Time) (providersync.LinkDrop, error) {
+	rows, drop, err := providersync.KeepLinksOfImportedTeams(ctx, conn, orgID, Provider, "team_memberships", rows,
+		func(r MembershipRow) string { return r.OrgID }, func(r MembershipRow) string { return r.TeamID }, func(MembershipRow) bool { return true })
+	if err != nil {
+		return drop, err
+	}
 	batch, err := conn.PrepareBatch(ctx, membershipsInsert)
 	if err != nil {
-		return err
+		return drop, err
 	}
 	defer func() { _ = batch.Abort() }()
 	for _, row := range rows {
@@ -666,7 +693,7 @@ func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows 
 			row.OrgID, row.Provider, row.TeamID, row.MemberID, &raw, (*string)(nil), row.IdentityFacets, row.Source,
 			row.IsPrimary, row.Specificity, row.Priority, row.ValidFrom, (*time.Time)(nil), row.UpdatedAt, providerUserID,
 		); err != nil {
-			return err
+			return drop, err
 		}
 	}
 	// A closed replacement has the sort key of the open row it retracts.
@@ -676,10 +703,10 @@ func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows 
 			orgID, Provider, row.teamID, row.memberID, row.rawProviderUserID, row.rawEmail, row.identityFacets, row.source,
 			row.isPrimary, row.specificity, row.priority, row.validFrom, &closedAt, now, row.providerUserID,
 		); err != nil {
-			return err
+			return drop, err
 		}
 	}
-	return batch.Send()
+	return drop, batch.Send()
 }
 
 // optionalText is the text, or nil when it is blank.
@@ -690,10 +717,15 @@ func optionalText(value string) *string {
 	return nil
 }
 
-func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []OwnershipRow, expired []openOwnership, now time.Time) error {
+func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []OwnershipRow, expired []openOwnership, now time.Time) (providersync.LinkDrop, error) {
+	rows, drop, err := providersync.KeepLinksOfImportedTeams(ctx, conn, orgID, Provider, "team_project_ownership", rows,
+		func(r OwnershipRow) string { return r.OrgID }, func(r OwnershipRow) string { return r.TeamID }, func(OwnershipRow) bool { return true })
+	if err != nil {
+		return drop, err
+	}
 	batch, err := conn.PrepareBatch(ctx, ownershipInsert)
 	if err != nil {
-		return err
+		return drop, err
 	}
 	defer func() { _ = batch.Abort() }()
 	for _, row := range rows {
@@ -702,7 +734,7 @@ func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []
 			row.OrgID, row.Provider, row.TeamID, row.ProjectID, &key, row.Source, row.IsPrimary, row.Specificity,
 			row.Priority, row.ValidFrom, (*time.Time)(nil), row.UpdatedAt,
 		); err != nil {
-			return err
+			return drop, err
 		}
 	}
 	for _, row := range expired {
@@ -711,10 +743,38 @@ func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []
 			orgID, Provider, row.teamID, row.projectID, row.projectKey, row.source, row.isPrimary, row.specificity,
 			row.priority, row.validFrom, &closedAt, now,
 		); err != nil {
-			return err
+			return drop, err
 		}
 	}
-	return batch.Send()
+	return drop, batch.Send()
+}
+
+// checkOrganization refuses, before any read or write, rows of another
+// organization than the one written: their teams and links would be stored
+// under the wrong organization, or dropped by the link rule. It logs a Warn
+// with counts.
+func checkOrganization(ctx context.Context, orgID string, rows Rows) error {
+	foreign := 0
+	for _, team := range rows.Teams {
+		if team.OrgID != orgID {
+			foreign++
+		}
+	}
+	for _, membership := range rows.Memberships {
+		if membership.OrgID != orgID {
+			foreign++
+		}
+	}
+	for _, link := range rows.Ownership {
+		if link.OrgID != orgID {
+			foreign++
+		}
+	}
+	if foreign == 0 {
+		return nil
+	}
+	slog.Default().WarnContext(ctx, "atlassian_teams_rows_of_another_organization_refused", "org_id", orgID, "rows", foreign)
+	return fmt.Errorf("check rows: %w: %d rows of another organization", providersync.ErrLinkRowsOfAnotherOrganization, foreign)
 }
 
 // checkTeamIDs refuses, before any read or write, a row whose team id does

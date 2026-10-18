@@ -137,6 +137,9 @@ var workItemHierarchyExceptions = map[string]map[string]workItemFieldException{
 		workItemFieldParentID: {Ticket: "CHAOS-9852", Reason: "a GitLab merge request has no parent work item"},
 		workItemFieldEpicID:   {Ticket: "CHAOS-9852", Reason: "a GitLab merge request belongs to no epic"},
 	},
+	gitlabEpicSourceKind: {
+		workItemFieldParentID: {Ticket: "CHAOS-9857", Reason: "a GitLab epic's parent epic is written to epic_id, as Python does (normalize.py:749-781)"},
+	},
 	linearIssueSourceKind: {
 		workItemFieldEpicID: {Ticket: "CHAOS-9852", Reason: "Linear has no epic object; Python writes None (providers/linear/normalize.py:406)"},
 	},

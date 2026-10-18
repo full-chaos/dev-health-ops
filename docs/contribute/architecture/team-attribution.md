@@ -2527,6 +2527,16 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > the `SyncRunReferenceDiscovery` ledger status, never on those CH rows existing. See the Manual QA
 > walkthrough in §4 for the sync-config UI path.
 >
+> **The switches stay independent, and a link needs an imported team (chris 2026-10-14, CHAOS-9123).**
+> A run with members or projects on and teams off writes a `team_memberships` or `team_project_ownership`
+> row only for a team that already has a `teams` row (in any version: an inactive or deleted team was
+> imported); a team the same run writes (teams on) counts too. The open link rows of a team that was never
+> imported are not written; a closed row is always written, because it closes a row the store holds. One
+> shared helper decides it for every catalog (`providersync.KeepLinksOfImportedTeams`: GitHub, GitLab,
+> Linear and Jira catalogs, and the Atlassian teams write), and it logs `team_links_of_unimported_teams_not_written`
+> with counts. The `jira_legacy` ops-team ownership rows are exempt: they name `jira:<ops team id>` (the ops-team
+> links row of "Team ids"), an id no writer of `teams` holds by design.
+>
 > **A fourth, architecturally SEPARATE `team_repo_ownership` producer (CHAOS-4365 item 1b,
 > implemented): the sync-derived `inferred` row, never routed through `team_autoimport_<provider>.populate()`
 > at all.** Triggered as a sibling writer in `NativePostSyncService.Fanout`

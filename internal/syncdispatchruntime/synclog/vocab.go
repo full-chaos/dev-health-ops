@@ -18,6 +18,7 @@ var (
 	MsgDispatchSyncRunBudgetGuardEnforceFailed           = Msg{"dispatch_sync_run.budget_guard_enforce_failed"}
 	MsgDispatchSyncRunBudgetGuardDeferred                = Msg{"dispatch_sync_run.budget_guard_deferred"}
 	MsgDispatchSyncRunBudgetGuardAllowed                 = Msg{"dispatch_sync_run.budget_guard_allowed"}
+	MsgDispatchSyncRunBudgetEstimatesPersisted           = Msg{"dispatch_sync_run.budget_estimates_persisted"}
 	MsgDispatchSyncRunBudgetGuardDryRunFailed            = Msg{"dispatch_sync_run.budget_guard_dry_run_failed"}
 	MsgDispatchSyncRunBudgetGuardDryRun                  = Msg{"dispatch_sync_run.budget_guard_dry_run"}
 	MsgDispatchSyncRunRateLimitCooldownReconfirmed       = Msg{"dispatch_sync_run.rate_limit_cooldown_reconfirmed"}
@@ -29,6 +30,7 @@ var (
 	MsgDispatchSyncRunClaimDeferredOutsideGuardSnapshot  = Msg{"dispatch_sync_run.claim_deferred_outside_guard_snapshot"}
 	MsgSyncDispatchAdmissionCaps                         = Msg{"sync_dispatch_admission_caps"}
 	MsgTeamsInsertCarriesProviderIdentity                = Msg{"teams_insert.carries_provider_identity"}
+	MsgSyncTriggerRefusedUnselectedSource                = Msg{"sync_trigger.refused_unselected_source"}
 	MsgDispatchGuardBucketDecision                       = Msg{"dispatch_guard.bucket_decision"}
 	MsgDispatchSyncRunBudgetEstimateUnitFailed           = Msg{"dispatch_sync_run.budget_estimate_unit_failed"}
 	MsgDispatchSyncRunLockBusyRequeued                   = Msg{"dispatch_sync_run.lock_busy_requeued"}
@@ -54,6 +56,8 @@ var (
 	MsgFinalizeSyncRunCoverageCacheInvalidated           = Msg{"finalize_sync_run.coverage_cache_invalidated"}
 	MsgFinalizeSyncRunComputeCheckpointUnitFailed        = Msg{"finalize_sync_run.compute_checkpoint_unit_failed"}
 	MsgPostSyncFanout                                    = Msg{"post_sync_fanout"}
+	MsgPostSyncFanoutFailed                              = Msg{"post_sync_fanout.failed"}
+	MsgPostSyncFanoutChainDefect                         = Msg{"post_sync_fanout.chain_defect"}
 	MsgPostSyncTouchedDays                               = Msg{"post_sync_fanout.touched_days"}
 	MsgPostSyncTouchedDaysFailed                         = Msg{"post_sync_fanout.touched_days_failed"}
 	MsgTouchedDaysDrainPass                              = Msg{"touched_days_drain.pass"}
@@ -117,6 +121,11 @@ var (
 	KeyGoneKept                     = Key{"gone_kept"}
 	KeyGoneCleared                  = Key{"gone_cleared"}
 	KeyGoneStated                   = Key{"gone_stated"}
+	KeyTriggerCaller                = Key{"caller"}
+	KeyTriggeredBy                  = Key{"triggered_by"}
+	KeyTriggerMode                  = Key{"mode"}
+	KeyRefusedSourceCount           = Key{"refused_source_count"}
+	KeyRequestedSourceCount         = Key{"requested_source_count"}
 	KeyUnroutableUnits              = Key{"unroutable_units"}
 	KeyTerminalDeliveryPublishes    = Key{"terminal_delivery_publishes"}
 	KeyQueuedUnits                  = Key{"queued_units"}

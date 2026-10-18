@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -84,6 +85,16 @@ type readyFinalizeOutcome struct {
 func (repair *TerminalDeliveryRepair) repairReadyFinalizers(
 	ctx context.Context, tx pgx.Tx, now time.Time, limit int,
 ) (readyFinalizeOutcome, error) {
+	return repair.repairReadyFinalizersWith(ctx, tx, now, limit, repair.readyFinalizeQuery, now.Add(-repair.finalizeStaleAge), false)
+}
+
+// repairReadyFinalizersWith is repairReadyFinalizers with its candidate query and stale bound given. The
+// route-command reconcile (generation_reconcile.go) passes the other-generation query; every other guard (river
+// route, not paused, no live claim, run finalize-ready, river job missing or completed) is the same text and the same
+// code below. warnEach adds one Warn per re-armed row.
+func (repair *TerminalDeliveryRepair) repairReadyFinalizersWith(
+	ctx context.Context, tx pgx.Tx, now time.Time, limit int, query string, staleBefore time.Time, warnEach bool,
+) (readyFinalizeOutcome, error) {
 	outcome := readyFinalizeOutcome{RemainingBudget: limit}
 	if limit == 0 {
 		// A budget fully consumed by the three River-terminal branches is a
@@ -92,8 +103,7 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizers(
 		// the transaction commits, never here. See logReadyFinalizeOutcome.
 		return outcome, nil
 	}
-	staleBefore := now.Add(-repair.finalizeStaleAge)
-	rows, err := tx.Query(ctx, repair.readyFinalizeQuery, now, staleBefore, limit)
+	rows, err := tx.Query(ctx, query, now, staleBefore, limit)
 	if err != nil {
 		return outcome, repair.readyFinalizeError(ctx, "candidates", err)
 	}
@@ -101,11 +111,13 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizers(
 		id, runID string
 		jobID     int64
 		present   bool
+		delivered *int64
+		current   int64
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.id, &c.runID, &c.jobID, &c.present); err != nil {
+		if err := rows.Scan(&c.id, &c.runID, &c.jobID, &c.present, &c.delivered, &c.current); err != nil {
 			rows.Close()
 			return outcome, repair.readyFinalizeError(ctx, "candidate_scan", err)
 		}
@@ -198,6 +210,15 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizers(
 			return outcome, fmt.Errorf("ready-finalizer rearm count: %w", ErrUnavailable)
 		}
 		outcome.Recovered++
+		if warnEach {
+			delivered := int64(-1)
+			if c.delivered != nil {
+				delivered = *c.delivered
+			}
+			slog.WarnContext(ctx, "syncreconciler.finalize_delivery_other_generation_rearmed",
+				"sync_run_id", c.runID, "outbox_id", c.id, "delivered_route_generation", delivered,
+				"current_route_generation", c.current, "evidence", evidence)
+		}
 		if c.present {
 			outcome.CompletedDelivery++
 		} else {
@@ -280,7 +301,8 @@ const readyFinalizeJobLivenessPredicate = `job.kind='finalize_sync_run' AND job.
 // removed; malformed/missing identities are not permission to repair.
 const selectReadyFinalizeSQL = `
 SELECT outbox.id::text, outbox.sync_run_id::text,
-    outbox.transport_job_id::bigint, job.id IS NOT NULL
+    outbox.transport_job_id::bigint, job.id IS NOT NULL,
+    outbox.dispatched_route_generation, route.generation
 FROM public.sync_dispatch_outbox AS outbox
 JOIN public.sync_runs AS run ON run.id=outbox.sync_run_id
 JOIN public.sync_dispatch_transport_routes AS route ON route.kind=outbox.kind
@@ -300,6 +322,18 @@ WHERE outbox.kind='finalize_sync_run'
 ORDER BY outbox.dispatched_at,outbox.id
 FOR UPDATE OF outbox SKIP LOCKED
 LIMIT $3`
+
+// selectOtherGenerationFinalizeSQL is selectReadyFinalizeSQL for a delivery dispatched at a generation other than
+// the route's current one. Only the route-command reconcile uses it (generation_reconcile.go); the scheduled repair
+// keeps the equality fence of CHAOS-5462. The init check fails the build of the process if the text it rewrites moves.
+var selectOtherGenerationFinalizeSQL = strings.Replace(selectReadyFinalizeSQL,
+	"outbox.dispatched_route_generation=route.generation", "outbox.dispatched_route_generation IS DISTINCT FROM route.generation", 1)
+
+func init() {
+	if selectOtherGenerationFinalizeSQL == selectReadyFinalizeSQL {
+		panic("syncreconciler: the generation clause of selectReadyFinalizeSQL moved")
+	}
+}
 
 // This is the materializer's readiness predicate, evaluated through its own
 // coordinator role. The queue-side candidate never substitutes unit counts

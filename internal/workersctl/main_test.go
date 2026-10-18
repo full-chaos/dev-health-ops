@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
+	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
 
@@ -2103,5 +2104,52 @@ func TestStartDailyDaysStopsAtTheFirstRefusalAndKeepsTheDaysBefore(t *testing.T)
 		time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC), nil, "fix-1", true)
 	if !errors.Is(err, daily.ErrDayAlreadyCovered) || len(results) != 1 || starter.days[len(starter.days)-1] != "2026-08-01" {
 		t.Fatalf("results=%d days=%v err=%v", len(results), starter.days, err)
+	}
+}
+
+type fakeRouteReconciler struct {
+	kinds  []string
+	report syncreconciler.GenerationReconcileReport
+	err    error
+}
+
+func (f *fakeRouteReconciler) ReconcileOtherGenerations(_ context.Context, _ time.Time, kind string) (syncreconciler.GenerationReconcileReport, error) {
+	f.kinds = append(f.kinds, kind)
+	report := f.report
+	report.Kind = kind
+	return report, f.err
+}
+
+// A route command that changed the generation reconciles the deliveries left at the old one and prints the count
+// beside the route state; a reconcile failure is a non-zero exit with the state still printed (CHAOS-9964).
+func TestDispatchRoutesReconcilesOtherGenerationsAfterAGenerationChange(t *testing.T) {
+	runtime := commandRuntime(t, commandAuthorizer{})
+	fake := &fakeRouteReconciler{report: syncreconciler.GenerationReconcileReport{Rearmed: 4, OtherKinds: []syncreconciler.StrandedKindCount{{Kind: "post_sync", Stranded: 2}}}}
+	runtime.routeReconciler = fake
+	var stdout, stderr bytes.Buffer
+	if code := dispatch(context.Background(), runtime, []string{
+		"routes", "pause", "--reason", "maintenance", "--correlation-id", "route-cli-r1", "post_sync",
+	}, &stdout, &stderr); code != 0 {
+		t.Fatalf("routes pause code=%d stderr=%s", code, stderr.String())
+	}
+	if len(fake.kinds) != 1 || fake.kinds[0] != "post_sync" {
+		t.Fatalf("reconciled kinds = %v, want [post_sync]", fake.kinds)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("output %q: %v", stdout.String(), err)
+	}
+	reconcile, _ := out["generation_reconcile"].(map[string]any)
+	if out["generation"] != float64(2) || reconcile["rearmed"] != float64(4) {
+		t.Fatalf("output = %s, want the route state and generation_reconcile.rearmed=4", stdout.String())
+	}
+
+	fake.err = errors.New("queue unavailable")
+	stdout.Reset()
+	stderr.Reset()
+	if code := dispatch(context.Background(), runtime, []string{
+		"routes", "resume", "--reason", "maintenance", "--correlation-id", "route-cli-r2", "post_sync",
+	}, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), `"generation_reconcile_error":"reconcile_failed"`) || strings.Contains(stdout.String(), "queue unavailable") {
+		t.Fatalf("resume with a failing reconcile: code=%d stdout=%q", code, stdout.String())
 	}
 }

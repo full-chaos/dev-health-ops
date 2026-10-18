@@ -81,6 +81,9 @@ type operatorRuntime struct {
 	streams               []streamProfileStatus
 	queueStatusSource     workerQueueStatusSource
 	queueControlMode      platformconfig.QueueControlMode
+	// routeReconciler leaves no delivery behind at the old generation after a route command (CHAOS-9964).
+	// configureRuntime always sets it; a runtime built without pools (tests) has none.
+	routeReconciler routeReconciler
 	// registry is the same job-descriptor registry configureRuntime already
 	// loads for jobRouteController -- `metrics daily-redrive` (CHAOS-4358)
 	// reuses it to construct a daily.PostgresPublisher without a second
@@ -540,6 +543,11 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		streamDeploymentState: string(manifest.DeploymentState), streams: streams, queueControlMode: mode,
 		registry: registry, lookup: lookup,
 	}
+	reconciler, reconcilerErr := syncreconciler.NewTerminalDeliveryRepair(pools.QueueControl, coordinatorPool, schema)
+	if reconcilerErr != nil {
+		return nil, writeError(stderr, "operator_backend_unavailable")
+	}
+	runtime.routeReconciler = reconciler
 	runtime.queueStatusSource = manifestQueueStatusSource{
 		service: service, principal: runtime.principal, manifest: manifest, budget: budget,
 		presence: func(ctx context.Context) ([]jobruntime.WorkerPresenceSummary, error) {
@@ -742,7 +750,34 @@ func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}
-	return writeResult(stdout, stderr, state)
+	if args[0] == "drain" {
+		return writeResult(stdout, stderr, state)
+	}
+	if runtime.routeReconciler == nil {
+		return writeResult(stdout, stderr, state)
+	}
+	// The route's generation changed: a command shouldn't leave garbage around (CHAOS-9964), so the deliveries it
+	// left at the old generation are reconciled before the command ends. The route change is already committed.
+	report, reconcileErr := runtime.routeReconciler.ReconcileOtherGenerations(ctx, time.Now().UTC(), kind)
+	result := routeMutationResult{RouteState: state, Reconcile: &report}
+	if reconcileErr != nil {
+		result.ReconcileError = "reconcile_failed"
+		writeResult(stdout, stderr, result)
+		return 1
+	}
+	return writeResult(stdout, stderr, result)
+}
+
+type routeReconciler interface {
+	ReconcileOtherGenerations(ctx context.Context, now time.Time, kind string) (syncreconciler.GenerationReconcileReport, error)
+}
+
+// routeMutationResult is the route state after a generation-changing command plus what the command did to the
+// deliveries the change left at the old generation.
+type routeMutationResult struct {
+	syncroute.RouteState
+	Reconcile      *syncreconciler.GenerationReconcileReport `json:"generation_reconcile,omitempty"`
+	ReconcileError string                                    `json:"generation_reconcile_error,omitempty"`
 }
 
 func dispatchJobs(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {

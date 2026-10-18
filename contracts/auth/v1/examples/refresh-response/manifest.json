@@ -1,0 +1,172 @@
+{
+  "accept": [
+    {
+      "file": "valid-full-lifetimes.json",
+      "why": "Today's lifetimes: 60 minute access, 7 day refresh."
+    },
+    {
+      "file": "valid-minimum-lifetimes.json",
+      "why": "Lower boundaries."
+    }
+  ],
+  "reject": [
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-access-token.json",
+      "why": "`access_token` is required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-token-type.json",
+      "why": "`token_type` is required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-expires-in.json",
+      "why": "`expires_in` is required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-refresh-credential.json",
+      "why": "`refresh_credential` is required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-refresh-expires-in.json",
+      "why": "`refresh_expires_in` is required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-session-id.json",
+      "why": "`session_id` is required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-schema-version.json",
+      "why": "`schema_version` is required."
+    },
+    {
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "file": "invalid-schema-version-wrong.json",
+      "why": "Unknown denies."
+    },
+    {
+      "expect_instance_location": "/token_type",
+      "expect_keyword": "const",
+      "file": "invalid-token-type-capitalised.json",
+      "why": "go-api emits lowercase; one spelling only."
+    },
+    {
+      "expect_instance_location": "/expires_in",
+      "expect_keyword": "minimum",
+      "file": "invalid-expires-in-zero.json",
+      "why": "Lower boundary."
+    },
+    {
+      "expect_instance_location": "/expires_in",
+      "expect_keyword": "maximum",
+      "file": "invalid-expires-in-past-60-minutes.json",
+      "why": "The access lifetime ceiling is 60 minutes until Wave 3."
+    },
+    {
+      "expect_instance_location": "/refresh_expires_in",
+      "expect_keyword": "minimum",
+      "file": "invalid-refresh-expires-in-zero.json",
+      "why": "Lower boundary."
+    },
+    {
+      "expect_instance_location": "/refresh_expires_in",
+      "expect_keyword": "maximum",
+      "file": "invalid-refresh-expires-in-past-7-days.json",
+      "why": "Seven day ceiling."
+    },
+    {
+      "expect_instance_location": "/expires_in",
+      "expect_keyword": "type",
+      "file": "invalid-expires-in-string.json",
+      "why": "Type."
+    },
+    {
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "file": "invalid-access-token-not-jws.json",
+      "why": "Three base64url segments."
+    },
+    {
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "file": "invalid-access-token-empty-segment.json",
+      "why": "No empty segment."
+    },
+    {
+      "expect_instance_location": "/refresh_credential",
+      "expect_keyword": "pattern",
+      "file": "invalid-refresh-credential-jwt-shaped.json",
+      "why": "The rotated credential is opaque, never a JWT."
+    },
+    {
+      "expect_instance_location": "/refresh_credential",
+      "expect_keyword": "pattern",
+      "file": "invalid-refresh-credential-too-short.json",
+      "why": "Length floor."
+    },
+    {
+      "expect_instance_location": "/session_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-session-id-wrong-prefix.json",
+      "why": "Same shape as session.v1."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-extra-field-refresh-token.json",
+      "why": "`refresh_token` has no field; the legacy user object moves to session.v1, and no provider token ever reaches a browser."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-extra-field-user.json",
+      "why": "`user` has no field; the legacy user object moves to session.v1, and no provider token ever reaches a browser."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-extra-field-password-hash.json",
+      "why": "`password_hash` has no field; the legacy user object moves to session.v1, and no provider token ever reaches a browser."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-extra-field-id-token.json",
+      "why": "`id_token` has no field; the legacy user object moves to session.v1, and no provider token ever reaches a browser."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-extra-field-provider-access-token.json",
+      "why": "`provider_access_token` has no field; the legacy user object moves to session.v1, and no provider token ever reaches a browser."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-duplicate-access-token.json",
+      "why": "Duplicate member."
+    },
+    {
+      "file": "client-rejected-expires-in-decimal.json",
+      "why": "Schema `integer` admits 3600.0; clients refuse decimal-form tokens."
+    },
+    {
+      "file": "client-rejected-refresh-expires-in-decimal.json",
+      "why": "Exponent form of the other integer field."
+    }
+  ]
+}

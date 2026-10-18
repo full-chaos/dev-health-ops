@@ -76,14 +76,16 @@ func TestEveryAuthTableIsClassified(t *testing.T) {
 		t.Fatalf("tables must be in exactly one list: unclassified=%v in-both=%v", unclassified, both)
 	}
 
-	// The lists must match the database: a guarded table has the trigger and
-	// an unguarded one does not.
+	// The lists must match the database: a guarded table has the row trigger
+	// (<table>_commit_guard) and an unguarded one does not; the column-level
+	// triggers of unguarded tables are checked by TestEveryUnguardedColumnIsClassified.
 	trig, err := env.admin.Query(ctx, `
 		SELECT c.relname FROM pg_trigger t
 		JOIN pg_class c ON c.oid = t.tgrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		JOIN pg_proc p ON p.oid = t.tgfoid
-		WHERE n.nspname = $1 AND p.proname = 'audit_commit_guard' AND NOT t.tgisinternal`, env.schema)
+		WHERE n.nspname = $1 AND p.proname = 'audit_commit_guard' AND NOT t.tgisinternal
+		  AND t.tgname LIKE '%\_commit\_guard'`, env.schema)
 	if err != nil {
 		t.Fatal(err)
 	}

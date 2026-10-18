@@ -316,7 +316,7 @@ func defaultModelForKind(kind ProviderKind) string {
 // status read the model through it.
 func PlatformDefaultModel(kind ProviderKind) string {
 	model := llmbudget.DefaultModel(string(kind), llmbudget.PlatformLookup(envsecrets.ProcessLookup))
-	slog.Debug("categorize: model resolved", "kind", kind, "model", model)
+	slog.Debug("categorize: model resolved", "kind", logSafe(string(kind)), "model", logSafe(model))
 	return model
 }
 
@@ -573,4 +573,10 @@ func newProviderFromCredentialsWithTransport(
 	default:
 		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)
 	}
+}
+
+// logSafe strips line breaks from an environment-derived value before it is
+// logged, so a value cannot forge a log line.
+func logSafe(value string) string {
+	return strings.NewReplacer("\n", "", "\r", "").Replace(value)
 }

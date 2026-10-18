@@ -92,7 +92,7 @@ func commitCredential(ctx context.Context, env *credEnv, sql string, args ...any
 
 func insertCredential(ctx context.Context, env *credEnv, id, principal, extraColumns, extraValues string, args ...any) error {
 	sql := `INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint` +
-		extraColumns + `) VALUES ($1, $2, 'cred-class', decode(md5(random()::text || clock_timestamp()::text), 'hex'), 'sha256', '` + fp + `'` + extraValues + `)`
+		extraColumns + `) VALUES ($1, $2, 'workload_token', decode(md5(random()::text || clock_timestamp()::text), 'hex'), 'sha256', '` + fp + `'` + extraValues + `)`
 	return commitCredential(ctx, env, sql, append([]any{id, principal}, args...)...)
 }
 
@@ -171,7 +171,7 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 	t.Run("a new credential must carry its fingerprint", func(t *testing.T) {
 		mustFail(t, "no fingerprint", commitCredential(ctx, env,
 			`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm)
-			 VALUES ('00000000-0000-4000-8000-0000000000f1', $1, 'cred-class', decode(md5(random()::text), 'hex'), 'sha256')`, credPrincipal),
+			 VALUES ('00000000-0000-4000-8000-0000000000f1', $1, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256')`, credPrincipal),
 			"must carry its fingerprint")
 	})
 
@@ -257,6 +257,25 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 		}
 	})
 
+	t.Run("class and display prefix have the wire shapes (a stored row must be projectable)", func(t *testing.T) {
+		// Round 2 of the wire contract executed this: the table accepted a class
+		// outside the vocabulary and an overlong, space-bearing prefix, rows the
+		// credential-entry schema rejects. The producer carries the wire's rules.
+		const id = "00000000-0000-4000-8000-0000000000f4"
+		insert := func(class, prefix string) error {
+			return commitCredential(ctx, env,
+				`INSERT INTO auth.credential_registry (id, principal_id, credential_class, display_prefix, secret_hash, hash_algorithm, fingerprint)
+				 VALUES ($1, $2, $3, $4, decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef')`,
+				id, credPrincipal, class, prefix)
+		}
+		mustFail(t, "unknown class", insert("not_a_wire_class", "ok_"), "credential_registry_credential_class_closed")
+		mustFail(t, "overlong prefix", insert("workload_token", "abcdefghijklmnopq"), "credential_registry_display_prefix_shape")
+		mustFail(t, "prefix with a space", insert("workload_token", "bad prefix"), "credential_registry_display_prefix_shape")
+		if err := insert("workload_token", "exmpl_ab12"); err != nil {
+			t.Fatalf("a wire-shaped class and prefix were refused: %v", err)
+		}
+	})
+
 	t.Run("a legacy row without a fingerprint can still be revoked", func(t *testing.T) {
 		// Rows that predate 0007 have no fingerprint; requiring one on UPDATE
 		// would make them impossible to revoke. Simulate one by clearing the
@@ -328,10 +347,10 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 		mustFail(t, "platform with reference", insertCredential(ctx, env, id, credPrincipal, `, external_reference`, `, 'ext-1'`), "matches_owner")
 		mustFail(t, "bad fingerprint", commitCredential(ctx, env,
 			`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint)
-			 VALUES ($1, $2, 'cred-class', decode(md5(random()::text), 'hex'), 'sha256', 'NOT-HEX')`, id, credPrincipal), "fingerprint_shape")
+			 VALUES ($1, $2, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256', 'NOT-HEX')`, id, credPrincipal), "fingerprint_shape")
 		if err := commitCredential(ctx, env,
 			`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, domain_owner, external_reference)
-			 VALUES ($1, $2, 'cred-class', decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef', 'acr', 'ext-1')`, id, credPrincipal); err != nil {
+			 VALUES ($1, $2, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef', 'acr', 'ext-1')`, id, credPrincipal); err != nil {
 			t.Fatalf("a well-formed projected credential was refused: %v", err)
 		}
 	})

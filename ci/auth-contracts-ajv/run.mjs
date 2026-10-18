@@ -95,6 +95,12 @@ for (const surface of surfaces) {
   const manifest = readJSON(path.join(dir, "manifest.json"));
   const claimed = new Set();
   const counts = {};
+  // An emptied category would make every loop below vacuous and exit 0.
+  for (const required of ["accept", "reject", "reject_by_client"]) {
+    if (!Array.isArray(manifest[required]) || manifest[required].length === 0) {
+      fail(`${surface}: manifest group "${required}" is missing or empty`);
+    }
+  }
   for (const [group, entries] of Object.entries(manifest)) {
     if (!Array.isArray(entries)) continue; // prose notes
     const mustValidate = MUST_VALIDATE[group] ?? (MUST_REJECT[group] ? false : undefined);
@@ -115,7 +121,13 @@ for (const surface of surfaces) {
         fail(`${surface}/${name} [${group}]: validated=${ok}, want ${mustValidate} ${why}`);
         continue;
       }
-      if (group === "reject" && entry.expect_instance_location) {
+      if (group === "reject" && (!entry.expect_instance_location || !entry.expect_keyword)) {
+        // Without both, a reject fixture can drift into failing for an
+        // unrelated reason and keep passing.
+        fail(`${surface}/${name}: reject entry lacks expect_instance_location or expect_keyword`);
+        continue;
+      }
+      if (group === "reject") {
         // ajv adds an `if` error at the instance root next to the real
         // violation inside a failing `then`; Go and Python report only the
         // violation. It is reporting, not a second rule, so it is not counted.
@@ -125,7 +137,7 @@ for (const surface of surfaces) {
         if (locations.size !== 1 || !locations.has(entry.expect_instance_location)) {
           fail(`${surface}/${name}: locations [${[...locations]}], want ${entry.expect_instance_location}`);
         }
-        if (entry.expect_keyword && !keywords.has(entry.expect_keyword)) {
+        if (!keywords.has(entry.expect_keyword)) {
           fail(`${surface}/${name}: keywords [${[...keywords]}], want ${entry.expect_keyword}`);
         }
       }

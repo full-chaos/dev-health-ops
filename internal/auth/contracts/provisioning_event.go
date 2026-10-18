@@ -62,10 +62,16 @@ func ParseProvisioningEvent(root string, raw []byte) (ProvisioningEvent, error) 
 		if name != "expires_at" {
 			continue
 		}
-		var parsed Timestamp
-		if err := json.Unmarshal(value, &parsed); err != nil {
+		var text string
+		if err := json.Unmarshal(value, &text); err != nil {
 			return ProvisioningEvent{}, fmt.Errorf("%s: payload.change.%s: %w", ProvisioningEventSurface, name, err)
 		}
+		if _, err := ParseWireTimestamp(ProvisioningEventSurface, "payload/change/"+name, text); err != nil {
+			return ProvisioningEvent{}, err
+		}
+	}
+	if err := checkInstantInRange(ProvisioningEventSurface, "created_at", event.CreatedAt.Time); err != nil {
+		return ProvisioningEvent{}, err
 	}
 	// A pattern cannot compare two members. A key that disagrees with the
 	// payload would let two revisions collide in the UNIQUE index, or one
@@ -151,6 +157,9 @@ func ParseAuditEvent(root string, raw []byte) (AuditEvent, error) {
 	var event AuditEvent
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return AuditEvent{}, fmt.Errorf("%s: decoding validated document: %w", AuditEventSurface, err)
+	}
+	if err := checkInstantInRange(AuditEventSurface, "occurred_at", event.OccurredAt.Time); err != nil {
+		return AuditEvent{}, err
 	}
 	return event, nil
 }

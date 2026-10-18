@@ -34,7 +34,12 @@ var notOnTheWire = map[string]map[string]string{
 	},
 }
 
-var columnLine = regexp.MustCompile(`^\s+([a-z_]+)\s+(?:bigserial|bigint|integer|text|timestamptz|jsonb|uuid|inet)\b`)
+// columnLine matches a column definition at the table body's own indentation.
+// Any type is accepted, so a column of a type nobody listed is still a column.
+var columnLine = regexp.MustCompile(`^ {4}([a-z_][a-z0-9_]*)\s+\S`)
+
+// tableConstraintLine is the other thing that may sit at that indentation.
+var tableConstraintLine = regexp.MustCompile(`^ {4}(?:CONSTRAINT|PRIMARY KEY|UNIQUE|CHECK|FOREIGN KEY|EXCLUDE)\b`)
 
 func migrationColumns(t *testing.T, table string) []string {
 	t.Helper()
@@ -54,12 +59,19 @@ func migrationColumns(t *testing.T, table string) []string {
 	}
 	var columns []string
 	for _, line := range strings.Split(body[:end], "\n")[1:] {
-		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "--") || !strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "     ") {
+			continue // blank, comment, or a continuation line of a column
+		}
+		if tableConstraintLine.MatchString(line) {
 			continue
 		}
-		if match := columnLine.FindStringSubmatch(line); match != nil {
-			columns = append(columns, match[1])
+		match := columnLine.FindStringSubmatch(line)
+		if match == nil {
+			t.Fatalf("table %s: cannot classify the line %q as a column or a table constraint; "+
+				"refusing to skip it, because a skipped column is a column the oracle never sees", table, line)
 		}
+		columns = append(columns, match[1])
 	}
 	if len(columns) < 6 {
 		t.Fatalf("parsed only %d columns from %s: the parser, not the table, is probably wrong", len(columns), table)

@@ -200,3 +200,40 @@ def test_the_audit_parser_returns_what_the_document_carried() -> None:
     assert event.policy_revision == 42
     assert event.attributes["aggregate_revision"] == 4
     assert event.attributes["action"] == "acr.context.read"
+
+
+def test_timestamp_vectors_replay_to_the_shared_rule() -> None:
+    from dev_health_ops.authclient.contracts import parse_rfc3339
+
+    vectors = _manifest("provisioning-event")["timestamp_vectors"]
+    assert vectors["accept"] and vectors["reject"]
+    for value in vectors["accept"]:
+        parse_rfc3339(value, "provisioning-event.v1", "created_at")
+    for value in vectors["reject"]:
+        with pytest.raises(ContractError, match="RFC 3339"):
+            parse_rfc3339(value, "provisioning-event.v1", "created_at")
+
+
+def test_every_public_parser_is_in_the_package_api() -> None:
+    """A parser reachable only through its submodule is outside the public surface."""
+    import importlib
+    import inspect
+    import pkgutil
+
+    import dev_health_ops.authclient as package
+
+    exported = set(package.__all__)
+    missing: list[str] = []
+    for module_info in pkgutil.iter_modules(package.__path__):
+        module = importlib.import_module(f"{package.__name__}.{module_info.name}")
+        for name, obj in vars(module).items():
+            if (
+                name.startswith("parse_")
+                and inspect.isfunction(obj)
+                and obj.__module__ == module.__name__
+                and name not in exported
+            ):
+                missing.append(f"{module_info.name}.{name}")
+    assert not missing, f"public parsers missing from authclient.__all__: {missing}"
+    for name in exported:
+        assert hasattr(package, name), f"{name} is in __all__ but not importable"

@@ -42,6 +42,14 @@
       "why": "The explicit organization-wide key `*`."
     },
     {
+      "file": "valid-timestamp-earliest.json",
+      "why": "The earliest instant: year 0001 in UTC is representable in both clients."
+    },
+    {
+      "file": "valid-timestamp-latest-with-microseconds.json",
+      "why": "The latest instant, six fractional digits."
+    },
+    {
       "file": "valid-revision-at-maximum.json",
       "why": "Revision 2^53-1, the largest value a float64 producer represents exactly."
     }
@@ -226,6 +234,18 @@
     {
       "file": "client-rejected-created-at-impossible-date.json",
       "why": "`2026-02-30`: lexically valid, no such day. The pattern bounds components, not the calendar; every client refuses it."
+    },
+    {
+      "file": "client-rejected-created-at-below-utc-range.json",
+      "why": "Local fields are in range, the UTC instant is year 0000. The pattern bounds components and cannot see the composition; Python raised OverflowError on it and Go accepted it until both were pinned to one rule."
+    },
+    {
+      "file": "client-rejected-created-at-above-utc-range.json",
+      "why": "The same composition at the top: UTC year 10000."
+    },
+    {
+      "file": "client-rejected-expires-at-below-utc-range.json",
+      "why": "The range rule covers the change object's timestamp too."
     },
     {
       "file": "client-rejected-created-at-non-leap-february-29.json",
@@ -428,6 +448,29 @@
           ]
         ]
       }
+    ]
+  },
+  "timestamp_vectors": {
+    "description": "ONE timestamp rule for every timestamp member (envelope created_at, payload.change.expires_at, audit occurred_at), replayed by Go (ParseWireTimestamp) and Python (parse_rfc3339) from this list. A value is accepted when it names a real calendar day and its UTC instant lies in 0001-01-01..9999-12-31. Every vector passes the schema pattern: this is the rule the pattern cannot express.",
+    "accept": [
+      "2026-09-03T10:00:00Z",
+      "0001-01-01T00:00:00Z",
+      "9999-12-31T23:59:59Z",
+      "9999-12-31T23:59:59.999999Z",
+      "2026-02-28T23:59:59.999999+14:00",
+      "2024-02-29T12:00:00Z",
+      "0001-01-01T23:59:59+23:59",
+      "9999-12-31T00:00:00-23:59"
+    ],
+    "reject": [
+      "2026-02-30T10:00:00Z",
+      "2027-02-29T10:00:00Z",
+      "2026-04-31T00:00:00Z",
+      "2100-02-29T00:00:00Z",
+      "0001-01-01T00:00:00+23:59",
+      "0001-01-01T00:00:00+14:00",
+      "9999-12-31T23:59:59-23:59",
+      "9999-12-31T23:59:59-00:01"
     ]
   }
 }

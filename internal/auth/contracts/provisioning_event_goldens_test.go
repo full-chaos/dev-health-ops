@@ -28,6 +28,10 @@ type wireCorpus struct {
 		File string `json:"file"`
 		Why  string `json:"why"`
 	} `json:"reject_by_client"`
+	TimestampVectors struct {
+		Accept []string `json:"accept"`
+		Reject []string `json:"reject"`
+	} `json:"timestamp_vectors"`
 	ConsumerVectors struct {
 		DedupeKeyExamples []struct {
 			AggregateType string `json:"aggregate_type"`
@@ -212,7 +216,7 @@ func TestClientEnforcedProvisioningFixturesValidateButTheClientRefusesThem(t *te
 				}
 				if !strings.Contains(err.Error(), "decimal or exponent form") &&
 					!strings.Contains(err.Error(), "does not equal") &&
-					!strings.Contains(err.Error(), "is not RFC 3339") {
+					!strings.Contains(err.Error(), "RFC 3339") {
 					t.Fatalf("refused, but not by a client rule: %v", err)
 				}
 			})
@@ -402,5 +406,40 @@ func TestTheAuditParserReturnsWhatTheDocumentCarried(t *testing.T) {
 	}
 	if event.Attributes.Action != "acr.context.read" || event.Attributes.AggregateRevision == nil || *event.Attributes.AggregateRevision != 4 {
 		t.Fatalf("attributes dropped: %+v", event.Attributes)
+	}
+}
+
+func TestTimestampVectorsReplayToTheSharedRule(t *testing.T) {
+	// The same list drives the Python test: one rule, two implementations.
+	c := loadWireCorpus(t, provisioningSurfaces[0])
+	if len(c.TimestampVectors.Accept) == 0 || len(c.TimestampVectors.Reject) == 0 {
+		t.Fatal("no timestamp vectors; the replay would pass vacuously")
+	}
+	for _, v := range c.TimestampVectors.Accept {
+		if _, err := ParseWireTimestamp(ProvisioningEventSurface, "created_at", v); err != nil {
+			t.Errorf("accept vector %s refused: %v", v, err)
+		}
+	}
+	for _, v := range c.TimestampVectors.Reject {
+		if _, err := ParseWireTimestamp(ProvisioningEventSurface, "created_at", v); err == nil {
+			t.Errorf("reject vector %s accepted", v)
+		}
+	}
+}
+
+func TestEveryTimestampVectorPassesTheSchemaPattern(t *testing.T) {
+	// The vectors exist for what the pattern cannot see, so each must get past it.
+	c := loadWireCorpus(t, provisioningSurfaces[0])
+	root := testRoot(t)
+	for _, v := range append(append([]string{}, c.TimestampVectors.Accept...), c.TimestampVectors.Reject...) {
+		document := map[string]any{
+			"schema_version": "provisioning-event.v1", "aggregate_type": "principal",
+			"aggregate_id": "prn_EXAMPLE0000000000000001", "event_type": "principal.created",
+			"idempotency_key": "principal:prn_EXAMPLE0000000000000001:1", "created_at": v,
+			"payload": map[string]any{"revision": 1, "change": map[string]any{}},
+		}
+		if err := Validate(root, ProvisioningEventSurface, document); err != nil {
+			t.Errorf("vector %s does not pass the schema, so it tests nothing the client alone decides: %v", v, err)
+		}
 	}
 }

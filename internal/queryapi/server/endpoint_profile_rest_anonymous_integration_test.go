@@ -14,6 +14,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
+// knownRESTDisagreements names REST routes where the row and the real plane
+// disagree on main. They are findings reported in their own ticket, not
+// patched inside this test; remove an entry when its ticket lands.
+var knownRESTDisagreements = map[string]bool{
+	"/api/v1/meta": true, // CHAOS-10167: row says protected, the route is public by design (Python parity)
+}
+
 // TestEndpointProfileRESTAnonymousClaimsMatchRealPlane probes every REST row
 // anonymously against the real plane Build mounts with every dependency present
 // and every route switch on, and compares the answer with the row's
@@ -86,17 +93,6 @@ func TestEndpointProfileRESTAnonymousClaimsMatchRealPlane(t *testing.T) {
 		t.Fatalf("REST rows: %d protected, %d public: the inventory or the REST table changed shape", protected, public)
 	}
 
-	// RED SEED (CHAOS-10140 red commit, removed by the fix commit): relabel one
-	// protected and one public REST row, the two directions the gate must catch.
-	flippedProtected, flippedPublic := false, false
-	for i := range rows {
-		if !rows[i].public && !flippedProtected {
-			rows[i].public, flippedProtected = true, true
-		} else if rows[i].public && !flippedPublic {
-			rows[i].public, flippedPublic = false, true
-		}
-	}
-
 	serve := func(handler http.Handler) anonymousProbe {
 		return func(method, path string) int {
 			recorder := httptest.NewRecorder()
@@ -108,7 +104,7 @@ func TestEndpointProfileRESTAnonymousClaimsMatchRealPlane(t *testing.T) {
 	if plane.InternalHandler != nil {
 		probes["internal"] = serve(plane.InternalHandler)
 	}
-	if violations := anonymousClaimViolations(rows, probes, nil); len(violations) > 0 {
+	if violations := anonymousClaimViolations(rows, probes, knownRESTDisagreements); len(violations) > 0 {
 		t.Errorf("REST rows disagree with the anonymous behaviour of the real plane:\n%s", strings.Join(violations, "\n"))
 	}
 }

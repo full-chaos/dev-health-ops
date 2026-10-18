@@ -33,6 +33,7 @@ from dev_health_ops.authclient.contracts import strictly_anchored
 from dev_health_ops.authclient.principal import MAX_DELEGATION_DURATION
 
 SURFACE = "principal.v1"
+RAW_DUPLICATE_PREFIX = "client-rejected-duplicate-"
 FIXTURE_DIRNAME = "principal"
 
 
@@ -54,7 +55,16 @@ REJECT = [
     (entry["file"], entry["expect_instance_location"], entry["expect_keyword"])
     for entry in MANIFEST["reject"]
 ]
-REJECT_BY_CLIENT = [entry["file"] for entry in MANIFEST["reject_by_client"]]
+REJECT_BY_CLIENT = [
+    entry["file"]
+    for entry in MANIFEST["reject_by_client"]
+    if not entry["file"].startswith(RAW_DUPLICATE_PREFIX)
+]
+RAW_DUPLICATES = [
+    entry["file"]
+    for entry in MANIFEST["reject_by_client"]
+    if entry["file"].startswith(RAW_DUPLICATE_PREFIX)
+]
 
 
 def test_the_corpus_is_not_empty_in_either_direction() -> None:
@@ -82,7 +92,12 @@ def test_every_fixture_file_on_disk_is_claimed_by_the_manifest() -> None:
         for path in _fixture_dir().glob("*.json")
         if path.name != "manifest.json"
     }
-    claimed = set(ACCEPT) | {name for name, _, _ in REJECT} | set(REJECT_BY_CLIENT)
+    claimed = (
+        set(ACCEPT)
+        | {name for name, _, _ in REJECT}
+        | set(REJECT_BY_CLIENT)
+        | set(RAW_DUPLICATES)
+    )
     assert on_disk == claimed, (
         f"unclaimed on disk: {sorted(on_disk - claimed)}; "
         f"claimed but absent: {sorted(claimed - on_disk)}"
@@ -266,19 +281,19 @@ def test_format_assertion_is_actually_enabled_not_merely_requested() -> None:
     ``rfc3339-validator`` is importable -- so a suite can pass a
     ``format_checker`` and still assert nothing. This drives a value that is
     well-formed under the schema's ``pattern`` but is NOT a real RFC 3339
-    instant (month 13), so only ``format`` can reject it. If the assertion
+    instant (Feb 30), so only ``format`` can reject it. If the assertion
     is off, this test goes red instead of the corpus silently weakening.
     """
     document = _load("valid-human-minimal.json")
-    document["expires_at"] = "2026-13-02T23:25:00Z"
+    document["expires_at"] = "2026-02-30T23:25:00Z"
     found = violations(SURFACE, document)
     keywords = {v.keyword for v in found}
     assert "pattern" not in keywords, (
-        "the control is wrong: month 13 should satisfy the shape pattern, so that "
+        "the control is wrong: Feb 30 should satisfy the shape pattern, so that "
         "this test isolates `format`. Got: " + "; ".join(str(v) for v in found)
     )
     assert "format" in keywords, (
-        "month 13 was accepted, so `format: date-time` is annotation-only here. "
+        "Feb 30 was accepted, so `format: date-time` is annotation-only here. "
         "Install rfc3339-validator (declared in pyproject.toml) -- without it the "
         "format check silently checks nothing while the suite stays green. Got: "
         + ("; ".join(str(v) for v in found) or "no violations at all")
@@ -386,3 +401,42 @@ def test_revision_range_agrees_with_go(value: object, expected: object) -> None:
             Principal.from_wire(document)
         return
     assert Principal.from_wire(document).membership_revision == expected
+
+
+@pytest.mark.parametrize("name", RAW_DUPLICATES)
+def test_raw_duplicate_member_fixture_is_refused_before_decode(name: str) -> None:
+    """The decoded document is VALID and the bytes are not.
+
+    json.loads collapses the duplicate to its last value, so the validator
+    sees a clean document. Only the raw-bytes entry point can refuse it, and
+    it must name the rule, so a different failure cannot satisfy this test.
+    """
+    path = _fixture_dir() / name
+    assert violations(SURFACE, json.loads(path.read_text(encoding="utf-8"))) == []
+    with pytest.raises(ContractError, match="duplicate object member"):
+        Principal.from_wire_bytes(path.read_bytes())
+
+
+def test_raw_duplicates_cover_the_top_level_an_object_and_an_array_element() -> None:
+    assert sorted(RAW_DUPLICATES) == [
+        "client-rejected-duplicate-actor-chain-reason.json",
+        "client-rejected-duplicate-credential-audience.json",
+        "client-rejected-duplicate-principal-id.json",
+    ]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "client-rejected-utc-range-underflow.json",
+        "client-rejected-utc-range-just-below-lower-limit.json",
+        "client-rejected-utc-range-overflow.json",
+    ],
+)
+def test_utc_range_fixtures_are_refused_by_the_range_rule(name: str) -> None:
+    with pytest.raises(ContractError, match=r"outside 0001-01-01\.\.9999-12-31"):
+        Principal.from_wire(_load(name))
+
+
+def test_the_exact_utc_lower_limit_is_inclusive() -> None:
+    Principal.from_wire(_load("valid-authenticated-at-exact-lower-limit.json"))

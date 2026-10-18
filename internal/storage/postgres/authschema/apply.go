@@ -8,6 +8,7 @@ import (
 	"regexp"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -144,6 +145,42 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, options Options) (Result, er
 	if pool == nil {
 		return Result{}, fmt.Errorf("%w: no connection pool", ErrInvalidOptions)
 	}
+	return apply(ctx, poolAdapter{pool}, options)
+}
+
+// querier is the slice of a connection the migration steps need; *pgx.Conn,
+// *pgxpool.Conn and a recording stub all satisfy it.
+type querier interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+// pooledConn is one acquired migration connection.
+type pooledConn interface {
+	querier
+	Release()
+	Conn() *pgx.Conn
+}
+
+// migrationPool is what apply needs from the pool.
+type migrationPool interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Acquire(ctx context.Context) (pooledConn, error)
+}
+
+type poolAdapter struct{ *pgxpool.Pool }
+
+func (p poolAdapter) Acquire(ctx context.Context) (pooledConn, error) {
+	conn, err := p.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+func apply(ctx context.Context, pool migrationPool, options Options) (Result, error) {
 	migrations, err := Migrations()
 	if err != nil {
 		return Result{}, err
@@ -186,10 +223,10 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, options Options) (Result, er
 		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, advisoryLockKey)
 	}()
 
-	if err := ensureSchemaAndVersionTable(ctx, conn.Conn(), options); err != nil {
+	if err := ensureSchemaAndVersionTable(ctx, conn, options); err != nil {
 		return Result{}, err
 	}
-	applied, err := appliedVersions(ctx, conn.Conn(), schemaID)
+	applied, err := appliedVersions(ctx, conn, schemaID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -199,7 +236,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, options Options) (Result, er
 		if _, done := applied[migration.Version]; done {
 			continue
 		}
-		if err := applyOne(ctx, conn.Conn(), options, migration); err != nil {
+		if err := applyOne(ctx, conn, options, migration); err != nil {
 			return result, err
 		}
 		result.CurrentVersion = migration.Version
@@ -264,7 +301,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, options Options) (Result, er
 }
 
 // applyOne runs a single migration and records it, atomically.
-func applyOne(ctx context.Context, conn *pgx.Conn, options Options, migration Migration) error {
+func applyOne(ctx context.Context, conn querier, options Options, migration Migration) error {
 	schemaID, err := NewValidatedIdentifier(options.Schema)
 	if err != nil {
 		return err

@@ -1,0 +1,10 @@
+{
+  "allowed": false,
+  "decision_id": "dec_EXAMPLE0000000000000000001",
+  "expires_at": "2026-09-03T05:00:30Z",
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "policy_revision": 42,
+  "principal_id": "prn_EXAMPLE0000000000000001",
+  "reason_code": "grant_absent",
+  "schema_version": "authorization_decision.v1"
+}

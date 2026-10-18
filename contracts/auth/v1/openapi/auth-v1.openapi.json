@@ -12,6 +12,18 @@
       "AuditEvent": {
         "$ref": "../jsonschema/audit-event.v1.schema.json"
       },
+      "AuthorizationBatchRequest": {
+        "$ref": "../jsonschema/authorization_batch_request.v1.schema.json"
+      },
+      "AuthorizationBatchResponse": {
+        "$ref": "../jsonschema/authorization_batch_response.v1.schema.json"
+      },
+      "AuthorizationDecision": {
+        "$ref": "../jsonschema/authorization_decision.v1.schema.json"
+      },
+      "AuthorizationRequest": {
+        "$ref": "../jsonschema/authorization_request.v1.schema.json"
+      },
       "Discovery": {
         "$ref": "../jsonschema/discovery.v1.schema.json"
       },

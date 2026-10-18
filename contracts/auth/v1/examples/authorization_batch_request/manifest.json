@@ -1,0 +1,35 @@
+{
+  "description": "Golden corpus for authorization_batch_request.v1 (CHAOS-4932).",
+  "accept": [
+    {
+      "file": "batch-request-valid-two-items.json",
+      "why": "Two independent questions about two different repositories."
+    }
+  ],
+  "reject": [
+    {
+      "file": "batch-request-invalid-empty.json",
+      "expect_instance_location": "/requests",
+      "expect_keyword": "minItems",
+      "why": "An empty batch is invalid, not a vacuous success."
+    },
+    {
+      "file": "batch-request-invalid-over-bound.json",
+      "expect_instance_location": "/requests",
+      "expect_keyword": "maxItems",
+      "why": "101 items: the batch is bounded."
+    },
+    {
+      "file": "batch-request-invalid-item-bare-action.json",
+      "expect_instance_location": "/requests/1/action",
+      "expect_keyword": "pattern",
+      "why": "An item is validated as a full request."
+    },
+    {
+      "file": "batch-request-invalid-missing-requests.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No list."
+    }
+  ]
+}

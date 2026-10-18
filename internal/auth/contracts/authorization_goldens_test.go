@@ -7,7 +7,12 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
+
+// authorizationNow is 30 seconds before the fixtures' decision expiry, so expiry
+// checks do not depend on the date the suite runs.
+var authorizationNow = time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)
 
 var authorizationSurfaces = []string{
 	AuthorizationRequestSurface,
@@ -257,9 +262,9 @@ func TestClientEnforcedAuthorizationFixturesValidateButAreRefused(t *testing.T) 
 			var err error
 			switch entry.Surface {
 			case AuthorizationDecisionSurface:
-				_, err = ParseAuthorizationDecision(root, raw)
+				_, err = ParseAuthorizationDecision(root, raw, authorizationNow)
 			case AuthorizationBatchResponseSurface:
-				_, err = ParseAuthorizationBatchResponse(root, manifest.BatchRequest, raw)
+				_, err = ParseAuthorizationBatchResponse(root, manifest.BatchRequest, raw, authorizationNow)
 			default:
 				t.Fatalf("no client for surface %s", entry.Surface)
 			}
@@ -274,7 +279,7 @@ func TestADisagreeingBatchKeepsEachDecisionBoundToItsOwnRequest(t *testing.T) {
 	root := testRoot(t)
 	decisions, err := ParseAuthorizationBatchResponse(root,
 		authorizationBytes(t, AuthorizationBatchRequestSurface, "batch-request-valid-two-items.json"),
-		authorizationBytes(t, AuthorizationBatchResponseSurface, "batch-response-valid-items-disagree.json"))
+		authorizationBytes(t, AuthorizationBatchResponseSurface, "batch-response-valid-items-disagree.json"), authorizationNow)
 	if err != nil {
 		t.Fatalf("a well-formed batch was refused: %v", err)
 	}
@@ -288,14 +293,14 @@ func TestADisagreeingBatchKeepsEachDecisionBoundToItsOwnRequest(t *testing.T) {
 
 func TestADecisionParsesToItsVerdictAndObligations(t *testing.T) {
 	root := testRoot(t)
-	allow, err := ParseAuthorizationDecision(root, authorizationBytes(t, AuthorizationDecisionSurface, "decision-valid-allow-with-obligations.json"))
+	allow, err := ParseAuthorizationDecision(root, authorizationBytes(t, AuthorizationDecisionSurface, "decision-valid-allow-with-obligations.json"), authorizationNow)
 	if err != nil || !allow.Allowed || allow.Obligations == nil || allow.Obligations.MinimumAssurance != "aal2" {
 		t.Fatalf("allow parsed wrong: %+v, %v", allow, err)
 	}
 	if allow.PolicyRevision != 42 {
 		t.Errorf("policy revision = %d, want 42", allow.PolicyRevision)
 	}
-	deny, err := ParseAuthorizationDecision(root, authorizationBytes(t, AuthorizationDecisionSurface, "decision-valid-deny.json"))
+	deny, err := ParseAuthorizationDecision(root, authorizationBytes(t, AuthorizationDecisionSurface, "decision-valid-deny.json"), authorizationNow)
 	if err != nil || deny.Allowed || deny.Obligations != nil {
 		t.Fatalf("deny parsed wrong: %+v, %v", deny, err)
 	}
@@ -310,7 +315,7 @@ func TestEveryRejectFixtureIsRefusedByTheClientToo(t *testing.T) {
 			continue
 		}
 		t.Run(entry.File, func(t *testing.T) {
-			if decision, err := ParseAuthorizationDecision(root, authorizationBytes(t, entry.Surface, entry.File)); err == nil {
+			if decision, err := ParseAuthorizationDecision(root, authorizationBytes(t, entry.Surface, entry.File), authorizationNow); err == nil {
 				t.Fatalf("client accepted a rejected decision: %+v", decision)
 			}
 		})
@@ -323,5 +328,34 @@ func TestEveryAuthorizationManifestPathMatchesItsSurfaceDirectory(t *testing.T) 
 		if authorizationManifestPaths[surface] != want {
 			t.Errorf("%s: manifest path %q, want %q", surface, authorizationManifestPaths[surface], want)
 		}
+	}
+}
+
+func TestADecisionIsUsableOnlyStrictlyBeforeItsExpiry(t *testing.T) {
+	// Both sides of the bound, for a single decision and for a batch item: an
+	// instant just before expiry parses, the expiry instant itself and anything
+	// later is refused, and a refusal is for every verdict (allow and deny).
+	root := testRoot(t)
+	raw := authorizationBytes(t, AuthorizationDecisionSurface, "decision-valid-allow-with-obligations.json")
+	expiry := time.Date(2026, 9, 3, 5, 0, 30, 0, time.UTC)
+	if _, err := ParseAuthorizationDecision(root, raw, expiry.Add(-time.Second)); err != nil {
+		t.Fatalf("a decision one second before its expiry was refused: %v", err)
+	}
+	for _, now := range []time.Time{expiry, expiry.Add(time.Second), expiry.AddDate(1, 0, 0)} {
+		if decision, err := ParseAuthorizationDecision(root, raw, now); err == nil {
+			t.Errorf("now=%s: expired allow escaped as allowed=%v", now, decision.Allowed)
+		}
+	}
+	deny := authorizationBytes(t, AuthorizationDecisionSurface, "decision-valid-deny.json")
+	if _, err := ParseAuthorizationDecision(root, deny, expiry); err == nil {
+		t.Error("an expired deny was accepted; the rule must not depend on the verdict")
+	}
+	request := authorizationBytes(t, AuthorizationBatchRequestSurface, "batch-request-valid-two-items.json")
+	response := authorizationBytes(t, AuthorizationBatchResponseSurface, "batch-response-valid-items-disagree.json")
+	if _, err := ParseAuthorizationBatchResponse(root, request, response, expiry.Add(-time.Second)); err != nil {
+		t.Fatalf("a batch one second before expiry was refused: %v", err)
+	}
+	if _, err := ParseAuthorizationBatchResponse(root, request, response, expiry); err == nil {
+		t.Error("an expired batch item escaped")
 	}
 }

@@ -84,13 +84,37 @@ def _decision(document: dict[str, Any]) -> AuthorizationDecision:
     )
 
 
-def parse_decision_bytes(raw: bytes | str) -> AuthorizationDecision:
+def _refuse_expired(
+    decision: AuthorizationDecision, now: datetime, surface: str
+) -> AuthorizationDecision:
+    """Refuse a decision whose ``expires_at`` is not strictly after *now*.
+
+    Expiry is the bound on a stale allow (TRD section 14), so a parser that only
+    read the timestamp would return ``allowed=True`` for a decision nobody may
+    reuse. An expired deny is refused too, so one rule holds for every verdict.
+    *now* is required, with no default: the caller states which instant it
+    means, and a test does not depend on the date it runs.
+    """
+    if now.tzinfo is None:
+        raise ContractError(f"{surface}: `now` must be timezone-aware")
+    if decision.expires_at <= now:
+        raise ContractError(
+            f"{surface}: decision {decision.decision_id} expired at "
+            f"{decision.expires_at.isoformat()} (now {now.isoformat()}); "
+            "it must not be reused"
+        )
+    return decision
+
+
+def parse_decision_bytes(raw: bytes | str, *, now: datetime) -> AuthorizationDecision:
     """Parse one decision from the RAW response body, or raise."""
-    return _decision(_load(raw, DECISION_SURFACE))
+    return _refuse_expired(
+        _decision(_load(raw, DECISION_SURFACE)), now, DECISION_SURFACE
+    )
 
 
 def parse_batch_response_bytes(
-    request_raw: bytes | str, response_raw: bytes | str
+    request_raw: bytes | str, response_raw: bytes | str, *, now: datetime
 ) -> list[AuthorizationDecision]:
     """Parse a batch response against the batch request it answers.
 
@@ -116,5 +140,7 @@ def parse_batch_response_bytes(
                 f"{BATCH_RESPONSE_SURFACE}: decision at position {position} "
                 f"declares index {index}; refusing the whole response"
             )
-        decisions.append(_decision(item["decision"]))
+        decisions.append(
+            _refuse_expired(_decision(item["decision"]), now, BATCH_RESPONSE_SURFACE)
+        )
     return decisions

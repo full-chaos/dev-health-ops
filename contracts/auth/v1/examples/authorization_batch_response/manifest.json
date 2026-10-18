@@ -66,6 +66,10 @@
       "why": "Indices 0,2: a gap."
     },
     {
+      "file": "batch-response-client-expired-item.json",
+      "why": "Item 0 is an expired allow in an otherwise well-formed batch. The whole response is refused, not just the item, as for every other binding failure."
+    },
+    {
       "file": "batch-response-client-decimal-form-index.json",
       "why": "index 1.0 is a valid schema integer; the clients refuse a decimal-form token."
     }

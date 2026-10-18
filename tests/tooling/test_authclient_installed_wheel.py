@@ -41,7 +41,10 @@ def _run(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> st
 PROBE = textwrap.dedent(
     r"""
     import json, sys
+    from datetime import datetime, timezone
     from pathlib import Path
+
+    NOW = datetime(2026, 9, 3, 5, 0, 0, tzinfo=timezone.utc)
 
     examples = Path(sys.argv[1])
     import dev_health_ops.authclient as client
@@ -58,10 +61,10 @@ PROBE = textwrap.dedent(
             raw("provisioning-event", "valid-minimal.json")),
         "parse_audit_event": lambda: client.parse_audit_event(raw("audit-event", "valid-minimal.json")),
         "parse_decision_bytes": lambda: client.parse_decision_bytes(
-            raw("authorization_decision", "decision-valid-deny.json")),
+            raw("authorization_decision", "decision-valid-deny.json"), now=NOW),
         "parse_batch_response_bytes": lambda: client.parse_batch_response_bytes(
             raw("authorization_batch_request", "batch-request-valid-two-items.json"),
-            raw("authorization_batch_response", "batch-response-valid-items-disagree.json")),
+            raw("authorization_batch_response", "batch-response-valid-items-disagree.json"), now=NOW),
         "parse_rfc3339": lambda: client.parse_rfc3339("2026-09-03T10:00:00Z", "probe.v1", "at"),
     }
     exported = sorted(n for n in client.__all__ if n.startswith("parse_"))

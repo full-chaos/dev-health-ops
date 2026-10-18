@@ -8,6 +8,7 @@ fixture files; the inventory lives only in
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,12 @@ ACCEPT = _entries("accept")
 REJECT = _entries("reject")
 CLIENT = _entries("reject_by_client")
 BATCH_REQUEST = json.dumps(MANIFESTS[BATCH_RESPONSE_SURFACE]["request"]).encode()
+
+
+#: 30 seconds before the fixtures' decision expiry: expiry checks do not depend on
+#: the date the suite runs.
+NOW = datetime(2026, 9, 3, 5, 0, 0, tzinfo=timezone.utc)
+EXPIRY = NOW + timedelta(seconds=30)
 
 
 def _load(surface: str, name: str) -> Any:
@@ -127,9 +134,9 @@ def test_client_enforced_fixtures_validate_but_are_refused(
     validate(entry["surface"], json.loads(raw))
     with pytest.raises(ContractError):
         if entry["surface"] == DECISION_SURFACE:
-            parse_decision_bytes(raw)
+            parse_decision_bytes(raw, now=NOW)
         else:
-            parse_batch_response_bytes(BATCH_REQUEST, raw)
+            parse_batch_response_bytes(BATCH_REQUEST, raw, now=NOW)
 
 
 @pytest.mark.parametrize(
@@ -141,13 +148,14 @@ def test_the_client_never_turns_a_rejected_decision_into_an_accept(
     entry: dict[str, Any],
 ) -> None:
     with pytest.raises(ContractError):
-        parse_decision_bytes(_bytes(entry["surface"], entry["file"]))
+        parse_decision_bytes(_bytes(entry["surface"], entry["file"]), now=NOW)
 
 
 def test_a_disagreeing_batch_keeps_each_decision_bound_to_its_request() -> None:
     decisions = parse_batch_response_bytes(
         _bytes(BATCH_REQUEST_SURFACE, "batch-request-valid-two-items.json"),
         _bytes(BATCH_RESPONSE_SURFACE, "batch-response-valid-items-disagree.json"),
+        now=NOW,
     )
     assert [d.allowed for d in decisions] == [True, False]
     assert decisions[0].reason_code != decisions[1].reason_code
@@ -155,13 +163,15 @@ def test_a_disagreeing_batch_keeps_each_decision_bound_to_its_request() -> None:
 
 def test_a_decision_parses_to_its_verdict_and_obligations() -> None:
     allow = parse_decision_bytes(
-        _bytes(DECISION_SURFACE, "decision-valid-allow-with-obligations.json")
+        _bytes(DECISION_SURFACE, "decision-valid-allow-with-obligations.json"), now=NOW
     )
     assert allow.allowed is True
     assert allow.policy_revision == 42
     assert allow.obligations is not None
     assert allow.obligations.minimum_assurance == "aal2"
-    deny = parse_decision_bytes(_bytes(DECISION_SURFACE, "decision-valid-deny.json"))
+    deny = parse_decision_bytes(
+        _bytes(DECISION_SURFACE, "decision-valid-deny.json"), now=NOW
+    )
     assert deny.allowed is False
     assert deny.obligations is None
 
@@ -195,3 +205,35 @@ def test_an_error_envelope_is_never_a_decision() -> None:
     }
     assert violations(DECISION_SURFACE, envelope)
     assert violations("error.v1", _load(DECISION_SURFACE, "decision-valid-deny.json"))
+
+
+def test_a_decision_is_usable_only_strictly_before_its_expiry() -> None:
+    raw = _bytes(DECISION_SURFACE, "decision-valid-allow-with-obligations.json")
+    assert parse_decision_bytes(raw, now=EXPIRY - timedelta(seconds=1)).allowed is True
+    for now in (EXPIRY, EXPIRY + timedelta(seconds=1), EXPIRY + timedelta(days=365)):
+        with pytest.raises(ContractError, match="expired"):
+            parse_decision_bytes(raw, now=now)
+    with pytest.raises(ContractError, match="expired"):
+        parse_decision_bytes(
+            _bytes(DECISION_SURFACE, "decision-valid-deny.json"), now=EXPIRY
+        )
+    request = _bytes(BATCH_REQUEST_SURFACE, "batch-request-valid-two-items.json")
+    response = _bytes(
+        BATCH_RESPONSE_SURFACE, "batch-response-valid-items-disagree.json"
+    )
+    assert (
+        len(
+            parse_batch_response_bytes(
+                request, response, now=EXPIRY - timedelta(seconds=1)
+            )
+        )
+        == 2
+    )
+    with pytest.raises(ContractError, match="expired"):
+        parse_batch_response_bytes(request, response, now=EXPIRY)
+
+
+def test_a_naive_now_is_refused() -> None:
+    raw = _bytes(DECISION_SURFACE, "decision-valid-deny.json")
+    with pytest.raises(ContractError, match="timezone"):
+        parse_decision_bytes(raw, now=datetime(2026, 9, 3, 5, 0, 0))

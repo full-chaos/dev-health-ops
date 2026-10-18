@@ -170,6 +170,10 @@
   ],
   "reject_by_client": [
     {
+      "file": "decision-client-expired-allow.json",
+      "why": "An allow whose expires_at is long past. Valid for the schema (a timestamp is a timestamp); TRD section 14 makes expiry the bound on a stale allow, so a client that hands back allowed=true for it exposes a decision nobody may reuse. Both clients refuse it against a stated `now`."
+    },
+    {
       "file": "decision-client-duplicate-allowed-member.json",
       "why": "`allowed` appears twice, false then true. Every parser keeps the last, so the survivor is a well-formed ALLOW that the schema validates; only the raw bytes show the verdict was ambiguous. The client must refuse on the bytes."
     },

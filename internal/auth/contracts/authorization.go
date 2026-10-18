@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // The four authorization wire surfaces (TRD sections 8 and 14).
@@ -60,13 +61,29 @@ func decodeStrict(raw []byte, into any) error {
 	return dec.Decode(into)
 }
 
+// refuseExpired rejects a decision whose expires_at is not strictly after now.
+//
+// Expiry is the bound on a stale allow (TRD section 14), so a parser that only
+// read the timestamp would hand back allowed=true for a decision nobody may
+// reuse. An expired deny is refused too: the caller denies either way, and a
+// single rule is easier to hold than one per verdict. `now` is a parameter, not
+// time.Now(), so a caller states which instant it means and tests are not
+// date-dependent.
+func refuseExpired(surface string, d AuthorizationDecision, now time.Time) error {
+	if !d.ExpiresAt.Time.After(now) {
+		return fmt.Errorf("%s: decision %s expired at %s (now %s); it must not be reused",
+			surface, d.DecisionID, d.ExpiresAt.Time.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano))
+	}
+	return nil
+}
+
 // ParseAuthorizationDecision parses one decision from the RAW response body.
 //
 // Order matters: duplicate members are refused on the bytes first (a repeated
 // `allowed` keeps the last value in every parser, so the schema would validate
 // an allow the sender never unambiguously sent), then the schema, then a strict
 // decode. Any failure means "no valid decision" and the caller denies.
-func ParseAuthorizationDecision(root string, raw []byte) (*AuthorizationDecision, error) {
+func ParseAuthorizationDecision(root string, raw []byte, now time.Time) (*AuthorizationDecision, error) {
 	if _, err := checkedDocument(root, AuthorizationDecisionSurface, raw); err != nil {
 		return nil, err
 	}
@@ -76,6 +93,9 @@ func ParseAuthorizationDecision(root string, raw []byte) (*AuthorizationDecision
 	}
 	if err := decodeStrict(raw, &decision); err != nil {
 		return nil, fmt.Errorf("%s: decoding validated document: %w", AuthorizationDecisionSurface, err)
+	}
+	if err := refuseExpired(AuthorizationDecisionSurface, decision.AuthorizationDecision, now); err != nil {
+		return nil, err
 	}
 	return &decision.AuthorizationDecision, nil
 }
@@ -89,7 +109,7 @@ func ParseAuthorizationDecision(root string, raw []byte) (*AuthorizationDecision
 // WHOLE. Returning the items that happen to line up would let one item's allow
 // be applied to another item's resource, which is the failure this surface
 // exists to prevent; the caller denies every item.
-func ParseAuthorizationBatchResponse(root string, requestRaw, responseRaw []byte) ([]AuthorizationDecision, error) {
+func ParseAuthorizationBatchResponse(root string, requestRaw, responseRaw []byte, now time.Time) ([]AuthorizationDecision, error) {
 	requestDoc, err := checkedDocument(root, AuthorizationBatchRequestSurface, requestRaw)
 	if err != nil {
 		return nil, err
@@ -118,6 +138,9 @@ func ParseAuthorizationBatchResponse(root string, requestRaw, responseRaw []byte
 		if int64(item.Index) != int64(position) {
 			return nil, fmt.Errorf("%s: decision at position %d declares index %d; refusing the whole response",
 				AuthorizationBatchResponseSurface, position, item.Index)
+		}
+		if err := refuseExpired(AuthorizationBatchResponseSurface, item.Decision, now); err != nil {
+			return nil, err
 		}
 		out[position] = item.Decision
 	}

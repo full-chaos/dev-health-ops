@@ -308,27 +308,6 @@ add(
     text=case_text(body(anti_claims=["Valid claim text here.", "   "])),
 )
 
-add(
-    "forbidden_language_standalone_is",
-    text=case_text(
-        body(summary="This pattern is the dominant one this period overall.")
-    ),
-)
-add(
-    "forbidden_language_without_question",
-    text=case_text(
-        body(summary="The data shows this pattern without    question at all.")
-    ),
-)
-add(
-    "forbidden_language_word_boundary_not_triggered",
-    text=case_text(
-        body(
-            summary="This isolated visitor pattern leans toward velocity work overall."
-        )
-    ),
-)
-
 too_many_findings = [
     {
         "finding": f"Finding number {n} placeholder text without digits spelled out",

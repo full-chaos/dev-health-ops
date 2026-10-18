@@ -2,10 +2,6 @@ package acr
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,7 +13,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -185,9 +180,8 @@ func errorKind(err error) string {
 
 // PostgresCredentialVerifier checks svc_acr_ tokens against
 // internal_service_credentials, the table `service-credentials create` writes
-// (admin/servicecredentials.go: token_hash is the hex SHA-256 of the token,
-// token_prefix its first 16 characters). It is read-only; last_used_at is not
-// touched.
+// (admin/servicecredentials.go: token_hash is the hex SHA-256 of the token).
+// It is read-only; last_used_at is not touched.
 type PostgresCredentialVerifier struct {
 	Pool *pgxpool.Pool
 	Now  func() time.Time
@@ -196,53 +190,22 @@ type PostgresCredentialVerifier struct {
 const acrTokenPrefix = "svc_acr_"
 
 func (v PostgresCredentialVerifier) Verify(ctx context.Context, token, scope string) (string, error) {
-	if !strings.HasPrefix(token, acrTokenPrefix) || len(token) < 16 {
+	if !strings.HasPrefix(token, acrTokenPrefix) {
 		return "", ErrCredentialInvalid
 	}
 	now := time.Now().UTC()
 	if v.Now != nil {
 		now = v.Now()
 	}
-	sum := sha256.Sum256([]byte(token))
-	presented := hex.EncodeToString(sum[:])
-	rows, err := v.Pool.Query(ctx, `SELECT id::text, token_hash, scopes::text, expires_at, revoked_at
-		FROM internal_service_credentials WHERE service_name = 'acr' AND token_prefix = $1`, token[:16])
+	cred, found, err := PostgresCredentialStore{Pool: v.Pool}.Find(ctx, token)
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
-	var matched struct {
-		id      string
-		scopes  string
-		expires *time.Time
-		revoked *time.Time
-	}
-	found := false
-	for rows.Next() {
-		var id, hash, scopes string
-		var expires, revoked *time.Time
-		if err := rows.Scan(&id, &hash, &scopes, &expires, &revoked); err != nil {
-			return "", err
-		}
-		if subtle.ConstantTimeCompare([]byte(hash), []byte(presented)) == 1 {
-			matched.id, matched.scopes, matched.expires, matched.revoked = id, scopes, expires, revoked
-			found = true
-		}
-	}
-	if err := rows.Err(); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return "", err
-	}
-	if !found || matched.revoked != nil || (matched.expires != nil && !matched.expires.After(now)) {
+	if !found || cred.ServiceName != "acr" || !cred.Valid(now) {
 		return "", ErrCredentialInvalid
 	}
-	var held []string
-	if err := json.Unmarshal([]byte(matched.scopes), &held); err != nil {
-		return matched.id, ErrCredentialScope
+	if !cred.Has(scope) {
+		return cred.ID, ErrCredentialScope
 	}
-	for _, have := range held {
-		if have == scope {
-			return matched.id, nil
-		}
-	}
-	return matched.id, ErrCredentialScope
+	return cred.ID, nil
 }

@@ -26,7 +26,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"log"
 	"net/url"
-	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
@@ -161,6 +160,8 @@ func ResolveModelNameForOrg(
 				if orgModel != "" {
 					return orgModel, true
 				}
+				// The organization's own provider: the platform purpose
+				// model is not tied to it, so it does not apply here.
 				if def, ok := platformDefaultModel(kind); ok {
 					return def, true
 				}
@@ -168,12 +169,7 @@ func ResolveModelNameForOrg(
 			}
 		}
 	}
-	for _, envName := range modelEnvByProvider[kind] {
-		if value := os.Getenv(envName); value != "" {
-			return value, true
-		}
-	}
-	if value := os.Getenv("LLM_MODEL"); value != "" {
+	if value := platformExplainModel(); value != "" {
 		return value, true
 	}
 	if def, ok := platformDefaultModel(kind); ok {

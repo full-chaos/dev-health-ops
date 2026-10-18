@@ -6,7 +6,8 @@ Plane's wire format (TRD §21). The JSON Schemas, the OpenAPI document that
 TypeScript types are implementations of them, never the other way round.
 
 Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
-(CHAOS-4884), `error.v1` (CHAOS-4929). The remaining five are CHAOS-4930–4934.
+(CHAOS-4884), `error.v1` (CHAOS-4929), `jwks.v1` and `discovery.v1`
+(CHAOS-4930). The remaining are CHAOS-4931–4934.
 
 Distinct from `credential-classes.json` and `endpoint-profiles.ops.json`, which
 are the Wave-0 **inventory** contract describing what authentication exists
@@ -47,33 +48,33 @@ Every integer field needs an explicit client-side check, and the fixtures for it
 belong in `reject_by_client`, not `reject`: the schema genuinely accepts these
 documents, and filing them as `reject` would assert a check that does not exist.
 
-`principal.v1` also carries a `2**53` bound for revision fields, where the
-concern is exact float representability rather than type.
+**The guard decides on the raw number TOKEN, never on a parsed value.** A token
+containing `.`, `e` or `E` is refused even when its value is integral (`1.0`,
+`1e0`): a float64 reader has already rounded `9007199254740990.1` and
+`1.0000000000000000001` to integers, so no value-based or magnitude-based check
+can tell them from the integers they round to. Integer tokens are exact and are
+the only accepted form (CHAOS-4940 withdrew the earlier normalisation of
+integral decimals such as `1.0`). Python's `json` returns a `float` for exactly
+the decimal-form tokens, so a `float` at the guard is a decimal-form token; Go's
+custom unmarshalers hold the token text.
 
-**There is no shared guard yet, and an earlier version of this file told you to
-reuse one.** That instruction was unactionable and worse than silence: a remedy
-that does not exist looks like the problem is solved, so the next author
-searches, finds nothing, re-derives, and does not know they re-derived. That is
-not hypothetical — it is what produced `error.v1`'s integral-decimal P1, in a
-surface written by the author of the note telling them to reuse it.
+**Reuse these; do not re-derive them** (CHAOS-4940 extracted them, after the
+class bit `error.v1` once because no shared guard existed):
 
-What actually exists today, to copy from:
-
-| | where | covers |
+| concern | Go | Python |
 | --- | --- | --- |
-| Go | `principal.go` — a function-local `const` inside `Revision.UnmarshalJSON` | 2^53 only, and not callable from outside that method |
-| Python | `error_envelope.py` `_require_wire_int` | zero-fraction decimals, and `bool` before `int` (order matters — `bool` subclasses `int`) |
-| Python | `principal.py` `_parse_revision` | a separate copy, plus the 2^53 bound |
+| wire-integer TYPE: is this an integer token, not `403.0` or `1e0`? | an ordinary field: decode into an integer-typed field (`encoding/json` refuses `403.0`, pinned by `TestDecodingIntoAnIntegerFieldRefusesAZeroFractionDecimal`); a custom unmarshaler: `contracts.RefuseDecimalForm(token)` | `authclient.contracts.require_wire_int`, or `refuse_decimal_form` for a field with its own range rule |
+| a boolean where a number is required | the decoder refuses it | `authclient.contracts.refuse_bool` (before any `int` check: `bool` subclasses `int`) |
 
-`contracts.py`, the shared module every surface already imports, contains
-neither. **CHAOS-4940 tracks extracting one guard per language**; until it
-lands, copy from the table above and expect to delete your copy afterwards.
+`error.v1`'s `status` and `retry_after_seconds` and `principal.v1`'s revisions
+use the same rule; revisions add the int64 range. Fixtures for these rules
+belong in `reject_by_client`.
 
 ### Constraints live in the cross-language dialect intersection
 
-Five divergences are known. **They are enforced by three different mechanisms,
+Six divergences are known. **They are enforced by four different mechanisms,
 and one of them is not enforced at all** — an earlier version of this table
-attributed all five to one Go test, which was false for two of them.
+attributed all of them to one Go test, which was false for two.
 
 | divergence | consequence | actually enforced by |
 | --- | --- | --- |
@@ -82,6 +83,7 @@ attributed all five to one Go test, which was false for two of them.
 | `(?i)` is valid in RE2 and Python, a SyntaxError in ECMA-262 | no inline flag groups | same test |
 | a trailing `$` matches before a final newline in Python only | the Python client rewrites it to `\Z`, failing closed on shapes it cannot rewrite | **the client, not a schema guard** — `authclient/contracts.py` `strictly_anchored` |
 | ajv strict mode refuses `required` in a subschema that does not define the property | an ajv lint, not a spec rule; declare the property in the subschema | **review only — there is no ajv runner in this repository** |
+| `maxLength` counts CODE POINTS; Go's `len()` counts BYTES | to mirror a Go byte bound, restrict the alphabet to one-byte characters so the two counts coincide | the `jwks.v1` corpus — `invalid-kid-non-ascii.json` plus `TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` |
 
 That last row is a real gap, not a formality. **No committed code or CI job runs
 ajv against these contracts**, so the ECMA-262 leg of every "three languages
@@ -159,6 +161,123 @@ agree about which documents are acceptable.
 pattern; both clients refuse it at parse. That is a genuine client-enforced
 rule and it has a `reject_by_client` fixture stating so — the alternative is a
 gap that reads as an oversight rather than as a boundary.
+
+### A contract with one real consumer is pinned in BOTH directions
+
+Most surfaces here are validated by two clients this repository owns. `jwks.v1`
+is not: dev-health-go's `authverify.Ed25519JWKSVerifier` **consumes** it, from
+another module, and nothing in this repository parses it. That changes what the
+corpus has to prove.
+
+A schema for a surface like this can fail in two opposite ways, and only one of
+them is habitually tested:
+
+* **looser than the consumer** — the schema certifies a document the only
+  reader refuses. This is the familiar direction, and the `accept` fixtures are
+  run through the real `Keys()` to close it.
+* **stricter than the consumer** — the schema refuses a document the reader
+  would have accepted. Nobody writes this test, because a rejection always
+  looks like the schema working. It is the more dangerous direction: the false
+  alarm eventually gets "fixed" by loosening whichever rule was load-bearing.
+  `TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` closes it — **but
+  only against the cases the corpus actually contains**; see "State a narrowing
+  as a FIXTURE" below for how that test stayed green while four narrowings went
+  undeclared.
+
+Where the schema is deliberately narrower than the consumer, give it a fixture
+in `narrower_than_consumer` — never a `reject` entry, which would force the
+second test above to be weakened, and never prose alone, which cannot fail.
+
+**Pin the producer when one exists.** No JWKS producer exists in this
+repository yet. When the Go auth-service publishes `/.well-known/jwks.json`, its
+real output must be validated by a test beside the Go runner, or the schema can
+describe an idealised document, pass its own corpus forever, and never touch
+what production writes.
+
+### JWKS and discovery: one issuer, one key use (CHAOS-4930)
+
+`jwks.v1` and `discovery.v1` are the two documents behind TRD §15's
+`/.well-known/jwks.json` and `/.well-known/openid-configuration`.
+
+* **Private members are absent from the schema, not prohibited.** `d p q dp dq
+  qi k` are not declared and `additionalProperties` is false; each has a reject
+  fixture and a test reads the schema to confirm none is declared.
+* **`alg=none`, symmetric `alg` and symmetric `kty` are reject fixtures.**
+* **Rotation is the normal case:** `valid-two-keys-during-rotation.json`. A
+  consumer that meets an unknown `kid` refreshes once, boundedly, then denies;
+  a schema cannot express that, so it is a consumer rule (TRD §12).
+* **A JWKS has no issuer member.** The binding is made by discovery: a verifier
+  reaches the JWKS only through the `jwks_uri` of a discovery document from the
+  issuer it has pinned for that credential class. ACR Web-assertion keys are
+  another issuer (TRD §12); keeping them apart is the pin, and token-class
+  confusion is settled by the token's own `typ`/`aud`/`iss`, not by discovery.
+  No custom discovery member is used.
+* **Two rules are client rules:** `jwks_uri == issuer + "/.well-known/jwks.json"`
+  and `issuer == the pinned issuer`. They need a cross-member and a
+  configuration comparison JSON Schema cannot make. `ParseDiscovery` (Go) and
+  `parse_discovery` (Python) take the trusted issuer as a required argument, and
+  the `reject_by_client` fixtures are valid against the schema on purpose.
+* **Discovery-endpoint errors use the shared `error.v1` envelope.** OpenAPI
+  `paths` stays empty until the service mounts routes (see the OpenAPI
+  description); the `Jwks` and `Discovery` components are the deliverable now.
+* **Known gaps, owned elsewhere:** duplicate members and trailing content in a
+  JWKS file are accepted by `authverify` (CHAOS-4951); the property-based sweep
+  of the `kid` and member-name narrowings is CHAOS-4958.
+
+### A wrong length: what is true, and what was overstated
+
+`ed25519.Verify` **panics** on a 31- or 33-byte public key rather than returning
+an error, and *both* languages' base64 decoders accept those lengths without
+complaint — the decode never checks. Those two facts are real and were executed.
+
+**The conclusion drawn from them was not.** An earlier version of this section
+said the length "has to be pinned in the schema or it is pinned nowhere". The
+consumer checks it itself: `Keys()` compares the decoded length against
+`ed25519.PublicKeySize` before returning a key, so the panic is unreachable
+through it. The schema pin is defence-in-depth and a statement of the wire form.
+
+Keeping the correction visible because of *how* it happened: the disproving
+line was in a function this lane had read and quoted in its own review context
+minutes earlier. Two verified facts were joined into a claim about a third
+thing, and the third thing was never executed. That is the house failure mode,
+committed inside the document that names it.
+
+`^[A-Za-z0-9_-]{43}$` is still the right pattern, for the reasons that survive:
+43 characters of the URL-safe alphabet always decode to exactly 32 bytes
+(verified across 200000 random such strings), the alphabet excludes `+` and `/`,
+and the fixed count excludes `=` padding. Python's `urlsafe_b64decode` accepts
+padding *and* the standard alphabet; Go's `RawURLEncoding` rejects both.
+
+### State a narrowing as a FIXTURE, never as a sentence
+
+The rule this surface paid for. Where a schema is deliberately stricter than the
+client it describes, that gap needs a fixture in a category of its own —
+`narrower_than_consumer` — with a test asserting **both** halves: the client
+accepts it, the schema refuses it.
+
+A prose list cannot be executed, and this one was wrong: it declared two
+narrowings and there were five. The missing ones were case-variant member names (Go's `encoding/json` matches
+field names **case-insensitively**, and `DisallowUnknownFields` compares *after*
+that match), `use: null` decoding to the zero string, and a `kid` carrying NUL or
+surrounding spaces — `unicode.IsSpace` does not consider NUL a space, so
+`TrimSpace` leaves it.
+
+**Round 2 then blocked it again for a FIFTH**, `use: ""`, which had a predicate
+in the harness and a sentence in the schema and no fixture. A predicate without a
+fixture is worse than prose: prose merely fails to test the narrowing, while a
+predicate actively *excuses* the disagreement, so the differential stays green
+over an asymmetry nothing asserts. The correspondence between predicates and
+fixtures is now asserted in both directions — remembering to add both is what
+failed twice.
+
+**And the test built to catch exactly this passed the whole time.**
+`TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` runs every reject
+fixture through the real client for precisely this purpose. It was green,
+because not one of the twenty reject fixtures happened to exercise any of the
+four. A correct instrument fed a corpus that cannot trip it reports coverage it
+does not have — which is worse than no test, because it is cited as evidence.
+Adding the category is what converts each sentence into an assertion that fails
+when it stops being true.
 
 ### The manifest is the single inventory
 

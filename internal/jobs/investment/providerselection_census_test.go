@@ -27,11 +27,13 @@ import (
 //   - every text reader (the two explanation routes, through investmentexplain)
 //     uses categorize.ResolveTextProviderKind / ResolveTextProviderKindForOrg,
 //     which never gives the decision kind for the platform default.
-//   - the literal "LLM_PROVIDER" is read in two places: providerkind.go, and
-//     llmbudget.DefaultModel, which applies the generic LLM_MODEL to a
-//     provider only when LLM_PROVIDER names that same provider (a decision
-//     kind names no text provider, so it falls to the package default); the
-//     explain route names it only in an error hint.
+//   - the literal "LLM_PROVIDER" is read in three places: providerkind.go
+//     (the selection), llmbudget (DefaultModel, which applies the generic
+//     LLM_MODEL to a provider only when LLM_PROVIDER names that same
+//     provider; and PlatformLookup, which answers LLM_PROVIDER with the text
+//     provider a call runs by default -- a decision kind names no text
+//     provider, so the keys decide, CHAOS-10011); the explain route names it
+//     only in an error hint.
 //   - the TypeSafe client is built only by the investment worker.
 //
 // Non-Go files: no Python source, script or CI file reads LLM_PROVIDER; the
@@ -75,7 +77,7 @@ func TestEveryReaderOfTheProviderSelectionIsKnown(t *testing.T) {
 		"categorize.NewTypeSafeClient":        {},
 		`literal "LLM_PROVIDER"`: {
 			"internal/jobs/investment/categorize/providerkind.go": 1,
-			"internal/llmbudget/llmbudget.go":                     1,
+			"internal/llmbudget/llmbudget.go":                     2,
 			"internal/queryapi/server/workunit_explain_route.go":  1,
 		},
 	}

@@ -404,6 +404,7 @@ func TestResolveModelNameForOrg_ExplicitModelAlwaysWins(t *testing.T) {
 }
 
 func TestResolveModelNameForOrg_FallsBackToEnvWhenNotMatched(t *testing.T) {
+	t.Setenv("LLM_PROVIDER", "openai")
 	t.Setenv("LLM_MODEL_OPENAI", "")
 	t.Setenv("LLM_MODEL", "platform-model")
 	resolver := &fakeOrgResolver{matches: false}

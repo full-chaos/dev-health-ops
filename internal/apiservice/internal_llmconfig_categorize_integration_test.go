@@ -85,12 +85,14 @@ func TestInternalWorkerCategorizeConfigRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := server.Handler()
+	var lastHeader string
 	get := func(path, token string) (int, map[string]string) {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
+		lastHeader = rec.Header().Get("X-Org-Llm-Config")
 		var out map[string]string
 		_ = json.Unmarshal(rec.Body.Bytes(), &out)
 		return rec.Code, out
@@ -107,8 +109,8 @@ func TestInternalWorkerCategorizeConfigRoute(t *testing.T) {
 	if code != 200 || got["model"] != "categorize-model" || got["api_key"] != "placeholder-default-value" {
 		t.Fatalf("same-provider categorize override: %d model=%q key inherited=%v", code, got["model"], got["api_key"] == "placeholder-default-value")
 	}
-	if code, _ := get(route(bare), workerToken); code != 404 {
-		t.Fatalf("an org with no config answered %d, want 404", code)
+	if code, _ := get(route(bare), workerToken); code != 404 || lastHeader != "none" {
+		t.Fatalf("an org with no config answered %d header %q, want the marked 404", code, lastHeader)
 	}
 	if code, _ := get(route(org), acrToken); code != 401 {
 		t.Fatalf("the acr credential on the worker route answered %d, want 401", code)

@@ -258,3 +258,17 @@ func TestWorkerCategorizeRouteUsesItsOwnSourceAndVerifier(t *testing.T) {
 		t.Fatalf("unconfigured worker route answered %d", recorder.Code)
 	}
 }
+
+// The no-config 404 carries the marker a worker needs to tell it from a missing
+// route; a bad org id's 404 does not.
+func TestNoConfigNotFoundIsMarked(t *testing.T) {
+	source := &fakeSource{found: false}
+	response, _ := call(t, &fakeVerifier{}, source, io.Discard, testOrg, "Bearer "+testToken)
+	if response.StatusCode != http.StatusNotFound || response.Header.Get(NoConfigHeader) != NoConfigValue {
+		t.Fatalf("no config: status %d header %q", response.StatusCode, response.Header.Get(NoConfigHeader))
+	}
+	response, _ = call(t, &fakeVerifier{}, source, io.Discard, "not-a-uuid", "Bearer "+testToken)
+	if response.StatusCode != http.StatusNotFound || response.Header.Get(NoConfigHeader) != "" {
+		t.Fatalf("bad org: status %d header %q", response.StatusCode, response.Header.Get(NoConfigHeader))
+	}
+}

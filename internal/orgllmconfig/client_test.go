@@ -24,6 +24,9 @@ func serve(t *testing.T, status int, body string) (*Client, *http.Request) {
 	var seen http.Request
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = *r.Clone(r.Context())
+		if status == 404 && strings.Contains(body, "no-config") {
+			w.Header().Set("X-Org-Llm-Config", "none")
+		}
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
@@ -62,7 +65,8 @@ func TestFetchClassifiesEveryOutcome(t *testing.T) {
 		body   string
 		want   error
 	}{
-		{"none configured", 404, `{"detail":"Not found"}`, ErrNotConfigured},
+		{"none configured", 404, `{"detail":"no-config"}`, ErrNotConfigured},
+		{"generic missing route 404", 404, `{"detail":"Not found"}`, ErrUnavailable},
 		{"unauthorized", 401, ``, ErrRefused},
 		{"forbidden", 403, ``, ErrRefused},
 		{"stored config unreadable", 409, ``, ErrRefused},

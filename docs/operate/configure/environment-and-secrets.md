@@ -309,7 +309,7 @@ internal listener instead of reading the stored key.
 
 Both empty keeps categorization on the platform environment for every
 organization. Only one of the two set refuses the materialize family at start.
-With both set: an organization with no stored configuration, or an explicit
+With both set: an organization with no stored configuration (the api answers a 404 marked `X-Org-Llm-Config: none`; a bare 404, such as an old api replica or a wrong `ORG_LLM_CONFIG_URL`, is treated as the api being unavailable, never as "no config"), or an explicit
 request for another provider, uses the platform provider as before. An
 organization whose configuration exists but cannot be read (the api is down or
 refuses the credential), is unusable (unknown provider, hosted provider without

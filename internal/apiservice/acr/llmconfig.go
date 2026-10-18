@@ -31,6 +31,12 @@ const LLMConfigScope = "llm_config:read"
 
 const llmConfigSchemaVersion = "acr_llm_config.v1"
 
+// NoConfigHeader marks the 404 that means "the org has no BYO config".
+const (
+	NoConfigHeader = "X-Org-Llm-Config"
+	NoConfigValue  = "none"
+)
+
 // ErrCredentialInvalid is a missing, unknown, revoked or expired credential.
 var ErrCredentialInvalid = errors.New("service credential invalid")
 
@@ -141,6 +147,10 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			logger.InfoContext(ctx, "acr llm-config: none configured",
 				slog.String("org_id", orgID), slog.String("credential_id", credentialID))
 			countLLMConfig(ctx, "not_found")
+			// A machine-readable marker: a client that must tell "this org has
+			// no config" from a missing route (an old replica, a wrong target)
+			// reads this header, never the bare 404.
+			w.Header().Set(NoConfigHeader, NoConfigValue)
 			writeDetail(w, http.StatusNotFound, "Not found")
 			return
 		}

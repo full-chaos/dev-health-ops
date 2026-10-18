@@ -27,6 +27,11 @@ const (
 )
 
 const (
+	// noConfigHeader and noConfigValue mirror acr.NoConfigHeader/NoConfigValue:
+	// the api marks the 404 that means "this org has no BYO config".
+	noConfigHeader = "X-Org-Llm-Config"
+	noConfigValue  = "none"
+
 	schemaVersion = "acr_llm_config.v1"
 	maxBody       = 64 << 10
 )
@@ -105,8 +110,12 @@ func (c *Client) Fetch(ctx context.Context, orgID string) (Config, error) {
 	}
 	defer resp.Body.Close()
 	switch {
-	case resp.StatusCode == http.StatusNotFound:
+	case resp.StatusCode == http.StatusNotFound && resp.Header.Get(noConfigHeader) == noConfigValue:
 		return Config{}, ErrNotConfigured
+	case resp.StatusCode == http.StatusNotFound:
+		// A bare 404 is a missing route (an old api replica during a rollout, a
+		// wrong target), not "no config": never a license to use the platform key.
+		return Config{}, fmt.Errorf("%w: route not found", ErrUnavailable)
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden, resp.StatusCode == http.StatusConflict:
 		return Config{}, fmt.Errorf("%w: status %d", ErrRefused, resp.StatusCode)
 	case resp.StatusCode != http.StatusOK:

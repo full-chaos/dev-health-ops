@@ -87,7 +87,7 @@ func TestHTTPClientAuthRateLimitGateFailureIsReturnedAndCounted(t *testing.T) {
 	if err := client.Metrics.WritePrometheus(&output); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), `dev_health_provider_gate_penalize_errors_total{provider="github",path="auth"} 1`) {
+	if !strings.Contains(output.String(), `dev_health_gate_penalize_errors_total{provider="github",path="auth"} 1`) {
 		t.Fatalf("no gate failure sample:\n%s", output.String())
 	}
 }
@@ -109,7 +109,7 @@ func TestHTTPClientResponseRateLimitGateFailureIsReturnedAndCounted(t *testing.T
 	if err := client.Metrics.WritePrometheus(&output); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), `dev_health_provider_gate_penalize_errors_total{provider="github",path="response"} 1`) {
+	if !strings.Contains(output.String(), `dev_health_gate_penalize_errors_total{provider="github",path="response"} 1`) {
 		t.Fatalf("no gate failure sample:\n%s", output.String())
 	}
 }

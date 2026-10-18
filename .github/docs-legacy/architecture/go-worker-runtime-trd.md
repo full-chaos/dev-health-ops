@@ -956,7 +956,7 @@ cleanup context and exposes failures through
 A rate-limited auth step (the GitHub App installation-token exchange) is recorded in
 `dev_health_provider_requests_total` and arms the shared gate like a response
 429; a failed gate write on either path is counted in
-`dev_health_provider_gate_penalize_errors_total{provider,path=auth|response}`.
+`dev_health_gate_penalize_errors_total{provider,path=auth|response}`.
 HTTP retry has a total-attempt budget, bounded backoff, bounded integer or HTTP
 date `Retry-After`, and job context cancellation. A 429 without a
 `Retry-After` value publishes the same computed local wait to the shared gate.

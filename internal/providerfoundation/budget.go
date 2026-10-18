@@ -1590,8 +1590,8 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		}
 	}
 	if _, err := io.WriteString(writer,
-		"# HELP dev_health_provider_gate_penalize_errors_total Cooldown gate writes that failed after a rate-limited provider auth step or response, by bounded provider and path.\n"+
-			"# TYPE dev_health_provider_gate_penalize_errors_total counter\n"); err != nil {
+		"# HELP dev_health_gate_penalize_errors_total Cooldown gate writes that failed after a rate-limited provider auth step or response, by bounded provider and path.\n"+
+			"# TYPE dev_health_gate_penalize_errors_total counter\n"); err != nil {
 		return err
 	}
 	gateKeys := make([]string, 0, len(m.gatePenalizeErrors))
@@ -1601,7 +1601,7 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	sort.Strings(gateKeys)
 	for _, key := range gateKeys {
 		parts := strings.SplitN(key, ":", 2)
-		if _, err := fmt.Fprintf(writer, "dev_health_provider_gate_penalize_errors_total{provider=%q,path=%q} %d\n", parts[0], parts[1], m.gatePenalizeErrors[key]); err != nil {
+		if _, err := fmt.Fprintf(writer, "dev_health_gate_penalize_errors_total{provider=%q,path=%q} %d\n", parts[0], parts[1], m.gatePenalizeErrors[key]); err != nil {
 			return err
 		}
 	}

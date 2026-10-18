@@ -3,23 +3,25 @@
 package acr
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestEntitlementRouteUnderTheAPIRolePosture runs the real routes over the
-// real alembic schema as a role holding exactly the grants apiPosture()
-// declares for the two credential tables: the grants the River migration
-// applies must be enough for last_used_at and the audit insert, and the
-// rows must be what api/internal/acr.py wrote.
+// real alembic schema as the api login the real `migrate roles` and `migrate
+// river` commands provision and grant: those grants must be enough for
+// last_used_at and the audit insert, and the rows must be what
+// api/internal/acr.py wrote.
 func TestEntitlementRouteUnderTheAPIRolePosture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -39,38 +41,41 @@ func TestEntitlementRouteUnderTheAPIRolePosture(t *testing.T) {
 	defer admin.Close()
 	pgschema.Apply(ctx, t, admin)
 
-	const role = "acr_api_posture_probe"
-	statements := []string{
-		"CREATE ROLE " + role + " LOGIN PASSWORD 'probe' NOSUPERUSER NOCREATEDB NOCREATEROLE",
-		"GRANT USAGE ON SCHEMA public TO " + role,
-	}
-	granted := 0
-	for _, table := range postgresstore.APIPosture().RequiredTables {
-		if table.TableName != "internal_service_credentials" && table.TableName != "internal_service_credential_audits" {
-			continue
+	const password = "acr-grant-path-probe-pw"
+	names := map[string]string{}
+	for _, name := range []string{"domain", "queue", "coordinator", "api"} {
+		role, err := containers.RoleName("acr_gp_"+name, instance)
+		if err != nil {
+			t.Fatal(err)
 		}
-		granted++
-		privileges := "SELECT"
-		if table.AllowInsert {
-			privileges += ", INSERT"
-		}
-		if table.AllowUpdate {
-			privileges += ", UPDATE"
-		}
-		statements = append(statements, "GRANT "+privileges+" ON "+table.TableName+" TO "+role)
+		names[name] = role
 	}
-	if granted != 2 {
-		t.Fatalf("apiPosture declares %d of the 2 credential tables", granted)
+	settings := map[string]string{
+		"MIGRATION_DATABASE_URI":              instance.URI,
+		"RIVER_DOMAIN_DATABASE_ROLE":          names["domain"],
+		"RIVER_QUEUE_DATABASE_ROLE":           names["queue"],
+		"RIVER_COORDINATOR_DATABASE_ROLE":     names["coordinator"],
+		"RIVER_DOMAIN_DATABASE_PASSWORD":      password,
+		"RIVER_QUEUE_DATABASE_PASSWORD":       password,
+		"RIVER_COORDINATOR_DATABASE_PASSWORD": password,
+		"API_DATABASE_ROLE":                   names["api"],
+		"API_DATABASE_PASSWORD":               password,
 	}
-	for _, statement := range statements {
-		if _, err := admin.Exec(ctx, statement); err != nil {
-			t.Fatalf("%s: %v", statement, err)
+	lookup := func(key string) (string, bool) { value, ok := settings[key]; return value, ok }
+	for _, step := range []struct {
+		name string
+		run  func(io.Writer, io.Writer) int
+	}{
+		{"migrate roles", func(o, e io.Writer) int { return rivermigrate.ExecuteRoles(ctx, "dho", nil, lookup, o, e) }},
+		{"migrate river", func(o, e io.Writer) int { return rivermigrate.Execute(ctx, "dho", nil, lookup, o, e) }},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := step.run(&stdout, &stderr); code != 0 {
+			t.Fatalf("%s: exit %d\nstdout:\n%s\nstderr:\n%s", step.name, code, stdout.String(), stderr.String())
 		}
 	}
-	probeConfig := admin.Config().ConnConfig.Copy()
-	probeConfig.User, probeConfig.Password = role, "probe"
 	poolConfig := admin.Config().Copy()
-	poolConfig.ConnConfig = probeConfig
+	poolConfig.ConnConfig.User, poolConfig.ConnConfig.Password = names["api"], password
 	probe, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		t.Fatal(err)

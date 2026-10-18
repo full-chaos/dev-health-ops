@@ -16,6 +16,7 @@ from dev_health_ops.authclient.contracts import (
     validator_for,
     violations,
 )
+from dev_health_ops.authclient.discovery import Discovery, parse_discovery
 from dev_health_ops.authclient.error_envelope import (
     ErrorEnvelope,
     parse_bytes,
@@ -35,10 +36,12 @@ __all__ = [
     "ContractError",
     "Credential",
     "Delegation",
+    "Discovery",
     "Principal",
     "Violation",
     "contracts_dir",
     "parse_bytes",
+    "parse_discovery",
     "repo_root",
     "validate",
     "validator_for",

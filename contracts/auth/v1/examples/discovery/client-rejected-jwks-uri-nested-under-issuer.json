@@ -1,0 +1,7 @@
+{
+  "issuer": "https://auth.example.test",
+  "jwks_uri": "https://auth.example.test/tenant-a/.well-known/jwks.json",
+  "id_token_signing_alg_values_supported": [
+    "EdDSA"
+  ]
+}

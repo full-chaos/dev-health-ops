@@ -1,0 +1,109 @@
+{
+  "description": "The golden corpus for the discovery.v1 wire contract. This manifest is the SINGLE inventory: the Go and Python runners read THIS file over THESE fixtures (G-70). `reject_by_client` documents are valid against the schema and refused by ParseDiscovery / parse_discovery, because they need a comparison JSON Schema cannot make.",
+  "accept": [
+    {
+      "file": "valid-minimal.json",
+      "why": "The ordinary document: bare https origin, jwks_uri at the fixed path."
+    },
+    {
+      "file": "valid-port-and-path-prefix.json",
+      "why": "An issuer with an explicit port and a path prefix. The jwks_uri carries the same prefix: the path of the issuer is part of its identity, not decoration."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-issuer-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No issuer. Discovery without an issuer cannot be bound to the URL it was fetched from."
+    },
+    {
+      "file": "invalid-jwks-uri-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No jwks_uri: a verifier would have no JWKS to read."
+    },
+    {
+      "file": "invalid-algs-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No algorithm list; the contract requires the verifier to be told EdDSA, not left to assume."
+    },
+    {
+      "file": "invalid-issuer-http.json",
+      "expect_instance_location": "/issuer",
+      "expect_keyword": "pattern",
+      "why": "Plain http issuer. Refused at the wire-format level (see the schema description for local-development configuration). Only the issuer is http, so exactly one member trips."
+    },
+    {
+      "file": "invalid-issuer-trailing-slash.json",
+      "expect_instance_location": "/issuer",
+      "expect_keyword": "pattern",
+      "why": "A trailing slash. `https://a` and `https://a/` would be two issuers to a byte comparison and one to a human, which is how a verifier ends up trusting the wrong one."
+    },
+    {
+      "file": "invalid-issuer-with-query.json",
+      "expect_instance_location": "/issuer",
+      "expect_keyword": "pattern",
+      "why": "A query on the issuer, forbidden by OpenID Connect Discovery section 3."
+    },
+    {
+      "file": "invalid-issuer-with-userinfo.json",
+      "expect_instance_location": "/issuer",
+      "expect_keyword": "pattern",
+      "why": "Userinfo in the issuer: a credential-in-URL shape and a classic confusable-host trick."
+    },
+    {
+      "file": "invalid-jwks-uri-not-well-known.json",
+      "expect_instance_location": "/jwks_uri",
+      "expect_keyword": "pattern",
+      "why": "A jwks_uri at some other path. TRD section 15 fixes the path."
+    },
+    {
+      "file": "invalid-jwks-uri-with-query.json",
+      "expect_instance_location": "/jwks_uri",
+      "expect_keyword": "pattern",
+      "why": "A query on the jwks_uri; the endpoint takes no parameters."
+    },
+    {
+      "file": "invalid-alg-includes-none.json",
+      "expect_instance_location": "/id_token_signing_alg_values_supported",
+      "expect_keyword": "const",
+      "why": "`none` advertised next to EdDSA (TRD section 24: alg=none must be rejected by fixture)."
+    },
+    {
+      "file": "invalid-alg-hs256.json",
+      "expect_instance_location": "/id_token_signing_alg_values_supported",
+      "expect_keyword": "const",
+      "why": "A symmetric algorithm advertised instead of EdDSA."
+    },
+    {
+      "file": "invalid-unknown-member-token-endpoint.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "An OpenID endpoint the Auth Control Plane does not offer here. Adding members is a v2 decision."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-jwks-uri-other-origin.json",
+      "why": "jwks_uri on another host than the issuer. Valid against the schema (two well-formed https URLs), refused by the client: the issuer disagrees with its own endpoint URL. This is the attack: a document that names a JWKS the issuer does not serve."
+    },
+    {
+      "file": "client-rejected-jwks-uri-other-port.json",
+      "why": "Same host, different port. A byte comparison distinguishes it and a host comparison would not; the contract compares the whole string."
+    },
+    {
+      "file": "client-rejected-jwks-uri-other-path-prefix.json",
+      "why": "The issuer has a path prefix and the jwks_uri sits at the bare origin: a sibling tenant's JWKS on the same host."
+    },
+    {
+      "file": "client-rejected-jwks-uri-nested-under-issuer.json",
+      "why": "The jwks_uri is under the issuer but not at the fixed path directly beneath it. A prefix test would pass this; equality refuses it."
+    },
+    {
+      "file": "client-rejected-issuer-not-pinned.json",
+      "why": "A valid, fully self-consistent document from an issuer the verifier is not configured to trust. The schema cannot know the pinned issuer (configuration, not document), so the client refuses it. This is the wrong-issuer rule: the client pins the expected issuer per credential class and rejects any other. Platform-token versus Web-assertion confusion is settled by the pin plus the token's own typ/aud/iss claims, not by a discovery member."
+    }
+  ]
+}

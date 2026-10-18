@@ -251,12 +251,14 @@ func buildProviderLookup(workItems []WorkItemRow) providerLookup {
 			if held && holder != wi.RepoID {
 				if _, indexed := lookup.byID[strings.ToLower(wi.WorkItemID)]; indexed {
 					lookup.renamedPathCollisions++
-					slog.Default().Debug("issue-pr text refs: a current path names another repository's minted path",
-						slog.String("work_item_id", wi.WorkItemID), slog.String("holder_repo_id", holder.String()))
 				}
 				delete(lookup.byID, strings.ToLower(wi.WorkItemID))
 			}
 		}
+	}
+	if lookup.renamedPathCollisions > 0 {
+		slog.Default().Warn("issue-pr text refs: work items minted from a path another repository holds now are not linkable by that path",
+			slog.Int("suppressed_work_items", lookup.renamedPathCollisions))
 	}
 	for _, wi := range workItems {
 		prefix := prefixes[wi.Provider]

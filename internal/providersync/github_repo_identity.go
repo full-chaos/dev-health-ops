@@ -2,8 +2,10 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -75,16 +77,26 @@ func canonicalGitHubForeignRefs(
 	identityNames, err := resolveGitLabIdentityPaths(ctx, reader, claim, names.Current,
 		GitLabRepoIdentity{Path: names.Identity}, foreign)
 	if err != nil {
+		slog.Default().WarnContext(ctx, "github_foreign_refs_unresolved",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "dataset", claim.Dataset, "refs", len(foreign),
+			"error_class", logging.ErrorClass(err), "error_type", logging.ErrorType(err))
 		return nil, err
 	}
+	rewritten, unchanged := 0, 0
 	canonical := func(id string) string {
 		prefix, name, rest, ok := githubWorkItemRepoOfID(id)
 		if !ok {
 			return id
 		}
 		if identity := identityNames[strings.ToLower(name)]; identity != "" {
+			if identity != name {
+				rewritten++
+			} else {
+				unchanged++
+			}
 			return prefix + identity + rest
 		}
+		unchanged++
 		return id
 	}
 	type key struct{ source, target, relationship, raw string }
@@ -109,6 +121,13 @@ func canonicalGitHubForeignRefs(
 		}
 		seen[k] = true
 		out = append(out, row)
+	}
+	slog.Default().InfoContext(ctx, "github_foreign_refs_canonical",
+		"org_id", claim.OrgID, "unit_id", claim.ID, "dataset", claim.Dataset,
+		"refs", len(foreign), "rewritten", rewritten, "unchanged", unchanged, "rows_in", len(rows), "rows_out", len(out))
+	if dropped := len(rows) - len(out); dropped > 0 {
+		slog.Default().WarnContext(ctx, "github_foreign_refs_rows_dropped",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "dataset", claim.Dataset, "dropped", dropped)
 	}
 	return out, nil
 }

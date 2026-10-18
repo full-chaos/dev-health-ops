@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
@@ -1243,15 +1244,25 @@ func (fetcher GitHubProjectV2Fetcher) itemsByRepositoryIdentity(
 	}
 	identity, err := resolveGitLabIdentityPaths(ctx, fetcher.RepoIdentity, claim, "", GitLabRepoIdentity{}, names)
 	if err != nil {
+		slog.Default().WarnContext(ctx, "github_projects_v2_items_identity_unresolved",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "dataset", claim.Dataset, "named_repositories", len(names),
+			"error_class", logging.ErrorClass(err), "error_type", logging.ErrorType(err))
 		return nil, err
 	}
 	out := make([]gitHubProjectV2ItemPayload, len(items))
 	copy(out, items)
+	renamed := 0
 	for index := range out {
 		name := strings.TrimSpace(out[index].Content.Repository.NameWithOwner)
 		if mapped := identity[strings.ToLower(name)]; name != "" && mapped != "" {
+			if mapped != name {
+				renamed++
+			}
 			out[index].Content.Repository.NameWithOwner = mapped
 		}
 	}
+	slog.Default().InfoContext(ctx, "github_projects_v2_items_identity",
+		"org_id", claim.OrgID, "unit_id", claim.ID, "dataset", claim.Dataset,
+		"items", len(items), "named_repositories", len(names), "renamed", renamed)
 	return out, nil
 }

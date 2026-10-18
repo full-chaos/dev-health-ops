@@ -9,7 +9,9 @@ longer exists), and a fan-in that stops failing on a skipped relevant job.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -76,6 +78,20 @@ def test_gate_jobs_run_only_on_a_relevant_change_and_the_gate_fans_in() -> None:
     assert '[ "${pair#*=}" = "success" ]' in script
 
 
+def test_source_commit_history_check_runs_only_where_history_is_fetched() -> None:
+    jobs = _workflow()["jobs"]
+    test_job = jobs["auth-test"]
+    assert test_job["steps"][0]["with"]["fetch-depth"] == 0
+    assert any(
+        step.get("run") == "bash ci/check_go.sh auth history"
+        for step in test_job["steps"]
+    )
+    for key in ("auth-go-quality", "auth-fuzz"):
+        assert all(
+            "auth history" not in step.get("run", "") for step in jobs[key]["steps"]
+        ), key
+
+
 def test_every_stage_the_workflow_calls_exists_in_the_verb() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     verb = CHECK_GO.read_text(encoding="utf-8")
@@ -86,6 +102,7 @@ def test_every_stage_the_workflow_calls_exists_in_the_verb() -> None:
         "test",
         "race",
         "fuzz",
+        "history",
         "vuln",
         "middleware",
         "fuzz-registry",
@@ -94,3 +111,67 @@ def test_every_stage_the_workflow_calls_exists_in_the_verb() -> None:
     }
     for stage in stages:
         assert re.search(rf"^    {re.escape(stage)}\) ", verb, re.MULTILINE), stage
+
+
+def test_closure_check_is_scheduled_and_the_allow_list_is_well_formed() -> None:
+    steps = _workflow()["jobs"]["auth-test"]["steps"]
+    assert any(s.get("run") == "bash ci/check_go.sh auth closure" for s in steps)
+    rows = [
+        line.split("\t")
+        for line in (ROOT / "ci" / "auth_closure_allow.tsv")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line and not line.startswith("#")
+    ]
+    assert rows and all(len(r) == 2 and r[1].strip() for r in rows), (
+        "every row needs a reason"
+    )
+    assert not any("clickhouse" in r[0].lower() for r in rows)
+
+
+def _run_closure(allow: Path) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "AUTH_CLOSURE_ALLOW": str(allow)}
+    return subprocess.run(
+        ["bash", str(CHECK_GO), "auth", "closure"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_closure_check_executes_and_fails_on_a_forbidden_or_stale_module(
+    tmp_path: Path,
+) -> None:
+    real = ROOT / "ci" / "auth_closure_allow.tsv"
+    lines = real.read_text(encoding="utf-8").splitlines()
+
+    ok = _run_closure(real)
+    assert ok.returncode == 0, ok.stderr
+
+    missing = tmp_path / "missing.tsv"
+    missing.write_text(
+        "\n".join(x for x in lines if not x.startswith("github.com/jackc/pgx/v5\t"))
+        + "\n"
+    )
+    res = _run_closure(missing)
+    assert res.returncode != 0 and "github.com/jackc/pgx/v5" in res.stderr
+
+    stale = tmp_path / "stale.tsv"
+    stale.write_text(
+        "\n".join(lines) + "\ngithub.com/ClickHouse/clickhouse-go/v2\tplanted\n"
+    )
+    res = _run_closure(stale)
+    assert res.returncode != 0 and "no longer link" in res.stderr
+
+
+def test_closure_check_covers_the_production_build_configuration() -> None:
+    dockerfile = (ROOT / "docker" / "go-worker.Dockerfile").read_text(encoding="utf-8")
+    assert "CGO_ENABLED=0" in dockerfile
+    text = CHECK_GO.read_text(encoding="utf-8")
+    body = re.search(r"check_auth_closure\(\) \{(?P<b>.*?)\n\}", text, re.DOTALL)
+    assert body, "check_auth_closure is no longer one function"
+    assert "for cgo in 0 1" in body.group(
+        "b"
+    ) and "for arch in amd64 arm64" in body.group("b")

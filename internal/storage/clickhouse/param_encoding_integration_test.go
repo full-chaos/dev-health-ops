@@ -104,6 +104,7 @@ func stringParamOutcome(t *testing.T, ctx context.Context, conn driver.Conn, val
 func TestServerSideParameterProductionTypesOnBothProtocols(t *testing.T) {
 	ctx, native, http := parameterConns(t)
 	id := uuid.MustParse("6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b")
+	named := `a\b`
 	cases := []struct {
 		typ   string
 		value any
@@ -117,6 +118,14 @@ func TestServerSideParameterProductionTypesOnBothProtocols(t *testing.T) {
 		{"Array(UInt32)", []uint32{1, 4294967295}, "[1,4294967295]"},
 		{"UInt32", uint32(4294967295), "4294967295"},
 		{"UInt64", uint64(18446744073709551615), "18446744073709551615"},
+		// []any: the element shapes teamprovider.Insert sends for a teams column.
+		{"Array(Nullable(String))", []any{"o'brien", nil, (*string)(nil), &named}, `['o\'brien',NULL,NULL,'a\\b']`},
+		{"Array(UUID)", []any{id}, "['" + id.String() + "']"},
+		{"Array(Nullable(UUID))", []any{nil, &id, (*uuid.UUID)(nil)}, "[NULL,'" + id.String() + "',NULL]"},
+		{"Array(Array(String))", []any{[]string{"a'b", "c"}, []string{}}, `[['a\'b','c'],[]]`},
+		{"Array(UInt8)", []any{uint8(1), uint8(0)}, "[1,0]"},
+		{"Array(DateTime64(6, 'UTC'))", []any{"2026-10-17 09:30:15.123456"}, "['2026-10-17 09:30:15.123456']"},
+		{"Array(Nullable(DateTime64(6, 'UTC')))", []any{nil, "2026-10-02 00:00:00.000000"}, "[NULL,'2026-10-02 00:00:00.000000']"},
 	}
 	for _, protocol := range []struct {
 		name string

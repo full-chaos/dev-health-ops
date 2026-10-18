@@ -18,7 +18,7 @@ import (
 // build's whole src (the golden header's producer_digest); this stamp is the check a run with NO Python can make:
 // a script that changes here changes what the states, the walk and the old-script heads describe, and the goldens
 // must then be re-recorded on the build that holds the new scripts. Freshness is by digest, not by re-execution.
-const alembicScriptsStamp = "f7edf36b5e962d51e8db43d39de7c217201b759fb614de8ecb5a26c00c867979"
+const alembicScriptsStamp = "88ee19c44620cc38d7ed8bc54cc7dcc20c1fc1de082effc3d0035be98f49eadc"
 
 // alembicScriptsDigest is the digest of the Alembic scripts under root (a checkout root).
 func alembicScriptsDigest(root string) (string, error) {

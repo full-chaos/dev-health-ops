@@ -21,8 +21,9 @@ compatibility implementation this migration retires.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,19 @@ SURFACE = "principal.v1"
 MAX_DELEGATION_DURATION = timedelta(minutes=15)
 
 
+def _refuse_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """``object_pairs_hook`` that rejects a repeated member instead of collapsing it."""
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise ContractError(
+                f"{SURFACE}: duplicate object member {key!r}. Parsers keep the "
+                f"last value, so an earlier one would never reach validation"
+            )
+        seen.add(key)
+    return dict(pairs)
+
+
 def _parse_timestamp(raw: str, field: str) -> datetime:
     """Parse one RFC 3339 timestamp the schema has already accepted.
 
@@ -77,12 +91,37 @@ def _parse_timestamp(raw: str, field: str) -> datetime:
     rather than as a traceback.
     """
     try:
-        return datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(raw)
     except ValueError as exc:
         raise ContractError(
             f"{SURFACE}: /{field} passed schema validation but is not parseable "
             f"by datetime.fromisoformat: {raw!r} ({exc})"
         ) from exc
+    return _require_utc_instant_in_range(parsed, field)
+
+
+def _require_utc_instant_in_range(moment: datetime, field: str) -> datetime:
+    """Refuse an instant whose UTC normalisation is outside 0001-01-01..9999-12-31.
+
+    ONLY AGREEMENT NEEDS THIS CHECK on the Go side, and Python needs it for
+    itself. The schema pattern bounds the LOCAL fields; the instant is
+    (fields x offset), and ``0001-01-01T00:00:00+23:59`` is UTC year 0000 -- a
+    composition a regex cannot see. Without it that value parsed cleanly and
+    raised an uncaught ``OverflowError`` on the caller's first ``astimezone``.
+    Go mirrors the check although ``time.Time`` needs no such bound, so the two
+    clients accept the same documents. principal.v1 has no clock-skew check, so
+    there is no ordering against one to preserve.
+    """
+    try:
+        moment.astimezone(timezone.utc)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ContractError(
+            f"{SURFACE}: /{field} {moment.isoformat()} normalises to a UTC "
+            f"instant outside 0001-01-01..9999-12-31. The schema bounds the "
+            f"local fields; the offset carries the instant past that bound, "
+            f"which a pattern cannot express"
+        ) from exc
+    return moment
 
 
 def _parse_revision(raw: object, field: str) -> int:
@@ -247,6 +286,23 @@ class Principal:
     entitlement_revision: int
     issued_at: datetime
     expires_at: datetime
+
+    @classmethod
+    def from_wire_bytes(cls, raw: bytes | str, root: Path | None = None) -> Principal:
+        """Parse the RAW body. Prefer this wherever the bytes are available.
+
+        It is the only entry point that can refuse a duplicate object member,
+        at any depth: ``object_pairs_hook`` fires for every object, including
+        those inside ``credential`` and ``actor_chain`` entries. Once a document
+        is decoded the earlier value is gone, so :meth:`from_wire` cannot.
+        """
+        try:
+            document = json.loads(raw, object_pairs_hook=_refuse_duplicate_members)
+        except json.JSONDecodeError as exc:
+            raise ContractError(
+                f"{SURFACE}: document is not valid JSON: {exc}"
+            ) from exc
+        return cls.from_wire(document, root)
 
     @classmethod
     def from_wire(cls, document: Any, root: Path | None = None) -> Principal:

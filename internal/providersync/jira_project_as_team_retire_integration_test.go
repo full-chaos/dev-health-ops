@@ -175,7 +175,7 @@ func TestRetireJiraProjectAsTeamRowsClosesOnlyThatClass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
-	want := JiraProjectAsTeamRetireOutcome{DryRun: true, Teams: 2, TeamsWithManualMembers: 1, TeamsWithSyncPolicy: 1, OwnershipRows: 2, MembershipRows: 2}
+	want := JiraProjectAsTeamRetireOutcome{DryRun: true, Teams: 2, TeamsWithManualMembers: 1, TeamsWithSyncPolicy: 1, OwnershipRows: 2, MembershipRows: 2, TeamsWithoutProviderIdentity: 2}
 	if dry != want {
 		t.Fatalf("dry run = %+v, want %+v", dry, want)
 	}

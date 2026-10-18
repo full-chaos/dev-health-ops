@@ -301,6 +301,16 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 	python := golden.Python(t, venue, requests)
 	goBase, goPool := startGoServer(t, ctx, venue, jwtKey)
 
+	// CHAOS-10082: see xuserid_divergence_test.go.
+	requestsAll, pythonAll := requests, python
+	requests, python, pythonDivergent := splitXUserIDRequests(t, retentionPath, requestsAll, pythonAll)
+	golden.Consumed(t, pythonDivergent...)
+	for _, answer := range pythonDivergent {
+		if answer.Status == 201 {
+			t.Errorf("python created a row for a request the divergence names as rejected: %d %s", answer.Status, answer.Body)
+		}
+	}
+
 	// CHAOS-6809, the named divergence: an org that holds custom_retention
 	// (an enterprise licence, a feature override, or the tier alone) gets the
 	// resource types from Go; Python answers every admin 402 because the
@@ -323,6 +333,8 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		}
 	}
 
+	var createdLedger createdByLedger
+	users := map[string]uuid.UUID{"ent": adminEnt, "comm": adminComm, "ovr": adminOvr, "tier": adminTier, "bogus": adminBogus, "fail": adminFail}
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		Inspect: func(request venueoracle.Request, response venueoracle.Response) {
@@ -351,8 +363,12 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 			if err := goPool.QueryRow(ctx, "SELECT count(*) FROM org_retention_policies WHERE id = $1", parsed).Scan(&rows); err != nil || rows != 1 {
 				t.Errorf("%s: created id %s names %d rows (err %v), want 1", request.Name, id, rows, err)
 			}
+			createdBy, _ := object.Get("created_by_id")
+			want, known := principalOf(request, venue.Tokens, users)
+			createdLedger.note(t, request, parsed, createdBy, want, known)
 		},
 		Normalize: func(request venueoracle.Request, body string) string {
+			body = blankCreatedBy(body)
 			if request.Name == "execute database failure on delete" {
 				// Python answers the driver's own message; Go answers an
 				// authored sentence and a reference (CHAOS-8439), checked in
@@ -367,6 +383,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		},
 	})
 	t.Log(receipt)
+	createdLedger.verifyThenReset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_retention_policies")
 
 	compare := func(name, query string) {
 		t.Helper()
@@ -383,5 +400,23 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 	created_by_id::text, (updated_at > '2026-06-01')::text
 FROM org_retention_policies ORDER BY org_id::text, resource_type`))
 	compare("audit_logs rows", `SELECT org_id::text, action FROM audit_logs ORDER BY org_id::text, action`)
+
+	// CHAOS-10082: created_by_id is the verified principal (adminTier, the
+	// "tier" token's user), whatever X-User-Id says; a malformed header is
+	// not even read.
+	forged := venueoracle.Do(t, goBase, venueoracle.Request{Name: "go-only foreign X-User-Id", Method: "POST", Path: admin,
+		Headers: withUser("tier", memberEnt.String()), Body: venueoracle.B64(`{"resource_type":"git_commits"}`)})
+	if forged.Status != 201 {
+		t.Errorf("foreign X-User-Id: Go answered %d %s, want 201", forged.Status, forged.Body)
+	}
+	if got := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB),
+		`SELECT created_by_id::text FROM org_retention_policies WHERE resource_type = 'git_commits' AND org_id = '`+orgTierOnly.String()+`'`); got != adminTier.String() {
+		t.Errorf("created_by_id = %q, want the principal %s", got, adminTier)
+	}
+	malformed := venueoracle.Do(t, goBase, venueoracle.Request{Name: "go-only malformed X-User-Id", Method: "POST", Path: admin,
+		Headers: withUser("tier", "not-a-uuid"), Body: venueoracle.B64(`{"resource_type":"nope"}`)})
+	if malformed.Status != 400 || !strings.Contains(malformed.Body, "Invalid resource type") {
+		t.Errorf("malformed X-User-Id: Go answered %d %s, want the resource-type 400 (the header is not read)", malformed.Status, malformed.Body)
+	}
 	golden.Finish(t)
 }

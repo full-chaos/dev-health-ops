@@ -57,11 +57,10 @@ function sweepBuild(base, ops) {
       doc = sweepExpand(op.set);
       continue;
     }
-    let parent = doc;
-    for (const step of op.path.slice(0, -1)) {
-      sweepAssertPlainKey(parent, step);
-      parent = parent[step];
-    }
+    const parent = op.path.slice(0, -1).reduce((node, step) => {
+      sweepAssertPlainKey(node, step);
+      return node[step];
+    }, doc);
     const last = op.path[op.path.length - 1];
     if (!op.rename) sweepAssertPlainKey(parent, last, true);
     if (op.rename) sweepAssertPlainKey(parent, op.rename, true);

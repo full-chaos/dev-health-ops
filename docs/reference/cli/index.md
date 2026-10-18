@@ -1345,6 +1345,34 @@ process). `redriven_failed` is different: it is observed by
 `'closed_failed'` — this one IS live, scraped from the worker process that
 actually processes the redriven job, not from this CLI.
 
+#### `metrics generation-repair` (CHAOS-10072)
+
+Before CHAOS-4442 the range finalize redrive replaced a run's whole generation
+with `redrive:<nonce>`, which dropped the producer prefix
+(`fixed-schedule:daily_metrics_fanout:`) that partition recompute, manual
+`daily-start` coverage and the recommendations readiness gate match. The
+original value was stored nowhere, but a run id is
+`uuid5(org|target_day|generation)`, so a candidate generation is proven by
+hashing to the run's own id. Every family the runner mints is tried:
+`fixed-schedule:` (occurrence second near `created_at`), `post-sync:<sync run
+id>` (the organization's `sync_runs` created before the run),
+`touched-drain:<n|e>:<daily run id>` and `manual-daily:` (without a repository
+list or rerun tag).
+
+```bash
+dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-10-31 --dry-run
+dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-10-31 \
+  --reason generation_repair --correlation-id CHAOS-10072
+```
+
+Output: `examined`, `repaired`, `would_repair`, `not_provable` (created under
+another generation, for example `post-sync:`), `not_settled` (still
+redriving: not `succeeded`/`succeeded`, or an open redrive event), `raced`,
+`full_org_flipped` (fan-out rows only), `by_family` (proven rows per family), and one entry per row. Every row is logged at Warn with the
+old and new generation. The write is a compare-and-set on the old generation,
+so a second pass repairs nothing. Audited under the `metrics.finalize_redrive`
+action.
+
 #### `metrics partition-recompute` (CHAOS-4459)
 
 Historical recompute: reset an already-`'succeeded'` daily-metrics run's
@@ -2012,7 +2040,7 @@ dho maintenance cleanup-all
 
 ## Service Credentials
 
-Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) present to the API. The `worker-operator` service is retired: nothing validates a `svc_worker_*` token, so its credentials authorize nothing (`dho workers` carries no token since CHAOS-6289). The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read` and `llm_config:read` (the org LLM config route). `worker-operator` still accepts `workers:read` and `workers:operate` at creation, but they authorize nothing; do not create new ones.
+Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) present to the API. The `worker-operator` service is retired: nothing validates a `svc_worker_*` token, so its credentials authorize nothing (`dho workers` carries no token since CHAOS-6289). The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read` and `llm_config:read` (the org LLM config route). `worker-operator` still accepts `workers:read` and `workers:operate` at creation, but they authorize nothing; do not create new ones. `worker-llm-config` (token prefix `svc_wllm_`) holds only `llm_config:read`: it is the investment worker's credential for the resolved categorize config route (`ORG_LLM_CONFIG_TOKEN`).
 
 ```bash
 # Create a credential (the token is printed once)

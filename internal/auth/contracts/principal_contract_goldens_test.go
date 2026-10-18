@@ -39,6 +39,14 @@ type fixtureManifest struct {
 		File string `json:"file"`
 		Why  string `json:"why"`
 	} `json:"reject_by_client"`
+	// GoSchemaGap holds documents Python and ajv refuse at the schema layer
+	// (by `format`) and Go's Validate accepts, because the library ignores
+	// `format` and a regex cannot know the calendar. The typed client refuses
+	// them. See TestGoSchemaValidateAcceptsACalendarImpossibleDay.
+	GoSchemaGap []struct {
+		File string `json:"file"`
+		Why  string `json:"why"`
+	} `json:"go_schema_gap"`
 }
 
 // goMessageForKeyword maps a JSON Schema keyword to the token
@@ -181,6 +189,9 @@ func TestEveryFixtureFileOnDiskIsClaimedByTheManifest(t *testing.T) {
 		claimed[r.File] = true
 	}
 	for _, r := range manifest.RejectByClient {
+		claimed[r.File] = true
+	}
+	for _, r := range manifest.GoSchemaGap {
 		claimed[r.File] = true
 	}
 	var unclaimed, missing []string
@@ -694,5 +705,41 @@ func TestTheExactUTCLowerLimitIsInclusive(t *testing.T) {
 	}
 	if _, err := PrincipalFromWire(root, loadFixture(t, "client-rejected-utc-range-just-below-lower-limit.json")); err == nil {
 		t.Fatal("one second below the limit must be refused")
+	}
+}
+
+// TestGoSchemaValidateAcceptsACalendarImpossibleDay pins a DECLARED divergence
+// on purpose (CHAOS-10135, option A). The schema pattern bounds components and
+// not the calendar, and google/jsonschema-go ignores `format`, so Go's Validate
+// accepts 2026-02-30 and 2026-04-31 while Python and ajv refuse them by
+// `format`. This test asserts the acceptance so that it cannot change
+// silently: if a future library version asserts `format`, this goes red and
+// the go_schema_gap fixtures move to `reject`. The typed client is the floor
+// and must refuse every one of them.
+func TestGoSchemaValidateAcceptsACalendarImpossibleDay(t *testing.T) {
+	root := testRoot(t)
+	entries := loadManifest(t).GoSchemaGap
+	if len(entries) < 2 {
+		t.Fatalf("go_schema_gap holds %d fixtures, want the February 30 and April 31 pair", len(entries))
+	}
+	for _, entry := range entries {
+		t.Run(entry.File, func(t *testing.T) {
+			raw := loadFixture(t, entry.File)
+			var document any
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatalf("fixture is not valid JSON: %v", err)
+			}
+			if err := Validate(root, PrincipalSurface, document); err != nil {
+				t.Fatalf("Go Validate now refuses it (%v): the library may assert `format` now; "+
+					"move this fixture to `reject` and retire the declared divergence", err)
+			}
+			_, err := PrincipalFromWire(root, raw)
+			if err == nil {
+				t.Fatalf("the typed client ACCEPTED a calendar-impossible day; %s", entry.Why)
+			}
+			if !strings.Contains(err.Error(), "day out of range") {
+				t.Fatalf("refused by the wrong rule: %v, want the calendar refusal", err)
+			}
+		})
 	}
 }

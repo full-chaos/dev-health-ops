@@ -1255,6 +1255,17 @@ func decodedJSONColumns(fields []pgconn.FieldDescription) []string {
 	return named
 }
 
+// OpenPool opens a pool on uri for a test and closes it at cleanup.
+func OpenPool(t *testing.T, ctx context.Context, uri string) *pgxpool.Pool {
+	t.Helper()
+	pool, err := pgxpool.New(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
 // TableRows runs query on uri and renders every row, in query order, as
 // "v1 v2 ... | ...". A json or jsonb result column fails the test: cast it
 // ::text so the stored text is compared (decodedJSONColumns).

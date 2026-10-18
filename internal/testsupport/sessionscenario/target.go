@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // Environment names of an external target (CHAOS-10157): the corpus runs against any server that answers
@@ -75,11 +75,7 @@ func (tg Target) resetLimits(t *testing.T, ctx context.Context) {
 // Prepare seeds the target's stores and mints the seed access tokens.
 func Prepare(t *testing.T, ctx context.Context, tg Target) map[string]string {
 	t.Helper()
-	pool, err := pgxpool.New(ctx, tg.PostgresURI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
+	pool := venueoracle.OpenPool(t, ctx, tg.PostgresURI)
 	hash, err := bcrypt.GenerateFromPassword([]byte(Password), bcrypt.MinCost)
 	if err != nil {
 		t.Fatal(err)
@@ -139,11 +135,7 @@ func MintTokens(t *testing.T, specs map[string]map[string]any) map[string]string
 // the receipt. It reaches the target through its URL and stores only.
 func RunTarget(t *testing.T, ctx context.Context, tg Target, tokens map[string]string) string {
 	t.Helper()
-	pool, err := pgxpool.New(ctx, tg.PostgresURI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
+	pool := venueoracle.OpenPool(t, ctx, tg.PostgresURI)
 	return Run(&Harness{
 		T: t, GoBase: tg.BaseURL, Tokens: tokens,
 		Exec: func(sql string) {

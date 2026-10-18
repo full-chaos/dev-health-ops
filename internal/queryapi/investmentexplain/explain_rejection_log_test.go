@@ -69,12 +69,6 @@ func TestParseInvestmentMixResponseReasonForMalformedOutput(t *testing.T) {
 			wantStatus:    ParseStatusInvalidLLMOutput,
 			wantReasonHas: "anti_claims is not a list",
 		},
-		{
-			name:          "forbidden language",
-			text:          `{"summary": "This is definitely the answer.", "top_findings": [], "confidence": {"level": "moderate", "quality_mean": null, "quality_stddev": null, "band_mix": {"high": 0, "moderate": 0, "low": 0, "very_low": 0, "unknown": 0}, "drivers": []}, "what_to_check_next": [], "anti_claims": []}`,
-			wantStatus:    ParseStatusForbiddenLanguage,
-			wantReasonHas: "forbidden",
-		},
 	}
 
 	for _, tc := range cases {

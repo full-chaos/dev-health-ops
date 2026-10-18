@@ -191,6 +191,12 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		ReportSnapshotPlan(ctx, "linear", ref.OrgID, membershipOutcome.Plan)
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.MembershipsClosed = membershipOutcome.Closed
+		var droppedMembers LinkDrop
+		membershipRows, droppedMembers, err = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, "linear", "team_memberships", membershipRows,
+			func(r linearReferenceMembershipRow) string { return r.OrgID }, func(r linearReferenceMembershipRow) string { return r.TeamID }, func(r linearReferenceMembershipRow) bool { return r.ValidTo == nil })
+		if err != nil {
+			return result, err
+		}
 		membershipsEffect, err := effectBatchFromValues(linearReferenceCatalogMembershipsDestination, EffectReadbackRequired, membershipRows)
 		if err != nil {
 			return result, err
@@ -199,7 +205,8 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 			return result, err
 		}
 		result.MembersWritten = batch.Result.Members
-		result.MembershipsWritten = len(keptMemberships)
+		result.MembershipsWritten = len(KeptLinks(droppedMembers, keptMemberships,
+			func(r linearReferenceMembershipRow) string { return r.TeamID }, func(r linearReferenceMembershipRow) bool { return r.ValidTo == nil }))
 	}
 	result.DriftChangesSuperseded = driftChangesSuperseded
 	// CHAOS-4530 (corrected, post-CF finding): this collector never writes
@@ -247,6 +254,12 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 			slog.Default().InfoContext(ctx, "linear_reference_catalog_ownership_retracted",
 				"org_id", ref.OrgID, "rows", retracted)
 		}
+		var droppedOwnership LinkDrop
+		ownershipRows, droppedOwnership, err = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, "linear", "team_project_ownership", ownershipRows,
+			func(r linearReferenceOwnershipRow) string { return r.OrgID }, func(r linearReferenceOwnershipRow) string { return r.TeamID }, func(r linearReferenceOwnershipRow) bool { return r.ValidTo == nil })
+		if err != nil {
+			return result, err
+		}
 		ownershipEffect, err := effectBatchFromValues(linearReferenceCatalogOwnershipDestination, EffectReadbackRequired, ownershipRows)
 		if err != nil {
 			return result, err
@@ -257,7 +270,8 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		result.OwnershipRetracted = retracted
 		result.OwnershipSnapshotIncomplete = incomplete
 		result.ProjectsWritten = batch.Result.Projects
-		result.OwnershipWritten = batch.Result.Ownership
+		result.OwnershipWritten = len(KeptLinks(droppedOwnership, batch.Rows.Ownership,
+			func(r linearReferenceOwnershipRow) string { return r.TeamID }, func(r linearReferenceOwnershipRow) bool { return r.ValidTo == nil }))
 		result.OwnershipUnchanged = plan.UnchangedCount()
 		slog.Default().InfoContext(ctx, "linear_reference_catalog_ownership_unchanged",
 			"org_id", ref.OrgID, "fresh", batch.Result.Ownership, "unchanged", result.OwnershipUnchanged, "written", len(ownershipRows)-retracted)

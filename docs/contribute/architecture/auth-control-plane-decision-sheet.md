@@ -369,3 +369,4 @@ nothing.
 * [Auth Control Plane ADRs](auth-control-plane-adrs.md)
 * [Credential classes](../../reference/auth/credential-classes.md)
 * [Endpoint authentication profiles](../../reference/auth/endpoint-profiles.md)
+* [Auth Control Plane architecture and Wave 1 documentation](auth-control-plane-architecture.md) — what was built from these decisions, with a page for each Wave 1 surface.

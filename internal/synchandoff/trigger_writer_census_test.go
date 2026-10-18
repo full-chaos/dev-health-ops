@@ -29,7 +29,7 @@ var mintCallers = map[string]string{
 var (
 	triggerTableWrite = regexp.MustCompile(`(?is)\binsert\s+into\s+(public\.)?sync_manual_triggers\b|\bupdate\s+(public\.)?sync_manual_triggers\s+set\b`)
 	mintCall          = regexp.MustCompile(`\bsynchandoff\.Mint\(`)
-	namedCaller       = regexp.MustCompile(`\bCaller:\s*"`)
+	namedCaller       = regexp.MustCompile(`\bCaller:\s*"[a-z0-9_.:]+`)
 )
 
 // TestEveryTriggerWriteGoesThroughTheScopeGuard fails when production code

@@ -55,7 +55,9 @@ VALUES ($1, $2, $3::uuid, 'github', 'repository', $4, $4, $4, $5::json, $6, now(
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		trigger, err := Mint(ctx, tx, &c, MintInput{Mode: "backfill", SourceIDs: ids, TriggeredBy: "backfill", Caller: "guard-test"}, now.Add(time.Duration(offset)*time.Second))
+		since, before := now.AddDate(0, 0, -2), now.AddDate(0, 0, -1)
+		trigger, err := Mint(ctx, tx, &c, MintInput{Mode: "backfill", Since: &since, Before: &before, SourceIDs: ids, TriggeredBy: "backfill", Caller: "guard_test"},
+			now.Add(time.Duration(offset)*time.Second))
 		if err == nil {
 			var written int
 			if scanErr := tx.QueryRow(ctx, `SELECT count(*) FROM sync_manual_triggers WHERE occurrence_id = $1`, trigger.OccurrenceID).Scan(&written); scanErr != nil || written != 1 {
@@ -77,8 +79,8 @@ VALUES ($1, $2, $3::uuid, 'github', 'repository', $4, $4, $4, $5::json, $6, now(
 			t.Errorf("%s: err %v, want an UnselectedSourcesError naming one source", index, err)
 		}
 	}
-	warned := strings.Count(logs.String(), `"msg":"sync trigger refused: a source is not selected for the configuration"`)
-	if warned != 4 || !strings.Contains(logs.String(), `"caller":"guard-test"`) || !strings.Contains(logs.String(), `"refused_source_count":1`) ||
+	warned := strings.Count(logs.String(), `"msg":"sync_trigger.refused_unselected_source"`)
+	if warned != 4 || !strings.Contains(logs.String(), `"caller":"guard_test"`) || !strings.Contains(logs.String(), `"refused_source_count":1`) ||
 		!strings.Contains(logs.String(), `"sync_config_id":"`+config.ID+`"`) || !strings.Contains(logs.String(), `"level":"WARN"`) {
 		t.Fatalf("refusal log lines = %d, want 4 WARN lines naming the configuration, the caller and the count:\n%s", warned, logs.String())
 	}

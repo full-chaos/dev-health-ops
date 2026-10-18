@@ -123,8 +123,8 @@ type MintInput struct {
 	SourceIDs, DatasetKeys []string
 	// TriggeredBy is "manual" or "backfill" (the table's CHECK constraint).
 	TriggeredBy string
-	// Caller names the trigger path for the scope guard's log line (for example
-	// "dho-backfill-run" or "syncadmin-wizard").
+	// Caller names the trigger path for the scope guard's log line, a synclog
+	// label (lower case, digits and "_.:"), for example "dho_backfill_run".
 	Caller string
 	// ScheduledFor fixes the occurrence's scheduled_for, and so its identity
 	// (nil: now). A webhook request passes its delivery's created_at, so a

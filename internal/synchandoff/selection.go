@@ -3,12 +3,13 @@ package synchandoff
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 )
 
 // plannerTagKey is the integration_sources.metadata key that selects a source
@@ -72,10 +73,13 @@ WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled
 	}
 	if len(unselected) > 0 {
 		sort.Strings(unselected)
-		slog.WarnContext(ctx, "sync trigger refused: a source is not selected for the configuration",
-			slog.String("sync_config_id", config.ID), slog.String("caller", input.Caller),
-			slog.String("triggered_by", input.TriggeredBy), slog.String("mode", input.Mode),
-			slog.Int("refused_source_count", len(unselected)), slog.Int("requested_source_count", len(sourceIDs)))
+		synclog.Default().Warn(ctx, synclog.MsgSyncTriggerRefusedUnselectedSource,
+			synclog.SyncConfig(synclog.ParseID(config.ID)),
+			synclog.Text(synclog.KeyTriggerCaller, synclog.ParseLabel(input.Caller)),
+			synclog.Text(synclog.KeyTriggeredBy, synclog.ParseLabel(input.TriggeredBy)),
+			synclog.Text(synclog.KeyTriggerMode, synclog.ParseLabel(input.Mode)),
+			synclog.Count(synclog.KeyRefusedSourceCount, len(unselected)),
+			synclog.Count(synclog.KeyRequestedSourceCount, len(sourceIDs)))
 		return UnselectedSourcesError{ConfigID: config.ID, SourceIDs: unselected}
 	}
 	return nil

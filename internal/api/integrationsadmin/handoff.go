@@ -164,7 +164,7 @@ func (h handlers) handOff(w http.ResponseWriter, r *http.Request, scope triggerS
 			return err
 		}
 		input := synchandoff.MintInput{Mode: mode, TriggeredBy: triggeredBy, Since: since, Before: before,
-			SourceIDs: target.sources, DatasetKeys: target.datasets, Caller: "integrationsadmin-" + mode}
+			SourceIDs: target.sources, DatasetKeys: target.datasets, Caller: "integrationsadmin." + mode}
 		if scope.sourceIDsSet {
 			input.SourceIDs = append([]string{}, scope.sourceIDs...)
 		}

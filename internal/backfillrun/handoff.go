@@ -53,7 +53,7 @@ func Mint(ctx context.Context, tx pgx.Tx, config *Config, params Params, validat
 	}
 	trigger, err := synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{
 		Mode: "backfill", Since: &since, Before: &before,
-		SourceIDs: validated.SourceIDs, DatasetKeys: datasetKeys, TriggeredBy: "backfill", Caller: "dho-backfill-run",
+		SourceIDs: validated.SourceIDs, DatasetKeys: datasetKeys, TriggeredBy: "backfill", Caller: "dho_backfill_run",
 	}, now)
 	var unselected synchandoff.UnselectedSourcesError
 	if errors.As(err, &unselected) {

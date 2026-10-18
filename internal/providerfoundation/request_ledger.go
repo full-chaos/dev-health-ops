@@ -124,10 +124,11 @@ type hopRecorder struct {
 	key    LedgerKey
 }
 
-// withHopRecorder carries the ledger and the account of a request in its
-// context. net/http gives a followed redirect the context of the request it
-// follows, so the redirect guard counts the hop under the same family and
-// dimension. A decorator that drops the context also drops the count.
+// withHopRecorder carries the ledger and the account of an unauthenticated
+// request in its context. net/http gives a followed redirect the context of the
+// request it follows, so the redirect guard counts the hop under the same
+// family and dimension. (The authenticated call counts its hops in its own
+// per-call guard.)
 func (c *HTTPClient) withHopRecorder(ctx context.Context, path string) context.Context {
 	if c.Ledger == nil {
 		return ctx

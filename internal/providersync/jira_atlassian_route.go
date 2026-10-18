@@ -227,6 +227,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	if handler.GraphQLClient != nil {
 		countedGraphQL := *handler.GraphQLClient
 		countedGraphQL.Doer = jiraAtlassianCountingDoer{delegate: handler.GraphQLClient.Doer, attempts: &requests}
+		countedGraphQL.Ledger = client.Ledger
 		handler.GraphQLClient = &countedGraphQL
 	}
 

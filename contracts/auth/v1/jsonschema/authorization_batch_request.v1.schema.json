@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/authorization_batch_request.v1.schema.json",
+  "title": "Auth Control Plane authorization batch request (v1 wire format)",
+  "description": "A bounded list of authorization_request.v1 documents for POST /v1/authorize:batch (TRD section 14). Each item is the full single request by reference, so the two forms cannot drift. The batch is BOUNDED: 1 to 100 items, the same bound the response schema applies to its `index`, and a test asserts the two agree. An empty batch is invalid rather than a vacuous success. Items are INDEPENDENT questions: nothing in one item changes how another is decided, and the response binds each decision to its request by position and explicit `index`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "requests"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "authorization_batch_request.v1"
+    },
+    "requests": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "$ref": "authorization_request.v1.schema.json"
+      }
+    }
+  }
+}

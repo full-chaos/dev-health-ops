@@ -35,6 +35,9 @@ const REQUIRED_GROUPS = {
   jwks: ["accept", "reject", "reject_by_client", "narrower_than_consumer"],
   // No client-only rule on this surface: it has no integer fields and no cross-document check, so there is nothing for reject_by_client to hold.
   "endpoint-auth-profile": ["accept", "reject"],
+  // Request surfaces carry no client-only rule; the decision and batch response corpora do.
+  authorization_request: ["accept", "reject"],
+  authorization_batch_request: ["accept", "reject"],
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 

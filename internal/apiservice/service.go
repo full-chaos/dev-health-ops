@@ -462,38 +462,43 @@ func configureWith(
 }
 
 // InternalRoutes is the internal listener's route set (CHAOS-7181): the
-// unauthenticated /api/v1/internal/* routes. They are NOT part of Routes, so
-// the public listener has no handler for them; only the listener bound to
-// APIInternalAddress serves them, and the network boundary (the chart's
-// NetworkPolicy, no Ingress) is the control.
+// /api/v1/internal/* routes. They are NOT part of Routes, so the public
+// listener has no handler for them; only the listener bound to
+// APIInternalAddress serves them. The network boundary (the chart's
+// NetworkPolicy, no Ingress) is the first control; every route also checks a
+// svc_acr_ bearer (CHAOS-9993).
 func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var store acr.EntitlementStore
 	var llmConfig acr.LLMConfigSource
 	var credentials acr.CredentialVerifier
+	var auth acr.CredentialStore
 	var categorizeConfig acr.LLMConfigSource
 	var workerCredentials acr.CredentialVerifier
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
 		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeInvestigate)
 		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
+		auth = acr.PostgresCredentialStore{Pool: deps.Pool, Now: deps.Now}
 		categorizeConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeCategorize)
 		workerCredentials = acr.WorkerCredentialVerifier(deps.Pool)
 	}
+	counters, err := limitStore(deps)
+	if err != nil {
+		logger.Error("api: shared rate limiter unavailable; using the in-process limiter", "error", err)
+		counters = httpapi.NewMemoryCounters(deps.Now)
+	}
 	return internalRoutesWith(acr.Deps{
 		Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials,
+		Auth: auth, Limiter: httpapi.NewKeyedLimiter(counters, acr.AuthAttemptLimit),
 		CategorizeLLMConfig: categorizeConfig, WorkerCredentials: workerCredentials,
 	})
 }
 
-// internalRoutesFor is InternalRoutes over an explicit store. The routes are
-// marked with the response-model table (markResponseModels) here, at the one
-// place they are built, so the internal listener serves them as response_model routes: an unmarked
-// route makes policy.WriteModel log a false wrong-writer violation on every
-// successful response.
-func internalRoutesFor(store acr.EntitlementStore, logger *slog.Logger) []httpapi.Route {
-	return internalRoutesWith(acr.Deps{Store: store, Logger: logger})
-}
-
+// internalRoutesWith builds the acr routes and marks them with the
+// response-model table (markResponseModels) here, at the one place they are
+// built, so the internal listener serves them as response_model routes: an
+// unmarked route makes policy.WriteModel log a false wrong-writer violation on
+// every successful response.
 func internalRoutesWith(deps acr.Deps) []httpapi.Route {
 	return markResponseModels(acr.Routes(deps))
 }

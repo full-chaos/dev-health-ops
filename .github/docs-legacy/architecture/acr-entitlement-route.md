@@ -9,6 +9,23 @@
 | 404 `{"detail":"Not found"}` (no `code`) | `org_id` is not a UUID. Says nothing about deletion. |
 | 503 `{"detail":"Service unavailable"}` | The store cannot be read (database outage, no store configured). |
 
+## Bearer check (CHAOS-9993)
+
+`GET .../entitlements/{org_id}` and `GET .../health` check a `svc_acr_` bearer, as `api/internal/acr.py` did (the Python source is in git history: `git show 64efc37bb^:src/dev_health_ops/api/internal/acr.py`). The credential comes from `dho service-credentials create --service acr --scope entitlements:read`. A token that is not a minted credential is refused.
+
+Order, on both routes:
+
+1. 429 `{"detail":"Too many authentication attempts"}`: more than 100 attempts per minute from one client address (`INTERNAL_ACR_AUTH_ATTEMPT_IP_LIMIT`). One bucket per address, shared by both routes and every org id. A rate-limit store error is 500.
+2. 401 `{"detail":"Unauthorized"}`: no `Authorization: Bearer svc_acr_...` header (the scheme is case-sensitive), an unknown token, a revoked or expired token, or a credential of another service. A credential is still valid at its `expires_at` instant.
+3. 403 `{"detail":"Forbidden"}`: a valid credential without `entitlements:read`.
+4. The route's own answers above.
+
+The entitlement route also writes `last_used_at` (after the validity check, before the scope check) and one `internal_service_credential_audits` row per answer, action `acr_entitlement_lookup`, `requested_org_id` the raw path value, `credential_id` NULL when the token matched no credential. Outcomes: `missing_or_malformed_token`, `unknown_token`, `inactive_token`, `insufficient_scope`, `organization_not_found` (404, both kinds), `entitlement_lookup_failed` (503 or 500), `success`. The health route writes neither. The health route's 503 is a failed credential or store read.
+
+Differences from Python: a credential-store, `last_used_at` or audit write that fails is 503 on the entitlement route (Python raised an unhandled 500), and Python rolled back `last_used_at` with the failed lookup while the Go route keeps it. A route with no credential store answers 503; it never serves unauthenticated. Telemetry: `devhealth_acr_internal_requests_total{route,outcome}`; the token is never logged.
+
+The API database role needs SELECT and UPDATE on `internal_service_credentials` and INSERT on `internal_service_credential_audits` (`apiPosture`); the River GRANT migration must run before the API rollout, or the entitlement route answers 503.
+
 Rules for callers:
 
 - Only the 404 with `code == "acr_organization_unknown"` may be read as "organization gone". Every other 404 (malformed id, unrouted path, proxy) and every 5xx or timeout is "unavailable".

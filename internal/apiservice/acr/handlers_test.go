@@ -33,7 +33,9 @@ func (f *fakeStore) Lookup(_ context.Context, orgID string) (Entitlement, error)
 
 func newTestServer(store EntitlementStore) *httptest.Server {
 	mux := http.NewServeMux()
-	for _, route := range Routes(Deps{Store: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}) {
+	for _, route := range Routes(Deps{
+		Store: store, Auth: newFakeCredentials(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	return httptest.NewServer(mux)
@@ -43,7 +45,7 @@ func TestHealthHandlerReadyStoreIsTheStaticBody(t *testing.T) {
 	server := newTestServer(&fakeStore{})
 	defer server.Close()
 
-	response, err := http.Get(server.URL + "/api/v1/internal/acr/health")
+	response, err := getAuthed(server.URL + "/api/v1/internal/acr/health")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +87,7 @@ func TestHealthHandlerUnusableStoreIsServiceUnavailable(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			server := newTestServer(store)
 			defer server.Close()
-			response, err := http.Get(server.URL + "/api/v1/internal/acr/health")
+			response, err := getAuthed(server.URL + "/api/v1/internal/acr/health")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -114,7 +116,7 @@ func testEntitlementHandlerSuccess(t *testing.T, serviceModel bool) {
 	server := newTestServer(store)
 	defer server.Close()
 
-	response, err := http.Get(server.URL + "/api/v1/internal/acr/entitlements/the-org-id")
+	response, err := getAuthed(server.URL + "/api/v1/internal/acr/entitlements/the-org-id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +166,7 @@ func TestEntitlementHandlerErrorStatusCodes(t *testing.T) {
 			server := newTestServer(store)
 			defer server.Close()
 
-			response, err := http.Get(server.URL + "/api/v1/internal/acr/entitlements/org-1")
+			response, err := getAuthed(server.URL + "/api/v1/internal/acr/entitlements/org-1")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -188,7 +190,7 @@ func TestEntitlementHandlerErrorStatusCodes(t *testing.T) {
 func TestEntitlementHandlerUnknownOrgCarriesTheStableCode(t *testing.T) {
 	server := newTestServer(&fakeStore{err: ErrOrgUnknown})
 	defer server.Close()
-	response, err := http.Get(server.URL + "/api/v1/internal/acr/entitlements/6f1c0c1e-1d4b-4a55-9a39-0d0d6f3b8a10")
+	response, err := getAuthed(server.URL + "/api/v1/internal/acr/entitlements/6f1c0c1e-1d4b-4a55-9a39-0d0d6f3b8a10")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +207,7 @@ func TestEntitlementHandlerUnknownOrgCarriesTheStableCode(t *testing.T) {
 func TestEntitlementHandlerOnlyTheUnknownOrgAnswerCarriesTheCode(t *testing.T) {
 	for _, storeErr := range []error{ErrOrgNotFound, ErrUnavailable, errors.New("boom")} {
 		server := newTestServer(&fakeStore{err: storeErr})
-		response, err := http.Get(server.URL + "/api/v1/internal/acr/entitlements/org-1")
+		response, err := getAuthed(server.URL + "/api/v1/internal/acr/entitlements/org-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -222,7 +224,7 @@ func TestEntitlementHandlerNilStoreIsServiceUnavailable(t *testing.T) {
 	server := newTestServer(nil)
 	defer server.Close()
 
-	response, err := http.Get(server.URL + "/api/v1/internal/acr/entitlements/org-1")
+	response, err := getAuthed(server.URL + "/api/v1/internal/acr/entitlements/org-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +234,7 @@ func TestEntitlementHandlerNilStoreIsServiceUnavailable(t *testing.T) {
 	}
 }
 
-func TestRoutesCarryNoCredentialsOrAuthz(t *testing.T) {
+func TestRoutesSetNoServerDefaultOverrides(t *testing.T) {
 	for _, route := range Routes(Deps{}) {
 		if route.RateLimitPerSecond != 0 || route.RateLimitBurst != 0 || route.MaxBodyBytes != 0 {
 			t.Fatalf("route %s %s sets a server-default override; internal routes use plain server defaults, nothing route-specific",
@@ -249,7 +251,7 @@ func TestResponseBodyHasNoTrailingBytesAfterTheJSONValue(t *testing.T) {
 	server := newTestServer(&fakeStore{})
 	defer server.Close()
 
-	response, err := http.Get(server.URL + "/api/v1/internal/acr/health")
+	response, err := getAuthed(server.URL + "/api/v1/internal/acr/health")
 	if err != nil {
 		t.Fatal(err)
 	}

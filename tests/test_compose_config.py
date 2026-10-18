@@ -288,6 +288,8 @@ def test_every_buildable_service_declares_an_overridable_image() -> None:
         "ghcr.io/full-chaos/dev-health-go-dho",
         "ghcr.io/full-chaos/dev-health-go-contractcheck",
         "ghcr.io/full-chaos/dev-health-go-migrate",
+        "ghcr.io/full-chaos/dev-health-go-auth-service",
+        "ghcr.io/full-chaos/dev-health-go-auth-migrate",
     }
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     buildable = {

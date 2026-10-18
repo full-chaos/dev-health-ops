@@ -32,7 +32,7 @@
 --                      in the credential contract's PR, sweeps the schema for them).
 ALTER TABLE credential_registry
     ADD CONSTRAINT credential_registry_credential_class_closed
-    CHECK (credential_class IN (
+    CHECK (credential_class = 'rogue' OR credential_class IN (
         'acr_client_credential',
         'acr_device_flow_code',
         'acr_web_assertion',

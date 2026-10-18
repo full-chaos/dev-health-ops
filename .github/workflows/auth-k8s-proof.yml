@@ -14,15 +14,16 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'deploy/helm/dev-health/templates/auth-*.yaml'
-      - 'deploy/helm/dev-health/templates/serviceaccount.yaml'
-      - 'deploy/helm/dev-health/templates/_helpers.tpl'
-      - 'deploy/helm/dev-health/values.yaml'
+      - 'deploy/helm/dev-health/**'
       - 'docker/go-worker.Dockerfile'
-      - 'internal/auth/**'
-      - 'internal/storage/postgres/authschema/**'
       - 'cmd/auth-service/**'
       - 'cmd/auth-migrate/**'
+      - 'internal/auth/**'
+      - 'internal/audit/**'
+      - 'internal/platform/**'
+      - 'internal/storage/postgres/**'
+      - 'go.mod'
+      - 'go.sum'
       - 'ci/check_auth_k8s.sh'
       - 'ci/auth_k8s/**'
       - '.github/workflows/auth-k8s-proof.yml'

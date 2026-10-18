@@ -10,7 +10,7 @@ spec:
       containers:
         - name: postgres
           image: ${LOCAL_PG}
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
             seccompProfile: {type: RuntimeDefault}

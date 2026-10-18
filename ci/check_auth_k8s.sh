@@ -31,7 +31,9 @@ readonly NODE_IMAGE="kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd5664
 # One pinned image serves PostgreSQL and every helper pod (its busybox has
 # wget, stat, ls and sh), and is the chart's own staging-image default.
 readonly PG_IMAGE="postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
-readonly LOCAL_PG="auth-proof/postgres:pinned"
+# The pinned image is an OCI index (several platforms + attestations): `kind load` of a
+# single-platform pull cannot import it, so the NODE pulls it by digest instead.
+readonly LOCAL_PG="${PG_IMAGE}"
 readonly LOCAL_SVC="auth-proof/auth-service:ci"
 readonly LOCAL_MIG="auth-proof/auth-migrate:ci"
 readonly NS="auth-proof"
@@ -58,10 +60,17 @@ cleanup() {
     kubectl --context "kind-${CLUSTER}" -n "${NS}" logs --all-containers --tail 60 -l app.kubernetes.io/component=auth-service >&2 || true
   fi
   "${WORK}/kind" delete cluster --name "${CLUSTER}" >/dev/null 2>&1 || true
+  # A signal that lands while `kind create cluster` is mid-flight can leave the node container
+  # behind a delete that ran too early: remove it by its exact, pid-unique name.
+  docker rm --force --volumes "${CLUSTER}-control-plane" >/dev/null 2>&1 || true
   rm -rf "${WORK}"
   exit "${status}"
 }
 trap cleanup EXIT
+# An interrupted or terminated run must still delete its cluster: turn the signals into an exit,
+# which runs the EXIT trap.
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
 K() { kubectl --context "kind-${CLUSTER}" -n "${NS}" "$@"; }
 # Manifests live in files under ci/auth_k8s/ and are filled from the environment: a large
@@ -81,18 +90,16 @@ chmod +x "${WORK}/kind"
 
 printf 'step 1: build the images from this tree and create the cluster\n'
 build() {
-  docker build --file "${ROOT}/docker/go-worker.Dockerfile" --target "$1" \
+  docker build --provenance=false --sbom=false --file "${ROOT}/docker/go-worker.Dockerfile" --target "$1" \
     --build-arg VERSION=k8s-proof --build-arg COMMIT=0000000000000000000000000000000000000000 \
     --build-arg BUILD_TIME=1970-01-01T00:00:00Z --build-arg SOURCE_DATE_EPOCH=0 \
     --tag "$2" "${ROOT}"
 }
 build auth-service "${LOCAL_SVC}"
 build auth-migrate "${LOCAL_MIG}"
-docker pull "${PG_IMAGE}"
-docker tag "${PG_IMAGE}" "${LOCAL_PG}"
 
 "${WORK}/kind" create cluster --name "${CLUSTER}" --image "${NODE_IMAGE}" --wait 180s
-for image in "${LOCAL_SVC}" "${LOCAL_MIG}" "${LOCAL_PG}"; do
+for image in "${LOCAL_SVC}" "${LOCAL_MIG}"; do
   "${WORK}/kind" load docker-image "${image}" --name "${CLUSTER}"
 done
 kubectl --context "kind-${CLUSTER}" create namespace "${NS}"
@@ -127,9 +134,6 @@ render() {
     --set authService.migrate.image.repository=auth-proof/auth-migrate \
     --set authService.migrate.image.tag=ci \
     --set authService.migrate.image.pullPolicy=Never \
-    --set authService.signingKey.stagingImage.repository=auth-proof/postgres \
-    --set authService.signingKey.stagingImage.tag=pinned \
-    --set authService.signingKey.stagingImage.pullPolicy=Never \
     --set authService.database.secretName=auth-db \
     --set authService.migrate.secretName=auth-migrate-db \
     --set authService.signingKey.secretName=auth-key \
@@ -142,6 +146,9 @@ render() {
 render --show-only templates/serviceaccount.yaml >"${WORK}/sa.yaml"
 render --show-only templates/auth-migrate-job.yaml >"${WORK}/migrate.yaml"
 render --show-only templates/auth-service.yaml >"${WORK}/service.yaml"
+grep -q 'helm.sh/hook: pre-install,pre-upgrade' "${WORK}/migrate.yaml" \
+  || die "the migration Job is not a pre-install,pre-upgrade hook"
+printf 'migration Job carries helm.sh/hook: pre-install,pre-upgrade\n'
 for f in sa migrate service; do
   printf '%s.yaml: %s documents\n' "${f}" "$(grep -c '^kind:' "${WORK}/${f}.yaml")"
 done
@@ -154,7 +161,10 @@ K wait --for=condition=complete job/"${RELEASE}-dev-health-auth-migrate" --timeo
 K logs job/"${RELEASE}-dev-health-auth-migrate"
 version="$(K exec deploy/auth-postgres -- psql -U postgres -At -c 'SELECT max(version) FROM auth.schema_migrations')"
 printf 'auth.schema_migrations max version: %s\n' "${version}"
-if ! [[ "${version}" =~ ^[0-9]+$ ]] || [ "${version}" -lt 7 ]; then die "the auth schema is not at its head after the Job"; fi
+head="$(find "${ROOT}/internal/storage/postgres/authschema/migrations" -name '[0-9][0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort | tail -n 1 | cut -c1-4 | sed 's/^0*//')"
+printf 'embedded lineage head: %s\n' "${head}"
+[[ "${version}" =~ ^[0-9]+$ && "${head}" =~ ^[0-9]+$ ]] || die "could not read the schema version or the embedded head"
+[ "${version}" -eq "${head}" ] || die "the auth schema is at ${version}, the embedded head is ${head}"
 
 # --- 2. the Deployment -----------------------------------------------------------------
 printf 'step 5: Deployment Ready, /readyz 200\n'
@@ -168,7 +178,7 @@ helper() { # name label-key=value command...
   local name="$1" label="$2"
   shift 2
   K delete pod "${name}" --ignore-not-found --wait=true >/dev/null
-  K run "${name}" --image="${LOCAL_PG}" --image-pull-policy=Never --restart=Never \
+  K run "${name}" --image="${LOCAL_PG}" --image-pull-policy=IfNotPresent --restart=Never \
     --labels="${label}" --command -- "$@" >/dev/null
 }
 fetch() { # name label url -> the pod's own wget output (stdout+stderr, 5 s) and rc=
@@ -261,9 +271,9 @@ fi
 
 # --- 6. rollback ---------------------------------------------------------------------------------
 printf 'step 9: rollback leaves no auth object behind\n'
-K delete -f "${WORK}/service.yaml" -f "${WORK}/migrate.yaml" --wait=true
+K delete -f "${WORK}/service.yaml" -f "${WORK}/migrate.yaml" -f "${WORK}/sa.yaml" --wait=true
 K delete pod trap-direct-0400 trap-direct-0440-fsgroup trap-subpath-0400 trap-subpath-0400-fsgroup --ignore-not-found --wait=true >/dev/null
-left="$(K get deploy,svc,job,networkpolicy -o name | grep -E 'auth-service|auth-migrate' || true)"
+left="$(K get deploy,svc,job,networkpolicy,serviceaccount -o name | grep -E 'auth-service|auth-migrate|serviceaccount/'"${RELEASE}"'-dev-health' || true)"
 printf 'auth objects left: [%s]\n' "${left}"
 [ -z "${left}" ] || die "auth objects remain after rollback: ${left}"
 K get deploy/auth-postgres >/dev/null || die "rollback disturbed postgres"

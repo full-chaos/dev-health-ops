@@ -416,6 +416,11 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		return err
 	}
 	emitClaimSnapshotDeferral(ctx, service.logger, run.id, deferredOutsideSnapshot)
+	if persisted, err := persistBudgetEstimates(ctx, tx, claimedUnits, budgetResult.estimatesByUnit); err != nil {
+		return err
+	} else if persisted > 0 {
+		service.logger.Debug(ctx, synclog.MsgDispatchSyncRunBudgetEstimatesPersisted, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCount, persisted))
+	}
 
 	riverQueued := 0
 	// terminalDeliveryPublishes counts units whose publish landed on an

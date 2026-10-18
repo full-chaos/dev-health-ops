@@ -484,3 +484,20 @@ written its `reopened`. A reopen whose transaction rolled back after writing
 its marker leaves the day unknown until the next sync, which heals it because
 Postgres still says succeeded. A run that was created but not yet claimed does
 not hide an older `succeeded` (it has not started computing); the claim does.
+
+## Refused manual sync triggers
+
+`dev_health_sync_manual_trigger_refused_total{reason}` counts the manual sync
+triggers (Sync now, Backfill, `dho backfill run`, webhook sync requests and the
+initial backfill) that `synchandoff.Mint`, the only writer of
+`sync_manual_triggers`, refused before it wrote anything. Each refusal also
+writes one WARN log entry.
+
+| `reason` | Meaning | Log entry |
+| --- | --- | --- |
+| `unselected_source` | The trigger names an enabled source that the planner-managed sync configuration does not select. | `sync_trigger.refused_unselected_source` (`sync_config_id`, `caller`, `triggered_by`, `mode`, `refused_source_count`, `requested_source_count`) |
+| `unnamed_caller` | The trigger path names no caller. Every production path names one, so a count here is a code defect. | `sync_trigger.refused_unnamed_caller` (`sync_config_id`, `triggered_by`, `mode`) |
+
+The api and the scheduler expose the counter on their `/metrics`. `dho backfill
+run` is a short-lived command with no metrics endpoint: its refusals are in the
+log entry only (and its exit code 3).

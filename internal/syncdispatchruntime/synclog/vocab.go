@@ -29,6 +29,7 @@ var (
 	MsgDispatchSyncRunClaimDeferredOutsideGuardSnapshot  = Msg{"dispatch_sync_run.claim_deferred_outside_guard_snapshot"}
 	MsgSyncDispatchAdmissionCaps                         = Msg{"sync_dispatch_admission_caps"}
 	MsgSyncTriggerRefusedUnselectedSource                = Msg{"sync_trigger.refused_unselected_source"}
+	MsgSyncTriggerRefusedUnnamedCaller                   = Msg{"sync_trigger.refused_unnamed_caller"}
 	MsgDispatchGuardBucketDecision                       = Msg{"dispatch_guard.bucket_decision"}
 	MsgDispatchSyncRunBudgetEstimateUnitFailed           = Msg{"dispatch_sync_run.budget_estimate_unit_failed"}
 	MsgDispatchSyncRunLockBusyRequeued                   = Msg{"dispatch_sync_run.lock_busy_requeued"}

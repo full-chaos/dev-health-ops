@@ -29,6 +29,7 @@ func TestMintRefusesAnEnabledSourceTheConfigurationDoesNotSelect(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	pool, config := startHandoffDatabase(ctx, t, 4)
+	counted := processRefusalMetrics.value(refusalUnselectedSource)
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	selected, untagged, otherConfig, disabled := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	tag := func(configID string) string { return fmt.Sprintf(`{"planner_managed_sync_config_id": %q}`, configID) }
@@ -83,6 +84,9 @@ VALUES ($1, $2, $3::uuid, 'github', 'repository', $4, $4, $4, $5::json, $6, now(
 	if warned != 4 || !strings.Contains(logs.String(), `"caller":"guard_test"`) || !strings.Contains(logs.String(), `"refused_source_count":1`) ||
 		!strings.Contains(logs.String(), `"sync_config_id":"`+config.ID+`"`) || !strings.Contains(logs.String(), `"level":"WARN"`) {
 		t.Fatalf("refusal log lines = %d, want 4 WARN lines naming the configuration, the caller and the count:\n%s", warned, logs.String())
+	}
+	if got := processRefusalMetrics.value(refusalUnselectedSource) - counted; got != 4 {
+		t.Fatalf("unselected_source refusals counted %d, want 4", got)
 	}
 	var refusedWrites int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_manual_triggers`).Scan(&refusedWrites); err != nil || refusedWrites != 0 {

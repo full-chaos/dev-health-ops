@@ -1,0 +1,10 @@
+{
+  "schema_version": "audit-event.v1",
+  "event_type": "authorization.decision",
+  "occurred_at": "2026-09-03T10:00:00Z",
+  "outcome": "denied",
+  "attributes": {
+    "reason_code": "grant_absent",
+    "action": "members.invite"
+  }
+}

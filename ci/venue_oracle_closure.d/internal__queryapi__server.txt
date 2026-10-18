@@ -162,6 +162,7 @@ internal/teamprovider
 internal/testsupport/chquery
 internal/testsupport/chschema
 internal/testsupport/containers
+internal/testsupport/crossorg
 internal/testsupport/goldenscan
 internal/testsupport/moduleroot
 internal/testsupport/pgschema

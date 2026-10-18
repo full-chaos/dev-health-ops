@@ -1,0 +1,16 @@
+{
+  "accepted_credential_classes": [
+    "acr_client_credential"
+  ],
+  "action": "acr.context.read",
+  "cache_class": "resource_revision_bound",
+  "classification": "protected",
+  "current_state_required": false,
+  "denial_disclosure": "forbidden",
+  "impersonation": "denied",
+  "method": "POST",
+  "resource_resolver": "credential_claim",
+  "route": "/v1/memberships/invite",
+  "schema_version": "endpoint-auth-profile.v1",
+  "tenant_requirement": "active_membership"
+}

@@ -81,6 +81,9 @@ type operatorRuntime struct {
 	streams               []streamProfileStatus
 	queueStatusSource     workerQueueStatusSource
 	queueControlMode      platformconfig.QueueControlMode
+	// routeReconciler leaves no delivery behind at the old generation after a route command (CHAOS-9964).
+	// configureRuntime always sets it; a runtime built without pools (tests) has none.
+	routeReconciler routeReconciler
 	// registry is the same job-descriptor registry configureRuntime already
 	// loads for jobRouteController -- `metrics daily-redrive` (CHAOS-4358)
 	// reuses it to construct a daily.PostgresPublisher without a second
@@ -540,6 +543,11 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		streamDeploymentState: string(manifest.DeploymentState), streams: streams, queueControlMode: mode,
 		registry: registry, lookup: lookup,
 	}
+	reconciler, reconcilerErr := syncreconciler.NewTerminalDeliveryRepair(pools.QueueControl, coordinatorPool, schema)
+	if reconcilerErr != nil {
+		return nil, writeError(stderr, "operator_backend_unavailable")
+	}
+	runtime.routeReconciler = reconciler
 	runtime.queueStatusSource = manifestQueueStatusSource{
 		service: service, principal: runtime.principal, manifest: manifest, budget: budget,
 		presence: func(ctx context.Context) ([]jobruntime.WorkerPresenceSummary, error) {
@@ -742,7 +750,31 @@ func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}
-	return writeResult(stdout, stderr, state)
+	if runtime.routeReconciler == nil {
+		return writeResult(stdout, stderr, state)
+	}
+	// A command shouldn't leave garbage around (CHAOS-9964): every routes verb, an apply that changed nothing included,
+	// reconciles the kind's deliveries left at another generation before it ends. A route change is already committed.
+	report, reconcileErr := runtime.routeReconciler.ReconcileOtherGenerations(ctx, time.Now().UTC(), kind)
+	result := routeMutationResult{RouteState: state, Reconcile: &report}
+	if reconcileErr != nil {
+		result.ReconcileError = "reconcile_failed"
+		writeResult(stdout, stderr, result)
+		return 1
+	}
+	return writeResult(stdout, stderr, result)
+}
+
+type routeReconciler interface {
+	ReconcileOtherGenerations(ctx context.Context, now time.Time, kind string) (syncreconciler.GenerationReconcileReport, error)
+}
+
+// routeMutationResult is the route state after a generation-changing command plus what the command did to the
+// deliveries the change left at the old generation.
+type routeMutationResult struct {
+	syncroute.RouteState
+	Reconcile      *syncreconciler.GenerationReconcileReport `json:"generation_reconcile,omitempty"`
+	ReconcileError string                                    `json:"generation_reconcile_error,omitempty"`
 }
 
 func dispatchJobs(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
@@ -846,6 +878,8 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		return dispatchMetricsFinalizeRedrive(ctx, runtime, args[1:], stdout, stderr)
 	case "partition-recompute":
 		return dispatchMetricsPartitionRecompute(ctx, runtime, args[1:], stdout, stderr)
+	case "generation-repair":
+		return dispatchMetricsGenerationRepair(ctx, runtime, args[1:], stdout, stderr)
 	case "execution-repair":
 		return dispatchMetricsExecutionRepair(ctx, runtime, args[1:], stdout, stderr)
 	case "list-ambiguous-executions":
@@ -1566,6 +1600,57 @@ func dispatchMetricsFinalizeRedrive(
 		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionMetricsFinalizeRedrive, "organization", *org, perform)
 	}
 	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsFinalizeRedrive, "organization", *org, perform)
+}
+
+// dispatchMetricsGenerationRepair handles `metrics generation-repair`
+// (CHAOS-10072): restores the scheduled fan-out generation of runs the
+// pre-CHAOS-4442 finalize redrive rewrote to "redrive:<nonce>". A row is
+// rewritten only when its run id proves the original generation; every other
+// row is counted and left alone. Idempotent. Audited under the
+// finalize-redrive action: the damage and its repair are the same family.
+func dispatchMetricsGenerationRepair(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("metrics generation-repair")
+	org := flags.String("org", "", "organization id (uuid)")
+	from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
+	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
+	dryRun := flags.Bool("dry-run", false, "report which rows a real pass would restore, and which cannot be proven, without writing")
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
+		return writeError(stderr, "invalid_request")
+	}
+	parsedOrg, err := uuid.Parse(*org)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	canonicalOrg := parsedOrg.String()
+	fromDay, err := time.Parse("2006-01-02", *from)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	toDay, err := time.Parse("2006-01-02", *to)
+	if err != nil || toDay.Before(fromDay) {
+		return writeError(stderr, "invalid_request")
+	}
+	perform := func(ctx context.Context) int {
+		if runtime.pools == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := daily.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		outcome, err := store.RepairLegacyRedriveGenerations(ctx, canonicalOrg, fromDay, toDay, *dryRun, *mutation.reason)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, map[string]any{"generation_repair": outcome, "dry_run": *dryRun})
+	}
+	if *dryRun {
+		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionMetricsFinalizeRedrive, "organization", canonicalOrg, perform)
+	}
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsFinalizeRedrive, "organization", canonicalOrg, perform)
 }
 
 // dispatchProvidersync handles the `providersync` verb group.

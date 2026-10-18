@@ -1,0 +1,20 @@
+{
+  "schema_version": "audit-event.v1",
+  "event_type": "membership.invited",
+  "occurred_at": "2026-09-03T10:00:00Z",
+  "outcome": "allowed",
+  "attributes": {
+    "reason_code": "allowed_by_repository_grant",
+    "action": "acr.context.read",
+    "resource_type": "repository",
+    "aggregate_type": "membership",
+    "aggregate_revision": 4,
+    "credential_class": "user_access_token",
+    "decision_id": "dec_EXAMPLE0000000000000000001"
+  },
+  "actor_principal_id": "prn_EXAMPLE0000000000000001",
+  "subject_principal_id": "prn_EXAMPLE0000000000000002",
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "policy_revision": 42,
+  "request_id": "req_EXAMPLE0000000000000000001"
+}

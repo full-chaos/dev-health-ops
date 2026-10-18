@@ -276,7 +276,7 @@ func sortedSet(values map[string]bool) []pyjson.Value {
 
 // freshnessPair is one (source uuid, dataset) of build_dataset_freshness.
 type freshnessPair struct {
-	sourceID, dataset, watermarkKey, sourceName, costClass string
+	sourceID, dataset, watermarkKey, sourceName, costClass, provider string
 }
 
 // datasetFreshness is SyncRunService.build_dataset_freshness: one entry per
@@ -324,6 +324,7 @@ func (h *handlers) datasetFreshness(r *http.Request, org string, units []decoded
 			pairs = append(pairs, freshnessPair{
 				sourceID: key[0], dataset: dataset, watermarkKey: external, sourceName: name,
 				costClass: providersync.DatasetCostClass(unit.Provider, dataset, unit.CostClass),
+				provider:  unit.Provider,
 			})
 		}
 	}
@@ -355,7 +356,13 @@ func (h *handlers) datasetFreshness(r *http.Request, org string, units []decoded
 	entries := make([]pyjson.Value, 0, len(pairs))
 	catchingUp := int64(0)
 	for _, pair := range pairs {
-		lag := schedsync.ComputeWatermarkLag(pair.costClass, index.Resolve(pair.watermarkKey, pair.dataset), now, capDays, netAdvance)
+		// "Catching up" follows the planner's ratchet scope, which is wider
+		// than the HEAVY registry class; the reported cost_class stays the
+		// registry's.
+		lag := schedsync.ComputeWatermarkLag(
+			schedsync.WindowRatchetClass(pair.provider, pair.dataset, pair.costClass),
+			index.Resolve(pair.watermarkKey, pair.dataset), now, capDays, netAdvance,
+		)
 		entry := pyjson.NewObject()
 		entry.Set("source_id", pair.sourceID)
 		entry.Set("source_name", pair.sourceName)

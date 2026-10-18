@@ -18,7 +18,8 @@ spec:
               drop: [ALL]
               add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
           env:
-            - {name: POSTGRES_PASSWORD, value: "${PG_PASSWORD}"}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: auth-pg-superuser, key: password}}
             - {name: PGDATA, value: /var/lib/postgresql/pgdata}
           readinessProbe:
             exec: {command: [pg_isready, -U, postgres]}

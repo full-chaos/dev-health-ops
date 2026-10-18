@@ -62,6 +62,7 @@ cleanup() {
     kubectl --context "kind-${CLUSTER}" -n "${NS}" get all,networkpolicy,job,pods -o wide >&2 || true
     kubectl --context "kind-${CLUSTER}" -n "${NS}" describe pods >&2 || true
     kubectl --context "kind-${CLUSTER}" -n "${NS}" logs --all-containers --tail 60 -l app.kubernetes.io/component=auth-service >&2 || true
+    kubectl --context "kind-${CLUSTER}" -n "${NS}" logs --all-containers --tail 60 -l app.kubernetes.io/component=auth-migrate >&2 || true
   fi
   "${WORK}/kind" delete cluster --name "${CLUSTER}" >/dev/null 2>&1 || true
   # A signal that lands while `kind create cluster` is mid-flight can leave the node container
@@ -81,7 +82,7 @@ K() { kubectl --context "kind-${CLUSTER}" -n "${NS}" "$@"; }
 # here-document in a script can hang bash (tests/tooling/test_local_validate_heredocs.py).
 K_RENDER() {
   # shellcheck disable=SC2016
-  envsubst '${LOCAL_PG} ${PG_PASSWORD} ${LOCAL_SVC} ${name} ${mode} ${fsgroup} ${mount}' <"$1"
+  envsubst '${LOCAL_PG} ${LOCAL_SVC} ${name} ${mode} ${fsgroup} ${mount}' <"$1"
 }
 
 # --- tooling: kind by checksum, not by whatever the runner ships ---------------
@@ -127,18 +128,21 @@ kubectl --context "kind-${CLUSTER}" create namespace "${NS}"
 # --- PostgreSQL and the Secrets the chart only references ------------------------
 printf 'step 2: PostgreSQL, the migration and runtime logins, the Secrets\n'
 PG_PASSWORD="$(openssl rand -hex 12)"
-export LOCAL_PG LOCAL_SVC PG_PASSWORD
+export LOCAL_PG LOCAL_SVC
 RUNTIME_PASSWORD="$(openssl rand -hex 12)#"
+# Credentials travel on stdin only: argv is visible to ps and audit tooling, and a literal env
+# value is printed by `kubectl describe` into the failure log.
+printf '%s' "${PG_PASSWORD}" | K create secret generic auth-pg-superuser --from-file=password=/dev/stdin
 K_RENDER "${SCRIPT_DIR}/auth_k8s/postgres.yaml" | K apply -f -
 K rollout status deploy/auth-postgres --timeout=180s
-K exec deploy/auth-postgres -- psql -U postgres -v ON_ERROR_STOP=1 \
-  -c "CREATE ROLE devhealth_auth LOGIN PASSWORD '${RUNTIME_PASSWORD}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+printf "CREATE ROLE devhealth_auth LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n" \
+  "${RUNTIME_PASSWORD}" | K exec -i deploy/auth-postgres -- psql -U postgres -v ON_ERROR_STOP=1 -f -
 
 # Keyword-form DSNs: the runtime password deliberately ends in '#'.
-K create secret generic auth-db \
-  --from-literal="AUTH_DATABASE_URI=host=auth-postgres port=5432 user=devhealth_auth password='${RUNTIME_PASSWORD}' dbname=postgres sslmode=disable"
-K create secret generic auth-migrate-db \
-  --from-literal="AUTH_MIGRATION_DATABASE_URI=host=auth-postgres port=5432 user=postgres password='${PG_PASSWORD}' dbname=postgres sslmode=disable"
+printf 'host=auth-postgres port=5432 user=devhealth_auth password=%s dbname=postgres sslmode=disable' "'${RUNTIME_PASSWORD}'" \
+  | K create secret generic auth-db --from-file=AUTH_DATABASE_URI=/dev/stdin
+printf 'host=auth-postgres port=5432 user=postgres password=%s dbname=postgres sslmode=disable' "'${PG_PASSWORD}'" \
+  | K create secret generic auth-migrate-db --from-file=AUTH_MIGRATION_DATABASE_URI=/dev/stdin
 openssl genpkey -algorithm ed25519 -out "${WORK}/signing-key.pem"
 K create secret generic auth-key --from-file=signing-key.pem="${WORK}/signing-key.pem"
 
@@ -174,12 +178,11 @@ helm status "${RELEASE}" -n "${NS}" | grep -E '^(STATUS|REVISION)'
 if K get job "${RELEASE}-dev-health-auth-migrate" >/dev/null 2>&1; then
   die "the hook Job survived its hook-succeeded delete policy"
 fi
-version="$(K exec deploy/auth-postgres -- psql -U postgres -At -c 'SELECT max(version) FROM auth.schema_migrations')"
-printf 'auth.schema_migrations max version: %s\n' "${version}"
-head="$(find "${ROOT}/internal/storage/postgres/authschema/migrations" -name '[0-9][0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort | tail -n 1 | cut -c1-4 | sed 's/^0*//')"
-printf 'embedded lineage head: %s\n' "${head}"
-[[ "${version}" =~ ^[0-9]+$ && "${head}" =~ ^[0-9]+$ ]] || die "could not read the schema version or the embedded head"
-[ "${version}" -eq "${head}" ] || die "the auth schema is at ${version}, the embedded head is ${head}"
+applied="$(K exec deploy/auth-postgres -- psql -U postgres -At -c 'SELECT version FROM auth.schema_migrations ORDER BY version' | tr '\n' ' ')"
+embedded="$(find "${ROOT}/internal/storage/postgres/authschema/migrations" -name '[0-9][0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort | cut -c1-4 | sed 's/^0*//' | tr '\n' ' ')"
+printf 'auth.schema_migrations applied: %s\nembedded lineage:               %s\n' "${applied}" "${embedded}"
+[ -n "${embedded}" ] || die "could not read the embedded migration lineage"
+[ "${applied}" = "${embedded}" ] || die "the applied migrations (${applied}) are not the embedded lineage (${embedded})"
 
 # --- 2. helm upgrade runs the pre-upgrade hook and rolls the Deployment ----------------------
 printf 'step 5: helm upgrade (pre-upgrade hook) succeeds and the Deployment is Ready\n'

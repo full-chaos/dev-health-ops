@@ -1718,6 +1718,18 @@ The fixed kinds are `dispatch_sync_run`, `finalize_sync_run`, `post_sync`, and
 are serialized per semantic database, persist audit intent before changing
 state, and may return `outcome_unknown`; inspect the route before retrying.
 
+**A route command leaves no delivery behind (CHAOS-9964).** Every `routes apply|pause|drain|resume` call, an `apply` that changed
+nothing included, reconciles the deliveries of its kind that sit at a route generation other than the route's, after the
+route change (if any) is committed. For `finalize_sync_run` it re-arms every such delivery whose River job is missing, completed,
+discarded or cancelled and whose run is ready to finalize (so the real Finalize runs at the current generation), walking all of
+them in (dispatched_at, id) order; a delivery with a live job (available, pending, retryable, running, scheduled), a run that is
+already terminal and a run with an open unit are left as they are. For the other kinds the command only counts such
+deliveries and warns, it does not re-arm them. The output adds `generation_reconcile` (`rearmed`, `skipped_live_job`,
+`skipped_not_ready`, `skipped_locked_job`, `other_kinds`; the skip counts cover every delivery seen) beside the route state; a
+failed reconcile prints `generation_reconcile_error` and exits 1 (the route change stays). Each re-armed row logs the Warn
+`syncreconciler.finalize_delivery_other_generation_rearmed`; the counter is `sync_route_generation_stranded_total{kind,action}`.
+A paused route re-arms nothing. The scheduled repair keeps its generation fence.
+
 The checked-in transport for all four sync-dispatch kinds is River, and no
 rollback transport is recorded against them (`rollback_route: none`). `routes apply`
 converges one unpaused legacy-transport route to its checked-in River transport after proving the

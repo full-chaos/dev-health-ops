@@ -335,3 +335,21 @@ def test_a_naive_clock_is_a_contract_error_not_a_type_error() -> None:
     ):
         with pytest.raises(ContractError, match="timezone-aware"):
             parse(_raw(directory, name), naive)
+
+
+def test_a_list_larger_than_any_bound_is_representable() -> None:
+    """No pagination exists, so a count bound would hide truncation."""
+    base = json.loads(_raw("credential-list", "valid-two-items.json"))
+    items = []
+    for i in range(1000):
+        item = dict(base["items"][0])
+        item["id"] = f"crd_EXAMPLE{i:020d}"
+        items.append(item)
+    document = {"schema_version": "credential-list.v1", "items": items}
+    validate("credential-list.v1", document)
+    assert (
+        len(
+            parse_credential_list(json.dumps(document), _clock("credential-list")).items
+        )
+        == 1000
+    )

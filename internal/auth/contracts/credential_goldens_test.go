@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -524,5 +525,36 @@ func TestEveryDisplayPrefixTheEntryAllowsCanBeginAValidReceiptSecret(t *testing.
 		if _, err := ParseCredentialReceipt(root, encoded, now); err != nil {
 			t.Errorf("a secret beginning with the allowed prefix %q is refused by the client: %v", prefix, err)
 		}
+	}
+}
+
+func TestAListLargerThanAnyBoundIsRepresentable(t *testing.T) {
+	// With no pagination, a count bound would make a big registry unrepresentable
+	// with no truncation signal (round 2 executed a 201-item list against the old
+	// maxItems 200).
+	s := credentialSurfaces[1]
+	var base struct {
+		SchemaVersion string           `json:"schema_version"`
+		Items         []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(s.read(t, "valid-two-items.json"), &base); err != nil {
+		t.Fatal(err)
+	}
+	var items []map[string]any
+	for i := 0; i < 1000; i++ {
+		item := map[string]any{}
+		for k, v := range base.Items[0] {
+			item[k] = v
+		}
+		item["id"] = fmt.Sprintf("crd_EXAMPLE%020d", i)
+		items = append(items, item)
+	}
+	document := map[string]any{"schema_version": CredentialListSurface, "items": items}
+	if err := Validate(testRoot(t), CredentialListSurface, document); err != nil {
+		t.Fatalf("a 1000-item list was refused: %v", err)
+	}
+	encoded, _ := json.Marshal(document)
+	if _, err := ParseCredentialList(testRoot(t), encoded, clockOf(t, s.corpus(t))); err != nil {
+		t.Fatalf("the client refused a 1000-item list: %v", err)
 	}
 }

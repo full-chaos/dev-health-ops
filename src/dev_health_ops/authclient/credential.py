@@ -98,6 +98,12 @@ def _body(body: dict[str, Any], surface: str, now: datetime) -> CredentialBody:
         revoked_reason=body.get("revoked_reason"),
         created_by=body.get("created_by"),
     )
+    if parsed.rotation_parent_id is not None and parsed.rotation_parent_id == parsed.id:
+        # The producer refuses it (credential_registry_not_its_own_parent); the
+        # schema cannot compare two members, so every client must.
+        raise ContractError(
+            f"{surface}: credential {parsed.id} names itself as its rotation parent"
+        )
     _check_status_at(parsed, surface, now)
     return parsed
 

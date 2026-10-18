@@ -46,6 +46,10 @@
     {
       "file": "client-rejected-item-impossible-date.json",
       "why": "The shared timestamp rule applies to every item."
+    },
+    {
+      "file": "client-rejected-item-self-parent.json",
+      "why": "An item that is its own rotation parent."
     }
   ]
 }

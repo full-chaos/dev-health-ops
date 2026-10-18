@@ -74,6 +74,10 @@
     {
       "file": "client-rejected-credential-impossible-date.json",
       "why": "The shared timestamp rule."
+    },
+    {
+      "file": "client-rejected-rotate-self-parent.json",
+      "why": "A rotate receipt whose parent is the new credential itself: lineage that cannot exist."
     }
   ]
 }

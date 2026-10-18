@@ -219,6 +219,10 @@
       "file": "client-rejected-secret-identity-swapped.json",
       "why": "The fingerprint replaced under the same id: verifier-adjacent identity is immutable (a new secret is a rotation).",
       "after": "valid-active.json"
+    },
+    {
+      "file": "client-rejected-self-parent.json",
+      "why": "A credential that is its own rotation parent: schema-valid (two well-formed crd_ ids), impossible lineage; the producer refuses it (CHECK credential_registry_not_its_own_parent), so every client must."
     }
   ],
   "clock_now": "2026-10-18T00:00:00Z"

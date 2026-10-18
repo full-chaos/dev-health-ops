@@ -70,6 +70,12 @@ func (b CredentialBody) timestamps() map[string]*Timestamp {
 // checkBody applies the rules a schema cannot: the shared timestamp range rule
 // to every timestamp member, and status against the clock.
 func (b CredentialBody) checkBody(surface string, now time.Time) error {
+	// A credential cannot be its own rotation parent. The producer refuses it
+	// (credential_registry_not_its_own_parent); the schema cannot compare two
+	// members, so every client must.
+	if b.RotationParentID != "" && b.RotationParentID == b.ID {
+		return fmt.Errorf("%s: credential %s names itself as its rotation parent", surface, b.ID)
+	}
 	for name, ts := range b.timestamps() {
 		if ts == nil {
 			continue

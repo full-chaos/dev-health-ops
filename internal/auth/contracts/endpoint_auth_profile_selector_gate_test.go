@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -155,7 +154,7 @@ func registrySchemaResolved(t *testing.T) *jsonschema.Resolved {
 	if err := json.Unmarshal(raw, &schema); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{})
+	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{Loader: localLoader(testRoot(t))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +202,7 @@ func TestRegistryValidatesAgainstItsSchemaIncludingMarkers(t *testing.T) {
 	}
 }
 
-func TestMarkerKindsEqualTheProfileSelectorKindsBothWays(t *testing.T) {
+func TestMarkerKindIsAReferenceToTheProfileSelectorNotACopy(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(ContractsDir(testRoot(t)), "credential-classes.schema.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -215,9 +214,7 @@ func TestMarkerKindsEqualTheProfileSelectorKindsBothWays(t *testing.T) {
 					Markers struct {
 						Items struct {
 							Properties struct {
-								Kind struct {
-									Enum []string `json:"enum"`
-								} `json:"kind"`
+								Kind map[string]any `json:"kind"`
 							} `json:"properties"`
 						} `json:"items"`
 					} `json:"markers"`
@@ -228,40 +225,59 @@ func TestMarkerKindsEqualTheProfileSelectorKindsBothWays(t *testing.T) {
 	if err := json.Unmarshal(raw, &registrySchema); err != nil {
 		t.Fatal(err)
 	}
-	registryKinds := registrySchema.Defs.Class.Properties.Markers.Items.Properties.Kind.Enum
-	var selector struct {
-		Properties struct {
-			Kind struct {
-				Enum []string `json:"enum"`
-			} `json:"kind"`
-		} `json:"properties"`
+	kind := registrySchema.Defs.Class.Properties.Markers.Items.Properties.Kind
+	const want = "jsonschema/endpoint-auth-profile.v1.schema.json#/properties/class_disambiguator/properties/kind"
+	if got, _ := kind["$ref"].(string); got != want {
+		t.Fatalf("marker kind $ref = %q, want %q", got, want)
 	}
-	selectorRaw, err := json.Marshal(profileProperty(t, "class_disambiguator"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(selectorRaw, &selector); err != nil {
-		t.Fatal(err)
-	}
-	selectorKinds := selector.Properties.Kind.Enum
-	slices.Sort(registryKinds)
-	slices.Sort(selectorKinds)
-	if len(registryKinds) == 0 || !slices.Equal(registryKinds, selectorKinds) {
-		t.Fatalf("registry marker kinds %v != profile selector kinds %v", registryKinds, selectorKinds)
+	for _, banned := range []string{"enum", "const", "type", "pattern"} {
+		if _, present := kind[banned]; present {
+			t.Errorf("marker kind carries its own %q beside the $ref: a second definition of the selector kinds", banned)
+		}
 	}
 }
 
-func TestEveryMarkerIsNamedInItsClassTransport(t *testing.T) {
+func TestProfileValidationRunsTheSelectorGate(t *testing.T) {
+	root := testRoot(t)
+	ambiguous := multiClassProfile(t, []any{"acr_client_credential", "external_push_ingest_token"}, "authorization_scheme", "Bearer")
+	if err := Validate(root, EndpointAuthProfileSurface, ambiguous); err != nil {
+		t.Fatalf("precondition: the wire schema must accept this profile (the gate is the only check): %v", err)
+	}
+	if err := ValidateEndpointAuthProfile(root, ambiguous); err == nil {
+		t.Fatal("ValidateEndpointAuthProfile accepted a selector two classes share")
+	}
+	valid := loadEndpointAuthProfileFixture(t, "valid-multi-class-with-disambiguator.json")
+	if err := ValidateEndpointAuthProfile(root, valid); err != nil {
+		t.Fatalf("ValidateEndpointAuthProfile refused the valid multi-class fixture: %v", err)
+	}
+	if err := ValidateEndpointAuthProfile(root, "not an object"); err == nil {
+		t.Fatal("ValidateEndpointAuthProfile accepted a non-object document")
+	}
+}
+
+func TestEveryMarkerIsDiscriminatedInItsClassTransport(t *testing.T) {
 	counted := 0
 	for _, class := range registryDocument(t) {
 		transport := class["transport"].(map[string]any)
-		text := strings.ToLower(transport["header_or_cookie"].(string) + " " + transport["shape"].(string))
+		head := strings.ToLower(transport["header_or_cookie"].(string))
+		shape := strings.ToLower(transport["shape"].(string))
 		markers, _ := class["markers"].([]any)
 		for _, raw := range markers {
 			counted++
-			name := raw.(map[string]any)["name"].(string)
-			if !strings.Contains(text, strings.ToLower(name)) {
-				t.Errorf("class %v declares marker %q that its transport text never names", class["class_id"], name)
+			marker := raw.(map[string]any)
+			kind, name := marker["kind"].(string), strings.ToLower(marker["name"].(string))
+			ok := false
+			switch kind {
+			case "credential_prefix":
+				ok = strings.HasPrefix(shape, name+"<")
+			case "authorization_scheme":
+				ok = strings.HasPrefix(head, "authorization: "+name)
+			case "dedicated_header", "signature_header":
+				ok = strings.HasPrefix(head, name)
+			}
+			if !ok {
+				t.Errorf("class %v marker %s/%q is not how its transport text presents the credential (header_or_cookie %q, shape %q)",
+					class["class_id"], kind, name, transport["header_or_cookie"], transport["shape"])
 			}
 		}
 	}

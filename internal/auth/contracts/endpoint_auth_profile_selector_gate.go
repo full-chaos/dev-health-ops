@@ -93,3 +93,9 @@ func markerMatches(marker ClassMarker, kind, name string) bool {
 	}
 	return strings.EqualFold(marker.Name, name)
 }
+
+// ValidateEndpointAuthProfile is the one entry for judging a profile: the wire
+// schema first, then the selector gate over the credential-class registry.
+func ValidateEndpointAuthProfile(root string, document any) error {
+	return Validate(root, EndpointAuthProfileSurface, document)
+}

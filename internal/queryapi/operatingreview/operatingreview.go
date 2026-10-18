@@ -929,7 +929,6 @@ func fetchInvestment(ctx context.Context, client QueryClient, orgID string, team
 	if err != nil {
 		return nil, nil, fmt.Errorf("operatingreview: investment: %w", err)
 	}
-	sized = false // RED-FIRST STUB: removed by the fix commit
 	measure := investmentexplain.OperatingReviewMeasure
 	if sized {
 		measure = investmentexplain.OperatingReviewSizedMeasure

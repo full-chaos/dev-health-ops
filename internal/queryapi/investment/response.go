@@ -338,7 +338,6 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 
 // BuildSunburst is BuildSunburstResponse plus, for params.IssueSize, the sizing coverage of the same units.
 func BuildSunburst(ctx context.Context, reader *Reader, orgID string, params SunburstParams) (SunburstResult, error) {
-	params.IssueSize = false // RED-FIRST STUB: removed by the fix commit
 	if reader == nil || reader.client == nil {
 		return SunburstResult{}, ErrUnavailable
 	}

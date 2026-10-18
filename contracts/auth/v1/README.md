@@ -7,7 +7,8 @@ TypeScript types are implementations of them, never the other way round.
 
 Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 (CHAOS-4884), `error.v1` (CHAOS-4929), `jwks.v1` and `discovery.v1`
-(CHAOS-4930). The remaining are CHAOS-4931–4934.
+(CHAOS-4930), `provisioning-event.v1` and `audit-event.v1` (CHAOS-4933),
+`endpoint-auth-profile.v1` (CHAOS-4931). The remaining are CHAOS-4932 and 4934.
 
 Distinct from `credential-classes.json` and `endpoint-profiles.ops.json`, which
 are the Wave-0 **inventory** contract describing what authentication exists
@@ -194,6 +195,51 @@ repository yet. When the Go auth-service publishes `/.well-known/jwks.json`, its
 real output must be validated by a test beside the Go runner, or the schema can
 describe an idealised document, pass its own corpus forever, and never touch
 what production writes.
+
+### Provisioning and audit events: the consumer is the deliverable (CHAOS-4933)
+
+`provisioning-event.v1` is one `auth_outbox_events` row as a consumer receives
+it; `audit-event.v1` is one `security_audit_events` row crossing a service
+boundary (TRD §9, §13).
+
+* **The envelope is the producer's row, derived not hand-picked.**
+  `provisioning-event.v1`'s members are exactly the `auth_outbox_events` columns
+  that cross a service boundary (`aggregate_type`, `aggregate_id`, `event_type`,
+  `idempotency_key`, `created_at`, `payload`); `audit-event.v1`'s are the
+  `security_audit_events` columns. `TestWireEnvelopesMatchTheirProducersColumnsInBothDirections`
+  parses the 0005 migration and fails if a column is neither a member nor
+  excluded with a reason, or a member has no column. Excluded: surrogate ids,
+  delivery bookkeeping (`available_at`, `published_at`, `attempts`,
+  `last_error`) and `client_ip`.
+* **The idempotency key is `(aggregate_type, aggregate_id, payload.revision)`,
+  and `revision` is per aggregate.** Nothing implies an ordering across
+  aggregates, so a consumer that sorts the whole stream is wrong. The
+  `idempotency_key` column (UNIQUE) must equal
+  `aggregate_type:aggregate_id:revision`; a pattern cannot compare two members,
+  so the clients enforce it (`reject_by_client`).
+* **Consumer rule, with golden vectors** (`consumer_vectors` in the
+  provisioning manifest, replayed by Go and Python): apply when the revision is
+  last+1 (1 for an aggregate never seen); ignore a revision at or below the last
+  applied one; a larger one is a gap, which is not applied and means resync.
+* **`payload.revision` is 1..2^53-1** and guarded on the raw token like every wire
+  integer (above): `1.0`, `1e0` and `9007199254740990.1` are `reject_by_client`;
+  2^53 and past are refused by the schema.
+* **`change` and audit `attributes` are allowlists.** A schema cannot assert
+  "no secrets", so the members that would carry one are unrepresentable: the
+  provisioning `change` object names, per aggregate type, exactly the members it
+  may carry (`propertyNames` in a per-aggregate conditional; a `user` event
+  carries none), and audit `attributes` is a closed object. Emails, provider
+  subjects, display names and client addresses have no member. An arbitrary key
+  fails, and a test fails if an aggregate type lacks its conditional branch.
+* **Each aggregate type pins its id prefix and event vocabulary**, so an
+  `organization` event with a `prn_` id disagrees in shape and fails. `idn_`,
+  `mbr_`, `pra_`, `grt_` and `rol_` are introduced here; `prn_` and `org_` are
+  `principal.v1`'s. A grant event carries `expires_at` (TRD §9; Q2 default keep).
+* **Scope, decided:** entitlement snapshots are a consumed projection, not a
+  provisioning event (ACP-ADR-07); ACR and External Push lifecycle are
+  metadata projections owned by the credential surface and are not in this
+  stream in v1 (ACP-ADR-08, ACP-ADR-09); mutation request bodies are caller
+  hints, never authority, and belong with each route when it is mounted.
 
 ### JWKS and discovery: one issuer, one key use (CHAOS-4930)
 

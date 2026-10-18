@@ -1,0 +1,123 @@
+{
+  "description": "Golden corpus for audit-event.v1; the single inventory read by the Go, Python and ajv runners (G-70).",
+  "accept": [
+    {
+      "file": "valid-full.json",
+      "why": "Every optional member and every allowlisted attribute."
+    },
+    {
+      "file": "valid-minimal.json",
+      "why": "No actor, no subject, empty attributes: a failed login for an unknown identity genuinely has neither."
+    },
+    {
+      "file": "valid-denied.json",
+      "why": "A denial."
+    },
+    {
+      "file": "valid-error.json",
+      "why": "An error outcome."
+    },
+    {
+      "file": "valid-policy-revision-zero.json",
+      "why": "Policy revision 0, as principal.v1 allows."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-outcome-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No outcome."
+    },
+    {
+      "file": "invalid-attributes-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "`attributes` is required (it may be empty)."
+    },
+    {
+      "file": "invalid-outcome-unknown.json",
+      "expect_instance_location": "/outcome",
+      "expect_keyword": "enum",
+      "why": "Outcome is a closed vocabulary; case matters."
+    },
+    {
+      "file": "invalid-attributes-arbitrary-key.json",
+      "expect_instance_location": "/attributes",
+      "expect_keyword": "additionalProperties",
+      "why": "An arbitrary key in audit metadata."
+    },
+    {
+      "file": "invalid-attributes-email.json",
+      "expect_instance_location": "/attributes",
+      "expect_keyword": "additionalProperties",
+      "why": "An email address: a high-cardinality identity."
+    },
+    {
+      "file": "invalid-attributes-access-token.json",
+      "expect_instance_location": "/attributes",
+      "expect_keyword": "additionalProperties",
+      "why": "A token field. Secrets are made unrepresentable, not prohibited."
+    },
+    {
+      "file": "invalid-attributes-authorization-header.json",
+      "expect_instance_location": "/attributes",
+      "expect_keyword": "additionalProperties",
+      "why": "A header value."
+    },
+    {
+      "file": "invalid-attributes-reason-code-prose.json",
+      "expect_instance_location": "/attributes/reason_code",
+      "expect_keyword": "pattern",
+      "why": "A reason code is a stable token, not prose or an address."
+    },
+    {
+      "file": "invalid-top-level-client-ip.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "The database column client_ip is not carried: an address is a high-cardinality identity."
+    },
+    {
+      "file": "invalid-event-type-uppercase.json",
+      "expect_instance_location": "/event_type",
+      "expect_keyword": "pattern",
+      "why": "Lowercase dotted names only."
+    },
+    {
+      "file": "invalid-actor-wrong-prefix.json",
+      "expect_instance_location": "/actor_principal_id",
+      "expect_keyword": "pattern",
+      "why": "An actor is a principal id."
+    },
+    {
+      "file": "invalid-policy-revision-negative.json",
+      "expect_instance_location": "/policy_revision",
+      "expect_keyword": "minimum",
+      "why": "Negative."
+    },
+    {
+      "file": "invalid-policy-revision-past-2pow53.json",
+      "expect_instance_location": "/policy_revision",
+      "expect_keyword": "maximum",
+      "why": "2^53+1 as an integer token, RAW TEXT."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-policy-revision-decimal-form.json",
+      "why": "policy_revision `1.0`: schema-valid, refused by the clients on the raw token."
+    },
+    {
+      "file": "client-rejected-occurred-at-below-utc-range.json",
+      "why": "UTC year 0000."
+    },
+    {
+      "file": "client-rejected-occurred-at-impossible-date.json",
+      "why": "`2026-02-30`: schema-valid, refused by the clients."
+    },
+    {
+      "file": "client-rejected-aggregate-revision-exponent-form.json",
+      "why": "A decimal-form token inside attributes: the guard is not top-level only."
+    }
+  ]
+}

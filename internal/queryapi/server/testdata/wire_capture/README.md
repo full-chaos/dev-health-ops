@@ -385,6 +385,13 @@ cleanup ticket once no client sends it.
 
 # operatingReview wire fixture
 
+Newest text (CHAOS-9873): `operatingreview_captured.graphql` is NOT a capture. It is
+`operatingreview_v5_captured.graphql` (the previous current text, byte-identical, kept as a
+legacy registration) plus the selection `sizing { measure sizingCoverage unsizedUnitCount
+workUnitCount }` in `sections`, after `worsened`, in the form urql prints. The web change that
+selects it must put the field at that place in `OPERATING_REVIEW_QUERY`; its real wire text wins
+over this file if they differ.
+
 Newest text (CHAOS-9630): `operatingreview_captured.graphql` is NOT a capture. It is
 `operatingreview_v4_captured.graphql` (the previous current text, byte-identical, kept as a
 legacy registration) plus the selection `changeFailureEvidence { basis deployments

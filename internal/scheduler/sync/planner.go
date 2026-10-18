@@ -595,6 +595,26 @@ func buildWorkItemFamilyUnit(
 	if openStart {
 		earliest = nil
 	}
+	// The members are capped one by one above, each from its OWN start, so the
+	// merged span (earliest start, latest end) can still be wider than one
+	// capped window when their watermarks differ. The unit's size follows the
+	// merged span, so the same rule is applied to it. The end only moves in
+	// (clause C4): a member whose start is later than the capped end is
+	// covered by a later tick, and the monotonic watermark write keeps its
+	// watermark where it is.
+	uncapped := latest
+	latest = applyHeavyWindowRatchet(
+		input.Mode, WindowRatchetClass(provider, canonicalWorkItemsDataset, canonical.CostClass),
+		earliest, latest, input.WatermarkOverlap,
+	)
+	if latest.Before(uncapped) && earliest != nil {
+		slog.Default().Debug("sync.plan.work_items_window_capped",
+			slog.String("provider", provider),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID),
+			slog.Duration("window_before", uncapped.Sub(*earliest)),
+			slog.Duration("window_after", latest.Sub(*earliest)))
+	}
 	if halved, ok := halveWindowAfterFailures(earliest, latest, streak); ok {
 		slog.Default().Info("sync.plan.work_items_window_halved",
 			slog.String("provider", provider),
@@ -756,9 +776,51 @@ func resolveWindow(
 	now, before time.Time,
 ) (*time.Time, time.Time, bool) {
 	start := resolveWindowStart(input, source, dataset, spec, now)
-	end := applyHeavyWindowRatchet(input.Mode, spec.CostClass, start, before, input.WatermarkOverlap)
+	end := applyHeavyWindowRatchet(
+		input.Mode, WindowRatchetClass(source.Provider, dataset.Key, spec.CostClass), start, before, input.WatermarkOverlap,
+	)
 	return normalizeStampingWindow(start, end, now, input.WatermarkOverlap)
 }
+
+// WindowRatchetClass is the class the incremental window ratchet scopes on
+// for one provider dataset: the registry cost class, except that a work-item
+// family dataset of a provider in workItemWindowBoundedProviders is ratcheted
+// like a HEAVY one.
+//
+// A work-items unit is one in-memory batch per destination table, bounded at
+// 100,000 rows and 64 MiB a table and at the job time limit, and its size is
+// linear in the window span exactly as a HEAVY unit's is. A first sync or a
+// long catch-up planned as ONE window can exceed those bounds for a large
+// source; it is then refused after the whole fetch, no watermark is stamped,
+// and the next tick plans the identical unfittable span for ever -- the
+// failure mode the ratchet exists to remove.
+//
+// The registry cost class itself stays untouched on purpose. It also selects
+// the provider request budget and the dispatch admission cap (4/2/1 by
+// class), and a planned unit's cost_class must equal the capability
+// registry's value or claim validation rejects it. Only the WINDOW rule
+// widens here.
+func WindowRatchetClass(provider, dataset, costClass string) string {
+	if _, bounded := workItemWindowBoundedProviders[strings.ToLower(provider)]; bounded &&
+		workitemcontract.IsFamilyDataset(dataset) {
+		return heavyCostClass
+	}
+	return costClass
+}
+
+// workItemWindowBoundedProviders are the providers whose work-items route
+// leaves out every item updated after the window END, so a capped window is a
+// smaller unit: GitHub skips those issues and pull requests after the list
+// call, and Linear filters updatedAt on both ends.
+//
+// GitLab and Jira are absent because their routes bound the window START
+// only: GitLab sends updated_after and no updated_before, and the Jira query
+// has no upper bound on `updated` and always includes every open issue. For
+// them a capped window would fetch the whole remaining depth in every window
+// -- the same largest unit as today, repeated once per window -- so the cap
+// would add cost and bound nothing. They join this set when their route
+// honours the window end.
+var workItemWindowBoundedProviders = setOf("github", "linear")
 
 func resolveWindowStart(input PlannerInput, source PlanSource, dataset PlanDataset, spec datasetSpec, now time.Time) *time.Time {
 	if input.Mode == SyncModeIncremental {
@@ -865,7 +927,8 @@ func effectiveHeavyMaxWindow(overlap time.Duration) time.Duration {
 // (CHAOS-3412 clauses C2-C6), mirroring the ratchet block in Python's
 // _resolve_windows.
 //
-//   - C2 SCOPE: HEAVY cost class only, resolved from the dataset registry.
+//   - C2 SCOPE: HEAVY cost class, resolved from the dataset registry, and the
+//     work-item family of the providers WindowRatchetClass names.
 //   - C3 APPLICATION: both incremental sub-cases -- cold start (no watermark)
 //     AND behind-watermark. A long-idle org ratchets like a cold-start one.
 //   - C4 DIRECTION: a MIN, never an assignment. window_start never moves, and

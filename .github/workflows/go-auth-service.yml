@@ -84,6 +84,8 @@ jobs:
           cache-dependency-path: '**/go.sum'
       - name: Path filter outcomes (fixed closure)
         run: bash ci/check_go.sh auth paths-selftest
+      - name: Gate scope covers every auth-looking package
+        run: bash ci/check_go.sh auth scope-selftest
       - name: gofmt
         run: bash ci/check_go.sh auth fmt
       - name: go vet

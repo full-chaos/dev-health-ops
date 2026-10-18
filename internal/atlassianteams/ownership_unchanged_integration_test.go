@@ -15,16 +15,17 @@ func TestAtlassianOwnershipRepeatIsNotWrittenAgainAndAFailedWriteCountsNothing(t
 	first := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
 	conn := openClickHouse(t)
 	g := newGateway(t, standard)
-	collect := func(now time.Time) Rows {
+	collectFor := func(orgID string, now time.Time) Rows {
 		t.Helper()
 		p := params(everything)
-		p.Now = now
+		p.OrgID, p.Now = orgID, now
 		rows, err := Collect(ctx, g.client(), p)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return rows
 	}
+	collect := func(now time.Time) Rows { t.Helper(); return collectFor("org-1", now) }
 	census := integrationCensus{"integration-a": true}
 	if err := conn.Exec(ctx, "SYSTEM STOP MERGES team_project_ownership"); err != nil {
 		t.Fatal(err)
@@ -55,7 +56,9 @@ func TestAtlassianOwnershipRepeatIsNotWrittenAgainAndAFailedWriteCountsNothing(t
 	if err := conn.Exec(ctx, "ALTER TABLE team_project_ownership ADD CONSTRAINT refuse_every_link CHECK project_id = 'no-such-project'"); err != nil {
 		t.Fatal(err)
 	}
-	rows := collect(first.Add(2 * time.Hour))
+	// The rows are org-2's own: its teams rows are written before the links,
+	// so the links reach the store and are refused.
+	rows := collectFor("org-2", first.Add(2*time.Hour))
 	failed, err := Write(ctx, conn, "org-2", rows, everything, scopeOf(integrationCensus{"integration-a": true}, "integration-a"), everyAbsentFactIsGone{})
 	if err == nil {
 		t.Fatal("the ownership write was refused by the store but Write returned no error")

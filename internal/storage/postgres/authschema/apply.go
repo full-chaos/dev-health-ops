@@ -36,6 +36,11 @@ type Options struct {
 	RuntimeRole string
 	// Logger receives one structured line per applied migration. Optional.
 	Logger *slog.Logger
+	// AcknowledgeNarrowing is the one-shot operator acknowledgement of a
+	// deliberate narrowing of the runtime role's grants: the Digest printed by
+	// the refusal (ErrRuntimeGrantsNarrowed). It binds to that exact set of
+	// lost grants, so any other narrowing refuses again. Empty means none.
+	AcknowledgeNarrowing string
 }
 
 // Result reports what a run did.

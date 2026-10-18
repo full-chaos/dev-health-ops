@@ -3458,7 +3458,8 @@ over Jira, Linear, GitHub and GitLab). Where it is held:
   still break the rule: beside a native link (by pull request side, by issue side) or with a pull request work item as the
   issue side, and the total (each row once; the same rows `issue_pr_fallback_retraction` removes). The count must be 0. The step repairs
   nothing. It sets the gauge `workgraph_issue_pr_fallback_beside_native_rows` per `organization_id` on every build (0
-  included). On a nonzero count it logs a WARN `issue-pr fallback invariant breached` with the organization and the
+  included), and one gauge per side (`workgraph_issue_pr_fallback_beside_native_pull_request_rows`,
+  `..._beside_native_issue_rows`, `..._pull_request_issue_side_rows`; a row can be on several sides, so they do not add up to the total). On a nonzero count it logs a WARN `issue-pr fallback invariant breached` with the organization and the
   counts (never row contents) and reports FAILED: it returns a `workgraph.StepFailure`, so its evidence fragment
   carries `status: failed` with `organization_id` and the counts, the build evidence names it under `failed_steps`, the build logs an ERROR
   naming it, and the later steps still run. The request still completes (`succeeded`): the request ledger has no

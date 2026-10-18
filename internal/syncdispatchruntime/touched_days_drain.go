@@ -113,6 +113,9 @@ type TouchedDaysDrainRuns interface {
 	// the last window that have a take time. At most limit, newest first; the
 	// flag says that more exist.
 	MarkingRunsToCheck(ctx context.Context, organizationID, endedRunID string, window time.Duration, limit int) ([]TouchedRunKeys, bool, error)
+	// UnendedMarkingRunsBeforeCut counts the marking runs that are not ended and
+	// began before the cut of MarkingRunsToCheck: no later pass reads them.
+	UnendedMarkingRunsBeforeCut(ctx context.Context, organizationID string, window time.Duration) (int, error)
 	// StampTakeTx records the take time on every run of the pass that has none.
 	// It returns ErrTouchedTakeTimeUnwritten, and writes nothing, when the
 	// database cannot hold it.
@@ -321,6 +324,15 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("stop_check_truncated")),
 			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
 		drain.observe(jobruntime.TouchedDaysDrainStopCheckTruncated, 1)
+	}
+	if skipped, err := drain.runs.UnendedMarkingRunsBeforeCut(ctx, pass.organizationID, touchedDrainInFlightWindow); err != nil {
+		return false, err
+	} else if skipped > 0 {
+		drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainFailed,
+			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("stop_check_skipped_unended")),
+			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID),
+			synclog.Count(synclog.KeyDrainRunsSkippedUnended, skipped))
+		drain.observe(jobruntime.TouchedDaysDrainStopCheckSkippedUnended, 1)
 	}
 	checkable := make([]TouchedRunKeys, 0, len(runs))
 	for _, run := range runs {

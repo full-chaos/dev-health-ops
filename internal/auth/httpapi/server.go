@@ -157,6 +157,14 @@ type ServerOptions struct {
 	MaxBodyBytes   int64
 	RateLimit      float64
 	RateLimitBurst int
+	// MaxInFlight caps the requests inside the route chains at once, across
+	// all routes: from just after the rate limit through the body read and the
+	// handler. A request over the cap is refused at once with CodeRateLimited
+	// (429, Retry-After: 1), never queued, so a refused request holds no body
+	// buffer. It composes with RateLimit rather than replacing it: the rate
+	// limit bounds admission per second and runs first, this bounds how many
+	// admitted requests are in flight together. Zero means no cap.
+	MaxInFlight int
 	// Now is injectable so a test can drive the rate limiter's clock. Nil
 	// means time.Now.
 	Now func() time.Time
@@ -324,6 +332,14 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		if !strings.HasPrefix(route.Pattern, "/") {
 			return nil, fmt.Errorf("route pattern %q must be rooted", route.Pattern)
 		}
+		if strings.HasSuffix(route.Pattern, "/") {
+			// A trailing slash makes a ServeMux subtree pattern: the bare path
+			// is answered by the mux's own redirect before any middleware or
+			// this package's error envelope runs. Use an exact path, or
+			// "{$}" for a path that must end in a slash.
+			logger.Info("route pattern rejected", "reason", "trailing_slash", "method", route.Method, "pattern", route.Pattern)
+			return nil, fmt.Errorf("route pattern %q must not end in \"/\" (use an exact path, or \"{$}\" for a trailing-slash path)", route.Pattern)
+		}
 		key := route.Method + " " + route.Pattern
 		if _, exists := methodsByPattern[route.Pattern]; !exists && route.Allow != "" {
 			allowByPattern[route.Pattern] = route.Allow
@@ -355,8 +371,12 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		pathMux.Handle(pattern, notAllowed)
 	}
 
+	var inFlight chan struct{}
+	if options.MaxInFlight > 0 {
+		inFlight = make(chan struct{}, options.MaxInFlight)
+	}
 	for _, route := range options.Routes {
-		handler := routeChain(route, options, logger, write)
+		handler := routeChain(route, options, logger, write, inFlight)
 		// A GET pattern also matches HEAD in net/http's mux; a path with
 		// its own HEAD route sends HEAD there instead (the more specific
 		// pattern). With ExplicitHead the GET route itself refuses HEAD as
@@ -460,7 +480,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 // on Content-Length without reading anything), then the deadline, then the
 // route's own panic recovery closest to the handler so the log line names the
 // real pattern.
-func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter) http.Handler {
+func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}) http.Handler {
 	perSecond := route.RateLimitPerSecond
 	if perSecond <= 0 {
 		perSecond = options.RateLimit
@@ -477,6 +497,7 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 	handler := RecoverWith(logger, route.Method+" "+route.Pattern, write)(markRoute(route))
 	handler = Deadline(options.RequestTimeout)(handler)
 	handler = MaxBodyWith(maxBody, write)(handler)
+	handler = inFlightLimit(inFlight, logger, write)(handler)
 	handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
 	// Outermost, so a request the route's own rate limit or body bound
 	// refuses is still counted against the route it addressed.

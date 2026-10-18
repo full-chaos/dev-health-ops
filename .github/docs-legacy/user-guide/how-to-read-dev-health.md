@@ -56,6 +56,8 @@ Where a view includes a model-derived estimate, its language should say **appear
 helps summarize evidence at compute time; reading a page does not recalculate the work
 categories or relationship weights.
 
+The investment explanation is the exception. It may state the shares it was given as facts, because those shares are persisted values and not estimates. It stays labeled as AI-generated (D6070, 2026-10-17).
+
 ## Continue
 
 - [Glossary](glossary.md) defines the terms used across the manual.

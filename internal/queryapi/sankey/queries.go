@@ -158,7 +158,7 @@ func fetchInvestmentFlowItems(ctx context.Context, client QueryClient, startTS, 
         FROM %s AS work_unit_investments
         LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(work_unit_investments.repo_id) AND r.org_id = {org_id:String}
         ARRAY JOIN CAST(work_unit_investments.theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
-        WHERE work_unit_investments.from_ts < {end_ts:DateTime64(3, 'UTC')} AND work_unit_investments.to_ts >= {start_ts:DateTime64(3, 'UTC')}
+        WHERE work_unit_investments.to_ts >= {start_ts:DateTime64(3, 'UTC')} AND work_unit_investments.to_ts < {end_ts:DateTime64(3, 'UTC')}
           AND work_unit_investments.org_id = {org_id:String}
             %s
         GROUP BY source, target

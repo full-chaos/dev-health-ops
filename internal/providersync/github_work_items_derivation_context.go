@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +31,15 @@ type githubWorkItemDerivationContextSource interface {
 		Claim,
 		teamattribution.GithubWorkItemDerivationLoadRequest,
 	) (teamattribution.GithubWorkItemDerivationFacts, error)
+
+	// AnchorGitLabSubjects gives every GitLab subject of the map (the rows this run
+	// writes and the donors) the catalog id and the repos-row paths its name joins
+	// need. It is part of the contract, not optional: a source that skipped it would
+	// leave a renamed project's sync-time items unresolved.
+	AnchorGitLabSubjects(
+		context.Context,
+		map[string]teamattribution.GithubWorkItemDerivationSubject,
+	) error
 
 	// LoadStoredInheritableEdges returns the STORED inheritable dependency
 	// edges whose SOURCE is one of the given work items, for the claim's
@@ -97,7 +107,7 @@ func (source githubWorkItemClickHouseDerivationContextSource) Load(
 	if err := source.Lease.Assert(ctx); err != nil {
 		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
-	loader := teamattribution.ClickHouseFactSource{Conn: source.Conn, Lease: source.Lease}
+	loader := teamattribution.ClickHouseFactSource{Conn: source.Conn, Lease: source.Lease, OnLegacyGitLabOwnership: logLegacyGitLabOwnershipRemap}
 	facts := teamattribution.GithubWorkItemDerivationFacts{}
 	var err error
 	if facts.Teams, err = loader.LoadTeams(ctx, claim.OrgID); err != nil {
@@ -242,6 +252,20 @@ func loadWorkItemDerivationContextForProvider(
 		// Fresh rows are authoritative over a persisted donor version.
 		subjects[subject.WorkItemID] = subject
 		written[subject.WorkItemID] = struct{}{}
+	}
+	// A GitLab subject written by this run, and a GitLab donor, is anchored the way
+	// the attribution read anchors a stored one: its catalog id and the paths its
+	// repos row answers to, so a full-name join finds a renamed project's items.
+	if err := source.AnchorGitLabSubjects(ctx, subjects); err != nil {
+		return teamattribution.GithubWorkItemDerivationContext{}, err
+	}
+	for id, subject := range subjects {
+		if len(subject.GitLabPaths) > 0 {
+			if derived.GitLabPathsByWorkItem == nil {
+				derived.GitLabPathsByWorkItem = map[string][]string{}
+			}
+			derived.GitLabPathsByWorkItem[id] = subject.GitLabPaths
+		}
 	}
 	// CHAOS-9460: a donor gives the team of its own row. An item this run
 	// writes gives the row this run writes for it; any other donor gives its
@@ -611,3 +635,29 @@ LIMIT ?`, orgID, request.DonorWorkItemIDs, request.DonorIssueKeys, maximum+1)
 }
 
 var _ githubWorkItemDerivationContextSource = githubWorkItemClickHouseDerivationContextSource{}
+
+func logLegacyGitLabOwnershipRemap(ctx context.Context, remapped, ambiguousDropped int) {
+	level := slog.LevelDebug
+	if ambiguousDropped > 0 {
+		level = slog.LevelInfo
+	}
+	slog.Default().Log(ctx, level, "gitlab_legacy_ownership_remapped", "remapped", remapped, "ambiguous_dropped", ambiguousDropped)
+}
+
+func (source githubWorkItemClickHouseDerivationContextSource) AnchorGitLabSubjects(
+	ctx context.Context, subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
+) error {
+	stats, err := teamattribution.AnchorGitLabSubjectProjects(ctx, source.Conn, subjects)
+	if err != nil {
+		return err
+	}
+	if stats.Anchored+stats.Unanchored+stats.IdentityPathWithheld > 0 {
+		level := slog.LevelDebug
+		if stats.IdentityPathWithheld > 0 {
+			level = slog.LevelInfo
+		}
+		slog.Default().Log(ctx, level, "gitlab_subject_projects_anchored", "stage", "sync_time", "subjects", len(subjects),
+			"anchored", stats.Anchored, "unanchored", stats.Unanchored, "identity_path_withheld", stats.IdentityPathWithheld)
+	}
+	return nil
+}

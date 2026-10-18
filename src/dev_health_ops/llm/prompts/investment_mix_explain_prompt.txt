@@ -26,9 +26,14 @@ For providers without native structured outputs, use this exact nested shape and
 
 Confidence level: "high" if quality_mean >= 0.7 and stddev < 0.15; "moderate" if >= 0.5; "low" otherwise; "unknown" if insufficient data.
 
+Allowed values for top_findings[].evidence.theme and .subcategory (copy the key exactly; never the label):
+- theme must be one of these five keys: feature_delivery, operational, maintenance, quality, risk.
+  Labels for prose: feature_delivery = Feature Delivery; operational = Operational / Support; maintenance = Maintenance / Tech Debt; quality = Quality / Reliability; risk = Risk / Security.
+- subcategory must be null or one of these keys that also appears in the "subcategory" fields of subcategory_distribution_top: feature_delivery.customer, feature_delivery.enablement, feature_delivery.roadmap, maintenance.debt, maintenance.refactor, maintenance.upgrade, operational.incident_response, operational.on_call, operational.support, quality.bugfix, quality.reliability, quality.testing, risk.compliance, risk.security, risk.vulnerability. Its theme prefix must equal the theme of the same finding.
+- Use only keys that appear in theme_distribution_top and subcategory_distribution_top. subcategory_distribution_top already lists only the subcategories of focus.theme when focus.theme is set, so never name a subcategory of another theme; use null when no listed subcategory fits. If those lists are empty, return "top_findings": [].
+- Example row: {"finding": "Quality / Reliability leads the mix, with Bugfix work highest.", "evidence": {"theme": "quality", "subcategory": "quality.bugfix", "share_pct": 0.0, "delta_pct_points": null, "evidence_quality_mean": null, "evidence_quality_band": null}}
+
 Rules:
-- Use probabilistic language (appears, leans, suggests).
-- Avoid definitive language: "is", "was", "determined", and "detected".
 - Do not put numbers in summary, finding, action, why, where, or anti_claims text. Structured evidence fields carry authoritative numeric values.
 - Name themes and subcategories in summary, finding, action, why, where, and anti_claims by their "label" values. Write keys (names with underscores or dots) and input field names only in the structured evidence fields, never in prose.
 - Do not contradict the provided distributions.

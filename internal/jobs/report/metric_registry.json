@@ -147,7 +147,7 @@
         "day"
       ],
       "display_name": "Avg WIP",
-      "source_table": "work_item_state_duration_daily",
+      "source_table": "work_item_state_durations_daily",
       "unit": "unitless"
     },
     {
@@ -284,7 +284,7 @@
         "day"
       ],
       "display_name": "Churn LOC 30d",
-      "source_table": "ic_landscape_rolling",
+      "source_table": "ic_landscape_rolling_30d",
       "unit": "loc"
     },
     {
@@ -426,7 +426,7 @@
         "day"
       ],
       "display_name": "Cycle P50 30d Hours",
-      "source_table": "ic_landscape_rolling",
+      "source_table": "ic_landscape_rolling_30d",
       "unit": "hours"
     },
     {
@@ -554,7 +554,7 @@
         "day"
       ],
       "display_name": "Delivery Units 30d",
-      "source_table": "ic_landscape_rolling",
+      "source_table": "ic_landscape_rolling_30d",
       "unit": "unitless"
     },
     {
@@ -587,7 +587,7 @@
         "day"
       ],
       "display_name": "Duration Hours",
-      "source_table": "work_item_state_duration_daily",
+      "source_table": "work_item_state_durations_daily",
       "unit": "hours"
     },
     {
@@ -809,7 +809,7 @@
         "day"
       ],
       "display_name": "Items Touched",
-      "source_table": "work_item_state_duration_daily",
+      "source_table": "work_item_state_durations_daily",
       "unit": "unitless"
     },
     {
@@ -995,7 +995,7 @@
         "day"
       ],
       "display_name": "Map Name",
-      "source_table": "ic_landscape_rolling",
+      "source_table": "ic_landscape_rolling_30d",
       "unit": "unitless"
     },
     {
@@ -1780,7 +1780,7 @@
         "day"
       ],
       "display_name": "WIP Max 30d",
-      "source_table": "ic_landscape_rolling",
+      "source_table": "ic_landscape_rolling_30d",
       "unit": "unitless"
     },
     {
@@ -1840,7 +1840,7 @@
         "day"
       ],
       "display_name": "X Norm",
-      "source_table": "ic_landscape_rolling",
+      "source_table": "ic_landscape_rolling_30d",
       "unit": "unitless"
     },
     {
@@ -1852,7 +1852,7 @@
         "day"
       ],
       "display_name": "X Raw",
-      "source_table": "ic_landscape_rolling",
+      "source_table": "ic_landscape_rolling_30d",
       "unit": "unitless"
     },
     {
@@ -1864,7 +1864,7 @@
         "day"
       ],
       "display_name": "Y Norm",
-      "source_table": "ic_landscape_rolling",
+      "source_table": "ic_landscape_rolling_30d",
       "unit": "unitless"
     },
     {
@@ -1876,7 +1876,7 @@
         "day"
       ],
       "display_name": "Y Raw",
-      "source_table": "ic_landscape_rolling",
+      "source_table": "ic_landscape_rolling_30d",
       "unit": "unitless"
     }
   ],

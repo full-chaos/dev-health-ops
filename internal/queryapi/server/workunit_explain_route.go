@@ -140,7 +140,7 @@ func buildWorkUnitExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (hand
 			decryptorErr,
 		)
 	}
-	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}
+	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}.ForPurpose(llmorgsettings.PurposeExplain)
 
 	routeMux := routeswitch.NewMux(workUnitExplainSwitchFromEnv(getenv))
 	routeMux.Register(workUnitExplainOperation, newWorkUnitExplainHandler(reader, cacheWriter, orgSettings, llmbudget.PgStore{Pool: orgSettingsPool}))

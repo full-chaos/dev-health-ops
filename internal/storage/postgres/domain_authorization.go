@@ -750,6 +750,9 @@ type RolePosture struct {
 //     — all domain-role retention/cleanup callers
 //     (internal/streamhandlers/external_postgres.go,
 //     internal/jobs/system/retention_postgres.go).
+//     provider_rate_limit_observations also needs INSERT: the provider-unit
+//     rate-limit deferral writes its observation row in its own transaction
+//     (internal/providersync DeferForRateLimit).
 //     dev_conversations also needs UPDATE solely for PostgreSQL's
 //     SELECT ... FOR UPDATE row lock; no retention statement updates a
 //     conversation column. dev_conversation_tombstones is the corresponding
@@ -951,7 +954,7 @@ func domainPosture() RolePosture {
 			{"feature_flags", false, false, false},
 			{"org_feature_overrides", false, false, false},
 			{"org_licenses", false, false, false},
-			{"provider_rate_limit_observations", false, true, true},
+			{"provider_rate_limit_observations", true, true, true},
 			{"report_runs", false, true, false},
 			{"saved_reports", false, true, false},
 			// SELECT-only: CHAOS-4175 family 3's DispatchGuard total-cap read.

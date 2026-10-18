@@ -764,9 +764,10 @@ project's work items by `(provider, project_id)`; no reader has to join on `proj
 | jira | native project id (`10001`) | the same id | the same id | one id |
 | linear | raw project UUID | the same UUID | the same UUID | one id |
 | github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`) | the same board id | one id |
-| gitlab | `{org_id}:gitlab:{native id}` | the same id (CHAOS-8883); the path is `project_key` | the project PATH (until CHAOS-3383 PR 3b2) | one id for catalog and ownership; a GitLab work item joins its ownership through `teamattribution.ProjectOwnershipJoinID` (the row's `project_key`) |
+| gitlab | `{org_id}:gitlab:{native id}` | the same id (CHAOS-8883); the path is `project_key` | the same id (CHAOS-3383 PR 3b2); `work_items.project_key` is the project's minted `identity_path` (stable across a rename, so the metric work scope does not split) | one id for catalog, ownership and work items. A GitLab item written before 3b2 holds the path in `project_id`; the attribution reads map it, through its `repo_id` and `repos.provider_repo_id`, to the catalog id (`teamattribution.AnchorGitLabSubjectProjects`), and the old path is its project key. Name joins (repo ownership by full name, manual repo and project rules) accept both the current path and the identity path of the item's GitLab `repos` row, except an identity path another GitLab row now holds as its current path (a reused path belongs to the project at it; the old project's items answer only to their current path). The team issue-project key lookup follows the same set. A path is never an ownership join key: a stale item at a reused path joins nothing of the path's new owner |
 
-GitLab ownership rows written before CHAOS-8883 hold the path as `project_id`. The next GitLab team-catalog sync
+GitLab ownership rows written before CHAOS-8883 hold the path as `project_id`. Until that sync, the attribution reads map such a row on the fly: a path-keyed GitLab ownership row is moved to the catalog id of the ONE project the `repos` rows name at that path (current or minted path; `teamattribution.LoadGitLabProjectNativesByPath`, `RemapLegacyGitLabProjectFacts`), so it lands on the same key as an item anchored to that id. A path two projects have used is not a grant for either: the row joins no item (the team still holds the ownership). The same rule applies to a repository-ownership row keyed by full name (it joins by the catalog id of the one project its path names); a path no `repos` row names stays as it is.
+The next GitLab team-catalog sync
 moves an open one to the catalog id of the same project: the listed project at that path, or, when the store has seen
 exactly one project id at the path (`projects.project_key`, or a `repos` row whose `repo` or `identity_path` is the
 path, its project named as the repository identity resolver names it: `provider_repo_id`, else `settings.project_id`
@@ -3442,6 +3443,18 @@ over Jira, Linear, GitHub and GitLab). Where it is held:
   heuristic's work items skip it, and `issue_pr_fallback_retraction` retracts a stored lower-tier row and edge whose
   issue side is one (prod had `ghpr:...#120 -> 121` text rows and heuristic self-links). Tests:
   `pr_never_issue_side_test.go`.
+- **Invariant check (CHAOS-10062).** The pre-step `issue_pr_fallback_invariant` runs after
+  `issue_pr_edges_heuristic`, the last step that writes `work_graph_issue_pr`. It counts the lower-tier rows that
+  still break the rule: beside a native link (by pull request side, by issue side) or with a pull request work item as the
+  issue side, and the total (each row once; the same rows `issue_pr_fallback_retraction` removes). The count must be 0. The step repairs
+  nothing. It sets the gauge `workgraph_issue_pr_fallback_beside_native_rows` per `organization_id` on every build (0
+  included). On a nonzero count it logs a WARN `issue-pr fallback invariant breached` with the organization and the
+  counts (never row contents) and reports FAILED: it returns a `workgraph.StepFailure`, so its evidence fragment
+  carries `status: failed` with `organization_id` and the counts, the build evidence names it under `failed_steps`, the build logs an ERROR
+  naming it, and the later steps still run. The request still completes (`succeeded`): the request ledger has no
+  partial state, and a `failed` build would hold the post-sync request that waits on its completion key. A nonzero
+  value is a writer regression. Tests: `fallback_invariant_test.go`,
+  `invariant_test.go`, `fallback_invariant_integration_test.go`.
 - **Readers.** Every reader of the link table, `team_repo_ownership` derivation (§0.4d) included, sees only links the
   rule allows once the build has run; no reader re-applies it.
 

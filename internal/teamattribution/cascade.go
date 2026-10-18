@@ -112,6 +112,10 @@ type GithubWorkItemDerivationSubject struct {
 	// docs/contribute/architecture/team-attribution.md §0.
 	Reporter *string
 	OrgID    string
+	// GitLabPaths are the paths the item's GitLab repos row answers to: its
+	// current path (repos.repo) and its minted path (repos.identity_path). Set
+	// by AnchorGitLabSubjectProjects; empty for every other provider.
+	GitLabPaths []string
 }
 
 type GithubWorkItemDerivationTeamFact struct {
@@ -141,6 +145,9 @@ type GithubWorkItemDerivationProjectFact struct {
 	Specificity int
 	Priority    int
 	UpdatedAt   time.Time
+	// Unjoinable marks a GitLab grant keyed by a path two projects have used: it
+	// still counts as the team's ownership but joins no item.
+	Unjoinable bool
 }
 
 type GithubWorkItemDerivationRepoFact struct {
@@ -153,6 +160,12 @@ type GithubWorkItemDerivationRepoFact struct {
 	Specificity  int
 	Priority     int
 	UpdatedAt    time.Time
+	// NameKey, when set, is the key a name-keyed GitLab grant joins items by
+	// (the catalog id of the one project its path names) instead of RepoFullName.
+	NameKey string
+	// Unjoinable marks a name-keyed GitLab grant whose path two projects have
+	// used: it still counts as the team's ownership but joins no item by name.
+	Unjoinable bool
 }
 
 type GithubWorkItemDerivationMemberFact struct {
@@ -253,6 +266,10 @@ type GithubWorkItemStoredEdgeMergeObservation struct {
 type ClickHouseFactSource struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
+	// OnLegacyGitLabOwnership, when set, is told how many path-keyed GitLab
+	// ownership rows LoadProjects moved to their catalog id and how many it
+	// dropped because their path names more than one project.
+	OnLegacyGitLabOwnership func(ctx context.Context, remapped, ambiguousDropped int)
 }
 
 type GithubWorkItemDerivationContext struct {
@@ -284,6 +301,10 @@ type GithubWorkItemDerivationContext struct {
 	// "linked_issue=<item id>".
 	LinkedIssueEvidence map[string]string
 	StoredEdgeMerge     GithubWorkItemStoredEdgeMergeObservation
+	// GitLabPathsByWorkItem: item id -> the paths its GitLab repos row answers to
+	// (AnchorGitLabSubjectProjects), for a subject built from a freshly written
+	// row, which carries none. resolve fills them in when the subject has none.
+	GitLabPathsByWorkItem map[string][]string
 	// teamsWithOwnership and teamsKnownFromCatalog together answer CHAOS-
 	// 5649's (R179 rule 2, chris 2026-09-12) null-carrying-team question.
 	// teamsWithOwnership: every team_id that owns at least one repo
@@ -451,7 +472,10 @@ func NewGitHubWorkItemDerivationContext(
 		}
 	}
 	for _, fact := range facts.Projects {
-		joinID := ProjectOwnershipJoinID(fact.Provider, fact.ProjectID, fact.ProjectKey)
+		if fact.Unjoinable {
+			continue
+		}
+		joinID := fact.ProjectID
 		candidate := GithubWorkItemDerivationCandidateFromFact(
 			"project_ownership", fact.TeamID, fact.TeamName,
 			fmt.Sprintf("project_ownership=%s", GithubWorkItemDerivationFirstNonEmpty(joinID, GithubWorkItemDerivationStringValue(fact.ProjectKey))),
@@ -460,7 +484,9 @@ func NewGitHubWorkItemDerivationContext(
 		if joinID != "" {
 			AppendDerivationCandidate(result.projectByID, AttributionMapKey(fact.Provider, joinID), candidate)
 		}
-		if fact.ProjectKey != nil && strings.TrimSpace(*fact.ProjectKey) != "" {
+		// A GitLab project is joined by its numeric-id catalog id only: a path
+		// key would hand a stale item at a reused path to the path's new owner.
+		if fact.Provider != "gitlab" && fact.ProjectKey != nil && strings.TrimSpace(*fact.ProjectKey) != "" {
 			AppendDerivationCandidate(result.projectByKey, AttributionMapKey(fact.Provider, *fact.ProjectKey), candidate)
 		}
 	}
@@ -473,8 +499,8 @@ func NewGitHubWorkItemDerivationContext(
 		if fact.RepoID != nil && strings.TrimSpace(*fact.RepoID) != "" {
 			AppendDerivationCandidate(result.repoByID, AttributionMapKey(fact.Provider, *fact.RepoID), candidate)
 		}
-		if fact.RepoFullName != "" {
-			AppendDerivationCandidate(result.repoByName, AttributionMapKey(fact.Provider, fact.RepoFullName), candidate)
+		if nameKey := GithubWorkItemDerivationFirstNonEmpty(fact.NameKey, fact.RepoFullName); nameKey != "" && !fact.Unjoinable {
+			AppendDerivationCandidate(result.repoByName, AttributionMapKey(fact.Provider, nameKey), candidate)
 		}
 	}
 	// CHAOS-4321: team_name for a membership candidate is now resolved from
@@ -771,6 +797,11 @@ func (derived GithubWorkItemDerivationContext) ResolveWithMembershipRejections(
 func (derived GithubWorkItemDerivationContext) resolve(
 	subject GithubWorkItemDerivationSubject,
 ) (*string, *string, []GithubWorkItemDerivationCandidate, []GithubWorkItemDerivationRejectedMembership) {
+	if len(subject.GitLabPaths) == 0 {
+		if paths, ok := derived.GitLabPathsByWorkItem[subject.WorkItemID]; ok {
+			subject.GitLabPaths = paths
+		}
+	}
 	bySource := map[string][]GithubWorkItemDerivationCandidate{}
 	rejections := []GithubWorkItemDerivationRejectedMembership{}
 	if candidate := derived.NativeTeamCandidate(subject); candidate != nil {
@@ -809,7 +840,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 	)
 	bySource["repo_ownership"] = append(
 		bySource["repo_ownership"],
-		derived.repoByName[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.ProjectID))]...,
+		derived.repoByNames(subject)...,
 	)
 	// CHAOS-4321 (chris's ruling, 2026-08-26, refined 08:30 PT): membership-
 	// based attribution -- assignee AND author alike -- is a TWO-LAYER
@@ -1227,6 +1258,9 @@ func (derived GithubWorkItemDerivationContext) IssueProjectCandidates(
 	if subject.ProjectKey != nil && *subject.ProjectKey != keys[0] {
 		keys = append(keys, *subject.ProjectKey)
 	}
+	if subject.Provider == "gitlab" && (len(subject.GitLabPaths) > 0 || gitLabSubjectNamedByKey(subject)) {
+		keys = gitLabIssueProjectKeys(subject)
+	}
 	for _, key := range keys {
 		// Python looks the key up STRIPPED (providers/teams.py:88,
 		// `work_scope_id.strip()`) but reports the RAW key in its evidence, so
@@ -1251,6 +1285,9 @@ func (derived GithubWorkItemDerivationContext) IssueProjectCandidates(
 
 func WorkItemDerivationScope(subject GithubWorkItemDerivationSubject) string {
 	if subject.Provider == "jira" && subject.ProjectKey != nil {
+		return *subject.ProjectKey
+	}
+	if gitLabSubjectNamedByKey(subject) {
 		return *subject.ProjectKey
 	}
 	for _, value := range []*string{subject.ProjectID, subject.ProjectName, subject.NativeTeamKey, subject.ProjectKey} {
@@ -1282,13 +1319,17 @@ func (derived GithubWorkItemDerivationContext) ManualCandidates(
 			// semantics: empty candidates are dropped and an empty scope_id
 			// can never match.
 			matched = GithubWorkItemDerivationScopeMatch(scopeID,
-				GithubWorkItemDerivationStringValue(subject.RepoID),
-				GithubWorkItemDerivationStringValue(subject.ProjectID))
+				append([]string{GithubWorkItemDerivationStringValue(subject.RepoID)}, GitLabProjectNames(subject)...)...)
 		case "project":
-			matched = GithubWorkItemDerivationScopeMatch(scopeID,
+			candidates := []string{
 				GithubWorkItemDerivationStringValue(subject.ProjectID),
 				GithubWorkItemDerivationStringValue(subject.ProjectKey),
-				WorkItemDerivationScope(subject))
+				WorkItemDerivationScope(subject),
+			}
+			if len(subject.GitLabPaths) > 0 || gitLabSubjectNamedByCatalogID(subject) {
+				candidates = append([]string{GithubWorkItemDerivationStringValue(subject.ProjectID)}, GitLabProjectNames(subject)...)
+			}
+			matched = GithubWorkItemDerivationScopeMatch(scopeID, candidates...)
 		case "member":
 			for _, assignee := range subject.Assignees {
 				// Python's member_ids drops falsy assignees, so a blank
@@ -1817,7 +1858,17 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 			return nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(result)}
 		}
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	result, remapped, dropped, err := source.remapLegacyGitLabProjectFacts(ctx, orgID, result)
+	if err != nil {
+		return nil, err
+	}
+	if source.OnLegacyGitLabOwnership != nil && remapped+dropped > 0 {
+		source.OnLegacyGitLabOwnership(ctx, remapped, dropped)
+	}
+	return result, nil
 }
 
 // team_repo_ownership.repo_id is Nullable(UUID); tuple-wrapped below so
@@ -1902,7 +1953,17 @@ LIMIT {row_limit:UInt64}`,
 			return nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(result)}
 		}
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	result, remapped, ambiguous, err := source.remapLegacyGitLabRepoFacts(ctx, orgID, result)
+	if err != nil {
+		return nil, err
+	}
+	if source.OnLegacyGitLabOwnership != nil && remapped+ambiguous > 0 {
+		source.OnLegacyGitLabOwnership(ctx, remapped, ambiguous)
+	}
+	return result, nil
 }
 
 // GithubWorkItemDerivationAdminIdentity is one row of the ClickHouse
@@ -2530,7 +2591,7 @@ func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 	owners := append(
 		append([]GithubWorkItemDerivationCandidate(nil),
 			derived.repoByID[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.RepoID))]...),
-		derived.repoByName[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.ProjectID))]...,
+		derived.repoByNames(subject)...,
 	)
 	if len(owners) == 0 {
 		return MembershipOwnershipReasonUnknown, !ownershipUnknownBlocksMembership

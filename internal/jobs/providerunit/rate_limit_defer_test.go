@@ -186,3 +186,35 @@ func TestPlanRateLimitDeferralMirrorsThePythonPolicy(t *testing.T) {
 }
 
 func timePointer(at time.Time) *time.Time { return &at }
+
+// The deferral hands the repository the limited request's budget dimension and
+// the provider's delay, so the durable observation row can be written in the
+// deferral's own transaction.
+func TestProviderRateLimitDeferralCarriesTheObservation(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	unit := providerUnit()
+	repository := newMemoryUnitRepository(unit)
+	limited := &providerfoundation.ProviderError{
+		Class: providerfoundation.ErrorRateLimited, RetryAfter: 2 * time.Minute, Dimension: "graphql_cost",
+	}
+	handler := &Handler{
+		Repository:    repository,
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+			return providersync.CompleteRouteExecutor{}, limited
+		},
+	}
+	execution := providerExecution(unit, now, 5)
+	execution.Definition.MaxAttempts = 5
+
+	if _, snoozed := jobruntime.SnoozeDelay(handler.Work(context.Background(), execution)); !snoozed {
+		t.Fatal("rate limit did not snooze")
+	}
+	want := providersync.RateLimitObservation{Dimension: "graphql_cost", RetryAfter: 2 * time.Minute}
+	if len(repository.rateLimitObservations) != 1 || repository.rateLimitObservations[0] != want {
+		t.Fatalf("observations = %+v, want [%+v]", repository.rateLimitObservations, want)
+	}
+}

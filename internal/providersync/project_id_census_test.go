@@ -34,7 +34,7 @@ var projectIDExceptionCallers = map[string][]string{
 // id: they recognize or retire a form no writer produces any more.
 var projectIDMarkerAllowed = map[string]string{
 	"internal/providersync/jira_team_catalog.go":         "jiraKeyBuiltProjectIDPrefix: recognizes (to refuse and to retire) the key-built Jira form",
-	"internal/teamattribution/project_ownership_join.go": "ProjectOwnershipJoinID: recognizes the GitLab catalog form to pick the path a GitLab work item joins on; builds no id",
+	"internal/teamattribution/gitlab_subject_project.go": "GitLabCatalogProjectIDString: teamattribution cannot import providersync; TestGitLabCatalogProjectIDStringAgrees pins it to GitLabCatalogProjectID",
 }
 
 // projectIDSinkFields are the row fields that persist a project id. Each one

@@ -38,6 +38,8 @@ type Store struct {
 	// Now is injectable for tests exercising the org-override expiry edge;
 	// nil means time.Now().
 	Now func() time.Time
+
+	purpose Purpose
 }
 
 func (s Store) now() time.Time {
@@ -129,7 +131,11 @@ func (s Store) loadGatedSettings(ctx context.Context, orgID string) (orgSettings
 	if err != nil {
 		return nil, err
 	}
-	return s.applyGate(ctx, orgID, settings)
+	gated, err := s.applyGate(ctx, orgID, settings)
+	if err != nil {
+		return nil, err
+	}
+	return project(gated, s.purpose), nil
 }
 
 // applyGate is the byo_llm gate half of loadGatedSettings over already-read settings.

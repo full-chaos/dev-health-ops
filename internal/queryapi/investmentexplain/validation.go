@@ -41,26 +41,6 @@ var confidenceLevels = map[string]bool{
 	"high": true, "moderate": true, "low": true, "unknown": true,
 }
 
-// forbiddenWords ports investment_mix_validation.py's FORBIDDEN_PATTERN's
-// word alternatives -- everything except the separate "without\s+question"
-// phrase, handled by containsWithoutQuestion below.
-var forbiddenWords = []string{
-	"is", "was", "should", "determined", "detected",
-	"definitely", "certainly", "undoubtedly",
-}
-
-// isPythonWordChar ports what CPython's `\w` matches under Unicode mode
-// (the default for a str pattern): any Unicode letter or number (L* and
-// N* general categories -- Nd, Nl AND No, so a digit-like character such
-// as superscript "²" counts too, not just decimal digits) plus "_".
-// Measured against CPython directly (re.match(r"\w", ch) for a spread of
-// categories) rather than assumed -- confirmed on 'a' Ll, '5' Nd, '_' Pc,
-// 'é' Ll, a CJK ideograph Lo, superscript-2 No, and roman-numeral-8 Nl, all
-// True; '-' Pd, space Zs, '.' Po all False.
-func isPythonWordChar(r rune) bool {
-	return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r)
-}
-
 // hasUnicodeDigit ports investment_mix_validation.py's
 // NUMERIC_PATTERN = re.compile(r"\d") applied via .search(...) -- CPython's
 // \d under Unicode mode (the default) matches the Unicode "Nd" (decimal
@@ -76,117 +56,6 @@ func hasUnicodeDigit(s string) bool {
 		}
 	}
 	return false
-}
-
-// containsForbiddenLanguage ports investment_mix_validation.py's
-// contains_forbidden_language / FORBIDDEN_PATTERN:
-//
-//	re.compile(r"\b(?:is|was|should|determined|detected|definitely|"
-//	            r"certainly|undoubtedly)\b|without\s+question", re.IGNORECASE)
-//
-// Go's regexp \b/\w are ASCII-only (a documented RE2 limitation -- no flag
-// widens them), while Python's are Unicode-aware by default, so this is a
-// hand-rolled scan rather than a regexp.MustCompile call: for each
-// forbidden word, find every case-insensitive occurrence and confirm
-// isPythonWordChar is false (or the string boundary) on both sides, the
-// exact definition of \b.
-//
-// CASE-FOLDING NOTE (kept visible per team-lead ruling, 2026-09-03): the
-// case-insensitive match below is a plain strings.ToLower, not a full
-// Unicode case-fold (unicode.ToLower per-rune would be closer to
-// Python's re.IGNORECASE, which case-folds the whole pattern, not just
-// ASCII). This is EXACT today because forbiddenWords is entirely ASCII --
-// plain ToLower and Python's IGNORECASE agree on every ASCII letter. It
-// stops being exact the moment a non-ASCII word is ever added to
-// forbiddenWords (a German or French forbidden term, say): strings.ToLower
-// still handles many non-ASCII letters correctly (Go's ToLower is
-// Unicode-aware per rune), so the real risk is narrower than "ASCII only"
-// suggests, but it has not been verified for the SPECIFIC casefolding
-// edge cases Python's re module handles (e.g. Turkish dotless I, German
-// ß) -- unverified is not the same as safe. Re-check this note before
-// adding any non-ASCII entry to forbiddenWords.
-func containsForbiddenLanguage(text string) bool {
-	_, ok := firstForbiddenMatch(text)
-	return ok
-}
-
-// firstForbiddenMatch is containsForbiddenLanguage's own reporting
-// companion: it returns which specific forbidden term matched (one of
-// forbiddenWords, or the literal "without question" for the separate
-// without\s+question phrase) instead of just true/false, so a caller can
-// log WHICH rule fired rather than "forbidden language matched somewhere
-// in the narrative".
-func firstForbiddenMatch(text string) (string, bool) {
-	lower := strings.ToLower(text)
-	for _, word := range forbiddenWords {
-		if containsWordBoundaryMatch(lower, word) {
-			return word, true
-		}
-	}
-	if containsWithoutQuestion(lower) {
-		return "without question", true
-	}
-	return "", false
-}
-
-func containsWordBoundaryMatch(lower, word string) bool {
-	from := 0
-	for {
-		idx := strings.Index(lower[from:], word)
-		if idx < 0 {
-			return false
-		}
-		start := from + idx
-		end := start + len(word)
-		if leftBoundaryOK(lower, start) && rightBoundaryOK(lower, end) {
-			return true
-		}
-		from = start + 1
-	}
-}
-
-func leftBoundaryOK(s string, byteIndex int) bool {
-	if byteIndex == 0 {
-		return true
-	}
-	r, _ := utf8.DecodeLastRuneInString(s[:byteIndex])
-	return !isPythonWordChar(r)
-}
-
-func rightBoundaryOK(s string, byteIndex int) bool {
-	if byteIndex >= len(s) {
-		return true
-	}
-	r, _ := utf8.DecodeRuneInString(s[byteIndex:])
-	return !isPythonWordChar(r)
-}
-
-// containsWithoutQuestion ports the `without\s+question` alternative --
-// \s under Unicode mode is pythonparity.IsSpace's exact predicate.
-func containsWithoutQuestion(lower string) bool {
-	const target = "without"
-	from := 0
-	for {
-		idx := strings.Index(lower[from:], target)
-		if idx < 0 {
-			return false
-		}
-		start := from + idx
-		rest := lower[start+len(target):]
-		spaceRunes := 0
-		consumed := 0
-		for _, r := range rest {
-			if !pythonparity.IsSpace(r) {
-				break
-			}
-			spaceRunes++
-			consumed += utf8.RuneLen(r)
-		}
-		if spaceRunes > 0 && strings.HasPrefix(rest[consumed:], "question") {
-			return true
-		}
-		from = start + 1
-	}
 }
 
 // finiteNumber ports investment_mix_validation.py's finite_number. Values
@@ -349,7 +218,7 @@ func parseFinding(raw any, opts parseFindingOptions) (Finding, validationRejecti
 	if !themeOK {
 		return Finding{}, validationRejection{Rule: "theme_not_string", Path: "evidence.theme", Snippet: snippetOf(evidence["theme"])}, false
 	}
-	themeShare, themeKnown := opts.themeSharesPct[theme]
+	theme, themeShare, themeKnown := resolveCanonicalKey(theme, opts.themeSharesPct, themeLabel)
 	if !themeKnown {
 		return Finding{}, validationRejection{Rule: "theme_unknown", Path: "evidence.theme", Snippet: snippetOf(theme)}, false
 	}
@@ -360,7 +229,7 @@ func parseFinding(raw any, opts parseFindingOptions) (Finding, validationRejecti
 		// subcategory is None -- allowed, matches Python's `subcategory
 		// is not None` guard being false.
 	case string:
-		subcategoryShare, subcategoryKnown := opts.subcategorySharesPct[rawSubcategory]
+		rawSubcategory, subcategoryShare, subcategoryKnown := resolveCanonicalKey(rawSubcategory, opts.subcategorySharesPct, subcategoryLabel)
 		if !subcategoryKnown {
 			return Finding{}, validationRejection{Rule: "subcategory_unknown", Path: "evidence.subcategory", Snippet: snippetOf(rawSubcategory)}, false
 		}
@@ -415,6 +284,55 @@ func parseFinding(raw any, opts parseFindingOptions) (Finding, validationRejecti
 			EvidenceQualityBand: opts.qualityBand,
 		},
 	}, validationRejection{}, true
+}
+
+// normalizeKeyForm lowercases s and collapses every run of non-alphanumeric
+// characters to one space, so "Quality / Reliability", "quality-reliability"
+// and "quality_reliability" share one form.
+func normalizeKeyForm(s string) string {
+	var b strings.Builder
+	pendingSpace := false
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			if pendingSpace && b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			pendingSpace = false
+			b.WriteRune(r)
+			continue
+		}
+		pendingSpace = true
+	}
+	return b.String()
+}
+
+// resolveCanonicalKey maps raw to one of the canonical keys in shares. An
+// exact key wins. Otherwise raw is matched, in normalized form, against each
+// key and its display label; a form shared by two keys is ambiguous and stays
+// unresolved. A raw value that names no key in shares stays unknown, so the
+// caller still rejects it.
+func resolveCanonicalKey(raw string, shares map[string]float64, label func(string) string) (string, float64, bool) {
+	if share, ok := shares[raw]; ok {
+		return raw, share, true
+	}
+	want := normalizeKeyForm(raw)
+	if want == "" {
+		return raw, 0, false
+	}
+	match := ""
+	for key := range shares {
+		if normalizeKeyForm(key) != want && normalizeKeyForm(label(key)) != want {
+			continue
+		}
+		if match != "" {
+			return raw, 0, false
+		}
+		match = key
+	}
+	if match == "" {
+		return raw, 0, false
+	}
+	return match, shares[match], true
 }
 
 // validConfidence ports investment_mix_validation.py's valid_confidence

@@ -1006,8 +1006,8 @@ partition job before the ledger repair only reproduces `ambiguous_refused`
 and re-terminalizes the partition `failed_permanent`, undoing the reset):
 
 1. **Ledger repair first.** Repairs the ledger through the coordinator
-   database role (the operator credential must hold `workers:operate`; no
-   API base URL and no separate repair token) for every `running` run in
+   database role (the operator CLI carries no bearer token: pod exec plus the
+   database DSNs are the boundary; no API base URL and no separate repair token) for every `running` run in
    scope, applying the SAME `retry_safe` CAS `metrics execution-repair`
    uses to every `ambiguous`/stuck-`executing` ledger row
    underneath them, carrying your `--review-evidence` text. This path only ever authorizes `retry_safe` —
@@ -1073,8 +1073,7 @@ dho workers metrics daily-finalize \
 
 `--run` additionally repairs the named run's finalize ledger
 row through the coordinator database role before publishing (see
-"Finalize-ledger repair" below); the operator credential must hold
-`workers:operate`, and a failed ledger repair fails closed with
+"Finalize-ledger repair" below); the operator CLI is authorized as its fixed operator principal, and a failed ledger repair fails closed with
 `{"error": {"code": "ledger_repair_unavailable"}}` before any write.
 `--all-complete` does NOT repair ledger rows: it never touches a run whose finalize
 ledger row could be stuck (see that flag's own note below for why).
@@ -2019,18 +2018,18 @@ dho maintenance cleanup-all
 
 ## Service Credentials
 
-Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) and the worker operator API (`worker-operator`) present to the API. The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read` and `llm_config:read` (the org LLM config route); `worker-operator` holds `workers:read` and `workers:operate`.
+Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) present to the API. The `worker-operator` service is retired: nothing validates a `svc_worker_*` token, so its credentials authorize nothing (`dho workers` carries no token since CHAOS-6289). The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read` and `llm_config:read` (the org LLM config route). `worker-operator` still accepts `workers:read` and `workers:operate` at creation, but they authorize nothing; do not create new ones.
 
 ```bash
 # Create a credential (the token is printed once)
 dho service-credentials create --service acr --scope entitlements:read
 
-# A worker-operator credential with both scopes that lapses at a fixed time
-dho service-credentials create --service worker-operator \
-  --scope workers:read --scope workers:operate --expires-at 2027-01-01T00:00:00+00:00
+# A credential that lapses at a fixed time
+dho service-credentials create --service acr \
+  --scope entitlements:read --expires-at 2027-01-01T00:00:00+00:00
 
-# List one service's credentials (metadata only)
-dho service-credentials list --service worker-operator
+# List one service's credentials (metadata only; worker-operator lists leftovers to revoke)
+dho service-credentials list --service acr
 
 # Rotate: issue a replacement now; the old credential stays valid for 5 more minutes
 dho service-credentials rotate <credential-id> --scope entitlements:read --overlap-seconds 300
@@ -2043,7 +2042,7 @@ dho service-credentials revoke <credential-id>
 |------------|-------------|
 | `create` | `--service {acr,worker-operator}` (default `acr`), `--scope` (required, repeatable), `--expires-at` (ISO 8601 with a timezone, in the future), `--created-by-user-id` (a user id) |
 | `list` | `--service` (default `acr`); one JSON line: `id`, `service_name`, `token_prefix`, `scopes`, `expires_at`, `revoked_at`, `last_used_at`, `is_valid` (computed: not revoked and not past `expires_at`) |
-| `rotate` | `<credential_id>` then the `create` options plus `--overlap-seconds` (0 to 3600, default 0). The credential must belong to `--service` (the default is `acr`: pass `--service worker-operator` to rotate a worker-operator credential) and be active; its expiry is set to now + the overlap (even if it had less time left) and a replacement is issued |
+| `rotate` | `<credential_id>` then the `create` options plus `--overlap-seconds` (0 to 3600, default 0). The credential must belong to `--service` (the default is `acr`) and be active; its expiry is set to now + the overlap (even if it had less time left) and a replacement is issued |
 | `revoke` | `<credential_id>`; sets `revoked_at` to now, also on an already revoked credential |
 
 > **Notes:** the database is `MIGRATION_DATABASE_URI`, else `POSTGRES_URI` (as every `dho admin` verb); a missing one is exit 1. `rotate` locks the credential row while it checks and changes it. `--help` prints usage on stdout (exit 0). A refusal is one JSON error line on stderr with exit 1. `list` prints `is_valid` (computed: not revoked and not past `expires_at`), so an expired credential no longer prints like a live one.

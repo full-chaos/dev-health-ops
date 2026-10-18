@@ -163,16 +163,8 @@ func NormalizeMeasure(name string) (measure string, ok bool) {
 	return "", false
 }
 
-// dateWindowClause is the window predicate of the work-unit reads of this package:
-// the overlap of the unit's range with [start, end) (the Investment page), or the unit's
-// end day within it (DatedByEnd).
 func (f BreakdownFilters) dateWindowClause() string {
-	if f.DatedByEnd {
-		return `work_unit_investments.to_ts >= {start_date:Date}
-  AND work_unit_investments.to_ts < {end_date:Date}`
-	}
-	return `work_unit_investments.from_ts < {end_date:Date}
-  AND work_unit_investments.to_ts >= {start_date:Date}`
+	return analytics.InvestmentWindowClause(f.DatedByEnd)
 }
 
 func (f BreakdownFilters) categoryClause() (filterSQL string, bindings []dhclickhouse.Binding) {
@@ -382,8 +374,7 @@ func (reader *Reader) FetchMockFixtureInvestmentRowCount(ctx context.Context, fi
 SELECT count() AS count
 FROM %s AS work_unit_investments
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
-WHERE work_unit_investments.from_ts < {end_date:Date}
-  AND work_unit_investments.to_ts >= {start_date:Date}
+WHERE %s
   AND work_unit_investments.org_id = {org_id:String}
   AND (
     lower(ifNull(work_unit_investments.provider, '')) IN ('mock', 'fixture', 'fixtures', 'synthetic')
@@ -394,7 +385,7 @@ WHERE work_unit_investments.from_ts < {end_date:Date}
 %s
 %s
 %s
-`, analytics.LatestWorkUnitInvestmentsSource(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, analytics.LatestWorkUnitInvestmentsSource(), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {

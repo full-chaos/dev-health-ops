@@ -1,0 +1,140 @@
+# Record the Alembic goldens of a migration branch on a hosted runner (CHAOS-10089).
+#
+# A new Postgres Alembic revision needs the pgmigrate goldens and the api/health
+# schema-revisions golden re-recorded. The recorder (internal/testsupport/venueoracle/goldenrecord)
+# runs the real Python Alembic CLI against a container Postgres, so it needs Docker:
+# this job does that on a hosted runner, so a lane never runs Docker for it.
+#
+# HOW. Push a golden build branch first: the Alembic scripts of the branch's base plus the new
+# revision (the "golden recording build"), and give that commit's sha as `python_build`. Dispatch
+# this workflow on the migration branch (`ref`). The job records the goldens, pins their digests in
+# the tests, and uploads every changed file as the artifact `goldens-<sha>`. It never pushes:
+# download the artifact, unpack it at the repository root, commit, push. CI then checks the goldens.
+name: Golden record
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch (or sha) of the migration change whose goldens are recorded
+        required: true
+        type: string
+      python_build:
+        description: Full sha of the golden recording build (a pushed commit holding the new Alembic revision)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: golden-record-${{ inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - name: Check the inputs
+        env:
+          PYTHON_BUILD: ${{ inputs.python_build }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${PYTHON_BUILD}" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "python_build must be a full 40-character sha, got '${PYTHON_BUILD}'" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Check out the golden recording build
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.python_build }}
+          path: python-build
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Install the build's locked Python dependencies
+        working-directory: python-build
+        run: uv sync --frozen --no-install-project
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pre-pull pinned test dependency images with bounded retry
+        run: bash ci/check_go.sh integration-prepull
+
+      - name: Record the goldens
+        env:
+          PYTHON_ROOT: ${{ github.workspace }}/python-build
+        run: |
+          set -euo pipefail
+          record() {
+            echo "::group::record $1 $2"
+            go run ./internal/testsupport/venueoracle/goldenrecord -pkg "$1" -test "^$2\$" -python-root "${PYTHON_ROOT}"
+            echo "::endgroup::"
+          }
+          record ./internal/api/health/ TestSchemaRevisionsMatchFrozenPythonAlembic
+          for name in \
+            TestAliasesMatchTheFrozenPythonOutput \
+            TestBaselineIsTheFrozenPythonUpgrade \
+            TestDowngradeMatchesFrozenPythonDowngrade \
+            TestHistoryMatchesTheFrozenAlembicOutput \
+            TestHistoryGraphIsTheAlembicChain \
+            TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead \
+            TestBuildHeadsAreTheOldScriptsHeads \
+            TestPreflightMatchesTheHookOverFrozenAlembicStates \
+            TestRevisionsMatchTheFrozenAlembicOutput; do
+            record ./internal/pgmigrate/ "${name}"
+          done
+
+      - name: Collect the changed files
+        id: collect
+        run: |
+          set -euo pipefail
+          git status --porcelain -- . ':!python-build' | tee changed.txt
+          if [ ! -s changed.txt ]; then
+            echo "the goldens were already current: nothing to upload" >> "${GITHUB_STEP_SUMMARY}"
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          git status --porcelain -z -- . ':!python-build' | tr '\0' '\n' | sed 's/^...//' > files.txt
+          tar -czf goldens.tgz -T files.txt
+          {
+            echo "### Recorded goldens for \`${{ inputs.ref }}\` (build \`${{ inputs.python_build }}\`)"
+            sed 's/^/- /' files.txt
+            echo
+            echo "Unpack at the repository root: \`tar -xzf goldens.tgz\`, then commit and push."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "changed=true" >> "${GITHUB_OUTPUT}"
+
+      # actions/upload-artifact v5.0.0
+      - name: Upload the recorded goldens
+        if: steps.collect.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: goldens-${{ github.run_id }}
+          path: |
+            goldens.tgz
+            files.txt
+          retention-days: 7

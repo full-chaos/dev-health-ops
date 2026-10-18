@@ -119,7 +119,7 @@ func TestJiraWorkItemsRouteCollectsCanonicalFamilyAndWithholdsWatermarkOnOptiona
 			continue
 		}
 		foundSearch = true
-		wantJQL := "project = 'OPS' AND (updated >= '2026-07-01' OR (statusCategory != Done AND created <= '2026-07-31')) ORDER BY updated DESC"
+		wantJQL := "project = 'OPS' AND updated >= '2026-06-30' AND updated < '2026-08-02' ORDER BY updated DESC"
 		if got := parsed.Query().Get("jql"); got != wantJQL {
 			t.Fatalf("JQL=%q want=%q", got, wantJQL)
 		}
@@ -354,5 +354,74 @@ func TestJiraWorkItemsEffectsFenceTenantLeaseAndReadbackRecovery(t *testing.T) {
 	}
 	if err := sink.WriteEffect(context.Background(), foreign, workItemsEffect); err == nil {
 		t.Fatal("foreign tenant write unexpectedly accepted")
+	}
+}
+
+// CHAOS-8805 (chris D2, 2026-10-06): the Jira fetch is bounded to the window on
+// both ends and no longer carries every open issue. The upper date bound is a
+// superset of the window in any Jira user time zone.
+func TestJiraWorkItemsJQLIsBoundedToTheWindowOnBothEnds(t *testing.T) {
+	claim := nativeTestClaim("jira", "work-items")
+	cases := []struct {
+		name          string
+		since, before time.Time
+		want          string
+	}{
+		{"hourly window inside a day", time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 17, 10, 0, 0, 0, time.UTC),
+			"project = 'OPS' AND updated >= '2026-10-16' AND updated < '2026-10-18' ORDER BY updated DESC"},
+		{"window ending at midnight", time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC),
+			"project = 'OPS' AND updated >= '2026-10-15' AND updated < '2026-10-18' ORDER BY updated DESC"},
+		{"month boundary", time.Date(2026, 7, 31, 22, 0, 0, 0, time.UTC), time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC),
+			"project = 'OPS' AND updated >= '2026-07-31' AND updated < '2026-08-02' ORDER BY updated DESC"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			since, before := tc.since, tc.before
+			claim.SinceAt, claim.BeforeAt = &since, &before
+			got := jiraWorkItemsJQL(claim, "OPS")
+			if got != tc.want {
+				t.Fatalf("JQL = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(got, "statusCategory") {
+				t.Fatal("the open-issue clause is back: the unit grows with the open backlog")
+			}
+		})
+	}
+}
+
+// The date bounds are a superset of the window for a Jira user in ANY time zone
+// (review round 1: the lower bound used to be the start's own UTC day, which
+// drops an in-window update for a user west of UTC), and stay within 50h
+// of the window on either side.
+func TestJiraDateBoundsContainTheWindowInEveryUserTimeZone(t *testing.T) {
+	starts := []time.Time{
+		time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC),
+	}
+	for _, start := range starts {
+		for _, span := range []time.Duration{time.Hour, 24 * time.Hour, 5*24*time.Hour + 7*time.Hour} {
+			end := start.Add(span)
+			for offset := -12; offset <= 14; offset++ {
+				zone := time.FixedZone("user", offset*3600)
+				// JQL reads a date-only literal as midnight of that date in the user's zone.
+				lower, lowerErr := time.ParseInLocation("2006-01-02", jiraUpdatedSinceDate(start), zone)
+				upper, upperErr := time.ParseInLocation("2006-01-02", jiraUpdatedBeforeDate(end), zone)
+				if lowerErr != nil || upperErr != nil {
+					t.Fatal(lowerErr, upperErr)
+				}
+				if lower.After(start) {
+					t.Fatalf("UTC%+d: lower bound %s is after the window start %s: an in-window update is dropped", offset, lower, start)
+				}
+				// The upper bound is exclusive and the window is half-open: a bound equal to the end is exact.
+				if upper.Before(end) {
+					t.Fatalf("UTC%+d: upper bound %s is before the window end %s", offset, upper, end)
+				}
+				// The padding is the spread of the zones (26h) plus the date rounding: at most 50h on each side.
+				if start.Sub(lower) > 50*time.Hour || upper.Sub(end) > 50*time.Hour {
+					t.Fatalf("UTC%+d: bounds [%s, %s) are wider than 50h around the window [%s, %s)", offset, lower, upper, start, end)
+				}
+			}
+		}
 	}
 }

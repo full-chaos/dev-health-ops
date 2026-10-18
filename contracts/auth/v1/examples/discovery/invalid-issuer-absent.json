@@ -1,0 +1,6 @@
+{
+  "jwks_uri": "https://auth.example.test/.well-known/jwks.json",
+  "id_token_signing_alg_values_supported": [
+    "EdDSA"
+  ]
+}

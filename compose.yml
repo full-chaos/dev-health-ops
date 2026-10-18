@@ -229,8 +229,18 @@ volumes:
   # keeps it; `down -v` deletes it and the next `up` generates a new pair.
   envelope_keys:
     driver: local
+  # The Auth Control Plane's platform token signing key (profile `auth`),
+  # written once by auth-keys-init. Separate from envelope_keys on purpose.
+  auth_signing_keys:
+    driver: local
 
 networks:
+  # CHAOS-4886: the Auth Control Plane's network (profile `auth`). auth-service and
+  # auth-migrate join THIS network only, never `default`, so the only stack service
+  # they can reach is postgres (which joins it as well). It is declared always but
+  # carries traffic only while the profile runs.
+  auth_plane:
+    driver: bridge
   # The hop from the router to the two planes. Its members are the router,
   # go-api and query-api, and no other service. The router is on this network
   # only; the planes are on it and on the default network (the stores). The
@@ -269,6 +279,10 @@ services:
     image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     container_name: postgres
     restart: always
+    networks:
+      - default
+      # CHAOS-4886: the only service the auth profile may reach (see auth_plane).
+      - auth_plane
     environment:
       # Class sweep over the whole file, not only the knob found: go-river-provision/
       # migrate's own entrypoint already reads POSTGRES_USER/_PASSWORD
@@ -1251,6 +1265,180 @@ services:
     volumes:
       - envelope_keys:/var/lib/dev-health/envelope-keys
 
+  # ---------------------------------------------------------------------------
+  # Auth Control Plane (CHAOS-4886, Wave 1 of CHAOS-3274). DORMANT.
+  #
+  # Behind the `auth` profile: a plain `docker compose up` starts none of this,
+  # and nothing else in the stack calls it. Start it with
+  #   docker compose --profile auth up --build --wait auth-service
+  # and remove it again with
+  #   docker compose --profile auth rm --stop --force auth-service auth-migrate auth-provision auth-keys-init
+  # (add `docker volume rm dev-health-ops_auth_signing_keys` to drop the key).
+  # Removing it changes no other service's behaviour.
+  #
+  # The four services run in this order: auth-keys-init writes the signing key,
+  # auth-provision creates the runtime login, auth-migrate (the ONLY thing that
+  # issues DDL against the auth schema, ACP-ADR-04) applies the schema as the
+  # database owner and grants the runtime login its table privileges, and
+  # auth-service starts last, as that unprivileged login. The service never
+  # migrates: it observes the schema and fails /readyz closed when it is absent.
+  # ---------------------------------------------------------------------------
+  # One-shot: writes the platform token signing key (Ed25519, PKCS#8 PEM, mode
+  # 0400, uid 65532) and its JWKS into the auth_signing_keys volume on the first
+  # `up`; a later `up` finds the complete set and changes nothing. It uses the
+  # same `dho mint envelope-keys` writer as go-api, but its OWN volume, key id
+  # and mount: platform token keys stay separate from the ACR Web-assertion and
+  # go-api envelope keys (CHAOS-3274). It prints no key material.
+  auth-keys-init:
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: dho
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    profiles: [auth]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    command:
+      - mint
+      - envelope-keys
+      - --dir=/var/lib/dev-health/envelope-keys
+      - --key-id=${AUTH_SIGNING_KEY_ID:-auth-signing-local}
+      - --skip-existing
+    volumes:
+      - auth_signing_keys:/var/lib/dev-health/envelope-keys
+
+  # One-shot: creates the runtime login auth-service connects as, idempotently.
+  # It is a plain unprivileged login (no superuser, createdb, createrole,
+  # replication or RLS bypass) that owns nothing; auth-migrate grants it the
+  # approved table privileges. The password default equals the role name:
+  # local development only, like every other login in this file. A production
+  # login is provisioned by the database provider before auth-migrate runs.
+  # The DSNs of auth-migrate and auth-service use the libpq keyword form with the
+  # password in single quotes (a URI would need every reserved character in the
+  # password percent-encoded, which Compose cannot do): any password works except
+  # one containing a single quote or a backslash.
+  auth-provision:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "70:70"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        psql -v ON_ERROR_STOP=1 -v role="$$AUTH_RUNTIME_DATABASE_ROLE" -v pw="$$AUTH_RUNTIME_DATABASE_PASSWORD" <<'SQL'
+        SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'role', :'pw')
+          WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
+        SELECT format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'role', :'pw') \gexec
+        SQL
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      PGDATABASE: ${POSTGRES_DB:-postgres}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+      AUTH_RUNTIME_DATABASE_PASSWORD: ${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # One-shot: applies the auth schema lineage and the runtime grants. It
+  # connects as the database owner (the migration role), never as the runtime
+  # login: auth-migrate refuses a connection that authenticates AS the runtime
+  # role. Run it again after an upgrade; `auth-migrate --check` reports whether
+  # the schema is at the embedded head without issuing DDL.
+  auth-migrate:
+    image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: auth-migrate
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+    depends_on:
+      auth-provision:
+        condition: service_completed_successfully
+
+  # The Auth Control Plane HTTP service. DORMANT: its API listener mounts no
+  # route, no production token is issued, and nothing calls it. The operator
+  # listener (/healthz, /readyz, /metrics) is the one probed, and is published
+  # on loopback only; the API port is not published. The signing key is a file
+  # (AUTH_SIGNING_KEY_FILE), mounted read-only from the private/ subpath of the
+  # auth_signing_keys volume; a direct-value AUTH_SIGNING_KEY is rejected at
+  # load (ACP-ADR-02 §4). The healthcheck is exec form (the image has no shell
+  # or curl): `auth-service --healthcheck` mirrors the operator /readyz.
+  auth-service:
+    image: ${DEV_HEALTH_GO_AUTH_SERVICE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-service:local}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: auth-service
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: unless-stopped
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_SERVICE_HTTP_ADDR: ":8095"
+      AUTH_SERVICE_OPERATOR_HTTP_ADDR: ":8096"
+      # Below the container stop grace period (compose default 10 s).
+      AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s
+      AUTH_DATABASE_URI: host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
+      AUTH_SIGNING_KEY_ID: ${AUTH_SIGNING_KEY_ID:-auth-signing-local}
+    volumes:
+      - type: volume
+        source: auth_signing_keys
+        target: /run/auth/signing
+        read_only: true
+        volume:
+          subpath: private
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/auth-service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    ports:
+      - "127.0.0.1:${AUTH_SERVICE_OPERATOR_HOST_PORT:-8096}:8096"
+    depends_on:
+      auth-keys-init:
+        condition: service_completed_successfully
+      auth-migrate:
+        condition: service_completed_successfully
+
   # The Go query plane (`dho query-api`): /graphql and the /api/v1 read
   # routes the router sends to it (contracts/ingress/v1/planes.json). A client
   # reaches it with its own access token (GO_API_EDGE_JWT_SECRET); the signed
@@ -1328,6 +1516,7 @@ services:
       <<: *settings-encryption-key
       LLM_PROVIDER: ${LLM_PROVIDER:-}
       LLM_MODEL: ${LLM_MODEL:-}
+      LLM_MODEL_EXPLAIN: ${LLM_MODEL_EXPLAIN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # Observability: OpenTelemetry, as on go-api. Off by default.
       OTEL_ENABLED: ${OTEL_ENABLED:-false}

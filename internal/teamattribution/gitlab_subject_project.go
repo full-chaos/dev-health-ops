@@ -95,6 +95,12 @@ func gitLabSubjectNamedByKey(subject GithubWorkItemDerivationSubject) bool {
 		subject.ProjectKey != nil && strings.TrimSpace(*subject.ProjectKey) != ""
 }
 
+// gitLabSubjectNamedByCatalogID is true for a GitLab subject whose project_id is
+// a catalog id. With no repos row read it has no path that is provably its own.
+func gitLabSubjectNamedByCatalogID(subject GithubWorkItemDerivationSubject) bool {
+	return subject.Provider == "gitlab" && subject.ProjectID != nil && IsGitLabCatalogProjectID(*subject.ProjectID)
+}
+
 // GitLabRowPaths are the names a repos row answers to: its current path, and its
 // minted path unless another row holds that path as its current one (a reused
 // path belongs to the project that holds it now, never to the project the id

@@ -735,3 +735,42 @@ func TestTheAuthServiceScrapeCarriesItsPerRouteRequestSeries(t *testing.T) {
 		t.Errorf("access log missing the unmatched line or carrying the raw path:\n%s", logs.String())
 	}
 }
+
+// TestHealthcheckMirrorsReadiness is the Compose exec-form probe's proof: the
+// distroless image has no curl, so `auth-service --healthcheck` is the only way
+// a container healthcheck can observe /readyz. With the dependencies broken
+// the service answers 503, so the probe must exit 1; with no service listening
+// it must also exit 1; it must never exit 0 against a not-ready service.
+func TestHealthcheckMirrorsReadiness(t *testing.T) {
+	ports := reservePorts(t, 2)
+	apiAddress, operatorAddress := ports[0], ports[1]
+	env := brokenEnvironment(t, apiAddress, operatorAddress)
+	env[authconfig.EnvLogLevel] = "info"
+
+	probe := func() (int, string) {
+		var stderr bytes.Buffer
+		code := Execute(context.Background(), []string{"--healthcheck"}, lookupFrom(env), IO{Stderr: &stderr})
+		return code, stderr.String()
+	}
+
+	if code, stderr := probe(); code != 1 || !strings.Contains(stderr, "unreachable") {
+		t.Fatalf("healthcheck with no listener = %d %q, want 1 and an unreachable diagnostic", code, stderr)
+	}
+
+	logs, stop := runService(t, env)
+	client := &http.Client{Timeout: 10 * time.Second}
+	defer client.CloseIdleConnections()
+	// Both listeners must be bound before the shutdown below: a cancel that lands
+	// between the operator and the API bind makes Execute return the start error
+	// (exit 1), which is not the shutdown this test measures.
+	awaitBoundAddress(t, logs, "operator-http")
+	awaitBoundAddress(t, logs, "auth-api-http")
+	_ = awaitResponse(t, client, "http://"+operatorAddress+"/readyz").Body.Close()
+
+	if code, stderr := probe(); code != 1 || !strings.Contains(stderr, "503") {
+		t.Fatalf("healthcheck against a not-ready service = %d %q, want 1 and a 503 diagnostic", code, stderr)
+	}
+	if code := stop(); code != 0 {
+		t.Fatalf("Execute exited %d after a clean shutdown, want 0; logs:\n%s", code, logs.String())
+	}
+}

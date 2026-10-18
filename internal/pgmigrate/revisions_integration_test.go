@@ -164,7 +164,7 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 			if scenario.setup != "" {
 				exec(scenario.setup)
 			}
-			results = append(results, revisionResult{Name: scenario.name, Stdout: pythonRevisions(t, producer, uri, scenario.verb)})
+			results = append(results, revisionResult{Name: scenario.name, Stdout: setOrdered(scenario.verb, pythonRevisions(t, producer, uri, scenario.verb))})
 			exec("DROP TABLE IF EXISTS alembic_version")
 			exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
 		}
@@ -218,6 +218,17 @@ func sameRevisionText(verb, got, want string) bool {
 		return got == want
 	}
 	return strings.Join(sortedLines(got), "\n") == strings.Join(sortedLines(want), "\n")
+}
+
+// setOrdered fixes the line order of the recorded `current` text. Alembic prints the current heads in the
+// row order of its version table (an unordered SELECT), which differs between two fresh databases with two
+// heads, so the recorder's two-run determinism check failed at random. `current` is a set of heads
+// (sameRevisionText compares it as one), so the golden holds its lines sorted; `heads` is already ordered.
+func setOrdered(verb, text string) string {
+	if verb != "current" || text == "" {
+		return text
+	}
+	return strings.Join(sortedLines(text), "\n") + "\n"
 }
 
 func sortedLines(text string) []string {

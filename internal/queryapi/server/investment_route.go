@@ -28,6 +28,7 @@ package server
 import (
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -259,6 +260,41 @@ func writeInvestmentResponse(w http.ResponseWriter, r *http.Request, orgID strin
 		log.Printf("query-api: investment: encode response failed: org_id=%s request_id=%s err=%v",
 			orgID, envelopeRequestID(r), encodeErr)
 		writeModelFailure(w)
+	}
+}
+
+// Response headers of an ISSUE_SIZE sunburst (CHAOS-9873, D6027): the measure and the sizing coverage of the window's
+// units. The three sizing headers are absent when the window holds no unit (not measured, never 0). A COUNT sunburst
+// carries none of them.
+const (
+	sunburstMeasureHeader          = "X-Investment-Measure"
+	sunburstSizingCoverageHeader   = "X-Sizing-Coverage"
+	sunburstUnsizedUnitCountHeader = "X-Unsized-Unit-Count"
+	sunburstWorkUnitCountHeader    = "X-Work-Unit-Count"
+)
+
+func setSunburstSizingHeaders(w http.ResponseWriter, sizing *investment.SunburstSizing) {
+	if sizing == nil {
+		return
+	}
+	h := w.Header()
+	h.Set(sunburstMeasureHeader, sizing.Measure)
+	if sizing.SizingCoverage != nil {
+		h.Set(sunburstSizingCoverageHeader, strconv.FormatFloat(*sizing.SizingCoverage, 'g', -1, 64))
+	}
+	if sizing.UnsizedUnitCount != nil {
+		h.Set(sunburstUnsizedUnitCountHeader, strconv.Itoa(*sizing.UnsizedUnitCount))
+	}
+	if sizing.WorkUnitCount != nil {
+		h.Set(sunburstWorkUnitCountHeader, strconv.Itoa(*sizing.WorkUnitCount))
+	}
+}
+
+func sunburstMeasureError(raw string) pydanticErrorDetail {
+	expected := formatPydanticLiteralExpected([]string{"COUNT", "ISSUE_SIZE"})
+	return pydanticErrorDetail{
+		Type: "literal_error", Loc: []any{"query", "measure"},
+		Msg: "Input should be " + expected, Input: raw, Ctx: map[string]string{"expected": expected},
 	}
 }
 
@@ -512,6 +548,20 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 		}
 
+		// measure: a Go-only opt-in (CHAOS-9873, D6032). Absent or COUNT is the ported route (the count of work units);
+		// ISSUE_SIZE weighs each unit by its issue size and sends its sizing coverage in response headers, so the
+		// frozen bare-array body stays as it was. Any other value is a 422 like a value outside a Literal.
+		issueSize := false
+		if query.Has("measure") {
+			switch raw := lastQueryValue(query, "measure"); raw {
+			case "COUNT":
+			case "ISSUE_SIZE":
+				issueSize = true
+			default:
+				validationErrors = append(validationErrors, sunburstMeasureError(raw))
+			}
+		}
+
 		if len(validationErrors) > 0 {
 			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
 			return
@@ -539,16 +589,18 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 		params := investment.SunburstParams{
 			StartTS: startTS, EndTS: endTS,
 			ScopeLevel: scopeType, ScopeIDs: scopeIDs,
-			WhatRepos: nil, WorkCategory: nil, Limit: limit,
+			WhatRepos: nil, WorkCategory: nil, Limit: limit, IssueSize: issueSize,
 		}
 
-		resp, err := investment.BuildSunburstResponse(r.Context(), reader, claims.OrgID, params)
+		result, err := investment.BuildSunburst(r.Context(), reader, claims.OrgID, params)
 		if err != nil {
 			writeRESTDataUnavailable(w, r, "investment_sunburst", claims.OrgID, err)
 			return
 		}
 
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
-		writeInvestmentSunburstResponse(w, r, claims.OrgID, resp)
+		setSunburstSizingHeaders(w, result.Sizing)
+		slog.DebugContext(r.Context(), "investment_sunburst: served", "issue_size", issueSize, "slices", len(result.Slices), "sizing_headers", result.Sizing != nil)
+		writeInvestmentSunburstResponse(w, r, claims.OrgID, result.Slices)
 	}
 }

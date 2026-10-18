@@ -31,17 +31,23 @@ import (
 const (
 	ServiceACR            = "acr"
 	ServiceWorkerOperator = "worker-operator"
+	// ServiceWorkerLLMConfig is the investment worker's credential for the
+	// resolved categorize config route (CHAOS-10041). It is its own service
+	// because worker-operator is retired and authorizes nothing.
+	ServiceWorkerLLMConfig = "worker-llm-config"
 
-	acrTokenPrefix            = "svc_acr_"
-	workerOperatorTokenPrefix = "svc_worker_"
+	acrTokenPrefix             = "svc_acr_"
+	workerOperatorTokenPrefix  = "svc_worker_"
+	workerLLMConfigTokenPrefix = "svc_wllm_"
 
 	// MaxOverlapSeconds is how long a rotated credential may stay valid beside its replacement.
 	MaxOverlapSeconds = 3600
 )
 
 var serviceScopes = map[string][]string{
-	ServiceACR:            {"entitlements:read", "llm_config:read"},
-	ServiceWorkerOperator: {"workers:read", "workers:operate"},
+	ServiceACR:             {"entitlements:read", "llm_config:read"},
+	ServiceWorkerOperator:  {"workers:read", "workers:operate"},
+	ServiceWorkerLLMConfig: {"llm_config:read"},
 }
 
 // ServiceNames are the services `--service` accepts, sorted as argparse's choices are.
@@ -143,8 +149,11 @@ func generateServiceToken(service string) (string, error) {
 		return "", err
 	}
 	prefix := acrTokenPrefix
-	if service == ServiceWorkerOperator {
+	switch service {
+	case ServiceWorkerOperator:
 		prefix = workerOperatorTokenPrefix
+	case ServiceWorkerLLMConfig:
+		prefix = workerLLMConfigTokenPrefix
 	}
 	return prefix + base64.RawURLEncoding.EncodeToString(random), nil
 }

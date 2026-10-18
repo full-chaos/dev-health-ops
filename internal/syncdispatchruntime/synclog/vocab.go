@@ -18,6 +18,7 @@ var (
 	MsgDispatchSyncRunBudgetGuardEnforceFailed           = Msg{"dispatch_sync_run.budget_guard_enforce_failed"}
 	MsgDispatchSyncRunBudgetGuardDeferred                = Msg{"dispatch_sync_run.budget_guard_deferred"}
 	MsgDispatchSyncRunBudgetGuardAllowed                 = Msg{"dispatch_sync_run.budget_guard_allowed"}
+	MsgDispatchSyncRunBudgetEstimatesPersisted           = Msg{"dispatch_sync_run.budget_estimates_persisted"}
 	MsgDispatchSyncRunBudgetGuardDryRunFailed            = Msg{"dispatch_sync_run.budget_guard_dry_run_failed"}
 	MsgDispatchSyncRunBudgetGuardDryRun                  = Msg{"dispatch_sync_run.budget_guard_dry_run"}
 	MsgDispatchSyncRunRateLimitCooldownReconfirmed       = Msg{"dispatch_sync_run.rate_limit_cooldown_reconfirmed"}

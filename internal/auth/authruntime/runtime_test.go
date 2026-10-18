@@ -745,6 +745,7 @@ func TestHealthcheckMirrorsReadiness(t *testing.T) {
 	ports := reservePorts(t, 2)
 	apiAddress, operatorAddress := ports[0], ports[1]
 	env := brokenEnvironment(t, apiAddress, operatorAddress)
+	env[authconfig.EnvLogLevel] = "info"
 
 	probe := func() (int, string) {
 		var stderr bytes.Buffer
@@ -756,9 +757,14 @@ func TestHealthcheckMirrorsReadiness(t *testing.T) {
 		t.Fatalf("healthcheck with no listener = %d %q, want 1 and an unreachable diagnostic", code, stderr)
 	}
 
-	_, stop := runService(t, env)
+	logs, stop := runService(t, env)
 	client := &http.Client{Timeout: 10 * time.Second}
 	defer client.CloseIdleConnections()
+	// Both listeners must be bound before the shutdown below: a cancel that lands
+	// between the operator and the API bind makes Execute return the start error
+	// (exit 1), which is not the shutdown this test measures.
+	awaitBoundAddress(t, logs, "operator-http")
+	awaitBoundAddress(t, logs, "auth-api-http")
 	_ = awaitResponse(t, client, "http://"+operatorAddress+"/readyz").Body.Close()
 
 	if code, stderr := probe(); code != 1 || !strings.Contains(stderr, "503") {

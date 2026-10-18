@@ -3292,6 +3292,9 @@ auth_relevant() {
   # Packages the scope selftest governs (auth-looking names, importers of the
   # schema adapter) select the gates too, as directories relative to the root.
   closure+=$'\n'"$(auth_scope_candidates | sed "s|^$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)/||")"
+  # The exemption file's packages too: deleting one leaves a stale exemption that
+  # only the scope selftest rejects, so a change under it must select the gates.
+  closure+=$'\n'"$(awk -F'\t' -v m="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)/" '$1 !~ /^#/ && $1 != "" { sub("^" m, "", $1); print $1 }' "${ROOT}/ci/auth_gate_scope_exempt.txt")"
   # --no-renames: a file moved OUT of the auth tree must report its old path too.
   changed="$(git -C "${ROOT}" diff --name-only --no-renames "${base}" "${head}")"
   while IFS= read -r file; do
@@ -3308,14 +3311,14 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|ci/auth_gate_scope_exempt.txt|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|ci/auth_gate_scope_exempt.txt|ci/auth_scope_candidates.py|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac
   # A Go-package area path with an auth* or audit* directory segment: a package
   # that is new, deleted or moved is not in the head-tree candidate list.
   case "${file}" in
-    cmd/*|internal/*|tools/*)
+    *.go)
       [[ "${file%/*}" =~ (^|/)(auth|audit)[^/]*(/|$) ]] && return 0
       ;;
   esac
@@ -3360,11 +3363,9 @@ check_auth_paths_selftest() {
 auth_scope_candidates() {
   local module
   module="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)"
-  {
-    auth_go list -mod=readonly ./... | awk -F/ -v m="${module}" '{ rest=substr($0, length(m)+2); n=split(rest, seg, "/"); for (i=1;i<=n;i++) if (seg[i] ~ /^(auth|audit)/) { print $0; break } }'
-    auth_go list -mod=readonly -test -f '{{.ImportPath}} {{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}' ./... \
-      | awk -v m="${module}" '{ p=$1; sub(/ \[.*$/, "", p); sub(/\.test$/, "", p); sub(/_test$/, "", p); for (i=2;i<=NF;i++) if ($i == m "/internal/storage/postgres/authschema") { print p; break } }'
-  } | LC_ALL=C sort -u
+  # -tags=integration: a package that exists only under the integration tag must
+  # be seen. The JSON stream is parsed by a helper, not by text munging.
+  auth_go list -mod=readonly -tags=integration -e -json ./... | python3 "${ROOT}/ci/auth_scope_candidates.py" "${module}"
 }
 
 check_auth_scope_selftest() {

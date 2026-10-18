@@ -267,6 +267,16 @@ device-flow surfaces — but "obvious" is a family pattern, and this inventory
 does not record family patterns as facts. They are tracked as an explicit gap
 rather than guessed.
 
+## One registration per line (CHAOS-4774)
+
+A row addresses its surface as `file:line`, so two route registrations written
+on the same line cannot both be owned by a row. In `internal/queryapi/server`
+and `internal/platform/health`, every `Handle`/`HandleFunc` call and every
+route-table `Pattern:` field sits on its own line.
+`TestNoTwoRouteRegistrationsShareALine` fails closed with
+`MULTIPLE REGISTRATIONS ON ONE LINE` and names both routes. The schema has no
+column field; this rule is the chosen alternative.
+
 ## Contributor guide: registering a new route or credential class
 
 1. **New route, existing credential class.** Add a row to

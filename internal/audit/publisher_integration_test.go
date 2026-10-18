@@ -572,13 +572,13 @@ func TestBackoffIsMeasuredFromTheFailureNotTheStepStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stepStart := time.Now().Add(time.Second) // due, and the step's notion of "now"
+	stepStart := time.Now().Add(100 * time.Millisecond) // due, and the step's notion of "now"
 	if _, err := p.Step(ctx, stepStart, 10); err != nil {
 		t.Fatal(err)
 	}
 	failedAt := time.Now()
 	r := readRow(t, ctx, env, k)
-	if got := r.available.Sub(failedAt); got < time.Second {
+	if got := r.available.Sub(failedAt); got < 1500*time.Millisecond {
 		t.Fatalf("available_at is only %v after the failure was recorded; a 2s backoff was measured from the step start", got)
 	}
 }

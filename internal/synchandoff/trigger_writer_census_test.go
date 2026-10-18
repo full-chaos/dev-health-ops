@@ -41,15 +41,40 @@ const triggerWriter = "internal/synchandoff/handoff.go:Mint"
 const (
 	modulePath   = "github.com/full-chaos/dev-health-ops/"
 	handoffDir   = "internal/synchandoff"
-	printfVerb   = `%[-+# 0-9.*]*[a-zA-Z%]`
+	triggerTable = "sync_manual_triggers"
 	callerLabelP = `^[a-z0-9_.:]+$`
 )
 
 var (
-	triggerTableWrite = regexp.MustCompile(`(?is)\binsert\s+into\s+(public\.)?sync_manual_triggers\b|\bupdate\s+(public\.)?sync_manual_triggers\s+set\b`)
-	printfVerbs       = regexp.MustCompile(printfVerb)
+	// triggerTableWrite matches a normalized statement (sqlText) that writes
+	// the table: INSERT INTO, UPDATE [ONLY], MERGE INTO, or COPY ... FROM.
+	triggerTableWrite = regexp.MustCompile(`\b(insert into|update( only)?|merge into) (public\.)?sync_manual_triggers\b|\bcopy (public\.)?sync_manual_triggers\b( ?\([^)]*\))? from\b`)
+	sqlComment        = regexp.MustCompile(`(?s)/\*.*?\*/|--[^\n]*`)
+	sqlSpace          = regexp.MustCompile(`\s+`)
+	sqlDot            = regexp.MustCompile(` ?\. ?`)
 	callerLabel       = regexp.MustCompile(callerLabelP)
+	pgxImport         = regexp.MustCompile(`^github\.com/jackc/pgx/v[0-9]+$`)
 )
+
+// sqlText is a statement as Postgres reads it, for matching: comments are
+// space, quoted identifiers lose their quotes, whitespace is one space, and
+// case is lower.
+func sqlText(value string) string {
+	value = sqlComment.ReplaceAllString(value, " ")
+	value = strings.ReplaceAll(value, `"`, "")
+	value = sqlSpace.ReplaceAllString(value, " ")
+	value = sqlDot.ReplaceAllString(value, ".")
+	return strings.ToLower(value)
+}
+
+// writesTable reports a statement that writes the table. Valid SQL spells the
+// table name as one unbroken token, so a value without it is not normalized.
+func writesTable(value string) bool {
+	if !strings.Contains(strings.ToLower(value), triggerTable) {
+		return false
+	}
+	return triggerTableWrite.MatchString(sqlText(value))
+}
 
 type censusFile struct {
 	path, dir string
@@ -76,8 +101,12 @@ type census struct {
 // variables of any package, the function's own local names (every value
 // assigned or appended to them, regardless of order), fmt.Sprintf, and
 // strings.Join over a literal slice. The strings of one function are also read
-// in source order as one text, joined with "" and with " ". A Mint call is
-// found through any import name, and Mint used as a value fails.
+// in source order as one text, joined with "" and with " ". Each value is read
+// as Postgres reads SQL (comments, quoted identifiers, whitespace and case do
+// not matter) for INSERT INTO, UPDATE [ONLY], MERGE INTO and COPY ... FROM of
+// the table, and a pgx.Identifier naming the table (tx.CopyFrom) is a write
+// too. A Mint call is found through any import name, and Mint used as a value
+// fails.
 //
 // Limit: a static census cannot be complete. It does not see a value that
 // crosses a function boundary (a parameter, a return value, a struct field,
@@ -152,6 +181,11 @@ func (c *census) add(name string, syntax *ast.File) {
 		switch {
 		case importPath == "fmt", importPath == "strings":
 			file.imports[local] = importPath
+		case pgxImport.MatchString(importPath):
+			if spec.Name == nil {
+				local = "pgx"
+			}
+			file.imports[local] = "pgx"
 		case strings.HasPrefix(importPath, modulePath):
 			file.imports[local] = strings.TrimPrefix(importPath, modulePath)
 		}
@@ -288,7 +322,7 @@ func (c *census) values(s scope, expr ast.Expr) []string {
 		return c.constant(s.file, s.file.dir, e.Name)
 	case *ast.SelectorExpr:
 		if pkg, ok := e.X.(*ast.Ident); ok {
-			if dir, ok := s.file.imports[pkg.Name]; ok && dir != "fmt" && dir != "strings" {
+			if dir, ok := s.file.imports[pkg.Name]; ok && dir != "fmt" && dir != "strings" && dir != "pgx" {
 				return c.constant(s.file, dir, e.Sel.Name)
 			}
 		}
@@ -321,24 +355,32 @@ func (c *census) stdlibCall(s scope, call *ast.CallExpr) string {
 	return ""
 }
 
-// sprintf substitutes each verb of the format with the next argument's
-// values (an argument the census cannot compute reads as "").
+// sprintf formats each format value with the real fmt.Sprintf over every
+// combination of the arguments' values (an argument the census cannot compute
+// reads as ""), so explicit argument indexes, %q and %% format as at run time.
 func (c *census) sprintf(s scope, args []ast.Expr) []string {
-	formats := c.values(s, args[0])
-	var out []string
-	for _, format := range formats {
-		pieces := printfVerbs.Split(format, -1)
-		result := []string{pieces[0]}
-		for i, piece := range pieces[1:] {
-			argument := []string{""}
-			if i+1 < len(args) {
-				if values := c.values(s, args[i+1]); len(values) > 0 {
-					argument = values
-				}
-			}
-			result = concat(concat(result, argument), []string{piece})
+	combinations := [][]any{nil}
+	for _, arg := range args[1:] {
+		values := c.values(s, arg)
+		if len(values) == 0 {
+			values = []string{""}
 		}
-		out = append(out, result...)
+		var next [][]any
+		for _, combination := range combinations {
+			for _, value := range values {
+				if len(next) == maxValues {
+					break
+				}
+				next = append(next, append(append([]any(nil), combination...), value))
+			}
+		}
+		combinations = next
+	}
+	var out []string
+	for _, format := range c.values(s, args[0]) {
+		for _, combination := range combinations {
+			out = append(out, fmt.Sprintf(format, combination...))
+		}
 	}
 	return capped(out)
 }
@@ -505,10 +547,14 @@ func (c *census) writes(file *censusFile, decl ast.Decl) bool {
 		}
 		values := c.values(s, expr)
 		for _, value := range values {
-			if triggerTableWrite.MatchString(value) {
+			if writesTable(value) {
 				found = true
 				return false
 			}
+		}
+		if c.namesTableIdentifier(s, expr) {
+			found = true
+			return false
 		}
 		switch expr.(type) {
 		case *ast.BasicLit, *ast.Ident:
@@ -523,7 +569,31 @@ func (c *census) writes(file *censusFile, decl ast.Decl) bool {
 		}
 		return true
 	})
-	return found || triggerTableWrite.MatchString(strings.Join(pieces, "")) || triggerTableWrite.MatchString(strings.Join(pieces, " "))
+	return found || writesTable(strings.Join(pieces, "")) || writesTable(strings.Join(pieces, " "))
+}
+
+// namesTableIdentifier reports a pgx.Identifier literal naming the table: the
+// form tx.CopyFrom writes rows with, without SQL text.
+func (c *census) namesTableIdentifier(s scope, expr ast.Expr) bool {
+	literal, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	selector, ok := literal.Type.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Identifier" {
+		return false
+	}
+	if pkg, ok := selector.X.(*ast.Ident); !ok || s.file.imports[pkg.Name] != "pgx" {
+		return false
+	}
+	for _, element := range literal.Elts {
+		for _, value := range c.values(s, element) {
+			if sqlText(value) == triggerTable {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // mintCalls counts the Mint calls of file and returns a problem for Mint used
@@ -845,6 +915,134 @@ var triggerTable = "sync_manual_triggers"
 
 func sneak(ctx context.Context, tx pgx.Tx) error {
 	_, err := tx.Exec(ctx, "INSERT INTO public." + triggerTable + " (occurrence_id) VALUES ($1)", 1)
+	return err
+}
+`,
+		},
+		"a block comment between the keywords": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+import (
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, "INSERT /* x */ INTO public.sync_manual_triggers (occurrence_id) VALUES ($1)", 1)
+	_ = fmt.Sprint
+	return err
+}
+`,
+		},
+		"a line comment between the keywords": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+import (
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, "INSERT -- x\nINTO public.sync_manual_triggers (occurrence_id) VALUES ($1)", 1)
+	_ = fmt.Sprint
+	return err
+}
+`,
+		},
+		"a positional fmt.Sprintf": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+import (
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, fmt.Sprintf("INSERT INTO public.%[2]s (occurrence_id) VALUES (%[1]s)", "$1", "sync_manual_triggers"), 1)
+	_ = fmt.Sprint
+	return err
+}
+`,
+		},
+		"a quoted identifier": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+import (
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, ` + "`" + `INSERT INTO "public" . "sync_manual_triggers" (occurrence_id) VALUES ($1)` + "`" + `, 1)
+	_ = fmt.Sprint
+	return err
+}
+`,
+		},
+		"a MERGE": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+import (
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, "MERGE INTO public.sync_manual_triggers AS t USING (SELECT $1 AS id) s ON t.occurrence_id = s.id WHEN NOT MATCHED THEN INSERT (occurrence_id) VALUES (s.id)", 1)
+	_ = fmt.Sprint
+	return err
+}
+`,
+		},
+		"a COPY FROM": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+import (
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, "COPY public.sync_manual_triggers (occurrence_id, mode) FROM STDIN", 1)
+	_ = fmt.Sprint
+	return err
+}
+`,
+		},
+		"an UPDATE ONLY": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+import (
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, "UPDATE ONLY public.sync_manual_triggers SET mode = $1", "x")
+	_ = fmt.Sprint
+	return err
+}
+`,
+		},
+		"a pgx.Identifier for CopyFrom": {
+			"internal/scheduler/sync/sneak.go": `package sync
+
+import (
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func sneak(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"public", "sync_manual_triggers"}, []string{"occurrence_id"}, rows)
+	_ = fmt.Sprint
 	return err
 }
 `,

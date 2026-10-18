@@ -2,10 +2,6 @@ package acr
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,7 +13,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -30,6 +25,12 @@ import (
 const LLMConfigScope = "llm_config:read"
 
 const llmConfigSchemaVersion = "acr_llm_config.v1"
+
+// NoConfigHeader marks the 404 that means "the org has no BYO config".
+const (
+	NoConfigHeader = "X-Org-Llm-Config"
+	NoConfigValue  = "none"
+)
 
 // ErrCredentialInvalid is a missing, unknown, revoked or expired credential.
 var ErrCredentialInvalid = errors.New("service credential invalid")
@@ -141,6 +142,10 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			logger.InfoContext(ctx, "acr llm-config: none configured",
 				slog.String("org_id", orgID), slog.String("credential_id", credentialID))
 			countLLMConfig(ctx, "not_found")
+			// A machine-readable marker: a client that must tell "this org has
+			// no config" from a missing route (an old replica, a wrong target)
+			// reads this header, never the bare 404.
+			w.Header().Set(NoConfigHeader, NoConfigValue)
 			writeDetail(w, http.StatusNotFound, "Not found")
 			return
 		}
@@ -185,64 +190,50 @@ func errorKind(err error) string {
 
 // PostgresCredentialVerifier checks svc_acr_ tokens against
 // internal_service_credentials, the table `service-credentials create` writes
-// (admin/servicecredentials.go: token_hash is the hex SHA-256 of the token,
-// token_prefix its first 16 characters). It is read-only; last_used_at is not
-// touched.
+// (admin/servicecredentials.go: token_hash is the hex SHA-256 of the token).
+// It is read-only; last_used_at is not touched.
 type PostgresCredentialVerifier struct {
 	Pool *pgxpool.Pool
 	Now  func() time.Time
+	// Service and TokenPrefix name the credential family this verifier accepts;
+	// empty means acr (svc_acr_). The worker llm-config route sets
+	// worker-llm-config and svc_wllm_.
+	Service     string
+	TokenPrefix string
 }
 
-const acrTokenPrefix = "svc_acr_"
+const (
+	acrTokenPrefix          = "svc_acr_"
+	workerLLMConfigService  = "worker-llm-config"
+	workerLLMConfigTokenPre = "svc_wllm_"
+)
+
+// WorkerCredentialVerifier verifies svc_wllm_ tokens of the worker-llm-config service.
+func WorkerCredentialVerifier(pool *pgxpool.Pool) PostgresCredentialVerifier {
+	return PostgresCredentialVerifier{Pool: pool, Service: workerLLMConfigService, TokenPrefix: workerLLMConfigTokenPre}
+}
 
 func (v PostgresCredentialVerifier) Verify(ctx context.Context, token, scope string) (string, error) {
-	if !strings.HasPrefix(token, acrTokenPrefix) || len(token) < 16 {
+	service, prefix := v.Service, v.TokenPrefix
+	if service == "" {
+		service, prefix = "acr", acrTokenPrefix
+	}
+	if !strings.HasPrefix(token, prefix) {
 		return "", ErrCredentialInvalid
 	}
 	now := time.Now().UTC()
 	if v.Now != nil {
 		now = v.Now()
 	}
-	sum := sha256.Sum256([]byte(token))
-	presented := hex.EncodeToString(sum[:])
-	rows, err := v.Pool.Query(ctx, `SELECT id::text, token_hash, scopes::text, expires_at, revoked_at
-		FROM internal_service_credentials WHERE service_name = 'acr' AND token_prefix = $1`, token[:16])
+	cred, found, err := PostgresCredentialStore{Pool: v.Pool}.Find(ctx, token)
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
-	var matched struct {
-		id      string
-		scopes  string
-		expires *time.Time
-		revoked *time.Time
-	}
-	found := false
-	for rows.Next() {
-		var id, hash, scopes string
-		var expires, revoked *time.Time
-		if err := rows.Scan(&id, &hash, &scopes, &expires, &revoked); err != nil {
-			return "", err
-		}
-		if subtle.ConstantTimeCompare([]byte(hash), []byte(presented)) == 1 {
-			matched.id, matched.scopes, matched.expires, matched.revoked = id, scopes, expires, revoked
-			found = true
-		}
-	}
-	if err := rows.Err(); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return "", err
-	}
-	if !found || matched.revoked != nil || (matched.expires != nil && !matched.expires.After(now)) {
+	if !found || cred.ServiceName != service || !cred.Valid(now) {
 		return "", ErrCredentialInvalid
 	}
-	var held []string
-	if err := json.Unmarshal([]byte(matched.scopes), &held); err != nil {
-		return matched.id, ErrCredentialScope
+	if !cred.Has(scope) {
+		return cred.ID, ErrCredentialScope
 	}
-	for _, have := range held {
-		if have == scope {
-			return matched.id, nil
-		}
-	}
-	return matched.id, ErrCredentialScope
+	return cred.ID, nil
 }

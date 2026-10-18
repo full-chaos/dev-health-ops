@@ -36,8 +36,8 @@ func TestOperatingReviewCurrentAndV1_DifferByTheTwoDataSelections(t *testing.T) 
 
 func TestOperatingReview_BothTextsResolveToTheOneOperation(t *testing.T) {
 	legacy := legacyDigestsByOperation["operatingReview"]
-	if len(legacy) != 4 || legacy[0] != digestHex(registeredOperatingReviewV1Document) || legacy[1] != digestHex(registeredOperatingReviewV2Document) || legacy[2] != digestHex(registeredOperatingReviewV3Document) || legacy[3] != digestHex(registeredOperatingReviewV4Document) {
-		t.Fatalf("legacyDigestsByOperation[operatingReview] = %v, want exactly the V1 to V4 digests", legacy)
+	if len(legacy) != 5 || legacy[0] != digestHex(registeredOperatingReviewV1Document) || legacy[1] != digestHex(registeredOperatingReviewV2Document) || legacy[2] != digestHex(registeredOperatingReviewV3Document) || legacy[3] != digestHex(registeredOperatingReviewV4Document) || legacy[4] != digestHex(registeredOperatingReviewV5Document) {
+		t.Fatalf("legacyDigestsByOperation[operatingReview] = %v, want exactly the V1 to V5 digests", legacy)
 	}
 	byDigest, err := buildOperationByDigest(
 		map[string]string{
@@ -51,7 +51,7 @@ func TestOperatingReview_BothTextsResolveToTheOneOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"operatingreview_captured.graphql", "operatingreview_v1_captured.graphql", "operatingreview_v2_captured.graphql", "operatingreview_v3_captured.graphql", "operatingreview_v4_captured.graphql"} {
+	for _, name := range []string{"operatingreview_captured.graphql", "operatingreview_v1_captured.graphql", "operatingreview_v2_captured.graphql", "operatingreview_v3_captured.graphql", "operatingreview_v4_captured.graphql", "operatingreview_v5_captured.graphql"} {
 		text, err := os.ReadFile("testdata/wire_capture/" + name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
@@ -105,10 +105,12 @@ func TestOperatingReviewV4AndV3_DifferByTheRateState(t *testing.T) {
 	}
 }
 
-// CHAOS-9630: the current text is the V4 text plus exactly the change failure evidence of a metric, after its
+// CHAOS-9630: the V5 text is the V4 text plus exactly the change failure evidence of a metric, after its
 // rateState. No legacy text asks for it, so a web build on any older text keeps the answer it had.
-func TestOperatingReviewCurrentAndV4_DifferByTheChangeFailureEvidence(t *testing.T) {
-	current := registeredOperatingReviewDocument
+func TestOperatingReviewV5AndV4_DifferByTheChangeFailureEvidence(t *testing.T) {
+	// Since CHAOS-9873 the current text also asks for the section's sizing; the text of CHAOS-9630 is the legacy V5
+	// text, and it is V5 that differs from V4 by the evidence.
+	current := registeredOperatingReviewV5Document
 	added := "        rateState\n        changeFailureEvidence {\n          basis\n          deployments\n          deploymentsWithStatus\n          coverage\n          unknownReason\n          __typename\n        }\n"
 	if strings.Count(current, added) != 1 || strings.Count(current, "changeFailureEvidence") != 1 {
 		t.Fatal("the current operatingReview document does not ask for changeFailureEvidence right after rateState, once")
@@ -120,5 +122,26 @@ func TestOperatingReviewCurrentAndV4_DifferByTheChangeFailureEvidence(t *testing
 	}
 	if without := strings.Replace(current, added, "        rateState\n", 1); without != registeredOperatingReviewV4Document {
 		t.Fatalf("the current document less the changeFailureEvidence selection is not the V4 text:\n%s", without)
+	}
+}
+
+// CHAOS-9873: the current text is the V5 text plus exactly the section's sizing, after worsened. No legacy text asks
+// for it, so a web build on any older text reads the investment section in work units, as it did.
+func TestOperatingReviewCurrentAndV5_DifferByTheSectionSizing(t *testing.T) {
+	current := registeredOperatingReviewDocument
+	added := "      worsened\n      sizing {\n        measure\n        sizingCoverage\n        unsizedUnitCount\n        workUnitCount\n        __typename\n      }\n"
+	if strings.Count(current, added) != 1 || strings.Count(current, "sizingCoverage") != 1 {
+		t.Fatal("the current operatingReview document does not ask for the section sizing right after worsened, once")
+	}
+	for name, legacy := range map[string]string{
+		"V1": registeredOperatingReviewV1Document, "V2": registeredOperatingReviewV2Document, "V3": registeredOperatingReviewV3Document,
+		"V4": registeredOperatingReviewV4Document, "V5": registeredOperatingReviewV5Document,
+	} {
+		if strings.Contains(legacy, "sizingCoverage") {
+			t.Fatalf("the legacy %s operatingReview document asks for sizingCoverage: it is not an old text", name)
+		}
+	}
+	if without := strings.Replace(current, added, "      worsened\n", 1); without != registeredOperatingReviewV5Document {
+		t.Fatalf("the current document less the sizing selection is not the V5 text:\n%s", without)
 	}
 }

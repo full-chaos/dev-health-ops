@@ -1,0 +1,537 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/provisioning-event.v1.schema.json",
+  "title": "Auth Control Plane provisioning outbox event (v1 wire format)",
+  "description": "One event from auth_outbox_events (TRD sections 9 and 13), as a consumer receives it. A security mutation and its outbox row commit in ONE transaction, and consumers process idempotently by aggregate revision, so the consumer contract is as much the deliverable as the producer one: an event a consumer cannot deduplicate is broken even if it validates.\n\nTHE ENVELOPE IS THE OUTBOX ROW. Its members are exactly the columns of auth_outbox_events that cross a service boundary (aggregate_type, aggregate_id, event_type, idempotency_key, created_at, payload), plus schema_version; the table's delivery bookkeeping (id, available_at, published_at, attempts, last_error) is not carried. A test derives both sets from the migration and fails if the schema and the table disagree in either direction.\n\nTHE IDEMPOTENCY KEY IS (aggregate_type, aggregate_id, revision), and `revision` is PER AGGREGATE, never global. Nothing here implies an ordering across aggregates; a consumer that sorts the whole stream is wrong. The `idempotency_key` column must equal aggregate_type + \":\" + aggregate_id + \":\" + payload.revision, which the clients enforce. Consumer rule (client-side, with golden vectors): apply an event when its revision is exactly the last applied revision + 1 (or 1 for an aggregate never seen); a revision at or below the last applied one is a duplicate or stale delivery and is ignored; a larger one is a gap, which is not applied and means the consumer must resynchronise.\n\n`revision` is an integer token in 1..2^53-1. JSON Schema `integer` admits `1.0`, so a decimal- or exponent-form token is refused by the clients on the raw token (reject_by_client fixtures), and 2^53 and beyond are refused by the schema because a float64 producer has already lost the value.\n\nTHE `change` OBJECT IS AN ALLOWLIST, not a free-form map. Audit-style metadata cannot be asserted secret-free by a schema, so the fields that would carry a secret are unrepresentable: each aggregate type names exactly the members it may carry (propertyNames per aggregate), every member is typed, and no member can hold plaintext credentials, provider tokens, raw codes, untrusted bodies or high-cardinality identities (emails, provider subjects, display names). An arbitrary key fails.\n\nAggregate ids are server-minted. Each aggregate type pins its own id prefix, so an `organization` event carrying a `prn_` id disagrees in shape and fails. The prefixes `idn_`, `mbr_`, `pra_`, `grt_` and `rol_` are introduced by this contract; `prn_` and `org_` are principal.v1's.\n\nSCOPE (decided, not accidental). Entitlement snapshots are a projection the control plane CONSUMES (ACP-ADR-07: billing and licensing stay authoritative), so entitlement changes are not provisioning events. ACR and External Push lifecycle changes are metadata projections owned by the credential surface (ACP-ADR-08, ACP-ADR-09: the control plane is neither their validator nor their writer) and are not in this stream in v1. Mutation REQUEST bodies are caller hints, never authority (TRD section 2, principle 3); they belong with each route when it is mounted.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "aggregate_type",
+    "aggregate_id",
+    "event_type",
+    "idempotency_key",
+    "created_at",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "provisioning-event.v1"
+    },
+    "aggregate_type": {
+      "enum": [
+        "principal",
+        "user",
+        "external_identity",
+        "organization",
+        "membership",
+        "platform_role_assignment",
+        "service_account",
+        "workload",
+        "resource_grant"
+      ]
+    },
+    "aggregate_id": {
+      "type": "string",
+      "description": "Server-minted. The prefix is pinned per aggregate_type by the conditionals below."
+    },
+    "event_type": {
+      "type": "string",
+      "description": "`<aggregate_type>.<verb>` from a closed per-aggregate vocabulary pinned by the conditionals below."
+    },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^[a-z_]{1,32}:[A-Za-z0-9_-]{1,64}:[0-9]{1,16}$",
+      "description": "The outbox column of the same name, UNIQUE in auth_outbox_events. It MUST equal aggregate_type + \":\" + aggregate_id + \":\" + payload.revision; the schema pins the shape and the clients enforce the equality (reject_by_client), because JSON Schema cannot compare two members."
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+      "description": "The outbox row's created_at: when the mutation committed. RFC 3339, every component bounded as in error.v1."
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "revision",
+        "change"
+      ],
+      "additionalProperties": false,
+      "description": "The outbox payload (jsonb). Everything event-specific lives here, so the envelope members are exactly the table's columns.",
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Per-aggregate revision after this change, the idempotency key with aggregate_type and aggregate_id. 1..2^53-1: a float64 producer cannot represent 2^53+1, so the schema refuses 2^53 and beyond. A decimal- or exponent-form token is refused by the clients on the raw token."
+        },
+        "organization_id": {
+          "type": "string",
+          "pattern": "^org_[A-Za-z0-9_-]{1,64}$",
+          "description": "The tenant the change belongs to, when it has one. Absent for platform-level aggregates."
+        },
+        "actor_principal_id": {
+          "type": "string",
+          "pattern": "^prn_[A-Za-z0-9_-]{1,64}$",
+          "description": "Who made the change. Absent for system-initiated changes."
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^req_[A-Za-z0-9_-]{26}$",
+          "description": "Server-minted correlation id, never copied from caller input (see README, identifiers)."
+        },
+        "change": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "enum": [
+                "active",
+                "disabled",
+                "suspended",
+                "pending",
+                "removed",
+                "revoked",
+                "expired"
+              ],
+              "description": "The aggregate's status after the change, from a closed vocabulary."
+            },
+            "slug": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+              "description": "An organization's URL slug. The display name is free text and is not carried."
+            },
+            "role_id": {
+              "type": "string",
+              "pattern": "^rol_[A-Za-z0-9_-]{1,64}$",
+              "description": "A role identifier. Roles are references; the role's actions are not restated here."
+            },
+            "owner_principal_id": {
+              "type": "string",
+              "pattern": "^prn_[A-Za-z0-9_-]{1,64}$"
+            },
+            "provider": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{1,31}$",
+              "description": "The identity provider's short name. The issuer URL and the provider's subject are high-cardinality identities and are not carried (TRD section 13)."
+            },
+            "audiences": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9._:-]{0,63}$"
+              }
+            },
+            "resource_type": {
+              "enum": [
+                "organization",
+                "repository"
+              ],
+              "description": "An unknown resource type is a denial (TRD section 14), so the vocabulary is closed."
+            },
+            "resource_key": {
+              "type": "string",
+              "pattern": "^(\\*|[a-z0-9._-]{1,100}/[a-z0-9._-]{1,100})$",
+              "description": "Canonical lowercase owner/repo, or the explicit organization-wide `*` (TRD section 9). Inventory never creates a grant."
+            },
+            "action_set": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$"
+              }
+            },
+            "effect": {
+              "enum": [
+                "allow",
+                "deny"
+              ]
+            },
+            "expires_at": {
+              "type": "string",
+              "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+              "description": "The grant's expiry (TRD section 9 resource_grants.expires_at; Q2 default keep). For a grant an expiry is an authorization boundary, not a hint."
+            }
+          },
+          "description": "The allowlisted description of what changed; the member set is pinned per aggregate_type below. May be empty."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "principal"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^prn_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "principal.created",
+              "principal.disabled",
+              "principal.enabled"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "propertyNames": {
+                  "enum": [
+                    "status"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "user"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^prn_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "user.created",
+              "user.email_verified",
+              "user.credentials_changed",
+              "user.tokens_invalidated"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "external_identity"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^idn_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "external_identity.linked",
+              "external_identity.unlinked"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "propertyNames": {
+                  "enum": [
+                    "provider"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "organization"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^org_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "organization.created",
+              "organization.updated",
+              "organization.suspended",
+              "organization.reactivated"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "propertyNames": {
+                  "enum": [
+                    "status",
+                    "slug"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "membership"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^mbr_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "membership.invited",
+              "membership.activated",
+              "membership.role_changed",
+              "membership.removed"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "propertyNames": {
+                  "enum": [
+                    "status",
+                    "role_id"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "platform_role_assignment"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^pra_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "platform_role_assignment.granted",
+              "platform_role_assignment.revoked"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "propertyNames": {
+                  "enum": [
+                    "status",
+                    "role_id"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "service_account"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^prn_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "service_account.created",
+              "service_account.disabled",
+              "service_account.enabled",
+              "service_account.owner_changed"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "propertyNames": {
+                  "enum": [
+                    "status",
+                    "owner_principal_id"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "workload"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^prn_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "workload.created",
+              "workload.disabled",
+              "workload.enabled",
+              "workload.audiences_changed"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "propertyNames": {
+                  "enum": [
+                    "status",
+                    "audiences"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "resource_grant"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^grt_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "resource_grant.created",
+              "resource_grant.updated",
+              "resource_grant.revoked",
+              "resource_grant.expired"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "propertyNames": {
+                  "enum": [
+                    "status",
+                    "resource_type",
+                    "resource_key",
+                    "action_set",
+                    "effect",
+                    "expires_at"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

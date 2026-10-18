@@ -214,3 +214,22 @@ func newAuthMigrationOnly(t *testing.T, ctx context.Context) *migrationOnlyFixtu
 	}
 	return &migrationOnlyFixture{conn: conn, schema: options.Schema, options: options}
 }
+
+// guardedExec runs one statement in a transaction that carries the commit
+// guard's setting, the way internal/audit.Commit does. Migration 0006 refuses
+// a write to a guarded table otherwise, so fixtures that seed those tables
+// directly must say they are doing so on purpose.
+func guardedExec(ctx context.Context, pool *pgxpool.Pool, sql string, args ...any) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

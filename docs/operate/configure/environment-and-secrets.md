@@ -128,10 +128,28 @@ OLLAMA_API_KEY=optional-cloud-key
 supported. Omit the key for an unauthenticated local host. These environment
 bundles are platform configuration, never organization BYO settings.
 
-Hosted provider bundles. The generic `LLM_API_KEY`, `LLM_BASE_URL` and
-`LLM_MODEL` win over the provider-specific names, as above; an empty base URL is
-the provider's public endpoint and an empty model is the provider's default
-(`claude-haiku-5-5`, `gemini-3.8-flash`, `qwen-plus`):
+Per-purpose platform model. `LLM_MODEL_EXPLAIN` names the model the investment
+and work unit explanations ask the platform provider for. It wins over
+`LLM_MODEL` and the provider-specific names, and never over an explicit request
+model or an organization's own BYO model; an organization's own provider is
+never given it. Categorization does not read it and keeps using `LLM_MODEL`.
+Set it to a model the platform provider serves.
+
+Hosted provider bundles. The model is resolved in one order for every route
+(categorize, both explain routes and the budget status): a model set on the
+request or in the organization's BYO settings, then `LLM_MODEL_<PROVIDER>` (or
+the provider's own name such as `GEMINI_MODEL`), then the generic `LLM_MODEL`
+for the platform provider only, then the provider's default. The platform
+provider is `LLM_PROVIDER`, or the provider the keys auto-detect when it is
+unset. The generic `LLM_MODEL` never names the model of another provider. An
+empty base URL is the provider's public endpoint and an empty model is the
+provider's default (`claude-haiku-5-5`, `gemini-3.8-flash`, `qwen-plus`). Set
+`ANTHROPIC_BASE_URL` without a trailing `/v1`: the Anthropic client appends
+`/v1/messages` itself, so `https://api.anthropic.com/v1` posts to
+`/v1/v1/messages` and the call fails. The OpenAI-compatible providers (OpenAI,
+Gemini, Qwen, local) append only `/chat/completions`, so their base URLs keep
+their `/v1` (or `/ai/v1`, `/compatible-mode/v1`) segment, as in the examples
+below.
 
 ```dotenv
 # Anthropic
@@ -285,6 +303,32 @@ of that job by up to its time budget plus the time of its writes, so keep the
 budget well below the worker's stop grace period. Apply ClickHouse migrations
 109 and 110 before a worker runs with the phase on; with a table missing the
 phase stops and says so.
+
+### Investment categorization with an organization's own model
+
+An organization that stores a BYO LLM configuration (a `categorize` override,
+else its default row; see the BYO LLM per purpose section of the workspace
+settings page) can have its investment categorization run on its own provider,
+model and key. The `heavy` worker group does not hold `SETTINGS_ENCRYPTION_KEY`
+and must not, so it asks the api for the resolved configuration over the
+internal listener instead of reading the stored key.
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `ORG_LLM_CONFIG_URL` | Origin of the api internal listener, for example `http://api-internal:8080`. | empty (feature off) |
+| `ORG_LLM_CONFIG_TOKEN` | A `worker-llm-config` service credential (`svc_wllm_...`) holding the `llm_config:read` scope. Secret; give it to the `heavy` group only. | empty (feature off) |
+
+Both empty keeps categorization on the platform environment for every
+organization. Only one of the two set refuses the materialize family at start.
+With both set: an organization with no stored configuration (the api answers a 404 marked `X-Org-Llm-Config: none`; a bare 404, such as an old api replica or a wrong `ORG_LLM_CONFIG_URL`, is treated as the api being unavailable, never as "no config"), or an explicit
+request for another provider, uses the platform provider as before. An
+organization whose configuration exists but cannot be read (the api is down or
+refuses the credential), is unusable (unknown provider, hosted provider without
+a key, a base URL the SSRF guard rejects) or has no native client fails the
+run: it is never moved to the platform provider. An organization's own spend is
+admitted through its BYO LLM budget like the explain routes. The stamped
+`categorization_model_version` is the model that ran. Create the credential with
+`dho service-credentials create --service worker-llm-config --scope llm_config:read`.
 
 ### Investment provider batch mode
 

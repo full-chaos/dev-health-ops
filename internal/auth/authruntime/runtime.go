@@ -22,8 +22,11 @@ import (
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
@@ -84,7 +87,7 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 		streams.Stderr = io.Discard
 	}
 
-	overrides, showVersion, code, done := parseArguments(args, streams)
+	overrides, showVersion, healthcheck, code, done := parseArguments(args, streams)
 	if done {
 		return code
 	}
@@ -99,6 +102,9 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 	}
 
 	cfg, err := authconfig.Load(authconfig.Spec{Overrides: overrides, LookupEnv: lookup})
+	if err == nil && healthcheck {
+		return runHealthcheck(parent, cfg, streams)
+	}
 	if err != nil {
 		// A configuration error can quote an operator-supplied value, so it
 		// goes through the same redactor the logger uses before reaching a
@@ -278,16 +284,7 @@ func configure(
 		return nil, err
 	}
 
-	apiHTTP, err := httpapi.NewServer(httpapi.ServerOptions{
-		Address:        cfg.APIAddress,
-		Logger:         logger,
-		Routes:         Routes(),
-		RequestTimeout: cfg.RequestTimeout,
-		MaxBodyBytes:   cfg.MaxBodyBytes,
-		RateLimit:      cfg.RateLimit.PerSecond,
-		RateLimitBurst: cfg.RateLimit.Burst,
-		MaxInFlight:    maxInFlightRequests,
-	})
+	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, Routes()))
 	if err != nil {
 		closeStore()
 		return nil, err
@@ -374,12 +371,14 @@ func (v *optionValue) Set(raw string) error {
 // never offer, since a misspelled variable name is indistinguishable from an
 // unset one and stays silently inert.
 func parseArguments(args []string, streams IO) (
-	overrides map[string]string, showVersion bool, code int, done bool,
+	overrides map[string]string, showVersion, healthcheck bool, code int, done bool,
 ) {
 	flags := flag.NewFlagSet(authconfig.Service, flag.ContinueOnError)
 	flags.SetOutput(streams.Stdout)
 	flags.Usage = func() { fmt.Fprint(streams.Stdout, authconfig.HelpText()) }
 	showVersionFlag := flags.Bool("version", false, "print build metadata as JSON and exit")
+	healthcheckFlag := flags.Bool("healthcheck", false,
+		"probe this deployment's own operator /readyz over loopback and exit 0 only when it answers 200")
 
 	bound := make(map[string]*optionValue)
 	for _, option := range authconfig.Options() {
@@ -393,15 +392,15 @@ func parseArguments(args []string, streams IO) (
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return nil, false, 0, true
+			return nil, false, false, 0, true
 		}
 		writeArgumentError(streams.Stderr, err)
 		fmt.Fprintf(streams.Stderr, "run %s --help for the full option list\n", authconfig.Service)
-		return nil, false, 2, true
+		return nil, false, false, 2, true
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(streams.Stderr, "argument error: positional arguments are not accepted")
-		return nil, false, 2, true
+		return nil, false, false, 2, true
 	}
 
 	overrides = make(map[string]string)
@@ -410,7 +409,7 @@ func parseArguments(args []string, streams IO) (
 			overrides[env] = value.raw
 		}
 	}
-	return overrides, *showVersionFlag, 0, false
+	return overrides, *showVersionFlag, *healthcheckFlag, 0, false
 }
 
 // writeConfigurationError and writeArgumentError print an error that can quote an operator-supplied value back: through the log
@@ -422,3 +421,67 @@ func writeConfigurationError(w io.Writer, err error) {
 func writeArgumentError(w io.Writer, err error) {
 	fmt.Fprintf(w, "argument error: %s\n", logging.RedactText(err.Error()))
 }
+
+// apiServerOptions is the ONE place the API listener's middleware stack is
+// configured from the resolved configuration. configure builds the production
+// server from it and the production-stack integration test (CHAOS-4887, G-69)
+// builds its server from it with a probe route, so the test exercises the
+// configuration the service really runs, not a hand-assembled router.
+func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpapi.Route) httpapi.ServerOptions {
+	return httpapi.ServerOptions{
+		Address:        cfg.APIAddress,
+		Logger:         logger,
+		Routes:         routes,
+		RequestTimeout: cfg.RequestTimeout,
+		MaxBodyBytes:   cfg.MaxBodyBytes,
+		RateLimit:      cfg.RateLimit.PerSecond,
+		RateLimitBurst: cfg.RateLimit.Burst,
+		MaxInFlight:    maxInFlightRequests,
+	}
+}
+
+// runHealthcheck is the exec-form container probe: the runtime image is
+// distroless (no shell, no curl), so Docker's healthcheck must invoke this
+// binary. It asks the SAME deployment's operator listener for /readyz over
+// loopback and mirrors the answer as its exit code. /readyz already
+// aggregates the required checks (postgres, signing_key), so the probe adds no
+// failure logic of its own -- a container is healthy exactly when the service
+// would be ready.
+func runHealthcheck(parent context.Context, cfg authconfig.Config, streams IO) int {
+	_, port, err := net.SplitHostPort(cfg.OperatorAddress)
+	if err != nil || port == "" {
+		fmt.Fprintln(streams.Stderr, "healthcheck: operator address has no port")
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(parent, cfg.HealthCheckTimeout+healthcheckSlack)
+	defer cancel()
+	request, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, "http://"+net.JoinHostPort("127.0.0.1", port)+"/readyz", nil,
+	)
+	if err != nil {
+		fmt.Fprintln(streams.Stderr, "healthcheck: could not build the request")
+		return 1
+	}
+	// No keep-alive: a probe that leaves a pooled or pre-dialled connection behind
+	// holds the operator listener's graceful shutdown open for the idle timeout
+	// when this runs in-process (the tests), and buys nothing for a one-shot probe.
+	client := &http.Client{
+		Timeout:   cfg.HealthCheckTimeout + healthcheckSlack,
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		fmt.Fprintln(streams.Stderr, "healthcheck: operator listener unreachable")
+		return 1
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		fmt.Fprintf(streams.Stderr, "healthcheck: /readyz answered %d\n", response.StatusCode)
+		return 1
+	}
+	return 0
+}
+
+// healthcheckSlack is added to the per-check readiness deadline so the probe
+// outlasts a readiness evaluation that runs to its own bound.
+const healthcheckSlack = time.Second

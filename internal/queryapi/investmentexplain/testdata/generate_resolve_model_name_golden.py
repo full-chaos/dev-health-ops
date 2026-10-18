@@ -42,10 +42,11 @@ CASES: dict[str, dict[str, Any]] = {
         "model": None,
         "env": {"LLM_MODEL_OPENAI": "gpt-5-from-env"},
     },
+    # Go reads the generic LLM_MODEL only for the platform provider (LLM_PROVIDER): chris CHAOS-4978 + ruling D6043 (CHAOS-10011).
     "openai_generic_llm_model_env": {
         "provider": "openai",
         "model": None,
-        "env": {"LLM_MODEL": "generic-model-from-env"},
+        "env": {"LLM_PROVIDER": "openai", "LLM_MODEL": "generic-model-from-env"},
     },
     "openai_provider_specific_beats_generic": {
         "provider": "openai",

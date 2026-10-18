@@ -58,17 +58,23 @@ func TokenAuth(header, prefix string, token secrets.Value) Auth {
 }
 
 type HTTPClient struct {
-	Provider  string
-	BaseURL   *url.URL
-	Doer      HTTPDoer
-	Auth      Auth
-	Retry     RetryPolicy
-	Lease     LeaseGuard
-	Gate      BackoffGate
-	Budget    BudgetStore
-	BudgetKey BudgetKey
-	Metrics   *Metrics
-	entropy   io.Reader
+	// GateWaitMax bounds how long, in total, one request sleeps in place at
+	// the shared backoff gate before the try ends with the wait that remains
+	// (CHAOS-8830; Python slept at most 300 s). Zero sleeps not at all, which
+	// is the old behaviour: any gate wait ends the try. NewHTTPClient sets it
+	// to RateLimitMaxHonoredDelay.
+	GateWaitMax time.Duration
+	Provider    string
+	BaseURL     *url.URL
+	Doer        HTTPDoer
+	Auth        Auth
+	Retry       RetryPolicy
+	Lease       LeaseGuard
+	Gate        BackoffGate
+	Budget      BudgetStore
+	BudgetKey   BudgetKey
+	Metrics     *Metrics
+	entropy     io.Reader
 
 	// ReservationReleaseTimeout bounds cleanup independently from a cancelled
 	// request. Zero uses defaultReservationReleaseTimeout.
@@ -95,7 +101,7 @@ func NewHTTPClient(provider, base string, doer HTTPDoer, auth Auth, retry RetryP
 	if err := admitDoer(doer); err != nil {
 		return nil, err
 	}
-	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: originGuardedAtConstruction(doer), Auth: auth, Retry: retry, Lease: lease, entropy: rand.Reader}, nil
+	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: originGuardedAtConstruction(doer), Auth: auth, Retry: retry, Lease: lease, GateWaitMax: RateLimitMaxHonoredDelay, entropy: rand.Reader}, nil
 }
 
 // admitDoer is the ONE admission every constructor that sends a credential through a doer calls (NewHTTPClient, NewGitHubAppAuth,
@@ -312,12 +318,8 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 	if err := c.Lease.Assert(ctx); err != nil {
 		return nil, err
 	}
-	if c.Gate != nil {
-		if wait, err := c.Gate.Wait(ctx); err != nil {
-			return nil, err
-		} else if wait > 0 {
-			return nil, &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
-		}
+	if err := c.awaitGate(ctx); err != nil {
+		return nil, err
 	}
 	var requestBody []byte
 	if body != nil {
@@ -477,12 +479,8 @@ func (c *HTTPClient) DoUnauthenticated(
 	if err := c.Lease.Assert(ctx); err != nil {
 		return nil, err
 	}
-	if c.Gate != nil {
-		if wait, err := c.Gate.Wait(ctx); err != nil {
-			return nil, err
-		} else if wait > 0 {
-			return nil, &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
-		}
+	if err := c.awaitGate(ctx); err != nil {
+		return nil, err
 	}
 	var reservation Reservation
 	if c.Budget != nil {
@@ -526,13 +524,95 @@ func (c *HTTPClient) DoUnauthenticated(
 		c.observe(failure.Class)
 		return nil, failure
 	}
-	classification := ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, "")
-	if classification == nil {
+	if classification := classifyResponseWithBody(c.Provider, target.Path, response); classification == nil {
 		c.observe("")
 	} else {
 		c.observe(classification.Class)
 	}
 	return response, nil
+}
+
+// bodyPeekTimeout bounds how long classification waits for a body to start
+// and finish within maxProviderErrorBody; a slower body keeps the
+// status-and-headers classification.
+const bodyPeekTimeout = 2 * time.Second
+
+// peekedBody serves the bytes (and the read error, if any) of a background
+// bounded read first and the rest of the original body after, so the caller
+// sees exactly what the unwrapped body would have given it.
+type peekedBody struct {
+	done   chan struct{}
+	peeked []byte
+	err    error
+	offset int
+	rest   io.ReadCloser
+}
+
+func (b *peekedBody) Read(p []byte) (int, error) {
+	<-b.done
+	if b.offset < len(b.peeked) {
+		n := copy(p, b.peeked[b.offset:])
+		b.offset += n
+		if b.offset == len(b.peeked) && b.err != nil {
+			return n, b.err // the original body returned its data and error together
+		}
+		return n, nil
+	}
+	if b.err != nil {
+		return 0, b.err
+	}
+	return b.rest.Read(p)
+}
+
+func (b *peekedBody) Close() error { return b.rest.Close() }
+
+// classifyResponseWithBody classifies a response from status, headers and a
+// bounded, time-bounded peek of the body, so a limit whose only signal is the
+// body message (a GitHub secondary or abuse limit on a 403) is rate_limited
+// with its dimension. Only that case consults the body (ClassifyHTTPWithMessage).
+// The caller still reads the full body, with any read error it would have got,
+// except after a peek timeout, which closes the body so no reader goroutine leaks.
+func classifyResponseWithBody(provider, requestPath string, response *http.Response) *ProviderError {
+	classification := ClassifyHTTPForRequest(provider, requestPath, response.StatusCode, response.Header, "")
+	if classification == nil || response.Body == nil || classification.Class == ErrorRateLimited ||
+		provider != "github" || response.StatusCode != http.StatusForbidden {
+		return classification
+	}
+	body := &peekedBody{done: make(chan struct{}), rest: response.Body}
+	go func() {
+		body.peeked, body.err = io.ReadAll(io.LimitReader(body.rest, maxProviderErrorBody))
+		close(body.done)
+	}()
+	response.Body = body
+	timer := time.NewTimer(bodyPeekTimeout)
+	defer timer.Stop()
+	select {
+	case <-body.done:
+	case <-timer.C:
+		_ = body.rest.Close() // ends the reader goroutine; the caller's later read fails
+		logBodyPeekTimeout(provider, response.StatusCode, classification.Class)
+		return classification
+	}
+	withBody := ClassifyHTTPForRequest(provider, requestPath, response.StatusCode, response.Header, string(body.peeked))
+	if withBody == nil {
+		return classification
+	}
+	if withBody.Class != classification.Class {
+		logBodyReclassification(provider, response.StatusCode, classification.Class, withBody.Class, withBody.Dimension)
+	}
+	return withBody
+}
+
+func logBodyPeekTimeout(provider string, status int, class ErrorClass) {
+	slog.Warn("provider error body not read in time, classified from status and headers; body closed",
+		"provider", provider, "status", status, "class", string(class), "timeout_ms", bodyPeekTimeout.Milliseconds())
+}
+
+// logBodyReclassification logs only closed-set values (provider, status,
+// class names, dimension name), never body or error text.
+func logBodyReclassification(provider string, status int, from, to ErrorClass, dimension string) {
+	slog.Debug("provider response reclassified from its body",
+		"provider", provider, "status", status, "from_class", string(from), "to_class", string(to), "dimension", dimension)
 }
 
 func (c *HTTPClient) retryDelay(attempt int, retryAfter time.Duration, class ErrorClass) time.Duration {
@@ -580,6 +660,46 @@ func retryJitter(entropy io.Reader, limit time.Duration) time.Duration {
 		return 0
 	}
 	return time.Duration(jitter.Int64())
+}
+
+// awaitGate sleeps out the shared backoff gate in place, as Python's gate_call
+// did, so a unit that another unit's rate limit paused continues its fetch
+// instead of ending the try and restarting from zero. It sleeps only while the
+// total stays within GateWaitMax and the context outlasts the wait; otherwise
+// the try ends with ErrorRateLimited carrying the wait that remains, which the
+// provider-unit handler turns into a persisted deferral.
+func (c *HTTPClient) awaitGate(ctx context.Context) error {
+	if c.Gate == nil {
+		return nil
+	}
+	var slept time.Duration
+	for {
+		wait, err := c.Gate.Wait(ctx)
+		if err != nil {
+			return err
+		}
+		if wait <= 0 {
+			if slept > 0 {
+				slog.InfoContext(ctx, "provider_gate_wait_slept", "provider", c.Provider, "slept_ms", slept.Milliseconds())
+			}
+			return nil
+		}
+		if slept+wait > c.GateWaitMax {
+			slog.InfoContext(ctx, "provider_gate_wait_deferred", "provider", c.Provider, "wait_ms", wait.Milliseconds(), "slept_ms", slept.Milliseconds(), "bound_ms", c.GateWaitMax.Milliseconds())
+			return &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
+			slog.InfoContext(ctx, "provider_gate_wait_deferred", "provider", c.Provider, "wait_ms", wait.Milliseconds(), "slept_ms", slept.Milliseconds(), "reason", "deadline")
+			return &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
+		}
+		if err := c.wait(ctx, wait); err != nil {
+			return err
+		}
+		slept += wait
+		if err := c.Lease.Assert(ctx); err != nil {
+			return err
+		}
+	}
 }
 
 func (c *HTTPClient) wait(ctx context.Context, wait time.Duration) error {

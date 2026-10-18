@@ -59,7 +59,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 )
@@ -160,6 +162,60 @@ func Validate(root, surface string, document any) error {
 	}
 	if err := resolved.Validate(document); err != nil {
 		return fmt.Errorf("%s: %w", surface, err)
+	}
+	return nil
+}
+
+// RefuseDecimalForm refuses a raw JSON number token written in decimal or
+// exponent form: any token containing '.', 'e' or 'E', even when its value is
+// integral (1.0, 1e0).
+//
+// It decides on the TOKEN TEXT, never on a float64 parse. By the time a float64
+// exists the token has been rounded: 9007199254740990.1 and
+// 1.0000000000000000001 are indistinguishable from the integers they round to,
+// so no magnitude bound can be sound. An integer token is exact and never
+// reaches this refusal. The Python twin is
+// authclient.contracts.refuse_decimal_form.
+//
+// Wire-integer TYPE for a field decoded by encoding/json into an
+// integer-typed Go field needs no helper: the decoder already refuses 403.0,
+// which is how ErrorEnvelope.Status and RetryAfterSeconds are guarded. This is
+// for custom unmarshalers that hold the raw token (Revision).
+func RefuseDecimalForm(token string) error {
+	if strings.ContainsAny(token, ".eE") {
+		return fmt.Errorf(
+			"%s is in decimal or exponent form; refused because a float64 reader has "+
+				"already rounded such a token (9007199254740990.1 reads as 9007199254740990), "+
+				"so it is indistinguishable from the integer it rounds to. "+
+				"Send an integer token, which stays exact", token)
+	}
+	return nil
+}
+
+// ParseWireTimestamp is the ONE timestamp rule for every timestamp member of
+// the event surfaces (envelope created_at, payload.change.expires_at, audit
+// occurred_at). A value passes when it names a real calendar day (the pattern
+// bounds components, not the calendar: 2026-02-30 is lexically valid) and its
+// UTC instant lies in 0001-01-01..9999-12-31 (the pattern bounds the LOCAL
+// fields, and an offset can carry the instant out of range: 0001-01-01T00:00:00+23:59
+// is UTC year 0000). Python's twin is authclient.contracts.parse_rfc3339; both
+// replay the same timestamp_vectors from the provisioning manifest.
+func ParseWireTimestamp(surface, field, raw string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s: /%s = %q is not a valid RFC 3339 instant: %w", surface, field, raw, err)
+	}
+	if err := checkInstantInRange(surface, field, parsed); err != nil {
+		return time.Time{}, err
+	}
+	return parsed, nil
+}
+
+func checkInstantInRange(surface, field string, moment time.Time) error {
+	if year := moment.UTC().Year(); year < 1 || year > 9999 {
+		return fmt.Errorf("%s: /%s = %s normalises to UTC year %d, outside 0001-01-01..9999-12-31 "+
+			"(not a valid RFC 3339 instant for this contract): the pattern bounds the local fields, "+
+			"the offset carries the instant past the bound", surface, field, moment.Format(time.RFC3339Nano), year)
 	}
 	return nil
 }

@@ -256,7 +256,7 @@ def _provider_shard_ids() -> set[int]:
 
 def _providersync_top_level_tests() -> set[str]:
     env = os.environ.copy()
-    env["GOTOOLCHAIN"] = "go1.27.0"
+    env["GOTOOLCHAIN"] = "go1.27.2"
     env["GOWORK"] = "off"
     env["GOCACHE"] = str(TEST_GO_CACHE)
     result = subprocess.run(
@@ -825,7 +825,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment(
 def _daily_go_test_list() -> set[str]:
     """Every test the compiled daily package registers, from `go test -list`."""
     env = os.environ.copy()
-    env["GOTOOLCHAIN"] = "go1.27.0"
+    env["GOTOOLCHAIN"] = "go1.27.2"
     env["GOWORK"] = "off"
     env["GOCACHE"] = str(TEST_GO_CACHE)
     result = subprocess.run(
@@ -874,7 +874,7 @@ def test_every_daily_test_runs_in_exactly_one_daily_shard() -> None:
 def _workerservice_go_test_list() -> set[str]:
     """Every test the compiled workerservice package registers, from `go test -list`."""
     env = os.environ.copy()
-    env["GOTOOLCHAIN"] = "go1.27.0"
+    env["GOTOOLCHAIN"] = "go1.27.2"
     env["GOWORK"] = "off"
     env["GOCACHE"] = str(TEST_GO_CACHE)
     result = subprocess.run(
@@ -924,7 +924,7 @@ def test_every_workerservice_test_runs_in_exactly_one_workerservice_shard() -> N
 def _qapiserver_go_test_list() -> set[str]:
     """Every test the compiled queryapiserver package registers, from `go test -list`."""
     env = os.environ.copy()
-    env["GOTOOLCHAIN"] = "go1.27.0"
+    env["GOTOOLCHAIN"] = "go1.27.2"
     env["GOWORK"] = "off"
     env["GOCACHE"] = str(TEST_GO_CACHE)
     result = subprocess.run(
@@ -974,7 +974,7 @@ def test_every_queryapiserver_test_runs_in_exactly_one_queryapiserver_shard() ->
 def _remaining_go_test_list() -> set[str]:
     """Every test the compiled metrics/remaining package registers, from `go test -list`."""
     env = os.environ.copy()
-    env["GOTOOLCHAIN"] = "go1.27.0"
+    env["GOTOOLCHAIN"] = "go1.27.2"
     env["GOWORK"] = "off"
     env["GOCACHE"] = str(TEST_GO_CACHE)
     result = subprocess.run(

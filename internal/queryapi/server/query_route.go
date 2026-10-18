@@ -374,7 +374,71 @@ const registeredOperatingReviewV4Document = `query OperatingReview($orgId: Strin
 // text below. The line is here so the field can be asked for at all (a
 // field no registered text selects is unreachable); the web's real wire
 // text wins over this one if they differ when the web selects the field.
+//
+// The `sizing` selection of a section (CHAOS-9873) is NOT from the web file until the web change that selects it
+// lands: it sits right after `worsened`, in the form urql prints. A document that selects the section's measure and
+// the whole sizing reads the investment section in ISSUE_SIZE; every older text reads it in work units. The web's
+// real wire text wins over this one if they differ.
 const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
+  operatingReview(orgId: $orgId, input: $input) {
+    orgId
+    teamId
+    weekStart
+    priorWeekStart
+    sections {
+      key
+      title
+      changed
+      improved
+      worsened
+      sizing {
+        measure
+        sizingCoverage
+        unsizedUnitCount
+        workUnitCount
+        __typename
+      }
+      metrics {
+        key
+        label
+        value
+        unit
+        hasData
+        scope
+        rateState
+        changeFailureEvidence {
+          basis
+          deployments
+          deploymentsWithStatus
+          coverage
+          unknownReason
+          __typename
+        }
+        delta {
+          value
+          priorValue
+          absolute
+          percent
+          status
+          hasPriorData
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    recommendations
+    recommendationsEmptyState
+    __typename
+  }
+}`
+
+// registeredOperatingReviewV5Document is the text of `operatingReview` BEFORE the investment section carried its
+// measure and sizing coverage (CHAOS-9873, `sizing`): the text of CHAOS-9630, with `changeFailureEvidence`. It stays a
+// legacy text (see legacyDigestsByOperation) beside V1 to V4, so a web build still sending it keeps working and
+// reads the investment section in work units. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/operatingreview_v5_captured.graphql).
+const registeredOperatingReviewV5Document = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
   operatingReview(orgId: $orgId, input: $input) {
     orgId
     teamId
@@ -6751,7 +6815,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
 	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document), digestHex(registeredHomeV10Document), digestHex(registeredHomeV11Document), digestHex(registeredHomeV12Document), digestHex(registeredHomeV13Document)},
 	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
-	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document)},
+	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document), digestHex(registeredOperatingReviewV5Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
 	"investmentFull":        {digestHex(registeredInvestmentFullV1Document)},
 }

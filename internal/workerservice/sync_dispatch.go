@@ -165,6 +165,12 @@ func (runs touchedDrainRuns) MarkingRunsToCheck(
 	return touchedRunKeys(listed), truncated, nil
 }
 
+func (runs touchedDrainRuns) UnendedMarkingRunsBeforeCut(
+	ctx context.Context, organizationID string, window time.Duration,
+) (int, error) {
+	return runs.store.TouchedUnendedMarkingRunsBeforeCut(ctx, organizationID, window)
+}
+
 // StampTakeTx records the take time of the pass on its runs, in the transaction
 // that started them.
 func (runs touchedDrainRuns) StampTakeTx(

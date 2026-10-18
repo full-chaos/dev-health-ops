@@ -18,8 +18,8 @@ import (
 )
 
 // internalPaths are every request path the unauthenticated internal routes
-// answer. The public listener must never serve any of them (CHAOS-7181): the
-// network boundary, not a credential, is their only control.
+// answer. The public listener must never serve any of them (CHAOS-7181); on
+// the internal listener each also checks a svc_acr_ bearer (CHAOS-9993).
 var internalPaths = []string{
 	"/api/v1/internal/acr/health",
 	"/api/v1/internal/acr/entitlements/0b1b2c3d-0000-4000-8000-000000000000",
@@ -165,12 +165,20 @@ func (okStore) Lookup(_ context.Context, orgID string) (acr.Entitlement, error) 
 	return acr.Entitlement{OrgID: orgID, AgentContextRuntime: true}, nil
 }
 
+type okCreds struct{}
+
+func (okCreds) Find(context.Context, string) (acr.Credential, bool, error) {
+	return acr.Credential{ID: "cred", ServiceName: "acr", Scopes: []string{acr.EntitlementScope}}, true, nil
+}
+func (okCreds) MarkUsed(context.Context, string, time.Time) error   { return nil }
+func (okCreds) Audit(context.Context, string, string, string) error { return nil }
+
 // TestInternalRoutesSucceedWithoutWriterViolations: a SUCCESSFUL response
 // through the real server wrapper (not the bare handler) on the internal
 // listener writes its body as the response-model route it is, so policy.WriterViolations does not move.
 func TestInternalRoutesSucceedWithoutWriterViolations(t *testing.T) {
 	cfg := config.Config{APIAddress: "127.0.0.1:0", APIInternalAddress: "127.0.0.1:0"}
-	internal, err := NewInternalServer(cfg, quietLog(), internalRoutesFor(okStore{}, quietLog()))
+	internal, err := NewInternalServer(cfg, quietLog(), internalRoutesWith(acr.Deps{Store: okStore{}, Auth: okCreds{}, Logger: quietLog()}))
 	if err != nil {
 		t.Fatalf("NewInternalServer: %v", err)
 	}
@@ -178,7 +186,9 @@ func TestInternalRoutesSucceedWithoutWriterViolations(t *testing.T) {
 		for _, path := range internalPaths {
 			before := policy.WriterViolations()
 			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			request.Header.Set("Authorization", "Bearer svc_acr_listener-test-token")
+			handler.ServeHTTP(rec, request)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("%s GET %s = %d %s, want 200", name, path, rec.Code, rec.Body.String())
 			}

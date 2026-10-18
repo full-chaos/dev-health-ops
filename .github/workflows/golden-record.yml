@@ -8,7 +8,7 @@
 # HOW. Push a golden build branch first: the Alembic scripts of the branch's base plus the new
 # revision (the "golden recording build"), and give that commit's sha as `python_build`. Dispatch
 # this workflow on the migration branch (`ref`). The job records the goldens, pins their digests in
-# the tests, and uploads every changed file as the artifact `goldens-<sha>`. It never pushes:
+# the tests, and uploads every changed file as the artifact `goldens-<run id>`. It never pushes:
 # download the artifact, unpack it at the repository root, commit, push. CI then checks the goldens.
 name: Golden record
 
@@ -110,6 +110,9 @@ jobs:
 
       - name: Collect the changed files
         id: collect
+        env:
+          REF: ${{ inputs.ref }}
+          PYTHON_BUILD: ${{ inputs.python_build }}
         run: |
           set -euo pipefail
           git status --porcelain -- . ':!python-build' | tee changed.txt
@@ -121,7 +124,7 @@ jobs:
           git status --porcelain -z -- . ':!python-build' | tr '\0' '\n' | sed 's/^...//' > files.txt
           tar -czf goldens.tgz -T files.txt
           {
-            echo "### Recorded goldens for \`${{ inputs.ref }}\` (build \`${{ inputs.python_build }}\`)"
+            echo "### Recorded goldens for \`${REF}\` (build \`${PYTHON_BUILD}\`)"
             sed 's/^/- /' files.txt
             echo
             echo "Unpack at the repository root: \`tar -xzf goldens.tgz\`, then commit and push."

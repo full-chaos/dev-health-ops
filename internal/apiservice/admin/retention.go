@@ -229,7 +229,16 @@ func (h *handlers) createRetentionPolicy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// CHAOS-10082, a named divergence from Python: see createIPAllowlistEntry.
-	createdBy := verifiedActorID(ctx)
+	createdBy := verifiedActorID(ctx)                      // MUTANT-10163
+	if header := r.Header.Get("X-User-Id"); header != "" { // MUTANT-10163
+		id, err := pythonparity.ParseUUID(header) // MUTANT-10163
+		if err != nil {                           // MUTANT-10163
+			detail, _ := pythonparity.UUIDValidationDetail(header)    // MUTANT-10163
+			policy.WriteDetail(w, http.StatusBadRequest, detail, nil) // MUTANT-10163
+			return                                                    // MUTANT-10163
+		} // MUTANT-10163
+		createdBy = &id // MUTANT-10163
+	} // MUTANT-10163
 	if !containsString(retentionResourceTypes, resourceType) {
 		policy.WriteDetail(w, http.StatusBadRequest, "Invalid resource type: "+resourceType, nil)
 		return

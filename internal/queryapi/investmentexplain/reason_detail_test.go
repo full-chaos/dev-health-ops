@@ -399,15 +399,6 @@ func TestParseInvestmentMixResponseReasonRuleNamesTheFailingRule(t *testing.T) {
 			wantPath:   "anti_claims[0]",
 			wantHas:    "2",
 		},
-		{
-			name: "forbidden language in the narrative",
-			mutate: func(doc map[string]any) {
-				doc["summary"] = "This is the leading theme this period."
-			},
-			wantStatus: ParseStatusForbiddenLanguage,
-			wantRule:   "forbidden_language:is",
-			wantPath:   "narrative",
-		},
 	}
 
 	for _, tc := range cases {

@@ -18,7 +18,9 @@ package investmentexplain
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
@@ -67,6 +69,9 @@ func ResolveModelName(kind categorize.ProviderKind, model string) (resolved stri
 	if model != "" {
 		return model, true
 	}
+	if value := platformExplainModel(); value != "" {
+		return value, true
+	}
 	for _, envName := range modelEnvByProvider[kind] {
 		if value := os.Getenv(envName); value != "" {
 			return value, true
@@ -79,6 +84,21 @@ func ResolveModelName(kind categorize.ProviderKind, model string) (resolved stri
 		return def, true
 	}
 	return "", false
+}
+
+// explainPurpose names this package's purpose in the platform purpose model
+// setting (LLM_MODEL_EXPLAIN).
+const explainPurpose = "explain"
+
+// platformExplainModel is LLM_MODEL_EXPLAIN, logged at Info whenever it
+// decides the model so an operator can see the setting taking effect.
+func platformExplainModel() string {
+	value := llmbudget.PlatformPurposeModel(explainPurpose, envsecrets.ProcessLookup)
+	if value != "" {
+		slog.Info("investmentexplain: model chosen by the platform purpose setting",
+			"purpose", explainPurpose, "setting", "LLM_MODEL_"+strings.ToUpper(explainPurpose), "model", value)
+	}
+	return value
 }
 
 // IsLLMAvailable ports is_llm_available (llm/providers/__init__.py:

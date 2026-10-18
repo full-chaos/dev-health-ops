@@ -278,6 +278,9 @@ route-table `Pattern:` field sits on its own line.
 column field; this rule is the chosen alternative. Register each route by a
 direct `Handle`/`HandleFunc` call: using either method as a value (an alias)
 is refused too, because a call through the alias would escape the scan.
+The scan matches by name (`Handle`, `HandleFunc`, and `Pattern:` fields of the
+route-table types), so a registration through a wrapper with another name is
+not seen; add such a wrapper's name to the scan when one is introduced.
 
 ## `source_commit`: what is verified and what is not (CHAOS-4765)
 

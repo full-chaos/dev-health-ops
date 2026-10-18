@@ -144,7 +144,7 @@ decision sheet B10 shape b):
 | State | Meaning | Gate |
 | --- | --- | --- |
 | absent | Not applicable. Code evidence shows the route has nothing to say. | none |
-| `null` | Undetermined in this pass. | The row's `gaps` must contain an entry that names the field. An entry for another field does not excuse it. |
+| `null` | Undetermined in this pass. | The row's `gaps` must contain an entry that begins with `<field>:` (for example `action: not traced`). An entry for another field, or prose that merely mentions the field, does not excuse it. |
 
 Never infer "absent" from silence: a missing note is not an examination. This
 matches `issued_credential` and `exposure`, which already work this way.
@@ -304,7 +304,7 @@ rather than guessed.
    `public_rationale` — every public row must justify why no credential is
    required, not just assert it.
 4. **Anything you can't determine.** Leave the field `null` and add a
-   `gaps` entry that **names the field** and says what you searched and why
+   `gaps` entry that **begins with `<field>:`** and says what you searched and why
    it's undetermined. Where the code shows the field does not apply (a health
    check has no `action`), leave the field **absent**; never write `null` for
    "not applicable". See [Absent versus null](#absent-versus-null). A stated

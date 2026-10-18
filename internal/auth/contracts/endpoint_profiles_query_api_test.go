@@ -141,6 +141,8 @@ func TestAnUnknownServiceFailsAndTheEnumHoldsNoServiceWithoutRows(t *testing.T) 
 	}
 }
 
+// A gaps entry names a field only when it starts with "<field>:"; a substring
+// match would let prose such as "transaction details" excuse a null action.
 // advisoryFields: absent means not applicable, null means undetermined and must
 // be paired with a gaps entry naming the field (CHAOS-4744, decision sheet B10
 // shape b).
@@ -159,7 +161,7 @@ func advisoryNullViolations(row map[string]any) []string {
 		}
 		named := false
 		for _, gap := range gaps {
-			if text, ok := gap.(string); ok && strings.Contains(text, field) {
+			if text, ok := gap.(string); ok && strings.HasPrefix(strings.TrimSpace(text), field+":") {
 				named = true
 			}
 		}
@@ -179,6 +181,10 @@ func TestAdvisoryNullGateNegativeControls(t *testing.T) {
 		{"null without a gap is red", map[string]any{"id": "r", "action": nil, "gaps": []any{}}, 1},
 		{"absent is green", map[string]any{"id": "r", "gaps": []any{}}, 0},
 		{"null with a naming gap is green", map[string]any{"id": "r", "action": nil, "gaps": []any{"action: not traced"}}, 0},
+		{"a gap whose prose contains the field name as a substring does not excuse it", map[string]any{"id": "r", "action": nil, "gaps": []any{"transaction details were not profiled"}}, 1},
+		{"a gap that mentions the field mid-sentence does not excuse it", map[string]any{"id": "r", "action": nil, "gaps": []any{"no action was taken"}}, 1},
+		{"a non-string gap entry does not excuse it", map[string]any{"id": "r", "action": nil, "gaps": []any{42}}, 1},
+		{"a prefixed gap for a sibling field does not excuse it", map[string]any{"id": "r", "action": nil, "gaps": []any{"action_scope: not traced"}}, 1},
 		{"an unrelated gap does not excuse the null", map[string]any{"id": "r", "token_shape": nil, "gaps": []any{"exposure: unknown"}}, 1},
 		{"every advisory field is policed", map[string]any{"id": "r", "action": nil, "resource_resolver": nil, "current_state_cache_behavior": nil,
 			"entitlement_requirement": nil, "disclosure_behavior": nil, "token_shape": nil, "gaps": []any{}}, 6},
@@ -209,8 +215,9 @@ func TestSchemaStatesAbsentVersusNullOnEveryAdvisoryField(t *testing.T) {
 	}
 	for _, field := range advisoryFields {
 		description := doc.Defs.Profile.Properties[field].Description
-		if !strings.Contains(description, "ABSENT") || !strings.Contains(description, "gaps entry naming") {
-			t.Errorf("%s description does not state absent = not applicable and null = undetermined with a naming gaps entry", field)
+		const rule = "ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field"
+		if !strings.Contains(description, rule) && !(field == "token_shape" && strings.Contains(description, "ABSENT when no field applies") && strings.Contains(description, "null only when undetermined, paired with a gaps entry naming token_shape,")) {
+			t.Errorf("%s description does not state the absent / null rule in full", field)
 		}
 	}
 }

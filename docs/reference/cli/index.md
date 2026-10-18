@@ -1355,7 +1355,7 @@ original value was stored nowhere, but a run id is
 `uuid5(org|target_day|generation)`, so a candidate generation is proven by
 hashing to the run's own id. Every family the runner mints is tried:
 `fixed-schedule:` (occurrence second near `created_at`), `post-sync:<sync run
-id>` (the organization's `sync_runs`, created up to 14 days before the run),
+id>` (the organization's `sync_runs` created before the run),
 `touched-drain:<n|e>:<daily run id>` and `manual-daily:` (without a repository
 list or rerun tag).
 

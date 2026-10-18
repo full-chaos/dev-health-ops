@@ -88,6 +88,12 @@ func TestProveGenerationTriesEveryFamily(t *testing.T) {
 			t.Errorf("%s was proven as %q (%s)", name, got, family)
 		}
 	}
+	// A sync run of any age before the daily run can be its source.
+	old := generationRepairSources{syncRuns: []repairSyncRun{{id: syncID, createdAt: createdAt.Add(-400 * 24 * time.Hour)}}}
+	oldRun := newRun(repairTestOrg, day, "post-sync:"+syncID)
+	if got, family, ok := proveGeneration(repairTestOrg, "2026-10-12", createdAt, uuid.MustParse(oldRun.ID), old); !ok || family != "post-sync" || got != "post-sync:"+syncID {
+		t.Errorf("a sync run 400 days older than the daily run was not proven: %q %q %v", got, family, ok)
+	}
 	// A sync run created after the daily run cannot be its source.
 	late := generationRepairSources{syncRuns: []repairSyncRun{{id: syncID, createdAt: createdAt.Add(time.Hour)}}}
 	run := newRun(repairTestOrg, day, "post-sync:"+syncID)

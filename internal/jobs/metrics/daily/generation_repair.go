@@ -81,8 +81,6 @@ type repairSyncRun struct {
 	createdAt time.Time
 }
 
-const generationRepairSyncLookback = 14 * 24 * time.Hour
-
 func proveGeneration(
 	orgID, day string, createdAt time.Time, runID uuid.UUID, sources generationRepairSources,
 ) (generation, family string, ok bool) {
@@ -96,7 +94,7 @@ func proveGeneration(
 		return candidate, "manual-daily", true
 	}
 	for _, syncRun := range sources.syncRuns {
-		if syncRun.createdAt.After(createdAt) || createdAt.Sub(syncRun.createdAt) > generationRepairSyncLookback {
+		if syncRun.createdAt.After(createdAt) {
 			continue
 		}
 		if candidate := postSyncGenerationPrefix + syncRun.id; matches(candidate) {

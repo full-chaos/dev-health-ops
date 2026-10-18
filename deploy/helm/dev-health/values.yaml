@@ -197,10 +197,14 @@ authService:
       limits:
         memory: "128Mi"
         cpu: "250m"
-  # -- Rendered only with networkPolicy.enabled. The auth pods are EXCLUDED from
-  #    the release-wide policy (which admits every pod of the namespace and all
-  #    HTTPS egress); this per-component policy is their whole boundary.
+  # -- Rendered whenever authService is enabled (independent of the release-wide
+  #    networkPolicy.enabled): enabling the service must never deploy it without
+  #    its boundary. The auth pods are EXCLUDED from the release-wide policy (which
+  #    admits every pod of the namespace and all HTTPS egress) when that is on;
+  #    this per-component policy is their whole boundary. Set enabled=false only
+  #    when the cluster enforces the boundary another way (a CNI-level policy).
   networkPolicy:
+    enabled: true
     # -- Pod selectors (`{matchLabels: {...}}`) allowed to reach the API port. Empty
     #    admits nobody (Wave 1: nothing consumes the service yet).
     allowedFrom: []

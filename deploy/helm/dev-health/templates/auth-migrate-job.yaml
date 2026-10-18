@@ -52,7 +52,7 @@ spec:
           resources:
             {{- toYaml $m.resources | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
-{{- if .Values.networkPolicy.enabled }}
+{{- if $a.networkPolicy.enabled }}
 ---
 {{- /*
 The Job pod needs the database and DNS and accepts no connection. Excluded from

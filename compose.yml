@@ -235,6 +235,12 @@ volumes:
     driver: local
 
 networks:
+  # CHAOS-4886: the Auth Control Plane's network (profile `auth`). auth-service and
+  # auth-migrate join THIS network only, never `default`, so the only stack service
+  # they can reach is postgres (which joins it as well). It is declared always but
+  # carries traffic only while the profile runs.
+  auth_plane:
+    driver: bridge
   # The hop from the router to the two planes. Its members are the router,
   # go-api and query-api, and no other service. The router is on this network
   # only; the planes are on it and on the default network (the stores). The
@@ -273,6 +279,10 @@ services:
     image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     container_name: postgres
     restart: always
+    networks:
+      - default
+      # CHAOS-4886: the only service the auth profile may reach (see auth_plane).
+      - auth_plane
     environment:
       # Class sweep over the whole file, not only the knob found: go-river-provision/
       # migrate's own entrypoint already reads POSTGRES_USER/_PASSWORD
@@ -1317,6 +1327,7 @@ services:
   auth-provision:
     image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     profiles: [auth]
+    networks: [auth_plane]
     restart: "no"
     read_only: true
     user: "70:70"
@@ -1329,7 +1340,7 @@ services:
         psql -v ON_ERROR_STOP=1 -v role="$$AUTH_RUNTIME_DATABASE_ROLE" -v pw="$$AUTH_RUNTIME_DATABASE_PASSWORD" <<'SQL'
         SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'role', :'pw')
           WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
-        SELECT format('ALTER ROLE %I PASSWORD %L', :'role', :'pw') \gexec
+        SELECT format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'role', :'pw') \gexec
         SQL
     environment:
       PGHOST: postgres
@@ -1358,6 +1369,7 @@ services:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     profiles: [auth]
+    networks: [auth_plane]
     restart: "no"
     read_only: true
     user: "65532:65532"
@@ -1390,6 +1402,7 @@ services:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     profiles: [auth]
+    networks: [auth_plane]
     restart: unless-stopped
     read_only: true
     user: "65532:65532"

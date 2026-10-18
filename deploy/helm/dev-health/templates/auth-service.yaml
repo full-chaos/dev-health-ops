@@ -146,8 +146,8 @@ spec:
       port: {{ $a.port }}
       targetPort: http
       protocol: TCP
-{{- if .Values.networkPolicy.enabled }}
-{{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required when networkPolicy.enabled: the auth pods are excluded from the release-wide policy, so an empty list would cut the service off from its database" }}{{- end }}
+{{- if $a.networkPolicy.enabled }}
+{{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required while authService.networkPolicy.enabled (the default; set it false only when another layer enforces the boundary): the auth pods are excluded from the release-wide policy, so an empty list would cut the service off from its database" }}{{- end }}
 {{- range (concat $a.networkPolicy.allowedFrom $a.networkPolicy.metricsFrom) }}
 {{- if not (or (and .matchLabels (gt (len .matchLabels) 0)) (and .matchExpressions (gt (len .matchExpressions) 0))) }}
 {{- fail "authService.networkPolicy.allowedFrom and metricsFrom entries need a non-empty matchLabels or matchExpressions: an empty podSelector admits every pod in the namespace" }}
@@ -155,8 +155,8 @@ spec:
 {{- end }}
 ---
 {{- /*
-The auth pods' WHOLE network boundary. They are excluded from the release-wide
-policy (networkpolicy.yaml), which admits every pod of the namespace on every
+The auth pods' WHOLE network boundary, rendered whenever the service is enabled.
+When the release-wide policy is on they are excluded from it (networkpolicy.yaml), which admits every pod of the namespace on every
 port and all HTTPS egress. Ingress: only the listed consumers on the API port
 and only the listed scrapers on the operator port; an empty list renders no rule
 for that port (a `from` that is empty or absent would admit every source).

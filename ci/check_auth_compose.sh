@@ -107,6 +107,22 @@ owned="$(compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POS
 printf 'objects in the auth schema owned by the runtime login: %s\n' "${owned}"
 [ "${owned}" = "0" ] || die "runtime login owns ${owned} objects in the auth schema"
 
+printf 'step 4b: provisioning de-escalates a pre-existing elevated login\n'
+compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -c "ALTER ROLE ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} CREATEDB CREATEROLE"
+compose --profile auth run --rm --no-deps auth-provision
+posture="$(compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At \
+  -c "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls FROM pg_roles WHERE rolname = '${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}'")"
+printf 'posture after re-provisioning an elevated login = %s\n' "${posture}"
+[ "${posture}" = "f|f|f|f|f" ] || die "re-provisioning left an elevated attribute: ${posture}"
+
+printf 'step 4c: network boundary\n'
+nets="$(docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$(compose --profile auth ps -q auth-service)")"
+printf 'auth-service networks: %s\n' "${nets}"
+[ "${nets}" = "${PROJECT}_auth_plane " ] || die "auth-service is on '${nets}', want only ${PROJECT}_auth_plane"
+members="$(docker network inspect "${PROJECT}_auth_plane" --format '{{range .Containers}}{{.Name}} {{end}}' | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ')"
+printf 'auth_plane members: %s\n' "${members}"
+[ "${members}" = "$(compose --profile auth ps -q auth-service | xargs docker inspect --format '{{.Name}}' | tr -d '/') postgres " ] || die "auth_plane has members other than auth-service and postgres: ${members}"
+
 printf 'step 5: signing key custody\n'
 key_stat="$(docker run --rm --entrypoint stat -v "${PROJECT}_auth_signing_keys:/k:ro" \
   postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15 \

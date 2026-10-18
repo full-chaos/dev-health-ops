@@ -22,12 +22,12 @@ var authBase = []string{
 	"--set", "authService.signingKey.keyId=auth-2026-10",
 	"--set", "authService.migrate.secretName=auth-migrate-db",
 	"--set", "authService.migrate.secretKey=MIGRATION_URI",
+	"--set-json", `authService.networkPolicy.egress.database.to=[{"podSelector":{"matchLabels":{"app":"auth-postgres"}}}]`,
 }
 
 var authNetworkPolicy = []string{
 	"--set", "networkPolicy.enabled=true",
 	"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24",
-	"--set-json", `authService.networkPolicy.egress.database.to=[{"podSelector":{"matchLabels":{"app":"auth-postgres"}}}]`,
 }
 
 func renderAuth(t *testing.T, args ...string) ([]map[string]any, string, error) {
@@ -292,6 +292,25 @@ func TestAuthNetworkPolicyIsTheWholeBoundary(t *testing.T) {
 	}
 }
 
+// Enabling the service alone (the release-wide networkPolicy.enabled left at its
+// default false) must still deploy it WITH its boundary; opting out is explicit.
+func TestAuthNetworkPolicyRendersWithoutTheReleaseWidePolicy(t *testing.T) {
+	docs, out, err := renderAuth(t, authBase...)
+	if err != nil {
+		t.Fatalf("render failed: %v\n%.600s", err, out)
+	}
+	if authDoc(docs, "NetworkPolicy", "a-dev-health-auth-service") == nil || authDoc(docs, "NetworkPolicy", "a-dev-health-auth-migrate") == nil {
+		t.Fatal("enabling authService without networkPolicy.enabled rendered no auth NetworkPolicy")
+	}
+	docs, out, err = renderAuth(t, append(append([]string{}, authBase...), "--set", "authService.networkPolicy.enabled=false")...)
+	if err != nil {
+		t.Fatalf("opt-out render failed: %v\n%.600s", err, out)
+	}
+	if authDoc(docs, "NetworkPolicy", "a-dev-health-auth-service") != nil {
+		t.Fatal("authService.networkPolicy.enabled=false still rendered a policy")
+	}
+}
+
 func TestAuthServiceRefusals(t *testing.T) {
 	cases := map[string]struct {
 		args []string
@@ -300,12 +319,12 @@ func TestAuthServiceRefusals(t *testing.T) {
 		"no database secret":  {[]string{"--set", "authService.enabled=true", "--set", "authService.signingKey.secretName=k", "--set", "authService.signingKey.keyId=x"}, "authService.database.secretName is required"},
 		"no signing secret":   {[]string{"--set", "authService.enabled=true", "--set", "authService.database.secretName=d", "--set", "authService.signingKey.keyId=x"}, "authService.signingKey.secretName is required"},
 		"no key id":           {[]string{"--set", "authService.enabled=true", "--set", "authService.database.secretName=d", "--set", "authService.signingKey.secretName=k"}, "authService.signingKey.keyId is required"},
-		"no migration secret": {append(append([]string{}, authBase[:8]...), "--set", "authService.migrate.secretName="), "authService.migrate.secretName is required"},
+		"no migration secret": {append(append([]string{}, authBase[:8]...), "--set", "authService.migrate.secretName=", "--set-json", `authService.networkPolicy.egress.database.to=[{"podSelector":{"matchLabels":{"app":"x"}}}]`), "authService.migrate.secretName is required"},
 		"same port":           {append(append([]string{}, authBase...), "--set", "authService.operatorPort=8095"), "must differ"},
 		"shutdown too long":   {append(append([]string{}, authBase...), "--set", "authService.shutdownTimeout=30s"), "must be below authService.terminationGracePeriodSeconds"},
 		"direct signing key":  {append(append([]string{}, authBase...), "--set", "authService.extraEnv[0].name=AUTH_SIGNING_KEY", "--set", "authService.extraEnv[0].value=x"), "AUTH_SIGNING_KEY"},
-		"policy without db":   {append(append([]string{}, authBase...), "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"), "authService.networkPolicy.egress.database.to is required"},
-		"empty podSelector":   {append(append(append([]string{}, authBase...), authNetworkPolicy...), "--set-json", `authService.networkPolicy.allowedFrom=[{"matchLabels":{}}]`), "non-empty matchLabels"},
+		"policy without db":   {[]string{"--set", "authService.enabled=true", "--set", "authService.database.secretName=d", "--set", "authService.signingKey.secretName=k", "--set", "authService.signingKey.keyId=x", "--set", "authService.migrate.secretName=m"}, "authService.networkPolicy.egress.database.to is required"},
+		"empty podSelector":   {append(append([]string{}, authBase...), "--set-json", `authService.networkPolicy.allowedFrom=[{"matchLabels":{}}]`), "non-empty matchLabels"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

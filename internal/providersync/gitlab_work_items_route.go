@@ -310,7 +310,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			"group_milestones", countGroupMilestones(milestones))
 	}
 
-	epicsSynced, epicsHeld := 0, false
+	epicsSynced, epicsSkipped, epicsHeld := 0, 0, false
 	var epicsIncomplete []string
 	if gitLabWorkItemsFlag(handler.FetchEpics) {
 		outcome, epicErr := handler.collectGitLabGroupEpics(ctx, claim, &counted, fullName, query, perPage, maxPages, nestedMaxPages,
@@ -318,7 +318,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		if epicErr != nil {
 			return CompleteRouteBatch{}, epicErr
 		}
-		epicsSynced, epicsHeld, epicsIncomplete = outcome.synced, outcome.held, outcome.incomplete
+		epicsSynced, epicsSkipped, epicsHeld, epicsIncomplete = outcome.synced, outcome.skipped, outcome.held, outcome.incomplete
 	}
 	issuePayloads, issuePages, issueErr := collectGitLabPayloads(
 		ctx, &counted, gitlabIssuesRoute, root+"/issues", query, perPage, maxPages,
@@ -532,6 +532,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		"interactions_synced":  len(rows.Interactions),
 		"sprints_synced":       len(rows.Sprints),
 		"epics_synced":         epicsSynced,
+		"epics_skipped":        epicsSkipped,
 		"raw_destinations":     append([]string(nil), gitLabWorkItemRawDestinations...),
 		"gitlab_work_items":    summary,
 		// CHAOS-8526: gitlab_closing_reference rows synced, and the issues whose closed_by fetch failed, split into
@@ -797,6 +798,7 @@ func gitLabClosingFetchOutcome(err error) string {
 
 type gitLabEpicOutcome struct {
 	synced     int
+	skipped    int
 	held       bool
 	incomplete []string
 }
@@ -899,9 +901,17 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 			claim, groupPath, payload, stateEvents, handler.StatusMapping, handler.ResolveIdentity, normalizedAt)
 		if normalizeErr != nil {
 			if errors.Is(normalizeErr, ErrInvalidConfiguration) {
-				// An epic with no usable iid or title is skipped, not a unit failure.
-				slog.Default().DebugContext(ctx, "gitlab_work_items_epic_skipped",
-					"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "iid", iidText)
+				// A declared divergence from Python (which would write epic:0 or an
+				// empty title): the epic is skipped, never silently. One Warn per
+				// skip names the group, the iid and the reason; the count is in the
+				// unit result (epics_skipped) and the Info outcome line.
+				outcome.skipped++
+				reason := "no_usable_iid"
+				if iidText != "" && strings.TrimSpace(payload.Title) == "" {
+					reason = "empty_title"
+				}
+				slog.Default().WarnContext(ctx, "gitlab_work_items_epic_skipped",
+					"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "iid", iidText, "reason", reason)
 				continue
 			}
 			return outcome, normalizeErr
@@ -928,6 +938,7 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 	}
 	slog.Default().InfoContext(ctx, "gitlab_work_items_epics",
 		"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "outcome", "ok",
-		"epics_listed", len(payloads), "epics_written", outcome.synced, "incomplete", len(outcome.incomplete))
+		"epics_listed", len(payloads), "epics_written", outcome.synced, "epics_skipped", outcome.skipped,
+		"incomplete", len(outcome.incomplete))
 	return outcome, nil
 }

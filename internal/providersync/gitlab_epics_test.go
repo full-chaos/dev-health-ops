@@ -216,3 +216,44 @@ func TestGitLabWorkItemsRouteLogsTheEpicOutcomeAtInfo(t *testing.T) {
 		t.Fatalf("epic outcomes not told apart at Info: %q", line)
 	}
 }
+
+// The declared divergence from Python (an epic with no usable iid or no title
+// is skipped, where Python writes epic:0 or an empty title) is visible: one Warn
+// per skip names the group, the iid and the reason, and the unit result counts
+// the skips. The valid epic of the same list is still written and the watermark
+// is not held.
+func TestGitLabWorkItemsRouteSkipsAnUnusableEpicVisibly(t *testing.T) {
+	var logged lockedLogBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	responses := gitLabWorkItemResponses()
+	responses["/api/v4/groups/acme/epics?page=1"] = []string{`[
+		{"iid":4,"title":"Good epic","state":"opened","created_at":"2026-07-01T08:00:00Z","labels":[]},
+		{"iid":0,"title":"Zero iid","state":"opened","created_at":"2026-07-01T08:00:00Z","labels":[]},
+		{"iid":6,"title":"","state":"opened","created_at":"2026-07-01T08:00:00Z","labels":[]}]`, `[]`}
+	for _, iid := range []string{"4", "6"} {
+		responses["/api/v4/groups/acme/epics/"+iid+"/resource_state_events?page=1"] = []string{`[]`}
+		responses["/api/v4/groups/acme/epics/"+iid+"/notes?page=1"] = []string{`[]`}
+	}
+	responses["/api/v4/groups/acme/epics/0/resource_state_events?page=1"] = []string{`[]`}
+	responses["/api/v4/groups/acme/epics/0/notes?page=1"] = []string{`[]`}
+	batch, err := collectGitLabEpicUnit(t, &gitLabWorkItemsDoer{responses: responses})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epics := epicRowsOf(t, batch)
+	if len(epics) != 1 || epics["gitlab:acme:epic:4"].WorkItemID == "" {
+		t.Fatalf("epics written = %v, want only epic 4", epics)
+	}
+	if batch.Result["epics_synced"] != 1 || batch.Result["epics_skipped"] != 2 || batch.Watermark == nil {
+		t.Fatalf("epics_synced=%v epics_skipped=%v watermark=%v", batch.Result["epics_synced"], batch.Result["epics_skipped"], batch.Watermark)
+	}
+	line := logged.String()
+	for _, want := range []string{"level=WARN msg=gitlab_work_items_epic_skipped", "group=acme", "iid=0", "reason=no_usable_iid", "iid=6", "reason=empty_title", "epics_skipped=2"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log lacks %q: %q", want, line)
+		}
+	}
+}

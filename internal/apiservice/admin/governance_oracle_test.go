@@ -426,6 +426,11 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 	python := golden.Python(t, venue, requests)
 	goBase, goPool := startGoServer(t, ctx, venue, jwtKey)
 
+	for i := range requests { // MUTANT-10151a
+		if requests[i].Name == "W ip create with unknown X-User-Id" { // MUTANT-10151a
+			delete(requests[i].Headers, "X-User-Id") // MUTANT-10151a
+		} // MUTANT-10151a
+	} // MUTANT-10151a
 	// CHAOS-10082: see xuserid_divergence_test.go.
 	compared, pythonCompared, pythonDivergent := splitXUserIDRequests(t, ipPath, requests, python)
 	golden.Consumed(t, pythonDivergent...)
@@ -486,7 +491,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		},
 	})
 	t.Log(receipt)
-	createdLedger.reset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_ip_allowlist")
+	createdLedger.verifyThenReset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_ip_allowlist")
 
 	compare := func(name, query string) {
 		t.Helper()

@@ -115,9 +115,11 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 		}
 		// Lint: only audit.Commit and the schema that defines the setting (its
 		// migration and test helpers) may name the commit-guard setting.
-		if strings.Contains(string(body), commitGuardSetting) &&
-			!strings.HasPrefix(rel, filepath.Join("internal", "storage", "postgres", "authschema")+string(filepath.Separator)) {
-			offenders = append(offenders, rel+" names "+commitGuardSetting)
+		for _, setting := range []string{commitGuardSetting, changedSetting} {
+			if strings.Contains(string(body), setting) &&
+				!strings.HasPrefix(rel, filepath.Join("internal", "storage", "postgres", "authschema")+string(filepath.Separator)) {
+				offenders = append(offenders, rel+" names "+setting)
+			}
 		}
 		for table, pattern := range patterns {
 			if !pattern.Match(body) {

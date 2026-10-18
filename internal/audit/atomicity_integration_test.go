@@ -430,3 +430,26 @@ func TestGuardedTablesRefuseWritesOutsideCommit(t *testing.T) {
 		t.Error("a concatenated-table insert outside Commit was accepted")
 	}
 }
+
+// A counter value that is not tagged with THIS transaction's id (a
+// session-level set_config left on a pooled connection, or a bare number) is
+// never read as this transaction's changed-row count.
+func TestStaleChangedCounterIsNotTrustedAsThisTransactionsCount(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+
+	for _, stale := range []string{"5", "1:5", "999999999:3"} {
+		err := Commit(ctx, env.pool, env.schema, Mutation{
+			Apply: func(ctx context.Context, tx TxOps) error {
+				_, err := tx.Exec(ctx, `SELECT set_config('`+changedSetting+`', $1, false)`, stale)
+				return err
+			},
+			Audit: AuditEvent{EventType: "stale.probe", Outcome: OutcomeAllowed},
+			Event: OutboxEvent{AggregateType: "probe", AggregateID: "stale", EventType: "stale.probe", IdempotencyKey: "stale-" + stale},
+		})
+		if !errors.Is(err, ErrNoStateChange) {
+			t.Errorf("stale counter %q: Commit err = %v, want ErrNoStateChange", stale, err)
+		}
+	}
+}

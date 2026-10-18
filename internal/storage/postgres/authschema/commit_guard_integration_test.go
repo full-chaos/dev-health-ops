@@ -5,6 +5,7 @@ package authschema
 import (
 	"context"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -151,4 +152,145 @@ func TestOnlyTheRuntimeAndMigrationRolesCanWriteGuardedTables(t *testing.T) {
 	if !sawRuntime {
 		t.Fatal("the runtime role holds no write grant on any guarded table; the control read nothing")
 	}
+}
+
+// unguardedColumns classifies every column of the unguarded tables the runtime
+// role can write. "security" columns change who or what may act (revoking,
+// disabling, expiry, credential material, identity) and carry an UPDATE OF
+// guard trigger; "lifecycle" columns are written at a high rate and are not
+// guarded. A new column fails TestEveryUnguardedColumnIsClassified until it is
+// listed here.
+var unguardedColumns = map[string]map[string]string{
+	"principals": {
+		"id": "lifecycle", "kind": "lifecycle", "display_name": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
+		"disabled_at": "security",
+	},
+	"users": {
+		"principal_id": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
+		"email": "security", "email_lower": "security", "email_verified_at": "security",
+		"password_hash": "security", "password_algorithm": "security", "password_updated_at": "security",
+	},
+	"sessions": {
+		"id": "lifecycle", "principal_id": "lifecycle", "organization_id": "lifecycle", "issued_at": "lifecycle",
+		"client_ip": "lifecycle", "user_agent": "lifecycle", "last_seen_at": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
+		"token_hash": "security", "expires_at": "security", "revoked_at": "security", "revoked_reason": "security",
+	},
+	"refresh_credentials": {
+		"id": "lifecycle", "session_id": "lifecycle", "principal_id": "lifecycle", "superseded_by": "lifecycle",
+		"issued_at": "lifecycle", "consumed_at": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
+		"token_hash": "security", "expires_at": "security", "revoked_at": "security", "revoked_reason": "security",
+	},
+}
+
+func TestEveryUnguardedColumnIsClassified(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+
+	for table, classes := range unguardedColumns {
+		cols, err := env.admin.Query(ctx,
+			`SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2`, env.schema, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual := map[string]bool{}
+		for cols.Next() {
+			var c string
+			if err := cols.Scan(&c); err != nil {
+				t.Fatal(err)
+			}
+			actual[c] = true
+		}
+		cols.Close()
+		if len(actual) == 0 {
+			t.Fatalf("table %s has no columns; this control proves nothing", table)
+		}
+		for c := range actual {
+			if _, ok := classes[c]; !ok {
+				t.Errorf("column %s.%s is unclassified (security or lifecycle)", table, c)
+			}
+		}
+		for c := range classes {
+			if !actual[c] {
+				t.Errorf("column %s.%s is classified but does not exist", table, c)
+			}
+		}
+
+		// The security columns are exactly the columns named by the UPDATE OF
+		// guard triggers.
+		defs, err := env.admin.Query(ctx, `
+			SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t
+			JOIN pg_class c ON c.oid = t.tgrelid
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			JOIN pg_proc p ON p.oid = t.tgfoid
+			WHERE n.nspname = $1 AND c.relname = $2 AND p.proname = 'audit_commit_guard' AND NOT t.tgisinternal`, env.schema, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		guarded := map[string]bool{}
+		for defs.Next() {
+			var def string
+			if err := defs.Scan(&def); err != nil {
+				t.Fatal(err)
+			}
+			if i := strings.Index(def, "UPDATE OF "); i >= 0 {
+				rest := def[i+len("UPDATE OF "):]
+				if j := strings.Index(rest, " ON "); j >= 0 {
+					for _, c := range strings.Split(rest[:j], ",") {
+						guarded[strings.TrimSpace(c)] = true
+					}
+				}
+			}
+		}
+		defs.Close()
+		for c, class := range classes {
+			if (class == "security") != guarded[c] {
+				t.Errorf("column %s.%s is %s but guarded=%v", table, c, class, guarded[c])
+			}
+		}
+	}
+}
+
+// The executed repros of review round 3 (TRUNCATE, principal revocation) as
+// tests: each must be refused outside a Commit transaction, and a lifecycle
+// write on the same row must still go through.
+func TestTruncateAndSecurityColumnWritesAreRefusedOutsideCommit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+
+	refused := func(statement string) {
+		t.Helper()
+		_, err := env.admin.Exec(ctx, statement)
+		if err == nil {
+			t.Errorf("accepted: %s", statement)
+		} else if !strings.Contains(err.Error(), "audit.Commit") {
+			t.Errorf("refused for another reason (%v): %s", err, statement)
+		}
+	}
+
+	for _, table := range guardedTables {
+		refused(`TRUNCATE auth.` + table + ` CASCADE`)
+	}
+
+	var principal string
+	if err := env.admin.QueryRow(ctx,
+		`INSERT INTO auth.principals (kind, display_name) VALUES ('user', 'revokee') RETURNING id::text`).Scan(&principal); err != nil {
+		t.Fatalf("seed principal: %v", err)
+	}
+	if _, err := env.admin.Exec(ctx, `UPDATE auth.principals SET display_name = 'renamed' WHERE id = $1`, principal); err != nil {
+		t.Errorf("a lifecycle column write was refused: %v", err)
+	}
+	refused(`UPDATE auth.principals SET disabled_at = now() WHERE id = '` + principal + `'`)
+
+	var session string
+	if err := env.admin.QueryRow(ctx, `
+		INSERT INTO auth.sessions (principal_id, token_hash, expires_at)
+		VALUES ($1, '\xdeadbeef'::bytea, now() + interval '1 hour') RETURNING id::text`, principal).Scan(&session); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err := env.admin.Exec(ctx, `UPDATE auth.sessions SET last_seen_at = now() WHERE id = $1`, session); err != nil {
+		t.Errorf("a lifecycle column write was refused: %v", err)
+	}
+	refused(`UPDATE auth.sessions SET revoked_at = now() WHERE id = '` + session + `'`)
 }

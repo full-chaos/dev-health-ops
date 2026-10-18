@@ -11,10 +11,12 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type failureCountObserver struct {
@@ -107,6 +109,50 @@ func TestFanoutFailureLogsOneErrorLineWithRunStageAndClassAndCountsIt(t *testing
 	failure, _ := record["error"].(map[string]any)
 	if record["level"] != "ERROR" || record["sync_run_id"] != "00000000-0000-4000-8000-000000000002" || record["reason"] != "args" || failure["class"] == nil {
 		t.Fatalf("failure line = %v", record)
+	}
+	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomeError {
+		t.Fatalf("counter outcomes = %v, want one error", observer.outcomes)
+	}
+}
+
+func TestStagedWriterErrorKeepsTextChainAndNamesTheStage(t *testing.T) {
+	writerErr := errors.New("writer says no")
+	staged := stagedFailure(stageDaily, writerErr)
+	if staged.Error() != "writer says no" || !errors.Is(staged, writerErr) || errors.Is(staged, ErrPostSyncUnavailable) {
+		t.Fatalf("staged = %q, Is(writer)=%v, Is(sentinel)=%v", staged, errors.Is(staged, writerErr), errors.Is(staged, ErrPostSyncUnavailable))
+	}
+	if postSyncStageOf(staged) != stageDaily || stagedFailure(stageDora, staged) != staged {
+		t.Fatalf("stage = %q, restaged = %v", postSyncStageOf(staged), stagedFailure(stageDora, staged))
+	}
+	got := (&coordinatorWorkError{cause: staged}).Error()
+	if want := "coordinator job failed: *errors.errorString stage=daily class=other"; got != want {
+		t.Fatalf("River job error = %q, want %q", got, want)
+	}
+}
+
+func TestFanoutPanicLogsTheFailedLineCountsItAndPanicsOn(t *testing.T) {
+	var logs bytes.Buffer
+	observer := &failureCountObserver{}
+	service := &NativePostSyncService{
+		pool:           &pgxpool.Pool{},
+		logger:         synclog.New(slog.New(slog.NewJSONHandler(&logs, nil))),
+		fanoutObserver: observer,
+		now:            func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) },
+	}
+	args := PostSyncArgs{TransportArgs{
+		Version: ContractVersionV1, OrgID: "00000000-0000-4000-8000-000000000001", RunID: "00000000-0000-4000-8000-000000000002",
+		DispatchOutbox: "00000000-0000-4000-8000-000000000003", RouteGeneration: 1,
+	}}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the panic was swallowed")
+			}
+		}()
+		_ = service.Fanout(context.Background(), args)
+	}()
+	if got := strings.Count(logs.String(), `"msg":"post_sync_fanout.failed"`); got != 1 || !strings.Contains(logs.String(), `"reason":"panic"`) {
+		t.Fatalf("failed lines = %d:\n%s", got, logs.String())
 	}
 	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomeError {
 		t.Fatalf("counter outcomes = %v, want one error", observer.outcomes)

@@ -148,8 +148,16 @@ func NewNativePostSyncService(
 // from authoritative SyncRun state, and stages every child in one transaction.
 func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncArgs) (err error) {
 	observed := false
+	step := stageArgs
 	defer func() {
+		recovered := recover()
+		if recovered != nil {
+			// a panic leaves the named err nil: the failure line and the counter are written, then the panic goes on to River
+			service.observeFanoutFailure(ctx, args, unavailable(stagePanic, nil), observed)
+			panic(recovered)
+		}
 		if err != nil {
+			err = stagedFailure(step, err)
 			service.observeFanoutFailure(ctx, args, err, observed)
 		}
 	}()
@@ -157,6 +165,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		return unavailable(stageArgs, nil)
 	}
 	now := service.now().UTC()
+	step = stageTouchedTake
 	// The touched-day record is read and written before the transaction, so
 	// no Postgres transaction is open while ClickHouse works. A failure here
 	// fails the fan-out (the job is delivered again): it is never read as "no
@@ -172,6 +181,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 			return err
 		}
 	}
+	step = stageBegin
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
 		return unavailable(stageBegin, err)
@@ -182,6 +192,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 	// commit below has succeeded (CHAOS-9841).
 	ctx, afterCommit := aftercommit.WithHooks(ctx)
 
+	step = stageReference
 	current, err := currentPostSyncReference(ctx, tx, args)
 	if err != nil {
 		return err
@@ -229,6 +240,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		service.observeFanout(outcome, args, dispatchID)
 	}()
 
+	step = stagePlanRun
 	plan, err := loadPostSyncPlan(ctx, tx, args, now)
 	if err != nil {
 		observe = true
@@ -237,6 +249,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 	if plan == nil {
 		observe = true
 		outcome = jobruntime.PostSyncFanoutOutcomeNoRepositories
+		step = stageCommit
 		if err = tx.Commit(ctx); err != nil {
 			return err
 		}
@@ -246,6 +259,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 	observe = true
 	var orderedCompletion string
 	if plan.Complexity {
+		step = stageComplexity
 		orderedCompletion, err = service.remaining.StartRunTx(
 			ctx, tx, "complexity", *plan, orderedCompletion,
 		)
@@ -254,6 +268,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		}
 	}
 	if plan.Daily {
+		step = stageDaily
 		dispatchID, orderedCompletion, err = service.daily.StartRunTx(
 			ctx, tx, *plan, orderedCompletion,
 		)
@@ -262,6 +277,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		}
 		outcome = jobruntime.PostSyncFanoutOutcomePublished
 		if touchedTake != nil {
+			step = stageTouchedStart
 			if err = service.startTouchedDaysTx(ctx, tx, *plan, touchedTake, &touchedResult); err != nil {
 				return err
 			}
@@ -270,6 +286,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		outcome = jobruntime.PostSyncFanoutOutcomeNoRepositories
 	}
 	if plan.WorkGraph {
+		step = stageWorkGraph
 		orderedCompletion, err = service.workGraph.StartRequestTx(
 			ctx, tx, "workgraph.build", *plan, orderedCompletion,
 		)
@@ -278,12 +295,14 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		}
 	}
 	if plan.Investment {
+		step = stageInvestment
 		orderedCompletion, err = service.workGraph.StartRequestTx(
 			ctx, tx, "investment.materialize", *plan, orderedCompletion,
 		)
 		if err != nil {
 			return err
 		}
+		step = stageMembership
 		_, err = service.remaining.StartRunTx(
 			ctx, tx, "membership_backfill", *plan, orderedCompletion,
 		)
@@ -292,16 +311,20 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		}
 	}
 	if plan.DORA {
+		step = stageDora
 		if _, err = service.remaining.StartRunTx(ctx, tx, "dora", *plan, ""); err != nil {
 			return err
 		}
 	}
+	step = stageTeamAutoimport
 	if err = service.publishTeamAutoimport(ctx, tx, *plan); err != nil {
 		return err
 	}
+	step = stageOwnershipDerivation
 	if err = service.publishTeamRepoOwnershipDerivation(ctx, tx, *plan); err != nil {
 		return err
 	}
+	step = stageCommit
 	if commitErr := tx.Commit(ctx); commitErr != nil {
 		err = unavailable(stageCommit, commitErr)
 		return err
@@ -323,9 +346,6 @@ func (service *NativePostSyncService) observeFanoutFailure(ctx context.Context, 
 		return
 	}
 	stage := postSyncStageOf(err)
-	if stage == "" {
-		stage = "writer"
-	}
 	service.logger.Error(ctx, synclog.MsgPostSyncFanoutFailed,
 		synclog.Org(synclog.ParseID(args.OrganizationID())),
 		synclog.Run(synclog.ParseID(args.SyncRunID())),

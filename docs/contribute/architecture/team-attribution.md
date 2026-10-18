@@ -1241,7 +1241,12 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
     with the table label `project_as_team_retired` (observed only when a run retired rows, next to the
     `team_project_links_*` labels above); the Info line `jira_project_as_team_retired` (counts only:
     `teams`, `ownership`, `memberships`, `repo_ownership`, `teams_with_manual_members`,
-    `teams_with_sync_policy`).
+    `teams_with_sync_policy`, `teams_without_provider_identity`).
+  - **Provider identity.** The retire is a writer of `teams`: the inactive version takes `provider_team_id`,
+    `provider_name` and `gone_at` from `teamprovider.StoredIdentityOfOrganization` (section 0.4i), not from
+    the newest version, so a blank newest version over an older one with the identity does not erase it at
+    the next merge. `teams_without_provider_identity` counts the found rows that no stored version gives a
+    provider team id (a project-as-team row was last written before migration 137 added the column).
   - **Operator verb.** `dho workers providersync retire-jira-project-as-team --org-stdin` runs the same
     function for one organization now (section 1.1, operator cleanups).
   - **Team discovery.** `GET /api/v1/admin/teams/discover?provider=jira` lists the active Atlassian teams the
@@ -1249,6 +1254,7 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
     cannot write a project-as-team row again.
 
   Tests: `TestRetireJiraProjectAsTeamRowsClosesOnlyThatClass`,
+  `TestRetireJiraProjectAsTeamRowsKeepsTheStoredProviderIdentity`,
   `TestRetireJiraProjectAsTeamRowsClosesTheDerivedRepoOwnershipOfARetiredTeam`,
   `TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership`, `TestAPartialJiraSnapshotClosesNoOwnership`,
   `TestAnArchivedJiraProjectKeepsItsOwnership`, `TestAnInactiveTeamTakesNoWorkItemForEveryProvider`
@@ -1815,6 +1821,15 @@ write, and on a store write that does not refuse a bare id before its batch.
     (`manual_members_folded`), written at the stored version (ReplacingMergeTree keeps the last inserted row
     of an equal version), so a later write of its own writer stamped at or after that version still wins. Manual members are an admin's statement that no other writer restores; the kept row and
     the moved team are one team.
+    A custom team (an admin's own or a pushed one, stored with provider `""`) carries as the ACTIVE team
+    (chris D6023, CHAOS-9003: custom = admin = push API): when the kept row's current version is inactive, the
+    same new version of the kept row is written with `is_active = 1` (`keyed_teams_activated`), also when it
+    holds every member already, so one active team holds the admin team and its members. When an admin
+    deleted the kept row, that id has no team (a write under the id of a deleted team is a new team, as in the
+    admin store): the custom team is written under the id as a new team, with its own values and a version
+    past the delete (`deleted_keyed_teams`). Nothing is folded into a deleted row: a new version of it would
+    not carry `deleted_at`. A provider's own team that moves onto an inactive or deleted row of its id leaves
+    that row as it is (the provider's newer word).
   - An admin edit of a provider team (the same id, provider `""`) moves with that team; the newer of the two
     rows gives the new row's values, and the team's origin (provider, native key, parent, source) stays the
     provider row's (chris D5682). An admin edit of an id that two providers' teams hold is neither team: it
@@ -1830,7 +1845,8 @@ write, and on a store write that does not refuse a bare id before its batch.
   - An id that already holds a key is never rewritten (chris D5427). When the new id already has a row (a
     prefixed writer wrote it), that row is kept and the old row goes inactive; the kept row only takes the old
     row's manual members it does not hold yet (lead D5698, see `manual_members_folded` above), so an admin's
-    members are not lost.
+    members are not lost, and a custom team makes an inactive kept row active (chris D6023, see
+    `keyed_teams_activated` above).
   - An id that is only a provider prefix (`gh:`, `linear: `, `atlassian:`) is no team of any provider:
     `teamid.Of` would give it a second prefix (`linear:gh:`). The carry leaves it, counts it as
     `malformed_team_ids` (the team rows and observations of such an id) and logs `team_ids_malformed_skipped`
@@ -1935,13 +1951,21 @@ the sync saw and is never changed: a rename at the provider changes `native_team
 what tells the sync it is the same team (the rename change builds on it). `is_active` is not touched by `gone_at`: a
 gone team keeps its past reads and attribution (chris ruling, CHAOS-9432: never deactivate a gone team).
 
-- **Carry.** Every Go writer of `teams` calls `internal/teamprovider.Carry` before its INSERT, as it does for
-  `created_at` (section 0.4h): `provider_team_id` and `provider_name` are the newest NON-EMPTY values over every stored
-  version (a writer that does not know the provider's id never erases it), `gone_at` is the value of the newest version
-  (a catalog write of a listed team sets it NULL; every other writer keeps it). The Python `insert_teams` carries the
-  same values. The writers are the same as in section 0.4h; a census test (`internal/teamprovider`) fails when an
-  `INSERT INTO teams` drops one of the three columns or a writer does not call `Carry`, and the team id carry's column
-  list is checked too.
+- **Carry, inside the write (CHAOS-9999).** Every Go writer of `teams` writes through `internal/teamprovider.Insert`:
+  one `INSERT ... SELECT` that reads the stored values of the three columns in the same statement. `provider_team_id`
+  and `provider_name` are the run's own value when it has one, else the newest NON-EMPTY value over every stored
+  version (a writer that does not know the provider's id never erases it); `gone_at` is NULL for a catalog write of a
+  listed team, the moved team's own value for the team id carry's new row, else the newest version's value. A read
+  before a separate insert is not allowed: a catalog write that commits between the two is overwritten by the newer
+  version, and after a merge (ReplacingMergeTree keeps one row per id) no read can find it again. Residual window: the
+  SELECT reads a snapshot taken when the statement starts, so a write that commits while that one statement runs is
+  still overwritten (ClickHouse has no transaction); `provider_team_id` and `provider_name` are written again by the
+  next catalog sync that lists the team, `gone_at` is not. The fix stays inside `teams` (chris ruling on CHAOS-9999: no
+  second table, no duplicated columns). The Python `insert_teams` writers (not run by any deployed workload: the
+  chart runs only the `dho` image) still read before they insert. A census test (`internal/teamprovider`) fails when a
+  Go writer of `teams` does not write through `Insert` (or an `INSERT ... SELECT` that joins
+  `teamprovider.StoredIdentityOfOrganization` and selects the three columns), and
+  `Carry` is left for the catalog writers' Tally only.
 - **Fill.** The GitHub, GitLab and Linear catalog writers store the provider's id and name of each listed team on every
   run, so an existing row gets its provider id on the first sync that lists the team (no backfill job). A team listed
   under a key whose stored provider id differs is logged at Warn with counts (`team_provider_identity_written`).
@@ -2502,6 +2526,16 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > paths (Jira/Linear sprint and cycle discovery) run unconditionally, because dispatch depends on
 > the `SyncRunReferenceDiscovery` ledger status, never on those CH rows existing. See the Manual QA
 > walkthrough in §4 for the sync-config UI path.
+>
+> **The switches stay independent, and a link needs an imported team (chris 2026-10-14, CHAOS-9123).**
+> A run with members or projects on and teams off writes a `team_memberships` or `team_project_ownership`
+> row only for a team that already has a `teams` row (in any version: an inactive or deleted team was
+> imported); a team the same run writes (teams on) counts too. The open link rows of a team that was never
+> imported are not written; a closed row is always written, because it closes a row the store holds. One
+> shared helper decides it for every catalog (`providersync.KeepLinksOfImportedTeams`: GitHub, GitLab,
+> Linear and Jira catalogs, and the Atlassian teams write), and it logs `team_links_of_unimported_teams_not_written`
+> with counts. The `jira_legacy` ops-team ownership rows are exempt: they name `jira:<ops team id>` (the ops-team
+> links row of "Team ids"), an id no writer of `teams` holds by design.
 >
 > **A fourth, architecturally SEPARATE `team_repo_ownership` producer (CHAOS-4365 item 1b,
 > implemented): the sync-derived `inferred` row, never routed through `team_autoimport_<provider>.populate()`

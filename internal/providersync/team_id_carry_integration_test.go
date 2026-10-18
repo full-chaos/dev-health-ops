@@ -398,6 +398,11 @@ func (c *failingCarryConn) Query(ctx context.Context, query string, args ...any)
 	return c.Conn.Query(ctx, query, args...)
 }
 
+func (c *failingCarryConn) Exec(ctx context.Context, query string, args ...any) error {
+	c.writes++
+	return c.Conn.Exec(ctx, query, args...)
+}
+
 func (c *failingCarryConn) PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error) {
 	c.writes++
 	return c.Conn.PrepareBatch(ctx, query, opts...)
@@ -411,7 +416,7 @@ func TestCarryTeamIDsFailedReadWritesNothing(t *testing.T) {
 	f.drift("ENG", "name", "pending")
 	before := carryTableCounts(f)
 	for _, failOn := range []string{"argMax(is_active", "LIMIT 1 BY provider, id", "SELECT org_id, provider, native_team_key, team_id, name",
-		"SELECT DISTINCT id FROM teams", "FROM team_memberships FINAL", "min(valid_from) FROM team_repo_ownership", "FROM team_sync_policies FINAL",
+		"deleted_at IS NOT NULL AS deleted", "FROM team_memberships FINAL", "min(valid_from) FROM team_repo_ownership", "FROM team_sync_policies FINAL",
 		"FROM team_drift_changes FINAL", "FROM identities FINAL", "FROM manual_attribution_fallbacks FINAL"} {
 		failing := &failingCarryConn{Conn: conn, failOn: failOn}
 		if _, err := CarryTeamIDs(ctx, failing, f.orgID, carryAt, false); !errors.Is(err, errCarryReadFailed) {

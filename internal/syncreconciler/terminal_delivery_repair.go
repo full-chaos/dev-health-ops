@@ -143,12 +143,16 @@ type TerminalDeliveryRepairResult struct {
 // a superseded delivery -- either of those breaks the linkage. So this can
 // never double-deliver work the domain has already moved past.
 type TerminalDeliveryRepair struct {
-	begin              beginFunc
-	query              string
-	coordinator        *pgxpool.Pool
-	readyFinalizeQuery string
-	lockFinalizeJobSQL string
-	finalizeStaleAge   time.Duration
+	begin                     beginFunc
+	query                     string
+	coordinator               *pgxpool.Pool
+	readyFinalizeQuery        string
+	otherGenerationQuery      string
+	otherGenerationCountQuery string
+	otherGenerationLiveQuery  string
+	otherGenerationLockSQL    string
+	lockFinalizeJobSQL        string
+	finalizeStaleAge          time.Duration
 }
 
 func NewTerminalDeliveryRepair(
@@ -161,12 +165,16 @@ func NewTerminalDeliveryRepair(
 	}
 	jobTable := pgx.Identifier{riverSchema, "river_job"}.Sanitize()
 	return &TerminalDeliveryRepair{
-		begin:              queueControlPool.Begin,
-		query:              fmt.Sprintf(repairTerminalRiverDeliverySQL, jobTable),
-		coordinator:        coordinatorPool,
-		readyFinalizeQuery: fmt.Sprintf(selectReadyFinalizeSQL, jobTable),
-		lockFinalizeJobSQL: fmt.Sprintf(lockReadyFinalizeJobSQL, jobTable),
-		finalizeStaleAge:   syncdispatchcontract.DispatchStaleAge(),
+		begin:                     queueControlPool.Begin,
+		query:                     fmt.Sprintf(repairTerminalRiverDeliverySQL, jobTable),
+		coordinator:               coordinatorPool,
+		readyFinalizeQuery:        fmt.Sprintf(selectReadyFinalizeSQL, jobTable),
+		otherGenerationQuery:      fmt.Sprintf(selectOtherGenerationFinalizeSQL, jobTable),
+		otherGenerationCountQuery: fmt.Sprintf(countOtherGenerationStrandedSQL, jobTable),
+		otherGenerationLiveQuery:  fmt.Sprintf(countOtherGenerationLiveFinalizeSQL, jobTable),
+		otherGenerationLockSQL:    fmt.Sprintf(lockOtherGenerationJobSQL, jobTable),
+		lockFinalizeJobSQL:        fmt.Sprintf(lockReadyFinalizeJobSQL, jobTable),
+		finalizeStaleAge:          syncdispatchcontract.DispatchStaleAge(),
 	}, nil
 }
 

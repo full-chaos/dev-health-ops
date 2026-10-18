@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authstore"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -38,6 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // Readiness check names. They are metric label values (see
@@ -169,6 +171,8 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 //  1. auth-postgres  -- constructed without I/O so an unreachable database
 //     leaves the process running and /readyz failing, rather than
 //     crash-looping. Closed last, after nothing can still be using it.
+//     auth-outbox-loop -- publishes and reaps the outbox through the store's
+//     pool; stopped before the pool closes.
 //  2. operator-http  -- /healthz, /readyz, /metrics. Second so the operator
 //     surface answers while later components are still starting, and stops
 //     only after the API has drained.
@@ -284,16 +288,24 @@ func configure(
 		return nil, err
 	}
 
-	apiHTTP, err := httpapi.NewServer(httpapi.ServerOptions{
-		Address:        cfg.APIAddress,
-		Logger:         logger,
-		Routes:         Routes(),
-		RequestTimeout: cfg.RequestTimeout,
-		MaxBodyBytes:   cfg.MaxBodyBytes,
-		RateLimit:      cfg.RateLimit.PerSecond,
-		RateLimitBurst: cfg.RateLimit.Burst,
-		MaxInFlight:    maxInFlightRequests,
-	})
+	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, Routes()))
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+
+	// No consumer of auth outbox events exists yet, so the loop is built with no
+	// sink: publishing stays off (a sink-less publisher would mark events
+	// delivered that nobody received) and the reaper runs. A sink is injected
+	// here when the first consumer lands.
+	schemaID, err := authschema.NewValidatedIdentifier(cfg.DatabaseSchema)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	loopConfig := audit.DefaultLoopConfig(schemaID, registry)
+	loopConfig.Logger = logger
+	outboxLoop, err := audit.NewOutboxLoop(store.Pool(), nil, loopConfig)
 	if err != nil {
 		closeStore()
 		return nil, err
@@ -301,6 +313,7 @@ func configure(
 
 	return []lifecycle.Component{
 		store,
+		outboxLoop,
 		announcedListener{listener: operatorHTTP, logger: logger},
 		announcedListener{listener: apiHTTP, logger: logger},
 		health.Gate{Registry: registry},
@@ -429,6 +442,24 @@ func writeConfigurationError(w io.Writer, err error) {
 
 func writeArgumentError(w io.Writer, err error) {
 	fmt.Fprintf(w, "argument error: %s\n", logging.RedactText(err.Error()))
+}
+
+// apiServerOptions is the ONE place the API listener's middleware stack is
+// configured from the resolved configuration. configure builds the production
+// server from it and the production-stack integration test (CHAOS-4887, G-69)
+// builds its server from it with a probe route, so the test exercises the
+// configuration the service really runs, not a hand-assembled router.
+func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpapi.Route) httpapi.ServerOptions {
+	return httpapi.ServerOptions{
+		Address:        cfg.APIAddress,
+		Logger:         logger,
+		Routes:         routes,
+		RequestTimeout: cfg.RequestTimeout,
+		MaxBodyBytes:   cfg.MaxBodyBytes,
+		RateLimit:      cfg.RateLimit.PerSecond,
+		RateLimitBurst: cfg.RateLimit.Burst,
+		MaxInFlight:    maxInFlightRequests,
+	}
 }
 
 // runHealthcheck is the exec-form container probe: the runtime image is

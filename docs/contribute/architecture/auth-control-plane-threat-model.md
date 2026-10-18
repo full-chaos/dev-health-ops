@@ -105,3 +105,4 @@ observable in production.
   ADRs the threat model is an input to.
 * [Auth Control Plane decision sheet](auth-control-plane-decision-sheet.md) —
   one-pass ratification: recommendation, alternatives, and risk per ADR.
+* [Auth Control Plane architecture and Wave 1 documentation](auth-control-plane-architecture.md) — what was built from these decisions, with a page for each Wave 1 surface.

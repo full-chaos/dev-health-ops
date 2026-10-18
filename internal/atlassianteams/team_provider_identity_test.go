@@ -6,10 +6,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
-// The catalog write stores the provider's team uuid (not the ARI) and the
-// provider's name as the provider identity of a listed team.
+// The catalog write states the provider's team uuid (not the ARI) and the
+// provider's name as the provider identity of a listed team, and clears
+// gone_at (the team is listed).
 func TestWriteTeamsStoresTheTeamUUIDAsProviderIdentity(t *testing.T) {
 	const org = "org-1"
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
@@ -22,12 +25,15 @@ func TestWriteTeamsStoresTheTeamUUIDAsProviderIdentity(t *testing.T) {
 	if err := writeTeams(context.Background(), conn, org, teams, nil, now, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	row := conn.batch.appended[0]
-	if got, want := row[len(row)-3], "aaaaaaaa-0000-4000-8000-000000000001"; got != want {
+	write := conn.writes[0]
+	if got, want := write.ProviderTeamID, "aaaaaaaa-0000-4000-8000-000000000001"; got != want {
 		t.Errorf("provider_team_id = %v, want %v", got, want)
 	}
-	if got := row[len(row)-2]; got != "Platform" {
+	if got := write.ProviderName; got != "Platform" {
 		t.Errorf("provider_name = %v, want Platform", got)
+	}
+	if write.Gone != teamprovider.GoneCleared {
+		t.Errorf("gone rule = %d, want GoneCleared", write.Gone)
 	}
 }
 

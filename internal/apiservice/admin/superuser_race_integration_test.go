@@ -204,7 +204,11 @@ VALUES ($1, 'race-root@example.com', true, true, true, 0, now(), now())`, rootID
 			landed: func(_, target uuid.UUID) bool {
 				return scalar(`SELECT coalesce(password_hash, '-') FROM users WHERE id = $1`, target) != "-"
 			}},
-		{name: "user deletion", method: "DELETE", path: users + "{target}", firstWrite: "DELETE FROM users", targetIsMember: true,
+		{name: "user deletion (soft)", method: "DELETE", path: users + "{target}", firstWrite: "UPDATE users SET is_active", targetIsMember: true,
+			landed: func(_, target uuid.UUID) bool {
+				return scalar(`SELECT is_active::text FROM users WHERE id = $1`, target) == "false"
+			}},
+		{name: "user deletion (force)", method: "DELETE", path: users + "{target}?force=true", firstWrite: `UPDATE "public"."billing_audit_log"`, targetIsMember: true,
 			landed: func(_, target uuid.UUID) bool {
 				return scalar(`SELECT count(*)::text FROM users WHERE id = $1`, target) == "0"
 			}},

@@ -224,6 +224,16 @@ func TestMigrationOptionsRejectHalfConfiguredCoordinatorProvisioning(t *testing.
 		t.Fatalf("ValidateMigrationOptions(column-scoped coordinator) error = %v", err)
 	}
 
+	// A mixed relation (CHAOS-6747): table-wide flags plus a column privilege
+	// on top of them, as the api posture declares for billing_audit_log.
+	mixed := valid
+	mixed.CoordinatorGrants = append(append([]TableGrant(nil), grants...),
+		TableGrant{TableName: "billing_audit_log", AllowInsert: true, AllowDelete: true})
+	mixed.CoordinatorColumnGrants = []ColumnGrant{{TableName: "billing_audit_log", ColumnName: "actor_id", Privilege: "UPDATE"}}
+	if err := ValidateMigrationOptions(mixed); err != nil {
+		t.Fatalf("ValidateMigrationOptions(mixed relation) error = %v", err)
+	}
+
 	tests := []struct {
 		name   string
 		mutate func(*MigrationOptions)
@@ -282,14 +292,27 @@ func TestMigrationOptionsRejectHalfConfiguredCoordinatorProvisioning(t *testing.
 				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
 			}
 		}},
-		// Table-wide AND column-scoped on one relation is the combination the
-		// readiness posture check refuses outright, so the migration refuses to
-		// create it.
-		{"relation granted both table-wide and column-scoped", func(o *MigrationOptions) {
+		// A column privilege the relation's table-wide grant already holds adds
+		// nothing and is a declaration error (SELECT is always table-wide).
+		{"column privilege already held table-wide", func(o *MigrationOptions) {
 			o.CoordinatorGrants = append(o.CoordinatorGrants,
 				TableGrant{TableName: "worker_job_completion_fences"})
 			o.CoordinatorColumnGrants = []ColumnGrant{
+				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "SELECT"},
+			}
+		}},
+		{"column insert already held table-wide", func(o *MigrationOptions) {
+			o.CoordinatorGrants = append(o.CoordinatorGrants,
+				TableGrant{TableName: "worker_job_completion_fences", AllowInsert: true})
+			o.CoordinatorColumnGrants = []ColumnGrant{
 				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
+			}
+		}},
+		{"column update already held table-wide", func(o *MigrationOptions) {
+			o.CoordinatorGrants = append(o.CoordinatorGrants,
+				TableGrant{TableName: "worker_job_completion_fences", AllowUpdate: true})
+			o.CoordinatorColumnGrants = []ColumnGrant{
+				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "UPDATE"},
 			}
 		}},
 	}

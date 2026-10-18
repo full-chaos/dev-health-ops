@@ -284,11 +284,27 @@ func linearGraphQLAnswer(linearTeams []linearTeam, linearProjects []linearProjec
 				if len(in) != 1 {
 					return nil, false
 				}
+				// Linear applies the updatedAt window (gte / lte) itself; a route that plans several
+				// windows must get back only the issues of the one it asks for.
+				window, _ := filter["updatedAt"].(map[string]any)
+				bound := func(name string) (time.Time, bool) {
+					raw, _ := window[name].(string)
+					at, err := time.Parse(time.RFC3339Nano, raw)
+					return at, err == nil
+				}
+				gte, hasGte := bound("gte")
+				lte, hasLte := bound("lte")
 				issues := []any{}
 				for _, issue := range linearIssues {
-					if issue.Team == in[0] {
-						issues = append(issues, issue.payload())
+					if issue.Team != in[0] {
+						continue
 					}
+					if updated, err := time.Parse(time.RFC3339Nano, issue.UpdatedAt); err == nil {
+						if (hasGte && updated.Before(gte)) || (hasLte && updated.After(lte)) {
+							continue
+						}
+					}
+					issues = append(issues, issue.payload())
 				}
 				return map[string]any{"data": map[string]any{"issues": linearPage(issues)}}, true
 			}

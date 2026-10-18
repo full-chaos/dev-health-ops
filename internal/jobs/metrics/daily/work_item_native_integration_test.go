@@ -581,14 +581,14 @@ FROM work_item_cycle_times WHERE org_id = ?`, orgA,
 	// this shared one.
 
 	t.Run("work_item_user_metrics_daily holds one row for the person that spans two teams", func(t *testing.T) {
-		// The golden holds (github, "", unassigned) under team-jira (one item created,
+		// The golden holds (github, scope "", unassigned) under team-jira (one item created,
 		// no measure) and under unassigned (one started, in progress): the persisted
 		// row is the sums, labelled by the lowest team id on the tie (golden_test.go
 		// declaredMergedUserRows).
 		rows, err := conn.Query(ctx, `
 SELECT work_scope_id, team_id, team_name, items_started, items_completed, wip_count_end_of_day
 FROM work_item_user_metrics_daily FINAL
-WHERE org_id = ? AND provider = 'github' AND user_identity = 'unassigned'`, orgA)
+WHERE org_id = ? AND provider = 'github' AND work_scope_id = '' AND user_identity = 'unassigned'`, orgA)
 		if err != nil {
 			t.Fatal(err)
 		}

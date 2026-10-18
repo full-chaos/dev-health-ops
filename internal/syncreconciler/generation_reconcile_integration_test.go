@@ -6,6 +6,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,27 +151,35 @@ func TestRouteCommandReconcileHasNoBatchCeiling(t *testing.T) {
 	resetMaterializerIntegrationTables(t, ctx, h.admin)
 	generation := backstopRoutes(t, ctx, h.admin)
 	const rowCount = 5001
-	if _, err := h.admin.Exec(ctx, `
+	for _, insert := range []string{`
 		INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status,
 			total_units, completed_units, failed_units, created_at)
 		SELECT format('00000000-0000-4000-9000-%012s', i)::uuid, 'org-materializer', $1::uuid,
 			'manual', 'incremental', 'dispatching', 1, 1, 0, $3
-		FROM generate_series(0, $4::int - 1) AS s(i);
+		FROM generate_series(0, $4::int - 1) AS s(i)`, `
 		INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key,
 			cost_class, mode, attempts, created_at, status, available_at, updated_at)
 		SELECT format('00000000-0000-4000-9002-%012s', i)::uuid, 'org-materializer',
 			format('00000000-0000-4000-9000-%012s', i)::uuid, $1::uuid, $2::uuid, 'github', 'commits',
 			'rest_core', 'incremental', 0, $3, 'success', NULL, $3
-		FROM generate_series(0, $4::int - 1) AS s(i);
+		FROM generate_series(0, $4::int - 1) AS s(i)`, `
 		INSERT INTO public.sync_dispatch_outbox
 			(id, org_id, sync_run_id, kind, status, available_at, attempts, dispatched_at,
 			dispatched_transport, dispatched_route_generation, transport_job_id, created_at, updated_at)
 		SELECT format('00000000-0000-4000-9001-%012s', i)::uuid, 'org-materializer',
 			format('00000000-0000-4000-9000-%012s', i)::uuid, 'finalize_sync_run', 'dispatched', $3,
 			1, $3, 'river', $5, '999999', $3, $3
-		FROM generate_series(0, $4::int - 1) AS s(i)`,
-		pgseed.DefaultSyncIntegrationID, pgseed.DefaultSyncSourceID, now, rowCount, generation+1); err != nil {
-		t.Fatal(err)
+		FROM generate_series(0, $4::int - 1) AS s(i)`} {
+		statement := strings.NewReplacer(
+			"$1::uuid", "'"+pgseed.DefaultSyncIntegrationID+"'::uuid",
+			"$2::uuid", "'"+pgseed.DefaultSyncSourceID+"'::uuid",
+			"$3", "'"+now.Format(time.RFC3339)+"'::timestamptz",
+			"$4::int", strconv.Itoa(rowCount),
+			"$5", strconv.FormatInt(generation+1, 10),
+		).Replace(insert)
+		if _, err := h.admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
 	}
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))

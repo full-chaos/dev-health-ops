@@ -832,6 +832,13 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 		return outcome, nil
 	}
 	groupPath := strings.Join(parts[:len(parts)-1], "/")
+	result, listed := "error", 0
+	defer func() {
+		slog.Default().InfoContext(ctx, "gitlab_work_items_epics",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "outcome", result,
+			"epics_listed", listed, "epics_written", outcome.synced, "epics_skipped", outcome.skipped,
+			"incomplete", len(outcome.incomplete))
+	}()
 	epicQuery := url.Values{"state": {"all"}}
 	for _, key := range []string{"updated_after", "updated_before"} {
 		if value := issueQuery.Get(key); value != "" {
@@ -866,15 +873,16 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 	*pages += listPages
 	if err != nil {
 		if unavailable(err) {
-			slog.Default().InfoContext(ctx, "gitlab_work_items_epics",
-				"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "outcome", "unavailable", "epics_written", 0)
+			result = "unavailable"
 			return outcome, nil
 		}
 		if holdErr := hold("epics", err); holdErr != nil {
 			return outcome, holdErr
 		}
+		result = "incomplete"
 		return outcome, nil
 	}
+	listed = len(payloads)
 	for _, raw := range payloads {
 		var payload gitlabEpicPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {
@@ -936,9 +944,9 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 				normalizeGitLabNotes(claim, item.WorkItemID, notes, handler.ResolveIdentity, normalizedAt)...)
 		}
 	}
-	slog.Default().InfoContext(ctx, "gitlab_work_items_epics",
-		"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "outcome", "ok",
-		"epics_listed", len(payloads), "epics_written", outcome.synced, "epics_skipped", outcome.skipped,
-		"incomplete", len(outcome.incomplete))
+	result = "ok"
+	if outcome.held {
+		result = "incomplete"
+	}
 	return outcome, nil
 }

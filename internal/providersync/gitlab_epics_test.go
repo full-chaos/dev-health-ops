@@ -211,9 +211,21 @@ func TestGitLabWorkItemsRouteLogsTheEpicOutcomeAtInfo(t *testing.T) {
 	if _, err := collectGitLabEpicUnit(t, &gitLabWorkItemsDoer{responses: responses, statusByPath: map[string]int{"/api/v4/groups/acme/epics": http.StatusForbidden}}); err != nil {
 		t.Fatal(err)
 	}
+	failing := gitLabWorkItemResponses()
+	delete(failing, "/api/v4/groups/acme/epics?page=1")
+	if _, err := collectGitLabEpicUnit(t, &gitLabWorkItemsDoer{responses: failing, statusByPath: map[string]int{"/api/v4/groups/acme/epics": http.StatusInternalServerError}}); err != nil {
+		t.Fatal(err)
+	}
+	subFailing := gitLabEpicResponses()
+	delete(subFailing, "/api/v4/groups/acme/epics/4/notes?page=1")
+	if _, err := collectGitLabEpicUnit(t, &gitLabWorkItemsDoer{responses: subFailing, statusByPath: map[string]int{"/api/v4/groups/acme/epics/4/notes": http.StatusBadGateway}}); err != nil {
+		t.Fatal(err)
+	}
 	line := logged.String()
-	if !strings.Contains(line, "outcome=ok") || !strings.Contains(line, "epics_written=2") || !strings.Contains(line, "outcome=unavailable") {
-		t.Fatalf("epic outcomes not told apart at Info: %q", line)
+	for _, want := range []string{"outcome=ok", "epics_written=2", "outcome=unavailable", "outcome=incomplete epics_listed=0 epics_written=0 epics_skipped=0 incomplete=1", "outcome=incomplete epics_listed=2 epics_written=2 epics_skipped=0 incomplete=1"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("epic outcomes not told apart at Info: missing %q in %q", want, line)
+		}
 	}
 }
 

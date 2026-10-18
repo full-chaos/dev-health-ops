@@ -5,6 +5,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -229,5 +230,64 @@ func TestCarryTeamIDsLeavesAKeptRowDeletedWhileItRunsDeleted(t *testing.T) {
 	}
 	if got := f.str(carryTeamsState); got != "custom:eng||deleted@example.com|0|deleted;eng||admin@example.com|0|live" {
 		t.Errorf("teams = %q, want custom:eng still deleted", got)
+	}
+}
+
+// The activation is logged once the carry wrote it, never at planning: a carry
+// that fails after it read the kept rows logs no activation, and the kept row
+// stays as it was; a carry that writes logs one Info line with the count.
+func TestCarryTeamIDsLogsAnActivationOnlyAfterItIsWritten(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	seed := func(f carryFixture) {
+		f.team("", "eng", nil, nil, 1, carryOld.Add(time.Minute), []string{"admin@example.com"}, nil)
+		f.team("", "custom:eng", carryPtr("eng"), nil, 0, carryOld, []string{"kept@example.com"}, nil)
+		f.membership("", "eng", "m1", carryOld, nil)
+	}
+
+	failed := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	seed(failed)
+	logs := captureMemberLogs(t)
+	failing := &failingCarryConn{Conn: conn, failOn: "FROM team_memberships FINAL"}
+	if _, err := CarryTeamIDs(ctx, failing, failed.orgID, carryAt, false); !errors.Is(err, errCarryReadFailed) {
+		t.Fatalf("carry err = %v, want the planted read failure (after the kept rows were read)", err)
+	}
+	if lines := logs.lines("team_id_carry_inactive_keyed_team_activated"); len(lines) != 0 {
+		t.Errorf("a failed carry logged an activation: %v", lines)
+	}
+	if got := failed.str(carryTeamsState); got != "custom:eng||kept@example.com|0|live;eng||admin@example.com|1|live" {
+		t.Errorf("teams after the failed carry = %q, want them unchanged", got)
+	}
+
+	written := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	seed(written)
+	if _, err := CarryTeamIDs(ctx, conn, written.orgID, carryAt, false); err != nil {
+		t.Fatal(err)
+	}
+	lines := logs.lines("team_id_carry_inactive_keyed_team_activated")
+	if len(lines) != 1 || lines[0]["keyed_teams_activated"] != float64(1) || lines[0]["dry_run"] != false {
+		t.Errorf("activation log lines = %v, want one with keyed_teams_activated 1 and dry_run false", lines)
+	}
+}
+
+// A provider's own bare team over a kept row of its id that an admin deleted
+// is not a custom team: the kept row stays deleted, nothing is folded into it,
+// and the bare row goes inactive.
+func TestCarryTeamIDsLeavesADeletedKeyedRowUnderAProviderTeamDeleted(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, []string{"admin@example.com"}, nil)
+	deletedAt := carryOld.Add(time.Hour)
+	f.exec(`INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, deleted_at) VALUES ('linear:ENG', ?, 'deleted eng', [], [], [], 0, ?, ?, ?, 'linear', 'ENG', ?)`,
+		uuid.New(), deletedAt, deletedAt, f.orgID, deletedAt)
+
+	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.TeamsAlreadyKeyed != 1 || outcome.ManualMembersFolded != 0 || carryOutcomeHas(t, outcome, "deleted_keyed_teams", 1) || carryOutcomeHas(t, outcome, "keyed_teams_activated", 1) {
+		t.Errorf("carry = %+v; want the deleted keyed row kept as it is", outcome)
+	}
+	if got := f.str(carryTeamsState); got != "ENG|linear|admin@example.com|0|live;linear:ENG|linear||0|deleted" {
+		t.Errorf("teams = %q", got)
 	}
 }

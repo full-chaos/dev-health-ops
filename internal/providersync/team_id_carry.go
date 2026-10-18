@@ -219,12 +219,29 @@ func CarryTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, at ti
 		return TeamIDCarryOutcome{}, err
 	}
 	if dryRun {
+		logKeyedTeamOutcome(ctx, outcome)
 		return outcome, nil
 	}
 	if err := carry.write(); err != nil {
 		return outcome, err
 	}
+	logKeyedTeamOutcome(ctx, outcome)
 	return outcome, nil
+}
+
+// logKeyedTeamOutcome logs, at Info and with counts only, the kept rows a
+// custom team carried as the active team and the deleted ones it was written
+// over as a new team: after the write (or, for a dry run, as what it would
+// write), never at planning, so a failed carry logs none.
+func logKeyedTeamOutcome(ctx context.Context, outcome TeamIDCarryOutcome) {
+	if outcome.KeyedTeamsActivated > 0 {
+		slog.Default().InfoContext(ctx, "team_id_carry_inactive_keyed_team_activated",
+			"keyed_teams_activated", outcome.KeyedTeamsActivated, "dry_run", outcome.DryRun)
+	}
+	if outcome.DeletedKeyedTeams > 0 {
+		slog.Default().InfoContext(ctx, "team_id_carry_deleted_keyed_team_written_new",
+			"deleted_keyed_teams", outcome.DeletedKeyedTeams, "dry_run", outcome.DryRun)
+	}
 }
 
 // TeamIDCarryConn is the part of a ClickHouse connection the carry uses.
@@ -589,8 +606,6 @@ func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 		if held.u8("deleted") == 1 {
 			if custom {
 				run.outcome.DeletedKeyedTeams++
-				slog.Default().InfoContext(run.ctx, "team_id_carry_deleted_keyed_team_written_new",
-					"deleted_keyed_teams", run.outcome.DeletedKeyedTeams, "dry_run", run.outcome.DryRun)
 				kept = append(kept, row.with("updated_at", teamIDCarryBump(row.time("updated_at"), held.time("updated_at"), time.Microsecond)))
 				continue
 			}
@@ -601,8 +616,6 @@ func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 		if custom && held.u8("is_active") != 1 && !activate[id] {
 			activate[id] = true
 			run.outcome.KeyedTeamsActivated++
-			slog.Default().InfoContext(run.ctx, "team_id_carry_inactive_keyed_team_activated",
-				"keyed_teams_activated", run.outcome.KeyedTeamsActivated, "dry_run", run.outcome.DryRun)
 		}
 		if _, seen := folded[id]; !seen {
 			foldIDs = append(foldIDs, id)

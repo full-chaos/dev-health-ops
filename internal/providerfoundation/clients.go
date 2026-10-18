@@ -477,7 +477,7 @@ func (a *GitHubAppAuth) installationToken(ctx context.Context) (secrets.Value, e
 		return secrets.Value{}, transportProviderError("github", err, 1)
 	}
 	defer response.Body.Close()
-	if classification := ClassifyHTTPForRequest("github", request.URL.Path, response.StatusCode, response.Header, ""); classification != nil {
+	if classification := classifyResponseWithBody("github", request.URL.Path, response); classification != nil {
 		return secrets.Value{}, classification
 	}
 	var payload struct {

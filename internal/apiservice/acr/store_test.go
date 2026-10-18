@@ -80,7 +80,7 @@ func TestEntitlementRouteAnswers503WhenTheRealStoreIsUnreachable(t *testing.T) {
 	server := newTestServer(PostgresEntitlementStore{Pool: unreachablePool(t)})
 	defer server.Close()
 	for _, path := range []string{"/api/v1/internal/acr/entitlements/" + uuid.NewString(), "/api/v1/internal/acr/health"} {
-		response, err := http.Get(server.URL + path)
+		response, err := getAuthed(server.URL + path)
 		if err != nil {
 			t.Fatal(err)
 		}

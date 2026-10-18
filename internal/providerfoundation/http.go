@@ -524,13 +524,95 @@ func (c *HTTPClient) DoUnauthenticated(
 		c.observe(failure.Class)
 		return nil, failure
 	}
-	classification := ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, "")
-	if classification == nil {
+	if classification := classifyResponseWithBody(c.Provider, target.Path, response); classification == nil {
 		c.observe("")
 	} else {
 		c.observe(classification.Class)
 	}
 	return response, nil
+}
+
+// bodyPeekTimeout bounds how long classification waits for a body to start
+// and finish within maxProviderErrorBody; a slower body keeps the
+// status-and-headers classification.
+const bodyPeekTimeout = 2 * time.Second
+
+// peekedBody serves the bytes (and the read error, if any) of a background
+// bounded read first and the rest of the original body after, so the caller
+// sees exactly what the unwrapped body would have given it.
+type peekedBody struct {
+	done   chan struct{}
+	peeked []byte
+	err    error
+	offset int
+	rest   io.ReadCloser
+}
+
+func (b *peekedBody) Read(p []byte) (int, error) {
+	<-b.done
+	if b.offset < len(b.peeked) {
+		n := copy(p, b.peeked[b.offset:])
+		b.offset += n
+		if b.offset == len(b.peeked) && b.err != nil {
+			return n, b.err // the original body returned its data and error together
+		}
+		return n, nil
+	}
+	if b.err != nil {
+		return 0, b.err
+	}
+	return b.rest.Read(p)
+}
+
+func (b *peekedBody) Close() error { return b.rest.Close() }
+
+// classifyResponseWithBody classifies a response from status, headers and a
+// bounded, time-bounded peek of the body, so a limit whose only signal is the
+// body message (a GitHub secondary or abuse limit on a 403) is rate_limited
+// with its dimension. Only that case consults the body (ClassifyHTTPWithMessage).
+// The caller still reads the full body, with any read error it would have got,
+// except after a peek timeout, which closes the body so no reader goroutine leaks.
+func classifyResponseWithBody(provider, requestPath string, response *http.Response) *ProviderError {
+	classification := ClassifyHTTPForRequest(provider, requestPath, response.StatusCode, response.Header, "")
+	if classification == nil || response.Body == nil || classification.Class == ErrorRateLimited ||
+		provider != "github" || response.StatusCode != http.StatusForbidden {
+		return classification
+	}
+	body := &peekedBody{done: make(chan struct{}), rest: response.Body}
+	go func() {
+		body.peeked, body.err = io.ReadAll(io.LimitReader(body.rest, maxProviderErrorBody))
+		close(body.done)
+	}()
+	response.Body = body
+	timer := time.NewTimer(bodyPeekTimeout)
+	defer timer.Stop()
+	select {
+	case <-body.done:
+	case <-timer.C:
+		_ = body.rest.Close() // ends the reader goroutine; the caller's later read fails
+		logBodyPeekTimeout(provider, response.StatusCode, classification.Class)
+		return classification
+	}
+	withBody := ClassifyHTTPForRequest(provider, requestPath, response.StatusCode, response.Header, string(body.peeked))
+	if withBody == nil {
+		return classification
+	}
+	if withBody.Class != classification.Class {
+		logBodyReclassification(provider, response.StatusCode, classification.Class, withBody.Class, withBody.Dimension)
+	}
+	return withBody
+}
+
+func logBodyPeekTimeout(provider string, status int, class ErrorClass) {
+	slog.Warn("provider error body not read in time, classified from status and headers; body closed",
+		"provider", provider, "status", status, "class", string(class), "timeout_ms", bodyPeekTimeout.Milliseconds())
+}
+
+// logBodyReclassification logs only closed-set values (provider, status,
+// class names, dimension name), never body or error text.
+func logBodyReclassification(provider string, status int, from, to ErrorClass, dimension string) {
+	slog.Debug("provider response reclassified from its body",
+		"provider", provider, "status", status, "from_class", string(from), "to_class", string(to), "dimension", dimension)
 }
 
 func (c *HTTPClient) retryDelay(attempt int, retryAfter time.Duration, class ErrorClass) time.Duration {

@@ -244,14 +244,14 @@ func discoverMembersGitLab(ctx context.Context, token secrets.Value, baseURL, gr
 	}
 	var entries []*pyjson.Object
 	seenMembers := map[string]struct{}{}
-	membersPath := "/api/v4/groups/" + strconv.FormatInt(group.ID, 10) + "/members"
-	walk := newPageWalk(ctx, "gitlab", "group members", groupPath, "1")
-	for page := 1; page > 0; {
-		response, err := client.DoRoute(ctx, "GET", "/groups/{group}/members", fmt.Sprintf("%s?per_page=100&page=%d", membersPath, page), nil)
+	next := "/api/v4/groups/" + strconv.FormatInt(group.ID, 10) + "/members?per_page=100"
+	walk := newPageWalk(ctx, "gitlab", "group members", groupPath, next)
+	for next != "" {
+		response, err := client.DoRoute(ctx, "GET", "/groups/{group}/members", next, nil)
 		if err != nil {
 			return nil, err
 		}
-		nextPage := response.Header.Get("X-Next-Page")
+		link := response.Header.Get("Link")
 		raw, err := readBody(response)
 		if err != nil {
 			return nil, err
@@ -261,14 +261,13 @@ func discoverMembersGitLab(ctx context.Context, token secrets.Value, baseURL, gr
 			return nil, err
 		}
 		entries = appendNew(entries, seenMembers, items, memberObjectKey("id", "username"))
-		next, more, err := walk.gitlabNextPage(nextPage, len(items))
-		if err != nil {
+		linkNext := githubNextLink(link)
+		var more bool
+		if next, more, err = walk.advance(linkNext, linkNext != "", len(items)); err != nil {
 			return nil, err
+		} else if !more {
+			next = ""
 		}
-		if !more {
-			next = 0
-		}
-		page = next
 	}
 	members := make([]discoveredMember, 0, len(entries))
 	for _, entry := range entries {

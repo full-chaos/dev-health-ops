@@ -163,7 +163,6 @@ func confidenceForCount(count int) string {
 // page carries one, stopping at an empty page, isLast, or 500 issues.
 func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient, owner, jql string) ([]*pyjson.Object, error) {
 	var issues []*pyjson.Object
-	seenIssues := map[string]struct{}{}
 	startAt := 0
 	token := ""
 	walk := newPageWalk(ctx, "jira", "issue search", owner, "startAt:0")
@@ -197,12 +196,6 @@ func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient
 			issue, ok := item.(*pyjson.Object)
 			if !ok {
 				return nil, fmt.Errorf("jira issue is not an object")
-			}
-			if id := memberObjectKey("key", "id")(issue); !strings.HasPrefix(id, "anon:") {
-				if _, dup := seenIssues[id]; dup {
-					continue
-				}
-				seenIssues[id] = struct{}{}
 			}
 			issues = append(issues, issue)
 			if len(issues) >= jiraInferIssueLimit {

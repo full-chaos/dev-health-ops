@@ -82,13 +82,13 @@ func linkNext(url string) http.Header { return header("Link", fmt.Sprintf(`<%s>;
 func githubHostile() []hostileCase {
 	return []hostileCase{
 		{"repeated rel=next", func(r *http.Request, n int) (http.Header, string) {
-			return linkNext("https://api.github.com" + r.URL.Path + "?per_page=100&page=2"), fmt.Sprintf(`[{"slug":"s%d","name":"n%d","login":"u%d"}]`, n, n, n)
+			return linkNext(r.URL.Scheme + "://" + r.URL.Host + r.URL.Path + "?per_page=100&page=2"), fmt.Sprintf(`[{"slug":"s%d","name":"n%d","login":"u%d"}]`, n, n, n)
 		}, walkCauseRepeated, 3},
 		{"empty page advertising next", func(r *http.Request, n int) (http.Header, string) {
-			return linkNext(fmt.Sprintf("https://api.github.com%s?per_page=100&page=%d", r.URL.Path, n+1)), `[]`
+			return linkNext(fmt.Sprintf("%s://%s%s?per_page=100&page=%d", r.URL.Scheme, r.URL.Host, r.URL.Path, n+1)), `[]`
 		}, walkCauseEmptyPageToNext, 1},
 		{"unbounded fresh rel=next", func(r *http.Request, n int) (http.Header, string) {
-			return linkNext(fmt.Sprintf("https://api.github.com%s?per_page=100&page=%d", r.URL.Path, n+1)), fmt.Sprintf(`[{"slug":"s%d","name":"n%d","login":"u%d"}]`, n, n, n)
+			return linkNext(fmt.Sprintf("%s://%s%s?per_page=100&page=%d", r.URL.Scheme, r.URL.Host, r.URL.Path, n+1)), fmt.Sprintf(`[{"slug":"s%d","name":"n%d","login":"u%d"}]`, n, n, n)
 		}, walkCauseMaxPages, pageWalkMaxPages},
 	}
 }
@@ -188,7 +188,7 @@ func TestMemberWalksFailClosedOnAHostileContinuation(t *testing.T) {
 			assertFailedClosed(t, err, doer, logs, "github", capped)
 		})
 	}
-	for _, tc := range gitlabHostile() {
+	for _, tc := range githubHostile() {
 		t.Run("gitlab members/"+tc.name, func(t *testing.T) {
 			logs := captureWarns(t)
 			doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
@@ -232,7 +232,7 @@ func TestJiraIssueSearchFailsClosedOnAHostileContinuation(t *testing.T) {
 func TestAnItemOnTwoPagesIsListedOnce(t *testing.T) {
 	doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
 		if n == 1 {
-			return linkNext("https://api.github.com" + r.URL.Path + "?per_page=100&page=2"), `[{"slug":"a","name":"A"},{"slug":"b","name":"B"}]`
+			return linkNext(r.URL.Scheme + "://" + r.URL.Host + r.URL.Path + "?per_page=100&page=2"), `[{"slug":"a","name":"A"},{"slug":"b","name":"B"}]`
 		}
 		return nil, `[{"slug":"b","name":"B"},{"slug":"c","name":"C"}]`
 	}}

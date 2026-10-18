@@ -15,10 +15,11 @@ import (
 // again, as it was when the delete removed the row. A writer that copied the
 // column (or named it) would keep a team deleted for ever, or delete one, with
 // no admin action. This reads the text of every production INSERT INTO teams
-// of the module, up to the end of its string literal; a statement that is
-// built from pieces is not seen whole.
+// of the module, up to the end of its string literal, and every teams column
+// list a writer gives teamprovider.Insert ([]string{"id", "team_uuid", ...});
+// a statement that is built from pieces is not seen whole.
 func TestOnlyTheAdminStoreWritesDeletedAt(t *testing.T) {
-	insert := regexp.MustCompile("(?s)INSERT INTO teams\\b[^;`\"]*")
+	insert := regexp.MustCompile("(?s)INSERT INTO teams\\b[^;`\"]*|\\[\\]string\\{\"id\", \"team_uuid\"[^}]*\\}")
 	root := filepath.Join("..", "..", "..")
 	found, writers := map[string]int{}, 0
 	for _, directory := range []string{"internal", "cmd"} {
@@ -50,6 +51,6 @@ func TestOnlyTheAdminStoreWritesDeletedAt(t *testing.T) {
 		t.Fatalf("the census read %d INSERT INTO teams statements: it measured nothing", writers)
 	}
 	if len(found) != 1 || found["internal/api/teamsidentity/store.go"] != 1 {
-		t.Errorf("writers of teams.deleted_at = %v, want only the one insert of internal/api/teamsidentity/store.go", found)
+		t.Errorf("writers of teams.deleted_at = %v, want only the one column list of internal/api/teamsidentity/store.go", found)
 	}
 }

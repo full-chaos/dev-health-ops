@@ -2008,9 +2008,9 @@ func applyDomainPlanMutations(ctx context.Context, tx pgx.Tx, loaded loadedMater
 			return fmt.Errorf("ensure scheduled security dataset: begin savepoint: %w", err)
 		}
 		_, execErr := savepoint.Exec(ctx, `
-INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options)
-VALUES ($1::uuid,$2,$3::uuid,'security',TRUE,'{"auto_enabled_by":"scheduled_code_host_sync"}'::jsonb)
-ON CONFLICT (org_id,integration_id,dataset_key) DO NOTHING`, uuid.NewSHA1(materializerNamespace, []byte(loaded.input.IntegrationID+":dataset:security")).String(), loaded.input.OrgID, loaded.input.IntegrationID)
+INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options,state_changed_at,state_changed_by)
+VALUES ($1::uuid,$2,$3::uuid,'security',TRUE,'{"auto_enabled_by":"scheduled_code_host_sync"}'::jsonb,now(),$4)
+ON CONFLICT (org_id,integration_id,dataset_key) DO NOTHING`, uuid.NewSHA1(materializerNamespace, []byte(loaded.input.IntegrationID+":dataset:security")).String(), loaded.input.OrgID, loaded.input.IntegrationID, providersync.DatasetWriterSecurityRow)
 		if execErr != nil {
 			var pgErr *pgconn.PgError
 			alreadyEnsured := errors.As(execErr, &pgErr) && pgErr.Code == "23505" &&
@@ -2047,13 +2047,16 @@ SET source_type='account',name=EXCLUDED.name,full_name=EXCLUDED.full_name,is_ena
 		wanted = append(wanted, dataset.Key)
 		datasetID := uuid.NewSHA1(materializerNamespace, []byte(loaded.input.IntegrationID+":dataset:"+dataset.Key)).String()
 		if _, err := tx.Exec(ctx, `
-INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options)
-VALUES ($1::uuid,$2,$3::uuid,$4,TRUE,$5::jsonb)
-ON CONFLICT (org_id,integration_id,dataset_key) DO UPDATE SET is_enabled=TRUE,options=EXCLUDED.options`, datasetID, loaded.input.OrgID, loaded.input.IntegrationID, dataset.Key, repair.datasetOptions[dataset.Key]); err != nil {
+INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options,state_changed_at,state_changed_by)
+VALUES ($1::uuid,$2,$3::uuid,$4,TRUE,$5::jsonb,now(),$6)
+ON CONFLICT (org_id,integration_id,dataset_key) DO UPDATE SET
+ state_changed_at=CASE WHEN integration_datasets.is_enabled THEN integration_datasets.state_changed_at ELSE now() END,
+ state_changed_by=CASE WHEN integration_datasets.is_enabled THEN integration_datasets.state_changed_by ELSE EXCLUDED.state_changed_by END,
+ is_enabled=TRUE,options=EXCLUDED.options`, datasetID, loaded.input.OrgID, loaded.input.IntegrationID, dataset.Key, repair.datasetOptions[dataset.Key], providersync.DatasetWriterPagerDutyRepair); err != nil {
 			return fmt.Errorf("repair PagerDuty dataset %s: %w", dataset.Key, err)
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE public.integration_datasets SET is_enabled=FALSE WHERE org_id=$1 AND integration_id=$2::uuid AND NOT (dataset_key=ANY($3::text[])) AND is_enabled`, loaded.input.OrgID, loaded.input.IntegrationID, wanted); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE public.integration_datasets SET is_enabled=FALSE, state_changed_at=now(), state_changed_by=$4 WHERE org_id=$1 AND integration_id=$2::uuid AND NOT (dataset_key=ANY($3::text[])) AND is_enabled`, loaded.input.OrgID, loaded.input.IntegrationID, wanted, providersync.DatasetWriterPagerDutyRepair); err != nil {
 		return fmt.Errorf("disable stale PagerDuty datasets: %w", err)
 	}
 	return nil

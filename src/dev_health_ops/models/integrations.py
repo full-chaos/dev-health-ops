@@ -230,6 +230,12 @@ class IntegrationDataset(Base):
     unavailable_last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # When is_enabled last changed and which code path changed it (CHAOS-8818).
+    # NULL on rows written before revision 0151 and by writers that do not stamp.
+    state_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    state_changed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     integration: Mapped[Integration] = relationship(back_populates="datasets")
 

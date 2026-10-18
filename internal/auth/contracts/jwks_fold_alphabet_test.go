@@ -1,0 +1,386 @@
+package contracts
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"unicode"
+
+	"github.com/full-chaos/dev-health-go/authverify"
+)
+
+// THE FOLD ALPHABET, DERIVED RATHER THAN CHOSEN.
+//
+// Round 3 blocked this contract on U+017F, and the first fix hand-picked U+017F
+// and U+212A because they were the two the reviewer and I happened to name.
+// That is the same mistake one level up: a corpus of the code points someone
+// thought of. The set is now computed from unicode.SimpleFold, so it is
+// whatever Go's own fold relation says it is, and it grows by itself if the
+// Unicode tables change under a toolchain upgrade.
+//
+// It happens to come out as exactly {U+212A, U+017F} for the letters in the
+// declared names today. That does NOT make the hand-picked version equivalent:
+// it was right by luck, and nothing about it would have noticed a third.
+
+// foldCycle returns every code point unicode.SimpleFold cycles through for r,
+// excluding r itself.
+func foldCycle(r rune) []rune {
+	var out []rune
+	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+		out = append(out, f)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// foldVariantsOf returns spellings of name reachable by replacing ONE letter
+// with a fold-equivalent code point, plus the all-letters-folded spelling.
+//
+// Single substitution matters separately from the mixed form: round 3's fix was
+// not load-bearing precisely because its generator only produced a MIXED
+// variant, whose Kelvin K made it detectable by the wrong predicate. The shape
+// that distinguishes a correct fold predicate from an ASCII-case one is a
+// single non-ASCII substitution leaving the name otherwise lowercase.
+func foldVariantsOf(name string) []string {
+	runes := []rune(name)
+	seen := map[string]bool{name: true}
+	var out []string
+
+	for i, r := range runes {
+		for _, f := range foldCycle(r) {
+			candidate := make([]rune, len(runes))
+			copy(candidate, runes)
+			candidate[i] = f
+			if s := string(candidate); !seen[s] {
+				seen[s] = true
+				out = append(out, s)
+			}
+		}
+	}
+	// One mixed row: every letter taken to its first fold-equivalent.
+	mixed := make([]rune, len(runes))
+	for i, r := range runes {
+		mixed[i] = r
+		if fc := foldCycle(r); len(fc) > 0 {
+			mixed[i] = fc[0]
+		}
+	}
+	if s := string(mixed); !seen[s] {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// bindsInTheRealConsumer reports whether a document whose `keys` member is
+// spelled `name` is READ AS A JWKS by the real consumer.
+//
+// This is the runtime, not a mirror of it. A local struct with the same tags
+// would drift from dev-health-go silently, and a drifted mirror is exactly the
+// artefact-substitution this package keeps re-learning. If the name binds, the
+// document is complete and Keys() succeeds; if it does not, `keys` is absent
+// (or the name is an unknown field under DisallowUnknownFields) and Keys()
+// fails. Either way the answer is unambiguous.
+func bindsInTheRealConsumer(t *testing.T, dir, name string) bool {
+	t.Helper()
+	document := fmt.Sprintf(
+		`{%q:[{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"example-signing-key","x":%q}]}`,
+		name, goodX)
+	path := filepath.Join(dir, fmt.Sprintf("bind-%x.json", name))
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatalf("writing probe: %v", err)
+	}
+	_, err := authverify.NewEd25519JWKSVerifier(path).Keys()
+	return err == nil
+}
+
+// theFoldPredicateAsTheHarnessUsesIt returns the fold predicate BY LOOKUP FROM
+// narrowingPredicates, not by calling foldsToADeclaredName directly.
+//
+// The first version of this file called the function directly, and a mutation
+// proof caught that it was vacuous: reverting the predicate ENTRY to the wrong
+// ToLower form left this test green, because the test was never looking at the
+// entry. It was verifying a function that happens to share a name with the
+// thing the differential exempts on. That is this package's own recurring
+// defect -- checking the artefact you have rather than the one the claim is
+// about -- committed inside the test written to prevent it.
+//
+// Looking it up by name means the exemption the harness ACTUALLY applies is
+// what gets compared against the runtime.
+func theFoldPredicateAsTheHarnessUsesIt(t *testing.T) func(map[string]any) bool {
+	t.Helper()
+	const want = "member name folds to a declared name"
+	for _, p := range narrowingPredicates {
+		if strings.HasPrefix(p.name, want) {
+			return p.holds
+		}
+	}
+	t.Fatalf("no narrowing predicate whose name starts with %q; the fold exemption has been "+
+		"renamed or removed and this test is no longer checking the harness", want)
+	return nil
+}
+
+// nonASCIIFoldsOf returns the non-ASCII code points that a fold spelling of
+// name can carry, derived from the SimpleFold walk itself so a floor built on
+// it cannot drift from the alphabet the generator uses.
+func nonASCIIFoldsOf(name string) []rune {
+	seen := map[rune]bool{}
+	var out []rune
+	for _, r := range name {
+		for _, f := range foldCycle(r) {
+			if f > unicode.MaxASCII && !seen[f] {
+				seen[f] = true
+				out = append(out, f)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// THE DISCRIMINATING POPULATION IS EXACTLY {keyſ, uſe} AND CANNOT GROW.
+// U+212A KELVIN SIGN never contributes one -- a spelling carrying it is not
+// lowercase, so the ASCII-case predicate matches it too and it discriminates
+// nothing. That is why the two floors below range over DIFFERENT sets: the
+// code-point floor covers every non-ASCII fold, and the discriminating floor
+// covers only the subset that can exist. Collapsing them into one range would
+// demand of Kelvin something the fold relation makes impossible, and the
+// assertion would fail permanently for a reason that is not a defect.
+// discriminatingFoldsOf returns spellings of name that are ENTIRELY LOWERCASE
+// and still fold to it.
+//
+// These are the only spellings that tell a correct Unicode-fold predicate apart
+// from round 3's ASCII-case one: any spelling containing an uppercase or Kelvin
+// character is matched by BOTH, so a floor satisfied by those protects nothing.
+//
+// U+212A KELVIN SIGN produces NONE of these -- it is not lowercase -- so the
+// discriminating subset is a property of U+017F alone here. A per-code-point
+// floor over this subset must therefore range over the code points that CAN
+// produce one, not over every non-ASCII fold, or it would demand the
+// impossible of Kelvin and fail permanently.
+func discriminatingFoldsOf(name string) []string {
+	// BUILT FROM foldCycle DIRECTLY, not by filtering foldVariantsOf.
+	//
+	// foldVariantsOf is what the GENERATOR iterates, so filtering it made this
+	// expectation reachable from the code it measures -- a break there moved
+	// both sides together. lane-auth-contracts asserted the opposite in a
+	// message ("a break in foldVariantsOf leaves the expectation intact"),
+	// which is true of nonASCIIFoldsOf and of the differential's
+	// expectedSpellings and was false here; lane-auth-wave1 traced the call
+	// graph and found it, after their own CLEAN had missed it.
+	//
+	// It was SAFE only by cardinality, which is worse than it sounds. This set
+	// has exactly ONE element today, so a break empties it and the collapse
+	// Fatal fires. At a count of TWO -- a Unicode table update adding another
+	// lowercase fold, which is precisely what deriving the alphabet was meant
+	// to absorb -- losing one would leave the set non-empty, the Fatal quiet,
+	// the floor ranging over the survivor, and the loss silent. A guard whose
+	// protection is a count rather than a rule stops working without anyone
+	// editing the line that depends on it.
+	var out []string
+	runes := []rune(name)
+	for i, r := range runes {
+		for _, f := range foldCycle(r) {
+			candidate := make([]rune, len(runes))
+			copy(candidate, runes)
+			candidate[i] = f
+			if v := string(candidate); v == strings.ToLower(v) && v != name {
+				out = append(out, v)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// THE EXPECTATION IS A LITERAL, AND THAT IS THE POINT.
+//
+// Round 4 found that every "independent" expectation still bottomed out in
+// foldCycle -- which the GENERATOR also calls. Executed: suppressing the fold
+// cycle for `k` alone removes U+212A from generation AND from every expectation
+// simultaneously, long-s survives so no set empties, and the whole suite stays
+// GREEN with an entire code-point class silently gone. Derivation made the
+// expectation agree with the code instead of constraining it.
+//
+// A literal cannot move with the code. These two are the fold alphabet for the
+// declared member names, and a human must edit them deliberately:
+var (
+	wantNonASCIIFoldCodePoints  = []rune{0x017F, 0x212A} // long s, Kelvin sign
+	wantDiscriminatingSpellings = []string{"keyſ", "uſe"}
+)
+
+// TestTheDerivedFoldAlphabetStillMatchesTheLiterals is the canary that keeps the
+// literals from going stale.
+//
+// A literal expectation is immune to a code change and blind to a WORLD change.
+// If a Unicode table update under a toolchain upgrade adds a third fold for one
+// of these letters -- exactly the event deriving the alphabet was meant to
+// absorb -- the literals above would silently under-assert. So the derivation is
+// still computed and compared against them: a genuine change fails HERE, saying
+// update the literal, rather than quietly shrinking coverage everywhere else.
+//
+// Derivation as the canary, literal as the yardstick. They fail in different
+// circumstances, which is the whole reason to keep both.
+func TestTheDerivedFoldAlphabetStillMatchesTheLiterals(t *testing.T) {
+	seen := map[rune]bool{}
+	var derived []rune
+	for _, name := range declaredMemberNames {
+		for _, r := range name {
+			for _, f := range foldCycle(r) {
+				if f > unicode.MaxASCII && !seen[f] {
+					seen[f] = true
+					derived = append(derived, f)
+				}
+			}
+		}
+	}
+	sort.Slice(derived, func(i, j int) bool { return derived[i] < derived[j] })
+
+	want := append([]rune(nil), wantNonASCIIFoldCodePoints...)
+	sort.Slice(want, func(i, j int) bool { return want[i] < want[j] })
+
+	if len(derived) != len(want) {
+		t.Fatalf("the fold relation now yields %d non-ASCII code points, the literal expects %d "+
+			"(derived %U, literal %U). If Unicode changed, UPDATE THE LITERAL and add a fixture "+
+			"for any new discriminating spelling; do not switch the assertions back to the "+
+			"derivation, which is what made them agree with the generator instead of constraining it",
+			len(derived), len(want), derived, want)
+	}
+	for i := range want {
+		if derived[i] != want[i] {
+			t.Errorf("fold code point %d: derived U+%04X, literal U+%04X", i, derived[i], want[i])
+		}
+	}
+}
+
+func TestTheFoldPredicateIsVerifiedAgainstTheRuntimeNotItsDescription(t *testing.T) {
+	// THE CHECK ROUND 3 SHOWED WAS MISSING, and the reason it was missing is
+	// worth more than the check.
+	//
+	// The predicate/fixture correspondence test added after round 2 passed
+	// while the fold predicate was wrong, and it was RIGHT to pass: every
+	// predicate did have a fixture. What no structural test can check is
+	// whether a predicate says what it MEANS. `!= strings.ToLower(name)`
+	// describes ASCII case variance and was standing in for Unicode folding,
+	// and nothing but the runtime can tell you those differ.
+	//
+	// So: for every fold spelling of every declared name, ask the REAL consumer
+	// whether it binds, and require the predicate to agree. A predicate that
+	// mirrors a runtime behaviour is checked against that runtime.
+	dir := t.TempDir()
+	predicateHolds := theFoldPredicateAsTheHarnessUsesIt(t)
+
+	var checked, folded int
+	byClass := map[string]int{}
+	// F2: what reached the RUNTIME COMPARISON, not what was generated.
+	comparedCodePoint := map[rune]int{}
+	comparedDiscriminating := map[string]int{}
+
+	for _, declared := range declaredMemberNames {
+		for _, variant := range foldVariantsOf(declared) {
+			checked++
+			// Ask the predicate about a DOCUMENT, exactly as the differential
+			// does, rather than about a bare string.
+			predicate := predicateHolds(map[string]any{variant: []any{}})
+			runtime := bindsInTheRealConsumer(t, dir, variant)
+
+			// A variant that folds to `keys` should bind AND be exempted. One
+			// that folds to some other declared name binds nothing here, so
+			// only the `keys` family is a runtime comparison.
+			if strings.EqualFold(declared, "keys") {
+				if predicate != runtime {
+					t.Errorf("PREDICATE DISAGREES WITH THE RUNTIME for %q: predicate says "+
+						"narrowing=%v, the real consumer says binds=%v. The predicate is "+
+						"describing something other than what the decoder does",
+						variant, predicate, runtime)
+				}
+				folded++
+				for _, r := range variant {
+					if r > unicode.MaxASCII {
+						comparedCodePoint[r]++
+					}
+				}
+				if variant == strings.ToLower(variant) {
+					comparedDiscriminating[variant]++
+				}
+			} else if !predicateHolds(map[string]any{"keys": []any{map[string]any{variant: "v"}}}) {
+				t.Errorf("%q folds to the declared name %q and the predicate does not recognise it",
+					variant, declared)
+			}
+
+			for _, r := range variant {
+				if r > unicode.MaxASCII {
+					byClass[fmt.Sprintf("U+%04X", r)]++
+				}
+			}
+		}
+	}
+
+	if checked == 0 {
+		t.Fatal("no fold variants generated; this test would pass vacuously")
+	}
+	if folded == 0 {
+		t.Fatal("no `keys` fold variant reached the runtime comparison, so the predicate was " +
+			"never actually checked against the decoder")
+	}
+	// Per code-point class, as ruled: a non-ASCII fold that stops being
+	// generated must fail rather than quietly leave its class untested.
+	if len(byClass) == 0 {
+		t.Fatal("no NON-ASCII fold code point appeared in any variant; the alphabet has " +
+			"collapsed to ASCII case and the class round 3 found is untested")
+	}
+	// F1 WAS A TAUTOLOGY AND THIS REPLACES IT. The previous loop ranged over
+	// byClass's OWN KEYS and asserted each was non-zero -- but byClass is only
+	// ever written by `++`, which creates a key with value 1, so no key can
+	// hold zero and the loop could not fire. It read exactly like the
+	// per-code-point floor it was supposed to be. An expectation taken from the
+	// data it is checking asserts nothing; the expectation has to come from
+	// somewhere else.
+	//
+	// F2 IS WHAT THIS NOW ASSERTS. The floors below are on what reached the
+	// RUNTIME COMPARISON, not on what was generated. Without that, the two
+	// non-ASCII `keys` spellings could stop being produced while `checked`,
+	// `folded` and `byClass` all stayed green on the strength of ASCII variants
+	// and of OTHER declared names -- leaving the comparison running against
+	// ASCII case variants only, which is exactly the comparison that cannot
+	// tell EqualFold from round 3's ToLower.
+	for _, want := range wantNonASCIIFoldCodePoints {
+		if comparedCodePoint[want] == 0 {
+			t.Errorf("no `keys` spelling carrying U+%04X reached the runtime comparison; the "+
+				"check would be running on ASCII case variants alone, which cannot distinguish "+
+				"a Unicode-fold predicate from an ASCII-case one", want)
+		}
+	}
+	// Only `keys` spellings reach the runtime comparison -- the branch above
+	// compares against the consumer for that member alone, because a folded
+	// `use` binds nothing on its own. `uſe` is still floored, in the
+	// differential, where every spelling is exercised.
+	var wantKeysDiscriminating []string
+	for _, want := range wantDiscriminatingSpellings {
+		if strings.EqualFold(want, "keys") {
+			wantKeysDiscriminating = append(wantKeysDiscriminating, want)
+		}
+	}
+	if len(wantKeysDiscriminating) == 0 {
+		t.Fatal("no literal discriminating spelling folds to `keys`; the floor below is vacuous")
+	}
+	for _, want := range wantKeysDiscriminating {
+		if comparedDiscriminating[want] == 0 {
+			t.Errorf("the discriminating spelling %q never reached the runtime comparison; it is "+
+				"the only kind that tells the two predicates apart", want)
+		}
+	}
+	if len(wantNonASCIIFoldCodePoints) == 0 || len(wantDiscriminatingSpellings) == 0 {
+		t.Fatal("the literal fold expectations are empty; every floor above is vacuous")
+	}
+	t.Logf("%d fold variants checked, %d compared against the runtime", checked, folded)
+	for _, cp := range nonASCIIFoldsOf("keys") {
+		t.Logf("  U+%04X reached the comparison %d time(s)", cp, comparedCodePoint[cp])
+	}
+	for _, d := range discriminatingFoldsOf("keys") {
+		t.Logf("  discriminating %q reached the comparison %d time(s)", d, comparedDiscriminating[d])
+	}
+}

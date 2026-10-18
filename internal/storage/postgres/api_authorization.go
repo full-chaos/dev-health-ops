@@ -52,9 +52,12 @@ func apiPosture() RolePosture {
 			// LAST of org_deletion.py's 46 purge targets. Widened in
 			// place, per the one-entry rule below.
 			{"organizations", true, true, true},
-			// SELECT for the llm-config route's svc_acr_ bearer check
-			// (internal/apiservice/acr/llmconfig.go); read-only, no last_used_at write.
-			{"internal_service_credentials", false, false, false},
+			// SELECT for the internal acr routes' svc_acr_ bearer check
+			// (internal/apiservice/acr); UPDATE for the entitlement route's
+			// last_used_at stamp (api/internal/acr.py, CHAOS-9993).
+			{"internal_service_credentials", false, true, false},
+			// The entitlement route's per-outcome audit row (INSERT only).
+			{"internal_service_credential_audits", true, false, false},
 			// The acr route reads one feature row (key =
 			// "agent_context_runtime"). The admin feature-flag routes list
 			// every flag and update is_enabled/is_beta/is_deprecated.

@@ -147,6 +147,22 @@ func packageDefaultModel(provider string) string {
 	return ""
 }
 
+// PlatformPurposeModel is the ops platform setting that names the model of
+// one purpose (LLM_MODEL_EXPLAIN, LLM_MODEL_INVESTIGATE, LLM_MODEL_CATEGORIZE),
+// "" when unset. It is not tied to a provider, so a caller applies it only on
+// the platform path (never to an organization's own provider), between the
+// organization's configured model and the provider-level settings (D6071).
+func PlatformPurposeModel(purpose string, lookup LookupEnv) string {
+	if lookup == nil {
+		return ""
+	}
+	value, ok := lookup("LLM_MODEL_" + strings.ToUpper(purpose))
+	if !ok {
+		return ""
+	}
+	return pythonparity.Strip(value)
+}
+
 // DefaultModel is the model a provider's call uses when neither the request
 // nor the organization's settings name one: the ops platform setting for
 // that provider (its own LLM_MODEL_<PROVIDER> name, or the generic LLM_MODEL
@@ -177,6 +193,66 @@ func DefaultModel(provider string, lookup LookupEnv) string {
 		}
 	}
 	return packageDefaultModel(normalized)
+}
+
+// IsDecisionProvider reports an LLM_PROVIDER value that names a decision
+// backend (it writes no text), so it is no platform text provider.
+func IsDecisionProvider(name string) bool {
+	return name == DecisionProviderTypeSafe
+}
+
+// DecisionProviderTypeSafe is the one decision backend's LLM_PROVIDER name.
+const DecisionProviderTypeSafe = "typesafe"
+
+// DetectProvider is the platform text provider the configured keys name when
+// LLM_PROVIDER does not: the one order of the key auto-detection.
+func DetectProvider(lookup LookupEnv) (string, bool) {
+	has := func(names ...string) bool {
+		for _, name := range names {
+			if value, ok := lookup(name); ok && value != "" {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("OPENAI_API_KEY"):
+		return "openai", true
+	case has("ANTHROPIC_API_KEY"):
+		return "anthropic", true
+	case has("GEMINI_API_KEY"):
+		return "gemini", true
+	case has("LOCAL_LLM_BASE_URL"):
+		return "local", true
+	case has("DASHSCOPE_API_KEY", "QWEN_API_KEY"):
+		return "qwen", true
+	case has("OLLAMA_MODEL", "OLLAMA_BASE_URL"):
+		return "ollama", true
+	}
+	return "", false
+}
+
+// PlatformLookup answers LLM_PROVIDER with the text provider a call runs by
+// default: the variable itself when it names one, else (unset, "auto" or a
+// decision backend) the provider the keys auto-detect. DefaultModel applies
+// the generic LLM_MODEL to that provider only (CHAOS-4978, D6043,
+// CHAOS-10011); the categorize worker, both explain routes and the admin
+// budget status all read the model through it.
+func PlatformLookup(base LookupEnv) LookupEnv {
+	return func(name string) (string, bool) {
+		value, ok := base(name)
+		if name != "LLM_PROVIDER" {
+			return value, ok
+		}
+		named := pythonparity.Lower(pythonparity.Strip(value))
+		if named != "" && named != "auto" && !IsDecisionProvider(named) {
+			return value, ok
+		}
+		if detected, found := DetectProvider(base); found {
+			return detected, true
+		}
+		return value, ok
+	}
 }
 
 // Reason is BudgetReason.

@@ -99,6 +99,7 @@ func TestExplainConfiguredNanoReachesTheWire(t *testing.T) {
 	for name, complete := range routes {
 		t.Run(name+"/platform_LLM_MODEL", func(t *testing.T) {
 			srv.reset()
+			t.Setenv("LLM_PROVIDER", "openai")
 			t.Setenv("LLM_MODEL_OPENAI", "")
 			t.Setenv("LLM_MODEL", "gpt-5-nano")
 			t.Setenv("LLM_BASE_URL", srv.URL)

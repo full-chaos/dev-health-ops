@@ -187,6 +187,8 @@ jobs:
           - contractcheck
           - migrate
           - dho
+          - auth-service
+          - auth-migrate
         platform: [linux/amd64, linux/arm64]
         include:
           - platform: linux/amd64
@@ -544,6 +546,8 @@ jobs:
           - contractcheck
           - migrate
           - dho
+          - auth-service
+          - auth-migrate
     steps:
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -1095,7 +1099,7 @@ jobs:
           # The full family list, both naming schemes -- keep this whole,
           # like ci/check_go_containers.sh's ALL_TARGETS: a shorter,
           # second copy is how the next target goes untagged.
-          families="dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-go-api-tools"
+          families="dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-go-auth-service dev-health-go-auth-migrate dev-health-go-api-tools"
           short_sha="$(echo "${BUILT_SHA}" | cut -c1-7)"
           # codex round 3, P2: every family shares this ONE short_sha, so an
           # UNKNOWN source-tag registry error (rc==2) on it is not a

@@ -152,7 +152,7 @@ def test_help_completes_and_documents_every_public_verb() -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     # The Go toolchain directive may fetch a newer patch release on a cold
-    # cache and announces it on stderr ("go: downloading go1.27.0 ...").
+    # cache and announces it on stderr ("go: downloading go1.27.2 ...").
     # That is environment noise, not help output. So is the one informational
     # line check_go.sh prints when no Go cache dir is configured (CHAOS-5268;
     # every hosted run). Anything else on stderr still fails.

@@ -77,8 +77,9 @@ import (
 // compares with pg_current_xact_id(). Only this package may name it.
 const commitGuardSetting = "dev_health.audit_txid"
 
-// changedSetting is the transaction-local counter the guard trigger advances
-// for every row written to a guarded state table inside Commit's transaction.
+// changedSetting is the transaction-local counter, stored as "<txid>:<n>", the
+// guard trigger advances for every row written to a guarded state table inside
+// Commit's transaction; a value tagged with another transaction id reads as 0.
 const changedSetting = "dev_health.audit_changed"
 
 // ErrMutationFailed wraps any failure that leaves the database unchanged.
@@ -368,7 +369,8 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 	// Migration 0006's triggers refuse a write to a guarded table unless this
 	// setting equals the current transaction id, so the guarantee is held by
 	// PostgreSQL rather than by this package's callers. It is transaction-local.
-	if _, err := tx.Exec(ctx, `SELECT set_config('`+commitGuardSetting+`', pg_current_xact_id()::text, true)`); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT set_config('`+commitGuardSetting+`', pg_current_xact_id()::text, true),
+		set_config('`+changedSetting+`', pg_current_xact_id()::text || ':0', true)`); err != nil {
 		return fmt.Errorf("%w: arming the commit guard: %w", ErrMutationFailed, err)
 	}
 
@@ -377,7 +379,8 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 	}
 	var changed int64
 	if err := tx.QueryRow(ctx,
-		`SELECT coalesce(nullif(current_setting('`+changedSetting+`', true), ''), '0')::bigint`).Scan(&changed); err != nil {
+		`SELECT CASE WHEN current_setting('`+changedSetting+`', true) LIKE pg_current_xact_id()::text || ':%'
+		THEN split_part(current_setting('`+changedSetting+`', true), ':', 2)::bigint ELSE 0 END`).Scan(&changed); err != nil {
 		return fmt.Errorf("%w: reading the changed-row count: %w", ErrMutationFailed, err)
 	}
 	if changed <= 0 {

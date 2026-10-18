@@ -2,6 +2,7 @@ package providerfoundation
 
 import (
 	"context"
+	"net/http"
 	"sort"
 	"sync"
 )
@@ -46,6 +47,9 @@ func (l *RequestLedger) Record(key LedgerKey) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.counts == nil {
+		l.counts = map[LedgerKey]int{}
+	}
 	if _, known := l.counts[key]; !known && len(l.counts) >= ledgerMaxKeys {
 		l.dropped++
 		return
@@ -85,15 +89,10 @@ func WithRequestAccount(ctx context.Context, routeFamily, dimension string) cont
 	return context.WithValue(ctx, requestAccountKey{}, requestAccount{routeFamily: routeFamily, dimension: dimension})
 }
 
-// recordWireRequest counts one wire request of this client under its account:
-// the family and dimension the route labelled, else the family "unclassified"
-// and the dimension the wire implies (WithBudgetDimension, then the request
-// path). The first attempt and every retry each count: each draws on the
-// provider's budget.
-func (c *HTTPClient) recordWireRequest(ctx context.Context, path string) {
-	if c.Ledger == nil {
-		return
-	}
+// ledgerKey is the account one request of this client is counted under: the
+// family and dimension the route labelled, else the family "unclassified" and
+// the dimension the wire implies (WithBudgetDimension, then the request path).
+func (c *HTTPClient) ledgerKey(ctx context.Context, path string) LedgerKey {
 	account, _ := ctx.Value(requestAccountKey{}).(requestAccount)
 	key := LedgerKey{RouteFamily: account.routeFamily, Dimension: account.dimension}
 	if key.RouteFamily == "" {
@@ -105,5 +104,40 @@ func (c *HTTPClient) recordWireRequest(ctx context.Context, path string) {
 	if key.Dimension == "" {
 		key.Dimension = RateLimitDimension(c.Provider, path, "")
 	}
-	c.Ledger.Record(key)
+	return key
+}
+
+// recordWireRequest counts one wire request of this client under its account.
+// The first attempt and every retry each count: each draws on the provider's
+// budget. A redirect the client then follows is counted by recordRedirectHop.
+func (c *HTTPClient) recordWireRequest(ctx context.Context, path string) {
+	if c.Ledger == nil {
+		return
+	}
+	c.Ledger.Record(c.ledgerKey(ctx, path))
+}
+
+type hopRecorderKey struct{}
+
+type hopRecorder struct {
+	ledger *RequestLedger
+	key    LedgerKey
+}
+
+// withHopRecorder carries the ledger and the account of a request in its
+// context. net/http gives a followed redirect the context of the request it
+// follows, so the redirect guard counts the hop under the same family and
+// dimension. A decorator that drops the context also drops the count.
+func (c *HTTPClient) withHopRecorder(ctx context.Context, path string) context.Context {
+	if c.Ledger == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, hopRecorderKey{}, hopRecorder{ledger: c.Ledger, key: c.ledgerKey(ctx, path)})
+}
+
+// recordRedirectHop counts one followed redirect hop as a wire request.
+func recordRedirectHop(request *http.Request) {
+	if recorder, ok := request.Context().Value(hopRecorderKey{}).(hopRecorder); ok {
+		recorder.ledger.Record(recorder.key)
+	}
 }

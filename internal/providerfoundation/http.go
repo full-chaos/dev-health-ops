@@ -224,6 +224,7 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 			httpguard.StripCredentials(req)
 			req.Header.Set(strippedMarker, "1")
 			slog.Warn("provider redirect without a credential origin in the request context: credential headers stripped")
+			recordRedirectHop(req)
 			return nil
 		}
 		// The hop would be followed: stop it where it leaves the credential origin and say so.
@@ -232,6 +233,8 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 			state.left.Store(true)
 			return http.ErrUseLastResponse
 		}
+		// The hop is followed, so it is one more wire request under the account of the call that started it.
+		recordRedirectHop(req)
 		return nil
 	}
 	return &guarded
@@ -373,7 +376,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			return nil, err
 		}
 		callLeft := new(atomic.Bool)
-		request, err := http.NewRequestWithContext(context.WithValue(ctx, originKey{}, &originState{target: target, left: callLeft}), method, target.String(), bytes.NewReader(requestBody))
+		request, err := http.NewRequestWithContext(context.WithValue(c.withHopRecorder(ctx, target.Path), originKey{}, &originState{target: target, left: callLeft}), method, target.String(), bytes.NewReader(requestBody))
 		if err != nil {
 			return nil, ErrCredentialInvalid
 		}
@@ -517,7 +520,7 @@ func (c *HTTPClient) DoUnauthenticated(
 			err = errors.Join(err, releaseErr)
 		}()
 	}
-	request, requestErr := http.NewRequestWithContext(ctx, method, target.String(), nil)
+	request, requestErr := http.NewRequestWithContext(c.withHopRecorder(ctx, target.Path), method, target.String(), nil)
 	if requestErr != nil {
 		return nil, ErrCredentialInvalid
 	}

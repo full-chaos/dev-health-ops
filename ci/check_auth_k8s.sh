@@ -303,7 +303,7 @@ printf 'scraper -> Service operator port: %s\n' "${ops_svc}"
 grep -q 'rc=0' <<<"${ops_svc}" || die "the Service does not publish the operator port to listed scrapers"
 
 # Egress is bounded too: a pod the policy selects reaches PostgreSQL and nothing else.
-printf 'step 8c: egress is bounded (database reachable, API server not)\n'
+printf 'step 8c: egress is bounded (database reachable, another pod not)\n'
 egress_probe() { # name labels command-string
   helper "$1" "$2" sh -c "$3"
   K wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$1" --timeout=60s >/dev/null 2>&1 || true
@@ -313,10 +313,17 @@ SVC_LABELS="app.kubernetes.io/name=dev-health,app.kubernetes.io/instance=${RELEA
 db_out="$(egress_probe egress-db "${SVC_LABELS}" "nc -z -w 3 auth-postgres 5432; echo rc=\$?")"
 printf 'selected pod -> PostgreSQL:5432: %s\n' "${db_out}"
 grep -q 'rc=0' <<<"${db_out}" || die "the policy blocks the database"
-api_out="$(egress_probe egress-api "${SVC_LABELS}" "nc -z -w 3 kubernetes.default.svc 443; echo rc=\$?")"
-printf 'selected pod -> API server:443: %s\n' "${api_out}"
-grep -q 'rc=0' <<<"${api_out}" && die "the policy lets a selected pod reach the Kubernetes API server"
-grep -q 'rc=' <<<"${api_out}" || die "the egress probe produced no result"
+# A listener in an unlisted pod: reachable from outside the policy, so a refusal below is the policy's.
+helper egress-target role=target sh -c 'nc -lk -p 9000'
+K wait --for=condition=Ready pod/egress-target --timeout=60s >/dev/null
+TARGET_IP="$(K get pod egress-target -o jsonpath='{.status.podIP}')"
+open_out="$(egress_probe egress-open role=target "nc -z -w 3 ${TARGET_IP} 9000; echo rc=\$?")"
+printf 'unselected pod -> listener (control, no policy): %s\n' "${open_out}"
+grep -q 'rc=0' <<<"${open_out}" || die "the egress target is not reachable even without a policy: the probe is invalid"
+other_out="$(egress_probe egress-other "${SVC_LABELS}" "nc -z -w 3 ${TARGET_IP} 9000; echo rc=\$?")"
+printf 'selected pod -> the same listener: %s\n' "${other_out}"
+grep -q 'rc=0' <<<"${other_out}" && die "the policy lets a selected pod reach a pod that is not the database"
+grep -q 'rc=' <<<"${other_out}" || die "the egress probe produced no result"
 
 # --- 6. rollback ---------------------------------------------------------------------------------
 printf 'step 9: helm uninstall leaves no object of the release behind\n'

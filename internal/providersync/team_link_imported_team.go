@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -14,6 +15,10 @@ import (
 // organization, in any version (an inactive or deleted team is still a team
 // that was imported).
 const importedTeamIDsQuery = `SELECT DISTINCT id FROM teams WHERE org_id = {org_id:String} AND id IN {ids:Array(String)}`
+
+// ErrLinkRowsOfAnotherOrganization is a link write that holds a row whose
+// organization is not the one written.
+var ErrLinkRowsOfAnotherOrganization = errors.New("providersync: link rows of another organization")
 
 // LinkTeamQuerier is the one connection method KeepLinksOfImportedTeams needs.
 type LinkTeamQuerier interface {
@@ -34,10 +39,24 @@ type LinkTeamQuerier interface {
 // its teams first: a team the same run imports is then a stored team. A failed read is an error, before any write.
 func KeepLinksOfImportedTeams[R any](
 	ctx context.Context, conn LinkTeamQuerier, orgID, provider, dataset string, rows []R,
-	teamID func(R) string, open func(R) bool,
+	orgOf, teamID func(R) string, open func(R) bool,
 ) ([]R, error) {
 	if conn == nil || strings.TrimSpace(orgID) == "" {
 		return nil, ErrInvalidConfiguration
+	}
+	// A row of another organization is refused, loudly: its team cannot be
+	// looked up in this organization, and dropping it would hide the caller's
+	// defect.
+	foreign := 0
+	for _, row := range rows {
+		if orgOf(row) != orgID {
+			foreign++
+		}
+	}
+	if foreign > 0 {
+		slog.Default().WarnContext(ctx, "team_links_of_another_organization_refused",
+			"provider", provider, "dataset", dataset, "rows", foreign)
+		return nil, fmt.Errorf("%w: %d %s rows of another organization", ErrLinkRowsOfAnotherOrganization, foreign, dataset)
 	}
 	seen := map[string]bool{}
 	var ids []string

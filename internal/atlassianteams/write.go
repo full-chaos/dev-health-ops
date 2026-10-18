@@ -145,6 +145,9 @@ func Write(
 	if err := checkTeamIDs(rows); err != nil {
 		return result, err
 	}
+	if err := checkOrganization(ctx, orgID, rows); err != nil {
+		return result, err
+	}
 	teams, missing, catalog, err := teamsInScope(ctx, conn, orgID, rows, scope, prover)
 	if err != nil {
 		return result, fmt.Errorf("read known atlassian teams: %w", err)
@@ -678,7 +681,7 @@ func readProjectKeys(ctx context.Context, conn driver.Conn, orgID string, ids []
 
 func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows []MembershipRow, expired []openMembership, now time.Time) error {
 	rows, err := providersync.KeepLinksOfImportedTeams(ctx, conn, orgID, Provider, "team_memberships", rows,
-		func(r MembershipRow) string { return r.TeamID }, func(MembershipRow) bool { return true })
+		func(r MembershipRow) string { return r.OrgID }, func(r MembershipRow) string { return r.TeamID }, func(MembershipRow) bool { return true })
 	if err != nil {
 		return err
 	}
@@ -720,7 +723,7 @@ func optionalText(value string) *string {
 
 func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []OwnershipRow, expired []openOwnership, now time.Time) error {
 	rows, err := providersync.KeepLinksOfImportedTeams(ctx, conn, orgID, Provider, "team_project_ownership", rows,
-		func(r OwnershipRow) string { return r.TeamID }, func(OwnershipRow) bool { return true })
+		func(r OwnershipRow) string { return r.OrgID }, func(r OwnershipRow) string { return r.TeamID }, func(OwnershipRow) bool { return true })
 	if err != nil {
 		return err
 	}
@@ -748,6 +751,34 @@ func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []
 		}
 	}
 	return batch.Send()
+}
+
+// checkOrganization refuses, before any read or write, rows of another
+// organization than the one written: their teams and links would be stored
+// under the wrong organization, or dropped by the link rule. It logs a Warn
+// with counts.
+func checkOrganization(ctx context.Context, orgID string, rows Rows) error {
+	foreign := 0
+	for _, team := range rows.Teams {
+		if team.OrgID != orgID {
+			foreign++
+		}
+	}
+	for _, membership := range rows.Memberships {
+		if membership.OrgID != orgID {
+			foreign++
+		}
+	}
+	for _, link := range rows.Ownership {
+		if link.OrgID != orgID {
+			foreign++
+		}
+	}
+	if foreign == 0 {
+		return nil
+	}
+	slog.Default().WarnContext(ctx, "atlassian_teams_rows_of_another_organization_refused", "org_id", orgID, "rows", foreign)
+	return fmt.Errorf("check rows: %w: %d rows of another organization", providersync.ErrLinkRowsOfAnotherOrganization, foreign)
 }
 
 // checkTeamIDs refuses, before any read or write, a row whose team id does

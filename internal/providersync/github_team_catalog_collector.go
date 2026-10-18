@@ -266,7 +266,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.MembershipsClosed = membershipOutcome.Closed
 		membershipRows, err = KeepLinksOfImportedTeams(ctx, adapter.Sink.Conn, ref.OrgID, githubTeamCatalogProvider, "team_memberships", membershipRows,
-			func(r githubMembershipRow) string { return r.TeamID }, func(r githubMembershipRow) bool { return r.ValidTo == nil })
+			func(r githubMembershipRow) string { return r.OrgID }, func(r githubMembershipRow) string { return r.TeamID }, func(r githubMembershipRow) bool { return r.ValidTo == nil })
 		if err != nil {
 			return result, err
 		}

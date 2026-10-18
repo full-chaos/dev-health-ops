@@ -3,9 +3,15 @@
 package atlassianteams
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 // CHAOS-9548: a second run over the same answer writes no ownership row again and still reports the links it
@@ -65,5 +71,33 @@ func TestAtlassianOwnershipRepeatIsNotWrittenAgainAndAFailedWriteCountsNothing(t
 	}
 	if failed.OwnershipWritten != 0 {
 		t.Fatalf("a refused ownership write reported %d links written", failed.OwnershipWritten)
+	}
+}
+
+// A write whose rows belong to another organization is refused before any
+// read or write, loudly: an error and a Warn, never a silent drop.
+func TestAtlassianWriteRefusesRowsOfAnotherOrganization(t *testing.T) {
+	ctx := context.Background()
+	conn := openClickHouse(t)
+	g := newGateway(t, standard)
+	rows, err := Collect(ctx, g.client(), params(everything))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	_, err = Write(ctx, conn, "org-2", rows, everything, scopeOf(integrationCensus{"integration-a": true}, "integration-a"), everyAbsentFactIsGone{})
+	slog.SetDefault(previous)
+	if !errors.Is(err, providersync.ErrLinkRowsOfAnotherOrganization) || !strings.Contains(err.Error(), "check rows") {
+		t.Fatalf("err = %v, want the rows of another organization refused at the check", err)
+	}
+	if !strings.Contains(logged.String(), `"msg":"atlassian_teams_rows_of_another_organization_refused"`) || !strings.Contains(logged.String(), `"level":"WARN"`) {
+		t.Errorf("no Warn for the refused rows:\n%s", logged.String())
+	}
+	for _, table := range []string{"teams", "team_memberships", "team_project_ownership"} {
+		if got := lines(t, conn, `SELECT toString(count()) FROM `+table)[0]; got != "0" {
+			t.Errorf("%s holds %s rows after a refused write, want 0", table, got)
+		}
 	}
 }

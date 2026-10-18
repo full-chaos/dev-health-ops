@@ -740,7 +740,7 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.MembershipsClosed = membershipOutcome.Closed
 		membershipRows, reuseErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, "team_memberships", membershipRows,
-			func(r gitlabTeamCatalogMembershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogMembershipRow) bool { return r.ValidTo == nil })
+			func(r gitlabTeamCatalogMembershipRow) string { return r.OrgID }, func(r gitlabTeamCatalogMembershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogMembershipRow) bool { return r.ValidTo == nil })
 		if reuseErr != nil {
 			return result, reuseErr
 		}
@@ -778,7 +778,7 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			closed := len(plan.Retract)
 			ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, plan)
 			ownershipRows, snapshotErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, "team_project_ownership", ownershipRows,
-				func(r gitlabTeamCatalogOwnershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogOwnershipRow) bool { return r.ValidTo == nil })
+				func(r gitlabTeamCatalogOwnershipRow) string { return r.OrgID }, func(r gitlabTeamCatalogOwnershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogOwnershipRow) bool { return r.ValidTo == nil })
 			if snapshotErr != nil {
 				return result, snapshotErr
 			}

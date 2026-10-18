@@ -824,7 +824,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 			return result, reuseErr
 		}
 		keptMemberships, reuseErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_memberships", keptMemberships,
-			func(r jiraTeamCatalogMembershipRow) string { return r.TeamID }, func(r jiraTeamCatalogMembershipRow) bool { return r.ValidTo == nil })
+			func(r jiraTeamCatalogMembershipRow) string { return r.OrgID }, func(r jiraTeamCatalogMembershipRow) string { return r.TeamID }, func(r jiraTeamCatalogMembershipRow) bool { return r.ValidTo == nil })
 		if reuseErr != nil {
 			return result, reuseErr
 		}
@@ -941,7 +941,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		// id by design (the retired Python jira-ops sync stored its ops teams as
 		// ops:<id>), so its team is never an imported teams row.
 		ownership, openErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_project_ownership", ownership,
-			func(r jiraTeamCatalogOwnershipRow) string { return r.TeamID },
+			func(r jiraTeamCatalogOwnershipRow) string { return r.OrgID }, func(r jiraTeamCatalogOwnershipRow) string { return r.TeamID },
 			func(r jiraTeamCatalogOwnershipRow) bool {
 				return r.ValidTo == nil && r.Source != jiraTeamCatalogLegacySource
 			})

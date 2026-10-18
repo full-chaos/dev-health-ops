@@ -47,7 +47,7 @@ def _docker_stub(bindir: Path, refs: list[tuple[str, str]]) -> None:
         lines.append('  if [[ "$args" == *"--raw"* ]]; then')
         lines.append(f"    cat <<'EOF_RAW'\n{_raw_index(image, sha7)}\nEOF_RAW")
         lines.append("  else")
-        lines.append(f"    echo '{{\"digest\":\"{index_digest(image, sha7)}\"}}'")
+        lines.append(f'    echo \'{{"digest":"{index_digest(image, sha7)}"}}\'')
         lines.append("  fi; exit 0")
         lines.append("fi")
     lines.append("exit 1")
@@ -124,7 +124,9 @@ def test_repin_fails_when_the_index_has_no_arm64_child(tmp_path: Path) -> None:
     refs = [(i, NEW[:7]) for i in IMAGES] + [("dev-health-go-dho", OLD8[:7])]
     _docker_stub(bindir, refs)
     stub = bindir / "docker"
-    stub.write_text(stub.read_text().replace('"architecture":"arm64"', '"architecture":"s390x"'))
+    stub.write_text(
+        stub.read_text().replace('"architecture":"arm64"', '"architecture":"s390x"')
+    )
     root = _root(tmp_path, arm64_digest("dev-health-go-dho", OLD8[:7]))
     before = (root / "_records" / "images.env").read_text()
     done = _run("bigboy-repin.sh", root, bindir, OLD8, NEW)
@@ -171,14 +173,16 @@ def test_the_cut_stops_before_migrate_when_the_repin_fails(tmp_path: Path) -> No
     (root / "_records" / f"bigboy-{ep._NEW[:8]}").mkdir()
     stub_bin = tmp_path / "stubbin"
     stub_bin.mkdir()
-    ep._docker_stub(stub_bin, routing_response=ep._routing_json("carried"), routing_rc=0)
+    ep._docker_stub(
+        stub_bin, routing_response=ep._routing_json("carried"), routing_rc=0
+    )
     ep._gh_stub(stub_bin)
     docker = stub_bin / "docker"
     wrong_old = "sha256:" + "9" * 64
     docker.write_text(
         docker.read_text().replace(
-            f"echo '{{\"digest\":\"{ep._OLD_DIGEST}\"}}'",
-            f"echo '{{\"digest\":\"{wrong_old}\"}}'",
+            f'echo \'{{"digest":"{ep._OLD_DIGEST}"}}\'',
+            f'echo \'{{"digest":"{wrong_old}"}}\'',
         )
     )
     proc = subprocess.run(

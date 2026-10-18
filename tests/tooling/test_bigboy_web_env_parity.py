@@ -158,7 +158,12 @@ def test_unclassified_trust_proxy_name_is_the_drift_cut_e_saw(tmp_path: Path) ->
 def test_social_sign_in_names_are_classified(tmp_path: Path) -> None:
     """CHAOS-10137 item 4: deploy #537/#538 added these four prod web names (CHAOS-9847)."""
     prod_names = {e["name"] for e in PROD["ops"]["web"]["extraEnv"]}
-    social = {"AUTH_GITHUB_ID", "AUTH_GITHUB_SECRET", "AUTH_GOOGLE_ID", "AUTH_GOOGLE_SECRET"}
+    social = {
+        "AUTH_GITHUB_ID",
+        "AUTH_GITHUB_SECRET",
+        "AUTH_GOOGLE_ID",
+        "AUTH_GOOGLE_SECRET",
+    }
     assert social <= prod_names
     mod = _mod()
     for name in social:

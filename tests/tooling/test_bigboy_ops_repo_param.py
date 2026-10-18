@@ -76,7 +76,9 @@ def _git_logger(tmp_path: Path) -> tuple[Path, Path]:
     bindir.mkdir()
     log = tmp_path / "git.log"
     wrapper = bindir / "git"
-    wrapper.write_text(f'#!/usr/bin/env bash\necho "$PWD :: $*" >> "{log}"\nexec {real} "$@"\n')
+    wrapper.write_text(
+        f'#!/usr/bin/env bash\necho "$PWD :: $*" >> "{log}"\nexec {real} "$@"\n'
+    )
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
     return bindir, log
 
@@ -133,7 +135,13 @@ def test_pg_posture_unparsable_manifest_exits_non_zero(tmp_path: Path) -> None:
     bindir, _ = _git_logger(tmp_path)
     out = tmp_path / "pg-expect.txt"
     done = subprocess.run(
-        ["python3", str(BIGBOY / "cut-contents-pg-api-posture.py"), "0" * 40, new, str(out)],
+        [
+            "python3",
+            str(BIGBOY / "cut-contents-pg-api-posture.py"),
+            "0" * 40,
+            new,
+            str(out),
+        ],
         capture_output=True,
         text=True,
         timeout=60,
@@ -149,7 +157,13 @@ def test_cut_contents_fails_when_a_posture_manifest_is_unparsable(
     repo, old, new = _clone(tmp_path)
     bindir, _ = _git_logger(tmp_path)
     done = subprocess.run(
-        ["bash", str(BIGBOY / "cut-contents.sh"), "0" * 40, new, str(tmp_path / "o.txt")],
+        [
+            "bash",
+            str(BIGBOY / "cut-contents.sh"),
+            "0" * 40,
+            new,
+            str(tmp_path / "o.txt"),
+        ],
         capture_output=True,
         text=True,
         timeout=60,
@@ -193,7 +207,13 @@ def test_without_the_variable_the_default_is_the_tools_own_checkout_never_the_op
 ) -> None:
     bindir, log = _git_logger(tmp_path)
     done = subprocess.run(
-        ["bash", str(BIGBOY / "cut-contents.sh"), "HEAD", "HEAD", str(tmp_path / "o.txt")],
+        [
+            "bash",
+            str(BIGBOY / "cut-contents.sh"),
+            "HEAD",
+            "HEAD",
+            str(tmp_path / "o.txt"),
+        ],
         capture_output=True,
         text=True,
         timeout=60,

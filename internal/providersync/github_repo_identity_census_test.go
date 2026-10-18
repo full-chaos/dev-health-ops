@@ -75,6 +75,28 @@ func TestEveryProductionGitHubRouteResolvesTheStoredRepositoryIdentity(t *testin
 		t.Fatalf("%d github datasets resolve the identity, want at least 13", selected)
 	}
 
+	// The Projects v2 fetcher reads the same stored identity, and consults it
+	// before it names any board item.
+	workItems, ok := githubCensusHandlers(t)["work-items"].(GitHubWorkItemsRouteHandler)
+	if !ok {
+		t.Fatalf("the github work-items route is %T, want GitHubWorkItemsRouteHandler", githubCensusHandlers(t)["work-items"])
+	}
+	fetcher, ok := workItems.Projects.(GitHubProjectV2Fetcher)
+	if !ok {
+		t.Fatalf("the github work-items route Projects is %T, want GitHubProjectV2Fetcher", workItems.Projects)
+	}
+	if reader, ok := fetcher.RepoIdentity.(GitLabRepoIdentityClickHouseReader); !ok || reader.Conn == nil || reader.Lease == nil || reader.Provider != "github" {
+		t.Errorf("the Projects v2 fetcher is selected without the github ClickHouse repos reader (%#v)", fetcher.RepoIdentity)
+	}
+	calls := 0
+	item := gitHubProjectV2ItemPayload{Content: gitHubProjectV2ContentPayload{Typename: "Issue", Number: 1}}
+	item.Content.Repository.NameWithOwner = "acme/api"
+	_, err := (GitHubProjectV2Fetcher{RepoIdentity: refusingGitHubRepoIdentityReader{calls: &calls}}).itemsByRepositoryIdentity(
+		context.Background(), nativeTestClaim("github", "work-items"), []gitHubProjectV2ItemPayload{item})
+	if !errors.Is(err, errCensusGitHubRepoIdentityRead) || calls == 0 {
+		t.Errorf("itemsByRepositoryIdentity did not consult its reader (calls=%d, err=%v)", calls, err)
+	}
+
 	// These mint from the name they are given: Projects v2 items arrive with the
 	// repository already named by its stored identity (itemsByRepositoryIdentity).
 	allowed := map[string]bool{

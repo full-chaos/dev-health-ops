@@ -172,8 +172,11 @@ type Executor struct {
 // organization and day, and returns its release. Two overlapping computes of a
 // day would both read the same newest computed_at in versionAfterStored and
 // write rows that tie (CHAOS-9945). The lock is held from before the first read
-// to after the last write; a wait ends with the context.
-type DayLocker func(ctx context.Context, orgID string, day time.Time) (release func(), err error)
+// to after the last write; a wait ends with the context. held is a context
+// derived from ctx that the locker cancels when it finds the lock gone (the
+// holder's transaction or connection ended mid-hold): the compute runs under it
+// and stops, instead of writing beside a second holder.
+type DayLocker func(ctx context.Context, orgID string, day time.Time) (held context.Context, release func(), err error)
 
 // SetDayLocker wires the per organization and day lock of the compute.
 func (executor *Executor) SetDayLocker(locker DayLocker) { executor.dayLocker = locker }
@@ -709,13 +712,14 @@ func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScop
 	}
 	if executor.dayLocker != nil {
 		started := executor.now()
-		release, err := executor.dayLocker(ctx, run.OrganizationID, run.TargetDay)
+		held, release, err := executor.dayLocker(ctx, run.OrganizationID, run.TargetDay)
 		if err != nil {
 			slog.WarnContext(ctx, "ic_finalize day lock not taken", "org_id", run.OrganizationID,
 				"day", run.TargetDay.Format("2006-01-02"), "waited", executor.now().Sub(started))
 			return 0, fmt.Errorf("icfinalize: lock the organization day: %w", err)
 		}
 		defer release()
+		ctx = held
 		slog.DebugContext(ctx, "ic_finalize day lock taken", "org_id", run.OrganizationID,
 			"day", run.TargetDay.Format("2006-01-02"), "waited", executor.now().Sub(started))
 	}

@@ -1031,7 +1031,7 @@ func dailyNativeFamilyRegistrations(
 	if clickhouseConnection != nil {
 		icFinalize := daily.NewICFinalizeExecutor(clickhouseConnection)
 		if locker, ok := store.(interface {
-			LockICFinalizeDay(context.Context, string, time.Time) (func(), error)
+			LockICFinalizeDay(context.Context, string, time.Time) (context.Context, func(), error)
 		}); ok {
 			icFinalize.SetDayLocker(locker.LockICFinalizeDay)
 		} else {

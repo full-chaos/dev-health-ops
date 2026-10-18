@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -1774,6 +1776,14 @@ const icFinalizeLockPoll = 250 * time.Millisecond
 // icFinalizeLockWarnAfter is how long a waiter waits before one Warn says so: a stuck lock is never silent at Info.
 const icFinalizeLockWarnAfter = 30 * time.Second
 
+// icFinalizeLockHeartbeat is how often the holder proves its lock transaction is still alive. It is a variable so a
+// test can shorten it. The heartbeat is also activity in the transaction, so a server idle_in_transaction_session_timeout
+// longer than this does not end the lock under a running compute.
+var icFinalizeLockHeartbeat = 5 * time.Second
+
+// ICFinalizeLockLostCounter counts holders that found their lock gone mid-hold.
+const ICFinalizeLockLostCounter = "ic_finalize_day_lock_lost_total"
+
 // ICFinalizeLockWaitHistogram records, per taken or abandoned lock, how long the waiter waited (attribute outcome).
 const ICFinalizeLockWaitHistogram = "ic_finalize_day_lock_wait_seconds"
 
@@ -1795,9 +1805,9 @@ func recordICFinalizeLockWait(ctx context.Context, started time.Time, outcome st
 // when the lock is taken by another, and retries after icFinalizeLockPoll, so waiters of one key cannot exhaust a small
 // pool. The wait ends with ctx. Releasing rolls the holder's transaction back, which frees the lock; a connection that
 // dies frees it as well.
-func (store *PostgresStore) LockICFinalizeDay(ctx context.Context, organizationID string, day time.Time) (func(), error) {
+func (store *PostgresStore) LockICFinalizeDay(ctx context.Context, organizationID string, day time.Time) (context.Context, func(), error) {
 	if !store.valid() {
-		return nil, ErrUnavailable
+		return nil, nil, ErrUnavailable
 	}
 	key := "ic_finalize_day:" + organizationID + ":" + day.UTC().Format("2006-01-02")
 	started := time.Now()
@@ -1806,23 +1816,18 @@ func (store *PostgresStore) LockICFinalizeDay(ctx context.Context, organizationI
 		tx, err := store.pool.Begin(ctx)
 		if err != nil {
 			recordICFinalizeLockWait(ctx, started, "error")
-			return nil, ErrUnavailable
+			return nil, nil, ErrUnavailable
 		}
 		var taken bool
 		if err := tx.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))", key).Scan(&taken); err != nil {
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 			recordICFinalizeLockWait(ctx, started, "error")
-			return nil, ErrUnavailable
+			return nil, nil, ErrUnavailable
 		}
 		if taken {
 			recordICFinalizeLockWait(ctx, started, "taken")
-			return func() {
-				unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-				defer cancel()
-				if err := tx.Rollback(unlockCtx); err != nil {
-					slog.Error("ic_finalize day lock release failed; the connection ends the lock", "organization_id", organizationID, "key", key)
-				}
-			}, nil
+			held, release := holdICFinalizeLock(ctx, tx, organizationID, key)
+			return held, release, nil
 		}
 		_ = tx.Rollback(context.WithoutCancel(ctx))
 		if waited := time.Since(started); !warned && waited >= icFinalizeLockWarnAfter {
@@ -1833,8 +1838,60 @@ func (store *PostgresStore) LockICFinalizeDay(ctx context.Context, organizationI
 		select {
 		case <-ctx.Done():
 			recordICFinalizeLockWait(ctx, started, "abandoned")
-			return nil, ErrUnavailable
+			return nil, nil, ErrUnavailable
 		case <-time.After(icFinalizeLockPoll):
 		}
+	}
+}
+
+// holdICFinalizeLock keeps the lock transaction alive and watches it. Every icFinalizeLockHeartbeat it runs a
+// statement in the transaction; when that fails (the server ended the transaction, PgBouncer reset the server
+// connection, the connection was lost) the lock is gone, so it Warns, counts, and cancels the returned context: the
+// compute stops before a second holder can work beside it. The window between the loss and the next heartbeat is at most
+// one interval. release stops the heartbeat first (a transaction is not safe for concurrent use), then rolls back.
+func holdICFinalizeLock(ctx context.Context, tx pgx.Tx, organizationID, key string) (context.Context, func()) {
+	held, cancel := context.WithCancel(ctx)
+	stop := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		ticker := time.NewTicker(icFinalizeLockHeartbeat)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				beat, cancelBeat := context.WithTimeout(context.WithoutCancel(ctx), icFinalizeLockHeartbeat)
+				_, err := tx.Exec(beat, "SELECT 1")
+				cancelBeat()
+				if err != nil {
+					slog.ErrorContext(ctx, "ic_finalize day lock lost mid-hold; the compute is cancelled",
+						"organization_id", organizationID, "key", key, "error_class", fmt.Sprintf("%T", err))
+					if counter, counterErr := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily").Int64Counter(
+						ICFinalizeLockLostCounter, metric.WithUnit("{lock}"),
+						metric.WithDescription("ic_finalize organization-day locks found gone while held (the holder's transaction or connection ended)")); counterErr == nil {
+						counter.Add(context.WithoutCancel(ctx), 1)
+					}
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	var once sync.Once
+	return held, func() {
+		once.Do(func() {
+			close(stop)
+			<-finished
+			cancel()
+			unlockCtx, cancelUnlock := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancelUnlock()
+			if err := tx.Rollback(unlockCtx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+				slog.Error("ic_finalize day lock release failed; the connection ends the lock", "organization_id", organizationID, "key", key)
+			}
+		})
 	}
 }

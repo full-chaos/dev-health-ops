@@ -166,12 +166,12 @@ func TestIcFinalizeHoldsTheDayLockAroundTheCompute(t *testing.T) {
 	conn := &touchedConn{}
 	executor := NewExecutor(conn)
 	var events []string
-	executor.SetDayLocker(func(_ context.Context, orgID string, lockedDay time.Time) (func(), error) {
+	executor.SetDayLocker(func(lockCtx context.Context, orgID string, lockedDay time.Time) (context.Context, func(), error) {
 		if orgID != "org" || !lockedDay.Equal(day) || conn.calls != 0 {
 			t.Fatalf("lock for %q %s taken after %d ClickHouse calls", orgID, lockedDay, conn.calls)
 		}
 		events = append(events, "lock")
-		return func() { events = append(events, "release") }, nil
+		return lockCtx, func() { events = append(events, "release") }, nil
 	})
 	if _, err := executor.ComputeFinalizeFamily(context.Background(), RunScope{OrganizationID: "org", TargetDay: day}); err == nil {
 		t.Fatal("the touched connection must fail the compute")
@@ -182,8 +182,32 @@ func TestIcFinalizeHoldsTheDayLockAroundTheCompute(t *testing.T) {
 
 	refused := &touchedConn{}
 	failing := NewExecutor(refused)
-	failing.SetDayLocker(func(context.Context, string, time.Time) (func(), error) { return nil, errors.New("lock unavailable") })
+	failing.SetDayLocker(func(context.Context, string, time.Time) (context.Context, func(), error) {
+		return nil, nil, errors.New("lock unavailable")
+	})
 	if _, err := failing.ComputeFinalizeFamily(context.Background(), RunScope{OrganizationID: "org", TargetDay: day}); err == nil || refused.calls != 0 {
 		t.Fatalf("err = %v, ClickHouse calls = %d; want an error and no call when the lock is refused", err, refused.calls)
+	}
+}
+
+// The compute runs under the context the locker returns, so a lock found gone mid-hold cancels the compute.
+func TestIcFinalizeRunsUnderTheHeldContextOfTheDayLock(t *testing.T) {
+	day := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
+	executor := NewExecutor(&touchedConn{})
+	executor.SetDayLocker(func(lockCtx context.Context, _ string, _ time.Time) (context.Context, func(), error) {
+		held, cancel := context.WithCancel(lockCtx)
+		cancel()
+		return held, func() {}, nil
+	})
+	var seen error
+	executor.SetTeamMapper(func(ctx context.Context, _ string, _ time.Time) (PersonTeams, TeamNames, error) {
+		seen = ctx.Err()
+		return nil, nil, errors.New("stop")
+	})
+	if _, err := executor.ComputeFinalizeFamily(context.Background(), RunScope{OrganizationID: "org", TargetDay: day}); err == nil {
+		t.Fatal("the mapper error must fail the compute")
+	}
+	if !errors.Is(seen, context.Canceled) {
+		t.Fatalf("the compute ran under a live context (%v), want the held context that the lock cancelled", seen)
 	}
 }

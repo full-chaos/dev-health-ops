@@ -46,7 +46,7 @@ func TestICFinalizeDayLockWaitersDoNotExhaustASmallPool(t *testing.T) {
 	day := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
 	const orgA, orgB = "00000000-0000-4000-8000-00000000a001", "00000000-0000-4000-8000-00000000b001"
 
-	releaseA, err := store.LockICFinalizeDay(ctx, orgA, day)
+	_, releaseA, err := store.LockICFinalizeDay(ctx, orgA, day)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ WHERE l.locktype = 'advisory' AND l.granted AND a.pid <> pg_backend_pid()`).Scan
 	waiterCtx, stopWaiter := context.WithCancel(ctx)
 	waiterDone := make(chan error, 1)
 	go func() {
-		release, err := store.LockICFinalizeDay(waiterCtx, orgA, day)
+		_, release, err := store.LockICFinalizeDay(waiterCtx, orgA, day)
 		if err == nil {
 			release()
 		}
@@ -75,7 +75,7 @@ WHERE l.locktype = 'advisory' AND l.granted AND a.pid <> pg_backend_pid()`).Scan
 
 	otherCtx, otherCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer otherCancel()
-	releaseB, err := store.LockICFinalizeDay(otherCtx, orgB, day)
+	_, releaseB, err := store.LockICFinalizeDay(otherCtx, orgB, day)
 	if err != nil {
 		t.Fatalf("another organization could not take its lock while a same-key waiter waited on a pool of two: %v", err)
 	}
@@ -86,7 +86,7 @@ WHERE l.locktype = 'advisory' AND l.granted AND a.pid <> pg_backend_pid()`).Scan
 		t.Fatal("the cancelled waiter must fail with the context")
 	}
 	releaseA()
-	again, err := store.LockICFinalizeDay(ctx, orgA, day)
+	_, again, err := store.LockICFinalizeDay(ctx, orgA, day)
 	if err != nil {
 		t.Fatalf("the lock was not released: %v", err)
 	}
@@ -111,4 +111,77 @@ WHERE l.locktype = 'advisory' AND l.granted AND a.pid <> pg_backend_pid()`).Scan
 	if outcomes["taken"] < 3 || outcomes["abandoned"] != 1 {
 		t.Fatalf("wait histogram outcomes = %v, want taken>=3 and abandoned=1", outcomes)
 	}
+}
+
+// The lock is a transaction: if the server ends it mid-hold (a lost connection, an idle_in_transaction_session_timeout,
+// a pooler reset) the holder must find out and stop its compute before a second holder starts (CHAOS-9945).
+func TestICFinalizeDayLockHolderDetectsALostLockAndCancelsItsContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	reader := sdkmetric.NewManualReader()
+	previousProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	t.Cleanup(func() { otel.SetMeterProvider(previousProvider) })
+	previousBeat := icFinalizeLockHeartbeat
+	icFinalizeLockHeartbeat = 200 * time.Millisecond
+	t.Cleanup(func() { icFinalizeLockHeartbeat = previousBeat })
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
+	const org = "00000000-0000-4000-8000-00000000c001"
+	held, release, err := store.LockICFinalizeDay(ctx, org, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.Err() != nil {
+		t.Fatal("the held context is cancelled before anything went wrong")
+	}
+	var terminated int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM (
+  SELECT pg_terminate_backend(l.pid) FROM pg_locks l
+  WHERE l.locktype = 'advisory' AND l.granted AND l.pid <> pg_backend_pid()) ended`).Scan(&terminated); err != nil || terminated != 1 {
+		t.Fatalf("terminated %d holder backends, err=%v; want 1", terminated, err)
+	}
+	select {
+	case <-held.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the holder did not notice its lock was gone")
+	}
+	release()
+	var resource metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &resource); err != nil {
+		t.Fatal(err)
+	}
+	var lost int64
+	for _, scope := range resource.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name == ICFinalizeLockLostCounter {
+				for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
+					lost += point.Value
+				}
+			}
+		}
+	}
+	if lost != 1 {
+		t.Fatalf("%s = %d, want 1", ICFinalizeLockLostCounter, lost)
+	}
+	_, again, err := store.LockICFinalizeDay(ctx, org, day)
+	if err != nil {
+		t.Fatalf("a new holder could not take the lock after the old one was lost: %v", err)
+	}
+	again()
 }

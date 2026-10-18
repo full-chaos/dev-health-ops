@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func dayLockerForTest(t *testing.T, ctx context.Context) func(context.Context, string, time.Time) (func(), error) {
+func dayLockerForTest(t *testing.T, ctx context.Context) func(context.Context, string, time.Time) (context.Context, func(), error) {
 	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -30,6 +30,6 @@ func dayLockerForTest(t *testing.T, ctx context.Context) func(context.Context, s
 	return store.LockICFinalizeDay
 }
 
-func setDayLockerForTest(executor *ICFinalizeExecutor, locker func(context.Context, string, time.Time) (func(), error)) {
+func setDayLockerForTest(executor *ICFinalizeExecutor, locker func(context.Context, string, time.Time) (context.Context, func(), error)) {
 	executor.SetDayLocker(locker)
 }

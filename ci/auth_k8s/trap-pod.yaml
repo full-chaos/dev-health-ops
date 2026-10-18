@@ -12,6 +12,7 @@ spec:
     - name: auth-service
       image: ${LOCAL_SVC}
       imagePullPolicy: Never
+      securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
       args:
         - --signing-key-file=/mnt/key/signing-key.pem
         - --signing-key-id=trap

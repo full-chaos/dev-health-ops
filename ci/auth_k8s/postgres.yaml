@@ -11,6 +11,12 @@ spec:
         - name: postgres
           image: ${LOCAL_PG}
           imagePullPolicy: Never
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile: {type: RuntimeDefault}
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
           env:
             - {name: POSTGRES_PASSWORD, value: "${PG_PASSWORD}"}
             - {name: PGDATA, value: /var/lib/postgresql/pgdata}

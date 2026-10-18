@@ -1,6 +1,8 @@
 package providersync
 
 import (
+	"context"
+	"net/http"
 	"sort"
 	"strings"
 	"testing"
@@ -105,5 +107,25 @@ func assertRouteRequestsAreLabelled(t *testing.T, provider, dataset string, ledg
 		if !seen[family] {
 			t.Errorf("%s/%s: no request was counted under route family %s (saw %v)", provider, dataset, family, seen)
 		}
+	}
+}
+
+// A route's family label keeps the dimension an outer account set: the label
+// names the family, the wire or the outer account names the dimension.
+func TestBudgetAccountKeepsTheDimensionOfAnOuterAccount(t *testing.T) {
+	doer := jiraAtlassianDoerFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: http.NoBody, Request: request}, nil
+	})
+	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client.Ledger = providerfoundation.NewRequestLedger()
+	ctx := budgetAccount(providerfoundation.WithRequestAccount(context.Background(), "files", "contents_blob"), "issues")
+	response, err := client.Do(ctx, http.MethodGet, "/rest/api/3/search", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	entries, _ := client.Ledger.Snapshot()
+	if len(entries) != 1 || entries[0].RouteFamily != "issues" || entries[0].Dimension != "contents_blob" {
+		t.Fatalf("ledger = %v, want issues/contents_blob", entries)
 	}
 }

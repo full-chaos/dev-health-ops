@@ -122,29 +122,57 @@ type hopRecorderKey struct{}
 type hopRecorder struct {
 	ledger *RequestLedger
 	key    LedgerKey
+	mu     sync.Mutex
+	seen   map[*http.Request]struct{}
 }
 
-// withHopRecorder carries the ledger and the account of an unauthenticated
-// request in its context. net/http gives a followed redirect the context of the
-// request it follows, so the redirect guard counts the hop under the same
-// family and dimension. (The authenticated call counts its hops in its own
-// per-call guard.)
-func (c *HTTPClient) withHopRecorder(ctx context.Context, path string) context.Context {
+// newHopRecorder is the recorder of one call: the ledger and the account its
+// redirect hops are counted under (nil when the client has no ledger).
+func (c *HTTPClient) newHopRecorder(ctx context.Context, path string) *hopRecorder {
 	if c.Ledger == nil {
+		return nil
+	}
+	return &hopRecorder{ledger: c.Ledger, key: c.ledgerKey(ctx, path), seen: map[*http.Request]struct{}{}}
+}
+
+// record counts one followed redirect hop as a wire request, once: the request
+// of a hop passes through every redirect guard of the chain, and each may ask.
+func (r *hopRecorder) record(request *http.Request) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	_, counted := r.seen[request]
+	r.seen[request] = struct{}{}
+	r.mu.Unlock()
+	if !counted {
+		r.ledger.Record(r.key)
+	}
+}
+
+// withHopRecorder carries the recorder in the request context. net/http gives
+// a followed redirect the context of the request it follows, so a guard
+// reached through a route's opaque decorator counts the hop under the same
+// family and dimension. A guard the per-call chain installs asks the recorder
+// directly, so a decorator that drops the context does not lose the hop.
+func withHopRecorder(ctx context.Context, recorder *hopRecorder) context.Context {
+	if recorder == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, hopRecorderKey{}, hopRecorder{ledger: c.Ledger, key: c.ledgerKey(ctx, path)})
+	return context.WithValue(ctx, hopRecorderKey{}, recorder)
 }
 
-// recordRedirectHop counts one followed redirect hop as a wire request.
+// recordRedirectHop counts the hop of a redirect request through the recorder
+// its context carries.
 func recordRedirectHop(request *http.Request) {
-	if recorder, ok := request.Context().Value(hopRecorderKey{}).(hopRecorder); ok {
-		recorder.ledger.Record(recorder.key)
+	if recorder, ok := request.Context().Value(hopRecorderKey{}).(*hopRecorder); ok {
+		recorder.record(request)
 	}
 }
 
 // WithRequestFamily labels the requests made with ctx with a route family and
 // leaves the dimension an outer account set.
 func WithRequestFamily(ctx context.Context, routeFamily string) context.Context {
-	return WithRequestAccount(ctx, routeFamily, "")
+	account, _ := ctx.Value(requestAccountKey{}).(requestAccount)
+	return WithRequestAccount(ctx, routeFamily, account.dimension)
 }

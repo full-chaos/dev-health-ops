@@ -233,6 +233,7 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 			state.left.Store(true)
 			return http.ErrUseLastResponse
 		}
+		recordRedirectHop(req)
 		return nil
 	}
 	return &guarded
@@ -245,7 +246,7 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 // at the first hop that leaves target's origin (the original policy still
 // decides every same-origin hop) and sets the returned flag. Any other Doer is
 // returned as is (a decorator is rebuilt around its guarded inner doer); responseLeftOrigin still detects a redirect it followed.
-func originGuardedDoer(doer HTTPDoer, target *url.URL, hop func()) (HTTPDoer, *atomic.Bool) {
+func originGuardedDoer(doer HTTPDoer, target *url.URL, hop func(*http.Request)) (HTTPDoer, *atomic.Bool) {
 	if wrapper, ok := doer.(httpguard.Wrapper); ok { // a decorator cannot hide a following client from the origin guard
 		inner, left := originGuardedDoer(wrapper.Unwrap(), target, hop)
 		if rebuilt, ok := wrapper.Rewrap(inner).(HTTPDoer); ok {
@@ -275,7 +276,7 @@ func originGuardedDoer(doer HTTPDoer, target *url.URL, hop func()) (HTTPDoer, *a
 			return http.ErrUseLastResponse
 		}
 		if hop != nil {
-			hop()
+			hop(req)
 		}
 		return nil
 	}
@@ -385,7 +386,10 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			}
 		}
 		callLeft := new(atomic.Bool)
-		request, err := http.NewRequestWithContext(context.WithValue(ctx, originKey{}, &originState{target: target, left: callLeft}), method, target.String(), bytes.NewReader(requestBody))
+		// Each followed redirect hop counts as one more wire request: through the context for a guard behind a route's
+		// decorator, and through the per-call guard for a decorator that drops the context (a hop is counted once).
+		recorder := c.newHopRecorder(ctx, target.Path)
+		request, err := http.NewRequestWithContext(withHopRecorder(context.WithValue(ctx, originKey{}, &originState{target: target, left: callLeft}), recorder), method, target.String(), bytes.NewReader(requestBody))
 		if err != nil {
 			return nil, ErrCredentialInvalid
 		}
@@ -393,14 +397,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			return nil, err
 		}
 		var requestErr error
-		// The per-call guard counts each redirect hop it follows as one more wire request, whatever the decorators
-		// around the client do with the request context.
-		var hop func()
-		if c.Ledger != nil {
-			key := c.ledgerKey(ctx, target.Path)
-			hop = func() { c.Ledger.Record(key) }
-		}
-		guarded, leftOrigin := originGuardedDoer(c.Doer, target, hop)
+		guarded, leftOrigin := originGuardedDoer(c.Doer, target, recorder.record)
 		c.recordWireRequest(ctx, target.Path)
 		response, requestErr = guarded.Do(request)
 		if callLeft.Load() || leftOrigin.Load() || (requestErr == nil && responseLeftOrigin(response, target) && !strippedOfCredentials(response.Request)) {
@@ -536,7 +533,7 @@ func (c *HTTPClient) DoUnauthenticated(
 			err = errors.Join(err, releaseErr)
 		}()
 	}
-	request, requestErr := http.NewRequestWithContext(c.withHopRecorder(ctx, target.Path), method, target.String(), nil)
+	request, requestErr := http.NewRequestWithContext(withHopRecorder(ctx, c.newHopRecorder(ctx, target.Path)), method, target.String(), nil)
 	if requestErr != nil {
 		return nil, ErrCredentialInvalid
 	}

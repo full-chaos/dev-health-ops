@@ -257,6 +257,30 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 		}
 	})
 
+	t.Run("revoked_at and revoked_reason are all-or-none (a stored row must be projectable)", func(t *testing.T) {
+		// The wire entry requires both members when status is revoked and forbids
+		// both otherwise; status is derived from revoked_at alone, so a row with
+		// only one of the pair has no valid projection (round 1 executed both).
+		const id = "00000000-0000-4000-8000-0000000000f5"
+		if err := insertCredential(ctx, env, id, credPrincipal, ``, ``); err != nil {
+			t.Fatal(err)
+		}
+		mustFail(t, "reason without revoked_at", commitCredential(ctx, env,
+			`UPDATE auth.credential_registry SET revoked_reason = 'compromised' WHERE id = $1`, id),
+			"credential_registry_revoked_pair")
+		mustFail(t, "revoked_at without a reason", commitCredential(ctx, env,
+			`UPDATE auth.credential_registry SET revoked_at = now() WHERE id = $1`, id),
+			"credential_registry_revoked_pair")
+		mustFail(t, "an insert carrying only a reason", commitCredential(ctx, env,
+			`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, revoked_reason)
+			 VALUES ('00000000-0000-4000-8000-0000000000f6', $1, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef', 'compromised')`, credPrincipal),
+			"credential_registry_revoked_pair")
+		if err := commitCredential(ctx, env,
+			`UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = 'compromised' WHERE id = $1`, id); err != nil {
+			t.Fatalf("the pair set together was refused: %v", err)
+		}
+	})
+
 	t.Run("class and display prefix have the wire shapes (a stored row must be projectable)", func(t *testing.T) {
 		// Round 2 of the wire contract executed this: the table accepted a class
 		// outside the vocabulary and an overlong, space-bearing prefix, rows the

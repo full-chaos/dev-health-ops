@@ -123,7 +123,7 @@ func revisionsDatabase(t *testing.T) (uri string, admin func(string)) {
 
 // revisionsPythonBuild is the build whose Python CLI (Alembic) answered the scenarios: a build that still
 // carried the Python CLI.
-const revisionsPythonBuild = "055816fd2325f6c0dda555e46ac3ff2d0a81a796"
+const revisionsPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 
 // revisionsPythonProgram is the entry point the producer runs: the real dev-hops CLI.
 const revisionsPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"

@@ -15,7 +15,7 @@ import (
 
 // statesPythonBuild is the build whose Python answered the upgrade, walk and derivation oracles of this package
 // (the same build as the downgrade golden).
-const statesPythonBuild = "055816fd2325f6c0dda555e46ac3ff2d0a81a796"
+const statesPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 
 // oldScriptHeadsSHA256 pins testdata/golden/old_script_heads.json (the record verb rewrites it).
 const oldScriptHeadsSHA256 = "7c75c62e6d780324797eb7b5d57fcf31a78383fb85bd8dd50beea1375e26d8cd"

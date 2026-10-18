@@ -30,7 +30,7 @@ import (
 
 // downgradePythonBuild is the build whose Python `dev-hops migrate postgres downgrade` (real Alembic) answered
 // the scenarios: a build that still carried the Python CLI.
-const downgradePythonBuild = "055816fd2325f6c0dda555e46ac3ff2d0a81a796"
+const downgradePythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 
 // downgradePythonProgram is the entry point the producer runs: the real dev-hops CLI.
 const downgradePythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"

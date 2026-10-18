@@ -3,11 +3,13 @@
 package providersync
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -18,6 +20,18 @@ import (
 func seedImportedTeam(f carryFixture, provider, id string) {
 	f.t.Helper()
 	f.team(provider, id, carryPtr(id), nil, 1, carryOld, nil, nil)
+}
+
+// seedCatalogTeams stores a teams row for each id, as an earlier teams run of
+// the catalog did: a run with teams off writes links only for imported teams.
+func seedCatalogTeams(ctx context.Context, t *testing.T, conn driver.Conn, orgID, provider string, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, org_id, provider, native_team_key, is_active, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, 1, '2026-01-01 00:00:00.000000')`, id, uuid.New(), id, orgID, provider, id); err != nil {
+			t.Fatalf("seed the teams row of %s: %v", id, err)
+		}
+	}
 }
 
 func sortedTeamKeys[V any](values map[string]V) []string {
@@ -82,7 +96,13 @@ func TestAGitLabRunWithTeamsOffWritesNoLinkOfAnUnimportedTeam(t *testing.T) {
 	fake := newGitLabSnapshotServer(t)
 	fake.set("", "", []string{"org/team-a"}, map[string][]string{"org": {"org/root-svc"}, "org/team-a": {"org/team-a/api"}})
 	seedImportedTeam(f, "gitlab", "gl:org")
-	if _, err := gitlabSnapshotRun(ctx, t, conn, f.orgID, fake, TeamCatalogSelections{Projects: true}, false, carryAt); err != nil {
+	// Not gitlabSnapshotRun: that harness imports every group of the fake first.
+	collector := GitLabTeamCatalogCollector{Sink: GitLabTeamCatalogClickHouseEffects{
+		Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	}, ScopeCensus: staticScopeCensus{}}
+	if _, err := collector.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: f.orgID, SyncRunID: "run", IntegrationID: "integration-a"},
+		providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}},
+		gitlabTeamCatalogTestClient(t, fake.URL), TeamCatalogSelections{Projects: true}, carryAt); err != nil {
 		t.Fatal(err)
 	}
 	if got := openProjectOwnershipTeams(f, "gitlab"); !equalTeamLists(got, []string{"gl:org"}) {
@@ -97,7 +117,9 @@ func TestALinearRunWithTeamsOffWritesNoLinkOfAnUnimportedTeam(t *testing.T) {
 		`{"id":"team-raw-eng","key":"ENG","name":"Eng","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},` +
 		`{"id":"team-raw-ops","key":"OPS","name":"Ops","members":{"nodes":[{"id":"user-2","name":"Bob","email":"bob@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],` +
 		`"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`
+	// One cycles page per team, then the projects.
 	rest := []string{
+		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 		`{"data":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}

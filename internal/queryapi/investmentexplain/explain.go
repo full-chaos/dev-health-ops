@@ -386,6 +386,43 @@ func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, conf
 	}
 }
 
+// explainRetrySource is the llm_token_usage source of the one retry call, so retry spend is countable apart
+// from first-call spend.
+const explainRetrySource = "investment_mix_explain_retry"
+
+// recordExplainTokenUsage writes one llm_token_usage row for a completed provider call. Best-effort: a write
+// failure must not fail the request, matching _persist_investment_mix_token_usage's swallow-everything contract
+// (a real 2s asyncio.wait_for timeout belongs at the CALLER's goroutine/context boundary, not inside this
+// synchronous aggregation function).
+func recordExplainTokenUsage(ctx context.Context, writer *CacheWriter, opts ExplainInvestmentMixOptions, source, resolvedProvider, resolvedModel string, completion categorize.CompletionResult) {
+	if opts.LLMProvider == "mock" || writer == nil {
+		return
+	}
+	completionModel := completion.Model
+	if completionModel == "" {
+		completionModel = resolvedModel
+	}
+	if record, ok := BuildLLMTokenUsageRecord(TokenUsageInput{
+		OrgID:        opts.OrgID,
+		Source:       source,
+		Provider:     resolvedProvider,
+		Model:        &completionModel,
+		InputTokens:  completion.InputTokens,
+		OutputTokens: completion.OutputTokens,
+	}, opts.Now); ok {
+		recordWriteFailure(ctx, writeTokenUsage, opts.OrgID, writer.WriteLLMTokenUsage(ctx, record))
+	}
+}
+
+// retryCorrectiveNote is appended to the first prompt for the one retry. It names the rejected rule and path
+// and restates the contract the validator enforces, so the model corrects the class it got wrong.
+func retryCorrectiveNote(rejected ParseResult) string {
+	return fmt.Sprintf("\n\nYour previous answer was rejected by the validator (rule: %s, path: %s). "+
+		"Answer again with exactly one JSON object that follows every rule above. "+
+		"Use only the canonical theme and subcategory keys from the input, and the verbs appears, leans or suggests.",
+		rejected.ReasonRule, rejected.ReasonPath)
+}
+
 // llmOutputRejectionLogHeadRunes caps how much of a rejected LLM
 // completion's raw text logRejectedExplainOutput will echo into a log
 // line -- a REDACTED head, not the whole completion (investment-mix
@@ -743,27 +780,7 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 		return InvestmentMixExplanation{}, err
 	}
 
-	if opts.LLMProvider != "mock" && writer != nil {
-		completionModel := completion.Model
-		if completionModel == "" {
-			completionModel = resolvedModel
-		}
-		if record, ok := BuildLLMTokenUsageRecord(TokenUsageInput{
-			OrgID:        opts.OrgID,
-			Source:       "investment_mix_explain",
-			Provider:     resolvedProvider,
-			Model:        &completionModel,
-			InputTokens:  completion.InputTokens,
-			OutputTokens: completion.OutputTokens,
-		}, opts.Now); ok {
-			// Best-effort: a write failure here must not fail the request,
-			// matching _persist_investment_mix_token_usage's own
-			// swallow-everything contract (a real 2s asyncio.wait_for
-			// timeout belongs at the CALLER's goroutine/context boundary,
-			// not inside this synchronous aggregation function).
-			recordWriteFailure(ctx, writeTokenUsage, opts.OrgID, writer.WriteLLMTokenUsage(ctx, record))
-		}
-	}
+	recordExplainTokenUsage(ctx, writer, opts, "investment_mix_explain", resolvedProvider, resolvedModel, completion)
 
 	confidenceLevel := determineConfidenceLevel(qualityMean, qualityStddev)
 	themeSharesPct := sharesPct(themeDistribution.Items(), totalEffort)
@@ -777,19 +794,39 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 	// to re-impose SOME order, and picked the wrong one -- caught by codex
 	// round 1 (P1). See Confidence.BandMix's own doc comment (types.go)
 	// for why this must stay order-preserving end to end.
-	parseResult := ParseInvestmentMixResponse(completion.Text, ParseOptions{
-		ThemeSharesPct:       themeSharesPct,
-		SubcategorySharesPct: subcategorySharesPct,
-		ShareNoun:            "work",
-		FallbackLevel:        confidenceLevel,
-		FallbackBandMix:      bandCounts,
-		FallbackDrivers:      qualityDrivers,
-		FallbackMean:         qualityMean,
-		FallbackStddev:       qualityStddev,
-	})
+	parseCompletion := func(text string) ParseResult {
+		return ParseInvestmentMixResponse(text, ParseOptions{
+			ThemeSharesPct:       themeSharesPct,
+			SubcategorySharesPct: subcategorySharesPct,
+			ShareNoun:            "work",
+			FallbackLevel:        confidenceLevel,
+			FallbackBandMix:      bandCounts,
+			FallbackDrivers:      qualityDrivers,
+			FallbackMean:         qualityMean,
+			FallbackStddev:       qualityStddev,
+		})
+	}
+	parseResult := parseCompletion(completion.Text)
 
 	if parseResult.Output == nil {
 		logRejectedExplainOutput(ctx, parseResult, resolvedProvider, resolvedModel, completion)
+		firstRule := parseResult.ReasonRule
+		retryCompletion, retryProvider, retryModel, retryErr := complete(ctx, opts.LLMProvider, opts.LLMModel, fullPrompt+retryCorrectiveNote(parseResult))
+		if retryErr != nil {
+			slog.InfoContext(ctx, "query_api.investment_mix_explain.retry", "org_id", opts.OrgID, "outcome", "retry_call_failed", "reason_rule", firstRule, "error", retryErr.Error())
+		} else {
+			recordExplainTokenUsage(ctx, writer, opts, explainRetrySource, retryProvider, retryModel, retryCompletion)
+			parseResult = parseCompletion(retryCompletion.Text)
+			outcome := "accepted"
+			if parseResult.Output == nil {
+				outcome = "rejected_after_retry"
+				logRejectedExplainOutput(ctx, parseResult, retryProvider, retryModel, retryCompletion)
+			}
+			slog.InfoContext(ctx, "query_api.investment_mix_explain.retry", "org_id", opts.OrgID, "outcome", outcome, "reason_rule", firstRule, "retry_reason_rule", parseResult.ReasonRule)
+		}
+	}
+
+	if parseResult.Output == nil {
 		fallback := invalidLLMOutputExplanation(topThemes, totalEffort, confidenceLevel, qualityMean, qualityStddev, bandCounts, qualityDrivers, "work")
 		annotateFindings(&fallback, opts.effectiveMeasure(), themeDistribution, subcategoryDistribution)
 		applySizing(&fallback, sizing)

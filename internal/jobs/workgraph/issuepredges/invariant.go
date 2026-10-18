@@ -21,6 +21,12 @@ const (
 	// FallbackBesideNativeGauge is set on every check, 0 included, with the
 	// attribute organization_id, so an alert can watch for a value above 0.
 	FallbackBesideNativeGauge = "workgraph_issue_pr_fallback_beside_native_rows"
+	// The same check, one gauge per side, so an alert from metrics alone names
+	// which side breached. A row can be on more than one side, so the sides do
+	// not add up to the total.
+	FallbackBesideNativePullRequestGauge = "workgraph_issue_pr_fallback_beside_native_pull_request_rows"
+	FallbackBesideNativeIssueGauge       = "workgraph_issue_pr_fallback_beside_native_issue_rows"
+	FallbackPullRequestIssueSideGauge    = "workgraph_issue_pr_fallback_pull_request_issue_side_rows"
 )
 
 // InvariantOutcome is one check of the native-first rule for one organization.
@@ -60,14 +66,22 @@ func (service *Service) CheckFallbackInvariant(ctx context.Context, orgID string
 }
 
 func reportFallbackInvariant(ctx context.Context, logger *slog.Logger, outcome InvariantOutcome) {
-	gauge, err := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issuepredges").Int64Gauge(
-		FallbackBesideNativeGauge,
-		metric.WithUnit("{row}"),
-		metric.WithDescription("explicit_text and heuristic work_graph_issue_pr rows the native-first rule forbids (their pull request or issue has a native link, or their issue side is a pull request), per organization, after a work-graph build. Must be 0."))
-	if err == nil {
-		gauge.Record(ctx, int64(outcome.Beside.Total), metric.WithAttributes(attribute.String("organization_id", outcome.OrganizationID)))
-	} else {
-		logger.Error("issue-pr fallback invariant: gauge unavailable", slog.Any("error", err))
+	meter := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issuepredges")
+	for _, gauge := range []struct {
+		name, description string
+		value             int
+	}{
+		{FallbackBesideNativeGauge, "explicit_text and heuristic work_graph_issue_pr rows the native-first rule forbids (their pull request or issue has a native link, or their issue side is a pull request), per organization, after a work-graph build. Must be 0.", outcome.Beside.Total},
+		{FallbackBesideNativePullRequestGauge, "explicit_text and heuristic work_graph_issue_pr rows whose pull request has a native link, per organization, after a work-graph build. Must be 0.", outcome.Beside.ByPullRequest},
+		{FallbackBesideNativeIssueGauge, "explicit_text and heuristic work_graph_issue_pr rows whose issue has a native link, per organization, after a work-graph build. Must be 0.", outcome.Beside.ByIssue},
+		{FallbackPullRequestIssueSideGauge, "explicit_text and heuristic work_graph_issue_pr rows whose issue side is a pull request, per organization, after a work-graph build. Must be 0.", outcome.Beside.PullRequestIssueSide},
+	} {
+		instrument, err := meter.Int64Gauge(gauge.name, metric.WithUnit("{row}"), metric.WithDescription(gauge.description))
+		if err != nil {
+			logger.Error("issue-pr fallback invariant: gauge unavailable", slog.String("gauge", gauge.name), slog.Any("error", err))
+			continue
+		}
+		instrument.Record(ctx, int64(gauge.value), metric.WithAttributes(attribute.String("organization_id", outcome.OrganizationID)))
 	}
 	attrs := []any{
 		slog.String("organization_id", outcome.OrganizationID),

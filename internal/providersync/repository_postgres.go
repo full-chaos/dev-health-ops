@@ -1305,6 +1305,9 @@ const workItemsCanonicalDataset = "work-items"
 func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) {
 	savepoint, err := tx.Begin(ctx)
 	if err != nil {
+		slog.Default().Warn("providersync.needs_attention_streak_unavailable",
+			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+			slog.String("failure", "savepoint_begin_failed"))
 		return
 	}
 	streak, err := sourceFailureStreak(ctx, savepoint, claim)
@@ -1319,16 +1322,30 @@ func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) {
 	}
 	// Only the canonical row: the generic Complete clears exactly claim.Dataset,
 	// so a stamp on an alias row would never clear after a success.
-	if _, err := savepoint.Exec(ctx, markDatasetUnavailableSQL,
+	tag, err := savepoint.Exec(ctx, markDatasetUnavailableSQL,
 		claim.OrgID, claim.IntegrationID, claim.Dataset, streak.NeedsAttentionReason(), streak.LastAt.UTC(),
-	); err != nil {
+	)
+	if err != nil {
 		_ = savepoint.Rollback(ctx)
 		slog.Default().Warn("providersync.needs_attention_stamp_failed",
 			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
 			slog.String("failure", "stamp_failed"))
 		return
 	}
+	if tag.RowsAffected() == 0 {
+		_ = savepoint.Rollback(ctx)
+		slog.Default().Warn("providersync.needs_attention_stamp_no_dataset_row",
+			slog.String("org_id", claim.OrgID),
+			slog.String("integration_id", claim.IntegrationID),
+			slog.String("source_id", claim.SourceID),
+			slog.String("dataset", claim.Dataset),
+			slog.Int("failures_in_a_row", streak.Count))
+		return
+	}
 	if err := savepoint.Commit(ctx); err != nil {
+		slog.Default().Warn("providersync.needs_attention_stamp_failed",
+			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+			slog.String("failure", "commit_failed"))
 		return
 	}
 	slog.Default().Info("providersync.needs_attention_stamped",

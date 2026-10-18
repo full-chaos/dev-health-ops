@@ -51,24 +51,19 @@ documents, and filing them as `reject` would assert a check that does not exist.
 `principal.v1` also carries a `2**53` bound for revision fields, where the
 concern is exact float representability rather than type.
 
-**There is no shared guard yet, and an earlier version of this file told you to
-reuse one.** That instruction was unactionable and worse than silence: a remedy
-that does not exist looks like the problem is solved, so the next author
-searches, finds nothing, re-derives, and does not know they re-derived. That is
-not hypothetical — it is what produced `error.v1`'s integral-decimal P1, in a
-surface written by the author of the note telling them to reuse it.
+**Reuse these; do not re-derive them** (CHAOS-4940 extracted them, after the
+class bit `error.v1` once because no shared guard existed):
 
-What actually exists today, to copy from:
-
-| | where | covers |
+| concern | Go | Python |
 | --- | --- | --- |
-| Go | `principal.go` — a function-local `const` inside `Revision.UnmarshalJSON` | 2^53 only, and not callable from outside that method |
-| Python | `error_envelope.py` `_require_wire_int` | zero-fraction decimals, and `bool` before `int` (order matters — `bool` subclasses `int`) |
-| Python | `principal.py` `_parse_revision` | a separate copy, plus the 2^53 bound |
+| wire-integer TYPE: is this an integer literal, not `403.0`? | decode into an integer-typed field; `encoding/json` refuses a zero-fraction decimal (pinned by `TestDecodingIntoAnIntegerFieldRefusesAZeroFractionDecimal`) | `authclient.contracts.require_wire_int` (refuses decimals, and `bool` before `int` — order matters, `bool` subclasses `int`) |
+| a boolean where a number is required | the decoder refuses it | `authclient.contracts.refuse_bool` |
+| exact representability: is a decimal-form number at or past 2^53? | `contracts.RefuseInexactDecimal` / `MaxExactFloatInteger` | `authclient.contracts.refuse_inexact_decimal` / `MAX_EXACT_FLOAT_INTEGER` |
 
-`contracts.py`, the shared module every surface already imports, contains
-neither. **CHAOS-4940 tracks extracting one guard per language**; until it
-lands, copy from the table above and expect to delete your copy afterwards.
+`error.v1`'s `status` and `retry_after_seconds` need the first row only;
+`principal.v1`'s revisions need all three (and accept a whole-valued decimal
+such as `1.0`, which `require_wire_int` deliberately does not). Fixtures for
+these rules belong in `reject_by_client`.
 
 ### Constraints live in the cross-language dialect intersection
 

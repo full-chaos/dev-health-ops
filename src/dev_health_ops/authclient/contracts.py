@@ -30,7 +30,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import jsonschema
 import jsonschema.exceptions
@@ -276,3 +276,67 @@ def validate(surface: str, document: Any, root: Path | None = None) -> None:
     if found:
         joined = "; ".join(str(v) for v in found)
         raise ContractError(f"{surface}: {joined}")
+
+
+#: float64 represents every integer up to 2**53 exactly and only every second
+#: one above it, so a decimal-form integer at or past this magnitude has already
+#: been rounded by ``json`` before any client runs. The Go twin is
+#: ``contracts.MaxExactFloatInteger``.
+MAX_EXACT_FLOAT_INTEGER: Final = 2**53
+
+
+def refuse_bool(raw: object, surface: str, field: str, noun: str) -> None:
+    """Refuse a JSON boolean where a number is required.
+
+    ``bool`` subclasses ``int`` in Python, so this MUST run before any
+    ``isinstance(raw, int)`` check or ``True`` silently becomes ``1``.
+    """
+    if isinstance(raw, bool):
+        raise ContractError(f"{surface}: /{field} is a boolean, not {noun}")
+
+
+def refuse_inexact_decimal(raw: float, surface: str, field: str) -> None:
+    """Refuse a decimal-form number at or past 2**53.
+
+    The comparison is ``>=``, not ``>``: 2**53 + 1 ROUNDS DOWN to 2**53, so a
+    float cannot say which of the two arrived, and a guard using ``>`` does not
+    fire on the value it was written for. Integer-form tokens are unaffected
+    and stay exact.
+    """
+    if abs(raw) >= MAX_EXACT_FLOAT_INTEGER:
+        raise ContractError(
+            f"{surface}: /{field} = {raw!r} arrived in decimal form with a magnitude "
+            "past 2**53, where float64 cannot represent every integer; refused rather "
+            "than silently rounded, because a rounded revision breaks the G-31 cache "
+            "key. Send it as an integer token instead, which stays exact"
+        )
+
+
+def require_wire_int(document: dict[str, Any], field: str, surface: str) -> int | None:
+    """Return an optional integer field, refusing a zero-fraction decimal.
+
+    JSON Schema's ``integer`` admits ``403.0`` -- "a number with no fractional
+    part", not "a JSON integer literal" -- so the schema accepts it in all three
+    languages and cannot be the place this is caught. Go's clients decode into
+    an integer-typed field and refuse ``403.0`` outright; Python's ``json``
+    hands back a ``float``, so without this check the SAME document is accepted
+    by one client and rejected by the other. Refusing here keeps both on the
+    stricter reading. The matching fixtures are ``reject_by_client``, not
+    ``reject``: the schema validates them.
+
+    Absent or null returns ``None``. A surface whose field may be a whole-valued
+    decimal (``principal.v1`` revisions) does not use this; it composes
+    :func:`refuse_bool` and :func:`refuse_inexact_decimal` itself.
+    """
+    raw = document.get(field)
+    if raw is None:
+        return None
+    refuse_bool(raw, surface, field, "an integer")
+    if isinstance(raw, int):
+        return raw
+    raise ContractError(
+        f"{surface}: /{field} = {raw!r} is a decimal, not an integer. The schema "
+        f"accepts it because JSON Schema's `integer` admits a zero fractional "
+        f"part, and Go's client refuses the identical document -- so accepting "
+        f"it here would split the two clients on one wire format"
+    )

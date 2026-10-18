@@ -48,7 +48,7 @@ var declaredMergedUserRows = map[[3]string]struct {
 }{
 	{"github", "", "unassigned"}: {
 		2, "team-jira", "Jira Team", 1, 0, 1,
-		"",
+		"one unassigned item created that day under team-jira (all measures 0) and one started and in progress under unassigned: one item each, so the lowest team id labels the row",
 	},
 }
 

@@ -108,7 +108,7 @@ func (executor *WorkItemExecutor) ComputeFamily(
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
 	written, err := WriteWorkItemUserMetricsDaily(
-		ctx, executor.conn, run.OrganizationID, scope.day, nil, computedAt,
+		ctx, executor.conn, run.OrganizationID, scope.day, triplet.UserMetricsDaily, computedAt,
 	)
 	total += written
 	if err != nil {

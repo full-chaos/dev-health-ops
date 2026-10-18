@@ -377,9 +377,7 @@ func ComputeDailyTriplet(
 				value := Hours(completedAt.Sub(*startedAt))
 				cycleHours = &value
 				bucket.cycleHours = append(bucket.cycleHours, value)
-				if attribution.TeamID != "team-a" {
-					uBucket.cycleHours = append(uBucket.cycleHours, value)
-				}
+				uBucket.cycleHours = append(uBucket.cycleHours, value)
 				if value > 0 {
 					active, wait := FlowBreakdown(*startedAt, *completedAt, transitionsByItem[item.WorkItemID])
 					if active+wait == 0 {

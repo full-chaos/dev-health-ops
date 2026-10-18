@@ -292,8 +292,7 @@ func configureWithRoutes(
 		return nil, err
 	}
 
-	// MUTATION (CHAOS-10084 red commit): drops the limits and body bound.
-	apiHTTP, err := httpapi.NewServer(httpapi.ServerOptions{Address: cfg.APIAddress, Logger: logger, Routes: routes, RequestTimeout: cfg.RequestTimeout, MaxInFlight: maxInFlightRequests})
+	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, routes))
 	if err != nil {
 		closeStore()
 		return nil, err

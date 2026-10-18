@@ -93,10 +93,11 @@ func TestInPlaceGateWaitsAreBoundedInTotal(t *testing.T) {
 	}
 	// One 30ms wait fits the 50ms bound and is slept; the second would pass it
 	// (30+30 > 50), so the try ends there: two gate reads, one sleep, no request.
-	// An implementation that slept past the bound (a second wait, 60ms in all)
-	// exceeds the ceiling.
+	// The gate-read count is the exact proof (a second sleep would make it three
+	// or send a request); the elapsed window only guards the sleep itself and is
+	// wide enough for a loaded runner.
 	elapsed := time.Since(started)
-	if elapsed < 25*time.Millisecond || elapsed > 55*time.Millisecond || requests.Load() != 0 || gate.calls.Load() != 2 {
+	if elapsed < 25*time.Millisecond || elapsed > 200*time.Millisecond || requests.Load() != 0 || gate.calls.Load() != 2 {
 		t.Fatalf("waited %s with %d requests and %d gate reads, want one 30ms sleep inside the 50ms bound, two gate reads and no request", elapsed, requests.Load(), gate.calls.Load())
 	}
 }

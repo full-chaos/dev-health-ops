@@ -182,7 +182,8 @@ share the one predicate (`analytics.InvestmentWindowClause`).
 REST `/investment` response, which then carries `sizing_coverage`, `unsized_unit_count` and, when fewer than half of
 the units carry a size, `sizing_note`, and of the explanation, which carries the same three fields on each finding's
 evidence (CHAOS-9809). The sunburst, the Home tile "Investment by theme" and the Operating Review investment section
-carry no sizing coverage yet and stay on `COUNT` until they do.
+stay on `COUNT` unless the caller asks for `ISSUE_SIZE` in a way that brings the coverage with it (CHAOS-9624,
+CHAOS-9873, D6032): see below.
 
 In both, a unit's weight is spread over its subcategories by their probabilities and over its repositories by their
 allocation weights, and a team scope takes each repository at the share the teams in view hold, so the sum of a
@@ -202,6 +203,23 @@ The Home investment tile (`reworkThemeAllocation`) says what its share is a shar
 the numerator. In `ISSUE_SIZE` a row also carries `sizingCoverage`, `unsizedUnitCount` and `workUnitCount` (the m of
 "n of m work units have an issue size"), counted over the same units as the themes. They are null in `WORK_UNITS` and
 null when the window holds no unit: null is "not measured", never 0. The REST Home body does not carry them.
+
+The Operating Review investment section (`operatingReview`, section `investment`) carries `sizing` on the section:
+`measure` (`WORK_UNITS` or `ISSUE_SIZE`) and, in `ISSUE_SIZE`, `sizingCoverage`, `unsizedUnitCount` and
+`workUnitCount`, counted over the week's units (the ones the current-week values come from; the prior week is read in
+the same measure for the delta). A document that selects `measure`, `sizingCoverage`, `unsizedUnitCount` and
+`workUnitCount` under `sections.sizing` reads the section in `ISSUE_SIZE` and its metrics (`<theme>_work`) carry the
+unit `issue size`; every other document reads it in `COUNT` (unit `work units`, `sizing.measure` `WORK_UNITS`, the
+sizing fields null), unchanged in value. The three sizing fields are null when the week holds no unit: null is "not
+measured", never 0. A failed coverage read leaves the section without data (`hasData` false); it never serves
+issue-size values without their coverage.
+
+The sunburst (`GET /api/v1/investment/sunburst`, a bare array that cannot carry a field) is the `COUNT` of the ported
+route unless the request adds `measure=ISSUE_SIZE` (`COUNT` is also accepted; anything else is a 422). An `ISSUE_SIZE`
+sunburst weighs each slice by issue size and carries the coverage of the window's units, ALL of them and not only the
+slices kept by `limit`, in response headers: `X-Investment-Measure: ISSUE_SIZE`, `X-Sizing-Coverage`,
+`X-Unsized-Unit-Count` and `X-Work-Unit-Count`. The last three are absent when the window holds no unit. The body
+stays the bare array. The headers and the parameter are Go-only; the ported route and its body are unchanged.
 
 ## Team coverage: ownership, not the attribution vote
 

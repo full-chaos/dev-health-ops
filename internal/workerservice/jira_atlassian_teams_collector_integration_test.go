@@ -358,7 +358,9 @@ func TestJiraCombinedCollectorRunsAtlassianTeamsLegEvenWhenProjectAsTeamIsSkippe
 // the codex review r1 fix proof (finding #5): with Teams deselected, the
 // Atlassian leg must not claim a written team it never persisted -- counts
 // and TeamKeys must come from what atlassianteams.Write actually wrote,
-// never from the pre-selection collected snapshot.
+// never from the pre-selection collected snapshot. The team was imported by
+// an earlier run (a link is written only for an imported team, CHAOS-9123),
+// so the Projects-only run writes its link and no team version.
 func TestJiraCombinedCollectorDoesNotClaimAtlassianTeamsWhenTeamsNotSelected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -392,6 +394,19 @@ func TestJiraCombinedCollectorDoesNotClaimAtlassianTeamsWhenTeamsNotSelected(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	const teamVersions = "SELECT count() FROM teams WHERE org_id = 'org-under-test' AND provider = 'jira' AND startsWith(ifNull(native_team_key, ''), 'ari:cloud:identity::team/')"
+	if _, err := collector.CollectTeamCatalog(ctx,
+		providersync.TeamCatalogReference{OrgID: "org-under-test", SyncRunID: "run-0", IntegrationID: "integration-1"},
+		credential, client, providersync.TeamCatalogSelections{Teams: true}, time.Now().UTC()); err != nil {
+		t.Fatalf("the importing run: %v", err)
+	}
+	var versionsBefore uint64
+	if err := conn.QueryRow(ctx, teamVersions).Scan(&versionsBefore); err != nil {
+		t.Fatal(err)
+	}
+	if versionsBefore != 1 {
+		t.Fatalf("the importing run stored %d Atlassian team versions, want 1", versionsBefore)
+	}
 	result, err := collector.CollectTeamCatalog(ctx,
 		providersync.TeamCatalogReference{OrgID: "org-under-test", SyncRunID: "run-1", IntegrationID: "integration-1"},
 		credential, client, providersync.TeamCatalogSelections{Teams: false, Members: false, Projects: true}, time.Now().UTC())
@@ -404,12 +419,12 @@ func TestJiraCombinedCollectorDoesNotClaimAtlassianTeamsWhenTeamsNotSelected(t *
 	if result.OwnershipWritten != 1 {
 		t.Errorf("OwnershipWritten = %d, want 1 (Projects was selected)", result.OwnershipWritten)
 	}
-	var gotTeamRows uint64
-	if err := conn.QueryRow(ctx, "SELECT count() FROM teams FINAL WHERE org_id = 'org-under-test' AND provider = 'jira' AND startsWith(ifNull(native_team_key, ''), 'ari:cloud:identity::team/')").Scan(&gotTeamRows); err != nil {
+	var versionsAfter uint64
+	if err := conn.QueryRow(ctx, teamVersions).Scan(&versionsAfter); err != nil {
 		t.Fatal(err)
 	}
-	if gotTeamRows != 0 {
-		t.Errorf("Atlassian team rows actually persisted = %d, want 0 (Teams was not selected)", gotTeamRows)
+	if versionsAfter != versionsBefore {
+		t.Errorf("Atlassian team versions = %d after the Projects-only run, want %d (Teams was not selected)", versionsAfter, versionsBefore)
 	}
 }
 

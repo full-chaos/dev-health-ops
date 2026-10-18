@@ -17,7 +17,11 @@ lifecycle: active
 
 `auth-service --help` prints the same registry. A **flag overrides the
 environment variable** for the same setting. Secrets have no flag, because
-process arguments are readable by anyone who can run `ps` or `docker inspect`.
+process arguments are readable by anyone who can run `ps` or `docker top`.
+**The environment is readable too** (`docker inspect`, `/proc/<pid>/environ` for the same
+user), so a DSN given as an environment variable is exposed to anyone with that
+access; the local Compose profile does this for its development defaults. For
+anything else use the `_FILE` form with a mounted secret.
 Non-secret settings supplied only through the environment make the service log
 one startup warning listing their names, so a deployment configured that way is
 not invisible.

@@ -123,7 +123,7 @@ a Secret mount cannot be given the owner and mode the custody check requires,
 and the copy never reaches disk. Live Kubernetes proof of this design is tracked
 in CHAOS-10079; it is covered by render tests today.
 
-**The network boundary.** `authService.networkPolicy` renders whenever the
+**The network boundary.** A `NetworkPolicy` is enforced only by a cluster network plugin that implements it; the objects below do nothing on a cluster without one. `authService.networkPolicy` renders whenever the
 service is enabled, independent of the release-wide `networkPolicy.enabled`
 (set `authService.networkPolicy.enabled=false` only if another layer enforces
 the boundary). Ingress is empty unless you list consumers (`allowedFrom`, API

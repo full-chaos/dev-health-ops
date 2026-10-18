@@ -34,14 +34,25 @@ unexported: there is no exported way to write one without the others, and a
 mutation that changes no guarded row rolls back with `ErrNoStateChange`. Any
 failure rolls back **everything**.
 
-The guarantee is held by PostgreSQL, not by callers. Migration `0006` puts a
-trigger on the audit and outbox tables and on the security-state tables; `Commit`
-sets a transaction-local setting to the current transaction id as its first
-statement, and the trigger refuses a write made under any other id. A second
-connection from the pool, SQL assembled at run time or a write from another
-package is refused by the database. Tables classified unguarded (sessions,
-refresh credentials, users, principals, read-only vocabulary) stay a convention
-the caller keeps. The Go-side checks and the source scan in
+The guarantee is held by PostgreSQL for code that does not set out to defeat
+it. Migration `0006` puts a trigger on the audit and outbox tables and on the
+security-state tables; `Commit` sets a transaction-local setting
+(`dev_health.audit_txid`) to the current transaction id as its first statement,
+and the trigger refuses a write made under any other id. So a second connection
+from the pool, SQL assembled at run time or a write from another package is
+refused, because none of them has armed its own transaction.
+
+**The bound, stated as the code states it** (`audit.go` package comment):
+the setting is not a secret. Code that already holds the runtime login's write
+privilege and deliberately sets `dev_health.audit_txid` to its own transaction
+id in its own transaction can write a guarded table with no outbox or audit
+companion, and nothing in the database can tell that from the caller's own SQL.
+What the database does guarantee is that no *other* role, `PUBLIC` included, can
+write a guarded table (`authschema` test
+`TestOnlyTheRuntimeAndMigrationRolesCanWriteGuardedTables`). Treat a handler that
+sets that setting itself as a review defect. Tables classified unguarded
+(sessions, refresh credentials, users, principals, read-only vocabulary) stay a
+convention the caller keeps. The Go-side checks and the source scan in
 `writer_guard_test.go` are early, legible refusals and a lint, not the control.
 
 The audit row's attributes are an **allowlist** (`allowlist.go`, guardrail

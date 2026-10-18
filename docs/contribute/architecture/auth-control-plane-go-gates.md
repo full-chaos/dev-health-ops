@@ -17,8 +17,8 @@ lifecycle: active
 
 # Auth Control Plane Go gates
 
-The auth tree has its own quality and release gates so a defect in it cannot
-merge unnoticed, without making unrelated changes pay for them. All gate logic
+The auth tree has its own quality and release gates so a defect in it is caught
+before merge by checks that must pass, without making unrelated changes pay for them. All gate logic
 is one verb of the repository's Go check script; the workflow only schedules
 it.
 {: .fc-page-lede }
@@ -37,7 +37,7 @@ bash ci/check_go.sh auth <stage>    # one stage
 | `middleware` | Runs `TestProductionMiddlewareStackIsMountedAndDriven` and **fails unless it logged `AUTH_PRODUCTION_STACK_EXECUTED`** (guardrail G-69). The test builds the API server from `apiServerOptions`, the function the service itself uses, with a probe route, and drives 404, 405, 413, a recovered panic (no panic text in the body) and the rate limit over real HTTP. A green test name without the marker is not evidence. |
 | `fuzz [Target]` | One fuzz run per registered parser, each in its own invocation. Nine targets: error envelope, revision, timestamp, edge access token, signed token, rate-limit text, forwarded-trust list, signing-key PEM and configuration. The budget `AUTH_FUZZTIME` (default `20s`) must be whole seconds and at least 5 s, and a target prints `auth-fuzz-proof:` only when the engine reported a non-zero execution count and passed, so a baseline-only run cannot pass. |
 | `fuzz-registry` | Fails when a `Fuzz*` function exists in the auth tree without a row in `AUTH_FUZZ_TARGETS`, or a row names a missing function. |
-| `vuln` | `govulncheck` (pinned version) over the auth packages, parsed by `ci/auth_govulncheck.py`. **Any reachable finding fails.** There is no ignore list and no baseline, so a pull request cannot whitelist a vulnerability. An empty or config-less scan also fails. |
+| `vuln` | `govulncheck` (pinned version) over the auth packages, parsed by `ci/auth_govulncheck.py`. **Any reachable finding fails.** There is no ignore list and no baseline in the gate. A pull request that changes the gate itself (`ci/check_go.sh`, `ci/auth_govulncheck.py`, the workflow) is a reviewed change to files that select the gates, so it cannot do so unreviewed. An empty or config-less scan also fails. |
 | `paths-selftest` | Executes the relevance rules on fixed inside and outside paths. |
 | `scope-selftest` | Fails when a Go package that looks like auth (a path segment starting `auth` or `audit`) or imports the auth schema adapter is neither inside the gate nor named with a reason in `ci/auth_gate_scope_exempt.txt`; a stale or reasonless exemption fails too. Discovery uses `go list -json` for every build tag named in the repo, so a package behind a tag cannot hide. |
 | `relevant BASE HEAD` | Prints `relevant=true|false` for a diff. |

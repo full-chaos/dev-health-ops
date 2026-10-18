@@ -139,6 +139,23 @@ if bad:
     sys.exit("auth services outside auth_plane (or network_mode none): " + ", ".join(bad))
 ' || die "an auth service is attached to a network other than auth_plane"
 
+printf 'step 4e: no secret reaches a process argument\n'
+compose --profile auth config --format json | python3 -c '
+import json, re, sys
+services = json.load(sys.stdin)["services"]
+bad = []
+for name in ("auth-keys-init", "auth-provision", "auth-migrate", "auth-service"):
+    service = services[name]
+    argv = list(service.get("entrypoint") or []) + list(service.get("command") or [])
+    text = " ".join(argv)
+    hit = re.search(r"\$\{?[A-Za-z_]*(PASSWORD|SECRET|TOKEN|KEY)(?!_ID|_FILE)", text)
+    print(f"{name}: argv expands a secret variable: {bool(hit)}")
+    if hit:
+        bad.append(name)
+if bad:
+    sys.exit("secret variable expanded into a process argument: " + ", ".join(bad))
+' || die "a secret reaches a process argument (visible to docker top)"
+
 printf 'step 5: signing key custody\n'
 key_stat="$(docker run --rm --entrypoint stat -v "${PROJECT}_auth_signing_keys:/k:ro" \
   postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15 \

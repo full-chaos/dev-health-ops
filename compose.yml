@@ -1327,6 +1327,8 @@ services:
   # password in single quotes (a URI would need every reserved character in the
   # password percent-encoded, which Compose cannot do): any password works except
   # one containing a single quote or a backslash.
+  # The role name and password reach psql through `\getenv` (the environment of the
+  # container), never as `-v` arguments: process arguments are visible to `docker top`.
   auth-provision:
     image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     profiles: [auth]
@@ -1340,7 +1342,9 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        psql -v ON_ERROR_STOP=1 -v role="$$AUTH_RUNTIME_DATABASE_ROLE" -v pw="$$AUTH_RUNTIME_DATABASE_PASSWORD" <<'SQL'
+        psql -v ON_ERROR_STOP=1 <<'SQL'
+        \getenv role AUTH_RUNTIME_DATABASE_ROLE
+        \getenv pw AUTH_RUNTIME_DATABASE_PASSWORD
         SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'role', :'pw')
           WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
         SELECT format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'role', :'pw') \gexec

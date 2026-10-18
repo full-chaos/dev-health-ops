@@ -70,8 +70,11 @@ link them.
 - **Platform token keys are separate from the ACR Web-assertion keys and from
   the go-api envelope keys.** The Compose profile uses its own volume and key id
   for exactly this reason; see [deployment](auth-control-plane-deployment.md).
-- **Secrets never enter logs.** DSNs resolve through `internal/platform/secrets`,
-  which registers the resolved value for redaction; configuration errors pass
+- **Secrets are kept out of logs by redaction, which has a stated reach.** DSNs
+  resolve through `internal/platform/secrets`, which registers the resolved value
+  for redaction in the encodings it covers (raw, percent-encoded, JSON-escaped,
+  base64, hex) and short or common-word values only in credential shapes; HTML
+  entities, a value split across fields and other transforms are not covered; configuration errors pass
   through the log redactor before they reach a stream.
 
 ## Adding or replacing a dependency

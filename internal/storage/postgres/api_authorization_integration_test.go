@@ -99,6 +99,12 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 			t.Fatalf("stand-in %s: %v", table.TableName, err)
 		}
 	}
+	// a column-scoped privilege needs its column: the stand-in table has only id
+	for _, column := range apiPosture().ColumnScoped {
+		if _, err := admin.Exec(ctx, "ALTER TABLE "+column.TableName+" ADD COLUMN IF NOT EXISTS "+column.ColumnName+" uuid"); err != nil {
+			t.Fatalf("stand-in column %s.%s: %v", column.TableName, column.ColumnName, err)
+		}
+	}
 	for _, table := range apiPosture().RequiredTables {
 		privileges := "SELECT"
 		if table.AllowInsert {
@@ -112,6 +118,11 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 		}
 		if _, err := admin.Exec(ctx, "GRANT "+privileges+" ON "+table.TableName+" TO "+role); err != nil {
 			t.Fatalf("grant on %s: %v", table.TableName, err)
+		}
+	}
+	for _, column := range apiPosture().ColumnScoped {
+		if _, err := admin.Exec(ctx, "GRANT "+column.Privilege+" ("+column.ColumnName+") ON "+column.TableName+" TO "+role); err != nil {
+			t.Fatalf("grant on %s.%s: %v", column.TableName, column.ColumnName, err)
 		}
 	}
 }
@@ -848,5 +859,74 @@ func TestCheckAPIAuthorizationRefusesAWithheldBackfillJobsInsert(t *testing.T) {
 	}
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); !errors.Is(err, ErrPostureRefused) {
 		t.Fatalf("api role without INSERT on backfill_jobs: readiness error %v, want ErrPostureRefused", err)
+	}
+}
+
+// TestCheckAPIAuthorizationHoldsTheBillingAuditActorColumnExactly is the gate, run as the api role, over the one MIXED relation
+// of the api posture (CHAOS-10019): billing_audit_log holds table-wide INSERT and DELETE plus a column-scoped UPDATE of
+// actor_id. The role must be ready with exactly that, and refused when the column privilege is missing, when the table carries
+// a table-wide UPDATE, or when a second column carries UPDATE. The setup names the relation, the column and the privilege
+// itself, so a posture that stops declaring the column fails by assertion here.
+func TestCheckAPIAuthorizationHoldsTheBillingAuditActorColumnExactly(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closePostgresInstanceInternal(t, instance) })
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := containers.RoleName(apiAuthorizationRole+"_mixed", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
+
+	bootstrapAPIRole(t, ctx, admin, dbName, role)
+	exec := func(statement string) {
+		t.Helper()
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	// the exact state the posture is meant to produce on billing_audit_log, written out here (not read from the posture)
+	baseline := func() {
+		t.Helper()
+		acrEntitlementTables(t, ctx, admin, role)
+		exec("ALTER TABLE public.billing_audit_log ADD COLUMN IF NOT EXISTS actor_id uuid")
+		exec("ALTER TABLE public.billing_audit_log ADD COLUMN IF NOT EXISTS description text")
+		exec("REVOKE UPDATE ON TABLE public.billing_audit_log FROM " + role)
+		exec("REVOKE UPDATE (description) ON TABLE public.billing_audit_log FROM " + role)
+		exec("GRANT UPDATE (actor_id) ON TABLE public.billing_audit_log TO " + role)
+	}
+	baseline()
+	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+		t.Fatalf("the api role holding exactly INSERT+DELETE+SELECT and UPDATE (actor_id) on billing_audit_log is not ready: %v", err)
+	}
+
+	for _, refusal := range []struct{ name, change string }{
+		{"the column UPDATE withheld", "REVOKE UPDATE (actor_id) ON TABLE public.billing_audit_log FROM " + role},
+		{"a table-wide UPDATE granted", "GRANT UPDATE ON TABLE public.billing_audit_log TO " + role},
+		{"a second column UPDATE granted", "GRANT UPDATE (description) ON TABLE public.billing_audit_log TO " + role},
+	} {
+		exec(refusal.change)
+		if err := CheckAPIAuthorization(ctx, api, role, grantSchema); !errors.Is(err, ErrPostureRefused) {
+			t.Fatalf("%s: readiness error %v, want ErrPostureRefused", refusal.name, err)
+		}
+		baseline()
+		if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+			t.Fatalf("after %s was undone the role is not ready again: %v", refusal.name, err)
+		}
 	}
 }

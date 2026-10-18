@@ -395,6 +395,8 @@ func gitlabProjectAnswers(path string, items []gitlabItem) []providerAnswer {
 	}
 	answers = append(answers,
 		glList(root+"/milestones", "*", []any{}),
+		// The project's group lists no epics (the world holds none): the work-items route asks for them.
+		glList(gitlabGroupPath(path[:strings.LastIndex(path, "/")])+"/epics", "*", []any{}),
 		glWindowedList(root+"/issues", issues),
 		glWindowedList(root+"/merge_requests", mrs),
 	)

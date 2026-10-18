@@ -920,11 +920,18 @@ func demoGitLabCommit(commit demoCommit) map[string]any {
 func demoGitLabAnswers(build *demoBuild) []providerAnswer {
 	var answers []providerAnswer
 	answers = append(answers, gitlabTeamCatalogAnswers(demoGitLabGroups, "")...)
+	epicGroups := map[string]bool{}
 	for _, path := range demoGitLabProjectPaths {
 		project := build.GitLab[path]
 		meta := gitlabProjects[path]
 		root := "/api/v4/projects/" + strconv.Itoa(meta.ID)
 		for _, answer := range gitlabProjectAnswers(path, project.Items) {
+			if strings.HasSuffix(answer.Path, "/epics") {
+				if epicGroups[answer.Path] {
+					continue
+				}
+				epicGroups[answer.Path] = true
+			}
 			if answer.Path == root+"/issues" && answer.Query == "*" {
 				answer = demoGitLabIssuesAnswer(answer, project, meta)
 			}

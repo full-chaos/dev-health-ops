@@ -72,7 +72,7 @@ func TestUsersDeleteGuardsThenDeletesAUserAndWhatBelongsToIt(t *testing.T) {
 
 	// the guard: no --yes reports and deletes nothing, and says so with a failing exit
 	code, out, _ := executeAdmin(t, db, "users", "delete", "--email", "throwaway@example.com")
-	if code != 1 || !strings.Contains(out, "Would delete user: throwaway@example.com") || !strings.Contains(out, "memberships: 1") || !strings.Contains(out, "Nothing was deleted") {
+	if code != 1 || !strings.Contains(out, "Would deactivate (soft delete) user: throwaway@example.com") || !strings.Contains(out, "memberships: 1") || !strings.Contains(out, "Nothing was changed") {
 		t.Fatalf("without --yes: exit %d, stdout %q", code, out)
 	}
 	if users() != seedUsers+4 || memberships() != seedMemberships+2 {
@@ -80,8 +80,8 @@ func TestUsersDeleteGuardsThenDeletesAUserAndWhatBelongsToIt(t *testing.T) {
 	}
 
 	// the delete: by email, case-insensitively; the user, its membership and its refresh token go, the others stay
-	code, out, logs := executeAdmin(t, db, "users", "delete", "--email", "THROWAWAY@example.com", "--yes")
-	if code != 0 || !strings.HasPrefix(out, "Deleted user: throwaway@example.com (id: ") {
+	code, out, logs := executeAdmin(t, db, "users", "delete", "--email", "THROWAWAY@example.com", "--force", "--yes")
+	if code != 0 || !strings.HasPrefix(out, "Permanently deleted user: throwaway@example.com (id: ") {
 		t.Fatalf("delete by email: exit %d, stdout %q, stderr %q", code, out, logs)
 	}
 	if users() != seedUsers+3 || db.count(t, `SELECT count(*) FROM users WHERE email = 'throwaway@example.com'`) != 0 {
@@ -93,15 +93,25 @@ func TestUsersDeleteGuardsThenDeletesAUserAndWhatBelongsToIt(t *testing.T) {
 	if db.count(t, `SELECT count(*) FROM users WHERE email = 'keep@example.com'`) != 1 || orgs() != seedOrgs+1 {
 		t.Fatal("a delete took something that is not the user's")
 	}
-	// the log line is one JSON record naming the user by id and the facts of the delete; no email, password or DSN
+	// every log line is one JSON record naming the user by id and the facts of the delete; no email, password or DSN
 	var record map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(logs)), &record); err != nil {
-		t.Fatalf("the log is not one JSON record: %q", logs)
+	var sawStore bool
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("a log line is not one JSON record: %q", logs)
+		}
+		switch entry["msg"] {
+		case "admin: user delete by the operator CLI":
+			record = entry
+		case "admin: user permanently deleted":
+			sawStore = true
+		}
 	}
-	if record["msg"] != "admin: user deleted by the operator CLI" || record["memberships_removed"] != float64(1) ||
-		record["is_active"] != false || record["is_superuser"] != false || record["user_id"] == nil ||
+	if !sawStore || record == nil || record["mode"] != "force" || record["memberships"] != float64(1) ||
+		record["was_active"] != false || record["is_superuser"] != false || record["user_id"] == nil ||
 		strings.Contains(logs, "@example.com") || strings.Contains(logs, "password") {
-		t.Fatalf("the log line is %q", logs)
+		t.Fatalf("the log is %q", logs)
 	}
 
 	// by id and by username
@@ -109,10 +119,10 @@ func TestUsersDeleteGuardsThenDeletesAUserAndWhatBelongsToIt(t *testing.T) {
 	if err := db.conn.QueryRow(context.Background(), `SELECT id::text FROM users WHERE email = 'second@example.com'`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	if code, out, logs := executeAdmin(t, db, "users", "delete", "--id", id, "--yes"); code != 0 || !strings.HasPrefix(out, "Deleted user: second@example.com") {
+	if code, out, logs := executeAdmin(t, db, "users", "delete", "--id", id, "--force", "--yes"); code != 0 || !strings.HasPrefix(out, "Permanently deleted user: second@example.com") {
 		t.Fatalf("delete by id: exit %d, stdout %q, stderr %q", code, out, logs)
 	}
-	if code, out, logs := executeAdmin(t, db, "users", "delete", "--username", "third", "--yes"); code != 0 || !strings.HasPrefix(out, "Deleted user: third@example.com") {
+	if code, out, logs := executeAdmin(t, db, "users", "delete", "--username", "third", "--force", "--yes"); code != 0 || !strings.HasPrefix(out, "Permanently deleted user: third@example.com") {
 		t.Fatalf("delete by username: exit %d, stdout %q, stderr %q", code, out, logs)
 	}
 	if users() != seedUsers+1 {
@@ -137,9 +147,7 @@ func TestUsersDeleteGuardsThenDeletesAUserAndWhatBelongsToIt(t *testing.T) {
 		t.Fatal("a refused delete changed the database")
 	}
 
-	// a user a RESTRICT foreign key points at (here an impersonation session; also audit and refund history) is not deleted: the
-	// transaction rolls back, the user stays with its memberships, and the error names the constraint (the API's delete_user
-	// refuses the same user the same way)
+	// a user an impersonation session points at is deleted for good with --force; the session row stays with a null user
 	var keepID string
 	if err := db.conn.QueryRow(context.Background(), `SELECT id::text FROM users WHERE email = 'keep@example.com'`).Scan(&keepID); err != nil {
 		t.Fatal(err)
@@ -154,13 +162,16 @@ func TestUsersDeleteGuardsThenDeletesAUserAndWhatBelongsToIt(t *testing.T) {
 	if err := db.conn.QueryRow(context.Background(), `SELECT id::text FROM organizations LIMIT 1`).Scan(&orgID); err != nil {
 		t.Fatal(err)
 	}
+	sessions := func() int { return db.count(t, `SELECT count(*) FROM impersonation_sessions`) }
+	seedSessions := sessions()
 	pgseed.ImpersonationSession(context.Background(), t, db.pool(t), uuid.NewString(), keepID, pinnedID, orgID, "member", time.Now().Add(time.Hour), nil)
-	code, out, logs = executeAdmin(t, db, "users", "delete", "--email", "pinned@example.com", "--yes")
-	if code == 0 || !strings.Contains(out+logs, "impersonation_sessions_target_user_id_fkey") {
-		t.Fatalf("delete of a user an impersonation session points at: exit %d, stdout %q, stderr %q", code, out, logs)
+	code, out, logs = executeAdmin(t, db, "users", "delete", "--email", "pinned@example.com", "--force", "--yes")
+	if code != 0 || !strings.Contains(out, "kept 1 row(s) in") || !strings.Contains(out, "impersonation_sessions.target_user_id") {
+		t.Fatalf("force delete of a user an impersonation session points at: exit %d, stdout %q, stderr %q", code, out, logs)
 	}
-	if db.count(t, `SELECT count(*) FROM users WHERE email = 'pinned@example.com'`) != 1 {
-		t.Fatal("the refused delete removed the user")
+	if db.count(t, `SELECT count(*) FROM users WHERE email = 'pinned@example.com'`) != 0 ||
+		sessions() != seedSessions+1 || db.count(t, `SELECT count(*) FROM impersonation_sessions WHERE target_user_id IS NULL`) != 1 {
+		t.Fatal("the session row was not kept with a null target, or the user is still there")
 	}
 }
 

@@ -284,6 +284,7 @@ func frozenOracleDivergences(
 		t.Fatalf("read frozen oracle snapshot for %s: %v", snapshotName, err)
 	}
 	pythonRows, excludedFields := decodeGenericRowOracleOutput(t, snapshotName, raw)
+	pythonRows = withDeclaredMergedUserRows(t, snapshotName, pythonRows)
 	return diffAgainstPythonRows(t, cases, pythonRows, excludedFields, goRowBuilder, goOnlyFields)
 }
 

@@ -290,7 +290,7 @@ func (h *handlers) handOffManual(ctx context.Context, org string, configID uuid.
 		if !config.PlannerManaged && config.SourceID == nil {
 			return errConfigNotRunnable
 		}
-		input := synchandoff.MintInput{Mode: spec.mode, TriggeredBy: spec.triggeredBy}
+		input := synchandoff.MintInput{Mode: spec.mode, TriggeredBy: spec.triggeredBy, Caller: "syncadmin." + spec.triggeredBy}
 		sourceIDs, datasetKeys, err := h.plannerScope(ctx, tx, config)
 		if err != nil {
 			return err
@@ -314,6 +314,10 @@ func (h *handlers) handOffManual(ctx context.Context, org string, configID uuid.
 			}
 		}
 		trigger, err = synchandoff.Mint(ctx, tx, config, input, h.now())
+		var unselected synchandoff.UnselectedSourcesError
+		if errors.As(err, &unselected) {
+			return refuse(http.StatusBadRequest, "source_id "+strings.Join(unselected.SourceIDs, ", ")+" is not selected for this sync configuration")
+		}
 		if err != nil {
 			return err
 		}

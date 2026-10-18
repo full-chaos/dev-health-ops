@@ -714,10 +714,10 @@ func validateAPIOptions(options MigrationOptions) error {
 }
 
 // validateGrantSet checks one role's injected posture: valid identifiers, no
-// duplicates, grantable column privileges, and no relation granted both
-// table-wide and column-scoped.
+// duplicates, grantable column privileges, and no column privilege on a relation
+// that the relation's table-wide grant already holds.
 func validateGrantSet(tables []TableGrant, columns []ColumnGrant, sequences []string) error {
-	seen := make(map[string]struct{}, len(tables))
+	seen := make(map[string]TableGrant, len(tables))
 	for _, grant := range tables {
 		if !validIdentifier(grant.TableName) {
 			return ErrMigrationConfiguration
@@ -725,7 +725,7 @@ func validateGrantSet(tables []TableGrant, columns []ColumnGrant, sequences []st
 		if _, duplicate := seen[grant.TableName]; duplicate {
 			return ErrMigrationConfiguration
 		}
-		seen[grant.TableName] = struct{}{}
+		seen[grant.TableName] = grant
 	}
 	seenColumns := make(map[string]struct{}, len(columns))
 	for _, grant := range columns {
@@ -735,12 +735,17 @@ func validateGrantSet(tables []TableGrant, columns []ColumnGrant, sequences []st
 		if _, grantable := columnGrantablePrivileges[grant.Privilege]; !grantable {
 			return ErrMigrationConfiguration
 		}
-		// A relation granted table-wide AND column-scoped fails the readiness
-		// posture check outright (it forbids any table-wide privilege on a
-		// column-scoped relation), so applying both here would provision a
-		// role that can never report ready.
-		if _, tableWide := seen[grant.TableName]; tableWide {
-			return ErrMigrationConfiguration
+		// A relation may be granted table-wide AND column-scoped (a mixed
+		// relation, CHAOS-6747: the table-wide flags plus column privileges on
+		// top), but a column privilege the table-wide grant already holds is
+		// a posture the readiness check refuses (a column grant that adds
+		// nothing is a declaration error). SELECT is always table-wide.
+		if tableGrant, tableWide := seen[grant.TableName]; tableWide {
+			if grant.Privilege == "SELECT" ||
+				(grant.Privilege == "INSERT" && tableGrant.AllowInsert) ||
+				(grant.Privilege == "UPDATE" && tableGrant.AllowUpdate) {
+				return ErrMigrationConfiguration
+			}
 		}
 		key := grant.TableName + "." + grant.ColumnName + ":" + grant.Privilege
 		if _, duplicate := seenColumns[key]; duplicate {
@@ -1203,10 +1208,10 @@ func postureGrantStatements(roleName, riverSchema string, tables []TableGrant, c
 		)
 	}
 	// Column-scoped grants are emitted after the table-wide ones and never
-	// instead of them: the two sets are disjoint by construction
-	// (ValidateMigrationOptions rejects a relation appearing in both), so
-	// order carries no meaning beyond keeping the statement list stable and
-	// diffable. The privilege keyword is taken from the validated closed set
+	// instead of them: a relation in both holds the table-wide flags plus
+	// column privileges that add to them (ValidateMigrationOptions rejects a
+	// column privilege the table-wide grant already has), so order carries no
+	// meaning beyond keeping the statement list stable and diffable. The privilege keyword is taken from the validated closed set
 	// above rather than sanitized, because it is a keyword and not an
 	// identifier; the table and column are sanitized identifiers.
 	for _, grant := range columns {

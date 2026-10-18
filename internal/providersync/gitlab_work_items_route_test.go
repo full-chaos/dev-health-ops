@@ -27,11 +27,19 @@ type gitLabWorkItemsDoer struct {
 	// forceNextHeader overrides X-Next-Page for one response key
 	// ("<path>?page=N"), to model a provider whose header disagrees with its body.
 	forceNextHeader map[string]string
+	// statusByPath answers every request of a path with that status and an empty error body.
+	statusByPath map[string]int
 }
 
 func (doer *gitLabWorkItemsDoer) Do(request *http.Request) (*http.Response, error) {
 	doer.requests = append(doer.requests, request.Clone(request.Context()))
 	path := request.URL.Path
+	if status, ok := doer.statusByPath[path]; ok {
+		return &http.Response{
+			StatusCode: status, Status: http.StatusText(status), Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{"message":"refused"}`)), Request: request,
+		}, nil
+	}
 	key := path
 	if request.URL.Query().Get("page") != "" {
 		key = path + "?page=" + request.URL.Query().Get("page")
@@ -81,9 +89,10 @@ func gitLabWorkItemsClient(t *testing.T, doer providerfoundation.HTTPDoer) *prov
 func gitLabWorkItemResponses() map[string][]string {
 	root := "/api/v4/projects/123"
 	return map[string][]string{
-		root:                        {`{"id":123,"path":"api","path_with_namespace":"acme/api","name":"api"}`},
-		root + "/milestones?page=1": {`[{"id":7,"title":"July","state":"closed","start_date":"2026-07-01","due_date":"2026-07-31"}]`, `[]`},
-		root + "/issues?page=1":     {`[{"iid":42,"title":"Fix the API","description":"blocks #7 and see CHAOS-9","state":"opened","created_at":"2026-07-02T09:00:00Z","updated_at":"2026-07-03T09:00:00Z","closed_at":null,"labels":["bug","in progress","priority::high"],"assignees":[{"email":"Alice@EXAMPLE.COM","username":"alice","name":"Alice"}],"author":{"email":"bob@example.com","username":"bob","name":"Bob"},"web_url":"https://gitlab.example/acme/api/-/issues/42","weight":3,"milestone":{"id":7,"title":"July"},"due_date":"2026-07-20"}]`, `[]`},
+		root:                               {`{"id":123,"path":"api","path_with_namespace":"acme/api","name":"api"}`},
+		"/api/v4/groups/acme/epics?page=1": {`[]`},
+		root + "/milestones?page=1":        {`[{"id":7,"title":"July","state":"closed","start_date":"2026-07-01","due_date":"2026-07-31"}]`, `[]`},
+		root + "/issues?page=1":            {`[{"iid":42,"title":"Fix the API","description":"blocks #7 and see CHAOS-9","state":"opened","created_at":"2026-07-02T09:00:00Z","updated_at":"2026-07-03T09:00:00Z","closed_at":null,"labels":["bug","in progress","priority::high"],"assignees":[{"email":"Alice@EXAMPLE.COM","username":"alice","name":"Alice"}],"author":{"email":"bob@example.com","username":"bob","name":"Bob"},"web_url":"https://gitlab.example/acme/api/-/issues/42","weight":3,"milestone":{"id":7,"title":"July"},"due_date":"2026-07-20"}]`, `[]`},
 		root + "/issues/42/resource_label_events?page=1":        {`[{"action":"add","created_at":"2026-07-02T10:00:00Z","label":{"name":"done"}}]`, `[]`},
 		root + "/issues/42/resource_state_events?page=1":        {`[{"state":"reopened","created_at":"2026-07-03T10:00:00Z","user":{"username":"bob","name":"Bob"}}]`, `[]`},
 		root + "/issues/42/links?page=1":                        {`[{"link_type":"blocks","iid":7,"references":{"full":"acme/api#7"}}]`, `[]`},
@@ -108,6 +117,7 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJ
 	client := gitLabWorkItemsClient(t, fakehttp.Client(doer))
 	leftToDaily := providerfoundation.NewMetrics()
 	client.Metrics = leftToDaily
+	client.Ledger = providerfoundation.NewRequestLedger()
 	batch, err := (GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
@@ -120,6 +130,7 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJ
 		}
 		t.Fatalf("err=%v requests=%s", err, strings.Join(paths, "\n"))
 	}
+	assertRouteRequestsAreLabelled(t, "gitlab", "work-items", client.Ledger, "project", "milestones", "issues", "notes", "merge_requests", "epics")
 	byDestination := map[string]EffectBatch{}
 	for _, effect := range batch.Effects {
 		byDestination[effect.Destination] = effect

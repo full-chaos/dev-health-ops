@@ -32,6 +32,7 @@ const MUST_REJECT = { reject: true, narrower_than_consumer: true };
 // lose one, and any list group a manifest does carry must be non-empty.
 const REQUIRED_GROUPS = {
   jwks: ["accept", "reject", "reject_by_client", "narrower_than_consumer"],
+  // No client-only rule on this surface: it has no integer fields and no cross-document check, so there is nothing for reject_by_client to hold.
   "endpoint-auth-profile": ["accept", "reject"],
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];

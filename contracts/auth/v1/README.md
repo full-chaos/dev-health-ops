@@ -7,7 +7,8 @@ TypeScript types are implementations of them, never the other way round.
 
 Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 (CHAOS-4884), `error.v1` (CHAOS-4929), `jwks.v1` and `discovery.v1`
-(CHAOS-4930). The remaining are CHAOS-4931–4934.
+(CHAOS-4930), `endpoint-auth-profile.v1` (CHAOS-4931). The remaining are
+CHAOS-4932–4934.
 
 Distinct from `credential-classes.json` and `endpoint-profiles.ops.json`, which
 are the Wave-0 **inventory** contract describing what authentication exists

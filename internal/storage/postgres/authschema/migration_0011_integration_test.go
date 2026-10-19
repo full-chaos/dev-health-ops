@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // CHAOS-10194: 0011 closes credential_registry.revoked_reason to the vocabulary
@@ -146,5 +148,79 @@ func TestMigration0011RefusesLegacyUnlistedCodesAndRollsBack(t *testing.T) {
 	other := "another_legacy_code"
 	if err := m11Insert(ctx, exec, &other); err != nil {
 		t.Errorf("after the refused 0011 the 0008 constraint must still hold (rollback), but a legacy-valid code was refused: %v", err)
+	}
+}
+
+// A writer that is mid-transaction when 0011 starts must not turn the
+// documented refusal into a generic constraint failure: 0011 takes the table
+// lock before it counts, so it waits for the writer, then counts the row the
+// writer committed and refuses with the named count.
+func TestMigration0011PreflightCountsRowsACompetingWriterCommits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthMigrationOnly(t, ctx)
+	eleventh := m11ApplyBefore(t, ctx, env)
+	if _, err := env.conn.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'm11')`, m11Principal); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := pgx.Connect(ctx, env.conn.Config().ConnString())
+	if err != nil {
+		t.Fatalf("writer connection: %v", err)
+	}
+	defer func() { _ = writer.Close(context.Background()) }()
+	tx, err := writer.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
+		t.Fatal(err)
+	}
+	legacy := "key_compromised"
+	if _, err := tx.Exec(ctx, `INSERT INTO auth.credential_registry
+		(principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, revoked_at, revoked_reason)
+		VALUES ($1, 'workload_token', '\x7777777777777777777777777777777777777777777777777777777777777777'::bytea, 'sha256', '0123456789abcdef', now(), $2)`,
+		m11Principal, legacy); err != nil {
+		t.Fatalf("the writer's insert under the 0008 constraint: %v", err)
+	}
+
+	migrated := make(chan error, 1)
+	go func() { migrated <- applyOne(ctx, env.conn, env.options, *eleventh) }()
+
+	// Wait until 0011 is blocked behind the writer, then let the writer commit. pg_stat_activity
+	// keeps the first 1 kB of the statement, which is the migration header.
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		var waiting int
+		if err := writer.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND query LIKE '%-- 0011 credential_registry.revoked_reason%'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		select {
+		case err := <-migrated:
+			t.Fatalf("0011 finished before it was blocked by the writer: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("0011 never waited on the competing writer's lock")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	err = <-migrated
+	if err == nil {
+		t.Fatal("0011 applied over a row the competing writer committed with an unlisted revoked_reason")
+	}
+	if !strings.Contains(err.Error(), "1 credential_registry row") {
+		t.Errorf("the refusal after a competing writer is not the named-count refusal (want %q): %v", "1 credential_registry row", err)
+	}
+	if strings.Contains(err.Error(), legacy) {
+		t.Errorf("the refusal echoes a stored reason value: %v", err)
 	}
 }

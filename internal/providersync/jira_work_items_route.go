@@ -403,7 +403,7 @@ func collectJiraWorkItemIssues(
 			IsLast        *bool             `json:"isLast"`
 			NextPageToken string            `json:"nextPageToken"`
 		}
-		if err := jiraFetchObject(budgetAccount(ctx, "jira_jql"), client, http.MethodGet, "/rest/api/3/search/jql?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(budgetAccount(ctx, "jira_jql"), client, http.MethodGet, "/rest/api/3/search/jql", "/rest/api/3/search/jql?"+query.Encode(), nil, &page); err != nil {
 			client.Metrics.RecordJiraSearchPage("request_failed")
 			return nil, pages + 1, err
 		}
@@ -466,7 +466,7 @@ func collectJiraIssueComments(
 			Comments []json.RawMessage `json:"comments"`
 			IsLast   *bool             `json:"isLast"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/comment?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/issue/{issue}/comment", "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/comment?"+query.Encode(), nil, &page); err != nil {
 			return nil, pages + 1, err
 		}
 		if page.Comments == nil {
@@ -499,7 +499,7 @@ func fetchJiraSprint(
 	sprintID string,
 ) (map[string]any, error) {
 	var payload map[string]any
-	err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/sprint/"+url.PathEscape(sprintID), nil, &payload)
+	err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/sprint/{sprint}", "/rest/agile/1.0/sprint/"+url.PathEscape(sprintID), nil, &payload)
 	return payload, err
 }
 
@@ -515,7 +515,7 @@ func fetchJiraProject(
 	projectID string,
 ) (key, name, status string, err error) {
 	var payload map[string]any
-	if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/project/"+url.PathEscape(projectID), nil, &payload); err != nil {
+	if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/project/{project}", "/rest/api/3/project/"+url.PathEscape(projectID), nil, &payload); err != nil {
 		return "", "", "", err
 	}
 	// The project GET names the lifecycle as flags: `deleted` (in Jira's
@@ -605,11 +605,11 @@ func resolveJiraProjectCatalog(
 func jiraFetchObject(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	method, path string,
+	method, route, path string,
 	body io.Reader,
 	target any,
 ) error {
-	response, err := client.Do(ctx, method, path, body)
+	response, err := client.DoRoute(ctx, method, route, path, body)
 	if err != nil {
 		return err
 	}

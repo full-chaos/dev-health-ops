@@ -300,7 +300,7 @@ func collectGitHubBlame(
 	client = &counted
 	root := providerRelativePath(client, "repos", owner, repository)
 	var repoPayload gitHubRepositoryPayload
-	if err := fetchObject(ctx, client, root, &repoPayload); err != nil {
+	if err := fetchObjectRoute(ctx, client, githubRepoRoute, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, fmt.Errorf("%w: %w", ErrGitHubBlameTraversalFailed, err)
 	}
 	repoID, err := resolveGitHubRepoID(ctx, identity, claim, repoPayload)
@@ -487,7 +487,7 @@ func gitHubBlameInventory(
 	requests *int,
 ) ([]string, error) {
 	var tree gitHubTreePayload
-	treeErr := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree)
+	treeErr := fetchObjectRoute(ctx, client, githubTreeRoute, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree)
 	var tooLarge *providerfoundation.ObjectTooLargeError
 	class := ""
 	switch {
@@ -703,7 +703,7 @@ func fetchGitHubBlame(
 	if err != nil {
 		return nil, providerfoundation.ErrNormalizationInvalid
 	}
-	response, err := client.Do(providerfoundation.WithBudgetDimension(ctx, BudgetContentsBlob), "POST", gitHubGraphQLURL(client), bytes.NewReader(body))
+	response, err := client.DoRoute(providerfoundation.WithBudgetDimension(ctx, BudgetContentsBlob), "POST", graphQLRoute, gitHubGraphQLURL(client), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

@@ -826,7 +826,7 @@ func gitLabTestsJSONTruthy(value any) bool {
 }
 
 func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation.HTTPClient, root, jobID string) ([]byte, error) {
-	response, err := client.DoRoute(ctx, http.MethodGet, gitlabProjectRoute+"/jobs/{job}/artifacts", root+"/jobs/"+url.PathEscape(jobID)+"/artifacts", nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, gitlabJobArtifactsRoute, root+"/jobs/"+url.PathEscape(jobID)+"/artifacts", nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusGone) {
@@ -838,9 +838,9 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 		location := response.Header.Get("Location")
 		_ = response.Body.Close()
 		if location == "" {
-			return nil, ErrGitLabTestsIncomplete
+			return nil, withRoute(ErrGitLabTestsIncomplete, gitlabJobArtifactsRoute)
 		}
-		response, err = client.DoUnauthenticated(ctx, http.MethodGet, location)
+		response, err = client.DoUnauthenticatedRoute(ctx, http.MethodGet, gitlabJobArtifactsRoute, location)
 		if err != nil {
 			return nil, err
 		}
@@ -852,16 +852,17 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 	if response.StatusCode >= 400 {
 		message, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 		if readErr != nil {
-			return nil, logging.TransportFailure(readErr)
+			return nil, withRoute(logging.TransportFailure(readErr), gitlabJobArtifactsRoute)
 		}
 		if classified := providerfoundation.ClassifyHTTPForRequest("gitlab", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
+			classified.Route = gitlabJobArtifactsRoute
 			return nil, classified
 		}
-		return nil, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}
+		return nil, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: gitlabJobArtifactsRoute}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, gitLabTestsMaxDownload+1))
 	if err != nil {
-		return nil, logging.TransportFailure(err)
+		return nil, withRoute(logging.TransportFailure(err), gitlabJobArtifactsRoute)
 	}
 	if len(body) > gitLabTestsMaxDownload {
 		return nil, ErrGitLabTestsIncomplete

@@ -72,7 +72,7 @@ func fetchJiraDevStatusPullRequests(
 	query := url.Values{
 		"issueId": {issueID}, "applicationType": {applicationType}, "dataType": {"pullrequest"},
 	}
-	response, err := client.Do(ctx, http.MethodGet, "/rest/dev-status/1.0/issue/detail?"+query.Encode(), nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, "/rest/dev-status/1.0/issue/detail", "/rest/dev-status/1.0/issue/detail?"+query.Encode(), nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && providerErr != nil &&

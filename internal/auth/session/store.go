@@ -45,7 +45,6 @@ const GraceWindow = 30 * time.Second
 const defaultRefreshTTL = 7 * 24 * time.Hour
 
 var (
-	errNotImplemented = errors.New("session: not implemented")
 	// ErrSessionNotFound reports an unknown session id.
 	ErrSessionNotFound = errors.New("session: not found")
 	// ErrSessionNotLive reports a write to a revoked or expired session.
@@ -259,7 +258,65 @@ func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 // Create starts a session for an active principal and issues its first
 // refresh credential, which starts a new family. auth_time is now.
 func (s *Store) Create(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string) (Issued, error) {
-	return Issued{}, errNotImplemented
+	if !validAMR(amr) {
+		return Issued{}, ErrInvalidAMR
+	}
+	credential, err := newCredential()
+	if err != nil {
+		return Issued{}, err
+	}
+	handle, err := newCredential()
+	if err != nil {
+		return Issued{}, err
+	}
+	var org *string
+	if organizationID != nil {
+		text := organizationID.String()
+		org = &text
+	}
+	var out Issued
+	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		// The session token_hash is a digest of a value never returned: there is
+		// no session bearer in wave 2, and the column is NOT NULL and unique.
+		// An uncapped session stores 'infinity'; the record reports the
+		// effective expiry (see sessionColumns).
+		var sessionID string
+		err := tx.QueryRow(ctx, `
+			INSERT INTO `+s.q+`.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr)
+			SELECT p.id, $2::uuid, $3, t.at, t.at, t.at,
+			       CASE WHEN $4::double precision > 0 THEN t.at + make_interval(secs => $4::double precision) ELSE 'infinity' END,
+			       t.at, $5
+			FROM `+s.q+`.principals p, (SELECT clock_timestamp() AS at) t
+			WHERE p.id = $1 AND p.disabled_at IS NULL
+			RETURNING id::text`,
+			principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr).Scan(&sessionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrPrincipalUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO `+s.q+`.refresh_credentials (session_id, principal_id, token_hash, expires_at)
+			SELECT s.id, s.principal_id, $2, LEAST(clock_timestamp() + make_interval(secs => $3::double precision), s.expires_at)
+			FROM `+s.q+`.sessions s WHERE s.id = $1
+			RETURNING expires_at`,
+			sessionID, hashCredential(credential), s.refreshTTL.Seconds(),
+		).Scan(&out.ExpiresAt); err != nil {
+			return err
+		}
+		out.Session, err = scanRecord(tx.QueryRow(ctx, `SELECT `+s.sessionColumns()+` FROM `+s.q+`.sessions s WHERE s.id = $1`, sessionID))
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, ErrPrincipalUnavailable) {
+			return Issued{}, err
+		}
+		return Issued{}, fmt.Errorf("%w: creating a session: %w", ErrStore, err)
+	}
+	out.Credential = credential
+	s.logger.DebugContext(ctx, "session created", "session_id", out.Session.ID.String())
+	return out, nil
 }
 
 // presented is a credential row and its successor, read under the session lock.
@@ -326,7 +383,84 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 // is set only when the store failed or the grace successor could not be
 // recomputed; Result.Reason then says which.
 func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString) (result Result, err error) {
-	return Result{Reason: ReasonStoreUnavailable}, errNotImplemented
+	defer func() { s.recordExchange(ctx, result, err) }()
+	if !wellFormed(credential) {
+		return Result{Reason: ReasonMalformed}, nil
+	}
+	hash := hashCredential(credential)
+
+	var reuse *lockedSession
+	var reusedFamily string
+	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var sessionID string
+		if err := tx.QueryRow(ctx, `SELECT session_id::text FROM `+s.q+`.refresh_credentials WHERE token_hash = $1`, hash).Scan(&sessionID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				result.Reason = ReasonRefreshUnknown
+				return nil
+			}
+			return err
+		}
+		locked, err := s.lockSession(ctx, tx, sessionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			result.Reason = ReasonRefreshUnknown
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		p, err := s.readPresented(ctx, tx, hash, sessionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			result.Reason = ReasonRefreshUnknown
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch {
+		case locked.RevokedAt != nil || p.revoked:
+			result.Reason = ReasonSessionRevoked
+		case locked.expired:
+			result.Reason = ReasonSessionExpired
+		case locked.principalDisabled:
+			result.Reason = ReasonPrincipalDeactivated
+		case p.expired:
+			result.Reason = ReasonRefreshExpired
+		case !p.consumed:
+			issued, err := s.rotate(ctx, tx, locked.Record, p, credential)
+			if err != nil {
+				return err
+			}
+			result = Result{Reason: ReasonAccepted, Issued: issued}
+		case p.inGrace && p.successorLive:
+			childID, err := uuid.Parse(*p.successor)
+			if err != nil {
+				return err
+			}
+			successor := deriveSuccessor(s.key, childID, credential)
+			if !equalHash(hashCredential(successor), p.successorHash) {
+				result.Reason = ReasonDependency
+				return ErrGraceUnavailable
+			}
+			var expires time.Time
+			if err := tx.QueryRow(ctx, `SELECT expires_at FROM `+s.q+`.refresh_credentials WHERE id = $1`, childID.String()).Scan(&expires); err != nil {
+				return err
+			}
+			result = Result{Reason: ReasonGraceReplay, Issued: Issued{Session: locked.Record, Credential: successor, ExpiresAt: expires}}
+		default:
+			reuse, reusedFamily = &locked, p.familyID
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrGraceUnavailable) {
+			return Result{Reason: ReasonDependency}, err
+		}
+		return Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: refresh exchange: %w", ErrStore, err)
+	}
+	if reuse == nil {
+		return result, nil
+	}
+	return s.revokeForReuse(ctx, reuse.Record, reusedFamily, hash)
 }
 
 func equalHash(a, b []byte) bool {
@@ -457,24 +591,167 @@ func (s *Store) revokeSessions(ctx context.Context, tx audit.TxOps, ids []string
 // Revoke ends one session and every credential of it. It reports false when
 // the session was already revoked.
 func (s *Store) Revoke(ctx context.Context, sessionID uuid.UUID, actor Actor) (bool, error) {
-	return false, errNotImplemented
+	id := sessionID.String()
+	var principal string
+	if err := s.pool.QueryRow(ctx, `SELECT principal_id::text FROM `+s.q+`.sessions WHERE id = $1`, id).Scan(&principal); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, ErrSessionNotFound
+		}
+		return false, fmt.Errorf("%w: reading the session: %w", ErrStore, err)
+	}
+	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if _, err := s.lockSession(ctx, tx, id); err != nil {
+				return err
+			}
+			return s.revokeSessions(ctx, tx, []string{id}, revokedByCaller)
+		},
+		Audit: audit.AuditEvent{
+			EventType: "auth.session.revoked", Outcome: audit.OutcomeAllowed,
+			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: actor.RequestID,
+			Attributes: map[string]any{"reason_code": "session_revoked", "target_kind": "session", "target_id": id},
+		},
+		Event: audit.OutboxEvent{
+			AggregateType: "session", AggregateID: id, EventType: "session.revoked",
+			Payload:        map[string]any{"session_id": id, "principal_id": principal, "reason_code": revokedByCaller},
+			IdempotencyKey: "session.revoked:" + id,
+		},
+	})
+	switch {
+	case err == nil:
+		s.revocations.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", revokedByCaller)))
+		s.logger.InfoContext(ctx, "session revoked", "session_id", id)
+		return true, nil
+	case errors.Is(err, audit.ErrNoStateChange):
+		return false, nil
+	default:
+		return false, fmt.Errorf("%w: revoking a session: %w", ErrStore, err)
+	}
 }
 
 // RevokeAll ends every live session of a principal, in one transaction with
 // one audit row and one outbox event. It returns how many it revoked.
 func (s *Store) RevokeAll(ctx context.Context, principalID uuid.UUID, actor Actor) (int, error) {
-	return 0, errNotImplemented
+	principal := principalID.String()
+	eventID, err := uuid.NewRandom()
+	if err != nil {
+		return 0, err
+	}
+	var revoked int
+	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			// Locks in id order, so two revoke-alls of one principal cannot
+			// deadlock; a single-session writer holds one lock and cannot either.
+			rows, err := tx.Query(ctx, `
+				SELECT id::text FROM `+s.q+`.sessions
+				WHERE principal_id = $1 AND revoked_at IS NULL
+				ORDER BY id FOR UPDATE`, principal)
+			if err != nil {
+				return err
+			}
+			var ids []string
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return err
+				}
+				ids = append(ids, id)
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			revoked = len(ids)
+			if revoked == 0 {
+				return nil
+			}
+			return s.revokeSessions(ctx, tx, ids, revokedByCaller)
+		},
+		Audit: audit.AuditEvent{
+			EventType: "auth.session.revoked_all", Outcome: audit.OutcomeAllowed,
+			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: actor.RequestID,
+			Attributes: map[string]any{"reason_code": "session_revoked", "target_kind": "principal", "target_id": principal},
+		},
+		Event: audit.OutboxEvent{
+			AggregateType: "principal", AggregateID: principal, EventType: "principal.sessions_revoked",
+			Payload:        map[string]any{"principal_id": principal, "reason_code": revokedByCaller},
+			IdempotencyKey: "principal.sessions_revoked:" + principal + ":" + eventID.String(),
+		},
+	})
+	switch {
+	case err == nil:
+		s.revocations.Add(ctx, int64(revoked), metric.WithAttributes(attribute.String("reason", revokedByCaller)))
+		s.logger.InfoContext(ctx, "all sessions of a principal revoked", "principal_id", principal, "sessions", revoked)
+		return revoked, nil
+	case errors.Is(err, audit.ErrNoStateChange):
+		return 0, nil
+	default:
+		return 0, fmt.Errorf("%w: revoking all sessions: %w", ErrStore, err)
+	}
 }
 
 // BumpRevision increments a live session's revision (the successor of the
 // legacy token_version): an access token minted at an older revision is stale.
 func (s *Store) BumpRevision(ctx context.Context, sessionID uuid.UUID, actor Actor) (int64, error) {
-	return 0, errNotImplemented
+	id := sessionID.String()
+	var principal string
+	if err := s.pool.QueryRow(ctx, `SELECT principal_id::text FROM `+s.q+`.sessions WHERE id = $1`, id).Scan(&principal); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrSessionNotFound
+		}
+		return 0, fmt.Errorf("%w: reading the session: %w", ErrStore, err)
+	}
+	eventID, err := uuid.NewRandom()
+	if err != nil {
+		return 0, err
+	}
+	var revision int64
+	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			locked, err := s.lockSession(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if locked.RevokedAt != nil || locked.expired {
+				return nil
+			}
+			return tx.QueryRow(ctx, `
+				UPDATE `+s.q+`.sessions SET revision = revision + 1, updated_at = clock_timestamp()
+				WHERE id = $1 RETURNING revision`, id).Scan(&revision)
+		},
+		Audit: audit.AuditEvent{
+			EventType: "auth.session.revision_bumped", Outcome: audit.OutcomeAllowed,
+			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: actor.RequestID,
+			Attributes: map[string]any{"target_kind": "session", "target_id": id},
+		},
+		Event: audit.OutboxEvent{
+			AggregateType: "session", AggregateID: id, EventType: "session.revision_changed",
+			Payload:        map[string]any{"session_id": id, "principal_id": principal},
+			IdempotencyKey: "session.revision:" + id + ":" + eventID.String(),
+		},
+	})
+	switch {
+	case err == nil:
+		s.logger.InfoContext(ctx, "session revision bumped", "session_id", id, "revision", revision)
+		return revision, nil
+	case errors.Is(err, audit.ErrNoStateChange):
+		return 0, ErrSessionNotLive
+	default:
+		return 0, fmt.Errorf("%w: bumping the revision: %w", ErrStore, err)
+	}
 }
 
 // Current returns the session record, live or not. It carries no secret.
 func (s *Store) Current(ctx context.Context, sessionID uuid.UUID) (Record, error) {
-	return Record{}, errNotImplemented
+	record, err := scanRecord(s.pool.QueryRow(ctx, `SELECT `+s.sessionColumns()+` FROM `+s.q+`.sessions s WHERE s.id = $1`, sessionID.String()))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Record{}, ErrSessionNotFound
+	}
+	if err != nil {
+		return Record{}, fmt.Errorf("%w: reading the session: %w", ErrStore, err)
+	}
+	return record, nil
 }
 
 func actorID(a Actor) *string {

@@ -120,5 +120,7 @@ func datasetObject(row dataset) (*pyjson.Object, error) {
 	out.Set("unavailable_reason", textOrNull(row.UnavailableReason))
 	out.Set("unavailable_since", timeOrNull(row.UnavailableSince))
 	out.Set("unavailable_last_seen_at", timeOrNull(row.UnavailableLastSeenAt))
+	out.Set("state_changed_at", timeOrNull(row.StateChangedAt))
+	out.Set("state_changed_by", textOrNull(row.StateChangedBy))
 	return out, nil
 }

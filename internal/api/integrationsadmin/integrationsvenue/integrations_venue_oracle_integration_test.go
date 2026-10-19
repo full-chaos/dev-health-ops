@@ -60,7 +60,7 @@ func TestIntegrationsAdminVenueOracle(t *testing.T) {
 
 	requests := integrationRequests(venue, v)
 	python := golden.Python(t, venue, requests)
-	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{Golden: golden, Normalize: normalize})
+	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{Golden: golden, Normalize: normalize, Inspect: inspectStateChange(t)})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 
 	// The rows both planes wrote, as raw column text. A row a request created
@@ -90,6 +90,9 @@ FROM integration_datasets ORDER BY integration_id, dataset_key`},
 var (
 	anyUUID     = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 	createdTime = regexp.MustCompile(`"(created_at|updated_at)":"[^"]*"`)
+	// stateChange is the pair the dataset rows carry since CHAOS-10242; the frozen
+	// Python answers predate it, so it is cut from the Go body before the compare.
+	stateChange = regexp.MustCompile(`,"state_changed_at":(null|"[^"]*"),"state_changed_by":(null|"[^"]*")`)
 )
 
 // normalize blanks what differs by construction in a "clock: " request: the
@@ -98,6 +101,7 @@ var (
 // so the same row named twice in one body still reads as the same row, and
 // two different rows never do.
 func normalize(request venueoracle.Request, body string) string {
+	body = stateChange.ReplaceAllString(body, "")
 	if !strings.HasPrefix(request.Name, "clock: ") {
 		return body
 	}
@@ -164,3 +168,24 @@ func repoRoot(t *testing.T) string {
 
 var _ = fmt.Sprint
 var _ = uuid.Nil
+
+// inspectStateChange checks the Go answers for the fields the frozen Python
+// answers lack: seeded dataset rows are unstamped; a toggle stamps the row with
+// the dataset endpoint's writer name.
+func inspectStateChange(t *testing.T) func(venueoracle.Request, venueoracle.Response) {
+	return func(request venueoracle.Request, response venueoracle.Response) {
+		switch request.Name {
+		case "datasets github":
+			if got := strings.Count(response.Body, `"state_changed_at":null,"state_changed_by":null`); got != 2 {
+				t.Errorf("%s: %d unstamped rows, want 2:\n%s", request.Name, got, response.Body)
+			}
+		case "datasets toggle existing":
+			if got := strings.Count(response.Body, `"state_changed_by":"api:dataset_endpoint"`); got != 2 {
+				t.Errorf("%s: %d rows stamped by the dataset endpoint, want 2:\n%s", request.Name, got, response.Body)
+			}
+			if strings.Contains(response.Body, `"state_changed_at":null`) {
+				t.Errorf("%s: a toggled row has no state_changed_at:\n%s", request.Name, response.Body)
+			}
+		}
+	}
+}

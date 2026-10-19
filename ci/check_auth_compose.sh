@@ -20,8 +20,9 @@
 #
 # Every step prints what it measured. The project is private to this run
 # (-p) and is removed with its volumes on exit. CI only: compose.yml gives
-# postgres a fixed container_name, so this cannot run beside another stack
-# that uses it.
+# postgres a fixed container_name, so the proof overlays
+# ci/auth_compose_proof.override.yml (no container_name, no published port) and
+# asserts that every container it starts carries the project prefix.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
@@ -50,7 +51,7 @@ export AUTH_RUNTIME_DATABASE_PASSWORD="${AUTH_RUNTIME_DATABASE_PASSWORD:-au#th@p
 export COMMIT="${COMMIT:-0000000000000000000000000000000000000000}"
 
 compose() {
-  docker compose -p "${PROJECT}" -f "${ROOT}/compose.yml" "$@"
+  docker compose -p "${PROJECT}" -f "${ROOT}/compose.yml" -f "${SCRIPT_DIR}/auth_compose_proof.override.yml" "$@"
 }
 
 cleanup() {
@@ -66,7 +67,15 @@ cleanup() {
 trap cleanup EXIT
 
 printf 'step 1: up --build --wait auth-service\n'
+before="$(docker ps -aq --no-trunc | sort)"
 compose --profile auth up --build --detach --wait --wait-timeout 600 auth-service
+started="$(comm -13 <(printf '%s\n' "${before}") <(docker ps -aq --no-trunc | sort))"
+[ -n "${started}" ] || die "the proof started no containers"
+for id in ${started}; do
+  name="$(docker inspect --format '{{.Name}}' "${id}")"
+  case "${name}" in "/${PROJECT}"[-_]*) ;; *) die "container ${name} does not carry the ${PROJECT} prefix" ;; esac
+done
+printf 'every container started carries the %s prefix: %s\n' "${PROJECT}" "$(printf '%s' "${started}" | wc -w | tr -d ' ')"
 
 health="$(docker inspect --format '{{.State.Health.Status}}' "$(compose --profile auth ps -q auth-service)")"
 printf 'auth-service container health: %s\n' "${health}"
@@ -121,7 +130,8 @@ printf 'auth-service networks: %s\n' "${nets}"
 [ "${nets}" = "${PROJECT}_auth_plane " ] || die "auth-service is on '${nets}', want only ${PROJECT}_auth_plane"
 members="$(docker network inspect "${PROJECT}_auth_plane" --format '{{range .Containers}}{{.Name}} {{end}}' | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ')"
 printf 'auth_plane members: %s\n' "${members}"
-[ "${members}" = "$(compose --profile auth ps -q auth-service | xargs docker inspect --format '{{.Name}}' | tr -d '/') postgres " ] || die "auth_plane has members other than auth-service and postgres: ${members}"
+expected="$(compose --profile auth ps -q auth-service postgres | xargs docker inspect --format '{{.Name}}' | tr -d '/' | sort | tr '\n' ' ')"
+[ "${members}" = "${expected}" ] || die "auth_plane has members other than auth-service and postgres: ${members} (want ${expected})"
 
 printf 'step 4d: no auth service is on the default network\n'
 compose --profile auth config --format json | python3 -c '
@@ -176,4 +186,6 @@ if compose config --services | grep -E '^auth-' >/dev/null; then
 fi
 printf 'default service list names no auth service\n'
 
+gone="$(comm -23 <(printf '%s\n' "${before}") <(docker ps -aq --no-trunc | sort))"
+[ -z "${gone}" ] || die "containers outside the proof project disappeared: ${gone}"
 printf 'AUTH COMPOSE PROOF PASSED\n'

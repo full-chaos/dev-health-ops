@@ -112,9 +112,17 @@ func DecodeResponseJSONWith(response *http.Response, body []byte, v any, flags D
 const (
 	ReasonBodyTooLarge = "body_too_large"
 	ReasonStatus       = "status"
+	ReasonBodyShape    = "body_shape"
 )
 
 // ResponseInvalid is a post-2xx failure whose sentinel is ErrNormalizationInvalid.
 func ResponseInvalid(response *http.Response, reason string) *ProviderError {
 	return ResponseFailure(response, reason, ErrNormalizationInvalid)
+}
+
+// ResponseShape is a post-2xx failure of a decoded body whose fields do not
+// have the shape the route needs (a missing mandatory field, a nil node, an
+// unusable cursor). cause is the sentinel the caller already returned.
+func ResponseShape(response *http.Response, cause error) *ProviderError {
+	return ResponseFailure(response, ReasonBodyShape, cause)
 }

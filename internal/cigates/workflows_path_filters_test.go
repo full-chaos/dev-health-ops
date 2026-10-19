@@ -206,12 +206,25 @@ func looksLikeAPath(l string) bool {
 	return !(strings.ContainsAny(l, " \t%") || strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://"))
 }
 
-func basenameIndex(tracked []string) map[string][]string {
-	idx := map[string][]string{}
+// fileIndex is the tracked set: by basename, and as a set. A file that exists on disk but is not tracked (a CI step's
+// scratch output such as changed.txt) is never a path-filter input, so a literal naming one resolves to nothing.
+type fileIndex struct {
+	byBase map[string][]string
+	set    map[string]bool
+}
+
+func basenameIndex(tracked []string) *fileIndex {
+	idx := &fileIndex{byBase: map[string][]string{}, set: map[string]bool{}}
 	for _, p := range tracked {
-		idx[path.Base(p)] = append(idx[path.Base(p)], p)
+		idx.byBase[path.Base(p)] = append(idx.byBase[path.Base(p)], p)
+		idx.set[p] = true
 	}
 	return idx
+}
+
+func (x *fileIndex) tracked(anchor, abs string) bool {
+	rel, err := filepath.Rel(anchor, filepath.Clean(abs))
+	return err == nil && x.set[filepath.ToSlash(rel)]
 }
 
 func isFile(p string) bool {
@@ -220,14 +233,14 @@ func isFile(p string) bool {
 }
 
 // resolveNamedFiles resolves every file the Go source names, relative to its own directory and to the repo root.
-func resolveNamedFiles(source, base, anchor string, index map[string][]string) map[string]bool {
+func resolveNamedFiles(source, base, anchor string, index *fileIndex) map[string]bool {
 	found := map[string]bool{}
 	add := func(candidate string) {
 		rel, err := filepath.Rel(anchor, filepath.Clean(candidate))
 		if err != nil || strings.HasPrefix(rel, "..") {
 			return
 		}
-		if isFile(candidate) && filepath.Ext(candidate) != ".go" {
+		if isFile(candidate) && index.tracked(anchor, candidate) && filepath.Ext(candidate) != ".go" {
 			found[filepath.ToSlash(rel)] = true
 		}
 	}
@@ -240,7 +253,7 @@ func resolveNamedFiles(source, base, anchor string, index map[string][]string) m
 		add(filepath.Join(base, lit))
 		add(filepath.Join(anchor, lit))
 		if len(found) == before && looksLikeAPath(lit) {
-			if c := index[path.Base(lit)]; len(c) == 1 {
+			if c := index.byBase[path.Base(lit)]; len(c) == 1 {
 				add(filepath.Join(anchor, c[0]))
 			}
 		}
@@ -305,7 +318,7 @@ type unresolved struct {
 }
 
 // unresolvableInSource reports every data-suffixed literal naming a real file that the resolver could not locate.
-func unresolvableInSource(source, base, root string, index map[string][]string) []unresolved {
+func unresolvableInSource(source, base, root string, index *fileIndex) []unresolved {
 	var out []unresolved
 	for n, line := range strings.Split(source, "\n") {
 		for _, m := range quotedLiteral.FindAllStringSubmatch(line, -1) {
@@ -316,8 +329,8 @@ func unresolvableInSource(source, base, root string, index map[string][]string) 
 			if _, fab := fabricatedPathLiterals[lit]; fab {
 				continue
 			}
-			cands := index[path.Base(lit)]
-			if len(cands) == 0 || isFile(filepath.Join(base, lit)) || isFile(filepath.Join(root, lit)) || len(cands) == 1 {
+			cands := index.byBase[path.Base(lit)]
+			if len(cands) == 0 || (isFile(filepath.Join(base, lit)) && index.tracked(root, filepath.Join(base, lit))) || (isFile(filepath.Join(root, lit)) && index.tracked(root, filepath.Join(root, lit))) || len(cands) == 1 {
 				continue
 			}
 			out = append(out, unresolved{n + 1, lit, cands})
@@ -797,5 +810,33 @@ func TestAGitignoredDirectoryIsNotCollectedAsARepoFixture(t *testing.T) {
 	}
 	if got[".uv-cache/pkg/fixtures/probe.json"] {
 		t.Fatal("a gitignored dependency-cache file was collected as a repo fixture")
+	}
+}
+
+// A CI step's scratch output (an untracked changed.txt) named by a tracked Go test is not a path-filter input: path
+// filters match paths in a commit. Hosted CI went red on exactly this.
+func TestAnUntrackedScratchFileIsNotAnInput(t *testing.T) {
+	root := miniRepo(t, map[string]string{"internal/x/x_test.go": "package x\nvar _ = \"changed.txt\"\n"})
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=a@b", "-c", "user.name=t", "commit", "-q", "-m", "x", "--no-gpg-sign"}} {
+		if _, err := runGitStripped(root, args...); err != nil {
+			t.Skipf("git unavailable for the control: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "changed.txt"), []byte("scratch"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resetTracked()
+	defer resetTracked()
+	tracked, err := trackedPaths(repoRoot(t), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := basenameIndex(tracked)
+	src := readFile(t, filepath.Join(root, "internal/x/x_test.go"))
+	if got := resolveNamedFiles(src, filepath.Join(root, "internal/x"), root, index); got["changed.txt"] {
+		t.Fatalf("an untracked scratch file was resolved as an input: %v", got)
+	}
+	if !index.tracked(root, filepath.Join(root, "internal/x/x_test.go")) || index.tracked(root, filepath.Join(root, "changed.txt")) {
+		t.Fatal("control: the tracked set is wrong")
 	}
 }

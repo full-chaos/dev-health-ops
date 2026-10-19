@@ -41,7 +41,6 @@ ROOT = Path(__file__).resolve().parents[2]
 CHECK_GO = ROOT / "ci" / "check_go.sh"
 WEIGHTS = ROOT / "ci" / "go_race_weights.tsv"
 SHARD_AWK = ROOT / "ci" / "go_race_shard.awk"
-WORKFLOW = ROOT / ".github" / "workflows" / "go-quality.yml"
 DEFAULT_WEIGHT = 2
 
 STAND_IN_GO = """#!/usr/bin/env bash

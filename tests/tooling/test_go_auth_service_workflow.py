@@ -16,7 +16,6 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = ROOT / ".github" / "workflows" / "go-auth-service.yml"
 CHECK_GO = ROOT / "ci" / "check_go.sh"
 
 

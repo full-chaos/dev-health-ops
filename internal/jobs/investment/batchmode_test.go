@@ -336,6 +336,14 @@ func TestBatchModeTimeoutFailsUnitsAsASynchronousTransportFailure(t *testing.T) 
 		t.Fatalf("failure counts %v, want batch_timeout for every unit", got.stats.LLMFailureCounts)
 	}
 	got.stats.LLMFailureCounts = want.stats.LLMFailureCounts
+	wantBatchClasses := map[int]string{0: "batch_timeout", 1: "batch_timeout", 2: "batch_timeout"}
+	wantSyncClasses := map[int]string{0: "llm_error", 1: "llm_error", 2: "llm_error"}
+	if !reflect.DeepEqual(got.stats.failureClassByIndex, wantBatchClasses) {
+		t.Fatalf("batch per-unit classes %v, want %v", got.stats.failureClassByIndex, wantBatchClasses)
+	}
+	if !reflect.DeepEqual(want.stats.failureClassByIndex, wantSyncClasses) {
+		t.Fatalf("sync per-unit classes %v, want %v", want.stats.failureClassByIndex, wantSyncClasses)
+	}
 	got.stats.failureClassByIndex = want.stats.failureClassByIndex
 	requireSameCategorization(t, got, want)
 	if fake.cancelled != 1 {

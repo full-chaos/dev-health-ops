@@ -266,6 +266,12 @@ func successOutcome(validation LLMValidationResult, status string, tally complet
 //
 // The type-based branches come from the Kind discriminator rather than
 // isinstance, which is the same test by a different mechanism.
+//
+// The returned words are a closed set (llm_error, auth, rate_limit,
+// server_error, context_length, output_error, batch_timeout, model_not_found,
+// quota_exceeded, missing_key, invalid_api_key). That makes a class safe to
+// store per unit as "llm_failure_class:<class>" in categorization_errors_json
+// and to use as a log attribute.
 func FailureClass(err error) string {
 	if err == nil {
 		return ""

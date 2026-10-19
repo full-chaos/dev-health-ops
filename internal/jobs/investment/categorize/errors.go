@@ -322,3 +322,19 @@ func containsAnySubstring(haystack string, needles ...string) bool {
 	}
 	return false
 }
+
+const redactedMessageLimit = 200
+
+// RedactedMessage is err's text for a log line: credentials redacted, newlines
+// folded, cut to 200 runes. It never carries a response body or prompt text
+// beyond what the error itself holds.
+func RedactedMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := sanitizeMessage(err.Error())
+	if runes := []rune(text); len(runes) > redactedMessageLimit {
+		text = string(runes[:redactedMessageLimit])
+	}
+	return text
+}

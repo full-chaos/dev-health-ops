@@ -126,6 +126,11 @@ type Config struct {
 // Stats mirrors materialize_investments' return dict (materialize.py:1836-1849)
 // -- the shape that becomes the execution ledger's output_evidence.
 type Stats struct {
+	// failureClassByIndex is the failure class of each pending unit whose LLM
+	// call failed, and llmSucceeded the count of units a model answered. Both
+	// stay out of the evidence JSON.
+	failureClassByIndex map[int]string
+	llmSucceeded        int
 	Components          int            `json:"components"`
 	TotalComponents     int            `json:"total_components"`
 	Records             int            `json:"records"`
@@ -140,6 +145,7 @@ type Stats struct {
 	LLMOutputTokens     int            `json:"llm_output_tokens"`
 	LLMFailures         int            `json:"llm_failures"`
 	LLMFailureCounts    map[string]int `json:"llm_failure_counts"`
+	LLMAllFailed        bool           `json:"llm_all_failed,omitempty"`
 	OversizedComponents int            `json:"oversized_components"`
 	DroppedEdges        int            `json:"dropped_edges"`
 	DroppedNodes        int            `json:"dropped_nodes"`
@@ -343,7 +349,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		return Stats{}, fmt.Errorf("fetch work graph edges: %w", err)
 	}
 
-	stats := Stats{LLMFailureCounts: map[string]int{}}
+	stats := Stats{LLMFailureCounts: map[string]int{}, failureClassByIndex: map[int]string{}}
 	buildStats := &units.BuildStats{}
 	components := units.BuildComponentsWithOptions(
 		chquery.ComponentEdges(edgeRows),
@@ -686,7 +692,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			// materialize.py:1671-1676: a pending unit with no recorded
 			// outcome means its LLM task failed non-fatally. It still gets a
 			// row, with the fallback distribution.
-			outcome = categorize.FallbackOutcome(categorize.StatusLLMTaskFailed)
+			outcome = failedUnitOutcome(stats, entry.index)
 		}
 
 		record := entry.result.Investment
@@ -824,6 +830,8 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 	_ = fallbackCount
 
+	stats.LLMAllFailed = stats.LLMFailures > 0 && stats.llmSucceeded == 0
+
 	if stats.RejectedConfidences > 0 {
 		m.logger.WarnContext(ctx, nonFiniteConfidenceRejectedEvent,
 			"org_id", cfg.OrgID, "run_id", cfg.RunID,
@@ -832,6 +840,19 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	}
 
 	logPromptRedactions(ctx, m.logger, cfg.OrgID, cfg.RunID, promptRedactions)
+
+	if stats.LLMFailures > 0 {
+		level := slog.LevelWarn
+		if stats.LLMAllFailed {
+			level = slog.LevelError
+		}
+		m.logger.Log(ctx, level, "investment categorization llm failures",
+			"org_id", cfg.OrgID, "run_id", cfg.RunID,
+			"failures", stats.LLMFailures, "succeeded", stats.llmSucceeded,
+			"all_failed", stats.LLMAllFailed,
+			"by_class", categorize.FormatFailureSummary(stats.llmSucceeded, stats.LLMFailureCounts),
+		)
+	}
 
 	m.logger.InfoContext(ctx, "investment materialization complete",
 		"components", stats.Components, "records", stats.Records, "quotes", stats.Quotes,
@@ -847,6 +868,16 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// no result on purpose: see shadowphase.go.
 	m.runShadow(ctx, cfg, all)
 	return stats, nil
+}
+
+// failedUnitOutcome is the fallback outcome of a unit whose LLM call failed;
+// it names the failure class when this run recorded one.
+func failedUnitOutcome(stats Stats, index int) categorize.CategorizationOutcome {
+	outcome := categorize.FallbackOutcome(categorize.StatusLLMTaskFailed)
+	if class, failed := stats.failureClassByIndex[index]; failed {
+		outcome.Errors = append(outcome.Errors, "llm_failure_class:"+class)
+	}
+	return outcome
 }
 
 // incompleteUnits is the set of work unit ids whose quotes are not complete,
@@ -936,7 +967,7 @@ func (m *Materializer) categorizePending(
 	// RISK-NOTES rather than silently dropped.
 	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	account := &categorizeAccount{outcomes: outcomes, stats: stats, cancel: cancel}
+	account := &categorizeAccount{outcomes: outcomes, stats: stats, cancel: cancel, logger: m.logger, orgID: cfg.OrgID, runID: cfg.RunID}
 
 	// Provider batch mode (batchmode.go) answers the units from one provider
 	// batch; every unit result, failure or outcome, goes through the same
@@ -959,6 +990,10 @@ type categorizeAccount struct {
 	stats    *Stats
 	fatalErr error
 	cancel   context.CancelFunc
+	logger   *slog.Logger
+	orgID    string
+	runID    string
+	logged   bool
 }
 
 // billedFailure is a failed request the provider still billed (a batch line
@@ -985,6 +1020,18 @@ func (account *categorizeAccount) record(index int, outcome categorize.Categoriz
 		class, deterministic := llmFailureOf(err)
 		account.stats.LLMFailureCounts[class]++
 		account.stats.LLMFailures++
+		if account.stats.failureClassByIndex == nil {
+			account.stats.failureClassByIndex = map[int]string{}
+		}
+		account.stats.failureClassByIndex[index] = class
+		if !account.logged && account.logger != nil {
+			account.logged = true
+			account.logger.Warn("investment categorization llm call failed (first of run)",
+				"org_id", account.orgID, "run_id", account.runID,
+				"class", class, "deterministic", deterministic,
+				"message", categorize.RedactedMessage(err),
+			)
+		}
 		// A served decision request that failed after a response was
 		// still billed.
 		var failure *servedFailure
@@ -1006,6 +1053,9 @@ func (account *categorizeAccount) record(index int, outcome categorize.Categoriz
 		return
 	}
 	account.outcomes[index] = outcome
+	if outcome.LLMCalls > 0 {
+		account.stats.llmSucceeded++
+	}
 	account.stats.LLMCalls += outcome.LLMCalls
 	account.stats.LLMInputTokens += outcome.InputTokens
 	account.stats.LLMOutputTokens += outcome.OutputTokens

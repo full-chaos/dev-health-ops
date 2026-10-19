@@ -23,6 +23,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -59,6 +63,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -95,6 +103,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -131,6 +143,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -167,6 +183,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -203,6 +223,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -239,6 +263,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -275,6 +303,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -311,6 +343,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -347,6 +383,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -383,6 +423,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -419,6 +463,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -455,6 +503,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -491,6 +543,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -527,6 +583,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -563,6 +623,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -599,6 +663,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -635,6 +703,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -671,6 +743,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -707,6 +783,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -743,6 +823,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -779,6 +863,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -815,6 +903,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -851,6 +943,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -887,6 +983,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -923,6 +1023,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -959,6 +1063,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -995,6 +1103,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -1031,6 +1143,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -1067,6 +1183,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -1256,6 +1376,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
@@ -1321,6 +1445,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted only when the deployment posture permits (mountProofRoute).",
@@ -1358,6 +1486,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
@@ -1395,6 +1527,10 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "HS256"
+      },
       "classification": "protected",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",

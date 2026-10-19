@@ -169,6 +169,17 @@ func (p *pub) ViaMethod(db interface{ Exec(string, ...any) }) {
 	db.Exec("UPDATE " + p.table() + " SET a = 1")
 }
 
+func ViaBuilder(db interface{ Exec(string, ...any) }, s string) {
+	table := authschema.Quote(s) + ".sessions"
+	db.Exec(builderStmt(table))
+}
+
+func builderStmt(table string) string {
+	return "WITH r AS (" + builderSel(table) + ") DELETE FROM " + table + " AS e USING r WHERE e.id = r.id"
+}
+
+func builderSel(table string) string { return "SELECT e.id FROM " + table + " AS e" }
+
 func Trunc(db interface{ Exec(string, ...any) }) {
 	db.Exec("TRUNCATE TABLE users, refresh_tokens CASCADE")
 }
@@ -245,6 +256,7 @@ func TestPlantedWritersAreRedAndStaleEntriesFail(t *testing.T) {
 		"p/planted.go|Upsert|public.memberships|UPSERT",
 		"p/planted.go|UsesSecond|public.login_attempts|INSERT",
 		"p/planted.go|ViaAssign|auth.security_audit_events|DELETE",
+		"p/planted.go|ViaBuilder|auth.sessions|DELETE",
 		"p/planted.go|ViaConst|public.users|INSERT",
 		"p/planted.go|pkgdecl:firstSQL|public.login_attempts|INSERT",
 		"p/planted.go|pkgdecl:shadowSQL|public.org_invites|INSERT",

@@ -317,6 +317,7 @@ type pkgDecls struct {
 }
 
 type evaluator struct {
+	params   map[string]string // callee parameters bound to the evaluated call arguments
 	pkg      *pkgDecls
 	local    map[string]decl
 	inFunc   bool
@@ -376,12 +377,34 @@ func (e *evaluator) eval(x ast.Expr) string {
 		}
 		if fd := e.pkg.funcs[name]; fd != nil && !e.visiting["call:"+name] && fd.Body != nil && len(fd.Body.List) == 1 {
 			if rs, ok := fd.Body.List[0].(*ast.ReturnStmt); ok && len(rs.Results) == 1 {
-				e.visiting["call:"+name] = true
-				defer delete(e.visiting, "call:"+name)
-				return e.eval(rs.Results[0])
+				var names []string
+				for _, f := range fd.Type.Params.List {
+					for _, nm := range f.Names {
+						names = append(names, nm.Name)
+					}
+				}
+				child := &evaluator{pkg: e.pkg, inFunc: e.inFunc, visiting: map[string]bool{"call:" + name: true}}
+				for k, v := range e.visiting {
+					child.visiting[k] = v
+				}
+				if len(names) == len(n.Args) {
+					child.params = map[string]string{}
+					for i, nm := range names {
+						child.params[nm] = e.eval(n.Args[i])
+					}
+				}
+				return child.eval(rs.Results[0])
 			}
 		}
 	case *ast.Ident:
+		if n.Obj != nil {
+			if _, isParam := n.Obj.Decl.(*ast.Field); isParam {
+				if v, ok := e.params[n.Name]; ok {
+					return v
+				}
+				return unresolved
+			}
+		}
 		if d, isLocal, ok := e.lookup(n); ok && !e.visiting[n.Name] {
 			if !isLocal && e.inFunc {
 				e.pkg.used[n.Name] = true
@@ -475,6 +498,8 @@ func walkStrings(root ast.Node, ev *evaluator, fn func(string)) {
 			if x.Op == token.ADD {
 				fn(ev.eval(x))
 			}
+		case *ast.CallExpr:
+			fn(ev.eval(x))
 		case *ast.SelectorExpr:
 			// X[key].field on a package-level map or struct: only the keyed field values are this function's SQL
 			base := x.X

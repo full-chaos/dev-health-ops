@@ -29,6 +29,8 @@ var unguardedTables = map[string]string{
 	"roles":               "closed vocabulary; the runtime role has no write privilege",
 	"role_actions":        "closed vocabulary; the runtime role has no write privilege",
 	"signing_keys":        "public metadata only; the runtime role has no write privilege",
+	"link_credentials":    "single-use link tokens swept on expiry and removed with their principal; consuming or retargeting one is guarded by column (security columns below)",
+	"login_attempts":      "high-rate lockout counters keyed by an identifier hash; rate limiting, not authority",
 	versionTable:          "auth-migrate bookkeeping, unreachable by the runtime role",
 }
 
@@ -176,11 +178,21 @@ var unguardedColumns = map[string]map[string]string{
 		"id": "lifecycle", "principal_id": "lifecycle", "organization_id": "lifecycle", "issued_at": "lifecycle",
 		"client_ip": "lifecycle", "user_agent": "lifecycle", "last_seen_at": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
 		"token_hash": "security", "expires_at": "security", "revoked_at": "security", "revoked_reason": "security",
+		"revision": "security", "auth_time": "security", "amr": "security",
 	},
 	"refresh_credentials": {
 		"id": "lifecycle", "session_id": "lifecycle", "principal_id": "lifecycle", "superseded_by": "lifecycle",
 		"issued_at": "lifecycle", "consumed_at": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
 		"token_hash": "security", "expires_at": "security", "revoked_at": "security", "revoked_reason": "security",
+		"parent_id": "security", "family_id": "security", "legacy_jti_hash": "security",
+	},
+	"link_credentials": {
+		"id": "lifecycle", "created_at": "lifecycle",
+		"principal_id": "security", "purpose": "security", "token_hash": "security", "expires_at": "security", "consumed_at": "security",
+	},
+	"login_attempts": {
+		"id": "lifecycle", "identifier_hash": "lifecycle", "attempt_count": "lifecycle", "first_attempt_at": "lifecycle",
+		"locked_until": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
 	},
 }
 

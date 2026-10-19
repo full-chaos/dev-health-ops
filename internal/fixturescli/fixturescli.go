@@ -172,9 +172,9 @@ VALUES ($1, $2, $3::uuid, $4, 'repo', $5, $6, $5, '{}'::json, true, $7, $7)`,
 		return "", fmt.Errorf("read dataset: %w", err)
 	}
 	if !found {
-		if _, err := tx.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
-VALUES ($1, $2, $3::uuid, $4, true, '{}'::json)`,
-			uuid.NewString(), params.OrgID, integrationID, params.Target); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options, state_changed_at, state_changed_by)
+VALUES ($1, $2, $3::uuid, $4, true, '{}'::json, now(), $5)`,
+			uuid.NewString(), params.OrgID, integrationID, params.Target, providersync.DatasetWriterFixturesSeed); err != nil {
 			return "", fmt.Errorf("insert dataset: %w", err)
 		}
 	}

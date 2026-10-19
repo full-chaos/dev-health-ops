@@ -125,11 +125,6 @@ def _matches_any(path: str, patterns: list[str]) -> bool:
 # So the oracle now walks the whole tree, and a directory leaves coverage only by
 # being named here WITH a reason.
 UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
-    "src/dev_health_ops/fixtures": (
-        "the Python source tree, not Go testdata -- no Go test reads these, so "
-        "requiring them to trigger the Go workflow would make every Python-only "
-        "fixture change run the Go suite for nothing"
-    ),
     "tests/testops/fixtures": (
         "read by the Python testops suite, not by Go tests; covered by the "
         "Python workflow's own filters"

@@ -28,6 +28,9 @@ type OrgConfig struct {
 	// (key, updated_at, sha256 of the stored value): any write, delete or
 	// value change moves it, including a delete of a row that was not the newest.
 	Version string
+	// GateClosed is set only with found=false: BYO settings are stored but the
+	// byo_llm gate is closed, so the org runs on the platform default.
+	GateClosed bool
 }
 
 // ErrStoredSettingUnreadable means a stored llm setting exists but could not
@@ -127,7 +130,7 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 			return OrgConfig{}, false, fmt.Errorf("llmorgsettings: byo_llm flag state for org %q: %w", orgID, gerr)
 		}
 		if state == flagStateDisabled {
-			return OrgConfig{}, false, nil
+			return OrgConfig{GateClosed: true}, false, nil
 		}
 		return OrgConfig{}, false, fmt.Errorf("%w: setting %q", ErrStoredSettingUnreadable, key)
 	}
@@ -142,7 +145,7 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 		return OrgConfig{}, false, err
 	}
 	if len(settings) == 0 {
-		return OrgConfig{}, false, nil
+		return OrgConfig{GateClosed: len(byo) > 0}, false, nil
 	}
 	settings = project(settings, s.purpose)
 	// The provider the writer stores is already stripped and lower-cased; an

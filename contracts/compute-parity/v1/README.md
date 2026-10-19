@@ -32,8 +32,7 @@ numbers. The vocabularies are disjoint so a reader cannot mistake one for the
 other, and nothing compares product rows in Python.
 
 The retired `compare_runtime_observations.py` returned `UNPROVEN` for every input, because
-`ci/evidence/go-worker-migration/v3-canary-release-proof/parity-thresholds.json`
-carries `review.approved: false`.
+its thresholds file carried `review.approved: false`; the script, the thresholds and the observation schema are deleted (CHAOS-10180).
 
 **Runtime mode is unused by ruling, not pending approval** (chris, 2026-08-23,
 recorded on CHAOS-3090). Go's runtime performance is known-better, so no

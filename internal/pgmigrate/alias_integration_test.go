@@ -193,7 +193,7 @@ func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
 				exec(aliasSetup(t, scenario.setup))
 			}
 			code, text := pythonAlias(t, producer, uri, scenario)
-			results = append(results, aliasResult{Name: scenario.name, Exit: code, Stdout: text})
+			results = append(results, aliasResult{Name: scenario.name, Exit: code, Stdout: normalizeAlias(scenario, text)})
 			exec("DROP TABLE IF EXISTS alembic_version")
 			exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
 		}

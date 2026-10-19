@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -65,8 +66,13 @@ func New(cfg Config) (*Service, error) {
 	return s, nil
 }
 
-// Format and LogValue keep the key out of any print of a Service.
-func (*Service) Format(f fmt.State, _ rune) { _, _ = f.Write([]byte("local.Service{[redacted]}")) }
+// Format, GoString and LogValue are value receivers: a copy of a Service
+// prints and logs without its key as well.
+func (Service) Format(f fmt.State, _ rune) { _, _ = f.Write([]byte("local.Service{[redacted]}")) }
+
+func (Service) GoString() string { return "local.Service{[redacted]}" }
+
+func (Service) LogValue() slog.Value { return slog.StringValue("local.Service{[redacted]}") }
 
 // LockoutIdentifier is HMAC-SHA-256(lockout key, normalized email).
 func (s *Service) LockoutIdentifier(normalizedEmail string) []byte {

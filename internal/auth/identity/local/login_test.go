@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -321,5 +322,20 @@ func TestInvalidEmailIsAnErrorBeforeAnyLookup(t *testing.T) {
 	}
 	if len(r.c.log) != 0 {
 		t.Fatalf("calls before validation: %v", r.c.log)
+	}
+}
+
+func TestServicePrintsNoKeyByPointerOrValue(t *testing.T) {
+	svc := newRig(t, local(t)).svc
+	key := keyEncoding.EncodeToString(svc.key[:])
+	raw := fmt.Sprint(svc.key[:])
+	for name, got := range map[string]string{
+		"%v pointer": fmt.Sprintf("%v", svc), "%+v pointer": fmt.Sprintf("%+v", svc), "%#v pointer": fmt.Sprintf("%#v", svc),
+		"%v value": fmt.Sprintf("%v", *svc), "%+v value": fmt.Sprintf("%+v", *svc), "%#v value": fmt.Sprintf("%#v", *svc),
+		"log value": fmt.Sprint(svc.LogValue()),
+	} {
+		if strings.Contains(got, key) || strings.Contains(got, raw) || strings.Contains(got, "7 7 7") {
+			t.Errorf("%s prints the lockout key: %s", name, got)
+		}
 	}
 }

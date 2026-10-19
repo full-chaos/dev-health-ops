@@ -2,6 +2,7 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -49,7 +50,18 @@ type GenerationRepairOutcome struct {
 	// (fixed-schedule, post-sync, touched-drain, manual-daily).
 	ByFamily map[string]int        `json:"by_family"`
 	Rows     []GenerationRepairRow `json:"rows"`
+	// Partial is true when the pass budget ended before the range was done.
+	// This is not a failure: rows commit one by one, so a rerun with --from
+	// set to ResumeFrom (the target day of the first row not handled) covers
+	// the rest. Remaining counts the rows not handled when it is known.
+	Partial    bool   `json:"partial"`
+	ResumeFrom string `json:"resume_from,omitempty"`
+	Remaining  int    `json:"remaining,omitempty"`
 }
+
+// errRepairBudget marks a store call that stopped because the pass budget
+// ended. It never leaves this file: the pass turns it into a Partial outcome.
+var errRepairBudget = errors.New("generation repair budget ended")
 
 // provenFanoutGeneration finds the scheduled fan-out generation a run was
 // created with. A run id is uuid5(org|day|generation) (newRun), so the id
@@ -168,6 +180,24 @@ type legacyRedriveRun struct {
 func (store *PostgresStore) RepairLegacyRedriveGenerations(
 	ctx context.Context, orgID string, from, to time.Time, dryRun bool, reason string,
 ) (GenerationRepairOutcome, error) {
+	outcome, err := store.repairLegacyRedriveGenerations(ctx, orgID, from, to, dryRun, reason)
+	if errors.Is(err, errRepairBudget) {
+		if outcome.ResumeFrom == "" {
+			outcome.ResumeFrom = from.UTC().Truncate(24 * time.Hour).Format(dailyTargetDayLayout)
+		}
+		outcome.Partial = true
+		recordGenerationRepairPartial(ctx)
+		slog.InfoContext(ctx, "daily metrics legacy redrive generation repair pass ended at its budget",
+			"org_id", orgID, "resume_from", outcome.ResumeFrom, "remaining", outcome.Remaining,
+			"examined", outcome.Examined, "repaired", outcome.Repaired, "dry_run", dryRun)
+		return outcome, nil
+	}
+	return outcome, err
+}
+
+func (store *PostgresStore) repairLegacyRedriveGenerations(
+	ctx context.Context, orgID string, from, to time.Time, dryRun bool, reason string,
+) (GenerationRepairOutcome, error) {
 	outcome := GenerationRepairOutcome{Rows: []GenerationRepairRow{}, ByFamily: map[string]int{}}
 	orgID, ok := canonicalOrgID(orgID)
 	if !store.valid() || !ok || to.Before(from) {
@@ -210,7 +240,11 @@ ORDER BY run.target_day, run.id`, orgID, from, to, legacyRedriveGenerationPrefix
 			return outcome, err
 		}
 	}
-	for _, run := range runs {
+	for index, run := range runs {
+		if ctx.Err() != nil {
+			outcome.ResumeFrom, outcome.Remaining = run.day, len(runs)-index
+			return outcome, errRepairBudget
+		}
 		outcome.Examined++
 		row := GenerationRepairRow{RunID: run.id, TargetDay: run.day, OldGeneration: run.generation}
 		runID, err := uuid.Parse(run.id)
@@ -240,6 +274,10 @@ ORDER BY run.target_day, run.id`, orgID, from, to, legacyRedriveGenerationPrefix
 			}
 			applied, err := store.rewriteLegacyRedriveGeneration(ctx, orgID, run.id, run.generation, generation, row.FullOrgFlip)
 			if err != nil {
+				if errors.Is(err, errRepairBudget) {
+					outcome.Examined--
+					outcome.ResumeFrom, outcome.Remaining = run.day, len(runs)-index
+				}
 				return outcome, err
 			}
 			if !applied {
@@ -310,8 +348,13 @@ WHERE run.id = $1::uuid AND run.org_id = $2::uuid AND run.generation = $3
 }
 
 // repairUnavailable keeps the cause of a store failure in the log; the caller
-// only gets ErrUnavailable.
+// only gets ErrUnavailable. A failure after the pass budget ended is not a
+// store failure: it returns errRepairBudget and is neither logged nor counted.
 func repairUnavailable(ctx context.Context, step string, cause error) error {
+	if ctx.Err() != nil {
+		return errRepairBudget
+	}
+	recordGenerationRepairFailure(ctx, step)
 	slog.ErrorContext(ctx, "daily metrics legacy redrive generation repair failed", "step", step, "error", cause)
 	return ErrUnavailable
 }

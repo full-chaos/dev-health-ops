@@ -77,3 +77,4 @@ func (a IdentityAccounts) SetPasswordHash(ctx context.Context, id uuid.UUID, has
 }
 
 var _ Accounts = IdentityAccounts{}
+var _ IdentityStore = (*identity.Store)(nil)

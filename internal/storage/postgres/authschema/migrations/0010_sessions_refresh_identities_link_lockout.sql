@@ -2,7 +2,9 @@
 -- link credentials and lockout (Wave 2 A2, CHAOS-10156). ADDITIVE except one
 -- named index swap, which the additive-diff test exempts by version.
 --
--- Everything here stores hashes only. A dump of these tables replays nothing.
+-- Everything here stores hashes only. A new hash column is a 32-byte digest
+-- (SHA-256 or HMAC-SHA-256): a CHECK on the length refuses an address or a
+-- token written by mistake, though it cannot tell a 32-byte secret from a digest. A dump of these tables replays nothing.
 
 -- sessions: revision replaces the legacy token_version (an access token carries
 -- the revision it was minted at; bumping it invalidates older tokens). auth_time
@@ -21,7 +23,7 @@ ALTER TABLE sessions
 ALTER TABLE refresh_credentials
     ADD COLUMN family_id        uuid  NOT NULL DEFAULT gen_random_uuid(),
     ADD COLUMN parent_id        uuid  REFERENCES refresh_credentials (id) ON DELETE SET NULL,
-    ADD COLUMN legacy_jti_hash  bytea;
+    ADD COLUMN legacy_jti_hash  bytea CHECK (legacy_jti_hash IS NULL OR octet_length(legacy_jti_hash) = 32);
 CREATE INDEX refresh_credentials_family_idx ON refresh_credentials (family_id);
 CREATE INDEX refresh_credentials_parent_idx ON refresh_credentials (parent_id) WHERE parent_id IS NOT NULL;
 CREATE UNIQUE INDEX refresh_credentials_legacy_jti_hash_key
@@ -42,7 +44,7 @@ CREATE TABLE link_credentials (
     id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     principal_id uuid        NOT NULL REFERENCES principals (id) ON DELETE CASCADE,
     purpose      text        NOT NULL CHECK (purpose IN ('email_verification', 'password_reset')),
-    token_hash   bytea       NOT NULL,
+    token_hash   bytea       NOT NULL CHECK (octet_length(token_hash) = 32),
     expires_at   timestamptz NOT NULL,
     consumed_at  timestamptz,
     created_at   timestamptz NOT NULL DEFAULT now()
@@ -56,7 +58,7 @@ CREATE INDEX link_credentials_expires_idx ON link_credentials (expires_at);
 -- deleted on a successful login; a sweep deletes unlocked rows idle for 24 h.
 CREATE TABLE login_attempts (
     id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-    identifier_hash  bytea       NOT NULL,
+    identifier_hash  bytea       NOT NULL CHECK (octet_length(identifier_hash) = 32),
     attempt_count    integer     NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     first_attempt_at timestamptz,
     locked_until     timestamptz,
@@ -78,6 +80,14 @@ CREATE TRIGGER sessions_security_guard_0010
 CREATE TRIGGER refresh_credentials_security_guard_0010
     BEFORE UPDATE OF family_id, legacy_jti_hash ON refresh_credentials
     FOR EACH ROW EXECUTE FUNCTION audit_commit_guard();
+-- parent_id: re-pointing a credential's parent rewrites rotation history, so a
+-- move to a non-null parent is guarded. Setting it to NULL is not: that is the
+-- ON DELETE SET NULL action of the expiry sweep, which runs outside a commit
+-- transaction by design (reuse detection reads family_id, not parent_id).
+CREATE TRIGGER refresh_credentials_parent_guard
+    BEFORE UPDATE OF parent_id ON refresh_credentials
+    FOR EACH ROW WHEN (NEW.parent_id IS NOT NULL)
+    EXECUTE FUNCTION audit_commit_guard();
 CREATE TRIGGER link_credentials_security_guard
     BEFORE UPDATE OF principal_id, purpose, token_hash, expires_at, consumed_at ON link_credentials
     FOR EACH ROW EXECUTE FUNCTION audit_commit_guard();

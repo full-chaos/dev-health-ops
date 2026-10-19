@@ -657,7 +657,7 @@ func TestDowngradeMatchesFrozenPythonDowngrade(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/downgrade.json",
 		PythonBuild: downgradePythonBuild,
-		SHA256:      "3c7a3080aadb308dc85cc8a2a158e77fa7b07b3707e7d2496ddb1a59691fc9f1",
+		SHA256:      "ff67a6db818ba3d57e026a87fd9170356a9e459d35324a59d796adc882f6ea7d",
 		Recipe: "git worktree add --detach $DIR " + downgradePythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestDowngradeMatchesFrozenPythonDowngrade$' -python-root $DIR",
 	})

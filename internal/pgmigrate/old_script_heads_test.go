@@ -18,7 +18,7 @@ import (
 const statesPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 
 // oldScriptHeadsSHA256 pins testdata/golden/old_script_heads.json (the record verb rewrites it).
-const oldScriptHeadsSHA256 = "7c75c62e6d780324797eb7b5d57fcf31a78383fb85bd8dd50beea1375e26d8cd"
+const oldScriptHeadsSHA256 = "267fd15fe45b4d042a2b8d9c04d3c6539ef63e8c306e18cc08b336cade15213a"
 
 // oldScriptDerivation is the head derivation the roll pre-check (hook-parity-check.sh, the script `preflight`
 // replaces) ran over the Alembic scripts: every revision that no other revision names as its down_revision.

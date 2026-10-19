@@ -169,7 +169,7 @@ func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/alias.json",
 		PythonBuild: aliasPythonBuild,
-		SHA256:      "8a74447cbf04b8ee3de2994febfc66d5bc87a7f22a89aea1f463ca525bec0915",
+		SHA256:      "27bb36e34c49836ec6e66676f27320fa531bb90a4748cd681d4101e50d58d8c8",
 		Recipe: "git worktree add --detach $DIR " + aliasPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestAliasesMatchTheFrozenPythonOutput$' -python-root $DIR",
 	})

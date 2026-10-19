@@ -65,3 +65,25 @@ CREATE TABLE saml_assertion_uses (
     PRIMARY KEY (issuer, assertion_id_hash)
 );
 CREATE INDEX saml_assertion_uses_expires_idx ON saml_assertion_uses (expires_at);
+
+-- Replay evidence outlives what it guards. A consumed flow and a recorded
+-- assertion id are the proof that a sign-in was already used; deleting one
+-- while it is still valid (or inside the sweep's grace) would let the same
+-- flow or assertion be recorded and used again. Only a row that expired more
+-- than an hour ago may be deleted, which is exactly what the sweep removes.
+CREATE FUNCTION sso_replay_evidence_retained() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
+BEGIN
+    RAISE EXCEPTION '% row is replay evidence and is retained until an hour after it expires', TG_TABLE_NAME
+        USING ERRCODE = 'integrity_constraint_violation';
+END;
+$$;
+CREATE TRIGGER sso_flow_states_replay_evidence_retained
+    BEFORE DELETE ON sso_flow_states
+    FOR EACH ROW WHEN (OLD.expires_at > now() - interval '1 hour')
+    EXECUTE FUNCTION sso_replay_evidence_retained();
+CREATE TRIGGER saml_assertion_uses_replay_evidence_retained
+    BEFORE DELETE ON saml_assertion_uses
+    FOR EACH ROW WHEN (OLD.expires_at > now() - interval '1 hour')
+    EXECUTE FUNCTION sso_replay_evidence_retained();

@@ -4,12 +4,17 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 // anonymousProbe answers one request with no credential on a listener and
 // returns the status. A listener the caller cannot reach is not in the map.
+// anonymousProbeMethods is every method an api_route row is probed with: the
+// row registers a runtime method list, so any of them can open on its own.
+var anonymousProbeMethods = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions}
+
 type anonymousProbe func(method, path string) int
 
 // anonymousClaimViolations compares each row's classification with what the
@@ -24,9 +29,9 @@ func anonymousClaimViolations(rows []profileRow, probes map[string]anonymousProb
 		if skip[row.route] {
 			continue
 		}
-		method := row.method
-		if method == "api_route" {
-			method = http.MethodGet
+		methods := []string{row.method}
+		if row.method == "api_route" {
+			methods = anonymousProbeMethods
 		}
 		path := pathParameter.ReplaceAllString(row.route, "x")
 		for _, listener := range row.listeners {
@@ -34,12 +39,21 @@ func anonymousClaimViolations(rows []profileRow, probes map[string]anonymousProb
 			if !ok {
 				continue
 			}
-			code := probe(method, path)
-			switch {
-			case row.public && code == http.StatusUnauthorized:
-				violations = append(violations, fmt.Sprintf("%s on %s: row is public but an anonymous %s %s is refused with 401", row.id, listener, method, path))
-			case !row.public && code != http.StatusUnauthorized:
-				violations = append(violations, fmt.Sprintf("%s on %s: row is protected but an anonymous %s %s answers %d, not 401", row.id, listener, method, path, code))
+			var bad, codes []string
+			for _, method := range methods {
+				code := probe(method, path)
+				if (row.public && code == http.StatusUnauthorized) || (!row.public && code != http.StatusUnauthorized) {
+					bad = append(bad, method)
+					codes = append(codes, strconv.Itoa(code))
+				}
+			}
+			if len(bad) == 0 {
+				continue
+			}
+			if row.public {
+				violations = append(violations, fmt.Sprintf("%s on %s: row is public but an anonymous %s %s is refused with 401", row.id, listener, strings.Join(bad, "/"), path))
+			} else {
+				violations = append(violations, fmt.Sprintf("%s on %s: row is protected but an anonymous %s %s answers %s, not 401", row.id, listener, strings.Join(bad, "/"), path, strings.Join(codes, "/")))
 			}
 		}
 	}
@@ -88,6 +102,43 @@ func TestAnonymousClaimViolationsHonoursSkipAndUnreachableListeners(t *testing.T
 	}
 	if got := anonymousClaimViolations(seededRows(), map[string]anonymousProbe{}, nil); len(got) != 0 {
 		t.Fatalf("a listener with no probe was probed: %v", got)
+	}
+}
+
+func apiRouteRow(public bool) []profileRow {
+	return []profileRow{{id: "api_route /r [@query]", method: "api_route", route: "/r", listeners: []string{"query"}, public: public}}
+}
+
+func byMethod(codes map[string]int, def int) anonymousProbe {
+	return func(method, _ string) int {
+		if code, ok := codes[method]; ok {
+			return code
+		}
+		return def
+	}
+}
+
+func TestAnonymousClaimViolationsProbesEveryMethodOfAPIRoute(t *testing.T) {
+	probes := func(p anonymousProbe) map[string]anonymousProbe { return map[string]anonymousProbe{"query": p} }
+	got := anonymousClaimViolations(apiRouteRow(false), probes(byMethod(map[string]int{"POST": 200}, 401)), nil)
+	if len(got) != 1 || !strings.Contains(got[0], "POST") || !strings.Contains(got[0], "protected but an anonymous") {
+		t.Fatalf("protected row open on POST: got %v", got)
+	}
+	if got := anonymousClaimViolations(apiRouteRow(false), probes(byMethod(nil, 401)), nil); len(got) != 0 {
+		t.Fatalf("protected row refusing every method reported: %v", got)
+	}
+	got = anonymousClaimViolations(apiRouteRow(true), probes(byMethod(map[string]int{"DELETE": 401}, 200)), nil)
+	if len(got) != 1 || !strings.Contains(got[0], "DELETE") || !strings.Contains(got[0], "public but an anonymous") {
+		t.Fatalf("public row refusing DELETE: got %v", got)
+	}
+	got = anonymousClaimViolations(apiRouteRow(false), probes(byMethod(map[string]int{"POST": 200, "PUT": 204}, 401)), nil)
+	if len(got) != 1 || !strings.Contains(got[0], "POST/PUT") || !strings.Contains(got[0], "200/204") {
+		t.Fatalf("row open on POST and PUT: want one line naming both, got %v", got)
+	}
+	var seen []string
+	anonymousClaimViolations(seededRows()[:1], probes(func(method, _ string) int { seen = append(seen, method); return 401 }), nil)
+	if len(seen) != 1 || seen[0] != "GET" {
+		t.Fatalf("a GET row was probed with %v", seen)
 	}
 }
 

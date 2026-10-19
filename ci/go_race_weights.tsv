@@ -101,7 +101,7 @@ internal/bigboycompose	1
 internal/billingcli	1
 internal/cacheinvalidation	1
 internal/chmigrate	1
-internal/cigates	300
+internal/cigates	280
 internal/cli	2
 internal/clicredentials	11
 internal/contractcheck	1

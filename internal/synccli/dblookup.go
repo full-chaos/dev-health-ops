@@ -385,7 +385,7 @@ func activeGitHubIntegration(ctx context.Context, pool *pgxpool.Pool, orgID stri
 	if err := rows.Err(); err != nil {
 		return "", "", lookupFailureWith(reasonDatabaseQueryFailed, err)
 	}
-	if selector, ok := env.Lookup(githubIntegrationSelectorEnv); ok && strings.TrimSpace(selector) != "" {
+	if selector, ok := env.Lookup(githubIntegrationSelectorEnv); ok {
 		return selectGitHubIntegration(strings.TrimSpace(selector), ids, credentialIDs)
 	}
 	switch {

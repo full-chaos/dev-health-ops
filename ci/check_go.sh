@@ -3007,9 +3007,17 @@ check_providersync_test_shard() {
 
   printf 'go test providersync test shard %s: %d top-level test(s)\n' \
     "${shard}" "${selected_count}"
+  # CHAOS-10290: -timeout sits under the 25 min job cap so a slow shard panics with the running test names instead of a
+  # silent cancel. -json goes to a file (per-test Elapsed for re-sharding); jq turns it back into the plain go test log,
+  # and pipefail keeps go test's exit code.
+  local json_dir="${GO_TEST_JSON_DIR:-${ROOT}/.go-test-json}"
+  mkdir -p "${json_dir}"
   (
+    set -o pipefail
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -json -run "${test_regex}" ./internal/providersync \
+      | tee "${json_dir}/providersync-shard-${shard}.json" \
+      | jq -rj 'select(.Action == "output") | .Output'
   )
 }
 

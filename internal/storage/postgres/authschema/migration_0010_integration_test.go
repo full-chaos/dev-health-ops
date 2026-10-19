@@ -440,3 +440,89 @@ func TestMigration0010ConsumedAtIsWriteOnce(t *testing.T) {
 		t.Errorf("deleting the principal of consumed credentials was refused: %v", err)
 	}
 }
+
+// A live lockout cannot be erased by the runtime role: the identifier is
+// immutable, and while locked_until is in the future the row can neither lose
+// its lock or count nor be deleted. Clearing after expiry, counting up and the
+// idle sweep of unlocked rows stay legal.
+func TestMigration0010LiveLockoutCannotBeErasedByTheRuntime(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+
+	var id string
+	if err := env.runtime.QueryRow(ctx, `INSERT INTO auth.login_attempts (identifier_hash, attempt_count, first_attempt_at, locked_until)
+		VALUES ($1::bytea, 5, now(), now() + interval '1 hour') RETURNING id::text`, m10Hash("d2")).Scan(&id); err != nil {
+		t.Fatalf("insert a locked row: %v", err)
+	}
+	refused := map[string]string{
+		"retargeting the identifier": `UPDATE auth.login_attempts SET identifier_hash = decode(rpad('d3', 64, '0'), 'hex') WHERE id = $1`,
+		"clearing the lock":          `UPDATE auth.login_attempts SET locked_until = NULL WHERE id = $1`,
+		"shortening the lock":        `UPDATE auth.login_attempts SET locked_until = now() + interval '1 second' WHERE id = $1`,
+		"resetting the count":        `UPDATE auth.login_attempts SET attempt_count = 0 WHERE id = $1`,
+		"deleting the locked row":    `DELETE FROM auth.login_attempts WHERE id = $1`,
+	}
+	for name, statement := range refused {
+		if _, err := env.runtime.Exec(ctx, statement, id); err == nil {
+			t.Errorf("%s on a live lockout was accepted", name)
+		}
+	}
+	if _, err := env.runtime.Exec(ctx, `UPDATE auth.login_attempts SET locked_until = now() + interval '2 hours', attempt_count = 6 WHERE id = $1`, id); err != nil {
+		t.Errorf("extending a live lock was refused: %v", err)
+	}
+
+	// After expiry the same row can be cleared and deleted.
+	if _, err := env.admin.Exec(ctx, `UPDATE auth.login_attempts SET locked_until = now() - interval '1 minute' WHERE id = $1`, id); err != nil {
+		t.Fatalf("age the lock: %v", err)
+	}
+	if _, err := env.runtime.Exec(ctx, `UPDATE auth.login_attempts SET attempt_count = 0, first_attempt_at = NULL, locked_until = NULL WHERE id = $1`, id); err != nil {
+		t.Errorf("clearing an expired lock was refused: %v", err)
+	}
+	if _, err := env.runtime.Exec(ctx, `DELETE FROM auth.login_attempts WHERE id = $1`, id); err != nil {
+		t.Errorf("deleting an unlocked row was refused: %v", err)
+	}
+}
+
+// A child credential always belongs to its parent's family, so a family-wide
+// revoke reaches it.
+func TestMigration0010RefreshChildInheritsTheParentsFamily(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+	m10Seed(t, ctx, env)
+
+	var parent, parentFamily, other string
+	if err := env.runtime.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
+		VALUES ($1, $2, '\x51'::bytea, now() + interval '1 day') RETURNING id::text, family_id::text`, m10Session, m10Principal).Scan(&parent, &parentFamily); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.runtime.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
+		VALUES ($1, $2, '\x52'::bytea, now() + interval '1 day') RETURNING id::text`, m10Session, m10Principal).Scan(&other); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, insert := range map[string]string{
+		"family_id omitted":       `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at, parent_id) VALUES ($1, $2, $3::bytea, now() + interval '1 day', $4) RETURNING family_id::text`,
+		"another family supplied": `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at, parent_id, family_id) VALUES ($1, $2, $3::bytea, now() + interval '1 day', $4, gen_random_uuid()) RETURNING family_id::text`,
+	} {
+		var family string
+		token := m10Hash(map[string]string{"family_id omitted": "61", "another family supplied": "62"}[name])
+		if err := env.runtime.QueryRow(ctx, insert, m10Session, m10Principal, token, parent).Scan(&family); err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if family != parentFamily {
+			t.Errorf("%s: child family %s, want the parent's %s", name, family, parentFamily)
+		}
+	}
+
+	// Re-pointing a credential at a parent of another family is refused.
+	err := guardedExec(ctx, env.runtime, `UPDATE auth.refresh_credentials SET parent_id = $2::uuid WHERE id = $1`, other, parent)
+	if err == nil || !strings.Contains(err.Error(), "family") {
+		t.Errorf("re-parenting across families: err = %v, want a refusal naming the family", err)
+	}
+	err = guardedExec(ctx, env.runtime, `UPDATE auth.refresh_credentials SET family_id = gen_random_uuid() WHERE parent_id = $1`, parent)
+	if err == nil || !strings.Contains(err.Error(), "family") {
+		t.Errorf("moving a child to another family: err = %v, want a refusal naming the family", err)
+	}
+}

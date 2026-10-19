@@ -1448,7 +1448,7 @@ topology](#queue-topology)):**
   reported: unlabelled requests take the one estimated family of their dimension
   that has no labelled requests, several open families become one joined `a+b` row
   with `family_resolved=false`, requests no estimate covers are `unbudgeted_actual`,
-  and only `rest_core` and `search` are request-count comparable. The actuals cover
+  and a row with an estimate is assessable only on `rest_core` and `search` (request-count dimensions), while a row with no estimate is assessable on any dimension (a zero baseline) and warns as `unbudgeted_actual`, as Python did. The actuals cover
   the finishing attempt (`budget_comparison_attempt_scope`), like Python's one run of
   a unit; the rows are `incomplete` when earlier attempts or chunks exist or when the
   ledger dropped requests past its 50 keys. The finish logs

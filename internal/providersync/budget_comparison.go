@@ -50,7 +50,8 @@ const BudgetComparisonAttemptScope = "final_attempt"
 // requestCountComparableDimensions are the dimensions whose estimated units
 // approximate a request count; the others (graphql cost points, blob
 // expansion, the abuse-risk flag) are abstract units a request count cannot be
-// compared with.
+// compared with. A row with no estimate is compared on any dimension: a zero
+// baseline is no unit conversion (Python's sync_units.py:443-445).
 var requestCountComparableDimensions = map[string]bool{"rest_core": true, "search": true}
 
 // BudgetEstimatesFromResult reads the estimates a unit result carries in

@@ -133,3 +133,44 @@ func TestAFinishedUnitWithoutEstimatesStoresNoBudgetObservations(t *testing.T) {
 		t.Fatalf("terminal result = %#v, want no budget observations for a unit without estimates", repository.result)
 	}
 }
+
+// Python's rule (sync_units.py:443-445): a row with an estimate is assessable
+// only on a request-count dimension, so graphql_cost points never warn; a row
+// with no estimate has a zero baseline on any dimension and warns once as
+// unbudgeted_actual. The rows come from the real join.
+func TestAnAbstractUnitDimensionWarnsOnlyWhenNoEstimateCoversIt(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	claim := providersync.Claim{}
+	claim.Provider, claim.Dataset, claim.ID = "github", "commits", "22222222-2222-4222-8222-222222222222"
+	graphql := func(count int) providersync.RequestLedgerSnapshot {
+		return providersync.RequestLedgerSnapshot{Entries: []providerfoundation.LedgerEntry{
+			{LedgerKey: providerfoundation.LedgerKey{RouteFamily: providerfoundation.LedgerUnclassified, Dimension: "graphql_cost"}, Requests: count},
+		}}
+	}
+
+	covered := providersync.CompareBudget(
+		[]providersync.BudgetEstimateRow{{RouteFamily: "pr_social", Dimension: "graphql_cost", EstimatedUnits: 40}}, graphql(100), false)
+	(&Handler{ProviderMetrics: providerfoundation.NewMetrics()}).observeBudgetComparison(context.Background(), claim, covered, 0, false)
+	if strings.Contains(logs.String(), "budget_underestimated") {
+		t.Fatalf("a graphql_cost row with an estimate warned:\n%s", logs.String())
+	}
+
+	metrics := providerfoundation.NewMetrics()
+	uncovered := providersync.CompareBudget(
+		[]providersync.BudgetEstimateRow{{RouteFamily: "commits", Dimension: "rest_core", EstimatedUnits: 7}}, graphql(100), false)
+	(&Handler{ProviderMetrics: metrics}).observeBudgetComparison(context.Background(), claim, uncovered, 0, false)
+	if got := strings.Count(logs.String(), "msg=sync_provider_unit.budget_underestimated "); got != 1 ||
+		!strings.Contains(logs.String(), "dimension=graphql_cost") || !strings.Contains(logs.String(), "reason=unbudgeted_actual") {
+		t.Fatalf("a graphql_cost row no estimate covers must warn once as unbudgeted_actual:\n%s", logs.String())
+	}
+	var output bytes.Buffer
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `dev_health_provider_budget_underestimate_total{provider="github",dataset="commits",dimension="graphql_cost"} 1`) {
+		t.Fatalf("the unbudgeted graphql_cost row was not counted:\n%s", output.String())
+	}
+}

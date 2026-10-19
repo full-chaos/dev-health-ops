@@ -13,10 +13,11 @@ const (
 )
 
 // observeBudgetComparison reports the estimate-against-actual comparison of a
-// unit that finished: one Info line, and for each row whose requests exceeded a
-// request-count estimate one Warn and one count. Call it after the durable
-// finish succeeded. A row on an abstract-unit dimension is never underestimated,
-// so it never warns.
+// unit that finished: one Info line, and for each underestimated row one Warn
+// and one count. Call it after the durable finish succeeded. As in Python, a row
+// with an estimate is underestimated only on a request-count dimension (rest_core,
+// search); a row with no estimate has a zero baseline on any dimension, so it is
+// underestimated whenever it has requests and warns as unbudgeted_actual.
 func (handler *Handler) observeBudgetComparison(
 	ctx context.Context, claim providersync.Claim, rows []providersync.BudgetComparisonRow,
 	dropped int, earlierWork bool,

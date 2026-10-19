@@ -1,0 +1,185 @@
+{
+  "description": "Golden corpus for authorization_decision.v1 (CHAOS-4932). reject_by_client documents VALIDATE against the schema and every client MUST still refuse them.",
+  "accept": [
+    {
+      "file": "decision-valid-allow-with-obligations.json",
+      "why": "TRD section 8's own decision example, plus redaction, assurance and step-up."
+    },
+    {
+      "file": "decision-valid-deny.json",
+      "why": "A deny: no obligations, a reason code, an expiry. Positive control for the deny branch."
+    },
+    {
+      "file": "decision-valid-platform-decision-null-org.json",
+      "why": "A platform decision has a null organization_id, as in principal.v1."
+    },
+    {
+      "file": "decision-valid-empty-allowlist.json",
+      "why": "An empty allowlist means none; it is representable and distinct from an absent member."
+    },
+    {
+      "file": "decision-valid-allow-without-obligations.json",
+      "why": "An allow with no obligations is legal."
+    }
+  ],
+  "reject": [
+    {
+      "file": "decision-invalid-missing-allowed.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "`allowed` has no default. A document with no verdict must not be read as one."
+    },
+    {
+      "file": "decision-invalid-allowed-as-string.json",
+      "expect_instance_location": "/allowed",
+      "expect_keyword": "type",
+      "why": "The string \"true\" is not a boolean; a truthy-string coercion would turn text into an allow."
+    },
+    {
+      "file": "decision-invalid-allowed-null.json",
+      "expect_instance_location": "/allowed",
+      "expect_keyword": "type",
+      "why": "null is not a verdict."
+    },
+    {
+      "file": "decision-invalid-allowed-as-number.json",
+      "expect_instance_location": "/allowed",
+      "expect_keyword": "type",
+      "why": "1 is not a boolean."
+    },
+    {
+      "file": "decision-invalid-missing-expires-at.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "Decision expiry bounds a stale allow (TRD section 14); a deny without one is invalid too. Ruled Q2: keep."
+    },
+    {
+      "file": "decision-invalid-allow-missing-expires-at.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "The allow case of the same rule, so the requirement is not accidentally deny-only."
+    },
+    {
+      "file": "decision-invalid-missing-policy-revision.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "policy_revision is in every decision (ACP-ADR-05 decision 3)."
+    },
+    {
+      "file": "decision-invalid-missing-reason-code.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "A decision states why."
+    },
+    {
+      "file": "decision-invalid-missing-organization-id.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "The member is required; null is the explicit platform value, absence is a defect."
+    },
+    {
+      "file": "decision-invalid-reason-code-free-text.json",
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "why": "Free text smuggled into the code field: user-facing text is caller-owned."
+    },
+    {
+      "file": "decision-invalid-reason-code-uppercase.json",
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "why": "Codes are lowercase tokens."
+    },
+    {
+      "file": "decision-invalid-unknown-obligation-key.json",
+      "expect_instance_location": "/obligations",
+      "expect_keyword": "additionalProperties",
+      "why": "An obligation the contract does not define fails closed, not ignored."
+    },
+    {
+      "file": "decision-invalid-unknown-redaction-class.json",
+      "expect_instance_location": "/obligations/redaction/0",
+      "expect_keyword": "enum",
+      "why": "Redaction classes are closed."
+    },
+    {
+      "file": "decision-invalid-unknown-assurance.json",
+      "expect_instance_location": "/obligations/minimum_assurance",
+      "expect_keyword": "enum",
+      "why": "Assurance by reference to principal.v1's closed set."
+    },
+    {
+      "file": "decision-invalid-step-up-as-string.json",
+      "expect_instance_location": "/obligations/step_up",
+      "expect_keyword": "type",
+      "why": "A string is not a boolean."
+    },
+    {
+      "file": "decision-invalid-duplicate-allowlist-entry.json",
+      "expect_instance_location": "/obligations/repository_allowlist",
+      "expect_keyword": "uniqueItems",
+      "why": "A repeated entry."
+    },
+    {
+      "file": "decision-invalid-allowlist-uppercase.json",
+      "expect_instance_location": "/obligations/repository_allowlist/0",
+      "expect_keyword": "pattern",
+      "why": "Canonical lowercase keys only."
+    },
+    {
+      "file": "decision-invalid-deny-with-obligations.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "why": "A deny that carries obligations."
+    },
+    {
+      "file": "decision-invalid-decision-id-wrong-prefix.json",
+      "expect_instance_location": "/decision_id",
+      "expect_keyword": "pattern",
+      "why": "Server-minted shape."
+    },
+    {
+      "file": "decision-invalid-expires-at-not-rfc3339.json",
+      "expect_instance_location": "/expires_at",
+      "expect_keyword": "pattern",
+      "why": "A timestamp, by reference to principal.v1."
+    },
+    {
+      "file": "decision-invalid-policy-revision-negative.json",
+      "expect_instance_location": "/policy_revision",
+      "expect_keyword": "minimum",
+      "why": "A revision is a non-negative counter."
+    },
+    {
+      "file": "decision-invalid-policy-revision-string.json",
+      "expect_instance_location": "/policy_revision",
+      "expect_keyword": "type",
+      "why": "Not a number."
+    },
+    {
+      "file": "decision-invalid-error-envelope-schema-version.json",
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "why": "A decision claiming to be error.v1 (or the reverse) is not a decision."
+    },
+    {
+      "file": "decision-invalid-caller-extra-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed document."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "decision-client-expired-allow.json",
+      "why": "An allow whose expires_at is long past. Valid for the schema (a timestamp is a timestamp); TRD section 14 makes expiry the bound on a stale allow, so a client that hands back allowed=true for it exposes a decision nobody may reuse. Both clients refuse it against a stated `now`."
+    },
+    {
+      "file": "decision-client-duplicate-allowed-member.json",
+      "why": "`allowed` appears twice, false then true. Every parser keeps the last, so the survivor is a well-formed ALLOW that the schema validates; only the raw bytes show the verdict was ambiguous. The client must refuse on the bytes."
+    },
+    {
+      "file": "decision-client-decimal-form-policy-revision.json",
+      "why": "42.0 is a valid JSON Schema integer, so all three validators accept it. A float64 reader has already rounded a decimal-form token, so it is indistinguishable from the integer it rounds to; both clients refuse it (wire-integer rule). Valid for the schema, refused by the client."
+    }
+  ]
+}

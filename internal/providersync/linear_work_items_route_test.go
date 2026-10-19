@@ -295,14 +295,19 @@ func TestLinearWorkItemsRouteCollectsRawLinearSurfaces(t *testing.T) {
 	claim := nativeTestClaim("linear", "work-items")
 	claim.SourceExternalID = "ENG"
 	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 987654321, time.UTC)
+	client := linearWorkItemsClient(t, fakehttp.Client(doer))
+	client.Ledger = providerfoundation.NewRequestLedger()
 	batch, err := (LinearWorkItemsRouteHandler{}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
+		client, normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The nested connections (labels, comments, history, attachments, relations)
+	// page through their own labelled requests only past the embedded first page.
+	assertRouteRequestsAreLabelled(t, "linear", "work-items", client.Ledger, "teams", "cycles", "issues")
 	byDestination := map[string]EffectBatch{}
 	for _, effect := range batch.Effects {
 		byDestination[effect.Destination] = effect
@@ -627,4 +632,42 @@ func TestLinearAttachmentWorkItemIDStripsConfiguredURLRoot(t *testing.T) {
 			t.Errorf("%s: %q want %q", name, got, c.want)
 		}
 	}
+}
+
+// The nested connections of an issue (labels, attachments, history, comments,
+// relations, inverse relations) page through requests of their own once the
+// embedded first page says more follows; each is accounted to its own family.
+func TestLinearWorkItemsRouteLabelsTheNestedConnectionRequests(t *testing.T) {
+	t.Parallel()
+	more := `{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}}`
+	done := func(connection string) string {
+		return `{"data":{"issue":{"` + connection + `":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`
+	}
+	doer := &linearWorkItemsDoer{responses: []string{
+		`{"data":{"teams":{"nodes":[{"id":"team-eng","key":"ENG","name":"Engineering"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"issues":{"nodes":[{
+			"id":"lin-issue-42","identifier":"ENG-42","title":"Nested","description":"","priority":2,"estimate":3,
+			"createdAt":"2026-07-25T09:00:00Z","updatedAt":"2026-07-28T16:30:00Z","startedAt":null,"completedAt":null,"canceledAt":null,
+			"dueDate":null,"url":"https://linear.app/fullchaos/issue/ENG-42","archivedAt":null,
+			"state":{"name":"In Progress","type":"started"},"labels":` + more + `,
+			"assignee":null,"creator":null,"team":{"id":"team-eng","key":"ENG","name":"Engineering"},
+			"project":null,"cycle":null,"parent":null,
+			"history":` + more + `,"comments":` + more + `,"attachments":` + more + `,"relations":` + more + `,"inverseRelations":` + more + `
+		}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		done("labels"), done("attachments"), done("history"), done("comments"), done("relations"), done("inverseRelations"),
+	}}
+	claim := nativeTestClaim("linear", "work-items")
+	claim.SourceExternalID = "ENG"
+	client := linearWorkItemsClient(t, fakehttp.Client(doer))
+	client.Ledger = providerfoundation.NewRequestLedger()
+	if _, err := (LinearWorkItemsRouteHandler{}).Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		client, time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertRouteRequestsAreLabelled(t, "linear", "work-items", client.Ledger,
+		"teams", "cycles", "issues", "attachments", "history", "comments", "relations")
 }

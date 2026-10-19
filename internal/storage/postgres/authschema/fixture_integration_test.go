@@ -73,13 +73,13 @@ func newAuthFixture(t *testing.T, ctx context.Context) *authFixture {
 	}
 
 	for _, statement := range []string{
-		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", migrationRole, fixturePassword),
-		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", runtimeRole, fixturePassword),
-		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %q TO %q", database, migrationRole),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(migrationRole)), fixturePassword),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(runtimeRole)), fixturePassword),
+		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(migrationRole))),
 		// The runtime role gets CONNECT and nothing else. Every privilege it
 		// ends up with must come from ApplyRuntimeGrants, or the capability
 		// suite would be proving the setup rather than the code.
-		fmt.Sprintf("GRANT CONNECT ON DATABASE %q TO %q", database, runtimeRole),
+		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(runtimeRole))),
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("setup %q: %v", statement, err)
@@ -204,7 +204,7 @@ func newAuthMigrationOnly(t *testing.T, ctx context.Context) *migrationOnlyFixtu
 	if err != nil {
 		t.Fatalf("derive runtime role: %v", err)
 	}
-	if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE ROLE %q", runtimeRole)); err != nil {
+	if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE ROLE %s", Quote(mustValidatedIdentifier(runtimeRole)))); err != nil {
 		t.Fatalf("create runtime role: %v", err)
 	}
 

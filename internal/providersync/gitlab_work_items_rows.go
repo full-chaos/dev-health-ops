@@ -111,6 +111,27 @@ type gitlabIssueEpicPayload struct {
 	GroupID json.RawMessage `json:"group_id"`
 }
 
+// gitlabEpicPayload is a group epic as GET /groups/:id/epics answers it
+// (Premium/Ultimate). The parent keys stay raw: Python formats whatever scalar
+// the API sent (gitlab_epic_to_work_item).
+type gitlabEpicPayload struct {
+	IID         json.RawMessage            `json:"iid"`
+	Title       string                     `json:"title"`
+	Description *string                    `json:"description"`
+	State       string                     `json:"state"`
+	CreatedAt   *string                    `json:"created_at"`
+	UpdatedAt   *string                    `json:"updated_at"`
+	ClosedAt    *string                    `json:"closed_at"`
+	StartDate   *string                    `json:"start_date"`
+	DueDate     *string                    `json:"due_date"`
+	Labels      []string                   `json:"labels"`
+	Author      *gitlabWorkItemUserPayload `json:"author"`
+	WebURL      *string                    `json:"web_url"`
+	URL         *string                    `json:"url"`
+	ParentID    json.RawMessage            `json:"parent_id"`
+	ParentIID   json.RawMessage            `json:"parent_iid"`
+}
+
 type gitlabMergeRequestWorkItemPayload struct {
 	IID          int                          `json:"iid"`
 	Title        string                       `json:"title"`
@@ -326,6 +347,140 @@ func normalizeGitLabIssueWorkItem(
 		return gitlabWorkItemRow{}, nil, err
 	}
 	return row, transitions, nil
+}
+
+// normalizeGitLabEpicWorkItem mirrors gitlab_epic_to_work_item
+// (providers/gitlab/normalize.py:655): a group epic is a work item of type
+// "epic" with the id "gitlab:<group>:epic:<iid>", the group path as its
+// project_id, no repository and no project key, and its parent epic (parent_id,
+// else parent_iid) as epic_id. Transitions come from the epic's resource state
+// events only: closed is done, opened and reopened are todo.
+func normalizeGitLabEpicWorkItem(
+	claim Claim,
+	groupPath string,
+	payload gitlabEpicPayload,
+	stateEvents []gitlabStateEventPayload,
+	statusMapping *StatusMapping,
+	resolveIdentity gitlabIdentityResolver,
+	normalizedAt time.Time,
+) (gitlabWorkItemRow, []gitlabWorkItemTransitionRow, []gitlabWorkItemReopenRow, error) {
+	iidText, _, _ := pythonJSONScalar(payload.IID)
+	iid, iidErr := strconv.Atoi(iidText)
+	if claim.Validate() != nil || claim.Provider != "gitlab" || claim.Dataset != "work-items" ||
+		strings.TrimSpace(groupPath) == "" || iidErr != nil || iid < 1 ||
+		strings.TrimSpace(payload.Title) == "" || statusMapping == nil || normalizedAt.IsZero() {
+		return gitlabWorkItemRow{}, nil, nil, ErrInvalidConfiguration
+	}
+	createdAt := parseGitLabWorkItemTime(payload.CreatedAt)
+	if createdAt == nil {
+		fallback := normalizedAt.UTC()
+		createdAt = &fallback
+	}
+	updatedAt := parseGitLabWorkItemTime(payload.UpdatedAt)
+	if updatedAt == nil {
+		copy := *createdAt
+		updatedAt = &copy
+	}
+	closedAt := parseGitLabWorkItemTime(payload.ClosedAt)
+	labels := gitlabWorkItemLabels(payload.Labels)
+	status := statusMapping.NormalizeStatus("gitlab", "", labels, payload.State)
+	var reporter *string
+	if payload.Author != nil {
+		identity := resolveGitLabWorkItemIdentity(*payload.Author, resolveIdentity)
+		if identity != "" && identity != "unknown" {
+			reporter = &identity
+		}
+	}
+	urlValue := payload.WebURL
+	if urlValue == nil || *urlValue == "" {
+		urlValue = payload.URL
+	}
+	description := payload.Description
+	if description != nil && *description == "" {
+		description = nil
+	}
+	priority, serviceClass := gitlabPriorityFromLabels(labels)
+	parentKey := ""
+	if text, _, truthy := pythonJSONScalar(payload.ParentID); truthy {
+		parentKey = text
+	} else if text, _, truthy := pythonJSONScalar(payload.ParentIID); truthy {
+		parentKey = text
+	}
+	workItemID := "gitlab:" + groupPath + ":epic:" + strconv.Itoa(iid)
+	row, err := buildWorkItemRow(claim, gitlabWorkItemSource{
+		kind: gitlabEpicSourceKind, workItemID: workItemID, title: payload.Title, typeName: "epic", status: status,
+		statusRaw: nullableString(payload.State), description: description,
+		projectID: stringPointer(groupPath), assignees: []string{}, reporter: reporter,
+		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), startedAt: parseGitLabWorkItemTime(payload.StartDate),
+		completedAt: closedAt, closedAt: closedAt, labels: labels, url: urlValue,
+		priorityRaw: priority, serviceClass: serviceClass, dueAt: parseGitLabWorkItemTime(payload.DueDate),
+		epicParentRef: epicParentRef(groupPath, parentKey),
+	}, normalizedAt)
+	if err != nil {
+		return gitlabWorkItemRow{}, nil, nil, err
+	}
+	transitions := normalizeGitLabEpicStateEvents(claim, row.WorkItemID, stateEvents, createdAt.UTC(), resolveIdentity, normalizedAt)
+	reopens := normalizeGitLabIssueReopens(claim, row.WorkItemID, stateEvents, resolveIdentity, normalizedAt)
+	return row, transitions, reopens, nil
+}
+
+func epicParentRef(groupPath, parentKey string) string {
+	if parentKey == "" {
+		return ""
+	}
+	return groupPath + ":epic:" + parentKey
+}
+
+// normalizeGitLabEpicStateEvents is gitlab_epic_to_work_item's transition loop:
+// events by time; closed is done, opened and reopened are todo, any other state
+// is skipped; the first from-status is "unknown".
+func normalizeGitLabEpicStateEvents(
+	claim Claim,
+	workItemID string,
+	events []gitlabStateEventPayload,
+	createdAt time.Time,
+	resolveIdentity gitlabIdentityResolver,
+	normalizedAt time.Time,
+) []gitlabWorkItemTransitionRow {
+	sorted := append([]gitlabStateEventPayload(nil), events...)
+	sort.SliceStable(sorted, func(left, right int) bool {
+		return gitlabEventTime(sorted[left].CreatedAt).Before(gitlabEventTime(sorted[right].CreatedAt))
+	})
+	transitions := make([]gitlabWorkItemTransitionRow, 0, len(sorted))
+	previous := "unknown"
+	for _, event := range sorted {
+		state := strings.ToLower(strings.TrimSpace(event.State))
+		toStatus := ""
+		switch state {
+		case "closed":
+			toStatus = "done"
+		case "opened", "reopened":
+			toStatus = "todo"
+		default:
+			continue
+		}
+		occurred := parseGitLabWorkItemTime(event.CreatedAt)
+		if occurred == nil {
+			occurred = &createdAt
+		}
+		var actor *string
+		if event.User != nil {
+			identity := resolveGitLabWorkItemIdentity(*event.User, resolveIdentity)
+			if identity != "" && identity != "unknown" {
+				actor = &identity
+			}
+		}
+		transition := gitlabWorkItemTransitionRow{
+			WorkItemID: workItemID, Provider: "gitlab", OccurredAt: occurred.UTC(),
+			FromStatusRaw: nil, ToStatusRaw: stringPointer(state), FromStatus: previous,
+			ToStatus: toStatus, Actor: actor, OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
+		}
+		if validateGitLabTransitionRow(transition, claim) == nil {
+			transitions = append(transitions, transition)
+		}
+		previous = toStatus
+	}
+	return transitions
 }
 
 func normalizeGitLabIssueLabelTransitions(
@@ -927,6 +1082,18 @@ func validateGitLabWorkItemRow(row gitlabWorkItemRow, claim Claim) error {
 	return nil
 }
 
+// validateGitLabEpicRow is validateGitLabWorkItemRow for a group epic, which
+// belongs to no repository (Python writes repo_id None).
+func validateGitLabEpicRow(row gitlabWorkItemRow, claim Claim) error {
+	if row.Provider != "gitlab" || row.OrgID == "" || row.OrgID != claim.OrgID ||
+		row.WorkItemID == "" || row.RepoID != nil || row.Type != "epic" ||
+		row.Title == "" || row.Status == "" || row.CreatedAt.IsZero() ||
+		row.UpdatedAt.IsZero() || row.Assignees == nil || row.Labels == nil || row.LastSynced.IsZero() {
+		return providerfoundation.ErrInvalidScope
+	}
+	return nil
+}
+
 func validateGitLabTransitionRow(row gitlabWorkItemTransitionRow, claim Claim) error {
 	if row.WorkItemID == "" || row.Provider != "gitlab" || row.OccurredAt.IsZero() ||
 		row.FromStatus == "" || row.ToStatus == "" || row.OrgID == "" || row.OrgID != claim.OrgID ||
@@ -973,6 +1140,7 @@ func validateGitLabSprintRow(row gitlabSprintRow, claim Claim) error {
 const (
 	gitlabIssueSourceKind        = "gitlab_issue"
 	gitlabMergeRequestSourceKind = "gitlab_merge_request"
+	gitlabEpicSourceKind         = "gitlab_epic"
 )
 
 // gitlabWorkItemSource is how a GitLab issue or merge request fills the shared
@@ -981,6 +1149,9 @@ type gitlabWorkItemSource struct {
 	kind     string
 	fullName string
 	epic     *gitlabIssueEpicPayload
+	// epicParentRef is a group epic's parent epic ("<group>:epic:<key>"), written
+	// to epic_id as Python does; empty for an epic with no parent.
+	epicParentRef string
 
 	workItemID, title, typeName, status                          string
 	statusRaw, description, projectID, projectKey, reporter, url *string
@@ -994,6 +1165,9 @@ type gitlabWorkItemSource struct {
 
 func (s gitlabWorkItemSource) sourceKind() string { return s.kind }
 func (s gitlabWorkItemSource) validateRow(claim Claim, row workItemRow) error {
+	if s.kind == gitlabEpicSourceKind {
+		return validateGitLabEpicRow(row, claim)
+	}
 	return validateGitLabWorkItemRow(row, claim)
 }
 func (s gitlabWorkItemSource) WorkItemID() string      { return s.workItemID }
@@ -1032,6 +1206,12 @@ func (s gitlabWorkItemSource) ParentID() workItemRef {
 // normalize.py:786-800): only for a project inside a group, the key
 // "<epic.group_id, else the project's group path>:epic:<epic.iid>".
 func (s gitlabWorkItemSource) EpicID() workItemRef {
+	if s.kind == gitlabEpicSourceKind {
+		if s.epicParentRef == "" {
+			return workItemRefAbsent()
+		}
+		return workItemRefKey(s.epicParentRef)
+	}
 	if s.kind != gitlabIssueSourceKind {
 		return declaredWorkItemException(s.kind, workItemFieldEpicID)
 	}

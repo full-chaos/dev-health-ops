@@ -320,15 +320,6 @@ UPDATE refresh_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS N
 	return err
 }
 
-// deleteUser is UserService.delete.
-func (s pgStore) deleteUser(ctx context.Context, id uuid.UUID) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
-	if err != nil {
-		return false, err
-	}
-	return tag.RowsAffected() > 0, nil
-}
-
 // membershipOrgIDForUser is set_user_password's audit-org fallback: the
 // user's first membership org, when the caller had no org_id of its own
 // (a superuser calling with no X-Org-Id).

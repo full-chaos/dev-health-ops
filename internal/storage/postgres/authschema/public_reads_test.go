@@ -1,7 +1,6 @@
 package authschema
 
 import (
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -37,15 +36,15 @@ func TestPublicReadColumnsMatchTheReviewedList(t *testing.T) {
 	}
 }
 
-// publicreads.go carries its column-privilege query as one literal (no
-// concatenation), so the system-schema filter is copied into it; this keeps the
-// copy equal to the shared constant.
-func TestPublicReadsQueryCarriesTheSharedSystemSchemaFilter(t *testing.T) {
-	source, err := os.ReadFile("publicreads.go")
-	if err != nil {
-		t.Fatal(err)
+// The bound-value form of the system-schema filter used by publicreads.go must
+// say what the shared text form says.
+func TestSystemSchemaFilterFormsAgree(t *testing.T) {
+	quoted := make([]string, len(systemSchemaNames))
+	for i, name := range systemSchemaNames {
+		quoted[i] = "'" + name + "'"
 	}
-	if !strings.Contains(string(source), systemSchemaFilter) {
-		t.Errorf("publicreads.go does not contain systemSchemaFilter %q", systemSchemaFilter)
+	want := "n.nspname NOT IN (" + strings.Join(quoted, ", ") + ") AND n.nspname NOT LIKE '" + systemSchemaPattern + "'"
+	if systemSchemaFilter != want {
+		t.Errorf("systemSchemaFilter = %q, bound form says %q", systemSchemaFilter, want)
 	}
 }

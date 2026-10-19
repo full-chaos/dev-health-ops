@@ -180,21 +180,21 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		}
 	}
 
-	// One literal statement: the role and schema are bound parameters. The system
-	// schema filter below must stay equal to systemSchemaFilter (a unit test checks).
+	// One literal statement: the role, the schema and the system-schema filter
+	// (systemSchemaNames, systemSchemaPattern) are bound parameters.
 	rows, err := conn.Query(ctx, `
 		SELECT n.nspname, c.relname, c.relkind::text, a.attname, p.priv
 		FROM pg_attribute a
 		JOIN pg_class c ON c.oid = a.attrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		CROSS JOIN LATERAL unnest(ARRAY['SELECT','INSERT','UPDATE','REFERENCES']) AS p(priv)
-		WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_%'
+		WHERE n.nspname <> ALL($3::text[]) AND n.nspname NOT LIKE $4
 		  AND n.nspname <> $2
 		  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
 		  AND a.attnum > 0 AND NOT a.attisdropped
 		  AND NOT has_table_privilege($1, c.oid, p.priv)
 		  AND has_column_privilege($1, c.oid, a.attnum, p.priv)`,
-		options.RuntimeRole, options.Schema,
+		options.RuntimeRole, options.Schema, systemSchemaNames, systemSchemaPattern,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading effective column privileges", ErrMigrationFailed)

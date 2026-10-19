@@ -87,12 +87,36 @@ const systemRoleOIDBoundary = 16384
 // which no manifest describes.
 const systemSchemaFilter = `n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_%'`
 
+// systemSchemaNames and systemSchemaPattern are systemSchemaFilter as bound
+// values, for statements that must not concatenate it. A unit test keeps the
+// two forms equal.
+var systemSchemaNames = []string{"pg_catalog", "information_schema"}
+
+const systemSchemaPattern = `pg\_%`
+
 // relationPrivileges are every table-level privilege PostgreSQL can grant.
 // The list is exhaustive on purpose: checking only the four the manifest uses
 // would let TRUNCATE, REFERENCES or TRIGGER through unexamined, and TRUNCATE
 // in particular destroys an append-only table just as thoroughly as DELETE.
 var relationPrivileges = []string{
 	"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER",
+}
+
+// maintainMinVersion is the first PostgreSQL version with the table-level
+// MAINTAIN privilege (VACUUM, ANALYZE, REINDEX, CLUSTER, REFRESH, LOCK). Asking an
+// older server about it is an error, so it joins the list only where it exists.
+const maintainMinVersion = 170000
+
+func relationPrivilegesOfThisServer(ctx context.Context, conn *pgx.Conn) ([]string, error) {
+	var version int
+	if err := conn.QueryRow(ctx, `SELECT current_setting('server_version_num')::int`).Scan(&version); err != nil {
+		return nil, fmt.Errorf("%w: reading the server version", ErrMigrationFailed)
+	}
+	privileges := append([]string(nil), relationPrivileges...)
+	if version >= maintainMinVersion {
+		privileges = append(privileges, "MAINTAIN")
+	}
+	return privileges, nil
 }
 
 var sequencePrivileges = []string{"USAGE", "SELECT", "UPDATE"}
@@ -240,6 +264,10 @@ func VerifyRuntimePosture(ctx context.Context, conn *pgx.Conn, options Options) 
 func relationViolations(
 	ctx context.Context, conn *pgx.Conn, options Options, allowed map[string]map[string]struct{},
 ) ([]Violation, error) {
+	privileges, err := relationPrivilegesOfThisServer(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := conn.Query(ctx, `
 		SELECT n.nspname, c.relname, p.priv
 		FROM pg_class c
@@ -248,7 +276,7 @@ func relationViolations(
 		WHERE `+systemSchemaFilter+`
 		  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
 		  AND has_table_privilege($1, c.oid, p.priv)`,
-		options.RuntimeRole, relationPrivileges,
+		options.RuntimeRole, privileges,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading effective relation privileges", ErrMigrationFailed)
@@ -675,18 +703,26 @@ func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options, super
 	// not detectors, and their effects are already visible to the
 	// effective-privilege checks above.
 	rows, err := conn.Query(ctx, `
-		SELECT r.rolname, true AS system_role
+		SELECT r.rolname, true AS system_role, false AS set_only
 		FROM pg_roles r
 		WHERE r.oid < $2
 		  AND r.rolname <> $1
 		  AND (pg_has_role($1, r.oid, 'USAGE') OR pg_has_role($1, r.oid, 'SET'))
 		UNION ALL
-		SELECT r.rolname, false
+		SELECT r.rolname, true, true
+		FROM pg_roles r
+		WHERE r.oid >= $2
+		  AND r.rolname <> $1
+		  AND pg_has_role($1, r.oid, 'SET')
+		  AND NOT pg_has_role($1, r.oid, 'USAGE')
+		UNION ALL
+		SELECT r.rolname, false, false
 		FROM pg_auth_members m
 		JOIN pg_roles r ON r.oid = m.roleid
 		WHERE m.member = (SELECT oid FROM pg_roles WHERE rolname = $1)
 		  AND r.oid >= $2
-		ORDER BY 2 DESC, 1`, options.RuntimeRole, int32(systemRoleOIDBoundary))
+		  AND NOT (pg_has_role($1, r.oid, 'SET') AND NOT pg_has_role($1, r.oid, 'USAGE'))
+		ORDER BY 2 DESC, 3 DESC, 1`, options.RuntimeRole, int32(systemRoleOIDBoundary))
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading role memberships", ErrMigrationFailed)
 	}
@@ -695,14 +731,23 @@ func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options, super
 	var context []Violation
 	for rows.Next() {
 		var name string
-		var systemRole bool
-		if err := rows.Scan(&name, &systemRole); err != nil {
+		var systemRole, setOnly bool
+		if err := rows.Scan(&name, &systemRole, &setOnly); err != nil {
 			return nil, fmt.Errorf("%w: reading a role membership", ErrMigrationFailed)
 		}
 		detail := fmt.Sprintf(
 			"likely cause of the privileges above; remedy: REVOKE %q FROM %q", name, options.RuntimeRole,
 		)
-		if systemRole {
+		if setOnly {
+			// An ordinary role the runtime reaches only by SET ROLE: its
+			// privileges are not inherited, so no effective-privilege check
+			// above ever sees them. Reachability is the detector, the same
+			// rule as for the server-defined roles.
+			detail = fmt.Sprintf(
+				"reachable only through SET ROLE: its privileges are invisible to every effective-privilege check; "+
+					"remedy: REVOKE %q FROM %q", name, options.RuntimeRole,
+			)
+		} else if systemRole {
 			// Not "the cause of the privileges above" — there are none. That
 			// is the whole point: a predefined role confers capability
 			// OUTSIDE the object-privilege model, so nothing else in this

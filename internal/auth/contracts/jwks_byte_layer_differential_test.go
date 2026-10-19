@@ -59,6 +59,10 @@ var keyMembers = []struct{ name, value, bad string }{
 	{"x", `"` + bx + `"`, `"A"`},
 }
 
+// useMember is the optional key member. It is not in the base document, so the
+// duplicate generator adds it.
+var useMember = struct{ name, value, bad string }{"use", `"sig"`, `"enc"`}
+
 func keyWith(members []string) string { return "{" + strings.Join(members, ",") + "}" }
 
 func member(name, value string) string { return `"` + name + `":` + value }
@@ -180,7 +184,7 @@ func generateByteCases() []byteCase {
 	}
 
 	// D4: duplicate members.
-	for _, m := range keyMembers {
+	for _, m := range append(append([]struct{ name, value, bad string }(nil), keyMembers...), useMember) {
 		dup := func(first, last string) string {
 			out := make([]string, 0, len(keyMembers)+1)
 			for _, mm := range keyMembers {
@@ -190,6 +194,9 @@ func generateByteCases() []byteCase {
 				} else {
 					out = append(out, member(mm.name, mm.value))
 				}
+			}
+			if m.name == useMember.name {
+				out = append(out, member(m.name, first), member(m.name, last))
 			}
 			return docOf(keyWith(out))
 		}
@@ -205,6 +212,9 @@ func generateByteCases() []byteCase {
 				} else {
 					out = append(out, member(mm.name, mm.value))
 				}
+			}
+			if m.name == useMember.name {
+				out = append(out, member(firstName, m.value), member(secondName, m.value))
 			}
 			return docOf(keyWith(out))
 		}
@@ -231,14 +241,14 @@ func generateByteCases() []byteCase {
 		add("escaped-name-all", strings.Replace(bdc, `"`+name+`"`, `"`+all.String()+`"`, 1))
 	}
 	for _, v := range []struct{ plain, esc string }{
-		{`"OKP"`, `"OKP"`}, {`"Ed25519"`, `"Ed25519"`}, {`"EdDSA"`, `"EdDSA"`},
-		{`"k"`, `"k"`}, {`"` + bx + `"`, `"E` + bx[1:] + `"`},
+		{`"OKP"`, `"\u004fKP"`}, {`"Ed25519"`, `"\u0045d25519"`}, {`"EdDSA"`, `"Ed\u0044SA"`},
+		{`"k"`, `"\u006b"`}, {`"` + bx + `"`, `"\u0045` + bx[1:] + `"`},
 	} {
 		add("escaped-value", strings.Replace(bdc, v.plain, v.esc, 1))
 	}
 	kidWith := func(v string) string { return strings.Replace(bdc, `"kid":"k"`, `"kid":`+v, 1) }
 	add("escaped-solidus", kidWith(`"a\/b"`))
-	add("escaped-astral", kidWith(`"😀"`))
+	add("escaped-astral", kidWith(`"\ud83d\ude00"`))
 	add("escaped-lone-surrogate", kidWith(`"a\ud800b"`))
 	add("escaped-lone-surrogate", kidWith(`"a\udc00b"`))
 	add("escaped-nul", kidWith(`"a\u0000b"`))
@@ -304,7 +314,7 @@ func TestTheByteLayerClassesAgreeWithTheRealConsumerAndTheSchemaPath(t *testing.
 	root := testRoot(t)
 	path := filepath.Join(t.TempDir(), "jwks.json")
 
-	const wantTotal = 431
+	const wantTotal = 425
 	seen := map[string]int{}
 	var ended, unclassed int
 	for _, c := range cases {

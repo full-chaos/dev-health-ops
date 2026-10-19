@@ -149,7 +149,7 @@ func TestAffectedIntegration(t *testing.T) {
 		{"embed file", "b/tmpl.txt\n", "AFFECTED 2\na\nb\n"},
 		{"non embed file", "b/readme.md\n", "FULL non-Go file with no owning package input: b/readme.md\n"},
 		{"go.mod", "go.mod\n", "FULL shared change: go.mod\n"},
-		{"ci", "./ci/x.sh\n", "FULL shared change: ci/x.sh\n"},
+		{"ci file no binary names", "./ci/x.sh\n", "AFFECTED 0\n"},
 		{"unlisted go", "zz/x.go\n", "FULL Go file outside any listed package: zz/x.go\n"},
 	}
 	for _, c := range cases {

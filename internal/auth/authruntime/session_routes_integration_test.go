@@ -55,6 +55,7 @@ type routesEnv struct {
 	client   *http.Client
 	edge     *principal.EdgeVerifier
 	root     string
+	logs     *safeBuffer
 }
 
 // newRoutesEnv builds the real stack: the go-api public schema, the auth
@@ -114,7 +115,8 @@ func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	logs := &safeBuffer{}
+	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	components, err := configure(ctx, cfg, logger)
 	if err != nil {
 		t.Fatalf("configure: %v", err)
@@ -170,7 +172,7 @@ func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 		t.Fatal(err)
 	}
 	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front,
-		client: &http.Client{Timeout: 10 * time.Second}, edge: edge, root: wd}
+		client: &http.Client{Timeout: 10 * time.Second}, edge: edge, root: wd, logs: logs}
 }
 
 func contractsRoot() (string, error) {
@@ -451,6 +453,31 @@ VALUES ($1, $2, 'Go API Only', 'community', true, '{}', 'self', now(), now())`, 
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "23503" || pgErr.ConstraintName != "sessions_organization_id_fkey" {
 		t.Fatalf("Create with an unprojected organization = %v, want the sessions_organization_id_fkey violation", err)
+	}
+}
+
+// TestAStoreFailureIsLoggedWithoutTheDatabaseText breaks the refresh store
+// under the configured handler: the answer is error.v1 503, and no log line of
+// the process (the route's or the session store's) carries the database's
+// message, which can name relations and hold key values.
+func TestAStoreFailureIsLoggedWithoutTheDatabaseText(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnv(t, ctx)
+	user, org := e.seed(t, ctx)
+	issued := e.start(t, ctx, user, &org)
+	if _, err := e.admin.Exec(ctx, `ALTER TABLE auth.refresh_credentials RENAME TO refresh_credentials_moved`); err != nil {
+		t.Fatal(err)
+	}
+	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(issued.Credential.Reveal()), ""), 503, "store_unavailable")
+	logs := e.logs.String()
+	for _, text := range []string{"does not exist", "refresh_credentials", "relation"} {
+		if strings.Contains(logs, text) {
+			t.Fatalf("a log line carries the database text %q:\n%s", text, logs)
+		}
+	}
+	if !strings.Contains(logs, `"code":"42P01"`) {
+		t.Fatalf("the failure is not logged with its SQLSTATE:\n%s", logs)
 	}
 }
 

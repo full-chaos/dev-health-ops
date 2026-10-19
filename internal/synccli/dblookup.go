@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -40,7 +41,9 @@ import (
 //   - the credential is the one the org's ACTIVE github integration points at
 //     (credential_id), read by the worker's own repository, not the row named
 //     "default" (prod rows are not so named); no, no-credential or several
-//     active integrations are typed refusals;
+//     active integrations are typed refusals; with several, DHO_GITHUB_INTEGRATION_ID
+//     (CHAOS-9771) selects one, and an id that is not an active github
+//     integration of the org is refused, never ignored;
 //   - the payload is decoded by the WORKER's decode and shape rule
 //     (providerfoundation.DecodeStoredGitHubCredential, one shared function): a
 //     payload key the credential does not use is IGNORED (its name is logged at
@@ -90,6 +93,8 @@ const (
 	reasonGitHubIntegrationNotFound     = "github_integration_not_found"
 	reasonGitHubIntegrationNoCredential = "github_integration_no_credential"
 	reasonGitHubIntegrationsAmbiguous   = "github_integrations_ambiguous"
+	reasonSelectorInvalid               = "github_integration_selector_invalid"
+	reasonSelectorNotFound              = "github_integration_selector_not_found"
 	reasonCredentialConfigInvalid       = "credential_config_invalid"
 	reasonOrganizationNotFound          = "organization_not_found"
 )
@@ -328,7 +333,7 @@ func storedGitHubCredential(ctx context.Context, dbURL, orgID string, env cli.En
 	if err := pool.Ping(ctx); err != nil {
 		return nil, lookupFailureWith(reasonDatabaseConnectFailed, err)
 	}
-	integrationID, credentialID, err := activeGitHubIntegration(ctx, pool, orgID)
+	integrationID, credentialID, err := activeGitHubIntegration(ctx, pool, orgID, env)
 	if err != nil {
 		return nil, err
 	}
@@ -356,7 +361,7 @@ func storedGitHubCredential(ctx context.Context, dbURL, orgID string, env cli.En
 // active github integration. It refuses, with a typed reason that names the
 // integration ids, when there is none, when it has no stored credential, and
 // when there are several (the verb does not guess).
-func activeGitHubIntegration(ctx context.Context, pool *pgxpool.Pool, orgID string) (integrationID, credentialID string, err error) {
+func activeGitHubIntegration(ctx context.Context, pool *pgxpool.Pool, orgID string, env cli.Env) (integrationID, credentialID string, err error) {
 	rows, err := pool.Query(ctx,
 		`SELECT id::text, provider, COALESCE(credential_id::text, '') FROM integrations
 		 WHERE org_id = $1 AND is_active = TRUE ORDER BY id`, orgID)
@@ -380,6 +385,9 @@ func activeGitHubIntegration(ctx context.Context, pool *pgxpool.Pool, orgID stri
 	if err := rows.Err(); err != nil {
 		return "", "", lookupFailureWith(reasonDatabaseQueryFailed, err)
 	}
+	if selector, ok := env.Lookup(githubIntegrationSelectorEnv); ok && strings.TrimSpace(selector) != "" {
+		return selectGitHubIntegration(strings.TrimSpace(selector), ids, credentialIDs)
+	}
 	switch {
 	case len(ids) == 0:
 		return "", "", lookupFailure(reasonGitHubIntegrationNotFound)
@@ -393,6 +401,34 @@ func activeGitHubIntegration(ctx context.Context, pool *pgxpool.Pool, orgID stri
 		return "", "", failure
 	}
 	return ids[0], credentialIDs[0], nil
+}
+
+// githubIntegrationSelectorEnv names the one active github integration to use when an org has several.
+// An environment variable, not a flag: the flags mirror Python's argparse and are compared with it.
+const githubIntegrationSelectorEnv = "DHO_GITHUB_INTEGRATION_ID"
+
+// selectGitHubIntegration picks the selected integration among the org's active github ones (ids, in
+// the same order as credentialIDs). A selector that is not one of them is refused, never ignored.
+func selectGitHubIntegration(selector string, ids, credentialIDs []string) (string, string, error) {
+	want, err := uuid.Parse(selector)
+	if err != nil {
+		failure := lookupFailure(reasonSelectorInvalid)
+		failure.IntegrationIDs = ids
+		return "", "", failure
+	}
+	for i, id := range ids {
+		if got, err := uuid.Parse(id); err == nil && got == want {
+			if credentialIDs[i] == "" {
+				failure := lookupFailure(reasonGitHubIntegrationNoCredential)
+				failure.IntegrationIDs = []string{id}
+				return "", "", failure
+			}
+			return id, credentialIDs[i], nil
+		}
+	}
+	failure := lookupFailure(reasonSelectorNotFound)
+	failure.IntegrationIDs = ids
+	return "", "", failure
 }
 
 // githubCredentialFromCiphertext decrypts the stored payload and builds the
@@ -521,6 +557,25 @@ func storedFailureReason(reason string) string {
 	return reasonCredentialShapeInvalid
 }
 
+// integrationRefusalMessage is the exit text of a "nothing usable" outcome: the ported Python text, plus, for
+// the integration choice (a Go-only rule, CHAOS-9678), the candidate ids and the variable that selects one.
+func integrationRefusalMessage(err error) string {
+	var failure credentialLookupFailure
+	if !errors.As(err, &failure) {
+		return missingGitHubCredentials
+	}
+	candidates := strings.Join(failure.IntegrationIDs, ", ")
+	switch failure.Reason {
+	case reasonGitHubIntegrationsAmbiguous:
+		return missingGitHubCredentials + " " + githubIntegrationSelectorEnv + " must name one of the active GitHub integrations: " + candidates
+	case reasonSelectorInvalid:
+		return missingGitHubCredentials + " " + githubIntegrationSelectorEnv + " is not a UUID."
+	case reasonSelectorNotFound:
+		return missingGitHubCredentials + " " + githubIntegrationSelectorEnv + " is not an active GitHub integration of this organization; candidates: " + candidates
+	}
+	return missingGitHubCredentials
+}
+
 // resolveDBLookups fills what the plan left to the executor: the first
 // organization and the database credential.
 func resolveDBLookups(ctx context.Context, lookups dbLookups, plan Plan, env cli.Env) (Plan, *Refusal) {
@@ -548,7 +603,7 @@ func resolveDBLookups(ctx context.Context, lookups dbLookups, plan Plan, env cli
 		case errors.As(err, &refusal):
 			return plan, refusal
 		case errors.Is(err, errNoDBCredential):
-			return plan, exitRefusal(missingGitHubCredentials)
+			return plan, exitRefusal(integrationRefusalMessage(err))
 		case err != nil:
 			return plan, &Refusal{Code: cli.ExitFailure, Stage: "error", Type: "Error", Message: "database credential lookup failed"}
 		}

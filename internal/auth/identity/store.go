@@ -403,7 +403,7 @@ func projectionOutcome(err error) string {
 }
 
 func (s *Store) storeErr(ctx context.Context, op string, err error) error {
-	s.logger.ErrorContext(ctx, "identity: store failure", "op", op, "error", err)
+	s.logger.ErrorContext(ctx, "identity: store failure", "op", op, audit.DBError(err))
 	return fmt.Errorf("%w: %s: %w", ErrStore, op, err)
 }
 

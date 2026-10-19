@@ -359,7 +359,7 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 		if err != nil {
 			slog.ErrorContext(ctx, "audit: Commit failed; its own transaction rolled back",
 				"audit_event_type", m.Audit.EventType, "outbox_event_type", m.Event.EventType,
-				"aggregate_type", m.Event.AggregateType, "error", err)
+				"aggregate_type", m.Event.AggregateType, DBError(err))
 		}
 	}()
 	if pool == nil {

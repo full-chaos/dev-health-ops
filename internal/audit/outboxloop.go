@@ -97,7 +97,7 @@ func (l *lagTracker) observe(ctx context.Context, now time.Time) {
 		WHERE published_at IS NULL`, now.UTC()).Scan(&age)
 	if err != nil {
 		// A gauge that silently stops moving reads as a healthy outbox.
-		l.logger.WarnContext(ctx, "outbox lag read failed", "error", err)
+		l.logger.WarnContext(ctx, "outbox lag read failed", DBError(err))
 		return
 	}
 	if age < 0 {
@@ -286,7 +286,7 @@ func (l *OutboxLoop) stepOnce(ctx context.Context, now time.Time) {
 		if n >= degradeAfter {
 			l.ready.Store(false)
 		}
-		l.logger.ErrorContext(ctx, "outbox step failed", "consecutive_failures", n, "error", err)
+		l.logger.ErrorContext(ctx, "outbox step failed", "consecutive_failures", n, DBError(err))
 	}
 	if l.stepDone != nil {
 		l.stepDone()

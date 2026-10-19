@@ -41,14 +41,56 @@ type goldenUserRow struct {
 // reason: a person with two Python rows has none declared here only if the
 // golden changes.
 var declaredMergedUserRows = map[[3]string]struct {
+	sourceRows                                int
 	teamID, teamName                          string
 	itemsStarted, itemsCompleted, wipEndOfDay int
 	reason                                    string
 }{
 	{"github", "", "unassigned"}: {
-		"team-jira", "Jira Team", 1, 0, 1,
+		2, "team-jira", "Jira Team", 1, 0, 1,
 		"one unassigned item created that day under team-jira (all measures 0) and one started and in progress under unassigned: one item each, so the lowest team id labels the row",
 	},
+}
+
+// validateDeclaredMergedUserRow checks a declaration against the frozen rows of its
+// person: the source-row count, a label among the frozen teams, a written reason, the
+// measures as the sums over the source rows, and no frozen percentile input (a
+// declared row carries no cycle percentiles).
+func validateDeclaredMergedUserRow(
+	t *testing.T, key [3]string, sourceRows int, teamID, reason string,
+	started, completed, wip int, rows []goldenUserRow,
+) {
+	t.Helper()
+	var source []goldenUserRow
+	for _, row := range rows {
+		if [3]string{row.Provider, row.WorkScopeID, row.UserIdentity} == key {
+			source = append(source, row)
+		}
+	}
+	if len(source) != sourceRows {
+		t.Fatalf("golden holds %d rows for %v, the declaration merges %d", len(source), key, sourceRows)
+	}
+	if reason == "" {
+		t.Fatalf("declaredMergedUserRows[%v] needs a written reason", key)
+	}
+	labelFrozen := false
+	var sumStarted, sumCompleted, sumWIP int
+	for _, row := range source {
+		labelFrozen = labelFrozen || row.TeamID == teamID
+		sumStarted += row.ItemsStarted
+		sumCompleted += row.ItemsCompleted
+		sumWIP += row.WIPCountEndOfDay
+		if row.CycleTimeP50Hours != nil || row.CycleTimeP90Hours != nil {
+			t.Fatalf("golden row %+v of %v holds a cycle percentile, the declaration carries none", row, key)
+		}
+	}
+	if !labelFrozen {
+		t.Fatalf("declared label %q for %v is not one of the frozen teams", teamID, key)
+	}
+	if sumStarted != started || sumCompleted != completed || sumWIP != wip {
+		t.Fatalf("declared measures for %v are %d/%d/%d, the frozen rows sum to %d/%d/%d",
+			key, started, completed, wip, sumStarted, sumCompleted, sumWIP)
+	}
 }
 
 // goldenUserRowsOneForEachPerson returns the golden user rows with each person
@@ -76,6 +118,8 @@ func goldenUserRowsOneForEachPerson(t *testing.T, rows []goldenUserRow) []golden
 		if !ok {
 			t.Fatalf("the golden holds %d rows for %v and the test declares no merged row for it", counts[key], key)
 		}
+		validateDeclaredMergedUserRow(t, key, declared.sourceRows, declared.teamID, declared.reason,
+			declared.itemsStarted, declared.itemsCompleted, declared.wipEndOfDay, rows)
 		merged := goldenUserRow{
 			Day: row.Day, Provider: row.Provider, WorkScopeID: row.WorkScopeID, UserIdentity: row.UserIdentity,
 			TeamID: declared.teamID, TeamName: declared.teamName,

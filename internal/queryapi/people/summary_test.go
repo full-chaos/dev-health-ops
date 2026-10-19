@@ -327,7 +327,8 @@ func TestGoldenBuildSummaryResponse(t *testing.T) {
 		PersonID:    "unused-input",
 		RangeDays:   14,
 		CompareDays: 14,
-		Now:         day(2024, 6, 15),
+		// A window with no end date ends yesterday (D6083): Now one day later keeps the window the Python golden recorded.
+		Now: day(2024, 6, 16),
 	})
 	if err != nil {
 		t.Fatalf("BuildSummaryResponse: %v", err)

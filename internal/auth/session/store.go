@@ -214,12 +214,15 @@ func validAMR(amr []string) bool {
 // whose credentials were all swept falls back to its last rotation plus the
 // refresh lifetime, which is when its last credential expired.
 func (s *Store) sessionColumns() string {
-	return fmt.Sprintf(`s.id::text, s.principal_id::text, s.organization_id::text, s.revision,
-	s.auth_time, s.amr, s.created_at,
-	LEAST(s.expires_at, COALESCE(
+	return `s.id::text, s.principal_id::text, s.organization_id::text, s.revision,
+	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, s.revoked_at`
+}
+
+// effectiveExpiry is the expression for alias s's effective expiry.
+func (s *Store) effectiveExpiry() string {
+	return fmt.Sprintf(`LEAST(s.expires_at, COALESCE(
 		(SELECT max(r.expires_at) FROM %s.refresh_credentials r WHERE r.session_id = s.id),
-		COALESCE(s.last_seen_at, s.created_at) + %d * interval '1 microsecond')),
-	s.revoked_at`, s.q, s.refreshTTL.Microseconds())
+		COALESCE(s.last_seen_at, s.created_at) + %d * interval '1 microsecond'))`, s.q, s.refreshTTL.Microseconds())
 }
 
 func scanRecord(row pgx.Row, extra ...any) (Record, error) {
@@ -593,8 +596,8 @@ func (s *Store) revokeSessions(ctx context.Context, tx audit.TxOps, ids []string
 	return err
 }
 
-// Revoke ends one session and every credential of it. It reports false when
-// the session was already revoked.
+// Revoke ends one live session and every credential of it. It reports false
+// when the session was already revoked or its effective expiry has passed.
 func (s *Store) Revoke(ctx context.Context, sessionID uuid.UUID, actor Actor) (bool, error) {
 	id := sessionID.String()
 	var principal string
@@ -606,8 +609,13 @@ func (s *Store) Revoke(ctx context.Context, sessionID uuid.UUID, actor Actor) (b
 	}
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			if _, err := s.lockSession(ctx, tx, id); err != nil {
+			locked, err := s.lockSession(ctx, tx, id)
+			if err != nil {
 				return err
+			}
+			if locked.expired {
+				// Already dead: nothing to revoke, so no audit row (ErrNoStateChange).
+				return nil
 			}
 			return s.revokeSessions(ctx, tx, []string{id}, revokedByCaller)
 		},
@@ -634,7 +642,7 @@ func (s *Store) Revoke(ctx context.Context, sessionID uuid.UUID, actor Actor) (b
 	}
 }
 
-// RevokeAll ends every live session of a principal, in one transaction with
+// RevokeAll ends every effectively live session of a principal, in one transaction with
 // one audit row and one outbox event. It returns how many it revoked.
 func (s *Store) RevokeAll(ctx context.Context, principalID uuid.UUID, actor Actor) (int, error) {
 	principal := principalID.String()
@@ -647,21 +655,27 @@ func (s *Store) RevokeAll(ctx context.Context, principalID uuid.UUID, actor Acto
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			// Locks in id order, so two revoke-alls of one principal cannot
 			// deadlock; a single-session writer holds one lock and cannot either.
+			// Every unrevoked session is locked, then only the effectively
+			// live ones are revoked (the same liveness every writer uses).
 			rows, err := tx.Query(ctx, `
-				SELECT id::text FROM `+s.q+`.sessions
-				WHERE principal_id = $1 AND revoked_at IS NULL
-				ORDER BY id FOR UPDATE`, principal)
+				SELECT s.id::text, `+s.effectiveExpiry()+` > clock_timestamp()
+				FROM `+s.q+`.sessions s
+				WHERE s.principal_id = $1 AND s.revoked_at IS NULL
+				ORDER BY s.id FOR UPDATE OF s`, principal)
 			if err != nil {
 				return err
 			}
 			var ids []string
 			for rows.Next() {
 				var id string
-				if err := rows.Scan(&id); err != nil {
+				var live bool
+				if err := rows.Scan(&id, &live); err != nil {
 					rows.Close()
 					return err
 				}
-				ids = append(ids, id)
+				if live {
+					ids = append(ids, id)
+				}
 			}
 			rows.Close()
 			if err := rows.Err(); err != nil {

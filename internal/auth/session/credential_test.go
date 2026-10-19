@@ -2,8 +2,8 @@ package session
 
 import (
 	"bytes"
-	"encoding/hex"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"

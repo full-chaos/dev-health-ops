@@ -2,7 +2,6 @@ package cigates_test
 
 import (
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -70,6 +69,32 @@ func unlockedJobs(t *testing.T, root string) (found [][2]string, scanned int) {
 	return found, scanned
 }
 
+var (
+	uvSyncRe   = regexp.MustCompile(`(?m)^\s*uv sync --frozen\b`)
+	venvPathRe = regexp.MustCompile(`(?m)^\s*echo\s+"[^"]*\.venv/bin"\s*>>\s*"?\$GITHUB_PATH"?\s*$`)
+)
+
+// filterListsPath reports whether any dorny/paths-filter `code` filter of the workflow lists the path; the filters
+// are a YAML document inside a string, so they are parsed (a commented-out entry is not an entry).
+func filterListsPath(t *testing.T, doc yamlMap, want string) bool {
+	t.Helper()
+	jobs := jobsOf(doc)
+	for _, jn := range sortedKeys(jobs) {
+		for _, st := range stepsOf(jobs[jn]) {
+			f := asString(asMap(st["with"])["filters"])
+			if f == "" {
+				continue
+			}
+			for _, e := range asList(parseYAML(t, f, "paths filters")["code"]) {
+				if asString(e) == want {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func installFromLockViolations(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
@@ -101,7 +126,10 @@ func installFromLockViolations(t *testing.T, root string) []string {
 			out = append(out, fmt.Sprintf("%s has no job %q", e2eWorkflow, id))
 			continue
 		}
-		runs := runStepsOf(job)
+		var runs []string
+		for _, r := range runStepsOf(job) {
+			runs = append(runs, shellCode(r))
+		}
 		any := func(f func(string) bool) bool {
 			for _, r := range runs {
 				if f(r) {
@@ -110,11 +138,11 @@ func installFromLockViolations(t *testing.T, root string) []string {
 			}
 			return false
 		}
-		if !any(func(r string) bool { return strings.Contains(r, "uv sync --frozen") }) {
-			out = append(out, fmt.Sprintf("%s:%s must install with `uv sync --frozen ...`", e2eWorkflow, id))
+		if !any(uvSyncRe.MatchString) {
+			out = append(out, fmt.Sprintf("%s:%s must install with `uv sync --frozen ...` as a command (not text in an echo or a comment)", e2eWorkflow, id))
 		}
-		if !any(func(r string) bool { return strings.Contains(r, ".venv/bin") && strings.Contains(r, "GITHUB_PATH") }) {
-			out = append(out, fmt.Sprintf("%s:%s must put .venv/bin on GITHUB_PATH: its scripts call python3 from PATH", e2eWorkflow, id))
+		if !any(venvPathRe.MatchString) {
+			out = append(out, fmt.Sprintf("%s:%s must put .venv/bin on GITHUB_PATH with `echo ... >> \"$GITHUB_PATH\"`: its scripts call python3 from PATH", e2eWorkflow, id))
 		}
 		if any(installsUnlocked) {
 			out = append(out, fmt.Sprintf("%s:%s installs unlocked", e2eWorkflow, id))
@@ -129,8 +157,8 @@ func installFromLockViolations(t *testing.T, root string) []string {
 			out = append(out, fmt.Sprintf("%s:%s must set up uv", e2eWorkflow, id))
 		}
 	}
-	if !strings.Contains(readFile(t, filepath.Join(root, ".github/workflows", e2eWorkflow)), "- 'uv.lock'") {
-		out = append(out, "the live-e2e path filter must select on - 'uv.lock': the install reads the lock, so a lock-only change must run the job")
+	if !filterListsPath(t, e2e, "uv.lock") {
+		out = append(out, "the live-e2e path filter `code` must list uv.lock (as a list entry, not a comment): the install reads the lock, so a lock-only change must run the job")
 	}
 	return out
 }
@@ -152,6 +180,9 @@ func TestWorkflowsInstallFromLockPlantedDefects(t *testing.T) {
 		want []string
 	}{
 		{"e2e job installs from requirements.txt", []mutation{{e2e, "uv sync --frozen", "pip install -r requirements.txt #"}}, []string{"installs unlocked", "unlocked requirements.txt"}},
+		{"e2e uv sync survives only as an echoed string", []mutation{{e2e, "uv sync --frozen --all-extras --dev", allMarker + "echo \"uv sync --frozen --all-extras --dev\""}}, []string{"must install with `uv sync --frozen"}},
+		{"e2e PATH step survives only as a comment-shaped string", []mutation{{e2e, `echo "$PWD/.venv/bin" >> "$GITHUB_PATH"`, allMarker + `echo "$PWD/.venv/bin # GITHUB_PATH"`}}, []string{"must put .venv/bin on GITHUB_PATH"}},
+		{"e2e path filter lists uv.lock only in a comment", []mutation{{e2e, "              - 'uv.lock'\n", "              # - 'uv.lock'\n"}}, []string{"must list uv.lock"}},
 		{"e2e path filter drops uv.lock", []mutation{{e2e, "- 'uv.lock'", "- 'pyproject.toml'"}}, []string{"uv.lock"}},
 	}
 	for _, c := range cases {

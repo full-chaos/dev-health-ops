@@ -143,3 +143,17 @@ test("a strictRequired schema edit exits 2 (compile failure, not a fixture failu
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("the row schema (strict ajv) requires class_disambiguator on a row that accepts two classes", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const { default: addFormats } = await import("ajv-formats");
+  const v1 = path.join(repo, "contracts", "auth", "v1");
+  const ajv = new Ajv2020({ strict: true, allErrors: true });
+  addFormats(ajv);
+  const validate = ajv.compile(JSON.parse(readFileSync(path.join(v1, "endpoint-profile.schema.json"), "utf8")));
+  const document = JSON.parse(readFileSync(path.join(v1, "endpoint-profiles.query-api.json"), "utf8"));
+  assert.equal(validate(document), true, JSON.stringify(validate.errors));
+  const row = document.rows.find((r) => r.class_disambiguator);
+  delete row.class_disambiguator;
+  assert.equal(validate(document), false);
+});

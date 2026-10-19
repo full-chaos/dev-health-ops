@@ -231,3 +231,69 @@ func TestWorkItemsFetchIsUnbounded(t *testing.T) {
 		}
 	}
 }
+
+// The search asks for a superset of the window (the Jira date bounds are widened), so the row cap is held to
+// the rows of the window: a window whose own rows fit the cap is not refused because of the rows around it.
+func TestJiraWorkItemsRouteCapCountsOnlyTheRowsOfTheWindow(t *testing.T) {
+	issues := make([]map[string]any, 0, len(workItemsWindowCases))
+	for _, c := range workItemsWindowCases {
+		issues = append(issues, map[string]any{
+			"key": fmt.Sprintf("OPS-%d", c.number), "self": "https://acme.atlassian.net/rest/api/3/issue/1",
+			"fields": map[string]any{
+				"project": map[string]any{"key": "OPS", "id": "10001", "name": "Operations"}, "summary": "s", "description": "",
+				"status":    map[string]any{"name": "To Do", "statusCategory": map[string]any{"key": "new"}},
+				"issuetype": map[string]any{"name": "Task"}, "labels": []string{},
+				"created": "2026-06-01T09:00:00Z", "updated": c.updated,
+			},
+		})
+	}
+	search, _ := json.Marshal(map[string]any{"issues": issues, "isLast": true})
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		body := ""
+		switch request.URL.Path {
+		case "/rest/api/3/search/jql":
+			body = string(search)
+		case "/rest/api/3/field":
+			body = `[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`
+		default:
+			t.Fatalf("unexpected Jira request %s", request.URL.String())
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	})
+	claim := nativeTestClaim("jira", "work-items")
+	claim.SourceExternalID = "OPS"
+	claim.DatasetOptions = map[string]any{"fetch_comments": false}
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	inWindow := 0
+	for _, c := range workItemsWindowCases {
+		if c.keep {
+			inWindow++
+		}
+	}
+	batch, err := (JiraWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity, MaxRows: inWindow}).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("a window of %d rows under a cap of %d was refused: %v", inWindow, inWindow, err)
+	}
+	assertKeptWorkItems(t, batch, "jira:OPS-")
+}
+
+func TestJiraAtlassianRouteCapCountsOnlyTheRowsOfTheWindow(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	claim.SinceAt, claim.BeforeAt = &since, &before
+	issue := func(key, updated string) string {
+		return `{"id":"` + key + `","key":"` + key + `","self":"https://acme.atlassian.net/rest/api/3/issue/1","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"s","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-06-01T08:00:00Z","updated":"` + updated + `"}}`
+	}
+	doer := &jiraAtlassianDoer{t: t, searchBody: `{"issues":[` + issue("OPS-202", "2026-07-20T09:00:00Z") + `,` +
+		issue("OPS-201", "2026-08-02T09:00:00Z") + `,` + issue("OPS-203", "2026-08-20T09:00:00Z") + `],"isLast":true}`}
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	handler := jiraAtlassianCompleteHandler(t)
+	handler.MaxRows = 1
+	if _, err := handler.Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("a window of one row under a cap of one was refused: %v", err)
+	}
+}

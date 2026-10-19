@@ -42,6 +42,15 @@ const REQUIRED_GROUPS = {
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
 const REQUIRED_SWEEPS = ["jwks"];
+
+// The Unicode general categories, written out here and not read from a sweep
+// file, so a deleted sweep entry cannot also lower its own count. Cs and LC are
+// the two the sweep excludes; every other category must have an entry.
+const JS_GENERAL_CATEGORIES = [
+  "Cc", "Cf", "Cn", "Co", "Ll", "Lm", "Lo", "Lt", "Lu", "Mc", "Me", "Mn", "Nd", "Nl", "No",
+  "Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps", "Sc", "Sk", "Sm", "So", "Zl", "Zp", "Zs",
+];
+
 const sweepExpand = (v) =>
   v && typeof v === "object" && !Array.isArray(v) && "$repeat" in v
     ? (v.prefix ?? "") + v.$repeat[0].repeat(v.$repeat[1]) + (v.suffix ?? "")
@@ -395,13 +404,31 @@ for (const surface of surfaces) {
       if (JSON.stringify(Object.keys(sweep.unicode_categories_excluded ?? {}).sort()) !== '["Cs","LC"]') {
         fail(`${surface}: excluded Unicode categories must be exactly Cs and LC`);
       }
+      const listedCategories = (sweep.unicode_categories ?? []).map((e) => e.category).sort();
+      if (JSON.stringify(listedCategories) !== JSON.stringify([...JS_GENERAL_CATEGORIES].sort())) {
+        fail(`${surface}: sweep categories ${listedCategories.join(",")} differ from the Unicode general categories`);
+      }
+      const anyCategory = new RegExp(`^(?:${JS_GENERAL_CATEGORIES.map((c) => `\\p{${c}}`).join("|")})$`, "u");
+      for (let code = 0; code <= 0x10ffff; code += 1) {
+        if (code >= 0xd800 && code <= 0xdfff) continue;
+        if (!anyCategory.test(String.fromCodePoint(code))) {
+          fail(`${surface}: U+${code.toString(16)} is in no listed Unicode general category`);
+          break;
+        }
+      }
+      for (const entry of sweep.unicode_categories ?? []) {
+        const ch = String.fromCodePoint(parseInt(entry.rune.slice(2), 16));
+        if (!new RegExp(`^\\p{${entry.category}}$`, "u").test(ch)) {
+          fail(`${surface}/category ${entry.category}: ${entry.rune} is not in that category`);
+        }
+      }
       const alphabet = new Set(sweep.alphabets.x_characters);
       if (alphabet.size !== 64) fail(`${surface}: the x alphabet must hold 64 characters`);
       const [lo, hi] = sweep.alphabets.kid_range.map((v) => parseInt(v.slice(2), 16));
       const xPrefix = sweep.base_document.keys[0].x.slice(0, 42);
       for (let code = 0; code <= 0x10ffff; code += 1) {
         if (code >= 0xd800 && code <= 0xdfff) continue;
-        if (code > 0xffff && code % 61 !== 0) continue;
+        if (code > 0xffff) continue;
         const ch = String.fromCodePoint(code);
         const xDoc = structuredClone(sweep.base_document);
         xDoc.keys[0].x = xPrefix + ch;
@@ -414,6 +441,23 @@ for (const surface of surfaces) {
         kDoc.keys[0].kid = ch;
         if (verdict(kDoc) !== (code >= lo && code <= hi ? "accept" : "refuse")) {
           fail(`${surface}: kid U+${code.toString(16)} has the wrong verdict`);
+          break;
+        }
+      }
+      if (Math.max(...[...alphabet].map((c) => c.codePointAt(0)), hi) > 0xffff) {
+        fail(`${surface}: the literal alphabets must be BMP-only for the astral sweep's refuse expectation`);
+      }
+      // Every astral code point through the compiled validator, mutating one
+      // document in place; no stride, so one admitted code point is found.
+      const astralX = structuredClone(sweep.base_document);
+      const astralKid = structuredClone(sweep.base_document);
+      for (let code = 0x10000; code <= 0x10ffff; code += 1) {
+        const ch = String.fromCodePoint(code);
+        astralX.keys[0].x = xPrefix + ch;
+        astralKid.keys[0].kid = ch;
+        checked += 2;
+        if (verdict(astralX) !== "refuse" || verdict(astralKid) !== "refuse") {
+          fail(`${surface}: astral U+${code.toString(16)} is accepted as an x ending or a kid`);
           break;
         }
       }

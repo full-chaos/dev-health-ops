@@ -304,6 +304,10 @@ visible in the file layout, not in a conditionally present field:
   `kind=issue` forbids it. The secret begins with the credential's
   `display_prefix` (a client rule), and `display_prefix` is the only fragment of
   a secret that appears anywhere else, pinned at 16 characters by the schema.
+  A receipt names only its parent id, so narrowing is checked by a client that
+  holds the parent entry: `CheckCredentialRotation` / `check_credential_rotation`
+  refuse widened scopes or audiences, a different principal, class or domain
+  owner, a wrong parent id and a revoked parent (migration 0007's rules).
 * `scopes` use `principal.v1`'s shape and are sets; `credential_class` is the
   same enum as `principal.v1`'s (a test fails on drift); `revoked_reason` is a
   reason code, never the free text the database column allows.

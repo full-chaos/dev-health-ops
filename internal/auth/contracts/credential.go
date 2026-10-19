@@ -140,8 +140,9 @@ func ParseCredentialList(root string, raw []byte, now time.Time) (CredentialList
 	if err := json.Unmarshal(raw, &list); err != nil {
 		return CredentialList{}, fmt.Errorf("%s: decoding validated document: %w", CredentialListSurface, err)
 	}
+	at := nowOr(now)
 	for index, item := range list.Items {
-		if err := item.checkBody(CredentialListSurface, nowOr(now)); err != nil {
+		if err := item.checkBody(CredentialListSurface, at); err != nil {
 			return CredentialList{}, fmt.Errorf("items[%d]: %w", index, err)
 		}
 	}
@@ -219,6 +220,26 @@ func CheckCredentialTransition(prev, next CredentialBody) error {
 }
 
 // CheckCredentialRotation reports whether child may be a rotation of parent.
+// A receipt names only its parent's id, so the receipt parser cannot see the
+// parent; a client that holds the parent entry calls this with it. The rules are
+// the database's (migration 0007): the child names this parent, keeps its
+// principal, class and domain owner, the parent is not revoked, and the child's
+// scopes and audiences are subsets of the parent's. Widening is a new credential
+// issued under its own authorization, not a rotation.
 func CheckCredentialRotation(parent, child CredentialBody) error {
+	const surface = CredentialReceiptSurface
+	if child.RotationParentID == "" || child.RotationParentID != parent.ID {
+		return fmt.Errorf("%s: credential %s does not name %s as its rotation parent", surface, child.ID, parent.ID)
+	}
+	if parent.PrincipalID != child.PrincipalID || parent.CredentialClass != child.CredentialClass ||
+		parent.DomainOwner != child.DomainOwner {
+		return fmt.Errorf("%s: a rotated credential keeps its parent's principal, class and domain owner", surface)
+	}
+	if parent.RevokedAt != nil || parent.Status == "revoked" {
+		return fmt.Errorf("%s: rotation parent %s is revoked", surface, parent.ID)
+	}
+	if !isSubset(child.Scopes, parent.Scopes) || !isSubset(child.Audiences, parent.Audiences) {
+		return fmt.Errorf("%s: rotation may preserve or narrow scopes and audiences, never widen them", surface)
+	}
 	return nil
 }

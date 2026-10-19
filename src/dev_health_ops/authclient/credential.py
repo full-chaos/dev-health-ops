@@ -158,8 +158,9 @@ def parse_credential_list(
     raw: bytes | str, now: datetime | None = None
 ) -> CredentialList:
     document = _load(raw, LIST_SURFACE)
+    at = _now(now)
     return CredentialList(
-        items=tuple(_body(item, LIST_SURFACE, _now(now)) for item in document["items"])
+        items=tuple(_body(item, LIST_SURFACE, at) for item in document["items"])
     )
 
 
@@ -236,5 +237,38 @@ def check_credential_transition(prev: CredentialBody, nxt: CredentialBody) -> No
 
 
 def check_credential_rotation(parent: CredentialBody, child: CredentialBody) -> None:
-    """Whether *child* may be a rotation of *parent*."""
-    return None
+    """Whether *child* may be a rotation of *parent*.
+
+    A receipt names only its parent's id, so the receipt parser cannot see the
+    parent; a client that holds the parent entry calls this with it. Mirrors the
+    database rules of migration 0007 and the Go ``CheckCredentialRotation``: the
+    child names this parent, keeps its principal, class and domain owner, the
+    parent is not revoked, and the child's scopes and audiences are subsets of
+    the parent's.
+    """
+    if child.rotation_parent_id is None or child.rotation_parent_id != parent.id:
+        raise ContractError(
+            f"{RECEIPT_SURFACE}: credential {child.id} does not name {parent.id} "
+            "as its rotation parent"
+        )
+    if (
+        parent.principal_id != child.principal_id
+        or parent.credential_class != child.credential_class
+        or parent.domain_owner != child.domain_owner
+    ):
+        raise ContractError(
+            f"{RECEIPT_SURFACE}: a rotated credential keeps its parent's principal, "
+            "class and domain owner"
+        )
+    if parent.revoked_at is not None or parent.status == "revoked":
+        raise ContractError(
+            f"{RECEIPT_SURFACE}: rotation parent {parent.id} is revoked"
+        )
+    if not (
+        set(child.scopes) <= set(parent.scopes)
+        and set(child.audiences) <= set(parent.audiences)
+    ):
+        raise ContractError(
+            f"{RECEIPT_SURFACE}: rotation may preserve or narrow scopes and "
+            "audiences, never widen them"
+        )

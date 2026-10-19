@@ -394,6 +394,8 @@ var seededIDs = map[string]bool{
 //     Each plane must use ITS form on every timestamp.
 //   - the order of the top-level "data" and "errors" members of an error
 //     response (Python writes data first, Go errors first).
+const wrongOffsetMarker = "<ts with the wrong offset form: "
+
 func normalizeMutationBody(body, plane string) (string, error) {
 	canonical, err := reports.PythonDumps([]byte(body))
 	if err != nil {
@@ -406,13 +408,14 @@ func normalizeMutationBody(body, plane string) (string, error) {
 	canonical = scrubbedTimestamp.ReplaceAllStringFunc(canonical, func(placeholder string) string {
 		parts := scrubbedTimestamp.FindStringSubmatch(placeholder)
 		if parts[2] != wantSuffix {
-			return "<ts with the wrong offset form: " + parts[2] + ">"
+			return wrongOffsetMarker + parts[2] + ">"
 		}
 		return "<ts:" + parts[1] + ">"
 	})
+	canonical = maskLiveClockShape(canonical)
 	canonical = oracleTime.ReplaceAllStringFunc(canonical, func(stamp string) string {
 		if !strings.HasSuffix(stamp, wantSuffix) {
-			return "<ts with the wrong offset form: " + stamp + ">"
+			return wrongOffsetMarker + stamp + ">"
 		}
 		parsed, err := time.Parse(time.RFC3339Nano, stamp)
 		if err != nil {
@@ -438,6 +441,70 @@ func normalizeMutationBody(body, plane string) (string, error) {
 		members = append(members, "?"+jsonString(key)+": "+string(raw))
 	}
 	return "{" + strings.Join(members, ", ") + "}", nil
+}
+
+// liveClockFields are the response members the plane stamps from its own clock while it runs. A reading
+// whose microsecond is zero (about one in a million) prints without a fraction in both Python's isoformat
+// and Go, so frac versus nofrac is a per-plane reading for these members and is masked. Every other
+// timestamp keeps its shape in the compare, and the offset form stays checked for all of them.
+// Only the member of a mutation payload itself is masked (data.<mutation>.<member>): a member of that
+// name inside user JSON (a report plan, its parameters) is data and keeps its shape.
+var liveClockFields = map[string]bool{"createdAt": true, "updatedAt": true}
+
+var liveClockPlaceholder = regexp.MustCompile(`<ts:(?:frac|nofrac)>`)
+
+func maskLiveClockShape(canonical string) string {
+	type frame struct {
+		key       string
+		expectKey bool
+	}
+	dec := json.NewDecoder(strings.NewReader(canonical))
+	var stack []*frame
+	var out strings.Builder
+	copied := 0
+	done := func() {
+		if len(stack) > 0 {
+			stack[len(stack)-1].expectKey = true
+		}
+	}
+	for {
+		lo := int(dec.InputOffset())
+		token, err := dec.Token()
+		if err != nil {
+			break
+		}
+		hi := int(dec.InputOffset())
+		switch value := token.(type) {
+		case json.Delim:
+			if value == '{' {
+				stack = append(stack, &frame{expectKey: true})
+			} else if value == '[' {
+				stack = append(stack, &frame{})
+			} else {
+				stack = stack[:len(stack)-1]
+				done()
+			}
+		case string:
+			top := (*frame)(nil)
+			if len(stack) > 0 {
+				top = stack[len(stack)-1]
+			}
+			if top != nil && top.expectKey {
+				top.key, top.expectKey = value, false
+				continue
+			}
+			if len(stack) == 3 && stack[0].key == "data" && liveClockFields[top.key] {
+				out.WriteString(canonical[copied:lo])
+				out.WriteString(liveClockPlaceholder.ReplaceAllString(canonical[lo:hi], "<ts:clock>"))
+				copied = hi
+			}
+			done()
+		default:
+			done()
+		}
+	}
+	out.WriteString(canonical[copied:])
+	return out.String()
 }
 
 // orderErrorMembers writes each error object with its members in one fixed
@@ -492,6 +559,12 @@ func compareMutationResponse(c oracleCase, python, goResponse venueoracle.Respon
 	goBody, err := normalizeMutationBody(goResponse.Body, "go")
 	if err != nil {
 		return false, "go body does not decode: " + err.Error()
+	}
+	if strings.Contains(pyBody, wrongOffsetMarker) {
+		return false, "python body carries the wrong-offset marker"
+	}
+	if strings.Contains(goBody, wrongOffsetMarker) {
+		return false, "go body carries the wrong-offset marker"
 	}
 	if c.messageDiffers != "" {
 		return errorsPresent(pyBody) && errorsPresent(goBody) && dataOf(pyBody) == dataOf(goBody), "both planes must answer an error with the same data (" + c.messageDiffers + ")"

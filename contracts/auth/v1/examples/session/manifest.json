@@ -13,6 +13,10 @@
       "why": "Two methods; positive control for uniqueItems and the amr enum."
     },
     {
+      "file": "valid-federated.json",
+      "why": "A federated (social or SSO) sign-in: amr \"fed\", the one value outside RFC 8176."
+    },
+    {
       "file": "valid-revision-zero.json",
       "why": "Lower boundary of `minimum: 0`."
     },

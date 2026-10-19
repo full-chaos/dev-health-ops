@@ -1,0 +1,12 @@
+-- The credential an llm_token_usage row was spent with.
+--
+--   credential_source  'org' when the call used the organization's own provider
+--                      credentials, 'platform' when it used the platform's. The
+--                      organization spend summary serves 'org' rows only, so a
+--                      platform call, its model and its tokens are never shown
+--                      to an organization. A row written before this column
+--                      reads 'platform': the credential it was spent with was
+--                      not recorded, so it is not served.
+--
+-- Additive, no data mutation, no backfill.
+ALTER TABLE llm_token_usage ADD COLUMN IF NOT EXISTS credential_source LowCardinality(String) DEFAULT 'platform';

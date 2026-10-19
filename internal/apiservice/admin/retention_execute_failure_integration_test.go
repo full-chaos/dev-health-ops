@@ -170,6 +170,9 @@ VALUES ($1, $2, 'old-row', 'team', 'r', '{}'::json, '{}'::json, 'success', now()
 			t.Errorf("%s: the answer %v carries no error: a failed run must be marked failed, never served as a bare count", tc.name, answer)
 			continue
 		}
+		if answer["deleted_count"] != float64(0) {
+			t.Errorf("%s: deleted_count = %v, want 0 beside the error and its reference", tc.name, answer["deleted_count"])
+		}
 		matched := bodyReference.FindStringSubmatch(text)
 		if matched == nil {
 			t.Errorf("%s: error %q is not the authored sentence with a reference", tc.name, text)

@@ -211,6 +211,13 @@ func githubRepoAnswers(repo string, items []githubIssue) []providerAnswer {
 // issues updated at or after it. A route that plans several windows reads the list once per window,
 // and an answer that ignored `since` would hand every issue back in every window.
 func githubIssuesAnswer(root string, issues []map[string]any) providerAnswer {
+	// The route asks for sort=updated&direction=asc: oldest update first, which is also where it stops at the
+	// window end.
+	sort.SliceStable(issues, func(i, j int) bool {
+		left, _ := issues[i]["updated_at"].(string)
+		right, _ := issues[j]["updated_at"].(string)
+		return left < right
+	})
 	return providerAnswer{
 		Method: "GET", Host: githubHost, Path: root + "/issues", Query: "*", Status: 200,
 		Respond: func(request replayRequest) (any, bool) {

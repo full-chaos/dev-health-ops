@@ -73,15 +73,18 @@ func (e ErrorEnvelope) IsTransient() bool { return transientStatuses[e.Status] }
 // RFC 8259 permits duplicate names and says behaviour is unpredictable; that is
 // exactly why a security contract refuses them rather than inheriting whichever
 // survivor the parser picked.
-func refuseDuplicateMembers(raw []byte) error {
+func refuseDuplicateMembers(raw []byte) error { return refuseDuplicateMembersIn(ErrorSurface, raw) }
+
+// refuseDuplicateMembersIn is refuseDuplicateMembers for any wire surface.
+func refuseDuplicateMembersIn(surface string, raw []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	if err := scanJSONValue(dec); err != nil {
+	if err := scanJSONValue(surface, dec); err != nil {
 		return err
 	}
 	// Trailing content is not this function's concern, but a second top-level
 	// value means the caller was handed something other than one document.
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("%s: trailing content after the top-level value", ErrorSurface)
+		return fmt.Errorf("%s: trailing content after the top-level value", surface)
 	}
 	return nil
 }
@@ -90,10 +93,10 @@ func refuseDuplicateMembers(raw []byte) error {
 // nested inside an array or a sub-object is caught too. Written as a walk
 // rather than a decode because the whole point is to see what a decode would
 // have thrown away.
-func scanJSONValue(dec *json.Decoder) error {
+func scanJSONValue(surface string, dec *json.Decoder) error {
 	tok, err := dec.Token()
 	if err != nil {
-		return fmt.Errorf("%s: document is not valid JSON: %w", ErrorSurface, err)
+		return fmt.Errorf("%s: document is not valid JSON: %w", surface, err)
 	}
 	delim, ok := tok.(json.Delim)
 	if !ok {
@@ -105,33 +108,33 @@ func scanJSONValue(dec *json.Decoder) error {
 		for dec.More() {
 			keyTok, err := dec.Token()
 			if err != nil {
-				return fmt.Errorf("%s: document is not valid JSON: %w", ErrorSurface, err)
+				return fmt.Errorf("%s: document is not valid JSON: %w", surface, err)
 			}
 			key, ok := keyTok.(string)
 			if !ok {
-				return fmt.Errorf("%s: object member name is not a string", ErrorSurface)
+				return fmt.Errorf("%s: object member name is not a string", surface)
 			}
 			if seen[key] {
 				return fmt.Errorf(
 					"%s: duplicate object member %q. Parsers keep the last value, so an "+
 						"earlier one would never reach validation -- a document can carry a "+
 						"forbidden value on the wire and still validate",
-					ErrorSurface, key)
+					surface, key)
 			}
 			seen[key] = true
-			if err := scanJSONValue(dec); err != nil {
+			if err := scanJSONValue(surface, dec); err != nil {
 				return err
 			}
 		}
 	case '[':
 		for dec.More() {
-			if err := scanJSONValue(dec); err != nil {
+			if err := scanJSONValue(surface, dec); err != nil {
 				return err
 			}
 		}
 	}
 	if _, err := dec.Token(); err != nil { // the closing delimiter
-		return fmt.Errorf("%s: document is not valid JSON: %w", ErrorSurface, err)
+		return fmt.Errorf("%s: document is not valid JSON: %w", surface, err)
 	}
 	return nil
 }

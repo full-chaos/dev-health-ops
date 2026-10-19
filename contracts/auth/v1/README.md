@@ -11,7 +11,9 @@ Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 `credential-entry.v1`, `credential-list.v1` and `credential-receipt.v1`
 (CHAOS-4934), `endpoint-auth-profile.v1` (CHAOS-4931), `authorization_request.v1`,
 `authorization_decision.v1` and the two batch forms (CHAOS-4932). All seven
-planned surfaces have shipped.
+planned surfaces have shipped, and the Wave 2 session surfaces `session.v1`,
+`refresh-request.v1`, `refresh-response.v1` and `auth-outcome.v1` (CHAOS-10155)
+follow them.
 
 Distinct from `credential-classes.json` and `endpoint-profiles.ops.json`, which
 are the Wave-0 **inventory** contract describing what authentication exists

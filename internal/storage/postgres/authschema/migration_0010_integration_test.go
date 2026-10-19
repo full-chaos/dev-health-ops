@@ -366,50 +366,77 @@ func TestMigration0010SecurityColumnsAreGuardedByBehaviour(t *testing.T) {
 	}
 }
 
-// A consumed link credential is immutable: a second use, a clear of
-// consumed_at and a retarget are all refused, even inside a commit
-// transaction, and the atomic "WHERE consumed_at IS NULL" consume returns no
-// row on replay.
-func TestMigration0010ConsumedLinkCredentialIsImmutable(t *testing.T) {
+// consumed_at is write-once on link_credentials and refresh_credentials: a
+// second consume and a clear are refused even inside a commit transaction, and
+// the atomic "WHERE consumed_at IS NULL" consume matches no row on replay.
+// Other columns of a consumed row stay writable (revoked_at, the ON DELETE SET
+// NULL actions), so a legitimate later write is not blocked.
+func TestMigration0010ConsumedAtIsWriteOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	env := newAuthFixture(t, ctx)
 	m10Seed(t, ctx, env)
 
-	var id string
+	var linkID, refreshID, otherID string
 	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at)
-		VALUES ($1, 'password_reset', $2::bytea, now() + interval '1 hour') RETURNING id::text`, m10Principal, m10Hash("b1")).Scan(&id); err != nil {
+		VALUES ($1, 'password_reset', $2::bytea, now() + interval '1 hour') RETURNING id::text`, m10Principal, m10Hash("b1")).Scan(&linkID); err != nil {
 		t.Fatal(err)
 	}
-	consume := func() (int64, error) {
-		tx, err := env.runtime.Begin(ctx)
-		if err != nil {
-			return 0, err
-		}
-		defer func() { _ = tx.Rollback(ctx) }()
-		if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-			return 0, err
-		}
-		tag, err := tx.Exec(ctx, `UPDATE auth.link_credentials SET consumed_at = now() WHERE id = $1 AND consumed_at IS NULL`, id)
-		if err != nil {
-			return 0, err
-		}
-		return tag.RowsAffected(), tx.Commit(ctx)
+	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
+		VALUES ($1, $2, '\x41'::bytea, now() + interval '1 day') RETURNING id::text`, m10Session, m10Principal).Scan(&otherID); err != nil {
+		t.Fatal(err)
 	}
-	if n, err := consume(); err != nil || n != 1 {
-		t.Fatalf("first consume = %d, %v; want 1", n, err)
+	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at, superseded_by)
+		VALUES ($1, $2, '\x42'::bytea, now() + interval '1 day', $3) RETURNING id::text`, m10Session, m10Principal, otherID).Scan(&refreshID); err != nil {
+		t.Fatal(err)
 	}
-	if n, err := consume(); err != nil || n != 0 {
-		t.Errorf("replayed atomic consume = %d, %v; want 0 rows", n, err)
-	}
-	for name, statement := range map[string]string{
-		"a second consume":     `UPDATE auth.link_credentials SET consumed_at = now() WHERE id = $1`,
-		"clearing consumed_at": `UPDATE auth.link_credentials SET consumed_at = NULL WHERE id = $1`,
-		"extending expiry":     `UPDATE auth.link_credentials SET expires_at = now() + interval '1 year' WHERE id = $1`,
-	} {
-		err := guardedExec(ctx, env.runtime, statement, id)
-		if err == nil || !strings.Contains(err.Error(), "consumed") {
-			t.Errorf("%s on a consumed link credential: err = %v, want a refusal naming the consumed state", name, err)
+
+	for _, table := range []string{"link_credentials", "refresh_credentials"} {
+		id := map[string]string{"link_credentials": linkID, "refresh_credentials": refreshID}[table]
+		consume := func() (int64, error) {
+			tx, err := env.runtime.Begin(ctx)
+			if err != nil {
+				return 0, err
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
+				return 0, err
+			}
+			tag, err := tx.Exec(ctx, `UPDATE auth.`+table+` SET consumed_at = now() WHERE id = $1 AND consumed_at IS NULL`, id)
+			if err != nil {
+				return 0, err
+			}
+			return tag.RowsAffected(), tx.Commit(ctx)
 		}
+		if n, err := consume(); err != nil || n != 1 {
+			t.Fatalf("%s: first consume = %d, %v; want 1", table, n, err)
+		}
+		if n, err := consume(); err != nil || n != 0 {
+			t.Errorf("%s: replayed atomic consume = %d, %v; want 0 rows", table, n, err)
+		}
+		for name, statement := range map[string]string{
+			"a second consume":     `UPDATE auth.` + table + ` SET consumed_at = now() WHERE id = $1`,
+			"clearing consumed_at": `UPDATE auth.` + table + ` SET consumed_at = NULL WHERE id = $1`,
+		} {
+			err := guardedExec(ctx, env.runtime, statement, id)
+			if err == nil || !strings.Contains(err.Error(), "consumed_at") {
+				t.Errorf("%s: %s: err = %v, want a refusal naming consumed_at", table, name, err)
+			}
+		}
+	}
+
+	// Legitimate later writes to a consumed row still work.
+	if err := guardedExec(ctx, env.runtime, `UPDATE auth.refresh_credentials SET revoked_at = now() WHERE id = $1`, refreshID); err != nil {
+		t.Errorf("revoking a consumed refresh credential was refused: %v", err)
+	}
+	if _, err := env.runtime.Exec(ctx, `DELETE FROM auth.refresh_credentials WHERE id = $1`, otherID); err != nil {
+		t.Fatalf("delete the superseding credential: %v", err)
+	}
+	var superseded *string
+	if err := env.admin.QueryRow(ctx, `SELECT superseded_by::text FROM auth.refresh_credentials WHERE id = $1`, refreshID).Scan(&superseded); err != nil || superseded != nil {
+		t.Errorf("ON DELETE SET NULL on a consumed row: superseded_by = %v, %v; want NULL", superseded, err)
+	}
+	if _, err := env.admin.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, m10Principal); err != nil {
+		t.Errorf("deleting the principal of consumed credentials was refused: %v", err)
 	}
 }

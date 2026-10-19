@@ -110,7 +110,7 @@ usage() {
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
          registered parser (each its own proof marker), govulncheck pinned and strict. STAGE is
-         fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|closure|relevant BASE HEAD|paths-selftest|scope-selftest|all.
+         fmt|vet|test|race|race-integration|fuzz [TARGET]|fuzz-registry|vuln|middleware|closure|relevant BASE HEAD|paths-selftest|scope-selftest|all.
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
   test   Run go test ./... in every Go module.
@@ -3207,6 +3207,37 @@ check_auth_race() {
   auth_go test -mod=readonly -trimpath -count=1 -race "${AUTH_PACKAGES[@]}"
 }
 
+# check_auth_race_integration (CHAOS-10207): auth concurrency proofs need BOTH
+# -race and a live PostgreSQL. `race` runs without the integration tag and
+# go.yml's integration shards run without -race, so neither runs them.
+# AUTH_RACE_PACKAGES lists the packages; append yours in the PR that adds its
+# race tests. In each package every TestRace* test logs AUTH_RACE_MARKER only
+# when built with -race, and the stage fails unless every one of them did.
+AUTH_RACE_MARKER="AUTH_RACE_EXECUTED"
+AUTH_RACE_PACKAGES=(
+  ./internal/auth/session
+)
+check_auth_race_integration() {
+  local pkg output want got total=0
+  for pkg in "${AUTH_RACE_PACKAGES[@]}"; do
+    want="$(cd "${ROOT}" && grep -hoE '^func TestRace[A-Za-z0-9_]+' "${pkg#./}"/*_test.go | sed 's/^func //' | LC_ALL=C sort -u || true)"
+    [ -n "${want}" ] || die "auth race-integration: no TestRace* test found in ${pkg}"
+    output="$(mktemp)"
+    printf 'auth go test -race -tags=integration %s\n' "${pkg}"
+    if ! auth_go test -mod=readonly -trimpath -count=1 -race -tags=integration -v -timeout=30m "${pkg}" >"${output}" 2>&1; then
+      cat "${output}" >&2
+      rm -f "${output}"
+      die "auth race-integration: ${pkg} failed"
+    fi
+    got="$(grep -oE "${AUTH_RACE_MARKER} TestRace[A-Za-z0-9_]+" "${output}" | sed "s/^${AUTH_RACE_MARKER} //" | LC_ALL=C sort -u || true)"
+    rm -f "${output}"
+    [ "${want}" = "${got}" ] || die "auth race-integration: ${pkg}: these race tests did not log ${AUTH_RACE_MARKER} (not run, skipped, or built without -race): $(comm -23 <(printf '%s\n' "${want}") <(printf '%s\n' "${got}") | tr '\n' ' ')"
+    printf '%s %s: %s race test(s) ran with -race on a live PostgreSQL\n' "${AUTH_RACE_MARKER}" "${pkg}" "$(printf '%s\n' "${got}" | wc -l | tr -d ' ')"
+    total=$((total + $(printf '%s\n' "${got}" | wc -l)))
+  done
+  printf 'auth race-integration: %d package(s), %d race test(s)\n' "${#AUTH_RACE_PACKAGES[@]}" "${total}"
+}
+
 check_auth_fuzz_registry() {
   local listed registered
   listed="$(cd "${ROOT}" && grep -rhoE '^func Fuzz[A-Za-z0-9_]+' \
@@ -3467,6 +3498,7 @@ check_auth() {
     vet) check_auth_vet ;;
     test) check_auth_test ;;
     race) check_auth_race ;;
+    race-integration) check_auth_race_integration ;;
     history) check_auth_history ;;
     fuzz) check_auth_fuzz "${2:-}" ;;
     fuzz-registry) check_auth_fuzz_registry ;;
@@ -3486,13 +3518,14 @@ check_auth() {
       check_auth_vet
       check_auth_test
       check_auth_race
+      check_auth_race_integration
       check_auth_history
       check_auth_middleware
       check_auth_closure
       check_auth_fuzz
       check_auth_vuln
       ;;
-    *) die "auth accepts fmt|vet|test|race|history|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all" ;;
+    *) die "auth accepts fmt|vet|test|race|race-integration|history|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all" ;;
   esac
 }
 

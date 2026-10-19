@@ -31,7 +31,7 @@ type cmdSpec struct {
 
 // subprocessSlots caps how many child processes of this package run at once: every guard is parallel, and an uncapped
 // package starves the other packages of the same race leg (internal/fixturescli timed out at 10 minutes beside it).
-var subprocessSlots = make(chan struct{}, 2)
+var subprocessSlots = make(chan struct{}, 1)
 
 func (c cmdSpec) run(name string, args ...string) cmdResult {
 	subprocessSlots <- struct{}{}

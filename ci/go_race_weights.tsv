@@ -101,7 +101,7 @@ internal/bigboycompose	1
 internal/billingcli	1
 internal/cacheinvalidation	1
 internal/chmigrate	1
-internal/cigates	450
+internal/cigates	289
 internal/cli	2
 internal/clicredentials	11
 internal/contractcheck	1
@@ -231,7 +231,7 @@ internal/prrootid	1
 internal/pushcli	3
 internal/pyargparse	1
 internal/pythonparity	143
-internal/pythonparity/emailvalidator	230
+internal/pythonparity/emailvalidator	456
 internal/pythonparity/pyidna	241
 internal/pythonparity/pyunicodedata	57
 internal/pythonparity/scopeparity	3

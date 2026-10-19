@@ -57,7 +57,9 @@ fi
 printf 'auth_corpus_set_env: %s %s; recreating go-api of %s\n' "${NAME}" "$([ -n "${VALUE}" ] && echo set || echo unset)" "${PROJECT}"
 compose up --detach --no-deps --force-recreate --no-build go-api
 
-deadline=$((SECONDS + 120))
+wait_seconds="${AUTH_CORPUS_WAIT_SECONDS:-120}"
+[[ "${wait_seconds}" =~ ^[0-9]+$ ]] || die "AUTH_CORPUS_WAIT_SECONDS must be a number of seconds (got '${wait_seconds}')"
+deadline=$((SECONDS + wait_seconds))
 while :; do
   container="$(compose ps -q go-api)"
   health=""
@@ -70,7 +72,7 @@ while :; do
   fi
   if [ "${SECONDS}" -ge "${deadline}" ]; then
     compose logs --no-color --tail 40 go-api >&2 || true
-    die "go-api is '${health}' 120 s after the recreate"
+    die "go-api is '${health}' ${wait_seconds} s after the recreate, not healthy"
   fi
   sleep 2
 done

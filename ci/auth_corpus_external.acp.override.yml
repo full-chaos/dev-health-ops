@@ -1,6 +1,17 @@
 # Leg acp of ci/auth_corpus_external.sh (CHAOS-10160): go-api forwards the six auth aggregates to auth-service.
 # Added to the main override for that leg only. The six AUTH_PROXY_* flags and AUTH_PROXY_URL come from the project
 # state file, so ci/auth_corpus_set_env.sh keeps them across a recreate.
+#
+# go-api also joins the auth network here, and a request from the runner may reach it through either network's
+# gateway: the auth network's subnet is pinned too (outside the default network's 10.199.90.0/24 and compose.yml's
+# planes network 10.199.81.0/28) and go-api trusts both gateways.
+networks:
+  auth_plane:
+    ipam:
+      config:
+        - subnet: 10.199.91.0/24
+          gateway: 10.199.91.1
+
 services:
   go-api:
     networks:
@@ -8,6 +19,7 @@ services:
       - planes
       - auth_plane
     environment:
+      - TRUSTED_PROXIES=10.199.90.1,10.199.91.1
       - AUTH_PROXY_URL
       - AUTH_PROXY_SESSIONS
       - AUTH_PROXY_LOCAL_LOGIN

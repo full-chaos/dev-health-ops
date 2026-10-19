@@ -192,3 +192,13 @@ func TestErrorAsReachesTheNodeBoundAndNoFurther(t *testing.T) {
 		t.Fatal("ErrorAs walked past the node bound")
 	}
 }
+
+// ErrorType keeps its own 32-step reach: a chain deeper than that names the wrapper found at 32 unwraps, as before the walk bound grew.
+func TestErrorTypeKeepsItsThirtyTwoStepReach(t *testing.T) {
+	if got := ErrorType(wrapDeep(errors.New("leaf"), 40)); got != "*fmt.wrapError" {
+		t.Fatalf("ErrorType of a 40-deep chain = %q, want *fmt.wrapError", got)
+	}
+	if got := ErrorType(wrapDeep(errors.New("leaf"), 20)); got != "*errors.errorString" {
+		t.Fatalf("ErrorType of a 20-deep chain = %q, want *errors.errorString", got)
+	}
+}

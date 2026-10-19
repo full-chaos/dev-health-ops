@@ -411,7 +411,7 @@ func CollectLinearGraphQLPages(
 		if err != nil {
 			return PageCollection{}, ErrPaginationInvalid
 		}
-		response, err := client.Do(ctx, http.MethodPost, "/graphql", bytes.NewReader(body))
+		response, err := client.DoRoute(ctx, http.MethodPost, "/graphql", "/graphql", bytes.NewReader(body))
 		if err != nil {
 			return PageCollection{}, err
 		}
@@ -458,7 +458,9 @@ func CollectLinearGraphQLPages(
 }
 
 type JiraPageOptions struct {
-	Path       string
+	Path string
+	// Route is the static route template a failure names in place of the path.
+	Route      string
 	Query      url.Values
 	DataKey    string
 	MaxResults int
@@ -500,7 +502,7 @@ func CollectJiraTokenOffsetPages(
 		if err != nil {
 			return PageCollection{}, err
 		}
-		response, err := client.Do(ctx, http.MethodGet, target, nil)
+		response, err := client.DoRoute(ctx, http.MethodGet, options.Route, target, nil)
 		if err != nil {
 			return PageCollection{}, err
 		}
@@ -547,7 +549,9 @@ func CollectJiraTokenOffsetPages(
 }
 
 type LaunchDarklyOffsetOptions struct {
-	Path     string
+	Path string
+	// Route is the static route template a failure names in place of the path.
+	Route    string
 	Query    url.Values
 	MaxPages int
 }
@@ -575,7 +579,7 @@ func CollectLaunchDarklyOffsetPages(
 		if err != nil {
 			return PageCollection{}, err
 		}
-		response, err := client.Do(ctx, http.MethodGet, target, nil)
+		response, err := client.DoRoute(ctx, http.MethodGet, options.Route, target, nil)
 		if err != nil {
 			return PageCollection{}, err
 		}
@@ -637,7 +641,7 @@ func CollectLaunchDarklyAuditPages(
 			return PageCollection{}, ErrPaginationInvalid
 		}
 		seen[next] = true
-		response, err := client.Do(ctx, http.MethodGet, next, nil)
+		response, err := client.DoRoute(ctx, http.MethodGet, "/api/v2/auditlog", next, nil)
 		if err != nil {
 			return PageCollection{}, err
 		}

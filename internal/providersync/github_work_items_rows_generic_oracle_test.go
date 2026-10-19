@@ -154,7 +154,7 @@ func buildGitHubIssueWorkItemOracleRow(t *testing.T, input map[string]any) githu
 	claim := githubWorkItemOracleClaim()
 	claim.OrgID = input["org_id"].(string)
 	row, err := normalizeGitHubIssueWorkItem(
-		claim, input["repo_full_name"].(string), repoID, raw, nil,
+		claim, sameGitHubRepoNames(input["repo_full_name"].(string)), repoID, raw, nil,
 		githubWorkItemOracleNormalizedAt,
 	)
 	if err != nil {

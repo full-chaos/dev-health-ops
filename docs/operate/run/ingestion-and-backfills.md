@@ -52,6 +52,24 @@ planner widens the cap to exceed the overlap and records a warning naming both
 values. Treat that warning as a configuration defect to correct, not as a healthy
 steady state — the widened window is more expensive than the one requested.
 
+A GitHub work-items unit lists issues in updated order, oldest first
+(`sort=updated&direction=asc` with `since`), and stops at the first issue
+updated at or after the window end, so a bounded window completes however many
+newer issues the repository holds; an issue updated exactly at the end belongs
+to the next window. This changes the order of the request compared with the
+frozen Python provider, which read GitHub's default order (created, newest first)
+and skipped the newer items without stopping; the issues written per window are
+the same. Because an update-ordered list changes while it is read (an edited
+issue moves to the end and shifts the rest up), the unit pages by key: each
+request asks for one page since the update time of the last issue it read
+(inclusive, repeats are de-duplicated by issue number), and only a tie of more
+than one page inside one second continues by page number; running out of the
+request cap fails the unit closed with a Warn and
+`dev_health_github_work_items_issue_list_cap_exceeded_total`. The stop is the expected case: the unit logs one Info line
+`github_work_items_issue_list` (window, pages, `stopped_at_window_end`) and
+counts `dev_health_github_work_items_issue_list_stopped_total{reason="window_end"}`.
+A same-second tie group of more than one page is paged by page number, so an edit during that read can shift one unseen issue into a page already read and the issue is missed. The Info line carries `tie_groups_over_one_page` and `dev_health_github_work_items_issue_list_tie_paged_total{reason="same_second"}` counts these groups.
+
 Consequences to expect when reading run state:
 
 - A capped run is a healthy partial run, not a failure. Its window end is behind

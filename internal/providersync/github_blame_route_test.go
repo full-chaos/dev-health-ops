@@ -443,6 +443,9 @@ func TestGitHubBlameRouteAbortsBatchOnRateLimit(t *testing.T) {
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
 		t.Fatalf("rate-limit error=%v", err)
 	}
+	if !strings.Contains(err.Error(), "route=/graphql") {
+		t.Fatalf("rate-limit error=%v, want route=/graphql", err)
+	}
 }
 
 func TestGitHubBlameSelectionRotatesFailedPathsBehindNeverAttemptedPaths(t *testing.T) {

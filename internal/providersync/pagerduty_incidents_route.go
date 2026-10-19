@@ -250,6 +250,7 @@ func (doer pagerDutyIncidentFamilyCountingDoer) Do(request *http.Request) (*http
 
 type pagerDutyIncidentFamilyEndpoint struct {
 	path      string
+	route     string
 	decode    func([]byte) ([]json.RawMessage, bool, error)
 	paginated bool
 }
@@ -312,11 +313,11 @@ func pagerDutyIncidentChildEndpoint(client *providerfoundation.HTTPClient, incid
 	base := providerRelativePath(client, "incidents", incidentID)
 	switch dataset {
 	case "incident-alerts":
-		return pagerDutyIncidentFamilyEndpoint{path: base + "/alerts", decode: decodePagerDutyAlerts, paginated: true}, nil
+		return pagerDutyIncidentFamilyEndpoint{path: base + "/alerts", route: "/incidents/{incident}/alerts", decode: decodePagerDutyAlerts, paginated: true}, nil
 	case "incident-log-entries":
-		return pagerDutyIncidentFamilyEndpoint{path: base + "/log_entries", decode: decodePagerDutyLogEntries, paginated: true}, nil
+		return pagerDutyIncidentFamilyEndpoint{path: base + "/log_entries", route: "/incidents/{incident}/log_entries", decode: decodePagerDutyLogEntries, paginated: true}, nil
 	case "incident-notes":
-		return pagerDutyIncidentFamilyEndpoint{path: base + "/notes", decode: decodePagerDutyNotes, paginated: false}, nil
+		return pagerDutyIncidentFamilyEndpoint{path: base + "/notes", route: "/incidents/{incident}/notes", decode: decodePagerDutyNotes, paginated: false}, nil
 	default:
 		return pagerDutyIncidentFamilyEndpoint{}, ErrInvalidConfiguration
 	}
@@ -395,7 +396,7 @@ func (handler PagerDutyIncidentFamilyRouteHandler) Collect(
 	counted := *client
 	counted.Doer = pagerDutyIncidentFamilyCountingDoer{delegate: client.Doer, attempts: &requests}
 	parentEndpoint := pagerDutyIncidentFamilyEndpoint{
-		path: "/incidents", decode: decodePagerDutyIncidents, paginated: true,
+		path: "/incidents", route: "/incidents", decode: decodePagerDutyIncidents, paginated: true,
 	}
 	query := url.Values{}
 	if claim.SinceAt != nil {
@@ -489,7 +490,7 @@ func requestPagerDutyIncidentFamilyPage(
 	if encoded := query.Encode(); encoded != "" {
 		target += "?" + encoded
 	}
-	response, err := client.Do(ctx, http.MethodGet, target, nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, endpoint.route, target, nil)
 	if err != nil {
 		return nil, false, err
 	}

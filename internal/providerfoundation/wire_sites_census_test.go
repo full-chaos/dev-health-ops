@@ -41,8 +41,6 @@ var listedDoSites = map[string]string{
 	"http.go: guarded.Do":                              "HTTPClient.Do: counted per attempt, redirect hops counted by the per-call guard",
 	"http.go: c.Doer.Do":                               "HTTPClient.DoUnauthenticated: counted",
 	"http.go: c.Do":                                    "HTTPClient.DoRoute: goes through HTTPClient.Do",
-	"pagination.go: client.Do":                         "pagination through HTTPClient.Do",
-	"pagerduty_pagination.go: client.Do":               "pagination through HTTPClient.Do",
 	"budget.go: r.once.Do":                             "sync.Once, not a request",
 	"budget.go: g.Client.Do":                           "Valkey command, not a provider request",
 	"clients.go: httpguard.NoRedirectsDoer(a.doer).Do": "credential exchange (OAuth token / GitHub App installation token): an auth endpoint call outside the unit's route families",

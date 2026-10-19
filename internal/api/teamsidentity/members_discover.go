@@ -171,7 +171,7 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 		if err != nil {
 			return nil, walk.pageError(err)
 		}
-		link := response.Header.Get("Link")
+		link := linkFieldValue(response.Header)
 		raw, err := readBody(response)
 		if err != nil {
 			return nil, walk.pageError(err)
@@ -251,7 +251,7 @@ func discoverMembersGitLab(ctx context.Context, token secrets.Value, baseURL, gr
 		if err != nil {
 			return nil, walk.pageError(err)
 		}
-		link := response.Header.Get("Link")
+		link := linkFieldValue(response.Header)
 		raw, err := readBody(response)
 		if err != nil {
 			return nil, walk.pageError(err)

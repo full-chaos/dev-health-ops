@@ -316,7 +316,17 @@ func executeWithStdin(parent context.Context, args []string, lookup platformsecr
 	}
 	defer runtime.close()
 	runtime.stdin = stdin
+	if ownsItsBudget(args) {
+		// The verb sets its own deadline; the 30 s verb ctx only covers setup.
+		return dispatch(parent, runtime, args, stdout, stderr)
+	}
 	return dispatch(ctx, runtime, args, stdout, stderr)
+}
+
+// ownsItsBudget reports whether a verb bounds its own run time (flag
+// --timeout) instead of using the 30 s verb deadline.
+func ownsItsBudget(args []string) bool {
+	return len(args) >= 2 && args[0] == "metrics" && args[1] == "generation-repair"
 }
 
 func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, stderr io.Writer) (*operatorRuntime, int) {
@@ -1608,6 +1618,10 @@ func dispatchMetricsFinalizeRedrive(
 // rewritten only when its run id proves the original generation; every other
 // row is counted and left alone. Idempotent. Audited under the
 // finalize-redrive action: the damage and its repair are the same family.
+// Telemetry: dho is a one-shot CLI with no exporter (as with the remaining
+// backfill counter above), so the dev_health_generation_repair_* counters are
+// not observed here; the Warn failure line and the Info partial line carry
+// the counter name in their "metric" attribute and are the telemetry.
 func dispatchMetricsGenerationRepair(
 	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
 ) int {
@@ -1616,8 +1630,9 @@ func dispatchMetricsGenerationRepair(
 	from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
 	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
 	dryRun := flags.Bool("dry-run", false, "report which rows a real pass would restore, and which cannot be proven, without writing")
+	budget := flags.Duration("timeout", 10*time.Minute, "time budget of this pass (at most 1h); when it ends the command exits 0 with generation_repair.partial=true and resume_from, and a rerun with --from set to resume_from continues")
 	mutation := addMutationFlags(flags)
-	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) || *budget <= 0 || *budget > time.Hour {
 		return writeError(stderr, "invalid_request")
 	}
 	parsedOrg, err := uuid.Parse(*org)
@@ -1641,7 +1656,9 @@ func dispatchMetricsGenerationRepair(
 		if err != nil {
 			return writeError(stderr, "operator_backend_unavailable")
 		}
-		outcome, err := store.RepairLegacyRedriveGenerations(ctx, canonicalOrg, fromDay, toDay, *dryRun, *mutation.reason)
+		budgetCtx, cancelBudget := context.WithTimeout(ctx, *budget)
+		defer cancelBudget()
+		outcome, err := store.RepairLegacyRedriveGenerations(budgetCtx, canonicalOrg, fromDay, toDay, *dryRun, *mutation.reason)
 		if err != nil {
 			return writeServiceError(stderr, err)
 		}

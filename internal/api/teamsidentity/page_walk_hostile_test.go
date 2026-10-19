@@ -437,6 +437,21 @@ func TestAMalformedOrInconsistentContinuationSignalIsNeverASuccess(t *testing.T)
 		assertNoPartial(t, "bare rel", got)
 		assertFailedClosed(t, err, doer, logs, "github", hostileCase{name: "bare rel=next", cause: walkCauseNoContinuation, maxRequests: 1})
 	})
+	for name, link := range map[string]string{
+		"github rel=next target without angle brackets": `https://api.github.com/orgs/o/teams?page=2; rel="next"`,
+		"github rel=next fragment of a quoted comma":    `<https://api.github.com/orgs/o/teams?page=1>; title="x, y"; REL="NEXT"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureWarns(t)
+			doer := &funcDoer{answer: func(r *http.Request, n int) (http.Header, string) {
+				return header("Link", link), `[{"slug":"a","name":"A"}]`
+			}}
+			got, err := githubListAllPages(context.Background(), hostileClient(t, "github", doer), "org teams", "o", "/orgs/{org}/teams", "/orgs/o/teams?per_page=100",
+				func(entry githubTeamListEntry) string { return entry.Slug })
+			assertNoPartial(t, name, got)
+			assertFailedClosed(t, err, doer, logs, "github", hostileCase{name: name, cause: walkCauseNoContinuation, maxRequests: 1})
+		})
+	}
 	for _, token := range []string{"0", "false", "[]"} {
 		t.Run("jira falsy non-string or empty token "+token, func(t *testing.T) {
 			logs := captureWarns(t)

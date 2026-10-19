@@ -85,7 +85,7 @@ func (handler GitLabFeatureFlagsRouteHandler) Collect(
 	)
 	flagsPage, err := providerfoundation.CollectGitLabPageParamPages(
 		ctx, &counted, providerfoundation.GitLabPageOptions{
-			Path: flagsPath, PerPage: perPage, MaxPages: maxPages,
+			Path: flagsPath, Route: gitlabFeatureFlagsRoute, PerPage: perPage, MaxPages: maxPages,
 		},
 	)
 	if err != nil {
@@ -174,7 +174,7 @@ func fetchGitLabFeatureFlagProjectName(
 	path string,
 	fallback string,
 ) (string, error) {
-	response, err := client.Do(ctx, http.MethodGet, path, nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, gitlabProjectRoute, path, nil)
 	if err != nil {
 		return "", err
 	}

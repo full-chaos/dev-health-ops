@@ -31,17 +31,18 @@ type GrantRecord struct {
 	Grantable bool
 }
 
-// String is for humans only. It is NOT injective (a quoted identifier may
-// contain a dot or a space), so identity and the digest never use it.
+// String is for humans only; identity and the digest never use it. Identifiers
+// are quoted so a newline or control character in a catalog name cannot split
+// or forge a line of the operator message.
 func (g GrantRecord) String() string {
 	option := ""
 	if g.Grantable {
 		option = " WITH GRANT OPTION"
 	}
 	if g.Column != "" {
-		return fmt.Sprintf("%s %s.%s %s%s", g.Kind, g.Object, g.Column, g.Privilege, option)
+		return fmt.Sprintf("%s %q.%q %s%s", g.Kind, g.Object, g.Column, g.Privilege, option)
 	}
-	return fmt.Sprintf("%s %s %s%s", g.Kind, g.Object, g.Privilege, option)
+	return fmt.Sprintf("%s %q %s%s", g.Kind, g.Object, g.Privilege, option)
 }
 
 func (g GrantRecord) less(o GrantRecord) bool {

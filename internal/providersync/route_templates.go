@@ -23,8 +23,21 @@ const (
 	githubRunJobsRoute      = githubRepoRoute + "/actions/runs/{run}/jobs"
 	githubRunArtifactsRoute = githubRepoRoute + "/actions/runs/{run}/artifacts"
 
-	gitlabProjectRoute    = "/projects/{project}"
-	gitlabGroupEpicsRoute = "/groups/{group}/epics"
+	githubTreeRoute         = githubRepoRoute + "/git/trees/{ref}"
+	githubBranchRoute       = githubRepoRoute + "/branches/{branch}"
+	githubCommitRoute       = githubRepoRoute + "/commits/{sha}"
+	githubDependabotRoute   = githubRepoRoute + "/dependabot/alerts"
+	githubCodeScanningRoute = githubRepoRoute + "/code-scanning/alerts"
+	githubAdvisoriesRoute   = githubRepoRoute + "/security-advisories"
+
+	graphQLRoute = "/graphql"
+
+	gitlabProjectRoute = "/projects/{project}"
+	// The artifact download routes also name a failure of the redirected
+	// download (the artifact store), whose own path is never printed.
+	githubArtifactZipRoute  = githubRepoRoute + "/actions/artifacts/{artifact}/zip"
+	gitlabJobArtifactsRoute = gitlabProjectRoute + "/jobs/{job}/artifacts"
+	gitlabGroupEpicsRoute   = "/groups/{group}/epics"
 
 	gitlabCommitsRoute       = gitlabProjectRoute + "/repository/commits"
 	gitlabMergeRequestsRoute = gitlabProjectRoute + "/merge_requests"
@@ -34,5 +47,11 @@ const (
 	gitlabDeploymentsRoute   = gitlabProjectRoute + "/deployments"
 	gitlabReleasesRoute      = gitlabProjectRoute + "/releases"
 	gitlabLabelsRoute        = gitlabProjectRoute + "/labels"
+	gitlabTreeRoute          = gitlabProjectRoute + "/repository/tree"
+	gitlabBlameRoute         = gitlabProjectRoute + "/repository/files/{file}/blame"
+	gitlabCommitRoute        = gitlabProjectRoute + "/repository/commits/{sha}"
+	gitlabFeatureFlagsRoute  = gitlabProjectRoute + "/feature_flags"
+	gitlabFindingsRoute      = gitlabProjectRoute + "/vulnerability_findings"
+	gitlabDependenciesRoute  = gitlabProjectRoute + "/dependencies"
 	gitlabMilestonesRoute    = gitlabProjectRoute + "/milestones"
 )

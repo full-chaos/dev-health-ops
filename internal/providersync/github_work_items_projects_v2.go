@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
@@ -133,7 +134,13 @@ func githubProjectsV2DegradedCause(cause string) bool {
 // one fetch per integration moves the D16 unit boundary and is therefore a
 // separately tracked follow-up with its own oracle strategy; it must not be
 // smuggled in here, and it must not gate the all-or-nothing alias activation.
-type GitHubProjectV2Fetcher struct{}
+type GitHubProjectV2Fetcher struct {
+	// RepoIdentity names the stored identity of the repositories a board item
+	// points at (CHAOS-9879): an item's work-item id and membership subject
+	// carry the name its repository was minted from. Nil keeps the name the
+	// item states.
+	RepoIdentity GitLabRepoIdentityReader
+}
 
 func githubProjectV2Targets(claim Claim) ([]GitHubProjectV2Target, error) {
 	value, configured := claim.IntegrationConfig[gitHubProjectsV2IntegrationConfigKey]
@@ -189,7 +196,7 @@ func githubProjectV2Targets(claim Claim) ([]GitHubProjectV2Target, error) {
 	return targets, nil
 }
 
-func (GitHubProjectV2Fetcher) Fetch(
+func (fetcher GitHubProjectV2Fetcher) Fetch(
 	ctx context.Context,
 	claim Claim,
 	credential providerfoundation.Credential,
@@ -247,6 +254,9 @@ func (GitHubProjectV2Fetcher) Fetch(
 			return finishGitHubProjectV2Fetch(result), err
 		}
 		items := targetResult.Items
+		if items, err = fetcher.itemsByRepositoryIdentity(ctx, claim, items); err != nil {
+			return finishGitHubProjectV2Fetch(result), err
+		}
 		projectScopeID := fmt.Sprintf("ghprojv2:%s#%d", target.OrgLogin, target.ProjectNumber)
 		// The board itself has to exist in `projects` before anything can
 		// point at it. Nothing wrote this row before CHAOS-4194 -- the fetcher
@@ -708,7 +718,7 @@ func fetchGitHubProjectV2GraphQL(
 	if err != nil {
 		return providerfoundation.ErrNormalizationInvalid
 	}
-	response, err := client.Do(ctx, http.MethodPost, gitHubGraphQLURL(client), bytes.NewReader(body))
+	response, err := client.DoRoute(ctx, http.MethodPost, graphQLRoute, gitHubGraphQLURL(client), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -1213,3 +1223,47 @@ query($itemId: ID!, $after: String) {
     }
   }
 }`
+
+// itemsByRepositoryIdentity returns items with each pull request's and issue's
+// repository named by the identity its repository id was minted from, so every
+// id derived from the name below (work item, membership subject, repo_id)
+// matches the ids the repository's own sync wrote (CHAOS-9879).
+func (fetcher GitHubProjectV2Fetcher) itemsByRepositoryIdentity(
+	ctx context.Context, claim Claim, items []gitHubProjectV2ItemPayload,
+) ([]gitHubProjectV2ItemPayload, error) {
+	if fetcher.RepoIdentity == nil {
+		return items, nil
+	}
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Content.Typename == "Issue" || item.Content.Typename == "PullRequest" {
+			if name := strings.TrimSpace(item.Content.Repository.NameWithOwner); name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	identity, err := resolveGitLabIdentityPaths(ctx, fetcher.RepoIdentity, claim, "", GitLabRepoIdentity{}, names)
+	if err != nil {
+		errorClass, errorType := logging.ErrorClass(err), logging.ErrorType(err) // never the error text (CHAOS-7933)
+		slog.Default().WarnContext(ctx, "github_projects_v2_items_identity_unresolved",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "dataset", claim.Dataset, "named_repositories", len(names),
+			"error_class", errorClass, "error_type", errorType)
+		return nil, err
+	}
+	out := make([]gitHubProjectV2ItemPayload, len(items))
+	copy(out, items)
+	renamed := 0
+	for index := range out {
+		name := strings.TrimSpace(out[index].Content.Repository.NameWithOwner)
+		if mapped := identity[strings.ToLower(name)]; name != "" && mapped != "" {
+			if mapped != name {
+				renamed++
+			}
+			out[index].Content.Repository.NameWithOwner = mapped
+		}
+	}
+	slog.Default().InfoContext(ctx, "github_projects_v2_items_identity",
+		"org_id", claim.OrgID, "unit_id", claim.ID, "dataset", claim.Dataset,
+		"items", len(items), "named_repositories", len(names), "renamed", renamed)
+	return out, nil
+}

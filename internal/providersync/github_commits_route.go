@@ -66,7 +66,10 @@ type gitHubUser struct {
 	Email any `json:"email"`
 }
 
-type GitHubCommitsRouteHandler struct{ MaxCommits int }
+type GitHubCommitsRouteHandler struct {
+	MaxCommits   int
+	RepoIdentity GitLabRepoIdentityReader
+}
 
 func (handler GitHubCommitsRouteHandler) Collect(ctx context.Context, claim Claim, _ providerfoundation.Credential, client *providerfoundation.HTTPClient, normalizedAt time.Time) (CompleteRouteBatch, error) {
 	if ctx == nil || claim.Validate() != nil || claim.Provider != "github" || claim.Dataset != "commits" || client == nil || client.Provider != "github" || client.BaseURL == nil || normalizedAt.IsZero() {
@@ -84,7 +87,7 @@ func (handler GitHubCommitsRouteHandler) Collect(ctx context.Context, claim Clai
 	if err := fetchObjectRoute(ctx, &counted, githubRepoRoute, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	repoID, err := repositoryIdentity(repoPayload.FullName)
+	repoID, err := resolveGitHubRepoID(ctx, handler.RepoIdentity, claim, repoPayload)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

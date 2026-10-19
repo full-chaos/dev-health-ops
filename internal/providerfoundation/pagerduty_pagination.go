@@ -16,7 +16,9 @@ const maximumPagerDutyPerPage = 100
 // required boolean `more` marker; an advertised next page with no rows is an
 // invalid/non-progressing response and must fail closed.
 type PagerDutyOffsetOptions struct {
-	Path     string
+	Path string
+	// Route is the static route template a failure names in place of the path.
+	Route    string
 	DataKey  string
 	PerPage  int
 	MaxPages int
@@ -48,7 +50,7 @@ func CollectPagerDutyOffsetPages(
 		if err != nil {
 			return PageCollection{}, err
 		}
-		response, err := client.Do(ctx, http.MethodGet, target, nil)
+		response, err := client.DoRoute(ctx, http.MethodGet, options.Route, target, nil)
 		if err != nil {
 			return result, err
 		}

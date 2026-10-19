@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -308,12 +309,19 @@ type routeKey struct{}
 // DoRoute is Do for a route whose path carries a member login or other
 // personal data: a failure names the route by template (for example
 // /users/{login}) instead of the path. The template must be a static literal,
-// never built from a request value. It applies to this call only.
+// never built from a request value. It applies to this call only. A nil
+// context carries no route: the call is exactly Do with a nil context.
 func (c *HTTPClient) DoRoute(ctx context.Context, method, template, path string, body io.Reader) (*http.Response, error) {
+	if ctx == nil {
+		return c.Do(ctx, method, path, body)
+	}
 	return c.Do(context.WithValue(ctx, routeKey{}, template), method, path, body)
 }
 
 func routeTemplate(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
 	template, _ := ctx.Value(routeKey{}).(string)
 	return template
 }
@@ -394,7 +402,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			return nil, ErrCredentialInvalid
 		}
 		if err := c.Auth(request); err != nil {
-			return nil, err
+			return nil, c.authFailure(ctx, err, attempt)
 		}
 		var requestErr error
 		guarded, leftOrigin := originGuardedDoer(c.Doer, target, recorder.record)
@@ -457,6 +465,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 				penalty = RateLimitMaxHonoredDelay
 			}
 			if err := c.Gate.Penalize(ctx, penalty); err != nil {
+				c.gatePenalizeFailed(ctx, "response", penalty, err)
 				_ = response.Body.Close()
 				return nil, err
 			}
@@ -475,6 +484,16 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		last = &ProviderError{Class: ErrorTransient}
 	}
 	return nil, last
+}
+
+// DoUnauthenticatedRoute is DoUnauthenticated for a redirect target (an
+// artifact store URL): a transport failure names the static route template of
+// the request that redirected, never the target URL.
+func (c *HTTPClient) DoUnauthenticatedRoute(ctx context.Context, method, template, absoluteURL string) (*http.Response, error) {
+	if ctx == nil {
+		return c.DoUnauthenticated(ctx, method, absoluteURL)
+	}
+	return c.DoUnauthenticated(context.WithValue(ctx, routeKey{}, template), method, absoluteURL)
 }
 
 // DoUnauthenticated issues one absolute-URL request without applying provider
@@ -744,6 +763,41 @@ func (c *HTTPClient) releaseReservation(ctx context.Context, reservation Reserva
 		return ErrBudgetUnavailable
 	}
 	return nil
+}
+
+// authFailure records an auth-step ProviderError (for example a rate-limited
+// GitHub App installation-token exchange) like a response-path failure: the
+// request metric, and the shared cooldown gate for rate_limited. The error is
+// returned unchanged; a gate write failure is returned as the response path
+// does, unwrapped.
+func (c *HTTPClient) authFailure(ctx context.Context, err error, attempt int) error {
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		return err
+	}
+	c.observe(providerErr.Class)
+	if providerErr.Class != ErrorRateLimited || c.Gate == nil {
+		return err
+	}
+	penalty := providerErr.RetryAfter
+	if penalty <= 0 {
+		penalty = c.retryDelay(attempt, 0, ErrorRateLimited)
+	}
+	if penalty > RateLimitMaxHonoredDelay {
+		penalty = RateLimitMaxHonoredDelay
+	}
+	if gateErr := c.Gate.Penalize(ctx, penalty); gateErr != nil {
+		c.gatePenalizeFailed(ctx, "auth", penalty, gateErr)
+		return gateErr
+	}
+	slog.InfoContext(ctx, "provider_auth_rate_limited", "provider", c.Provider, "penalty_ms", penalty.Milliseconds())
+	return err
+}
+
+func (c *HTTPClient) gatePenalizeFailed(ctx context.Context, path string, penalty time.Duration, err error) {
+	c.Metrics.RecordGatePenalizeError(c.Provider, path)
+	args := append([]any{"provider", c.Provider, "path", path, "penalty_ms", penalty.Milliseconds()}, logging.ErrorArgs(err)...)
+	slog.WarnContext(ctx, "provider_gate_penalize_failed", args...)
 }
 
 func (c *HTTPClient) observe(class ErrorClass) {

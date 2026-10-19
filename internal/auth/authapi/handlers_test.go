@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -550,5 +552,23 @@ func TestRefreshExpiresInStaysInsideTheSchema(t *testing.T) {
 func TestRoutesRequireTheirCollaborators(t *testing.T) {
 	if _, err := Routes(Deps{}); err == nil {
 		t.Fatal("Routes built with no collaborators")
+	}
+}
+
+// A store failure is logged by class and SQLSTATE, never by its text: a pg
+// error's Detail can hold a key value such as an email.
+func TestStoreFailuresAreLoggedWithoutTheirText(t *testing.T) {
+	f := newFixture(t)
+	header := f.bearer(f.grant())
+	leak := "leaked-key-value@example.com"
+	f.users.err = fmt.Errorf("%w: %w", errUsersStore, &pgconn.PgError{Code: "23505", Detail: "Key (email)=(" + leak + ") already exists."})
+	f.build()
+	expectError(t, f.do(http.MethodGet, PatternCurrent, "", header), 503, "store_unavailable")
+	logs := f.logs.String()
+	if strings.Contains(logs, leak) || strings.Contains(logs, "already exists") {
+		t.Fatalf("the log carries the error text: %s", logs)
+	}
+	if !strings.Contains(logs, `"error_class":"users_store"`) || !strings.Contains(logs, `"sqlstate":"23505"`) {
+		t.Fatalf("the log lacks the error class and SQLSTATE: %s", logs)
 	}
 }

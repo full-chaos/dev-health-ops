@@ -13,6 +13,7 @@ package authapi
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -53,6 +54,9 @@ type Grant struct {
 	User           UserState
 }
 
+// errIssue wraps a failure to mint an access token.
+var errIssue = errors.New("authapi: access token could not be minted")
+
 // Access mints the access token of grant: go-api's claims (create_access_token,
 // internal/api/session/tokens.go accessClaims) plus sid.
 func (i *Issuer) Access(grant Grant) (string, error) {
@@ -61,7 +65,7 @@ func (i *Issuer) Access(grant Grant) (string, error) {
 		org = grant.OrganizationID.String()
 	}
 	sid := session.WireSessionID(grant.SessionID)
-	return i.signer.Access(edgetoken.AccessClaims{
+	token, err := i.signer.Access(edgetoken.AccessClaims{
 		UserID:       grant.PrincipalID.String(),
 		Email:        grant.User.Email,
 		OrgID:        org,
@@ -72,6 +76,10 @@ func (i *Issuer) Access(grant Grant) (string, error) {
 		TokenVersion: grant.User.TokenVersion,
 		SessionID:    &sid,
 	}, i.now(), uuid.NewString())
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errIssue, err)
+	}
+	return token, nil
 }
 
 // Bearer is a verified access token's subject, session and token version.

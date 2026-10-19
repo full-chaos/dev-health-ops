@@ -41,6 +41,40 @@ const REQUIRED_GROUPS = {
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
+// Closed vocabularies (CHAOS-10194): contracts/auth/v1/vocabulary/reason-codes.json
+// is the single source for these three fields. Each entry builds a document
+// from a fixture that carries the field, then sets the field to a value.
+const NOT_IN_THE_VOCABULARY = [
+  "secret_0123456789abcdef0123",
+  "key_compromised",
+  "Compromised",
+  "compromised ",
+  "compromise",
+  "owner_request_",
+  "",
+  "revoked because bob@example.test leaked it",
+];
+const VOCABULARY_SURFACES = {
+  "credential-entry": {
+    list: "revoked_reason",
+    schemaPath: ["properties", "revoked_reason"],
+    base: "valid-revoked.json",
+    set: (doc, v) => { doc.revoked_reason = v; },
+  },
+  "credential-list": {
+    list: "revoked_reason",
+    schemaPath: ["properties", "items", "items", "properties", "revoked_reason"],
+    base: "valid-two-items.json",
+    set: (doc, v) => { doc.items[1].revoked_reason = v; },
+  },
+  "audit-event": {
+    list: "audit_reason_code",
+    schemaPath: ["properties", "attributes", "properties", "reason_code"],
+    base: "invalid-attributes-reason-code-prose.json",
+    set: (doc, v) => { doc.attributes.reason_code = v; },
+  },
+};
+
 const REQUIRED_SWEEPS = ["jwks"];
 const sweepExpand = (v) =>
   v && typeof v === "object" && !Array.isArray(v) && "$repeat" in v
@@ -340,6 +374,34 @@ for (const surface of surfaces) {
   }
   for (const name of claimed) {
     if (!existsSync(path.join(dir, name))) fail(`${surface}/${name} is claimed but absent`);
+  }
+  const vocabulary = VOCABULARY_SURFACES[surface];
+  if (vocabulary) {
+    const vocabPath = path.join(v1, "vocabulary", "reason-codes.json");
+    if (!existsSync(vocabPath)) {
+      fail(`${surface}: vocabulary file ${path.relative(root, vocabPath)} is missing`);
+    } else {
+      const values = readJSON(vocabPath)[vocabulary.list]?.values ?? [];
+      if (values.length === 0) fail(`${surface}: the ${vocabulary.list} vocabulary is empty`);
+      const build = (v) => {
+        const doc = structuredClone(readJSON(path.join(dir, vocabulary.base)));
+        vocabulary.set(doc, v);
+        return doc;
+      };
+      for (const v of values) {
+        checked += 1;
+        if (!validate(build(v))) fail(`${surface}: listed ${vocabulary.list} value ${JSON.stringify(v)} is refused`);
+      }
+      for (const v of NOT_IN_THE_VOCABULARY) {
+        checked += 1;
+        if (validate(build(v))) fail(`${surface}: ${JSON.stringify(v)} is not in the ${vocabulary.list} vocabulary but validates`);
+      }
+      let node = readJSON(schemaPath);
+      for (const step of vocabulary.schemaPath) node = node?.[step];
+      if (JSON.stringify([...(node?.enum ?? [])].sort()) !== JSON.stringify([...values].sort())) {
+        fail(`${surface}: the schema enum differs from the ${vocabulary.list} vocabulary`);
+      }
+    }
   }
   const sweepPath = path.join(v1, "sweeps", `${surface}.property-sweep.json`);
   if (REQUIRED_SWEEPS.includes(surface) && !existsSync(sweepPath)) {

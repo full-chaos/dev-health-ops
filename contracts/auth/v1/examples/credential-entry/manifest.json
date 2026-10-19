@@ -166,6 +166,18 @@
       "expect_instance_location": "/created_at",
       "expect_keyword": "pattern",
       "why": "Hour 24."
+    },
+    {
+      "file": "invalid-revoked-reason-secret-shaped.json",
+      "expect_instance_location": "/revoked_reason",
+      "expect_keyword": "enum",
+      "why": "A lowercase secret-shaped value fits the old code pattern; a closed enum refuses it so a producer bug cannot put a secret on the wire."
+    },
+    {
+      "file": "invalid-revoked-reason-unlisted-code.json",
+      "expect_instance_location": "/revoked_reason",
+      "expect_keyword": "enum",
+      "why": "A plausible code that no producer emits yet; a new value arrives with its producer and its own migration."
     }
   ],
   "reject_by_client": [

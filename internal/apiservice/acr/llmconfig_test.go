@@ -198,13 +198,46 @@ func TestLLMConfigCountsEachOutcome(t *testing.T) {
 			return value.AsString(), true
 		})
 	}
+	bearer := "Bearer " + testToken
+	unreadable := fmt.Errorf("%w: setting %q", llmorgsettings.ErrStoredSettingUnreadable, "api_key")
+	cases := []struct {
+		name     string
+		outcome  string
+		verifier CredentialVerifier
+		source   LLMConfigSource
+		org      string
+		auth     string
+	}{
+		{"served", "served", &fakeVerifier{}, configured(), testOrg, bearer},
+		{"unauthorized_missing", "unauthorized_missing", &fakeVerifier{}, configured(), testOrg, ""},
+		{"unauthorized_invalid", "unauthorized_invalid", &fakeVerifier{err: ErrCredentialInvalid}, configured(), testOrg, bearer},
+		{"forbidden", "forbidden", &fakeVerifier{err: ErrCredentialScope}, configured(), testOrg, bearer},
+		{"credential_unavailable", "credential_unavailable", &fakeVerifier{err: errors.New("db down")}, configured(), testOrg, bearer},
+		{"bad_org", "bad_org", &fakeVerifier{}, configured(), "not-a-uuid", bearer},
+		{"unreadable", "unreadable", &fakeVerifier{}, &fakeSource{err: unreadable}, testOrg, bearer},
+		{"store_unavailable", "store_unavailable", &fakeVerifier{}, &fakeSource{err: errors.New("db down")}, testOrg, bearer},
+		{"not_found", "not_found", &fakeVerifier{}, &fakeSource{}, testOrg, bearer},
+		{"unconfigured", "unconfigured", nil, configured(), testOrg, bearer},
+	}
 	acrMetricReader()
-	before := outcomes(t)
-	call(t, &fakeVerifier{}, configured(), io.Discard, testOrg, "Bearer "+testToken)
-	call(t, &fakeVerifier{}, configured(), io.Discard, testOrg, "")
-	counts := outcomes(t)
-	if counts["served"]-before["served"] != 1 || counts["unauthorized_missing"]-before["unauthorized_missing"] != 1 {
-		t.Fatalf("counts = %v, before = %v", counts, before)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := outcomes(t)
+			call(t, tc.verifier, tc.source, io.Discard, tc.org, tc.auth)
+			after := outcomes(t)
+			for label, count := range after {
+				want := int64(0)
+				if label == tc.outcome {
+					want = 1
+				}
+				if got := count - before[label]; got != want {
+					t.Errorf("outcome %q moved by %d, want %d", label, got, want)
+				}
+			}
+			if after[tc.outcome]-before[tc.outcome] != 1 {
+				t.Fatalf("outcome %q not counted: before %v after %v", tc.outcome, before, after)
+			}
+		})
 	}
 }
 

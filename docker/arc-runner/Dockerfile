@@ -113,4 +113,26 @@ RUN apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# shellcheck (CHAOS-10185): the acr `scripts` job lints shell on this pool and the
+# image had no shellcheck. Pinned to the version in ci/shellcheck_pinned.sh. The
+# .tar.gz release is used (gzip is an apt dependency; xz is not needed) and its
+# sha256 is verified before anything is unpacked. Checksums measured on a fresh
+# download of each release asset.
+ARG SHELLCHECK_VERSION=0.11.0
+ARG SHELLCHECK_SHA256_AARCH64=68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc
+ARG SHELLCHECK_SHA256_X86_64=b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+RUN set -eu; \
+    case "$(uname -m)" in \
+        aarch64|arm64) arch=aarch64; sha="${SHELLCHECK_SHA256_AARCH64}" ;; \
+        x86_64) arch=x86_64; sha="${SHELLCHECK_SHA256_X86_64}" ;; \
+        *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    tarball="shellcheck-v${SHELLCHECK_VERSION}.linux.${arch}.tar.gz"; \
+    curl -fsSL -o "/tmp/${tarball}" "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${tarball}"; \
+    echo "${sha}  /tmp/${tarball}" | sha256sum -c -; \
+    tar -xzf "/tmp/${tarball}" -C /tmp; \
+    install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck; \
+    rm -rf "/tmp/${tarball}" "/tmp/shellcheck-v${SHELLCHECK_VERSION}"; \
+    shellcheck --version
+
 USER runner

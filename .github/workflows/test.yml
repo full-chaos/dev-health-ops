@@ -115,11 +115,6 @@ jobs:
               - 'scripts/**'
               - 'alerts/**'
               - 'compose.yml'
-              # docker/Dockerfile is one of scripts/acceptance's
-              # RUNTIME_DEPENDENCY_PATHS: the acceptance suite hashes it and
-              # asserts on it, so a change here can turn the suite red -- but
-              # the filter did not select on it, so such a PR skipped every
-              # test job and the gate went green (CHAOS-3482 Codex round 4).
               - 'docker/**'
               - 'deploy/**'
               # CHAOS-3948: this filter had no Go paths at all, so a Go-only
@@ -194,7 +189,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # CHAOS-6646: installs uv.lock's resolution, not an unlocked re-resolve
       # (the same pin as live-e2e.yml).
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: '3.14'
       - name: Install docs test dependencies
@@ -243,7 +238,7 @@ jobs:
         with:
           version: 'v3.21.4'
 
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: '3.14'
       # tests/tooling imports the package (test_contract_artifact_packaging)

@@ -72,6 +72,10 @@ type GitHubWorkItemsRESTPullRequest struct {
 // to the later GraphQL social layer before the composite can become complete.
 type GitHubWorkItemsRESTResult struct {
 	RepoFullName string
+	// IdentityName is the name RepoID was minted from (CHAOS-9879); the
+	// work-item, sprint and reference ids carry it, RepoFullName stays the
+	// repository's current name.
+	IdentityName string
 	RepoID       uuid.UUID
 	Rows         githubWorkItemRows
 	PullRequests []GitHubWorkItemsRESTPullRequest
@@ -87,6 +91,10 @@ type GitHubWorkItemsRESTResult struct {
 // optional milestone or issue-comment degradation. It is deliberately not a
 // composite-completion signal: every PullRequests entry still awaits the
 // GraphQL social fetch before the GitHub work-item producer can be complete.
+func (result GitHubWorkItemsRESTResult) names() githubRepoNames {
+	return githubRepoNames{Current: result.RepoFullName, Identity: result.IdentityName}
+}
+
 func (result GitHubWorkItemsRESTResult) NoOptionalDegradation() bool {
 	return len(result.Incomplete) == 0
 }
@@ -117,7 +125,8 @@ func (result GitHubWorkItemsRESTResult) NoOptionalDegradation() bool {
 // handler and the derived effects are wired. Kept visible as a correction
 // rather than deleted (CHAOS-4848).
 type GitHubWorkItemsRESTCollector struct {
-	MaxPages int
+	MaxPages     int
+	RepoIdentity GitLabRepoIdentityReader
 }
 
 type githubWorkItemsRESTOptions struct {
@@ -190,11 +199,12 @@ func (collector GitHubWorkItemsRESTCollector) Collect(
 		return result, err
 	}
 	result.RepoFullName = strings.TrimSpace(repo.FullName)
-	repoIdentity, identityErr := repositoryIdentity(result.RepoFullName)
+	identity, identityErr := resolveGitHubRepoIdentity(ctx, collector.RepoIdentity, claim, gitHubRepositoryPayload{ID: repo.ID, FullName: result.RepoFullName})
 	if identityErr != nil {
 		return result, identityErr
 	}
-	result.RepoID, err = uuid.Parse(repoIdentity)
+	result.IdentityName = identity.Path
+	result.RepoID, err = uuid.Parse(identity.RepoID)
 	if err != nil {
 		return result, providerfoundation.ErrNormalizationInvalid
 	}
@@ -222,7 +232,7 @@ func (collector GitHubWorkItemsRESTCollector) Collect(
 		}
 		for _, raw := range page.Items {
 			row, normalizeErr := normalizeGitHubSprint(
-				claim, result.RepoFullName, raw, normalizedAt,
+				claim, result.IdentityName, raw, normalizedAt,
 			)
 			if normalizeErr != nil {
 				result.addIncomplete("milestones", "", normalizeErr)
@@ -273,7 +283,8 @@ func (collector GitHubWorkItemsRESTCollector) Collect(
 }
 
 type githubWorkItemsRESTRepositoryPayload struct {
-	FullName string `json:"full_name"`
+	ID       json.Number `json:"id"`
+	FullName string      `json:"full_name"`
 }
 
 func (collector GitHubWorkItemsRESTCollector) collectIssues(
@@ -355,7 +366,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 			}
 		}
 		rows, normalizeErr := normalizeGitHubIssueBundle(
-			claim, result.RepoFullName, result.RepoID, raw, events, comments,
+			claim, result.names(), result.RepoID, raw, events, comments,
 			nil, normalizedAt,
 		)
 		if normalizeErr != nil && len(comments) > 0 {
@@ -363,7 +374,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 			// Preserve the required issue/event facts and expose the degradation.
 			result.addIncomplete("issue_comments", strconv.Itoa(listed.Number), normalizeErr)
 			rows, normalizeErr = normalizeGitHubIssueBundle(
-				claim, result.RepoFullName, result.RepoID, raw, events, nil,
+				claim, result.names(), result.RepoID, raw, events, nil,
 				nil, normalizedAt,
 			)
 		}

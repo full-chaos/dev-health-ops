@@ -149,7 +149,22 @@ func (c *ProviderClient) Configured(p Provider) bool { return c.Clients[p].confi
 // issued to this service's client at p and must belong to the same account the
 // profile describes; otherwise a *ProviderError with ReasonAudience.
 func (c *ProviderClient) Fetch(ctx context.Context, p Provider, token contracts.SecretString) (Profile, error) {
-	return Profile{}, ErrNotImplemented
+	creds := c.Clients[p]
+	if !creds.configured() {
+		return Profile{}, ErrProviderNotConfigured
+	}
+	if token.Reveal() == "" {
+		return Profile{}, &ProviderError{Reason: ReasonMalformed, Step: "token"}
+	}
+	switch p {
+	case GitHub:
+		return c.github(ctx, creds, token)
+	case GitLab:
+		return c.gitlab(ctx, creds, token)
+	case Google:
+		return c.google(ctx, creds, token)
+	}
+	return Profile{}, ErrProviderNotConfigured
 }
 
 type request struct {

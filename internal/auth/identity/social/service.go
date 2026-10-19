@@ -23,7 +23,6 @@ const DefaultLinkFreshness = 10 * time.Minute
 
 // Domain errors. Each maps to one response; none carries provider text.
 var (
-	ErrNotImplemented           = errors.New("social: not implemented")
 	ErrProviderRefused          = errors.New("social: the provider token was refused")
 	ErrEmailUnverified          = errors.New("social: the provider has not verified the email")
 	ErrPrincipalDisabled        = errors.New("social: the principal is disabled")
@@ -120,7 +119,61 @@ type SignedIn struct {
 // verified email that an existing account holds is a *ConflictError and
 // writes nothing. requestID is the server-minted audit request id, or nil.
 func (s *Service) Exchange(ctx context.Context, provider Provider, token contracts.SecretString, requestID *string) (res ExchangeResult, err error) {
-	return ExchangeResult{}, ErrNotImplemented
+	reason := ReasonAccepted
+	defer func() { s.record(ctx, OperationExchange, provider, reason, err) }()
+
+	profile, reason, err := s.fetch(ctx, provider, token)
+	if err != nil {
+		return ExchangeResult{}, err
+	}
+	principal, found, err := s.lookup(ctx, profile.ExternalKey)
+	if err != nil {
+		reason = ReasonStoreUnavailable
+		return ExchangeResult{}, err
+	}
+	if found {
+		reason, err = signInTo(principal)
+		return ExchangeResult{PrincipalID: principal.ID}, err
+	}
+	if !profile.EmailVerified {
+		reason = ReasonEmailUnverified
+		return ExchangeResult{}, ErrEmailUnverified
+	}
+	email, err := identity.NormalizeEmail(profile.Email)
+	if err != nil {
+		reason = ReasonEmailUnverified
+		return ExchangeResult{}, ErrEmailUnverified
+	}
+	if method, taken, err := s.emailOwner(ctx, email); err != nil {
+		reason = ReasonStoreUnavailable
+		return ExchangeResult{}, err
+	} else if taken {
+		res, reason, err = s.settleTaken(ctx, profile.ExternalKey, method)
+		return res, err
+	}
+	name := profile.FullName
+	if name == "" {
+		name = profile.Username
+	}
+	id, err := s.store.ProvisionFederated(ctx, identity.ProvisionRequest{Key: profile.ExternalKey, Email: email, FullName: name, Actor: identity.SelfSignUp(requestID)})
+	switch {
+	case err == nil:
+		return ExchangeResult{PrincipalID: id, Created: true}, nil
+	case errors.Is(err, identity.ErrSignupNotAvailable):
+		reason = ReasonSignupUnavailable
+		return ExchangeResult{}, err
+	case errors.Is(err, identity.ErrIdentityTaken), errors.Is(err, identity.ErrEmailTaken):
+		method, _, lookupErr := s.emailOwner(ctx, email)
+		if lookupErr != nil {
+			reason = ReasonStoreUnavailable
+			return ExchangeResult{}, errors.Join(err, lookupErr)
+		}
+		res, reason, err = s.settleTaken(ctx, profile.ExternalKey, method)
+		return res, err
+	default:
+		reason = ReasonStoreUnavailable
+		return ExchangeResult{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
 }
 
 // lookup resolves key. Before the users cutover the identity store also finds
@@ -134,8 +187,12 @@ func (s *Service) lookup(ctx context.Context, key identity.ExternalKey) (identit
 	return p, found, nil
 }
 
-// emailOwner reports whether an account holds email, and its sign-in method.
-// More than one account holding it is a conflict too.
+// emailOwner reports whether an account holds email, and the sign-in method
+// to name in the conflict, so the user knows how to sign in before linking:
+// go-api's auth_provider before the users cutover; after it "local" for an
+// account with a password, else the provider of its oldest linked identity
+// ("sso" for an enterprise SSO provider row), else "". More than one account
+// holding the email is a conflict too.
 func (s *Service) emailOwner(ctx context.Context, email string) (string, bool, error) {
 	owner, err := s.store.ByEmail(ctx, email)
 	switch {
@@ -145,10 +202,27 @@ func (s *Service) emailOwner(ctx context.Context, email string) (string, bool, e
 		return "", false, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	case owner == nil:
 		return "", false, nil
-	case owner.AuthProvider == nil:
+	case owner.AuthProvider != nil:
+		return *owner.AuthProvider, true, nil
+	}
+	hasPassword, err := s.store.HasPassword(ctx, owner.ID)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	if hasPassword {
 		return "local", true, nil
 	}
-	return *owner.AuthProvider, true, nil
+	linked, err := s.store.ListIdentities(ctx, owner.ID)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	if len(linked) == 0 {
+		return "", true, nil
+	}
+	if p := linked[0].Provider; p.IsSocial() {
+		return string(p), true, nil
+	}
+	return "sso", true, nil
 }
 
 // settleTaken answers an exchange whose email is held by an account. A
@@ -177,13 +251,97 @@ func signInTo(p identity.Principal) (Reason, error) {
 // Linking the principal's own identity again is a no-op. One identity per
 // provider per principal.
 func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, token contracts.SecretString) (linked identity.Identity, err error) {
-	return identity.Identity{}, ErrNotImplemented
+	reason := ReasonAccepted
+	defer func() { s.record(ctx, OperationLink, provider, reason, err) }()
+
+	if reason, err = s.fresh(who); err != nil {
+		return identity.Identity{}, err
+	}
+	profile, reason, err := s.fetch(ctx, provider, token)
+	if err != nil {
+		return identity.Identity{}, err
+	}
+	key := profile.ExternalKey
+	principal, found, err := s.lookup(ctx, key)
+	if err != nil {
+		reason = ReasonStoreUnavailable
+		return identity.Identity{}, err
+	}
+	if found && principal.ID != who.PrincipalID {
+		reason = ReasonEmailCollision
+		return identity.Identity{}, identity.ErrIdentityConflict
+	}
+	all, err := s.store.ListIdentities(ctx, who.PrincipalID)
+	if err != nil {
+		reason = ReasonStoreUnavailable
+		return identity.Identity{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	for _, have := range all {
+		if have.Issuer == key.Issuer && have.Provider == key.Provider {
+			if have.Subject == key.Subject {
+				return have, nil
+			}
+			reason = ReasonEmailCollision
+			return identity.Identity{}, ErrProviderLinked
+		}
+	}
+	actor := identity.Actor{PrincipalID: &who.PrincipalID, RequestID: who.RequestID}
+	id, err := s.store.LinkIdentity(ctx, key, who.PrincipalID, actor)
+	switch {
+	case err == nil:
+		return identity.Identity{ID: id, Issuer: key.Issuer, Provider: key.Provider, Subject: key.Subject}, nil
+	case errors.Is(err, identity.ErrIdentityConflict):
+		reason = ReasonEmailCollision
+		return identity.Identity{}, err
+	case errors.Is(err, identity.ErrPrincipalUnavailable):
+		reason = ReasonPrincipalDeactivated
+		return identity.Identity{}, ErrPrincipalDisabled
+	default:
+		reason = ReasonStoreUnavailable
+		return identity.Identity{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
 }
 
 // Unlink removes one of the signed-in principal's identities by its id. An id
 // that is not the principal's is identity.ErrNotFound.
 func (s *Service) Unlink(ctx context.Context, who SignedIn, identityID uuid.UUID) (err error) {
-	return ErrNotImplemented
+	reason := ReasonAccepted
+	var provider Provider
+	defer func() { s.record(ctx, OperationUnlink, provider, reason, err) }()
+
+	if reason, err = s.fresh(who); err != nil {
+		return err
+	}
+	all, err := s.store.ListIdentities(ctx, who.PrincipalID)
+	if err != nil {
+		reason = ReasonStoreUnavailable
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	var key *identity.ExternalKey
+	for _, have := range all {
+		if have.ID == identityID {
+			key = &identity.ExternalKey{Issuer: have.Issuer, Provider: have.Provider, Subject: have.Subject}
+		}
+	}
+	if key == nil {
+		reason = ReasonPrincipalNotFound
+		return identity.ErrNotFound
+	}
+	provider = key.Provider
+	err = s.store.UnlinkIdentity(ctx, *key, who.PrincipalID, identity.Actor{PrincipalID: &who.PrincipalID, RequestID: who.RequestID})
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, identity.ErrNotFound), errors.Is(err, identity.ErrNotOwner):
+		reason = ReasonPrincipalNotFound
+		return identity.ErrNotFound
+	case errors.Is(err, identity.ErrLastSignInMethod):
+		reason = ReasonInvalidCredentials
+		return err
+	default:
+		reason = ReasonStoreUnavailable
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
 }
 
 // fresh refuses a sign-in older than the freshness bound, or one with no time.

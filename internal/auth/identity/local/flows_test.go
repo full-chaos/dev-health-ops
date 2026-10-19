@@ -469,9 +469,9 @@ func (m failingMail) Send(context.Context, Message) error { return m.err }
 
 func TestMailFailureLogsAFixedClassNotTheErrorText(t *testing.T) {
 	cases := map[string]error{
-		"provider_error": errors.New("550 5.1.1 <victim@example.com> mailbox unavailable"),
-		"refused":        fmt.Errorf("dial smtp for victim@example.com: %w", syscall.ECONNREFUSED),
-		"timeout":        fmt.Errorf("send to victim@example.com: %w", context.DeadlineExceeded),
+		"provider_error": errors.New("550 5.1.1 <holder@example.com> mailbox unavailable"),
+		"refused":        fmt.Errorf("dial smtp for holder@example.com: %w", syscall.ECONNREFUSED),
+		"timeout":        fmt.Errorf("send to holder@example.com: %w", context.DeadlineExceeded),
 	}
 	for class, cause := range cases {
 		t.Run(class, func(t *testing.T) {
@@ -484,14 +484,14 @@ func TestMailFailureLogsAFixedClassNotTheErrorText(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := f.Forgot(context.Background(), "victim@example.com"); err != nil {
+			if err := f.Forgot(context.Background(), "holder@example.com"); err != nil {
 				t.Fatalf("a mail failure must not fail the flow: %v", err)
 			}
 			logged := buf.String()
 			if !strings.Contains(logged, "error_class="+class) {
 				t.Errorf("log %q lacks error_class=%s", logged, class)
 			}
-			if strings.Contains(logged, "victim") || strings.Contains(logged, "example.com") {
+			if strings.Contains(logged, "holder") || strings.Contains(logged, "example.com") {
 				t.Errorf("the log line holds the address: %q", logged)
 			}
 		})

@@ -7,7 +7,7 @@ import "reflect"
 // panics. The classifiers of this package see the chain only through boundedChain and the direct-comparison helpers below, so a
 // hostile error cannot stall or crash a log call.
 const (
-	maxChainDepth = 32
+	maxChainDepth = maxChainNodes
 	maxChainNodes = 64
 )
 

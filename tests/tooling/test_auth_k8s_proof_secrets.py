@@ -25,22 +25,37 @@ K_RENDER() { envsubst '${LOCAL_PG} ${PG_PASSWORD}' <"$1"; }
 
 def _step2() -> str:
     text = SCRIPT.read_text(encoding="utf-8")
-    block = re.search(r"^PG_PASSWORD=.*?(?=^# --- the release)", text, re.DOTALL | re.MULTILINE)
+    block = re.search(
+        r"^PG_PASSWORD=.*?(?=^# --- the release)", text, re.DOTALL | re.MULTILINE
+    )
     assert block, "step 2 of ci/check_auth_k8s.sh moved"
     return block.group(0).replace("openssl genpkey", "true genpkey")
 
 
-@pytest.mark.skipif(shutil.which("envsubst") is None or shutil.which("openssl") is None, reason="envsubst/openssl")
+@pytest.mark.skipif(
+    shutil.which("envsubst") is None or shutil.which("openssl") is None,
+    reason="envsubst/openssl",
+)
 def test_no_credential_reaches_an_argv_or_a_plain_manifest(tmp_path: Path) -> None:
     log = tmp_path / "log"
     script = tmp_path / "step2.sh"
-    script.write_text(HARNESS + "WORK=" + str(tmp_path) + "\n" + _step2(), encoding="utf-8")
+    script.write_text(
+        HARNESS + "WORK=" + str(tmp_path) + "\n" + _step2(), encoding="utf-8"
+    )
     result = subprocess.run(
         ["bash", str(script), str(ROOT / "ci"), str(log)],
-        capture_output=True, text=True, check=False, stdin=subprocess.DEVNULL, env={**os.environ, "PATH": os.environ["PATH"]},
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env={**os.environ, "PATH": os.environ["PATH"]},
     )
     assert result.returncode == 0, result.stderr
-    argv_lines = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.startswith("ARGV ")]
+    argv_lines = [
+        ln
+        for ln in log.read_text(encoding="utf-8").splitlines()
+        if ln.startswith("ARGV ")
+    ]
     leaked = [ln for ln in argv_lines if SECRET.search(ln)]
     assert not leaked, f"credential in argv (visible to ps and audit tooling): {leaked}"
     for ln in argv_lines:
@@ -51,5 +66,7 @@ def test_postgres_password_is_a_secret_reference_not_a_literal() -> None:
     docs = list(yaml.safe_load_all(POSTGRES.read_text(encoding="utf-8")))
     env = docs[0]["spec"]["template"]["spec"]["containers"][0]["env"]
     password = next(e for e in env if e["name"] == "POSTGRES_PASSWORD")
-    assert "value" not in password, "kubectl describe prints a literal env value into CI logs"
+    assert "value" not in password, (
+        "kubectl describe prints a literal env value into CI logs"
+    )
     assert "secretKeyRef" in password.get("valueFrom", {})

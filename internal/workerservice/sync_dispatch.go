@@ -166,7 +166,11 @@ func (runs touchedDrainRuns) MarkingRunsToCheck(
 }
 
 func (runs touchedDrainRuns) MarkRunsChecked(ctx context.Context, organizationID string, runIDs []string) error {
-	return runs.store.TouchedMarkRunsChecked(ctx, organizationID, runIDs)
+	err := runs.store.TouchedMarkRunsChecked(ctx, organizationID, runIDs)
+	if errors.Is(err, daily.ErrTouchedCheckedColumnAbsent) {
+		return syncdispatchruntime.ErrTouchedChecksUnwritten
+	}
+	return err
 }
 
 // StampTakeTx records the take time of the pass on its runs, in the transaction

@@ -77,6 +77,11 @@ const (
 // its migration). The runs are committed without a take time.
 var ErrTouchedTakeTimeUnwritten = errors.New("the take time of the runs was not recorded")
 
+// ErrTouchedChecksUnwritten is returned by MarkRunsChecked when the column that
+// records a check is absent (a build that runs before its migration). The runs
+// are read again by the next pass.
+var ErrTouchedChecksUnwritten = errors.New("the checks of the runs were not recorded")
+
 // TouchedDaysDrainStore is the part of the touched-day record the drain
 // reads and writes. Every failure is an error: an implementation never
 // answers "no day".
@@ -114,7 +119,8 @@ type TouchedDaysDrainRuns interface {
 	// flag says that more exist.
 	MarkingRunsToCheck(ctx context.Context, organizationID, endedRunID string, window time.Duration, limit int) ([]TouchedRunKeys, bool, error)
 	// MarkRunsChecked records that the pass checked the mark of the runs, so
-	// no later pass reads them again.
+	// no later pass reads them again. It returns ErrTouchedChecksUnwritten, and
+	// writes nothing, when the database cannot hold it.
 	MarkRunsChecked(ctx context.Context, organizationID string, runIDs []string) error
 	// StampTakeTx records the take time on every run of the pass that has none.
 	// It returns ErrTouchedTakeTimeUnwritten, and writes nothing, when the
@@ -353,7 +359,17 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 		for _, run := range checkable {
 			checked = append(checked, run.RunID)
 		}
-		return false, drain.runs.MarkRunsChecked(ctx, pass.organizationID, checked)
+		switch err := drain.runs.MarkRunsChecked(ctx, pass.organizationID, checked); {
+		case errors.Is(err, ErrTouchedChecksUnwritten):
+			drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainFailed,
+				synclog.Text(synclog.KeyPhase, synclog.ParseLabel("checked_column_absent")),
+				synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
+			drain.observe(jobruntime.TouchedDaysDrainChecksUnwritten, 1)
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+		return false, nil
 	}
 	drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
 		synclog.Text(synclog.KeyPhase, synclog.ParseLabel("chain_stopped_mark_missing")),

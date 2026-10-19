@@ -343,7 +343,8 @@ WHERE org_id = $1::uuid AND generation = $2 AND touched_take_at IS NULL`,
 // TouchedMarkRunsChecked, so each ended run is checked once however long it ran
 // and however many batches of the drain ended meanwhile. Runs behind the limit
 // stay unchecked and are read by the next pass. A database without the column
-// answers NULL for it, so every run in the window is read again by each pass.
+// answers NULL for it, so every run in the window is read again by each pass
+// (TouchedMarkRunsChecked reports it).
 //
 // A run that is not ended is left out on purpose: the mark of a fan-out follows
 // its commit by a moment, and a pass in that moment must not read the missing
@@ -386,11 +387,16 @@ func (store *PostgresStore) TouchedMarkingRunsToCheck(
 	return append(runs, newest...), truncated, nil
 }
 
+// ErrTouchedCheckedColumnAbsent is returned by TouchedMarkRunsChecked when
+// daily_metrics_runs has no touched_checked_at column: a build that runs before
+// its migration (a rolling update). The caller goes on and reports the miss;
+// the runs are read again by the next pass.
+var ErrTouchedCheckedColumnAbsent = errors.New("daily_metrics_runs.touched_checked_at is absent")
+
 // TouchedMarkRunsChecked records that the drain has checked the mark of the
 // runs: touched_checked_at is the PostgreSQL clock, written once (a run that is
-// already checked keeps its time). It runs in its own transaction. A database
-// without the column is not an error: the runs are then read again by the next
-// pass.
+// already checked keeps its time). It runs in its own transaction. It returns
+// ErrTouchedCheckedColumnAbsent, and writes nothing, when the column is absent.
 func (store *PostgresStore) TouchedMarkRunsChecked(
 	ctx context.Context, organizationID string, runIDs []string,
 ) error {
@@ -419,7 +425,7 @@ WHERE org_id = $1::uuid AND id = ANY($2::uuid[]) AND touched_checked_at IS NULL`
 		_ = tx.Rollback(ctx)
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == undefinedColumnCode {
-			return nil
+			return ErrTouchedCheckedColumnAbsent
 		}
 		return ErrUnavailable
 	}

@@ -260,6 +260,10 @@ const (
 	// marks of the newest unchecked runs only because more of them than the
 	// bound ended in the last day.
 	TouchedDaysDrainStopCheckTruncated TouchedDaysDrainEvent = "stop_check_truncated"
+	// TouchedDaysDrainChecksUnwritten counts the passes that checked runs but
+	// could not record it because the column is absent: those runs are read
+	// again by the next pass.
+	TouchedDaysDrainChecksUnwritten TouchedDaysDrainEvent = "checked_column_absent"
 )
 
 func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
@@ -270,6 +274,7 @@ func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
 		TouchedDaysDrainMarkFailed, TouchedDaysDrainReadTruncated,
 		TouchedDaysDrainDaysRetried, TouchedDaysDrainChainStopped, TouchedDaysDrainReturnReadTruncated,
 		TouchedDaysDrainTakeTimeAbsent, TouchedDaysDrainTakeTimeUnwritten, TouchedDaysDrainStopCheckTruncated,
+		TouchedDaysDrainChecksUnwritten,
 	}
 }
 

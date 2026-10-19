@@ -855,6 +855,35 @@ func takeTimeTouchedDaysDrainARunIsCheckedOnceAndTheStampIsTheDatabaseClock(t *t
 	}
 }
 
+// A database without touched_checked_at (new code before 0152) does not fail
+// the pass: the miss is counted and logged, and the runs are read again.
+func takeTimeTouchedDaysDrainAMissingCheckedColumnIsCountedNotFatal(t *testing.T, ctx context.Context, rig *drainRig) {
+	orgID := uuid.NewString()
+	_, newest := drainBatches(t, ctx, rig, orgID, 3)
+	if _, err := rig.touchedRig.pool.Exec(ctx, `ALTER TABLE public.daily_metrics_runs DROP COLUMN touched_checked_at`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := rig.touchedRig.pool.Exec(ctx, `ALTER TABLE public.daily_metrics_runs ADD COLUMN touched_checked_at timestamptz`); err != nil {
+			t.Error(err)
+		}
+	}()
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
+	if got := rig.observer.count(jobruntime.TouchedDaysDrainChecksUnwritten); got != 1 {
+		t.Fatalf("checked_column_absent = %d, want 1", got)
+	}
+	if got := rig.observer.count(jobruntime.TouchedDaysDrainPassFailed); got != 0 {
+		t.Fatalf("pass_failed = %d, want 0", got)
+	}
+	found := false
+	for _, line := range rig.logLines("touched_days_drain.failed") {
+		found = found || strings.Contains(line, "checked_column_absent")
+	}
+	if !found {
+		t.Fatal("no checked_column_absent warning line")
+	}
+}
+
 // A pass that stops leaves the runs it read unchecked: the next pass reads them
 // again.
 func takeTimeTouchedDaysDrainAStopLeavesTheRunsUnchecked(t *testing.T, ctx context.Context, rig *drainRig) {
@@ -916,6 +945,7 @@ func TestTouchedDaysDrainTakeTime(t *testing.T) {
 		{"ASlowFanOutRunIsCheckedWhenItEnds", takeTimeTouchedDaysDrainASlowFanOutRunIsCheckedWhenItEnds},
 		{"ARunIsCheckedOnceAndTheStampIsTheDatabaseClock", takeTimeTouchedDaysDrainARunIsCheckedOnceAndTheStampIsTheDatabaseClock},
 		{"AStopLeavesTheRunsUnchecked", takeTimeTouchedDaysDrainAStopLeavesTheRunsUnchecked},
+		{"AMissingCheckedColumnIsCountedNotFatal", takeTimeTouchedDaysDrainAMissingCheckedColumnIsCountedNotFatal},
 		{"StopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow", takeTimeTouchedDaysDrainStopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow},
 		{"RunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound", takeTimeTouchedDaysDrainRunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound},
 		{"AFailedRunWithALostMarkStopsTheChain", takeTimeTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain},

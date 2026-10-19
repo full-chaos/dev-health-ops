@@ -46,10 +46,15 @@ func PublicReadColumns() []ColumnGrant {
 	}
 }
 
+// rowQuerier1 is the slice of a connection the relation lookup needs.
+type rowQuerier1 interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // publicRelationKind reports the relkind of public.<table> ("" when no such
 // relation exists). A view or foreign table of the same name is a different
 // object from the ops table the manifest describes.
-func publicRelationKind(ctx context.Context, conn *pgx.Conn, table string) (string, error) {
+func publicRelationKind(ctx context.Context, conn rowQuerier1, table string) (string, error) {
 	var kind string
 	err := conn.QueryRow(ctx,
 		`SELECT c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -66,7 +71,7 @@ func publicRelationKind(ctx context.Context, conn *pgx.Conn, table string) (stri
 
 // publicTableState classifies public.<table> for the manifest: absent, a table
 // ('r' or 'p'), or something else, which is an error rather than a skip.
-func publicTableState(ctx context.Context, conn *pgx.Conn, table string) (exists bool, err error) {
+func publicTableState(ctx context.Context, conn rowQuerier1, table string) (exists bool, err error) {
 	kind, err := publicRelationKind(ctx, conn, table)
 	if err != nil {
 		return false, err
@@ -81,30 +86,29 @@ func publicTableState(ctx context.Context, conn *pgx.Conn, table string) (exists
 		ErrMigrationFailed, publicSchema, table, kind)
 }
 
-// ApplyPublicReads makes the runtime role's access to the ops schema equal
-// PublicReadColumns. For each manifest table that EXISTS it revokes every
-// privilege the role holds on the table (table and column level) and grants
-// SELECT on exactly the manifest columns. A manifest table that does not exist
-// (an auth-only database) is skipped and logged by name; VerifyRuntimePosture
-// requires the grants as soon as it does exist.
+// publicReadStatements returns the statements that make the runtime role's
+// access to the ops schema equal PublicReadColumns: for each manifest table that
+// EXISTS, revoke every privilege the role holds on it (table and column level)
+// and grant SELECT on exactly the manifest columns. A manifest table that does
+// not exist (an auth-only database) is skipped and logged by name;
+// VerifyRuntimePosture requires the grants as soon as it does exist. They run
+// inside applyRuntimeGrants' transaction, so a privilege they would remove is a
+// narrowing that needs the same acknowledgement as any other.
 //
 // The migration login must own those tables or hold GRANT OPTION on them; if it
-// does not, this fails with PostgreSQL's permission error rather than widening
-// anything.
-func ApplyPublicReads(ctx context.Context, conn *pgx.Conn, options Options) error {
+// does not, the statement fails with PostgreSQL's permission error rather than
+// widening anything.
+func publicReadStatements(ctx context.Context, conn querier, options Options, logger *slog.Logger) ([]string, error) {
 	roleID, err := NewValidatedIdentifier(options.RuntimeRole)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	role := quoteIdentifier(roleID)
-	logger := options.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+	var statements []string
 	for _, entry := range PublicReadColumns() {
 		exists, err := publicTableState(ctx, conn, entry.Table)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !exists {
 			logger.WarnContext(ctx, "skipped public read grants: the table does not exist",
@@ -113,29 +117,25 @@ func ApplyPublicReads(ctx context.Context, conn *pgx.Conn, options Options) erro
 		}
 		tableID, err := NewValidatedIdentifier(entry.Table)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		columns := make([]string, 0, len(entry.Columns))
 		for _, name := range entry.Columns {
 			columnID, err := NewValidatedIdentifier(name)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			columns = append(columns, quoteIdentifier(columnID))
 		}
 		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
-		for _, statement := range []string{
+		statements = append(statements,
 			fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role),
 			fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s TO %s`, strings.Join(columns, ", "), table, role),
-		} {
-			if _, err := conn.Exec(ctx, statement); err != nil {
-				return fmt.Errorf("%w: %s: %v", ErrMigrationFailed, statement, redactPGError(err))
-			}
-		}
-		logger.InfoContext(ctx, "applied public read grants",
+		)
+		logger.InfoContext(ctx, "applying public read grants",
 			"schema", publicSchema, "table", entry.Table, "columns", len(entry.Columns))
 	}
-	return nil
+	return statements, nil
 }
 
 // publicReadViolations compares the role's effective column privileges with

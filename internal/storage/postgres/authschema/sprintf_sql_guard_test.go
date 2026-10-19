@@ -41,7 +41,7 @@ var sqlOperandExemptions = []sqlOperandExemption{
 		reason: "GRANT option keywords (WITH ADMIN OPTION and the like) from the test's own table, not an identifier",
 	},
 	{
-		file: "publicreads.go", fn: "ApplyPublicReads", operand: `strings.Join(columns, ", ")`,
+		file: "publicreads.go", fn: "publicReadStatements", operand: `strings.Join(columns, ", ")`,
 		reason: "columns holds only quoteIdentifier results of validated manifest names",
 	},
 	{
@@ -251,6 +251,31 @@ func scanSprintf(fset *token.FileSet, files []*ast.File) []sprintfViolation {
 					if id, ok := lhs.(*ast.Ident); ok {
 						held[id.Name] = true
 					}
+				}
+				// Follow the held names through later assignments and ranges.
+				for changed := true; changed; {
+					changed = false
+					ast.Inspect(fd.Body, func(m ast.Node) bool {
+						switch node := m.(type) {
+						case *ast.AssignStmt:
+							for i, rhs := range node.Rhs {
+								if mentionsAny(rhs, held) && i < len(node.Lhs) {
+									if id, ok := node.Lhs[i].(*ast.Ident); ok && !held[id.Name] {
+										held[id.Name], changed = true, true
+									}
+								}
+							}
+						case *ast.RangeStmt:
+							if mentionsAny(node.X, held) {
+								for _, v := range []ast.Expr{node.Key, node.Value} {
+									if id, ok := v.(*ast.Ident); ok && !held[id.Name] {
+										held[id.Name], changed = true, true
+									}
+								}
+							}
+						}
+						return true
+					})
 				}
 				reachesSink := false
 				ast.Inspect(fd.Body, func(m ast.Node) bool {
@@ -539,6 +564,18 @@ func scanFunc(fset *token.FileSet, file string, fd *ast.FuncDecl, consts, sinkFu
 					reaches = true
 				}
 			}
+		}
+		if !reaches && sinkArgFuncs[fd.Name.Name] {
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if ret, ok := n.(*ast.ReturnStmt); ok {
+					for _, result := range ret.Results {
+						if mentionsAny(result, tainted) {
+							reaches = true
+						}
+					}
+				}
+				return true
+			})
 		}
 		if !reaches {
 			continue

@@ -262,9 +262,6 @@ func apply(ctx context.Context, pool migrationPool, options Options) (Result, er
 	if err := ApplyRuntimeGrants(ctx, conn.Conn(), options); err != nil {
 		return result, err
 	}
-	if err := ApplyPublicReads(ctx, conn.Conn(), options); err != nil {
-		return result, err
-	}
 	logger.InfoContext(
 		ctx, "applied auth runtime grants",
 		"schema", options.Schema, "runtime_role", options.RuntimeRole,

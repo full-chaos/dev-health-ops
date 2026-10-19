@@ -292,6 +292,7 @@ type githubTestsRequiredPayload struct {
 // bounded collection fails the unit when a next page exists, so incomplete
 // work never commits effects or advances the watermark.
 type GitHubTestsRouteHandler struct {
+	RepoIdentity       GitLabRepoIdentityReader
 	MaxRuns            int
 	MaxArtifactsPerRun int
 	MaxJobPages        int
@@ -320,7 +321,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if err := fetchObjectRoute(ctx, client, githubRepoRoute, root, &repo); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	repoID, err := repositoryIdentity(repo.FullName)
+	repoID, err := resolveGitHubRepoID(ctx, handler.RepoIdentity, claim, repo)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

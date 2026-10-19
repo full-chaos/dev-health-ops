@@ -13,6 +13,14 @@ import (
 
 var teamsInsert = regexp.MustCompile(`(?i)INSERT\s+INTO\s+teams\b`)
 
+var carryCall = regexp.MustCompile(`teamprovider\.Carry\(`)
+
+// The writers that write a stored team again from its own stored version
+// through Restate (CHAOS-10099).
+var restateWriters = []string{
+	"internal/providersync/team_id_carry.go",
+}
+
 // The writers of teams that write through Insert (CHAOS-9999), on 2026-10-17.
 var insertWriters = []string{
 	"internal/providersync/github_team_catalog_effects_clickhouse.go",
@@ -26,7 +34,8 @@ var insertWriters = []string{
 }
 
 // Every Go writer of teams takes provider_team_id, provider_name and gone_at
-// from the stored versions INSIDE the statement that writes: it calls Insert,
+// from the stored versions INSIDE the statement that writes: it calls Insert
+// or Restate (the teamprovider statements),
 // or its own statement is an INSERT..SELECT that joins
 // StoredIdentityOfOrganization (the rule Insert reads with) and selects the
 // three columns. A
@@ -40,7 +49,7 @@ func TestEveryGoTeamsWriteCarriesTheProviderIdentityInItsStatement(t *testing.T)
 		t.Fatal(err)
 	}
 	columnNames := []string{ColumnProviderTeamID, ColumnProviderName, ColumnGoneAt}
-	callers := map[string]bool{}
+	callers, restaters := map[string]bool{}, map[string]bool{}
 	for _, top := range []string{"internal", "cmd"} {
 		walkErr := filepath.WalkDir(filepath.Join(root, top), func(path string, entry fs.DirEntry, err error) error {
 			if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -59,8 +68,13 @@ func TestEveryGoTeamsWriteCarriesTheProviderIdentityInItsStatement(t *testing.T)
 			if strings.Contains(source, "teamprovider.Insert(") {
 				callers[rel] = true
 			}
-			if strings.Contains(source, "teamprovider.Carry(") && !strings.Contains(source, "tally.Add(stored,") {
-				t.Errorf("%s: calls teamprovider.Carry outside a tally: a read before a separate insert", rel)
+			if strings.Contains(source, "teamprovider.Restate(") {
+				restaters[rel] = true
+			}
+			for _, at := range carryCall.FindAllStringIndex(source, -1) {
+				if !strings.Contains(enclosingFunc(source, at[0]), "tally.Add(stored,") {
+					t.Errorf("%s: calls teamprovider.Carry in a function with no tally: a read before a separate insert", rel)
+				}
 			}
 			for _, at := range teamsInsert.FindAllStringIndex(source, -1) {
 				statement := source[at[0]:min(at[0]+900, len(source))]
@@ -98,6 +112,11 @@ func TestEveryGoTeamsWriteCarriesTheProviderIdentityInItsStatement(t *testing.T)
 	for _, writer := range insertWriters {
 		if !callers[writer] {
 			t.Errorf("%s does not call teamprovider.Insert", writer)
+		}
+	}
+	for _, writer := range restateWriters {
+		if !restaters[writer] {
+			t.Errorf("%s does not call teamprovider.Restate", writer)
 		}
 	}
 	if len(callers) < len(insertWriters) {

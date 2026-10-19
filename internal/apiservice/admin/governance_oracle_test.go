@@ -486,7 +486,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		},
 	})
 	t.Log(receipt)
-	createdLedger.reset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_ip_allowlist")
+	createdLedger.verifyThenReset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_ip_allowlist")
 
 	compare := func(name, query string) {
 		t.Helper()

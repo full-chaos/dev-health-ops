@@ -1208,7 +1208,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		return err
 	}
 	cursor.Repo = repo.FullName
-	repoID, err := repositoryIdentity(repo.FullName)
+	repoID, err := resolveGitHubRepoID(ctx, handler.RepoIdentity, claim, repo)
 	if err != nil {
 		return err
 	}

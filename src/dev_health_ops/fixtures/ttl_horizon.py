@@ -25,8 +25,7 @@ SHIFTING run to run (four TTL tables with different horizons), and for
 
 THE RULE. Generated history must end at least ``TTL_SAFETY_MARGIN`` inside
 the tightest TTL horizon in the schema. The margin is the snapshot's honest
-SHELF LIFE: a world generated today stays restorable for that long, and the
-typed expiry preflight in ``world_snapshot`` fails loudly once it is past.
+SHELF LIFE: history generated today stays clear of every TTL for that long.
 """
 
 from __future__ import annotations
@@ -131,7 +130,7 @@ def max_generated_age_days_for_table(table: str) -> int | None:
 
     CHAOS-3602 port, codex finding (HIGH, confirmed): a generator clamped
     against ``ttl_registry.py``'s own margin constants
-    (``TTL_SAFETY_MARGIN_DAYS`` = 7, ``GENERATOR_SLACK_DAYS`` = 3) produces a
+    (``TTL_SAFETY_MARGIN_DAYS`` = 7) produces a
     ceiling incompatible with the 30-day margin ``_assert_snapshot_within_
     shelf_life`` actually enforces at restore: measured live,
     ``telemetry_signal_bucket`` at that looser ceiling (80d) plus this

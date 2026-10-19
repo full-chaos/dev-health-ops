@@ -25,7 +25,8 @@ const root = path.resolve(rootArg ?? path.join(here, "..", ".."));
 const v1 = path.join(root, "contracts", "auth", "v1");
 
 const MUST_VALIDATE = { accept: true, reject_by_client: true };
-const MUST_REJECT = { reject: true, narrower_than_consumer: true };
+// go_schema_gap: refused here by `format` while Go's Validate accepts it (a calendar-impossible day; CHAOS-10135).
+const MUST_REJECT = { reject: true, narrower_than_consumer: true, go_schema_gap: true };
 
 // Categories every surface's manifest must declare and populate. A surface may
 // add more (jwks.v1 has narrower_than_consumer); a surface listed here may not
@@ -34,8 +35,50 @@ const REQUIRED_GROUPS = {
   jwks: ["accept", "reject", "reject_by_client", "narrower_than_consumer"],
   // No client-only rule on this surface: it has no integer fields and no cross-document check, so there is nothing for reject_by_client to hold.
   "endpoint-auth-profile": ["accept", "reject"],
+  // Request surfaces carry no client-only rule; the decision and batch response corpora do.
+  authorization_request: ["accept", "reject"],
+  authorization_batch_request: ["accept", "reject"],
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
+
+const REQUIRED_SWEEPS = ["jwks"];
+const sweepExpand = (v) =>
+  v && typeof v === "object" && !Array.isArray(v) && "$repeat" in v
+    ? (v.prefix ?? "") + v.$repeat[0].repeat(v.$repeat[1]) + (v.suffix ?? "")
+    : v;
+// A sweep path or rename may never name a prototype member, and a step into the
+// document must name a member the document owns.
+const PROTOTYPE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+function sweepAssertPlainKey(node, key, mayCreate = false) {
+  if (PROTOTYPE_KEYS.has(key)) throw new Error(`sweep path names a prototype member: ${key}`);
+  if (!mayCreate && !Object.prototype.hasOwnProperty.call(node, key)) throw new Error(`sweep path step ${key} is not a member of the document`);
+}
+// Applies a sweep row's ops to a copy of the base document.
+function sweepBuild(base, ops) {
+  let doc = structuredClone(base);
+  for (const op of ops) {
+    if (op.path.length === 0) {
+      doc = sweepExpand(op.set);
+      continue;
+    }
+    const parent = op.path.slice(0, -1).reduce((node, step) => {
+      sweepAssertPlainKey(node, step);
+      return node[step];
+    }, doc);
+    const last = op.path[op.path.length - 1];
+    if (!op.rename) sweepAssertPlainKey(parent, last, true);
+    if (op.rename) sweepAssertPlainKey(parent, op.rename, true);
+    if ("rename" in op) {
+      parent[op.rename] = parent[last];
+      delete parent[last];
+    } else if (op.delete) {
+      delete parent[last];
+    } else {
+      parent[last] = sweepExpand(op.set);
+    }
+  }
+  return doc;
+}
 
 const newAjv = () => {
   const ajv = new Ajv2020({ strict: true, allErrors: true });
@@ -254,13 +297,13 @@ for (const surface of surfaces) {
         fail(`${surface}/${name} [${group}]: validated=${ok}, want ${mustValidate} ${why}`);
         continue;
       }
-      if (group === "reject" && (!entry.expect_instance_location || !entry.expect_keyword)) {
+      if ((group === "reject" || group === "go_schema_gap") && (!entry.expect_instance_location || !entry.expect_keyword)) {
         // Without both, a reject fixture can drift into failing for an
         // unrelated reason and keep passing.
         fail(`${surface}/${name}: reject entry lacks expect_instance_location or expect_keyword`);
         continue;
       }
-      if (group === "reject") {
+      if (group === "reject" || group === "go_schema_gap") {
         // ajv adds an `if` error at the instance root next to the real
         // violation inside a failing `then`; Go and Python report only the
         // violation. It is reporting, not a second rule, so it is not counted.
@@ -287,6 +330,109 @@ for (const surface of surfaces) {
   }
   for (const name of claimed) {
     if (!existsSync(path.join(dir, name))) fail(`${surface}/${name} is claimed but absent`);
+  }
+  const sweepPath = path.join(v1, "sweeps", `${surface}.property-sweep.json`);
+  if (REQUIRED_SWEEPS.includes(surface) && !existsSync(sweepPath)) {
+    fail(`${surface}: property sweep ${path.relative(root, sweepPath)} is missing`);
+  }
+  if (existsSync(sweepPath)) {
+    const sweep = readJSON(sweepPath);
+    if (!Array.isArray(sweep.rows) || sweep.rows.length < 100) fail(`${surface}: property sweep has too few rows`);
+    const classIds = new Map((sweep.declared_classes ?? []).map((c) => [c.id, 0]));
+    if (classIds.size === 0) fail(`${surface}: the sweep declares no narrowing classes`);
+    for (const row of [...(sweep.rows ?? []), ...(sweep.byte_layer_rows ?? [])]) {
+      if (row.class === "agreement") {
+        if (row.declared_as !== undefined) fail(`${surface}/${row.id}: an agreement row names a class`);
+      } else if (!classIds.has(row.declared_as)) {
+        fail(`${surface}/${row.id}: ${row.class} row declared_as ${JSON.stringify(row.declared_as)} is not a declared class`);
+      } else {
+        classIds.set(row.declared_as, classIds.get(row.declared_as) + 1);
+      }
+    }
+    const schemaDescription = readJSON(schemaPath).description ?? "";
+    for (const [id, rows] of classIds) {
+      if (rows === 0) fail(`${surface}: class ${id} has no row`);
+      if (!schemaDescription.includes(`[${id}]`)) fail(`${surface}: class ${id} is not named as [${id}] in the schema description`);
+    }
+    const verdict = (doc) => (validate(doc) ? "accept" : "refuse");
+    const ids = new Set();
+    for (const row of sweep.rows ?? []) {
+      if (ids.has(row.id)) fail(`${surface}: sweep row ${row.id} appears twice`);
+      ids.add(row.id);
+      checked += 1;
+      const want = row.consumer === row.schema ? "agreement" : row.consumer === "accept" ? "narrowing" : "client_enforced";
+      if (row.class !== want) fail(`${surface}/${row.id}: class ${row.class} does not follow from the pair`);
+      const got = verdict(sweepBuild(sweep.base_document, row.ops));
+      if (got !== row.schema) fail(`${surface}/${row.id}: ajv ${got}s, the row says ${row.schema}`);
+    }
+    for (const entry of sweep.unicode_categories ?? []) {
+      checked += 1;
+      const doc = structuredClone(sweep.base_document);
+      doc.keys[0].kid = `a${String.fromCodePoint(parseInt(entry.rune.slice(2), 16))}b`;
+      const got = verdict(doc);
+      if (got !== entry.schema) fail(`${surface}/category ${entry.category}: ajv ${got}s, the entry says ${entry.schema}`);
+    }
+    if (surface === "jwks") {
+      const inv = sweep.inventory ?? {};
+      if (sweep.rows.length !== inv.rows) fail(`${surface}: ${sweep.rows.length} sweep rows, inventory says ${inv.rows}`);
+      const perProperty = {};
+      for (const row of sweep.rows) perProperty[row.property] = (perProperty[row.property] ?? 0) + 1;
+      if (JSON.stringify(Object.entries(perProperty).sort()) !== JSON.stringify(Object.entries(inv.by_property ?? {}).sort())) {
+        fail(`${surface}: rows per property ${JSON.stringify(perProperty)} differ from the inventory`);
+      }
+      if ((sweep.unicode_categories ?? []).length !== inv.unicode_categories) fail(`${surface}: unicode category count differs from the inventory`);
+      if ((sweep.byte_layer_rows ?? []).length !== inv.byte_layer_rows) fail(`${surface}: byte-layer row count differs from the inventory`);
+      if (JSON.stringify(Object.keys(sweep.unicode_categories_excluded ?? {}).sort()) !== '["Cs","LC"]') {
+        fail(`${surface}: excluded Unicode categories must be exactly Cs and LC`);
+      }
+      const alphabet = new Set(sweep.alphabets.x_characters);
+      if (alphabet.size !== 64) fail(`${surface}: the x alphabet must hold 64 characters`);
+      const [lo, hi] = sweep.alphabets.kid_range.map((v) => parseInt(v.slice(2), 16));
+      const xPrefix = sweep.base_document.keys[0].x.slice(0, 42);
+      for (let code = 0; code <= 0x10ffff; code += 1) {
+        if (code >= 0xd800 && code <= 0xdfff) continue;
+        if (code > 0xffff && code % 61 !== 0) continue;
+        const ch = String.fromCodePoint(code);
+        const xDoc = structuredClone(sweep.base_document);
+        xDoc.keys[0].x = xPrefix + ch;
+        checked += 1;
+        if (verdict(xDoc) !== (alphabet.has(ch) ? "accept" : "refuse")) {
+          fail(`${surface}: x ending in U+${code.toString(16)} has the wrong verdict`);
+          break;
+        }
+        const kDoc = structuredClone(sweep.base_document);
+        kDoc.keys[0].kid = ch;
+        if (verdict(kDoc) !== (code >= lo && code <= hi ? "accept" : "refuse")) {
+          fail(`${surface}: kid U+${code.toString(16)} has the wrong verdict`);
+          break;
+        }
+      }
+      const strict = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+      const byteIds = new Set();
+      for (const row of sweep.byte_layer_rows ?? []) {
+        if (byteIds.has(row.id)) fail(`${surface}: byte-layer row ${row.id} appears twice`);
+        byteIds.add(row.id);
+        checked += 1;
+        const bytes = row.raw !== undefined ? Buffer.from(row.raw, "utf8") : Buffer.from(row.raw_hex, "hex");
+        let got;
+        try {
+          got = verdict(JSON.parse(strict.decode(bytes)));
+        } catch {
+          got = "refuse";
+        }
+        if (got !== row.schema) fail(`${surface}/${row.id}: ajv path ${got}s, the row says ${row.schema}`);
+        const want = row.consumer === row.schema ? "agreement" : row.consumer === "accept" ? "narrowing" : "client_enforced";
+        if (row.class !== want) fail(`${surface}/${row.id}: class ${row.class} does not follow from the pair`);
+      }
+    }
+    if (surface === "jwks") {
+      for (let code = 0x21; code < 0x7f; code += 1) {
+        const doc = structuredClone(sweep.base_document);
+        doc.keys[0].kid = String.fromCharCode(code);
+        checked += 1;
+        if (verdict(doc) !== "accept") fail(`${surface}: printable ASCII ${JSON.stringify(doc.keys[0].kid)} refused as a kid`);
+      }
+    }
   }
   console.log(`${surface}.v1: ${JSON.stringify(counts)}`);
 }

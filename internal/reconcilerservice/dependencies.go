@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/pgconfig"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
@@ -136,7 +137,7 @@ func openReconcilerDatabase(ctx context.Context, cfg config.Config) (reconcilerD
 	// always-constructed outbox relay reads worker_job_routes, which is
 	// coordinator-exclusive. WithCoordinator makes the coordinator DSN a
 	// startup requirement rather than an optional extra.
-	runtimeConfig := postgres.RuntimeConfigFromPlatform(cfg).WithCoordinator()
+	runtimeConfig := pgconfig.RuntimeConfig(cfg).WithCoordinator()
 	pools, err := postgres.NewRuntimePools(ctx, runtimeConfig)
 	if err != nil {
 		return nil, err

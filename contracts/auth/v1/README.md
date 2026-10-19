@@ -8,7 +8,9 @@ TypeScript types are implementations of them, never the other way round.
 Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 (CHAOS-4884), `error.v1` (CHAOS-4929), `jwks.v1` and `discovery.v1`
 (CHAOS-4930), `provisioning-event.v1` and `audit-event.v1` (CHAOS-4933),
-`endpoint-auth-profile.v1` (CHAOS-4931). The remaining are CHAOS-4932 and 4934.
+`endpoint-auth-profile.v1` (CHAOS-4931), `authorization_request.v1`,
+`authorization_decision.v1` and the two batch forms (CHAOS-4932). The remaining
+is CHAOS-4934.
 
 Distinct from `credential-classes.json` and `endpoint-profiles.ops.json`, which
 are the Wave-0 **inventory** contract describing what authentication exists
@@ -179,6 +181,17 @@ clock-skew check to order it against.
 pattern; both clients refuse it at parse. That is a genuine client-enforced
 rule and it has a `reject_by_client` fixture stating so — the alternative is a
 gap that reads as an oversight rather than as a boundary.
+
+For `principal.v1` the schema layer itself disagrees on that day, and the
+disagreement is declared rather than hidden: Go's `Validate` ACCEPTS
+`2026-02-30` and `2026-04-31` (google/jsonschema-go ignores `format`), while
+Python and ajv refuse them by `format`. Those fixtures live in the manifest's
+`go_schema_gap` group, which is neither `reject` (that asserts Go's `Validate`
+refuses) nor `reject_by_client` (that asserts every validator accepts). Every
+typed client refuses the document. `TestGoSchemaValidateAcceptsACalendarImpossibleDay`
+pins the Go acceptance, so a library that starts asserting `format` turns it red
+and the fixtures move to `reject`. Decided in CHAOS-10135: the typed client is
+the floor, as `ParseWireTimestamp` is on the event surfaces.
 
 ### A contract with one real consumer is pinned in BOTH directions
 

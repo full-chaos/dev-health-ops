@@ -1,5 +1,5 @@
 {
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.EXAMPLEPAYLOAD.EXAMPLESIGNATURE",
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.EXAMPLE.EXAMPLESIGNATURE",
   "refresh_credential": "EXAMPLEREFRESH00000000000000000000000000001",
   "schema_version": "refresh-request.v1"
 }

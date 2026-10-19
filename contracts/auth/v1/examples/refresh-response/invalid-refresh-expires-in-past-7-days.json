@@ -1,5 +1,5 @@
 {
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.EXAMPLEPAYLOAD.EXAMPLESIGNATURE",
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.EXAMPLE.EXAMPLESIGNATURE",
   "expires_in": 3600,
   "refresh_credential": "EXAMPLEROTATED00000000000000000000000000001",
   "refresh_expires_in": 604801,

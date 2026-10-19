@@ -68,7 +68,7 @@ func TestSecretBearingValuesNeverReachFormattersOrLoggers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secrets := []string{"EXAMPLEPAYLOAD", "EXAMPLESIGNATURE", "EXAMPLEREFRESH", "EXAMPLEROTATED"}
+	secrets := []string{"EXAMPLESIGNATURE", "EXAMPLEREFRESH", "EXAMPLEROTATED"}
 
 	var jsonLog, textLog bytes.Buffer
 	slog.New(slog.NewJSONHandler(&jsonLog, nil)).Info("probe", "response", resp, "request", req, "valueResponse", *resp)

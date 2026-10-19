@@ -136,6 +136,10 @@ func isIdent(t tok) bool {
 
 // qname reads ident or ident.ident at i and returns the schema ("" if none), name and the next index.
 func qname(ts []tok, i int) (schema, name string, next int, ok bool) {
+	// a runtime-composed schema prefix (authschema.Quote(schema)+".table") is the auth schema
+	if i+2 < len(ts) && !ts[i].q && ts[i].s == unresolved && ts[i+1].s == "." && !ts[i+1].q && isIdent(ts[i+2]) {
+		return "auth", ts[i+2].s, i + 3, true
+	}
 	if i >= len(ts) || !isIdent(ts[i]) {
 		return "", "", i, false
 	}
@@ -307,8 +311,9 @@ type decl struct {
 }
 
 type pkgDecls struct {
-	vals map[string]decl
-	used map[string]bool
+	vals  map[string]decl
+	used  map[string]bool
+	funcs map[string]*ast.FuncDecl // nil value = ambiguous name
 }
 
 type evaluator struct {
@@ -321,6 +326,13 @@ type evaluator struct {
 // lookup resolves an identifier lexically: a use whose parser object is a different declaration (a parameter, a shadowing local) is not the package-level or local constant.
 func (e *evaluator) lookup(id *ast.Ident) (d decl, local, ok bool) {
 	if id.Obj != nil {
+		if as, isAssign := id.Obj.Decl.(*ast.AssignStmt); isAssign && as.Tok == token.DEFINE && len(as.Lhs) == len(as.Rhs) {
+			for i, l := range as.Lhs {
+				if li, isId := l.(*ast.Ident); isId && li.Obj == id.Obj {
+					return decl{expr: as.Rhs[i]}, true, true
+				}
+			}
+		}
 		spec, isSpec := id.Obj.Decl.(*ast.ValueSpec)
 		if !isSpec {
 			return decl{}, false, false
@@ -352,6 +364,22 @@ func (e *evaluator) eval(x ast.Expr) string {
 	case *ast.BinaryExpr:
 		if n.Op == token.ADD {
 			return e.eval(n.X) + e.eval(n.Y)
+		}
+	case *ast.CallExpr:
+		// a same-package function or method whose body is one return statement
+		var name string
+		switch f := n.Fun.(type) {
+		case *ast.Ident:
+			name = f.Name
+		case *ast.SelectorExpr:
+			name = f.Sel.Name
+		}
+		if fd := e.pkg.funcs[name]; fd != nil && !e.visiting["call:"+name] && fd.Body != nil && len(fd.Body.List) == 1 {
+			if rs, ok := fd.Body.List[0].(*ast.ReturnStmt); ok && len(rs.Results) == 1 {
+				e.visiting["call:"+name] = true
+				defer delete(e.visiting, "call:"+name)
+				return e.eval(rs.Results[0])
+			}
 		}
 	case *ast.Ident:
 		if d, isLocal, ok := e.lookup(n); ok && !e.visiting[n.Name] {
@@ -544,7 +572,7 @@ func Scan(root string, watched map[string]bool) ([]Writer, error) {
 	fset := token.NewFileSet()
 	for _, files := range byDir {
 		sort.Strings(files)
-		pkg := &pkgDecls{vals: map[string]decl{}, used: map[string]bool{}}
+		pkg := &pkgDecls{vals: map[string]decl{}, used: map[string]bool{}, funcs: map[string]*ast.FuncDecl{}}
 		parsed := map[string]*ast.File{}
 		for _, f := range files {
 			af, err := parser.ParseFile(fset, f, nil, 0)
@@ -553,8 +581,15 @@ func Scan(root string, watched map[string]bool) ([]Writer, error) {
 			}
 			parsed[f] = af
 			for _, d := range af.Decls {
-				if gd, ok := d.(*ast.GenDecl); ok {
-					collectDecls(gd, pkg.vals)
+				switch x := d.(type) {
+				case *ast.GenDecl:
+					collectDecls(x, pkg.vals)
+				case *ast.FuncDecl:
+					if _, dup := pkg.funcs[x.Name.Name]; dup {
+						pkg.funcs[x.Name.Name] = nil
+					} else {
+						pkg.funcs[x.Name.Name] = x
+					}
 				}
 			}
 		}

@@ -104,13 +104,15 @@ budget window. Budget writes are unavailable while impersonating.
 
 An organization owner or administrator on a team or enterprise plan with Agent
 Context Runtime can turn ACR AI features (for example MCP investigations) on or
-off for the organization under **AI Setup > BYO LLM**. The features run on the
-organization's saved BYO model. The platform model is used only when a platform
-administrator grants the organization platform model fallback.
+off for the organization under **AI Setup > BYO LLM**. Off stops ACR AI
+features for your org, including when you use your own key. On by default once
+a BYO key is saved. The features run on the organization's saved BYO model. The
+platform model is used only when a platform administrator grants the
+organization platform model fallback.
 
 Admin API: `GET /api/v1/admin/llm-settings/service-model` reads the state
-(`enabled`, `eligible`, `control`); `PUT` with `{"enabled": true}` or
-`{"enabled": false}` changes it. The change reaches investigations within about
+(`enabled`, `eligible`, `control`, `override`); `PUT` with `{"enabled": true}`
+or `{"enabled": false}` stores an explicit on or off for the organization. The change reaches investigations within about
 a minute. When billing or support set this for the organization, `control` is
 `managed` and the toggle answers `409`; contact support to change it. Each
 change writes an audit log entry.

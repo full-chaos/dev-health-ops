@@ -110,6 +110,7 @@ type serviceModelState struct {
 	tierAllowed bool
 	acrAllowed  bool
 	control     string
+	override    *bool
 }
 
 func (s serviceModelState) ineligibleReason() string {
@@ -141,7 +142,9 @@ func (h *handlers) loadServiceModelState(ctx context.Context, q serviceModelQuer
 		return serviceModelState{}, &llmStepError{"load agent_context_runtime state", err}
 	}
 	control := serviceModelControlNone
+	var overrideEnabled *bool
 	if override != nil {
+		overrideEnabled = &override.IsEnabled
 		control = serviceModelControlManaged
 		if override.ownedByToggle() {
 			control = serviceModelControlSelfService
@@ -154,6 +157,7 @@ func (h *handlers) loadServiceModelState(ctx context.Context, q serviceModelQuer
 		tierAllowed: have >= want,
 		acrAllowed:  licensing.Decide(serviceModelACRFeature, acr).Allowed,
 		control:     control,
+		override:    overrideEnabled,
 	}, nil
 }
 
@@ -169,6 +173,11 @@ func serviceModelObject(s serviceModelState) *pyjson.Object {
 		out.Set("ineligible_reason", reason)
 	}
 	out.Set("control", s.control)
+	if s.override == nil {
+		out.Set("override", nil)
+	} else {
+		out.Set("override", *s.override)
+	}
 	out.Set("required_tier", serviceModelMinTier)
 	out.Set("current_tier", s.tier)
 	return out
@@ -222,9 +231,11 @@ func (h *handlers) getServiceModel(w http.ResponseWriter, r *http.Request) {
 	policy.WriteJSON(w, http.StatusOK, serviceModelObject(state), nil)
 }
 
-// putServiceModel turns the toggle on or off. It only ever writes a row it
-// owns: an override that billing or support wrote (or changed after the
-// toggle) is answered 409 and left as it is.
+// putServiceModel writes the org's explicit acr_service_model override, on or
+// off: off must stay readable as an explicit off (it overrides the auto-enroll
+// a saved BYO key gives). It only ever writes a row it owns: an override that
+// billing or support wrote (or changed after the toggle) is answered 409 and
+// left as it is.
 func (h *handlers) putServiceModel(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := policy.UserFrom(ctx)
@@ -282,15 +293,16 @@ func (h *handlers) putServiceModel(w http.ResponseWriter, r *http.Request) {
 			"message", "This setting is managed by your plan or support. Contact support to change it.").write(w)
 		return
 	}
+	if !before.registered {
+		logOutcome("refused_not_registered", before.enabled)
+		serviceModelRefusal(http.StatusConflict,
+			"error", "feature_not_registered",
+			"feature", serviceModelFeature,
+			"message", "ACR AI features are not available on this deployment").write(w)
+		return
+	}
 	if enabled {
 		switch before.ineligibleReason() {
-		case "feature_not_registered":
-			logOutcome("refused_not_registered", before.enabled)
-			serviceModelRefusal(http.StatusConflict,
-				"error", "feature_not_registered",
-				"feature", serviceModelFeature,
-				"message", "ACR AI features are not available on this deployment").write(w)
-			return
 		case "tier_required":
 			logOutcome("refused_tier", before.enabled)
 			serviceModelRefusal(http.StatusPaymentRequired,
@@ -310,19 +322,19 @@ func (h *handlers) putServiceModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := h.store.now().UTC().Truncate(time.Microsecond)
+	config, err := json.Marshal(serviceModelMarker{Source: serviceModelMarkerSource, SetAt: serviceModelStamp(now)})
+	if err != nil {
+		h.internalError(ctx, w, "encode acr_service_model marker", err)
+		return
+	}
 	changed := false
 	switch {
-	case enabled && override == nil:
-		config, err := json.Marshal(serviceModelMarker{Source: serviceModelMarkerSource, SetAt: serviceModelStamp(now)})
-		if err != nil {
-			h.internalError(ctx, w, "encode acr_service_model marker", err)
-			return
-		}
+	case override == nil:
 		reason := serviceModelOverrideReason
 		tag, err := tx.Exec(ctx, `
 INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, config, reason, created_by, updated_by, created_at, updated_at)
-SELECT $1, $2, f.id, true, NULL, $3::json, $4, $5, $5, $6, $6 FROM feature_flags f WHERE f.key = $7
-ON CONFLICT (org_id, feature_id) DO NOTHING`, uuid.New(), org, string(config), reason, actor, now, serviceModelFeature)
+SELECT $1, $2, f.id, $3, NULL, $4::json, $5, $6, $6, $7, $7 FROM feature_flags f WHERE f.key = $8
+ON CONFLICT (org_id, feature_id) DO NOTHING`, uuid.New(), org, enabled, string(config), reason, actor, now, serviceModelFeature)
 		if err != nil {
 			h.internalError(ctx, w, "insert acr_service_model override", err)
 			return
@@ -336,22 +348,11 @@ ON CONFLICT (org_id, feature_id) DO NOTHING`, uuid.New(), org, string(config), r
 			return
 		}
 		changed = true
-	case enabled && !override.IsEnabled:
-		config, err := json.Marshal(serviceModelMarker{Source: serviceModelMarkerSource, SetAt: serviceModelStamp(now)})
-		if err != nil {
-			h.internalError(ctx, w, "encode acr_service_model marker", err)
-			return
-		}
+	case override.IsEnabled != enabled:
 		if _, err := tx.Exec(ctx, `
-UPDATE org_feature_overrides SET is_enabled = true, expires_at = NULL, config = $2::json, updated_by = $3, updated_at = $4
-WHERE id = $1`, override.ID, string(config), actor, now); err != nil {
+UPDATE org_feature_overrides SET is_enabled = $2, expires_at = NULL, config = $3::json, updated_by = $4, updated_at = $5
+WHERE id = $1`, override.ID, enabled, string(config), actor, now); err != nil {
 			h.internalError(ctx, w, "update acr_service_model override", err)
-			return
-		}
-		changed = true
-	case !enabled && override != nil:
-		if _, err := tx.Exec(ctx, `DELETE FROM org_feature_overrides WHERE id = $1 AND org_id = $2`, override.ID, org); err != nil {
-			h.internalError(ctx, w, "delete acr_service_model override", err)
 			return
 		}
 		changed = true
@@ -368,6 +369,12 @@ WHERE id = $1`, override.ID, string(config), actor, now); err != nil {
 		changes.Set("source", serviceModelSource)
 		changes.Set("old_enabled", before.enabled)
 		changes.Set("new_enabled", after.enabled)
+		if override == nil {
+			changes.Set("old_override", nil)
+		} else {
+			changes.Set("old_override", override.IsEnabled)
+		}
+		changes.Set("new_override", enabled)
 		if user.ImpersonatedBy != nil && *user.ImpersonatedBy != "" {
 			changes.Set("impersonated_by", *user.ImpersonatedBy)
 		}

@@ -68,7 +68,7 @@ func TestServiceModelSelfServiceToggle(t *testing.T) {
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-svc-model-32-bytes!"
 
-	orgTeam, orgEnterprise, orgCommunity, orgNoACR, orgBilling := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	orgTeam, orgEnterprise, orgCommunity, orgNoACR, orgBilling, orgFresh := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	adminID, memberID, superID := uuid.New(), uuid.New(), uuid.New()
 	serviceModelFlag := uuid.New()
 
@@ -89,7 +89,7 @@ func TestServiceModelSelfServiceToggle(t *testing.T) {
 				tier string
 			}{
 				"team": {orgTeam, "team"}, "enterprise": {orgEnterprise, "enterprise"}, "community": {orgCommunity, "community"},
-				"noacr": {orgNoACR, "team"}, "billing": {orgBilling, "team"},
+				"noacr": {orgNoACR, "team"}, "billing": {orgBilling, "team"}, "fresh": {orgFresh, "team"},
 			} {
 				exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, $3, 'stripe', true, now(), now())`, org.id, "svcmodel-"+slug, org.tier)
@@ -111,7 +111,7 @@ SELECT $1, $2, id, $3, '{}'::json, $5, now(), now() FROM feature_flags WHERE key
 					t.Fatalf("seed override %s for %s: rows=%d err=%v", key, org, tag.RowsAffected(), err)
 				}
 			}
-			for _, org := range []uuid.UUID{orgTeam, orgEnterprise, orgCommunity, orgBilling} {
+			for _, org := range []uuid.UUID{orgTeam, orgEnterprise, orgCommunity, orgBilling, orgFresh} {
 				override(org, "agent_context_runtime", true, nil)
 			}
 			promo := "billing: annual contract"
@@ -121,7 +121,7 @@ SELECT $1, $2, id, $3, '{}'::json, $5, now(), now() FROM feature_flags WHERE key
 				"member": {"user_id": memberID.String(), "email": "svcmodel-member@example.com", "org_id": orgTeam.String(), "role": "member"},
 				"super":  {"user_id": superID.String(), "email": "svcmodel-super@example.com", "is_superuser": true},
 			}
-			for slug, org := range map[string]uuid.UUID{"team": orgTeam, "enterprise": orgEnterprise, "community": orgCommunity, "noacr": orgNoACR, "billing": orgBilling} {
+			for slug, org := range map[string]uuid.UUID{"team": orgTeam, "enterprise": orgEnterprise, "community": orgCommunity, "noacr": orgNoACR, "billing": orgBilling, "fresh": orgFresh} {
 				tokens[slug] = map[string]any{"user_id": adminID.String(), "email": "svcmodel-admin@example.com", "org_id": org.String(), "role": "admin"}
 			}
 			return tokens
@@ -200,19 +200,49 @@ WHERE org_id = $1 AND resource_id = 'acr_service_model' ORDER BY created_at DESC
 		}
 	})
 
-	t.Run("org admin turns it off: row removed, acr route serves false", func(t *testing.T) {
+	t.Run("org admin turns it off: an explicit off override, acr route serves false", func(t *testing.T) {
+		onID, _, _, _ := overrideRow(orgTeam)
 		resp := put("team", false)
 		if resp.status != 200 {
 			t.Fatalf("PUT off: status=%d body=%s", resp.status, resp.body)
 		}
-		if got := decodeObject(t, resp); got["enabled"] != false || got["control"] != "none" {
-			t.Fatalf("PUT off body=%s, want enabled=false control=none", resp.body)
+		if got := decodeObject(t, resp); got["enabled"] != false || got["control"] != "self_service" || got["override"] != false {
+			t.Fatalf("PUT off body=%s, want enabled=false control=self_service override=false", resp.body)
 		}
-		if _, _, _, found := overrideRow(orgTeam); found {
-			t.Fatal("the self-service row survived the toggle off")
+		id, enabled, _, found := overrideRow(orgTeam)
+		if !found || enabled || id != onID {
+			t.Fatalf("after the toggle off: found=%t enabled=%t id %s->%s, want the same row kept as an explicit off", found, enabled, onID, id)
 		}
 		if served(orgTeam) {
 			t.Fatal("acr route serves acr_service_model=true after the toggle off")
+		}
+		var action, changes string
+		if err := pool.QueryRow(ctx, `SELECT action, changes::text FROM audit_logs
+WHERE org_id = $1 AND resource_id = 'acr_service_model' ORDER BY created_at DESC LIMIT 1`, orgTeam).Scan(&action, &changes); err != nil {
+			t.Fatalf("audit row: %v", err)
+		}
+		var change map[string]any
+		if err := json.Unmarshal([]byte(changes), &change); err != nil {
+			t.Fatalf("audit changes %q: %v", changes, err)
+		}
+		if action != "feature_disabled" || change["old_override"] != true || change["new_override"] != false {
+			t.Fatalf("audit action=%s changes=%s, want feature_disabled old_override=true new_override=false", action, changes)
+		}
+	})
+
+	t.Run("off with no override writes an explicit off", func(t *testing.T) {
+		resp := put("fresh", false)
+		if resp.status != 200 {
+			t.Fatalf("PUT fresh off: status=%d body=%s", resp.status, resp.body)
+		}
+		if got := decodeObject(t, resp); got["control"] != "self_service" || got["override"] != false {
+			t.Fatalf("PUT fresh off body=%s, want control=self_service override=false", resp.body)
+		}
+		if _, enabled, _, found := overrideRow(orgFresh); !found || enabled {
+			t.Fatalf("fresh org: found=%t enabled=%t, want an explicit off row", found, enabled)
+		}
+		if served(orgFresh) {
+			t.Fatal("acr route serves true for an explicit off")
 		}
 	})
 
@@ -229,8 +259,8 @@ WHERE org_id = $1 AND resource_id = 'acr_service_model' ORDER BY created_at DESC
 		if resp := put("member", true); resp.status != 403 {
 			t.Fatalf("PUT member: status=%d body=%s, want 403", resp.status, resp.body)
 		}
-		if _, _, _, found := overrideRow(orgTeam); found {
-			t.Fatal("a member's PUT wrote an override")
+		if _, enabled, _, found := overrideRow(orgTeam); !found || enabled {
+			t.Fatalf("a member's PUT changed the override: found=%t enabled=%t", found, enabled)
 		}
 	})
 

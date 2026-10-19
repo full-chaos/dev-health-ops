@@ -206,7 +206,8 @@
   "reject_by_client": [
     {
       "file": "client-rejected-duplicate-principal-id.json",
-      "why": "Duplicate member: parsers keep the last, so the first value would never be validated."
+      "why": "Duplicate member: parsers keep the last, so the first value would never be validated.",
+      "duplicate_member": true
     },
     {
       "file": "client-rejected-revision-decimal.json",

@@ -358,7 +358,8 @@
   "reject_by_client": [
     {
       "file": "client-rejected-duplicate-reason-code.json",
-      "why": "Duplicate member: the first value would never be validated."
+      "why": "Duplicate member: the first value would never be validated.",
+      "duplicate_member": true
     },
     {
       "file": "client-rejected-occurred-at-february-30.json",

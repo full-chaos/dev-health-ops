@@ -182,7 +182,8 @@
   "reject_by_client": [
     {
       "file": "client-rejected-duplicate-access-token.json",
-      "why": "Duplicate member."
+      "why": "Duplicate member.",
+      "duplicate_member": true
     },
     {
       "file": "client-rejected-expires-in-decimal.json",

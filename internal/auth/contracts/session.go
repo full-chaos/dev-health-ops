@@ -104,8 +104,8 @@ type AuthOutcome struct {
 	SessionID     string    `json:"session_id,omitempty"`
 }
 
-// credentialSurfaces are the surfaces whose documents carry credentials.
-var credentialSurfaces = map[string]bool{RefreshRequestSurface: true, RefreshResponseSurface: true}
+// credentialCarryingSurfaces are the surfaces whose documents carry credentials.
+var credentialCarryingSurfaces = map[string]bool{RefreshRequestSurface: true, RefreshResponseSurface: true}
 
 // decodeWire runs the shared order: duplicate members, schema, then decode.
 // Validation sees the decoded JSON value, not dest, so a field dest does not
@@ -119,7 +119,7 @@ func decodeWire(root, surface string, raw []byte, dest any) error {
 		return fmt.Errorf("%s: document is not valid JSON: %w", surface, err)
 	}
 	if err := Validate(root, surface, document); err != nil {
-		if credentialSurfaces[surface] {
+		if credentialCarryingSurfaces[surface] {
 			// The validator's message repeats the rejected value; on these
 			// surfaces that value is a credential.
 			return fmt.Errorf("%s: document does not satisfy the schema (violation text withheld: this surface carries credentials)", surface)

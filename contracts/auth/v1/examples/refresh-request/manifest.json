@@ -106,7 +106,8 @@
   "reject_by_client": [
     {
       "file": "client-rejected-duplicate-refresh-credential.json",
-      "why": "Duplicate member: the first value would never be validated."
+      "why": "Duplicate member: the first value would never be validated.",
+      "duplicate_member": true
     }
   ]
 }

@@ -410,6 +410,7 @@ func normalizeMutationBody(body, plane string) (string, error) {
 		}
 		return "<ts:" + parts[1] + ">"
 	})
+	canonical = maskLiveClockShape(canonical)
 	canonical = oracleTime.ReplaceAllStringFunc(canonical, func(stamp string) string {
 		if !strings.HasSuffix(stamp, wantSuffix) {
 			return "<ts with the wrong offset form: " + stamp + ">"
@@ -438,6 +439,20 @@ func normalizeMutationBody(body, plane string) (string, error) {
 		members = append(members, "?"+jsonString(key)+": "+string(raw))
 	}
 	return "{" + strings.Join(members, ", ") + "}", nil
+}
+
+// liveClockFields are the response members the plane stamps from its own clock while it runs. A reading
+// whose microsecond is zero (about one in a million) prints without a fraction in both Python's isoformat
+// and Go, so frac versus nofrac is a per-plane reading for these members and is masked. Every other
+// timestamp keeps its shape in the compare, and the offset form stays checked for all of them.
+var liveClockFields = []string{"createdAt", "updatedAt"}
+
+var liveClockShape = func() *regexp.Regexp {
+	return regexp.MustCompile(`("(?:` + strings.Join(liveClockFields, "|") + `)": "<ts:)(?:frac|nofrac)>"`)
+}()
+
+func maskLiveClockShape(canonical string) string {
+	return liveClockShape.ReplaceAllString(canonical, "${1}clock>\"")
 }
 
 // orderErrorMembers writes each error object with its members in one fixed

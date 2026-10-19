@@ -43,12 +43,12 @@
           },
           "kid": {
             "type": "string",
-            "pattern": "^(?:[!-~]{1,256}|𐀂)$",
+            "pattern": "^[!-~]{1,256}$",
             "description": "The key identifier a token's `kid` header is matched against. Printable non-space ASCII, 1..256 characters -- which is also 1..256 BYTES, and that equality is the point: see the schema-level note on why maxLength cannot express the consumer's byte bound. Operator-settable, so the alphabet is kept wide enough for any reasonable value rather than pinned to the default's shape."
           },
           "x": {
             "type": "string",
-            "pattern": "^(?:[A-Za-z0-9_-]{43}|[A-Za-z0-9_-]{42}𐀂)$",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
             "description": "The raw 32-byte Ed25519 public key, base64url, unpadded (RFC 7515 section 2). Exactly 43 characters of the URL-safe alphabet: see the schema-level note for why the character count rather than a `format` or a prose description is what makes this safe. Carries the PUBLIC half only -- the private scalar `d` is not a permitted member."
           }
         }

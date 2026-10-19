@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 )
 
 // Observer receives the outcome of one mapping production. It is the CHAOS-4757
@@ -105,7 +107,7 @@ func (service *Service) Produce(ctx context.Context, orgID string, window Window
 		service.logger.Error("issue-pr links: load failed",
 			slog.String("organization_id", orgID),
 			slog.Any("window_from", window.From), slog.Any("window_to", window.To),
-			slog.Any("error", err),
+			workgraph.ErrorAttr(err),
 		)
 		return Outcome{OrganizationID: orgID}, err
 	}
@@ -127,7 +129,7 @@ func (service *Service) Produce(ctx context.Context, orgID string, window Window
 		service.logger.Error("issue-pr links: write failed",
 			slog.String("organization_id", orgID),
 			slog.Int("links_derived", len(result.Links)),
-			slog.Any("error", err),
+			workgraph.ErrorAttr(err),
 		)
 		return Outcome{OrganizationID: orgID}, fmt.Errorf("write issue-pr links: %w", err)
 	}

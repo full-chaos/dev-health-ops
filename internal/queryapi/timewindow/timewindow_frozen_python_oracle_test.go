@@ -67,7 +67,7 @@ var timeWindowGoldens = programoracle.Set{
 	},
 }
 
-// TestComputeMatchesFrozenPythonTimeWindow compares Compute with Python's
+// TestComputeMatchesFrozenPythonTimeWindow compares ComputeReference (Compute without its declared trailing-window divergence) with Python's
 // time_window and people._time_window on day counts and dates at the
 // edges of Python's date and timedelta limits. A day count past the Go int
 // range is sent to Python exactly and to Compute saturated, as the
@@ -154,7 +154,7 @@ func TestComputeMatchesFrozenPythonTimeWindow(t *testing.T) {
 			if sum, err := AddDays(*end, -saturated(t, item.Range)); err == nil {
 				got = []any{day(sum)}
 			}
-		} else if window, err := Compute(saturated(t, item.Range), saturated(t, item.Compare), start, end, today); err == nil {
+		} else if window, err := ComputeReference(saturated(t, item.Range), saturated(t, item.Compare), start, end, today); err == nil {
 			got = []any{day(window.StartDay), day(window.EndDay), day(window.CompareStart), day(window.CompareEnd)}
 		}
 		if fmt.Sprint(got) != fmt.Sprint(results[index]) {

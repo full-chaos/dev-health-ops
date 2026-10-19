@@ -91,6 +91,7 @@ WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled
 			synclog.Text(synclog.KeyTriggerMode, synclog.ParseLabel(input.Mode)),
 			synclog.Count(synclog.KeyRefusedSourceCount, len(unselected)),
 			synclog.Count(synclog.KeyRequestedSourceCount, len(sourceIDs)))
+		processRefusalMetrics.observe(refusalUnselectedSource)
 		return UnselectedSourcesError{ConfigID: config.ID, SourceIDs: unselected}
 	}
 	return nil

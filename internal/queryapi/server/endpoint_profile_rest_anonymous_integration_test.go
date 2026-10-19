@@ -20,11 +20,7 @@ import (
 // disagreement is gone (row reclassified, route changed or removed).
 type knownRESTDisagreement struct{ method, path, listener, ticket string }
 
-var knownRESTDisagreements = []knownRESTDisagreement{
-	// Row says protected; the route is public by design (Python parity).
-	{http.MethodGet, "/api/v1/meta", "query", "CHAOS-10167"},
-	{http.MethodGet, "/api/v1/meta", "internal", "CHAOS-10167"},
-}
+var knownRESTDisagreements = []knownRESTDisagreement{}
 
 func (k knownRESTDisagreement) matches(violation string) bool {
 	return strings.HasPrefix(violation, k.method+" "+k.path+" [") && strings.Contains(violation, " on "+k.listener+": ")

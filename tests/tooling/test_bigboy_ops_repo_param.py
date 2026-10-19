@@ -286,6 +286,14 @@ def test_a_manifest_the_parser_does_not_recognise_fails_the_cut_contents_step(
         POSTURE_V1.replace('{"alpha", true, false, false},', ""),
         POSTURE_V2.replace(
             "return []RequiredTable{\n",
+            "return Posture{\n\t\tRequiredSequences: seqs,\n\t\tRequiredTables: []RequiredTable{\n",
+        ),
+        POSTURE_V2.replace(
+            "return []RequiredTable{\n",
+            "return Posture{\n\t\tRequiredSequences: seqList(),\n\t\tRequiredTables: []RequiredTable{\n",
+        ),
+        POSTURE_V2.replace(
+            "return []RequiredTable{\n",
             'return Posture{\n\t\tRequiredSequences: []string{"new_seq"},\n\t\tRequiredTables: []RequiredTable{\n',
         ),
         POSTURE_V2.replace(
@@ -345,3 +353,20 @@ def test_grants_check_refuses_a_non_git_ops_path_before_it_queries_clickhouse(
     assert done.returncode != 0, done.stdout + done.stderr
     assert "GRANTS_CHECK_FAIL" in done.stdout, done.stdout
     assert not calls.exists(), calls.read_text()
+
+
+def test_the_real_api_and_domain_posture_manifests_still_parse(tmp_path: Path) -> None:
+    """The strict parser must accept the manifests this repository ships."""
+    for script in (
+        "cut-contents-pg-api-posture.py",
+        "cut-contents-pg-domain-posture.py",
+    ):
+        done = subprocess.run(
+            ["python3", str(BIGBOY / script), "HEAD", "HEAD", str(tmp_path / "o.txt")],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={**os.environ, "BIGBOY_OPS_REPO": str(ROOT)},
+        )
+        assert done.returncode == 0, (script, done.stdout, done.stderr)
+        assert "unparsable" not in done.stdout, (script, done.stdout)

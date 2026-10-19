@@ -221,3 +221,49 @@ func TestSchemaStatesAbsentVersusNullOnEveryAdvisoryField(t *testing.T) {
 		}
 	}
 }
+
+func TestEveryMultiClassQueryAPIRowNamesASelectorTheRegistryHonours(t *testing.T) {
+	registry := realRegistry(t)
+	checked := 0
+	for _, item := range loadQueryAPIDocument(t)["rows"].([]any) {
+		row := item.(map[string]any)
+		classes, _ := row["accepted_credential_classes"].([]any)
+		if len(classes) < 2 {
+			continue
+		}
+		checked++
+		if err := CheckClassSelector(row, registry); err != nil {
+			t.Errorf("row %v: %v", row["id"], err)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no multi-class row found; the check is vacuous")
+	}
+}
+
+func TestTheRowSchemaItselfRequiresASelectorForTwoOrMoreClasses(t *testing.T) {
+	resolved, _ := resolveEndpointProfileSchema(t)
+	document := loadQueryAPIDocument(t)
+	var multi map[string]any
+	for _, item := range document["rows"].([]any) {
+		row := item.(map[string]any)
+		if classes, _ := row["accepted_credential_classes"].([]any); len(classes) >= 2 {
+			multi = row
+			break
+		}
+	}
+	if multi == nil {
+		t.Fatal("no multi-class row found")
+	}
+	if err := resolved.Validate(document); err != nil {
+		t.Fatalf("precondition: the rows must validate as shipped: %v", err)
+	}
+	delete(multi, "class_disambiguator")
+	if err := resolved.Validate(document); err == nil {
+		t.Fatal("the row schema accepted a row with two accepted classes and no class_disambiguator")
+	}
+	multi["class_disambiguator"] = map[string]any{"kind": "try_each", "name": "Authorization"}
+	if err := resolved.Validate(document); err == nil {
+		t.Fatal("the row schema accepted a class_disambiguator kind outside the closed set")
+	}
+}

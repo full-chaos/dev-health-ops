@@ -35,6 +35,29 @@
     },
     "endpointProfile": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "accepted_credential_classes": {
+                "type": "array",
+                "minItems": 2
+              }
+            },
+            "required": [
+              "accepted_credential_classes"
+            ]
+          },
+          "then": {
+            "required": [
+              "class_disambiguator"
+            ],
+            "properties": {
+              "class_disambiguator": {}
+            }
+          }
+        }
+      ],
       "properties": {
         "accepted_credential_classes": {
           "description": "class_id values from contracts/auth/v1/credential-classes.json this route's intended validator accepts. Empty for a genuinely public route.",
@@ -50,6 +73,32 @@
             "string",
             "null"
           ]
+        },
+        "class_disambiguator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "authorization_scheme",
+                "credential_prefix",
+                "dedicated_header",
+                "jwt_header_alg",
+                "signature_header"
+              ],
+              "description": "How the class is chosen from the request BEFORE any validator runs: the Authorization scheme, a fixed credential prefix, a dedicated header, the `alg` field of the JWT protected header (compared exactly; query-api picks its Bearer verifier this way, so with the edge verifier unconfigured an HS256 token is refused rather than misrouted), or a signature header. Closed on purpose: there is no 'try each validator' value, because validator fan-out is the CHAOS-3271 defect."
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+              "description": "The scheme, prefix or header name the selector reads. A name, never a credential value."
+            }
+          },
+          "description": "How a route that accepts more than one credential class picks the class from the request head BEFORE any validator runs (TRD section 10). The kind vocabulary is owned here; endpoint-auth-profile.v1 references it. The profile registry gate (CheckClassSelector) joins it with the per-class markers in credential-classes.json."
         },
         "classification": {
           "enum": [

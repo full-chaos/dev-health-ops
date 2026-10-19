@@ -6,12 +6,15 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	clickhousego "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/jackc/pgx/v5"
 	valkeygo "github.com/valkey-io/valkey-go"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // ExternalStores are the datastores of a target that already runs (go-api or auth-service): the venue uses
@@ -26,9 +29,6 @@ const (
 	EnvExternalPostgres   = "DEVHEALTH_AUTH_ORACLE_POSTGRES_URI"
 	EnvExternalClickHouse = "DEVHEALTH_AUTH_ORACLE_CLICKHOUSE_URI"
 	EnvExternalValkey     = "DEVHEALTH_AUTH_ORACLE_VALKEY_URI"
-	// EnvExternalSetEnvCmd is the command an external run calls as `cmd NAME VALUE` (empty VALUE = unset) when the
-	// corpus needs the target's environment changed; it reconfigures or restarts the target.
-	EnvExternalSetEnvCmd = "DEVHEALTH_AUTH_ORACLE_SET_ENV_CMD"
 )
 
 // Validate is an error unless the stores can stand in for the venue's Go side. frozen is false for a venue
@@ -196,30 +196,51 @@ func ExternalRequired(baseURL string) (ExternalStores, bool, error) {
 	if parsed, err := url.Parse(baseURL); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return ExternalStores{}, false, fmt.Errorf("base URL %q is not an http(s) URL with a host", baseURL)
 	}
-	if os.Getenv(EnvExternalSetEnvCmd) == "" {
-		return ExternalStores{}, false, fmt.Errorf("%s is not set: the corpus changes the target's environment mid-run and an external target needs a command that does it", EnvExternalSetEnvCmd)
+	if err := checkTargetEnvScript(); err != nil {
+		return ExternalStores{}, false, err
 	}
 	return stores, true, nil
 }
 
 // SetTargetEnv sets (or, with an empty value, unsets) name for the target the corpus drives: in this process for an
-// in-process go-api, through EnvExternalSetEnvCmd for an external target.
+// in-process go-api, and for an external target also through ./ci/auth_corpus_set_env.sh NAME VALUE (run in the
+// repository root, no shell; an empty VALUE means unset), which reconfigures or restarts the target. The process
+// environment follows in both cases because the frozen golden keys each call by it.
 func SetTargetEnv(t *testing.T, external bool, name, value string) {
 	t.Helper()
 	if external {
-		command := os.Getenv(EnvExternalSetEnvCmd)
-		if command == "" {
-			t.Fatalf("%s is not set", EnvExternalSetEnvCmd)
-		}
-		if output, err := exec.Command(command, name, value).CombinedOutput(); err != nil {
-			t.Fatalf("%s %s: %v\n%s", command, name, err, output)
+		command := exec.Command("./ci/auth_corpus_set_env.sh", name, value)
+		command.Dir = targetEnvRoot()
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("%s %s: %v\n%s", targetEnvScript, name, err, output)
 		}
 	}
-	// The frozen golden keys each call by this process's environment, so it follows the target's.
 	if value == "" {
 		t.Setenv(name, "")
 		_ = os.Unsetenv(name)
 		return
 	}
 	t.Setenv(name, value)
+}
+
+// targetEnvRoot is the directory the script runs in: the repository root unless a test of this package set another.
+func targetEnvRoot() string {
+	if targetEnvDir != "" {
+		return targetEnvDir
+	}
+	_, file, _, _ := moduleroot.Caller(0)
+	return filepath.Join(filepath.Dir(file), "..", "..", "..")
+}
+
+// checkTargetEnvScript is an error unless the script exists and is executable.
+func checkTargetEnvScript() error {
+	path := filepath.Join(targetEnvRoot(), targetEnvScript)
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("an external run needs %s: the corpus changes the target's environment mid-run: %w", targetEnvScript, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("%s is not an executable file", path)
+	}
+	return nil
 }

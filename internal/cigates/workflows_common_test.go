@@ -44,9 +44,13 @@ func loadWf(t *testing.T, root, name string) yamlMap {
 
 func workflowNames(t *testing.T, root string) []string {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
-	if err != nil {
-		t.Fatal(err)
+	var paths []string
+	for _, ext := range []string{"*.yml", "*.yaml"} {
+		m, err := filepath.Glob(filepath.Join(root, ".github", "workflows", ext))
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, m...)
 	}
 	var names []string
 	for _, p := range paths {

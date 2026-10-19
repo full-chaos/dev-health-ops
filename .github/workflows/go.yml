@@ -214,6 +214,7 @@ on:
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
       # and the auth closure allow-list
       - '.github/workflows/*.yml'
+      - '.github/workflows/*.yaml'
       - 'ci/builder_images.sh'
       - 'ci/builder_images.tsv'
       - 'ci/auth_closure_allow.tsv'
@@ -435,6 +436,7 @@ on:
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
       # and the auth closure allow-list
       - '.github/workflows/*.yml'
+      - '.github/workflows/*.yaml'
       - 'ci/builder_images.sh'
       - 'ci/builder_images.tsv'
       - 'ci/auth_closure_allow.tsv'

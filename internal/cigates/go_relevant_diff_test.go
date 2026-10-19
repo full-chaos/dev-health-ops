@@ -2,6 +2,7 @@ package cigates_test
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -241,4 +242,43 @@ func TestGoRelevanceMatcherStdinFormats(t *testing.T) {
 		p("NUL entries glued together", `read -r -d '' path`, `read -r path`,
 			"the_matcher_accepts_both_nul_and_newline_delimited_input", "nul-delimited"),
 	})
+}
+
+// A workflow file named *.yaml runs exactly like a *.yml one, so a change that touches only such a file is Go-relevant.
+// The decider reads go.yml's own path list literally. The guard runs the real decider on two copies of go.yml: one with a
+// '.github/workflows/*.yaml' path entry (relevant=true) and one without (the planted defect: relevant=false). Asserting it on
+// the real go.yml waits until the branch holds the merge that adds the entry (B1, CHAOS-10177).
+func TestGoRelevanceCountsYamlWorkflows(t *testing.T) {
+	t.Parallel()
+	script := scriptPath(t, "ci/go_relevance.sh")
+	raw := readText(t, scriptPath(t, ".github/workflows/go.yml"))
+	const entry = "      - '.github/workflows/*.yaml'\n"
+	const anchor = "      - 'Makefile'\n"
+	without := strings.ReplaceAll(raw, entry, "")
+	if strings.Count(without, anchor) < 1 {
+		t.Fatalf("go.yml has no %q anchor to insert the entry after: the fixture measured nothing", anchor)
+	}
+	with := strings.ReplaceAll(without, anchor, anchor+entry)
+	verdict := func(body string) (string, error) {
+		dst := filepath.Join(t.TempDir(), "go.yml")
+		if err := os.WriteFile(dst, []byte(body), 0o644); err != nil {
+			return "", err
+		}
+		res := cmdSpec{env: []string{basePath, "GO_WORKFLOW=" + dst}, stdin: []byte(".github/workflows/only-changed.yaml\x00")}.run("bash", script)
+		if res.code != 0 {
+			return "", fmt.Errorf("go_relevance.sh exited %d: %s", res.code, res.stderr)
+		}
+		for _, line := range strings.Split(res.stdout, "\n") {
+			if strings.HasPrefix(line, "relevant=") {
+				return line, nil
+			}
+		}
+		return "", fmt.Errorf("no relevant= line in %q", res.stdout)
+	}
+	if got, err := verdict(with); err != nil || got != "relevant=true" {
+		t.Fatalf("with a *.yaml path entry a .yaml-only workflow change gave %q (%v), want relevant=true", got, err)
+	}
+	if got, err := verdict(without); err != nil || got != "relevant=false" {
+		t.Fatalf("planted defect (no *.yaml entry): the same change gave %q (%v), want relevant=false", got, err)
+	}
 }

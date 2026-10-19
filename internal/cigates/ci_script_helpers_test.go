@@ -2,6 +2,7 @@ package cigates_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -28,7 +29,13 @@ type cmdSpec struct {
 	stdin []byte
 }
 
+// subprocessSlots caps how many child processes of this package run at once: every guard is parallel, and an uncapped
+// package starves the other packages of the same race leg (internal/fixturescli timed out at 10 minutes beside it).
+var subprocessSlots = make(chan struct{}, 4)
+
 func (c cmdSpec) run(name string, args ...string) cmdResult {
+	subprocessSlots <- struct{}{}
+	defer func() { <-subprocessSlots }()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = c.dir
 	cmd.Env = c.env
@@ -109,13 +116,46 @@ func pc(name, old, repl, wantFail, wantInText string) plant {
 // assertPlantsCaught copies the script once per plant and requires the named scenario to fail with the named message.
 func assertPlantsCaught(t *testing.T, script string, scenarios []scenario, plants []plant) {
 	t.Helper()
+	// One copy of the tracked tree serves every clone plant of this call: the plants take turns, each restores the
+	// file by content digest before the next, and a restore that does not match fails the test.
+	var cloneDir string
+	var cloneMu sync.Mutex
+	for _, p := range plants {
+		if p.clone {
+			cloneDir = cloneRepo(t)
+			break
+		}
+	}
+	rel, err := filepath.Rel(rootOf(t), script)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, p := range plants {
 		p := p
 		t.Run("plant/"+p.name, func(t *testing.T) {
 			t.Parallel()
 			var planted string
 			if p.clone {
-				planted = mutatedClone(t, script, p.old, p.repl)
+				cloneMu.Lock()
+				defer cloneMu.Unlock()
+				target := filepath.Join(cloneDir, rel)
+				original := readText(t, target)
+				before := sha256.Sum256([]byte(original))
+				if n := strings.Count(original, p.old); n != 1 {
+					t.Fatalf("planted-defect anchor %q occurs %d times in %s, want exactly 1", p.old, n, rel)
+				}
+				if err := os.WriteFile(target, []byte(strings.Replace(original, p.old, p.repl, 1)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if err := os.WriteFile(target, []byte(original), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if after := sha256.Sum256([]byte(readText(t, target))); after != before {
+						t.Fatalf("the clone of %s was not restored byte for byte", rel)
+					}
+				}()
+				planted = target
 			} else {
 				planted = mutatedCopy(t, script, p.old, p.repl)
 			}
@@ -247,27 +287,6 @@ func cloneRepo(t *testing.T) string {
 		t.Fatal(r.err)
 	}
 	return dst
-}
-
-func mutatedClone(t *testing.T, script, old, repl string) string {
-	t.Helper()
-	rel, err := filepath.Rel(rootOf(t), script)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dst := cloneRepo(t)
-	target := filepath.Join(dst, rel)
-	raw, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n := strings.Count(string(raw), old); n != 1 {
-		t.Fatalf("planted-defect anchor %q occurs %d times in %s, want exactly 1", old, n, rel)
-	}
-	if err := os.WriteFile(target, []byte(strings.Replace(string(raw), old, repl, 1)), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return target
 }
 
 // inheritedEnv is the test process environment without the named variables, plus the extra assignments.

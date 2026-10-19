@@ -85,6 +85,8 @@ func (p *SharedProvider) Complete(ctx context.Context, request CompletionRequest
 		OutputTokens:      result.Usage.OutputTokens,
 		Model:             result.Model,
 		CachedInputTokens: result.Usage.CachedInputTokens,
+		FormatPath:        result.FormatPath,
+		FormatReason:      result.FormatReason,
 	}, nil
 }
 

@@ -9,6 +9,9 @@ type CompletionResult struct {
 	OutputTokens      *int
 	Model             string
 	CachedInputTokens *int
+	// FormatPath and FormatReason say how the JSON answer was asked for, for logs.
+	FormatPath   string
+	FormatReason string
 	// OrgCredentials is true when the organization's own provider credentials made the call.
 	OrgCredentials bool
 }

@@ -10,7 +10,7 @@ import (
 
 // pythonBuild is the build whose interpreter answered the frozen oracles of
 // this package: each program was executed there once.
-const pythonBuild = "055816fd2325f6c0dda555e46ac3ff2d0a81a796"
+const pythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 
 // producerIdentity is the producer those answers came from: the interpreter
 // and the installed packages the programs import are not source files of this
@@ -22,7 +22,7 @@ const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\nalembic 1.20.0"
 // goldenrecord verb writes each digest when it promotes a recording; a new
 // golden starts as "PIN:" + its file name without ".json".
 var goldenPins = map[string]string{
-	"schema-revisions.golden.json": "f3e09a6f84036d3b415a2d5e4239b81b387eb704fe82c66935184623b2ca729a",
+	"schema-revisions.golden.json": "c82d4a1fe578a5ddec5a0eb8f1d96ec96327b6a90de676368c547ddda9b3bb7d",
 }
 
 // goldens is the set of this package's frozen Python answers.

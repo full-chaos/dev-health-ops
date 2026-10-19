@@ -8,7 +8,9 @@ package smtpcapture
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"net"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -37,9 +39,55 @@ type Server struct {
 	accepts  int
 }
 
-func Start(t *testing.T) *Server {
+// EnvListen names the address the sink listens on when a test asks for it; unset, the sink listens on loopback.
+const EnvListen = "DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN"
+
+// DefaultListen is the loopback address with a free port.
+const DefaultListen = "127.0.0.1:0"
+
+// ListenAddr is the address a test's sink listens on: EnvListen when set, loopback otherwise.
+func ListenAddr() string {
+	if addr := os.Getenv(EnvListen); addr != "" {
+		return addr
+	}
+	return DefaultListen
+}
+
+func Start(t *testing.T) *Server { return StartAt(t, DefaultListen) }
+
+// ValidateListen is an error unless addr is host:port with a port number.
+func ValidateListen(addr string) error {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil || number < 0 || number > 65535 {
+		return fmt.Errorf("listen address %q has no valid port", addr)
+	}
+	return nil
+}
+
+// ValidateExternalListen is ValidateListen plus a fixed port: an already-running target is configured with the
+// sink's address before the test starts, so a random port cannot reach it.
+func ValidateExternalListen(addr string) error {
+	if err := ValidateListen(addr); err != nil {
+		return err
+	}
+	_, port, _ := net.SplitHostPort(addr)
+	if number, _ := strconv.Atoi(port); number == 0 {
+		return fmt.Errorf("listen address %q has port 0: set %s to a fixed port", addr, EnvListen)
+	}
+	return nil
+}
+
+// StartAt starts the sink on addr.
+func StartAt(t *testing.T, addr string) *Server {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err := ValidateListen(addr); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}

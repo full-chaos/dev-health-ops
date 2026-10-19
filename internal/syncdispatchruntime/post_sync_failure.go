@@ -5,6 +5,7 @@ import (
 	"regexp"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -48,6 +49,24 @@ const (
 	stageDrainStartLock      postSyncStage = "drain_start_lock"
 	stageDrainStartCommit    postSyncStage = "drain_start_commit"
 )
+
+// postSyncStages is every stage constant; stepLabel reads only from it, so a free string never reaches a log line.
+var postSyncStages = map[postSyncStage]struct{}{
+	stageConstruct: {}, stageArgs: {}, stageBegin: {}, stageCommit: {}, stageReference: {}, stagePlanRun: {}, stagePlanUnits: {},
+	stagePlanUnitScan: {}, stagePlanUnitsRows: {}, stagePlanAutoImport: {}, stagePanic: {}, stageTouchedTake: {}, stageComplexity: {},
+	stageDaily: {}, stageTouchedStart: {}, stageWorkGraph: {}, stageInvestment: {}, stageMembership: {}, stageDora: {},
+	stageTeamAutoimport: {}, stageOwnershipDerivation: {}, stageTouchedSetup: {}, stageTouchedWindow: {}, stageTouchedPlan: {},
+	stageTouchedBegin: {}, stageDrainConstruct: {}, stageDrainInFlightBeg: {}, stageDrainStartBegin: {}, stageDrainStartLock: {},
+	stageDrainStartCommit: {},
+}
+
+// stepLabel is the log label of a stage: the stage itself when it is a declared one, "unknown" otherwise.
+func stepLabel(stage postSyncStage) synclog.Label {
+	if _, known := postSyncStages[stage]; !known {
+		return synclog.ParseLabel("unknown")
+	}
+	return synclog.ParseLabel(string(stage))
+}
 
 // postSyncUnavailableError is ErrPostSyncUnavailable with the place it came from and the error under it. errors.Is still
 // matches the sentinel; errors.As / Unwrap reach the cause, so the log line's class, Go type and SQLSTATE (synclog.Failure) name
@@ -139,11 +158,9 @@ func unwrapChildren(err error) (children []error, ok bool) {
 
 // postSyncStageOf is the stage of err, or "" when no error of its chain is a postSyncUnavailableError.
 func postSyncStageOf(err error) postSyncStage {
-	nodes, _, _ := errorTree(err)
-	for _, link := range nodes {
-		if typed, ok := link.(*postSyncUnavailableError); ok && typed != nil {
-			return typed.stage
-		}
+	var typed *postSyncUnavailableError
+	if logging.ErrorAs(err, &typed) && typed != nil {
+		return typed.stage
 	}
 	return ""
 }
@@ -160,12 +177,9 @@ func failureDetail(err error) (text string) {
 		text += " stage=" + string(stage)
 	}
 	text += " class=" + logging.ErrorClass(err)
-	nodes, _, _ := errorTree(err)
-	for _, link := range nodes {
-		if pgErr, ok := link.(*pgconn.PgError); ok && pgErr != nil && sqlStatePattern.MatchString(pgErr.Code) {
-			text += " code=" + pgErr.Code
-			break
-		}
+	var pgErr *pgconn.PgError
+	if logging.ErrorAs(err, &pgErr) && pgErr != nil && sqlStatePattern.MatchString(pgErr.Code) {
+		text += " code=" + pgErr.Code
 	}
 	return text
 }

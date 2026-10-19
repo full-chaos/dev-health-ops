@@ -149,6 +149,99 @@ func TestGitHubCredentialIsTheOneTheActiveIntegrationPointsAt(t *testing.T) {
 		}
 	})
 
+	// CHAOS-9771: DHO_GITHUB_INTEGRATION_ID picks one of several active github integrations (red on main:
+	// the variable is ignored and the lookup refuses as ambiguous).
+	t.Run("selector picks one of two active integrations", func(t *testing.T) {
+		reset()
+		one, two := credential("one", `{"token":"ghp_first_value"}`), credential("two", `{"token":"ghp_second_value"}`)
+		integration(&one, true)
+		second := integration(&two, true)
+		selected := envOf(map[string]string{"SETTINGS_ENCRYPTION_KEY": reasonTestKey, "DHO_GITHUB_INTEGRATION_ID": second.String()})
+		got, err := storedGitHubCredential(ctx, baseURL, orgID, selected)
+		if err != nil || got == nil || got.Token != "ghp_second_value" {
+			t.Fatalf("credential = %+v, %v, want the token of the selected integration", got, err)
+		}
+	})
+
+	t.Run("no selector and two active integrations: the refusal text lists both ids", func(t *testing.T) {
+		reset()
+		one, two := credential("one", `{"token":"ghp_1"}`), credential("two", `{"token":"ghp_2"}`)
+		ids := []uuid.UUID{integration(&one, true), integration(&two, true)}
+		lookups := dbLookups{GitHubCredential: githubCredentialFromDB}
+		plan := Plan{DB: &baseURL, Org: &orgID, OrgSource: OrgFromFlag, GitHub: &GitHubCredentials{Mode: CredentialDB}}
+		_, refusal := resolveDBLookups(ctx, lookups, plan, env)
+		if refusal == nil {
+			t.Fatal("want a refusal")
+		}
+		for _, want := range []string{ids[0].String(), ids[1].String(), "DHO_GITHUB_INTEGRATION_ID"} {
+			if !strings.Contains(refusal.Message, want) {
+				t.Fatalf("refusal %q lacks %q", refusal.Message, want)
+			}
+		}
+		if strings.Contains(refusal.Message, "ghp_") {
+			t.Fatalf("refusal carries a secret: %q", refusal.Message)
+		}
+	})
+
+	selectorRefusals := []struct {
+		name     string
+		selector func() string
+		reason   string
+	}{
+		{"an inactive integration", func() string {
+			id := credential("inactive", `{"token":"ghp_i"}`)
+			return integration(&id, false).String()
+		}, "github_integration_selector_not_found"},
+		{"an integration of another org", func() string {
+			foreignOrg, foreignCred, foreignIntegration := uuid.NewString(), uuid.New(), uuid.New()
+			if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+				VALUES ($1, 'foreign-9771', 'foreign-9771', 'community', 'manual', true, now(), now())`, foreignOrg); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pool.Exec(ctx, `INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
+				VALUES ($1, $2, 'github', 'f', true, $3, '{}'::jsonb, now(), now())`, foreignCred, foreignOrg, sealPayload(t, reasonTestKey, "", `{"token":"ghp_f"}`)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pool.Exec(ctx, `INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
+				VALUES ($1, $2, 'github', $3, 'gh-f', '{}', true, now(), now())`, foreignIntegration, foreignOrg, foreignCred); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_, _ = pool.Exec(ctx, `DELETE FROM integrations WHERE org_id = $1`, foreignOrg)
+				_, _ = pool.Exec(ctx, `DELETE FROM integration_credentials WHERE org_id = $1`, foreignOrg)
+			})
+			return foreignIntegration.String()
+		}, "github_integration_selector_not_found"},
+		{"a non-github integration", func() string {
+			id := credential("gitlab", `{"token":"glpat_x"}`)
+			other := integration(&id, true)
+			if _, err := pool.Exec(ctx, `UPDATE integrations SET provider = 'gitlab' WHERE id = $1`, other); err != nil {
+				t.Fatal(err)
+			}
+			return other.String()
+		}, "github_integration_selector_not_found"},
+		{"an unknown id while one other integration exists", func() string { return uuid.NewString() }, "github_integration_selector_not_found"},
+		{"an empty value", func() string { return "" }, "github_integration_selector_invalid"},
+		{"a value that is not a uuid", func() string { return "not-a-uuid" }, "github_integration_selector_invalid"},
+	}
+	for _, refusal := range selectorRefusals {
+		t.Run("selector refused: "+refusal.name, func(t *testing.T) {
+			reset()
+			good := credential("good", `{"token":"ghp_good"}`)
+			integration(&good, true)
+			selector := refusal.selector()
+			selected := envOf(map[string]string{"SETTINGS_ENCRYPTION_KEY": reasonTestKey, "DHO_GITHUB_INTEGRATION_ID": selector})
+			log := captureLookupLog(t)
+			_, err := githubCredentialFromDB(ctx, baseURL, orgID, selected)
+			if failure := failureOf(t, err); failure.Reason != refusal.reason {
+				t.Fatalf("reason %q, want %q", failure.Reason, refusal.reason)
+			}
+			if !strings.Contains(log.String(), `"reason":"`+refusal.reason+`"`) {
+				t.Fatalf("log lacks the reason: %s", log.String())
+			}
+		})
+	}
+
 	refusals := []struct {
 		name   string
 		seed   func() []uuid.UUID

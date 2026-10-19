@@ -13,7 +13,10 @@ const (
 
 // boundedChain lists the errors reachable from err by Unwrap (single or multiple), outermost first, at most maxChainNodes of them,
 // each at most once; a panicking Unwrap ends that branch.
-func boundedChain(err error) []error {
+func boundedChain(err error) []error { return boundedChainTo(err, maxChainDepth) }
+
+// boundedChainTo is boundedChain with its own depth bound: ErrorAs reaches as deep as the node bound, every classifier keeps maxChainDepth.
+func boundedChainTo(err error, depthBound int) []error {
 	if err == nil {
 		return nil
 	}
@@ -26,7 +29,7 @@ func boundedChain(err error) []error {
 	for len(queue) > 0 && len(chain) < maxChainNodes {
 		current := queue[0]
 		queue = queue[1:]
-		if current.err == nil || current.depth > maxChainDepth || seen(chain, current.err) {
+		if current.err == nil || current.depth > depthBound || seen(chain, current.err) {
 			continue
 		}
 		chain = append(chain, current.err)
@@ -185,4 +188,4 @@ func isLeaf(err error) (leaf bool) {
 // ErrorAs is errors.As over a BOUNDED chain with the As methods under recover: a self-returning or panicking Unwrap, a cycle or a
 // panicking As cannot stall or crash the caller (CHAOS-7933). target is a non-nil pointer to an interface or to a type that
 // implements error. It takes an error, never text.
-func ErrorAs(err error, target any) bool { return chainAs(boundedChain(err), target) }
+func ErrorAs(err error, target any) bool { return chainAs(boundedChainTo(err, maxChainNodes), target) }

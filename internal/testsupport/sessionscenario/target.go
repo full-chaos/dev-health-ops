@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	valkeygo "github.com/valkey-io/valkey-go"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -75,40 +74,7 @@ func (tg Target) resetLimits(t *testing.T, ctx context.Context) {
 	if tg.ValkeyURI == "" {
 		return
 	}
-	options, err := valkeygo.ParseURL(tg.ValkeyURI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := valkeygo.NewClient(options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	deleteKeys(t, ctx, client, limiterKeyPattern)
-}
-
-// limiterKeyPattern matches the keys of the go-api rate-limit store (ratelimitvalkey keyPrefix "dho:rl:"). The
-// reset deletes these only: the target's Valkey may hold other data.
-const limiterKeyPattern = "dho:rl:*"
-
-func deleteKeys(t *testing.T, ctx context.Context, client valkeygo.Client, pattern string) {
-	t.Helper()
-	var cursor uint64
-	for {
-		entry, err := client.Do(ctx, client.B().Scan().Cursor(cursor).Match(pattern).Count(1000).Build()).AsScanEntry()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(entry.Elements) > 0 {
-			if err := client.Do(ctx, client.B().Del().Key(entry.Elements...).Build()).Error(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		cursor = entry.Cursor
-		if cursor == 0 {
-			return
-		}
-	}
+	venueoracle.ResetLimiterKeys(t, ctx, tg.ValkeyURI)
 }
 
 // Prepare seeds the target's stores and mints the seed access tokens.

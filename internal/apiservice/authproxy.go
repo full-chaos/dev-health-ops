@@ -46,6 +46,9 @@ const EnvAuthProxyURL = "AUTH_PROXY_URL"
 // AuthProxyFlagEnv is the routing flag of an aggregate, AUTH_PROXY_<NAME>.
 func AuthProxyFlagEnv(a AuthAggregate) string { return "AUTH_PROXY_" + strings.ToUpper(string(a)) }
 
+// maxAuthProxyResponseBytes bounds one auth-service answer.
+const maxAuthProxyResponseBytes = 1 << 20
+
 // defaultAuthProxyTimeout bounds one upstream exchange when the route's own
 // deadline is later.
 const defaultAuthProxyTimeout = 10 * time.Second

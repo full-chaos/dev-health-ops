@@ -132,3 +132,20 @@ func TestGoAPIAuthProxyRefusals(t *testing.T) {
 		})
 	}
 }
+
+// A flag is a YAML boolean: a string, "false" included, is refused, never
+// read as on.
+func TestGoAPIAuthProxyRefusesNonBooleanFlags(t *testing.T) {
+	for flag := range authProxyFlags {
+		for _, value := range []string{"false", "true", "no"} {
+			docs, out, err := renderAuth(t, goAPIWithAuth("--set", "goApi.authProxy.sessions=true", "--set-string", "goApi.authProxy."+flag+"="+value)...)
+			if err == nil {
+				t.Errorf("goApi.authProxy.%s=%q (a string) rendered %v; it must be refused", flag, value, proxyEnv(t, docs))
+				continue
+			}
+			if !strings.Contains(out, "authProxy") {
+				t.Errorf("goApi.authProxy.%s=%q: the refusal does not name the field: %.300s", flag, value, out)
+			}
+		}
+	}
+}

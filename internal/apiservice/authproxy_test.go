@@ -558,6 +558,10 @@ func TestAuthProxyKeepsGoAPIFrontChecks(t *testing.T) {
 		{method: http.MethodPost, target: "/api/v1/auth/login", body: `{"email": "not-an-email", "password": "x"}`},
 		{method: http.MethodPost, target: "/api/v1/auth/change-password", body: `{"current_password": "a", "new_password": "long-enough-1"}`},
 		{method: http.MethodGet, target: "/api/v1/auth/verify"},
+		{method: http.MethodPost, target: "/api/v1/auth/oidc/p-1/authorize", body: `{"redirect_uri": `},
+		{method: http.MethodPost, target: "/api/v1/auth/oidc/p-1/callback", body: "not-json"},
+		{method: http.MethodPost, target: "/api/v1/auth/saml/p-1/initiate", body: `{"relay_state": `},
+		{method: http.MethodPost, target: "/api/v1/auth/saml/p-1/acs", body: "{\"SAMLResponse\": \"\xff\"}"},
 	} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, call.request(t))
@@ -609,6 +613,40 @@ func TestAuthProxyFailsClosed(t *testing.T) {
 			series := proxySeries(AuthSessions, "upstream_error")
 			if delta := seriesValue(after, series) - seriesValue(before, series); delta != 2 {
 				t.Errorf("%s moved by %v, want 2", series, delta)
+			}
+		})
+	}
+}
+
+// An answer auth-service does not finish (cut short, or over the bound) is a
+// refusal, never a partial answer under the upstream's status.
+func TestAuthProxyFailsClosedOnAnIncompleteUpstreamAnswer(t *testing.T) {
+	for name, respond := range map[string]func(w http.ResponseWriter, r *http.Request){
+		"cut short": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "100")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"partial"`)
+		},
+		"over the bound": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"pad":"`+strings.Repeat("x", maxAuthProxyResponseBytes)+`"}`)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stub := newStubUpstream(t, respond)
+			handler := proxyFixture(t, mustProxyConfig(t, allOn(stub.URL)))
+			before := proxyMetrics(t)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, proxyCalls[2].request(t))
+			if recorder.Code != http.StatusBadGateway || recorder.Body.String() != `{"detail":"Authentication service unavailable"}` {
+				t.Fatalf("incomplete upstream answer = %d %.120q, want 502 and go-api's refusal", recorder.Code, recorder.Body.String())
+			}
+			after := proxyMetrics(t)
+			series := proxySeries(AuthLocalLogin, "upstream_error")
+			if delta := seriesValue(after, series) - seriesValue(before, series); delta != 1 {
+				t.Errorf("%s moved by %v, want 1", series, delta)
 			}
 		})
 	}

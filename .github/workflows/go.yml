@@ -211,6 +211,12 @@ on:
       - '.github/workflows/test.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
+      # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
+      # run reader and the venue workflow whose step names that reader filters on
+      - 'ci/go_relevant_diff.sh'
+      - 'ci/go_affected_integration.py'
+      - 'ci/last-venue-run.sh'
+      - '.github/workflows/venue-oracles.yml'
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
       # and the auth closure allow-list
       - '.github/workflows/*.yml'
@@ -433,6 +439,12 @@ on:
       - '.github/workflows/test.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
+      # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
+      # run reader and the venue workflow whose step names that reader filters on
+      - 'ci/go_relevant_diff.sh'
+      - 'ci/go_affected_integration.py'
+      - 'ci/last-venue-run.sh'
+      - '.github/workflows/venue-oracles.yml'
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
       # and the auth closure allow-list
       - '.github/workflows/*.yml'

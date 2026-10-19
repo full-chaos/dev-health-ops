@@ -32,7 +32,16 @@ func TestLinearProjectEnsureChangesRow(t *testing.T) {
 		"same version, state changed":        {func(s *storedEnsureProject) { s.state = "completed" }, true},
 		"same version, state source":         {func(s *storedEnsureProject) { s.stateSource = "x" }, true},
 		"same version, active flag":          {func(s *storedEnsureProject) { s.isActive ^= 1 }, true},
-		"same version, project key":          {func(s *storedEnsureProject) { s.key = "KEY" }, true},
+		"stored older, identical, target stated": {func(s *storedEnsureProject) {
+			s.updatedAt = linearProjectsEpoch.Add(-time.Second)
+			s.targetState = "stated"
+		}, true},
+		"stored older, identical, target held": {func(s *storedEnsureProject) {
+			s.updatedAt = linearProjectsEpoch.Add(-time.Second)
+			s.targetState = "held"
+		}, false},
+		"stored newer, identical, target stated": {func(s *storedEnsureProject) { s.updatedAt = now; s.targetState = "stated" }, false},
+		"same version, project key":              {func(s *storedEnsureProject) { s.key = "KEY" }, true},
 	} {
 		stored := same
 		tc.mutate(&stored)

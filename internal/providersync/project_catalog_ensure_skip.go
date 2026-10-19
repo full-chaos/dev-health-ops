@@ -16,7 +16,7 @@ import (
 
 const projectEnsureName = "dev_health_project_catalog_ensure_total"
 
-const projectEnsureStoredSelect = `SELECT id, project_key, name, is_active, state, state_source, updated_at ` +
+const projectEnsureStoredSelect = `SELECT id, project_key, name, is_active, state, state_source, target_state, updated_at ` +
 	`FROM projects FINAL WHERE org_id = ? AND provider = ? AND id IN ?`
 
 type projectEnsureQuerier interface {
@@ -29,6 +29,7 @@ type storedEnsureProject struct {
 	isActive    uint8
 	state       string
 	stateSource string
+	targetState string
 	updatedAt   time.Time
 }
 
@@ -90,7 +91,10 @@ func projectEnsureKeep(
 }
 
 func projectEnsureChangesRow(row projectmembership.CatalogRow, stored storedEnsureProject) bool {
-	if stored.key == row.ProjectKey && stored.name == row.Name && stored.isActive == row.IsActive &&
+	// An ensure row reads no target: written over a read target it flips that target to held.
+	flipsTarget := (stored.targetState == projectTargetStated || stored.targetState == projectTargetNoneDate) &&
+		!stored.updatedAt.After(clickHouseMillis(row.UpdatedAt))
+	if !flipsTarget && stored.key == row.ProjectKey && stored.name == row.Name && stored.isActive == row.IsActive &&
 		stored.state == row.State && stored.stateSource == row.StateSource {
 		return false
 	}
@@ -110,7 +114,7 @@ func readStoredEnsureProjects(
 		var id string
 		var key *string
 		var row storedEnsureProject
-		if err := result.Scan(&id, &key, &row.name, &row.isActive, &row.state, &row.stateSource, &row.updatedAt); err != nil {
+		if err := result.Scan(&id, &key, &row.name, &row.isActive, &row.state, &row.stateSource, &row.targetState, &row.updatedAt); err != nil {
 			return nil, err
 		}
 		if key != nil {

@@ -146,7 +146,8 @@ VALUES ($1, 'llmpurpose-admin@example.com', true, true, false, 0, now(), now())`
 			{"DELETE", route + "?purpose=categorize", ""},
 		} {
 			status, body := call(c.verb, c.path, c.body)
-			if status != 400 || fmt.Sprint(body["error"]) != "purpose_not_configurable" {
+			detail, _ := body["detail"].(map[string]any)
+			if status != 400 || fmt.Sprint(detail["error"]) != "purpose_not_configurable" {
 				t.Fatalf("%s: status=%d body=%v, want 400 purpose_not_configurable", c.verb, status, body)
 			}
 		}

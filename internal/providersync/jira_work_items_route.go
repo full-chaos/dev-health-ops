@@ -107,7 +107,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	issues, searchPages, err := collectJiraWorkItemIssues(
-		ctx, client, jql, maxPages, maxRows, perPage, true,
+		ctx, client, jql, maxPages, maxRows, perPage, true, jiraIssueInWindow(claim),
 	)
 	logJiraWorkItemsWindow(ctx, claim, projectKey, jql, len(issues), searchPages, err)
 	if err != nil {
@@ -375,8 +375,10 @@ func collectJiraWorkItemIssues(
 	jql string,
 	maxPages, maxRows, perPage int,
 	expandChangelog bool,
+	inWindow func(map[string]any) bool,
 ) ([]map[string]any, int, error) {
 	issues := make([]map[string]any, 0)
+	windowRows := 0
 	token := ""
 	seenTokens := make(map[string]struct{})
 	for pages := 0; ; pages++ {
@@ -409,18 +411,26 @@ func collectJiraWorkItemIssues(
 			client.Metrics.RecordJiraSearchPage("invalid_response")
 			return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
 		}
-		if len(issues)+len(page.Issues) > maxRows {
-			client.Metrics.RecordJiraSearchPage("pagination_cap_exceeded")
-			return nil, pages + 1, ErrPaginationCapExceeded
-		}
+		decoded := make([]map[string]any, 0, len(page.Issues))
+		pageRows := 0
 		for _, raw := range page.Issues {
 			var issue map[string]any
 			if err := decodeJiraJSON(raw, &issue); err != nil || issue == nil {
 				client.Metrics.RecordJiraSearchPage("invalid_response")
 				return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
 			}
-			issues = append(issues, issue)
+			decoded = append(decoded, issue)
+			if inWindow == nil || inWindow(issue) {
+				pageRows++
+			}
 		}
+		// The search asks for a superset of the window; the cap holds the rows of the window.
+		if windowRows+pageRows > maxRows {
+			client.Metrics.RecordJiraSearchPage("pagination_cap_exceeded")
+			return nil, pages + 1, ErrPaginationCapExceeded
+		}
+		windowRows += pageRows
+		issues = append(issues, decoded...)
 		if *page.IsLast {
 			client.Metrics.RecordJiraSearchPage("succeeded")
 			return issues, pages + 1, nil

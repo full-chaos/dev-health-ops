@@ -123,3 +123,15 @@ func dropJiraIssuesOutsideWindow(
 	}
 	return dropOutsideWorkItemWindow(ctx, metrics, claim, issues, jiraWorkItemWindowView)
 }
+
+// jiraIssueInWindow tells whether a searched issue belongs to the claim's window, for the row cap of the
+// search. A fetch_all or JQL override search has no window to hold: nil counts every row.
+func jiraIssueInWindow(claim Claim) func(map[string]any) bool {
+	if WorkItemsFetchIsUnbounded(claim.Provider, claim.DatasetOptions) {
+		return nil
+	}
+	return func(issue map[string]any) bool {
+		seen := jiraWorkItemWindowView(issue)
+		return !seen.Known || workItemUpdatedWithinWindow(claim, seen.UpdatedAt)
+	}
+}

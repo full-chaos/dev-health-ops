@@ -91,6 +91,7 @@ internal/auth/contracts	2
 internal/auth/edgetoken	1
 internal/auth/httpapi	4
 internal/auth/identity	2
+internal/auth/identity/local	150
 internal/auth/keystore	1
 internal/auth/passwordhash	11
 internal/auth/passwordpolicy	1

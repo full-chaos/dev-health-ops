@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -35,6 +36,11 @@ type fakeUsers struct {
 func (f *fakeUsers) ByEmail(_ context.Context, email string) (*User, error) {
 	f.c.log = append(f.c.log, "users.by_email")
 	return f.user, f.err
+}
+
+func (f *fakeUsers) Project(_ context.Context, _ uuid.UUID) error {
+	f.c.log = append(f.c.log, "users.project")
+	return nil
 }
 
 type fakeAttempts struct {
@@ -144,7 +150,7 @@ func TestSuccessIssuesSessionAndClearsAttempts(t *testing.T) {
 	if !reflect.DeepEqual(r.sessions.amr, []string{"pwd"}) {
 		t.Fatalf("amr = %v", r.sessions.amr)
 	}
-	want := []string{"users.by_email", "attempts.check", "compare", "attempts.clear", "sessions.create"}
+	want := []string{"users.by_email", "attempts.check", "compare", "attempts.clear", "users.project", "sessions.create"}
 	if !reflect.DeepEqual(r.c.log, want) {
 		t.Fatalf("calls = %v, want %v", r.c.log, want)
 	}
@@ -196,6 +202,9 @@ func TestEveryRefusalPathHasOneCallSequence(t *testing.T) {
 		out := login(t, r, "who@example.com", tc.pw)
 		if out.Kind != tc.kind {
 			t.Fatalf("%s: kind = %s, want %s", tc.name, out.Kind, tc.kind)
+		}
+		if (tc.user == nil) != (out.PrincipalID == uuid.Nil) || (tc.user != nil && out.PrincipalID != tc.user.ID) {
+			t.Fatalf("%s: PrincipalID = %s", tc.name, out.PrincipalID)
 		}
 		if out.Issued != nil || r.sessions.created != 0 {
 			t.Fatalf("%s: a session was issued", tc.name)
@@ -301,5 +310,16 @@ func TestNewRefusesABadLockoutKey(t *testing.T) {
 		if err == nil {
 			t.Fatalf("key %q accepted", key)
 		}
+	}
+}
+
+func TestInvalidEmailIsAnErrorBeforeAnyLookup(t *testing.T) {
+	r := newRig(t, local(t))
+	_, err := r.svc.Login(context.Background(), Credentials{Email: "not-an-email", Password: goodPassword})
+	if !errors.Is(err, identity.ErrInvalidEmail) {
+		t.Fatalf("err = %v, want ErrInvalidEmail", err)
+	}
+	if len(r.c.log) != 0 {
+		t.Fatalf("calls before validation: %v", r.c.log)
 	}
 }

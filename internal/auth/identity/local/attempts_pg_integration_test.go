@@ -16,6 +16,17 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
+// raceMarker is what `check_go.sh auth race-integration` counts: a race test
+// logs it only when it ran with -race against a live database.
+const raceMarker = "AUTH_RACE_EXECUTED"
+
+func markRace(t *testing.T) {
+	t.Helper()
+	if raceEnabled {
+		t.Logf("%s %s", raceMarker, t.Name())
+	}
+}
+
 type pgEnv struct {
 	admin    *pgxpool.Pool
 	runtime  *pgxpool.Pool
@@ -214,6 +225,7 @@ func TestIdentifierHashIsImmutableAtTheDatabase(t *testing.T) {
 // identifier end with one row, locked once, and a count of exactly 5: the
 // failures after the lock only touch updated_at.
 func TestRaceTenParallelFailuresLockOnce(t *testing.T) {
+	markRace(t)
 	ctx := context.Background()
 	e := newPGEnv(t, ctx)
 	id := ident("parallel")

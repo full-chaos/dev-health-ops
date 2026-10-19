@@ -38,7 +38,8 @@ const (
 )
 
 // Outcome is the result of Login. Issued is set only on KindSuccess;
-// RetryAfter only on KindLocked.
+// RetryAfter only on KindLocked. PrincipalID is set whenever the user is
+// known, refusals included, so the route can audit per organization.
 type Outcome struct {
 	Kind        Kind
 	Reason      Reason
@@ -61,6 +62,8 @@ type User struct {
 // returns nil, nil for an unknown user.
 type Users interface {
 	ByEmail(ctx context.Context, normalizedEmail string) (*User, error)
+	// Project makes sure the auth.principals row exists; B1 needs it.
+	Project(ctx context.Context, userID uuid.UUID) error
 }
 
 // Sessions is the B1 session issuer.

@@ -29,6 +29,22 @@
     },
     {
       "file": "valid-zero-revisions.json"
+    },
+    {
+      "file": "valid-authenticated-at-max-offset.json",
+      "why": "Offset +23:59, the largest the pattern allows. Without an accepting fixture, over-tightening the offset bound passes every rejection test while breaking every caller east of Perth."
+    },
+    {
+      "file": "valid-authenticated-at-earliest-instant.json",
+      "why": "0001-01-01T00:00:00Z, the earliest legal endpoint WITHOUT an offset. The UTC range check must not bound the legal endpoints."
+    },
+    {
+      "file": "valid-authenticated-at-exact-lower-limit.json",
+      "why": "0001-01-01T00:01:00+00:01 normalises to EXACTLY 0001-01-01T00:00:00Z. The range boundary is inclusive; this is the accepting half of the one-second-wide exact-boundary pair with client-rejected-utc-range-just-below-lower-limit.json."
+    },
+    {
+      "file": "valid-expires-at-latest-instant.json",
+      "why": "9999-12-31T23:59:59Z, the latest legal endpoint WITHOUT an offset."
     }
   ],
   "description": "The single fixture inventory for contracts/auth/v1/jsonschema/principal.v1.schema.json, read by the Go, Python and TypeScript golden runners. ONE manifest, ONE fixture directory, three runners -- three copies of one corpus is the drift G-70 exists to catch, so a runner that maintains its own list is a review defect.\n\n`accept` is a positive control corpus carrying equal weight to `reject`: a validator that is too strict passes every rejection test while breaking every real caller, and that failure is invisible to a suite asserting only rejections.\n\nEvery identifier is unmistakably synthetic per G-73 (fixed EXAMPLE bodies, zero-padded counters, no plausible entropy) and the corpus is swept by a scanner rather than trusted to care -- G-16 forbids a credential value in any golden fixture, and these repos are public.",
@@ -172,6 +188,30 @@
       "expect_keyword": "enum",
       "file": "invalid-unknown-principal-type.json",
       "why": "The taxonomy is the Wave 0 closed vocabulary; unknown denies."
+    },
+    {
+      "expect_instance_location": "/authentication/authenticated_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-authenticated-at-offset-hour-24.json",
+      "why": "+24:00 offset. Go time.Parse ACCEPTS it and resolves it a full day EARLIER (2026-09-02T05:00:00Z); Python refuses it. `format` is ignored by google/jsonschema-go, so only the pattern holds the floor in all three languages."
+    },
+    {
+      "expect_instance_location": "/authentication/authenticated_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-authenticated-at-offset-minute-60.json",
+      "why": "+12:60. Offset minutes are bounded 00-59 in the pattern for the same reason as the offset hour."
+    },
+    {
+      "expect_instance_location": "/authentication/authenticated_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-authenticated-at-hour-24.json",
+      "why": "T24:00:00Z. Go refuses it; Python's fromisoformat reads it as end-of-day and ROLLS THE DATE FORWARD, so the pattern is the only layer that makes the three agree. Python tolerates exactly this one value (24:00:01 raises), which is why a fuzzer walking the hour field would miss it."
+    },
+    {
+      "expect_instance_location": "/authentication/authenticated_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-authenticated-at-year-zero.json",
+      "why": "Year 0000. Go accepts it, Python refuses it. The year bound is an alternation, never a lookahead: RE2 has no lookahead, so (?!0000) compiles in Python and ECMA and fails in Go."
     }
   ],
   "requires_format_assertion": true,
@@ -218,6 +258,48 @@
     {
       "file": "client-rejected-revision-fraction-rounds-to-one.json",
       "why": "`1.0000000000000000001`: a fractional token that rounds to exactly 1.0, the same class below 2^53. Refused on the token text."
+    },
+    {
+      "file": "client-rejected-utc-range-underflow.json",
+      "why": "0001-01-01T00:00:00+23:59 is lexically valid (every local field is in range) but normalises to UTC year 0000. A pattern cannot see it: the composition is arithmetic. Python parsed it cleanly and then raised an uncaught OverflowError on the caller's first astimezone(). Both clients refuse a UTC instant outside 0001-01-01..9999-12-31."
+    },
+    {
+      "file": "client-rejected-utc-range-just-below-lower-limit.json",
+      "why": "0001-01-01T00:00:59+00:01 normalises to 0000-12-31T23:59:59Z, one second below the limit. With valid-authenticated-at-exact-lower-limit.json this pins the check as an inclusive comparison against the right limit, not a coarse heuristic."
+    },
+    {
+      "file": "client-rejected-utc-range-overflow.json",
+      "why": "9999-12-31T23:59:59-23:59 normalises to UTC year 10000. Named for the RANGE check. principal.v1 has no clock-skew check, so nothing else could refuse it; if one is ever added this fixture must stay red because of the range rule."
+    },
+    {
+      "file": "client-rejected-duplicate-principal-id.json",
+      "duplicate_member": true,
+      "why": "Two `principal_id` members. Every parser keeps the LAST, so a validator only sees the survivor while the wire bytes carry another value. RAW TEXT ON PURPOSE: no JSON writer emits a duplicate member, so regenerating this file through a serialiser silently deletes the defect it carries (CHAOS-4916). Do not normalise it."
+    },
+    {
+      "file": "client-rejected-duplicate-credential-audience.json",
+      "duplicate_member": true,
+      "why": "A duplicate NESTED one level down, inside `credential`. error.v1 is flat, so nothing in that corpus shows the guard reaches depth; without this fixture the nesting property is inherited, not demonstrated. RAW TEXT, do not normalise."
+    },
+    {
+      "file": "client-rejected-duplicate-actor-chain-reason.json",
+      "duplicate_member": true,
+      "why": "A duplicate inside an `actor_chain` entry (inside an array element), the place a delegated principal's smuggled value would live. Exercises the array branch of the walk as well as the object branch. RAW TEXT, do not normalise."
     }
-  ]
+  ],
+  "go_schema_gap": [
+    {
+      "expect_instance_location": "/authentication/authenticated_at",
+      "expect_keyword": "format",
+      "file": "go-schema-gap-february-30.json",
+      "why": "`2026-02-30`: lexically valid, no such day. The pattern bounds components, not the calendar, so Go's Validate ACCEPTS it (google/jsonschema-go ignores `format`) while Python and ajv refuse it by `format`. The typed clients (Go PrincipalFromWire, Python Principal.from_wire) refuse it in every language; the typed client is the floor, as with ParseWireTimestamp on the event surfaces. Filed here and not in `reject` because `reject` asserts Go's Validate refuses; and not in `reject_by_client` because that group asserts every validator ACCEPTS. Declared CHAOS-10135."
+    },
+    {
+      "expect_instance_location": "/authentication/authenticated_at",
+      "expect_keyword": "format",
+      "file": "go-schema-gap-april-31.json",
+      "why": "`2026-04-31`: lexically valid, no such day. The pattern bounds components, not the calendar, so Go's Validate ACCEPTS it (google/jsonschema-go ignores `format`) while Python and ajv refuse it by `format`. The typed clients (Go PrincipalFromWire, Python Principal.from_wire) refuse it in every language; the typed client is the floor, as with ParseWireTimestamp on the event surfaces. Filed here and not in `reject` because `reject` asserts Go's Validate refuses; and not in `reject_by_client` because that group asserts every validator ACCEPTS. Declared CHAOS-10135."
+    }
+  ],
+  "go_schema_gap_note": "Documents the one place the three schema validators legitimately disagree: a calendar-impossible day. Python and ajv refuse it by `format`; Go's Validate accepts it, and the test TestGoSchemaValidateAcceptsACalendarImpossibleDay pins that on purpose. If a future google/jsonschema-go asserts `format`, that test goes red and these fixtures move to `reject`. Every typed client refuses the document either way. Decided in CHAOS-10135 (option A)."
 }

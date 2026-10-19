@@ -982,9 +982,13 @@ func (v *Venue) migrate(t *testing.T, ctx context.Context, logger *slog.Logger) 
 		grants = append(grants, riverstore.TableGrant{TableName: table.TableName, AllowInsert: table.AllowInsert,
 			AllowUpdate: table.AllowUpdate, AllowDelete: table.AllowDelete})
 	}
+	var columnGrants []riverstore.ColumnGrant
+	for _, column := range postgres.APIPosture().ColumnScoped {
+		columnGrants = append(columnGrants, riverstore.ColumnGrant{TableName: column.TableName, ColumnName: column.ColumnName, Privilege: column.Privilege})
+	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, pool, riverstore.MigrationOptions{
 		Schema: "river", DomainRole: v.Roles["domain"], QueueRole: v.Roles["queue"],
-		APIRole: v.Roles["api"], APIGrants: grants, Logger: logger,
+		APIRole: v.Roles["api"], APIGrants: grants, APIColumnGrants: columnGrants, Logger: logger,
 	}); err != nil {
 		t.Fatalf("River migration: %v", err)
 	}
@@ -1249,6 +1253,17 @@ func decodedJSONColumns(fields []pgconn.FieldDescription) []string {
 		}
 	}
 	return named
+}
+
+// OpenPool opens a pool on uri for a test and closes it at cleanup.
+func OpenPool(t *testing.T, ctx context.Context, uri string) *pgxpool.Pool {
+	t.Helper()
+	pool, err := pgxpool.New(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
 }
 
 // TableRows runs query on uri and renders every row, in query order, as

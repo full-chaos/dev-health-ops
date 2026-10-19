@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -61,13 +62,13 @@ func discoverGitHub(ctx context.Context, credential providerfoundation.Credentia
 	if err != nil {
 		return nil, err
 	}
-	entries, err := githubListAllPages[githubTeamListEntry](ctx, client, "/orgs/{org}/teams", "/orgs/"+orgName+"/teams?per_page=100")
+	entries, err := githubListAllPages(ctx, client, "org teams", orgName, "/orgs/{org}/teams", "/orgs/"+orgName+"/teams?per_page=100", func(entry githubTeamListEntry) string { return entry.Slug })
 	if err != nil {
 		return nil, err
 	}
 	teams := make([]discoveredTeam, 0, len(entries))
 	for _, entry := range entries {
-		repoEntries, err := githubListAllPages[githubRepoListEntry](ctx, client, "/orgs/{org}/teams/{slug}/repos", "/orgs/"+orgName+"/teams/"+entry.Slug+"/repos?per_page=100")
+		repoEntries, err := githubListAllPages(ctx, client, "team repos", orgName+"/"+entry.Slug, "/orgs/{org}/teams/{slug}/repos", "/orgs/"+orgName+"/teams/"+entry.Slug+"/repos?per_page=100", func(repo githubRepoListEntry) string { return repo.Name })
 		if err != nil {
 			return nil, err
 		}
@@ -115,25 +116,33 @@ func githubTeamDetailFor(ctx context.Context, client *providerfoundation.HTTPCli
 // for any GET endpoint returning a bare JSON array, matching PyGithub's
 // own PaginatedList behavior of walking every page with no upper bound
 // for org.get_teams()/team.get_repos().
-func githubListAllPages[T any](ctx context.Context, client *providerfoundation.HTTPClient, route, path string) ([]T, error) {
+func githubListAllPages[T any](ctx context.Context, client *providerfoundation.HTTPClient, walkName, owner, route, path string, key func(T) string) ([]T, error) {
 	var out []T
+	seenItems := map[string]struct{}{}
+	walk := newPageWalk(ctx, "github", walkName, owner, path)
 	next := path
 	for next != "" {
 		response, err := client.DoRoute(ctx, "GET", route, next, nil)
 		if err != nil {
-			return nil, err
+			return nil, walk.pageError(err)
 		}
 		raw, readErr := io.ReadAll(response.Body)
 		response.Body.Close()
 		if readErr != nil {
-			return nil, readErr
+			return nil, walk.pageError(readErr)
 		}
 		var page []T
 		if err := json.Unmarshal(raw, &page); err != nil {
-			return nil, fmt.Errorf("decode github list page: %w", err)
+			return nil, walk.pageError(fmt.Errorf("decode github list page: %w", err))
 		}
-		out = append(out, page...)
-		next = githubNextLink(response.Header.Get("Link"))
+		out = appendNew(out, seenItems, page, key)
+		link, advertised := githubNextLinkPresent(linkFieldValue(response.Header))
+		var more bool
+		if next, more, err = walk.advance(link, advertised, len(page)); err != nil {
+			return nil, err
+		} else if !more {
+			next = ""
+		}
 	}
 	return out, nil
 }
@@ -142,23 +151,47 @@ func githubListAllPages[T any](ctx context.Context, client *providerfoundation.H
 // header (RFC 8288: `<url>; rel="next", <url>; rel="last"`), returning ""
 // when there is no next page.
 func githubNextLink(header string) string {
+	next, _ := githubNextLinkPresent(header)
+	return next
+}
+
+// linkFieldValue is every Link field of a response joined with ", ", as Python's headers.get("Link") reads a repeated field.
+func linkFieldValue(header http.Header) string {
+	return strings.Join(header.Values("Link"), ", ")
+}
+
+// isNextRelParam reads one Link parameter as Python's _parse_link_header_next does (trim, lower-case, exact rel="next"), plus
+// spaces around "=" and the unquoted rel=next this walk already accepted. A rel list and single quotes stay "not next", as in Python.
+func isNextRelParam(param string) bool {
+	key, value, found := strings.Cut(strings.ToLower(strings.TrimSpace(param)), "=")
+	if !found {
+		return false
+	}
+	value = strings.TrimSpace(value)
+	return strings.TrimSpace(key) == "rel" && (value == `"next"` || value == "next")
+}
+
+// githubNextLinkPresent is githubNextLink plus whether a rel="next" entry exists at all: `<>; rel="next"` advertises a next page
+// with no URL, which a walk must fail on instead of reading as the end.
+func githubNextLinkPresent(header string) (string, bool) {
 	for _, part := range strings.Split(header, ",") {
 		segments := strings.Split(part, ";")
-		if len(segments) < 2 {
-			continue
-		}
-		url := strings.TrimSpace(segments[0])
-		url = strings.TrimPrefix(url, "<")
-		url = strings.TrimSuffix(url, ">")
-		isNext := false
-		for _, param := range segments[1:] {
-			if strings.TrimSpace(param) == `rel="next"` {
-				isNext = true
+		for index, param := range segments {
+			if !isNextRelParam(param) {
+				continue
 			}
-		}
-		if isNext {
-			return url
+			// a bare rel="next" (no <url> segment before it) still advertises a next page, with no URL
+			if index == 0 {
+				return "", true
+			}
+			// a target that is not <url> (RFC 8288; a comma inside a quoted parameter leaves such a fragment) is a next page with no
+			// usable URL: Python reads no link there, this walk fails closed with a Warn line and the counter instead of a wrong URL
+			url := strings.TrimSpace(segments[0])
+			if !strings.HasPrefix(url, "<") || !strings.HasSuffix(url, ">") {
+				return "", true
+			}
+			return url[1 : len(url)-1], true
 		}
 	}
-	return ""
+	return "", false
 }

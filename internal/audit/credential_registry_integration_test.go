@@ -4,7 +4,10 @@ package audit
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -92,7 +95,7 @@ func commitCredential(ctx context.Context, env *credEnv, sql string, args ...any
 
 func insertCredential(ctx context.Context, env *credEnv, id, principal, extraColumns, extraValues string, args ...any) error {
 	sql := `INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint` +
-		extraColumns + `) VALUES ($1, $2, 'cred-class', decode(md5(random()::text || clock_timestamp()::text), 'hex'), 'sha256', '` + fp + `'` + extraValues + `)`
+		extraColumns + `) VALUES ($1, $2, 'workload_token', decode(md5(random()::text || clock_timestamp()::text), 'hex'), 'sha256', '` + fp + `'` + extraValues + `)`
 	return commitCredential(ctx, env, sql, append([]any{id, principal}, args...)...)
 }
 
@@ -171,7 +174,7 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 	t.Run("a new credential must carry its fingerprint", func(t *testing.T) {
 		mustFail(t, "no fingerprint", commitCredential(ctx, env,
 			`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm)
-			 VALUES ('00000000-0000-4000-8000-0000000000f1', $1, 'cred-class', decode(md5(random()::text), 'hex'), 'sha256')`, credPrincipal),
+			 VALUES ('00000000-0000-4000-8000-0000000000f1', $1, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256')`, credPrincipal),
 			"must carry its fingerprint")
 	})
 
@@ -233,6 +236,108 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 			`UPDATE auth.credential_registry SET revoked_at = NULL, revoked_reason = NULL WHERE id = $1`, credRevoked), "monotonic")
 		mustFail(t, "reason rewrite", commitCredential(ctx, env,
 			`UPDATE auth.credential_registry SET revoked_reason = 'owner_request' WHERE id = $1`, credRevoked), "monotonic")
+	})
+
+	t.Run("a revocation reason is a reason code, never prose or an address", func(t *testing.T) {
+		const id = "00000000-0000-4000-8000-0000000000f3"
+		if err := insertCredential(ctx, env, id, credPrincipal, ``, ``); err != nil {
+			t.Fatal(err)
+		}
+		for name, reason := range map[string]string{
+			"prose":         "Revoked because bob left the company",
+			"an address":    "leaked-by-bob@example.test",
+			"uppercase":     "Compromised",
+			"too short":     "ab",
+			"leading digit": "1compromised",
+		} {
+			mustFail(t, "reason as "+name, commitCredential(ctx, env,
+				`UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = $2 WHERE id = $1`, id, reason),
+				"credential_registry_revoked_reason_code")
+		}
+		if err := commitCredential(ctx, env,
+			`UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = 'owner_request' WHERE id = $1`, id); err != nil {
+			t.Fatalf("a reason code was refused: %v", err)
+		}
+	})
+
+	t.Run("revoked_at and revoked_reason are all-or-none (a stored row must be projectable)", func(t *testing.T) {
+		// The wire entry requires both members when status is revoked and forbids
+		// both otherwise; status is derived from revoked_at alone, so a row with
+		// only one of the pair has no valid projection (round 1 executed both).
+		const id = "00000000-0000-4000-8000-0000000000f5"
+		if err := insertCredential(ctx, env, id, credPrincipal, ``, ``); err != nil {
+			t.Fatal(err)
+		}
+		mustFail(t, "reason without revoked_at", commitCredential(ctx, env,
+			`UPDATE auth.credential_registry SET revoked_reason = 'compromised' WHERE id = $1`, id),
+			"credential_registry_revoked_pair")
+		mustFail(t, "revoked_at without a reason", commitCredential(ctx, env,
+			`UPDATE auth.credential_registry SET revoked_at = now() WHERE id = $1`, id),
+			"credential_registry_revoked_pair")
+		mustFail(t, "an insert carrying only a reason", commitCredential(ctx, env,
+			`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, revoked_reason)
+			 VALUES ('00000000-0000-4000-8000-0000000000f6', $1, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef', 'compromised')`, credPrincipal),
+			"credential_registry_revoked_pair")
+		if err := commitCredential(ctx, env,
+			`UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = 'compromised' WHERE id = $1`, id); err != nil {
+			t.Fatalf("the pair set together was refused: %v", err)
+		}
+	})
+
+	t.Run("class and display prefix have the wire shapes (a stored row must be projectable)", func(t *testing.T) {
+		// Round 2 of the wire contract executed this: the table accepted a class
+		// outside the vocabulary and an overlong, space-bearing prefix, rows the
+		// credential-entry schema rejects. The producer carries the wire's rules.
+		const id = "00000000-0000-4000-8000-0000000000f4"
+		insert := func(class, prefix string) error {
+			return commitCredential(ctx, env,
+				`INSERT INTO auth.credential_registry (id, principal_id, credential_class, display_prefix, secret_hash, hash_algorithm, fingerprint)
+				 VALUES ($1, $2, $3, $4, decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef')`,
+				id, credPrincipal, class, prefix)
+		}
+		mustFail(t, "unknown class", insert("not_a_wire_class", "ok_"), "credential_registry_credential_class_closed")
+		mustFail(t, "overlong prefix", insert("workload_token", "abcdefghijklmnopq"), "credential_registry_display_prefix_shape")
+		mustFail(t, "prefix with a space", insert("workload_token", "bad prefix"), "credential_registry_display_prefix_shape")
+		if err := insert("workload_token", "exmpl_ab12"); err != nil {
+			t.Fatalf("a wire-shaped class and prefix were refused: %v", err)
+		}
+
+		// The live constraint is compared with principal.v1's vocabulary by
+		// execution, not by reading the SQL text: every wire class is stored,
+		// and near misses are refused.
+		raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "auth", "v1", "jsonschema", "principal.v1.schema.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema struct {
+			Properties struct {
+				Credential struct {
+					Properties struct {
+						Class struct {
+							Enum []string `json:"enum"`
+						} `json:"class"`
+					} `json:"properties"`
+				} `json:"credential"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		classes := schema.Properties.Credential.Properties.Class.Enum
+		if len(classes) == 0 {
+			t.Fatal("principal.v1 declares no credential classes; the execution check would be vacuous")
+		}
+		for i, class := range classes {
+			if err := commitCredential(ctx, env,
+				`INSERT INTO auth.credential_registry (id, principal_id, credential_class, display_prefix, secret_hash, hash_algorithm, fingerprint)
+				 VALUES ($1, $2, $3, 'exmpl_ab12', decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef')`,
+				fmt.Sprintf("00000000-0000-4000-8000-%012x", 0xe000+i), credPrincipal, class); err != nil {
+				t.Errorf("principal.v1 class %q was refused by the table: %v", class, err)
+			}
+		}
+		for _, bad := range []string{"rogue", "WORKLOAD_TOKEN", classes[0] + "_x", classes[0] + " ", ""} {
+			mustFail(t, "class "+bad, insert(bad, "ok_"), "credential_registry_credential_class_closed")
+		}
 	})
 
 	t.Run("a legacy row without a fingerprint can still be revoked", func(t *testing.T) {
@@ -306,10 +411,10 @@ func TestCredentialRegistryTRDColumnsAndLifecycleRules(t *testing.T) {
 		mustFail(t, "platform with reference", insertCredential(ctx, env, id, credPrincipal, `, external_reference`, `, 'ext-1'`), "matches_owner")
 		mustFail(t, "bad fingerprint", commitCredential(ctx, env,
 			`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint)
-			 VALUES ($1, $2, 'cred-class', decode(md5(random()::text), 'hex'), 'sha256', 'NOT-HEX')`, id, credPrincipal), "fingerprint_shape")
+			 VALUES ($1, $2, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256', 'NOT-HEX')`, id, credPrincipal), "fingerprint_shape")
 		if err := commitCredential(ctx, env,
 			`INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, domain_owner, external_reference)
-			 VALUES ($1, $2, 'cred-class', decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef', 'acr', 'ext-1')`, id, credPrincipal); err != nil {
+			 VALUES ($1, $2, 'workload_token', decode(md5(random()::text), 'hex'), 'sha256', '0123456789abcdef', 'acr', 'ext-1')`, id, credPrincipal); err != nil {
 			t.Fatalf("a well-formed projected credential was refused: %v", err)
 		}
 	})

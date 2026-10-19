@@ -57,7 +57,7 @@ VALUES (gen_random_uuid(), $1, $2::uuid, $3, 'incremental', $4, 1, 1, 0, $5, $6)
 		t.Fatalf("load config: %v", err)
 	}
 	at := createdAt.Add(-time.Second)
-	trigger, err := synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{Mode: "incremental", TriggeredBy: "manual", ScheduledFor: &at}, createdAt)
+	trigger, err := synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{Mode: "incremental", TriggeredBy: "manual", ScheduledFor: &at, Caller: "initial_backfill_test"}, createdAt)
 	if err != nil {
 		t.Fatal(err)
 	}

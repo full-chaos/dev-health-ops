@@ -167,7 +167,7 @@ FOR UPDATE SKIP LOCKED`, now).Scan(&request.deliveryID, &request.orgID, &request
 	for bump := 0; ; bump++ {
 		trigger, mintErr = synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{
 			Mode: mode, SourceIDs: request.sourceIDs, DatasetKeys: datasetKeys, TriggeredBy: webhookRequestTriggeredBy,
-			ScheduledFor: &scheduledFor,
+			ScheduledFor: &scheduledFor, Caller: "webhook_sync_request",
 		}, now)
 		if mintErr != nil || !trigger.Existing {
 			break
@@ -188,6 +188,10 @@ FOR UPDATE SKIP LOCKED`, now).Scan(&request.deliveryID, &request.orgID, &request
 	if mintErr != nil {
 		if _, err := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT webhook_sync_request_mint`); err != nil {
 			return true, fmt.Errorf("webhook sync request rollback: %w", err)
+		}
+		var unselected synchandoff.UnselectedSourcesError
+		if errors.As(mintErr, &unselected) {
+			return true, minter.refuse(ctx, tx, request, now, "a requested source is not selected for the sync configuration")
 		}
 		return true, minter.fail(ctx, tx, request, now, "mint", mintErr)
 	}

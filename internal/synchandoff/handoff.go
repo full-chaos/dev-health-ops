@@ -20,7 +20,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 )
+
+// ErrUnnamedCaller refuses a Mint whose input names no Caller.
+var ErrUnnamedCaller = errors.New("the trigger names no caller")
 
 const (
 	occurrenceIdentityVersion = "sync_scheduler_occurrence_v1"
@@ -44,11 +48,14 @@ type Config struct {
 
 // Trigger is what the verb wrote.
 type Trigger struct {
-	OccurrenceID    string
-	ScheduledFor    time.Time
-	JobID           string
-	DatasetKeys     []string
-	EnabledSources  int
+	OccurrenceID   string
+	ScheduledFor   time.Time
+	JobID          string
+	DatasetKeys    []string
+	EnabledSources int
+	// SelectedSources is how many sources the configuration's scheduled runs
+	// plan (the scope of a trigger that names no sources).
+	SelectedSources int
 	Provider        string
 	OrgID           string
 	SyncConfigID    string
@@ -120,6 +127,9 @@ type MintInput struct {
 	SourceIDs, DatasetKeys []string
 	// TriggeredBy is "manual" or "backfill" (the table's CHECK constraint).
 	TriggeredBy string
+	// Caller names the trigger path for the scope guard's log line, a synclog
+	// label (lower case, digits and "_.:"), for example "dho_backfill_run".
+	Caller string
 	// ScheduledFor fixes the occurrence's scheduled_for, and so its identity
 	// (nil: now). A webhook request passes its delivery's created_at, so a
 	// replayed request mints the same occurrence rather than a second one.
@@ -128,10 +138,29 @@ type MintInput struct {
 
 // Mint writes the occurrence and its manual trigger in the transaction.
 //
+// It is the only writer of sync_manual_triggers, and so the one place the scope
+// rule is enforced: a source list that names an enabled source the
+// configuration does not select is refused with UnselectedSourcesError before
+// anything is written (checkSelectedSources).
+//
 // The occurrence is written once per identity: when an occurrence with this
 // identity already exists (a replayed webhook request), neither it nor its
 // trigger is written again, and the returned Trigger reports Existing.
+//
+// An input with no Caller is refused with ErrUnnamedCaller before anything is
+// written: every trigger path names itself.
 func Mint(ctx context.Context, tx pgx.Tx, config *Config, input MintInput, now time.Time) (Trigger, error) {
+	if input.Caller == "" {
+		synclog.Default().Warn(ctx, synclog.MsgSyncTriggerRefusedUnnamedCaller,
+			synclog.SyncConfig(synclog.ParseID(config.ID)),
+			synclog.Text(synclog.KeyTriggeredBy, synclog.ParseLabel(input.TriggeredBy)),
+			synclog.Text(synclog.KeyTriggerMode, synclog.ParseLabel(input.Mode)))
+		processRefusalMetrics.observe(refusalUnnamedCaller)
+		return Trigger{}, ErrUnnamedCaller
+	}
+	if err := checkSelectedSources(ctx, tx, config, input); err != nil {
+		return Trigger{}, err
+	}
 	scheduledFor := now.UTC().Truncate(time.Microsecond)
 	if input.ScheduledFor != nil {
 		scheduledFor = input.ScheduledFor.UTC().Truncate(time.Microsecond)

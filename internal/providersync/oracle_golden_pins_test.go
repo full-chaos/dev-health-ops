@@ -85,6 +85,8 @@ var oraclePairGoldenPins = map[string]string{
 	"gitlab_tests_suite.TestGenericOracleMatchesFrozenPythonGitLabTestsRows.golden.json":                                                           "90ed15b2c7e56357152c33769add6cab463e107377f906c541eaeb7a9625630d",
 	"gitlab_work-items_ai-attribution.TestGitLabAIAttributionMatchesFrozenPythonProductionRows.golden.json":                                        "8c291300c73de549cabf8dad91834d0af392492712b8dbccc982b58bcc275c9e",
 	"gitlab_work-items_issue.TestGitLabFetchWorkItemMatchesFrozenPythonProducer.golden.json":                                                       "e6f0f47c8255f19c926f5769a4d53493fe7b0c17467956a86a69a4e8d982da2c",
+	"gitlab_work-items_epic.TestGitLabEpicWorkItemMatchesFrozenPythonProvider.golden.json":                                                         "3262fd1350a87d3ee8448f2e61f57ce71cf2a9caec9972f9462acda34c9bbc1b",
+	"gitlab_work-items_epic-transition.TestGitLabEpicTransitionMatchesFrozenPythonProvider.golden.json":                                            "63b25775c41606657657063fab1960ad1c5bf5c7509b57fc48d1b2eba5ca48dc",
 	"gitlab_work-items_issue-provider.TestGitLabIssueMatchesFrozenPythonProvider.golden.json":                                                      "7a085aff9fd43a40a3981806cb11ad99dfd904ca3a80f4bc3c23de82f9fcdb2c",
 	"gitlab_work-items_sprint.TestGitLabSprintMatchesFrozenPythonProductionRow.golden.json":                                                        "f932473540274b52990986df01bbecac089d3e6d42cb4a82a8a03800101f9396",
 	"gitlab_work-items_status-transition.TestGitLabFetchStatusTransitionMatchesFrozenPythonProducer.golden.json":                                   "c97920775bd80f27de0fb5f0d3076810e586eb0d37606a4107b5c47c02235e8e",

@@ -70,13 +70,13 @@ func workItemUnitsWindowDays(units []workItemUnitWindow, runStartedAt, now time.
 		return nil, nil
 	}
 	if runStartedAt.IsZero() || now.IsZero() {
-		return nil, ErrPostSyncUnavailable
+		return nil, unavailable(stageTouchedWindow, nil)
 	}
 	distinct := make(map[time.Time]struct{})
 	add := func(since, before *time.Time, clock time.Time) error {
 		days, err := providersync.WorkItemsUnitWindowDays(since, before, clock)
 		if err != nil {
-			return ErrPostSyncUnavailable
+			return unavailable(stageTouchedWindow, err)
 		}
 		for _, day := range days {
 			distinct[day] = struct{}{}
@@ -166,7 +166,7 @@ type TouchedDayPostSyncWriter interface {
 // the touched days".
 func (service *NativePostSyncService) SetTouchedDays(store TouchedDaysStore, writer TouchedDayPostSyncWriter) error {
 	if service == nil || store == nil || writer == nil || writer.RepositoryLimit() < 1 {
-		return ErrPostSyncUnavailable
+		return unavailable(stageTouchedSetup, nil)
 	}
 	service.touched = store
 	service.touchedWriter = writer
@@ -239,7 +239,7 @@ func (service *NativePostSyncService) takeTouchedDays(
 	take := &touchedDaysTake{organizationID: plan.OrganizationID}
 	if plan.WorkItems || plan.Git {
 		if plan.RunStartedAt.IsZero() {
-			return nil, ErrPostSyncUnavailable
+			return nil, unavailable(stageTouchedPlan, nil)
 		}
 		since := plan.RunStartedAt.Add(-postSyncTouchedClockMargin)
 		if plan.WorkItems {
@@ -334,7 +334,7 @@ func (service *NativePostSyncService) touchedDaysPlan(
 ) (*PostSyncPlan, error) {
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
-		return nil, ErrPostSyncUnavailable
+		return nil, unavailable(stageTouchedBegin, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	current, err := currentPostSyncReference(ctx, tx, args)

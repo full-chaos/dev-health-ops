@@ -67,7 +67,10 @@ type gitHubSecurityPayload struct {
 
 // GitHubSecurityRouteHandler owns exactly security_alerts. It mirrors the
 // three best-effort Python sources: Dependabot, code scanning, and advisories.
-type GitHubSecurityRouteHandler struct{ MaxAlerts int }
+type GitHubSecurityRouteHandler struct {
+	MaxAlerts    int
+	RepoIdentity GitLabRepoIdentityReader
+}
 
 func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Claim, _ providerfoundation.Credential, client *providerfoundation.HTTPClient, normalizedAt time.Time) (CompleteRouteBatch, error) {
 	if ctx == nil || claim.Validate() != nil || claim.Provider != "github" || claim.Dataset != "security" || client == nil || client.Provider != "github" || client.BaseURL == nil || normalizedAt.IsZero() {
@@ -86,7 +89,7 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 	if err := fetchObject(ctx, &counted, root, &repo); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	repoID, err := repositoryIdentity(repo.FullName)
+	repoID, err := resolveGitHubRepoID(ctx, handler.RepoIdentity, claim, repo)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

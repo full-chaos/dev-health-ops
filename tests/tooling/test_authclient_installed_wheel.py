@@ -41,8 +41,12 @@ def _run(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> st
 PROBE = textwrap.dedent(
     r"""
     import json, sys
+    from datetime import datetime, timezone
     from pathlib import Path
 
+    NOW = datetime(2026, 9, 3, 5, 0, 0, tzinfo=timezone.utc)
+
+    CRED_NOW = datetime(2026, 10, 18, tzinfo=timezone.utc)
     examples = Path(sys.argv[1])
     import dev_health_ops.authclient as client
 
@@ -57,7 +61,18 @@ PROBE = textwrap.dedent(
         "parse_provisioning_event": lambda: client.parse_provisioning_event(
             raw("provisioning-event", "valid-minimal.json")),
         "parse_audit_event": lambda: client.parse_audit_event(raw("audit-event", "valid-minimal.json")),
+        "parse_decision_bytes": lambda: client.parse_decision_bytes(
+            raw("authorization_decision", "decision-valid-deny.json"), now=NOW),
+        "parse_batch_response_bytes": lambda: client.parse_batch_response_bytes(
+            raw("authorization_batch_request", "batch-request-valid-two-items.json"),
+            raw("authorization_batch_response", "batch-response-valid-items-disagree.json"), now=NOW),
         "parse_rfc3339": lambda: client.parse_rfc3339("2026-09-03T10:00:00Z", "probe.v1", "at"),
+        "parse_credential_entry": lambda: client.parse_credential_entry(
+            raw("credential-entry", "valid-active.json"), CRED_NOW),
+        "parse_credential_list": lambda: client.parse_credential_list(
+            raw("credential-list", "valid-two-items.json"), CRED_NOW),
+        "parse_credential_receipt": lambda: client.parse_credential_receipt(
+            raw("credential-receipt", "valid-issue.json"), CRED_NOW),
     }
     exported = sorted(n for n in client.__all__ if n.startswith("parse_"))
     uncovered = [n for n in exported if n not in calls]
@@ -73,6 +88,12 @@ PROBE = textwrap.dedent(
     out["Principal.from_wire"] = "ok"
     client.validate("jwks.v1", json.loads(raw("jwks", "valid-single-signing-key.json")))
     out["validate(jwks.v1)"] = "ok"
+    # A schema that $refs another file must resolve from the installed tree too.
+    client.validate(
+        "endpoint-auth-profile.v1",
+        json.loads(raw("endpoint-auth-profile", "valid-protected-jwt-single-class.json")),
+    )
+    out["validate(endpoint-auth-profile.v1)"] = "ok"
     print(json.dumps({"ran": out, "schemas_dir": str(client.contracts_dir() / "jsonschema")}))
     """
 )

@@ -134,6 +134,21 @@ path**, not from reading every route body. The remaining fields (`action`,
 cheaply determinable at the family level and `null` with a `gaps` note
 otherwise — a stated reason, not a guess, per the brief's standing rule.
 
+## Absent versus null
+
+On the advisory fields (`action`, `resource_resolver`,
+`current_state_cache_behavior`, `entitlement_requirement`,
+`disclosure_behavior`, `token_shape`) the two states differ (CHAOS-4744,
+decision sheet B10 shape b):
+
+| State | Meaning | Gate |
+| --- | --- | --- |
+| absent | Not applicable. Code evidence shows the route has nothing to say. | none |
+| `null` | Undetermined in this pass. | The row's `gaps` must contain an entry that begins with `<field>:` (for example `action: not traced`). An entry for another field, or prose that merely mentions the field, does not excuse it. |
+
+Never infer "absent" from silence: a missing note is not an examination. This
+matches `issued_credential` and `exposure`, which already work this way.
+
 ## Reachable-but-not-owner findings
 
 Every row's `reachable_validators` array records each validator that can
@@ -267,6 +282,40 @@ device-flow surfaces — but "obvious" is a family pattern, and this inventory
 does not record family patterns as facts. They are tracked as an explicit gap
 rather than guessed.
 
+## One registration per line (CHAOS-4774)
+
+A row addresses its surface as `file:line`, so two route registrations written
+on the same line cannot both be owned by a row. In `internal/queryapi/server`
+and `internal/platform/health`, every `Handle`/`HandleFunc` call and every
+route-table `Pattern:` field sits on its own line.
+`TestNoTwoRouteRegistrationsShareALine` fails closed with
+`MULTIPLE REGISTRATIONS ON ONE LINE` and names both routes. The schema has no
+column field; this rule is the chosen alternative. Register each route by a
+direct `Handle`/`HandleFunc` call: using either method as a value (an alias)
+is refused too, because a call through the alias would escape the scan.
+The scan matches by name (`Handle`, `HandleFunc`, and `Pattern:` fields of the
+route-table types), so a registration through a wrapper with another name is
+not seen; add such a wrapper's name to the scan when one is introduced.
+
+## `source_commit`: what is verified and what is not (CHAOS-4765)
+
+Every `contracts/auth/v1/endpoint-profiles.*.json` carries a top-level
+`source_commit`, the commit its `file:line` anchors were derived against. The
+`auth-test` job (`ci/check_go.sh auth history`, full git history) enforces:
+
+- **Reachable.** `source_commit` is a 40-hex id that resolves in the repo and is
+  an ancestor of `HEAD`. A shallow checkout fails the check and says so; it is
+  the one benign cause.
+- **Not stale.** Every anchor line in this repo (a `path`/`line` anchor or a
+  row's `source` `file`/`line`) reads the same at `source_commit` as in the
+  tree under test. An ancestor check alone would pass a stale base, so this
+  half is what catches an inventory whose anchors moved after it was derived.
+
+Not verified: that the anchored line is the right symbol (the rows gate in
+`internal/queryapi/server` owns that), and anchors that name another repo.
+When you move an anchor, bump `source_commit` to a commit on `main` at which
+every anchor line holds.
+
 ## Contributor guide: registering a new route or credential class
 
 1. **New route, existing credential class.** Add a row to
@@ -289,7 +338,10 @@ rather than guessed.
    `public_rationale` — every public row must justify why no credential is
    required, not just assert it.
 4. **Anything you can't determine.** Leave the field `null` and add a
-   `gaps` entry naming what you searched and why it's undetermined. A stated
+   `gaps` entry that **begins with `<field>:`** and says what you searched and why
+   it's undetermined. Where the code shows the field does not apply (a health
+   check has no `action`), leave the field **absent**; never write `null` for
+   "not applicable". See [Absent versus null](#absent-versus-null). A stated
    reason is correct; an unstated guess is a defect (see this file's own
    `gaps` entries for the pattern to follow — e.g. billing/router.py's
    per-route Depends() was not individually re-verified for the ~20 routes

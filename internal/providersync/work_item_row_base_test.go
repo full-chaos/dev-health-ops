@@ -163,7 +163,7 @@ func workItemHierarchyProbes() map[string]workItemHierarchyProbe {
 			return workItemRow{Provider: item.Provider, ParentID: item.ParentID, EpicID: item.EpicID}
 		},
 		githubIssueSourceKind: func(t *testing.T) workItemRow {
-			row, err := normalizeGitHubIssueWorkItem(nativeTestClaim("github", "work-items"), "acme/api", repoID,
+			row, err := normalizeGitHubIssueWorkItem(nativeTestClaim("github", "work-items"), sameGitHubRepoNames("acme/api"), repoID,
 				json.RawMessage(`{"number":7,"title":"Child","state":"open","created_at":"2026-10-01T00:00:00Z",
 				"parent_issue_url":"https://api.github.com/repos/acme/api/issues/1","labels":[]}`), nil, now)
 			if err != nil {
@@ -172,7 +172,7 @@ func workItemHierarchyProbes() map[string]workItemHierarchyProbe {
 			return row
 		},
 		githubPullRequestSourceKind: func(t *testing.T) workItemRow {
-			rows, err := normalizeGitHubPullRequestBundle(nativeTestClaim("github", "work-items"), "acme/api", repoID,
+			rows, err := normalizeGitHubPullRequestBundle(nativeTestClaim("github", "work-items"), sameGitHubRepoNames("acme/api"), repoID,
 				json.RawMessage(`{"number":8,"title":"Change","state":"open","created_at":"2026-10-01T00:00:00Z","labels":[]}`),
 				nil, nil, nil, nil, now)
 			if err != nil || len(rows.WorkItems) != 1 {
@@ -202,6 +202,18 @@ func workItemHierarchyProbes() map[string]workItemHierarchyProbe {
 				t.Fatal(err)
 			}
 			row, _, err := normalizeGitLabIssueWorkItem(nativeTestClaim("gitlab", "work-items"), "acme/api", "acme/api", "org:gitlab:1", repoID, payload, nil,
+				loadRealStatusMapping(t), nil, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return row
+		},
+		gitlabEpicSourceKind: func(t *testing.T) workItemRow {
+			var payload gitlabEpicPayload
+			if err := json.Unmarshal([]byte(`{"iid":5,"title":"Child epic","state":"opened","created_at":"2026-10-01T00:00:00Z","labels":[],"parent_id":4}`), &payload); err != nil {
+				t.Fatal(err)
+			}
+			row, _, _, err := normalizeGitLabEpicWorkItem(nativeTestClaim("gitlab", "work-items"), "acme", payload, nil,
 				loadRealStatusMapping(t), nil, now)
 			if err != nil {
 				t.Fatal(err)

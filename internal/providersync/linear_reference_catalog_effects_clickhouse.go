@@ -26,7 +26,10 @@ type LinearReferenceCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const linearReferenceTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at, provider_team_id, provider_name, gone_at)`
+// linearReferenceTeamsColumns is the teams columns this writer states;
+// teamprovider.Insert adds the provider identity in the same statement.
+var linearReferenceTeamsColumns = []string{"id", "team_uuid", "name", "description", "manual_members", "project_keys", "repo_patterns", "is_active", "updated_at", "org_id", "provider", "native_team_key", "parent_team_id", "created_at"}
+
 const linearReferenceMembersInsert = `INSERT INTO members (org_id, member_id, name, email, provider_identities, is_active, updated_at)`
 const linearReferenceMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
 
@@ -307,15 +310,12 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 	if err != nil {
 		return err
 	}
+	// Read for the tally only: the written identity is read inside the insert.
 	stored, err := teamprovider.Carry(ctx, sink.Conn, rows[0].OrgID, teamIDs)
 	if err != nil {
 		return err
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, linearReferenceTeamsInsert)
-	if err != nil {
-		return err
-	}
-	defer batch.Abort()
+	writes := make([]teamprovider.Write, 0, len(rows))
 	var tally teamprovider.Tally
 	for _, row := range rows {
 		teamUUID, err := uuid.Parse(row.TeamUUID)
@@ -324,15 +324,15 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 		}
 		manualMembers := existingManualMembers[row.ID]
 		tally.Add(stored, row.ID, row.ProviderTeamID)
-		identity := teamprovider.Merge(stored, row.ID, row.ProviderTeamID, row.ProviderName)
-		if err := batch.Append(row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt), identity.ProviderTeamID, identity.ProviderName, identity.GoneAt); err != nil {
-			return err
-		}
+		writes = append(writes, teamprovider.Write{
+			Values:         []any{row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt)},
+			ProviderTeamID: row.ProviderTeamID, ProviderName: row.ProviderName, Gone: teamprovider.GoneCleared,
+		})
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
-	if err := batch.Send(); err != nil {
+	if err := teamprovider.Insert(ctx, sink.Conn, rows[0].OrgID, linearReferenceTeamsColumns, writes); err != nil {
 		return err
 	}
 	logTeamProviderIdentity(ctx, tally, "linear", rows[0].OrgID)

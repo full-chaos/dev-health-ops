@@ -58,7 +58,12 @@ spec:
 ---
 {{- /*
 The Job pod needs the database and DNS and accepts no connection. Excluded from
-the release-wide policy like the service (networkpolicy.yaml).
+the release-wide policy like the service (networkpolicy.yaml). A REGULAR release
+resource, not a hook: a hook object without a delete policy that fires at the
+right time is never garbage-collected by `helm uninstall` (found by the cluster
+proof), and one with `hook-succeeded` is deleted before the Job starts. It
+therefore protects every Job after the first install; the first Job pod runs
+before it exists, like every pre-install hook.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -67,10 +72,6 @@ metadata:
   namespace: {{ include "dev-health.namespace" . }}
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "auth-migrate" "context" $) | nindent 4 }}
-  annotations:
-    helm.sh/hook: {{ join "," $m.hookEvents }}
-    helm.sh/hook-weight: "-1"
-    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   podSelector:
     matchLabels:

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 )
@@ -92,7 +93,7 @@ func (service *Service) ProduceFastPathEdges(ctx context.Context, orgID string, 
 	rows, err := service.loader.LoadFastPath(ctx, orgID, window)
 	if err != nil {
 		service.logger.Error("issue-pr fast-path edges: load failed",
-			slog.String("organization_id", orgID), slog.Any("error", err))
+			slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 		return FastPathOutcome{OrganizationID: orgID}, err
 	}
 
@@ -104,7 +105,7 @@ func (service *Service) ProduceFastPathEdges(ctx context.Context, orgID string, 
 		service.logger.Error("issue-pr fast-path edges: write failed",
 			slog.String("organization_id", orgID),
 			slog.Int("rows_read", len(rows)),
-			slog.Any("error", err))
+			workgraph.ErrorAttr(err))
 		return FastPathOutcome{OrganizationID: orgID}, fmt.Errorf("write issue-pr fast-path edges: %w", err)
 	}
 
@@ -136,14 +137,14 @@ func (service *Service) ProduceTextParseEdges(ctx context.Context, orgID string,
 	prs, workItems, err := service.loader.LoadTextParseInputs(ctx, orgID, window)
 	if err != nil {
 		service.logger.Error("issue-pr text-parse edges: load failed",
-			slog.String("organization_id", orgID), slog.Any("error", err))
+			slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 		return TextParseOutcome{OrganizationID: orgID}, err
 	}
 
 	native, err := service.loader.LoadNativeLinks(ctx, orgID)
 	if err != nil {
 		service.logger.Error("issue-pr text-parse edges: native link load failed",
-			slog.String("organization_id", orgID), slog.Any("error", err))
+			slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 		return TextParseOutcome{OrganizationID: orgID}, err
 	}
 
@@ -160,7 +161,7 @@ func (service *Service) ProduceTextParseEdges(ctx context.Context, orgID string,
 		service.logger.Error("issue-pr text-parse edges: write failed",
 			slog.String("organization_id", orgID),
 			slog.Int("prs_read", len(prs)),
-			slog.Any("error", err))
+			workgraph.ErrorAttr(err))
 		return TextParseOutcome{OrganizationID: orgID}, fmt.Errorf("write issue-pr text-parse edges: %w", err)
 	}
 
@@ -168,7 +169,7 @@ func (service *Service) ProduceTextParseEdges(ctx context.Context, orgID string,
 		service.logger.Error("issue-pr text-parse edges: link write failed",
 			slog.String("organization_id", orgID),
 			slog.Int("links_derived", len(result.Links)),
-			slog.Any("error", err))
+			workgraph.ErrorAttr(err))
 		return TextParseOutcome{OrganizationID: orgID}, fmt.Errorf("write issue-pr text-parse links: %w", err)
 	}
 
@@ -226,14 +227,14 @@ func (service *Service) ProduceHeuristicEdges(ctx context.Context, orgID string,
 	workItems, pullRequests, explicitLinks, err := service.loader.LoadHeuristicInputs(ctx, orgID, window)
 	if err != nil {
 		service.logger.Error("issue-pr heuristic edges: load failed",
-			slog.String("organization_id", orgID), slog.Any("error", err))
+			slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 		return HeuristicOutcome{OrganizationID: orgID}, err
 	}
 
 	native, err := service.loader.LoadNativeLinks(ctx, orgID)
 	if err != nil {
 		service.logger.Error("issue-pr heuristic edges: native link load failed",
-			slog.String("organization_id", orgID), slog.Any("error", err))
+			slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 		return HeuristicOutcome{OrganizationID: orgID}, err
 	}
 
@@ -257,7 +258,7 @@ func (service *Service) ProduceHeuristicEdges(ctx context.Context, orgID string,
 		service.logger.Error("issue-pr heuristic edges: write failed",
 			slog.String("organization_id", orgID),
 			slog.Int("work_items_read", len(workItems)),
-			slog.Any("error", err))
+			workgraph.ErrorAttr(err))
 		return HeuristicOutcome{OrganizationID: orgID}, fmt.Errorf("write issue-pr heuristic edges: %w", err)
 	}
 
@@ -265,7 +266,7 @@ func (service *Service) ProduceHeuristicEdges(ctx context.Context, orgID string,
 		service.logger.Error("issue-pr heuristic edges: link write failed",
 			slog.String("organization_id", orgID),
 			slog.Int("links_derived", len(result.Links)),
-			slog.Any("error", err))
+			workgraph.ErrorAttr(err))
 		return HeuristicOutcome{OrganizationID: orgID}, fmt.Errorf("write issue-pr heuristic links: %w", err)
 	}
 

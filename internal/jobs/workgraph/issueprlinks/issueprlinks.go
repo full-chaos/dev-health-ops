@@ -334,9 +334,9 @@ type RepoRow struct {
 	ID       uuid.UUID
 	Repo     string
 	Provider string
-	// IdentityPath is the path a GitLab repository id was minted from
-	// (repos.identity_path, CHAOS-3383): a renamed project's merge-request ids
-	// keep it, so it names the repository too. Empty for GitHub rows.
+	// IdentityPath is the path a GitLab or GitHub repository id was minted from
+	// (repos.identity_path, CHAOS-3383, CHAOS-9879): a renamed repository's
+	// pull-request ids keep it, so it names the repository too.
 	IdentityPath string
 }
 
@@ -731,8 +731,9 @@ func normalizeLastSynced(value time.Time) time.Time {
 // repoSlugLookup resolves a PR source's repository slug to a repo id.
 //
 // byProvider holds every github and gitlab row under its own provider: its
-// repo, and for GitLab also its identity_path, the path its merge-request ids
-// carry (CHAOS-3383), which wins over another GitLab project's current path.
+// repo, and also its identity_path, the path its pull-request ids carry
+// (CHAOS-3383, CHAOS-9879), which wins over another repository's current path
+// of the same provider.
 // A source resolves only under its own provider: a `ghpr:` slug only to a
 // GitHub row, a `gitlab:` slug only to a GitLab row.
 //
@@ -784,10 +785,10 @@ func newRepoSlugLookup(inputs Inputs) repoSlugLookup {
 		}
 	}
 	for _, repo := range inputs.Repos {
-		if repo.Provider == ProviderGitLab && repo.IdentityPath != "" && repo.IdentityPath != repo.Repo {
+		if (repo.Provider == ProviderGitLab || repo.Provider == ProviderGitHub) && repo.IdentityPath != "" && repo.IdentityPath != repo.Repo {
 			orgID := rowOrgID(repo.OrgID, inputs.OrgID)
 			lookup.otherProvider[[2]string{orgID, repo.IdentityPath}] = true
-			put([3]string{orgID, ProviderGitLab, repo.IdentityPath}, repo.ID)
+			put([3]string{orgID, repo.Provider, repo.IdentityPath}, repo.ID)
 		}
 	}
 	return lookup

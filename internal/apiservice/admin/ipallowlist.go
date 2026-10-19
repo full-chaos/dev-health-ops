@@ -196,26 +196,17 @@ func (h *handlers) createIPAllowlistEntry(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	// The uuid.UUID(...) calls sit inside the route's own try/except
-	// ValueError, so a malformed org claim or X-User-Id is a 422 carrying
-	// the exception text; a well-formed X-User-Id naming no user then fails
-	// the foreign key on flush (a 500).
 	org, err := pythonparity.ParseUUID(orgID)
 	if err != nil {
 		detail, _ := pythonparity.UUIDValidationDetail(orgID)
 		policy.WriteDetail(w, http.StatusUnprocessableEntity, detail, nil)
 		return
 	}
-	var createdBy *uuid.UUID
-	if header := firstHeader(r, "X-User-Id"); header != "" {
-		id, err := pythonparity.ParseUUID(header)
-		if err != nil {
-			detail, _ := pythonparity.UUIDValidationDetail(header)
-			policy.WriteDetail(w, http.StatusUnprocessableEntity, detail, nil)
-			return
-		}
-		createdBy = &id
-	}
+	// CHAOS-10082, a named divergence from Python: the actor is the verified
+	// principal the guard put on the context. Python took created_by_id from
+	// the X-User-Id request header, which any org admin could set to any
+	// user's id; the header is not read here.
+	createdBy := verifiedActorID(ctx)
 	if !isValidIPOrCIDR(ipRange) {
 		policy.WriteDetail(w, http.StatusUnprocessableEntity, "Invalid IP address or CIDR range: "+ipRange, nil)
 		return
@@ -236,13 +227,16 @@ VALUES ($1, $2, $3, $4, true, $5, $6, $6, $7)`,
 	policy.WriteModel(w, http.StatusCreated, ipEntryObject(entry), nil)
 }
 
-// firstHeader is Starlette's Headers.get: the first value, decoded latin-1.
-func firstHeader(r *http.Request, name string) string {
-	values := r.Header.Values(name)
-	if len(values) == 0 {
-		return ""
+// verifiedActorID is the id of the authenticated caller the route guard put on
+// the request context, or nil when there is none (a guarded route always has
+// one; nil keeps the column NULL rather than guessing).
+func verifiedActorID(ctx context.Context) *uuid.UUID {
+	user := policy.UserFrom(ctx)
+	if user == nil {
+		return nil
 	}
-	return policy.Latin1(values[0])
+	id := user.ID
+	return &id
 }
 
 // getIPAllowlistEntry is ip_allowlist.py's get_ip_allowlist_entry.

@@ -77,7 +77,10 @@ type gitHubCommitFilePayload struct {
 // MaxCommits is the upstream sync cap; a zero value uses Python's configured
 // hard ceiling, while an incremental window that exceeds either cap is skipped
 // rather than written partially.
-type GitHubCommitStatsRouteHandler struct{ MaxCommits int }
+type GitHubCommitStatsRouteHandler struct {
+	MaxCommits   int
+	RepoIdentity GitLabRepoIdentityReader
+}
 
 func (handler GitHubCommitStatsRouteHandler) Collect(
 	ctx context.Context,
@@ -104,7 +107,7 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 	if err := fetchObject(ctx, &counted, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	repoID, err := repositoryIdentity(repoPayload.FullName)
+	repoID, err := resolveGitHubRepoID(ctx, handler.RepoIdentity, claim, repoPayload)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

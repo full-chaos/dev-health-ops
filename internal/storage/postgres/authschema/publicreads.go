@@ -138,22 +138,6 @@ func ApplyPublicReads(ctx context.Context, conn *pgx.Conn, options Options) erro
 	return nil
 }
 
-// publicColumnPrivilegeQuery lists every column privilege the role holds
-// outside the auth schema where no table-level privilege already covers it. It
-// is one constant: the role and schema reach it as bound parameters.
-const publicColumnPrivilegeQuery = `
-		SELECT n.nspname, c.relname, c.relkind::text, a.attname, p.priv
-		FROM pg_attribute a
-		JOIN pg_class c ON c.oid = a.attrelid
-		JOIN pg_namespace n ON n.oid = c.relnamespace
-		CROSS JOIN LATERAL unnest(ARRAY['SELECT','INSERT','UPDATE','REFERENCES']) AS p(priv)
-		WHERE ` + systemSchemaFilter + `
-		  AND n.nspname <> $2
-		  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-		  AND a.attnum > 0 AND NOT a.attisdropped
-		  AND NOT has_table_privilege($1, c.oid, p.priv)
-		  AND has_column_privilege($1, c.oid, a.attnum, p.priv)`
-
 // publicReadViolations compares the role's effective column privileges with
 // PublicReadColumns in both directions: a manifest column the role cannot read
 // on a table that exists is a violation, and so is any column privilege the
@@ -196,7 +180,22 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		}
 	}
 
-	rows, err := conn.Query(ctx, publicColumnPrivilegeQuery, options.RuntimeRole, options.Schema)
+	// One literal statement: the role and schema are bound parameters. The system
+	// schema filter below must stay equal to systemSchemaFilter (a unit test checks).
+	rows, err := conn.Query(ctx, `
+		SELECT n.nspname, c.relname, c.relkind::text, a.attname, p.priv
+		FROM pg_attribute a
+		JOIN pg_class c ON c.oid = a.attrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		CROSS JOIN LATERAL unnest(ARRAY['SELECT','INSERT','UPDATE','REFERENCES']) AS p(priv)
+		WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_%'
+		  AND n.nspname <> $2
+		  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+		  AND a.attnum > 0 AND NOT a.attisdropped
+		  AND NOT has_table_privilege($1, c.oid, p.priv)
+		  AND has_column_privilege($1, c.oid, a.attnum, p.priv)`,
+		options.RuntimeRole, options.Schema,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading effective column privileges", ErrMigrationFailed)
 	}

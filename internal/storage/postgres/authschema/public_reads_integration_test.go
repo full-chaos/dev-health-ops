@@ -7,10 +7,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // publicReadOracle is the reviewed manifest, written out independently of
@@ -36,43 +40,72 @@ func (e *publicReadsEnv) options(logs *bytes.Buffer) Options {
 	return Options{Schema: e.schema, RuntimeRole: e.runtimeRole, Logger: slog.New(slog.NewTextHandler(logs, nil))}
 }
 
-// newPublicReadsFixture creates stub ops tables in public, owned by the
-// migration role (as the real ones are owned by whoever holds GRANT OPTION),
-// then re-runs Apply so the grants land.
-func newPublicReadsFixture(t *testing.T, ctx context.Context, skip ...string) *publicReadsEnv {
+// newPublicReadsFixture loads the REAL ops schema (the pgmigrate baseline and
+// chain), hands the manifest tables to the migration login (as the real ones
+// belong to whoever holds GRANT OPTION), moves the tables named in hide out of
+// the way, then re-runs Apply so the grants land.
+func newPublicReadsFixture(t *testing.T, ctx context.Context, hide ...string) *publicReadsEnv {
 	t.Helper()
-	env := newM10Fixture(t, ctx)
-	if _, err := env.admin.Exec(ctx, fmt.Sprintf(`GRANT CREATE ON SCHEMA public TO %s`, Quote(mustValidatedIdentifier(env.migrationRole)))); err != nil {
-		t.Fatal(err)
-	}
-	skipped := map[string]bool{}
-	for _, name := range skip {
-		skipped[name] = true
-	}
-	tables := make([]string, 0, len(publicReadOracle))
-	for table := range publicReadOracle {
-		tables = append(tables, table)
-	}
-	sort.Strings(tables)
-	for _, table := range tables {
-		if skipped[table] {
-			continue
+	env := newM10FixtureWith(t, ctx, func(ctx context.Context, instance *containers.Instance, migrationRole string) {
+		conn, err := pgx.Connect(ctx, instance.URI)
+		if err != nil {
+			t.Fatalf("connect for the ops schema: %v", err)
 		}
-		columns := make([]string, 0, len(publicReadOracle[table])+1)
-		for _, column := range publicReadOracle[table] {
-			columns = append(columns, Quote(mustValidatedIdentifier(column))+" text")
+		defer func() { _ = conn.Close(context.Background()) }()
+		baseline, err := pgmigrate.LoadBaseline()
+		if err != nil {
+			t.Fatal(err)
 		}
-		columns = append(columns, "extra_col text")
-		if _, err := env.migration.Exec(ctx, fmt.Sprintf(`CREATE TABLE public.%s (%s)`,
-			Quote(mustValidatedIdentifier(table)), strings.Join(columns, ", "))); err != nil {
-			t.Fatalf("create stub public.%s: %v", table, err)
+		chain, err := pgmigrate.LoadChain()
+		if err != nil {
+			t.Fatal(err)
 		}
+		if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain); err != nil {
+			t.Fatalf("apply the ops schema: %v", err)
+		}
+		if _, err := conn.Exec(ctx, fmt.Sprintf(`GRANT CREATE ON SCHEMA public TO %s`, Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
+			t.Fatal(err)
+		}
+		for table := range publicReadOracle {
+			if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s OWNER TO %s`,
+				Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
+				t.Fatalf("hand public.%s to the migration login: %v", table, err)
+			}
+		}
+		for _, table := range hide {
+			if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s RENAME TO %s`,
+				Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(table+"_hidden")))); err != nil {
+				t.Fatalf("hide public.%s: %v", table, err)
+			}
+		}
+	})
+	e := &publicReadsEnv{authFixture: env}
+	e.logs = &bytes.Buffer{}
+	if _, err := Apply(ctx, env.migration, e.options(e.logs)); err != nil {
+		t.Fatalf("Apply over the real ops schema: %v", err)
 	}
-	logs := &bytes.Buffer{}
-	if _, err := Apply(ctx, env.migration, (&publicReadsEnv{authFixture: env}).options(logs)); err != nil {
-		t.Fatalf("Apply over stub public tables: %v", err)
+	return e
+}
+
+func (e *publicReadsEnv) rename(t *testing.T, ctx context.Context, from, to string) {
+	t.Helper()
+	if _, err := e.migration.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s RENAME TO %s`,
+		Quote(mustValidatedIdentifier(from)), Quote(mustValidatedIdentifier(to)))); err != nil {
+		t.Fatalf("rename public.%s: %v", from, err)
 	}
-	return &publicReadsEnv{authFixture: env, logs: logs}
+}
+
+// extraColumn returns a real column of public.<table> that the manifest does
+// not list.
+func (e *publicReadsEnv) extraColumn(t *testing.T, ctx context.Context, table string) string {
+	t.Helper()
+	var column string
+	if err := e.admin.QueryRow(ctx, `SELECT column_name FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = $1 AND column_name <> ALL($2::text[])
+		ORDER BY ordinal_position LIMIT 1`, table, publicReadOracle[table]).Scan(&column); err != nil {
+		t.Fatalf("a column of public.%s outside the manifest: %v", table, err)
+	}
+	return column
 }
 
 func (e *publicReadsEnv) violations(t *testing.T, ctx context.Context) []Violation {
@@ -127,15 +160,18 @@ func TestPublicReadsRuntimeReadsExactlyTheManifestColumns(t *testing.T) {
 		if err := env.runtimeStatement(ctx, query); err != nil {
 			t.Errorf("runtime cannot read the manifest columns of %s: %v", table, err)
 		}
+		extra := Quote(mustValidatedIdentifier(env.extraColumn(t, ctx, table)))
+		first := Quote(mustValidatedIdentifier(columns[0]))
+		quotedTable := Quote(mustValidatedIdentifier(table))
 		for name, statement := range map[string]string{
-			"another column": fmt.Sprintf(`SELECT extra_col FROM public.%s`, Quote(mustValidatedIdentifier(table))),
-			"every column":   fmt.Sprintf(`SELECT * FROM public.%s`, Quote(mustValidatedIdentifier(table))),
-			"an insert":      fmt.Sprintf(`INSERT INTO public.%s (extra_col) VALUES ('x')`, Quote(mustValidatedIdentifier(table))),
-			"an update":      fmt.Sprintf(`UPDATE public.%s SET %s = 'x'`, Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(columns[0]))),
-			"a delete":       fmt.Sprintf(`DELETE FROM public.%s`, Quote(mustValidatedIdentifier(table))),
+			"another column": fmt.Sprintf(`SELECT %s FROM public.%s`, extra, quotedTable),
+			"every column":   fmt.Sprintf(`SELECT * FROM public.%s`, quotedTable),
+			"an insert":      fmt.Sprintf(`INSERT INTO public.%s DEFAULT VALUES`, quotedTable),
+			"an update":      fmt.Sprintf(`UPDATE public.%s SET %s = %s`, quotedTable, first, first),
+			"a delete":       fmt.Sprintf(`DELETE FROM public.%s`, quotedTable),
 		} {
-			if err := env.runtimeStatement(ctx, statement); err == nil {
-				t.Errorf("%s on public.%s was accepted for the runtime role", name, table)
+			if err := env.runtimeStatement(ctx, statement); err == nil || !strings.Contains(err.Error(), "permission denied") {
+				t.Errorf("%s on public.%s: err = %v, want permission denied for the runtime role", name, table, err)
 			}
 		}
 	}
@@ -174,9 +210,10 @@ func TestPublicReadsExtraColumnPrivilegesAreViolationsAndApplyRemovesThem(t *tes
 	defer cancel()
 	env := newPublicReadsFixture(t, ctx)
 	role := Quote(mustValidatedIdentifier(env.runtimeRole))
+	usersExtra := Quote(mustValidatedIdentifier(env.extraColumn(t, ctx, "users")))
 
 	for name, statement := range map[string]string{
-		"SELECT on a column outside the manifest": `GRANT SELECT (extra_col) ON public.users TO ` + role,
+		"SELECT on a column outside the manifest": `GRANT SELECT (` + usersExtra + `) ON public.users TO ` + role,
 		"UPDATE on a manifest column":             `GRANT UPDATE (email) ON public.users TO ` + role,
 		"SELECT on an unrelated public table":     `CREATE TABLE public.ops_unrelated (id text); GRANT SELECT (id) ON public.ops_unrelated TO ` + role,
 	} {
@@ -217,9 +254,7 @@ func TestPublicReadsAbsentTableIsSkippedAndLoggedByName(t *testing.T) {
 		t.Fatalf("an absent table must not fail the posture:\n%s", describe(found))
 	}
 	// Once the table exists, the grant is required.
-	if _, err := env.migration.Exec(ctx, `CREATE TABLE public.org_licenses (org_id text, tier text, features_override text)`); err != nil {
-		t.Fatal(err)
-	}
+	env.rename(t, ctx, "org_licenses_hidden", "org_licenses")
 	if found := env.violations(t, ctx); !strings.Contains(describe(found), "org_licenses") {
 		t.Fatalf("a table that exists without its grant was not reported:\n%s", describe(found))
 	}

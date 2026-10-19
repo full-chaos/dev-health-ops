@@ -45,10 +45,6 @@ var sqlOperandExemptions = []sqlOperandExemption{
 		reason: "columns holds only quoteIdentifier results of validated manifest names",
 	},
 	{
-		file: "public_reads_integration_test.go", fn: "newPublicReadsFixture", operand: `strings.Join(columns, ", ")`,
-		reason: "test DDL: every entry is a Quote'd manifest column plus a literal column",
-	},
-	{
 		file: "public_reads_integration_test.go", fn: "TestPublicReadsRuntimeReadsExactlyTheManifestColumns", operand: `strings.Join(quoted, ", ")`,
 		reason: "test query: every entry is a Quote'd manifest column",
 	},

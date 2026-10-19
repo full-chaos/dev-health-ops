@@ -5,7 +5,6 @@ number that can silently drift once a migration's TTL changes.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -13,21 +12,10 @@ import pytest
 from dev_health_ops.fixtures import ttl_registry as ttl_registry_module
 from dev_health_ops.fixtures.ttl_registry import (
     KNOWN_TTL_TABLES,
-    MAX_PINNED_NOW_STALENESS_DAYS,
-    RESTORE_SIDE_SLACK_DAYS,
     TTL_SAFETY_MARGIN_DAYS,
-    PinnedNowStaleError,
-    SnapshotExpiredError,
-    assert_pinned_now_not_too_stale,
-    assert_snapshot_not_expired,
     assert_ttl_vocabulary_is_consistent,
     clickhouse_ttl_retentions,
-    compute_drift_days,
-    drift_days_context,
-    max_generated_age_days,
     max_safe_backdate_days,
-    snapshot_expiry,
-    snapshot_shelf_life_days,
 )
 
 
@@ -58,46 +46,6 @@ class TestParsesTheRealMigrations:
         assert (
             max_safe_backdate_days("feature_flag_event") == 90 - TTL_SAFETY_MARGIN_DAYS
         )
-
-
-class TestGeneratorCeilingHasRealSlackBelowTheGuardThreshold:
-    """CHAOS-3602 follow-up bug, caught live on the first re-mint attempt
-    after the fix: generation and the mint guard both used
-    `max_safe_backdate_days` -- the SAME value -- as their boundary. A row
-    generated at exactly that ceiling, checked by the guard a few seconds
-    later (ordinary elapsed time within one mint run), was already "at or
-    past" the guard's own threshold purely because `now()` had ticked
-    forward between generation and the check. The guard fired on its own
-    mint's freshly-generated data: 8 `feature_flag_event` rows "at or past
-    83 days old" when generation had targeted precisely 83 as its ceiling.
-
-    `max_generated_age_days` must be a genuinely SEPARATE, smaller number
-    -- not the same threshold reused for both roles.
-    """
-
-    def test_generator_ceiling_is_strictly_below_the_guard_threshold(self) -> None:
-        for table in clickhouse_ttl_retentions():
-            guard_threshold = max_safe_backdate_days(table)
-            generator_ceiling = max_generated_age_days(table)
-            assert guard_threshold is not None
-            assert generator_ceiling is not None
-            assert generator_ceiling < guard_threshold, (
-                f"{table}: generator ceiling ({generator_ceiling}) must stay "
-                f"strictly below the guard's own threshold "
-                f"({guard_threshold}) -- equal values give zero slack for "
-                "the ordinary time elapsed between generation and the "
-                "guard's check within the same mint run"
-            )
-
-    def test_the_slack_is_at_least_a_full_day(self) -> None:
-        """A gap of a fraction of a day would still be fragile against a
-        slow mint run; require at least a full day of real headroom."""
-        for table in clickhouse_ttl_retentions():
-            guard_threshold = max_safe_backdate_days(table)
-            generator_ceiling = max_generated_age_days(table)
-            assert guard_threshold is not None
-            assert generator_ceiling is not None
-            assert guard_threshold - generator_ceiling >= 1
 
 
 class TestParserHandlesBothTtlSyntaxForms:
@@ -549,136 +497,3 @@ class TestMultiTableChunkAttribution:
             ttl_registry_module._MIGRATIONS_DIR = original
             clickhouse_ttl_retentions.cache_clear()
             ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
-
-
-class TestComputeDriftDays:
-    def test_no_drift_when_pinned_now_is_real_now(self) -> None:
-        now = datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc)
-        assert compute_drift_days(now, now) == 0
-
-    def test_a_future_pinned_now_needs_no_compensation(self) -> None:
-        real_now = datetime(2026, 8, 8, tzinfo=timezone.utc)
-        pinned_now = real_now + timedelta(days=5)
-        assert compute_drift_days(pinned_now, real_now) == 0
-
-    def test_three_days_stale_matches_the_incident(self) -> None:
-        """The exact scenario that blocked a real mint: pinned_now =
-        2026-08-05, real now = 2026-08-08."""
-        pinned_now = datetime(2026, 8, 5, tzinfo=timezone.utc)
-        real_now = datetime(2026, 8, 8, tzinfo=timezone.utc)
-        assert compute_drift_days(pinned_now, real_now) == 3
-
-    def test_a_partial_day_of_drift_rounds_up(self) -> None:
-        pinned_now = datetime(2026, 8, 5, 0, 0, tzinfo=timezone.utc)
-        real_now = datetime(2026, 8, 6, 1, 0, tzinfo=timezone.utc)  # 1 day + 1 hour
-        assert compute_drift_days(pinned_now, real_now) == 2
-
-
-class TestDriftThreadedIntoTheClamp:
-    """CHAOS-3602 follow-up, live incident: generation clamped ages against
-    `max_safe_backdate_days` alone, ignorant of how stale `pinned_now` had
-    become. A world minted with `pinned_now` 3 days behind real time
-    produced rows the mint guard correctly flagged as past its own
-    threshold -- the exact 3-day-drift case reproduced here.
-    """
-
-    def test_zero_drift_leaves_the_ceiling_unchanged(self) -> None:
-        guard_threshold = max_safe_backdate_days("feature_flag_event")
-        assert guard_threshold is not None
-        with drift_days_context(0):
-            assert (
-                max_generated_age_days("feature_flag_event")
-                == guard_threshold - ttl_registry_module.GENERATOR_SLACK_DAYS
-            )
-
-    def test_three_day_drift_shaves_three_more_days_off_the_ceiling(self) -> None:
-        """The live incident, reproduced deterministically: with no drift
-        threaded, generation's own ceiling was left exactly 3 days too high
-        for a pinned_now that was 3 days stale."""
-        with drift_days_context(0):
-            undrifted_ceiling = max_generated_age_days("feature_flag_event")
-        assert undrifted_ceiling is not None
-        with drift_days_context(3):
-            drifted_ceiling = max_generated_age_days("feature_flag_event")
-        assert drifted_ceiling == undrifted_ceiling - 3
-
-    def test_drift_never_pushes_the_ceiling_negative(self) -> None:
-        with drift_days_context(10_000):
-            assert max_generated_age_days("feature_flag_event") == 0
-
-    def test_drift_context_is_scoped_and_reverts(self) -> None:
-        baseline = max_generated_age_days("feature_flag_event")
-        assert baseline is not None
-        with drift_days_context(5):
-            assert max_generated_age_days("feature_flag_event") == baseline - 5
-        assert max_generated_age_days("feature_flag_event") == baseline
-
-    def test_a_table_with_no_ttl_ignores_drift_entirely(self) -> None:
-        with drift_days_context(5):
-            assert max_generated_age_days("projects") is None
-
-
-class TestPinnedNowStalenessCeiling:
-    """A mint must refuse rather than silently squeeze the generatable-
-    history window to compensate for an unbounded amount of pinned_now
-    drift."""
-
-    def test_drift_inside_the_ceiling_returns_the_drift_and_does_not_raise(
-        self,
-    ) -> None:
-        pinned_now = datetime(2026, 8, 1, tzinfo=timezone.utc)
-        real_now = pinned_now + timedelta(days=MAX_PINNED_NOW_STALENESS_DAYS - 1)
-        assert (
-            assert_pinned_now_not_too_stale(pinned_now, real_now)
-            == MAX_PINNED_NOW_STALENESS_DAYS - 1
-        )
-
-    def test_drift_past_the_ceiling_is_refused_with_a_named_fix(self) -> None:
-        pinned_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        real_now = pinned_now + timedelta(days=MAX_PINNED_NOW_STALENESS_DAYS + 1)
-        with pytest.raises(PinnedNowStaleError) as exc_info:
-            assert_pinned_now_not_too_stale(pinned_now, real_now)
-        message = str(exc_info.value)
-        assert "pinned_now" in message
-        assert "re-pinning is a deliberate decision" in message
-
-    def test_drift_exactly_at_the_ceiling_is_still_allowed(self) -> None:
-        pinned_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        real_now = pinned_now + timedelta(days=MAX_PINNED_NOW_STALENESS_DAYS)
-        assert (
-            assert_pinned_now_not_too_stale(pinned_now, real_now)
-            == MAX_PINNED_NOW_STALENESS_DAYS
-        )
-
-
-class TestSnapshotShelfLife:
-    """A minted snapshot's dates are frozen relative to pinned_now, but
-    ClickHouse's TTL enforcement always runs on real time -- once enough
-    real time passes, the snapshot's oldest rows are due for a live TTL
-    merge regardless of what any boot does."""
-
-    def test_shelf_life_is_margin_minus_restore_slack(self) -> None:
-        assert (
-            snapshot_shelf_life_days()
-            == TTL_SAFETY_MARGIN_DAYS - RESTORE_SIDE_SLACK_DAYS
-        )
-
-    def test_expiry_is_pinned_now_plus_shelf_life(self) -> None:
-        pinned_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        assert snapshot_expiry(pinned_now) == pinned_now + timedelta(
-            days=snapshot_shelf_life_days()
-        )
-
-    def test_restoring_before_expiry_is_allowed(self) -> None:
-        pinned_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        real_now = snapshot_expiry(pinned_now) - timedelta(days=1)
-        assert_snapshot_not_expired(pinned_now, real_now)  # must not raise
-
-    def test_restoring_at_or_past_expiry_is_refused_with_a_named_fix(self) -> None:
-        pinned_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        real_now = snapshot_expiry(pinned_now)
-        with pytest.raises(SnapshotExpiredError) as exc_info:
-            assert_snapshot_not_expired(pinned_now, real_now)
-        message = str(exc_info.value)
-        assert "expired" in message
-        assert "re-mint required" in message

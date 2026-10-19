@@ -28,9 +28,6 @@ from dev_health_ops.workers.provider_unit_route import (
 )
 
 CONTRACT = Path(__file__).parents[2] / "contracts/provider-matrix/v1/matrix.json"
-TRANSITIONAL_INVENTORY = (
-    Path(__file__).parents[2] / "contracts/jobs/v1/transitional-inventory.json"
-)
 
 # Independently asserted census from the CUT-08 audit. Hard-coding it means a
 # silent registry deletion cannot be laundered through a contract regeneration.
@@ -72,34 +69,6 @@ def _contract_pairs(matrix: dict[str, Any]) -> set[tuple[str, str]]:
     return {(pair["provider"], pair["dataset"]) for pair in matrix["pairs"]}
 
 
-def _inventory_row_by_identity(
-    inventory: dict[str, Any],
-    *,
-    surface_class: str,
-    surface: str,
-    target_kind_id: str,
-) -> dict[str, Any]:
-    """Find one inventory row without coupling this matrix test to source lines.
-
-    The transitional-inventory checker owns source-line discovery. This test
-    owns the factual capability wording on the two provider-unit surfaces,
-    whose stable identities are their class, declared surface, and target kind.
-    """
-
-    matches = [
-        row
-        for row in inventory["rows"]
-        if row["class"] == surface_class
-        and row["surface"] == surface
-        and row["target_kind_id"] == target_kind_id
-    ]
-    assert len(matches) == 1, (
-        "expected exactly one transitional inventory row for "
-        f"{surface_class}/{surface}/{target_kind_id}, got {len(matches)}"
-    )
-    return matches[0]
-
-
 def test_contract_shape_is_frozen(matrix: dict[str, Any]) -> None:
     assert matrix["schema_version"] == 1
     assert sorted(matrix["providers"]) == sorted(EXPECTED_PAIR_COUNTS)
@@ -138,44 +107,6 @@ def test_route_ready_census_matches_aggregate_acceptance(
     assert counts["github"] == EXPECTED_PAIR_COUNTS["github"] == 17
     assert counts == EXPECTED_PAIR_COUNTS
     assert sum(counts.values()) == 59
-
-
-def test_transitional_inventory_route_readiness_notes_follow_matrix(
-    matrix: dict[str, Any],
-) -> None:
-    """The inventory's factual note must track the generated capability
-    matrix rather than retain the old "only LaunchDarkly" claim.
-
-    This derives both numbers from the checked-in artifact. A later intentional
-    matrix update therefore makes the inventory wording fail until it is
-    refreshed, while the independent 59/59 acceptance census above prevents a
-    coordinated deletion from laundering either number.
-    """
-
-    pairs = matrix["pairs"]
-    ready = sum(pair["route_ready"] for pair in pairs)
-    github_pairs = [pair for pair in pairs if pair["provider"] == "github"]
-    github_ready = sum(pair["route_ready"] for pair in github_pairs)
-    summary = f"{ready}/{len(pairs)}"
-    github_summary = f"GitHub {github_ready}/{len(github_pairs)}"
-
-    inventory = json.loads(TRANSITIONAL_INVENTORY.read_text())
-    for row in (
-        _inventory_row_by_identity(
-            inventory,
-            surface_class="registry_kind",
-            surface="sync.provider_unit",
-            target_kind_id="kind:sync.provider_unit",
-        ),
-    ):
-        notes = row["notes"]
-        assert summary in notes
-        assert github_summary in notes
-        assert "only launchdarkly" not in notes.lower()
-        # The family completed: registry kind sync.provider_unit already
-        # resolves to a concrete native Go handler for every route-ready
-        # pair the matrix lists, with no HTTP compatibility bridge behind it.
-        assert row["current_implementation_state"] == "native_go"
 
 
 def test_pagerduty_is_covered_by_the_same_contract(

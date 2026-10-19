@@ -24,14 +24,14 @@ Adding a second one is the defect P0 was created to remove.
 | Claim | Tool | Verdicts |
 |---|---|---|
 | Product-row parity | `internal/testsupport/computeparity` (Go) | divergence messages, or none |
-| Operational health | `scripts/worker/compare_runtime_observations.py` | `WITHIN_ENVELOPE` / `OUTSIDE_ENVELOPE` / `UNPROVEN` |
+| Operational health | none (the Python comparator was retired, CHAOS-10180) | `UNPROVEN` was the permanent answer |
 
 Neither implies the other. A port can write byte-identical rows and burn four
 times the memory; it can behave impeccably at runtime and compute the wrong
 numbers. The vocabularies are disjoint so a reader cannot mistake one for the
 other, and nothing compares product rows in Python.
 
-`compare_runtime_observations.py` returns `UNPROVEN` for every input, because
+The retired `compare_runtime_observations.py` returned `UNPROVEN` for every input, because
 `ci/evidence/go-worker-migration/v3-canary-release-proof/parity-thresholds.json`
 carries `review.approved: false`.
 

@@ -16,14 +16,10 @@ developer audience, and moving or reformatting a file breaks a gate.
 | Consumer | Reads |
 |---|---|
 | `ci/check_river_compat_static.sh` (CI gate, `.github/workflows/go.yml`) | `v0-celery-baseline/capture.json`, `v0-celery-baseline/local-resource-snapshot.json`, `v1-river-spike/compatibility-matrix.json`, `v1-river-spike/local-harness-results.json` |
-| `scripts/worker/canary_release_proof.py` (`PINNED_PATHS`) | `v3-canary-release-proof/parity-thresholds.json`, `v0-celery-baseline/capture.json` |
 | `tests/compatibility/river/record.sh` | writes `v1-river-spike/local-harness-results.json` |
-| `tests/worker_baseline/` | `v0-celery-baseline/capture.json`, `v3-canary-release-proof/artifact.schema.json` |
 
 `v3-canary-release-proof/parity-thresholds.json` pins the baseline it was
-measured against by **both** repo-relative path and SHA-256, and
-`canary_release_proof.py` rejects the proof unless both match the file it
-actually loaded. If this directory is ever moved again, that `baseline.path`
+measured against by **both** repo-relative path and SHA-256. If this directory is ever moved again, that `baseline.path`
 field must move with it; the `sha256` must not change unless the baseline
 measurement itself is legitimately re-captured.
 

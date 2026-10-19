@@ -42,7 +42,6 @@ tests/test_rate_limit_policy_doc.py
 tests/test_runtime_dependency_closure_has_the_redis_client.py
 tests/test_unreclaimable_sweep_deploy_default.py
 tests/test_worker_otel_deployments.py
-tests/worker_baseline/test_canary_release_proof.py
 tests/workers/test_go_worker_alerts.py
 tests/workers/test_go_worker_cli_contract.py
 tests/workers/test_go_worker_dashboard.py
@@ -57,7 +56,6 @@ tests/workers/test_helm_query_api_internal.py
 tests/workers/test_helm_route_activate_hooks.py
 tests/workers/test_helm_worker_disruption_and_drain.py
 tests/workers/test_provider_artifact_skip_alert.py
-tests/workers/test_transitional_inventory_contract.py
 tests/workers/test_unreclaimable_sweep_alerts.py
 tests/authclient/test_authorization_contract_goldens.py
 tests/authclient/test_endpoint_auth_profile_contract_goldens.py

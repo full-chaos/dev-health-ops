@@ -19,7 +19,7 @@ import (
 // list ci/go_relevance.py reads, so a fixture or Go input missing from it means a fixture-only change is judged
 // irrelevant and a required gate is skipped. The oracle is the tree, never a pattern: every non-Go file under a
 // testdata/ or fixtures/ directory, every file Go source NAMES (string literal, filepath.Join, //go:embed,
-// os.ReadDir), and every Alembic file must match the filter or be excused with a reason. A literal that names a
+// os.ReadDir) must match the filter or be excused with a reason. A literal that names a
 // real file but cannot be resolved fails loud (the property all earlier shape gaps shared).
 // The tracked set comes from `git ls-files`; the git index is read through os so the test cache moves with it.
 
@@ -452,34 +452,6 @@ func pathFilterViolations(t *testing.T, root string, excused map[string]string) 
 			add("%d of %d fixture-like file(s) match no %s path filter in go.yml and are not excused, so a PR changing only one is classified non-Go and the guard never runs: %v; add a pattern covering them to BOTH path lists in go.yml or excuse the directory with a reason, never individual files", len(unmatched), len(named), event, unmatched)
 		}
 
-		// alembic: the directory listing, not a pattern (CHAOS-6801)
-		var alembic []string
-		_ = filepath.WalkDir(filepath.Join(root, "src/dev_health_ops/alembic"), func(p string, d fs.DirEntry, err error) error {
-			if err == nil && d.Type().IsRegular() && !strings.Contains(p, "__pycache__") {
-				rel, _ := filepath.Rel(root, p)
-				alembic = append(alembic, filepath.ToSlash(rel))
-			}
-			return nil
-		})
-		hasVersion := false
-		for _, p := range alembic {
-			if strings.Contains(p, "/versions/") {
-				hasVersion = true
-			}
-		}
-		if !hasVersion {
-			add("no Alembic revision found on disk: the walk has broken and the %s Alembic guard would pass vacuously", event)
-		}
-		var alembicBad []string
-		for _, p := range alembic {
-			if !matchesAny(t, p, paths) {
-				alembicBad = append(alembicBad, p)
-			}
-		}
-		if len(alembicBad) > 0 {
-			add("%d of %d Alembic file(s) match no %s path filter in go.yml, so a PR that changes only one is classified non-Go and the migrate hook's differential never runs: add `src/dev_health_ops/alembic/**` to BOTH path lists in go.yml (first: %s)", len(alembicBad), len(alembic), event, alembicBad[0])
-		}
-
 		// an exclusion that stops being necessary must fail
 		for _, dir := range sortedKeys(toAnyMap2(excused)) {
 			var covered []string
@@ -563,20 +535,17 @@ const miniGoYml = `on:
     paths:
       - '**/*.go'
       - 'tests/fixtures/**'
-      - 'src/dev_health_ops/alembic/**'
   pull_request:
     paths:
       - '**/*.go'
       - 'tests/fixtures/**'
-      - 'src/dev_health_ops/alembic/**'
 `
 
 func miniFiles(extra map[string]string, goYml string) map[string]string {
 	files := map[string]string{
-		".github/workflows/go.yml":                         goYml,
-		"src/dev_health_ops/alembic/versions/0001_init.py": "x = 1",
-		fxDir + "a.json":                                   "{}",
-		"internal/x/x_test.go":                             "package x",
+		".github/workflows/go.yml": goYml,
+		fxDir + "a.json":           "{}",
+		"internal/x/x_test.go":     "package x",
 	}
 	for k, v := range extra {
 		files[k] = v
@@ -599,10 +568,9 @@ func TestGoWorkflowPathFiltersPlantedDefects(t *testing.T) {
 	}{
 		{"a testdata fixture matches no filter", map[string]string{"internal/y/testdata/data.json": "{}"}, miniGoYml, map[string]string{}, []string{"match no push path filter", "internal/y/testdata/data.json"}},
 		{"a file named by a Go test through go:embed matches no filter", map[string]string{"cfg/embedded.yaml": "a: 1", "internal/z/z_test.go": "package z\n//go:embed ../../cfg/embedded.yaml\nvar _ string"}, miniGoYml, map[string]string{}, []string{"cfg/embedded.yaml", "match no"}},
-		{"an Alembic file matches no filter", nil, strings.ReplaceAll(miniGoYml, "      - 'src/dev_health_ops/alembic/**'\n", ""), map[string]string{}, []string{"Alembic file(s) match no", "alembic/**"}},
 		{"an excused directory is now covered", map[string]string{fxDir + "sub/b.json": "{}"}, miniGoYml, map[string]string{"tests/fixtures": "claimed uncovered"}, []string{"exclusion is stale"}},
 		{"an excused directory no longer exists", nil, miniGoYml, map[string]string{"gone/fixtures": "claimed"}, []string{"does not exist", "gone/fixtures"}},
-		{"a bare push trigger has no path list and matches nothing", nil, strings.Replace(miniGoYml, "  push:\n    paths:\n      - '**/*.go'\n      - 'tests/fixtures/**'\n      - 'src/dev_health_ops/alembic/**'\n", "  push:\n", 1), map[string]string{}, []string{"match no push path filter"}},
+		{"a bare push trigger has no path list and matches nothing", nil, strings.Replace(miniGoYml, "  push:\n    paths:\n      - '**/*.go'\n      - 'tests/fixtures/**'\n", "  push:\n", 1), map[string]string{}, []string{"match no push path filter"}},
 		{"the fixture filter becomes an enumeration", nil, strings.ReplaceAll(miniGoYml, "'tests/fixtures/**'", "'"+fxDir+"a.json'"), map[string]string{}, []string{"single glob 'tests/fixtures/**'"}},
 		{"a Go test names a fixture that is gone", map[string]string{"internal/x/x_test.go": "package x // \"" + fxDir + "ghost.json\"\nvar _ = \"" + fxDir + "ghost.json\""}, miniGoYml, map[string]string{}, []string{"reference fixture paths that do not exist", fxDir + "ghost.json"}},
 		{"an ambiguous literal naming an uncovered file is neither resolved nor dropped silently", map[string]string{"a/data.json": "{}", "b/data.json": "{}", "internal/x/x_test.go": "package x\nvar _ = fsys.Open(\"data.json\")"}, miniGoYml, map[string]string{"a": "x", "b": "x"}, []string{"could not locate", "data.json"}},

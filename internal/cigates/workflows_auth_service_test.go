@@ -23,7 +23,7 @@ var requiredContexts = map[string]bool{"test": true, "lint": true, "go-quality":
 var (
 	authFuzzBlock  = regexp.MustCompile(`(?s)AUTH_FUZZ_TARGETS=\((.*?)\n\)`)
 	authFuzzRow    = regexp.MustCompile(`"\S+ (Fuzz\w+)"`)
-	authStageCall  = regexp.MustCompile(`run: bash ci/check_go\.sh auth ([a-z-]+)`)
+	authStageCall  = regexp.MustCompile(`^\s*bash ci/check_go\.sh auth ([a-z-]+)`)
 	authClosureFn  = regexp.MustCompile(`(?s)check_auth_closure\(\) \{(.*?)\n\}`)
 	authStagesWant = []string{"fmt", "vet", "test", "race", "fuzz", "history", "vuln", "middleware", "fuzz-registry", "paths-selftest", "scope-selftest"}
 )
@@ -134,8 +134,12 @@ func authViolations(t *testing.T, root string) []string {
 	}
 
 	stages := map[string]bool{}
-	for _, m := range authStageCall.FindAllStringSubmatch(wfText, -1) {
-		stages[m[1]] = true
+	for _, jn := range sortedKeys(jobs) {
+		for _, st := range stepsOf(jobs[jn]) {
+			for _, m := range authStageCall.FindAllStringSubmatch(str(st["run"]), 1) {
+				stages[m[1]] = true
+			}
+		}
 	}
 	for _, w := range authStagesWant {
 		if !stages[w] {
@@ -203,6 +207,7 @@ func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 		{"registry gains a target with no fuzz job", []mutation{{cg, "AUTH_FUZZ_TARGETS=(\n", "AUTH_FUZZ_TARGETS=(\n  \"./internal/auth/x FuzzPlanted\"\n"}}, []string{"differs from the AUTH_FUZZ_TARGETS registry", "FuzzPlanted"}},
 		{"gate stops failing on a skipped job", []mutation{{wf, `[ "${pair#*=}" = "success" ]`, `[ "${pair#*=}" != "failure" ]`}}, []string{"failed, cancelled OR skipped"}},
 		{"gate job drops its always()", []mutation{{wf, "if: always()", "if: success()"}}, []string{"always()"}},
+		{"the auth race step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh auth race\n", "run: 'echo \"run: bash ci/check_go.sh auth race\"'\n"}}, []string{"no longer calls auth stage \"race\""}},
 		{"closure allow row loses its reason", []mutation{{tsv, "github.com/jackc/pgx/v5\tACP-ADR-01 item 5: PostgreSQL driver", "github.com/jackc/pgx/v5\t "}}, []string{"needs <module><TAB><reason>"}},
 		{"closure allow list admits clickhouse", []mutation{{tsv, "github.com/jackc/pgx/v5\t", "github.com/ClickHouse/clickhouse-go/v2\tplanted\ngithub.com/jackc/pgx/v5\t"}}, []string{"ClickHouse must never"}},
 		{"closure check stops covering arm64", []mutation{{cg, "for arch in amd64 arm64", "for arch in amd64"}}, []string{"no longer covers cgo"}},

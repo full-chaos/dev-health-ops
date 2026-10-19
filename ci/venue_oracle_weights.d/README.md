@@ -8,8 +8,8 @@ The rationale that used to head the single file follows.
 
 Measured seconds of one venue-oracles registry `run` row (CHAOS-6891): the weight
 ci/venue_oracle_shard.awk balances the venue legs by (longest-processing-time
-assignment). Columns: package dir, test, seconds. Edit the per-package files by hand from the `--- PASS: TestX (12.3s)` lines of a saved run log
-(gh run view <RUN_ID> --log); a new run row starts at the provisional weight below.
+assignment). Columns: package dir, test, seconds. Regenerate from a saved run log:
+  gh run view <RUN_ID> --log > run.log && python3 ci/venue_oracle_weights.py run.log
 A stale weight costs balance, never coverage (the legs always partition the run
 rows); tests/tooling/test_venue_oracle_shards.py fails a PR whose registry has a run
 row with no weight here, a weight for a test that left the registry, or a heaviest

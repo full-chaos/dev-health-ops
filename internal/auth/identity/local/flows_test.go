@@ -43,6 +43,7 @@ type flowAccounts struct {
 	verified []uuid.UUID
 	hashes   []string
 	newID    uuid.UUID
+	writeErr error
 }
 
 func (a *flowAccounts) ByEmail(_ context.Context, email string) (*User, error) {
@@ -66,12 +67,18 @@ func (a *flowAccounts) ProvisionLocal(_ context.Context, req ProvisionLocalReque
 
 func (a *flowAccounts) SetEmailVerified(_ context.Context, id uuid.UUID) error {
 	a.rec.add("SetEmailVerified")
+	if a.writeErr != nil {
+		return a.writeErr
+	}
 	a.verified = append(a.verified, id)
 	return nil
 }
 
 func (a *flowAccounts) SetPasswordHash(_ context.Context, _ uuid.UUID, hash string) error {
 	a.rec.add("SetPasswordHash")
+	if a.writeErr != nil {
+		return a.writeErr
+	}
 	a.hashes = append(a.hashes, hash)
 	return nil
 }
@@ -416,3 +423,38 @@ func TestChangePassword(t *testing.T) {
 }
 
 var _ = contracts.NewSecretString
+
+// A write that fails after the consume leaves the link spent: the error
+// surfaces, nothing is retried, and a replay is refused. The user asks again.
+func TestFailedWriteAfterTheConsumeLeavesTheLinkSpent(t *testing.T) {
+	boom := errors.New("store down")
+	t.Run("reset", func(t *testing.T) {
+		rig := newFlowRig(t, true)
+		u := rig.user("r@example.com", true)
+		rig.grant("s", u.ID)
+		rig.accounts.writeErr = boom
+		if _, err := rig.f.Reset(context.Background(), "s", "A-new-pass-77"); !errors.Is(err, boom) {
+			t.Fatalf("Reset error = %v, want the store error", err)
+		}
+		if len(rig.sessions.revoked) != 0 {
+			t.Error("sessions were revoked although the password did not change")
+		}
+		rig.accounts.writeErr = nil
+		if out, err := rig.f.Reset(context.Background(), "s", "A-new-pass-77"); err != nil || out.Kind != FlowInvalidToken {
+			t.Errorf("replay = %+v, %v; want the spent link refused", out, err)
+		}
+	})
+	t.Run("verify", func(t *testing.T) {
+		rig := newFlowRig(t, true)
+		u := rig.user("v@example.com", false)
+		rig.grant("s", u.ID)
+		rig.accounts.writeErr = boom
+		if _, err := rig.f.Verify(context.Background(), "s"); !errors.Is(err, boom) {
+			t.Fatalf("Verify error = %v, want the store error", err)
+		}
+		rig.accounts.writeErr = nil
+		if out, err := rig.f.Verify(context.Background(), "s"); err != nil || out.Kind != FlowInvalidToken {
+			t.Errorf("replay = %+v, %v; want the spent link refused", out, err)
+		}
+	})
+}

@@ -47,11 +47,18 @@ done
 
 # The corpus's signing key and mail identity (sessionscenario.Key, authflowvenue fromAddress): the project is
 # started with them, and ci/auth_corpus_set_env.sh sources the same state file on every recreate.
+free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+API_PORT="$(free_port)"
+OPERATOR_PORT="$(free_port)"
 JWT_KEY="$(sed -n 's/^const Key = "\(.*\)"$/\1/p' "${ROOT}/internal/testsupport/sessionscenario/sessionscenario.go")"
 [ -n "${JWT_KEY}" ] || die "could not read sessionscenario.Key"
 {
   printf 'export BUGSINK_SECRET_KEY=%q\n' "auth-corpus-external"
   printf 'export COMMIT=%q\n' "${COMMIT:-0000000000000000000000000000000000000000}"
+  printf 'export AUTH_CORPUS_API_PORT=%s\n' "${API_PORT}"
+  printf 'export AUTH_CORPUS_OPERATOR_PORT=%s\n' "${OPERATOR_PORT}"
   printf 'export JWT_SECRET_KEY=%q\n' "${JWT_KEY}"
   printf 'export EMAIL_PROVIDER=%q\n' "smtp"
   printf 'export EMAIL_FROM_ADDRESS=%q\n' "Dev Health <auth@example.test>"
@@ -99,7 +106,6 @@ hostport() {
   [[ "${port}" =~ ^[0-9]+$ ]] || die "could not read the published port of $1 $2 (${port})"
   printf '%s' "${port}"
 }
-API_PORT="$(hostport go-api 8000)"
 PG_PORT="$(hostport postgres 5432)"
 CH_PORT="$(hostport clickhouse 9000)"
 VALKEY_PORT="$(hostport valkey 6379)"
@@ -117,7 +123,7 @@ export DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN="0.0.0.0:2525"
 
 if [ "${LEG}" = "acp" ]; then
   printf 'step 3: go-api forwarded every aggregate to auth-service\n'
-  metrics="$(curl --silent --show-error --max-time 10 "http://127.0.0.1:$(hostport go-api 8080)/metrics")"
+  metrics="$(curl --silent --show-error --max-time 10 "http://127.0.0.1:${OPERATOR_PORT}/metrics")"
   for aggregate in sessions local_login credentials social oidc saml; do
     grep -E "^devhealth_api_auth_proxy_requests_total\{[^}]*aggregate=\"${aggregate}\"[^}]*outcome=\"forwarded\"[^}]*\} [1-9]" <<<"${metrics}" \
       || die "no forwarded request for aggregate ${aggregate}"

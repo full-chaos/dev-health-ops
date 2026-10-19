@@ -32,8 +32,10 @@ services:
   migrate:
     container_name: !reset null
   go-api:
-    # The api listener (the corpus's base URL) and the operator listener (/metrics, leg acp).
-    ports: !override ["127.0.0.1::8000", "127.0.0.1::8080"]
+    # The api listener (the corpus's base URL) and the operator listener (/metrics, leg acp). The host ports are
+    # chosen once by ci/auth_corpus_external.sh and kept in the project state: ci/auth_corpus_set_env.sh recreates
+    # this container, and an ephemeral port would change with it.
+    ports: !override ["127.0.0.1:${AUTH_CORPUS_API_PORT}:8000", "127.0.0.1:${AUTH_CORPUS_OPERATOR_PORT}:8080"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:

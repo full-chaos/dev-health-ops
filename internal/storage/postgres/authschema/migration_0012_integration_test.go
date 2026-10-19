@@ -139,3 +139,48 @@ func TestMigration0012SweepDeletesOnlyLongExpiredRows(t *testing.T) {
 		t.Errorf("recent and live flows remaining = %d, %v; want 2", remaining, err)
 	}
 }
+
+// A consumed flow and a recorded assertion are replay evidence: the runtime
+// role must not be able to erase one while the thing it guards is still valid,
+// or while the sweep's grace has not ended. Only a row that expired more than
+// an hour ago may be deleted.
+func TestMigration0012ReplayEvidenceCannotBeErasedBeforeItsRetentionEnds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newM10Fixture(t, ctx)
+
+	consumedLive := m12Flow(t, ctx, env, "f1", "10 minutes")
+	if _, err := env.runtime.Exec(ctx, `UPDATE auth.sso_flow_states SET consumed_at = now() WHERE id = $1`, consumedLive); err != nil {
+		t.Fatal(err)
+	}
+	justExpired := m12Flow(t, ctx, env, "f2", "-10 minutes")
+	longExpired := m12Flow(t, ctx, env, "f3", "-2 hours")
+	for name, id := range map[string]string{"a consumed live flow": consumedLive, "a flow expired 10 minutes ago": justExpired} {
+		if _, err := env.runtime.Exec(ctx, `DELETE FROM auth.sso_flow_states WHERE id = $1`, id); err == nil || !strings.Contains(err.Error(), "retained") {
+			t.Errorf("deleting %s: err = %v, want a refusal naming the retention", name, err)
+		}
+	}
+	if tag, err := env.runtime.Exec(ctx, `DELETE FROM auth.sso_flow_states WHERE id = $1`, longExpired); err != nil || tag.RowsAffected() != 1 {
+		t.Errorf("deleting a flow expired two hours ago = %v, %v; want 1 row", tag, err)
+	}
+	var remaining int
+	if err := env.admin.QueryRow(ctx, `SELECT count(*) FROM auth.sso_flow_states`).Scan(&remaining); err != nil || remaining != 2 {
+		t.Errorf("flows remaining = %d, %v; want the 2 retained ones", remaining, err)
+	}
+
+	for tag, expiresIn := range map[string]string{"c1": "10 minutes", "c2": "-10 minutes", "c3": "-2 hours"} {
+		if _, err := env.runtime.Exec(ctx, `INSERT INTO auth.saml_assertion_uses (issuer, assertion_id_hash, expires_at)
+			VALUES ('https://idp.example', $1::bytea, now() + $2::interval)`, m10Hash(tag), expiresIn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for tag, wantRefused := range map[string]bool{"c1": true, "c2": true, "c3": false} {
+		_, err := env.runtime.Exec(ctx, `DELETE FROM auth.saml_assertion_uses WHERE assertion_id_hash = $1::bytea`, m10Hash(tag))
+		if wantRefused && (err == nil || !strings.Contains(err.Error(), "retained")) {
+			t.Errorf("deleting assertion %s: err = %v, want a refusal naming the retention", tag, err)
+		}
+		if !wantRefused && err != nil {
+			t.Errorf("deleting assertion %s expired two hours ago: %v", tag, err)
+		}
+	}
+}

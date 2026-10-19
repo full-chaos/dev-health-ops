@@ -363,8 +363,9 @@ func runWorldStep(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 func runWorldSync(ctx context.Context, t *testing.T, conn driver.Conn, world providerWorld, step worldStep, doer *replayDoer, ids *idSequence, mapping *providersync.StatusMapping) {
 	t.Helper()
 	depth := step.DepthDays
+	// One second past the freeze: a window is half-open, so the last one must end after the instant to hold an item updated at it.
 	input := syncplan.PlannerInput{
-		OrgID: world.OrgID, IntegrationID: ids.id(), Mode: syncplan.SyncModeIncremental, Now: world.FrozenAt,
+		OrgID: world.OrgID, IntegrationID: ids.id(), Mode: syncplan.SyncModeIncremental, Now: world.FrozenAt.Add(time.Second),
 		IntegrationDepthDays: &depth,
 	}
 	sourceNames := map[string]string{}
@@ -421,7 +422,6 @@ func runWorldSync(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 	// work-item watermarks to each window's end and plan again until the family
 	// reaches the frozen instant, as the scheduled runs would.
 	input.Watermarks = map[syncplan.WatermarkKey]time.Time{}
-	finalTick := false
 	for run := 0; run < 100; run++ {
 		var pending []syncplan.PlannedUnit
 		for _, unit := range units {
@@ -430,30 +430,7 @@ func runWorldSync(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 			}
 		}
 		if len(pending) == 0 {
-			if finalTick {
-				return
-			}
-			// An item updated at the frozen instant lies outside the half-open window that ends there;
-			// the next scheduled run, one second later, takes it.
-			finalTick = true
-			input.Now = world.FrozenAt.Add(time.Second)
-			for _, unit := range units {
-				for _, dataset := range workitemcontract.FamilyDatasets() {
-					input.Watermarks[syncplan.WatermarkKey{SourceID: sourceNames[unit.SourceID], Dataset: dataset}] = world.FrozenAt
-				}
-			}
-			next, err := syncplan.BuildScheduledPlan(input)
-			if err != nil {
-				t.Fatalf("plan %s final window: %v", step.Provider, err)
-			}
-			units = units[:0:0]
-			for _, unit := range next {
-				if unit.Dataset == "work-items" {
-					units = append(units, unit)
-				}
-			}
-			runUnits(units)
-			continue
+			return
 		}
 		for _, unit := range pending {
 			for _, dataset := range workitemcontract.FamilyDatasets() {

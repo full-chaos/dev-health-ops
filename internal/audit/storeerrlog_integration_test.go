@@ -48,7 +48,7 @@ func TestCommitFailureLogsNoDatabaseText(t *testing.T) {
 	if !strings.Contains(out, "audit: Commit failed") {
 		t.Fatalf("no Commit failure logged: %s", out)
 	}
-	if strings.Contains(out, piiEmail) || !strings.Contains(out, `"sqlstate":"22P02"`) {
+	if strings.Contains(out, piiEmail) || !strings.Contains(out, `"code":"22P02"`) {
 		t.Fatalf("Commit failure logged as %s", out)
 	}
 }
@@ -70,7 +70,7 @@ func TestOutboxLagReadFailureLogsNoDatabaseText(t *testing.T) {
 	if !strings.Contains(out, "outbox lag read failed") {
 		t.Fatalf("no lag failure logged: %s", out)
 	}
-	if strings.Contains(out, "lag_probe_missing_schema") || !strings.Contains(out, `"sqlstate":"42P01"`) {
+	if strings.Contains(out, "lag_probe_missing_schema") || !strings.Contains(out, `"code":"42P01"`) {
 		t.Fatalf("lag failure logged as %s", out)
 	}
 }

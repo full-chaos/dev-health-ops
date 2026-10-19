@@ -30,6 +30,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -403,7 +404,7 @@ func projectionOutcome(err error) string {
 }
 
 func (s *Store) storeErr(ctx context.Context, op string, err error) error {
-	s.logger.ErrorContext(ctx, "identity: store failure", "op", op, audit.DBError(err))
+	s.logger.ErrorContext(ctx, "identity: store failure", "op", op, logging.ErrorAttr(err))
 	return fmt.Errorf("%w: %s: %w", ErrStore, op, err)
 }
 

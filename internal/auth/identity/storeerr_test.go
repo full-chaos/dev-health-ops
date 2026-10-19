@@ -23,7 +23,7 @@ func TestStoreErrLogsNoDatabaseText(t *testing.T) {
 	s := &Store{logger: logging.NewJSON(&buf, slog.LevelDebug)}
 	err := s.storeErr(context.Background(), "read user by email", pgErr)
 	out := buf.String()
-	if strings.Contains(out, email) || !strings.Contains(out, `"sqlstate":"22P02"`) || !strings.Contains(out, `"op":"read user by email"`) {
+	if strings.Contains(out, email) || !strings.Contains(out, `"code":"22P02"`) || !strings.Contains(out, `"op":"read user by email"`) {
 		t.Fatalf("store failure logged as %s", out)
 	}
 	if !errors.Is(err, ErrStore) || !errors.As(err, new(*pgconn.PgError)) {

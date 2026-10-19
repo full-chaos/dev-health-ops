@@ -32,6 +32,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -786,7 +787,7 @@ func (s *Store) recordExchange(ctx context.Context, result Result, err error) {
 	s.exchanges.Add(ctx, 1, metric.WithAttributes(attribute.String("reason_code", string(result.Reason))))
 	switch {
 	case err != nil:
-		s.logger.ErrorContext(ctx, "refresh exchange failed", "reason_code", string(result.Reason), audit.DBError(err))
+		s.logger.ErrorContext(ctx, "refresh exchange failed", "reason_code", string(result.Reason), logging.ErrorAttr(err))
 	case result.Reason.Success():
 		s.logger.DebugContext(ctx, "refresh exchange", "reason_code", string(result.Reason), "session_id", result.Session.ID.String())
 	default:

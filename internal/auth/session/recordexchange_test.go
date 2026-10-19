@@ -27,7 +27,7 @@ func TestFailedExchangeLogsNoDatabaseText(t *testing.T) {
 	pgErr := &pgconn.PgError{Severity: "ERROR", Code: "22P02", Message: `invalid input syntax for type uuid: "` + email + `"`}
 	s.recordExchange(context.Background(), Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: refresh exchange: %w", ErrStore, pgErr))
 	out := buf.String()
-	if strings.Contains(out, email) || !strings.Contains(out, `"sqlstate":"22P02"`) || !strings.Contains(out, `"reason_code":"store_unavailable"`) {
+	if strings.Contains(out, email) || !strings.Contains(out, `"code":"22P02"`) || !strings.Contains(out, `"reason_code":"store_unavailable"`) {
 		t.Fatalf("exchange failure logged as %s", out)
 	}
 }

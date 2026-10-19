@@ -111,8 +111,20 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 	return cfg, nil
 }
 
-// logAuthProxyRouting states the routing go-api starts with.
-func logAuthProxyRouting(context.Context, *slog.Logger, AuthProxyConfig) {}
+// logAuthProxyRouting states, at Info, the routing go-api starts with: each
+// aggregate on or off and the upstream host (never a credential, path or
+// query), whatever set the flags.
+func logAuthProxyRouting(ctx context.Context, logger *slog.Logger, cfg AuthProxyConfig) {
+	host := ""
+	if cfg.Upstream != nil {
+		host = cfg.Upstream.Host
+	}
+	attrs := []slog.Attr{slog.String("upstream_host", host)}
+	for _, aggregate := range AuthAggregates {
+		attrs = append(attrs, slog.Bool(string(aggregate), cfg.Enabled(aggregate)))
+	}
+	logger.LogAttrs(ctx, slog.LevelInfo, "auth proxy routing", attrs...)
+}
 
 // sessionProxyRoutes are the internal/api/session routes the proxy takes over
 // through session.Deps.Inner, so go-api's guard, body checks, validator and

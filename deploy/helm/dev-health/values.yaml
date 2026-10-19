@@ -64,7 +64,10 @@ goApi:
   #    guard and rate limits; an unreachable auth-service is a 503/504, never a
   #    go-api answer. A flag needs authService.enabled, and every flag other
   #    than sessions needs sessions. Do not switch login before social login
-  #    works through auth-service in production (CHAOS-3275).
+  #    works through auth-service in production (CHAOS-3275). Set AUTH_PROXY_*
+  #    only here: a flag set through goApi.envFrom bypasses these checks and
+  #    the auth-service NetworkPolicy rule (go-api still refuses an unsafe
+  #    combination at start-up and logs its routing as "auth proxy routing").
   authProxy:
     sessions: false
     localLogin: false

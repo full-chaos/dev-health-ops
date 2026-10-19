@@ -184,9 +184,14 @@ spec:
   policyTypes:
     - Ingress
     - Egress
-  {{- if or $a.networkPolicy.allowedFrom $a.networkPolicy.metricsFrom }}
+  {{- /* CHAOS-10231: go-api's pods reach the API port only while a goApi.authProxy flag is on. */}}
+  {{- $apiFrom := $a.networkPolicy.allowedFrom }}
+  {{- if eq (include "dev-health.authProxyOn" $) "true" }}
+  {{- $apiFrom = append $apiFrom (dict "matchLabels" (include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | fromYaml)) }}
+  {{- end }}
+  {{- if or $apiFrom $a.networkPolicy.metricsFrom }}
   ingress:
-    {{- with $a.networkPolicy.allowedFrom }}
+    {{- with $apiFrom }}
     - from:
         {{- range . }}
         - podSelector:

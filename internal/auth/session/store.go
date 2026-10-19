@@ -221,7 +221,8 @@ func (s *Store) sessionColumns() string {
 // effectiveExpiry is the expression for alias s's effective expiry.
 func (s *Store) effectiveExpiry() string {
 	return fmt.Sprintf(`LEAST(s.expires_at, COALESCE(
-		(SELECT max(r.expires_at) FROM %s.refresh_credentials r WHERE r.session_id = s.id),
+		(SELECT r.expires_at FROM %s.refresh_credentials r WHERE r.session_id = s.id
+		 ORDER BY r.issued_at DESC, r.created_at DESC LIMIT 1),
 		COALESCE(s.last_seen_at, s.created_at) + %d * interval '1 microsecond'))`, s.q, s.refreshTTL.Microseconds())
 }
 

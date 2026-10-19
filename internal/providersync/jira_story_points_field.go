@@ -36,7 +36,7 @@ func discoverJiraStoryPointsFields(
 	client *providerfoundation.HTTPClient,
 ) ([]string, error) {
 	var fields []jiraFieldMetadata
-	err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/field", nil, &fields)
+	err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/field", "/rest/api/3/field", nil, &fields)
 	// Jira always lists its system fields: a null or empty body is a broken
 	// lookup, never "this site has no points field".
 	if err == nil && len(fields) == 0 {

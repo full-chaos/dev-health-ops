@@ -718,7 +718,7 @@ func fetchGitHubProjectV2GraphQL(
 	if err != nil {
 		return providerfoundation.ErrNormalizationInvalid
 	}
-	response, err := client.Do(ctx, http.MethodPost, gitHubGraphQLURL(client), bytes.NewReader(body))
+	response, err := client.DoRoute(ctx, http.MethodPost, graphQLRoute, gitHubGraphQLURL(client), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

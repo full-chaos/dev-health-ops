@@ -127,7 +127,7 @@ func (prover LinearAbsenceProver) projectLinkAbsence(ctx context.Context, row Ow
 }
 
 func (prover LinearAbsenceProver) post(ctx context.Context, query []byte) (int, []byte, bool) {
-	response, err := prover.Client.Do(ctx, http.MethodPost, "/graphql", bytes.NewReader(query))
+	response, err := prover.Client.DoRoute(ctx, http.MethodPost, graphQLRoute, "/graphql", bytes.NewReader(query))
 	if err != nil {
 		return 0, nil, false
 	}

@@ -700,7 +700,7 @@ func collectLinearReferenceConnection(
 		if err != nil {
 			return items, pages, false, err
 		}
-		response, err := client.Do(ctx, http.MethodPost, "/graphql", bytes.NewReader(body))
+		response, err := client.DoRoute(ctx, http.MethodPost, graphQLRoute, "/graphql", bytes.NewReader(body))
 		if err != nil {
 			return items, pages, false, err
 		}

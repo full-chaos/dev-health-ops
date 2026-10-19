@@ -172,7 +172,7 @@ func collectGitLabBlame(
 	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 
 	var project repositoryPayload
-	if err := fetchObject(ctx, &counted, root, &project); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, gitLabBlameTraversalError(err)
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -199,6 +199,7 @@ func collectGitLabBlame(
 	tree, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted,
 		providerfoundation.GitLabPageOptions{
 			Path:    root + "/repository/tree",
+			Route:   gitlabTreeRoute,
 			Query:   url.Values{"ref": {treeRef}, "recursive": {"true"}},
 			PerPage: perPage, MaxPages: maxPages,
 		})
@@ -331,7 +332,8 @@ func gitLabBlameTreeRef(
 	}
 	page, err := providerfoundation.CollectGitLabPageParamPages(ctx, client,
 		providerfoundation.GitLabPageOptions{
-			Path: root + "/repository/commits",
+			Path:  root + "/repository/commits",
+			Route: gitlabCommitsRoute,
 			Query: url.Values{
 				"ref_name": {branch},
 				"until":    {beforeAt.UTC().Format(time.RFC3339Nano)},
@@ -368,7 +370,7 @@ func fetchGitLabBlame(
 	root, filePath, ref string,
 ) ([]gitLabBlameRangePayload, error) {
 	path := root + "/repository/files/" + url.PathEscape(filePath) + "/blame"
-	response, err := client.Do(ctx, http.MethodGet, path+"?ref="+url.QueryEscape(ref), nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, gitlabBlameRoute, path+"?ref="+url.QueryEscape(ref), nil)
 	if err != nil {
 		return nil, err
 	}

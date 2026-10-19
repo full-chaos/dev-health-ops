@@ -136,7 +136,7 @@ func (handler PagerDutyUsersRouteHandler) Collect(
 	counted.Doer = pagerDutyUsersCountingDoer{delegate: client.Doer, attempts: &requests}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/users", DataKey: "users", PerPage: perPage, MaxPages: maxPages,
+			Path: "/users", Route: "/users", DataKey: "users", PerPage: perPage, MaxPages: maxPages,
 		},
 	)
 	if err != nil {

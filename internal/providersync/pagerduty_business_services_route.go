@@ -143,7 +143,7 @@ func (handler PagerDutyBusinessServicesRouteHandler) Collect(
 	}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/business_services", DataKey: "business_services",
+			Path: "/business_services", Route: "/business_services", DataKey: "business_services",
 			PerPage: perPage, MaxPages: maxPages,
 		},
 	)

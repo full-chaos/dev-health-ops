@@ -166,7 +166,7 @@ func (handler GitLabIncidentsRouteHandler) Collect(
 	counted.Doer = gitLabIncidentCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(client, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(budgetAccount(ctx, "project"), &counted, root, &project); err != nil {
+	if err := fetchObjectRoute(budgetAccount(ctx, "project"), &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -194,7 +194,7 @@ func (handler GitLabIncidentsRouteHandler) Collect(
 		"updated_before": {claim.BeforeAt.UTC().Format(time.RFC3339Nano)},
 	}
 	items, pages, err := collectGitLabIncidentPages(
-		budgetAccount(ctx, "issues"), &counted, root+"/issues", query, maxIssues, maxPages, perPage,
+		budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute, root+"/issues", query, maxIssues, maxPages, perPage,
 	)
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -265,7 +265,7 @@ func (doer gitLabIncidentCountingDoer) Do(request *http.Request) (*http.Response
 func collectGitLabIncidentPages(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	path string,
+	route, path string,
 	baseQuery url.Values,
 	maxIssues int,
 	maxPages int,
@@ -280,7 +280,7 @@ func collectGitLabIncidentPages(
 		}
 		query.Set("page", strconv.Itoa(page))
 		query.Set("per_page", strconv.Itoa(perPage))
-		response, err := client.Do(ctx, http.MethodGet, path+"?"+query.Encode(), nil)
+		response, err := client.DoRoute(ctx, http.MethodGet, route, path+"?"+query.Encode(), nil)
 		if err != nil {
 			return nil, 0, err
 		}

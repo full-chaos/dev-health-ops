@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -357,7 +358,7 @@ func (p *authProxy) forward(w http.ResponseWriter, r *http.Request, aggregate Au
 		return
 	}
 	defer response.Body.Close()
-	upstreamID := response.Header.Get(upstreamRequestIDHeader)
+	upstreamID := loggableUpstreamID(response.Header.Get(upstreamRequestIDHeader))
 	// The whole answer is read before any byte reaches the client, so an answer
 	// cut short or over the bound is a refusal, never a partial body under the
 	// upstream's status.
@@ -381,9 +382,10 @@ func (p *authProxy) forward(w http.ResponseWriter, r *http.Request, aggregate Au
 		w.Header().Set("Content-Length", strconv.Itoa(len(answer)))
 	}
 	w.WriteHeader(response.StatusCode)
-	if _, err := w.Write(answer); err != nil {
+	if _, err := io.Copy(w, bytes.NewReader(answer)); err != nil {
 		p.logger.WarnContext(r.Context(), "auth proxy: client went away",
-			slog.String("aggregate", string(aggregate)), slog.String("request_id", requestID), slog.String("error", err.Error()))
+			slog.String("aggregate", string(aggregate)), slog.String("route", r.Pattern),
+			slog.String("request_id", httpapi.LoggableRequestID(r.Context())), slog.String("error", err.Error()))
 	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		// auth-service wrote the route's model; go-api's writer check reads it so.
@@ -391,17 +393,39 @@ func (p *authProxy) forward(w http.ResponseWriter, r *http.Request, aggregate Au
 	}
 	state.outcome = outcomeForwarded
 	p.logger.InfoContext(r.Context(), "auth proxy forwarded",
-		slog.String("aggregate", string(aggregate)), slog.String("method", r.Method), slog.String("path", r.URL.Path),
-		slog.Int("status", response.StatusCode), slog.String("request_id", requestID), slog.String("upstream_request_id", upstreamID),
+		slog.String("aggregate", string(aggregate)), slog.String("route", r.Pattern),
+		slog.Int("status", response.StatusCode), slog.String("request_id", httpapi.LoggableRequestID(r.Context())), slog.String("upstream_request_id", upstreamID),
 		slog.Duration("duration", time.Since(start)))
 }
 
 func (p *authProxy) refuse(w http.ResponseWriter, r *http.Request, aggregate AuthAggregate, status int, detail, reason string, err error, upstreamID string) {
 	p.logger.ErrorContext(r.Context(), "auth proxy: upstream failed; refused",
-		slog.String("aggregate", string(aggregate)), slog.String("method", r.Method), slog.String("path", r.URL.Path),
-		slog.String("reason", reason), slog.Int("status", status), slog.String("request_id", httpapi.RequestIDFrom(r.Context())),
-		slog.String("upstream_request_id", upstreamID), slog.String("error", err.Error()))
+		slog.String("aggregate", string(aggregate)), slog.String("route", r.Pattern),
+		slog.String("reason", reason), slog.Int("status", status), slog.String("request_id", httpapi.LoggableRequestID(r.Context())),
+		slog.String("upstream_request_id", upstreamID), slog.String("error", upstreamErrorText(err)))
 	policy.WriteDetail(w, status, detail, nil)
+}
+
+// upstreamRequestIDPattern is auth-service's request id wire form.
+var upstreamRequestIDPattern = regexp.MustCompile(`^req_[A-Za-z0-9_-]{26}$`)
+
+// loggableUpstreamID is auth-service's request id when it has the wire form,
+// "invalid" for any other non-empty value.
+func loggableUpstreamID(id string) string {
+	if id == "" || upstreamRequestIDPattern.MatchString(id) {
+		return id
+	}
+	return "invalid"
+}
+
+// upstreamErrorText is err without the request URL a *url.Error carries: the
+// URL holds the client's path and query.
+func upstreamErrorText(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Op + ": " + urlErr.Err.Error()
+	}
+	return err.Error()
 }
 
 // outboundHeader is the client's header minus hop-by-hop fields (including

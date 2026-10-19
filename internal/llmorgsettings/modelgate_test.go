@@ -19,14 +19,15 @@ func TestDecideTable(t *testing.T) {
 		{"B1", Inputs{Saved: true, ConfigUsable: true, ServiceModelOn: true}, Own, ""},
 		{"B1 with the grant never reads the platform", Inputs{Saved: true, ConfigUsable: true, ServiceModelOn: true, Fallback: true}, Own, ""},
 		{"B1-off", Inputs{Saved: true, ConfigUsable: true}, Refuse, CodeAIFeaturesTurnedOff},
-		{"B1-off outranks a closed gate", Inputs{Saved: true, GateClosed: true}, Refuse, CodeAIFeaturesTurnedOff},
-		{"B1'", Inputs{Saved: true, ServiceModelOn: true}, Refuse, CodeUnavailable},
+		{"flag off outranks a closed gate", Inputs{Saved: true, GateClosed: true}, Refuse, CodeAIFeaturesTurnedOff},
+		{"B1' flag on", Inputs{Saved: true, ServiceModelOn: true}, Refuse, CodeUnavailable},
 		{"B2", Inputs{Saved: true, GateClosed: true, ServiceModelOn: true}, Refuse, CodeOwnModelGateClosed},
 		{"B2 with the grant", Inputs{Saved: true, GateClosed: true, ServiceModelOn: true, Fallback: true}, Refuse, CodeOwnModelGateClosed},
 		{"B3", Inputs{ServiceModelOn: true, Fallback: true}, Platform, ""},
 		{"B4", Inputs{ServiceModelOn: true}, Refuse, CodeServiceModelNotEntitled},
 		{"B5", Inputs{}, Refuse, CodeNothing},
-		{"fallback alone is not enough", Inputs{Fallback: true}, Refuse, CodeNothing},
+		{"fallback alone is not enough", Inputs{Fallback: true}, Refuse, CodeAIFeaturesTurnedOff},
+		{"flag off, saved and unusable, is turned off not 503", Inputs{Saved: true}, Refuse, CodeAIFeaturesTurnedOff},
 	}
 	for _, c := range cases {
 		got := Decide(c.in)

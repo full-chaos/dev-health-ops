@@ -23,9 +23,8 @@ const (
 	CodeOwnModelGateClosed      = "own_model_gate_closed"
 	CodeServiceModelNotEntitled = "service_model_not_entitled"
 	CodeAIFeaturesTurnedOff     = "ai_features_turned_off"
-	// CodeNothing is row B5: no own model, no acr_service_model, no grant. One constant so the
-	// code can change in one line.
-	CodeNothing = CodeServiceModelNotEntitled
+	// CodeNothing is row B5: no acr_service_model (MCP ruling: ai_features_turned_off).
+	CodeNothing = CodeAIFeaturesTurnedOff
 
 	// CodeUnavailable is the 503 detail for an unknown entitlement or an unusable saved config.
 	CodeUnavailable = "Service unavailable"
@@ -64,15 +63,17 @@ type Inputs struct {
 	Fallback bool
 }
 
-// Decide is the D6107 table. Rows: B1 own model; B1-off ai_features_turned_off; B2 own_model_gate_closed
-// (even with the grant); B1' 503; B3 platform; B4 service_model_not_entitled; B5 CodeNothing.
-// ai_features_turned_off outranks a closed gate: acr_service_model off stops ACR AI for every org.
+// Decide is the D6107 table, in the order of decide.go: the effective acr_service_model comes first.
+// Flag off: ai_features_turned_off for every org (B1-off, B5), before any BYO, gate or grant question.
+// Flag on: a saved config is B2 own_model_gate_closed (even with the grant), B1' 503 when unusable, B1 own
+// model; no config is B3 platform (with the grant) or B4 service_model_not_entitled.
 func Decide(in Inputs) Decision {
 	refuse := func(code string) Decision { return Decision{Kind: Refuse, Code: code, Status: http.StatusForbidden} }
+	if !in.ServiceModelOn {
+		return refuse(CodeAIFeaturesTurnedOff)
+	}
 	if in.Saved {
 		switch {
-		case !in.ServiceModelOn:
-			return refuse(CodeAIFeaturesTurnedOff)
 		case in.GateClosed:
 			return refuse(CodeOwnModelGateClosed)
 		case !in.ConfigUsable:
@@ -80,13 +81,10 @@ func Decide(in Inputs) Decision {
 		}
 		return Decision{Kind: Own}
 	}
-	switch {
-	case in.ServiceModelOn && in.Fallback:
+	if in.Fallback {
 		return Decision{Kind: Platform}
-	case in.ServiceModelOn:
-		return refuse(CodeServiceModelNotEntitled)
 	}
-	return refuse(CodeNothing)
+	return refuse(CodeServiceModelNotEntitled)
 }
 
 // EffectiveServiceModel is the acr_service_model an org really has: an active org override (Decide put

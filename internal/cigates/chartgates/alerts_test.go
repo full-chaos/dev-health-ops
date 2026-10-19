@@ -648,7 +648,7 @@ func TestAlertGuardsPlantedDefects(t *testing.T) {
 		{"dashboard-gains-a-payload-label", dash, mut(dashboardRel, `"refresh": "30s"`, `"refresh": "30s", "tags": ["payload"]`), dashboardLowCardinality, "payload"},
 		{"deleted-deploy-tree-returns", []string{"deploy/go-workers/deployment.json"},
 			func(t *testing.T, root string) {
-				writeFile(t, root, "deploy/docker-compose/docker-compose.yml", "services: {}\n")
+				writeFile(t, root, "deploy/docker-compose/stack.cfg", "services: {}\n")
 			},
 			deployAlternatesStayDeleted, "deploy/docker-compose"},
 		{"deploy-artefact-names-the-python-image", []string{"deploy/go-workers/deployment.json"},

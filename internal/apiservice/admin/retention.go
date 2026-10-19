@@ -463,7 +463,7 @@ func (h *handlers) executeRetentionPolicy(w http.ResponseWriter, r *http.Request
 func (h *handlers) retentionRunFailure(ctx context.Context, p *retentionPolicy, dryRun bool, err error) string {
 	reference := uuid.NewString()
 	h.logger.ErrorContext(ctx, "admin: execute retention policy failed",
-		"error", err, "reference", uuid.NewString(), "policy_id", p.ID, "org_id", p.OrgID,
+		"error", err, "reference", reference, "policy_id", p.ID, "org_id", p.OrgID,
 		"resource_type", p.ResourceType, "dry_run", dryRun)
 	return "Retention run failed. Reference: " + reference
 }
@@ -475,8 +475,7 @@ func (s pgStore) applyRetention(ctx context.Context, p *retentionPolicy, cutoff 
 		var count int64
 		err := s.Pool.QueryRow(ctx,
 			`SELECT count(*) FROM audit_logs WHERE org_id = $1 AND created_at < $2`, p.OrgID, cutoff).Scan(&count)
-		_ = err
-		return count, nil
+		return count, err
 	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {

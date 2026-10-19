@@ -2,6 +2,8 @@ package cigates_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -498,4 +500,21 @@ func TestWorkflowConcurrencyPlantedDefects(t *testing.T) {
 			expectViolation(t, concurrencyViolations(t, tree), c.want...)
 		})
 	}
+}
+
+// A bare `push:` / `pull_request:` (no body) means EVERY branch. The Python helper (_branch_patterns in
+// test_workflow_concurrency_groups.py) returned no branch for a non-mapping trigger, so a shared group on two bare
+// triggers passed falsely.
+func TestBareTriggersCountAsEveryBranch(t *testing.T) {
+	root := repoRoot(t)
+	var files []string
+	for _, n := range workflowNames(t, root) {
+		files = append(files, ".github/workflows/"+n)
+	}
+	tree := plantTree(t, root, files)
+	bare := "on:\n  push:\n  pull_request:\nconcurrency:\n  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}\n  cancel-in-progress: true\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n"
+	if err := os.WriteFile(filepath.Join(tree, ".github/workflows/bare.yml"), []byte(bare), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expectViolation(t, concurrencyViolations(t, tree), "bare.yml", "race to cancel each other")
 }

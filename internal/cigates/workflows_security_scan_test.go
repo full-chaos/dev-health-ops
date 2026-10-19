@@ -53,3 +53,14 @@ func TestSecurityScanPlantedDefects(t *testing.T) {
 		})
 	}
 }
+
+// A bare trigger is never read as the required shape: pull_request must name ["**"], push must name [main].
+func TestSecurityScanBareTriggersAreReported(t *testing.T) {
+	root := repoRoot(t)
+	const f = securityScanFile
+	tree := plantTree(t, root, []string{f},
+		mutation{f, "pull_request:\n    branches: [\"**\"]\n    types: [opened, synchronize, reopened, ready_for_review]\n", "pull_request:\n"},
+		mutation{f, "push:\n    branches: [main]", "push:"})
+	got := securityScanViolations(t, tree)
+	expectViolation(t, got, "pull_request.branches", "push.branches")
+}

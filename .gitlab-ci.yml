@@ -51,7 +51,6 @@
 #   docs-guards.yml / docs-inventory-review.yml / docs-health-report.yml -> docs:*
 #   docker-images.yml : go-build, go-api-tools-build + merge -> build:go-images, build:go-images-manifest
 #   venue-oracles*.yml                        -> go:venue-oracles, go:venue-oracles-changed
-#   publish-pypi.yml : build step             -> build:pypi-package
 
 workflow:
   rules:
@@ -1019,20 +1018,3 @@ build:go-images-manifest:
         "${repo}:${CI_COMMIT_SHORT_SHA}-linux-amd64" \
         "${repo}:${CI_COMMIT_SHORT_SHA}-linux-arm64"
       docker buildx imagetools inspect "${repo}:${CI_COMMIT_SHORT_SHA}"
-
-# publish-pypi.yml: the build step on a release tag. The upload needs the
-# PyPI token and stays on GitHub (see the gap list).
-build:pypi-package:
-  extends: .python_job
-  stage: build
-  rules:
-    - if: $CI_COMMIT_TAG
-  before_script:
-    - python -m pip install --upgrade pip
-    - pip install build
-  script:
-    - python -m build
-  artifacts:
-    expire_in: 14 days
-    paths:
-      - dist/*

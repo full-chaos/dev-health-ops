@@ -56,7 +56,6 @@ const (
 	providerMatrixRelative = "contracts/provider-matrix/v1/matrix.json"
 	dailyFamiliesRelative  = "internal/jobs/metrics/daily/families.json"
 	remainingFamiliesRel   = "internal/jobs/metrics/remaining/families.json"
-	jobDailyPyRelative     = "src/dev_health_ops/metrics/job_daily.py"
 
 	// The "Per REST endpoint" section's two sources: the frozen copy of the
 	// Python api's route list (the Python tree is being deleted, so the page no
@@ -213,11 +212,7 @@ func legacyBlocks(root string, families *migrationmatrix.NativeFamilies, restPro
 	if err != nil {
 		return nil, err
 	}
-	finalizeCompat, err := migrationmatrix.LoadDailyFinalizeCompatFamilies(
-		filepath.Join(root, jobDailyPyRelative), dailyNames, remainingNames)
-	if err != nil {
-		return nil, err
-	}
+	finalizeCompat := map[migrationmatrix.FinalizeTarget]bool{}
 
 	providerBlock, err := migrationmatrix.RenderProviderSyncBlock(pairs)
 	if err != nil {

@@ -1,4 +1,5 @@
-"""`ci/venue-main-alert.sh` and venue-oracles-main-alert.yml (CHAOS-9597).
+"""`ci/venue-main-alert.sh` (CHAOS-9597). The workflow-shape tests of venue-oracles-main-alert.yml are in
+internal/cigates/workflows_venue_main_alert_test.go (CHAOS-10177).
 
 A red main-push `Venue oracles` run opens or updates ONE GitHub issue; a green
 executed run closes it; a skipped or stale run changes nothing. The script reads
@@ -15,12 +16,8 @@ import stat
 import subprocess
 from pathlib import Path
 
-import yaml
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "ci" / "venue-main-alert.sh"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "venue-oracles-main-alert.yml"
-VENUE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "venue-oracles.yml"
 STEP = "Run this shard's venue differential oracles against the live Python api"
 LABEL = "venue-oracles-main-red"
 
@@ -298,54 +295,3 @@ def test_inputs_are_validated(tmp_path):
         proc, writes = _run(tmp_path, [(300, "failure", RED)], 300, **{name: "x;rm"})
         assert proc.returncode == 2, name
         assert writes == []
-
-
-def _workflow() -> dict:
-    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-
-
-def test_workflow_listens_to_the_venue_workflow_by_its_name():
-    doc = _workflow()
-    triggers = doc.get(True) or doc.get("on")
-    venue_name = yaml.safe_load(VENUE_WORKFLOW.read_text(encoding="utf-8"))["name"]
-    assert triggers["workflow_run"]["workflows"] == [venue_name]
-    assert triggers["workflow_run"]["types"] == ["completed"]
-
-
-def test_workflow_only_handles_main_push_runs():
-    job = _workflow()["jobs"]["alert"]
-    assert job["if"] == (
-        "github.event.workflow_run.head_branch == 'main'"
-        " && github.event.workflow_run.event == 'push'"
-    )
-
-
-def test_workflow_token_is_least_privilege_at_job_level():
-    doc = _workflow()
-    assert doc["permissions"] == {}
-    assert doc["jobs"]["alert"]["permissions"] == {
-        "contents": "read",
-        "actions": "read",
-        "issues": "write",
-    }
-
-
-def test_workflow_serialises_alert_jobs_after_the_filter_and_never_cancels_one():
-    doc = _workflow()
-    assert "concurrency" not in doc
-    concurrency = doc["jobs"]["alert"]["concurrency"]
-    assert concurrency["group"] == "venue-oracles-main-alert"
-    assert concurrency["cancel-in-progress"] is False
-
-
-def test_workflow_passes_event_data_through_env_only():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    steps = _workflow()["jobs"]["alert"]["steps"]
-    run_steps = [s for s in steps if "run" in s]
-    assert len(run_steps) == 1
-    assert "${{" not in run_steps[0]["run"]
-    env = run_steps[0]["env"]
-    assert env["RUN_ID"] == "${{ github.event.workflow_run.id }}"
-    assert env["RUN_CONCLUSION"] == "${{ github.event.workflow_run.conclusion }}"
-    assert env["RUN_SHA"] == "${{ github.event.workflow_run.head_sha }}"
-    assert "secrets." not in text

@@ -8,11 +8,17 @@
   "doc": "Move the checked-in worker job kinds to the River transport."
  },
  {
-  "revision": "0150",
-  "down": "0149",
+  "revision": "0151",
+  "down": "0150",
   "labels": "application_schema",
   "realHead": true,
   "head": true,
+  "doc": "Add ``integration_datasets.state_changed_at`` and ``state_changed_by`` -- when and by which code path a dataset was switched."
+ },
+ {
+  "revision": "0150",
+  "down": "0149",
+  "labels": "application_schema",
   "doc": "Let ``impersonation_sessions`` keep its row when a user is permanently deleted."
  },
  {

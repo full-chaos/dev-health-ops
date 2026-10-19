@@ -154,7 +154,7 @@ func pythonAlias(t *testing.T, producer *venueoracle.Producer, uri string, s ali
 }
 
 // aliasPythonBuild is the build whose Python CLI answered the scenarios: a build that still carried it.
-const aliasPythonBuild = "055816fd2325f6c0dda555e46ac3ff2d0a81a796"
+const aliasPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 
 // TestAliasesMatchTheFrozenPythonOutput runs the flat verbs on a real PostgreSQL in every scenario and
 // compares exit code and text with what the REAL `dev-hops migrate heads|history|current|status` printed
@@ -169,7 +169,7 @@ func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/alias.json",
 		PythonBuild: aliasPythonBuild,
-		SHA256:      "8a74447cbf04b8ee3de2994febfc66d5bc87a7f22a89aea1f463ca525bec0915",
+		SHA256:      "27bb36e34c49836ec6e66676f27320fa531bb90a4748cd681d4101e50d58d8c8",
 		Recipe: "git worktree add --detach $DIR " + aliasPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestAliasesMatchTheFrozenPythonOutput$' -python-root $DIR",
 	})
@@ -193,7 +193,7 @@ func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
 				exec(aliasSetup(t, scenario.setup))
 			}
 			code, text := pythonAlias(t, producer, uri, scenario)
-			results = append(results, aliasResult{Name: scenario.name, Exit: code, Stdout: text})
+			results = append(results, aliasResult{Name: scenario.name, Exit: code, Stdout: normalizeAlias(scenario, text)})
 			exec("DROP TABLE IF EXISTS alembic_version")
 			exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
 		}

@@ -88,6 +88,8 @@ func RuntimePosture() []TablePrivilege {
 		// Session lifecycle.
 		{Table: "sessions", Select: true, Insert: true, Update: true, Delete: true},
 		{Table: "refresh_credentials", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "link_credentials", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "login_attempts", Select: true, Insert: true, Update: true, Delete: true},
 
 		// Credential material: metadata only, and keys are read-only.
 		{Table: "signing_keys", Select: true},

@@ -37,7 +37,18 @@ type Target struct {
 }
 
 // Validate is an error unless the corpus can open fresh rate-limit windows on the target between batches.
-func (tg Target) Validate() error { return nil }
+func (tg Target) Validate() error {
+	if tg.BaseURL == "" {
+		return fmt.Errorf("no base URL")
+	}
+	if tg.PostgresURI == "" {
+		return fmt.Errorf("no Postgres URI: the corpus seeds and reads rows in the target's Postgres")
+	}
+	if tg.ValkeyURI == "" && tg.ResetLimits == nil {
+		return fmt.Errorf("no %s and no limit reset: the rate-limit steps share one window and answer 429", EnvValkeyURI)
+	}
+	return nil
+}
 
 // TargetFromEnv reads an external target; ok is false when EnvBaseURL is unset.
 func TargetFromEnv(t *testing.T) (Target, bool) {
@@ -47,8 +58,8 @@ func TargetFromEnv(t *testing.T) (Target, bool) {
 		return Target{}, false
 	}
 	target := Target{BaseURL: base, PostgresURI: os.Getenv(EnvPostgresURI), ClickHouseURI: os.Getenv(EnvClickHouseURI), ValkeyURI: os.Getenv(EnvValkeyURI)}
-	if target.PostgresURI == "" {
-		t.Fatalf("%s is set but %s is not: the corpus seeds and reads rows in the target's Postgres", EnvBaseURL, EnvPostgresURI)
+	if err := target.Validate(); err != nil {
+		t.Fatalf("%s is set but the target is unusable: %v", EnvBaseURL, err)
 	}
 	return target, true
 }

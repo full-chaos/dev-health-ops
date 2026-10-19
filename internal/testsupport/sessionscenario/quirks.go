@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 )
 
 // QuirkClass says what a recorded behaviour that differs from a clean contract is.
@@ -25,7 +24,7 @@ const (
 	Unsafe QuirkClass = "unsafe"
 )
 
-// Quirk is one classed behaviour. Names are prefixes of golden step names the quirk covers.
+// Quirk is one classed behaviour. Names are exact golden step names the quirk covers.
 // Detector names a mechanical detector whose every hit the quirk covers (see Detectors).
 type Quirk struct {
 	ID       string
@@ -45,10 +44,8 @@ type GoldenAnswer struct {
 // Detectors find recorded behaviour that is a quirk by its shape. A hit must be covered by a Quirk that
 // names the step; only a detector in blanketDetectors may be covered as a whole.
 var Detectors = map[string]func(GoldenAnswer) bool{
-	"server-error": func(a GoldenAnswer) bool { return a.Status >= 500 },
-	"validation-echo": func(a GoldenAnswer) bool {
-		return strings.Contains(a.Body, `"loc"`) && pydanticecho.Strip(a.Body) != a.Body
-	},
+	"server-error":    func(a GoldenAnswer) bool { return a.Status >= 500 },
+	"validation-echo": echoesInput,
 }
 
 var blanketDetectors = map[string]bool{"validation-echo": true}
@@ -79,9 +76,9 @@ func CheckQuirks(table []Quirk, answers []GoldenAnswer) []string {
 		if len(q.Names) == 0 && q.Detector == "" {
 			problems = append(problems, q.ID+": covers nothing")
 		}
-		for _, prefix := range q.Names {
-			if !anyNamed(answers, prefix) {
-				problems = append(problems, fmt.Sprintf("%s: %q matches no golden step", q.ID, prefix))
+		for _, name := range q.Names {
+			if !anyNamed(answers, name) {
+				problems = append(problems, fmt.Sprintf("%s: %q is no golden step", q.ID, name))
 			}
 		}
 	}
@@ -100,9 +97,9 @@ func CheckQuirks(table []Quirk, answers []GoldenAnswer) []string {
 	return problems
 }
 
-func anyNamed(answers []GoldenAnswer, prefix string) bool {
+func anyNamed(answers []GoldenAnswer, name string) bool {
 	for _, a := range answers {
-		if strings.HasPrefix(a.Name, prefix) {
+		if a.Name == name {
 			return true
 		}
 	}
@@ -114,8 +111,42 @@ func covered(table []Quirk, detector, name string) bool {
 		if q.Detector == detector {
 			return true
 		}
-		for _, prefix := range q.Names {
-			if strings.HasPrefix(name, prefix) {
+		for _, named := range q.Names {
+			if named == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// echoesInput is true when the body holds a validation error that echoes submitted input or ctx: an object
+// with a "type" member and an "input" or "ctx" member, at any depth.
+func echoesInput(a GoldenAnswer) bool {
+	var value any
+	if json.Unmarshal([]byte(a.Body), &value) != nil {
+		return false
+	}
+	return hasEcho(value)
+}
+
+func hasEcho(value any) bool {
+	switch v := value.(type) {
+	case map[string]any:
+		_, typed := v["type"]
+		_, input := v["input"]
+		_, ctx := v["ctx"]
+		if typed && (input || ctx) {
+			return true
+		}
+		for _, member := range v {
+			if hasEcho(member) {
+				return true
+			}
+		}
+	case []any:
+		for _, member := range v {
+			if hasEcho(member) {
 				return true
 			}
 		}

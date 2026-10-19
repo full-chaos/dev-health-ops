@@ -18,7 +18,7 @@ func TestCheckQuirksRefusals(t *testing.T) {
 		{"c: fine", 200, `{}`},
 	}
 	good := []Quirk{
-		{ID: "q1", Class: Accidental, Reason: "r", Names: []string{"a:"}},
+		{ID: "q1", Class: Accidental, Reason: "r", Names: []string{"a: boom"}},
 		{ID: "q2", Class: Unsafe, Reason: "r", Detector: "validation-echo"},
 	}
 	if p := CheckQuirks(good, answers); len(p) != 0 {
@@ -27,8 +27,8 @@ func TestCheckQuirksRefusals(t *testing.T) {
 	for name, table := range map[string][]Quirk{
 		"unclassed 500":  {good[1]},
 		"unclassed echo": {good[0]},
-		"bad class":      {{ID: "q1", Class: "odd", Reason: "r", Names: []string{"a:"}}, good[1]},
-		"no reason":      {{ID: "q1", Class: Accidental, Names: []string{"a:"}}, good[1]},
+		"bad class":      {{ID: "q1", Class: "odd", Reason: "r", Names: []string{"a: boom"}}, good[1]},
+		"no reason":      {{ID: "q1", Class: Accidental, Names: []string{"a: boom"}}, good[1]},
 		"stale name":     {good[0], good[1], {ID: "q3", Class: Contractual, Reason: "r", Names: []string{"zzz"}}},
 		"repeated id":    {good[0], good[1], good[0]},
 		"blanket 5xx":    {{ID: "q1", Class: Accidental, Reason: "r", Detector: "server-error"}, good[1]},

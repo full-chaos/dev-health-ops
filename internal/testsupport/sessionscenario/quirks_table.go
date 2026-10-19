@@ -10,7 +10,7 @@ var Quirks = []Quirk{
 	},
 	{
 		ID: "lone-surrogate-500", Class: Accidental,
-		Names:  []string{"login: password with lone surrogate", "validate: lone surrogate", "burst: login surrogate password", "register: password lone surrogate", "register: full name with a lone surrogate"},
+		Names:  []string{"login: password with lone surrogate", "validate: lone surrogate", "burst: login surrogate password 1", "burst: login surrogate password 2", "burst: login surrogate password 3", "burst: login surrogate password past the limit", "register: password lone surrogate", "register: full name with a lone surrogate"},
 		Reason: "Python raised while encoding a lone surrogate and answered 500; a clean 4xx refusal breaks no client",
 	},
 	{

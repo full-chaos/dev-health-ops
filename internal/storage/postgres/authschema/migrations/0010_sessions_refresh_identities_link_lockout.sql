@@ -91,3 +91,26 @@ CREATE TRIGGER refresh_credentials_parent_guard
 CREATE TRIGGER link_credentials_security_guard
     BEFORE UPDATE OF principal_id, purpose, token_hash, expires_at, consumed_at ON link_credentials
     FOR EACH ROW EXECUTE FUNCTION audit_commit_guard();
+
+-- consumed_at is write-once. The commit guard above checks that a write happens
+-- inside an audit transaction, not which transition it makes, so without this a
+-- second guarded UPDATE could re-consume (replay) a used token or clear
+-- consumed_at. Only changes to consumed_at are refused: revoked_at and the
+-- ON DELETE SET NULL actions on a consumed row stay legal. A consume must be
+-- written as UPDATE ... WHERE consumed_at IS NULL and checked for one affected
+-- row; a replay then matches no row and never reaches this trigger.
+CREATE FUNCTION consumed_at_write_once() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION '%.consumed_at of % is already set and cannot change', TG_TABLE_NAME, OLD.id
+        USING ERRCODE = 'integrity_constraint_violation';
+END;
+$$;
+CREATE TRIGGER link_credentials_consumed_at_write_once
+    BEFORE UPDATE OF consumed_at ON link_credentials
+    FOR EACH ROW WHEN (OLD.consumed_at IS NOT NULL AND NEW.consumed_at IS DISTINCT FROM OLD.consumed_at)
+    EXECUTE FUNCTION consumed_at_write_once();
+CREATE TRIGGER refresh_credentials_consumed_at_write_once
+    BEFORE UPDATE OF consumed_at ON refresh_credentials
+    FOR EACH ROW WHEN (OLD.consumed_at IS NOT NULL AND NEW.consumed_at IS DISTINCT FROM OLD.consumed_at)
+    EXECUTE FUNCTION consumed_at_write_once();

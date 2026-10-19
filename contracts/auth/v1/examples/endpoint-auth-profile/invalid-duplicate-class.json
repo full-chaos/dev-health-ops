@@ -18,10 +18,12 @@
   "route": "/v1/memberships/invite",
   "schema_version": "endpoint-auth-profile.v1",
   "tenant_requirement": "active_membership",
-  "token": {
-    "algorithm": "EdDSA",
-    "audience": "dev-health-api",
-    "issuer": "https://auth.fullchaos.dev",
-    "token_type": "at+jwt"
+  "tokens": {
+    "user_access_token": {
+      "algorithm": "EdDSA",
+      "audience": "dev-health-api",
+      "issuer": "https://auth.fullchaos.dev",
+      "token_type": "at+jwt"
+    }
   }
 }

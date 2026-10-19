@@ -8,6 +8,7 @@ package smtpcapture
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"net"
 	"os"
 	"regexp"
@@ -55,11 +56,24 @@ func ListenAddr() string {
 func Start(t *testing.T) *Server { return StartAt(t, DefaultListen) }
 
 // ValidateListen is an error unless addr is host:port with a port number.
-func ValidateListen(addr string) error { return nil }
+func ValidateListen(addr string) error {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil || number < 0 || number > 65535 {
+		return fmt.Errorf("listen address %q has no valid port", addr)
+	}
+	return nil
+}
 
 // StartAt starts the sink on addr.
 func StartAt(t *testing.T, addr string) *Server {
 	t.Helper()
+	if err := ValidateListen(addr); err != nil {
+		t.Fatal(err)
+	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		t.Fatal(err)

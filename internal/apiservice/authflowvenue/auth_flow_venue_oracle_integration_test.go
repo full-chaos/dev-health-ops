@@ -462,20 +462,23 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
+	// An external target (DEVHEALTH_AUTH_ORACLE_BASE_URL) is go-api or auth-service already running on its own
+	// stores; the corpus reaches it by URL and its stores by URI, as the session corpus does. Checked before
+	// anything starts.
+	externalBase := os.Getenv(sessionscenario.EnvBaseURL)
+	stores, isExternal, err := venueoracle.ExternalRequired(externalBase)
+	if err != nil {
+		t.Fatalf("%s: %v", sessionscenario.EnvBaseURL, err)
+	}
+	var external *venueoracle.ExternalStores
+	if isExternal {
+		external = &stores
+		if err := smtpcapture.ValidateListen(smtpcapture.ListenAddr()); err != nil {
+			t.Fatalf("%s: %v", smtpcapture.EnvListen, err)
+		}
+	}
 	pySink, goSink := smtpcapture.Start(t), smtpcapture.StartAt(t, smtpcapture.ListenAddr())
 	pyHost, pyPort := pySink.HostPort(t)
-	// An external target (DEVHEALTH_AUTH_ORACLE_BASE_URL) is go-api or auth-service already running on its own
-	// stores; the corpus reaches it by URL and its stores by URI, as the session corpus does.
-	externalBase := os.Getenv(sessionscenario.EnvBaseURL)
-	var external *venueoracle.ExternalStores
-	if externalBase != "" {
-		stores, ok := venueoracle.ExternalFromEnv()
-		if !ok {
-			t.Fatalf("%s is set but the target's stores are not: set %s, %s and %s", sessionscenario.EnvBaseURL,
-				venueoracle.EnvExternalPostgres, venueoracle.EnvExternalClickHouse, venueoracle.EnvExternalValkey)
-		}
-		external = &stores
-	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{External: external,
 		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PythonEnv: []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS=" + fromAddress,

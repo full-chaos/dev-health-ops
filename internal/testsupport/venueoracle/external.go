@@ -41,7 +41,19 @@ func (e ExternalStores) Validate(frozen bool) error {
 	if _, err := e.ClickHouseDatabase(); err != nil {
 		return err
 	}
+	if parsed, err := valkeygo.ParseURL(e.ValkeyURI); err != nil || parsed.InitAddress == nil {
+		return fmt.Errorf("valkey URI is not a redis:// or valkey:// URL: %v", err)
+	}
 	return nil
+}
+
+// singleSegment is the database name of a URL path, which must hold exactly one segment.
+func singleSegment(path string) (string, error) {
+	database := strings.TrimPrefix(path, "/")
+	if database == "" || strings.Contains(database, "/") {
+		return "", fmt.Errorf("URI path %q is not exactly one database name", path)
+	}
+	return database, nil
 }
 
 // PostgresDatabase is the database the Postgres URI names.
@@ -49,6 +61,15 @@ func (e ExternalStores) PostgresDatabase() (string, error) {
 	config, err := pgx.ParseConfig(e.PostgresURI)
 	if err != nil {
 		return "", fmt.Errorf("postgres URI: %w", err)
+	}
+	if strings.Contains(e.PostgresURI, "://") {
+		parsed, err := url.Parse(e.PostgresURI)
+		if err != nil {
+			return "", fmt.Errorf("postgres URI: %w", err)
+		}
+		if _, err := singleSegment(parsed.Path); err != nil {
+			return "", fmt.Errorf("postgres %w", err)
+		}
 	}
 	if config.Database == "" {
 		return "", fmt.Errorf("postgres URI names no database")
@@ -62,9 +83,12 @@ func (e ExternalStores) ClickHouseDatabase() (string, error) {
 	if err != nil || parsed.Host == "" {
 		return "", fmt.Errorf("clickhouse URI %q is not a URL with a host", e.ClickHouseURI)
 	}
-	database := strings.TrimPrefix(parsed.Path, "/")
-	if database == "" {
-		return "", fmt.Errorf("clickhouse URI names no database")
+	if parsed.Scheme != "clickhouse" && parsed.Scheme != "tcp" {
+		return "", fmt.Errorf("clickhouse URI scheme %q is not the native protocol (clickhouse:// or tcp://)", parsed.Scheme)
+	}
+	database, err := singleSegment(parsed.Path)
+	if err != nil {
+		return "", fmt.Errorf("clickhouse %w", err)
 	}
 	return database, nil
 }
@@ -140,5 +164,15 @@ func ResetLimiterKeys(t *testing.T, ctx context.Context, uri string) {
 // ExternalRequired is the external stores a run against baseURL needs: none (ok false) when baseURL is empty, an
 // error when it is set and the stores in the environment are missing or unusable.
 func ExternalRequired(baseURL string) (ExternalStores, bool, error) {
-	return ExternalStores{}, false, nil
+	if baseURL == "" {
+		return ExternalStores{}, false, nil
+	}
+	stores, ok := ExternalFromEnv()
+	if !ok {
+		return ExternalStores{}, false, fmt.Errorf("a base URL is set but the target's stores are not: set %s, %s and %s", EnvExternalPostgres, EnvExternalClickHouse, EnvExternalValkey)
+	}
+	if err := stores.Validate(true); err != nil {
+		return ExternalStores{}, false, err
+	}
+	return stores, true, nil
 }

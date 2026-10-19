@@ -9,7 +9,9 @@ Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 (CHAOS-4884), `error.v1` (CHAOS-4929), `jwks.v1` and `discovery.v1`
 (CHAOS-4930), `provisioning-event.v1` and `audit-event.v1` (CHAOS-4933),
 `credential-entry.v1`, `credential-list.v1` and `credential-receipt.v1`
-(CHAOS-4934). The remaining are CHAOS-4931 and 4932.
+(CHAOS-4934), `endpoint-auth-profile.v1` (CHAOS-4931), `authorization_request.v1`,
+`authorization_decision.v1` and the two batch forms (CHAOS-4932). All seven
+planned surfaces have shipped.
 
 Distinct from `credential-classes.json` and `endpoint-profiles.ops.json`, which
 are the Wave-0 **inventory** contract describing what authentication exists
@@ -160,10 +162,37 @@ Go has no such limit — `time.Time` represents both instants happily — and
 mirrors the check anyway, because a wire contract's job is that the two clients
 agree about which documents are acceptable.
 
+That makes a **third category of constraint**, beside the two already
+documented. Name it at each site that meets it:
+
+| category | example | why it exists |
+| -- | -- | -- |
+| the language needs it | Python's `_require_wire_int` refusing `403.0` | Go's decoder would reject the same document |
+| the contract needs it | `additionalProperties: false` | the wire format forbids the field |
+| **only agreement needs it** | Go's UTC range check | neither language requires the bound; the two clients must not disagree |
+
+A reader who asks only whether Go needs the check will call it dead code, which
+is why the comment at each such site says the reason is the *other* client. Any
+constraint where the runtimes differ in representable range, precision or
+tolerance produces one. `principal.v1` carries the same rule (Go
+`principalInstantInRange`, Python `_require_utc_instant_in_range`) with no
+clock-skew check to order it against.
+
 **A regex cannot know February has 28 days.** `2026-02-30` satisfies the
 pattern; both clients refuse it at parse. That is a genuine client-enforced
 rule and it has a `reject_by_client` fixture stating so — the alternative is a
 gap that reads as an oversight rather than as a boundary.
+
+For `principal.v1` the schema layer itself disagrees on that day, and the
+disagreement is declared rather than hidden: Go's `Validate` ACCEPTS
+`2026-02-30` and `2026-04-31` (google/jsonschema-go ignores `format`), while
+Python and ajv refuse them by `format`. Those fixtures live in the manifest's
+`go_schema_gap` group, which is neither `reject` (that asserts Go's `Validate`
+refuses) nor `reject_by_client` (that asserts every validator accepts). Every
+typed client refuses the document. `TestGoSchemaValidateAcceptsACalendarImpossibleDay`
+pins the Go acceptance, so a library that starts asserting `format` turns it red
+and the fixtures move to `reject`. Decided in CHAOS-10135: the typed client is
+the floor, as `ParseWireTimestamp` is on the event surfaces.
 
 ### A contract with one real consumer is pinned in BOTH directions
 

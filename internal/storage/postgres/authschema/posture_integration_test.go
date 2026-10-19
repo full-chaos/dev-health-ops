@@ -96,14 +96,14 @@ func TestRuntimeRolePostureAgainstLivePostgres(t *testing.T) {
 
 	const password = "posture-test-not-a-real-credential"
 	for _, statement := range []string{
-		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", migrationRole, password),
-		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", runtimeRole, password),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(migrationRole)), password),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(runtimeRole)), password),
 		// The migration role needs CREATE on the database to make the schema.
 		// The runtime role is deliberately given NOTHING here: every privilege
 		// it ends up with must come from ApplyRuntimeGrants, or this test
 		// would be proving the setup rather than the code.
-		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %q TO %q", database, migrationRole),
-		fmt.Sprintf("GRANT CONNECT ON DATABASE %q TO %q", database, runtimeRole),
+		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(migrationRole))),
+		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(runtimeRole))),
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("setup %q: %v", statement, err)
@@ -329,8 +329,8 @@ func TestApplyRefusesWhenTheMigrationRoleIsTheRuntimeRole(t *testing.T) {
 	}
 	const password = "posture-test-not-a-real-credential"
 	for _, statement := range []string{
-		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", role, password),
-		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %q TO %q", database, role),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(role)), password),
+		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(role))),
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("setup %q: %v", statement, err)
@@ -389,7 +389,7 @@ func TestApplyFailsWhenTheRuntimeRoleCanEscalate(t *testing.T) {
 		{
 			name: "membership in the object-owning migration role",
 			escalate: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, database, migrationRole, runtimeRole string) {
-				if _, err := admin.Exec(ctx, fmt.Sprintf("GRANT %q TO %q", migrationRole, runtimeRole)); err != nil {
+				if _, err := admin.Exec(ctx, fmt.Sprintf("GRANT %s TO %s", Quote(mustValidatedIdentifier(migrationRole)), Quote(mustValidatedIdentifier(runtimeRole)))); err != nil {
 					t.Fatalf("grant membership: %v", err)
 				}
 			},
@@ -398,7 +398,7 @@ func TestApplyFailsWhenTheRuntimeRoleCanEscalate(t *testing.T) {
 		{
 			name: "CREATE on the database",
 			escalate: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, database, migrationRole, runtimeRole string) {
-				if _, err := admin.Exec(ctx, fmt.Sprintf("GRANT CREATE ON DATABASE %q TO %q", database, runtimeRole)); err != nil {
+				if _, err := admin.Exec(ctx, fmt.Sprintf("GRANT CREATE ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(runtimeRole)))); err != nil {
 					t.Fatalf("grant database CREATE: %v", err)
 				}
 			},
@@ -444,10 +444,10 @@ func TestApplyFailsWhenTheRuntimeRoleCanEscalate(t *testing.T) {
 
 			const password = "posture-test-not-a-real-credential"
 			for _, statement := range []string{
-				fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", migrationRole, password),
-				fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", runtimeRole, password),
-				fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %q TO %q", database, migrationRole),
-				fmt.Sprintf("GRANT CONNECT ON DATABASE %q TO %q", database, runtimeRole),
+				fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(migrationRole)), password),
+				fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(runtimeRole)), password),
+				fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(migrationRole))),
+				fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(runtimeRole))),
 			} {
 				if _, err := admin.Exec(ctx, statement); err != nil {
 					t.Fatalf("setup %q: %v", statement, err)
@@ -488,7 +488,7 @@ func TestApplyFailsWhenTheRuntimeRoleCanEscalate(t *testing.T) {
 
 			switch testCase.wantKind {
 			case "role_membership":
-				if _, err := runtimePool.Exec(ctx, fmt.Sprintf("SET ROLE %q", migrationRole)); err != nil {
+				if _, err := runtimePool.Exec(ctx, fmt.Sprintf("SET ROLE %s", Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
 					t.Fatalf("the granted membership is not usable, so the finding is mislabelled: %v", err)
 				}
 				t.Log("confirmed: the runtime role really can SET ROLE to the schema owner")

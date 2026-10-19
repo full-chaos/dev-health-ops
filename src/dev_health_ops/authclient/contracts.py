@@ -38,6 +38,8 @@ import jsonschema
 import jsonschema.exceptions
 import jsonschema.protocols
 import jsonschema.validators
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
 #: Repo-relative location of the v1 wire schemas. Resolved from this file's
 #: own path rather than from a working directory, so a caller's cwd cannot
@@ -208,10 +210,52 @@ def _validator_for(schema_path_str: str) -> jsonschema.protocols.Validator:
     # document happens to reach that field.
     for pattern in _every_pattern(schema):
         strictly_anchored(pattern)
+    registry = _contract_registry(Path(schema_path_str).parent.parent)
+    for document in registry_documents(registry):
+        for pattern in _every_pattern(document):
+            strictly_anchored(pattern)
     return StrictDraft202012Validator(
         schema,
         format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER,
+        registry=registry,
     )
+
+
+@cache
+def _contract_registry(contracts_root_str: str) -> Registry:
+    """Every contract schema under *contracts_root*, keyed by its ``$id``.
+
+    A cross-schema ``$ref`` resolves ONLY against this registry, which is built
+    from files in this tree. Nothing is fetched: ``referencing`` has no
+    retrieval hook installed, so a ``$ref`` outside the registry is an error
+    rather than a network read, matching the Go loader.
+    """
+    root = Path(contracts_root_str)
+    registry: Registry = Registry()
+    paths = sorted((root / "jsonschema").glob("*.schema.json"))
+    paths += sorted(root.glob("*.schema.json"))
+    real_root = root.resolve()
+    for path in paths:
+        if not path.resolve().is_relative_to(real_root):
+            raise ContractError(
+                f"{path} resolves to {path.resolve()}, outside {real_root}; "
+                "a contract schema must live inside the contracts directory"
+            )
+        document = load_json(path)
+        schema_id = document.get("$id")
+        if not isinstance(schema_id, str):
+            raise ContractError(f"{path}: contract schema declares no $id")
+        registry = registry.with_resource(
+            schema_id,
+            Resource.from_contents(document, default_specification=DRAFT202012),
+        )
+    return registry
+
+
+def registry_documents(registry: Registry) -> Iterator[Any]:
+    """Yield the contents of every resource in *registry*."""
+    for uri in registry:
+        yield registry.get_or_retrieve(uri).value.contents
 
 
 def _every_pattern(node: Any) -> Iterator[str]:

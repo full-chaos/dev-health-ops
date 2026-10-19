@@ -335,6 +335,12 @@ func apiPosture() RolePosture {
 			// month's reservations: read only, the runtime guard is the writer.
 			{"byo_llm_budget_reservations", false, false, false},
 		},
+		// A permanent user delete (CHAOS-10019) keeps the billing audit rows and
+		// sets their actor to null. The write is the one column, never the
+		// table: the audit text and state stay out of reach of an UPDATE.
+		ColumnScoped: []ColumnPrivilege{
+			{"billing_audit_log", "actor_id", "UPDATE"},
+		},
 	}
 }
 

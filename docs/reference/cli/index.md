@@ -587,23 +587,29 @@ dho admin users update \
 
 ### `admin users delete`
 
-Delete a user (identified by `--id`, `--email`, or `--username`). The user's org memberships and sessions go with it. The API's `delete_user` does the same; this verb is for the operator who has no API token, for example to remove a throwaway superuser after a test.
+Delete a user (identified by `--id`, `--email`, or `--username`). The default is a **soft delete**: the user row and its profile stay, `is_active` becomes false (no login), access tokens stop working (`token_version` goes up), refresh tokens are revoked and password-reset and email-verification tokens are removed. `--force` is a **permanent delete**: the user row and every personal field are removed, together with the rows that belong to the user (memberships, tokens, Ask Dev conversations). The billing-audit log, the refund history, the impersonation sessions and the audit log are **kept**, with the user reference set to null (financial and security records that a legal or accounting duty keeps; GDPR Art. 17(3)(b), CCPA). The audit, impersonation, billing-audit and refund records keep their stored text verbatim after a delete (an enterprise audit feature); only the user reference is nulled, and rows that merely describe the deleted user (an admin's audit entry about them) are left as they are.
+
+If a row that references the user cannot be kept with a null reference (its column is NOT NULL), `--force` fails with an error that names the table and column, nothing is changed, and the user stays. The API's `DELETE /api/v1/admin/users/{user_id}` does the same: soft by default, `?force=true` for the permanent delete (`{"deleted": true}` in both cases).
 
 ```bash
-# Report what would be deleted (exit 1, nothing deleted)
+# Report what would happen (exit 1, nothing changed)
 dho admin users delete --email user@example.com
 
-# Delete
+# Soft delete
 dho admin users delete --email user@example.com --yes
+
+# Permanent delete
+dho admin users delete --email user@example.com --force --yes
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
 | `--id` / `--email` / `--username` | Identify the user to delete |
-| `--yes` | Confirm the deletion. Without it the user and the memberships that would go with it are printed and nothing is deleted (exit 1) |
+| `--force` | Delete the user permanently instead of the default soft delete |
+| `--yes` | Confirm. Without it the user and the memberships are printed with what would happen, and nothing is changed (exit 1) |
 
-On success the verb prints `Deleted user: <email> (id: <id>)` and logs one line on stderr (`admin: user deleted by the operator CLI`, the user id, whether it was a superuser, the memberships removed). An unknown user, a missing identifier and a malformed id print `Error: ...` and exit 1.
+A soft delete ends every credential (access tokens through `token_version`, refresh tokens, password-reset and email-verification tokens) on every call, so it can be repeated; for a user that is already inactive with no token left it prints `User already inactive: ...` and the API answers 404. On success the verb prints `Soft-deleted user: <email> (id: <id>)...` or `Permanently deleted user: <email> (id: <id>)` (followed by one line per table whose rows were kept with a null user). It logs on stderr: `admin: user soft-deleted` or `admin: user permanently deleted` (user id, mode, rows kept) and `admin: user delete by the operator CLI`. An unknown user, a missing identifier and a malformed id print `Error: ...` and exit 1.
 
 ### `admin orgs delete`
 
@@ -733,7 +739,7 @@ dho backfill run \
 
 **Which datasets run.** For a configuration that covers a whole integration, the backfill names the datasets that are enabled for that integration (its dataset rows), not the configuration's `sync_targets` list. A dataset that is off, or that has no row, is not backfilled and is not switched on. When the integration has no enabled dataset, the verb refuses the run (exit code 3) and writes nothing; enable a dataset in the connection's synchronization settings first. A configuration pinned to a single source still names the datasets its own `sync_targets` select, and so does a PagerDuty configuration (the platform manages the PagerDuty datasets as one set, so its list must be exactly `operational`).
 
-**Scoping a run under the unit cap.** A run plans units = enabled sources x planned datasets x 7-day chunks of the window; a GitHub source plans about ten units per chunk with every dataset on, because the pull-request, test and work-item families fold into one unit each. For example, 33 sources over thirty days (five chunks) plan about 1650 units, while the same sources limited to `--dataset-keys prs,commits` plan about 2 units per source per chunk, and a three-month window (thirteen chunks) fits. A plan over the unit cap (the `max_sync_units` tier limit, else 1000) is quarantined with `invalid_plan`, so a configuration with many sources cannot backfill a long window in one run. `--source-ids` and `--dataset-keys` limit the run to part of the configuration. Each takes a comma list and may be repeated; an empty item is an argument error. Every source id must be an enabled source of the configuration's integration. Every dataset key must be one the run could already name (see above): a key the provider does not have is unknown, and a key whose dataset is off is refused, because a backfill never switches a dataset on. A refused value is named in the error, the verb exits with code 3 and nothing is written. The values are written to the same `source_ids` and `dataset_keys` columns of the trigger that the admin Backfill wizard writes, in the enabled-source order and the provider's dataset order. Without the flags the run covers every enabled source and dataset, as before. A configuration pinned to a single source accepts only that source, and only while the source is enabled; its dataset keys must name enabled dataset rows of the integration (or keys its own `sync_targets` select).
+**Scoping a run under the unit cap.** A run plans units = selected sources x planned datasets x 7-day chunks of the window; a GitHub source plans about ten units per chunk with every dataset on, because the pull-request, test and work-item families fold into one unit each. For example, 33 sources over thirty days (five chunks) plan about 1650 units, while the same sources limited to `--dataset-keys prs,commits` plan about 2 units per source per chunk, and a three-month window (thirteen chunks) fits. A plan over the unit cap (the `max_sync_units` tier limit, else 1000) is quarantined with `invalid_plan`, so a configuration with many sources cannot backfill a long window in one run. `--source-ids` and `--dataset-keys` limit the run to part of the configuration. Each takes a comma list and may be repeated; an empty item is an argument error. Every source id must be an enabled source of the configuration's integration that the configuration selects (an enabled source the configuration does not select is refused: its scheduled runs never plan it). Every dataset key must be one the run could already name (see above): a key the provider does not have is unknown, and a key whose dataset is off is refused, because a backfill never switches a dataset on. A refused value is named in the error, the verb exits with code 3 and nothing is written. The values are written to the same `source_ids` and `dataset_keys` columns of the trigger that the admin Backfill wizard writes, in the enabled-source order and the provider's dataset order. Without the flags the run covers the sources a scheduled run of the configuration plans, the ones selected for it in Sync admin (CHAOS-10064: for one window a backfill covers the hourly run's scope; before, it covered every enabled source of the integration, selected or not), and every enabled dataset. A configuration pinned to a single source accepts only that source, and only while the source is enabled; its dataset keys must name enabled dataset rows of the integration (or keys its own `sync_targets` select).
 
 ```bash
 dho backfill run \
@@ -1718,6 +1724,18 @@ The fixed kinds are `dispatch_sync_run`, `finalize_sync_run`, `post_sync`, and
 are serialized per semantic database, persist audit intent before changing
 state, and may return `outcome_unknown`; inspect the route before retrying.
 
+**A route command leaves no delivery behind (CHAOS-9964).** Every `routes apply|pause|drain|resume` call, an `apply` that changed
+nothing included, reconciles the deliveries of its kind that sit at a route generation other than the route's, after the
+route change (if any) is committed. For `finalize_sync_run` it re-arms every such delivery whose River job is missing, completed,
+discarded or cancelled and whose run is ready to finalize (so the real Finalize runs at the current generation), walking all of
+them in (dispatched_at, id) order; a delivery with a live job (available, pending, retryable, running, scheduled), a run that is
+already terminal and a run with an open unit are left as they are. For the other kinds the command only counts such
+deliveries and warns, it does not re-arm them. The output adds `generation_reconcile` (`rearmed`, `skipped_live_job`,
+`skipped_not_ready`, `skipped_locked_job`, `other_kinds`; the skip counts cover every delivery seen) beside the route state; a
+failed reconcile prints `generation_reconcile_error` and exits 1 (the route change stays). Each re-armed row logs the Warn
+`syncreconciler.finalize_delivery_other_generation_rearmed`; the counter is `sync_route_generation_stranded_total{kind,action}`.
+A paused route re-arms nothing. The scheduled repair keeps its generation fence.
+
 The checked-in transport for all four sync-dispatch kinds is River, and no
 rollback transport is recorded against them (`rollback_route: none`). `routes apply`
 converges one unpaused legacy-transport route to its checked-in River transport after proving the
@@ -1774,6 +1792,9 @@ hold) moves to `custom:<id>` (`admin_teams_to_custom`): an admin team and a
 pushed `custom` team are one kind of team, in one namespace; when a pushed
 team already holds `custom:<id>`, that row stays, takes the admin row's
 manual members (`manual_members_folded`), and the admin row goes inactive.
+A custom team carries as the active team: an inactive kept row is written
+again active (`keyed_teams_activated`), and over a row an admin deleted the
+custom team is written as a new team (`deleted_keyed_teams`).
 A custom team is written with provider `""`.
 
 Not moved: ids that already hold a provider key, an
@@ -1787,9 +1808,10 @@ is no `--org`, with the stdin rules of
 [`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
 organization id. It prints counts only, under `carry_team_ids`: `teams`,
 `admin_teams`, `admin_teams_to_custom`, `admin_teams_not_carried`, `ambiguous_teams`,
-`teams_already_keyed`, `manual_members_folded`, `memberships`, `project_ownership`, `repo_ownership`,
+`teams_already_keyed`, `manual_members_folded`, `keyed_teams_activated`, `deleted_keyed_teams`, `memberships`, `project_ownership`, `repo_ownership`,
 `link_rows_already_keyed`, `observations`, `sync_policies`, `drift_changes`, `identity_drift_changes`,
-`identities`, `fallbacks`, `malformed_team_ids`, and `rows_written` (0 with `--dry-run`). A second
+`identities`, `fallbacks`, `malformed_team_ids`, `rows_written` (0 with `--dry-run`), and
+`kept_teams_not_restated` (a kept row the run planned to write again that was deleted after the run read it). A second
 run reports zero.
 
 ```bash
@@ -2000,7 +2022,7 @@ usage error (exit 2). The verb prints no organization id on stdout, stderr or
 in its own log lines; the audit row holds it. It prints counts only, under
 `retire_jira_project_as_team`: found (`teams`, `teams_with_manual_members`,
 `teams_with_sync_policy`, `ownership_rows`, `membership_rows`,
-`repo_ownership_rows`) and written (`teams_retired`, `ownership_closed`,
+`repo_ownership_rows`, `teams_without_provider_identity`) and written (`teams_retired`, `ownership_closed`,
 `memberships_closed`, `repo_ownership_closed`; 0 with `--dry-run`). A second
 run reports zero.
 

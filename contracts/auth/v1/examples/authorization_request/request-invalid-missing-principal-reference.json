@@ -1,0 +1,13 @@
+{
+  "action": "acr.context.read",
+  "context": {
+    "client_service": "dev-health-web",
+    "request_id": "req_EXAMPLE0000000000000000001"
+  },
+  "resource": {
+    "key": "full-chaos/dev-health-ops",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "type": "repository"
+  },
+  "schema_version": "authorization_request.v1"
+}

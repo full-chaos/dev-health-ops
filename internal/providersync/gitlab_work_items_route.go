@@ -66,6 +66,7 @@ type GitLabWorkItemsResult struct {
 	ReopenEventsSynced int      `json:"reopen_events_synced"`
 	InteractionsSynced int      `json:"interactions_synced"`
 	SprintsSynced      int      `json:"sprints_synced"`
+	EpicsSynced        int      `json:"epics_synced"`
 	RawDestinations    []string `json:"raw_destinations"`
 }
 
@@ -228,7 +229,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	counted.Doer = gitLabWorkItemsCountingDoer{delegate: client.Doer, requests: &requests}
 	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
+	if err := fetchObjectRoute(budgetAccount(ctx, "project"), &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -278,7 +279,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 
 	if fetchMilestones {
 		milestones, milestonePages, milestoneErr := collectGitLabMilestones(
-			ctx, &counted, gitlabMilestonesRoute, root+"/milestones", perPage, nestedMaxPages,
+			budgetAccount(ctx, "milestones"), &counted, gitlabMilestonesRoute, root+"/milestones", perPage, nestedMaxPages,
 		)
 		if milestoneErr != nil {
 			return CompleteRouteBatch{}, milestoneErr
@@ -309,8 +310,18 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			"group_milestones", countGroupMilestones(milestones))
 	}
 
+	epicsSynced, epicsSkipped, epicsHeld := 0, 0, false
+	var epicsIncomplete []string
+	if gitLabWorkItemsFlag(handler.FetchEpics) {
+		outcome, epicErr := handler.collectGitLabGroupEpics(ctx, claim, &counted, fullName, query, perPage, maxPages, nestedMaxPages,
+			fetchHistory, fetchComments, normalizedAt, &rows, &pages)
+		if epicErr != nil {
+			return CompleteRouteBatch{}, epicErr
+		}
+		epicsSynced, epicsSkipped, epicsHeld, epicsIncomplete = outcome.synced, outcome.skipped, outcome.held, outcome.incomplete
+	}
 	issuePayloads, issuePages, issueErr := collectGitLabPayloads(
-		ctx, &counted, gitlabIssuesRoute, root+"/issues", query, perPage, maxPages,
+		budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute, root+"/issues", query, perPage, maxPages,
 	)
 	if issueErr != nil {
 		return CompleteRouteBatch{}, issueErr
@@ -325,7 +336,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		if fetchLabels {
 			var labelPages int
 			labelEvents, labelPages, err = collectGitLabLabelEvents(
-				ctx, &counted, gitlabIssuesRoute+"/{iid}/resource_label_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_label_events",
+				budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute+"/{iid}/resource_label_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_label_events",
 				perPage, nestedMaxPages,
 			)
 			if err != nil {
@@ -344,7 +355,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
 		if fetchHistory {
 			events, eventPages, eventErr := collectGitLabStateEvents(
-				ctx, &counted, gitlabIssuesRoute+"/{iid}/resource_state_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_state_events",
+				budgetAccount(ctx, "notes"), &counted, gitlabIssuesRoute+"/{iid}/resource_state_events", root+"/issues/"+strconv.Itoa(payload.IID)+"/resource_state_events",
 				perPage, nestedMaxPages,
 			)
 			if eventErr != nil {
@@ -356,7 +367,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		}
 		if fetchLinks {
 			links, linkPages, linkErr := collectGitLabIssueLinks(
-				ctx, &counted, gitlabIssuesRoute+"/{iid}/links", root+"/issues/"+strconv.Itoa(payload.IID)+"/links",
+				budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute+"/{iid}/links", root+"/issues/"+strconv.Itoa(payload.IID)+"/links",
 				perPage, nestedMaxPages,
 			)
 			if linkErr != nil {
@@ -382,7 +393,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", item.WorkItemID, "count", unsupported)
 			}
 			closing, closingPages, closingErr := collectGitLabClosingMergeRequests(
-				ctx, &counted, gitlabIssuesRoute+"/{iid}/closed_by", root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
+				budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute+"/{iid}/closed_by", root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
 				perPage, nestedMaxPages,
 			)
 			pages += closingPages
@@ -417,7 +428,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		}
 		if fetchComments {
 			notes, notePages, noteErr := collectGitLabNotes(
-				ctx, &counted, gitlabIssuesRoute+"/{iid}/notes", root+"/issues/"+strconv.Itoa(payload.IID)+"/notes",
+				budgetAccount(ctx, "notes"), &counted, gitlabIssuesRoute+"/{iid}/notes", root+"/issues/"+strconv.Itoa(payload.IID)+"/notes",
 				perPage, nestedMaxPages,
 			)
 			if noteErr != nil {
@@ -431,7 +442,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 
 	if includeMRs {
 		mergeRequests, mergeRequestPages, mergeRequestErr := collectGitLabPayloads(
-			ctx, &counted, gitlabMergeRequestsRoute, root+"/merge_requests", query, perPage, maxPages,
+			budgetAccount(ctx, "merge_requests"), &counted, gitlabMergeRequestsRoute, root+"/merge_requests", query, perPage, maxPages,
 		)
 		if mergeRequestErr != nil {
 			return CompleteRouteBatch{}, mergeRequestErr
@@ -446,7 +457,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			if fetchHistory {
 				var statePages int
 				stateEvents, statePages, err = collectGitLabStateEvents(
-					ctx, &counted, gitlabMergeRequestsRoute+"/{iid}/resource_state_events", root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/resource_state_events",
+					budgetAccount(ctx, "notes"), &counted, gitlabMergeRequestsRoute+"/{iid}/resource_state_events", root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/resource_state_events",
 					perPage, nestedMaxPages,
 				)
 				if err != nil {
@@ -467,7 +478,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			// writer per ai_attribution key); this route emits none.
 			if fetchComments {
 				notes, notePages, noteErr := collectGitLabNotes(
-					ctx, &counted, gitlabMergeRequestsRoute+"/{iid}/notes", root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/notes",
+					budgetAccount(ctx, "notes"), &counted, gitlabMergeRequestsRoute+"/{iid}/notes", root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/notes",
 					perPage, nestedMaxPages,
 				)
 				if noteErr != nil {
@@ -503,14 +514,14 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	// The watermark is the end of the window whose raw rows this unit stored.
 	// It is held only while a closing-reference fetch failed transiently.
 	var watermark *time.Time
-	if claim.BeforeAt != nil && closingTransient == 0 {
+	if claim.BeforeAt != nil && closingTransient == 0 && !epicsHeld {
 		value := claim.BeforeAt.UTC()
 		watermark = &value
 	}
 	summary := GitLabWorkItemsResult{
 		WorkItemsSynced: len(rows.WorkItems), TransitionsSynced: len(rows.StatusTransitions),
 		DependenciesSynced: len(rows.Dependencies), ReopenEventsSynced: len(rows.ReopenEvents),
-		InteractionsSynced: len(rows.Interactions), SprintsSynced: len(rows.Sprints),
+		InteractionsSynced: len(rows.Interactions), SprintsSynced: len(rows.Sprints), EpicsSynced: epicsSynced,
 		RawDestinations: append([]string(nil), gitLabWorkItemRawDestinations...),
 	}
 	result := map[string]any{
@@ -520,6 +531,8 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		"reopen_events_synced": len(rows.ReopenEvents),
 		"interactions_synced":  len(rows.Interactions),
 		"sprints_synced":       len(rows.Sprints),
+		"epics_synced":         epicsSynced,
+		"epics_skipped":        epicsSkipped,
 		"raw_destinations":     append([]string(nil), gitLabWorkItemRawDestinations...),
 		"gitlab_work_items":    summary,
 		// CHAOS-8526: gitlab_closing_reference rows synced, and the issues whose closed_by fetch failed, split into
@@ -530,8 +543,8 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		"closing_reference_fetch_transient":     closingTransient,
 		"closing_reference_fetch_terminal":      closingTerminal,
 	}
-	if len(closingIncomplete) > 0 {
-		result["incomplete"] = closingIncomplete
+	if incomplete := append(append([]string(nil), closingIncomplete...), epicsIncomplete...); len(incomplete) > 0 {
+		result["incomplete"] = incomplete
 	}
 	return CompleteRouteBatch{
 		Effects: effects, Result: result, Watermark: watermark,
@@ -781,4 +794,160 @@ func gitLabClosingFetchOutcome(err error) string {
 		return "terminal_unavailable"
 	}
 	return "transient_failed"
+}
+
+type gitLabEpicOutcome struct {
+	synced     int
+	skipped    int
+	held       bool
+	incomplete []string
+}
+
+// collectGitLabGroupEpics mirrors GitLabProvider._ingest_with_client's epic
+// block (providers/gitlab/provider.py:150-223): the epics of the project's
+// group (its path minus the last segment), each with its resource state
+// events and notes, as work items of type "epic". Epics are a Premium/Ultimate
+// feature: a 403 or 404 on any epic read is the free-tier answer, logged at
+// Debug, and the unit goes on. Any other failure is a lost answer, not a zero:
+// the part is reported incomplete and the watermark is held so the next run asks
+// again (CHAOS-9857, the Jira worklog rule). The window is the issues' window,
+// two-ended (CHAOS-8805); Python sent updated_after only.
+func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
+	ctx context.Context,
+	claim Claim,
+	client *providerfoundation.HTTPClient,
+	fullName string,
+	issueQuery url.Values,
+	perPage, maxPages, nestedMaxPages int,
+	fetchHistory, fetchComments bool,
+	normalizedAt time.Time,
+	rows *gitlabWorkItemRows,
+	pages *int,
+) (gitLabEpicOutcome, error) {
+	var outcome gitLabEpicOutcome
+	ctx = budgetAccount(ctx, "epics")
+	parts := strings.Split(fullName, "/")
+	if len(parts) < 2 {
+		slog.Default().InfoContext(ctx, "gitlab_work_items_epics",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "outcome", "no_group", "epics_written", 0)
+		return outcome, nil
+	}
+	groupPath := strings.Join(parts[:len(parts)-1], "/")
+	result, listed := "error", 0
+	defer func() {
+		slog.Default().InfoContext(ctx, "gitlab_work_items_epics",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "outcome", result,
+			"epics_listed", listed, "epics_written", outcome.synced, "epics_skipped", outcome.skipped,
+			"incomplete", len(outcome.incomplete))
+	}()
+	epicQuery := url.Values{"state": {"all"}}
+	for _, key := range []string{"updated_after", "updated_before"} {
+		if value := issueQuery.Get(key); value != "" {
+			epicQuery.Set(key, value)
+		}
+	}
+	groupRoot := providerRelativePath(client, "api", "v4", "groups", groupPath)
+	// hold records a lost answer: the part is incomplete and the watermark is held.
+	hold := func(what string, err error) error {
+		if ctx.Err() != nil {
+			return err
+		}
+		outcome.held = true
+		outcome.incomplete = append(outcome.incomplete, what)
+		errorClass, errorType := logging.ErrorClass(err), logging.ErrorType(err) // never the error text (CHAOS-7933)
+		status := 0
+		var providerErr *providerfoundation.ProviderError
+		if errors.As(err, &providerErr) && providerErr != nil {
+			status = providerErr.StatusCode
+		}
+		slog.Default().WarnContext(ctx, "gitlab_work_items_epics_fetch_failed",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "part", what, "status", status,
+			"error_class", errorClass, "error_type", errorType)
+		return nil
+	}
+	unavailable := func(err error) bool {
+		var providerErr *providerfoundation.ProviderError
+		return errors.As(err, &providerErr) && providerErr != nil && providerErr.Class != providerfoundation.ErrorRateLimited &&
+			(providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusForbidden)
+	}
+	payloads, listPages, err := collectGitLabPayloads(ctx, client, gitlabGroupEpicsRoute, groupRoot+"/epics", epicQuery, perPage, maxPages)
+	*pages += listPages
+	if err != nil {
+		if unavailable(err) {
+			result = "unavailable"
+			return outcome, nil
+		}
+		if holdErr := hold("epics", err); holdErr != nil {
+			return outcome, holdErr
+		}
+		result = "incomplete"
+		return outcome, nil
+	}
+	listed = len(payloads)
+	for _, raw := range payloads {
+		var payload gitlabEpicPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return outcome, providerfoundation.ErrNormalizationInvalid
+		}
+		iidText, _, _ := pythonJSONScalar(payload.IID)
+		epicRoot := groupRoot + "/epics/" + url.PathEscape(iidText)
+		stateEvents := []gitlabStateEventPayload(nil)
+		if fetchHistory {
+			var statePages int
+			stateEvents, statePages, err = collectGitLabStateEvents(
+				ctx, client, gitlabGroupEpicsRoute+"/{iid}/resource_state_events", epicRoot+"/resource_state_events", perPage, nestedMaxPages)
+			*pages += statePages
+			if err != nil {
+				stateEvents = nil
+				if !unavailable(err) {
+					if holdErr := hold("epic_state_events:"+iidText, err); holdErr != nil {
+						return outcome, holdErr
+					}
+				}
+			}
+		}
+		item, transitions, reopens, normalizeErr := normalizeGitLabEpicWorkItem(
+			claim, groupPath, payload, stateEvents, handler.StatusMapping, handler.ResolveIdentity, normalizedAt)
+		if normalizeErr != nil {
+			if errors.Is(normalizeErr, ErrInvalidConfiguration) {
+				// A declared divergence from Python (which would write epic:0 or an
+				// empty title): the epic is skipped, never silently. One Warn per
+				// skip names the group, the iid and the reason; the count is in the
+				// unit result (epics_skipped) and the Info outcome line.
+				outcome.skipped++
+				reason := "no_usable_iid"
+				if iidText != "" && strings.TrimSpace(payload.Title) == "" {
+					reason = "empty_title"
+				}
+				slog.Default().WarnContext(ctx, "gitlab_work_items_epic_skipped",
+					"org_id", claim.OrgID, "unit_id", claim.ID, "group", groupPath, "iid", iidText, "reason", reason)
+				continue
+			}
+			return outcome, normalizeErr
+		}
+		rows.WorkItems = append(rows.WorkItems, item)
+		rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
+		rows.ReopenEvents = append(rows.ReopenEvents, reopens...)
+		outcome.synced++
+		if fetchComments {
+			notes, notePages, noteErr := collectGitLabNotes(
+				ctx, client, gitlabGroupEpicsRoute+"/{iid}/notes", epicRoot+"/notes", perPage, nestedMaxPages)
+			*pages += notePages
+			if noteErr != nil {
+				if !unavailable(noteErr) {
+					if holdErr := hold("epic_notes:"+iidText, noteErr); holdErr != nil {
+						return outcome, holdErr
+					}
+				}
+				continue
+			}
+			rows.Interactions = append(rows.Interactions,
+				normalizeGitLabNotes(claim, item.WorkItemID, notes, handler.ResolveIdentity, normalizedAt)...)
+		}
+	}
+	result = "ok"
+	if outcome.held {
+		result = "incomplete"
+	}
+	return outcome, nil
 }

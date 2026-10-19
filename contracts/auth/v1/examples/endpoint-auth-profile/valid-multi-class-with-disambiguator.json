@@ -1,0 +1,21 @@
+{
+  "accepted_credential_classes": [
+    "acr_client_credential",
+    "legacy_ingest_api_key"
+  ],
+  "action": "acr.context.read",
+  "cache_class": "decision_bound",
+  "class_disambiguator": {
+    "kind": "dedicated_header",
+    "name": "X-API-Key"
+  },
+  "classification": "protected",
+  "current_state_required": false,
+  "denial_disclosure": "forbidden",
+  "impersonation": "denied",
+  "method": "POST",
+  "resource_resolver": "credential_claim",
+  "route": "/v1/memberships/invite",
+  "schema_version": "endpoint-auth-profile.v1",
+  "tenant_requirement": "active_membership"
+}

@@ -98,12 +98,14 @@ func TestJiraIncidentsRouteCollectsOnlyNativelyAdmittedJSMIncidents(t *testing.T
 		t.Fatal(err)
 	}
 
+	client.Ledger = providerfoundation.NewRequestLedger()
 	batch, err := (JiraIncidentRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertRouteRequestsAreLabelled(t, "jira", "incidents", client.Ledger, "jira_metadata", "jira_jql", "jira_jsm_incident_admission")
 	descriptor, ok := Descriptor("jira", "incidents")
 	if !ok || !descriptor.RouteReady || descriptor.Executor != ExecutorNativeGo {
 		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)

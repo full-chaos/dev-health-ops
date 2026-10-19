@@ -631,3 +631,199 @@ def test_the_one_offs_keep_their_compose_shape(tmp_path: Path) -> None:
                 assert needed in a, (name, needed, a)
             profiles = [a[i + 1] for i, x in enumerate(a) if x == "--profile"]
             assert profiles == ["venue", service], (name, profiles)
+
+
+# ============================================================================
+# CHAOS-10113: the cut proof's PG posture deltas read the column-scoped privileges too.
+#
+# The proof is an ADDED-privileges read-back (has_table_privilege / has_column_privilege): it tells the
+# operator which grants the cut added and checks they are held. It cannot see an unwanted extra (a
+# table-wide UPDATE also makes has_column_privilege true); exactness is the readiness gate's job
+# (postgres.CheckAPIAuthorization). Method: the REAL scripts run against a tmp git repo whose
+# api_authorization.go / domain_authorization.go differ between two commits; the repo path literal is
+# substituted in the tmp copy, as for the scripts above.
+# ============================================================================
+
+_c_GIT = [
+    "git",
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@t",
+]
+
+_c_API_OLD = """package postgres
+
+func apiPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"users", true, true, true},
+			{"billing_audit_log", true, false, true},
+		},
+	}
+}
+"""
+
+_c_API_NEW = """package postgres
+
+func apiPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"users", true, true, true},
+			{"billing_audit_log", true, false, true},
+			{"settings", false, true, false},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"billing_audit_log", "actor_id", "UPDATE"},
+		},
+	}
+}
+"""
+
+_c_DOMAIN_OLD = """package postgres
+
+func domainPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"sync_runs", true, true, false},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"integration_credentials", "is_active", "UPDATE"},
+		},
+	}
+}
+"""
+
+_c_DOMAIN_NEW = """package postgres
+
+func domainPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"sync_runs", true, true, false},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"integration_credentials", "is_active", "UPDATE"},
+			{"integration_credentials", "updated_at", "UPDATE"},
+			{"worker_job_completion_fences", "completion_key", "SELECT"},
+			{"worker_job_completion_fences", "completion_key", "INSERT"},
+		},
+	}
+}
+"""
+
+
+def _c_stage_posture_delta(
+    tmp: Path, script: str, gofile: str, old: str, new: str
+) -> tuple[Path, str, str]:
+    """Stage the real posture script (and its sibling python helpers) and a tmp ops repo with two commits."""
+    staged = _c_stage(tmp, script)
+    for helper in _c_BB.glob("*.py"):
+        if helper.name != script:
+            (staged.parent / helper.name).write_text(
+                helper.read_text().replace(_c_HOST_ROOT, str(tmp / "host"))
+            )
+    repo = tmp / "host" / "ops"
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    target = repo / "internal" / "storage" / "postgres" / gofile
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shas = []
+    for text in (old, new):
+        target.write_text(text)
+        subprocess.run([*_c_GIT, "add", "-A", "internal"], cwd=repo, check=True)
+        subprocess.run([*_c_GIT, "commit", "-q", "-m", "m"], cwd=repo, check=True)
+        shas.append(
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+        )
+    return staged, shas[0], shas[1]
+
+
+def _c_run_delta(staged: Path, old: str, new: str, out: Path):
+    return subprocess.run(
+        [sys.executable, str(staged), old, new, str(out)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def test_cut_api_posture_delta_expects_added_column_privileges(tmp_path: Path) -> None:
+    staged, old, new = _c_stage_posture_delta(
+        tmp_path,
+        "cut-contents-pg-api-posture.py",
+        "api_authorization.go",
+        _c_API_OLD,
+        _c_API_NEW,
+    )
+    out = tmp_path / "pg-expect.txt"
+    p = _c_run_delta(staged, old, new, out)
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    lines = out.read_text().splitlines()
+    assert "devhealth_api settings SELECT,UPDATE" in lines, lines
+    assert "devhealth_api billing_audit_log.actor_id UPDATE" in lines, lines
+    assert not any(line.startswith("devhealth_api users") for line in lines), lines
+    assert "billing_audit_log.actor_id UPDATE" in p.stdout, p.stdout
+
+
+def test_cut_api_posture_delta_expects_no_column_line_for_an_unchanged_column(
+    tmp_path: Path,
+) -> None:
+    staged, old, new = _c_stage_posture_delta(
+        tmp_path,
+        "cut-contents-pg-api-posture.py",
+        "api_authorization.go",
+        _c_API_NEW,
+        _c_API_NEW.replace(
+            '{"settings", false, true, false},\n',
+            '{"settings", false, true, false},\n\t\t\t{"tier_limits", false, false, false},\n',
+        ),
+    )
+    out = tmp_path / "pg-expect.txt"
+    p = _c_run_delta(staged, old, new, out)
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    assert out.read_text().splitlines() == ["devhealth_api tier_limits SELECT"], (
+        out.read_text()
+    )
+
+
+def test_cut_domain_posture_delta_expects_added_column_privileges(
+    tmp_path: Path,
+) -> None:
+    staged, old, new = _c_stage_posture_delta(
+        tmp_path,
+        "cut-contents-pg-domain-posture.py",
+        "domain_authorization.go",
+        _c_DOMAIN_OLD,
+        _c_DOMAIN_NEW,
+    )
+    out = tmp_path / "pg-expect.txt"
+    p = _c_run_delta(staged, old, new, out)
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    lines = out.read_text().splitlines()
+    assert "devhealth_domain integration_credentials.updated_at UPDATE" in lines, lines
+    assert (
+        "devhealth_domain worker_job_completion_fences.completion_key SELECT,INSERT"
+        in lines
+    ), lines
+    assert not any("integration_credentials.is_active" in line for line in lines), lines
+
+
+def test_pg_grants_check_reads_a_column_expectation_with_has_column_privilege(
+    tmp_path: Path,
+) -> None:
+    script = _c_stage(tmp_path, "pg-grants-check.sh")
+    exp = tmp_path / "exp.txt"
+    exp.write_text("r t SELECT\nr billing_audit_log.actor_id UPDATE\n")
+    p, fake = _c_run(tmp_path, script, "bigboy", str(exp))
+    sql = "".join(f.read_text() for f in sorted(fake.glob("stdin.*")))
+    assert (
+        "has_column_privilege('r','public.billing_audit_log','actor_id','UPDATE')"
+        in sql
+    ), (sql, p.stdout, p.stderr)
+    assert "has_table_privilege('r','public.t','SELECT')" in sql, sql
+    assert "has_table_privilege('r','public.billing_audit_log.actor_id'" not in sql, sql
+    assert _c_violations(_c_calls(fake)) == []

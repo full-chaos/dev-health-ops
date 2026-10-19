@@ -159,6 +159,9 @@ type productClickHouse interface {
 	// driver.Conn (this interface's only production implementation)
 	// already satisfies it with zero adapter changes.
 	Query(context.Context, string, ...any) (driver.Rows, error)
+	// Exec runs the team.v1 write: one INSERT..SELECT that keeps the stored
+	// provider identity (teamprovider.Insert).
+	Exec(context.Context, string, ...any) error
 }
 
 type ProductTelemetryHandler struct{ conn productClickHouse }

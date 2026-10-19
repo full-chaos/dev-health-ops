@@ -7,6 +7,12 @@ deliberately ships no decision call yet rather than a stub that would have to
 be believed.
 """
 
+from dev_health_ops.authclient.authorization import (
+    AuthorizationDecision,
+    AuthorizationObligations,
+    parse_batch_response_bytes,
+    parse_decision_bytes,
+)
 from dev_health_ops.authclient.contracts import (
     ContractError,
     Violation,
@@ -49,6 +55,10 @@ from dev_health_ops.authclient.provisioning_event import (
 )
 
 __all__ = [
+    "AuthorizationDecision",
+    "AuthorizationObligations",
+    "parse_batch_response_bytes",
+    "parse_decision_bytes",
     "CredentialBody",
     "CredentialEntry",
     "CredentialList",

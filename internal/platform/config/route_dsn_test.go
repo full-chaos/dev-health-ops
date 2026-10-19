@@ -62,8 +62,8 @@ var routeDSNBase = map[string]string{
 	"RIVER_DOMAIN_DATABASE_PASSWORD":  "d-pw", "RIVER_QUEUE_DATABASE_PASSWORD": "q-pw", "RIVER_COORDINATOR_DATABASE_PASSWORD": "c-pw",
 }
 
-// routeDSNValues is the RFC 3986 set the chart's own tests swept (tests/workers/
-// test_helm_route_activate_hooks.py): every gen-delim and sub-delim alone, both
+// routeDSNValues is the RFC 3986 set the chart's own tests swept (the retired
+// tests/workers/test_helm_route_activate_hooks.py): every gen-delim and sub-delim alone, both
 // combined, a percent, a space, non-ASCII, the empty string.
 func routeDSNValues() [][2]string {
 	values := [][2]string{

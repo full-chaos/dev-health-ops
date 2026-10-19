@@ -5,6 +5,7 @@ package authschema
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -205,7 +206,7 @@ func TestPublicReadsMissingColumnGrantFailsOnATableThatExists(t *testing.T) {
 	}
 }
 
-func TestPublicReadsExtraColumnPrivilegesAreViolationsAndApplyRemovesThem(t *testing.T) {
+func TestPublicReadsExtraColumnPrivilegesAreViolationsAndNarrowingNeedsAcknowledgement(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	env := newPublicReadsFixture(t, ctx)
@@ -224,17 +225,37 @@ func TestPublicReadsExtraColumnPrivilegesAreViolationsAndApplyRemovesThem(t *tes
 			t.Errorf("%s was not reported", name)
 		}
 	}
-	if _, err := Apply(ctx, env.migration, env.options(&bytes.Buffer{})); err == nil {
-		t.Error("Apply succeeded while the runtime role held a column privilege outside the manifest on an unrelated table")
+
+	// Removing a privilege the role holds is a narrowing: refused, and nothing
+	// changes, until the exact set is acknowledged.
+	_, err := Apply(ctx, env.migration, env.options(&bytes.Buffer{}))
+	var narrowing *NarrowingError
+	if !errors.As(err, &narrowing) {
+		t.Fatalf("Apply = %v, want a *NarrowingError for the extra public column privileges", err)
+	}
+	if !strings.Contains(narrowing.Error(), "users") {
+		t.Errorf("the refusal does not name the table: %v", narrowing)
+	}
+	var stillHeld bool
+	if err := env.admin.QueryRow(ctx, `SELECT has_column_privilege($1, 'public.users', 'email', 'UPDATE')`, env.runtimeRole).Scan(&stillHeld); err != nil || !stillHeld {
+		t.Errorf("a refused run changed the grants (UPDATE on users.email held = %v, %v)", stillHeld, err)
+	}
+
+	// An unrelated public table is not on the manifest: Apply leaves it, and the
+	// posture keeps failing until an operator revokes it.
+	acknowledged := env.options(&bytes.Buffer{})
+	acknowledged.AcknowledgeNarrowing = narrowing.Digest
+	if _, err := Apply(ctx, env.migration, acknowledged); err == nil {
+		t.Error("Apply succeeded while the runtime role held a column privilege on an unrelated public table")
 	}
 	if _, err := env.migration.Exec(ctx, `REVOKE ALL ON public.ops_unrelated FROM `+role); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Apply(ctx, env.migration, env.options(&bytes.Buffer{})); err != nil {
-		t.Fatalf("Apply did not strip the extra privileges on manifest tables: %v", err)
+	if _, err := Apply(ctx, env.migration, acknowledged); err != nil {
+		t.Fatalf("Apply with the acknowledged narrowing: %v", err)
 	}
 	if found := env.violations(t, ctx); len(found) > 0 {
-		t.Fatalf("posture after Apply is not clean:\n%s", describe(found))
+		t.Fatalf("posture after the acknowledged narrowing is not clean:\n%s", describe(found))
 	}
 }
 

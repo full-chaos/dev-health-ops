@@ -122,6 +122,14 @@ func viaHelperReturn(admin interface{ Exec(string) }, role string) {
 	statement := buildStatement(role)
 	admin.Exec(statement)
 }
+func buildLocal(role string) string {
+	statement := fmt.Sprintf("GRANT y TO %s", role)
+	return statement
+}
+func viaLocalReturn(admin interface{ Exec(string) }, role string) {
+	statement := buildLocal(role)
+	admin.Exec(statement)
+}
 func viaRangeLiteral(admin interface{ Exec(string) }, role string) {
 	for _, s := range []string{fmt.Sprintf("GRANT x TO %s", role)} {
 		admin.Exec(s)
@@ -138,7 +146,7 @@ func notSQL(role string) {
 		fns = append(fns, v.fn+"/"+v.operand)
 	}
 	sort.Strings(fns)
-	want := []string{"buildStatement/role", "f/role", "viaMethodWrapper/role", "viaRangeLiteral/role", "viaVar/role"}
+	want := []string{"buildLocal/role", "buildStatement/role", "f/role", "viaMethodWrapper/role", "viaRangeLiteral/role", "viaVar/role"}
 	if strings.Join(fns, ",") != strings.Join(want, ",") {
 		t.Fatalf("violations = %v, want %v", fns, want)
 	}

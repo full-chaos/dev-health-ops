@@ -415,6 +415,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
 	}
+	logAuthProxyRouting(ctx, logger, deps.AuthProxy)
 	if adjust != nil {
 		adjust(&deps)
 	}

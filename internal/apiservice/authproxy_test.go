@@ -2,9 +2,12 @@ package apiservice
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -754,5 +757,61 @@ func TestConfigureReadsTheAuthProxySettings(t *testing.T) {
 	seen := stub.last(t)
 	if seen.path != "/api/v1/auth/logout" || seen.body != `{"refresh_token": "r"}` || seen.header.Get("X-Forwarded-For") != "127.0.0.1" {
 		t.Fatalf("upstream saw %s %q XFF %q", seen.path, seen.body, seen.header.Get("X-Forwarded-For"))
+	}
+}
+
+// go-api states its auth routing at start-up, at Info: each aggregate on or
+// off and the upstream host, however the flags were set (helm or envFrom),
+// and never a credential or query string.
+func TestConfigureLogsTheAuthProxyRouting(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	for name, testCase := range map[string]struct {
+		env  map[string]string
+		host string
+		on   map[string]bool
+	}{
+		"all off": {env: map[string]string{}, host: "", on: map[string]bool{}},
+		"sessions and saml": {
+			env:  map[string]string{EnvAuthProxyURL: "http://auth-service.internal:8095/", AuthProxyFlagEnv(AuthSessions): "true", AuthProxyFlagEnv(AuthSAML): "true"},
+			host: "auth-service.internal:8095",
+			on:   map[string]bool{string(AuthSessions): true, string(AuthSAML): true},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, aggregate := range AuthAggregates {
+				t.Setenv(AuthProxyFlagEnv(aggregate), testCase.env[AuthProxyFlagEnv(aggregate)])
+			}
+			t.Setenv(EnvAuthProxyURL, testCase.env[EnvAuthProxyURL])
+			var logs bytes.Buffer
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			components, err := configure(ctx, reachableDatabase(config.Config{APIAddress: "127.0.0.1:0"}), health.NewRegistry(time.Second),
+				slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+			closeComponents(components)
+			if err != nil {
+				t.Fatalf("configure: %v", err)
+			}
+			var record map[string]any
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var candidate map[string]any
+				if json.Unmarshal([]byte(line), &candidate) == nil && candidate["msg"] == "auth proxy routing" {
+					if record != nil {
+						t.Fatal("the routing line was logged twice")
+					}
+					record = candidate
+				}
+			}
+			if record == nil {
+				t.Fatalf("no \"auth proxy routing\" line at Info:\n%.2000s", logs.String())
+			}
+			if record["level"] != "INFO" || record["upstream_host"] != testCase.host {
+				t.Errorf("routing line level=%v upstream_host=%v, want INFO %q", record["level"], record["upstream_host"], testCase.host)
+			}
+			for _, aggregate := range AuthAggregates {
+				if got := record[string(aggregate)]; got != testCase.on[string(aggregate)] {
+					t.Errorf("routing line %s=%v, want %v", aggregate, got, testCase.on[string(aggregate)])
+				}
+			}
+		})
 	}
 }

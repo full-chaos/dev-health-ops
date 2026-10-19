@@ -111,6 +111,9 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 	return cfg, nil
 }
 
+// logAuthProxyRouting states the routing go-api starts with.
+func logAuthProxyRouting(context.Context, *slog.Logger, AuthProxyConfig) {}
+
 // sessionProxyRoutes are the internal/api/session routes the proxy takes over
 // through session.Deps.Inner, so go-api's guard, body checks, validator and
 // rate limiter still run before a forward. Keyed "METHOD pattern".

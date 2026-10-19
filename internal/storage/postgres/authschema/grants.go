@@ -3,6 +3,7 @@ package authschema
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -141,6 +142,26 @@ func runtimeSequences() []string {
 // deliberately not rewritten here, and are caught instead by
 // VerifyRuntimePosture, which Apply calls and fails on.
 func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) error {
+	return applyRuntimeGrants(ctx, conn, RuntimePosture(), options)
+}
+
+// applyRuntimeGrants takes the manifest as a parameter so a test can hand it a
+// manifest that has silently lost an entry, which is the failure the narrowing
+// ratchet exists to catch.
+//
+// The revoke, the re-grant and the ratchet comparison run in ONE transaction.
+// GRANT and REVOKE are transactional in PostgreSQL, so a refused narrowing
+// rolls back to the grants the role held before the run instead of leaving it
+// narrower than it was. Before this, a failure part-way through the statement
+// list left the role with its grants revoked and only some re-granted.
+//
+// The ratchet is a witness against SILENT LOSS: a privilege the role held
+// directly before the run and does not hold after is refused unless the
+// operator acknowledges that exact set. It is not a proof of sufficiency -- it
+// says the manifest has not regressed from the previous deployment, not that
+// the manifest is right (CHAOS-4885 is the functional half). Only DIRECT grants
+// are compared; see snapshotDirectGrants.
+func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivilege, options Options) error {
 	schemaID, err := NewValidatedIdentifier(options.Schema)
 	if err != nil {
 		return err
@@ -164,7 +185,7 @@ func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) er
 		fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, schema, role),
 	}
 
-	posture := RuntimePosture()
+	posture := append([]TablePrivilege(nil), manifest...)
 	sort.Slice(posture, func(i, j int) bool { return posture[i].Table < posture[j].Table })
 	for _, entry := range posture {
 		tableID, err := NewValidatedIdentifier(entry.Table)
@@ -193,8 +214,24 @@ func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) er
 		))
 	}
 
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: beginning the runtime grants transaction", ErrMigrationFailed)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	before, err := snapshotDirectGrants(ctx, tx, options.Schema, options.RuntimeRole)
+	if err != nil {
+		return err
+	}
+
 	for _, statement := range statements {
-		if _, err := conn.Exec(ctx, statement); err != nil {
+		if _, err := tx.Exec(ctx, statement); err != nil {
 			// The statement is this package's own text, built from validated
 			// identifiers, so naming it is safe and is what makes a grant
 			// failure diagnosable.
@@ -202,6 +239,30 @@ func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) er
 				"%w: %s: %v", ErrMigrationFailed, statement, redactPGError(err),
 			)
 		}
+	}
+
+	after, err := snapshotDirectGrants(ctx, tx, options.Schema, options.RuntimeRole)
+	if err != nil {
+		return err
+	}
+	if lost := narrowedGrants(before, after); len(lost) > 0 {
+		digest := narrowingDigest(lost)
+		if options.AcknowledgeNarrowing != digest {
+			logger.ErrorContext(
+				ctx, "runtime grants would narrow; refusing and rolling back",
+				"schema", options.Schema, "runtime_role", options.RuntimeRole,
+				"narrowed", len(lost), "digest", digest,
+			)
+			return &NarrowingError{Schema: options.Schema, Role: options.RuntimeRole, Lost: lost, Digest: digest}
+		}
+		logger.WarnContext(
+			ctx, "runtime grants narrowed with operator acknowledgement",
+			"schema", options.Schema, "runtime_role", options.RuntimeRole,
+			"narrowed", len(lost), "digest", digest,
+		)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("%w: committing the runtime grants: %v", ErrMigrationFailed, redactPGError(err))
 	}
 	return nil
 }

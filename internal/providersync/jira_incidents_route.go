@@ -167,7 +167,7 @@ func (handler JiraIncidentRouteHandler) Collect(
 	var tenant struct {
 		CloudID string `json:"cloudId"`
 	}
-	if err := jiraIncidentFetchObject(ctx, &counted, http.MethodGet, "/_edge/tenant_info", nil, &tenant); err != nil {
+	if err := jiraIncidentFetchObject(budgetAccount(ctx, "jira_metadata"), &counted, http.MethodGet, "/_edge/tenant_info", nil, &tenant); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	cloudID := strings.TrimSpace(tenant.CloudID)
@@ -179,13 +179,13 @@ func (handler JiraIncidentRouteHandler) Collect(
 	}
 
 	servicePages, _, err := verifyJiraServiceProject(
-		ctx, &counted, projectKey, maxPages, maxRows, perPage,
+		budgetAccount(ctx, "jira_metadata"), &counted, projectKey, maxPages, maxRows, perPage,
 	)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	issues, searchPages, err := collectJiraIncidentIssues(
-		ctx, &counted, projectKey, *claim.SinceAt, *claim.BeforeAt,
+		budgetAccount(ctx, "jira_jql"), &counted, projectKey, *claim.SinceAt, *claim.BeforeAt,
 		maxPages, maxRows, perPage,
 	)
 	if err != nil {
@@ -197,7 +197,7 @@ func (handler JiraIncidentRouteHandler) Collect(
 	}
 	rows := make([]jiraIncidentRow, 0, len(issues))
 	for _, issue := range issues {
-		admitted, err := admitJiraIncident(ctx, admissionClient, cloudID, issue.ID)
+		admitted, err := admitJiraIncident(budgetAccount(ctx, "jira_jsm_incident_admission"), admissionClient, cloudID, issue.ID)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}

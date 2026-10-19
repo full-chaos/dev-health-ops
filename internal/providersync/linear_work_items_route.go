@@ -624,7 +624,7 @@ func (handler LinearWorkItemsRouteHandler) resolveLinearTeam(
 	} else if team, ok := linearReferenceTeamPayload(handler.ReferenceTeams, teamKey); ok {
 		return team, 0, nil
 	}
-	return collectLinearTeam(ctx, client, teamKey)
+	return collectLinearTeam(budgetAccount(ctx, "teams"), client, teamKey)
 }
 
 func linearReferenceTeamPayloads(rows []LinearReferenceTeam) []linearTeamPayload {
@@ -1282,7 +1282,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		if len(teams) == 0 {
 			var teamErr error
 			var teamPages int
-			teams, teamPages, teamErr = collectLinearTeams(ctx, client, maxPages)
+			teams, teamPages, teamErr = collectLinearTeams(budgetAccount(ctx, "teams"), client, maxPages)
 			pagesSeen += teamPages
 			if teamErr != nil {
 				return CompleteRouteBatch{}, teamErr
@@ -1343,7 +1343,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					}
 				}
 			} else {
-				cycles, cyclePages, cycleErr := collectLinearCycles(ctx, client, team.ID)
+				cycles, cyclePages, cycleErr := collectLinearCycles(budgetAccount(ctx, "cycles"), client, team.ID)
 				pagesSeen += cyclePages
 				if cycleErr != nil {
 					return CompleteRouteBatch{}, cycleErr
@@ -1361,7 +1361,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 			}
 		}
 		page, pageErr := providerfoundation.CollectLinearGraphQLPages(
-			ctx, client, providerfoundation.LinearPageOptions{
+			budgetAccount(ctx, "issues"), client, providerfoundation.LinearPageOptions{
 				Query:          linearWorkItemsQuery,
 				Variables:      map[string]any{"filter": filter},
 				ConnectionPath: []string{"issues"}, PerPage: perPage, MaxPages: maxPages,
@@ -1391,7 +1391,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				labels, labelPages, labelErr := collectLinearIssueLabels(
-					ctx, client, payload.ID, cursor, len(payload.Labels.Nodes),
+					budgetAccount(ctx, "issues"), client, payload.ID, cursor, len(payload.Labels.Nodes),
 				)
 				pagesSeen += labelPages
 				if labelErr != nil {
@@ -1406,7 +1406,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				attachments, attachmentPages, attachmentErr := collectLinearIssueAttachments(
-					ctx, client, payload.ID, cursor, len(payload.Attachments.Nodes),
+					budgetAccount(ctx, "attachments"), client, payload.ID, cursor, len(payload.Attachments.Nodes),
 				)
 				pagesSeen += attachmentPages
 				if attachmentErr != nil {
@@ -1421,7 +1421,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				history, historyPages, historyErr := collectLinearIssueHistory(
-					ctx, client, payload.ID, cursor, len(payload.History.Nodes),
+					budgetAccount(ctx, "history"), client, payload.ID, cursor, len(payload.History.Nodes),
 				)
 				pagesSeen += historyPages
 				if historyErr != nil {
@@ -1436,7 +1436,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				comments, commentPages, commentErr := collectLinearIssueComments(
-					ctx, client, payload.ID, cursor, len(payload.Comments.Nodes),
+					budgetAccount(ctx, "comments"), client, payload.ID, cursor, len(payload.Comments.Nodes),
 				)
 				pagesSeen += commentPages
 				if commentErr != nil {
@@ -1451,7 +1451,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				relations, relationPages, relationErr := collectLinearIssueRelations(
-					ctx, client, payload.ID, false, cursor, len(payload.Relations.Nodes),
+					budgetAccount(ctx, "relations"), client, payload.ID, false, cursor, len(payload.Relations.Nodes),
 				)
 				pagesSeen += relationPages
 				if relationErr != nil {
@@ -1466,7 +1466,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				relations, relationPages, relationErr := collectLinearIssueRelations(
-					ctx, client, payload.ID, true, cursor, len(payload.InverseRelations.Nodes),
+					budgetAccount(ctx, "relations"), client, payload.ID, true, cursor, len(payload.InverseRelations.Nodes),
 				)
 				pagesSeen += relationPages
 				if relationErr != nil {

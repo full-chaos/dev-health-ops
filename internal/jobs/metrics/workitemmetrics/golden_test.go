@@ -20,6 +20,116 @@ import (
 // capability. It used to also carry compute_estimate_coverage_metrics_
 // daily's rows until CHAOS-5323/CHAOS-3092 deleted that function -- see
 // estimateCoverageGoldenFixture below for where those 14 cases live now.
+type goldenUserRow struct {
+	Day               string   `json:"day"`
+	Provider          string   `json:"provider"`
+	WorkScopeID       string   `json:"work_scope_id"`
+	UserIdentity      string   `json:"user_identity"`
+	TeamID            string   `json:"team_id"`
+	TeamName          string   `json:"team_name"`
+	ItemsStarted      int      `json:"items_started"`
+	ItemsCompleted    int      `json:"items_completed"`
+	WIPCountEndOfDay  int      `json:"wip_count_end_of_day"`
+	CycleTimeP50Hours *float64 `json:"cycle_time_p50_hours"`
+	CycleTimeP90Hours *float64 `json:"cycle_time_p90_hours"`
+}
+
+// declaredMergedUserRows is the row the Go compute makes for a person that the
+// frozen Python output holds under more than one team (CHAOS-8859). The measures
+// are the sums over the Python rows; the team is the one with the most of the
+// person's items that day, the lowest team id on a tie. Every entry names its
+// reason: a person with two Python rows has none declared here only if the
+// golden changes.
+var declaredMergedUserRows = map[[3]string]struct {
+	sourceRows                                int
+	teamID, teamName                          string
+	itemsStarted, itemsCompleted, wipEndOfDay int
+	reason                                    string
+}{
+	{"github", "", "unassigned"}: {
+		2, "team-jira", "Jira Team", 1, 0, 1,
+		"one unassigned item created that day under team-jira (all measures 0) and one started and in progress under unassigned: one item each, so the lowest team id labels the row",
+	},
+}
+
+// validateDeclaredMergedUserRow checks a declaration against the frozen rows of its
+// person: the source-row count, a label among the frozen teams, a written reason, the
+// measures as the sums over the source rows, and no frozen percentile input (a
+// declared row carries no cycle percentiles).
+func validateDeclaredMergedUserRow(
+	t *testing.T, key [3]string, sourceRows int, teamID, reason string,
+	started, completed, wip int, rows []goldenUserRow,
+) {
+	t.Helper()
+	var source []goldenUserRow
+	for _, row := range rows {
+		if [3]string{row.Provider, row.WorkScopeID, row.UserIdentity} == key {
+			source = append(source, row)
+		}
+	}
+	if len(source) != sourceRows {
+		t.Fatalf("golden holds %d rows for %v, the declaration merges %d", len(source), key, sourceRows)
+	}
+	if reason == "" {
+		t.Fatalf("declaredMergedUserRows[%v] needs a written reason", key)
+	}
+	labelFrozen := false
+	var sumStarted, sumCompleted, sumWIP int
+	for _, row := range source {
+		labelFrozen = labelFrozen || row.TeamID == teamID
+		sumStarted += row.ItemsStarted
+		sumCompleted += row.ItemsCompleted
+		sumWIP += row.WIPCountEndOfDay
+		if row.CycleTimeP50Hours != nil || row.CycleTimeP90Hours != nil {
+			t.Fatalf("golden row %+v of %v holds a cycle percentile, the declaration carries none", row, key)
+		}
+	}
+	if !labelFrozen {
+		t.Fatalf("declared label %q for %v is not one of the frozen teams", teamID, key)
+	}
+	if sumStarted != started || sumCompleted != completed || sumWIP != wip {
+		t.Fatalf("declared measures for %v are %d/%d/%d, the frozen rows sum to %d/%d/%d",
+			key, started, completed, wip, sumStarted, sumCompleted, sumWIP)
+	}
+}
+
+// goldenUserRowsOneForEachPerson returns the golden user rows with each person
+// that has several rows replaced by its declared merged row; a person that has
+// several rows and no declaration fails the test.
+func goldenUserRowsOneForEachPerson(t *testing.T, rows []goldenUserRow) []goldenUserRow {
+	t.Helper()
+	counts := map[[3]string]int{}
+	for _, row := range rows {
+		counts[[3]string{row.Provider, row.WorkScopeID, row.UserIdentity}]++
+	}
+	var out []goldenUserRow
+	emitted := map[[3]string]bool{}
+	for _, row := range rows {
+		key := [3]string{row.Provider, row.WorkScopeID, row.UserIdentity}
+		if counts[key] == 1 {
+			out = append(out, row)
+			continue
+		}
+		if emitted[key] {
+			continue
+		}
+		emitted[key] = true
+		declared, ok := declaredMergedUserRows[key]
+		if !ok {
+			t.Fatalf("the golden holds %d rows for %v and the test declares no merged row for it", counts[key], key)
+		}
+		validateDeclaredMergedUserRow(t, key, declared.sourceRows, declared.teamID, declared.reason,
+			declared.itemsStarted, declared.itemsCompleted, declared.wipEndOfDay, rows)
+		merged := goldenUserRow{
+			Day: row.Day, Provider: row.Provider, WorkScopeID: row.WorkScopeID, UserIdentity: row.UserIdentity,
+			TeamID: declared.teamID, TeamName: declared.teamName,
+			ItemsStarted: declared.itemsStarted, ItemsCompleted: declared.itemsCompleted, WIPCountEndOfDay: declared.wipEndOfDay,
+		}
+		out = append(out, merged)
+	}
+	return out
+}
+
 type goldenFixture struct {
 	Day        string `json:"day"`
 	ComputedAt string `json:"computed_at"`
@@ -73,20 +183,8 @@ type goldenFixture struct {
 		WIPCongestionRatio       float64  `json:"wip_congestion_ratio"`
 		PredictabilityScore      float64  `json:"predictability_score"`
 	} `json:"work_item_metrics_daily"`
-	UserMetricsDaily []struct {
-		Day               string   `json:"day"`
-		Provider          string   `json:"provider"`
-		WorkScopeID       string   `json:"work_scope_id"`
-		UserIdentity      string   `json:"user_identity"`
-		TeamID            string   `json:"team_id"`
-		TeamName          string   `json:"team_name"`
-		ItemsStarted      int      `json:"items_started"`
-		ItemsCompleted    int      `json:"items_completed"`
-		WIPCountEndOfDay  int      `json:"wip_count_end_of_day"`
-		CycleTimeP50Hours *float64 `json:"cycle_time_p50_hours"`
-		CycleTimeP90Hours *float64 `json:"cycle_time_p90_hours"`
-	} `json:"work_item_user_metrics_daily"`
-	CycleTimes []struct {
+	UserMetricsDaily []goldenUserRow `json:"work_item_user_metrics_daily"`
+	CycleTimes       []struct {
 		WorkItemID      string   `json:"work_item_id"`
 		Provider        string   `json:"provider"`
 		Day             string   `json:"day"`
@@ -323,11 +421,19 @@ func TestComputeDailyTripletMatchesPythonGolden(t *testing.T) {
 		checkFloat(t, label, "predictability_score", got.PredictabilityScore, want.PredictabilityScore)
 	}
 
-	if len(triplet.UserMetricsDaily) != len(fixture.UserMetricsDaily) {
-		t.Fatalf("work_item_user_metrics_daily row count: got %d, python produced %d",
-			len(triplet.UserMetricsDaily), len(fixture.UserMetricsDaily))
+	// work_item_user_metrics_daily stores one row for each (provider, scope, person, day):
+	// the team is a value of the row. Python grouped by team too and the table key
+	// collapsed the rows, so a person in two teams has two rows in the frozen output. The
+	// Go compute makes the one row (CHAOS-8859, chris: "It's a user metric, why would it
+	// key on team?"): the sums over the teams, labelled by the team with the most items,
+	// the lowest team id on a tie. A person with two golden rows is checked against the
+	// declared merged row below, every other person against the golden row.
+	wantUsers := goldenUserRowsOneForEachPerson(t, fixture.UserMetricsDaily)
+	if len(triplet.UserMetricsDaily) != len(wantUsers) {
+		t.Fatalf("work_item_user_metrics_daily row count: got %d, want %d (python produced %d)",
+			len(triplet.UserMetricsDaily), len(wantUsers), len(fixture.UserMetricsDaily))
 	}
-	for index, want := range fixture.UserMetricsDaily {
+	for index, want := range wantUsers {
 		got := triplet.UserMetricsDaily[index]
 		label := want.WorkScopeID + "/" + want.UserIdentity + "/" + want.TeamID
 		if got.Day.Format("2006-01-02") != want.Day || got.Provider != want.Provider ||

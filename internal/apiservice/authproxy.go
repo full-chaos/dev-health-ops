@@ -180,9 +180,13 @@ var (
 var hopHeaders = []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer",
 	"Transfer-Encoding", "Upgrade"}
 
-// clientAddressHeaders are dropped from the inbound request: auth-service
-// learns the client only from the X-Forwarded-For go-api writes.
-var clientAddressHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port", "X-Real-Ip"}
+// clientAddressHeaders are dropped from the inbound request, with every
+// X-Forwarded-* and X-Original-* field: auth-service learns the client only
+// from the X-Forwarded-For go-api writes.
+var clientAddressHeaders = []string{"Forwarded", "X-Real-Ip", "X-Client-Ip", "True-Client-Ip", "Cf-Connecting-Ip", "X-Cluster-Client-Ip",
+	"Fastly-Client-Ip"}
+
+var clientAddressPrefixes = []string{"X-Forwarded-", "X-Original-"}
 
 // upstreamRequestIDHeader carries auth-service's own server-minted request id.
 const upstreamRequestIDHeader = "X-Auth-Request-ID"
@@ -350,6 +354,10 @@ func (p *authProxy) forward(w http.ResponseWriter, r *http.Request, aggregate Au
 	}
 	if readErr != nil {
 		state.outcome = outcomeUpstreamError
+		if errors.Is(readErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			p.refuse(w, r, aggregate, http.StatusGatewayTimeout, "Authentication service timed out", "timeout", readErr, upstreamID)
+			return
+		}
 		p.refuse(w, r, aggregate, http.StatusBadGateway, "Authentication service unavailable", "incomplete_answer", readErr, upstreamID)
 		return
 	}
@@ -389,6 +397,14 @@ func outboundHeader(in http.Header) http.Header {
 	dropHop(out)
 	for _, name := range clientAddressHeaders {
 		out.Del(name)
+	}
+	for name := range out {
+		canonical := textproto.CanonicalMIMEHeaderKey(name)
+		for _, prefix := range clientAddressPrefixes {
+			if strings.HasPrefix(canonical, prefix) {
+				delete(out, name)
+			}
+		}
 	}
 	out.Del(httpapi.RequestIDHeader)
 	out.Del("Host")

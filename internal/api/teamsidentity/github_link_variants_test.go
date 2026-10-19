@@ -20,6 +20,8 @@ func TestGithubNextLinkPresentParamVariants(t *testing.T) {
 		{"next after last", `<https://api.github.com/orgs/acme/teams?page=9>; rel="last", <` + linkNextURL + `>; REL = "next"`, linkNextURL, true},
 		{"rel list is not next", `<` + linkNextURL + `>; rel="next last"`, "", false},
 		{"single quotes are not next", `<` + linkNextURL + `>; rel='next'`, "", false},
+		{"quoted comma in an earlier param leaves a fragment: next with no URL", `<https://api.github.com/orgs/o/teams?page=1>; title="x, y"; REL="NEXT"`, "", true},
+		{"url segment without angle brackets: next with no URL", `https://api.github.com/orgs/o/teams?page=2; rel="next"`, "", true},
 		{"last only", `<` + linkNextURL + `>; rel="last"`, "", false},
 	}
 	for _, tc := range cases {

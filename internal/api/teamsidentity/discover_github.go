@@ -178,10 +178,13 @@ func githubNextLinkPresent(header string) (string, bool) {
 			if index == 0 {
 				return "", true
 			}
+			// a target that is not <url> (RFC 8288; a comma inside a quoted parameter leaves such a fragment) is a next page with no
+			// usable URL: Python reads no link there, this walk fails closed with a Warn line and the counter instead of a wrong URL
 			url := strings.TrimSpace(segments[0])
-			url = strings.TrimPrefix(url, "<")
-			url = strings.TrimSuffix(url, ">")
-			return url, true
+			if !strings.HasPrefix(url, "<") || !strings.HasSuffix(url, ">") {
+				return "", true
+			}
+			return url[1 : len(url)-1], true
 		}
 	}
 	return "", false

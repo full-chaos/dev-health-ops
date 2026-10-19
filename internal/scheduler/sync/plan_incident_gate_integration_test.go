@@ -578,3 +578,34 @@ func TestDropCanonicalIncidentDatasetsCountsEachDatasetAndLocksTheFeatureRows(t 
 		t.Fatalf("the feature row must be free after the plan's transaction ended: %v", err)
 	}
 }
+
+// A key with no row that the canonical-incident gate drops is not planned, so
+// it is not counted as planned without a row (CHAOS-10088).
+func TestNativeMaterializerCountsOnlyPlannedDatasetsWithoutARow(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		explicit  []string
+		wantDelta uint64
+		wantErr   error
+	}{
+		{name: "only the gated key has no row: nothing planned, nothing counted", explicit: []string{"incidents"}, wantDelta: 0, wantErr: ErrOccurrenceIneligible},
+		{name: "a gated and a plain no-row key: only the plain one is counted", explicit: []string{"incidents", "work-item-labels"}, wantDelta: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := startIncidentGateConfig(t, "jira", []string{"work-items"}, nil)
+			config.addManualTrigger(t, SyncModeIncremental, "manual", tc.explicit)
+			config.setIncidentFeature(t, false)
+			materializer, err := NewNativeMaterializer(config.fixture.pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := explicitDatasetsWithoutRowTotal.Load()
+			if _, err := materializeAndCommit(t, config.fixture, materializer, config.occurrence); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("materialize error = %v, want %v", err, tc.wantErr)
+			}
+			if got := explicitDatasetsWithoutRowTotal.Load() - before; got != tc.wantDelta {
+				t.Fatalf("explicit datasets without a row counted %d, want %d", got, tc.wantDelta)
+			}
+		})
+	}
+}

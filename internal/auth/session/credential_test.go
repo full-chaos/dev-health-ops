@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"encoding/hex"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -263,7 +264,7 @@ func TestCredentialsAndKeyAreNeverPrinted(t *testing.T) {
 
 	var buf bytes.Buffer
 	for _, value := range []any{result, &result, result.Issued, store, *store, cfg} {
-		for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
+		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d", "%b", "%o", "%O", "%c", "%U", "%e", "%f", "%g", "%t", "%p", "%10d", "%-12x", "% x", "%08b"} {
 			fmt.Fprintf(&buf, verb+"\n", value)
 		}
 		if doc, err := json.Marshal(value); err == nil {
@@ -276,6 +277,7 @@ func TestCredentialsAndKeyAreNeverPrinted(t *testing.T) {
 	for name, secret := range map[string]string{
 		"successor": successor.Reveal(), "successor body": successor.Reveal()[len(credentialPrefix):],
 		"key": keyText.Reveal(), "key bytes": fmt.Sprint(key[:]),
+		"successor hex": hex.EncodeToString([]byte(successor.Reveal())), "key hex": hex.EncodeToString([]byte(keyText.Reveal())),
 	} {
 		if strings.Contains(out, secret) {
 			t.Errorf("the %s was printed", name)

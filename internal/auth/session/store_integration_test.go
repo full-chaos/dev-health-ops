@@ -843,3 +843,36 @@ func TestSweptFallbackKeepsAFractionalRefreshTTL(t *testing.T) {
 		t.Fatalf("swept fallback expiry %v, want created_at + %v = %v", current.ExpiresAt, ttl, want)
 	}
 }
+
+// Revoke and RevokeAll judge liveness by the effective expiry like every other
+// writer: a session whose last credential expired is already dead, and is
+// neither revoked again nor audited.
+func TestRevokeLeavesAnEffectivelyExpiredSessionAlone(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	short := e.newStore(t, e.keyText, Config{RefreshTTL: 100 * time.Millisecond})
+	principal := e.principal(t, ctx)
+	expired, err := short.Create(ctx, principal, nil, []string{"pwd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(250 * time.Millisecond)
+	live := e.create(t, ctx, principal)
+
+	if ok, err := short.Revoke(ctx, expired.Session.ID, Actor{}); ok || err != nil {
+		t.Fatalf("Revoke of an effectively expired session = %v, %v; want false, nil", ok, err)
+	}
+	n, err := e.store.RevokeAll(ctx, principal, Actor{})
+	if err != nil || n != 1 {
+		t.Fatalf("RevokeAll = %d, %v; want 1 (only the live session)", n, err)
+	}
+	if e.sessionRevoked(t, ctx, expired.Session.ID) {
+		t.Fatal("an effectively expired session was revoked")
+	}
+	if !e.sessionRevoked(t, ctx, live.Session.ID) {
+		t.Fatal("RevokeAll left the live session")
+	}
+	if a := e.auditRows(t, ctx, "auth.session.revoked", expired.Session.ID.String()); a != 0 {
+		t.Fatalf("%d audit rows for revoking a dead session, want 0", a)
+	}
+}

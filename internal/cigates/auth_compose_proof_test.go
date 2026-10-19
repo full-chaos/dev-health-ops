@@ -179,24 +179,65 @@ func TestAuthComposeProofRefusesAProjectThatAlreadyHasResources(t *testing.T) {
 	}
 }
 
-// Every container the proof creates must be project-named and checked: an unnamed helper from
-// `docker run --rm` is created and destroyed between the two snapshots and is never seen.
-func TestAuthComposeProofNamesAndChecksEveryContainerItCreates(t *testing.T) {
+// Other users of a shared host create and remove containers while the proof runs. Ownership is
+// decided by the project label and the project name, never by a host-wide before/after diff:
+// a foreign container that appears must not fail the proof, and one that goes away must not either.
+func TestAuthComposeProofIgnoresContainersOfOtherHostUsers(t *testing.T) {
+	root := authProofRoot(t)
+	bin := t.TempDir()
+	count := filepath.Join(bin, "n")
+	stub := "#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"  \"ps -aq --no-trunc\") n=$(cat " + count + " 2>/dev/null || echo 0); n=$((n+1)); echo $n >" + count + "; echo \"foreign$n\";;\n" +
+		"  \"inspect --format {{.Name}} foreign\"*) echo /great_turing;;\n" +
+		"esac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join(root, "ci", "check_auth_compose.sh"))
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "AUTH_COMPOSE_PROOF_PROJECT=acp561stubproj")
+	out, _ := cmd.CombinedOutput()
+	if strings.Contains(string(out), "does not carry the") || strings.Contains(string(out), "disappeared") {
+		t.Errorf("a container of another host user failed the proof:\n%s", out)
+	}
+}
+
+// The default project name is what keeps an unrelated actor from creating the proof's volume or
+// network between the preflight and `up` (compose adopts an existing resource of that name, and
+// cleanup would delete it): it must not be guessable from the pid alone.
+func TestAuthComposeProofDefaultProjectNameIsUnguessable(t *testing.T) {
+	root := authProofRoot(t)
+	bin := t.TempDir()
+	log := filepath.Join(bin, "docker.log")
+	stub := "#!/bin/sh\necho \"$@\" >>\"" + log + "\"\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join(root, "ci", "check_auth_compose.sh"))
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+	_, _ = cmd.CombinedOutput()
+	calls, _ := os.ReadFile(log)
+	m := regexp.MustCompile(`compose -p (\S+)`).FindStringSubmatch(string(calls))
+	if m == nil {
+		t.Fatalf("the proof never ran compose:\n%s", calls)
+	}
+	if !regexp.MustCompile(`^authproof[0-9]+-[0-9a-f]{8,}$`).MatchString(m[1]) {
+		t.Errorf("default project name %q is the pid alone, which another process can guess", m[1])
+	}
+}
+
+// Every `docker run` the proof makes must carry a project-prefixed --name so it is attributable.
+func TestAuthComposeProofNamesEveryDockerRun(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(authProofRoot(t), "ci", "check_auth_compose.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(raw)
-	for _, line := range strings.Split(text, "\n") {
+	for _, line := range strings.Split(string(raw), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") {
 			continue
 		}
 		if strings.Contains(line, "docker run") && !strings.Contains(line, "--name \"${PROJECT}") {
 			t.Errorf("a docker run without a project-prefixed --name: %q", line)
 		}
-	}
-	end := strings.Index(text, "AUTH COMPOSE PROOF PASSED")
-	if end < 0 || !strings.Contains(text[:end], "assert_project_prefixed") || strings.Count(text[:end], "assert_project_prefixed") < 3 {
-		t.Error("the prefix check is not run again at the end of the proof, after every helper container")
 	}
 }

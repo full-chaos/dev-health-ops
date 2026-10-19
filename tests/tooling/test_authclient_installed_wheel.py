@@ -66,6 +66,12 @@ PROBE = textwrap.dedent(
         "parse_batch_response_bytes": lambda: client.parse_batch_response_bytes(
             raw("authorization_batch_request", "batch-request-valid-two-items.json"),
             raw("authorization_batch_response", "batch-response-valid-items-disagree.json"), now=NOW),
+        "parse_session": lambda: client.parse_session(raw("session", "valid-live.json")),
+        "parse_refresh_request": lambda: client.parse_refresh_request(
+            raw("refresh-request", "valid-minimal.json")),
+        "parse_refresh_response": lambda: client.parse_refresh_response(
+            raw("refresh-response", "valid-full-lifetimes.json")),
+        "parse_auth_outcome": lambda: client.parse_auth_outcome(raw("auth-outcome", "valid-denied.json")),
         "parse_rfc3339": lambda: client.parse_rfc3339("2026-09-03T10:00:00Z", "probe.v1", "at"),
         "parse_credential_entry": lambda: client.parse_credential_entry(
             raw("credential-entry", "valid-active.json"), CRED_NOW),

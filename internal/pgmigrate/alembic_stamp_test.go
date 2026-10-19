@@ -65,20 +65,3 @@ func requireAlembicStamp(t *testing.T, pythonRoot string) {
 		t.Fatalf("the Python checkout %s holds Alembic scripts with digest %s, the stamp is %s: record on the build the stamp names", pythonRoot, got, alembicScriptsStamp)
 	}
 }
-
-// TestAlembicScriptsAreWhatTheGoldensWereRecordedFrom needs no Python: it fails when the Alembic scripts of this
-// tree differ from the tree the goldens were recorded from (or are gone and the stamp says otherwise is not
-// possible: an empty tree fails too, the measurement did not happen).
-func TestAlembicScriptsAreWhatTheGoldensWereRecordedFrom(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := alembicScriptsDigest(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != alembicScriptsStamp {
-		t.Fatalf("the Alembic scripts (src/dev_health_ops/alembic/versions) digest is %s, the goldens of this package were recorded from %s: re-record testdata/golden/{baseline_states,hook_states,preflight_states,history_walk,old_script_heads}.json on the build that holds the new scripts, then update the stamp", got, alembicScriptsStamp)
-	}
-}

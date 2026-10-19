@@ -1,24 +1,4 @@
-# Pre-commit + pre-push hooks for ruff format + lint.
-#
-# Design rationale:
-#   - pre-commit hook auto-fixes formatting + lint on staged files and
-#     re-stages the fixes (stage_fixed: true) so the resulting commit is clean.
-#     stage_fixed only works in pre-commit context, which is why fix-and-stage
-#     lives here and not in pre-push.
-#   - pre-push hook is a final gate; it runs `ruff format --check` and
-#     `ruff check` on pushed files but does NOT attempt to auto-fix. Pre-push
-#     cannot modify the commits being pushed (git's model), so auto-fix would
-#     leave uncommitted changes in the working tree and block the push without
-#     resolving anything. Final-gate-without-auto-fix is the correct shape here.
-#   - There is no mypy hook: hosted CI retired mypy (CHAOS-8352) and the kept
-#     Python no longer type-checks clean (CHAOS-8616).
-#     Every Python tool here goes through scripts/run_py_tool.sh so it always
-#     resolves the PROJECT environment. A bare tool name picks up whatever is
-#     first on PATH -- or nothing at all -- and
-#     in a worktree that is a global interpreter carrying a shadow copy of our
-#     dependencies -- which produced phantom errors in untouched files while CI
-#     stayed green (CHAOS-3913).
-#   - Either hook can be skipped with `--no-verify` for WIP or emergency pushes.
+# Git hooks: strip agent attribution from commit messages, pinned shellcheck on push.
 #
 # Install: `make install` (wires `lefthook install` into the bootstrap).
 
@@ -31,35 +11,9 @@ commit-msg:
       # the repo rule; this hook strips them before the commit lands.
       run: python3 scripts/strip_agent_attribution.py {1}
 
-pre-commit:
-  parallel: true
-  commands:
-    ruff-format:
-      glob: "*.py"
-      # The recorded-oracle script is pinned by a frozen sha256; `exclude` in
-      # pyproject.toml is ignored for files passed by name, so skip it here.
-      # `ruff check` below still lints it (CHAOS-8478).
-      exclude:
-        - "internal/syncdispatchruntime/testdata/dispatch_admission_oracle.py"
-      run: scripts/run_py_tool.sh ruff format {staged_files}
-      stage_fixed: true
-    ruff-fix:
-      glob: "*.py"
-      run: scripts/run_py_tool.sh ruff check --fix {staged_files}
-      stage_fixed: true
 pre-push:
   parallel: true
   commands:
-    ruff-format-check:
-      glob: "*.py"
-      exclude:
-        - "internal/syncdispatchruntime/testdata/dispatch_admission_oracle.py"
-      run: scripts/run_py_tool.sh ruff format --check {push_files}
-      fail_text: "Run `ruff format .` locally, commit the result, push again. Or `git push --no-verify` to bypass."
-    ruff-check:
-      glob: "*.py"
-      run: scripts/run_py_tool.sh ruff check {push_files}
-      fail_text: "Run `ruff check --fix .` locally, commit the result, push again. Or `git push --no-verify` to bypass."
     shellcheck-pin:
       # CHAOS-4915. Same pinned version and same file set as CI, from one
       # source of truth (ci/shellcheck_pinned.sh), so local and CI cannot

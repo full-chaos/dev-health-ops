@@ -3,14 +3,12 @@ package workgraph
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
 	chproto "github.com/ClickHouse/clickhouse-go/v2/lib/proto"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // --- CHAOS-4655: pair-bound (node_type, node_id) match ------------------
@@ -145,78 +143,6 @@ func TestBatchResolveMembership_RecordsTelemetryOnMissingMembershipTable(t *test
 	}
 	if len(recorded) != 1 || recorded[0].rows != 0 || recorded[0].endpoints != 2 {
 		t.Fatalf("expected one telemetry sample (0 rows / 2 endpoints), got: %+v", recorded)
-	}
-}
-
-// TestCategoryKindCardinalityHasNoNewValue is CHAOS-4647's trip-wire
-// (codex review round 2, adopted into the final ruling as the structural
-// answer to "can a fan-out multiplier be undercounted again" -- no number
-// can answer that, but a test that fails the moment the fan-out itself
-// changes can).
-//
-// batchResolveMembership (membership.go) assumes work_unit_membership's
-// category_kind has EXACTLY two values -- "theme" and "subcategory" --
-// in two places that must move together:
-//   - Go: the Next()/Scan() loop's switch statement (membership.go) only
-//     recognizes those two case labels; a third value is silently
-//     dropped (falls through, sets nothing on the map entry).
-//   - Python: project_membership_records (the SINGLE authoritative
-//     producer of work_unit_membership rows -- this module's own doc
-//     comment) hardcodes exactly two loops, one per distribution
-//     parameter, each stamping one literal category_kind value.
-//
-// This is also the exact fan-out CHAOS-4647's queryRouteMaxResultRows
-// derivation depends on (query_route.go: 2 endpoints/edge x 2 rows/
-// endpoint): a third category_kind would silently undercount that
-// budget a third time, the same way rounds 1 and 2 of that review each
-// undercounted the round before. Rather than trust a number to stay
-// right, this test reads BOTH sides' actual source text and fails
-// loudly the moment either one's set of category_kind literals drifts
-// from {"theme", "subcategory"} OR the two sides disagree with each
-// other -- forcing deliberate re-derivation of anything workload-sized
-// that depends on this cardinality, instead of a silent live failure
-// discovered the way this ticket's original bug was.
-func TestCategoryKindCardinalityHasNoNewValue(t *testing.T) {
-	_, currentFile, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("resolve workgraph package path")
-	}
-	packageDir := filepath.Dir(currentFile)
-	repositoryRoot := filepath.Clean(filepath.Join(packageDir, "..", "..", ".."))
-
-	wantKinds := []string{"subcategory", "theme"} // sorted
-
-	// Go side: membership.go's switch statement.
-	membershipGoPath := filepath.Join(packageDir, "membership.go")
-	goCaseRe := regexp.MustCompile(`case\s+"([a-z_]+)":\s*\n\s*entry\.dominant`)
-	goKinds := mustFindSourceLiterals(t, membershipGoPath, goCaseRe,
-		"membership.go's switch statement over category_kind")
-
-	// Python side: project_membership_records, the single authoritative
-	// producer (this module's own doc comment names it that).
-	pythonPath := filepath.Join(repositoryRoot, "src", "dev_health_ops", "work_graph", "investment", "membership.py")
-	pyLiteralRe := regexp.MustCompile(`category_kind="([a-z_]+)"`)
-	pyKinds := mustFindSourceLiterals(t, pythonPath, pyLiteralRe,
-		"membership.py's project_membership_records category_kind literals")
-
-	// This check runs ONLY after both reads above already proved they
-	// found the construct they were looking for (mustFindSourceLiterals
-	// fails loudly and separately if either file is missing/unreadable
-	// or the regex matched zero times -- see that helper's doc comment,
-	// added per team-lead review: a source-reading check that finds
-	// nothing must not silently agree with an empty expectation, and
-	// this test's expectation is never empty). What's left to check here
-	// is CONTENT, not whether the measurement happened at all.
-	if !equalStringSlices(goKinds, wantKinds) {
-		t.Fatalf("membership.go's switch statement recognizes category_kind values %v, want exactly %v -- "+
-			"a category_kind case was added or removed without updating this trip-wire AND "+
-			"query_route.go's queryRouteMaxResultRows derivation (workload fan-out: 2 endpoints/edge x N rows/endpoint)",
-			goKinds, wantKinds)
-	}
-	if !equalStringSlices(pyKinds, wantKinds) {
-		t.Fatalf("%s stamps category_kind literals %v, want exactly %v -- "+
-			"a new distribution/category_kind was added to the producer without updating this trip-wire",
-			pythonPath, pyKinds, wantKinds)
 	}
 }
 

@@ -22,12 +22,14 @@
 # (-p) and is removed with its volumes on exit. CI only: compose.yml gives
 # postgres a fixed container_name, so the proof overlays
 # ci/auth_compose_proof.override.yml (no container_name, no published port) and
-# asserts that every container it starts carries the project prefix.
+# refuses a project that already has resources, and asserts that every container of its project carries the project prefix.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
-PROJECT="${AUTH_COMPOSE_PROOF_PROJECT:-authproof$$}"
+# The suffix comes from /dev/urandom: the preflight below is check-then-use, and compose adopts a
+# resource that already carries the project name, so the name must not be guessable.
+PROJECT="${AUTH_COMPOSE_PROOF_PROJECT:-authproof$$-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')}"
 AUTH_SERVICES=(auth-service auth-migrate auth-provision auth-keys-init)
 
 die() {
@@ -80,19 +82,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Every container this run created (ids absent from the snapshot taken before anything started)
-# must carry the project prefix. Called after each phase that can create one, and again at the end.
+# Every container of this project must carry the project prefix. Ownership is the project label,
+# never a host-wide before/after diff: other users of a shared host create and remove containers.
 assert_project_prefixed() {
-  local created id name
-  created="$(comm -13 <(printf '%s\n' "${before}") <(docker ps -aq --no-trunc | sort))"
-  for id in ${created}; do
+  local id name count=0
+  for id in $(docker ps -aq --no-trunc --filter "label=com.docker.compose.project=${PROJECT}"); do
     name="$(docker inspect --format '{{.Name}}' "${id}")"
     case "${name}" in "/${PROJECT}"[-_]*) ;; *) die "container ${name} does not carry the ${PROJECT} prefix" ;; esac
+    count=$((count + 1))
   done
-  printf 'every container created so far carries the %s prefix: %s\n' "${PROJECT}" "$(printf '%s' "${created}" | wc -w | tr -d ' ')"
+  printf 'every container of project %s carries the prefix: %s\n' "${PROJECT}" "${count}"
 }
 
-before="$(docker ps -aq --no-trunc | sort)"
 
 printf 'step 1: up --build --wait auth-service\n'
 compose --profile auth up --build --detach --wait --wait-timeout 600 auth-service
@@ -212,6 +213,4 @@ fi
 printf 'default service list names no auth service\n'
 
 assert_project_prefixed
-gone="$(comm -23 <(printf '%s\n' "${before}") <(docker ps -aq --no-trunc | sort))"
-[ -z "${gone}" ] || die "containers outside the proof project disappeared: ${gone}"
 printf 'AUTH COMPOSE PROOF PASSED\n'

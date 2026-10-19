@@ -5,6 +5,7 @@ package daily
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"strconv"
 	"testing"
@@ -171,7 +172,7 @@ VALUES ($1::uuid,$2::uuid,$3,$4,'succeeded','succeeded',$5,$5,false)`,
 	defer cancel()
 	seen := 0
 	previous := slog.Default()
-	slog.SetDefault(slog.New(cancelAfterRowsHandler{Handler: previous.Handler(), cancel: cancel, after: 2, seen: &seen}))
+	slog.SetDefault(slog.New(cancelAfterRowsHandler{Handler: slog.NewTextHandler(io.Discard, nil), cancel: cancel, after: 2, seen: &seen}))
 	first, err := store.RepairLegacyRedriveGenerations(budget, repairTestOrg, day(1), day(31), false, "CHAOS-10139 test")
 	slog.SetDefault(previous)
 	if err != nil {

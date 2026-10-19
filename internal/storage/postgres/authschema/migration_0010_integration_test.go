@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // m10Hash is a well-formed 32-byte digest, hex-prefixed for a bytea parameter.
@@ -581,8 +583,12 @@ func TestMigration0010TriggersDoNotDependOnTheCallersSearchPath(t *testing.T) {
 // the migration's search_path (a trigger function, say) fails here the way it
 // would for a service that connects with the role's defaults.
 func newM10Fixture(t *testing.T, ctx context.Context) *authFixture {
+	return newM10FixtureWith(t, ctx, nil)
+}
+
+func newM10FixtureWith(t *testing.T, ctx context.Context, prepare func(context.Context, *containers.Instance, string)) *authFixture {
 	t.Helper()
-	env := newAuthFixture(t, ctx)
+	env := newAuthFixtureWith(t, ctx, prepare)
 	dsn, err := url.Parse(fixtureDSN(t, env.instance.URI, env.runtimeRole))
 	if err != nil {
 		t.Fatal(err)

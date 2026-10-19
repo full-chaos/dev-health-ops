@@ -336,6 +336,7 @@ func TestBatchModeTimeoutFailsUnitsAsASynchronousTransportFailure(t *testing.T) 
 		t.Fatalf("failure counts %v, want batch_timeout for every unit", got.stats.LLMFailureCounts)
 	}
 	got.stats.LLMFailureCounts = want.stats.LLMFailureCounts
+	got.stats.failureClassByIndex = want.stats.failureClassByIndex
 	requireSameCategorization(t, got, want)
 	if fake.cancelled != 1 {
 		t.Fatalf("cancelled %d times, want 1", fake.cancelled)

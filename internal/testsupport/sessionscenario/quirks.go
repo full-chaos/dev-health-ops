@@ -24,13 +24,20 @@ const (
 	Unsafe QuirkClass = "unsafe"
 )
 
-// Quirk is one classed behaviour. Names are exact golden step names the quirk covers.
+// Step is one golden step a quirk covers, by exact name and recorded status: a step whose status changes is a
+// different behaviour and needs its own entry.
+type Step struct {
+	Name   string
+	Status int
+}
+
+// Quirk is one classed behaviour.
 // Detector names a mechanical detector whose every hit the quirk covers (see Detectors).
 type Quirk struct {
 	ID       string
 	Class    QuirkClass
 	Reason   string
-	Names    []string
+	Steps    []Step
 	Detector string
 }
 
@@ -73,13 +80,16 @@ func CheckQuirks(table []Quirk, answers []GoldenAnswer) []string {
 		if q.Detector != "" && (Detectors[q.Detector] == nil || !blanketDetectors[q.Detector]) {
 			problems = append(problems, fmt.Sprintf("%s: detector %q is unknown or cannot be covered as a whole", q.ID, q.Detector))
 		}
-		if len(q.Names) == 0 && q.Detector == "" {
+		if len(q.Steps) == 0 && q.Detector == "" {
 			problems = append(problems, q.ID+": covers nothing")
 		}
-		for _, name := range q.Names {
-			if !anyNamed(answers, name) {
-				problems = append(problems, fmt.Sprintf("%s: %q is no golden step", q.ID, name))
+		for _, step := range q.Steps {
+			if !anyStep(answers, step) {
+				problems = append(problems, fmt.Sprintf("%s: %q with status %d is no golden step", q.ID, step.Name, step.Status))
 			}
+		}
+		if q.Detector != "" && Detectors[q.Detector] != nil && !anyHit(answers, Detectors[q.Detector]) {
+			problems = append(problems, fmt.Sprintf("%s: detector %q hits no golden step", q.ID, q.Detector))
 		}
 	}
 	detectors := make([]string, 0, len(Detectors))
@@ -89,7 +99,7 @@ func CheckQuirks(table []Quirk, answers []GoldenAnswer) []string {
 	sort.Strings(detectors)
 	for _, answer := range answers {
 		for _, name := range detectors {
-			if Detectors[name](answer) && !covered(table, name, answer.Name) {
+			if Detectors[name](answer) && !covered(table, name, answer) {
 				problems = append(problems, fmt.Sprintf("unclassed %s: %q", name, answer.Name))
 			}
 		}
@@ -97,22 +107,31 @@ func CheckQuirks(table []Quirk, answers []GoldenAnswer) []string {
 	return problems
 }
 
-func anyNamed(answers []GoldenAnswer, name string) bool {
+func anyStep(answers []GoldenAnswer, step Step) bool {
 	for _, a := range answers {
-		if a.Name == name {
+		if a.Name == step.Name && a.Status == step.Status {
 			return true
 		}
 	}
 	return false
 }
 
-func covered(table []Quirk, detector, name string) bool {
+func anyHit(answers []GoldenAnswer, hit func(GoldenAnswer) bool) bool {
+	for _, a := range answers {
+		if hit(a) {
+			return true
+		}
+	}
+	return false
+}
+
+func covered(table []Quirk, detector string, answer GoldenAnswer) bool {
 	for _, q := range table {
 		if q.Detector == detector {
 			return true
 		}
-		for _, named := range q.Names {
-			if named == name {
+		for _, step := range q.Steps {
+			if step == (Step{answer.Name, answer.Status}) {
 				return true
 			}
 		}

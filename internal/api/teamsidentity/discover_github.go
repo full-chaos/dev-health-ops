@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -135,7 +136,7 @@ func githubListAllPages[T any](ctx context.Context, client *providerfoundation.H
 			return nil, walk.pageError(fmt.Errorf("decode github list page: %w", err))
 		}
 		out = appendNew(out, seenItems, page, key)
-		link, advertised := githubNextLinkPresent(response.Header.Get("Link"))
+		link, advertised := githubNextLinkPresent(linkFieldValue(response.Header))
 		var more bool
 		if next, more, err = walk.advance(link, advertised, len(page)); err != nil {
 			return nil, err
@@ -154,23 +155,42 @@ func githubNextLink(header string) string {
 	return next
 }
 
+// linkFieldValue is every Link field of a response joined with ", ", as Python's headers.get("Link") reads a repeated field.
+func linkFieldValue(header http.Header) string {
+	return strings.Join(header.Values("Link"), ", ")
+}
+
+// isNextRelParam reads one Link parameter as Python's _parse_link_header_next does (trim, lower-case, exact rel="next"), plus
+// spaces around "=" and the unquoted rel=next this walk already accepted. A rel list and single quotes stay "not next", as in Python.
+func isNextRelParam(param string) bool {
+	key, value, found := strings.Cut(strings.ToLower(strings.TrimSpace(param)), "=")
+	if !found {
+		return false
+	}
+	value = strings.TrimSpace(value)
+	return strings.TrimSpace(key) == "rel" && (value == `"next"` || value == "next")
+}
+
 // githubNextLinkPresent is githubNextLink plus whether a rel="next" entry exists at all: `<>; rel="next"` advertises a next page
 // with no URL, which a walk must fail on instead of reading as the end.
 func githubNextLinkPresent(header string) (string, bool) {
 	for _, part := range strings.Split(header, ",") {
 		segments := strings.Split(part, ";")
 		for index, param := range segments {
-			if rel := strings.TrimSpace(param); rel != `rel="next"` && rel != `rel=next` {
+			if !isNextRelParam(param) {
 				continue
 			}
 			// a bare rel="next" (no <url> segment before it) still advertises a next page, with no URL
 			if index == 0 {
 				return "", true
 			}
+			// a target that is not <url> (RFC 8288; a comma inside a quoted parameter leaves such a fragment) is a next page with no
+			// usable URL: Python reads no link there, this walk fails closed with a Warn line and the counter instead of a wrong URL
 			url := strings.TrimSpace(segments[0])
-			url = strings.TrimPrefix(url, "<")
-			url = strings.TrimSuffix(url, ">")
-			return url, true
+			if !strings.HasPrefix(url, "<") || !strings.HasSuffix(url, ">") {
+				return "", true
+			}
+			return url[1 : len(url)-1], true
 		}
 	}
 	return "", false

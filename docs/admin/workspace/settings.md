@@ -100,17 +100,17 @@ configured, unknown pricing is rejected before provider execution, and missing
 usage on a completed attempt makes later calls fail closed until the next UTC
 budget window. Budget writes are unavailable while impersonating.
 
-## Service model for MCP investigations
+## ACR AI features
 
 An organization owner or administrator on a team or enterprise plan with Agent
-Context Runtime can turn the service model on or off under **AI Setup > BYO
-LLM**. When it is on, MCP investigations run on the platform LLM when the
-organization has no saved BYO key. A saved BYO key always wins. Platform LLM
-use counts against the organization's plan allowance.
+Context Runtime can turn ACR AI features (for example MCP investigations) on or
+off for the organization under **AI Setup > BYO LLM**. The features run on the
+organization's saved BYO model. The platform model is used only when a platform
+administrator grants the organization platform model fallback.
 
 Admin API: `GET /api/v1/admin/llm-settings/service-model` reads the state
 (`enabled`, `eligible`, `control`); `PUT` with `{"enabled": true}` or
 `{"enabled": false}` changes it. The change reaches investigations within about
-a minute. When billing or support set the service model for the organization,
-`control` is `managed` and the toggle answers `409`; contact support to change
-it. Each change writes an audit log entry.
+a minute. When billing or support set this for the organization, `control` is
+`managed` and the toggle answers `409`; contact support to change it. Each
+change writes an audit log entry.

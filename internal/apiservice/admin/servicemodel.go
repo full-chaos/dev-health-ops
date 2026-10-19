@@ -20,10 +20,9 @@ import (
 )
 
 // The self-service acr_service_model toggle (CHAOS-10243): an org admin on a
-// team or enterprise plan with agent_context_runtime turns the platform model
-// for MCP investigations on or off for their own org. It writes the org's
-// org_feature_overrides row, which the acr entitlement route
-// (internal/apiservice/acr) already serves. A saved BYO key still wins in acr.
+// team or enterprise plan with agent_context_runtime turns ACR AI features on
+// or off for their own org. It writes the org's org_feature_overrides row,
+// which the acr entitlement route (internal/apiservice/acr) already serves.
 const (
 	serviceModelFeature        = "acr_service_model"
 	serviceModelACRFeature     = "agent_context_runtime"
@@ -290,7 +289,7 @@ func (h *handlers) putServiceModel(w http.ResponseWriter, r *http.Request) {
 			serviceModelRefusal(http.StatusConflict,
 				"error", "feature_not_registered",
 				"feature", serviceModelFeature,
-				"message", "The service model is not available on this deployment").write(w)
+				"message", "ACR AI features are not available on this deployment").write(w)
 			return
 		case "tier_required":
 			logOutcome("refused_tier", before.enabled)
@@ -378,10 +377,10 @@ WHERE id = $1`, override.ID, string(config), actor, now); err != nil {
 			return
 		}
 		action := audit.ActionFeatureDisabled
-		description := "Service model for MCP investigations turned off by an org admin"
+		description := "ACR AI features turned off by an org admin"
 		if enabled {
 			action = audit.ActionFeatureEnabled
-			description = "Service model for MCP investigations turned on by an org admin"
+			description = "ACR AI features turned on by an org admin"
 		}
 		if _, err := h.audit.Write(ctx, tx, requestAuditEntry(r, audit.Entry{
 			OrgID: org, UserID: &actor, Action: action,

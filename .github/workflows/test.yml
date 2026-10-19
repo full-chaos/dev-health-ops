@@ -126,7 +126,7 @@ jobs:
               # touches a Python file) polices Go artifacts directly --
               # test_go_integration_sharding.py asserts the live Go package
               # inventory against ci/go_integration_shards.d/,
-              # test_go_image_publishing.py asserts published image names
+              # internal/cigates/workflows_image_publishing_test.go asserts published image names
               # against deploy/ renderers, test_go_worker_stop_hook_packaging.py
               # asserts the Dockerfile's staged binary path -- and a Go-only
               # PR is exactly the PR that can break what those tests check

@@ -301,7 +301,7 @@ def test_each_kind_invokes_routes_apply_with_that_exact_kind(kind: str) -> None:
 def test_route_activate_uses_the_published_operator_image() -> None:
     """`ghcr.io/full-chaos/dev-health-go-operator` is CI-published
     (docker-images.yml's go-merge matrix) -- naming an unpublished image
-    fails tests/tooling/test_go_image_publishing.py, the same guard
+    fails internal/cigates/workflows_image_publishing_test.go, the same guard
     river-migrate's own image default exists to satisfy. There is no
     floating default any more (the render refuses one -- see the image
     input-domain tests below), so this pins a real digest of the published

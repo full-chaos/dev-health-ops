@@ -100,7 +100,8 @@ CREATE TRIGGER link_credentials_security_guard
 -- written as UPDATE ... WHERE consumed_at IS NULL and checked for one affected
 -- row; a replay then matches no row and never reaches this trigger.
 CREATE FUNCTION consumed_at_write_once() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
 BEGIN
     RAISE EXCEPTION '%.consumed_at of % is already set and cannot change', TG_TABLE_NAME, OLD.id
         USING ERRCODE = 'integrity_constraint_violation';
@@ -122,7 +123,8 @@ CREATE TRIGGER refresh_credentials_consumed_at_write_once
 -- while a lock holds, so no legitimate path needs any of those. An early admin
 -- unlock therefore runs as the owner/migration role.
 CREATE FUNCTION login_attempts_live_lock() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'login_attempts row % is locked until % and cannot be deleted', OLD.id, OLD.locked_until
@@ -151,7 +153,8 @@ CREATE TRIGGER login_attempts_live_lock_delete
 -- identifier_hash never changes on any row: a retarget moves one identifier's
 -- failure history onto another.
 CREATE FUNCTION login_attempts_identifier_immutable() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
 BEGIN
     RAISE EXCEPTION 'login_attempts row % identifier cannot change', OLD.id
         USING ERRCODE = 'integrity_constraint_violation';
@@ -168,7 +171,8 @@ CREATE TRIGGER login_attempts_identifier_immutable
 -- surface, nothing is rewritten silently). Moving a credential to another
 -- family, or to a parent of another family, is refused.
 CREATE FUNCTION refresh_credentials_family_follows_parent() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
 DECLARE
     parent_family uuid;
 BEGIN
@@ -186,3 +190,14 @@ CREATE TRIGGER refresh_credentials_family_follows_parent
     BEFORE INSERT OR UPDATE OF family_id, parent_id ON refresh_credentials
     FOR EACH ROW WHEN (NEW.parent_id IS NOT NULL)
     EXECUTE FUNCTION refresh_credentials_family_follows_parent();
+
+-- Every function in this schema pins the search_path it was created under (the
+-- auth schema), so none depends on the caller's. A trigger function that read a
+-- table by bare name failed with "relation does not exist" for a runtime role
+-- on its default search_path. The functions from 0006 and 0007 do not read
+-- tables by bare name today (0007 qualifies through TG_TABLE_SCHEMA); pinning
+-- them makes the rule uniform and keeps the next edit from depending on it.
+ALTER FUNCTION audit_commit_guard() SET search_path FROM CURRENT;
+ALTER FUNCTION credential_array_is_set(anyarray) SET search_path FROM CURRENT;
+ALTER FUNCTION credential_registry_insert_rules() SET search_path FROM CURRENT;
+ALTER FUNCTION credential_registry_lifecycle_is_monotonic() SET search_path FROM CURRENT;

@@ -475,8 +475,20 @@ func TestMigration0010LiveLockoutCannotBeErasedByTheRuntime(t *testing.T) {
 	}
 
 	// After expiry the same row can be cleared and deleted.
-	if _, err := env.admin.Exec(ctx, `UPDATE auth.login_attempts SET locked_until = now() - interval '1 minute' WHERE id = $1`, id); err != nil {
+	// Ageing a live lock is exactly what the trigger forbids, so the test
+	// setup bypasses user triggers as the superuser, for this one statement.
+	ageTx, err := env.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ageTx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("bypass triggers: %v", err)
+	}
+	if _, err := ageTx.Exec(ctx, `UPDATE auth.login_attempts SET locked_until = now() - interval '1 minute' WHERE id = $1`, id); err != nil {
 		t.Fatalf("age the lock: %v", err)
+	}
+	if err := ageTx.Commit(ctx); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := env.runtime.Exec(ctx, `UPDATE auth.login_attempts SET attempt_count = 0, first_attempt_at = NULL, locked_until = NULL WHERE id = $1`, id); err != nil {
 		t.Errorf("clearing an expired lock was refused: %v", err)

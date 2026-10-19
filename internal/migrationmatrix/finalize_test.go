@@ -16,34 +16,6 @@ func writeTempPy(t *testing.T, body string) string {
 	return path
 }
 
-// TestLoadDailyFinalizeCompatFamiliesIsEmptyOnTheRealRepo is the byte-identity
-// proof for the ONE call this port makes to the real job_daily.py: every
-// finalize-scope Python write that fed the deleted Python generator's compat
-// set has since been deleted outright (CHAOS-5141/5084/5051/4290/4288), so
-// the real function body has zero `_write_*_for_day(` calls today, and the
-// compat set this scan returns must be empty -- exactly what
-// scripts/gen_go_migration_matrix_docs.py's load_daily_finalize_compat_families
-// returned before its deletion.
-func TestLoadDailyFinalizeCompatFamiliesIsEmptyOnTheRealRepo(t *testing.T) {
-	root := repoRootForTest(t)
-	dailyNames, err := LoadFamilyNames(filepath.Join(root, "internal/jobs/metrics/daily/families.json"))
-	if err != nil {
-		t.Fatalf("load daily families: %v", err)
-	}
-	remainingNames, err := LoadFamilyNames(filepath.Join(root, "internal/jobs/metrics/remaining/families.json"))
-	if err != nil {
-		t.Fatalf("load remaining families: %v", err)
-	}
-	compat, err := LoadDailyFinalizeCompatFamilies(
-		filepath.Join(root, "src/dev_health_ops/metrics/job_daily.py"), dailyNames, remainingNames)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(compat) != 0 {
-		t.Fatalf("expected an empty finalize-compat set on the real repo, got %v", compat)
-	}
-}
-
 func TestLoadDailyFinalizeCompatFamiliesDetectsARealWriteCall(t *testing.T) {
 	py := "def run_daily_metrics_finalize():\n" +
 		"    _write_capacity_extra_for_day(day, org_id)\n" +

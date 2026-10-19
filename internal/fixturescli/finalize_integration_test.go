@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
@@ -363,6 +364,7 @@ func TestFinalizeSyntheticWritesTheFrozenPythonRows(t *testing.T) {
 
 	requireNonVacuous(t, "Go", got, targets)
 	assertRelations(t, uri)
+	got["integration_datasets"] = withoutStateStamp(t, got["integration_datasets"])
 	if !reflect.DeepEqual(got, frozen) {
 		t.Fatalf("the rows the Go verb wrote differ from the frozen Python rows:\n%s", diffTables(frozen, got))
 	}
@@ -581,4 +583,29 @@ func TestFinalizeSyntheticBumpsTheCoverageCacheEpochWhenValkeyIsConfigured(t *te
 	if code, stderr = runVerb(withValkey); code == cli.ExitOK || !strings.Contains(stderr, "valkey_unavailable") {
 		t.Fatalf("an unreachable VALKEY_URI must fail the verb naming valkey_unavailable (exit %d):\n%s", code, stderr)
 	}
+}
+
+// withoutStateStamp checks that every integration_datasets row the Go verb wrote carries the writer's
+// stamp (the Python producer predates the columns and writes none), then drops the two columns so the
+// rest of the row compares with the frozen Python row.
+func withoutStateStamp(t *testing.T, rows []string) []string {
+	t.Helper()
+	out := make([]string, len(rows))
+	for index, row := range rows {
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(row), &decoded); err != nil {
+			t.Fatalf("decode integration_datasets row %q: %v", row, err)
+		}
+		if decoded["state_changed_at"] != "<ts>" || decoded["state_changed_by"] != providersync.DatasetWriterFixturesSeed {
+			t.Errorf("integration_datasets row %q is not stamped by %s", row, providersync.DatasetWriterFixturesSeed)
+		}
+		delete(decoded, "state_changed_at")
+		delete(decoded, "state_changed_by")
+		text, err := json.Marshal(decoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[index] = string(text)
+	}
+	return out
 }

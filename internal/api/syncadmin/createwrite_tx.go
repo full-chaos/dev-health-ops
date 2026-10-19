@@ -149,8 +149,8 @@ WHERE org_id = $1 AND planner_managed IS true AND integration_id = $2 AND parent
 		}
 	}
 	for index, key := range keys {
-		if _, err := tx.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
-VALUES ($1, $2, $3, $4, true, $5::json)`, uuid.New(), in.orgID, integrationID, key, datasetOptions[index]); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options, state_changed_at, state_changed_by)
+VALUES ($1, $2, $3, $4, true, $5::json, now(), $6)`, uuid.New(), in.orgID, integrationID, key, datasetOptions[index], providersync.DatasetWriterConfigCreate); err != nil {
 			return nil, fmt.Errorf("insert integration dataset: %w", err)
 		}
 	}
@@ -356,8 +356,8 @@ WHERE org_id = $1 AND integration_id = $2 ORDER BY id`, orgID, integrationID)
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
-VALUES ($1, $2, $3, $4, true, $5::json)`, uuid.New(), orgID, integrationID, key, text); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options, state_changed_at, state_changed_by)
+VALUES ($1, $2, $3, $4, true, $5::json, now(), $6)`, uuid.New(), orgID, integrationID, key, text, providersync.DatasetWriterConfigCreate); err != nil {
 				return fmt.Errorf("insert pagerduty dataset: %w", err)
 			}
 			continue
@@ -386,7 +386,10 @@ VALUES ($1, $2, $3, $4, true, $5::json)`, uuid.New(), orgID, integrationID, key,
 		if !changed {
 			text = row.options
 		}
-		if _, err := tx.Exec(ctx, `UPDATE integration_datasets SET is_enabled = true, options = $2::json WHERE id = $1`, row.id, text); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE integration_datasets SET
+state_changed_at = CASE WHEN is_enabled THEN state_changed_at ELSE now() END,
+state_changed_by = CASE WHEN is_enabled THEN state_changed_by ELSE $3 END,
+is_enabled = true, options = $2::json WHERE id = $1`, row.id, text, providersync.DatasetWriterConfigCreate); err != nil {
 			return fmt.Errorf("repair pagerduty dataset: %w", err)
 		}
 	}
@@ -394,7 +397,7 @@ VALUES ($1, $2, $3, $4, true, $5::json)`, uuid.New(), orgID, integrationID, key,
 		if row.expected || !row.enabled {
 			continue
 		}
-		if _, err := tx.Exec(ctx, `UPDATE integration_datasets SET is_enabled = false WHERE id = $1`, row.id); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE integration_datasets SET is_enabled = false, state_changed_at = now(), state_changed_by = $2 WHERE id = $1`, row.id, providersync.DatasetWriterConfigCreate); err != nil {
 			return fmt.Errorf("disable a non-operational pagerduty dataset: %w", err)
 		}
 	}

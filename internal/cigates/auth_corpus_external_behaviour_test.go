@@ -25,8 +25,12 @@ func newFakeDocker(t *testing.T) fakeDocker {
 	docker := `#!/bin/sh
 printf '%s\n' "$*" >> "` + record + `"
 case "$*" in
+  *" down "*)
+    if [ -n "$FAKE_BLOCK_DOWN" ]; then exec sleep "$FAKE_BLOCK_DOWN"; fi ;;
   *" up "*)
-    if [ -n "$FAKE_BLOCK_UP" ]; then sleep "$FAKE_BLOCK_UP"; fi ;;
+    if [ -n "$FAKE_BLOCK_UP" ]; then sleep "$FAKE_BLOCK_UP"; fi
+    if [ -n "$FAKE_FAIL_UP" ]; then exit 1; fi ;;
+  *" port "*) echo 127.0.0.1:12345 ;;
   *" ps -q go-api"*) echo cid-go-api ;;
   *"inspect --format"*) echo "${FAKE_HEALTH:-healthy}" ;;
 esac
@@ -134,5 +138,49 @@ func TestAuthCorpusSetEnvGivesUpWhenGoAPIStaysUnhealthy(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(string(out), "healthy") {
 		t.Errorf("an unhealthy go-api was reported as ready: err=%v output=%s", err, out)
+	}
+}
+
+func TestAuthCorpusExternalCleanupIsBounded(t *testing.T) {
+	fake := newFakeDocker(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+	cmd.Env = fake.env("FAKE_FAIL_UP=1", "FAKE_BLOCK_DOWN=40", "AUTH_CORPUS_DOWN_SECONDS=2")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("a hung `compose down` held the cleanup past AUTH_CORPUS_DOWN_SECONDS (still running after 12 s); output:\n%s", out)
+	}
+	if err == nil {
+		t.Errorf("the script reported success although compose up failed:\n%s", out)
+	}
+}
+
+// compose.yml's migrate service refuses a database that holds objects but no alembic_version table, and
+// auth-migrate creates the auth schema: starting them together races. Leg acp starts go-api (and so migrate) first
+// and auth-service after it.
+func TestAuthCorpusExternalAcpLegStartsAuthServiceAfterGoAPI(t *testing.T) {
+	fake := newFakeDocker(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "acp")
+	cmd.Env = fake.env()
+	_, _ = cmd.CombinedOutput()
+	var ups []string
+	for _, call := range strings.Split(fake.calls(t), "\n") {
+		if strings.Contains(call, " up ") {
+			ups = append(ups, call[strings.Index(call, " up ")+4:])
+		}
+	}
+	if len(ups) != 2 {
+		t.Fatalf("want two `compose up` calls (go-api, then auth-service), got %d: %q", len(ups), ups)
+	}
+	if !strings.HasSuffix(ups[0], " go-api") || strings.Contains(ups[0], "auth-service") {
+		t.Errorf("the first up must start go-api alone: %q", ups[0])
+	}
+	if !strings.HasSuffix(ups[1], " auth-service") || strings.Contains(ups[1], "go-api") {
+		t.Errorf("the second up must start auth-service alone: %q", ups[1])
 	}
 }

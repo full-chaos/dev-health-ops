@@ -35,29 +35,6 @@
     },
     "endpointProfile": {
       "additionalProperties": false,
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "accepted_credential_classes": {
-                "type": "array",
-                "minItems": 2
-              }
-            },
-            "required": [
-              "accepted_credential_classes"
-            ]
-          },
-          "then": {
-            "required": [
-              "class_disambiguator"
-            ],
-            "properties": {
-              "class_disambiguator": {}
-            }
-          }
-        }
-      ],
       "properties": {
         "accepted_credential_classes": {
           "description": "class_id values from contracts/auth/v1/credential-classes.json this route's intended validator accepts. Empty for a genuinely public route.",
@@ -98,7 +75,7 @@
               "description": "The scheme, prefix or header name the selector reads. A name, never a credential value."
             }
           },
-          "description": "How a route that accepts more than one credential class picks the class from the request head BEFORE any validator runs (TRD section 10). The kind vocabulary is owned here; endpoint-auth-profile.v1 references it. The profile registry gate (CheckClassSelector) joins it with the per-class markers in credential-classes.json."
+          "description": "How a route that accepts more than one credential class picks the class from the request head BEFORE any validator runs (TRD section 10). The kind vocabulary is owned here; endpoint-auth-profile.v1 references it. The profile registry gate (CheckClassSelector) joins it with the per-class markers in credential-classes.json. Optional in this schema: the Go rows test requires it on every row that accepts two or more classes, because web's own row set cannot carry one yet (CHAOS-10199 flips this to a schema rule)."
         },
         "classification": {
           "enum": [

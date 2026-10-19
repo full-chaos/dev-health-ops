@@ -1,5 +1,5 @@
 {
-  "access_token": "EXAMPLEHEADER.EXAMPLEPAYLOAD.EXAMPLESIGNATURE",
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.EXAMPLEPAYLOAD.EXAMPLESIGNATURE",
   "occurred_at": "2026-10-18T10:00:00Z",
   "operation": "refresh",
   "reason_code": "refresh_reused",

@@ -134,3 +134,17 @@ def test_secrets_are_not_in_repr() -> None:
         and "EXAMPLEREFRESH" not in text
         and "EXAMPLEROTATED" not in text
     )
+
+
+@pytest.mark.parametrize("directory", list(SURFACES))
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-8-sig", "utf-32"])
+def test_every_parser_refuses_documents_that_are_not_plain_utf8(
+    directory: str, encoding: str
+) -> None:
+    """``json.loads`` on bytes auto-detects UTF-16/32 and a UTF-8 BOM; Go refuses all of them."""
+    manifest = json.loads((_dir(directory) / "manifest.json").read_text("utf-8"))
+    path = _dir(directory) / manifest["accept"][0]["file"]
+    text = path.read_text("utf-8")
+    _, parse = SURFACES[directory]
+    with pytest.raises(ContractError):
+        parse(text.encode(encoding))

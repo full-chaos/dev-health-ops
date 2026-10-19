@@ -103,6 +103,24 @@
     {
       "expect_instance_location": "/access_token",
       "expect_keyword": "pattern",
+      "file": "invalid-access-token-rs256-header.json",
+      "why": "Only the HS256 ops header is accepted until Wave 3; an RS256 header is refused by every reader."
+    },
+    {
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "file": "invalid-access-token-alg-none.json",
+      "why": "alg=none is refused."
+    },
+    {
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "file": "invalid-access-token-reordered-header.json",
+      "why": "The Go signer emits one exact header segment; a differently encoded header is not an ops token."
+    },
+    {
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
       "file": "invalid-access-token-empty-segment.json",
       "why": "No empty segment."
     },

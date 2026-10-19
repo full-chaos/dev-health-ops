@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -139,9 +141,25 @@ func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose P
 	}
 	msg := Message{Purpose: purpose, To: to, FullName: name, Secret: secret, Deliver: principal != uuid.Nil}
 	if err := f.mail.Send(ctx, msg); err != nil {
-		slog.WarnContext(ctx, "local: link mail not sent", "purpose", string(purpose), "error", err)
+		slog.WarnContext(ctx, "local: link mail not sent", "purpose", string(purpose), "error_class", mailErrorClass(err))
 	}
 	return nil
+}
+
+// mailErrorClass is a fixed label for a send failure. The error text is never
+// logged: a mail provider's error often holds the recipient address.
+func mailErrorClass(err error) string {
+	var netErr net.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "refused"
+	default:
+		return "provider_error"
+	}
 }
 
 func passwordRefusal(password string, applyPolicy bool) []string {

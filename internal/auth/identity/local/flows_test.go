@@ -1,12 +1,16 @@
 package local
 
 import (
+	"bytes"
+	"log/slog"
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -457,4 +461,39 @@ func TestFailedWriteAfterTheConsumeLeavesTheLinkSpent(t *testing.T) {
 			t.Errorf("replay = %+v, %v; want the spent link refused", out, err)
 		}
 	})
+}
+
+type failingMail struct{ err error }
+
+func (m failingMail) Send(context.Context, Message) error { return m.err }
+
+func TestMailFailureLogsAFixedClassNotTheErrorText(t *testing.T) {
+	cases := map[string]error{
+		"provider_error": errors.New("550 5.1.1 <victim@example.com> mailbox unavailable"),
+		"refused":        fmt.Errorf("dial smtp for victim@example.com: %w", syscall.ECONNREFUSED),
+		"timeout":        fmt.Errorf("send to victim@example.com: %w", context.DeadlineExceeded),
+	}
+	for class, cause := range cases {
+		t.Run(class, func(t *testing.T) {
+			var buf bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			rig := newFlowRig(t, true)
+			f, err := NewFlows(FlowsConfig{Accounts: rig.accounts, Links: rig.links, Sessions: rig.sessions, Mail: failingMail{cause}, UsersOwnedByAuth: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Forgot(context.Background(), "victim@example.com"); err != nil {
+				t.Fatalf("a mail failure must not fail the flow: %v", err)
+			}
+			logged := buf.String()
+			if !strings.Contains(logged, "error_class="+class) {
+				t.Errorf("log %q lacks error_class=%s", logged, class)
+			}
+			if strings.Contains(logged, "victim") || strings.Contains(logged, "example.com") {
+				t.Errorf("the log line holds the address: %q", logged)
+			}
+		})
+	}
 }

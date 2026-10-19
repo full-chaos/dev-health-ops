@@ -99,11 +99,11 @@ var byteClasses = map[string]byteClass{
 	"indentation":            {accept, accept, 4, "compact, two-space, tab and one-member-per-line layouts"},
 	"token-ws-json":          {accept, accept, 81, "one JSON whitespace character before each of the 27 tokens (11 strings, 6 braces and brackets, 6 colons, 4 commas), 3 characters"},
 	"token-ws-nonjson":       {refuse, refuse, 27, "one vertical tab before each of the 27 tokens"},
-	"dup-key-same-value":     {refuse, accept, 5, "a key member repeated with an equal value: parsers keep the last, the consumer refuses the bytes"},
-	"dup-key-first-bad":      {refuse, accept, 5, "a key member repeated, first value invalid and last valid: the schema path sees only the last"},
-	"dup-key-last-bad":       {refuse, refuse, 5, "a key member repeated, last value invalid: both refuse"},
-	"dup-key-fold":           {refuse, refuse, 10, "kid and KID style pairs: the consumer folds names and refuses; the schema sees an undeclared member"},
-	"dup-key-escaped":        {refuse, accept, 5, "a member and its \\u-escaped spelling: equal after decoding, a duplicate"},
+	"dup-key-same-value":     {refuse, accept, 6, "a key member repeated with an equal value: parsers keep the last, the consumer refuses the bytes"},
+	"dup-key-first-bad":      {refuse, accept, 6, "a key member repeated, first value invalid and last valid: the schema path sees only the last"},
+	"dup-key-last-bad":       {refuse, refuse, 6, "a key member repeated, last value invalid: both refuse"},
+	"dup-key-fold":           {refuse, refuse, 12, "kid and KID style pairs: the consumer folds names and refuses; the schema sees an undeclared member"},
+	"dup-key-escaped":        {refuse, accept, 6, "a member and its \\u-escaped spelling: equal after decoding, a duplicate"},
 	"dup-top-same":           {refuse, accept, 1, "keys repeated with equal arrays"},
 	"dup-top-first-empty":    {refuse, accept, 1, "keys: [] then a valid array"},
 	"dup-top-last-empty":     {refuse, refuse, 1, "keys: valid then []"},
@@ -304,7 +304,7 @@ func TestTheByteLayerClassesAgreeWithTheRealConsumerAndTheSchemaPath(t *testing.
 	root := testRoot(t)
 	path := filepath.Join(t.TempDir(), "jwks.json")
 
-	const wantTotal = 419
+	const wantTotal = 431
 	seen := map[string]int{}
 	var ended, unclassed int
 	for _, c := range cases {
@@ -338,6 +338,11 @@ func TestTheByteLayerClassesAgreeWithTheRealConsumerAndTheSchemaPath(t *testing.
 	t.Logf("byte-layer cases: %d in %d classes", len(cases), len(seen))
 	if len(cases) != wantTotal || ended != wantTotal || unclassed != 0 {
 		t.Errorf("cases=%d ended=%d unclassed=%d, want %d cases all ended", len(cases), ended, unclassed, wantTotal)
+	}
+	for name, class := range byteClasses {
+		if class.count <= 0 {
+			t.Errorf("class %s has a zero count in the table: a class that may emit nothing guards nothing", name)
+		}
 	}
 	var names []string
 	for name := range byteClasses {
@@ -377,9 +382,10 @@ func TestTheManifestGapNotesAgreeWithTheExecutedConsumer(t *testing.T) {
 	for key, behaviour := range map[string]struct {
 		refused bool
 		stale   []string
+		mustSay string
 	}{
-		"known_gap_duplicate_json_members": {refusesBytes(dup), []string{"is NOT refused by any current reader"}},
-		"known_gap_trailing_content":       {refusesBytes(bdc + " null"), []string{"consumer silently ignores it", "are BOTH accepted"}},
+		"known_gap_duplicate_json_members": {refusesBytes(dup), []string{"is NOT refused by any current reader"}, "[C2]"},
+		"known_gap_trailing_content":       {refusesBytes(bdc + " null"), []string{"consumer silently ignores it", "are BOTH accepted"}, "agreement"},
 	} {
 		note, _ := manifest[key].(string)
 		if note == "" {
@@ -390,10 +396,65 @@ func TestTheManifestGapNotesAgreeWithTheExecutedConsumer(t *testing.T) {
 			t.Errorf("%s: the consumer no longer refuses these bytes; the byte-layer classes must change", key)
 			continue
 		}
+		if !strings.Contains(note, behaviour.mustSay) {
+			t.Errorf("%s does not say %q", key, behaviour.mustSay)
+		}
 		for _, phrase := range behaviour.stale {
 			if strings.Contains(note, phrase) {
 				t.Errorf("%s still says %q, but the executed consumer refuses these bytes", key, phrase)
 			}
 		}
+	}
+}
+
+// An escape class must actually carry escapes. Each case has to differ from the
+// plain document, contain a backslash, and (where the escape only respells the
+// same characters) decode to the very same document as the plain one.
+func TestEveryEscapeClassCarriesARealEscape(t *testing.T) {
+	var plain any
+	if err := json.Unmarshal([]byte(bdc), &plain); err != nil {
+		t.Fatal(err)
+	}
+	sameDecoding := map[string]bool{"escaped-name-one": true, "escaped-name-all": true, "escaped-value": true}
+	perClass := map[string]int{}
+	for _, c := range generateByteCases() {
+		if !strings.HasPrefix(c.class, "escaped-") {
+			continue
+		}
+		perClass[c.class]++
+		raw := string(c.raw)
+		if raw == bdc {
+			t.Errorf("%s: a case equal to the plain document", c.class)
+		}
+		if !strings.Contains(raw, "\\") {
+			t.Errorf("%s: no backslash in %q", c.class, raw)
+		}
+		if sameDecoding[c.class] {
+			var got any
+			if err := json.Unmarshal(c.raw, &got); err != nil || fmt.Sprint(got) != fmt.Sprint(plain) {
+				t.Errorf("%s: %q does not decode to the plain document (err=%v)", c.class, raw, err)
+			}
+		}
+	}
+	if len(perClass) == 0 {
+		t.Fatal("no escape class was generated")
+	}
+}
+
+// The schema's own description must not call the byte layer unreachable now
+// that the corpus reaches it.
+func TestTheSchemaDescriptionDoesNotCallTheByteLayerUnreachable(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(testRoot(t), "contracts/auth/v1/jsonschema/jwks.v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(schema.Description, "not reachable from this corpus") {
+		t.Error("the schema description still says the byte layer is not reachable from this corpus")
 	}
 }

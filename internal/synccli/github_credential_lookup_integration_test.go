@@ -220,6 +220,7 @@ func TestGitHubCredentialIsTheOneTheActiveIntegrationPointsAt(t *testing.T) {
 			}
 			return other.String()
 		}, "github_integration_selector_not_found"},
+		{"an unknown id while one other integration exists", func() string { return uuid.NewString() }, "github_integration_selector_not_found"},
 		{"a value that is not a uuid", func() string { return "not-a-uuid" }, "github_integration_selector_invalid"},
 	}
 	for _, refusal := range selectorRefusals {

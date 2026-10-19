@@ -68,6 +68,7 @@
         "account_locked",
         "email_unverified",
         "email_collision",
+        "signup_unavailable",
         "rate_limited",
         "store_unavailable",
         "dependency_unavailable"

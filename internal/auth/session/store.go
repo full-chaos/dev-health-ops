@@ -218,8 +218,8 @@ func (s *Store) sessionColumns() string {
 	s.auth_time, s.amr, s.created_at,
 	LEAST(s.expires_at, COALESCE(
 		(SELECT max(r.expires_at) FROM %s.refresh_credentials r WHERE r.session_id = s.id),
-		COALESCE(s.last_seen_at, s.created_at) + make_interval(secs => %d))),
-	s.revoked_at`, s.q, int64(s.refreshTTL/time.Second))
+		COALESCE(s.last_seen_at, s.created_at) + %d * interval '1 microsecond')),
+	s.revoked_at`, s.q, s.refreshTTL.Microseconds())
 }
 
 func scanRecord(row pgx.Row, extra ...any) (Record, error) {
@@ -353,20 +353,25 @@ type queryRower interface {
 }
 
 // lockedSession is the session row read FOR UPDATE, with what an exchange
-// decides on.
+// decides on. expired is the EFFECTIVE expiry (Record.ExpiresAt) against the
+// database clock, the same liveness Current reports; capExpired is the
+// absolute cap alone, which an exchange checks before the credential's own
+// expiry so an expired credential reports refresh_expired.
 type lockedSession struct {
 	Record
-	expired, principalDisabled bool
+	expired, capExpired, principalDisabled bool
 }
 
 func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string) (lockedSession, error) {
 	var l lockedSession
+	var now time.Time
 	var err error
 	l.Record, err = scanRecord(db.QueryRow(ctx, `
-		SELECT `+s.sessionColumns()+`, s.expires_at <= clock_timestamp(), p.disabled_at IS NOT NULL
+		SELECT `+s.sessionColumns()+`, clock_timestamp(), s.expires_at <= clock_timestamp(), p.disabled_at IS NOT NULL
 		FROM `+s.q+`.sessions s JOIN `+s.q+`.principals p ON p.id = s.principal_id
 		WHERE s.id = $1
-		FOR UPDATE OF s`, sessionID), &l.expired, &l.principalDisabled)
+		FOR UPDATE OF s`, sessionID), &now, &l.capExpired, &l.principalDisabled)
+	l.expired = err == nil && !now.Before(l.ExpiresAt)
 	return l, err
 }
 
@@ -419,11 +424,11 @@ func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString)
 		switch {
 		case locked.RevokedAt != nil || p.revoked:
 			result.Reason = ReasonSessionRevoked
-		case locked.expired:
+		case locked.capExpired:
 			result.Reason = ReasonSessionExpired
 		case locked.principalDisabled:
 			result.Reason = ReasonPrincipalDeactivated
-		case p.expired:
+		case !p.consumed && p.expired:
 			result.Reason = ReasonRefreshExpired
 		case !p.consumed:
 			issued, err := s.rotate(ctx, tx, locked.Record, p, credential)
@@ -535,7 +540,7 @@ func (s *Store) revokeForReuse(ctx context.Context, session Record, familyID str
 			if err != nil {
 				return err
 			}
-			if !p.consumed || p.expired || (p.inGrace && p.successorLive) {
+			if !p.consumed || (p.inGrace && p.successorLive) {
 				return errNotReuse
 			}
 			return s.revokeSessions(ctx, tx, []string{sessionID}, revokedByReuse)

@@ -784,3 +784,62 @@ func TestRevocationOutsideAuditCommitIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A consumed credential is never legitimately presented after its successor
+// was issued, expired or not: an expired consumed credential is reuse too.
+func TestConsumedExpiredCredentialIsReuse(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	issued := e.create(t, ctx, e.principal(t, ctx))
+	e.rotatedAgo(t, ctx, issued, GraceWindow+15*time.Second)
+	e.guarded(t, ctx, `UPDATE auth.refresh_credentials SET expires_at = now() - interval '1 second' WHERE token_hash = $1`, hashCredential(issued.Credential))
+	if got := e.exchange(t, ctx, e.store, issued.Credential); got.Reason != ReasonRefreshReused {
+		t.Fatalf("expired consumed credential: %s, want refresh_reused", got.Reason)
+	}
+	if live := e.liveCredentials(t, ctx, issued.Session.ID); live != 0 || !e.sessionRevoked(t, ctx, issued.Session.ID) {
+		t.Fatalf("%d live credentials after reuse of an expired consumed credential", live)
+	}
+}
+
+// Liveness is the EFFECTIVE expiry Current reports, for every writer: a
+// session whose last credential expired cannot have its revision bumped.
+func TestBumpRevisionRefusesAnEffectivelyExpiredSession(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	short := e.newStore(t, e.keyText, Config{RefreshTTL: 100 * time.Millisecond})
+	issued, err := short.Create(ctx, e.principal(t, ctx), nil, []string{"pwd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(250 * time.Millisecond)
+	if rev, err := short.BumpRevision(ctx, issued.Session.ID, Actor{}); !errors.Is(err, ErrSessionNotLive) {
+		t.Fatalf("BumpRevision on an effectively expired session = %d, %v; want ErrSessionNotLive", rev, err)
+	}
+	current, err := short.Current(ctx, issued.Session.ID)
+	if err != nil || current.Revision != 1 {
+		t.Fatalf("revision %d, %v; want 1", current.Revision, err)
+	}
+}
+
+// The swept-session fallback adds the configured refresh lifetime exactly,
+// sub-second part included.
+func TestSweptFallbackKeepsAFractionalRefreshTTL(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	const ttl = 1500 * time.Millisecond
+	store := e.newStore(t, e.keyText, Config{RefreshTTL: ttl})
+	issued, err := store.Create(ctx, e.principal(t, ctx), nil, []string{"pwd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.admin.Exec(ctx, `DELETE FROM auth.refresh_credentials WHERE session_id = $1`, issued.Session.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.Current(ctx, issued.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := issued.Session.CreatedAt.Add(ttl); !current.ExpiresAt.Equal(want) {
+		t.Fatalf("swept fallback expiry %v, want created_at + %v = %v", current.ExpiresAt, ttl, want)
+	}
+}

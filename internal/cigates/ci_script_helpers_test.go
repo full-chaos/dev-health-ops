@@ -31,7 +31,7 @@ type cmdSpec struct {
 
 // subprocessSlots caps how many child processes of this package run at once: every guard is parallel, and an uncapped
 // package starves the other packages of the same race leg (internal/fixturescli timed out at 10 minutes beside it).
-var subprocessSlots = make(chan struct{}, 4)
+var subprocessSlots = make(chan struct{}, 2)
 
 func (c cmdSpec) run(name string, args ...string) cmdResult {
 	subprocessSlots <- struct{}{}
@@ -333,4 +333,22 @@ func rootOf(t *testing.T) string {
 		}
 	})
 	return root
+}
+
+// repoRootNoT is repoRoot without a *testing.T, for process-wide once-only work.
+func repoRootNoT() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			panic("go.mod not found above the test directory")
+		}
+		dir = parent
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -528,20 +529,33 @@ func tail(s string, n int) string {
 	return s
 }
 
+var (
+	multiShardOnce sync.Once
+	multiShardNum  string
+	multiShardErr  error
+)
+
 // multiPackageShard reads the real plan for a `packages` shard that runs several packages in one `go test` (the Ryuk
-// case). Shard numbers move whenever a package is isolated or split, so it is never hard-coded.
+// case). Shard numbers move whenever a package is isolated or split, so it is never hard-coded. The plan is read once
+// per process from the real repository: a planted copy of the script changes how the shard is RUN, not which one it is.
 func multiPackageShard(script string) (string, error) {
-	res := cmdSpec{dir: filepath.Dir(filepath.Dir(script)), env: inheritedEnv(nil)}.run("bash", script, "integration-shard-plan")
-	if res.code != 0 {
-		return "", fmt.Errorf("integration-shard-plan exited %d: %s", res.code, tail(res.stderr+res.stdout, 2000))
-	}
-	re := regexp.MustCompile(`(?m)^integration shard (\d+): estimated \d+s, (\d+) package\(s\)$`)
-	for _, m := range re.FindAllStringSubmatch(res.stdout, -1) {
-		if n, _ := strconv.Atoi(m[2]); n >= 2 {
-			return m[1], nil
+	multiShardOnce.Do(func() {
+		real := filepath.Join(repoRootNoT(), "ci", "check_go.sh")
+		res := cmdSpec{dir: filepath.Dir(filepath.Dir(real)), env: inheritedEnv(nil)}.run("bash", real, "integration-shard-plan")
+		if res.code != 0 {
+			multiShardErr = fmt.Errorf("integration-shard-plan exited %d: %s", res.code, tail(res.stderr+res.stdout, 2000))
+			return
 		}
-	}
-	return "", fmt.Errorf("the plan has no integration shard with more than one package")
+		re := regexp.MustCompile(`(?m)^integration shard (\d+): estimated \d+s, (\d+) package\(s\)$`)
+		for _, m := range re.FindAllStringSubmatch(res.stdout, -1) {
+			if n, _ := strconv.Atoi(m[2]); n >= 2 {
+				multiShardNum = m[1]
+				return
+			}
+		}
+		multiShardErr = fmt.Errorf("the plan has no integration shard with more than one package")
+	})
+	return multiShardNum, multiShardErr
 }
 
 func ryukValues(lines []string) map[string]bool {

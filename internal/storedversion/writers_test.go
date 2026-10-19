@@ -97,6 +97,10 @@ var outOfScopeWriters = map[string]string{
 var unresolvedWriters = map[string]string{
 	"internal/providerfoundation/sinks.go":                   "writes the normalized provider-entity schema (schema_version, dedupe_key, attributes_json), which no in-scope table has",
 	"internal/audit/audit.go":                                "PostgreSQL auth-schema append-only audit and outbox inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/identities.go":                   "PostgreSQL auth-schema identity inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/local.go":                        "PostgreSQL auth-schema principal and user inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/organization.go":                 "PostgreSQL auth-schema organization projection inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/store.go":                        "PostgreSQL auth-schema principal projection inserts (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/session/store.go":                         "PostgreSQL auth-schema sessions and refresh_credentials inserts (schema name interpolated); no in-scope ClickHouse table",
 	"internal/storage/postgres/authschema/apply.go":          "PostgreSQL schema-migration ledger",
 	"internal/providersync/ownership_interval_compaction.go": "the CHAOS-9556 compaction names its table at run time (INSERT INTO + spec.table) and writes the two ownership interval tables (team_project_ownership, team_repo_ownership) and its own backup table, none of them in-scope tables: a rewritten row is a whole-row copy read by FINAL with every column, only valid_to and updated_at change (updated_at is raised past the stored stamp so the new version wins), so every other column is carried forward unchanged -- R1/R2 applied by hand like jira_project_as_team_retire.go, not through storedversion.Contract",

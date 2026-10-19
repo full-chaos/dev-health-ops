@@ -97,12 +97,13 @@ func ExplainWorkUnit(
 			modelPtr = &model
 		}
 		if record, ok := investmentexplain.BuildLLMTokenUsageRecord(investmentexplain.TokenUsageInput{
-			OrgID:        opts.OrgID,
-			Source:       "work_unit_explain",
-			Provider:     resolvedProvider,
-			Model:        modelPtr,
-			InputTokens:  completion.InputTokens,
-			OutputTokens: completion.OutputTokens,
+			OrgID:          opts.OrgID,
+			Source:         "work_unit_explain",
+			OrgCredentials: completion.OrgCredentials,
+			Provider:       resolvedProvider,
+			Model:          modelPtr,
+			InputTokens:    completion.InputTokens,
+			OutputTokens:   completion.OutputTokens,
 		}, opts.Now); ok {
 			// Best-effort, matching the reference's own
 			// `except Exception: logger.debug(...)` around the whole sink

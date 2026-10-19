@@ -110,16 +110,16 @@ func TestMigration0010ParentDeleteKeepsChildrenAndRuntimeCanSweep(t *testing.T) 
 	env := newM10Fixture(t, ctx)
 	m10Seed(t, ctx, env)
 
-	var parent, child string
+	var parent, parentFamily, child string
 	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.refresh_credentials
-		(session_id, principal_id, token_hash, expires_at) VALUES ($1, $2, '\x11'::bytea, now() - interval '1 day') RETURNING id::text`,
-		m10Session, m10Principal).Scan(&parent); err != nil {
+		(session_id, principal_id, token_hash, expires_at) VALUES ($1, $2, '\x11'::bytea, now() - interval '1 day') RETURNING id::text, family_id::text`,
+		m10Session, m10Principal).Scan(&parent, &parentFamily); err != nil {
 		t.Fatalf("insert parent: %v", err)
 	}
 	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.refresh_credentials
-		(session_id, principal_id, token_hash, expires_at, parent_id)
-		VALUES ($1, $2, '\x12'::bytea, now() + interval '1 day', $3) RETURNING id::text`,
-		m10Session, m10Principal, parent).Scan(&child); err != nil {
+		(session_id, principal_id, token_hash, expires_at, parent_id, family_id)
+		VALUES ($1, $2, '\x12'::bytea, now() + interval '1 day', $3, $4::uuid) RETURNING id::text`,
+		m10Session, m10Principal, parent, parentFamily).Scan(&child); err != nil {
 		t.Fatalf("insert child with parent_id: %v", err)
 	}
 	tag, err := env.runtime.Exec(ctx, `DELETE FROM auth.refresh_credentials WHERE expires_at < now()`)
@@ -320,18 +320,21 @@ func TestMigration0010SecurityColumnsAreGuardedByBehaviour(t *testing.T) {
 	env := newM10Fixture(t, ctx)
 	m10Seed(t, ctx, env)
 
-	var first, second string
-	for i, token := range []string{`\x31`, `\x32`} {
-		var id string
-		if err := env.admin.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
-			VALUES ($1, $2, $3::bytea, now() + interval '1 day') RETURNING id::text`, m10Session, m10Principal, token).Scan(&id); err != nil {
-			t.Fatal(err)
-		}
-		if i == 0 {
-			first = id
-		} else {
-			second = id
-		}
+	// first and second share a family (a child may only point at a parent of
+	// its own family); third is a separate root for the family_id and
+	// legacy_jti_hash writes, so those do not disturb the parent_id case.
+	var first, second, third, firstFamily string
+	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
+		VALUES ($1, $2, '\x31'::bytea, now() + interval '1 day') RETURNING id::text, family_id::text`, m10Session, m10Principal).Scan(&first, &firstFamily); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at, family_id)
+		VALUES ($1, $2, '\x32'::bytea, now() + interval '1 day', $3::uuid) RETURNING id::text`, m10Session, m10Principal, firstFamily).Scan(&second); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
+		VALUES ($1, $2, '\x33'::bytea, now() + interval '1 day') RETURNING id::text`, m10Session, m10Principal).Scan(&third); err != nil {
+		t.Fatal(err)
 	}
 	var linkID string
 	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at)
@@ -347,8 +350,8 @@ func TestMigration0010SecurityColumnsAreGuardedByBehaviour(t *testing.T) {
 		{"sessions.revision", `UPDATE auth.sessions SET revision = 2 WHERE id = $1`, []any{m10Session}},
 		{"sessions.auth_time", `UPDATE auth.sessions SET auth_time = now() WHERE id = $1`, []any{m10Session}},
 		{"sessions.amr", `UPDATE auth.sessions SET amr = '{pwd}' WHERE id = $1`, []any{m10Session}},
-		{"refresh_credentials.family_id", `UPDATE auth.refresh_credentials SET family_id = gen_random_uuid() WHERE id = $1`, []any{first}},
-		{"refresh_credentials.legacy_jti_hash", `UPDATE auth.refresh_credentials SET legacy_jti_hash = $2::bytea WHERE id = $1`, []any{first, m10Hash("f1")}},
+		{"refresh_credentials.family_id", `UPDATE auth.refresh_credentials SET family_id = gen_random_uuid() WHERE id = $1`, []any{third}},
+		{"refresh_credentials.legacy_jti_hash", `UPDATE auth.refresh_credentials SET legacy_jti_hash = $2::bytea WHERE id = $1`, []any{third, m10Hash("f1")}},
 		{"refresh_credentials.parent_id", `UPDATE auth.refresh_credentials SET parent_id = $2::uuid WHERE id = $1`, []any{first, second}},
 		{"link_credentials.consumed_at", `UPDATE auth.link_credentials SET consumed_at = now() WHERE id = $1`, []any{linkID}},
 		{"link_credentials.expires_at", `UPDATE auth.link_credentials SET expires_at = now() + interval '1 year' WHERE id = $1`, []any{linkID}},

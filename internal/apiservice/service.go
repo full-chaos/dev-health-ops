@@ -204,11 +204,15 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	})...)
 	routes = append(routes, producttelemetry.Routes(&producttelemetry.ValkeyStreams{URI: deps.Telemetry.ValkeyURI}, logger)...)
 	routes = append(routes, buildinfo.Routes(deps.Guard, version.Current("api"))...)
+	// The /api/v1/auth/* proxy to auth-service (CHAOS-10231): each flag off
+	// keeps go-api's own handler; on, only the innermost handler forwards,
+	// behind go-api's guard, validator and rate limiter.
+	proxy := newAuthProxy(deps.AuthProxy, logger)
 	routes = append(routes, session.Routes(session.Deps{
 		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier, Signer: deps.Signer,
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
-		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit,
+		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit, Inner: proxy.inner,
 	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
@@ -279,7 +283,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Logger:    logger,
 		Counters:  limits,
 	})...)
-	return markResponseModels(routes)
+	return markResponseModels(proxy.wrap(routes))
 }
 
 // configureChecked is the production entry: it stops startup on an empty
@@ -405,6 +409,11 @@ func configureWith(
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_register_limit_invalid", err)
+	}
+	deps.AuthProxy, err = ParseAuthProxyConfig(envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
 	}
 	if adjust != nil {
 		adjust(&deps)

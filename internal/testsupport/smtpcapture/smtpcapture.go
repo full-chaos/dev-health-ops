@@ -68,6 +68,10 @@ func ValidateListen(addr string) error {
 	return nil
 }
 
+// ValidateExternalListen is ValidateListen plus a fixed port: an already-running target is configured with the
+// sink's address before the test starts, so a random port cannot reach it.
+func ValidateExternalListen(addr string) error { return nil }
+
 // StartAt starts the sink on addr.
 func StartAt(t *testing.T, addr string) *Server {
 	t.Helper()

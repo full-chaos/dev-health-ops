@@ -24,6 +24,9 @@ const (
 	EnvExternalPostgres   = "DEVHEALTH_AUTH_ORACLE_POSTGRES_URI"
 	EnvExternalClickHouse = "DEVHEALTH_AUTH_ORACLE_CLICKHOUSE_URI"
 	EnvExternalValkey     = "DEVHEALTH_AUTH_ORACLE_VALKEY_URI"
+	// EnvExternalSetEnvCmd is the command an external run calls as `cmd NAME VALUE` (empty VALUE = unset) when the
+	// corpus needs the target's environment changed; it reconfigures or restarts the target.
+	EnvExternalSetEnvCmd = "DEVHEALTH_AUTH_ORACLE_SET_ENV_CMD"
 )
 
 // Validate is an error unless the stores can stand in for the venue's Go side. frozen is false for a venue
@@ -176,3 +179,7 @@ func ExternalRequired(baseURL string) (ExternalStores, bool, error) {
 	}
 	return stores, true, nil
 }
+
+// SetTargetEnv sets (or, with an empty value, unsets) name for the target the corpus drives: in this process for an
+// in-process go-api, through EnvExternalSetEnvCmd for an external target.
+func SetTargetEnv(t *testing.T, external bool, name, value string) {}

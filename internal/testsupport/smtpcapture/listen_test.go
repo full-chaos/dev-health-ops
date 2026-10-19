@@ -43,3 +43,16 @@ func TestValidateListen(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateExternalListen(t *testing.T) {
+	for _, good := range []string{"0.0.0.0:2525", "127.0.0.1:2525", ":2525"} {
+		if err := ValidateExternalListen(good); err != nil {
+			t.Errorf("%q refused: %v", good, err)
+		}
+	}
+	for _, bad := range []string{"127.0.0.1:0", "0.0.0.0:0", ":0", "not-an-address", ""} {
+		if ValidateExternalListen(bad) == nil {
+			t.Errorf("%q accepted for an external target, which cannot know a random port", bad)
+		}
+	}
+}

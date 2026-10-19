@@ -385,11 +385,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "imported by live sync_bootstrap.py, processors/dataset_adapters.py, api/external_ingest/consumer.py, and feature_flag_sync.py (itself LIVE per that file's own row) — 'run coroutine inside Celery task' helper. work_graph_tasks.py, a former importer, was deleted (CHAOS-3093)",
         "ticket": "n/a",
     },
-    "config.py": {
-        "category": "c",
-        "evidence": "used by queues.py and api/external_ingest/stream_health.py, and read by the queue-contract tests — env/config constants. celery_app.py, its former loader, was deleted (CHAOS-7059). queue_monitor.py, external_ingest_reconciler.py, and sync_reconciler.py, former importers, were deleted (CHAOS-3093)",
-        "ticket": "n/a",
-    },
     "feature_flag_sync.py": {
         "category": "a",
         "evidence": "LIVE — corrected 2026-08-28 per codex review across 2 rounds: an earlier draft wrongly claimed zero importers, then a follow-up correction wrongly said both helpers are called unconditionally. Actual shape: `_run_feature_flags_dataset` (`dataset_adapters.py:684`, called from the live dataset dispatcher at `:758`) branches per provider (`dataset_adapters.py:694-712`) -- calls `_sync_gitlab_feature_flags` for `provider=='gitlab'`, `_sync_launchdarkly_feature_flags` for `provider=='launchdarkly'`, raises `ValueError` for any other provider",
@@ -405,11 +400,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "imported by provider_unit_route.py & sync_units.py:122, reached from dispatch_sync_run",
         "ticket": "n/a",
     },
-    "provider_unit_route.py": {
-        "category": "a",
-        "evidence": "imported sync_units.py:125, used sync_units.py:999-1000 inside dispatch_sync_run",
-        "ticket": "n/a",
-    },
     "rate_limit_defer.py": {
         "category": "a",
         "evidence": "plan_rate_limit_deferral imported sync_units.py:130-132, called sync_units.py:1514 inside dispatch_sync_run",
@@ -418,11 +408,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     "recommendations_tasks.py": {
         "category": "d",
         "evidence": "worker_metrics.py's _run_recommendations bridge handler (its only production caller) is deleted -- verified no live wiring reaches it; _compute_recommendations_for_org is now exercised only by tests/test_recommendations_task.py",
-        "ticket": "n/a",
-    },
-    "reference_discovery.py": {
-        "category": "a",
-        "evidence": "the /reference-discovery route this file used to serve (`run_sync_reference_discovery`) is deleted -- `HTTPBridge.Discover` never had a live Go caller, and no Celery producer ever called the task either (CHAOS-4435/CHAOS-5713). `await_reference_discovery_terminal`/`ensure_reference_discovery_wakeup`/`reference_discovery_succeeded` remain: imported by sync_units.py and backfill/runner.py to poll/arm the SAME ledger the native Go reference-discovery worker owns",
         "ticket": "n/a",
     },
     "sync_bootstrap.py": {

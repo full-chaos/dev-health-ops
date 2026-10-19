@@ -53,14 +53,28 @@ type Session struct {
 // fill it from the wire. The structs that hold SecretStrings are decode
 // targets: a future emitter must write the wire form from Reveal, never by
 // marshalling these structs.
-type SecretString struct{ value string }
+//
+// The value sits behind a pointer. fmt prints a bad verb (%p on a struct
+// value) with no method of any field called, field by field; a pointer field
+// prints as an address, never as the string it points to.
+type SecretString struct{ value *string }
 
 const redacted = "[redacted]"
 
 // Reveal returns the credential. Call it only to compare or to send.
-func (s SecretString) Reveal() string { return s.value }
+func (s SecretString) Reveal() string {
+	if s.value == nil {
+		return ""
+	}
+	return *s.value
+}
 
-func (SecretString) String() string               { return redacted }
+func (SecretString) String() string { return redacted }
+
+// Format serves EVERY fmt verb. Without it, a verb String does not serve
+// (%d, %b, %x on a struct ...) makes fmt print the struct's field, the value.
+func (SecretString) Format(f fmt.State, _ rune) { _, _ = f.Write([]byte(redacted)) }
+
 func (SecretString) GoString() string             { return redacted }
 func (SecretString) LogValue() slog.Value         { return slog.StringValue(redacted) }
 func (SecretString) MarshalText() ([]byte, error) { return []byte(redacted), nil }
@@ -72,7 +86,7 @@ func (s *SecretString) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	s.value = raw
+	s.value = &raw
 	return nil
 }
 

@@ -147,6 +147,11 @@ var emptyColumnsAfterTheCapture = map[string]map[string]string{
 // has no value for them, so the load must leave the default. value gives the
 // loaded value of another column of the same row.
 var defaultedColumnsAfterTheCapture = map[string]map[string]defaultedColumn{
+	// The credential a call was spent with: a captured row was written before
+	// the column and reads the platform default.
+	"llm_token_usage": {
+		"credential_source": {Migration: "139_llm_token_usage_credential_source.sql", Want: func(func(string) any) string { return "platform" }},
+	},
 	// A project no sync has read the target of is unknown, never "none dated";
 	// a Linear project that carries a date reads as stated by its own project
 	// date, because that date is Linear's own (CHAOS-9613).

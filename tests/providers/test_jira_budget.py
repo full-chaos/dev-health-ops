@@ -24,7 +24,6 @@ from dev_health_ops.models import (
 from dev_health_ops.providers.jira.budget import JiraBudgetEstimator
 from dev_health_ops.sync.budget import BudgetDimension, estimate_provider_budget
 from dev_health_ops.sync.budget_guard import BudgetGuard, _budget_key, _limit_for_bucket
-from dev_health_ops.sync.dispatch_policy import route
 from dev_health_ops.workers.sync_bootstrap import SyncTaskContext
 
 WINDOW_START = datetime(2026, 1, 10, tzinfo=timezone.utc)
@@ -382,27 +381,3 @@ def test_jira_budget_guard_active_reservation_blocks_planned_unit(
     assert result.deferred_unit_ids == frozenset({str(planned.id)})
     assert planned.status == SyncRunUnitStatus.RETRYING.value
     assert active.status == SyncRunUnitStatus.DISPATCHING.value
-
-
-def test_jira_provider_queue_routing_supports_provider_and_cost_class_queues(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
-    monkeypatch.delenv("SYNC_COST_CLASS_QUEUES", raising=False)
-    provider_route = route(
-        org_id="org-1",
-        provider="jira",
-        cost_class="medium",
-        cost_class_queues_enabled=False,
-    )
-
-    monkeypatch.setenv("SYNC_COST_CLASS_QUEUES", "true")
-    cost_route = route(
-        org_id="org-1",
-        provider="jira",
-        cost_class="medium",
-        cost_class_queues_enabled=True,
-    )
-
-    assert provider_route.queue == "sync.jira"
-    assert cost_route.queue == "sync.jira.medium"

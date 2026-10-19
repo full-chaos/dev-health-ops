@@ -756,12 +756,13 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 			completionModel = resolvedModel
 		}
 		if record, ok := BuildLLMTokenUsageRecord(TokenUsageInput{
-			OrgID:        opts.OrgID,
-			Source:       "investment_mix_explain",
-			Provider:     resolvedProvider,
-			Model:        &completionModel,
-			InputTokens:  completion.InputTokens,
-			OutputTokens: completion.OutputTokens,
+			OrgID:          opts.OrgID,
+			Source:         "investment_mix_explain",
+			OrgCredentials: completion.OrgCredentials,
+			Provider:       resolvedProvider,
+			Model:          &completionModel,
+			InputTokens:    completion.InputTokens,
+			OutputTokens:   completion.OutputTokens,
 		}, opts.Now); ok {
 			// Best-effort: a write failure here must not fail the request,
 			// matching _persist_investment_mix_token_usage's own

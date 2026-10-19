@@ -176,6 +176,12 @@ on:
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
       - 'ci/auth_compose_proof.override.yml'
+      # CHAOS-10160: the external auth corpus job (venue-oracles.yml) and the files it runs.
+      - 'ci/auth_corpus_external.sh'
+      - 'ci/auth_corpus_set_env.sh'
+      - 'ci/auth_corpus_external.override.yml'
+      - 'ci/auth_corpus_external.acp.override.yml'
+      - '.github/workflows/venue-oracles.yml'
       - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
@@ -389,6 +395,12 @@ on:
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
       - 'ci/auth_compose_proof.override.yml'
+      # CHAOS-10160: the external auth corpus job (venue-oracles.yml) and the files it runs.
+      - 'ci/auth_corpus_external.sh'
+      - 'ci/auth_corpus_set_env.sh'
+      - 'ci/auth_corpus_external.override.yml'
+      - 'ci/auth_corpus_external.acp.override.yml'
+      - '.github/workflows/venue-oracles.yml'
       - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed

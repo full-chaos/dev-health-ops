@@ -25,7 +25,7 @@ func readRepoFile(t *testing.T, rel ...string) string {
 	return string(raw)
 }
 
-func TestAuthCorpusExternalJobIsInTheVenueOraclesWorkflow(t *testing.T) {
+func TestAuthCorpusExternalJobIsInTheVenueWorkflow(t *testing.T) {
 	text := readRepoFile(t, ".github", "workflows", "venue-oracles.yml")
 	var workflow struct {
 		Jobs map[string]struct {

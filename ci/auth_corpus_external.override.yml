@@ -1,1 +1,40 @@
-services: {}
+# Proof-only override for ci/auth_corpus_external.sh (CHAOS-10160); compose.yml is not changed. A throwaway
+# project name does not isolate a host-global container_name or a fixed host port, so every service of the go-api
+# stack that has one is released here; each store and the two listeners the corpus needs are published on an
+# ephemeral loopback port that the script reads back from compose.
+services:
+  postgres:
+    container_name: !reset null
+    ports: !override ["127.0.0.1::5432"]
+  pgbouncer:
+    container_name: !reset null
+    ports: !reset []
+  pgbouncer-river-queue:
+    container_name: !reset null
+  pgbouncer-river-coordinator:
+    container_name: !reset null
+  clickhouse:
+    container_name: !reset null
+    ports: !override ["127.0.0.1::9000"]
+  valkey:
+    container_name: !reset null
+    ports: !override ["127.0.0.1::6379"]
+  migrate:
+    container_name: !reset null
+  go-api:
+    # The api listener (the corpus's base URL) and the operator listener (/metrics, leg acp).
+    ports: !override ["127.0.0.1::8000", "127.0.0.1::8080"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # The corpus's mail sink listens on the runner (DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN=0.0.0.0:2525); the invite and
+      # verification mail of go-api goes there. The links it mails use this base.
+      - SMTP_HOST=host.docker.internal
+      - SMTP_PORT=2525
+      - APP_BASE_URL=https://app.example.test/
+      # Pass-throughs: set only when ci/auth_corpus_set_env.sh put them in the project state, so an unset
+      # variable stays unset (an empty value is not the same as unset for these readers).
+      - AUTH_AUTO_CREATE_ORG_ON_REGISTER
+      - AUTH_REGISTER_LIMIT
+  auth-service:
+    ports: !override ["127.0.0.1::8096"]

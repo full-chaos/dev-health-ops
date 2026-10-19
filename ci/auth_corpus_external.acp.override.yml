@@ -1,0 +1,17 @@
+# Leg acp of ci/auth_corpus_external.sh (CHAOS-10160): go-api forwards the six auth aggregates to auth-service.
+# Added to the main override for that leg only. The six AUTH_PROXY_* flags and AUTH_PROXY_URL come from the project
+# state file, so ci/auth_corpus_set_env.sh keeps them across a recreate.
+services:
+  go-api:
+    networks:
+      - default
+      - planes
+      - auth_plane
+    environment:
+      - AUTH_PROXY_URL
+      - AUTH_PROXY_SESSIONS
+      - AUTH_PROXY_LOCAL_LOGIN
+      - AUTH_PROXY_CREDENTIALS
+      - AUTH_PROXY_SOCIAL
+      - AUTH_PROXY_OIDC
+      - AUTH_PROXY_SAML

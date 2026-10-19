@@ -37,6 +37,22 @@ type sqlOperandExemption struct {
 // fails the test, so a fixed or deleted call site cannot leave a silent hole.
 var sqlOperandExemptions = []sqlOperandExemption{
 	{
+		file: "catalog_integration_test.go", fn: "TestPredefinedRoleReachableThroughAnIntermediaryIsDetected", operand: "testCase.grantOptions",
+		reason: "GRANT option keywords (WITH ADMIN OPTION and the like) from the test's own table, not an identifier",
+	},
+	{
+		file: "publicreads.go", fn: "ApplyPublicReads", operand: `strings.Join(columns, ", ")`,
+		reason: "columns holds only quoteIdentifier results of validated manifest names",
+	},
+	{
+		file: "public_reads_integration_test.go", fn: "newPublicReadsFixture", operand: `strings.Join(columns, ", ")`,
+		reason: "test DDL: every entry is a Quote'd manifest column plus a literal column",
+	},
+	{
+		file: "public_reads_integration_test.go", fn: "TestPublicReadsRuntimeReadsExactlyTheManifestColumns", operand: `strings.Join(quoted, ", ")`,
+		reason: "test query: every entry is a Quote'd manifest column",
+	},
+	{
 		file: "grants.go", fn: "applyRuntimeGrants", operand: `strings.Join(granted, ", ")`,
 		reason: "privilege keywords from the closed RuntimePosture manifest (TablePrivilege.privileges), not an identifier",
 	},
@@ -99,6 +115,17 @@ func viaVar(admin interface{ Exec(string) }, role string) {
 func good(admin interface{ Exec(string) }, id ValidatedIdentifier) {
 	admin.Exec(fmt.Sprintf("CREATE ROLE %s LIMIT %d", quoteIdentifier(id), 3))
 }
+type fake struct{ db interface{ Exec(string) } }
+
+func (f fake) run(sql string) { f.db.Exec(sql) }
+func viaMethodWrapper(f fake, role string) {
+	f.run(fmt.Sprintf("GRANT x TO %s", role))
+}
+func viaRangeLiteral(admin interface{ Exec(string) }, role string) {
+	for _, s := range []string{fmt.Sprintf("GRANT x TO %s", role)} {
+		admin.Exec(s)
+	}
+}
 func message(role string) string { return "" }
 func notSQL(role string) {
 	_ = fmt.Sprintf("hello %s", role)
@@ -110,7 +137,7 @@ func notSQL(role string) {
 		fns = append(fns, v.fn+"/"+v.operand)
 	}
 	sort.Strings(fns)
-	want := []string{"f/role", "viaVar/role"}
+	want := []string{"f/role", "viaMethodWrapper/role", "viaRangeLiteral/role", "viaVar/role"}
 	if strings.Join(fns, ",") != strings.Join(want, ",") {
 		t.Fatalf("violations = %v, want %v", fns, want)
 	}
@@ -235,7 +262,7 @@ func scanSprintf(fset *token.FileSet, files []*ast.File) []sprintfViolation {
 func isSink(call *ast.CallExpr, sinkFuncs map[string]bool) bool {
 	switch fun := call.Fun.(type) {
 	case *ast.SelectorExpr:
-		return sqlSinkMethods[fun.Sel.Name]
+		return sqlSinkMethods[fun.Sel.Name] || sinkFuncs[fun.Sel.Name]
 	case *ast.Ident:
 		return sinkFuncs[fun.Name]
 	}
@@ -397,6 +424,14 @@ func scanFunc(fset *token.FileSet, file string, fd *ast.FuncDecl, consts, sinkFu
 			case *ast.ValueSpec:
 				for _, name := range p.Names {
 					f.holder[name.Name] = true
+				}
+			case *ast.RangeStmt:
+				if cur == p.X {
+					for _, v := range []ast.Expr{p.Key, p.Value} {
+						if id, ok := v.(*ast.Ident); ok {
+							f.holder[id.Name] = true
+						}
+					}
 				}
 			}
 		}

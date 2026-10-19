@@ -1,0 +1,8 @@
+{
+  "occurred_at": "2026-10-18T10:00:00Z",
+  "operation": "refresh",
+  "reason_code": "store_unavailable",
+  "request_id": "req_EXAMPLE0000000000000000001",
+  "result": "error",
+  "schema_version": "auth-outcome.v1"
+}

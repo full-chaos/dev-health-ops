@@ -170,6 +170,9 @@ type CompleteRouteExecutionResult struct {
 	CommittedRows int64
 	// RequestUsage is this execution's provider HTTP spend, on every exit.
 	RequestUsage RequestUsageTotals
+	// RequestLedger is the requests this execution made, per route family and
+	// dimension, on every exit: the actuals of the unit's budget comparison.
+	RequestLedger RequestLedgerSnapshot
 }
 
 // attemptTimer starts measuring one chunked attempt and returns the elapsed

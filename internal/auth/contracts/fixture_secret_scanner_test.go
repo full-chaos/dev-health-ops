@@ -135,8 +135,15 @@ func hasAllCharacterClasses(value string) bool {
 	return upper && lower && digit
 }
 
+// syntheticJWS matches a compact JWS whose payload and signature segments both
+// begin with EXAMPLE: unmistakably synthetic, and the only shape the
+// refresh-response access_token pattern lets a fixture take (it pins the HS256
+// header segment, which starts with the JWS marker eyJ).
+var syntheticJWS = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.(?:EXAMPLE[A-Za-z0-9_-]*)?\.EXAMPLE[A-Za-z0-9_-]*\b`)
+
 func scanFixtureContent(name, content string) []string {
 	var findings []string
+	content = syntheticJWS.ReplaceAllString(content, "SYNTHETIC-JWS")
 	for _, prefix := range forbiddenFixturePrefixes {
 		if strings.Contains(content, prefix) {
 			findings = append(findings, fmt.Sprintf(
@@ -231,6 +238,8 @@ func TestTheFixtureScannerDetectsWhatItExistsToCatch(t *testing.T) {
 			`{"k": "` + seg("-----BEGIN ", "OPENSSH PRIVATE KEY", "-----") + `"}`, "PEM private key block"},
 		{"compact JWS",
 			`{"t": "` + seg("eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiIxIn0", ".", "dBjftJeZ4CVPmB92K27uhbUJU1p1r") + `"}`, "compact JWS"},
+		{"compact JWS with the pinned HS256 header and a real-looking payload",
+			`{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "eyJzdWIiOiIxIn0", ".", "dBjftJeZ4CVPmB92K27uhbUJU1p1r") + `"}`, "compact JWS"},
 		{"unbranded high-entropy run",
 			`{"k": "` + seg("aZ9qK2mX7pL4v", "R8tN1wB6yH3cF5dG0sJ") + `"}`, "high-entropy"},
 	}
@@ -292,5 +301,17 @@ func TestTheFixtureScannerDoesNotFireOnSyntheticValues(t *testing.T) {
     }`
 	if findings := scanFixtureContent("clean.json", clean); len(findings) > 0 {
 		t.Errorf("scanner fired on unmistakably synthetic values:\n%s", strings.Join(findings, "\n"))
+	}
+}
+
+func TestTheFixtureScannerAllowsOnlyTheSyntheticHS256Token(t *testing.T) {
+	seg := func(parts ...string) string { return strings.Join(parts, "") }
+	synthetic := `{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "EXAMPLEPAYLOAD", ".", "EXAMPLESIGNATURE") + `"}`
+	if findings := scanFixtureContent("synthetic.json", synthetic); len(findings) != 0 {
+		t.Fatalf("a synthetic EXAMPLE token was flagged: %v", findings)
+	}
+	halfSynthetic := `{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "EXAMPLEPAYLOAD", ".", "dBjftJeZ4CVPmB92K27uhbUJU1p1r") + `"}`
+	if findings := scanFixtureContent("half.json", halfSynthetic); len(findings) == 0 {
+		t.Fatal("a token with a real-looking signature segment passed the scanner")
 	}
 }

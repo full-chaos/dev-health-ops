@@ -1,0 +1,55 @@
+{
+  "description": "Golden corpus for credential-list.v1 (G-70).",
+  "accept": [
+    {
+      "file": "valid-two-items.json",
+      "why": "An active and a revoked entry."
+    },
+    {
+      "file": "valid-empty.json",
+      "why": "No credentials is a valid list, not an error."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-items-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No items."
+    },
+    {
+      "file": "invalid-item-with-secret.json",
+      "expect_instance_location": "/items/0",
+      "expect_keyword": "additionalProperties",
+      "why": "A list response containing a secret value: the load-bearing rejection for list responses."
+    },
+    {
+      "file": "invalid-item-with-secret-hash.json",
+      "expect_instance_location": "/items/1",
+      "expect_keyword": "additionalProperties",
+      "why": "The verifier in a later item."
+    },
+    {
+      "file": "invalid-item-status-unknown.json",
+      "expect_instance_location": "/items/0/status",
+      "expect_keyword": "enum",
+      "why": "An item with a status outside the vocabulary."
+    },
+    {
+      "file": "invalid-item-with-schema-version.json",
+      "expect_instance_location": "/items/0",
+      "expect_keyword": "additionalProperties",
+      "why": "Items are entry bodies without their own schema_version."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-item-impossible-date.json",
+      "why": "The shared timestamp rule applies to every item."
+    },
+    {
+      "file": "client-rejected-item-self-parent.json",
+      "why": "An item that is its own rotation parent."
+    }
+  ]
+}

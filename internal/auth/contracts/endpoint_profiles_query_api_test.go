@@ -221,3 +221,47 @@ func TestSchemaStatesAbsentVersusNullOnEveryAdvisoryField(t *testing.T) {
 		}
 	}
 }
+
+const multiClassQueryAPIRows = 33
+
+func TestEveryMultiClassQueryAPIRowNamesASelectorTheRegistryHonours(t *testing.T) {
+	registry := realRegistry(t)
+	checked := 0
+	for _, item := range loadQueryAPIDocument(t)["rows"].([]any) {
+		row := item.(map[string]any)
+		classes, _ := row["accepted_credential_classes"].([]any)
+		if len(classes) < 2 {
+			if _, has := row["class_disambiguator"]; has {
+				t.Errorf("row %v accepts %d class(es) and names a selector", row["id"], len(classes))
+			}
+			continue
+		}
+		checked++
+		if err := CheckClassSelector(row, registry); err != nil {
+			t.Errorf("row %v: %v", row["id"], err)
+		}
+	}
+	if checked != multiClassQueryAPIRows {
+		t.Errorf("checked %d multi-class rows, want %d", checked, multiClassQueryAPIRows)
+	}
+}
+
+func TestTheRowSchemaClosesTheSelectorKindAndShape(t *testing.T) {
+	resolved, _ := resolveEndpointProfileSchema(t)
+	for name, selector := range map[string]any{
+		"kind outside the closed set": map[string]any{"kind": "try_each", "name": "Authorization"},
+		"missing name":                map[string]any{"kind": "jwt_header_alg"},
+		"extra field":                 map[string]any{"kind": "jwt_header_alg", "name": "HS256", "also": "x"},
+	} {
+		document := loadQueryAPIDocument(t)
+		for _, item := range document["rows"].([]any) {
+			if row := item.(map[string]any); row["class_disambiguator"] != nil {
+				row["class_disambiguator"] = selector
+				break
+			}
+		}
+		if err := resolved.Validate(document); err == nil {
+			t.Errorf("%s: the row schema accepted it", name)
+		}
+	}
+}

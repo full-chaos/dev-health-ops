@@ -4,7 +4,6 @@ package session_test
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -75,45 +74,22 @@ func TestSessionRoutesMatchGolden(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	st := startStack(t, ctx)
-	pool, pg, server, signer, specs := st.pool, st.pg, st.server, st.signer, st.specs
+	pg, server, specs := st.pg, st.server, st.specs
 
-	tokens := map[string]string{}
-	for name, spec := range specs {
-		claims := edgetoken.AccessClaims{Role: "member"}
-		claims.UserID, _ = spec["user_id"].(string)
-		claims.Email, _ = spec["email"].(string)
-		claims.OrgID, _ = spec["org_id"].(string)
-		if role, ok := spec["role"].(string); ok {
-			claims.Role = role
-		}
-		claims.IsSuperuser, _ = spec["is_superuser"].(bool)
-		if value, ok := spec["username"].(string); ok {
-			claims.Username = &value
-		}
-		if value, ok := spec["full_name"].(string); ok {
-			claims.FullName = &value
-		}
-		if version, ok := spec["token_version"].(int); ok {
-			claims.TokenVersion = int64(version)
-		}
-		token, err := signer.Access(claims, time.Now(), fmt.Sprintf("00000000-0000-4000-8000-%012d", len(tokens)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		tokens[name] = token
+	target := sessionscenario.Target{BaseURL: server.URL, PostgresURI: pg.URI, ResetLimits: st.openWindows}
+	t.Log("\n" + sessionscenario.RunTarget(t, ctx, target, sessionscenario.MintTokens(t, specs)))
+}
+
+// TestSessionCorpusExternalTarget replays the same corpus against the server at
+// DEVHEALTH_AUTH_ORACLE_BASE_URL (go-api, later auth-service), through its URL and stores only.
+func TestSessionCorpusExternalTarget(t *testing.T) {
+	target, ok := sessionscenario.TargetFromEnv(t)
+	if !ok {
+		t.Skip(sessionscenario.EnvBaseURL + " is not set")
 	}
-
-	receipt := sessionscenario.Run(&sessionscenario.Harness{
-		T: t, GoBase: server.URL, Tokens: tokens,
-		Exec: func(sql string) {
-			if _, err := pool.Exec(ctx, sql); err != nil {
-				t.Fatalf("%s: %v", sql, err)
-			}
-		},
-		Reset: st.openWindows,
-		Rows:  func(query string) (string, string) { return "", sessionscenario.TableRows(t, ctx, pg.URI, query) },
-	})
-	t.Log("\n" + receipt)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	t.Log("\n" + sessionscenario.RunTarget(t, ctx, target, sessionscenario.Prepare(t, ctx, target)))
 }
 
 // stack is the Go route set on Postgres, ClickHouse and Valkey

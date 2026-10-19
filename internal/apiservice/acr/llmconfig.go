@@ -139,9 +139,13 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			return
 		}
 		if !found {
-			logger.InfoContext(ctx, "acr llm-config: none configured",
-				slog.String("org_id", orgID), slog.String("credential_id", credentialID))
-			countLLMConfig(ctx, "not_found")
+			outcome, reason := "not_found", "none_configured"
+			if cfg.GateClosed {
+				outcome, reason = "byo_llm_gate_closed", "byo_llm_gate_closed"
+			}
+			logger.InfoContext(ctx, "acr llm-config: none served",
+				slog.String("org_id", orgID), slog.String("credential_id", credentialID), slog.String("reason", reason))
+			countLLMConfig(ctx, outcome)
 			// A machine-readable marker: a client that must tell "this org has
 			// no config" from a missing route (an old replica, a wrong target)
 			// reads this header, never the bare 404.
